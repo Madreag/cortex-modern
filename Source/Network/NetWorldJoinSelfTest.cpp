@@ -47,6 +47,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -60,6 +61,68 @@
 #endif
 
 namespace RTE {
+
+	struct HeldRouteTestAccess {
+		struct Observed {
+			uint8_t chosen = 0;
+			bool listens = false;
+			std::vector<uint8_t> dials;
+			std::vector<uint16_t> members;
+		};
+		static bool Observe(const std::vector<uint8_t>& order, uint8_t local, const std::vector<uint8_t>& reachable,
+		                    const std::set<uint8_t>& held, const std::set<uint8_t>& departed, uint16_t port,
+		                    Observed& observed, std::string* error) {
+			struct TraceWire final : LoopbackTransport {
+				TraceWire(uint16_t base, std::vector<uint8_t>& dials, const std::vector<uint8_t>& reachable): base(base), dials(dials), reachable(reachable) {}
+				bool Connect(const std::string& address, uint16_t destination, std::string* why = nullptr) override {
+					const auto peer = static_cast<uint8_t>(destination - base);
+					dials.push_back(peer);
+					return std::find(reachable.begin(), reachable.end(), peer) != reachable.end() && LoopbackTransport::Connect(address, destination, why);
+				}
+				uint16_t base;
+				std::vector<uint8_t>& dials;
+				const std::vector<uint8_t>& reachable;
+			};
+			std::vector<std::unique_ptr<LoopbackTransport>> endpoints;
+			for (uint8_t peer: reachable) {
+				if (peer == local || departed.contains(peer)) continue;
+				auto endpoint = std::make_unique<LoopbackTransport>();
+				if (!endpoint->StartHost(static_cast<uint16_t>(port + peer), error)) return false;
+				endpoints.push_back(std::move(endpoint));
+			}
+			NetLockstepCoordinator peer;
+			peer.m_Config.sessionId = 0xAC00 + port; peer.m_Config.roundId = 91;
+			peer.m_Config.localPeerId = local; peer.m_Config.authorityPeerId = 1;
+			peer.m_Config.peerCount = *std::max_element(order.begin(), order.end());
+			peer.m_Config.matchConfig = NetMatchConfigUtil::MakeDefault(peer.m_Config.sessionId);
+			peer.m_Config.matchConfig.peerCount = peer.m_Config.peerCount;
+			peer.m_Config.matchConfig.successorOrder = order;
+			for (uint8_t id = 1; id <= peer.m_Config.peerCount; ++id) {
+				peer.m_Config.matchConfig.migrationPeers.push_back({id, static_cast<uint16_t>(port + id), {"loopback"}});
+				if (id != local) peer.m_RemotePeerIds.push_back(id);
+			}
+			peer.m_Config.migrationKey.fill(0x39);
+			peer.m_Config.migrationTransportFactory = [&] { return std::make_unique<TraceWire>(port, observed.dials, reachable); };
+			peer.m_State = NetLockstepState::Running; peer.m_RoundId = 91;
+			peer.m_Stats.nextFrame = 101; peer.m_LastCompletedSimulationTick = 100;
+			peer.m_RemovedPeers = departed;
+			for (uint8_t id: held) peer.m_AiHeldSeats[id] = 90;
+			if (peer.BeginHostMigration(c_NetHostLossSilenceMs - 1)) { *error = "held route began before the host-loss deadline"; return false; }
+			if (!peer.BeginHostMigration(c_NetHostLossSilenceMs)) { *error = "held route never entered the common migration"; return false; }
+			(void)peer.ContactMigrationSuccessor(c_NetHostLossSilenceMs);
+			if (peer.m_MigrationChoice) {
+				observed.chosen = static_cast<uint8_t>(peer.m_MigrationChoice->host);
+				observed.members = peer.m_MigrationChoice->members;
+				observed.listens = observed.chosen == local && peer.m_MigrationTransport != nullptr;
+			}
+			// A socket or a reachable subset is never an authority decision.
+			if (peer.GetHostPeerId() != 1 || peer.GetMigrationResult().generation != 0 || peer.IsStopped() || peer.IsFailed()) {
+				*error = "a held route promoted a peer or ended the round without every named survivor"; return false;
+			}
+			return true;
+		}
+	};
+
 
 	namespace {
 		const char* s_FailTag = "net-world-join-selftest";
@@ -4318,6 +4381,59 @@ namespace RTE {
 			return Fail("held-seat-returner-watches: the member whose seat the AI holds came back as a watcher, not on slot 2");
 		}
 		std::cout << "[net-world-join-selftest] PASS a_held_world_seat_waits_for_its_returner" << std::endl;
+		return 0;
+	}
+
+
+	int TestEveryHeldSurvivorFindsOneHost() {
+		using Routes = std::vector<uint8_t>;
+		struct Case { const char* name; uint8_t local; Routes reachable; std::set<uint8_t> held; Routes expected; bool listens; };
+		const Case cases[] = {
+			{"first-held-listens", 2, {3}, {3}, {}, true},
+			{"second-held-dials-the-first", 3, {2}, {2}, {2}, false},
+			{"three-held-third-dials-the-first", 4, {2, 3}, {2, 3}, {2}, false},
+			{"held-first-owner-still-must-agree", 4, {2, 3}, {2}, {2}, false},
+			{"first-live-owner-listens", 2, {3, 4}, {}, {}, true},
+			{"no-reachable-owner-cannot-elect-alone", 2, {}, {}, {}, true},
+		};
+		uint16_t port = 49910;
+		for (const Case& test: cases) {
+			HeldRouteTestAccess::Observed observed; std::string why;
+			if (!HeldRouteTestAccess::Observe({2, 3, 4}, test.local, test.reachable, test.held, {}, port, observed, &why)) return Fail(why);
+			if (observed.chosen != 2 || observed.dials != test.expected || observed.listens != test.listens || observed.members != std::vector<uint16_t>{2, 3, 4})
+				return Fail(std::string("held-succession-") + test.name + ": the common route changed the fixed candidate, route order or complete electorate");
+			port += 10;
+		}
+		HeldRouteTestAccess::Observed lone; std::string why;
+		if (!HeldRouteTestAccess::Observe({2}, 2, {}, {}, {}, port, lone, &why)) return Fail(why);
+		if (lone.chosen != 0 || lone.listens || !lone.dials.empty() || !lone.members.empty()) return Fail("a sole remaining owner opened a self-election route");
+		std::cout << "[net-world-join-selftest] PASS every_held_survivor_finds_one_host routes=6 lone_wait=1" << std::endl;
+		return 0;
+	}
+
+	int TestDisagreeingHeldViewsMeetAtOneListener() {
+		struct Case { const char* name; std::set<uint8_t> heldBySecond; std::set<uint8_t> heldByThird; };
+		const Case cases[] = {
+			{"the-first-reads-the-other-live", {}, {2}},
+			{"both-read-the-other-live", {}, {}},
+			{"both-read-the-other-held", {3}, {2}},
+			{"the-other-reads-the-first-live", {3}, {}},
+		};
+		uint16_t port = 50010;
+		for (const Case& test: cases) {
+			HeldRouteTestAccess::Observed second, third; std::string why;
+			if (!HeldRouteTestAccess::Observe({2, 3}, 2, {3}, test.heldBySecond, {}, port, second, &why) ||
+			    !HeldRouteTestAccess::Observe({2, 3}, 3, {2}, test.heldByThird, {}, port + 10, third, &why)) return Fail(why);
+			if (!second.listens || third.listens || !second.dials.empty() || third.dials != std::vector<uint8_t>{2} ||
+			    second.chosen != 2 || third.chosen != 2 || second.members != std::vector<uint16_t>{2, 3} || third.members != second.members)
+				return Fail(std::string("held-views-") + test.name + ": expected one election listener, the exact first dial, and both owners");
+			port += 20;
+		}
+		HeldRouteTestAccess::Observed afterDeparture; std::string why;
+		if (!HeldRouteTestAccess::Observe({2, 3, 4}, 3, {4}, {}, {2}, port, afterDeparture, &why)) return Fail(why);
+		if (!afterDeparture.listens || afterDeparture.chosen != 3 || !afterDeparture.dials.empty() || afterDeparture.members != std::vector<uint16_t>{3, 4})
+			return Fail("a departed first survivor kept the listener from the next agreed owner");
+		std::cout << "[net-world-join-selftest] PASS disagreeing_held_views_meet_at_one_listener views=4 departed_first=1" << std::endl;
 		return 0;
 	}
 
@@ -9887,6 +10003,8 @@ namespace RTE {
 		if (const int result = TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;
 		if (const int result = TestAHeldWorldMembersLeaveReleasesItsSeat(); result != 0) return result;
+		if (const int result = TestEveryHeldSurvivorFindsOneHost(); result != 0) return result;
+		if (const int result = TestDisagreeingHeldViewsMeetAtOneListener(); result != 0) return result;
 		if (const int result = TestHostAuthorityNeedsEveryNamedSurvivor(); result != 0) return result;
 		if (const int result = TestAHeldSeatJudgesItsHostByTheLinkAlone(); result != 0) return result;
 		if (const int result = TestActivationFollowsTheMeasuredTrail(); result != 0) return result;

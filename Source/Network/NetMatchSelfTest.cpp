@@ -5783,12 +5783,15 @@ namespace RTE {
 			leaver->left = true;
 			pumpClients();
 			round1.Tick(NetLockstepNowMs()); // Receive the last authenticated leave before advancing the silence clock.
-			for (int spin = 0; spin < 6500 && !round1.GetPeerLeaveFrames().contains(leaverPeerId); ++spin) {
+			const uint64_t holdDeadline = round1.LastAuthenticatedTraffic(leaverPeerId) + c_NetSeatDisconnectSilenceMs;
+			while (NetLockstepNowMs() <= holdDeadline + 400 && !round1.GetPeerLeaveFrames().contains(leaverPeerId)) {
 				pumpClients();
 				round1.Tick(NetLockstepNowMs());
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
-			if (!round1.GetPeerLeaveFrames().contains(leaverPeerId)) {
+			if (!round1.GetPeerLeaveFrames().contains(leaverPeerId) ||
+			    round1.GetStats().lastHoldDeclarationMs < c_NetSeatDisconnectSilenceMs ||
+			    round1.GetStats().lastHoldDeclarationMs > c_NetSeatDisconnectSilenceMs + 400) {
 				*error = "the host round never saw the clean leave: " + round1.BuildReportJson() + " roster_stage=" + (hostSession.GetReconnectHost() ? std::to_string(static_cast<int>(hostSession.GetReconnectHost()->GetRoster().stage)) : "none");
 				return false;
 			}
@@ -6850,7 +6853,7 @@ namespace RTE {
 			}
 			// Past the old window the seat is still held for its player: no resolution, the round plays on.
 			fixture.clock.skippedMs += NetReconnectHost::c_ProvisionalExpiryMs + 1000;
-			if (!PumpRematchUntil(fixture, 6500, [&] {
+			if (!PumpRematchUntil(fixture, 3000, [&] {
 				    // The default policy hands the seat to the AI (Substituted); its player keeps it and nothing expires it.
 				    return host.round->HeldSeatResolution(2) != NetLockstepHoldResolution::Expired && survivor->round->HeldSeatResolution(2) != NetLockstepHoldResolution::Expired &&
 				           host.admission.GetStats().seatHoldsExpired == 0 && host.admission.IsSeatHeldForReclaim(2);

@@ -645,7 +645,7 @@ namespace RTE {
 		uint32_t blockingFrameWaits = 0;
 		uint64_t holdNoticeBudgetMs = 0;
 		bool holdDeadlineFeasible = true;
-		uint64_t lastHoldDeclarationMs = 0;
+		uint64_t lastHoldDeclarationMs = 0; //!< Authenticated silence elapsed when the host last ordered a hold.
 		uint32_t ownParksExcluded = 0; //!< Gaps in our own ticks that were not charged to a peer.
 		uint64_t longestOwnParkMs = 0; //!< The longest of them; the start work a peer's machine is also doing.
 		uint64_t localTickOverruns = 0;
@@ -1441,6 +1441,8 @@ namespace RTE {
 		std::string DescribePeer(uint8_t peerId) const;
 		/// The seat roster's player names by lockstep peer; the session plane's pump hands them over from any thread.
 		void SetSeatNames(std::map<uint8_t, std::string> names);
+		/// Latest authenticated traffic used by the disconnect deadline, including a returning link.
+		uint64_t LastAuthenticatedTraffic(uint8_t peer) const;
 		std::string BuildReportJson() const;
 
 		static const char* StateName(NetLockstepState state);
@@ -1477,6 +1479,9 @@ namespace RTE {
 		friend bool TestAnAnnouncedCaptureExcusesEverySeatForItsCost(std::string* error);
 		friend bool TestDelayTracksASteadySendersArrivalPhase(std::string* error);
 		friend bool TestAheadInputIsNotASimulationStall(std::string* error);
+		friend bool TestHeldHostMarkerPrecedesItsHold(std::string* error);
+		friend bool TestHeldHostReturnsPastThePreparedHorizon(std::string* error);
+		friend bool TestAPreviouslyHeldHostTakesItsSeatBack(std::string* error);
 		friend bool TestHostOwnHoldIsRejectedOnEveryWirePhase(std::string* error);
 		friend bool TestAReturnerDelayCoversItsTrail(std::string* error);
 		friend bool TestADecisionRepeatedPastItsFrameIsNotANewOne(std::string* error);
@@ -1527,6 +1532,7 @@ namespace RTE {
 		friend bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error);
 		friend bool TestCommitOnlySuccessorReproposesRelease(std::string* error);
 		friend struct SeatSuccessionTestAccess;
+		friend struct HeldRouteTestAccess;
 		friend struct SeatAdmissionServiceTest;
 		friend class ScenarioRunner;
 
@@ -1814,7 +1820,10 @@ namespace RTE {
 		void QueueTiming(const NetLockstepTiming& timing, uint8_t onlyPeer = 0);
 		void FlushTimingOutgoing();
 		void CommitTiming(uint64_t revision);
-		void ApplyTiming(const NetLockstepTiming& timing);
+		void ApplyTiming(const NetLockstepTiming& timing, bool recorded = false);
+		bool HasRecordedHostHold() const;
+		bool IsRecordedHostReturn(const NetLockstepTiming& timing) const;
+		void ReclaimRecordedHostSeat(uint64_t nowMs);
 		void PublishCapturePark(uint64_t startFrame);
 		void ApplyCapturePark(const NetLockstepTiming& timing);
 		uint64_t CaptureParkCapTicks() const;
@@ -1827,7 +1836,6 @@ namespace RTE {
 		void FlushDeferredParkTimings();
 		bool DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing);
 		uint64_t PeerAbsenceBudgetMs(uint8_t peer) const;
-		uint64_t LastAuthenticatedTraffic(uint8_t peer) const;
 		bool SceneLoadInputPending(uint8_t peer, uint64_t frame, uint64_t nowMs);
 		void TakeSceneLoadStatus(const NetLockstepTiming& timing, uint64_t nowMs);
 		uint64_t CaptureExcuseUntil(uint8_t peerId, uint64_t frame, uint64_t firstMissingMs);
