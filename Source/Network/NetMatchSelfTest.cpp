@@ -10175,6 +10175,21 @@ namespace RTE {
 		if (held[0].manual != std::vector<uint64_t>{205} || alone.saved.size() != 1 || alone.reported != std::vector<size_t>{1} || alone.named != std::vector<size_t>{1}) {
 			fail("held-seat-save: host marked " + TickList(held[0].manual) + " heard " + TickList(alone.saved));
 		}
+		std::array<SchedulePeer, 2> paused;
+		setUp(paused, 1, "00000000deadbeef-0000000000000015");
+		const auto config = NetMatchConfigUtil::MakeDefault(0x9A23);
+		std::string joinError;
+		if (!paused[0].service.m_WorldJoin.ConfigureMatchRejoins(config, 9, 1000.0 / 60.0, &joinError)) fail(joinError);
+		paused[0].service.m_WorldCapturePending = true;
+		const ScheduleRun pausedRun = RunSchedule(paused, 500, {200}, [&](uint64_t tick, NetMatchService::AutosaveTickInput& input) {
+			input.paused = true;
+			if (tick > 6) paused[0].service.m_WorldCapturePending = false;
+		});
+		for (const SchedulePeer& peer: paused)
+			if (peer.captures != std::vector<uint64_t>{6, 205} || peer.manual != std::vector<uint64_t>{205})
+				fail("paused-requested-captures " + TickList(peer.captures));
+		if (pausedRun.saved.size() != 1 || paused[0].service.m_NextAutosaveSimTime != -1 || paused[0].service.m_LastAutosaveSimTime != -1)
+			fail("paused captures did not finish or advanced the periodic schedule");
 		if (!failures.empty()) {
 			*error = failures;
 			return false;

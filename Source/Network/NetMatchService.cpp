@@ -3933,21 +3933,24 @@ static std::string ResyncSaveName() {
 		const bool joinCapture = m_WorldCapturePending && m_WorldJoin.IsConfigured() &&
 		                         std::none_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [](const AwaitedAutosave& entry) { return entry.joinCapture; });
 		if (!joinCapture && !ask && seconds == 0) return output;
+		if (input.paused && !joinCapture && !ask) return output;
 		// A park commits empty frames, so an activation inside one would never be stamped: nothing is named until it lands.
 		// The startup frames before a round's agreed first frame carry no commands either, so a capture named in them never
 		// reaches a writer and the schedule would wait on it for the rest of the round.
 		if (input.activationPending || input.startupPending || input.ownSeatHeld || input.hostProvisional) return output;
-		const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
-		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
-		if (m_NextAutosaveSimTime < 0 || input.now < m_LastAutosaveSimTime) {
-			m_NextAutosaveSimTime = input.now - tickLength + interval;
+		if (!input.paused) {
+			const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
+			const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
+			if (m_NextAutosaveSimTime < 0 || input.now < m_LastAutosaveSimTime) {
+				m_NextAutosaveSimTime = input.now - tickLength + interval;
+			}
+			m_LastAutosaveSimTime = input.now;
+			// The capture is named `lead` ticks ahead, so it reaches every peer's stream before its tick.
+			const int64_t takenAt = input.now + static_cast<int64_t>(input.lead) * tickLength;
+			// The host's ask never moves the interval: it is advanced only when its own capture is due.
+			if (!joinCapture && !ask && takenAt < m_NextAutosaveSimTime) return output;
+			if (interval > 0 && takenAt >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((takenAt - m_NextAutosaveSimTime) / interval + 1) * interval;
 		}
-		m_LastAutosaveSimTime = input.now;
-		// The capture is named `lead` ticks ahead, so it reaches every peer's stream before its tick.
-		const int64_t takenAt = input.now + static_cast<int64_t>(input.lead) * tickLength;
-		// The host's ask never moves the interval: it is advanced only when its own capture is due.
-		if (!joinCapture && !ask && takenAt < m_NextAutosaveSimTime) return output;
-		if (interval > 0 && takenAt >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((takenAt - m_NextAutosaveSimTime) / interval + 1) * interval;
 		m_OpenCaptureTick = input.tick + input.lead;
 		m_OpenCaptureApplied = false;
 		m_OpenCaptureForJoin = joinCapture;
@@ -4143,7 +4146,7 @@ static std::string ResyncSaveName() {
 		return taken;
 	}
 
-	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
+	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick, bool paused) {
 		std::vector<CheckpointNote> applied;
 		for (const auto& [sender, checkpoint]: ScenarioRunner::TakeAppliedCheckpoints()) applied.push_back({sender, checkpoint.kind, checkpoint.tick});
 		// A segment held for its checkpoint opens the moment the archive thread has named the digest.
@@ -4155,6 +4158,7 @@ static std::string ResyncSaveName() {
 		AutosaveTickInput input;
 		input.tick = tick;
 		input.now = g_TimerMan.GetSimTimeTicks();
+		input.paused = paused;
 		input.unwritten = g_ActivityMan.UnwrittenAutosaves();
 		input.applied = std::move(applied);
 		input.finished = finished;

@@ -420,12 +420,12 @@ namespace RTE {
 			if (s_AutosaveSecondsOverridden) return s_AutosaveSeconds;
 			return config.autosaveEnabled ? config.autosaveIntervalSeconds : 0;
 		}
-		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
 		/// A completed tick's committed frame joins the catch-up history a returner replays; a paused tick's too.
 		void AppendCommittedJoinFrame(uint64_t tick);
 		/// Lets the round's return history go below the oldest frame a returner may still be served from.
 		void PruneReturnHistory(uint64_t tick);
-		void AutosaveAtTickBoundary(uint64_t tick);
+		/// Services announced captures at every committed boundary; paused ticks do not advance periodic autosaves.
+		void AutosaveAtTickBoundary(uint64_t tick, bool paused = false);
 		bool CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory, const std::string& label = "");
 		/// One entry of the checkpoint schedule on the committed stream.
 		struct CheckpointNote { uint8_t sender = 0; uint8_t kind = 0; uint64_t tick = 0; };
@@ -433,6 +433,7 @@ namespace RTE {
 		struct AutosaveTickInput {
 			uint64_t tick = 0;
 			int64_t now = 0; //!< The tick's sim time.
+			bool paused = false; //!< Only requested captures are scheduled while simulation time is paused.
 			size_t unwritten = 0; //!< Captures this peer's writer has not finished.
 			std::vector<CheckpointNote> applied; //!< The schedule entries the tick's committed frame carried.
 			std::vector<uint64_t> finished; //!< Captures this peer's writer finished since the last boundary.
