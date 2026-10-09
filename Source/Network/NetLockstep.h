@@ -1799,7 +1799,7 @@ namespace RTE {
 		/// @return Whether the seat is a slow machine.
 		bool FeedsBelowRoundRate(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* rate = nullptr);
 		static void NoteArrival(NetLockstepPeerStats& stats, uint64_t nowMs, uint64_t frame);
-		/// Whether the wait for every peer's published startup has used the round's answer budget.
+		/// Wait for every human owner's published startup before committing the first frame.
 		void TickStartupWait(uint64_t nowMs);
 		void FormAgreedFirstFrame(uint64_t nowMs);
 		bool SendAgreedStart(uint8_t onlyPeerId = 0);
@@ -1920,7 +1920,7 @@ namespace RTE {
 		uint64_t m_StartWaitSinceMs = 0;
 		bool m_LocalStartupPublished = false;
 		std::set<uint8_t> m_PeerStartupPublished; //!< Peers whose startup reading has reached us.
-		std::set<uint8_t> m_StartupLinksLost; //!< Host: seats whose link died before the agreed start; the start holds them.
+		std::set<uint8_t> m_StartupLinksLost; //!< Link-loss facts before the agreed start; human startup remains required.
 		bool m_AgreedStartApplied = false;
 		std::optional<NetLockstepStart> m_AgreedStartRecord;
 		std::set<uint8_t> m_StartupHeldSeatStamps; //!< Boundary-held seats stamped on their first committed tick.

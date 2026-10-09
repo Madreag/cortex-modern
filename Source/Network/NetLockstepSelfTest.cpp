@@ -725,7 +725,7 @@ namespace RTE {
 				if (!host.InstallResyncInputs(inputs, error) || !host.PrimeResyncInputs({}, error)) return false;
 				host.Tick(++round.now);
 				auto committed = inputs;
-				if (!RecoveryWireCheck(host.IsRunning() && host.GetStats().nextFrame == 43 && host.SeatReleases().at(3).rbegin()->first > 42 && host.IsSeatReclaimableAt(3, 42) && SameRecoveryInputs(host.CapturePendingInputs(40), committed),
+				if (!RecoveryWireCheck(host.IsRunning() && host.GetStats().nextFrame == 43 && host.SeatReleases().at(3).rbegin()->first > 42 && !host.IsSeatReclaimableAt(3, 42) && host.IsSeatReclaimableAt(3, 43) && SameRecoveryInputs(host.CapturePendingInputs(40), committed),
 				                       error, "restoration dropped a configured departed sender's accepted controller, commands or observations")) {
 					*error += " next=" + std::to_string(host.GetStats().nextFrame) + " release=" + std::to_string(host.SeatReleases().at(3).rbegin()->first) +
 					    " reclaimable42=" + std::to_string(host.IsSeatReclaimableAt(3, 42)) + " same=" + std::to_string(SameRecoveryInputs(host.CapturePendingInputs(40), committed));
@@ -12641,7 +12641,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!host.Start(hostT, cfg(1, {{2, 1}}, true), error) || !client.Start(clientT, cfg(2, {{1, 1}}, false), error)) {
 				return false;
 			}
-			for (uint64_t now = 0; now <= 2000; now += 5) {
+			for (uint64_t now = NetLockstepNowMs(), until = now + 2000; now <= until; now += 5) {
 				host.Tick(now);
 				client.Tick(now);
 				if (host.IsRunning() && client.IsRunning()) {
@@ -12654,13 +12654,18 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "the pump fixture did not reach Running";
 				return false;
 			}
-			// The client never sends frame 0, so the host waits for it and times out.
+			// The client stays connected while its input is late. The session pump keeps running until the host explicitly ends.
 			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error)) {
 				return false;
 			}
 			uint32_t pumps = 0;
 			ScenarioRunner::SetLockstepCoordinator(&host);
-			ScenarioRunner::SetSessionPump([&pumps] { ++pumps; });
+			ScenarioRunner::SetSessionPump([&] {
+				++pumps;
+				hostT.AdvanceTimeMs(15); clientT.AdvanceTimeMs(15);
+				client.Tick(NetLockstepNowMs());
+				if (pumps == 40) host.Complete("explicit host end while input is late");
+			});
 			NetLockstepReadyFrame ready;
 			std::string waitError;
 			const bool got = ScenarioRunner::WaitForLockstepControllerFrame(0, ready, &waitError);
@@ -12670,7 +12675,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "the wait returned a frame the peer never sent";
 				return false;
 			}
-			if (pumps == 0) {
+			if (pumps < 40 || host.HasHeldAISeat(2)) {
 				*error = "the admission plane was never serviced while the round waited";
 				return false;
 			}

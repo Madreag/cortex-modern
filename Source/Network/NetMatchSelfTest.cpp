@@ -6528,9 +6528,19 @@ namespace RTE {
 			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
 				target[peer] = peer->lastApplied + ticks;
 			}
-			return PumpRematchUntil(fixture, 4000, [&] {
+			const bool played = PumpRematchUntil(fixture, 4000, [&] {
 				return std::all_of(target.begin(), target.end(), [](const auto& entry) { return entry.first->lastApplied >= entry.second; });
 			});
+			if (!played) {
+				static bool reported = false;
+				if (!reported) {
+					reported = true;
+					for (RematchPeer* peer: LiveRematchPeers(fixture))
+						std::cerr << "[rematch-first-wait] peer=" << static_cast<int>(peer->LockstepId()) << " applied=" << peer->lastApplied << " produce=" << peer->nextProduce
+						          << " roster=" << static_cast<int>(fixture.Host().admission.GetRoster().stage) << " " << peer->round->BuildReportJson() << std::endl;
+				}
+			}
+			return played;
 		}
 
 		// LeaveMatch: the §7 exchange while the link is up, then the round is told, then the process goes.
@@ -12851,6 +12861,8 @@ namespace RTE {
 		std::cout << "[net-match-selftest] start_intent kept_through_drop=" << keptThroughDrop << " kept_through_join=" << keptThroughJoin
 		          << " started=" << lobby.IsStarted() << " revision=" << lobby.GetMatchConfig().configRevision << std::endl;
 		if (!keptThroughDrop || !keptThroughJoin || !lobby.IsStarted()) {
+			for (const auto& seat: admission.GetRoster().seats)
+				std::cerr << "[start-intent-seat] id=" << static_cast<int>(seat.seatId) << " phase=" << static_cast<int>(seat.phase) << " link=" << static_cast<int>(seat.link) << " owner=" << (seat.owner != 0) << std::endl;
 			*error = std::string("the host clicked Start once and the round ") + (lobby.IsStarted() ? "started" : "never started") + ": the click was " +
 			         (keptThroughDrop ? (keptThroughJoin ? "kept" : "withdrawn when the owner reclaimed its held seat") : "withdrawn when a joiner's link dropped");
 			return false;

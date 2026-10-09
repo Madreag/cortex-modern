@@ -12446,10 +12446,6 @@ namespace RTE {
 			return;
 		}
 		MaybeSendControlHeartbeat(nowMs);
-		if (AnyDroppedSeatHeld() && !UsesBoundedWait() && m_AiHeldSeats.empty()) {
-			m_AdvanceBlock = "dropped-seat-pause";
-			return;
-		}
 		while (true) {
 			if (m_RecoveryDrainThrough) {
 				for (const auto& [peer, heldFrame]: m_AiHeldSeats) *m_RecoveryDrainThrough = std::max(*m_RecoveryDrainThrough, heldFrame);
@@ -12521,32 +12517,6 @@ namespace RTE {
 				}
 				m_AdvanceBlock = "remote-input";
 				break;
-			}
-			// With its own seat off and no other seat required, the host's own simulation paces the round, exactly as its input would:
-			// a frame is committed once the tick that would have produced its input has run, so the seat's return finds it caught up.
-			if (!m_Playback && requiredRemotes == 0 && localIt == m_LocalFrames.end() && m_Config.localPeerId == GetHostPeerId() &&
-			    (IsSeatUnderAI(m_Config.localPeerId, m_Stats.nextFrame) || IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame)) &&
-			    (!m_LastCompletedSimulationTick || m_Stats.nextFrame > *m_LastCompletedSimulationTick + std::max<uint16_t>(1, InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame)))) {
-				m_AdvanceBlock = "host-paced";
-				break;
-			}
-			// A host whose own seat the AI holds still commits every frame first: it sends the others an empty frame of its own for each
-			// frame it commits, which they wait on and drop as a held seat's input, so no peer ever commits past the host's decisions.
-			if (!m_Playback && m_Config.localPeerId == GetHostPeerId() && IsSeatUnderAI(m_Config.localPeerId, m_Stats.nextFrame)) {
-				// Once its return is agreed, the frames before its new start are ones the others no longer wait on the host for.
-				if (localIt == m_LocalFrames.end() && m_Stats.nextFrame >= EffectiveStartOf(m_Config.localPeerId)) {
-					std::string markerError;
-					if (!QueueInputAtTarget(m_Stats.nextFrame, {}, {}, &markerError, {})) {
-						DiagnosticLine() << "[net-lockstep] held host could not send its commit of frame " << m_Stats.nextFrame << ": " << markerError << std::endl;
-						m_AdvanceBlock = "held-host-marker";
-						break;
-					}
-				}
-				m_LocalFrames.erase(m_Stats.nextFrame);
-				m_LocalCommands.erase(m_Stats.nextFrame);
-				m_LocalObservations.erase(m_Stats.nextFrame);
-				m_LocalValueObservations.erase(m_Stats.nextFrame);
-				localIt = m_LocalFrames.end();
 			}
 			if (parkFrame && !m_Playback) {
 				// Measured, not assumed: the frame is counted with input only when every seat it requires is in it.
