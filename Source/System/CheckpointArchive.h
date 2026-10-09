@@ -236,10 +236,6 @@ namespace RTE {
 		}
 		template<size_t Begin, class Fields, size_t... Index> void CapturePrimitives(const Fields& fields, std::index_sequence<Index...>) {
 			constexpr size_t fixedBytes = (PrimitiveBytes<FieldType<Fields, Begin + Index>>() + ... + 0);
-			const auto copy = [&](char* into) {
-				size_t at = 0;
-				(WritePrimitive(into, at, std::get<Begin + Index>(fields)), ...);
-			};
 			if constexpr ((PrimitiveHasString<FieldType<Fields, Begin + Index>>() || ...)) {
 				size_t size = fixedBytes;
 				const auto add = [&](const auto& field) {
@@ -248,9 +244,40 @@ namespace RTE {
 					size += bytes;
 				};
 				(add(std::get<Begin + Index>(fields)), ...);
-				Buffer().CapturePrimitiveBlock(size, &DecodePrimitives<FieldType<Fields, Begin + Index>...>, copy);
+				Buffer().CapturePrimitiveBlock(size, &DecodePrimitives<FieldType<Fields, Begin + Index>...>, [&](char* into) {
+					size_t at = 0;
+					(WritePrimitive(into, at, std::get<Begin + Index>(fields)), ...);
+				});
 			} else {
-				Buffer().CapturePrimitiveBlock(fixedBytes, &DecodePrimitives<FieldType<Fields, Begin + Index>...>, copy);
+				constexpr auto offsets = [] {
+					std::array<size_t, sizeof...(Index)> result;
+					size_t at = 0, index = 0;
+					((result[index++] = at, at += PrimitiveBytes<FieldType<Fields, Begin + Index>>()), ...);
+					return result;
+				}();
+				Buffer().CapturePrimitiveBlock(fixedBytes, &DecodePrimitives<FieldType<Fields, Begin + Index>...>, [&](char* into) {
+					(WriteFixedPrimitive<offsets[Index]>(into, std::get<Begin + Index>(fields)), ...);
+				});
+			}
+		}
+		template<size_t Offset, class T> static void WriteFixedPrimitive(char* into, const T& value) {
+			if constexpr (std::is_same_v<T, Vector>) {
+				WriteFixedPrimitive<Offset>(into, value.m_X); WriteFixedPrimitive<Offset + sizeof(float)>(into, value.m_Y);
+			} else if constexpr (std::is_same_v<T, Box>) {
+				WriteFixedPrimitive<Offset>(into, value.m_Corner); WriteFixedPrimitive<Offset + 2 * sizeof(float)>(into, value.m_Width); WriteFixedPrimitive<Offset + 3 * sizeof(float)>(into, value.m_Height);
+			} else if constexpr (std::is_array_v<T> || CheckpointArray<T>) {
+				using Element = std::remove_cvref_t<decltype(value[0])>;
+				if constexpr (std::is_trivially_copyable_v<T> && PrimitiveBytes<T>() == sizeof(T)) {
+					std::memcpy(into + Offset, &value, sizeof(T));
+				} else {
+					constexpr size_t count = [] { if constexpr (std::is_array_v<T>) return std::extent_v<T>; else return std::tuple_size_v<T>; }();
+					[&]<size_t... Index>(std::index_sequence<Index...>) {
+						(WriteFixedPrimitive<Offset + Index * PrimitiveBytes<Element>()>(into, value[Index]), ...);
+					}(std::make_index_sequence<count>{});
+				}
+			} else {
+				static_assert(std::is_trivially_copyable_v<T>);
+				std::memcpy(into + Offset, &value, sizeof(T));
 			}
 		}
 		template<size_t Begin, class Fields> void CaptureFields(const Fields& fields) {
