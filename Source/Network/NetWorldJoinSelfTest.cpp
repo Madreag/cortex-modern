@@ -2690,11 +2690,25 @@ namespace RTE {
 		leave.holderGeneration = offer.holderGeneration;
 		host.HandleMessage(12, leave, 10);
 		host.TakeOutbound();
-		// The leaver keeps its seat, held as for a drop; a join without its ticket is a newcomer and takes the free slot.
+		// A holder who lost its ticket still owns its held seat and must not receive a second one.
 		NetH4NewJoin rejoin = join;
 		rejoin.txId.fill(14);
 		host.HandleMessage(14, rejoin, 20);
 		host.Tick(NetReconnectAdmission::c_DenialReleaseMs);
+		bool heldRefusal = false;
+		for (const NetH4Outbound& outbound: host.TakeOutbound()) {
+			if (outbound.connection != 14) continue;
+			if (std::holds_alternative<NetH4TicketOffer>(outbound.payload)) return Fail("a returning world holder was offered a second seat");
+			if (const auto* rejected = std::get_if<NetJoinRejected>(&outbound.payload)) {
+				heldRefusal = rejected->rejectReason == NetRejectReason::HostNotAccepting && rejected->mismatchKey == "seat_held_for_you";
+			}
+		}
+		if (!heldRefusal) return Fail("the returning holder was not directed back to its held seat");
+		// A different newcomer can still take the unused slot without displacing the held owner.
+		NetH4NewJoin newcomer = join;
+		newcomer.displayName = "bob";
+		newcomer.txId.fill(15);
+		host.HandleMessage(15, newcomer, NetReconnectAdmission::c_DenialReleaseMs + 1);
 		bool landed = false;
 		for (const NetH4Outbound& outbound: host.TakeOutbound()) {
 			if (const auto* ticket = std::get_if<NetH4TicketOffer>(&outbound.payload)) {
@@ -2705,12 +2719,12 @@ namespace RTE {
 			}
 			if (const auto* rejected = std::get_if<NetJoinRejected>(&outbound.payload)) {
 				if (rejected->humanMessage == "the match is already in progress") {
-					return Fail("rejoin after a clean leave did not land in the running world");
+					return Fail("a different newcomer could not join after the holder left");
 				}
 			}
 		}
 		if (!landed) {
-			return Fail("rejoin after a clean leave did not land in the running world");
+			return Fail("a different newcomer was not offered the unused world seat");
 		}
 		for (const NetH4SeatStatus& status: host.GetSeatStatuses()) {
 			if (status.stableSeat == offer.stableSeat && (!status.committed || status.closed)) {
