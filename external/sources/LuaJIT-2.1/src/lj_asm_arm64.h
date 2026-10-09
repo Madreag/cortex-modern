@@ -1358,9 +1358,7 @@ static void asm_fpunary(ASMState *as, IRIns *ir, A64Ins ai)
 static void asm_fpmath(ASMState *as, IRIns *ir)
 {
   IRFPMathOp fpm = (IRFPMathOp)ir->op2;
-  if (fpm == IRFPM_SQRT) {
-    asm_fpunary(as, ir, A64I_FSQRTd);
-  } else if (fpm <= IRFPM_TRUNC) {
+  if (fpm <= IRFPM_TRUNC) {
     asm_fpunary(as, ir, fpm == IRFPM_FLOOR ? A64I_FRINTMd :
 			fpm == IRFPM_CEIL ? A64I_FRINTPd : A64I_FRINTZd);
   } else {

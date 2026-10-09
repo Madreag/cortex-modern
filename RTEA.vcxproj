@@ -1004,6 +1004,7 @@
     <ClInclude Include="Source\System\RTEError.h" />
     <ClInclude Include="Source\System\RTETools.h" />
     <ClInclude Include="Source\System\FloatingPointEnvironment.h" />
+    <ClInclude Include="Source\System\DeterministicMath.h" />
     <ClInclude Include="Source\System\Matrix.h" />
     <ClInclude Include="Source\System\PathFinder.h" />
     <ClInclude Include="Source\System\Reader.h" />

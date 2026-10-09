@@ -74,6 +74,18 @@ LUA_API int luaJIT_setmode(lua_State *L, int idx, int mode);
 LUA_API unsigned int luaJIT_numeric_policy(void);
 LUA_API void luaJIT_set_fp_assert(void (*check)(void));
 
+typedef struct luaJIT_MathHooks {
+  double (*sin)(double), (*cos)(double), (*tan)(double);
+  double (*asin)(double), (*acos)(double), (*atan)(double);
+  double (*sinh)(double), (*cosh)(double), (*tanh)(double);
+  double (*exp)(double), (*log)(double), (*log2)(double), (*log10)(double);
+  double (*sqrt)(double);
+  double (*pow)(double, double), (*atan2)(double, double), (*fmod)(double, double);
+} luaJIT_MathHooks;
+LUA_API int luaJIT_set_math_hooks(const luaJIT_MathHooks *hooks);
+LUA_API int luaJIT_math_policy(lua_State *L);
+LUA_API unsigned int luaJIT_runtime_flags(lua_State *L);
+
 /* Native preview boundary; no Lua library entry points. */
 #define LUAJIT_PREVIEW_REGISTRY_ROOT	0x0001	/* Roll the registry back with the globals. */
 LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t nskip,

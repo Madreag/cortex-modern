@@ -262,6 +262,7 @@ namespace RTE {
 		bool RunLuaHeldReferenceSelfTest();
 		static bool RunNumericPolicySelfTest();
 		static bool RunFloatingPointCallbackSelfTest(int drift = 0);
+		static bool RunDeterministicMathSelfTest();
 
 		/// Every script-owned MovableObject still live in this state's heap.
 		void VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit);

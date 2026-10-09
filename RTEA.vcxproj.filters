@@ -628,6 +628,9 @@
     <ClInclude Include="Source\System\FloatingPointEnvironment.h">
       <Filter>System</Filter>
     </ClInclude>
+    <ClInclude Include="Source\System\DeterministicMath.h">
+      <Filter>System</Filter>
+    </ClInclude>
     <ClInclude Include="Source\System\RTEError.h">
       <Filter>System</Filter>
     </ClInclude>

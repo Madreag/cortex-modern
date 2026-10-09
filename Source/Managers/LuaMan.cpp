@@ -1,3 +1,4 @@
+#include "DeterministicMath.h"
 #include "LuaMan.h"
 #include "FloatText.h"
 
@@ -11,6 +12,7 @@
 #include "RTETools.h"
 #include "FloatingPointEnvironment.h"
 #include <cfenv>
+#include <bit>
 #include "LuaThreadCodec.h"
 #include "CheckpointImage.h"
 #include "ScenarioRunner.h"
@@ -222,7 +224,17 @@ namespace {
 		static std::once_flag installed;
 		std::call_once(installed, [] {
 			luaJIT_set_fp_assert([] { FloatingPointEnvironment::Enter(); FloatingPointEnvironment::Assert("Lua library return"); });
+			const luaJIT_MathHooks hooks = {
+				DeterministicSin, DeterministicCos, DeterministicTan,
+				DeterministicAsin, DeterministicAcos, DeterministicAtan,
+				DeterministicSinh, DeterministicCosh, DeterministicTanh,
+				DeterministicExp, DeterministicLog, DeterministicLog2, DeterministicLog10,
+				static_cast<double (*)(double)>(DeterministicSqrt),
+				DeterministicPow, DeterministicAtan2, static_cast<double (*)(double, double)>(DeterministicFmod)
+			};
+			if (!luaJIT_set_math_hooks(&hooks)) { std::abort(); }
 		});
+		if (luaJIT_math_policy(state) != 1) { std::abort(); }
 		lua_pushlightuserdata(state, reinterpret_cast<void*>(&CheckedNativeCall));
 		if (!luaJIT_setmode(state, -1, LUAJIT_MODE_WRAPCFUNC | LUAJIT_MODE_ON)) { std::abort(); }
 		lua_pop(state, 1);
@@ -271,14 +283,14 @@ namespace {
 	int det_math_asin(lua_State* L) {
 		const double x = luaL_checknumber(L, 1);
 		const double t = 1.0 - x * x;
-		lua_pushnumber(L, DeterministicAtan2(x, std::sqrt(t < 0.0 ? 0.0 : t)));
+		lua_pushnumber(L, DeterministicAtan2(x, DeterministicSqrt(t < 0.0 ? 0.0 : t)));
 		return 1;
 	}
 
 	int det_math_acos(lua_State* L) {
 		const double x = luaL_checknumber(L, 1);
 		const double t = 1.0 - x * x;
-		lua_pushnumber(L, DeterministicAtan2(std::sqrt(t < 0.0 ? 0.0 : t), x));
+		lua_pushnumber(L, DeterministicAtan2(DeterministicSqrt(t < 0.0 ? 0.0 : t), x));
 		return 1;
 	}
 
@@ -7653,6 +7665,120 @@ PreviewWindowCreateFunctionsForType(Scene);
 	    luabind::def((std::string("Is") + std::string(#TYPE)).c_str(), &LuaAdaptersEntityCast::IsConst##TYPE), \
 	    OWNINGSCOPE::Register##TYPE##LuaBindings()
 
+bool LuaStateWrapper::RunDeterministicMathSelfTest() {
+	lua_State* state = luaL_newstate();
+	if (!state) { return false; }
+	RegisterFloatingPointChecks(state);
+	luaL_openlibs(state);
+	bool passed = true;
+	const auto check = [&passed](bool ok, const char* name) {
+		std::printf("[deterministic-math-selftest] %s %s\n", ok ? "PASS" : "FAIL", name);
+		passed = passed && ok;
+	};
+	check(luaJIT_math_policy(state) == 1, "linked_vm_math_policy");
+	check(std::bit_cast<uint64_t>(DeterministicSqrt(2.0)) == 0x3FF6A09E667F3BCDULL, "binary64_sqrt_rounding");
+	check(std::bit_cast<uint32_t>(DeterministicSqrt(2.0F)) == 0x3FB504F3U, "binary32_sqrt_rounding");
+	check(DeterministicFmod(0x1p1023, 3.0) == 2.0, "fmod_large_exponent");
+	check(std::bit_cast<uint64_t>(DeterministicFmod(-4.0, 2.0)) == 0x8000000000000000ULL, "fmod_negative_zero");
+	check(std::bit_cast<uint64_t>(DeterministicFmod(0x1p-1000, 0x3p-1050)) == (1ULL << 24), "fmod_subnormal");
+	check(DeterministicPow(2.0, -1024.0) == 0x1p-1024 && DeterministicPow(0x1p-1024, -1.0) == std::numeric_limits<double>::infinity(), "power_extreme_reciprocal");
+	check(std::bit_cast<uint64_t>(DeterministicPow(-0.0, 3.0)) == 0x8000000000000000ULL && std::isnan(DeterministicPow(-2.0, 0.5)), "power_zero_and_domain");
+	struct Unary { const char* name; double (*function)(double); };
+	const Unary unary[] = {
+		{"sin", DeterministicSin}, {"cos", DeterministicCos}, {"tan", DeterministicTan},
+		{"asin", DeterministicAsin}, {"acos", DeterministicAcos}, {"atan", DeterministicAtan},
+		{"sinh", DeterministicSinh}, {"cosh", DeterministicCosh}, {"tanh", DeterministicTanh},
+		{"exp", DeterministicExp}, {"log", DeterministicLog}, {"log10", DeterministicLog10},
+		{"sqrt", static_cast<double (*)(double)>(DeterministicSqrt)}
+	};
+	uint64_t digest = 14695981039346656037ULL;
+	const auto record = [&digest](double value) {
+		const uint64_t bits = std::bit_cast<uint64_t>(value);
+		for (unsigned shift = 0; shift < 64; shift += 8) { digest = (digest ^ ((bits >> shift) & 0xFFULL)) * 1099511628211ULL; }
+	};
+	for (const int mode : {LUAJIT_MODE_OFF, LUAJIT_MODE_ON}) {
+		luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_FLUSH);
+		luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | mode);
+		const char* powers =
+			"local function power(x,y) return x^y end; "
+			"local sum=0; for i=1,12000 do sum=sum+power(i/16384,3.0)+power(i/16384,0.9)+math.pow(i/16384,3.0) end; "
+			"local values={}; for i=1,64 do local x=i/64; "
+			"values[#values+1]=power(x,3.0); values[#values+1]=power(x,0.9); "
+			"values[#values+1]=math.pow(x,3.0) end; "
+			"values[#values+1]=1.125^0.9; values[#values+1]=('1.125')^('0.9'); "
+			"return values";
+		const bool loaded = luaL_dostring(state, powers) == 0;
+		check(loaded, mode == LUAJIT_MODE_ON ? "jit_power_kernel" : "interpreter_power_kernel");
+		if (loaded) {
+			bool same = true;
+			int index = 1;
+			const auto equal = [&](double expected) {
+				lua_rawgeti(state, -1, index++);
+				const double actual = lua_tonumber(state, -1);
+				lua_pop(state, 1);
+				record(actual);
+				same = same && std::bit_cast<uint64_t>(actual) == std::bit_cast<uint64_t>(expected);
+			};
+			for (int i = 1; i <= 64; ++i) {
+				const double value = static_cast<double>(i) / 64.0;
+				equal(DeterministicPow(value, 3.0)); equal(DeterministicPow(value, 0.9)); equal(DeterministicPow(value, 3.0));
+			}
+			equal(DeterministicPow(1.125, 0.9)); equal(DeterministicPow(1.125, 0.9));
+			check(same, "bytecode_jit_constant_fold_and_string_power_bits");
+		}
+		lua_settop(state, 0);
+		if (mode == LUAJIT_MODE_ON) {
+			check(luaL_dostring(state, "assert(require('jit.util').traceinfo(1)~=nil)") == 0, "power_trace_executed");
+			lua_settop(state, 0);
+		}
+		for (const Unary& entry : unary) {
+			const std::string script = std::string("local fn=math.") + entry.name + "; local out={}; for i=1,12000 do local k=i%31+1; out[k]=fn(k/32) end; return out";
+			const bool called = luaL_dostring(state, script.c_str()) == 0;
+			bool same = called;
+			if (called) for (int i = 1; i <= 31; ++i) {
+				lua_rawgeti(state, -1, i);
+				const double actual = lua_tonumber(state, -1);
+				const double expected = entry.function(static_cast<double>(i) / 32.0);
+				same = same && std::bit_cast<uint64_t>(actual) == std::bit_cast<uint64_t>(expected);
+				record(actual);
+				lua_pop(state, 1);
+			}
+			check(same, entry.name);
+			lua_settop(state, 0);
+		}
+		const Unary binary[] = {
+			{"atan2", [](double value) { return DeterministicAtan2(value, 1.75); }},
+			{"fmod", [](double value) { return DeterministicFmod(value, 1.75); }},
+			{"log", [](double value) { return DeterministicLog2(value) * (1.0 / DeterministicLog2(1.75)); }},
+			{"ldexp", [](double value) { return std::ldexp(value, 1); }}
+		};
+		for (const Unary& entry : binary) {
+			const std::string script = std::string("local fn=math.") + entry.name + "; local out={}; for i=1,12000 do local k=i%31+1; out[k]=fn(k/16,1.75) end; return out";
+			const bool called = luaL_dostring(state, script.c_str()) == 0;
+			bool same = called;
+			if (called) for (int i = 1; i <= 31; ++i) {
+				lua_rawgeti(state, -1, i);
+				const double actual = lua_tonumber(state, -1);
+				const double expected = entry.function(static_cast<double>(i) / 16.0);
+				same = same && std::bit_cast<uint64_t>(actual) == std::bit_cast<uint64_t>(expected);
+				record(actual);
+				lua_pop(state, 1);
+			}
+			check(same, entry.name);
+			lua_settop(state, 0);
+		}
+		check(luaL_dostring(state, "jit.opt.start('fma'); local function f(a,b,c) return a*b+c end; for i=1,12000 do assert(f(1+2^-27,1-2^-27,-1)==0) end") == 0 && luaJIT_math_policy(state) == 1, "fma_stays_disabled");
+		lua_settop(state, 0);
+		check(luaL_dostring(state, "assert(math.ldexp(1.5,3.9)==12); assert(math.fmod(2^1023,3)==2); assert(math.log(8,2)==3)") == 0, "ldexp_fmod_log_base_semantics");
+		lua_settop(state, 0);
+	}
+	lua_close(state);
+	FloatingPointEnvironment::Assert("math selftest return");
+	std::printf("[deterministic-math-selftest] digest=%016llx\n", static_cast<unsigned long long>(digest));
+	std::printf("[deterministic-math-selftest] %s\n", passed ? "PASS" : "FAIL");
+	return passed;
+}
+
 bool LuaStateWrapper::RunFloatingPointCallbackSelfTest(int drift) {
 	lua_State* state = luaL_newstate();
 	if (!state) { return false; }
@@ -7691,7 +7817,7 @@ bool LuaStateWrapper::RunNumericPolicySelfTest() {
 		luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | mode | LUAJIT_MODE_FLUSH);
 		luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | mode);
 		const bool ok = luaL_dostring(state, arithmetic) == 0;
-		std::printf("[lua-numeric-policy-selftest] %s %s_arithmetic\n", ok ? "PASS" : "FAIL", mode == LUAJIT_MODE_ON ? "jit" : "interpreter");
+		std::printf("[lua-numeric-policy-selftest] %s %s_arithmetic runtime_flags=%08x\n", ok ? "PASS" : "FAIL", mode == LUAJIT_MODE_ON ? "jit" : "interpreter", luaJIT_runtime_flags(state));
 		if (!ok) { std::fprintf(stderr, "%s\n", lua_tostring(state, -1)); lua_pop(state, 1); }
 		passed = passed && ok;
 	}
@@ -7751,6 +7877,8 @@ void LuaStateWrapper::Initialize() {
 	if (!g_SettingsMan.DisableLuaJIT() && !luaJIT_setmode(m_State, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_ON)) {
 		RTEAbort("Failed to initialize LuaJIT!\nIf this error persists, please disable LuaJIT with \"Settings.ini\" property \"DisableLuaJIT\".");
 	}
+	if (luaJIT_math_policy(m_State) != 1) { std::abort(); }
+	std::printf("[lua-numeric-policy] policy=%u runtime_flags=%08x math=engine fma=off\n", luaJIT_numeric_policy(), luaJIT_runtime_flags(m_State));
 
 	// A state made between two captures still owes the next capture its first table write.
 	luaJIT_arm_tab_write_trap(m_State);

@@ -8,6 +8,10 @@
 
 #include "lua.h"
 
+#if defined(__FAST_MATH__) || defined(_M_FP_FAST)
+#error "The engine requires precise LuaJIT floating-point compilation"
+#endif
+
 /* All engine targets use the ARM64-compatible number mode. */
 #if defined(LUAJIT_NUMMODE) && LUAJIT_NUMMODE != 2
 #error "The engine requires LUAJIT_NUMMODE=2"

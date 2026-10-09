@@ -2118,8 +2118,6 @@ static void build_subroutines(BuildCtx *ctx)
   |  math_round floor
   |  math_round ceil
   |
-  |.ffunc_nsse math_sqrt, sqrtsd; jmp ->fff_resxmm0
-  |
   |.ffunc math_log
   |  cmp NARGS:RD, 1+1; jne ->fff_fallback	// Exactly one argument.
   |  cmp dword [BASE+4], LJ_TISNUM; jae ->fff_fallback
@@ -2128,7 +2126,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  movsd FPARG1, xmm0
   |.endif
   |  mov RB, BASE
-  |  call extern log
+  |  call extern lj_vm_math_log
   |  mov BASE, RB
   |  jmp ->fff_resfp
   |
@@ -2138,7 +2136,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  movsd FPARG1, xmm0
   |.endif
   |  mov RB, BASE
-  |  call extern func
+  |  call extern lj_vm_math_ .. func
   |  mov BASE, RB
   |  jmp ->fff_resfp
   |.endmacro
@@ -2150,11 +2148,12 @@ static void build_subroutines(BuildCtx *ctx)
   |  movsd FPARG3, xmm1
   |.endif
   |  mov RB, BASE
-  |  call extern func
+  |  call extern lj_vm_math_ .. func
   |  mov BASE, RB
   |  jmp ->fff_resfp
   |.endmacro
   |
+  |  math_extern sqrt
   |  math_extern log10
   |  math_extern exp
   |  math_extern sin
@@ -2170,7 +2169,8 @@ static void build_subroutines(BuildCtx *ctx)
   |  math_extern2 atan2
   |  math_extern2 fmod
   |
-  |.ffunc_nnr math_ldexp;	fscale; fpop1;	jmp ->fff_resn
+  |.ffunc math_ldexp
+  |  jmp ->fff_fallback
   |
   |.ffunc_1 math_frexp
   |  mov RB, [BASE+4]
@@ -4044,7 +4044,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  movsd FPARG1, xmm0
     |  movsd FPARG3, xmm1
     |.endif
-    |  call extern pow
+    |  call extern lj_vm_math_pow
     |  movzx RA, PC_RA
     |  mov BASE, RB
     |.if X64
@@ -5993,4 +5993,3 @@ static void emit_asm_debug(BuildCtx *ctx)
     break;
   }
 }
-

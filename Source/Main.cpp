@@ -11008,6 +11008,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-fp-environment-selftest") {
 			return FloatingPointEnvironment::RunSelfTest() && LuaStateWrapper::RunFloatingPointCallbackSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-deterministic-math-selftest") {
+			return LuaStateWrapper::RunDeterministicMathSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-fp-environment-native-drift-selftest") {
 			return LuaStateWrapper::RunFloatingPointCallbackSelfTest(1) ? EXIT_SUCCESS : EXIT_FAILURE;
 		}

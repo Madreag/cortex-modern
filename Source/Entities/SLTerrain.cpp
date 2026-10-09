@@ -1,3 +1,4 @@
+#include "DeterministicMath.h"
 #include "SLTerrain.h"
 #include "MetricsCollector.h"
 #include "TerrainFrosting.h"
@@ -454,7 +455,7 @@ std::deque<MOPixel*> SLTerrain::EraseSilhouette(BITMAP* sprite, const Vector& po
 
 	int maxWidth = static_cast<int>(static_cast<float>(sprite->w + std::abs(pivot.GetFloorIntX() - (sprite->w / 2))) * scale);
 	int maxHeight = static_cast<int>(static_cast<float>(sprite->h + std::abs(pivot.GetFloorIntY() - (sprite->h / 2))) * scale);
-	int maxDiameter = static_cast<int>(std::sqrt(static_cast<float>(maxWidth * maxWidth + maxHeight * maxHeight)) * 2.0F);
+	int maxDiameter = static_cast<int>(DeterministicSqrt(static_cast<float>(maxWidth * maxWidth + maxHeight * maxHeight)) * 2.0F);
 	int skipCount = skipMOP;
 
 	BITMAP* tempBitmap = g_SceneMan.GetIntermediateBitmapForSettlingIntoTerrain(maxDiameter);

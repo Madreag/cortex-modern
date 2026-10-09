@@ -55,6 +55,7 @@ SELFTESTS = [
     "rotate-primitive",
     "lua-numeric-policy",
     "fp-environment",
+    "deterministic-math",
     "sim-checksum",
     "cow-checkpoint",
     "frame-recorder",
