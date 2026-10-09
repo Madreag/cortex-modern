@@ -605,12 +605,14 @@ namespace RTE {
 			return "(absent)";
 		}
 
-		/// connect-limit: every rendezvous signal waits delayMs in the stub, as signals crossing a slow directory do, so the connect
-		/// outlasts GNS's 10 s default and must still reach Connected inside the ICE limit; then a joiner whose signals are never
+		/// connect-limit: requests wait past GNS's 10 s default and replies wait delayMs, so a two-signal rendezvous
+		/// must still reach Connected inside the ICE limit; then a joiner whose signals are never
 		/// delivered gives up inside that limit; and the route tracker reports one move per change of the live route.
 		int RunConnectLimit(double delayMs) {
 			const uint32_t limitMs = GnsTransport::IceConnectTimeoutMs();
-			Say("mode: connect-limit, single process; every rendezvous signal waits " + Ms(delayMs) + "ms in the stub; the ICE connect limit is " + std::to_string(limitMs) + "ms");
+			const double defaultLimitMs = 10000.0;
+			const double requestDelayMs = defaultLimitMs + delayMs;
+			Say("mode: connect-limit, single process; requests wait " + Ms(requestDelayMs) + "ms and replies wait " + Ms(delayMs) + "ms; the ICE connect limit is " + std::to_string(limitMs) + "ms");
 			EnableGnsOutput();
 			std::string failure;
 			{
@@ -649,7 +651,7 @@ namespace RTE {
 				StubRecvContext hostContext(toJoiner, releases, Answer::Accept);
 				StubRecvContext joinerContext(toHost, releases, Answer::Ignore);
 				const auto pump = [&] {
-					DeliverAfter(*toHost, host.transport, hostContext, delayMs);
+					DeliverAfter(*toHost, host.transport, hostContext, requestDelayMs);
 					DeliverAfter(*toJoiner, joiner.transport, joinerContext, delayMs);
 					Drain(host);
 					Drain(joiner);
@@ -677,7 +679,7 @@ namespace RTE {
 								Say(std::string(side->name) + " connection config TimeoutInitial=" + value);
 								if (failure.empty() && value != std::to_string(limitMs)) failure = std::string(side->name) + "'s ICE connection runs with TimeoutInitial=" + value + ", not the ICE limit " + std::to_string(limitMs);
 							}
-							if (failure.empty() && tookMs <= 10000.0) {
+							if (failure.empty() && tookMs <= defaultLimitMs) {
 								failure = "the slow rendezvous connected in " + Ms(tookMs) + "ms, inside GNS's 10 s default, so it does not exercise the limit: raise the delay";
 							}
 						}
