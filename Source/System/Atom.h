@@ -6,6 +6,7 @@
 #include <string>
 #include "Material.h"
 #include "SceneMan.h"
+#include "CheckpointPagePool.h"
 
 namespace RTE {
 
@@ -65,6 +66,8 @@ namespace RTE {
 	/// A point (pixel) that tests for collisions with a BITMAP's drawn pixels, ie not the mask color. Owned and operated by other objects.
 	class Atom : public Serializable {
 		friend struct ContractAudit;
+		struct FreezeState;
+		struct FrozenList;
 
 
 	public:
@@ -73,6 +76,19 @@ namespace RTE {
 		std::string SaveCheckpoint() const;
 		/// Owns atom fields before the saver thread formats the existing list.
 		static CheckpointText CaptureCheckpointList(const std::vector<Atom*>& atoms);
+		/// Freezes native pages while the live capture records its small owned inputs.
+		class SnapshotScope {
+		public:
+			explicit SnapshotScope(bool enabled);
+			~SnapshotScope();
+			std::shared_ptr<const CheckpointPagePool::Snapshot> Pages() const;
+			SnapshotScope(const SnapshotScope&) = delete;
+			SnapshotScope& operator=(const SnapshotScope&) = delete;
+		private:
+			std::shared_ptr<FreezeState> m_State;
+			FreezeState* m_Previous = nullptr;
+		};
+		static bool CaptureFrozenProperties(Writer& writer, const std::vector<Atom*>& atoms);
 		static std::string CheckpointListSelfTestMismatch();
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		void ResolveCheckpointLinks();
@@ -477,6 +493,9 @@ namespace RTE {
 		bool m_SubStepped;
 
 	private:
+		static inline std::atomic<FreezeState*> s_FreezeState{nullptr};
+		static std::shared_ptr<const FrozenList> FreezeList(const std::vector<Atom*>& atoms);
+		static CheckpointText CaptureFrozenList(const std::shared_ptr<const FrozenList>& list);
 		// Owner, collision bodies and their roots are resolved after the complete
 		// native world has adopted its saved identities.
 		std::array<std::string, 3> m_CheckpointMaterialReferences;

@@ -2,6 +2,7 @@
 #include "Base64/base64.h"
 #include "CheckpointArchive.h"
 #include "CheckpointProperties.h"
+#include "ScenarioRunner.h"
 
 #include "SLTerrain.h"
 #include "MovableMan.h"
@@ -31,6 +32,40 @@ std::mutex Atom::s_MemoryPoolMutex;
 std::vector<void*> Atom::s_AllocatedPool;
 int Atom::s_PoolAllocBlockCount = 200;
 int Atom::s_InstancesInUse = 0;
+
+namespace {
+	struct NativeAtomPool {
+		CheckpointPagePool pages;
+		std::vector<void*> free;
+	};
+	NativeAtomPool* s_NativeAtomPool = nullptr;
+}
+
+struct Atom::FreezeState : std::enable_shared_from_this<FreezeState> {
+	std::shared_ptr<const CheckpointPagePool::Snapshot> pages;
+	std::unordered_map<const MovableObject*, long> knownIDs;
+};
+
+Atom::SnapshotScope::SnapshotScope(bool enabled) {
+	if (!enabled) return;
+	m_State = std::make_shared<FreezeState>();
+	{
+		std::lock_guard lock(s_MemoryPoolMutex);
+		if (s_NativeAtomPool) m_State->pages = s_NativeAtomPool->pages.Freeze();
+	}
+	const auto known = g_MovableMan.SnapshotKnownObjects();
+	m_State->knownIDs.reserve(known.size());
+	for (const MovableObject* object: known) m_State->knownIDs.emplace(object, object->GetUniqueID());
+	m_Previous = s_FreezeState.exchange(m_State.get(), std::memory_order_acq_rel);
+}
+
+Atom::SnapshotScope::~SnapshotScope() {
+	if (m_State) s_FreezeState.store(m_Previous, std::memory_order_release);
+}
+
+std::shared_ptr<const CheckpointPagePool::Snapshot> Atom::SnapshotScope::Pages() const {
+	return m_State ? m_State->pages : nullptr;
+}
 
 // This forms a circle around the Atom's offset center, to check for mask color pixels in order to determine the normal at the Atom's position.
 const int Atom::s_NormalChecks[c_NormalCheckCount][2] = {{0, -3}, {1, -3}, {2, -2}, {3, -1}, {3, 0}, {3, 1}, {2, 2}, {1, 3}, {0, 3}, {-1, 3}, {-2, 2}, {-3, 1}, {-3, 0}, {-3, -1}, {-2, -2}, {-1, -3}};
@@ -737,6 +772,15 @@ int Atom::Save(Writer& writer) const {
 
 void* Atom::GetPoolMemory() {
 	std::lock_guard<std::mutex> guard(s_MemoryPoolMutex);
+	if (ScenarioRunner::HasLockstepCoordinator()) {
+		// The native pool stays alive through manager and static teardown.
+		if (!s_NativeAtomPool) s_NativeAtomPool = new NativeAtomPool;
+		if (s_NativeAtomPool->free.empty()) s_NativeAtomPool->pages.Grow(sizeof(Atom), std::max(s_PoolAllocBlockCount, 10), s_NativeAtomPool->free);
+		void* memory = s_NativeAtomPool->free.back();
+		s_NativeAtomPool->free.pop_back();
+		++s_InstancesInUse;
+		return memory;
+	}
 
 	// If the pool is empty, then fill it up again with as many instances as we are set to
 	if (s_AllocatedPool.empty()) {
@@ -787,7 +831,8 @@ int Atom::ReturnPoolMemory(void* returnedMemory) {
 	}
 
 	std::lock_guard<std::mutex> guard(s_MemoryPoolMutex);
-	s_AllocatedPool.push_back(returnedMemory);
+	if (s_NativeAtomPool && s_NativeAtomPool->pages.Contains(returnedMemory)) s_NativeAtomPool->free.push_back(returnedMemory);
+	else s_AllocatedPool.push_back(returnedMemory);
 
 	// Keep track of the number of instances passed in
 	s_InstancesInUse--;
