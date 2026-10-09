@@ -1245,6 +1245,8 @@ struct MenuTraceCoverage {
 };
 static MenuTraceCoverage s_menuTraceCoverage;
 static bool s_cowCheckpointAutosave = false;
+static bool s_checkpointRestoreContinue = false;
+static uint64_t s_checkpointRestoreTick = 0;
 static bool s_checkpointFixturePrimeScripts = false;
 static bool s_checkpointAudioEffects = false;
 static bool s_checkpointAudioEffectsPassed = false;
@@ -1641,7 +1643,7 @@ static uint64_t s_netReplayDumpTo = 0;
 bool HarnessMatchRunActive() {
 	// This explicit checkpoint fixture flag also restores archives without an
 	// active scenario runner. Their saved baseline still includes Tests.rte.
-	if (s_cowCheckpointAutosave) return true;
+	if (s_cowCheckpointAutosave || s_checkpointRestoreContinue) return true;
 	std::string type = "GAScripted", preset = s_netMatchServiceE2EPreset, module = s_netMatchServiceE2EModule;
 	const auto selected = [&](const NetMatchConfig& config) {
 		type = config.activityType; preset = config.activityPreset; module = config.activityModule;
@@ -2117,6 +2119,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (currentArg == "-cow-checkpoint-autosave") {
 			s_cowCheckpointAutosave = true;
+			++i;
+			continue;
+		}
+		if (currentArg == "-checkpoint-restore-continue") {
+			s_checkpointRestoreContinue = true;
 			++i;
 			continue;
 		}
@@ -7595,6 +7602,15 @@ void RunGameLoop() {
 				break;
 			}
 			ZoneScopedN("Simulation Update");
+			struct RestoreTickCost {
+				bool enabled;
+				uint64_t tick;
+				std::chrono::steady_clock::time_point start;
+				~RestoreTickCost() {
+					if (enabled) System::PrintDiagnosticLine(std::format("[checkpoint-restore-tick] tick={} sim_us={}", tick,
+					    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()));
+				}
+			} restoreTickCost{s_checkpointRestoreContinue, nextSimTick, s_checkpointRestoreContinue ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}};
 			HarnessCost::BeginFrame();
 
 			// The probe's sim-rate keys land before the update that reads them; SDL events only arrive per frame.
@@ -7685,7 +7701,8 @@ void RunGameLoop() {
 				for (SceneObject* object: actors) if (auto* actor = dynamic_cast<Actor*>(object)) actor->InitializeObjectScriptsIfNeeded();
 			}
 			if (!s_loadGameName.empty() && ScenarioRunner::GetArgs().maxTicks > 0 &&
-			    simTick >= static_cast<uint64_t>(ScenarioRunner::GetArgs().maxTicks)) {
+			    (s_checkpointRestoreContinue ? simTick >= s_checkpointRestoreTick && simTick - s_checkpointRestoreTick >= static_cast<uint64_t>(ScenarioRunner::GetArgs().maxTicks) :
+			     simTick >= static_cast<uint64_t>(ScenarioRunner::GetArgs().maxTicks))) {
 				System::SetQuit(true);
 			}
 			if (s_cowCheckpointAutosave && g_ActivityMan.ActivityRunning() && simTick == 1) {
@@ -8255,6 +8272,8 @@ void RunGameLoop() {
 				g_MovableMan.FeedTickEndChecksum();
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
+				if (s_checkpointRestoreContinue) System::PrintDiagnosticLine(std::format("[checkpoint-restore-hash] tick={} total={} sim_gated={}",
+				    simTick, SimChecksum::HashHex(tickResult.total), SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult))));
 				RetractAbandonedTickHashes();
 				if (liveHashTick) {
 					nlohmann::json subsystems = nlohmann::json::object();
@@ -8385,7 +8404,7 @@ void RunGameLoop() {
 			}
 			// The self-test's capture rides the same tick boundary the live autosave uses, after the
 			// census above: a capture taken at the top of the frame describes a different instant.
-			if (s_cowCheckpointAutosave && g_ActivityMan.ActivityRunning() && simTick > 0 && (simTick == 1 || simTick % 60 == 0)) {
+			if (s_cowCheckpointAutosave && !s_checkpointRestoreContinue && g_ActivityMan.ActivityRunning() && simTick > 0 && (simTick == 1 || simTick % 60 == 0)) {
 				// The capture freezes the sim thread, so its budget is one sim tick.
 				constexpr int64_t captureBudgetUs = 16700;
 				const bool saved = g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", simTick);
@@ -11658,8 +11677,12 @@ int main(int argc, char** argv) {
 					// Recapture the restored instant before simulation advances. The
 					// fixture's absolute two-tick cap can precede the saved tick.
 					const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-					if (!g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", tick) || !g_ActivityMan.WaitForAutosaveVerdict()) s_loadGameFailed = true;
-					System::SetQuit(true);
+					if (!g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", tick) || (!s_checkpointRestoreContinue && !g_ActivityMan.WaitForAutosaveVerdict())) s_loadGameFailed = true;
+					if (!s_checkpointRestoreContinue || s_loadGameFailed) System::SetQuit(true);
+				}
+				if (loadedSavedGame && s_checkpointRestoreContinue) {
+					s_checkpointRestoreTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+					if (ScenarioRunner::GetArgs().maxTicks <= 0) { s_loadGameFailed = true; System::SetQuit(true); }
 				}
 			}
 			if (!loadedSavedGame && !g_ActivityMan.Initialize()) {
@@ -11675,6 +11698,12 @@ int main(int argc, char** argv) {
 			}
 
 			RunGameLoop();
+			if (loadedSavedGame && s_checkpointRestoreContinue) {
+				const bool saved = !s_cowCheckpointAutosave || g_ActivityMan.WaitForAutosaveVerdict();
+				s_loadGameFailed = s_loadGameFailed || !saved;
+				System::PrintDiagnosticLine(std::format("[checkpoint-restore-continue] start={} end={} captured={} verdict={}",
+				    s_checkpointRestoreTick, g_TimerMan.GetSimUpdateCount(), s_cowCheckpointAutosave, !s_loadGameFailed));
+			}
 
 			// The menu-driven match writes the same lockstep counters the headless gates do, so a
 			// lobby lane can say which side of the relay a stall was on.
