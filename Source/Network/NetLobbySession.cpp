@@ -1909,7 +1909,9 @@ namespace RTE {
 		}
 		const NetHash32 incomingHash = NetMatchConfigUtil::HashConfig(message.config);
 		// A Ready counts only for the setup it was given for: the comparison comes before any path takes the new config.
-		if (m_State != NetLobbyState::WaitingForConfig && m_LocalReady && !m_Config.autoReady && SetupDiffers(m_Config.matchConfig, message.config)) {
+		const NetMatchConfig& readied = m_Config.readyForSetup ? *m_Config.readyForSetup : m_Config.matchConfig;
+		if ((m_State != NetLobbyState::WaitingForConfig || m_Config.readyForSetup) && m_LocalReady && !m_Config.autoReady &&
+		    (readied.sessionId != message.config.sessionId || SetupDiffers(readied, message.config))) {
 			m_LocalReady = false;
 			m_ReadySent = false;
 			m_ReadyClearedBySetup = true;
@@ -1933,6 +1935,7 @@ namespace RTE {
 			Reject(validateError);
 			return;
 		}
+		m_Config.readyForSetup.reset();
 		m_Config.matchConfig = message.config;
 		if (!m_Config.matchConfig.relay.Usable(RelayWallSeconds())) m_Config.matchConfig.relay = {};
 		m_MatchConfigHash = incomingHash;

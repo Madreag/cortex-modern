@@ -698,7 +698,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 	});
 	for (const NetGameCommand& command: commands) {
 		if (std::holds_alternative<NetGameSeatHold>(command.payload) || std::holds_alternative<NetGameInputDelay>(command.payload) || std::holds_alternative<NetGameSeatReclaim>(command.payload) ||
-		    std::holds_alternative<NetGameSeatRelease>(command.payload)) continue;
+		    std::holds_alternative<NetGameSeatRelease>(command.payload) || std::holds_alternative<NetGameHostAuthority>(command.payload)) continue;
 		if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) {
 			ScenarioRunner::ObserveLockstepPlayerBindings(command.senderPeerId, readyFrame.frame, *bindings);
 			continue;

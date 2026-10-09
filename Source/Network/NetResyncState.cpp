@@ -149,7 +149,7 @@ namespace RTE {
 			return command.sequence == 0 && command.senderPeerId == input.senderPeerId &&
 			       (std::holds_alternative<NetGameInputDelay>(command.payload) || std::holds_alternative<NetGameSeatHold>(command.payload) ||
 			        std::holds_alternative<NetGameSeatRelease>(command.payload) || std::holds_alternative<NetGameSeatReclaim>(command.payload) ||
-			        std::holds_alternative<NetGameWorldTransition>(command.payload));
+			        std::holds_alternative<NetGameWorldTransition>(command.payload) || std::holds_alternative<NetGameHostAuthority>(command.payload));
 		});
 	}
 

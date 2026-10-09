@@ -1281,7 +1281,7 @@ namespace RTE {
 
 	uint8_t ScenarioRunner::GetLockstepHostPeerId() {
 		NetLockstepPlaneGuard plane;
-		return s_LockstepCoordinator ? s_LockstepCoordinator->GetHostPeerId() : 0;
+		return s_LockstepCoordinator ? s_LockstepCoordinator->SimulationHostPeerId() : 0;
 	}
 
 	bool ScenarioRunner::IsHostMigrationCatchUp() {
@@ -3329,7 +3329,7 @@ namespace RTE {
 			                                             " ticks were due before their inputs") +
 			                            "; the clock drops what it owes and holds back " + std::to_string(slide) + " ticks");
 		}
-		s_UpdateAuthority = {tick, s_LockstepCoordinator->GetHostPeerId()};
+		s_UpdateAuthority = {tick, s_LockstepCoordinator->HostAuthorityAt(tick)};
 		return true;
 	}
 

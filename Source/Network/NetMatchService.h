@@ -1277,6 +1277,7 @@ namespace RTE {
 		/// The session the round is hosted on; the adopted match config carries the seats it offers.
 		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig) const;
 		/// Applies the service's lobby start policy and request controls.
+		std::optional<NetMatchConfig> ReadyForRejoin(const NetMatchServiceRequest& request) const;
 		void ConfigureLobbyStart(NetMatchRunnerConfig& config);
 		/// Publishes the runner's accepted lobby configuration and its display snapshot together.
 		void ConfigureLobbyPublishing(NetMatchRunnerConfig& config, const NetMatchRunner& runner);
@@ -1850,6 +1851,7 @@ namespace RTE {
 		uint16_t m_BeaconGamePort = 0;
 		uint8_t m_BeaconMaxPlayers = 2;
 		std::atomic<bool> m_ReadyRequested{false};
+		std::optional<NetMatchConfig> m_ReadyRejoinConfig; //!< The setup the player readied for, retained only while reconnecting to that lobby.
 		std::atomic<bool> m_StartRequested{false};
 		std::atomic<bool> m_CancelStartRequested{false};
 		std::atomic<bool> m_LobbyInput{false};

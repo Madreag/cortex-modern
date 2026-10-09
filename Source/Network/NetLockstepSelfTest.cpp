@@ -4195,6 +4195,13 @@ namespace RTE {
 					uint64_t fold = 1469598103934665603ULL;
 					const auto mix = [&fold](uint64_t value) { fold = (fold ^ value) * 1099511628211ULL; };
 					mix(ready.frame);
+					mix(ready.authorityPeerId);
+					mix(ready.updateAuthorityPeerId == 0 ? ready.authorityPeerId : ready.updateAuthorityPeerId);
+					for (const auto* commands: {&ready.localCommands, &ready.remoteCommands}) for (const auto& command: *commands)
+						if (const auto* authority = std::get_if<NetGameHostAuthority>(&command.payload)) {
+							mix(authority->formerPeerId); mix(authority->peerId); mix(authority->generation); mix(authority->applyFrame);
+							mix(authority->electorate); mix(authority->voters); mix(authority->members);
+						}
 					for (const uint8_t peer: ready.departedPeerIds) mix(0x100 + peer);
 					for (const uint8_t peer: ready.aiHeldPeerIds) mix(0x200 + peer);
 					for (const auto& [peer, frame]: ready.committedPeerLeaves) mix((0x300ULL + peer) ^ (frame << 16));
@@ -4312,7 +4319,7 @@ namespace RTE {
 		}
 
 		// R6 (4) on the round: a split of two against two with the host's pair: the far pair is two of four connected seats, no
-		// majority, so it hands the match to nobody and waits for the host; the host's pair plays on with the far seats held.
+		// majority, so neither side commits a different roster or authority.
 		bool TestATwoTwoSplitMigratesNobody(std::string* error) {
 			QuorumRig r;
 			if (!StartQuorumRig(r, 4, 47120, error)) return false;
@@ -4320,27 +4327,24 @@ namespace RTE {
 				*error = "the four-player round never ran twenty frames:" + r.Report();
 				return false;
 			}
-			const uint64_t splitAt = r.simulated[0];
+			const uint64_t committedLimit = *std::max_element(r.queued.begin(), r.queued.end());
 			r.partition->Split({1, 2}, {3, 4});
-			const auto settled = [&r, splitAt] {
-				return r.Peer(3).IsStopped() && r.Peer(4).IsStopped() && r.Peer(1).IsRunning() && r.Peer(2).IsRunning() && r.simulated[0] >= splitAt + 60 && r.simulated[1] >= splitAt + 60;
-			};
+			const auto settled = [&r] { return r.Peer(3).IsStopped() && r.Peer(4).IsStopped(); };
 			(void)PumpQuorumRig(r, 12000, settled);
 			const std::string unreachable = "PeerHeld:The host is unreachable - 2 of 4 players reachable";
 			const bool farPairWaits = r.Peer(3).IsStopped() && r.Peer(4).IsStopped() && r.Peer(3).GetStats().timeoutReason == unreachable && r.Peer(4).GetStats().timeoutReason == unreachable;
 			const bool nobodyHosts = r.Peer(3).GetHostPeerId() == 1 && r.Peer(4).GetHostPeerId() == 1;
-			const bool hostPlays = r.Peer(1).IsRunning() && r.Peer(2).IsRunning() && r.Peer(2).GetHostPeerId() == 1 && r.simulated[0] >= splitAt + 60 &&
-			                       r.Peer(1).IsSeatUnderAI(3, r.simulated[0]) && r.Peer(1).IsSeatUnderAI(4, r.simulated[0]);
+			const bool hostPlays = r.Peer(1).GetHostPeerId() == 1 && r.Peer(2).GetHostPeerId() == 1 && r.simulated[0] <= committedLimit &&
+			                       !r.Peer(1).IsSeatUnderAI(3, UINT64_MAX) && !r.Peer(1).IsSeatUnderAI(4, UINT64_MAX);
 			if (!farPairWaits || !nobodyHosts || !hostPlays) {
-				*error = "a two-two split " + std::string(!nobodyHosts ? "elected a second host" : !farPairWaits ? "did not leave the far pair waiting" : "stopped the host's pair") + ":" + r.Report();
+				*error = "a two-two split " + std::string(!nobodyHosts ? "elected a second host" : !farPairWaits ? "did not leave the far pair waiting" : "committed a minority hold") + ":" + r.Report();
 				return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS a_two_two_split_migrates_nobody far=\"" << r.Peer(3).GetStats().timeoutReason << "\" host_played_to=" << r.simulated[0] << std::endl;
 			return true;
 		}
 
-		// R6 (5) on the round: a two-player split: the survivor is one of two connected seats, the two-seat exception, so it hosts the
-		// match alone at the next generation; the host plays on with the survivor's seat held, and learns of the generation later.
+		// Neither half of a two-player partition can certify a new roster or host. A clean host leave remains a separate event.
 		bool TestATwoPlayerSplitSurvivorHostsAlone(std::string* error) {
 			QuorumRig r;
 			if (!StartQuorumRig(r, 2, 47130, error)) return false;
@@ -4348,29 +4352,28 @@ namespace RTE {
 				*error = "the two-player round never ran twenty frames:" + r.Report();
 				return false;
 			}
-			const uint64_t splitAt = r.simulated[1];
+			const uint64_t committedLimit = *std::max_element(r.queued.begin(), r.queued.end());
 			r.partition->Split({1}, {2});
-			const auto settled = [&r, splitAt] {
-				return r.Peer(2).IsRunning() && !r.Peer(2).IsMigrating() && r.Peer(2).GetHostPeerId() == 2 && r.simulated[1] >= splitAt + 30 && r.simulated[0] >= splitAt + 30;
+			const auto settled = [&r] {
+				return r.Peer(2).IsStopped();
 			};
-			if (!PumpQuorumRig(r, 12000, settled) || r.Peer(2).GetMigrationResult().generation != 1 || !r.Peer(1).IsRunning() || r.Peer(1).GetHostPeerId() != 1 ||
-			    !r.Peer(1).IsSeatUnderAI(2, r.simulated[0]) || !r.Peer(1).IsHostProvisional()) {
-				*error = "the survivor of a two-player split did not host alone beside the held, provisional host: provisional=" + std::to_string(r.Peer(1).IsHostProvisional()) + r.Report();
+			if (!PumpQuorumRig(r, 12000, settled) || r.Peer(2).GetHostPeerId() != 1 || r.Peer(1).GetHostPeerId() != 1 ||
+			    r.Peer(1).IsSeatUnderAI(2, UINT64_MAX) || r.simulated[0] > committedLimit || r.simulated[1] > committedLimit) {
+				*error = "a two-player partition manufactured a second committed history: provisional=" + std::to_string(r.Peer(1).IsHostProvisional()) + r.Report();
 				return false;
 			}
-			// The split heals: the survivor's generation wins, and the old host stops to rejoin it.
-			r.partition->cut.clear();
-			if (!PumpQuorumRig(r, 6000, [&r] { return r.Peer(1).IsStopped(); }) || r.Peer(1).SupersedingPeer() != 2 || !r.Peer(1).IsSuperseded() || !r.Peer(2).IsRunning()) {
-				*error = "the survivor's generation did not win when the two-player split healed: superseded by " + std::to_string(r.Peer(1).SupersedingPeer()) + r.Report();
-				return false;
-			}
-			std::cout << "[net-lockstep-selftest] PASS a_two_player_split_survivor_hosts_alone generation=" << r.Peer(2).GetMigrationResult().generation << " survivor_played_to=" << r.simulated[1]
+			// An unverified directory generation cannot remove the host either.
+			r.Peer(1).NoteSuperseded(99);
+			if (r.Peer(1).IsSuperseded() || r.Peer(1).GetHostPeerId() != 1) { *error = "a directory generation removed an uncertified host"; return false; }
+			std::string why;
+			if (!QuorumFoldsAgree(r, {1, 2}, &why)) { *error = why; return false; }
+			std::cout << "[net-lockstep-selftest] PASS a_two_player_split_cannot_elect_a_second_host generation=" << r.Peer(2).GetMigrationResult().generation << " survivor_played_to=" << r.simulated[1]
 			          << " superseded_by=" << static_cast<int>(r.Peer(1).SupersedingPeer()) << std::endl;
 			return true;
 		}
 
 		// R6 (3) on the round: the host is cut off from the other three; they are three of four connected seats and hand the match on,
-		// while the host, one of four, keeps simulating as a provisional host.
+		// while the host, one of four, parks at the end of its committed prefix.
 		bool TestAnIsolatedHostIsProvisionalWhileTheMajorityMigrates(std::string* error) {
 			QuorumRig r;
 			if (!StartQuorumRig(r, 4, 47150, error)) return false;
@@ -4379,18 +4382,19 @@ namespace RTE {
 				return false;
 			}
 			const uint64_t splitAt = r.simulated[0];
+			const uint64_t committedLimit = *std::max_element(r.queued.begin(), r.queued.end());
 			r.partition->Split({1}, {2, 3, 4});
 			const auto settled = [&r, splitAt] {
 				for (uint8_t peer = 2; peer <= 4; ++peer)
 					if (!r.Peer(peer).IsRunning() || r.Peer(peer).IsMigrating() || r.Peer(peer).GetHostPeerId() != 2) return false;
-				return r.Peer(1).IsHostProvisional() && r.simulated[0] >= splitAt + 60;
+				return r.Peer(1).IsHostProvisional() && r.simulated[1] >= splitAt + 60;
 			};
 			if (!PumpQuorumRig(r, 12000, settled)) {
 				*error = "an isolated host was not left provisional beside the majority's handover: reach " + std::to_string(r.Peer(1).GetHostReach().votes) + " of " +
 				         std::to_string(r.Peer(1).GetHostReach().seats) + r.Report();
 				return false;
 			}
-			if (r.Peer(1).GetHostReach().votes != 1 || r.Peer(1).GetHostReach().seats != 4 || !r.Peer(1).IsRunning() || r.Peer(1).SupersedingPeer() != 0) {
+			if (r.Peer(1).GetHostReach().votes != 1 || r.Peer(1).GetHostReach().seats != 4 || !r.Peer(1).IsRunning() || r.Peer(1).SupersedingPeer() != 0 || r.simulated[0] > committedLimit) {
 				*error = "the isolated host counted its reach wrongly: " + std::to_string(r.Peer(1).GetHostReach().votes) + " of " + std::to_string(r.Peer(1).GetHostReach().seats) + r.Report();
 				return false;
 			}
@@ -4406,6 +4410,8 @@ namespace RTE {
 				*error = "the provisional host's screen did not say its play is provisional";
 				return false;
 			}
+			std::string why;
+			if (!QuorumFoldsAgree(r, {1, 2, 3, 4}, &why)) { *error = why; return false; }
 			// The split heals: the old host asks the successors, learns the match went on, and stops to rejoin it as a player.
 			r.partition->cut.clear();
 			if (!PumpQuorumRig(r, 6000, [&r] { return r.Peer(1).IsStopped(); }) || r.Peer(1).SupersedingPeer() != 2 ||
@@ -21872,6 +21878,31 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			*error = "every-hold-producer-writes-the-seat-log: a hold adopted from a replayed tail at 25, back at 90, read (under_ai, gone) at 40/96 as " + seen + "; expected 11/00";
 			return false;
 		}
+		// A continuing survivor must acknowledge the hold before either seat ownership or its vote changes.
+		LoopbackTransport hostWire, survivorWire;
+		if (!hostWire.StartHost(43565, error) || !survivorWire.Connect("loopback", 43565, error)) return false;
+		hostWire.PollEvents(); survivorWire.PollEvents();
+		NetLockstepCoordinator host;
+		host.m_Config = config; host.m_Config.localPeerId = 1; host.m_Config.authorityPeerId = 1;
+		host.m_Config.matchConfig.successorOrder = {2, 3};
+		host.m_State = NetLockstepState::Running; host.m_RoundId = 41; host.m_Stats.nextFrame = 100;
+		host.m_Transport = &hostWire; host.m_RemotePeerIds = {2, 3}; host.m_RemoteTransports[2] = 1;
+		for (uint8_t peer: {1, 2, 3}) host.m_PeerEffectiveStart[peer] = 5;
+		if (!host.ProposePeerHold(3, 1000, error, 100)) return false;
+		if (host.IsSeatUnderAI(3, 100) || host.MigrationElectorate() != 7 || !host.TimingDecisionPendingAt(100)) {
+			*error = "an unacknowledged hold changed the seat, electorate, or commit barrier"; return false;
+		}
+		const auto proposed = host.m_TimingDecisions.begin()->second.proposal;
+		auto ack = proposed; ack.senderPeerId = 2; ack.phase = NetTimingPhase::Acknowledge; ack.nextFrame = 100;
+		host.HandleTiming(ack, 1001, 1);
+		if (host.IsSeatUnderAI(3, 99) || !host.IsSeatUnderAI(3, 100) || host.TimingDecisionPendingAt(100)) {
+			*error = "an acknowledged hold missed its exact committed tick"; return false;
+		}
+		// A later attempt to remove the last survivor cannot be committed by the host alone.
+		host.m_LastDeliveredFrame = 100; host.m_LastCompletedSimulationTick = 100; host.m_Stats.nextFrame = 101;
+		if (!host.ProposePeerHold(2, 1100, error, 101) || host.IsSeatUnderAI(2, 101) || !host.TimingDecisionPendingAt(101)) {
+			*error = "repeated late holds manufactured a lone authority"; return false;
+		}
 		return true;
 	}
 
@@ -22162,13 +22193,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		config.peerCount = 3; config.authorityPeerId = 1;
 		survivor.m_Config = config;
 		NetLockstepReadyFrame ready;
-		ready.frame = 300; ready.hasLocalInput = true;
+		ready.frame = 300; ready.hasLocalInput = true; ready.authorityPeerId = 1; ready.updateAuthorityPeerId = 1;
 		ready.localFrames.resize(1);
 		ready.remoteFrameCounts[3] = 1; ready.remoteFrames.resize(1);
 		ready.remoteCommands.push_back({1, NetGameSeatHold{1, 0, 5, 1, 300}});
 		std::vector<uint8_t> bytes;
 		NetLockstepReadyFrame decoded;
 		const bool encoded = survivor.EncodeMigrationFrame(ready, bytes);
+		survivor.m_Config.authorityPeerId = 3; // Decoding must use the recorded authority, regardless of the current host.
 		const bool read = encoded && survivor.DecodeMigrationFrame(bytes, 300, decoded);
 		if (!read || decoded.remoteCommands.size() != 1 || decoded.remoteFrameCounts.contains(1) || !decoded.remoteFrameCounts.contains(3)) {
 			*error = "a-held-hosts-frame-crosses-a-migration: the frame of a held host's hold encoded " + std::to_string(encoded) + " and read back " + std::to_string(read) +
@@ -22176,10 +22208,22 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return false;
 		}
 		// The frame names the peer that committed it, so packing it for a returner keeps the order the live round applied.
-		if (decoded.localPeerId != 2) {
+		if (decoded.localPeerId != 2 || decoded.authorityPeerId != 1 || decoded.updateAuthorityPeerId != 1) {
 			*error = "a-held-hosts-frame-crosses-a-migration: a migration frame read back naming committing peer " + std::to_string(decoded.localPeerId) + "; expected 2";
 			return false;
 		}
+		NetLockstepFrame handover;
+		handover.senderPeerId = 3; handover.roundId = 1; handover.targetFrame = 301;
+		const NetGameHostAuthority authority{1, 3, 1, 301, 7, 6, 6};
+		handover.commands.push_back({3, authority});
+		NetLockstepFrame restored;
+		if (!NetLockstepCodec::EncodeRecoveryInput(handover, bytes) || !NetLockstepCodec::DecodeRecoveryInput(bytes, restored) || restored.commands != handover.commands) {
+			*error = "a committed authority event did not survive recovery encoding"; return false;
+		}
+		auto invalid = authority; invalid.voters = 4; invalid.members = 4;
+		if (invalid.IsValid()) { *error = "one voter certified a three-seat authority"; return false; }
+		survivor.m_AuthorityEvents.emplace(301, authority);
+		if (survivor.HostAuthorityAt(300) != 1 || survivor.HostAuthorityAt(301) != 3) { *error = "authority crossed its committed tick"; return false; }
 		return true;
 	}
 

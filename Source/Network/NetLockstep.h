@@ -455,6 +455,7 @@ namespace RTE {
 		std::vector<uint8_t> members;
 		std::vector<uint8_t> bytes;
 		std::vector<NetLockstepTiming> futureDelays;
+		uint32_t voterMask = 0; //!< The seats that agreed this generation and boundary.
 		uint32_t connectedMask = 0; ///< Answer: the seats the voter's committed round has connected at its applied frame, the host's among them; roll call and abort: the roster the vote is counted against.
 	};
 
@@ -482,7 +483,7 @@ namespace RTE {
 	class NetHostMigrationCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x314D4843;
-		static constexpr uint16_t c_Version = 3;
+		static constexpr uint16_t c_Version = 4;
 		static constexpr size_t c_ChunkBytes = 48 * 1024;
 		static constexpr size_t c_MaxFrameBytes = 4 * 512 * 1024 + 256;
 		static constexpr size_t c_HistoryFrames = 2 * 240;
@@ -698,6 +699,7 @@ namespace RTE {
 		static constexpr uint16_t c_Version = 40;
 		static constexpr uint16_t c_AdmissionVersion = 48; //!< Catch-up reports identify the replay owning their work counters.
 		static constexpr uint16_t c_EditorPlacementVersion = 47;
+		static constexpr uint16_t c_HostAuthorityVersion = 49; //!< Committed handovers carry their tick and voting certificate.
 		static constexpr uint16_t c_WorldVersion = 39;
 		static constexpr uint16_t c_SeatDeviceVersion = 39;
 		/// Version 37 carries input frames on the unreliable lane: a window reaches back a round trip, and a tick that
@@ -1116,6 +1118,7 @@ namespace RTE {
 		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
 		bool SchedulePeerAdmission(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
 		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
+		bool HasAgreedSeatReclaim(uint8_t peer, uint64_t frame) const { NET_PLANE_CHECK(); const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame; }
 		bool HasWorldAdmission(uint8_t peer, uint64_t frame) const { NET_PLANE_CHECK(); const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame && it->second.worldTransition.has_value(); }
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs) { NET_PLANE_CHECK(); HandleEvent(event, nowMs); }
 		/// Every peer's delay changes this round has applied, keyed by the frame each takes effect.
@@ -1265,6 +1268,8 @@ namespace RTE {
 		uint64_t GetRoundId() const { NET_PLANE_CHECK(); return m_RoundId; }
 		NetHash32 GetRoundConfigHash() const { NET_PLANE_CHECK(); return m_RoundConfigHash; }
 		uint8_t GetHostPeerId() const { NET_PLANE_CHECK(); return m_Config.authorityPeerId != 0 ? m_Config.authorityPeerId : m_Config.matchConfig.hostPeerId; }
+		uint8_t HostAuthorityAt(uint64_t frame) const;
+		uint8_t SimulationHostPeerId() const { NET_PLANE_CHECK(); return HostAuthorityAt(m_GrantedSimulationTick.value_or(GetResumeFrame())); }
 		bool IsMigrating() const { NET_PLANE_CHECK(); return m_MigrationPhase == NetHostMigrationPhase::Contacting || m_MigrationPhase == NetHostMigrationPhase::Recovering || m_MigrationPhase == NetHostMigrationPhase::WaitingForReady || m_MigrationPhase == NetHostMigrationPhase::ResyncAdmission; }
 		bool IsMigrationCatchUp() const { NET_PLANE_CHECK(); return IsMigrating() && GetResumeFrame() <= m_MigrationBoundary; }
 		NetHostMigrationPhase GetMigrationPhase() const { NET_PLANE_CHECK(); return m_MigrationPhase; }
@@ -1520,7 +1525,9 @@ namespace RTE {
 		bool IsLostMigrationSuccessor(uint8_t peerId) const;
 		/// The seats connected at a committed frame - neither gone nor held by the AI - the host's among them, one bit per peer.
 		uint32_t ConnectedSeatsAt(uint64_t frame) const;
-		/// The successor's quorum: a strict majority of the most advanced voter's connected seats voted, or the one survivor of two.
+		uint32_t MigrationElectorate() const;
+		bool HasMigrationCertificate(const NetHostMigrationMessage& message) const;
+		/// A strict majority of the committed roster; proposed holds never remove a vote.
 		bool MigrationQuorum(NetHostMigrationReach& reach);
 		/// A side without the quorum hosts nothing: its seat is held by whoever hosts, and it returns later.
 		void StopHostUnreachable();
@@ -1571,7 +1578,10 @@ namespace RTE {
 		//!< Successors this peer gave up on; a later election in this handover chain must not dial them again.
 		std::vector<uint8_t> m_MigrationLostSuccessors;
 		NetHostMigrationReach m_MigrationReach; //!< The handover's vote as this peer last saw it.
-		uint32_t m_MigrationQuorumMask = 0; //!< Successor: the connected seats of the most advanced voter's roster.
+		uint32_t m_MigrationQuorumMask = 0; //!< The committed electorate for this handover.
+		uint32_t m_MigrationVoterMask = 0;
+		uint64_t m_CertifiedSupersedingGeneration = 0;
+		uint64_t m_SuspectedSupersedingGeneration = 0;
 		NetHostMigrationResult m_MigrationResult;
 		std::set<uint8_t> m_MigrationExpected;
 		std::map<uint8_t, NetHostMigrationMessage> m_MigrationAnswers;
@@ -2091,6 +2101,8 @@ namespace RTE {
 		std::map<uint64_t, std::pair<uint8_t, uint8_t>> m_ReplayAuthorities;
 		std::map<uint64_t, uint8_t> m_ReplayAuthorityHistory;
 		uint8_t m_ReplayOpeningAuthority = 0;
+		uint64_t m_ReplayOpeningGeneration = 0;
+		std::map<uint64_t, NetGameHostAuthority> m_AuthorityEvents;
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)
 		std::map<uint64_t, std::vector<NetGameCommand>> m_LocalCommands;
 		std::map<uint64_t, std::map<uint8_t, std::vector<NetGameCommand>>> m_RemoteCommands; //!< frame -> (peerId -> commands)

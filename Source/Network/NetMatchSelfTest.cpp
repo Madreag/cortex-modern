@@ -2415,6 +2415,28 @@ namespace RTE {
 		};
 
 		bool TestNetworkRevisionsKeepReady(std::string* error) {
+			// A reconnect validates the setup on its first host config, before advertising the retained Ready.
+			for (int change = 0; change < 4; ++change) {
+				LoopbackTransport a, b; NetPeerId ar, br;
+				if (!StartLoopbackTransports(static_cast<uint16_t>(43560 + change), a, b, ar, br, error)) return false;
+				NetLobbySession first, returning;
+				NetLobbySessionConfig hc;
+				hc.host = true; hc.localPeerId = 1; hc.remotePeerId = 2; hc.remoteTransportPeerId = ar;
+				hc.matchConfig = MakeConfig(); hc.autoStart = false;
+				const auto readied = hc.matchConfig;
+				++hc.matchConfig.configRevision; ++hc.matchConfig.seatRosterRevision;
+				if (change == 1) hc.matchConfig.automaticRepair = !hc.matchConfig.automaticRepair;
+				if (change == 2) ++hc.matchConfig.sessionId;
+				auto cc = hc; cc.host = false; cc.localPeerId = 2; cc.remotePeerId = 1; cc.remoteTransportPeerId = br;
+				cc.autoReady = false; cc.readyForSetup = readied;
+				if (!first.Start(a, hc, error) || !returning.Start(b, cc, error)) return false;
+				returning.SetLocalReady(change != 3);
+				for (uint64_t now = 0; now < 1000; now += 10) { first.Tick(now); returning.Tick(now); a.AdvanceTimeMs(10); b.AdvanceTimeMs(10); }
+				if (returning.IsLocalReady() != (change == 0) || first.IsRemoteReady(2) != (change == 0)) {
+					*error = "reconnect Ready did not follow its agreed setup, case=" + std::to_string(change); return false;
+				}
+			}
+
 			LoopbackTransport hostWire, clientWire;
 			NetPeerId hostRemote, clientRemote;
 			if (!StartLoopbackTransports(43271, hostWire, clientWire, hostRemote, clientRemote, error)) return false;
@@ -14008,6 +14030,21 @@ namespace RTE {
 		NetSession hostSession, clientSession;
 		if (!StartServiceRematchSession(43274, hostWire, clientWire, hostSession, clientSession, error)) return false;
 		NetMatchService service;
+		NetMatchServiceRequest reconnect;
+		reconnect.rejoin = true; reconnect.host = false; reconnect.sessionId = "same-lobby";
+		service.m_LastJoinRoute = reconnect;
+		service.m_AdoptedMatchConfig = MakeConfig(); service.m_ReadyRequested.store(true);
+		const auto readied = service.ReadyForRejoin(reconnect);
+		if (!readied || readied->sessionId != service.m_AdoptedMatchConfig.sessionId) { *error = "a lobby reconnect forgot its Ready setup"; return false; }
+		service.m_ReadyRejoinConfig = readied; service.m_AdoptedMatchConfig = {};
+		if (!service.ReadyForRejoin(reconnect)) { *error = "a failed reconnect retry forgot Ready"; return false; }
+		auto other = reconnect; other.sessionId = "different-lobby";
+		if (service.ReadyForRejoin(other)) { *error = "Ready crossed into a different lobby"; return false; }
+		other = reconnect; other.rejoin = false;
+		if (service.ReadyForRejoin(other)) { *error = "a fresh join inherited Ready"; return false; }
+		service.SetReady(false);
+		if (service.ReadyForRejoin(reconnect) || service.m_ReadyRejoinConfig) { *error = "Cancel Ready survived a reconnect"; return false; }
+		service.m_LastJoinRoute.reset();
 		NetMatchRunner runner;
 		runner.m_Config.host = false;
 		runner.m_Config.matchConfig = MakeConfig();

@@ -504,6 +504,14 @@ static std::string ResyncSaveName() {
 		if (mux) mux->SetPump({});
 	}
 
+	std::optional<NetMatchConfig> NetMatchService::ReadyForRejoin(const NetMatchServiceRequest& request) const {
+		const bool sameLobby = request.rejoin && !request.host && !m_MatchWasRunning && m_LastJoinRoute &&
+		    (request.sessionId.empty() ? m_LastJoinRoute->sessionId.empty() && request.address == m_LastJoinRoute->address && request.port == m_LastJoinRoute->port :
+		     request.sessionId == m_LastJoinRoute->sessionId);
+		if (!sameLobby || !m_ReadyRequested.load()) return std::nullopt;
+		return m_AdoptedMatchConfig.sessionId != 0 ? std::optional<NetMatchConfig>(m_AdoptedMatchConfig) : m_ReadyRejoinConfig;
+	}
+
 	bool NetMatchService::Start(const NetMatchServiceRequest& incoming, std::string* error) {
 		NetMatchServiceRequest request = incoming;
 		if (!request.rejoin) {
@@ -513,9 +521,11 @@ static std::string ResyncSaveName() {
 		}
 		// A seat rejoining the match it was playing is still that match's: a failed attempt is retried, never dropped.
 		bool rejoinOfARunningMatch = false;
+		std::optional<NetMatchConfig> readyRejoinConfig;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			rejoinOfARunningMatch = request.rejoin && !request.host && m_MatchWasRunning;
+			readyRejoinConfig = ReadyForRejoin(request);
 		}
 		Destroy(request.rejoin);
 		if (!request.rejoin) {
@@ -550,7 +560,8 @@ static std::string ResyncSaveName() {
 		}
 		m_CancelRequested.store(false);
 		// A seat rejoining its own running match has nothing to choose in the lobby round: it is ready once it connects.
-		m_ReadyRequested.store(rejoinOfARunningMatch);
+		m_ReadyRejoinConfig = std::move(readyRejoinConfig);
+		m_ReadyRequested.store(rejoinOfARunningMatch || m_ReadyRejoinConfig.has_value());
 		m_StartRequested.store(false);
 		m_CancelStartRequested.store(false);
 		m_HostSetupOpen.store(false);
@@ -2391,6 +2402,7 @@ static std::string ResyncSaveName() {
 			// A staged options draft names the session it was accepted under; teardown drops it
 			// with that config so the next lobby never sees its predecessor's edit.
 			m_AdoptedMatchConfig = {};
+			m_ReadyRejoinConfig.reset();
 			m_PendingHostOptions.reset();
 			m_HostOptionsRequest.Clear();
 			m_ResyncOnDesync = false;
@@ -3242,6 +3254,7 @@ static std::string ResyncSaveName() {
 	void NetMatchService::SetReady(bool ready) {
 		m_ReadyRequested.store(ready);
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!ready) m_ReadyRejoinConfig.reset();
 		if (m_State == NetMatchServiceState::Starting) {
 			m_StatusText = ready ? "Ready; waiting for host start" : "Not ready";
 			m_ErrorText.clear();
@@ -5682,7 +5695,8 @@ static std::string ResyncSaveName() {
 				}
 			}
 			if (session.activationProposed && !session.activationCommitted &&
-			    (m_HeldWorldReclaims.contains(session.connection) || m_Coordinator->HasWorldAdmission(session.assignedPeerId, session.activationTick))) {
+			    ((m_HeldWorldReclaims.contains(session.connection) && m_Coordinator->HasAgreedSeatReclaim(session.assignedPeerId, session.activationTick)) ||
+			     m_Coordinator->HasWorldAdmission(session.assignedPeerId, session.activationTick))) {
 				m_WorldJoin.MarkActivationCommitted(session.connection);
 				m_Runner->GetLobbySession().SendPayloadTo(WorldJoinLobbyPeer(session), MakeWorldJoinReport(c_NetWorldReportActivationCommit, session.activationTick), nullptr);
 				{
@@ -10672,6 +10686,7 @@ static std::string ResyncSaveName() {
 		// World hosts, including the menu path, start automatically once their bound players are ready.
 		config.autoStart = config.host && config.matchConfig.persistentWorld;
 		config.readyRequested = &m_ReadyRequested;
+		config.readyForSetup = m_ReadyRejoinConfig;
 		config.startRequested = &m_StartRequested;
 		config.cancelStartRequested = &m_CancelStartRequested;
 		config.hostSetupOpen = &m_HostSetupOpen;
