@@ -23796,7 +23796,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		const auto waitAt = [&](uint64_t frame, uint64_t since, uint64_t late, uint8_t missing) {
 			host.m_Stats.nextFrame = frame; host.m_LastQueuedTargetFrame = frame - 1;
 			host.m_LastCompletedSimulationTick = frame - 1;
-			host.m_Stats.peers[missing].highestFrameReceived = frame - 1;
+			host.m_Stats.peers[missing].highestTargetFrame = frame - 1;
 			host.m_Stats.peers[missing].lastProgressMs = since;
 			(void)host.DeclareOverdueInputs(frame, since + late, since, {missing});
 			require(host.m_TimingDecisions.empty(), "late placement input proposed a hold at " + std::to_string(frame));
@@ -23831,7 +23831,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			host.AdvanceReadyFrames(1000); host.AdvanceReadyFrames(1053);
 			require(!host.IsSeatUnderAI(1, 75) && !host.ProposePeerHold(1, 1053, nullptr), "53 ms held the Captain's own seat");
 			waitAt(5014, 1056692, 83, 4);
-			host.m_Stats.peers[2].highestFrameReceived = 5025; host.m_Stats.peers[2].lastProgressMs = 1056888;
+			host.m_Stats.peers[2].highestTargetFrame = 5025; host.m_Stats.peers[2].lastProgressMs = 1056888;
 			require(!host.ProposePeerHold(2, 1056927, nullptr, 0, "timing_ack"), "a 152 ms live receipt erased a placement voter");
 		} else if (fight == 13) {
 			for (const auto& point: std::array<std::pair<uint64_t, uint8_t>, 3>{{{4533, 3}, {5142, 4}, {5202, 2}}})
