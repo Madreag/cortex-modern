@@ -102,6 +102,12 @@ namespace RTE {
 	bool RunLobbySeatHoldSelfTest(std::string* error);
 
 	namespace {
+		struct DirectConnectionScope {
+			SettingsMan::NetworkConnectionMode saved = g_SettingsMan.GetNetworkConnectionMode();
+			DirectConnectionScope() { g_SettingsMan.SetNetworkConnectionMode(SettingsMan::NetworkConnectionMode::Automatic); }
+			~DirectConnectionScope() { g_SettingsMan.SetNetworkConnectionMode(saved); }
+		};
+
 		bool TestCrossCaptureBarrier(std::string* error) {
 			const auto root = std::filesystem::path("Userdata") / "cross-barrier-selftest";
 			std::filesystem::create_directories(root);
@@ -10748,12 +10754,35 @@ namespace RTE {
 			return false;
 		}
 
-		// The same identity comes back on a new link and is admitted to the seat it just left.
+		// A kicked identity remains refused for this match, even on a different connection.
 		service.m_ReconnectHost.TakeOutbound();
+		const NetPeerId kickedConnection = 76;
+		service.m_ReconnectHost.BindParticipantId(kickedConnection, kickedId);
+		NetH4NewJoin kickedJoin;
+		kickedJoin.identity = h4;
+		kickedJoin.displayName = "Client";
+		kickedJoin.txId.fill(0x32);
+		service.m_ReconnectHost.HandleMessage(kickedConnection, kickedJoin, 0);
+		bool refusedKick = false, offeredKick = false;
+		for (const NetH4Outbound& outbound: service.m_ReconnectHost.TakeOutbound()) {
+			if (outbound.connection != kickedConnection) continue;
+			offeredKick |= std::holds_alternative<NetH4TicketOffer>(outbound.payload);
+			if (const auto* refused = std::get_if<NetJoinRejected>(&outbound.payload))
+				refusedKick = refused->rejectReason == NetRejectReason::ParticipantBanned && refused->mismatchKey == "participant_removed" &&
+				              refused->humanMessage.find("Client was removed by the host") != std::string::npos;
+		}
+		if (!refusedKick || offeredKick) {
+			*error = "the kicked lobby identity was not refused by name on its new connection";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		// A different player can still join the seat the kick released.
+		NetAuthBytes32 replacementId = kickedId;
+		replacementId[0] ^= 0x5A;
 		const NetPeerId returnConnection = 77;
-		service.m_ReconnectHost.BindParticipantId(returnConnection, kickedId);
+		service.m_ReconnectHost.BindParticipantId(returnConnection, replacementId);
 		NetReconnectClient returnAdmission;
-		returnAdmission.Configure(&store, h4, "Client");
+		returnAdmission.Configure(&store, h4, "Replacement");
 		returnAdmission.SetUnixClock([](void* context) { return *static_cast<uint64_t*>(context); }, &unixNow);
 		if (!returnAdmission.BeginNewJoin(0, error)) {
 			SetNetAuthCryptoForTest(nullptr);
@@ -10788,14 +10817,14 @@ namespace RTE {
 			}
 		}
 		if (!returnOffered || returnAdmission.GetState() != NetH4ClientState::Joined) {
-			*error = "the kicked identity's rejoin answered " + returnAnswer +
+			*error = "the replacement identity's join answered " + returnAnswer +
 			         " client=" + NetReconnectClientStateName(returnAdmission.GetState()) +
 			         (returnAdmission.HasLastRejectReason() ? std::string(" reason=") + NetProtocol::RejectReasonName(returnAdmission.GetLastRejectReason()) : "");
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
 
-		// A ban is the only refusal: the re-seated holder is banned, the store names its identity,
+		// Banning the replacement also records its identity in the ban store,
 		// and the same identity's next join is refused with ParticipantBanned.
 		NetModerationSelection banned{};
 		for (const auto& seat : service.m_ReconnectHost.GetModerationView()) {
@@ -10816,19 +10845,19 @@ namespace RTE {
 		}
 		bool banRecorded = false;
 		for (const NetHostBanRecord& record : service.m_BanStore.List()) {
-			banRecorded = banRecorded || record.identity == kickedId;
+			banRecorded = banRecorded || record.identity == replacementId;
 		}
 		if (!banRecorded) {
-			*error = "the lobby ban never wrote the kicked identity into the ban list";
+			*error = "the lobby ban never wrote the replacement identity into the ban list";
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
 		service.m_ReconnectHost.TakeOutbound();
 		const NetPeerId bannedConnection = 78;
-		service.m_ReconnectHost.BindParticipantId(bannedConnection, kickedId);
+		service.m_ReconnectHost.BindParticipantId(bannedConnection, replacementId);
 		NetH4NewJoin bannedJoin;
 		bannedJoin.identity = h4;
-		bannedJoin.displayName = "Client";
+		bannedJoin.displayName = "Replacement";
 		bannedJoin.txId.fill(0x33);
 		service.m_ReconnectHost.HandleMessage(bannedConnection, bannedJoin, 0);
 		bool refusedBan = false;
@@ -10851,7 +10880,7 @@ namespace RTE {
 		}
 		SetNetAuthCryptoForTest(nullptr);
 		std::filesystem::remove_all(lane, code);
-		std::cout << "[net-match-selftest] PASS kick: a lobby kick opens the seat for the same identity and only a ban refuses it" << std::endl;
+		std::cout << "[net-match-selftest] PASS kick: the removed identity stays refused, a replacement joins, and its ban is recorded" << std::endl;
 		return true;
 	}
 
@@ -11304,7 +11333,7 @@ namespace RTE {
 		}
 
 		// The admission plane after a Starting kick: the seat is back in the pool for the next joiner,
-		// and the kicked identity itself may take an open seat - only the ban list holds one out.
+		// while the kicked identity remains refused on a new connection.
 		{
 			ScriptedAuthCrypto seatCrypto;
 			SetNetAuthCryptoForTest(&seatCrypto);
@@ -11475,14 +11504,36 @@ namespace RTE {
 				SetNetAuthCryptoForTest(nullptr);
 				return false;
 			}
-			// A kick is not a ban: the kicked identity's own return is offered an open seat like any
-			// joiner, on whatever link it comes back on.
-			const NetPeerId returningConnection = 78;
-			seatService.m_ReconnectHost.BindParticipantId(returningConnection, kickedId);
+			// A kicked identity cannot evade its removal by opening a new connection.
+			const NetPeerId kickedConnection = 78;
+			seatService.m_ReconnectHost.BindParticipantId(kickedConnection, kickedId);
+			NetH4NewJoin kickedJoin;
+			kickedJoin.identity = seatH4;
+			kickedJoin.displayName = "Kicked";
+			kickedJoin.txId.fill(0x22);
+			seatService.m_ReconnectHost.HandleMessage(kickedConnection, kickedJoin, 0);
+			bool refusedKick = false, offeredKick = false;
+			for (const NetH4Outbound& outbound: seatService.m_ReconnectHost.TakeOutbound()) {
+				if (outbound.connection != kickedConnection) continue;
+				offeredKick |= std::holds_alternative<NetH4TicketOffer>(outbound.payload);
+				if (const auto* refused = std::get_if<NetJoinRejected>(&outbound.payload))
+					refusedKick = refused->rejectReason == NetRejectReason::ParticipantBanned && refused->mismatchKey == "participant_removed" &&
+					              refused->humanMessage.find("Client was removed by the host") != std::string::npos;
+			}
+			if (!refusedKick || offeredKick || !seatService.m_BanStore.List().empty()) {
+				*error = "the Starting kick lost its named refusal or wrote a ban record";
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			// Another identity may take the remaining open seat, never the replacement's reservation.
+			NetAuthBytes32 otherId = replacementId;
+			otherId[0] ^= 0x5A;
+			const NetPeerId returningConnection = 79;
+			seatService.m_ReconnectHost.BindParticipantId(returningConnection, otherId);
 			NetH4NewJoin returningJoin;
 			returningJoin.identity = seatH4;
-			returningJoin.displayName = "Kicked";
-			returningJoin.txId.fill(0x22);
+			returningJoin.displayName = "Other";
+			returningJoin.txId.fill(0x23);
 			seatService.m_ReconnectHost.HandleMessage(returningConnection, returningJoin, 0);
 			bool offeredReturn = false;
 			uint16_t returnSeat = UINT16_MAX;
@@ -11500,11 +11551,11 @@ namespace RTE {
 				}
 			}
 			if (!offeredReturn) {
-				*error = "the kicked identity's return answered " + returnAnswer;
+				*error = "the other identity's join answered " + returnAnswer;
 				SetNetAuthCryptoForTest(nullptr);
 				return false;
 			}
-			// A return is a fresh join, so the offer has to name a seat open to a joiner: not cpu,
+			// The next join must name a seat still open to a joiner: not cpu,
 			// local, committed, closed, already held, or still holding an offer the test saw go out.
 			const std::vector<NetH4Seat> seatRows = seatService.m_ReconnectHost.GetSeatTable();
 			const std::vector<NetH4SeatStatus> seatStatuses = seatService.m_ReconnectHost.GetSeatStatuses();
@@ -11523,14 +11574,14 @@ namespace RTE {
 			const bool onlyOpenIsKicked = openSeats.size() == 1 && openSeats.front() == kickedSeat;
 			if (onlyOpenIsKicked ? returnSeat != kickedSeat
 			                    : std::find(openSeats.begin(), openSeats.end(), returnSeat) == openSeats.end()) {
-				*error = "the kicked identity's return was offered seat " + std::to_string(returnSeat) +
+				*error = "the other identity's join was offered seat " + std::to_string(returnSeat) +
 				         (onlyOpenIsKicked ? ", not the kicked seat that was the only one open" : ", not an open seat");
 				SetNetAuthCryptoForTest(nullptr);
 				return false;
 			}
 			SetNetAuthCryptoForTest(nullptr);
 			std::filesystem::remove_all(seatLane, seatCode);
-			std::cout << "[net-match-selftest] PASS kick: a Starting kick opens the seat for a replacement and re-admits the kicked identity" << std::endl;
+			std::cout << "[net-match-selftest] PASS kick: a Starting kick refuses the removed identity and offers distinct open seats to replacements" << std::endl;
 		}
 		return true;
 	}
@@ -16150,6 +16201,16 @@ namespace RTE {
 			service.m_DirectoryRow.seatsFree = 1;
 			service.m_DirectoryRow.listenPort = port;
 			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+			// This running host already has its local network, listener and directory lease.
+			const auto wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+			service.m_ConnectionAuthority.Update(NetLockstepNowMs(), wall);
+			service.m_ConnectionNetworkRevision = service.m_ConnectionAuthority.NetworkRevision();
+			service.m_IceIdentity = NetIceHostIdentity("completed-lobby-expiry");
+			service.m_DirectoryRow.iceIdentity = service.m_IceIdentity;
+			service.m_DirectoryRow.iceVirtualPort = NetMatchService::c_IceVirtualPort;
+			service.m_IceBoundSessionId = id;
+			service.m_DirectoryRow.resumeSessionId = id;
+			service.m_DirectoryRow.resumeToken = "tok-expiry";
 			// The router is asked and never answers: the row registers anyway.
 			NetMatchService::RequestHostPortMap(port, &router);
 			for (int spin = 0; spin < 250 && service.m_Directory.GetState() != NetDirectoryClient::State::Registered; ++spin) {
@@ -16160,9 +16221,11 @@ namespace RTE {
 				step = std::string("the directory never registered; state=") + NetDirectoryClient::StateName(service.m_Directory.GetState());
 				return false;
 			}
-			std::lock_guard<std::mutex> lock(service.m_Mutex);
-			service.m_IceBoundSessionId = service.m_Directory.GetSessionId();
-			service.m_IceIdentity = NetIceHostIdentity(service.m_IceBoundSessionId);
+			if (service.m_IceBoundSessionId != service.m_Directory.GetSessionId() ||
+			    service.m_IceIdentity != NetIceHostIdentity("completed-lobby-expiry")) {
+				step = "publishing the expiry fixture changed its bound row or listener identity";
+				return false;
+			}
 			return true;
 		};
 		// Moves the lobby's wait into the past. The steady clock's own origin is the only limit.
@@ -16387,7 +16450,18 @@ namespace RTE {
 		const auto confirmed = [](NetMatchService& service) {
 			return nlohmann::json::parse(service.m_Directory.BuildReportJson()).value("confirmed_listed", nlohmann::json());
 		};
-		// A running host registers without the lobby's LAN beacon, then pins its identity as SetUpIceTransport does.
+		const auto prepareListener = [](NetMatchService& service, bool ice) {
+			// Observe the initial network before publishing the fixture's listener, as startup does.
+			const auto wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+			service.m_ConnectionAuthority.Update(NetLockstepNowMs(), wall);
+			service.m_ConnectionNetworkRevision = service.m_ConnectionAuthority.NetworkRevision();
+			if (ice) {
+				service.m_IceIdentity = NetIceHostIdentity("directory-lease-selftest");
+				service.m_DirectoryRow.iceIdentity = service.m_IceIdentity;
+				service.m_DirectoryRow.iceVirtualPort = NetMatchService::c_IceVirtualPort;
+			}
+		};
+		// A running host already has a listener and a bound row; publish that same lease.
 		const auto hostAndBind = [&](NetMatchService& service, bool ice, const std::shared_ptr<Wire>& wire, std::string& step) {
 			service.m_Directory.SetTransportFactory([wire] { return std::make_unique<ScriptedTransport>(wire); });
 			{
@@ -16406,16 +16480,23 @@ namespace RTE {
 			service.m_DirectoryRow.seatsFree = 1;
 			service.m_DirectoryRow.listenPort = 48041;
 			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+			prepareListener(service, ice);
+			if (ice) {
+				const auto lease = nlohmann::json::parse(wire->replies.front().body);
+				service.m_IceBoundSessionId = lease.at("session_id").get<std::string>();
+				service.m_DirectoryRow.resumeSessionId = service.m_IceBoundSessionId;
+				service.m_DirectoryRow.resumeToken = lease.at("token").get<std::string>();
+			}
 			// The router is asked and never answers: the row registers anyway.
 			NetMatchService::RequestHostPortMap(48041, &router);
 			if (!pumpUntil(service, 500, [&] { return service.m_Directory.GetState() == NetDirectoryClient::State::Registered; })) {
 				step = std::string("the directory never registered; state=") + NetDirectoryClient::StateName(service.m_Directory.GetState());
 				return false;
 			}
-			if (ice) {
-				std::lock_guard<std::mutex> lock(service.m_Mutex);
-				service.m_IceBoundSessionId = service.m_Directory.GetSessionId();
-				service.m_IceIdentity = NetIceHostIdentity(service.m_IceBoundSessionId);
+			if (ice && (service.m_IceBoundSessionId != service.m_Directory.GetSessionId() ||
+			            service.m_IceIdentity != NetIceHostIdentity("directory-lease-selftest"))) {
+				step = "publishing the running host changed its bound row or listener identity";
+				return false;
 			}
 			return true;
 		};
@@ -16467,7 +16548,7 @@ namespace RTE {
 		std::vector<std::string> misses;
 		SettingsGuard settings;
 
-		for (bool ice : {false, true}) { // An Unlisted lobby registers before ICE has a bound identity.
+		for (bool ice : {false, true}) { // An Unlisted lobby publishes its listener before the directory binds a row.
 			auto wire = std::make_shared<Wire>();
 			wire->replies = {registerReply(idA, "tok-unlisted", 60, true), hidden, deleted};
 			NetMatchService service;
@@ -16483,6 +16564,7 @@ namespace RTE {
 			service.m_DirectoryRow.peerCount = 2;
 			service.m_DirectoryRow.listenPort = 48041;
 			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+			prepareListener(service, ice);
 			service.Update();
 			std::string step;
 			if (service.m_DirectoryRetracted || count(*wire, "POST", "/v1/sessions") != 0) {
@@ -16557,6 +16639,8 @@ namespace RTE {
 					rematchRow.listenPort = service.m_DirectoryRow.listenPort;
 					rematchRow.listenAddrs = service.m_DirectoryRow.listenAddrs;
 					rematchRow.joinMode = service.m_DirectoryRow.joinMode;
+					rematchRow.iceIdentity = service.m_DirectoryRow.iceIdentity;
+					rematchRow.iceVirtualPort = service.m_DirectoryRow.iceVirtualPort;
 					NetIceJoinTarget laterJoin;
 					const std::string refusal = NetIceResolveSessionRow({rematchRow}, {}, rematchRow.sessionId, &laterJoin);
 					if (!refusal.empty() || laterJoin.identity != service.m_IceIdentity || laterJoin.joinMode != "either") {
@@ -17003,7 +17087,15 @@ namespace RTE {
 		for (int i = 0; i < 20; ++i) pump();
 		if (!host.IsRunning() || !client.IsRunning()) { *error = "menu input round did not start"; return false; }
 		ScenarioRunner::SetLockstepCoordinator(&client);
-		struct Restore { ~Restore() { if (g_MenuMan.IsLocalPauseMenuOpen()) g_MenuMan.ToggleLocalPauseMenu(); ScenarioRunner::SetLockstepCoordinator(nullptr); } } restore;
+		struct Restore {
+			bool inActivity = g_ActivityMan.IsInActivity();
+			~Restore() {
+				if (g_MenuMan.IsLocalPauseMenuOpen()) g_MenuMan.ToggleLocalPauseMenu();
+				g_ActivityMan.SetInActivity(inActivity);
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+			}
+		} restore;
+		g_ActivityMan.SetInActivity(true);
 		if (!g_MenuMan.ToggleLocalPauseMenu()) { *error = "local network menu did not open"; return false; }
 		bool neutral = true; uint64_t committed = 0;
 		for (uint64_t tick = 0; tick < 300; ++tick) {
@@ -17559,8 +17651,8 @@ namespace RTE {
 				return false;
 			}
 			if (noDirectRoute && NetMatchService::SetupFailureStatus(&session, noDirectRoute) !=
-			    "No direct route (NAT): forward the host's UDP port or use LAN") {
-				*error = "ice failure message still uses the generic setup failure";
+			    "No direct route connected. Retry with your Connection set to Automatic, and ask the host to enable its relay.") {
+				*error = "ice failure message lost its connection recovery guidance: " + NetMatchService::SetupFailureStatus(&session, noDirectRoute);
 				return false;
 			}
 			if (arm == 4 && NetMatchService::SetupFailureStatus(&session, noDirectRoute) != "The host banned you from this session") {
@@ -17568,9 +17660,9 @@ namespace RTE {
 				return false;
 			}
 			if (arm >= 9 && (why.find("relay") == std::string::npos && why.find("Relay") == std::string::npos)) { *error = "failure hid the relay stage"; return false; }
-			if (arm == 10 && NetMatchService::SetupFailureStatus(&session, true, true) != "Relay route failed (TURN): check the relay or forward the host's UDP port") { *error = "relay failure action missing"; return false; }
+			if (arm == 10 && NetMatchService::SetupFailureStatus(&session, true, true) != "The relay could not connect. Retry joining; the host can check its Relay choice in Host Options > Network.") { *error = "relay failure action missing"; return false; }
 		}
-		std::cout << "[net-match-selftest] PASS ice failure message: failed ICE and IP stages name the port-forward or LAN action" << std::endl;
+		std::cout << "[net-match-selftest] PASS ice failure message: failed ICE and IP stages name Connection and host Relay actions" << std::endl;
 		std::cout << "[net-match-selftest] PASS ice IP retry: runtime, immediate and signaling refusals dial the advertised IP once" << std::endl;
 		std::cout << "[net-match-selftest] PASS ice refusal policy: no invented address, no retry of a ban or cancellation" << std::endl;
 		std::cout << "[net-match-selftest] PASS ice deadline: directory lookup time does not consume the connection budget" << std::endl;
@@ -18428,6 +18520,7 @@ namespace RTE {
 	}
 
 	int NetMatchSelfTest::Run() {
+		DirectConnectionScope direct;
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
 			return 1;

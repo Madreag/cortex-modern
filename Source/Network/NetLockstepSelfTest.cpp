@@ -713,11 +713,12 @@ namespace RTE {
 			const std::map<uint8_t, std::map<uint64_t, uint16_t>> delays{{2, {{43, 2}}}};
 			if (!round.Start(2, 44988, error, true, delays)) return false;
 			std::vector<NetLockstepFrame> source;
+			// Recovered packets retain their targets across a committed delay change.
 			for (uint64_t target = 41; target <= 43; ++target) {
 				for (uint8_t index = 0; index < 2; ++index) {
 					auto input = RecoveryWireInput(index + 1, target, round.peer[index].GetRoundId());
 					if (target == 43 && index == 0) input.commands.push_back({1, NetGameSetTeamFunds{0, 919}});
-					if (!round.peer[index].QueueLocalInput(target, input.frames, input.commands, error, input.observations)) return false;
+					if (!round.peer[index].QueueRecoveredInput(input, error)) return false;
 					if (target == 43) source.push_back(std::move(input));
 				}
 				round.Pump();
@@ -750,7 +751,7 @@ namespace RTE {
 								input.commands.push_back({1, NetGameSetTeamFunds{0, 919}});
 								input.frames.front().aimAngle = 0.375F;
 							}
-							if (!conflicting.peer[peer].QueueLocalInput(target, input.frames, input.commands, error, input.observations)) return false;
+							if (!conflicting.peer[peer].QueueRecoveredInput(input, error)) return false;
 						}
 						conflicting.Pump();
 					}
@@ -7897,6 +7898,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) return false;
 					if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) || !client.QueueLocalInput(0, {MakeFrame(101, 1)}, {}, error)) return false;
 					if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.GetStats().framesAccepted == 1 && client.GetStats().framesAccepted == 1; }, error)) return false;
+					NetLockstepReadyFrame completed;
+					if (!host.PopReadyFrame(completed) || completed.frame != delay || !client.PopReadyFrame(completed) || completed.frame != delay) {
+						*error = "the recovery fixture did not deliver its completed tick"; return false;
+					}
+					host.FinishSimulationTick(delay); client.FinishSimulationTick(delay);
+					if (!host.BeginSimulationTick(delay + 1, error) || !client.BeginSimulationTick(delay + 1, error)) return false;
 					if (rejoin) {
 						host.RequestResync("player rejoined");
 					} else {
@@ -7911,6 +7918,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					}
 					if (!host.QueueLocalInput(1, {MakeFrame(100, 2)}, {}, error) || !client.QueueLocalInput(1, {MakeFrame(101, 2)}, {}, error)) return false;
 					if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.GetStats().framesAccepted == 2 && client.GetStats().framesAccepted == 2; }, error)) return false;
+					if (!host.PopReadyFrame(completed) || completed.frame != delay + 1 || !client.PopReadyFrame(completed) || completed.frame != delay + 1) {
+						*error = "the recovery fixture did not deliver its granted tick"; return false;
+					}
 					if (client.FinishSimulationTick(delay + 1) || !host.FinishSimulationTick(delay + 1) || !host.IsFailed()) {
 						*error = "the host did not own the recovery boundary";
 						return false;
@@ -15490,7 +15500,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			while (host.PopReadyFrame(committed)) {
 			}
 			host.FinishSimulationTick(0);
-			// Tick 1 is queued locally and the remote's frames stop with no drop notice: the fenced reclaim.
+			// Tick 1 is granted and queued locally; the remote stops with no drop notice: the fenced reclaim.
+			if (!host.BeginSimulationTick(1, error)) return false;
 			if (!host.QueueLocalInput(1, {MakeFrame(100, 2)}, {}, error)) {
 				return false;
 			}
@@ -15628,6 +15639,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			host.FinishSimulationTick(0);
 			survivor.FinishSimulationTick(0);
 			// Tick 1: the fenced incarnation goes silent with no drop notice; the survivor still plays.
+			if (!host.BeginSimulationTick(1, error) || !survivor.BeginSimulationTick(1, error)) return false;
 			if (!host.QueueLocalInput(1, {MakeFrame(100, 2)}, {}, error) ||
 			    !survivor.QueueLocalInput(1, {MakeFrame(300, 2)}, {}, error)) {
 				return false;
@@ -15766,6 +15778,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					*error = "boundary-resync fixture did not freeze on tick 2";
 					return false;
 				}
+				if (!host.BeginSimulationTick(2, error)) return false;
 				return host.QueueLocalInput(2, {MakeFrame(100, 3)}, {}, error);
 			};
 			{

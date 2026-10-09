@@ -9719,10 +9719,14 @@ namespace RTE {
 		if (m_PendingRecoveryStop || !IsRunning()) return;
 		m_PendingRecoveryStop = NetLockstepStop{m_Config.localPeerId, reason, frame, message};
 		if (m_Config.localPeerId == GetHostPeerId()) {
-			// The snapshot includes every tick already committed by its coordinator.
-			m_RecoveryDrainThrough = m_ReadyFrames.empty() ? m_GrantedSimulationTick.value_or(m_Stats.nextFrame) : m_ReadyFrames.back().frame;
+			// The snapshot drains committed input, never the next tick still waiting for it.
+			m_RecoveryDrainThrough = m_ReadyFrames.empty() ? m_LastDeliveredFrame.value_or(m_LastCompletedSimulationTick.value_or(m_Config.startFrame)) : m_ReadyFrames.back().frame;
 			if (m_GrantedSimulationTick) *m_RecoveryDrainThrough = std::max(*m_RecoveryDrainThrough, *m_GrantedSimulationTick);
 			for (const auto& [peer, heldFrame]: m_AiHeldSeats) *m_RecoveryDrainThrough = std::max(*m_RecoveryDrainThrough, heldFrame);
+			// Between ticks the committed world may already be drained, with no later Finish call due.
+			if (!m_GrantedSimulationTick && m_LastCompletedSimulationTick && *m_LastCompletedSimulationTick >= *m_RecoveryDrainThrough) {
+				(void)FinishSimulationTick(*m_LastCompletedSimulationTick);
+			}
 		}
 		if (m_Config.localPeerId != GetHostPeerId()) {
 			// A client requests the stop while continuing to supply the host's current tick.
@@ -13062,6 +13066,8 @@ namespace RTE {
 				if (encoded && link != m_RemoteTransports.end() && m_LastQueuedTargetFrame <= through) (void)m_Transport->Send(link->second, m_Config.frameLane, bytes);
 			}
 		}
+		// Input beyond the recovery boundary is not owed while the simulation drains its committed ticks.
+		if (m_RecoveryDrainThrough && m_Stats.nextFrame > *m_RecoveryDrainThrough) return;
 		const bool pending = hasLocal || hasRemote || hasFutureLocal || hasFutureRemote || !m_RecoveryOutgoing.empty();
 		if (!pending) {
 			return;

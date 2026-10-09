@@ -803,7 +803,9 @@ namespace RTE {
 				}
 				const bool stopped = ScenarioRunner::FinishLockstepSimulationTick(target);
 				if (!Check(stopped == (target == last) && (target == last ? pair.host.IsFailed() : pair.host.IsRunning()), error,
-				           "recovery stopped before the committed world was complete")) return false;
+				           "recovery stopped before the committed world was complete: tick=" + std::to_string(target) +
+				           " last=" + std::to_string(last) + " state=" + NetLockstepCoordinator::StateName(pair.host.GetState()) +
+				           " reason=" + pair.host.GetStats().timeoutReason)) return false;
 				pair.Step();
 			}
 			uint64_t dropFrame = 0;
@@ -820,6 +822,28 @@ namespace RTE {
 		}
 
 		bool TestRecoveryAtGrantedBoundary(std::string* error) {
+			// A request between ticks must finish at the completed world without inventing another tick.
+			{
+				Pair completed(44218, 0, 0);
+				if (!completed.Start(error) || !completed.Running(error) ||
+				    !completed.host.PrimeResyncInputs({}, error) || !completed.client.PrimeResyncInputs({}, error)) return false;
+				completed.host.DeferStopsToTickBoundary();
+				if (!QueueFull(completed.host, FullInput(1, c_Start, completed.host.GetRoundId()), error) ||
+				    !QueueFull(completed.client, FullInput(2, c_Start, completed.client.GetRoundId()), error) ||
+				    !completed.Until([&] { return completed.host.GetStats().nextFrame == c_Start + 1 && completed.client.GetStats().nextFrame == c_Start + 1; }, error)) return false;
+				NetLockstepReadyFrame ready;
+				if (!Check(completed.host.PopReadyFrame(ready) && ready.frame == c_Start &&
+				           completed.client.PopReadyFrame(ready) && ready.frame == c_Start, error, "between-ticks fixture did not deliver its completed world")) return false;
+				completed.host.FinishSimulationTick(c_Start);
+				completed.client.FinishSimulationTick(c_Start);
+				completed.host.RequestResync("between ticks recovery");
+				if (!Check(completed.host.IsFailed() && !completed.host.HasPendingRecoveryStop() &&
+				           completed.host.GetResumeFrame() == c_Start + 1 && !completed.host.PopReadyFrame(ready), error,
+				           "between-ticks recovery waited for a nonexistent tick or changed the completed boundary")) return false;
+				if (!completed.Until([&] { return completed.client.IsFailed(); }, error) ||
+				    !Check(completed.client.GetResumeFrame() == c_Start + 1 && !completed.client.PopReadyFrame(ready), error,
+				           "between-ticks recovery did not stop its peer at the completed boundary")) return false;
+			}
 			Pair pair(44218, 0, 0);
 			if (!pair.Start(error) || !pair.Running(error) || !pair.host.PrimeResyncInputs({}, error) || !pair.client.PrimeResyncInputs({}, error)) return false;
 			pair.host.DeferStopsToTickBoundary();
@@ -876,7 +900,8 @@ namespace RTE {
 			for (uint8_t peer = 1; peer <= 3; ++peer) {
 				auto input = FullInput(peer, c_Start, coordinators[peer - 1].GetRoundId());
 				if (!withBoundary) { input.commands.clear(); input.observations.clear(); }
-				if (!coordinators[peer - 1].PrimeResyncInputs({}, error) || !QueueFull(coordinators[peer - 1], input, error)) return false;
+				// A recovered packet keeps its target even when the boundary changes its peer's delay.
+				if (!coordinators[peer - 1].PrimeResyncInputs({}, error) || !coordinators[peer - 1].QueueRecoveredInput(input, error)) return false;
 				expected.push_back(std::move(input));
 			}
 			if (!Check(drive([&] { return std::all_of(coordinators.begin(), coordinators.end(), [](const auto& item) { return item.GetStats().nextFrame == c_Start + 1; }); }),
