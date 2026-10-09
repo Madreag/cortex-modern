@@ -2393,6 +2393,35 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		}
 
 		{
+			auto actor = std::make_unique<Actor>();
+			actor->SetStringValue("z", "last");
+			actor->SetStringValue(std::string("a\0key", 5), std::string("first\0value", 11));
+			actor->SetStringValue("a", "prefix");
+			actor->SetNumberValue("z", -0.0);
+			actor->SetNumberValue("a", std::bit_cast<double>(uint64_t{0x7FF8000000004321}));
+			const auto capture = [&] {
+				return Writer::Capture([&](Writer& output) { Scene::SaveSceneObject(output, actor.get(), false, false); });
+			};
+			const std::string reference = capture().Text();
+			CheckpointText frozen;
+			{
+				CheckpointWriter::BatchScope batch(true);
+				CheckpointCache transient(true);
+				transient.Begin();
+				CheckpointWriter::CacheScope cacheScope(&transient);
+				frozen = capture();
+			}
+			actor->SetStringValue("a", "changed");
+			actor->SetNumberValue("z", 99);
+			actor.reset();
+			std::array<std::future<std::string>, 4> readers;
+			for (auto& reader: readers) reader = std::async(std::launch::async, [frozen] { return frozen.Text(); });
+			bool exact = true;
+			for (auto& reader: readers) exact = reader.get() == reference && exact;
+			check(exact, "owned_custom_values_sort_after_source_death_with_binary_keys_and_float_bits");
+		}
+
+		{
 			std::vector<CheckpointText> deferred;
 			{
 				CheckpointWriter::BatchScope batch(true);

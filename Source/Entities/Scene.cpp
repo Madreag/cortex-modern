@@ -1538,6 +1538,30 @@ int Scene::Save(Writer& writer) const {
 
 namespace {
 	thread_local int64_t s_LastObjectCaptureUs = 0;
+	template<class Map> bool CaptureCustomValues(Writer& writer, const Map& values, const char* type) {
+		if (!writer.IsCapturing() || !CheckpointWriter::BatchEnabled()) return false;
+		if (values.empty()) return true;
+		using Entry = std::pair<std::string, typename Map::mapped_type>;
+		std::vector<Entry> owned(values.begin(), values.end());
+		size_t bytes = sizeof(owned) + owned.size() * sizeof(Entry);
+		for (const auto& [key, value]: owned) {
+			bytes += key.size();
+			if constexpr (std::is_same_v<typename Map::mapped_type, std::string>) bytes += value.size();
+		}
+		const int indent = writer.GetIndent();
+		writer.Append(CheckpointText::Deferred([owned = std::move(owned), type = std::string(type), indent]() mutable {
+			std::sort(owned.begin(), owned.end(), [](const Entry& first, const Entry& second) { return first.first < second.first; });
+			return Writer::Capture([&](Writer& output) {
+				for (const auto& [key, value]: owned) {
+					output.NewProperty("AddCustomValue");
+					output.ObjectStart(type);
+					output.NewPropertyWithValue(key, value);
+					output.ObjectEnd();
+				}
+			}, indent).Text();
+		}, bytes));
+		return true;
+	}
 	int64_t SnapshotThreadMinorFaults() {
 #ifdef __linux__
 		rusage usage{};
@@ -2079,14 +2103,16 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			}
 		}
 
-		for (const auto* entry: MovableObject::EntriesByKey(mosRotatingToSave->GetStringValueMap())) {
+		const auto& stringValues = mosRotatingToSave->GetStringValueMap();
+		if (!CaptureCustomValues(writer, stringValues, "StringValue")) for (const auto* entry: MovableObject::EntriesByKey(stringValues)) {
 			writer.NewProperty("AddCustomValue");
 			writer.ObjectStart("StringValue");
 			writer.NewPropertyWithValue(entry->first, entry->second);
 			writer.ObjectEnd();
 		}
 
-		for (const auto* entry: MovableObject::EntriesByKey(mosRotatingToSave->GetNumberValueMap())) {
+		const auto& numberValues = mosRotatingToSave->GetNumberValueMap();
+		if (!CaptureCustomValues(writer, numberValues, "NumberValue")) for (const auto* entry: MovableObject::EntriesByKey(numberValues)) {
 			writer.NewProperty("AddCustomValue");
 			writer.ObjectStart("NumberValue");
 			writer.NewPropertyWithValue(entry->first, entry->second);
