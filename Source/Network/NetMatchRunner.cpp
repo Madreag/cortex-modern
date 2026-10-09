@@ -800,6 +800,8 @@ namespace RTE {
 			}
 		} else if (const auto* admission = session.GetReconnectClient(); admission && admission->IsAdmitted() && admission->HasRecord()) {
 			lockstepConfig.seatPresenceEpoch = admission->GetRecord().epoch;
+			// A lobby return already advanced the seat incarnation before the round began.
+			if (admission->GetIncarnation() != 0) lockstepConfig.peerIncarnations[LocalLockstepPeerId(session)] = admission->GetIncarnation();
 		}
 		lockstepConfig.startFrame = m_UseLobbyProtocol ? m_Lobby.GetStartFrame() : config.startFrame;
 		lockstepConfig.localPeerId = LocalLockstepPeerId(session);

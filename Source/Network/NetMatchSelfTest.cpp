@@ -7013,9 +7013,11 @@ namespace RTE {
 				if (ready.assignedPeerId + 1 == rejoined->LockstepId()) returnerConnection = ready.transportPeerId;
 			}
 			const bool seatHeld = host.admission.GetSeatHolder(stableSeat, holder, generation, incarnation);
+			const auto& roundIncarnations = rejoined->round->GetConfig().peerIncarnations;
 			if (!rejoined->reconnect.UsedStoredTicket() || rejoined->reconnect.GetState() != NetH4ClientState::Joined ||
 			    rejoined->reconnect.GetRecord().stableSeat != stableSeat || rejoined->LockstepId() != moverId || !seatHeld || holder != returnerConnection ||
 			    incarnation != incarnationBefore + 1 || generation != rejoined->reconnect.GetRecord().holderGeneration ||
+			    !roundIncarnations.contains(moverId) || roundIncarnations.at(moverId) != incarnation ||
 			    host.admission.GetStats().reclaimsAccepted != planeBefore.reclaimsAccepted + 1) {
 				return fail("the returner is lockstep peer " + std::to_string(rejoined->LockstepId()) + " where stable seat " + std::to_string(stableSeat) +
 				            " holds incarnation " + std::to_string(incarnation) + " of holder generation " + std::to_string(generation));
