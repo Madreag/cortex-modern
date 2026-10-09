@@ -17009,7 +17009,15 @@ namespace RTE {
 		for (int i = 0; i < 20; ++i) pump();
 		if (!host.IsRunning() || !client.IsRunning()) { *error = "menu input round did not start"; return false; }
 		ScenarioRunner::SetLockstepCoordinator(&client);
-		struct Restore { ~Restore() { if (g_MenuMan.IsLocalPauseMenuOpen()) g_MenuMan.ToggleLocalPauseMenu(); ScenarioRunner::SetLockstepCoordinator(nullptr); } } restore;
+		struct Restore {
+			bool inActivity = g_ActivityMan.IsInActivity();
+			~Restore() {
+				if (g_MenuMan.IsLocalPauseMenuOpen()) g_MenuMan.ToggleLocalPauseMenu();
+				g_ActivityMan.SetInActivity(inActivity);
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+			}
+		} restore;
+		g_ActivityMan.SetInActivity(true);
 		if (!g_MenuMan.ToggleLocalPauseMenu()) { *error = "local network menu did not open"; return false; }
 		bool neutral = true; uint64_t committed = 0;
 		for (uint64_t tick = 0; tick < 300; ++tick) {
