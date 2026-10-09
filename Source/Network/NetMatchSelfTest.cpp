@@ -14025,9 +14025,10 @@ namespace RTE {
 				}
 			} detach;
 			ScenarioRunner::SetLockstepCoordinator(&clientRound);
-			// Ends the round on its first run, so the wait below returns at once.
+			// The still-attached pump delivers an explicit host End to the waiting client.
 			ScenarioRunner::SetSessionPump([&] {
-				if (++pumpRuns == 1) clientRound.Complete("refused resync probe");
+				hostRound.Tick(NetLockstepNowMs());
+				if (++pumpRuns == 1) hostRound.Complete("refused resync probe");
 			});
 			const uint64_t roundBefore = ScenarioRunner::GetLockstepRoundId();
 			std::string refusal;
