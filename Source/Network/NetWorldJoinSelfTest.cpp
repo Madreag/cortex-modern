@@ -7359,6 +7359,9 @@ namespace RTE {
 		if (!service.m_Session->HasReject() || service.m_Session->GetRejectSummary() != detail) {
 			*error = name + " fixture did not receive the host's disconnect packet"; return false;
 		}
+		if (service.m_Session->BuildRejectText() != detail) {
+			*error = name + ": a host disconnect acquired an empty mismatch comparison"; return false;
+		}
 		if (!service.m_Session->HasReject() || service.m_Session->GetRejectReason() != reason) {
 			*error = name + ": host disconnect reason " + NetProtocol::RejectReasonName(reason) + " became " + NetProtocol::RejectReasonName(service.m_Session->GetRejectReason());
 			return false;

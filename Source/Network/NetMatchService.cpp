@@ -10534,7 +10534,7 @@ static std::string ResyncSaveName() {
 		};
 		if (m_ConnectionMode == 2) {
 			// A setup that never reached the transport already says why; only a relay that failed to connect is named here.
-			if (error && transportReady && !directoryFull) *error = "Relay connection failed: " + *error + "; retry joining or check the relay in Settings > Network";
+			if (error && transportReady && !directoryFull && routeFailed()) *error = "Relay connection failed: " + *error + "; retry joining or check the relay in Settings > Network";
 			return false;
 		}
 		if (transportReady && !routeFailed()) return false;
