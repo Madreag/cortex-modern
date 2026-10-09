@@ -377,13 +377,14 @@ namespace RTE {
 			transport.Push({NetTransportEventType::PacketReceived, 300, NetTransportLane::ControlReliable, helloBytes, ""});
 			host.Tick(0);
 
-			if (host.GetState() != NetSessionState::Accepted || transport.sentPackets.size() != 2) {
-				*error = "scripted host did not accept and send both accept messages";
+			if (host.GetState() != NetSessionState::Accepted || transport.sentPackets.size() != 3) {
+				*error = "scripted host did not send both accept messages and its first heartbeat";
 				return false;
 			}
 
 			bool sawHostHello = false;
 			bool sawJoinAccepted = false;
+			bool sawHeartbeat = false;
 			for (const ScriptedHostTransport::SentPacket& packet : transport.sentPackets) {
 				if (packet.peerId != 300) {
 					*error = "host sent response to the wrong transport peer";
@@ -406,10 +407,12 @@ namespace RTE {
 						*error = "JoinAccepted leaked the transport peer id into the session peer id";
 						return false;
 					}
+				} else if (std::holds_alternative<NetHeartbeat>(decoded.message.payload)) {
+					sawHeartbeat = true;
 				}
 			}
-			if (!sawHostHello || !sawJoinAccepted) {
-				*error = "scripted host did not send HostHello and JoinAccepted";
+			if (!sawHostHello || !sawJoinAccepted || !sawHeartbeat) {
+				*error = "scripted host did not send HostHello, JoinAccepted and Heartbeat";
 				return false;
 			}
 			return true;
@@ -720,7 +723,7 @@ namespace RTE {
 				if (closed && client.GetState() != NetSessionState::HelloSent && client.GetState() != NetSessionState::Connecting) break;
 			}
 			const std::string told = client.BuildPlayerRefusalText();
-			const std::string expected = "Network protocol differs (host " + std::to_string(c_AlphaProtocol) + "; yours " + std::to_string(NetProtocol::c_Version) + ").";
+			const std::string expected = "Network protocol differs (host " + std::to_string(c_AlphaProtocol) + "; yours " + std::to_string(NetProtocol::c_Version) + "). Update both games to the same version.";
 			if (fromClient == c_InvalidNetPeerId || client.GetState() != NetSessionState::Rejected || told != expected) {
 				*error = "a new player refused by an older host read '" + told + "' in state " + NetSession::StateName(client.GetState()) + (fromClient == c_InvalidNetPeerId ? " (its hello never arrived)" : "");
 				return false;
@@ -771,14 +774,14 @@ namespace RTE {
 					*error = std::string("a peer advertising ") + c.advertised + " was never told why: " + *error;
 					return false;
 				}
-				const std::string expected = protocol ? "Network protocol differs (host " + std::to_string(NetProtocol::c_Version) + "; yours " + c.advertised + ")." :
+				const std::string expected = protocol ? "Network protocol differs (host " + std::to_string(NetProtocol::c_Version) + "; yours " + c.advertised + "). Update both games to the same version." :
 				    "Your build differs from the host's (host stage2-p2c-selftest; yours fixture-other-build).";
 				if (client.GetRejectReason() != (protocol ? NetRejectReason::ProtocolMismatch : NetRejectReason::BuildMismatch) ||
 				    client.BuildPlayerRefusalText() != expected || host.GetReadyPeerCount() != 0 || host.GetState() != NetSessionState::Listening) {
 					*error = "the advertised mismatch changed admission or lost its versions: " + client.BuildPlayerRefusalText(); return false;
 				}
 				// The host's own notice names what differed from its side, never "this host".
-				const std::string hostExpected = protocol ? "Their network protocol differs (theirs " + std::string(c.advertised) + "; yours " + std::to_string(NetProtocol::c_Version) + ")." :
+				const std::string hostExpected = protocol ? "Their network protocol differs (theirs " + std::string(c.advertised) + "; yours " + std::to_string(NetProtocol::c_Version) + "). Update both games to the same version." :
 				    "Their build differs from yours (theirs fixture-other-build; yours stage2-p2c-selftest).";
 				if (host.BuildPlayerRefusalText() != hostExpected) {
 					*error = "the host was told \"" + host.BuildPlayerRefusalText() + "\" where it must read \"" + hostExpected + "\""; return false;
@@ -1197,12 +1200,23 @@ namespace RTE {
 			};
 			client.SetRejoinPhase(NetSession::RejoinPhase::ImagePending);
 			run(250);
+			// The round owns the transport between recoveries, so the session does not tick through Active.
+			client.SetRejoinPhase(NetSession::RejoinPhase::Active);
+			now += 2000;
+			clientTransport.AdvanceTimeMs(2000);
+			client.SetRejoinPhase(NetSession::RejoinPhase::ImagePending);
+			run(250);
+			if (client.HasReject()) {
+				*error = "a second recovery inherited the first recovery's phase ceiling";
+				return false;
+			}
 			client.SetRejoinPhase(NetSession::RejoinPhase::Loading);
 			run(250);
 			if (client.HasReject()) {
 				*error = "a rejoin phase ended before its own ceiling: the clock did not start again at the phase change";
 				return false;
 			}
+			client.SetRejoinPhase(NetSession::RejoinPhase::Loading);
 			run(200);
 			if (!client.HasReject() || client.GetRejectReason() != NetRejectReason::Timeout) {
 				*error = "a rejoin phase that outlived its ceiling kept the rejoin waiting: phase=Loading reject=" + std::to_string(client.HasReject());
@@ -1335,7 +1349,7 @@ namespace RTE {
 			if (!pump()) return false;
 			sessions[1].Tick(now);
 			if (!sessions[1].IsClosed() || hostSession.GetReadyPeerCount() != 1 || !sessions[0].IsReady() || !lobbies[0].IsLocalReady() ||
-			    hostLobby.IsRemoteReady(2) || hostLobby.GetState() != NetLobbyState::WaitingForConfigAck ||
+			    !hostLobby.IsRemoteReady(2) || hostLobby.IsConfigAcked(2) || hostLobby.GetState() != NetLobbyState::WaitingForConfigAck ||
 			    hostLobby.GetMatchConfig().configRevision != revisionBeforeForgery + 1) {
 				*error = "forged readiness was not isolated to its sending connection: closed=" + std::to_string(sessions[1].IsClosed()) +
 				         " peers=" + std::to_string(hostSession.GetReadyPeerCount()) + " host_ready=" + std::to_string(hostLobby.IsRemoteReady(2)) +

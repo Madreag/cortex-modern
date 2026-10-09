@@ -638,19 +638,28 @@ namespace RTE {
 			host.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
 			host.SetLiveMatch(true);
 			host.SetPersistentWorld(false);
+			// Ordinary live matches offer an unused seat through the private catch-up path.
 			host.HandleMessage(11, join, 0);
-			host.Tick(NetReconnectAdmission::c_DenialReleaseMs);
+			bool offered = false;
+			for (const NetH4Outbound& outbound: host.TakeOutbound()) {
+				if (const auto* offer = std::get_if<NetH4TicketOffer>(&outbound.payload)) {
+					offered = outbound.connection == 11 && offer->stableSeat == 1;
+				}
+				if (std::holds_alternative<NetJoinRejected>(outbound.payload)) return Fail("an ordinary live match refused its unused seat");
+			}
+			if (!offered) return Fail("an ordinary live match did not offer its unused seat");
+			// The same live match must not offer that provisionally reserved seat to another player.
+			join.displayName = "bob";
+			join.txId.fill(10);
+			host.HandleMessage(12, join, 1);
+			host.Tick(NetReconnectAdmission::c_DenialReleaseMs + 1);
 			bool refused = false;
 			for (const NetH4Outbound& outbound: host.TakeOutbound()) {
-				if (const auto* rejected = std::get_if<NetJoinRejected>(&outbound.payload)) {
-					if (rejected->humanMessage == "the match is already in progress") {
-						refused = true;
-					}
-				}
+				if (outbound.connection != 12) continue;
+				if (std::holds_alternative<NetH4TicketOffer>(outbound.payload)) return Fail("an ordinary live match offered a reserved seat twice");
+				if (const auto* rejected = std::get_if<NetJoinRejected>(&outbound.payload)) refused = rejected->rejectReason == NetRejectReason::SessionFull;
 			}
-			if (!refused) {
-				return Fail("an ordinary NewJoin was accepted");
-			}
+			if (!refused) return Fail("an ordinary live match did not refuse a join with no open seat");
 			return 0;
 		}
 
@@ -981,6 +990,7 @@ namespace RTE {
 			if (!sent.pending || sent.kind != c_NetWorldReportCatchUp) {
 				return Fail("appliedThrough-did-not-reach-E-minus-1: the joiner sent no catch-up report");
 			}
+			if (sent.replayStart != 40) return Fail("the catch-up report lost its replay's starting tick");
 			const uint64_t reportsBefore = catchUp.reportsSent;
 			const uint64_t repeatBegan = NetLockstepNowMs();
 			for (int pump = 0; pump < 100; ++pump) NetMatchService::StepWorldJoinCatchUpClient(pair.client, catchUp);
@@ -1598,8 +1608,12 @@ namespace RTE {
 			if (internet.address != live.address || internet.sessionId != live.sessionId || internet.port != live.port)
 				return Fail("a held Internet client lost its live session route");
 			const auto restarted = NetMatchService::BuildTicketRejoinRequest(record, "Player", false);
-			if (restarted.address != record.hostAddress || restarted.sessionId != record.directorySessionId)
-				return Fail("a restarted client lost its stored ticket route");
+			if (restarted.address != "ice:" || restarted.sessionId != record.directorySessionId)
+				return Fail("a restarted Internet client lost its stored directory identity");
+			record.directorySessionId.clear();
+			const auto direct = NetMatchService::BuildTicketRejoinRequest(record, "Player", false);
+			if (direct.address != record.hostAddress || !direct.sessionId.empty())
+				return Fail("a restarted direct-IP client lost its stored address");
 			return 0;
 		}
 
@@ -1612,6 +1626,8 @@ namespace RTE {
 			record.hostSessionId = 0x5151ULL;
 			record.hostAddress = "198.51.100.7:42124";
 			record.issuedAtUnixMs = 1000;
+			record.seatToken = "selftest-seat-token";
+			record.authorityKey.fill(11);
 			record.persistentWorld = true;
 			const NetMatchServiceRequest world = NetMatchService::BuildTicketRejoinRequest(record, "alice", false);
 			if (!world.persistentWorld || world.activityPreset != "Persistent World") {
@@ -1644,28 +1660,40 @@ namespace RTE {
 				            std::string(decoded.persistentWorld ? "true" : "false") + " version " +
 				            std::to_string(decoded.recordVersion) + " session \"" + decoded.directorySessionId + "\"");
 			}
-			// An ordinary ticket on this build stops at the directory session id: no build is handed a
-			// version it cannot read for a flag the record does not carry.
+			// Both match kinds keep their signed credential; the world flag selects the rejoin plane.
 			NetH4TicketRecord ordinaryRecord = record;
 			ordinaryRecord.persistentWorld = false;
 			ordinaryRecord.recordVersion = NetReconnectTicketStore::RecordVersionFor(false);
 			std::vector<uint8_t> ordinaryBytes;
-			if (ordinaryRecord.recordVersion != NetReconnectTicketStore::c_DirectoryRecordVersion ||
-			    !NetReconnectTicketStore::Serialize(ordinaryRecord, ordinaryBytes) || ordinaryBytes.size() + 1 != bytes.size()) {
+			if (ordinaryRecord.recordVersion != NetReconnectTicketStore::c_RecordVersion ||
+			    !NetReconnectTicketStore::Serialize(ordinaryRecord, ordinaryBytes) || ordinaryBytes.size() != bytes.size()) {
 				return Fail("ticket-rejoin-did-not-target-the-world: an ordinary ticket wrote version " +
 				            std::to_string(ordinaryRecord.recordVersion) + " and " + std::to_string(ordinaryBytes.size()) +
 				            " bytes against the world's " + std::to_string(bytes.size()));
 			}
 			NetH4TicketRecord ordinaryDecoded;
 			if (!NetReconnectTicketStore::Deserialize(ordinaryBytes, ordinaryDecoded) || ordinaryDecoded.persistentWorld ||
-			    ordinaryDecoded.directorySessionId != ordinaryRecord.directorySessionId) {
+			    !(ordinaryDecoded == ordinaryRecord)) {
 				return Fail("ticket-rejoin-did-not-target-the-world: an ordinary ticket read back world " +
 				            std::string(ordinaryDecoded.persistentWorld ? "true" : "false") + " session \"" +
 				            ordinaryDecoded.directorySessionId + "\"");
 			}
+			// Older ordinary records still load without a world flag or signed credential.
+			NetH4TicketRecord legacy = ordinaryRecord;
+			legacy.recordVersion = NetReconnectTicketStore::c_DirectoryRecordVersion;
+			legacy.seatToken.clear();
+			legacy.authorityKey = {};
+			std::vector<uint8_t> legacyBytes;
+			NetH4TicketRecord legacyDecoded;
+			if (!NetReconnectTicketStore::Serialize(legacy, legacyBytes) ||
+			    !NetReconnectTicketStore::Deserialize(legacyBytes, legacyDecoded) || !(legacyDecoded == legacy)) {
+				return Fail("the legacy ordinary ticket lost its directory identity or acquired a world flag");
+			}
 			// A world record cannot be written into a body that has no flag byte to carry it.
 			NetH4TicketRecord mislabelled = record;
 			mislabelled.recordVersion = NetReconnectTicketStore::c_DirectoryRecordVersion;
+			mislabelled.seatToken.clear();
+			mislabelled.authorityKey = {};
 			std::vector<uint8_t> refused;
 			if (NetReconnectTicketStore::Serialize(mislabelled, refused)) {
 				return Fail("ticket-rejoin-did-not-target-the-world: a world record serialized into a version " +
@@ -2662,11 +2690,25 @@ namespace RTE {
 		leave.holderGeneration = offer.holderGeneration;
 		host.HandleMessage(12, leave, 10);
 		host.TakeOutbound();
-		// The leaver keeps its seat, held as for a drop; a join without its ticket is a newcomer and takes the free slot.
+		// A holder who lost its ticket still owns its held seat and must not receive a second one.
 		NetH4NewJoin rejoin = join;
 		rejoin.txId.fill(14);
 		host.HandleMessage(14, rejoin, 20);
 		host.Tick(NetReconnectAdmission::c_DenialReleaseMs);
+		bool heldRefusal = false;
+		for (const NetH4Outbound& outbound: host.TakeOutbound()) {
+			if (outbound.connection != 14) continue;
+			if (std::holds_alternative<NetH4TicketOffer>(outbound.payload)) return Fail("a returning world holder was offered a second seat");
+			if (const auto* rejected = std::get_if<NetJoinRejected>(&outbound.payload)) {
+				heldRefusal = rejected->rejectReason == NetRejectReason::HostNotAccepting && rejected->mismatchKey == "seat_held_for_you";
+			}
+		}
+		if (!heldRefusal) return Fail("the returning holder was not directed back to its held seat");
+		// A different newcomer can still take the unused slot without displacing the held owner.
+		NetH4NewJoin newcomer = join;
+		newcomer.displayName = "bob";
+		newcomer.txId.fill(15);
+		host.HandleMessage(15, newcomer, NetReconnectAdmission::c_DenialReleaseMs + 1);
 		bool landed = false;
 		for (const NetH4Outbound& outbound: host.TakeOutbound()) {
 			if (const auto* ticket = std::get_if<NetH4TicketOffer>(&outbound.payload)) {
@@ -2677,12 +2719,12 @@ namespace RTE {
 			}
 			if (const auto* rejected = std::get_if<NetJoinRejected>(&outbound.payload)) {
 				if (rejected->humanMessage == "the match is already in progress") {
-					return Fail("rejoin after a clean leave did not land in the running world");
+					return Fail("a different newcomer could not join after the holder left");
 				}
 			}
 		}
 		if (!landed) {
-			return Fail("rejoin after a clean leave did not land in the running world");
+			return Fail("a different newcomer was not offered the unused world seat");
 		}
 		for (const NetH4SeatStatus& status: host.GetSeatStatuses()) {
 			if (status.stableSeat == offer.stableSeat && (!status.committed || status.closed)) {
@@ -4150,6 +4192,48 @@ namespace RTE {
 		NetLockstepFrame first;
 		if (chunk.size() < 4 + size || !DecodeCommittedJoinFrame(std::vector<uint8_t>(chunk.begin() + 4, chunk.begin() + 4 + size), first, &error) || first.targetFrame != 51)
 			return Fail("an in-place tail did not start at the frame after the seat's own state: " + error);
+		for (uint64_t tick = 81; tick <= 400; ++tick) {
+			NetLockstepFrame frame;
+			frame.senderPeerId = 1; frame.targetFrame = tick; frame.roundId = 9;
+			if (!host.Tail().Append(frame, &error)) return Fail(error);
+		}
+		host.CancelJoin(42, "held again");
+		if (!host.BeginInPlaceRejoin(42, 2, 2, 4, "returning", 2, 282, &error)) return Fail(error);
+		host.NoteRejoinLinkFit(42, true);
+		while (host.NextTailDatagram(42, 1000, chunk)) {}
+		NetLobbySession lobby;
+		const auto report = [&](uint64_t applied, uint64_t ticks, uint64_t workUs, uint64_t sentThrough, uint64_t replayStart) {
+			NetLobbySession::WorldJoinReport progress;
+			progress.pending = true; progress.kind = c_NetWorldReportCatchUp; progress.fromPeer = 2;
+			progress.value = applied; progress.workTicks = ticks; progress.workUs = workUs; progress.sentThrough = sentThrough;
+			progress.replayStart = replayStart;
+			return NetMatchService::ApplyWorldJoinReport(lobby, host, progress, 42, 800, 2000);
+		};
+		if (report(326, 279, 300000, 82, 47) != 0 || !host.FindSession(42)->headroom.Ready())
+			return Fail("the prior replay did not establish the counter baseline");
+		if (report(365, 0, 0, 0, 365) != 0) return Fail("a restarted replay activated without proving capacity");
+		session = host.FindSession(42);
+		if (session->acknowledgedThrough != 365 || session->headroom.Ready() || session->headroom.Ratio() != 0 ||
+		    session->tailInFlight.empty() || session->tailInFlight.front().last <= 365)
+			return Fail("a second hold retained the first replay's work or unacknowledged tail");
+		if (!host.NextTailDatagram(42, 3000, chunk)) return Fail("the missing tail was not resent");
+		bool missingResent = false;
+		for (size_t offset = 0; offset + 4 <= chunk.size();) {
+			const uint32_t bytes = static_cast<uint32_t>(chunk[offset]) | (static_cast<uint32_t>(chunk[offset + 1]) << 8) |
+			    (static_cast<uint32_t>(chunk[offset + 2]) << 16) | (static_cast<uint32_t>(chunk[offset + 3]) << 24);
+			offset += 4;
+			NetLockstepFrame resent;
+			if (bytes > chunk.size() - offset || !DecodeCommittedJoinFrame(std::vector<uint8_t>(chunk.begin() + offset, chunk.begin() + offset + bytes), resent, &error)) return Fail(error);
+			missingResent = missingResent || resent.targetFrame == 366;
+			offset += bytes;
+		}
+		if (!missingResent) return Fail("the resend queue stayed behind the returner's missing frame 366");
+		(void)report(375, 10, 10000, 0, 365);
+		if (report(376, 9, 9000, 0, 365) != 0 || host.FindSession(42)->acknowledgedThrough != 376)
+			return Fail("invalid capacity counters blocked an applied-frame acknowledgement");
+		(void)report(326, 279, 300000, 82, 47);
+		if (host.FindSession(42)->acknowledgedThrough != 376 || host.FindSession(42)->priorInputThrough != 82 || host.FindSession(42)->replayStart != 365)
+			return Fail("a previous replay rolled back progress or the input fence");
 		std::cout << "[net-world-join-selftest] PASS a_held_seat_catches_up_in_place_without_an_image from=50 first=" << first.targetFrame << std::endl;
 		return 0;
 	}
@@ -7316,6 +7400,9 @@ namespace RTE {
 		if (!service.m_Session->HasReject() || service.m_Session->GetRejectSummary() != detail) {
 			*error = name + " fixture did not receive the host's disconnect packet"; return false;
 		}
+		if (service.m_Session->BuildRejectText() != detail) {
+			*error = name + ": a host disconnect acquired an empty mismatch comparison"; return false;
+		}
 		if (!service.m_Session->HasReject() || service.m_Session->GetRejectReason() != reason) {
 			*error = name + ": host disconnect reason " + NetProtocol::RejectReasonName(reason) + " became " + NetProtocol::RejectReasonName(service.m_Session->GetRejectReason());
 			return false;
@@ -8553,7 +8640,7 @@ namespace RTE {
 		return true;
 	}
 
-	// (e) The browser row: a world reads its boot, state, seats and watchers; an ordinary row does not move.
+	// The browser row describes the game and its availability without exposing its network address.
 	bool TestBrowserWorldRowText(std::string* error) {
 		NetDirectoryLocalIdentity local;
 		local.networkProtocolVersion = 11;
@@ -8606,7 +8693,7 @@ namespace RTE {
 			return false;
 		}
 		const std::string ordinaryText = NetDirectoryClient::DescribeGameRow(rows[1]);
-		const std::string expectedOrdinary = "[NET] Duel - P4 Alpha Duel (3/4) 10.0.0.4:42124";
+		const std::string expectedOrdinary = "[NET] Duel - P4 Alpha Duel (3/4)";
 		if (ordinaryText != expectedOrdinary) {
 			*error = "browser-ordinary-row-text-changed: the row reads \"" + ordinaryText + "\", it must read \"" + expectedOrdinary + "\"";
 			return false;

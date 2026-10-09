@@ -124,13 +124,13 @@ INTERNET_SAVED = {"SessionDirectoryUrl": "newdir.example.test/serve",
                   "SessionDirectoryCertSha256": "b" * 64}
 STUN_DEFAULT = "stun.l.google.com:19302,stun.cloudflare.com:3478,stun.nextcloud.com:443"
 NAT_KEYS = ("NetworkIceEnable", "NetworkStunServers", "NetworkTurnServers", "NetworkTurnUser", "NetworkTurnPass")
-NAT_LABEL = "Automatic direct connection"
+NAT_LABEL = "Automatic connection"
 NAT_STATES = ("On (default)", "Off")
 # The row's first line for each drafted state; the lines under it say what this computer's settings mean for it.
-NAT_HINTS = {"On (default)": "Tries a direct connection through each player's router first. Recommended.",
-             "Off": "Players reach you only at your public address and port; many home networks cannot."}
-# With no STUN server to ask, On reaches this network only, and its first line says so.
-NAT_STUN_EMPTY = "The STUN server list is empty, so only players on your network connect directly (Settings - Network - Connection)."
+NAT_HINTS = {"On (default)": "Automatic: tries direct routes, then a relay if needed.",
+             "Off": "Automatic connection is off; players need a reachable UDP address."}
+# No STUN does not rule out a relay, LAN or forwarded UDP connection.
+NAT_STUN_EMPTY = "No STUN servers: a relay, LAN or forwarded UDP can still connect."
 RELAY_STATES = ("Off", "Game service (default)", "Custom relay")
 RELAY_KEYS = (*NAT_KEYS, "NetworkHostRelayMode", "NetworkConnectionMode", "NetworkPlayerTurnServers", "NetworkPlayerTurnUser", "NetworkPlayerTurnPass")
 CONNECTION_ROWS = ("LabelNetworkConnection", "ComboNetworkConnection", "LabelNetworkConnectionHint",
@@ -596,14 +596,17 @@ def repair_probe(who, root, roomy=True):
              {"op": "mouse_down", "control": "NetworkSeatsOptions"},
              {"op": "mouse_up", "control": "NetworkSeatsOptions"},
              {"op": "wait", "control": "NetworkSeatsOptionsText", "equals": {"visible": True}},
+             {"op": "mouse_down", "control": "NetworkSeatsOptions"}, {"op": "wait", "renders": 3},
+             {"op": "mouse_up", "control": "NetworkSeatsOptions"}, {"op": "wait", "renders": 4},
              {"op": "assert_control", "control": "NetworkSeatsOptionsText", **({"fits": True} if roomy else {}),
-              "text_contains": "Repair match: Ready - pause menu > Match Options" if who == "host" else "Frame redundancy:"},
+              "text_contains": "Repair match: Ready - pause menu > Match Details" if who == "host" else "Frame redundancy:"},
              *([] if roomy else [menu_step("assert_vertical_scroll NetworkSeatsOptionsText")]),
              {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
              {"op": "wait", "panel_open": False},
              {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
              {"op": "wait", "screen": "Pause"}, {"op": "wait", "renders": 2}, menu_step("activate ButtonMatchOptions"),
              {"op": "wait", "screen": "PauseMatchOptions"},
+             menu_step("activate ButtonConnectionDetails"), {"op": "wait", "renders": 4},
              {"op": "assert", "equals": {"service": "Running"}},
              menu_step("assert_rect_inside MatchOptionsBox viewport"),
              *row_checks("LabelMatchOptions", "MatchOptionsBox"),
@@ -726,7 +729,7 @@ def host_stun_readback(port):
              "activate ButtonHostOptBack\nwait 3\nactivate ButtonMultiplayerCreate\nwait 15\n"
              "activate ButtonLobbyOptions\nwait 3\nactivate TabHostPageConnection\nwait 3\n"
              f"combo_select ComboHostNetIce {NAT_STATES[0]}\nwait 3\nactivate ButtonHostOptApply\nwait 3\n"
-             "assert_label LabelHostOptStatus Close this lobby to change the direct connection.\n" + row_checks +
+             "assert_label LabelHostOptStatus Close this lobby to change automatic connection.\n" + row_checks +
              "activate ButtonHostOptBack\nwait 3\nactivate ButtonLobbyOptions\nwait 3\nactivate TabHostPageConnection\nwait 3\n"
              f"assert_label ComboHostNetIce {NAT_STATES[1]}\ndump_host_options\nexit\n")
     return text
@@ -736,7 +739,7 @@ def host_relay_readback(port):
     text = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
             f"setup_host_port {port}\nactivate ButtonHostOptions\nwait 3\n"
             "activate TabHostPageConnection\nwait 3\n"
-            f"assert_label LabelHostNetRelay Relay fallback\nassert_label ComboHostNetRelay {RELAY_STATES[1]}\n"
+            f"assert_label LabelHostNetRelay Match relay\nassert_label ComboHostNetRelay {RELAY_STATES[1]}\n"
             f"assert_label ComboHostNetIce {NAT_STATES[0]}\ndump_host_options\n")
     for state in (RELAY_STATES[0], RELAY_STATES[2], RELAY_STATES[1]):
         text += f"combo_select ComboHostNetRelay {state}\nwait 3\n"
@@ -875,7 +878,10 @@ def lobby_case(case, port, root):
             if who == "host":
                 steps += [{"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
                           {"op": "wait", "screen": "Pause", "elapsed_ms": 400},
-                          menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch")]
+                          menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch"),
+                          {"op": "wait", "screen": "PauseLeaveConfirm", "renders": 4, "scope": "menu"},
+                          {"op": "assert", "equals": {"service": "Running", "screen": "PauseLeaveConfirm"}, "scope": "menu"},
+                          menu_step("activate ButtonLeaveConfirm")]
             steps += [{"op": "wait", "service": "Starting", "scope": "menu"}, {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]
             probes[who] = {"schema": 1, "timeout_ms": 150000, "steps": steps}
             assert scripts[who].endswith("exit\n"), scripts[who][-80:]
@@ -1284,7 +1290,10 @@ def scripts(case, port, root, size="960x540"):
             if who == "host":
                 steps += [{"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
                           {"op": "wait", "screen": "Pause", "elapsed_ms": 400},
-                          menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch")]
+                          menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch"),
+                          {"op": "wait", "screen": "PauseLeaveConfirm", "renders": 4, "scope": "menu"},
+                          {"op": "assert", "equals": {"service": "Running", "screen": "PauseLeaveConfirm"}, "scope": "menu"},
+                          menu_step("activate ButtonLeaveConfirm")]
             steps += [{"op": "wait", "service": "Starting", "scope": "menu"},
                       {"op": "assert", "equals": {"service": "Starting"}, "scope": "menu"},
                       # The lobby box's rect lands next to the net_ui rects in the same observation,
@@ -1744,7 +1753,7 @@ def scripts(case, port, root, size="960x540"):
                 # On the two-peer fixture the adopted config names both seated humans, the lobby is kept to
                 # this network, and Apply refuses a port edit mid-session.
                 "activate TabHostPageTiming\nwait 3\nassert_visible CollectionBoxHostPageTiming 1\n"
-                "assert_label LabelHostNetMode Host mode: Playing - capacity 2 - humans seated 2\n"
+                "assert_label LabelHostNetMode Host mode: Player host - capacity 2 - humans seated 2\n"
                 "activate TabHostPageConnection\nwait 3\nassert_label ComboHostNetVisibility Local discovery\n"
                 "set_text TextHostNetPort 40000\nwait 3\nactivate ButtonHostOptApply\nwait 3\n"
                 "assert_label LabelHostOptStatus Close this lobby to change the game port\n"
@@ -1777,7 +1786,7 @@ def scripts(case, port, root, size="960x540"):
                 "assert_enabled ButtonHostSeatDlgKick 1\nassert_enabled ButtonHostSeatDlgBan 1\n"
                 "activate ButtonHostSeatDlgKick\nwait 10\n"
                 "assert_visible HostSeatDialog 0\n"
-                "assert_label LabelHostOptStatus Kick: Ok\n"
+                "assert_label LabelHostOptStatus Kick: Done.\n"
                 # The open seat is published as a new config revision, so the panel re-seeds its draft
                 # and the seat's name column reads the unseated name instead of the removed player's.
                 "wait 10\nassert_label LabelHostSeatName1 Client 2\n"
@@ -1804,7 +1813,7 @@ def scripts(case, port, root, size="960x540"):
                 "assert_enabled ButtonHostSeatDlgBan 1\n"
                 "activate ButtonHostSeatDlgBan\nwait 10\n"
                 "assert_visible HostSeatDialog 0\n"
-                "assert_label LabelHostOptStatus Ban: Ok\n"
+                "assert_label LabelHostOptStatus Ban: Done.\n"
                 "activate TabHostPageSession\nwait 3\n"
                 "activate ButtonHostSessBanned\nwait 5\n"
                 "assert_visible HostBannedDialog 1\nassert_label LabelHostBannedList Joiner\n"
@@ -2024,7 +2033,7 @@ def scripts(case, port, root, size="960x540"):
         text += checks("ButtonHostNetRecalc", "CollectionBoxHostPageTiming")
         # The host row names mode/capacity/seated humans off the adopted config.
         text += checks("LabelHostNetMode", "CollectionBoxHostPageTiming")
-        text += "assert_label LabelHostNetMode Host mode: Playing - capacity 2 - humans seated 1\n"
+        text += "assert_label LabelHostNetMode Host mode: Player host - capacity 2 - humans seated 1\n"
         text += "assert_no_overlap_within CollectionBoxHostPageTiming\n"
         text += "dump_host_options\n"
         # Connection: the listing in its honest names and the port, this computer's choices that commit with Apply.
@@ -2831,10 +2840,14 @@ def run_case(options, case, root, failing=None):
             pages = [{c["name"]: c for c in capture["controls"]} for capture in images
                      if any(c["name"] == "ComboHostNetIce" for c in capture["controls"])]
             assert [page["ComboHostNetIce"]["text"] for page in pages] == [*NAT_STATES, *NAT_STATES], pages
-            for page in pages:
+            for index, page in enumerate(pages):
                 label, combo, hint = (page[name] for name in ("LabelHostNetIce", "ComboHostNetIce", "LabelHostNetIceHint"))
                 first = NAT_STUN_EMPTY if (case, combo["text"]) == ("host-stun-empty", "On (default)") else NAT_HINTS[combo["text"]]
-                assert label["text"] == NAT_LABEL and hint["text"].startswith(first + "\n"), (label, hint)
+                assert label["text"] == NAT_LABEL, label
+                if index < 3:
+                    assert hint["text"].startswith(first + "\n"), hint
+                else:
+                    assert hint["text"].startswith("Current connection: ") and "Close the lobby" in hint["text"], hint
                 assert combo_item_names(combo) == list(NAT_STATES), combo
                 assert all(row["text_fits"] for row in (label, combo, hint)), (label, combo, hint)
                 assert label["rect"][1] == combo["rect"][1], (label, combo)
@@ -2842,8 +2855,8 @@ def run_case(options, case, root, failing=None):
                 page_rect = page["CollectionBoxHostPageConnection"]["rect"]
                 assert page_rect[1] + page_rect[3] + 4 <= page["ButtonHostOptBack"]["rect"][1], page
             for page in (pages[0], pages[2]):
-                # An empty STUN list leaves direct connections to this network, and the hint says so; the shipped list says nothing of it.
-                empty = "The STUN server list is empty" in page["LabelHostNetIceHint"]["text"]
+                # The setup hint distinguishes missing STUN from the available relay/LAN/forwarded routes.
+                empty = "No STUN servers" in page["LabelHostNetIceHint"]["text"]
                 assert empty == (case == "host-stun-empty"), page
                 assert "online game list service" in page["LabelHostNetIceHint"]["text"], page
             expected_saved = dict.fromkeys(NAT_KEYS, "")
@@ -2960,7 +2973,7 @@ def run_case(options, case, root, failing=None):
             assert reports["client"]["service"]["status"] == "Match left", reports["client"]["service"]["status"]
             leave = reports["client"]["service"]["reconnect"]
             assert leave["client_leave_acks"] == 1 and leave["client_unacknowledged_leaves"] == 0, leave
-            # A player who leaves keeps the seat and its ticket, so Rejoin Match brings the player back while the match runs.
+            # Leaving keeps the ticket and holds the seat until the host reassigns it.
             assert leave["client_state"] == "Left" and leave["ticket_stored"] is True, leave
             assert "[net-reconnect] leave: Left (ticket kept)" in logs["client"], logs["client"][-2000:]
             announcements = re.findall(r"\[net-lockstep\] a leave becomes a hold for peer 2 at frame (\d+): Match left", logs["host"])

@@ -80,6 +80,8 @@ namespace RTE {
 			int64_t spectatorMax = 0;
 			std::string localModuleManifestHash; //!< A 'modules' refusal's two digests: this player's game data and the host's.
 			std::string hostModuleManifestHash;
+			int64_t localNetworkProtocol = 0;
+			int64_t hostNetworkProtocol = 0;
 		};
 
 		/// The one line the join screen shows for a row. A world reads its boot, its published state and
@@ -111,6 +113,7 @@ namespace RTE {
 		const std::string& GetObservedIp() const { return m_ObservedIp; }
 		/// The session token the register reply issued; the host's signaling channel proves it.
 		const std::string& GetToken() const { return m_Token; }
+		const std::string& AuthorityKey() const { return m_AuthorityKey; }
 		/// Requests or retrieves the held session's short-lived relay offer without blocking a frame.
 		bool RequestIceServers(const std::string& matchId, uint32_t ttl, const NetRelayConfig* fixed = nullptr);
 		bool FetchIceServers(const std::string& sessionId);
@@ -120,6 +123,8 @@ namespace RTE {
 		const std::string& IceError() const { return m_IceError; }
 		/// The directory said the host's relay backend refused the host's last request (not that the match has no relay).
 		bool IceRelayRefused() const { return m_IceRelayRefused; }
+		bool IceRequestRetryable() const { return m_IceRetryable; }
+		uint32_t IceRetryDelayMs() const { return m_IceRetryDelayMs; }
 
 		/// Host: keep the row registered. The first call after Idle registers; the row passed on
 		/// each call carries the live peer_count/seats_free for the next heartbeat. `listed`
@@ -215,6 +220,7 @@ namespace RTE {
 		std::optional<bool> m_ConfirmedListed; //!< The held row's last server-confirmed visibility; empty without one.
 		std::optional<bool> m_InFlightListed; //!< The visibility carried by the in-flight heartbeat.
 		bool m_HiddenUnsupported = false; //!< A hidden intent on a legacy service already deleted once.
+		bool m_ConnectionProtocolRefused = false; //!< Metadata refresh cannot retry an incompatible directory.
 		bool m_BrowseWanted = false;
 		NetDirectoryRegisterRequest m_Row;
 		bool m_ListenAddrsDirty = false;
@@ -222,10 +228,11 @@ namespace RTE {
 		bool m_Running = false;
 		std::string m_SessionId;
 		std::string m_Token;
+		std::string m_AuthorityKey;
 		std::string m_ObservedIp;
 		int64_t m_HeartbeatS = 0;
 		int64_t m_SupersededGeneration = 0;
-		/// A 409 names the generation that holds the row now: this host keeps it no more.
+		/// A directory migration refusal names the generation that now holds the row.
 		bool TakeSuperseded(const Reply& reply);
 		int64_t m_ExpiresInS = 0;
 		uint64_t m_NextHeartbeatMs = 0;
@@ -253,6 +260,9 @@ namespace RTE {
 		std::unique_ptr<Transport> m_IceRequest;
 		NetRelayConfig m_IceServers;
 		std::string m_IceError; bool m_IceRelayRefused = false;
+		bool m_IceRetryable = false;
+		bool m_IceHostRequest = false;
+		uint32_t m_IceRetryDelayMs = 500;
 		uint64_t m_IceReplies = 0;
 		RequestKind m_RequestKind = RequestKind::None;
 

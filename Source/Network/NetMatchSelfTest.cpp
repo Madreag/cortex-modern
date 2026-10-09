@@ -24,7 +24,10 @@
 #include "NetPortMap.h"
 #include "NetModerationGUI.h"
 #include "NetHostOptionsText.h"
+#include "NetPlayerPresentation.h"
+#include "NetChatPresentation.h"
 #include "Activity.h"
+#include "GameActivity.h"
 #include "Actor.h"
 #include "AEmitter.h"
 #include "ActivityMan.h"
@@ -32,6 +35,22 @@
 #include "MovableMan.h"
 #include "ScenarioRunner.h"
 #include "NetModerationGUIProbe.h"
+#include "MenuAutomation.h"
+#include "GUIDrawRecord.h"
+#include "GUI.h"
+#include "AllegroScreen.h"
+#include "GUITextBox.h"
+#include "FrameMan.h"
+#include "SettingsGUI.h"
+#include "ModManagerGUI.h"
+#include "SaveLoadMenuGUI.h"
+#include "PauseMenuGUI.h"
+#include "MainMenuGUI.h"
+#include "TitleScreen.h"
+#include "GUIInputWrapper.h"
+#include "UInputMan.h"
+#include "WindowMan.h"
+#include <SDL3/SDL.h>
 
 #ifdef SYSTEM_MINIZIP
 #include <minizip/zip.h>
@@ -83,6 +102,12 @@ namespace RTE {
 	bool RunLobbySeatHoldSelfTest(std::string* error);
 
 	namespace {
+		struct DirectConnectionScope {
+			SettingsMan::NetworkConnectionMode saved = g_SettingsMan.GetNetworkConnectionMode();
+			DirectConnectionScope() { g_SettingsMan.SetNetworkConnectionMode(SettingsMan::NetworkConnectionMode::Automatic); }
+			~DirectConnectionScope() { g_SettingsMan.SetNetworkConnectionMode(saved); }
+		};
+
 		bool TestCrossCaptureBarrier(std::string* error) {
 			const auto root = std::filesystem::path("Userdata") / "cross-barrier-selftest";
 			std::filesystem::create_directories(root);
@@ -2390,6 +2415,28 @@ namespace RTE {
 		};
 
 		bool TestNetworkRevisionsKeepReady(std::string* error) {
+			// A reconnect validates the setup on its first host config, before advertising the retained Ready.
+			for (int change = 0; change < 4; ++change) {
+				LoopbackTransport a, b; NetPeerId ar, br;
+				if (!StartLoopbackTransports(static_cast<uint16_t>(43560 + change), a, b, ar, br, error)) return false;
+				NetLobbySession first, returning;
+				NetLobbySessionConfig hc;
+				hc.host = true; hc.localPeerId = 1; hc.remotePeerId = 2; hc.remoteTransportPeerId = ar;
+				hc.matchConfig = MakeConfig(); hc.autoStart = false;
+				const auto readied = hc.matchConfig;
+				++hc.matchConfig.configRevision; ++hc.matchConfig.seatRosterRevision;
+				if (change == 1) hc.matchConfig.automaticRepair = !hc.matchConfig.automaticRepair;
+				if (change == 2) ++hc.matchConfig.sessionId;
+				auto cc = hc; cc.host = false; cc.localPeerId = 2; cc.remotePeerId = 1; cc.remoteTransportPeerId = br;
+				cc.autoReady = false; cc.readyForSetup = readied;
+				if (!first.Start(a, hc, error) || !returning.Start(b, cc, error)) return false;
+				returning.SetLocalReady(change != 3);
+				for (uint64_t now = 0; now < 1000; now += 10) { first.Tick(now); returning.Tick(now); a.AdvanceTimeMs(10); b.AdvanceTimeMs(10); }
+				if (returning.IsLocalReady() != (change == 0) || first.IsRemoteReady(2) != (change == 0)) {
+					*error = "reconnect Ready did not follow its agreed setup, case=" + std::to_string(change); return false;
+				}
+			}
+
 			LoopbackTransport hostWire, clientWire;
 			NetPeerId hostRemote, clientRemote;
 			if (!StartLoopbackTransports(43271, hostWire, clientWire, hostRemote, clientRemote, error)) return false;
@@ -5072,7 +5119,7 @@ namespace RTE {
 				return false;
 			}
 			const std::string missing = NetHostSeatRemovalRefusal(NetMatchServiceState::Starting, false, 2, "Kick");
-			if (missing != "Kick: no moderation row for peer 2 (Starting).") {
+			if (missing != "Kick: no player holds this seat.") {
 				*error = "the seat miss has the wrong phase or peer: " + missing;
 				return false;
 			}
@@ -5297,7 +5344,7 @@ namespace RTE {
 				*error = "the hosted request lost the return window: " + std::to_string(built.returnWindowMinutes);
 				return false;
 			}
-			const std::string summary = NetHostOptionsSummary(built, {});
+			const std::string summary = NetHostConnectionSummary(built, {});
 			if (summary.find("Frame redundancy: 6 ticks") == std::string::npos) {
 				*error = "the adopted summary lost the redundancy: " + summary;
 				return false;
@@ -5991,6 +6038,183 @@ namespace RTE {
 		}
 
 	} // namespace
+
+	bool TestAnEmptyLobbyAdmitsLaterJoiners(std::string* error) {
+		RematchFixture fixture;
+		if (!SetUpRematchFixture(fixture, "empty-lobby-late-join", 43276, 4, error)) return false;
+		RematchPeer& host = fixture.Host();
+		host.config.sessionConfig.readyWithoutPeers = true;
+		if (!host.session.StartHost(host.transport, host.config.sessionConfig, error)) return false;
+		NetMatchRunner& runner = host.runner;
+		runner.m_Config = host.config;
+		runner.m_Config.autoStart = runner.m_Config.autoReady = false;
+		runner.m_MatchConfig = host.config.matchConfig;
+		std::atomic<bool> start{false}, cancel{false};
+		runner.m_Config.startRequested = &start;
+		runner.m_Config.cancelRequested = &cancel;
+		std::array<bool, 4> connected{};
+		std::array<std::unique_ptr<NetLobbySession>, 4> lobbies;
+		uint32_t pumps = 0;
+		bool sawFourNotReady = false;
+		bool leftLobby = false, sawHeldSeat = false, returnedToLobby = false;
+		uint32_t leftAtPump = 0;
+		NetRosterSeat originalSeat;
+		std::string pumpError;
+		runner.m_Config.publishLobby = [&](const NetLobbySnapshot&) {
+			++pumps;
+			for (size_t i = 1; i < fixture.peers.size(); ++i) {
+				RematchPeer& peer = *fixture.peers[i];
+				if (i == 1 && leftLobby && !returnedToLobby) {
+					const auto* held = host.admission.GetRoster().Find(2);
+					if (host.session.GetReadyPeerCount() == 2 && held && held->phase == NetSeatPhase::Held) sawHeldSeat = true;
+					if (!sawHeldSeat || pumps < leftAtPump + 10) continue;
+					peer.reconnect.Configure(&peer.store, RematchIdentity(), "Client 1");
+					peer.reconnect.SetUnixClock(&RematchUnixClock, nullptr);
+					peer.reconnect.SetHostContext("loopback", NetHash32{});
+					peer.reconnect.SetRequireStoredTicket(true);
+					returnedToLobby = true;
+				}
+				// The host is already pumping its empty manual lobby when these independent peers arrive.
+				if (!connected[i] && pumps >= 1 + (i - 1) * 10) {
+					connected[i] = peer.session.StartClient(peer.transport, "loopback", peer.config.sessionConfig, &pumpError);
+					if (!connected[i]) { cancel.store(true); return; }
+				}
+				if (!connected[i]) continue;
+				if (!lobbies[i]) {
+					peer.session.Tick(fixture.clock.NowMs());
+					if (!peer.session.IsReady() || peer.reconnect.GetState() != NetH4ClientState::Joined) continue;
+					NetLobbySessionConfig config;
+					config.localPeerId = peer.LockstepId();
+					config.remotePeerId = 1;
+					config.remoteTransportPeerId = peer.session.GetRemoteTransportPeerId();
+					config.matchConfig = peer.config.matchConfig;
+					config.session = &peer.session;
+					config.sessionNowMs = [&fixture] { return fixture.clock.NowMs(); };
+					config.autoReady = config.autoStart = false;
+					config.timeoutMs = 8000;
+					lobbies[i] = std::make_unique<NetLobbySession>();
+					if (!lobbies[i]->Start(peer.transport, config, &pumpError)) { cancel.store(true); return; }
+				}
+				lobbies[i]->Tick(fixture.clock.NowMs());
+			}
+			if (host.session.GetReadyPeerCount() == 3 &&
+			    std::all_of(lobbies.begin() + 1, lobbies.end(), [](const auto& lobby) {
+				    return lobby && lobby->GetState() == NetLobbyState::WaitingForReady && !lobby->IsLocalReady();
+			    })) {
+				if (host.admission.GetRoster().stage != NetRosterStage::Lobby || runner.m_Lobby.IsRemoteReady() || runner.m_Lobby.IsStarted()) {
+					pumpError = "the initial lobby formed a round before the host asked to start";
+					cancel.store(true);
+					return;
+				}
+				if (!leftLobby) {
+					sawFourNotReady = true;
+					originalSeat = *host.admission.GetRoster().Find(2);
+					fixture.peers[1]->session.Close("leaving the lobby");
+					fixture.peers[1]->transport.Stop();
+					lobbies[1].reset();
+					connected[1] = false;
+					leftLobby = true;
+					leftAtPump = pumps;
+					return;
+				}
+				const auto* returned = host.admission.GetRoster().Find(2);
+				if (!returnedToLobby || !fixture.peers[1]->reconnect.UsedStoredTicket() || !returned ||
+				    returned->owner != originalSeat.owner || returned->ticket != originalSeat.ticket || returned->phase != NetSeatPhase::Lobby) {
+					pumpError = "the returning lobby connection did not reclaim its original seat";
+					cancel.store(true);
+					return;
+				}
+				for (size_t i = 1; i < lobbies.size(); ++i) lobbies[i]->SetLocalReady(true);
+				start.store(true);
+			}
+			fixture.clock.skippedMs.fetch_add(20);
+			if (pumps > 150) cancel.store(true);
+		};
+		const bool started = runner.RunLobby(host.transport, host.session, 8000, error);
+		std::cout << "[empty-lobby-test] host admitted=" << host.session.GetReadyPeerCount()
+		          << " lobby_config_sent=" << runner.m_Lobby.GetStats().configPacketsSent
+		          << " four_not_ready=" << sawFourNotReady << " started=" << started << std::endl;
+		for (size_t i = 1; i < lobbies.size(); ++i) {
+			if (!lobbies[i]) { *error = "a late joiner never reached the admission handoff: " + pumpError; return false; }
+			lobbies[i]->Tick(fixture.clock.NowMs());
+			const auto* seat = host.admission.GetRoster().Find(fixture.peers[i]->LockstepId());
+			std::cout << "[empty-lobby-test] client=" << i << " seat=" << (seat ? NetSeatPhaseName(seat->phase) : "missing")
+			          << " config_received=" << lobbies[i]->GetStats().messagesReceived
+			          << " ignored_session=" << lobbies[i]->GetStats().ignoredSessionPackets
+			          << " started=" << lobbies[i]->IsStarted() << std::endl;
+		}
+		if (!started || !sawFourNotReady || !sawHeldSeat || !returnedToLobby) { *error = "a late or returning joiner was admitted but never received the lobby config: " + pumpError; return false; }
+		for (size_t i = 1; i < lobbies.size(); ++i) {
+			if (!lobbies[i]->IsStarted() || lobbies[i]->GetMatchConfigHash() != runner.GetMatchConfigHash()) {
+				*error = "the four peers did not start with the same config and roster";
+				return false;
+			}
+		}
+		if (runner.GetMatchConfig().seatRosterHash != HashRoster(host.admission.GetRoster())) {
+			*error = "the first start did not agree on the formed roster";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestDismissedRejoinStaysDismissed(std::string* error) {
+		struct Restore {
+			std::string path;
+			bool admission;
+			~Restore() { NetMatchService::SetTicketStorePath(path); NetMatchService::SetAdmissionEnabled(admission); }
+		} restore{NetMatchService::s_TicketStorePath, NetMatchService::IsAdmissionEnabled()};
+		const auto path = std::filesystem::current_path() / "Userdata" / "dismissed-rejoin-selftest" / "reconnect.ticket";
+		std::error_code code;
+		std::filesystem::remove_all(path.parent_path(), code);
+		NetMatchService::SetAdmissionEnabled(true);
+		NetMatchService::SetTicketStorePath(path.string());
+		NetReconnectTicketStore store;
+		store.SetPath(path.string());
+		NetH4TicketRecord ticket;
+		ticket.recordVersion = NetReconnectTicketStore::RecordVersionFor(false);
+		ticket.epoch.fill(0x21);
+		ticket.credential.fill(0x42);
+		ticket.stableSeat = 2;
+		ticket.holderGeneration = 1;
+		ticket.hostSessionId = 123456;
+		ticket.hostAddress = "loopback";
+		ticket.directorySessionId = "dismissed-rejoin-test";
+		ticket.issuedAtUnixMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		if (!store.Store(ticket, error)) return false;
+		{
+			NetMatchService first;
+			first.ScanStoredTicket();
+			if (first.GetReconnectUx().GetOffer() != NetReconnectOffer::Available || !first.GetReconnectUx().IsAwaitingHostReturn()) {
+				*error = "the fresh ticket was not offered and watched"; return false;
+			}
+			if (!first.DismissReconnectOffer(100, error)) return false;
+			if (!first.DismissReconnectOffer(200, error)) return false;
+		}
+		NetMatchService relaunched;
+		relaunched.ScanStoredTicket();
+		std::cout << "[dismissed-rejoin-test] relaunched offered=" << (relaunched.GetReconnectUx().GetOffer() == NetReconnectOffer::Available)
+		          << " watching=" << relaunched.GetReconnectUx().IsAwaitingHostReturn() << std::endl;
+		if (relaunched.GetReconnectUx().GetOffer() == NetReconnectOffer::Available || relaunched.GetReconnectUx().IsAwaitingHostReturn()) {
+			*error = "a dismissed rejoin offer restarted its prompt and host watch after relaunch"; return false;
+		}
+		NetH4TicketRecord retained;
+		if (store.Load(ticket.issuedAtUnixMs, retained, error) != NetH4TicketLoadResult::Loaded || retained != ticket ||
+		    relaunched.GetReconnectUx().GetOfferAddress() != ticket.hostAddress) {
+			*error = "dismissing the prompt removed the seat ticket or its manual rejoin route"; return false;
+		}
+		if (!store.Store(ticket, error)) return false;
+		relaunched.ScanStoredTicket();
+		if (relaunched.GetReconnectUx().GetOffer() == NetReconnectOffer::Available || relaunched.GetReconnectUx().IsAwaitingHostReturn()) {
+			*error = "rewriting the same ticket revived its dismissed prompt"; return false;
+		}
+		++ticket.holderGeneration;
+		if (!store.Store(ticket, error)) return false;
+		relaunched.ScanStoredTicket();
+		if (relaunched.GetReconnectUx().GetOffer() != NetReconnectOffer::Available || !relaunched.GetReconnectUx().IsAwaitingHostReturn()) {
+			*error = "dismissing an old ticket hid a new ticket's offer"; return false;
+		}
+		return true;
+	}
 
 	bool TestInitialLobbyStartsWithHeldSeats(std::string* error) {
 		for (const int scenario: {0, 1, 2}) {
@@ -6817,9 +7041,11 @@ namespace RTE {
 				if (ready.assignedPeerId + 1 == rejoined->LockstepId()) returnerConnection = ready.transportPeerId;
 			}
 			const bool seatHeld = host.admission.GetSeatHolder(stableSeat, holder, generation, incarnation);
+			const auto& roundIncarnations = rejoined->round->GetConfig().peerIncarnations;
 			if (!rejoined->reconnect.UsedStoredTicket() || rejoined->reconnect.GetState() != NetH4ClientState::Joined ||
 			    rejoined->reconnect.GetRecord().stableSeat != stableSeat || rejoined->LockstepId() != moverId || !seatHeld || holder != returnerConnection ||
 			    incarnation != incarnationBefore + 1 || generation != rejoined->reconnect.GetRecord().holderGeneration ||
+			    !roundIncarnations.contains(moverId) || roundIncarnations.at(moverId) != incarnation ||
 			    host.admission.GetStats().reclaimsAccepted != planeBefore.reclaimsAccepted + 1) {
 				return fail("the returner is lockstep peer " + std::to_string(rejoined->LockstepId()) + " where stable seat " + std::to_string(stableSeat) +
 				            " holds incarnation " + std::to_string(incarnation) + " of holder generation " + std::to_string(generation));
@@ -7817,7 +8043,8 @@ namespace RTE {
 		NetRelayLogins::Remember("scrub-user-4c1d,ab");
 		NetRelayLogins::Remember("scrub-pass-77e0");
 		const std::string scrubbed = NetRelayLogins::Scrub("TURN allocate user=scrub-user-4c1d pass 'scrub-pass-77e0' tab ab");
-		const bool scrubs = scrubbed == "TURN allocate user=<relay-login> pass '<relay-login>' tab <relay-login>";
+		const bool scrubs = scrubbed == "TURN allocate user=<relay-login> pass '<relay-login>' tab <relay-login>" &&
+		    NetRelayLogins::Scrub("Initial ICE auth: { ice { auth { pwd_frag: \"test-fragment\" } } }") == "ICE authentication signal <redacted>";
 		const bool pass = logins == 0 && files >= 8 && scrubs;
 		std::cout << "[net-match-selftest] " << (pass ? "PASS" : "FAIL") << " a_written_config_holds_no_relay_login files=" << files << " logins=" << logins
 		          << (first.empty() ? "" : " first=" + first) << " scrubbed='" << scrubbed << "'" << std::endl;
@@ -7891,13 +8118,25 @@ namespace RTE {
 		size_t listed = 0, joinerListed = 0, migratedListed = 0;
 		const size_t hostWire = onWire(host, hostPlayers, listed);
 		const size_t joinerWire = onWire(joiner, joinerPlayers, joinerListed);
+		// The initial lobby's worker owns its transport until Start. The UI must
+		// retain the measured route that worker published while no member wire exists.
+		NetLobbyMember lobbyPeer;
+		lobbyPeer.peerId = 1;
+		lobbyPeer.connected = true;
+		lobbyPeer.connectedRoute = joiner.GetConnectedRoute(1);
+		joiner.m_LobbySnapshot.members = {lobbyPeer};
+		auto workerWire = std::move(joiner.m_Transport);
+		const bool lobbyRoute = joiner.GetConnectedRoute(1) == "direct" &&
+		                        joiner.GetLobbySnapshot().members.front().connectedRoute == "direct" &&
+		                        joiner.GetNatModeText().find("measured direct route") != std::string::npos;
+		joiner.m_Transport = std::move(workerWire);
 		joiner.m_MigratedTransport = std::move(joiner.m_Transport);
 		const size_t migratedWire = onWire(joiner, migratedPlayers, migratedListed);
 		const bool pass = hostWire == 2 && hostPlayers == std::set<int>{2, 3} && joinerWire == 1 && joinerPlayers == std::set<int>{1} && migratedWire == 1 &&
-		                  migratedPlayers == std::set<int>{1} && listed >= 4;
+		                  migratedPlayers == std::set<int>{1} && listed >= 4 && lobbyRoute;
 		std::cout << "[net-match-selftest] " << (pass ? "PASS" : "FAIL") << " report_lists_every_connection host_connections=" << hostWire << " host_bound=" << hostPlayers.size()
 		          << " joiner_connections=" << joinerWire << " joiner_bound=" << joinerPlayers.size() << " migrated_connections=" << migratedWire
-		          << " migrated_bound=" << migratedPlayers.size() << " process_connections=" << listed << std::endl;
+		          << " migrated_bound=" << migratedPlayers.size() << " process_connections=" << listed << " worker_lobby_route=" << lobbyRoute << std::endl;
 		if (!pass) {
 			*error = "the host's report lists " + std::to_string(hostWire) + " of its 2 joiners' connections (" + std::to_string(hostPlayers.size()) + " bound to a player), a joiner's " +
 			         std::to_string(joinerWire) + " (" + std::to_string(migratedWire) + " on a migrated wire) of its 1, the process " + std::to_string(listed);
@@ -9964,6 +10203,21 @@ namespace RTE {
 		if (held[0].manual != std::vector<uint64_t>{205} || alone.saved.size() != 1 || alone.reported != std::vector<size_t>{1} || alone.named != std::vector<size_t>{1}) {
 			fail("held-seat-save: host marked " + TickList(held[0].manual) + " heard " + TickList(alone.saved));
 		}
+		std::array<SchedulePeer, 2> paused;
+		setUp(paused, 1, "00000000deadbeef-0000000000000015");
+		const auto config = NetMatchConfigUtil::MakeDefault(0x9A23);
+		std::string joinError;
+		if (!paused[0].service.m_WorldJoin.ConfigureMatchRejoins(config, 9, 1000.0 / 60.0, &joinError)) fail(joinError);
+		paused[0].service.m_WorldCapturePending = true;
+		const ScheduleRun pausedRun = RunSchedule(paused, 500, {200}, [&](uint64_t tick, NetMatchService::AutosaveTickInput& input) {
+			input.paused = true;
+			if (tick > 6) paused[0].service.m_WorldCapturePending = false;
+		});
+		for (const SchedulePeer& peer: paused)
+			if (peer.captures != std::vector<uint64_t>{6, 205} || peer.manual != std::vector<uint64_t>{205})
+				fail("paused-requested-captures " + TickList(peer.captures));
+		if (pausedRun.saved.size() != 1 || paused[0].service.m_NextAutosaveSimTime != -1 || paused[0].service.m_LastAutosaveSimTime != -1)
+			fail("paused captures did not finish or advanced the periodic schedule");
 		if (!failures.empty()) {
 			*error = failures;
 			return false;
@@ -10522,12 +10776,35 @@ namespace RTE {
 			return false;
 		}
 
-		// The same identity comes back on a new link and is admitted to the seat it just left.
+		// A kicked identity remains refused for this match, even on a different connection.
 		service.m_ReconnectHost.TakeOutbound();
+		const NetPeerId kickedConnection = 76;
+		service.m_ReconnectHost.BindParticipantId(kickedConnection, kickedId);
+		NetH4NewJoin kickedJoin;
+		kickedJoin.identity = h4;
+		kickedJoin.displayName = "Client";
+		kickedJoin.txId.fill(0x32);
+		service.m_ReconnectHost.HandleMessage(kickedConnection, kickedJoin, 0);
+		bool refusedKick = false, offeredKick = false;
+		for (const NetH4Outbound& outbound: service.m_ReconnectHost.TakeOutbound()) {
+			if (outbound.connection != kickedConnection) continue;
+			offeredKick |= std::holds_alternative<NetH4TicketOffer>(outbound.payload);
+			if (const auto* refused = std::get_if<NetJoinRejected>(&outbound.payload))
+				refusedKick = refused->rejectReason == NetRejectReason::ParticipantBanned && refused->mismatchKey == "participant_removed" &&
+				              refused->humanMessage.find("Client was removed by the host") != std::string::npos;
+		}
+		if (!refusedKick || offeredKick) {
+			*error = "the kicked lobby identity was not refused by name on its new connection";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		// A different player can still join the seat the kick released.
+		NetAuthBytes32 replacementId = kickedId;
+		replacementId[0] ^= 0x5A;
 		const NetPeerId returnConnection = 77;
-		service.m_ReconnectHost.BindParticipantId(returnConnection, kickedId);
+		service.m_ReconnectHost.BindParticipantId(returnConnection, replacementId);
 		NetReconnectClient returnAdmission;
-		returnAdmission.Configure(&store, h4, "Client");
+		returnAdmission.Configure(&store, h4, "Replacement");
 		returnAdmission.SetUnixClock([](void* context) { return *static_cast<uint64_t*>(context); }, &unixNow);
 		if (!returnAdmission.BeginNewJoin(0, error)) {
 			SetNetAuthCryptoForTest(nullptr);
@@ -10562,14 +10839,14 @@ namespace RTE {
 			}
 		}
 		if (!returnOffered || returnAdmission.GetState() != NetH4ClientState::Joined) {
-			*error = "the kicked identity's rejoin answered " + returnAnswer +
+			*error = "the replacement identity's join answered " + returnAnswer +
 			         " client=" + NetReconnectClientStateName(returnAdmission.GetState()) +
 			         (returnAdmission.HasLastRejectReason() ? std::string(" reason=") + NetProtocol::RejectReasonName(returnAdmission.GetLastRejectReason()) : "");
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
 
-		// A ban is the only refusal: the re-seated holder is banned, the store names its identity,
+		// Banning the replacement also records its identity in the ban store,
 		// and the same identity's next join is refused with ParticipantBanned.
 		NetModerationSelection banned{};
 		for (const auto& seat : service.m_ReconnectHost.GetModerationView()) {
@@ -10590,19 +10867,19 @@ namespace RTE {
 		}
 		bool banRecorded = false;
 		for (const NetHostBanRecord& record : service.m_BanStore.List()) {
-			banRecorded = banRecorded || record.identity == kickedId;
+			banRecorded = banRecorded || record.identity == replacementId;
 		}
 		if (!banRecorded) {
-			*error = "the lobby ban never wrote the kicked identity into the ban list";
+			*error = "the lobby ban never wrote the replacement identity into the ban list";
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
 		service.m_ReconnectHost.TakeOutbound();
 		const NetPeerId bannedConnection = 78;
-		service.m_ReconnectHost.BindParticipantId(bannedConnection, kickedId);
+		service.m_ReconnectHost.BindParticipantId(bannedConnection, replacementId);
 		NetH4NewJoin bannedJoin;
 		bannedJoin.identity = h4;
-		bannedJoin.displayName = "Client";
+		bannedJoin.displayName = "Replacement";
 		bannedJoin.txId.fill(0x33);
 		service.m_ReconnectHost.HandleMessage(bannedConnection, bannedJoin, 0);
 		bool refusedBan = false;
@@ -10625,7 +10902,7 @@ namespace RTE {
 		}
 		SetNetAuthCryptoForTest(nullptr);
 		std::filesystem::remove_all(lane, code);
-		std::cout << "[net-match-selftest] PASS kick: a lobby kick opens the seat for the same identity and only a ban refuses it" << std::endl;
+		std::cout << "[net-match-selftest] PASS kick: the removed identity stays refused, a replacement joins, and its ban is recorded" << std::endl;
 		return true;
 	}
 
@@ -11078,7 +11355,7 @@ namespace RTE {
 		}
 
 		// The admission plane after a Starting kick: the seat is back in the pool for the next joiner,
-		// and the kicked identity itself may take an open seat - only the ban list holds one out.
+		// while the kicked identity remains refused on a new connection.
 		{
 			ScriptedAuthCrypto seatCrypto;
 			SetNetAuthCryptoForTest(&seatCrypto);
@@ -11249,14 +11526,36 @@ namespace RTE {
 				SetNetAuthCryptoForTest(nullptr);
 				return false;
 			}
-			// A kick is not a ban: the kicked identity's own return is offered an open seat like any
-			// joiner, on whatever link it comes back on.
-			const NetPeerId returningConnection = 78;
-			seatService.m_ReconnectHost.BindParticipantId(returningConnection, kickedId);
+			// A kicked identity cannot evade its removal by opening a new connection.
+			const NetPeerId kickedConnection = 78;
+			seatService.m_ReconnectHost.BindParticipantId(kickedConnection, kickedId);
+			NetH4NewJoin kickedJoin;
+			kickedJoin.identity = seatH4;
+			kickedJoin.displayName = "Kicked";
+			kickedJoin.txId.fill(0x22);
+			seatService.m_ReconnectHost.HandleMessage(kickedConnection, kickedJoin, 0);
+			bool refusedKick = false, offeredKick = false;
+			for (const NetH4Outbound& outbound: seatService.m_ReconnectHost.TakeOutbound()) {
+				if (outbound.connection != kickedConnection) continue;
+				offeredKick |= std::holds_alternative<NetH4TicketOffer>(outbound.payload);
+				if (const auto* refused = std::get_if<NetJoinRejected>(&outbound.payload))
+					refusedKick = refused->rejectReason == NetRejectReason::ParticipantBanned && refused->mismatchKey == "participant_removed" &&
+					              refused->humanMessage.find("Client was removed by the host") != std::string::npos;
+			}
+			if (!refusedKick || offeredKick || !seatService.m_BanStore.List().empty()) {
+				*error = "the Starting kick lost its named refusal or wrote a ban record";
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			// Another identity may take the remaining open seat, never the replacement's reservation.
+			NetAuthBytes32 otherId = replacementId;
+			otherId[0] ^= 0x5A;
+			const NetPeerId returningConnection = 79;
+			seatService.m_ReconnectHost.BindParticipantId(returningConnection, otherId);
 			NetH4NewJoin returningJoin;
 			returningJoin.identity = seatH4;
-			returningJoin.displayName = "Kicked";
-			returningJoin.txId.fill(0x22);
+			returningJoin.displayName = "Other";
+			returningJoin.txId.fill(0x23);
 			seatService.m_ReconnectHost.HandleMessage(returningConnection, returningJoin, 0);
 			bool offeredReturn = false;
 			uint16_t returnSeat = UINT16_MAX;
@@ -11274,11 +11573,11 @@ namespace RTE {
 				}
 			}
 			if (!offeredReturn) {
-				*error = "the kicked identity's return answered " + returnAnswer;
+				*error = "the other identity's join answered " + returnAnswer;
 				SetNetAuthCryptoForTest(nullptr);
 				return false;
 			}
-			// A return is a fresh join, so the offer has to name a seat open to a joiner: not cpu,
+			// The next join must name a seat still open to a joiner: not cpu,
 			// local, committed, closed, already held, or still holding an offer the test saw go out.
 			const std::vector<NetH4Seat> seatRows = seatService.m_ReconnectHost.GetSeatTable();
 			const std::vector<NetH4SeatStatus> seatStatuses = seatService.m_ReconnectHost.GetSeatStatuses();
@@ -11297,14 +11596,14 @@ namespace RTE {
 			const bool onlyOpenIsKicked = openSeats.size() == 1 && openSeats.front() == kickedSeat;
 			if (onlyOpenIsKicked ? returnSeat != kickedSeat
 			                    : std::find(openSeats.begin(), openSeats.end(), returnSeat) == openSeats.end()) {
-				*error = "the kicked identity's return was offered seat " + std::to_string(returnSeat) +
+				*error = "the other identity's join was offered seat " + std::to_string(returnSeat) +
 				         (onlyOpenIsKicked ? ", not the kicked seat that was the only one open" : ", not an open seat");
 				SetNetAuthCryptoForTest(nullptr);
 				return false;
 			}
 			SetNetAuthCryptoForTest(nullptr);
 			std::filesystem::remove_all(seatLane, seatCode);
-			std::cout << "[net-match-selftest] PASS kick: a Starting kick opens the seat for a replacement and re-admits the kicked identity" << std::endl;
+			std::cout << "[net-match-selftest] PASS kick: a Starting kick refuses the removed identity and offers distinct open seats to replacements" << std::endl;
 		}
 		return true;
 	}
@@ -12316,8 +12615,7 @@ namespace RTE {
 		return true;
 	}
 
-	// A joiner the host refuses because the match is full knocks again while a dead slot may free; its whole wait still ends at the
-	// round's budget with the refusal named, never knocking on past it until someone cancels.
+	// An ordinary full-match refusal is immediate; an explicit wait still ends at its budget.
 	bool TestAFullMatchsKnockEndsAtTheBudget(std::string* error) {
 		LoopbackTransport hostTransport, firstTransport, knockTransport;
 		NetSession host, first, knock;
@@ -12360,6 +12658,8 @@ namespace RTE {
 		runner.m_Config.host = false;
 		runner.m_Config.joinAddress = "loopback";
 		runner.m_Config.sessionConfig = knockConfig;
+		uint32_t retries = 0;
+		runner.m_Config.resolveJoinAddress = [&] { ++retries; return std::string("loopback"); };
 		std::atomic<bool> cancel{false};
 		runner.m_Config.cancelRequested = &cancel;
 		bool sawFull = false;
@@ -12377,11 +12677,21 @@ namespace RTE {
 		std::string waitError;
 		const bool ready = runner.WaitForSessionReady(knockTransport, knock, 1, 400, &waitError);
 		const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+		if (ready || !knock.IsRejected() || knock.GetMismatchKey() != "peer_count" || retries != 0) {
+			cancel.store(true); watchdog.join();
+			*error = "an ordinary full-match refusal restarted the connection";
+			return false;
+		}
+		runner.m_Config.waitForSlot = true;
+		if (!knock.StartClient(knockTransport, "loopback", knockConfig, error)) { cancel.store(true); watchdog.join(); return false; }
+		const auto waitingBegan = std::chrono::steady_clock::now();
+		const bool waitingReady = runner.WaitForSessionReady(knockTransport, knock, 1, 400, &waitError);
+		const double waitingMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitingBegan).count();
 		cancel.store(true);
 		watchdog.join();
 		std::cout << "[net-match-selftest] full_knock ready=" << ready << " refused_full=" << sawFull << " elapsed_ms=" << static_cast<long long>(elapsedMs) << " why='" << waitError << "'" << std::endl;
 		// The wait ends on the first pass past its budget: one 5 ms sleep at the platform timer's granularity plus a pump, never a retry's 2 s.
-		if (ready || !sawFull || waitError == "match setup canceled" || elapsedMs > 400.0 + 50.0) {
+		if (ready || waitingReady || !sawFull || waitError == "match setup canceled" || elapsedMs > 400.0 + 50.0 || waitingMs > 400.0 + 50.0) {
 			*error = "a joiner refused as full waited " + std::to_string(static_cast<long long>(elapsedMs)) + " ms against a 400 ms budget and ended '" + waitError + "'";
 			return false;
 		}
@@ -12699,6 +13009,149 @@ namespace RTE {
 			return false;
 		}
 		if (!hostShown(hostService.GetLobbySnapshot())) return false;
+		{
+			// A saved seat rejoins the initial lobby, then waits past the connection
+			// attempt budget before the host starts. Admission, roster and lobby are real.
+			RematchFixture fixture;
+			if (!SetUpRematchFixture(fixture, "returned-lobby-waits", 43276, 2, error)) return false;
+			RematchPeer& host = fixture.Host();
+			RematchPeer& peer = *fixture.peers[1];
+			if (!host.session.StartHost(host.transport, host.config.sessionConfig, error) ||
+			    !peer.session.StartClient(peer.transport, "loopback", peer.config.sessionConfig, error)) return false;
+			const auto admit = [&] {
+				for (unsigned pump = 0; pump < 100; ++pump) {
+					host.session.Tick(fixture.clock.NowMs()); peer.session.Tick(fixture.clock.NowMs());
+					if (host.session.IsReady() && peer.session.IsReady() && peer.reconnect.GetState() == NetH4ClientState::Joined) return true;
+					fixture.clock.skippedMs.fetch_add(10);
+				}
+				return false;
+			};
+			if (!admit()) { *error = "the returning-lobby fixture did not admit its first connection"; return false; }
+			const NetRosterSeat original = *host.admission.GetRoster().Find(2);
+			peer.session.Close("leaving the lobby"); peer.transport.Stop();
+			for (unsigned pump = 0; pump < 3; ++pump) { host.session.Tick(fixture.clock.NowMs()); fixture.clock.skippedMs.fetch_add(10); }
+			peer.reconnect.Configure(&peer.store, RematchIdentity(), "Returning player");
+			peer.reconnect.SetUnixClock(&RematchUnixClock, nullptr);
+			peer.reconnect.SetHostContext("loopback", NetHash32{});
+			peer.reconnect.SetRequireStoredTicket(true);
+			peer.session.SetRejoinPhase(NetSession::RejoinPhase::Connecting);
+			if (!peer.session.StartClient(peer.transport, "loopback", peer.config.sessionConfig, error) || !admit()) return false;
+			const NetRosterSeat* reclaimed = host.admission.GetRoster().Find(2);
+			if (!peer.reconnect.UsedStoredTicket() || !reclaimed || reclaimed->owner != original.owner || reclaimed->ticket != original.ticket) {
+				*error = "the returned-lobby fixture did not reclaim its original authenticated seat"; return false;
+			}
+			for (RematchPeer* member: {&host, &peer}) {
+				member->runner.m_Config = member->config;
+				member->runner.m_MatchConfig = member->config.matchConfig;
+				member->runner.m_State = NetMatchRuntimeState::LobbySync;
+				NetLobbySessionConfig lobby;
+				lobby.host = member->host; lobby.localPeerId = member->LockstepId();
+				lobby.remoteTransportPeerIds = member->runner.BuildRemoteTransportMap(member->session);
+				lobby.matchConfig = member->config.matchConfig; lobby.session = &member->session;
+				lobby.sessionNowMs = [&fixture] { return fixture.clock.NowMs(); };
+				lobby.autoReady = lobby.autoStart = false; lobby.timeoutMs = 8000;
+				if (!member->runner.m_Lobby.Start(member->transport, lobby, error)) return false;
+			}
+			for (unsigned pump = 0; pump < 100 && peer.runner.m_Lobby.GetState() != NetLobbyState::WaitingForReady; ++pump) {
+				host.runner.m_Lobby.Tick(fixture.clock.NowMs()); peer.runner.m_Lobby.Tick(fixture.clock.NowMs());
+				fixture.clock.skippedMs.fetch_add(10);
+			}
+			if (peer.runner.m_Lobby.GetState() != NetLobbyState::WaitingForReady) { *error = "the returned seat did not receive the lobby configuration"; return false; }
+			NetMatchService returned;
+			returned.m_State = NetMatchServiceState::Starting;
+			returned.m_LocalPeerId = peer.LockstepId();
+			returned.m_ChatSession = &peer.session;
+			returned.m_OrdinaryTicketRejoin = returned.m_HeldRejoinDriving = true;
+			const uint64_t attemptAt = 1000;
+			returned.m_TicketRejoinAttemptStartedMs = attemptAt;
+			returned.m_ReconnectUx.NoteDropped(attemptAt, "Returning to the lobby");
+			returned.m_ReconnectUx.NoteAttemptStarted(attemptAt);
+			returned.m_ReadyRequested.store(true);
+			peer.runner.m_Lobby.SetLocalReady(true);
+			NetMatchRunnerConfig publish;
+			returned.ConfigureLobbyPublishing(publish, peer.runner);
+			publish.publishLobby(peer.runner.BuildLobbySnapshot(peer.transport, peer.session));
+			returned.DriveOrdinaryTicketRejoin(attemptAt + 2 * NetMatchService::c_TicketRejoinAttemptBudgetMs);
+			returned.m_ChatSession = nullptr;
+			if (returned.m_OrdinaryTicketRejoin || returned.m_HeldRejoinDriving || returned.m_CancelRequested.load() ||
+			    peer.session.GetRejoinPhase() != NetSession::RejoinPhase::Active || !returned.m_ReadyRequested.load() || !peer.runner.m_Lobby.IsLocalReady()) {
+				*error = "an admitted lobby return was cancelled or lost Ready while waiting for host start"; return false;
+			}
+			std::cout << "[net-match-selftest] PASS returned_lobby_waits_past_rejoin_deadline" << std::endl;
+		}
+		{
+			// The old host keeps seat 1 when it returns to the successor at seat 2.
+			// Exercise admission before the lobby hello can correct the remote host id.
+			RematchFixture fixture;
+			if (!SetUpRematchFixture(fixture, "former-host-return", 43277, 2, error)) return false;
+			RematchPeer& former = fixture.Host();
+			RematchPeer& successor = *fixture.peers[1];
+			if (!former.session.StartHost(former.transport, former.config.sessionConfig, error) ||
+			    !successor.session.StartClient(successor.transport, "loopback", successor.config.sessionConfig, error)) return false;
+			const auto admit = [&](RematchPeer& host, RematchPeer& client) {
+				for (unsigned pump = 0; pump < 100; ++pump) {
+					host.session.Tick(fixture.clock.NowMs()); client.session.Tick(fixture.clock.NowMs());
+					if (host.session.IsReady() && host.session.GetReadyPeerCount() == 1 && client.session.IsReady() &&
+					    client.reconnect.GetState() == NetH4ClientState::Joined) return true;
+					fixture.clock.skippedMs.fetch_add(10);
+				}
+				*error = "the former-host fixture did not complete admission: " + client.session.GetRejectSummary();
+				return false;
+			};
+			if (!admit(former, successor)) return false;
+			NetH4TicketRecord ticket;
+			if (!former.admission.EnsureLocalTicket(ticket)) { *error = "the former host has no saved seat"; return false; }
+			ticket.hostAddress = "loopback";
+			ticket.issuedAtUnixMs = RematchUnixClock(nullptr);
+			former.store.SetPath((fixture.ticketDirectory / "host.ticket").string());
+			if (!former.store.Store(ticket, error)) return false;
+			const NetRosterSeat original = *former.admission.GetRoster().Find(1);
+			former.admission.SetLiveMatch(true);
+			const auto capsule = former.admission.ExportMigrationState();
+			NetMatchConfig migrated = former.config.matchConfig;
+			migrated.hostPeerId = 2;
+			former.transport.Stop(); successor.transport.Stop();
+			if (!successor.admission.ImportMigrationState(capsule, successor.registry, migrated, 2, {}, fixture.clock.NowMs())) {
+				*error = "the successor did not import the former host's admission state"; return false;
+			}
+			successor.session.SetReconnectClient(nullptr);
+			successor.session.SetReconnectHost(&successor.admission);
+			if (!successor.session.StartHost(successor.transport, successor.config.sessionConfig, error) ||
+			    !successor.session.AdoptHostMigration(successor.transport, 2, 2, migrated, {}, fixture.clock.NowMs())) return false;
+			former.session.SetReconnectHost(nullptr);
+			former.reconnect.Configure(&former.store, RematchIdentity(), "Returning host");
+			former.reconnect.SetUnixClock(&RematchUnixClock, nullptr);
+			former.reconnect.SetHostContext("loopback", NetHash32{});
+			former.reconnect.SetRequireStoredTicket(true);
+			former.session.SetReconnectClient(&former.reconnect);
+			former.session.SetRejoinPhase(NetSession::RejoinPhase::Connecting);
+			if (!former.session.StartClient(former.transport, "loopback", former.config.sessionConfig, error) || !admit(successor, former)) return false;
+			const NetRosterSeat* reclaimed = successor.admission.GetRoster().Find(1);
+			const auto peers = former.session.GetReadyPeers();
+			if (!former.reconnect.UsedStoredTicket() || former.LockstepId() != 1 || !reclaimed ||
+			    reclaimed->owner != original.owner || reclaimed->ticket != original.ticket ||
+			    !former.reconnect.GetRosterReplica().HasRoster() || former.reconnect.GetRosterReplica().Roster().hostSeat != 2 ||
+			    peers.size() != 1 || peers.front().assignedPeerId != 1) {
+				*error = "the returned host did not keep its saved seat and identify the successor as a distinct remote peer"; return false;
+			}
+			for (RematchPeer* member: {&successor, &former}) {
+				NetLobbySessionConfig lobby;
+				lobby.host = member == &successor; lobby.localPeerId = member->LockstepId();
+				lobby.remoteTransportPeerIds = member->runner.BuildRemoteTransportMap(member->session);
+				lobby.matchConfig = lobby.host ? migrated : former.config.matchConfig;
+				lobby.session = &member->session; lobby.sessionNowMs = [&fixture] { return fixture.clock.NowMs(); };
+				lobby.autoReady = lobby.autoStart = false; lobby.timeoutMs = 8000;
+				if (!member->runner.m_Lobby.Start(member->transport, lobby, error)) return false;
+			}
+			for (unsigned pump = 0; pump < 100 && former.runner.m_Lobby.GetState() != NetLobbyState::WaitingForReady; ++pump) {
+				successor.runner.m_Lobby.Tick(fixture.clock.NowMs()); former.runner.m_Lobby.Tick(fixture.clock.NowMs());
+				fixture.clock.skippedMs.fetch_add(10);
+			}
+			if (former.runner.m_Lobby.GetState() != NetLobbyState::WaitingForReady || former.runner.m_Lobby.GetMatchConfig().hostPeerId != 2) {
+				*error = "the returned host did not accept the successor's lobby: " + former.runner.m_Lobby.GetFailureReason(); return false;
+			}
+			std::cout << "[net-match-selftest] PASS former_host_returns_to_successor_lobby" << std::endl;
+		}
 		std::cout << "[net-match-selftest] PASS joining_lobby_waits_for_host_config" << std::endl;
 		return true;
 	}
@@ -12777,6 +13230,7 @@ namespace RTE {
 
 		// The snapshot the lobby screen reads comes from the runner's own lobby, so the round runs on it.
 		NetMatchRunner runner;
+		runner.m_Config.host = true;
 		NetLobbySession& hostLobby = runner.GetLobbySession();
 		NetLobbySessionConfig lobbyConfig;
 		lobbyConfig.host = true;
@@ -13576,6 +14030,21 @@ namespace RTE {
 		NetSession hostSession, clientSession;
 		if (!StartServiceRematchSession(43274, hostWire, clientWire, hostSession, clientSession, error)) return false;
 		NetMatchService service;
+		NetMatchServiceRequest reconnect;
+		reconnect.rejoin = true; reconnect.host = false; reconnect.sessionId = "same-lobby";
+		service.m_LastJoinRoute = reconnect;
+		service.m_AdoptedMatchConfig = MakeConfig(); service.m_ReadyRequested.store(true);
+		const auto readied = service.ReadyForRejoin(reconnect);
+		if (!readied || readied->sessionId != service.m_AdoptedMatchConfig.sessionId) { *error = "a lobby reconnect forgot its Ready setup"; return false; }
+		service.m_ReadyRejoinConfig = readied; service.m_AdoptedMatchConfig = {};
+		if (!service.ReadyForRejoin(reconnect)) { *error = "a failed reconnect retry forgot Ready"; return false; }
+		auto other = reconnect; other.sessionId = "different-lobby";
+		if (service.ReadyForRejoin(other)) { *error = "Ready crossed into a different lobby"; return false; }
+		other = reconnect; other.rejoin = false;
+		if (service.ReadyForRejoin(other)) { *error = "a fresh join inherited Ready"; return false; }
+		service.SetReady(false);
+		if (service.ReadyForRejoin(reconnect) || service.m_ReadyRejoinConfig) { *error = "Cancel Ready survived a reconnect"; return false; }
+		service.m_LastJoinRoute.reset();
 		NetMatchRunner runner;
 		runner.m_Config.host = false;
 		runner.m_Config.matchConfig = MakeConfig();
@@ -13617,6 +14086,55 @@ namespace RTE {
 		service.ConfigureLobbyStart(hostRun);
 		if (!NetMatchRunner::SeatingWaitExpired(hostRun.lobbySeatingWaitMs, hostRun.lobbyWaitMs, 600001) ||
 		    NetMatchRunner::SeatingWaitExpired(0u, hostRun.lobbyWaitMs, 660001)) { *error = "the host's seating policy changed"; return false; }
+		for (int activity = 0; activity < 4; ++activity) {
+			LoopbackTransport host, guest;
+			NetSession hosting, joining;
+			if (!StartServiceRematchSession(static_cast<uint16_t>(43470 + activity), host, guest, hosting, joining, error)) return false;
+			NetMatchService activeService;
+			NetMatchRunner active;
+			active.m_Config.host = true;
+			active.m_Config.matchConfig = MakeConfig();
+			active.m_Config.matchConfig.peerCount = 3;
+			active.m_Config.matchConfig.players.push_back({3, 2, false, "Client 3"});
+			active.m_Config.matchConfig.idleWaitMinutes = 1;
+			activeService.ConfigureLobbyStart(active.m_Config);
+			active.m_MatchConfig = active.m_Config.matchConfig;
+			uint64_t clock = std::max(hosting.GetClockMs(), joining.GetClockMs());
+			const uint64_t start = clock;
+			active.m_Config.nowMs = [&clock] { return clock; };
+			NetLobbySession guestLobby;
+			NetLobbySessionConfig guestConfig;
+			guestConfig.localPeerId = 2; guestConfig.remotePeerId = 1;
+			guestConfig.remoteTransportPeerId = joining.GetRemoteTransportPeerId();
+			guestConfig.matchConfig = active.m_MatchConfig;
+			guestConfig.session = &joining;
+			guestConfig.sessionNowMs = [&clock] { return clock; };
+			if (!guestLobby.Start(guest, guestConfig, error)) return false;
+			std::atomic<bool> stop{false};
+			active.m_Config.cancelRequested = &stop;
+			active.m_Config.publishLobby = [&](const NetLobbySnapshot&) {
+				guestLobby.Tick(clock);
+				const uint64_t elapsed = clock - start;
+				if (elapsed == 40000 || elapsed == 80000) {
+					if (activity == 1) activeService.NoteLobbyInput();
+					if (activity == 2) (void)joining.SendChat(c_NetChatScopeAll, "Still choosing the match");
+					if (activity == 3) guestLobby.SetLocalReady(elapsed == 80000);
+				}
+				host.AdvanceTimeMs(1000); guest.AdvanceTimeMs(1000);
+				clock += 1000;
+				if (elapsed > 160000) stop.store(true);
+			};
+			std::string idle;
+			if (active.RunLobby(host, hosting, active.m_Config.lobbyWaitMs, &idle) || idle.find("closed after being idle") == std::string::npos ||
+			    clock - start < (activity ? 140000u : 60000u) || clock - start > (activity ? 145000u : 65000u) ||
+			    active.GetLobbySession().GetStats().timeouts != 1) {
+				*error = "lobby activity case " + std::to_string(activity) + " expired at " + std::to_string(clock - start) + " ms: " + idle; return false;
+			}
+			guestLobby.Tick(clock);
+			if (!guestLobby.IsRejected() || guestLobby.GetFailureReason() != idle) {
+				*error = "the idle host closed without telling its ready guest why"; return false;
+			}
+		}
 		return true;
 	}
 
@@ -15503,7 +16021,7 @@ namespace RTE {
 			bool Finished() override { return true; }
 			NetDirectoryClient::Reply Take() override {
 				if (m_Wire->sent.size() == 1)
-					return {200, R"({"session_id":"2b3c4d5e-ffff-4aaa-8bbb-ccccddddeeee","token":"tok-router","expires_in_s":90,"heartbeat_s":30,"observed_ip":"198.51.100.4"})", ""};
+					return {200, R"({"connection_protocol":1,"session_id":"2b3c4d5e-ffff-4aaa-8bbb-ccccddddeeee","token":"tok-router","expires_in_s":90,"heartbeat_s":30,"observed_ip":"198.51.100.4"})", ""};
 				return {200, R"({"expires_in_s":90,"heartbeat_s":30})", ""};
 			}
 			void Abort() override {}
@@ -15720,6 +16238,16 @@ namespace RTE {
 			service.m_DirectoryRow.seatsFree = 1;
 			service.m_DirectoryRow.listenPort = port;
 			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+			// This running host already has its local network, listener and directory lease.
+			const auto wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+			service.m_ConnectionAuthority.Update(NetLockstepNowMs(), wall);
+			service.m_ConnectionNetworkRevision = service.m_ConnectionAuthority.NetworkRevision();
+			service.m_IceIdentity = NetIceHostIdentity("completed-lobby-expiry");
+			service.m_DirectoryRow.iceIdentity = service.m_IceIdentity;
+			service.m_DirectoryRow.iceVirtualPort = NetMatchService::c_IceVirtualPort;
+			service.m_IceBoundSessionId = id;
+			service.m_DirectoryRow.resumeSessionId = id;
+			service.m_DirectoryRow.resumeToken = "tok-expiry";
 			// The router is asked and never answers: the row registers anyway.
 			NetMatchService::RequestHostPortMap(port, &router);
 			for (int spin = 0; spin < 250 && service.m_Directory.GetState() != NetDirectoryClient::State::Registered; ++spin) {
@@ -15730,9 +16258,11 @@ namespace RTE {
 				step = std::string("the directory never registered; state=") + NetDirectoryClient::StateName(service.m_Directory.GetState());
 				return false;
 			}
-			std::lock_guard<std::mutex> lock(service.m_Mutex);
-			service.m_IceBoundSessionId = service.m_Directory.GetSessionId();
-			service.m_IceIdentity = NetIceHostIdentity(service.m_IceBoundSessionId);
+			if (service.m_IceBoundSessionId != service.m_Directory.GetSessionId() ||
+			    service.m_IceIdentity != NetIceHostIdentity("completed-lobby-expiry")) {
+				step = "publishing the expiry fixture changed its bound row or listener identity";
+				return false;
+			}
 			return true;
 		};
 		// Moves the lobby's wait into the past. The steady clock's own origin is the only limit.
@@ -15757,7 +16287,7 @@ namespace RTE {
 			remote.connected = remoteBack;
 			service.m_LobbySnapshot.members = {local, remote};
 		};
-		const auto registerReply = NetDirectoryClient::Reply{200, R"({"session_id":")" + id + R"(","token":"tok-expiry","expires_in_s":15,"heartbeat_s":1,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""};
+		const auto registerReply = NetDirectoryClient::Reply{200, R"({"connection_protocol":1,"session_id":")" + id + R"(","token":"tok-expiry","expires_in_s":15,"heartbeat_s":1,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""};
 		SettingsGuard settings;
 
 		{   // both peers back in time: the wait ends, the lobby stands
@@ -15917,7 +16447,7 @@ namespace RTE {
 		WithheldRouter router;
 		ScopeExit mappingGone{[] { NetMatchService::ReleaseHostPortMap(); }};
 		const auto registerReply = [](const std::string& id, const char* token, int heartbeatS, bool capable) {
-			return NetDirectoryClient::Reply{200, R"({"session_id":")" + id + R"(","token":")" + token + R"(","expires_in_s":15,"heartbeat_s":)" + std::to_string(heartbeatS) + R"(,"observed_ip":"127.0.0.1")" + (capable ? R"(,"supports_unlisted":true})" : "}"), ""};
+			return NetDirectoryClient::Reply{200, R"({"connection_protocol":1,"session_id":")" + id + R"(","token":")" + token + R"(","expires_in_s":15,"heartbeat_s":)" + std::to_string(heartbeatS) + R"(,"observed_ip":"127.0.0.1")" + (capable ? R"(,"supports_unlisted":true})" : "}"), ""};
 		};
 		const NetDirectoryClient::Reply hidden{200, R"({"expires_in_s":15,"heartbeat_s":1,"listed":false})", ""};
 		const NetDirectoryClient::Reply listed{200, R"({"expires_in_s":15,"heartbeat_s":1,"listed":true})", ""};
@@ -15957,7 +16487,18 @@ namespace RTE {
 		const auto confirmed = [](NetMatchService& service) {
 			return nlohmann::json::parse(service.m_Directory.BuildReportJson()).value("confirmed_listed", nlohmann::json());
 		};
-		// A running host registers without the lobby's LAN beacon, then pins its identity as SetUpIceTransport does.
+		const auto prepareListener = [](NetMatchService& service, bool ice) {
+			// Observe the initial network before publishing the fixture's listener, as startup does.
+			const auto wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+			service.m_ConnectionAuthority.Update(NetLockstepNowMs(), wall);
+			service.m_ConnectionNetworkRevision = service.m_ConnectionAuthority.NetworkRevision();
+			if (ice) {
+				service.m_IceIdentity = NetIceHostIdentity("directory-lease-selftest");
+				service.m_DirectoryRow.iceIdentity = service.m_IceIdentity;
+				service.m_DirectoryRow.iceVirtualPort = NetMatchService::c_IceVirtualPort;
+			}
+		};
+		// A running host already has a listener and a bound row; publish that same lease.
 		const auto hostAndBind = [&](NetMatchService& service, bool ice, const std::shared_ptr<Wire>& wire, std::string& step) {
 			service.m_Directory.SetTransportFactory([wire] { return std::make_unique<ScriptedTransport>(wire); });
 			{
@@ -15976,16 +16517,23 @@ namespace RTE {
 			service.m_DirectoryRow.seatsFree = 1;
 			service.m_DirectoryRow.listenPort = 48041;
 			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+			prepareListener(service, ice);
+			if (ice) {
+				const auto lease = nlohmann::json::parse(wire->replies.front().body);
+				service.m_IceBoundSessionId = lease.at("session_id").get<std::string>();
+				service.m_DirectoryRow.resumeSessionId = service.m_IceBoundSessionId;
+				service.m_DirectoryRow.resumeToken = lease.at("token").get<std::string>();
+			}
 			// The router is asked and never answers: the row registers anyway.
 			NetMatchService::RequestHostPortMap(48041, &router);
 			if (!pumpUntil(service, 500, [&] { return service.m_Directory.GetState() == NetDirectoryClient::State::Registered; })) {
 				step = std::string("the directory never registered; state=") + NetDirectoryClient::StateName(service.m_Directory.GetState());
 				return false;
 			}
-			if (ice) {
-				std::lock_guard<std::mutex> lock(service.m_Mutex);
-				service.m_IceBoundSessionId = service.m_Directory.GetSessionId();
-				service.m_IceIdentity = NetIceHostIdentity(service.m_IceBoundSessionId);
+			if (ice && (service.m_IceBoundSessionId != service.m_Directory.GetSessionId() ||
+			            service.m_IceIdentity != NetIceHostIdentity("directory-lease-selftest"))) {
+				step = "publishing the running host changed its bound row or listener identity";
+				return false;
 			}
 			return true;
 		};
@@ -16037,7 +16585,7 @@ namespace RTE {
 		std::vector<std::string> misses;
 		SettingsGuard settings;
 
-		for (bool ice : {false, true}) { // An Unlisted lobby registers before ICE has a bound identity.
+		for (bool ice : {false, true}) { // An Unlisted lobby publishes its listener before the directory binds a row.
 			auto wire = std::make_shared<Wire>();
 			wire->replies = {registerReply(idA, "tok-unlisted", 60, true), hidden, deleted};
 			NetMatchService service;
@@ -16053,6 +16601,7 @@ namespace RTE {
 			service.m_DirectoryRow.peerCount = 2;
 			service.m_DirectoryRow.listenPort = 48041;
 			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+			prepareListener(service, ice);
 			service.Update();
 			std::string step;
 			if (service.m_DirectoryRetracted || count(*wire, "POST", "/v1/sessions") != 0) {
@@ -16127,6 +16676,8 @@ namespace RTE {
 					rematchRow.listenPort = service.m_DirectoryRow.listenPort;
 					rematchRow.listenAddrs = service.m_DirectoryRow.listenAddrs;
 					rematchRow.joinMode = service.m_DirectoryRow.joinMode;
+					rematchRow.iceIdentity = service.m_DirectoryRow.iceIdentity;
+					rematchRow.iceVirtualPort = service.m_DirectoryRow.iceVirtualPort;
 					NetIceJoinTarget laterJoin;
 					const std::string refusal = NetIceResolveSessionRow({rematchRow}, {}, rematchRow.sessionId, &laterJoin);
 					if (!refusal.empty() || laterJoin.identity != service.m_IceIdentity || laterJoin.joinMode != "either") {
@@ -16232,7 +16783,7 @@ namespace RTE {
 			if (!step.empty()) misses.push_back("hidden 404 in flight: " + step);
 		}
 
-		{   // a mid-match re-register is not the bound row: its register says ip, and the end deletes it
+		{   // A register claims the bound id; a directory returning a different id leaves an IP-only row.
 			auto wire = std::make_shared<Wire>();
 			wire->replies = {registerReply(idA, "tok-a", 1, true), gone, registerReply(idB, "tok-b", 60, true), deleted};
 			NetMatchService service;
@@ -16245,13 +16796,17 @@ namespace RTE {
 					const auto registration = std::find_if(wire->sent.rbegin(), wire->sent.rend(), [](const auto& request) {
 						return request.method == "POST" && request.path == "/v1/sessions";
 					});
-					const std::string second = body(*registration).value("join_mode", "");
+					const auto registered = body(*registration);
+					const std::string second = registered.value("join_mode", "");
+					const bool boundClaim = registered.value("resume_session_id", "") == idA && registered.value("resume_token", "") == "tok-a";
+					const bool unboundRow = service.m_IceBoundSessionId == idA && service.m_DirectoryRow.joinMode == "ip";
 					service.FinishMatch("match over");
 					if (!pumpUntil(service, 500, [&] { return count(*wire, "DELETE", "/v1/sessions/" + idB) == 1; })) {
 						step = "the end kept a row GNS is not pinned to";
 					}
-					if (first != "either" || second != "ip") {
-						step += (step.empty() ? "" : "; ") + std::string("register join_mode ") + first + " then " + second + ", want either then ip";
+					if (first != "either" || second != "either" || !boundClaim || !unboundRow) {
+						step += (step.empty() ? "" : "; ") + std::string("register join_mode ") + first + " then " + second +
+						        " bound_claim=" + (boundClaim ? "1" : "0") + " unbound_ip_row=" + (unboundRow ? "1" : "0");
 					}
 				}
 			}
@@ -16569,7 +17124,15 @@ namespace RTE {
 		for (int i = 0; i < 20; ++i) pump();
 		if (!host.IsRunning() || !client.IsRunning()) { *error = "menu input round did not start"; return false; }
 		ScenarioRunner::SetLockstepCoordinator(&client);
-		struct Restore { ~Restore() { if (g_MenuMan.IsLocalPauseMenuOpen()) g_MenuMan.ToggleLocalPauseMenu(); ScenarioRunner::SetLockstepCoordinator(nullptr); } } restore;
+		struct Restore {
+			bool inActivity = g_ActivityMan.IsInActivity();
+			~Restore() {
+				if (g_MenuMan.IsLocalPauseMenuOpen()) g_MenuMan.ToggleLocalPauseMenu();
+				g_ActivityMan.SetInActivity(inActivity);
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+			}
+		} restore;
+		g_ActivityMan.SetInActivity(true);
 		if (!g_MenuMan.ToggleLocalPauseMenu()) { *error = "local network menu did not open"; return false; }
 		bool neutral = true; uint64_t committed = 0;
 		for (uint64_t tick = 0; tick < 300; ++tick) {
@@ -16618,10 +17181,6 @@ namespace RTE {
 		if (waiting != "Connecting (6 of 30 s) - waiting for the host's answer" || testing != "Connecting (12 of 30 s) - testing routes, relay ready" ||
 		    again != "Connecting again (2 of 30 s) - testing routes") {
 			*error = "the connecting line read \"" + waiting + "\" / \"" + testing + "\" / \"" + again + "\"";
-			return false;
-		}
-		if (!NetIceRetryCanSucceed(3, 0) || NetIceRetryCanSucceed(0, 0) || NetIceRetryCanSucceed(4, 1)) {
-			*error = "an ICE retry was offered to a dial its host never answered or refused, or denied to one it answered";
 			return false;
 		}
 		return true;
@@ -16826,7 +17385,7 @@ namespace RTE {
 			const int masks[] = {7, 6, 1};
 			if (GnsTransport::ConnectionPolicyAllowsRoute(mode, false) != (mode != 2) ||
 			    GnsTransport::ConnectionPolicyAllowsRoute(mode, true) != (mode != 1)) { *error = "selected route bypassed the player's connection policy"; return false; }
-			if (ice.iceEnable != masks[mode] || (mode == 1 ? !ice.turnServerList.empty() : ice.turnServerList != "relay.example:3478") ||
+			if (ice.iceEnable != masks[mode] || (mode == 1 ? !ice.turnServerList.empty() : ice.turnServerList != "relay.example:3478,turn:relay.example:3478?transport=tcp,turns:relay.example:5349?transport=tcp") ||
 			    (mode == 2 && !ice.stunServerList.empty())) {
 				*error = "connection preference did not constrain ICE candidate types or TURN credentials";
 				return false;
@@ -16842,10 +17401,10 @@ namespace RTE {
 			return false;
 		}
 		settings.SetNetworkPlayerTurnServers("");
-		const auto parallel = NetRelayConfig::Fixed("one.example:3478,two.example:3478", "one-user,two-user", "one-pass,two-pass", "parallel", now + 3600);
+		const auto parallel = NetRelayConfig::Fixed("one.example:3478,turn:two.example:3478?transport=tcp,turns:three.example:443?transport=tcp", "one-user,two-user,three-user", "one-pass,two-pass,three-pass", "parallel", now + 3600);
 		std::string parallelServers, parallelUsers, parallelPasswords;
-		parallel.UdpLists(parallelServers, parallelUsers, parallelPasswords);
-		if (!parallel.Valid() || parallelServers != "one.example:3478,two.example:3478" || parallelUsers != "one-user,two-user" || parallelPasswords != "one-pass,two-pass") { *error = "existing parallel TURN logins did not retain their server mapping"; return false; }
+		parallel.TurnLists(parallelServers, parallelUsers, parallelPasswords);
+		if (!parallel.Valid() || parallelServers != "one.example:3478,turn:two.example:3478?transport=tcp,turns:three.example:443?transport=tcp" || parallelUsers != "one-user,two-user,three-user" || parallelPasswords != "one-pass,two-pass,three-pass") { *error = "parallel TURN logins did not retain their UDP/TCP/TLS server mapping"; return false; }
 		NetRelayConfig expired = relay;
 		expired.expiresAt = now;
 		if (!NetMatchService::BuildIceConfig(settings, "", 41011, expired).turnServerList.empty()) {
@@ -16854,11 +17413,12 @@ namespace RTE {
 		}
 		settings.SetNetworkConnectionMode(SettingsMan::NetworkConnectionMode::RelayOnly);
 		const auto tlsOnly = NetRelayConfig::Fixed("turns:relay.example:443?transport=tcp", "temporary-user", "temporary-password", "tls-only", now + 3600);
-		// The native ICE client speaks UDP TURN only, so a TLS-only offer yields no endpoint and the join refuses by name.
-		if (!NetMatchService::BuildIceConfig(settings, "", 41011, tlsOnly).turnServerList.empty()) {
-			*error = "Relay only turned a TLS-only host offer into a UDP relay endpoint";
+		// A network that blocks UDP still receives the TLS URI, including its transport.
+		if (NetMatchService::BuildIceConfig(settings, "", 41011, tlsOnly).turnServerList != "turns:relay.example:443?transport=tcp") {
+			*error = "Relay only discarded or changed a TLS-only host offer";
 			return false;
 		}
+		if (!NetRelayConfig::Fixed("turns:relay.example:443?transport=udp", "user", "password", "invalid", now + 3600).Empty()) { *error = "unsupported DTLS relay URI was accepted as TLS"; return false; }
 		std::cout << "[net-match-selftest] PASS relay offer: versioned config, expiry, secret refusal, player modes and own-relay precedence" << std::endl;
 		return true;
 	}
@@ -16886,7 +17446,7 @@ namespace RTE {
 		auto script = std::make_shared<Script>();
 		service.m_Directory.SetTransportFactory([script] { return std::make_unique<Wire>(script); });
 		service.m_Directory.Configure("dir.example", "0123456789abcdef", "");
-		script->replies.push_back({200, R"({"session_id":"11111111-2222-4333-8444-555555555555","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+		script->replies.push_back({200, R"({"connection_protocol":1,"session_id":"11111111-2222-4333-8444-555555555555","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 		service.m_Directory.Advertise(NetDirectoryRegisterRequest{}, false);
 		service.m_Directory.Update(0); service.m_Directory.Update(0);
 		service.m_IsHost = true;
@@ -16903,6 +17463,8 @@ namespace RTE {
 		script->replies.push_back({200, relay.ToJson(), ""});
 		service.UpdateRelayOffer(1);
 		NetRelayConfig offered;
+		if (!service.ReadRelayOffer(offered)) { *error = "an Automatic host's direct lobby waited for the directory relay"; return false; }
+		service.m_ConnectionMode = 2;
 		if (!service.m_Directory.IceRequestPending() || service.ReadRelayOffer(offered)) { *error = "host did not wait for the match's relay request"; return false; }
 		const auto body = nlohmann::json::parse(script->sent.back().body);
 		if (body.value("token", "") != "host-token" || body.value("match_id", "") != relay.matchId || body.size() != 3) { *error = "host sent an unexpected relay request: " + script->sent.back().body; return false; }
@@ -16949,7 +17511,20 @@ namespace RTE {
 		service.m_FreshRelayRequested = true;
 		service.UpdateRelayOffer(60010);
 		service.m_Directory.Update(60011); service.UpdateRelayOffer(60011);
-		if (service.GetRelayError() != "Relay credentials unavailable or expired") failures.push_back("a failed re-mint printed \"" + service.GetRelayError() + "\"");
+		if (service.GetRelayError() != "The relay login is not ready. Retry joining after the host's relay reconnects.") failures.push_back("a failed re-mint printed \"" + service.GetRelayError() + "\"");
+		// A join may race the host's first mint or renewal; retry only temporary failures.
+		for (const auto& reply : std::vector<NetDirectoryClient::Reply>{{404, R"({"error":"relay_offer_unavailable"})", ""},
+		                                                            {429, R"({"error":"relay_rate_limited","retry_after_s":2})", ""},
+		                                                            {502, R"({"error":"relay_provider_refused"})", ""},
+		                                                            {403, R"({"error":"forbidden"})", ""}}) {
+			script->replies.push_back(reply);
+			if (!service.m_Directory.FetchIceServers("11111111-2222-4333-8444-555555555555")) { *error = "relay bootstrap retry did not start"; return false; }
+			service.m_Directory.Update(60012);
+			const bool retry = reply.statusCode == 404 || reply.statusCode == 429;
+			if (service.m_Directory.IceRequestRetryable() != retry ||
+			    (reply.statusCode == 429 && service.m_Directory.IceRetryDelayMs() != 2000) ||
+			    service.m_Directory.IceRelayRefused() != (reply.statusCode == 502)) failures.push_back("relay bootstrap lost its retry or refusal reason");
+		}
 		if (!failures.empty()) {
 			*error = "relay renewal: " + failures.front();
 			for (size_t index = 1; index < failures.size(); ++index) *error += " | " + failures[index];
@@ -17113,8 +17688,8 @@ namespace RTE {
 				return false;
 			}
 			if (noDirectRoute && NetMatchService::SetupFailureStatus(&session, noDirectRoute) !=
-			    "No direct route (NAT): forward the host's UDP port or use LAN") {
-				*error = "ice failure message still uses the generic setup failure";
+			    "No direct route connected. Retry with your Connection set to Automatic, and ask the host to enable its relay.") {
+				*error = "ice failure message lost its connection recovery guidance: " + NetMatchService::SetupFailureStatus(&session, noDirectRoute);
 				return false;
 			}
 			if (arm == 4 && NetMatchService::SetupFailureStatus(&session, noDirectRoute) != "The host banned you from this session") {
@@ -17122,9 +17697,9 @@ namespace RTE {
 				return false;
 			}
 			if (arm >= 9 && (why.find("relay") == std::string::npos && why.find("Relay") == std::string::npos)) { *error = "failure hid the relay stage"; return false; }
-			if (arm == 10 && NetMatchService::SetupFailureStatus(&session, true, true) != "Relay route failed (TURN): check the relay or forward the host's UDP port") { *error = "relay failure action missing"; return false; }
+			if (arm == 10 && NetMatchService::SetupFailureStatus(&session, true, true) != "The relay could not connect. Retry joining; the host can check its Relay choice in Host Options > Network.") { *error = "relay failure action missing"; return false; }
 		}
-		std::cout << "[net-match-selftest] PASS ice failure message: failed ICE and IP stages name the port-forward or LAN action" << std::endl;
+		std::cout << "[net-match-selftest] PASS ice failure message: failed ICE and IP stages name Connection and host Relay actions" << std::endl;
 		std::cout << "[net-match-selftest] PASS ice IP retry: runtime, immediate and signaling refusals dial the advertised IP once" << std::endl;
 		std::cout << "[net-match-selftest] PASS ice refusal policy: no invented address, no retry of a ban or cancellation" << std::endl;
 		std::cout << "[net-match-selftest] PASS ice deadline: directory lookup time does not consume the connection budget" << std::endl;
@@ -17347,7 +17922,642 @@ namespace RTE {
 		return leavePassed && probePassed ? 0 : 1;
 	}
 
+	template<class Session>
+	bool TestChatReceipts(std::string* error) {
+		if constexpr (requires(Session& session, uint64_t* id) { session.SendChat(c_NetChatScopeAll, std::string("draft"), id); session.ChatSendResult(uint64_t{1}); }) {
+			LoopbackTransport transport;
+			Session host;
+			NetSessionConfig config;
+			config.port = 43261; config.maxPeers = 1;
+			if (!host.StartHost(transport, config, error)) return false;
+			uint64_t ids[6]{};
+			for (int line = 0; line < 6; ++line) {
+				if (!host.SendChat(c_NetChatScopeAll, "draft " + std::to_string(line), &ids[line])) { *error = "valid draft was refused before the pump"; return false; }
+				const auto result = host.ChatSendResult(ids[line]);
+				if (result.state != decltype(result.state)::Queued) { *error = "queued is incorrectly reported as sent"; return false; }
+			}
+			host.PumpChatOutbox();
+			for (int line = 0; line < 6; ++line) {
+				const auto result = host.ChatSendResult(ids[line]);
+				if (result.state != (line < 5 ? decltype(result.state)::Sent : decltype(result.state)::Refused) || result.detail.empty()) { *error = "the rate-dropped draft has no honest send result"; return false; }
+			}
+			Session unlinked;
+			uint64_t id = 0;
+			if (!unlinked.SendChat(c_NetChatScopeAll, "kept draft", &id)) { *error = "the unlinked fixture did not queue"; return false; }
+			unlinked.PumpChatOutbox();
+			const auto refused = unlinked.ChatSendResult(id);
+			if (refused.state != decltype(refused.state)::Refused || refused.detail.find("unavailable") == std::string::npos) { *error = "the unlinked draft has no connection refusal"; return false; }
+			std::cout << "[net-match-selftest] PASS chat receipts distinguish queued, sent, rate refused and unlinked; five per second unchanged" << std::endl;
+			return true;
+		} else {
+			*error = "the chat outbox gives no receipt for a queued draft that is later refused";
+			return false;
+		}
+	}
+
+	bool TestInMatchPresentation(std::string* error) {
+		bool passed = true;
+		const auto check = [&](bool ok, const std::string& why) {
+			if (!ok) { std::cerr << "[net-match-selftest] FAIL ui_presentation: " << why << std::endl; passed = false; }
+		};
+		const std::string returnNotice = NetReconnectUx::HeldSeatReturnNotice();
+		check(returnNotice.find("AI plays your units") != std::string::npos && returnNotice.find("until the host reassigns it") != std::string::npos,
+		      "in-match leave/rejoin copy promises unconditional seat ownership: " + returnNotice);
+		NetLobbySnapshot connected;
+		connected.localPeerId = 1;
+		NetLobbyMember own; own.peerId = 1; own.connected = true;
+		connected.members.push_back(own);
+		NetMatchService::SeatView held; held.seat.owner = 1; held.state = "Held";
+		check(NetPlayerPresentation::PlayingSummary(NetPlayerPresentation::OwnSeatHeld(connected, held, false), 0, {}) == "The AI is playing for you",
+		      "a connected local held seat reads as everyone playing");
+		held.state = "Reconnecting";
+		check(NetPlayerPresentation::OwnSeatHeld(connected, held, false), "a local returning seat reads as active control");
+		held.seat.owner = 0;
+		connected.members.front().aiHeld = true;
+		check(!NetPlayerPresentation::OwnSeatHeld(connected, held, false), "an opened authoritative seat retains a cached hold");
+		check(NetPlayerPresentation::OwnSeatHeld(connected, std::nullopt, false) && !NetPlayerPresentation::OwnSeatHeld(connected, std::nullopt, true),
+		      "local cached holds ignore an authoritative release when no roster view exists");
+		struct AlertCase { bool known; bool initialized; bool local; bool notifyEnabled; bool soundEnabled; bool notify; bool sound; };
+		for (const AlertCase arrival : {AlertCase{false, true, false, true, true, true, true},
+		    {false, true, false, true, false, true, false}, {false, true, false, false, true, false, true},
+		    {false, true, false, false, false, false, false}, {true, true, false, true, true, false, false},
+		    {false, false, false, true, true, false, false}, {false, true, true, true, true, false, false}}) {
+			const auto alert = NetChatAlertFor(arrival.known, arrival.initialized, arrival.local, arrival.notifyEnabled, arrival.soundEnabled);
+			check(alert.notify == arrival.notify && alert.sound == arrival.sound, "chat arrival preferences, history or own echo gating ignored");
+		}
+		check(NetChatLineVisible(false, false, true, 7, 7) && !NetChatLineVisible(false, false, true, 9, 7),
+		      "an own echo hides the remote message that triggered a hidden-history notice");
+		check(!NetChatLineVisible(false, false, false, 7, 7) && NetChatLineVisible(true, false, false, 9, 7) && NetChatLineVisible(false, true, false, 9, 7),
+		      "chat notice expiration or normal/open history visibility changed");
+		NetMatchSummary ended;
+		ended.result = "Match ended by host";
+		check(ended.LineText().find("draw") == std::string::npos && ended.DetailsText().find("No result") != std::string::npos,
+		      "an unfinished host-ended round reads as a draw: " + ended.LineText());
+		ended.result = "Match complete";
+		check(ended.LineText().find("draw") != std::string::npos, "a completed draw lost its result");
+		ended.winnerTeam = 1;
+		check(ended.LineText().find("Team 2 wins") != std::string::npos, "a played winner lost its team");
+		check(RoundEndedWinnerTeam(PackRoundEndedRecord(321, -2)) == -2 && RoundEndedFinalFrame(PackRoundEndedRecord(321, -2)) == 321 &&
+		      NetMatchService::RoundEndResultText(-2, 0).find("no result") != std::string::npos, "a held returner reads an unfinished end as a draw");
+		for (auto cause : {NetSeatHoldCause::LateStream, NetSeatHoldCause::TimingAck, NetSeatHoldCause::Quiet,
+		                   NetSeatHoldCause::OwnSeat, NetSeatHoldCause::RejoinFailed, NetSeatHoldCause::Crash}) {
+			NetH4ModerationSeat seat; seat.held = true; seat.holdCause = cause;
+			check(!NetModerationUx::HoldCause(seat).empty(), "a connected held seat lost cause " + std::string(NetSeatHoldCauseName(cause)));
+		}
+		NetMatchConfig rules;
+		rules.players = {{1, 0, false, "Host"}, {0, 1, true, "CPU opponent"}};
+		rules.teamRules[1].technologyIntent = "Coalition.rte";
+		rules.teamRules[1].aiSkill = 73;
+		const auto text = NetHostOptionsSummary(rules, {});
+		check(text.find("Team 2") != std::string::npos && text.find("Coalition.rte") != std::string::npos && text.find("73") != std::string::npos,
+		      "round rules omit team technology, AI skill or arrangement");
+		check(text.find("Frame redundancy") == std::string::npos && text.find("Input delay:") == std::string::npos && text.find("Phase:") == std::string::npos,
+		      "round rules lead with connection machinery");
+		NetLobbyMember cpu;
+		cpu.peerId = 0; cpu.team = 1; cpu.cpu = true; cpu.displayName = "CPU opponent";
+		const auto cpuLine = NetPlayerPresentation::Row(cpu);
+		check(cpuLine.find("Team 2") != std::string::npos && cpuLine.find("AI") != std::string::npos, "CPU roster line omits its team or AI state: " + cpuLine);
+		check(NetChatAudience(SettingsMan::NetworkChatDefaultScope::Team, false, false) == c_NetChatScopeTeam, "saved Team audience is not used");
+		check(NetChatAudience(SettingsMan::NetworkChatDefaultScope::All, true, false) == c_NetChatScopeTeam &&
+		      NetChatAudience(SettingsMan::NetworkChatDefaultScope::Team, false, true) == c_NetChatScopeAll, "explicit chat audience override is not honored");
+		check(NetChatRosterPeer(0) == 1 && NetChatRosterPeer(1) == 2, "chat sender maps to the wrong roster seat");
+		const std::string longWord(128, 'W');
+		const auto wrapped = NetChatWrap(longWord, 37, [](const std::string& part) { return static_cast<int>(part.size()); });
+		std::string joined;
+		for (const auto& line: wrapped) { joined += line; check(line.size() <= 37, "a chat line exceeds its readable column"); }
+		check(joined == longWord && wrapped.size() > 1, "wrapping drops part of a valid chat message");
+		if (!passed) *error = "in-match presentation defects";
+		return passed;
+	}
+
+	bool TestPauseNavigationDuringRecovery(std::string* error) {
+		NetMatchService::Construct();
+		struct Restore {
+			std::unique_ptr<Activity> activity;
+			bool inActivity = g_ActivityMan.IsInActivity();
+			Restore() { g_ActivityMan.SwapCheckpointActivity(activity); }
+			~Restore() {
+				if (g_MenuMan.IsLocalPauseMenuOpen()) g_MenuMan.ToggleLocalPauseMenu();
+				GUIInputWrapper::SetAutomationDriving(false);
+				SetPanelDrawRecording(false);
+				g_ActivityMan.SwapCheckpointActivity(activity);
+				g_ActivityMan.SetInActivity(inActivity);
+				NetMatchService::Destruct();
+			}
+		} restore;
+		std::unique_ptr<Activity> game = std::make_unique<GameActivity>();
+		g_ActivityMan.SwapCheckpointActivity(game);
+		g_ActivityMan.GetActivity()->SetActivityState(Activity::Editing);
+		g_ActivityMan.SetInActivity(true);
+		g_NetMatchService.m_State = NetMatchServiceState::Running;
+		g_NetMatchService.m_IsHost = true;
+		g_NetMatchService.m_MatchWasRunning = true;
+		GUIInputWrapper::SetAutomationDriving(true);
+		SetPanelDrawRecording(true);
+		bool waiting = false, leftWait = false;
+		const auto frame = [&] {
+			SDL_Event event{};
+			while (SDL_PollEvent(&event)) g_UInputMan.HandleInputEvent(event);
+			g_UInputMan.Update(!waiting);
+			if (waiting) leftWait = g_MenuMan.UpdateNetworkWaitInput();
+			else g_MenuMan.UpdateLocalPauseMenu();
+			g_MenuMan.DrawLocalPauseMenu();
+			MenuAutomation::AfterDrawnFrame();
+			g_UInputMan.EndFrame();
+		};
+		std::string observation;
+		const auto finishHand = [&] {
+			for (int frames = 0; frames < 90 && MenuAutomation::HandBusy(); ++frames) frame();
+			bool passed = false;
+			return MenuAutomation::HandFinished(passed, observation) && passed;
+		};
+		if (!MenuAutomation::HandGameKey("Escape", [] { return g_MenuMan.IsLocalPauseMenuOpen(); }, "recovering match pause menu", observation) || !finishHand()) {
+			*error = "Escape paused or left the recovering match instead of opening its local menu: " + observation;
+			return false;
+		}
+		if (!MenuAutomation::HandClick(g_MenuMan.GetActivePauseMenu()->AutomationManager(), "ButtonSettings", nullptr, observation) || !finishHand() ||
+		    g_MenuMan.GetActivePauseMenu()->AutomationActiveScreenName() != "PauseSettings") {
+			*error = "the mouse could not open pause Settings: " + observation; return false;
+		}
+		if (!MenuAutomation::HandGameKey("Escape", [] { return g_MenuMan.GetActivePauseMenu() && g_MenuMan.GetActivePauseMenu()->AutomationActiveScreenName() != "PauseSettings"; }, "back from Settings", observation) || !finishHand()) {
+			*error = "Escape did not return Settings to pause: " + observation; return false;
+		}
+		if (!MenuAutomation::HandGameKey("Escape", [] { return !g_MenuMan.IsLocalPauseMenuOpen(); }, "resume recovering match", observation) || !finishHand() ||
+		    !g_ActivityMan.IsInActivity() || g_NetMatchService.GetState() != NetMatchServiceState::Running) {
+			*error = "the second Escape left the match: " + observation; return false;
+		}
+		waiting = true;
+		g_NetMatchService.m_IsHost = false;
+		g_NetMatchService.m_HeldRejoinDriving = true;
+		for (const auto state: {NetMatchServiceState::Running, NetMatchServiceState::Starting, NetMatchServiceState::Failed}) {
+			g_NetMatchService.m_State = state;
+			if (!MenuAutomation::HandGameKey("Escape", [&] { return g_MenuMan.IsLocalPauseMenuOpen(); }, "rejoin wait pause menu", observation) || !finishHand() ||
+			    !MenuAutomation::HandGameKey("Escape", [&] { return !g_MenuMan.IsLocalPauseMenuOpen(); }, "return to rejoin wait", observation) || !finishHand() ||
+			    leftWait || !g_ActivityMan.IsInActivity() || g_NetMatchService.GetState() != state) {
+				*error = "Escape left or restarted the held rejoin wait: " + observation;
+				return false;
+			}
+		}
+		g_NetMatchService.m_State = NetMatchServiceState::Running;
+		g_NetMatchService.m_HeldRejoinDriving = false;
+		if (!MenuAutomation::HandGameKey("Escape", [] { return g_MenuMan.IsLocalPauseMenuOpen(); }, "leave menu", observation) || !finishHand() ||
+		    !MenuAutomation::HandClick(g_MenuMan.GetActivePauseMenu()->AutomationManager(), "ButtonLeaveMatch", nullptr, observation) || !finishHand() ||
+		    !MenuAutomation::HandClick(g_MenuMan.GetActivePauseMenu()->AutomationManager(), "ButtonLeaveConfirm", nullptr, observation) || !finishHand() ||
+		    !leftWait || g_ActivityMan.IsInActivity()) {
+			*error = "the explicit Leave confirmation did not leave the match: " + observation; return false;
+		}
+		g_NetMatchService.LeaveMatch("Match left");
+		g_MenuMan.HandleTransitionIntoMenuLoop(true);
+		if (g_MenuMan.m_TitleScreen->GetTitleTransitionState() != TitleScreen::TitleTransition::ScrollingFadeIn) {
+			*error = "an explicit Leave selected the activity picker instead of the main menu"; return false;
+		}
+		g_MenuMan.SkipTitleIntroForAutomation();
+		g_MenuMan.Update(); g_MenuMan.Draw();
+		auto* resume = g_MenuMan.GetMainMenu()->AutomationManager()->GetControl("ButtonResume");
+		if (!g_ActivityMan.GetActivity()->IsOver() || !g_MenuMan.IsMainMenuInteractive() || (resume && resume->GetVisible())) {
+			*error = "a left match landed on the activity picker or still offered Resume Game"; return false;
+		}
+		g_NetMatchService.m_State = NetMatchServiceState::Idle;
+		g_NetMatchService.m_MatchWasRunning = g_NetMatchService.m_HeldRejoinDriving = false;
+		g_ActivityMan.SetInActivity(true);
+		if (g_MenuMan.ToggleLocalPauseMenu()) {
+			*error = "single player acquired the network pause menu";
+			return false;
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS recovery_pause_settings_escape_resumes_and_wait_escape_never_leaves");
+		return true;
+	}
+
+	bool TestInternetTicketRecovery(std::string* error) {
+		{
+			struct Restore {
+				std::string path = NetMatchService::s_TicketStorePath;
+				bool admission = NetMatchService::IsAdmissionEnabled();
+				~Restore() { NetMatchService::SetTicketStorePath(path); NetMatchService::SetAdmissionEnabled(admission); }
+			} restore;
+			NetMatchService::SetAdmissionEnabled(true);
+			const auto path = std::filesystem::current_path() / "Userdata" / "refused-rejoin-selftest" / "reconnect.ticket";
+			NetMatchService::SetTicketStorePath(path.string());
+			const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			NetH4TicketRecord ticket;
+			ticket.recordVersion = NetReconnectTicketStore::RecordVersionFor(false);
+			ticket.epoch.fill(0x31); ticket.credential.fill(0x73);
+			ticket.stableSeat = 2; ticket.holderGeneration = 1; ticket.hostSessionId = 781;
+			ticket.hostAddress = "loopback";
+			ticket.issuedAtUnixMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+			struct Refusal { NetRejectReason reason; std::string key, summary, text; };
+			const std::string ours = std::to_string(NetProtocol::c_Version), theirs = std::to_string(NetProtocol::c_Version + 1);
+			for (const auto& refusal: {
+			    Refusal{NetRejectReason::IdentityUnproven, "seat_owner", "Alex owns this seat. Join another open seat.", "Alex owns this seat. Join another open seat."},
+			    Refusal{NetRejectReason::ParticipantBanned, "participant", "banned", "The host banned you from this session"},
+			    Refusal{NetRejectReason::ProtocolMismatch, "protocol_version", "protocol differs", "Network protocol differs (host " + theirs + "; yours " + ours + "). Update both games to the same version."},
+			    Refusal{NetRejectReason::SeatReassigned, "seat", "reassigned", "The host gave your seat to another player."},
+			    Refusal{NetRejectReason::SeatReleased, "seat", "released", "The host released your seat."}}) {
+				for (const bool manualFirst: {false, true}) {
+					LoopbackTransport hostWire, clientWire;
+					NetMatchService refused;
+					refused.m_TicketStore.SetPath(path.string());
+					if (!refused.m_TicketStore.Store(ticket, error) || !hostWire.StartHost(43195, error)) return false;
+					refused.m_Session = std::make_unique<NetSession>();
+					refused.m_ReconnectClient.Configure(&refused.m_TicketStore, {}, "Rejected player");
+					refused.m_Session->SetReconnectClient(&refused.m_ReconnectClient);
+					NetSessionConfig config;
+					config.port = 43195;
+					config.localIdentity.gameVersion = "7.0.0-test";
+					config.localIdentity.buildId = "refused-rejoin-selftest";
+					config.localIdentity.controllerFrameVersion = ControllerFrame::c_Version;
+					config.localIdentity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+					if (!refused.m_Session->StartClient(clientWire, "loopback", config, error)) return false;
+					refused.m_Session->Tick(0);
+					const auto events = hostWire.PollEvents();
+					const auto connected = std::find_if(events.begin(), events.end(), [](const auto& event) { return event.type == NetTransportEventType::PeerConnected; });
+					NetMessage message;
+					message.payload = NetJoinRejected{refusal.reason, refusal.summary, refusal.key, theirs, ours};
+					std::vector<uint8_t> bytes;
+					if (connected == events.end() || !NetProtocol::Encode(message, bytes) || !hostWire.Send(connected->peerId, NetTransportLane::ControlReliable, bytes, error)) {
+						*error = "the final-refusal fixture could not send the host's answer"; return false;
+					}
+					refused.m_Session->Tick(1);
+					if (!refused.m_Session->HasReject() || refused.m_Session->GetRejectReason() != refusal.reason) {
+						*error = "the final-refusal fixture did not receive the host's answer"; return false;
+					}
+					refused.m_State = NetMatchServiceState::Failed;
+					refused.m_MatchWasRunning = true;
+					refused.m_ErrorText = refused.m_Session->BuildRejectText();
+					refused.m_OrdinaryTicketRejoin = refused.m_HeldRejoinDriving = true;
+					refused.m_HeldRejoinRoutes.push_back(NetMatchServiceRequest{});
+					refused.m_ReconnectUx.NoteDropped(now, "Lost host");
+					refused.m_ReconnectUx.NoteAttemptStarted(now);
+					if (manualFirst) refused.DriveOrdinaryTicketRejoin(now + 1);
+					else refused.DriveReconnectUx(now + 1);
+					if (!refused.m_ReconnectUx.IsRefused() || refused.m_ReconnectUx.GetStatusText() != refusal.text) {
+						*error = "a final admission refusal did not settle on the host's plain answer"; return false;
+					}
+					for (uint64_t update = 2; update < 6; ++update) {
+						refused.DriveReconnectUx(now + update);
+						refused.DriveOrdinaryTicketRejoin(now + update);
+					}
+					const bool ticketGone = refusal.reason == NetRejectReason::SeatReassigned || refusal.reason == NetRejectReason::SeatReleased || refusal.reason == NetRejectReason::ParticipantBanned;
+					if (!refused.m_ReconnectUx.IsRefused() || refused.m_ReconnectUx.GetStatusText() != refusal.text || refused.m_ReconnectUx.GetAttempts() != 1 ||
+					    refused.m_OrdinaryTicketRejoin || refused.m_HeldRejoinDriving || !refused.m_HeldRejoinRoutes.empty() || refused.m_HeldRejoinRetryAtMs != 0 ||
+					    refused.m_ReconnectUx.CanRetryManually() || refused.m_ReconnectUx.CanCancel() || refused.m_TicketStore.HasRecord() == ticketGone) {
+						*error = "repeated menu updates rearmed a final refusal or changed which ticket survives"; return false;
+					}
+					// A later explicit game choice retires this refusal even if its own setup fails before dialing.
+					NetMatchServiceRequest next;
+					next.port = 0;
+					std::string setupError;
+					if (refused.Start(next, &setupError) || refused.m_ReconnectUx.IsRefused() || !refused.m_ReconnectUx.GetStatusText().empty()) {
+						*error = "a new game choice retained the previous seat's refusal"; return false;
+					}
+				}
+			}
+			System::PrintDiagnosticLine("[net-match-selftest] PASS final_admission_refusal_survives_menu_updates_and_new_game_clears_it");
+		}
+		{
+			struct RestoreAdmission {
+				bool enabled = NetMatchService::IsAdmissionEnabled();
+				~RestoreAdmission() { NetMatchService::SetAdmissionEnabled(enabled); }
+			} restore;
+			NetMatchService::SetAdmissionEnabled(true);
+			for (int phase = 0; phase < 3; ++phase) {
+				LoopbackTransport hostWire, clientWire;
+				NetPeerId hostPeer = 0, clientPeer = 0;
+				if (!StartLoopbackTransports(43193, hostWire, clientWire, hostPeer, clientPeer, error)) return false;
+				NetMatchService host, returning;
+				NetLockstepConfig config;
+				config.sessionId = config.roundId = 778; config.peerCount = 2; config.startFrame = 1;
+				config.matchConfig = MakeConfig(); config.matchConfig.sessionId = config.sessionId;
+				config.matchConfig.successorOrder = {2}; config.matchConfig.migrationPeers = {{2, 43194, {"loopback"}}};
+				config.migrationKey.fill(0x39);
+				config.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
+				config.localPeerId = 1; config.remoteTransportPeerIds = {{2, hostPeer}};
+				host.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+				if (!host.m_Coordinator->Start(hostWire, config, error)) return false;
+				config.localPeerId = 2; config.remoteTransportPeerIds = {{1, clientPeer}};
+				returning.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+				if (!returning.m_Coordinator->Start(clientWire, config, error)) return false;
+				for (uint64_t now = 0; now < 50; now += 5) {
+					host.m_Coordinator->Tick(now); returning.m_Coordinator->Tick(now);
+					hostWire.AdvanceTimeMs(5); clientWire.AdvanceTimeMs(5);
+				}
+				if (!host.m_Coordinator->IsRunning() || !returning.m_Coordinator->IsRunning()) {
+					*error = "the route-change fixture did not enter the live round"; return false;
+				}
+				host.m_IsHost = true; host.m_LocalPeerId = 1; returning.m_LocalPeerId = 2;
+				host.m_State = returning.m_State = NetMatchServiceState::Running;
+				const uint64_t steady = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+				const uint64_t wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+				host.UpdateConnectionAuthority(steady); returning.UpdateConnectionAuthority(steady);
+				if (phase == 1 && !returning.m_Coordinator->BeginHostMigration(50)) {
+					*error = "the route-change fixture did not enter handover"; return false;
+				}
+				if (phase == 2 && !returning.m_Coordinator->BeginSimulationTick(1, error)) return false;
+				// A resumed clock enters the same authority revision path as a changed address.
+				host.m_ConnectionAuthority.Update(steady + 1, wall + 21);
+				returning.m_ConnectionAuthority.Update(steady + 1, wall + 21);
+				host.PumpSessionEvents(); returning.PumpSessionEvents();
+				if (phase == 2) {
+					if (!returning.m_Coordinator->IsRunning()) { *error = "a route change interrupted a granted simulation tick"; return false; }
+					(void)returning.m_Coordinator->FinishSimulationTick(1);
+					returning.PumpSessionEvents();
+				}
+				if (!host.m_Coordinator->IsRunning() || !returning.m_Coordinator->IsStopped() || returning.m_Coordinator->IsMigrating() ||
+				    returning.m_Coordinator->GetStats().timeoutReason != "PeerHeld:Your network changed - rejoining the same seat" ||
+				    returning.m_Coordinator->GetHostPeerId() != 1 || returning.m_LocalPeerId != 2 ||
+				    returning.m_ConnectionNetworkRevision != returning.m_ConnectionAuthority.NetworkRevision()) {
+					*error = "a local route change did not leave the waiting client ready for same-seat recovery while the host kept running"; return false;
+				}
+			}
+			System::PrintDiagnosticLine("[net-match-selftest] PASS local_route_change_rejoins_during_input_wait_and_handover");
+		}
+		for (const auto& address: {"ice:ip:::1", "ice:str:successor", "192.0.2.4", "2001:db8::4"}) {
+			NetReconnectUx prompt;
+			prompt.OfferStoredTicket(NetH4TicketLoadResult::Loaded, address);
+			if (prompt.GetOfferText().find(address) != std::string::npos) {
+				*error = "a saved rejoin prompt exposes its transport address"; return false;
+			}
+		}
+		if (NetRejoinAddress("ice:str:successor", 41234) != "ice:str:successor" || NetRejoinAddress("ice:ip:::1", 41234) != "ice:ip:::1" ||
+		    NetRejoinAddress("192.0.2.4", 41234) != "192.0.2.4:41234" || NetRejoinAddress("2001:db8::4", 41234) != "[2001:db8::4]:41234") {
+			*error = "saving a successor corrupts its ICE identity or loses its direct port"; return false;
+		}
+		NetH4TicketRecord record;
+		record.hostAddress = "ice:";
+		record.directorySessionId = "recovery-session";
+		{
+			NetMatchService successor;
+			successor.m_ConnectionMode = 2;
+			successor.m_MigrationDirectorySession = record.directorySessionId;
+			successor.m_MigrationDirectoryToken = "test-successor-token";
+			successor.m_DirectoryRow.seatsFree = 1;
+			successor.AdoptMigrationDirectoryLocked({2, 41234, {"192.0.2.2", "ice:str:successor"}}, 2);
+			auto row = nlohmann::json::parse(NetDirectoryCodec::EncodeRegisterRequest(successor.m_DirectoryRow));
+			row.erase("resume_token"); row.erase("resume_session_id");
+			row["session_id"] = record.directorySessionId; row["age_s"] = 0;
+			row["observed_ip"] = "192.0.2.2"; row["state"] = "running";
+			NetDirectoryListResponse listing;
+			std::string reason;
+			NetIceJoinTarget target;
+			if (!NetDirectoryCodec::DecodeListResponse(nlohmann::json{{"sessions", {row}}, {"total", 1}}.dump(), listing, reason) ||
+			    !NetIceResolveSessionRow(listing.sessions, {}, record.directorySessionId, &target).empty() ||
+			    target.identity != "str:successor" || target.virtualPort != NetMatchService::c_MigrationVirtualPort ||
+			    target.joinMode != "ice" || !target.address.empty() || successor.m_IceBoundSessionId != record.directorySessionId ||
+			    !successor.m_DirectoryRow.listenAddrs.empty() || !successor.m_FreshRelayRequested.load()) {
+				*error = "a relay-only successor cannot be found through its published listener after handover: " + reason; return false;
+			}
+			row["ice_virtual_port"] = 65536;
+			if (NetDirectoryCodec::DecodeListResponse(nlohmann::json{{"sessions", {row}}, {"total", 1}}.dump(), listing, reason)) {
+				*error = "an invalid successor virtual port passed the directory decoder"; return false;
+			}
+		}
+		NetMatchServiceRequest published;
+		published.address = "ice:";
+		published.port = 41010;
+		const auto request = NetMatchService::BuildHeldRejoinRequest(record, "Returning player", false, published);
+		if (request.sessionId != record.directorySessionId || request.address != published.address || !request.rejoin || request.host) {
+			*error = "a successor route discarded the Internet session required by relay-only rejoin";
+			return false;
+		}
+		NetMatchService client;
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		client.m_ReconnectUx.NoteDropped(now, "Lost host");
+		client.m_ReconnectUx.SetRetryWindowMs(NetMatchService::c_TicketRejoinAttemptBudgetMs * NetReconnectUx::c_MaxAttempts + 300000);
+		client.m_ReconnectUx.NoteAttemptStarted(now);
+		client.m_OrdinaryTicketRejoin = client.m_HeldRejoinDriving = true;
+		client.m_State = NetMatchServiceState::Failed;
+		client.DriveOrdinaryTicketRejoin();
+		if (client.GetReconnectUx().GetState() != NetReconnectUxState::Waiting || client.m_HeldRejoinRetryAtMs == 0 || !client.m_OrdinaryTicketRejoin) {
+			*error = "a failed manual rejoin still shows attempt 1 in flight instead of its failure and scheduled retry";
+			return false;
+		}
+		client.m_State = NetMatchServiceState::Starting;
+		client.m_HeldRejoinRetryAtMs = 0;
+		client.m_TicketRejoinAttemptStartedMs = now;
+		client.m_ReconnectUx.NoteAttemptStarted(now);
+		client.DriveOrdinaryTicketRejoin(now + NetMatchService::c_TicketRejoinAttemptBudgetMs);
+		if (!client.m_CancelRequested.load() || client.GetReconnectUx().GetState() == NetReconnectUxState::Retrying ||
+		    client.GetLobbySnapshot().statusText.find("did not answer") == std::string::npos) {
+			*error = "an unanswered Connecting attempt is not cancelled with a visible outcome at its deadline"; return false;
+		}
+		{
+			NetSession admitted;
+			admitted.SetRejoinPhase(NetSession::RejoinPhase::ImagePending);
+			client.m_ChatSession = &admitted;
+			client.m_CancelRequested.store(false);
+			client.m_ReconnectUx.NoteAttemptStarted(now);
+			client.DriveOrdinaryTicketRejoin(now + NetMatchService::c_TicketRejoinAttemptBudgetMs);
+			client.m_ChatSession = nullptr;
+			if (client.m_CancelRequested.load() || client.GetReconnectUx().GetState() != NetReconnectUxState::Retrying) {
+				*error = "the initial worker's admitted session was treated as an unanswered connection"; return false;
+			}
+		}
+		for (uint32_t attempt = client.m_ReconnectUx.GetAttempts(); attempt < NetReconnectUx::c_MaxAttempts; ++attempt) {
+			client.m_ReconnectUx.NoteAttemptStarted(now);
+			client.m_ReconnectUx.NoteAttemptFailed(now, "Host unavailable");
+		}
+		client.m_State = NetMatchServiceState::Failed;
+		client.DriveOrdinaryTicketRejoin();
+		if (client.m_HeldRejoinDriving || client.m_ReconnectUx.GetState() != NetReconnectUxState::GaveUp ||
+		    client.m_ReconnectUx.GetAttempts() != NetReconnectUx::c_MaxAttempts) {
+			*error = "an exhausted manual rejoin kept retrying instead of showing its final outcome"; return false;
+		}
+		client.m_ReconnectUx.SetRetryWindowMs(NetMatchService::c_TicketRejoinAttemptBudgetMs * NetReconnectUx::c_MaxAttempts + 300000);
+		client.m_ReconnectUx.NoteReconnected(now);
+		client.m_ReconnectUx.NoteDropped(now + 100, "Later drop");
+		client.m_ReconnectUx.Tick(now + 100 + NetReconnectUx::c_ResumeWindowMs + 1);
+		if (client.m_ReconnectUx.GetState() != NetReconnectUxState::GaveUp) {
+			*error = "a successful ticket return changed the later automatic recovery window"; return false;
+		}
+		{
+			const uint64_t unixNow = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+			struct Restore {
+				std::string path = NetMatchService::s_TicketStorePath;
+				bool admission = NetMatchService::IsAdmissionEnabled();
+				~Restore() { NetMatchService::SetTicketStorePath(path); NetMatchService::SetAdmissionEnabled(admission); }
+			} restore;
+			const auto path = std::filesystem::current_path() / "Userdata" / "host-return-selftest" / "reconnect.ticket";
+			NetMatchService::SetTicketStorePath(path.string());
+			NetMatchService::SetAdmissionEnabled(true);
+			LoopbackTransport wire;
+			NetMatchService departing;
+			NetLockstepConfig config;
+			config.sessionId = config.roundId = 777; config.localPeerId = 1; config.peerCount = 4;
+			config.scenario = "HostReturnSelfTest"; config.ownershipPolicy = "unique-id-split";
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(777);
+			config.matchConfig.peerCount = 4; config.matchConfig.players.resize(4);
+			for (int i = 0; i < 4; ++i) { config.matchConfig.players[i].peerId = i + 1; config.matchConfig.players[i].team = i % 2; }
+			config.matchConfig.successorOrder = {2, 3, 4};
+			config.matchConfig.migrationPeers = {{2, 41010, {"192.0.2.2", "ice:"}}, {3, 41010, {"192.0.2.3", "ice:"}}};
+			departing.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+			if (!departing.m_Coordinator->StartReplay(wire, config, error)) return false;
+			departing.m_Session = std::make_unique<NetSession>();
+			NetSessionConfig session;
+			session.readyWithoutPeers = true; session.port = 41010;
+			if (!departing.m_Session->StartHost(wire, session, error)) return false;
+			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(false);
+			record.epoch.fill(0x31); record.credential.fill(0x73);
+			record.stableSeat = 1; record.holderGeneration = 1; record.hostSessionId = 777;
+			record.hostAddress = "192.0.2.1:41010"; record.issuedAtUnixMs = unixNow;
+			departing.m_TicketStore.SetPath(path.string());
+			if (!departing.m_TicketStore.Store(record, error)) return false;
+			departing.m_MatchWasRunning = departing.m_IsHost = true;
+			departing.m_LocalPeerId = 1; departing.m_State = NetMatchServiceState::Running;
+			departing.m_DirectoryRow.name = "Test game";
+			departing.ConfirmHostLeave(NetHostLeaveOutcome::HandsOver);
+			departing.LeaveMatch("Match left");
+			NetH4TicketRecord returned;
+			if (departing.m_TicketStore.Load(unixNow, returned, error) != NetH4TicketLoadResult::Loaded || returned.hostAddress != "ice:" ||
+			    returned.directorySessionId != record.directorySessionId || !departing.m_TicketStore.LoadRoutes(returned).empty() ||
+			    NetMatchService::BuildTicketRejoinRequest(returned, "Returning host", false).address != "ice:") {
+				*error = "the departing Internet host did not leave route resolution to its directory authority"; return false;
+			}
+			if (departing.GetReconnectUx().GetHostReturnText().find("Test game") == std::string::npos ||
+			    departing.GetReconnectUx().GetOfferText().find("192.0.2.") != std::string::npos) {
+				*error = "the public host's return offer names an address instead of the game"; return false;
+			}
+			departing.GetReconnectUx().NoteHostReturn(true, "Returned game");
+			if (departing.GetReconnectUx().GetHostReturnText().find("Returned game") == std::string::npos) {
+				*error = "the host watch did not adopt the directory's game name"; return false;
+			}
+			for (int closure = 0; closure < 4; ++closure) {
+				NetMatchService closing;
+				closing.m_TicketStore.SetPath(path.string());
+				record.recordVersion = NetReconnectTicketStore::c_RecordVersion;
+				record.seatToken = "test-host-seat-lease";
+				if (!closing.m_TicketStore.Store(record, error)) return false;
+				closing.m_IsHost = true;
+				closing.m_State = NetMatchServiceState::Starting;
+				closing.m_PersistedLocalLease = closure == 2 ? "another-session-lease" : record.seatToken;
+				if (closure == 3) closing.ReportRuntimeError("unexpected host fault");
+				else closing.Destroy(closure == 1);
+				const bool retained = closing.m_TicketStore.Load(unixNow, returned) == NetH4TicketLoadResult::Loaded;
+				if (retained != (closure != 0)) {
+					*error = "closing an unstarted host kept its own ticket or removed a recoverable/unrelated ticket"; return false;
+				}
+			}
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS internet_ticket_keeps_session_and_failed_attempt_advances");
+		return true;
+	}
+
+	bool TestDataRootDiscovery(std::string* error) {
+		const auto root = std::filesystem::current_path() / "Userdata" / "data-root-selftest";
+		const auto game = root / "game", selected = root / "selected", build = game / "compiler-output";
+		std::filesystem::create_directories(build);
+		for (const auto& base: {game, selected}) {
+			std::filesystem::create_directories(base / "Data/Base.rte/Shaders");
+			std::ofstream(base / "Data/Base.rte/Index.ini").put('\n');
+			std::ofstream(base / "Data/Base.rte/Shaders/ScreenBlit.vert").put('\n');
+		}
+		const auto executable = build / "CortexCommand";
+		std::ofstream(executable).put('\n');
+		if (System::ResolveDataRoot(build, executable) != game) {
+			*error = "launching from a compiler output directory does not discover the game data above its executable"; return false;
+		}
+		if (System::ResolveDataRoot(selected, executable) != selected || System::ResolveDataRoot(game, executable) != game) {
+			*error = "data discovery replaced an explicitly selected data root and its mods"; return false;
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS build_directory_data_discovery_preserves_selected_root");
+		return true;
+	}
+
+	bool TestMatchChatOpeningText(std::string* error) {
+		NetMatchService::Construct();
+		struct Restore {
+			~Restore() { g_UInputMan.DisableKeys(false); g_UInputMan.TypeIntoSeatInput(false); g_UInputMan.EndFrame(); g_UInputMan.EndSimUpdate(); NetMatchService::Destruct(); }
+		} restore;
+		AllegroScreen screen(g_FrameMan.GetBackBuffer32());
+		NetModerationGUI panel(&screen);
+		panel.m_ChatInMatch = true;
+		NetLobbySnapshot snapshot;
+		SDL_Event key{};
+		key.type = SDL_EVENT_KEY_DOWN; key.key.scancode = SDL_SCANCODE_T; key.key.key = SDLK_T; key.key.down = true;
+		g_UInputMan.HandleInputEvent(key);
+		SDL_Event text{};
+		text.type = SDL_EVENT_TEXT_INPUT; text.text.text = "t";
+		g_UInputMan.HandleInputEvent(text);
+		g_UInputMan.Update(false);
+		panel.UpdateMatchChat(snapshot, false);
+		panel.DrawMatchChat(snapshot);
+		g_UInputMan.EndFrame();
+		key.type = SDL_EVENT_KEY_UP; key.key.down = false;
+		g_UInputMan.HandleInputEvent(key);
+		panel.UpdateMatchChat(snapshot, false);
+		panel.DrawMatchChat(snapshot);
+		g_UInputMan.EndFrame();
+		if (!panel.IsChatEntryOpen() || !panel.m_MatchChatInput || !panel.m_MatchChatInput->GetText().empty()) {
+			*error = "the key that opened match chat leaked into its draft"; return false;
+		}
+		text.text.text = "thanks";
+		g_UInputMan.HandleInputEvent(text);
+		panel.UpdateMatchChat(snapshot, false);
+		panel.DrawMatchChat(snapshot);
+		g_UInputMan.EndFrame();
+		if (panel.m_MatchChatInput->GetText() != "thanks") {
+			*error = "suppressing the opening key also swallowed the player's next typed letter"; return false;
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS chat_opening_key_is_not_text_and_next_text_is_preserved");
+		return true;
+	}
+
+	bool TestLobbyChatReturn(std::string* error) {
+		LoopbackTransport wire;
+		NetMatchService::Construct();
+		struct Restore {
+			~Restore() { GUIInputWrapper::SetAutomationDriving(false); SetPanelDrawRecording(false); g_UInputMan.EndFrame(); g_UInputMan.EndSimUpdate(); NetMatchService::Destruct(); }
+		} restore;
+		g_NetMatchService.m_State = NetMatchServiceState::Starting;
+		g_NetMatchService.m_IsHost = true;
+		g_NetMatchService.m_Session = std::make_unique<NetSession>();
+		NetSessionConfig config;
+		config.readyWithoutPeers = true;
+		if (!g_NetMatchService.m_Session->StartHost(wire, config, error)) return false;
+		g_NetMatchService.m_ChatSession = g_NetMatchService.m_Session.get();
+		GUIInputWrapper::SetAutomationDriving(true);
+		SetPanelDrawRecording(true);
+		AllegroScreen screen(g_FrameMan.GetBackBuffer32());
+		GUIInputWrapper input(-1, true);
+		MainMenuGUI menu(&screen, &input);
+		menu.SetActiveMenuScreen(MainMenuGUI::MenuScreen::MultiplayerScreen, false);
+		const auto frame = [&] {
+			SDL_Event event{};
+			while (SDL_PollEvent(&event)) g_UInputMan.HandleInputEvent(event);
+			g_UInputMan.Update(false);
+			menu.Update(); menu.Draw();
+			MenuAutomation::AfterDrawnFrame();
+			g_UInputMan.EndFrame(); g_UInputMan.EndSimUpdate();
+		};
+		std::string observation;
+		const auto finishHand = [&] {
+			for (int frames = 0; frames < 90 && MenuAutomation::HandBusy(); ++frames) frame();
+			bool passed = false;
+			return MenuAutomation::HandFinished(passed, observation) && passed;
+		};
+		frame();
+		for (const auto& key: {std::string("Return"), std::string("Keypad Enter")}) {
+			const std::string line = "Lobby hello " + key;
+			if (!MenuAutomation::HandType(menu.AutomationManager(), "TextLobbyChat", line, false, observation) || !finishHand() ||
+			    menu.m_MultiplayerLobbyChatInput->GetText() != line || !menu.m_MultiplayerLobbyChatInput->HasFocus()) {
+				*error = "the lobby chat hand failed to type and focus its drawn box: " + observation; return false;
+			}
+			if (!MenuAutomation::HandGameKey(key, [&] { return menu.m_LobbyChatRequestId != 0; }, "focused lobby chat submission", observation) || !finishHand()) {
+				*error = "a delivered " + key + " event did not submit the focused lobby chat: " + observation; return false;
+			}
+			g_NetMatchService.m_Session->Tick(1000);
+			frame();
+			const auto history = g_NetMatchService.ChatHistory();
+			if (menu.m_LobbyChatRequestId || !menu.m_MultiplayerLobbyChatInput->GetText().empty() ||
+			    std::count_if(history.begin(), history.end(), [&](const NetChatEntry& entry) { return entry.text == line; }) != 1) {
+				*error = "lobby Return lost or duplicated the message, or failed to clear the receipted draft"; return false;
+			}
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS focused_lobby_return_and_keypad_enter_submit_once");
+		return true;
+	}
+
 	int NetMatchSelfTest::Run() {
+		DirectConnectionScope direct;
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
 			return 1;
@@ -17363,9 +18573,36 @@ namespace RTE {
 		if (const char* selected = std::getenv("CCCP_TEST_MATCH_CASE")) {
 			const std::string name(selected);
 			bool passed = false;
-			if (name == "state-delivery") passed = TestLobbyStartWaitsForReceivedState(&error);
+			if (name == "ui-presentation") passed = TestInMatchPresentation(&error);
+			else if (name == "pause-navigation") passed = TestPauseNavigationDuringRecovery(&error);
+			else if (name == "ticket-recovery") passed = TestInternetTicketRecovery(&error);
+			else if (name == "placement-confirm") passed = GameActivity::RunSetupEditorSelfTest(true);
+			else if (name == "data-root") passed = TestDataRootDiscovery(&error);
+			else if (name == "chat-opening") passed = TestMatchChatOpeningText(&error);
+			else if (name == "lobby-return") passed = TestLobbyChatReturn(&error);
+			else if (name == "setup-editor") passed = GameActivity::RunSetupEditorSelfTest();
+			else if (name == "chat-receipts") passed = TestChatReceipts<NetSession>(&error);
+			else if (name == "chat-routing") passed = TestChatRoutingAndBounds(&error);
+			else if (name == "state-delivery") passed = TestLobbyStartWaitsForReceivedState(&error);
 			else if (name == "state-receipts") passed = TestLobbyStateReceiptsAreBoundAndRepeated(&error);
 			else if (name == "joining-lobby") passed = TestAJoiningLobbyWaitsForHostConfig(&error);
+			else if (name == "lobby-idle") passed = TestMenuLobbyWaitsForALiveHost(&error);
+			else if (name == "full-knock") passed = TestAFullMatchsKnockEndsAtTheBudget(&error);
+			else if (name == "relay-core") {
+				// RunBeforeInitialization already checked settings and candidate policy,
+				// before the global SettingsMan singleton was constructed.
+				passed = TestWrittenConfigsHoldNoRelayLogin(&error) && TestTheReportListsEveryConnection(&error) &&
+				         TestConnectedRouteEvidence(&error) && TestRelayOfferRefresh(&error) &&
+				         TestLobbyRelayAdoption(&error) && TestInternetTicketRecovery(&error) && TestSessionIdJoinRefusals(&error);
+			}
+			else if (name == "relay-join-fix") {
+				std::string joinError, dismissError, heldError;
+				const bool joins = TestAnEmptyLobbyAdmitsLaterJoiners(&joinError);
+				const bool dismisses = TestDismissedRejoinStaysDismissed(&dismissError);
+				const bool held = TestInitialLobbyStartsWithHeldSeats(&heldError);
+				passed = joins && dismisses && held;
+				error = joinError + "; " + dismissError + "; " + heldError;
+			}
 			else if (name == "lobby-stability") {
 				passed = true;
 				const auto check = [&](bool (*test)(std::string*), const char* label) {
@@ -17401,6 +18638,8 @@ namespace RTE {
 		row(&TestMenuLobbyWaitsForALiveHost, "live_menu_lobby_outlasts_ten_minutes");
 		row(&TestLobbyTimeoutDoesNotClaimHostDeparture, "a_seat_timeout_is_not_host_departure");
 		row(&TestInitialLobbyStartsWithHeldSeats, "first_start_keeps_four_seats_with_absent_owners");
+		row(&TestAnEmptyLobbyAdmitsLaterJoiners, "empty_manual_lobby_admits_three_later_joiners");
+		row(&TestDismissedRejoinStaysDismissed, "dismissed_rejoin_survives_relaunch_and_keeps_the_ticket");
 		row(&TestSessionIdJoinRefusals, "rejoin_end_requires_host_evidence");
 		row(&TestIceConnectingLine, "direct_fallback_attempt_clock");
 		row(&TestReplayStorageDoesNotBlockTicks, "replay_storage_does_not_block_ticks");
@@ -17408,6 +18647,8 @@ namespace RTE {
 		row(&TestAHostMappingOutlastsItsPendingIdentity, "a_host_mapping_outlasts_its_pending_identity");
 		row(&TestAHostWithNoRouterReadsNoRouterMapping, "a_host_with_no_router_reads_no_router_mapping");
 		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");
+		row(&TestInMatchPresentation, "in_match_presentation_results_teams_causes_and_chat");
+		row(&TestChatReceipts<NetSession>, "chat_send_receipts");
 		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
 		row(&RunCrossRosterSelfTest, "cross_mixed_roster_preserves_seats_and_cpu_rules");
 		row(&RunCrossEndSignalSelfTest, "forced_end_phase_signal_requires_sender_round_incarnation_and_id");

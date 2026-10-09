@@ -9663,6 +9663,42 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = exact && checkpointValues;
 	}
 	{
+		const int result = RunScriptString(R"lua(
+local script = assert(loadfile("Base.rte/Scenes/Objects/Bunkers/BunkerSystems/ActorSpawner/ActorSpawner.lua"))
+local constructed = 0
+local environment = setmetatable({
+	ActivityMan = { GetActivity = function() return {} end },
+	ToGameActivity = function(activity) return activity end,
+	SceneMan = { Scene = {} },
+	Timer = function() return {} end,
+	require = function() return { Initialize = function() end } end,
+	CreateAHuman = function(preset, tech)
+		assert(preset == "Green Dummy" and tech == "Base.rte", "the spawner lost its class or tech")
+		constructed = constructed + 1
+		return {}
+	end
+}, { __index = _G })
+environment._G = environment
+setfenv(script, environment)()
+local values = { ActorPresetName = "Green Dummy", ActorClassName = "AHuman", ActorTechName = "Base.rte", SpawnType = "Specific", AIMode = "SENTRY" }
+local spawner = {
+	Pos = Vector(12, 24), Team = Activity.TEAM_1,
+	StringValueExists = function(_, key) return type(values[key]) == "string" end,
+	NumberValueExists = function() return false end,
+	GetStringValue = function(_, key) return values[key] or "" end,
+	GetNumberValue = function() return 0 end,
+	SetNumberValue = function() end,
+	RemoveNumberValue = function() end
+}
+environment.Create(spawner)
+assert(constructed == 1 and spawner.specificActorClassName == "AHuman" and spawner.specificActorTechName == "Base.rte")
+assert(spawner.nextActor.Team == spawner.Team and spawner.nextActor.Pos == spawner.Pos and spawner.nextActor.AIMode == Actor.AIMODE_SENTRY)
+)lua");
+		const bool passed = result == 0;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " actor_spawner_keeps_class_and_tech result=" << result << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
 		lua_State* first = luaL_newstate();
 		lua_State* second = luaL_newstate();
 		const auto sharedBirth = [](lua_State* state, int localCount) {
@@ -10005,6 +10041,48 @@ assert(({_ScriptGraphNative(CheckpointEndedZone)})[1] == "invalid", "the restore
 		lua_gc(m_State, LUA_GCCOLLECT, 0);
 		const bool passed = held && !scriptClass.empty() && !remapped && freezeClass == scriptClass;
 		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_preview_never_reads_an_object_its_script_outlived held=" << held << " remapped=" << remapped << " frozen_as=" << freezeClass << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+
+	{
+		// A round's start capture can see its activity before the manager installs it.
+		LuaStateWrapper probeState;
+		probeState.Initialize();
+		probeState.CaptureScriptGraphBaseline();
+		std::unique_ptr<Activity> activity = std::make_unique<GameActivity>();
+		luabind::object(probeState.GetLuaState(), static_cast<GameActivity*>(activity.get())).push(probeState.GetLuaState());
+		lua_setglobal(probeState.GetLuaState(), "_ScriptGraphActivityProbe");
+		const bool planted = probeState.RunScriptString(R"lua(
+package.loaded._CheckpointActivityModule = { Activity = _ScriptGraphActivityProbe, count = 7 }
+_ScriptGraphActivityProbe = nil
+)lua") == 0;
+		CheckpointText before, after;
+		std::vector<std::string> problems;
+		const bool first = planted && probeState.CaptureScriptGraph(before, problems, true);
+		if (first) (void)before.Text();
+		probeState.WaitFrozenCopy();
+		g_ActivityMan.SwapCheckpointActivity(activity);
+		const bool second = first && probeState.CaptureScriptGraph(after, problems, true);
+		std::string restoreError;
+		bool restored = false;
+		if (second) {
+			const std::string text = after.Text();
+			probeState.WaitFrozenCopy();
+			probeState.RunScriptString("package.loaded._CheckpointActivityModule = nil");
+			std::vector<std::string> restoreProblems;
+			restored = probeState.RestoreScriptGraph(text, restoreProblems) && probeState.RunScriptString(R"lua(
+assert(package.loaded._CheckpointActivityModule.count == 7)
+assert(_ScriptGraphNativeAddress(package.loaded._CheckpointActivityModule.Activity) == _ScriptGraphNativeAddress(ActivityMan:GetActivity()))
+)lua") == 0;
+			if (!restoreProblems.empty()) restoreError = restoreProblems.front();
+		}
+		g_ActivityMan.SwapCheckpointActivity(activity);
+		probeState.RunScriptString("package.loaded._CheckpointActivityModule = nil");
+		const bool passed = first && second && restored;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL")
+		          << " cached_activity_reference_follows_world_role first=" << first << " second=" << second
+		          << " restored=" << restored << " error=" << restoreError << std::endl;
+		for (const auto& problem: problems) std::cout << "[script-graph-selftest] activity probe: " << problem << std::endl;
 		checkpointValues = passed && checkpointValues;
 	}
 

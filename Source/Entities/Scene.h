@@ -743,6 +743,10 @@ namespace RTE {
 		/// @return A shared pointer to the volatile PathRequest to be used to track whehter the asynchrnous path calculation has been completed, and check its results.
 		std::shared_ptr<volatile PathRequest> CalculatePathAsync(const Vector& start, const Vector& end, float jumpHeight = FLT_MAX, float digStrength = c_PathFindingDefaultDigStrength, Activity::Teams team = Activity::Teams::NoTeam, PathCompleteCallback callback = nullptr);
 
+		/// Calculates a local editor path using the same terrain view and solver as CalculatePathAsync.
+		/// Completes on the worker without waiting for a future lockstep tick, which a placement release may be blocking.
+		std::shared_ptr<volatile PathRequest> CalculatePathAsyncForEditor(const Vector& start, const Vector& end, float jumpHeight = FLT_MAX, float digStrength = c_PathFindingDefaultDigStrength, Activity::Teams team = Activity::Teams::NoTeam, PathCompleteCallback callback = nullptr);
+
 		/// Records a terrain material change for the committed-horizon path grid.
 		struct HorizonTerrainBox {
 			Box box;

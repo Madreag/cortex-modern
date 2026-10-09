@@ -87,7 +87,7 @@ namespace RTE {
 		uint32_t admissionMessages = 0; //!< H4 admission messages handed to the reconnect plane.
 		uint32_t oldWireRejectionsSent = 0; //!< Host: explicit rejections stamped at the peer's own header version (§10).
 		uint32_t oldWireDisconnects = 0; //!< Host: old-wire peers whose version we cannot answer in, disconnected with the reason text.
-		uint32_t pendingAdmissionJoins = 0; //!< Host: mid-match joiners admitted on a provisional id to prove a ticket on (§6).
+		uint32_t pendingAdmissionJoins = 0; //!< Host: seat claims authenticated on a provisional id.
 		uint32_t moduleDigestRequestsSent = 0; //!< Digest exchanges opened on a module-manifest refusal, so the refusal can name the modules.
 		uint32_t moduleDigestsSent = 0;
 		uint32_t moduleDigestsReceived = 0;
@@ -102,12 +102,19 @@ namespace RTE {
 
 	/// One presentation-queue line. Chat is never a sim command and never enters a tick hash, so it
 	/// lives in this bounded queue the UI drains instead of any command stream.
+	enum class NetChatSendState { Unknown, Queued, Sent, Refused };
+	struct NetChatSendResult {
+		NetChatSendState state = NetChatSendState::Unknown;
+		std::string detail;
+	};
+
 	struct NetChatEntry {
 		uint64_t receivedTick = 0; //!< The lockstep frame current when it arrived (lobby phase: 0).
 		uint8_t senderPeerId = 0; //!< Session-assigned id of the author; the host's own seat is 0.
 		std::string senderName; //!< Filled when this session knows the name; the UI resolves the rest.
 		uint8_t scope = c_NetChatScopeAll;
 		std::string text;
+		uint64_t historyId = 0; //!< Local presentation identity: distinguishes repeated lines during a paused tick.
 	};
 
 	// A connected peer as seen by the match runner: its transport id and session-assigned id.
@@ -123,8 +130,7 @@ namespace RTE {
 		// Twice the peer cap, so a full lobby plus a reconnect attempt per seat all fit while an
 		// unauthenticated connection still cannot make the host track an unbounded number of them.
 		static constexpr uint32_t c_MaxUnauthenticatedPeers = 8;
-		// §6: a ticket holder can arrive while the incarnation it supersedes still holds the seat's peer
-		// id, so a live match keeps this many ids past the peer cap for joiners that have yet to prove.
+		// Pending claims use ids outside the player range until admission commits a seat.
 		static constexpr uint8_t c_MaxPendingAdmissions = 4;
 
 		bool StartHost(INetTransport& transport, NetSessionConfig config, std::string* error = nullptr);
@@ -156,7 +162,7 @@ namespace RTE {
 			return "Unknown";
 		}
 		void SetRejoinPhase(RejoinPhase phase) {
-			m_RejoinPhase = phase;
+			if (m_RejoinPhase.exchange(phase) != phase) m_RejoinPhaseChanged = true;
 			m_AdmissionSuspended = SuspendsSilence(phase);
 		}
 		RejoinPhase GetRejoinPhase() const { return m_RejoinPhase; }
@@ -185,6 +191,7 @@ namespace RTE {
 		void DisconnectReadyPeer(NetPeerId peerId, NetRejectReason reason, const std::string& message);
 		/// Refuses every connection still in its handshake with the message, without ending the host's session.
 		void DisconnectJoiningPeers(NetRejectReason reason, const std::string& message);
+		void DisconnectJoiningPeer(NetPeerId peerId, NetRejectReason reason, const std::string& message);
 		/// Host: how many connections are still in their handshake. A rejoin that has reached us but not yet
 		/// been admitted lives here, and the goodbye drain must see it arrive.
 		uint32_t GetHandshakingPeerCount() const;
@@ -230,8 +237,9 @@ namespace RTE {
 		/// it never becomes a lockstep command and no part of it reaches a tick hash. The host's
 		/// line relays to every Ready peer; a client's line goes to the host, which relays it.
 		/// @return false when the line was refused outright (bad scope, oversize, malformed text, or
-		/// a full outbox); a queued line can still be rate-dropped at the pump - the counters tell.
-		bool SendChat(uint8_t scope, const std::string& text);
+		/// a full outbox). With requestId, ChatSendResult reports later link, rate and transport refusal.
+		bool SendChat(uint8_t scope, const std::string& text, uint64_t* requestId = nullptr);
+		NetChatSendResult ChatSendResult(uint64_t requestId) const;
 		/// Drains the bounded presentation queue (newest 64 kept). Safe from the UI thread while the
 		/// runner worker owns the transport pump.
 		std::vector<NetChatEntry> TakeChatEntries();
@@ -273,6 +281,7 @@ namespace RTE {
 		const std::string& GetRejectSummary() const { return m_RejectSummary; }
 		/// Host: the display name the last refused connection joined with, so the host's notice can say who.
 		const std::string& GetRefusedPlayerName() const { return m_RefusedPlayerName; }
+		const std::string& GetLobbyNotice() const { return m_LobbyNotice; }
 		const NetSessionStats& GetStats() const { return m_Stats; }
 		/// The number of connections the host is tracking that have not yet passed a ClientHello.
 		uint32_t GetUnauthenticatedPeerCount() const;
@@ -294,6 +303,7 @@ namespace RTE {
 		static const char* StateName(NetSessionState state);
 
 	private:
+		friend bool TestLobbyDepartureNotice(std::string* error);
 		uint8_t m_HostAssignedPeerId = 0;
 		struct PeerState {
 			NetPeerId transportPeerId = c_InvalidNetPeerId;
@@ -325,6 +335,7 @@ namespace RTE {
 		void MaybeSendHeartbeats();
 		void RepeatUnansweredHello();
 		void ProcessEvent(const NetTransportEvent& event);
+		void MarkPeerReady(PeerState& peer);
 		void ProcessPacket(NetPeerId peerId, const std::vector<uint8_t>& bytes);
 		void HandleMalformed(NetPeerId peerId, const NetProtocolError& decodeError, const std::vector<uint8_t>& bytes);
 		/// Host: answers a peer whose header version we do not speak, explicitly when the envelope
@@ -347,8 +358,7 @@ namespace RTE {
 		/// round, so its receive clock is stale by design and the heartbeat check would evict it.
 		void ExpireSilentHandshakes();
 		uint8_t AllocatePeerId() const;
-		/// An id past the peer cap for a mid-match joiner to run its admission transaction on; a commit
-		/// replaces it with the seat's own id. Zero outside a live match, or when the range is full.
+		/// An id outside the player range for a seat claim; a commit replaces it with the seat's own id.
 		uint8_t AllocatePendingAdmissionPeerId() const;
 		/// Host: closes a peer's transport ourselves. The admission plane only ever hears about a drop
 		/// through the transport's own event, so a peer we hang up on must be handed to it here or its
@@ -410,7 +420,8 @@ namespace RTE {
 		// A worker thread evaluates silence while the game thread declares the park, so these cross threads.
 		std::atomic<bool> m_PumpParked{false};
 		std::atomic<RejoinPhase> m_RejoinPhase{RejoinPhase::Active};
-		RejoinPhase m_CeilingPhase = RejoinPhase::Active; //!< The phase the ceiling clock is timing, read on the session's own thread.
+		std::atomic<bool> m_RejoinPhaseChanged{false}; //!< Keeps phase transitions until the session resumes ticking.
+		RejoinPhase m_CeilingPhase = RejoinPhase::Active; //!< The phase timed on the session's own thread.
 		uint64_t m_CeilingPhaseSinceMs = 0;
 		std::atomic<bool> m_AdmissionSuspended{false};
 		std::atomic<bool> m_SilenceSuspended{false};
@@ -426,6 +437,7 @@ namespace RTE {
 		std::string m_ExpectedValue;
 		std::string m_ActualValue;
 		std::string m_RejectSummary;
+		std::string m_LobbyNotice;
 		mutable std::string m_PlacedJoinerHash; //!< The refused joiner's config hash last placed against this build's versions.
 		mutable int m_PlacedJoinerOrder = 0; //!< Negative when that joiner's game is older, positive when newer, zero when unplaced.
 		std::string m_RefusedPlayerName;
@@ -455,9 +467,13 @@ namespace RTE {
 		struct NetChatOutbound {
 			uint8_t scope;
 			std::string text;
+			uint64_t requestId = 0;
 		};
 		mutable std::mutex m_ChatMutex;
 		std::deque<NetChatOutbound> m_ChatOutbox;
+		uint64_t m_NextChatRequestId = 1;
+		uint64_t m_NextChatHistoryId = 1;
+		std::map<uint64_t, NetChatSendResult> m_ChatSendResults;
 		std::deque<NetChatEntry> m_ChatLog;
 		std::deque<NetChatEntry> m_ChatHistory;
 		std::map<uint8_t, int> m_ChatTeams;

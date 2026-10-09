@@ -9,6 +9,8 @@
 #include "GUIRadioButton.h"
 #include "GUILabel.h"
 
+#include <algorithm>
+
 using namespace RTE;
 
 SettingsInputGUI::SettingsInputGUI(GUIControlManager* parentControlManager) :
@@ -27,6 +29,7 @@ SettingsInputGUI::SettingsInputGUI(GUIControlManager* parentControlManager) :
 
 		m_PlayerInputSettingsBoxes[player].SensitivityLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelP" + playerNum + "Sensitivity"));
 		m_PlayerInputSettingsBoxes[player].SensitivitySlider = dynamic_cast<GUISlider*>(m_GUIControlManager->GetControl("SliderP" + playerNum + "Sensitivity"));
+		m_PlayerInputSettingsBoxes[player].SensitivitySliderWidth = m_PlayerInputSettingsBoxes[player].SensitivitySlider->GetWidth();
 
 		m_PlayerInputSettingsBoxes[player].DeadZoneControlsBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxP" + playerNum + "DeadzoneControls"));
 		m_PlayerInputSettingsBoxes[player].CircleDeadZoneRadioButton = dynamic_cast<GUIRadioButton*>(m_GUIControlManager->GetControl("RadioP" + playerNum + "DeadzoneCircle"));
@@ -143,6 +146,7 @@ void SettingsInputGUI::UpdatePlayerSelectedDeviceLabel(int player) {
 void SettingsInputGUI::ShowOrHidePlayerInputDeviceSensitivityControls(int player) {
 	m_PlayerInputSettingsBoxes.at(player).SensitivityLabel->SetVisible(false);
 	m_PlayerInputSettingsBoxes.at(player).SensitivitySlider->SetVisible(false);
+	m_PlayerInputSettingsBoxes.at(player).SensitivitySlider->Resize(m_PlayerInputSettingsBoxes.at(player).SensitivitySliderWidth, m_PlayerInputSettingsBoxes.at(player).SensitivitySlider->GetHeight());
 	m_PlayerInputSettingsBoxes.at(player).DeadZoneControlsBox->SetVisible(false);
 
 	switch (g_UInputMan.GetControlScheme(player)->GetDevice()) {
@@ -159,6 +163,11 @@ void SettingsInputGUI::ShowOrHidePlayerInputDeviceSensitivityControls(int player
 		case InputDevice::DEVICE_GAMEPAD_2:
 		case InputDevice::DEVICE_GAMEPAD_3:
 		case InputDevice::DEVICE_GAMEPAD_4:
+			// Leave the deadzone type controls room in both the main and pause menus.
+			m_PlayerInputSettingsBoxes.at(player).SensitivitySlider->Resize(
+				std::min(m_PlayerInputSettingsBoxes.at(player).SensitivitySliderWidth,
+					std::max(1, m_PlayerInputSettingsBoxes.at(player).DeadZoneControlsBox->GetRelXPos() - m_PlayerInputSettingsBoxes.at(player).SensitivitySlider->GetRelXPos() - 8)),
+				m_PlayerInputSettingsBoxes.at(player).SensitivitySlider->GetHeight());
 			m_PlayerInputSettingsBoxes.at(player).SensitivityLabel->SetVisible(true);
 			m_PlayerInputSettingsBoxes.at(player).SensitivitySlider->SetVisible(true);
 			m_PlayerInputSettingsBoxes.at(player).SensitivitySlider->SetMaximum(85);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <bit>
 #include <map>
 #include <optional>
 #include <array>
@@ -35,6 +36,8 @@ namespace RTE {
 		SeatReclaim = 20,
 		Checkpoint = 21,
 		SeatRelease = 22,
+		EditorPlacement = 23,
+		HostAuthority = 24,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -317,8 +320,26 @@ namespace RTE {
 		std::string className;
 		std::string preset;
 		std::string module;
+		bool hFlipped = false;
+		std::vector<std::array<std::string, 3>> addedInventory;
 
 		bool operator==(const NetGamePlaceBrain&) const = default;
+	};
+
+	// A setup-editor purchase. The local preview never spends shared funds or enters the world.
+	struct NetGameEditorPlacement {
+		int32_t team = 0;
+		int32_t player = -1;
+		float posX = 0.0F, posY = 0.0F;
+		std::string className, preset, module;
+		std::string nativeTechModule;
+		float foreignCostMult = 1.0F;
+		bool hFlipped = false;
+		int64_t recipientUID = 0;
+		bool equipResidentBrain = false;
+		std::string brainClassName, brainPreset, brainModule;
+
+		bool operator==(const NetGameEditorPlacement&) const = default;
 	};
 
 	// Host-authored membership, spawn and binding for one announced tick.
@@ -408,7 +429,20 @@ namespace RTE {
 		bool operator==(const NetGameSeatRelease&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain, NetGameWorldTransition, NetGameSeatHold, NetGameInputDelay, NetGameSeatReclaim, NetGameCheckpoint, NetGameSeatRelease>;
+	/// The agreed handover event at the first tick of the successor's input stream.
+	struct NetGameHostAuthority {
+		uint8_t formerPeerId = 0, peerId = 0;
+		uint64_t generation = 0, applyFrame = 0;
+		uint32_t electorate = 0, voters = 0, members = 0;
+		bool IsValid() const {
+			return formerPeerId > 0 && formerPeerId <= 4 && peerId > 0 && peerId <= 4 && formerPeerId != peerId &&
+			    generation != 0 && applyFrame != 0 && electorate != 0 && (electorate & ~0xFU) == 0 && (voters & ~electorate) == 0 &&
+			    (members & ~voters) == 0 && (members & (1u << (peerId - 1))) != 0 && 2 * std::popcount(voters) > std::popcount(electorate);
+		}
+		bool operator==(const NetGameHostAuthority&) const = default;
+	};
+
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain, NetGameWorldTransition, NetGameSeatHold, NetGameInputDelay, NetGameSeatReclaim, NetGameCheckpoint, NetGameSeatRelease, NetGameEditorPlacement, NetGameHostAuthority>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;

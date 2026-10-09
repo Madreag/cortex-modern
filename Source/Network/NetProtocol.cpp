@@ -439,10 +439,11 @@ namespace RTE {
 			AppendU16LE(out, payload.h4Version);
 			AppendBytes(out, payload.txId);
 			return AppendH4Identity(out, payload.identity, error) &&
-			       AppendName(out, payload.displayName, "display_name", error);
+			       AppendName(out, payload.displayName, "display_name", error) &&
+			       AppendString(out, payload.directorySessionId, 64, "directory_session", error);
 		}
 
-		bool EncodePayload(const NetH4TicketOffer& payload, std::vector<uint8_t>& out, NetProtocolError*) {
+		bool EncodePayload(const NetH4TicketOffer& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
 			AppendU16LE(out, payload.h4Version);
 			AppendBytes(out, payload.txId);
 			AppendBytes(out, payload.epoch);
@@ -451,7 +452,8 @@ namespace RTE {
 			AppendBytes(out, payload.credential);
 			AppendU64LE(out, payload.hostSessionId);
 			AppendU32LE(out, payload.provisionalExpiryMs);
-			return true;
+			AppendBytes(out, payload.authorityKey);
+			return AppendString(out, payload.seatToken, 512, "seat_token", error);
 		}
 
 		bool EncodePayload(const NetH4TicketStoredAck& payload, std::vector<uint8_t>& out, NetProtocolError*) {
@@ -480,7 +482,8 @@ namespace RTE {
 			AppendU16LE(out, payload.stableSeat);
 			AppendU32LE(out, payload.holderGeneration);
 			return AppendH4Identity(out, payload.identity, error) &&
-			       AppendName(out, payload.displayName, "display_name", error);
+			       AppendName(out, payload.displayName, "display_name", error) &&
+			       AppendString(out, payload.seatToken, 512, "seat_token", error);
 		}
 
 		bool EncodePayload(const NetH4Challenge& payload, std::vector<uint8_t>& out, NetProtocolError*) {
@@ -525,7 +528,8 @@ namespace RTE {
 			AppendBytes(out, payload.txId);
 			AppendU16LE(out, payload.stableSeat);
 			return AppendH4Identity(out, payload.identity, error) &&
-			       AppendName(out, payload.displayName, "display_name", error);
+			       AppendName(out, payload.displayName, "display_name", error) &&
+			       AppendString(out, payload.directorySessionId, 64, "directory_session", error);
 		}
 
 		bool EncodePayload(const NetH4ApplicantAck& payload, std::vector<uint8_t>& out, NetProtocolError*) {
@@ -536,7 +540,7 @@ namespace RTE {
 			return true;
 		}
 
-		bool EncodePayload(const NetH4SubstitutionOffer& payload, std::vector<uint8_t>& out, NetProtocolError*) {
+		bool EncodePayload(const NetH4SubstitutionOffer& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
 			AppendU16LE(out, payload.h4Version);
 			AppendBytes(out, payload.txId);
 			AppendBytes(out, payload.epoch);
@@ -546,7 +550,8 @@ namespace RTE {
 			AppendBytes(out, payload.challenge);
 			AppendU64LE(out, payload.hostSessionId);
 			AppendU32LE(out, payload.provisionalExpiryMs);
-			return true;
+			AppendBytes(out, payload.authorityKey);
+			return AppendString(out, payload.seatToken, 512, "seat_token", error);
 		}
 
 		bool EncodePayload(const NetH4SubstitutionAck& payload, std::vector<uint8_t>& out, NetProtocolError*) {
@@ -676,6 +681,12 @@ namespace RTE {
 			AppendU16LE(out, payload.h4Version);
 			AppendU32LE(out, payload.revision);
 			return true;
+		}
+
+		bool EncodePayload(const NetH4ConnectionLease& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
+			AppendU16LE(out, payload.h4Version);
+			AppendBytes(out, payload.authorityKey);
+			return AppendString(out, payload.seatToken, 512, "seat_token", error);
 		}
 
 		bool EncodePayload(const NetParticipantProof& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
@@ -927,7 +938,8 @@ namespace RTE {
 			return ReadH4Version(reader, payload.h4Version, error) &&
 			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
 			       ReadH4Identity(reader, payload.identity, error) &&
-			       reader.ReadName(payload.displayName, "display_name", error);
+			       reader.ReadName(payload.displayName, "display_name", error) &&
+			       reader.ReadString(payload.directorySessionId, 64, "directory_session", error);
 		}
 
 		bool DecodePayload(ByteReader& reader, NetH4TicketOffer& payload, NetProtocolError* error) {
@@ -938,7 +950,9 @@ namespace RTE {
 			       ReadH4HolderGeneration(reader, payload.holderGeneration, error) &&
 			       ReadOrTruncated(reader.ReadBytes(payload.credential), reader, error, "credential") &&
 			       ReadOrTruncated(reader.ReadU64LE(payload.hostSessionId), reader, error, "host_session_id") &&
-			       ReadOrTruncated(reader.ReadU32LE(payload.provisionalExpiryMs), reader, error, "provisional_expiry_ms");
+			       ReadOrTruncated(reader.ReadU32LE(payload.provisionalExpiryMs), reader, error, "provisional_expiry_ms") &&
+			       ReadOrTruncated(reader.ReadBytes(payload.authorityKey), reader, error, "authority_key") &&
+			       reader.ReadString(payload.seatToken, 512, "seat_token", error);
 		}
 
 		bool DecodePayload(ByteReader& reader, NetH4TicketStoredAck& payload, NetProtocolError* error) {
@@ -974,7 +988,8 @@ namespace RTE {
 			       ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") &&
 			       ReadH4HolderGeneration(reader, payload.holderGeneration, error) &&
 			       ReadH4Identity(reader, payload.identity, error) &&
-			       reader.ReadName(payload.displayName, "display_name", error);
+			       reader.ReadName(payload.displayName, "display_name", error) &&
+			       reader.ReadString(payload.seatToken, 512, "seat_token", error);
 		}
 
 		bool DecodePayload(ByteReader& reader, NetH4Challenge& payload, NetProtocolError* error) {
@@ -1016,7 +1031,8 @@ namespace RTE {
 			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
 			       ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") &&
 			       ReadH4Identity(reader, payload.identity, error) &&
-			       reader.ReadName(payload.displayName, "display_name", error);
+			       reader.ReadName(payload.displayName, "display_name", error) &&
+			       reader.ReadString(payload.directorySessionId, 64, "directory_session", error);
 		}
 
 		bool DecodePayload(ByteReader& reader, NetH4ApplicantAck& payload, NetProtocolError* error) {
@@ -1035,7 +1051,9 @@ namespace RTE {
 			       ReadOrTruncated(reader.ReadBytes(payload.credential), reader, error, "credential") &&
 			       ReadOrTruncated(reader.ReadBytes(payload.challenge), reader, error, "challenge") &&
 			       ReadOrTruncated(reader.ReadU64LE(payload.hostSessionId), reader, error, "host_session_id") &&
-			       ReadOrTruncated(reader.ReadU32LE(payload.provisionalExpiryMs), reader, error, "provisional_expiry_ms");
+			       ReadOrTruncated(reader.ReadU32LE(payload.provisionalExpiryMs), reader, error, "provisional_expiry_ms") &&
+			       ReadOrTruncated(reader.ReadBytes(payload.authorityKey), reader, error, "authority_key") &&
+			       reader.ReadString(payload.seatToken, 512, "seat_token", error);
 		}
 
 		bool DecodePayload(ByteReader& reader, NetH4SubstitutionAck& payload, NetProtocolError* error) {
@@ -1209,6 +1227,12 @@ namespace RTE {
 			return true;
 		}
 
+		bool DecodePayload(ByteReader& reader, NetH4ConnectionLease& payload, NetProtocolError* error) {
+			return ReadH4Version(reader, payload.h4Version, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.authorityKey), reader, error, "authority_key") &&
+			       reader.ReadString(payload.seatToken, 512, "seat_token", error);
+		}
+
 		bool DecodePayload(ByteReader& reader, NetH4RosterRevision& payload, NetProtocolError* error) {
 			uint16_t size = 0;
 			if (!ReadH4Version(reader, payload.h4Version, error) || !ReadOrTruncated(reader.ReadU16LE(size), reader, error, "roster_size")) {
@@ -1259,6 +1283,7 @@ namespace RTE {
 			case NetMessageType::ParticipantRemoval:
 			case NetMessageType::RosterRevision:
 			case NetMessageType::RosterRevisionRequest:
+			case NetMessageType::ConnectionLease:
 				return true;
 			default:
 				return false;
@@ -1270,6 +1295,7 @@ namespace RTE {
 	}
 
 	bool NetProtocol::IsMessageTypeInVersion(NetMessageType type, uint16_t headerVersion) {
+		if (type == NetMessageType::ConnectionLease) return headerVersion == c_Version;
 		if (headerVersion == 1) {
 			return !IsModuleDigestMessageType(type) && type != NetMessageType::Chat && type != NetMessageType::ParticipantRemoval &&
 			       type != NetMessageType::ParticipantChallenge && type != NetMessageType::ParticipantProof;
@@ -1283,7 +1309,7 @@ namespace RTE {
 		if (headerVersion == 3 || headerVersion == 4) {
 			return type != NetMessageType::RosterRevision && type != NetMessageType::RosterRevisionRequest;
 		}
-		return headerVersion == c_Version;
+		return headerVersion == 5 || headerVersion == c_Version;
 	}
 
 	NetMessageType NetProtocol::MessageTypeOf(const NetPayload& payload) {
@@ -1319,6 +1345,7 @@ namespace RTE {
 			[](const NetParticipantProof&) { return NetMessageType::ParticipantProof; },
 			[](const NetH4RosterRevision&) { return NetMessageType::RosterRevision; },
 			[](const NetH4RosterRevisionRequest&) { return NetMessageType::RosterRevisionRequest; },
+			[](const NetH4ConnectionLease&) { return NetMessageType::ConnectionLease; },
 		}, payload);
 	}
 
@@ -1346,6 +1373,7 @@ namespace RTE {
 			case NetMessageType::Applicant: return "Applicant";
 			case NetMessageType::ApplicantAck: return "ApplicantAck";
 			case NetMessageType::SubstitutionOffer: return "SubstitutionOffer";
+			case NetMessageType::ConnectionLease: return "ConnectionLease";
 			case NetMessageType::SubstitutionAck: return "SubstitutionAck";
 			case NetMessageType::ModuleDigestRequest: return "ModuleDigestRequest";
 			case NetMessageType::ModuleDigests: return "ModuleDigests";
@@ -1412,7 +1440,7 @@ namespace RTE {
 	bool NetProtocol::CanEncodeAtVersion(uint16_t headerVersion) {
 		// Every older version shares every payload it had with this build, so an older peer can still be told,
 		// in its own envelope, why it was refused.
-		return headerVersion == c_Version || (headerVersion >= 1 && headerVersion <= 4);
+		return headerVersion == c_Version || (headerVersion >= 1 && headerVersion <= 5);
 	}
 
 	bool NetProtocol::PeekHeaderVersion(const uint8_t* data, size_t size, uint16_t& outVersion) {
@@ -1763,6 +1791,12 @@ namespace RTE {
 			}
 			case NetMessageType::RosterRevisionRequest: {
 				NetH4RosterRevisionRequest value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::ConnectionLease: {
+				NetH4ConnectionLease value;
 				decoded = DecodePayload(payloadReader, value, &payloadError);
 				payload = value;
 				break;

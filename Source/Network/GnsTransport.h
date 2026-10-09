@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,12 +21,17 @@ namespace RTE {
 	/// The route each connection last named in a receipt; a connection whose live route differs has moved.
 	class GnsRouteTracker {
 	public:
-		enum class Observation { First, Same, Moved };
-		Observation Observe(uint64_t connection, bool relayed) {
-			const auto [entry, inserted] = m_Relayed.try_emplace(connection, relayed);
+		enum class Observation { Unavailable, First, Same, Moved };
+		/// GNS publishes neither a relay flag nor an address while it selects a replacement route.
+		static std::optional<bool> SelectedRoute(bool relayed, bool hasRemoteAddress) {
+			return relayed || hasRemoteAddress ? std::optional<bool>(relayed) : std::nullopt;
+		}
+		Observation Observe(uint64_t connection, std::optional<bool> relayed) {
+			if (!relayed) return Observation::Unavailable;
+			const auto [entry, inserted] = m_Relayed.try_emplace(connection, *relayed);
 			if (inserted) return Observation::First;
-			if (entry->second == relayed) return Observation::Same;
-			entry->second = relayed;
+			if (entry->second == *relayed) return Observation::Same;
+			entry->second = *relayed;
 			return Observation::Moved;
 		}
 		void Forget(uint64_t connection) { m_Relayed.erase(connection); }
@@ -126,11 +132,12 @@ namespace RTE {
 		std::string GetLocalIdentity() const;
 		/// The same identity read without a transport of its own; empty while GNS is not running in this process.
 		static std::string ProcessIdentity();
+		static uint32_t LocalRouteRevision();
 		/// Updates the credentials used by subsequent ICE connections on this listener.
 		static void ApplyIceServers(const GnsP2PConfig& config);
 		/// Also hands a changed relay login to the TURN allocations of the live P2P connections.
 		void UpdateListenerIceServers(const GnsP2PConfig& config);
-		static bool ConnectionPolicyAllowsRoute(int mode, bool relayed) { return mode == 1 ? !relayed : mode != 2 || relayed; }
+		static bool ConnectionPolicyAllowsRoute(int mode, std::optional<bool> relayed) { return !relayed || (mode == 1 ? !*relayed : mode != 2 || *relayed); }
 		static std::string TurnHostReceipts(const std::string& servers);
 		/// The connect limit ICE connections run with: c_IceConnectTimeoutMs, or CC_TEST_ICE_CONNECT_TIMEOUT_MS when a measurement sets it.
 		static uint32_t IceConnectTimeoutMs();

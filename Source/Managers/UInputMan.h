@@ -355,6 +355,8 @@ namespace RTE {
 		/// Returns the current text input.
 		/// @return The current text input.
 		const std::string& GetTextInput() const { return m_TextInput; }
+		/// Consumes text already delivered by a key that opened a text entry, keeping the rest of this frame's text.
+		void ConsumeTextInputPrefix(const std::string& prefix) { if (!prefix.empty() && m_TextInput.starts_with(prefix)) m_TextInput.erase(0, prefix.size()); }
 #pragma endregion
 
 #pragma region Mouse Handling

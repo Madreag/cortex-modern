@@ -31,6 +31,7 @@ namespace RTE {
 			if ((!server.username.empty() && !textValid(server.username)) || (!server.credential.empty() && !textValid(server.credential))) return false;
 			for (const auto& url : server.urls) {
 				if (url.size() > 256 || !std::regex_match(url, urlPattern)) return false;
+				if (url.starts_with("turns:") && url.ends_with("?transport=udp")) return false;
 				if (!url.starts_with("stun:")) {
 					relay = true;
 					if (!textValid(server.username) || !textValid(server.credential)) return false;
@@ -124,15 +125,15 @@ namespace RTE {
 		return result.Valid() ? result : NetRelayConfig{};
 	}
 
-	void NetRelayConfig::UdpLists(std::string& servers, std::string& users, std::string& passwords) const {
+	void NetRelayConfig::TurnLists(std::string& servers, std::string& users, std::string& passwords) const {
 		servers.clear(); users.clear(); passwords.clear();
 		for (const auto& server : iceServers) {
 			for (const auto& url : server.urls) {
-				if (!url.starts_with("turn:")) continue;
+				if (!url.starts_with("turn:") && !url.starts_with("turns:")) continue;
 				const size_t query = url.find('?');
-				if (query != std::string::npos && url.substr(query) != "?transport=udp") continue;
+				const bool udp = url.starts_with("turn:") && (query == std::string::npos || url.substr(query) == "?transport=udp");
 				const std::string separator = servers.empty() ? "" : ",";
-				servers += separator + url.substr(5, query == std::string::npos ? query : query - 5);
+				servers += separator + (udp ? url.substr(5, query == std::string::npos ? query : query - 5) : url);
 				users += separator + server.username;
 				passwords += separator + server.credential;
 			}
@@ -169,6 +170,9 @@ namespace RTE {
 		}
 
 		std::string Scrub(std::string line) {
+			// Native rendezvous diagnostics can contain the ICE authentication
+			// fragment before the transport has any relay login to remember.
+			if (line.find("pwd_frag:") != std::string::npos) return "ICE authentication signal <redacted>";
 			std::vector<std::string> logins;
 			{
 				std::lock_guard lock(Mutex());

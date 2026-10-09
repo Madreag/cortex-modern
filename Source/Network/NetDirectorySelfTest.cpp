@@ -4,6 +4,10 @@
 #include "NetHttpClient.h"
 #include "NetMatchService.h"
 #include "NetMuxTransport.h"
+#include "AreaEditor.h"
+#include "GUIInputWrapper.h"
+#include "GUI.h"
+#include "MainMenuGUI.h"
 #ifdef CCCP_WITH_GNS
 #include "GnsSignaling.h"
 #include "GnsTransport.h"
@@ -56,6 +60,136 @@
 #include <vector>
 
 namespace RTE {
+	namespace {
+		class LobbyNoticeTransport final : public INetTransport {
+		public:
+			bool StartHost(uint16_t, std::string*) override { return true; }
+			bool Connect(const std::string&, uint16_t, std::string*) override { return true; }
+			bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string*, bool*) override { return true; }
+			void Disconnect(NetPeerId, const std::string&) override {}
+			void Stop() override {}
+			std::vector<NetTransportEvent> PollEvents() override { return {}; }
+		};
+	}
+
+	bool TestJoiningProgress(std::string* error) {
+		NetLobbySnapshot snapshot;
+		if (!MainMenuGUI::JoiningNeedsProgress(snapshot)) { *error = "joining dismissed progress before the lobby was admitted"; return false; }
+		snapshot.inLobby = true; snapshot.awaitingHostConfig = true;
+		snapshot.transferLine = "Receiving the world";
+		if (!MainMenuGUI::JoiningNeedsProgress(snapshot)) { *error = "a receiving join lost its progress screen and Cancel"; return false; }
+		snapshot.awaitingHostConfig = false;
+		if (MainMenuGUI::JoiningNeedsProgress(snapshot)) { *error = "an admitted lobby kept the joining screen"; return false; }
+		std::cout << "[net-directory-selftest] PASS joining_progress" << std::endl;
+		return true;
+	}
+
+	bool TestLobbyDepartureNotice(std::string* error) {
+		LobbyNoticeTransport transport;
+		NetSession session;
+		session.m_Transport = &transport;
+		session.m_Role = NetSessionRole::Host;
+		session.m_State = NetSessionState::Ready;
+		NetSession::PeerState peer;
+		peer.transportPeerId = 1; peer.assignedPeerId = 1; peer.displayName = "Guest"; peer.state = NetSessionState::Ready;
+		session.m_Peers.push_back(peer);
+		session.InjectEvent({NetTransportEventType::PeerDisconnected, 1, NetTransportLane::ControlReliable, {}, "connection lost"}, 100);
+		if (session.GetLobbyNotice().find("Guest disconnected") == std::string::npos) { *error = "the lobby did not name the disconnected player"; return false; }
+		session.MarkPeerReady(session.m_Peers.front());
+		if (!session.GetLobbyNotice().empty()) { *error = "a returned player left the previous departure notice visible"; return false; }
+		session.m_Config.timeoutMs = 100;
+		session.m_NowMs = 250; session.m_LastTimeoutCheckMs = 200;
+		session.CheckTimeouts();
+		if (session.GetLobbyNotice().find("Guest disconnected") == std::string::npos || session.GetLobbyNotice().find("timed out") == std::string::npos) {
+			*error = "a seated player's timeout was described as an unnamed failed join"; return false;
+		}
+		NetMatchService service;
+		service.m_State = NetMatchServiceState::Starting;
+		service.m_LocalPeerId = 3;
+		service.m_AdoptedMatchConfig = NetMatchConfigUtil::MakeDefault(73);
+		NetLobbyMember sibling;
+		sibling.peerId = 2;
+		sibling.displayName = NetMatchConfigUtil::UnseatedSlotName(2, false);
+		service.m_LobbySnapshot.members = {sibling};
+		auto& view = service.m_SeatViews[2];
+		view.name = "Guest";
+		view.seat.owner = 7;
+		view.seat.link = NetSeatLink::Dropped;
+		view.state = "Held";
+		view.line = "Guest disconnected - seat held";
+		const auto shown = service.GetLobbySnapshot();
+		if (shown.members.size() != 1 || shown.members.front().displayName != "Guest" ||
+			!shown.members.front().dropped || shown.members.front().statusLine != view.line) {
+			*error = "a sibling's held ordinary-lobby seat lost its name and departure explanation"; return false;
+		}
+		std::cout << "[net-directory-selftest] PASS lobby_departure_notice" << std::endl;
+		return true;
+	}
+
+	bool TestAreaEditorCancel(std::string* error) {
+		bool prompted = false;
+		EditorActivity::EditorMode mode = AreaEditor::EmptySceneMode(true, prompted, EditorActivity::EDITINGOBJECT);
+		if (mode != EditorActivity::NEWDIALOG) { *error = "an empty scene was not offered a first area"; return false; }
+		for (int canceled : {EditorActivity::NEWDIALOG, EditorActivity::LOADDIALOG, EditorActivity::SAVEDIALOG}) {
+			mode = static_cast<EditorActivity::EditorMode>(canceled);
+			// The shared Cancel handler returns to EDITINGOBJECT; this is its next frame.
+			mode = AreaEditor::EmptySceneMode(true, prompted, EditorActivity::EDITINGOBJECT);
+			if (mode != EditorActivity::EDITINGOBJECT) { *error = "Cancel reopened the empty scene's New Area dialog"; return false; }
+		}
+		prompted = false;
+		if (AreaEditor::EmptySceneMode(true, prompted, EditorActivity::LOADDIALOG) != EditorActivity::LOADDIALOG) {
+			*error = "an empty scene replaced the player's chosen Load dialog"; return false;
+		}
+		std::cout << "[net-directory-selftest] PASS area_editor_cancel" << std::endl;
+		return true;
+	}
+
+	bool TestJoiningFailureDetail(std::string* error) {
+		const std::string detail = "That listing changed while you were joining. Refresh the list and try again.";
+		LobbyNoticeTransport transport;
+		NetSession session;
+		if (!session.StartClient(transport, "127.0.0.1", NetSessionConfig{}, error)) return false;
+		session.InjectEvent({NetTransportEventType::PeerDisconnected, 1, NetTransportLane::ControlReliable, {}, detail}, 0);
+		if (!session.HasReject() || session.GetRejectReason() != NetRejectReason::HostLinkLost) { *error = "listing failure fixture did not close the link"; return false; }
+		if (NetMatchService::SetupFailureDetail(&session, "ICE connection failed: " + detail).find(detail) == std::string::npos) {
+			*error = "joining replaced the listing repair instruction with generic link loss"; return false;
+		}
+		if (!session.StartClient(transport, "127.0.0.1", NetSessionConfig{}, error)) return false;
+		NetMessage refusal;
+		refusal.payload = NetJoinRejected{NetRejectReason::ParticipantBanned, "The host banned you from this session", "participant_identity", "admitted", "banned"};
+		std::vector<uint8_t> bytes;
+		if (!NetProtocol::Encode(refusal, bytes)) { *error = "could not encode the explicit refusal"; return false; }
+		session.InjectEvent({NetTransportEventType::PeerConnected, 1}, 1);
+		session.InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, {}}, 1);
+		if (!session.IsRejected() || NetMatchService::SetupFailureDetail(&session, detail).find("banned") == std::string::npos) {
+			*error = "a transport detail hid the host's explicit admission refusal"; return false;
+		}
+		std::cout << "[net-directory-selftest] PASS joining_failure_detail" << std::endl;
+		return true;
+	}
+
+	bool TestLobbyPingReadout(std::string* error) {
+		NetMatchConfig config = NetMatchConfigUtil::MakeDefault(73);
+		config.delayPolicy = NetMatchDelayPolicy::Auto;
+		config.peerInputDelayFrames = {2, 5};
+		NetLobbySnapshot snapshot;
+		snapshot.hostPeerId = 1; snapshot.localPeerId = 2;
+		NetLobbyMember host; host.peerId = 1; host.connected = true; host.pingMs = 83; host.pingMeasured = true;
+		NetLobbyMember local; local.peerId = 2; local.connected = true; local.isLocal = true;
+		snapshot.members = {host, local};
+		const std::string text = NetMatchService::LobbyInputDelayText(config, snapshot, 2);
+		if (text.find("83ms ping") == std::string::npos || text.find("0ms ping") != std::string::npos) { *error = "the client delay readout used its own zero ping instead of the host link"; return false; }
+		snapshot.members.front().pingMeasured = false;
+		if (NetMatchService::LobbyInputDelayText(config, snapshot, 2).find("ping not measured yet") == std::string::npos) {
+			*error = "an unmeasured host link was presented as a measured ping"; return false;
+		}
+		if (NetMatchService::LobbyInputDelayText(config, snapshot, 1).find("0ms ping") != std::string::npos) {
+			*error = "a host's local zero was presented as network ping"; return false;
+		}
+		std::cout << "[net-directory-selftest] PASS lobby_ping_readout" << std::endl;
+		return true;
+	}
+
 	bool TestDirectoryCapacityFallback(std::string* error) {
 #ifdef CCCP_WITH_GNS
 		class DirectHost final : public INetTransport {
@@ -149,7 +283,7 @@ namespace RTE {
 			explicit Answer(std::shared_ptr<std::vector<NetDirectoryClient::Request>> sent): m_Sent(std::move(sent)) {}
 			void Start(const NetDirectoryClient::Request& request) override { m_Sent->push_back(request); }
 			bool Finished() override { return true; }
-			NetDirectoryClient::Reply Take() override { return {200, R"({"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"new-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""}; }
+			NetDirectoryClient::Reply Take() override { return {200, R"({"connection_protocol":1,"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"new-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""}; }
 			void Abort() override {}
 			std::shared_ptr<std::vector<NetDirectoryClient::Request>> m_Sent;
 		};
@@ -157,6 +291,7 @@ namespace RTE {
 		service.m_IsHost = true;
 		service.m_IceBoundSessionId = oldId;
 		service.m_IceEnabled = true;
+		service.m_IceIdentity = NetIceHostIdentity(oldId);
 		service.m_DirectoryRow.persistentWorld = true; service.m_DirectoryRow.worldId = oldId;
 		service.m_DirectoryRow.listenAddrs = {"127.0.0.1"}; service.m_DirectoryRow.listenPort = 47460;
 		service.m_HostSignalCredential.store(std::make_shared<const NetMatchService::HostSignalCredential>(NetMatchService::HostSignalCredential{oldId, "old-token"}));
@@ -189,6 +324,92 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestLobbyDirectoryLeaseRecovery(std::string* error) {
+		const std::string id = "7b8c9d2e-1111-4222-8333-444455556666";
+		class Answer final : public NetDirectoryClient::Transport {
+		public:
+			explicit Answer(std::shared_ptr<std::vector<NetDirectoryClient::Request>> sent): m_Sent(std::move(sent)) {}
+			void Start(const NetDirectoryClient::Request& request) override { m_Sent->push_back(request); }
+			bool Finished() override { return true; }
+			NetDirectoryClient::Reply Take() override {
+				if (m_Sent->size() == 2) return {404, R"({"error":"not_found"})", ""};
+				return {200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""};
+			}
+			void Abort() override {}
+			std::shared_ptr<std::vector<NetDirectoryClient::Request>> m_Sent;
+		};
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_State = NetMatchServiceState::Starting;
+		service.m_IceEnabled = true;
+		service.m_IceBoundSessionId = id;
+		service.m_IceIdentity = NetIceHostIdentity(id);
+		service.m_HostSignalCredential.store(std::make_shared<const NetMatchService::HostSignalCredential>(NetMatchService::HostSignalCredential{id, "host-token"}));
+		auto sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
+		service.m_Directory.SetTransportFactory([sent] { return std::make_unique<Answer>(sent); });
+		service.m_Directory.Configure("https://dir.test", "0123456789abcdef", "");
+		service.m_Directory.Advertise({}, false);
+		service.m_Directory.Update(0); service.m_Directory.Update(0);
+		service.RefreshDirectorySignalCredentialLocked(0);
+		service.m_Directory.Update(17417); service.m_Directory.Update(17417);
+		service.RefreshDirectorySignalCredentialLocked(17417);
+		const auto before = service.m_HostSignalCredential.load();
+		service.m_Directory.Advertise(service.m_DirectoryRow, false);
+		service.m_Directory.Update(22416);
+		if (sent->size() != 2) { *error = "lobby recovery ignored the directory retry deadline"; return false; }
+		service.m_Directory.Update(22417);
+		const auto body = nlohmann::json::parse(sent->back().body);
+		if (body.value("resume_session_id", std::string()) != id || body.value("resume_token", std::string()) != "host-token") {
+			*error = "expired lobby registration discarded its listener's directory identity"; return false;
+		}
+		service.m_Directory.Update(22417);
+		service.RefreshDirectorySignalCredentialLocked(22417);
+		if (service.m_HostSignalCredential.load() == before) { *error = "renewed lobby lease left its failed signal pump unopened"; return false; }
+		std::cout << "[net-directory-selftest] PASS lobby_directory_lease_recovery" << std::endl;
+		return true;
+	}
+
+	bool TestLobbyDirectoryStatus(std::string* error) {
+		class Answer final : public NetDirectoryClient::Transport {
+		public:
+			void Start(const NetDirectoryClient::Request&) override {}
+			bool Finished() override { return true; }
+			NetDirectoryClient::Reply Take() override { return {200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""}; }
+			void Abort() override {}
+		};
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_State = NetMatchServiceState::Starting;
+		service.m_Directory.SetTransportFactory([] { return std::make_unique<Answer>(); });
+		service.m_Directory.Configure("https://dir.test", "0123456789abcdef", "");
+		service.m_Directory.Advertise({}, false);
+		service.m_Directory.Update(0);
+		service.RefreshDirectorySignalCredentialLocked(0);
+		if (service.GetListingStatus() != NetListingStatus::Opening || service.GetDirectoryVisibility() != 2 || !service.SetDirectoryVisibility(2)) {
+			*error = "public registration was described as network-only or refused its existing visibility"; return false;
+		}
+		service.m_Directory.Update(0);
+		service.RefreshDirectorySignalCredentialLocked(0);
+		if (service.GetListingStatus() != NetListingStatus::Listed || service.GetDirectoryVisibility() != 2) {
+			*error = "registered public lobby without ICE was not described as listed"; return false;
+		}
+		if (!service.SetDirectoryVisibility(0) || service.GetDirectoryVisibility() != 0 || service.SetDirectoryVisibility(2)) {
+			*error = "a retracted lobby retained its public intent or relisted the ended lease"; return false;
+		}
+		service.m_DirectoryRetracted = false;
+		service.m_DirectoryState = NetDirectoryClient::State::Registering;
+		if (!service.SetDirectoryVisibility(0) || !service.m_DirectoryRetracted) {
+			*error = "a pending public registration ignored the host's local-only choice"; return false;
+		}
+		service.m_DirectoryRetracted = false;
+		service.m_HostThisNetworkOnly = true;
+		if (service.GetDirectoryVisibility() != 0 || service.SetDirectoryVisibility(2)) {
+			*error = "a LAN-bound lobby accepted a public listing"; return false;
+		}
+		std::cout << "[net-directory-selftest] PASS lobby_directory_status" << std::endl;
+		return true;
+	}
+
 	bool TestSignalPumpInitialCredential(std::string* error) {
 #ifdef CCCP_WITH_GNS
 		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
@@ -218,6 +439,21 @@ namespace RTE {
 			return false;
 		}
 		mux.SetPump({});
+		NetMuxTransport migrated;
+		auto successor = GnsDirectorySignalDispatcher::MakeMigrationStandby();
+		const_cast<NetDirectorySignalChannel&>(successor->Channel()).SetTransportFactory([] { return std::make_unique<PollAnswer>(); });
+		if (!successor->Start(*migrated.P2PGns(), config)) { *error = "successor fixture could not bind its dispatcher"; return false; }
+		service.InstallIcePump(migrated, true, successor);
+		std::weak_ptr<GnsDirectorySignalDispatcher> held = successor;
+		successor.reset();
+		(void)migrated.PollEvents();
+		if (held.expired()) { *error = "the successor pump lost its signaling owner"; return false; }
+		const auto& successorHeaders = held.lock()->Channel().RequestHeaders();
+		if (std::none_of(successorHeaders.begin(), successorHeaders.end(), [](const auto& value) { return value.first == "X-Session-Token" && value.second == "recovered-token"; })) {
+			*error = "the successor pump kept the previous host's directory token"; return false;
+		}
+		migrated.SetPump({});
+		if (!held.expired()) { *error = "the retired successor dispatcher outlived its pump"; return false; }
 #endif
 		std::cout << "[net-directory-selftest] PASS signal_pump_initial_credential" << std::endl;
 		return true;
@@ -619,7 +855,7 @@ namespace RTE {
 				std::string reason;
 				NetDirectoryRegisterResponse created;
 				if (!NetDirectoryCodec::DecodeRegisterResponse(
-						R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"abcTOK123","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})",
+						R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"abcTOK123","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})",
 						created, reason)) {
 					*error = "canned register response refused: " + reason;
 					return false;
@@ -716,7 +952,7 @@ namespace RTE {
 			bool TestUnlistedVisibility(std::string* error) {
 				std::vector<std::string> misses;
 				CheckOptionalVisibilityField<NetDirectoryRegisterResponse>("register response", "supports_unlisted",
-					R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"abcTOK123","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})",
+					R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"abcTOK123","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})",
 					&NetDirectoryCodec::DecodeRegisterResponse, &NetDirectoryCodec::EncodeRegisterResponse, false, misses);
 				CheckOptionalVisibilityField<NetDirectoryHeartbeatRequest>("heartbeat request", "listed",
 					R"({"token":"abcTOK123","peer_count":2,"seats_free":1})",
@@ -1102,10 +1338,54 @@ namespace RTE {
 				return true;
 			}
 
+			bool TestConnectionProtocolRefusal(std::string* error) {
+				for (const int status : {409, 200}) for (const bool refresh : {false, true}) for (const int64_t version: {int64_t{0}, int64_t{2}}) {
+					ScriptedClient s;
+					NetDirectoryRegisterResponse response{"7b8c9d2e-1111-4222-8333-444455556666", "fixture-proof", 15, 5, "192.0.2.1"};
+					const auto row = SampleRegisterRequest();
+					if (refresh) s.replies->push_back({200, NetDirectoryCodec::EncodeRegisterResponse(response), ""});
+					response.connectionProtocol = version;
+					s.replies->push_back({status, status == 200 ? NetDirectoryCodec::EncodeRegisterResponse(response) :
+					    json{{"error", "connection_version"}, {"client_version", NetDirectoryLimits::c_ConnectionProtocol}, {"directory_version", version}}.dump(), ""});
+					s.client.Advertise(row, false);
+					s.client.Update(0); s.client.Update(0);
+					if (refresh) {
+						s.client.RefreshRegistration(row, true, 0);
+						s.client.Update(5000); s.client.Update(5000);
+					}
+					const size_t expectedRequests = refresh ? 2 : 1;
+					if (s.client.GetState() != NetDirectoryClient::State::Failed || s.sent->size() != expectedRequests ||
+					    s.client.GetSupersededGeneration() != 0 ||
+					    s.client.LastError().find("protocol is 1") == std::string::npos ||
+					    s.client.LastError().find("directory uses " + std::to_string(version)) == std::string::npos) {
+						*error = "a directory protocol mismatch did not stop with both versions"; return false;
+					}
+					const std::string refusal = s.client.LastError();
+					for (const uint64_t now : {10000ULL, 100000ULL, 200000ULL}) {
+						// The service republishes metadata and calls Configure on every update.
+						s.client.Configure("dir.test/", "key0123456789abcd", "");
+						s.client.Advertise(row, true);
+						s.client.Update(now);
+						if (s.client.GetState() != NetDirectoryClient::State::Failed || s.sent->size() != expectedRequests || s.client.LastError() != refusal) {
+							*error = "routine listing metadata rearmed a terminal directory version refusal"; return false;
+						}
+					}
+					if (refresh) s.client.AbandonLease(); // An explicit new match may try again.
+					else s.client.Configure("https://other.test", "key0123456789abcd", "");
+					s.client.Advertise(row, false);
+					s.client.Update(300000);
+					if (s.client.GetState() != NetDirectoryClient::State::Registering || s.sent->size() != expectedRequests + 1) {
+						*error = "an explicit new match or directory could not retry after a version refusal"; return false;
+					}
+				}
+				std::cout << "[net-directory-selftest] PASS connection_protocol_refusal versions=named" << std::endl;
+				return true;
+			}
+
 			bool TestRelayCredentialRequest(std::string* error) {
 				ScriptedClient s;
 				if (s.client.RequestIceServers("match:1", 3600)) { *error = "relay request lacked the host lease"; return false; }
-				s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				s.client.Advertise(SampleRegisterRequest(), false);
 				s.client.Update(0);
 				s.client.Update(0);
@@ -1140,13 +1420,13 @@ namespace RTE {
 					*error = "S5: one refusal discarded the world's last stored proof"; return false;
 				}
 				ScriptedClient recovered;
-				recovered.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"replacement-proof","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				recovered.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"replacement-proof","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				recovered.client.Advertise(row, true); recovered.client.Update(0); recovered.client.Update(0);
 				recovered.client.RefreshRegistration(row, true, 1);
 				recovered.replies->push_back({403, R"({"error":"forbidden"})", ""});
 				recovered.replies->push_back({403, R"({"error":"forbidden"})", ""});
 				for (uint64_t now: {5001ULL, 15001ULL}) { recovered.client.Update(now); recovered.client.Update(now); }
-				recovered.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"latest-proof","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				recovered.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"latest-proof","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				recovered.client.Update(35001);
 				if (json::parse(recovered.sent->back().body).value("resume_token", std::string()) != "previous-proof") { *error = "S5: recovery lost its second retained proof"; return false; }
 				recovered.client.Update(35001);
@@ -1165,7 +1445,7 @@ namespace RTE {
 			bool TestListedRefusalsKeepRetrying(std::string* error) {
 				for (const bool heartbeat : {false, true}) for (const int status : {400, 401, 403, 404, 405, 408, 410, 422}) {
 					ScriptedClient s;
-					const NetDirectoryClient::Reply success{200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""};
+					const NetDirectoryClient::Reply success{200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""};
 					if (heartbeat) s.replies->push_back(success);
 					s.replies->push_back({status, R"({"error":"refused"})", ""});
 					s.replies->push_back(heartbeat && status != 404 ? NetDirectoryClient::Reply{200, R"({"expires_in_s":15,"heartbeat_s":5})", ""} : success);
@@ -1185,7 +1465,7 @@ namespace RTE {
 					}
 				}
 				ScriptedClient throttled;
-				throttled.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				throttled.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				throttled.replies->push_back({429, R"({"retry_after_s":30})", ""});
 				throttled.client.Advertise(SampleRegisterRequest(), true);
 				throttled.client.Update(0); throttled.client.Update(0);
@@ -1199,7 +1479,7 @@ namespace RTE {
 
 			bool TestClientLifecycle(std::string* error) {
 				ScriptedClient s;
-				s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
 				s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
 				s.replies->push_back({200, R"({"ok":true})", ""});
@@ -1270,6 +1550,31 @@ namespace RTE {
 			// R6 (sss): one host per handover generation - a successor's claim names its generation, every heartbeat and the delete
 			// carry this host's, and a 409 that names a later one stops the client keeping the row.
 			bool TestASupersededHostKeepsTheRowNoMore(std::string* error) {
+				for (const char* code : {"superseded", "already_migrated"}) {
+					ScriptedClient refused;
+					refused.replies->push_back({409, json{{"error", code}, {"migration_gen", 2}}.dump(), ""});
+					refused.client.Advertise(SampleRegisterRequest(), true);
+					refused.client.Update(0); refused.client.Update(0);
+					refused.client.Advertise(SampleRegisterRequest(), true);
+					refused.client.Update(100000);
+					if (refused.client.GetState() != NetDirectoryClient::State::Superseded || refused.client.GetSupersededGeneration() != 2 || refused.sent->size() != 1) {
+						*error = "a named migration refusal did not stop registration"; return false;
+					}
+				}
+				for (const char* body : {"not-json", "[]", R"({"migration_gen":2})", R"({"error":409,"migration_gen":2})", R"({"error":"other_conflict","migration_gen":2})"}) {
+					for (const bool heartbeat : {false, true}) {
+						ScriptedClient unrelated;
+						if (heartbeat) unrelated.replies->push_back({200, NetDirectoryCodec::EncodeRegisterResponse(
+						    NetDirectoryRegisterResponse{"7b8c9d2e-1111-4222-8333-444455556666", "fixture-proof", 15, 5, "192.0.2.1"}), ""});
+						unrelated.replies->push_back({409, body, ""});
+						unrelated.client.Advertise(SampleRegisterRequest(), true);
+						unrelated.client.Update(0); unrelated.client.Update(0);
+						if (heartbeat) { unrelated.client.Update(5000); unrelated.client.Update(5000); }
+						if (unrelated.client.GetState() == NetDirectoryClient::State::Superseded || unrelated.client.GetSupersededGeneration() != 0) {
+							*error = "an unrelated HTTP conflict superseded the host"; return false;
+						}
+					}
+				}
 				NetDirectoryRegisterRequest claim = SampleRegisterRequest();
 				claim.resumeSessionId = "7b8c9d2e-1111-4222-8333-444455556666";
 				claim.resumeToken = "tok";
@@ -1281,7 +1586,7 @@ namespace RTE {
 					return false;
 				}
 				ScriptedClient s;
-				s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				s.replies->push_back({409, R"({"error":"superseded","migration_gen":1})", ""});
 				s.client.Advertise(SampleRegisterRequest(), true);
 				s.client.Update(0);
@@ -1313,11 +1618,11 @@ namespace RTE {
 
 			bool TestHeartbeat404Reregisters(std::string* error) {
 				ScriptedClient s;
-				s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				s.replies->push_back({404, R"({"error":"not_found"})", ""});
-				s.replies->push_back({200, R"({"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				s.replies->push_back({404, R"({"error":"not_found"})", ""});
-				s.replies->push_back({200, R"({"session_id":"9d2e1f3a-3333-4444-8555-666677778888","token":"tok3","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"9d2e1f3a-3333-4444-8555-666677778888","token":"tok3","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 
 				s.client.Advertise(SampleRegisterRequest(), false);
 				s.client.Update(0);
@@ -1359,7 +1664,7 @@ namespace RTE {
 			bool TestAWorldTakesItsRowBackFromAForgetfulDirectory(std::string* error) {
 				const std::string world = "5e6f7a8b-1111-4222-8333-444455556666";
 				const auto granted = [&](const char* token) {
-					return NetDirectoryClient::Reply{200, R"({"session_id":")" + world + R"(","token":")" + token + R"(","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""};
+					return NetDirectoryClient::Reply{200, R"({"connection_protocol":1,"session_id":")" + world + R"(","token":")" + token + R"(","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""};
 				};
 				const NetDirectoryClient::Reply beat{200, R"({"expires_in_s":15,"heartbeat_s":5})", ""};
 				const NetDirectoryClient::Reply gone{404, R"({"error":"not_found"})", ""};
@@ -1428,7 +1733,7 @@ namespace RTE {
 
 			bool TestHeartbeat429HonorsRetryAfter(std::string* error) {
 				ScriptedClient s;
-				s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":30})", ""});
 				s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
 
@@ -1456,7 +1761,7 @@ namespace RTE {
 				s.replies->push_back({0, "", "send: certificate verification failed"});
 				s.replies->push_back({0, "", "connect timed out"});
 				s.replies->push_back({0, "", "connect timed out"});
-				s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 
 				s.client.Advertise(SampleRegisterRequest(), false);
 				s.client.Update(0);
@@ -1503,8 +1808,8 @@ namespace RTE {
 				CallAdvertiseIntent(client, row, running, listed, 0);
 			}
 
-			const char* kRegisterCapable = R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})";
-			const char* kRegisterLegacy = R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})";
+			const char* kRegisterCapable = R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})";
+			const char* kRegisterLegacy = R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})";
 			const std::string kSessionPath = "/v1/sessions/7b8c9d2e-1111-4222-8333-444455556666";
 			const std::string kHeartbeatPath = kSessionPath + "/heartbeat";
 
@@ -1688,7 +1993,7 @@ namespace RTE {
 					ScriptedClient s;
 					s.replies->push_back({200, kRegisterCapable, ""});
 					s.replies->push_back({404, R"({"error":"not_found"})", ""});
-					s.replies->push_back({200, R"({"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""});
+					s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""});
 					s.replies->push_back({200, R"({"ok":true})", ""});
 					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
 					s.client.Update(0);
@@ -1767,7 +2072,7 @@ namespace RTE {
 					if (report.value("supports_unlisted", json(true)) != json(false)) {
 						note("legacy-hidden: the report did not expose capability=false");
 					}
-					s.replies->push_back({200, R"({"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+					s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
 					CallAdvertise(s.client, SampleRegisterRequest(), false, true);
 					s.client.Update(120000);
@@ -1791,7 +2096,7 @@ namespace RTE {
 
 				{   // an explicit supports_unlisted:false reply is the same legacy path as absent
 					ScriptedClient s;
-					s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":false})", ""});
+					s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":false})", ""});
 					s.replies->push_back({200, R"({"ok":true})", ""});
 					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
 					s.client.Update(0);
@@ -1900,7 +2205,7 @@ namespace RTE {
 			}
 
 			const char* kSecretToken = "tok-report-secret-5e1d";
-			const char* kRegisterCapableSecret = R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok-report-secret-5e1d","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})";
+			const char* kRegisterCapableSecret = R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok-report-secret-5e1d","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})";
 
 			std::string VisibilityFields(const json& report) {
 				return "desired=" + report.value("desired_listed", json("absent")).dump() + " confirmed=" + report.value("confirmed_listed", json("absent")).dump() + " capable=" + report.value("supports_unlisted", json("absent")).dump();
@@ -2187,6 +2492,17 @@ namespace RTE {
 					} else if (!ReportRowless(report)) {
 						note("shutdown: the report still claimed " + VisibilityFields(report) + " after Shutdown deleted the row");
 					}
+					auto newLease = json::parse(kRegisterCapableSecret);
+					newLease["session_id"] = "7b8c9d2e-1111-4222-8333-444455556667";
+					s.replies->push_back({200, newLease.dump(), ""});
+					s.client.Advertise(SampleRegisterRequest(), false);
+					s.client.Update(SteadyMs() + 60000);
+					const auto fresh = json::parse(s.sent->back().body);
+					if (s.sent->back().method != "POST" || !fresh.value("resume_session_id", std::string()).empty() || !fresh.value("resume_token", std::string()).empty()) {
+						note("shutdown: a new lobby reclaimed the deleted lobby's lease");
+					}
+					s.client.Update(SteadyMs() + 60000);
+					if (s.client.GetSessionId() != newLease["session_id"].get<std::string>()) note("shutdown: the next lobby did not adopt its fresh lease");
 				}
 
 				{   // Shutdown inside a heartbeat 429 keeps retry_after: no DELETE within its budget, none counted
@@ -2860,7 +3176,7 @@ namespace RTE {
 			bool TestDirectoryErrorSnapshot(std::string* error) {
 				ScriptedClient host;
 				host.replies->push_back({503, R"({"error":"full"})", ""});
-				host.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				host.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				host.client.Advertise(SampleRegisterRequest(), false);
 				host.client.Update(0); host.client.Update(0);
 				std::promise<void> read, changed;
@@ -2905,24 +3221,27 @@ namespace RTE {
 				return true;
 			}
 
-			bool TestSignal404Fails(std::string* error) {
+			bool TestSignal404WaitsForAuthority(std::string* error) {
 				ScriptedChannel s(false);
 				s.replies->push_back({404, R"({"error":"not_found"})", ""});
+				s.replies->push_back(kPostOk);
 				s.channel.SetPolling(true);
 				s.channel.Update(0);
 				s.channel.Update(0);
 				const bool took = s.channel.Post("host", "after-failure");
-				s.channel.Update(600000);
+				s.channel.Update(4999);
 				const json report = json::parse(s.channel.BuildReportJson());
-				if (s.channel.GetState() != NetDirectorySignalChannel::State::Failed || s.channel.GetLastError() != "session gone" || report["state"] != "failed" || report["last_error"] != "session gone" || report["last_status"] != 404) {
-					*error = "signal 404: expected failed with \"session gone\", report " + report.dump();
+				if (s.channel.GetState() != NetDirectorySignalChannel::State::Open || s.channel.GetLastError().find("Cancel") == std::string::npos || report["last_status"] != 404) {
+					*error = "a missing signalling row ended recovery before the seat authority answered";
 					return false;
 				}
-				if (took || s.sent->size() != 1) {
-					*error = "signal 404: the failed channel still took or sent a signal";
+				if (!took || s.sent->size() != 1) {
+					*error = "signal 404 did not retain its queued message and five-second backoff";
 					return false;
 				}
-				std::cout << "[net-directory-selftest] signal 404: poll answered 404 -> " << report.dump() << ", nothing sent after" << std::endl;
+				s.channel.Update(5000);
+				if (s.sent->size() != 2 || s.sent->back().method != "POST") { *error = "signal 404 did not retry its retained message"; return false; }
+				std::cout << "[net-directory-selftest] PASS missing_signal_row waits_for_authority retry_ms=5000" << std::endl;
 				return true;
 			}
 
@@ -3031,7 +3350,7 @@ namespace RTE {
 			}
 
 #ifdef CCCP_WITH_GNS
-			bool TestGoneListingEndsTheRendezvous(std::string* error) {
+			bool TestMissingListingKeepsTheRendezvous(std::string* error) {
 				GnsTransport transport;
 				GnsDirectorySignalDispatcher dispatcher;
 				GnsDirectorySignalDispatcher::Config config;
@@ -3051,11 +3370,12 @@ namespace RTE {
 				dispatcher.SetPolling(true, 0); dispatcher.Update(0); dispatcher.Update(1);
 				const auto events = transport.PollEvents();
 				const bool refused = std::any_of(events.begin(), events.end(), [](const NetTransportEvent& event) {
-					return event.type == NetTransportEventType::PeerDisconnected && event.reason.find("Refresh the list and try again") != std::string::npos;
+					return event.type == NetTransportEventType::PeerDisconnected;
 				});
+				const bool waiting = dispatcher.Channel().GetState() == NetDirectorySignalChannel::State::Open;
 				dispatcher.Stop(); transport.Stop();
-				if (!refused) { *error = "point3: a removed listing left the old rendezvous waiting without retry words"; return false; }
-				std::cout << "[net-directory-selftest] PASS gone_listing_ends_rendezvous" << std::endl;
+				if (refused || !waiting) { *error = "a missing signalling row prematurely disconnected a recoverable ICE dial"; return false; }
+				std::cout << "[net-directory-selftest] PASS missing_listing_keeps_rendezvous" << std::endl;
 				return true;
 			}
 
@@ -3190,6 +3510,24 @@ namespace RTE {
 					return false;
 				}
 				std::cout << "[net-directory-selftest] signal priority: with the poll due at t=0, POST(first) and POST(second) went before the GET" << std::endl;
+				for (const int wait : {0, 2}) {
+					ScriptedChannel busy(false);
+					busy.channel.SetPolling(true); busy.channel.SetPollWait(wait);
+					busy.replies->push_back(kPostOk); busy.replies->push_back(kPostOk);
+					for (int offer = 0; offer < 12; ++offer)
+						if (!busy.channel.Post("host", "offer")) { *error = "the busy signal queue refused an offer"; return false; }
+					busy.channel.Update(0); busy.channel.Update(1); busy.channel.Update(2);
+					if (busy.sent->size() != 3 || !RequestIs(busy.sent->back(), "GET", busy.PollPath(0).c_str(), error)) {
+						*error = "queued offers starved the peer's answer or blocked outgoing offers on a long poll"; return false;
+					}
+					busy.replies->push_back({200, SignalListBody({{1, "host", busy.channel.GetLocalPeer(), B64("answer")}}), ""});
+					if (!busy.channel.Post("host", "new offer")) { *error = "the active poll refused a new offer"; return false; }
+					busy.channel.Update(3);
+					if (Taken(busy) != "1:answer" || busy.channel.PendingPosts() == 0 || busy.sent->back().method != "POST") {
+						*error = "a new offer discarded the peer's ready answer or the answer stopped outgoing progress"; return false;
+					}
+				}
+				std::cout << "[net-directory-selftest] PASS queued_signals_receive_answers_before_the_outbox_drains" << std::endl;
 				return true;
 			}
 
@@ -3348,13 +3686,18 @@ namespace RTE {
 
 			std::string error;
 			const char* selected = std::getenv("CCCP_TEST_DIRECTORY_CASE");
+			if (selected && std::string(selected) == "protocol") {
+				if (!TestConnectionProtocolRefusal(&error) || !TestASupersededHostKeepsTheRowNoMore(&error)) return fail(error);
+				std::cout << "[net-directory-selftest] PASS" << std::endl;
+				return 0;
+			}
 #ifdef CCCP_WITH_GNS
 			if (!selected || std::string(selected) == "point3") {
-				if (!TestGoneListingEndsTheRendezvous(&error)) return fail(error);
+				if (!TestMissingListingKeepsTheRendezvous(&error)) return fail(error);
 				if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
 			}
 #endif
-			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"T1", TestDirectoryErrorSnapshot}, {"T2", TestDirectoryCapacityFallback}, {"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
+			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"LJ", TestJoiningProgress}, {"L7", TestLobbyDepartureNotice}, {"L2", TestAreaEditorCancel}, {"L5", TestJoiningFailureDetail}, {"L10", TestLobbyPingReadout}, {"L1", TestLobbyDirectoryLeaseRecovery}, {"L3", TestLobbyDirectoryStatus}, {"T1", TestDirectoryErrorSnapshot}, {"T2", TestDirectoryCapacityFallback}, {"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
 				if (!selected || std::string(selected) == test.first || (std::string(selected) == "U5" && std::string(test.first) == "T2")) {
 					if (!test.second(&error)) return fail(error);
 					if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
@@ -3388,7 +3731,8 @@ namespace RTE {
 			if (!TestSignalLongPoll(&error)) return fail(error);
 			if (!TestSignalPostInterruptsAnIdlePoll(&error)) return fail(error);
 			if (!TestDirectoryCapacityWords(&error)) return fail(error);
-			if (!TestSignal404Fails(&error)) return fail(error);
+			if (!TestConnectionProtocolRefusal(&error)) return fail(error);
+			if (!TestSignal404WaitsForAuthority(&error)) return fail(error);
 			if (!TestSignal403Fails(&error)) return fail(error);
 			if (!TestSignalQueueFullRetries(&error)) return fail(error);
 			if (!TestSignal429RetryAfter(&error)) return fail(error);

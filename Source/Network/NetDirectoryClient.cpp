@@ -118,6 +118,7 @@ namespace RTE {
 	void NetDirectoryClient::SetTransportFactory(TransportFactory factory) { m_Factory = std::move(factory); }
 
 	void NetDirectoryClient::Configure(std::string baseUrl, std::string installKey, std::string certPinSha256) {
+		const std::string previousUrl = m_BaseUrl;
 		m_BaseUrl = std::move(baseUrl);
 		m_InstallKey = std::move(installKey);
 		m_CertPinSha256 = std::move(certPinSha256);
@@ -129,6 +130,7 @@ namespace RTE {
 		if (!m_BaseUrl.empty() && m_BaseUrl.rfind("https://", 0) != 0) {
 			m_BaseUrl = "https://" + m_BaseUrl;
 		}
+		if (m_BaseUrl != previousUrl) m_ConnectionProtocolRefused = false;
 		if (m_BaseUrl.empty()) {
 			if (m_IceRequest) m_IceRequest->Abort();
 			m_IceRequest.reset();
@@ -184,7 +186,14 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::Advertise(const NetDirectoryRegisterRequest& row, bool running, bool listed) {
+		const auto retainedClaim = std::make_pair(m_Row.resumeSessionId, m_Row.resumeToken);
 		m_Row = row;
+		// A metadata refresh must not discard the identity acknowledged by the service.
+		// It is also the identity the live ICE listener and returning seats still use.
+		if (!row.persistentWorld && row.resumeSessionId.empty()) {
+			m_Row.resumeSessionId = m_SessionId.empty() ? retainedClaim.first : m_SessionId;
+			m_Row.resumeToken = m_Token.empty() ? retainedClaim.second : m_Token;
+		}
 		if (row.persistentWorld) {
 			if (m_ProofWorldId != row.worldId) { m_ProofWorldId = row.worldId; m_WorldProofs.clear(); m_WorldProofAttempt.reset(); m_WorldProofRefusals = 0; }
 			if (m_WorldProofs.empty()) RememberWorldProof(row.resumeSessionId, row.resumeToken);
@@ -198,11 +207,11 @@ namespace RTE {
 		if (!m_Listed) {
 			// m_NextAttemptMs stays: a 429 or backoff deadline binds every request, whatever the intent.
 			m_BackoffMs = 0;
-			// A hidden intent that a legacy service already refused stays Failed on repeat calls.
-			if (m_State == State::Failed && (listed || !m_HiddenUnsupported)) {
+			// Repeated metadata cannot retry a protocol refusal or an unsupported hidden intent.
+			if (m_State == State::Failed && !m_ConnectionProtocolRefused && (listed || !m_HiddenUnsupported)) {
 				SetState(State::Idle);
 			}
-		} else if (m_State == State::Failed && listed) {
+		} else if (m_State == State::Failed && !m_ConnectionProtocolRefused && listed) {
 			SetState(m_SessionId.empty() ? State::Registering : State::Registered);
 		}
 		m_Listed = true;
@@ -225,8 +234,11 @@ namespace RTE {
 		}
 		m_RequestKind = RequestKind::None;
 		m_Listed = false;
+		m_ConnectionProtocolRefused = false;
 		m_SessionId.clear();
 		m_Token.clear();
+		m_Row.resumeSessionId.clear();
+		m_Row.resumeToken.clear();
 		m_ConfirmedListed.reset();
 		m_ProofWorldId.clear(); m_WorldProofs.clear(); m_WorldProofAttempt.reset(); m_WorldProofRefusals = 0;
 		if (m_State != State::Disabled)
@@ -343,6 +355,7 @@ namespace RTE {
 		m_Listed = false;
 		m_BrowseWanted = false;
 		if (m_State == State::Disabled) {
+			AbandonLease();
 			return;
 		}
 		const uint64_t begin = SteadyNowMs();
@@ -353,23 +366,16 @@ namespace RTE {
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(5));
 		}
-		if (m_Request) {
-			m_Request->Abort();
-			m_Request.reset();
-			m_RequestKind = RequestKind::None;
-		}
-		m_SessionId.clear();
-		m_Token.clear();
-		m_ConfirmedListed.reset();
+		AbandonLease();
 		m_Capable = false;
-		if (m_State != State::Disabled) {
-			SetState(State::Idle);
-		}
 	}
 
 	bool NetDirectoryClient::StartIceRequest(const Request& request) {
 		if (m_IceRequest || m_BaseUrl.empty() || !m_Factory) return false;
 		m_IceError.clear();
+		m_IceRelayRefused = false;
+		m_IceRetryable = false;
+		m_IceHostRequest = request.method == "POST";
 		m_IceRequest = m_Factory();
 		m_IceRequest->Start(request);
 		return true;
@@ -398,15 +404,26 @@ namespace RTE {
 		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 		NetRelayConfig offer;
 		m_IceRelayRefused = reply.statusCode == 502 && reply.body.find("\"relay_provider_refused\"") != std::string::npos;
+		m_IceRetryable = false;
+		m_IceRetryDelayMs = 500;
 		if (reply.statusCode == 200 && NetRelayConfig::FromJson(reply.body, offer) && offer.Usable(now)) {
 			m_IceServers = std::move(offer);
 			m_IceError.clear();
 		} else {
 			if (!m_IceServers.Usable(now)) m_IceServers = {};
-			m_IceError = m_IceRelayRefused ? "The host's relay refused the credentials" :
-			             reply.statusCode == 429 ? "Relay credential rate limit; retrying shortly" :
-			             reply.statusCode == 403 ? "Relay credential request refused by the directory" :
-			             "Relay credentials unavailable or expired";
+			m_IceRetryable = !m_IceRelayRefused && (reply.statusCode == 0 || reply.statusCode == 404 || reply.statusCode == 408 ||
+			                 reply.statusCode == 429 || reply.statusCode >= 500 || (reply.statusCode == 200 && offer.Valid()));
+			const json details = json::parse(reply.body, nullptr, false);
+			if (details.is_object() && details.contains("retry_after_s") && details["retry_after_s"].is_number_unsigned()) {
+				m_IceRetryDelayMs = static_cast<uint32_t>(std::min<uint64_t>(details["retry_after_s"].get<uint64_t>(), 3600) * 1000);
+				m_IceRetryDelayMs = std::max<uint32_t>(m_IceRetryDelayMs, 500);
+			}
+			m_IceError = m_IceRelayRefused
+			                 ? (m_IceHostRequest ? "The relay service refused your request. Check Relay in the lobby and retry."
+			                                     : "The host's relay refused the credentials. Ask the host to check Relay in the lobby.")
+			             : reply.statusCode == 429 ? "The relay service is busy. Wait briefly and retry joining."
+			             : reply.statusCode == 403 ? "The directory refused the relay request. Refresh the game list and retry."
+			             : "The relay login is not ready. Retry joining after the host's relay reconnects.";
 		}
 	}
 
@@ -469,12 +486,16 @@ namespace RTE {
 	}
 
 	bool NetDirectoryClient::TakeSuperseded(const Reply& reply) {
-		if (reply.statusCode != 409) return false;
+		if (reply.statusCode != 409 || !reply.error.empty()) return false;
 		int64_t generation = 0;
 		try {
 			const json body = json::parse(reply.body);
+			if (!body.is_object()) return false;
+			const auto code = body.find("error");
+			if (code == body.end() || !code->is_string() || (*code != "superseded" && *code != "already_migrated")) return false;
 			if (body.contains("migration_gen") && body.at("migration_gen").is_number_integer()) generation = body.at("migration_gen").get<int64_t>();
 		} catch (const json::exception&) {
+			return false;
 		}
 		m_SupersededGeneration = std::max<int64_t>(generation, 1);
 		NoteError("the match went on under host generation " + std::to_string(m_SupersededGeneration) + ": this host keeps the row no more");
@@ -498,6 +519,18 @@ namespace RTE {
 			return;
 		}
 		if (TakeSuperseded(reply)) return;
+		if (reply.statusCode == 409) {
+			const auto body = json::parse(reply.body, nullptr, false);
+			if (body.is_object() && body.contains("error") && body["error"] == "connection_version") {
+				const auto version = body.find("directory_version");
+				const int64_t actual = version != body.end() && version->is_number_integer() ? version->get<int64_t>() : 0;
+				NoteError("Your connection protocol is " + std::to_string(NetDirectoryLimits::c_ConnectionProtocol) + "; the directory uses " + std::to_string(actual) + ". Update the game or directory so the versions match.");
+				m_ConnectionProtocolRefused = true;
+				SetState(State::Failed);
+				ScheduleRetry(nowMs);
+				return;
+			}
+		}
 		if (!reply.error.empty() || reply.statusCode == 0) {
 			NoteError("register: " + (reply.error.empty() ? "transport error" : reply.error));
 			ScheduleRetry(nowMs);
@@ -511,12 +544,22 @@ namespace RTE {
 				ScheduleRetry(nowMs);
 				return;
 			}
+			if (response.connectionProtocol != NetDirectoryLimits::c_ConnectionProtocol) {
+				NoteError("Your connection protocol is " + std::to_string(NetDirectoryLimits::c_ConnectionProtocol) + "; the directory uses " + std::to_string(response.connectionProtocol) + ". Update the game or directory so the versions match.");
+				m_ConnectionProtocolRefused = true;
+				SetState(State::Failed);
+				return;
+			}
 			m_SessionId = response.sessionId;
 			m_Token = response.token;
+			m_AuthorityKey = response.authorityKey;
 			if (m_Row.persistentWorld) {
 				RememberWorldProof(m_Row.resumeSessionId, m_Row.resumeToken);
 				RememberWorldProof(m_SessionId, m_Token);
 				m_WorldProofAttempt = std::make_pair(m_SessionId, m_Token); m_WorldProofRefusals = 0;
+			} else {
+				m_Row.resumeSessionId = m_SessionId;
+				m_Row.resumeToken = m_Token;
 			}
 			m_ObservedIp = response.observedIp;
 			// The register schema is unchanged, so a fresh row starts visible on either service.
@@ -558,16 +601,8 @@ namespace RTE {
 				ScheduleRetry(nowMs);
 				return;
 			}
-			// The stored row token is not this row's any more (a directory that restarted holds none): a world claims its own id
-			// again, anything else registers fresh, instead of leaving the row unlisted for the rest of its life.
-			const auto claim = std::make_pair(m_Row.resumeSessionId, m_Row.resumeToken);
-			if (std::find(m_RefusedResumes.begin(), m_RefusedResumes.end(), claim) == m_RefusedResumes.end()) {
-				if (m_RefusedResumes.size() >= c_MaxRefusedResumes) m_RefusedResumes.erase(m_RefusedResumes.begin());
-				m_RefusedResumes.push_back(claim);
-			}
-			ApplyRefusedResumes(m_Row);
-			NoteError(m_Row.resumeSessionId.empty() ? "register refused (403): the stored directory row is not ours, registering fresh"
-			                                        : "register refused (403): the directory holds no token for the world's row, claiming the world's id again");
+			// A fresh id would strand every issued seat. Keep proving the same hosted session.
+			NoteError("The directory could not verify this match. The running match can continue; restoring its directory state allows reconnects to resume.");
 			ScheduleRetry(nowMs);
 			return;
 		}
@@ -636,10 +671,12 @@ namespace RTE {
 				SetState(State::Failed);
 				return;
 			}
+			m_Row.resumeSessionId = m_SessionId;
+			m_Row.resumeToken = m_Token;
 			m_SessionId.clear();
 			m_Token.clear();
 			SetState(State::Registering);
-			NoteError("heartbeat: row gone (404), re-registering after the backoff");
+			NoteError("heartbeat: row gone (404), renewing its identity after the backoff");
 			ScheduleRetry(nowMs);
 			return;
 		}
@@ -864,6 +901,8 @@ namespace RTE {
 				lanIdentity.moduleManifestHash = host.compatibility.moduleManifestHash;
 				std::string why;
 				const bool lanWorld = worldLocal != nullptr && host.compatibility.lockstepCodecVersion == worldLocal->lockstepCodecVersion;
+				row.localNetworkProtocol = (lanWorld ? *worldLocal : local).networkProtocolVersion;
+				row.hostNetworkProtocol = lanIdentity.networkProtocolVersion;
 				if (NetDirectoryCodec::IsJoinable(lanIdentity, lanWorld ? *worldLocal : local, &why)) {
 					row.joinable = true;
 				} else {
@@ -896,6 +935,8 @@ namespace RTE {
 			row.spectatorMax = session.spectatorMax;
 			std::string why;
 			const NetDirectoryLocalIdentity& ident = (session.persistentWorld && worldLocal != nullptr) ? *worldLocal : local;
+			row.localNetworkProtocol = ident.networkProtocolVersion;
+			row.hostNetworkProtocol = session.networkProtocolVersion;
 			if (!NetDirectoryCodec::IsJoinable(session, ident, &why)) {
 				row.reason = MapMismatchReason(why);
 				NoteGameData(row, ident.moduleManifestHash, session.moduleManifestHash);
@@ -914,6 +955,8 @@ namespace RTE {
 	}
 
 	std::string NetDirectoryClient::JoinRefusalText(const GameRow& row, bool brief) {
+		if (row.reason == "protocol") return "Your network protocol is " + std::to_string(row.localNetworkProtocol) +
+			"; the host uses " + std::to_string(row.hostNetworkProtocol) + ". Update both games to the same version.";
 		if (row.reason == "modules") {
 			// The console lists each module's digest, so two players can find the module whose files differ.
 			if (brief) return "Cannot join: game data differs - see the console (~)";
@@ -926,8 +969,7 @@ namespace RTE {
 	std::string NetDirectoryClient::DescribeGameRow(const GameRow& row) {
 		const std::string refusal = row.joinable ? std::string() : " [" + row.reason + "]";
 		if (!row.persistentWorld) {
-			return "[" + row.source + "] " + row.name + " - " + row.activity + " (" + row.players + ") " +
-			       row.address + ":" + std::to_string(row.port) + refusal;
+			return "[" + row.source + "] " + row.name + " - " + row.activity + " (" + row.players + ")" + refusal;
 		}
 		// A world is judged by its boot, whether it is up, and what it still has room for; its address
 		// says nothing a player acts on because a world is reached through its own row.

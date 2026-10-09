@@ -82,38 +82,45 @@ namespace RTE {
 	}
 
 	inline std::string NetHostNatModeText(const SettingsMan& settings) {
-		if (!settings.GetNetworkIceEnableSetting()) return "Port forwarding required";
-		if (settings.GetNetworkHostRelayMode() != SettingsMan::NetworkHostRelayMode::Off) return "NAT: STUN + relay";
-		return settings.GetNetworkStunServersSetting().empty() ? "Port forwarding required" : "NAT: STUN";
+		if (!settings.GetNetworkIceEnableSetting()) return "By address: LAN or forwarded UDP";
+		if (settings.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) return "Relay only: relay required";
+		if (settings.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::DirectOnly) return "Direct only: no relay";
+		return settings.GetNetworkHostRelayMode() != SettingsMan::NetworkHostRelayMode::Off ? "Automatic: direct or relay" : "Automatic: direct routes only";
 	}
 
 	/// The relay row's hint for the drafted choice: what it does, then what the choice needs.
 	inline std::string NetHostRelayHint(const SettingsMan& settings, SettingsMan::NetworkHostRelayMode mode, bool directOn) {
 		if (settings.HasNetworkTurnServersOverride()) return "A command-line TURN override applies to this run; this row saves your hosting preference.\nDirect is lowest latency; a relay adds its round trip.";
-		if (!directOn) return "Automatic direct connection is off, so this match offers no relay. Turn it on above to offer one.";
+		if (!directOn) return "Automatic connection is off, so this match offers no relay. Turn it on above to offer one.";
+		if (settings.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly)
+			return mode == SettingsMan::NetworkHostRelayMode::Off ? "Relay only needs a relay. Select Game service or Custom relay before creating the lobby."
+				: "Relay only: every connection uses the selected relay.\nThe relay's round trip is added to each connection.";
+		if (settings.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::DirectOnly)
+			return "Direct only: this computer uses no relay.\nThe host's relay offer remains available to players who allow it.";
 		switch (mode) {
 			case SettingsMan::NetworkHostRelayMode::Off: return "No relay: a player who cannot connect directly cannot join.\nDirect connections have the lowest latency; some routers need port forwarding.";
 			case SettingsMan::NetworkHostRelayMode::Fixed: return "If a direct connection fails, your own relay carries it, adding its round trip.\nAddress: host:port or TURN URLs. Use a login, never a signing secret. Players may pick Direct only.";
-			default: return "If a direct connection fails, the game service relays it, adding its round trip.\nUDP relays only in this build; the game service's login renews itself while the session runs.";
+			default: return "If a direct connection fails, the game service relays it, adding its round trip.\nRelays support UDP, TCP and TLS; the game service's login renews while the session runs.";
 		}
 	}
 
 	/// The direct-connection row's hint for the drafted choice, then what this computer's settings and the live session mean for it.
 	inline std::string NetHostNatTraversalHint(const SettingsMan& settings, bool directOn, bool setup, bool readOnly, const std::string& route) {
-		// Two lines fit the row: with no STUN server to ask, what the choice does is reach this network only.
-		std::string text = !directOn ? "Players reach you only at your public address and port; many home networks cannot.\n"
-		                 : settings.GetNetworkStunServersSetting().empty() ? "The STUN server list is empty, so only players on your network connect directly (Settings - Network - Connection).\n"
-		                 : "Tries a direct connection through each player's router first. Recommended.\n";
-		if (readOnly) return text + "This is your saved preference; only the host sets up this match.";
+		std::string text = !directOn ? "Automatic connection is off; players need a reachable UDP address.\n"
+		                 : settings.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly ? "Relay only: players connect through a relay.\n"
+		                 : settings.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::DirectOnly ? "Direct only: NAT traversal or a reachable UDP address; no relay.\n"
+		                 : settings.GetNetworkStunServersSetting().empty() ? "No STUN servers: a relay, LAN or forwarded UDP can still connect.\n"
+		                 : "Automatic: tries direct routes, then a relay if needed.\n";
+		if (readOnly) return "Your connection policy: " + std::string(NetConnectionModeHint(settings.GetNetworkConnectionMode())) + "\nThe host controls discovery and the match's relay offer.";
 		if (settings.GetNetworkIceEnable() != settings.GetNetworkIceEnableSetting() || settings.GetNetworkStunServers() != settings.GetNetworkStunServersSetting()) {
 			return text + "Command-line ICE/STUN overrides apply to this run; this row saves your preference.";
 		}
 		if (!setup) {
 			if (route == "ip") return text + "This lobby connects by address: players need your UDP port forwarded, or the same network.";
-			if (route == "ice") return text + "This lobby connects players directly. Close it to change this.";
-			if (!settings.GetNetworkIceEnableSetting()) return text + "Direct connection is off for this lobby. Close it to change this.";
+			if (route == "ice") return text + "This lobby negotiates an allowed route. Close it to change automatic connection.";
+			if (!settings.GetNetworkIceEnableSetting()) return text + "Automatic connection is off for this lobby. Close it to change this.";
 		}
-		return text + (settings.GetSessionDirectoryUrl().empty() ? "A direct connection over the internet needs the online game list service (Settings - Network - Internet)."
+		return text + (settings.GetSessionDirectoryUrl().empty() ? "Automatic connections need the online game list service (Settings - Network - Internet)."
 		                                                          : !setup ? "The lobby is still setting up its connection." : "Applied when you create the lobby.");
 	}
 
@@ -123,8 +130,23 @@ namespace RTE {
 
 	inline std::string NetHostSeatRemovalRefusal(NetMatchServiceState state, bool published, uint8_t peerId, const std::string& verb) {
 		if (state == NetMatchServiceState::Completed) return verb + ": match completed; return to the lobby first.";
-		if (!published) return verb + ": no moderation row for peer " + std::to_string(peerId) + " (" + NetMatchService::StateName(state) + ").";
+		if (!published) return verb + ": no player holds this seat.";
 		return {};
+	}
+
+	inline const char* NetKickBanResultText(NetKickBanResult result) {
+		switch (result) {
+			case NetKickBanResult::Ok: return "Done.";
+			case NetKickBanResult::Queued: return "Waiting for the host to apply it...";
+			case NetKickBanResult::NotHosting: return "Only the host can do this.";
+			case NetKickBanResult::UnknownSeat: return "This seat is no longer in the lobby.";
+			case NetKickBanResult::ForbiddenTarget: return "The host's own seat cannot be removed.";
+			case NetKickBanResult::StaleSelection: return "This seat changed. Open its details and try again.";
+			case NetKickBanResult::ActionUnavailable: return "No player is available to remove from this seat.";
+			case NetKickBanResult::PersistenceFailed: return "The ban could not be saved. Check the host's storage.";
+			case NetKickBanResult::UnknownIdentity: return "This player's identity is not available yet. Try again after they join.";
+		}
+		return "The action could not be completed.";
 	}
 
 	inline bool NetHostRepairEnabled(const NetMatchService& service) {
@@ -181,8 +203,18 @@ namespace RTE {
 		for (const NetMatchPlayerSlot& slot : config.players) {
 			(slot.cpu ? cpus : humans)++;
 		}
-		line("Seats: " + std::to_string(humans) + " human, " + std::to_string(cpus) + " CPU of " +
-		     std::to_string(config.peerCount) + " peers");
+		line("Players: " + std::to_string(humans) + " human, " + std::to_string(cpus) + " AI");
+		for (size_t team = 0; team < config.teamRules.size(); ++team) {
+			std::string players;
+			for (const auto& slot: config.players) {
+				if (slot.team != team) continue;
+				players += (players.empty() ? "" : ", ") + (slot.displayName.empty() ? "Player " + std::to_string(slot.peerId) : slot.displayName) + (slot.cpu ? " (AI)" : " (human)");
+			}
+			if (players.empty()) continue;
+			const auto& rules = config.teamRules[team];
+			line("Team " + std::to_string(team + 1) + ": " + players);
+			line("  Technology: " + (rules.technologyModule.empty() ? (rules.technologyIntent == "-All-" ? std::string("All factions") : rules.technologyIntent) : rules.technologyModule) + "   AI skill: " + std::to_string(rules.aiSkill));
+		}
 		// Short rows share a line, so the summary fits the smallest panel that shows it.
 		line("Difficulty: " + std::to_string(config.difficulty) + "   Starting gold: " +
 		     (config.startingGold >= NetMatchConfigUtil::c_InfiniteGold ? std::string("Infinite") : std::to_string(config.startingGold) + " oz"));
@@ -192,6 +224,13 @@ namespace RTE {
 		// The brainless-humans row, in the same words the Rules page's combo uses.
 		line(std::string("When every human brain is lost: ") +
 		     (config.brainlessHumansSpectate ? "Keep playing, humans spectate" : "End the match"));
+		return text;
+	}
+
+	/// Connection and recovery details, shown separately from the round's rules.
+	inline std::string NetHostConnectionSummary(const NetMatchConfig& config, const NetLobbySnapshot& snapshot) {
+		std::string text;
+		auto line = [&text](const std::string& row) { text += (text.empty() ? "" : "\n") + row; };
 		// The live figure drops the service's own row name, which this line already carries.
 		std::string live = snapshot.inputDelayText;
 		if (live.starts_with("Input delay: ")) live.erase(0, 13);

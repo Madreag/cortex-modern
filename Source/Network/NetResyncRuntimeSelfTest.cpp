@@ -753,7 +753,119 @@ namespace RTE {
 				"frame wait failure was refused with \"" + waitReason + "\" instead of the boundary reason");
 		}
 
-		bool TestThreePeerCapture(std::string* error) {
+		bool TestRecoveryDrainsCommittedPrefix(std::string* error) {
+			Pair pair(44217, 0, 0);
+			if (!pair.Start(error) || !pair.Running(error) || !pair.host.PrimeResyncInputs({}, error) || !pair.client.PrimeResyncInputs({}, error)) return false;
+			ResetScenario reset;
+			ScenarioRunner::SetLockstepCoordinator(&pair.host);
+			pair.host.DeferStopsToTickBoundary();
+			constexpr uint64_t last = c_Start + NetLockstepCodec::c_MaxFutureFrameSkew + 53;
+			InputsByFrame host, client;
+			for (uint64_t target = c_Start; target <= last; ++target) {
+				host[target] = FullInput(1, target, pair.host.GetRoundId());
+				client[target] = FullInput(2, target, pair.client.GetRoundId());
+				if (!QueueFull(pair.host, host.at(target), error) || !QueueFull(pair.client, client.at(target), error) ||
+				    !pair.Until([&] { return pair.host.GetStats().nextFrame == target + 1 && pair.client.GetStats().nextFrame == target + 1; }, error)) return false;
+				NetLockstepReadyFrame ready;
+				if (!Check(pair.client.PopReadyFrame(ready) && ready.frame == target, error, "survivor lost a committed input")) return false;
+				(void)pair.client.FinishSimulationTick(target);
+			}
+			NetResyncState tooEarly;
+			std::vector<uint8_t> envelope;
+			std::string refused;
+			if (!ScenarioRunner::CaptureNetResyncState(c_Start - 1, tooEarly, error, false) ||
+			    !Check(!NetResyncCodec::Encode(tooEarly, {1}, envelope, &refused) && !refused.empty(), error,
+			           "an oversized committed prefix escaped the recovery bound")) return false;
+			if (!pair.host.BeginSimulationTick(c_Start, error)) return false;
+			pair.host.RequestResync("long-stall recovery");
+			std::vector<NetLockstepFrame> future;
+			for (uint64_t target = last + 1; target <= last + 2; ++target) {
+				for (uint8_t peer: {uint8_t{1}, uint8_t{2}}) {
+					auto input = FullInput(peer, target, pair.host.GetRoundId());
+					if (!QueueFull(peer == 1 ? pair.host : pair.client, input, error)) return false;
+					future.push_back(std::move(input));
+				}
+			}
+			for (int step = 0; step < 4; ++step) pair.Step();
+			if (!Check(pair.host.GetStats().nextFrame == last + 1, error, "the recovery boundary moved while its world caught up")) return false;
+			for (uint64_t target = c_Start; target <= last; ++target) {
+				if (!pair.host.BeginSimulationTick(target, error)) return false;
+				NetLockstepReadyFrame ready;
+				if (!Check(pair.host.PopReadyFrame(ready) && ready.frame == target, error, "recovery skipped or repeated a committed tick")) return false;
+				for (uint8_t peer: {uint8_t{1}, uint8_t{2}}) {
+					const auto& input = (peer == 1 ? host : client).at(target);
+					if (!Check(SameInput(ReadyInput(ready, peer, 1, pair.host.GetRoundId()), input), error,
+					           "recovery changed committed controller, command or observation bytes")) return false;
+					for (const auto& command: input.commands) {
+						if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) ScenarioRunner::ObserveLockstepPlayerBindings(peer, target, *bindings);
+						else if (!Check(ScenarioRunner::ConsumeLockstepGameCommand(command), error, "recovery applied a command twice")) return false;
+					}
+				}
+				const bool stopped = ScenarioRunner::FinishLockstepSimulationTick(target);
+				if (!Check(stopped == (target == last) && (target == last ? pair.host.IsFailed() : pair.host.IsRunning()), error,
+				           "recovery stopped before the committed world was complete: tick=" + std::to_string(target) +
+				           " last=" + std::to_string(last) + " state=" + NetLockstepCoordinator::StateName(pair.host.GetState()) +
+				           " reason=" + pair.host.GetStats().timeoutReason)) return false;
+				pair.Step();
+			}
+			uint64_t dropFrame = 0;
+			NetResyncState captured, decoded;
+			std::vector<uint8_t> archive;
+			if (!ScenarioRunner::ResolveResyncDropFrame(pair.host.GetResumeFrame(), last, dropFrame, error) ||
+			    !ScenarioRunner::CaptureNetResyncState(last, captured, error, false) ||
+			    !NetResyncCodec::Encode(captured, {1, 2, 3}, envelope, error) ||
+			    !NetResyncCodec::Decode(envelope, captured.sessionId, dropFrame, decoded, archive, error)) return false;
+			NetLockstepReadyFrame extra;
+			return Check(dropFrame == last + 1 && decoded.savedTick == last && SameInputs(decoded.pendingInputs, future) &&
+			             archive == std::vector<uint8_t>({1, 2, 3}) && !pair.host.PopReadyFrame(extra), error,
+			             "recovery lost future input or mislabeled the completed world");
+		}
+
+		bool TestRecoveryAtGrantedBoundary(std::string* error) {
+			// A request between ticks must finish at the completed world without inventing another tick.
+			{
+				Pair completed(44218, 0, 0);
+				if (!completed.Start(error) || !completed.Running(error) ||
+				    !completed.host.PrimeResyncInputs({}, error) || !completed.client.PrimeResyncInputs({}, error)) return false;
+				completed.host.DeferStopsToTickBoundary();
+				if (!QueueFull(completed.host, FullInput(1, c_Start, completed.host.GetRoundId()), error) ||
+				    !QueueFull(completed.client, FullInput(2, c_Start, completed.client.GetRoundId()), error) ||
+				    !completed.Until([&] { return completed.host.GetStats().nextFrame == c_Start + 1 && completed.client.GetStats().nextFrame == c_Start + 1; }, error)) return false;
+				NetLockstepReadyFrame ready;
+				if (!Check(completed.host.PopReadyFrame(ready) && ready.frame == c_Start &&
+				           completed.client.PopReadyFrame(ready) && ready.frame == c_Start, error, "between-ticks fixture did not deliver its completed world")) return false;
+				completed.host.FinishSimulationTick(c_Start);
+				completed.client.FinishSimulationTick(c_Start);
+				completed.host.RequestResync("between ticks recovery");
+				if (!Check(completed.host.IsFailed() && !completed.host.HasPendingRecoveryStop() &&
+				           completed.host.GetResumeFrame() == c_Start + 1 && !completed.host.PopReadyFrame(ready), error,
+				           "between-ticks recovery waited for a nonexistent tick or changed the completed boundary")) return false;
+				if (!completed.Until([&] { return completed.client.IsFailed(); }, error) ||
+				    !Check(completed.client.GetResumeFrame() == c_Start + 1 && !completed.client.PopReadyFrame(ready), error,
+				           "between-ticks recovery did not stop its peer at the completed boundary")) return false;
+			}
+			Pair pair(44218, 0, 0);
+			if (!pair.Start(error) || !pair.Running(error) || !pair.host.PrimeResyncInputs({}, error) || !pair.client.PrimeResyncInputs({}, error)) return false;
+			pair.host.DeferStopsToTickBoundary();
+			const auto host = FullInput(1, c_Start, pair.host.GetRoundId());
+			const auto client = FullInput(2, c_Start, pair.client.GetRoundId());
+			if (!QueueFull(pair.host, host, error) || !QueueFull(pair.client, client, error) ||
+			    !pair.Until([&] { return pair.host.GetStats().nextFrame == c_Start + 1; }, error) ||
+			    !pair.host.BeginSimulationTick(c_Start, error)) return false;
+			NetLockstepReadyFrame ready;
+			if (!Check(pair.host.PopReadyFrame(ready) && ready.frame == c_Start, error, "granted tick was not committed")) return false;
+			pair.host.RequestResync("in-flight tick recovery");
+			const auto futureHost = FullInput(1, c_Start + 1, pair.host.GetRoundId());
+			const auto futureClient = FullInput(2, c_Start + 1, pair.client.GetRoundId());
+			if (!QueueFull(pair.host, futureHost, error) || !QueueFull(pair.client, futureClient, error)) return false;
+			for (int step = 0; step < 4; ++step) pair.Step();
+			return Check(pair.host.GetStats().nextFrame == c_Start + 1 && pair.host.FinishSimulationTick(c_Start) &&
+			             pair.host.GetResumeFrame() == c_Start + 1 && !pair.host.PopReadyFrame(ready) &&
+			             SameInputs(pair.host.CapturePendingInputs(c_Start), {futureHost, futureClient}), error,
+			             "recovery added a tick after its granted boundary or lost future input");
+		}
+
+		bool TestThreePeerCapture(std::string* error, bool withBoundary = false) {
 			std::array<LoopbackTransport, 3> transports;
 			std::array<NetLockstepCoordinator, 3> coordinators;
 			if (!transports[0].StartHost(44201, error) || !transports[1].Connect("loopback", 44201, error) || !transports[2].Connect("loopback", 44201, error)) return false;
@@ -766,6 +878,7 @@ namespace RTE {
 				config.peerCount = 3;
 				config.timeoutMs = 1000;
 				config.resumeFromSnapshot = true;
+				if (withBoundary) config.initialDelayChanges = {{2, {{c_Start, 2}}}};
 				config.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
 				config.relayToOtherPeers = peer == 1;
 				if (!coordinators[peer - 1].Start(transports[peer - 1], config, error)) return false;
@@ -786,15 +899,18 @@ namespace RTE {
 			std::vector<NetLockstepFrame> expected;
 			for (uint8_t peer = 1; peer <= 3; ++peer) {
 				auto input = FullInput(peer, c_Start, coordinators[peer - 1].GetRoundId());
-				input.commands.clear(); input.observations.clear();
-				if (!coordinators[peer - 1].PrimeResyncInputs({}, error) || !QueueFull(coordinators[peer - 1], input, error)) return false;
+				if (!withBoundary) { input.commands.clear(); input.observations.clear(); }
+				// A recovered packet keeps its target even when the boundary changes its peer's delay.
+				if (!coordinators[peer - 1].PrimeResyncInputs({}, error) || !coordinators[peer - 1].QueueRecoveredInput(input, error)) return false;
 				expected.push_back(std::move(input));
 			}
 			if (!Check(drive([&] { return std::all_of(coordinators.begin(), coordinators.end(), [](const auto& item) { return item.GetStats().nextFrame == c_Start + 1; }); }),
 			           error, "three-peer recovery capture did not retain a ready frame")) return false;
+			auto applied = expected;
+			if (withBoundary) applied.front().commands.push_back({1, NetGameInputDelay{2, 2}});
 			for (const auto& coordinator: coordinators) {
-				if (!Check(SameInputs(coordinator.CapturePendingInputs(c_Start - 1), expected), error,
-				           "ready controller-only inputs lost their original sender when remote inputs were merged")) return false;
+				if (!Check(SameInputs(coordinator.CapturePendingInputs(c_Start - 1), applied) && SameInputs(coordinator.CapturePendingSourceInputs(c_Start - 1), expected), error,
+				           "ready inputs lost their sender, source commands or appended boundary commands")) return false;
 			}
 			return true;
 		}
@@ -1049,8 +1165,10 @@ namespace RTE {
 			             error, "second-heal envelope failed to retain the complete pending input state");
 		}
 
-		bool TestRepeatedFullDelayedRestore(uint16_t hostDelay, uint16_t clientDelay, uint16_t port, std::string* error) {
+		bool TestRepeatedFullDelayedRestore(uint16_t hostDelay, uint16_t clientDelay, uint16_t port, std::string* error, bool withBoundary = false) {
 			Pair pair(port, hostDelay, clientDelay);
+			constexpr uint64_t boundary = c_Start + 3;
+			if (withBoundary) pair.hostConfig.initialDelayChanges = pair.clientConfig.initialDelayChanges = {{2, {{boundary, clientDelay}}}};
 			if (!pair.Start(error) || !pair.Running(error)) return false;
 			ResetScenario reset;
 			ScenarioRunner::SetLockstepCoordinator(&pair.host);
@@ -1063,16 +1181,22 @@ namespace RTE {
 				std::vector<NetLockstepFrame> priming;
 				for (uint64_t target = c_Start; target <= last; ++target) {
 					expected[target] = FullInput(peer, target, coordinator.GetRoundId(), target == c_Start + 1 ? 4096 : 3);
+					if (withBoundary && peer == 1 && target == boundary) expected[target].commands.push_back({1, NetGameSetTeamFunds{0, 919}});
 					if (target < c_Start + delay) priming.push_back(expected.at(target));
 				}
 				if (!coordinator.PrimeResyncInputs(priming, error)) return false;
 				for (uint64_t target = c_Start + delay; target <= last; ++target) if (!coordinator.QueueRecoveredInput(expected.at(target), error)) return false;
 			}
 			if (!pair.Until([&] { return pair.host.GetStats().nextFrame == last + 1 && pair.client.GetStats().nextFrame == last + 1; }, error)) return false;
-			const auto expectedInputs = [&](uint64_t first) {
+			const auto expectedInput = [&](uint8_t peer, uint64_t target, bool source) {
+				auto input = (peer == 1 ? host : client).at(target);
+				if (withBoundary && peer == 1 && target == boundary && !source) input.commands.push_back({1, NetGameInputDelay{2, clientDelay}});
+				return input;
+			};
+			const auto expectedInputs = [&](uint64_t first, bool source = false) {
 				std::vector<NetLockstepFrame> result;
 				for (uint64_t target = first; target <= last; ++target) {
-					result.push_back(host.at(target)); result.push_back(client.at(target));
+					result.push_back(expectedInput(1, target, source)); result.push_back(expectedInput(2, target, source));
 				}
 				return result;
 			};
@@ -1080,7 +1204,10 @@ namespace RTE {
 				NetResyncState captured;
 				std::vector<uint8_t> bytes, archive;
 				return ScenarioRunner::CaptureNetResyncState(saved, captured, error) &&
-				       Check(captured.sourceRound == pair.host.GetRoundId() && SameInputs(captured.pendingInputs, expectedInputs(saved + 1)),
+				       Check(captured.sourceRound == pair.host.GetRoundId() && SameInputs(captured.pendingInputs, expectedInputs(saved + 1)) &&
+				             captured.sourceCommandCounts == (withBoundary && saved < boundary ?
+				                 std::map<std::pair<uint8_t, uint64_t>, size_t>{{{1, boundary}, host.at(boundary).commands.size()}} :
+				                 std::map<std::pair<uint8_t, uint64_t>, size_t>{}),
 				             error, "delayed heal capture changed accepted input targets or bytes") &&
 				       NetResyncCodec::Encode(captured, {0x44, 0x33}, bytes, error) &&
 				       NetResyncCodec::Decode(bytes, captured.sessionId, saved + 1, state, archive, error) &&
@@ -1095,7 +1222,18 @@ namespace RTE {
 				for (auto* inputs: {&host, &client}) for (auto& [target, input]: *inputs) input.roundId = pair.host.GetRoundId();
 				const auto expected = expectedInputs(state.savedTick + 1);
 				const auto attempts = pair.hostTransport.recoveryAttempts + pair.clientTransport.recoveryAttempts;
-				if (!ScenarioRunner::RestoreNetResyncState(state, error) || !pair.client.InstallResyncInputs(expected, error)) return false;
+				if (withBoundary && state.savedTick == c_Start - 1) {
+					for (int field = 0; field < 3; ++field) {
+						auto conflicting = state;
+						for (auto& input: conflicting.pendingInputs) if (input.senderPeerId == 1 && input.targetFrame == boundary) {
+							if (field == 0) input.frames.front().aimAngle += 0.125F;
+							if (field == 1) std::get<NetGameSetTeamFunds>(input.commands.at(3).payload).funds += 1;
+							if (field == 2) input.observations.front().value = 0.0F;
+						}
+						if (!RefuseRestoreUnchanged(pair, pair.host, conflicting, "decorated input changed original packet field " + std::to_string(field), error)) return false;
+					}
+				}
+				if (!ScenarioRunner::RestoreNetResyncState(state, error) || !pair.client.InstallResyncInputs(expected, error, state.sourceCommandCounts)) return false;
 				std::vector<NetLockstepFrame> priming;
 				for (uint16_t index = 0; index < clientDelay; ++index) priming.push_back(client.at(state.savedTick + 1 + index));
 				if (!pair.client.PrimeResyncInputs(priming, error)) return false;
@@ -1103,6 +1241,8 @@ namespace RTE {
 					if (!ScenarioRunner::QueueLockstepLocalControllerFrames(produced, {Input(1, produced + 999)}, error)) return false;
 				}
 				return Check(SameInputs(pair.host.CapturePendingInputs(state.savedTick), expected) && SameInputs(pair.client.CapturePendingInputs(state.savedTick), expected) &&
+				             SameInputs(pair.host.CapturePendingSourceInputs(state.savedTick), expectedInputs(state.savedTick + 1, true)) &&
+				             SameInputs(pair.client.CapturePendingSourceInputs(state.savedTick), expectedInputs(state.savedTick + 1, true)) &&
 				             pair.host.GetStats().framePacketsSent == 0 && pair.client.GetStats().framePacketsSent == 0 &&
 				             pair.hostTransport.recoveryAttempts + pair.clientTransport.recoveryAttempts == attempts,
 				             error, "delayed restore or priming sampled fresh input, changed history or resent accepted input");
@@ -1115,14 +1255,14 @@ namespace RTE {
 						NetLockstepReadyFrame ready;
 						if (!Check(coordinator.PopReadyFrame(ready) && ready.frame == target, error, "repeated delayed restore changed commitment order or target")) return false;
 						for (uint8_t peer: {uint8_t{1}, uint8_t{2}}) {
-							const auto& expected = (peer == 1 ? host : client).at(target);
+							const auto expected = expectedInput(peer, target, false);
 							if (!Check(SameInput(ReadyInput(ready, peer, local, coordinator.GetRoundId()), expected), error,
 							           "repeated delayed restore changed controller, command or observation bytes")) return false;
 							if (local != 1) continue;
 							for (const auto& command: expected.commands) {
 								if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) {
 									ScenarioRunner::ObserveLockstepPlayerBindings(peer, target, *bindings);
-								} else if (!Check(ScenarioRunner::ConsumeLockstepGameCommand(command) && !ScenarioRunner::ConsumeLockstepGameCommand(command),
+								} else if (!Check(ScenarioRunner::ConsumeLockstepGameCommand(command) && (command.sequence == 0 || !ScenarioRunner::ConsumeLockstepGameCommand(command)),
 								                  error, "repeated delayed restore skipped or reapplied a command")) return false;
 							}
 						}
@@ -1299,13 +1439,16 @@ namespace RTE {
 		run("checksum ACK authority", TestChecksumAckAuthority);
 		run("snapshot capture", TestSnapshotCapture);
 		run("deferred stop capture", TestDeferredStopCapture);
+		run("recovery drains committed prefix", TestRecoveryDrainsCommittedPrefix);
+		run("recovery at granted boundary", TestRecoveryAtGrantedBoundary);
 		run("destroyed coordinator retires", TestDestroyedCoordinatorRetires);
 		run("full asymmetric input 0/3", [](auto* error) { return TestFullAsymmetric(0, 3, 44196, error); });
 		run("full asymmetric input 3/0", [](auto* error) { return TestFullAsymmetric(3, 0, 44197, error); });
 		run("full asymmetric input 1/3", [](auto* error) { return TestFullAsymmetric(1, 3, 44198, error); });
 		run("full asymmetric input 3/1", [](auto* error) { return TestFullAsymmetric(3, 1, 44199, error); });
 		run("recovery chunk retry", TestRecoveryChunkRetry);
-		run("three-peer capture", TestThreePeerCapture);
+		run("three-peer capture", [](auto* error) { return TestThreePeerCapture(error); });
+		run("three-peer boundary capture", [](auto* error) { return TestThreePeerCapture(error, true); });
 		run("local history bound", TestLocalHistoryBound);
 		run("second heal before resend", TestSecondHealBeforeResend);
 		run("unknown local input", TestLocalUnknownInput);
@@ -1315,6 +1458,8 @@ namespace RTE {
 		run("unsent intent targets", TestUnsentIntentTargets);
 		run("repeated full restore 1/3", [](auto* error) { return TestRepeatedFullDelayedRestore(1, 3, 44213, error); });
 		run("repeated full restore 3/1", [](auto* error) { return TestRepeatedFullDelayedRestore(3, 1, 44214, error); });
+		run("repeated boundary restore 1/3", [](auto* error) { return TestRepeatedFullDelayedRestore(1, 3, 44215, error, true); });
+		run("repeated boundary restore 3/1", [](auto* error) { return TestRepeatedFullDelayedRestore(3, 1, 44216, error, true); });
 		if (failed != 0) {
 			std::cerr << "[net-resync-runtime-selftest] FAIL: " << failed << " of " << total << " groups" << std::endl;
 			return 1;

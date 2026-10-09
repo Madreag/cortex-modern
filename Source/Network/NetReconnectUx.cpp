@@ -12,14 +12,14 @@ namespace RTE {
 	void NetReconnectUx::NoteConnected(uint64_t nowMs) {
 		(void)nowMs;
 		m_State = NetReconnectUxState::Connected;
+		m_ResumeWindowMs = c_ResumeWindowMs;
 		m_Attempts = 0;
 		m_Reason.clear();
 	}
 
 	void NetReconnectUx::NoteDropped(uint64_t nowMs, std::string reason) {
-		// A schedule that is already running, has been stopped by the player, or has run out is not
-		// re-armed by the same loss being reported again.
-		if (IsActive()) {
+		// The same loss cannot restart a running, cancelled, spent or refused attempt.
+		if (IsActive() || IsRefused()) {
 			return;
 		}
 		m_State = NetReconnectUxState::Waiting;
@@ -33,6 +33,7 @@ namespace RTE {
 	void NetReconnectUx::NoteReconnected(uint64_t nowMs) {
 		(void)nowMs;
 		m_State = NetReconnectUxState::Reconnected;
+		m_ResumeWindowMs = c_ResumeWindowMs;
 		m_Reason.clear();
 	}
 
@@ -40,7 +41,7 @@ namespace RTE {
 		if (m_State != NetReconnectUxState::Waiting) {
 			return false;
 		}
-		if (m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > c_ResumeWindowMs)) {
+		if (!m_RetainedSeat && (m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > m_ResumeWindowMs))) {
 			// The host's own resume window has closed, so nothing this side does can still land.
 			m_State = NetReconnectUxState::GaveUp;
 			return false;
@@ -50,18 +51,19 @@ namespace RTE {
 
 	void NetReconnectUx::NoteAttemptStarted(uint64_t nowMs) {
 		m_State = NetReconnectUxState::Retrying;
-		++m_Attempts;
+		if (m_Attempts != UINT32_MAX) ++m_Attempts;
 		m_NextAttemptMs = nowMs + c_AttemptIntervalMs;
 	}
 
 	void NetReconnectUx::NoteAttemptFailed(uint64_t nowMs, std::string reason) {
+		if (IsRefused()) return;
 		if (!reason.empty()) {
 			m_Reason = std::move(reason);
 		}
 		if (m_State != NetReconnectUxState::Retrying) {
 			return;
 		}
-		m_State = m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > c_ResumeWindowMs)
+		m_State = !m_RetainedSeat && (m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > m_ResumeWindowMs))
 		              ? NetReconnectUxState::GaveUp
 		              : NetReconnectUxState::Waiting;
 	}
@@ -83,13 +85,14 @@ namespace RTE {
 	}
 
 	void NetReconnectUx::RequestManualRetry(uint64_t nowMs) {
-		if (!CanRetryManually()) {
+		if (!CanRetryManually() && m_Offer != NetReconnectOffer::Available) {
 			return;
 		}
 		m_State = NetReconnectUxState::Waiting;
 		m_DroppedAtMs = nowMs;
 		m_NextAttemptMs = nowMs;
 		m_Attempts = 0;
+		m_Reason.clear();
 	}
 
 	bool NetReconnectUx::CanCancel() const {
@@ -100,7 +103,8 @@ namespace RTE {
 		return m_State == NetReconnectUxState::GaveUp || m_State == NetReconnectUxState::Cancelled;
 	}
 
-	void NetReconnectUx::OfferStoredTicket(NetH4TicketLoadResult load, std::string hostAddress) {
+	void NetReconnectUx::OfferStoredTicket(NetH4TicketLoadResult load, std::string hostAddress, std::string matchName) {
+		m_OfferName = std::move(matchName);
 		switch (load) {
 			case NetH4TicketLoadResult::Loaded:
 				m_Offer = NetReconnectOffer::Available;
@@ -117,22 +121,30 @@ namespace RTE {
 				break;
 		}
 		m_OfferAddress.clear();
+		m_OfferName.clear();
 	}
 
 	void NetReconnectUx::DismissOffer() {
 		m_Offer = NetReconnectOffer::None;
 		m_OfferAddress.clear();
+		m_OfferName.clear();
+	}
+
+	void NetReconnectUx::DismissStoredOffer() {
+		if (m_Offer == NetReconnectOffer::Available) m_Offer = NetReconnectOffer::Dismissed;
+		StopWatchingForHostReturn();
 	}
 
 	void NetReconnectUx::WatchForHostReturn(std::string matchName, std::string directorySessionId) {
 		m_AwaitingHostReturn = true;
 		m_HostReturned = false;
-		m_AwaitMatchName = matchName.empty() ? "the match" : std::move(matchName);
+		m_AwaitMatchName = matchName.empty() || matchName.starts_with("ice:") || matchName.starts_with("iceip:") || matchName.starts_with("iceid:") ? "your match" : std::move(matchName);
 		m_AwaitSessionId = std::move(directorySessionId);
 	}
 
-	void NetReconnectUx::NoteHostReturn(bool present) {
+	void NetReconnectUx::NoteHostReturn(bool present, const std::string& matchName) {
 		if (m_AwaitingHostReturn) {
+			if (present && !matchName.empty()) m_AwaitMatchName = m_OfferName = matchName;
 			m_HostReturned = present;
 			m_WatchReason.clear();
 		}
@@ -169,11 +181,14 @@ namespace RTE {
 
 	std::string NetReconnectUx::GetOfferText() const {
 		switch (m_Offer) {
-			case NetReconnectOffer::Available: return "Rejoin your match at " + m_OfferAddress + "?";
+			case NetReconnectOffer::Available:
+				if (!m_OfferName.empty()) return "Rejoin " + m_OfferName + "?";
+				return "Rejoin your match?";
 			case NetReconnectOffer::Corrupt: return "The saved rejoin information is damaged and cannot be used.";
 			case NetReconnectOffer::Stale: return "The saved rejoin information is too old to use.";
 			case NetReconnectOffer::Missing: return "No reconnect record for that match.";
 			case NetReconnectOffer::None: break;
+			case NetReconnectOffer::Dismissed: break;
 		}
 		return "";
 	}
@@ -182,7 +197,11 @@ namespace RTE {
 		const std::string tail = m_Reason.empty() ? "" : " (" + m_Reason + ")";
 		switch (m_State) {
 			case NetReconnectUxState::Waiting:
+				if (m_RetainedSeat) return "Reconnecting - waiting to reach your match. Cancel stops rejoining." + tail;
+				return m_Attempts == 0 ? "Rejoining the match... preparing the first attempt. Cancel stops rejoining." + tail : "Rejoin attempt " + std::to_string(m_Attempts) + " of " +
+				       std::to_string(c_MaxAttempts) + " failed; retrying shortly" + tail;
 			case NetReconnectUxState::Retrying:
+				if (m_RetainedSeat) return "Reconnecting - reclaiming your seat. Cancel stops rejoining." + tail;
 				return "Rejoining the match... attempt " + std::to_string(m_Attempts == 0 ? 1U : m_Attempts) + " of " +
 				       std::to_string(c_MaxAttempts) + tail;
 			case NetReconnectUxState::Reconnected: return "Back in the match.";
@@ -205,6 +224,10 @@ namespace RTE {
 			return " - Reconnecting";
 		}
 		return dropped ? " - Disconnected" : "";
+	}
+
+	const char* NetReconnectUx::HeldSeatReturnNotice() {
+		return "The AI plays your units; your seat is held until the host reassigns it.";
 	}
 
 	std::string NetModerationPanelTitle(bool running, bool holdPause, const std::string& holdName, uint32_t holdSeconds, bool sharedPause) {
@@ -233,6 +256,21 @@ namespace RTE {
 			return seconds < 60 ? std::to_string(seconds) + " s ago" : std::to_string(seconds / 60) + " min ago";
 		};
 		if (seat.closed) return {};
+		switch (seat.holdCause) {
+			case NetSeatHoldCause::Capacity: return "Machine too slow";
+			case NetSeatHoldCause::LateStream: return "Inputs arrived too late";
+			case NetSeatHoldCause::TimingAck: return "Waiting for the player to accept the input delay";
+			case NetSeatHoldCause::Quiet: return "Stopped receiving this player's input";
+			case NetSeatHoldCause::OwnSeat: return "Catching up before taking control";
+			case NetSeatHoldCause::Crash: return "The player's game stopped";
+			case NetSeatHoldCause::RejoinFailed: return "The return could not catch up";
+			case NetSeatHoldCause::Leave: return "Left " + ago(seat.leftForMs);
+			case NetSeatHoldCause::LinkDrop: return "Connection lost " + ago(seat.droppedForMs);
+			case NetSeatHoldCause::Released: return "The host opened the seat";
+			case NetSeatHoldCause::Kicked: return "Removed by the host";
+			case NetSeatHoldCause::Banned: return "Banned by the host";
+			case NetSeatHoldCause::None: break;
+		}
 		if (seat.leftByChoice) return "Left " + ago(seat.leftForMs);
 		if (seat.slowMachine) return "Machine too slow";
 		if (seat.dropped) return "Connection lost " + ago(seat.droppedForMs);
@@ -254,7 +292,7 @@ namespace RTE {
 	void NetModerationUx::Refresh(const std::vector<NetH4ModerationSeat>& seats) {
 		m_Rows.clear();
 		for (const NetH4ModerationSeat& seat: seats) {
-			if (seat.cpu || (!seat.substitutable && !seat.substituting && !seat.dropped && !seat.slowMachine)) {
+			if (seat.cpu || (!seat.held && !seat.substitutable && !seat.substituting && !seat.dropped && !seat.slowMachine)) {
 				continue;
 			}
 			Row row;

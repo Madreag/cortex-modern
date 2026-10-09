@@ -288,7 +288,7 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_RelayUserTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkRelayUser"));
 	m_RelayPassTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkRelayPass"));
 	m_RelayPassTextbox->SetPasswordMask(true);
-	dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkRelayHint"))->SetText("Leave the address empty for the host's offer. Changes apply next connection.\nUDP TURN only; no TCP/TLS relays. A host's directory login renews while the session runs.");
+	dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkRelayHint"))->SetText("Leave the address empty for the host's offer. Changes apply next connection.\nRelays support UDP, TCP and TLS. A host's directory login renews while the session runs.");
 	for (GUITextBox* box : {m_StunServersTextbox, m_RelayAddressTextbox, m_RelayUserTextbox, m_RelayPassTextbox}) box->SetMaxTextLength(1024);
 	for (const char* name : {"LabelNetworkConnectionHint", "LabelNetworkStunHint", "LabelNetworkOwnRelay", "LabelNetworkRelayHint", "LabelNetInternetReason"}) {
 		if (auto* label = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl(name))) label->SetFont(m_GUIControlManager->GetSkin()->GetFont("FontSmall.png"));
@@ -452,6 +452,7 @@ void SettingsNetworkGUI::UpdateStatusLines() {
 	const char* record = "-";
 	switch (reconnect.GetOffer()) {
 		case NetReconnectOffer::Available: record = "Rejoin available"; break;
+		case NetReconnectOffer::Dismissed: record = "Manual rejoin available"; break;
 		case NetReconnectOffer::Corrupt: record = "Unreadable"; break;
 		case NetReconnectOffer::Stale: record = "Expired"; break;
 		case NetReconnectOffer::Missing: record = "No recovery record"; break;
@@ -460,7 +461,7 @@ void SettingsNetworkGUI::UpdateStatusLines() {
 	m_RecoveryRecordLabel->SetText(record);
 	const std::string status = reconnect.GetStatusText();
 	m_RecoveryStatusLabel->SetText(status.empty() ? "-" : status);
-	m_RejoinButton->SetEnabled(reconnect.GetOffer() == NetReconnectOffer::Available || reconnect.CanRetryManually());
+	m_RejoinButton->SetEnabled(reconnect.GetOffer() == NetReconnectOffer::Available || reconnect.GetOffer() == NetReconnectOffer::Dismissed || reconnect.CanRetryManually());
 	m_CancelRecoveryButton->SetEnabled(reconnect.CanCancel());
 
 	const uint32_t autosaveSeconds = g_SettingsMan.GetAutosaveSeconds();
@@ -496,13 +497,12 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		if (guiEvent.GetControl() == m_RejoinButton) {
 			NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
 			reconnect.RequestManualRetry(NetLockstepNowMs());
+			reconnect.NoteAttemptStarted(NetLockstepNowMs());
 			reconnect.DismissOffer();
 			std::string rejoinError;
 			if (!g_NetMatchService.BeginTicketRejoin(&rejoinError)) {
 				reconnect.NoteAttemptFailed(NetLockstepNowMs(), rejoinError);
 				m_RecoveryError->SetText(rejoinError.empty() ? "Rejoin failed." : rejoinError);
-			} else {
-				reconnect.NoteAttemptStarted(NetLockstepNowMs());
 			}
 		} else if (guiEvent.GetControl() == m_CancelRecoveryButton) {
 			NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();

@@ -22,6 +22,7 @@
 #include "GUIListPanel.h"
 #include "GUIRadioButton.h"
 #include "GUISlider.h"
+#include "GUIScrollbar.h"
 #include "GUITab.h"
 #include "GUITextBox.h"
 #include "FrameMan.h"
@@ -1685,11 +1686,11 @@ namespace RTE::MenuAutomation {
 
 	bool Handles(const std::string& command) {
 		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_inside_screen" || command == "assert_text_fits" || command == "assert_no_overlap" || command == "assert_no_overlap_within" ||
-			command == "dump_refresh_count" || command == "dump_enter_state" ||
+			command == "dump_refresh_count" || command == "dump_enter_state" || command == "assert_game_row_activity" || command == "assert_game_row_refusal" ||
 			command == "dump_host_options" || command == "dump_player_options" || command == "key" || command == "pad" ||
 			command == "key_down" || command == "key_up" || command == "focus" ||
 			command == "set_text" || command == "assert_host_port" || command == "combo_drop" || command == "combo_select" || command == "combo_refused" || command == "assert_combo_items" ||
-			command == "slider_set" || command == "model_mark" || command == "assert_model_changed" || command == "screen_mark" || command == "assert_screen_changed" ||
+			command == "slider_set" || command == "wheel_control" || command == "model_mark" || command == "assert_model_changed" || command == "screen_mark" || command == "assert_screen_changed" ||
 			command == "assert_box_text" || command == "type_text" || command == "assert_value" || command == "assert_selected" || command == "click_row" ||
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
@@ -1712,6 +1713,23 @@ namespace RTE::MenuAutomation {
 		return {{"rect", rect}, {"uncovered_pixels", uncovered}, {"pixels", rect[2] * rect[3]}};
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
+		if (command == "assert_game_row_activity" || command == "assert_game_row_refusal") {
+			NetDirectoryClient::GameRow row;
+			row.name = "A very long public host name that uses most of the browser row";
+			row.activity = "Skirmish"; row.scene = "Grasslands"; row.players = "1/4"; row.source = "NET"; row.joinable = true;
+			if (command == "assert_game_row_refusal") {
+				row.joinable = false; row.reason = "modules";
+				row.localModuleManifestHash = std::string(64, 'a'); row.hostModuleManifestHash = std::string(64, 'b');
+				observation = MainMenuGUI::GameRowJoinRefusal(row);
+				return observation.find("compare") != std::string::npos && observation.find("console") != std::string::npos;
+			}
+			std::string listName;
+			args >> listName;
+			auto* list = manager ? dynamic_cast<GUIListBox*>(manager->GetControl(listName)) : nullptr;
+			if (!list || !Visible(list)) { observation = "a visible game browser is required"; return false; }
+			observation = MainMenuGUI::DiscoveredGameRowText(row, list->GetFont(), std::max(1, list->GetWidth() - 29));
+			return observation.find(row.activity) != std::string::npos;
+		}
 		if (command == "meta_command") {
 			std::string name;
 			args >> name;
@@ -2377,6 +2395,10 @@ namespace RTE::MenuAutomation {
 				std::string target;
 				int expected = 0;
 				args >> std::quoted(target) >> expected;
+				if (auto* scrollbar = dynamic_cast<GUIScrollbar*>(manager->GetControl(target))) {
+					observation = target + " expected=" + std::to_string(expected) + " actual=" + std::to_string(scrollbar->GetValue());
+					return Visible(scrollbar) && scrollbar->GetValue() == expected;
+				}
 				auto* slider = dynamic_cast<GUISlider*>(manager->GetControl(target));
 				observation = target + " expected=" + std::to_string(expected) + " actual=" + (slider ? std::to_string(slider->GetValue()) : std::string("none")) + (slider && !Visible(slider) ? " (not on the screen)" : "");
 				return slider && Visible(slider) && slider->GetValue() == expected;
@@ -2394,6 +2416,20 @@ namespace RTE::MenuAutomation {
 				auto* list = dynamic_cast<GUIListBox*>(manager->GetControl(target));
 				observation = target + " expected=" + std::to_string(row) + " actual=" + (list ? std::to_string(list->GetSelectedIndex()) : std::string("none")) + (list && !Visible(list) ? " (not on the screen)" : "");
 				return list && Visible(list) && list->GetSelectedIndex() == row;
+			}
+			if (command == "wheel_control") {
+				std::string target;
+				int steps = 0;
+				args >> std::quoted(target) >> steps;
+				auto* control = manager->GetControl(target);
+				if (!control || !Visible(control) || steps == 0) { observation = "a visible wheel target and nonzero movement are required"; return false; }
+				const Rect r = Rectangle(control->GetPanel());
+				Hand::Start("wheel over " + target, {
+					[r](std::string&) { Hand::Move(r[0] + r[2] / 2, r[1] + r[3] / 2); return Hand::Beat::Next; },
+					[steps](std::string&) { Hand::Wheel(steps); return Hand::Beat::Next; },
+					[](std::string&) { return Hand::Beat::Next; }});
+				observation = target + " " + std::to_string(steps);
+				return true;
 			}
 			if (command == "slider_set") {
 				std::string target;
@@ -2699,10 +2735,11 @@ namespace RTE::MenuAutomation {
 			NetLobbySnapshot snapshot;
 			snapshot.inputDelayText = "Input delay: 4 (auto, 50ms ping)";
 			const std::string summary = NetHostOptionsSummary(config, snapshot);
-			check("hint_summary_policy", summary.find("\nWhen a player falls behind: Give the seat to the AI (host too) until they catch up\n") != std::string::npos, summary);
-			check("hint_summary_delay", summary.find("\nInput delay: Automatic, ping plus a 3-tick margin, raised live if inputs arrive late - now 4 (auto, 50ms ping)\n") != std::string::npos, summary);
+			const std::string connection = NetHostConnectionSummary(config, snapshot);
+			check("hint_summary_policy", connection.find("\nWhen a player falls behind: Give the seat to the AI (host too) until they catch up\n") != std::string::npos, connection);
+			check("hint_summary_delay", connection.starts_with("Input delay: Automatic, ping plus a 3-tick margin, raised live if inputs arrive late - now 4 (auto, 50ms ping)\n"), connection);
 			check("hint_summary_no_rejoin", summary.find("rejoin") == std::string::npos, summary);
-			check("summary_short_rows_share_lines", summary.find(" ticks   Slow player bound: 3 ticks\n") != std::string::npos && summary.find("\nDifficulty: ") != std::string::npos &&
+			check("summary_short_rows_share_lines", connection.find(" ticks   Slow player bound: 3 ticks\n") != std::string::npos && summary.find("\nDifficulty: ") != std::string::npos &&
 			      summary.find("   Starting gold: ") != std::string::npos, summary);
 			same("transfer_line_measured", NetImageTransferLine(3250585, 8598323, 1468006.0), "Receiving the world: 3.1 of 8.2 MB - 1.4 MB/s - 4 s left");
 			same("transfer_line_before_a_rate", NetImageTransferLine(0, 8598323, 0.0), "Receiving the world: 0.0 of 8.2 MB");

@@ -51,6 +51,8 @@ namespace RTE {
 		/// Gets the current working directory.
 		/// @return Absolute path to current working directory.
 		static const std::string& GetWorkingDirectory() { return s_WorkingDirectory; }
+		/// Keeps a selected data root, or finds the game data above the actual executable when launched from a build directory.
+		static std::filesystem::path ResolveDataRoot(const std::filesystem::path& workingDirectory, const std::filesystem::path& executable);
 
 		/// Gets this process's id, for files that concurrent instances must not share.
 		static unsigned long GetProcessID();

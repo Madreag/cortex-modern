@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""In-memory JSON session directory (HTTP or HTTPS)."""
+"""Session discovery, signed connection leases and ICE introductions."""
 
 from __future__ import annotations
 
@@ -28,6 +28,11 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse, unquote_plus
 from urllib.request import Request, urlopen
+
+if __package__:
+    from .connection_authority import ConnectionAuthority, ConnectionErrorReply, CONNECTION_PROTOCOL, connection_version
+else:
+    from connection_authority import ConnectionAuthority, ConnectionErrorReply, CONNECTION_PROTOCOL, connection_version
 
 # Cloudflare refuses urllib's default agent (403, error code 1010), so the relay request names the product.
 USER_AGENT = "cccp-session-directory/1"
@@ -510,6 +515,7 @@ class Session:
         self.ice_offer: Optional[dict[str, Any]] = None
         self.ice_generation = 0
         self.ice_refused = False  # the host's last mint was refused by its relay backend
+        self.ice_fixed = False
         self.migration_gen = 0  # the host handover generation that holds the row
         self.register_fingerprint = ""
         self.register_retry_until = 0.0
@@ -523,7 +529,7 @@ class Session:
 
     def as_list_row(self, now: float) -> dict[str, Any]:
         row = {key: self.fields[key] for key in LIST_ROW_FIELDS}
-        for key in ("persistent_world", "world_id", "world_boot", "spectator_free", "spectator_max", "seats_held"):
+        for key in ("persistent_world", "world_id", "world_boot", "spectator_free", "spectator_max", "seats_held", "ice_identity", "ice_virtual_port"):
             if key in self.fields:
                 row[key] = self.fields[key]
         row["session_id"] = self.session_id
@@ -622,8 +628,6 @@ class SessionDirectory:
         self._owner_written = 0
         self._owner_failure: Optional[BaseException] = None
         self._owner_writer = threading.Thread(target=self._write_owners_loop, name="world-owner-write", daemon=True)
-        if self._owner_state is not None:
-            self._owner_writer.start()
         if self._pending_state is not None and self._pending_state.exists():
             if self._pending_state.stat().st_size > MAX_PENDING_BYTES:
                 raise ValueError("pending world state exceeds its byte bound")
@@ -654,6 +658,14 @@ class SessionDirectory:
                 self._sessions[sid] = sess
                 self._register_replays[sid] = sess
                 self._pending_worlds[sid] = record
+        self.connections = ConnectionAuthority(self._service_key, self._owner_state.with_suffix(".connections.sqlite3") if self._owner_state else None)
+        try:
+            self._restore_connections()
+        except BaseException:
+            self.connections.close()
+            raise
+        if self._owner_state is not None:
+            self._owner_writer.start()
         self._pruner = threading.Thread(
             target=self._prune_loop, name="session-prune", daemon=True
         )
@@ -661,6 +673,144 @@ class SessionDirectory:
     def start_pruner(self) -> None:
         if not self._pruner.is_alive():
             self._pruner.start()
+
+    def _persist_session(self, sess: Session, now: float, reopen_world: bool = False) -> None:
+        """A reply acknowledges both the lease and the state needed after restart."""
+        wall = time.time()
+        snapshot = dict(fields=sess.fields, token=sess.token, observed_ip=sess.observed_ip,
+            created_at=wall - max(0, now - sess.created_at), last_beat=wall - max(0, now - sess.last_beat),
+            state=sess.state, listed=sess.listed, acknowledged=sess.acknowledged, install_key=sess.install_key,
+            install_key_sha256=getattr(sess, "install_key_sha256", ""), migration_gen=sess.migration_gen,
+            ice_offer=sess.ice_offer, ice_generation=sess.ice_generation, ice_refused=sess.ice_refused, ice_fixed=sess.ice_fixed,
+            register_fingerprint=sess.register_fingerprint, register_previous_sha256=sess.register_previous_sha256,
+            register_retry_until=wall + max(0, sess.register_retry_until - now) if sess.register_retry_until else 0,
+            next_seq=sess.next_seq, queue_drain_at={peer: wall - max(0, now - stamp) for peer, stamp in sess.queue_drain_at.items()},
+            queues={peer: [dict(item.as_json(), payload_len=item.payload_len, source_ip=item.source_ip) for item in queue] for peer, queue in sess.queues.items()})
+        self.connections.remember_session(sess.session_id, snapshot, wall, reopen_world)
+
+    def _restore_connections(self) -> None:
+        now, wall = time.monotonic(), time.time()
+        for sid, record in self.connections.records():
+            if record.get("ended"):
+                self._sessions.pop(sid, None)
+                self._register_replays.pop(sid, None)
+                self._host_ends[sid] = now + max(0, record["retain_until"] - wall)
+                continue
+            snapshot = record.get("session")
+            if not isinstance(snapshot, dict):
+                continue
+            sess = Session(sid, snapshot["token"], snapshot["fields"], snapshot["observed_ip"], now - max(0, wall - snapshot["created_at"]))
+            sess.last_beat = now - max(0, wall - snapshot["last_beat"])
+            for field in ("state", "listed", "acknowledged", "install_key", "install_key_sha256", "migration_gen", "ice_offer", "ice_generation", "ice_refused", "ice_fixed", "register_fingerprint", "register_previous_sha256", "next_seq"):
+                if field in snapshot:
+                    setattr(sess, field, snapshot[field])
+            sess.register_retry_until = now + max(0, snapshot["register_retry_until"] - wall) if snapshot.get("register_retry_until") else 0
+            sess.queue_drain_at = {peer: now - max(0, wall - stamp) for peer, stamp in snapshot.get("queue_drain_at", {}).items()}
+            for peer, queue in snapshot.get("queues", {}).items():
+                sess.queues[peer] = [Signal(item["seq"], item["from"], item["to"], item["payload_b64"], item["payload_len"], item["source_ip"]) for item in queue]
+                sess.undrained_bytes += sum(item.payload_len for item in sess.queues[peer])
+                self._stored_signal_bytes += sum(item.stored_bytes for item in sess.queues[peer])
+            prior = self._sessions.get(sid)
+            if prior is not None:
+                self._clear_signals(prior)
+            if now - sess.last_beat < self.expiry_s:
+                self._sessions[sid] = sess
+                if sess.register_fingerprint and (sess.register_retry_until == 0 or now < sess.register_retry_until):
+                    self._register_replays[sid] = sess
+            elif sess.acknowledged:
+                deadline = now + max(0, record["retain_until"] - wall) if record.get("seats") else sess.last_beat + self.expiry_s + RESUME_GRACE_S
+                if deadline > now:
+                    self._retired[sid] = (sess, deadline)
+                    self._resume_tokens[sid] = (sess.token, deadline, sess.migration_gen)
+                else:
+                    self._clear_signals(sess)
+            else:
+                self._clear_signals(sess)
+
+    def connection_bootstrap(self, session_id: str, now: float) -> dict[str, Any]:
+        with self._lock:
+            sess = self._signalling(session_id, now)
+            if sess is None:
+                if session_id in self._host_ends:
+                    raise ConnectionErrorReply(410, "match_ended", "The host ended this match. Choose another game.")
+                raise ConnectionErrorReply(404, "match_unavailable", "The directory is waiting for this match. Reconnecting will retry; Cancel returns to Multiplayer.")
+            return dict(connection_protocol=CONNECTION_PROTOCOL, authority_key=self.connections.public_key,
+                network_protocol=sess.fields["network_protocol_version"], host_generation=sess.migration_gen,
+                ice_identity=sess.fields.get("ice_identity", ""), ice_virtual_port=sess.fields.get("ice_virtual_port", 0),
+                listen_addrs=sess.fields["listen_addrs"], listen_port=sess.fields["listen_port"], join_mode=sess.fields["join_mode"],
+                state=sess.state, name=sess.fields["name"], session=sess.as_list_row(now), relay_enabled=sess.ice_offer is not None)
+
+    def connection_request(self, session_id: str, data: dict[str, Any], now: float, install_key: str) -> dict[str, Any]:
+        connection_version(data)
+        operation = data.get("operation")
+        wall = time.time()
+        with self._lock:
+            sess = self._signalling(session_id, now)
+            if sess is None:
+                if session_id in self._host_ends:
+                    raise ConnectionErrorReply(410, "match_ended", "The host ended this match. Choose another game.")
+                raise ConnectionErrorReply(404, "match_unavailable", "The directory is waiting for this match. Reconnecting will retry; Cancel returns to Multiplayer.")
+            if operation in ("issue", "remove"):
+                token = data.get("token")
+                if not isinstance(token, str) or not tokens_equal(token, sess.token):
+                    raise PermissionError("forbidden")
+                if data.get("host_generation") != sess.migration_gen:
+                    raise Superseded("superseded", sess.migration_gen)
+                self._persist_session(sess, now)
+                return self.connections.issue(session_id, data, wall) if operation == "issue" else self.connections.remove(session_id, data, wall)
+            if operation != "check-in":
+                raise ConnectionErrorReply(400, "connection_request", "The connection request was incomplete. Cancel and join again.")
+            answer, renew, host_claim = self.connections.check_in(session_id, data, wall)
+            hosting = bool(host_claim and host_claim["generation"] == sess.migration_gen and tokens_equal(host_claim["token"], sess.token))
+            if hosting:
+                route = host_claim["route"]
+                addresses = require_listen_addrs(route)
+                port = require_int(route, "listen_port", 1, 65535)
+                identity = require_str(route, "ice_identity")
+                virtual_port = require_int(route, "ice_virtual_port", 0, 65535)
+                if bool(identity) != bool(virtual_port):
+                    raise ConnectionErrorReply(400, "connection_request", "The host's route was incomplete. Reconnecting will retry; Cancel returns to Multiplayer.")
+                update = dict(listen_addrs=addresses, listen_port=port,
+                    join_mode="either" if identity and addresses else "ice" if identity else "ip")
+                if identity:
+                    update.update(ice_identity=identity, ice_virtual_port=virtual_port)
+                else:
+                    sess.fields.pop("ice_identity", None)
+                    sess.fields.pop("ice_virtual_port", None)
+                if any(sess.fields.get(key) != value for key, value in update.items()):
+                    sess.fields.update(update)
+                    self._persist_session(sess, now)
+            answer["host"] = self.connection_bootstrap(session_id, now)
+            answer["relay_current"] = not renew
+            # A fixed pair has the host's chosen lifetime. Provider credentials
+            # are minted for this seat, independent of its previous route.
+            fixed = sess.ice_offer if sess.ice_fixed else None
+            relay_enabled = sess.ice_offer is not None
+            if not renew or not relay_enabled:
+                return answer
+            limited = self.turn_limiter.probe(install_key, now, False)
+            if limited:
+                answer["relay_retry_after_s"] = limited[1]["retry_after_s"]
+                return answer
+            self.turn_limiter.commit(install_key, now, False)
+        try:
+            if fixed is not None:
+                offer = dict(fixed, expires_at=int(wall) + min(600, self.turn_max_ttl))
+            else:
+                offer = self.turn_provider.mint(session_id, min(600, self.turn_max_ttl), int(wall))
+        except TurnError as error:
+            answer["relay_error"] = error.body["error"]
+            answer["relay_retry_after_s"] = 5
+            return answer
+        with self._lock:
+            if self.connections.set_relay(session_id, answer["seat"], answer["generation"], offer, time.time()):
+                answer["relay"] = offer
+                answer["relay_current"] = True
+                current = self._signalling(session_id, now)
+                if hosting and current is sess and tokens_equal(host_claim["token"], current.token):
+                    current.ice_offer = offer
+                    self._persist_session(current, time.monotonic())
+        return answer
 
     def _load_service_key(self, create_owner_key: bool) -> bytes:
         if self._owner_key is None:
@@ -931,6 +1081,9 @@ class SessionDirectory:
             self._signals_changed.notify_all()
         if self._owner_writer.is_alive():
             self._owner_writer.join(OWNER_WRITE_WAIT_S)
+        if self._pruner.is_alive():
+            self._pruner.join(OWNER_WRITE_WAIT_S)
+        self.connections.close()
 
     def _prune_loop(self) -> None:
         while not self._stop.wait(1.0):
@@ -959,6 +1112,7 @@ class SessionDirectory:
 
     def prune(self, now: float) -> None:
         with self._lock:
+            self.connections.prune(time.time())
             self.turn_limiter.prune_idle(now)
             dead = [
                 sid
@@ -967,27 +1121,38 @@ class SessionDirectory:
             ]
             for sid in dead:
                 sess = self._sessions[sid]
+                retained_until = self.connections.retained_until(sid)
+                deadline = max(sess.last_beat + self.expiry_s + RESUME_GRACE_S, now + retained_until - time.time())
                 if sess.acknowledged and sess.fields.get("persistent_world") is True:
                     self._credit_world_listing(sess, min(now, sess.last_beat + self.expiry_s))
-                if sess.acknowledged and sess.state == "running":
-                    self._retired[sid] = (sess, sess.last_beat + self.expiry_s + RESUME_GRACE_S)
+                if sess.acknowledged and (sess.state == "running" or retained_until > time.time()):
+                    self._retired[sid] = (sess, deadline)
                 else:
                     self._clear_signals(sess)
                 if sess.acknowledged:
-                    self._resume_tokens[sid] = (sess.token, sess.last_beat + self.expiry_s + RESUME_GRACE_S, sess.migration_gen)
+                    self._resume_tokens[sid] = (sess.token, deadline, sess.migration_gen)
                 del self._sessions[sid]
                 if self._pending_worlds.pop(sid, None) is not None:
                     self._owner_revision += 1
                     self._owner_changed.notify_all()
             for sid, (_, deadline, _) in list(self._resume_tokens.items()):
                 if now >= deadline:
-                    del self._resume_tokens[sid]
+                    kept = self.connections.retained_until(sid) - time.time()
+                    if kept > 0:
+                        token, _, generation = self._resume_tokens[sid]
+                        self._resume_tokens[sid] = (token, now + kept, generation)
+                    else:
+                        del self._resume_tokens[sid]
             while len(self._resume_tokens) > MAX_ROWS:
                 del self._resume_tokens[next(iter(self._resume_tokens))]
             for sid, (retired, deadline) in list(self._retired.items()):
                 if now >= deadline:
-                    self._clear_signals(retired)
-                    del self._retired[sid]
+                    kept = self.connections.retained_until(sid) - time.time()
+                    if kept > 0:
+                        self._retired[sid] = (retired, now + kept)
+                    else:
+                        self._clear_signals(retired)
+                        del self._retired[sid]
             while len(self._retired) > MAX_ROWS:
                 sid = next(iter(self._retired))
                 self._clear_signals(self._retired[sid][0])
@@ -1018,6 +1183,7 @@ class SessionDirectory:
         return sess
 
     def register(self, data: dict[str, Any], observed_ip: str, now: float, install_key: str = "") -> dict[str, Any]:
+        connection_version(data)
         self.prune(now)
         with self._lock:
             # Capacity is answered before any field work: a full directory must not spend parsing.
@@ -1037,6 +1203,11 @@ class SessionDirectory:
                 else:
                     fields[name] = require_int(data, name, 0, 10**9)
             fields["listen_addrs"] = require_listen_addrs(data)
+            if "ice_identity" in data or "ice_virtual_port" in data:
+                fields["ice_identity"] = require_str(data, "ice_identity")
+                fields["ice_virtual_port"] = require_int(data, "ice_virtual_port", 1, 65535)
+                if not fields["ice_identity"]:
+                    raise FieldError("invalid_field", "ice_identity")
             if "persistent_world" in data:
                 if not isinstance(data["persistent_world"], bool):
                     raise FieldError("invalid_field", "persistent_world")
@@ -1091,6 +1262,7 @@ class SessionDirectory:
                     replay.observed_ip = observed_ip
                     self._sessions[session_id] = replay
                     self._resume_tokens.pop(session_id, None)
+                    self._persist_session(replay, now)
                     return self._register_reply(replay)
                 retained = self._resume_tokens.get(session_id)
                 token = previous.token if previous else retained[0] if retained else ""
@@ -1123,6 +1295,7 @@ class SessionDirectory:
                 if previous is not None and not previous.acknowledged and same_host and presented != previous.token and (claimed is None or claimed == previous.migration_gen):
                     previous.fields = fields
                     previous.observed_ip = observed_ip
+                    self._persist_session(previous, now)
                     return self._register_reply(previous)
                 if same_signed_owner and owner is not None and not proven and claimed is not None and proof[2] < owner["migration_gen"] and claimed <= owner["migration_gen"]:
                     raise Superseded("already_migrated", owner["migration_gen"])
@@ -1189,7 +1362,25 @@ class SessionDirectory:
                 # A durable claim keeps the signals still owed to the successor.
                 sess.queues, sess.next_seq = carried.queues, carried.next_seq
                 sess.queue_drain_at, sess.undrained_bytes = carried.queue_drain_at, carried.undrained_bytes
-            elif previous_session is not None:
+                # Rejoining peers need the same offer while the successor renews it.
+                # Keep its original expiry; resuming never extends a relay login.
+                sess.ice_offer = carried.ice_offer
+                sess.ice_refused = carried.ice_refused
+                sess.ice_generation = carried.ice_generation
+                sess.ice_fixed = carried.ice_fixed
+            try:
+                self._persist_session(sess, now, reopen_world=world and not first_world)
+            except BaseException:
+                # A refused durable registration must not leave a pending world
+                # that could become a live row after the next service restart.
+                if previous_pending is None:
+                    self._pending_worlds.pop(session_id, None)
+                else:
+                    self._pending_worlds[session_id] = previous_pending
+                self._owner_revision += 1
+                self._owner_changed.notify_all()
+                raise
+            if carried is None and previous_session is not None:
                 self._clear_signals(previous_session)
             self._retired.pop(session_id, None)
             self._sessions[session_id] = sess
@@ -1198,6 +1389,7 @@ class SessionDirectory:
             if resume is not None:
                 self._resume_tokens.pop(session_id, None)
             self._signals_changed.notify_all()
+            self._host_ends.pop(session_id, None)
         return self._register_reply(sess)
 
     def _register_reply(self, sess: Session) -> dict[str, Any]:
@@ -1208,6 +1400,8 @@ class SessionDirectory:
             "heartbeat_s": as_json_int(self.heartbeat_s),
             "observed_ip": sess.observed_ip,
             "supports_unlisted": True,
+            "connection_protocol": CONNECTION_PROTOCOL,
+            "authority_key": self.connections.public_key,
         }
 
     def mint_ice_servers(self, session_id: str, data: dict[str, Any], install_key: str, now: float) -> dict[str, Any]:
@@ -1252,6 +1446,8 @@ class SessionDirectory:
                 raise TurnError(503, "relay_credential_expired")
             sess.ice_offer = offer
             sess.ice_refused = False
+            sess.ice_fixed = "iceServers" in data
+            self._persist_session(sess, now)
             LOGGER.info('relay_offer_issued %s', json.dumps(dict(session_id=session_id, match_id=offer['match_id'],
                 provider='fixed' if 'iceServers' in data else self.turn_provider._config.get('backend', 'cloudflare'),
                 generation=generation, expires_at=offer['expires_at'], server_count=len(offer['iceServers'])), sort_keys=True))
@@ -1259,7 +1455,9 @@ class SessionDirectory:
 
     def get_ice_servers(self, session_id: str, now: float) -> dict[str, Any]:
         with self._lock:
-            sess = self._get(session_id, now)
+            # An expired running listing still routes survivor signals during the
+            # existing resume grace. Those dials also need its unexpired offer.
+            sess = self._signalling(session_id, now)
             if not sess:
                 raise KeyError(session_id)
             if not sess.ice_offer or sess.ice_offer["expires_at"] <= int(time.time()):
@@ -1324,6 +1522,7 @@ class SessionDirectory:
             sess.last_beat = now
             listed_now = sess.listed
             held = sess.migration_gen
+            self._persist_session(sess, now)
         self._wait_owner_write(revision)
         answer: dict[str, Any] = {
             "expires_in_s": as_json_int(self.expiry_s),
@@ -1343,6 +1542,7 @@ class SessionDirectory:
     def _record_host_end(self, session_id: str, now: float) -> None:
         self.host_end_status(session_id, now)
         self._host_ends[session_id] = now + 600
+        self.connections.end(session_id, time.time())
 
     def _delete_retired_host(self, session_id: str, token: str, generation: Optional[int], now: float) -> bool:
         retired = self._resume_tokens.get(session_id)
@@ -1509,6 +1709,7 @@ class SessionDirectory:
             sess.undrained_bytes += len(raw)
             self._stored_signal_bytes += charge
             self._signals_changed.notify_all()
+            self._persist_session(sess, now)
         return {"ok": True, "seq": seq}
 
     def get_signals(
@@ -1562,6 +1763,8 @@ class SessionDirectory:
             else:
                 sess.queues.pop(peer, None)
                 sess.queue_drain_at.pop(peer, None)
+            if dropped:
+                self._persist_session(sess, now)
         return {"signals": [item.as_json() for item in kept]}
 
 
@@ -1811,7 +2014,9 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
             return header, "header"
 
         def _handle_error(self, exc: BaseException) -> None:
-            if isinstance(exc, TurnError):
+            if isinstance(exc, ConnectionErrorReply):
+                self._send(exc.status, exc.body)
+            elif isinstance(exc, TurnError):
                 self._send(exc.status, exc.body)
             elif isinstance(exc, Superseded):
                 self._send(409, exc.body)
@@ -1847,6 +2052,11 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                     self._send(gated[0], gated[1])
                     return
                 now = time.monotonic()
+                if len(parts) == 4 and parts[:2] == ["v1", "sessions"] and parts[3] == "connections":
+                    version = self.headers.get("X-Connection-Protocol", "0")
+                    connection_version({"connection_protocol": int(version) if version.isdecimal() and len(version) <= 5 else 0})
+                    self._send(200, store.connection_bootstrap(parse_session_id(parts[2]), now))
+                    return
                 if len(parts) == 4 and parts[:2] == ["v1", "sessions"] and parts[3] == "host-end":
                     self._send(200, store.host_end_status(parse_session_id(parts[2]), now))
                     return
@@ -1941,6 +2151,9 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                     self._send(gated[0], gated[1])
                     return
                 body = self._read_json()
+                if len(parts) == 4 and parts[:2] == ["v1", "sessions"] and parts[3] == "connections":
+                    self._send(200, store.connection_request(parse_session_id(parts[2]), body, now, self.headers.get("X-Install-Key", "")))
+                    return
                 if len(parts) == 4 and parts[:2] == ["v1", "sessions"] and parts[3] == "ice-servers":
                     self._send(200, store.mint_ice_servers(parse_session_id(parts[2]), body, self.headers.get("X-Install-Key", ""), now))
                     return

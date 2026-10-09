@@ -116,6 +116,10 @@ namespace RTE {
 		/// @param mouseWheelChange The amount of wheel movement. Positive is scroll up, negative is scroll down.
 		virtual void OnMouseWheelChange(int x, int y, int modifier, int mouseWheelChange){};
 
+		/// Routes wheel events over this panel and its children to a non-owned scrolling control.
+		void SetMouseWheelTarget(GUIPanel* target) { m_MouseWheelTarget = target; }
+		GUIPanel* GetMouseWheelTarget() const { return m_MouseWheelTarget; }
+
 		/// Called when a key goes down.
 		/// @param KeyCode KeyCode, Modifier.
 		virtual void OnKeyDown(int KeyCode, int Modifier);
@@ -275,6 +279,7 @@ namespace RTE {
 		bool m_Captured;
 		GUIManager* m_Manager;
 		GUIPanel* m_Parent;
+		GUIPanel* m_MouseWheelTarget;
 
 		GUIFont* m_Font;
 		unsigned long m_FontColor;

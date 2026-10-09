@@ -188,7 +188,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x05, 0x00,
+				0x06, 0x00,
 				0x18, 0x00,
 				0x07, 0x00,
 				0x00, 0x00,
@@ -225,7 +225,7 @@ namespace RTE {
 
 			// Every fixed-width admission message, with the size the wire schema fixes for it.
 			const std::vector<std::pair<NetMessage, size_t>> messages = {
-				{{21, 0, NetH4TicketOffer{c_NetH4Version, MakeBytes<16>(0x40), MakeBytes<16>(0x50), 3, 1, MakeBytes<32>(0x60), 0xAABBCCDDEEFF0011ULL, 20000}}, 84},
+				{{21, 0, NetH4TicketOffer{c_NetH4Version, MakeBytes<16>(0x40), MakeBytes<16>(0x50), 3, 1, MakeBytes<32>(0x60), 0xAABBCCDDEEFF0011ULL, 20000}}, 118},
 				{{22, 0, NetH4TicketStoredAck{c_NetH4Version, MakeBytes<16>(0x40), 3, 1, true}}, 28},
 				{{23, 0, NetH4JoinCommitted{c_NetH4Version, MakeBytes<16>(0x40), 3, 1, 1, 2}}, 32},
 				{{25, 0, NetH4Challenge{c_NetH4Version, MakeBytes<16>(0x20), MakeBytes<32>(0x70), 10000}}, 54},
@@ -233,8 +233,9 @@ namespace RTE {
 				{{27, 0, NetH4LeaveRequest{c_NetH4Version, MakeBytes<16>(0xA0), MakeBytes<16>(0x30), 2, 7}}, 40},
 				{{28, 0, NetH4LeaveAck{c_NetH4Version, MakeBytes<16>(0xA0), 2, 7, true}}, 28},
 				{{30, 0, NetH4ApplicantAck{c_NetH4Version, MakeBytes<16>(0xB0), 1, 20000}}, 24},
-				{{31, 0, NetH4SubstitutionOffer{c_NetH4Version, MakeBytes<16>(0xB0), MakeBytes<16>(0x50), 1, 2, MakeBytes<32>(0x60), MakeBytes<32>(0x70), 0xAABBCCDDEEFF0011ULL, 20000}}, 116},
+				{{31, 0, NetH4SubstitutionOffer{c_NetH4Version, MakeBytes<16>(0xB0), MakeBytes<16>(0x50), 1, 2, MakeBytes<32>(0x60), MakeBytes<32>(0x70), 0xAABBCCDDEEFF0011ULL, 20000}}, 150},
 				{{32, 0, NetH4SubstitutionAck{c_NetH4Version, MakeBytes<16>(0xB0), 1, 2, MakeBytes<16>(0x80), MakeBytes<32>(0x90), true}}, 76},
+				{{35, 0, NetH4ConnectionLease{c_NetH4Version, std::string(512, 'A'), MakeBytes<32>(0x70)}}, 548},
 			};
 			for (const auto& [message, payloadBytes] : messages) {
 				if (!RoundTrip(message, error)) {
@@ -265,12 +266,13 @@ namespace RTE {
 			widestApplicant.identity.gameVersion.assign(NetProtocol::c_MaxShortTextBytes, 'v');
 			widestApplicant.identity.buildId.assign(NetProtocol::c_MaxShortTextBytes, 'b');
 			widestApplicant.displayName.assign(NetProtocol::c_MaxDisplayNameBytes, 'n');
+			widestApplicant.directorySessionId.assign(64, 'd');
 			std::vector<uint8_t> widestApplicantBytes;
 			if (!EncodeMessage({34, 0, widestApplicant}, widestApplicantBytes, error)) {
 				return false;
 			}
-			if (widestApplicantBytes.size() - NetProtocol::c_HeaderBytes != 478U) {
-				*error = "worst-case Applicant payload is " + std::to_string(widestApplicantBytes.size() - NetProtocol::c_HeaderBytes) + " bytes, not 478";
+			if (widestApplicantBytes.size() - NetProtocol::c_HeaderBytes != 544U) {
+				*error = "worst-case Applicant payload is " + std::to_string(widestApplicantBytes.size() - NetProtocol::c_HeaderBytes) + " bytes, not 544";
 				return false;
 			}
 			if (!RoundTrip({34, 0, widestApplicant}, error)) {
@@ -283,13 +285,14 @@ namespace RTE {
 			widest.identity.gameVersion.assign(NetProtocol::c_MaxShortTextBytes, 'v');
 			widest.identity.buildId.assign(NetProtocol::c_MaxShortTextBytes, 'b');
 			widest.displayName.assign(NetProtocol::c_MaxDisplayNameBytes, 'n');
+			widest.seatToken.assign(512, 'A');
 			std::vector<uint8_t> widestBytes;
 			if (!EncodeMessage({29, 0, widest}, widestBytes, error)) {
 				return false;
 			}
 			// The cap is sized against this number, so pin it rather than only bounding it.
-			if (widestBytes.size() - NetProtocol::c_HeaderBytes != 498U) {
-				*error = "worst-case Reclaim payload is " + std::to_string(widestBytes.size() - NetProtocol::c_HeaderBytes) + " bytes, not 498";
+			if (widestBytes.size() - NetProtocol::c_HeaderBytes != 1012U) {
+				*error = "worst-case Reclaim payload is " + std::to_string(widestBytes.size() - NetProtocol::c_HeaderBytes) + " bytes, not 1012";
 				return false;
 			}
 			if (widestBytes.size() - NetProtocol::c_HeaderBytes > NetProtocol::c_MaxH4PayloadBytes) {
@@ -309,14 +312,14 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expected = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x05, 0x00,
+				0x06, 0x00,
 				0x18, 0x00,
 				0x10, 0x00,
 				0x00, 0x00,
 				0x04, 0x03, 0x02, 0x01,
 				0x36, 0x00, 0x00, 0x00,
 				0x00, 0x00, 0x00, 0x00,
-				0x01, 0x00,
+				0x02, 0x00,
 			};
 			for (uint8_t i = 0; i < 16; ++i) {
 				expected.push_back(static_cast<uint8_t>(0x10 + i));
@@ -335,14 +338,14 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expectedAck = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x05, 0x00,
+				0x06, 0x00,
 				0x18, 0x00,
 				0x13, 0x00,
 				0x00, 0x00,
 				0x07, 0x00, 0x00, 0x00,
 				0x1C, 0x00, 0x00, 0x00,
 				0x00, 0x00, 0x00, 0x00,
-				0x01, 0x00,
+				0x02, 0x00,
 			};
 			for (uint8_t i = 0; i < 16; ++i) {
 				expectedAck.push_back(static_cast<uint8_t>(0xA0 + i));
@@ -358,14 +361,14 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expectedSubstitution = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x05, 0x00,
+				0x06, 0x00,
 				0x18, 0x00,
 				0x17, 0x00,
 				0x00, 0x00,
 				0x09, 0x00, 0x00, 0x00,
 				0x4C, 0x00, 0x00, 0x00,
 				0x00, 0x00, 0x00, 0x00,
-				0x01, 0x00,
+				0x02, 0x00,
 			};
 			for (uint8_t i = 0; i < 16; ++i) {
 				expectedSubstitution.push_back(static_cast<uint8_t>(0xB0 + i));
@@ -391,7 +394,7 @@ namespace RTE {
 				return false;
 			}
 			std::vector<uint8_t> mutated = bytes;
-			mutated[NetProtocol::c_HeaderBytes] = 0x02U;
+			mutated[NetProtocol::c_HeaderBytes] = static_cast<uint8_t>(c_NetH4Version + 1);
 			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::UnsupportedVersion, error)) {
 				return false;
 			}

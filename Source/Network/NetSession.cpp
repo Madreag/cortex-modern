@@ -200,6 +200,7 @@ namespace RTE {
 		m_ExpectedValue.clear();
 		m_ActualValue.clear();
 		m_RejectSummary.clear();
+		m_LobbyNotice.clear();
 		m_HasRemoteIdentityHash = false;
 		m_Stats = {};
 		m_Peers.clear();
@@ -207,6 +208,7 @@ namespace RTE {
 		{
 			std::lock_guard<std::mutex> chatLock(m_ChatMutex);
 			m_ChatOutbox.clear();
+			m_ChatSendResults.clear();
 			m_ChatLog.clear();
 			m_ChatHistory.clear();
 			m_ChatTeams.clear();
@@ -249,6 +251,7 @@ namespace RTE {
 		m_ExpectedValue.clear();
 		m_ActualValue.clear();
 		m_RejectSummary.clear();
+		m_LobbyNotice.clear();
 		m_HasRemoteIdentityHash = false;
 		m_AwaitingModuleDigests = false;
 		m_ModuleDigestsSent = false;
@@ -261,6 +264,7 @@ namespace RTE {
 			std::lock_guard<std::mutex> chatLock(m_ChatMutex);
 			m_ChatOutbox.clear();
 			m_ChatLog.clear();
+			m_ChatSendResults.clear();
 			m_ChatHistory.clear();
 			m_ChatTeams.clear();
 			m_ChatRate.clear();
@@ -369,6 +373,18 @@ namespace RTE {
 			peer.state = NetSessionState::Closed;
 			DropPeerTransport(peer.transportPeerId, message);
 		}
+		RefreshHostState();
+	}
+
+	void NetSession::DisconnectJoiningPeer(NetPeerId peerId, NetRejectReason reason, const std::string& message) {
+		if (m_Role != NetSessionRole::Host) return;
+		PeerState* peer = FindPeer(peerId);
+		if (!peer) return;
+		if (peer->state == NetSessionState::Ready) { DisconnectReadyPeer(peerId, reason, message); return; }
+		if (peer->state != NetSessionState::Handshake && peer->state != NetSessionState::Accepted) return;
+		Send(peerId, NetDisconnect{static_cast<uint16_t>(reason), message});
+		peer->state = NetSessionState::Closed;
+		DropPeerTransport(peerId, message);
 		RefreshHostState();
 	}
 
@@ -524,6 +540,7 @@ namespace RTE {
 		m_Peers.clear();
 		m_HasReject = false;
 		m_RejectSummary.clear();
+		m_LobbyNotice.clear();
 		if (m_Role == NetSessionRole::Host) {
 			for (const auto& [peer, connection]: peers) {
 				PeerState state;
@@ -611,16 +628,23 @@ namespace RTE {
 		}
 		if (m_Role == NetSessionRole::Host) {
 			for (const PeerState& peer : m_Peers) {
-				if (peer.state == NetSessionState::Ready) {
+				if (peer.state == NetSessionState::Ready || peer.state == NetSessionState::Accepted) {
 					SendHeartbeat(peer.transportPeerId);
 				}
 			}
-		} else if ((m_State == NetSessionState::Ready ||
+		} else if ((m_State == NetSessionState::Ready || m_State == NetSessionState::Accepted ||
 		            (m_State == NetSessionState::HelloSent && FaultInjected("client_never_says_hello"))) &&
 		           m_RemoteTransportPeerId != c_InvalidNetPeerId) {
 			SendHeartbeat(m_RemoteTransportPeerId);
 		}
 		m_NextHeartbeatMs = m_NowMs + m_Config.heartbeatIntervalMs;
+	}
+
+	void NetSession::MarkPeerReady(PeerState& peer) {
+		peer.state = NetSessionState::Ready;
+		peer.lastReceiveMs = m_NowMs;
+		peer.lastHeartbeatMs = m_NowMs;
+		m_LobbyNotice.clear();
 	}
 
 	void NetSession::ProcessEvent(const NetTransportEvent& event) {
@@ -691,6 +715,9 @@ namespace RTE {
 					}
 					if (PeerState* peer = FindPeer(event.peerId)) {
 						if (NetA7Journal::Enabled()) NetA7Journal::Session("handshake_closed", m_NowMs, {{"connection", std::to_string(peer->a7ConnectionId)}, {"reason", event.reason}});
+						if (peer->state == NetSessionState::Ready) {
+							m_LobbyNotice = (peer->displayName.empty() ? "A player" : peer->displayName) + " disconnected.";
+						}
 						peer->state = NetSessionState::Closed;
 					}
 					RefreshHostState();
@@ -877,6 +904,16 @@ namespace RTE {
 			}
 			peer->helloSeen = true;
 			peer->clientNonce = hello->clientNonce;
+			const NetIdentityMismatch mismatch = ValidateClientHello(*hello);
+			if (HasMismatch(mismatch)) {
+				if (mismatch.rejectReason == NetRejectReason::ModuleManifestMismatch && !peer->awaitingModuleDigests && BeginModuleDigestExchange(peerId)) {
+					peer->awaitingModuleDigests = true;
+					peer->pendingModuleMismatch = mismatch;
+					return;
+				}
+				RejectPeer(*peer, mismatch.rejectReason, mismatch.key, mismatch.expectedShortValue, mismatch.actualShortValue, mismatch.summary);
+				return;
+			}
 			uint8_t assignedPeerId = AllocatePeerId();
 			if (assignedPeerId == 0) {
 				if (m_Config.maxPeers == 0) {
@@ -884,8 +921,7 @@ namespace RTE {
 					RejectPeer(*peer, NetRejectReason::SessionFull, "peer_count", "0", std::to_string(ActivePeerCount()), "session seats no remote player");
 					return;
 				}
-				// §6: the seat's own id is still held by the incarnation this joiner may be about to
-				// supersede, so it proves on a provisional one and takes the seat's id from the commit.
+				// A full session authenticates a seat claim on a provisional id; only a commit seats it.
 				assignedPeerId = AllocatePendingAdmissionPeerId();
 				if (assignedPeerId == 0) {
 					RejectPeer(*peer, NetRejectReason::SessionFull, "peer_count", std::to_string(m_Config.maxPeers), std::to_string(ActivePeerCount()), "session is full");
@@ -898,16 +934,6 @@ namespace RTE {
 					RejectPeer(*peer, NetRejectReason::DuplicateClientNonce, "client_nonce", "unique", std::to_string(hello->clientNonce), "duplicate client nonce");
 					return;
 				}
-			}
-			const NetIdentityMismatch mismatch = ValidateClientHello(*hello);
-			if (HasMismatch(mismatch)) {
-				if (mismatch.rejectReason == NetRejectReason::ModuleManifestMismatch && !peer->awaitingModuleDigests && BeginModuleDigestExchange(peerId)) {
-					peer->awaitingModuleDigests = true;
-					peer->pendingModuleMismatch = mismatch;
-					return;
-				}
-				RejectPeer(*peer, mismatch.rejectReason, mismatch.key, mismatch.expectedShortValue, mismatch.actualShortValue, mismatch.summary);
-				return;
 			}
 			if (NetA7Journal::Enabled()) NetA7Journal::Session("handshake_accepted", m_NowMs, {{"connection", std::to_string(peer->a7ConnectionId)}});
 			peer->clientNonce = hello->clientNonce;
@@ -974,6 +1000,15 @@ namespace RTE {
 				RejectPeer(*peer, NetRejectReason::HostNotAccepting, "state", "accepted", StateName(peer->state), "ready state arrived before acceptance");
 				return;
 			}
+			if (m_ReconnectHost) {
+				const auto seat = m_ReconnectHost->StableSeatOfConnection(peerId);
+				NetPeerId holder = c_InvalidNetPeerId;
+				uint32_t generation = 0, incarnation = 0;
+				if (!seat || !m_ReconnectHost->GetSeatHolder(*seat, holder, generation, incarnation) || holder != peerId) {
+					RejectPeer(*peer, NetRejectReason::HostNotAccepting, "admission", "committed seat", "uncommitted", "The host has not admitted this seat. Join again.");
+					return;
+				}
+			}
 			if (ready->peerId != peer->assignedPeerId) {
 				RejectPeer(*peer, NetRejectReason::ProtocolMismatch, "peer_id", std::to_string(peer->assignedPeerId), std::to_string(ready->peerId), "ready state peer id does not match accepted session");
 				return;
@@ -986,6 +1021,7 @@ namespace RTE {
 				RejectPeer(*peer, NetRejectReason::ModuleManifestMismatch, "module_manifest_hash", HashText(m_Config.localIdentity.moduleManifestHash), HashText(ready->moduleManifestHash), "ready state module manifest hash does not match accepted session");
 				return;
 			}
+			if (ready->ready && peer->state != NetSessionState::Ready) m_LobbyNotice.clear();
 			peer->state = ready->ready ? NetSessionState::Ready : NetSessionState::Accepted;
 			peer->lastHeartbeatMs = m_NowMs;
 			if (ready->ready) {
@@ -1001,6 +1037,9 @@ namespace RTE {
 			return;
 		}
 		if (std::holds_alternative<NetDisconnect>(message.payload)) {
+			if (peer->state == NetSessionState::Ready) {
+				m_LobbyNotice = (peer->displayName.empty() ? "A player" : peer->displayName) + " left the lobby.";
+			}
 			peer->state = NetSessionState::Closed;
 			DropPeerTransport(peerId, "peer disconnected");
 			RefreshHostState();
@@ -1077,9 +1116,7 @@ namespace RTE {
 				// so a different id would silently re-point every actor the returner had.
 				if (PeerState* peer = FindPeer(commit.connection)) {
 					peer->assignedPeerId = commit.assignedPeerId;
-					peer->state = NetSessionState::Ready;
-					peer->lastReceiveMs = m_NowMs;
-					peer->lastHeartbeatMs = m_NowMs;
+					MarkPeerReady(*peer);
 				}
 				if (commit.supersededConnection != c_InvalidNetPeerId) {
 					if (PeerState* superseded = FindPeer(commit.supersededConnection)) {
@@ -1102,7 +1139,8 @@ namespace RTE {
 		}
 	}
 
-	bool NetSession::SendChat(uint8_t scope, const std::string& text) {
+	bool NetSession::SendChat(uint8_t scope, const std::string& text, uint64_t* requestId) {
+		if (requestId) *requestId = 0;
 		std::string clean = text;
 		const bool valid = scope <= c_NetChatScopeTeam && SanitizeChatText(clean);
 		std::lock_guard<std::mutex> lock(m_ChatMutex);
@@ -1116,8 +1154,20 @@ namespace RTE {
 			++m_Stats.chatDroppedRate;
 			return false;
 		}
-		m_ChatOutbox.push_back({scope, std::move(clean)});
+		const uint64_t id = requestId ? m_NextChatRequestId++ : 0;
+		if (requestId) {
+			*requestId = id;
+			while (m_ChatSendResults.size() >= 128) m_ChatSendResults.erase(m_ChatSendResults.begin());
+			m_ChatSendResults[id] = {NetChatSendState::Queued, "Waiting to send"};
+		}
+		m_ChatOutbox.push_back({scope, std::move(clean), id});
 		return true;
+	}
+
+	NetChatSendResult NetSession::ChatSendResult(uint64_t requestId) const {
+		std::lock_guard<std::mutex> lock(m_ChatMutex);
+		const auto found = m_ChatSendResults.find(requestId);
+		return found == m_ChatSendResults.end() ? NetChatSendResult{} : found->second;
 	}
 
 	void NetSession::PumpChatOutbox() {
@@ -1129,6 +1179,11 @@ namespace RTE {
 		while (!pending.empty()) {
 			NetChatOutbound line = std::move(pending.front());
 			pending.pop_front();
+			const auto receipt = [&](NetChatSendState state, const std::string& detail) {
+				if (!line.requestId) return;
+				const auto found = m_ChatSendResults.find(line.requestId);
+				if (found != m_ChatSendResults.end()) found->second = {state, detail};
+			};
 			// Accepted counts as linked: a client sits in Accepted while its admission commit is in
 			// flight, and the host's aggregate state is Accepted in the same window - both are in
 			// the lobby. A host alone in its lobby is still Listening; its own lines must sink even
@@ -1142,14 +1197,14 @@ namespace RTE {
 				std::lock_guard<std::mutex> lock(m_ChatMutex);
 				if (!linked) {
 					++m_Stats.chatDroppedInvalid;
+					receipt(NetChatSendState::Refused, "Not sent: the chat connection is unavailable. Your draft is kept.");
 					continue;
 				}
 				if (!AdmitChatRate(c_LocalChatRateKey, m_NowMs)) {
 					++m_Stats.chatDroppedRate;
+					receipt(NetChatSendState::Refused, "Not sent: chat allows five messages per second. Wait, then press Enter to retry.");
 					continue;
 				}
-				++m_Stats.chatMessagesSent;
-				DeliverChat({m_LockstepFrame, m_LocalPeerId, m_Config.displayName, line.scope, line.text});
 				if (m_Role == NetSessionRole::Client) {
 					sendToHost = true;
 				} else {
@@ -1174,20 +1229,25 @@ namespace RTE {
 			wire.senderPeerId = m_LocalPeerId;
 			wire.scope = line.scope;
 			wire.sentAtMs = static_cast<uint32_t>(m_NowMs);
-			wire.text = std::move(line.text);
-			if (sendToHost) {
-				Send(m_RemoteTransportPeerId, wire);
-				continue;
-			}
+			wire.text = line.text;
+			bool sent = true;
 			uint32_t relayed = 0;
+			if (sendToHost) sent = Send(m_RemoteTransportPeerId, wire);
 			for (const NetPeerId target : targets) {
 				if (Send(target, wire)) {
 					++relayed;
-				}
+				} else sent = false;
 			}
-			if (relayed > 0) {
+			{
 				std::lock_guard<std::mutex> lock(m_ChatMutex);
 				m_Stats.chatMessagesRelayed += relayed;
+				if (sent) {
+					++m_Stats.chatMessagesSent;
+					DeliverChat({m_LockstepFrame, m_LocalPeerId, m_Config.displayName, line.scope, line.text});
+					receipt(NetChatSendState::Sent, "Sent to the chat connection");
+				} else {
+					receipt(NetChatSendState::Refused, relayed ? "Some players received this message; another connection refused it. Your draft is kept; retrying may send it twice." : "Not sent: the chat connection refused the message. Your draft is kept.");
+				}
 			}
 		}
 	}
@@ -1244,6 +1304,7 @@ namespace RTE {
 	}
 
 	void NetSession::DeliverChat(NetChatEntry entry) {
+		entry.historyId = m_NextChatHistoryId++;
 		m_ChatHistory.push_back(entry);
 		while (m_ChatHistory.size() > 32) {
 			m_ChatHistory.pop_front();
@@ -1326,6 +1387,9 @@ namespace RTE {
 			// The commit names the seat's own peer id (P4); adopt it before declaring ourselves Ready,
 			// or the host's ready check would see a different id than the seat it just committed.
 			m_LocalPeerId = m_ReconnectClient->GetAssignedPeerId();
+			// The former host can return as a client; the admitted roster names its remote host.
+			const NetRosterReplica& replica = m_ReconnectClient->GetRosterReplica();
+			if (replica.HasRoster() && replica.Roster().HostSeatValid()) AdoptLobbyHostPeerId(replica.Roster().hostSeat);
 			Send(m_RemoteTransportPeerId, BuildReadyState(true));
 			m_State = NetSessionState::Ready;
 			m_StateStartedMs = m_NowMs;
@@ -1520,7 +1584,7 @@ namespace RTE {
 		// watchdogs and their own clocks.
 		// Each phase with nobody to answer gets the host's own join deadline on its own clock and no more: past it the
 		// rejoin ends here, and the seat stays with the AI the host already gave it.
-		if (const RejoinPhase phase = m_RejoinPhase.load(); phase != m_CeilingPhase) {
+		if (const RejoinPhase phase = m_RejoinPhase.load(); m_RejoinPhaseChanged.exchange(false) || phase != m_CeilingPhase) {
 			m_CeilingPhase = phase;
 			m_CeilingPhaseSinceMs = m_NowMs;
 		} else if (SuspendsSilence(phase) && m_Config.rejoinPhaseCeilingMs != 0 && m_NowMs >= m_CeilingPhaseSinceMs &&
@@ -1584,6 +1648,8 @@ namespace RTE {
 				}
 				if (m_NowMs >= peer.lastReceiveMs && m_NowMs - peer.lastReceiveMs > m_Config.timeoutMs) {
 					++m_Stats.timeouts;
+					m_LobbyNotice = (peer.displayName.empty() ? "A player" : peer.displayName) +
+						(peer.state == NetSessionState::Ready ? " disconnected (connection timed out)." : " could not join: the connection timed out.");
 					Send(peer.transportPeerId, NetDisconnect{static_cast<uint16_t>(NetRejectReason::Timeout), "heartbeat timeout"});
 					DropPeerTransport(peer.transportPeerId, "heartbeat timeout");
 					peer.state = NetSessionState::Failed;
@@ -1671,6 +1737,11 @@ namespace RTE {
 	void NetSession::RejectPeer(PeerState& peer, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
 		RejectConnection(peer.transportPeerId, reason, key, expected, actual, summary);
 		m_RefusedPlayerName = peer.displayName;
+		if (reason == NetRejectReason::ParticipantRemoved || reason == NetRejectReason::ParticipantBanned) {
+			m_LobbyNotice = BuildPlayerRefusalText();
+		} else {
+			m_LobbyNotice = (peer.displayName.empty() ? "A player" : peer.displayName) + " could not join: " + BuildPlayerRefusalText();
+		}
 		peer.state = NetSessionState::Rejected;
 		RefreshHostState();
 	}
@@ -1678,6 +1749,7 @@ namespace RTE {
 	void NetSession::RejectConnection(NetPeerId peerId, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
 		RecordReject(reason, key, expected, actual, summary);
 		m_RefusedPlayerName.clear();
+		m_LobbyNotice = "A player could not join: " + BuildPlayerRefusalText();
 		Send(peerId, NetJoinRejected{reason, summary, key, expected, actual});
 		if (m_Transport) {
 			// The close reason rides the transport too, so a peer that misses the reject packet still sees why.
@@ -1724,7 +1796,7 @@ namespace RTE {
 					// A joiner offers a range of protocols; one that offers a single protocol is named by it.
 					const size_t dash = m_ActualValue.find('-');
 					const bool single = dash != std::string::npos && m_ActualValue.substr(0, dash) == m_ActualValue.substr(dash + 1);
-					return "Their network protocol differs (theirs " + (single ? m_ActualValue.substr(0, dash) : m_ActualValue) + "; yours " + m_ExpectedValue + ").";
+					return "Their network protocol differs (theirs " + (single ? m_ActualValue.substr(0, dash) : m_ActualValue) + "; yours " + m_ExpectedValue + "). Update both games to the same version.";
 				}
 				case NetRejectReason::BuildMismatch:
 					// Two builds with the same id can still differ in their session identity; its hashes mean nothing on screen.
@@ -1745,7 +1817,7 @@ namespace RTE {
 					return "This host runs a different game version.";
 				case NetRejectReason::ProtocolMismatch: {
 					const std::string mine = std::to_string(m_AdvertisedProtocolForTest.value_or(NetProtocol::c_Version));
-					return "Network protocol differs (host " + hostValue(mine) + "; yours " + mine + ").";
+					return "Network protocol differs (host " + hostValue(mine) + "; yours " + mine + "). Update both games to the same version.";
 				}
 				case NetRejectReason::BuildMismatch: {
 					const std::string mine = m_AdvertisedBuildForTest.value_or(m_Config.localIdentity.buildId);
@@ -1799,7 +1871,9 @@ namespace RTE {
 				if (m_Role == NetSessionRole::Host && !m_RefusedPlayerName.empty())
 					return m_RefusedPlayerName + (m_MismatchKey == "participant_removed" ? " was removed from this session" : " is banned from this session");
 				return BuildRejectText();
-			case NetRejectReason::IdentityUnproven: return "Your player identity could not be verified.";
+			case NetRejectReason::IdentityUnproven:
+				if (m_MismatchKey == "seat_owner" && !m_RejectSummary.empty()) return CleanHostNoticeText(m_RejectSummary, NetProtocol::c_MaxDiagnosticTextBytes);
+				return "Your player identity could not be verified.";
 			default: return "The host could not admit this connection. Please try again.";
 		}
 	}
@@ -1814,7 +1888,7 @@ namespace RTE {
 			return value.size() > 12 ? value.substr(0, 8) + ".." : value;
 		};
 		std::string text = m_RejectSummary.empty() ? NetProtocol::RejectReasonName(m_RejectReason) : m_RejectSummary;
-		if (!m_MismatchKey.empty()) {
+		if (!m_MismatchKey.empty() && (!m_ExpectedValue.empty() || !m_ActualValue.empty())) {
 			text += " (" + m_MismatchKey + ": " + shortValue(m_ExpectedValue) + " vs " + shortValue(m_ActualValue) + ")";
 		}
 		return text;
@@ -1847,7 +1921,8 @@ namespace RTE {
 	}
 
 	uint8_t NetSession::AllocatePendingAdmissionPeerId() const {
-		if (m_Role != NetSessionRole::Host || m_ReconnectHost == nullptr || !m_ReconnectHost->HoldsSeatsForReturn()) {
+		if (m_Role != NetSessionRole::Host || m_ReconnectHost == nullptr ||
+		    (!m_ReconnectHost->HoldsSeatsForReturn() && !m_ReconnectHost->AuthenticatesSeatClaims())) {
 			return 0;
 		}
 		for (uint16_t candidate = static_cast<uint16_t>(m_Config.maxPeers) + 1;

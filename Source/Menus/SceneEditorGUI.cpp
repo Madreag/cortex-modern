@@ -30,6 +30,10 @@
 #include "Deployment.h"
 #include "BunkerAssemblyScheme.h"
 #include "Loadout.h"
+#include "GUI.h"
+#include "AllegroBitmap.h"
+#include "GUIFont.h"
+#include "MenuAutomation.h"
 
 #include <atomic>
 #include <thread>
@@ -922,6 +926,12 @@ void SceneEditorGUI::Update() {
 						g_FrameMan.ClearScreenText(g_ActivityMan.GetActivity()->ScreenOfPlayer(m_pController->GetPlayer()));
 						g_FrameMan.SetScreenText("You can't afford to place that!", g_ActivityMan.GetActivity()->ScreenOfPlayer(m_pController->GetPlayer()), 333, 1500);
 						g_GUISound.UserErrorSound()->Play(m_pController->GetPlayer());
+					} else if (game && game->IsLockstepPlacement()) {
+						if ((dynamic_cast<TerrainObject*>(m_pCurrentObject) || m_CursorInAir) &&
+						    game->EnqueueEditorPlacement(*m_pCurrentObject, m_pController->GetPlayer(), m_NativeTechModule, m_ForeignCostMult)) {
+							m_EditMade = true;
+							g_GUISound.PlacementThud()->Play(m_pController->GetPlayer());
+						} else g_GUISound.UserErrorSound()->Play(m_pController->GetPlayer());
 					} else {
 						// TODO: Experimental! clean up this messiness
 						SceneObject* pPlacedClone = dynamic_cast<SceneObject*>(m_pCurrentObject->Clone());
@@ -1384,7 +1394,23 @@ void SceneEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 	m_DrawTexture->Draw(Box(Vector(), m_DrawTexture->m_Width, m_DrawTexture->m_Height), Box(Vector(), m_DrawTexture->m_Width, m_DrawTexture->m_Height));
 	rlZDepth(0);
 
-	// Draw the pie menu
+	if (m_FeatureSet == INGAMEEDIT && GameActivity::IsLockstepPlacement() && m_EditorGUIMode != PICKINGOBJECT && m_EditorGUIMode != INACTIVE) {
+		const auto* game = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+		if (game && game->NeedsPlacementConfirmation(m_pController->GetPlayer())) {
+			const bool returnKey = game->IsPlacementConfirmKeyAvailable(m_pController->GetPlayer(), SDL_SCANCODE_RETURN);
+			const bool keypad = game->IsPlacementConfirmKeyAvailable(m_pController->GetPlayer(), SDL_SCANCODE_KP_ENTER);
+			const std::string prompt = returnKey ? "Enter / Return: finish placement   |   Pie menu: Done"
+			                                   : keypad ? "Keypad Enter: finish placement   |   Pie menu: Done"
+			                                            : "Pie menu: Done (finish placement)";
+			AllegroBitmap bitmap(pTargetBitmap);
+			auto* font = g_FrameMan.GetSmallFont(true);
+			const int y = pTargetBitmap->h - font->GetFontHeight() - 8;
+			rectfill(pTargetBitmap, 0, y - 4, pTargetBitmap->w - 1, pTargetBitmap->h - 1, makeacol32(20, 22, 27, 255));
+			font->DrawAligned(&bitmap, pTargetBitmap->w / 2, y, prompt, GUIFont::Centre);
+			MenuAutomation::NoteDrawnText("PlacementConfirm", prompt);
+		}
+	}
+	// The original pie gesture remains visible above the placement hint.
 	m_PieMenu->Draw(pTargetBitmap, targetPos);
 }
 
@@ -1478,11 +1504,16 @@ void SceneEditorGUI::UpdateBrainSkyPathAndCost(Vector brainPos) {
 	}
 
 	Activity::Teams team = static_cast<Activity::Teams>(g_ActivityMan.GetActivity()->GetTeamOfPlayer(m_pController->GetPlayer()));
-	m_PathRequest = g_SceneMan.GetScene()->CalculatePathAsync(pos1, pos2, FLT_MAX, c_PathFindingDefaultDigStrength, team,
-	                                                          [&](std::shared_ptr<volatile PathRequest> pathRequest) {
-		                                                          m_BrainSkyPath = const_cast<std::list<Vector>&>(pathRequest->path);
-		                                                          m_BrainSkyPathCost = pathRequest->totalCost;
-	                                                          });
+	RequestBrainSkyPath(*g_SceneMan.GetScene(), pos1, pos2, team);
+}
+
+void SceneEditorGUI::RequestBrainSkyPath(Scene& scene, const Vector& start, const Vector& end, int team) {
+	m_PathRequest = scene.CalculatePathAsyncForEditor(
+	    start, end, FLT_MAX, c_PathFindingDefaultDigStrength, static_cast<Activity::Teams>(team),
+	    [this](std::shared_ptr<volatile PathRequest> pathRequest) {
+		    m_BrainSkyPath = const_cast<std::list<Vector>&>(pathRequest->path);
+		    m_BrainSkyPathCost = pathRequest->totalCost;
+	    });
 }
 
 bool SceneEditorGUI::UpdateBrainPath() {

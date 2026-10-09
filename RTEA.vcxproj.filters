@@ -550,6 +550,9 @@
     <ClInclude Include="Source\Network\NetDirectoryClient.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetConnectionAuthority.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetDirectoryCodec.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -902,6 +905,9 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetDirectoryClient.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetConnectionAuthority.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetDirectoryCodec.cpp">

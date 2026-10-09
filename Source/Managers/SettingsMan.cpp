@@ -1028,8 +1028,8 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	{
 		GnsTransport wire;
 		std::string error;
-		check("relay-only IP refusal", !wire.Connect("127.0.0.1", 48109, &error) && error == "Relay only refuses direct IP; choose Automatic or Direct only");
-		check("relay-only IP listener refusal", !wire.StartHost(48109, &error) && error == "Relay only refuses direct IP; choose Automatic or Direct only");
+		check("relay-only IP refusal", !wire.Connect("127.0.0.1", 48109, &error) && error == "Your Connection is Relay only. Join from the Internet list, or switch Connection to Automatic to use a direct address.");
+		check("relay-only IP listener refusal", !wire.StartHost(48109, &error) && error == "Your Connection is Relay only. Host an Internet game, or switch Connection to Automatic to listen on a direct address.");
 	}
 	settings.SetNetworkConnectionMode(NetworkConnectionMode::Automatic);
 

@@ -571,6 +571,7 @@ Vector AtomGroup::GetAdjustedAtomOffset(const Atom* atom) const {
 }
 
 float AtomGroup::GetMomentOfInertia() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_MomentOfInertia, m_StoredOwnerMass); });
 	float currentOwnerMass = (m_OwnerMOSR->GetMass() != 0 ? m_OwnerMOSR->GetMass() : 0.0001F);
 	if (m_MomentOfInertia == 0.0F || std::abs(m_StoredOwnerMass - currentOwnerMass) >= (m_StoredOwnerMass / 10.0F)) {
 		RTEAssert(m_OwnerMOSR, "Tried to calculate moment of inertia for an AtomGroup with no parent!");

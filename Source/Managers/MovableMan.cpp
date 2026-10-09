@@ -4,6 +4,7 @@
 #include "Constants.h"
 #include "OwnedMovableObjects.h"
 #include "MovableMan.h"
+#include <iostream>
 #include "SimDumpTape.h"
 #include "NetA7Journal.h"
 #include "PrimitiveMan.h"
@@ -26,6 +27,7 @@
 #include "ACDropShip.h"
 #include "PEmitter.h"
 #include "MOPixel.h"
+#include "MOSParticle.h"
 #include "HeldDevice.h"
 #include "HDFirearm.h"
 #include "SLTerrain.h"
@@ -78,6 +80,7 @@ extern "C" {
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <locale>
 #include <map>
 #include <memory>
 #include <queue>
@@ -695,7 +698,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 	});
 	for (const NetGameCommand& command: commands) {
 		if (std::holds_alternative<NetGameSeatHold>(command.payload) || std::holds_alternative<NetGameInputDelay>(command.payload) || std::holds_alternative<NetGameSeatReclaim>(command.payload) ||
-		    std::holds_alternative<NetGameSeatRelease>(command.payload)) continue;
+		    std::holds_alternative<NetGameSeatRelease>(command.payload) || std::holds_alternative<NetGameHostAuthority>(command.payload)) continue;
 		if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) {
 			ScenarioRunner::ObserveLockstepPlayerBindings(command.senderPeerId, readyFrame.frame, *bindings);
 			continue;
@@ -1104,6 +1107,8 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				continue;
 			}
 			ApplyDeferredSoundOp(*sound);
+		} else if (const auto* placement = std::get_if<NetGameEditorPlacement>(&command.payload)) {
+			if (auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) game->ApplyNetEditorPlacement(*placement, command.senderPeerId);
 		} else if (const NetGamePlaceBrain* placeBrain = std::get_if<NetGamePlaceBrain>(&command.payload)) {
 			// A seat's committed brain placement in the synchronized setup editor.
 			if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
@@ -1871,6 +1876,131 @@ void MovableMan::DumpMOLines(uint64_t tick, const char* kind, MovableObject* mo,
 void MovableMan::DumpMOSimState(uint64_t tick, const char* kind, MovableObject* mo, std::ostream& out) const {
 	DumpMOLines(tick, kind, mo, out);
 }
+
+void MovableMan::CapturePhysicsHistory(uint64_t tick, uint64_t phase) const {
+	static const std::string prefix = [] { const char* path = std::getenv("CC_TEST_PHYSICS_HISTORY"); return path ? path : ""; }();
+	if (prefix.empty()) return;
+	static const std::string trigger = [] { const char* path = std::getenv("CC_TEST_PHYSICS_TRIGGER"); return path ? path : ""; }();
+	using Row = std::array<uint64_t, 48>;
+	struct Frame { uint64_t tick = 0, phase = 0; size_t offset = 0, rows = 0; };
+	constexpr size_t maxFrames = 600 * 3;
+	constexpr size_t maxRows = (96 * 1024 * 1024) / sizeof(Row);
+	static std::array<Frame, maxFrames> history;
+	static std::vector<Row> storage(maxRows);
+	static size_t first = 0, count = 0, usedRows = 0, cursor = 0;
+	static uint64_t incident = 0, postRemaining = 0;
+	static int64_t maximumUs = 0, totalUs = 0;
+	static uint64_t captures = 0;
+	const auto entered = std::chrono::steady_clock::now();
+	const auto countObject = [&](auto&& self, const MovableObject* mo) -> size_t {
+		size_t result = 1;
+		if (const auto* rotating = dynamic_cast<const MOSRotating*>(mo)) {
+			for (const Attachable* child: rotating->GetAttachableList()) result += self(self, child);
+		}
+		return result;
+	};
+	size_t neededRows = 0;
+	const auto countCohort = [&](const auto& objects) { for (const MovableObject* mo: objects) neededRows += countObject(countObject, mo); };
+	countCohort(m_Actors); countCohort(m_Items); countCohort(m_Particles);
+	countCohort(m_AddedActors); countCohort(m_AddedItems); countCohort(m_AddedParticles);
+	if (neededRows > maxRows) {
+		std::cout << "[physics-history-error] frame_exceeds_byte_bound tick=" << tick << " rows=" << neededRows << std::endl;
+		return;
+	}
+	while (count > 0 && (count == history.size() || usedRows + neededRows > maxRows)) {
+		usedRows -= history[first].rows;
+		first = (first + 1) % history.size(); --count;
+	}
+	Frame& frame = history[(first + count++) % history.size()];
+	frame = {tick, phase, cursor, 0};
+	const auto bits = [](float value) -> uint64_t { return std::bit_cast<uint32_t>(value); };
+	const auto fold = [](uint64_t& hash, uint64_t value) { hash = (hash ^ value) * 1099511628211ULL; };
+	const auto forces = [&](const auto& values) {
+		uint64_t hash = 14695981039346656037ULL;
+		for (const auto& [force, offset]: values) {
+			for (float value: {force.m_X, force.m_Y, offset.m_X, offset.m_Y}) fold(hash, bits(value));
+		}
+		return hash;
+	};
+	const auto atoms = [&](const auto& values) {
+		uint64_t hash = 14695981039346656037ULL;
+		for (const Atom* atom: values) {
+			fold(hash, static_cast<uint64_t>(atom->PackTravelResidue()));
+			for (float value: {atom->GetOffset().m_X, atom->GetOffset().m_Y, atom->GetNormal().m_X, atom->GetNormal().m_Y}) fold(hash, bits(value));
+		}
+		return hash;
+	};
+	const auto record = [&](auto&& self, MovableObject* mo, uint64_t cohort) -> void {
+		Row row{};
+		row[0] = mo->GetUniqueID(); row[1] = cohort; row[2] = static_cast<uint64_t>(mo->GetID()); row[3] = static_cast<uint64_t>(mo->GetRootID());
+		const bool flags[] = {mo->m_CheckTerrIntersection, mo->m_HitsMOs, mo->m_GetsHitByMOs, mo->m_IgnoresTeamHits, mo->m_IgnoresAtomGroupHits,
+		    mo->m_IgnoresActorHits, mo->m_MissionCritical, mo->m_CanBeSquished, mo->m_IsUpdated, mo->m_DidWrap, mo->m_ToSettle, mo->m_ToDelete, mo->m_IsTraveling};
+		for (size_t index = 0; index < std::size(flags); ++index) row[4] |= static_cast<uint64_t>(flags[index]) << index;
+		row[5] = static_cast<uint64_t>(mo->GetTeam()); row[6] = mo->m_MOType;
+		const MOSprite* sprite = dynamic_cast<const MOSprite*>(mo);
+		const float values[] = {mo->GetPos().m_X, mo->GetPos().m_Y, mo->m_Vel.m_X, mo->m_Vel.m_Y, mo->m_PrevPos.m_X, mo->m_PrevPos.m_Y,
+		    mo->m_PrevVel.m_X, mo->m_PrevVel.m_Y, mo->GetAngularVel(), sprite ? sprite->GetRotAngle() : 0.0F, mo->GetMass(), mo->m_Mass, mo->m_PinStrength,
+		    mo->m_Sharpness, mo->m_Scale, mo->m_GlobalAccScalar, mo->m_AirResistance, mo->m_AirThreshold, mo->m_DistanceTravelled};
+		for (size_t index = 0; index < std::size(values); ++index) row[index + 7] = bits(values[index]);
+		row[26] = std::bit_cast<uint64_t>(mo->m_AgeTimer.GetElapsedSimTimeMS());
+		row[27] = std::bit_cast<uint64_t>(mo->m_RestTimer.GetElapsedSimTimeMS());
+		row[28] = std::bit_cast<uint64_t>(mo->m_MOIgnoreTimer.GetElapsedSimTimeMS());
+		row[29] = mo->m_MOToNotHitUID; row[30] = mo->HitWhatMOID(); row[31] = mo->HitWhatParticleUniqueID(); row[32] = mo->HitWhatTerrMaterial();
+		row[37] = mo->m_Forces.size(); row[38] = forces(mo->m_Forces); row[39] = mo->m_ImpulseForces.size(); row[40] = forces(mo->m_ImpulseForces);
+		row[43] = mo->GetRootParent()->GetUniqueID(); row[46] = static_cast<uint64_t>(mo->m_RestThreshold); row[47] = static_cast<uint64_t>(mo->m_VelOscillations);
+		if (MOSRotating* rotating = dynamic_cast<MOSRotating*>(mo)) {
+			if (const AtomGroup* group = rotating->GetAtomGroup()) {
+				row[33] = bits(group->GetStoredMomentOfInertia()); row[34] = bits(group->GetStoredOwnerMass()); row[35] = group->GetAtomCount();
+				row[36] = atoms(group->GetAtomList());
+				uint64_t ignored = 14695981039346656037ULL;
+				for (MOID id: group->GetIgnoreMOIDs()) fold(ignored, static_cast<uint64_t>(id));
+				row[45] = ignored;
+			}
+			row[41] = bits(rotating->GetTravelImpulse().m_X); row[42] = bits(rotating->GetTravelImpulse().m_Y);
+		}
+		if (sprite) row[44] = sprite->GetFrame();
+		if (const MOPixel* pixel = dynamic_cast<const MOPixel*>(mo)) { row[35] = 1; row[36] = static_cast<uint64_t>(pixel->GetAtomResidue()); }
+		if (const MOSParticle* particle = dynamic_cast<const MOSParticle*>(mo)) { row[35] = 1; row[36] = static_cast<uint64_t>(particle->GetAtomResidue()); }
+		storage[cursor] = row; cursor = (cursor + 1) % maxRows; ++frame.rows; ++usedRows;
+		if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
+			for (Attachable* child: rotating->GetAttachableList()) self(self, child, 6);
+		}
+	};
+	const auto cohort = [&](const auto& objects, uint64_t kind) { for (MovableObject* mo: objects) record(record, mo, kind); };
+	cohort(m_Actors, 0); cohort(m_Items, 1); cohort(m_Particles, 2);
+	cohort(m_AddedActors, 3); cohort(m_AddedItems, 4); cohort(m_AddedParticles, 5);
+	const int64_t elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - entered).count();
+	maximumUs = std::max(maximumUs, elapsedUs); totalUs += elapsedUs; ++captures;
+	if (phase != 3) return;
+	if (tick % 600 == 0) {
+		std::cout << "[physics-history] tick=" << tick << " rows=" << frame.rows << " buffer_bytes=" << storage.size() * sizeof(Row) << " history_rows=" << usedRows << " frames=" << count << " first_tick=" << history[first].tick << " mean_us=" << totalUs / captures << " max_us=" << maximumUs << std::endl;
+	}
+	const auto flush = [&](const std::string& suffix) {
+		std::ofstream out(prefix + "." + std::to_string(incident) + suffix + ".bin", std::ios::binary);
+		out.write("PHYSTRC1", 8);
+		const auto number = [&](uint64_t value) { out.write(reinterpret_cast<const char*>(&value), sizeof(value)); };
+		number(1); number(std::tuple_size_v<Row>); number(count);
+		for (size_t index = 0; index < count; ++index) {
+			const Frame& kept = history[(first + index) % history.size()];
+			number(kept.tick); number(kept.phase); number(kept.rows);
+			const size_t contiguous = std::min(kept.rows, maxRows - kept.offset);
+			out.write(reinterpret_cast<const char*>(storage.data() + kept.offset), static_cast<std::streamsize>(contiguous * sizeof(Row)));
+			out.write(reinterpret_cast<const char*>(storage.data()), static_cast<std::streamsize>((kept.rows - contiguous) * sizeof(Row)));
+		}
+		std::cout << "[physics-history] incident=" << incident << " tick=" << tick << " frames=" << count << " suffix=" << suffix << std::endl;
+	};
+	if (postRemaining > 0 && --postRemaining == 0) flush(".post");
+	if (incident < 3 && !trigger.empty()) {
+		uint64_t requested = 0;
+		std::ifstream input(trigger); input >> requested;
+		if (requested > incident && requested <= 3) {
+			incident = requested; flush(".first"); postRemaining = 16;
+			std::ofstream dump(prefix + "." + std::to_string(incident) + ".simdump.txt");
+			dump.imbue(std::locale::classic()); DumpSimState(tick, dump);
+		}
+	}
+}
+
 
 void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 	DumpSimLines(tick, out);
@@ -5347,7 +5477,8 @@ void MovableMan::AbsorbAddedMOs() {
 void MovableMan::ResolvePendingSnapshotLinks() {
 	// Keep the pending cohort until absorption so the saved resident order is retained.
 	for (MovableObject* mo: m_PendingLinkResolves) {
-		if (ValidMO(mo)) {
+		// The collision-valid set can omit saved particles that still travel.
+		if (IsKnownObject(mo)) {
 			mo->ResolveFaithfulLinks();
 		}
 	}
@@ -5639,6 +5770,27 @@ bool MovableMan::RunLuaStateRestoreBoundarySelfTest() {
 	int idIndex = -1;
 	double restoredField = -1.0;
 	bool ready = true;
+	bool pendingNativeRestored = false;
+	{
+		// A dropped item stays in a saved particle cohort after it leaves the collision-valid set.
+		const auto* preset = dynamic_cast<const HDFirearm*>(g_PresetMan.GetEntityPreset("HDFirearm", "Battle Rifle", "Base.rte"));
+		std::unique_ptr<HDFirearm> dropped(preset ? dynamic_cast<HDFirearm*>(preset->Clone()) : nullptr);
+		AtomGroup* group = dropped ? dropped->GetAtomGroup() : nullptr;
+		const std::string saved = group ? group->SaveCheckpoint() : "";
+		const bool loaded = group && !group->GetAtomList().empty() && group->LoadCheckpoint(saved);
+		const bool known = dropped && IsKnownObject(dropped.get());
+		const bool valid = dropped && ValidMO(dropped.get());
+		if (loaded) {
+			m_Particles.push_back(dropped.get());
+			m_PendingLinkResolves.push_back(dropped.get());
+			ResolvePendingSnapshotLinks();
+			pendingNativeRestored = known && !valid && std::all_of(group->GetAtomList().begin(), group->GetAtomList().end(), [&](const Atom* atom) { return atom->GetOwner() == dropped.get(); }) && group->SaveCheckpoint() == saved;
+			std::erase(m_Particles, dropped.get());
+			std::erase(m_PendingLinkResolves, dropped.get());
+		}
+		std::cout << "[script-graph-selftest] " << (pendingNativeRestored ? "PASS" : "FAIL")
+		          << " restored_particle_keeps_its_atom_parents loaded=" << loaded << " known=" << known << " collision_valid=" << valid << " parents=" << pendingNativeRestored << std::endl;
+	}
 
 	{
 		// A spawn from a SERIAL pass - the channel the contract blesses - takes its OWN state, though the
@@ -5712,7 +5864,7 @@ bool MovableMan::RunLuaStateRestoreBoundarySelfTest() {
 	const bool serialGreen = ready && serialSpawnState > 0 && serialSpawnState == serialSpawnOwnState;
 	const bool parallelKnown = ready && parallelSpawnState > 0 && parallelSpawnState == parallelSpawnSpawnerState && spawnerPlacements == 1;
 	const bool restoreGreen = ready && restoredState > 0 && restoredState == savedIndex && restoredField == 7.0;
-	const bool passed = serialGreen && parallelKnown && restoreGreen;
+	const bool passed = serialGreen && parallelKnown && restoreGreen && pendingNativeRestored;
 	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL")
 	          << " restore_keeps_the_object_with_its_saved_script_graph states=" << c_LuaStateCount
 	          << " serial_spawn_state=" << serialSpawnState << " serial_spawn_own_state=" << serialSpawnOwnState
@@ -6862,8 +7014,10 @@ void MovableMan::Update() {
 
 	TraceTrackedPhase("phA");
 
+	CapturePhysicsHistory(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), 1);
 	// Travel MOs
 	Travel();
+	CapturePhysicsHistory(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), 2);
 
 	SceneMan::SetTerrainEventContext(0);
 

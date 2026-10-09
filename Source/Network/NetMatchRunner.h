@@ -101,9 +101,11 @@ namespace RTE {
 		bool autoStart = true;
 		bool waitForSlot = false; //!< A joiner a world refused because its slots are held knocks again for one to open, within the join's wait.
 		std::atomic<bool>* readyRequested = nullptr;
+		std::optional<NetMatchConfig> readyForSetup; //!< Reconnect Ready must match this prior setup and session.
 		std::atomic<bool>* startRequested = nullptr;
 		std::atomic<bool>* cancelStartRequested = nullptr; //!< Host: withdraws its Start and its countdown.
 		std::atomic<bool>* hostSetupOpen = nullptr; //!< Host: its setup screen is open.
+		std::atomic<bool>* lobbyInput = nullptr; //!< Host menu input since the last lobby pump.
 		uint32_t startCountdownMs = 0; //!< Host: how long a Start with someone not ready counts down; 0 waits for every Ready.
 		// Host: the round's start scripts, streamed ahead of the lobby start the first time a start is asked for.
 		std::function<std::vector<uint8_t>()> roundStartScripts;
@@ -278,6 +280,7 @@ namespace RTE {
 		friend bool TestAJoiningLobbyWaitsForHostConfig(std::string* error);
 		friend bool TestMenuLobbyWaitsForALiveHost(std::string* error);
 		friend bool TestInitialLobbyStartsWithHeldSeats(std::string* error);
+		friend bool TestAnEmptyLobbyAdmitsLaterJoiners(std::string* error);
 		friend bool TestAHostsStartSurvivesTheLobbysOwnChanges(std::string* error);
 		friend bool TestKickedSeatReadsOpen(std::string* error);
 		friend bool TestARunningRoundsJoinerIsNotAskedForItsStartRoster(std::string* error);

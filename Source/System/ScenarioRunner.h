@@ -273,6 +273,7 @@ namespace RTE {
 		static void SetWorldCatchUpWatcher(bool watcher);
 		static void NoteWorldCatchUpTickCost(uint64_t tick, uint64_t workUs, uint64_t wallUs = 0);
 		static uint64_t WorldCatchUpWorkTicks();
+		static uint64_t WorldCatchUpStartTick();
 		static uint64_t WorldCatchUpWorkUs();
 		static uint64_t WorldCatchUpPriorInputThrough();
 		static void SetWorldCatchUpPriorInputThrough(uint64_t frame);
@@ -540,7 +541,7 @@ namespace RTE {
 
 		/// Enqueue an owner-issued game command to ride the next local lockstep frame; the coordinator stamps
 		/// the sender and both peers apply it at the synced frame.
-		static void EnqueueLocalGameCommand(const NetGameCommand& command);
+		static bool EnqueueLocalGameCommand(const NetGameCommand& command);
 		static std::vector<NetGameCommand> DrainLocalGameCommands();
 
 		/// Pin the sim-affecting config to canonical values for a deterministic run, so the sim is

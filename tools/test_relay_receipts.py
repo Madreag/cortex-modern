@@ -42,7 +42,7 @@ class RelayReceipts(unittest.TestCase):
 
     def test_directory_mint_receipt_contains_only_public_evidence(self):
         from session_directory import session_directory as directory
-        fields = dict(name='unit', activity='test', scene='test', mode='pvp', peer_count=2, seats_free=1,
+        fields = dict(connection_protocol=1, name='unit', activity='test', scene='test', mode='pvp', peer_count=2, seats_free=1,
             game_version='1', build_id='a', network_protocol_version=1, lockstep_codec_version=1, controller_frame_version=1,
             match_config_hash='a'*64, session_identity_hash='b'*64, module_manifest_hash='c'*64,
             listen_port=41010, listen_addrs=['127.0.0.1'], join_mode='ice')

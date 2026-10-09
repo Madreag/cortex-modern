@@ -93,6 +93,8 @@ namespace RTE {
 		bool AutomationRowOf(const std::string& name, std::string& listName, int& row) const;
 		/// The games the Join screen lists, in list order: a row shows words, the join target is here.
 		const std::vector<NetDirectoryClient::GameRow>& AutomationGameRows() const { return m_GameRows; }
+		static std::string DiscoveredGameRowText(const NetDirectoryClient::GameRow& row, GUIFont* font, int width);
+		static std::string GameRowJoinRefusal(const NetDirectoryClient::GameRow& row);
 
 		/// What the multiplayer screens hold for the next lobby and the host's draft, for a readback that a change reached them.
 		std::string AutomationModelText() const;
@@ -130,6 +132,9 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		friend bool TestJoiningProgress(std::string* error);
+		friend bool TestLobbyChatReturn(std::string* error);
+		static bool JoiningNeedsProgress(const NetLobbySnapshot& snapshot);
 		std::unique_ptr<GUIInputWrapper> m_AutomationInput;
 		/// Enumeration for the different sub-menu screens of the main menu.
 		enum MenuScreen {
@@ -351,6 +356,7 @@ namespace RTE {
 		// The lobby's chat is built in code so the panel can grow for it without touching the skin file.
 		std::array<GUILabel*, 8> m_MultiplayerLobbyChatLabels;
 		GUITextBox* m_MultiplayerLobbyChatInput;
+		uint64_t m_LobbyChatRequestId = 0;
 		GUILabel* m_MultiplayerLobbyVersionLabel; //!< The build's version line under the chat entry, as the main menu shows it.
 		std::deque<std::string> m_MultiplayerLobbyChatLines; //!< Newest at the back; the labels show the last eight.
 		MultiplayerSubScreen m_MultiplayerSubScreen;
@@ -621,8 +627,8 @@ namespace RTE {
 		/// @param guiEventControl Pointer to the GUI element that the player interacted with.
 		void HandleMultiplayerScreenInputEvents(const GUIControl* guiEventControl);
 
-		/// Sends the lobby chat box's line: Enter for All, Ctrl+Enter for Team. The line is cleared
-		/// only when the session accepted it.
+		/// Queues the saved audience's line (Ctrl+Enter: Team; Shift+Enter: All). Clears the draft
+		/// only after the local transport accepts it.
 		void SendLobbyChat();
 
 		/// Handles the player interaction with the editor selection screen GUI elements.

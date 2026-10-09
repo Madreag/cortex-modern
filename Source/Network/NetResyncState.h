@@ -26,12 +26,17 @@ namespace RTE {
 		std::vector<NetResyncPendingCommand> pendingCommands;
 		std::vector<NetResyncPendingCommand> pendingPlayerBindings;
 		std::vector<NetLockstepFrame> pendingInputs;
+		/// Original packet command counts where the coordinator appended boundary events.
+		std::map<std::pair<uint8_t, uint64_t>, size_t> sourceCommandCounts;
 		std::vector<NetGameCommand> admittedReseats;
 		int64_t e2eFirstTransferUid = 0; //!< First owner transfer; a late joiner is a new process.
 		/// The checkpoint the host named for this heal, so every peer rewinds to the same archive
 		/// instead of choosing one of its own. Empty when the host holds no restorable checkpoint.
 		std::string rewindMatchId;
 		uint64_t rewindTick = 0;
+		void ClearPending() {
+			pendingInputs.clear(); sourceCommandCounts.clear(); pendingCommands.clear(); pendingPlayerBindings.clear(); admittedReseats.clear();
+		}
 		bool operator==(const NetResyncState&) const = default;
 	};
 
@@ -46,6 +51,7 @@ namespace RTE {
 		static constexpr size_t c_MaxTotalBytes = c_MaxMetadataBytes + c_MaxArchiveBytes;
 		static bool Encode(const NetResyncState& state, const std::vector<uint8_t>& archive, std::vector<uint8_t>& bytes, std::string* error = nullptr);
 		static bool Decode(const std::vector<uint8_t>& bytes, uint64_t sessionId, uint64_t startFrame, NetResyncState& state, std::vector<uint8_t>& archive, std::string* error = nullptr);
+		static bool ValidSourceCommandCount(const NetLockstepFrame& input, size_t count);
 	};
 
 }

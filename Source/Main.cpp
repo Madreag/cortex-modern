@@ -29,6 +29,7 @@
 #include "FloatText.h"
 #include "MainMenuGUI.h"
 #include "NetModerationGUI.h"
+#include "NetChatPresentation.h"
 #include "NetModerationGUIProbe.h"
 #include "Icon.h"
 #include "AllegroScreen.h"
@@ -121,6 +122,7 @@
 #include "NetProtocolSelfTest.h"
 #include "NetReconnectSelfTest.h"
 #include "NetReconnectSessionSelfTest.h"
+#include "NetReconnectUx.h"
 #include "NetSession.h"
 #include "NetSessionSelfTest.h"
 #include "NetRejoinMatrixSelfTest.h"
@@ -5021,17 +5023,12 @@ static void DrawFrameWithPreviews() {
 	NetModerationGUIProbe::AfterDraw();
 }
 
-/// Draws the wait; returns whether a held seat's player asked to leave it.
+/// Draws the network wait; returns whether the player explicitly left through the local menu.
 static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, const std::string& heldLine = {}) {
 	PollSDLEvents();
 	g_UInputMan.Update(false);
-	// A held seat stays its player's, so the player may leave the wait from its first second.
-	const bool leave = heldRejoin && !g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.KeyPressed(SDLK_ESCAPE);
-	if (g_UInputMan.KeyPressed(SDLK_F6) || (g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.AnyStartPress(false))) {
-		g_MenuMan.ToggleNetworkPanel();
-	}
-	g_MenuMan.UpdateNetworkUI();
-	g_MenuMan.UpdateLocalPauseMenu();
+	// Escape opens or backs out of the local menu; only its explicit Leave/End action exits the wait.
+	const bool leave = g_MenuMan.UpdateNetworkWaitInput();
 	g_WindowMan.ClearBackbuffer();
 	clear_to_color(g_FrameMan.GetBackBuffer32(), makeacol32(20, 22, 27, 255));
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
@@ -5041,10 +5038,15 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, resyncTitle, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncTitle);
 	// A held player's units are the AI's until the player is back; a repair pauses every player at once.
-	const std::string resyncLine = heldRejoin ? "The AI plays your units until you are back  /  " + std::to_string(elapsedSeconds) + " s  /  F6: Players  /  Esc: leave - your seat stays yours"
+	const std::string resyncLine = heldRejoin ? NetReconnectUx::HeldSeatReturnNotice()
 	                                          : "Every player waits while the match is reloaded  /  " + std::to_string(elapsedSeconds) + " s  /  F6: Players";
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8, resyncLine, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncLine);
+	if (heldRejoin) {
+		const std::string controls = std::to_string(elapsedSeconds) + " s  /  F6: Players  /  Esc: pause menu";
+		g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 10 + g_FrameMan.GetSmallFont(true)->GetFontHeight(), controls, GUIFont::Centre);
+		MenuAutomation::NoteDrawnText("RejoinOverlay", controls);
+	}
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts(resyncTitle);
 	ScenarioRunner::NoteResyncOverlayFrame();
@@ -7061,13 +7063,12 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			const std::string unreachableAtStop = stopLine.rfind("The host is unreachable", 0) == 0 ? stopLine : std::string();
 			// The wait's screen goes up before the host's snapshot save holds this thread, so the stopped match says why at once.
 			const bool leaveAtOnce = UpdateResyncUI(0, heldRejoin, unreachableAtStop);
-			if (heldRejoin) {
-				resyncOk = g_NetMatchService.BeginHeldRejoin(&resyncError);
-			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
 			if (leaveAtOnce) {
 				leftTheWait = true;
 				resyncOk = false;
-			}
+			} else if (heldRejoin) {
+				resyncOk = g_NetMatchService.BeginHeldRejoin(&resyncError);
+			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
 			std::string launchPreset;
 			for (bool attempt = resyncOk; attempt;) {
 				attempt = false;
@@ -7199,7 +7200,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				}
 			} else if (leftTheWait) {
 				System::PrintDiagnosticLine("[net-match] held client: left the wait for its host; the seat and its ticket are kept");
-				g_ConsoleMan.PrintString("NETWORK: Left the match - your seat is kept; Rejoin Match while it runs");
+				g_ConsoleMan.PrintString("NETWORK: Left the match - seat held until the host reassigns it; use Rejoin Match to try to return");
 				g_NetMatchService.LeaveHeldWait();
 				g_ActivityMan.EndActivity();
 				g_ActivityMan.SetInActivity(false);
@@ -7838,7 +7839,7 @@ void RunGameLoop() {
 				}
 				// The session plane keeps running through a pause: a seat held during it is served its image and its tail.
 				g_NetMatchService.PumpSessionEvents();
-				if (const NetMatchServiceState netServiceState = g_NetMatchService.GetState(); g_NetMatchService.IsHost() && netServiceState == NetMatchServiceState::Running) {
+				if (const NetMatchServiceState netServiceState = g_NetMatchService.GetState(); netServiceState == NetMatchServiceState::Running) {
 					g_NetMatchService.Update();
 				}
 			}
@@ -8164,8 +8165,8 @@ void RunGameLoop() {
 				}
 				// The session-directory heartbeat rides Update on the game thread, never the pump.
 				if (const NetMatchServiceState netServiceState = g_NetMatchService.GetState();
-				    g_NetMatchService.IsHost() && (netServiceState == NetMatchServiceState::Starting || netServiceState == NetMatchServiceState::ReadyToLaunch ||
-				                                   netServiceState == NetMatchServiceState::Running || netServiceState == NetMatchServiceState::Completed)) {
+				    netServiceState == NetMatchServiceState::Starting || netServiceState == NetMatchServiceState::ReadyToLaunch ||
+				    netServiceState == NetMatchServiceState::Running || netServiceState == NetMatchServiceState::Completed) {
 					g_NetMatchService.Update();
 				}
 				DriveModerationE2e();
@@ -8213,6 +8214,7 @@ void RunGameLoop() {
 					System::PrintDiagnosticLine("[selftest] late script stall done plane_ticks=" + std::to_string(NetLockstepPlane::Ticks() - planeTicksBefore));
 				}
 				g_ActivityMan.LateUpdateGlobalScripts();
+				g_MovableMan.CapturePhysicsHistory(simTick, 3);
 				// Kick the async MOID draw after the last main-thread sim mutation of the tick; it
 				// completes before the render frames below, which share draw scratch state with it.
 				g_MovableMan.StartMOIDDrawTask();
@@ -8587,8 +8589,7 @@ void RunGameLoop() {
 				if (landed) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump, "landed");
 				if (!catchingUp && ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0)) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
-			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
-			else g_NetMatchService.AppendCommittedJoinFrame(simTick);
+			g_NetMatchService.AutosaveAtTickBoundary(simTick, lockstepPausedTick);
 			TelemetryBundle::CaptureAtTickBoundary();
 			const long long crossCaptureUs = g_TimerMan.GetAbsoluteTime() - crossCaptureStartUs;
 			const long long crossCaptureWaitUs = ScenarioRunner::GetLockstepWaitUs() - crossCaptureWaitStartUs;
@@ -9139,13 +9140,14 @@ void RunGameLoop() {
 					// Leaving a running net match: a clean leave lets N-peer survivors keep playing and,
 					// with nobody left, ends their match at once - unlike a drop, which holds the seat
 					// open for its reclaim window. The §7 exchange runs before the link goes down.
-					if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+					const bool networkMatchLeft = g_NetMatchService.GetState() == NetMatchServiceState::Running;
+					if (networkMatchLeft) {
 						g_ConsoleMan.PrintString("NETWORK: Match left");
 						g_NetMatchService.LeaveMatch("Match left");
 					}
 					if (s_netMatchServiceE2E && !s_menuScriptPath.empty() && !s_menuScriptComplete && !s_menuScriptFailed) {
 						s_menuScriptHoldE2ePause = true;
-						g_MenuMan.HandleTransitionIntoMenuLoop();
+						g_MenuMan.HandleTransitionIntoMenuLoop(networkMatchLeft);
 						RunMenuLoop();
 						s_menuScriptHoldE2ePause = false;
 						if (!s_menuScriptComplete && !System::IsSetToQuit()) continue;
@@ -9159,7 +9161,7 @@ void RunGameLoop() {
 						System::SetQuit(true);
 						break;
 					}
-					g_MenuMan.HandleTransitionIntoMenuLoop();
+					g_MenuMan.HandleTransitionIntoMenuLoop(networkMatchLeft);
 					RunMenuLoop();
 				}
 			}
@@ -10276,22 +10278,36 @@ int RunNetMatchServiceE2E() {
 
 	bool setupCancelled = false;
 	std::string activityPreset;
+	// Match setup needs every admitted peer's readiness.
+	const bool waitPeers = std::getenv("CC_TEST_NET_MATCH_E2E_WAIT_PEERS") != nullptr;
 	if (setupError.empty()) {
 		g_NetMatchService.SetReady();
 		bool crossOptionsApplied = s_crossHostOptions.empty() || !e2eHost;
 		uint64_t crossReadyRevision = UINT64_MAX;
-		if (e2eHost && crossOptionsApplied) {
+		const auto peersReady = [waitPeers] {
+			if (!waitPeers) return true;
+			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+			const auto ready = std::count_if(snapshot.members.begin(), snapshot.members.end(), [](const NetLobbyMember& member) {
+				return !member.cpu && member.connected && member.ready;
+			});
+			return ready >= s_netMatchPeers - (s_netDedicated ? 1 : 0);
+		};
+		if (e2eHost && crossOptionsApplied && peersReady()) {
 			g_NetMatchService.RequestStart();
 		}
 		bool roundEndedOnTheWay = false;
 		while (true) {
 			PollSDLEvents();
 			CrossRecoveryAtCommittedTick(0);
+			if (waitPeers && g_NetMatchService.GetState() == NetMatchServiceState::Starting) g_NetMatchService.SetReady();
 			if (!crossOptionsApplied) {
 				std::string optionsError;
-				if (CrossHostOptions(0, &optionsError)) { crossOptionsApplied = true; g_NetMatchService.SetReady(); g_NetMatchService.RequestStart(); }
+				if (CrossHostOptions(0, &optionsError)) { crossOptionsApplied = true; g_NetMatchService.SetReady(); if (peersReady()) g_NetMatchService.RequestStart(); }
 			}
-			if (crossOptionsApplied) CrossReadyForCurrentConfig(crossReadyRevision);
+			if (crossOptionsApplied && peersReady()) {
+				if (e2eHost && waitPeers) g_NetMatchService.RequestStart();
+				CrossReadyForCurrentConfig(crossReadyRevision);
+			}
 			if (System::IsSetToQuit()) {
 				setupCancelled = true;
 				g_NetMatchService.Destroy();

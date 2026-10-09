@@ -510,11 +510,10 @@ namespace RTE {
 				if (error) *error = m_SetupError;
 				return false;
 			}
-			// A world whose slots are all held tells the joiner so at once; one that chose to wait knocks for a slot, its countdown shown.
-			const bool slotsHeld = session.IsRejected() && session.GetMismatchKey() == "slots_held";
 			m_SlotWaitLeftMs = m_Config.waitForSlot ? maxWaitMs - waitMs : 0;
-			// A reconnect can knock before the host's transport notices the dead slot; retry until the timeout frees it.
-			if (!m_Config.host && session.IsRejected() && session.GetRejectReason() == NetRejectReason::SessionFull && (!slotsHeld || m_Config.waitForSlot)) {
+			// A reconnect may arrive before its dead transport frees an id; a seat refusal is final unless the player chose to wait.
+			const bool reconnectWaitingForId = session.GetRejoinPhase() == NetSession::RejoinPhase::Connecting && session.GetMismatchKey() == "peer_count";
+			if (!m_Config.host && session.IsRejected() && session.GetRejectReason() == NetRejectReason::SessionFull && (m_Config.waitForSlot || reconnectWaitingForId)) {
 				if (nowMs >= nextRetryMs) {
 					nextRetryMs = nowMs + 2000;
 					std::string retryError;
@@ -556,14 +555,18 @@ namespace RTE {
 		}
 		// The seat roster the round is agreed on rides in the config; a peer whose copy differs is refused at the start.
 		NetReconnectHost* admission = m_Config.host ? session.GetReconnectHost() : nullptr;
-		if (admission && !m_MatchConfig.persistentWorld && admission->GetRoster().stage == NetRosterStage::Lobby) {
+		const auto formInitialRound = [&] {
+			if (!admission || m_MatchConfig.persistentWorld || admission->GetRoster().stage != NetRosterStage::Lobby) return;
 			// The first round forms on the same roster transition as a rematch: open or held seats
 			// keep their number and start with AI; only connected owners wait at the start gate.
 			admission->FormRematch();
 			const std::vector<uint8_t> present = RematchMembers(m_MatchConfig.hostPeerId, m_MatchConfig.peerCount, admission->StartMembers());
 			m_MatchConfig.activePeerIds = present.size() < m_MatchConfig.peerCount ? present : std::vector<uint8_t>{};
 			m_ActivePeerIds = m_MatchConfig.activePeerIds;
-		}
+		};
+		// A manual menu lobby opens before its joiners arrive. Keep admission in Lobby until the
+		// host asks to start, or those later arrivals become held seats outside the round's members.
+		if (m_Config.autoStart) formInitialRound();
 		if (admission && admission->GetRoster().revision != 0) {
 			m_MatchConfig.seatRosterRevision = admission->GetRoster().revision;
 			m_MatchConfig.seatRosterHash = HashRoster(admission->GetRoster());
@@ -580,6 +583,7 @@ namespace RTE {
 		lobbyConfig.displayName = m_Config.sessionConfig.displayName;
 		lobbyConfig.platform = m_Config.sessionConfig.localIdentity.platform;
 		lobbyConfig.autoReady = m_Config.autoReady;
+		lobbyConfig.readyForSetup = m_Config.readyForSetup;
 		lobbyConfig.autoStart = m_Config.autoStart && relayReady;
 		lobbyConfig.startCountdownMs = m_Config.startCountdownMs;
 		lobbyConfig.session = &session;
@@ -617,7 +621,9 @@ namespace RTE {
 
 		const auto startTime = std::chrono::steady_clock::now();
 		const uint64_t roundStartSessionMs = m_Config.nowMs ? m_Config.nowMs() : 0;
-		uint64_t transferProgress = m_Lobby.GetStateTransferProgressSerial(), lastTransferProgressMs = 0;
+		uint64_t transferProgress = m_Lobby.GetStateTransferProgressSerial(), lastProgressMs = 0;
+		uint64_t activity = m_Lobby.GetActivitySerial();
+		uint64_t chatMessages = uint64_t(session.GetStats().chatMessagesSent) + session.GetStats().chatMessagesReceived;
 		NetMatchConfig stagedOptions;
 		bool readyAsked = false; // A Ready only the player can take back: an automatic one is never withdrawn here.
 		while (true) {
@@ -656,6 +662,7 @@ namespace RTE {
 				}
 			}
 			if (relayReady && m_Config.startRequested && m_Config.startRequested->exchange(false)) {
+				if (m_Config.host) formInitialRound();
 				if (m_Config.host && m_Config.roundStartScripts) {
 					if (std::vector<uint8_t> scripts = m_Config.roundStartScripts(); !scripts.empty()) m_Lobby.BeginStateTransfer(std::move(scripts));
 				}
@@ -701,7 +708,15 @@ namespace RTE {
 			}
 			if (const uint64_t progress = m_Lobby.GetStateTransferProgressSerial(); progress != transferProgress) {
 				transferProgress = progress;
-				lastTransferProgressMs = clocks.budgetMs;
+				lastProgressMs = clocks.budgetMs;
+			}
+			if (m_Config.host && m_Config.lobbySeatingWaitMs) {
+				const uint64_t nextActivity = m_Lobby.GetActivitySerial();
+				const uint64_t nextChat = uint64_t(session.GetStats().chatMessagesSent) + session.GetStats().chatMessagesReceived;
+				const bool input = m_Config.lobbyInput && m_Config.lobbyInput->exchange(false);
+				if (input || nextActivity != activity || nextChat != chatMessages) lastProgressMs = clocks.budgetMs;
+				activity = nextActivity;
+				chatMessages = nextChat;
 			}
 			// The lobby round owns the transport queue, so the plane only gets its time from here.
 			session.TickAdmissionPlane(clocks.planeMs);
@@ -733,8 +748,8 @@ namespace RTE {
 				return false;
 			}
 			// The seating wait is re-read every tick because a live options edit republishes it.
-			if (clocks.budgetMs >= lastTransferProgressMs &&
-			    SeatingWaitExpired(m_Config.lobbySeatingWaitMs, static_cast<uint32_t>(maxWaitMs), clocks.budgetMs - lastTransferProgressMs)) {
+			if (clocks.budgetMs >= lastProgressMs &&
+			    SeatingWaitExpired(m_Config.lobbySeatingWaitMs, static_cast<uint32_t>(maxWaitMs), clocks.budgetMs - lastProgressMs)) {
 				m_Lobby.TimeoutWaitingForStart();
 				SetFailed(m_Lobby.GetFailureReason());
 				if (error) *error = m_SetupError;
@@ -786,6 +801,8 @@ namespace RTE {
 			}
 		} else if (const auto* admission = session.GetReconnectClient(); admission && admission->IsAdmitted() && admission->HasRecord()) {
 			lockstepConfig.seatPresenceEpoch = admission->GetRecord().epoch;
+			// A lobby return already advanced the seat incarnation before the round began.
+			if (admission->GetIncarnation() != 0) lockstepConfig.peerIncarnations[LocalLockstepPeerId(session)] = admission->GetIncarnation();
 		}
 		lockstepConfig.startFrame = m_UseLobbyProtocol ? m_Lobby.GetStartFrame() : config.startFrame;
 		lockstepConfig.localPeerId = LocalLockstepPeerId(session);
@@ -983,9 +1000,7 @@ namespace RTE {
 		snapshot.resumeHeldLocally = m_Config.host || m_Lobby.AnsweredResumeHeld();
 		// Start waits on a live remote ready, not the idle default (a reject never seats one).
 		snapshot.remoteReady = m_Lobby.GetState() != NetLobbyState::Idle && m_Lobby.IsRemoteReady();
-		if (m_Config.host && session.HasReject() && session.GetReadyPeerCount() < m_Config.sessionConfig.maxPeers) {
-			snapshot.errorText = "A player could not join: " + session.BuildPlayerRefusalText();
-		}
+		if (m_Config.host) snapshot.errorText = session.GetLobbyNotice();
 
 		const uint8_t localId = LocalLockstepPeerId(session);
 		const std::map<uint8_t, NetPeerId> remoteTransports = BuildRemoteTransportMap(session);
@@ -1014,8 +1029,11 @@ namespace RTE {
 				member.pingMs = 0;
 			} else if (transportIt != remoteTransports.end()) {
 				member.pingMs = transport.GetPeerPingMs(transportIt->second);
+				member.pingMeasured = transport.IsPeerPingMeasured(transportIt->second);
+				member.connectedRoute = transport.GetConnectedRoute(transportIt->second);
 			} else {
 				member.pingMs = m_Lobby.GetRemotePingMs(slot.peerId);
+				member.pingMeasured = member.pingMs != 0;
 			}
 			member.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(rosterConfig, slot.peerId);
 			snapshot.members.push_back(member);

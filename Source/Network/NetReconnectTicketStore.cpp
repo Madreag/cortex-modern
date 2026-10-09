@@ -62,6 +62,17 @@ namespace RTE {
 			return value;
 		}
 
+		bool OfferIdentityBytes(const NetH4TicketRecord& record, std::vector<uint8_t>& bytes) {
+			if (record.seatToken.empty()) return NetReconnectTicketStore::Serialize(record, bytes);
+			// A renewal or a route change is still the same offer. Only a different
+			// match, seat or holder credential can undo the player's dismissal.
+			bytes = {'C', 'C', 'C', 'P', 'S', 'D', 'I', 'S'};
+			bytes.insert(bytes.end(), record.epoch.begin(), record.epoch.end());
+			AppendU16LE(bytes, record.stableSeat); AppendU32LE(bytes, record.holderGeneration);
+			AppendU64LE(bytes, record.hostSessionId);
+			return true;
+		}
+
 		void SetError(std::string* error, std::string text) {
 			if (error) {
 				*error = std::move(text);
@@ -109,13 +120,13 @@ namespace RTE {
 
 	bool NetReconnectTicketStore::Serialize(const NetH4TicketRecord& record, std::vector<uint8_t>& out) {
 		const uint16_t version = record.recordVersion;
-		if ((version != c_RecordVersion && version != c_DirectoryRecordVersion && version != c_LegacyRecordVersion) ||
+		if ((version < c_LegacyRecordVersion || version > c_RecordVersion) ||
 		    record.holderGeneration == 0 || record.hostAddress.size() > c_MaxHostAddressBytes ||
-		    record.directorySessionId.size() > c_MaxDirectorySessionIdBytes) {
+		    record.directorySessionId.size() > c_MaxDirectorySessionIdBytes || record.seatToken.size() > 512) {
 			return false;
 		}
 		// A body that cannot spell the world flag must not be handed a record that carries one.
-		if (record.persistentWorld && version < c_RecordVersion) {
+		if ((record.persistentWorld && version < c_WorldRecordVersion) || (!record.seatToken.empty() && version < c_RecordVersion)) {
 			return false;
 		}
 		out.clear();
@@ -135,12 +146,17 @@ namespace RTE {
 			AppendU16LE(out, static_cast<uint16_t>(record.directorySessionId.size()));
 			out.insert(out.end(), record.directorySessionId.begin(), record.directorySessionId.end());
 		}
-		if (version >= c_RecordVersion) {
+		if (version >= c_WorldRecordVersion) {
 			out.push_back(record.persistentWorld ? c_PersistentWorldFlag : uint8_t{0});
+		}
+		if (version >= c_RecordVersion) {
+			AppendU16LE(out, static_cast<uint16_t>(record.seatToken.size()));
+			out.insert(out.end(), record.seatToken.begin(), record.seatToken.end());
+			out.insert(out.end(), record.authorityKey.begin(), record.authorityKey.end());
 		}
 		const size_t expected = c_FixedBytes + record.hostAddress.size() +
 		    (version >= c_DirectoryRecordVersion ? 2 + record.directorySessionId.size() : 0) +
-		    (version >= c_RecordVersion ? 1 : 0);
+		    (version >= c_WorldRecordVersion ? 1 : 0) + (version >= c_RecordVersion ? 34 + record.seatToken.size() : 0);
 		return out.size() == expected;
 	}
 
@@ -152,8 +168,7 @@ namespace RTE {
 		NetH4TicketRecord record;
 		record.recordVersion = ReadU16LE(bytes.data() + offset);
 		offset += 2;
-		if (record.recordVersion != c_RecordVersion && record.recordVersion != c_DirectoryRecordVersion &&
-		    record.recordVersion != c_LegacyRecordVersion) {
+		if (record.recordVersion < c_LegacyRecordVersion || record.recordVersion > c_RecordVersion) {
 			return false;
 		}
 		std::memcpy(record.epoch.data(), bytes.data() + offset, record.epoch.size());
@@ -178,14 +193,14 @@ namespace RTE {
 		record.hostAddress.assign(reinterpret_cast<const char*>(bytes.data() + offset), addressBytes);
 		offset += addressBytes;
 		// v3 appends one flag byte after the v2 body, so a v2 reader's length check is unchanged.
-		const size_t flagBytes = record.recordVersion >= c_RecordVersion ? 1 : 0;
+		const size_t flagBytes = record.recordVersion >= c_WorldRecordVersion ? 1 : 0;
 		if (record.recordVersion >= c_DirectoryRecordVersion) {
 			if (bytes.size() < offset + 2) {
 				return false;
 			}
 			const uint16_t sessionBytes = ReadU16LE(bytes.data() + offset);
 			offset += 2;
-			if (sessionBytes > c_MaxDirectorySessionIdBytes || bytes.size() != offset + sessionBytes + flagBytes) {
+			if (sessionBytes > c_MaxDirectorySessionIdBytes || bytes.size() < offset + sessionBytes + flagBytes) {
 				return false;
 			}
 			record.directorySessionId.assign(reinterpret_cast<const char*>(bytes.data() + offset), sessionBytes);
@@ -194,12 +209,20 @@ namespace RTE {
 			return false;
 		}
 		if (flagBytes != 0) {
-			const uint8_t flags = bytes[offset];
+			const uint8_t flags = bytes[offset++];
 			if ((flags & ~c_PersistentWorldFlag) != 0) {
 				return false;
 			}
 			record.persistentWorld = (flags & c_PersistentWorldFlag) != 0;
 		}
+		if (record.recordVersion >= c_RecordVersion) {
+			if (bytes.size() < offset + 34) return false;
+			const uint16_t tokenBytes = ReadU16LE(bytes.data() + offset); offset += 2;
+			if (tokenBytes > 512 || bytes.size() != offset + tokenBytes + record.authorityKey.size()) return false;
+			record.seatToken.assign(reinterpret_cast<const char*>(bytes.data() + offset), tokenBytes); offset += tokenBytes;
+			std::memcpy(record.authorityKey.data(), bytes.data() + offset, record.authorityKey.size()); offset += record.authorityKey.size();
+		}
+		if (bytes.size() != offset) return false;
 		// Generation 0 names no holder, so it can prove nothing.
 		if (record.holderGeneration == 0) {
 			return false;
@@ -248,6 +271,39 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetReconnectTicketStore::DismissOffer(const NetH4TicketRecord& record, std::string* error) {
+		// Bind the preference to the seat, so renewing the same lease does not dismiss the preference.
+		std::vector<uint8_t> body;
+		NetAuthBytes32 fingerprint{};
+		if (!OfferIdentityBytes(record, body) || !NetH4MacTicketRecord(record.credential, body, fingerprint)) {
+			SetError(error, "could not identify the rejoin offer to dismiss");
+			return false;
+		}
+		const std::vector<uint8_t> bytes(fingerprint.begin(), fingerprint.end());
+		const std::filesystem::path path(m_Path + ".dismissed"), temporary(m_Path + ".dismissed.tmp");
+		if (!WriteFileDurably(temporary, bytes, error)) return false;
+		std::error_code code;
+		std::filesystem::rename(temporary, path, code);
+		if (code) {
+			std::error_code ignored;
+			std::filesystem::remove(temporary, ignored);
+			SetError(error, "could not save the rejoin dismissal: " + code.message());
+			return false;
+		}
+		std::filesystem::permissions(path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write, std::filesystem::perm_options::replace, code);
+		return true;
+	}
+
+	bool NetReconnectTicketStore::IsOfferDismissed(const NetH4TicketRecord& record) const {
+		std::error_code code;
+		if (std::filesystem::file_size(m_Path + ".dismissed", code) != sizeof(NetAuthBytes32) || code) return false;
+		std::ifstream file(m_Path + ".dismissed", std::ios::binary);
+		NetAuthBytes32 fingerprint{};
+		if (!file.read(reinterpret_cast<char*>(fingerprint.data()), fingerprint.size()) || file.peek() != std::char_traits<char>::eof()) return false;
+		std::vector<uint8_t> body;
+		return OfferIdentityBytes(record, body) && NetH4VerifyTicketRecord(record.credential, body, fingerprint);
+	}
+
 	NetH4TicketLoadResult NetReconnectTicketStore::Read(uint64_t nowUnixMs, NetH4TicketRecord& out, std::string* error, std::vector<uint8_t>& bytes) const {
 		std::error_code code;
 		if (!std::filesystem::exists(m_Path, code)) {
@@ -276,7 +332,8 @@ namespace RTE {
 			SetError(error, "the recovery record failed its integrity check");
 			return NetH4TicketLoadResult::Corrupt;
 		}
-		if (nowUnixMs >= record.issuedAtUnixMs && nowUnixMs - record.issuedAtUnixMs > c_MaxRecordAgeMs) {
+		// A signed lease renews by its own key; the authority decides whether that seat still exists.
+		if (record.seatToken.empty() && nowUnixMs >= record.issuedAtUnixMs && nowUnixMs - record.issuedAtUnixMs > c_MaxRecordAgeMs) {
 			SetError(error, "the recovery record is too old to offer");
 			return NetH4TicketLoadResult::Stale;
 		}
@@ -316,6 +373,8 @@ namespace RTE {
 		}
 		std::filesystem::remove(m_Path + ".routes", code);
 		if (code) { SetError(error, "could not delete the recovery routes: " + code.message()); return false; }
+		std::filesystem::remove(m_Path + ".dismissed", code);
+		if (code) { SetError(error, "could not delete the rejoin dismissal: " + code.message()); return false; }
 		++m_Clears;
 		return true;
 	}
@@ -325,7 +384,7 @@ namespace RTE {
 		std::vector<uint8_t> bytes{'C', 'C', 'C', 'P', 'H', '4', 'R', 'T'};
 		bytes.insert(bytes.end(), record.epoch.begin(), record.epoch.end());
 		AppendU16LE(bytes, record.stableSeat); AppendU32LE(bytes, record.holderGeneration);
-		AppendU64LE(bytes, record.hostSessionId); AppendU64LE(bytes, record.issuedAtUnixMs);
+		AppendU64LE(bytes, record.hostSessionId); AppendU64LE(bytes, record.seatToken.empty() ? record.issuedAtUnixMs : 0);
 		AppendU16LE(bytes, static_cast<uint16_t>(routes.size()));
 		for (const auto& route: routes) {
 			if (route.address.empty() || route.address.size() > c_MaxHostAddressBytes || route.port == 0) return false;
@@ -358,7 +417,7 @@ namespace RTE {
 		if (!NetH4VerifyTicketRecord(record.credential, body, mac) ||
 		    std::memcmp(body.data() + 8, record.epoch.data(), record.epoch.size()) != 0 ||
 		    ReadU16LE(body.data() + 24) != record.stableSeat || ReadU32LE(body.data() + 26) != record.holderGeneration ||
-		    ReadU64LE(body.data() + 30) != record.hostSessionId || ReadU64LE(body.data() + 38) != record.issuedAtUnixMs) return {};
+		    ReadU64LE(body.data() + 30) != record.hostSessionId || ReadU64LE(body.data() + 38) != (record.seatToken.empty() ? record.issuedAtUnixMs : 0)) return {};
 		const auto count = ReadU16LE(body.data() + 46);
 		if (count > NetMatchConfigUtil::c_MaxPeerCount * NetMatchConfigUtil::c_MaxMigrationAddresses) return {};
 		std::vector<NetH4TicketRoute> routes;

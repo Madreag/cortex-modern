@@ -224,7 +224,14 @@ void GUIManager::Update(bool ignoreKeyboardEvents) {
 		}
 
 		if (MouseWheelChange && CurPanel) {
-			CurPanel->OnMouseWheelChange(MouseX, MouseY, Mod, MouseWheelChange);
+			GUIPanel* wheelTarget = CurPanel;
+			for (GUIPanel* panel = CurPanel; panel; panel = panel->GetParentPanel()) {
+				if (GUIPanel* target = panel->GetMouseWheelTarget(); target && target->_GetVisible() && target->IsEnabled()) {
+					wheelTarget = target;
+					break;
+				}
+			}
+			wheelTarget->OnMouseWheelChange(MouseX, MouseY, Mod, MouseWheelChange);
 		}
 
 		m_MouseOverPanel = CurPanel;

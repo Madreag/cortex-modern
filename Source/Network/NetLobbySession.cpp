@@ -84,6 +84,7 @@ namespace RTE {
 		m_RoundEventsAfterStart.clear();
 		m_InputDelaySamples.clear();
 		m_TimingClockMs = 0;
+		m_ActivitySerial = 0;
 		if (config.localPeerId == 0) {
 			if (error) *error = "lobby local peer id is invalid";
 			return false;
@@ -359,6 +360,7 @@ namespace RTE {
 			return false;
 		}
 		if (IsKnownRemote(peerId)) {
+			if (m_RemoteTransports.at(peerId) != transport) ++m_ActivitySerial;
 			if (m_StateReceiptRequired && m_RemoteTransports.at(peerId) != transport) {
 				m_ReceivedChunkCountByPeer.erase(peerId);
 				m_OutgoingChunkIndexByPeer.erase(peerId);
@@ -367,6 +369,7 @@ namespace RTE {
 			return true;
 		}
 		m_RemotePeerIds.push_back(peerId);
+		++m_ActivitySerial;
 		m_RemoteTransports[peerId] = transport;
 		m_ConfigAckedByPeer[peerId] = false;
 		m_RemoteReadyByPeer[peerId] = false;
@@ -790,6 +793,7 @@ namespace RTE {
 		if (IsTerminal(m_State)) {
 			return;
 		}
+		if (m_LocalReady != ready) ++m_ActivitySerial;
 		m_LocalReady = ready;
 		if (!ready) {
 			// A Ready the host holds is taken back on the wire; one never sent just stays unsent.
@@ -810,6 +814,7 @@ namespace RTE {
 		if (IsTerminal(m_State) || (m_Config.host && m_SetupOpen)) {
 			return;
 		}
+		if (!m_StartIntent) ++m_ActivitySerial;
 		m_StartIntent = true;
 		// With everyone ready the round starts at once; otherwise the host's Start counts down, which every peer sees.
 		if (m_Config.host && m_Config.startCountdownMs != 0 && m_StartCountdownDeadlineMs == 0 && !AllRemoteReady() && HasRequiredOccupancy()) {
@@ -823,6 +828,7 @@ namespace RTE {
 		if (!m_Config.host || IsTerminal(m_State) || IsStartCommitted()) {
 			return;
 		}
+		if (m_StartIntent || m_StartCountdownDeadlineMs != 0) ++m_ActivitySerial;
 		m_StartIntent = false;
 		if (m_StartCountdownDeadlineMs != 0) {
 			m_StartCountdownDeadlineMs = 0;
@@ -835,6 +841,7 @@ namespace RTE {
 			return;
 		}
 		if (open) CancelStart();
+		++m_ActivitySerial;
 		m_SetupOpen = open;
 		m_PeerStatePending = true;
 	}
@@ -877,6 +884,7 @@ namespace RTE {
 			return false;
 		}
 		const bool setupChanged = SetupDiffers(m_Config.matchConfig, config);
+		if (setupChanged) ++m_ActivitySerial;
 		m_Config.matchConfig = config;
 		m_Config.autoInputDelay = config.delayPolicy == NetMatchDelayPolicy::Auto;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(config);
@@ -949,6 +957,7 @@ namespace RTE {
 	}
 
 	void NetLobbySession::RemoveRemotePeer(uint8_t peerId) {
+		if (IsKnownRemote(peerId)) ++m_ActivitySerial;
 		m_LobbyUpConnections.erase(RemoteTransportOf(peerId));
 		std::erase_if(m_QueuedStateTransfers, [&](const auto& transfer) { return transfer.first == peerId; });
 		if (m_StateTransferOnlyPeer == peerId) {
@@ -1006,7 +1015,11 @@ namespace RTE {
 		const NetReconnectHost* plane = m_Config.session ? m_Config.session->GetReconnectHost() : nullptr;
 		const NetRosterSeat* seat = plane ? plane->RosterSeatOfPeer(peerId) : nullptr;
 		if (!seat || seat->owner == 0) return false;
-		// The round starts that seat held by the AI and its player comes back through the rejoin; nobody waits for its endpoint.
+		// The initial lobby has not agreed on round members. Removing a held owner from that
+		// set now would also hide its authenticated return from SyncSessionPeers. FormRematch
+		// selects the present members when the host actually asks to start.
+		if (plane->GetRoster().stage == NetRosterStage::Lobby) return true;
+		// The formed round starts that seat held by the AI; nobody waits for its old endpoint.
 		NetMatchConfig held = m_Config.matchConfig;
 		if (LeaveRoundMembers(held, peerId)) {
 			++held.configRevision;
@@ -1084,6 +1097,7 @@ namespace RTE {
 			}
 		}
 		if (transports == m_RemoteTransports) return;
+		++m_ActivitySerial;
 		const auto previous = m_RemoteTransports;
 		bool addedPeer = false;
 		for (const auto& [peerId, transportId]: previous) {
@@ -1663,7 +1677,7 @@ namespace RTE {
 					uint8_t kind = 0;
 					uint64_t value = 0;
 					WorldJoinReport report;
-					if (ParseWorldJoinReport(*chunk, kind, value, &report.workTicks, &report.workUs, &report.sentThrough)) {
+					if (ParseWorldJoinReport(*chunk, kind, value, &report.workTicks, &report.workUs, &report.sentThrough, &report.replayStart)) {
 						if (kind == c_NetWorldReportCatchUp) ++m_Stats.catchUpReportsReceived;
 						report.kind = kind; report.value = value; report.fromPeer = sender->first; report.pending = true;
 						if (kind == c_NetWorldReportRoundEnded && !m_Config.host) m_RoundEndedRecord = value;
@@ -1733,9 +1747,13 @@ namespace RTE {
 
 	void NetLobbySession::TimeoutWaitingForStart() {
 		++m_Stats.timeouts;
+		if (m_Config.host && !IsStartRequested()) {
+			Reject("The lobby closed after being idle. Host a new match.");
+			return;
+		}
 		if (m_Config.host && m_Config.enableMigration && m_Config.matchConfig.activePeerIds.empty()) {
 			for (uint8_t peer = 1; peer <= m_Config.matchConfig.peerCount; ++peer) {
-				if (m_MigrationEndpoints.contains(peer)) {
+				if ((peer != m_Config.localPeerId && !IsKnownRemote(peer)) || m_MigrationEndpoints.contains(peer)) {
 					continue;
 				}
 				std::string name = "peer " + std::to_string(peer);
@@ -1891,7 +1909,9 @@ namespace RTE {
 		}
 		const NetHash32 incomingHash = NetMatchConfigUtil::HashConfig(message.config);
 		// A Ready counts only for the setup it was given for: the comparison comes before any path takes the new config.
-		if (m_State != NetLobbyState::WaitingForConfig && m_LocalReady && !m_Config.autoReady && SetupDiffers(m_Config.matchConfig, message.config)) {
+		const NetMatchConfig& readied = m_Config.readyForSetup ? *m_Config.readyForSetup : m_Config.matchConfig;
+		if ((m_State != NetLobbyState::WaitingForConfig || m_Config.readyForSetup) && m_LocalReady && !m_Config.autoReady &&
+		    (readied.sessionId != message.config.sessionId || SetupDiffers(readied, message.config))) {
 			m_LocalReady = false;
 			m_ReadySent = false;
 			m_ReadyClearedBySetup = true;
@@ -1915,6 +1935,7 @@ namespace RTE {
 			Reject(validateError);
 			return;
 		}
+		m_Config.readyForSetup.reset();
 		m_Config.matchConfig = message.config;
 		if (!m_Config.matchConfig.relay.Usable(RelayWallSeconds())) m_Config.matchConfig.relay = {};
 		m_MatchConfigHash = incomingHash;
@@ -1963,7 +1984,9 @@ namespace RTE {
 		}
 		++m_Stats.readyPacketsReceived;
 		// A Ready sent before the peer acknowledged this setup was given for an earlier one.
-		m_RemoteReadyByPeer[message.peerId] = message.ready && HasAckedSetup(message.peerId);
+		const bool ready = message.ready && HasAckedSetup(message.peerId);
+		if (m_RemoteReadyByPeer[message.peerId] != ready) ++m_ActivitySerial;
+		m_RemoteReadyByPeer[message.peerId] = ready;
 		m_PeerStatePending = true;
 	}
 
@@ -2023,11 +2046,14 @@ namespace RTE {
 			}
 			return;
 		}
+		if (m_RemoteNamesByPeer[message.peerId] != message.displayName) ++m_ActivitySerial;
 		m_RemoteNamesByPeer[message.peerId] = message.displayName;
 		m_RemotePlatformsByPeer[message.peerId] = message.platform;
 		// The explicit Ready message is the authoritative edge; the periodic state keeps views live. At the host a Ready counts
 		// once the peer has acknowledged the setup it readies for.
-		m_RemoteReadyByPeer[message.peerId] = message.ready && (!m_Config.host || !IsKnownRemote(message.peerId) || HasAckedSetup(message.peerId));
+		const bool ready = message.ready && (!m_Config.host || !IsKnownRemote(message.peerId) || HasAckedSetup(message.peerId));
+		if (m_RemoteReadyByPeer[message.peerId] != ready) ++m_ActivitySerial;
+		m_RemoteReadyByPeer[message.peerId] = ready;
 		m_RemotePingByPeer[message.peerId] = message.pingMs;
 		// The host forwards each client's state to the others, stamped with its measured ping so
 		// everyone sees an honest star-hub-relative connection quality.

@@ -393,6 +393,8 @@ namespace RTE {
 		std::vector<uint8_t> activePeerIds;
 		std::array<uint8_t, 32> migrationKey{};
 		std::function<std::unique_ptr<INetTransport>()> migrationTransportFactory;
+		/// The connection authority supplies current routes without changing the agreed game config.
+		std::function<NetMatchMigrationPeer(const NetMatchMigrationPeer&)> migrationEndpoint;
 		/// Dials a handover endpoint that names an ICE route through the session's rendezvous; the identity may be empty.
 		std::function<bool(INetTransport& transport, const std::string& identity, std::string* error)> migrationIceDial;
 		/// Opens the rendezvous on this peer's handover listener once it hosts the handover.
@@ -445,6 +447,7 @@ namespace RTE {
 		uint8_t successorPeerId = 0;
 		NetHash32 configHash{};
 		uint64_t appliedFrame = 0;
+		uint64_t preparedFrame = 0; //!< Highest complete input frame retained for the handover, even before simulation.
 		uint64_t completeFrom = 0;
 		uint64_t boundary = 0;
 		uint64_t frame = 0;
@@ -453,6 +456,7 @@ namespace RTE {
 		std::vector<uint8_t> members;
 		std::vector<uint8_t> bytes;
 		std::vector<NetLockstepTiming> futureDelays;
+		uint32_t voterMask = 0; //!< The seats that agreed this generation and boundary.
 		uint32_t connectedMask = 0; ///< Answer: the seats the voter's committed round has connected at its applied frame, the host's among them; roll call and abort: the roster the vote is counted against.
 	};
 
@@ -480,7 +484,7 @@ namespace RTE {
 	class NetHostMigrationCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x314D4843;
-		static constexpr uint16_t c_Version = 3;
+		static constexpr uint16_t c_Version = 4;
 		static constexpr size_t c_ChunkBytes = 48 * 1024;
 		static constexpr size_t c_MaxFrameBytes = 4 * 512 * 1024 + 256;
 		static constexpr size_t c_HistoryFrames = 2 * 240;
@@ -694,7 +698,9 @@ namespace RTE {
 		static constexpr uint32_t c_Magic = 0x334C4343U;
 		/// Version 40 carries scene-load readiness; version 39 carries each seat's device class.
 		static constexpr uint16_t c_Version = 40;
-		static constexpr uint16_t c_AdmissionVersion = 46; //!< Admission requires cumulative input acceptance and committed succession grants.
+		static constexpr uint16_t c_AdmissionVersion = 48; //!< Catch-up reports identify the replay owning their work counters.
+		static constexpr uint16_t c_EditorPlacementVersion = 47;
+		static constexpr uint16_t c_HostAuthorityVersion = 49; //!< Committed handovers carry their tick and voting certificate.
 		static constexpr uint16_t c_WorldVersion = 39;
 		static constexpr uint16_t c_SeatDeviceVersion = 39;
 		/// Version 37 carries input frames on the unreliable lane: a window reaches back a round trip, and a tick that
@@ -721,6 +727,8 @@ namespace RTE {
 		/// Advertised in Ack.receivedMask; the older peer decodes the Ack and ignores receivedMask.
 		static constexpr uint32_t c_FrameWindowCapabilityMask = 0x80000000U;
 		static constexpr uint32_t c_InputAcceptedMask = 0x40000000U;
+		static constexpr uint32_t c_FramePreparedMask = 0x04000000U;
+		static constexpr uint16_t c_FramePreparedVersion = 50;
 		/// Asks the named sender (the low byte) to resend its ticks from highestContiguousFrame on the reliable lane; an older peer ignores it.
 		static constexpr uint32_t c_FrameResendRequestMask = 0x20000000U;
 		/// The sender goes quiet after highestContiguousFrame, the last frame it fed, for the reason in the low byte: the host holds
@@ -982,6 +990,8 @@ namespace RTE {
 		/// Starts in playback mode: no remotes, no handshake — every frame commits from the local
 		/// queue, which the replay reader feeds through QueueReplayFrame.
 		bool StartReplay(INetTransport& transport, const NetLockstepConfig& config, std::string* error = nullptr);
+		/// Starts the replay of an existing world while retaining the seat history its simulation still reads.
+		bool StartCatchUpReplay(INetTransport& transport, const NetLockstepConfig& config, const NetLockstepCoordinator& live, std::string* error = nullptr);
 		/// Installs the recording's host-authored startup boundary before playback queues its first frame.
 		bool ApplyReplayAgreedStart(const NetLockstepStart& start, std::string* error = nullptr);
 		bool IsReplayPlayback() const { NET_PLANE_CHECK(); return m_Playback; }
@@ -997,9 +1007,11 @@ namespace RTE {
 		bool QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr, const std::vector<NetSoundObservation>& observations = {}, const std::vector<NetValueObservation>& valueObservations = {});
 		bool PrimeResyncFrames(const std::vector<std::vector<NetGameCommand>>& batches, std::string* error = nullptr);
 		bool PrimeResyncInputs(const std::vector<NetLockstepFrame>& batches, std::string* error = nullptr);
-		bool InstallResyncInputs(const std::vector<NetLockstepFrame>& authoritativeInputs, std::string* error = nullptr);
+		bool InstallResyncInputs(const std::vector<NetLockstepFrame>& authoritativeInputs, std::string* error = nullptr, const std::map<std::pair<uint8_t, uint64_t>, size_t>& sourceCommandCounts = {});
 		bool QueueRecoveredInput(const NetLockstepFrame& frame, std::string* error = nullptr);
 		std::vector<NetLockstepFrame> CapturePendingInputs(uint64_t afterFrame) const;
+		/// Pending packets before committed timing events are added to their apply sets.
+		std::vector<NetLockstepFrame> CapturePendingSourceInputs(uint64_t afterFrame) const;
 		std::vector<NetLockstepFrame> CaptureLocalInputHistory() const;
 		bool NeedsResyncPriming() const { NET_PLANE_CHECK(); return m_Config.resumeFromSnapshot && !m_ResyncPrimed; }
 		bool SubmitLocalChecksum(uint64_t frame, const std::array<uint8_t, 32>& hash, std::string* error = nullptr, const std::map<uint8_t, uint64_t>& appliedCommands = {});
@@ -1075,7 +1087,7 @@ namespace RTE {
 
 		//! Frames committed and not yet consumed: the round's runway.
 		size_t ReadyFrameCount() const { NET_PLANE_CHECK(); return m_ReadyFrames.size(); }
-		bool HasReadyFrame(uint64_t frame) const { NET_PLANE_CHECK(); return !NeedsMigrationSnapshot() && !m_ReadyFrames.empty() && m_ReadyFrames.front().frame == frame; }
+		bool HasReadyFrame(uint64_t frame) const { NET_PLANE_CHECK(); return !NeedsMigrationSnapshot() && !m_ReadyFrames.empty() && m_ReadyFrames.front().frame == frame && PreparedFrameReplicated(frame); }
 		/// The local frames already queued for a future frame; the local-actor preview runs them early.
 		bool PeekLocalFrames(uint64_t frame, std::vector<ControllerFrame>& outFrames) const;
 		bool PeekLocalInput(uint64_t frame, NetLockstepFrame& outFrame) const { NET_PLANE_CHECK(); return FindLocalInput(frame, outFrame); }
@@ -1109,6 +1121,7 @@ namespace RTE {
 		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
 		bool SchedulePeerAdmission(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
 		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
+		bool HasAgreedSeatReclaim(uint8_t peer, uint64_t frame) const { NET_PLANE_CHECK(); const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame; }
 		bool HasWorldAdmission(uint8_t peer, uint64_t frame) const { NET_PLANE_CHECK(); const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame && it->second.worldTransition.has_value(); }
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs) { NET_PLANE_CHECK(); HandleEvent(event, nowMs); }
 		/// Every peer's delay changes this round has applied, keyed by the frame each takes effect.
@@ -1258,6 +1271,8 @@ namespace RTE {
 		uint64_t GetRoundId() const { NET_PLANE_CHECK(); return m_RoundId; }
 		NetHash32 GetRoundConfigHash() const { NET_PLANE_CHECK(); return m_RoundConfigHash; }
 		uint8_t GetHostPeerId() const { NET_PLANE_CHECK(); return m_Config.authorityPeerId != 0 ? m_Config.authorityPeerId : m_Config.matchConfig.hostPeerId; }
+		uint8_t HostAuthorityAt(uint64_t frame) const;
+		uint8_t SimulationHostPeerId() const { NET_PLANE_CHECK(); return HostAuthorityAt(m_GrantedSimulationTick.value_or(GetResumeFrame())); }
 		bool IsMigrating() const { NET_PLANE_CHECK(); return m_MigrationPhase == NetHostMigrationPhase::Contacting || m_MigrationPhase == NetHostMigrationPhase::Recovering || m_MigrationPhase == NetHostMigrationPhase::WaitingForReady || m_MigrationPhase == NetHostMigrationPhase::ResyncAdmission; }
 		bool IsMigrationCatchUp() const { NET_PLANE_CHECK(); return IsMigrating() && GetResumeFrame() <= m_MigrationBoundary; }
 		NetHostMigrationPhase GetMigrationPhase() const { NET_PLANE_CHECK(); return m_MigrationPhase; }
@@ -1291,6 +1306,8 @@ namespace RTE {
 		}
 		/// A transport fault starts agreement without choosing a simulation departure.
 		bool BeginHostMigration(uint64_t nowMs);
+		/// A changed local route rejoins its seat; false leaves an already granted tick to finish first.
+		bool NoteLocalRouteChanged();
 		/// The handover's vote as this peer last saw it: the successor's own tally, or the one its roll call told a voter.
 		NetHostMigrationReach GetMigrationReach() const { NET_PLANE_CHECK(); return m_MigrationReach; }
 		bool BeginHostMigrationAfterHeal(uint64_t nowMs);
@@ -1435,7 +1452,10 @@ namespace RTE {
 		friend bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error);
 		friend bool TestARoundsOwnEndIsNoHold(std::string* error);
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
-		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
+		friend bool TestFourPlayerHoldWaitsForALiveAcknowledgement(std::string* error);
+		friend bool TestBriefHostJitterKeepsItsHumanSeat(std::string* error);
+		friend bool TestHeldHostReturnsPastThePreparedHorizon(std::string* error);
+		friend bool TestAPreviouslyHeldHostTakesItsSeatBack(std::string* error);
 		friend bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error);
 		friend bool TestAReturnGapDoesNotStartTheHostsClock(std::string* error);
 		friend bool TestAHoldLandsAtTheFirstFrameItsSeatOwes(std::string* error);
@@ -1450,7 +1470,7 @@ namespace RTE {
 		friend bool TestHeldHostMarkerPrecedesItsHold(std::string* error);
 		friend bool TestAReturnerDelayCoversItsTrail(std::string* error);
 		friend bool TestADecisionRepeatedPastItsFrameIsNotANewOne(std::string* error);
-		friend bool TestTheHostsRunwayPrecedesItsLateClock(std::string* error);
+		friend bool TestAHostKeepsItsSeatAfterItsRunwayExpires(std::string* error);
 		friend bool TestArrivalLeadIncludesTheFastestSurvivor(std::string* error);
 		friend bool TestHostStatusKeepsTheReceiversLinkMeasurement(std::string* error);
 		friend bool TestEachSurvivorsRunwayUsesItsOwnLink(std::string* error);
@@ -1463,7 +1483,7 @@ namespace RTE {
 		friend bool TestAHeldSeatsSilenceCarriesItsReturn(std::string* error);
 		friend bool TestReturnFramesBypassReliableLoss(std::string* error);
 		friend bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
-		friend bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
+		friend bool TestAHostKeepsItsSeatBeforeCapture(std::string* error);
 		friend bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error);
 		friend bool TestAHeldClientsHashIsNotTheRounds(std::string* error);
 		friend bool TestAReplayTakesTheRecordedSeatPolicy(std::string* error);
@@ -1475,7 +1495,7 @@ namespace RTE {
 		friend bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 		friend bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
 		friend bool TestAQueuedReturnLeavesALaterHold(std::string* error);
-		friend bool TestAHostIsJudgedAgainAfterItsOwnReturn(std::string* error);
+		friend bool TestAHostKeepsItsSeatAfterItsOwnReturn(std::string* error);
 		friend bool TestARepeatedStartHoldsNoFramesBehindIt(std::string* error);
 		friend bool TestALaggingSimulationReadsTheFrameItTook(std::string* error);
 		friend bool TestAHeldHostsFrameCrossesAMigration(std::string* error);
@@ -1511,7 +1531,9 @@ namespace RTE {
 		bool IsLostMigrationSuccessor(uint8_t peerId) const;
 		/// The seats connected at a committed frame - neither gone nor held by the AI - the host's among them, one bit per peer.
 		uint32_t ConnectedSeatsAt(uint64_t frame) const;
-		/// The successor's quorum: a strict majority of the most advanced voter's connected seats voted, or the one survivor of two.
+		uint32_t MigrationElectorate() const;
+		bool HasMigrationCertificate(const NetHostMigrationMessage& message) const;
+		/// A strict majority of the committed roster; proposed holds never remove a vote.
 		bool MigrationQuorum(NetHostMigrationReach& reach);
 		/// A side without the quorum hosts nothing: its seat is held by whoever hosts, and it returns later.
 		void StopHostUnreachable();
@@ -1519,6 +1541,7 @@ namespace RTE {
 		NetHostMigrationTimeouts MigrationTimeouts() const;
 		/// How long a survivor waits on its dial to the successor before it dials the next entry.
 		uint64_t MigrationDialPatienceMs() const { return IsMigrationIceEndpoint(m_MigrationAddress) ? c_MigrationIceDialMs : NetHostMigrationTimeouts::c_RetryMs; }
+		std::optional<NetMatchMigrationPeer> MigrationEndpoint(uint8_t peerId) const;
 		bool HoldsLiveMigrationCandidate(uint64_t nowMs, uint64_t budget) const;
 		void PublishMigrationPlan(uint64_t nowMs);
 		void CompleteHostMigration(uint64_t nowMs);
@@ -1561,7 +1584,10 @@ namespace RTE {
 		//!< Successors this peer gave up on; a later election in this handover chain must not dial them again.
 		std::vector<uint8_t> m_MigrationLostSuccessors;
 		NetHostMigrationReach m_MigrationReach; //!< The handover's vote as this peer last saw it.
-		uint32_t m_MigrationQuorumMask = 0; //!< Successor: the connected seats of the most advanced voter's roster.
+		uint32_t m_MigrationQuorumMask = 0; //!< The committed electorate for this handover.
+		uint32_t m_MigrationVoterMask = 0;
+		uint64_t m_CertifiedSupersedingGeneration = 0;
+		uint64_t m_SuspectedSupersedingGeneration = 0;
 		NetHostMigrationResult m_MigrationResult;
 		std::set<uint8_t> m_MigrationExpected;
 		std::map<uint8_t, NetHostMigrationMessage> m_MigrationAnswers;
@@ -1644,6 +1670,7 @@ namespace RTE {
 		bool SenderOwnsTransport(uint8_t claimedPeerId, NetPeerId fromTransport) const;
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
+		std::vector<NetLockstepFrame> CapturePendingInputsImpl(uint64_t afterFrame, bool includeBoundaryCommands) const;
 		void StampFrameAuthority(NetLockstepReadyFrame& ready);
 		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false, bool removed = false, bool cleanLeave = true);
 		void ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay);
@@ -1786,15 +1813,12 @@ namespace RTE {
 		void RetryLateStartReclaims();
 		void FlushDeferredParkTimings();
 		bool DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing);
-		/// Host: holds its own seat when every other seat's input for the frame is in hand and its own simulation has not produced its input within the bound.
-		bool JudgeOwnSeat(uint64_t frame, uint64_t nowMs);
+		uint64_t PeerAbsenceBudgetMs(uint8_t peer) const;
 		bool SceneLoadInputPending(uint8_t peer, uint64_t frame, uint64_t nowMs);
 		void TakeSceneLoadStatus(const NetLockstepTiming& timing, uint64_t nowMs);
 		uint64_t CaptureExcuseUntil(uint8_t peerId, uint64_t frame, uint64_t firstMissingMs);
-		/// Host: takes its own held seat back once its simulation has caught up to the committed frames.
+		/// Host: returns a seat held by an older build at a fixed, agreed future boundary.
 		void ReclaimOwnSeat(uint64_t nowMs);
-		std::optional<uint64_t> m_OwnMissingFrame; //!< Host: the frame its own input was first missing for with every other seat's in hand.
-		uint64_t m_OwnMissingSinceMs = 0;
 		std::string m_OwnSeatWaitLogged; //!< Host: why its held seat last waited to come back, as last logged.
 		uint64_t FutureTimingFrame() const;
 		struct TimingDecision {
@@ -1802,6 +1826,7 @@ namespace RTE {
 			uint8_t acknowledgedPeers = 0;
 			bool committed = false;
 			uint64_t proposedAtMs = 0;
+			uint64_t lastRetryAtMs = 0;
 		};
 		std::map<uint64_t, TimingDecision> m_TimingDecisions;
 		std::map<uint64_t, NetLockstepTiming> m_SettledTimings; //!< The newest proposals this peer took and has since let go of, by revision.
@@ -2009,6 +2034,7 @@ namespace RTE {
 		bool m_CaptureParkAwaitingReports = false;
 		bool m_CaptureParkFinalized = false;
 		std::optional<NetLockstepStop> m_PendingRecoveryStop;
+		std::optional<uint64_t> m_RecoveryDrainThrough;
 		std::optional<NetLockstepStop> m_PendingCompleteStop;
 		uint8_t m_HostLeaveRecordFrom = 0; //!< Client: the host whose leave record this round heard.
 		bool m_MigrationHostAnnounced = false; //!< The host this handover replaces sent its leave record.
@@ -2079,6 +2105,14 @@ namespace RTE {
 		std::map<uint64_t, std::pair<uint8_t, uint8_t>> m_ReplayAuthorities;
 		std::map<uint64_t, uint8_t> m_ReplayAuthorityHistory;
 		uint8_t m_ReplayOpeningAuthority = 0;
+		uint64_t m_ReplayOpeningGeneration = 0;
+		std::map<uint64_t, NetGameHostAuthority> m_AuthorityEvents;
+		std::optional<uint64_t> m_LocalPreparedFrame, m_LastPreparedSentFrame;
+		std::map<uint8_t, uint64_t> m_PreparedFrameReceipts;
+		uint64_t m_LastPreparedSentMs = 0;
+		bool UsesPreparedFrameReceipts() const;
+		bool PreparedFrameReplicated(uint64_t frame) const;
+		void PublishPreparedFrame(uint64_t nowMs);
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)
 		std::map<uint64_t, std::vector<NetGameCommand>> m_LocalCommands;
 		std::map<uint64_t, std::map<uint8_t, std::vector<NetGameCommand>>> m_RemoteCommands; //!< frame -> (peerId -> commands)
@@ -2127,6 +2161,8 @@ namespace RTE {
 		std::map<uint64_t, std::map<uint8_t, std::array<uint8_t, 32>>> m_RemoteChecksums; //!< frame -> (peerId -> hash)
 		std::map<uint8_t, uint64_t> m_VerifiedAppliedFrames; //!< Matching hashes keep their applied prefix after the hash buffers are pruned.
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;
+		/// Command counts before the coordinator adds boundary events, by frame and sender.
+		std::map<uint64_t, std::map<uint8_t, size_t>> m_PendingSourceCommandCounts;
 		std::map<uint64_t, NetLockstepReadyFrame> m_ReadyHistory;
 
 		bool AllRemoteStartsReceived() const { return m_RemoteStartsReceived.size() == m_RemotePeerIds.size(); }

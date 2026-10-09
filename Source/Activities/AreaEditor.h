@@ -135,6 +135,10 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		friend bool TestAreaEditorCancel(std::string* error);
+		bool m_EmptyScenePrompted;
+		static EditorMode EmptySceneMode(bool emptyScene, bool& prompted, EditorMode mode);
+		void OfferNewArea(bool emptyScene);
 		/// Clears all the member variables of this Activity, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

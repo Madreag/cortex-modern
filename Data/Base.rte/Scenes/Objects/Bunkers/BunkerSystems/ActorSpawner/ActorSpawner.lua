@@ -142,7 +142,7 @@ function Create(self)
 	
 	self.specificActorPresetName = self:StringValueExists("ActorPresetName") and self:GetStringValue("ActorPresetName") or nil;
 	self.specificActorClassName = self:StringValueExists("ActorClassName") and self:GetStringValue("ActorClassName") or nil;
-	self.specificActorClassName = self:StringValueExists("ActorTechName") and self:GetStringValue("ActorTechName") or nil;
+	self.specificActorTechName = self:StringValueExists("ActorTechName") and self:GetStringValue("ActorTechName") or nil;
 	self.spawnEquipment = self:GetNumberValue("SpawnEquipment") == 1 and true or false;
 
 	self.spawnType = self:GetStringValue("SpawnType");

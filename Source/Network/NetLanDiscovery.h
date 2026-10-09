@@ -28,18 +28,19 @@ namespace RTE {
 		uint8_t playerCount = 0;
 		uint8_t maxPlayers = 0;
 		uint64_t lastSeenMs = 0;
+		uint64_t matchId = 0; // A route hint only; admission still verifies the signed seat.
+		uint32_t hostGeneration = 0;
 		bool hasCompatibility = false;      // False on a v1 beacon: there is nothing to judge.
 		NetLanCompatIdentity compatibility; // Meaningful only when hasCompatibility is set.
 	};
 
-	/// LAN game discovery over UDP broadcast: a hosting lobby beacons once a second; the join
-	/// screen's browser collects beacons and lists fresh ones. Direct IP stays the internet path —
-	/// this is purely the same-network convenience.
+	/// LAN discovery and same-network recovery over UDP broadcast. A host keeps
+	/// beaconing its match while it runs so retained seats can find a changed address.
 	class NetLanDiscovery {
 	public:
 		static constexpr uint16_t c_DiscoveryPort = 42115;
 		static constexpr uint32_t c_Magic = 0x434C4143U; // "CALC" -> CC LAn disCovery
-		static constexpr uint16_t c_Version = 2;
+		static constexpr uint16_t c_Version = 3;
 		static constexpr uint64_t c_BeaconIntervalMs = 1000;
 		static constexpr uint64_t c_EntryTtlMs = 3500;
 
@@ -48,7 +49,7 @@ namespace RTE {
 		/// Starts broadcasting this host's lobby. Safe to call repeatedly to update the payload.
 		bool StartBeacon(uint16_t gamePort, const std::string& hostName, const std::string& activity, const std::string& mode, uint8_t playerCount, uint8_t maxPlayers, std::string* error = nullptr);
 		/// Same beacon plus the compatibility fields (v2). A nullptr compat emits the v1 layout, which an old reader still decodes.
-		bool StartBeacon(uint16_t gamePort, const std::string& hostName, const std::string& activity, const std::string& mode, uint8_t playerCount, uint8_t maxPlayers, const NetLanCompatIdentity* compat, std::string* error = nullptr);
+		bool StartBeacon(uint16_t gamePort, const std::string& hostName, const std::string& activity, const std::string& mode, uint8_t playerCount, uint8_t maxPlayers, const NetLanCompatIdentity* compat, std::string* error = nullptr, uint64_t matchId = 0, uint32_t hostGeneration = 0);
 		/// Starts listening for other hosts' beacons.
 		bool StartBrowser(std::string* error = nullptr);
 		void Stop();
@@ -65,6 +66,8 @@ namespace RTE {
 
 		/// The machine's primary outbound IPv4 (the address LAN peers can reach), "" when unknown.
 		static std::string GetPrimaryLocalAddress();
+		/// Active IPv4/IPv6 addresses, with the default IPv4 route first. Used only by connection upkeep.
+		static std::vector<std::string> GetLocalAddresses();
 
 	private:
 		bool EnsureSocket(bool bindListenPort, std::string* error);

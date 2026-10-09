@@ -122,6 +122,7 @@ namespace RTE {
 			LeaveCancelButton,
 			MatchOptionsCloseButton,
 			MatchRepairButton,
+			ConnectionDetailsButton,
 			ButtonCount
 		};
 
@@ -219,7 +220,7 @@ namespace RTE {
 		void PlaceButtonRow(int button, int rowOffset);
 
 		/// Shows or hides the leave confirmation in place of the menu rows.
-		void ShowLeaveConfirm(bool show);
+		void ShowLeaveConfirm(bool show, bool endMatch = false);
 
 		/// Shows or hides the match options view in place of the menu rows, refilled on open.
 		void ShowMatchOptions(bool show);
@@ -227,6 +228,8 @@ namespace RTE {
 
 		/// Sizes the match details panel to the summary it draws.
 		void FitMatchOptionsBox();
+		bool m_ConnectionDetailsShown = false;
+		bool m_EndConfirmShown = false;
 
 		/// The one line of what leaving costs this player, from the session's own hold.
 		LeaveConsequence ReadLeaveConsequence() const;

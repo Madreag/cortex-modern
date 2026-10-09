@@ -1,5 +1,7 @@
 #include "NetReconnectSessionSelfTest.h"
 
+#include <cstdlib>
+
 #include "ControllerFrame.h"
 #include "LoopbackTransport.h"
 #include "NetAuthCrypto.h"
@@ -92,8 +94,9 @@ namespace RTE {
 					return false;
 				}
 				for (size_t i = 0; i < count; ++i) {
-					m_Counter = static_cast<uint8_t>(m_Counter * 37U + 149U);
-					buffer[i] = m_Counter;
+					// A byte-sized cycle reused whole epochs after 256 bytes of fixture draws.
+					m_Counter = m_Counter * 6364136223846793005ULL + 1442695040888963407ULL;
+					buffer[i] = static_cast<uint8_t>(m_Counter >> 56);
 				}
 				return true;
 			}
@@ -119,7 +122,7 @@ namespace RTE {
 			}
 
 		private:
-			uint8_t m_Counter = 1;
+			uint64_t m_Counter = 1;
 		};
 
 		struct ScopedTestCrypto {
@@ -3172,6 +3175,13 @@ namespace RTE {
 				    given.GetStatusText() != "The host gave your seat to another player." || given.GetOffer() != NetReconnectOffer::None) {
 					return Fail("a seat the host gave away still read '" + given.GetStatusText() + "' with retry " + std::to_string(given.CanRetryManually()));
 				}
+				given.NoteDropped(500001, "connection closed by peer");
+				given.NoteAttemptFailed(500002, "host did not answer");
+				given.RequestManualRetry(500003);
+				if (!given.IsRefused() || given.Tick(500003) || given.CanCancel() || given.CanRetryManually() ||
+				    given.GetStatusText() != "The host gave your seat to another player.") {
+					return Fail("a repeated drop or late failure rearmed or replaced the host's final refusal");
+				}
 			}
 
 			// The window closing is a real end, not just a spent counter.
@@ -3190,8 +3200,12 @@ namespace RTE {
 				NetReconnectUx offer;
 				offer.OfferStoredTicket(NetH4TicketLoadResult::Loaded, "10.0.0.7");
 				if (offer.GetOffer() != NetReconnectOffer::Available || offer.GetOfferAddress() != "10.0.0.7" ||
-				    offer.GetOfferText().find("10.0.0.7") == std::string::npos) {
-					return Fail("a usable record was not offered with its host");
+				    offer.GetOfferText() != "Rejoin your match?") {
+					return Fail("a usable record lost its route or exposed it in the rejoin offer");
+				}
+				offer.OfferStoredTicket(NetH4TicketLoadResult::Loaded, "10.0.0.7", "Evening match");
+				if (offer.GetOfferText() != "Rejoin Evening match?" || offer.GetOfferAddress() != "10.0.0.7") {
+					return Fail("a named rejoin offer did not preserve its private route");
 				}
 				offer.OfferStoredTicket(NetH4TicketLoadResult::Corrupt, "10.0.0.7");
 				if (offer.GetOffer() != NetReconnectOffer::Corrupt || !offer.GetOfferAddress().empty() ||
@@ -3321,7 +3335,7 @@ namespace RTE {
 		}
 
 		// A player who leaves a running match on purpose keeps its seat exactly as a dropped one does: the ticket stays, the seat is
-		// held, and the return is a reclaim; nobody is told it left. A stranger is answered as before.
+		// held, and the return is a reclaim; nobody is told it left. A newcomer may take a different, unused seat.
 		int TestCleanLeaverKeepsTheSeat() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -3375,6 +3389,17 @@ namespace RTE {
 				if (cause != "Left 2 min ago") {
 					return Fail(mode + ": the Seats panel read the held seat's cause as '" + cause + "'");
 				}
+				Endpoint withoutTicket;
+				withoutTicket.connection = 97;
+				ConfigureEndpoint(withoutTicket, "returner-without-ticket", &unixNow);
+				wire.Add(&withoutTicket);
+				wire.host.BindParticipantId(withoutTicket.connection, leaver);
+				if (!withoutTicket.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) return Fail(error);
+				const NetJoinRejected* ownSeat = LastOf<NetJoinRejected>(wire.Delivered(withoutTicket.connection));
+				if (!ownSeat || ownSeat->mismatchKey != "seat_held_for_you" || ownSeat->expected != std::to_string(record.stableSeat) ||
+				    LastOf<NetH4TicketOffer>(wire.Delivered(withoutTicket.connection))) {
+					return Fail(mode + ": an unticketed returner was offered another seat instead of its held seat");
+				}
 				Endpoint returner;
 				returner.connection = 96;
 				ConfigureEndpoint(returner, world ? "left-world-return" : "left-match-return", &unixNow);
@@ -3388,26 +3413,18 @@ namespace RTE {
 					const NetJoinRejected* refused = LastOf<NetJoinRejected>(wire.Delivered(returner.connection));
 					return Fail(mode + ": the leaver's return was refused " + (refused == nullptr ? std::string("silently") : std::string(NetProtocol::RejectReasonName(refused->rejectReason))));
 				}
-				const auto joinAs = [&wire, &error](NetPeerId connection, const NetAuthBytes32& id, uint8_t tx) {
-					wire.host.BindParticipantId(connection, id);
-					NetH4NewJoin join;
-					join.txId = Ramp<16>(tx);
-					join.identity = MakeIdentity();
-					join.displayName = "stranger";
-					const bool sent = wire.SendRaw(connection, join, &error);
-					wire.nowMs += NetReconnectAdmission::c_DenialReleaseMs;
-					wire.DrainHostOutbound();
-					return sent;
-				};
-				if (!joinAs(98, Ramp<32>(0xC1), 0x63)) {
-					return Fail(error);
-				}
-				const NetJoinRejected* stranger = LastOf<NetJoinRejected>(wire.Delivered(98));
-				if (stranger != nullptr && stranger->rejectReason == NetRejectReason::SeatReleased) {
-					return Fail(mode + ": a stranger was told its seat was released");
-				}
-				if (!world && (stranger == nullptr || stranger->mismatchKey != "live_match")) {
-					return Fail(mode + ": a stranger's join was not answered as before");
+				Endpoint newcomer;
+				newcomer.connection = 98;
+				ConfigureEndpoint(newcomer, "newcomer", &unixNow);
+				wire.Add(&newcomer);
+				wire.host.BindParticipantId(newcomer.connection, Ramp<32>(0xC1));
+				if (!newcomer.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) return Fail(error);
+				NetPeerId holder = c_InvalidNetPeerId;
+				uint32_t generation = 0, incarnation = 0;
+				if (newcomer.client.GetState() != NetH4ClientState::Joined || newcomer.client.GetRecord().stableSeat == record.stableSeat ||
+				    !wire.host.GetSeatHolder(record.stableSeat, holder, generation, incarnation) || holder != returner.connection ||
+				    generation != record.holderGeneration) {
+					return Fail(mode + ": a late newcomer did not take only the unused seat, preserving the returned holder");
 				}
 			}
 			return 0;
@@ -3442,8 +3459,8 @@ namespace RTE {
 				wire.host.SetPersistentWorld(persistent);
 				std::vector<std::unique_ptr<Endpoint>> players;
 				std::vector<NetH4TicketRecord> records;
-				// A match holds the one seat its player left; a world holds both, so it has no slot left for a newcomer.
-				for (size_t index = 0; index < (persistent ? 2u : 1u); ++index) {
+				// Both human seats are held, so neither kind of match has an unused slot for a newcomer.
+				for (size_t index = 0; index < 2u; ++index) {
 					auto player = std::make_unique<Endpoint>();
 					player->connection = static_cast<NetPeerId>(95 + index);
 					ConfigureEndpoint(*player, std::string(persistent ? "held-world-" : "held-match-") + std::to_string(index), &unixNow);
@@ -3461,7 +3478,7 @@ namespace RTE {
 					if (seat.cpu || seat.stableSeat != seated.stableSeat) continue;
 					wire.host.NoteSeatHeldInPlace(seat.lockstepPeerId, NetSeatHoldCause::Capacity);
 					const NetAuthBytes32 sameOwner = Ramp<32>(0xB1);
-					inPlace = keyOf(refusalTo(wire, 96, &sameOwner, "renamed", 0x70, &error)) + " expected=seat_held_for_you:" + std::to_string(seat.stableSeat);
+						inPlace = keyOf(refusalTo(wire, 196, &sameOwner, "renamed", 0x70, &error)) + " expected=seat_held_for_you:" + std::to_string(seat.stableSeat);
 				}
 				std::cout << "[net-reconnect-session-selftest] unticketed_return " << (persistent ? "world" : "match") << " held_in_place=" << inPlace << std::endl;
 				if (inPlace.substr(0, inPlace.find(' ')) != inPlace.substr(inPlace.find("expected=") + 9)) note(persistent, "its player back while its seat is held in place was answered " + inPlace);
@@ -4508,7 +4525,7 @@ namespace RTE {
 			};
 
 			uint64_t unixNow = 1'700'000'000'000ULL;
-			// The leave the engine now runs: the link is still up, so the ack arrives and clears the record.
+			// A live link acknowledges the leave while the seat and return ticket stay with the holder.
 			{
 				LoopbackTransport hostTransport, clientTransport;
 				NetSession host, client;
@@ -4540,11 +4557,12 @@ namespace RTE {
 				if (acknowledgedMs - startedMs > NetReconnectClient::c_LeaveAckBudgetMs) {
 					return Fail("the leave outran P21's ack budget");
 				}
-				if (store.HasRecord() || reconnect.GetStats().leaveAcksReceived != 1 || reconnect.GetStats().ticketsCleared != 1) {
-					return Fail("an acknowledged leave did not clear the recovery record");
+				if (!store.HasRecord() || reconnect.GetStats().leaveAcksReceived != 1 || reconnect.GetStats().ticketsCleared != 0) {
+					return Fail("an acknowledged leave lost its return ticket or leave accounting");
 				}
-				if (admission.GetStats().seatsClosedByLeave != 1) {
-					return Fail("the host did not close the seat on the leave");
+				if (admission.GetStats().seatsClosedByLeave != 1 || admission.GetStats().seatsDropped != 1 ||
+				    !admission.IsSeatHeldForReclaim(MakeSeatTable()[0].lockstepPeerId)) {
+					return Fail("the host did not acknowledge the leave and retain its held seat");
 				}
 			}
 
@@ -6555,60 +6573,16 @@ namespace RTE {
 			}
 			record.directorySessionId = "sess-re-resolve-1";
 			record.hostAddress = "10.0.0.8:41010";
-			const NetMatchServiceRequest rejoin = TicketRejoinRequestFromRecord(record, "Client");
-			if (rejoin.sessionId != "sess-re-resolve-1" || rejoin.address != "10.0.0.8:41010" || rejoin.host) {
-				return Fail("BeginTicketRejoin.sessionId did not take the stored directory session id");
+			const NetMatchServiceRequest rejoin = NetMatchService::BuildTicketRejoinRequest(record, "Client", false);
+			if (rejoin.sessionId != record.directorySessionId || rejoin.address != "ice:" || rejoin.host || !rejoin.rejoin) {
+				return Fail("an Internet ticket did not request its directory's current route");
 			}
-			// Rejoin Match dials the address with the port the record keeps; the transport takes the port from it.
-			record.hostAddress = "127.0.0.1:49460";
-			const NetMatchServiceRequest menuRejoin = NetMatchService::BuildTicketRejoinRequest(record, "Client", false);
-			if (menuRejoin.address != "127.0.0.1:49460") {
-				return Fail("a ticket rejoin dialled " + menuRejoin.address + " for a host at 127.0.0.1:49460");
-			}
-			record.hostAddress = "10.0.0.8:41010";
-			if (ResolveTicketJoinAddress(record, "ignored", "127.0.0.1", "198.51.100.9:1", false) != "198.51.100.9:1") {
-				return Fail("SessionFull resolveJoinAddress ignored a remapped directory address");
-			}
-			if (ResolveTicketJoinAddress(record, "ignored", "127.0.0.1", "", true) != "session:sess-re-resolve-1") {
-				return Fail("SessionFull resolveJoinAddress ignored the stored directory session id");
-			}
-			// The SessionFull retry's own resolution: the address it dials comes out of the browsed rows.
-			NetDirectoryLocalIdentity local;
-			local.networkProtocolVersion = 1;
-			local.lockstepCodecVersion = 20;
-			local.controllerFrameVersion = 6;
-			local.sessionIdentityHash = std::string(64, 'a');
-			local.moduleManifestHash = std::string(64, 'c');
-			NetDirectorySessionRow browsed;
-			browsed.name = "Player";
-			browsed.activity = "P4 Alpha Duel";
-			browsed.mode = "pvp-skirmish";
-			browsed.peerCount = 2;
-			browsed.seatsFree = 1;
-			browsed.networkProtocolVersion = local.networkProtocolVersion;
-			browsed.lockstepCodecVersion = local.lockstepCodecVersion;
-			browsed.controllerFrameVersion = local.controllerFrameVersion;
-			browsed.sessionIdentityHash = local.sessionIdentityHash;
-			browsed.moduleManifestHash = local.moduleManifestHash;
-			browsed.listenAddrs = {"198.51.100.7"};
-			browsed.listenPort = 41010;
-			browsed.joinMode = "ip";
-			browsed.sessionId = record.directorySessionId;
-			browsed.state = "lobby";
-			const std::string fromRows = ResolveTicketJoinAddressFromRows(record, "ignored", "127.0.0.1", {browsed}, local, false);
-			if (fromRows != "198.51.100.7") {
-				return Fail("the SessionFull retry dialled '" + fromRows + "' instead of the browsed row's address");
-			}
-			NetDirectorySessionRow otherSession = browsed;
-			otherSession.sessionId = "sess-re-resolve-other";
-			otherSession.listenAddrs = {"198.51.100.9"};
-			const std::string noRow = ResolveTicketJoinAddressFromRows(record, "ignored", "127.0.0.1", {otherSession}, local, false);
-			if (noRow != record.hostAddress) {
-				return Fail("a browse that found another session's row dialled '" + noRow + "' instead of the stored host address");
-			}
-			const std::string emptyBrowse = ResolveTicketJoinAddressFromRows(record, "ignored", "127.0.0.1", {}, local, true);
-			if (emptyBrowse != "session:sess-re-resolve-1") {
-				return Fail("a browse that found nothing dialled '" + emptyBrowse + "' instead of the stored directory session");
+			NetH4TicketRecord direct = record;
+			direct.directorySessionId.clear();
+			direct.hostAddress = "127.0.0.1:49460";
+			const NetMatchServiceRequest directRejoin = NetMatchService::BuildTicketRejoinRequest(direct, "Client", false);
+			if (directRejoin.address != direct.hostAddress || !directRejoin.sessionId.empty() || !directRejoin.rejoin) {
+				return Fail("a direct ticket lost its host's port or acquired a directory dependency");
 			}
 			// A record left by the previous host is not this join's: the retry dials what the request named.
 			NetH4TicketRecord otherHost = record;
@@ -6617,8 +6591,13 @@ namespace RTE {
 			if (TicketMatchesRequest(otherHost, "sess-re-resolve-1", "10.0.0.8:41010")) {
 				return Fail("a ticket for host 10.0.0.9 was taken for a join to 10.0.0.8");
 			}
-			if (!TicketMatchesRequest(record, "sess-re-resolve-1", "") || !TicketMatchesRequest(record, "", "10.0.0.8:41010")) {
+			if (!TicketMatchesRequest(record, "sess-re-resolve-1", "") || !TicketMatchesRequest(direct, "", direct.hostAddress) ||
+			    TicketMatchesRequest(record, "", record.hostAddress)) {
 				return Fail("this join's own ticket was refused by the host and session match");
+			}
+			otherHost.hostAddress = "ice:";
+			if (TicketMatchesRequest(otherHost, record.directorySessionId, "ice:")) {
+				return Fail("two online matches shared a seat through the ICE route placeholder");
 			}
 
 			class ScriptedTransport final : public NetDirectoryClient::Transport {
@@ -6640,32 +6619,9 @@ namespace RTE {
 				std::shared_ptr<std::vector<NetDirectoryClient::Request>> m_Sent;
 			};
 
-			// The SessionFull retry's own browse: the production loop, answered by a scripted list.
-			{
-				auto listReplies = std::make_shared<std::deque<NetDirectoryClient::Reply>>();
-				auto listSent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
-				NetDirectoryListResponse list;
-				list.sessions = {browsed};
-				list.total = 1;
-				listReplies->push_back({200, NetDirectoryCodec::EncodeListResponse(list), ""});
-				NetDirectoryClient browseClient;
-				browseClient.SetTransportFactory([listReplies, listSent] { return std::make_unique<ScriptedTransport>(listReplies, listSent); });
-				browseClient.Configure("https://dir.test", "key0123456789abcd", "");
-				const std::vector<NetDirectorySessionRow> browsedRows = BrowseSessionRows(browseClient, 250, [] { return false; });
-				if (browsedRows.size() != 1 || browsedRows.front().sessionId != record.directorySessionId) {
-					return Fail("the retry's browse returned " + std::to_string(browsedRows.size()) + " rows for the stored session");
-				}
-				if (listSent->empty() || listSent->front().path.find("/v1/sessions") == std::string::npos) {
-					return Fail("the retry's browse asked for '" + (listSent->empty() ? std::string("nothing") : listSent->front().path) + "' instead of the session list");
-				}
-				if (ResolveTicketJoinAddressFromRows(record, "ignored", "127.0.0.1", browsedRows, local, false) != "198.51.100.7") {
-					return Fail("the rows the retry browsed did not resolve to the row's address");
-				}
-			}
-
 			auto replies = std::make_shared<std::deque<NetDirectoryClient::Reply>>();
 			auto sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
-			replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""});
+			replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""});
 			replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":true})", ""});
 			replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":true})", ""});
 			NetDirectoryClient client;
@@ -6711,11 +6667,9 @@ namespace RTE {
 		}
 	} // namespace
 
-		// A lobby member whose process is gone sends nothing and closes nothing: the host reaps it on
-		// its own heartbeat timeout. That close is ours, so no transport event ever reaches the
-		// admission plane, and before this the seat stayed committed to a peer that no longer existed -
-		// every replacement was then refused a full lobby, which is what the 4-peer drop lane measured.
-		int TestReapedLobbySeatReturnsToThePool() {
+		// A lobby member's heartbeat timeout drops its link but preserves its admitted seat and ticket.
+		// A newcomer cannot take that seat without the host's choice, even before the first round.
+		int TestReapedLobbySeatRetainsItsHolder() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
 			std::string error;
@@ -6733,7 +6687,7 @@ namespace RTE {
 			registry.BeginHostedSession();
 			NetReconnectHost admission;
 			admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
-			// One human seat, so the replacement can only be admitted if the reaped seat came back.
+			// One human seat, so a newcomer must be refused while its original holder owns it.
 			admission.SetSeatTable({{0, 1, 1, false, 2, false}, {1, 0, 3, true, 0, false}}, NetMatchMode::PvPSkirmish);
 			NetReconnectTicketStore firstStore;
 			firstStore.SetPath(StorePath("reap-first"));
@@ -6747,7 +6701,7 @@ namespace RTE {
 			NetSessionConfig hostConfig = MakeSessionConfig(port, 101, "Host");
 			hostConfig.maxPeers = 2;
 			// The transport says nothing about a close we make ourselves, which is how GNS behaved: the
-			// seat has to come back because the session hands the peer over, not because the wire did.
+			// admission plane must learn about the drop from the session, even without a wire event.
 			LoopbackTransportConfig silentClose;
 			silentClose.silentLocalDisconnect = true;
 			hostTransport.SetFaultConfig(silentClose);
@@ -6777,17 +6731,14 @@ namespace RTE {
 			}
 			const std::vector<NetH4SeatStatus> seats = admission.GetSeatStatuses();
 			const auto reaped = std::find_if(seats.begin(), seats.end(), [](const NetH4SeatStatus& seat) { return seat.stableSeat == 0; });
-			if (reaped == seats.end() || reaped->committed) {
-				return Fail("the reaped member's seat is still committed to a peer that is gone");
+			if (reaped == seats.end() || !reaped->committed || !reaped->dropped || reaped->closed || !firstStore.HasRecord()) {
+				return Fail("the reaped member lost its admitted seat, drop mark or return ticket");
 			}
-			// It has to be the reap that released it, not a later sweep: the session hands the peer over.
-			if (admission.GetStats().seatsReleased != 1 || admission.GetStats().seatsClosedByLeave != 0) {
-				return Fail("the seat came back by some route other than the reap: released=" +
-				            std::to_string(admission.GetStats().seatsReleased) +
-				            " byLeave=" + std::to_string(admission.GetStats().seatsClosedByLeave));
+			if (admission.GetStats().seatsDropped != 1 || admission.GetStats().seatsReleased != 0 || admission.GetStats().seatsClosedByLeave != 0) {
+				return Fail("the reap did not record exactly one retained seat drop");
 			}
 
-			// The replacement: it can only be admitted onto the one seat the reap released.
+			// A different install without that ticket must not take the retained seat.
 			NetReconnectTicketStore secondStore;
 			secondStore.SetPath(StorePath("reap-second"));
 			NetReconnectClient secondClient;
@@ -6804,11 +6755,11 @@ namespace RTE {
 				hostTransport.AdvanceTimeMs(10);
 				secondTransport.AdvanceTimeMs(10);
 			}
-			if (secondClient.GetState() != NetH4ClientState::Joined) {
-				return Fail(std::string("the replacement was refused the reaped seat: ") + second.BuildRejectText());
+			if (second.GetState() != NetSessionState::Rejected || second.GetRejectReason() != NetRejectReason::SessionFull) {
+				return Fail(std::string("a newcomer was not refused the retained seat: ") + second.BuildRejectText());
 			}
-			if (host.GetReadyPeerCount() != 1) {
-				return Fail("the host did not end up with exactly the replacement seated");
+			if (host.GetReadyPeerCount() != 0) {
+				return Fail("the host admitted a newcomer over the retained holder");
 			}
 			return 0;
 		}
@@ -8622,6 +8573,98 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestApplicantDecisionsKeepTheHolder() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			// A departed holder, a seated bystander and an unseated requester. Moderating the request
+			// must preserve the holder's seat and only ban the requester's proven identity.
+			wire.host.SetSeatTable({{0, 1, 1, false, 2, false}, {1, 2, 2, false, 3, false}, {2, 3, 3, false, 4, false}, {3, 0, 4, true, 0, false}}, NetMatchMode::PvPSkirmish);
+			Endpoint departed;
+			departed.connection = 421;
+			ConfigureEndpoint(departed, "removed-departed", &unixNow);
+			wire.Add(&departed);
+			NetH4TicketRecord departedRecord;
+			if (!departed.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error) || departed.client.GetState() != NetH4ClientState::Joined ||
+			    departed.store.Load(unixNow, departedRecord, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail("the fixture could not seat the first member: " + error);
+			}
+			Endpoint holder;
+			holder.connection = 422;
+			ConfigureEndpoint(holder, "removed-holder", &unixNow);
+			wire.Add(&holder);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!holder.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error) || holder.client.GetState() != NetH4ClientState::Joined) {
+				return Fail(std::string("the holder did not join: ") + NetReconnectClientStateName(holder.client.GetState()) +
+				            " reason=" + NetProtocol::RejectReasonName(holder.client.GetLastRejectReason()) + " " + error);
+			}
+			NetH4TicketRecord holderRecord;
+			if (holder.store.Load(unixNow, holderRecord, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail(error);
+			}
+			wire.host.SetLiveMatch(true);
+			wire.host.NotifyDisconnect(departed.connection, 100);
+			departed.connected = false;
+			wire.Remove(departed.connection);
+			departed.client.NotifyAmbiguousLoss();
+			if (!wire.host.IsSeatHeldForReclaim(2)) return Fail("the departed member's seat has no reclaim hold");
+			Endpoint applicant;
+			applicant.connection = 433;
+			ConfigureEndpoint(applicant, "requester", &unixNow);
+			wire.Add(&applicant);
+			const auto requesterId = Ramp<32>(0xD6);
+			wire.host.BindParticipantId(applicant.connection, requesterId);
+			NetHostBanStore bans;
+			bans.SetPath((std::filesystem::temp_directory_path() / "ui-applicant-bans").string());
+			if (!bans.Load(&error)) return Fail(error);
+			wire.host.SetBanStore(&bans);
+			const auto view = [&]() {
+				for (const auto& seat: wire.host.GetModerationView()) if (seat.stableSeat == departedRecord.stableSeat) return seat;
+				return NetH4ModerationSeat{};
+			};
+			const auto before = view();
+			const auto holderUnchanged = [&]() {
+				const auto seat = view();
+				return seat.holderGeneration == before.holderGeneration && seat.incarnation == before.incarnation &&
+				       seat.seatGeneration == before.seatGeneration && seat.heldForReclaim && !seat.closed;
+			};
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			const auto request = MakeApplicant(departedRecord.stableSeat, 0x61, "removed-departed");
+			if (!wire.SendRaw(applicant.connection, request, &error)) return Fail(error);
+			wire.DrainHostOutbound();
+			if (view().applicants.size() != 1) return Fail("the requester was not listed");
+			const auto selected = NetSelectModerationSeat(view(), applicant.connection);
+			auto stale = selected;
+			stale.applicantTransaction[0] ^= 1;
+			NetParticipantRemovalIssue issued;
+			if (wire.host.RemoveParticipant(stale, NetParticipantRemovalAction::Kick, wire.nowMs, unixNow, 0x4831ULL, 1, 150, issued) != NetKickBanResult::StaleSelection || !holderUnchanged())
+				return Fail("a stale applicant transaction changed the incumbent");
+			if (wire.host.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, wire.nowMs, unixNow, 0x4831ULL, 1, 150, issued) != NetKickBanResult::Ok || !holderUnchanged() || !view().applicants.empty() || issued.lockstepPeerId != 0)
+				return Fail("declining a requester removed or changed the incumbent");
+			wire.DrainHostOutbound();
+			if (!wire.SendRaw(applicant.connection, request, &error) || !holderUnchanged() || !view().applicants.empty()) return Fail("a declined transaction revived on retry");
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!wire.SendRaw(applicant.connection, MakeApplicant(departedRecord.stableSeat, 0x62, "removed-departed"), &error)) return Fail(error);
+			wire.DrainHostOutbound();
+			if (view().applicants.size() != 1) return Fail("the fresh request was not listed");
+			const auto banSelection = NetSelectModerationSeat(view(), applicant.connection);
+			auto refusal = [](const std::vector<uint8_t>&, std::string& why) { why = "test capacity refused"; return false; };
+			wire.host.SetMigrationCapacityCheck(refusal);
+			if (wire.host.RemoveParticipant(banSelection, NetParticipantRemovalAction::BanSession, wire.nowMs, unixNow, 0x4831ULL, 1, 150, issued) != NetKickBanResult::ActionUnavailable || !holderUnchanged() || view().applicants.empty() || bans.IsBanned(requesterId, 0x4831ULL))
+				return Fail("a refused requester ban partly changed policy or the incumbent");
+			wire.host.SetMigrationCapacityCheck({});
+			if (wire.host.RemoveParticipant(banSelection, NetParticipantRemovalAction::BanSession, wire.nowMs, unixNow, 0x4831ULL, 1, 150, issued) != NetKickBanResult::Ok || !holderUnchanged() || !view().applicants.empty() || issued.connection != applicant.connection || issued.lockstepPeerId != 0 || !bans.IsBanned(requesterId, 0x4831ULL))
+				return Fail("a requester ban targeted the incumbent or failed to bind the requester's identity");
+			std::cout << "[net-reconnect-session-selftest] PASS requester decline and identity ban keep the incumbent; stale and capacity refusals are atomic" << std::endl;
+			return 0;
+		}
+
 		int TestRemovedTransactionsDropped() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -9191,7 +9234,232 @@ namespace RTE {
 		return 0;
 	}
 
+	int TestSignedSeatLobbyAdmission() {
+		std::string error;
+		if (!ResetLaneDirectory(&error)) return Fail(error);
+		uint64_t unixNow = 1700000000000ULL, nowMs = 0;
+		const uint16_t port = 42139;
+		NetParticipantIdentityStore hostKey, ownerKey, otherKey;
+		hostKey.SetPath(StorePath("lobby-host-key")); ownerKey.SetPath(StorePath("lobby-owner-key")); otherKey.SetPath(StorePath("lobby-other-key"));
+		if (!hostKey.LoadOrCreate(&error) || !ownerKey.LoadOrCreate(&error) || !otherKey.LoadOrCreate(&error)) return Fail(error);
+		NetConnectionAuthority hostAuthority, ownerAuthority, otherAuthority;
+		hostAuthority.Configure(&hostKey, "", "", ""); ownerAuthority.Configure(&ownerKey, "", "", ""); otherAuthority.Configure(&otherKey, "", "", "");
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) return Fail("signed lobby registry");
+		NetReconnectHost admission;
+		NetSessionConfig hostConfig = MakeSessionConfig(port, 101, "Host");
+		hostConfig.maxPeers = 1;
+		admission.Configure(&registry, hostConfig.sessionId, MakeIdentity());
+		admission.SetSeatTable({MakeSeatTable().front()}, NetMatchMode::PvPSkirmish);
+		admission.SetUnixClock(&FixedUnixClock, &unixNow);
+		admission.SetConnectionAuthority(&hostAuthority);
+		NetHostBanStore bans;
+		bans.SetPath(StorePath("lobby-bans"));
+		if (!bans.Load(&error)) return Fail(error);
+		admission.SetBanStore(&bans);
+		LoopbackTransport hostTransport, ownerTransport;
+		NetSession host, owner;
+		host.SetReconnectHost(&admission);
+		host.EnableParticipantProof(nullptr);
+		host.SetHostBanStore(&bans);
+		NetReconnectTicketStore ownerStore;
+		ownerStore.SetPath(StorePath("lobby-owner"));
+		NetReconnectClient ownerClient;
+		ownerClient.Configure(&ownerStore, MakeIdentity(), "Original player");
+		ownerClient.SetUnixClock(&FixedUnixClock, &unixNow);
+		ownerClient.SetHostContext("loopback", MakeHash(5));
+		ownerClient.SetConnectionAuthority(&ownerAuthority);
+		owner.SetReconnectClient(&ownerClient);
+		owner.EnableParticipantProof(&ownerKey);
+		if (!host.StartHost(hostTransport, hostConfig, &error) ||
+		    !owner.StartClient(ownerTransport, "loopback", MakeSessionConfig(port, 202, "Original player"), &error)) return Fail(error);
+		const auto pump = [&](NetSession* applicant, LoopbackTransport* transport, uint64_t duration = 600) {
+			for (const uint64_t until = nowMs + duration; nowMs <= until; nowMs += 10) {
+				host.Tick(nowMs); owner.Tick(nowMs);
+				if (applicant) applicant->Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10); ownerTransport.AdvanceTimeMs(10);
+				if (transport) transport->AdvanceTimeMs(10);
+			}
+		};
+		pump(nullptr, nullptr);
+		NetH4TicketRecord ticket;
+		if (!owner.IsReady() || host.GetReadyPeerCount() != 1 || ownerStore.Load(unixNow, ticket) != NetH4TicketLoadResult::Loaded)
+			return Fail("signed lobby did not seat its original player");
+		const NetPeerId originalConnection = host.GetReadyPeers().front().transportPeerId;
+		const auto originalKept = [&] {
+			NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
+			return owner.IsReady() && host.GetReadyPeerCount() == 1 &&
+			    admission.GetSeatHolder(ticket.stableSeat, holder, generation, incarnation) && holder == originalConnection && generation == ticket.holderGeneration;
+		};
+		uint64_t nonce = 300;
+		const auto refuse = [&](const char* name, bool copied, bool requireTicket, bool admissionAttached, bool wrongVersion,
+		                        NetRejectReason reason, const std::string& text) {
+			LoopbackTransport transport;
+			NetSession applicant;
+			NetReconnectTicketStore store;
+			store.SetPath(StorePath(name));
+			if (copied && !store.Store(ticket, &error)) return false;
+			NetReconnectClient client;
+			client.Configure(&store, MakeIdentity(), name);
+			client.SetUnixClock(&FixedUnixClock, &unixNow);
+			client.SetHostContext("loopback", MakeHash(5));
+			client.SetConnectionAuthority(&otherAuthority);
+			client.SetRequireStoredTicket(requireTicket);
+			if (admissionAttached) applicant.SetReconnectClient(&client);
+			applicant.EnableParticipantProof(&otherKey);
+			auto config = MakeSessionConfig(port, ++nonce, name);
+			if (wrongVersion) config.minProtocolVersion = config.maxProtocolVersion = NetProtocol::c_Version + 1;
+			if (!applicant.StartClient(transport, "loopback", config, &error)) return false;
+			pump(&applicant, &transport);
+			if (!applicant.IsRejected() || applicant.GetRejectReason() != reason || applicant.BuildRejectText().find(text) == std::string::npos || !originalKept()) {
+				error = std::string(name) + ": " + applicant.BuildRejectText();
+				return false;
+			}
+			return true;
+		};
+		if (!refuse("copied-rejoin", true, true, true, false, NetRejectReason::IdentityUnproven, "Original player owns this seat") ||
+		    !refuse("copied-join", true, false, true, false, NetRejectReason::IdentityUnproven, "Original player owns this seat") ||
+		    !refuse("newcomer", false, false, true, false, NetRejectReason::SessionFull, "Every seat is taken") ||
+		    !refuse("uncommitted-ready", false, false, false, false, NetRejectReason::HostNotAccepting, "not admitted this seat") ||
+		    !refuse("wrong-version", false, false, true, true, NetRejectReason::ProtocolMismatch, "protocol")) return Fail(error);
+		if (!bans.Ban(otherKey.PublicId(), NetHostBanScope::Session, "Other player", "banned", hostConfig.sessionId, unixNow, &error) ||
+		    !refuse("banned-rejoin", true, true, true, false, NetRejectReason::ParticipantBanned, "banned")) return Fail(error);
+
+		// Unanswered proofs consume the same bounded pending range as a running match.
+		std::array<LoopbackTransport, NetSession::c_MaxPendingAdmissions + 1> pending;
+		NetClientHello hello;
+		const auto manifest = MakeManifest();
+		hello.gameVersion = manifest.gameVersion; hello.buildId = manifest.buildId;
+		hello.controllerFrameVersion = manifest.controllerFrameVersion; hello.controllerFrameEncodedSize = manifest.controllerFrameEncodedSize;
+		hello.deterministicConfigHash = manifest.deterministicConfigHash; hello.moduleManifestHash = manifest.moduleManifestHash;
+		hello.sessionRulesHash = manifest.sessionRulesHash; hello.sessionIdentityHash = manifest.sessionIdentityHash;
+		hello.minProtocolVersion = hello.maxProtocolVersion = NetProtocol::c_Version;
+		hello.displayName = "Pending player";
+		for (size_t index = 0; index < pending.size(); ++index) {
+			auto& transport = pending[index];
+			if (!transport.Connect("loopback", port, &error)) return Fail(error);
+			hello.clientNonce = ++nonce;
+			std::vector<uint8_t> bytes;
+			if (!NetProtocol::Encode({1, 0, hello}, bytes) || !transport.Send(1, NetTransportLane::ControlReliable, bytes, &error)) return Fail(error);
+			pump(nullptr, &transport, 20);
+			bool challenged = false, full = false;
+			for (const auto& event: transport.PollEvents()) {
+				if (event.type != NetTransportEventType::PacketReceived) continue;
+				const auto decoded = NetProtocol::Decode(event.bytes);
+				if (!decoded.ok) return Fail("pending proof did not decode");
+				challenged = challenged || std::holds_alternative<NetParticipantChallenge>(decoded.message.payload);
+				if (const auto* rejected = std::get_if<NetJoinRejected>(&decoded.message.payload)) full = rejected->rejectReason == NetRejectReason::SessionFull;
+			}
+			if (challenged != (index < NetSession::c_MaxPendingAdmissions) || full != (index == NetSession::c_MaxPendingAdmissions) || !originalKept())
+				return Fail("a pending lobby proof changed the player cap or its bounded admission range");
+		}
+		for (auto& transport: pending) transport.Stop();
+		owner.Close("returning from the lobby");
+		pump(nullptr, nullptr, 20);
+		LoopbackTransport returningTransport;
+		NetSession returning;
+		NetReconnectClient returningClient;
+		returningClient.Configure(&ownerStore, MakeIdentity(), "Original player");
+		returningClient.SetUnixClock(&FixedUnixClock, &unixNow);
+		returningClient.SetHostContext("loopback", MakeHash(5));
+		returningClient.SetConnectionAuthority(&ownerAuthority);
+		returningClient.SetRequireStoredTicket(true);
+		returning.SetReconnectClient(&returningClient);
+		returning.EnableParticipantProof(&ownerKey);
+		if (!returning.StartClient(returningTransport, "loopback", MakeSessionConfig(port, ++nonce, "Original player"), &error)) return Fail(error);
+		pump(&returning, &returningTransport);
+		if (!returning.IsReady() || !returningClient.UsedStoredTicket() || returningClient.GetIncarnation() != 2 ||
+		    host.GetReadyPeerCount() != 1 || returning.GetLocalPeerId() != MakeSeatTable().front().peerId || admission.IsLiveMatch())
+			return Fail("the original player could not reclaim its lobby seat: " + returning.BuildRejectText());
+		std::cout << "[net-reconnect-session-selftest] PASS signed_lobby copied_join_and_rejoin=named_refusal ban=refused version=refused uncommitted_ready=refused pending=bounded owner=same_seat" << std::endl;
+		return 0;
+	}
+
+	int TestSignedSeatOwnership() {
+		if (const int result = TestSignedSeatLobbyAdmission(); result != 0) return result;
+		std::string error;
+		if (!ResetLaneDirectory(&error)) return Fail(error);
+		if (!GetNetParticipantCrypto().IsRealCrypto()) return Fail("signed seats need the real participant crypto provider");
+		uint64_t unixNow = 1700000000000ULL;
+		NetParticipantIdentityStore hostKey, ownerKey, otherKey;
+		hostKey.SetPath(StorePath("lease-host-key")); ownerKey.SetPath(StorePath("lease-owner-key")); otherKey.SetPath(StorePath("lease-other-key"));
+		if (!hostKey.LoadOrCreate(&error) || !ownerKey.LoadOrCreate(&error) || !otherKey.LoadOrCreate(&error)) return Fail("signed seat keys: " + error);
+		NetConnectionAuthority hostAuthority, ownerAuthority, otherAuthority;
+		hostAuthority.Configure(&hostKey, "", "", ""); ownerAuthority.Configure(&ownerKey, "", "", ""); otherAuthority.Configure(&otherKey, "", "", "");
+		Wire wire; ConfigureWire(wire);
+		wire.host.SetUnixClock(&FixedUnixClock, &unixNow);
+		wire.host.SetConnectionAuthority(&hostAuthority);
+		wire.host.SetParticipantProofRequired(true);
+		Endpoint owner; owner.connection = 501;
+		ConfigureEndpoint(owner, "Original player", &unixNow);
+		owner.client.SetConnectionAuthority(&ownerAuthority);
+		wire.host.BindParticipantId(owner.connection, ownerKey.PublicId());
+		wire.Add(&owner);
+		if (!owner.client.BeginNewJoin(0, &error) || !wire.Pump(&error) || owner.client.GetState() != NetH4ClientState::Joined)
+			return Fail("signed direct admission: " + error);
+		NetH4TicketRecord first;
+		NetSeatLease lease;
+		if (owner.store.Load(unixNow, first) != NetH4TicketLoadResult::Loaded ||
+		    !NetSeatLease::Decode(first.seatToken, first.authorityKey, lease) || lease.participant != ownerKey.PublicId() || !lease.directorySessionId.empty())
+			return Fail("direct admission did not persist its host-signed, player-bound seat");
+		NetSeatLease damaged;
+		std::string tampered = first.seatToken; tampered[40] = tampered[40] == 'A' ? 'B' : 'A';
+		if (NetSeatLease::Decode(tampered, first.authorityKey, damaged) || NetSeatLease::Decode(first.seatToken, otherKey.PublicId(), damaged))
+			return Fail("a modified seat or wrong issuer passed signature verification");
+		Endpoint copy; copy.connection = 502;
+		ConfigureEndpoint(copy, "Copied seat", &unixNow);
+		copy.client.SetConnectionAuthority(&otherAuthority);
+		wire.host.BindParticipantId(copy.connection, otherKey.PublicId());
+		wire.Add(&copy);
+		if (!copy.store.Store(first) || !copy.client.BeginReclaim(first, wire.nowMs, &error) || !wire.Pump(&error)) return Fail("copied seat request: " + error);
+		const auto* refused = LastOf<NetJoinRejected>(wire.Delivered(copy.connection));
+		NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
+		if (!refused || refused->rejectReason != NetRejectReason::IdentityUnproven || refused->humanMessage.find("Original player") == std::string::npos ||
+		    !wire.host.GetSeatHolder(first.stableSeat, holder, generation, incarnation) || holder != owner.connection || generation != first.holderGeneration)
+			return Fail("a copied seat was not refused by its owner's name while preserving the original connection");
+		const auto* offer = LastOf<NetH4TicketOffer>(wire.Delivered(owner.connection));
+		if (!offer || !wire.SendRaw(copy.connection, NetH4TicketStoredAck{c_NetH4Version, offer->txId, offer->stableSeat, offer->holderGeneration, true}, &error))
+			return Fail("cached commit replay setup");
+		wire.DrainHostOutbound();
+		if (CountOf<NetH4JoinCommitted>(wire.Delivered(copy.connection)) != 0) return Fail("a copied acknowledgement replayed another player's commit");
+		if (!owner.store.DismissOffer(first)) return Fail("signed seat dismissal");
+		unixNow += 151000; wire.nowMs += 151000;
+		if (!wire.Pump(&error)) return Fail(error);
+		NetH4TicketRecord renewed;
+		NetSeatLease refreshed;
+		if (owner.store.Load(unixNow, renewed) != NetH4TicketLoadResult::Loaded || renewed.seatToken == first.seatToken ||
+		    !NetSeatLease::Decode(renewed.seatToken, renewed.authorityKey, refreshed) || !refreshed.SameSeat(lease) ||
+		    !refreshed.Usable(unixNow / 1000) || !owner.store.IsOfferDismissed(renewed)) return Fail("renewing a seat changed its binding or redisplayed a dismissed offer");
+		NetSeatAuthRegistry successor;
+		if (!successor.ImportMigrationState(wire.registry.ExportMigrationState()) || successor.HostLeaseSigningKey() != wire.registry.HostLeaseSigningKey())
+			return Fail("host migration lost the direct match's lease signing key");
+		refreshed.issuedAt += 150; refreshed.expiresAt += 150;
+		if (!NetSeatLease::Sign(successor.HostLeaseSigningKey(), refreshed) || !NetSeatLease::Decode(refreshed.token, first.authorityKey, damaged))
+			return Fail("the successor could not renew the direct host's signed seat");
+		ownerAuthority.Suspend();
+		if (ownerAuthority.AdoptLocalLease(refreshed) || ownerAuthority.LocalLease()) return Fail("leaving restarted background seat renewal");
+		if (!ownerAuthority.RestoreLease(refreshed) || !ownerAuthority.LocalLease()) return Fail("manual rejoin could not restore the suspended seat");
+		NetReconnectUx ux; ux.SetRetainedSeat(true); ux.NoteConnected(0); ux.NoteDropped(1, "directory unavailable");
+		for (uint64_t attempt = 0; attempt < 50; ++attempt) {
+			const uint64_t now = 1 + attempt * 60000;
+			if (!ux.Tick(now)) return Fail("a retained seat stopped waiting during a long outage");
+			ux.NoteAttemptStarted(now); ux.NoteAttemptFailed(now + 100, "directory unavailable");
+		}
+		ux.Cancel(4000000);
+		if (ux.Tick(5000000) || ux.GetState() != NetReconnectUxState::Cancelled) return Fail("Cancel did not stop retained-seat recovery");
+		if (hostAuthority.CheckIns() != 0 || ownerAuthority.CheckIns() != 0) return Fail("a direct match checked in with a directory");
+		std::cout << "[net-reconnect-session-selftest] PASS signed_seats copied_token=named_refusal owner=unchanged renewal=same_seat migration=same_issuer cancel=stops direct=offline" << std::endl;
+		return 0;
+	}
+
 	int NetReconnectSessionSelfTest::Run() {
+		if (const char* selected = std::getenv("CCCP_TEST_RECONNECT_CASE")) {
+			if (std::string(selected) == "applicant-decisions") return TestApplicantDecisionsKeepTheHolder();
+			if (std::string(selected) == "signed-seats") return TestSignedSeatOwnership();
+			return Fail("unknown selected reconnect check");
+		}
+		if (const int result = TestApplicantDecisionsKeepTheHolder(); result != 0) return result;
+		if (const int result = TestSignedSeatOwnership(); result != 0) return result;
 		if (const int result = TestLocalHostPresence(); result != 0) return result;
 		if (const int result = TestRemovalStoreKindsAndAlias(); result != 0) return result;
 		if (const int result = TestStoreFailsClosed(); result != 0) {
@@ -9247,7 +9515,7 @@ namespace RTE {
 		if (const int result = TestSessionWiring(); result != 0) {
 			return result;
 		}
-		if (const int result = TestReapedLobbySeatReturnsToThePool(); result != 0) {
+		if (const int result = TestReapedLobbySeatRetainsItsHolder(); result != 0) {
 			return result;
 		}
 		if (const int result = TestSessionEndIsTheOnlySignal(); result != 0) {

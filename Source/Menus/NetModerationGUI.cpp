@@ -11,6 +11,8 @@
 #include "NetSession.h"
 #include "NetHostOptionsText.h"
 #include "NetPlayerPresentation.h"
+#include "NetChatPresentation.h"
+#include "GUISound.h"
 #include "ScenarioRunner.h"
 #include "SettingsMan.h"
 #include "System.h"
@@ -19,6 +21,7 @@
 #include "FrameRecorder.h"
 #include "UInputMan.h"
 #include "GUI.h"
+#include "GUIDrawRecord.h"
 #include <chrono>
 #include <array>
 #include "GUIEvent.h"
@@ -69,10 +72,10 @@ namespace {
 	constexpr int c_PanelMaxLost = 318;
 
 	/// The panel's top row: centred, but under the status widget's band on a screen with the rows for both.
-	int PanelTop(int screenHeight) {
+	int PanelTop(int screenHeight, int wantedHeight = c_PanelHeight) {
 		const int band = (screenHeight < c_CompactMaxHeight ? c_StripBandBottom : c_StatusBoxTop + c_StatusBoxHeight) + c_PanelGap;
-		const int lowest = std::max(0, screenHeight - c_PanelHeight - c_PanelGap);
-		return std::clamp((screenHeight - c_PanelHeight) / 2, std::min(band, lowest), lowest);
+		const int lowest = std::max(0, screenHeight - wantedHeight - c_PanelGap);
+		return std::clamp((screenHeight - wantedHeight) / 2, std::min(band, lowest), lowest);
 	}
 
 	/// What the overlay may use while the synchronized setup editor holds the world. The editor owns the top
@@ -187,7 +190,7 @@ namespace {
 	}
 
 	/// The run an open entry needs above the seats panel: one history row and the tight entry.
-	int ChatEntryMinimum(int lineHeight) { return lineHeight + lineHeight + 4; }
+	int ChatEntryMinimum(int lineHeight) { return 4 * lineHeight + 28; }
 
 	std::string DisplayName(std::string text) {
 		for (char& c: text) if (static_cast<unsigned char>(c) < 32) c = ' ';
@@ -266,9 +269,8 @@ namespace {
 	// The roster names this machine's own seat held or rejoining until the host says it is back.
 	bool OwnRosterSeatHeld() {
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
-		return std::any_of(snapshot.members.begin(), snapshot.members.end(), [&snapshot](const auto& member) {
-			return member.peerId == snapshot.localPeerId && !member.cpu && (member.aiHeld || member.reclaiming) && !ScenarioRunner::IsLockstepSeatReleased(member.peerId);
-		});
+		const auto view = g_NetMatchService.GetSeatView(snapshot.localPeerId);
+		return NetPlayerPresentation::OwnSeatHeld(snapshot, view, !view && ScenarioRunner::IsLockstepSeatReleased(snapshot.localPeerId));
 	}
 
 	/// This player's own seat on its way back: the roster holds it, or this peer replays its hold while it catches up.
@@ -477,6 +479,8 @@ NetModerationGUI::NetModerationGUI(AllegroScreen* screen) :
 		seat.actions[2] = button("NetworkSeatCancel" + suffix, "Cancel this approval", 10, 40, 150);
 		seat.remove = button("NetworkSeatRemove" + suffix, "", 10, 40, 120);
 		seat.ban = button("NetworkSeatBan" + suffix, "", 10, 40, 180);
+		seat.declineApplicant = button("NetworkSeatDeclineApplicant" + suffix, "", 10, 40, 150);
+		seat.banApplicant = button("NetworkSeatBanApplicant" + suffix, "", 10, 40, 180);
 		HideRow(seat);
 	}
 	m_Panel->SetVisible(false);
@@ -508,6 +512,16 @@ void NetModerationGUI::CreateOverlay() {
 	m_MatchChatInput = dynamic_cast<GUITextBox*>(m_OverlayControls->AddControl("TextMatchChatInput", "TEXTBOX", nullptr, 0, 0, 20, 16));
 	m_MatchChatInput->SetMaxTextLength(static_cast<int>(NetProtocol::c_MaxShortTextBytes));
 	m_MatchChatInput->SetVisible(false);
+	m_MatchChatCaption = dynamic_cast<GUILabel*>(m_OverlayControls->AddControl("LabelMatchChatAudience", "LABEL", nullptr, 0, 0, 20, 16));
+	m_MatchChatCaption->SetHAlignment(GUIFont::Left);
+	m_MatchChatCaption->SetVAlignment(GUIFont::Top);
+	m_ChatOlder = dynamic_cast<GUIButton*>(m_OverlayControls->AddControl("ButtonMatchChatOlder", "BUTTON", nullptr, 0, 0, 96, 20));
+	m_ChatOlder->SetText("Older messages");
+	m_ChatNewer = dynamic_cast<GUIButton*>(m_OverlayControls->AddControl("ButtonMatchChatNewer", "BUTTON", nullptr, 0, 0, 96, 20));
+	m_ChatNewer->SetText("Newer messages");
+	m_MatchChatCaption->SetVisible(false);
+	m_ChatOlder->SetVisible(false);
+	m_ChatNewer->SetVisible(false);
 }
 
 bool NetModerationGUI::SetOpen(bool open) {
@@ -528,6 +542,8 @@ bool NetModerationGUI::SetOpen(bool open) {
 		m_More->SetPushed(false);
 		m_OptionsView = false;
 		m_PageFirstPeer = 0;
+		m_PageFirstTeam = 0;
+		m_PageFirstCpu = false;
 		for (auto& seat: m_Seats) {
 			for (auto* button: seat.actions) button->SetPushed(false);
 			seat.remove->SetPushed(false);
@@ -574,10 +590,11 @@ NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanel(int highestTo
 	return {std::max(0, std::min(chosen->top, bottomLimit - height)), height};
 }
 
-NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int screenHeight, int rowHeight, const std::vector<PanelBand>& textBands, int reservedTop) {
+NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int screenHeight, int rowHeight, const std::vector<PanelBand>& textBands, int reservedTop, int wantedHeight) {
 	const int minHeight = c_PanelHeight - c_PanelMaxLost;
-	const int top = PanelTop(screenHeight);
-	const int height = std::max(minHeight, std::min(c_PanelHeight, screenHeight - c_PanelGap - top));
+	wantedHeight = std::clamp(wantedHeight, minHeight, c_PanelHeight);
+	const int top = PanelTop(screenHeight, wantedHeight);
+	const int height = std::max(minHeight, std::min(wantedHeight, screenHeight - c_PanelGap - top));
 	if (screenHeight >= c_CompactMaxHeight) {
 		const int fittedTop = std::max(top, reservedTop);
 		return {fittedTop, std::max(minHeight, std::min(height, screenHeight - c_PanelGap - fittedTop))};
@@ -592,7 +609,7 @@ NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int s
 	for (const PanelBand& band: textBands) {
 		bands.push_back({band.top, band.bottom + rowHeight + 2 * c_PanelGap});
 	}
-	const int wanted = std::max(minHeight, std::min(c_PanelHeight, screenHeight - c_PanelGap - highestTop));
+	const int wanted = std::max(minHeight, std::min(wantedHeight, screenHeight - c_PanelGap - highestTop));
 	return PlaceSeatsPanel(highestTop, screenHeight - c_PanelGap, wanted, minHeight, bands);
 }
 
@@ -616,6 +633,8 @@ namespace {
 	/// say it - its marker clears the moment the lobby seats, and on a Failed landing at once.
 	bool PostMatchLobbyAlive() {
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+		const auto state = g_NetMatchService.GetState();
+		if (state == NetMatchServiceState::Failed || state == NetMatchServiceState::Idle) return false;
 		return g_NetMatchService.NeedsCompletedLobbyPump() ||
 		    (snapshot.playedAMatch && snapshot.active && !snapshot.leftMatch);
 	}
@@ -647,7 +666,10 @@ void NetModerationGUI::LayoutPanel() {
 	const int screenHeight = g_WindowMan.GetResY();
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
 	const int rowHeight = std::max(12, font ? font->GetFontHeight() : 12) + 8;
-	const int width = std::min(c_PanelWidth, g_WindowMan.GetResX() - 12);
+	int wantedWidth = 430;
+	if (m_OptionsView || m_Rows.size() > m_Seats.size() || std::any_of(m_Rows.begin(), m_Rows.end(), [](const PanelRow& row) { return row.decision.has_value(); })) wantedWidth = c_PanelWidth;
+	for (const auto& row: m_Rows) wantedWidth = std::max(wantedWidth, std::min(c_PanelWidth, m_LabelFont->CalculateWidth(row.name + "  /  " + row.state) + 28));
+	const int width = std::min(wantedWidth, g_WindowMan.GetResX() - 12);
 	const EditorArea area = FreeArea(g_WindowMan.GetResX());
 	std::vector<PanelBand> textBands;
 	for (const auto& band: area.textBands) {
@@ -661,7 +683,16 @@ void NetModerationGUI::LayoutPanel() {
 		const int lineHeight = ChatLineHeight(g_SettingsMan.GetNetworkChatTextSize() == SettingsMan::NetworkChatTextSize::Large);
 		reservedTop = std::max(reservedTop, ChatTopLimit(area, screenHeight) + ChatEntryMinimum(lineHeight) + c_PanelGap);
 	}
-	const PanelPlacement placed = PlaceSeatsPanelOnScreen(screenHeight, rowHeight, textBands, reservedTop);
+	int wantedHeight = 144;
+	if (m_OptionsView) {
+		wantedHeight = 76 + m_Options->GetTextHeight();
+	} else if (g_NetMatchService.IsHost()) {
+		wantedHeight = 40 + rowHeight + 4 + 36 + 32;
+		for (size_t row = m_PageStart; row < m_Rows.size() && row < m_PageStart + m_Seats.size(); ++row) wantedHeight += RowHeight(m_Rows[row], width - 20);
+	} else {
+		wantedHeight = 76 + m_Roster->GetTextHeight();
+	}
+	const PanelPlacement placed = PlaceSeatsPanelOnScreen(screenHeight, rowHeight, textBands, reservedTop, std::clamp(wantedHeight, 144, c_PanelHeight));
 	const int top = placed.top;
 	const int height = placed.height;
 	const int lost = std::min(c_PanelMaxLost, c_PanelHeight - height);
@@ -671,14 +702,18 @@ void NetModerationGUI::LayoutPanel() {
 		m_Panel->Move((g_WindowMan.GetResX() - width) / 2, top);
 		m_Panel->Resize(width, height);
 	}
+	for (GUILabel* label: {m_Title, m_Summary, m_Roster, m_Options, m_Status}) {
+		if (label->GetWidth() != width - 20) label->Resize(width - 20, label->GetHeight());
+	}
 	// The roster yields the reserved rows and scrolls for what no longer fits; the status row gives up
 	// its second line first, then moves up with the close row instead of clipping at the panel's bottom.
 	// The options view shares that band, so it takes the same shrink and the same scroll.
-	if (m_Options->GetHeight() != 240 - lost) {
-		m_Options->Resize(m_Options->GetWidth(), 240 - lost);
+	const int textHeight = std::max(0, height - 76);
+	if (m_Options->GetHeight() != textHeight) {
+		m_Options->Resize(m_Options->GetWidth(), textHeight);
 	}
-	if (!g_NetMatchService.IsHost() && m_Roster->GetHeight() != 240 - lost) {
-		m_Roster->Resize(m_Roster->GetWidth(), 240 - lost);
+	if (!g_NetMatchService.IsHost() && m_Roster->GetHeight() != textHeight) {
+		m_Roster->Resize(m_Roster->GetWidth(), textHeight);
 	}
 	m_Roster->SetVerticalOverflowScroll(lost != 0);
 	m_Roster->ActivateDeactivateOverflowScroll(lost != 0);
@@ -694,7 +729,7 @@ void NetModerationGUI::LayoutPanel() {
 	if (m_Status->GetHeight() != statusHeight) {
 		m_Status->Resize(m_Status->GetWidth(), statusHeight);
 	}
-	if (m_Close->GetRelYPos() != closeY) {
+	if (m_Close->GetRelYPos() != closeY || m_Close->GetRelXPos() != width - 224) {
 		m_Close->SetPositionRel(width - 224, closeY);
 		m_OptionsToggle->SetPositionRel(10, closeY);
 	}
@@ -703,9 +738,11 @@ void NetModerationGUI::LayoutPanel() {
 namespace {
 	/// A button sized to its caption, the name in it shortened first when the caption would pass the room it has.
 	void Caption(GUIButton* button, GUIFont* font, const std::string& before, const std::string& name, const std::string& after, int room) {
-		std::string text = before + name + after;
-		const int fixed = font->CalculateWidth(before + after) + 20;
-		if (font->CalculateWidth(text) + 20 > room) text = before + FitName(font, name, std::max(24, room - fixed)) + after;
+		// Keep the player's name before spending the button's room on an optional explanation.
+		const std::string suffix = font->CalculateWidth(before + name + after) + 20 <= room ? after : std::string{};
+		std::string text = before + name + suffix;
+		const int fixed = font->CalculateWidth(before + suffix) + 20;
+		if (font->CalculateWidth(text) + 20 > room) text = before + FitName(font, name, std::max(1, room - fixed)) + suffix;
 		if (button->GetText() != text) button->SetText(text);
 		const int width = std::min(room, std::max(60, font->CalculateWidth(text) + 20));
 		if (button->GetWidth() != width) button->Resize(width, 20);
@@ -728,7 +765,7 @@ namespace {
 			case NetKickBanResult::ForbiddenTarget: return "the host's own place cannot be taken away";
 			case NetKickBanResult::UnknownSeat:
 			case NetKickBanResult::StaleSelection: return "that place changed - try again";
-			case NetKickBanResult::UnknownIdentity: return "that player is no longer in the match";
+			case NetKickBanResult::UnknownIdentity: return "the player's identity is not verified";
 			case NetKickBanResult::PersistenceFailed: return "the ban list could not be saved";
 			default: return "that is not possible right now";
 		}
@@ -756,7 +793,7 @@ namespace {
 		auto place = [](const NetModerationGUI::PanelRow& row) {
 			return row.seat ? std::make_pair(row.seat->stableSeat, row.seat->incarnation) : std::make_pair(uint16_t{0}, uint32_t{0});
 		};
-		auto request = [](const NetModerationGUI::PanelRow& row) { return row.decision ? row.decision->applicant : c_InvalidNetPeerId; };
+		auto request = [](const NetModerationGUI::PanelRow& row) { return row.decision ? row.decision->selection : NetModerationSelection{}; };
 		return shown.peer == pressed.peer && shown.opened == pressed.opened && place(shown) == place(pressed) && request(shown) == request(pressed);
 	}
 
@@ -777,11 +814,11 @@ int NetModerationGUI::RowHeight(const PanelRow& row, int inner) const {
 	}
 	const int below = std::max(6, RequestListHeight(m_LabelFont, requests) - 22 + 6);
 	const int whyLines = LineCount(WrapWhole(m_LabelFont, why, inner - listWidth - 12));
-	return 22 + lineHeight + 4 + 22 + std::max(below, whyLines * lineHeight + 6);
+	return 22 + lineHeight + 4 + 44 + std::max(below, whyLines * lineHeight + 6);
 }
 
 void NetModerationGUI::HideRow(Controls& controls) {
-	for (GUIControl* control: std::initializer_list<GUIControl*>{controls.name, controls.detail, controls.hint, controls.requests, controls.remove, controls.ban}) Show(control, false);
+	for (GUIControl* control: std::initializer_list<GUIControl*>{controls.name, controls.detail, controls.hint, controls.requests, controls.remove, controls.ban, controls.declineApplicant, controls.banApplicant}) Show(control, false);
 	for (auto* action: controls.actions) Show(action, false);
 }
 
@@ -790,14 +827,16 @@ std::vector<NetModerationGUI::PanelRow> NetModerationGUI::BuildRows(const NetLob
 	m_Model.Refresh(seats);
 	std::vector<PanelRow> held, playing;
 	for (const auto& member: snapshot.members) {
-		if (member.cpu || member.isLocal || member.peerId == snapshot.localPeerId) continue;
+		if (!member.cpu && (member.isLocal || member.peerId == snapshot.localPeerId)) continue;
 		PanelRow row;
 		row.peer = member.peerId;
+		row.team = member.team;
+		row.cpu = member.cpu;
 		for (size_t index = 0; index < m_Model.RowCount(); ++index) {
-			if (m_Model.GetRow(index).lockstepPeerId == member.peerId) row.decision = m_Model.GetRow(index);
+			if (!member.cpu && m_Model.GetRow(index).lockstepPeerId == member.peerId) row.decision = m_Model.GetRow(index);
 		}
 		// A place nobody holds any more is a line on the roster, unless a newcomer asks for it: then it is the host's to give.
-		row.opened = ShownRow(member) == "Open seat" || NetPlayerPresentation::Opened(member.peerId);
+		row.opened = !member.cpu && (ShownRow(member) == "Open seat" || NetPlayerPresentation::Opened(member.peerId));
 		if (row.opened && !(row.decision && !row.decision->view.applicants.empty())) continue;
 		row.name = row.opened ? "Open place (seat " + std::to_string(member.peerId) + ")" : DisplayName(ShownName(member));
 		// The roster's own reading after the name: the state, and the route while the link is live.
@@ -805,7 +844,7 @@ std::vector<NetModerationGUI::PanelRow> NetModerationGUI::BuildRows(const NetLob
 		const std::string prefix = DisplayName(ShownName(member)) + "  /  ";
 		row.state = full.starts_with(prefix) ? full.substr(prefix.size()) : NetPlayerPresentation::State(member);
 		for (const NetH4ModerationSeat& seat: seats) {
-			if (!seat.cpu && seat.lockstepPeerId == member.peerId) row.seat = seat;
+			if (!member.cpu && !seat.cpu && seat.lockstepPeerId == member.peerId) row.seat = seat;
 		}
 		(row.decision ? held : playing).push_back(std::move(row));
 	}
@@ -814,8 +853,8 @@ std::vector<NetModerationGUI::PanelRow> NetModerationGUI::BuildRows(const NetLob
 	// player, and an opened place while somebody asks for it.
 	m_RowsImplied = 0;
 	for (const auto& member: snapshot.members) {
-		if (member.cpu || member.isLocal || member.peerId == snapshot.localPeerId) continue;
-		const bool open = NetPlayerPresentation::Row(member) == "Open seat" || NetPlayerPresentation::Opened(member.peerId);
+		if (!member.cpu && (member.isLocal || member.peerId == snapshot.localPeerId)) continue;
+		const bool open = !member.cpu && (NetPlayerPresentation::Row(member) == "Open seat" || NetPlayerPresentation::Opened(member.peerId));
 		const bool asked = std::any_of(seats.begin(), seats.end(), [&](const NetH4ModerationSeat& seat) {
 			return !seat.cpu && seat.lockstepPeerId == member.peerId && !seat.applicants.empty();
 		});
@@ -841,9 +880,9 @@ int NetModerationGUI::FillRow(Controls& controls, const PanelRow& row, size_t sl
 	const int removeX = banX - 6 - controls.remove->GetWidth();
 	Place(controls.ban, banX, top);
 	Place(controls.remove, removeX, top);
-	Show(controls.ban, !row.opened);
-	Show(controls.remove, !row.opened);
-	const int nameWidth = row.opened ? inner : std::max(40, removeX - 16);
+	Show(controls.ban, !row.opened && !row.cpu);
+	Show(controls.remove, !row.opened && !row.cpu);
+	const int nameWidth = row.opened || row.cpu ? inner : std::max(40, removeX - 16);
 	controls.name->Resize(nameWidth, 20);
 	Place(controls.name, 10, top + 2);
 	controls.name->SetText(FitName(m_LabelFont, row.name, nameWidth));
@@ -852,15 +891,17 @@ int NetModerationGUI::FillRow(Controls& controls, const PanelRow& row, size_t sl
 	if (row.decision) {
 		const NetH4ModerationSeat& view = row.decision->view;
 		const std::string cause = NetModerationUx::HoldCause(view);
-		detail = NetPlayerPresentation::State(row.peer, false, view.dropped, view.reclaiming) + (cause.empty() ? "" : "  /  " + cause) +
+		detail = "Team " + std::to_string(view.team + 1) + "  /  " + NetPlayerPresentation::State(row.peer, false, view.dropped, view.reclaiming) + (cause.empty() ? "" : "  /  " + cause) +
 		         (view.joinProgress.empty() ? "" : "  /  " + view.joinProgress);
 	}
-	if (!removable && running && !row.opened) detail += "  /  changes are paused for a moment";
+	if (!removable && running && !row.opened && !row.cpu) detail += "  /  changes are paused for a moment";
 	controls.detail->Resize(inner, lineHeight);
 	Place(controls.detail, 10, top + 22);
 	controls.detail->SetText(FitLine(m_LabelFont, detail, inner));
 	Show(controls.detail, true);
 	if (!row.decision) {
+		Show(controls.declineApplicant, false);
+		Show(controls.banApplicant, false);
 		Show(controls.hint, false);
 		Show(controls.requests, false);
 		for (auto* action: controls.actions) Show(action, false);
@@ -887,6 +928,15 @@ int NetModerationGUI::FillRow(Controls& controls, const PanelRow& row, size_t sl
 		Show(controls.actions[action], shown);
 		if (shown) x += controls.actions[action]->GetWidth() + 6;
 	}
+	const bool requestActions = chosen && view.actionsAvailable && !view.substituting;
+	Caption(controls.declineApplicant, m_LabelFont, armed && m_Armed->kind == Armed::Kind::DeclineApplicant ? "Confirm: decline " : "Decline ", chosen ? applicant : "request", "", buttonRoom / 2);
+	Caption(controls.banApplicant, m_LabelFont, armed && m_Armed->kind == Armed::Kind::BanApplicant ? "Confirm: ban " : "Ban ", chosen ? applicant : "requester", "", buttonRoom / 2);
+	Place(controls.declineApplicant, 10, buttonsTop + 22);
+	Place(controls.banApplicant, 16 + controls.declineApplicant->GetWidth(), buttonsTop + 22);
+	controls.declineApplicant->SetEnabled(requestActions);
+	controls.banApplicant->SetEnabled(requestActions);
+	Show(controls.declineApplicant, !view.applicants.empty());
+	Show(controls.banApplicant, !view.applicants.empty());
 	// The people asking for this place, or why the give-away has nobody to name.
 	const std::string why = RowWhy(row);
 	const int listX = 10 + inner - listWidth;
@@ -929,13 +979,14 @@ int NetModerationGUI::FillRow(Controls& controls, const PanelRow& row, size_t sl
 	if (controls.hint->GetText() != wrapped) controls.hint->SetText(wrapped);
 	const int hintHeight = std::max(1, LineCount(wrapped)) * lineHeight;
 	if (controls.hint->GetWidth() != hintWidth || controls.hint->GetHeight() != hintHeight) controls.hint->Resize(hintWidth, hintHeight);
-	Place(controls.hint, view.applicants.empty() ? listX : 10, view.applicants.empty() ? listTop : buttonsTop + 22);
+	Place(controls.hint, view.applicants.empty() ? listX : 10, view.applicants.empty() ? listTop : buttonsTop + 44);
 	Show(controls.hint, !why.empty());
 	return RowHeight(row, inner);
 }
 
 void NetModerationGUI::Refresh() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+	if (snapshot.isHost && !m_OptionsView) m_Rows = BuildRows(snapshot);
 	LayoutPanel();
 	// The hold is the round's, read from the same place the stall overlay reads it.
 	std::string holdName;
@@ -943,7 +994,7 @@ void NetModerationGUI::Refresh() {
 	const bool holdPause = ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds);
 	m_Title->SetText(m_OptionsView ? "MATCH DETAILS" :
 	    NetModerationPanelTitle(snapshot.serviceState == "Running", holdPause, DisplayName(holdName), holdSeconds, ScenarioRunner::IsLockstepPaused()));
-	m_OptionsToggle->SetText(m_OptionsView ? "Back to players" : "Rules for this round");
+	m_OptionsToggle->SetText(m_OptionsView ? (m_ConnectionView ? "Back to players" : "Connection details") : "Rules for this round");
 	m_Options->SetVisible(m_OptionsView);
 	if (m_Armed && PanelNowMs() > m_Armed->untilMs) {
 		m_Armed.reset();
@@ -952,13 +1003,14 @@ void NetModerationGUI::Refresh() {
 	if (m_OptionsView) {
 		// The adopted config every peer runs this round by - read-only here the way the lobby's
 		// Details reads it for a client; the editable pages are the lobby's own.
-		std::string options = NetHostOptionsSummary(g_NetMatchService.GetLobbyMatchConfig(), snapshot);
-		if (snapshot.isHost) {
+		std::string options = m_ConnectionView ? NetHostConnectionSummary(g_NetMatchService.GetLobbyMatchConfig(), snapshot) : NetHostOptionsSummary(g_NetMatchService.GetLobbyMatchConfig(), snapshot);
+		if (snapshot.isHost && m_ConnectionView) {
 			options += "\nRepair match: " + std::string(NetHostRepairEnabled(g_NetMatchService)
 			    ? "Ready - pause menu > Match Details" : NetHostRepairHint(g_NetMatchService));
 		}
 		m_Options->SetText(WrapText(m_LabelFont, FitTokens(m_LabelFont, options, m_Options->GetWidth()), m_Options->GetWidth()));
-		m_Summary->SetText("Rules for this round");
+		m_Summary->SetText(m_ConnectionView ? "Connection details" : "Rules for this round");
+		LayoutPanel();
 		m_Status->SetVisible(false);
 		m_Roster->SetVisible(false);
 		m_RowsShown = 0;
@@ -976,18 +1028,17 @@ void NetModerationGUI::Refresh() {
 		m_Summary->SetText("Only the host can keep, give away or remove a player's place");
 		std::string roster;
 		for (const auto& member: snapshot.members) {
-			if (member.cpu) continue;
 			std::string line = DisplayName(ShownRow(member));
-			if (member.isLocal || member.peerId == snapshot.localPeerId) line.insert(DisplayName(ShownName(member)).size(), " (you)");
+			if (!member.cpu && (member.isLocal || member.peerId == snapshot.localPeerId)) line.insert(DisplayName(ShownName(member)).size(), " (you)");
 			roster += (roster.empty() ? "" : "\n\n") + line;
 		}
 		Place(m_Roster, 10, 40);
 		m_Roster->SetText(WrapText(m_LabelFont, FitTokens(m_LabelFont, roster, m_Roster->GetWidth()), m_Roster->GetWidth()));
 		m_Roster->SetVisible(true);
 		m_Status->SetVisible(false);
+		LayoutPanel();
 		return;
 	}
-	m_Rows = BuildRows(snapshot);
 	size_t away = 0, requests = 0;
 	// An opened place leads the rows but nobody is away from it: the sentence names the player who is.
 	const PanelRow* awayRow = nullptr;
@@ -1000,7 +1051,8 @@ void NetModerationGUI::Refresh() {
 			requests += row.decision->applicants;
 		}
 	}
-	std::string summary = away == 0 ? "Everyone is playing" : away == 1 ? awayRow->name + " is away" : std::to_string(away) + " players are away";
+	const bool ownHeld = OwnRosterSeatHeld() || ScenarioRunner::IsLockstepOwnSeatHeld();
+	std::string summary = NetPlayerPresentation::PlayingSummary(ownHeld, away, awayRow ? awayRow->name : std::string());
 	if (requests) summary += requests == 1 ? " - 1 request to join" : " - " + std::to_string(requests) + " requests to join";
 	m_Summary->SetText(FitLine(m_LabelFont, summary, m_Summary->GetWidth()));
 	// The host's own line leads, then a page of the other players' rows, above the status line that says what an action will do
@@ -1024,7 +1076,7 @@ void NetModerationGUI::Refresh() {
 	// The page shown is the one that holds the player it began with, so it stays put while rows come and go around it.
 	size_t page = 0;
 	for (size_t index = 0; index < m_Rows.size(); ++index) {
-		if (m_Rows[index].peer != m_PageFirstPeer) continue;
+		if (m_Rows[index].peer != m_PageFirstPeer || m_Rows[index].team != m_PageFirstTeam || m_Rows[index].cpu != m_PageFirstCpu) continue;
 		page = static_cast<size_t>(std::upper_bound(pageStarts.begin(), pageStarts.end(), index) - pageStarts.begin()) - 1;
 		break;
 	}
@@ -1032,15 +1084,21 @@ void NetModerationGUI::Refresh() {
 	m_PageTurn = false;
 	m_PageStart = m_Rows.empty() ? 0 : pageStarts[page];
 	m_PageFirstPeer = m_Rows.empty() ? 0 : m_Rows[m_PageStart].peer;
+	m_PageFirstTeam = m_Rows.empty() ? 0 : m_Rows[m_PageStart].team;
+	m_PageFirstCpu = !m_Rows.empty() && m_Rows[m_PageStart].cpu;
 	const size_t shown = (page + 1 < pageStarts.size() ? pageStarts[page + 1] : m_Rows.size()) - m_PageStart;
 	std::string own;
 	std::vector<std::string> lines;
 	for (const auto& member: snapshot.members) {
-		if (member.cpu) continue;
-		const bool self = member.isLocal || member.peerId == snapshot.localPeerId;
+		const bool self = !member.cpu && (member.isLocal || member.peerId == snapshot.localPeerId);
 		const bool listed = std::any_of(m_Rows.begin(), m_Rows.end(), [&](const PanelRow& row) { return row.peer == member.peerId; });
 		if (self) {
-			own = DisplayName(ShownName(member)) + " (you)  /  " + NetPlayerPresentation::State(member);
+			own = DisplayName(ShownName(member)) + " (you)  /  Team " + std::to_string(member.team + 1) + "  /  " + NetPlayerPresentation::State(member);
+			if (const auto view = g_NetMatchService.GetSeatView(member.peerId); view && view->seat.holdCause != NetSeatHoldCause::None) {
+				NetH4ModerationSeat held;
+				held.holdCause = view->seat.holdCause;
+				own += "  /  " + NetModerationUx::HoldCause(held);
+			}
 		} else if (!listed) {
 			lines.push_back(DisplayName(ShownRow(member)));
 		}
@@ -1092,7 +1150,8 @@ void NetModerationGUI::Refresh() {
 void NetModerationGUI::DropStaleArmed() {
 	if (!m_Armed) return;
 	const bool here = m_Armed->slot < m_RowsShown && SlotRow(m_Armed->slot).peer == m_Armed->peer && SlotRow(m_Armed->slot).seat &&
-	                  SlotRow(m_Armed->slot).seat->stableSeat == m_Armed->stableSeat && SlotRow(m_Armed->slot).seat->incarnation == m_Armed->incarnation;
+	                  SlotRow(m_Armed->slot).seat->stableSeat == m_Armed->stableSeat && SlotRow(m_Armed->slot).seat->incarnation == m_Armed->incarnation &&
+	                  NetSelectModerationSeat(*SlotRow(m_Armed->slot).seat, m_Armed->selection.applicant) == m_Armed->selection;
 	if (here) return;
 	// The confirming press would land on someone else now: the action is off, and the host is told why.
 	m_Armed.reset();
@@ -1110,12 +1169,20 @@ void NetModerationGUI::PressArmed(const PanelRow& row, size_t slot, Armed::Kind 
 	if (!row.seat) return;
 	const NetH4ModerationSeat& seat = *row.seat;
 	const NetPeerId applicant = row.decision ? row.decision->applicant : c_InvalidNetPeerId;
+	const bool targetsApplicant = kind == Armed::Kind::DeclineApplicant || kind == Armed::Kind::BanApplicant;
+	const auto selection = NetSelectModerationSeat(seat, (targetsApplicant || kind == Armed::Kind::Let) ? applicant : c_InvalidNetPeerId);
+	if (targetsApplicant && selection.applicant == c_InvalidNetPeerId) return;
 	const bool second = m_Armed && m_Armed->kind == kind && m_Armed->slot == slot && m_Armed->peer == row.peer && m_Armed->stableSeat == seat.stableSeat &&
-	                    m_Armed->incarnation == seat.incarnation && m_Armed->applicant == applicant && PanelNowMs() <= m_Armed->untilMs;
+	                    m_Armed->incarnation == seat.incarnation && m_Armed->applicant == applicant && m_Armed->selection == selection && PanelNowMs() <= m_Armed->untilMs;
 	if (!second) {
 		m_Armed = Armed{kind, slot, row.peer, seat.stableSeat, seat.incarnation, applicant, PanelNowMs() + 6000};
+		m_Armed->selection = selection;
 		const std::string name = row.name;
-		if (kind == Armed::Kind::Let) {
+		if (targetsApplicant) {
+			const auto newcomer = NetModerationUx::ApplicantName(*row.decision);
+			m_PanelStatus = kind == Armed::Kind::DeclineApplicant ? "Decline " + newcomer + "'s request; " + name + " keeps this place - press again"
+			    : "Ban " + newcomer + " from this session; " + name + " keeps this place - press again";
+		} else if (kind == Armed::Kind::Let) {
 			const std::string newcomer = row.decision ? NetModerationUx::ApplicantName(*row.decision) : std::string("the player");
 			m_PanelStatus = row.opened ? newcomer + " takes this open place - press again to confirm"
 			                           : newcomer + " takes " + name + "'s place and " + name + " cannot return to it - press again to confirm";
@@ -1132,8 +1199,14 @@ void NetModerationGUI::PressArmed(const PanelRow& row, size_t slot, Armed::Kind 
 		m_ActionResult = m_Model.Act(*row.decision, NetModerationAction::Substitute);
 		return;
 	}
-	const NetParticipantRemovalAction action = kind == Armed::Kind::Remove ? NetParticipantRemovalAction::Kick : NetParticipantRemovalAction::BanSession;
-	const NetKickBanResult result = g_NetMatchService.RemoveParticipant(NetSelectModerationSeat(seat), action);
+	const NetParticipantRemovalAction action = kind == Armed::Kind::Remove || kind == Armed::Kind::DeclineApplicant ? NetParticipantRemovalAction::Kick : NetParticipantRemovalAction::BanSession;
+	const NetKickBanResult result = g_NetMatchService.RemoveParticipant(selection, action);
+	if (targetsApplicant) {
+		const auto newcomer = NetModerationUx::ApplicantName(*row.decision);
+		m_PanelStatus = result == NetKickBanResult::Ok ? (kind == Armed::Kind::DeclineApplicant ? newcomer + "'s request was declined." : newcomer + " was banned from this session.")
+		    : "Request unchanged: " + RemovalWords(result) + ".";
+		return;
+	}
 	const char* done = kind == Armed::Kind::Remove ? " was removed from the match." : " was banned from this session.";
 	if (result == NetKickBanResult::Ok) {
 		m_PanelStatus = row.name + done;
@@ -1156,7 +1229,9 @@ bool NetModerationGUI::HandleEvents() {
 		if (event.GetType() == GUIEvent::Command && control == m_Close) { SetOpen(false); continue; }
 		if (event.GetType() == GUIEvent::Command && control == m_OptionsToggle) {
 			// A view that closes takes its press and its armed action with it.
-			m_OptionsView = !m_OptionsView;
+			if (!m_OptionsView) { m_OptionsView = true; m_ConnectionView = false; }
+			else if (!m_ConnectionView) m_ConnectionView = true;
+			else { m_OptionsView = false; m_ConnectionView = false; }
 			DropStalePress(false);
 			m_Armed.reset();
 			m_PanelStatus.clear();
@@ -1180,7 +1255,7 @@ bool NetModerationGUI::HandleEvents() {
 				continue;
 			}
 			const bool action = std::find(widgets.actions.begin(), widgets.actions.end(), control) != widgets.actions.end();
-			if (!action && control != widgets.remove && control != widgets.ban) continue;
+			if (!action && control != widgets.remove && control != widgets.ban && control != widgets.declineApplicant && control != widgets.banApplicant) continue;
 			if (event.GetType() == GUIEvent::Notification && event.GetMsg() == GUIButton::Pushed) {
 				// A new press replaces any kept one: only the player this control shows now can be acted on.
 				m_Press = Press{control, slot, SlotRow(slot)};
@@ -1194,7 +1269,11 @@ bool NetModerationGUI::HandleEvents() {
 					continue;
 				}
 				const PanelRow row = SlotRow(slot);
-				if (control == widgets.remove) {
+				if (control == widgets.declineApplicant) {
+					PressArmed(row, slot, Armed::Kind::DeclineApplicant);
+				} else if (control == widgets.banApplicant) {
+					PressArmed(row, slot, Armed::Kind::BanApplicant);
+				} else if (control == widgets.remove) {
 					if (!row.opened) PressArmed(row, slot, Armed::Kind::Remove);
 				} else if (control == widgets.ban) {
 					if (!row.opened) PressArmed(row, slot, Armed::Kind::Ban);
@@ -1242,6 +1321,13 @@ void NetModerationGUI::Update() {
 		m_ReadMs = nowMs;
 	}
 	const NetLobbySnapshot& snapshot = *m_FrameSnapshot;
+	const auto state = g_NetMatchService.GetState();
+	if (state == NetMatchServiceState::Failed || state == NetMatchServiceState::Idle) {
+		SetOpen(false);
+		m_ChatInMatch = false;
+		UpdateMatchChat(snapshot, false);
+		return;
+	}
 	if (frameDue) {
 		NoteSharedNames(snapshot);
 		const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
@@ -1308,7 +1394,6 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	// The announced input delay rides the corner box so the HUD shows what the lobby showed.
 	if (!snapshot.inputDelayText.empty()) text += "\n" + snapshot.inputDelayText;
 	for (const auto& member: snapshot.members) {
-		if (member.cpu) continue;
 		text += "\n" + DisplayName(ShownRow(member));
 	}
 	// The cap column: a token the box cannot grow past is ellipsized before the width rule measures it.
@@ -1345,7 +1430,7 @@ bool NetModerationGUI::AutomationWrapLines(const std::string& text, std::string&
 }
 
 bool NetModerationGUI::MatchStatusWanted() const {
-	if (g_SettingsMan.GetNetworkShowDiagnostics() || ScenarioRunner::IsLockstepLocalMachineSlow()) return true;
+	if (g_SettingsMan.GetNetworkShowDiagnostics() || ScenarioRunner::IsLockstepLocalMachineSlow() || OwnRosterSeatHeld() || ScenarioRunner::IsLockstepOwnSeatHeld()) return true;
 	switch (g_SettingsMan.GetNetworkMatchStatusMode()) {
 		case SettingsMan::NetworkMatchStatusMode::Off: return false;
 		case SettingsMan::NetworkMatchStatusMode::Always: return true;
@@ -1468,6 +1553,15 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	// This player's own seat on its way back, and the other seats the AI plays while their players are away.
 	const bool ownRejoin = !menuLobby && !hostLost && (resyncing || ScenarioRunner::WorldCatchUpActive()) &&
 	                       (OwnRosterSeatHeld() || ScenarioRunner::IsLockstepOwnSeatHeld());
+	const bool ownHeld = !menuLobby && !hostLost && (OwnRosterSeatHeld() || ScenarioRunner::IsLockstepOwnSeatHeld());
+	std::string ownHeldCause;
+	if (ownHeld) {
+		if (const auto view = g_NetMatchService.GetSeatView(snapshot.localPeerId)) {
+			NetH4ModerationSeat held;
+			held.holdCause = view->seat.holdCause;
+			ownHeldCause = NetModerationUx::HoldCause(held);
+		}
+	}
 	std::vector<std::string> heldNames, heldCauses, returningNames, lostNames;
 	if (!menuLobby && !hostLost) {
 		for (const auto& member: snapshot.members) {
@@ -1500,6 +1594,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		if (hostLost) return snapshot.statusText.starts_with("Changing hosts") ? "Changing hosts - the match picks up in a moment" : "Host lost - contacting the next host...";
 		// The toast and the full-screen wait say the rest; the box's line never repeats theirs.
 		if (ownRejoin) return "Rejoining - catching up with the match";
+		if (ownHeld) return NetPlayerPresentation::PlayingSummary(true, 0, {});
 		if (resyncing) return "Match repair in progress";
 		if (placing) {
 			if (localUnplaced) return "Place your brain";
@@ -1520,13 +1615,14 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	// The lines under the headline: the wait so far, who else is placing, why a seat is held and how each player is connected.
 	const auto details = [&](int textWidth) {
 		std::vector<std::string> lines;
+		if (!ownHeldCause.empty()) lines.push_back("Your seat: " + ownHeldCause);
 		if (hostLost || (missingFrames && !paused)) lines.push_back("Waiting " + SecondsInWords(currentWaitMs));
 		if (placing) {
 			if (localUnplaced && !othersPlacing.empty()) lines.push_back(FitLine(font, "Also placing: " + NamesInWords(othersPlacing), textWidth));
 			lines.push_back(countOnly + " brains placed");
 		}
 		if (!resyncing && !placing && !hostLost) {
-			for (const std::string& cause: heldCauses) lines.push_back(FitLine(font, cause, textWidth));
+			for (const std::string& cause: heldCauses) lines.push_back(cause);
 		}
 		if (!diagnostics && !hostLost && !menuLobby) {
 			for (const auto& member: snapshot.members) {
@@ -1549,13 +1645,14 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		                             static_cast<long long>(paused), static_cast<long long>((countdown + 59) / 60), static_cast<long long>(waiting),
 		                             hostLost || missingFrames ? currentWaitMs / 100 : 0LL, static_cast<long long>(m_MatchDelayFrames), static_cast<long long>(m_BaseDelayFrames),
 		                             ping ? static_cast<long long>(*ping) : -1LL, static_cast<long long>(snapshot.isHost), static_cast<long long>(snapshot.hostPeerId),
-		                             static_cast<long long>(localUnplaced), static_cast<long long>(ownRejoin)}) {
+		                             static_cast<long long>(localUnplaced), static_cast<long long>(ownRejoin), static_cast<long long>(ownHeld)}) {
 			key += ' ' + std::to_string(value);
 		}
 		for (const long long value: geometry) key += ' ' + std::to_string(value);
 		key += '|' + std::string(pace) + '|' + placementNames + '|' + holdName + '|' + snapshot.statusText + '|' + m_StatusProbeLine + '|' + missingPeers;
 		for (const std::string& name: othersPlacing) key += '|' + name;
 		for (const std::string& cause: heldCauses) key += '|' + cause;
+		key += "|own " + ownHeldCause;
 		for (const std::string& name: heldNames) key += "|ai " + name;
 		for (const auto& member: snapshot.members) {
 			key += '|' + std::to_string(member.peerId) + ',' + member.displayName + ',' + std::to_string(member.team) + ',' + std::to_string(member.cpu) + ',' +
@@ -1790,6 +1887,11 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot, bool fr
 	const bool inMatch = m_ChatInMatch;
 	if (!inMatch) {
 		m_MatchChatLines.clear();
+		m_ChatWrappedLines.clear();
+		m_ChatWrapKey.clear();
+		m_ChatHistoryInitialized = false;
+		m_ChatNotifyUntilUs = 0;
+		m_ChatNotifyHistoryId = 0;
 		if (m_ChatEntryOpen) {
 			m_ChatEntryOpen = false;
 			if (m_MatchChatInput) {
@@ -1813,6 +1915,7 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot, bool fr
 		const long long nowUs = g_TimerMan.GetAbsoluteTime();
 		for (const NetChatEntry& entry: history) {
 			MatchChatLine line;
+			line.historyId = entry.historyId;
 			line.receivedTick = entry.receivedTick;
 			line.senderPeerId = entry.senderPeerId;
 			line.scope = entry.scope;
@@ -1820,22 +1923,37 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot, bool fr
 			line.text = entry.text;
 			line.seenUs = nowUs;
 			for (const auto& member: snapshot.members) {
-				if (member.peerId != entry.senderPeerId) continue;
+				if (member.cpu || member.peerId != NetChatRosterPeer(entry.senderPeerId)) continue;
 				line.team = member.team;
 				if (line.name.empty()) line.name = member.displayName;
 				break;
 			}
+			bool known = false;
 			for (const auto& prior: m_MatchChatLines) {
-				if (prior.receivedTick == line.receivedTick && prior.senderPeerId == line.senderPeerId && prior.text == line.text) {
+				if (prior.historyId == line.historyId) {
 					line.seenUs = prior.seenUs;
-					line.team = prior.team ? prior.team : line.team;
+					line.team = prior.team;
+					known = true;
 					if (line.name.empty()) line.name = prior.name;
 					break;
 				}
 			}
+			const auto alert = NetChatAlertFor(known, m_ChatHistoryInitialized, NetChatRosterPeer(entry.senderPeerId) == snapshot.localPeerId,
+			    g_SettingsMan.GetNetworkChatNotify(), g_SettingsMan.GetNetworkChatSound());
+			if (alert.notify) {
+				m_ChatNotifyUntilUs = nowUs + 6000000;
+				m_ChatNotifyHistoryId = entry.historyId;
+			}
+			if (alert.sound) {
+				RandomGenerator* previous = t_simRNGOverride;
+				t_simRNGOverride = &g_RenderRNG;
+				g_GUISound.SelectionChangeSound()->Play();
+				t_simRNGOverride = previous;
+			}
 			next.push_back(std::move(line));
 		}
 		m_MatchChatLines = std::move(next);
+		m_ChatHistoryInitialized = true;
 	}
 
 	const bool consoleOpen = g_ConsoleMan.IsEnabled() && !g_ConsoleMan.IsReadOnly();
@@ -1851,12 +1969,14 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot, bool fr
 	}
 	const SDL_Scancode chatKey = ChatScancode();
 	// In the lobby the lobby's own chat box is the entry; the overlay's would only steal its keys.
-	const bool keyChat = !m_ChatEntryOpen && !consoleOpen && !PostMatchLobbySurfaces() && g_UInputMan.KeyPressed(chatKey);
-	if ((scriptChat || keyChat) && !m_ChatKeysHeld && !m_ChatEntryOpen && !consoleOpen) {
+	const bool otherMenu = g_MenuMan.IsLocalPauseMenuOpen() || g_MenuMan.IsNetworkPanelOpen() || PostMatchLobbySurfaces();
+	const bool keyChat = !m_ChatEntryOpen && !consoleOpen && !otherMenu && g_UInputMan.KeyPressed(chatKey);
+	if ((scriptChat || keyChat) && !m_ChatKeysHeld && !m_ChatEntryOpen && !consoleOpen && !otherMenu) {
 		CreateOverlay();
 		m_ChatEntryOpen = true;
+		m_ChatScroll = 0;
 		if (m_MatchChatInput) {
-			m_MatchChatInput->SetText("");
+			m_MatchChatInput->SetEnabled(m_ChatRequestId == 0);
 			m_MatchChatInput->SetVisible(true);
 			if (GUIPanel* panel = m_MatchChatInput->GetPanel()) panel->SetFocus();
 		}
@@ -1867,16 +1987,43 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot, bool fr
 			m_ChatDisabledKeys = true;
 		}
 		m_Input->SetKeyJoyMouseCursor(true);
+		// SDL can deliver the opening key's text in the same event batch. Remove that prefix only; later typed text stays.
+		const SDL_Keycode letter = SDL_GetKeyFromScancode(chatKey, SDL_GetModState(), false);
+		const auto& text = g_UInputMan.GetTextInput();
+		if (keyChat && letter > 0 && letter < 128 && !text.empty() &&
+		    (text.front() == static_cast<char>(letter) ||
+		     (letter >= 'a' && letter <= 'z' && text.front() == static_cast<char>(letter - 'a' + 'A')))) {
+			g_UInputMan.ConsumeTextInputPrefix(text.substr(0, 1));
+		}
 	}
 	m_ChatKeysHeld = scriptChat || g_UInputMan.KeyHeld(chatKey);
 
 	if (!m_ChatEntryOpen) return;
+	if (m_ChatRequestId) {
+		const auto result = g_NetMatchService.ChatSendResult(m_ChatRequestId);
+		if (result.state != NetChatSendState::Queued) {
+			m_ChatRequestId = 0;
+			m_MatchChatInput->SetEnabled(true);
+			m_ChatSendStatus = result.state == NetChatSendState::Unknown ? "Not sent: the chat session changed. Your draft is kept." : result.detail;
+			if (result.state == NetChatSendState::Sent) {
+				m_ChatSendStatus.clear();
+				m_MatchChatInput->SetText("");
+				m_ChatEntryOpen = false;
+				m_MatchChatInput->SetVisible(false);
+				if (m_ChatDisabledKeys) { g_UInputMan.DisableKeys(false); g_UInputMan.TypeIntoSeatInput(false); m_ChatDisabledKeys = false; }
+				m_Input->SetKeyJoyMouseCursor(false);
+				return;
+			}
+			if (GUIPanel* panel = m_MatchChatInput->GetPanel()) panel->SetFocus();
+		}
+	}
+	if (g_UInputMan.KeyPressed(SDL_SCANCODE_PAGEUP)) m_ChatScroll = std::min(m_ChatVisualRows, m_ChatScroll + 4);
+	if (g_UInputMan.KeyPressed(SDL_SCANCODE_PAGEDOWN)) m_ChatScroll = m_ChatScroll > 4 ? m_ChatScroll - 4 : 0;
 
 	// An entry that outlived its match holds the lobby's keys hostage; it closes the same way Escape does.
 	if (g_UInputMan.KeyPressed(SDL_SCANCODE_ESCAPE) || PostMatchLobbySurfaces()) {
 		m_ChatEntryOpen = false;
 		if (m_MatchChatInput) {
-			m_MatchChatInput->SetText("");
 			m_MatchChatInput->SetVisible(false);
 		}
 		if (m_ChatDisabledKeys) {
@@ -1892,12 +2039,19 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot, bool fr
 		m_OverlayControls->Update();
 		GUIEvent event;
 		while (m_OverlayControls->GetEvent(&event)) {
+			if (event.GetType() == GUIEvent::Command && event.GetControl() == m_ChatOlder) m_ChatScroll = std::min(m_ChatVisualRows, m_ChatScroll + 4);
+			if (event.GetType() == GUIEvent::Command && event.GetControl() == m_ChatNewer) m_ChatScroll = m_ChatScroll > 4 ? m_ChatScroll - 4 : 0;
 			if (event.GetType() == GUIEvent::Notification && event.GetMsg() == GUITextBox::Enter && event.GetControl() == m_MatchChatInput) {
+				if (m_ChatRequestId) continue;
 				const std::string text = m_MatchChatInput->GetText();
 				if (!text.empty()) {
 					const int modifier = m_OverlayControls->GetManager()->GetInputController()->GetModifier();
-					const uint8_t scope = (modifier & GUIPanel::MODI_CTRL) ? c_NetChatScopeTeam : c_NetChatScopeAll;
-					if (!g_NetMatchService.SendChat(scope, text)) continue;
+					const uint8_t scope = NetChatAudience(g_SettingsMan.GetNetworkChatDefaultScope(), modifier & GUIPanel::MODI_CTRL, modifier & GUIPanel::MODI_SHIFT);
+					m_ChatPendingScope = scope;
+					if (!g_NetMatchService.SendChat(scope, text, &m_ChatRequestId)) { m_ChatSendStatus = "Not sent: chat is unavailable or the message was refused. Your draft is kept."; continue; }
+					m_ChatSendStatus = std::string("Sending to ") + (scope == c_NetChatScopeTeam ? "Team" : "All") + "...";
+					m_MatchChatInput->SetEnabled(false);
+					continue;
 				}
 				m_ChatEntryOpen = false;
 				m_MatchChatInput->SetText("");
@@ -1921,13 +2075,16 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 		return;
 	}
 	const bool showHistory = g_SettingsMan.GetNetworkChatVisible();
-	if (!showHistory && !m_ChatEntryOpen) {
+	if (!showHistory && !m_ChatEntryOpen && (!g_SettingsMan.GetNetworkChatNotify() || g_TimerMan.GetAbsoluteTime() >= m_ChatNotifyUntilUs)) {
 		for (GUILabel* label: m_MatchChat) {
 			if (!label) continue;
 			label->SetVisible(false);
 			label->SetText("");
 		}
 		if (m_MatchChatInput) m_MatchChatInput->SetVisible(false);
+		m_MatchChatCaption->SetVisible(false);
+		m_ChatOlder->SetVisible(false);
+		m_ChatNewer->SetVisible(false);
 		m_ChatRect = {};
 		return;
 	}
@@ -1968,103 +2125,122 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	}
 	const int topLimit = ChatTopLimit(area, backbuffer->h);
 
-	int rows = showHistory ? static_cast<int>(std::min(m_MatchChat.size(), m_MatchChatLines.size())) : 0;
 	const int available = std::max(0, bottom - topLimit);
-	// The size is the last thing to give, after the entry's spare pixels and the panel's rows.
 	bool reducedTextSize = false;
-	if (wantsLarge && showHistory && m_ChatEntryOpen && available < ChatEntryMinimum(lineH)) {
-		if (GUIFont* small = g_FrameMan.GetSmallFont(true); small && std::max(12, small->GetFontHeight()) + 4 < lineH) {
+	if (wantsLarge && m_ChatEntryOpen && available < ChatEntryMinimum(lineH)) {
+		if (GUIFont* small = g_FrameMan.GetSmallFont(true)) {
 			font = small;
-			lineH = std::max(12, small->GetFontHeight()) + 4;
+			lineH = std::max(12, font->GetFontHeight()) + 4;
 			reducedTextSize = true;
 		}
 	}
-	// The entry gives up its two spare pixels before the history gives up a row.
-	const int roomyInputH = lineH + 6;
-	const int tightInputH = lineH + 4;
-	const int inputH = !m_ChatEntryOpen ? 0 : (available - roomyInputH >= lineH ? roomyInputH : tightInputH);
-	// The band yields to whatever owns the screen: as many history rows as fit above the entry.
-	const int maxRows = std::min(static_cast<int>(m_MatchChat.size()), std::max(0, (available - inputH) / lineH));
-	if (rows > maxRows) rows = maxRows;
-	const int height = rows * lineH + inputH;
-	// An open entry that the free area cannot hold gives way rather than drawing over an occupier.
-	if (height <= 0 || height > available) {
-		for (GUILabel* label: m_MatchChat) {
-			if (!label) continue;
-			label->SetVisible(false);
-			label->SetText("");
-		}
-		if (m_MatchChatInput) m_MatchChatInput->SetVisible(false);
-		m_ChatRect = {};
-		return;
-	}
-	int top = std::max(0, bottom - height);
 	int freeLeft = 8, freeRight = backbuffer->w - 8;
-	area.FreeSpan(top, bottom, backbuffer->w, freeLeft, freeRight);
-	constexpr int c_ChatMinWidth = 80;
-	if (freeRight - freeLeft < c_ChatMinWidth) {
-		// Nothing wide enough down here: the band takes the top band the toasts fall back to, or gives way.
-		top = 2;
-		freeLeft = 0;
-		freeRight = backbuffer->w;
-		area.FreeSpan(top, top + height, backbuffer->w, freeLeft, freeRight);
-		if (freeRight - freeLeft < c_ChatMinWidth) {
-			for (GUILabel* label: m_MatchChat) {
-				if (!label) continue;
-				label->SetVisible(false);
-				label->SetText("");
-			}
-			if (m_MatchChatInput) m_MatchChatInput->SetVisible(false);
-			m_ChatRect = {};
-			return;
-		}
+	// Measuring the whole available run keeps a wrapped line clear of every editor column it could reach.
+	area.FreeSpan(topLimit, bottom, backbuffer->w, freeLeft, freeRight);
+	const int width = std::min(420, freeRight - freeLeft - 8);
+	const auto hide = [&]() {
+		for (auto* label: m_MatchChat) { label->SetVisible(false); label->SetText(""); }
+		m_MatchChatInput->SetVisible(false);
+		m_MatchChatCaption->SetVisible(false);
+		m_ChatOlder->SetVisible(false);
+		m_ChatNewer->SetVisible(false);
+		m_ChatRect = {};
+	};
+	if (width < 80) { hide(); return; }
+	const auto wrap = [&](const std::string& text) { return NetChatWrap(text, width - 18, [&](const std::string& part) { return font->CalculateWidth(part); }); };
+	const bool notification = g_SettingsMan.GetNetworkChatNotify() && g_TimerMan.GetAbsoluteTime() < m_ChatNotifyUntilUs;
+	std::string wrapKey;
+	for (size_t index = 0; index < m_MatchChatLines.size(); ++index) {
+		if (!NetChatLineVisible(showHistory, m_ChatEntryOpen, notification, m_MatchChatLines[index].historyId, m_ChatNotifyHistoryId)) continue;
+		const auto& line = m_MatchChatLines[index];
+		const std::string text = (line.scope == c_NetChatScopeTeam ? "[TEAM] " : "[ALL] ") + DisplayName(line.name.empty() ? "Player" : line.name) + ": " + DisplayName(line.text);
+		wrapKey += std::to_string(line.historyId) + ":" + std::to_string(line.team) + ":" + text + '\n';
 	}
-	const int width = std::max(1, std::min(420, std::max(c_ChatMinWidth, freeRight - freeLeft - 8)));
-	const int x = std::max(0, std::min(backbuffer->w - width, freeLeft + std::max(0, (freeRight - freeLeft - width) / 2)));
+	if (wrapKey != m_ChatWrapKey || width != m_ChatWrapWidth || font != m_ChatWrapFont) {
+		m_ChatWrappedLines.clear();
+		for (size_t index = 0; index < m_MatchChatLines.size(); ++index) {
+			if (!NetChatLineVisible(showHistory, m_ChatEntryOpen, notification, m_MatchChatLines[index].historyId, m_ChatNotifyHistoryId)) continue;
+			const auto& line = m_MatchChatLines[index];
+			const std::string text = (line.scope == c_NetChatScopeTeam ? "[TEAM] " : "[ALL] ") + DisplayName(line.name.empty() ? "Player" : line.name) + ": " + DisplayName(line.text);
+			for (auto& part: wrap(text)) m_ChatWrappedLines.push_back({std::move(part), line.team, line.seenUs});
+		}
+		m_ChatWrapKey = std::move(wrapKey);
+		m_ChatWrapWidth = width;
+		m_ChatWrapFont = font;
+	}
+	const auto& visual = m_ChatWrappedLines;
+	m_ChatVisualRows = visual.size();
+	const int modifier = m_OverlayControls->GetManager()->GetInputController()->GetModifier();
+	const auto audience = m_ChatRequestId ? m_ChatPendingScope : NetChatAudience(g_SettingsMan.GetNetworkChatDefaultScope(), modifier & GUIPanel::MODI_CTRL, modifier & GUIPanel::MODI_SHIFT);
+	std::string caption = std::string("To ") + (audience == c_NetChatScopeTeam ? "Team" : "All") + " | Ctrl+Enter: Team | Shift+Enter: All";
+	if (!m_ChatSendStatus.empty()) caption += "\n" + m_ChatSendStatus;
+	const auto captionLines = m_ChatEntryOpen ? wrap(caption) : std::vector<std::string>{};
+	std::string wrappedCaption;
+	for (const auto& part: captionLines) wrappedCaption += (wrappedCaption.empty() ? "" : "\n") + part;
+	const int captionH = static_cast<int>(captionLines.size()) * lineH;
+	const int navigationH = m_ChatEntryOpen ? 22 : 0;
+	const int inputH = m_ChatEntryOpen ? lineH + 6 : 0;
+	const int footerH = inputH + captionH + navigationH;
+	const int maxRows = std::min(static_cast<int>(m_MatchChat.size()), std::max(0, (available - footerH) / lineH));
+	const int rows = std::min(maxRows, static_cast<int>(visual.size()));
+	const int height = rows * lineH + footerH;
+	if (height <= 0 || height > available) { hide(); return; }
+	const int top = bottom - height;
+	const int x = freeLeft + (freeRight - freeLeft - width) / 2;
 	m_ChatRect = {x, top, width, height, true};
-	m_ChatBand = {lineH, inputH, rows, showHistory, reducedTextSize};
-
+	m_ChatBand = {lineH, footerH, rows, showHistory || m_ChatEntryOpen || notification, reducedTextSize};
+	m_ChatScroll = std::min(m_ChatScroll, visual.size() > static_cast<size_t>(rows) ? visual.size() - rows : 0);
+	const size_t first = visual.size() - rows - (m_ChatEntryOpen ? m_ChatScroll : 0);
 	const long long nowUs = g_TimerMan.GetAbsoluteTime();
-	const size_t first = m_MatchChatLines.size() > static_cast<size_t>(rows) ? m_MatchChatLines.size() - static_cast<size_t>(rows) : 0;
 	AllegroBitmap bitmap(backbuffer);
 	for (size_t row = 0; row < m_MatchChat.size(); ++row) {
 		GUILabel* label = m_MatchChat[row];
-		const bool shown = row < static_cast<size_t>(rows);
-		label->SetVisible(shown);
-		if (!shown) {
-			label->SetText("");
-			continue;
-		}
-		const MatchChatLine& line = m_MatchChatLines[first + row];
-		long long ageUs = nowUs - line.seenUs;
-		if (ageUs < 0) ageUs = 0;
+		label->SetVisible(row < static_cast<size_t>(rows));
+		if (row >= static_cast<size_t>(rows)) { label->SetText(""); continue; }
+		const auto& line = visual[first + row];
+		const long long ageUs = std::max(0LL, nowUs - line.seenUs);
 		int alpha = 255;
-		if (!m_ChatEntryOpen && ageUs > 8000000) {
-			const long long fade = ageUs - 8000000;
-			alpha = fade >= 4000000 ? 90 : static_cast<int>(255 - (fade * 165) / 4000000);
-		}
-		std::string prefix = line.scope == c_NetChatScopeTeam ? "[TEAM] " : "";
-		std::string text = prefix + DisplayName(line.name.empty() ? "Player" : line.name) + ": " + DisplayName(line.text);
-		text = FitLine(font, std::move(text), width - 18);
+		if (!m_ChatEntryOpen && ageUs > 8000000) alpha = static_cast<int>(255 - std::min(4000000LL, ageUs - 8000000) * 165 / 4000000);
 		const int y = top + static_cast<int>(row) * lineH;
 		label->SetFont(font);
 		label->Move(x + 8, y + 2);
 		label->Resize(width - 12, lineH - 2);
-		label->SetText(text);
+		label->SetText(line.text);
 		rectfill(backbuffer, x, y, x + width - 1, y + lineH - 2, makeacol32(20, 22, 27, alpha));
 		rectfill(backbuffer, x, y, x + 2, y + lineH - 2, TeamBarColor(line.team, alpha));
 		label->Draw(&bitmap, false);
 	}
-	if (m_ChatEntryOpen && m_MatchChatInput) {
-		const int y = top + rows * lineH;
-		m_MatchChatInput->SetVisible(true);
+	m_MatchChatCaption->SetVisible(m_ChatEntryOpen);
+	m_MatchChatInput->SetVisible(m_ChatEntryOpen);
+	m_ChatOlder->SetVisible(m_ChatEntryOpen);
+	m_ChatNewer->SetVisible(m_ChatEntryOpen);
+	if (m_ChatEntryOpen) {
+		int y = top + rows * lineH;
+		rectfill(backbuffer, x, y, x + width - 1, bottom - 1, makeacol32(20, 22, 27, 255));
+		m_MatchChatCaption->SetFont(font);
+		m_MatchChatCaption->Move(x + 8, y + 2);
+		m_MatchChatCaption->Resize(width - 12, captionH);
+		m_MatchChatCaption->SetText(wrappedCaption);
+		m_MatchChatCaption->Draw(&bitmap, false);
+		y += captionH;
+		const int navigationWidth = std::min(96, (width - 12) / 2);
+		m_ChatOlder->Resize(navigationWidth, 20);
+		m_ChatNewer->Resize(navigationWidth, 20);
+		m_ChatOlder->SetText("Older");
+		m_ChatNewer->SetText("Newer");
+		m_ChatOlder->Move(x + 4, y);
+		m_ChatNewer->Move(x + width - navigationWidth - 4, y);
+		m_ChatOlder->SetEnabled(first > 0);
+		m_ChatNewer->SetEnabled(m_ChatScroll > 0);
+		m_ChatOlder->Draw(m_Screen);
+		m_ChatNewer->Draw(m_Screen);
+		RecordPanelDraw(m_ChatOlder->GetPanel());
+		RecordPanelDraw(m_ChatNewer->GetPanel());
+		y += navigationH;
 		m_MatchChatInput->Move(x + 4, y + 2);
 		m_MatchChatInput->Resize(width - 8, inputH - 4);
-		rectfill(backbuffer, x, y, x + width - 1, y + inputH - 1, makeacol32(20, 22, 27, 230));
-		rect(backbuffer, x, y, x + width - 1, y + inputH - 1, makeacol32(59, 65, 83, 255));
 		m_MatchChatInput->Draw(m_Screen);
-	} else if (m_MatchChatInput) {
-		m_MatchChatInput->SetVisible(false);
+		RecordPanelDraw(m_MatchChatInput->GetPanel());
 	}
 }
 
@@ -2302,6 +2478,8 @@ void NetModerationGUI::Draw() {
 		m_NetStatusBox->SetVisible(false);
 		m_NetStatus->SetVisible(false);
 	}
+	const auto state = g_NetMatchService.GetState();
+	if (state == NetMatchServiceState::Failed || state == NetMatchServiceState::Idle) return;
 	// A completed round's peer is still in its match until the activity is over, and it still needs its
 	// surfaces to read the result and leave. The menu-loop arm is the lobby's own version of that:
 	// the rematch lobby keeps the surfaces while the pump is owed.
@@ -2447,12 +2625,12 @@ std::vector<std::string> NetModerationGUI::AutomationRowControls(size_t slot) co
 	const std::string suffix = std::to_string(slot);
 	const PanelRow& row = SlotRow(slot);
 	std::vector<std::string> controls{"NetworkSeatName" + suffix, "NetworkSeatDetail" + suffix};
-	if (!row.opened) controls.insert(controls.end(), {"NetworkSeatRemove" + suffix, "NetworkSeatBan" + suffix});
+	if (!row.opened && !row.cpu) controls.insert(controls.end(), {"NetworkSeatRemove" + suffix, "NetworkSeatBan" + suffix});
 	if (row.decision) {
 		if (!row.opened) controls.push_back("NetworkSeatWait" + suffix);
 		controls.push_back("NetworkSeatSubstitute" + suffix);
 		if (row.decision->view.substituting) controls.push_back("NetworkSeatCancel" + suffix);
-		if (!row.decision->view.applicants.empty()) controls.push_back("NetworkSeatApplicant" + suffix);
+		if (!row.decision->view.applicants.empty()) controls.insert(controls.end(), {"NetworkSeatApplicant" + suffix, "NetworkSeatDeclineApplicant" + suffix, "NetworkSeatBanApplicant" + suffix});
 	}
 	return controls;
 }
@@ -2497,6 +2675,8 @@ GUIControl* NetModerationGUI::GetControl(const std::string& name) const {
 			if (part == "Cancel") return controls.actions[2];
 			if (part == "Remove") return controls.remove;
 			if (part == "Ban") return controls.ban;
+			if (part == "DeclineApplicant") return controls.declineApplicant;
+			if (part == "BanApplicant") return controls.banApplicant;
 		}
 		return nullptr;
 	}

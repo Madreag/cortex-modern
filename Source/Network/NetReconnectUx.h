@@ -20,7 +20,7 @@ namespace RTE {
 		Reconnected = 4, //!< Back in the match.
 		GaveUp = 5,      //!< The resume window closed; only a manual retry starts another attempt.
 		Cancelled = 6,   //!< The player stopped the automatic retries.
-		Refused = 7,     //!< The host gave the seat away or released it: nothing is left to rejoin.
+		Refused = 7,     //!< The host or directory refused this seat: automatic recovery stops.
 	};
 
 	/// What the startup scan of the recovery record found. The protocol does not care; the player does.
@@ -30,6 +30,7 @@ namespace RTE {
 		Corrupt = 2,
 		Stale = 3,
 		Missing = 4, //!< The scan ran and found no record; §11 says so rather than saying nothing.
+		Dismissed = 5, //!< The usable ticket remains for manual rejoin, with no automatic prompt or watch.
 	};
 
 	/// The reconnect UX (§11): the automatic-retry schedule with its cancel and manual-retry controls,
@@ -45,14 +46,14 @@ namespace RTE {
 
 		void NoteConnected(uint64_t nowMs);
 		/// The link is gone and a recovery record exists: the automatic schedule starts, first attempt
-		/// immediately. Ignored while a schedule is already running, cancelled or spent.
+		/// immediately. Ignored while a schedule is already running, cancelled, spent or refused.
 		void NoteDropped(uint64_t nowMs, std::string reason);
 		void NoteReconnected(uint64_t nowMs);
 		/// @return Whether an attempt is due now. The caller starts it and reports back.
 		bool Tick(uint64_t nowMs);
 		void NoteAttemptStarted(uint64_t nowMs);
 		void NoteAttemptFailed(uint64_t nowMs, std::string reason);
-		/// The host's final answer to a rejoin: the seat is no longer this player's, so nothing retries and nothing is offered.
+		/// A final admission refusal: nothing retries and nothing is offered.
 		void NoteRefused(std::string reason);
 		bool IsRefused() const { return m_State == NetReconnectUxState::Refused; }
 
@@ -60,13 +61,17 @@ namespace RTE {
 		void Cancel(uint64_t nowMs);
 		/// Reopens the window from now, whatever state we were in.
 		void RequestManualRetry(uint64_t nowMs);
+		void SetRetryWindowMs(uint64_t windowMs) { m_ResumeWindowMs = windowMs; }
+		void SetRetainedSeat(bool retained) { m_RetainedSeat = retained; }
 		bool CanCancel() const;
 		bool CanRetryManually() const;
 
 		/// Records what the startup scan of the store found, so the landing screen can offer the rejoin
 		/// or say precisely why it cannot.
-		void OfferStoredTicket(NetH4TicketLoadResult load, std::string hostAddress);
+		void OfferStoredTicket(NetH4TicketLoadResult load, std::string hostAddress, std::string matchName = {});
 		void DismissOffer();
+		/// Keeps the stored address available manually while suppressing the startup prompt.
+		void DismissStoredOffer();
 
 		/// 7e: the match died with its host and no successor took it, so there is nobody to rejoin yet.
 		/// The prompt stays on the screen and watches the directory for that session's row to return.
@@ -74,7 +79,7 @@ namespace RTE {
 		/// @param directorySessionId The row to watch; empty leaves only the manual address.
 		void WatchForHostReturn(std::string matchName, std::string directorySessionId);
 		/// The directory poll's answer for the watched row; a returned host enables the rejoin.
-		void NoteHostReturn(bool present);
+		void NoteHostReturn(bool present, const std::string& matchName = {});
 		/// There is no directory to watch, or it cannot be reached: the prompt stops waiting on a row it
 		/// will never see and leaves the player the address route it always had.
 		void NoteHostUnwatchable(std::string reason);
@@ -112,17 +117,22 @@ namespace RTE {
 
 		/// The §11 roster mark for another player's seat, or "" while the seat is fine.
 		static const char* RosterMark(bool dropped, bool reclaiming);
+		/// In-match leave and catch-up copy: a held seat can be reassigned by the host.
+		static const char* HeldSeatReturnNotice();
 
 		static const char* StateName(NetReconnectUxState state);
 
 	private:
 		NetReconnectUxState m_State = NetReconnectUxState::Idle;
 		uint64_t m_DroppedAtMs = 0;
+		uint64_t m_ResumeWindowMs = c_ResumeWindowMs;
 		uint64_t m_NextAttemptMs = 0;
 		uint32_t m_Attempts = 0;
+		bool m_RetainedSeat = false;
 		std::string m_Reason;
 		NetReconnectOffer m_Offer = NetReconnectOffer::None;
 		std::string m_OfferAddress;
+		std::string m_OfferName;
 		bool m_AwaitingHostReturn = false;
 		bool m_HostReturned = false;
 		std::string m_AwaitMatchName;

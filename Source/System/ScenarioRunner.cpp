@@ -82,6 +82,7 @@ namespace RTE {
 		std::map<uint64_t, NetLockstepFrame> s_RequeuedInputs;
 		std::map<uint64_t, NetLockstepFrame> s_LocalInputHistory;
 		std::vector<NetLockstepFrame> s_RecoveredInputs;
+		std::map<std::pair<uint8_t, uint64_t>, size_t> s_RecoveredSourceCommandCounts;
 		std::vector<NetResyncPendingCommand> s_RecoveredCommands, s_RecoveredPlayerBindings;
 		std::map<uint8_t, uint64_t> s_AppliedCommandSequences;
 		std::map<uint8_t, NetResyncPlayerBindings> s_PeerPlayerBindings;
@@ -1147,6 +1148,7 @@ namespace RTE {
 			s_RequeuedInputs.clear();
 			s_LocalInputHistory.clear();
 			s_RecoveredInputs.clear();
+			s_RecoveredSourceCommandCounts.clear();
 			s_RecoveredCommands.clear();
 			s_RecoveredPlayerBindings.clear();
 			s_AppliedCommandSequences.clear();
@@ -1186,6 +1188,7 @@ namespace RTE {
 		NetLockstepPlaneGuard plane;
 		std::erase_if(s_UnappliedLocalControlClaims, [&](const auto& claim) { return claim.second.frame <= completedTick; });
 		std::erase_if(s_RecoveredInputs, [&](const auto& input) { return input.targetFrame <= completedTick; });
+		std::erase_if(s_RecoveredSourceCommandCounts, [&](const auto& count) { return count.first.second <= completedTick; });
 		std::erase_if(s_RecoveredCommands, [&](const auto& command) { return command.frame <= completedTick; });
 		std::erase_if(s_RecoveredPlayerBindings, [&](const auto& binding) { return binding.frame <= completedTick; });
 		return s_LockstepCoordinator && s_LockstepCoordinator->FinishSimulationTick(completedTick);
@@ -1254,7 +1257,8 @@ namespace RTE {
 		if (!s_LockstepCoordinator) {
 			return 0;
 		}
-		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled);
+		// A coordinator's delivered cursor can lag the world at a return.
+		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled, s_LockstepAppliedFrame);
 	}
 
 	uint8_t ScenarioRunner::GetLockstepDropTimeActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
@@ -1277,7 +1281,7 @@ namespace RTE {
 
 	uint8_t ScenarioRunner::GetLockstepHostPeerId() {
 		NetLockstepPlaneGuard plane;
-		return s_LockstepCoordinator ? s_LockstepCoordinator->GetHostPeerId() : 0;
+		return s_LockstepCoordinator ? s_LockstepCoordinator->SimulationHostPeerId() : 0;
 	}
 
 	bool ScenarioRunner::IsHostMigrationCatchUp() {
@@ -1379,7 +1383,7 @@ namespace RTE {
 		return true;
 	}
 
-	static uint64_t s_CatchUpWorkTicks = 0, s_CatchUpWorkUs = 0, s_CatchUpLastMeasured = 0, s_CatchUpPriorInputThrough = 0;
+	static uint64_t s_CatchUpWorkTicks = 0, s_CatchUpWorkUs = 0, s_CatchUpLastMeasured = 0, s_CatchUpPriorInputThrough = 0, s_CatchUpStartTick = 0;
 	static uint64_t s_CatchUpLastWallUs = 0;
 	static bool s_CatchUpHadQueuedWork = false;
 
@@ -1394,6 +1398,7 @@ namespace RTE {
 	}
 
 	uint64_t ScenarioRunner::WorldCatchUpWorkTicks() { return s_CatchUpWorkTicks; }
+	uint64_t ScenarioRunner::WorldCatchUpStartTick() { return s_CatchUpStartTick; }
 	uint64_t ScenarioRunner::WorldCatchUpWorkUs() { return s_CatchUpWorkUs; }
 	uint64_t ScenarioRunner::WorldCatchUpPriorInputThrough() { return s_CatchUpPriorInputThrough; }
 	void ScenarioRunner::SetWorldCatchUpPriorInputThrough(uint64_t frame) { s_CatchUpPriorInputThrough = frame; }
@@ -1408,6 +1413,7 @@ namespace RTE {
 			s_WorldCatchUpTail.push_back(std::move(frame));
 		}
 		s_WorldCatchUpAppliedThrough = snapshotTick;
+		s_CatchUpStartTick = snapshotTick;
 		s_CatchUpWorkTicks = s_CatchUpWorkUs = s_CatchUpLastWallUs = 0;
 		s_CatchUpHadQueuedWork = false;
 		s_CatchUpHeadroom = {};
@@ -2260,8 +2266,18 @@ namespace RTE {
 		}
 		std::vector<NetGameCommand> commands;
 		const uint64_t targetFrame = tick + producing->InputDelayAt(config.localPeerId, tick);
-		if (producing->IsSeatReclaimGap(config.localPeerId, targetFrame) ||
-		    (config.localPeerId == producing->GetHostPeerId() && producing->IsSeatUnderAI(config.localPeerId, targetFrame))) {
+		if (producing->IsSeatReclaimGap(config.localPeerId, targetFrame)) {
+			// The returned player can act before its first input is due. Keep those
+			// accepted events for that input; only sampled AI writes and bindings expire.
+			std::erase_if(s_PendingLocalGameCommands, [](const NetGameCommand& command) {
+				return std::holds_alternative<NetGameAIOrder>(command.payload) ||
+				       std::holds_alternative<NetGameAIScriptMessage>(command.payload) ||
+				       std::holds_alternative<NetGameAIGib>(command.payload) ||
+				       std::holds_alternative<NetGamePlayerBindings>(command.payload);
+			});
+			return producing->QueueLocalInput(tick, frames, {}, error);
+		}
+		if (config.localPeerId == producing->GetHostPeerId() && producing->IsSeatUnderAI(config.localPeerId, targetFrame)) {
 			s_PendingLocalGameCommands.clear();
 			return producing->QueueLocalInput(tick, frames, {}, error);
 		}
@@ -2410,6 +2426,7 @@ namespace RTE {
 		s_RequeuedInputs.clear();
 		s_LocalInputHistory.clear();
 		s_RecoveredInputs.clear();
+		s_RecoveredSourceCommandCounts.clear();
 		s_RecoveredCommands.clear();
 		s_RecoveredPlayerBindings.clear();
 	}
@@ -2469,36 +2486,37 @@ namespace RTE {
 		}
 	}
 
-	void ScenarioRunner::EnqueueLocalGameCommand(const NetGameCommand& command) {
-		if (s_WorldCatchUpActive) return;
+	bool ScenarioRunner::EnqueueLocalGameCommand(const NetGameCommand& command) {
+		if (s_WorldCatchUpActive) return false;
 		if (g_MovableMan.IsRestoringSnapshot()) {
-			return;
+			return false;
 		}
 		if (g_MovableMan.IsSpeculative()) {
 			g_MovableMan.ReportSpeculationViolation("queueing a wire command for", nullptr);
-			return;
+			return false;
 		}
 		const NetGameCommandType enqueuedType = NetGameCommandTypeOf(command.payload);
 		if (enqueuedType != NetGameCommandType::Reseat && enqueuedType != NetGameCommandType::WorldTransition && enqueuedType != NetGameCommandType::Checkpoint) {
 			const uint8_t sender = command.senderPeerId != 0 ? command.senderPeerId : GetLockstepLocalPeerId();
 			if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
 				if (!IsLockstepAIOrderAuthorized(sender, *order)) {
-					return;
+					return false;
 				}
 			} else if (const NetGameAIScriptMessage* message = std::get_if<NetGameAIScriptMessage>(&command.payload)) {
 				// The writer is the authority for a message its pass sent, exactly as for an AI order.
 				if (!IsLockstepAIWriteAuthorized(sender, message->team, message->writerUID, message->writerUID)) {
-					return;
+					return false;
 				}
 			} else if (const NetGameAIGib* gib = std::get_if<NetGameAIGib>(&command.payload)) {
 				if (!IsLockstepAIWriteAuthorized(sender, gib->team, gib->writerUID, gib->writerUID)) {
-					return;
+					return false;
 				}
 			} else if (!IsLockstepTeamCommandSender(NetGameCommandTeam(command.payload), sender)) {
-				return;
+				return false;
 			}
 		}
 		s_PendingLocalGameCommands.push_back(command);
+		return true;
 	}
 
 	std::vector<NetGameCommand> ScenarioRunner::DrainLocalGameCommands() {
@@ -2632,21 +2650,49 @@ namespace RTE {
 			activity->CaptureNetPlayerBindings(own.bindings);
 		}
 		std::map<std::pair<uint8_t, uint64_t>, NetLockstepFrame> inputs;
-		auto futureInputs = s_RecoveredInputs;
-		for (auto& input: s_LockstepCoordinator->CapturePendingInputs(savedTick)) futureInputs.push_back(std::move(input));
+		std::map<std::pair<uint8_t, uint64_t>, NetLockstepFrame> sourceInputs;
+		for (auto input: s_LockstepCoordinator->CapturePendingSourceInputs(savedTick)) {
+			input.roundId = captured.sourceRound;
+			sourceInputs.emplace(std::make_pair(input.senderPeerId, input.targetFrame), std::move(input));
+		}
+		for (auto input: s_LockstepCoordinator->CapturePendingInputs(savedTick)) {
+			input.roundId = captured.sourceRound;
+			inputs.emplace(std::make_pair(input.senderPeerId, input.targetFrame), std::move(input));
+		}
+		for (auto input: s_RecoveredInputs) {
+			if (input.targetFrame <= savedTick) continue;
+			input.roundId = captured.sourceRound;
+			const auto key = std::make_pair(input.senderPeerId, input.targetFrame);
+			inputs.try_emplace(key, input);
+			if (const auto count = s_RecoveredSourceCommandCounts.find(key); count != s_RecoveredSourceCommandCounts.end()) input.commands.resize(count->second);
+			const auto [source, inserted] = sourceInputs.emplace(key, input);
+			if (!inserted && !SameInputBits(source->second, input)) { if (error) *error = "conflicting recovered source input"; return false; }
+		}
+		std::vector<NetLockstepFrame> futureInputs;
 		for (const auto& [frame, input]: s_LocalInputHistory) futureInputs.push_back(input);
 		for (auto& input: s_LockstepCoordinator->CaptureLocalInputHistory()) futureInputs.push_back(std::move(input));
 		for (auto& input: futureInputs) {
 			if (input.targetFrame <= savedTick) continue;
 			input.roundId = captured.sourceRound;
-			const auto [found, inserted] = inputs.emplace(std::make_pair(input.senderPeerId, input.targetFrame), input);
-			if (!inserted && !SameInputBits(found->second, input)) { if (error) *error = "conflicting pending input"; return false; }
+			const auto key = std::make_pair(input.senderPeerId, input.targetFrame);
+			const auto [found, inserted] = inputs.emplace(key, input);
+			// The history records packets before boundary events are appended.
+			const auto source = sourceInputs.find(key);
+			const auto& prior = source != sourceInputs.end() ? source->second : found->second;
+			if (!inserted && !SameInputBits(prior, input)) { if (error) *error = "conflicting pending input"; return false; }
 		}
 		auto pending = s_RecoveredCommands;
 		for (auto& command: s_LockstepCoordinator->CapturePendingCommands(savedTick)) pending.push_back(std::move(command));
 		auto pendingBindings = s_RecoveredPlayerBindings;
 		for (auto& binding: s_LockstepCoordinator->CapturePendingPlayerBindings(savedTick)) pendingBindings.push_back(std::move(binding));
 		for (const auto& [key, input]: inputs) {
+			if (const auto source = sourceInputs.find(key); source != sourceInputs.end()) {
+				if (source->second.commands.size() > input.commands.size()) { if (error) *error = "invalid pending source command count"; return false; }
+				auto original = input;
+				original.commands.resize(source->second.commands.size());
+				if (!SameInputBits(original, source->second)) { if (error) *error = "conflicting pending source input"; return false; }
+				if (original.commands.size() < input.commands.size()) captured.sourceCommandCounts.emplace(key, original.commands.size());
+			}
 			captured.pendingInputs.push_back(input);
 			for (const auto& command: input.commands) {
 				if (std::holds_alternative<NetGamePlayerBindings>(command.payload)) pendingBindings.push_back({input.targetFrame, command});
@@ -2685,7 +2731,7 @@ namespace RTE {
 		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator || state.sessionId != s_LockstepCoordinator->GetConfig().sessionId || state.savedTick == UINT64_MAX ||
 		    state.savedTick + 1 != s_LockstepCoordinator->GetConfig().startFrame || !state.pendingInputs.empty() || !state.pendingCommands.empty() ||
-		    !state.pendingPlayerBindings.empty() || !state.admittedReseats.empty()) {
+		    !state.pendingPlayerBindings.empty() || !state.sourceCommandCounts.empty() || !state.admittedReseats.empty()) {
 			if (error) *error = "catch-up state is not a committed boundary";
 			return false;
 		}
@@ -2729,6 +2775,7 @@ namespace RTE {
 		for (const auto& command: state.pendingCommands) if (!member(command.command.senderPeerId)) return fail(__LINE__);
 		for (const auto& binding: state.pendingPlayerBindings) if (!member(binding.command.senderPeerId)) return fail(__LINE__);
 		for (const auto& input: state.pendingInputs) if (!member(input.senderPeerId)) return fail(__LINE__);
+		for (const auto& [key, count]: state.sourceCommandCounts) if (key.first != GetLockstepHostPeerId()) return fail(__LINE__);
 		const uint8_t local = GetLockstepLocalPeerId();
 		const auto applied = state.appliedCommands.find(local);
 		const uint64_t watermark = applied == state.appliedCommands.end() ? 0 : applied->second;
@@ -2736,6 +2783,10 @@ namespace RTE {
 		const auto future = [&](uint64_t frame) { return frame > state.savedTick && frame - state.savedTick - 1 <= NetLockstepCodec::c_MaxFutureFrameSkew; };
 		std::vector<NetLockstepFrame> authoritative;
 		std::map<std::pair<uint8_t, uint64_t>, NetLockstepFrame> inputs;
+		const auto sourceInput = [&](NetLockstepFrame input) {
+			if (const auto count = state.sourceCommandCounts.find({input.senderPeerId, input.targetFrame}); count != state.sourceCommandCounts.end()) input.commands.resize(count->second);
+			return input;
+		};
 		for (auto input: state.pendingInputs) {
 			input.roundId = round;
 			inputs.emplace(std::make_pair(input.senderPeerId, input.targetFrame), input);
@@ -2749,7 +2800,7 @@ namespace RTE {
 			input.roundId = round;
 			if (!future(frame) || input.senderPeerId != local || frame != input.targetFrame || !NetLockstepCodec::EncodeRecoveryInput(input, validation)) return fail(__LINE__);
 			const auto [found, inserted] = inputs.emplace(std::make_pair(local, frame), input);
-			if (!inserted && !SameInputBits(found->second, input)) return fail(__LINE__);
+			if (!inserted && !SameInputBits(sourceInput(found->second), input)) return fail(__LINE__);
 		}
 		std::map<std::pair<uint8_t, uint64_t>, NetResyncPendingCommand> commands, bindings;
 		const auto addCommand = [&](const NetResyncPendingCommand& pending) {
@@ -2772,8 +2823,8 @@ namespace RTE {
 				} else if (!addCommand({input.targetFrame, command})) return fail(__LINE__);
 			}
 			if (input.senderPeerId == local) {
-				requeuedInputs.emplace(input.targetFrame, input);
-				history[input.targetFrame] = input;
+				requeuedInputs.emplace(input.targetFrame, sourceInput(input));
+				history[input.targetFrame] = sourceInput(input);
 			}
 		}
 		const auto agreesWithInput = [&](const NetResyncPendingCommand& pending) {
@@ -2846,7 +2897,7 @@ namespace RTE {
 			history.erase(history.begin(), history.lower_bound(history.rbegin()->first - NetLockstepCodec::c_MaxFutureFrameSkew));
 		}
 		// A playback's recording carries every committed frame from the checkpoint on, so nothing in flight is installed.
-		if (!s_LockstepCoordinator->IsReplayPlayback() && !s_LockstepCoordinator->InstallResyncInputs(authoritative, error)) return false;
+		if (!s_LockstepCoordinator->IsReplayPlayback() && !s_LockstepCoordinator->InstallResyncInputs(authoritative, error, state.sourceCommandCounts)) return false;
 		s_LockstepControlOverrides = std::move(owners);
 		s_LockstepDroppedControlOverrides = std::move(dropped);
 		// A resync does not undo the first transfer; a new process restores it from the snapshot.
@@ -2865,6 +2916,7 @@ namespace RTE {
 		s_RequeuedInputs = std::move(requeuedInputs);
 		s_LocalInputHistory = std::move(history);
 		s_RecoveredInputs = std::move(authoritative);
+		s_RecoveredSourceCommandCounts = state.sourceCommandCounts;
 		s_RecoveredCommands = std::move(recoveredCommands);
 		s_RecoveredPlayerBindings = std::move(recoveredBindings);
 		s_NextLocalCommandSequence = nextSequence;
@@ -3277,7 +3329,7 @@ namespace RTE {
 			                                             " ticks were due before their inputs") +
 			                            "; the clock drops what it owes and holds back " + std::to_string(slide) + " ticks");
 		}
-		s_UpdateAuthority = {tick, s_LockstepCoordinator->GetHostPeerId()};
+		s_UpdateAuthority = {tick, s_LockstepCoordinator->HostAuthorityAt(tick)};
 		return true;
 	}
 

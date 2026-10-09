@@ -9,8 +9,9 @@
 namespace RTE {
 
 	/// The record's own format versions. v1 is the original body; v2 appends the directory
-	/// session id; v3 appends the world-target flag and is written only for a world's ticket.
-	inline constexpr uint16_t c_NetH4TicketRecordVersion = 3;
+	/// session id; v3 appends the world-target flag; v4 adds the signed seat and issuer key.
+	inline constexpr uint16_t c_NetH4TicketRecordVersion = 4;
+	inline constexpr uint16_t c_NetH4TicketWorldVersion = 3;
 	inline constexpr uint16_t c_NetH4TicketDirectoryVersion = 2;
 	inline constexpr uint16_t c_NetH4TicketLegacyVersion = 1;
 
@@ -28,6 +29,8 @@ namespace RTE {
 		uint64_t issuedAtUnixMs = 0;
 		NetHash32 matchConfigHash{};
 		bool persistentWorld = false; //!< The host was a persistent world, so a rejoin hellos on the world plane.
+		std::string seatToken;
+		NetAuthBytes32 authorityKey{};
 
 		bool operator==(const NetH4TicketRecord&) const = default;
 	};
@@ -54,13 +57,12 @@ namespace RTE {
 		static constexpr uint16_t c_RecordVersion = c_NetH4TicketRecordVersion;
 		static constexpr uint16_t c_DirectoryRecordVersion = c_NetH4TicketDirectoryVersion;
 		static constexpr uint16_t c_LegacyRecordVersion = c_NetH4TicketLegacyVersion;
-		/// The version a record needs to say everything it carries: a world ticket needs the flag
-		/// byte, an ordinary one stops at the directory session id, so no build is handed a version
-		/// it cannot read for a field the record does not use.
-		static constexpr uint16_t RecordVersionFor(bool persistentWorld) { return persistentWorld ? c_RecordVersion : c_DirectoryRecordVersion; }
+		static constexpr uint16_t c_WorldRecordVersion = c_NetH4TicketWorldVersion;
+		/// Both ordinary and world matches persist the signed seat credential.
+		static constexpr uint16_t RecordVersionFor(bool) { return c_RecordVersion; }
 		// magic 8 + version 2 + epoch 16 + seat 2 + generation 4 + credential 32 + session 8 +
 		// issuedAt 8 + configHash 32 + address length 2, then the address, then (v2+) the session
-		// id, then (v3) one flag byte, then the 32 B mac.
+		// id, then (v3+) one flag byte, then (v4) issuer and bounded signed token, then the 32 B mac.
 		static constexpr size_t c_FixedBytes = 114;
 		static constexpr size_t c_MaxDirectorySessionIdBytes = NetProtocol::c_MaxShortTextBytes;
 		// Long enough to outlast any single session, short enough that a next-day launch is not
@@ -81,6 +83,9 @@ namespace RTE {
 		bool Store(const NetH4TicketRecord& record, std::string* error = nullptr);
 		bool StoreRoutes(const NetH4TicketRecord& record, const std::vector<NetH4TicketRoute>& routes, std::string* error = nullptr);
 		std::vector<NetH4TicketRoute> LoadRoutes(const NetH4TicketRecord& record) const;
+		/// Remembers only this record's prompt dismissal. The ticket and its routes are untouched.
+		bool DismissOffer(const NetH4TicketRecord& record, std::string* error = nullptr);
+		bool IsOfferDismissed(const NetH4TicketRecord& record) const;
 
 		/// Reads the record back.
 		/// @return Why the load produced nothing, or Loaded.

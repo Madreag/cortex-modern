@@ -1,6 +1,7 @@
 #include "MainMenuGUI.h"
 #include "NetHostOptionsText.h"
 #include "NetPlayerPresentation.h"
+#include "NetChatPresentation.h"
 
 #include "WindowMan.h"
 #include "FrameMan.h"
@@ -116,11 +117,11 @@ static std::string GameRowKey(const NetDirectoryClient::GameRow& row) {
 	return row.source + "|" + row.sessionId + "|" + row.name + "|" + row.address + ":" + std::to_string(row.port);
 }
 
-static std::string FitDiscoveredGameRow(const NetDirectoryClient::GameRow& row, GUIFont* font, int width) {
+std::string MainMenuGUI::DiscoveredGameRowText(const NetDirectoryClient::GameRow& row, GUIFont* font, int width) {
 	if (!font || row.persistentWorld) return NetDirectoryClient::DescribeGameRow(row);
-	std::string name = row.name, activity = row.activity + (row.scene.empty() ? std::string() : " on " + row.scene);
+	std::string name = row.name, scene = row.scene.empty() ? std::string() : " on " + row.scene;
 	const std::string suffix = " - " + row.players + " - " + (row.source == "LAN" ? "This network" : "Internet") + (row.joinable ? std::string() : " - " + GameRowReasonWords(row.reason));
-	const auto compose = [&] { return name + " - " + activity + suffix; };
+	const auto compose = [&] { return name + " - " + row.activity + scene + suffix; };
 	const auto shorten = [](std::string& value) {
 		const size_t dots = value.find("...");
 		if (dots == std::string::npos) {
@@ -129,9 +130,15 @@ static std::string FitDiscoveredGameRow(const NetDirectoryClient::GameRow& row, 
 		} else if (value.size() <= 4) value.clear();
 		else value.erase(dots > 0 ? dots - 1 : dots + 3, 1);
 	};
-	while (!activity.empty() && font->CalculateWidth(compose()) > width) shorten(activity);
+	// The activity identifies what is played. Scene details remain available on selection.
+	if (font->CalculateWidth(compose()) > width) scene.clear();
 	while (!name.empty() && font->CalculateWidth(compose()) > width) shorten(name);
 	return compose();
+}
+
+std::string MainMenuGUI::GameRowJoinRefusal(const NetDirectoryClient::GameRow& row) {
+	if (row.reason == "modules") return NetDirectoryClient::JoinRefusalText(row);
+	return "This game cannot be joined: " + GameRowReasonWords(row.reason) + ".";
 }
 
 // Windows-1252 for one Unicode codepoint; 0xA0-0xFF match Latin-1.
@@ -352,6 +359,7 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerLobbyPortMapLabel = nullptr;
 	m_MultiplayerLobbyChatLabels.fill(nullptr);
 	m_MultiplayerLobbyChatInput = nullptr;
+	m_LobbyChatRequestId = 0;
 	m_MultiplayerLobbyVersionLabel = nullptr;
 	m_MultiplayerLobbyChatLines.clear();
 
@@ -960,7 +968,7 @@ void MainMenuGUI::JoinSelectedGame() {
 	if (selected < 0 || static_cast<size_t>(selected) >= m_GameRows.size()) return;
 	const NetDirectoryClient::GameRow& row = m_GameRows[static_cast<size_t>(selected)];
 	if (!row.joinable) {
-		m_JoinStatusText = "This game cannot be joined: " + GameRowReasonWords(row.reason) + ".";
+		m_JoinStatusText = GameRowJoinRefusal(row);
 		g_GUISound.BackButtonPressSound()->Play();
 		return;
 	}
@@ -1189,6 +1197,13 @@ bool MainMenuGUI::HandleInputEvents() {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		}
 	}
+	// Some window systems deliver Return as a key event before the GUI's held-key state catches up.
+	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen && m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby &&
+	    !m_ActiveDialogBox && m_MultiplayerLobbyChatInput && m_MultiplayerLobbyChatInput->GetVisible() &&
+	    m_MultiplayerLobbyChatInput->GetEnabled() && m_MultiplayerLobbyChatInput->HasFocus() &&
+	    (g_UInputMan.KeyPressed(SDLK_RETURN) || g_UInputMan.KeyPressed(SDLK_KP_ENTER))) {
+		SendLobbyChat();
+	}
 	return false;
 }
 
@@ -1201,10 +1216,10 @@ void MainMenuGUI::SendLobbyChat() {
 		return;
 	}
 	const int modifier = m_SubMenuScreenGUIControlManager->GetManager()->GetInputController()->GetModifier();
-	const uint8_t scope = (modifier & GUIPanel::MODI_CTRL) ? c_NetChatScopeTeam : c_NetChatScopeAll;
-	if (g_NetMatchService.SendChat(scope, text)) {
-		m_MultiplayerLobbyChatInput->SetText("");
-	}
+	if (m_LobbyChatRequestId) return;
+	const uint8_t scope = NetChatAudience(g_SettingsMan.GetNetworkChatDefaultScope(), modifier & GUIPanel::MODI_CTRL, modifier & GUIPanel::MODI_SHIFT);
+	if (g_NetMatchService.SendChat(scope, text, &m_LobbyChatRequestId)) m_MultiplayerLobbyChatInput->SetEnabled(false);
+	else m_MultiplayerLobbyChatLines.push_back("Not sent: chat is unavailable or the message was refused. Your draft is kept.");
 }
 
 void MainMenuGUI::HandleMainScreenInputEvents(const GUIControl* guiEventControl) {
@@ -1404,20 +1419,21 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
 		reconnect.RequestManualRetry(MenuClockMs());
 		reconnect.DismissOffer();
+		reconnect.NoteAttemptStarted(MenuClockMs());
 		std::string rejoinError;
 		if (!g_NetMatchService.BeginTicketRejoin(&rejoinError)) {
 			reconnect.NoteAttemptFailed(MenuClockMs(), rejoinError);
 			m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(rejoinError));
 		} else {
-			reconnect.NoteAttemptStarted(MenuClockMs());
 			m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
 		}
 		g_GUISound.ButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]) {
 		// A cancel stops the automatic attempts; the recovery record survives it, so Rejoin still works.
-		g_NetMatchService.GetReconnectUx().Cancel(MenuClockMs());
-		g_NetMatchService.GetReconnectUx().DismissOffer();
-		g_NetMatchService.GetReconnectUx().StopWatchingForHostReturn();
+		std::string dismissError;
+		if (!g_NetMatchService.DismissReconnectOffer(MenuClockMs(), &dismissError)) {
+			m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(dismissError));
+		}
 		m_MultiplayerApplyOffered = false;
 		g_GUISound.BackButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerModerateButton]) {
@@ -1457,8 +1473,7 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::JoinAddressGoButton]) {
 		CloseMultiplayerDialog();
 		// A session id names nothing a player knows; the joining line says the game.
-		const std::string& address = m_MultiplayerJoinAddressTextBox->GetText();
-		m_JoinTargetName = address.starts_with("session:") ? std::string() : address;
+		m_JoinTargetName.clear();
 		m_JoinTargetPersistentWorld = false;
 		m_JoinTargetActivity.clear();
 		StartMultiplayer(false);
@@ -1694,22 +1709,17 @@ void MainMenuGUI::ApplyMultiplayerHostActivity() {
 		m_MultiplayerHostInfoLabel->SetText(m_MultiplayerHostPickNotice.empty() ? HostSummaryText() : m_MultiplayerHostPickNotice);
 	}
 	if (m_MultiplayerHostAboutLabel) {
-		// The activity's own description, its first sentence, as one line under its name.
+		// Keep the activity's own description, including its supported ways to play.
 		std::string about;
 		// An Activity keeps its own description; the Entity one it hides stays empty.
 		if (const auto* activity = dynamic_cast<const Activity*>(g_PresetMan.GetEntityPreset(HostActivityType(preset, module), preset, g_PresetMan.GetModuleID(module)))) {
 			about = activity->GetDescription();
-			const size_t stop = about.find_first_of(".!?");
-			if (stop != std::string::npos) about.resize(stop + 1);
 		}
 		m_MultiplayerHostAboutLabel->EnsureDrawableTextFont("FontSmall.png");
 		if (m_MultiplayerLobbyPlayerRowFallbackFont) m_MultiplayerHostAboutLabel->SetFont(m_MultiplayerLobbyPlayerRowFallbackFont);
-		if (GUIFont* font = m_MultiplayerLobbyPlayerRowFallbackFont; font && font->CalculateWidth(about) > m_MultiplayerHostAboutLabel->GetWidth()) {
-			while (!about.empty() && font->CalculateWidth(about + "...") > m_MultiplayerHostAboutLabel->GetWidth()) about.pop_back();
-			about += "...";
-		}
 		m_MultiplayerHostAboutLabel->SetText(about);
-		m_MultiplayerHostAboutLabel->SetText(about);
+		m_MultiplayerHostAboutLabel->SetVerticalOverflowScroll(true);
+		m_MultiplayerHostAboutLabel->ActivateDeactivateOverflowScroll(m_MultiplayerHostAboutLabel->GetTextHeight() > m_MultiplayerHostAboutLabel->GetHeight());
 	}
 	// Selecting an item puts the whole name back in the closed box, so the line is refitted here.
 	FitClosedComboText(m_MultiplayerHostActivityCombo);
@@ -2347,6 +2357,13 @@ namespace {
 	bool HostOptBoxFocused(GUITextBox* box) {
 		return box && box->GetPanel() && box->GetPanel()->HasFocus();
 	}
+
+	bool HostOptionsSameDraft(NetMatchConfig left, NetMatchConfig right) {
+		// Automatic per-peer delays are announced measurements, not editable fields on this panel.
+		if (left.delayPolicy == NetMatchDelayPolicy::Auto) left.peerInputDelayFrames.clear();
+		if (right.delayPolicy == NetMatchDelayPolicy::Auto) right.peerInputDelayFrames.clear();
+		return NetMatchConfigUtil::SameHostDraft(left, right);
+	}
 }
 
 void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
@@ -2384,7 +2401,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		const NetKickBanResult drained = g_NetMatchService.GetLastKickBanResult();
 		if (drained != NetKickBanResult::Queued) {
 			m_HostKickBanWatch = false;
-			m_HostOptionsStatusLabel->SetText(m_HostKickBanVerb + ": " + NetKickBanResultName(drained));
+			m_HostOptionsStatusLabel->SetText(m_HostKickBanVerb + ": " + NetKickBanResultText(drained));
 		}
 	}
 	// The title names the panel and the selector names the page; the client's read-only view is the match's details.
@@ -2482,7 +2499,8 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	// Under the selector: what the shown page edits, and for whom.
 	if (m_HostOptScopeLabel) {
 		const bool computer = m_HostOptionsPage == c_HostOptionsConnectionPage || m_HostOptionsPage == c_HostOptionsFilesPage;
-		const std::string scope = computer ? "Saved on this computer for every game you host."
+		const std::string scope = m_HostOptionsReadOnly && m_HostOptionsPage == c_HostOptionsConnectionPage ? "Your route for this match; hosting preferences are in Settings - Network."
+		                                   : computer ? "Saved on this computer for every game you host."
 		                                   : m_HostOptionsReadOnly ? "This match, as the host set it up."
 		                                   : m_HostOptionsSetupDraft ? "The lobby you create next." : "This lobby's match.";
 		if (m_HostOptScopeLabel->GetText() != scope) m_HostOptScopeLabel->SetText(scope);
@@ -2609,7 +2627,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	}
 	// H34: the adopted config's own words for the host row - mode, capacity and seated humans.
 	if (m_HostNetModeLabel) {
-		const NetMatchConfig& adopted = g_NetMatchService.GetLobbyMatchConfig();
+		const NetMatchConfig adopted = m_HostOptionsSetupDraft ? m_HostOptionsDraft : g_NetMatchService.GetLobbyMatchConfig();
 		int seated = 0;
 		for (const NetMatchPlayerSlot& slot : adopted.players) {
 			if (slot.cpu || slot.peerId == 0) continue;
@@ -2621,7 +2639,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 				}
 			}
 		}
-		m_HostNetModeLabel->SetText("Host mode: " + std::string(adopted.dedicated ? "Dedicated" : "Playing") +
+		m_HostNetModeLabel->SetText("Host mode: " + std::string(adopted.dedicated ? "Dedicated host" : "Player host") +
 		                            " - capacity " + std::to_string(adopted.peerCount) +
 		                            " - humans seated " + std::to_string(seated) +
 		                            " - " + (m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Auto ? "Auto" : "Fixed") +
@@ -2635,7 +2653,10 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		static const char* meanings[] = {"Anyone finds this game in the online game list and joins it.",
 		                                 "Not shown in the online game list: players join by your address.",
 		                                 "Only players on your network see it: no online listing is made."};
-		m_HostNetVisibilityHint->SetText(meanings[listingIndex]);
+		m_HostNetVisibilityHint->SetText(m_HostOptionsReadOnly ? "The host chooses who can find and join this game." : meanings[listingIndex]);
+	}
+	for (const char* name : {"ComboHostNetVisibility", "LabelHostNetPort", "TextHostNetPort", "LabelHostNetPortHint", "CheckHostPortMap"}) {
+		if (auto* control = MultiplayerControl(name)) control->SetVisible(!m_HostOptionsReadOnly);
 	}
 	if (m_MultiplayerHostPortMapCheckbox) m_MultiplayerHostPortMapCheckbox->SetCheck(m_HostComputerDraft.portMap ? GUICheckbox::Checked : GUICheckbox::Unchecked);
 	HostOptSetEditable(m_MultiplayerHostPortMapCheckbox, editable);
@@ -2650,19 +2671,25 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	HostOptSetEditable(m_HostNetVisibilityCombo, editable);
 	HostOptSelectComboIndex(m_HostNetIceCombo, m_HostComputerDraft.ice ? 0 : 1);
 	HostOptSetEditable(m_HostNetIceCombo, editable);
+	if (m_HostNetIceCombo) m_HostNetIceCombo->SetVisible(!m_HostOptionsReadOnly);
+	if (auto* label = dynamic_cast<GUILabel*>(MultiplayerControl("LabelHostNetIce"))) label->SetText(m_HostOptionsReadOnly ? "Your connection" : "Automatic connection");
 	if (m_HostNetIceHintLabel) {
-		m_HostNetIceHintLabel->SetText(NetHostNatTraversalHint(g_SettingsMan, m_HostComputerDraft.ice, m_HostOptionsSetupDraft, m_HostOptionsReadOnly, g_NetMatchService.GetIceRoute()));
+		m_HostNetIceHintLabel->SetText(m_HostOptionsSetupDraft
+			? NetHostNatTraversalHint(g_SettingsMan, m_HostComputerDraft.ice, true, false, {})
+			: "Current connection: " + g_NetMatchService.GetNatModeText() + "\n" +
+			  (m_HostOptionsReadOnly ? "Change your connection policy in Settings - Network." : "Close the lobby to change automatic connection."));
 	}
 	HostOptSelectComboIndex(m_HostRelayCombo, static_cast<int>(m_HostComputerDraft.relay));
 	HostOptSetEditable(m_HostRelayCombo, editable && m_HostOptionsSetupDraft);
+	if (m_HostRelayCombo) m_HostRelayCombo->SetVisible(!m_HostOptionsReadOnly);
 	const bool fixedRelay = m_HostComputerDraft.relay == SettingsMan::NetworkHostRelayMode::Fixed;
 	for (size_t i = 0; i < m_HostRelayBoxes.size(); ++i) {
 		if (auto* box = m_HostRelayBoxes[i]) {
-			box->SetVisible(fixedRelay);
+			box->SetVisible(fixedRelay && !m_HostOptionsReadOnly);
 			HostOptSetEditable(box, editable && m_HostOptionsSetupDraft);
 			if (!HostOptBoxFocused(box)) box->SetText(m_HostComputerDraft.relayFields[i]);
 		}
-		if (m_HostRelayLabels[i]) m_HostRelayLabels[i]->SetVisible(fixedRelay);
+		if (m_HostRelayLabels[i]) m_HostRelayLabels[i]->SetVisible(fixedRelay && !m_HostOptionsReadOnly);
 	}
 	if (m_HostRelayHint) {
 		std::string hint = NetHostRelayHint(g_SettingsMan, m_HostComputerDraft.relay, m_HostComputerDraft.ice);
@@ -2670,8 +2697,8 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		// The row holds two lines: a relay error takes the second.
 		if (!m_HostOptionsSetupDraft && !relayError.empty()) hint = hint.substr(0, hint.find('\n')) + "\n" + relayError;
 		if (m_HostOptionsReadOnly) {
-			hint = "Only the host sets up this match: this row shows your saved hosting preference.\n" +
-			       (relayError.empty() ? "Current match: " + g_NetMatchService.GetNatModeText() + ". Change your route in Settings > Network." : relayError);
+			hint = m_HostOptionsDraft.relay.Usable(static_cast<uint64_t>(std::time(nullptr))) ? "The host offers a relay for this match." : "The host currently offers no usable relay.";
+			hint += "\nYour measured route is shown above.";
 		}
 		m_HostRelayHint->SetText(hint);
 	}
@@ -2774,7 +2801,17 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	if (m_HostSessSeatsLabel) {
 		int humans = 0;
 		for (const NetMatchPlayerSlot& slot : m_HostOptionsDraft.players) humans += slot.cpu ? 0 : 1;
-		m_HostSessSeatsLabel->SetText("Human seats: " + std::to_string(humans) + " of " + std::to_string(m_HostOptionsDraft.players.size()));
+		const int connected = static_cast<int>(std::count_if(snapshot.members.begin(), snapshot.members.end(), [](const NetLobbyMember& member) {
+			return !member.cpu && member.connected;
+		}));
+		m_HostSessSeatsLabel->SetText("Human seats: " + std::to_string(humans) + " configured" +
+			(m_HostOptionsSetupDraft ? std::string() : " - " + std::to_string(connected) + " connected"));
+	}
+	if (auto* note = dynamic_cast<GUILabel*>(MultiplayerControl("LabelHostSessNote"))) {
+		note->SetText(m_HostOptionsReadOnly ? "These are the host's options for this match."
+			: m_HostOptionsSetupDraft ? "Apply sets up the lobby you create next."
+			: g_NetMatchService.GetState() == NetMatchServiceState::Completed ? "Apply stages options for the next match."
+			: "Apply updates this lobby for everyone here.");
 	}
 	static const uint8_t idleValues[] = {0, 1, 5, 10, 20, 30, 45, 60};
 	int idleIndex = 0;
@@ -2826,10 +2863,12 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	bool dirty = false;
 	if (m_HostOptionsSetupDraft) {
 		// Any field of the setup's list that differs from what Apply last took (or from what Advanced opened on) is a change.
-		dirty = !NetMatchConfigUtil::SameHostDraft(m_HostOptionsDraft, m_HostSetupOptions ? *m_HostSetupOptions : m_HostOptionsOpenedDraft);
+		dirty = !HostOptionsSameDraft(m_HostOptionsDraft, m_HostSetupOptions ? *m_HostSetupOptions : m_HostOptionsOpenedDraft);
 	} else {
 		const NetMatchConfig adopted = g_NetMatchService.GetLobbyMatchConfig();
-		dirty = !(m_HostOptionsDraft == adopted) && !(g_NetMatchService.GetPendingHostOptions() && m_HostOptionsDraft == *g_NetMatchService.GetPendingHostOptions());
+		const auto pending = g_NetMatchService.GetPendingHostOptions();
+		dirty = !HostOptionsSameDraft(m_HostOptionsDraft, adopted) &&
+			!(pending && HostOptionsSameDraft(m_HostOptionsDraft, *pending));
 	}
 	dirty = dirty || !(m_HostComputerDraft == m_HostComputerLoaded);
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostOptionsApplyButton], editable && dirty);
@@ -2838,8 +2877,11 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostOptionsBackButton], true);
 	// Leaving drops what Apply has not taken, and the button says so while there is anything to drop.
 	m_MainMenuButtons[MenuButton::HostOptionsBackButton]->SetText(dirty && editable ? "Cancel" : "Back");
-	if (m_HostOptionsStatusLabel->GetText().empty() && dirty) {
+	const std::string status = m_HostOptionsStatusLabel->GetText();
+	if (dirty && (status.empty() || status.starts_with("Applied") || status == "Saved as the host defaults.")) {
 		m_HostOptionsStatusLabel->SetText("Changes ready to apply.");
+	} else if (!dirty && (status == "Changes ready to apply." || status == "Unsaved changes")) {
+		m_HostOptionsStatusLabel->SetText("");
 	}
 	// An open seat dialog re-reads the moderation view every frame: the reclaim seconds tick and a
 	// new applicant shows without the host reopening it.
@@ -3183,7 +3225,7 @@ bool MainMenuGUI::CommitHostComputerDraft(bool commit) {
 	}
 	if (hosting && !m_HostOptionsSetupDraft && draft.ice != m_HostComputerLoaded.ice) {
 		// The session's routes were set up when it opened.
-		m_HostOptionsStatusLabel->SetText("Close this lobby to change the direct connection.");
+		m_HostOptionsStatusLabel->SetText("Close this lobby to change automatic connection.");
 		ShowHostOptionsPage(c_HostOptionsConnectionPage);
 		return false;
 	}
@@ -3543,13 +3585,15 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 	// H09/H10: Kick and Ban act on a human seat another peer holds - the host's own seat is never
 	// kickable (the store answers ForbiddenTarget, but the button stays off first).
 	const uint8_t localPeerId = g_NetMatchService.GetLobbySnapshot().localPeerId;
-	const bool humanSeat = host && !slot.cpu && slot.peerId != 0 && slot.peerId != localPeerId;
+	const bool owned = mrow && (mrow->view.committed || mrow->view.dropped || mrow->view.held || mrow->view.heldForReclaim || mrow->view.reclaiming);
+	const bool humanSeat = host && owned && !slot.cpu && slot.peerId != 0 && slot.peerId != localPeerId;
 	m_HostSeatDlgKick->SetEnabled(humanSeat);
 	m_HostSeatDlgBan->SetEnabled(humanSeat);
 	if (m_HostSeatDlgActionHint->GetText().empty() || !humanSeat) {
 		m_HostSeatDlgActionHint->SetText(humanSeat ? "Seat actions apply to this player."
 		                                         : (slot.cpu ? "CPU seats are the host's to retype, not to moderate."
 		                                            : host && slot.peerId != 0 && slot.peerId == localPeerId ? "The host's own seat is never kicked or banned."
+		                                            : host && !owned ? "No player holds this seat."
 		                                            : "Only the host can change who plays here."));
 	}
 }
@@ -3713,18 +3757,13 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 			m_HostSeatDlgModerationRow = -1;
 			m_HostSeatDlgRemovalSeat.reset();
 			CloseMultiplayerDialog();
-			m_HostOptionsStatusLabel->SetText(verb + (result == NetKickBanResult::Queued ? " queued..." : ": Ok"));
+			m_HostOptionsStatusLabel->SetText(verb + ": " + NetKickBanResultText(result));
 			m_HostKickBanWatch = result == NetKickBanResult::Queued;
 			m_HostKickBanVerb = verb;
 			return;
 		}
 		// The refusal names the store's own verdict; the issue carries the peer it was refused for.
-		const NetParticipantRemovalIssue issue = g_NetMatchService.GetLastRemovalIssue();
-		std::string text = verb + " refused - " + NetKickBanResultName(result) +
-		                   " (seat " + std::to_string(m_HostSeatDlgRemovalSeat->stableSeat) + ")";
-		if (issue.lockstepPeerId != 0) {
-			text += " (peer " + std::to_string(issue.lockstepPeerId) + ")";
-		}
+		std::string text = verb + ": " + NetKickBanResultText(result);
 		m_HostSeatDlgActionHint->SetText(text);
 		return;
 	}
@@ -3745,7 +3784,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		// UnbanParticipant answers Queued while the setup worker owns admission; the applied result
 		// replaces it at the next drain, and this dialog's rows re-read the store when it lands.
 		const NetKickBanResult result = g_NetMatchService.UnbanParticipant(m_HostBannedRecords[pick].identity);
-		m_HostBannedStatusLabel->SetText(std::string("Remove ban: ") + NetKickBanResultName(result));
+		m_HostBannedStatusLabel->SetText(std::string("Remove ban: ") + NetKickBanResultText(result));
 		RefreshHostBannedDialog();
 		return;
 	}
@@ -4013,7 +4052,7 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		// A joining peer keeps the join screen until the host admits it; the refresh switches the screen
 		// the moment the lobby snapshot says the seat is real.
 		m_JoinAttemptActive = !host;
-		const std::string target = m_JoinTargetName.empty() ? request.address : m_JoinTargetName;
+		const std::string target = m_JoinTargetName;
 		m_JoinStatusText = host ? std::string() : target.empty() ? "Connecting to the host..." : "Joining " + target + "...";
 		m_MultiplayerSubScreen = host ? MultiplayerSubScreen::Lobby : MultiplayerSubScreen::JoinSetup;
 	} else {
@@ -4122,6 +4161,10 @@ static std::string FormatModuleMismatchStatus(const std::string& text) {
 	return formatted;
 }
 
+bool MainMenuGUI::JoiningNeedsProgress(const NetLobbySnapshot& snapshot) {
+	return !snapshot.running && (!snapshot.inLobby || snapshot.awaitingHostConfig);
+}
+
 void MainMenuGUI::UpdateMultiplayerScreen() {
 	g_NetMatchService.Update();
 	// A completed match leaves the session connected; reconvene both peers in the lobby for a rematch.
@@ -4130,6 +4173,8 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 		g_NetMatchService.ReturnToLobby();
 	}
 	const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
+	if (snapshot.inLobby && snapshot.isHost && (g_UInputMan.AnyPress() || g_UInputMan.HasTextInput() ||
+	    g_UInputMan.MouseWheelMoved() != 0 || !g_UInputMan.GetMouseMovement().IsZero())) g_NetMatchService.NoteLobbyInput();
 
 	// While a connection is being established, cap the menu update rate so the GNS I/O service thread
 	// isn't CPU-starved by the menu rendering flat-out (the headless path yields the same way).
@@ -4157,10 +4202,11 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 			RefreshMultiplayerScreenControls(snapshot);
 			return;
 		}
-		if (!snapshot.running && snapshot.awaitingHostConfig && snapshot.transferLine.empty() && snapshot.waitLine.empty()) {
+		if (JoiningNeedsProgress(snapshot)) {
 			// The service's own phase ("Joining direct-IP match") says nothing the line does not.
-			const std::string status = snapshot.statusText.ends_with("direct-IP match") ? std::string() : PlayerFacingStatus(snapshot.statusText);
-			const std::string target = m_JoinTargetName.empty() ? m_MultiplayerJoinRequest.address : m_JoinTargetName;
+			const std::string status = !snapshot.transferLine.empty() ? snapshot.transferLine : !snapshot.waitLine.empty() ? snapshot.waitLine
+				: snapshot.statusText.ends_with("direct-IP match") ? std::string() : PlayerFacingStatus(snapshot.statusText);
+			const std::string target = m_JoinTargetName;
 			m_JoinStatusText = (target.empty() ? std::string("Connecting to the host...") : "Joining " + target + "...") +
 			                   (status.empty() ? std::string() : " " + status);
 			m_MultiplayerSubScreen = MultiplayerSubScreen::JoinSetup;
@@ -4198,6 +4244,7 @@ void MainMenuGUI::RefreshReconnectControls() {
 	// keeps one pair of controls whatever it is offering.
 	const NetJoinRefusalOffer refusal = m_MultiplayerApplyOffered ? g_NetMatchService.JoinRefusalOffer() : NetJoinRefusalOffer::None;
 	const bool applying = !recovering && !offering && refusal != NetJoinRefusalOffer::None;
+	const bool manualOffer = reconnect.GetOffer() == NetReconnectOffer::Dismissed && !recovering && !applying;
 	// A world whose slots are all held offers a wait beside the application; it stands where Resume does while it is offered.
 	const bool waitOffered = landing && applying && refusal == NetJoinRefusalOffer::SlotsHeld;
 	m_MainMenuButtons[MenuButton::MultiplayerWaitSlotButton]->SetVisible(waitOffered);
@@ -4207,9 +4254,9 @@ void MainMenuGUI::RefreshReconnectControls() {
 	// watch and the only route left is the address the player types.
 	const bool awaiting = reconnect.IsAwaitingHostReturn() && !recovering;
 	const bool hostBack = reconnect.HasHostReturned() || !reconnect.CanWatchHostReturn();
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || applying || awaiting || reconnect.CanRetryManually()));
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering ? (!awaiting || hostBack) : (applying || reconnect.CanRetryManually()));
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering ? "Rejoin Match" : (applying ? NetJoinRefusalApplyCaption(refusal) : "Retry"));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || manualOffer || applying || awaiting || reconnect.CanRetryManually()));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering ? (!awaiting || hostBack) : (manualOffer || applying || reconnect.CanRetryManually()));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering || manualOffer ? "Rejoin Match" : (applying ? NetJoinRefusalApplyCaption(refusal) : "Retry"));
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetVisible(landing && (offering || applying || awaiting || recovering));
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetEnabled(offering || applying || awaiting || reconnect.CanCancel());
 	// Stopping the attempts and setting the offer aside are different acts; the record survives both.
@@ -4319,6 +4366,20 @@ void MainMenuGUI::LayoutMultiplayerFooter(int width, int y) {
 }
 
 void MainMenuGUI::TakeLobbyChat(const NetLobbySnapshot& snapshot) {
+	if (m_LobbyChatRequestId) {
+		const auto result = g_NetMatchService.ChatSendResult(m_LobbyChatRequestId);
+		if (result.state != NetChatSendState::Queued) {
+			m_LobbyChatRequestId = 0;
+			m_MultiplayerLobbyChatInput->SetEnabled(true);
+			if (result.state == NetChatSendState::Sent) m_MultiplayerLobbyChatInput->SetText("");
+			else m_MultiplayerLobbyChatLines.push_back(result.state == NetChatSendState::Unknown ? "Chat not sent: the session changed; your draft is kept." : result.detail);
+		}
+	}
+	if (m_MultiplayerLobbyChatInput) {
+		const int modifier = m_SubMenuScreenGUIControlManager->GetManager()->GetInputController()->GetModifier();
+		const auto scope = NetChatAudience(g_SettingsMan.GetNetworkChatDefaultScope(), modifier & GUIPanel::MODI_CTRL, modifier & GUIPanel::MODI_SHIFT);
+		m_MultiplayerLobbyChatInput->SetRightText(m_LobbyChatRequestId ? "Sending..." : scope == c_NetChatScopeTeam ? "To Team" : "To All");
+	}
 	for (const NetChatEntry& entry : g_NetMatchService.TakeChatEntries()) {
 		std::string name = entry.senderName;
 		if (name.empty()) {
@@ -4734,22 +4795,26 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	                                   std::max(0, (panelCap - chatTop - inputBlock) / 10));
 	const int contentHeight = chatTop + chatRows * 10 + inputBlock;
 
-	// The newest chatRows lines, oldest on top; the entry box takes Enter for All, Ctrl+Enter for
-	// Team. Team lines indent two cells as well as carrying their [team] mark.
+	// The newest chatRows lines, oldest on top; Enter uses the saved audience, Ctrl+Enter selects Team,
+	// and Shift+Enter selects All. Team lines indent two cells as well as carrying their [team] mark.
 	TakeLobbyChat(snapshot);
 	// Lines sit bottom-aligned above the input: the newest line is always the lowest drawn row.
-	const size_t chatOffset = m_MultiplayerLobbyChatLines.size() > static_cast<size_t>(chatRows)
-	                              ? m_MultiplayerLobbyChatLines.size() - chatRows : 0;
-	const size_t firstLineRow = m_MultiplayerLobbyChatLines.size() - chatOffset < static_cast<size_t>(chatRows)
-	                                ? static_cast<size_t>(chatRows) - (m_MultiplayerLobbyChatLines.size() - chatOffset) : 0;
 	// Chat follows the player rows' convention: X=8, their ini spot, at the fixed panel width.
 	const int chatX = 8;
 	const int chatW = contentWidth - 2 * chatX;
+	GUIFont* chatFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png");
+	std::vector<std::string> visualChatLines;
+	for (const auto& message: m_MultiplayerLobbyChatLines) {
+		const auto wrapped = NetChatWrap(message, std::max(1, chatW - 4), [&](const std::string& text) { return chatFont->CalculateWidth(text); });
+		visualChatLines.insert(visualChatLines.end(), wrapped.begin(), wrapped.end());
+	}
+	const size_t chatOffset = visualChatLines.size() > static_cast<size_t>(chatRows) ? visualChatLines.size() - chatRows : 0;
+	const size_t firstLineRow = static_cast<size_t>(chatRows) - (visualChatLines.size() - chatOffset);
 	for (size_t row = 0; row < m_MultiplayerLobbyChatLabels.size(); ++row) {
 		GUILabel* label = m_MultiplayerLobbyChatLabels[row];
 		if (!label) continue;
 		const bool drawn = row < static_cast<size_t>(chatRows) && row >= firstLineRow;
-		label->SetText(drawn ? m_MultiplayerLobbyChatLines[chatOffset + row - firstLineRow] : "");
+		label->SetText(drawn ? visualChatLines[chatOffset + row - firstLineRow] : "");
 		// FontSmall's cells are 10px, so the rows pitch at the measured height, not the label's skin one.
 		label->SetPositionRel(chatX, chatTop + static_cast<int>(row) * 10);
 		if (label->GetWidth() != chatW) {
@@ -5332,6 +5397,7 @@ void MainMenuGUI::AutomationGoToMainScreen() {
 bool MainMenuGUI::AutomationControlExists(const std::string& controlName) const {
 	if (const auto index = ReplayRowIndex(controlName)) return *index < m_ReplayRows.size();
 	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return m_SettingsMenu->AutomationManager()->GetControl(controlName) != nullptr;
+	if (m_ActiveMenuScreen == MenuScreen::SaveOrLoadGameScreen) return m_SaveLoadMenu->AutomationManager()->GetControl(controlName) != nullptr;
 	return m_SubMenuScreenGUIControlManager->GetControl(controlName) != nullptr ||
 	       m_MainMenuScreenGUIControlManager->GetControl(controlName) != nullptr;
 }
@@ -5339,6 +5405,7 @@ bool MainMenuGUI::AutomationControlExists(const std::string& controlName) const 
 bool MainMenuGUI::AutomationControlEnabled(const std::string& controlName) const {
 	if (const auto index = ReplayRowIndex(controlName)) return *index < m_ReplayRows.size() && IsControlClickable(m_ReplayList);
 	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return MenuAutomation::Enabled(m_SettingsMenu->AutomationManager()->GetControl(controlName));
+	if (m_ActiveMenuScreen == MenuScreen::SaveOrLoadGameScreen) return MenuAutomation::Enabled(m_SaveLoadMenu->AutomationManager()->GetControl(controlName));
 	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
 	if (!control) {
 		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
@@ -5349,7 +5416,8 @@ bool MainMenuGUI::AutomationControlEnabled(const std::string& controlName) const
 
 GUIControlManager* MainMenuGUI::AutomationManager() const {
 	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return m_SettingsMenu->AutomationManager();
-	return m_ActiveMenuScreen == MenuScreen::SaveOrLoadGameScreen || m_ActiveMenuScreen == MenuScreen::ModManagerScreen ? nullptr : m_ActiveGUIControlManager;
+	if (m_ActiveMenuScreen == MenuScreen::SaveOrLoadGameScreen) return m_SaveLoadMenu->AutomationManager();
+	return m_ActiveMenuScreen == MenuScreen::ModManagerScreen ? nullptr : m_ActiveGUIControlManager;
 }
 
 void MainMenuGUI::HandleMetaGameNoticeScreenInputEvents(const GUIControl* guiEventControl) {
@@ -5473,7 +5541,7 @@ void MainMenuGUI::RefreshGamesList() {
 		if (detail.empty() && selected >= 0 && static_cast<size_t>(selected) < m_GameRows.size()) {
 			const NetDirectoryClient::GameRow& row = m_GameRows[static_cast<size_t>(selected)];
 			detail = row.name + ": " + row.activity + (row.scene.empty() ? std::string() : " on " + row.scene) + ", " + row.players + " players, " +
-			         (row.source == "LAN" ? "this network" : "internet") + (row.joinable ? std::string() : "\nCannot be joined: " + GameRowReasonWords(row.reason));
+			         (row.source == "LAN" ? "this network" : "internet") + (row.joinable ? std::string() : "\n" + GameRowJoinRefusal(row));
 		}
 		if (m_JoinSelectedLabel->GetText() != detail) m_JoinSelectedLabel->SetText(detail);
 		// A reason longer than the lines under the list scrolls down inside them, so all of it is read.
@@ -5550,7 +5618,7 @@ void MainMenuGUI::RefreshGamesList() {
 	}
 	rows = std::move(listed);
 	const auto describe = [this](const NetDirectoryClient::GameRow& row) {
-		return FitDiscoveredGameRow(row, m_MultiplayerLanGamesList->GetFont(), std::max(1, m_MultiplayerLanGamesList->GetWidth() - 29));
+		return DiscoveredGameRowText(row, m_MultiplayerLanGamesList->GetFont(), std::max(1, m_MultiplayerLanGamesList->GetWidth() - 29));
 	};
 	bool changed = rows.size() != m_GameRows.size();
 	for (size_t i = 0; !changed && i < rows.size(); ++i) {
@@ -5563,7 +5631,8 @@ void MainMenuGUI::RefreshGamesList() {
 	}
 	m_GameRows = std::move(rows);
 	m_MultiplayerLanGamesList->ClearList();
-	m_MultiplayerLanGamesList->EnableScrollbars(false, true);
+	// Long mod activity names remain readable instead of being abbreviated away.
+	m_MultiplayerLanGamesList->EnableScrollbars(true, true);
 	for (const NetDirectoryClient::GameRow& row: m_GameRows) {
 		m_MultiplayerLanGamesList->AddItem(describe(row));
 	}

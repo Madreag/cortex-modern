@@ -698,6 +698,7 @@ struct MusicCheckpoint {
         const std::string originalAudio = g_AudioMan.SaveCheckpoint();
         const auto originalRegistry = g_AudioMan.CaptureCheckpointSoundRegistry();
         const RandomGenerator originalRNG = g_RenderRNG;
+        const RandomGenerator originalSimRNG = g_SimRNG;
         State original; original.Swap(manager);
         bool ok = true;
         try {
@@ -734,6 +735,18 @@ struct MusicCheckpoint {
             SoundContainer* heldCurrent = manager.m_CurrentSoundContainer.get();
             auto held = manager.TakeCheckpointOwners();
             if (manager.m_CurrentSoundContainer || !manager.RestoreCheckpointOwners(held) || held || manager.m_CurrentSoundContainer.get() != heldCurrent || manager.SaveCheckpoint() != music || g_AudioMan.GetSoundContainerPlaybackCheckpoint(heldCurrent) != playback) throw std::runtime_error("music hold/reinstate lost original owner identity");
+            const std::string simulationRNG = g_SimRNG.SerializeCheckpoint();
+            manager.m_IsPlayingDynamicMusic = true;
+            manager.m_EndWhenCurrentEnds = false;
+            for (const auto mode: {DynamicSongSection::RANDOMNOREPEAT, DynamicSongSection::SHUFFLE}) {
+                restoredSection.SetSoundContainerSelectionCycleMode(mode);
+                for (int i = 0; i < 6; ++i) {
+                    restoredSection.SelectTransitionSoundContainer();
+                    manager.ExpireCurrentSectionForTest();
+                    if (g_SimRNG.SerializeCheckpoint() != simulationRNG) throw std::runtime_error("local music playback advanced the simulation RNG");
+                }
+            }
+            std::cout << "[music-checkpoint-selftest] local_music_playback_preserves_simulation_rng PASS" << std::endl;
             manager.EndDynamicMusic();
             // A stopped song must not leave a pointer into its destroyed sections.
             manager.m_IsPlayingDynamicMusic = true; manager.EndDynamicMusic();
@@ -744,6 +757,7 @@ struct MusicCheckpoint {
         g_AudioMan.RestoreCheckpointSoundRegistry(originalRegistry);
         ok = g_AudioMan.LoadCheckpoint(originalAudio) && ok;
         g_RenderRNG = originalRNG;
+        g_SimRNG = originalSimRNG;
         return ok;
     }
 };

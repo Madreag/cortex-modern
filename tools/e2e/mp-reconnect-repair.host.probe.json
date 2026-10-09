@@ -46,6 +46,22 @@
       }
     },
     {
+      "op": "mouse_down",
+      "control": "NetworkSeatsOptions"
+    },
+    {
+      "op": "wait",
+      "renders": 3
+    },
+    {
+      "op": "mouse_up",
+      "control": "NetworkSeatsOptions"
+    },
+    {
+      "op": "wait",
+      "renders": 4
+    },
+    {
       "op": "assert_control",
       "control": "NetworkSeatsOptionsText",
       "text_contains": "Repair match: Ready - pause menu > Match Details"
@@ -95,6 +111,21 @@
       "op": "wait",
       "screen": "PauseMatchOptions",
       "elapsed_ms": 400
+    },
+    {
+      "op": "wait",
+      "renders": 4,
+      "scope": "menu"
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonConnectionDetails",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "renders": 4,
+      "scope": "menu"
     },
     {
       "op": "assert",

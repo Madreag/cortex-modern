@@ -3,6 +3,7 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <iphlpapi.h>
 using SocketHandle = SOCKET;
 static constexpr SocketHandle c_InvalidSocket = INVALID_SOCKET;
 #else
@@ -11,6 +12,8 @@ static constexpr SocketHandle c_InvalidSocket = INVALID_SOCKET;
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 using SocketHandle = int;
 static constexpr SocketHandle c_InvalidSocket = -1;
 #endif
@@ -128,13 +131,13 @@ namespace RTE {
 		return StartBeacon(gamePort, hostName, activity, mode, playerCount, maxPlayers, nullptr, error);
 	}
 
-	bool NetLanDiscovery::StartBeacon(uint16_t gamePort, const std::string& hostName, const std::string& activity, const std::string& mode, uint8_t playerCount, uint8_t maxPlayers, const NetLanCompatIdentity* compat, std::string* error) {
+	bool NetLanDiscovery::StartBeacon(uint16_t gamePort, const std::string& hostName, const std::string& activity, const std::string& mode, uint8_t playerCount, uint8_t maxPlayers, const NetLanCompatIdentity* compat, std::string* error, uint64_t matchId, uint32_t hostGeneration) {
 		if (!EnsureSocket(false, error)) {
 			return false;
 		}
 		std::vector<uint8_t> payload;
 		AppendU32(payload, c_Magic);
-		AppendU16(payload, compat == nullptr ? c_LegacyBeaconVersion : c_Version);
+		AppendU16(payload, compat == nullptr ? c_LegacyBeaconVersion : matchId == 0 ? 2 : c_Version);
 		AppendU16(payload, gamePort);
 		payload.push_back(playerCount);
 		payload.push_back(maxPlayers);
@@ -147,6 +150,7 @@ namespace RTE {
 			AppendU64(payload, static_cast<uint64_t>(compat->controllerFrameVersion));
 			AppendString(payload, compat->sessionIdentityHash);
 			AppendString(payload, compat->moduleManifestHash);
+			if (matchId != 0) { AppendU64(payload, matchId); AppendU64(payload, hostGeneration); }
 		}
 		// A hosting lobby calls this every menu frame; keep the send schedule unless the payload
 		// actually changed, or the beacon would broadcast every frame instead of once per interval.
@@ -257,6 +261,12 @@ namespace RTE {
 				info.compatibility.controllerFrameVersion = static_cast<int64_t>(controllerFrameVersion);
 				info.hasCompatibility = true;
 			}
+			if (version >= 3) {
+				uint64_t generation = 0;
+				if (!ReadU64(buffer, static_cast<size_t>(received), offset, info.matchId) || info.matchId == 0 ||
+				    !ReadU64(buffer, static_cast<size_t>(received), offset, generation) || generation > UINT32_MAX) continue;
+				info.hostGeneration = static_cast<uint32_t>(generation);
+			}
 			char addressText[INET_ADDRSTRLEN] = {};
 			inet_ntop(AF_INET, &fromAddress.sin_addr, addressText, sizeof(addressText));
 			info.address = addressText;
@@ -302,6 +312,56 @@ namespace RTE {
 		}
 		CloseSocket(socketHandle);
 		return result;
+	}
+
+	std::vector<std::string> NetLanDiscovery::GetLocalAddresses() {
+		std::vector<std::string> addresses;
+		const auto append = [&](const sockaddr* address) {
+			if (!address) return;
+			char text[INET6_ADDRSTRLEN]{};
+			if (address->sa_family == AF_INET) {
+				const auto& value = reinterpret_cast<const sockaddr_in*>(address)->sin_addr;
+				const uint32_t ip = ntohl(value.s_addr);
+				if (ip == 0 || (ip >> 24) == 127 || (ip >> 16) == 0xa9fe) return;
+				if (inet_ntop(AF_INET, &value, text, sizeof(text))) addresses.emplace_back(text);
+			} else if (address->sa_family == AF_INET6) {
+				const auto& value = reinterpret_cast<const sockaddr_in6*>(address)->sin6_addr;
+				if (IN6_IS_ADDR_UNSPECIFIED(&value) || IN6_IS_ADDR_LOOPBACK(&value) || IN6_IS_ADDR_LINKLOCAL(&value)) return;
+				if (inet_ntop(AF_INET6, &value, text, sizeof(text))) addresses.emplace_back(text);
+			}
+		};
+#ifdef _WIN32
+		static const HMODULE library = LoadLibraryA("iphlpapi.dll");
+		using ReadAdapters = ULONG(WINAPI*)(ULONG, ULONG, PVOID, PIP_ADAPTER_ADDRESSES, PULONG);
+		const auto read = library ? reinterpret_cast<ReadAdapters>(GetProcAddress(library, "GetAdaptersAddresses")) : nullptr;
+		ULONG size = 16 * 1024;
+		if (read) for (int attempt = 0; attempt < 2 && size <= 1024 * 1024; ++attempt) {
+			std::vector<uint8_t> buffer(size);
+			auto* first = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data());
+			const ULONG result = read(AF_UNSPEC, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, nullptr, first, &size);
+			if (result == ERROR_BUFFER_OVERFLOW) continue;
+			if (result == NO_ERROR) for (auto* adapter = first; adapter; adapter = adapter->Next) {
+				if (adapter->OperStatus != IfOperStatusUp || adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+				for (auto* ip = adapter->FirstUnicastAddress; ip; ip = ip->Next) append(ip->Address.lpSockaddr);
+			}
+			break;
+		}
+#else
+		ifaddrs* first = nullptr;
+		if (getifaddrs(&first) == 0) {
+			for (const ifaddrs* item = first; item; item = item->ifa_next)
+				if ((item->ifa_flags & IFF_UP) && !(item->ifa_flags & IFF_LOOPBACK)) append(item->ifa_addr);
+			freeifaddrs(first);
+		}
+#endif
+		std::sort(addresses.begin(), addresses.end());
+		addresses.erase(std::unique(addresses.begin(), addresses.end()), addresses.end());
+		const auto primary = GetPrimaryLocalAddress();
+		if (!primary.empty()) {
+			std::erase(addresses, primary);
+			addresses.insert(addresses.begin(), primary);
+		}
+		return addresses;
 	}
 
 	std::vector<NetLanHostInfo> NetLanDiscovery::GetHosts(uint64_t nowMs) {

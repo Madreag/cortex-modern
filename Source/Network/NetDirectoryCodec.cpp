@@ -260,6 +260,9 @@ namespace RTE {
 			if (obj.contains("migration_gen") && !ReadInt(obj, "migration_gen", 0, NetDirectoryLimits::c_MaxIntField, out.migrationGen, reason)) {
 				return false;
 			}
+			if (!ReadOptionalPlainStr(obj, "ice_identity", out.iceIdentity, reason, NetDirectoryLimits::c_MaxStringChars) ||
+			    !ReadOptionalInt(obj, "ice_virtual_port", 1, NetDirectoryLimits::c_MaxListenPort, out.iceVirtualPort, reason)) return false;
+			if (out.iceIdentity.empty() != (out.iceVirtualPort == 0)) return Fail(reason, "invalid_field", "ice_identity");
 			return true;
 		}
 
@@ -281,6 +284,10 @@ namespace RTE {
 			obj["listen_port"] = in.listenPort;
 			obj["listen_addrs"] = in.listenAddrs;
 			obj["join_mode"] = in.joinMode;
+			if (!in.iceIdentity.empty()) {
+				obj["ice_identity"] = in.iceIdentity;
+				obj["ice_virtual_port"] = in.iceVirtualPort;
+			}
 			if (in.persistentWorld) {
 				obj["persistent_world"] = true;
 				obj["world_id"] = in.worldId;
@@ -315,6 +322,8 @@ namespace RTE {
 			out.listenPort = fields.listenPort;
 			out.listenAddrs = std::move(fields.listenAddrs);
 			out.joinMode = std::move(fields.joinMode);
+			out.iceIdentity = std::move(fields.iceIdentity);
+			out.iceVirtualPort = fields.iceVirtualPort;
 			out.persistentWorld = fields.persistentWorld;
 			out.worldId = std::move(fields.worldId);
 			out.worldBoot = fields.worldBoot;
@@ -349,6 +358,8 @@ namespace RTE {
 			fields.listenPort = row.listenPort;
 			fields.listenAddrs = row.listenAddrs;
 			fields.joinMode = row.joinMode;
+			fields.iceIdentity = row.iceIdentity;
+			fields.iceVirtualPort = row.iceVirtualPort;
 			fields.persistentWorld = row.persistentWorld;
 			fields.worldId = row.worldId;
 			fields.worldBoot = row.worldBoot;
@@ -369,6 +380,7 @@ namespace RTE {
 	std::string NetDirectoryCodec::EncodeRegisterRequest(const NetDirectoryRegisterRequest& request) {
 		json obj;
 		WriteRegisterFields(obj, request);
+		obj["connection_protocol"] = NetDirectoryLimits::c_ConnectionProtocol;
 		if (!request.resumeSessionId.empty()) {
 			obj["resume_session_id"] = request.resumeSessionId;
 			// A successor's claim names the generation it takes the row at: the directory takes the first claim of each.
@@ -399,13 +411,17 @@ namespace RTE {
 		};
 		// Unsupported stays omitted so the default encoding keeps the legacy shape.
 		if (response.supportsUnlisted) obj["supports_unlisted"] = true;
+		if (response.connectionProtocol != 0) obj["connection_protocol"] = response.connectionProtocol;
+		if (!response.authorityKey.empty()) obj["authority_key"] = response.authorityKey;
 		return obj.dump();
 	}
 
 	bool NetDirectoryCodec::DecodeRegisterResponse(const std::string& body, NetDirectoryRegisterResponse& out, std::string& reason) {
 		json obj;
 		if (!ParseBody(body, obj, reason)) return false;
-		return ReadStr(obj, "session_id", out.sessionId, reason) &&
+		return ReadOptionalInt(obj, "connection_protocol", 0, 65535, out.connectionProtocol, reason) &&
+		       ReadOptionalPlainStr(obj, "authority_key", out.authorityKey, reason, 64) &&
+		       ReadStr(obj, "session_id", out.sessionId, reason) &&
 		       ReadStr(obj, "token", out.token, reason) &&
 		       ReadInt(obj, "expires_in_s", 0, NetDirectoryLimits::c_MaxIntField, out.expiresInS, reason) &&
 		       ReadInt(obj, "heartbeat_s", 0, NetDirectoryLimits::c_MaxIntField, out.heartbeatS, reason) &&

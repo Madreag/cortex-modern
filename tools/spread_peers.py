@@ -1060,7 +1060,54 @@ def native_cpu_wait_source(source):
                       "    from spread_peers import submit_named_task\n"
                       "    return submit_named_task(_native_submit_task,value,globals())\n")
     source = source.replace(guard, replacement, 1).replace(entry, extension+'\n'+entry, 1)
-    return native_cache_source(source)
+    return native_cache_source(native_process_source(source))
+
+
+def native_process_source(source):
+    """Use the native process snapshot instead of a WMI service query on Windows."""
+    old = ("    if sys.platform=='win32':\n"
+           "        command=\"@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name) | ConvertTo-Json -Compress\"\n"
+           "        result=subprocess.run(['pwsh','-NoProfile','-NonInteractive','-Command',command],capture_output=True,text=True,timeout=8,\n"
+           "                              creationflags=subprocess.CREATE_NO_WINDOW)\n"
+           "        if result.returncode:raise RuntimeError('process counter failed')\n"
+           "        return [dict(pid=row['ProcessId'],parent=row['ParentProcessId'],name=row['Name']) for row in json.loads(result.stdout or '[]')]\n")
+    if source.count(old) != 1:
+        raise SpreadRefusal('native worker process counter differs from the supported kit')
+    source = source.replace(old, "    if sys.platform=='win32':\n        return native_windows_processes()\n", 1)
+    extension = '''
+def native_windows_processes():
+    import ctypes
+    class Entry(ctypes.Structure):
+        _fields_ = [('size', ctypes.c_ulong), ('usage', ctypes.c_ulong), ('pid', ctypes.c_ulong),
+                    ('heap', ctypes.c_size_t), ('module', ctypes.c_ulong), ('threads', ctypes.c_ulong),
+                    ('parent', ctypes.c_ulong), ('priority', ctypes.c_long), ('flags', ctypes.c_ulong),
+                    ('name', ctypes.c_wchar * 260)]
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateToolhelp32Snapshot.argtypes = [ctypes.c_ulong, ctypes.c_ulong]
+    kernel.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    kernel.Process32FirstW.argtypes = kernel.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.POINTER(Entry)]
+    kernel.Process32FirstW.restype = kernel.Process32NextW.restype = ctypes.c_int
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    snapshot = kernel.CreateToolhelp32Snapshot(2, 0)
+    if snapshot in (None, ctypes.c_void_p(-1).value):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        entry = Entry()
+        entry.size = ctypes.sizeof(entry)
+        if not kernel.Process32FirstW(snapshot, ctypes.byref(entry)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        rows = []
+        while True:
+            rows.append(dict(pid=entry.pid, parent=entry.parent, name=entry.name))
+            if not kernel.Process32NextW(snapshot, ctypes.byref(entry)):
+                if ctypes.get_last_error() != 18:  # ERROR_NO_MORE_FILES
+                    raise ctypes.WinError(ctypes.get_last_error())
+                return rows
+    finally:
+        kernel.CloseHandle(snapshot)
+'''
+    entry = "if __name__=='__main__':raise SystemExit(main())"
+    return source.replace(entry, extension+'\n'+entry, 1)
 
 
 def native_cache_source(source):

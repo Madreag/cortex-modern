@@ -23,6 +23,7 @@ namespace RTE {
 
 	namespace {
 		uint8_t RosterIdOf(uint16_t stableSeat) { return NetRosterIdOf(stableSeat); }
+		uint64_t ConnectionNowMs() { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); }
 	} // namespace
 
 	uint64_t NetRosterMatchIdOf(const NetAuthBytes16& epoch) {
@@ -89,6 +90,7 @@ namespace RTE {
 			if (state.hasParticipantId) {
 				row["participant_id"] = state.participantId;
 			}
+			if (!state.lease.Empty()) { row["seat_token"] = state.lease.token; row["seat_authority"] = state.lease.authority; }
 			if (const auto* ledger = m_Ledger.Find(state.seat.stableSeat))
 				row["ledger"] = {ledger->peerId, ledger->team, ledger->droppedAtFrame, ledger->actorUIDs};
 			seats.push_back(std::move(row));
@@ -102,7 +104,7 @@ namespace RTE {
 				}
 			}
 		}
-		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"roster_bytes", EncodeRoster(m_Roster)}, {"roster_host", rosterHost}, {"roster_banned", m_Roster.banned}, {"applicants", applicants}, {"seat_removal_undo", m_SeatRemovalUndo}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
+		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"removed_names", m_RemovedNames}, {"roster_bytes", EncodeRoster(m_Roster)}, {"roster_host", rosterHost}, {"roster_banned", m_Roster.banned}, {"applicants", applicants}, {"seat_removal_undo", m_SeatRemovalUndo}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
 	}
 
 	bool NetReconnectHost::RememberSeatRemoval(uint16_t stableSeat, uint64_t frame) {
@@ -283,6 +285,11 @@ namespace RTE {
 					state->participantId = row.at("participant_id").get<NetAuthBytes32>();
 					state->hasParticipantId = true;
 				}
+				if (row.contains("seat_token")) {
+					if (!NetSeatLease::Decode(row.at("seat_token").get<std::string>(), row.at("seat_authority").get<NetParticipantId>(), state->lease) ||
+					    state->lease.epoch != nextRegistry.GetEpoch() || state->lease.seat != seat || state->lease.generation != state->holderGeneration ||
+					    !state->hasParticipantId || state->lease.participant != state->participantId) return false;
+				}
 				if (rowCommitted && nextRegistry.GetActiveGeneration(seat) != state->holderGeneration)
 					return false;
 				if (const auto peer = transports.find(state->seat.lockstepPeerId); peer != transports.end()) {
@@ -320,6 +327,7 @@ namespace RTE {
 					return false;
 			}
 			if (object.contains("removed")) next.m_RemovedParticipants = object.at("removed").get<std::set<NetAuthBytes32>>();
+			next.m_RemovedNames = object.value("removed_names", std::map<NetAuthBytes32, std::string>{});
 			// The roster carried whole numbers on from the old host's: its host link is lost on the survivors' majority, a member that has
 			// not followed the successor is away, and taking the round over is its next revision under the next host generation.
 			NetSeatRoster carried;
@@ -390,11 +398,14 @@ namespace RTE {
 			next.m_DropOwnershipContext = m_DropOwnershipContext;
 			next.m_SeatSimIdentitySource = m_SeatSimIdentitySource;
 			next.m_SeatSimIdentityContext = m_SeatSimIdentityContext;
+			next.m_ConnectionAuthority = m_ConnectionAuthority;
+			next.m_LocalPlayerName = m_LocalPlayerName;
 			// A whole plane replaces this one, so the revision may not fall back to the import's zero:
 			// it carries on from ours, one step past the state a caller last saw.
 			const uint64_t revision = m_StateRevision + 1;
 			*this = std::move(next);
 			m_StateRevision = revision;
+			if (m_ConnectionAuthority) for (const auto& [player, name]: m_RemovedNames) m_ConnectionAuthority->Remove(player, name, m_BanStore && m_BanStore->IsBanned(player, m_HostSessionId));
 			return true;
 		} catch (const nlohmann::json::exception&) {
 			return false;
@@ -423,18 +434,33 @@ namespace RTE {
 		for (auto& state: m_Seats) {
 			if (!state.seat.local || state.seat.cpu)
 				continue;
-			if (state.holderGeneration != 0)
-				return record.epoch == m_Registry->GetEpoch() && record.stableSeat == state.seat.stableSeat && m_Registry->MatchesActiveCredential(record.stableSeat, record.holderGeneration, record.credential);
-			record = {};
-			if (!m_Registry->IssueCredential(state.seat.stableSeat, record.holderGeneration, record.credential))
-				return false;
-			record.epoch = m_Registry->GetEpoch();
-			record.stableSeat = state.seat.stableSeat;
-			record.hostSessionId = m_HostSessionId;
-			state.holderGeneration = record.holderGeneration;
-			state.incarnation = 1;
-			state.identity = m_LocalIdentity;
-			SeatHolder(state);
+			if (state.holderGeneration == 0) {
+				record = {};
+				if (!m_Registry->IssueCredential(state.seat.stableSeat, record.holderGeneration, record.credential)) return false;
+				record.epoch = m_Registry->GetEpoch(); record.stableSeat = state.seat.stableSeat; record.hostSessionId = m_HostSessionId;
+				state.holderGeneration = record.holderGeneration; state.incarnation = 1; state.identity = m_LocalIdentity;
+				if (m_ConnectionAuthority) {
+					state.participantId = m_ConnectionAuthority->LocalParticipant(); state.hasParticipantId = state.participantId != NetParticipantId{};
+					state.holderName = m_LocalPlayerName;
+					state.lease.epoch = record.epoch; state.lease.seat = record.stableSeat; state.lease.generation = record.holderGeneration;
+					state.lease.credential = record.credential; state.lease.hostSessionId = record.hostSessionId; state.lease.participant = state.participantId;
+				}
+				SeatHolder(state);
+			} else if (m_ConnectionAuthority && state.lease.generation != 0) {
+				record.epoch = state.lease.epoch; record.stableSeat = state.lease.seat; record.holderGeneration = state.lease.generation;
+				record.credential = state.lease.credential; record.hostSessionId = state.lease.hostSessionId;
+			} else if (record.epoch != m_Registry->GetEpoch() || record.stableSeat != state.seat.stableSeat ||
+			           !m_Registry->MatchesActiveCredential(record.stableSeat, record.holderGeneration, record.credential)) return false;
+			if (m_ConnectionAuthority) {
+				const std::string directory = m_ConnectionAuthority->DirectorySessionId();
+				if (state.lease.directorySessionId != directory) { state.lease.directorySessionId = directory; state.lease.token.clear(); }
+				if (const auto renewed = m_ConnectionAuthority->LocalLease(); renewed && renewed->SameSeat(state.lease) && renewed->issuedAt > state.lease.issuedAt) state.lease = *renewed;
+				std::string error;
+				if (!PrepareSeatLease(c_InvalidNetPeerId, state.holderName, state.lease, error)) return false;
+				record.seatToken = state.lease.token; record.authorityKey = state.lease.authority; record.directorySessionId = state.lease.directorySessionId;
+				record.issuedAtUnixMs = state.lease.issuedAt * 1000; record.recordVersion = NetReconnectTicketStore::c_RecordVersion;
+				(void)m_ConnectionAuthority->AdoptLocalLease(state.lease);
+			}
 			return true;
 		}
 		return false;
@@ -559,6 +585,7 @@ namespace RTE {
 			m_PendingReclaims.clear();
 			m_Fences.clear();
 			m_RemovedParticipants.clear();
+			m_RemovedNames.clear();
 			m_Outbound.clear();
 			m_PendingReseats.clear();
 			m_Commits.clear();
@@ -940,7 +967,7 @@ namespace RTE {
 		NoteStateChanged();
 		for (SeatState& state : m_Seats) {
 			// The current host keeps its own seat out of admission offers.
-			if (state.seat.cpu || state.seat.local || IsSeated(state) || IsHostOpened(state) || state.holderGeneration != 0) {
+			if (state.seat.cpu || state.seat.local || IsSeated(state)) {
 				continue;
 			}
 			const bool provisional = std::any_of(m_Provisionals.begin(), m_Provisionals.end(), [&state](const Provisional& pending) {
@@ -1003,6 +1030,18 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::Send(NetPeerId connection, NetPayload payload) {
+		if (m_ConnectionAuthority) if (const auto* committed = std::get_if<NetH4JoinCommitted>(&payload)) {
+			const SeatState* seat = FindSeat(committed->stableSeat);
+			NetParticipantId player{};
+			if (!seat || !LookupParticipantId(connection, player) || player != seat->participantId) {
+				const std::string name = seat && !seat->holderName.empty() ? seat->holderName : "The original player";
+				payload = NetJoinRejected{NetRejectReason::IdentityUnproven, name + " owns this seat. Join another open seat.", "seat_owner", "", ""};
+			} else if (seat->activeConnection != connection) {
+				payload = NetJoinRejected{NetRejectReason::HostNotAccepting, IsHolderAway(*seat)
+					? "This connection needs a fresh seat check-in. Reconnecting will retry; Cancel returns to Multiplayer."
+					: seat->holderName + " is still playing. The original keeps the seat; join another open seat.", "connection_retry", "", ""};
+			}
+		}
 		m_Outbound.push_back({connection, std::move(payload)});
 	}
 
@@ -1194,11 +1233,16 @@ namespace RTE {
 		}
 		if (Provisional* pending = FindProvisionalByTxId(message.txId)) {
 			// A retransmitted NewJoin re-offers the same ticket rather than opening a second seat.
+			NetAuthBytes32 participant{};
+			if (m_ConnectionAuthority && (!LookupParticipantId(connection, participant) || participant != pending->lease.participant)) {
+				Send(connection, NetJoinRejected{NetRejectReason::IdentityUnproven, pending->holderName + " owns this seat. Join another open seat.", "seat_owner", "", ""});
+				return;
+			}
 			pending->connection = connection;
 			pending->lastSentMs = nowMs;
 			++pending->retransmits;
 			++m_Stats.ticketOfferRetransmits;
-			Send(connection, pending->offer);
+			Send(connection, m_ConnectionAuthority && pending->offer.seatToken.empty() ? NetPayload{NetH4ConnectionLease{}} : NetPayload{pending->offer});
 			return;
 		}
 		if (m_Registry == nullptr || !m_Registry->IsActive()) {
@@ -1206,14 +1250,8 @@ namespace RTE {
 			Send(connection, NetJoinRejected{NetRejectReason::HostNotAccepting, "reconnect auth is unavailable", "reconnect_auth", "", ""});
 			return;
 		}
-		if (m_LiveMatch && !m_PersistentWorld) {
-			// Phase A: a claimant without a ticket cannot prove anything, so a live match refuses it.
-			// The refusal names the reason so the joiner can offer to apply for a seat instead; it
-			// rides the same release delay every denial does, and a NewJoin only ever reaches this
-			// path on a live match, so nothing an observer could not already time is disclosed.
-			++m_Stats.provisionalSeatsRefused;
-			const NetPayload refusal = RefuseUnseatable(connection, message.displayName, NetRejectReason::HostNotAccepting, "the match is already in progress", "live_match");
-			m_Admission.ScheduleDenial(connection, message.txId, NetH4DenialReason::UnknownSeat, nowMs, &refusal);
+		if (m_MigrationHold || m_Roster.stage == NetRosterStage::Migrating) {
+			Send(connection, NetJoinRejected{NetRejectReason::HostNotAccepting, "The match is changing host. Wait a moment and join again.", "connection_retry", "", ""});
 			return;
 		}
 		if (m_Provisionals.size() >= c_MaxProvisionalSeats) {
@@ -1221,11 +1259,17 @@ namespace RTE {
 			Send(connection, NetJoinRejected{NetRejectReason::SessionFull, "session is full", "provisional_seats", std::to_string(c_MaxProvisionalSeats), std::to_string(m_Provisionals.size())});
 			return;
 		}
-		// A world's slot comes back when its holder leaves cleanly; a match seat is spent once held.
+		// A returning holder without its ticket still owns the held seat. An unused slot
+		// must not silently give the same player a second seat.
+		if (const SeatState* own = HeldSeatOwnedBy(connection, message.displayName)) {
+			Send(connection, NetJoinRejected{NetRejectReason::HostNotAccepting, "Your seat is held for you. Use Rejoin Match, or apply to reclaim it.", "seat_held_for_you", std::to_string(own->seat.stableSeat), ""});
+			return;
+		}
+		// An open seat uses the same private image and catch-up as a returning holder.
 		SeatState* seat = m_PersistentWorld ? FindFreeWorldSeat() : FindFreeNeverHeldSeat();
 		if (seat == nullptr) {
 			++m_Stats.provisionalSeatsRefused;
-			Send(connection, RefuseUnseatable(connection, message.displayName, NetRejectReason::SessionFull, "session is full", "seats"));
+			Send(connection, RefuseUnseatable(connection, message.displayName, NetRejectReason::SessionFull, "Every seat is taken. Apply for a held seat or choose another match.", m_LiveMatch ? "live_match" : "seats"));
 			return;
 		}
 		uint32_t holderGeneration = 0;
@@ -1246,10 +1290,21 @@ namespace RTE {
 		pending.lastSentMs = nowMs;
 		pending.key = MakeKey(NetMessageType::NewJoin, seat->seat.stableSeat, holderGeneration, message.identity);
 		pending.offer = NetH4TicketOffer{c_NetH4Version, message.txId, m_Registry->GetEpoch(), seat->seat.stableSeat, holderGeneration, credential, m_HostSessionId, static_cast<uint32_t>(c_ProvisionalExpiryMs)};
+		pending.lease.directorySessionId = message.directorySessionId;
+		pending.lease.epoch = m_Registry->GetEpoch(); pending.lease.seat = pending.stableSeat; pending.lease.generation = holderGeneration;
+		pending.lease.credential = credential; pending.lease.hostSessionId = m_HostSessionId;
+		std::string leaseError;
+		if (PrepareSeatLease(connection, message.displayName, pending.lease, leaseError)) {
+			pending.offer.seatToken = pending.lease.token; pending.offer.authorityKey = pending.lease.authority;
+		} else if (!leaseError.empty()) {
+			m_Registry->RevokeSeat(pending.stableSeat);
+			Send(connection, NetJoinRejected{NetRejectReason::HostNotAccepting, leaseError, "seat_authority", "", ""});
+			return;
+		}
 		m_Provisionals.push_back(pending);
 		++m_Stats.provisionalSeatsOpened;
 		++m_Stats.ticketOffersSent;
-		Send(connection, pending.offer);
+		Send(connection, m_ConnectionAuthority && pending.offer.seatToken.empty() ? NetPayload{NetH4ConnectionLease{}} : NetPayload{pending.offer});
 	}
 
 	void NetReconnectHost::HandleTicketStoredAck(NetPeerId connection, const NetH4TicketStoredAck& message, uint64_t nowMs) {
@@ -1277,6 +1332,13 @@ namespace RTE {
 		if (pending->stableSeat != message.stableSeat || pending->holderGeneration != message.holderGeneration) {
 			++m_Stats.unknownTransactionDrops;
 			return;
+		}
+		if (m_ConnectionAuthority) {
+			NetAuthBytes32 participant{};
+			if (pending->offer.seatToken.empty() || !LookupParticipantId(connection, participant) || participant != pending->lease.participant) {
+				Send(connection, NetJoinRejected{NetRejectReason::IdentityUnproven, pending->holderName + " owns this seat. Join another open seat.", "seat_owner", "", ""});
+				return;
+			}
 		}
 		if (pending->connection != connection) {
 			// The ack arrived on a fresh connection: the offer was persisted but the first link died
@@ -1309,6 +1371,7 @@ namespace RTE {
 		seat->saturated = false;
 		// The roster names the player by the identity it proved on this link.
 		CaptureParticipant(*seat, connection);
+		seat->lease = pending->lease;
 		SeatHolder(*seat);
 		if (!BindIncarnation(*seat, connection)) {
 			Send(connection, NetJoinRejected{NetRejectReason::InternalError, c_DenialText, "incarnation", "", ""});
@@ -1365,6 +1428,18 @@ namespace RTE {
 		SeatState* seat = FindSeat(message.stableSeat);
 		const bool superseded = seat != nullptr && m_Registry != nullptr && seat->retiredGeneration == message.holderGeneration &&
 		                        nowMs < seat->retiredUntilMs && m_Registry->HasRetiredGeneration(message.stableSeat, message.holderGeneration);
+		if (seat && m_ConnectionAuthority && !superseded) {
+			std::string error;
+			bool expired = false;
+			if (!ValidateSeatLease(connection, *seat, message.seatToken, error, expired)) {
+				Send(connection, NetJoinRejected{expired ? NetRejectReason::HostNotAccepting : NetRejectReason::IdentityUnproven, error, expired ? "connection_retry" : "seat_owner", "", ""});
+				return;
+			}
+			if (seat->activeConnection != c_InvalidNetPeerId && seat->activeConnection != connection && !IsHolderAway(*seat)) {
+				Send(connection, NetJoinRejected{NetRejectReason::HostNotAccepting, seat->holderName + " is still playing. The original keeps the seat; close that connection before rejoining.", "seat_in_use", "", ""});
+				return;
+			}
+		}
 		if (!superseded && (seat == nullptr || !IsSeated(*seat) || IsHostOpened(*seat) || seat->saturated ||
 		                    seat->holderGeneration == 0 || seat->holderGeneration != message.holderGeneration ||
 		                    m_Registry == nullptr || m_Registry->GetActiveGeneration(message.stableSeat) != message.holderGeneration)) {
@@ -1657,6 +1732,55 @@ namespace RTE {
 		}
 	}
 
+	bool NetReconnectHost::PrepareSeatLease(NetPeerId connection, const std::string& name, NetSeatLease& lease, std::string& error) {
+		if (!m_ConnectionAuthority) return true;
+		if (m_Registry) m_ConnectionAuthority->SetHostSigningKey(m_Registry->HostLeaseSigningKey());
+		const uint64_t now = UnixNowMs() / 1000;
+		if (!lease.Empty() && lease.expiresAt > now + NetSeatLease::c_LifetimeSeconds / 2) return true;
+		if (connection != c_InvalidNetPeerId && !LookupParticipantId(connection, lease.participant)) {
+			error = "This device could not prove its player key. Restart the game and join again."; return false;
+		}
+		NetSeatLease wanted = lease;
+		wanted.issuedAt = now; wanted.expiresAt = now + NetSeatLease::c_LifetimeSeconds;
+		NetSeatLease issued;
+		const auto result = m_ConnectionAuthority->Issue(wanted, name.empty() ? "Player" : name, issued, error);
+		if (result != NetConnectionAuthority::Result::Ready) return false;
+		lease = std::move(issued); NoteStateChanged();
+		return true;
+	}
+
+	bool NetReconnectHost::ValidateSeatLease(NetPeerId connection, const SeatState& seat, const std::string& token, std::string& error, bool& expired) const {
+		expired = false;
+		NetParticipantId player{}; NetSeatLease lease;
+		if (!LookupParticipantId(connection, player) || player != seat.participantId) {
+			error = (seat.holderName.empty() ? "The original player" : seat.holderName) + " owns this seat. Join another open seat."; return false;
+		}
+		if (seat.lease.Empty() || !NetSeatLease::Decode(token, seat.lease.authority, lease) || !lease.SameSeat(seat.lease)) {
+			error = "This seat token could not be verified. Rejoin from the device that owns the seat."; return false;
+		}
+		// A direct host can renew its own expired token once the holder proves its
+		// key and H4 credential. An Internet return renews at the directory first.
+		if (!lease.directorySessionId.empty() && !lease.Usable(UnixNowMs() / 1000)) {
+			expired = true;
+			error = "Your seat lease expired. Reconnecting will renew it; Cancel returns to Multiplayer."; return false;
+		}
+		return true;
+	}
+
+	void NetReconnectHost::RenewSeatLeases() {
+		if (!m_ConnectionAuthority) return;
+		m_ConnectionAuthority->Update(ConnectionNowMs(), UnixNowMs() / 1000);
+		NetH4TicketRecord local;
+		(void)EnsureLocalTicket(local);
+		for (SeatState& seat: m_Seats) {
+			if (seat.seat.local || seat.lease.Empty() || seat.activeConnection == c_InvalidNetPeerId || IsHolderAway(seat) || IsHostOpened(seat)) continue;
+			const std::string prior = seat.lease.token;
+			std::string error;
+			if (PrepareSeatLease(seat.activeConnection, seat.holderName, seat.lease, error) && prior != seat.lease.token)
+				Send(seat.activeConnection, NetH4ConnectionLease{c_NetH4Version, seat.lease.token, seat.lease.authority});
+		}
+	}
+
 	bool NetReconnectHost::RefuseIfBanned(NetPeerId connection) {
 		NetAuthBytes32 id{};
 		const bool bound = LookupParticipantId(connection, id);
@@ -1667,7 +1791,8 @@ namespace RTE {
 		}
 		if (bound && m_RemovedParticipants.contains(id)) {
 			DiagnosticLine() << "[net-reconnect] admission refused reason=ParticipantBanned action=Kick peer=" << connection << std::endl;
-			Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "The host removed you from this session", "participant_removed", "", ""});
+			const auto named = m_RemovedNames.find(id);
+			Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, (named != m_RemovedNames.end() ? named->second : "This player") + " was removed by the host. Choose another match.", "participant_removed", "", ""});
 			++m_Stats.identityRejections;
 			return true;
 		}
@@ -1675,7 +1800,7 @@ namespace RTE {
 			return false;
 		}
 		DiagnosticLine() << "[net-reconnect] admission refused reason=ParticipantBanned peer=" << connection << std::endl;
-		Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "The host banned you from this session", "participant_identity", "", ""});
+		Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "The host banned you from this session. Choose another match.", "participant_identity", "", ""});
 		++m_Stats.identityRejections;
 		return true;
 	}
@@ -1704,13 +1829,63 @@ namespace RTE {
 		if (seat == nullptr) {
 			return NetKickBanResult::UnknownSeat;
 		}
-		if (seat->seat.local || seat->seat.cpu) {
-			return NetKickBanResult::ForbiddenTarget;
-		}
 		if (!(selection.epoch == m_ConfiguredEpoch) || selection.holderGeneration != seat->holderGeneration ||
 		    selection.incarnation != seat->incarnation || selection.seatGeneration != seat->seatGeneration) {
 			return NetKickBanResult::StaleSelection;
 		}
+		if (selection.applicant != c_InvalidNetPeerId) {
+			const Applicant* applicant = FindApplicant(selection.applicant, selection.stableSeat);
+			if (!applicant || applicant->txId != selection.applicantTransaction) return NetKickBanResult::StaleSelection;
+			if (applicant->approved) return NetKickBanResult::ActionUnavailable;
+			const Applicant chosen = *applicant;
+			const bool ban = action != NetParticipantRemovalAction::Kick;
+			// An applicant can already play a different seat. Declining only ends this request; banning
+			// that person uses the existing removal of their own seat, never the requested incumbent's.
+			if (ban) {
+				if (const auto owned = StableSeatOfConnection(chosen.connection)) {
+					for (const auto& view: GetModerationView()) if (view.stableSeat == *owned)
+						return RemoveParticipant(NetSelectModerationSeat(view), action, nowMs, unixNowMs, sessionId, round, boundaryFrame, issued);
+				}
+			}
+			issued.identity = chosen.identity;
+			issued.hasParticipantId = LookupParticipantId(chosen.connection, issued.participantId);
+			if (ban && !issued.hasParticipantId) return NetKickBanResult::UnknownIdentity;
+			if (ban && !m_BanStore) return NetKickBanResult::ActionUnavailable;
+			NetReconnectHost next = *this;
+			next.m_Applicants.erase(std::remove_if(next.m_Applicants.begin(), next.m_Applicants.end(), [&](const Applicant& row) {
+				return row.connection == chosen.connection && row.stableSeat == chosen.stableSeat && row.txId == chosen.txId;
+			}), next.m_Applicants.end());
+			const NetHostBanScope scope = action == NetParticipantRemovalAction::BanUntilRemoved ? NetHostBanScope::UntilRemoved : NetHostBanScope::Session;
+			if (ban) {
+				next.DropApplicantsFor(chosen.connection);
+				next.m_Admission.DropConnection(chosen.connection);
+				next.UnbindParticipantId(chosen.connection);
+				auto proposed = next.ExportMigrationState();
+				auto bans = m_BanStore->List();
+				const auto existing = std::find_if(bans.begin(), bans.end(), [&](const auto& row) { return row.identity == issued.participantId; });
+				if (existing == bans.end()) bans.push_back({issued.participantId, scope, unixNowMs, m_HostSessionId, chosen.displayName, "host ban"});
+				else if (scope == NetHostBanScope::UntilRemoved) existing->scope = scope;
+				auto state = nlohmann::json::from_cbor(proposed);
+				state["bans"] = nlohmann::json::array();
+				for (const auto& row: bans) if (row.scope == NetHostBanScope::UntilRemoved || row.sessionId == m_HostSessionId)
+					state["bans"].push_back({row.identity, static_cast<uint8_t>(row.scope), row.createdUnixMs, row.displayAlias, row.reason});
+				proposed = nlohmann::json::to_cbor(state);
+				if (proposed.empty() || proposed.size() > 32 * 1024) issued.refusal = "Applicant ban refused: the admission capsule exceeds 32 KiB.";
+				else if (m_MigrationCapacityCheck && !m_MigrationCapacityCheck(proposed, issued.refusal) && issued.refusal.empty()) issued.refusal = "Applicant ban refused: the migration capsule has no remaining capacity.";
+				if (!issued.refusal.empty()) return NetKickBanResult::ActionUnavailable;
+				std::string persistError;
+				if (!m_BanStore->Ban(issued.participantId, scope, chosen.displayName, "host ban", m_HostSessionId, unixNowMs, &persistError)) return NetKickBanResult::PersistenceFailed;
+				issued.connection = chosen.connection;
+			}
+			const NetJoinRejected denied{NetRejectReason::HostNotAccepting,
+			    ban ? "The host banned you from this session." : "The host declined your request for this seat.",
+			    "substitution", NetH4DenialReasonName(NetH4DenialReason::SeatNotSubstitutable), ""};
+			next.m_TxCache.Store(chosen.txId, chosen.key, denied, nowMs);
+			next.Send(chosen.connection, denied);
+			*this = std::move(next);
+			return NetKickBanResult::Ok;
+		}
+		if (seat->seat.local || seat->seat.cpu) return NetKickBanResult::ForbiddenTarget;
 		if (!IsSeated(*seat) && !IsHostOpened(*seat) && !IsHolderAway(*seat)) {
 			return NetKickBanResult::ActionUnavailable;
 		}
@@ -1754,9 +1929,8 @@ namespace RTE {
 		SeatState* nextSeat = next.FindSeat(selection.stableSeat);
 		if (retainRemoval && !next.RememberSeatRemoval(selection.stableSeat, boundaryFrame)) return NetKickBanResult::ActionUnavailable;
 		const std::string alias = seat->holderName;
-		// A kick opens the seat for anyone to take - including the player it just removed. Only the
-		// ban list above holds an identity out of a rejoin; m_RemovedParticipants stays for
-		// pre-fix migration state that still carries one.
+		// Removal follows the proven player across every delivery path and host.
+		if (issued.hasParticipantId) { next.m_RemovedParticipants.insert(issued.participantId); next.m_RemovedNames[issued.participantId] = alias; }
 		if (issued.connection != c_InvalidNetPeerId) {
 			next.m_Admission.DropConnection(issued.connection);
 		}
@@ -1803,6 +1977,7 @@ namespace RTE {
 		*m_Registry = std::move(nextRegistry);
 		next.m_Registry = m_Registry;
 		*this = std::move(next);
+		if (m_ConnectionAuthority && issued.hasParticipantId) m_ConnectionAuthority->Remove(issued.participantId, alias, action != NetParticipantRemovalAction::Kick);
 		return NetKickBanResult::Ok;
 	}
 
@@ -1820,6 +1995,7 @@ namespace RTE {
 		seat.holderName.clear();
 		seat.participantId = {};
 		seat.hasParticipantId = false;
+		seat.lease = {};
 		seat.retiredGeneration = 0;
 		seat.retiredUntilMs = 0;
 		BumpSeatGeneration(seat);
@@ -2074,6 +2250,7 @@ namespace RTE {
 		applicant.txId = message.txId;
 		applicant.identity = message.identity;
 		applicant.displayName = message.displayName;
+		applicant.directorySessionId = message.directorySessionId;
 		applicant.appliedAtMs = nowMs;
 		applicant.key = key;
 		// An application the lost host left pending keeps the place in line it had there.
@@ -2315,10 +2492,17 @@ namespace RTE {
 		pending.key = SubstitutionKey(stableSeat, holderGeneration);
 		pending.offer = NetH4SubstitutionOffer{c_NetH4Version, txId, m_Registry->GetEpoch(), stableSeat, holderGeneration,
 		                                       credential, challenge, m_HostSessionId, static_cast<uint32_t>(c_ProvisionalExpiryMs)};
+		pending.lease.directorySessionId = applicant->directorySessionId;
+		pending.lease.epoch = m_Registry->GetEpoch(); pending.lease.seat = stableSeat; pending.lease.generation = holderGeneration;
+		pending.lease.credential = credential; pending.lease.hostSessionId = m_HostSessionId;
+		std::string leaseError;
+		if (PrepareSeatLease(applicantConnection, pending.displayName, pending.lease, leaseError)) {
+			pending.offer.seatToken = pending.lease.token; pending.offer.authorityKey = pending.lease.authority;
+		} else if (!leaseError.empty()) return NetH4ModerationResult::ProviderUnavailable;
 		applicant->approved = true;
 		m_Substitutions.push_back(pending);
 		++m_Stats.substitutionOffersSent;
-		Send(applicantConnection, pending.offer);
+		Send(applicantConnection, m_ConnectionAuthority && pending.offer.seatToken.empty() ? NetPayload{NetH4ConnectionLease{}} : NetPayload{pending.offer});
 		return NetH4ModerationResult::Ok;
 	}
 
@@ -2355,6 +2539,10 @@ namespace RTE {
 			return;
 		}
 		const size_t index = static_cast<size_t>(pending - m_Substitutions.begin());
+		if (m_ConnectionAuthority) {
+			NetAuthBytes32 participant{};
+			if (pending->offer.seatToken.empty() || !LookupParticipantId(connection, participant) || participant != pending->lease.participant) return;
+		}
 		if (!message.stored) {
 			// Same rule as a first join: without a durable ticket the substitute could never prove this
 			// seat again, so the seat is not given to it.
@@ -2398,6 +2586,7 @@ namespace RTE {
 		seat->incarnation = 0;
 		seat->saturated = false;
 		CaptureParticipant(*seat, connection);
+		seat->lease = pending->lease;
 		seat->substituteName = pending->displayName;
 		seat->holderName = pending->displayName;
 		SeatHolder(*seat);
@@ -2563,18 +2752,32 @@ namespace RTE {
 
 	void NetReconnectHost::Tick(uint64_t nowMs) {
 		m_NowMs = std::max(m_NowMs, nowMs);
+		RenewSeatLeases();
 		if (m_MigrationHold)
 			return;
 		// A carried application nobody asked this host again for goes as an unanswered applicant does.
 		if (!m_CarriedApplicants.empty() && nowMs >= m_CarriedApplicantsUntilMs) m_CarriedApplicants.clear();
 		for (auto pending = m_Provisionals.begin(); pending != m_Provisionals.end();) {
 			if (nowMs >= pending->openedAtMs && nowMs - pending->openedAtMs > c_ProvisionalExpiryMs) {
+				if (m_ConnectionAuthority && pending->offer.seatToken.empty() && pending->connection != c_InvalidNetPeerId)
+					Send(pending->connection, NetJoinRejected{NetRejectReason::HostNotAccepting, "The directory did not answer this seat request. Reconnecting will retry; Cancel returns to Multiplayer.", "connection_retry", "", ""});
 				if (m_Registry != nullptr) {
 					m_Registry->RevokeSeat(pending->stableSeat);
 				}
 				++m_Stats.provisionalSeatsExpired;
 				pending = m_Provisionals.erase(pending);
 				continue;
+			}
+			if (m_ConnectionAuthority && pending->offer.seatToken.empty()) {
+				std::string error;
+				if (PrepareSeatLease(pending->connection, pending->holderName, pending->lease, error)) {
+					pending->offer.seatToken = pending->lease.token; pending->offer.authorityKey = pending->lease.authority;
+					pending->lastSentMs = nowMs; pending->retransmits = 0;
+					Send(pending->connection, pending->offer);
+				} else if (!error.empty()) {
+					Send(pending->connection, NetJoinRejected{NetRejectReason::HostNotAccepting, error, "seat_authority", "", ""});
+					m_Registry->RevokeSeat(pending->stableSeat); pending = m_Provisionals.erase(pending); continue;
+				} else { ++pending; continue; }
 			}
 			if (pending->connection != c_InvalidNetPeerId && pending->retransmits < c_MaxRetransmits &&
 			    nowMs >= pending->lastSentMs + c_RetransmitIntervalMs) {
@@ -2601,6 +2804,14 @@ namespace RTE {
 			if (nowMs >= pending.openedAtMs && nowMs - pending.openedAtMs > c_ProvisionalExpiryMs) {
 				AbandonSubstitution(index, NetH4DenialReason::SeatNotSubstitutable, "the substitution was not acknowledged in time", nowMs);
 				continue;
+			}
+			if (m_ConnectionAuthority && pending.offer.seatToken.empty()) {
+				std::string error;
+				if (PrepareSeatLease(pending.connection, pending.displayName, pending.lease, error)) {
+					pending.offer.seatToken = pending.lease.token; pending.offer.authorityKey = pending.lease.authority;
+					pending.lastSentMs = nowMs; pending.retransmits = 0; Send(pending.connection, pending.offer);
+				} else if (!error.empty()) { AbandonSubstitution(index, NetH4DenialReason::ProviderUnavailable, error, nowMs); continue; }
+				else { ++index; continue; }
 			}
 			if (pending.connection != c_InvalidNetPeerId && pending.retransmits < c_MaxRetransmits &&
 			    nowMs >= pending.lastSentMs + c_RetransmitIntervalMs) {
@@ -2725,6 +2936,7 @@ namespace RTE {
 		m_RequireStoredTicket = false;
 		m_Identity = std::move(identity);
 		m_DisplayName = std::move(displayName);
+		m_LeasePersistAtMs = 0;
 		// Attaching to a hosted session starts this peer's copy of its seat roster there.
 		m_RosterReplica.Reset();
 	}
@@ -2777,6 +2989,7 @@ namespace RTE {
 		switch (state) {
 			case NetH4ClientState::Idle: return "Idle";
 			case NetH4ClientState::Joining: return "Joining";
+			case NetH4ClientState::WaitingAuthority: return "Securing seat";
 			case NetH4ClientState::Storing: return "Storing";
 			case NetH4ClientState::Reclaiming: return "Reclaiming";
 			case NetH4ClientState::Proving: return "Proving";
@@ -2805,13 +3018,13 @@ namespace RTE {
 		NetH4TicketRecord record = m_Record;
 		record.recordVersion = NetReconnectTicketStore::RecordVersionFor(record.persistentWorld);
 		record.hostAddress = address;
-		record.directorySessionId = directorySessionId;
+		if (!m_ConnectionAuthority || !m_DirectorySessionId.empty()) record.directorySessionId = directorySessionId;
 		record.matchConfigHash = matchConfigHash;
 		if (record != m_Record && !m_Store->Store(record))
 			return false;
 		m_Record = std::move(record);
 		m_HostAddress = address;
-		m_DirectorySessionId = directorySessionId;
+		m_DirectorySessionId = m_Record.directorySessionId;
 		m_MatchConfigHash = matchConfigHash;
 		return true;
 	}
@@ -2829,6 +3042,8 @@ namespace RTE {
 		if (directorySessionId.empty()) {
 			return;
 		}
+		// A typed/LAN connection keeps its host authority even when that host also lists online.
+		if (m_ConnectionAuthority && m_DirectorySessionId.empty()) return;
 		m_DirectorySessionId = directorySessionId;
 		NetH4TicketRecord record = m_Record;
 		record.directorySessionId = directorySessionId;
@@ -2874,7 +3089,7 @@ namespace RTE {
 		return m_State == NetH4ClientState::Joining || m_State == NetH4ClientState::Storing ||
 		       m_State == NetH4ClientState::Reclaiming || m_State == NetH4ClientState::Proving ||
 		       m_State == NetH4ClientState::Applying || m_State == NetH4ClientState::Applied ||
-		       m_State == NetH4ClientState::Substituting;
+		       m_State == NetH4ClientState::Substituting || m_State == NetH4ClientState::WaitingAuthority;
 	}
 
 	void NetReconnectClient::SetApplyForSeat(bool enabled, uint16_t stableSeat) {
@@ -2916,6 +3131,7 @@ namespace RTE {
 	bool NetReconnectClient::AbsorbRejection(uint64_t nowMs, NetRejectReason reason, const std::string& key) {
 		m_LastRejectReason = reason;
 		m_HasLastRejectReason = true;
+		if (reason == NetRejectReason::IdentityUnproven) return false;
 		if (reason == NetRejectReason::SeatReassigned || reason == NetRejectReason::ParticipantRemoved ||
 		    reason == NetRejectReason::ParticipantBanned) {
 			if (reason != NetRejectReason::SeatReassigned) {
@@ -2966,7 +3182,7 @@ namespace RTE {
 		m_State = NetH4ClientState::Joining;
 		m_Error.clear();
 		m_WantsLinkClosed = false;
-		SendRequest(NetH4NewJoin{c_NetH4Version, m_TxId, m_Identity, m_DisplayName}, nowMs);
+		SendRequest(NetH4NewJoin{c_NetH4Version, m_TxId, m_Identity, m_DisplayName, m_DirectorySessionId}, nowMs);
 		return true;
 	}
 
@@ -2978,10 +3194,19 @@ namespace RTE {
 		}
 		m_Record = record;
 		m_HasRecord = true;
+		if (m_ConnectionAuthority && !record.seatToken.empty()) {
+			NetSeatLease lease;
+			if (!NetSeatLease::Decode(record.seatToken, record.authorityKey, lease)) {
+				Fail("This seat belongs to another player. Rejoin on the device that owns it.");
+				if (error) *error = m_Error;
+				return false;
+			}
+			if (lease.participant == m_ConnectionAuthority->LocalParticipant()) (void)m_ConnectionAuthority->AdoptLocalLease(lease);
+		}
 		m_State = NetH4ClientState::Reclaiming;
 		m_Error.clear();
 		m_WantsLinkClosed = false;
-		SendRequest(NetH4Reclaim{c_NetH4Version, m_TxId, record.epoch, record.stableSeat, record.holderGeneration, m_Identity, m_DisplayName}, nowMs);
+		SendRequest(NetH4Reclaim{c_NetH4Version, m_TxId, record.epoch, record.stableSeat, record.holderGeneration, m_Identity, m_DisplayName, record.seatToken}, nowMs);
 		return true;
 	}
 
@@ -3002,7 +3227,7 @@ namespace RTE {
 		m_AppliedAtMs = nowMs;
 		m_ApplySeat = stableSeat;
 		++m_Stats.applicationsSent;
-		SendRequest(NetH4Applicant{c_NetH4Version, m_TxId, stableSeat, m_Identity, m_DisplayName}, nowMs);
+		SendRequest(NetH4Applicant{c_NetH4Version, m_TxId, stableSeat, m_Identity, m_DisplayName, m_DirectorySessionId}, nowMs);
 		return true;
 	}
 
@@ -3033,7 +3258,32 @@ namespace RTE {
 		m_Outbound.push_back({c_InvalidNetPeerId, NetH4RosterRevisionRequest{c_NetH4Version, revision}});
 	}
 
+	bool NetReconnectClient::ReadSeatLease(const std::string& token, const NetAuthBytes32& key, NetH4TicketRecord& record) {
+		if (!m_ConnectionAuthority) return true;
+		NetSeatLease lease;
+		if (!NetSeatLease::Decode(token, key, lease) || !lease.Usable(UnixNowMs() / 1000) || lease.participant != m_ConnectionAuthority->LocalParticipant() ||
+		    lease.epoch != record.epoch || lease.seat != record.stableSeat || lease.generation != record.holderGeneration ||
+		    lease.hostSessionId != record.hostSessionId || lease.credential != record.credential || lease.directorySessionId != m_DirectorySessionId) return false;
+		record.seatToken = token; record.authorityKey = key; record.directorySessionId = lease.directorySessionId;
+		if (!record.directorySessionId.empty()) record.hostAddress = "ice:";
+		record.issuedAtUnixMs = lease.issuedAt * 1000; record.recordVersion = NetReconnectTicketStore::c_RecordVersion;
+		return m_ConnectionAuthority->AdoptLocalLease(lease);
+	}
+
 	bool NetReconnectClient::HandleMessage(const NetPayload& payload, uint64_t nowMs) {
+		if (const auto* renewed = std::get_if<NetH4ConnectionLease>(&payload)) {
+			if (renewed->seatToken.empty()) {
+				if (m_State == NetH4ClientState::Joining || m_State == NetH4ClientState::Applying || m_State == NetH4ClientState::Applied) {
+					m_State = NetH4ClientState::WaitingAuthority; m_HasPendingRequest = false;
+				}
+				return true;
+			}
+			if (m_ConnectionAuthority && m_HasRecord) {
+				auto record = m_Record;
+				if (ReadSeatLease(renewed->seatToken, renewed->authorityKey, record) && m_Store && m_Store->Store(record)) m_Record = std::move(record);
+			}
+			return true;
+		}
 		if (const auto* revision = std::get_if<NetH4RosterRevision>(&payload)) {
 			NetSeatRoster roster;
 			std::string why;
@@ -3046,7 +3296,7 @@ namespace RTE {
 			return true;
 		}
 		if (const auto* offer = std::get_if<NetH4TicketOffer>(&payload)) {
-			if (m_State != NetH4ClientState::Joining && m_State != NetH4ClientState::Storing) {
+			if (m_State != NetH4ClientState::Joining && m_State != NetH4ClientState::WaitingAuthority && m_State != NetH4ClientState::Storing) {
 				return true;
 			}
 			NetH4TicketRecord record;
@@ -3061,6 +3311,7 @@ namespace RTE {
 			record.matchConfigHash = m_Record.matchConfigHash;
 			record.persistentWorld = m_WorldTarget;
 			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(record.persistentWorld);
+			if (!ReadSeatLease(offer->seatToken, offer->authorityKey, record)) { Fail("The host could not prove this seat belongs to you. Cancel and join again."); return true; }
 			std::string storeError;
 			// The ack must never be sent before the record is durable: the host commits the seat on it.
 			const bool stored = m_Store != nullptr && m_Store->Store(record, &storeError);
@@ -3128,7 +3379,7 @@ namespace RTE {
 			return true;
 		}
 		if (const auto* offer = std::get_if<NetH4SubstitutionOffer>(&payload)) {
-			if (m_State != NetH4ClientState::Applying && m_State != NetH4ClientState::Applied && m_State != NetH4ClientState::Substituting) {
+			if (m_State != NetH4ClientState::Applying && m_State != NetH4ClientState::Applied && m_State != NetH4ClientState::WaitingAuthority && m_State != NetH4ClientState::Substituting) {
 				return true;
 			}
 			++m_Stats.substitutionOffersReceived;
@@ -3144,6 +3395,7 @@ namespace RTE {
 			record.matchConfigHash = m_Record.matchConfigHash;
 			record.persistentWorld = m_WorldTarget;
 			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(record.persistentWorld);
+			if (!ReadSeatLease(offer->seatToken, offer->authorityKey, record)) { Fail("The host could not prove this seat belongs to you. Cancel and join again."); return true; }
 			std::string storeError;
 			const bool stored = m_Store != nullptr && m_Store->Store(record, &storeError);
 			NetAuthBytes16 nonce{};
@@ -3291,6 +3543,14 @@ namespace RTE {
 	}
 
 	void NetReconnectClient::Tick(uint64_t nowMs) {
+		if (m_ConnectionAuthority && m_HasRecord && !m_Record.seatToken.empty()) {
+			m_ConnectionAuthority->Update(ConnectionNowMs(), UnixNowMs() / 1000);
+			if (const auto lease = m_ConnectionAuthority->LocalLease(); lease && lease->token != m_Record.seatToken && nowMs >= m_LeasePersistAtMs) {
+				auto record = m_Record;
+				m_LeasePersistAtMs = nowMs + 1000;
+				if (ReadSeatLease(lease->token, lease->authority, record) && m_Store && m_Store->Store(record)) m_Record = std::move(record);
+			}
+		}
 		if (m_EndpointRetryAtMs != 0 && nowMs >= m_EndpointRetryAtMs) {
 			StoreReturnEndpoint(nowMs);
 		}

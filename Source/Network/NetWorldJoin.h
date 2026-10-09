@@ -152,6 +152,7 @@ namespace RTE {
 		uint32_t holderGeneration = 0;
 		uint32_t incarnation = 0;
 		uint64_t priorInputThrough = 0;
+		uint64_t replayStart = 0; //!< The replay whose cumulative work counters are being measured.
 		bool linkFits = false;
 		NetCatchUpHeadroom headroom;
 		bool returnsToHeldSeat = false; //!< A world member taking back the seat held for it: it proves headroom as a private return does.
@@ -559,14 +560,15 @@ namespace RTE {
 	inline constexpr uint8_t c_NetWorldReportActivationCommit = 7;
 	/// A successor to a returner whose held state predates its handover: the first frame under the new authority.
 	inline constexpr uint8_t c_NetWorldReportHandover = 8;
-	/// The round ended while the seat was held or rejoining: its end record, the final frame and the winner team + 1 in the top byte.
+	/// Presentation result for a held returner: final frame and winner team + 1 in the top byte; 0 is a completed draw, 255 is no result.
 	inline constexpr uint8_t c_NetWorldReportRoundEnded = 9;
+	inline constexpr int c_NetRoundEndedNoResult = -2;
 	inline uint64_t PackRoundEndedRecord(uint64_t finalFrame, int winnerTeam) {
-		return (finalFrame & 0x00FFFFFFFFFFFFFFULL) | (static_cast<uint64_t>(static_cast<uint8_t>(winnerTeam < 0 ? 0 : winnerTeam + 1)) << 56);
+		return (finalFrame & 0x00FFFFFFFFFFFFFFULL) | (static_cast<uint64_t>(static_cast<uint8_t>(winnerTeam == c_NetRoundEndedNoResult ? 255 : winnerTeam < 0 ? 0 : winnerTeam + 1)) << 56);
 	}
 	inline uint64_t RoundEndedFinalFrame(uint64_t record) { return record & 0x00FFFFFFFFFFFFFFULL; }
-	/// The winner team, or -1 for a round that ended without one.
-	inline int RoundEndedWinnerTeam(uint64_t record) { return static_cast<int>(record >> 56) - 1; }
+	/// Winner team, -1 for a completed draw, or c_NetRoundEndedNoResult for an unfinished round.
+	inline int RoundEndedWinnerTeam(uint64_t record) { return (record >> 56) == 255 ? c_NetRoundEndedNoResult : static_cast<int>(record >> 56) - 1; }
 
 
 	/// Why a world turned a connection away, as a code the joiner turns into the line it shows.
@@ -600,7 +602,7 @@ namespace RTE {
 	NetLobbyStateChunk MakeWorldJoinHandoverReport(const NetWorldHandover& handover);
 	/// Reads a handover report's fields as ParseWorldJoinReport returns them.
 	NetWorldHandover WorldJoinHandoverFromReport(uint64_t value, uint64_t generation, uint64_t authority, uint64_t departedMask);
-	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value, uint64_t* workTicks = nullptr, uint64_t* workUs = nullptr, uint64_t* sentThrough = nullptr);
+	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value, uint64_t* workTicks = nullptr, uint64_t* workUs = nullptr, uint64_t* sentThrough = nullptr, uint64_t* replayStart = nullptr);
 
 	/// Host-authored Activate binding: seat, team, brain preset and spawn (Persistent World respawn API).
 	NetGameWorldTransition BuildWorldActivateTransition(const NetWorldJoinSession& session, const NetMatchConfig& config, uint64_t membershipRevision);
@@ -654,7 +656,7 @@ namespace RTE {
 		bool BeginRejoin(NetPeerId connection, uint16_t stableSeat, uint8_t peerId, uint32_t incarnation, const std::string& name, uint64_t nowMs, std::string* error = nullptr);
 		/// A held seat whose player kept its state: its catch-up streams the committed tail from the tick that state stands at, with no image.
 		bool BeginInPlaceRejoin(NetPeerId connection, uint16_t stableSeat, uint8_t peerId, uint32_t incarnation, const std::string& name, uint64_t nowMs, uint64_t heldThrough, std::string* error = nullptr);
-		bool NoteRejoinCapacity(NetPeerId connection, uint64_t workTicks, uint64_t workUs, uint64_t sentThrough);
+		bool NoteRejoinCapacity(NetPeerId connection, uint64_t workTicks, uint64_t workUs, uint64_t sentThrough, uint64_t replayStart = 0);
 		void NoteRejoinLinkFit(NetPeerId connection, bool fits);
 		/// The session whose catch-up gate is due in the log (a change, or a second of the round since); gate, when set, is the one its report met first.
 		const NetWorldJoinSession* TakeCatchUpGateToLog(NetPeerId connection, const char* gate, uint64_t nowFrame);
@@ -722,7 +724,8 @@ namespace RTE {
 		/// Records the tail the joiner has applied and, once it has caught the world, schedules E.
 		/// @param nowFrame The world's committed frame.
 		/// @param outActivationTick The announced activation tick when this call scheduled one.
-		bool NoteCatchUpProgress(NetPeerId connection, uint64_t appliedThrough, uint64_t ticksReplayed, uint64_t elapsedMs, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr);
+		/// @param capacityValid Whether this report's work counters may support an activation.
+		bool NoteCatchUpProgress(NetPeerId connection, uint64_t appliedThrough, uint64_t ticksReplayed, uint64_t elapsedMs, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr, bool capacityValid = true);
 		void NoteCatchUpClock(NetPeerId connection, uint64_t nowMs);
 		/// Returning seats that have replayed for longer than the bound without coming inside the activation lead.
 		/// A returner that replays slower than the round plays never closes on it, so it is never activated.

@@ -15,6 +15,21 @@ namespace RTE::NetPlayerPresentation {
 	// A seat only leaves a session it was seen in: a peer still connecting has no departure to show.
 	inline std::set<uint8_t> seated;
 
+	/// The authoritative seat wins over cached connection flags, including this machine's own hold.
+	inline bool OwnSeatHeld(const NetLobbySnapshot& snapshot, const std::optional<NetMatchService::SeatView>& view, bool released) {
+		if (view) return view->seat.owner != 0 && (view->state == "Held" || view->state == "Reconnecting");
+		if (released) return false;
+		for (const auto& member: snapshot.members) {
+			if (member.peerId == snapshot.localPeerId && !member.cpu && (member.aiHeld || member.reclaiming)) return true;
+		}
+		return false;
+	}
+
+	inline std::string PlayingSummary(bool ownHeld, size_t away, const std::string& awayName) {
+		if (ownHeld) return "The AI is playing for you";
+		return away == 0 ? "Everyone is playing" : away == 1 ? awayName + " is away" : std::to_string(away) + " players are away";
+	}
+
 	inline bool Placeholder(uint8_t peer, const std::string& name) {
 		return name.empty() || name == "Client " + std::to_string(peer) || name == "Player " + std::to_string(peer);
 	}
@@ -52,7 +67,7 @@ namespace RTE::NetPlayerPresentation {
 		return fallback.empty() ? "Player " + std::to_string(peer) : fallback;
 	}
 
-	inline std::string Name(const NetLobbyMember& member) { return Name(member.peerId, member.displayName); }
+	inline std::string Name(const NetLobbyMember& member) { return member.cpu ? (member.displayName.empty() ? "AI player" : member.displayName) : Name(member.peerId, member.displayName); }
 
 	inline std::string State(uint8_t peer, bool aiHeld, bool dropped, bool reclaiming, bool joining = false) {
 		const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
@@ -80,15 +95,16 @@ namespace RTE::NetPlayerPresentation {
 	}
 
 	inline std::string State(const NetLobbyMember& member) {
+		if (member.cpu) return "AI in control";
 		return State(member.peerId, member.aiHeld, member.dropped, member.reclaiming, member.joining);
 	}
 
 	inline std::string Row(const NetLobbyMember& member) {
 		// A seat nobody holds is open: no remembered name, and nothing reads it as connected.
 		if (!member.connected && !member.cpu && !member.isLocal && !member.dropped && !member.reclaiming && !member.aiHeld && Placeholder(member.peerId, member.displayName)) return "Open seat";
-		std::string row = Name(member) + "  /  " + State(member);
+		std::string row = Name(member) + "  /  Team " + std::to_string(member.team + 1) + "  /  " + State(member);
 		// A seat that is gone has no live route to name.
-		if (!member.connectedRoute.empty() && member.connected && !Departed(member.peerId)) row += " / via " + member.connectedRoute;
+		if (!member.cpu && !member.connectedRoute.empty() && member.connected && !Departed(member.peerId)) row += " / via " + member.connectedRoute;
 		return row;
 	}
 }
