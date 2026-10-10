@@ -191,7 +191,7 @@ namespace RTE {
 		std::optional<NetFrameTieRequest> m_FrameTieRequest;
 		NetFrameTieReply m_FrameTieReply;
 		bool m_FrameTieCheckedIn = false;
-		std::optional<uint64_t> m_FrameTieFirstPollMs;
+		std::optional<uint64_t> m_FrameTieBoundStartMs;
 		bool m_FrameTieFinalQuerySent = false;
 		uint64_t m_NextFrameTie = 0;
 		uint64_t m_NextHostChange = 0;
