@@ -11,6 +11,9 @@
       "name": "host",
       "menu_script": "host.menu",
       "probe": "host.probe",
+      "env": {
+        "CCCP_TEST_READBACK_TIMING": "1"
+      },
       "settings": {
         "SessionDirectoryUrl": "directory.broserver.com",
         "NetworkHostRelayMode": "Directory",
@@ -25,6 +28,9 @@
       "name": "joiner",
       "menu_script": "joiner.menu",
       "probe": "joiner.probe",
+      "env": {
+        "CCCP_TEST_READBACK_TIMING": "1"
+      },
       "settings": {
         "SessionDirectoryUrl": "directory.broserver.com",
         "NetworkHostRelayMode": "Directory",

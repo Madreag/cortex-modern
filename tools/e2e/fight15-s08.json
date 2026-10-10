@@ -160,6 +160,9 @@
           "name": "host",
           "menu_script": "kick-host.menu",
           "probe": "kick-host.probe",
+          "env": {
+            "CCCP_TEST_READBACK_TIMING": "1"
+          },
           "settings": {
             "SessionDirectoryUrl": "directory.broserver.com",
             "NetworkHostRelayMode": "Directory",
@@ -174,6 +177,9 @@
           "name": "joiner",
           "menu_script": "kick-joiner.menu",
           "probe": "kick-joiner.probe",
+          "env": {
+            "CCCP_TEST_READBACK_TIMING": "1"
+          },
           "settings": {
             "SessionDirectoryUrl": "directory.broserver.com",
             "NetworkHostRelayMode": "Directory",
@@ -193,6 +199,9 @@
           "name": "host",
           "menu_script": "ban-host.menu",
           "probe": "ban-host.probe",
+          "env": {
+            "CCCP_TEST_READBACK_TIMING": "1"
+          },
           "settings": {
             "SessionDirectoryUrl": "directory.broserver.com",
             "NetworkHostRelayMode": "Directory",
@@ -207,6 +216,9 @@
           "name": "joiner",
           "menu_script": "ban-joiner.menu",
           "probe": "ban-joiner.probe",
+          "env": {
+            "CCCP_TEST_READBACK_TIMING": "1"
+          },
           "settings": {
             "SessionDirectoryUrl": "directory.broserver.com",
             "NetworkHostRelayMode": "Directory",

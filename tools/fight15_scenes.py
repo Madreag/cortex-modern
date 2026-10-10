@@ -91,6 +91,7 @@ def emit(number, title, host, joiner, host_probe, join_probe, checklist, timeout
     scripts = {"host.menu": "\n".join(host) + "\n", "joiner.menu": "\n".join(joiner) + "\n",
                "host.probe": host_probe, "joiner.probe": join_probe}
     peers = [dict(name=peer, menu_script=f"{peer}.menu", probe=f"{peer}.probe",
+                  env=dict(CCCP_TEST_READBACK_TIMING="1"),
                   settings=dict(SETTINGS, NetworkDisplayName="Captain" if peer == "host" else "Joiner"))
              for peer in ("host", "joiner")]
     document = dict(schema=1, name=name, title=title, port_base=49410 + number * 2,
