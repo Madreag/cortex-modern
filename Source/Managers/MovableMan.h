@@ -1287,6 +1287,7 @@ namespace RTE {
 		bool m_MOSubtractionEnabled;
 
 		unsigned int m_SimUpdateFrameNumber;
+		bool m_LockstepPostEffectsPresented = false;
 		uint64_t m_ValueObservationsRejected;
 
 		std::vector<long> m_LastChecksumCensus; //!< The unique ids the last tick-end checksum census covered.

@@ -2105,6 +2105,7 @@ void MovableMan::Clear() {
 	m_MOSubtractionEnabled = true;
 	// HitWhatMOID / HitWhatTerrMaterial compare against this each tick; it's otherwise only incremented.
 	m_SimUpdateFrameNumber = 0;
+	m_LockstepPostEffectsPresented = false;
 	m_ValueObservationsRejected = 0;
 }
 
@@ -6988,9 +6989,11 @@ void MovableMan::Update() {
 	m_SimUpdateFrameNumber++;
 
 	// If this is the first sim update since a drawn one, then clear the post effects
-	if (g_TimerMan.SimUpdatesSinceDrawn() == 0) {
+	if (g_TimerMan.SimUpdatesSinceDrawn() == 0 ||
+	    (m_LockstepPostEffectsPresented && (ScenarioRunner::IsLockstepControllerSyncActive() || s_EffectsLingerLockstep))) {
 		g_PostProcessMan.ClearScenePostEffects();
 	}
+	m_LockstepPostEffectsPresented = false;
 
 	// Reset the draw HUD roster line settings
 	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
@@ -8031,6 +8034,10 @@ void MovableMan::CompleteQueuedMOIDDrawings() {
 
 void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 	ScopedRenderRNG renderRNG;
+	// A lockstep wait draws while the timer still owes updates, so this draw closes the glow frame.
+	if (ScenarioRunner::IsLockstepControllerSyncActive() || s_EffectsLingerLockstep) {
+		m_LockstepPostEffectsPresented = true;
+	}
 	ZoneScoped;
 
 	// Draw objects to accumulation bitmap, in reverse order so actors appear on top.
