@@ -11005,12 +11005,14 @@ int RunNetPortMapProbe() {
 int main(int argc, char** argv) {
 	FloatingPointEnvironment::Initialize();
 	bool netMatchSelfTest = false;
+	std::string fight15SelfTest;
 	bool netSeatSuccessionSelfTest = false;
 	bool netSeatAdmissionSelfTest = false;
 	bool netRejoinGridSelfTest = false;
 	bool netMatchLobbyLifecycleSelfTest = false;
 	bool netMatchLeaveCatchUpSelfTest = false;
 	for (int i = 1; i < argc; ++i) {
+		if (argv[i] && std::string(argv[i]) == "-fight15-selftest" && i + 1 < argc) fight15SelfTest = argv[++i];
 		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
 			return RotatePrimitiveSelfTest::Run();
 		}
@@ -11433,6 +11435,7 @@ int main(int argc, char** argv) {
 	}
 	if (netSeatSuccessionSelfTest) return ShutDown(NetLockstepSelfTest::RunSeatSuccession());
 	if (netSeatAdmissionSelfTest) return ShutDown(NetLockstepSelfTest::RunSeatAdmission());
+	if (!fight15SelfTest.empty()) return ShutDown(GameActivity::RunFight15SelfTest(fight15SelfTest) ? EXIT_SUCCESS : EXIT_FAILURE);
 	if (netMatchSelfTest) {
 		NetMatchService::Destruct();
 		const int result = netMatchLeaveCatchUpSelfTest ? NetMatchSelfTest::RunLeaveCatchUp() :

@@ -34,6 +34,7 @@ namespace RTE {
 
 	/// Handling for the main menu screen composition and sub-menu interaction.
 	class MainMenuGUI {
+		friend class GameActivity;
 
 	public:
 		/// Enumeration for the results of the MainMenuGUI input and event update.

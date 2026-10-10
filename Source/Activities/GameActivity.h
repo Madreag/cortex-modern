@@ -273,6 +273,7 @@ namespace RTE {
 		void PrepareCheckpointCapture() const;
 		static bool RunNetLocalUIRestoreSelfTest();
 		static bool RunSetupEditorSelfTest(bool confirmOnly = false);
+		static bool RunFight15SelfTest(const std::string& row);
 		static bool RunNetInventoryRelaunchProbe(std::string_view phase);
 
 		/// Locks a player controlled actor to a specific controller mode.

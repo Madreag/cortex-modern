@@ -26,6 +26,7 @@ namespace RTE {
 
 	/// A live-match roster and host panel; opening it leaves the simulation running.
 	class NetModerationGUI {
+		friend class GameActivity;
 	public:
 		explicit NetModerationGUI(AllegroScreen* screen);
 		~NetModerationGUI();
