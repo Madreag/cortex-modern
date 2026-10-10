@@ -55,6 +55,8 @@ namespace RTE {
 			// Times how long we've been in transit
 			Timer timer;
 		};
+		friend Delivery FreezeCheckpointValue(const Delivery& source, CheckpointNativeSnapshot& snapshot);
+		friend void AssignCheckpointValue(Delivery& value, const Delivery& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Public member variable, method and friend function declarations
 	public:
@@ -884,7 +886,5 @@ namespace RTE {
 		/// resetting the members of this abstraction level only.
 		void Clear();
 	};
-	GameActivity::Delivery FreezeCheckpointValue(const GameActivity::Delivery& source, CheckpointNativeSnapshot& snapshot);
-	void AssignCheckpointValue(GameActivity::Delivery& value, const GameActivity::Delivery& source, CheckpointNativeSnapshot& snapshot);
 
 } // namespace RTE
