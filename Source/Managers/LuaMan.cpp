@@ -7104,6 +7104,10 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 		LuaScriptGraphNativeCaptureScope lookups(shared);
 		FrozenCaptureStats* const previous = LuaMan::s_FrozenCaptureStats;
 		LuaMan::s_FrozenCaptureStats = &parts[index];
+		struct RestoreStats {
+			FrozenCaptureStats* previous;
+			~RestoreStats() { LuaMan::s_FrozenCaptureStats = previous; }
+		} restoreStats{previous};
 		const auto start = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		const uint64_t cpu = phaseCosts ? CheckpointThreadCpuUnits() : 0;
 		const uint64_t accountedCpu = phaseCosts ? CheckpointThreadAccountedCpu() : 0;
@@ -7112,7 +7116,6 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 		if (phaseCosts) stateCosts[index] = {
 		    std::chrono::duration_cast<std::chrono::microseconds>(start - phaseOrigin).count(),
 		    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()};
-		LuaMan::s_FrozenCaptureStats = previous;
 	};
 	const bool boundaryOnly = static_cast<bool>(CheckpointNativeSnapshot::Boundary());
 	// Each state is its own VM behind its own lock, so the states are captured side by side; this thread takes the states

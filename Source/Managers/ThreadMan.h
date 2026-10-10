@@ -8,6 +8,7 @@
 
 #include "BS_thread_pool.hpp"
 #include "FloatingPointEnvironment.h"
+#include "CheckpointFailure.h"
 
 #include <algorithm>
 #include <atomic>
@@ -34,8 +35,15 @@ namespace RTE {
 			m_Shared->count = count;
 			m_Shared->work = std::move(work);
 			const size_t threads = std::min<size_t>({count > 0 ? count - 1 : 0, helpers, static_cast<size_t>(pool.get_thread_count())});
-			for (size_t helper = 0; helper < threads; ++helper) {
-				pool.push_task([shared = m_Shared] { Run(*shared); });
+			try {
+				for (size_t helper = 0; helper < threads; ++helper) {
+					CheckpointFailure::Check(CheckpointFailure::Point::ParallelSubmission);
+					pool.push_task([shared = m_Shared] { Run(*shared); });
+				}
+			} catch (...) {
+				// Finish submitted readers before the constructor releases the caller's values.
+				Finish(false);
+				throw;
 			}
 		}
 		~ParallelWork() {

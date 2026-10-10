@@ -2443,6 +2443,33 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		}
 
 		{
+			BS::thread_pool pool(2);
+			const auto caller = std::this_thread::get_id();
+			std::mutex mutex;
+			std::condition_variable ready;
+			bool release = false;
+			std::atomic<bool> live{true};
+			std::atomic<unsigned> completed{0}, expired{0};
+			bool failed = false;
+			try {
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::ParallelSubmission, 1);
+				ParallelWork work(pool, 3, [&](size_t) {
+					std::unique_lock lock(mutex);
+					if (std::this_thread::get_id() == caller) { release = true; ready.notify_all(); }
+					else ready.wait(lock, [&] { return release; });
+					if (!live.load()) ++expired;
+					++completed;
+				}, 2);
+			} catch (const std::bad_alloc&) { failed = true; }
+			const unsigned atFailure = completed.load();
+			live = false;
+			{ std::lock_guard lock(mutex); release = true; ready.notify_all(); }
+			pool.wait_for_tasks();
+			check(failed && atFailure == 3 && expired.load() == 0,
+			      "failed_parallel_submission_finishes_readers_before_the_caller_unwinds");
+		}
+
+		{
 			CheckpointText frozen;
 			std::weak_ptr<const std::string> owned;
 			std::string reference;
