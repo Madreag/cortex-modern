@@ -53,8 +53,8 @@ LimbPath::LimbPath(const LimbPath& source, CheckpointNativeSnapshot& snapshot) :
 	Entity(source, snapshot),
 	m_Start(snapshot.Freeze(source.m_Start)),
 	m_StartSegCount(snapshot.Freeze(source.m_StartSegCount)),
-	m_Segments(snapshot.Freeze(source.m_Segments)),
-	m_CurrentSegment(m_Segments.begin() + std::distance(source.m_Segments.cbegin(), std::deque<Vector>::const_iterator(source.m_CurrentSegment))),
+	m_Segments(snapshot.Freeze(source.m_Segments, &m_Segments)),
+	m_CurrentSegment(m_Segments.begin()),
 	m_FootCollisionsDisabledSegment(snapshot.Freeze(source.m_FootCollisionsDisabledSegment)),
 	m_SegProgress(snapshot.Freeze(source.m_SegProgress)),
 	m_TravelSpeed(snapshot.Freeze(source.m_TravelSpeed)),
@@ -78,6 +78,8 @@ LimbPath::LimbPath(const LimbPath& source, CheckpointNativeSnapshot& snapshot) :
 	m_Ended(snapshot.Freeze(source.m_Ended)),
 	m_HFlipped(snapshot.Freeze(source.m_HFlipped)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	const auto current = std::distance(source.m_Segments.cbegin(), std::deque<Vector>::const_iterator(source.m_CurrentSegment));
+	if (!source.m_Segments.empty()) snapshot.AfterBoundary([this, current] { m_CurrentSegment = m_Segments.begin() + current; });
 }
 
 Entity* LimbPath::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
@@ -88,8 +90,10 @@ Entity* LimbPath::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) con
 void LimbPath::AssignCheckpointNative(const LimbPath& source, CheckpointNativeSnapshot& snapshot) {
 	snapshot.AssignEntity(*this, source);
 	m_Start = source.m_Start; m_StartSegCount = source.m_StartSegCount;
-	m_Segments = source.m_Segments;
-	m_CurrentSegment = m_Segments.begin() + std::distance(source.m_Segments.cbegin(), std::deque<Vector>::const_iterator(source.m_CurrentSegment));
+	m_Segments = snapshot.Freeze(source.m_Segments, &m_Segments);
+	m_CurrentSegment = m_Segments.begin();
+	const auto current = std::distance(source.m_Segments.cbegin(), std::deque<Vector>::const_iterator(source.m_CurrentSegment));
+	if (!source.m_Segments.empty()) snapshot.AfterBoundary([this, current] { m_CurrentSegment = m_Segments.begin() + current; });
 	m_FootCollisionsDisabledSegment = source.m_FootCollisionsDisabledSegment;
 	m_SegProgress = source.m_SegProgress; m_TravelSpeed = source.m_TravelSpeed;
 	m_SegmentEndedThreshold = source.m_SegmentEndedThreshold;
