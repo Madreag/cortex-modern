@@ -831,6 +831,15 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 		std::erase_if(m_AutosaveTasks, [](const auto& task) {
 			return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
 		});
+		// One capture's image is held at a time: an autosave due while the last one still writes waits for it, which only an
+		// interval far shorter than any a host can choose ever does.
+		if (!m_AutosaveTasks.empty()) {
+			const auto waitStart = std::chrono::steady_clock::now();
+			WaitForAutosaveTasks();
+			m_AutosaveTasks.clear();
+			System::PrintDiagnosticLine(std::format("[autosave] tick={} waited for the previous save ms={:.3f}", tick,
+			    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitStart).count()));
+		}
 		m_AutosaveTasks.reserve(m_AutosaveTasks.size() + 1);
 		const std::string fileName = matchId + "-" + std::to_string(tick);
 		std::string path = AutosaveStore::ArchivePath(matchId, tick).string();
