@@ -14,6 +14,24 @@ namespace RTE {
 
 	using namespace NetPeerFrameDetail;
 
+	void NetLockstepCoordinator::SendForwardedPeerInput(const NetLockstepFrame& input, uint8_t onlyPeer) {
+		NetLockstepFrame frame = input;
+		frame.priorWindow.clear();
+		std::vector<uint8_t> encoded;
+		if (!NetLockstepCodec::EncodeRecoveryInput(frame, encoded) || encoded.size() + 5 > NetLockstepCodec::c_InputWindowByteCap) return;
+		std::vector<uint8_t> body{1};
+		PutSize(body, static_cast<uint32_t>(encoded.size()));
+		body.insert(body.end(), encoded.begin(), encoded.end());
+		for (size_t offset = 0; offset < body.size(); offset += NetHostMigrationCodec::c_ChunkBytes) {
+			auto message = PeerFrameMessage(NetHostMigrationMessageType::PeerForwardInput);
+			message.successorPeerId = frame.senderPeerId; message.frame = frame.targetFrame;
+			message.totalBytes = static_cast<uint32_t>(body.size()); message.offset = static_cast<uint32_t>(offset);
+			const size_t end = std::min(body.size(), offset + NetHostMigrationCodec::c_ChunkBytes);
+			message.bytes.assign(body.begin() + offset, body.begin() + end);
+			SendPeerFrameMessage(std::move(message), NetTransportLane::ControlReliable, onlyPeer);
+		}
+	}
+
 	void NetLockstepCoordinator::SendPeerInput(const NetLockstepFrame& frame) {
 		if (!UsesPeerFrameGroups()) return;
 		std::vector<std::vector<uint8_t>> inputs;

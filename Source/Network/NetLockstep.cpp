@@ -8200,19 +8200,32 @@ namespace RTE {
 		}
 		if ((ack.receivedMask & NetLockstepCodec::c_FrameResendRequestMask) != 0 && IsRunning()) {
 			const uint8_t named = static_cast<uint8_t>(ack.receivedMask & 0xFFU);
-			if (named == m_Config.localPeerId) (void)ResendOwnFramesFrom(ack.senderPeerId, ack.highestContiguousFrame);
+			if (UsesPeerFrameGroups()) {
+				if (named == 0 || named > m_Config.peerCount || ack.highestContiguousFrame < m_Config.startFrame) return;
+				if (ack.highestContiguousFrame < m_Stats.nextFrame) SendPeerCommittedTail(ack.senderPeerId, ack.highestContiguousFrame);
+				else if (const auto inputs = m_PeerSourceInputs.find(ack.highestContiguousFrame); inputs != m_PeerSourceInputs.end())
+					if (const auto input = inputs->second.find(named); input != inputs->second.end()) SendForwardedPeerInput(input->second, ack.senderPeerId);
+			} else if (named == m_Config.localPeerId) (void)ResendOwnFramesFrom(ack.senderPeerId, ack.highestContiguousFrame);
 			else if (m_RelayHost && named != ack.senderPeerId && IsKnownRemotePeer(named)) (void)ResendRelayedFramesFrom(ack.senderPeerId, named, ack.highestContiguousFrame);
 		}
 	}
 
 	void NetLockstepCoordinator::RequestMissingFrames(uint8_t senderPeerId, uint64_t frame, uint64_t nowMs, uint64_t waitedMs) {
 		if (m_Config.frameLane == NetTransportLane::ControlReliable || m_Playback || !m_Transport) return;
-		// A client hears every other client through the host, which re-serves what it relayed.
-		const uint8_t via = m_RemoteTransports.contains(senderPeerId) ? senderPeerId : !m_RelayHost && m_RemoteTransports.contains(GetHostPeerId()) ? GetHostPeerId() : 0;
-		if (via == 0) return;
+		uint8_t via = 0;
+		if (UsesPeerFrameGroups()) {
+			// Any accepting peer can serve the original input. Its receipt names
+			// a live source even when the owner and the lobby host are absent.
+			if (const auto receipts = m_PeerInputReceipts.find(senderPeerId); receipts != m_PeerInputReceipts.end())
+				for (const auto& [peer, through]: receipts->second) if (peer != m_Config.localPeerId && through > frame &&
+				    (via == 0 || m_Stats.peers[peer].pingMs + m_Stats.peers[peer].jitterMs < m_Stats.peers[via].pingMs + m_Stats.peers[via].jitterMs)) via = peer;
+		} else {
+			via = m_RemoteTransports.contains(senderPeerId) ? senderPeerId : !m_RelayHost && m_RemoteTransports.contains(GetHostPeerId()) ? GetHostPeerId() : 0;
+			if (via == 0) return;
+		}
 		// A tick is lost once the sender has sent past it, or once the link it comes over has had its round trip: one
 		// still in flight on a long link arrives by itself. The same tick is asked for again only a round trip later.
-		const auto& link = m_Stats.peers[via];
+		const auto& link = m_Stats.peers[via == 0 ? senderPeerId : via];
 		const uint64_t tickMs = static_cast<uint64_t>(std::max(1.0, std::ceil(m_Config.simTickMs)));
 		uint64_t spacingMs = std::max<uint64_t>(tickMs, static_cast<uint64_t>(link.pingMs) + link.jitterMs);
 		// A tick still inside the lateness this sender's ticks usually land with is in flight, not lost: a relayed one
@@ -8237,7 +8250,9 @@ namespace RTE {
 		request.highestContiguousFrame = frame;
 		request.receivedMask = NetLockstepCodec::c_FrameResendRequestMask | senderPeerId;
 		std::string ignored;
-		if (SendPacket({request}, NetTransportLane::ControlReliable, &ignored, nullptr, nullptr, via)) ++m_Stats.frameResendRequests;
+		// Ask the whole peer group: a previously accepting witness may itself
+		// have gone quiet since issuing its receipt.
+		if (SendPacket({request}, NetTransportLane::ControlReliable, &ignored, nullptr, nullptr, UsesPeerFrameGroups() ? 0 : via)) ++m_Stats.frameResendRequests;
 	}
 
 	size_t NetLockstepCoordinator::ResendRelayedFramesFrom(uint8_t requesterPeerId, uint8_t senderPeerId, uint64_t fromFrame) {
