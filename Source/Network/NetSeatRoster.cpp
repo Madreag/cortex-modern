@@ -52,6 +52,7 @@ namespace RTE {
 			seat.returnAfterMs = nowMs + BackoffMs(seat.failedReturns);
 			const bool wasHeld = seat.holdCause != NetSeatHoldCause::None && seat.seatId != hostSeat;
 			seat.phase = wasHeld ? NetSeatPhase::Held : PresentPhase(stage);
+			if (wasHeld) seat.holdCause = NetSeatHoldCause::RejoinFailed;
 		}
 
 		/// The phase a returning or newly seated owner enters at the match's stage.
