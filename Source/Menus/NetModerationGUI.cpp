@@ -502,7 +502,17 @@ void NetModerationGUI::CreateConnectionControls() {
 	m_ConnectionFont->SetKerning(0);
 	for (auto state: {NetLinkQuality::State::Good, NetLinkQuality::State::Marginal, NetLinkQuality::State::Substituting, NetLinkQuality::State::Lost}) {
 		const auto words = NetLinkQualityPresentation::Describe(state);
-		m_ConnectionFont->CacheColor(makeacol32(words.red, words.green, words.blue, 255));
+		const auto color = makeacol32(words.red, words.green, words.blue, 255);
+		m_ConnectionFont->CacheColor(color);
+		auto* atlas = m_ConnectionFont->GetFontColor(color)->m_Bitmap;
+		const auto background = atlas->GetPixel(atlas->GetWidth() - 1, 0), separator = atlas->GetPixel(0, 0);
+		// This match's atlas tints every glyph pixel, including the menu font's antialias ink.
+		for (int y = 0; y < atlas->GetHeight(); ++y) {
+			for (int x = 0; x < atlas->GetWidth(); ++x) {
+				const auto pixel = atlas->GetPixel(x, y);
+				if (pixel != background && pixel != separator) atlas->SetPixel(x, y, color);
+			}
+		}
 		m_ConnectionColumnWidth = std::max(m_ConnectionColumnWidth, m_ConnectionFont->CalculateWidth(words.hint));
 		m_ConnectionColumnWidth = std::max(m_ConnectionColumnWidth, m_ConnectionFont->CalculateWidth("4294967295 ms / " + std::string(words.state)));
 	}

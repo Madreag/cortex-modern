@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 
 from PIL import Image, ImageChops
 
@@ -143,6 +144,7 @@ def run_single(repo, root, steps, size, *, runtime=None, exe=None, guard=False, 
     width, height = (int(part) for part in size.split("x"))
     seed_settings(run, {"ResolutionX": width, "ResolutionY": height, "ResolutionMultiplier": "1", "ShowAdvancedPerfStats": "0"})
     if guard:
+        seed_settings(run, {"ShowPerformanceStats": "0"})
         module = Path(run.cwd) / "Userdata/UserScenes.rte"
         module.mkdir(exist_ok=True)
         (module / "Index.ini").write_text(GUARD_INDEX, encoding="utf-8")
@@ -175,11 +177,11 @@ def failure_line(result):
 
 
 def guard_steps():
-    return [{"op": "wait_file", "path": "Userdata/UserScenes.rte/connection-guard-ready.json", "scope": "menu"},
-            {"op": "wait", "paused": True, "sim_at_least": 4, "scope": "menu"},
-            {"op": "wait", "renders": 4, "scope": "menu"},
-            {"op": "assert", "equals": {"service": "Idle", "screen": "Gameplay", "paused": True, "sim_frame": 4, "local_actor_alive": True}, "connections_absent": True, "scope": "menu"},
-            {"op": "screenshot_pair", "name": "guard", "scope": "menu"}, {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]
+    return [{"op": "wait_file", "path": "Userdata/UserScenes.rte/connection-guard-ready.json"},
+            {"op": "wait", "paused": False, "sim_at_least": 4},
+            {"op": "wait", "renders": 4},
+            {"op": "assert", "equals": {"service": "Idle", "screen": "Gameplay", "paused": False, "sim_frame": 4, "local_actor_alive": True}, "connections_absent": True},
+            {"op": "screenshot_pair", "name": "guard"}, {"op": "signal", "name": "done"}, {"op": "finish"}]
 
 
 def compare_guard(before, after, size):
@@ -250,6 +252,9 @@ def scene_document():
                 {"op": "wait", "service": "Running", "sim_at_least": 1}, {"op": "signal", "name": "done"}, {"op": "finish"}]
             if who != "host" and surface == "toggle":
                 steps = match_steps("Seats", "Good")
+            if surface == "held" and who == "seat4":
+                steps = [{"op": "wait", "service": "Running", "lockstep_frame_at_least": 120},
+                         {"op": "signal", "name": "done"}, {"op": "finish"}]
             steps.insert(1, menu("video_mark " + name))
             scripts[key + ".probe.json"] = json.dumps({"schema": 1, "timeout_ms": 90000, "steps": steps})
             lever = LEVER if surface != "HUD" else "1:" + state + ":" + str(STATES[state][1]) + ";2:Good:40;3:Good:40;4:Good:40"
@@ -259,7 +264,7 @@ def scene_document():
                     "probe": key + ".probe.json", "env": {"CC_TEST_LINK_QUALITY": lever, "CCCP_SETTINGSPATH": "Userdata/Settings.ini"},
                     "settings": {"NetworkDisplayName": SEAT_NAMES[index], "NetworkMatchStatusMode": "Auto", "NetworkShowDiagnostics": "0", "NetworkChatVisible": "0", "NetworkToastsEnabled": "0"}}
             if surface == "held" and who == "seat4":
-                peer["args"] += ["-net-test-live-stall", "120:20000"]
+                peer["kill_when"] = {"peer": "seat4", "probe_complete": True}
             if retained and index == 0:
                 peer["retained_runtime"] = retained
             else:
@@ -310,6 +315,67 @@ def frame_colours(native, path, size):
         return checks
 
 
+class SeatDrop:
+    def __init__(self, run, marker, timeout):
+        import ctypes as C
+        from ctypes import wintypes as W
+
+        if sys.platform != "win32":
+            raise ValueError("the local held-seat detector needs the Windows hidden runner")
+        kernel = C.WinDLL("kernel32", use_last_error=True)
+        kernel.FindFirstChangeNotificationW.argtypes = [W.LPCWSTR, W.BOOL, W.DWORD]
+        kernel.FindFirstChangeNotificationW.restype = W.HANDLE
+        kernel.FindNextChangeNotification.argtypes = [W.HANDLE]
+        kernel.FindCloseChangeNotification.argtypes = [W.HANDLE]
+        kernel.CreateEventW.argtypes = [C.c_void_p, W.BOOL, W.BOOL, W.LPCWSTR]
+        kernel.CreateEventW.restype = W.HANDLE
+        kernel.SetEvent.argtypes = [W.HANDLE]
+        kernel.CloseHandle.argtypes = [W.HANDLE]
+        kernel.WaitForMultipleObjects.argtypes = [W.DWORD, C.POINTER(W.HANDLE), W.BOOL, W.DWORD]
+        kernel.WaitForMultipleObjects.restype = W.DWORD
+        changed = kernel.FindFirstChangeNotificationW(str(marker.parent), False, 0x10)
+        if changed in (None, C.c_void_p(-1).value):
+            raise C.WinError(C.get_last_error())
+        cancelled = kernel.CreateEventW(None, True, False, None)
+        if not cancelled:
+            kernel.FindCloseChangeNotification(changed)
+            raise C.WinError(C.get_last_error())
+        handles = (W.HANDLE * 2)(cancelled, changed)
+        self.evidence = {"requested_frame": 120, "dropped": False}
+
+        def watch():
+            try:
+                # File-change notifications wait for the probe's signal without polling the engine.
+                while True:
+                    if marker.is_file():
+                        try:
+                            observed = json.loads(marker.read_text(encoding="utf-8"))
+                        except json.JSONDecodeError:
+                            pass
+                        else:
+                            break
+                    event = kernel.WaitForMultipleObjects(2, handles, False, int(timeout * 1000))
+                    if event == 0:
+                        return
+                    if event != 1:
+                        raise RuntimeError("held-seat probe signal did not arrive")
+                    if not kernel.FindNextChangeNotification(changed):
+                        raise C.WinError(C.get_last_error())
+                if observed.get("service") != "Running" or observed.get("lockstep_frame", 0) < 120:
+                    raise ValueError("held-seat drop signal is outside recorded gameplay")
+                run.terminate(0, "held-seat fixture after recorded gameplay frame 120")
+                self.evidence.update(dropped=True, observed=observed)
+            except (OSError, RuntimeError, ValueError) as error:
+                self.evidence["error"] = str(error)
+
+        self.thread = threading.Thread(target=watch, name="connection-seat-drop")
+        self.close_handles = lambda: (kernel.SetEvent(cancelled), self.thread.join(), kernel.FindCloseChangeNotification(changed), kernel.CloseHandle(cancelled))
+        self.thread.start()
+
+    def close(self):
+        self.close_handles()
+
+
 def local_case(options, repo, root, definition, scripts, port, retained):
     root.mkdir(parents=True, exist_ok=False)
     probe = root / "host-probe/probe.json"
@@ -318,9 +384,15 @@ def local_case(options, repo, root, definition, scripts, port, retained):
     reference = next((index for index, step in enumerate(document["steps"]) if step.get("control", "").startswith(("LabelOwnConnection", "NetworkSeatLink"))), None)
     if reference is not None:
         document["steps"].insert(reference, {"op": "screenshot_pair", "name": "reference"})
+    drop_marker = root / "seat4-probe/done.json"
+    held = definition["name"].startswith("Seats_held_")
+    if held:
+        document["steps"].insert(1, {"op": "wait_file", "path": str(drop_marker)})
+        if repo == options.baseline_repo:
+            document["steps"].insert(2, {"op": "wait", "elapsed_ms": 6000})
     write_json(probe, document)
     runs, records, runtimes = [], {}, {}
-    error = None
+    error, drop = None, None
     width, height = (int(part) for part in definition["size"].split("x"))
     try:
         for peer in definition["peers"]:
@@ -335,6 +407,12 @@ def local_case(options, repo, root, definition, scripts, port, retained):
                 args += ["-menu-script", str(menu_path), "-menu-script-out", str(root / "host-menu.json")]
             environment = {**peer.get("env", {}), "CCCP_HEADLESS": "1", "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1",
                            "CC_TEST_NET_UI_SCRIPT": str(probe) if who == "host" else ""}
+            if held and who == "seat4":
+                peer_probe = drop_marker.parent / "probe.json"
+                peer_document = json.loads(scripts[peer["probe"]])
+                peer_document["steps"] = [step for step in peer_document["steps"] if not step.get("command", "").startswith("video_mark ")]
+                write_json(peer_probe, peer_document)
+                environment["CC_TEST_NET_UI_SCRIPT"] = str(peer_probe)
             previous = peer.get("retained_runtime")
             runtime = retained[(previous["run"], previous["peer"])] if previous else None
             run = make_run(repo, args, root / who, options.timeout, runtime=runtime, env=environment)
@@ -348,6 +426,8 @@ def local_case(options, repo, root, definition, scripts, port, retained):
                 settings["NetworkConnectionIndicator"] = "1"
             seed_settings(run, settings)
             runtimes[(definition["name"], who)] = Path(run.cwd)
+            if held and who == "seat4":
+                drop = SeatDrop(run, drop_marker, options.timeout - 10)
         # The existing wait-peers lever holds the host until all three joiners are ready.
         for _, run in runs:
             run.start()
@@ -358,6 +438,8 @@ def local_case(options, repo, root, definition, scripts, port, retained):
     except (OSError, RuntimeError, ValueError) as failure:
         error = str(failure)
     finally:
+        if drop:
+            drop.close()
         for who, run in runs:
             run.close()
             records.setdefault(who, run.record)
@@ -365,7 +447,7 @@ def local_case(options, repo, root, definition, scripts, port, retained):
     native = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     result = {"records": records, "probe": native, "error": error, "port": port, "size": definition["size"],
               "topology": "single-box", "proof": False, "capture": str(probe.parent / "connection.png"),
-              "reference_capture": str(probe.parent / "reference.png")}
+              "reference_capture": str(probe.parent / "reference.png"), "drop": drop.evidence if drop else None}
     write_json(root / "local-result.json", result)
     return result, runtimes
 
@@ -391,6 +473,8 @@ def run_layout_detector(options, out, repo, port):
             if surface == "Seats" and state != "held":
                 control += str(STATES[state][0])
             passed = native.get("pass") is False and "unknown control: " + control in reason and native.get("failed_observation", {}).get("service") == "Running"
+            if state == "held":
+                passed &= bool(evidence["drop"] and evidence["drop"].get("dropped"))
             reference = Path(evidence["reference_capture"])
             passed &= reference.is_file()
             if reference.is_file():
@@ -402,6 +486,8 @@ def run_layout_detector(options, out, repo, port):
             passed = evidence["error"] is None and host.get("exit_code") == 0 and not host.get("timed_out") and native.get("pass") is True and native.get("complete") is True
             passed &= len(evidence["records"]) == len(definition["peers"]) and all(row.get("started") and not row.get("timed_out") for row in evidence["records"].values())
             passed &= all(checks)
+            if name.startswith("Seats_held_"):
+                passed &= bool(evidence["drop"] and evidence["drop"].get("dropped"))
             if name.startswith(("HUD_", "Seats_")) or name.endswith("-match"):
                 passed &= bool(checks)
             line = ("GREEN " if passed else "FAIL ") + name + (" " + reason if not passed else "")
@@ -508,6 +594,8 @@ def main():
         sha = subprocess.check_output(["git", "-C", str(options.baseline_repo), "rev-parse", "HEAD"], text=True).strip()
         if sha != BASE:
             parser.error("baseline checkout must be " + BASE)
+        baseline_exe = options.baseline_exe or options.baseline_repo / "Cortex Command.exe"
+        baseline_digest = hashlib.sha256(baseline_exe.read_bytes()).hexdigest()
     options.out.mkdir(parents=True, exist_ok=False)
     result = {"base": BASE, "cases": {}, "needs_testing": [], "pass": False,
               "topology": "single-box" if options.layout_detector or options.single_engine else "spread", "proof": False,
@@ -562,6 +650,11 @@ def main():
             base = run_layout_detector(options, options.out / "base", options.baseline_repo, options.port + len(scene_document()["runs"])) if options.layout_detector else run_multiplayer(options, options.out / "base", options.baseline_repo)
             result["cases"].update({"RED_" + name: row for name, row in base["cases"].items()})
     result["pass"] = not result["needs_testing"] and all(row.get("pass", False) for row in result["cases"].values())
+    if options.baseline_repo:
+        baseline_head = subprocess.check_output(["git", "-C", str(options.baseline_repo), "rev-parse", "HEAD"], text=True).strip()
+        result["baseline_exe_sha256"] = baseline_digest
+        result["baseline_unchanged"] = baseline_head == BASE and hashlib.sha256(baseline_exe.read_bytes()).hexdigest() == baseline_digest
+        result["pass"] &= result["baseline_unchanged"]
     result["proof"] = result["pass"] and not options.layout_detector and not options.single_engine
     write_json(options.out / "result.json", result)
     print(json.dumps({"pass": result["pass"], "needs_testing": result["needs_testing"]}), flush=True)
