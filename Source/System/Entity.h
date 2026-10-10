@@ -178,7 +178,8 @@ namespace RTE {
 			/// Grabs from the pre-allocated pool, an available chunk of memory the exact size of the Entity this ClassInfo represents. OWNERSHIP IS TRANSFERRED!
 			/// @return A pointer to the pre-allocated pool memory. OWNERSHIP IS TRANSFERRED!
 			void* GetPoolMemory();
-			void* GetCheckpointPoolMemory();
+			/// Allocates a snapshot value without taking a gameplay pool slot.
+			void* AllocateCheckpointMemory();
 
 			/// Returns a raw chunk of memory back to the pre-allocated available pool.
 			/// @param returnedMemory The raw chunk of memory that is being returned. Needs to be the same size as the type this ClassInfo describes. OWNERSHIP IS TRANSFERRED!
@@ -439,6 +440,7 @@ namespace RTE {
 		uint64_t m_CheckpointWriteGeneration = 0;
 		bool m_CheckpointValueTrap = false; //!< Set while a cached script graph chunk carries this object's text.
 		bool m_FrozenCheckpointNative = false;
+		void* m_CheckpointAllocation = nullptr;
 		Entity** m_CheckpointOwnerSlot = nullptr;
 		const CheckpointNativeSnapshot* m_CheckpointSnapshot = nullptr;
 		const Entity* m_CheckpointPreset = nullptr;
@@ -450,6 +452,7 @@ namespace RTE {
 
 	private:
 		static thread_local unsigned int s_CheckpointCloneDepth;
+		static thread_local void* s_DeletedCheckpointMemory;
 		/// Clears all the member variables of this Entity, effectively resetting the members of this abstraction level only.
 		void Clear();
 	};

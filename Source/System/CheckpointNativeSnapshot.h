@@ -103,7 +103,7 @@ namespace RTE {
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 			m_Owners.push_back(nullptr);
 			Entity** slot = &m_Owners.back();
-			void* memory = const_cast<Entity::ClassInfo&>(source.GetClass()).GetCheckpointPoolMemory();
+			void* memory = const_cast<Entity::ClassInfo&>(source.GetClass()).AllocateCheckpointMemory();
 			if (!memory) throw std::bad_alloc();
 			const ptrdiff_t offset = reinterpret_cast<const char*>(static_cast<const Entity*>(&source)) - reinterpret_cast<const char*>(&source);
 			Entity* target = reinterpret_cast<Entity*>(static_cast<char*>(memory) + offset);
@@ -116,13 +116,15 @@ namespace RTE {
 					T::PrepareCheckpointNative(source, reinterpret_cast<T*>(memory), *this);
 				new(memory) T(source, *this);
 				constructed = true;
+				target->m_CheckpointAllocation = memory;
 				return target;
 			} catch (...) {
 				if (constructed) std::launder(reinterpret_cast<T*>(memory))->~T();
 				*slot = nullptr;
 				m_Objects.erase(&source);
 				m_Slots.erase(target);
-				T::operator delete(memory);
+				if (Entity::s_DeletedCheckpointMemory == memory) Entity::s_DeletedCheckpointMemory = nullptr;
+				T::Deallocate(memory);
 				throw;
 			}
 		}

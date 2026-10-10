@@ -126,6 +126,7 @@ namespace RTE {
 		target.m_CheckpointPreset = Object(source.GetPresetForCopy());
 	}
 	thread_local unsigned int Entity::s_CheckpointCloneDepth = 0;
+	thread_local void* Entity::s_DeletedCheckpointMemory = nullptr;
 	bool Entity::IsCheckpointClone() { return s_CheckpointCloneDepth != 0 || MovableObject::IsFaithfulClone(); }
 
 	void Entity::ReportCheckpointValueWrite() {
@@ -161,7 +162,11 @@ namespace RTE {
 	}
 
 	Entity::~Entity() {
-		if (m_FrozenCheckpointNative) { if (m_CheckpointOwnerSlot) *m_CheckpointOwnerSlot = nullptr; return; }
+		if (m_FrozenCheckpointNative) {
+			if (m_CheckpointOwnerSlot) *m_CheckpointOwnerSlot = nullptr;
+			if (m_CheckpointAllocation) s_DeletedCheckpointMemory = m_CheckpointAllocation;
+			return;
+		}
 		Destroy(true);
 	}
 
@@ -519,6 +524,11 @@ namespace RTE {
 		if (!returnedMemory) {
 			return 0;
 		}
+		if (s_DeletedCheckpointMemory == returnedMemory) {
+			s_DeletedCheckpointMemory = nullptr;
+			m_Deallocate(returnedMemory);
+			return 0;
+		}
 
 #ifdef __SANITIZE_ADDRESS__
 		// If compiled with ASan, sidestep pooling and just use the allocator normally.
@@ -535,21 +545,10 @@ namespace RTE {
 		return m_InstancesInUse;
 	}
 
-	void* Entity::ClassInfo::GetCheckpointPoolMemory() {
+	void* Entity::ClassInfo::AllocateCheckpointMemory() {
 		if (!IsConcrete()) throw std::runtime_error("cannot allocate an abstract native checkpoint value");
-#ifndef __SANITIZE_ADDRESS__
-		std::lock_guard<std::mutex> guard(m_Mutex);
-		if (!m_AllocatedPool.empty()) {
-			void* memory = m_AllocatedPool.back();
-			m_AllocatedPool.pop_back();
-			if (!memory) throw std::bad_alloc();
-			++m_InstancesInUse;
-			return memory;
-		}
-#endif
 		void* memory = m_Allocate();
 		if (!memory) throw std::bad_alloc();
-		++m_InstancesInUse;
 		return memory;
 	}
 

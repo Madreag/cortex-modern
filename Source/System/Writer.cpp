@@ -2585,6 +2585,9 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			};
 			const auto baseline = capture(actor.get());
 			const std::string full = baseline.Text(), shared = baseline.SharedText();
+			auto marker = std::make_unique<Actor>();
+			Actor* const nextGameplaySlot = marker.get();
+			marker.reset();
 			const auto uid = MovableObject::GetUniqueIDCounter();
 			const auto simDraws = g_SimRNG.GetDrawCount(), renderDraws = g_RenderRNG.GetDrawCount();
 			bool refused = true;
@@ -2600,6 +2603,9 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
 			Actor* const frozen = snapshot->Object(actor.get());
 			const bool aliases = snapshot->Object(actor.get()) == frozen && snapshot->ValueObject(actor->GetController()) == frozen->GetController();
+			marker = std::make_unique<Actor>();
+			const bool poolUnchanged = marker.get() == nextGameplaySlot;
+			marker.reset();
 			actor->SetPos(Vector(99, 101)); actor->SetStringValue(std::string("a\0key", 5), "changed"); actor.reset();
 			const auto output = std::async(std::launch::async, [snapshot, frozen, capture] {
 				CheckpointFrozenClock other{123456789, 987654321, 111111111};
@@ -2610,7 +2616,7 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 				const auto values = capture(frozen);
 				return std::pair{values.Text(), values.SharedText()};
 			}).get();
-			check(refused && aliases && output.first == full && output.second == shared && MovableObject::GetUniqueIDCounter() == uid &&
+			check(refused && aliases && poolUnchanged && output.first == full && output.second == shared && MovableObject::GetUniqueIDCounter() == uid &&
 			      g_SimRNG.GetDrawCount() == simDraws && g_RenderRNG.GetDrawCount() == renderDraws,
 			      "native_snapshot_retries_partial_failure_preserves_aliases_and_serializes_after_source_death");
 		}
