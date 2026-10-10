@@ -56,7 +56,7 @@ namespace RTE {
 		bool CanRestore() const;
 		bool Restore() const;
 		std::string SaveMetadata() const;
-		static CheckpointText CaptureMetadata();
+		static CheckpointText CaptureMetadata(const Scene* source = nullptr);
 		bool LoadMetadata(std::string_view text, bool validateOnly = false);
 	private:
 		std::vector<BITMAP*> fencedBitmaps;

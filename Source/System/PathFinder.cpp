@@ -321,6 +321,39 @@ std::string PathFinder::SaveCheckpoint() const {
 	return writer.Text();
 }
 
+CheckpointText PathFinder::FreezeCheckpoint() const {
+	struct Node {
+		float x, y;
+		unsigned char navigable;
+		std::array<int64_t, PathNode::c_MaxAdjacentNodeCount> adjacent;
+		std::array<int, PathNode::c_MaxAdjacentNodeCount> material;
+	};
+	std::vector<Node> nodes;
+	nodes.reserve(m_NodeGrid.size());
+	for (const PathNode& source: m_NodeGrid) {
+		Node node;
+		node.x = source.Pos.m_X; node.y = source.Pos.m_Y;
+		std::memcpy(&node.navigable, &source.m_Navigable, sizeof(node.navigable));
+		for (size_t direction = 0; direction < node.adjacent.size(); ++direction) {
+			const PathNode* adjacent = source.AdjacentNodes[direction];
+			node.adjacent[direction] = adjacent ? static_cast<int64_t>(adjacent - m_NodeGrid.data()) : int64_t{-1};
+			const Material* material = source.AdjacentNodeBlockingMaterials[direction];
+			node.material[direction] = material ? static_cast<int>(material->GetIndex()) : -1;
+		}
+		nodes.push_back(node);
+	}
+	const size_t bytes = sizeof(nodes) + nodes.size() * sizeof(Node);
+	return CheckpointText::Deferred([nodes = std::move(nodes), dimension = m_NodeDimension, offset = m_Offset,
+		width = m_GridWidth, height = m_GridHeight, wrapsX = m_WrapsX, wrapsY = m_WrapsY] {
+		CheckpointWriter writer("PathFinder1");
+		writer(dimension, offset, width, height, wrapsX, wrapsY, nodes.size());
+		for (const Node& node: nodes) {
+			writer(node.x, node.y, static_cast<unsigned int>(node.navigable), node.adjacent, node.material);
+		}
+		return writer.Text();
+	}, bytes);
+}
+
 bool PathFinder::LoadCheckpoint(std::string_view text, bool validateOnly) {
 	try {
 		CheckpointReader reader(text, "PathFinder1", validateOnly);

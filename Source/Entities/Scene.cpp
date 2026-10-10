@@ -1,10 +1,14 @@
 #include "Scene.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "SceneObject.h"
+#include "SceneLayer.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "CheckpointImage.h"
 #include "CheckpointProperties.h"
 #include "CheckpointCast.h"
-#include "CheckpointNativeSnapshot.h"
 #include "BitmapCheckpoint.h"
 #include "TerrainLayerSnapshot.h"
 
@@ -96,6 +100,19 @@ using namespace RTE;
 ConcreteClassInfo(Scene, Entity, 0);
 const std::string Scene::Area::c_ClassName = "Area";
 
+Scene::Area::Area(const Area& source, CheckpointNativeSnapshot& snapshot) :
+	m_BoxList(snapshot.Freeze(source.m_BoxList)), m_Name(source.m_Name), m_FrozenNative(true) {
+	snapshot.BindValue(source, this);
+}
+
+void Scene::Area::AssignCheckpointNative(const Area& source, CheckpointNativeSnapshot& snapshot) {
+	if (!m_FrozenNative) { Destroy(true); Track(this, false); }
+	m_FrozenNative = true;
+	snapshot.BindValue(source, this);
+	m_BoxList = snapshot.Freeze(source.m_BoxList);
+	m_Name = source.m_Name;
+}
+
 Scene::RuntimeOwners::~RuntimeOwners() {
 	for (SceneObject* object: brains) delete object;
 	for (const auto& set: placed) for (SceneObject* object: set) delete object;
@@ -143,7 +160,8 @@ std::string Scene::SaveRuntimeCheckpoint() const {
 	// Each team's grid is its own; a capture takes them side by side, in the same order, beside the rest of the runtime,
 	// and takes the grids no pool thread started once the rest is written.
 	std::optional<ParallelWork> grids;
-	if (CheckpointWriter::IsCapturing() && !CaptureTrace::Serial()) {
+	if (IsFrozenCheckpointNative()) pathfinders.assign(m_FrozenPathFinders.begin(), m_FrozenPathFinders.end());
+	else if (CheckpointWriter::IsCapturing() && !CaptureTrace::Serial()) {
 		pathfinders.resize(m_pPathFinders.size());
 		grids.emplace(g_ThreadMan.GetPriorityThreadPool(), m_pPathFinders.size(), [this, &pathfinders, task = CaptureSentinel::CurrentTask()](size_t index) {
 			CaptureSentinel::WorkerScope worker(task);
@@ -172,7 +190,7 @@ std::string Scene::SaveRuntimeCheckpoint() const {
 	BitmapCheckpoint preview; preview.Capture(m_pPreviewBitmap);
 	TerrainLayerSnapshot terrain;
 	CheckpointText metadata;
-	if (CheckpointWriter::IsCapturing()) metadata = TerrainLayerSnapshot::CaptureMetadata();
+	if (CheckpointWriter::IsCapturing()) metadata = TerrainLayerSnapshot::CaptureMetadata(IsFrozenCheckpointNative() ? this : nullptr);
 	else {
 		if (!terrain.Capture()) throw std::runtime_error("could not capture scene terrain metadata");
 		metadata = CheckpointText(terrain.SaveMetadata());
@@ -274,11 +292,69 @@ bool Scene::LoadRuntimeCheckpoint(std::string_view text, bool validateOnly, bool
 // Holds the path calculated by CalculateScenePath
 thread_local std::list<Vector> s_ScenePath;
 
+Scene::Scene(const Scene& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	m_Location(snapshot.Freeze(source.m_Location)),
+	m_LocationOffset(snapshot.Freeze(source.m_LocationOffset)),
+	m_MetagamePlayable(snapshot.Freeze(source.m_MetagamePlayable)),
+	m_Revealed(snapshot.Freeze(source.m_Revealed)),
+	m_OwnedByTeam(snapshot.Freeze(source.m_OwnedByTeam)),
+	m_RoundIncome(snapshot.Freeze(source.m_RoundIncome)),
+	m_ResidentBrains{},
+	m_BuildBudget{},
+	m_BuildBudgetRatio{},
+	m_AutoDesigned(snapshot.Freeze(source.m_AutoDesigned)),
+	m_TotalInvestment(snapshot.Freeze(source.m_TotalInvestment)),
+	m_pTerrain(snapshot.Freeze(source.m_pTerrain)),
+	m_FrozenSaveRoots{},
+	m_FrozenFullGameSave(!dynamic_cast<EditorActivity*>(g_ActivityMan.GetActivity())),
+	m_PathfindingUpdated(snapshot.Freeze(source.m_PathfindingUpdated)),
+	m_PartialPathUpdateTimer(snapshot.Freeze(source.m_PartialPathUpdateTimer)),
+	m_HorizonTerrainBoxes{},
+	m_PlacedObjects{},
+	m_BackLayerList(snapshot.Freeze(source.m_BackLayerList)),
+	m_UnseenPixelSize{},
+	m_apUnseenLayer{},
+	m_SeenPixels{},
+	m_CleanedPixels{},
+	m_ScanScheduled{},
+	m_AreaList(snapshot.Freeze(source.m_AreaList)),
+	m_NavigableAreas(snapshot.Freeze(source.m_NavigableAreas)),
+	m_NavigableAreasUpToDate(snapshot.Freeze(source.m_NavigableAreasUpToDate)),
+	m_GlobalAcc(snapshot.Freeze(source.m_GlobalAcc)),
+	m_SelectedAssemblies(snapshot.Freeze(source.m_SelectedAssemblies)),
+	m_AssembliesCounts(snapshot.Freeze(source.m_AssembliesCounts)),
+	m_pPreviewBitmap(snapshot.Freeze(source.m_pPreviewBitmap)),
+	m_PreviewBitmapFile(snapshot.Freeze(source.m_PreviewBitmapFile)),
+	m_MetasceneParent(snapshot.Freeze(source.m_MetasceneParent)),
+	m_IsMetagameInternal(snapshot.Freeze(source.m_IsMetagameInternal)),
+	m_IsSavedGameInternal(snapshot.Freeze(source.m_IsSavedGameInternal)),
+	m_Deployments(snapshot.Freeze(source.m_Deployments)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	snapshot.FreezeArray(m_ResidentBrains, source.m_ResidentBrains);
+	snapshot.FreezeArray(m_BuildBudget, source.m_BuildBudget);
+	snapshot.FreezeArray(m_BuildBudgetRatio, source.m_BuildBudgetRatio);
+	snapshot.FreezeArray(m_PlacedObjects, source.m_PlacedObjects);
+	snapshot.FreezeArray(m_UnseenPixelSize, source.m_UnseenPixelSize);
+	snapshot.FreezeArray(m_apUnseenLayer, source.m_apUnseenLayer);
+	snapshot.FreezeArray(m_SeenPixels, source.m_SeenPixels);
+	snapshot.FreezeArray(m_CleanedPixels, source.m_CleanedPixels);
+	snapshot.FreezeArray(m_ScanScheduled, source.m_ScanScheduled);
+	for (size_t index = 0; index < m_FrozenPathFinders.size(); ++index) m_FrozenPathFinders[index] = source.m_pPathFinders[index] ? source.m_pPathFinders[index]->FreezeCheckpoint() : CheckpointText(std::string());
+	if (&source == g_SceneMan.GetScene()) { std::list<SceneObject*> roots; g_MovableMan.GetAllActors(false, roots); g_MovableMan.GetAllItems(false, roots); g_MovableMan.GetAllParticles(false, roots); m_FrozenSaveRoots = snapshot.Freeze(roots); }
+}
+
+Entity* Scene::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 Scene::Scene() {
 	Clear();
 }
 
 Scene::~Scene() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -1400,7 +1476,7 @@ void Scene::SaveSavedScene(Writer& writer, const std::string& fileName) const {
 int Scene::Save(Writer& writer) const {
 	Entity::Save(writer);
 
-	bool doFullGameSave = !dynamic_cast<EditorActivity*>(g_ActivityMan.GetActivity());
+	bool doFullGameSave = IsFrozenCheckpointNative() ? m_FrozenFullGameSave : !dynamic_cast<EditorActivity*>(g_ActivityMan.GetActivity());
 
 	writer.NewPropertyWithValue("LocationOnPlanet", m_Location);
 	writer.NewPropertyWithValue("MetagamePlayable", m_MetagamePlayable);
@@ -1433,9 +1509,12 @@ int Scene::Save(Writer& writer) const {
 
 	std::list<SceneObject*> liveObjects;
 	if (writer.IsSavedScene(this)) {
-		g_MovableMan.GetAllActors(false, liveObjects);
-		g_MovableMan.GetAllItems(false, liveObjects);
-		g_MovableMan.GetAllParticles(false, liveObjects);
+		if (IsFrozenCheckpointNative()) liveObjects = m_FrozenSaveRoots;
+		else {
+			g_MovableMan.GetAllActors(false, liveObjects);
+			g_MovableMan.GetAllItems(false, liveObjects);
+			g_MovableMan.GetAllParticles(false, liveObjects);
+		}
 	}
 	const auto placeable = [doFullGameSave](const SceneObject* placedObject) {
 		// Preset-less MOPixels (terrain debris) serialize in full form on full-game saves; anything else preset-less is unplaceable.
@@ -1618,6 +1697,7 @@ namespace {
 		}
 		// The channel carries the indent and the flags the tree would write the node with.
 		void Write() {
+			CheckpointNativeSnapshot::ReadScope native(m_Object->FrozenCheckpointNativeOwner());
 			const auto started = std::chrono::steady_clock::now();
 			CaptureTrace::Span span("ahead", CaptureTrace::Active() ? TraceName(m_Object) : std::string());
 			try {

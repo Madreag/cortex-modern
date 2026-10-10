@@ -89,6 +89,8 @@ namespace RTE {
 			SerializableClassNameGetter;
 			SerializableOverrideMethods;
 			std::string SaveCheckpoint() const;
+			Area(const Area& source, CheckpointNativeSnapshot& snapshot);
+			void AssignCheckpointNative(const Area& source, CheckpointNativeSnapshot& snapshot);
 			void TouchCheckpoint();
 			bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 
@@ -111,6 +113,7 @@ namespace RTE {
 				Track(this, true);
 			}
 			~Area() override {
+				if (m_FrozenNative) return;
 				Destroy(true);
 				Track(this, false);
 			}
@@ -231,6 +234,7 @@ namespace RTE {
 			/// Private member variable and method declarations
 		private:
 			static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.
+			bool m_FrozenNative = false;
 
 			/// Enters or leaves the set of live Areas IsLive reads.
 			static void Track(const Area* area, bool live);
@@ -264,6 +268,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a Scene object in system
 		/// memory. Create() should be called before using the object.
 		Scene();
+		CheckpointSnapshotMethods(Scene);
 
 		/// Destructor method used to clean up a Scene object before deletion
 		/// from system memory.
@@ -399,6 +404,7 @@ namespace RTE {
 		/// Gets the SLTerrain.
 		/// @return A pointer to the SLTerrain. Ownership is NOT transferred!
 		SLTerrain* GetTerrain() { return m_pTerrain; }
+		const SLTerrain* GetTerrain() const { return m_pTerrain; }
 
 		/// Gets access to the background layer list.
 		/// @return A reference to the std::list containing all the background layers.
@@ -844,6 +850,9 @@ namespace RTE {
 		// Pathfinding graph and logic. Owned by this
 		// The array of PathFinders for each team. Because we also have a shared pathfinder using index 0, we need to use MaxTeamCount + 1 to handle all the Teams' PathFinders.
 		std::array<std::unique_ptr<PathFinder>, Activity::Teams::MaxTeamCount + 1> m_pPathFinders;
+		std::array<CheckpointText, Activity::Teams::MaxTeamCount + 1> m_FrozenPathFinders;
+		std::list<SceneObject*> m_FrozenSaveRoots;
+		bool m_FrozenFullGameSave = true;
 		// Is set to true on any frame the pathfinding data has been updated
 		bool m_PathfindingUpdated;
 		// Timer for when to do an update of the pathfinding data
