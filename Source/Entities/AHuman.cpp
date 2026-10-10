@@ -44,6 +44,13 @@ using namespace RTE;
 
 ConcreteClassInfo(AHuman, Actor, 20);
 
+namespace {
+	LimbPath FreezeHumanLimb(const LimbPath& source, CheckpointNativeSnapshot& snapshot) {
+		CheckpointCloneCost cost("limb paths");
+		return LimbPath(source, snapshot);
+	}
+}
+
 AHuman::AHuman(const AHuman& source, CheckpointNativeSnapshot& snapshot) :
 	Actor(source, snapshot),
 	m_pHead(snapshot.Freeze(source.m_pHead)),
@@ -80,7 +87,19 @@ AHuman::AHuman(const AHuman& source, CheckpointNativeSnapshot& snapshot) :
 	m_MaxWalkPathCrouchShift(snapshot.Freeze(source.m_MaxWalkPathCrouchShift)),
 	m_CrouchAmount(snapshot.Freeze(source.m_CrouchAmount)),
 	m_CrouchAmountOverride(snapshot.Freeze(source.m_CrouchAmountOverride)),
-	m_Paths{},
+	m_Paths{
+		{FreezeHumanLimb(source.m_Paths[FGROUND][NOMOVE], snapshot), FreezeHumanLimb(source.m_Paths[FGROUND][CROUCH], snapshot),
+		 FreezeHumanLimb(source.m_Paths[FGROUND][STAND], snapshot), FreezeHumanLimb(source.m_Paths[FGROUND][WALK], snapshot),
+		 FreezeHumanLimb(source.m_Paths[FGROUND][RUN], snapshot), FreezeHumanLimb(source.m_Paths[FGROUND][JUMP], snapshot),
+		 FreezeHumanLimb(source.m_Paths[FGROUND][DISLODGE], snapshot), FreezeHumanLimb(source.m_Paths[FGROUND][PRONE], snapshot),
+		 FreezeHumanLimb(source.m_Paths[FGROUND][CRAWL], snapshot), FreezeHumanLimb(source.m_Paths[FGROUND][ARMCRAWL], snapshot),
+		 FreezeHumanLimb(source.m_Paths[FGROUND][CLIMB], snapshot)},
+		{FreezeHumanLimb(source.m_Paths[BGROUND][NOMOVE], snapshot), FreezeHumanLimb(source.m_Paths[BGROUND][CROUCH], snapshot),
+		 FreezeHumanLimb(source.m_Paths[BGROUND][STAND], snapshot), FreezeHumanLimb(source.m_Paths[BGROUND][WALK], snapshot),
+		 FreezeHumanLimb(source.m_Paths[BGROUND][RUN], snapshot), FreezeHumanLimb(source.m_Paths[BGROUND][JUMP], snapshot),
+		 FreezeHumanLimb(source.m_Paths[BGROUND][DISLODGE], snapshot), FreezeHumanLimb(source.m_Paths[BGROUND][PRONE], snapshot),
+		 FreezeHumanLimb(source.m_Paths[BGROUND][CRAWL], snapshot), FreezeHumanLimb(source.m_Paths[BGROUND][ARMCRAWL], snapshot),
+		 FreezeHumanLimb(source.m_Paths[BGROUND][CLIMB], snapshot)}},
 	m_RotAngleTargets(snapshot.Freeze(source.m_RotAngleTargets)),
 	m_Aiming(snapshot.Freeze(source.m_Aiming)),
 	m_ArmClimbing{},
@@ -100,8 +119,7 @@ AHuman::AHuman(const AHuman& source, CheckpointNativeSnapshot& snapshot) :
 	m_DeviceArmSwayRate(snapshot.Freeze(source.m_DeviceArmSwayRate)),
 	m_PersistedAHumanRuntime(snapshot.Freeze(source.m_PersistedAHumanRuntime, &m_PersistedAHumanRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
-	CheckpointCloneCost cost("limb paths");
-	snapshot.FreezeArray(m_Paths, source.m_Paths);
+	static_assert(MOVEMENTSTATECOUNT == 11);
 	snapshot.FreezeArray(m_ArmClimbing, source.m_ArmClimbing);
 }
 
