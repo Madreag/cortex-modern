@@ -39,7 +39,11 @@ def host_setup(players=2, cpu=False):
     if cpu:
         lines += ["activate TabHostPageSeats", "combo_select ComboHostSeatType2 CPU",
                   "combo_select ComboHostSeatType3 CPU"]
-    lines += ["activate ButtonHostOptApply", "wait_ms 400", "activate ButtonHostOptBack", "wait_ms 500",
+    lines += ["assert_label ComboHostNetVisibility Public (default)",
+              "assert_label ComboHostNetRelay Game service (default)"]
+    if cpu:
+        lines += ["activate ButtonHostOptApply", "wait_ms 400"]
+    lines += ["activate ButtonHostOptBack", "wait_ms 500",
               "activate ButtonMultiplayerCreate", "wait_substate Lobby 90",
               "video_mark fight15-host-listening", "wait_connected 2 90", "wait_ms 1200"]
     return lines
