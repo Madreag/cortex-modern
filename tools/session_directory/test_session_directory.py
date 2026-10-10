@@ -3337,6 +3337,48 @@ class ConnectionAuthorityTests(unittest.TestCase):
             self.assertEqual(self.referee_request(seat)["reason"], "host_alive")
         self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["host_generation"], 0)
 
+    def frame_check_in(self, seat, members, *, frame=88, owners=None, query_only=False):
+        envelope = self.referee_envelope(seat, check_in=True)
+        data = json.loads(base64.b64decode(envelope["signed_request"]))
+        data["frame_tie"] = dict(generation=0, round_id=7, frame=frame, host_seat=0,
+            config_hash=sample_register()["match_config_hash"], owners=owners or [0, 1, 2, 3], members=members, query_only=query_only)
+        raw = json.dumps(data, separators=(",", ":")).encode()
+        envelope.update(operation="frame-tie", signed_request=base64.b64encode(raw).decode(), signature=self.referee_players[seat][0].sign(REQUEST_DOMAIN + raw).hex())
+        return self.store.connection_request(self.sid, envelope, self.now, INSTALL_KEY)
+
+    def test_frame_tie_single_confirmed_side_finishes_in_one_exchange(self):
+        self.referee_fixture()
+        started = time.monotonic()
+        answer = self.frame_check_in(2, [2, 3])
+        self.assertEqual((answer["status"], answer["members"]), ("decided", [2, 3]))
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(self.frame_check_in(0, [2, 3], query_only=True)["members"], [2, 3])
+
+    def test_frame_tie_both_confirmed_sides_choose_host_and_keep_admin_generation(self):
+        self.referee_fixture()
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(2) as executor:
+            answers = list(executor.map(lambda group: self.frame_check_in(group[0], group), ([0, 1], [2, 3])))
+        for answer in answers:
+            self.assertEqual((answer["status"], answer["members"]), ("decided", [0, 1]))
+        self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["host_generation"], 0)
+
+    def test_frame_tie_query_never_confirms_a_missing_side(self):
+        self.referee_fixture()
+        answer = self.frame_check_in(0, [2, 3], query_only=True)
+        self.assertEqual(answer["status"], "waiting")
+        self.assertNotIn("members", answer)
+        self.assertFalse(dict(self.store.connections.records())[self.sid].get("frame_ties"))
+
+    def test_frame_tie_cannot_omit_retained_seats_or_confirm_overlapping_groups(self):
+        self.referee_fixture()
+        with self.assertRaises(ConnectionErrorReply): self.frame_check_in(0, [0], owners=[0, 1])
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(2) as executor:
+            answers = list(executor.map(lambda group: self.frame_check_in(group[0], group, frame=89), ([0, 1], [1, 2])))
+        self.assertEqual(answers[0]["members"], answers[1]["members"])
+        self.assertIn(answers[0]["members"], ([0, 1], [1, 2]))
+
     def test_host_referee_names_one_host_boundary_and_fences_old_owner(self):
         self.referee_fixture(); self.referee_silent_host()
         before = dict(self.store.connections.records())[self.sid]["seats"]
@@ -3376,6 +3418,19 @@ class ConnectionAuthorityTests(unittest.TestCase):
             self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["host_generation"], 0)
         self.assertEqual(self.referee_agreement(3)["decision"]["host_seat"], 1)
         self.assertTrue(bool(self.referee_agreement(1).get("host_token")))
+
+    def test_former_host_follows_each_validated_generation_without_receiving_current_admin_token(self):
+        self.referee_fixture(); self.referee_silent_host()
+        self.referee_request(2); self.referee_request(3)
+        first = self.referee_request(1)
+        self.wall += 16; self.now += 16
+        for seat in (2, 3): self.referee_request(seat, check_in=True)
+        self.referee_request(2, generation=1)
+        second = self.referee_request(3, generation=1)
+        self.assertEqual(second["decision"]["generation"], 2)
+        old = self.referee_request(1, generation=0)
+        self.assertEqual(old["decision"], first["decision"])
+        self.assertNotIn("host_token", old)
 
     def test_host_referee_undelivered_choice_requires_every_fallback_attestation(self):
         self.referee_fixture()

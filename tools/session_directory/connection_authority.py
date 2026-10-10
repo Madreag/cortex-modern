@@ -35,6 +35,8 @@ CHECK_IN_SECONDS = 5
 INSTANCE_GRACE_SECONDS = 20
 REQUEST_WINDOW_SECONDS = 60
 HOST_DISCONNECT_SECONDS = 15  # Keep aligned with the engine host-silence policy.
+FRAME_TIE_COLLECT_SECONDS = 0.25
+MAX_FRAME_TIES = 64
 MAX_SEATS = 7 + 16 + 1  # Match slots, world watchers, and the world's unused seat zero.
 MAX_MATCHES = 4096
 MAX_RECORD_BYTES = 2 * 1024 * 1024
@@ -348,6 +350,75 @@ class ConnectionAuthority:
             needs_relay = path_changed or not seat["relay"] or seat["relay"].get("expires_at", 0) - now <= SEAT_TOKEN_SECONDS
             return self._reply(sid, record, seat, now), needs_relay, dict(host_claim, route=route) if host_claim else None
 
+    def frame_tie(self, sid: str, envelope: dict[str, Any], now: float) -> dict[str, Any]:
+        answer, _renew, _host_claim = self.check_in(sid, envelope, now)
+        data = json.loads(base64.b64decode(envelope["signed_request"], validate=True))
+        request = data.get("frame_tie")
+        if not isinstance(request, dict):
+            raise ConnectionErrorReply(400, "frame_tie_request", "The frame check-in was incomplete. Reconnecting will retry.")
+        generation = bounded_int(request, "generation", 0, 2**32 - 2)
+        round_id = bounded_int(request, "round_id", 1, 2**64 - 1)
+        frame = bounded_int(request, "frame", 0, 2**64 - 1)
+        config_hash = bounded_hex(request, "config_hash", 32).hex()
+        host = bounded_int(request, "host_seat", 0, MAX_SEATS - 1)
+        owners, members = request.get("owners"), request.get("members")
+        query_only = request.get("query_only", False)
+        if (not isinstance(owners, list) or not isinstance(members, list) or len(owners) not in (2, 4)
+                or any(type(seat) is not int or seat < 0 or seat >= MAX_SEATS for seat in owners + members)
+                or owners != sorted(set(owners)) or members != sorted(set(members))
+                or len(members) * 2 != len(owners) or not set(members) <= set(owners)
+                or type(query_only) is not bool or host not in owners or answer["seat"] not in owners
+                or (not query_only and answer["seat"] not in members)):
+            raise ConnectionErrorReply(400, "frame_tie_request", "The tied groups did not name retained seats. Reconnecting will retry.")
+        key = f"{generation}:{round_id}:{config_hash}:{frame}"
+        deadline = time.monotonic() + FRAME_TIE_COLLECT_SECONDS
+        with self._lock:
+            record = self._match(sid, now)
+            session = record.get("session") or {}
+            if (generation != session.get("migration_gen", 0) or host != record.get("host_seat")
+                    or config_hash != session.get("fields", {}).get("match_config_hash")):
+                raise ConnectionErrorReply(409, "frame_tie_round", "The check-in names another host generation or match. Reconnecting will retry.")
+            if any(str(seat) not in record["seats"] or record["seats"][str(seat)]["participant"] in record["removed"] for seat in owners):
+                raise ConnectionErrorReply(403, "frame_tie_seats", "A seat in this check-in was removed by the host.")
+            retained = sorted(int(seat) for seat, lease in record["seats"].items() if int(seat) < 4 and lease["participant"] not in record["removed"])
+            if owners != retained:
+                raise ConnectionErrorReply(409, "frame_tie_owners", "The check-in did not name every retained seat. Reconnecting will retry.")
+            ties = record.setdefault("frame_ties", {})
+            if key not in ties and query_only:
+                return dict(connection_protocol=CONNECTION_PROTOCOL, generation=generation, round_id=round_id,
+                            frame=frame, config_hash=config_hash, status="waiting")
+            if key not in ties:
+                while len(ties) >= MAX_FRAME_TIES:
+                    del ties[next(iter(ties))]
+                ties[key] = {"owners": owners, "host": host, "until": now + FRAME_TIE_COLLECT_SECONDS, "groups": []}
+            tie = ties[key]
+            if tie["owners"] != owners or tie["host"] != host:
+                raise ConnectionErrorReply(409, "frame_tie_mismatch", "The groups disagree about the retained seats. Reconnecting will retry.")
+            if "winner" not in tie and not query_only and now < tie["until"]:
+                groups = tie["groups"]
+                if members not in groups and (not groups or set(members).isdisjoint(groups[0])):
+                    groups.append(members)
+            self._save(sid, record)
+            collect = "winner" not in tie and len(tie["groups"]) < 2 and not query_only
+        # Collect complementary check-ins within this HTTP exchange, without holding either directory lock.
+        if collect:
+            threading.Event().wait(max(0.0, deadline - time.monotonic()))
+        with self._lock:
+            record = self._match(sid, now)
+            tie = record["frame_ties"][key]
+            if "winner" not in tie and (not query_only or now >= tie["until"]):
+                groups = tie["groups"]
+                if len(groups) == 1:
+                    tie["winner"] = groups[0]
+                elif len(groups) == 2:
+                    tie["winner"] = next(group for group in groups if host in group)
+            result = {"connection_protocol": CONNECTION_PROTOCOL, "generation": generation, "round_id": round_id,
+                      "frame": frame, "config_hash": config_hash, "status": "decided" if "winner" in tie else "waiting"}
+            if "winner" in tie:
+                result["members"] = tie["winner"]
+            self._save(sid, record)
+            return result
+
     def note_host(self, sid: str, seat_id: int, generation: int, now: float) -> None:
         """Only SessionDirectory calls this after verifying the current host token."""
         with self._lock:
@@ -374,7 +445,7 @@ class ConnectionAuthority:
         with self._lock:
             record = self._match(sid, now)
             snapshot = record.get("session") or {}
-            decision = record.get("host_change")
+            decision = next((item for item in reversed(record.get("host_changes", [])) if item["previous_generation"] == generation), record.get("host_change"))
             if snapshot.get("fields", {}).get("persistent_world") is True:
                 raise ConnectionErrorReply(409, "world_host_fixed", "This world keeps its configured host. Reconnecting will retry.")
             agreement = change.get("agreement")
@@ -383,7 +454,7 @@ class ConnectionAuthority:
             if decision and decision["previous_generation"] == generation:
                 if decision["round_id"] != round_id or decision["config_hash"] != config_hash:
                     raise ConnectionErrorReply(409, "host_change_round", "The host changed in another round. Refreshing the match will retry.")
-                return self._host_change_reply(record, answer["seat"])
+                return self._host_change_reply(record, answer["seat"], decision)
             current = snapshot.get("migration_gen", 0)
             if generation != current:
                 raise ConnectionErrorReply(409, "host_generation", "This host generation has been superseded. Reconnecting will follow the current host.", host_generation=current)
@@ -433,9 +504,12 @@ class ConnectionAuthority:
         old_host = previous["old_host_seat"] if previous and previous["previous_generation"] == generation else record.get("host_seat")
         expected = sorted(int(key) for key, seat in record["seats"].items()
                           if int(key) < 4 and int(key) != old_host and seat["participant"] not in record["removed"]
-                          and seat.get("route", {}).get("state") != "left")
+                          and seat.get("route", {}).get("state") != "left"
+                          and (int(key) == seat_id or 0 <= now - seat.get("last_check_in", 0) < HOST_DISCONNECT_SECONDS))
+        heard = max(record.get("host_last_heard", 0), record["seats"].get(str(old_host), {}).get("last_check_in", 0))
         if (not isinstance(members, list) or any(type(peer) is not int for peer in members)
-                or members != expected or len(members) < 2 or host not in members or seat_id not in members
+                or members != expected or not members or host not in members or seat_id not in members
+                or (current == generation and (now < heard or now - heard < HOST_DISCONNECT_SECONDS))
                 or current not in (generation, generation + 1)
                 or config_hash != record.get("session", {}).get("fields", {}).get("match_config_hash")):
             raise ConnectionErrorReply(409, "host_agreement", "The host agreement does not name every remaining owner. Reconnecting will retry.")
@@ -472,15 +546,18 @@ class ConnectionAuthority:
         else:
             fields.pop("ice_identity", None); fields.pop("ice_virtual_port", None)
         fields["join_mode"] = "either" if identity and fields["listen_addrs"] else "ice" if identity else "ip"
+        history = record.setdefault("host_changes", [])
+        history.append(dict(decision))
+        del history[:-MAX_FRAME_TIES]
         record.update(session=snapshot, host_change=decision, host_seat=successor, host_last_heard=now,
                       host_change_reports={}, retain_until=now + MATCH_RETENTION_SECONDS)
         self._save(sid, record)
 
     @staticmethod
-    def _host_change_reply(record: dict[str, Any], seat_id: int) -> dict[str, Any]:
-        decision = record["host_change"]
+    def _host_change_reply(record: dict[str, Any], seat_id: int, decision=None) -> dict[str, Any]:
+        decision = decision or record["host_change"]
         reply = dict(connection_protocol=CONNECTION_PROTOCOL, status="decided", decision=dict(decision))
-        if seat_id == decision["host_seat"]:
+        if seat_id == decision["host_seat"] and decision["generation"] == record["session"]["migration_gen"]:
             reply["host_token"] = record["session"]["token"]
         return reply
 

@@ -31,11 +31,12 @@ namespace RTE {
 		Cancel();
 	}
 
-	void NetHttpClient::Start(const std::string& method, const std::string& url, const std::vector<std::pair<std::string, std::string>>& headers, const std::string& body, const std::string& certPinSha256) {
+	void NetHttpClient::Start(const std::string& method, const std::string& url, const std::vector<std::pair<std::string, std::string>>& headers, const std::string& body, const std::string& certPinSha256, int timeoutMs) {
 		if (m_Started.exchange(true)) {
 			Finish(Response{0, "", "client already used"});
 			return;
 		}
+		m_TimeoutMs = std::clamp(timeoutMs, 1, c_TotalTimeoutMs);
 #if defined(_WIN32) || defined(__linux__)
 		m_Done = false;
 		m_CancelRequested = false;
@@ -49,7 +50,7 @@ namespace RTE {
 			names.push_back(name.c_str());
 			values.push_back(value.c_str());
 		}
-		m_Apple = NetHttpAppleStart(method.c_str(), url.c_str(), names.data(), values.data(), headers.size(), body.data(), body.size(), certPinSha256.c_str(), c_ConnectTimeoutMs, c_TotalTimeoutMs, &NetHttpClient::AppleDone, this);
+		m_Apple = NetHttpAppleStart(method.c_str(), url.c_str(), names.data(), values.data(), headers.size(), body.data(), body.size(), certPinSha256.c_str(), std::min(c_ConnectTimeoutMs, m_TimeoutMs), m_TimeoutMs, &NetHttpClient::AppleDone, this);
 #else
 		(void)method; (void)url; (void)headers; (void)body; (void)certPinSha256;
 		Finish(Response{0, "", "http client not available on this platform"});
@@ -430,7 +431,7 @@ namespace RTE {
 
 	void NetHttpClient::WorkerMainImpl(std::string method, std::string url, std::vector<std::pair<std::string, std::string>> headers, std::string body, std::string certPinSha256) {
 		Response response;
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(c_TotalTimeoutMs);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(m_TimeoutMs);
 		const auto remainingMs = [&]() -> DWORD {
 			const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
 			return left > 0 ? static_cast<DWORD>(left) : 0;
@@ -516,7 +517,7 @@ namespace RTE {
 			finish(response);
 			return;
 		}
-		WinHttpSetTimeouts(session, c_ConnectTimeoutMs, c_ConnectTimeoutMs, c_TotalTimeoutMs, c_TotalTimeoutMs);
+		WinHttpSetTimeouts(session, std::min(c_ConnectTimeoutMs, m_TimeoutMs), std::min(c_ConnectTimeoutMs, m_TimeoutMs), m_TimeoutMs, m_TimeoutMs);
 		WinHttpHandle connection{WinHttpConnect(session, host.c_str(), parts.nPort, 0)};
 		if (!connection) {
 			response.error = WinHttpError("connect", GetLastError());
@@ -737,8 +738,8 @@ namespace RTE {
 		option(CURLOPT_CUSTOMREQUEST, method.c_str());
 		option(CURLOPT_USERAGENT, "CortexCommand/1.0");
 		option(CURLOPT_NOSIGNAL, 1L);
-		option(CURLOPT_CONNECTTIMEOUT_MS, static_cast<long>(c_ConnectTimeoutMs));
-		option(CURLOPT_TIMEOUT_MS, static_cast<long>(c_TotalTimeoutMs));
+		option(CURLOPT_CONNECTTIMEOUT_MS, static_cast<long>(std::min(c_ConnectTimeoutMs, m_TimeoutMs)));
+		option(CURLOPT_TIMEOUT_MS, static_cast<long>(m_TimeoutMs));
 		option(CURLOPT_SSL_VERIFYPEER, 1L);
 		option(CURLOPT_SSL_VERIFYHOST, certPinSha256.empty() ? 2L : 0L);
 		option(CURLOPT_FRESH_CONNECT, 1L);

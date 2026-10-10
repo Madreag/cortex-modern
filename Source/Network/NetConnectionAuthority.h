@@ -4,6 +4,7 @@
 #include "NetParticipantCrypto.h"
 #include "NetDirectoryCodec.h"
 #include "NetMatchConfig.h"
+#include "NetHttpClient.h"
 
 #include <map>
 #include <memory>
@@ -80,6 +81,21 @@ namespace RTE {
 		std::vector<uint16_t> members;
 	};
 
+	struct NetFrameTieRequest {
+		uint64_t generation = 0, roundId = 0, frame = 0;
+		NetHash32 configHash{};
+		uint16_t host = UINT16_MAX;
+		std::vector<uint16_t> owners, members;
+		bool queryOnly = false;
+		bool operator==(const NetFrameTieRequest&) const = default;
+	};
+	struct NetFrameTieReply {
+		enum class State { Unavailable, Waiting, Decided };
+		State state = State::Unavailable;
+		std::vector<uint16_t> members;
+	};
+	constexpr uint64_t c_NetFrameTieDeadlineMs = 1000;
+
 	/// One connection control plane, shared by admission and recovery. Every HTTP
 	/// operation is asynchronous. A direct match never starts a directory request.
 	/// It owns route/check-in state only; NetSeatRoster remains the sole seat phase.
@@ -124,6 +140,7 @@ namespace RTE {
 		std::optional<NetConnectionRoute> DirectHost(uint64_t matchId) const;
 		NetHostChangeReply QueryHostChange(const NetHostChangeRequest& request);
 		std::string HostChangeToken(uint64_t generation) const;
+		NetFrameTieReply QueryFrameTie(const NetFrameTieRequest& request);
 		void Update(uint64_t steadyMs, uint64_t unixSeconds);
 
 	private:
@@ -136,14 +153,15 @@ namespace RTE {
 			uint64_t retryAt = 0;
 			bool removal = false;
 		};
-		std::unique_ptr<NetHttpClient> StartRequest(const std::string& method, const std::string& body);
+		std::unique_ptr<NetHttpClient> StartRequest(const std::string& method, const std::string& body, int timeoutMs = NetHttpClient::c_TotalTimeoutMs);
 		bool ReadLeaseReply(const std::string& body, NetSeatLease& lease, std::string& error);
 		bool ReadHostReply(const std::string& body, NetConnectionHost& host, std::string& error);
 		void PollOperations(uint64_t steadyMs);
 		void PollCheckIn(uint64_t steadyMs, uint64_t unixSeconds);
 		void PollBootstrap(uint64_t steadyMs);
 		void PollHostChange(uint64_t steadyMs, uint64_t unixSeconds);
-		std::string SignedSeatRequest(const std::string& operation, uint64_t unixSeconds, const NetHostChangeRequest* change = nullptr);
+		void PollFrameTie(uint64_t steadyMs, uint64_t unixSeconds);
+		std::string SignedSeatRequest(const std::string& operation, uint64_t unixSeconds, const NetHostChangeRequest* change = nullptr, const NetFrameTieRequest* tie = nullptr);
 		void ObserveNetwork(uint64_t steadyMs, uint64_t unixSeconds);
 
 		mutable std::mutex m_Mutex;
@@ -167,6 +185,11 @@ namespace RTE {
 		std::optional<NetHostChangeRequest> m_HostChangeRequest;
 		NetHostChangeReply m_HostChangeReply;
 		std::string m_HostChangeToken;
+		std::unique_ptr<NetHttpClient> m_FrameTie;
+		std::vector<std::unique_ptr<NetHttpClient>> m_RetiredFrameTies;
+		std::optional<NetFrameTieRequest> m_FrameTieRequest;
+		NetFrameTieReply m_FrameTieReply;
+		uint64_t m_NextFrameTie = 0;
 		uint64_t m_NextHostChange = 0;
 		uint64_t m_NextCheckIn = 0, m_NextBootstrap = 0, m_CheckIns = 0;
 		uint64_t m_NextNetworkProbe = 0, m_LastWallSeconds = 0;

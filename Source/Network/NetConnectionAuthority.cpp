@@ -174,6 +174,7 @@ namespace RTE {
 		std::lock_guard lock(m_Mutex);
 		m_CheckIn.reset(); m_Bootstrap.reset(); m_Operations.clear(); m_LocalLease.reset(); m_HostToken.clear();
 		m_HostChange.reset(); m_HostChangeRequest.reset(); m_HostChangeReply = {}; m_HostChangeToken.clear();
+		m_FrameTie.reset(); m_FrameTieRequest.reset(); m_FrameTieReply = {}; m_NextFrameTie = 0;
 		m_HostSigningKey.fill(0);
 		m_BootstrapWanted = false;
 		m_Suspended = true;
@@ -182,6 +183,7 @@ namespace RTE {
 		std::lock_guard lock(m_Mutex);
 		m_Operations.clear(); m_CheckIn.reset(); m_Bootstrap.reset(); m_LocalLease.reset(); m_Host.reset();
 		m_HostChange.reset(); m_HostChangeRequest.reset(); m_HostChangeReply = {}; m_HostChangeToken.clear(); m_NextHostChange = 0;
+		m_FrameTie.reset(); m_FrameTieRequest.reset(); m_FrameTieReply = {}; m_NextFrameTie = 0;
 		m_SessionId.clear(); m_HostToken.clear(); m_DirectoryKey = {}; m_Route = {}; m_Relay = {};
 		m_HostSigningKey.fill(0);
 		m_Removals.clear(); m_PeerRoutes.clear();
@@ -201,6 +203,7 @@ namespace RTE {
 	void NetConnectionAuthority::SetDirectory(std::string sessionId, std::string hostToken, uint32_t hostGeneration, std::string authorityKey) {
 		std::lock_guard lock(m_Mutex);
 		if (m_SessionId != sessionId) {
+			m_FrameTie.reset(); m_FrameTieRequest.reset(); m_FrameTieReply = {}; m_NextFrameTie = 0;
 			m_HostChange.reset(); m_HostChangeRequest.reset(); m_HostChangeReply = {}; m_HostChangeToken.clear(); m_NextHostChange = 0;
 			m_Host.reset(); m_Bootstrap.reset(); m_CheckIn.reset(); m_Operations.clear(); m_DirectoryKey = {}; m_Removals.clear(); m_PeerRoutes.clear(); m_Relay = {};
 			if (m_LocalLease && m_LocalLease->directorySessionId != sessionId) m_LocalLease.reset();
@@ -313,11 +316,11 @@ namespace RTE {
 		m_Operations[key] = std::move(operation);
 	}
 
-	std::unique_ptr<NetHttpClient> NetConnectionAuthority::StartRequest(const std::string& method, const std::string& body) {
+	std::unique_ptr<NetHttpClient> NetConnectionAuthority::StartRequest(const std::string& method, const std::string& body, int timeoutMs) {
 		if (m_BaseUrl.empty() || m_SessionId.empty()) return nullptr;
 		auto request = std::make_unique<NetHttpClient>();
 		request->Start(method, m_BaseUrl + "/v1/sessions/" + m_SessionId + "/connections", {{"Content-Type", "application/json"}, {"X-Install-Key", m_InstallKey},
-			{"X-Connection-Protocol", std::to_string(NetSeatLease::c_Version)}}, body, m_CertPin);
+			{"X-Connection-Protocol", std::to_string(NetSeatLease::c_Version)}}, body, m_CertPin, timeoutMs);
 		return request;
 	}
 	bool NetConnectionAuthority::ReadLeaseReply(const std::string& text, NetSeatLease& lease, std::string& error) {
@@ -391,7 +394,7 @@ namespace RTE {
 		}
 		if (m_BootstrapWanted && !m_Bootstrap && !m_Refused && steadyMs >= m_NextBootstrap) m_Bootstrap = StartRequest("GET", "");
 	}
-	std::string NetConnectionAuthority::SignedSeatRequest(const std::string& operation, uint64_t unixSeconds, const NetHostChangeRequest* change) {
+	std::string NetConnectionAuthority::SignedSeatRequest(const std::string& operation, uint64_t unixSeconds, const NetHostChangeRequest* change, const NetFrameTieRequest* tie) {
 		NetAuthBytes16 nonce{};
 		if (!GetNetAuthCrypto().RandomBytes(nonce.data(), nonce.size())) return {};
 		json contents{{"session_id", m_SessionId}, {"seat_token", m_LocalLease->token}, {"nonce", Hex(nonce)}, {"instance", Hex(m_Instance)}, {"sent_at", unixSeconds},
@@ -403,6 +406,8 @@ namespace RTE {
 			if (change->agreedHost != UINT16_MAX)
 				contents["host_change"]["agreement"] = {{"host_seat", change->agreedHost}, {"boundary", change->agreedBoundary}, {"members", change->agreedMembers}};
 		}
+		if (tie) contents["frame_tie"] = {{"generation", tie->generation}, {"round_id", tie->roundId}, {"frame", tie->frame},
+			{"config_hash", Hex(tie->configHash)}, {"host_seat", tie->host}, {"owners", tie->owners}, {"members", tie->members}, {"query_only", tie->queryOnly}};
 		const std::string request = contents.dump();
 		std::vector<uint8_t> message(std::begin(c_RequestDomain), std::end(c_RequestDomain)); message.insert(message.end(), request.begin(), request.end());
 		NetParticipantSignature signature{};
@@ -472,6 +477,47 @@ namespace RTE {
 		std::lock_guard lock(m_Mutex);
 		return m_HostChangeReply.state == NetHostChangeReply::State::Decided && m_HostChangeReply.generation == generation ? m_HostChangeToken : std::string();
 	}
+	NetFrameTieReply NetConnectionAuthority::QueryFrameTie(const NetFrameTieRequest& request) {
+		std::lock_guard lock(m_Mutex);
+		if (m_Suspended || m_SessionId.empty() || m_BaseUrl.empty() || !m_Player || !m_LocalLease || m_LocalLease->directorySessionId != m_SessionId) return {};
+		if (!m_FrameTieRequest || *m_FrameTieRequest != request) {
+			if (m_RetiredFrameTies.size() >= 16) return {};
+			// A query on the sim thread retires an old request without joining its worker.
+			if (m_FrameTie) m_RetiredFrameTies.push_back(std::move(m_FrameTie));
+			m_FrameTieRequest = request; m_NextFrameTie = 0;
+			m_FrameTieReply = {}; m_FrameTieReply.state = NetFrameTieReply::State::Waiting;
+		}
+		return m_FrameTieReply;
+	}
+
+	void NetConnectionAuthority::PollFrameTie(uint64_t steadyMs, uint64_t unixSeconds) {
+		std::erase_if(m_RetiredFrameTies, [](const auto& request) { return request->Poll() == NetHttpClient::PollResult::Done; });
+		if (!m_FrameTieRequest || !m_LocalLease || !m_Player || m_Instance == NetAuthBytes16{} || m_FrameTieReply.state == NetFrameTieReply::State::Decided) return;
+		if (m_FrameTie) {
+			if (m_FrameTie->Poll() == NetHttpClient::PollResult::Pending) return;
+			const auto response = m_FrameTie->GetResponse(); m_FrameTie.reset(); m_NextFrameTie = steadyMs + 50;
+			m_FrameTieReply = {};
+			if (response.statusCode == 200) try {
+				const auto body = json::parse(response.body);
+				std::string error;
+				const auto& expected = *m_FrameTieRequest;
+				NetHash32 hash{};
+				if (!Protocol(body, error) || body.at("round_id") != expected.roundId || body.at("generation") != expected.generation ||
+				    body.at("frame") != expected.frame || !Unhex(body.at("config_hash").get<std::string>(), hash) || hash != expected.configHash) return;
+				m_FrameTieReply.state = NetFrameTieReply::State::Waiting;
+				if (body.at("status") == "decided") {
+					auto members = body.at("members").get<std::vector<uint16_t>>();
+					if (members.empty() || members.size() * 2 != expected.owners.size() || !std::is_sorted(members.begin(), members.end()) ||
+					    std::adjacent_find(members.begin(), members.end()) != members.end() || !std::includes(expected.owners.begin(), expected.owners.end(), members.begin(), members.end())) return;
+					m_FrameTieReply.state = NetFrameTieReply::State::Decided; m_FrameTieReply.members = std::move(members);
+				}
+			} catch (const json::exception&) { m_FrameTieReply = {}; }
+		}
+		if (m_FrameTie || steadyMs < m_NextFrameTie || m_FrameTieReply.state == NetFrameTieReply::State::Decided) return;
+		const std::string body = SignedSeatRequest("frame-tie", unixSeconds, nullptr, &*m_FrameTieRequest);
+		if (!body.empty()) m_FrameTie = StartRequest("POST", body, static_cast<int>(c_NetFrameTieDeadlineMs));
+	}
+
 	void NetConnectionAuthority::PollHostChange(uint64_t steadyMs, uint64_t unixSeconds) {
 		if (!m_HostChangeRequest || !m_LocalLease || !m_Player || m_Instance == NetAuthBytes16{}) return;
 		if (m_HostChange) {
@@ -535,7 +581,7 @@ namespace RTE {
 		}
 		ObserveNetwork(steadyMs, unixSeconds);
 		if (m_Suspended) { PollBootstrap(steadyMs); return; }
-		PollOperations(steadyMs); PollBootstrap(steadyMs); PollCheckIn(steadyMs, unixSeconds); PollHostChange(steadyMs, unixSeconds);
+		PollOperations(steadyMs); PollBootstrap(steadyMs); PollCheckIn(steadyMs, unixSeconds); PollHostChange(steadyMs, unixSeconds); PollFrameTie(steadyMs, unixSeconds);
 	}
 
 	void NetConnectionAuthority::ObserveNetwork(uint64_t steadyMs, uint64_t unixSeconds) {

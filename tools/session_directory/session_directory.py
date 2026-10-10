@@ -749,6 +749,11 @@ class SessionDirectory:
         connection_version(data)
         operation = data.get("operation")
         wall = time.time()
+        if operation == "frame-tie":
+            with self._lock:
+                if self._signalling(session_id, now) is None:
+                    raise ConnectionErrorReply(404, "match_unavailable", "The directory is waiting for this match. Reconnecting will retry.")
+            return self.connections.frame_tie(session_id, data, wall)
         with self._lock:
             sess = self._signalling(session_id, now)
             if sess is None:
