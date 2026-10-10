@@ -510,7 +510,10 @@ bool BitmapSnapshot::RunSelfTest() {
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
 SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::SceneLayerImpl(const SceneLayerImpl& source, CheckpointNativeSnapshot& snapshot) :
 	Entity(source, snapshot), m_BitmapFile(source.m_BitmapFile), m_MainTexture{},
-	m_MainBitmap(snapshot.Freeze(source.m_MainBitmap)), m_BackBitmap(snapshot.Freeze(source.m_BackBitmap)), m_BitmapClearTask{},
+	m_MainBitmap([&] {
+		if (source.m_BitmapClearTask.valid()) source.m_BitmapClearTask.wait();
+		return snapshot.Freeze(source.m_MainBitmap);
+	}()), m_BackBitmap(snapshot.Freeze(source.m_BackBitmap)), m_BitmapClearTask{},
 	m_LastClearColor(source.m_LastClearColor), m_Drawings(source.m_Drawings), m_MainBitmapOwned(false),
 	m_MainBitmapUpdated(source.m_MainBitmapUpdated), m_DrawMasked(source.m_DrawMasked), m_WrapX(source.m_WrapX), m_WrapY(source.m_WrapY),
 	m_OriginOffset(source.m_OriginOffset), m_Offset(source.m_Offset), m_ZOrder(source.m_ZOrder),
