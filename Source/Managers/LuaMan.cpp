@@ -7089,7 +7089,9 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		image->heap = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit, true, CheckpointWriter::BatchEnabled(), phaseCosts ? &heapCosts : nullptr, fences ? &fence : nullptr);
 		if (fence) {
 			// The fence is set on the idle checkpoint pool, so the largest state's capture does not wait for its heap's pages.
-			auto fenced = g_ThreadMan.GetCheckpointThreadPool().submit(std::move(fence));
+			std::future<void> fenced;
+			try { fenced = g_ThreadMan.GetCheckpointThreadPool().submit(fence); }
+			catch (...) { fence(); throw; }
 			std::lock_guard lock(fences->mutex);
 			fences->pending.push_back(std::move(fenced));
 		}
