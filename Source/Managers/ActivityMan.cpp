@@ -946,17 +946,12 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	LuaScriptGraphNativeCaptureScope::PreTouch();
 	// Nothing loads a bitmap from here on, so the index can be read while this thread captures the audio.
 	bitmapIndexReady = g_ThreadMan.GetPriorityThreadPool().submit([] { ContentFile::LoadedBitmapIndexScope::Refresh(); });
-	phase("sim_manager_values");
+	phase("sim_values");
 	auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
 	CheckpointNativeSnapshot::BoundaryScope boundary(snapshot);
-	auto audio = g_AudioMan.CaptureCheckpointState(false);
-	auto samples = g_AudioMan.CaptureCheckpointSamples();
-	g_AudioMan.FreezeCheckpointCapture(*audio, soundCursor);
+	std::shared_ptr<AudioCheckpointCapture> audio;
+	decltype(g_AudioMan.CaptureCheckpointSamples()) samples;
 	std::unordered_set<uint64_t> managerSounds;
-	g_AudioMan.CollectManagerSoundIdentities(managerSounds);
-	bitmapIndexReady.get();
-	bitmapIndex.emplace();
-	phase("sim_native_and_lua_values");
 	const auto& savers = RuntimeManagerSavers();
 	std::vector<CheckpointText> managers(savers.size());
 	std::vector<int64_t> managerUs(savers.size());
@@ -965,9 +960,15 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	const bool hasStart = m_StartActivity != nullptr;
 	Scene* scene = nullptr;
 	bool nativeFrozen = false;
-	// The world freezes on this thread and its helpers while the pool captures the script states beside it.
+	// The audio and the world freeze on this thread and its helpers while the pool captures the script states beside them.
 	const auto freezeNative = [&] {
 		nativeFrozen = true;
+		audio = g_AudioMan.CaptureCheckpointState(false);
+		samples = g_AudioMan.CaptureCheckpointSamples();
+		g_AudioMan.FreezeCheckpointCapture(*audio, soundCursor);
+		g_AudioMan.CollectManagerSoundIdentities(managerSounds);
+		bitmapIndexReady.get();
+		bitmapIndex.emplace();
 		std::vector<std::function<void()>> parts;
 		parts.reserve(savers.size() + 2);
 		parts.emplace_back([&] { activity = snapshot->Object(sourceActivity); });

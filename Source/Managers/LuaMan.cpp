@@ -7174,8 +7174,13 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	ContentFile::LoadedBitmapIndexScope bitmapIndex;
 	if (!CaptureSentinel::InParallelPhase()) LuaScriptGraphNativeCaptureScope::PreTouch();
 	CaptureSentinel::ParallelPhase parallel;
+	const std::shared_ptr<CheckpointNativeSnapshot> boundary = CheckpointNativeSnapshot::Boundary();
+	// An armed injected failure counts on this thread, so its states are captured here, in order.
+	const bool serial = CaptureTrace::Serial() || CheckpointFailure::Current() != CheckpointFailure::Point::None;
+	// With work of its own to run beside them, this thread leaves the world and every state to the pool.
+	const bool poolTakesAll = !serial && whileWaiting;
 	// A match's states can describe their heaps while the native worker walks the world.
-	if (!CheckpointWriter::BatchEnabled() || CheckpointNativeSnapshot::Boundary()) {
+	if (!poolTakesAll && (!CheckpointWriter::BatchEnabled() || boundary)) {
 		CaptureTrace::Span span("graph_build_world_wait");
 		LuaScriptGraphNativeCaptureScope::BuildWorld(shared);
 	}
@@ -7197,9 +7202,6 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 		    std::chrono::duration_cast<std::chrono::microseconds>(start - phaseOrigin).count(),
 		    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()};
 	};
-	const std::shared_ptr<CheckpointNativeSnapshot> boundary = CheckpointNativeSnapshot::Boundary();
-	// An armed injected failure counts on this thread, so its states are captured here, in order.
-	const bool serial = CaptureTrace::Serial() || CheckpointFailure::Current() != CheckpointFailure::Point::None;
 	// Each state is its own VM behind its own lock, so the states are captured side by side; this thread takes the states
 	// no pool thread has started once its own work is done.
 	size_t caller = 0;
@@ -7210,13 +7212,17 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 		}
 	}
 	std::optional<ParallelWork> states;
-	// With work of its own to run beside them, this thread leaves every state to the pool, the largest first.
-	const bool poolTakesAll = !serial && whileWaiting;
 	if (poolTakesAll) {
-		states.emplace(g_ThreadMan.GetPriorityThreadPool(), order.size(), [&capture, &boundary, caller](size_t index) {
+		// The world comes first and the largest state beside it; a state that reaches its natives before the world is
+		// described waits for it.
+		states.emplace(g_ThreadMan.GetPriorityThreadPool(), order.size() + 1, [&capture, &boundary, &shared, caller](size_t index) {
 			CaptureSentinel::WorkerScope worker("script-graph-state");
 			CheckpointNativeSnapshot::BoundaryScope boundaryScope(boundary);
-			capture(index == 0 ? caller : index <= caller ? index - 1 : index);
+			if (index == 0) {
+				if (shared) LuaScriptGraphNativeCaptureScope::BuildWorld(shared);
+				return;
+			}
+			capture(index == 1 ? caller : index <= caller + 1 ? index - 2 : index - 1);
 		});
 	} else if (!serial) {
 		states.emplace(g_ThreadMan.GetPriorityThreadPool(), order.size() - 1, [&capture, &boundary, caller](size_t index) {
