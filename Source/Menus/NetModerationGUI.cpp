@@ -1906,7 +1906,8 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 				text += "\n" + FitName(font, ShownName(member), std::max(24, width - 12 - font->CalculateWidth(numbers))) + numbers;
 			}
 			if (waiting && !placing) text += "\nWaiting " + SecondsInWords(currentWaitMs);
-			return WrapText(font, text, width - 12);
+			if (!m_StatusProbeLine.empty()) text += "\n" + m_StatusProbeLine;
+			return WrapText(font, FitTokens(font, text, width - 12), width - 12);
 		};
 		int width = 408, left = 0, right = 0, y = 24;
 		std::string text = composeMetrics(width);
