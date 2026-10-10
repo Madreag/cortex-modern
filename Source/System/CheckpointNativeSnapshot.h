@@ -17,6 +17,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <typeinfo>
@@ -156,6 +157,8 @@ namespace RTE {
 		HitData Freeze(const HitData& source);
 		void RememberMaterial(const Material* source, const Material* target);
 		const CheckpointText* MaterialReference(const Material* target) const;
+		/// The preset an entity was copied from, looked up once per name for the whole capture.
+		const Entity* PresetFor(const Entity& source);
 		void RememberUID(const MovableObject* source, MovableObject* target);
 		MovableObject* FindUID(long uid) const;
 
@@ -476,6 +479,24 @@ namespace RTE {
 		struct SoundSetKeyHash { size_t operator()(const std::vector<uint64_t>& key) const noexcept; };
 		struct SoundSetShard { std::mutex mutex; std::unordered_map<std::vector<uint64_t>, SoundSet*, SoundSetKeyHash> sets; };
 		std::array<SoundSetShard, 16> m_SoundSets;
+		struct PresetKey { const std::string* type; int module; std::string name; };
+		struct PresetName { const std::string* type; int module; std::string_view name; };
+		struct PresetHash {
+			using is_transparent = void;
+			size_t operator()(const PresetName& key) const noexcept;
+			size_t operator()(const PresetKey& key) const noexcept { return (*this)(PresetName{key.type, key.module, key.name}); }
+		};
+		struct PresetEqual {
+			using is_transparent = void;
+			static PresetName View(const PresetKey& key) { return {key.type, key.module, key.name}; }
+			static const PresetName& View(const PresetName& key) { return key; }
+			template<class A, class B> bool operator()(const A& left, const B& right) const {
+				const PresetName& a = View(left); const PresetName& b = View(right);
+				return a.type == b.type && a.module == b.module && a.name == b.name;
+			}
+		};
+		struct PresetShard { std::mutex mutex; std::unordered_map<PresetKey, const Entity*, PresetHash, PresetEqual> presets; };
+		std::array<PresetShard, 16> m_Presets;
 		std::array<OwnerShard, 32> m_OwnerShards;
 		CheckpointSharedMap<const Entity*, Entity*> m_Objects;
 		CheckpointSharedMap<Entity*, Entity**> m_Slots;

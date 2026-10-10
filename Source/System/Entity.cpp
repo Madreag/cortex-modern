@@ -251,9 +251,27 @@ namespace RTE {
 		const Entity* preset = nullptr;
 		{
 			CheckpointCloneCost cost("preset lookup");
-			preset = source.GetPresetForCopy();
+			preset = snapshot.PresetFor(source);
 		}
 		m_CheckpointPreset = snapshot.Object(preset);
+	}
+	size_t CheckpointNativeSnapshot::PresetHash::operator()(const PresetName& key) const noexcept {
+		return std::hash<std::string_view>{}(key.name) ^ (std::hash<const void*>{}(key.type) * 31) ^ (static_cast<size_t>(key.module) * 0x9E3779B97F4A7C15ULL);
+	}
+	const Entity* CheckpointNativeSnapshot::PresetFor(const Entity& source) {
+		// The answer GetPresetForCopy gives, which a capture's thousands of copies of a few presets would each look up again.
+		const std::string& name = source.m_IsOriginalPreset || source.m_CopiedFromPresetName.empty() ? source.m_PresetName : source.m_CopiedFromPresetName;
+		if (name.empty() || name == "None") return nullptr;
+		const PresetName key{&source.GetClassName(), source.m_DefinedInModule, name};
+		auto& shard = m_Presets[PresetHash{}(key) % m_Presets.size()];
+		{
+			std::lock_guard lock(shard.mutex);
+			if (const auto found = shard.presets.find(key); found != shard.presets.end()) return found->second;
+		}
+		const Entity* preset = source.GetPresetForCopy();
+		std::lock_guard lock(shard.mutex);
+		shard.presets.try_emplace(PresetKey{key.type, key.module, name}, preset);
+		return preset;
 	}
 	Entity* Entity::FreezeCheckpointNative(CheckpointNativeSnapshot&) const {
 		throw UnsupportedCheckpointNative("native checkpoint snapshot is not implemented for " + GetClassName());
@@ -271,7 +289,7 @@ namespace RTE {
 		target.m_Groups = source.m_Groups;
 		target.m_RandomWeight = source.m_RandomWeight;
 		target.m_CheckpointWriteGeneration = source.m_CheckpointWriteGeneration;
-		target.m_CheckpointPreset = Object(source.GetPresetForCopy());
+		target.m_CheckpointPreset = Object(PresetFor(source));
 	}
 	thread_local unsigned int Entity::s_CheckpointCloneDepth = 0;
 	thread_local void* Entity::s_DeletedCheckpointMemory = nullptr;
