@@ -48,7 +48,7 @@ namespace RTE {
 		/// wraps one NetHttpClient per request, as NetDirectoryClient's does.
 		void SetTransportFactory(NetDirectoryClient::TransportFactory factory);
 		/// The host end: reads peer=host, proving the session token in X-Session-Token (never the URL).
-		void ConfigureHost(std::string baseUrl, std::string installKey, std::string certPinSha256, std::string sessionId, std::string sessionToken);
+		void ConfigureHost(std::string baseUrl, std::string installKey, std::string certPinSha256, std::string sessionId, std::string sessionToken, std::string signalPeer = "host");
 		/// Moves the host's pending posts to its recovered lease, keeping the sink, poll arming and retry deadlines.
 		void RebindHost(const std::string& sessionId, const std::string& sessionToken);
 		/// A joiner end: mints a fresh join nonce (GetJoinNonce) and signals as "client:<nonce>".

@@ -1597,7 +1597,7 @@ void Activity::Update() {
 		if (m_MessageTimer[player].IsPastSimMS(5000)) {
 			g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
 		}
-		if (m_IsActive[player]) {
+		if (m_IsActive[player] && !(m_ActivityState == ActivityState::Editing && ScenarioRunner::HasLockstepCoordinator())) {
 			m_PlayerController[player].Update();
 		}
 	}

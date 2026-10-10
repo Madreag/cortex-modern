@@ -1018,7 +1018,7 @@ namespace RTE {
 		// The initial lobby has not agreed on round members. Removing a held owner from that
 		// set now would also hide its authenticated return from SyncSessionPeers. FormRematch
 		// selects the present members when the host actually asks to start.
-		if (plane->GetRoster().stage == NetRosterStage::Lobby) return true;
+		if (plane->GetRoster().stage == NetRosterStage::Lobby || seat->holdCause == NetSeatHoldCause::None) return true;
 		// The formed round starts that seat held by the AI; nobody waits for its old endpoint.
 		NetMatchConfig held = m_Config.matchConfig;
 		if (LeaveRoundMembers(held, peerId)) {
@@ -1096,6 +1096,18 @@ namespace RTE {
 				transports[worldPeer] = bound->second;
 			}
 		}
+		// An owner can be explicitly removed after its lobby link has already gone.
+		// The authority's open seat must republish even when the transport map is unchanged.
+		std::vector<uint8_t> releasedSeats;
+		for (const NetMatchPlayerSlot& slot: m_Config.matchConfig.players) {
+			if (slot.cpu || slot.peerId == m_Config.matchConfig.hostPeerId || transports.contains(slot.peerId) ||
+			    !RosterStartsSeatOpen(slot.peerId)) continue;
+			const auto& members = m_Config.matchConfig.activePeerIds;
+			if (slot.displayName != NetMatchConfigUtil::UnseatedSlotName(slot.peerId, m_Config.matchConfig.persistentWorld) ||
+			    members.empty() || std::find(members.begin(), members.end(), slot.peerId) != members.end())
+				releasedSeats.push_back(slot.peerId);
+		}
+		for (uint8_t peer: releasedSeats) RemoveRemotePeer(peer);
 		if (transports == m_RemoteTransports) return;
 		++m_ActivitySerial;
 		const auto previous = m_RemoteTransports;
@@ -1161,8 +1173,7 @@ namespace RTE {
 		if (m_Config.host) {
 			const NetReconnectHost* plane = m_Config.session ? m_Config.session->GetReconnectHost() : nullptr;
 			if (plane && plane->GetRoster().stage == NetRosterStage::Starting) {
-				// A forming round waits on the seats its roster has at the start on a live link, never on a held or an opened one;
-				// the host alone starts it when every other seat is held for its player.
+				// Every human owner in the new round must be present. A lobby drop is not a combat hold.
 				for (const uint8_t member: plane->StartMembers())
 					if (member != m_Config.matchConfig.hostPeerId && !IsKnownRemote(member)) return false;
 				return true;

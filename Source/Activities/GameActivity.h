@@ -460,6 +460,10 @@ namespace RTE {
 		/// This is a special update step for when any player is still editing the
 		/// scene.
 		void UpdateEditing();
+		/// Seeds shared placement before any local preview allocates objects.
+		void SeedPlacement();
+		/// Runs the local editor independently of committed world updates.
+		void UpdateEditingInput(bool frameInput);
 
 
 

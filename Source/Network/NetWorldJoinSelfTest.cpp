@@ -47,6 +47,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -60,6 +61,68 @@
 #endif
 
 namespace RTE {
+
+	struct HeldRouteTestAccess {
+		struct Observed {
+			uint8_t chosen = 0;
+			bool listens = false;
+			std::vector<uint8_t> dials;
+			std::vector<uint16_t> members;
+		};
+		static bool Observe(const std::vector<uint8_t>& order, uint8_t local, const std::vector<uint8_t>& reachable,
+		                    const std::set<uint8_t>& held, const std::set<uint8_t>& departed, uint16_t port,
+		                    Observed& observed, std::string* error) {
+			struct TraceWire final : LoopbackTransport {
+				TraceWire(uint16_t base, std::vector<uint8_t>& dials, const std::vector<uint8_t>& reachable): base(base), dials(dials), reachable(reachable) {}
+				bool Connect(const std::string& address, uint16_t destination, std::string* why = nullptr) override {
+					const auto peer = static_cast<uint8_t>(destination - base);
+					dials.push_back(peer);
+					return std::find(reachable.begin(), reachable.end(), peer) != reachable.end() && LoopbackTransport::Connect(address, destination, why);
+				}
+				uint16_t base;
+				std::vector<uint8_t>& dials;
+				const std::vector<uint8_t>& reachable;
+			};
+			std::vector<std::unique_ptr<LoopbackTransport>> endpoints;
+			for (uint8_t peer: reachable) {
+				if (peer == local || departed.contains(peer)) continue;
+				auto endpoint = std::make_unique<LoopbackTransport>();
+				if (!endpoint->StartHost(static_cast<uint16_t>(port + peer), error)) return false;
+				endpoints.push_back(std::move(endpoint));
+			}
+			NetLockstepCoordinator peer;
+			peer.m_Config.sessionId = 0xAC00 + port; peer.m_Config.roundId = 91;
+			peer.m_Config.localPeerId = local; peer.m_Config.authorityPeerId = 1;
+			peer.m_Config.peerCount = *std::max_element(order.begin(), order.end());
+			peer.m_Config.matchConfig = NetMatchConfigUtil::MakeDefault(peer.m_Config.sessionId);
+			peer.m_Config.matchConfig.peerCount = peer.m_Config.peerCount;
+			peer.m_Config.matchConfig.successorOrder = order;
+			for (uint8_t id = 1; id <= peer.m_Config.peerCount; ++id) {
+				peer.m_Config.matchConfig.migrationPeers.push_back({id, static_cast<uint16_t>(port + id), {"loopback"}});
+				if (id != local) peer.m_RemotePeerIds.push_back(id);
+			}
+			peer.m_Config.migrationKey.fill(0x39);
+			peer.m_Config.migrationTransportFactory = [&] { return std::make_unique<TraceWire>(port, observed.dials, reachable); };
+			peer.m_State = NetLockstepState::Running; peer.m_RoundId = 91;
+			peer.m_Stats.nextFrame = 101; peer.m_LastCompletedSimulationTick = 100;
+			peer.m_RemovedPeers = departed;
+			for (uint8_t id: held) peer.m_AiHeldSeats[id] = 90;
+			if (peer.BeginHostMigration(c_NetHostLossSilenceMs - 1)) { *error = "held route began before the host-loss deadline"; return false; }
+			if (!peer.BeginHostMigration(c_NetHostLossSilenceMs)) { *error = "held route never entered the common migration"; return false; }
+			(void)peer.ContactMigrationSuccessor(c_NetHostLossSilenceMs);
+			if (peer.m_MigrationChoice) {
+				observed.chosen = static_cast<uint8_t>(peer.m_MigrationChoice->host);
+				observed.members = peer.m_MigrationChoice->members;
+				observed.listens = observed.chosen == local && peer.m_MigrationTransport != nullptr;
+			}
+			// A socket or a reachable subset is never an authority decision.
+			if (peer.GetHostPeerId() != 1 || peer.GetMigrationResult().generation != 0 || peer.IsStopped() || peer.IsFailed()) {
+				*error = "a held route promoted a peer or ended the round without every named survivor"; return false;
+			}
+			return true;
+		}
+	};
+
 
 	namespace {
 		const char* s_FailTag = "net-world-join-selftest";
@@ -636,7 +699,7 @@ namespace RTE {
 			NetReconnectHost host;
 			host.Configure(&registry, 0x5741ULL, identity);
 			host.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
-			host.SetLiveMatch(true);
+			host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 			host.SetPersistentWorld(false);
 			// Ordinary live matches offer an unused seat through the private catch-up path.
 			host.HandleMessage(11, join, 0);
@@ -681,7 +744,7 @@ namespace RTE {
 			NetReconnectHost host;
 			host.Configure(&registry, 0x5742ULL, identity);
 			host.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
-			host.SetLiveMatch(true);
+			host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 			host.SetPersistentWorld(true);
 			host.HandleMessage(12, join, 0);
 			host.Tick(NetReconnectAdmission::c_DenialReleaseMs);
@@ -2595,7 +2658,7 @@ namespace RTE {
 			NetReconnectHost host;
 			host.Configure(&registry, 0x5743ULL, identity);
 			host.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
-			host.SetLiveMatch(true);
+			host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 			host.SetPersistentWorld(true);
 			NetH4TicketOffer offer;
 			if (!commitJoin(host, 12, "alice", offer)) {
@@ -2630,7 +2693,7 @@ namespace RTE {
 			if (!commitJoin(host, 13, "alice", offer)) {
 				return Fail("ordinary H4 join did not offer a ticket");
 			}
-			host.SetLiveMatch(true);
+			host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 			NetH4LeaveRequest leave;
 			leave.txId.fill(22);
 			leave.epoch = offer.epoch;
@@ -2663,7 +2726,7 @@ namespace RTE {
 		NetReconnectHost host;
 		host.Configure(&registry, 0x5745ULL, identity);
 		host.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
-		host.SetLiveMatch(true);
+		host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 		host.SetPersistentWorld(true);
 		NetH4NewJoin join;
 		join.identity = identity;
@@ -3333,7 +3396,7 @@ namespace RTE {
 		NetGameWorldTransition transition = BuildWorldActivateTransition(*bootstrap.FindSession(7), match, bootstrap.Membership().Revision());
 		transition.activationFrame = boundary;
 		if (!peers[0].ProposeWorldAdmission(remotes[0], 1, transition, &error)) return Fail(error);
-		if (peers[0].HasWorldAdmission(2, boundary)) return Fail("world admission committed before resident acknowledgement");
+		if (!peers[0].HasWorldAdmission(2, boundary)) return Fail("the host waited for a resident vote before ordering admission");
 		for (int i = 0; i < 30; ++i) pump();
 		if (!peers[0].HasWorldAdmission(2, boundary) || !peers[2].HasWorldAdmission(2, boundary)) return Fail("world admission did not agree at the replacement boundary world=" + peers[0].BuildReportJson() + " resident=" + peers[2].BuildReportJson());
 		configs[1].startFrame = boundary;
@@ -4321,55 +4384,34 @@ namespace RTE {
 		return 0;
 	}
 
-	/// A lone survivor carries a lost host's match; an announced host leave ends it.
-	int TestALoneSurvivorWithAHeldSeatHostsTheMatch() {
-		using Outcome = NetMatchService::LoneElection;
-		if (NetMatchService::LoneElectionOutcome(false, false) != Outcome::HostAlone) {
-			return Fail("lone-survivor-left-a-two-player-match: the survivor of a lost host did not host the match it carries alone");
-		}
-		if (NetMatchService::LoneElectionOutcome(true, false) != Outcome::EndMatch) {
-			return Fail("lone-survivor-announced-leave: the survivor of an announced host leave did not end the match");
-		}
-		// l4p-34: the Mac, cut off by its own lag, heard neither the host nor Linux and, with the second machine's seat held, took the match over.
-		if (NetMatchService::LoneElectionOutcome(false, true) != Outcome::RejoinHost || NetMatchService::LoneElectionOutcome(true, true) != Outcome::EndMatch) {
-			return Fail("lone-survivor-split-the-match: a peer that heard no live member and no host hosted a match of its own instead of rejoining");
-		}
-		std::cout << "[net-world-join-selftest] PASS a_lone_survivor_with_a_held_seat_hosts_the_match" << std::endl;
-		return 0;
-	}
 
-	/// A held seat is never a successor: a held seat whose host is gone dials the live survivors, and with every survivor held the
-	/// first of them in the match's order hosts while the others dial it.
 	int TestEveryHeldSurvivorFindsOneHost() {
 		using Routes = std::vector<uint8_t>;
-		const Routes order{2, 3, 4};
-		struct Case { const char* name; uint8_t local; Routes reachable; std::set<uint8_t> held; Routes expected; };
+		struct Case { const char* name; uint8_t local; Routes reachable; std::set<uint8_t> held; Routes expected; bool listens; };
 		const Case cases[] = {
-			{"first-held-hosts", 2, {3}, {3}, {}},
-			{"second-held-dials-the-first", 3, {2}, {2}, {2}},
-			{"three-held-third-dials-the-first", 4, {2, 3}, {2, 3}, {2}},
-			{"a-held-seat-is-never-dialed-past-a-live-one", 4, {2, 3}, {2}, {3}},
-			{"live-successors-in-order", 2, {3, 4}, {}, {3, 4}},
-			{"nobody-left-hosts-alone", 2, {}, {}, {}},
+			{"first-held-listens", 2, {3}, {3}, {}, true},
+			{"second-held-dials-the-first", 3, {2}, {2}, {2}, false},
+			{"three-held-third-dials-the-first", 4, {2, 3}, {2, 3}, {2}, false},
+			{"held-first-owner-still-must-agree", 4, {2, 3}, {2}, {2}, false},
+			{"first-live-owner-listens", 2, {3, 4}, {}, {}, true},
+			{"no-reachable-owner-cannot-elect-alone", 2, {}, {}, {}, true},
 		};
+		uint16_t port = 49910;
 		for (const Case& test: cases) {
-			const Routes routes = NetMatchService::HeldSuccessionRoutes(order, 1, test.local, test.reachable, test.held);
-			if (routes != test.expected) {
-				std::string got;
-				for (const uint8_t peer: routes) got += (got.empty() ? "" : ",") + std::to_string(peer);
-				return Fail(std::string("held-succession-") + test.name + ": peer " + std::to_string(test.local) + " would dial [" + got + "]");
-			}
+			HeldRouteTestAccess::Observed observed; std::string why;
+			if (!HeldRouteTestAccess::Observe({2, 3, 4}, test.local, test.reachable, test.held, {}, port, observed, &why)) return Fail(why);
+			if (observed.chosen != 2 || observed.dials != test.expected || observed.listens != test.listens || observed.members != std::vector<uint16_t>{2, 3, 4})
+				return Fail(std::string("held-succession-") + test.name + ": the common route changed the fixed candidate, route order or complete electorate");
+			port += 10;
 		}
-		std::cout << "[net-world-join-selftest] PASS every_held_survivor_finds_one_host" << std::endl;
+		HeldRouteTestAccess::Observed lone; std::string why;
+		if (!HeldRouteTestAccess::Observe({2}, 2, {}, {}, {}, port, lone, &why)) return Fail(why);
+		if (lone.chosen != 0 || lone.listens || !lone.dials.empty() || !lone.members.empty()) return Fail("a sole remaining owner opened a self-election route");
+		std::cout << "[net-world-join-selftest] PASS every_held_survivor_finds_one_host routes=6 lone_wait=1" << std::endl;
 		return 0;
 	}
 
-	/// Two held seats whose host went before its tail reached them hold different last revisions of its holds, so each may read the
-	/// other as live or held. Whatever each reads, exactly one of them listens - the first survivor in the match's order - and the
-	/// other's first dial is that one: they meet, and neither takes the match on a dial nobody answered.
 	int TestDisagreeingHeldViewsMeetAtOneListener() {
-		using Routes = std::vector<uint8_t>;
-		const Routes order{2, 3};
 		struct Case { const char* name; std::set<uint8_t> heldBySecond; std::set<uint8_t> heldByThird; };
 		const Case cases[] = {
 			{"the-first-reads-the-other-live", {}, {2}},
@@ -4377,18 +4419,30 @@ namespace RTE {
 			{"both-read-the-other-held", {3}, {2}},
 			{"the-other-reads-the-first-live", {3}, {}},
 		};
+		uint16_t port = 50010;
 		for (const Case& test: cases) {
-			const bool secondListens = NetMatchService::HeldSeatListens(order, 1, 2, {3}, test.heldBySecond, {});
-			const bool thirdListens = NetMatchService::HeldSeatListens(order, 1, 3, {2}, test.heldByThird, {});
-			const Routes thirdDials = NetMatchService::HeldSuccessionRoutes(order, 1, 3, {2}, test.heldByThird);
-			if (!secondListens || thirdListens || thirdDials.empty() || thirdDials.front() != 2) {
-				return Fail(std::string("held-views-") + test.name + ": peer 2 listens=" + std::to_string(secondListens) + " peer 3 listens=" + std::to_string(thirdListens) +
-				            " peer 3 dials first=" + (thirdDials.empty() ? std::string("nobody") : std::to_string(thirdDials.front())) + "; expected 1, 0 and 2");
-			}
+			HeldRouteTestAccess::Observed second, third; std::string why;
+			if (!HeldRouteTestAccess::Observe({2, 3}, 2, {3}, test.heldBySecond, {}, port, second, &why) ||
+			    !HeldRouteTestAccess::Observe({2, 3}, 3, {2}, test.heldByThird, {}, port + 10, third, &why)) return Fail(why);
+			if (!second.listens || third.listens || !second.dials.empty() || third.dials != std::vector<uint8_t>{2} ||
+			    second.chosen != 2 || third.chosen != 2 || second.members != std::vector<uint16_t>{2, 3} || third.members != second.members)
+				return Fail(std::string("held-views-") + test.name + ": expected one election listener, the exact first dial, and both owners");
+			port += 20;
 		}
-		// A survivor that left the match is no one's listener: the next in the order is.
-		if (!NetMatchService::HeldSeatListens({2, 3, 4}, 1, 3, {4}, {}, {2})) return Fail("held-views-a-departed-first-survivor: peer 3 would not listen after peer 2 left");
-		std::cout << "[net-world-join-selftest] PASS disagreeing_held_views_meet_at_one_listener" << std::endl;
+		HeldRouteTestAccess::Observed afterDeparture; std::string why;
+		if (!HeldRouteTestAccess::Observe({2, 3, 4}, 3, {4}, {}, {2}, port, afterDeparture, &why)) return Fail(why);
+		if (!afterDeparture.listens || afterDeparture.chosen != 3 || !afterDeparture.dials.empty() || afterDeparture.members != std::vector<uint16_t>{3, 4})
+			return Fail("a departed first survivor kept the listener from the next agreed owner");
+		std::cout << "[net-world-join-selftest] PASS disagreeing_held_views_meet_at_one_listener views=4 departed_first=1" << std::endl;
+		return 0;
+	}
+
+	int TestHostAuthorityNeedsEveryNamedSurvivor() {
+		for (uint32_t voters: {2U, 4U, 8U, 6U, 10U, 12U, 14U}) {
+			NetGameHostAuthority authority{1, 2, 1, 200, 14, voters, 14};
+			if (authority.IsValid() != (voters == 14)) return Fail("host authority accepted only a subset of its named survivors");
+		}
+		std::cout << "[net-world-join-selftest] PASS host_authority_needs_every_named_survivor" << std::endl;
 		return 0;
 	}
 
@@ -4399,13 +4453,13 @@ namespace RTE {
 		struct Case { const char* name; bool linkLost; bool hasReject; NetRejectReason reason; bool ownStop; bool imageRejoin; uint64_t silentMs; uint64_t rttMs; bool gone; };
 		const Case cases[] = {
 			{"own-transport-stopped", true, true, NetRejectReason::InternalError, true, false, 0, 0, false},
-			{"host-connection-dropped", true, true, NetRejectReason::InternalError, false, false, 0, 0, true},
-			{"host-link-lost", true, true, NetRejectReason::HostLinkLost, false, false, 0, 0, true},
-			{"host-ended-the-session", true, true, NetRejectReason::SessionEnded, false, false, 0, 0, true},
-			{"host-link-timed-out", true, true, NetRejectReason::Timeout, false, false, 0, 0, true},
-			{"link-closed-without-reject", true, false, NetRejectReason::InternalError, false, false, 0, 0, true},
+			{"host-connection-dropped", true, true, NetRejectReason::InternalError, false, false, 0, 0, false},
+			{"host-link-lost", true, true, NetRejectReason::HostLinkLost, false, false, 0, 0, false},
+			{"host-ended-the-session", true, true, NetRejectReason::SessionEnded, false, false, 0, 0, false},
+			{"host-link-timed-out", true, true, NetRejectReason::Timeout, false, false, 0, 0, false},
+			{"link-closed-without-reject", true, false, NetRejectReason::InternalError, false, false, 0, 0, false},
 			{"told-to-take-the-image", true, true, NetRejectReason::HostNotAccepting, false, true, 0, 0, false},
-			{"host-silent-past-the-loss-bound", false, false, NetRejectReason::InternalError, false, false, 1200, 100, true},
+			{"host-silent-past-the-loss-bound", false, false, NetRejectReason::InternalError, false, false, c_NetHostLossSilenceMs, 100, true},
 			{"host-stalled-900ms", false, false, NetRejectReason::InternalError, false, false, 900, 0, false},
 			{"lagged-link-inside-its-bound", false, false, NetRejectReason::InternalError, false, false, 1300, 200, false},
 		};
@@ -4416,14 +4470,14 @@ namespace RTE {
 		}
 		// The held seat and the round read one predicate: the same silence and round trip give the same verdict on both paths.
 		for (const uint64_t rtt: {0ULL, 40ULL, 200ULL, 401ULL})
-			for (const uint64_t silent: {0ULL, 999ULL, 1000ULL, 1079ULL, 1080ULL, 1399ULL, 1400ULL, 1801ULL, 1802ULL, 4000ULL}) {
+			for (const uint64_t silent: {0ULL, 999ULL, 1000ULL, 14999ULL, 15000ULL, 16000ULL}) {
 				const bool held = NetMatchService::HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, silent, rtt);
-				if (held != NetHostLinkLost(false, silent, rtt) || held != (silent >= 1000 + 2 * rtt)) {
+				if (held != NetHostLinkLost(false, silent, rtt) || held != (silent >= c_NetHostLossSilenceMs)) {
 					return Fail("held-seat-host-verdict-shared-bound: silent=" + std::to_string(silent) + "ms rtt=" + std::to_string(rtt) + "ms held seat=" + std::to_string(held) +
 					            " round=" + std::to_string(NetHostLinkLost(false, silent, rtt)));
 				}
 			}
-		std::cout << "[net-world-join-selftest] PASS a_held_seat_judges_its_host_by_the_link_alone bound_ms=" << NetHostLossBoundMs(0) << "+2rtt" << std::endl;
+		std::cout << "[net-world-join-selftest] PASS a_held_seat_judges_its_host_by_the_link_alone bound_ms=" << NetHostLossBoundMs(0) << " (independent of RTT)" << std::endl;
 		return 0;
 	}
 
@@ -5150,7 +5204,7 @@ namespace RTE {
 		NetReconnectHost admission;
 		admission.Configure(&registry, 0x5747ULL, identity);
 		admission.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
-		admission.SetLiveMatch(true);
+		admission.SetLiveMatch(true); admission.NotePlacementPhase(false, 0);
 		admission.SetPersistentWorld(true);
 		NetH4TicketOffer leaverOffer;
 		NetH4TicketOffer watcherOffer;
@@ -5241,7 +5295,7 @@ namespace RTE {
 		NetReconnectHost admission;
 		admission.Configure(&registry, 0x5748ULL, identity);
 		admission.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
-		admission.SetLiveMatch(true);
+		admission.SetLiveMatch(true); admission.NotePlacementPhase(false, 0);
 		admission.SetPersistentWorld(true);
 		NetH4TicketOffer aliceOffer;
 		NetH4TicketOffer bobOffer;
@@ -5393,7 +5447,7 @@ namespace RTE {
 		NetReconnectHost admission;
 		admission.Configure(&registry, 0x5749ULL, identity);
 		admission.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
-		admission.SetLiveMatch(true);
+		admission.SetLiveMatch(true); admission.NotePlacementPhase(false, 0);
 		admission.SetPersistentWorld(true);
 		admission.SetDropOwnershipSource(&PromotedWorldCensus, nullptr);
 		NetH4TicketOffer aliceOffer;
@@ -5611,7 +5665,7 @@ namespace RTE {
 		if (!oldHost.EnsureLocalTicket(own) || own.stableSeat != 0) return Fail("original-host-return: the original host's own seat took no seat-0 ticket");
 		NetH4TicketOffer successorOffer;
 		if (!CommitWorldSeat(oldHost, identity, 72, "successor", successorOffer)) return Fail("original-host-return: the successor could not join the old host");
-		oldHost.SetLiveMatch(true);
+		oldHost.SetLiveMatch(true); oldHost.NotePlacementPhase(false, 0);
 		const std::vector<uint8_t> state = oldHost.ExportMigrationState();
 		NetMatchConfig successorMatch = match;
 		successorMatch.hostPeerId = 2;
@@ -5675,7 +5729,7 @@ namespace RTE {
 		NetReconnectHost admission;
 		admission.Configure(&registry, 0x574400ULL, identity);
 		admission.SetSeatTable(table, config.mode);
-		admission.SetLiveMatch(true);
+		admission.SetLiveMatch(true); admission.NotePlacementPhase(false, 0);
 		admission.SetPersistentWorld(true);
 		NetH4TicketOffer offer;
 		if (!CommitWorldSeat(admission, identity, 61, "first", offer)) {
@@ -5726,7 +5780,7 @@ namespace RTE {
 		NetReconnectHost admission;
 		admission.Configure(&registry, 0x574401ULL, identity);
 		admission.SetSeatTable(table, config.mode);
-		admission.SetLiveMatch(true);
+		admission.SetLiveMatch(true); admission.NotePlacementPhase(false, 0);
 		admission.SetPersistentWorld(true);
 		NetH4TicketOffer firstOffer;
 		NetH4TicketOffer secondOffer;
@@ -6972,7 +7026,7 @@ namespace RTE {
 		NetReconnectHost hostN;
 		hostN.Configure(&bootN, config.sessionId, identity);
 		hostN.SetSeatTable(seats, config.mode);
-		hostN.SetLiveMatch(true);
+		hostN.SetLiveMatch(true); hostN.NotePlacementPhase(false, 0);
 		hostN.SetPersistentWorld(true);
 		NetH4NewJoin join;
 		join.identity = identity;
@@ -8261,7 +8315,7 @@ namespace RTE {
 			*error = "the between-rounds leave row could not seat its player";
 			return false;
 		}
-		host.SetLiveMatch(true);
+		host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 		host.SetMatchEnded();
 		const uint32_t releasedBefore = host.GetStats().seatsReleased;
 		NetH4LeaveRequest leave;
@@ -8275,7 +8329,7 @@ namespace RTE {
 		for (const NetH4Outbound& outbound: answered)
 			if (const auto* told = std::get_if<NetH4LeaveAck>(&outbound.payload)) ack = told;
 		const NetRosterSeat* seat = host.GetRoster().Find(static_cast<uint8_t>(offer.stableSeat + 1));
-		if (ack == nullptr || ack->seatClosed || !seat || seat->owner == 0 || seat->phase != NetSeatPhase::Held || seat->holdCause != NetSeatHoldCause::Leave ||
+		if (ack == nullptr || ack->seatClosed || !seat || seat->owner == 0 || seat->phase != NetSeatPhase::RematchLobby || seat->link != NetSeatLink::Dropped || seat->holdCause != NetSeatHoldCause::None ||
 		    host.GetStats().seatsReleased != releasedBefore || host.IsSeatClosed(offer.stableSeat)) {
 			*error = std::string("a leave between rounds did not keep the seat: ack=") + (ack ? (ack->seatClosed ? "closed" : "kept") : "none") + " roster=" +
 			         (seat ? RosterSeatLabel(*seat) : std::string("no seat")) + " released=" + std::to_string(host.GetStats().seatsReleased - releasedBefore);
@@ -8307,7 +8361,7 @@ namespace RTE {
 			*error = "the resumed-lobby row could not seat the host and its player";
 			return false;
 		}
-		host.SetLiveMatch(true);
+		host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 		// The match is saved, and resumed from disk: the host imports what it saved, nobody has reconnected, and its lobby opens.
 		const std::vector<uint8_t> saved = host.ExportMigrationState();
 		NetSeatAuthRegistry resumedRegistry;
@@ -8332,7 +8386,7 @@ namespace RTE {
 		const uint32_t releasedBefore = resumed.GetStats().seatsReleased;
 		resumed.NotifyDisconnect(65, 0);
 		const NetRosterSeat* seat = resumed.GetRoster().Find(seatId);
-		if (!seat || seat->owner == 0 || seat->phase != NetSeatPhase::Held || resumed.GetStats().seatsReleased != releasedBefore || resumed.IsSeatClosed(offer.stableSeat)) {
+		if (!seat || seat->owner == 0 || seat->phase != NetSeatPhase::RematchLobby || seat->link != NetSeatLink::Dropped || seat->holdCause != NetSeatHoldCause::None || resumed.GetStats().seatsReleased != releasedBefore || resumed.IsSeatClosed(offer.stableSeat)) {
 			*error = "a drop in a resumed match's lobby released the seat: roster=" + (seat ? RosterSeatLabel(*seat) : std::string("no seat")) +
 			         " released=" + std::to_string(resumed.GetStats().seatsReleased - releasedBefore);
 			return false;
@@ -8363,7 +8417,7 @@ namespace RTE {
 			*error = "the private-return row could not seat its player";
 			return false;
 		}
-		plane.SetLiveMatch(true);
+		plane.SetLiveMatch(true); plane.NotePlacementPhase(false, 0);
 		uint8_t peer = 0;
 		for (const NetH4Seat& seat: plane.GetSeatTable())
 			if (seat.stableSeat == offer.stableSeat) peer = seat.lockstepPeerId;
@@ -8372,6 +8426,7 @@ namespace RTE {
 		const auto phaseText = [&held]() { return std::string(held() ? NetSeatPhaseName(held()->phase) : "no seat"); };
 		// The player plays the round, drops, and returns with its ticket on a new link.
 		plane.NotifyDisconnect(61, 100);
+		plane.NoteSeatHeldInPlace(peer, NetSeatHoldCause::LinkDrop);
 		if (!ReclaimWorldSeat(plane, identity, offer, 65, 1500) || !held() || held()->phase != NetSeatPhase::RejoinImage) {
 			*error = "the private-return row's return was not admitted into its image: " + phaseText();
 			return false;
@@ -8401,7 +8456,7 @@ namespace RTE {
 		// The rejoin is abandoned with the player still connected: the roster fails the return, and nothing begins it again inside the backoff.
 		host.m_WorldJoin.CancelJoin(65, "the returner could not be moved past the capture park");
 		host.FeedRosterReturnsLocked();
-		if (held()->phase != NetSeatPhase::Held || held()->holdCause != NetSeatHoldCause::RejoinFailed || held()->failedReturns != 1) {
+		if (held()->phase != NetSeatPhase::Held || held()->holdCause != NetSeatHoldCause::LinkDrop || held()->failedReturns != 1) {
 			*error = "an abandoned private return did not fail on the roster: " + phaseText() + " failed=" + std::to_string(held()->failedReturns);
 			return false;
 		}
@@ -8754,7 +8809,7 @@ namespace RTE {
 				hostTransport.AdvanceTimeMs(5);
 				clientTransport.AdvanceTimeMs(5);
 			}
-			if (!host->IsRunning() || !host->ProposePeerHold(2, 80, &why) || !host->AnyHeldAISeat()) {
+			if (!host->IsRunning() || !host->ProposePeerHold(2, 80 + c_NetSeatDisconnectSilenceMs, &why) || !host->AnyHeldAISeat()) {
 				why = "round " + std::to_string(round) + " did not hold seat 2: " + why;
 				return false;
 			}
@@ -8958,7 +9013,7 @@ namespace RTE {
 			if (!leaver.m_Coordinator->IsRunning() || leaver.m_Coordinator->GetResumeFrame() < 15) { why = "the leaver's service has no running round"; return false; }
 			if (!registry.BeginHostedSession()) { why = "the leaver's ticket registry did not start"; return false; }
 			leaver.m_ReconnectHost.Configure(&registry, match.sessionId, MakeH4Identity());
-			leaver.m_ReconnectHost.SetSeatTable(NetH4BuildSeatTable(match), match.mode); leaver.m_ReconnectHost.SetLiveMatch(true);
+			leaver.m_ReconnectHost.SetSeatTable(NetH4BuildSeatTable(match), match.mode); leaver.m_ReconnectHost.SetLiveMatch(true); leaver.m_ReconnectHost.NotePlacementPhase(false, 0);
 			NetH4TicketRecord ticket;
 			if (!leaver.m_ReconnectHost.EnsureLocalTicket(ticket)) { why = "the leaver did not have its own ticket"; return false; }
 			ticket.hostAddress = "loopback";
@@ -8997,7 +9052,7 @@ namespace RTE {
 			         " error='" + own.errorText + "' reconnecting=" + std::to_string(own.reconnecting);
 			return false;
 		}
-		if (!departed.landed || departed.errorText != "The host left the match") {
+		if (!departed.landed || departed.errorText != "Could not reach the host - the match can be rejoined") {
 			*error = "a seat with nothing committed stayed on after its host left: landed=" + std::to_string(departed.landed) + " error='" + departed.errorText + "'";
 			return false;
 		}
@@ -9224,7 +9279,7 @@ namespace RTE {
 		NetReconnectHost admission;
 		admission.Configure(&registry, 0x5750ULL, identity);
 		admission.SetSeatTable(table, NetMatchMode::PvPSkirmish);
-		admission.SetLiveMatch(true);
+		admission.SetLiveMatch(true); admission.NotePlacementPhase(false, 0);
 		admission.SetPersistentWorld(true);
 		NetWorldJoinHost world;
 		std::string error;
@@ -9948,9 +10003,9 @@ namespace RTE {
 		if (const int result = TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;
 		if (const int result = TestAHeldWorldMembersLeaveReleasesItsSeat(); result != 0) return result;
-		if (const int result = TestALoneSurvivorWithAHeldSeatHostsTheMatch(); result != 0) return result;
 		if (const int result = TestEveryHeldSurvivorFindsOneHost(); result != 0) return result;
 		if (const int result = TestDisagreeingHeldViewsMeetAtOneListener(); result != 0) return result;
+		if (const int result = TestHostAuthorityNeedsEveryNamedSurvivor(); result != 0) return result;
 		if (const int result = TestAHeldSeatJudgesItsHostByTheLinkAlone(); result != 0) return result;
 		if (const int result = TestActivationFollowsTheMeasuredTrail(); result != 0) return result;
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;

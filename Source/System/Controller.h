@@ -448,6 +448,8 @@ namespace RTE {
 
 		/// Refreshes analog values (mouse, joystick) so the visual cursor tracks the latest input each render frame. Player-controlled only; no ControlStates writes.
 		void RenderUpdate();
+		/// Samples one presentation frame for a local editor without an actor.
+		void UpdateEditorInput();
 
 		/// Hands this to the producing pass, which starts from the input this seat itself produced last
 		/// tick. The committed frame the sim runs on is held aside until the pass ends; a seat that just
@@ -572,10 +574,10 @@ namespace RTE {
 #pragma region Update Breakdown
 		/// Updates the player's inputs portion of this Controller. For breaking down Update into more comprehensible chunks.
 		/// This method will call both UpdatePlayerPieMenuInput and UpdatePlayerAnalogInput.
-		void UpdatePlayerInput(std::array<bool, ControlState::CONTROLSTATECOUNT> lastControlStates);
+		void UpdatePlayerInput(std::array<bool, ControlState::CONTROLSTATECOUNT> lastControlStates, bool frameEdges = false);
 
 		/// Updates the player's PieMenu inputs portion of this Controller. For breaking down Update into more comprehensible chunks.
-		void UpdatePlayerPieMenuInput(std::array<bool, ControlState::CONTROLSTATECOUNT> lastControlStates);
+		void UpdatePlayerPieMenuInput(std::array<bool, ControlState::CONTROLSTATECOUNT> lastControlStates, bool frameEdges = false);
 
 		/// Updates the player's analog inputs portion of this Controller. For breaking down Update into more comprehensible chunks.
 		void UpdatePlayerAnalogInput();
@@ -584,7 +586,7 @@ namespace RTE {
 		void ResetCommandState();
 
 		/// Requests and applies input from the player.
-		void GetInputFromPlayer();
+		void GetInputFromPlayer(bool frameEdges = false);
 
 		/// Sampling this machine's input reads this machine's scheme, whatever the wire says the sim should see.
 		bool LocalIsMouseControlled() const { return GetLocalDeviceClass() == WireDeviceClass::MouseKeyboard; }

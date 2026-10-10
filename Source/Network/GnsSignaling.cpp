@@ -3,6 +3,7 @@
 #ifdef CCCP_WITH_GNS
 
 #include "nlohmann/json.hpp"
+#include "NetIdentity.h"
 
 #include <steam/isteamnetworkingutils.h>
 #include <steam/steamnetworkingsockets.h>
@@ -177,9 +178,9 @@ namespace RTE {
 		m_PollArmed = false;
 		m_PollWindows.clear();
 		m_Channel.SetSink([this](const NetDirectorySignalChannel::Signal& signal) { return Deliver(signal); });
-		m_Channel.SetPollWait(2);
+		m_Channel.SetPollWait(config.signalPeer == "host" ? 2 : 12);
 		if (m_Role == Role::Host) {
-			m_Channel.ConfigureHost(config.baseUrl, config.installKey, config.certPinSha256, config.sessionId, config.sessionToken);
+			m_Channel.ConfigureHost(config.baseUrl, config.installKey, config.certPinSha256, config.sessionId, config.sessionToken, config.signalPeer);
 		} else {
 			m_Channel.ConfigureClient(config.baseUrl, config.installKey, config.certPinSha256, config.sessionId);
 		}
@@ -187,7 +188,7 @@ namespace RTE {
 	}
 
 	GnsDirectorySignaling* GnsDirectorySignalDispatcher::CreateJoinSignaling() {
-		return m_Transport && m_Role == Role::Joiner ? Adopt("host") : nullptr;
+		return m_Transport && m_Role == Role::Joiner ? Adopt(m_Config.signalPeer) : nullptr;
 	}
 
 	GnsDirectorySignaling* GnsDirectorySignalDispatcher::Adopt(const std::string& peer) {
@@ -297,7 +298,7 @@ namespace RTE {
 		const std::string seq = "in seq=" + std::to_string(signal.seq);
 		const std::string label = seq + " from=" + signal.from + " " + KindName(frame) + " " + std::to_string(frame.size()) + " bytes" +
 		                          (duplicate ? ", byte-identical to the previous frame from this peer" : "");
-		const bool fromPeer = m_Role == Role::Host ? signal.from.rfind("client:", 0) == 0 : signal.from == "host";
+		const bool fromPeer = m_Role == Role::Host ? signal.from.rfind("client:", 0) == 0 : signal.from == m_Config.signalPeer;
 		const uint8_t kind = frame.empty() ? 0 : static_cast<uint8_t>(frame[0]);
 		if (fromPeer && kind == static_cast<uint8_t>(GnsSignalFrame::Rendezvous) && frame.size() > 1) {
 			Note(label + ": to ReceivedP2PCustomSignal");
@@ -334,6 +335,10 @@ namespace RTE {
 			++m_Counters.postsRefused;
 			Note("out refusal to " + peer + ": the channel refused it");
 		}
+	}
+
+	std::string GnsDirectorySignalDispatcher::MigrationSignalPeer(const std::string& identity) {
+		return "host:" + NetIdentity::HashHex(NetIdentity::HashCanonicalText("migration-route", {{"identity", identity}})).substr(0, 32);
 	}
 
 	std::string GnsDirectorySignalDispatcher::HostIdentity(const std::string& sessionId) {

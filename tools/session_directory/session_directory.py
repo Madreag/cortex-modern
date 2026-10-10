@@ -267,8 +267,13 @@ def valid_install_key(key: str) -> bool:
     return all(ch in INSTALL_KEY_CHARS for ch in key)
 
 
+def host_signal_peer(peer: str) -> bool:
+    return peer == "host" or (peer.startswith("host:") and 1 <= len(peer) - 5 <= MAX_STR
+                              and all(ch in INSTALL_KEY_CHARS for ch in peer[5:]))
+
+
 def valid_peer(peer: str) -> bool:
-    if peer == "host":
+    if host_signal_peer(peer):
         return True
     if peer.startswith("client:") and 1 <= len(peer) - 7 <= MAX_STR:
         return all(ch in INSTALL_KEY_CHARS for ch in peer[7:])
@@ -758,11 +763,30 @@ class SessionDirectory:
                     raise Superseded("superseded", sess.migration_gen)
                 self._persist_session(sess, now)
                 return self.connections.issue(session_id, data, wall) if operation == "issue" else self.connections.remove(session_id, data, wall)
+            if operation == "host-change":
+                answer = self.connections.host_change(session_id, data, wall,
+                    wall - max(0, now - sess.last_beat),
+                    lambda generation: self._issue_token(session_id, generation, sess.token))
+                if answer.get("status") == "decided":
+                    saved = dict(self.connections.records())[session_id]["session"]
+                    sess.token = saved["token"]
+                    sess.migration_gen = saved["migration_gen"]
+                    sess.fields = dict(saved["fields"])
+                    sess.last_beat = now - max(0, wall - saved["last_beat"])
+                    # The former host's fifteen-second listing has usually expired.
+                    # Publish the reserved generation so old heartbeats are fenced
+                    # and every survivor resolves the same successor while it recovers.
+                    self._sessions[session_id] = sess
+                    if session_id in self._resume_tokens:
+                        _, deadline, _ = self._resume_tokens[session_id]
+                        self._resume_tokens[session_id] = (sess.token, deadline, sess.migration_gen)
+                return answer
             if operation != "check-in":
                 raise ConnectionErrorReply(400, "connection_request", "The connection request was incomplete. Cancel and join again.")
             answer, renew, host_claim = self.connections.check_in(session_id, data, wall)
             hosting = bool(host_claim and host_claim["generation"] == sess.migration_gen and tokens_equal(host_claim["token"], sess.token))
             if hosting:
+                self.connections.note_host(session_id, answer["seat"], sess.migration_gen, wall)
                 route = host_claim["route"]
                 addresses = require_listen_addrs(route)
                 port = require_int(route, "listen_port", 1, 65535)
@@ -1308,7 +1332,8 @@ class SessionDirectory:
                     held = generation
                 if world and owner is None and previous is None and proof is not None:
                     held = proof[2]
-                if claimed is not None and claimed <= held and not ((replayed_owner or same_host or first_world) and claimed == held):
+                referee_host = not world and claimed is not None and self.connections.reserved_host(session_id, claimed, presented)
+                if claimed is not None and claimed <= held and not ((replayed_owner or same_host or first_world or referee_host) and claimed == held):
                     raise Superseded("already_migrated", held)
                 if claimed is None and held > 0 and not (replayed_owner or same_host):
                     raise Superseded("already_migrated", held)
@@ -1498,11 +1523,12 @@ class SessionDirectory:
             sess = self._get(session_id, now)
             if sess is None:
                 raise KeyError("not_found")
-            if not tokens_equal(token, sess.token):
-                raise PermissionError("forbidden")
-            # A host the match left behind no longer keeps the row its successor holds.
+            # A stale generation learns the published fence before its retired
+            # capability is rejected; it must relinquish gameplay authority too.
             if generation is not None and generation < sess.migration_gen:
                 raise Superseded("superseded", sess.migration_gen)
+            if not tokens_equal(token, sess.token):
+                raise PermissionError("forbidden")
             if valid_install_key(install_key):
                 sess.install_key = install_key
                 sess.install_key_sha256 = hashlib.sha256(install_key.encode()).hexdigest()
@@ -1655,27 +1681,27 @@ class SessionDirectory:
             sess = self._signalling(session_id, now)
             if sess is None:
                 raise KeyError("not_found")
-            if from_peer == "host":
+            if host_signal_peer(from_peer):
                 if not tokens_equal(token_or_nonce, sess.token):
                     raise PermissionError("forbidden")
             elif not tokens_equal(token_or_nonce, client_nonce(from_peer)):
                 raise PermissionError("forbidden")
-            elif to_peer != "host":
+            elif not host_signal_peer(to_peer):
                 raise PermissionError("forbidden")
             if to_peer not in sess.queues and len(sess.queues) >= MAX_DEST_QUEUES:
                 raise BufferError("queue_full")
             queue = list(sess.queues.get(to_peer, []))
             victims = []
-            anonymous = [item for item in sess.queues.get("host", []) if item.from_peer != "host"]
+            anonymous = [item for destination, queued in sess.queues.items() if host_signal_peer(destination) for item in queued if not host_signal_peer(item.from_peer)]
             projected_payload = sess.undrained_bytes
             projected_stored = self._stored_signal_bytes
             charge = len(payload_b64) + SIGNAL_METADATA_BYTES
             while True:
                 source = [item for item in anonymous if item.source_ip == source_ip]
                 nonce = [item for item in source if item.from_peer == from_peer]
-                source_full = from_peer != "host" and (len(source) >= MAX_SIGNAL_SOURCE_MESSAGES or sum(item.stored_bytes for item in source) + charge > MAX_SIGNAL_SOURCE_BYTES)
-                nonce_full = from_peer != "host" and len(nonce) >= MAX_SIGNAL_NONCE_MESSAGES
-                anonymous_full = from_peer != "host" and sum(item.payload_len for item in anonymous) + len(raw) > MAX_ANONYMOUS_SIGNAL_BYTES
+                source_full = not host_signal_peer(from_peer) and (len(source) >= MAX_SIGNAL_SOURCE_MESSAGES or sum(item.stored_bytes for item in source) + charge > MAX_SIGNAL_SOURCE_BYTES)
+                nonce_full = not host_signal_peer(from_peer) and len(nonce) >= MAX_SIGNAL_NONCE_MESSAGES
+                anonymous_full = not host_signal_peer(from_peer) and sum(item.payload_len for item in anonymous) + len(raw) > MAX_ANONYMOUS_SIGNAL_BYTES
                 if not (source_full or nonce_full or anonymous_full or len(queue) >= MAX_QUEUE or projected_payload + len(raw) > MAX_SESSION_PAYLOAD
                         or projected_stored + charge > MAX_STORED_SIGNAL_BYTES):
                     break
@@ -1697,7 +1723,7 @@ class SessionDirectory:
                 projected_payload -= victim.payload_len
                 projected_stored -= victim.stored_bytes
             for victim in victims:
-                sess.queues["host"].remove(victim)
+                sess.queues[victim.to_peer].remove(victim)
                 sess.undrained_bytes -= victim.payload_len
                 self._stored_signal_bytes -= victim.stored_bytes
             queue = sess.queues.setdefault(to_peer, [])
@@ -1727,7 +1753,7 @@ class SessionDirectory:
             sess = self._signalling(session_id, now)
             if sess is None:
                 raise KeyError("not_found")
-            if peer == "host":
+            if host_signal_peer(peer):
                 if host_token is None or not tokens_equal(host_token, sess.token):
                     raise PermissionError("forbidden")
             authenticated_lease = sess
@@ -1747,7 +1773,7 @@ class SessionDirectory:
                 sess = self._signalling(session_id, time.monotonic(), pruned=True)
                 if sess is None:
                     raise KeyError("not_found")
-                if peer == "host" and (sess is not authenticated_lease or not tokens_equal(host_token or "", sess.token)):
+                if host_signal_peer(peer) and (sess is not authenticated_lease or not tokens_equal(host_token or "", sess.token)):
                     raise PermissionError("forbidden")
             now = time.monotonic()
             queue = sess.queues.get(peer)

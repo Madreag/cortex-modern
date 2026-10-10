@@ -1859,7 +1859,7 @@ bool GameActivity::BuildLockstepSeatBrains() {
 	return true;
 }
 
-void GameActivity::UpdateEditing() {
+void GameActivity::SeedPlacement() {
 	// Editing the scene, just update the editor guis and see if players are ready to start or not
 	if (m_ActivityState != ActivityState::Editing)
 		return;
@@ -1869,6 +1869,7 @@ void GameActivity::UpdateEditing() {
 	const bool lockstep = IsLockstepPlacement();
 	if (lockstep && !m_LockstepPlacementSeeded) {
 		m_LockstepPlacementSeeded = true;
+		if (NetMatchService::IsConstructed()) g_NetMatchService.NotePlacementPhase(true, ScenarioRunner::GetLockstepAppliedFrame());
 		// Read before any local editor runs, so every peer starts its reserve from the same id.
 		m_LockstepPlacementUidBase = MovableObject::GetUniqueIDCounter();
 		SeedLockstepResidentBrains();
@@ -1884,8 +1885,10 @@ void GameActivity::UpdateEditing() {
 		}
 	}
 
-	///////////////////////////////////////////
-	// Iterate through all human players
+}
+
+void GameActivity::UpdateEditingInput(bool frameInput) {
+	const bool lockstep = IsLockstepPlacement();
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
@@ -1894,11 +1897,15 @@ void GameActivity::UpdateEditing() {
 		// Everything this seat's own editor does is local to this machine while the world is held.
 		const ScopedEditorRNG editorRNG(lockstep);
 
-		// A scripted gesture stands in for this seat's own mouse; only the UI probe queues one.
-		DriveScriptedSetupEditor(player);
 		// Return is an additional local Done gesture; the original editor still validates the brain and submits the shared command.
 		const auto* networkPanel = g_MenuMan.GetNetworkPanel();
 		const bool typing = g_ConsoleMan.IsEnabled() || (networkPanel && networkPanel->IsChatEntryOpen());
+		if (frameInput) {
+			if (typing) m_PlayerController[player].ApplyWireNeutral();
+			else m_PlayerController[player].UpdateEditorInput();
+		}
+		// A scripted gesture stands in for this seat's own mouse; only the UI probe queues one.
+		DriveScriptedSetupEditor(player);
 		if (lockstep && !typing && !g_MenuMan.IsLiveMenuOwningInput() && !m_ReadyToStart[player] && !m_LockstepPlacementSubmitted[player] &&
 		    m_pEditorGUI[player]->GetEditorGUIMode() != SceneEditorGUI::PICKINGOBJECT &&
 		    m_pEditorGUI[player]->GetEditorGUIMode() != SceneEditorGUI::INACTIVE &&
@@ -1951,7 +1958,7 @@ void GameActivity::UpdateEditing() {
 					m_MessageTimer[player].Reset();
 				} else if (m_LockstepPlacementSubmitted[player]) {
 					g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
-					g_FrameMan.SetScreenText("READY to start - wait for others to finish...", ScreenOfPlayer(player), 333);
+					g_FrameMan.SetScreenText(m_ReadyToStart[player] ? "READY to start - wait for others to finish..." : "Placement sent - waiting for confirmation...", ScreenOfPlayer(player), 333);
 					m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::ADDINGOBJECT);
 				}
 			}
@@ -1980,6 +1987,14 @@ void GameActivity::UpdateEditing() {
 		if (m_ReadyToStart[player])
 			g_FrameMan.SetScreenText("READY to start - wait for others to finish...", ScreenOfPlayer(player), 333);
 	}
+
+}
+
+void GameActivity::UpdateEditing() {
+	if (m_ActivityState != ActivityState::Editing) return;
+	const bool lockstep = IsLockstepPlacement();
+	SeedPlacement();
+	if (!lockstep) UpdateEditingInput(false);
 
 	// Have all players flagged themselves as ready to start the game?
 	bool allReady = true;
@@ -2055,6 +2070,7 @@ void GameActivity::UpdateEditing() {
 		if (allReady) {
 			// START the game!
 			m_ActivityState = ActivityState::Running;
+			if (lockstep && NetMatchService::IsConstructed()) g_NetMatchService.NotePlacementPhase(false, ScenarioRunner::GetLockstepAppliedFrame());
 			// Re-enable the AI's if we are done editing
 			DisableAIs(false);
 			InitAIs();
@@ -2162,6 +2178,8 @@ void GameActivity::UpdateSpectatorView(int player, bool lookedAround) {
 }
 
 void GameActivity::Update() {
+	if (m_ActivityState == ActivityState::Running && IsLockstepPlacement() && NetMatchService::IsConstructed())
+		g_NetMatchService.NotePlacementPhase(false, ScenarioRunner::GetLockstepAppliedFrame());
 	if (g_ActivityMan.LockstepRelaunchInProgress()) {
 		g_ActivityMan.NoteStaleActivitySlots(CountStaleRelaunchSlots(static_cast<int>(g_TimerMan.GetSimUpdateCount())));
 	}
@@ -2945,6 +2963,10 @@ void GameActivity::Update() {
 
 void GameActivity::RenderUpdate() {
 	Activity::RenderUpdate();
+	if (m_ActivityState == ActivityState::Editing && IsLockstepPlacement()) {
+		SeedPlacement();
+		UpdateEditingInput(true);
+	}
 }
 
 void GameActivity::PrepareDrawGUI(int whichScreen) {
@@ -4354,17 +4376,20 @@ bool GameActivity::RunSetupEditorSelfTest(bool confirmOnly) {
 		bool singlePlayerReceivedReturn = false;
 		bool receivedReturn = false;
 		bool refusedUnplacedBrain = false;
+		bool delayedSharedTick = false;
 		const auto drawFrame = [&] {
 			SDL_Event event;
 			while (SDL_PollEvent(&event)) g_UInputMan.HandleInputEvent(event);
 			g_UInputMan.Update(false);
 			if (g_UInputMan.KeyPressed(SDLK_RETURN)) receivedReturn = true;
 			if (!ScenarioRunner::HasLockstepCoordinator() && g_UInputMan.KeyPressed(SDLK_RETURN)) singlePlayerReceivedReturn = true;
-			game->UpdateEditing();
+			game->RenderUpdate();
+			if (!delayedSharedTick) game->UpdateEditing();
 			if (g_UInputMan.KeyPressed(SDLK_RETURN) && g_FrameMan.GetScreenText(0).find("Place your brain in a valid spot first") != std::string::npos) refusedUnplacedBrain = true;
 			editor->Draw(g_FrameMan.GetBackBuffer32(), Vector());
 			MenuAutomation::AfterDrawnFrame();
 			g_UInputMan.EndFrame();
+			if (delayedSharedTick) game->UpdateEditing();
 			g_UInputMan.EndSimUpdate();
 		};
 		std::string observation;
@@ -4400,7 +4425,8 @@ bool GameActivity::RunSetupEditorSelfTest(bool confirmOnly) {
 				System::PrintDiagnosticLine("[placement-confirm-selftest] FAIL return_stole_existing_player_binding " + observation); return false;
 			}
 		}
-		if (!MenuAutomation::HandGameKey("Return", [&] { return game->m_LockstepPlacementSubmitted[0]; }, "placement confirmation", observation)) return false;
+		delayedSharedTick = true;
+		if (!MenuAutomation::HandGameKey("Return", [&] { return game->m_LockstepPlacementSubmitted[0]; }, "placement confirmation after EndFrame", observation)) return false;
 		for (int frames = 0; frames < 90 && MenuAutomation::HandBusy(); ++frames) drawFrame();
 		bool confirmed = false;
 		const bool finished = MenuAutomation::HandFinished(confirmed, observation);

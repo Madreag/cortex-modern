@@ -580,15 +580,13 @@ namespace RTE {
 
 			std::vector<HSteamNetConnection> connections;
 			connections.reserve(m_PeersByConnection.size());
-			for (const auto& [connection, peerId] : m_PeersByConnection) {
-				(void)peerId;
-				connections.push_back(connection);
-			}
+			for (const auto& [connection, owner] : s_ConnectionOwners)
+				if (owner == this) connections.push_back(connection);
 			for (HSteamNetConnection connection : connections) {
-				// Flush + linger so a queued goodbye (lockstep stop, session close) reaches the peer.
-				m_Interface->FlushMessagesOnConnection(connection);
-				m_Interface->CloseConnection(connection, 0, "transport stopped", true);
-				KeepGnsForLingeringClose();
+				const bool accepted = m_PeersByConnection.contains(connection);
+				if (accepted) m_Interface->FlushMessagesOnConnection(connection);
+				m_Interface->CloseConnection(connection, 0, "transport stopped", accepted);
+				if (accepted) KeepGnsForLingeringClose();
 				ForgetConnection(connection);
 			}
 
@@ -906,11 +904,13 @@ namespace RTE {
 			if (m_P2PMode >= 0) m_DialedMs[connection] = SteadyMs();
 			if (m_Interface->AcceptConnection(connection) != k_EResultOK) {
 				m_Interface->CloseConnection(connection, 0, "accept failed", false);
+				ForgetConnection(connection);
 				m_PendingEvents.push_back({NetTransportEventType::TransportError, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "GNS AcceptConnection failed"});
 				return;
 			}
 			if (m_PollGroup != k_HSteamNetPollGroup_Invalid && !m_Interface->SetConnectionPollGroup(connection, m_PollGroup)) {
 				m_Interface->CloseConnection(connection, 0, "poll group assignment failed", false);
+				ForgetConnection(connection);
 				m_PendingEvents.push_back({NetTransportEventType::TransportError, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "GNS SetConnectionPollGroup failed"});
 				return;
 			}
