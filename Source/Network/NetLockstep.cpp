@@ -8202,9 +8202,9 @@ namespace RTE {
 			const uint8_t named = static_cast<uint8_t>(ack.receivedMask & 0xFFU);
 			if (UsesPeerFrameGroups()) {
 				if (named == 0 || named > m_Config.peerCount || ack.highestContiguousFrame < m_Config.startFrame) return;
-				if (ack.highestContiguousFrame < m_Stats.nextFrame) SendPeerCommittedTail(ack.senderPeerId, ack.highestContiguousFrame);
-				else if (const auto inputs = m_PeerSourceInputs.find(ack.highestContiguousFrame); inputs != m_PeerSourceInputs.end())
-					if (const auto input = inputs->second.find(named); input != inputs->second.end()) SendForwardedPeerInput(input->second, ack.senderPeerId);
+				const auto inputs = m_PeerSourceInputs.find(ack.highestContiguousFrame);
+				if (inputs != m_PeerSourceInputs.end() && inputs->second.contains(named)) SendForwardedPeerInput(inputs->second.at(named), ack.senderPeerId);
+				else if (ack.highestContiguousFrame < m_Stats.nextFrame) SendPeerCommittedTail(ack.senderPeerId, ack.highestContiguousFrame);
 			} else if (named == m_Config.localPeerId) (void)ResendOwnFramesFrom(ack.senderPeerId, ack.highestContiguousFrame);
 			else if (m_RelayHost && named != ack.senderPeerId && IsKnownRemotePeer(named)) (void)ResendRelayedFramesFrom(ack.senderPeerId, named, ack.highestContiguousFrame);
 		}

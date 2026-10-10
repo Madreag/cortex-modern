@@ -107,17 +107,18 @@ namespace RTE {
 					if (!hub.asymmetricFrame) return 0;
 					const bool forwarded = packet.type == Type::PeerForwardInput && packet.successorPeerId == hub.row.subject && packet.frame >= hub.asymmetricFrame;
 					const bool receipt = packet.type == Type::PeerReceipt && packet.successorPeerId == hub.row.subject && packet.frame > hub.asymmetricFrame && packet.bytes.empty();
+					const uint32_t requesters = ((1U << hub.row.seats) - 1) & ~(1U << (hub.row.subject - 1)) & ~(1U << 2);
 					if (hub.row.asymmetricBridge == 3) {
-						if (owner == 3 && other.owner <= 2 && forwarded) {
+						if (owner == 3 && (requesters & (1U << (other.owner - 1))) != 0 && forwarded) {
 							if (lane == NetTransportLane::InputUnreliable) { hub.asymmetricDropped |= 1U << (other.owner - 1); return 1; }
 							hub.asymmetricResent |= 1U << (other.owner - 1);
 						}
 						return 0;
 					}
-					if (packet.type == Type::PeerBridge && packet.preparedFrame == 0 && packet.frame == hub.asymmetricFrame && owner <= 2 &&
+					if (packet.type == Type::PeerBridge && packet.preparedFrame == 0 && packet.frame == hub.asymmetricFrame && (requesters & (1U << (owner - 1))) != 0 &&
 					    std::find(packet.members.begin(), packet.members.end(), hub.row.subject) != packet.members.end()) {
 						hub.asymmetricVoters |= 1U << (owner - 1);
-						if (hub.asymmetricVoters == 3 && !hub.asymmetricReleased) {
+						if (hub.asymmetricVoters == requesters && !hub.asymmetricReleased) {
 							hub.asymmetricReleased = true;
 							for (auto& held: hub.delayedInputs) {
 								const uint64_t delay = held.input == (hub.row.asymmetricBridge == 1) ? 1 : 2;
@@ -126,7 +127,7 @@ namespace RTE {
 							hub.delayedInputs.clear();
 						}
 					}
-					if (!hub.asymmetricReleased && owner == 3 && other.owner <= 2 && (forwarded || receipt)) {
+					if (!hub.asymmetricReleased && owner == 3 && (requesters & (1U << (other.owner - 1))) != 0 && (forwarded || receipt)) {
 						hub.delayedInputs.push_back({&other, {NetTransportEventType::PacketReceived, remote, lane, bytes, {}}, forwarded});
 						return 1;
 					}
@@ -414,7 +415,8 @@ namespace RTE {
 				const uint64_t end = hub.faultEnd + (row.gapMs > 5000 ? row.gapMs / 2 : 0) + c_TestReturnAllowanceMs + 4000;
 				while (hub.now <= end) if (!Step(error)) return false;
 				if (row.asymmetricBridge && row.asymmetricBridge < 3 && !hub.asymmetricReleased) { error = "the asymmetric input lever did not force both pending bridge votes"; return false; }
-				if (row.asymmetricBridge == 3 && (hub.asymmetricDropped != 3 || hub.asymmetricResent == 0)) { error = "the lost-forward lever did not recover an accepted input from its surviving witness"; return false; }
+				const uint32_t requesters = ((1U << row.seats) - 1) & ~(1U << (row.subject - 1)) & ~(1U << 2);
+				if (row.asymmetricBridge == 3 && (hub.asymmetricDropped != requesters || hub.asymmetricResent == 0)) { error = "the lost-forward lever did not recover an accepted input from its surviving witness"; return false; }
 				for (uint8_t id = 1; id <= row.seats; ++id) {
 					const bool doubleFailure = row.internet && row.directoryDown;
 					if (!IsAffected(id) && !doubleFailure && maxWait[id - 1] > (row.internet && row.seats == 2 ? 1000 : static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs)))) {
@@ -574,10 +576,11 @@ namespace RTE {
 		std::cout << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=29" << std::endl;
 		for (const auto& row: rows) {
 			std::string error; Fixture fixture; bool ok = fixture.Run(row, error);
-			if (row.name == std::string("partition_3_1")) for (unsigned order = 1; order <= 3; ++order) {
+			if (row.name == std::string("partition_3_1") || row.name == std::string("host_absent_3s"))
+			    for (unsigned order = row.subject == 1 ? 3 : 1; order <= 3; ++order) {
 				auto asymmetric = row; asymmetric.asymmetricBridge = order; asymmetric.rttMs = asymmetric.otherRttMs = 4;
 				Fixture arm; std::string detail; const bool converged = arm.Run(asymmetric, detail);
-				std::cout << "[net-session-plane-selftest] bridge-input-race order=" << (order == 1 ? "input-first" : order == 2 ? "receipt-first" : "lost-forward")
+				std::cout << "[net-session-plane-selftest] bridge-input-race subject=" << static_cast<int>(row.subject) << " order=" << (order == 1 ? "input-first" : order == 2 ? "receipt-first" : "lost-forward")
 				          << " two_pending_votes=" << arm.hub.asymmetricReleased << " dropped=" << arm.hub.asymmetricDropped << " resent=" << arm.hub.asymmetricResent
 				          << " result=" << (converged ? "PASS" : "FAIL") << (detail.empty() ? "" : ": " + detail) << std::endl;
 				if (!converged) { ok = false; if (error.empty()) error = detail; }
