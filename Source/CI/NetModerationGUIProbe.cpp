@@ -414,9 +414,9 @@ namespace {
 		Require(static_cast<bool>(input), "cannot read input script");
 		probe.script = Json::parse(input);
 		Require(probe.script.at("schema") == 1 && probe.script.at("steps").is_array(), "invalid script schema");
-		Require(!probe.script["steps"].empty() && probe.script["steps"].size() <= 256, "invalid script length");
+		Require(!probe.script["steps"].empty() && probe.script["steps"].size() <= 1024, "invalid script length");
 		const auto timeout = probe.script.at("timeout_ms").get<uint64_t>();
-		Require(timeout > 0 && timeout <= 180000, "invalid script deadline");
+		Require(timeout > 0 && timeout <= 1800000, "invalid script deadline");
 		const auto activation = probe.script.value("activation_timeout_ms", c_DefaultActivationTimeoutMs);
 		Require(activation > 0 && activation <= c_DefaultActivationTimeoutMs, "invalid activation deadline");
 		for (const auto& step: probe.script["steps"]) {

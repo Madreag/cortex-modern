@@ -4442,6 +4442,25 @@ namespace {
 }
 
 bool GameActivity::RunFight15SelfTest(const std::string& row) {
+	bool passed = true;
+	const auto check = [&](const std::string& name, bool value) {
+		System::PrintDiagnosticLine("[fight15-selftest] " + std::string(value ? "PASS " : "FAIL ") + row + " " + name);
+		passed = passed && value; return value;
+	};
+	if (row == "R7") {
+		// Close the live menu world so the measured interval ends with the ordinary shutdown.
+		NetMatchServiceRequest request; request.host = true; request.port = 47915; request.playerName = "Close fixture";
+		std::string error;
+		check("pending_local_session_starts", g_NetMatchService.Start(request, &error));
+		const uint64_t began = SDL_GetTicks();
+		SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+		const auto closeUnixMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+		System::PrintDiagnosticLine("[fight15-selftest] R7 close_started_unix_ms=" + std::to_string(closeUnixMs));
+		SDL_Event event{}; event.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED; event.window.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); SDL_PushEvent(&event);
+		::RunMenuLoop();
+		check("close_returns_without_a_peer", SDL_GetTicks() - began < 2000);
+		return passed;
+	}
 	struct Restore {
 		std::unique_ptr<Activity> activity;
 		MovableMan::WorldSetAside world;
@@ -4486,12 +4505,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		bool drawing;
 		explicit ScreenRefresh(bool enabled) : drawing(enabled) { if (drawing) g_WindowMan.GetScreenBuffer()->Begin(); }
 		~ScreenRefresh() { if (drawing) g_WindowMan.GetScreenBuffer()->End(); }
-	} refresh(row != "R7");
-	bool passed = true;
-	const auto check = [&](const std::string& name, bool value) {
-		System::PrintDiagnosticLine("[fight15-selftest] " + std::string(value ? "PASS " : "FAIL ") + row + " " + name);
-		passed = passed && value; return value;
-	};
+	} refresh(true);
 	const auto present = [&](const char* capture = nullptr) {
 		g_WindowMan.GetScreenBuffer()->End(); g_WindowMan.UploadFrame();
 		if (capture) g_FrameMan.SaveScreenToPNG(capture);
@@ -4658,17 +4672,6 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		pause.Update(); pause.Draw(false); present();
 		mouse(false, x, y, true); g_UInputMan.EndSimUpdate();
 		check("later_release_activates_back_to_game", pause.Update() == PauseMenuGUI::PauseMenuUpdateResult::ActivityResumed); pause.Draw(false); present();
-	} else if (row == "R7") {
-		NetMatchServiceRequest request; request.host = true; request.port = 47915; request.playerName = "Close fixture";
-		check("pending_local_session_starts", g_NetMatchService.Start(request, &error));
-		const uint64_t began = SDL_GetTicks();
-		SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
-		const auto closeUnixMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-		System::PrintDiagnosticLine("[fight15-selftest] R7 close_started_unix_ms=" + std::to_string(closeUnixMs));
-		SDL_Event event{}; event.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED; event.window.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); SDL_PushEvent(&event);
-		::RunMenuLoop();
-		check("close_returns_without_a_peer", SDL_GetTicks() - began < 2000);
-		System::SetQuit(false);
 	} else if (row == "R8") {
 		AllegroScreen screen(g_FrameMan.GetBackBuffer32()); GUIInputWrapper input(-1); GUIControlManager controls;
 		if (!controls.Create(&screen, &input, "Base.rte/GUIs/Skins/Menus", "MainMenuSubMenuSkin.ini")) return false;
