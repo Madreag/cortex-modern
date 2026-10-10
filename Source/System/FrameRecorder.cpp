@@ -258,10 +258,10 @@ namespace RTE {
 		// Scripted captures prepare their shared context before the first rendered frame.
 #if defined(_WIN32)
 		if (const char* script = std::getenv("CC_TEST_NET_UI_SCRIPT"); script && *script) {
-			HarnessCost::SimulationSpan setupCost;
+			const int64_t cpuBefore = ThreadCpuNanoseconds();
 			std::string readbackError;
 			m_ReadbackContext = FrameReadbackContext::Create(readbackError);
-			HarnessCost::Charge(HarnessCost::Recorder, setupCost.Stop());
+			HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - cpuBefore);
 			if (!m_ReadbackContext) { Finish(); return refuse(readbackError); }
 		}
 #endif
@@ -272,7 +272,7 @@ namespace RTE {
 #if defined(_WIN32)
 		if (m_ReadbackContext) {
 			// Scripted writers complete a transfer during setup, before any frame is rendered.
-			HarnessCost::SimulationSpan setupCost;
+			const int64_t cpuBefore = ThreadCpuNanoseconds();
 			int width = 0, height = 0;
 			SDL_GetWindowSizeInPixels(SDL_GL_GetCurrentWindow(), &width, &height);
 			GLint previousTexture = 0;
@@ -280,7 +280,9 @@ namespace RTE {
 			GLuint texture = 0;
 			glad_glGenTextures(1, &texture);
 			glad_glBindTexture(GL_TEXTURE_2D, texture);
-			glad_glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+			// Undefined texels need not take the driver's real transfer path.
+			const std::vector<unsigned char> colors(static_cast<std::size_t>(width) * height * 4, 127);
+			glad_glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, colors.data());
 			glad_glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
 			std::string setupError;
 			std::vector<std::shared_ptr<QueuedTextureReadback>> transfers;
@@ -299,6 +301,7 @@ namespace RTE {
 						if (!m_ReadbackContext->Complete(*transfer, pixels, error) && error.empty()) error = "capture writer setup failed";
 					} catch (const std::exception& failure) { error = failure.what(); }
 					HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - cpuBefore);
+					if (std::getenv("CCCP_TEST_READBACK_TIMING")) System::PrintDiagnosticLine("[capture-writer-setup] width=" + std::to_string(width) + " height=" + std::to_string(height) + " cpu_us=" + std::to_string((ThreadCpuNanoseconds() - cpuBefore) / 1000));
 					started->set_value(error);
 					if (error.empty()) WriterLoop();
 				}));
@@ -309,7 +312,7 @@ namespace RTE {
 			}
 			for (const auto& transfer: transfers) if (transfer->buffer || transfer->ready) FrameReadbackContext::Discard(*transfer);
 			glad_glDeleteTextures(1, &texture);
-			HarnessCost::Charge(HarnessCost::Recorder, setupCost.Stop());
+			HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - cpuBefore);
 			if (!setupError.empty()) { Finish(); return refuse(setupError); }
 		} else
 #endif
