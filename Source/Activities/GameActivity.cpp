@@ -4557,6 +4557,9 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		game->m_pBuyGUI[0] = new BuyMenuGUI; if (game->m_pBuyGUI[0]->Create(&game->m_PlayerController[0]) < 0) return false;
 		game->m_InventoryMenuGUI[0] = new InventoryMenuGUI; game->m_InventoryMenuGUI[0]->Create(&game->m_PlayerController[0]);
 		PieMenu* pie = brain->GetPieMenu(); Controller* controller = brain->GetController();
+		// AddActor holds the controller for its spawn tick. This case starts after that handoff.
+		controller->SetDisabled(false);
+		check("controlled_brain_is_ready_for_input", !controller->IsDisabled());
 		pie->CloseForCanonicalStart();
 		const auto observePie = [&](const char* when) {
 			System::PrintDiagnosticLine("[fight15-selftest] R3 " + std::string(when) + " slices=" + std::to_string(pie->GetPieSlices().size()) +
