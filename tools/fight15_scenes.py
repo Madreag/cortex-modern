@@ -27,27 +27,30 @@ def wait(**kwargs):
 
 def host_setup(players=2, cpu=False):
     lines = [
-        "wait_ms 1800", "activate ButtonMainToMultiplayer",
+        "wait_ms 1800", "activate ButtonMainToMultiplayer", "wait_ms 600", "assert_substate Landing",
         "settext TextMultiplayerName Captain", "activate ButtonMultiplayerHostGame",
+        "wait_ms 500", "assert_substate HostSetup",
         "combo_select ComboHostActivity Skirmish Defense", "combo_select ComboHostScene Grasslands",
         "setup_host_port {PORT}", f"combo_select ComboHostPlayers {players}",
-        "activate ButtonHostOptions", "activate TabHostPageConnection",
+        "activate ButtonHostOptions", "wait_ms 500", "assert_substate HostOptions", "activate TabHostPageConnection",
         "combo_select ComboHostNetVisibility Public (default)",
         "combo_select ComboHostNetRelay Game service (default)",
     ]
     if cpu:
         lines += ["activate TabHostPageSeats", "combo_select ComboHostSeatType2 CPU",
                   "combo_select ComboHostSeatType3 CPU"]
-    lines += ["activate ButtonHostOptApply", "activate ButtonHostOptBack",
+    lines += ["activate ButtonHostOptApply", "wait_ms 400", "activate ButtonHostOptBack", "wait_ms 500",
               "activate ButtonMultiplayerCreate", "wait_substate Lobby 90",
               "video_mark fight15-host-listening", "wait_connected 2 90", "wait_ms 1200"]
     return lines
 
 
 def join_setup():
-    return ["wait_ms 1800", "activate ButtonMainToMultiplayer",
+    return ["wait_ms 1800", "activate ButtonMainToMultiplayer", "wait_ms 600", "assert_substate Landing",
             "settext TextMultiplayerName Joiner", "activate ButtonMultiplayerJoinGame",
-            "wait_row GameRowPort{PORT} 90", "click_row GameRowPort{PORT}",
+            "wait_ms 600", "assert_substate JoinSetup",
+            "wait_row PublicGameRowPort{PORT} 90", "click_row PublicGameRowPort{PORT}",
+            "assert_label LabelJoinSelected internet",
             "assert_enabled ButtonMultiplayerConnect 1", "activate ButtonMultiplayerConnect",
             "wait_connected 2 90", "wait_substate Lobby 90", "wait_ms 1200"]
 
@@ -387,8 +390,8 @@ def moderation_scene():
         joiner += [wait(screen="MultiplayerScreen", scope="menu")]
         joiner += capture(f"{action}-joiner") + [menu(f"assert_label LabelJoinSelected The host {reason} you from this session")]
         if action == "ban":
-            joiner += [menu("activate ButtonMultiplayerJoinGame"), dict(op="wait_public_row", scope="menu", name="GameRowPort{PORT}"),
-                       menu("click_row GameRowPort{PORT}"), menu("activate ButtonMultiplayerConnect"), wait(elapsed_ms=12000, scope="menu")]
+            joiner += [menu("activate ButtonMultiplayerJoinGame"), dict(op="wait_public_row", scope="menu", name="PublicGameRowPort{PORT}"),
+                       menu("click_row PublicGameRowPort{PORT}"), menu("activate ButtonMultiplayerConnect"), wait(elapsed_ms=12000, scope="menu")]
             joiner += capture("banned-rejoin-refused") + [menu("assert_label LabelJoinSelected The host banned you from this session"), menu("assert_text_fits LabelJoinSelected")]
         joiner += [dict(op="finish")]
         emit(8, "Held kick and ban clicks and public-list refused readmission",

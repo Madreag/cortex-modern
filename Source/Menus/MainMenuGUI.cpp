@@ -5234,11 +5234,14 @@ static bool IsControlClickable(GUIControl* control) {
 
 bool MainMenuGUI::AutomationRowOf(const std::string& name, std::string& listName, int& row) const {
 	// The list shows every engine beaconing on the network, so a scripted join names its own session's row by port.
-	if (name.starts_with("GameRowPort")) {
-		const std::string number = name.substr(11);
+	const bool publicRow = name.starts_with("PublicGameRowPort");
+	if (publicRow || name.starts_with("GameRowPort")) {
+		const std::string number = name.substr(publicRow ? 17 : 11);
 		if (number.empty() || number.size() > 5 || number.find_first_not_of("0123456789") != std::string::npos) return false;
 		const unsigned long port = std::stoul(number);
-		const auto found = std::find_if(m_GameRows.begin(), m_GameRows.end(), [port](const NetDirectoryClient::GameRow& candidate) { return candidate.port == port; });
+		const auto found = std::find_if(m_GameRows.begin(), m_GameRows.end(), [port, publicRow](const NetDirectoryClient::GameRow& candidate) {
+			return candidate.port == port && (!publicRow || candidate.source == "NET");
+		});
 		if (found == m_GameRows.end()) return false;
 		listName = m_MultiplayerLanGamesList->GetName();
 		row = static_cast<int>(found - m_GameRows.begin());

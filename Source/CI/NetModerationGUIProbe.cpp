@@ -9,6 +9,7 @@
 #include "AHuman.h"
 #include "HDFirearm.h"
 #include "PieSlice.h"
+#include "RTETools.h"
 #include "ActivityMan.h"
 #include "CameraMan.h"
 #include "Controller.h"
@@ -39,9 +40,6 @@
 #include "TimerMan.h"
 #include "UInputMan.h"
 #include "WindowMan.h"
-#include "BuyMenuGUI.h"
-#include "PieMenu.h"
-#include "PieSlice.h"
 #include "MetricsCollector.h"
 
 #include <SDL3/SDL.h>
@@ -443,6 +441,11 @@ namespace {
 			if (activity->LocalInputOfPlayer(player) == step["input_player"].get<int>()) return player;
 		throw std::runtime_error("the requested local input has no seat");
 	}
+	struct EditorInputRNG {
+		RandomGenerator* previous = t_simRNGOverride;
+		explicit EditorInputRNG(bool match) { if (match) t_simRNGOverride = &g_RenderRNG; }
+		~EditorInputRNG() { t_simRNGOverride = previous; }
+	};
 
 	GUIControl* Control(const Json& step) {
 		if (step.value("scope", "") == "buy") {
@@ -741,6 +744,7 @@ namespace {
 			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 			auto* editor = game ? game->GetEditorGUI(LocalPlayer(step)) : nullptr;
 			Require(editor && observed["editing"] == true, "there is no local setup editor");
+			const EditorInputRNG editorRNG(game->IsLockstepPlacement());
 			const Entity* preset = g_PresetMan.GetEntityPreset(step.value("class", std::string("Actor")), step.value("preset", std::string("Brain Case")), step.value("module", std::string("Base.rte")));
 			Require(preset && editor->SetCurrentObject(dynamic_cast<SceneObject*>(preset->Clone())), "the editor cannot pick the requested preset");
 			editor->SetEditorGUIMode(step.value("brain", true) ? SceneEditorGUI::INSTALLINGBRAIN : SceneEditorGUI::ADDINGOBJECT);
