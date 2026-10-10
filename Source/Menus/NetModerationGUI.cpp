@@ -11,6 +11,7 @@
 #include "NetSession.h"
 #include "NetHostOptionsText.h"
 #include "NetPlayerPresentation.h"
+#include "NetLinkQualityPresentation.h"
 #include "NetChatPresentation.h"
 #include "GUISound.h"
 #include "ScenarioRunner.h"
@@ -489,6 +490,115 @@ NetModerationGUI::NetModerationGUI(AllegroScreen* screen) :
 
 NetModerationGUI::~NetModerationGUI() = default;
 
+void NetModerationGUI::CreateConnectionControls() {
+	if (m_ConnectionControls) return;
+	m_ConnectionControls = std::make_unique<GUIControlManager>();
+	RTEAssert(m_ConnectionControls->Create(m_Screen, m_Input.get(), "Base.rte/GUIs/Skins/Menus", "MainMenuSubMenuSkin.ini"), "Could not create the connection indicator");
+	m_ConnectionFont = m_ConnectionControls->GetSkin()->GetFont("FontSmall.png");
+	m_ConnectionFont->SetKerning(0);
+	for (auto state: {NetLinkQuality::State::Good, NetLinkQuality::State::Marginal, NetLinkQuality::State::Substituting, NetLinkQuality::State::Lost}) {
+		const auto words = NetLinkQualityPresentation::Describe(state);
+		m_ConnectionFont->CacheColor(makeacol32(words.red, words.green, words.blue, 255));
+		m_ConnectionColumnWidth = std::max(m_ConnectionColumnWidth, m_ConnectionFont->CalculateWidth(words.hint));
+		m_ConnectionColumnWidth = std::max(m_ConnectionColumnWidth, m_ConnectionFont->CalculateWidth("4294967295 ms / " + std::string(words.state)));
+	}
+	m_ConnectionBox = dynamic_cast<GUICollectionBox*>(m_ConnectionControls->AddControl("BoxOwnConnection", "COLLECTIONBOX", nullptr, 0, 0, 20, 20));
+	m_OwnConnection = dynamic_cast<GUILabel*>(m_ConnectionControls->AddControl("LabelOwnConnection", "LABEL", m_ConnectionBox, 6, 5, 20, 20));
+	m_OwnConnection->SetFont(m_ConnectionFont);
+	m_OwnConnection->SetHAlignment(GUIFont::Left);
+	m_OwnConnection->SetVAlignment(GUIFont::Top);
+	m_ConnectionBox->SetVisible(false);
+	m_ConnectionTitle = dynamic_cast<GUILabel*>(m_ConnectionControls->AddControl("NetworkSeatConnectionTitle", "LABEL", nullptr, 0, 0, m_ConnectionColumnWidth, 14));
+	m_ConnectionTitle->SetFont(m_ConnectionFont);
+	m_ConnectionTitle->SetHAlignment(GUIFont::Left);
+	m_ConnectionTitle->SetVAlignment(GUIFont::Top);
+	m_ConnectionTitle->SetText("CONNECTION");
+	m_ConnectionTitle->SetVisible(false);
+}
+
+void NetModerationGUI::ClearConnectionControls() {
+	m_ConnectionControls.reset();
+	m_ConnectionFont = nullptr;
+	m_ConnectionBox = nullptr;
+	m_OwnConnection = nullptr;
+	m_ConnectionTitle = nullptr;
+	m_SeatConnections.clear();
+	m_SeatConnectionTops.clear();
+	m_ConnectionRect = {};
+	m_ConnectionColumnWidth = 0;
+	m_ConnectionInMatch = false;
+}
+
+int NetModerationGUI::ConnectionRowHeight() const {
+	return m_ConnectionInMatch ? 2 * m_ConnectionFont->GetFontHeight() + 2 : 0;
+}
+
+void NetModerationGUI::DrawOwnConnection(const NetLobbySnapshot& snapshot) {
+	if (!g_SettingsMan.GetNetworkConnectionIndicator()) return;
+	const uint8_t localPeer = ScenarioRunner::GetLockstepLocalPeerId();
+	const auto quality = NetLinkQualityForSeat(localPeer ? localPeer : snapshot.localPeerId);
+	const auto words = NetLinkQualityPresentation::Describe(quality.state);
+	const std::string text = NetLinkQualityPresentation::HudText(quality);
+	const int width = m_ConnectionFont->CalculateWidth(text) + 12;
+	const int height = ConnectionRowHeight() + 10;
+	EditorArea area = FreeArea(g_WindowMan.GetResX());
+	for (const auto& band: area.textBands) area.occupiers.push_back(band);
+	if (m_StatusRect.visible) area.occupiers.push_back({m_StatusRect.x, m_StatusRect.y, m_StatusRect.width, m_StatusRect.height});
+	area.occupiers.push_back({0, 0, 152, 64});
+	area.occupiers.push_back({g_WindowMan.GetResX() - 40, 0, 40, 64});
+	int left = 0, right = 0, top = 24;
+	for (; top + height <= g_WindowMan.GetResY() / 2; top += 4) {
+		if (area.FreeSpan(top, top + height, g_WindowMan.GetResX(), left, right) && right - left >= width + 12) break;
+	}
+	if (top + height > g_WindowMan.GetResY() / 2) return;
+	const int x = right - width - 6;
+	m_ConnectionBox->Move(x, top);
+	m_ConnectionBox->Resize(width, height);
+	m_ConnectionBox->SetVisible(true);
+	m_OwnConnection->Resize(width - 12, height - 10);
+	m_OwnConnection->SetText(text);
+	m_OwnConnection->SetVisible(true);
+	m_ConnectionRect = {x, top, width, height, true};
+	BITMAP* buffer = g_FrameMan.GetBackBuffer32();
+	const int color = makeacol32(words.red, words.green, words.blue, 255);
+	rectfill(buffer, x, top, x + width - 1, top + height - 1, makeacol32(20, 22, 27, 255));
+	rect(buffer, x, top, x + width - 1, top + height - 1, makeacol32(59, 65, 83, 255));
+	line(buffer, x, top + 1, x, top + height - 2, color);
+	RecordPanelDraw(m_ConnectionBox->GetPanel());
+	m_ConnectionFont->SetColor(color);
+	AllegroBitmap bitmap(buffer);
+	m_OwnConnection->Draw(&bitmap, false);
+}
+
+void NetModerationGUI::DrawSeatConnections() {
+	if (!m_ConnectionInMatch || !m_Open || m_OptionsView) return;
+	const auto views = g_NetMatchService.GetSeatViews();
+	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
+	const int x = m_Panel->GetXPos() + m_Panel->GetWidth() - 10 - m_ConnectionColumnWidth;
+	m_ConnectionTitle->Move(x, m_Panel->GetYPos() + 8);
+	m_ConnectionTitle->SetVisible(true);
+	m_ConnectionFont->SetColor(makeacol32(175, 180, 190, 255));
+	m_ConnectionTitle->Draw(&bitmap, false);
+	for (const auto& [peer, top]: m_SeatConnectionTops) {
+		const int bottom = g_NetMatchService.IsHost() ? m_Status->GetRelYPos() : m_Close->GetRelYPos() - 4;
+		if (!views.contains(peer) || top + ConnectionRowHeight() > bottom) continue;
+		auto& label = m_SeatConnections[peer];
+		if (!label) {
+			label = dynamic_cast<GUILabel*>(m_ConnectionControls->AddControl("NetworkSeatLink" + std::to_string(peer), "LABEL", nullptr, 0, 0, m_ConnectionColumnWidth, ConnectionRowHeight()));
+			label->SetFont(m_ConnectionFont);
+			label->SetHAlignment(GUIFont::Left);
+			label->SetVAlignment(GUIFont::Top);
+		}
+		const auto quality = NetLinkQualityForSeat(views.at(peer).peerId);
+		const auto words = NetLinkQualityPresentation::Describe(quality.state);
+		label->Move(x, m_Panel->GetYPos() + top);
+		label->SetText(NetLinkQualityPresentation::SeatText(quality) + '\n' + words.hint);
+		label->SetVisible(true);
+		m_ConnectionFont->SetColor(makeacol32(words.red, words.green, words.blue, 255));
+		label->Draw(&bitmap, false);
+	}
+}
+
 void NetModerationGUI::CreateOverlay() {
 	if (m_OverlayControls) return;
 	m_OverlayControls = std::make_unique<GUIControlManager>();
@@ -672,7 +782,7 @@ void NetModerationGUI::LayoutPanel() {
 	const int screenHeight = g_WindowMan.GetResY();
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
 	const int rowHeight = std::max(12, font ? font->GetFontHeight() : 12) + 8;
-	int wantedWidth = 430;
+	int wantedWidth = m_ConnectionInMatch && !m_OptionsView ? c_PanelWidth : 430;
 	if (m_OptionsView || m_Rows.size() > m_Seats.size() || std::any_of(m_Rows.begin(), m_Rows.end(), [](const PanelRow& row) { return row.decision.has_value(); })) wantedWidth = c_PanelWidth;
 	for (const auto& row: m_Rows) wantedWidth = std::max(wantedWidth, std::min(c_PanelWidth, m_LabelFont->CalculateWidth(row.name + "  /  " + row.state) + 28));
 	const int width = std::min(wantedWidth, g_WindowMan.GetResX() - 12);
@@ -685,6 +795,7 @@ void NetModerationGUI::LayoutPanel() {
 	const int toastRows = static_cast<int>(std::min<size_t>(3, ScenarioRunner::GetVisibleNetUiToasts().size()));
 	const int statusBottom = m_StatusRect.visible ? m_StatusRect.y + m_StatusRect.height : c_StripBandBottom;
 	int reservedTop = statusBottom + c_PanelGap + (toastRows ? toastRows * rowHeight + c_PanelGap : 0);
+	if (m_ConnectionRect.visible) reservedTop = std::max(reservedTop, m_ConnectionRect.y + m_ConnectionRect.height + c_PanelGap);
 	if (m_ChatEntryOpen && g_SettingsMan.GetNetworkChatVisible()) {
 		const int lineHeight = ChatLineHeight(g_SettingsMan.GetNetworkChatTextSize() == SettingsMan::NetworkChatTextSize::Large);
 		reservedTop = std::max(reservedTop, ChatTopLimit(area, screenHeight) + ChatEntryMinimum(lineHeight) + c_PanelGap);
@@ -697,6 +808,11 @@ void NetModerationGUI::LayoutPanel() {
 		for (size_t row = m_PageStart; row < m_Rows.size() && row < m_PageStart + m_Seats.size(); ++row) wantedHeight += RowHeight(m_Rows[row], width - 20);
 	} else {
 		wantedHeight = 76 + m_Roster->GetTextHeight();
+		if (m_ConnectionInMatch && !m_SeatConnectionTops.empty()) {
+			int lastTop = 40;
+			for (const auto& [peer, top]: m_SeatConnectionTops) lastTop = std::max(lastTop, top);
+			wantedHeight = std::max(wantedHeight, 76 + lastTop - 40 + ConnectionRowHeight());
+		}
 	}
 	const PanelPlacement placed = PlaceSeatsPanelOnScreen(screenHeight, rowHeight, textBands, reservedTop, std::clamp(wantedHeight, 144, c_PanelHeight));
 	const int top = placed.top;
@@ -710,6 +826,10 @@ void NetModerationGUI::LayoutPanel() {
 	}
 	for (GUILabel* label: {m_Title, m_Summary, m_Roster, m_Options, m_Status}) {
 		if (label->GetWidth() != width - 20) label->Resize(width - 20, label->GetHeight());
+	}
+	if (m_ConnectionInMatch && !m_OptionsView) {
+		m_Roster->Resize(width - 28 - m_ConnectionColumnWidth, m_Roster->GetHeight());
+		m_Title->Resize(width - 28 - m_ConnectionColumnWidth, m_Title->GetHeight());
 	}
 	// The roster yields the reserved rows and scrolls for what no longer fits; the status row gives up
 	// its second line first, then moves up with the close row instead of clipping at the panel's bottom.
@@ -808,7 +928,7 @@ namespace {
 }
 
 int NetModerationGUI::RowHeight(const PanelRow& row, int inner) const {
-	const int lineHeight = std::max(14, m_LabelFont->GetFontHeight() + 2);
+	const int lineHeight = std::max({14, m_LabelFont->GetFontHeight() + 2, ConnectionRowHeight()});
 	if (!row.decision) return 22 + lineHeight + 6;
 	const size_t requests = row.decision->view.applicants.size();
 	const int listWidth = std::min(220, inner / 3);
@@ -854,6 +974,27 @@ std::vector<NetModerationGUI::PanelRow> NetModerationGUI::BuildRows(const NetLob
 		}
 		(row.decision ? held : playing).push_back(std::move(row));
 	}
+	if (m_ConnectionInMatch) {
+		for (const auto& [peer, view]: g_NetMatchService.GetSeatViews()) {
+			if (peer == snapshot.localPeerId || std::any_of(snapshot.members.begin(), snapshot.members.end(), [peer](const auto& member) { return !member.cpu && member.peerId == peer; })) continue;
+			PanelRow row;
+			row.peer = view.peerId;
+			row.name = DisplayName(view.name);
+			row.state = view.state;
+			for (size_t index = 0; index < m_Model.RowCount(); ++index) {
+				if (m_Model.GetRow(index).lockstepPeerId == peer) row.decision = m_Model.GetRow(index);
+			}
+			for (const auto& seat: seats) {
+				if (!seat.cpu && seat.lockstepPeerId == peer) { row.seat = seat; row.team = seat.team; }
+			}
+			if (!row.decision && view.seat.holdCause != NetSeatHoldCause::None) {
+				NetH4ModerationSeat cause;
+				cause.holdCause = view.seat.holdCause;
+				row.state += "  /  " + NetModerationUx::HoldCause(cause);
+			}
+			(row.decision ? held : playing).push_back(std::move(row));
+		}
+	}
 	held.insert(held.end(), playing.begin(), playing.end());
 	// The count the roster calls for, read apart from the rows above so a check can hold one against the other: every other
 	// player, and an opened place while somebody asks for it.
@@ -866,12 +1007,17 @@ std::vector<NetModerationGUI::PanelRow> NetModerationGUI::BuildRows(const NetLob
 		});
 		if (!open || asked) ++m_RowsImplied;
 	}
+	if (m_ConnectionInMatch) {
+		for (const auto& [peer, view]: g_NetMatchService.GetSeatViews()) {
+			if (peer != snapshot.localPeerId && std::none_of(snapshot.members.begin(), snapshot.members.end(), [peer](const auto& member) { return !member.cpu && member.peerId == peer; })) ++m_RowsImplied;
+		}
+	}
 	return held;
 }
 
 int NetModerationGUI::FillRow(Controls& controls, const PanelRow& row, size_t slot, int top) {
 	const int inner = m_Panel->GetWidth() - 20;
-	const int lineHeight = std::max(14, m_LabelFont->GetFontHeight() + 2);
+	const int lineHeight = std::max({14, m_LabelFont->GetFontHeight() + 2, ConnectionRowHeight()});
 	const bool running = g_NetMatchService.GetState() == NetMatchServiceState::Running;
 	const bool armed = m_Armed && m_Armed->slot == slot && m_Armed->peer == row.peer && row.seat && m_Armed->stableSeat == row.seat->stableSeat &&
 	                   m_Armed->incarnation == row.seat->incarnation;
@@ -901,9 +1047,11 @@ int NetModerationGUI::FillRow(Controls& controls, const PanelRow& row, size_t sl
 		         (view.joinProgress.empty() ? "" : "  /  " + view.joinProgress);
 	}
 	if (!removable && running && !row.opened && !row.cpu) detail += "  /  changes are paused for a moment";
-	controls.detail->Resize(inner, lineHeight);
+	const int detailWidth = m_ConnectionInMatch && !row.cpu ? inner - m_ConnectionColumnWidth - 8 : inner;
+	controls.detail->Resize(detailWidth, lineHeight);
 	Place(controls.detail, 10, top + 22);
-	controls.detail->SetText(FitLine(m_LabelFont, detail, inner));
+	controls.detail->SetText(FitLine(m_LabelFont, detail, detailWidth));
+	if (m_ConnectionInMatch && !row.cpu) m_SeatConnectionTops[row.peer] = top + 22;
 	Show(controls.detail, true);
 	if (!row.decision) {
 		Show(controls.declineApplicant, false);
@@ -991,6 +1139,7 @@ int NetModerationGUI::FillRow(Controls& controls, const PanelRow& row, size_t sl
 }
 
 void NetModerationGUI::Refresh() {
+	m_SeatConnectionTops.clear();
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 	if (snapshot.isHost && !m_OptionsView) m_Rows = BuildRows(snapshot);
 	LayoutPanel();
@@ -1024,7 +1173,7 @@ void NetModerationGUI::Refresh() {
 		Show(m_More, false);
 		return;
 	}
-	const int lineHeight = std::max(14, m_LabelFont->GetFontHeight() + 2);
+	const int lineHeight = std::max({14, m_LabelFont->GetFontHeight() + 2, ConnectionRowHeight()});
 	if (!snapshot.isHost) {
 		m_Rows.clear();
 		m_RowsShown = 0;
@@ -1033,13 +1182,28 @@ void NetModerationGUI::Refresh() {
 		Show(m_More, false);
 		m_Summary->SetText("Only the host can keep, give away or remove a player's place");
 		std::string roster;
+		int rosterTop = 40;
 		for (const auto& member: snapshot.members) {
 			std::string line = DisplayName(ShownRow(member));
 			if (!member.cpu && (member.isLocal || member.peerId == snapshot.localPeerId)) line.insert(DisplayName(ShownName(member)).size(), " (you)");
-			roster += (roster.empty() ? "" : "\n\n") + line;
+			if (m_ConnectionInMatch) {
+				if (!member.cpu) m_SeatConnectionTops[member.peerId] = rosterTop;
+				roster += (roster.empty() ? "" : "\n\n") + FitLine(m_LabelFont, line, m_Roster->GetWidth());
+				rosterTop += 2 * m_LabelFont->GetFontHeight();
+			} else {
+				roster += (roster.empty() ? "" : "\n\n") + line;
+			}
 		}
 		Place(m_Roster, 10, 40);
-		m_Roster->SetText(WrapText(m_LabelFont, FitTokens(m_LabelFont, roster, m_Roster->GetWidth()), m_Roster->GetWidth()));
+		if (m_ConnectionInMatch) {
+			for (const auto& [peer, view]: g_NetMatchService.GetSeatViews()) {
+				if (m_SeatConnectionTops.contains(peer)) continue;
+				m_SeatConnectionTops[peer] = rosterTop;
+				roster += (roster.empty() ? "" : "\n\n") + FitLine(m_LabelFont, DisplayName(view.line), m_Roster->GetWidth());
+				rosterTop += 2 * m_LabelFont->GetFontHeight();
+			}
+		}
+		m_Roster->SetText(m_ConnectionInMatch ? roster : WrapText(m_LabelFont, FitTokens(m_LabelFont, roster, m_Roster->GetWidth()), m_Roster->GetWidth()));
 		m_Roster->SetVisible(true);
 		m_Status->SetVisible(false);
 		LayoutPanel();
@@ -1094,11 +1258,12 @@ void NetModerationGUI::Refresh() {
 	m_PageFirstCpu = !m_Rows.empty() && m_Rows[m_PageStart].cpu;
 	const size_t shown = (page + 1 < pageStarts.size() ? pageStarts[page + 1] : m_Rows.size()) - m_PageStart;
 	std::string own;
-	std::vector<std::string> lines;
+	std::vector<std::pair<uint8_t, std::string>> lines;
 	for (const auto& member: snapshot.members) {
 		const bool self = !member.cpu && (member.isLocal || member.peerId == snapshot.localPeerId);
 		const bool listed = std::any_of(m_Rows.begin(), m_Rows.end(), [&](const PanelRow& row) { return row.peer == member.peerId; });
 		if (self) {
+			if (m_ConnectionInMatch) m_SeatConnectionTops[member.peerId] = 40;
 			own = DisplayName(ShownName(member)) + " (you)  /  Team " + std::to_string(member.team + 1) + "  /  " + NetPlayerPresentation::State(member);
 			if (const auto view = g_NetMatchService.GetSeatView(member.peerId); view && view->seat.holdCause != NetSeatHoldCause::None) {
 				NetH4ModerationSeat held;
@@ -1106,19 +1271,30 @@ void NetModerationGUI::Refresh() {
 				own += "  /  " + NetModerationUx::HoldCause(held);
 			}
 		} else if (!listed) {
-			lines.push_back(DisplayName(ShownRow(member)));
+			lines.emplace_back(member.cpu ? 0 : member.peerId, DisplayName(ShownRow(member)));
 		}
 	}
 	for (size_t index = 0; index < m_Rows.size(); ++index) {
-		if (index < m_PageStart || index >= m_PageStart + shown) lines.push_back(m_Rows[index].name + "  /  " + m_Rows[index].state);
+		if (index < m_PageStart || index >= m_PageStart + shown) lines.emplace_back(m_Rows[index].cpu ? 0 : m_Rows[index].peer, m_Rows[index].name + "  /  " + m_Rows[index].state);
+	}
+	if (m_ConnectionInMatch && own.empty()) {
+		if (const auto view = g_NetMatchService.GetSeatView(snapshot.localPeerId)) {
+			own = DisplayName(view->line);
+			m_SeatConnectionTops[view->peerId] = 40;
+		}
 	}
 	int rowsHeight = 0;
 	for (size_t slot = 0; slot < shown; ++slot) rowsHeight += RowHeight(SlotRow(slot), inner);
+	const int rosterPitch = m_ConnectionInMatch ? 2 * m_LabelFont->GetFontHeight() : lineHeight;
 	const int rosterLines = 1 + static_cast<int>(lines.size());
 	std::string roster = FitLine(m_LabelFont, own, m_Roster->GetWidth());
-	for (const std::string& line: lines) roster += "\n" + FitLine(m_LabelFont, line, m_Roster->GetWidth());
+	for (size_t index = 0; index < lines.size(); ++index) {
+		const auto& [peer, line] = lines[index];
+		roster += (m_ConnectionInMatch ? "\n\n" : "\n") + FitLine(m_LabelFont, line, m_Roster->GetWidth());
+		if (m_ConnectionInMatch && peer) m_SeatConnectionTops[peer] = 40 + static_cast<int>(index + 1) * rosterPitch;
+	}
 	// The roster takes what the page leaves, its first line at least, and scrolls for the rest.
-	const int rosterHeight = std::max(lineHeight, std::min(rosterLines * lineHeight, statusTop - 2 - 40 - 4 - rowsHeight));
+	const int rosterHeight = std::max(lineHeight, std::min((rosterLines - 1) * rosterPitch + lineHeight, statusTop - 2 - 40 - 4 - rowsHeight));
 	Place(m_Roster, 10, 40);
 	if (m_Roster->GetHeight() != rosterHeight) m_Roster->Resize(m_Roster->GetWidth(), rosterHeight);
 	const bool scrolls = rosterLines * lineHeight > rosterHeight;
@@ -2107,6 +2283,7 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	if (m_ToastRect.visible) {
 		area.occupiers.push_back({m_ToastRect.x, m_ToastRect.y, m_ToastRect.width, m_ToastRect.height});
 	}
+	if (m_ConnectionRect.visible) area.occupiers.push_back({m_ConnectionRect.x, m_ConnectionRect.y, m_ConnectionRect.width, m_ConnectionRect.height});
 	int bottom = backbuffer->h - 6;
 	auto lower = [&](int y) {
 		if (y > 0) bottom = std::min(bottom, y);
@@ -2128,7 +2305,7 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 		if (band.y + band.h > backbuffer->h / 2) lower(band.y - 4);
 		area.occupiers.push_back(band);
 	}
-	const int topLimit = ChatTopLimit(area, backbuffer->h);
+	const int topLimit = std::max(ChatTopLimit(area, backbuffer->h), m_ConnectionRect.visible ? m_ConnectionRect.y + m_ConnectionRect.height + 4 : 0);
 
 	const int available = std::max(0, bottom - topLimit);
 	bool reducedTextSize = false;
@@ -2303,6 +2480,7 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {
 	int bottom = editor.editing && m_StatusRect.visible ? m_StatusRect.y - 4 : backbuffer->h - 8;
 	// The stack never crosses a seat's own message band, which owns the rows it draws in.
 	int topLimit = 2;
+	if (m_ConnectionRect.visible) topLimit = m_ConnectionRect.y + m_ConnectionRect.height + 4;
 	for (const auto& band: editor.textBands) {
 		if (band.y + band.h <= backbuffer->h / 2) topLimit = std::max(topLimit, band.y + band.h + 4);
 		else bottom = std::min(bottom, band.y - 4);
@@ -2332,6 +2510,7 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {
 	if (m_ChatRect.visible) {
 		toastArea.occupiers.push_back({m_ChatRect.x, m_ChatRect.y, m_ChatRect.width, m_ChatRect.height});
 	}
+	if (m_ConnectionRect.visible) toastArea.occupiers.push_back({m_ConnectionRect.x, m_ConnectionRect.y, m_ConnectionRect.width, m_ConnectionRect.height});
 	int freeLeft = 0, freeRight = backbuffer->w;
 	toastArea.FreeSpan(top, bottom, backbuffer->w, freeLeft, freeRight);
 	const int countNeed = font->CalculateWidth(std::string("0 of 0")) + 14;
@@ -2398,7 +2577,7 @@ NetModerationGUI::GhostBandHit NetModerationGUI::ScanGhostBand(const int minRunP
 	if (m_ToastRect.visible) {
 		hit.probePixel = getpixel(backbuffer, m_ToastRect.x + 2, m_ToastRect.y + 2);
 	}
-	const OverlayRect* rects[] = {&m_ToastRect, &m_SeatsPanelRect, &m_StatusRect, &m_ChatRect, &m_RosterRect};
+	const OverlayRect* rects[] = {&m_ToastRect, &m_SeatsPanelRect, &m_StatusRect, &m_ChatRect, &m_RosterRect, &m_ConnectionRect};
 	for (int y = 0; y < backbuffer->h && !hit.found; ++y) {
 		int run = 0;
 		for (int x = 0; x < backbuffer->w; ++x) {
@@ -2479,12 +2658,23 @@ void NetModerationGUI::Draw() {
 	m_RosterRect = {};
 	m_RosterWrap = {};
 	m_StatusWrap = {};
+	const auto state = g_NetMatchService.GetState();
+	if (state == NetMatchServiceState::Failed || state == NetMatchServiceState::Idle) {
+		if (m_ConnectionControls) ClearConnectionControls();
+		return;
+	}
+	m_ConnectionRect = {};
+	m_ConnectionInMatch = false;
+	if (m_ConnectionControls) {
+		m_ConnectionBox->SetVisible(false);
+		m_OwnConnection->SetVisible(false);
+		m_ConnectionTitle->SetVisible(false);
+		for (const auto& [peer, label]: m_SeatConnections) label->SetVisible(false);
+	}
 	if (m_NetStatusBox) {
 		m_NetStatusBox->SetVisible(false);
 		m_NetStatus->SetVisible(false);
 	}
-	const auto state = g_NetMatchService.GetState();
-	if (state == NetMatchServiceState::Failed || state == NetMatchServiceState::Idle) return;
 	// A completed round's peer is still in its match until the activity is over, and it still needs its
 	// surfaces to read the result and leave. The menu-loop arm is the lobby's own version of that:
 	// the rematch lobby keeps the surfaces while the pump is owed.
@@ -2497,6 +2687,10 @@ void NetModerationGUI::Draw() {
 	const bool inMatch = MatchSurfacesDrawn(ScenarioRunner::IsLockstepControllerSyncActive(), g_NetMatchService.IsMatchResyncing(),
 	    snapshot.statusText.starts_with("Host lost"), ScenarioRunner::HasLockstepCoordinator(), matchEnded, ActivityInMatch(),
 	    PostMatchLobbyAlive(), LobbyMenuUp());
+	m_ConnectionInMatch = inMatch && !menuLobby && ActivityInMatch() &&
+	    (ScenarioRunner::HasLockstepCoordinator() || g_NetMatchService.IsMatchResyncing() || snapshot.hostLost);
+	if (m_ConnectionInMatch) CreateConnectionControls();
+	else if (m_ConnectionControls) ClearConnectionControls();
 	if (inMatch) {
 		CreateOverlay();
 	} else {
@@ -2509,6 +2703,7 @@ void NetModerationGUI::Draw() {
 		DrawMatchStatus(snapshot);
 		m_NetStatus->SetVisible(true);
 	}
+	if (m_ConnectionInMatch) DrawOwnConnection(snapshot);
 	s_OverlayPhases.Lap(2);
 	if (m_Open) {
 		uint64_t hash = std::hash<std::string>{}(snapshot.serviceState);
@@ -2535,6 +2730,7 @@ void NetModerationGUI::Draw() {
 			Refresh();
 		}
 		m_Controls->Draw();
+		DrawSeatConnections();
 	}
 	s_OverlayPhases.Lap(3);
 	if (inMatch) {
@@ -2712,6 +2908,9 @@ GUIControl* NetModerationGUI::GetControl(const std::string& name) const {
 	}
 	if (m_OverlayControls) {
 		if (GUIControl* overlay = m_OverlayControls->GetControl(name)) return overlay;
+	}
+	if (m_ConnectionControls) {
+		if (GUIControl* connection = m_ConnectionControls->GetControl(name)) return connection;
 	}
 	return m_Controls->GetControl(name);
 }

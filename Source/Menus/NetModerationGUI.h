@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -63,6 +64,7 @@ namespace RTE {
 		const OverlayRect& GetChatRect() const { return m_ChatRect; }
 		const OverlayRect& GetRosterRect() const { return m_RosterRect; }
 		const OverlayRect& GetSeatsPanelRect() const { return m_SeatsPanelRect; }
+		const OverlayRect& GetConnectionRect() const { return m_ConnectionRect; }
 		/// What a wrapped surface was asked to show on the last frame it drew, so a readback can check
 		/// the wrap held at word boundaries and the panel took its longest word.
 		struct WrapAudit {
@@ -223,6 +225,11 @@ namespace RTE {
 		void DrawRoster(const NetLobbySnapshot& snapshot);
 		/// Creates presentation controls only when an online match draws them.
 		void CreateOverlay();
+		void CreateConnectionControls();
+		void ClearConnectionControls();
+		void DrawOwnConnection(const NetLobbySnapshot& snapshot);
+		void DrawSeatConnections();
+		int ConnectionRowHeight() const;
 		/// Whether the status widget should be up, per NetworkMatchStatusMode: Off never, Always always, Auto on events and three seconds past recovery.
 		bool MatchStatusWanted() const;
 		/// Draws the status widget: the box on tall screens, a single-line strip in the top HUD gap on short ones.
@@ -240,6 +247,16 @@ namespace RTE {
 		std::unique_ptr<GUIInputWrapper> m_Input;
 		std::unique_ptr<GUIControlManager> m_Controls;
 		std::unique_ptr<GUIControlManager> m_OverlayControls;
+		std::unique_ptr<GUIControlManager> m_ConnectionControls;
+		GUIFont* m_ConnectionFont = nullptr;
+		GUICollectionBox* m_ConnectionBox = nullptr;
+		GUILabel* m_OwnConnection = nullptr;
+		GUILabel* m_ConnectionTitle = nullptr;
+		std::map<uint8_t, GUILabel*> m_SeatConnections;
+		std::map<uint8_t, int> m_SeatConnectionTops;
+		OverlayRect m_ConnectionRect;
+		int m_ConnectionColumnWidth = 0;
+		bool m_ConnectionInMatch = false;
 		GUICollectionBox* m_NetStatusBox = nullptr;
 		GUILabel* m_NetStatus = nullptr;
 		std::array<GUILabel*, 3> m_Toasts{};
