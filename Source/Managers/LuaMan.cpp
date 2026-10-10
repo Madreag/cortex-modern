@@ -10655,7 +10655,7 @@ end
 				plain.Initialize(); plain.LoadScriptGraphHelper();
 				lua_State* state = plain.GetLuaState();
 				if (presets.empty()) { exact = false; continue; }
-				if (std::strcmp(type, "GAScripted") == 0) luabind::object(state, static_cast<GAScripted*>(presets.front())).push(state);
+				if (std::strcmp(type, "GAScripted") == 0) luabind::object(state, static_cast<GameActivity*>(presets.front())).push(state);
 				else luabind::object(state, static_cast<GlobalScript*>(presets.front())).push(state);
 				lua_setglobal(state, "_BoundaryNamedPreset");
 				exact = plain.RunScriptString("assert(_ScriptGraphNative(_BoundaryNamedPreset, false) == 'preset'); assert(_ScriptGraphNative(_BoundaryNamedPreset, true) == 'named')") == 0 && exact;
