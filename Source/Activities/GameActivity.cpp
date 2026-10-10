@@ -70,7 +70,7 @@
 #include "GUILabel.h"
 #include "GUIButton.h"
 #include "SettingsMan.h"
-#include "RenderTexture.h"
+#include "RenderTarget.h"
 #include <chrono>
 
 #include <algorithm>
