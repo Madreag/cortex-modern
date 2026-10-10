@@ -208,6 +208,7 @@ namespace RTE {
 		static std::shared_ptr<std::pmr::memory_resource> LeaseCaptureStorage();
 		/// Keeps only the backing block of a prepared byte allocation until its last reader ends.
 		static std::shared_ptr<void> AllocateCaptureBytes(size_t bytes);
+		static std::shared_ptr<void> AllocateCaptureBytes(size_t bytes, size_t alignment);
 		explicit CheckpointBuffer(bool reserve = true);
 		CheckpointBuffer(const CheckpointBuffer&) = delete;
 		CheckpointBuffer& operator=(const CheckpointBuffer&) = delete;

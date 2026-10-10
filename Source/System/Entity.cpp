@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <format>
 #include <mutex>
@@ -242,7 +243,6 @@ namespace RTE {
 	}
 
 	Entity::Entity(const Entity& source, CheckpointNativeSnapshot& snapshot) :
-		m_PresetName(source.m_PresetName), m_CopiedFromPresetName(source.m_CopiedFromPresetName),
 		m_IsOriginalPreset(source.m_IsOriginalPreset), m_DefinedInModule(source.m_DefinedInModule),
 		m_RandomWeight(source.m_RandomWeight),
 		m_CheckpointWriteGeneration(source.m_CheckpointWriteGeneration), m_FrozenCheckpointNative(true), m_CheckpointSnapshot(&snapshot) {
@@ -280,8 +280,6 @@ namespace RTE {
 		target.m_FrozenCheckpointNative = true;
 		target.m_CheckpointSnapshot = this;
 		target.m_CheckpointOwnerSlot = Bind(source, &target);
-		target.m_PresetName = source.m_PresetName;
-		target.m_CopiedFromPresetName = source.m_CopiedFromPresetName;
 		target.m_IsOriginalPreset = source.m_IsOriginalPreset;
 		target.m_DefinedInModule = source.m_DefinedInModule;
 		FreezeMetadata(target, source);
@@ -292,9 +290,9 @@ namespace RTE {
 	void CheckpointNativeSnapshot::FreezeMetadata(Entity& target, const Entity& source) {
 		CheckpointCloneCost cost("entity metadata");
 		static const Metadata empty;
-		if (source.m_PresetDescription.empty() && source.m_FormattedReaderPosition.empty() && source.m_Groups.empty()) { target.m_CheckpointMetadata = &empty; return; }
+		if (source.m_PresetName.empty() && source.m_CopiedFromPresetName.empty() && source.m_PresetDescription.empty() && source.m_FormattedReaderPosition.empty() && source.m_Groups.empty()) { target.m_CheckpointMetadata = &empty; return; }
 		const auto equal = [&source](const Metadata& value) {
-			return value.description == source.m_PresetDescription && value.reader == source.m_FormattedReaderPosition && value.groups == source.m_Groups;
+			return value.name == source.m_PresetName && value.copied == source.m_CopiedFromPresetName && value.description == source.m_PresetDescription && value.reader == source.m_FormattedReaderPosition && value.groups == source.m_Groups;
 		};
 		struct Cache { uint64_t snapshot = 0; std::array<const Metadata*, 128> values{}; };
 		thread_local Cache cache;
@@ -303,26 +301,45 @@ namespace RTE {
 		if (const Metadata* recent = cache.values[local]; recent && equal(*recent)) { target.m_CheckpointMetadata = recent; return; }
 		size_t groups = 0;
 		for (const std::string& group: source.m_Groups) groups += std::hash<std::string>{}(group);
-		const size_t hash = std::hash<std::string>{}(source.m_PresetDescription) ^ (std::hash<std::string>{}(source.m_FormattedReaderPosition) * 31) ^ groups;
+		const size_t hash = std::hash<std::string>{}(source.m_PresetDescription) ^ (std::hash<std::string>{}(source.m_FormattedReaderPosition) * 31) ^ groups ^ std::hash<std::string>{}(source.m_PresetName) ^ (std::hash<std::string>{}(source.m_CopiedFromPresetName) * 17);
 		auto& shard = m_Metadata[hash % m_Metadata.size()];
 		std::lock_guard lock(shard.mutex);
 		const auto [first, last] = shard.values.equal_range(hash);
 		for (auto at = first; at != last; ++at) if (equal(*at->second)) { cache.values[local] = at->second.get(); target.m_CheckpointMetadata = cache.values[local]; return; }
-		auto value = std::make_unique<Metadata>(Metadata{source.m_PresetDescription, source.m_FormattedReaderPosition, source.m_Groups});
+		auto value = std::make_unique<Metadata>(Metadata{source.m_PresetName, source.m_CopiedFromPresetName, source.m_PresetDescription, source.m_FormattedReaderPosition, source.m_Groups});
 		const Metadata* kept = value.get();
 		shard.values.emplace(hash, std::move(value));
 		cache.values[local] = kept; target.m_CheckpointMetadata = kept;
 	}
 	void CheckpointNativeSnapshot::MaterializeMetadata() const {
+		if (!m_BoundarySealed.load(std::memory_order_acquire)) throw std::logic_error("native checkpoint values read before the boundary was sealed");
 		std::call_once(m_MetadataReady, [this] {
+			for (const auto& shard: m_OwnerShards) for (const auto& [value, apply]: shard.deferred) {
+				CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+				apply(value);
+			}
 			m_Objects.ForEach([](const Entity*, Entity* target) {
 				if (const auto* value = static_cast<const Metadata*>(target->m_CheckpointMetadata)) {
+					target->m_PresetName = value->name;
+					target->m_CopiedFromPresetName = value->copied;
 					target->m_PresetDescription = value->description;
 					target->m_FormattedReaderPosition = value->reader;
 					target->m_Groups = value->groups;
 				}
 			});
 		});
+	}
+	std::string_view CheckpointNativeSnapshot::OwnBytes(std::string_view source) {
+		void* memory = AllocateFrozen(source.size(), alignof(char));
+		if (!memory) {
+			auto storage = CheckpointBuffer::AllocateCaptureBytes(source.size());
+			memory = storage.get();
+			OwnerShard& shard = Owners();
+			std::lock_guard lock(shard.mutex);
+			shard.storage.push_back(std::move(storage));
+		}
+		std::memcpy(memory, source.data(), source.size());
+		return {static_cast<const char*>(memory), source.size()};
 	}
 	thread_local unsigned int Entity::s_CheckpointCloneDepth = 0;
 	thread_local void* Entity::s_DeletedCheckpointMemory = nullptr;

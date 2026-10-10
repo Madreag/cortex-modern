@@ -1005,6 +1005,7 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 		QueueDeferredSaveRefusal(SaveKind::Autosave, std::move(problems));
 		return false;
 	}
+	snapshot->SealBoundary();
 	for (size_t index = 0; index < savers.size(); ++index) image->globalParts.emplace_back(savers[index].name, managerUs[index]);
 	const std::string sceneName = SceneArchiveName(sourceScene, fileName);
 	image->graphUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - graphStart).count();

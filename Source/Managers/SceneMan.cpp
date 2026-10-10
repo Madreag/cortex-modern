@@ -3438,6 +3438,7 @@ bool SceneMan::RunMaterialCheckpointSelfTest() {
 		auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
 		const Material* inlineFrozen = snapshot->Object(&inlineValue);
 		const Material* ownedFrozen = snapshot->Object(first);
+		snapshot->SealBoundary();
 		CheckpointNativeSnapshot::ReadScope frozen(snapshot.get());
 		bool unownedRefused = false;
 		try { SaveMaterialReference(inlineFrozen); } catch (const std::logic_error&) { unownedRefused = true; }

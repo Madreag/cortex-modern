@@ -194,12 +194,12 @@ namespace {
 			if (leases.empty() || leases.back() != m_Current) leases.push_back(m_Current);
 			return address;
 		}
-		std::shared_ptr<void> AllocateBytes(size_t count) {
+		std::shared_ptr<void> AllocateBytes(size_t count, size_t alignment = alignof(uint8_t)) {
 			if (count > (1 << 20)) {
-				auto block = MakeBlock(count, alignof(uint8_t));
+				auto block = MakeBlock(count, alignment);
 				return {block, block->address};
 			}
-			void* address = Bump(count, alignof(uint8_t));
+			void* address = Bump(count, alignment);
 			return {m_Current, address};
 		}
 		size_t Blocks() const { return m_Blocks.load(std::memory_order_relaxed); }
@@ -1133,10 +1133,14 @@ std::shared_ptr<std::pmr::memory_resource> CheckpointBuffer::LeaseCaptureStorage
 }
 
 std::shared_ptr<void> CheckpointBuffer::AllocateCaptureBytes(size_t bytes) {
-	if (auto group = CurrentArenaGroup()) return group->AllocateBytes(bytes);
+	return AllocateCaptureBytes(bytes, alignof(uint8_t));
+}
+
+std::shared_ptr<void> CheckpointBuffer::AllocateCaptureBytes(size_t bytes, size_t alignment) {
+	if (auto group = CurrentArenaGroup()) return group->AllocateBytes(bytes, alignment);
 	auto* upstream = std::pmr::get_default_resource();
-	void* address = upstream->allocate(bytes, alignof(uint8_t));
-	return {address, [upstream, bytes](void* value) { upstream->deallocate(value, bytes, alignof(uint8_t)); }};
+	void* address = upstream->allocate(bytes, alignment);
+	return {address, [upstream, bytes, alignment](void* value) { upstream->deallocate(value, bytes, alignment); }};
 }
 
 CheckpointBuffer::CheckpointBuffer(bool reserve) : m_Arena(reserve ? s_Arena : nullptr),
@@ -1673,6 +1677,40 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			const auto baseline = record(1), deeper = record(5);
 			const auto relocated = baseline.ReindentWriter(4);
 			check(relocated.Text() == deeper.Text() && relocated.SharedText() == deeper.SharedText(), "frozen_writer_indent_preserves_literal_bytes_and_peer_runs");
+		}
+		{
+			std::vector<int> source{7, -19, 31}, values;
+			std::deque<Vector> vectors{Vector(-0.0F, 13.5F), Vector(17.25F, -23.5F)}, copiedVectors;
+			std::string bytes("line\n\tvalue\0\xff", 13), copiedBytes;
+			const auto expected = source;
+			const auto expectedVectors = vectors;
+			const auto expectedBytes = bytes;
+			CheckpointNativeSnapshot snapshot;
+			values = snapshot.Freeze(source, &values);
+			copiedVectors = snapshot.Freeze(vectors, &copiedVectors);
+			copiedBytes = snapshot.Freeze(bytes, &copiedBytes);
+			bool earlyRefused = false, lateRefused = false, partialRefused = false;
+			try { CheckpointNativeSnapshot::ReadScope early(&snapshot); } catch (const std::logic_error&) { earlyRefused = true; }
+			source.assign(1, 99); vectors.clear(); bytes.assign("changed");
+			snapshot.SealBoundary();
+			try {
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+				CheckpointNativeSnapshot::ReadScope failed(&snapshot);
+			} catch (const std::bad_alloc&) { lateRefused = true; }
+			const bool unexpanded = values.empty() && copiedVectors.empty() && copiedBytes.empty();
+			try {
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects, 1);
+				CheckpointNativeSnapshot::ReadScope failed(&snapshot);
+			} catch (const std::bad_alloc&) { partialRefused = true; }
+			const bool retried = std::async(std::launch::async, [&] {
+				CheckpointNativeSnapshot::ReadScope read(&snapshot);
+				bool exact = values == expected && copiedBytes == expectedBytes && copiedVectors.size() == expectedVectors.size();
+				for (size_t index = 0; exact && index < copiedVectors.size(); ++index) exact =
+				    std::bit_cast<uint32_t>(copiedVectors[index].m_X) == std::bit_cast<uint32_t>(expectedVectors[index].m_X) &&
+				    std::bit_cast<uint32_t>(copiedVectors[index].m_Y) == std::bit_cast<uint32_t>(expectedVectors[index].m_Y);
+				return exact;
+			}).get();
+			check(earlyRefused && lateRefused && partialRefused && unexpanded && retried, "boundary_sequences_expand_from_owned_bytes_after_mutation_and_failed_worker_retry");
 		}
 		{
 			CheckpointText frozen;
@@ -2633,6 +2671,7 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			}
 			auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
 			Actor* const frozen = snapshot->Object(actor.get());
+			snapshot->SealBoundary();
 			const bool aliases = snapshot->Object(actor.get()) == frozen && snapshot->ValueObject(actor->GetController()) == frozen->GetController();
 			marker = std::make_unique<Actor>();
 			const bool poolUnchanged = marker.get() == nextGameplaySlot;
@@ -2658,6 +2697,7 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			const auto baseline = Writer::Capture([&](Writer& writer) { writer.NewPropertyWithValue("Activity", &source); });
 			auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
 			const GATutorial* const frozen = snapshot->Object(&source);
+			snapshot->SealBoundary();
 			const auto output = std::async(std::launch::async, [snapshot, frozen] {
 				CheckpointNativeSnapshot::ReadScope read(snapshot.get());
 				CheckpointWriter::BatchOverride batch(true);

@@ -6,12 +6,15 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <deque>
 #include <list>
+#include <limits>
 #include <map>
 #include <memory>
 #include <memory_resource>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <queue>
 #include <set>
@@ -36,6 +39,8 @@ namespace RTE {
 	struct HitData;
 	class Material;
 	class MovableObject;
+	class Vector;
+	class Gib;
 
 	/// Times what a boundary freeze spends per kind of value; off unless CCCP_CHECKPOINT_PHASES=1.
 	class CheckpointCloneCost {
@@ -328,10 +333,61 @@ namespace RTE {
 			return static_cast<T*>(owner.first);
 		}
 		void AssignEntity(Entity& target, const Entity& source);
-		/// Owns equal descriptions, reader positions and groups once while the boundary is held.
+		/// Owns equal names, descriptions, reader positions and groups once while the boundary is held.
 		void FreezeMetadata(Entity& target, const Entity& source);
 		/// Gives frozen objects their legacy containers on the saver before any of them is read.
 		void MaterializeMetadata() const;
+		/// The boundary has finished owning every value before a frozen reader may expand its containers.
+		void SealBoundary() { m_BoundarySealed.store(true, std::memory_order_release); }
+		/// Runs from the first frozen reader, after the boundary, with only owned inputs.
+		template<class Work> void AfterBoundary(Work work) {
+			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+			void* memory = AllocateFrozen(sizeof(Work), alignof(Work));
+			const bool pooled = memory != nullptr;
+			auto& owner = AddValueOwner(pooled ? +[](void* value) noexcept { static_cast<Work*>(value)->~Work(); }
+			    : +[](void* value) noexcept { delete static_cast<Work*>(value); });
+			if (!memory) memory = ::operator new(sizeof(Work));
+			try { ::new(memory) Work(std::move(work)); }
+			catch (...) { if (!pooled) ::operator delete(memory); throw; }
+			owner.first = memory;
+			OwnerShard& shard = Owners();
+			std::lock_guard lock(shard.mutex);
+			shard.deferred.push_back({memory, [](void* value) { (*static_cast<Work*>(value))(); }});
+		}
+		std::string Freeze(const std::string& source, std::string* target) {
+			if (source.empty()) return {};
+			const auto bytes = OwnBytes(source);
+			AfterBoundary([target, bytes] { target->assign(bytes); });
+			return {};
+		}
+		template<class T> auto Freeze(const T& source, T*) { return Freeze(source); }
+		template<class T, class Allocator> auto Freeze(const std::vector<T, Allocator>& source, std::vector<T, Allocator>* target) {
+			if constexpr (DeferredElement<T>) {
+				if (!source.empty()) {
+					const auto* values = OwnValues(source);
+					AfterBoundary([target, values] { target->assign(values->Data(), values->Data() + values->size); });
+				}
+				return std::vector<T, Allocator>(source.get_allocator());
+			} else return Freeze(source);
+		}
+		template<class T, class Allocator> auto Freeze(const std::deque<T, Allocator>& source, std::deque<T, Allocator>* target) {
+			if constexpr (DeferredElement<T>) {
+				if (!source.empty()) {
+					const auto* values = OwnValues(source);
+					AfterBoundary([target, values] { target->assign(values->Data(), values->Data() + values->size); });
+				}
+				return std::deque<T, Allocator>(source.get_allocator());
+			} else return Freeze(source);
+		}
+		template<class T, class Allocator> auto Freeze(const std::list<T, Allocator>& source, std::list<T, Allocator>* target) {
+			if constexpr (DeferredElement<T>) {
+				if (!source.empty()) {
+					const auto* values = OwnValues(source);
+					AfterBoundary([target, values] { target->assign(values->Data(), values->Data() + values->size); });
+				}
+				return std::list<T, Allocator>(source.get_allocator());
+			} else return Freeze(source);
+		}
 		template<class T> requires (!std::is_array_v<T>) void Prepare(const T& source, T* target) {
 			if constexpr (std::is_base_of_v<Entity, T>) m_Objects.InsertOrAssign(&source, target);
 			else m_Values.InsertOrAssign(&source, target);
@@ -424,11 +480,49 @@ namespace RTE {
 			for (size_t index = 0; index < Size; ++index) {
 				if constexpr (std::is_array_v<T>) FreezeArray(target[index], source[index]);
 				else if constexpr (requires { target[index].AssignCheckpointNative(source[index], *this); }) target[index].AssignCheckpointNative(source[index], *this);
-				else target[index] = Freeze(source[index]);
+				else target[index] = Freeze(source[index], &target[index]);
 			}
 		}
 
 	private:
+		template<class T> static constexpr bool DeferredElement = std::is_arithmetic_v<T> || std::is_enum_v<T> || std::is_pointer_v<T> || std::is_same_v<T, Vector> || std::is_same_v<T, Gib>;
+		std::string_view OwnBytes(std::string_view source);
+		template<class T> struct alignas(alignof(T) > alignof(size_t) ? alignof(T) : alignof(size_t)) OwnedValues {
+			size_t size = 0;
+			T* data = nullptr;
+			T* Data() { return data; }
+			const T* Data() const { return data; }
+			~OwnedValues() { for (size_t index = 0; index < size; ++index) std::destroy_at(Data() + index); }
+		};
+		template<class Range> auto OwnValues(const Range& source) {
+			using T = typename Range::value_type;
+			using Record = OwnedValues<T>;
+			if (source.size() > ((std::numeric_limits<size_t>::max)() - sizeof(Record)) / sizeof(T)) throw std::bad_alloc();
+			const size_t bytes = sizeof(Record) + source.size() * sizeof(T);
+			void* memory = AllocateFrozen(bytes, alignof(Record));
+			if (!memory) {
+				auto storage = CheckpointBuffer::AllocateCaptureBytes(bytes, alignof(Record));
+				memory = storage.get();
+				OwnerShard& shard = Owners();
+				std::lock_guard lock(shard.mutex);
+				shard.storage.push_back(std::move(storage));
+			}
+			auto& owner = AddValueOwner([](void* value) noexcept { static_cast<Record*>(value)->~Record(); });
+			auto* record = ::new(memory) Record;
+			record->data = reinterpret_cast<T*>(static_cast<std::byte*>(memory) + sizeof(Record));
+			owner.first = record;
+			if constexpr (requires(const T& value) { T(value, *this); }) {
+				size_t index = 0;
+				for (const auto& value: source) Prepare(value, record->Data() + index++);
+				for (const auto& value: source) { ::new(record->Data() + record->size) T(value, *this); ++record->size; }
+			} else {
+				for (const auto& value: source) {
+					::new(record->Data() + record->size) T(Freeze(value));
+					++record->size;
+				}
+			}
+			return record;
+		}
 		struct Pixel;
 		using ValueOwner = std::pair<void*, void (*)(void*) noexcept>;
 		/// This thread's recent answers of this snapshot, read without a shard lock: the shared objects many owners
@@ -452,6 +546,7 @@ namespace RTE {
 			std::deque<Entity*> owners;
 			std::deque<ValueOwner> values;
 			std::vector<std::shared_ptr<void>> storage;
+			std::vector<std::pair<void*, void (*)(void*)>> deferred;
 		};
 		OwnerShard& Owners() { return m_OwnerShards[std::hash<std::thread::id>{}(std::this_thread::get_id()) % m_OwnerShards.size()]; }
 		Entity** AddOwner() {
@@ -500,12 +595,13 @@ namespace RTE {
 		struct PresetShard { std::mutex mutex; std::unordered_map<PresetKey, const Entity*, PresetHash, PresetEqual> presets; };
 		std::array<PresetShard, 16> m_Presets;
 		struct Metadata {
-			std::string description, reader;
+			std::string name, copied, description, reader;
 			std::unordered_set<std::string> groups;
 		};
 		struct MetadataShard { std::mutex mutex; std::unordered_multimap<size_t, std::unique_ptr<Metadata>> values; };
 		std::array<MetadataShard, 16> m_Metadata;
 		mutable std::once_flag m_MetadataReady;
+		std::atomic<bool> m_BoundarySealed{false};
 		std::array<OwnerShard, 32> m_OwnerShards;
 		CheckpointSharedMap<const Entity*, Entity*> m_Objects;
 		CheckpointSharedMap<const void*, void*> m_Values;
