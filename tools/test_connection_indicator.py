@@ -1,7 +1,7 @@
 """Connection pictures through the existing menu gestures, scene probes and hidden runner.
 
-Four separately assigned boxes provide proof. --layout-detector permits shared
-boxes for layout only; --single-engine runs preferences and the pixel guard.
+Four separately assigned boxes provide proof. --layout-detector launches four
+local peers for layout only; --single-engine runs preferences and the pixel guard.
 """
 from __future__ import annotations
 
@@ -155,6 +155,12 @@ def run_single(repo, root, steps, size, *, runtime=None, exe=None, guard=False, 
     observed = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else {}
     result = {"pass": record.get("exit_code") == 0 and not record.get("timed_out") and observed.get("pass") is True and observed.get("complete") is True,
               "record": record, "probe": observed, "runtime": str(run.cwd), "settings_path": str(settings_path)}
+    if guard:
+        ready = Path(run.cwd) / "Userdata/UserScenes.rte/connection-guard-ready.json"
+        result["guard_ready"] = json.loads(ready.read_text(encoding="utf-8")) if ready.is_file() else {}
+        result["pass"] &= result["guard_ready"] == {"activity_preset": "ConnectionGuard", "tick": 4}
+        if result["guard_ready"] != {"activity_preset": "ConnectionGuard", "tick": 4}:
+            result["guard_error"] = "running activity identity differs: " + json.dumps(result["guard_ready"])
     if expected_saved is not None:
         result["saved_indicator"] = saved_indicator(run.cwd)
         result["pass"] &= result["saved_indicator"] is expected_saved
@@ -165,13 +171,14 @@ def run_single(repo, root, steps, size, *, runtime=None, exe=None, guard=False, 
 
 
 def failure_line(result):
-    return result.get("persistence_error") or result.get("probe", {}).get("reason", result.get("probe", {}).get("error", "probe incomplete"))
+    return result.get("persistence_error") or result.get("guard_error") or result.get("probe", {}).get("reason", result.get("probe", {}).get("error", "probe incomplete"))
 
 
 def guard_steps():
-    return [{"op": "wait", "paused": True, "sim_at_least": 1, "scope": "menu"},
+    return [{"op": "wait_file", "path": "Userdata/UserScenes.rte/connection-guard-ready.json", "scope": "menu"},
+            {"op": "wait", "paused": True, "sim_at_least": 4, "scope": "menu"},
             {"op": "wait", "renders": 4, "scope": "menu"},
-            {"op": "assert", "equals": {"service": "Idle", "activity_preset": "Determinism ConnectionGuard", "paused": True}, "connections_absent": True, "scope": "menu"},
+            {"op": "assert", "equals": {"service": "Idle", "screen": "Gameplay", "paused": True, "sim_frame": 4, "local_actor_alive": True}, "connections_absent": True, "scope": "menu"},
             {"op": "screenshot_pair", "name": "guard", "scope": "menu"}, {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]
 
 
@@ -284,6 +291,130 @@ def scene_document():
             "timeout_s": 240, "scripts": scripts, "runs": runs, "checklist": checklist}
 
 
+def frame_colours(native, path, size):
+    rows = [row for row in native.get("steps", []) if row["op"] == "assert_control" and row["observed"].get("control", {}).get("ink_pixels")]
+    if not rows:
+        return []
+    if not path.is_file():
+        return [False]
+    with Image.open(path) as frame:
+        frame = frame.convert("RGB")
+        if frame.size != tuple(int(part) for part in size.split("x")):
+            return [False]
+        checks = []
+        for row in rows:
+            step = native["script"]["steps"][row["index"]]
+            x, y, width, height = row["observed"]["control"]["rect"]
+            pixels = frame.crop((x, y, x + width, y + height)).getdata()
+            checks.append(sum(pixel == tuple(step["ink_rgb"]) for pixel in pixels) >= 3)
+        return checks
+
+
+def local_case(options, repo, root, definition, scripts, port, retained):
+    root.mkdir(parents=True, exist_ok=False)
+    probe = root / "host-probe/probe.json"
+    document = json.loads(scripts[definition["peers"][0]["probe"]])
+    document["steps"] = [step for step in document["steps"] if not step.get("command", "").startswith("video_mark ")]
+    reference = next((index for index, step in enumerate(document["steps"]) if step.get("control", "").startswith(("LabelOwnConnection", "NetworkSeatLink"))), None)
+    if reference is not None:
+        document["steps"].insert(reference, {"op": "screenshot_pair", "name": "reference"})
+    write_json(probe, document)
+    runs, records, runtimes = [], {}, {}
+    error = None
+    width, height = (int(part) for part in definition["size"].split("x"))
+    try:
+        for peer in definition["peers"]:
+            who = peer["name"]
+            tokens = {"{PORT}": str(port), "{HOST_ADDRESS}": "127.0.0.1", "{OUT}": root.as_posix(), "{PEER}": who}
+            args = list(peer["args"])
+            for token, value in tokens.items():
+                args = [argument.replace(token, value) for argument in args]
+            if who == "host":
+                menu_path = root / "host.menu.txt"
+                menu_path.write_text(f"wait_file {(probe.parent / 'done.json').as_posix()} {options.timeout - 10}\nwait_ms 250\nexit\n", encoding="utf-8")
+                args += ["-menu-script", str(menu_path), "-menu-script-out", str(root / "host-menu.json")]
+            environment = {**peer.get("env", {}), "CCCP_HEADLESS": "1", "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1",
+                           "CC_TEST_NET_UI_SCRIPT": str(probe) if who == "host" else ""}
+            previous = peer.get("retained_runtime")
+            runtime = retained[(previous["run"], previous["peer"])] if previous else None
+            run = make_run(repo, args, root / who, options.timeout, runtime=runtime, env=environment)
+            runs.append((who, run))
+            if repo == options.baseline_repo and options.baseline_exe:
+                run.argv[0] = str(options.baseline_exe.resolve())
+            run.env["CCCP_SETTINGSPATH"] = str((Path(run.cwd) / "Userdata/Settings.ini").resolve())
+            settings = {"ResolutionX": width, "ResolutionY": height, "ResolutionMultiplier": "1", "ShowAdvancedPerfStats": "0",
+                        **peer.get("settings", {})}
+            if definition["name"] == "toggle-off":
+                settings["NetworkConnectionIndicator"] = "1"
+            seed_settings(run, settings)
+            runtimes[(definition["name"], who)] = Path(run.cwd)
+        # The existing wait-peers lever holds the host until all three joiners are ready.
+        for _, run in runs:
+            run.start()
+        for who, run in runs:
+            if who != "host" and run.poll() is None:
+                run.terminate(0, "local layout host finished")
+            records[who] = run.finish()
+    except (OSError, RuntimeError, ValueError) as failure:
+        error = str(failure)
+    finally:
+        for who, run in runs:
+            run.close()
+            records.setdefault(who, run.record)
+    path = probe.parent / "net-ui-result.json"
+    native = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    result = {"records": records, "probe": native, "error": error, "port": port, "size": definition["size"],
+              "topology": "single-box", "proof": False, "capture": str(probe.parent / "connection.png"),
+              "reference_capture": str(probe.parent / "reference.png")}
+    write_json(root / "local-result.json", result)
+    return result, runtimes
+
+
+def run_layout_detector(options, out, repo, port):
+    scenario = scene_document()
+    write_json(out / "connection-indicator.json", scenario)
+    baseline = repo == options.baseline_repo
+    cases, retained = {}, {}
+    for index, definition in enumerate(scenario["runs"]):
+        name = definition["name"]
+        if baseline and not name.startswith(("HUD_", "Seats_")):
+            continue
+        print("[connection-detector] " + ("base " if baseline else "tip ") + name + " port=" + str(port + index), flush=True)
+        evidence, runtimes = local_case(options, repo, out / name, definition, scenario["scripts"], port + index, retained)
+        retained.update(runtimes)
+        native = evidence["probe"]
+        checks = frame_colours(native, Path(evidence["capture"]), definition["size"])
+        reason = evidence["error"] or native.get("error", "probe incomplete")
+        if baseline:
+            surface, state, _ = name.split("_")
+            control = "LabelOwnConnection" if surface == "HUD" else "NetworkSeatLink"
+            if surface == "Seats" and state != "held":
+                control += str(STATES[state][0])
+            passed = native.get("pass") is False and "unknown control: " + control in reason and native.get("failed_observation", {}).get("service") == "Running"
+            reference = Path(evidence["reference_capture"])
+            passed &= reference.is_file()
+            if reference.is_file():
+                with Image.open(reference) as frame:
+                    passed &= frame.size == tuple(int(part) for part in definition["size"].split("x"))
+            line = ("RED " if passed else "FAIL ") + name + " " + reason
+        else:
+            host = evidence["records"].get("host", {})
+            passed = evidence["error"] is None and host.get("exit_code") == 0 and not host.get("timed_out") and native.get("pass") is True and native.get("complete") is True
+            passed &= len(evidence["records"]) == len(definition["peers"]) and all(row.get("started") and not row.get("timed_out") for row in evidence["records"].values())
+            passed &= all(checks)
+            if name.startswith(("HUD_", "Seats_")) or name.endswith("-match"):
+                passed &= bool(checks)
+            line = ("GREEN " if passed else "FAIL ") + name + (" " + reason if not passed else "")
+        cases[name] = {"pass": bool(passed), "line": line, "saved_frame_colour_checks": len(checks),
+                       "evidence": str(out / name / "local-result.json")}
+        print(line, flush=True)
+    passed = bool(cases) and all(row["pass"] for row in cases.values())
+    scored = {"cases": cases, "pass": passed, "driver_exit_code": 0 if passed else 1, "topology": "single-box", "proof": False,
+              "runner": "run_sim_test.make_run", "port_block": [port, port + len(scenario["runs"]) - 1]}
+    write_json(out / "picture-results.json", scored)
+    return scored
+
+
 def run_multiplayer(options, out, repo):
     scenario = out / "connection-indicator.json"
     write_json(scenario, scene_document())
@@ -356,17 +487,21 @@ def main():
     parser.add_argument("--baseline-repo", type=Path)
     parser.add_argument("--baseline-exe", type=Path)
     parser.add_argument("--single-engine", action="store_true")
-    parser.add_argument("--layout-detector", action="store_true", help="share assigned boxes for text and layout only; topology=single-box, proof=false")
+    parser.add_argument("--layout-detector", action="store_true", help="four local hidden peers on loopback; no spread or ffmpeg; topology=single-box, proof=false")
     parser.add_argument("--peer-boxes")
     parser.add_argument("--pool-registry", type=Path)
     parser.add_argument("--host-address")
     parser.add_argument("--port", type=int, default=49840)
     parser.add_argument("--timeout", type=int, default=240, help="single-engine startup and probe budget, including cold module loads")
     options = parser.parse_args()
-    if not options.single_engine and (not options.peer_boxes or not options.host_address):
+    if not options.single_engine and not options.layout_detector and (not options.peer_boxes or not options.host_address):
         parser.error("four-seat pictures need --peer-boxes and --host-address assigned by the lead")
     if options.layout_detector and options.single_engine:
         parser.error("--layout-detector runs four seats; it cannot be combined with --single-engine")
+    if options.layout_detector and (options.peer_boxes or options.host_address):
+        parser.error("--layout-detector starts only local peers; omit --peer-boxes and --host-address")
+    if options.layout_detector and not 1024 <= options.port <= 65535 - 2 * len(scene_document()["runs"]):
+        parser.error("--port must leave a lane block for both trees' local cases")
     if options.timeout < 120:
         parser.error("--timeout must leave at least 120 seconds for cold loads and framed gestures")
     if options.baseline_repo:
@@ -377,8 +512,10 @@ def main():
     result = {"base": BASE, "cases": {}, "needs_testing": [], "pass": False,
               "topology": "single-box" if options.layout_detector or options.single_engine else "spread", "proof": False,
               "mode": "layout-detector" if options.layout_detector else "single-engine" if options.single_engine else "four-box-proof"}
-    if not options.single_engine:
+    if not options.single_engine and not options.layout_detector:
         try:
+            if not Path(__file__).with_name("box_load.py").is_file():
+                raise ValueError("four-box proof cannot start: missing tools/box_load.py, required by the spread tool; --layout-detector runs locally without it")
             options.recording_env = recording_environment(options.pool_registry)
         except (OSError, ValueError) as error:
             result["error"] = str(error)
@@ -418,11 +555,11 @@ def main():
                     result["cases"][surface + "_" + state + "_" + size] = {"pass": False, "status": "NEEDS TESTING"}
         write_json(options.out / "connection-indicator.json", scene_document())
     else:
-        tip = run_multiplayer(options, options.out / "tip", options.repo)
+        tip = run_layout_detector(options, options.out / "tip", options.repo, options.port) if options.layout_detector else run_multiplayer(options, options.out / "tip", options.repo)
         result["cases"].update(tip["cases"])
         result["cases"]["scene_driver_tip"] = {"pass": tip["driver_exit_code"] == 0}
         if options.baseline_repo:
-            base = run_multiplayer(options, options.out / "base", options.baseline_repo)
+            base = run_layout_detector(options, options.out / "base", options.baseline_repo, options.port + len(scene_document()["runs"])) if options.layout_detector else run_multiplayer(options, options.out / "base", options.baseline_repo)
             result["cases"].update({"RED_" + name: row for name, row in base["cases"].items()})
     result["pass"] = not result["needs_testing"] and all(row.get("pass", False) for row in result["cases"].values())
     result["proof"] = result["pass"] and not options.layout_detector and not options.single_engine
