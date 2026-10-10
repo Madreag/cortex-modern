@@ -7234,7 +7234,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	// The states' heap fences finish before this capture returns, and before anything may write the heaps.
 	HeapFences fences;
 	// Every state can submit one fence, so tracking it cannot allocate after its task has started.
-	fences.pending.reserve(order.size());
+	if (poolTakesAll) fences.pending.reserve(order.size());
 	struct FencesJoined {
 		HeapFences& fences;
 		~FencesJoined() {
