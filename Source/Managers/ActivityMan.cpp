@@ -1581,6 +1581,13 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 			if (automatic) {
 				descriptor.worldStructureHash = NetIdentity::HashHex(NetIdentity::HashCanonicalText("autosave-world", {{"structure", image->structure.Text()}}));
 			}
+			if (frozenNative) {
+				image->activity = image->activity.Compact(); image->scene = image->scene.Compact();
+				image->structure = image->structure.Compact(); image->sceneRuntime = image->sceneRuntime.Compact();
+				image->globals = image->globals.Compact();
+				for (auto& graph: image->graphs) graph = graph.Compact();
+				image->nativePages.reset(); image->nativeReady = {};
+			}
 			WriteCheckpointArchive(fileName, path, zipLevel, matchId, saveText, indexText, layerNames,
 			    [&](size_t i, std::vector<unsigned char>& png) {
 				    png = images[i]->Bytes();
@@ -1588,11 +1595,6 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 			    },
 			    automatic ? &descriptor : nullptr, pinnedCheckpointSource, automatic ? &manifest : nullptr);
 			if (frozenNative) {
-				image->activity = image->activity.Compact(); image->scene = image->scene.Compact();
-				image->structure = image->structure.Compact(); image->sceneRuntime = image->sceneRuntime.Compact();
-				image->globals = image->globals.Compact();
-				for (auto& graph: image->graphs) graph = graph.Compact();
-				image->nativePages.reset(); image->nativeReady = {};
 				auto previous = CheckpointCow::Get().FinishImage(image, true);
 				previous.reset();
 			}
