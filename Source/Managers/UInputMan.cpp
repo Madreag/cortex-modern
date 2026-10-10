@@ -1339,7 +1339,7 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 			keyboard.changedKeyStates[inputEvent.key.scancode] = transitioned;
 			if (transitioned) {
 				(inputEvent.key.down ? keyboard.pressedSinceSim : keyboard.releasedSinceSim)[inputEvent.key.scancode] = true;
-				if (inputEvent.key.down) m_NetworkGUIKeyPresses[inputEvent.key.scancode] = true;
+				if (inputEvent.key.down && IsNetworkGUIInputActive()) m_NetworkGUIKeyPresses[inputEvent.key.scancode] = true;
 			}
 			keyboard.keyStates[inputEvent.key.scancode] = inputEvent.key.down;
 
