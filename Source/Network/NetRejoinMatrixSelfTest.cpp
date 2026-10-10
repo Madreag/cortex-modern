@@ -614,6 +614,7 @@ namespace RTE {
 			}
 			if (key == "holds") return value == "0" ? o.holds == 0 : value == ">0" ? o.holds > 0 : false;
 			if (key == "sub") {
+				if (value == "migrating") return o.sub == "migrating";
 				if (value == "unreachable") return o.sub == "stopped:PeerHeld";
 				return value == "run" ? o.sub == "run" : value == "over" ? o.sub == "stopped:Complete" : value == "ended" ? o.sub != "run" && o.sub != "migrating" : false;
 			}
@@ -998,7 +999,9 @@ namespace RTE {
 				case Event::Kick: successor.EvictRemovedPeer(3, "kicked", r.now); return "ok";
 				case Event::Ban: successor.EvictRemovedPeer(3, "banned", r.now); return "ok";
 				case Event::SeatRelease: successor.ResolveHeldSeat(3, NetLockstepHoldResolution::Expired, r.now); return "ok";
-				case Event::OwnCap: r.subject.Complete("e2e complete"); return "ok";
+				case Event::OwnCap:
+					r.subject.SetGoodbyeDrain(true); // The runtime's cap enters its final drain before Complete.
+					r.subject.Complete("e2e complete"); r.live[2] = false; return "ok";
 				case Event::LinkBlip:
 					r.live[2] = false;
 					PumpStar(r, 30);

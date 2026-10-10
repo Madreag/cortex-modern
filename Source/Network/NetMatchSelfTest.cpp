@@ -6906,6 +6906,27 @@ namespace RTE {
 			return shared >= 6;
 		}
 
+		void DropRematchProcess(RematchFixture& fixture, RematchPeer& peer) {
+			const uint8_t seat = peer.LockstepId();
+			const auto remotes = fixture.Host().session.GetReadyPeers();
+			peer.gone = true;
+			peer.transport.Stop();
+#if __has_include("NetPeerSessionWire.h")
+			if (peer.round) if (const auto links = peer.round->GetConfig().peerSessionLinks) {
+				// A process death stops every native path, not just its original
+				// star socket. The fixture's separate admission plane observes
+				// that same physical close; the frame group retains the seat.
+				if (links->listener) links->listener->Stop();
+				for (auto& [member, probe]: links->probes) if (probe.transport) probe.transport->Stop();
+			}
+#endif
+			for (const auto& remote: remotes) if (remote.assignedPeerId + 1 == seat) {
+				fixture.Host().session.InjectEvent({NetTransportEventType::PeerDisconnected, remote.transportPeerId,
+				    NetTransportLane::ControlReliable, {}, "fixture process stopped"}, fixture.clock.NowMs());
+				break;
+			}
+		}
+
 		// The middle seat's process dies inside round 1 and nobody reclaims it: its seat's hold runs out.
 		bool RematchAfterDropInRound(std::string& details, std::string* error) {
 			RematchFixture fixture;
@@ -6924,8 +6945,7 @@ namespace RTE {
 			RematchPeer* dropped = fixture.Client(2);
 			RematchPeer* survivor = fixture.Client(3);
 			if (!dropped || !survivor) return fail("round 1 did not seat lockstep peers 2 and 3");
-			dropped->gone = true;
-			dropped->transport.Stop();
+			DropRematchProcess(fixture, *dropped);
 			if (!PumpRematchUntil(fixture, 6500, [&] {
 				    return host.round->GetPeerLeaveFrames().contains(2) && survivor->round->GetPeerLeaveFrames().contains(2) && host.admission.GetStats().seatsDropped == 1;
 			    })) {
@@ -6992,8 +7012,7 @@ namespace RTE {
 			RematchPeer* survivor = fixture.Client(2);
 			RematchPeer* dropped = fixture.Client(3);
 			if (!survivor || !dropped) return fail("round 1 did not seat lockstep peers 2 and 3");
-			dropped->gone = true;
-			dropped->transport.Stop();
+			DropRematchProcess(fixture, *dropped);
 			if (survivor->round->GetPeerLeaveFrames().contains(dropped->LockstepId())) return fail("the survivor's round saw the drop after all");
 			if (!ReleaseAbsentRematchSeat(fixture, *dropped, &step)) return fail("the host's explicit between-round release");
 			if (!RematchFixtureRound(fixture, &step)) return fail("the rematch did not relaunch");
@@ -14688,8 +14707,7 @@ namespace RTE {
 			if (!dropped || !survivor) return fail("round 1 did not seat lockstep peers 2 and 3");
 			const NetMatchConfig played = survivor->runner.GetMatchConfig();
 			const uint8_t survivorSessionPeerId = survivor->session.GetLocalPeerId();
-			dropped->gone = true;
-			dropped->transport.Stop();
+			DropRematchProcess(fixture, *dropped);
 			RematchPeer& host = fixture.Host();
 			if (!PumpRematchUntil(fixture, 6500, [&] {
 				    return survivor->round->GetPeerLeaveFrames().contains(2) && host.admission.GetStats().seatsDropped == 1;

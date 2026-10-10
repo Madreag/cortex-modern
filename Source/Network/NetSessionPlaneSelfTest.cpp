@@ -345,6 +345,14 @@ namespace RTE {
 				} else if (freezeStarted && !thawed) { if (onThaw) onThaw(); thawed = true; }
 				NetLockstepPlaneGuard plane;
 				std::lock_guard lock(hub.mutex);
+				if (hub.row.adminDirectory && hub.now == hub.faultAt - 1) {
+					// Put the last authenticated host traffic at the silence lever's
+					// boundary, rather than at the preceding 250 ms heartbeat slot.
+					std::vector<uint8_t> heartbeat;
+					if (!NetProtocol::Encode({static_cast<uint32_t>(hub.now), 0, NetHeartbeat{hub.now, 0, 3}}, heartbeat, nullptr)) return false;
+					for (uint8_t id = 2; id <= hub.row.seats; ++id)
+						peers[id - 1]->InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, heartbeat, {}}, hub.now);
+				}
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) {
 					if (hub.row.realFrozen && id == hub.row.subject && hub.DuringFault()) continue;
 					if (hub.row.frozen && id == hub.row.subject && hub.DuringFault()) peers[id - 1]->PlaneTick(hub.now);

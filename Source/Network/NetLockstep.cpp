@@ -4390,7 +4390,17 @@ namespace RTE {
 		const auto droppedSeats = m_DroppedSeats;
 		const auto droppedAt = m_DroppedAtMs;
 		const auto completed = m_LastCompletedSimulationTick;
-		const auto authorityHistory = m_AuthorityEvents;
+		auto authorityHistory = m_AuthorityEvents;
+		if (const auto previous = authorityHistory.find(authority.applyFrame); previous != authorityHistory.end() && previous->second != authority) {
+			// A second certified succession may happen before the first one's
+			// activation is displayed. Its next generation owns that still
+			// future boundary; an already displayed authority is immutable.
+			if (previous->second.peerId != authority.formerPeerId || previous->second.generation + 1 != authority.generation ||
+			    (completed && authority.applyFrame <= *completed)) {
+				FailHostMigration("conflicting authority at the succession boundary"); return;
+			}
+			authorityHistory.erase(previous);
+		}
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 			m_Config.peerInputDelayFrames[peer] = InputDelayAt(peer, m_MigrationBoundary);
 		m_Config.inputDelayFrames = m_Config.peerInputDelayFrames.at(m_Config.localPeerId);

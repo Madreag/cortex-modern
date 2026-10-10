@@ -94,13 +94,24 @@ namespace RTE {
 		}
 		m_MigrationSuccessor = static_cast<uint8_t>(m_MigrationChoice->host);
 		if (m_MigrationSuccessor != m_Config.localPeerId || m_PeerAdminOwnVote) return;
+		// A survivor whose last progress predates this request may still be
+		// inside the liveness window. Do not fix an activation while that
+		// reader is frozen: the first vote is immutable once it can certify.
+		for (uint16_t member: m_MigrationChoice->members) if (member != m_Config.localPeerId) {
+			const auto progress = m_PeerAppliedAtMs.find(static_cast<uint8_t>(member));
+			if (progress == m_PeerAppliedAtMs.end() || progress->second < m_MigrationSinceMs) return;
+		}
 		auto proposal = PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
 		proposal.preparedFrame = 3; proposal.completeFrom = m_MigrationChoice->generation; proposal.boundary = m_MigrationChoice->boundary;
 		proposal.successorPeerId = m_MigrationSuccessor; proposal.connectedMask = 0;
 		for (uint16_t peer: m_MigrationChoice->members) { proposal.members.push_back(static_cast<uint8_t>(peer)); proposal.connectedMask |= AdminBit(static_cast<uint8_t>(peer)); }
 		uint64_t lead = m_Config.slowPlayerBoundTicks;
 		for (uint8_t peer: proposal.members) lead = std::max<uint64_t>(lead, InputDelayAt(peer, m_Stats.nextFrame) + m_Config.slowPlayerBoundTicks);
-		proposal.frame = std::max(m_Stats.nextFrame, proposal.boundary + 1) + lead;
+		uint64_t prepared = std::max(m_Stats.nextFrame, proposal.boundary + 1);
+		for (uint8_t peer: proposal.members) if (const auto report = m_Stats.peers.find(peer); report != m_Stats.peers.end())
+			prepared = std::max(prepared, report->second.reportedNextFrame);
+		if (prepared > UINT64_MAX - lead) return;
+		proposal.frame = prepared + lead;
 		const auto prefix = PeerAppliedFramePrefix(proposal.boundary); proposal.bytes.assign(prefix.begin(), prefix.end()); proposal.totalBytes = static_cast<uint32_t>(proposal.bytes.size());
 		proposal.voterMask = AdminBit(m_Config.localPeerId);
 		if (!ValidatePeerAdmin(proposal)) { RequestPeerCommittedTail(nowMs); return; }

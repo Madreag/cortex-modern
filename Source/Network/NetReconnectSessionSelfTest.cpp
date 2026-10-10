@@ -4424,6 +4424,11 @@ namespace RTE {
 			wire.host.NotePlacementPhase(false, 0);
 			wire.host.NotifyDisconnect(second.connection, 120);
 			second.connected = false;
+			const auto dropped = wire.host.GetRoster().Find(static_cast<uint8_t>(second.client.GetRecord().stableSeat + 1));
+			if (!dropped || dropped->phase != NetSeatPhase::Running) return Fail("a drop held the seat before its liveness interval");
+			wire.nowMs += c_NetSeatDisconnectSilenceMs;
+			wire.host.Tick(wire.nowMs);
+			wire.host.NoteSeatHeldInPlace(static_cast<uint8_t>(second.client.GetAssignedPeerId() + 1), NetSeatHoldCause::LinkDrop);
 			if (!wire.Pump(&error)) {
 				return Fail(error);
 			}

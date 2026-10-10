@@ -204,6 +204,11 @@ namespace RTE {
 			heard();
 			m_Stats.peers[message.senderPeerId].pingMs = rtt; m_Stats.peers[message.senderPeerId].jitterMs = jitter;
 			m_Stats.peers[message.senderPeerId].pingMeasured = rtt != 0;
+			// Only this authenticated heartbeat names a prepared horizon. Bridge
+			// kinds and receipt witnesses reuse that field for other purposes.
+			if (message.preparedFrame != UINT64_MAX && (message.preparedFrame <= m_Stats.nextFrame ||
+			    message.preparedFrame - m_Stats.nextFrame <= NetLockstepCodec::c_MaxFutureFrameSkew))
+				m_Stats.peers[message.senderPeerId].reportedNextFrame = std::max(m_Stats.peers[message.senderPeerId].reportedNextFrame, message.preparedFrame + 1);
 			if (PeerGroupHasAuthority(message.connectedMask) && message.appliedFrame >= m_Stats.nextFrame)
 				RequestPeerCommittedTail(nowMs);
 			return true;
