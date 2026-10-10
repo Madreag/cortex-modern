@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@ namespace RTE {
 		struct Copy;
 
 	public:
+		class Allocation;
 		struct Costs {
 			uint64_t bytes = 0;
 			int64_t workerUs = 0, simFaultUs = 0, otherFaultUs = 0;
@@ -24,6 +26,7 @@ namespace RTE {
 			~Snapshot();
 			/// Copies only from frozen pages; false means the address is outside this pool.
 			bool Read(const void* source, void* destination, size_t bytes) const;
+			std::span<const std::byte> ReadBytes(const void* source, size_t bytes) const;
 			bool Contains(const void* source, size_t bytes) const;
 			/// Borrowed fields still match the live capture until a page has opened.
 			bool CanBorrow(const void* source, size_t bytes) const;
@@ -32,8 +35,19 @@ namespace RTE {
 			Costs Cost() const;
 		private:
 			friend class CheckpointPagePool;
+			friend class Allocation;
 			struct Part { std::shared_ptr<Block> block; std::shared_ptr<Copy> copy; };
 			std::vector<Part> m_Parts;
+		};
+		class Allocation {
+		public:
+			explicit Allocation(size_t bytes);
+			void* Data() const;
+			size_t Bytes() const;
+			bool Contains(const void* source, size_t bytes) const;
+			std::shared_ptr<const Snapshot> Freeze() const;
+		private:
+			std::shared_ptr<Block> m_Block;
 		};
 
 		/// Appends slots in allocation order; the caller owns its usual free-list order.

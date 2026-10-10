@@ -3,6 +3,7 @@
 #include "Entity.h"
 #include "ContentFile.h"
 #include "Box.h"
+#include "CheckpointPagePool.h"
 
 #include <future>
 #include <memory>
@@ -89,6 +90,8 @@ namespace RTE {
 		};
 		struct FrozenRows {
 			std::shared_ptr<const Pixels> pixels;
+			std::shared_ptr<const CheckpointPagePool::Snapshot> pages;
+			std::vector<const uint8_t*> sourceRows;
 			std::shared_ptr<const BitmapSnapshot> previous;
 			std::vector<uint8_t> marked;
 			bool hasMarks = false, markedAll = false;

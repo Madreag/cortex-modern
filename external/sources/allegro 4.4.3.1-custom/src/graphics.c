@@ -23,6 +23,20 @@
 
 extern void blit_end(void);   /* for LOCK_FUNCTION; defined in blit.c */
 
+static void *(*bitmap_pixel_allocate)(size_t) = NULL;
+static int (*bitmap_pixel_release)(void *) = NULL;
+
+void set_bitmap_pixel_allocator(void *(*allocate)(size_t), int (*release)(void *))
+{
+   bitmap_pixel_allocate = allocate;
+   bitmap_pixel_release = release;
+}
+
+static void release_bitmap_pixels(void *pixels)
+{
+   if (!bitmap_pixel_release || !bitmap_pixel_release(pixels)) _AL_FREE(pixels);
+}
+
 
 
 #define PREFIX_I                "al-gfx INFO: "
@@ -1055,7 +1069,8 @@ BITMAP *create_bitmap_ex(int color_depth, int width, int height)
     */
    padding = (color_depth == 24) ? 1 : 0;
 
-   bitmap->dat = _AL_MALLOC_ATOMIC(width * height * BYTES_PER_PIXEL(color_depth) + padding);
+   bitmap->dat = bitmap_pixel_allocate ? bitmap_pixel_allocate(width * height * BYTES_PER_PIXEL(color_depth) + padding) :
+      _AL_MALLOC_ATOMIC(width * height * BYTES_PER_PIXEL(color_depth) + padding);
    if (!bitmap->dat) {
       _AL_FREE(bitmap);
       return NULL;
@@ -1068,7 +1083,7 @@ BITMAP *create_bitmap_ex(int color_depth, int width, int height)
    nr_pointers = MAX(2, height);
    bitmap->line = _AL_MALLOC(sizeof(char *) * nr_pointers);
    if (!bitmap->line) {
-      _AL_FREE(bitmap->dat);
+      release_bitmap_pixels(bitmap->dat);
       _AL_FREE(bitmap);
       return NULL;
    }
@@ -1497,7 +1512,7 @@ void destroy_bitmap(BITMAP *bitmap)
       }
 
       _AL_FREE(bitmap->line);
-      _AL_FREE(bitmap->dat);
+      release_bitmap_pixels(bitmap->dat);
       _AL_FREE(bitmap);
    }
 }

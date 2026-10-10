@@ -153,6 +153,44 @@ bool CheckpointPagePool::Contains(const void* address) const {
 	return std::any_of(m_Blocks.begin(), m_Blocks.end(), [&](const auto& block) { return block->Contains(address, 1); });
 }
 
+CheckpointPagePool::Allocation::Allocation(size_t bytes) {
+	const size_t page = PageWriteFence::SystemPageBytes();
+	if (!page || bytes > std::numeric_limits<size_t>::max() - page) throw std::bad_alloc();
+	m_Block = std::make_shared<Block>(std::max(page, (bytes + page - 1) / page * page));
+}
+void* CheckpointPagePool::Allocation::Data() const { return m_Block->live.data; }
+size_t CheckpointPagePool::Allocation::Bytes() const { return m_Block->live.bytes; }
+bool CheckpointPagePool::Allocation::Contains(const void* source, size_t bytes) const { return m_Block->Contains(source, bytes); }
+std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::Allocation::Freeze() const {
+	auto snapshot = std::make_shared<Snapshot>();
+	snapshot->m_Parts.reserve(1);
+	auto copy = std::make_shared<Copy>(m_Block->live.bytes, m_Block->pageBytes);
+	Block::Prepared prepared{m_Block.get(), copy};
+	if (!PageWriteFence::WatchCopies(m_Block.get(), {m_Block->live.data, m_Block->live.bytes}, Block::OnWrite, m_Block.get(), Block::Arm, &prepared))
+		throw std::runtime_error("could not fence checkpoint allocation pages");
+	snapshot->m_Parts.push_back({m_Block, std::move(copy)});
+	return snapshot;
+}
+
+std::span<const std::byte> CheckpointPagePool::Snapshot::ReadBytes(const void* source, size_t bytes) const {
+	const uintptr_t address = reinterpret_cast<uintptr_t>(source);
+	const auto end = std::upper_bound(m_Parts.begin(), m_Parts.end(), address, [](uintptr_t address, const Part& part) {
+		return address < reinterpret_cast<uintptr_t>(part.block->live.data);
+	});
+	if (end == m_Parts.begin() || !std::prev(end)->block->Contains(source, bytes))
+		throw std::runtime_error("native checkpoint span lies outside its frozen allocation");
+	const auto& part = *std::prev(end);
+	const size_t offset = address - reinterpret_cast<uintptr_t>(part.block->live.data);
+	if (bytes) {
+		const size_t first = offset / part.block->pageBytes, last = (offset + bytes - 1) / part.block->pageBytes;
+		for (size_t page = first; page <= last; ++page) {
+			if (!part.copy->saved[page].load(std::memory_order_acquire) && !part.block->SavePage(page, false))
+				throw std::runtime_error("could not read a frozen native page");
+		}
+	}
+	return {reinterpret_cast<const std::byte*>(part.copy->pages.data + offset), bytes};
+}
+
 std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::Freeze() const {
 	auto snapshot = std::make_shared<Snapshot>();
 	snapshot->m_Parts.reserve(m_Blocks.size());

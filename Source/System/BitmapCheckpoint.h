@@ -1,5 +1,6 @@
 #pragma once
 #include "CheckpointArchive.h"
+#include "CheckpointPagePool.h"
 #include "allegro.h"
 #include <cstring>
 #include <iostream>
@@ -19,6 +20,7 @@ namespace RTE {
 		std::shared_ptr<const void> TakeStorage();
 		static std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> Capture(
 		    const BITMAP* bitmap, const std::shared_ptr<const BitmapSnapshot>& previous);
+		static std::shared_ptr<const CheckpointPagePool::Snapshot> FreezePages(const std::shared_ptr<CheckpointPagePool::Allocation>& allocation);
 		/// Shares existing local preset searches during a joined world capture.
 		static const Entity* FindPreset(const std::string& type, const std::string& name, int module);
 	private:

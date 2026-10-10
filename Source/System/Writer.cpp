@@ -1269,6 +1269,7 @@ struct BitmapPixelCaptureScope::State {
 	std::array<Cells, 64> pixelShards;
 	std::mutex mutex;
 	std::unordered_map<const BITMAP*, std::shared_ptr<Cell>> cells;
+	std::unordered_map<const CheckpointPagePool::Allocation*, std::shared_ptr<const CheckpointPagePool::Snapshot>> pageCopies;
 	std::thread::id captureThread = std::this_thread::get_id();
 	~State() {
 		static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
@@ -1291,6 +1292,15 @@ std::shared_ptr<const void> BitmapPixelCaptureScope::TakeStorage() {
 	if (!m_State || s_Current.load() != m_State.get()) throw std::logic_error("pixel storage requires the current joined capture");
 	s_Current.store(m_Previous);
 	return std::shared_ptr<State>(std::move(m_State));
+}
+
+std::shared_ptr<const CheckpointPagePool::Snapshot> BitmapPixelCaptureScope::FreezePages(const std::shared_ptr<CheckpointPagePool::Allocation>& allocation) {
+	State* state = s_Current.load();
+	if (!state) return allocation->Freeze();
+	std::lock_guard lock(state->mutex);
+	auto& snapshot = state->pageCopies[allocation.get()];
+	if (!snapshot) snapshot = allocation->Freeze();
+	return snapshot;
 }
 const Entity* BitmapPixelCaptureScope::FindPreset(const std::string& type, const std::string& name, int module) {
 	State* state = s_Current.load();

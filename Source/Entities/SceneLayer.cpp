@@ -8,6 +8,7 @@
 #include "GLResourceMan.h"
 #include "BigTexture.h"
 #include "BitmapCheckpoint.h"
+#include "CheckpointFailure.h"
 
 #include "Draw.h"
 #include "tracy/Tracy.hpp"
@@ -25,6 +26,7 @@
 #include <stdexcept>
 #include <thread>
 #include <unordered_set>
+#include <map>
 
 using namespace RTE;
 
@@ -33,6 +35,48 @@ ConcreteClassInfo(SceneLayer, Entity, 0);
 ConcreteClassInfo(StaticSceneLayer, Entity, 0);
 
 namespace {
+	struct PixelAllocations {
+		std::mutex mutex;
+		std::map<uintptr_t, std::shared_ptr<CheckpointPagePool::Allocation>> values;
+		static inline std::atomic<PixelAllocations*> storage{nullptr};
+		static PixelAllocations& Get() { static auto* owner = [] { auto* value = new PixelAllocations; storage.store(value); return value; }(); return *owner; }
+		static void* Allocate(size_t bytes) noexcept {
+			try {
+				auto allocation = std::make_shared<CheckpointPagePool::Allocation>(bytes);
+				void* data = allocation->Data();
+				auto& storage = Get();
+				std::lock_guard lock(storage.mutex);
+				storage.values.emplace(reinterpret_cast<uintptr_t>(data), std::move(allocation));
+				return data;
+			} catch (...) { return nullptr; }
+		}
+		static int Release(void* address) noexcept {
+			if (!address) return 0;
+			auto* owner = storage.load();
+			if (!owner) return 0;
+			auto& storage = *owner;
+			std::shared_ptr<CheckpointPagePool::Allocation> allocation;
+			{
+				std::lock_guard lock(storage.mutex);
+				const auto found = storage.values.find(reinterpret_cast<uintptr_t>(address));
+				if (found == storage.values.end()) return 0;
+				allocation = std::move(found->second);
+				storage.values.erase(found);
+			}
+			return 1;
+		}
+		static std::shared_ptr<CheckpointPagePool::Allocation> Find(const BITMAP* bitmap, size_t rowBytes) {
+			if (!bitmap || bitmap->h <= 0 || !bitmap->line || !rowBytes) return {};
+			auto& storage = Get();
+			std::lock_guard lock(storage.mutex);
+			auto found = storage.values.upper_bound(reinterpret_cast<uintptr_t>(bitmap->line[0]));
+			if (found == storage.values.begin()) return {};
+			const auto allocation = std::prev(found)->second;
+			for (int row = 0; row < bitmap->h; ++row) if (!allocation->Contains(bitmap->line[row], rowBytes)) return {};
+			return allocation;
+		}
+	};
+	const bool s_PixelAllocator = [] { set_bitmap_pixel_allocator(PixelAllocations::Allocate, PixelAllocations::Release); return true; }();
 	std::atomic<int> s_BackBuffers{0};
 
 	BITMAP* NewBackBuffer(BITMAP* mainBitmap) {
@@ -93,6 +137,27 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::Freeze(const BITMAP* sourc
 }
 
 std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::FreezeRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll) {
+	if (source && source->w > 0 && source->h > 0) {
+		const int depth = bitmap_color_depth(source);
+		if (depth != 8 && depth != 15 && depth != 16 && depth != 24 && depth != 32)
+			throw std::runtime_error("Unsupported scene layer bitmap snapshot");
+		const size_t rowBytes = static_cast<size_t>(source->w) * ((depth + 7) / 8);
+		if (const auto allocation = PixelAllocations::Find(source, rowBytes)) {
+			auto snapshot = std::make_shared<BitmapSnapshot>();
+			snapshot->width = source->w; snapshot->height = source->h; snapshot->depth = depth; snapshot->rowBytes = rowBytes;
+			snapshot->fullCopyPercent = BitmapFullCopyPercent();
+			auto rows = std::make_unique<FrozenRows>();
+			rows->sourceRows.reserve(source->h);
+			for (int row = 0; row < source->h; ++row) rows->sourceRows.push_back(source->line[row]);
+			rows->previous = previous;
+			rows->hasMarks = markedRows != nullptr; rows->markedAll = markedAll;
+			if (markedRows) rows->marked = *markedRows;
+			rows->pages = BitmapPixelCaptureScope::FreezePages(allocation);
+			snapshot->frozenRows = std::move(rows);
+			snapshot->frozen = true;
+			return snapshot;
+		}
+	}
 	auto snapshot = std::const_pointer_cast<BitmapSnapshot>(CaptureRows(source, {}, markedRows, markedAll, true));
 	if (!snapshot || !previous || previous->width != snapshot->width || previous->height != snapshot->height || previous->depth != snapshot->depth) return snapshot;
 	auto rows = std::make_unique<FrozenRows>();
@@ -112,7 +177,15 @@ void BitmapSnapshot::Finalize() const {
 	if (!frozen) return;
 	std::call_once(ready, [this] {
 		std::vector<uint8_t*> lines(height);
-		for (int y = 0; y < height; ++y) lines[y] = frozenRows->pixels->At(static_cast<size_t>(y) * rowBytes);
+		if (frozenRows->pages) {
+			frozenRows->pages->Drain();
+			for (int y = 0; y < height; ++y) {
+				const auto bytes = frozenRows->pages->ReadBytes(frozenRows->sourceRows[y], rowBytes);
+				lines[y] = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(bytes.data()));
+			}
+		} else {
+			for (int y = 0; y < height; ++y) lines[y] = frozenRows->pixels->At(static_cast<size_t>(y) * rowBytes);
+		}
 		GFX_VTABLE vtable{}; vtable.color_depth = depth;
 		BITMAP source{}; source.w = width; source.h = height; source.vtable = &vtable; source.line = lines.data();
 		auto result = CaptureRows(&source, frozenRows->previous, frozenRows->hasMarks ? &frozenRows->marked : nullptr, frozenRows->markedAll, true);
@@ -177,6 +250,33 @@ bool BitmapSnapshot::RunSelfTest() {
 	};
 	try {
 		check("null_capture", !Capture(nullptr));
+		{
+			BitmapPtr parent(create_bitmap_ex(8, 1031, 79));
+			if (!parent) throw std::bad_alloc();
+			for (int row = 0; row < parent->h; ++row) for (int x = 0; x < parent->w; ++x) parent->line[row][x] = static_cast<uint8_t>(row * 19 + x * 7);
+			BitmapPtr child(create_sub_bitmap(parent.get(), 17, 3, 971, 71));
+			if (!child) throw std::bad_alloc();
+			const std::string original = Capture(child.get())->PixelBytes();
+			std::shared_ptr<const BitmapSnapshot> frozen;
+			{
+				BitmapPixelCaptureScope boundary(true);
+				const auto whole = Freeze(parent.get());
+				frozen = Freeze(child.get());
+				check("pixel_aliases_share_one_frozen_allocation", whole->frozenRows->pages == frozen->frozenRows->pages && frozen->copiedBytes == 0);
+			}
+			bool refused = false;
+			{
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativePages);
+				try { (void)Freeze(child.get()); } catch (const std::bad_alloc&) { refused = true; }
+			}
+			const auto retry = Freeze(child.get());
+			for (int row = 0; row < child->h; ++row) std::memset(child->line[row], row, 971);
+			child.reset(); parent.reset();
+			auto worker = std::async(std::launch::async, [frozen, retry, original] {
+				return frozen->PixelBytes() == original && retry->PixelBytes() == original;
+			});
+			check("pixel_page_failures_preserve_aliases_destruction_and_retry", refused && worker.get());
+		}
 		for (const int colorDepth: {8, 15, 16, 24, 32}) {
 			constexpr int width = 9, height = 100;
 			const size_t stride = width * ((colorDepth + 7) / 8);

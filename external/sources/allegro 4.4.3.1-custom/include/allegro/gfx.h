@@ -418,6 +418,7 @@ AL_FUNC(int, request_video_bitmap, (BITMAP *bitmap));
 AL_FUNC(int, enable_triple_buffer, (void));
 AL_FUNC(BITMAP *, create_bitmap, (int width, int height));
 AL_FUNC(BITMAP *, create_bitmap_ex, (int color_depth, int width, int height));
+AL_FUNC(void, set_bitmap_pixel_allocator, (void *(*allocate)(size_t), int (*release)(void *)));
 AL_FUNC(BITMAP *, create_sub_bitmap, (BITMAP *parent, int x, int y, int width, int height));
 AL_FUNC(BITMAP *, create_video_bitmap, (int width, int height));
 AL_FUNC(BITMAP *, create_system_bitmap, (int width, int height));
