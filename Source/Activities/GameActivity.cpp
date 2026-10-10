@@ -4472,6 +4472,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 	config.scenario = "Fight15SelfTest"; config.ownershipPolicy = "unique-id-split";
 	config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
 	config.matchConfig.peerCount = 1; config.matchConfig.players.resize(1);
+	if (row == "R3") config.matchConfig.players[0].team = TeamFour;
 	std::string error;
 	if (!coordinator.StartReplay(wire, config, &error)) return false;
 	ScenarioRunner::SetLockstepCoordinator(&coordinator);
@@ -4551,8 +4552,8 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		game->m_ActivityState = ActivityState::Running; game->m_Team[0] = TeamFour; game->m_TeamFunds[TeamFour] = 2345;
 		game->m_PlayerController[0].SetTeam(TeamFour);
 		auto* brain = static_cast<Actor*>(brainPreset->Clone()); brain->SetTeam(TeamFour); brain->SetPos(Vector(120, 120));
-		g_MovableMan.AddActor(brain); g_MovableMan.Update(); game->SetPlayerBrain(brain, 0); game->m_ControlledActor[0] = brain;
 		brain->SetControllerMode(Controller::CIM_PLAYER, 0);
+		g_MovableMan.AddActor(brain); g_MovableMan.Update(); game->SetPlayerBrain(brain, 0); game->m_ControlledActor[0] = brain;
 		game->m_pBuyGUI[0] = new BuyMenuGUI; if (game->m_pBuyGUI[0]->Create(&game->m_PlayerController[0]) < 0) return false;
 		game->m_InventoryMenuGUI[0] = new InventoryMenuGUI; game->m_InventoryMenuGUI[0]->Create(&game->m_PlayerController[0]);
 		PieMenu* pie = brain->GetPieMenu(); Controller* controller = brain->GetController();
@@ -4622,7 +4623,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		NetLobbyMember player; player.peerId = 2; player.displayName = "Edith"; player.connected = true; snapshot.members = {host, player};
 		const auto draw = [&] { menu.RefreshMultiplayerScreenControls(snapshot); menu.m_SubMenuScreenGUIControlManager->Draw(); present("fight15_R5"); };
 		const auto click = [&] {
-			GUIControl* start = menu.m_SubMenuScreenGUIControlManager->GetControl("ButtonLobbyStart"); if (!start) return false;
+			GUIControl* start = menu.m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart"); if (!start) return false;
 			int x, y, width, height; start->GetControlRect(&x, &y, &width, &height); x += width / 2; y += height / 2;
 			mouse(true, x, y, false); menu.m_SubMenuScreenGUIControlManager->Update();
 			int px = 0, py = 0, buttons[3]{}, states[3]{};
@@ -4641,7 +4642,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		check("host_start_takes_hand_press_release", click()); snapshot.startCountdownRunning = true; snapshot.startCountdownMs = 30000; draw();
 		check("started_countdown_is_visible", menu.m_MultiplayerStatusLabel->GetText().starts_with("Starting in 30 s"));
 		snapshot.startCountdownMs = 27000; draw(); check("countdown_counts_down", menu.m_MultiplayerStatusLabel->GetText().starts_with("Starting in 27 s"));
-		check("host_can_press_cancel", menu.m_SubMenuScreenGUIControlManager->GetControl("ButtonLobbyStart") && click());
+		check("host_can_press_cancel", menu.m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart") && click());
 		snapshot.startCountdownRunning = false; draw(); check("canceled_countdown_returns_to_waiting", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Edith to press Ready");
 	} else if (row == "R6") {
 		game->m_ActivityState = ActivityState::Running; g_MenuMan.SetIsInMenuScreen(true); g_UInputMan.TrapMousePos(false);
