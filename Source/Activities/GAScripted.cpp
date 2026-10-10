@@ -167,7 +167,7 @@ int GAScripted::Save(Writer& writer) const {
 	}
 	for (const CheckpointText& slice: m_FrozenPieSlices) {
 		writer.NewProperty("AddPieSlice");
-		writer.Append(slice.ReindentWriter(writer.GetIndentCount() - 1));
+		writer.Append(slice.ReindentWriter(writer.GetIndent() - 1));
 	}
 
 	for (const std::string& requiredArea: m_RequiredAreas) {
