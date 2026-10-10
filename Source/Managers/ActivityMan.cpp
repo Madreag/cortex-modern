@@ -905,9 +905,8 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	Scene* const scene = snapshot->Object(sourceScene);
 	const GAScripted* const activity = snapshot->Object(sourceActivity);
 	const std::string sceneName = SceneArchiveName(sourceScene, fileName);
-	CheckpointText startActivity;
 	const bool hasStart = m_StartActivity != nullptr;
-	if (hasStart) startActivity = Writer::Capture([this](Writer& writer) { writer.NewPropertyWithValue("CheckpointStartActivity", m_StartActivity.get()); });
+	const Activity* const startActivity = snapshot->Object(m_StartActivity.get());
 	const auto addLayer = [&image](std::string name, const SceneLayer* layer) {
 		if (layer) image->layers.emplace_back(std::move(name), layer->CaptureBitmapSnapshot(nullptr, true));
 	};
@@ -979,7 +978,7 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 		image->sceneUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
 		image->activity = Writer::Capture([&](Writer& writer) {
 			writer.NewPropertyWithValue("Activity", activity); writer.NewPropertyWithValue("HasCheckpointStartActivity", hasStart);
-			writer.PerPeerBegin(); if (hasStart) writer.Append(startActivity); writer.PerPeerEnd();
+			writer.PerPeerBegin(); if (hasStart) writer.NewPropertyWithValue("CheckpointStartActivity", startActivity); writer.PerPeerEnd();
 		});
 		image->sceneRuntime = CheckpointWriter::CaptureNative([scene] { return scene->SaveRuntimeCheckpoint(); });
 		{

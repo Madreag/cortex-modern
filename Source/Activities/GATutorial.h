@@ -25,6 +25,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a GATutorial object in system
 		/// memory. Create() should be called before using the object.
 		GATutorial();
+		CheckpointSnapshotMethods(GATutorial);
 
 		/// Destructor method used to clean up a GATutorial object before deletion
 		/// from system memory.

@@ -1,4 +1,5 @@
 #include "GATutorial.h"
+#include "CheckpointNativeSnapshot.h"
 
 #include "SceneMan.h"
 #include "PresetMan.h"
@@ -31,7 +32,15 @@ GATutorial::GATutorial() {
 	Clear();
 }
 
+GATutorial::GATutorial(const GATutorial& source, CheckpointNativeSnapshot& snapshot) : GameActivity(source, snapshot) {}
+
+Entity* GATutorial::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 GATutorial::~GATutorial() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
