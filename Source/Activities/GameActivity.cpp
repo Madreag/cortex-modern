@@ -13,6 +13,7 @@
 #include "ThreadMan.h"
 #include "MetaMan.h"
 #include "ConsoleMan.h"
+#include "LuaMan.h"
 #include "MenuMan.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
@@ -148,6 +149,9 @@ void GameActivity::Clear() {
 		m_NetworkPlayerNames[player] = "";
 	}
 	m_LockstepPlacementSeeded = false;
+	m_MatchLostBrainIDs.fill(0);
+	m_MatchBrainLosses.clear();
+	m_MatchEndReason.clear();
 	m_LockstepPlacementUidBase = 0;
 
 	m_StartingGold = 0;
@@ -1100,7 +1104,41 @@ void GameActivity::SetPaused(bool pause) {
 	Activity::SetPaused(pause);
 }
 
+void GameActivity::NoteMatchBrainLoss(const Actor& brain, const char* cause) {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive()) return;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (m_Brain[player] != &brain || m_MatchLostBrainIDs[player] == brain.GetUniqueID()) continue;
+		m_MatchLostBrainIDs[player] = brain.GetUniqueID();
+		std::ostringstream line;
+		line << LockstepSeatName(player) << "'s " << brain.GetPresetName() << " (team " << brain.GetTeam() + 1
+		     << ", uid " << brain.GetUniqueID() << ") " << cause << " at tick " << g_TimerMan.GetSimUpdateCount()
+		     << ", health " << brain.GetHealth() << ", wounds " << brain.GetWoundCount() << "/" << brain.GetGibWoundLimit();
+		m_MatchBrainLosses.push_back(line.str());
+		System::PrintDiagnosticLine("[net-match] brain lost: " + line.str());
+		g_ConsoleMan.PrintString("NETWORK: " + line.str());
+	}
+}
+
 void GameActivity::End() {
+	if (ScenarioRunner::IsLockstepControllerSyncActive() && !IsOver()) {
+		// The script chooses the result; keep its call site beside the brains that led to it.
+		std::string rule = "activity end";
+		if (LuaStateWrapper* wrapper = g_LuaMan.GetThreadCurrentLuaState()) {
+			lua_State* state = wrapper->GetLuaState();
+			lua_Debug frame;
+			for (int depth = 0; lua_getstack(state, depth, &frame); ++depth) {
+				if (lua_getinfo(state, "Sl", &frame) && frame.currentline > 0 && frame.source && frame.source[0] == '@') {
+					rule = std::string(frame.source + 1) + ":" + std::to_string(frame.currentline);
+					break;
+				}
+			}
+		}
+		m_MatchEndReason = GetPresetName() + " ended at tick " + std::to_string(g_TimerMan.GetSimUpdateCount()) + " by " + rule;
+		if (m_WinnerTeam != Teams::NoTeam) m_MatchEndReason += "; team " + std::to_string(m_WinnerTeam + 1) + " wins";
+		for (const std::string& loss: m_MatchBrainLosses) m_MatchEndReason += "; " + loss;
+		System::PrintDiagnosticLine("[net-match] activity end: " + m_MatchEndReason);
+		g_ConsoleMan.PrintString("NETWORK: " + m_MatchEndReason);
+	}
 	Activity::End();
 
 	bool playerWon = false;

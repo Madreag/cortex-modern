@@ -4280,13 +4280,14 @@ void RunMenuLoop() {
 static std::string BuildNetMatchResultText() {
 	const GameActivity* gameActivity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
 	const int winnerTeam = gameActivity ? gameActivity->GetWinnerTeam() : Activity::NoTeam;
+	const std::string reason = gameActivity && !gameActivity->GetMatchEndReason().empty() ? " - " + gameActivity->GetMatchEndReason() : std::string();
 	if (winnerTeam == Activity::NoTeam) {
-		return "Match over: draw";
+		return "Match over: draw" + reason;
 	}
 	if (g_NetMatchService.GetLocalTeam() == Activity::NoTeam) {
-		return "Match over";
+		return "Match over" + reason;
 	}
-	return winnerTeam == g_NetMatchService.GetLocalTeam() ? "Victory!" : "Defeat";
+	return (winnerTeam == g_NetMatchService.GetLocalTeam() ? std::string("Victory!") : std::string("Defeat")) + reason;
 }
 
 static std::string NetMatchEndReason(const Activity* activity) {

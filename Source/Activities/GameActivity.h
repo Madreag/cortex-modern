@@ -138,6 +138,10 @@ namespace RTE {
 		/// @return Whether the match is holding in the synchronized setup editor.
 		bool DescribeLockstepPlacementWait(std::string& names, int& placed, int& total) const;
 
+		/// Records an assigned brain's destruction before its actor is released.
+		void NoteMatchBrainLoss(const Actor& brain, const char* cause);
+		const std::string& GetMatchEndReason() const { return m_MatchEndReason; }
+
 		/// Test-only seam: puts a placement command on the wire exactly as issued, so a command every peer
 		/// has to refuse - an unknown preset, a seat this peer does not hold - can be exercised end to end.
 		/// @return Whether the command was enqueued.
@@ -841,6 +845,9 @@ namespace RTE {
 		std::array<NetGamePlaceBrain, Players::MaxPlayerCount> m_LockstepSeatBrains{}; //!< Per-seat committed placement; player < 0 means none yet.
 		long m_LockstepPlacementUidBase = 0; //!< The unique-id counter as the editing phase opened, identical on every peer.
 		bool m_LockstepPlacementSeeded = false; //!< The one-time seed pass has run for this editing phase.
+		std::array<long, Players::MaxPlayerCount> m_MatchLostBrainIDs{};
+		std::vector<std::string> m_MatchBrainLosses;
+		std::string m_MatchEndReason;
 
 		bool LoadNetLocalGameState(std::string_view text);
 		bool CreateNetLocalUI();

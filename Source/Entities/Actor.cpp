@@ -1974,6 +1974,9 @@ bool Actor::AddToInventoryBack(MovableObject* itemToAdd) {
 }
 
 void Actor::GibThis(const Vector& impactImpulse, MovableObject* movableObjectToIgnore) {
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) activity->NoteMatchBrainLoss(*this, "was gibbed");
+	}
 	// Play death sound
 	// TODO: Don't attenuate since death is pretty important.. maybe only make this happen for teh brains
 	if (m_DeathSound) {

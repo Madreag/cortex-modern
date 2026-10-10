@@ -7282,6 +7282,9 @@ void MovableMan::Update() {
 				// Set brain to 0 to avoid crashes due to brain deletion
 				Activity* pActivity = g_ActivityMan.GetActivity();
 				if (pActivity) {
+					if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+						if (auto* game = dynamic_cast<GameActivity*>(pActivity)) game->NoteMatchBrainLoss(**aIt, "was destroyed");
+					}
 					if (pActivity->IsAssignedBrain(*aIt))
 						pActivity->SetPlayerBrain(0, pActivity->IsBrainOfWhichPlayer(*aIt));
 					pActivity->ForgetDestroyedActor(*aIt);
