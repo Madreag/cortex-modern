@@ -24,6 +24,7 @@ struct BITMAP;
 namespace RTE {
 	struct BitmapSnapshot;
 	struct SoundData;
+	struct HitData;
 
 	// Snapshot constructors own archived fields without gameplay creation or callbacks.
 	class CheckpointNativeSnapshot {
@@ -47,6 +48,7 @@ namespace RTE {
 		void MaterializePixels() const;
 		CheckpointText FreezeWriter(const Serializable* source);
 		SoundData Freeze(const SoundData& source);
+		HitData Freeze(const HitData& source);
 
 		template<class T> T* Object(const T* source) {
 			static_assert(std::is_base_of_v<Entity, std::remove_const_t<T>>);

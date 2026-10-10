@@ -25,6 +25,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate an AtomGroup object in system memory. Create() should be called before using the object.
 		AtomGroup();
+		CheckpointSnapshotMethods(AtomGroup);
 
 		/// Copy constructor method used to instantiate an AtomGroup object identical to an already existing one.
 		/// @param reference An AtomGroup object which is passed in by reference.
@@ -387,6 +388,7 @@ namespace RTE {
 		float m_AreaDistributionSurfaceAreaMultiplier; //!< A multiplier for the AtomGroup's surface area, which affects how much it digs into terrain. 0.5 would halve the surface area so it would dig into terrain twice as much, 2.0 would make it dig into terrain half as much.
 
 	private:
+		std::shared_ptr<const Atom::FrozenList> m_FrozenAtoms;
 		std::string m_CheckpointMaterialReference;
 		long m_CheckpointOwnerID = 0;
 		bool m_HasCheckpointOwner = false;

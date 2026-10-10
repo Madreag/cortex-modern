@@ -67,10 +67,13 @@ namespace RTE {
 	class Atom : public Serializable {
 		friend struct ContractAudit;
 		struct FreezeState;
-		struct FrozenList;
 
 
 	public:
+		struct FrozenList;
+		static std::shared_ptr<const FrozenList> FreezeList(const std::vector<Atom*>& atoms, bool values = true);
+		static CheckpointText CaptureFrozenList(const std::shared_ptr<const FrozenList>& list);
+		static bool CaptureFrozenListProperties(Writer& writer, const std::shared_ptr<const FrozenList>& list);
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
 		std::string SaveCheckpoint() const;
@@ -84,6 +87,7 @@ namespace RTE {
 			AllocationScope(const AllocationScope&) = delete;
 			AllocationScope& operator=(const AllocationScope&) = delete;
 		private:
+		bool m_FrozenNative = false;
 			bool m_Previous;
 		};
 		/// Freezes native pages while the live capture records its small owned inputs.
@@ -106,6 +110,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate an Atom object in system memory. Create() should be called before using the object.
 		Atom();
+		Atom(const Atom& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Copy constructor method used to instantiate an Atom object identical to an already existing one.
 		/// @param reference An Atom object which is passed in by reference.
@@ -504,8 +509,6 @@ namespace RTE {
 
 	private:
 		static inline std::atomic<FreezeState*> s_FreezeState{nullptr};
-		static std::shared_ptr<const FrozenList> FreezeList(const std::vector<Atom*>& atoms, bool values = true);
-		static CheckpointText CaptureFrozenList(const std::shared_ptr<const FrozenList>& list);
 		// Owner, collision bodies and their roots are resolved after the complete
 		// native world has adopted its saved identities.
 		std::array<std::string, 3> m_CheckpointMaterialReferences;

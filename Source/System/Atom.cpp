@@ -1,4 +1,8 @@
 #include "Atom.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Material.h"
+#include "Color.h"
 #include "Base64/base64.h"
 #include "CheckpointArchive.h"
 #include "CheckpointProperties.h"
@@ -78,6 +82,72 @@ std::shared_ptr<const CheckpointPagePool::Snapshot> Atom::SnapshotScope::Pages()
 // This forms a circle around the Atom's offset center, to check for mask color pixels in order to determine the normal at the Atom's position.
 const int Atom::s_NormalChecks[c_NormalCheckCount][2] = {{0, -3}, {1, -3}, {2, -2}, {3, -1}, {3, 0}, {3, 1}, {2, 2}, {1, 3}, {0, 3}, {-1, 3}, {-2, 2}, {-3, 1}, {-3, 0}, {-3, -1}, {-2, -2}, {-1, -3}};
 
+HitData CheckpointNativeSnapshot::Freeze(const HitData& source) {
+	HitData value(source);
+	for (size_t index = 0; index < 2; ++index) {
+		value.Body[index] = nullptr; value.RootBody[index] = nullptr;
+		value.HitMaterial[index] = Freeze(source.HitMaterial[index]);
+	}
+	return value;
+}
+
+Atom::Atom(const Atom& source, CheckpointNativeSnapshot& snapshot) :
+	m_FrozenNative(true),
+	m_Offset(snapshot.Freeze(source.m_Offset)),
+	m_OriginalOffset(snapshot.Freeze(source.m_OriginalOffset)),
+	m_Normal(snapshot.Freeze(source.m_Normal)),
+	m_Material(snapshot.Freeze(source.m_Material)),
+	m_SubgroupID(snapshot.Freeze(source.m_SubgroupID)),
+	m_StepWasTaken(snapshot.Freeze(source.m_StepWasTaken)),
+	m_StepRatio(snapshot.Freeze(source.m_StepRatio)),
+	m_SegTraj(snapshot.Freeze(source.m_SegTraj)),
+	m_SegProgress(snapshot.Freeze(source.m_SegProgress)),
+	m_ChangedDir(snapshot.Freeze(source.m_ChangedDir)),
+	m_PrevError(snapshot.Freeze(source.m_PrevError)),
+	m_ResultWrapped(snapshot.Freeze(source.m_ResultWrapped)),
+	m_MOHitsDisabled(snapshot.Freeze(source.m_MOHitsDisabled)),
+	m_TerrainHitsDisabled(snapshot.Freeze(source.m_TerrainHitsDisabled)),
+	m_OwnerMO(nullptr),
+	m_CheckpointOwner(nullptr),
+	m_IgnoreMOID(snapshot.Freeze(source.m_IgnoreMOID)),
+	m_IgnoreMOIDs(snapshot.Freeze(source.m_IgnoreMOIDs)),
+	m_IgnoreMOIDsByGroup(snapshot.CopyValue(source.m_IgnoreMOIDsByGroup)),
+	m_LastTrailPoints(snapshot.Freeze(source.m_LastTrailPoints)),
+	m_TrailPoints(snapshot.Freeze(source.m_TrailPoints)),
+	m_LastHit(snapshot.Freeze(source.m_LastHit)),
+	m_MOIDHit(snapshot.Freeze(source.m_MOIDHit)),
+	m_TerrainMatHit(snapshot.Freeze(source.m_TerrainMatHit)),
+	m_NumPenetrations(snapshot.Freeze(source.m_NumPenetrations)),
+	m_TrailColor(snapshot.Freeze(source.m_TrailColor)),
+	m_TrailLength(snapshot.Freeze(source.m_TrailLength)),
+	m_TrailLengthVariation(snapshot.Freeze(source.m_TrailLengthVariation)),
+	m_IntPos{},
+	m_PrevIntPos{},
+	m_TrailPos{},
+	m_HitPos{},
+	m_Delta{},
+	m_Delta2{},
+	m_Increment{},
+	m_Error(snapshot.Freeze(source.m_Error)),
+	m_Dom(snapshot.Freeze(source.m_Dom)),
+	m_Sub(snapshot.Freeze(source.m_Sub)),
+	m_DomSteps(snapshot.Freeze(source.m_DomSteps)),
+	m_SubSteps(snapshot.Freeze(source.m_SubSteps)),
+	m_SubStepped(snapshot.Freeze(source.m_SubStepped)),
+	m_CheckpointMaterialReferences(source.CaptureCheckpointMaterialReferences()),
+	m_HasCheckpointMaterials(true),
+	m_CheckpointLinkIDs(source.CaptureCheckpointLinkIDs()),
+	m_HasCheckpointLinks(true),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	snapshot.FreezeArray(m_IntPos, source.m_IntPos);
+	snapshot.FreezeArray(m_PrevIntPos, source.m_PrevIntPos);
+	snapshot.FreezeArray(m_TrailPos, source.m_TrailPos);
+	snapshot.FreezeArray(m_HitPos, source.m_HitPos);
+	snapshot.FreezeArray(m_Delta, source.m_Delta);
+	snapshot.FreezeArray(m_Delta2, source.m_Delta2);
+	snapshot.FreezeArray(m_Increment, source.m_Increment);
+}
+
 Atom::Atom() {
 	NoteConstruction();
 	Clear();
@@ -152,6 +222,7 @@ std::string Atom::SampledConstructionStacks() {
 }
 
 Atom::~Atom() {
+	if (m_FrozenNative) return;
 	s_LiveCount.fetch_sub(1, std::memory_order_relaxed);
 	// Clear touches a dying atom's owners first thing; comparing its fields before and after would only touch them again.
 	m_CheckpointInitialized = false;
@@ -651,7 +722,11 @@ CheckpointText Atom::CaptureFrozenList(const std::shared_ptr<const FrozenList>& 
 
 bool Atom::CaptureFrozenProperties(Writer& writer, const std::vector<Atom*>& atoms) {
 	if (!CheckpointWriter::BatchEnabled() || !s_FreezeState.load(std::memory_order_acquire)) return false;
-	const auto list = FreezeList(atoms, false);
+	return CaptureFrozenListProperties(writer, FreezeList(atoms, false));
+}
+
+bool Atom::CaptureFrozenListProperties(Writer& writer, const std::shared_ptr<const FrozenList>& list) {
+	if (!list) return false;
 	const int indent = writer.GetIndent();
 	writer.Append(CheckpointText::Deferred([list, indent] {
 		struct Record { long long residue; CheckpointProperties::VectorValue offset; long long subgroup; int material; };

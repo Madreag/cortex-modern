@@ -1,5 +1,9 @@
 #include "DeterministicMath.h"
 #include "AtomGroup.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Material.h"
+#include "Atom.h"
 #include "Base64/base64.h"
 #include "CheckpointArchive.h"
 #include "CheckpointProperties.h"
@@ -25,6 +29,34 @@ using namespace RTE;
 
 ConcreteClassInfo(AtomGroup, Entity, 500);
 
+AtomGroup::AtomGroup(const AtomGroup& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	m_Atoms(source.m_AutoGenerate ? source.m_Atoms : snapshot.Freeze(source.m_Atoms)),
+	m_SubGroups(source.m_AutoGenerate ? source.m_SubGroups : snapshot.Freeze(source.m_SubGroups)),
+	m_OwnerMOSR(snapshot.Freeze(source.m_OwnerMOSR)),
+	m_StoredOwnerMass(snapshot.Freeze(source.m_StoredOwnerMass)),
+	m_Material(snapshot.Freeze(source.m_Material)),
+	m_AutoGenerate(snapshot.Freeze(source.m_AutoGenerate)),
+	m_Resolution(snapshot.Freeze(source.m_Resolution)),
+	m_Depth(snapshot.Freeze(source.m_Depth)),
+	m_JointOffset(snapshot.Freeze(source.m_JointOffset)),
+	m_LimbPos(snapshot.Freeze(source.m_LimbPos)),
+	m_MomentOfInertia(snapshot.Freeze(source.m_MomentOfInertia)),
+	m_IgnoreMOIDs(snapshot.Freeze(source.m_IgnoreMOIDs)),
+	m_AreaDistributionType(snapshot.Freeze(source.m_AreaDistributionType)),
+	m_AreaDistributionSurfaceAreaMultiplier(snapshot.Freeze(source.m_AreaDistributionSurfaceAreaMultiplier)),
+	m_FrozenAtoms(Atom::FreezeList(source.m_Atoms)),
+	m_CheckpointMaterialReference(source.m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(source.m_Material) : source.m_CheckpointMaterialReference),
+	m_CheckpointOwnerID(snapshot.Freeze(source.m_CheckpointOwnerID)),
+	m_HasCheckpointOwner(snapshot.Freeze(source.m_HasCheckpointOwner)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* AtomGroup::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 AtomGroup::AtomGroup() {
 	Clear();
 }
@@ -35,6 +67,7 @@ AtomGroup::AtomGroup(const AtomGroup& reference) {
 }
 
 AtomGroup::~AtomGroup() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -173,9 +206,9 @@ std::string AtomGroup::SaveCheckpoint() const {
 	    m_HasCheckpointOwner ? m_CheckpointOwnerID : (m_OwnerMOSR ? m_OwnerMOSR->GetUniqueID() : 0));
 	std::vector<CheckpointText> atoms;
 	std::unordered_map<const Atom*, size_t> indices;
-	const bool inlineAtoms = CheckpointWriter::IsCapturing() && CheckpointWriter::BatchEnabled();
+	const bool inlineAtoms = m_FrozenAtoms || (CheckpointWriter::IsCapturing() && CheckpointWriter::BatchEnabled());
 	if (inlineAtoms) {
-		writer.AppendFields(Atom::CaptureCheckpointList(m_Atoms));
+		writer.AppendFields(m_FrozenAtoms ? Atom::CaptureFrozenList(m_FrozenAtoms) : Atom::CaptureCheckpointList(m_Atoms));
 		if (m_SubGroups.empty()) writer(size_t{0});
 		else {
 			std::vector<std::pair<long, std::vector<Atom*>>> groups(m_SubGroups.begin(), m_SubGroups.end());
@@ -403,6 +436,7 @@ std::vector<long long> AtomGroup::GetTravelResidue() const {
 }
 
 void AtomGroup::CaptureSnapshotProperties(Writer& writer) const {
+	if (m_FrozenAtoms) { Atom::CaptureFrozenListProperties(writer, m_FrozenAtoms); return; }
 	if (Atom::CaptureFrozenProperties(writer, m_Atoms)) return;
 	struct Record {
 		long long residue;
