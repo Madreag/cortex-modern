@@ -43,6 +43,8 @@ namespace RTE {
 		/// Whether this menu has no controls, which is what a seat this machine does not present is answered with:
 		/// every call on it is a no-op and every getter answers neutral.
 		bool IsInert() const { return !m_pGUIController; }
+		/// The input probe uses the live shop controls; purchases still pass through their mouse handlers.
+		GUIControlManager* AutomationManager() const { return m_pGUIController; }
 
 		bool HasPendingCheckpoint() const { return !m_PendingCheckpoint.empty(); }
 		bool IsCheckpointInitialized() const { return m_CheckpointInitialized; }

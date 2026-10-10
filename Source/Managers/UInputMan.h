@@ -433,6 +433,7 @@ namespace RTE {
 		/// Gets mouse sensitivity while in Activity.
 		/// @return The current mouse sensitivity.
 		float GetMouseSensitivity() const { return m_MouseSensitivity; }
+		float GetMouseTrapRadius() const { return m_MouseTrapRadius; }
 
 		/// Sets mouse sensitivity while in Activity.
 		/// @param sensitivity New sensitivity value.

@@ -104,8 +104,7 @@ def file_evidence(path):
 
 
 def stamp():
-    clock = subprocess.check_output(["date", "-u", "+%Y-%m-%dT%H:%M:%S"], text=True).strip()
-    utc = datetime.strptime(clock, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    utc = datetime.now(timezone.utc)
     return utc.astimezone(timezone(timedelta(hours=-7))).strftime("%Y-%m-%d %I:%M:%S %p MST")
 
 
@@ -2248,6 +2247,8 @@ def run_one(options, scenario, run, run_index, out):
         result = _run_one(options, scenario, run, run_index, out)
         if not getattr(options, "dry_run", False):
             result["topology"] = "spread" if getattr(options, "remote_capture", None) else spread.topology(options, count)
+            if not getattr(options, "remote_capture", None):
+                result["proof"] = False
             for peer in result.get("peers", []):
                 peer["topology"] = result["topology"]
                 peer["record"]["topology"] = result["topology"]
