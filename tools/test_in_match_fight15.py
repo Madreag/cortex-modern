@@ -23,10 +23,10 @@ ROWS = tuple(f"R{number}" for number in range(1, 9))
 
 def settled_guard_steps():
     steps = guard_steps()
-    # The camera scrolls in real time. Controller icons also blink for the first four seconds.
-    # Capture the whole frozen simulation after both presentation clocks have settled.
+    # The camera scrolls in real time and controller icons expire after thirty seconds.
+    # Capture the whole frozen simulation after that interval on cold and warm starts alike.
     steps[2]["renders"] = 30
-    steps[2]["elapsed_ms"] = 5000
+    steps[2]["elapsed_ms"] = 31000
     return steps
 
 
