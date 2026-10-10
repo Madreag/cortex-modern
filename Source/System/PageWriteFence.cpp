@@ -1,4 +1,5 @@
 #include "PageWriteFence.h"
+#include "CheckpointFailure.h"
 
 #include <algorithm>
 #include <array>
@@ -7,6 +8,7 @@
 #include <cstring>
 #include <future>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <thread>
 
@@ -62,11 +64,12 @@ namespace RTE {
 			uintptr_t begin = 0, end = 0;
 			PageWriteFence::CopyObserver observer = nullptr;
 			void* context = nullptr;
+			std::atomic<size_t> readers{0};
+			std::atomic<bool> retiring{false};
 		};
 		struct CopyWatches {
-			std::array<CopyWatch, 256> watches{};
-			std::array<std::atomic<size_t>, 256> readers{};
-			std::array<std::atomic<bool>, 256> retiring{};
+			std::map<uintptr_t, std::shared_ptr<CopyWatch>> ranges;
+			std::map<void*, std::shared_ptr<CopyWatch>, std::less<void*>> owners;
 			std::atomic<size_t> count{0};
 			std::atomic_flag lock = ATOMIC_FLAG_INIT;
 		};
@@ -167,23 +170,21 @@ namespace RTE {
 		bool Take(uintptr_t address) {
 			CopyWatches& copies = Watches();
 			if (copies.count.load(std::memory_order_acquire)) {
-				CopyWatch found;
-				size_t slot = copies.watches.size();
+				CopyWatch* found = nullptr;
 				{
 					SpinLock guard(copies.lock);
-					for (size_t index = 0; index < copies.watches.size(); ++index) {
-						const CopyWatch& watch = copies.watches[index];
-						if (watch.owner && !copies.retiring[index].load(std::memory_order_relaxed) && address >= watch.begin && address < watch.end) {
-							found = watch;
-							slot = index;
-							copies.readers[slot].fetch_add(1, std::memory_order_acquire);
-							break;
+					auto range = copies.ranges.upper_bound(address);
+					if (range != copies.ranges.begin()) {
+						CopyWatch& watch = *std::prev(range)->second;
+						if (!watch.retiring.load(std::memory_order_relaxed) && address < watch.end) {
+							watch.readers.fetch_add(1, std::memory_order_acquire);
+							found = &watch;
 						}
 					}
 				}
-				if (slot < copies.watches.size()) {
-					const bool taken = found.observer(found.context, address);
-					copies.readers[slot].fetch_sub(1, std::memory_order_release);
+				if (found) {
+					const bool taken = found->observer(found->context, address);
+					found->readers.fetch_sub(1, std::memory_order_release);
 					return taken;
 				}
 			}
@@ -228,40 +229,58 @@ namespace RTE {
 			if (!InstallHandler()) return false;
 		}
 		CopyWatches& copies = Watches();
-		size_t slot = copies.watches.size();
+		std::shared_ptr<CopyWatch> watch;
+		decltype(copies.ranges)::node_type rangeNode;
+		decltype(copies.owners)::node_type ownerNode;
+		// Nodes allocate before the registry lock; the fault handler only looks them up.
 		{
 			SpinLock guard(copies.lock);
-			size_t vacant = copies.watches.size(), previous = copies.watches.size();
-			for (size_t index = 0; index < copies.watches.size(); ++index) {
-				const CopyWatch& watch = copies.watches[index];
-				if (watch.owner == owner) {
-					if (copies.retiring[index].load(std::memory_order_relaxed) || !arm || watch.begin != begin || begin + buffer.bytes < watch.end || watch.observer != observer || watch.context != context) return false;
-					previous = index;
-				} else if (watch.owner && begin < watch.end && begin + buffer.bytes > watch.begin) return false;
-				if (!watch.owner && vacant == copies.watches.size()) vacant = index;
-			}
-			slot = previous < copies.watches.size() ? previous : vacant;
-			if (slot == copies.watches.size()) return false;
-			// The slot pins its context while an arm or a fault uses it outside the registry lock.
-			copies.readers[slot].fetch_add(1, std::memory_order_acquire);
-			copies.watches[slot] = {owner, begin, begin + buffer.bytes, observer, context};
-			if (previous == copies.watches.size()) copies.count.fetch_add(1, std::memory_order_release);
+			if (const auto previous = copies.owners.find(owner); previous != copies.owners.end()) watch = previous->second;
 		}
-		// Publish before protection, as for a first watch. A failed arm can have
-		// protected part of the range: keep its observer until UnwatchCopies so
-		// those pages still preserve earlier generations or open safely.
-		// The arm callback holds the copy coordinator while protecting and adding
-		// a generation. Handler and worker writes cannot open the new fence midway.
+		if (!watch) {
+			try {
+				CheckpointFailure::Check(CheckpointFailure::Point::CopyWatch);
+				watch = std::make_shared<CopyWatch>();
+				watch->owner = owner; watch->begin = begin; watch->end = begin + buffer.bytes;
+				watch->observer = observer; watch->context = context;
+				decltype(copies.owners) owners;
+				owners.emplace(owner, watch); ownerNode = owners.extract(owner);
+				CheckpointFailure::Check(CheckpointFailure::Point::CopyWatch);
+				decltype(copies.ranges) ranges;
+				ranges.emplace(begin, watch); rangeNode = ranges.extract(begin);
+			} catch (const std::bad_alloc&) { return false; }
+		}
+		{
+			SpinLock guard(copies.lock);
+			const auto previous = copies.owners.find(owner);
+			if (previous != copies.owners.end()) {
+				watch = previous->second;
+				if (watch->retiring.load(std::memory_order_relaxed) || !arm || watch->begin != begin || begin + buffer.bytes < watch->end || watch->observer != observer || watch->context != context) return false;
+			}
+			auto next = copies.ranges.lower_bound(begin);
+			if (next != copies.ranges.end() && next->second == watch) ++next;
+			if (next != copies.ranges.end() && next->first < begin + buffer.bytes) return false;
+			const auto first = copies.ranges.lower_bound(begin);
+			if (first != copies.ranges.begin() && std::prev(first)->second->end > begin) return false;
+			if (previous == copies.owners.end()) {
+				if (!rangeNode || !ownerNode) return false;
+				copies.ranges.insert(std::move(rangeNode));
+				copies.owners.insert(std::move(ownerNode));
+				copies.count.fetch_add(1, std::memory_order_release);
+			} else watch->end = begin + buffer.bytes;
+			watch->readers.fetch_add(1, std::memory_order_acquire);
+		}
+		// A failed arm retains its observer until unwatch opens any protected pages.
 		const auto arming = costs ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		if (costs) costs->setupUs = std::chrono::duration_cast<std::chrono::microseconds>(arming - started).count();
 		if (arm) {
 			const bool armed = arm(armContext, begin, buffer.bytes);
 			if (costs) costs->armUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - arming).count();
-			copies.readers[slot].fetch_sub(1, std::memory_order_release);
+			watch->readers.fetch_sub(1, std::memory_order_release);
 			return armed;
 		}
 		const bool protectedPages = Protect(begin, buffer.bytes, true);
-		copies.readers[slot].fetch_sub(1, std::memory_order_release);
+		watch->readers.fetch_sub(1, std::memory_order_release);
 		if (!protectedPages) UnwatchCopies(owner);
 		return protectedPages;
 	}
@@ -269,31 +288,30 @@ namespace RTE {
 	void PageWriteFence::UnwatchCopies(void* owner) {
 		CopyWatches& copies = Watches();
 		if (!copies.count.load(std::memory_order_acquire)) return;
-		CopyWatch retired;
-		size_t slot = copies.watches.size();
+		std::shared_ptr<CopyWatch> retired;
 		bool first = false;
 		{
 			SpinLock guard(copies.lock);
-			for (size_t index = 0; index < copies.watches.size(); ++index) {
-				if (copies.watches[index].owner != owner) continue;
-				slot = index;
-				retired = copies.watches[index];
-				first = !copies.retiring[index].exchange(true, std::memory_order_acq_rel);
-				break;
+			if (const auto found = copies.owners.find(owner); found != copies.owners.end()) {
+				retired = found->second;
+				first = !retired->retiring.exchange(true, std::memory_order_acq_rel);
 			}
 		}
-		if (slot == copies.watches.size()) return;
+		if (!retired) return;
 		if (!first) {
-			while (copies.retiring[slot].load(std::memory_order_acquire)) std::this_thread::yield();
+			while (retired->retiring.load(std::memory_order_acquire)) std::this_thread::yield();
 			return;
 		}
-		// A retired slot is not reused until its last callback releases the context.
-		while (copies.readers[slot].load(std::memory_order_acquire)) std::this_thread::yield();
-		Protect(retired.begin, retired.end - retired.begin, false);
+		// The observer's context survives every arm and fault that already retained it.
+		while (retired->readers.load(std::memory_order_acquire)) std::this_thread::yield();
+		Protect(retired->begin, retired->end - retired->begin, false);
+		decltype(copies.ranges)::node_type rangeNode;
+		decltype(copies.owners)::node_type ownerNode;
 		{
 			SpinLock guard(copies.lock);
-			copies.watches[slot] = {};
-			copies.retiring[slot].store(false, std::memory_order_release);
+			rangeNode = copies.ranges.extract(retired->begin);
+			ownerNode = copies.owners.extract(owner);
+			retired->retiring.store(false, std::memory_order_release);
 			copies.count.fetch_sub(1, std::memory_order_release);
 		}
 	}
@@ -426,7 +444,7 @@ namespace RTE {
 				if (data) munmap(data, bytes);
 #endif
 			}
-		} pages{nullptr, page * 2};
+		} pages{nullptr, page * 1026};
 #ifdef _WIN32
 		pages.data = static_cast<uint8_t*>(VirtualAlloc(nullptr, pages.bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
 #else
@@ -496,6 +514,32 @@ namespace RTE {
 		writer.get();
 		unwatch.get();
 		if (!observedWrite || releasedEarly || second.saved.front() != 77 || second.data[0] != 91) return "unwatch released a context still answering its frozen write";
+		std::vector<Probe> many;
+		many.reserve(1024);
+		struct UnwatchAll {
+			std::vector<Probe>& probes;
+			~UnwatchAll() { for (auto& probe: probes) UnwatchCopies(&probe); }
+		} unwatchAll{many};
+		for (size_t index = 0; index < 1024; ++index) {
+			many.push_back({pages.data + page * (index + 2), std::vector<uint8_t>(page)});
+			auto& probe = many.back();
+			if (!WatchCopies(&probe, {probe.data, page}, observe, &probe)) return "independent page watch refused at " + std::to_string(index);
+		}
+		for (auto& probe: many) {
+			*static_cast<volatile uint8_t*>(probe.data) = 83;
+			if (probe.saved.front() != 42) return "page watch lookup preserved another allocation";
+			UnwatchCopies(&probe);
+		}
+		Probe retry{pages.data, std::vector<uint8_t>(page)};
+		for (size_t after: {size_t(0), size_t(1)}) {
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::CopyWatch, after);
+			if (WatchCopies(&retry, {retry.data, page}, observe, &retry) || !failure.Triggered()) return "watch allocation failure was not refused";
+			*static_cast<volatile uint8_t*>(retry.data) = 97;
+		}
+		if (!WatchCopies(&retry, {retry.data, page}, observe, &retry)) return "watch allocation failure left an unusable registration";
+		*static_cast<volatile uint8_t*>(retry.data) = 101;
+		UnwatchCopies(&retry);
+		if (retry.saved.front() != 97 || retry.data[0] != 101) return "watch allocation failure changed the retry's saved page";
 		return {};
 	}
 
