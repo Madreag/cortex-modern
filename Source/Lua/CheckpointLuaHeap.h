@@ -334,7 +334,9 @@ namespace RTE::CheckpointLua {
 
 		// The default gate holds VM entry until the submitted copy lands. A checkpoint's page fence instead
 		// saves a page before its next write; without a Submit either copy runs here.
-		Snapshot Freeze(const Submit& submit, bool copyOnWrite = false, bool batchCopy = false, HeapFreezeCosts* costs = nullptr) {
+		/// @param armLater When given, the page fences are left to the returned work instead of being set here; it must finish
+		/// before the VM runs again and before the copy task can start.
+		Snapshot Freeze(const Submit& submit, bool copyOnWrite = false, bool batchCopy = false, HeapFreezeCosts* costs = nullptr, std::function<void()>* armLater = nullptr) {
 			const auto started = std::chrono::steady_clock::now();
 			if (!m_State) throw std::runtime_error("a Lua heap capture has no state");
 			void* allocatorData = nullptr;
@@ -397,13 +399,24 @@ namespace RTE::CheckpointLua {
 					m_CowCoordinator->base = m_Base;
 					m_CowCoordinator->pageBytes = pageBytes;
 				}
-				CowCoordinator::Prepared prepared{m_CowCoordinator.get(), cow};
 				if (costs) costs->setupUs = MicrosecondsSince(started);
 				m_CowCopy = cow;
-				if (!PageWriteFence::WatchCopies(this, {reinterpret_cast<uint8_t*>(m_Base), data->committed}, CowCoordinator::OnWrite,
-				                                m_CowCoordinator.get(), CowCoordinator::Arm, &prepared, costs ? &costs->watch : nullptr))
-					throw std::runtime_error("could not fence the Lua heap page copy");
-				m_CowGateFree.store(true, std::memory_order_release);
+				if (armLater) {
+					*armLater = [this, cow, coordinator = m_CowCoordinator, committed = data->committed] {
+						CowCoordinator::Prepared prepared{coordinator.get(), cow};
+						if (!PageWriteFence::WatchCopies(this, {reinterpret_cast<uint8_t*>(m_Base), committed}, CowCoordinator::OnWrite, coordinator.get(), CowCoordinator::Arm, &prepared)) {
+							coordinator->Cancel(cow);
+							throw std::runtime_error("could not fence the Lua heap page copy");
+						}
+						m_CowGateFree.store(true, std::memory_order_release);
+					};
+				} else {
+					CowCoordinator::Prepared prepared{m_CowCoordinator.get(), cow};
+					if (!PageWriteFence::WatchCopies(this, {reinterpret_cast<uint8_t*>(m_Base), data->committed}, CowCoordinator::OnWrite,
+					                                m_CowCoordinator.get(), CowCoordinator::Arm, &prepared, costs ? &costs->watch : nullptr))
+						throw std::runtime_error("could not fence the Lua heap page copy");
+					m_CowGateFree.store(true, std::memory_order_release);
+				}
 			}
 			const bool receipt = Receipts().load(std::memory_order_acquire);
 			const size_t freshBytes = m_FreshBytes;

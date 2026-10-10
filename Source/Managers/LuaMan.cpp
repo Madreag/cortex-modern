@@ -157,6 +157,15 @@ struct RTE::LuaPathCallbackContext {
 const std::unordered_set<std::string> LuaMan::c_FileAccessModes = {"r", "r+", "w", "w+", "a", "a+", "rt", "wt"};
 
 namespace {
+	/// The heap fences a world capture's states leave to the checkpoint pool; the capture waits for every one before it returns.
+	struct HeapFences {
+		std::mutex mutex;
+		std::vector<std::future<void>> pending;
+	};
+	std::atomic<HeapFences*> s_HeapFences{nullptr};
+}
+
+namespace {
 	constexpr uint64_t c_PeerScriptBirthBand = uint64_t{1} << 36;
 	char s_PeerScriptBirthKey;
 	char s_SharedScriptBirthKey;
@@ -7075,7 +7084,15 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		CaptureTrace::Span heapSpan("graph_heap_freeze", std::to_string(g_LuaMan.GetStateIndex(this)));
 		CheckpointLua::HeapFreezeCosts heapCosts;
 		const uint64_t heapCpu = phaseCosts ? CheckpointThreadCpuUnits() : 0;
-		image->heap = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit, true, CheckpointWriter::BatchEnabled(), phaseCosts ? &heapCosts : nullptr);
+		HeapFences* fences = s_HeapFences.load(std::memory_order_acquire);
+		std::function<void()> fence;
+		image->heap = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit, true, CheckpointWriter::BatchEnabled(), phaseCosts ? &heapCosts : nullptr, fences ? &fence : nullptr);
+		if (fence) {
+			// The fence is set on the idle checkpoint pool, so the largest state's capture does not wait for its heap's pages.
+			auto fenced = g_ThreadMan.GetCheckpointThreadPool().submit(std::move(fence));
+			std::lock_guard lock(fences->mutex);
+			fences->pending.push_back(std::move(fenced));
+		}
 		const uint64_t heapCpuDone = phaseCosts ? CheckpointThreadCpuUnits() : 0;
 		const size_t bytes = image->heap.ByteCount();
 		const auto frozenUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
@@ -7212,6 +7229,20 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 		}
 	}
 	std::optional<ParallelWork> states;
+	// The states' heap fences finish before this capture returns, and before anything may write the heaps.
+	HeapFences fences;
+	struct FencesJoined {
+		HeapFences& fences;
+		~FencesJoined() {
+			s_HeapFences.store(nullptr, std::memory_order_release);
+			for (auto& fence: fences.pending) if (fence.valid()) fence.wait();
+		}
+	} fencesJoined{fences};
+	if (poolTakesAll) {
+		// The pool is made on this thread before any state reaches it.
+		g_ThreadMan.GetCheckpointThreadPool();
+		s_HeapFences.store(&fences, std::memory_order_release);
+	}
 	if (poolTakesAll) {
 		// The world comes first and the largest state beside it; a state that reaches its natives before the world is
 		// described waits for it.
@@ -7246,6 +7277,9 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 		states->Finish(!failure);
 	}
 	if (failure) std::rethrow_exception(failure);
+	s_HeapFences.store(nullptr, std::memory_order_release);
+	for (auto& fence: fences.pending) fence.get();
+	fences.pending.clear();
 	if (phaseCosts && boundary && shared) {
 		const auto [vectors, controllers] = shared->DirectOwnerCounts();
 		System::PrintDiagnosticLine(std::format("[checkpoint-native-lookups] direct_vectors={} direct_controllers={} full_owner_index={}", vectors, controllers, shared->HasOwnerIndex()));
