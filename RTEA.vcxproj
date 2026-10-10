@@ -958,6 +958,7 @@
     <ClInclude Include="Source\Network\NetLockstepSelfTest.h" />
     <ClInclude Include="Source\Network\NetSessionPlaneSelfTest.h" />
     <ClInclude Include="Source\Network\NetMatchConfig.h" />
+    <ClInclude Include="Source\Menus\NetLinkQualityPresentation.h" />
     <ClInclude Include="Source\Network\NetMatchRunner.h" />
     <ClInclude Include="Source\Network\NetMatchService.h" />
     <ClInclude Include="Source\Network\NetLanDiscovery.h" />

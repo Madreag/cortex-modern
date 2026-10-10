@@ -8,6 +8,8 @@
 #include "GameActivity.h"
 #include "GUI.h"
 #include "GUIButton.h"
+#include "GUIComboBox.h"
+#include "GUIControlManager.h"
 #include "GUIFont.h"
 #include "GUILabel.h"
 #include "GnsTransport.h"
@@ -37,6 +39,7 @@
 #include <SDL3/SDL.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -255,6 +258,7 @@ namespace {
 		// The heights the band laid itself out with, so a failure names them instead of only the rectangle.
 		const NetModerationGUI::ChatBand chatBand = panel ? panel->GetChatBand() : NetModerationGUI::ChatBand{};
 		observed["net_ui"] = {{"status", panel ? OverlayRect(panel->GetStatusRect()) : Rect(0, 0, 0, 0, false)},
+		    {"connection", panel ? OverlayRect(panel->GetConnectionRect()) : Rect(0, 0, 0, 0, false)},
 		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)},
 		    {"chat", panel ? OverlayRect(panel->GetChatRect()) : Rect(0, 0, 0, 0, false)},
 		    {"roster", panel ? OverlayRect(panel->GetRosterRect()) : Rect(0, 0, 0, 0, false)},
@@ -419,8 +423,19 @@ namespace {
 		}
 		auto* menu = g_MenuMan.GetNetworkPanel();
 		Require(menu != nullptr, "network panel has not been constructed");
-		auto* control = menu->GetControl(step.at("control").get<std::string>());
-		Require(control != nullptr, "unknown control: " + step.at("control").get<std::string>());
+		std::string name = step.at("control").get<std::string>();
+		if (step.contains("seat_name")) {
+			bool found = false;
+			for (const auto& [peer, view]: g_NetMatchService.GetSeatViews()) {
+				if (view.name != step.at("seat_name").get<std::string>()) continue;
+				name = "NetworkSeatLink" + std::to_string(peer);
+				found = true;
+				break;
+			}
+			Require(found, "unknown seat name: " + step.at("seat_name").get<std::string>());
+		}
+		auto* control = menu->GetControl(name);
+		Require(control != nullptr, "unknown control: " + name);
 		return control;
 	}
 
@@ -432,11 +447,15 @@ namespace {
 		if (auto* label = dynamic_cast<GUILabel*>(control)) {
 			value["text"] = label->GetText();
 			value["text_height"] = label->GetTextHeight();
+			value["text_width"] = label->GetTextWidth();
 		} else if (auto* button = dynamic_cast<GUIButton*>(control)) {
 			value["text"] = button->GetText();
 			value["pushed"] = button->IsPushed();
 		} else if (auto* box = dynamic_cast<GUITextBox*>(control)) {
 			value["text"] = box->GetText();
+		} else if (auto* combo = dynamic_cast<GUIComboBox*>(control)) {
+			value["selected_index"] = combo->GetSelectedIndex();
+			if (const auto* item = combo->GetSelectedItem()) value["text"] = item->m_Name;
 		} else if (auto* list = dynamic_cast<GUIListBox*>(control)) {
 			// A list reads as its rows, one per line, and the row it has selected.
 			std::string text;
@@ -489,6 +508,17 @@ namespace {
 
 	void Push(SDL_Event& event) {
 		Require(SDL_PushEvent(&event), std::string("SDL_PushEvent: ") + SDL_GetError());
+	}
+
+	bool HeldPeer(const Json& peer) {
+		const auto& views = g_NetMatchService.GetSeatViews();
+		if (peer.is_string()) {
+			return std::any_of(views.begin(), views.end(), [&](const auto& entry) {
+				return entry.second.name == peer.get<std::string>() && entry.second.seat.holdCause != NetSeatHoldCause::None;
+			});
+		}
+		const auto found = views.find(peer.get<uint8_t>());
+		return found != views.end() && found->second.seat.holdCause != NetSeatHoldCause::None;
 	}
 
 	Phase StepPhase(const Json& step) {
@@ -568,8 +598,9 @@ namespace {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("lockstep_frame_at_least") || step.contains("renders") ||
 			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
 			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
-			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most") || step.contains("paused"),
+			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer"),
 			    "wait has no predicate");
+			if (step.contains("held_peer") && !HeldPeer(step.at("held_peer"))) return false;
 			// The title screen's own scene reads as Gameplay too, paused; a started game runs.
 			if (step.contains("paused") && observed["paused"] != step["paused"]) return false;
 			if (step.contains("chat_entry_open") && observed["net_ui"].at("chat_entry_open") != step["chat_entry_open"]) return false;
@@ -771,6 +802,29 @@ namespace {
 				Require(observed.at(it.key()) == it.value(), "assertion differs: " + it.key());
 			}
 			if (step.contains("sim_at_least")) Require(observed["sim_frame"].get<long long>() >= step["sim_at_least"].get<long long>(), "simulation did not advance");
+			if (step.value("connections_absent", false)) {
+				const auto* panel = g_MenuMan.GetNetworkPanel();
+				Require(!panel || panel->GetControl("LabelOwnConnection") == nullptr, "connection controls were loaded outside a lockstep match");
+			}
+			if (step.contains("held_peer")) Require(HeldPeer(step.at("held_peer")), "the named seat is not held");
+			if (step.value("no_duplicate_name", false)) {
+				const auto* panel = g_MenuMan.GetNetworkPanel();
+				Require(panel && observed.at("panel_open") == true, "Seats is not open for the name assertion");
+				const auto rows = panel->AutomationRowNames();
+				observed["seat_row_names"] = rows;
+				for (const auto& name: rows) Require(std::count(rows.begin(), rows.end(), name) == 1, "duplicate Seats row name: " + name);
+				std::string text;
+				for (auto* item: *panel->AutomationManager()->GetControlList()) {
+					if (!item->GetVisible() || (item->GetName() != "NetworkSeatsRoster" && !item->GetName().starts_with("NetworkSeatName"))) continue;
+					if (auto* label = dynamic_cast<GUILabel*>(item)) text += label->GetText() + '\n';
+				}
+				for (const auto& name: step.at("names").get<std::vector<std::string>>()) {
+					size_t count = 0;
+					for (size_t at = text.find(name); at != std::string::npos; at = text.find(name, at + name.size())) ++count;
+					Require(count <= 1, "duplicate rendered seat name: " + name);
+					if (name == step.value("held_name", std::string{})) Require(count == 1, "held seat name is not drawn exactly once");
+				}
+			}
 			if (step.contains("name")) {
 				const std::string name = step.at("name").get<std::string>();
 				if (name == "pad_held") {
@@ -787,7 +841,8 @@ namespace {
 				}
 			}
 		} else if (op == "assert_control") {
-			observed["control"] = ReadControl(Control(step));
+			GUIControl* control = Control(step);
+			observed["control"] = ReadControl(control);
 			const auto& value = observed["control"];
 			if (step.contains("equals")) {
 				for (auto it = step.at("equals").begin(); it != step["equals"].end(); ++it) {
@@ -804,6 +859,48 @@ namespace {
 				Require(rect[0].get<int>() >= 0 && rect[1].get<int>() >= 0 && rect[0].get<int>() + rect[2].get<int>() <= g_WindowMan.GetResX() &&
 				    rect[1].get<int>() + rect[3].get<int>() <= g_WindowMan.GetResY(), "control exceeds viewport");
 				if (value.contains("text_height")) Require(value["text_height"].get<int>() <= rect[3].get<int>(), "label text exceeds its height");
+				if (step.value("unwrapped", false)) Require(value.at("text_width").get<int>() <= rect[2].get<int>(), "label text exceeds its width");
+			}
+			if (step.contains("inside")) {
+				Json parentStep = {{"control", step.at("inside")}};
+				const Json parent = ReadControl(Control(parentStep)).at("rect");
+				const Json& rect = value.at("rect");
+				Require(rect[0] >= parent[0] && rect[1] >= parent[1] &&
+				    rect[0].get<int>() + rect[2].get<int>() <= parent[0].get<int>() + parent[2].get<int>() &&
+				    rect[1].get<int>() + rect[3].get<int>() <= parent[1].get<int>() + parent[3].get<int>(), "control leaves its panel");
+			}
+			if (step.contains("ink_rgb")) {
+				const BITMAP* frame = g_FrameMan.GetBackBuffer32();
+				const auto rgb = step.at("ink_rgb").get<std::array<int, 3>>();
+				const Json& rect = value.at("rect");
+				int pixels = 0;
+				for (int y = std::max(0, rect[1].get<int>()); y < std::min(frame->h, rect[1].get<int>() + rect[3].get<int>()); ++y) {
+					for (int x = std::max(0, rect[0].get<int>()); x < std::min(frame->w, rect[0].get<int>() + rect[2].get<int>()); ++x) {
+						const int pixel = getpixel(const_cast<BITMAP*>(frame), x, y);
+						if (getr32(pixel) == rgb[0] && getg32(pixel) == rgb[1] && getb32(pixel) == rgb[2]) ++pixels;
+					}
+				}
+				observed["control"]["ink_pixels"] = pixels;
+				Require(pixels >= 3, "the rendered label has no expected state color");
+			}
+			if (step.value("hud_area", false)) {
+				const auto& area = observed.at("net_ui").at("connection");
+				Require(area.at("visible") == true && area.at("y").get<int>() + area.at("h").get<int>() <= g_WindowMan.GetResY() / 2, "connection badge leaves the HUD area");
+				for (const std::string& name: {"status", "toasts", "chat", "seats_panel"}) Require(!Overlaps(area, observed.at("net_ui").at(name)), "connection badge overlaps " + name);
+				for (const auto& seat: observed.at("editor_seats")) {
+					for (const std::string& name: {"picker", "screen_text_rect"}) {
+						if (seat.contains(name)) Require(!Overlaps(area, seat.at(name)), "connection badge overlaps " + name);
+					}
+				}
+			}
+			for (const auto& name: step.value("clear_of", std::vector<std::string>{})) {
+				Json otherStep = {{"control", name}};
+				const auto other = ReadControl(Control(otherStep));
+				if (!other.at("visible").get<bool>()) continue;
+				const auto& a = value.at("rect");
+				const auto& b = other.at("rect");
+				Require(a[0].get<int>() >= b[0].get<int>() + b[2].get<int>() || b[0].get<int>() >= a[0].get<int>() + a[2].get<int>() ||
+				    a[1].get<int>() >= b[1].get<int>() + b[3].get<int>() || b[1].get<int>() >= a[1].get<int>() + a[3].get<int>(), "control overlaps " + name);
 			}
 		} else if (op == "place_brain_command") {
 			// A placement exactly as issued, for the commands every peer has to refuse.
@@ -872,7 +969,7 @@ namespace {
 			}
 			const BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
 			// No overlay rectangle ever leaves the window, and a visible one keeps a positive area.
-			for (const std::string& element: {"status", "toasts", "seats_panel", "chat"}) {
+			for (const std::string& element: {"status", "toasts", "seats_panel", "chat", "connection"}) {
 				const Json& r = observed["net_ui"].at(element);
 				if (!r.at("visible").get<bool>()) continue;
 				Require(r["w"].get<int>() > 0 && r["h"].get<int>() > 0,
