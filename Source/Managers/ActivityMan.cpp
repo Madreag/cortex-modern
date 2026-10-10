@@ -1067,7 +1067,8 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	};
 	image->freezeUs = freezeSpan.Stop() / 1000;
 	phase(nullptr);
-	image->cloneCosts = CheckpointCloneCost::Take();
+	image->boundaryThread = std::hash<std::thread::id>{}(std::this_thread::get_id());
+	image->cloneCosts = CheckpointCloneCost::Take(&image->cloneThreadCosts);
 	return SubmitCheckpointArchiveImage(fileName, path, matchId, tick, task, compression, identity, std::move(image), complete, {}, {}, {}, {}, pixels.TakeStorage());
 }
 
@@ -1580,6 +1581,9 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 				}
 				System::PrintDiagnosticLine(std::format("[checkpoint-sim-phase] tick={} part=sim_return_tail us={}", tick, simUs - simPartsUs));
 				CheckpointCloneCost::Report(tick, std::move(image->cloneCosts));
+				for (const auto& [thread, cost]: image->cloneThreadCosts) System::PrintDiagnosticLine(std::format(
+				    "[checkpoint-clone-thread] tick={} thread={} simulation={} roots={} root_wall_us={} exclusive_sum_us={}",
+				    tick, thread, thread == image->boundaryThread, cost[0], cost[1] / 1000, cost[2] / 1000));
 				for (const auto& [name, layer]: image->layers) {
 					System::PrintDiagnosticLine(std::format("[checkpoint-layer-completion] name={} freeze_copy_bytes={} worker_copy_bytes={} compare_bytes={} dirty_bytes={} unmarked_dirty_bytes={}",
 					    name, layer->copiedBytes, layer->workerCopyBytes, layer->scannedBytes, layer->dirtyBytes, layer->unmarkedDirtyBytes));

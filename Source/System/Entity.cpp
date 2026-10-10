@@ -32,6 +32,8 @@ namespace RTE {
 		struct CloneCostTotals {
 			std::mutex mutex;
 			std::unordered_map<const char*, std::array<int64_t, 3>> kinds;
+			uint64_t thread = std::hash<std::thread::id>{}(std::this_thread::get_id());
+			int64_t roots = 0, rootNs = 0;
 		};
 		struct CloneCostThreads {
 			std::mutex mutex;
@@ -73,16 +75,21 @@ namespace RTE {
 		std::lock_guard lock(totals.mutex);
 		auto& kind = totals.kinds[m_Kind];
 		++kind[0]; kind[1] += inclusive; kind[2] += inclusive - m_Children;
+		if (!m_Parent) { ++totals.roots; totals.rootNs += inclusive; }
 	}
 
-	CheckpointCloneCost::Totals CheckpointCloneCost::Take() {
+	CheckpointCloneCost::Totals CheckpointCloneCost::Take(ThreadTotals* threads) {
 		if (!Enabled()) return {};
 		std::unordered_map<const char*, std::array<int64_t, 3>> merged;
 		std::lock_guard registryLock(CloneCostRegistry().mutex);
 		for (const auto& thread: CloneCostRegistry().threads) {
 			std::lock_guard lock(thread->mutex);
+			int64_t exclusiveNs = 0;
+			for (const auto& [kind, cost]: thread->kinds) exclusiveNs += cost[2];
+			if (threads && thread->roots) threads->emplace_back(thread->thread, std::array{thread->roots, thread->rootNs, exclusiveNs});
 			for (const auto& [kind, cost]: thread->kinds) for (size_t index = 0; index < cost.size(); ++index) merged[kind][index] += cost[index];
 			thread->kinds.clear();
+			thread->roots = 0; thread->rootNs = 0;
 		}
 		return Totals(merged.begin(), merged.end());
 	}

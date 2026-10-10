@@ -50,9 +50,10 @@ namespace RTE {
 		CheckpointCloneCost(const CheckpointCloneCost&) = delete;
 		CheckpointCloneCost& operator=(const CheckpointCloneCost&) = delete;
 		using Totals = std::vector<std::pair<const char*, std::array<int64_t, 3>>>;
+		using ThreadTotals = std::vector<std::pair<uint64_t, std::array<int64_t, 3>>>;
 		static bool Enabled();
 		/// Takes the costs gathered so far, as count, inclusive and exclusive nanoseconds per kind.
-		static Totals Take();
+		static Totals Take(ThreadTotals* threads = nullptr);
 		/// Prints taken costs, the largest exclusive cost first.
 		static void Report(uint64_t tick, Totals totals);
 	private:
