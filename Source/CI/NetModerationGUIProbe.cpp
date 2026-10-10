@@ -85,6 +85,9 @@ namespace {
 		bool shopHeader = false; //!< The pending shop click expands a module before choosing its item.
 		size_t minuteIndex = SIZE_MAX;
 		uint64_t minuteMs = 0, minuteTick = 0, fightSamples = 0, aiFiredFrames = 0;
+		size_t landingMoveIndex = SIZE_MAX, actorCycleIndex = SIZE_MAX;
+		uint64_t landingMoveTick = 0, actorCycleTick = 0, actorCycleRender = 0;
+		int actorCycleStage = 0, actorCyclePresses = 0;
 		uint64_t pageRender = 0; //!< The render show_row acts again at.
 		int pageTurns = 0; //!< Pages show_row has turned for the row it looks for.
 	};
@@ -568,7 +571,7 @@ namespace {
 			return command.starts_with("assert_") || command.starts_with("dump_") ? Phase::Draw : Phase::Poll;
 		}
 		if (op == "assert" || op == "assert_control" || op == "assert_editor" || op == "assert_net_ui_clear" ||
-		    op == "assert_buy" || op == "assert_pie" || op == "assert_window" || op == "assert_relay" ||
+		    op == "assert_buy" || op == "assert_pie" || op == "assert_scene" || op == "assert_window" || op == "assert_relay" ||
 		    op == "screenshot" || op == "screenshot_pair" || op == "finish" || op == "watch_route") return Phase::Draw;
 		if ((op == "key_down" || op == "key_up") && SimRateKey(step.value("key", ""))) return Phase::Sim;
 		return Phase::Poll;
@@ -578,7 +581,7 @@ namespace {
 	/// in-match draw, so their steps wait for it; `finish` ends a script that never leaves the menus.
 	bool MenuScopeStep(const Json& step) {
 		const std::string op = step.value("op", "");
-		return op == "menu" || op == "finish" || op == "wait" || op == "key_up" ||
+		return op == "menu" || op == "finish" || op == "wait" || op == "key_up" || op == "measure_minute" ||
 		    (op == "game_mouse" && step.contains("down") && step["down"] == false) || step.value("scope", "") == "menu";
 	}
 
@@ -800,13 +803,63 @@ namespace {
 				Push(event);
 			}
 			if (op == "editor_move") return false;
+		} else if (op == "landing_zone_move") {
+			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			const int player = LocalPlayer(step);
+			Require(game && observed["service"] == "Running", "landing-zone input has no running activity");
+			if (game->GetViewState(player) != Activity::ViewState::LandingZoneSelect) return false;
+			const Actor* brain = game->GetPlayerBrain(player);
+			Require(brain && g_MovableMan.ValidMO(brain), "landing-zone input has no living brain");
+			const uint64_t tick = g_TimerMan.GetSimUpdateCount();
+			if (probe.landingMoveIndex == probe.index && tick < probe.landingMoveTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4) return false;
+			const float target = brain->GetPos().m_X + step.value("offset_x", -80.0F);
+			const float difference = target - game->GetLandingZone(player).m_X;
+			observed["landing_zone"] = {{"x", game->GetLandingZone(player).m_X}, {"target_x", target}};
+			if (std::abs(difference) <= 3.0F) return true;
+			SDL_Event event{}; event.type = SDL_EVENT_MOUSE_MOTION;
+			event.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.motion.which = 1;
+			event.motion.x = g_WindowMan.GetResX() / 2; event.motion.y = g_WindowMan.GetResY() / 2;
+			event.motion.xrel = std::clamp(difference, -80.0F, 80.0F) / g_UInputMan.GetMouseSensitivity();
+			Push(event); probe.landingMoveIndex = probe.index; probe.landingMoveTick = tick;
+			return false;
+		} else if (op == "actor_next_until") {
+			auto* game = g_ActivityMan.GetActivity();
+			const int player = LocalPlayer(step), input = step.value("input_player", 0);
+			Require(game && observed["service"] == "Running", "actor selection has no running activity");
+			if (probe.actorCycleIndex != probe.index) {
+				probe.actorCycleIndex = probe.index; probe.actorCycleStage = probe.actorCyclePresses = 0;
+			}
+			const uint64_t tick = g_TimerMan.GetSimUpdateCount();
+			const SDL_Scancode key = static_cast<SDL_Scancode>(g_UInputMan.GetControlScheme(input)->GetKeyMapping(InputElements::INPUT_NEXT));
+			Require(key > SDL_SCANCODE_UNKNOWN && key < SDL_SCANCODE_COUNT, "Next Actor has no keyboard binding");
+			const auto pushKey = [&](bool down) {
+				SDL_Event event{}; event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+				event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.key.scancode = key;
+				event.key.key = SDL_GetKeyFromScancode(key, SDL_KMOD_NONE, false); event.key.down = down; Push(event);
+				probe.actorCycleTick = tick; probe.actorCycleRender = probe.renders;
+			};
+			if (probe.actorCycleStage == 1) {
+				if (tick < probe.actorCycleTick + 2 || probe.renders < probe.actorCycleRender + 3) return false;
+				pushKey(false); probe.actorCycleStage = 2; return false;
+			}
+			if (probe.actorCycleStage == 2) {
+				if (tick < probe.actorCycleTick + ScenarioRunner::GetLockstepLocalInputDelay() + 5) return false;
+				probe.actorCycleStage = 0;
+			}
+			const Actor* actor = game->GetControlledActor(player);
+			observed["actor_selection"] = {{"presses", probe.actorCyclePresses}, {"preset", actor ? actor->GetModuleAndPresetName() : ""}};
+			if (actor && actor->GetModuleAndPresetName() == step.at("preset").get<std::string>()) return true;
+			Require(probe.actorCyclePresses < 32, "thirty-two held Next Actor presses did not select the purchased unit");
+			pushKey(true); ++probe.actorCyclePresses; probe.actorCycleStage = 1; return false;
 		} else if (op == "assert_scene" || op == "wait_scene") {
 			auto* game = g_ActivityMan.GetActivity();
 			Require(game != nullptr, "the scene has no activity");
 			const int player = LocalPlayer(step), team = game->GetTeamOfPlayer(player);
 			auto* actor = game->GetControlledActor(player);
 			Json state = {{"team", team}, {"funds", game->GetTeamFunds(team)}, {"alive", actor && !actor->IsDead()}, {"brain_count", observed["brains"].size()},
-			    {"preset", actor ? actor->GetModuleAndPresetName() : ""}, {"team_actors", Json::array()}, {"weapon", ""}, {"fired", false}};
+			    {"preset", actor ? actor->GetModuleAndPresetName() : ""}, {"team_actors", Json::array()}, {"weapon", ""}, {"fired", false},
+			    {"landing_zone_selection", game->GetViewState(player) == Activity::ViewState::LandingZoneSelect},
+			    {"screen_text", g_FrameMan.GetScreenText(game->ScreenOfPlayer(player))}};
 			for (const auto* member: *g_MovableMan.GetTeamRoster(team)) state["team_actors"].push_back(member->GetModuleAndPresetName());
 			if (const auto* human = dynamic_cast<const AHuman*>(actor)) {
 				if (const auto* gun = dynamic_cast<const HDFirearm*>(human->GetEquippedItem())) {
@@ -820,6 +873,10 @@ namespace {
 			if (step.contains("funds_delta_from")) {
 				const auto& order = probe.result.at("bookmarks").at(step.at("funds_delta_from").get<std::string>()).at("scope");
 				good &= order.at("team") == team && state.at("funds").get<float>() == order.at("funds").get<float>() - order.at("cost").get<float>();
+			}
+			if (step.contains("rounds_less_than")) {
+				const auto& before = probe.result.at("bookmarks").at(step.at("rounds_less_than").get<std::string>()).at("scene");
+				good &= before.at("preset") == state.at("preset") && before.at("weapon") == state.at("weapon") && state.at("rounds").get<int>() < before.at("rounds").get<int>();
 			}
 			if (op == "wait_scene" && !good) return false;
 			Require(good, "the player's live scene differs: " + state.dump());

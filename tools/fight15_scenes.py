@@ -83,7 +83,7 @@ def lobby_wait(peer):
 def probe(steps, timeout=180000):
     steps = [part for step in steps for part in
              ([dict(op="signal", name="done", scope="menu"), step] if step["op"] == "finish" else [step])]
-    return json.dumps(dict(schema=1, timeout_ms=timeout, steps=steps), indent=2) + "\n"
+    return json.dumps(dict(schema=1, timeout_ms=timeout, label_dump=dict(every_ms=5000), steps=steps), indent=2) + "\n"
 
 
 def emit(number, title, host, joiner, host_probe, join_probe, checklist, timeout=220):
@@ -277,17 +277,24 @@ def buy(peer, fire=True):
     steps += [dict(op="assert_buy", input_player=0, equals=dict(cart=["Coalition.rte/Soldier Light", "Coalition.rte/Assault Rifle"], craft="Base.rte/Rocket MK2", passengers=1), remember="order"),
               dict(op="assert_control", scope="buy", input_player=0, control="BuyButton", equals=dict(visible=True, enabled=True), fits=True, inside="BuyGUIBox"),
               menu("activate BuyButton", scope="buy", input_player=0),
+              dict(op="landing_zone_move", input_player=0)]
+    steps += capture(f"landing-zone-{peer}")
+    steps += [dict(op="assert_scene", input_player=0, equals=dict(landing_zone_selection=True,
+              screen_text="Choose your landing zone... Hold UP or DOWN to place multiple orders"))]
+    steps += click()
+    steps += [
               dict(op="wait_scene", input_player=0, funds_delta_from="order"),
               dict(op="assert_scene", input_player=0, funds_delta_from="order"),
               dict(op="wait_scene", input_player=0, delivered="Coalition.rte/Soldier Light")]
     steps += capture(f"arrival-{peer}")
     steps += [dict(op="assert_scene", input_player=0, delivered="Coalition.rte/Soldier Light", equals=dict(alive=True))]
-    steps += key("E")
+    steps += [dict(op="actor_next_until", input_player=0, preset="Coalition.rte/Soldier Light")]
     steps += [dict(op="wait_scene", input_player=0, equals=dict(preset="Coalition.rte/Soldier Light", weapon="Coalition.rte/Assault Rifle"))]
     if fire:
+        steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset="Coalition.rte/Soldier Light", weapon="Coalition.rte/Assault Rifle"), remember="before-fire")]
         steps += [dict(op="game_mouse", down=True), wait(renders=5, sim_advanced=12)]
         steps += capture(f"fire-{peer}")
-        steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, fired=True, weapon="Coalition.rte/Assault Rifle")), dict(op="game_mouse", down=False)]
+        steps += [dict(op="assert_scene", input_player=0, rounds_less_than="before-fire", equals=dict(alive=True, fired=True, weapon="Coalition.rte/Assault Rifle")), dict(op="game_mouse", down=False)]
     return steps
 
 
