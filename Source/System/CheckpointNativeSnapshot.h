@@ -30,6 +30,7 @@ namespace RTE {
 	struct UnsupportedCheckpointNative : std::runtime_error { using std::runtime_error::runtime_error; };
 	struct BitmapSnapshot;
 	struct SoundData;
+	class SoundSet;
 	struct HitData;
 	class Material;
 	class MovableObject;
@@ -147,6 +148,8 @@ namespace RTE {
 		void MaterializePixels() const;
 		CheckpointText FreezeWriter(const Serializable* source);
 		SoundData Freeze(const SoundData& source);
+		/// The frozen copy of a container's sound set, shared by every container whose set freezes to an equal copy.
+		std::shared_ptr<SoundSet> FreezeSoundSet(const std::shared_ptr<SoundSet>& source);
 		HitData Freeze(const HitData& source);
 		void RememberMaterial(const Material* source, const Material* target);
 		const CheckpointText* MaterialReference(const Material* target) const;
@@ -163,6 +166,11 @@ namespace RTE {
 			if (slot.first != base) {
 				if (const auto known = m_Objects.Find(base)) target = *known;
 				else {
+					thread_local bool insidePreset = false;
+					const bool preset = CheckpointCloneCost::Enabled() && !insidePreset && base->IsOriginalPreset();
+					CheckpointCloneCost presets(preset ? "preset clones (inclusive)" : nullptr);
+					if (preset) insidePreset = true;
+					struct Leave { bool active; ~Leave() { if (active) insidePreset = false; } } leave{preset};
 					CheckpointCloneCost cost(CheckpointCloneCost::Enabled() ? base->GetClassName().c_str() : nullptr);
 					target = source->FreezeCheckpointNative(*this);
 				}
@@ -438,6 +446,9 @@ namespace RTE {
 		std::unordered_map<const Material*, std::pair<int, size_t>> m_MaterialOwners;
 		CheckpointSharedMap<long, MovableObject*> m_UIDs;
 		CheckpointFrozenClock m_Clock;
+		struct SoundSetKeyHash { size_t operator()(const std::vector<uint64_t>& key) const noexcept; };
+		struct SoundSetShard { std::mutex mutex; std::unordered_map<std::vector<uint64_t>, SoundSet*, SoundSetKeyHash> sets; };
+		std::array<SoundSetShard, 16> m_SoundSets;
 		std::array<OwnerShard, 32> m_OwnerShards;
 		CheckpointSharedMap<const Entity*, Entity*> m_Objects;
 		CheckpointSharedMap<Entity*, Entity**> m_Slots;
