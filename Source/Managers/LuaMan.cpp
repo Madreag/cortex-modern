@@ -4232,7 +4232,7 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	bool SpecialOwner(const void* address) const {
 		Once(m_SpecialBuilt, m_SpecialReady, [this] {
 			const auto add = [this](const void* value) { if (value) m_Special.insert(value); };
-			if (const auto* activity = g_ActivityMan.GetActivity()) {
+			if (auto* activity = g_ActivityMan.GetActivity()) {
 				for (int player = 0; player < Players::MaxPlayerCount; ++player) {
 					add(activity->GetPlayerController(player));
 					if (const auto* game = dynamic_cast<const GameActivity*>(activity)) {
@@ -4254,7 +4254,7 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 					}
 				}
 			}
-			if (const Scene* scene = g_SceneMan.GetScene()) {
+			if (Scene* scene = g_SceneMan.GetScene()) {
 				add(scene->GetTerrain());
 				for (const auto* layer: scene->GetBackLayers()) add(layer);
 			}
