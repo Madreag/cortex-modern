@@ -260,6 +260,9 @@ namespace RTE {
 				m_HostAssignedPeerId = peerId - 1;
 		}
 		bool AdoptHostMigration(INetTransport& transport, uint8_t localPeerId, uint8_t hostPeerId, const NetMatchConfig& config, const std::map<uint8_t, NetPeerId>& peers, uint64_t nowMs);
+		void RebindSessionWire(INetTransport& transport) { m_Transport = &transport; m_PeerFrameLifetime = true; }
+		/// A shared wire carries authenticated handover packets even while admission is active.
+		void SetAuxiliaryPacketValidator(std::function<bool(const std::vector<uint8_t>&)> validator) { m_AuxiliaryPacketValidator = std::move(validator); }
 
 		NetSessionRole GetRole() const { return m_Role; }
 		const NetSessionConfig& GetConfig() const { return m_Config; }
@@ -403,6 +406,7 @@ namespace RTE {
 		static uint8_t PlatformId(const std::string& platform);
 
 		INetTransport* m_Transport = nullptr;
+		bool m_PeerFrameLifetime = false;
 		NetSessionConfig m_Config;
 		NetSessionRole m_Role = NetSessionRole::None;
 		NetSessionState m_State = NetSessionState::Stopped;
@@ -442,6 +446,7 @@ namespace RTE {
 		mutable int m_PlacedJoinerOrder = 0; //!< Negative when that joiner's game is older, positive when newer, zero when unplaced.
 		std::string m_RefusedPlayerName;
 		NetHash32 m_RemoteIdentityHash{};
+		std::function<bool(const std::vector<uint8_t>&)> m_AuxiliaryPacketValidator;
 		bool m_HasRemoteIdentityHash = false;
 		// Client mirror of the parked peer state, bounded by its own deadline rather than by the
 		// handshake expiry the host runs.

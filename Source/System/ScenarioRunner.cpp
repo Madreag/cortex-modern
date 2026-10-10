@@ -92,6 +92,8 @@ namespace RTE {
 		bool s_WorldCatchUpHeld = false;
 		int s_WorldCatchUpBudget = 0;
 		int s_OwnSeatCatchUpBudget = 0;
+		uint64_t s_PeerCatchUpBudgetAtMs = 0;
+		double s_PeerCatchUpCredit = 0;
 		int s_FenceTraceFrames = 0; //!< Reclaim-gap frames whose inputs are still traced, fence by fence.
 		uint64_t s_WorldCatchUpAppliedThrough = 0;
 		uint64_t s_WorldCatchUpActivationTick = 0;
@@ -1512,11 +1514,24 @@ namespace RTE {
 	void ScenarioRunner::BeginWorldCatchUpFrame() {
 		s_WorldCatchUpBudget = s_WorldCatchUpActive ? c_WorldCatchUpTicksPerRealFrame : 0;
 		s_OwnSeatCatchUpBudget = c_WorldCatchUpTicksPerRealFrame;
+		NetLockstepPlaneGuard plane;
+		const uint64_t nowMs = NetLockstepNowMs();
+		if (!s_LockstepCoordinator || !s_LockstepCoordinator->PeerFrameCatchUpActive()) {
+			s_PeerCatchUpBudgetAtMs = nowMs; s_PeerCatchUpCredit = 0;
+			return;
+		}
+		const double tickMs = s_LockstepCoordinator->GetConfig().simTickMs;
+		if (tickMs <= 0 || !std::isfinite(tickMs)) { s_OwnSeatCatchUpBudget = 0; return; }
+		const uint64_t elapsed = nowMs >= s_PeerCatchUpBudgetAtMs ? std::min<uint64_t>(nowMs - s_PeerCatchUpBudgetAtMs, 100) : 0;
+		s_PeerCatchUpBudgetAtMs = nowMs;
+		s_PeerCatchUpCredit = std::min(static_cast<double>(c_NetSeatCatchUpBurstTicks), s_PeerCatchUpCredit + c_NetSeatCatchUpRate * elapsed / tickMs);
+		s_OwnSeatCatchUpBudget = static_cast<int>(s_PeerCatchUpCredit);
 	}
 
 	bool ScenarioRunner::TakeOwnSeatCatchUpGrant(uint64_t nextSimTick) {
 		NetLockstepPlaneGuard plane;
 		if (s_OwnSeatCatchUpBudget <= 0 || !s_LockstepCoordinator || !s_LockstepCoordinator->HasReadyFrame(nextSimTick)) return false;
+		if (s_LockstepCoordinator->PeerFrameCatchUpActive()) return true;
 		// A seat that came back from the committed tail stands a trip behind the round's inputs: it closes that trip through its reclaim gap.
 		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
 		if (!s_LockstepCoordinator->IsOwnHostSeatHeld() && !s_LockstepCoordinator->IsSeatReclaimGap(local, nextSimTick)) return false;
@@ -3324,6 +3339,11 @@ namespace RTE {
 	static bool RunPacedTick(uint64_t tick) {
 		std::string error;
 		if (!s_LockstepCoordinator->BeginSimulationTick(tick, &error)) { ScenarioRunner::SetControllerReplayError(error); return false; }
+		if (s_LockstepCoordinator->PeerFrameCatchUpActive()) {
+			--s_OwnSeatCatchUpBudget;
+			s_PeerCatchUpCredit = std::max(0.0, s_PeerCatchUpCredit - 1.0);
+		}
+		if (s_LockstepCoordinator->UsesPeerFrameGroups()) { s_UpdateAuthority = {tick, s_LockstepCoordinator->HostAuthorityAt(tick)}; return true; }
 		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
 		const bool gapClosed = tick > 0 && s_LockstepCoordinator->IsSeatReclaimGap(local, tick - 1) && !s_LockstepCoordinator->IsSeatReclaimGap(local, tick);
 		if (gapClosed) s_PaceSlide.Reset();
@@ -3378,6 +3398,9 @@ namespace RTE {
 		if (!s_LockstepCoordinator->IsRunning()) {
 			s_PreSimWait = now;
 			return false;
+		}
+		if (s_LockstepCoordinator->PeerFrameCatchUpActive()) {
+			if (s_OwnSeatCatchUpBudget <= 0) { s_PreSimWait = now; return false; }
 		}
 		// The time this peer waited for its round to start is not owed: a peer that waited longer would race through it and run
 		// ahead of the others' clocks by the difference, and the peer behind would feed every tick late.

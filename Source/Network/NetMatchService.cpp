@@ -300,7 +300,7 @@ namespace RTE {
 	bool BuildIdentityManifest(NetIdentityManifest& manifest, std::string* error, bool world) {
 		NetIdentityBuildOptions options;
 		options.buildId = "stage2-p2d-local";
-		options.sessionRulesTag = "stage2-p2-session-rules";
+		options.sessionRulesTag = "peer-session-plane-v1";
 		NetIdentity::StampOptionsForTarget(options, world);
 		return NetIdentity::BuildCurrentManifest(manifest, error, options);
 	}
@@ -695,7 +695,7 @@ static std::string ResyncSaveName() {
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions identityOptions;
 		identityOptions.buildId = "stage2-p2d-local";
-		identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+		identityOptions.sessionRulesTag = "peer-session-plane-v1";
 		const bool targetingWorld = request.persistentWorld || request.activityPreset == "Persistent World" || matchConfig.persistentWorld;
 		m_LastJoinTargetPersistentWorld = targetingWorld;
 		NetIdentity::StampOptionsForTarget(identityOptions, targetingWorld);
@@ -2338,6 +2338,7 @@ static std::string ResyncSaveName() {
 		owners->mux = std::move(m_Mux);
 		owners->transport = std::move(m_Transport);
 		owners->catchUpTransport = std::move(m_CatchUpTransport);
+		m_PeerSessionLinks.reset();
 		m_WorkerSession = nullptr;
 		m_ChatSession = nullptr;
 		m_WorkerDone = false;
@@ -5769,6 +5770,12 @@ static std::string ResyncSaveName() {
 		if (!DecodeWorldJoinImageBlob(bytes, image, archive, tailBytes, error)) {
 			return false;
 		}
+		if (m_Coordinator && m_Coordinator->UsesPeerFrameGroups()) {
+			if (m_Coordinator->HasCompletedSimulationTick() && image.tick < m_Coordinator->GetResumeFrame() - 1) {
+				if (error) *error = "a return image cannot undo a displayed frame";
+				return false;
+			}
+		}
 		const auto name = "p5join_recv_" + std::to_string(System::GetProcessID());
 		const auto path = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + name + ".ccsave";
 		std::error_code directoryCode;
@@ -5812,8 +5819,12 @@ static std::string ResyncSaveName() {
 			m_WorldCatchUp.pauseState = image.pauseState;
 			for (const auto& command: holds.commands) {
 				const auto* hold = std::get_if<NetGameSeatHold>(&command.payload);
-				if (!hold || hold->peerId == 0 || hold->peerId > adopted.peerCount || hold->cutoffFrame > image.tick) return false;
-				m_WorldCatchUp.initialHolds[hold->peerId] = *hold;
+				const auto* reclaim = std::get_if<NetGameSeatReclaim>(&command.payload);
+				const uint8_t peer = hold ? hold->peerId : reclaim ? reclaim->peerId : 0;
+				const uint64_t frame = hold ? hold->cutoffFrame : reclaim ? reclaim->activationFrame : 0;
+				if (command.senderPeerId != image.authorityPeerId || peer == 0 || peer > adopted.peerCount || frame > image.tick) return false;
+				if (hold) m_WorldCatchUp.initialHolds[peer] = *hold;
+				else m_WorldCatchUp.initialReclaims[peer] = *reclaim;
 			}
 		}
 		m_WorldCatchUp.snapshotTick = image.tick;
@@ -6283,6 +6294,12 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::InPlaceLiveRoundLocked(NetLockstepConfig& live) {
 		live = m_CatchUpCoordinator->GetConfig();
+		if (m_Coordinator) {
+			const auto& previous = m_Coordinator->GetConfig();
+			live.peerFrameGroups = previous.peerFrameGroups; live.peerSessionLinks = previous.peerSessionLinks;
+			live.frameTieReferee = previous.frameTieReferee; live.hostChangeReferee = previous.hostChangeReferee;
+			live.migrationTransportFactory = previous.migrationTransportFactory; live.migrationIceDial = previous.migrationIceDial; live.migrationIceHost = previous.migrationIceHost;
+		}
 		live.initialSeatBridgeSinceMs = m_CatchUpCoordinator->SeatBridgeTimes();
 		live.roundId = m_WorldCatchUp.roundId; live.originalRoundConfigHash = m_WorldCatchUp.roundConfigHash;
 		live.initialSeatHolds = m_CatchUpCoordinator->HeldTransactions();
@@ -6313,6 +6330,8 @@ static std::string ResyncSaveName() {
 		for (const auto& [peer, reclaim]: m_CatchUpCoordinator->ReclaimTransactions())
 			if (NetGameSeatReclaim& kept = agreed[peer]; kept.peerId == 0 || kept.eventSequence < reclaim.eventSequence) kept = reclaim;
 		NetLockstepCoordinator::AdoptOpenReturns(live, agreed, m_WorldCatchUp.activationTick);
+		if (live.peerFrameGroups && m_Coordinator)
+			(void)m_Coordinator->AdoptPeerReturnConfig(live, *m_CatchUpCoordinator, m_WorldCatchUp.activationTick);
 		if (live.matchConfig.peerInputDelayFrames.empty()) live.matchConfig.peerInputDelayFrames.resize(live.peerCount, live.matchConfig.inputDelayFrames);
 		for (const auto& [peer, changes]: live.initialDelayChanges) {
 			const auto at = changes.upper_bound(m_WorldCatchUp.activationTick);
@@ -6398,6 +6417,7 @@ static std::string ResyncSaveName() {
 		// catch-up runs; a host that really goes away still arrives as a transport close below.
 		if (NetSession* live = LiveSessionLocked()) live->SetSilenceSuspended(!m_IsHost && m_WorldCatchUp.active);
 		if (m_IsHost || !m_WorldCatchUp.active || !m_Runner) return;
+		if (m_Coordinator && m_Coordinator->UsesPeerFrameGroups()) m_Coordinator->Tick(NetLockstepNowMs());
 		NetLobbySession& lobby = m_Runner->GetLobbySession();
 		INetTransport* wire = ActiveWireLocked();
 		// A coordinator already handshaking for the activation polls the same wire; the tail and the reports it read go on here.
@@ -6406,11 +6426,22 @@ static std::string ResyncSaveName() {
 		m_PendingLobbyBytes = 0;
 		m_PendingLobbyOverflow = false;
 		NoteDroppedLobbyEvents(polledLobby.size());
-		for (const NetTransportEvent& event: polledLobby) lobby.HandleTransportEvent(event, nowMs);
-		if (!polledLobby.empty()) m_InPlaceHeardMs = SteadyNowMs();
+		const auto authenticatedHostTraffic = [&](const NetTransportEvent& event) {
+			if (!m_Session || event.type != NetTransportEventType::PacketReceived || event.peerId != m_Session->GetRemoteTransportPeerId()) return false;
+			if (NetLobbyProtocol::Decode(event.bytes).ok || NetProtocol::Decode(event.bytes).ok) return true;
+			const auto decoded = NetLockstepCodec::Decode(event.bytes, ControllerFrame::c_Version);
+			return decoded.ok && m_Coordinator && std::visit([&](const auto& payload) {
+				if constexpr (requires { payload.senderPeerId; }) return payload.senderPeerId == m_Coordinator->GetHostPeerId();
+				else return payload.localPeerId == m_Coordinator->GetHostPeerId();
+			}, decoded.packet.payload);
+		};
+		for (const NetTransportEvent& event: polledLobby) {
+			lobby.HandleTransportEvent(event, nowMs);
+			if (authenticatedHostTraffic(event)) m_InPlaceHeardMs = SteadyNowMs();
+		}
 		if (wire) {
 			for (const NetTransportEvent& event: wire->PollEvents()) {
-				if (event.type == NetTransportEventType::PacketReceived) m_InPlaceHeardMs = SteadyNowMs();
+				if (authenticatedHostTraffic(event)) m_InPlaceHeardMs = SteadyNowMs();
 				if (event.type == NetTransportEventType::PacketReceived && NetLobbyProtocol::Decode(event.bytes).ok) {
 					lobby.HandleTransportEvent(event, nowMs);
 				} else if (event.type == NetTransportEventType::PacketReceived && NetLockstepCodec::LooksLikePacket(event.bytes)) {
@@ -7013,6 +7044,15 @@ static std::string ResyncSaveName() {
 		m_ModerationSeats = std::move(seats);
 		m_LobbyModerationSignature = signature;
 		m_LobbyModerationPublished = true;
+	}
+
+	void NetMatchService::AttachPeerSessionWireLocked() {
+		if (!m_Coordinator || !m_Session || !m_Runner || !m_Coordinator->UsesPeerFrameGroups() || !m_Coordinator->IsRunning() || !m_PeerSessionLinks || m_PeerSessionLinks->sessionAttached) return;
+		m_MigratedTransport = std::make_unique<NetPeerSessionWire>(m_PeerSessionLinks);
+		m_PeerSessionLinks->sessionAttached = true;
+		m_Session->RebindSessionWire(*m_MigratedTransport);
+		m_Runner->GetLobbySession().RebindSessionWire(*m_MigratedTransport);
+		System::PrintDiagnosticLine("[net-session] retained peer links now carry the session");
 	}
 
 	void NetMatchService::AttachCoordinatorSessionSink() {
@@ -7630,7 +7670,7 @@ static std::string ResyncSaveName() {
 				} else
 					++event;
 			}
-		if (m_Coordinator->IsMigrating() && m_Coordinator->GetMigrationPhase() != NetHostMigrationPhase::ResyncAdmission) {
+		if (m_Coordinator->IsMigrating() && m_Coordinator->GetMigrationPhase() != NetHostMigrationPhase::ResyncAdmission && !m_Coordinator->UsesPeerFrameGroups()) {
 			m_StatusText = "Host lost - arranging handover";
 			return;
 		}
@@ -7653,10 +7693,12 @@ static std::string ResyncSaveName() {
 		}
 		const auto& result = m_Coordinator->GetMigrationResult();
 		// The coordinator is the only host-change protocol, including for held seats.
-		if (!m_Coordinator->MigrationUsesDirectory() && result.members.size() < 2) return;
+		const bool peerFrames = m_Coordinator->UsesPeerFrameGroups();
+		if (peerFrames) AttachPeerSessionWireLocked();
+		if (!peerFrames && !m_Coordinator->MigrationUsesDirectory() && result.members.size() < 2) return;
 		const auto& config = m_Coordinator->GetConfig().matchConfig;
-		auto wire = m_Coordinator->TakeMigrationTransport();
-		if (!wire) {
+		auto wire = peerFrames ? std::unique_ptr<INetTransport>{} : m_Coordinator->TakeMigrationTransport();
+		if (!peerFrames && !wire) {
 			m_Coordinator->Complete("host handover lost its transport");
 			return;
 		}
@@ -7664,7 +7706,7 @@ static std::string ResyncSaveName() {
 		m_MigrationMembers = result.members;
 		m_MigrationGeneration = result.generation;
 		m_IsHost = result.hostPeerId == m_LocalPeerId;
-		m_HandoverFrame = result.boundary + 1;
+		m_HandoverFrame = result.activationFrame != 0 ? result.activationFrame : result.boundary + 1;
 		m_MigrationAdmissionState = NetReconnectHost::MigrationStateAtFrame(m_MigrationAdmissionState, result.boundary);
 		if (!m_MigrationAdmissionState.empty()) {
 			const auto carried = nlohmann::json::from_cbor(m_MigrationAdmissionState);
@@ -7680,9 +7722,10 @@ static std::string ResyncSaveName() {
 		m_HostOptionsRequest.Clear();
 		m_LastRemovalIssue = {};
 		m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
-		if (ActiveWireLocked())
-			ActiveWireLocked()->Stop();
-		m_MigratedTransport = std::move(wire);
+		if (!peerFrames) {
+			if (ActiveWireLocked()) ActiveWireLocked()->Stop();
+			m_MigratedTransport = std::move(wire);
+		}
 		auto liveTransports = result.transports;
 		if (m_IsHost)
 			for (uint8_t peer: result.resyncPeers)
@@ -7707,6 +7750,7 @@ static std::string ResyncSaveName() {
 			m_Coordinator->Complete("host handover session roster is invalid");
 			return;
 		}
+		if (peerFrames) m_Session->RebindSessionWire(*m_MigratedTransport);
 		m_ChatSession = m_Session.get();
 		if (m_IsHost) {
 			m_Session->SetReconnectClient(nullptr);
@@ -7733,7 +7777,7 @@ static std::string ResyncSaveName() {
 			lobby.host = true;
 			lobby.localPeerId = m_LocalPeerId;
 			lobby.matchConfig = config;
-			lobby.startFrame = result.boundary + 1;
+			lobby.startFrame = m_HandoverFrame;
 			lobby.session = m_Session.get();
 			lobby.sessionNowMs = [this] { return AdmissionNowMs(); };
 			lobby.displayName = m_LocalName.empty() ? "Host" : m_LocalName;
@@ -7744,11 +7788,11 @@ static std::string ResyncSaveName() {
 		} else if (m_Coordinator->GetMigrationPhase() != NetHostMigrationPhase::ResyncAdmission) {
 			// A held return reports and takes its tail on the lobby, which is the new host's from here.
 			const auto hostLink = result.transports.find(result.hostPeerId);
-			if (hostLink == result.transports.end() || !BindClientLobbyToHostLocked(*m_MigratedTransport, result.hostPeerId, hostLink->second, result.boundary + 1))
+			if (hostLink == result.transports.end() || !BindClientLobbyToHostLocked(*m_MigratedTransport, result.hostPeerId, hostLink->second, m_HandoverFrame))
 				System::PrintDiagnosticLine("[net-match] this peer's rejoin lobby did not follow the new host");
 		}
 		m_ResyncOnDesync = true;
-		m_MigrationRepairPending = true;
+		m_MigrationRepairPending = !peerFrames;
 		const auto endpoint = std::find_if(config.migrationPeers.begin(), config.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == result.hostPeerId; });
 		if (endpoint != config.migrationPeers.end()) {
 			const std::string& connected = m_Coordinator->GetMigrationAddress();
@@ -7891,7 +7935,10 @@ static std::string ResyncSaveName() {
 		INetTransport* wire = ActiveWireLocked();
 		if (!wire) return;
 		const uint64_t nowMs = AdmissionNowMs();
-		for (const NetTransportEvent& event : wire->PollEvents()) {
+		if (m_Coordinator && m_Coordinator->UsesPeerFrameGroups()) m_Coordinator->Tick(NetLockstepNowMs());
+		auto events = std::move(m_PendingSessionEvents); m_PendingSessionEvents.clear();
+		auto received = wire->PollEvents(); events.insert(events.end(), std::make_move_iterator(received.begin()), std::make_move_iterator(received.end()));
+		for (const NetTransportEvent& event : events) {
 			if (event.type == NetTransportEventType::PacketReceived && NetLobbyProtocol::Decode(event.bytes).ok) {
 				m_Session->NotePeerTraffic(event.peerId, nowMs);
 				QueueLobbyEvent(event);
@@ -7916,7 +7963,7 @@ static std::string ResyncSaveName() {
 		UpdateConnectionAuthority(SteadyNowMs());
 		PushPendingToasts();
 		PumpHostMigration();
-		if (m_Coordinator && m_Coordinator->IsMigrating())
+		if (m_Coordinator && m_Coordinator->IsMigrating() && !m_Coordinator->UsesPeerFrameGroups())
 			return;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -7924,6 +7971,7 @@ static std::string ResyncSaveName() {
 				PumpCompletedSessionLocked();
 				return;
 			}
+			AttachPeerSessionWireLocked();
 		}
 		PumpSeatViews();
 		ReportFakeLinkEffects();
@@ -8787,6 +8835,12 @@ static std::string ResyncSaveName() {
 		return LiveInputDelayTextLocked();
 	}
 
+	NetLinkQuality NetMatchService::MeasuredLinkQualityForSeat(uint8_t peerId) const {
+		NetLockstepPlane::Gap plane("link quality");
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_Coordinator && m_State == NetMatchServiceState::Running ? m_Coordinator->LinkQualityForSeat(peerId) : NetLinkQuality{};
+	}
+
 	std::string NetMatchService::LiveInputDelayTextLocked() const {
 		if (m_Coordinator && m_State == NetMatchServiceState::Running) {
 			const auto& config = m_Coordinator->GetConfig().matchConfig;
@@ -8877,7 +8931,7 @@ static std::string ResyncSaveName() {
 		NetIdentityBuildOptions DiagnosticIdentityOptions() {
 			NetIdentityBuildOptions options;
 			options.buildId = "stage2-p2d-local";
-			options.sessionRulesTag = "stage2-p2-session-rules";
+			options.sessionRulesTag = "peer-session-plane-v1";
 			return options;
 		}
 	} // namespace
@@ -10332,6 +10386,16 @@ static std::string ResyncSaveName() {
 				return;
 			config.migrationKey = m_MigrationKey;
 			config.migrationGeneration = m_MigrationGeneration;
+			config.peerFrameGroups = config.substituteSlowPeers && !config.matchConfig.dedicated && !config.matchConfig.persistentWorld;
+			if (config.peerFrameGroups) {
+				if (!m_PeerSessionLinks) m_PeerSessionLinks = std::make_shared<NetPeerSessionLinks>();
+				config.peerSessionLinks = m_PeerSessionLinks;
+			}
+			if (m_Session) m_Session->SetAuxiliaryPacketValidator([key = config.migrationKey, session = config.sessionId](const std::vector<uint8_t>& bytes) {
+				if (!NetHostMigrationCodec::LooksLikePacket(bytes)) return false;
+				NetHostMigrationMessage message;
+				return NetHostMigrationCodec::Decode(bytes, key, message) && message.sessionId == session;
+			});
 			bool ice = false;
 			{
 				std::lock_guard<std::mutex> iceLock(m_MigrationIceMutex);
@@ -10339,6 +10403,26 @@ static std::string ResyncSaveName() {
 			}
 			config.migrationTransportFactory = [this, ice] { return MakeMigrationTransport(ice); };
 			if (!m_ConnectionAuthority.DirectorySessionId().empty()) {
+				config.frameTieReferee = [this, seats = NetH4BuildSeatTable(config.matchConfig)](const NetFrameTieRequest& peerRequest) {
+					auto request = peerRequest;
+					const auto stable = [&](uint16_t peer) -> uint16_t {
+						const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.lockstepPeerId == peer; });
+						return seat == seats.end() ? UINT16_MAX : seat->stableSeat;
+					};
+					request.host = stable(request.host);
+					for (auto& member: request.members) member = stable(member);
+					for (auto& owner: request.owners) owner = stable(owner);
+					std::sort(request.members.begin(), request.members.end()); std::sort(request.owners.begin(), request.owners.end());
+					auto reply = m_ConnectionAuthority.QueryFrameTie(request);
+					if (reply.state == NetFrameTieReply::State::Decided) {
+						for (auto& member: reply.members) {
+							const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.stableSeat == member; });
+							member = seat == seats.end() ? UINT16_MAX : seat->lockstepPeerId;
+						}
+						std::sort(reply.members.begin(), reply.members.end());
+					}
+					return reply;
+				};
 				config.hostChangeReferee = [this, seats = NetH4BuildSeatTable(config.matchConfig)](const NetHostChangeRequest& peerRequest) {
 					auto request = peerRequest;
 					const auto stable = [&](uint16_t peer) -> uint16_t {
@@ -10406,6 +10490,12 @@ static std::string ResyncSaveName() {
 		}
 		if (request.rejoin) {
 			// A returning seat's fresh session talks to the host live until its handshake is done.
+			const auto key = m_MigrationKey;
+			const uint64_t sessionId = runnerConfig.sessionConfig.sessionId;
+			session->SetAuxiliaryPacketValidator([key, sessionId](const std::vector<uint8_t>& bytes) {
+				NetHostMigrationMessage message;
+				return NetHostMigrationCodec::LooksLikePacket(bytes) && NetHostMigrationCodec::Decode(bytes, key, message) && message.sessionId == sessionId;
+			});
 			System::PrintDiagnosticLine("[net-match] rejoin phase Active -> Connecting");
 			session->SetRejoinPhase(NetSession::RejoinPhase::Connecting);
 			// It loads a checkpoint only if the host offers one on this connection: the round's opening offer may be retired.

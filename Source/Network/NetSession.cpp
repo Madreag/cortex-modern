@@ -182,9 +182,12 @@ namespace RTE {
 	}
 
 	bool NetSession::StartHost(INetTransport& transport, NetSessionConfig config, std::string* error) {
+		auto auxiliary = std::move(m_AuxiliaryPacketValidator);
 		Close("restart");
+		m_AuxiliaryPacketValidator = std::move(auxiliary);
 		if (!ReadAdvertisedVersionsForTest(error)) { m_State = NetSessionState::Failed; return false; }
 		m_Transport = &transport;
+		m_PeerFrameLifetime = dynamic_cast<NetPeerSessionWire*>(&transport) != nullptr;
 		m_Config = std::move(config);
 		m_Role = NetSessionRole::Host;
 		m_HostAssignedPeerId = c_HostAssignedPeerId;
@@ -231,9 +234,12 @@ namespace RTE {
 	}
 
 	bool NetSession::StartClient(INetTransport& transport, const std::string& address, NetSessionConfig config, std::string* error) {
+		auto auxiliary = std::move(m_AuxiliaryPacketValidator);
 		Close("restart");
+		m_AuxiliaryPacketValidator = std::move(auxiliary);
 		if (!ReadAdvertisedVersionsForTest(error)) { m_State = NetSessionState::Failed; return false; }
 		m_Transport = &transport;
+		m_PeerFrameLifetime = dynamic_cast<NetPeerSessionWire*>(&transport) != nullptr;
 		m_Config = std::move(config);
 		m_Role = NetSessionRole::Client;
 		m_HostAssignedPeerId = c_HostAssignedPeerId;
@@ -467,6 +473,8 @@ namespace RTE {
 	}
 
 	void NetSession::Close(const std::string& reason) {
+		m_AuxiliaryPacketValidator = {};
+		m_PeerFrameLifetime = false;
 		if (!m_Transport) {
 			return;
 		}
@@ -767,6 +775,11 @@ namespace RTE {
 	}
 
 	void NetSession::ProcessPacket(NetPeerId peerId, const std::vector<uint8_t>& bytes) {
+		// Authenticated handover traffic belongs to its plane on this same wire.
+		if (m_AuxiliaryPacketValidator && m_AuxiliaryPacketValidator(bytes)) {
+			++m_Stats.ignoredPhasePackets;
+			return;
+		}
 		const NetDecodeResult decoded = NetProtocol::Decode(bytes);
 		if (!decoded.ok) {
 			// Another phase's packet on the shared wire: a peer that finished its session handshake
@@ -1643,7 +1656,7 @@ namespace RTE {
 			// P14 expires a handshake on the connection's own age, which no resumption extends.
 			ExpireSilentHandshakes();
 			for (PeerState& peer : m_Peers) {
-				if (!IsActive(peer.state) || peer.state == NetSessionState::Handshake) {
+				if (!IsActive(peer.state) || peer.state == NetSessionState::Handshake || (m_PeerFrameLifetime && peer.state == NetSessionState::Ready)) {
 					continue;
 				}
 				if (m_NowMs >= peer.lastReceiveMs && m_NowMs - peer.lastReceiveMs > m_Config.timeoutMs) {
@@ -1669,7 +1682,7 @@ namespace RTE {
 					m_Transport->Disconnect(m_RemoteTransportPeerId, mismatch.summary);
 				}
 			}
-		} else if (!m_AdmissionSuspended &&
+		} else if (!m_AdmissionSuspended && !(m_PeerFrameLifetime && m_State == NetSessionState::Ready) &&
 		           (m_State == NetSessionState::Connecting || m_State == NetSessionState::HelloSent || m_State == NetSessionState::Ready) &&
 		           m_NowMs >= m_LastReceiveMs && m_NowMs - m_LastReceiveMs >
 		           ((NetA7Journal::ControlledSilentClient() && m_State == NetSessionState::HelloSent) ? NetA7Journal::SilentReceiveBudgetMs() : m_Config.timeoutMs)) {

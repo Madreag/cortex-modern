@@ -981,6 +981,7 @@ namespace RTE {
 		std::vector<NetChatEntry> ChatHistory() const;
 		/// "Input delay: N (auto, Rms ping)" / "(fixed)", from the announced match config. "" pre-lobby.
 		std::string GetInputDelayText() const;
+		NetLinkQuality MeasuredLinkQualityForSeat(uint8_t peerId) const;
 		/// The live host RTT on a client, or the largest connected peer RTT on the host.
 		std::optional<uint32_t> GetMatchPingMs() const;
 		/// Whether the current match is being restored from the host snapshot.
@@ -1185,6 +1186,8 @@ namespace RTE {
 		void PumpHostMigration();
 		void PublishMigrationCapsulesLocked();
 		std::unique_ptr<INetTransport> m_MigratedTransport;
+		std::shared_ptr<NetPeerSessionLinks> m_PeerSessionLinks;
+		void AttachPeerSessionWireLocked();
 		std::unique_ptr<NetLockstepCoordinator> m_MigrationFallbackCoordinator;
 		std::atomic<bool> m_MigrationFallbackReady{false};
 		uint64_t m_MigrationGeneration = 0;
@@ -1941,7 +1944,7 @@ namespace RTE {
 		bool m_InPlaceCatchUp = false;   //!< Held client: the catch-up replays on its own state over its live connection.
 		uint64_t m_InPlaceAskedMs = 0;   //!< When it last asked the host for its tail.
 		uint64_t m_InPlaceSinceMs = 0;   //!< When it began; a host that never serves it sends it to the image path.
-		uint64_t m_InPlaceHeardMs = 0;   //!< When its host's link last carried anything to it.
+		uint64_t m_InPlaceHeardMs = 0;   //!< When its bound host last carried a decoded packet to it.
 		uint64_t m_InPlaceProgressApplied = 0;
 		uint64_t m_InPlaceProgressLogged = 0; //!< The applied frame its progress was last logged at.
 		uint64_t m_HandoverFrame = 0; //!< The first frame the round committed under the authority that took it over here; 0 before a handover.

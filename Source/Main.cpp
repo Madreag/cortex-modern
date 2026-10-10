@@ -116,6 +116,7 @@
 #include "NetMatchReplay.h"
 #include "TelemetryBundle.h"
 #include "NetLockstepSelfTest.h"
+#include "NetSessionPlaneSelfTest.h"
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
 #include "NetMatchSelfTest.h"
@@ -9434,7 +9435,7 @@ int RunNetSessionCli() {
 	NetIdentityManifest manifest;
 	NetIdentityBuildOptions identityOptions;
 	identityOptions.buildId = "stage2-p2d-local";
-	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+	identityOptions.sessionRulesTag = "peer-session-plane-v1";
 	std::string error;
 	if (!NetIdentity::BuildCurrentManifest(manifest, &error, identityOptions)) {
 		{
@@ -9603,7 +9604,7 @@ bool PrepareNetLockstepScenario(GnsTransport& transport, NetSession& session, Ne
 	NetIdentityManifest manifest;
 	NetIdentityBuildOptions identityOptions;
 	identityOptions.buildId = "stage2-p2d-local";
-	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+	identityOptions.sessionRulesTag = "peer-session-plane-v1";
 	if (!NetIdentity::BuildCurrentManifest(manifest, error, identityOptions)) {
 		return false;
 	}
@@ -10505,7 +10506,7 @@ int RunNetDirectoryProbe(const std::string& baseUrlArg, const std::string& certP
 	NetIdentityManifest manifest;
 	NetIdentityBuildOptions identityOptions;
 	identityOptions.buildId = "stage2-p2d-local";
-	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+	identityOptions.sessionRulesTag = "peer-session-plane-v1";
 	if (!NetIdentity::BuildCurrentManifest(manifest, &reason, identityOptions)) {
 		{
 			std::ostringstream line;
@@ -10867,7 +10868,7 @@ int RunNetDirectoryList() {
 	NetIdentityManifest manifest;
 	NetIdentityBuildOptions identityOptions;
 	identityOptions.buildId = "stage2-p2d-local";
-	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+	identityOptions.sessionRulesTag = "peer-session-plane-v1";
 	NetIdentity::StampOptionsForTarget(identityOptions, false);
 	if (!NetIdentity::BuildCurrentManifest(manifest, &reason, identityOptions)) {
 		{
@@ -11068,6 +11069,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-selftest") {
 			return NetLockstepSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-session-plane-selftest") {
+			return NetSessionPlaneSelfTest::Run();
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-input-acceptance-selftest") {
 			return NetLockstepSelfTest::RunAcceptance();

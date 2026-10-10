@@ -586,7 +586,8 @@ namespace RTE {
 
 		manifest.deterministicConfigHash = NetIdentity::HashDeterministicConfig(manifest.deterministicConfig);
 		manifest.moduleManifestHash = NetIdentity::HashModuleManifest(manifest.modules);
-		manifest.sessionRulesHash = HashSessionRulesTag(options.sessionRulesTag);
+		// The menu's older tag names this runtime's session rules, so it must reject a build with the older frame path.
+		manifest.sessionRulesHash = HashSessionRulesTag(options.sessionRulesTag == "stage2-p2-session-rules" ? "peer-session-plane-v1" : options.sessionRulesTag);
 		manifest.sessionIdentityHash = HashIdentity(manifest);
 		manifest.hashDurationMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
 		return true;
