@@ -17,10 +17,12 @@ namespace RTE::CheckpointLua {
 		std::mutex mutex;
 		std::unique_ptr<lua_State, decltype(&lua_close)> state{nullptr, lua_close};
 		std::shared_ptr<void> context;
-		static void* Allocate(void*, void* address, size_t, size_t bytes) noexcept {
-			if (!bytes) { std::free(address); return nullptr; }
-			if (CheckpointFailure::Fails(CheckpointFailure::Point::LuaAllocation)) return nullptr;
-			return std::realloc(address, bytes);
+		lua_Alloc allocator = nullptr;
+		void* allocatorContext = nullptr;
+		static void* Allocate(void* opaque, void* address, size_t oldBytes, size_t bytes) noexcept {
+			auto& owner = *static_cast<GraphWorker*>(opaque);
+			if (bytes && CheckpointFailure::Fails(CheckpointFailure::Point::LuaAllocation)) return nullptr;
+			return owner.allocator(owner.allocatorContext, address, oldBytes, bytes);
 		}
 		~GraphWorker() { state.reset(); context.reset(); }
 	};
@@ -58,8 +60,11 @@ namespace RTE::CheckpointLua {
 			std::lock_guard lock(owner->mutex);
 			const bool first = !owner->state;
 			if (first) {
-				owner->state.reset(lua_newstate(GraphWorker::Allocate, nullptr));
+				CheckpointFailure::Check(CheckpointFailure::Point::LuaAllocation);
+				owner->state.reset(luaL_newstate());
 				if (!owner->state) throw std::bad_alloc();
+				owner->allocator = lua_getallocf(owner->state.get(), &owner->allocatorContext);
+				lua_setallocf(owner->state.get(), GraphWorker::Allocate, owner.get());
 			}
 			lua_State* worker = owner->state.get();
 			std::string result;
