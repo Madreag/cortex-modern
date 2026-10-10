@@ -20,6 +20,8 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a TerrainDebris object in system memory. Create() should be called before using the object.
 		TerrainDebris();
+		CheckpointSnapshotMethods(TerrainDebris);
+		static void PrepareCheckpointNative(const TerrainDebris& source, TerrainDebris* target, CheckpointNativeSnapshot& snapshot);
 
 		/// Makes the TerrainDebris object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.

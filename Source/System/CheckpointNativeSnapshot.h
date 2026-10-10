@@ -78,6 +78,8 @@ namespace RTE {
 			void* memory = ::operator new(sizeof(T));
 			try {
 				m_Values.emplace(source, memory);
+				if constexpr (requires { T::PrepareCheckpointNative(*source, static_cast<T*>(memory), *this); })
+					T::PrepareCheckpointNative(*source, static_cast<T*>(memory), *this);
 				::new(memory) T(*source, *this);
 				owner.first = memory;
 				return static_cast<T*>(memory);

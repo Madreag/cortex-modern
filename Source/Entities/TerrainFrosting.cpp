@@ -1,4 +1,6 @@
 #include "TerrainFrosting.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Material.h"
 #include "CheckpointImage.h"
 #include "SLTerrain.h"
 
@@ -7,6 +9,20 @@ using namespace RTE;
 const std::string TerrainFrosting::c_ClassName = "TerrainFrosting";
 
 void TerrainFrosting::TouchCheckpoint() { CheckpointValueWritten(this); }
+
+TerrainFrosting::TerrainFrosting(const TerrainFrosting& source, CheckpointNativeSnapshot& snapshot) :
+	m_FrostingMaterial(snapshot.Freeze(source.m_FrostingMaterial)),
+	m_TargetMaterial(snapshot.Freeze(source.m_TargetMaterial)),
+	m_MinThickness(snapshot.Freeze(source.m_MinThickness)),
+	m_MaxThickness(snapshot.Freeze(source.m_MaxThickness)),
+	m_InAirOnly(snapshot.Freeze(source.m_InAirOnly)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+void TerrainFrosting::PrepareCheckpointNative(const TerrainFrosting& source, TerrainFrosting* target, CheckpointNativeSnapshot& snapshot) {
+	snapshot.Prepare(source.m_FrostingMaterial, &target->m_FrostingMaterial);
+	snapshot.Prepare(source.m_TargetMaterial, &target->m_TargetMaterial);
+}
 
 void TerrainFrosting::Clear() {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_FrostingMaterial, m_TargetMaterial, m_MinThickness, m_MaxThickness, m_InAirOnly); }, m_CheckpointInitialized);

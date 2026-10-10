@@ -1,15 +1,50 @@
 #include "TerrainDebris.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Material.h"
+#include "ContentFile.h"
 #include "SLTerrain.h"
 
 using namespace RTE;
 
 ConcreteClassInfo(TerrainDebris, Entity, 0);
 
+TerrainDebris::TerrainDebris(const TerrainDebris& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	m_DebrisFile(snapshot.Freeze(source.m_DebrisFile)),
+	m_Bitmaps(snapshot.Freeze(source.m_Bitmaps)),
+	m_BitmapCount(snapshot.Freeze(source.m_BitmapCount)),
+	m_Material(snapshot.Freeze(source.m_Material)),
+	m_TargetMaterial(snapshot.Freeze(source.m_TargetMaterial)),
+	m_DebrisPlacementMode(snapshot.Freeze(source.m_DebrisPlacementMode)),
+	m_OnlyBuried(snapshot.Freeze(source.m_OnlyBuried)),
+	m_MinDepth(snapshot.Freeze(source.m_MinDepth)),
+	m_MaxDepth(snapshot.Freeze(source.m_MaxDepth)),
+	m_MinRotation(snapshot.Freeze(source.m_MinRotation)),
+	m_MaxRotation(snapshot.Freeze(source.m_MaxRotation)),
+	m_CanHFlip(snapshot.Freeze(source.m_CanHFlip)),
+	m_CanVFlip(snapshot.Freeze(source.m_CanVFlip)),
+	m_FlipChance(snapshot.Freeze(source.m_FlipChance)),
+	m_Density(snapshot.Freeze(source.m_Density)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* TerrainDebris::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
+void TerrainDebris::PrepareCheckpointNative(const TerrainDebris& source, TerrainDebris* target, CheckpointNativeSnapshot& snapshot) {
+	snapshot.Prepare(static_cast<const Entity&>(source), static_cast<Entity*>(target));
+	snapshot.Prepare(source.m_Material, &target->m_Material);
+	snapshot.Prepare(source.m_TargetMaterial, &target->m_TargetMaterial);
+}
+
 TerrainDebris::TerrainDebris() {
 	Clear();
 }
 
 TerrainDebris::~TerrainDebris() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
