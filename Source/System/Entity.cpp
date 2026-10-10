@@ -118,13 +118,14 @@ namespace RTE {
 		return m_UIDs.Find(uid).value_or(nullptr);
 	}
 	struct CheckpointNativeSnapshot::Pixel {
-		BITMAP bitmap{};
+		mutable BITMAP bitmap{};
 		GFX_VTABLE table{};
 		mutable std::vector<uint8_t*> lines;
 		std::shared_ptr<const BitmapSnapshot> snapshot;
 		const BITMAP* loaded = nullptr;
 		size_t rowBytes = 0;
-		CheckpointText text;
+		mutable CheckpointText text;
+		mutable std::once_flag textReady;
 		std::array<std::optional<std::string>, 2> paths;
 		mutable std::once_flag ready;
 		mutable std::string bytes;
@@ -134,11 +135,21 @@ namespace RTE {
 			for (int row = 0; row < source->h; ++row) rows.append(reinterpret_cast<const char*>(source->line[row]), rowBytes);
 			return rows;
 		}
+		/// The pixels' text, described by whoever reads it first rather than at the boundary.
+		const CheckpointText& Text() const {
+			std::call_once(textReady, [this] {
+				if (loaded) text = CheckpointText::Deferred([source = loaded, rowBytes = rowBytes] { return Rows(source, rowBytes); }, rowBytes * static_cast<size_t>(loaded->h));
+				else text = CheckpointText::Deferred([frozen = snapshot] { return frozen->PixelBytes(); }, snapshot->LogicalBytes());
+			});
+			return text;
+		}
 		void Materialize() const {
 			std::call_once(ready, [this] {
 				bytes = loaded ? Rows(loaded, rowBytes) : snapshot->PixelBytes();
 				const size_t stride = loaded ? rowBytes : snapshot->rowBytes;
+				lines.resize(bitmap.h);
 				for (size_t row = 0; row < lines.size(); ++row) lines[row] = reinterpret_cast<uint8_t*>(bytes.data()) + row * stride;
+				bitmap.line = lines.data();
 			});
 		}
 	};
@@ -154,8 +165,7 @@ namespace RTE {
 		auto pixel = std::make_shared<Pixel>();
 		pixel->bitmap = *source; pixel->table = *source->vtable;
 		pixel->bitmap.vtable = &pixel->table;
-		pixel->lines.resize(source->h);
-		pixel->bitmap.line = pixel->lines.data();
+		pixel->bitmap.line = nullptr;
 		pixel->bitmap.dat = nullptr; pixel->bitmap.extra = nullptr;
 		for (int depth = 0; depth < 2; ++depth) {
 			int requested = depth;
@@ -166,11 +176,8 @@ namespace RTE {
 			// A loaded image keeps its pixels while it is loaded (a save names its file and a load refuses other pixels), so the saver reads it.
 			pixel->loaded = source;
 			pixel->rowBytes = static_cast<size_t>(source->w) * ((depth + 7) / 8);
-			pixel->text = CheckpointText::Deferred([source, rowBytes = pixel->rowBytes] { return Pixel::Rows(source, rowBytes); }, pixel->rowBytes * static_cast<size_t>(source->h));
-		} else if (auto captured = BitmapPixelCaptureScope::Capture(source, {})) { pixel->snapshot = captured->first; pixel->text = captured->second; }
-		else {
+		} else {
 			pixel->snapshot = BitmapSnapshot::Freeze(source);
-			pixel->text = CheckpointText::Deferred([snapshot = pixel->snapshot] { return snapshot->PixelBytes(); }, pixel->snapshot->LogicalBytes());
 		}
 		// Another thread freezing an owner of the same image may have frozen it first; its copy is the one kept.
 		const auto [kept, claimed] = m_BitmapSources.TryEmplace(source, pixel);
@@ -181,7 +188,7 @@ namespace RTE {
 	std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> CheckpointNativeSnapshot::Pixels(const BITMAP* bitmap) const {
 		const auto found = m_Bitmaps.Find(bitmap);
 		if (!found) return {};
-		return std::pair{(*found)->snapshot, (*found)->text};
+		return std::pair{(*found)->snapshot, (*found)->Text()};
 	}
 	std::optional<const std::string*> CheckpointNativeSnapshot::BitmapPath(const BITMAP* bitmap, int& depth) const {
 		const auto found = m_Bitmaps.Find(bitmap);
