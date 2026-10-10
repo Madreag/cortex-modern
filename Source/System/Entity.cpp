@@ -242,8 +242,7 @@ namespace RTE {
 		m_PresetDescription(source.m_PresetDescription), m_FormattedReaderPosition(source.m_FormattedReaderPosition),
 		m_IsOriginalPreset(source.m_IsOriginalPreset), m_DefinedInModule(source.m_DefinedInModule),
 		m_Groups(source.m_Groups), m_RandomWeight(source.m_RandomWeight),
-		m_CheckpointWriteGeneration(source.m_CheckpointWriteGeneration), m_FrozenCheckpointNative(true), m_CheckpointSnapshot(&snapshot),
-		m_CheckpointModuleAndPreset(source.GetModuleAndPresetName()) {
+		m_CheckpointWriteGeneration(source.m_CheckpointWriteGeneration), m_FrozenCheckpointNative(true), m_CheckpointSnapshot(&snapshot) {
 		m_CheckpointOwnerSlot = snapshot.Bind(source, this);
 		const Entity* preset = nullptr;
 		{
@@ -268,7 +267,6 @@ namespace RTE {
 		target.m_Groups = source.m_Groups;
 		target.m_RandomWeight = source.m_RandomWeight;
 		target.m_CheckpointWriteGeneration = source.m_CheckpointWriteGeneration;
-		target.m_CheckpointModuleAndPreset = source.GetModuleAndPresetName();
 		target.m_CheckpointPreset = Object(source.GetPresetForCopy());
 	}
 	thread_local unsigned int Entity::s_CheckpointCloneDepth = 0;
@@ -509,7 +507,6 @@ namespace RTE {
 	}
 
 	std::string Entity::GetModuleAndPresetName() const {
-		if (m_FrozenCheckpointNative) return m_CheckpointModuleAndPreset;
 		if (m_DefinedInModule < 0) {
 			return GetPresetName();
 		}
