@@ -128,7 +128,10 @@ namespace RTE::CheckpointLua {
 				const int table = lua_gettop(destination);
 				lua_getfield(destination, table, "count");
 				const int count = lua_tointeger(destination, -1); lua_pop(destination, 1);
-				const int index = static_cast<int>(numberVnum(&position)), first = static_cast<int>(numberVnum(&origin));
+				view.Push(destination, position);
+				const int index = lua_tointeger(destination, -1); lua_pop(destination, 1);
+				view.Push(destination, origin);
+				const int first = lua_tointeger(destination, -1); lua_pop(destination, 1);
 				lua_newtable(destination);
 				lua_pushboolean(destination, true); lua_setfield(destination, -2, "owned");
 				lua_pushinteger(destination, first + index); lua_setfield(destination, -2, "first");
@@ -598,7 +601,11 @@ namespace RTE::CheckpointLua {
 				if (object->gch.gct != ~LJ_TFUNC) continue;
 				const auto* function = gco2func(object);
 				if (!IteratorCandidate(function)) continue;
-				if (function->c.f == ScriptGraphValueIteratorNext) continue;
+				if (function->c.f == ScriptGraphValueIteratorNext) {
+					const TValue& values = function->c.upvalue[0];
+					if (!tvistab(&values) || tabref(tabV(&values)->metatable)) { m_PlainRefusal = "iterator values metatable"; plain = false; }
+					continue;
+				}
 				const auto* meta = tabref(udataV(&function->c.upvalue[0])->metatable);
 				if (!meta) continue;
 				const auto* hook = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(iteratorKey));

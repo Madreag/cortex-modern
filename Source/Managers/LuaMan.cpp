@@ -10678,7 +10678,7 @@ end
 			std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " named_preset_boundary_keeps_the_live_global_path" << std::endl;
 			checkpointValues = exact && checkpointValues;
 		}
-		{
+		for (bool custom: {false, true}) {
 			LuaStateWrapper plain;
 			plain.Initialize(); plain.LoadScriptGraphHelper();
 			bool exact = plain.RunScriptString(R"lua(
@@ -10690,7 +10690,10 @@ _BoundaryOwnedIterator = { next = next, alias = next, thread = coroutine.create(
 	return next()
 end) }
 assert(coroutine.resume(_BoundaryOwnedIterator.thread))
+debug.setupvalue(next, 3, "2")
+debug.setupvalue(next, 4, "150")
 )lua") == 0;
+			if (custom) exact = plain.RunScriptString("local _, values = debug.getupvalue(_BoundaryOwnedIterator.next, 1); values.count = nil; setmetatable(values, {__index = function(_, key) if key == 'count' then return 3 end end})") == 0 && exact;
 			std::string reference;
 			std::vector<std::string> problems;
 			exact = plain.SerializeScriptGraph(reference, problems) && exact;
@@ -10709,8 +10712,8 @@ assert(coroutine.resume(_BoundaryOwnedIterator.thread))
 			}
 			plain.RunScriptString("_BoundaryOwnedIterator.next(); _BoundaryOwnedIterator = nil; collectgarbage('collect')");
 			const std::string actual = std::async(std::launch::async, [captured] { return captured.Text(); }).get();
-			exact = problems.empty() && stats.plainStates == 1 && actual == reference && exact;
-			std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " restored_iterator_ranges_finish_from_the_frozen_heap plain=" << stats.plainStates
+			exact = problems.empty() && stats.plainStates == (custom ? 0 : 1) && actual == reference && exact;
+			std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " restored_iterator_ranges_finish_from_the_frozen_heap custom=" << custom << " plain=" << stats.plainStates
 			    << " refusal=" << stats.plainRefusal << " problems=" << problems.size() << " bytes_exact=" << (actual == reference) << std::endl;
 			showMismatch("owned-iterator", reference, actual);
 			checkpointValues = exact && checkpointValues;
