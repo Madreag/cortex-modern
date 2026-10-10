@@ -1549,6 +1549,7 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 			previousImage.reset();
 			sceneCache.reset();
 			if (image->nativeReady.valid()) image->nativeReady.get();
+			CheckpointPagePool::Costs native;
 			if (complete) {
 				complete();
 				image->activity = image->activity.Compact(); image->scene = image->scene.Compact();
@@ -1556,6 +1557,7 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 				image->globals = image->globals.Compact();
 				for (auto& graph: image->graphs) graph = graph.Compact();
 				complete = {};
+				if (image->nativePages) native = image->nativePages->Cost();
 				image->nativePages.reset(); image->nativeReady = {};
 			}
 			const CheckpointText main = AssembleOwnedSave(*image);
@@ -1567,7 +1569,7 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 				for (const auto& [name, layer]: image->layers) layer->Finalize();
 				const int64_t simUs = image->captureClock->simulationUs.get();
 				const int64_t totalUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - image->captureClock->started).count();
-				const auto native = image->nativePages ? image->nativePages->Cost() : CheckpointPagePool::Costs{};
+				if (image->nativePages) native = image->nativePages->Cost();
 				System::PrintDiagnosticLine(std::format("[checkpoint-completion] tick={} sim_call_us={} total_capture_us={} native_boundary_us={} native_copy_worker_us={} native_sim_fault_observer_us={} native_other_fault_observer_us={} native_sim_faults={} native_other_faults={} native_bytes={} serializer_off_sim={}",
 				    tick, simUs, totalUs, image->nativeBoundaryUs, native.workerUs, native.simFaultUs, native.otherFaultUs,
 				    native.simFaults, native.otherFaults, native.bytes, std::this_thread::get_id() != simThread));
