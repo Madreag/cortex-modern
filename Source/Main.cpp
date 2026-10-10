@@ -7575,6 +7575,10 @@ void RunGameLoop() {
 			if (g_TimerMan.SimFrameBudgetSpent()) {
 				break;
 			}
+			// A restored run ends on the tick its cap names, not after the rest of that tick's frame.
+			if (s_checkpointRestoreContinue && System::IsSetToQuit()) {
+				break;
+			}
 			// A joiner launched from the menu restores its base before asking for the tick after it, as a launch at the loop's start does:
 			// the counter still reads the round this process left, whose next tick the catch-up never grants.
 			if (ScenarioRunner::WorldCatchUpActive() && !g_ActivityMan.IsInActivity() && g_ActivityMan.ActivitySetToRestart()) {
