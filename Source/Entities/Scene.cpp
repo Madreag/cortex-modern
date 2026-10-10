@@ -331,6 +331,8 @@ Scene::Scene(const Scene& source, CheckpointNativeSnapshot& snapshot) :
 	m_IsSavedGameInternal(snapshot.Freeze(source.m_IsSavedGameInternal)),
 	m_Deployments(snapshot.Freeze(source.m_Deployments)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	m_FrozenSaveModuleID = source.IsFrozenCheckpointNative() ? source.m_FrozenSaveModuleID : g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName);
+	m_FrozenSaveModulePath = source.IsFrozenCheckpointNative() ? source.m_FrozenSaveModulePath : g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName);
 	snapshot.FreezeArray(m_ResidentBrains, source.m_ResidentBrains);
 	snapshot.FreezeArray(m_BuildBudget, source.m_BuildBudget);
 	snapshot.FreezeArray(m_BuildBudgetRatio, source.m_BuildBudgetRatio);
@@ -1455,8 +1457,8 @@ CheckpointText Scene::CaptureSavedScene(const std::string& fileName) const {
 void Scene::SaveSavedScene(Writer& writer, const std::string& fileName) const {
 	Writer::SaveOverrides overrides;
 	overrides.scene = this;
-	const int module = g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName);
-	const std::string folder = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName);
+	const int module = IsFrozenCheckpointNative() ? m_FrozenSaveModuleID : g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName);
+	const std::string folder = IsFrozenCheckpointNative() ? m_FrozenSaveModulePath : g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName);
 	overrides.identities[this] = {fileName, module, true};
 	overrides.identities[m_pTerrain] = {fileName, module, true};
 	const auto layer = [&](SceneLayer* value, const std::string& name, bool terrain) {
@@ -1671,7 +1673,7 @@ namespace {
 	// text and the sounds it carries, so a node no tree takes leaves no trace in the capture.
 	class AheadNode {
 	public:
-		AheadNode(const SceneObject* object, unsigned channel, const Writer::SaveOverrides* overrides) : m_Object(object), m_Channel(channel), m_Overrides(overrides) {}
+		AheadNode(const SceneObject* object, unsigned channel, const Writer::SaveOverrides* overrides) : m_Object(object), m_Channel(channel), m_Overrides(overrides), m_Batched(CheckpointWriter::BatchEnabled()) {}
 		/// Writes the node here unless another thread already started it.
 		void Run() {
 			if (Claim()) Write();
@@ -1697,6 +1699,7 @@ namespace {
 		}
 		// The channel carries the indent and the flags the tree would write the node with.
 		void Write() {
+			CheckpointWriter::BatchOverride batch(m_Batched);
 			CheckpointNativeSnapshot::ReadScope native(m_Object->FrozenCheckpointNativeOwner());
 			const auto started = std::chrono::steady_clock::now();
 			CaptureTrace::Span span("ahead", CaptureTrace::Active() ? TraceName(m_Object) : std::string());
@@ -1725,6 +1728,7 @@ namespace {
 		const SceneObject* m_Object;
 		unsigned m_Channel;
 		const Writer::SaveOverrides* m_Overrides;
+		bool m_Batched;
 		std::atomic<bool> m_Started{false};
 		std::mutex m_Mutex;
 		std::condition_variable m_Done;
@@ -1779,6 +1783,7 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 	const Writer::SaveOverrides* overrides = writer.GetSaveOverrides();
 	const int indent = writer.GetIndent();
 	AudioMan::SoundCheckpointSaveScope* sounds = AudioMan::SoundCheckpointSaveScope::Current();
+	const bool batched = CheckpointWriter::BatchEnabled();
 	// The last capture's heaviest nodes that still exist are written side by side, ahead of the trees that hold them.
 	AheadCapture ahead;
 	{
@@ -1789,6 +1794,7 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 	}
 	// Each object is written by one thread, as its own capture, exactly as the loop would write it.
 	const auto capture = [&](size_t first, size_t last) {
+		CheckpointWriter::BatchOverride batch(batched);
 		AudioMan::SoundCheckpointSaveScope::Lend lend(sounds, CheckpointWriter::BatchEnabled());
 		AheadCaptureScope aheadScope(&ahead);
 		CheckpointCache values(CheckpointWriter::BatchEnabled());

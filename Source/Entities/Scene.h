@@ -853,6 +853,8 @@ namespace RTE {
 		std::array<CheckpointText, Activity::Teams::MaxTeamCount + 1> m_FrozenPathFinders;
 		std::list<SceneObject*> m_FrozenSaveRoots;
 		bool m_FrozenFullGameSave = true;
+		int m_FrozenSaveModuleID = -1;
+		std::string m_FrozenSaveModulePath;
 		// Is set to true on any frame the pathfinding data has been updated
 		bool m_PathfindingUpdated;
 		// Timer for when to do an update of the pathfinding data
