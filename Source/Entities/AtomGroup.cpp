@@ -31,8 +31,9 @@ ConcreteClassInfo(AtomGroup, Entity, 500);
 
 AtomGroup::AtomGroup(const AtomGroup& source, CheckpointNativeSnapshot& snapshot) :
 	Entity(source, snapshot),
-	m_Atoms(source.m_AutoGenerate ? source.m_Atoms : snapshot.Freeze(source.m_Atoms)),
-	m_SubGroups(source.m_AutoGenerate ? source.m_SubGroups : snapshot.Freeze(source.m_SubGroups)),
+	// Atoms stay identities; their frozen values are read from m_FrozenAtoms.
+	m_Atoms(source.m_Atoms),
+	m_SubGroups(source.m_SubGroups),
 	m_OwnerMOSR(snapshot.Freeze(source.m_OwnerMOSR)),
 	m_StoredOwnerMass(snapshot.Freeze(source.m_StoredOwnerMass)),
 	m_Material(snapshot.Freeze(source.m_Material)),
@@ -382,7 +383,8 @@ int AtomGroup::Save(Writer& writer) const {
 
 	// Only write out Atoms if they were manually specified
 	if (!m_AutoGenerate) {
-		for (const Atom* atom: m_Atoms) {
+		if (m_FrozenAtoms) Atom::SaveFrozenAtoms(writer, m_FrozenAtoms);
+		else for (const Atom* atom: m_Atoms) {
 			writer.NewProperty("AddAtom");
 			writer << *atom;
 		}
@@ -429,6 +431,10 @@ void AtomGroup::SetAtomList(const std::vector<Atom*>& newAtoms) {
 
 std::vector<long long> AtomGroup::GetTravelResidue() const {
 	std::vector<long long> residue;
+	if (m_FrozenAtoms) {
+		for (const auto& atom: Atom::FrozenValues(m_FrozenAtoms)) residue.push_back(atom.residue);
+		return residue;
+	}
 	residue.reserve(m_Atoms.size());
 	for (const Atom* atom: m_Atoms) {
 		residue.push_back(atom->PackTravelResidue());
@@ -503,6 +509,10 @@ void AtomGroup::SetTravelResidue(const std::vector<long long>& residue, const st
 
 std::vector<Vector> AtomGroup::GetAtomOffsets() const {
 	std::vector<Vector> offsets;
+	if (m_FrozenAtoms) {
+		for (const auto& atom: Atom::FrozenValues(m_FrozenAtoms)) offsets.push_back(atom.offset);
+		return offsets;
+	}
 	offsets.reserve(m_Atoms.size());
 	for (const Atom* atom: m_Atoms) {
 		offsets.push_back(atom->GetOffset());
@@ -589,6 +599,10 @@ void AtomGroup::RebuildFromPersisted(const std::vector<Vector>& offsets, const s
 
 std::vector<int> AtomGroup::GetAtomMaterialIndices() const {
 	std::vector<int> materials;
+	if (m_FrozenAtoms) {
+		for (const auto& atom: Atom::FrozenValues(m_FrozenAtoms)) materials.push_back(atom.material);
+		return materials;
+	}
 	materials.reserve(m_Atoms.size());
 	for (const Atom* atom: m_Atoms) {
 		materials.push_back(atom->GetMaterial()->GetIndex());
@@ -598,6 +612,10 @@ std::vector<int> AtomGroup::GetAtomMaterialIndices() const {
 
 std::vector<long long> AtomGroup::GetAtomSubIDs() const {
 	std::vector<long long> subIDs;
+	if (m_FrozenAtoms) {
+		for (const auto& atom: Atom::FrozenValues(m_FrozenAtoms)) subIDs.push_back(atom.subgroup);
+		return subIDs;
+	}
 	subIDs.reserve(m_Atoms.size());
 	for (const Atom* atom: m_Atoms) {
 		subIDs.push_back(atom->GetSubID());

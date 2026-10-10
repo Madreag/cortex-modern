@@ -589,6 +589,7 @@ struct Atom::FrozenList {
 	struct Layout {
 		size_t material, hitMaterials[2], hasMaterials, groupIgnore;
 		size_t prevError, penetrations, terrainDisabled, changedDir, offsetX, offsetY, subgroup;
+		size_t originalOffsetX, originalOffsetY, trailColor[3], trailLength, trailLengthVariation;
 	} layout{};
 	static constexpr size_t none = std::numeric_limits<size_t>::max();
 	using Raw = std::array<char, sizeof(Atom)>;
@@ -608,6 +609,14 @@ struct Atom::FrozenList {
 		T result;
 		std::memcpy(&result, raw.data() + offset, sizeof(result));
 		return result;
+	}
+	FrozenAtom Values(const Raw& raw) const {
+		const auto& fields = state->fields->layout;
+		const int penetrations = Field<int>(raw, fields.penetrations);
+		long long residue = static_cast<long long>(Field<int>(raw, fields.prevError)) * 256 + (penetrations < 255 ? penetrations : 255);
+		residue = residue * 4 + (Field<unsigned char>(raw, fields.terrainDisabled) ? 2 : 0) + (Field<unsigned char>(raw, fields.changedDir) ? 1 : 0);
+		return {residue, Vector(Field<float>(raw, fields.offsetX), Field<float>(raw, fields.offsetY)), Field<int>(raw, fields.subgroup),
+		    MaterialValueFor(Field<const Material*>(raw, fields.material)).index};
 	}
 	size_t Bytes() const {
 		size_t bytes = records.size() * (sizeof(Record) + sizeof(Atom)) + ranges.size() * sizeof(AtomFieldRange);
@@ -635,6 +644,11 @@ std::shared_ptr<const Atom::FrozenList> Atom::FreezeList(const std::vector<Atom*
 		layout.prevError = offset(atom.m_PrevError); layout.penetrations = offset(atom.m_NumPenetrations);
 		layout.terrainDisabled = offset(atom.m_TerrainHitsDisabled); layout.changedDir = offset(atom.m_ChangedDir);
 		layout.offsetX = offset(atom.m_Offset.m_X); layout.offsetY = offset(atom.m_Offset.m_Y); layout.subgroup = offset(atom.m_SubgroupID);
+		layout.originalOffsetX = offset(atom.m_OriginalOffset.m_X); layout.originalOffsetY = offset(atom.m_OriginalOffset.m_Y);
+		atom.m_TrailColor.VisitCheckpointFields([&](const auto& red, const auto& green, const auto& blue, const auto&) {
+			layout.trailColor[0] = offset(red); layout.trailColor[1] = offset(green); layout.trailColor[2] = offset(blue);
+		});
+		layout.trailLength = offset(atom.m_TrailLength); layout.trailLengthVariation = offset(atom.m_TrailLengthVariation);
 		size_t into = 0, colors = 0, dynamic = 0;
 		const auto describe = [&](const auto&... values) { (AtomFieldRanges(fields->ranges, &atom, into, colors, dynamic, values, true), ...); };
 		VisitCheckpoint(describe, atom);
@@ -730,26 +744,45 @@ bool Atom::CaptureFrozenListProperties(Writer& writer, const std::shared_ptr<con
 	if (!list) return false;
 	const int indent = writer.GetIndent();
 	writer.Append(CheckpointText::Deferred([list, indent] {
-		struct Record { long long residue; CheckpointProperties::VectorValue offset; long long subgroup; int material; };
-		std::vector<Record> records;
-		records.reserve(list->records.size());
-		for (const auto& atom: list->records) {
-			const auto raw = list->Read(atom);
-			const auto& layout = list->state->fields->layout;
-			const int penetrations = FrozenList::Field<int>(raw, layout.penetrations);
-			long long residue = static_cast<long long>(FrozenList::Field<int>(raw, layout.prevError)) * 256 + (penetrations < 255 ? penetrations : 255);
-			residue = residue * 4 + (FrozenList::Field<unsigned char>(raw, layout.terrainDisabled) ? 2 : 0) + (FrozenList::Field<unsigned char>(raw, layout.changedDir) ? 1 : 0);
-			records.push_back({residue, {FrozenList::Field<float>(raw, layout.offsetX), FrozenList::Field<float>(raw, layout.offsetY)},
-			    FrozenList::Field<int>(raw, layout.subgroup), list->MaterialValueFor(FrozenList::Field<const Material*>(raw, layout.material)).index});
-		}
+		const std::vector<FrozenAtom> records = FrozenValues(list);
 		return Writer::Capture([&](Writer& output) {
 			for (const auto& record: records) output.NewPropertyWithValue("AtomGroupResidue", record.residue);
-			for (const auto& record: records) CheckpointProperties::Owned<"AtomGroupOffset", CheckpointProperties::VectorValue>::WriteValue(output, record.offset);
+			for (const auto& record: records) CheckpointProperties::Owned<"AtomGroupOffset", CheckpointProperties::VectorValue>::WriteValue(output, {record.offset.m_X, record.offset.m_Y});
 			for (const auto& record: records) output.NewPropertyWithValue("AtomGroupSubID", record.subgroup);
 			for (const auto& record: records) output.NewPropertyWithValue("AtomGroupMaterial", record.material);
 		}, indent).Text();
 	}, list->Bytes()));
 	return true;
+}
+
+std::vector<Atom::FrozenAtom> Atom::FrozenValues(const std::shared_ptr<const FrozenList>& list) {
+	std::vector<FrozenAtom> values;
+	values.reserve(list->records.size());
+	for (const auto& record: list->records) values.push_back(list->Values(list->Read(record)));
+	return values;
+}
+
+void Atom::SaveFrozenAtoms(Writer& writer, const std::shared_ptr<const FrozenList>& list) {
+	const FrozenList::Tail empty;
+	const auto& layout = list->state->fields->layout;
+	for (const auto& record: list->records) {
+		const auto raw = list->Read(record);
+		const auto& tail = record.tail == FrozenList::none ? empty : list->tails.at(record.tail);
+		const Material* material = FrozenList::Field<const Material*>(raw, layout.material);
+		Color trailColor;
+		trailColor.SetR(FrozenList::Field<int>(raw, layout.trailColor[0])); trailColor.SetG(FrozenList::Field<int>(raw, layout.trailColor[1])); trailColor.SetB(FrozenList::Field<int>(raw, layout.trailColor[2]));
+		writer.NewProperty("AddAtom");
+		writer.ObjectStart(c_ClassName);
+		writer.NewPropertyWithValue("Offset", Vector(FrozenList::Field<float>(raw, layout.offsetX), FrozenList::Field<float>(raw, layout.offsetY)));
+		writer.NewPropertyWithValue("OriginalOffset", Vector(FrozenList::Field<float>(raw, layout.originalOffsetX), FrozenList::Field<float>(raw, layout.originalOffsetY)));
+		if (!writer.IsSnapshot()) writer.NewPropertyWithValue("Material", material);
+		else if (FrozenList::Field<unsigned char>(raw, layout.hasMaterials)) writer.NewPropertyWithValue("SpecialBehaviour_MaterialReference", CheckpointWriter::Native([&tail] { return tail.materials[0]; }).Base64(true));
+		else writer.NewPropertyWithValue("SpecialBehaviour_MaterialReference", list->MaterialValueFor(material).text.Base64(true));
+		writer.NewPropertyWithValue("TrailColor", trailColor);
+		writer.NewPropertyWithValue("TrailLength", FrozenList::Field<int>(raw, layout.trailLength));
+		writer.NewPropertyWithValue("TrailLengthVariation", FrozenList::Field<float>(raw, layout.trailLengthVariation));
+		writer.ObjectEnd();
+	}
 }
 
 CheckpointText Atom::CaptureCheckpointList(const std::vector<Atom*>& atoms) {

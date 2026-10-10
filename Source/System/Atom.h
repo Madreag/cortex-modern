@@ -74,6 +74,11 @@ namespace RTE {
 		static std::shared_ptr<const FrozenList> FreezeList(const std::vector<Atom*>& atoms, bool values = true);
 		static CheckpointText CaptureFrozenList(const std::shared_ptr<const FrozenList>& list);
 		static bool CaptureFrozenListProperties(Writer& writer, const std::shared_ptr<const FrozenList>& list);
+		/// The per-atom values an AtomGroup reports, read from frozen atom pages.
+		struct FrozenAtom { long long residue; Vector offset; long long subgroup; int material; };
+		static std::vector<FrozenAtom> FrozenValues(const std::shared_ptr<const FrozenList>& list);
+		/// Writes each frozen atom as an AddAtom property, exactly as the live atom saves itself.
+		static void SaveFrozenAtoms(Writer& writer, const std::shared_ptr<const FrozenList>& list);
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
 		std::string SaveCheckpoint() const;
