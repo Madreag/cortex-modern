@@ -195,7 +195,7 @@ namespace RTE {
 		class DirectHost final : public INetTransport {
 		public:
 			bool connected = false;
-			bool lobbyAccepted = false, lobbyReady = false, lobbyStarted = false;
+			bool lobbyPublished = false, lobbyAccepted = false, lobbyReady = false, lobbyStarted = false;
 			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(73);
 			std::vector<NetTransportEvent> pending;
 			DirectHost() {
@@ -227,10 +227,12 @@ namespace RTE {
 					// exchange as every V1 match; its route assertions stay below.
 					const auto lobby = NetLobbyProtocol::Decode(bytes);
 					if (lobby.ok) {
-						if (std::holds_alternative<NetLobbyHello>(lobby.message.payload)) {
+						if (!lobbyPublished && std::holds_alternative<NetLobbyPeerState>(lobby.message.payload)) {
+							lobbyPublished = true;
+							NetLobbyHello hello; hello.peerId = 1; hello.displayName = "Host"; hello.desiredRole = "host";
 							NetLobbyMigration capsule; capsule.kind = 2; capsule.peerId = 2;
 							capsule.configHash = NetMatchConfigUtil::HashConfig(match); capsule.sealedState.assign(32, 0x5A);
-							if (!ReplyLobby({NetLobbyMatchConfig{match}}) || !ReplyLobby({capsule})) return false;
+							if (!ReplyLobby({hello}) || !ReplyLobby({NetLobbyMatchConfig{match}}) || !ReplyLobby({capsule})) return false;
 						}
 						if (const auto* ack = std::get_if<NetLobbyConfigAck>(&lobby.message.payload))
 							lobbyAccepted = ack->peerId == 2 && ack->accepted && ack->matchConfigHash == NetMatchConfigUtil::HashConfig(match);

@@ -34,7 +34,10 @@ namespace RTE {
 		// An already signed certificate remains valid when the old host returns.
 		// A lone direct joiner cannot distinguish a dead host from a partitioned
 		// host that still owns the frame tie. Only the directory can fence it.
-		return std::popcount(voters) >= 2;
+		uint32_t owners = 0;
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= AdminBit(peer);
+		return std::popcount(voters) >= 2 && (voters & ~owners) == 0 && 2 * std::popcount(voters) > std::popcount(owners);
 	}
 
 	bool NetLockstepCoordinator::ValidatePeerAdmin(const NetHostMigrationMessage& proposal) const {
@@ -66,6 +69,11 @@ namespace RTE {
 			m_PeerAdminRequest->configHash = m_RoundConfigHash; m_PeerAdminRequest->appliedFrame = *m_LastCompletedSimulationTick;
 			m_PeerAdminRequest->preparedFrame = m_Stats.nextFrame - 1;
 			m_MigrationPhase = NetHostMigrationPhase::Contacting; m_MigrationSinceMs = nowMs;
+		}
+		if (m_MigrationChoice && !MigrationUsesDirectory() && !m_PeerAdminOwnVote) {
+			uint32_t chosen = 0;
+			for (uint16_t peer: m_MigrationChoice->members) chosen |= AdminBit(static_cast<uint8_t>(peer));
+			if (chosen != PeerAdminSurvivors(nowMs)) m_MigrationChoice.reset();
 		}
 		if (!m_MigrationChoice) {
 			auto choice = m_Config.hostChangeReferee ? m_Config.hostChangeReferee(*m_PeerAdminRequest) : NetHostChangeReply{};

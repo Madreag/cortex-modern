@@ -66,12 +66,6 @@ def main():
         native = (native[:begin] + '\n#if __has_include("NetPeerSessionWire.h")' + native[begin:end]
                   + '\n#else\n\t\t\t*error = "BASELINE-UNAVAILABLE: ' + method
                   + ' requires the new peer protocol API; not behavioral evidence";\n\t\t\treturn false;\n#endif' + native[end:])
-    visible = "host.IsSeatHoldVisible(late, 1083)"
-    if native.count(visible) != 1:
-        raise SystemExit("The baseline visibility probe anchor differs")
-    native = native.replace(visible, "([]<class Peer>(const Peer& p, uint8_t seat) { "
-                            "if constexpr (requires { p.IsSeatHoldVisible(seat, 1083); }) return p.IsSeatHoldVisible(seat, 1083); "
-                            "else return p.HasHeldAISeat(seat); })(host, late)")
     # The two recorded-host-return probes call the same pre-existing operation
     # under its baseline name. Their horizon and claim assertions stay intact.
     if native.count("host.ReclaimHostSeat(") != 2:

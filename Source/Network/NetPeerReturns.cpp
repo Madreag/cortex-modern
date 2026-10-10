@@ -36,7 +36,13 @@ namespace RTE {
 		witness.preparedFrame = UINT64_MAX; witness.frame = witness.appliedFrame = frame;
 		const auto group = m_FrameGroupChanges.upper_bound(frame);
 		witness.voterMask = group == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(group)->second;
-		if ((witness.voterMask & SeatBit(m_Config.localPeerId)) == 0) return;
+		if ((witness.voterMask & SeatBit(m_Config.localPeerId)) == 0) {
+			// A private reader cannot witness this group's frame. Advertise its
+			// newly applied prefix on the next pump so return eligibility can
+			// follow its catch-up instead of a stale periodic heartbeat.
+			m_PeerHeartbeatAtMs = std::min(m_PeerHeartbeatAtMs, m_TimingNowMs);
+			return;
+		}
 		const auto applied = PeerAppliedFramePrefix(frame), prepared = PeerFramePrefix(frame);
 		witness.bytes.assign(applied.begin(), applied.end()); witness.bytes.insert(witness.bytes.end(), prepared.begin(), prepared.end());
 		m_PeerFrameWitnesses[frame][m_Config.localPeerId] = witness;
@@ -107,7 +113,7 @@ namespace RTE {
 		const auto kept = m_PeerCommittedTail.find(frame);
 		if (kept == m_PeerCommittedTail.end()) return false;
 		if (frame > m_Config.startFrame && (!m_PeerTailPrefixes.contains(frame) || m_PeerTailPrefixes.at(frame) != PeerFramePrefix(frame - 1))) {
-			Fail(NetLockstepStopReason::ProtocolError, frame, "the committed tail differs from displayed history"); return false;
+			Fail(NetLockstepStopReason::ProtocolError, frame, "the committed tail differs from displayed history at frame " + std::to_string(frame)); return false;
 		}
 		NetLockstepReadyFrame ready;
 		if (const auto decisions = m_PeerTailDecisions.find(frame); decisions != m_PeerTailDecisions.end()) {
@@ -119,6 +125,23 @@ namespace RTE {
 			Fail(NetLockstepStopReason::ProtocolError, frame, "invalid committed peer tail"); return false;
 		}
 		StoreMigrationFrame(frame, kept->second);
+		// The certified history also fills receipt gaps in the original senders'
+		// streams. Without this, reading a tick from the tail leaves their next
+		// live input waiting forever behind an already displayed tick.
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+			if (peer == m_Config.localPeerId || !IsRemoteRequiredForFrame(peer, frame)) continue;
+			if (const auto bridge = m_PeerBridges.find(peer); bridge != m_PeerBridges.end() && frame >= bridge->second.fromFrame &&
+			    (!bridge->second.returnFrame || frame < *bridge->second.returnFrame)) continue;
+			auto& through = m_PeerAcceptedThrough[peer];
+			through = std::max(through, frame + 1);
+			auto& ahead = m_PeerAcceptedAhead[peer];
+			ahead.erase(ahead.begin(), ahead.lower_bound(through));
+			while (through != UINT64_MAX && ahead.erase(through) != 0) ++through;
+			m_PeerInputReceipts[peer][m_Config.localPeerId] = through;
+			auto receipt = PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
+			receipt.successorPeerId = peer; receipt.frame = through;
+			SendPeerFrameMessage(std::move(receipt));
+		}
 		m_Stats.nextFrame = frame + 1;
 		RememberCommittedFrame(ready);
 		m_ReadyFrames.push_back(std::move(ready));

@@ -230,12 +230,15 @@ namespace RTE {
 
 	void NetLockstepCoordinator::TickPeerInputDelay(uint64_t nowMs) {
 		if (!m_Config.adaptiveInputDelay || WaitsForPlacement() || !std::isfinite(m_Config.simTickMs) || m_Config.simTickMs <= 0) return;
+		if ((m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) == 0) return;
 		std::vector<std::pair<uint32_t, uint32_t>> paths;
 		for (const auto& [peer, sample]: m_PeerReceiptDelaySamples) if ((m_FrameGroupMembers & SeatBit(peer)) != 0) paths.emplace_back(sample.P95Ms(), sample.JitterMs());
-		const size_t needed = std::popcount(m_FrameGroupMembers) / 2;
+		const size_t needed = std::popcount(m_FrameGroupMembers) - 1;
 		if (needed == 0 || paths.size() < needed) return;
 		std::sort(paths.begin(), paths.end());
-		const auto [rtt, jitter] = paths[needed - 1];
+		// Every active receiver needs the sender's buffered input. Sizing to
+		// only a quorum slowly drains the runway of a healthy, longer path.
+		const auto [rtt, jitter] = paths.back();
 		const uint32_t margin = std::max(c_NetInputJitterReserveMs, jitter) + static_cast<uint32_t>(std::ceil((m_Config.slowPlayerBoundTicks + 1) * m_Config.simTickMs));
 		auto& local = m_Stats.peers[m_Config.localPeerId];
 		local.pingMs = rtt; local.pingMeasured = true;

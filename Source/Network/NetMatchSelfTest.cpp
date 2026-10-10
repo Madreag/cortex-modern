@@ -4748,6 +4748,8 @@ namespace RTE {
 		explicit HostOptionsLobbyRow(uint16_t port, uint64_t revision = 1) {
 			config.host = true;
 			config.matchConfig = MakeConfig();
+			config.matchConfig.inputDelayFrames = 1;
+			config.matchConfig.delayPolicy = NetMatchDelayPolicy::Fixed;
 			config.matchConfig.configRevision = revision;
 			config.useLobbyProtocol = true;
 			config.autoStart = false;

@@ -130,9 +130,17 @@ namespace RTE {
 				heard();
 				if (message.successorPeerId == m_Config.localPeerId && message.frame > 0) if (const auto sent = m_PeerInputSentAtMs.find(message.frame - 1); sent != m_PeerInputSentAtMs.end() && nowMs >= sent->second)
 				{
-					const auto delay = static_cast<uint32_t>(std::min<uint64_t>(nowMs - sent->second, UINT32_MAX));
-					m_PeerReceiptDelaySamples[message.senderPeerId].Observe(nowMs, delay);
-					m_PeerArrivalLatencyMs[m_Config.localPeerId] = {nowMs, delay};
+					const auto group = m_FrameGroupChanges.upper_bound(message.frame - 1);
+					const uint32_t members = group == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(group)->second;
+					const auto bridge = m_PeerBridges.find(message.senderPeerId);
+					const bool live = bridge == m_PeerBridges.end() || (bridge->second.returnFrame && message.appliedFrame >= *bridge->second.returnFrame);
+					// A private tail reader's delayed receipt measures its catch-up,
+					// not the live sender's transport round trip.
+					if (live && (members & m_FrameGroupMembers & SeatBit(message.senderPeerId)) != 0) {
+						const auto delay = static_cast<uint32_t>(std::min<uint64_t>(nowMs - sent->second, UINT32_MAX));
+						m_PeerReceiptDelaySamples[message.senderPeerId].Observe(nowMs, delay);
+						m_PeerArrivalLatencyMs[m_Config.localPeerId] = {nowMs, delay};
+					}
 				}
 				m_PeerInputReceipts[message.successorPeerId][message.senderPeerId] = std::max(m_PeerInputReceipts[message.successorPeerId][message.senderPeerId], message.frame);
 				ResolvePeerBridgeInputConflicts(nowMs);

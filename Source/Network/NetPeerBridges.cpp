@@ -249,6 +249,7 @@ namespace RTE {
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= SeatBit(peer);
 		if (agreed.preparedFrame == 1 && agreed.connectedMask == owners && agreed.frame <= m_Stats.nextFrame) m_PeerAdminFrameMembers = 0;
 		for (uint8_t peer: agreed.members) {
+			m_PeerReceiptDelaySamples.erase(peer);
 			if (agreed.preparedFrame == 1) {
 				if (!m_PeerBridges.contains(peer)) continue;
 				m_PeerBridges[peer].returnFrame = agreed.frame;

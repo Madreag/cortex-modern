@@ -1938,6 +1938,7 @@ namespace RTE {
 				size_t committed = 0;
 				if (!drive(4000, [&] {
 						while (host.PopReadyFrame(ready)) {
+							host.FinishSimulationTick(ready.frame);
 							++committed;
 						}
 						return committed >= 2;
@@ -1968,7 +1969,7 @@ namespace RTE {
 				};
 				// Losing the socket orders a held seat at the first missing tick.
 				aT.Stop();
-				if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(2) != 0; })) {
+				if (!drive(c_NetSeatDisconnectSilenceMs + 10, [&] { return host.GetPeerLeaveFrames().count(2) != 0; })) {
 					*error = "the drop was never adjudicated as a leave";
 					return false;
 				}
