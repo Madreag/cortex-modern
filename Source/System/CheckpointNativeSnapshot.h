@@ -551,7 +551,18 @@ namespace RTE {
 			std::vector<std::shared_ptr<void>> storage;
 			std::vector<std::pair<void*, void (*)(void*)>> deferred;
 		};
-		OwnerShard& Owners() { return m_OwnerShards[std::hash<std::thread::id>{}(std::this_thread::get_id()) % m_OwnerShards.size()]; }
+		OwnerShard& Owners() {
+			struct RecentOwner { uint64_t snapshot = 0; OwnerShard* shard = nullptr; };
+			thread_local RecentOwner recent;
+			if (recent.snapshot != m_Serial) {
+				auto shard = std::make_unique<OwnerShard>();
+				OwnerShard* owned = shard.get();
+				std::lock_guard lock(m_OwnerRegistryMutex);
+				m_OwnerShards.push_back(std::move(shard));
+				recent = {m_Serial, owned};
+			}
+			return *recent.shard;
+		}
 		Entity** AddOwner() {
 			OwnerShard& shard = Owners();
 			std::lock_guard lock(shard.mutex);
@@ -608,7 +619,8 @@ namespace RTE {
 		std::array<MetadataShard, 16> m_Metadata;
 		mutable std::once_flag m_MetadataReady;
 		std::atomic<bool> m_BoundarySealed{false};
-		std::array<OwnerShard, 32> m_OwnerShards;
+		std::mutex m_OwnerRegistryMutex;
+		std::vector<std::unique_ptr<OwnerShard>> m_OwnerShards;
 		CheckpointSharedMap<const Entity*, Entity*> m_Objects;
 		CheckpointSharedMap<const void*, void*> m_Values;
 		struct Reservation {

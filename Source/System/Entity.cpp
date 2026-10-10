@@ -252,8 +252,8 @@ namespace RTE {
 	CheckpointNativeSnapshot::~CheckpointNativeSnapshot() {
 		// A freeze that stopped early leaves claimed storage that was never constructed.
 		m_Reserved.ForEach([](const Entity*, const Reservation& reserved) { reserved.type->DeallocateCheckpointMemory(reserved.memory); });
-		for (auto& shard: m_OwnerShards) for (auto& object: shard.owners) if (Entity* value = std::exchange(object, nullptr)) delete value;
-		for (auto& shard: m_OwnerShards) for (auto& [value, destroy]: shard.values) if (value) destroy(value);
+		for (auto& shard: m_OwnerShards) for (auto& object: shard->owners) if (Entity* value = std::exchange(object, nullptr)) delete value;
+		for (auto& shard: m_OwnerShards) for (auto& [value, destroy]: shard->values) if (value) destroy(value);
 	}
 
 	Entity::Entity(const Entity& source, CheckpointNativeSnapshot& snapshot) :
@@ -352,7 +352,7 @@ namespace RTE {
 	void CheckpointNativeSnapshot::MaterializeMetadata() const {
 		if (!m_BoundarySealed.load(std::memory_order_acquire)) throw std::logic_error("native checkpoint values read before the boundary was sealed");
 		std::call_once(m_MetadataReady, [this] {
-			for (const auto& shard: m_OwnerShards) for (const auto& [value, apply]: shard.deferred) {
+			for (const auto& shard: m_OwnerShards) for (const auto& [value, apply]: shard->deferred) {
 				CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 				apply(value);
 			}
