@@ -2286,9 +2286,14 @@ def run_one(options, scenario, run, run_index, out):
         finally:
             options.remote_capture = previous
     from capture_native import reuse_native_builds
+    parameters = {}
+    if scenario.get("public_directory"):
+        # The helper's direct staging mode omits its private directory and session lookup.
+        # These menu scenes choose their own public directory and RelayOnly route in the engine.
+        parameters = dict(network="direct", join_by_session=False)
     with reuse_native_builds(spread, dispatcher=getattr(options, "pool_dispatcher", None),
                             registry=getattr(options, "pool_registry", None)):
-        result = spread.run_case(options.repo, root, peers, spread.Match(port_for(run_index, options.port), PORT_HI), drive=drive,
+        result = spread.run_case(options.repo, root, peers, spread.Match(port_for(run_index, options.port), PORT_HI, parameters), drive=drive,
                                  peer_boxes=getattr(options, "peer_boxes", None), dispatcher=getattr(options, "pool_dispatcher", None),
                                  registry=getattr(options, "pool_registry", None))
     return result["driver_result"]

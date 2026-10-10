@@ -94,7 +94,7 @@ def emit(number, title, host, joiner, host_probe, join_probe, checklist, timeout
                   settings=dict(SETTINGS, NetworkDisplayName="Captain" if peer == "host" else "Joiner"))
              for peer in ("host", "joiner")]
     document = dict(schema=1, name=name, title=title, port_base=49410 + number * 2,
-                    size="960x540", timeout_s=timeout, peers=peers, scripts=scripts, checklist=checklist)
+                    size="960x540", timeout_s=timeout, public_directory=True, peers=peers, scripts=scripts, checklist=checklist)
     (ROOT / f"{name}.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
 
 
@@ -219,7 +219,7 @@ def place(peer, occupied=False, x=None, relative_to=None):
     steps = [wait(editing=True), dict(op="assert_relay"), dict(op="editor_pick", input_player=0),
              dict(op="editor_move", input_player=0, x_fraction=fraction), wait(renders=5, elapsed_ms=1000)]
     if relative_to:
-        # The prefab's brain chamber is (48, 48) from its top-left, (96, 96) from its cursor.
+        # The cursor is the prefab's center (96, 96); its brain chamber is at (48, 48).
         steps[3].update(relative_to=relative_to, offset_x=-48, offset_y=-48)
     if peer == "joiner": steps += [wait(setup_ready=1)]
     if peer == "joiner" and occupied:

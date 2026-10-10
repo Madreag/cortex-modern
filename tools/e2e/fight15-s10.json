@@ -5,6 +5,7 @@
   "port_base": 49430,
   "size": "960x540",
   "timeout_s": 1750,
+  "public_directory": true,
   "peers": [
     {
       "name": "host",
