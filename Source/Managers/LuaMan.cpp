@@ -9507,6 +9507,11 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	{
+		const bool exact = PathFinder::RunCheckpointFreezeSelfTest();
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " committed_path_grid_freezes_exactly_without_joining_a_pending_solver" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
 		const bool exact = CheckpointLua::CopyPool::RunFailureSelfTest();
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " failed_copy_pool_startup_joins_its_readers_and_retries" << std::endl;
 		checkpointValues = exact && checkpointValues;

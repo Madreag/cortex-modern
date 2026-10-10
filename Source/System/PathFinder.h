@@ -244,6 +244,8 @@ namespace RTE {
 		/// Preserve the partially updated node graph at a completed checkpoint boundary.
 		std::string SaveCheckpoint() const;
 		CheckpointText FreezeCheckpoint() const;
+		/// Detects exact committed-grid capture without waiting for a pending solver.
+		static bool RunCheckpointFreezeSelfTest();
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 
 		/// Recalculates all the costs between all the PathNodes by tracing lines in the material layer and summing all the material strengths for each encountered pixel. Also resets the pather itself.

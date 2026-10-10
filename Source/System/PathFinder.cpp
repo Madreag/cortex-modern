@@ -33,6 +33,7 @@
 #include <cstdio>
 #include <execution>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <sstream>
 #include <memory>
@@ -352,6 +353,25 @@ CheckpointText PathFinder::FreezeCheckpoint() const {
 		}
 		return writer.Text();
 	}, bytes);
+}
+
+bool PathFinder::RunCheckpointFreezeSelfTest() {
+	auto source = std::make_unique<PathFinder>();
+	source->TestInstallGrid(3, 2, 17, nullptr);
+	source->m_NodeGrid[1].Pos.m_X = -0.0F;
+	source->m_NodeGrid[2].m_Navigable = false;
+	const std::string expected = source->SaveCheckpoint();
+	source->m_CurrentPathingRequests.store(1);
+	struct Release { PathFinder* source; ~Release() { if (source) source->m_CurrentPathingRequests.store(0); } } release{source.get()};
+	auto freeze = FloatingPointEnvironment::Async(std::launch::async, [&source] { return source->FreezeCheckpoint(); });
+	const bool noWait = freeze.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+	source->m_CurrentPathingRequests.store(0);
+	CheckpointText frozen = freeze.get();
+	source->TestInstallGrid(1, 1, 31, nullptr);
+	release.source = nullptr;
+	source.reset();
+	const std::string actual = FloatingPointEnvironment::Async(std::launch::async, [frozen] { return frozen.Text(); }).get();
+	return noWait && actual == expected;
 }
 
 bool PathFinder::LoadCheckpoint(std::string_view text, bool validateOnly) {
