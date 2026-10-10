@@ -231,6 +231,7 @@ namespace RTE {
 		/// Gets the command issued by this PieMenu in the last update, i.e. the PieSlice SliceType of the currently activated PieSlice, or None if no slice was activated.
 		/// @return The PieSlice type which has been picked, or None if none has been picked.
 		PieSliceType GetPieCommand() const;
+		std::string GetHoveredSliceDescription() const;
 
 		/// Gets a const reference to the vector containing pointers to all the PieSlices in this PieMenu.
 		/// @return A const reference to the vector containing pointers to all the PieSlices in this PieMenu.

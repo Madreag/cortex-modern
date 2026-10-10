@@ -1060,12 +1060,10 @@ bool Actor::HandlePieCommand(PieSliceType pieSliceType) {
 }
 
 int Actor::WhilePieMenuOpenListener(const PieMenu* pieMenu) {
-	// Only the seat's own machine runs the activity's per-player menu code, so under lockstep the buy
-	// menu setting has to take its slice out here, where every peer refreshes this pie menu. It runs
-	// before the scripts, as the activity's own removal does on the seat.
+	// Every peer keeps a disabled Buy slice so its player can read why buying is unavailable.
 	if (m_PieMenu && m_PieMenu->IsEnabling() && m_Controller.IsPlayerControlled() && ScenarioRunner::IsLockstepControllerSyncActive()) {
 		if (const GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity()); gameActivity && !gameActivity->GetBuyMenuEnabled()) {
-			m_PieMenu->RemovePieSlicesByType(PieSliceType::BuyMenu);
+			if (PieSlice* buy = m_PieMenu->GetFirstPieSliceByType(PieSliceType::BuyMenu)) buy->SetEnabled(false);
 		}
 	}
 	return MovableObject::WhilePieMenuOpenListener(pieMenu);

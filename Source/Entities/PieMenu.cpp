@@ -14,6 +14,8 @@
 #include "Base64/base64.h"
 
 #include "AHuman.h"
+#include "GameActivity.h"
+#include "ActivityMan.h"
 #include "ContentFile.h"
 
 #include "GUI.h"
@@ -848,6 +850,16 @@ PieSliceType PieMenu::GetPieCommand() const {
 	return (activatedSlice == nullptr) ? PieSliceType::NoType : activatedSlice->GetType();
 }
 
+std::string PieMenu::GetHoveredSliceDescription() const {
+	if (!m_HoveredPieSlice) return {};
+	if (ScenarioRunner::IsLockstepControllerSyncActive() && m_HoveredPieSlice->GetType() == PieSliceType::BuyMenu) {
+		if (m_HoveredPieSlice->IsEnabled()) return "Buy Menu - click to open";
+		const auto* activity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+		return activity && !activity->GetBuyMenuEnabled() ? "Buying disabled by this activity" : "Buying unavailable for this actor";
+	}
+	return m_HoveredPieSlice->GetDescription();
+}
+
 PieSlice* PieMenu::GetFirstPieSliceByPresetName(const std::string& presetName) const {
 	for (PieSlice* pieSlice: m_CurrentPieSlices) {
 		if (pieSlice->GetPresetName() == presetName) {
@@ -1153,6 +1165,11 @@ void PieMenu::Update() {
 			}
 		}
 
+		// A brain case has just one action; a click in its pie cannot choose anything else.
+		if (ScenarioRunner::IsLockstepControllerSyncActive() && m_EnabledState != EnabledState::Disabled && !m_HoveredPieSlice &&
+		    m_CurrentPieSlices.size() == 1 && m_CurrentPieSlices.front()->GetType() == PieSliceType::BuyMenu) {
+			SetHoveredPieSlice(m_CurrentPieSlices.front(), true);
+		}
 		if (m_HoveredPieSlice && m_EnabledState != EnabledState::Disabled && !m_ActiveSubPieMenu) {
 			UpdateSliceActivation();
 		}
@@ -1690,12 +1707,13 @@ void PieMenu::DrawPieCursorAndPieSliceDescriptions(BITMAP* targetBitmap, const V
 		Vector textPos = Vector(static_cast<float>(m_CurrentInnerRadius + std::max(m_BackgroundThickness, m_BackgroundSeparatorSize) + (m_LargeFont->GetFontHeight() * 0.5)), 0).RadRotate(textRotation) - textCenteringOffset;
 
 		AllegroBitmap allegroBitmap(targetBitmap);
+		const std::string description = GetHoveredSliceDescription();
 		if (GetRotAngle() <= c_EighthPI && (m_HoveredPieSlice == m_PieQuadrants[Directions::Up].m_MiddlePieSlice.get() || m_HoveredPieSlice == m_PieQuadrants[Directions::Down].m_MiddlePieSlice.get())) {
-			m_LargeFont->DrawAligned(&allegroBitmap, drawPos.GetFloorIntX() + textPos.GetFloorIntX(), drawPos.GetFloorIntY() + textPos.GetFloorIntY(), m_HoveredPieSlice->GetDescription().c_str(), GUIFont::Centre);
+			m_LargeFont->DrawAligned(&allegroBitmap, drawPos.GetFloorIntX() + textPos.GetFloorIntX(), drawPos.GetFloorIntY() + textPos.GetFloorIntY(), description, GUIFont::Centre);
 		} else if (textRotation < c_HalfPI - 0.01 || textRotation > c_PI + c_HalfPI + 0.01) {
-			m_LargeFont->DrawAligned(&allegroBitmap, drawPos.GetFloorIntX() + textPos.GetFloorIntX(), drawPos.GetFloorIntY() + textPos.GetFloorIntY(), m_HoveredPieSlice->GetDescription().c_str(), GUIFont::Left);
+			m_LargeFont->DrawAligned(&allegroBitmap, drawPos.GetFloorIntX() + textPos.GetFloorIntX(), drawPos.GetFloorIntY() + textPos.GetFloorIntY(), description, GUIFont::Left);
 		} else {
-			m_LargeFont->DrawAligned(&allegroBitmap, drawPos.GetFloorIntX() + textPos.GetFloorIntX(), drawPos.GetFloorIntY() + textPos.GetFloorIntY(), m_HoveredPieSlice->GetDescription().c_str(), GUIFont::Right);
+			m_LargeFont->DrawAligned(&allegroBitmap, drawPos.GetFloorIntX() + textPos.GetFloorIntX(), drawPos.GetFloorIntY() + textPos.GetFloorIntY(), description, GUIFont::Right);
 		}
 	}
 }
