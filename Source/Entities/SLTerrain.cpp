@@ -1,5 +1,9 @@
 #include "DeterministicMath.h"
 #include "SLTerrain.h"
+#include "CheckpointNativeSnapshot.h"
+#include "SceneLayer.h"
+#include "ContentFile.h"
+#include "Box.h"
 #include "MetricsCollector.h"
 #include "TerrainFrosting.h"
 #include "TerrainDebris.h"
@@ -23,11 +27,34 @@ using namespace RTE;
 
 ConcreteClassInfo(SLTerrain, SceneLayer, 0);
 
+SLTerrain::SLTerrain(const SLTerrain& source, CheckpointNativeSnapshot& snapshot) :
+	SceneLayer(source, snapshot),
+	m_Width(snapshot.Freeze(source.m_Width)),
+	m_Height(snapshot.Freeze(source.m_Height)),
+	m_FGColorLayer(snapshot.Freeze(source.m_FGColorLayer)),
+	m_BGColorLayer(snapshot.Freeze(source.m_BGColorLayer)),
+	m_MaterialCopy(snapshot.Freeze(source.m_MaterialCopy)),
+	m_LayerToDraw(snapshot.Freeze(source.m_LayerToDraw)),
+	m_DefaultBGTextureFile(snapshot.Freeze(source.m_DefaultBGTextureFile)),
+	m_TerrainFrostings(snapshot.Freeze(source.m_TerrainFrostings)),
+	m_TerrainDebris(snapshot.Freeze(source.m_TerrainDebris)),
+	m_TerrainObjects(snapshot.Freeze(source.m_TerrainObjects)),
+	m_UpdatedMaterialAreas(snapshot.Freeze(source.m_UpdatedMaterialAreas)),
+	m_OrbitDirection(snapshot.Freeze(source.m_OrbitDirection)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* SLTerrain::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 SLTerrain::SLTerrain() {
 	Clear();
 }
 
 SLTerrain::~SLTerrain() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

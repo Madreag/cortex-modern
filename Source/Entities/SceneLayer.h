@@ -120,6 +120,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a SceneLayerImpl object in system memory. Create() should be called before using the object.
 		SceneLayerImpl();
+		SceneLayerImpl(const SceneLayerImpl& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Makes the SceneLayer object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
@@ -402,6 +403,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a SceneLayerTracked object in system memory. Create() should be called before using the object.
 		SceneLayerTracked() :
 		    SceneLayerImpl<true>() {}
+		CheckpointSnapshotMethods(SceneLayerTracked);
 
 		// TODO: We shouldn't let external users access a non-const version of our bitmap. We should do all drawing to it internally, and track registering our MOID drawings internally too.
 		// However, in the interest of time (and my own sanity), given that the old code already does this, we're not doing that yet.
@@ -422,6 +424,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a SceneLayer object in system memory. Create() should be called before using the object.
 		SceneLayer() :
 		    SceneLayerImpl<false>() {}
+		CheckpointSnapshotMethods(SceneLayer);
 
 		/// Gets the BITMAP that this SceneLayer uses.
 		/// @return A pointer to the BITMAP of this SceneLayer. Ownership is NOT transferred!
@@ -441,6 +444,7 @@ namespace RTE {
 
 		/// Constructor method used to instantiate a SceneLayer object in system memory. Create() should be called before using the object.
 		StaticSceneLayer(): SceneLayerImpl<false, true>() {}
+		CheckpointSnapshotMethods(StaticSceneLayer);
 
 		/// Gets the BITMAP that this StaticSceneLayer uses.
 		/// The bitmap will only be uploaded to GPU once on the first draw. So any modifcations after that will not be drawn.

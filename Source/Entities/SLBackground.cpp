@@ -1,4 +1,7 @@
 #include "SLBackground.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
 #include "GUICheckpoint.h"
 #include "CheckpointArchive.h"
 #include "BigTexture.h"
@@ -16,11 +19,42 @@ using namespace RTE;
 
 ConcreteClassInfo(SLBackground, StaticSceneLayer, 0);
 
+SLBackground::SLBackground(const SLBackground& source, CheckpointNativeSnapshot& snapshot) :
+	StaticSceneLayer(source, snapshot),
+	m_CheckpointBitmaps{},
+	m_Bitmaps(snapshot.Freeze(source.m_Bitmaps)),
+	m_FrameCount(snapshot.Freeze(source.m_FrameCount)),
+	m_Frame(snapshot.Freeze(source.m_Frame)),
+	m_SpriteAnimMode(snapshot.Freeze(source.m_SpriteAnimMode)),
+	m_SpriteAnimDuration(snapshot.Freeze(source.m_SpriteAnimDuration)),
+	m_SpriteAnimIsReversingFrames(snapshot.Freeze(source.m_SpriteAnimIsReversingFrames)),
+	m_SpriteAnimTimer(snapshot.Freeze(source.m_SpriteAnimTimer)),
+	m_IsAnimatedManually(snapshot.Freeze(source.m_IsAnimatedManually)),
+	m_CanAutoScrollX(snapshot.Freeze(source.m_CanAutoScrollX)),
+	m_CanAutoScrollY(snapshot.Freeze(source.m_CanAutoScrollY)),
+	m_AutoScrollStep(snapshot.Freeze(source.m_AutoScrollStep)),
+	m_AutoScrollStepInterval(snapshot.Freeze(source.m_AutoScrollStepInterval)),
+	m_AutoScrollStepTimer(snapshot.Freeze(source.m_AutoScrollStepTimer)),
+	m_AutoScrollOffset(snapshot.Freeze(source.m_AutoScrollOffset)),
+	m_FillColorLeft(snapshot.Freeze(source.m_FillColorLeft)),
+	m_FillColorRight(snapshot.Freeze(source.m_FillColorRight)),
+	m_FillColorUp(snapshot.Freeze(source.m_FillColorUp)),
+	m_FillColorDown(snapshot.Freeze(source.m_FillColorDown)),
+	m_IgnoreAutoScale(snapshot.Freeze(source.m_IgnoreAutoScale)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* SLBackground::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 SLBackground::SLBackground() {
 	Clear();
 }
 
 SLBackground::~SLBackground() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

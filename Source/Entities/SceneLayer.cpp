@@ -1,4 +1,5 @@
 #include "SceneLayer.h"
+#include "CheckpointNativeSnapshot.h"
 #include "PageWriteFence.h"
 
 #include "FrameMan.h"
@@ -34,6 +35,23 @@ using namespace RTE;
 ConcreteClassInfo(SceneLayerTracked, Entity, 0);
 ConcreteClassInfo(SceneLayer, Entity, 0);
 ConcreteClassInfo(StaticSceneLayer, Entity, 0);
+
+SceneLayer::SceneLayer(const SceneLayer& source, CheckpointNativeSnapshot& snapshot) : SceneLayerImpl<false>(source, snapshot) {}
+SceneLayerTracked::SceneLayerTracked(const SceneLayerTracked& source, CheckpointNativeSnapshot& snapshot) : SceneLayerImpl<true>(source, snapshot) {}
+StaticSceneLayer::StaticSceneLayer(const StaticSceneLayer& source, CheckpointNativeSnapshot& snapshot) : SceneLayerImpl<false, true>(source, snapshot) {}
+
+Entity* SceneLayer::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+Entity* SceneLayerTracked::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+Entity* StaticSceneLayer::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
 
 namespace {
 	struct PixelAllocations {
@@ -486,12 +504,24 @@ bool BitmapSnapshot::RunSelfTest() {
 }
 
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
+SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::SceneLayerImpl(const SceneLayerImpl& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot), m_BitmapFile(source.m_BitmapFile), m_MainTexture{},
+	m_MainBitmap(snapshot.Freeze(source.m_MainBitmap)), m_BackBitmap(nullptr), m_BitmapClearTask{},
+	m_LastClearColor(source.m_LastClearColor), m_Drawings(source.m_Drawings), m_MainBitmapOwned(false),
+	m_MainBitmapUpdated(source.m_MainBitmapUpdated), m_DrawMasked(source.m_DrawMasked), m_WrapX(source.m_WrapX), m_WrapY(source.m_WrapY),
+	m_OriginOffset(source.m_OriginOffset), m_Offset(source.m_Offset), m_ZOrder(source.m_ZOrder),
+	m_ScrollInfo(source.m_ScrollInfo), m_ScrollRatio(source.m_ScrollRatio), m_ScaleFactor(source.m_ScaleFactor), m_ScaledDimensions(source.m_ScaledDimensions),
+	m_BitmapSnapshot(source.CaptureBitmapSnapshot(nullptr, true)), m_BitmapSnapshotDirtyRows{}, m_BitmapSnapshotAllDirty(false),
+	m_CheckpointInitialized(source.m_CheckpointInitialized) {}
+
+template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
 SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::SceneLayerImpl() {
 	Clear();
 }
 
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
 SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::~SceneLayerImpl() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -839,6 +869,7 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::CaptureRows(const BITMAP* 
 
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
 std::shared_ptr<const BitmapSnapshot> SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::CaptureBitmapSnapshot(std::vector<std::shared_ptr<const BitmapSnapshot>>* retired, bool deferRows) const {
+	if (IsFrozenCheckpointNative()) return m_BitmapSnapshot;
 	auto snapshot = deferRows ? BitmapSnapshot::FreezeRows(m_MainBitmap, m_BitmapSnapshot, &m_BitmapSnapshotDirtyRows, m_BitmapSnapshotAllDirty) :
 	    BitmapSnapshot::CaptureRows(m_MainBitmap, m_BitmapSnapshot, &m_BitmapSnapshotDirtyRows, m_BitmapSnapshotAllDirty);
 	if (retired && m_BitmapSnapshot) retired->push_back(std::move(m_BitmapSnapshot));
