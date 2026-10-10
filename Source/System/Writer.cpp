@@ -1704,6 +1704,7 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			      "completed_checkpoint_releases_fields_and_keeps_full_and_shared_bytes");
 		}
 		{
+			CheckpointWriter::BatchScope pool(true);
 			CheckpointWriter::BatchOverride batch(true);
 			auto values = Writer::Capture([](Writer& writer) {
 				writer.NewPropertyWithValue("Owned", std::string(65536, 'x'));
