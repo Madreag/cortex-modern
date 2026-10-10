@@ -15,6 +15,9 @@
 #include "Scene.h"
 #include "MOPixel.h"
 #include "Actor.h"
+#include "GATutorial.h"
+#include "Controller.h"
+#include "RTETools.h"
 #include "AtomGroup.h"
 #include "Deployment.h"
 #include "Reader.h"
@@ -2569,6 +2572,61 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			actor.reset();
 			const std::string encoded = std::async(std::launch::async, [frozen] { return frozen.Text(); }).get();
 			check(encoded == reference, "flat_checkpoint_tree_owns_nested_inventory_after_source_death");
+		}
+
+		{
+			auto actor = std::make_unique<Actor>();
+			auto pixel = std::make_unique<MOPixel>();
+			pixel->Create(); pixel->SetPos(Vector(-0.0F, 13.5F)); pixel->SetPresetName("native inventory pixel");
+			actor->AddInventoryItem(pixel.release()); actor->SetPos(Vector(17.25F, -23.5F));
+			actor->SetStringValue(std::string("a\0key", 5), std::string("v\0value", 7));
+			const auto capture = [](const Actor* value) {
+				return Writer::Capture([&](Writer& writer) { Scene::SaveSceneObject(writer, value, false, true); });
+			};
+			const auto baseline = capture(actor.get());
+			const std::string full = baseline.Text(), shared = baseline.SharedText();
+			const auto uid = MovableObject::GetUniqueIDCounter();
+			const auto simDraws = g_SimRNG.GetDrawCount(), renderDraws = g_RenderRNG.GetDrawCount();
+			bool refused = true;
+			for (size_t after: {size_t{0}, size_t{1}}) {
+				bool failed = false;
+				try {
+					CheckpointNativeSnapshot partial;
+					CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects, after);
+					partial.Object(actor.get());
+				} catch (const std::bad_alloc&) { failed = true; }
+				refused = refused && failed && capture(actor.get()).Text() == full;
+			}
+			auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
+			Actor* const frozen = snapshot->Object(actor.get());
+			const bool aliases = snapshot->Object(actor.get()) == frozen && snapshot->ValueObject(actor->GetController()) == frozen->GetController();
+			actor->SetPos(Vector(99, 101)); actor->SetStringValue(std::string("a\0key", 5), "changed"); actor.reset();
+			const auto output = std::async(std::launch::async, [snapshot, frozen, capture] {
+				CheckpointFrozenClock other{123456789, 987654321, 111111111};
+				CheckpointFrozenClock::Scope moved(&other);
+				CheckpointNativeSnapshot::ReadScope read(snapshot.get());
+				CheckpointWriter::BatchOverride batch(true);
+				CheckpointWriter::CacheScope cache(nullptr);
+				const auto values = capture(frozen);
+				return std::pair{values.Text(), values.SharedText()};
+			}).get();
+			check(refused && aliases && output.first == full && output.second == shared && MovableObject::GetUniqueIDCounter() == uid &&
+			      g_SimRNG.GetDrawCount() == simDraws && g_RenderRNG.GetDrawCount() == renderDraws,
+			      "native_snapshot_retries_partial_failure_preserves_aliases_and_serializes_after_source_death");
+		}
+
+		{
+			GATutorial source;
+			const auto baseline = Writer::Capture([&](Writer& writer) { writer.NewPropertyWithValue("Activity", &source); });
+			auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
+			const GATutorial* const frozen = snapshot->Object(&source);
+			const auto output = std::async(std::launch::async, [snapshot, frozen] {
+				CheckpointNativeSnapshot::ReadScope read(snapshot.get());
+				CheckpointWriter::BatchOverride batch(true);
+				const auto values = Writer::Capture([&](Writer& writer) { writer.NewPropertyWithValue("Activity", frozen); });
+				return std::pair{values.Text(), values.SharedText()};
+			}).get();
+			check(output.first == baseline.Text() && output.second == baseline.SharedText(), "native_starting_tutorial_keeps_its_type_and_peer_values");
 		}
 
 		{
