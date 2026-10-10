@@ -242,14 +242,14 @@ namespace RTE::CheckpointLua {
 		// The saver expands owned scalar tokens without native callbacks.
 		struct ScalarEntry {
 			uint64_t serial = 0;
-			TValue kind{}, instance{}, address{}, singletonName{};
+			TValue kind{}, instance{}, address{}, singletonName{}, addressedKind{};
 			std::array<TValue, 5> nativeTail{};
 			std::array<TValue, 2> members{};
 			std::array<TValue, 4> properties{};
 			unsigned memberCount = 0;
 			unsigned nativeTailCount = 0, propertyCount = 0;
 			NativeId movable = 0;
-			bool timer = false, singleton = false;
+			bool timer = false, singleton = false, namedWhenAddressed = false;
 			mutable std::unique_ptr<Entry> expanded;
 			const Entry* Expand() const {
 				if (!expanded) {
@@ -259,7 +259,7 @@ namespace RTE::CheckpointLua {
 					entry->native[0] = answer(kind);
 					if (singleton) entry->native[0].values.push_back(Value{singletonName});
 					for (unsigned index = 0; index < nativeTailCount; ++index) entry->native[0].values.push_back(Value{nativeTail[index]});
-					entry->native[1] = entry->native[0];
+					entry->native[1] = namedWhenAddressed ? answer(addressedKind) : entry->native[0];
 					entry->movable = movable;
 					for (unsigned index = 0; index < memberCount; ++index) entry->members.values.push_back(Value{members[index]});
 					entry->helpers.emplace("_ScriptGraphInstance", answer(instance));
@@ -824,6 +824,8 @@ namespace RTE::CheckpointLua {
 				const auto* preset = entity->GetPresetForCopy();
 				entry.kind = token("preset"); entry.nativeTail[entry.nativeTailCount++] = token(entity->GetClassName().c_str());
 				entry.nativeTail[entry.nativeTailCount++] = token(preset ? preset->GetPresetName().c_str() : ""); entry.nativeTail[entry.nativeTailCount++] = token(preset ? preset->GetModuleName().c_str() : "");
+				entry.namedWhenAddressed = ClassDerivesFrom(type, "Activity") || type->type() == LUABIND_TYPEID(GlobalScript);
+				if (entry.namedWhenAddressed) entry.addressedKind = token("named");
 			}
 			if (s_GraphNativeCapture->frozenWorld) m_Image->m_World = std::static_pointer_cast<const NativeImage::World>(s_GraphNativeCapture->frozenWorld);
 			m_Image->m_Scalars.emplace_back(gcval(&subject), std::move(entry));

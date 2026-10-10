@@ -10630,6 +10630,38 @@ end
 			std::ofstream(std::string(name) + "-frozen.txt", std::ios::binary) << actual;
 		};
 		{
+			bool exact = true;
+			for (const char* type: {"GAScripted", "GlobalScript"}) {
+				std::list<Entity*> presets;
+				g_PresetMan.GetAllOfType(presets, type);
+				LuaStateWrapper plain;
+				plain.Initialize(); plain.LoadScriptGraphHelper();
+				lua_State* state = plain.GetLuaState();
+				if (presets.empty()) { exact = false; continue; }
+				if (std::strcmp(type, "GAScripted") == 0) luabind::object(state, static_cast<GAScripted*>(presets.front())).push(state);
+				else luabind::object(state, static_cast<GlobalScript*>(presets.front())).push(state);
+				lua_setglobal(state, "_BoundaryNamedPreset");
+				exact = plain.RunScriptString("assert(_ScriptGraphNative(_BoundaryNamedPreset, false) == 'preset'); assert(_ScriptGraphNative(_BoundaryNamedPreset, true) == 'named')") == 0 && exact;
+				std::string reference;
+				std::vector<std::string> problems;
+				exact = plain.SerializeScriptGraph(reference, problems) && exact;
+				CheckpointText captured;
+				{
+					CheckpointWriter::BatchScope batch(true);
+					CheckpointNativeSnapshot::BoundaryScope boundary(std::make_shared<CheckpointNativeSnapshot>());
+					LuaScriptGraphNativeCaptureScope lookups;
+					LuaScriptGraphNativeCaptureScope::PreTouch();
+					LuaScriptGraphNativeCaptureScope::BuildWorld(LuaScriptGraphNativeCaptureScope::Current());
+					exact = plain.CaptureScriptGraph(captured, problems, true) && exact;
+				}
+				const std::string actual = captured.Text();
+				exact = problems.empty() && actual == reference && exact;
+				showMismatch("named-preset", reference, actual);
+			}
+			std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " named_preset_boundary_keeps_the_live_global_path" << std::endl;
+			checkpointValues = exact && checkpointValues;
+		}
+		{
 			for (bool custom: {false, true}) {
 				MovableMan::ConstructionRegistryScope world;
 				auto actor = std::make_unique<Actor>();
