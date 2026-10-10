@@ -308,6 +308,8 @@ namespace RTE {
 		/// @return Whether the key is pressed or not.
 		bool KeyPressed(SDL_Scancode scancodeToTest, int whichPlayer = -1) const { return GetKeyboardButtonState(scancodeToTest, InputState::Pressed, whichPlayer); }
 		bool KeyPressedScancode(SDL_Scancode scancodeToTest) const { return KeyPressed(scancodeToTest); } //!< Lua disambiguation helper.
+		bool IsNetworkGUIInputActive() const;
+		bool NetworkGUIKeyPressed(SDL_Scancode key) const { return key > SDL_SCANCODE_UNKNOWN && key < SDL_SCANCODE_COUNT && m_NetworkGUIKeyPresses[key]; }
 
 		/// Gets whether a key was pressed between the last update and the one previous to it, by keycode.
 		/// @param keycodeToTest A keycode to test. See SDL_KeyCode enumeration.
@@ -627,6 +629,7 @@ namespace RTE {
 			std::array<bool, SDL_SCANCODE_COUNT> releasedSinceSim{}; //!< Release events accumulated since last EndSimUpdate.
 		};
 		std::unordered_map<SDL_KeyboardID, Keyboard> m_KeyboardStates; //!< Keyboard state when multi keyboard support is enabled.
+		std::array<bool, SDL_SCANCODE_COUNT> m_NetworkGUIKeyPresses{}; //!< Local render edges, never part of the simulation.
 
 		struct Mouse {
 		std::string SaveCheckpoint() const;

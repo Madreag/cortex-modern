@@ -100,6 +100,7 @@ void UInputMan::Clear() {
 	m_MouseStates[0] = {};
 	m_KeyboardStates.clear();
 	m_KeyboardStates[0] = {};
+	m_NetworkGUIKeyPresses.fill(false);
 
 	for (Gamepad& gamepad: s_PrevJoystickStates) {
 		if (gamepad.m_JoystickID != -1) {
@@ -1324,6 +1325,10 @@ bool UInputMan::GetJoystickDirectionState(int whichJoy, int whichAxis, int which
 	return false;
 }
 
+bool UInputMan::IsNetworkGUIInputActive() const {
+	return ScenarioRunner::HasLockstepCoordinator() || g_NetMatchService.GetState() != NetMatchServiceState::Idle;
+}
+
 void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 	switch (inputEvent.type) {
 		case SDL_EVENT_KEY_UP:
@@ -1334,6 +1339,7 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 			keyboard.changedKeyStates[inputEvent.key.scancode] = transitioned;
 			if (transitioned) {
 				(inputEvent.key.down ? keyboard.pressedSinceSim : keyboard.releasedSinceSim)[inputEvent.key.scancode] = true;
+				if (inputEvent.key.down) m_NetworkGUIKeyPresses[inputEvent.key.scancode] = true;
 			}
 			keyboard.keyStates[inputEvent.key.scancode] = inputEvent.key.down;
 
@@ -1419,7 +1425,7 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 			Mouse& mouse = m_MouseStates[inputEvent.motion.which];
 			mouse.id = inputEvent.button.which;
 			bool transitioned = inputEvent.button.down != mouse.state[inputEvent.button.button];
-			mouse.change[inputEvent.button.button] = transitioned;
+			mouse.change[inputEvent.button.button] = IsNetworkGUIInputActive() ? mouse.change[inputEvent.button.button] || transitioned : transitioned;
 			if (transitioned) {
 				(inputEvent.button.down ? mouse.pressedSinceSim : mouse.releasedSinceSim)[inputEvent.button.button] = true;
 			}
@@ -1427,7 +1433,7 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 			if (inputEvent.button.which != 0) {
 				Mouse& combined = m_MouseStates[0];
 				bool transitionedCombined = inputEvent.button.down != combined.state[inputEvent.button.button];
-				combined.change[inputEvent.button.button] = transitionedCombined;
+				combined.change[inputEvent.button.button] = IsNetworkGUIInputActive() ? combined.change[inputEvent.button.button] || transitionedCombined : transitionedCombined;
 				if (transitionedCombined) {
 					(inputEvent.button.down ? combined.pressedSinceSim : combined.releasedSinceSim)[inputEvent.button.button] = true;
 				}
@@ -1559,6 +1565,7 @@ int UInputMan::Update(bool handleSpecialInput) {
 void UInputMan::EndFrame() {
 	// The frame a device edge was readable in ends here, and so does a scripted element's.
 	++m_RenderFrameCount;
+	m_NetworkGUIKeyPresses.fill(false);
 	m_LastDeviceWhichControlledGUICursor = InputDevice::DEVICE_KEYB_ONLY;
 
 	for (auto& [keyboardID, keyboard] : m_KeyboardStates) {

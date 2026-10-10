@@ -1201,7 +1201,7 @@ bool MainMenuGUI::HandleInputEvents() {
 	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen && m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby &&
 	    !m_ActiveDialogBox && m_MultiplayerLobbyChatInput && m_MultiplayerLobbyChatInput->GetVisible() &&
 	    m_MultiplayerLobbyChatInput->GetEnabled() && m_MultiplayerLobbyChatInput->HasFocus() &&
-	    (g_UInputMan.KeyPressed(SDLK_RETURN) || g_UInputMan.KeyPressed(SDLK_KP_ENTER))) {
+	    (g_UInputMan.NetworkGUIKeyPressed(SDL_SCANCODE_RETURN) || g_UInputMan.NetworkGUIKeyPressed(SDL_SCANCODE_KP_ENTER))) {
 		SendLobbyChat();
 	}
 	return false;

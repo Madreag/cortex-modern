@@ -1978,8 +1978,8 @@ void GameActivity::UpdateEditingInput(bool frameInput) {
 		    m_pEditorGUI[player]->GetEditorGUIMode() != SceneEditorGUI::PICKINGOBJECT &&
 		    m_pEditorGUI[player]->GetEditorGUIMode() != SceneEditorGUI::INACTIVE &&
 		    !(SDL_GetModState() & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) &&
-		    ((g_UInputMan.KeyPressed(SDLK_RETURN) && IsPlacementConfirmKeyAvailable(player, SDL_SCANCODE_RETURN)) ||
-		     (g_UInputMan.KeyPressed(SDLK_KP_ENTER) && IsPlacementConfirmKeyAvailable(player, SDL_SCANCODE_KP_ENTER)))) {
+	    ((g_UInputMan.NetworkGUIKeyPressed(SDL_SCANCODE_RETURN) && IsPlacementConfirmKeyAvailable(player, SDL_SCANCODE_RETURN)) ||
+	     (g_UInputMan.NetworkGUIKeyPressed(SDL_SCANCODE_KP_ENTER) && IsPlacementConfirmKeyAvailable(player, SDL_SCANCODE_KP_ENTER)))) {
 			m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::DONEEDITING);
 		}
 
