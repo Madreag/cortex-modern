@@ -788,15 +788,17 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 
 bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity) {
 	if (!AutosaveStore::ValidMatchId(matchId) || tick == 0) return false;
+	bool accepted = false;
+	const auto captureStart = std::chrono::steady_clock::now();
 	try {
 		std::erase_if(m_AutosaveTasks, [](const auto& task) {
 			return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
 		});
+		m_AutosaveTasks.reserve(m_AutosaveTasks.size() + 1);
 		const std::string fileName = matchId + "-" + std::to_string(tick);
-		const std::string path = AutosaveStore::ArchivePath(matchId, tick).string();
+		std::string path = AutosaveStore::ArchivePath(matchId, tick).string();
 		std::shared_future<bool> task;
 		size_t bytes = 0;
-		const auto captureStart = std::chrono::steady_clock::now();
 		std::promise<int64_t> simDone;
 		const auto captureClock = std::make_shared<CheckpointCaptureClock>(CheckpointCaptureClock{captureStart, simDone.get_future().share()});
 		struct SimulationDone {
@@ -819,7 +821,12 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 			return false;
 		}
 		m_AutosaveTasks.push_back(std::move(task));
+		accepted = true;
 		const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count();
+		m_LastAutosavePath = std::move(path);
+		m_LastAutosaveTick = tick;
+		m_LastAutosaveBytes = bytes;
+		m_LastAutosaveCaptureMs = captureMs;
 #ifdef _WIN32
 		if (phaseClock) {
 			LARGE_INTEGER clockEnd{}, frequency{};
@@ -829,17 +836,13 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 			    GetCurrentThreadId(), clockStart.QuadPart, clockEnd.QuadPart, frequency.QuadPart));
 		}
 #endif
-		m_LastAutosavePath = path;
-		m_LastAutosaveTick = tick;
-		m_LastAutosaveBytes = bytes;
-		m_LastAutosaveCaptureMs = captureMs;
 		System::PrintDiagnosticLine(std::format("[autosave] tick={} capture_ms={:.3f} bytes={}\n", tick, captureMs, bytes));
 		System::PrintDiagnosticLine(std::format("[autosave-effects] tick={} uids_allocated={} sim_draws={} render_draws={} sound_cursor_moves={}\n", tick,
 		                         m_LastCaptureEffects.uidsAllocated, m_LastCaptureEffects.simDraws, m_LastCaptureEffects.renderDraws, m_LastCaptureEffects.soundCursorMoves));
 		return true;
 	} catch (const std::bad_alloc&) {
-		std::fputs("[autosave] failed reason=out of memory\n", stdout);
-		return false;
+		std::fputs(accepted ? "[autosave] note unavailable reason=out of memory\n" : "[autosave] failed reason=out of memory\n", stdout);
+		return accepted;
 	} catch (const std::exception& error) {
 		{
 			try {
@@ -848,7 +851,7 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 				System::PrintDiagnosticLine(line.str());
 			} catch (const std::bad_alloc&) { std::fputs("[autosave] failed reason=out of memory\n", stdout); }
 		}
-		return false;
+		return accepted;
 	}
 }
 
@@ -1569,7 +1572,8 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 		}
 	}, matchId, tick);
 	task = submitted.verdict;
-	PrintCoalescedCapture("autosave", tick, submitted);
+	try { PrintCoalescedCapture("autosave", tick, submitted); }
+	catch (const std::bad_alloc&) { std::fputs("[autosave] note unavailable reason=out of memory\n", stdout); }
 	return true;
 }
 
