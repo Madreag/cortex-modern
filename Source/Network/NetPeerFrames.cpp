@@ -159,6 +159,7 @@ namespace RTE {
 	void NetLockstepCoordinator::TickPeerFrameGroups(uint64_t nowMs) {
 		TickPeerSessionWire(nowMs);
 		if (!UsesPeerFrameGroups() || !IsRunning()) return;
+		ResolvePeerBridgeInputConflicts(nowMs);
 		if (m_FrameGroupChanges.empty()) { m_FrameGroupMembers = (1U << m_Config.peerCount) - 1; m_FrameGroupChanges[m_Config.startFrame] = m_FrameGroupMembers; }
 		if (nowMs >= m_PeerHeartbeatAtMs) {
 			m_PeerHeartbeatAtMs = nowMs + 250;

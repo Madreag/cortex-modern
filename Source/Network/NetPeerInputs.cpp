@@ -117,6 +117,7 @@ namespace RTE {
 					m_PeerArrivalLatencyMs[m_Config.localPeerId] = {nowMs, delay};
 				}
 				m_PeerInputReceipts[message.successorPeerId][message.senderPeerId] = std::max(m_PeerInputReceipts[message.successorPeerId][message.senderPeerId], message.frame);
+				ResolvePeerBridgeInputConflicts(nowMs);
 			}
 			return true;
 		}
@@ -328,7 +329,11 @@ namespace RTE {
 		}
 		for (const auto& input: inputs) {
 			if (input.targetFrame < m_Stats.nextFrame || input.targetFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew) continue;
-			if ((m_PeerRejectedInputs[input.targetFrame] & SeatBit(input.senderPeerId)) != 0) continue;
+			if ((m_PeerRejectedInputs[input.targetFrame] & SeatBit(input.senderPeerId)) != 0) {
+				if (!m_PeerBridgeCertificates.contains({input.targetFrame, 0}))
+					m_PeerPendingBridgeInputs[input.targetFrame].try_emplace(input.senderPeerId, input);
+				continue;
+			}
 			const auto bridge = m_PeerBridges.find(input.senderPeerId);
 			if (bridge != m_PeerBridges.end() && (!bridge->second.returnFrame || input.targetFrame < *bridge->second.returnFrame))
 				m_PeerSourceInputs[input.targetFrame].try_emplace(input.senderPeerId, input);

@@ -1642,6 +1642,8 @@ namespace RTE {
 		void CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs);
 		bool ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly = false);
 		bool ValidatePeerBridge(const NetHostMigrationMessage& proposal) const;
+		bool PeerBridgeHasInputConflict(const NetHostMigrationMessage& proposal) const;
+		void ResolvePeerBridgeInputConflicts(uint64_t nowMs);
 		bool DecodePeerBridgeCertificate(const NetHostMigrationMessage& certificate, NetHostMigrationMessage& agreed, uint32_t& voters) const;
 		void TryCommitPeerBridge(uint64_t frame, uint64_t nowMs, uint8_t kind = 0);
 		void InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs);
@@ -1666,6 +1668,7 @@ namespace RTE {
 		std::map<PeerDecisionKey, NetHostMigrationMessage> m_PeerBridgeCertificates;
 		std::map<uint64_t, NetHostMigrationMessage> m_PeerReturnProofs;
 		std::map<uint64_t, uint32_t> m_PeerRejectedInputs;
+		std::map<uint64_t, std::map<uint8_t, NetLockstepFrame>> m_PeerPendingBridgeInputs;
 		std::map<uint8_t, uint64_t> m_PeerAcceptedThrough;
 		std::map<uint8_t, std::map<uint8_t, uint64_t>> m_PeerInputReceipts;
 		std::map<uint8_t, std::set<uint64_t>> m_PeerAcceptedAhead;

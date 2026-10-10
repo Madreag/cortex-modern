@@ -14,10 +14,48 @@ namespace RTE {
 
 	using namespace NetPeerFrameDetail;
 
+	bool NetLockstepCoordinator::PeerBridgeHasInputConflict(const NetHostMigrationMessage& proposal) const {
+		if (proposal.preparedFrame != 0) return false;
+		for (uint8_t owner: proposal.members) {
+			const auto receipts = m_PeerInputReceipts.find(owner);
+			if (receipts == m_PeerInputReceipts.end()) continue;
+			for (const auto& [peer, through]: receipts->second)
+				if (through > proposal.frame && (proposal.connectedMask & SeatBit(peer)) != 0) return true;
+		}
+		return false;
+	}
+
+	void NetLockstepCoordinator::ResolvePeerBridgeInputConflicts(uint64_t nowMs) {
+		for (auto& [key, votes]: m_PeerBridgeVotes) {
+			if (key.second != 0 || key.first < m_Stats.nextFrame || m_PeerBridgeCertificates.contains(key)) continue;
+			const auto own = votes.find(m_Config.localPeerId);
+			if (own != votes.end() && PeerBridgeHasInputConflict(own->second)) {
+				// This proposal requires a signer that has already accepted an
+				// excluded input. That signer cannot also vote for this bridge,
+				// so no certificate can exist for the abandoned proposal.
+				for (uint8_t peer: own->second.members) m_PeerRejectedInputs[key.first] &= ~SeatBit(peer);
+			}
+			std::erase_if(votes, [&](const auto& vote) { return PeerBridgeHasInputConflict(vote.second); });
+		}
+		for (auto pending = m_PeerPendingBridgeInputs.begin(); pending != m_PeerPendingBridgeInputs.end();) {
+			if (pending->first < m_Stats.nextFrame || m_PeerBridgeCertificates.contains({pending->first, 0})) {
+				pending = m_PeerPendingBridgeInputs.erase(pending);
+				continue;
+			}
+			for (auto input = pending->second.begin(); input != pending->second.end();) {
+				if ((m_PeerRejectedInputs[pending->first] & SeatBit(input->first)) != 0) { ++input; continue; }
+				AcceptRemoteTick(input->second, nowMs, false);
+				input = pending->second.erase(input);
+			}
+			if (pending->second.empty()) pending = m_PeerPendingBridgeInputs.erase(pending);
+			else ++pending;
+		}
+	}
+
 	bool NetLockstepCoordinator::ValidatePeerBridge(const NetHostMigrationMessage& proposal) const {
 		if (proposal.preparedFrame == 3) return ValidatePeerAdmin(proposal);
 		if (proposal.members.empty() || proposal.bytes.size() != NetHash32{}.size() + (proposal.preparedFrame == 1 ? 12 * proposal.members.size() : 0) || !PeerGroupHasAuthority(proposal.connectedMask) ||
-		    proposal.preparedFrame > 2 || (proposal.connectedMask & SeatBit(m_Config.localPeerId)) == 0) return false;
+		    proposal.preparedFrame > 2 || (proposal.connectedMask & SeatBit(m_Config.localPeerId)) == 0 || PeerBridgeHasInputConflict(proposal)) return false;
 		if (proposal.preparedFrame == 0 && proposal.frame != m_Stats.nextFrame) return false;
 		if (proposal.preparedFrame != 0 && (proposal.frame <= m_Stats.nextFrame || proposal.frame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew)) return false;
 		const uint64_t prefixFrame = proposal.preparedFrame != 0 ? proposal.boundary : proposal.frame - 1;

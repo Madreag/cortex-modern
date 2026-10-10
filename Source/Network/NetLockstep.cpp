@@ -5328,6 +5328,7 @@ namespace RTE {
 		m_LocalStartParkMs = 0;
 		m_PeerLastHeardMs.clear();
 		m_PeerBridges.clear(); m_PeerBridgeVotes.clear(); m_PeerBridgeCertificates.clear(); m_PeerRejectedInputs.clear();
+		m_PeerPendingBridgeInputs.clear();
 		m_PeerReturnProofs.clear();
 		m_PeerPreparedPrefixes.clear(); m_PeerReplayAppliedPrefixes.clear(); m_PeerFrameWitnesses.clear();
 		m_PeerArrivalLatencyMs.clear(); m_PeerForwardedInputs.clear(); m_PeerAcceptedThrough.clear(); m_PeerInputReceipts.clear(); m_PeerAcceptedAhead.clear(); m_PeerSourceInputs.clear();

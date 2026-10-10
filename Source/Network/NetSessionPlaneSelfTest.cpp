@@ -39,6 +39,7 @@ namespace RTE {
 			bool measurePace = false;
 			bool captureFrames = false, realFrozen = false;
 			bool adminDirectory = false, adminDirectoryDown = false;
+			unsigned asymmetricBridge = 0;
 		};
 		struct Wire;
 		struct Hub {
@@ -64,6 +65,11 @@ namespace RTE {
 			std::map<uint8_t, NetHostChangeRequest> adminReports;
 			NetHostChangeReply adminDecision;
 			uint64_t firstAdminRequestMs = UINT64_MAX;
+			struct DelayedInput { Wire* target; NetTransportEvent event; bool input; };
+			std::vector<DelayedInput> delayedInputs;
+			uint64_t asymmetricFrame = 0;
+			uint32_t asymmetricVoters = 0;
+			bool asymmetricReleased = false;
 		};
 		struct Wire final : INetTransport {
 			Hub& hub;
@@ -71,7 +77,7 @@ namespace RTE {
 			uint16_t port = 0;
 			uint32_t next = 1, sends = 0;
 			std::map<NetPeerId, std::pair<Wire*, NetPeerId>> connections;
-			struct Event { uint64_t at; NetTransportEvent value; };
+			struct Event { uint64_t at; NetTransportEvent value; bool crossesFault = false; };
 			std::vector<Event> events;
 			Wire(Hub& h, uint8_t seat): hub(h), owner(seat) { hub.wires.insert(this); }
 			~Wire() override { Stop(); hub.wires.erase(this); }
@@ -88,17 +94,53 @@ namespace RTE {
 				events.push_back({hub.now, {NetTransportEventType::PeerConnected, local, NetTransportLane::ControlReliable, {}, {}}});
 				other->events.push_back({hub.now, {NetTransportEventType::PeerConnected, remote, NetTransportLane::ControlReliable, {}, {}}}); return true;
 			}
+			template<class Message> unsigned DelayAsymmetricInput(const Message& packet, Wire& other, NetPeerId remote, NetTransportLane lane, const std::vector<uint8_t>& bytes) {
+				using Type = std::decay_t<decltype(packet.type)>;
+				if constexpr (requires { Type::PeerInput; Type::PeerForwardInput; Type::PeerReceipt; Type::PeerBridge; }) {
+					// One final input crosses only to seat 3. Seats 1 and 2 see its
+					// forwarded bytes and receipt only after both have voted to bridge.
+					if (packet.type == Type::PeerInput && owner == hub.row.subject && other.owner == 3) {
+						if (!hub.asymmetricFrame) hub.asymmetricFrame = packet.frame;
+						if (packet.frame == hub.asymmetricFrame) return 2;
+					}
+					if (!hub.asymmetricFrame) return 0;
+					if (packet.type == Type::PeerBridge && packet.preparedFrame == 0 && packet.frame == hub.asymmetricFrame && owner <= 2 &&
+					    std::find(packet.members.begin(), packet.members.end(), hub.row.subject) != packet.members.end()) {
+						hub.asymmetricVoters |= 1U << (owner - 1);
+						if (hub.asymmetricVoters == 3 && !hub.asymmetricReleased) {
+							hub.asymmetricReleased = true;
+							for (auto& held: hub.delayedInputs) {
+								const uint64_t delay = held.input == (hub.row.asymmetricBridge == 1) ? 1 : 2;
+								held.target->events.push_back({hub.now + delay, std::move(held.event)});
+							}
+							hub.delayedInputs.clear();
+						}
+					}
+					const bool forwarded = packet.type == Type::PeerForwardInput && packet.successorPeerId == hub.row.subject && packet.frame >= hub.asymmetricFrame;
+					const bool receipt = packet.type == Type::PeerReceipt && packet.successorPeerId == hub.row.subject && packet.frame > hub.asymmetricFrame && packet.bytes.empty();
+					if (!hub.asymmetricReleased && owner == 3 && other.owner <= 2 && (forwarded || receipt)) {
+						hub.delayedInputs.push_back({&other, {NetTransportEventType::PacketReceived, remote, lane, bytes, {}}, forwarded});
+						return 1;
+					}
+				}
+				return 0;
+			}
 			bool Send(NetPeerId id, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
 				std::lock_guard lock(hub.mutex);
 				if (congested) *congested = false;
 				const auto found = connections.find(id);
 				if (found == connections.end()) { if (error) *error = "the fixture connection is absent"; return false; }
 				auto [other, remote] = found->second;
-				if (hub.Split(owner, other->owner)) return true;
+				unsigned asymmetric = 0;
+				if (hub.row.asymmetricBridge && hub.DuringFault()) {
+					NetHostMigrationMessage packet; NetHash32 key; key.fill(0x39);
+					if (NetHostMigrationCodec::Decode(bytes, key, packet)) asymmetric = DelayAsymmetricInput(packet, *other, remote, lane, bytes);
+				}
+				if (asymmetric == 1 || (asymmetric != 2 && hub.Split(owner, other->owner))) return true;
 				const uint32_t ordinal = ++sends;
 				if (lane == NetTransportLane::InputUnreliable && hub.DuringFault() && hub.row.lossPercent &&
 				    (owner == hub.row.subject || other->owner == hub.row.subject) && ordinal % 100 < hub.row.lossPercent) return true;
-				other->events.push_back({hub.now + hub.Delay(owner, other->owner), {NetTransportEventType::PacketReceived, remote, lane, bytes, {}}}); return true;
+				other->events.push_back({hub.now + hub.Delay(owner, other->owner), {NetTransportEventType::PacketReceived, remote, lane, bytes, {}}, asymmetric == 2}); return true;
 			}
 			void Disconnect(NetPeerId id, const std::string& reason) override {
 				const auto found = connections.find(id); if (found == connections.end()) return;
@@ -110,7 +152,7 @@ namespace RTE {
 				std::vector<NetTransportEvent> ready;
 				for (auto it = events.begin(); it != events.end();) {
 					if (it->at > hub.now) { ++it; continue; }
-					if (!hub.Split(owner, connections.contains(it->value.peerId) ? connections.at(it->value.peerId).first->owner : owner)) ready.push_back(std::move(it->value));
+					if (it->crossesFault || !hub.Split(owner, connections.contains(it->value.peerId) ? connections.at(it->value.peerId).first->owner : owner)) ready.push_back(std::move(it->value));
 					it = events.erase(it);
 				}
 				return ready;
@@ -363,6 +405,7 @@ namespace RTE {
 				if (!Start(row, error)) return false;
 				const uint64_t end = hub.faultEnd + (row.gapMs > 5000 ? row.gapMs / 2 : 0) + c_TestReturnAllowanceMs + 4000;
 				while (hub.now <= end) if (!Step(error)) return false;
+				if (row.asymmetricBridge && !hub.asymmetricReleased) { error = "the asymmetric input lever did not force both pending bridge votes"; return false; }
 				for (uint8_t id = 1; id <= row.seats; ++id) {
 					const bool doubleFailure = row.internet && row.directoryDown;
 					if (!IsAffected(id) && !doubleFailure && maxWait[id - 1] > (row.internet && row.seats == 2 ? 1000 : static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs)))) {
@@ -522,6 +565,13 @@ namespace RTE {
 		std::cout << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=29" << std::endl;
 		for (const auto& row: rows) {
 			std::string error; Fixture fixture; bool ok = fixture.Run(row, error);
+			if (row.name == std::string("partition_3_1")) for (unsigned order = 1; order <= 2; ++order) {
+				auto asymmetric = row; asymmetric.asymmetricBridge = order; asymmetric.rttMs = asymmetric.otherRttMs = 4;
+				Fixture arm; std::string detail; const bool converged = arm.Run(asymmetric, detail);
+				std::cout << "[net-session-plane-selftest] bridge-input-race order=" << (order == 1 ? "input-first" : "receipt-first")
+				          << " two_pending_votes=" << arm.hub.asymmetricReleased << " result=" << (converged ? "PASS" : "FAIL") << (detail.empty() ? "" : ": " + detail) << std::endl;
+				if (!converged) { ok = false; if (error.empty()) error = detail; }
+			}
 			if (ok && row.name == std::string("two_joiner_3s_internet_and_direct")) { auto direct = row; direct.internet = false; Fixture arm; ok = arm.Run(direct, error); }
 			std::cout << "[net-session-plane-selftest] " << (ok ? "PASS " : "FAIL ") << row.name << (error.empty() ? "" : ": " + error) << std::endl;
 			if (ok) ++passed; else ++failed;
