@@ -233,11 +233,9 @@ namespace RTE {
 					type.DeallocateCheckpointMemory(memory);
 					return;
 				}
-				m_Slots.InsertOrAssign(target, slot);
 				m_Reserved.InsertOrAssign(&source, Reservation{memory, slot, &type});
 			} catch (...) {
 				m_Objects.Erase(&source);
-				m_Slots.Erase(target);
 				type.DeallocateCheckpointMemory(memory);
 				throw;
 			}
@@ -301,7 +299,6 @@ namespace RTE {
 				if (constructed) std::launder(reinterpret_cast<T*>(memory))->~T();
 				*slot = nullptr;
 				m_Objects.Erase(&source);
-				m_Slots.Erase(target);
 				if (Entity::s_DeletedCheckpointMemory == memory || Entity::s_DeletedCheckpointMemory == FrozenStorageMark(memory)) Entity::s_DeletedCheckpointMemory = nullptr;
 				if (!frozenStorage) T::Deallocate(memory);
 				throw;
@@ -315,8 +312,9 @@ namespace RTE {
 
 		Entity** Bind(const Entity& source, Entity* target) {
 			if (t_Binding.source == &source && t_Binding.target == target) return t_Binding.slot;
+			// Only an entity Make builds owns a slot; one built in place inside its owner has none.
 			m_Objects.InsertOrAssign(&source, target);
-			return m_Slots.Find(target).value_or(nullptr);
+			return nullptr;
 		}
 		template<class T> void BindValue(const T& source, T* target) { m_Values.InsertOrAssign(&source, target); }
 		template<class T> T* CopyValue(const T* source) {
@@ -499,7 +497,6 @@ namespace RTE {
 		std::array<PresetShard, 16> m_Presets;
 		std::array<OwnerShard, 32> m_OwnerShards;
 		CheckpointSharedMap<const Entity*, Entity*> m_Objects;
-		CheckpointSharedMap<Entity*, Entity**> m_Slots;
 		CheckpointSharedMap<const void*, void*> m_Values;
 		struct Reservation {
 			void* memory;
