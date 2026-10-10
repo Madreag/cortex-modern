@@ -39,6 +39,23 @@ namespace RTE {
 			else target = source->FreezeCheckpointNative(*this);
 			return reinterpret_cast<T*>(reinterpret_cast<char*>(target) + offset);
 		}
+		template<class T> T* ValueObject(const T* source) {
+			if (!source) return nullptr;
+			if (const auto known = m_Values.find(source); known != m_Values.end()) return static_cast<T*>(known->second);
+			m_ValueOwners.push_back({nullptr, [](void* value) noexcept { delete static_cast<T*>(value); }});
+			auto& owner = m_ValueOwners.back();
+			void* memory = ::operator new(sizeof(T));
+			try {
+				m_Values.emplace(source, memory);
+				::new(memory) T(*source, *this);
+				owner.first = memory;
+				return static_cast<T*>(memory);
+			} catch (...) {
+				m_Values.erase(source);
+				::operator delete(memory);
+				throw;
+			}
+		}
 
 		template<class T> Entity* Make(const T& source) {
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
@@ -80,6 +97,7 @@ namespace RTE {
 		}
 		template<class T> T* Freeze(T* source) {
 			if constexpr (std::is_base_of_v<Entity, std::remove_const_t<T>>) return Object(source);
+			else if constexpr (requires { std::remove_const_t<T>(*source, *this); }) return ValueObject(source);
 			else { static_assert(sizeof(T) == 0, "native pointer fields need an owned snapshot policy"); }
 		}
 		template<class T> auto Freeze(const std::atomic<T>& source) { return source.load(std::memory_order_acquire); }
@@ -129,7 +147,7 @@ namespace RTE {
 		template<class T> auto Freeze(const std::shared_ptr<T>& source) {
 			if (!source) return std::shared_ptr<T>();
 			if constexpr (std::is_base_of_v<Entity, T>) return std::shared_ptr<T>(Object(source.get()), [](T*) {});
-			else return std::make_shared<T>(*source, *this);
+			else return std::shared_ptr<T>(ValueObject(source.get()), [](T*) {});
 		}
 		template<class T> auto Freeze(const std::optional<T>& source) { return source ? std::optional<T>(Freeze(*source)) : std::optional<T>(); }
 		template<class T, size_t Size> void FreezeArray(T (&target)[Size], const T (&source)[Size]) {
@@ -140,6 +158,8 @@ namespace RTE {
 		std::list<Entity*> m_Owners;
 		std::unordered_map<const Entity*, Entity*> m_Objects;
 		std::unordered_map<Entity*, Entity**> m_Slots;
+		std::unordered_map<const void*, void*> m_Values;
+		std::list<std::pair<void*, void (*)(void*) noexcept>> m_ValueOwners;
 	};
 
 }

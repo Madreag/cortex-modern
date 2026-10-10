@@ -15,6 +15,7 @@
 namespace RTE {
 	CheckpointNativeSnapshot::~CheckpointNativeSnapshot() {
 		for (auto& object: m_Owners) if (Entity* value = std::exchange(object, nullptr)) delete value;
+		for (auto& [value, destroy]: m_ValueOwners) if (value) destroy(value);
 	}
 
 	Entity::Entity(const Entity& source, CheckpointNativeSnapshot& snapshot) :

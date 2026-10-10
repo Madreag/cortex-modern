@@ -1,4 +1,5 @@
 #include "MovableObject.h"
+#include "CheckpointNativeSnapshot.h"
 #include "CheckpointProperties.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
@@ -67,6 +68,8 @@ std::vector<MovableObject*> g_PendingValueObjects;
 
 MovableObjectReference::MovableObjectReference(const MovableObject* object) { *this = object; }
 MovableObjectReference::MovableObjectReference(const MovableObjectReference& reference) { Copy(reference); }
+MovableObjectReference::MovableObjectReference(const MovableObjectReference& reference, CheckpointNativeSnapshot& snapshot) :
+    m_Object(snapshot.Object(reference.get())), m_FrozenCheckpoint(true) {}
 MovableObjectReference::MovableObjectReference(MovableObjectReference&& reference) noexcept { Copy(reference); reference.Detach(); }
 MovableObjectReference::~MovableObjectReference() { Detach(); }
 
@@ -80,6 +83,7 @@ void MovableObjectReference::AttachLocked(const MovableObject* object) {
 }
 
 void MovableObjectReference::Detach() {
+    if (m_FrozenCheckpoint) { m_Object.store(nullptr, std::memory_order_release); return; }
     const MovableObject* object = get();
     if (!object) return;
     std::lock_guard lock(ReferenceLock(object));
@@ -95,6 +99,7 @@ void MovableObjectReference::Detach() {
 }
 
 MovableObjectReference& MovableObjectReference::operator=(const MovableObject* object) {
+    if (m_FrozenCheckpoint) { m_Object.store(object, std::memory_order_release); return *this; }
     if (get() == object) return *this;
     Detach();
     if (object) {
@@ -106,6 +111,8 @@ MovableObjectReference& MovableObjectReference::operator=(const MovableObject* o
 
 void MovableObjectReference::Copy(const MovableObjectReference& reference) {
     Detach();
+    m_FrozenCheckpoint = reference.m_FrozenCheckpoint;
+    if (m_FrozenCheckpoint) { m_Object.store(reference.get(), std::memory_order_release); return; }
     const MovableObject* object = reference.get();
     if (!object) return;
     std::lock_guard lock(ReferenceLock(object));

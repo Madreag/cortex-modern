@@ -4,6 +4,7 @@
 
 namespace RTE {
 class MovableObject;
+class CheckpointNativeSnapshot;
 
 // Non-owning native links expire when their target is reset or destroyed.
 // Each link belongs to its target's intrusive list; no world scan is needed.
@@ -11,6 +12,7 @@ class MovableObjectReference {
 public:
     MovableObjectReference(const MovableObject* object = nullptr);
     MovableObjectReference(const MovableObjectReference& reference);
+    MovableObjectReference(const MovableObjectReference& reference, CheckpointNativeSnapshot& snapshot);
     MovableObjectReference(MovableObjectReference&& reference) noexcept;
     ~MovableObjectReference();
     MovableObjectReference& operator=(const MovableObject* object);
@@ -27,6 +29,7 @@ private:
     MovableObjectReference* m_Previous = nullptr;
     MovableObjectReference* m_Next = nullptr;
     long* m_ExpiryIdentity = nullptr;
+    bool m_FrozenCheckpoint = false;
 
     void Detach();
     void AttachLocked(const MovableObject* object);
