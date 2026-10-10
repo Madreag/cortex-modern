@@ -1,8 +1,11 @@
 #pragma once
 
+#include "NetLinkQuality.h"
+
 #include "NetConnectionAuthority.h"
 
 #include "NetSeatRoster.h"
+#include "NetPeerSessionWire.h"
 
 #include "ControllerFrame.h"
 #include "NetGameCommand.h"
@@ -398,10 +401,12 @@ namespace RTE {
 		std::vector<uint8_t> activePeerIds;
 		std::array<uint8_t, 32> migrationKey{};
 		std::function<std::unique_ptr<INetTransport>()> migrationTransportFactory;
+		std::shared_ptr<NetPeerSessionLinks> peerSessionLinks;
 		/// The connection authority supplies current routes without changing the agreed game config.
 		std::function<NetMatchMigrationPeer(const NetMatchMigrationPeer&)> migrationEndpoint;
 		// The adapter translates stable directory seats to this round's peer ids.
 		std::function<NetHostChangeReply(const NetHostChangeRequest&)> hostChangeReferee;
+		std::function<NetFrameTieReply(const NetFrameTieRequest&)> frameTieReferee;
 		/// Dials a handover endpoint that names an ICE route through the session's rendezvous; the identity may be empty.
 		std::function<bool(INetTransport& transport, const std::string& identity, std::string* error)> migrationIceDial;
 		/// Opens the rendezvous on this peer's handover listener once it hosts the handover.
@@ -418,6 +423,7 @@ namespace RTE {
 		std::map<uint8_t, NetInputDelayEstimator> initialDelaySamples;
 		std::function<void(const NetMatchConfig&)> publishLiveConfig;
 		bool substituteSlowPeers = false;
+		bool peerFrameGroups = false;
 		uint16_t slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
 		// Service matches wait for every peer's measured activity startup before the agreed first frame.
 		bool requirePublishedStart = false;
@@ -442,7 +448,19 @@ namespace RTE {
 		Ready,
 		Commit,
 		Rejoin,
-		Abort
+		Abort,
+		PeerInput,
+		PeerReceipt,
+		PeerBridge,
+		PeerBridgeCommit,
+		PeerTailRequest,
+		PeerTail,
+		PeerTailMissing,
+		PeerHeartbeat,
+		PeerControl,
+		PeerSession,
+		PeerSessionAck,
+		PeerForwardInput
 	};
 
 	struct NetHostMigrationMessage {
@@ -470,6 +488,12 @@ namespace RTE {
 	/// A combat bridge stays invisible until this interval; host loss requires total traffic silence.
 	constexpr uint64_t c_NetSeatDisconnectSilenceMs = 5000;
 	constexpr uint64_t c_NetHostLossSilenceMs = 15000;
+	constexpr uint64_t c_NetInputContinuityMs = 2000;
+	constexpr uint64_t c_NetHeldActionReleaseMs = 250;
+	constexpr uint32_t c_NetSeatCatchUpRate = 3;
+	constexpr uint32_t c_NetSeatCatchUpBurstTicks = 6;
+	constexpr uint64_t c_NetSeatCatchUpAllowanceMs = 2000;
+	constexpr uint64_t c_NetFrameTieBoundMs = 1000;
 	/// One reading of host loss for every path that judges it: the round's own check, the roll call and a held seat's catch-up.
 	inline uint64_t NetHostLossBoundMs(uint64_t rttMs) { (void)rttMs; return c_NetHostLossSilenceMs; }
 	inline bool NetHostLinkLost(bool linkClosed, uint64_t silentMs, uint64_t rttMs) { (void)linkClosed; return silentMs >= NetHostLossBoundMs(rttMs); }
@@ -492,11 +516,14 @@ namespace RTE {
 	class NetHostMigrationCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x314D4843;
-		static constexpr uint16_t c_Version = 4;
-		static constexpr size_t c_ChunkBytes = 48 * 1024;
+		static constexpr uint16_t c_Version = 5;
+		static constexpr size_t c_ChunkBytes = 64 * 1024;
 		static constexpr size_t c_MaxFrameBytes = 4 * 512 * 1024 + 256;
+		static constexpr size_t c_MaxPeerTailBytes = c_MaxFrameBytes + 64 * 1024;
 		static constexpr size_t c_HistoryFrames = 2 * 240;
-		static constexpr size_t c_MaxHistoryBytes = 16 * 1024 * 1024; // Older inputs yield to resync before recovery consumes match memory.
+		static constexpr size_t c_MaxHistoryBytes = 16 * 1024 * 1024;
+		static constexpr size_t c_PeerHistoryFrames = 4096;
+		static constexpr size_t c_MaxPeerHistoryBytes = 512 * 1024 * 1024; // A short gap keeps its committed tail before older history yields to a private image.
 		static bool LooksLikePacket(const std::vector<uint8_t>& bytes);
 		static bool Encode(const NetHostMigrationMessage& message, const NetHash32& key, std::vector<uint8_t>& bytes);
 		static bool Decode(const std::vector<uint8_t>& bytes, const NetHash32& key, NetHostMigrationMessage& message);
@@ -510,6 +537,7 @@ namespace RTE {
 		std::vector<uint8_t> resyncPeers;
 		std::map<uint8_t, NetPeerId> transports;
 		uint8_t snapshotProviderPeerId = 0;
+		uint64_t activationFrame = 0;
 	};
 
 	struct NetLockstepReadyFrame {
@@ -602,6 +630,7 @@ namespace RTE {
 		uint32_t waits = 0;
 		uint32_t holds = 0;
 		uint32_t substitutions = 0;
+		uint32_t delayResizes = 0;
 		uint32_t rejoins = 0;
 		uint64_t longestWaitMsSinceReclaim = 0; //!< What this seat has waited since it was last reclaimed; the match record above keeps the round's totals.
 		uint32_t waitsSinceReclaim = 0;
@@ -747,6 +776,8 @@ namespace RTE {
 		/// last 15 ticks, measured at highestContiguousFrame. An older peer ignores it.
 		static constexpr uint32_t c_CapacityMask = 0x08000000U;
 		static constexpr uint8_t c_MaxWindowTicks = 32;
+		static constexpr uint8_t c_PeerInputWindowTicks = 192;
+		static constexpr size_t c_InputWindowByteCap = 5 + c_PeerInputWindowTicks * (512U * 1024U + 4U);
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
@@ -1000,6 +1031,7 @@ namespace RTE {
 		bool StartReplay(INetTransport& transport, const NetLockstepConfig& config, std::string* error = nullptr);
 		/// Starts the replay of an existing world while retaining the seat history its simulation still reads.
 		bool StartCatchUpReplay(INetTransport& transport, const NetLockstepConfig& config, const NetLockstepCoordinator& live, std::string* error = nullptr);
+		bool AdoptPeerReturnConfig(NetLockstepConfig& config, const NetLockstepCoordinator& replay, uint64_t activation) const;
 		/// Installs the recording's host-authored startup boundary before playback queues its first frame.
 		bool ApplyReplayAgreedStart(const NetLockstepStart& start, std::string* error = nullptr);
 		bool IsReplayPlayback() const { NET_PLANE_CHECK(); return m_Playback; }
@@ -1128,6 +1160,10 @@ namespace RTE {
 		std::string DescribePendingTimingDecisions(uint64_t frame) const;
 		bool DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames);
 		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
+		NetLinkQuality LinkQualityForSeat(uint8_t peerId, uint64_t nowMs = UINT64_MAX) const;
+		bool UsesPeerFrameGroups() const { NET_PLANE_CHECK(); return m_Config.peerFrameGroups && !m_Playback; }
+		void SetPeerFrameBlackoutForTest(uint64_t frame, uint64_t durationMs) { NET_PLANE_CHECK(); m_TestBlackoutFrame = frame; m_TestBlackoutDurationMs = durationMs; m_TestBlackoutAtMs.reset(); }
+		bool PeerFrameCatchUpActive() const;
 		/// @param fromFrame The first frame the hold covers, when the seat named it; 0 for the first frame the host lacks its input.
 		/// cause names the rule that holds the seat, printed with the proposal so a reader can tell a design hold from an unexplained one.
 		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr, uint64_t fromFrame = 0, const char* cause = "unnamed");
@@ -1283,7 +1319,7 @@ namespace RTE {
 		uint8_t GetHostPeerId() const { NET_PLANE_CHECK(); return m_Config.authorityPeerId != 0 ? m_Config.authorityPeerId : m_Config.matchConfig.hostPeerId; }
 		uint8_t HostAuthorityAt(uint64_t frame) const;
 		uint8_t SimulationHostPeerId() const { NET_PLANE_CHECK(); return HostAuthorityAt(m_GrantedSimulationTick.value_or(GetResumeFrame())); }
-		bool IsMigrating() const { NET_PLANE_CHECK(); return m_MigrationPhase == NetHostMigrationPhase::Contacting || m_MigrationPhase == NetHostMigrationPhase::Recovering || m_MigrationPhase == NetHostMigrationPhase::WaitingForReady || m_MigrationPhase == NetHostMigrationPhase::ResyncAdmission; }
+		bool IsMigrating() const { NET_PLANE_CHECK(); return m_State == NetLockstepState::Running && (m_MigrationPhase == NetHostMigrationPhase::Contacting || m_MigrationPhase == NetHostMigrationPhase::Recovering || m_MigrationPhase == NetHostMigrationPhase::WaitingForReady || m_MigrationPhase == NetHostMigrationPhase::ResyncAdmission); }
 		bool IsMigrationCatchUp() const { NET_PLANE_CHECK(); return IsMigrating() && GetResumeFrame() <= m_MigrationBoundary; }
 		NetHostMigrationPhase GetMigrationPhase() const { NET_PLANE_CHECK(); return m_MigrationPhase; }
 		NetHostMigrationResult GetMigrationResult() const { NET_PLANE_CHECK(); return m_MigrationResult; }
@@ -1469,6 +1505,7 @@ namespace RTE {
 		friend bool TestFourPlayerHoldDoesNotWaitForPolicyReceipts(std::string* error);
 		friend bool TestFourPeersCommitPlacement(std::string* error);
 		friend bool TestOwnerSilenceThreshold(unsigned check, std::string* error);
+		friend struct SessionPlaneRecoveryTest;
 		friend bool TestOwnerHostChange(unsigned mode, std::string* error);
 		friend bool TestPlacementSessionSequence(unsigned fight, std::string* error);
 		friend bool TestCombatJitterBridgesOnlyTheLateSeat(std::string* error);
@@ -1581,16 +1618,106 @@ namespace RTE {
 		std::optional<NetHostChangeReply> m_MigrationChoice;
 		std::unique_ptr<INetTransport> m_MigrationTransport;
 		std::unique_ptr<INetTransport> m_MigrationListener;
-		struct MigrationProbe {
-			std::unique_ptr<INetTransport> transport;
-			size_t nextAddress = 0;
-			uint64_t lastDialMs = 0;
-			std::string address;
-			bool answered = false;
-			NetPeerId connection = c_InvalidNetPeerId;
-			uint64_t lastHelloMs = 0;
-		};
+		using MigrationProbe = NetPeerProbe;
 		std::map<uint8_t, MigrationProbe> m_MigrationProbes;
+		std::unique_ptr<INetTransport>& PeerListener() { return m_Config.peerFrameGroups && m_Config.peerSessionLinks ? m_Config.peerSessionLinks->listener : m_MigrationListener; }
+		std::map<uint8_t, MigrationProbe>& PeerProbes() { return m_Config.peerFrameGroups && m_Config.peerSessionLinks ? m_Config.peerSessionLinks->probes : m_MigrationProbes; }
+		std::map<NetPeerId, uint8_t>& PeerListenerBindings() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->listenerBindings : m_PeerListenerBindings; }
+		std::map<NetPeerId, uint8_t>& PeerPrimaryBindings() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryBindings : m_PeerPrimaryBindings; }
+		bool& PeerPrimaryListener() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryListener : m_PeerPrimaryListener; }
+		bool HandlePeerSessionMessage(const NetHostMigrationMessage& message, uint64_t nowMs);
+		void TickPeerSessionWire(uint64_t nowMs);
+		uint64_t m_PeerSessionSendAtMs = 0;
+		std::map<NetPeerId, uint8_t> m_PeerListenerBindings;
+		std::map<NetPeerId, uint8_t> m_PeerPrimaryBindings;
+		NetHostMigrationMessage PeerFrameMessage(NetHostMigrationMessageType type) const;
+		void SendPeerFrameMessage(NetHostMigrationMessage message, NetTransportLane lane = NetTransportLane::ControlReliable, uint8_t onlyPeer = 0);
+		bool HandlePeerFrameMessage(const NetHostMigrationMessage& message, uint64_t nowMs);
+		void SendPeerInput(const NetLockstepFrame& frame);
+		void TickPeerFrameGroups(uint64_t nowMs);
+		bool PeerFrameBlackout(uint64_t nowMs);
+		bool PeerInputAccepted(uint64_t frame, uint8_t owner = 0) const;
+		bool PeerGroupHasAuthority(uint32_t voters) const;
+		void CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs);
+		bool ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly = false);
+		bool ValidatePeerBridge(const NetHostMigrationMessage& proposal) const;
+		bool DecodePeerBridgeCertificate(const NetHostMigrationMessage& certificate, NetHostMigrationMessage& agreed, uint32_t& voters) const;
+		void TryCommitPeerBridge(uint64_t frame, uint64_t nowMs, uint8_t kind = 0);
+		void InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs);
+		void PreparePeerBridgeInputs(uint64_t frame, uint64_t nowMs);
+		void NotePeerInputAccepted(const NetLockstepFrame& frame);
+		bool ApplyPeerCommittedTail(uint64_t frame, uint64_t nowMs);
+		void SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame);
+		void RequestPeerCommittedTail(uint64_t nowMs);
+		NetHash32 PeerFramePrefix(uint64_t frame) const;
+		NetHash32 PeerAppliedFramePrefix(uint64_t frame) const;
+		void SendPeerFrameWitness(uint64_t frame);
+		struct PeerBridge {
+			uint64_t fromFrame = 0;
+			uint64_t aiFrame = 0;
+			std::optional<uint64_t> returnFrame;
+			std::vector<ControllerFrame> lastInput;
+			uint32_t members = 0;
+		};
+		std::map<uint8_t, PeerBridge> m_PeerBridges;
+		using PeerDecisionKey = std::pair<uint64_t, uint8_t>;
+		std::map<PeerDecisionKey, std::map<uint8_t, NetHostMigrationMessage>> m_PeerBridgeVotes;
+		std::map<PeerDecisionKey, NetHostMigrationMessage> m_PeerBridgeCertificates;
+		std::map<uint64_t, NetHostMigrationMessage> m_PeerReturnProofs;
+		std::map<uint64_t, uint32_t> m_PeerRejectedInputs;
+		std::map<uint8_t, uint64_t> m_PeerAcceptedThrough;
+		std::map<uint8_t, std::map<uint8_t, uint64_t>> m_PeerInputReceipts;
+		std::map<uint8_t, std::set<uint64_t>> m_PeerAcceptedAhead;
+		std::map<uint64_t, std::map<uint8_t, NetLockstepFrame>> m_PeerSourceInputs;
+		std::map<uint64_t, std::vector<uint8_t>> m_PeerCommittedTail;
+		std::map<uint64_t, NetHash32> m_PeerTailPrefixes;
+		std::map<uint64_t, NetHash32> m_PeerPreparedPrefixes;
+		std::map<uint64_t, NetHash32> m_PeerReplayAppliedPrefixes;
+		std::map<uint64_t, std::map<uint8_t, NetHostMigrationMessage>> m_PeerFrameWitnesses;
+		std::map<uint8_t, uint64_t> m_PeerForwardedInputs;
+		std::map<uint8_t, std::pair<uint64_t, uint32_t>> m_PeerArrivalLatencyMs;
+		struct PeerTailVote { uint32_t members = 0; NetHash32 prefix{}, prepared{}; std::vector<uint8_t> bytes; };
+		std::map<uint64_t, std::map<uint8_t, PeerTailVote>> m_PeerTailVotes;
+		std::map<uint64_t, std::vector<NetHostMigrationMessage>> m_PeerTailDecisions;
+		struct PeerFrameIncoming {
+			uint32_t totalBytes = 0;
+			uint64_t lastReceivedMs = 0;
+			std::vector<uint8_t> bytes;
+		};
+		std::map<std::tuple<uint8_t, NetHostMigrationMessageType, uint64_t>, PeerFrameIncoming> m_PeerFrameIncoming;
+		std::optional<uint64_t> m_PeerTailThrough;
+		std::optional<uint64_t> m_PeerPaceStartMs;
+		uint64_t m_PeerPaceStartFrame = 0;
+		bool m_PeerHadHitch = false;
+		std::map<uint8_t, uint64_t> m_PeerAppliedThrough;
+		uint64_t m_PeerHeartbeatAtMs = 0;
+		uint64_t m_PeerTailRequestAtMs = 0;
+		uint64_t m_PeerVoteRetryAtMs = 0;
+		uint32_t m_FrameGroupMembers = 0;
+		std::map<uint64_t, uint32_t> m_FrameGroupChanges;
+		uint8_t m_AuthenticatedPeerMessage = 0;
+		bool m_PeerPrimaryListener = false;
+		std::map<uint8_t, uint64_t> m_PeerDelayBelowSinceMs;
+		std::optional<NetFrameTieRequest> m_PeerFrameTie;
+		uint64_t m_PeerFrameTieSinceMs = 0;
+		std::map<uint64_t, uint32_t> m_PeerFrameTieWinners;
+		uint64_t m_TestBlackoutFrame = UINT64_MAX, m_TestBlackoutDurationMs = 0;
+		std::optional<uint64_t> m_TestBlackoutAtMs;
+		bool m_TestBlackoutEnded = false;
+		std::map<uint64_t, uint64_t> m_PeerInputSentAtMs;
+		std::map<uint8_t, NetInputDelayEstimator> m_PeerReceiptDelaySamples;
+		void TickPeerInputDelay(uint64_t nowMs);
+		bool ProposePeerInputDelay(uint8_t peer, uint16_t delay, uint64_t frame);
+		bool ProposePeerReclaim(uint8_t peer, NetPeerId transport, uint32_t incarnation, uint64_t frame, uint64_t trailFrames, std::string* error);
+		void TickPeerAdmin(uint64_t nowMs);
+		bool ValidatePeerAdmin(const NetHostMigrationMessage& proposal) const;
+		bool PeerAdminCertificateValid(const NetHostMigrationMessage& proposal, uint32_t voters) const;
+		void InstallPeerAdmin(const NetHostMigrationMessage& proposal, uint32_t voters, uint64_t nowMs);
+		void DeliverPeerAdmin(const NetLockstepReadyFrame& ready);
+		uint32_t PeerAdminSurvivors(uint64_t nowMs) const;
+		std::optional<NetHostChangeRequest> m_PeerAdminRequest;
+		std::optional<NetHostMigrationMessage> m_PeerAdminOwnVote;
+		uint32_t m_PeerAdminFrameMembers = 0;
 		size_t m_MigrationNextAddress = 0;
 		std::string m_MigrationAddress;
 		uint64_t m_MigrationGeneration = 0;
@@ -1858,6 +1985,11 @@ namespace RTE {
 		std::vector<std::pair<NetLockstepTiming, NetPeerId>> m_PreStartTiming;
 		std::map<uint8_t, std::map<uint64_t, uint16_t>> m_DelayChanges;
 		std::map<uint8_t, NetInputDelayEstimator> m_DelayEstimators;
+		std::map<uint8_t, uint64_t> m_LastDelayResizeMs;
+		std::map<uint8_t, uint64_t> m_LastSubstituteCommittedMs;
+		static constexpr uint64_t c_DelayResizeIntervalMs = 2000;
+		static constexpr uint64_t c_DelayShrinkIntervalMs = 10000;
+		static constexpr uint16_t c_DelayShrinkStep = 1;
 		struct ArrivalLead {
 			uint64_t ms = 0; //!< When the input arrived.
 			uint64_t frame = 0; //!< The frame it was for.
