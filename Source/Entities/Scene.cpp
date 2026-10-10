@@ -2170,7 +2170,10 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			// Alternatively, if the MOSRotating has no Attachables but its preset does, we need to set the flag, because that means this is missing Attachables, and we don't want to magically regenerate them when a game is loaded.
 			if (!attachablesToSave.empty()) {
 				writer.NewPropertyWithValue("SpecialBehaviour_ClearAllAttachables", true);
-			} else if (const MOSRotating* presetOfMOSRotatingToSave = CheckpointCast<const MOSRotating>(g_PresetMan.GetEntityPreset(mosRotatingToSave->GetClassName(), mosRotatingToSave->GetPresetName(), mosRotatingToSave->GetModuleID())); presetOfMOSRotatingToSave && !presetOfMOSRotatingToSave->GetAttachableList().empty()) {
+			} else if (mosRotatingToSave->IsFrozenCheckpointNative() ? mosRotatingToSave->FrozenPresetHasAttachables() : [&] {
+				const auto* preset = CheckpointCast<const MOSRotating>(g_PresetMan.GetEntityPreset(mosRotatingToSave->GetClassName(), mosRotatingToSave->GetPresetName(), mosRotatingToSave->GetModuleID()));
+				return preset && !preset->GetAttachableList().empty();
+			}()) {
 				writer.NewPropertyWithValue("SpecialBehaviour_ClearAllAttachables", true);
 			}
 

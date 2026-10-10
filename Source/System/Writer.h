@@ -111,6 +111,7 @@ namespace RTE {
 		/// SharedText() with its timers bound at a capture's sim time, as BindSimTime(ticks).Text() binds the whole text.
 		std::string SharedText(int64_t simTimeTicks) const;
 		static CheckpointText Deferred(std::function<std::string()> produce, size_t ownedBytes = 0, std::string identity = {});
+		static CheckpointText DeferredValues(std::function<CheckpointText()> produce, size_t ownedBytes = 0);
 		/// Captured callables use native storage instead of function-wrapper allocations.
 		template<class Function> requires (!std::is_same_v<std::remove_cvref_t<Function>, std::function<std::string()>> && std::is_invocable_r_v<std::string, std::decay_t<Function>&>)
 		static CheckpointText Deferred(Function&& produce, size_t ownedBytes = 0, std::string identity = {}) {

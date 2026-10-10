@@ -374,6 +374,7 @@ struct CheckpointText::Data {
 		std::mutex ready;
 		std::atomic<bool> formatted{false};
 		std::string text;
+		std::optional<std::string> sharedValues;
 		std::vector<std::pair<size_t, size_t>> peerRuns;
 		std::once_flag copied;
 		std::string tape;
@@ -397,7 +398,7 @@ struct CheckpointText::Data {
 	std::pmr::vector<CheckpointText> children;
 	std::pmr::vector<std::shared_ptr<const void>> ownedBlocks;
 	// A deferred node's producer, dropped once it has produced: what it captured (a frozen heap, a pixel snapshot) goes with it.
-	mutable std::variant<std::monostate, std::function<std::string()>, CapturedProducer> produce;
+	mutable std::variant<std::monostate, std::function<std::string()>, CapturedProducer, std::function<CheckpointText()>> produce;
 	bool deferred = false;
 	std::string peerMark;
 	std::string identity;
@@ -504,6 +505,15 @@ CheckpointText CheckpointText::Deferred(std::function<std::string()> produce, si
 	data->deferred = true;
 	data->ownedBytes = ownedBytes;
 	data->identity = std::move(identity);
+	return CheckpointText(std::move(data));
+}
+
+CheckpointText CheckpointText::DeferredValues(std::function<CheckpointText()> produce, size_t ownedBytes) {
+	auto data = Data::Create();
+	data->produce = std::move(produce);
+	data->deferred = true;
+	data->hasPeer = true;
+	data->ownedBytes = ownedBytes;
 	return CheckpointText(std::move(data));
 }
 
@@ -784,8 +794,15 @@ const std::string& CheckpointText::Text() const {
 			if (node->deferred) {
 				{
 					const FloatingPointEnvironment::Scope scope("capture callback");
-					node->Output().text = std::visit([](const auto& produce) -> std::string {
+					node->Output().text = std::visit([node](const auto& produce) -> std::string {
 						if constexpr (std::is_same_v<std::remove_cvref_t<decltype(produce)>, std::monostate>) throw std::bad_function_call();
+						else if constexpr (std::is_same_v<std::remove_cvref_t<decltype(produce)>, std::function<CheckpointText()>>) {
+							const CheckpointText values = produce();
+							const std::string& text = values.Text();
+							std::string shared = values.SharedText();
+							if (shared != text) node->Output().sharedValues = std::move(shared);
+							return text;
+						}
 						else return produce();
 					}, node->produce);
 				}
@@ -892,6 +909,7 @@ std::string CheckpointText::SharedText() const {
 	if (m_Data->usesSimTime) return AtSimTime(m_Data->simTimeTicks).SharedText();
 	if (m_Data->deferred) {
 		const std::string& text = Text();
+		if (m_Data->Output().sharedValues) return *m_Data->Output().sharedValues;
 		std::string shared;
 		size_t at = 0;
 		for (const auto& [begin, end]: m_Data->Output().peerRuns) {
@@ -2600,6 +2618,22 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		const bool producedOnce = holding.Text() == "7" && holding.Text() == "7" && holding.SameValues(holding);
 		check(before == 2 && producedOnce && held.use_count() == 1, "owned_checkpoint_formatted_text_lets_its_producer_go",
 		      "use_count before=" + std::to_string(before) + " after=" + std::to_string(held.use_count()));
+		{
+			auto calls = std::make_shared<std::atomic<unsigned>>(0);
+			auto witness = std::make_shared<int>(17);
+			const auto deferred = CheckpointText::DeferredValues([calls, witness] {
+				if (calls->fetch_add(1) == 0) throw std::bad_alloc();
+				CheckpointWriter::BatchOverride batch(true);
+				return CheckpointWriter::CaptureNative([&] {
+					CheckpointWriter writer("DeferredValuesProbe"); writer(*witness); writer.PerPeer(std::string("private\0value", 13)); return writer.Text();
+				});
+			});
+			bool failed = false;
+			try { deferred.Text(); } catch (const std::bad_alloc&) { failed = true; }
+			const std::string full = deferred.Text(), shared = deferred.SharedText();
+			check(failed && full != shared && full.find(std::string("private\0value", 13)) != std::string::npos && shared.find("private") == std::string::npos &&
+			      calls->load() == 2 && witness.use_count() == 1 && deferred.Text() == full, "deferred_native_values_preserve_peer_runs_retry_and_release_the_snapshot");
+		}
 
 		{
 			struct Producer {

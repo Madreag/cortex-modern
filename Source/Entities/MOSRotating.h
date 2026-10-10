@@ -43,6 +43,7 @@ namespace RTE {
 		/// memory. Create() should be called before using the object.
 		MOSRotating();
 		CheckpointSnapshotMethods(MOSRotating);
+		bool FrozenPresetHasAttachables() const { return m_FrozenPresetHasAttachables; }
 
 		/// Destructor method used to clean up a MOSRotating object before deletion
 		/// from system memory.
@@ -675,6 +676,7 @@ namespace RTE {
 		bool LoadMOSRotatingRuntime(std::string_view text, bool validateOnly = false);
 
 		bool m_CheckpointInitialized = false;
+		bool m_FrozenPresetHasAttachables = false;
 
 		/// Clears all the member variables of this MOSRotating, effectively
 		/// resetting the members of this abstraction level only.

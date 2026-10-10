@@ -107,6 +107,8 @@ MOSRotating::MOSRotating(const MOSRotating& source, CheckpointNativeSnapshot& sn
 	m_pTempBitmapS(nullptr),
 	m_PersistedMOSRotatingRuntime(snapshot.Freeze(source.m_PersistedMOSRotatingRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	if (source.IsFrozenCheckpointNative()) m_FrozenPresetHasAttachables = source.m_FrozenPresetHasAttachables;
+	else if (const auto* preset = dynamic_cast<const MOSRotating*>(g_PresetMan.GetEntityPreset(source.GetClassName(), source.GetPresetName(), source.GetModuleID()))) m_FrozenPresetHasAttachables = !preset->GetAttachableList().empty();
 	for (const auto& [uid, function]: source.m_HardcodedAttachableUniqueIDsAndSetters) m_HardcodedAttachableUniqueIDsAndSetters.emplace(uid, nullptr);
 	for (const auto& [uid, function]: source.m_HardcodedAttachableUniqueIDsAndRemovers) m_HardcodedAttachableUniqueIDsAndRemovers.emplace(uid, nullptr);
 }

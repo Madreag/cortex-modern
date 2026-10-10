@@ -24,6 +24,7 @@
 struct BITMAP;
 
 namespace RTE {
+	struct UnsupportedCheckpointNative : std::runtime_error { using std::runtime_error::runtime_error; };
 	struct BitmapSnapshot;
 	struct SoundData;
 	struct HitData;

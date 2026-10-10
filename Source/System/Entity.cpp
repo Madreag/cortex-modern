@@ -107,7 +107,7 @@ namespace RTE {
 		m_CheckpointPreset = snapshot.Object(source.GetPresetForCopy());
 	}
 	Entity* Entity::FreezeCheckpointNative(CheckpointNativeSnapshot&) const {
-		throw std::runtime_error("native checkpoint snapshot is not implemented for " + GetClassName());
+		throw UnsupportedCheckpointNative("native checkpoint snapshot is not implemented for " + GetClassName());
 	}
 	void CheckpointNativeSnapshot::AssignEntity(Entity& target, const Entity& source) {
 		target.m_FrozenCheckpointNative = true;

@@ -6015,6 +6015,30 @@ static int ScriptGraphNativeSave(lua_State* L) {
 	}
 	if (s_ScriptGraphCapture) {
 		try {
+			if (const auto& snapshot = CheckpointNativeSnapshot::Boundary()) {
+				const Serializable* owned = nullptr;
+				try {
+					if (const auto* entity = dynamic_cast<const Entity*>(object)) owned = snapshot->Object(entity);
+					else if (const auto* area = dynamic_cast<const Scene::Area*>(object)) owned = snapshot->ValueObject(area);
+					else if (const auto* box = dynamic_cast<const Box*>(object)) owned = snapshot->ValueObject(box);
+					else if (const auto* set = dynamic_cast<const SoundSet*>(object)) owned = snapshot->ValueObject(set);
+				} catch (const UnsupportedCheckpointNative&) {}
+				if (owned) return PushScriptGraphCapturedText(L, CheckpointText::DeferredValues([snapshot, owned] {
+					CheckpointNativeSnapshot::ReadScope read(snapshot.get());
+					CheckpointWriter::BatchOverride batch(true);
+					CheckpointWriter::CacheScope cache(nullptr);
+					return Writer::Capture([owned](Writer& writer) {
+						Writer::SnapshotScope snapshotScope(writer);
+						writer.NewProperty("ScriptEntity");
+						if (const auto* mo = dynamic_cast<const MovableObject*>(owned)) Scene::SaveSceneObject(writer, mo, false, true);
+						else {
+							if (const auto* area = dynamic_cast<const Scene::Area*>(owned)) area->SaveSnapshot(writer);
+							else owned->Save(writer);
+							writer.ObjectEnd();
+						}
+					});
+				}));
+			}
 			return PushScriptGraphCapturedText(L, Writer::Capture([object](Writer& writer) {
 				Writer::SnapshotScope snapshotScope(writer);
 				writer.NewProperty("ScriptEntity");
@@ -7023,6 +7047,8 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 			}
 		}, peerMark, bytes);
 		return true;
+	} catch (const std::bad_alloc&) {
+		throw;
 	} catch (const std::exception& error) {
 		problems.emplace_back(std::string("frozen graph capture failed: ") + error.what());
 		return false;
