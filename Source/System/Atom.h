@@ -87,7 +87,6 @@ namespace RTE {
 			AllocationScope(const AllocationScope&) = delete;
 			AllocationScope& operator=(const AllocationScope&) = delete;
 		private:
-		bool m_FrozenNative = false;
 			bool m_Previous;
 		};
 		/// Freezes native pages while the live capture records its small owned inputs.
@@ -508,6 +507,7 @@ namespace RTE {
 		bool m_SubStepped;
 
 	private:
+		bool m_FrozenNative = false;
 		static inline std::atomic<FreezeState*> s_FreezeState{nullptr};
 		// Owner, collision bodies and their roots are resolved after the complete
 		// native world has adopted its saved identities.
