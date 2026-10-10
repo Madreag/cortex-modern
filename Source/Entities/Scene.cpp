@@ -4,6 +4,7 @@
 #include "CheckpointImage.h"
 #include "CheckpointProperties.h"
 #include "CheckpointCast.h"
+#include "CheckpointNativeSnapshot.h"
 #include "BitmapCheckpoint.h"
 #include "TerrainLayerSnapshot.h"
 
@@ -1715,6 +1716,7 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 		CheckpointWriter::CacheScope valuesScope(&values);
 		for (size_t index = first; index < last; ++index) {
 			const SceneObject* object = order[index];
+			CheckpointNativeSnapshot::ReadScope nativeValues(object->FrozenCheckpointNativeOwner());
 			CaptureTrace::Span span("mo", CaptureTrace::Active() ? TraceName(object) : std::string());
 			const int64_t cpuStart = cpuTrace ? SnapshotThreadCpuUnits() : 0;
 			const int64_t faultStart = cpuTrace ? SnapshotThreadMinorFaults() : 0;
@@ -1774,6 +1776,7 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 }
 
 void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave, bool isChildAttachable, bool saveFullData) {
+	CheckpointNativeSnapshot::ReadScope nativeValues(sceneObjectToSave->FrozenCheckpointNativeOwner());
 	if (writer.IsCapturing() && writer.GetCaptureObject() != sceneObjectToSave) {
 		const unsigned channel = 32 + 8 * writer.GetIndent() + 2 * saveFullData + isChildAttachable;
 		const uint64_t stamp = sceneObjectToSave->CheckpointWriteGeneration();

@@ -265,7 +265,7 @@ MovableObject::MovableObject(const MovableObject& source, CheckpointNativeSnapsh
 	m_SimUpdatesBetweenScriptedUpdates(snapshot.Freeze(source.m_SimUpdatesBetweenScriptedUpdates)),
 	m_SimUpdatesSinceLastScriptedUpdate(snapshot.Freeze(source.m_SimUpdatesSinceLastScriptedUpdate)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
-
+	snapshot.RememberUID(&source, this);
 }
 
 MovableObject::MovableObject() {

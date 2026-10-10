@@ -192,6 +192,7 @@ Material::Material(const Material& source, CheckpointNativeSnapshot& snapshot) :
 	m_TerrainFGTexture(snapshot.Freeze(source.m_TerrainFGTexture)),
 	m_TerrainBGTexture(snapshot.Freeze(source.m_TerrainBGTexture)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	snapshot.RememberMaterial(&source, this);
 }
 
 Entity* Material::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {

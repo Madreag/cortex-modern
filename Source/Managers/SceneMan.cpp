@@ -2,6 +2,7 @@
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "SceneMan.h"
+#include "CheckpointNativeSnapshot.h"
 #include "MetricsCollector.h"
 #include "PostProcessMan.h"
 #include "PresetMan.h"
@@ -3195,6 +3196,10 @@ namespace {
 }
 
 std::string SceneMan::SaveMaterialReference(const Material* material) const {
+	if (const auto* snapshot = CheckpointNativeSnapshot::Current()) {
+		if (const auto* reference = snapshot->MaterialReference(material)) return reference->Text();
+		if (material) throw std::logic_error("material is missing from the frozen native snapshot");
+	}
     if (!material) return CheckpointMaterialReference{}.Save();
     for (size_t index = 0; index < m_apMatPalette.size(); ++index) if (m_apMatPalette[index] == material) return CheckpointMaterialReference{1, index}.Save();
     if (const auto copy = m_MaterialCopyIndices.find(material); copy != m_MaterialCopyIndices.end()) return CheckpointMaterialReference{2, copy->second}.Save();

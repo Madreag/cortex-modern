@@ -14,6 +14,21 @@
 #include <vector>
 
 namespace RTE {
+	CheckpointNativeSnapshot::CheckpointNativeSnapshot() : m_Clock{g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetSimUpdateCount(), g_TimerMan.GetRealTickCount()} {}
+	void CheckpointNativeSnapshot::RememberMaterial(const Material* source, const Material* target) {
+		m_MaterialReferences.emplace(target, CheckpointWriter::CaptureNative([source] { return g_SceneMan.SaveMaterialReference(source); }));
+	}
+	const CheckpointText* CheckpointNativeSnapshot::MaterialReference(const Material* target) const {
+		const auto found = m_MaterialReferences.find(target);
+		return found == m_MaterialReferences.end() ? nullptr : &found->second;
+	}
+	void CheckpointNativeSnapshot::RememberUID(const MovableObject* source, MovableObject* target) {
+		if (source->GetUniqueID() > 0 && g_MovableMan.FindObjectByUniqueID(source->GetUniqueID()) == source) m_UIDs.emplace(source->GetUniqueID(), target);
+	}
+	MovableObject* CheckpointNativeSnapshot::FindUID(long uid) const {
+		const auto found = m_UIDs.find(uid);
+		return found == m_UIDs.end() ? nullptr : found->second;
+	}
 	struct CheckpointNativeSnapshot::Pixel {
 		BITMAP bitmap{};
 		GFX_VTABLE table{};

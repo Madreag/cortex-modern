@@ -2,6 +2,7 @@
 
 #include "Entity.h"
 #include "CheckpointFailure.h"
+#include "CheckpointFrozenClock.h"
 
 #include <array>
 #include <atomic>
@@ -25,20 +26,23 @@ namespace RTE {
 	struct BitmapSnapshot;
 	struct SoundData;
 	struct HitData;
+	class Material;
+	class MovableObject;
 
 	// Snapshot constructors own archived fields without gameplay creation or callbacks.
 	class CheckpointNativeSnapshot {
 	public:
-		CheckpointNativeSnapshot() = default;
+		CheckpointNativeSnapshot();
 		~CheckpointNativeSnapshot();
 		CheckpointNativeSnapshot(const CheckpointNativeSnapshot&) = delete;
 		CheckpointNativeSnapshot& operator=(const CheckpointNativeSnapshot&) = delete;
 		class ReadScope {
 		public:
-			explicit ReadScope(const CheckpointNativeSnapshot* snapshot) : m_Previous(s_Current) { if (snapshot) s_Current = snapshot; }
+			explicit ReadScope(const CheckpointNativeSnapshot* snapshot) : m_Previous(s_Current), m_Clock(snapshot ? &snapshot->m_Clock : nullptr) { if (snapshot) s_Current = snapshot; }
 			~ReadScope() { s_Current = m_Previous; }
 		private:
 			const CheckpointNativeSnapshot* m_Previous;
+			CheckpointFrozenClock::Scope m_Clock;
 		};
 		static const CheckpointNativeSnapshot* Current() { return s_Current; }
 		BITMAP* Freeze(BITMAP* source);
@@ -49,6 +53,10 @@ namespace RTE {
 		CheckpointText FreezeWriter(const Serializable* source);
 		SoundData Freeze(const SoundData& source);
 		HitData Freeze(const HitData& source);
+		void RememberMaterial(const Material* source, const Material* target);
+		const CheckpointText* MaterialReference(const Material* target) const;
+		void RememberUID(const MovableObject* source, MovableObject* target);
+		MovableObject* FindUID(long uid) const;
 
 		template<class T> T* Object(const T* source) {
 			static_assert(std::is_base_of_v<Entity, std::remove_const_t<T>>);
@@ -211,6 +219,9 @@ namespace RTE {
 		std::unordered_map<const BITMAP*, std::shared_ptr<Pixel>> m_Bitmaps;
 		std::unordered_map<const BITMAP*, std::shared_ptr<Pixel>> m_BitmapSources;
 		std::unordered_map<const Serializable*, CheckpointText> m_WriterValues;
+		std::unordered_map<const Material*, CheckpointText> m_MaterialReferences;
+		std::unordered_map<long, MovableObject*> m_UIDs;
+		CheckpointFrozenClock m_Clock;
 		std::list<Entity*> m_Owners;
 		std::unordered_map<const Entity*, Entity*> m_Objects;
 		std::unordered_map<Entity*, Entity**> m_Slots;

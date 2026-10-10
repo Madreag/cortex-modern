@@ -4,6 +4,7 @@
 #include "Constants.h"
 #include "OwnedMovableObjects.h"
 #include "MovableMan.h"
+#include "CheckpointNativeSnapshot.h"
 #include <iostream>
 #include "SimDumpTape.h"
 #include "NetA7Journal.h"
@@ -4994,6 +4995,7 @@ bool MovableMan::IsParticle(const MovableObject* pMOToCheck) {
 }
 
 MovableObject* MovableMan::FindObjectByUniqueID(long int id) {
+	if (const auto* snapshot = CheckpointNativeSnapshot::Current()) return snapshot->FindUID(id);
 	if (m_LinkRoot) {
 		if (MovableObject* part = m_LinkRoot->FindPartByUniqueID(id)) {
 			return part;

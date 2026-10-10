@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "Singleton.h"
+#include "CheckpointFrozenClock.h"
 
 #include <algorithm>
 #include <deque>
@@ -105,7 +106,7 @@ namespace RTE {
 
 		/// Gets the sim time in timer ticks, for rollback snapshots.
 		/// @return The accumulated sim time in ticks.
-		long long GetSimTimeTicks() const { return m_SimTimeTicks; }
+		long long GetSimTimeTicks() const { return CheckpointFrozenClock::current ? CheckpointFrozenClock::current->simTicks : m_SimTimeTicks; }
 		long long GetSimAccumulator() const { return m_SimAccumulator; }
 
 		/// Tells whether there is enough sim time accumulated to do at least one physics update.
@@ -207,19 +208,19 @@ namespace RTE {
 
 		/// Gets a current global real time measured in ticks from the start of the simulation up to the last Update of this TimerMan. Use TickFrequency to determine how many ticks go in a second.
 		/// @return The number of ticks passed since the simulation started.
-		long long GetRealTickCount() const { return m_RealTimeTicks; }
+		long long GetRealTickCount() const { return CheckpointFrozenClock::current ? CheckpointFrozenClock::current->realTicks : m_RealTimeTicks; }
 
 		/// Gets a current global simulation time measured in ticks from the start of the simulation up to the last Update of this TimerMan. Use TickFrequency to determine how many ticks go in a second.
 		/// @return The number of ticks passed since the simulation started.
-		long long GetSimTickCount() const { return m_SimTimeTicks; }
+		long long GetSimTickCount() const { return GetSimTimeTicks(); }
 
 		/// Gets a current global simulation time, measured in sim updates, from the start of the simulation up to the last Update of this TimerMan.
 		/// @return The number of simulation updates that have occurred since the simulation started.
-		long long GetSimUpdateCount() const { return m_SimUpdateCount; }
+		long long GetSimUpdateCount() const { return CheckpointFrozenClock::current ? CheckpointFrozenClock::current->simUpdates : m_SimUpdateCount; }
 
 		/// Gets a current global simulation time measured in ms ticks from the start of the simulation up to the last UpdateSim of this TimerMan.
 		/// @return The number of ms passed since the simulation started.
-		long long GetSimTimeMS() const { return m_SimTimeTicks * 1000 / m_TicksPerSecond; }
+		long long GetSimTimeMS() const { return GetSimTimeTicks() * 1000 / m_TicksPerSecond; }
 
 		/// Gets the current number of ticks that the simulation should be updating with.
 		/// @return The current fixed delta time that the simulation should be updating with, in ticks.
