@@ -447,7 +447,8 @@ bool BitmapSnapshot::RunSelfTest() {
 		for (const int colorDepth: {8, 15, 16, 24, 32}) {
 			std::array<std::shared_ptr<const BitmapSnapshot>, 3> snapshots;
 			std::array<std::string, 3> expected;
-			bool unscanned = false;
+		bool unscanned = false;
+		size_t boundaryCopyBytes = 0;
 			{
 				BitmapPtr source(create_bitmap_ex(colorDepth, 17, 101));
 				if (!source) throw std::bad_alloc();
@@ -461,15 +462,18 @@ bool BitmapSnapshot::RunSelfTest() {
 				snapshots[1] = Freeze(source.get(), snapshots[0]); remember(1);
 				snapshots[2] = Freeze(source.get(), snapshots[1]); remember(2);
 				unscanned = snapshots[1]->scannedBytes == 0 && snapshots[2]->scannedBytes == 0;
+				boundaryCopyBytes = snapshots[1]->frozenRows && snapshots[1]->frozenRows->pages ? 0 : snapshots[1]->LogicalBytes();
+				unscanned = snapshots[1]->copiedBytes == boundaryCopyBytes && unscanned;
 				clear_to_color(source.get(), 77);
 			}
-			const auto read = [snapshots, expected] {
+			const auto read = [snapshots, expected, boundaryCopyBytes] {
 				bool exact = true;
 				for (size_t index = 0; index < snapshots.size(); ++index) exact = snapshots[index]->PixelBytes() == expected[index] && exact;
 				return exact && snapshots[1]->scannedBytes == snapshots[1]->LogicalBytes() &&
 				    snapshots[1]->dirtyBytes == snapshots[1]->rowBytes && snapshots[1]->unmarkedDirtyBytes == snapshots[1]->rowBytes &&
 				    snapshots[2]->dirtyBytes == 0 && snapshots[2]->reusedRows == static_cast<size_t>(snapshots[2]->height) &&
-				    snapshots[1]->copiedBytes + snapshots[1]->workerCopyBytes == snapshots[1]->LogicalBytes();
+				    snapshots[1]->copiedBytes == boundaryCopyBytes &&
+				    snapshots[1]->workerCopyBytes == snapshots[1]->rowBytes && snapshots[2]->workerCopyBytes == 0;
 			};
 			std::array<std::future<bool>, 4> readers;
 			for (auto& reader: readers) reader = std::async(std::launch::async, read);
@@ -506,7 +510,7 @@ bool BitmapSnapshot::RunSelfTest() {
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
 SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::SceneLayerImpl(const SceneLayerImpl& source, CheckpointNativeSnapshot& snapshot) :
 	Entity(source, snapshot), m_BitmapFile(source.m_BitmapFile), m_MainTexture{},
-	m_MainBitmap(snapshot.Freeze(source.m_MainBitmap)), m_BackBitmap(nullptr), m_BitmapClearTask{},
+	m_MainBitmap(snapshot.Freeze(source.m_MainBitmap)), m_BackBitmap(snapshot.Freeze(source.m_BackBitmap)), m_BitmapClearTask{},
 	m_LastClearColor(source.m_LastClearColor), m_Drawings(source.m_Drawings), m_MainBitmapOwned(false),
 	m_MainBitmapUpdated(source.m_MainBitmapUpdated), m_DrawMasked(source.m_DrawMasked), m_WrapX(source.m_WrapX), m_WrapY(source.m_WrapY),
 	m_OriginOffset(source.m_OriginOffset), m_Offset(source.m_Offset), m_ZOrder(source.m_ZOrder),
