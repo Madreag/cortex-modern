@@ -623,6 +623,7 @@ struct MusicCheckpoint {
             data.SoundObject = nullptr; data.Offset = sample.offset; data.MinimumAudibleDistance = sample.minimum; data.AttenuationStartDistance = sample.attenuation;
             if (!sample.backend.empty()) bindings.emplace_back(&data, sample.backend);
         }
+        value.m_SoundDataSource = SoundSet::NameSoundData(value.m_SoundData);
         value.m_SubSoundSets.reserve(record.subsets.size());
         for (const auto& subset: record.subsets) { auto child = std::make_unique<SoundSet>(); BuildSet(subset, *child, bindings); value.m_SubSoundSets.push_back(child.release()); }
     }

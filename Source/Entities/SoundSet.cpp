@@ -9,6 +9,8 @@
 #include "RTEError.h"
 
 #include <bit>
+#include <mutex>
+#include <unordered_map>
 #include <future>
 #include <iostream>
 
@@ -18,6 +20,30 @@ SoundData CheckpointNativeSnapshot::Freeze(const SoundData& source) {
 	SoundData value = source;
 	value.SoundObject = nullptr;
 	return value;
+}
+
+size_t CheckpointNativeSnapshot::SoundSetKeyHash::operator()(const std::vector<uint64_t>& key) const noexcept {
+	uint64_t hash = 1469598103934665603ULL;
+	for (const uint64_t word: key) hash = (hash ^ word) * 1099511628211ULL;
+	return static_cast<size_t>(hash);
+}
+
+std::shared_ptr<SoundSet> CheckpointNativeSnapshot::FreezeSoundSet(const std::shared_ptr<SoundSet>& source) {
+	if (!source) return {};
+	thread_local std::vector<uint64_t> key;
+	key.clear();
+	source->AppendFreezeKey(key);
+	auto& shard = m_SoundSets[SoundSetKeyHash{}(key) % m_SoundSets.size()];
+	{
+		std::lock_guard lock(shard.mutex);
+		if (const auto found = shard.sets.find(key); found != shard.sets.end()) return std::shared_ptr<SoundSet>(found->second, [](SoundSet*) {});
+	}
+	SoundSet* frozen = ValueObject(source.get());
+	{
+		std::lock_guard lock(shard.mutex);
+		shard.sets.try_emplace(key, frozen);
+	}
+	return std::shared_ptr<SoundSet>(frozen, [](SoundSet*) {});
 }
 
 const std::string SoundSet::m_sClassName = "SoundSet";
@@ -36,6 +62,7 @@ SoundSet::SoundSet(const SoundSet& source, CheckpointNativeSnapshot& snapshot) :
 	m_PendingCycleMode{},
 	m_PendingCycleModeWritten(false),
 	m_SoundData(snapshot.Freeze(source.m_SoundData)),
+	m_SoundDataSource(source.m_SoundDataSource),
 	m_SubSoundSets(snapshot.Freeze(source.m_SubSoundSets)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)),
 	m_CheckpointValueTrap(false),
@@ -59,6 +86,7 @@ SoundSet& SoundSet::operator=(const SoundSet& reference) {
 		std::swap(m_CurrentSelection, copy.m_CurrentSelection);
 		std::swap(m_SimulationSelection, copy.m_SimulationSelection);
 		m_SoundData.swap(copy.m_SoundData);
+		std::swap(m_SoundDataSource, copy.m_SoundDataSource);
 		m_SubSoundSets.swap(copy.m_SubSoundSets);
 		SetCheckpointOwner(m_CheckpointOwner);
 		copy.SetCheckpointOwner(nullptr);
@@ -76,6 +104,7 @@ void SoundSet::Clear() {
 	m_CheckpointOwner = nullptr;
 
 	m_SoundData.clear();
+	m_SoundDataSource = 0;
 	m_SubSoundSets.clear();
 }
 
@@ -92,6 +121,30 @@ void SoundSet::SetCheckpointOwner(SoundContainer* owner) {
 	for (SoundSet* child: m_SubSoundSets) child->SetCheckpointOwner(owner);
 }
 
+uint64_t SoundSet::NameSoundData(const std::vector<SoundData>& data) {
+	if (data.empty()) return 0;
+	// Equal sound data, byte for byte, always gets the same name; the backend sound is not part of it.
+	struct Names { std::mutex mutex; std::unordered_map<std::string, uint64_t> values; };
+	static Names* names = new Names;
+	std::string key;
+	for (const SoundData& sound: data) {
+		const std::string file = sound.SoundFile.SaveCheckpoint();
+		const size_t size = file.size();
+		const float values[] = {sound.Offset.m_X, sound.Offset.m_Y, sound.MinimumAudibleDistance, sound.AttenuationStartDistance};
+		key.append(reinterpret_cast<const char*>(&size), sizeof(size));
+		key += file;
+		key.append(reinterpret_cast<const char*>(values), sizeof(values));
+	}
+	std::lock_guard lock(names->mutex);
+	return names->values.try_emplace(std::move(key), names->values.size() + 1).first->second;
+}
+
+void SoundSet::AppendFreezeKey(std::vector<uint64_t>& key) const {
+	key.insert(key.end(), {m_SoundDataSource, static_cast<uint64_t>(m_SoundSelectionCycleMode), m_CurrentSelection.first, static_cast<uint32_t>(m_CurrentSelection.second),
+	    m_SimulationSelection.first, static_cast<uint32_t>(m_SimulationSelection.second), m_CheckpointInitialized, m_SubSoundSets.size()});
+	for (const SoundSet* child: m_SubSoundSets) child->AppendFreezeKey(key);
+}
+
 std::vector<std::pair<bool, int>> SoundSet::CheckpointSelections() const {
 	std::vector<std::pair<bool, int>> selections{m_CurrentSelection, m_SimulationSelection};
 	for (const SoundSet* child: m_SubSoundSets) {
@@ -105,9 +158,11 @@ int SoundSet::Create(const SoundSet& reference) {
 	m_SoundSelectionCycleMode = reference.m_SoundSelectionCycleMode;
 	m_CurrentSelection = reference.m_CurrentSelection;
 	m_SimulationSelection = reference.m_SimulationSelection;
+	const bool copied = m_SoundData.empty();
 	for (SoundData referenceSoundData: reference.m_SoundData) {
 		m_SoundData.push_back(std::move(referenceSoundData));
 	}
+	m_SoundDataSource = copied ? reference.m_SoundDataSource : NameSoundData(m_SoundData);
 	for (const SoundSet* referenceSoundSet: reference.m_SubSoundSets) {
 		SoundSet* soundSet = new SoundSet(*referenceSoundSet);
 		m_SubSoundSets.push_back(soundSet);
@@ -499,6 +554,7 @@ void SoundSet::AddSoundNow(const std::string& soundFilePath, const Vector& offse
 	}
 
 	m_SoundData.push_back({soundFile, soundObject, offset, minimumAudibleDistance, attenuationStartDistance});
+	m_SoundDataSource = NameSoundData(m_SoundData);
 	TouchCheckpoint();
 }
 
@@ -532,6 +588,7 @@ bool SoundSet::RemoveSoundNow(const std::string& soundFilePath, bool removeFromS
 	if (anySoundsToRemove) {
 		TouchCheckpoint();
 		m_SoundData.erase(soundsToRemove, m_SoundData.end());
+		m_SoundDataSource = NameSoundData(m_SoundData);
 	}
 	if (removeFromSubSoundSets) {
 		for (SoundSet* subSoundSet: m_SubSoundSets) {

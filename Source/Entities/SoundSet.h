@@ -5,6 +5,9 @@
 #include "LuaMan.h"
 #include "SoundSimulation.h"
 
+#include <cstdint>
+#include <vector>
+
 namespace RTE {
 	class SoundContainer;
 	bool RunOwnedSoundSetCaptureSelfTest();
@@ -35,6 +38,9 @@ namespace RTE {
 		void ArmCheckpointValueTrap() { m_CheckpointValueTrap = true; }
 		void SetCheckpointOwner(SoundContainer* owner);
 		std::vector<std::pair<bool, int>> CheckpointSelections() const;
+		/// Appends what decides this set's frozen copy without reading its sounds: where its sound data came from, its mode and
+		/// selections, and the same for every sub set. Two sets with equal keys freeze to equal copies.
+		void AppendFreezeKey(std::vector<uint64_t>& key) const;
 		auto CheckpointStampValue() const { return CheckpointFields(CheckpointFieldText([this] { return SaveStructure(); }), CheckpointSelections()); }
 
 		/// How the SoundSet should choose the next sound or SoundSet to play when SelectNextSound is called.
@@ -133,7 +139,7 @@ namespace RTE {
 
 		/// Adds a copy of the given SoundData to this SoundSet.
 		/// @param soundDataToAdd The SoundData to copy to this SoundSet.
-		void AddSoundData(const SoundData& soundDataToAdd) { TouchCheckpoint(); m_SoundData.push_back(soundDataToAdd); }
+		void AddSoundData(const SoundData& soundDataToAdd) { TouchCheckpoint(); m_SoundData.push_back(soundDataToAdd); m_SoundDataSource = NameSoundData(m_SoundData); }
 
 		/// Adds a copy of the passed in SoundSet as a sub SoundSet of this SoundSet. Ownership IS transferred!
 		/// @param soundSetToAdd A reference to the SoundSet to be copied in as a sub SoundSet of this SoundSet. Ownership IS transferred!
@@ -240,6 +246,9 @@ namespace RTE {
         const std::pair<bool, int>& CurrentSelection() const { return SoundSimulationScope::IsSimulation() ? m_SimulationSelection : m_CurrentSelection; }
 
 		std::vector<SoundData> m_SoundData; //!< The SoundData available for selection in this SoundSet.
+		uint64_t m_SoundDataSource = 0; //!< Names the sound data this set holds; sets with equal sound data share the name.
+		/// The name of this exact sound data, the same for every equal copy; 0 for none.
+		static uint64_t NameSoundData(const std::vector<SoundData>& data);
 		std::vector<SoundSet*> m_SubSoundSets; //!< The sub SoundSets available for selection in this SoundSet.
 
 		bool m_CheckpointInitialized = false;

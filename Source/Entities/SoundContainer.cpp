@@ -55,7 +55,7 @@ SoundContainer::SoundContainer(const SoundContainer& source, CheckpointNativeSna
 	m_PreviewOrigin(nullptr),
 	m_CheckpointRegistered(false),
 	m_IsDestroying(false),
-	m_TopLevelSoundSet(snapshot.Freeze(source.m_TopLevelSoundSet)),
+	m_TopLevelSoundSet(snapshot.FreezeSoundSet(source.m_TopLevelSoundSet)),
 	m_PlayingChannels(snapshot.Freeze(source.m_PlayingChannels)),
 	m_SoundOverlapMode(snapshot.Freeze(source.m_SoundOverlapMode)),
 	m_BusRouting(snapshot.Freeze(source.m_BusRouting)),
