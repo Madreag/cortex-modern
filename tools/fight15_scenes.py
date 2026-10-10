@@ -60,6 +60,7 @@ def join_setup():
 
 
 def watches(prefix, text, state="substate:Lobby"):
+    text = "json:" + json.dumps(text) if "\n" in text else text
     return [f"text_watch start {prefix}-state equals {state} LabelMultiplayerStatus {text}",
             f"text_watch start {prefix}-layout layout {state}",
             f"text_watch start {prefix}-duplicates duplicates {state}",
@@ -143,7 +144,7 @@ def lobby_scenes():
     host += watches("ready-host", "Everyone is ready - press Start Match")
     joiner += ["video_mark ready-before-joiner", "assert_label ButtonMultiplayerReady Ready",
                "wait_ms 2500", "activate ButtonMultiplayerReady", "wait_ms 1200"]
-    joiner += watches("ready-joiner", "You're ready - waiting for the host to start the match")
+    joiner += watches("ready-joiner", "You're ready\nwaiting for the host to start the match")
     for lines, peer in ((host, "host"), (joiner, "joiner")):
         lines += [f"video_mark ready-after-{peer}", "wait_ms 1600"] + assert_watches(f"ready-{peer}")
         lines += ["wait_file {PROBE_DIR}/done.json 120", "wait_ms 1400", "exit"]

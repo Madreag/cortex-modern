@@ -1989,6 +1989,12 @@ namespace RTE::MenuAutomation {
 				args >> watch.rule >> watch.state;
 				if (watch.rule == "equals" || watch.rule == "shown") args >> watch.control;
 				std::getline(args >> std::ws, watch.text);
+				// JSON preserves an exact multiline label in a one-line input script.
+				if (watch.text.starts_with("json:")) {
+					const Json text = Json::parse(watch.text.substr(5), nullptr, false);
+					if (!text.is_string()) { observation = "invalid watch text JSON"; return false; }
+					watch.text = text.get<std::string>();
+				}
 				const bool textRule = watch.rule == "require" || watch.rule == "forbid" || watch.rule == "equals";
 				const bool known = textRule || watch.rule == "shown" || watch.rule == "duplicates" || watch.rule == "rtt" || watch.rule == "layout" || watch.rule == "overlap" || watch.rule == "seat_rows";
 				if (!known || watch.state.empty() || (textRule && watch.text.empty()) || ((watch.rule == "equals" || watch.rule == "shown") && watch.control.empty())) {
