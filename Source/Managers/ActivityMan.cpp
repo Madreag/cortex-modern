@@ -916,15 +916,17 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	g_MovableMan.CompleteQueuedMOIDDrawings();
 	g_MovableMan.WaitForActorsSeeTask();
 	MovableMan::KnownObjectsScope known;
-	LuaScriptGraphNativeCaptureScope lookups;
-	CaptureAllocationState allocation(false);
-	// The loaded-bitmap index and the atom pages' fences are made beside this thread's own boundary work.
+	// The known objects' copies, the loaded-bitmap index and the atom pages' fences are made beside this thread's own work.
+	std::future<void> knownCopied = g_ThreadMan.GetPriorityThreadPool().submit([&known] { known.Copy(); });
 	std::future<void> bitmapIndexReady, pagesArmed;
 	struct Joined {
+		std::future<void>& known;
 		std::future<void>& index;
 		std::future<void>& pages;
-		~Joined() { if (index.valid()) index.wait(); if (pages.valid()) pages.wait(); }
-	} joined{bitmapIndexReady, pagesArmed};
+		~Joined() { if (known.valid()) known.wait(); if (index.valid()) index.wait(); if (pages.valid()) pages.wait(); }
+	} joined{knownCopied, bitmapIndexReady, pagesArmed};
+	LuaScriptGraphNativeCaptureScope lookups;
+	CaptureAllocationState allocation(false);
 	std::optional<ContentFile::LoadedBitmapIndexScope> bitmapIndex;
 	CheckpointWriter::BatchScope batches(true, true);
 	CheckpointWriter::CacheScope cache(nullptr);
@@ -941,7 +943,7 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	image->nativeBoundaryUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
 	if (image->nativePages) image->nativeReady = CheckpointLua::CopyPool::Submit([pages = image->nativePages] { pages->Drain(); }).share();
 	std::vector<MovableObject*> held;
-	g_LuaMan.VisitScriptHeldMovableObjects([&held](MovableObject* object) { held.push_back(object); }, false);
+	g_LuaMan.VisitScriptHeldMovableObjects([&held](MovableObject* object) { held.push_back(object); }, true);
 	MovableMan::ScriptHeldScope scriptHeld(std::move(held));
 	LuaScriptGraphNativeCaptureScope::PreTouch();
 	// Nothing loads a bitmap from here on, so the index can be read while this thread captures the audio.

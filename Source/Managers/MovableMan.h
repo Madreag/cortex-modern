@@ -328,9 +328,10 @@ namespace RTE {
 			KnownObjectsScope& operator=(const KnownObjectsScope&) = delete;
 			/// The time every scope of this process has spent copying the registry, in milliseconds.
 			static double CopyMs();
-		private:
-			/// Copies the known objects the first time anything asks; a change since the scope opened stops it being asked.
+			/// Copies the known objects the first time anything asks, or now on a thread that copies them ahead of the
+			/// readers; a change since the scope opened stops them being asked.
 			void Copy() const;
+		private:
 			mutable std::once_flag m_Copied;
 			mutable std::vector<MovableObject*> m_ByIdentity; //!< In unique id order, as the registry holds them.
 			mutable std::vector<const MovableObject*> m_ByAddress; //!< Sorted by address, for IsKnownObject.
