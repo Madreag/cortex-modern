@@ -625,9 +625,12 @@ namespace RTE::CheckpointLua {
 			const auto answers = std::chrono::steady_clock::now();
 			m_Image->m_EnumUs = std::chrono::duration_cast<std::chrono::microseconds>(answers - started).count();
 			m_Image->m_Scalars.reserve(values.size());
+			CaptureAddressSet enumerated(m_TransientResource);
+			enumerated.Reserve(values.size());
 			for (const TValue& value: values) {
 				const auto* data = udataV(&value);
 				const auto address = gcval(&value);
+				enumerated.Insert(address);
 				if (const auto known = m_Cache.classes->compact.find(address); known != m_Cache.classes->compact.end() && known->second.serial == data->serial) {
 					m_SeenClasses.Insert(address); ++m_Image->m_CachedClasses; continue;
 				}
@@ -652,7 +655,7 @@ namespace RTE::CheckpointLua {
 			}
 			for (size_t index = 0; index < m_Queue.size(); ++index) {
 				const TValue value = m_Queue[index];
-				if (tvisudata(&value) && std::none_of(values.begin(), values.end(), [&](const TValue& captured) { return captured.u64 == value.u64; })) CaptureUserdata(value);
+				if (tvisudata(&value) && !enumerated.Contains(gcval(&value))) CaptureUserdata(value);
 			}
 			m_Image->m_AnswerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - answers).count();
 			m_Captured = true;
