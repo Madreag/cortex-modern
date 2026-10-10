@@ -975,6 +975,21 @@ namespace RTE {
 			player.connected = false;
 			wire.Remove(player.connection);
 			player.client.NotifyAmbiguousLoss();
+			uint8_t peer = 0;
+			for (const NetH4Seat& seat: wire.host.GetSeatTable())
+				if (seat.stableSeat == record.stableSeat) peer = seat.lockstepPeerId;
+			const NetRosterSeat* dropped = wire.host.RosterSeatOfPeer(peer);
+			if (!dropped || dropped->phase != NetSeatPhase::Running) {
+				*error = "the fixture held a dropped seat before its liveness interval";
+				return 1;
+			}
+			wire.nowMs += c_NetSeatDisconnectSilenceMs;
+			wire.host.Tick(wire.nowMs);
+			wire.host.NoteSeatHeldInPlace(peer, NetSeatHoldCause::LinkDrop);
+			if (!wire.host.RosterSeatOfPeer(peer) || wire.host.RosterSeatOfPeer(peer)->phase != NetSeatPhase::Held) {
+				*error = "the fixture has no host-ordered visible hold for its dropped player";
+				return 1;
+			}
 			return 0;
 		}
 
@@ -3672,6 +3687,7 @@ namespace RTE {
 				return Fail(std::string("a kick in a played match did not open the seat with its number kept: ") + (opened ? RosterSeatLabel(*opened) : std::string("no seat")) +
 				            " closed=" + std::to_string(wire.host.IsSeatClosed(kickedSeat)) + " substitutable=" + std::to_string(substitutable));
 			}
+			const std::string openedLabel = RosterSeatLabel(*opened);
 			// The already visible combat hold survives the end as a retained reservation.
 			wire.nowMs += c_NetSeatDisconnectSilenceMs;
 			wire.host.Tick(wire.nowMs);
@@ -3696,7 +3712,7 @@ namespace RTE {
 				return Fail(std::string("a leave between rounds did not keep the seat for its player: ") + (held ? RosterSeatLabel(*held) : std::string("no seat")) +
 				            " released=" + std::to_string(wire.host.GetStats().seatsReleased - releasedBefore));
 			}
-			std::cout << "[net-reconnect-session-selftest] PASS host_opened_seats_follow_the_roster kicked='" << RosterSeatLabel(*opened) << "' leaver='"
+			std::cout << "[net-reconnect-session-selftest] PASS host_opened_seats_follow_the_roster kicked='" << openedLabel << "' leaver='"
 			          << RosterSeatLabel(*held) << "'" << std::endl;
 			return 0;
 		}
@@ -4306,6 +4322,7 @@ namespace RTE {
 				if (!failures.empty()) continue;
 				host->FormRematch();
 				host->SetLiveMatch(true);
+				host->NotePlacementPhase(false, 0);
 				if (!host->IsLiveMatch() || host->GetRoster().stage != NetRosterStage::Running || host->RosterSeatOfPeer(3)->phase != NetSeatPhase::Held) return Fail(role + " could not start an explicit rematch with the seat held");
 			}
 			if (!failures.empty()) return Fail("ended held rounds restart during admission updates: " + failures);
@@ -5103,6 +5120,7 @@ namespace RTE {
 			if (!taken || taken->name != "Carol") {
 				return Fail("the stayer names the substitute's seat '" + (taken ? taken->name : std::string("(no seat)")) + "'");
 			}
+			const std::string substituteName = taken->name;
 			wire.host.NoteSeatHeldInPlace(MakeSeatTable()[0].lockstepPeerId, NetSeatHoldCause::Capacity);
 			if (!NetReconnectSessionSelfTestAccess::PublishHold(wire.host, MakeSeatTable()[0].lockstepPeerId, NetSeatHoldCause::Capacity))
 				return Fail("the historical stayer has no host-ordered visible hold");
@@ -5113,7 +5131,7 @@ namespace RTE {
 				return Fail("the substitute read the stayer's seat held in place as '" + lineOf(substitute, 0) + "'");
 			}
 			std::cout << "[net-reconnect-session-selftest] PASS a_substitutes_name_reaches_every_holder dropped='" << "leaver: Held - AI in control (connection lost)"
-			          << "' substitute=" << taken->name << " held_in_place='" << lineOf(substitute, 0) << "'" << std::endl;
+			          << "' substitute=" << substituteName << " held_in_place='" << lineOf(substitute, 0) << "'" << std::endl;
 			return 0;
 		}
 
