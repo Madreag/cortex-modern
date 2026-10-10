@@ -5292,8 +5292,8 @@ static std::string ResyncSaveName() {
 			if (m_Coordinator->SeatPlaysAtFrame(peer, next - 1)) m_ReconnectHost.NoteReturnCaughtUp(peer);
 		// The round's own hold of a playing seat whose link stays open is the roster's too, and so is that seat's return in place.
 		for (const uint8_t peer: m_ReconnectHost.PlayingPeers())
-			if (m_Coordinator->HasHeldAISeat(peer) && m_Coordinator->IsSeatUnderAI(peer, next - 1))
-				m_ReconnectHost.NoteSeatHeldInPlace(peer, NetSeatHoldCause::LinkDrop);
+			if (m_Coordinator->HasHeldAISeat(peer) && m_Coordinator->IsSeatUnderAI(peer, next - 1) && m_Coordinator->IsSeatHoldVisible(peer))
+				m_ReconnectHost.NoteSeatHeldInPlace(peer, peer == m_Coordinator->GetHostPeerId() ? NetSeatHoldCause::OwnSeat : NetSeatHoldCause::LateStream);
 		for (const uint8_t peer: m_ReconnectHost.HeldInPlacePeers())
 			if (m_Coordinator->SeatPlaysAtFrame(peer, next - 1)) m_ReconnectHost.NoteSeatPlaysAgain(peer);
 	}
@@ -6179,6 +6179,7 @@ static std::string ResyncSaveName() {
 		for (uint8_t peer = 1; peer <= config.peerCount && peer <= 8; ++peer)
 			if ((handover.departedMask & (1U << (peer - 1))) != 0) config.initialPeerLeaves.emplace(peer, handover.frame);
 		config.initialSeatHolds = m_CatchUpCoordinator->HeldTransactions();
+		config.initialSeatBridgeSinceMs = m_CatchUpCoordinator->SeatBridgeTimes();
 		// A held seat that took the round over is its hub: under the AI until the return it commits, never gone.
 		if (const auto left = config.initialPeerLeaves.find(handover.authorityPeerId); left != config.initialPeerLeaves.end() && left->second < handover.frame)
 			config.initialPeerLeaves.erase(left);
@@ -6282,6 +6283,7 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::InPlaceLiveRoundLocked(NetLockstepConfig& live) {
 		live = m_CatchUpCoordinator->GetConfig();
+		live.initialSeatBridgeSinceMs = m_CatchUpCoordinator->SeatBridgeTimes();
 		live.roundId = m_WorldCatchUp.roundId; live.originalRoundConfigHash = m_WorldCatchUp.roundConfigHash;
 		live.initialSeatHolds = m_CatchUpCoordinator->HeldTransactions();
 		live.initialPeerLeaves = m_CatchUpCoordinator->GetPeerLeaveFrames();
@@ -8330,7 +8332,7 @@ static std::string ResyncSaveName() {
 					member.waits = m_Coordinator->WaitsSinceReclaim(member.peerId);
 					member.longestWaitMs = m_Coordinator->LongestWaitMsSinceReclaim(member.peerId);
 				}
-				member.aiHeld = m_Coordinator->IsSeatUnderAI(member.peerId, m_Coordinator->GetResumeFrame());
+				member.aiHeld = m_Coordinator->IsSeatUnderAI(member.peerId, m_Coordinator->GetResumeFrame()) && m_Coordinator->IsSeatHoldVisible(member.peerId);
 				if (member.aiHeld) member.statusLine = member.reclaiming ? "Rejoining..." : "held - AI in control";
 				if (!member.aiHeld && !member.connectedRoute.empty() && g_SettingsMan.GetNetworkShowDiagnostics())
 					member.statusLine += (member.statusLine.empty() ? "" : " | ") + member.connectedRoute;

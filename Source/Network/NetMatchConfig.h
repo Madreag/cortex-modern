@@ -16,6 +16,9 @@
 
 namespace RTE {
 
+	/// Combat waits at most this many ticks after a sender's delayed input is due.
+	inline constexpr uint16_t c_NetSlowPlayerBoundTicks = 3;
+
 	struct NetHostMigrationTimeouts {
 		static constexpr uint64_t c_IceStepMs = 8000;
 		static constexpr uint64_t c_IceDialMs = 30000;
@@ -132,7 +135,7 @@ namespace RTE {
 		uint16_t inputDelayFrames = 0;
 		std::vector<uint16_t> peerInputDelayFrames; // Per-sender delay by peerId-1 (size 0 or peerCount); empty = uniform inputDelayFrames.
 		NetMatchDelayPolicy delayPolicy = NetMatchDelayPolicy::Auto;
-		uint16_t slowPlayerBoundTicks = 3;
+		uint16_t slowPlayerBoundTicks = c_NetSlowPlayerBoundTicks;
 		NetSlowPlayerPolicy slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 		bool autosaveEnabled = false;
 		uint32_t autosaveIntervalSeconds = 0;
@@ -174,7 +177,7 @@ namespace RTE {
 			return version == c_WorldLayoutVersion || version == c_PreRosterWorldVersion || version == c_PersistentWorldVersion;
 		}
 		static constexpr uint16_t c_TimingOptionsVersion = 6;
-		static constexpr uint16_t c_DefaultSlowPlayerBoundTicks = 3;
+		static constexpr uint16_t c_DefaultSlowPlayerBoundTicks = c_NetSlowPlayerBoundTicks;
 		static constexpr uint16_t c_MaxSlowPlayerBoundTicks = 120;
 		// Reserved values are 1 dedicated, 2 path, 4 world (v5), 8 redundancy, 16 migration and 32 return window.
 		static constexpr uint16_t c_ReservedDedicatedBit = 1;

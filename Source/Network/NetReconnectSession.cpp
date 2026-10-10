@@ -817,14 +817,14 @@ namespace RTE {
 
 	namespace {
 		bool IsInPlaceCause(NetSeatHoldCause cause) {
-			return cause == NetSeatHoldCause::Capacity || cause == NetSeatHoldCause::LateStream || cause == NetSeatHoldCause::Quiet || cause == NetSeatHoldCause::TimingAck;
+			return cause == NetSeatHoldCause::Capacity || cause == NetSeatHoldCause::LateStream || cause == NetSeatHoldCause::Quiet || cause == NetSeatHoldCause::TimingAck || cause == NetSeatHoldCause::OwnSeat;
 		}
 	}
 
 	void NetReconnectHost::NoteSeatHeldInPlace(uint8_t lockstepPeerId, NetSeatHoldCause cause) {
 		const SeatState* seat = SeatOfPeer(lockstepPeerId);
 		const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr;
-		if (!held || held->owner == 0 || held->phase != NetSeatPhase::Running || seat->seat.local) return;
+		if (!held || held->owner == 0 || held->phase != NetSeatPhase::Running) return;
 		if (cause == NetSeatHoldCause::Capacity) {
 			NetRosterEvent event;
 			event.kind = NetRosterEventKind::SlowMachine;
@@ -846,6 +846,7 @@ namespace RTE {
 		const SeatState* seat = SeatOfPeer(lockstepPeerId);
 		const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr;
 		if (!held || held->phase != NetSeatPhase::Held || held->link != NetSeatLink::Connected || !IsInPlaceCause(held->holdCause)) return;
+		if (seat->seat.local) { ApplySeatEvent(*seat, NetRosterEventKind::HostResumed); return; }
 		ApplySeatEvent(*seat, NetRosterEventKind::Returned, false, true);
 		if (const NetRosterSeat* back = RosterSeatOf(*seat); back && back->phase == NetSeatPhase::RejoinCatchUp) ApplySeatEvent(*seat, NetRosterEventKind::CaughtUp);
 	}
@@ -853,7 +854,7 @@ namespace RTE {
 	std::vector<uint8_t> NetReconnectHost::PlayingPeers() const {
 		std::vector<uint8_t> playing;
 		for (const SeatState& seat: m_Seats) {
-			const NetRosterSeat* held = seat.seat.cpu || seat.seat.local ? nullptr : RosterSeatOf(seat);
+			const NetRosterSeat* held = seat.seat.cpu ? nullptr : RosterSeatOf(seat);
 			if (held && held->owner != 0 && held->phase == NetSeatPhase::Running) playing.push_back(SimIdentityOfSeat(seat.seat).peerId);
 		}
 		return playing;
@@ -862,7 +863,7 @@ namespace RTE {
 	std::vector<uint8_t> NetReconnectHost::HeldInPlacePeers() const {
 		std::vector<uint8_t> held;
 		for (const SeatState& seat: m_Seats) {
-			const NetRosterSeat* row = seat.seat.cpu || seat.seat.local ? nullptr : RosterSeatOf(seat);
+			const NetRosterSeat* row = seat.seat.cpu ? nullptr : RosterSeatOf(seat);
 			if (row && row->phase == NetSeatPhase::Held && row->link == NetSeatLink::Connected && IsInPlaceCause(row->holdCause)) held.push_back(SimIdentityOfSeat(seat.seat).peerId);
 		}
 		return held;

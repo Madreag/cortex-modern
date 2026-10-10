@@ -5034,7 +5034,7 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, resyncTitle, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncTitle);
 	// A held player's units are the AI's until the player is back; a repair pauses every player at once.
-	const std::string resyncLine = heldRejoin ? NetReconnectUx::HeldSeatReturnNotice()
+	const std::string resyncLine = heldRejoin ? (ScenarioRunner::IsLockstepHoldNoticeVisible() ? NetReconnectUx::HeldSeatReturnNotice() : std::string())
 	                                          : "Every player waits while the match is reloaded  /  " + std::to_string(elapsedSeconds) + " s  /  F6: Players";
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8, resyncLine, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncLine);
@@ -7033,7 +7033,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			}
 			if (heldRejoin) {
 				s_netMatchHeldFromTick = matchTick;
-				g_ConsoleMan.PrintString("NETWORK: Held - AI in control - rejoining");
+				if (ScenarioRunner::IsLockstepHoldNoticeVisible()) g_ConsoleMan.PrintString("NETWORK: Held - AI in control - rejoining");
 				ScenarioRunner::PushNetUiToast("seat_held", "Held - AI in control - rejoining");
 			} else {
 				s_netMatchHeals.Note(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());

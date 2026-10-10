@@ -377,6 +377,7 @@ namespace RTE {
 		std::map<uint8_t, std::map<uint64_t, uint16_t>> initialDelayChanges;
 		std::map<uint8_t, NetGameSeatHold> initialSeatHolds;
 		std::map<uint8_t, NetGameSeatReclaim> initialSeatReclaims;
+		std::map<uint8_t, uint64_t> initialSeatBridgeSinceMs; // Local presentation clock, retained across private catch-up.
 		uint64_t seatStateThroughFrame = 0; // A joining round's holds, departures and returns already cover every frame up to this one.
 		uint32_t timeoutMs = 500;
 		uint8_t localPeerId = 0;
@@ -466,7 +467,7 @@ namespace RTE {
 		uint32_t connectedMask = 0; ///< Answer: the seats the voter's committed round has connected at its applied frame, the host's among them; roll call and abort: the roster the vote is counted against.
 	};
 
-	/// Only continuous authenticated-traffic silence permits these host decisions.
+	/// A combat bridge stays invisible until this interval; host loss requires total traffic silence.
 	constexpr uint64_t c_NetSeatDisconnectSilenceMs = 5000;
 	constexpr uint64_t c_NetHostLossSilenceMs = 15000;
 	/// One reading of host loss for every path that judges it: the round's own check, the roll call and a held seat's catch-up.
@@ -1120,6 +1121,8 @@ namespace RTE {
 			std::string cause;
 		};
 		std::optional<HoldFact> LastHoldOf(uint8_t peerId) const { NET_PLANE_CHECK(); const auto fact = m_HoldFacts.find(peerId); return fact == m_HoldFacts.end() ? std::nullopt : std::optional(fact->second); }
+		bool IsSeatHoldVisible(uint8_t peerId, uint64_t nowMs = UINT64_MAX) const;
+		std::map<uint8_t, uint64_t> SeatBridgeTimes() const { NET_PLANE_CHECK(); return m_SeatBridgeSinceMs; }
 		bool TimingDecisionPendingAt(uint64_t frame) const;
 		/// Names every decision holding a frame's production, for a wait that has lasted long enough to be a defect.
 		std::string DescribePendingTimingDecisions(uint64_t frame) const;
@@ -1468,7 +1471,7 @@ namespace RTE {
 		friend bool TestOwnerSilenceThreshold(unsigned check, std::string* error);
 		friend bool TestOwnerHostChange(unsigned mode, std::string* error);
 		friend bool TestPlacementSessionSequence(unsigned fight, std::string* error);
-		friend bool TestBriefHostJitterKeepsItsHumanSeat(std::string* error);
+		friend bool TestCombatJitterBridgesOnlyTheLateSeat(std::string* error);
 		friend bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error);
 		friend bool TestAReturnGapDoesNotStartTheHostsClock(std::string* error);
 		friend bool TestAHoldLandsAtTheFirstFrameItsSeatOwes(std::string* error);
@@ -1482,10 +1485,10 @@ namespace RTE {
 		friend bool TestHeldHostMarkerPrecedesItsHold(std::string* error);
 		friend bool TestHeldHostReturnsPastThePreparedHorizon(std::string* error);
 		friend bool TestAPreviouslyHeldHostTakesItsSeatBack(std::string* error);
-		friend bool TestHostOwnHoldIsRejectedOnEveryWirePhase(std::string* error);
+		friend bool TestHostSeatBridgeIsAuthenticatedOnEveryWirePhase(std::string* error);
 		friend bool TestAReturnerDelayCoversItsTrail(std::string* error);
 		friend bool TestADecisionRepeatedPastItsFrameIsNotANewOne(std::string* error);
-		friend bool TestAHostKeepsItsSeatAfterItsRunwayExpires(std::string* error);
+		friend bool TestAHostBridgesAfterItsRunwayExpires(std::string* error);
 		friend bool TestArrivalLeadIncludesTheFastestSurvivor(std::string* error);
 		friend bool TestHostStatusKeepsTheReceiversLinkMeasurement(std::string* error);
 		friend bool TestEachSurvivorsRunwayUsesItsOwnLink(std::string* error);
@@ -1498,7 +1501,7 @@ namespace RTE {
 		friend bool TestAHeldSeatsSilenceCarriesItsReturn(std::string* error);
 		friend bool TestReturnFramesBypassReliableLoss(std::string* error);
 		friend bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
-		friend bool TestAHostKeepsItsSeatBeforeCapture(std::string* error);
+		friend bool TestAHostStallBeforeCaptureUsesTheBound(std::string* error);
 		friend bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error);
 		friend bool TestAHeldClientsHashIsNotTheRounds(std::string* error);
 		friend bool TestAReplayTakesTheRecordedSeatPolicy(std::string* error);
@@ -1510,7 +1513,7 @@ namespace RTE {
 		friend bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 		friend bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
 		friend bool TestAQueuedReturnLeavesALaterHold(std::string* error);
-		friend bool TestAHostKeepsItsSeatAfterItsOwnReturn(std::string* error);
+		friend bool TestAHostBridgesAgainAfterItsOwnReturn(std::string* error);
 		friend bool TestARepeatedStartHoldsNoFramesBehindIt(std::string* error);
 		friend bool TestALaggingSimulationReadsTheFrameItTook(std::string* error);
 		friend bool TestAHeldHostsFrameCrossesAMigration(std::string* error);
@@ -1821,9 +1824,9 @@ namespace RTE {
 		void FlushTimingOutgoing();
 		void CommitTiming(uint64_t revision);
 		void ApplyTiming(const NetLockstepTiming& timing, bool recorded = false);
-		bool HasRecordedHostHold() const;
-		bool IsRecordedHostReturn(const NetLockstepTiming& timing) const;
-		void ReclaimRecordedHostSeat(uint64_t nowMs);
+		bool HasOrderedHostHold() const;
+		bool IsOrderedHostReturn(const NetLockstepTiming& timing) const;
+		void ReclaimHostSeat(uint64_t nowMs);
 		void PublishCapturePark(uint64_t startFrame);
 		void ApplyCapturePark(const NetLockstepTiming& timing);
 		uint64_t CaptureParkCapTicks() const;
@@ -1907,6 +1910,7 @@ namespace RTE {
 		std::optional<NetLockstepStop> m_OwnEndDuringMigration; //!< This peer's own end while its host was being replaced; the new host hears it.
 		std::map<uint8_t, NetGameSeatHold> m_HoldTransactions;
 		std::map<uint8_t, HoldFact> m_HoldFacts; //!< Host: what it measured at each seat's last hold.
+		std::map<uint8_t, uint64_t> m_SeatBridgeSinceMs;
 		std::map<uint8_t, NetGameSeatReclaim> m_ReclaimTransactions;
 		std::optional<uint64_t> m_ConsumerWaitingFrame;
 		std::optional<uint64_t> m_FirstMissingFrame;

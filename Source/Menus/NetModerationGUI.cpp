@@ -275,12 +275,14 @@ namespace {
 
 	/// This player's own seat on its way back: the roster holds it, or this peer replays its hold while it catches up.
 	bool OwnSeatReturning() {
-		return OwnRosterSeatHeld() || (ScenarioRunner::IsLockstepOwnSeatHeld() && (ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing()));
+		return ScenarioRunner::IsLockstepHoldNoticeVisible() && (OwnRosterSeatHeld() ||
+		    (ScenarioRunner::IsLockstepOwnSeatHeld() && (ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing())));
 	}
 
 	bool ToastStillApplies(const ScenarioRunner::NetUiToastRecord& toast) {
 		if (toast.kind == "slow_machine") return ScenarioRunner::IsLockstepLocalMachineSlow();
 		if (toast.kind != "seat_held") return true;
+		if (!ScenarioRunner::IsLockstepHoldNoticeVisible(toast.senderPeerId)) return false;
 		if (toast.text.ends_with("joining")) {
 			return ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing() || ScenarioRunner::IsLockstepOwnSeatHeld() || OwnRosterSeatHeld();
 		}

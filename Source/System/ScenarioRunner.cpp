@@ -934,6 +934,7 @@ namespace RTE {
 
 	void ScenarioRunner::PushNetUiToast(const std::string& kind, const std::string& text, uint8_t senderPeerId) {
 		NetLockstepPlaneGuard plane;
+		if (kind == "seat_held" && !IsLockstepHoldNoticeVisible(senderPeerId)) return;
 		// Selftests drive the service before the managers are built, so there is no sim clock to stamp with.
 		uint64_t tick = 0;
 		if (s_LockstepCoordinator) {
@@ -1014,8 +1015,16 @@ namespace RTE {
 		// A watcher has no seat to be held in until its host promotes it into one, and replays under another peer's id until it lands there.
 		if (WorldCatchUpActive() && s_WorldCatchUpWatcher) {
 			if (s_WorldCatchUpActivationTick != 0) visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - joining", 0});
-		} else if (WorldCatchUpActive() || IsLockstepOwnSeatHeld()) {
+		} else if ((WorldCatchUpActive() || IsLockstepOwnSeatHeld()) && IsLockstepHoldNoticeVisible(localPeer)) {
 			visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - rejoining", localPeer});
+		}
+		{
+			NetLockstepPlaneGuard plane;
+			if (s_LockstepCoordinator) for (const auto& [peer, since]: s_LockstepCoordinator->SeatBridgeTimes()) {
+				if (peer == localPeer || !s_LockstepCoordinator->IsSeatHoldVisible(peer, nowMs) ||
+				    std::any_of(visible.begin(), visible.end(), [peer](const auto& toast) { return toast.kind == "seat_held" && toast.senderPeerId == peer; })) continue;
+				visible.push_back({s_LockstepAppliedFrame, "seat_held", "Held - AI in control", peer});
+			}
 		}
 		if (WorldCatchUpActive()) {
 			// The replay's own rate, over the last second or so; the frame it needs is the announced activation once there is one,
@@ -1809,6 +1818,13 @@ namespace RTE {
 		// Every peer fences the same actors at the same frame: a count that disagrees is the desync.
 		std::cout << "[net-lockstep] " << (s_LockstepCoordinator->HasSeatReclaimGap(ready.frame) ? "reclaim" : "hold") << " gap frame=" << ready.frame << " inputs=" << seen << " fenced=" << fenced << std::endl;
 		if (ready.localFrames.size() + ready.remoteFrames.size() != before) s_LockstepCoordinator->RememberAppliedFrameInputs(ready);
+	}
+
+	bool ScenarioRunner::IsLockstepHoldNoticeVisible(uint8_t peerId) {
+		NetLockstepPlaneGuard plane;
+		if (!s_LockstepCoordinator) return true;
+		if (peerId == 0) peerId = s_LockstepCoordinator->GetConfig().localPeerId;
+		return !s_LockstepCoordinator->SeatBridgeTimes().contains(peerId) || s_LockstepCoordinator->IsSeatHoldVisible(peerId);
 	}
 
 	void ScenarioRunner::ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame) {
