@@ -60,6 +60,7 @@
 #include "GUIEvent.h"
 #include "PieSlice.h"
 #include "LuaMan.h"
+#include "lua.hpp"
 #include "ActivityMan.h"
 #include "TimerMan.h"
 #include "OwnedMovableObjects.h"
