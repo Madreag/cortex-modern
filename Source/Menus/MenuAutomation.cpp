@@ -1273,14 +1273,17 @@ namespace RTE::MenuAutomation {
 		return age >= 0 && age <= s_FrameSpanMs;
 	}
 
-	std::vector<std::pair<std::string, GUIControlManager*>> WatchedManagers(GUIControlManager* menu) {
+	std::vector<std::pair<std::string, GUIControlManager*>> WatchedManagersFor(GUIControlManager* menu, GUIControlManager* network, GUIControlManager* overlay) {
 		std::vector<std::pair<std::string, GUIControlManager*>> managers;
 		if (menu) managers.emplace_back("menu", menu);
-		if (auto* panel = g_MenuMan.GetNetworkPanel()) {
-			if (panel->AutomationManager() && panel->AutomationManager() != menu) managers.emplace_back("network", panel->AutomationManager());
-			if (panel->OverlayManager()) managers.emplace_back("overlay", panel->OverlayManager());
-		}
+		if (network && network != menu) managers.emplace_back("network", network);
+		if (overlay && overlay != menu && overlay != network) managers.emplace_back("overlay", overlay);
 		return managers;
+	}
+
+	std::vector<std::pair<std::string, GUIControlManager*>> WatchedManagers(GUIControlManager* menu) {
+		const auto* panel = g_MenuMan.GetNetworkPanel();
+		return WatchedManagersFor(menu, panel ? panel->AutomationManager() : nullptr, panel ? panel->OverlayManager() : nullptr);
 	}
 
 	GUIControl* WatchedControl(GUIControlManager* menu, const std::string& name) {
@@ -2668,6 +2671,14 @@ namespace RTE::MenuAutomation {
 			passed = passed && value;
 			std::cout << "[menu-automation-selftest] " << (value ? "PASS" : "FAIL") << " " << label << " " << detail << std::endl;
 		};
+		{
+			// Chat uses the overlay's manager as its active menu; it is still one surface.
+			GUIControlManager menu, network, overlay;
+			const auto chat = WatchedManagersFor(&overlay, &network, &overlay);
+			check("chat_overlay_is_watched_once", chat.size() == 2 && chat[0].second == &overlay && chat[1].second == &network, "surfaces=" + std::to_string(chat.size()));
+			const auto distinct = WatchedManagersFor(&menu, &network, &overlay);
+			check("distinct_surfaces_are_all_watched", distinct.size() == 3, "surfaces=" + std::to_string(distinct.size()));
+		}
 		{
 			std::istringstream missing("");
 			const int rows = ParseToastBandExpectedRows(missing);
