@@ -519,10 +519,13 @@ namespace RTE::CheckpointLua {
 
 		/// Reads the stack-top userdata's live class marker, including its Lua fallback.
 		const luabind::detail::object_rep* BindingObject(const TValue& subject) { return ClassObject(subject); }
+		const char* PlainRefusal() const { return m_PlainRefusal; }
 
 		bool TryCapturePlain() {
 			CheckThread();
-			if (!CheckpointWriter::BatchEnabled() || lua_gethook(State()) || m_Captured) return false;
+			if (!CheckpointWriter::BatchEnabled()) return false;
+			if (lua_gethook(State())) { m_PlainRefusal = "debug hook"; return false; }
+			if (m_Captured) return false;
 			const auto started = std::chrono::steady_clock::now();
 			const auto key = [&](const char* name) {
 				lua_pushstring(State(), name);
@@ -541,24 +544,28 @@ namespace RTE::CheckpointLua {
 				if (!meta) { TValue value; setgcVraw(&value, obj2gco(data), LJ_TUDATA); values.push_back(value); return; }
 				const auto* marker = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(classKey));
 				const bool descriptor = marker && !tvisnil(marker) && !tvisfalse(marker);
-				if (descriptor && data->len != sizeof(luabind::detail::class_rep)) { plain = false; return; }
+				if (descriptor && data->len != sizeof(luabind::detail::class_rep)) { m_PlainRefusal = "descriptor layout"; plain = false; return; }
 				TValue value; setgcVraw(&value, obj2gco(data), LJ_TUDATA);
 				if (!descriptor) {
 					const auto* objectMarker = lj_tab_getstr(const_cast<GCtab*>(meta), m_ClassMarker);
 					if (!objectMarker || tvisnil(objectMarker) || tvisfalse(objectMarker)) {
 						const auto* hook = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(iteratorKey));
-						if (tabref(meta->metatable) || (hook && tvisfunc(hook))) { plain = false; return; }
+						if (tabref(meta->metatable) || (hook && tvisfunc(hook))) { m_PlainRefusal = "userdata hook"; plain = false; return; }
 						values.push_back(value); return;
 					}
-					if (data->len < sizeof(luabind::detail::object_rep) || tabref(meta->metatable)) { plain = false; return; }
+					if (data->len < sizeof(luabind::detail::object_rep) || tabref(meta->metatable)) { m_PlainRefusal = "binding metatable"; plain = false; return; }
 					const auto* object = static_cast<const luabind::detail::object_rep*>(uddata(data));
 					const auto* type = object->crep();
-					if (!object->ptr() || !type || type->get_class_type() != luabind::detail::class_rep::cpp_class) { plain = false; return; }
+					if (!object->ptr() || !type || type->get_class_type() != luabind::detail::class_rep::cpp_class) { m_PlainRefusal = "binding lifetime or Lua class"; plain = false; return; }
 					const bool scalar = (object->flags() & luabind::detail::object_rep::owner) &&
 					                    (type->type() == LUABIND_TYPEID(Vector) || type->type() == LUABIND_TYPEID(Timer));
 					if (scalar) {
 						Push(value); plain = PlainScalarProperties(value, object); lua_pop(State(), 1);
-					} else plain = PlainSingleton(object) || PlainBorrowed(value, object) || PlainBoundaryReference(value, object);
+						if (!plain) m_PlainRefusal = "scalar override";
+					} else {
+						plain = PlainSingleton(object) || PlainBorrowed(value, object) || PlainBoundaryReference(value, object);
+						if (!plain) m_PlainRefusal = "native value needs live descriptors";
+					}
 				}
 				if (plain) values.push_back(value);
 			});
@@ -573,7 +580,7 @@ namespace RTE::CheckpointLua {
 				const auto* meta = tabref(udataV(&function->c.upvalue[0])->metatable);
 				if (!meta) continue;
 				const auto* hook = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(iteratorKey));
-				if (tabref(meta->metatable) || (hook && tvisfunc(hook))) plain = false;
+				if (tabref(meta->metatable) || (hook && tvisfunc(hook))) { m_PlainRefusal = "iterator hook"; plain = false; }
 			}
 			if (!plain) return false;
 			const auto answers = std::chrono::steady_clock::now();
@@ -825,8 +832,8 @@ namespace RTE::CheckpointLua {
 		static bool PlainSingleton(const luabind::detail::object_rep* object) {
 			if (!object || !object->ptr() || !object->crep() || (object->flags() & luabind::detail::object_rep::owner) ||
 			    object->crep()->get_class_type() != luabind::detail::class_rep::cpp_class) return false;
-			static constexpr std::array names{"ActivityMan", "AudioMan", "CameraMan", "ConsoleMan", "FrameMan", "LuaMan", "MetaMan", "MovableMan",
-			                                 "MusicMan", "PerformanceMan", "PostProcessMan", "PresetMan", "PrimitiveMan", "SceneMan", "SettingsMan", "TimerMan", "UInputMan"};
+			static constexpr std::array names{"ActivityManager", "AudioManager", "CameraManager", "ConsoleManager", "FrameManager", "LuaManager", "MetaManager", "MovableManager",
+			                                 "MusicManager", "PerformanceManager", "PostProcessManager", "PresetManager", "PrimitiveManager", "SceneManager", "SettingsManager", "MetricsCollectorManager", "TimerManager", "UInputManager"};
 			return std::find(names.begin(), names.end(), std::string_view(object->crep()->name())) != names.end();
 		}
 		struct References {
@@ -893,6 +900,7 @@ namespace RTE::CheckpointLua {
 		CaptureAddressSet m_Pinned{m_TransientResource};
 		std::pmr::vector<TValue> m_Queue{m_TransientResource};
 		bool m_Captured = false;
+		const char* m_PlainRefusal = "none";
 		struct ScalarKeys {
 			GCstr* index = nullptr;
 			std::array<GCstr*, 4> properties{};

@@ -31,6 +31,7 @@ namespace RTE {
 		std::vector<std::shared_ptr<GraphDirt>> observations;
 		int states = 0;
 		int plainStates = 0;
+		const char* plainRefusal = "none";
 		int64_t nativeUs = 0;
 		int64_t heapUs = 0;
 		int64_t copyUs = 0;

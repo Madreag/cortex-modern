@@ -7039,6 +7039,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 			image->scratch = scratch.values;
 			if (FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats) {
 				stats->plainStates += plainNatives;
+				stats->plainRefusal = natives.PlainRefusal();
 				if (phaseCosts) {
 					stats->callbacksCpu = callbacksCpuDone - callbacksCpu;
 					stats->nativeCpu = nativeCpuDone - nativeCpu;
@@ -10619,6 +10620,15 @@ end
 	}
 
 	if (m_CheckpointHeap) {
+		const auto showMismatch = [](std::string_view name, const std::string& expected, const std::string& actual) {
+			if (expected == actual) return;
+			const auto mismatch = std::mismatch(expected.begin(), expected.end(), actual.begin(), actual.end());
+			const size_t at = mismatch.first - expected.begin();
+			std::cout << "[script-graph-selftest] mismatch=" << name << " offset=" << at << " lengths=" << expected.size() << "/" << actual.size()
+			    << " expected=" << expected.substr(at, 160) << " actual=" << actual.substr(at, 160) << std::endl;
+			std::ofstream(std::string(name) + "-live.txt", std::ios::binary) << expected;
+			std::ofstream(std::string(name) + "-frozen.txt", std::ios::binary) << actual;
+		};
 		{
 			for (bool custom: {false, true}) {
 				MovableMan::ConstructionRegistryScope world;
@@ -10654,7 +10664,8 @@ end
 				const std::string actual = std::async(std::launch::async, [captured] { return captured.Text(); }).get();
 				exact = problems.empty() && stats.plainStates == (custom ? 0 : 1) && actual == reference && exact;
 				std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " borrowed_native_boundary_keeps_aliases_without_bulk_helpers custom=" << custom
-				    << " plain=" << stats.plainStates << " problems=" << problems.size() << " bytes_exact=" << (actual == reference) << std::endl;
+				    << " plain=" << stats.plainStates << " refusal=" << stats.plainRefusal << " problems=" << problems.size() << " bytes_exact=" << (actual == reference) << std::endl;
+				showMismatch("borrowed-native", reference, actual);
 				checkpointValues = exact && checkpointValues;
 			}
 		}
@@ -10679,7 +10690,8 @@ end
 			const std::string actual = captured.Text();
 			exact = problems.empty() && stats.plainStates == 1 && actual == reference && exact;
 			std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " plain_native_seeds_match_the_live_graph plain=" << stats.plainStates
-			    << " problems=" << problems.size() << " bytes_exact=" << (actual == reference) << std::endl;
+			    << " refusal=" << stats.plainRefusal << " problems=" << problems.size() << " bytes_exact=" << (actual == reference) << std::endl;
+			showMismatch("plain-native", reference, actual);
 			checkpointValues = exact && checkpointValues;
 			plain.RunScriptString("local meta = debug.getmetatable(_CheckpointPlainValues[1]); local previous = meta.__index; meta.__index = function(self, key) if key == 'X' then return previous(self, key) + 1 end return previous(self, key) end");
 			problems.clear(); stats = {}; reference.clear(); captured = {};
@@ -10696,7 +10708,8 @@ end
 			const std::string customized = captured.Text();
 			fallback = problems.empty() && stats.plainStates == 0 && customized == reference && fallback;
 			std::cout << "[script-graph-selftest] " << (fallback ? "PASS" : "FAIL") << " custom_native_getters_keep_the_filtered_live_capture plain=" << stats.plainStates
-			    << " problems=" << problems.size() << " bytes_exact=" << (customized == reference) << std::endl;
+			    << " refusal=" << stats.plainRefusal << " problems=" << problems.size() << " bytes_exact=" << (customized == reference) << std::endl;
+			showMismatch("custom-native", reference, customized);
 			checkpointValues = fallback && checkpointValues;
 		}
 		{
