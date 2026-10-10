@@ -48,6 +48,14 @@ def native_case(repo, root, row, size, exe=None):
     passes = [line for line in lines if f"PASS {row} " in line]
     close = re.search(r"R7 close_started_unix_ms=(\d+)", log)
     close_ms = datetime.fromisoformat(record["ended_utc"]).timestamp() * 1000 - int(close[1]) if close else None
+    if row == "R7":
+        timely = close_ms is not None and 0 <= close_ms < 1500
+        elapsed = f"{close_ms:.3f}" if close_ms is not None else "missing"
+        verdict = f"[fight15-driver] {'PASS' if timely else 'FAIL'} R7 process_exits_within_1500_ms actual_ms={elapsed}"
+        (passes if timely else fails).append(verdict)
+        lines.append(verdict)
+    phases = [{"phase": name, "unix_ms": int(unix_ms)} for name, unix_ms in
+              re.findall(r"R7 shutdown (\w+) ticks_ms=\d+ unix_ms=(\d+)", log)]
     pictures = []
     for path in sorted((Path(run.cwd) / "ScreenShots").glob("fight15_" + row + "_*.png")):
         with Image.open(path) as shot:
@@ -55,7 +63,7 @@ def native_case(repo, root, row, size, exe=None):
                              "ink_pixels": sum(pixel != (0, 0, 0) for pixel in shot.convert("RGB").get_flattened_data())})
     return {"exit_code": record.get("exit_code"), "timed_out": record.get("timed_out"),
             "evidence_complete": record.get("evidence_complete"), "passes": passes,
-            "fails": fails, "lines": lines, "size": size, "close_to_exit_ms": close_ms,
+            "fails": fails, "lines": lines, "size": size, "close_to_exit_ms": close_ms, "shutdown_phases": phases,
             "pictures": pictures, "runtime": str(run.cwd), "exe_sha256": file_sha256(run.argv[0])}
 
 
@@ -82,8 +90,6 @@ def main():
                 after = native_case(options.repo, options.out / ("tip-" + name), row, size)
                 red = before["exit_code"] == 1 and bool(before["fails"]) and not before["timed_out"] and before["evidence_complete"]
                 green = after["exit_code"] == 0 and bool(after["passes"]) and not after["fails"] and not after["timed_out"] and after["evidence_complete"]
-                if row == "R7":
-                    green &= after["close_to_exit_ms"] is not None and 0 <= after["close_to_exit_ms"] < 1500
                 if row in ("R4", "R5"):
                     expected_size = list(map(int, size.split("x")))
                     green &= bool(after["pictures"]) and all(shot["size"] == expected_size and shot["ink_pixels"] > 1000 for shot in after["pictures"])

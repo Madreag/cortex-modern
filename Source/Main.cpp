@@ -1902,7 +1902,9 @@ void InitializeManagers() {
 static bool s_MatchDestroyedForQuit = false;
 static bool s_Fight15CloseSelfTest = false;
 static void ObserveFight15Close(const char* phase) {
-	if (s_Fight15CloseSelfTest) System::PrintDiagnosticLine("[fight15-selftest] R7 shutdown " + std::string(phase) + " ticks_ms=" + std::to_string(SDL_GetTicks()));
+	if (!s_Fight15CloseSelfTest) return;
+	const auto unixMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+	System::PrintDiagnosticLine("[fight15-selftest] R7 shutdown " + std::string(phase) + " ticks_ms=" + std::to_string(SDL_GetTicks()) + " unix_ms=" + std::to_string(unixMs));
 }
 
 void DestroyManagers() {
@@ -1912,21 +1914,29 @@ void DestroyManagers() {
 	g_MetaMan.Destroy();
 	g_PerformanceMan.Destroy();
 	g_MovableMan.Destroy();
+	ObserveFight15Close("movables_destroyed");
 	g_SceneMan.Destroy();
+	ObserveFight15Close("scene_destroyed");
 	g_ActivityMan.Destroy();
+	ObserveFight15Close("activity_destroyed");
 	g_GUISound.Destroy();
 	g_AudioMan.Destroy();
+	ObserveFight15Close("audio_destroyed");
 	g_MusicMan.Destroy();
 	g_PresetMan.Destroy();
+	ObserveFight15Close("presets_destroyed");
 	g_UInputMan.Destroy();
+	ObserveFight15Close("devices_destroyed");
 	g_PostProcessMan.Destroy();
 	g_FrameMan.Destroy();
 	g_TimerMan.Destroy();
 	g_LuaMan.Destroy();
 	ContentFile::FreeAllLoaded();
+	ObserveFight15Close("content_freed");
 	g_ConsoleMan.Destroy();
 	g_GLResourceMan.Destroy();
 	g_WindowMan.Destroy();
+	ObserveFight15Close("window_manager_destroyed");
 
 #ifdef DEBUG_BUILD
 	Entity::ClassInfo::DumpPoolMemoryInfo(Writer("MemCleanupInfo.txt"));
