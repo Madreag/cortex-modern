@@ -579,7 +579,8 @@ namespace RTE {
 	std::array<uint8_t, 32> HashRoster(const NetSeatRoster& roster) {
 		std::vector<std::pair<std::string, std::string>> fields = {
 		    {"match", std::to_string(roster.matchId)}, {"round", std::to_string(roster.roundNo)}, {"revision", std::to_string(roster.revision)},
-		    {"stage", std::to_string(static_cast<int>(roster.stage))}, {"host", std::to_string(roster.hostSeat)}, {"migration", std::to_string(roster.migrationGen)}};
+		    {"stage", std::to_string(static_cast<int>(roster.stage))}, {"host", std::to_string(roster.hostSeat)}, {"migration", std::to_string(roster.migrationGen)},
+		    {"resume_stage", std::to_string(static_cast<int>(roster.resumeStage))}, {"stage_frame", std::to_string(roster.stageFrame)}};
 		for (const NetRosterSeat& seat: roster.seats) {
 			fields.emplace_back("seat." + std::to_string(seat.seatId), std::to_string(seat.owner) + ":" + std::to_string(seat.incarnation) + ":" + NetSeatPhaseName(seat.phase) + ":" +
 			                                                                   std::to_string(static_cast<int>(seat.holdCause)) + ":" + std::to_string(static_cast<int>(seat.link)) + ":" +
@@ -963,9 +964,16 @@ namespace RTE {
 			NetSeatRoster moved = host;
 			moved.seats[1].phase = NetSeatPhase::RejoinImage;
 			ok = ok && !replica.Agrees(HashRoster(moved), &why) && why.find("differs from the host's") != std::string::npos;
-			// The first seat's phase byte, past the header (22 bytes) and the seat's id, owner and incarnation.
+			// The stage boundary belongs to the whole revision, so changing it must break agreement too.
+			NetSeatRoster anotherBoundary = host;
+			++anotherBoundary.stageFrame;
+			ok = ok && !replica.Agrees(HashRoster(anotherBoundary), &why);
+			anotherBoundary = host;
+			anotherBoundary.resumeStage = NetRosterStage::Placement;
+			ok = ok && !replica.Agrees(HashRoster(anotherBoundary), &why);
+			// The phase follows the 31-byte header, id, owner and incarnation.
 			std::vector<uint8_t> bad = wire;
-			bad[33] = 0xFF;
+			bad[42] = 0xFF;
 			NetSeatRoster rejected;
 			ok = ok && !DecodeRoster(bad, rejected, &error);
 			check("seq the roster replicates whole, in order, refused by name when it differs", ok, "wire_bytes=" + std::to_string(wire.size()) + " error='" + error + "' why='" + why + "'");
