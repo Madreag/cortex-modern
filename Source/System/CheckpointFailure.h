@@ -10,17 +10,20 @@ namespace RTE {
 		enum class Point { None, NativePages, NativeRoots, NativeObjects, LuaPages, LuaSubmission, LuaAllocation, ArchiveSubmission, ArchiveValidation, ParallelSubmission };
 		class Scope {
 		public:
-			explicit Scope(Point point, size_t after = 0) : m_Point(s_Point), m_After(s_After) { s_Point = point; s_After = after; }
-			~Scope() { s_Point = m_Point; s_After = m_After; }
+			explicit Scope(Point point, size_t after = 0) : m_Point(s_Point), m_After(s_After), m_Triggered(s_Triggered) { s_Point = point; s_After = after; s_Triggered = false; }
+			~Scope() { s_Point = m_Point; s_After = m_After; s_Triggered = m_Triggered; }
+			bool Triggered() const noexcept { return s_Triggered; }
 			Scope(const Scope&) = delete;
 			Scope& operator=(const Scope&) = delete;
 		private:
 			Point m_Point;
 			size_t m_After;
+			bool m_Triggered;
 		};
 		static bool Fails(Point point) noexcept {
 			if (point != s_Point) return false;
 			if (s_After) { --s_After; return false; }
+			s_Triggered = true;
 			return true;
 		}
 		static Point Current() noexcept { return s_Point; }
@@ -28,5 +31,6 @@ namespace RTE {
 	private:
 		inline static thread_local Point s_Point = Point::None;
 		inline static thread_local size_t s_After = 0;
+		inline static thread_local bool s_Triggered = false;
 	};
 }

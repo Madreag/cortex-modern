@@ -1715,9 +1715,31 @@ bool ActivityMan::RunCheckpointCaptureSelfTest(uint64_t tick) {
 		const auto imageBytes = read(root / "image.ccsave");
 		const auto syncBytes = read(root / "sync.ccsave");
 		const bool same = imageBytes == syncBytes && !imageBytes.empty();
+		bool failures = true;
+		for (const auto point: {CheckpointFailure::Point::NativeObjects, CheckpointFailure::Point::NativeRoots, CheckpointFailure::Point::ArchiveSubmission}) {
+			bool refused = false;
+			const auto beforeUID = MovableObject::GetUniqueIDCounter();
+			const auto beforeSim = g_SimRNG.SerializeCheckpoint(), beforeRender = g_RenderRNG.SerializeCheckpoint();
+			const auto beforeSound = g_AudioMan.GetCheckpointSoundContainerCursor();
+			CheckpointFailure::Scope failure(point);
+			try {
+				std::shared_future<bool> failed;
+				size_t failedBytes = 0;
+				QueueFrozenAutosave(fileName, (root / "failed.ccsave").string(), "", tick, failed, failedBytes, SaveCompression::Fast, nullptr, {});
+			} catch (const std::bad_alloc&) { refused = true; }
+			failures = refused && failure.Triggered() && MovableObject::GetUniqueIDCounter() == beforeUID && g_SimRNG.SerializeCheckpoint() == beforeSim &&
+			    g_RenderRNG.SerializeCheckpoint() == beforeRender && g_AudioMan.GetCheckpointSoundContainerCursor() == beforeSound &&
+			    read(root / "image.ccsave") == imageBytes && !std::filesystem::exists(root / "failed.ccsave") && failures;
+		}
+		std::shared_future<bool> frozenTask;
+		size_t frozenBytes = 0;
+		const bool frozenQueued = QueueFrozenAutosave(fileName, (root / "frozen.ccsave").string(), "", tick, frozenTask, frozenBytes, SaveCompression::Fast, nullptr, {});
+		const bool frozenExact = frozenQueued && frozenTask.get() && read(root / "frozen.ccsave") == syncBytes;
+		System::PrintDiagnosticLine(std::format("[checkpoint-capture-selftest] {} owned_boundary_archive_exact_after_injected_failures tick={} failures={} exact={}\n",
+		    failures && frozenExact ? "PASS" : "FAIL", tick, failures, frozenExact));
 		System::PrintDiagnosticLine(std::format("[checkpoint-capture-selftest] {} tick={} image_bytes={} sync_bytes={} freeze_us={}\n",
 		    same ? "PASS" : "FAIL", tick, imageBytes.size(), syncBytes.size(), captured->freezeUs));
-		return same;
+		return same && failures && frozenExact;
 	} catch (const std::exception& error) {
 		System::PrintDiagnosticLine(std::format("[checkpoint-capture-selftest] FAIL tick={} reason={}\n", tick, error.what()));
 		return false;
