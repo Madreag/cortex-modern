@@ -17,6 +17,8 @@
 #include <array>
 #include <memory>
 #include <functional>
+#include <mutex>
+#include <set>
 namespace RTE {
 
 #define OBJARROWFRAMECOUNT 4
@@ -846,7 +848,8 @@ namespace RTE {
 		std::array<NetGamePlaceBrain, Players::MaxPlayerCount> m_LockstepSeatBrains{}; //!< Per-seat committed placement; player < 0 means none yet.
 		long m_LockstepPlacementUidBase = 0; //!< The unique-id counter as the editing phase opened, identical on every peer.
 		bool m_LockstepPlacementSeeded = false; //!< The one-time seed pass has run for this editing phase.
-		std::array<long, Players::MaxPlayerCount> m_MatchLostBrainIDs{};
+		std::mutex m_MatchBrainLossMutex;
+		std::set<long> m_MatchLostBrainIDs;
 		std::vector<std::string> m_MatchBrainLosses;
 		std::string m_MatchEndReason;
 

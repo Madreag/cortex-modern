@@ -13,7 +13,6 @@
 #include "ThreadMan.h"
 #include "MetaMan.h"
 #include "ConsoleMan.h"
-#include "LuaMan.h"
 #include "MenuMan.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
@@ -149,7 +148,7 @@ void GameActivity::Clear() {
 		m_NetworkPlayerNames[player] = "";
 	}
 	m_LockstepPlacementSeeded = false;
-	m_MatchLostBrainIDs.fill(0);
+	m_MatchLostBrainIDs.clear();
 	m_MatchBrainLosses.clear();
 	m_MatchEndReason.clear();
 	m_LockstepPlacementUidBase = 0;
@@ -1106,17 +1105,25 @@ void GameActivity::SetPaused(bool pause) {
 
 void GameActivity::NoteMatchBrainLoss(const Actor& brain, const char* cause) {
 	if (!ScenarioRunner::IsLockstepControllerSyncActive()) return;
+	std::string owner;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (m_Brain[player] != &brain || m_MatchLostBrainIDs[player] == brain.GetUniqueID()) continue;
-		m_MatchLostBrainIDs[player] = brain.GetUniqueID();
-		std::ostringstream line;
-		line << LockstepSeatName(player) << "'s " << brain.GetPresetName() << " (team " << brain.GetTeam() + 1
-		     << ", uid " << brain.GetUniqueID() << ") " << cause << " at tick " << g_TimerMan.GetSimUpdateCount()
-		     << ", health " << brain.GetHealth() << ", wounds " << brain.GetWoundCount() << "/" << brain.GetGibWoundLimit();
-		m_MatchBrainLosses.push_back(line.str());
-		System::PrintDiagnosticLine("[net-match] brain lost: " + line.str());
-		g_ConsoleMan.PrintString("NETWORK: " + line.str());
+		if (m_Brain[player] == &brain) owner += (owner.empty() ? "" : " and ") + LockstepSeatName(player);
 	}
+	if (owner.empty()) {
+		if (!brain.IsInGroup("Brains") || !g_MovableMan.IsActor(&brain)) return;
+		owner = "Team " + std::to_string(brain.GetTeam() + 1);
+	}
+	std::ostringstream line;
+	line << owner << "'s " << brain.GetPresetName() << " (team " << brain.GetTeam() + 1
+	     << ", uid " << brain.GetUniqueID() << ") " << cause << " at tick " << g_TimerMan.GetSimUpdateCount()
+	     << ", health " << brain.GetHealth() << ", wounds " << brain.GetWoundCount() << "/" << brain.GetGibWoundLimit();
+	{
+		std::lock_guard lock(m_MatchBrainLossMutex);
+		if (!m_MatchLostBrainIDs.insert(brain.GetUniqueID()).second) return;
+		m_MatchBrainLosses.push_back(line.str());
+	}
+	System::PrintDiagnosticLine("[net-match] brain lost: " + line.str());
+	g_ConsoleMan.PrintString("NETWORK: " + line.str());
 }
 
 void GameActivity::End() {
@@ -1135,7 +1142,10 @@ void GameActivity::End() {
 		}
 		m_MatchEndReason = GetPresetName() + " ended at tick " + std::to_string(g_TimerMan.GetSimUpdateCount()) + " by " + rule;
 		if (m_WinnerTeam != Teams::NoTeam) m_MatchEndReason += "; team " + std::to_string(m_WinnerTeam + 1) + " wins";
-		for (const std::string& loss: m_MatchBrainLosses) m_MatchEndReason += "; " + loss;
+		std::vector<std::string> losses;
+		{ std::lock_guard lock(m_MatchBrainLossMutex); losses = m_MatchBrainLosses; }
+		std::sort(losses.begin(), losses.end());
+		for (const std::string& loss: losses) m_MatchEndReason += "; " + loss;
 		System::PrintDiagnosticLine("[net-match] activity end: " + m_MatchEndReason);
 		g_ConsoleMan.PrintString("NETWORK: " + m_MatchEndReason);
 	}
