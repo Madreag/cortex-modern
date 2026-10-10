@@ -72,6 +72,7 @@
 #include "GUIButton.h"
 #include "SettingsMan.h"
 #include "RenderTarget.h"
+#include <SDL3/SDL_timer.h>
 #include <chrono>
 
 #include <algorithm>
@@ -4566,7 +4567,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		}
 		g_SettingsMan.SetNetworkMatchStatusMode(SettingsMan::NetworkMatchStatusMode::Off); panel.m_Open = true;
 		check("off_stays_off_on_demand", !panel.MatchStatusWanted());
-		g_SettingsMan.SetNetworkMatchStatusMode(SettingsMan::NetworkMatchStatusMode::WhenNeeded);
+		g_SettingsMan.SetNetworkMatchStatusMode(SettingsMan::NetworkMatchStatusMode::Auto);
 		check("players_panel_requests_numbers", panel.MatchStatusWanted());
 		panel.DrawMatchStatus(snapshot); panel.m_NetStatus->SetVisible(true);
 		const std::string text = panel.m_NetStatus->GetText();
