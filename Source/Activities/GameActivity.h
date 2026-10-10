@@ -54,9 +54,11 @@ namespace RTE {
 			long delay;
 			// Times how long we've been in transit
 			Timer timer;
+			Delivery FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const;
+			void AssignCheckpointNative(const Delivery& source, CheckpointNativeSnapshot& snapshot);
+			friend Delivery FreezeCheckpointValue(const Delivery& source, CheckpointNativeSnapshot& snapshot) { return source.FreezeCheckpointNative(snapshot); }
+			friend void AssignCheckpointValue(Delivery& value, const Delivery& source, CheckpointNativeSnapshot& snapshot) { value.AssignCheckpointNative(source, snapshot); }
 		};
-		friend Delivery FreezeCheckpointValue(const Delivery& source, CheckpointNativeSnapshot& snapshot);
-		friend void AssignCheckpointValue(Delivery& value, const Delivery& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Public member variable, method and friend function declarations
 	public:
