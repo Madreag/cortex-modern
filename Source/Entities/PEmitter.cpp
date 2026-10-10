@@ -20,7 +20,7 @@ ConcreteClassInfo(PEmitter, MOSParticle, 100);
 
 PEmitter::PEmitter(const PEmitter& source, CheckpointNativeSnapshot& snapshot) :
 	MOSParticle(source, snapshot),
-	m_EmissionList(snapshot.Freeze(source.m_EmissionList)),
+	m_EmissionList(snapshot.Freeze(source.m_EmissionList, &m_EmissionList)),
 	m_EmissionSound(snapshot.Freeze(source.m_EmissionSound)),
 	m_BurstSound(snapshot.Freeze(source.m_BurstSound)),
 	m_EndSound(snapshot.Freeze(source.m_EndSound)),
@@ -28,7 +28,7 @@ PEmitter::PEmitter(const PEmitter& source, CheckpointNativeSnapshot& snapshot) :
 	m_WasEmitting(snapshot.Freeze(source.m_WasEmitting)),
 	m_PersistedBurstTimerAnchor(snapshot.Freeze(source.m_PersistedBurstTimerAnchor)),
 	m_PersistedLastEmitTimerAnchor(snapshot.Freeze(source.m_PersistedLastEmitTimerAnchor)),
-	m_PersistedEmissionAccumulators(snapshot.Freeze(source.m_PersistedEmissionAccumulators)),
+	m_PersistedEmissionAccumulators(snapshot.Freeze(source.m_PersistedEmissionAccumulators, &m_PersistedEmissionAccumulators)),
 	m_PersistedEmissionTimers(snapshot.Freeze(source.m_PersistedEmissionTimers)),
 	m_EmitCount(snapshot.Freeze(source.m_EmitCount)),
 	m_EmitCountLimit(snapshot.Freeze(source.m_EmitCountLimit)),
@@ -51,7 +51,7 @@ PEmitter::PEmitter(const PEmitter& source, CheckpointNativeSnapshot& snapshot) :
 	m_FlashOnlyOnBurst(snapshot.Freeze(source.m_FlashOnlyOnBurst)),
 	m_SustainBurstSound(snapshot.Freeze(source.m_SustainBurstSound)),
 	m_BurstSoundFollowsEmitter(snapshot.Freeze(source.m_BurstSoundFollowsEmitter)),
-	m_PersistedPEmitterRuntime(snapshot.Freeze(source.m_PersistedPEmitterRuntime)),
+	m_PersistedPEmitterRuntime(snapshot.Freeze(source.m_PersistedPEmitterRuntime, &m_PersistedPEmitterRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 }
 

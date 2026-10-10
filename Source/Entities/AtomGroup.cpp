@@ -43,7 +43,7 @@ AtomGroup::AtomGroup(const AtomGroup& source, CheckpointNativeSnapshot& snapshot
 	m_JointOffset(snapshot.Freeze(source.m_JointOffset)),
 	m_LimbPos(snapshot.Freeze(source.m_LimbPos)),
 	m_MomentOfInertia(snapshot.Freeze(source.m_MomentOfInertia)),
-	m_IgnoreMOIDs(snapshot.Freeze(source.m_IgnoreMOIDs)),
+	m_IgnoreMOIDs(snapshot.Freeze(source.m_IgnoreMOIDs, &m_IgnoreMOIDs)),
 	m_AreaDistributionType(snapshot.Freeze(source.m_AreaDistributionType)),
 	m_AreaDistributionSurfaceAreaMultiplier(snapshot.Freeze(source.m_AreaDistributionSurfaceAreaMultiplier)),
 	m_FrozenAtoms([&source] { CheckpointCloneCost cost("atom lists"); return Atom::FreezeList(source.m_Atoms); }()),

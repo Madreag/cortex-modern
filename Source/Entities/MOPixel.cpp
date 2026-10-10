@@ -17,7 +17,7 @@ MOPixel::MOPixel(const MOPixel& source, CheckpointNativeSnapshot& snapshot) :
 	m_Atom(snapshot.Freeze(source.m_Atom)),
 	m_Color(snapshot.Freeze(source.m_Color)),
 	m_LethalRange(snapshot.Freeze(source.m_LethalRange)),
-	m_PersistedAtomCheckpoint(snapshot.Freeze(source.m_PersistedAtomCheckpoint)),
+	m_PersistedAtomCheckpoint(snapshot.Freeze(source.m_PersistedAtomCheckpoint, &m_PersistedAtomCheckpoint)),
 	m_PersistedAtomResidue(snapshot.Freeze(source.m_PersistedAtomResidue)),
 	m_HasPersistedAtomResidue(snapshot.Freeze(source.m_HasPersistedAtomResidue)),
 	m_PersistedLethalRange(snapshot.Freeze(source.m_PersistedLethalRange)),

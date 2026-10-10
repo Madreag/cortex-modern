@@ -36,7 +36,7 @@ MOSprite::MOSprite(const MOSprite& source, CheckpointNativeSnapshot& snapshot) :
 	m_AngularVel(snapshot.Freeze(source.m_AngularVel)),
 	m_PrevAngVel(snapshot.Freeze(source.m_PrevAngVel)),
 	m_SpriteFile(snapshot.Freeze(source.m_SpriteFile)),
-	m_aSprite(snapshot.Freeze(source.m_aSprite)),
+	m_aSprite(snapshot.Freeze(source.m_aSprite, &m_aSprite)),
 	m_SpriteBitmapOwners{},
 	m_IconFile(snapshot.Freeze(source.m_IconFile)),
 	m_GraphicalIcon(snapshot.Freeze(source.m_GraphicalIcon)),
@@ -62,7 +62,7 @@ MOSprite::MOSprite(const MOSprite& source, CheckpointNativeSnapshot& snapshot) :
 	m_pEntryWound(snapshot.Freeze(source.m_pEntryWound)),
 	m_pExitWound(snapshot.Freeze(source.m_pExitWound)),
 	m_SpriteModified(snapshot.Freeze(source.m_SpriteModified)),
-	m_PersistedMOSpriteRuntime(snapshot.Freeze(source.m_PersistedMOSpriteRuntime)),
+	m_PersistedMOSpriteRuntime(snapshot.Freeze(source.m_PersistedMOSpriteRuntime, &m_PersistedMOSpriteRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 
 }
