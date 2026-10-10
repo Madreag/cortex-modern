@@ -401,7 +401,7 @@ namespace RTE::CheckpointLua {
 				}
 				if (costs) costs->setupUs = MicrosecondsSince(started);
 				m_CowCopy = cow;
-				if (armLater) {
+				if (armLater && submit) {
 					*armLater = [this, cow, coordinator = m_CowCoordinator, committed = data->committed] {
 						CowCoordinator::Prepared prepared{coordinator.get(), cow};
 						if (!PageWriteFence::WatchCopies(this, {reinterpret_cast<uint8_t*>(m_Base), committed}, CowCoordinator::OnWrite, coordinator.get(), CowCoordinator::Arm, &prepared)) {
@@ -422,6 +422,9 @@ namespace RTE::CheckpointLua {
 			const size_t freshBytes = m_FreshBytes;
 			auto copy = [this, data, started, receipt, freshBytes, batchCopy, cow = m_CowCopy, coordinator = m_CowCoordinator] {
 				if (cow) {
+					// A deferred fence must own this generation before any page is copied.
+					while (cow->armed.load(std::memory_order_acquire) == 0) cow->armed.wait(0, std::memory_order_acquire);
+					if (cow->armed.load(std::memory_order_acquire) != 1) throw std::runtime_error("the Lua heap copy fence was cancelled");
 					const auto copying = std::chrono::steady_clock::now();
 					// Bounded page runs avoid repeated protection calls while live faults still save individual pages.
 					const size_t batchPages = batchCopy ? 64 : 1;
@@ -585,6 +588,7 @@ namespace RTE::CheckpointLua {
 			std::vector<uint8_t> saved;
 			std::shared_ptr<CopyFaultStats> faults;
 			std::shared_ptr<const void> buffer;
+			std::atomic<int> armed{0};
 			bool completed = false;
 		};
 		struct CowCoordinator {
@@ -606,7 +610,11 @@ namespace RTE::CheckpointLua {
 					std::erase_if(coordinator.copies, [](const auto& copy) { return copy->completed; });
 					coordinator.copies.push_back(prepared.copy);
 				} catch (...) { return false; }
-				if (PageWriteFence::ProtectCopyPages(address, bytes)) return true;
+				if (PageWriteFence::ProtectCopyPages(address, bytes)) {
+					prepared.copy->armed.store(1, std::memory_order_release);
+					prepared.copy->armed.notify_all();
+					return true;
+				}
 				coordinator.copies.pop_back();
 				return false;
 			}
@@ -661,7 +669,11 @@ namespace RTE::CheckpointLua {
 			void Cancel(const std::shared_ptr<CowCopy>& copy) {
 				Locked guard(lock);
 				std::erase(copies, copy);
-				if (copy) { copy->completed = true; copy->buffer.reset(); }
+				if (copy) {
+					copy->armed.store(2, std::memory_order_release);
+					copy->armed.notify_all();
+					copy->completed = true; copy->buffer.reset();
+				}
 				if (std::all_of(copies.begin(), copies.end(), [](const auto& generation) { return generation->completed; }) && copy)
 					PageWriteFence::OpenCopiedPage(base, copy->saved.size() * pageBytes);
 			}

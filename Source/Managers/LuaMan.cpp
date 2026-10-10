@@ -10966,6 +10966,27 @@ debug.setupvalue(next, 4, "150")
 			std::cout << "[script-graph-selftest] " << (bounded ? "PASS" : "FAIL") << " frozen_heap_retention_is_bounded_and_retryable" << std::endl;
 			checkpointValues = bounded && checkpointValues;
 		}
+		{
+			const auto owner = CheckpointLua::HeapOwner::Create();
+			lua_State* state = owner->State();
+			const uint64_t serial = luaJIT_state_serial(state);
+			std::optional<std::packaged_task<void()>> queued;
+			std::function<void()> arm;
+			const auto frozen = owner->Freeze([&](std::function<void()> copy) {
+				queued.emplace(std::move(copy));
+				return queued->get_future();
+			}, true, true, nullptr, &arm);
+			std::promise<void> entered;
+			auto copying = std::async(std::launch::async, [&] { entered.set_value(); (*queued)(); });
+			entered.get_future().get();
+			const bool waited = copying.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
+			arm();
+			luaJIT_set_state_serial(state, serial + 97);
+			copying.get();
+			const bool exact = waited && frozen.Read(&G(state)->objserial) == serial && luaJIT_state_serial(state) == serial + 97;
+			std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " copy_started_before_its_heap_fence_waits_for_that_generation" << std::endl;
+			checkpointValues = exact && checkpointValues;
+		}
 		// A frozen heap is copied off the thread that froze it. Until the copy lands, the state's lock is the
 		// gate: a script run through it waits, so its writes are never in the image. The copy threads are
 		// kept busy first, so the copy is still queued when the script asks for the state.
