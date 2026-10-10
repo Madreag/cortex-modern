@@ -6,5 +6,5 @@ function EffectsLinger:OnStart()
 end
 
 function EffectsLinger:OnTick(tick)
-	return false, false;
+	return tick >= 2, true;
 end

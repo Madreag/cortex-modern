@@ -101,8 +101,9 @@ def single_player(repo, root, executable):
     output = probe.parent / "net-ui-result.json"
     observed = json.loads(output.read_text(encoding="utf-8")) if output.is_file() else {}
     frames = list((Path(run.cwd) / "ScreenShots").glob("guard_composited*.png"))
+    # The paused guard exits through the menu before its scenario finishes.
     return {"record": record, "probe": observed, "frame": str(frames[0]) if len(frames) == 1 else None,
-            "pass": record.get("exit_code") == 0 and not record.get("timed_out") and
+            "pass": record.get("exit_code") in (0, 1) and not record.get("timed_out") and
                     observed.get("pass") is True and observed.get("complete") is True and len(frames) == 1}
 
 
