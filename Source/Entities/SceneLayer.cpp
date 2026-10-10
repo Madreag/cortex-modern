@@ -157,7 +157,7 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::Freeze(const BITMAP* sourc
 
 std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::FreezeRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll) {
 	if (source && source->w > 0 && source->h > 0) {
-		const int depth = bitmap_color_depth(source);
+		const int depth = bitmap_color_depth(const_cast<BITMAP*>(source));
 		if (depth != 8 && depth != 15 && depth != 16 && depth != 24 && depth != 32)
 			throw std::runtime_error("Unsupported scene layer bitmap snapshot");
 		const size_t rowBytes = static_cast<size_t>(source->w) * ((depth + 7) / 8);

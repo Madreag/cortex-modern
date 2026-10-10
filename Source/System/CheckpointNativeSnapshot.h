@@ -146,7 +146,7 @@ namespace RTE {
 			return static_cast<T*>(owner.first);
 		}
 		void AssignEntity(Entity& target, const Entity& source);
-		template<class T> void Prepare(const T& source, T* target) {
+		template<class T> requires (!std::is_array_v<T>) void Prepare(const T& source, T* target) {
 			if constexpr (std::is_base_of_v<Entity, T>) m_Objects.insert_or_assign(&source, target);
 			else m_Values.insert_or_assign(&source, target);
 			if constexpr (requires { T::PrepareCheckpointNative(source, target, *this); }) T::PrepareCheckpointNative(source, target, *this);
