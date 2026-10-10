@@ -9596,6 +9596,35 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = exact && checkpointValues;
 	}
 	{
+		MovableMan::ConstructionRegistryScope world;
+		CheckpointWriter::BatchScope batch(true);
+		auto actor = std::make_unique<Actor>();
+		actor->SetPresetName("reserved native storage survives its source");
+		actor->SetPos(Vector(-0.0F, 7.25F));
+		bool exact = true;
+		for (size_t after: {size_t{0}, size_t{1}}) {
+			bool refused = false;
+			try {
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects, after);
+				CheckpointNativeSnapshot failed;
+				failed.Reserve(*actor); failed.Construct(*actor);
+			} catch (const std::bad_alloc&) { refused = true; }
+			exact = refused && actor->GetPresetName() == "reserved native storage survives its source" && exact;
+		}
+		{
+			CheckpointNativeSnapshot retry;
+			retry.Reserve(*actor); retry.Construct(*actor);
+			const Actor* frozen = retry.Object(actor.get());
+			retry.SealBoundary();
+			actor->SetPresetName("changed"); actor->SetPos(Vector(31, 37)); actor.reset();
+			CheckpointNativeSnapshot::ReadScope read(&retry);
+			exact = frozen && frozen->GetPresetName() == "reserved native storage survives its source" &&
+			    std::signbit(frozen->GetPos().m_X) && frozen->GetPos().m_Y == 7.25F && exact;
+		}
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " reserved_native_arena_storage_rolls_back_and_survives_source_death" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
 		const bool exact = CheckpointLua::CaptureScope::FrozenTopologySelfTest();
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " owned_world_topology_indexes_after_source_death_for_concurrent_readers" << std::endl;
 		checkpointValues = exact && checkpointValues;

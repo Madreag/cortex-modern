@@ -42,6 +42,20 @@ namespace RTE {
 	class Vector;
 	class Gib;
 
+	/// Capture containers retain explicit arena leases instead of asking the gameplay heap for their nodes.
+	class CheckpointSnapshotMemory : public std::pmr::memory_resource {
+	private:
+		std::vector<std::shared_ptr<void>> m_Storage;
+		void* do_allocate(size_t bytes, size_t alignment) override {
+			auto storage = CheckpointBuffer::AllocateCaptureBytes(bytes, alignment);
+			void* address = storage.get();
+			m_Storage.push_back(std::move(storage));
+			return address;
+		}
+		void do_deallocate(void*, size_t, size_t) override {}
+		bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override { return this == &other; }
+	};
+
 	/// Times what a boundary freeze spends per kind of value; off unless CCCP_CHECKPOINT_PHASES=1.
 	class CheckpointCloneCost {
 	public:
@@ -117,8 +131,8 @@ namespace RTE {
 		static constexpr size_t c_ShardBits = 6;
 		struct alignas(64) Shard {
 			mutable std::mutex mutex;
-			// Entries live as long as the snapshot, so the shard takes their storage from its own growing buffer.
-			std::pmr::monotonic_buffer_resource memory{1024};
+			CheckpointSnapshotMemory storage;
+			std::pmr::monotonic_buffer_resource memory{1024, &storage};
 			std::pmr::unordered_map<Key, Value> map{&memory};
 		};
 		static size_t ShardOf(const Key& key) { return static_cast<size_t>((static_cast<uint64_t>(std::hash<Key>{}(key)) * 0x9E3779B97F4A7C15ULL) >> (64 - c_ShardBits)); }
@@ -235,17 +249,20 @@ namespace RTE {
 		void Reserve(const Entity& source) {
 			auto& type = const_cast<Entity::ClassInfo&>(source.GetClass());
 			Entity** slot = AddOwner();
-			void* memory = type.AllocateCheckpointMemory();
+			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+			void* memory = type.CheckpointInstanceBytes() ? AllocateFrozen(type.CheckpointInstanceBytes(), type.CheckpointInstanceAlignment()) : nullptr;
+			const bool frozenStorage = memory != nullptr;
+			if (!frozenStorage) memory = type.AllocateCheckpointMemory();
 			Entity* target = reinterpret_cast<Entity*>(static_cast<char*>(memory) + (reinterpret_cast<const char*>(&source) - static_cast<const char*>(dynamic_cast<const void*>(&source))));
 			try {
 				if (!m_Objects.TryEmplace(&source, target).second) {
-					type.DeallocateCheckpointMemory(memory);
+					if (!frozenStorage) type.DeallocateCheckpointMemory(memory);
 					return;
 				}
-				m_Reserved.InsertOrAssign(&source, Reservation{memory, slot, &type});
+				m_Reserved.InsertOrAssign(&source, Reservation{memory, slot, &type, frozenStorage});
 			} catch (...) {
 				m_Objects.Erase(&source);
-				type.DeallocateCheckpointMemory(memory);
+				if (!frozenStorage) type.DeallocateCheckpointMemory(memory);
 				throw;
 			}
 		}
@@ -271,6 +288,7 @@ namespace RTE {
 				m_Reserved.Erase(&source);
 				memory = reserved->memory;
 				slot = reserved->slot;
+				frozenStorage = reserved->frozenStorage;
 				target = reinterpret_cast<Entity*>(static_cast<char*>(memory) + offset);
 			} else {
 				slot = AddOwner();
@@ -579,10 +597,12 @@ namespace RTE {
 		/// The owner lists of the freezing thread; a slot keeps its address while other threads add theirs.
 		struct alignas(64) OwnerShard {
 			std::mutex mutex;
-			std::deque<Entity*> owners;
-			std::deque<ValueOwner> values;
-			std::vector<std::shared_ptr<void>> storage;
-			std::vector<std::pair<void*, void (*)(void*)>> deferred;
+			CheckpointSnapshotMemory allocator;
+			std::pmr::monotonic_buffer_resource memory{1024, &allocator};
+			std::pmr::deque<Entity*> owners{&memory};
+			std::pmr::deque<ValueOwner> values{&memory};
+			std::pmr::vector<std::shared_ptr<void>> storage{&memory};
+			std::pmr::vector<std::pair<void*, void (*)(void*)>> deferred{&memory};
 		};
 		OwnerShard& Owners() {
 			struct RecentOwner { uint64_t snapshot = 0; OwnerShard* shard = nullptr; };
@@ -660,6 +680,7 @@ namespace RTE {
 			void* memory;
 			Entity** slot;
 			Entity::ClassInfo* type;
+			bool frozenStorage;
 		};
 		CheckpointSharedMap<const Entity*, Reservation> m_Reserved;
 

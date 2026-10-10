@@ -4,6 +4,7 @@
 #include "RTEError.h"
 
 #include <cstdint>
+#include <cstddef>
 #include <mutex>
 #include <list>
 #include <unordered_set>
@@ -28,10 +29,10 @@ namespace RTE {
 	Entity::ClassInfo TYPE::m_sClass(#TYPE, &PARENT::m_sClass);
 
 #define ConcreteClassInfo(TYPE, PARENT, BLOCKCOUNT) \
-	Entity::ClassInfo TYPE::m_sClass(#TYPE, &PARENT::m_sClass, TYPE::Allocate, TYPE::Deallocate, TYPE::NewInstance, BLOCKCOUNT);
+	Entity::ClassInfo TYPE::m_sClass(#TYPE, &PARENT::m_sClass, TYPE::Allocate, TYPE::Deallocate, TYPE::NewInstance, BLOCKCOUNT, sizeof(TYPE), alignof(TYPE));
 
 #define ConcreteSubClassInfo(TYPE, SUPER, PARENT, BLOCKCOUNT) \
-	Entity::ClassInfo SUPER::TYPE::m_sClass(#TYPE, &PARENT::m_sClass, SUPER::TYPE::Allocate, SUPER::TYPE::Deallocate, SUPER::TYPE::NewInstance, BLOCKCOUNT);
+	Entity::ClassInfo SUPER::TYPE::m_sClass(#TYPE, &PARENT::m_sClass, SUPER::TYPE::Allocate, SUPER::TYPE::Deallocate, SUPER::TYPE::NewInstance, BLOCKCOUNT, sizeof(SUPER::TYPE), alignof(SUPER::TYPE));
 
 /// Convenience macro to cut down on duplicate ClassInfo methods in classes that extend Entity.
 #define ClassInfoGetters \
@@ -131,7 +132,7 @@ namespace RTE {
 			/// @param deallocFunc Function pointer to the raw deallocation function of memory. If the represented Entity subclass isn't concrete, pass in 0.
 			/// @param newFunc Function pointer to the new instance factory. If the represented Entity subclass isn't concrete, pass in 0.
 			/// @param allocBlockCount The number of new instances to fill the pre-allocated pool with when it runs out.
-			ClassInfo(const std::string& name, ClassInfo* parentInfo = 0, MemoryAllocate allocFunc = 0, MemoryDeallocate deallocFunc = 0, Entity* (*newFunc)() = 0, int allocBlockCount = 10);
+			ClassInfo(const std::string& name, ClassInfo* parentInfo = 0, MemoryAllocate allocFunc = 0, MemoryDeallocate deallocFunc = 0, Entity* (*newFunc)() = 0, int allocBlockCount = 10, size_t instanceBytes = 0, size_t instanceAlignment = 0);
 			~ClassInfo();
 #pragma endregion
 
@@ -180,6 +181,9 @@ namespace RTE {
 			void* GetPoolMemory();
 			/// Allocates a snapshot value without taking a gameplay pool slot.
 			void* AllocateCheckpointMemory();
+			/// The concrete type's storage lets a capture reserve it in its own arena.
+			size_t CheckpointInstanceBytes() const { return m_InstanceBytes; }
+			size_t CheckpointInstanceAlignment() const { return m_InstanceAlignment; }
 			/// Frees a snapshot value's storage that was never constructed.
 			void DeallocateCheckpointMemory(void* memory) { m_Deallocate(memory); }
 
@@ -219,6 +223,7 @@ namespace RTE {
 
 			MemoryAllocate m_Allocate; //!< Raw memory allocation for the size of the type this ClassInfo describes.
 			MemoryDeallocate m_Deallocate; //!< Raw memory deallocation for the size of the type this ClassInfo describes.
+			const size_t m_InstanceBytes, m_InstanceAlignment;
 			// TODO: figure out why this doesn't want to work when defined as std::function.
 			Entity* (*m_NewInstance)(); //!< Returns an actual new instance of the type that this describes.
 

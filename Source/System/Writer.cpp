@@ -4,6 +4,7 @@
 #include "CheckpointArchive.h"
 #include "CheckpointProperties.h"
 #include "CheckpointPagePool.h"
+#include "PageWriteFence.h"
 #include "CheckpointImage.h"
 #include "CheckpointNativeSnapshot.h"
 #include "ThreadMan.h"
@@ -163,14 +164,20 @@ namespace {
 	class CheckpointArenaGroup {
 	public:
 		struct Block {
-			std::pmr::memory_resource* upstream = std::pmr::get_default_resource();
+			std::shared_ptr<CheckpointPagePool::Allocation> pages;
 			void* address;
 			size_t bytes, alignment;
-			Block(size_t count, size_t align) : address(upstream->allocate(count, align)), bytes(count), alignment(align) {
+			Block(size_t count, size_t align) : bytes(count), alignment(align) {
+				const size_t page = PageWriteFence::SystemPageBytes();
+				const size_t padding = alignment > page ? alignment - 1 : 0;
+				if (bytes > (std::numeric_limits<size_t>::max)() - padding) throw std::bad_alloc();
+				pages = std::make_shared<CheckpointPagePool::Allocation>(bytes + padding);
+				address = pages->Data();
+				size_t available = pages->Bytes();
+				if (!std::align(alignment, bytes, address, available)) throw std::bad_alloc();
 				s_CheckpointPoolLiveBytes.fetch_add(bytes, std::memory_order_relaxed);
 			}
 			~Block() {
-				upstream->deallocate(address, bytes, alignment);
 				s_CheckpointPoolLiveBytes.fetch_sub(bytes, std::memory_order_relaxed);
 			}
 		};

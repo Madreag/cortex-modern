@@ -258,7 +258,7 @@ namespace RTE {
 	}
 	CheckpointNativeSnapshot::~CheckpointNativeSnapshot() {
 		// A freeze that stopped early leaves claimed storage that was never constructed.
-		m_Reserved.ForEach([](const Entity*, const Reservation& reserved) { reserved.type->DeallocateCheckpointMemory(reserved.memory); });
+		m_Reserved.ForEach([](const Entity*, const Reservation& reserved) { if (!reserved.frozenStorage) reserved.type->DeallocateCheckpointMemory(reserved.memory); });
 		for (auto& shard: m_OwnerShards) for (auto& object: shard->owners) if (Entity* value = std::exchange(object, nullptr)) delete value;
 		for (auto& shard: m_OwnerShards) for (auto& [value, destroy]: shard->values) if (value) destroy(value);
 	}
@@ -677,11 +677,12 @@ namespace RTE {
 		return reader;
 	}
 
-	Entity::ClassInfo::ClassInfo(const std::string& name, ClassInfo* parentInfo, MemoryAllocate allocFunc, MemoryDeallocate deallocFunc, Entity* (*newFunc)(), int allocBlockCount) :
+	Entity::ClassInfo::ClassInfo(const std::string& name, ClassInfo* parentInfo, MemoryAllocate allocFunc, MemoryDeallocate deallocFunc, Entity* (*newFunc)(), int allocBlockCount, size_t instanceBytes, size_t instanceAlignment) :
 	    m_Name(name),
 	    m_ParentInfo(parentInfo),
 	    m_Allocate(allocFunc),
 	    m_Deallocate(deallocFunc),
+	    m_InstanceBytes(instanceBytes), m_InstanceAlignment(instanceAlignment),
 	    m_NewInstance(newFunc),
 	    m_NextClass(s_ClassHead) {
 		s_ClassHead = this;
