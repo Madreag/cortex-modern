@@ -4646,7 +4646,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			} else if (snapshot.remoteReady || notReady.empty()) {
 				sentence = "Everyone is ready - press Start Match";
 			} else {
-				sentence = "Waiting for " + names(notReady) + " to press Ready - Start Match starts in 30 s";
+				sentence = "Waiting for " + names(notReady) + " to press Ready";
 			}
 		} else if (snapshot.joiningWorld) {
 			sentence = PlayerFacingStatus(snapshot.statusText);
