@@ -4724,9 +4724,12 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		m_MultiplayerLobbyPortMapLabel->SetHorizontalOverflowScroll(wide);
 		m_MultiplayerLobbyPortMapLabel->ActivateDeactivateOverflowScroll(wide);
 	}
-	const int summaryHeight = summary ? 20 : 0;
 	m_LastMatchSummaryLabel->SetPositionRel(12, 178 + statusExtra);
+	m_LastMatchSummaryLabel->SetHorizontalOverflowScroll(false);
+	m_LastMatchSummaryLabel->ActivateDeactivateOverflowScroll(false);
 	m_LastMatchSummaryLabel->Resize(contentWidth - 90, 18);
+	const int summaryHeight = summary ? std::max(20, m_LastMatchSummaryLabel->GetTextHeight() + 6) : 0;
+	m_LastMatchSummaryLabel->Resize(contentWidth - 90, std::max(18, summaryHeight - 2));
 	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetPositionRel(contentWidth - 74, 178 + statusExtra);
 	m_MultiplayerLobbyPortMapLabel->SetPositionRel(12, 178 + statusExtra + summaryHeight);
 	const int portMapHeight = listing.empty() ? 0 : 14;
