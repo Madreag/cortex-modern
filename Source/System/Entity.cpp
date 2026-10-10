@@ -332,10 +332,11 @@ namespace RTE {
 		const auto equal = [&source](const Metadata& value) {
 			return value.name == source.m_PresetName && value.copied == source.m_CopiedFromPresetName && value.description == source.m_PresetDescription && value.reader == source.m_FormattedReaderPosition && value.groups == source.m_Groups;
 		};
-		struct Cache { uint64_t snapshot = 0; std::array<const Metadata*, 128> values{}; };
+		struct Cache { uint64_t snapshot = 0; std::array<const Metadata*, 1024> values{}; };
 		thread_local Cache cache;
 		if (cache.snapshot != m_Serial) { cache.values.fill(nullptr); cache.snapshot = m_Serial; }
-		const size_t local = (std::hash<std::string>{}(source.m_PresetName) ^ (reinterpret_cast<uintptr_t>(&source.GetClass()) >> 4)) % cache.values.size();
+		const size_t local = (std::hash<std::string>{}(source.m_PresetName) ^ std::hash<std::string>{}(source.m_CopiedFromPresetName) ^
+		    std::hash<std::string>{}(source.m_FormattedReaderPosition) ^ (reinterpret_cast<uintptr_t>(&source.GetClass()) >> 4)) % cache.values.size();
 		if (const Metadata* recent = cache.values[local]; recent && equal(*recent)) { target.m_CheckpointMetadata = recent; return; }
 		size_t groups = 0;
 		for (const std::string& group: source.m_Groups) groups += std::hash<std::string>{}(group);
