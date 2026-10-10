@@ -173,7 +173,22 @@ namespace RTE::CheckpointLua {
 		static std::future<void> Submit(std::function<void()> work) {
 			return Get().Push(std::move(work));
 		}
-		// Page copies contend with the joined native readers for the same memory.
+		/// Detects partial startup cleanup and a successful retry.
+		static bool RunFailureSelfTest() {
+			std::atomic<size_t> exited{0};
+			bool refused = false;
+			{
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::CopyStartup, 1);
+				try { CopyPool failed(2, &exited); }
+				catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+			}
+			const bool joined = exited.load() == 1;
+			CopyPool retry(2, &exited);
+			std::atomic<bool> copied{false};
+			retry.Push([&copied] { copied.store(true); }).get();
+			return refused && joined && copied.load();
+		}
+		// The boundary prepares native values before queued page copies contend for memory.
 		class PauseScope {
 		public:
 			explicit PauseScope(bool enabled) : m_Enabled(enabled) {
@@ -206,25 +221,43 @@ namespace RTE::CheckpointLua {
 		std::condition_variable m_Ready;
 		std::deque<std::packaged_task<void()>> m_Tasks;
 		unsigned m_Paused = 0;
+		bool m_Stopping = false;
+		std::array<std::thread, 4> m_Threads;
 
-		CopyPool() {
-			const unsigned threads = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
-			for (unsigned index = 0; index < threads; ++index) {
-				FloatingPointEnvironment::StartThread([this] {
-					while (true) {
-						std::packaged_task<void()> task;
-						{
-							std::unique_lock lock(m_Mutex);
-							m_Ready.wait(lock, [this] { return !m_Paused && !m_Tasks.empty(); });
-							task = std::move(m_Tasks.front());
-							m_Tasks.pop_front();
+		explicit CopyPool(unsigned threads = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u), std::atomic<size_t>* exited = nullptr) {
+			try {
+				for (unsigned index = 0; index < threads; ++index) {
+					CheckpointFailure::Check(CheckpointFailure::Point::CopyStartup);
+					m_Threads[index] = FloatingPointEnvironment::StartThread([this, exited] {
+						struct Exit { std::atomic<size_t>* count; ~Exit() { if (count) count->fetch_add(1); } } exit{exited};
+						while (true) {
+							std::packaged_task<void()> task;
+							{
+								std::unique_lock lock(m_Mutex);
+								m_Ready.wait(lock, [this] { return m_Stopping || (!m_Paused && !m_Tasks.empty()); });
+								if (m_Stopping && m_Tasks.empty()) return;
+								task = std::move(m_Tasks.front());
+								m_Tasks.pop_front();
+							}
+							CaptureSentinel::WorkerScope worker("heap-copy");
+							const FloatingPointEnvironment::Scope scope("Lua copy task");
+							task();
 						}
-						CaptureSentinel::WorkerScope worker("heap-copy");
-						const FloatingPointEnvironment::Scope scope("Lua copy task");
-						task();
-					}
-				}).detach();
+					});
+				}
+			} catch (...) {
+				Stop();
+				throw;
 			}
+		}
+		~CopyPool() { Stop(); }
+		void Stop() {
+			{
+				std::lock_guard lock(m_Mutex);
+				m_Stopping = true;
+			}
+			m_Ready.notify_all();
+			for (auto& thread: m_Threads) if (thread.joinable()) thread.join();
 		}
 		std::future<void> Push(std::function<void()> work) {
 			std::packaged_task<void()> task(std::move(work));
