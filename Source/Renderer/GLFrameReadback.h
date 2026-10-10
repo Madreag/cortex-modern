@@ -287,22 +287,36 @@ namespace RTE {
 			return result;
 		}
 
-		bool Complete(QueuedTextureReadback& frame, std::span<unsigned char> rgb, std::string& error) {
+		bool Complete(QueuedTextureReadback& frame, std::span<unsigned char> rgb, std::string& error, bool yieldWhilePending = false,
+		              std::array<int64_t, 6>* costs = nullptr, int64_t (*cpuClock)() = nullptr) {
+			int64_t previous = cpuClock ? cpuClock() : 0;
+			const auto noteCost = [&](std::size_t phase) {
+				if (costs && cpuClock) {
+					const int64_t now = cpuClock();
+					(*costs)[phase] = now - previous;
+					previous = now;
+				}
+			};
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (!MakeWriterCurrent(error)) return false;
+			noteCost(0);
 			bool done = false;
 			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
 			while (std::chrono::steady_clock::now() < deadline) {
-				const GLenum state = glad_glClientWaitSync(frame.ready, 0, 1000000);
+				const GLenum state = glad_glClientWaitSync(frame.ready, 0, yieldWhilePending ? 0 : 1000000);
 				if (state == GL_ALREADY_SIGNALED || state == GL_CONDITION_SATISFIED) { done = true; break; }
 				if (state == GL_WAIT_FAILED) { error = "queued pixel transfer fence failed"; break; }
+				// A scripted writer can sleep until the GPU finishes instead of spending CPU in the driver wait.
+				if (yieldWhilePending) SDL_Delay(1);
 			}
+			noteCost(1);
 			if (!done && error.empty()) error = "queued pixel transfer did not finish within 90 seconds";
 			if (done) {
 				m_RGBA.resize(static_cast<std::size_t>(frame.width) * frame.height * 4);
 				glad_glBindBuffer(GL_PIXEL_PACK_BUFFER, frame.buffer);
 				glad_glGetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(m_RGBA.size()), m_RGBA.data());
 				const GLenum readError = glad_glGetError();
+				noteCost(2);
 				done = readError == GL_NO_ERROR && rgb.size() == static_cast<std::size_t>(frame.width) * frame.height * 3;
 				if (!done) error = "queued pixel copy GL error " + std::to_string(readError) + " or RGB size mismatch";
 				if (done) {
@@ -315,13 +329,16 @@ namespace RTE {
 					}
 				}
 			}
+			noteCost(3);
 			glad_glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 			Discard(frame);
 			if (const GLenum cleanupError = glad_glGetError(); cleanupError != GL_NO_ERROR) {
 				error += " queued readback cleanup GL error " + std::to_string(cleanupError);
 				done = false;
 			}
+			noteCost(4);
 			if (!ReleaseWriterContext(error)) done = false;
+			noteCost(5);
 			return done;
 		}
 
