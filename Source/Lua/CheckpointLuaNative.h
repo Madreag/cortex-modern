@@ -241,11 +241,11 @@ namespace RTE::CheckpointLua {
 		// The saver expands owned scalar tokens without native callbacks.
 		struct ScalarEntry {
 			uint64_t serial = 0;
-			TValue kind{}, instance{}, address{};
+			TValue kind{}, instance{}, address{}, singletonName{};
 			std::array<TValue, 2> members{};
 			std::array<TValue, 4> properties{};
 			unsigned memberCount = 0;
-			bool timer = false;
+			bool timer = false, singleton = false;
 			mutable std::unique_ptr<Entry> expanded;
 			const Entry* Expand() const {
 				if (!expanded) {
@@ -253,6 +253,7 @@ namespace RTE::CheckpointLua {
 					entry->serial = serial;
 					const auto answer = [](const TValue& token) { Result result; result.values.push_back(Value{token}); return result; };
 					entry->native[0] = answer(kind);
+					if (singleton) entry->native[0].values.push_back(Value{singletonName});
 					entry->native[1] = entry->native[0];
 					for (unsigned index = 0; index < memberCount; ++index) entry->members.values.push_back(Value{members[index]});
 					entry->helpers.emplace("_ScriptGraphInstance", answer(instance));
@@ -260,7 +261,7 @@ namespace RTE::CheckpointLua {
 					static constexpr std::array vectorNames{"X", "Y"};
 					static constexpr std::array timerNames{"StartSimTimeTicks", "SimTimeLimitTicks", "StartRealTimeTicks", "RealTimeLimitTicks"};
 					const std::span<const char* const> names = timer ? std::span<const char* const>(timerNames) : std::span<const char* const>(vectorNames);
-					for (size_t index = 0; index < names.size(); ++index) entry->properties.emplace(names[index], answer(properties[index]));
+					if (!singleton) for (size_t index = 0; index < names.size(); ++index) entry->properties.emplace(names[index], answer(properties[index]));
 					expanded = std::move(entry);
 				}
 				return expanded.get();
@@ -513,6 +514,87 @@ namespace RTE::CheckpointLua {
 		/// Reads the stack-top userdata's live class marker, including its Lua fallback.
 		const luabind::detail::object_rep* BindingObject(const TValue& subject) { return ClassObject(subject); }
 
+		bool TryCapturePlain() {
+			CheckThread();
+			if (!CheckpointWriter::BatchEnabled() || lua_gethook(State()) || m_Captured) return false;
+			const auto started = std::chrono::steady_clock::now();
+			const auto key = [&](const char* name) {
+				lua_pushstring(State(), name);
+				GCstr* result = strV(&State()->top[-1]); Keep(-1); lua_pop(State(), 1);
+				return result;
+			};
+			const auto* classKey = key("__luabind_classrep");
+			if (!m_ClassMarker) m_ClassMarker = key("__luabind_class");
+			const auto* iteratorKey = key("__iterator_snapshot");
+			std::pmr::vector<TValue> values(m_TransientResource);
+			bool plain = true;
+			ForEachUserdata(State(), false, true, [&](GCudata* data) {
+				if (!plain) return;
+				const auto* meta = tabref(data->metatable);
+				if (!meta) { plain = false; return; }
+				const auto* marker = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(classKey));
+				const bool descriptor = marker && !tvisnil(marker) && !tvisfalse(marker);
+				if (descriptor && data->len != sizeof(luabind::detail::class_rep)) { plain = false; return; }
+				TValue value; setgcVraw(&value, obj2gco(data), LJ_TUDATA);
+				if (!descriptor) {
+					const auto* objectMarker = lj_tab_getstr(const_cast<GCtab*>(meta), m_ClassMarker);
+					if (data->len < sizeof(luabind::detail::object_rep) || tabref(meta->metatable) || !objectMarker || tvisnil(objectMarker) || tvisfalse(objectMarker)) { plain = false; return; }
+					const auto* object = static_cast<const luabind::detail::object_rep*>(uddata(data));
+					const auto* type = object->crep();
+					if (!object->ptr() || !type || type->get_class_type() != luabind::detail::class_rep::cpp_class) { plain = false; return; }
+					const bool scalar = (object->flags() & luabind::detail::object_rep::owner) &&
+					                    (type->type() == LUABIND_TYPEID(Vector) || type->type() == LUABIND_TYPEID(Timer));
+					if (scalar) {
+						Push(value); plain = PlainScalarProperties(value, object); lua_pop(State(), 1);
+					} else plain = PlainSingleton(object);
+				}
+				if (plain) values.push_back(value);
+			});
+			// Iterator hooks can execute mod code and retain the filtered live walk.
+			for (GCobj* object = gcnext(obj2gco(mainthread(G(State())))); plain && object; object = gcnext(object)) {
+				if (object->gch.gct != ~LJ_TFUNC) continue;
+				const auto* function = gco2func(object);
+				if (!IteratorCandidate(function)) continue;
+				if (function->c.f == ScriptGraphValueIteratorNext) { plain = false; break; }
+				const auto* meta = tabref(udataV(&function->c.upvalue[0])->metatable);
+				if (!meta) continue;
+				const auto* hook = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(iteratorKey));
+				if (tabref(meta->metatable) || (hook && tvisfunc(hook))) plain = false;
+			}
+			if (!plain) return false;
+			const auto answers = std::chrono::steady_clock::now();
+			m_Image->m_EnumUs = std::chrono::duration_cast<std::chrono::microseconds>(answers - started).count();
+			m_Image->m_Scalars.reserve(values.size());
+			for (const TValue& value: values) {
+				const auto* data = udataV(&value);
+				const auto address = gcval(&value);
+				if (const auto known = m_Cache.classes->compact.find(address); known != m_Cache.classes->compact.end() && known->second.serial == data->serial) {
+					m_SeenClasses.Insert(address); ++m_Image->m_CachedClasses; continue;
+				}
+				Push(value);
+				const auto* object = ClassObject(value);
+				if (object && PlainSingleton(object)) {
+					NativeImage::ScalarEntry entry;
+					entry.serial = data->serial; entry.singleton = true; setnilV(&entry.kind);
+					lua_pushstring(State(), object->crep()->name()); entry.singletonName = At(-1); Keep(-1); lua_pop(State(), 1);
+					object->crep()->get_table(State()); entry.members[entry.memberCount++] = At(-1); Keep(-1); lua_pop(State(), 1);
+					if (object->get_lua_table().is_valid()) {
+						object->get_lua_table().get(State()); entry.instance = At(-1); Keep(-1); lua_pop(State(), 1);
+						entry.members[entry.memberCount++] = entry.instance;
+					} else setnilV(&entry.instance);
+					lua_pushlightuserdata(State(), object->ptr()); entry.address = At(-1); lua_pop(State(), 1);
+					m_Image->m_Scalars.emplace_back(address, std::move(entry));
+					lua_pop(State(), 1);
+				} else {
+					lua_pop(State(), 1);
+					CaptureUserdata(value);
+				}
+			}
+			m_Image->m_AnswerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - answers).count();
+			m_Captured = true;
+			return true;
+		}
+
 		void Capture() {
 			CheckThread();
 			if (m_Captured || !m_Image) throw std::logic_error("native image capture cannot be repeated");
@@ -630,6 +712,13 @@ namespace RTE::CheckpointLua {
 		}
 
 	private:
+		static bool PlainSingleton(const luabind::detail::object_rep* object) {
+			if (!object || !object->ptr() || !object->crep() || (object->flags() & luabind::detail::object_rep::owner) ||
+			    object->crep()->get_class_type() != luabind::detail::class_rep::cpp_class) return false;
+			static constexpr std::array names{"ActivityMan", "AudioMan", "CameraMan", "ConsoleMan", "FrameMan", "LuaMan", "MetaMan", "MovableMan",
+			                                 "MusicMan", "PerformanceMan", "PostProcessMan", "PresetMan", "PrimitiveMan", "SceneMan", "SettingsMan", "TimerMan", "UInputMan"};
+			return std::find(names.begin(), names.end(), std::string_view(object->crep()->name())) != names.end();
+		}
 		struct References {
 			lua_State* state;
 			decltype(std::declval<global_State&>().gc.threshold) threshold;
@@ -637,6 +726,7 @@ namespace RTE::CheckpointLua {
 			int count = 0;
 			explicit References(lua_State* source) : state(source), threshold(G(source)->gc.threshold), serial(luaJIT_state_serial(source)) {
 				G(state)->gc.threshold = std::numeric_limits<decltype(threshold)>::max();
+				CheckpointFailure::Check(CheckpointFailure::Point::NativeRoots);
 				// This capture's own address keys its table, for the reason the cache's does.
 				lua_pushlightuserdata(state, this);
 				lua_newtable(state);

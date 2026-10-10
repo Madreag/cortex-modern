@@ -6819,12 +6819,14 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		lua_State* state;
 		int top;
 		uint64_t serial;
+		std::optional<decltype(std::declval<global_State&>().gc.threshold)> nativeThreshold;
 		bool done = false;
 		void Run() {
 			if (done) return;
 			done = true;
 			lua_settop(state, top);
 			luaJIT_set_state_serial(state, serial);
+			if (nativeThreshold) G(state)->gc.threshold = *nativeThreshold;
 		}
 		~RestoreCapture() { Run(); }
 	} restore{m_State, top, luaJIT_state_serial(m_State)};
@@ -6892,15 +6894,18 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 			const uint64_t nativeCpu = phaseCosts ? CheckpointThreadCpuUnits() : 0;
 			if (!m_NativeCache) m_NativeCache = std::make_shared<CheckpointLua::NativeCache>(m_State);
 			std::optional<CaptureTrace::Span> span(std::in_place, "graph_natives", std::to_string(g_LuaMan.GetStateIndex(this)));
+			restore.nativeThreshold = G(m_State)->gc.threshold;
 			CheckpointLua::CaptureScope natives(m_State, *m_NativeCache);
 			const auto descriptorStarted = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			const uint64_t descriptorCpu = phaseCosts ? CheckpointThreadCpuUnits() : 0;
-			CheckpointLua::DescriptorRootScope descriptorRoots(m_State, restore.top, roots, image->callbacks, image->stateIndex,
+			const bool plainNatives = natives.TryCapturePlain();
+			std::optional<CheckpointLua::DescriptorRootScope> descriptorRoots;
+			if (!plainNatives) descriptorRoots.emplace(m_State, restore.top, roots, image->callbacks, image->stateIndex,
 				image->callbackObjects ? std::span<const TValue>(image->callbackObjects->roots) : std::span<const TValue>(),
 				[&natives](const TValue& value) { return natives.BindingObject(value); });
 			const uint64_t descriptorCpuDone = phaseCosts ? CheckpointThreadCpuUnits() : 0;
 			const auto descriptorDone = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-			natives.Capture();
+			if (!plainNatives) natives.Capture();
 			span.reset();
 			const auto nativeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
 			const uint64_t nativeCpuDone = phaseCosts ? CheckpointThreadCpuUnits() : 0;
@@ -6910,6 +6915,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 			const auto finishDone = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			image->scratch = scratch.values;
 			if (FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats) {
+				stats->plainStates += plainNatives;
 				if (phaseCosts) {
 					stats->callbacksCpu = callbacksCpuDone - callbacksCpu;
 					stats->nativeCpu = nativeCpuDone - nativeCpu;
@@ -7090,8 +7096,10 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 		if (phaseCosts) System::PrintDiagnosticLine(std::format("[checkpoint-lua-phase] state={} start_us={} total_us={} callbacks_us={} roots_us={} native_us={} native_setup_us={} descriptor_us={} enum_us={} world_us={} answers_us={} native_finish_us={} heap_us={} heap_setup_us={} heap_watch_setup_us={} heap_watch_arm_us={} userdata={} bytes={}",
 		    index, stateCosts[index].first, stateCosts[index].second, part.callbacksUs, part.rootsUs, part.nativeUs, part.nativeSetupUs, part.descriptorUs,
 		    part.enumUs, part.worldUs, part.answerUs, part.nativeFinishUs, part.heapUs, part.heapSetupUs, part.heapWatchSetupUs, part.heapWatchArmUs, part.userdata, part.bytes));
+		if (phaseCosts) System::PrintDiagnosticLine(std::format("[checkpoint-lua-boundary] state={} plain={} native_us={} heap_us={}", index, part.plainStates, part.nativeUs, part.heapUs));
 		stats.observations.insert(stats.observations.end(), part.observations.begin(), part.observations.end());
 		stats.states += part.states; stats.nativeUs += part.nativeUs; stats.heapUs += part.heapUs; stats.copyUs += part.copyUs;
+		stats.plainStates += part.plainStates;
 		stats.pages += part.pages; stats.bytes += part.bytes; stats.userdata += part.userdata; stats.cached += part.cached;
 		stats.shared += part.shared; stats.sharedMismatches += part.sharedMismatches;
 		stats.iterators += part.iterators; stats.owned += part.owned; stats.callbacksUs += part.callbacksUs; stats.faults += part.faults;
@@ -10444,6 +10452,43 @@ end
 
 	if (m_CheckpointHeap) {
 		{
+			LuaStateWrapper plain;
+			plain.Initialize();
+			plain.RunScriptString("_CheckpointPlainValues = { Vector(-0.0, 7.25), Timer() }");
+			std::string reference;
+			std::vector<std::string> problems;
+			bool exact = plain.SerializeScriptGraph(reference, problems);
+			CheckpointText captured;
+			FrozenCaptureStats stats;
+			{
+				struct RestoreStats {
+					FrozenCaptureStats* previous = LuaMan::s_FrozenCaptureStats;
+					~RestoreStats() { LuaMan::s_FrozenCaptureStats = previous; }
+				} restoreStats;
+				LuaMan::s_FrozenCaptureStats = &stats;
+				CheckpointWriter::BatchScope batch(true);
+				exact = plain.CaptureScriptGraph(captured, problems, true) && exact;
+			}
+			exact = problems.empty() && stats.plainStates == 1 && captured.Text() == reference && exact;
+			std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " plain_native_seeds_match_the_live_graph" << std::endl;
+			checkpointValues = exact && checkpointValues;
+			plain.RunScriptString("local meta = debug.getmetatable(_CheckpointPlainValues[1]); local previous = meta.__index; meta.__index = function(self, key) if key == 'X' then return previous(self, key) + 1 end return previous(self, key) end");
+			problems.clear(); stats = {}; reference.clear(); captured = {};
+			bool fallback = plain.SerializeScriptGraph(reference, problems);
+			{
+				struct RestoreStats {
+					FrozenCaptureStats* previous = LuaMan::s_FrozenCaptureStats;
+					~RestoreStats() { LuaMan::s_FrozenCaptureStats = previous; }
+				} restoreStats;
+				LuaMan::s_FrozenCaptureStats = &stats;
+				CheckpointWriter::BatchScope batch(true);
+				fallback = plain.CaptureScriptGraph(captured, problems, true) && fallback;
+			}
+			fallback = problems.empty() && stats.plainStates == 0 && captured.Text() == reference && fallback;
+			std::cout << "[script-graph-selftest] " << (fallback ? "PASS" : "FAIL") << " custom_native_getters_keep_the_filtered_live_capture" << std::endl;
+			checkpointValues = fallback && checkpointValues;
+		}
+		{
 			bool failuresHeld = true;
 			for (const auto point: {CheckpointFailure::Point::LuaPages, CheckpointFailure::Point::LuaSubmission}) {
 				const auto before = m_CheckpointHeap->Stats();
@@ -10474,6 +10519,24 @@ end
 			                      RunScriptString("_ScriptGraphAllocationRetry = { held = 97 }; assert(_ScriptGraphAllocationRetry.held == 97); _ScriptGraphAllocationRetry = nil") == 0;
 			std::cout << "[script-graph-selftest] " << (liveHeld ? "PASS" : "FAIL") << " live_lua_allocation_failure_preserves_vm_entry_and_births" << std::endl;
 			checkpointValues = liveHeld && checkpointValues;
+			const auto gcThreshold = G(m_State)->gc.threshold;
+			struct RestoreGcThreshold {
+				lua_State* state;
+				decltype(std::declval<global_State&>().gc.threshold) threshold;
+				~RestoreGcThreshold() { G(state)->gc.threshold = threshold; }
+			} restoreGc{m_State, gcThreshold};
+			const auto probeThreshold = std::numeric_limits<decltype(gcThreshold)>::max() / 2;
+			G(m_State)->gc.threshold = probeThreshold;
+			const uint64_t nativeSerial = luaJIT_state_serial(m_State);
+			std::vector<std::string> nativeProblems;
+			bool nativeRefused = false;
+			{
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeRoots);
+				nativeRefused = !CaptureScriptGraph(refusedGraph, nativeProblems, true);
+			}
+			const bool nativeHeld = nativeRefused && G(m_State)->gc.threshold == probeThreshold && luaJIT_state_serial(m_State) == nativeSerial;
+			std::cout << "[script-graph-selftest] " << (nativeHeld ? "PASS" : "FAIL") << " native_root_allocation_failure_restores_gc_policy_and_births" << std::endl;
+			checkpointValues = nativeHeld && checkpointValues;
 			CheckpointText expectedGraph, failedGraph;
 			std::vector<std::string> failures;
 			bool retryHeld = CaptureScriptGraph(expectedGraph, failures, true);
