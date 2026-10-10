@@ -115,6 +115,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a Controller object in system memory. Create() should be called before using the object.
 		Controller() { Clear(); }
+		Controller(const Controller& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Constructor method used to instantiate a Controller object in system memory. Create() should be called before using the object.
 		/// @param mode The controller input mode, like AI, player etc.

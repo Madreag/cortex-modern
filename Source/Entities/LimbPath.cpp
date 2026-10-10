@@ -1,5 +1,9 @@
 #include "DeterministicMath.h"
 #include "LimbPath.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "Matrix.h"
 #include "CheckpointArchive.h"
 #include "MovableObject.h"
 
@@ -45,11 +49,67 @@ bool LimbPath::LoadCheckpoint(std::string_view text, bool validateOnly) {
 
 ConcreteClassInfo(LimbPath, Entity, 20);
 
+LimbPath::LimbPath(const LimbPath& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	m_Start(snapshot.Freeze(source.m_Start)),
+	m_StartSegCount(snapshot.Freeze(source.m_StartSegCount)),
+	m_Segments(snapshot.Freeze(source.m_Segments)),
+	m_CurrentSegment(m_Segments.begin() + std::distance(source.m_Segments.cbegin(), std::deque<Vector>::const_iterator(source.m_CurrentSegment))),
+	m_FootCollisionsDisabledSegment(snapshot.Freeze(source.m_FootCollisionsDisabledSegment)),
+	m_SegProgress(snapshot.Freeze(source.m_SegProgress)),
+	m_TravelSpeed(snapshot.Freeze(source.m_TravelSpeed)),
+	m_SegmentEndedThreshold(snapshot.Freeze(source.m_SegmentEndedThreshold)),
+	m_BaseTravelSpeedMultiplier(snapshot.Freeze(source.m_BaseTravelSpeedMultiplier)),
+	m_CurrentTravelSpeedMultiplier(snapshot.Freeze(source.m_CurrentTravelSpeedMultiplier)),
+	m_BaseScaleMultiplier(snapshot.Freeze(source.m_BaseScaleMultiplier)),
+	m_CurrentScaleMultiplier(snapshot.Freeze(source.m_CurrentScaleMultiplier)),
+	m_PushForce(snapshot.Freeze(source.m_PushForce)),
+	m_JointPos(snapshot.Freeze(source.m_JointPos)),
+	m_JointVel(snapshot.Freeze(source.m_JointVel)),
+	m_Rotation(snapshot.Freeze(source.m_Rotation)),
+	m_RotationOffset(snapshot.Freeze(source.m_RotationOffset)),
+	m_PositionOffset(snapshot.Freeze(source.m_PositionOffset)),
+	m_TimeLeft(snapshot.Freeze(source.m_TimeLeft)),
+	m_PathTimer(snapshot.Freeze(source.m_PathTimer)),
+	m_SegTimer(snapshot.Freeze(source.m_SegTimer)),
+	m_TotalLength(snapshot.Freeze(source.m_TotalLength)),
+	m_RegularLength(snapshot.Freeze(source.m_RegularLength)),
+	m_SegmentDone(snapshot.Freeze(source.m_SegmentDone)),
+	m_Ended(snapshot.Freeze(source.m_Ended)),
+	m_HFlipped(snapshot.Freeze(source.m_HFlipped)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* LimbPath::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
+void LimbPath::AssignCheckpointNative(const LimbPath& source, CheckpointNativeSnapshot& snapshot) {
+	snapshot.AssignEntity(*this, source);
+	m_Start = source.m_Start; m_StartSegCount = source.m_StartSegCount;
+	m_Segments = source.m_Segments;
+	m_CurrentSegment = m_Segments.begin() + std::distance(source.m_Segments.cbegin(), std::deque<Vector>::const_iterator(source.m_CurrentSegment));
+	m_FootCollisionsDisabledSegment = source.m_FootCollisionsDisabledSegment;
+	m_SegProgress = source.m_SegProgress; m_TravelSpeed = source.m_TravelSpeed;
+	m_SegmentEndedThreshold = source.m_SegmentEndedThreshold;
+	m_BaseTravelSpeedMultiplier = source.m_BaseTravelSpeedMultiplier; m_CurrentTravelSpeedMultiplier = source.m_CurrentTravelSpeedMultiplier;
+	m_BaseScaleMultiplier = source.m_BaseScaleMultiplier; m_CurrentScaleMultiplier = source.m_CurrentScaleMultiplier;
+	m_PushForce = source.m_PushForce; m_JointPos = source.m_JointPos; m_JointVel = source.m_JointVel;
+	m_Rotation.AssignCheckpointNative(source.m_Rotation, snapshot);
+	m_RotationOffset = source.m_RotationOffset; m_PositionOffset = source.m_PositionOffset; m_TimeLeft = source.m_TimeLeft;
+	m_PathTimer.AssignCheckpointNative(source.m_PathTimer, snapshot); m_SegTimer.AssignCheckpointNative(source.m_SegTimer, snapshot);
+	m_TotalLength = source.m_TotalLength; m_RegularLength = source.m_RegularLength;
+	m_SegmentDone = source.m_SegmentDone; m_Ended = source.m_Ended; m_HFlipped = source.m_HFlipped;
+	m_CheckpointInitialized = source.m_CheckpointInitialized;
+}
+
 LimbPath::LimbPath() {
 	Clear();
 }
 
 LimbPath::~LimbPath() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

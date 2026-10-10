@@ -40,6 +40,8 @@ namespace RTE {
 		/// Constructor method used to instantiate a LimbPath object in system
 		/// memory. Create() should be called before using the object.
 		LimbPath();
+		CheckpointSnapshotMethods(LimbPath);
+		void AssignCheckpointNative(const LimbPath& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a LimbPath object before deletion
 		/// from system memory.

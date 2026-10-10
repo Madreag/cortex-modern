@@ -1,4 +1,7 @@
 #include "Round.h"
+#include "CheckpointNativeSnapshot.h"
+#include "SoundContainer.h"
+#include "MovableObject.h"
 #include "PresetMan.h"
 #include "MOPixel.h"
 
@@ -6,11 +9,34 @@ using namespace RTE;
 
 ConcreteClassInfo(Round, Entity, 500);
 
+Round::Round(const Round& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	m_Particle(snapshot.Freeze(source.m_Particle)),
+	m_ParticleCount(snapshot.Freeze(source.m_ParticleCount)),
+	m_FireVel(snapshot.Freeze(source.m_FireVel)),
+	m_InheritsFirerVelocity(snapshot.Freeze(source.m_InheritsFirerVelocity)),
+	m_Separation(snapshot.Freeze(source.m_Separation)),
+	m_LifeVariation(snapshot.Freeze(source.m_LifeVariation)),
+	m_Shell(snapshot.Freeze(source.m_Shell)),
+	m_ShellVel(snapshot.Freeze(source.m_ShellVel)),
+	m_FireSound(snapshot.Freeze(source.m_FireSound)),
+	m_AILifeTime(snapshot.Freeze(source.m_AILifeTime)),
+	m_AIFireVel(snapshot.Freeze(source.m_AIFireVel)),
+	m_AIPenetration(snapshot.Freeze(source.m_AIPenetration)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* Round::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 Round::Round() {
 	Clear();
 }
 
 Round::~Round() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

@@ -4,6 +4,7 @@
 #include <algorithm>
 
 namespace RTE {
+	class CheckpointNativeSnapshot;
 
 	/// A class representing a RGB color value.
 	class Color : public Serializable {
@@ -44,6 +45,7 @@ namespace RTE {
 			Clear();
 			Create(reference.m_R, reference.m_G, reference.m_B);
 		}
+		Color(const Color& source, CheckpointNativeSnapshot&);
 
 		/// Makes the Color object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.

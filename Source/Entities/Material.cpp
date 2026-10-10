@@ -1,4 +1,7 @@
 #include "Material.h"
+#include "CheckpointNativeSnapshot.h"
+#include "ContentFile.h"
+#include "Color.h"
 #include "CheckpointArchive.h"
 #include "MovableObject.h"
 #include "Base64/base64.h"
@@ -164,6 +167,36 @@ void Material::SwapCheckpoint(Material& other) noexcept {
     };
     swapFile(m_FGTextureFile, other.m_FGTextureFile); swapFile(m_BGTextureFile, other.m_BGTextureFile);
     swap(m_TerrainFGTexture, other.m_TerrainFGTexture); swap(m_TerrainBGTexture, other.m_TerrainBGTexture);
+}
+
+Material::Material(const Material& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	m_Index(snapshot.Freeze(source.m_Index)),
+	m_Priority(snapshot.Freeze(source.m_Priority)),
+	m_Piling(snapshot.Freeze(source.m_Piling)),
+	m_Integrity(snapshot.Freeze(source.m_Integrity)),
+	m_Restitution(snapshot.Freeze(source.m_Restitution)),
+	m_Friction(snapshot.Freeze(source.m_Friction)),
+	m_Stickiness(snapshot.Freeze(source.m_Stickiness)),
+	m_VolumeDensity(snapshot.Freeze(source.m_VolumeDensity)),
+	m_PixelDensity(snapshot.Freeze(source.m_PixelDensity)),
+	m_GibImpulseLimitPerLiter(snapshot.Freeze(source.m_GibImpulseLimitPerLiter)),
+	m_GibWoundLimitPerLiter(snapshot.Freeze(source.m_GibWoundLimitPerLiter)),
+	m_SettleMaterialIndex(snapshot.Freeze(source.m_SettleMaterialIndex)),
+	m_SpawnMaterialIndex(snapshot.Freeze(source.m_SpawnMaterialIndex)),
+	m_IsScrap(snapshot.Freeze(source.m_IsScrap)),
+	m_Color(snapshot.Freeze(source.m_Color)),
+	m_UseOwnColor(snapshot.Freeze(source.m_UseOwnColor)),
+	m_FGTextureFile(snapshot.Freeze(source.m_FGTextureFile)),
+	m_BGTextureFile(snapshot.Freeze(source.m_BGTextureFile)),
+	m_TerrainFGTexture(snapshot.Freeze(source.m_TerrainFGTexture)),
+	m_TerrainBGTexture(snapshot.Freeze(source.m_TerrainBGTexture)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* Material::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
 }
 
 std::string Material::SaveCheckpoint() const {

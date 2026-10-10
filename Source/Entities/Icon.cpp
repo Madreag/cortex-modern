@@ -1,10 +1,34 @@
 #include "Icon.h"
+#include "CheckpointNativeSnapshot.h"
+#include "ContentFile.h"
 #include "CheckpointArchive.h"
 #include "GUICheckpoint.h"
 
 using namespace RTE;
 
 ConcreteClassInfo(Icon, Entity, 80);
+
+Icon::Icon(const Icon& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	m_BitmapFile(snapshot.Freeze(source.m_BitmapFile)),
+	m_FrameCount(snapshot.Freeze(source.m_FrameCount)),
+	m_BitmapsIndexed(snapshot.Freeze(source.m_BitmapsIndexed)),
+	m_BitmapsTrueColor(snapshot.Freeze(source.m_BitmapsTrueColor)),
+	m_CheckpointBitmapOwners{},
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* Icon::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
+void Icon::AssignCheckpointNative(const Icon& source, CheckpointNativeSnapshot& snapshot) {
+	snapshot.AssignEntity(*this, source);
+	m_BitmapFile = source.m_BitmapFile; m_FrameCount = source.m_FrameCount;
+	m_BitmapsIndexed = snapshot.Freeze(source.m_BitmapsIndexed); m_BitmapsTrueColor = snapshot.Freeze(source.m_BitmapsTrueColor);
+	m_CheckpointBitmapOwners.clear(); m_CheckpointInitialized = source.m_CheckpointInitialized;
+}
 
 Icon::Icon() {
 	Clear();
@@ -18,6 +42,7 @@ Icon::Icon(const Icon& reference) {
 }
 
 Icon::~Icon() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

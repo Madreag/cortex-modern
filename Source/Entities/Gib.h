@@ -30,6 +30,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a Gib object in system memory. Create() should be called before using the object.
 		Gib();
+		Gib(const Gib& source, CheckpointNativeSnapshot& snapshot);
 		Gib(const Gib& reference) { Clear(); Create(reference); }
 
 		/// Creates a Gib to be identical to another, by deep copy.

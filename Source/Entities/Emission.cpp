@@ -1,4 +1,8 @@
 #include "Emission.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "MovableObject.h"
 #include "CheckpointArchive.h"
 #include "Base64/base64.h"
 #include "PresetMan.h"
@@ -148,6 +152,31 @@ int Emission::Save(Writer& writer) const {
 	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_EmissionCheckpoint", CheckpointWriter::Native([&] { return SaveCheckpoint(); }).Base64(true));
 
 	return 0;
+}
+
+Emission::Emission(const Emission& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	m_pEmission(snapshot.Freeze(source.m_pEmission)),
+	m_PPM(snapshot.Freeze(source.m_PPM)),
+	m_BurstSize(snapshot.Freeze(source.m_BurstSize)),
+	m_Accumulator(snapshot.Freeze(source.m_Accumulator)),
+	m_Spread(snapshot.Freeze(source.m_Spread)),
+	m_MinVelocity(snapshot.Freeze(source.m_MinVelocity)),
+	m_MaxVelocity(snapshot.Freeze(source.m_MaxVelocity)),
+	m_LifeVariation(snapshot.Freeze(source.m_LifeVariation)),
+	m_PushesEmitter(snapshot.Freeze(source.m_PushesEmitter)),
+	m_InheritsVel(snapshot.Freeze(source.m_InheritsVel)),
+	m_InheritsAngularVel(snapshot.Freeze(source.m_InheritsAngularVel)),
+	m_StartTimer(snapshot.Freeze(source.m_StartTimer)),
+	m_StopTimer(snapshot.Freeze(source.m_StopTimer)),
+	m_Offset(snapshot.Freeze(source.m_Offset)),
+	m_ParticleCount(snapshot.Freeze(source.m_ParticleCount)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* Emission::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
 }
 
 std::string Emission::SaveCheckpoint() const {

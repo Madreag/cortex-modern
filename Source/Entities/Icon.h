@@ -28,6 +28,8 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate an Icon object in system memory. Create() should be called before using the object.
 		Icon();
+		CheckpointSnapshotMethods(Icon);
+		void AssignCheckpointNative(const Icon& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Copy constructor method used to instantiate an Icon object identical to an already existing one.
 		/// @param reference An Icon object which is passed in by reference.

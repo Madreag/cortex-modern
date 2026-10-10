@@ -1,8 +1,13 @@
 #include "Timer.h"
 
 RTE::Timer::Timer(const Timer& source, CheckpointNativeSnapshot&) :
-	m_StartRealTime(source.m_StartRealTime), m_StartSimTime(source.m_StartSimTime),
-	m_RealTimeLimit(source.m_RealTimeLimit), m_SimTimeLimit(source.m_SimTimeLimit), m_TicksPerMS(source.m_TicksPerMS) {}
+	m_TicksPerMS(source.m_TicksPerMS), m_StartRealTime(source.m_StartRealTime), m_RealTimeLimit(source.m_RealTimeLimit),
+	m_StartSimTime(source.m_StartSimTime), m_SimTimeLimit(source.m_SimTimeLimit) {}
+
+void RTE::Timer::AssignCheckpointNative(const Timer& source, CheckpointNativeSnapshot&) {
+	m_TicksPerMS = source.m_TicksPerMS; m_StartRealTime = source.m_StartRealTime; m_RealTimeLimit = source.m_RealTimeLimit;
+	m_StartSimTime = source.m_StartSimTime; m_SimTimeLimit = source.m_SimTimeLimit;
+}
 
 using namespace RTE;
 

@@ -1,4 +1,6 @@
 #include "Gib.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
 #include "CheckpointProperties.h"
 #include "PresetMan.h"
 #include "MovableObject.h"
@@ -8,6 +10,22 @@
 using namespace RTE;
 
 const std::string Gib::c_ClassName = "Gib";
+
+Gib::Gib(const Gib& source, CheckpointNativeSnapshot& snapshot) :
+	m_GibParticle(snapshot.Freeze(source.m_GibParticle)),
+	m_PersistedParticleUniqueID(snapshot.Freeze(source.m_PersistedParticleUniqueID)),
+	m_Offset(snapshot.Freeze(source.m_Offset)),
+	m_Count(snapshot.Freeze(source.m_Count)),
+	m_Spread(snapshot.Freeze(source.m_Spread)),
+	m_MinVelocity(snapshot.Freeze(source.m_MinVelocity)),
+	m_MaxVelocity(snapshot.Freeze(source.m_MaxVelocity)),
+	m_LifeVariation(snapshot.Freeze(source.m_LifeVariation)),
+	m_InheritsVel(snapshot.Freeze(source.m_InheritsVel)),
+	m_InheritsAngularVel(snapshot.Freeze(source.m_InheritsAngularVel)),
+	m_IgnoresTeamHits(snapshot.Freeze(source.m_IgnoresTeamHits)),
+	m_SpreadMode(snapshot.Freeze(source.m_SpreadMode)),
+	m_CheckpointOwner(nullptr) {
+}
 
 Gib::Gib() {
 	Clear();
