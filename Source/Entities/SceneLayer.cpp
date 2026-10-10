@@ -469,7 +469,7 @@ bool BitmapSnapshot::RunSelfTest() {
 				return exact && snapshots[1]->scannedBytes == snapshots[1]->LogicalBytes() &&
 				    snapshots[1]->dirtyBytes == snapshots[1]->rowBytes && snapshots[1]->unmarkedDirtyBytes == snapshots[1]->rowBytes &&
 				    snapshots[2]->dirtyBytes == 0 && snapshots[2]->reusedRows == static_cast<size_t>(snapshots[2]->height) &&
-				    snapshots[1]->copiedBytes == snapshots[1]->LogicalBytes();
+				    snapshots[1]->copiedBytes + snapshots[1]->workerCopyBytes == snapshots[1]->LogicalBytes();
 			};
 			std::array<std::future<bool>, 4> readers;
 			for (auto& reader: readers) reader = std::async(std::launch::async, read);
