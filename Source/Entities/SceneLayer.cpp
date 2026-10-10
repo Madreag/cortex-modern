@@ -142,7 +142,7 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::FreezeRows(const BITMAP* s
 		if (depth != 8 && depth != 15 && depth != 16 && depth != 24 && depth != 32)
 			throw std::runtime_error("Unsupported scene layer bitmap snapshot");
 		const size_t rowBytes = static_cast<size_t>(source->w) * ((depth + 7) / 8);
-		if (const auto allocation = PixelAllocations::Find(source, rowBytes)) {
+		if (const auto allocation = PixelAllocations::Find(source, rowBytes); allocation && allocation->Bytes() > PageWriteFence::SystemPageBytes()) {
 			auto snapshot = std::make_shared<BitmapSnapshot>();
 			snapshot->width = source->w; snapshot->height = source->h; snapshot->depth = depth; snapshot->rowBytes = rowBytes;
 			snapshot->fullCopyPercent = BitmapFullCopyPercent();
