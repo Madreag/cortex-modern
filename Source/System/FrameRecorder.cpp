@@ -254,6 +254,16 @@ namespace RTE {
 		const char* codec = std::getenv("CCCP_TEST_RECORD_CODEC");
 		m_EncoderPath = encoder ? encoder : "";
 		m_EncoderCodec = codec && *codec ? codec : "libx264";
+		// Scripted captures prepare their shared context before the first rendered frame.
+#if defined(_WIN32)
+		if (const char* script = std::getenv("CC_TEST_NET_UI_SCRIPT"); script && *script) {
+			HarnessCost::SimulationSpan setupCost;
+			std::string readbackError;
+			m_ReadbackContext = FrameReadbackContext::Create(readbackError);
+			HarnessCost::Charge(HarnessCost::Recorder, setupCost.Stop());
+			if (!m_ReadbackContext) { Finish(); return refuse(readbackError); }
+		}
+#endif
 		// A killed engine never writes its last manifest; this one already names the capture rate its index is judged at.
 		WriteManifest();
 		// An encoder takes the frames in order on one pipe, so it has one writer; PNGs encode on a pool.

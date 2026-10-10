@@ -4537,9 +4537,13 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		game->m_pEditorGUI[0] = new SceneEditorGUI;
 		auto* editor = game->m_pEditorGUI[0]; if (editor->Create(&game->m_PlayerController[0]) < 0) return false;
 		editor->SetCurrentObject(static_cast<SceneObject*>(brainPreset->Clone())); editor->SetEditorGUIMode(SceneEditorGUI::INSTALLINGBRAIN); editor->SetCursorPos(Vector(120, 120));
-		const auto frame = [&] { g_UInputMan.Update(false); game->RenderUpdate(); editor->Draw(g_FrameMan.GetBackBuffer32(), Vector()); present(); };
+		const auto frame = [&] {
+			g_UInputMan.Update(false); g_UInputMan.EndSimUpdate();
+			game->RenderUpdate(); editor->Draw(g_FrameMan.GetBackBuffer32(), Vector()); present();
+		};
 		frame(); editor->SetCursorPos(Vector(120, 120));
 		mouse(true, 480, 270, false); frame();
+		check("frame_press_reaches_local_editor", editor->GetEditorGUIMode() == SceneEditorGUI::PLACINGOBJECT);
 		check("press_does_not_install", !game->m_LockstepPlacementSubmitted[0]);
 		mouse(false, 480, 270, false); frame();
 		const auto commands = ScenarioRunner::DrainLocalGameCommands();
