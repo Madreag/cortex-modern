@@ -1766,6 +1766,7 @@ def review(scenario, capture, out):
                 "failures": {row["peer"]: row["menu_script_failures"] for row in capture["peers"]},
                 "verdict": "agent-review-required"}
     document["topology"] = capture.get("topology", "single-box: not proof" if len(capture["peers"]) > 1 else "single-peer")
+    document["proof"] = capture.get("proof", False)
     if capture.get("peer_boxes"):
         document["peer_boxes"] = capture["peer_boxes"]
     if capture.get("feel_window"):
@@ -2246,17 +2247,18 @@ def run_one(options, scenario, run, run_index, out):
     if not spread.enabled(options) or getattr(options, "dry_run", False):
         result = _run_one(options, scenario, run, run_index, out)
         if not getattr(options, "dry_run", False):
-            result["topology"] = "spread" if getattr(options, "remote_capture", None) else spread.topology(options, count)
+            result["topology"] = "spread" if getattr(options, "remote_capture", None) else "single-box" if count > 1 else "single-peer"
             if not getattr(options, "remote_capture", None):
                 result["proof"] = False
             for peer in result.get("peers", []):
                 peer["topology"] = result["topology"]
                 peer["record"]["topology"] = result["topology"]
                 if not getattr(options, "remote_capture", None):
+                    peer["proof"] = peer["record"]["proof"] = False
                     record_path = Path(peer["root"]) / "record.json"
                     if record_path.is_file():
                         record = json.loads(record_path.read_text(encoding="utf-8"))
-                        write_json(record_path, dict(record, topology=result["topology"]))
+                        write_json(record_path, dict(record, topology=result["topology"], proof=False))
         return result
     root = Path(out)/run.get("name", f"run{run_index}")
     size = tuple(map(int, (options.size or run.get("size") or scenario.get("size") or DEFAULT_SIZE).split("x")))
@@ -2477,8 +2479,10 @@ def scenario_manifest(capture, out, elapsed):
                 "scratch_root": capture.get("scratch_root"), "scratch_limit_bytes": capture.get("scratch_limit_bytes", SCRATCH_LIMIT),
                 "peer_selection": capture.get("scenario_definition", {}).get("peer_selection"), "platform": capture.get("platform", sys.platform)}
     manifest["topology"] = capture.get("topology", "single-box: not proof" if len(peers) > 1 else "single-peer")
+    manifest["proof"] = capture.get("proof", False)
     for peer in peers:
         peer["topology"] = manifest["topology"]
+        peer["proof"] = manifest["proof"]
         peer["box"] = next((row.get("box") for run in capture["runs"] for row in run["peers"] if run["name"] == peer["run"] and row["peer"] == peer["peer"]), None)
     if capture.get("scenario_definition", {}).get("cross_machine"):
         from e2e.cross import record_auxiliary_evidence
@@ -2514,6 +2518,7 @@ def aggregate_review(capture, out):
                 "run_findings": [finding for document in documents for finding in document.get("run_findings", [])],
                 "reviews": [str(Path(run["root"]) / "review.json") for run in capture["runs"]]}
     document["topology"] = capture.get("topology", "single-box: not proof" if any(len(run.get("peers", [])) > 1 for run in capture["runs"]) else "single-peer")
+    document["proof"] = capture.get("proof", False)
     document["peer_boxes"] = {run["name"]: run.get("peer_boxes", {}) for run in capture["runs"]}
     write_json(Path(out) / "review.json", document)
     return document
@@ -2999,6 +3004,8 @@ def main():
                "scratch_root": str(options.scratch_root), "scratch_limit_bytes": options.scratch_limit_bytes,
                "started": stamp(), "command": [sys.executable, *sys.argv], "scenario_definition": scenario}
     capture["topology"] = ("spread" if options.host_box else spread.topology(options, max(len(run.get("peers") or scenario.get("peers") or []) for run in runs)))
+    if not options.host_box and not spread.enabled(options):
+        capture.update(topology="single-box" if max(len(run.get("peers") or scenario.get("peers") or []) for run in runs) > 1 else "single-peer", proof=False)
     if options.layout_detector:
         capture.update(topology="single-box", proof=False)
     from relay_private import public_value

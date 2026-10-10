@@ -80,6 +80,8 @@ def lobby_wait(peer):
 
 
 def probe(steps, timeout=180000):
+    steps = [part for step in steps for part in
+             ([dict(op="signal", name="done", scope="menu"), step] if step["op"] == "finish" else [step])]
     return json.dumps(dict(schema=1, timeout_ms=timeout, steps=steps), indent=2) + "\n"
 
 
@@ -108,19 +110,19 @@ def lobby_scenes():
     host += watches("lobby-host", "Waiting for Joiner to press Ready")
     joiner += watches("lobby-joiner", "Press Ready when you're ready to play")
     for lines, peer in ((host, "host"), (joiner, "joiner")):
-        lines += ["assert_label LabelLobbyPlayer0 Captain", "assert_label LabelLobbyPlayer1 Joiner",
+        lines += [f"video_mark lobby-{peer}", "assert_label LabelLobbyPlayer0 Captain", "assert_label LabelLobbyPlayer1 Joiner",
                   "assert_text_fits LabelLobbyPlayer0", "assert_text_fits LabelLobbyPlayer1",
-                  "assert_no_overlap LabelLobbyPlayer0 LabelLobbyPlayer1", f"video_mark lobby-{peer}",
+                  "assert_no_overlap LabelLobbyPlayer0 LabelLobbyPlayer1",
                   f"chat all {peer} answers", "wait_ms 1200"]
     host += ["wait_label LabelLobbyChatAny joiner answers"] + assert_watches("lobby-host")
     host += ["wait_ms 2000", "activate ButtonLobbyOptions",
-             "activate TabHostPageSeats", "assert_visible CollectionBoxHostPageSeats 1",
-             "assert_text_fits LabelHostOptionsTitle", "video_mark seats-host", "wait_ms 1400",
+             "activate TabHostPageSeats", "video_mark seats-host", "assert_visible CollectionBoxHostPageSeats 1",
+             "assert_text_fits LabelHostOptionsTitle", "wait_ms 1400",
              "activate ButtonHostOptBack", "wait_ms 1400"]
     joiner += ["wait_label LabelLobbyChatAny host answers"] + assert_watches("lobby-joiner")
     joiner += ["activate ButtonLobbyEditSetup",
-               "activate TabHostPageSeats", "assert_visible CollectionBoxHostPageSeats 1",
-               "assert_enabled ButtonHostOptApply 0", "video_mark seats-joiner", "wait_ms 1400",
+               "activate TabHostPageSeats", "video_mark seats-joiner", "assert_visible CollectionBoxHostPageSeats 1",
+               "assert_enabled ButtonHostOptApply 0", "wait_ms 1400",
                "activate ButtonHostOptBack", "wait_ms 1400"]
     for lines in (host, joiner):
         lines += ["wait_file {PROBE_DIR}/done.json 120", "wait_ms 1400", "exit"]
