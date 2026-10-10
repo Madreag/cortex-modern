@@ -47,6 +47,7 @@ namespace RTE {
 			/// Constructor method used to instantiate a SOPlacer object in system
 			/// memory. Create() should be called before using the object.
 			SOPlacer() { Clear(); }
+			SOPlacer(const SOPlacer& source, CheckpointNativeSnapshot& snapshot);
 
 			/// Creates a SOPlacer to be identical to another, by deep copy.
 			/// @param reference A reference to the SOPlacer to deep copy.

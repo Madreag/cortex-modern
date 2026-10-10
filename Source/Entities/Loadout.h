@@ -29,6 +29,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a Loadout object in system
 		/// memory. Create() should be called before using the object.
 		Loadout() { Clear(); }
+		CheckpointSnapshotMethods(Loadout);
 
 		/// Copy constructor method used to instantiate a Loadout object
 		/// identical to an already existing one.

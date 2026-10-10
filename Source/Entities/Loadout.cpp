@@ -1,9 +1,24 @@
 #include "Loadout.h"
+#include "CheckpointNativeSnapshot.h"
+#include "SceneObject.h"
 #include "PresetMan.h"
 #include "MovableObject.h"
 #include "ACraft.h"
 
 using namespace RTE;
+
+Loadout::Loadout(const Loadout& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	m_Complete(snapshot.Freeze(source.m_Complete)),
+	m_pDeliveryCraft(snapshot.Freeze(source.m_pDeliveryCraft)),
+	m_CargoItems(snapshot.Freeze(source.m_CargoItems)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* Loadout::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
 
 ConcreteClassInfo(Loadout, Entity, 0);
 

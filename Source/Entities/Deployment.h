@@ -29,6 +29,8 @@ namespace RTE {
 		/// Constructor method used to instantiate a Deployment object in system
 		/// memory. Create() should be called before using the object.
 		Deployment();
+		CheckpointSnapshotMethods(Deployment);
+		static void PrepareCheckpointNative(const Deployment& source, Deployment* target, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a Deployment object before deletion
 		/// from system memory.

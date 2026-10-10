@@ -1,4 +1,8 @@
 #include "TerrainObject.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "SceneObject.h"
+#include "ContentFile.h"
 #include "SLTerrain.h"
 #include "SceneMan.h"
 #include "Draw.h"
@@ -10,11 +14,31 @@ using namespace RTE;
 
 ConcreteClassInfo(TerrainObject, SceneObject, 0);
 
+TerrainObject::TerrainObject(const TerrainObject& source, CheckpointNativeSnapshot& snapshot) :
+	SceneObject(source, snapshot),
+	m_FGColorFile(snapshot.Freeze(source.m_FGColorFile)),
+	m_FGColorBitmap(snapshot.Freeze(source.m_FGColorBitmap)),
+	m_BGColorFile(snapshot.Freeze(source.m_BGColorFile)),
+	m_BGColorBitmap(snapshot.Freeze(source.m_BGColorBitmap)),
+	m_MaterialFile(snapshot.Freeze(source.m_MaterialFile)),
+	m_MaterialBitmap(snapshot.Freeze(source.m_MaterialBitmap)),
+	m_BitmapOffset(snapshot.Freeze(source.m_BitmapOffset)),
+	m_OffsetDefined(snapshot.Freeze(source.m_OffsetDefined)),
+	m_ChildObjects(snapshot.Freeze(source.m_ChildObjects)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* TerrainObject::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 TerrainObject::TerrainObject() {
 	Clear();
 }
 
 TerrainObject::~TerrainObject() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

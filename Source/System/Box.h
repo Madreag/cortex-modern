@@ -6,6 +6,7 @@
 #include "raylib/raylib.h"
 
 namespace RTE {
+	class CheckpointNativeSnapshot;
 
 
 	/// A useful 2D axis-aligned rectangle class.
@@ -24,6 +25,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a Box object.
 		Box() { Clear(); }
+		Box(const Box& source, CheckpointNativeSnapshot&) : m_Corner(source.m_Corner), m_Width(source.m_Width), m_Height(source.m_Height) {}
 
 		/// Constructor method used to instantiate a Box object from two points.
 		/// @param corner1 Vector position of the upper left corner of this box.

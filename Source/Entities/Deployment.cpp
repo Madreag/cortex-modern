@@ -1,4 +1,6 @@
 #include "Deployment.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Icon.h"
 #include "PresetMan.h"
 #include "MetaMan.h"
 #include "ContentFile.h"
@@ -18,11 +20,33 @@ ConcreteClassInfo(Deployment, SceneObject, 0);
 std::vector<BITMAP*> Deployment::m_apArrowLeftBitmap;
 std::vector<BITMAP*> Deployment::m_apArrowRightBitmap;
 
+Deployment::Deployment(const Deployment& source, CheckpointNativeSnapshot& snapshot) :
+	SceneObject(source, snapshot),
+	m_LoadoutName(snapshot.Freeze(source.m_LoadoutName)),
+	m_Icon(snapshot.Freeze(source.m_Icon)),
+	m_SpawnRadius(snapshot.Freeze(source.m_SpawnRadius)),
+	m_WalkRadius(snapshot.Freeze(source.m_WalkRadius)),
+	m_ID(snapshot.Freeze(source.m_ID)),
+	m_HFlipped(snapshot.Freeze(source.m_HFlipped)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* Deployment::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
+void Deployment::PrepareCheckpointNative(const Deployment& source, Deployment* target, CheckpointNativeSnapshot& snapshot) {
+	snapshot.Prepare(static_cast<const SceneObject&>(source), static_cast<SceneObject*>(target));
+	snapshot.Prepare(source.m_Icon, &target->m_Icon);
+}
+
 Deployment::Deployment() {
 	Clear();
 }
 
 Deployment::~Deployment() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

@@ -19,6 +19,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a TerrainObject object in system memory. Create() should be called before using the object.
 		TerrainObject();
+		CheckpointSnapshotMethods(TerrainObject);
 
 		/// Makes the TerrainObject object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.

@@ -1,4 +1,7 @@
 #include "BunkerAssemblyScheme.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "ContentFile.h"
 #include "PresetMan.h"
 #include "FrameMan.h"
 #include "Draw.h"
@@ -21,11 +24,33 @@ namespace {
 	}
 } // namespace
 
+BunkerAssemblyScheme::BunkerAssemblyScheme(const BunkerAssemblyScheme& source, CheckpointNativeSnapshot& snapshot) :
+	SceneObject(source, snapshot),
+	m_BitmapFile(snapshot.Freeze(source.m_BitmapFile)),
+	m_pBitmap(snapshot.Freeze(source.m_pBitmap)),
+	m_pPresentationBitmap(snapshot.Freeze(source.m_pPresentationBitmap)),
+	m_pIconBitmap(snapshot.Freeze(source.m_pIconBitmap)),
+	m_ChildObjects(snapshot.Freeze(source.m_ChildObjects)),
+	m_IsOneTypePerScene(snapshot.Freeze(source.m_IsOneTypePerScene)),
+	m_Limit(snapshot.Freeze(source.m_Limit)),
+	m_BitmapOffset(snapshot.Freeze(source.m_BitmapOffset)),
+	m_MaxDeployments(snapshot.Freeze(source.m_MaxDeployments)),
+	m_SymmetricScheme(snapshot.Freeze(source.m_SymmetricScheme)),
+	m_AssemblyGroup(snapshot.Freeze(source.m_AssemblyGroup)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* BunkerAssemblyScheme::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 BunkerAssemblyScheme::BunkerAssemblyScheme() {
 	Clear();
 }
 
 BunkerAssemblyScheme::~BunkerAssemblyScheme() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

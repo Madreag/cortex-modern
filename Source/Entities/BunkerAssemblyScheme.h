@@ -48,6 +48,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a BunkerAssemblyScheme object in system
 		/// memory. Create() should be called before using the object.
 		BunkerAssemblyScheme();
+		CheckpointSnapshotMethods(BunkerAssemblyScheme);
 
 		/// Destructor method used to clean up a BunkerAssemblyScheme object before deletion
 		/// from system memory.

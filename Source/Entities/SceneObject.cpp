@@ -11,6 +11,12 @@ using namespace RTE;
 AbstractClassInfo(SceneObject, Entity);
 const std::string SceneObject::SOPlacer::c_ClassName = "SOPlacer";
 
+SceneObject::SOPlacer::SOPlacer(const SOPlacer& source, CheckpointNativeSnapshot& snapshot) :
+	m_pObjectReference(snapshot.Object(source.m_pObjectReference)), m_CheckpointOwner(nullptr),
+	m_Offset(source.m_Offset), m_RotAngle(source.m_RotAngle), m_HFlipped(source.m_HFlipped), m_Team(source.m_Team) {
+	snapshot.BindValue(source, this);
+}
+
 SceneObject::SceneObject(const SceneObject& source, CheckpointNativeSnapshot& snapshot) :
 	Entity(source, snapshot),
 	m_Pos(snapshot.Freeze(source.m_Pos)),
