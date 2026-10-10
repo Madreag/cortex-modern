@@ -183,7 +183,6 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::FreezeRows(const BITMAP* s
 		if (depth != 8 && depth != 15 && depth != 16 && depth != 24 && depth != 32)
 			throw std::runtime_error("Unsupported scene layer bitmap snapshot");
 		const size_t rowBytes = static_cast<size_t>(source->w) * ((depth + 7) / 8);
-		if (!previous && !markedRows && !markedAll) if (auto uniform = UniformRows(source, depth, rowBytes)) return uniform;
 		if (const auto allocation = PixelAllocations::Find(source, rowBytes); allocation && allocation->Bytes() > PageWriteFence::SystemPageBytes()) {
 			auto snapshot = std::make_shared<BitmapSnapshot>();
 			snapshot->width = source->w; snapshot->height = source->h; snapshot->depth = depth; snapshot->rowBytes = rowBytes;
@@ -199,6 +198,7 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::FreezeRows(const BITMAP* s
 			snapshot->frozen = true;
 			return snapshot;
 		}
+		if (!previous && !markedRows && !markedAll) if (auto uniform = UniformRows(source, depth, rowBytes)) return uniform;
 	}
 	auto snapshot = std::const_pointer_cast<BitmapSnapshot>(CaptureRows(source, {}, markedRows, markedAll, true));
 	if (!snapshot || !previous || previous->width != snapshot->width || previous->height != snapshot->height || previous->depth != snapshot->depth) return snapshot;
@@ -230,7 +230,9 @@ void BitmapSnapshot::Finalize() const {
 		}
 		GFX_VTABLE vtable{}; vtable.color_depth = depth;
 		BITMAP source{}; source.w = width; source.h = height; source.vtable = &vtable; source.line = lines.data();
-		auto result = CaptureRows(&source, frozenRows->previous, frozenRows->hasMarks ? &frozenRows->marked : nullptr, frozenRows->markedAll, true);
+		std::shared_ptr<const BitmapSnapshot> result;
+		if (!frozenRows->previous && !frozenRows->hasMarks && !frozenRows->markedAll) result = UniformRows(&source, depth, rowBytes);
+		if (!result) result = CaptureRows(&source, frozenRows->previous, frozenRows->hasMarks ? &frozenRows->marked : nullptr, frozenRows->markedAll, true);
 		rows = result->rows;
 		fullPixels = result->fullPixels;
 		scannedBytes = result->scannedBytes; markedBytes = result->markedBytes; dirtyBytes = result->dirtyBytes;

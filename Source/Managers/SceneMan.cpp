@@ -3241,6 +3241,32 @@ const Material* SceneMan::ResolveMaterialReference(std::string_view text, bool a
 }
 
 std::string SceneMan::SaveMaterialCatalog() const {
+    if (const auto& snapshot = CheckpointNativeSnapshot::Boundary()) {
+        const int count = m_MaterialCount;
+        auto names = m_MatNameMap;
+        std::array<const Material*, c_PaletteEntriesNumber> palette{};
+        std::vector<const Material*> copies, presets;
+        for (size_t index = 0; index < palette.size(); ++index) palette[index] = snapshot->Object(m_apMatPalette[index]);
+        for (const Material* material: m_MaterialCopiesVector) copies.push_back(snapshot->Object(material));
+        for (const Material* material: CheckpointMaterialPresets()) presets.push_back(snapshot->Object(material));
+        // The catalog's values are owned at the boundary; its descriptors are made on the saver.
+        CheckpointWriter deferred(CheckpointWriter::FieldsOnly{});
+        deferred.AppendFields(CheckpointText::DeferredValues([snapshot, count, names = std::move(names), palette, copies = std::move(copies), presets = std::move(presets)] {
+                CheckpointNativeSnapshot::ReadScope read(snapshot.get());
+                CheckpointWriter::BatchOverride batch(true);
+                return CheckpointWriter::CaptureNative([&] {
+                    std::array<CheckpointText, c_PaletteEntriesNumber> savedPalette;
+                    std::vector<CheckpointText> savedCopies, savedPresets;
+                    for (size_t index = 0; index < palette.size(); ++index) if (palette[index]) savedPalette[index] = CheckpointWriter::CaptureNative([&] { return palette[index]->SaveCheckpoint(); });
+                    for (const Material* material: copies) savedCopies.push_back(CheckpointWriter::CaptureNative([material] { return material->SaveCheckpoint(); }));
+                    for (const Material* material: presets) savedPresets.push_back(CheckpointWriter::CaptureNative([material] { return material->SaveCheckpoint(); }));
+                    CheckpointWriter writer("MaterialCatalog1");
+                    writer(count, names, savedPalette, savedCopies, savedPresets);
+                    return writer.Text();
+                });
+        }));
+        return deferred.Text();
+    }
     if (CheckpointWriter::IsCapturing()) {
         std::array<CheckpointText, c_PaletteEntriesNumber> palette;
         const auto presetMaterials = CheckpointMaterialPresets();
