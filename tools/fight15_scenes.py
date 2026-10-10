@@ -219,7 +219,8 @@ def place(peer, occupied=False, x=None, relative_to=None):
     steps = [wait(editing=True), dict(op="assert_relay"), dict(op="editor_pick", input_player=0),
              dict(op="editor_move", input_player=0, x_fraction=fraction), wait(renders=5, elapsed_ms=1000)]
     if relative_to:
-        steps[3].update(relative_to=relative_to, offset_x=48, offset_y=48)
+        # The prefab's brain chamber is (48, 48) from its top-left, (96, 96) from its cursor.
+        steps[3].update(relative_to=relative_to, offset_x=-48, offset_y=-48)
     if peer == "joiner": steps += [wait(setup_ready=1)]
     if peer == "joiner" and occupied:
         steps += [wait(setup_ready=1), dict(op="editor_move", input_player=0, x_fraction=0.35)]
