@@ -1,4 +1,5 @@
 #include "MOSParticle.h"
+#include "CheckpointNativeSnapshot.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 
@@ -12,11 +13,26 @@ using namespace RTE;
 
 ConcreteClassInfo(MOSParticle, MovableObject, 1000);
 
+MOSParticle::MOSParticle(const MOSParticle& source, CheckpointNativeSnapshot& snapshot) :
+	MOSprite(source, snapshot),
+	m_Atom(snapshot.Freeze(source.m_Atom)),
+	m_PersistedAtomCheckpoint(snapshot.Freeze(source.m_PersistedAtomCheckpoint)),
+	m_PersistedAtomResidue(snapshot.Freeze(source.m_PersistedAtomResidue)),
+	m_HasPersistedAtomResidue(snapshot.Freeze(source.m_HasPersistedAtomResidue)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* MOSParticle::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 MOSParticle::MOSParticle() {
 	Clear();
 }
 
 MOSParticle::~MOSParticle() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

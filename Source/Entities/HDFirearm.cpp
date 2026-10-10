@@ -1,4 +1,9 @@
 #include "HDFirearm.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "SoundContainer.h"
+#include "Attachable.h"
 #include "CheckpointProperties.h"
 #include "MetricsCollector.h"
 #include "CheckpointArchive.h"
@@ -19,11 +24,75 @@ using namespace RTE;
 
 ConcreteClassInfo(HDFirearm, HeldDevice, 50);
 
+HDFirearm::HDFirearm(const HDFirearm& source, CheckpointNativeSnapshot& snapshot) :
+	HeldDevice(source, snapshot),
+	m_pMagazineReference(snapshot.Freeze(source.m_pMagazineReference)),
+	m_pMagazine(snapshot.Freeze(source.m_pMagazine)),
+	m_pFlash(snapshot.Freeze(source.m_pFlash)),
+	m_PreFireSound(snapshot.Freeze(source.m_PreFireSound)),
+	m_FireSound(snapshot.Freeze(source.m_FireSound)),
+	m_FireEchoSound(snapshot.Freeze(source.m_FireEchoSound)),
+	m_ActiveSound(snapshot.Freeze(source.m_ActiveSound)),
+	m_DeactivationSound(snapshot.Freeze(source.m_DeactivationSound)),
+	m_EmptySound(snapshot.Freeze(source.m_EmptySound)),
+	m_ReloadStartSound(snapshot.Freeze(source.m_ReloadStartSound)),
+	m_ReloadEndSound(snapshot.Freeze(source.m_ReloadEndSound)),
+	m_ReloadEndOffset(snapshot.Freeze(source.m_ReloadEndOffset)),
+	m_HasPlayedEndReloadSound(snapshot.Freeze(source.m_HasPlayedEndReloadSound)),
+	m_RateOfFire(snapshot.Freeze(source.m_RateOfFire)),
+	m_ActivationDelay(snapshot.Freeze(source.m_ActivationDelay)),
+	m_DeactivationDelay(snapshot.Freeze(source.m_DeactivationDelay)),
+	m_Reloading(snapshot.Freeze(source.m_Reloading)),
+	m_DoneReloading(snapshot.Freeze(source.m_DoneReloading)),
+	m_BaseReloadTime(snapshot.Freeze(source.m_BaseReloadTime)),
+	m_FullAuto(snapshot.Freeze(source.m_FullAuto)),
+	m_FireIgnoresThis(snapshot.Freeze(source.m_FireIgnoresThis)),
+	m_Reloadable(snapshot.Freeze(source.m_Reloadable)),
+	m_OneHandedReloadTimeMultiplier(snapshot.Freeze(source.m_OneHandedReloadTimeMultiplier)),
+	m_DualReloadable(snapshot.Freeze(source.m_DualReloadable)),
+	m_ReloadAngle(snapshot.Freeze(source.m_ReloadAngle)),
+	m_OneHandedReloadAngle(snapshot.Freeze(source.m_OneHandedReloadAngle)),
+	m_LastFireTmr(snapshot.Freeze(source.m_LastFireTmr)),
+	m_ReloadTmr(snapshot.Freeze(source.m_ReloadTmr)),
+	m_PersistedLastFireTimerAnchor(snapshot.Freeze(source.m_PersistedLastFireTimerAnchor)),
+	m_PersistedReloadTimerAnchor(snapshot.Freeze(source.m_PersistedReloadTimerAnchor)),
+	m_MuzzleOff(snapshot.Freeze(source.m_MuzzleOff)),
+	m_EjectOff(snapshot.Freeze(source.m_EjectOff)),
+	m_MagOff(snapshot.Freeze(source.m_MagOff)),
+	m_ShakeRange(snapshot.Freeze(source.m_ShakeRange)),
+	m_SharpShakeRange(snapshot.Freeze(source.m_SharpShakeRange)),
+	m_NoSupportFactor(snapshot.Freeze(source.m_NoSupportFactor)),
+	m_ParticleSpreadRange(snapshot.Freeze(source.m_ParticleSpreadRange)),
+	m_ShellEjectAngle(snapshot.Freeze(source.m_ShellEjectAngle)),
+	m_ShellSpreadRange(snapshot.Freeze(source.m_ShellSpreadRange)),
+	m_ShellAngVelRange(snapshot.Freeze(source.m_ShellAngVelRange)),
+	m_ShellVelVariation(snapshot.Freeze(source.m_ShellVelVariation)),
+	m_RecoilScreenShakeAmount(snapshot.Freeze(source.m_RecoilScreenShakeAmount)),
+	m_AIFireVel(snapshot.Freeze(source.m_AIFireVel)),
+	m_AIBulletLifeTime(snapshot.Freeze(source.m_AIBulletLifeTime)),
+	m_AIBulletAccScalar(snapshot.Freeze(source.m_AIBulletAccScalar)),
+	m_FiredOnce(snapshot.Freeze(source.m_FiredOnce)),
+	m_FireFrame(snapshot.Freeze(source.m_FireFrame)),
+	m_FiredLastFrame(snapshot.Freeze(source.m_FiredLastFrame)),
+	m_AlreadyClicked(snapshot.Freeze(source.m_AlreadyClicked)),
+	m_RoundsFired(snapshot.Freeze(source.m_RoundsFired)),
+	m_IsAnimatedManually(snapshot.Freeze(source.m_IsAnimatedManually)),
+	m_LegacyCompatibilityRoundsAlwaysFireUnflipped(snapshot.Freeze(source.m_LegacyCompatibilityRoundsAlwaysFireUnflipped)),
+	m_PersistedHDFirearmRuntime(snapshot.Freeze(source.m_PersistedHDFirearmRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* HDFirearm::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 HDFirearm::HDFirearm() {
 	Clear();
 }
 
 HDFirearm::~HDFirearm() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

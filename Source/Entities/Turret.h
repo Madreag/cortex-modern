@@ -20,6 +20,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a Turret object in system memory. Create() should be called before using the object.
 		Turret();
+		CheckpointSnapshotMethods(Turret);
 
 		/// Creates a Turret to be identical to another, by deep copy.
 		/// @param reference A reference to the Turret to deep copy.

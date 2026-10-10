@@ -1,4 +1,5 @@
 #include "AEJetpack.h"
+#include "CheckpointNativeSnapshot.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 
@@ -9,11 +10,32 @@ using namespace RTE;
 
 ConcreteClassInfo(AEJetpack, AEmitter, 20);
 
+AEJetpack::AEJetpack(const AEJetpack& source, CheckpointNativeSnapshot& snapshot) :
+	AEmitter(source, snapshot),
+	m_JetpackType(snapshot.Freeze(source.m_JetpackType)),
+	m_JetTimeTotal(snapshot.Freeze(source.m_JetTimeTotal)),
+	m_JetTimeLeft(snapshot.Freeze(source.m_JetTimeLeft)),
+	m_JetThrustBonusMultiplier(snapshot.Freeze(source.m_JetThrustBonusMultiplier)),
+	m_JetReplenishRate(snapshot.Freeze(source.m_JetReplenishRate)),
+	m_MinimumFuelRatio(snapshot.Freeze(source.m_MinimumFuelRatio)),
+	m_JetAngleRange(snapshot.Freeze(source.m_JetAngleRange)),
+	m_CanAdjustAngleWhileFiring(snapshot.Freeze(source.m_CanAdjustAngleWhileFiring)),
+	m_AdjustsThrottleForWeight(snapshot.Freeze(source.m_AdjustsThrottleForWeight)),
+	m_PersistedAEJetpackRuntime(snapshot.Freeze(source.m_PersistedAEJetpackRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* AEJetpack::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 AEJetpack::AEJetpack() {
 	Clear();
 }
 
 AEJetpack::~AEJetpack() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

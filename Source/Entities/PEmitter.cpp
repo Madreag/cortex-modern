@@ -1,4 +1,9 @@
 #include "PEmitter.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "SoundContainer.h"
+#include "Matrix.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 
@@ -13,11 +18,61 @@ using namespace RTE;
 
 ConcreteClassInfo(PEmitter, MOSParticle, 100);
 
+PEmitter::PEmitter(const PEmitter& source, CheckpointNativeSnapshot& snapshot) :
+	MOSParticle(source, snapshot),
+	m_EmissionList(snapshot.Freeze(source.m_EmissionList)),
+	m_EmissionSound(snapshot.Freeze(source.m_EmissionSound)),
+	m_BurstSound(snapshot.Freeze(source.m_BurstSound)),
+	m_EndSound(snapshot.Freeze(source.m_EndSound)),
+	m_EmitEnabled(snapshot.Freeze(source.m_EmitEnabled)),
+	m_WasEmitting(snapshot.Freeze(source.m_WasEmitting)),
+	m_PersistedBurstTimerAnchor(snapshot.Freeze(source.m_PersistedBurstTimerAnchor)),
+	m_PersistedLastEmitTimerAnchor(snapshot.Freeze(source.m_PersistedLastEmitTimerAnchor)),
+	m_PersistedEmissionAccumulators(snapshot.Freeze(source.m_PersistedEmissionAccumulators)),
+	m_PersistedEmissionTimers(snapshot.Freeze(source.m_PersistedEmissionTimers)),
+	m_EmitCount(snapshot.Freeze(source.m_EmitCount)),
+	m_EmitCountLimit(snapshot.Freeze(source.m_EmitCountLimit)),
+	m_NegativeThrottleMultiplier(snapshot.Freeze(source.m_NegativeThrottleMultiplier)),
+	m_PositiveThrottleMultiplier(snapshot.Freeze(source.m_PositiveThrottleMultiplier)),
+	m_Throttle(snapshot.Freeze(source.m_Throttle)),
+	m_EmissionsIgnoreThis(snapshot.Freeze(source.m_EmissionsIgnoreThis)),
+	m_BurstScale(snapshot.Freeze(source.m_BurstScale)),
+	m_BurstTriggered(snapshot.Freeze(source.m_BurstTriggered)),
+	m_BurstSpacing(snapshot.Freeze(source.m_BurstSpacing)),
+	m_BurstTimer(snapshot.Freeze(source.m_BurstTimer)),
+	m_PlayBurstSound(snapshot.Freeze(source.m_PlayBurstSound)),
+	m_EmitAngle(snapshot.Freeze(source.m_EmitAngle)),
+	m_EmissionOffset(snapshot.Freeze(source.m_EmissionOffset)),
+	m_LastEmitTmr(snapshot.Freeze(source.m_LastEmitTmr)),
+	m_FlashScale(snapshot.Freeze(source.m_FlashScale)),
+	m_AvgBurstImpulse(snapshot.Freeze(source.m_AvgBurstImpulse)),
+	m_AvgImpulse(snapshot.Freeze(source.m_AvgImpulse)),
+	m_LoudnessOnEmit(snapshot.Freeze(source.m_LoudnessOnEmit)),
+	m_FlashOnlyOnBurst(snapshot.Freeze(source.m_FlashOnlyOnBurst)),
+	m_SustainBurstSound(snapshot.Freeze(source.m_SustainBurstSound)),
+	m_BurstSoundFollowsEmitter(snapshot.Freeze(source.m_BurstSoundFollowsEmitter)),
+	m_PersistedPEmitterRuntime(snapshot.Freeze(source.m_PersistedPEmitterRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* PEmitter::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
+void PEmitter::PrepareCheckpointNative(const PEmitter& source, PEmitter* target, CheckpointNativeSnapshot& snapshot) {
+	snapshot.Prepare(static_cast<const MOSParticle&>(source), static_cast<MOSParticle*>(target));
+	snapshot.Prepare(source.m_EmissionSound, &target->m_EmissionSound);
+	snapshot.Prepare(source.m_BurstSound, &target->m_BurstSound);
+	snapshot.Prepare(source.m_EndSound, &target->m_EndSound);
+}
+
 PEmitter::PEmitter() {
 	Clear();
 }
 
 PEmitter::~PEmitter() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

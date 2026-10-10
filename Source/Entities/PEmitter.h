@@ -29,6 +29,8 @@ namespace RTE {
 		/// Constructor method used to instantiate a PEmitter object in system
 		/// memory. Create() should be called before using the object.
 		PEmitter();
+		CheckpointSnapshotMethods(PEmitter);
+		static void PrepareCheckpointNative(const PEmitter& source, PEmitter* target, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a PEmitter object before deletion
 		/// from system memory.

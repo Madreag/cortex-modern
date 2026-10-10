@@ -1,4 +1,9 @@
 #include "AEmitter.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "Matrix.h"
+#include "Attachable.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 
@@ -14,11 +19,58 @@ using namespace RTE;
 
 ConcreteClassInfo(AEmitter, Attachable, 100);
 
+AEmitter::AEmitter(const AEmitter& source, CheckpointNativeSnapshot& snapshot) :
+	Attachable(source, snapshot),
+	m_EmissionList(snapshot.Freeze(source.m_EmissionList)),
+	m_EmissionSound(snapshot.Freeze(source.m_EmissionSound)),
+	m_BurstSound(snapshot.Freeze(source.m_BurstSound)),
+	m_EndSound(snapshot.Freeze(source.m_EndSound)),
+	m_EmitEnabled(snapshot.Freeze(source.m_EmitEnabled)),
+	m_WasEmitting(snapshot.Freeze(source.m_WasEmitting)),
+	m_EmitCount(snapshot.Freeze(source.m_EmitCount)),
+	m_EmitCountLimit(snapshot.Freeze(source.m_EmitCountLimit)),
+	m_NegativeThrottleMultiplier(snapshot.Freeze(source.m_NegativeThrottleMultiplier)),
+	m_PositiveThrottleMultiplier(snapshot.Freeze(source.m_PositiveThrottleMultiplier)),
+	m_Throttle(snapshot.Freeze(source.m_Throttle)),
+	m_EmissionsIgnoreThis(snapshot.Freeze(source.m_EmissionsIgnoreThis)),
+	m_BurstScale(snapshot.Freeze(source.m_BurstScale)),
+	m_BurstDamage(snapshot.Freeze(source.m_BurstDamage)),
+	m_EmitterDamageMultiplier(snapshot.Freeze(source.m_EmitterDamageMultiplier)),
+	m_BurstTriggered(snapshot.Freeze(source.m_BurstTriggered)),
+	m_BurstSpacing(snapshot.Freeze(source.m_BurstSpacing)),
+	m_BurstTimer(snapshot.Freeze(source.m_BurstTimer)),
+	m_PersistedBurstTimerAnchor(snapshot.Freeze(source.m_PersistedBurstTimerAnchor)),
+	m_PersistedEmissionAccumulators(snapshot.Freeze(source.m_PersistedEmissionAccumulators)),
+	m_PersistedEmissionTimers(snapshot.Freeze(source.m_PersistedEmissionTimers)),
+	m_PlayBurstSound(snapshot.Freeze(source.m_PlayBurstSound)),
+	m_EmitAngle(snapshot.Freeze(source.m_EmitAngle)),
+	m_EmissionOffset(snapshot.Freeze(source.m_EmissionOffset)),
+	m_EmitDamage(snapshot.Freeze(source.m_EmitDamage)),
+	m_LastEmitTmr(snapshot.Freeze(source.m_LastEmitTmr)),
+	m_PersistedLastEmitTimerAnchor(snapshot.Freeze(source.m_PersistedLastEmitTimerAnchor)),
+	m_pFlash(snapshot.Freeze(source.m_pFlash)),
+	m_FlashScale(snapshot.Freeze(source.m_FlashScale)),
+	m_AvgBurstImpulse(snapshot.Freeze(source.m_AvgBurstImpulse)),
+	m_AvgImpulse(snapshot.Freeze(source.m_AvgImpulse)),
+	m_LoudnessOnEmit(snapshot.Freeze(source.m_LoudnessOnEmit)),
+	m_FlashOnlyOnBurst(snapshot.Freeze(source.m_FlashOnlyOnBurst)),
+	m_SustainBurstSound(snapshot.Freeze(source.m_SustainBurstSound)),
+	m_BurstSoundFollowsEmitter(snapshot.Freeze(source.m_BurstSoundFollowsEmitter)),
+	m_PersistedAEmitterRuntime(snapshot.Freeze(source.m_PersistedAEmitterRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* AEmitter::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 AEmitter::AEmitter() {
 	Clear();
 }
 
 AEmitter::~AEmitter() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

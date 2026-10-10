@@ -30,6 +30,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a AEmitter object in system
 		/// memory. Create() should be called before using the object.
 		AEmitter();
+		CheckpointSnapshotMethods(AEmitter);
 
 		/// Destructor method used to clean up a AEmitter object before deletion
 		/// from system memory.

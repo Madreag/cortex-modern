@@ -20,6 +20,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a MOPixel object in system memory. Create() should be called before using the object.
 		MOPixel();
+		CheckpointSnapshotMethods(MOPixel);
 
 		/// Convenience constructor to both instantiate a MOPixel in memory and Create it at the same time.
 		/// @param color A Color object specifying the color of this MOPixel.

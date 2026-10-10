@@ -30,6 +30,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a HDFirearm object in system
 		/// memory. Create() should be called before using the object.
 		HDFirearm();
+		CheckpointSnapshotMethods(HDFirearm);
 
 		/// Destructor method used to clean up a HDFirearm object before deletion
 		/// from system memory.
