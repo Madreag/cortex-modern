@@ -27909,6 +27909,11 @@ namespace {
 			    !round.peers[1].GetStats().timeoutReason.starts_with("Complete:")) return done("the explicit end elected a solo successor or left its match running");
 			service.PumpHostMigration();
 			if (service.m_IsHost) return done("the ended survivor installed itself as administrator");
+			ScenarioRunner::SetLockstepCoordinator(&round.peers[1]);
+			const uint64_t stoppedTick = round.peers[1].GetResumeFrame();
+			if (ScenarioRunner::PollLockstepSimulationTick(stoppedTick) || ScenarioRunner::GetControllerReplayError() !=
+			    "tick " + std::to_string(stoppedTick) + " lockstep stopped: Complete:The host left the match")
+				return done("the explicit end did not reach the simulation with its exact reason");
 			service.FinishMatch("The host left the match");
 			if (service.m_State != NetMatchServiceState::Completed || service.GetLobbySnapshot().running)
 				return done("the lone survivor plays on after the delivered host leave");
