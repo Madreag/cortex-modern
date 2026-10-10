@@ -534,9 +534,15 @@ class IsolatedRun:
         extra = dict(env or {})
         self.env = dict(os.environ)
         self.env.update(extra)
-        self.env["CCCP_HEADLESS"] = "1"
+        self.headed = self.env.get("CC_RUNNER_HEADED") == "1"
         env_set = dict(extra)
-        env_set["CCCP_HEADLESS"] = "1"
+        if self.headed:
+            self.argv = [arg for arg in self.argv if arg != "-headless"]
+            self.env.pop("CCCP_HEADLESS", None)
+            env_set.pop("CCCP_HEADLESS", None)
+        else:
+            self.env["CCCP_HEADLESS"] = "1"
+            env_set["CCCP_HEADLESS"] = "1"
         # A FATAL writes the minidump at this cwd-relative path, beside AbortCode.txt.
         if "CC_TEST_CRASH_DUMP" not in extra:
             self.env.setdefault("CC_TEST_CRASH_DUMP", "crash.dmp")
@@ -547,10 +553,11 @@ class IsolatedRun:
             "argv": self.argv,
             "cwd": str(self.cwd),
             "timeout_seconds": timeout,
-            "private_desktop": self.name,
+            "private_desktop": None if self.headed else self.name,
             "input_desktop_before": self.before,
             "created_utc": utc_now(),
-            "headless_env": "1",
+            "headless_env": self.env.get("CCCP_HEADLESS"),
+            "visible_window": self.headed,
             "env_set": env_set,
             "desktop_switch_restricted": True,
             "job_kill_on_close": True,
@@ -567,6 +574,11 @@ class IsolatedRun:
             self._save()
             raise StartupCheckError(reason) from error
         self.record['input_desktop_before'] = self.before
+        if self.headed:
+            if self.before != "Default":
+                raise StartupCheckError("Visible engines require the signed-in player's Default desktop session.")
+            self.name = self.before
+            self.record["launch_desktop"] = self.name
         self._save()
 
     def _check(self, name, ok, detail):
@@ -663,7 +675,7 @@ class IsolatedRun:
             if self.do_startup_checks:
                 self._startup_checks()
             wait_while_user_fullscreen(self.record, self._save)
-            self.desktop = check(create_desktop(self.name, None, None, 0, 0x01FF, None))
+            self.desktop = check(open_input(0, False, 0x0001)) if self.headed else check(create_desktop(self.name, None, None, 0, 0x01FF, None))
             self.job = check(create_job(None, None))
             limits = box_runner_limits(environ=self.env)
             self.record["runner_limits"] = limits
@@ -697,7 +709,7 @@ class IsolatedRun:
             si.cb = C.sizeof(SI)
             si.lpDesktop = "winsta0\\" + self.name
             si.dwFlags = 0x101
-            si.wShowWindow = 0
+            si.wShowWindow = 5 if self.headed else 0
             si.hStdInput = in_handle
             si.hStdOutput = out_handle
             si.hStdError = out_handle
