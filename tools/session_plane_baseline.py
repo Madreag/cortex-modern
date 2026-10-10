@@ -82,6 +82,15 @@ def main():
         original = (baseline / relative).read_text(encoding="utf-8")
         friends = [line for line in current.splitlines() if line.strip().startswith("friend ") and line not in original.splitlines()]
         insert(relative, anchor, "\n" + "\n".join(friends))
+    # Current leave-fact probes need storage the old engine never populates.
+    # Keep that field false by default; no leave/hold/import behavior is backported.
+    relative = "Source/Network/NetSeatRoster.h"
+    original = (baseline / relative).read_text(encoding="utf-8")
+    start = original.index("struct NetRosterSeat {")
+    end = original.index("\n\t};", start)
+    if "leftByChoice" in original[start:end]:
+        raise SystemExit("The baseline already defines the leave-fact probe field")
+    write(relative, original[:end] + "\n\t\tbool leftByChoice = false; ///< Inert storage for the current leave-fact probes." + original[end:])
     insert("Source/Main.cpp", '#include "NetLockstepSelfTest.h"', '\n#include "NetSessionPlaneSelfTest.h"')
     needle = '\t\tif (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-selftest") {'
     text = (baseline / "Source/Main.cpp").read_text(encoding="utf-8")
@@ -94,6 +103,7 @@ def main():
     proof = {"baseline": sha, "probe_source": subprocess.check_output(["git", "-C", str(tip), "rev-parse", "HEAD"], text=True).strip(),
              "files": {name: hashlib.sha256((baseline / name).read_bytes()).hexdigest() for name in changed},
              "behavior_changes": False, "launch_change": "visible POSIX routing",
+             "inert_probe_fields": ["NetRosterSeat::leftByChoice (default false; no baseline decision writes it)"],
              "unavailable_not_credited": list(unavailable),
              "probe_suites": ["net-session-plane", "net-lockstep", "net-input-acceptance", "net-lockstep-released-claims",
                               "net-lockstep-release-paths", "net-lockstep-seat-succession", "net-lockstep-seat-admission",
