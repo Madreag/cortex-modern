@@ -7,6 +7,7 @@
 #include "GUIInput.h"
 #include "GUISound.h"
 #include "CheckpointArchive.h"
+#include "CheckpointNativeSnapshot.h"
 #include "BitmapCheckpoint.h"
 #include "Atom.h"
 #include "NetIdentity.h"
@@ -1240,6 +1241,18 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		PrintCoalescedCapture("fullstate", tick, submitted);
 		return true;
 	}
+	return SubmitCheckpointArchiveImage(fileName, path, matchId, tick, task, compression, identity, std::move(image), {},
+	    std::move(sceneCache), std::move(previousImage), std::move(retired), std::move(retiredLayers), std::move(pixelStorage));
+}
+
+bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
+    std::shared_future<bool>& task, SaveCompression compression, const AutosaveIdentity* identity, std::shared_ptr<CheckpointImage> image,
+    std::function<void()> complete, std::shared_ptr<CheckpointCache> sceneCache, std::shared_ptr<const CheckpointImage> previousImage,
+    std::vector<CheckpointText> retired, std::vector<std::shared_ptr<const BitmapSnapshot>> retiredLayers, std::shared_ptr<const void> pixelStorage) {
+	std::vector<std::string> layerNames;
+	for (const auto& [name, snapshot]: image->layers) layerNames.push_back(name);
+	const SaveKind kind = matchId.empty() ? (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual) : SaveKind::Autosave;
+	static const bool layerCosts = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
 	const CheckpointPalette palette = CaptureCheckpointPalette();
 	const int zipLevel = ZipLevelFor(compression);
 	const auto simThread = std::this_thread::get_id();
@@ -1249,10 +1262,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		descriptor.schema = AutosaveStore::c_DescriptorSchema;
 		descriptor.matchId = matchId;
 		descriptor.savedTick = tick;
-		descriptor.simTimeTicks = g_TimerMan.GetSimTimeTicks();
+		descriptor.simTimeTicks = image->simTimeTicks;
 		descriptor.gameVersion = c_VersionString;
-		descriptor.activityPreset = activity->GetPresetName();
-		descriptor.scenePreset = scene->GetPresetName();
+		descriptor.activityPreset = image->activityName;
+		descriptor.scenePreset = image->originalScenePresetName;
 		if (identity) {
 			descriptor.sessionId = identity->sessionId;
 			descriptor.roundId = identity->roundId;
@@ -1288,11 +1301,12 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// Nothing writes the image once it is published, so the worker keeps its own buffers. A match's automatic captures
 	// are one series; a save the player asked for has none and is always written.
 	const AutosaveArchiveWriter::Submitted submitted = AutosaveWriter().Submit([this, image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel, kind,
-	                                automatic, descriptor, manifest, pinnedCheckpointSource, sceneCache, previousImage,
+	                                automatic, descriptor, manifest, pinnedCheckpointSource, sceneCache, previousImage, complete = std::move(complete),
 	                                retired = std::move(retired), retiredLayers = std::move(retiredLayers), failure = CheckpointFailure::Current(), pixelStorage = std::move(pixelStorage)](bool replaced) mutable {
 		CheckpointFailure::Scope failureScope(failure);
 		pixelStorage.reset();
 		if (replaced) {
+			complete = {};
 			retired.clear();
 			retiredLayers.clear();
 			previousImage.reset();
@@ -1314,11 +1328,17 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			previousImage.reset();
 			sceneCache.reset();
 			if (image->nativeReady.valid()) image->nativeReady.get();
+			if (complete) complete();
 			const CheckpointText main = AssembleOwnedSave(*image);
 			const CheckpointText index = AssembleOwnedIndex(*image);
 			const auto images = ReuseAutosaveImages(matchId, image->layers, palette);
 			const std::string& saveText = main.Text();
 			const std::string& indexText = index.Text();
+			if (complete) {
+				auto previous = CheckpointCow::Get().FinishImage(image, true);
+				previous.reset();
+				complete = {};
+			}
 			if (layerCosts && image->captureClock) {
 				for (const auto& [name, layer]: image->layers) layer->Finalize();
 				const int64_t simUs = image->captureClock->simulationUs.get();
@@ -2744,7 +2764,7 @@ const std::vector<ActivityMan::RuntimeManagerSaver>& ActivityMan::RuntimeManager
 std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage,
                                               std::vector<std::pair<std::string, int64_t>>* timings, const std::vector<CheckpointText>* managerParts,
                                               AudioCheckpointCapture* audio, const AudioCheckpointCapture* audioSamples,
-                                              std::vector<CheckpointSection>* sections) const {
+	                                              std::vector<CheckpointSection>* sections, const CheckpointText* frozenAudio) const {
 	// A script-owned SoundContainer that has lost its last Lua reference still owns its playing
 	// voices until the collector sweeps it, so an unsettled heap names owners no restore can produce.
 	if (collectGarbage) g_LuaMan.CollectGarbageForCheckpoint();
@@ -2802,6 +2822,7 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 		record("committed_seats", [&] { writer(CheckpointWriter::Native([] { return g_UInputMan.SaveCommittedSeats(); })); });
 	}
 	record("audio", [&] {
+		if (frozenAudio) { write("audio", CheckpointScope::Shared, *frozenAudio); return; }
 		// Audio read earlier in the capture is written the same way once its sound owners are known.
 		const auto save = [audio, audioSamples](const std::function<bool(uint64_t, const SoundContainer*)>& contained) {
 			return audio ? g_AudioMan.SaveCaptured(*audio, contained, audioSamples) : g_AudioMan.SaveCheckpoint(contained);

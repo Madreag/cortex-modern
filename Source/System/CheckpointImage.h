@@ -143,7 +143,7 @@ namespace RTE {
 			return m_LuaGraphs;
 		}
 
-		std::shared_ptr<const CheckpointImage> FinishImage(std::shared_ptr<CheckpointImage> image);
+		std::shared_ptr<const CheckpointImage> FinishImage(std::shared_ptr<CheckpointImage> image, bool frozenNative = false);
 		void RecordWorker(int64_t workerUs);
 		void RecordGraphText(int64_t graphTextUs);
 		void PublishLog(const CheckpointImage& image, int64_t workerUs) const;

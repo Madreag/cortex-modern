@@ -27,6 +27,9 @@ namespace RTE {
 	struct AudioCheckpointCapture;
 	struct CheckpointSection;
 	struct CheckpointCaptureClock;
+	struct CheckpointImage;
+	struct BitmapSnapshot;
+	class CheckpointCache;
 	enum class CheckpointScope : uint8_t;
 
 	/// The singleton manager of the Activities and rules of Cortex Command.
@@ -404,11 +407,18 @@ namespace RTE {
 		                              std::shared_future<bool>& task, size_t& bytes, SaveCompression compression = SaveCompression::Fast,
 		                              const AutosaveIdentity* identity = nullptr, bool fullStateOnly = false,
 		                              std::shared_ptr<const CheckpointCaptureClock> captureClock = {});
+		bool QueueFrozenAutosave(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
+		    std::shared_future<bool>& task, size_t& bytes, SaveCompression compression, const AutosaveIdentity* identity,
+		    std::shared_ptr<const CheckpointCaptureClock> captureClock);
+		bool SubmitCheckpointArchiveImage(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
+		    std::shared_future<bool>& task, SaveCompression compression, const AutosaveIdentity* identity, std::shared_ptr<CheckpointImage> image,
+		    std::function<void()> complete = {}, std::shared_ptr<CheckpointCache> sceneCache = {}, std::shared_ptr<const CheckpointImage> previousImage = {},
+		    std::vector<CheckpointText> retired = {}, std::vector<std::shared_ptr<const BitmapSnapshot>> retiredLayers = {}, std::shared_ptr<const void> pixelStorage = {});
 		/// Sections, when given with the manager parts, receives every part the globals carry under its name and scope.
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage,
 		    std::vector<std::pair<std::string, int64_t>>* timings = nullptr, const std::vector<CheckpointText>* managerParts = nullptr,
 		    AudioCheckpointCapture* audio = nullptr, const AudioCheckpointCapture* audioSamples = nullptr,
-		    std::vector<CheckpointSection>* sections = nullptr) const;
+		    std::vector<CheckpointSection>* sections = nullptr, const CheckpointText* frozenAudio = nullptr) const;
 		/// One manager's part of the runtime globals: its name, its saver and whether every peer of a match holds it alike.
 		struct RuntimeManagerSaver {
 			const char* name;

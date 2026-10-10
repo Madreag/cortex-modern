@@ -356,12 +356,15 @@ bool CheckpointCow::HasLua(size_t stateCount) const {
 	return !m_LuaGraphs.empty() && m_LuaGraphs.size() == stateCount;
 }
 
-std::shared_ptr<const CheckpointImage> CheckpointCow::FinishImage(std::shared_ptr<CheckpointImage> image) {
+std::shared_ptr<const CheckpointImage> CheckpointCow::FinishImage(std::shared_ptr<CheckpointImage> image, bool frozenNative) {
 	if (!image) return {};
-	image->generation = m_Cache.Generation();
-	image->objectsReused = m_Cache.Reused();
-	image->objectsCaptured = m_Cache.Touched() > m_Cache.Reused() ? m_Cache.Touched() - m_Cache.Reused() : 0;
+	if (!frozenNative) {
+		image->generation = m_Cache.Generation();
+		image->objectsReused = m_Cache.Reused();
+		image->objectsCaptured = m_Cache.Touched() > m_Cache.Reused() ? m_Cache.Touched() - m_Cache.Reused() : 0;
+	}
 	std::lock_guard lock(m_Mutex);
+	if (frozenNative) image->generation = m_Last ? m_Last->generation + 1 : 1;
 	m_LastFreezeUs = image->freezeUs;
 	m_LastImageBytes = image->imageBytes;
 	m_LastDirtyRatio = image->dirtyRatio;
