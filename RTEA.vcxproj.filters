@@ -586,10 +586,22 @@
     <ClInclude Include="Source\Network\NetResyncRuntimeSelfTest.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetLinkQuality.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetPeerSessionWire.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetPeerFrameHelpers.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetLockstep.h">
       <Filter>Network</Filter>
     </ClInclude>
     <ClInclude Include="Source\Network\NetLockstepSelfTest.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetSessionPlaneSelfTest.h">
       <Filter>Network</Filter>
     </ClInclude>
     <ClInclude Include="Source\Network\NetMatchConfig.h">
@@ -997,10 +1009,34 @@
     <ClCompile Include="Source\Network\NetResyncRuntimeSelfTest.cpp">
       <Filter>Network</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Network\NetLinkQuality.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetPeerFrames.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetPeerBridges.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetPeerInputs.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetPeerReturns.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetPeerAdmin.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetPeerSessionWire.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Network\NetLockstep.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetLockstepSelfTest.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetSessionPlaneSelfTest.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetMatchConfig.cpp">
