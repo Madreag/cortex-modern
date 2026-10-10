@@ -18,6 +18,8 @@
 
 #include "tracy/Tracy.hpp"
 
+#include <algorithm>
+#include <atomic>
 #include <bit>
 #include <future>
 #include <tuple>
@@ -59,6 +61,7 @@ struct Atom::FreezeState : std::enable_shared_from_this<FreezeState> {
 	std::shared_ptr<const FrozenList> fields;
 	std::mutex materialMutex;
 	std::unordered_map<const Material*, std::shared_ptr<const MaterialValue>> materials;
+	const uint64_t serial = [] { static std::atomic<uint64_t> serials{0}; return ++serials; }();
 };
 
 Atom::SnapshotScope::SnapshotScope(bool enabled) {
@@ -679,16 +682,22 @@ std::shared_ptr<const Atom::FrozenList> Atom::FreezeList(const std::vector<Atom*
 		}
 		list->records.push_back(record);
 	}
-	{
+	// A freeze names a few dozen materials thousands of times, so each thread keeps the names it has already looked up.
+	struct Known { uint64_t state = 0; std::vector<std::pair<const Material*, std::shared_ptr<const FreezeState::MaterialValue>>> values; };
+	thread_local Known known;
+	if (known.state != list->state->serial) known = {list->state->serial, {}};
+	for (auto& [source, material]: list->materials) {
+		const auto found = std::find_if(known.values.begin(), known.values.end(), [source](const auto& value) { return value.first == source; });
+		if (found != known.values.end() && (!values || found->second->hasText)) { material = found->second; continue; }
 		std::lock_guard lock(list->state->materialMutex);
-		for (auto& [source, material]: list->materials) {
-			auto& kept = list->state->materials[source];
-			if (!kept || (values && !kept->hasText)) {
-				const CheckpointText text = values ? CheckpointWriter::Native([source] { return g_SceneMan.SaveMaterialReference(source); }) : CheckpointText();
-				kept = std::make_shared<FreezeState::MaterialValue>(FreezeState::MaterialValue{text, source ? source->GetIndex() : -1, values});
-			}
-			material = kept;
+		auto& kept = list->state->materials[source];
+		if (!kept || (values && !kept->hasText)) {
+			const CheckpointText text = values ? CheckpointWriter::Native([source] { return g_SceneMan.SaveMaterialReference(source); }) : CheckpointText();
+			kept = std::make_shared<FreezeState::MaterialValue>(FreezeState::MaterialValue{text, source ? source->GetIndex() : -1, values});
 		}
+		material = kept;
+		if (found != known.values.end()) found->second = kept;
+		else known.values.emplace_back(source, kept);
 	}
 	return list;
 }
