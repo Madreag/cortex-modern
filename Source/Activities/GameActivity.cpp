@@ -1332,6 +1332,10 @@ bool GameActivity::SubmitLockstepBrainPlacement(int player) {
 	if (!scene || !scene->GetResidentBrain(player)) {
 		return false;
 	}
+	if (const std::string reason = MatchBrainPlacementReason(player, scene->GetResidentBrain(player)->GetPos(), scene->GetResidentBrain(player)); !reason.empty()) {
+		RefuseBrainPlacement(player, reason, true);
+		return false;
+	}
 	// This machine vets its own player's spot - the choice is off the wire, like every other menu decision.
 	if (m_pEditorGUI[player] && !m_pEditorGUI[player]->TestBrainResidence()) {
 		return false;
@@ -1515,7 +1519,8 @@ void GameActivity::DriveScriptedSetupEditor(int player) {
 		}
 	} else {
 		const SceneObject* resident = scene ? scene->GetResidentBrain(player) : nullptr;
-		if (resident && resident->GetPresetName() == gesture.preset) {
+		if ((resident && resident->GetPresetName() == gesture.preset) ||
+		    (m_ReadyToStart[player] && m_LockstepSeatBrains[player].preset == gesture.preset)) {
 			s_ScriptedEditorGestures[player].pop_front();
 		} else if (++gesture.attempts >= c_ScriptedEditorAttempts) {
 			give_up();
@@ -1776,6 +1781,8 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 	if (!g_PresetMan.GetEntityPreset(placement.className, placement.preset, placement.module)) {
 		return refuse("Brain placement rejected - unknown preset \"" + placement.preset + "\"");
 	}
+	const auto* brain = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset(placement.className, placement.preset, placement.module));
+	if (const std::string reason = MatchBrainPlacementReason(player, Vector(placement.posX, placement.posY), brain); !reason.empty()) return refuse(reason);
 	// Recorded, not built: the brains are all made at the start, off a counter every peer shares, so a
 	// local editor's own preview objects cannot shift the unique ids the sim ends up with.
 	const auto previous = m_LockstepSeatBrains[player];
@@ -1795,6 +1802,26 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 	ScenarioRunner::PushNetUiToast("brain_placed", IsLocalHumanSeat(player) ? std::string("You placed your brain")
 	                                                                            : LockstepSeatName(player) + " placed their brain");
 	return true;
+}
+
+std::string GameActivity::MatchBrainPlacementReason(int player, const Vector& spot, const SceneObject* brain) const {
+	if (!brain || !brain->IsInGroup("Brains")) return "Choose a brain to install";
+	if (!std::isfinite(spot.m_X) || !std::isfinite(spot.m_Y) || spot.m_X < 0 || spot.m_X >= g_SceneMan.GetSceneWidth() ||
+	    spot.m_Y < 0 || spot.m_Y >= g_SceneMan.GetSceneHeight()) return "Outside the scene - move your brain into the scene";
+	if (g_SceneMan.GetTerrMatter(spot.GetFloorIntX(), spot.GetFloorIntY()) != g_MaterialAir) return "Inside terrain - move your brain into open space";
+	const auto radius = [](const SceneObject* object) {
+		const auto* movable = dynamic_cast<const MovableObject*>(object);
+		return movable ? std::max(8.0F, movable->GetRadius()) : 8.0F;
+	};
+	for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
+		const auto& placed = m_LockstepSeatBrains[seat];
+		if (seat == player || !m_ReadyToStart[seat] || placed.player != seat) continue;
+		const auto* other = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset(placed.className, placed.preset, placed.module));
+		if (g_SceneMan.ShortestDistance(spot, Vector(placed.posX, placed.posY), true).MagnitudeIsLessThan(radius(brain) + radius(other) + 4.0F)) {
+			return "Occupied by " + LockstepSeatName(seat) + "'s brain - choose another spot";
+		}
+	}
+	return {};
 }
 
 std::string GameActivity::LockstepSeatName(int player) {
@@ -1911,6 +1938,9 @@ void GameActivity::SeedPlacement() {
 		// Read before any local editor runs, so every peer starts its reserve from the same id.
 		m_LockstepPlacementUidBase = MovableObject::GetUniqueIDCounter();
 		SeedLockstepResidentBrains();
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			if (IsLocalHumanSeat(player) && m_pEditorGUI[player]) m_pEditorGUI[player]->SetCursorPos(DeterministicBrainSpot(player));
+		}
 		// A seat no peer drives gets its brain from the host, at the spot every peer derives.
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 			if (IsSeatActive(player) && IsHumanSeat(player) && LockstepSeatPeerId(player) == 0 && MayCommitBrainPlacement(player)) {
@@ -1961,7 +1991,9 @@ void GameActivity::UpdateEditingInput(bool frameInput) {
 
 		if (lockstep && askedDone && !m_ReadyToStart[player] && !m_LockstepPlacementSubmitted[player] &&
 		    m_pEditorGUI[player]->GetEditorGUIMode() != SceneEditorGUI::DONEEDITING) {
-			RefuseBrainPlacement(player, "Place your brain in a valid spot first", true);
+			const auto* editor = m_pEditorGUI[player];
+			const std::string reason = MatchBrainPlacementReason(player, editor->GetCursorPos(), editor->GetCurrentObject());
+			RefuseBrainPlacement(player, reason.empty() ? "Click to install your brain before continuing" : reason, true);
 		}
 
 		// Set the team associations with each screen displayed

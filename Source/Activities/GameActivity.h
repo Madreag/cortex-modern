@@ -137,6 +137,7 @@ namespace RTE {
 		/// placed. Read by the match status strip; never read by the simulation.
 		/// @return Whether the match is holding in the synchronized setup editor.
 		bool DescribeLockstepPlacementWait(std::string& names, int& placed, int& total) const;
+		std::string MatchBrainPlacementReason(int player, const Vector& spot, const SceneObject* brain) const;
 
 		/// Records an assigned brain's destruction before its actor is released.
 		void NoteMatchBrainLoss(const Actor& brain, const char* cause);
