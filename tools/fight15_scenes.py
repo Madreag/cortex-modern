@@ -232,14 +232,17 @@ def place(peer, occupied=False, x=None, relative_to=None):
                   dict(op="editor_move", input_player=0, x_fraction=fraction), wait(renders=5, elapsed_ms=1000)]
     steps += capture(f"valid-preview-{peer}")
     steps += [dict(op="assert_editor", input_player=0, equals=dict(screen_text="Valid spot - click to INSTALL your brain")),
+              dict(op="assert_net_ui_clear", player=0 if peer == "host" else 1),
               dict(op="assert_control", control="LabelNetMatchStatus", text_contains="0 of 2" if peer == "host" else "1 of 2", fits=True, inside="BoxNetMatchStatus")]
     steps += click()
     if peer == "host":
         steps += [wait(setup_ready=1)] + capture("placed-host")
-        steps += [dict(op="assert_editor", input_player=0, equals=dict(ready=True, submitted=True)),
+        steps += [dict(op="assert_editor", input_player=0, equals=dict(ready=True, submitted=True, screen_text="READY to start - wait for others to finish...")),
+                  dict(op="assert_net_ui_clear", player=0),
                   dict(op="assert_control", control="LabelNetMatchStatus", text_contains="1 of 2", fits=True, inside="BoxNetMatchStatus")]
     steps += key("Return")
-    steps += [wait(editing=False, paused=False), dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2))]
+    steps += [wait(editing=False, paused=False), dict(op="assert", equals=dict(setup_ready=2, setup_humans=2, local_actor_alive=True)),
+              dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2))]
     steps += capture(f"playing-{peer}")
     return steps
 
