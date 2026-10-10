@@ -2610,6 +2610,7 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			pixel->Create(); pixel->SetPos(Vector(-0.0F, 13.5F)); pixel->SetPresetName("native inventory pixel");
 			actor->AddInventoryItem(pixel.release()); actor->SetPos(Vector(17.25F, -23.5F));
 			actor->SetStringValue(std::string("a\0key", 5), std::string("v\0value", 7));
+			actor->SetDescription(std::string("mod\0description", 15)); actor->AddToGroup("capture-only group");
 			const auto capture = [](const Actor* value) {
 				return Writer::Capture([&](Writer& writer) { Scene::SaveSceneObject(writer, value, false, true); });
 			};
@@ -2636,7 +2637,8 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			marker = std::make_unique<Actor>();
 			const bool poolUnchanged = marker.get() == nextGameplaySlot;
 			marker.reset();
-			actor->SetPos(Vector(99, 101)); actor->SetStringValue(std::string("a\0key", 5), "changed"); actor.reset();
+			actor->SetPos(Vector(99, 101)); actor->SetStringValue(std::string("a\0key", 5), "changed");
+			actor->SetDescription("changed description"); actor->RemoveFromGroup("capture-only group"); actor.reset();
 			const auto output = std::async(std::launch::async, [snapshot, frozen, capture] {
 				CheckpointFrozenClock other{123456789, 987654321, 111111111};
 				CheckpointFrozenClock::Scope moved(&other);

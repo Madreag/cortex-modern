@@ -446,6 +446,7 @@ namespace RTE {
 		Entity** m_CheckpointOwnerSlot = nullptr;
 		const CheckpointNativeSnapshot* m_CheckpointSnapshot = nullptr;
 		const Entity* m_CheckpointPreset = nullptr;
+		const void* m_CheckpointMetadata = nullptr;
 
 		// Forbidding copying
 		Entity(const Entity& reference) {}

@@ -138,7 +138,7 @@ namespace RTE {
 		static const std::shared_ptr<CheckpointNativeSnapshot>& Boundary() { return s_Boundary; }
 		class ReadScope {
 		public:
-			explicit ReadScope(const CheckpointNativeSnapshot* snapshot) : m_Previous(s_Current), m_Clock(snapshot ? &snapshot->m_Clock : nullptr) { if (snapshot) s_Current = snapshot; }
+			explicit ReadScope(const CheckpointNativeSnapshot* snapshot) : m_Previous(s_Current), m_Clock(snapshot ? &snapshot->m_Clock : nullptr) { if (snapshot) { snapshot->MaterializeMetadata(); s_Current = snapshot; } }
 			~ReadScope() { s_Current = m_Previous; }
 		private:
 			const CheckpointNativeSnapshot* m_Previous;
@@ -328,6 +328,10 @@ namespace RTE {
 			return static_cast<T*>(owner.first);
 		}
 		void AssignEntity(Entity& target, const Entity& source);
+		/// Owns equal descriptions, reader positions and groups once while the boundary is held.
+		void FreezeMetadata(Entity& target, const Entity& source);
+		/// Gives frozen objects their legacy containers on the saver before any of them is read.
+		void MaterializeMetadata() const;
 		template<class T> requires (!std::is_array_v<T>) void Prepare(const T& source, T* target) {
 			if constexpr (std::is_base_of_v<Entity, T>) m_Objects.InsertOrAssign(&source, target);
 			else m_Values.InsertOrAssign(&source, target);
@@ -495,6 +499,13 @@ namespace RTE {
 		};
 		struct PresetShard { std::mutex mutex; std::unordered_map<PresetKey, const Entity*, PresetHash, PresetEqual> presets; };
 		std::array<PresetShard, 16> m_Presets;
+		struct Metadata {
+			std::string description, reader;
+			std::unordered_set<std::string> groups;
+		};
+		struct MetadataShard { std::mutex mutex; std::unordered_multimap<size_t, std::unique_ptr<Metadata>> values; };
+		std::array<MetadataShard, 16> m_Metadata;
+		mutable std::once_flag m_MetadataReady;
 		std::array<OwnerShard, 32> m_OwnerShards;
 		CheckpointSharedMap<const Entity*, Entity*> m_Objects;
 		CheckpointSharedMap<const void*, void*> m_Values;
