@@ -824,7 +824,7 @@ namespace {
 				probe.minuteIndex = probe.index; probe.minuteMs = NowMs(); probe.minuteTick = observed["lockstep_frame"].get<uint64_t>();
 			}
 			auto* activity = g_ActivityMan.GetActivity();
-			for (int team = 0; team < Teams::MaxTeamCount; ++team) {
+			for (int team = 0; team < Activity::MaxTeamCount; ++team) {
 				bool human = false;
 				for (int player = 0; player < Players::MaxPlayerCount; ++player) human |= activity->IsSeatActive(player) && activity->IsHumanSeat(player) && activity->GetTeamOfPlayer(player) == team;
 				if (human) continue;
