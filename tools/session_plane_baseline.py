@@ -75,13 +75,12 @@ def main():
     write("Source/Network/NetLockstepSelfTest.cpp", native)
     # Access declarations let current probes inspect the old state without
     # changing a single baseline decision or transport path.
-    for name, anchor in (("NetLockstep.h", "class NetLockstepCoordinator {"), ("NetMatchService.h", "class NetMatchService")):
+    for name, anchor in (("NetLockstep.h", "class NetLockstepCoordinator {"),
+                         ("NetMatchService.h", "class NetMatchService : public Singleton<NetMatchService> {")):
         relative = "Source/Network/" + name
         current = (tip / relative).read_text(encoding="utf-8")
         original = (baseline / relative).read_text(encoding="utf-8")
         friends = [line for line in current.splitlines() if line.strip().startswith("friend ") and line not in original.splitlines()]
-        if name == "NetMatchService.h":
-            anchor = original[original.index(anchor):original.index("{", original.index(anchor)) + 1]
         insert(relative, anchor, "\n" + "\n".join(friends))
     insert("Source/Main.cpp", '#include "NetLockstepSelfTest.h"', '\n#include "NetSessionPlaneSelfTest.h"')
     needle = '\t\tif (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-selftest") {'
