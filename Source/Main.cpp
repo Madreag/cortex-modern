@@ -11507,6 +11507,8 @@ int main(int argc, char** argv) {
 							std::ostringstream line;
 							line << "[net-replay-dump] frame=" << record.targetFrame << " uid=" << frame.actorUniqueID << " mode=" << static_cast<int>(frame.inputMode)
 							     << " player=" << static_cast<int>(frame.playerRaw) << " flags=0x" << std::hex << static_cast<int>(frame.flags) << std::dec
+							     << " state_mask=" << frame.stateMask << " left=" << ((frame.stateMask & (1ULL << MOVE_LEFT)) != 0)
+							     << " right=" << ((frame.stateMask & (1ULL << MOVE_RIGHT)) != 0) << " move_x=" << frame.analogMoveX << " move_y=" << frame.analogMoveY
 							     << " flip=" << (frame.IsActorHFlipped() ? 1 : 0) << " aim_intent=" << (frame.HasAimIntent() ? 1 : 0) << " flip_intent=" << (frame.HasFlipIntent() ? 1 : 0)
 							     << " aim=" << std::hexfloat << frame.aimAngle << std::defaultfloat << " fg=" << frame.equippedFGUniqueID << " bg=" << frame.equippedBGUniqueID
 							     << " device=" << static_cast<int>(frame.deviceClass) << " aim_speed=" << frame.digitalAimSpeed;
