@@ -3644,6 +3644,8 @@ namespace RTE {
 			if (wire.host.GetRoster().stage != NetRosterStage::Ended) return Fail("the watcher fixture did not end its played round");
 			wire.host.SetLiveMatch(false);
 			const std::string betweenRounds = answerTo(121, 0x81, &error);
+			wire.host.FormRematch();
+			if (wire.host.GetRoster().stage != NetRosterStage::Starting) return Fail("the watcher fixture did not form its resumed round");
 			wire.host.SetLiveMatch(true);
 			wire.host.NotePlacementPhase(false, 0);
 			if (wire.host.GetRoster().stage != NetRosterStage::Running) return Fail("the watcher fixture did not start its played round");
