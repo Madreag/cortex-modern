@@ -173,6 +173,10 @@ def run_single(repo, root, steps, size, *, runtime=None, exe=None, guard=False, 
 
 
 def failure_line(result):
+    if result.get("record", {}).get("exit_code") == 0xC0000135:
+        return "runtime DLL missing before engine startup; declare the runner PATH prefix with --runtime-dll-dir"
+    if result.get("record", {}).get("timed_out"):
+        return "engine deadline after " + ("completed probe" if result.get("probe", {}).get("complete") else "incomplete probe")
     return result.get("persistence_error") or result.get("guard_error") or result.get("probe", {}).get("reason", result.get("probe", {}).get("error", "probe incomplete"))
 
 
@@ -181,7 +185,10 @@ def guard_steps():
             {"op": "wait", "paused": False, "sim_at_least": 4},
             {"op": "wait", "renders": 4},
             {"op": "assert", "equals": {"service": "Idle", "screen": "Gameplay", "paused": False, "sim_frame": 4, "local_actor_alive": True}, "connections_absent": True},
-            {"op": "screenshot_pair", "name": "guard"}, {"op": "signal", "name": "done"}, {"op": "finish"}]
+            {"op": "screenshot_pair", "name": "guard"},
+            {"op": "key_down", "key": "Escape"}, {"op": "wait", "paused": True, "renders": 2, "scope": "menu"},
+            {"op": "key_up", "key": "Escape", "scope": "menu"}, {"op": "wait", "renders": 2, "scope": "menu"},
+            {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]
 
 
 def compare_guard(before, after, size):
@@ -572,6 +579,7 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--baseline-repo", type=Path)
     parser.add_argument("--baseline-exe", type=Path)
+    parser.add_argument("--runtime-dll-dir", type=Path, action="append", default=[], help="local Windows runner PATH prefix for both trees' runtime DLLs; leaves the baseline files unchanged")
     parser.add_argument("--single-engine", action="store_true")
     parser.add_argument("--layout-detector", action="store_true", help="four local hidden peers on loopback; no spread or ffmpeg; topology=single-box, proof=false")
     parser.add_argument("--peer-boxes")
@@ -590,16 +598,28 @@ def main():
         parser.error("--port must leave a lane block for both trees' local cases")
     if options.timeout < 120:
         parser.error("--timeout must leave at least 120 seconds for cold loads and framed gestures")
+    options.runtime_dll_dir = [directory.resolve() for directory in options.runtime_dll_dir]
+    if options.runtime_dll_dir:
+        if sys.platform != "win32" or not (options.layout_detector or options.single_engine):
+            parser.error("--runtime-dll-dir is a local Windows runner prefix; proof mode uses the box registry's path_prepend")
+        for directory in options.runtime_dll_dir:
+            if not directory.is_dir() or not any(directory.glob("*.dll")):
+                parser.error("runtime DLL runner PATH prefix is missing or empty: " + str(directory))
+        os.environ["PATH"] = os.pathsep.join([str(directory) for directory in options.runtime_dll_dir] + [os.environ.get("PATH", "")])
+        print("[connection-pictures] runtime DLL runner PATH prefix: " + os.pathsep.join(map(str, options.runtime_dll_dir)), flush=True)
     if options.baseline_repo:
         sha = subprocess.check_output(["git", "-C", str(options.baseline_repo), "rev-parse", "HEAD"], text=True).strip()
         if sha != BASE:
             parser.error("baseline checkout must be " + BASE)
         baseline_exe = options.baseline_exe or options.baseline_repo / "Cortex Command.exe"
         baseline_digest = hashlib.sha256(baseline_exe.read_bytes()).hexdigest()
+        if sys.platform == "win32" and (options.layout_detector or options.single_engine) and not any(baseline_exe.parent.glob("*.dll")) and not options.runtime_dll_dir:
+            parser.error("baseline runtime DLLs are absent beside " + str(baseline_exe) + "; missing runner PATH prefix: use --runtime-dll-dir <RUNTIME_DLL_DIR>")
     options.out.mkdir(parents=True, exist_ok=False)
     result = {"base": BASE, "cases": {}, "needs_testing": [], "pass": False,
               "topology": "single-box" if options.layout_detector or options.single_engine else "spread", "proof": False,
-              "mode": "layout-detector" if options.layout_detector else "single-engine" if options.single_engine else "four-box-proof"}
+              "mode": "layout-detector" if options.layout_detector else "single-engine" if options.single_engine else "four-box-proof",
+              "runtime_dll_dirs": list(map(str, options.runtime_dll_dir))}
     if not options.single_engine and not options.layout_detector:
         try:
             if not Path(__file__).with_name("box_load.py").is_file():
@@ -633,6 +653,10 @@ def main():
             before = run_single(options.baseline_repo, before_root, guard_steps(), size, exe=options.baseline_exe, guard=True, timeout=options.timeout)
             guard = {**compare_guard(before_root, after_root, size), "compared": True, "base_probe_pass": before["pass"], "tip_probe_pass": after["pass"]}
             guard["pass"] &= before["pass"] and after["pass"]
+            if not before["pass"]:
+                guard["base_probe_reason"] = failure_line(before)
+            if not after["pass"]:
+                guard["tip_probe_reason"] = failure_line(after)
         result["cases"]["guard_" + size] = guard
         print(("GREEN" if guard["pass"] and guard["compared"] else "CAPTURED" if guard["pass"] else "FAIL") + " guard " + size + " " + json.dumps(guard), flush=True)
     if options.single_engine:
