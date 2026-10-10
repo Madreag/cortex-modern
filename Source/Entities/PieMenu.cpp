@@ -1,5 +1,6 @@
 #include "PieMenu.h"
 #include "CheckpointArchive.h"
+#include "CheckpointNativeSnapshot.h"
 
 #include "System/ScenarioRunner.h"
 #include "LoopbackTransport.h"
@@ -26,6 +27,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <future>
 #include <sstream>
 #include <string>
 
@@ -58,11 +60,43 @@ const std::unordered_map<Directions, Directions> PieMenu::c_CounterClockwiseDire
 
 BITMAP* PieMenu::s_CursorBitmap = nullptr;
 
+PieMenu::PieMenu(const PieMenu& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot), m_LargeFont(nullptr),
+	m_Owner(snapshot.Freeze(source.m_Owner)), m_MenuController(nullptr), m_AffectedObject(nullptr),
+	m_DirectionIfSubPieMenu(source.m_DirectionIfSubPieMenu), m_MenuMode(source.m_MenuMode),
+	m_CenterPos(source.m_CenterPos), m_Rotation(source.m_Rotation), m_EnabledState(source.m_EnabledState),
+	m_EnableDisableAnimationTimer(snapshot.Freeze(source.m_EnableDisableAnimationTimer)),
+	m_HoverTimer(snapshot.Freeze(source.m_HoverTimer)), m_SubPieMenuHoverOpenTimer(snapshot.Freeze(source.m_SubPieMenuHoverOpenTimer)),
+	m_IconSeparatorMode(source.m_IconSeparatorMode), m_FullInnerRadius(source.m_FullInnerRadius),
+	m_BackgroundThickness(source.m_BackgroundThickness), m_BackgroundSeparatorSize(source.m_BackgroundSeparatorSize),
+	m_DrawBackgroundTransparent(source.m_DrawBackgroundTransparent), m_BackgroundColor(source.m_BackgroundColor),
+	m_BackgroundBorderColor(source.m_BackgroundBorderColor), m_SelectedItemBackgroundColor(source.m_SelectedItemBackgroundColor),
+	m_HoveredPieSlice(nullptr), m_ActivatedPieSlice(nullptr), m_AlreadyActivatedPieSlice(nullptr),
+	m_CurrentPieSlices(snapshot.Freeze(source.m_CurrentPieSlices, &m_CurrentPieSlices)), m_ActiveSubPieMenu(nullptr),
+	m_CurrentInnerRadius(source.m_CurrentInnerRadius), m_CursorInVisiblePosition(source.m_CursorInVisiblePosition),
+	m_CursorAngle(source.m_CursorAngle), m_CursorVisualAngle(source.m_CursorVisualAngle),
+	m_BGBitmap(snapshot.Freeze(source.m_BGBitmap)), m_BGRotationBitmap(snapshot.Freeze(source.m_BGRotationBitmap)),
+	m_BGPieSlicesWithSubPieMenuBitmap(snapshot.Freeze(source.m_BGPieSlicesWithSubPieMenuBitmap)),
+	m_BGBitmapNeedsRedrawing(source.m_BGBitmapNeedsRedrawing),
+	m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing(source.m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing),
+	m_CheckpointInitialized(source.m_CheckpointInitialized) {
+	for (size_t index = 0; index < m_PieQuadrants.size(); ++index) {
+		m_PieQuadrants[index].m_Enabled = source.m_PieQuadrants[index].m_Enabled;
+		m_PieQuadrants[index].m_Direction = source.m_PieQuadrants[index].m_Direction;
+	}
+}
+
+Entity* PieMenu::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 PieMenu::PieMenu() {
 	Clear();
 }
 
 PieMenu::~PieMenu() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -546,6 +580,29 @@ bool PieMenu::RunCheckpointSelfTest() {
 		menu.m_CursorVisualAngle == 0.625F && menu.m_EnableDisableAnimationTimer.GetStartSimTimeMS() == 1234 && menu.m_HoverTimer.GetSimTimeLimitTicks() == 4321);
 	check("independent_pixels_and_clip", getpixel(menu.m_BGBitmap, 3, 4) == 21 && getpixel(menu.m_BGRotationBitmap, 3, 4) == 22 &&
 		getpixel(menu.m_BGPieSlicesWithSubPieMenuBitmap, 3, 4) == 23 && menu.m_BGBitmap->cl == 1 && menu.m_BGBitmap->cb == 10 && !menu.m_BGBitmapNeedsRedrawing);
+	{
+		auto source = std::make_unique<PieMenu>();
+		bool exact = source->Create() >= 0 && source->LoadRuntimeCheckpoint(saved);
+		auto* slice = new PieSlice;
+		exact = slice->Create() >= 0 && exact;
+		exact = source->AddPieSlice(slice, nullptr) && exact;
+		CheckpointWriter::BatchOverride ordinary(false);
+		const auto reference = Writer::Capture([&](Writer& writer) { writer << source.get(); }, 5);
+		const std::string full = reference.Text(), shared = reference.SharedText();
+		auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
+		const auto captured = snapshot->FreezeWriter(source.get()).ReindentWriter(4);
+		snapshot->SealBoundary();
+		putpixel(source->m_BGBitmap, 3, 4, 93);
+		source->m_CurrentInnerRadius = 7;
+		source.reset();
+		bool refused = false;
+		try {
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects, 2);
+			(void)captured.Text();
+		} catch (const std::bad_alloc&) { refused = true; }
+		const auto written = std::async(std::launch::async, [captured] { return std::pair{captured.Text(), captured.SharedText()}; }).get();
+		check("native_menu_writer_survives_source_death_and_partial_allocation_retry", exact && refused && written.first == full && written.second == shared);
+	}
 	menu.FreezeAtRadius(15);
 	check("freeze_is_presentation_only", menu.SaveRuntimeCheckpoint() == saved, menu.SaveRuntimeCheckpoint(), saved);
 	const auto described = menu.DescribeInteractionState();

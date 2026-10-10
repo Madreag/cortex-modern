@@ -30,6 +30,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a PieMenu object in system memory. Create() should be called before using the object.
 		PieMenu();
+		CheckpointSnapshotMethods(PieMenu);
 
 		/// Makes the PieMenu object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.

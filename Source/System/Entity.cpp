@@ -230,6 +230,20 @@ namespace RTE {
 	CheckpointText CheckpointNativeSnapshot::FreezeWriter(const Serializable* source) {
 		if (const auto known = m_WriterValues.Find(source)) return *known;
 		CheckpointCloneCost cost("Writer text");
+		const Entity* ownedSource = nullptr;
+		if (const auto* entity = dynamic_cast<const Entity*>(source)) {
+			try { ownedSource = Object(entity); }
+			catch (const UnsupportedCheckpointNative&) {}
+		}
+		if (ownedSource) {
+			auto values = CheckpointText::DeferredWriter([this, ownedSource] {
+				ReadScope frozen(this);
+				CheckpointWriter::BatchOverride owned(false);
+				CheckpointWriter::CacheScope uncached(nullptr);
+				return Writer::Capture([ownedSource](Writer& writer) { writer << ownedSource; }, 1);
+			});
+			return m_WriterValues.TryEmplace(source, std::move(values)).first;
+		}
 		CheckpointWriter::BatchOverride owned(false);
 		CheckpointWriter::CacheScope uncached(nullptr);
 		auto values = Writer::Capture([source](Writer& writer) { writer << source; }, 1);
