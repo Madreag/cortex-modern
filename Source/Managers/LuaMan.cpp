@@ -112,8 +112,6 @@ extern "C" {
 #include <unordered_set>
 #include <utility>
 
-#include <cmath>
-
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyLua.hpp"
 
@@ -218,7 +216,6 @@ namespace {
 		lua_pop(L, 1);
 	}
 
-<<<<<<< Updated upstream
 	int CheckedNativeCall(lua_State* state, lua_CFunction function) {
 		const FloatingPointEnvironment::Scope scope("Lua native callback");
 		return function(state);
@@ -245,9 +242,6 @@ namespace {
 	}
 
 	// Route math.atan/atan2 through the cross-platform poly — AI ballistics aim through these and the platform libm atan2 diverges cross-toolchain.
-=======
-	// Route the math trig functions through the cross-platform poly — LuaJIT calls the platform libm, which diverges cross-toolchain (combat spread/recoil aim through these).
->>>>>>> Stashed changes
 	int det_math_atan(lua_State* L) {
 		lua_pushnumber(L, DeterministicAtan2(luaL_checknumber(L, 1), luaL_optnumber(L, 2, 1.0)));
 		return 1;
@@ -258,7 +252,6 @@ namespace {
 		return 1;
 	}
 
-<<<<<<< Updated upstream
 	// Route math.exp through the cross-platform poly — combat AI aim-skill uses it and the platform libm exp diverges cross-toolchain.
 	int det_math_exp(lua_State* L) {
 		lua_pushnumber(L, DeterministicExp(luaL_checknumber(L, 1)));
@@ -272,8 +265,6 @@ namespace {
 	}
 
 	// Route the remaining transcendentals through the polys — a LuaJIT/libm probe found sin/cos/tan/asin/acos/tanh/sinh/cosh all diverge cross-toolchain (only log was identical).
-=======
->>>>>>> Stashed changes
 	int det_math_sin(lua_State* L) {
 		lua_pushnumber(L, DeterministicSin(luaL_checknumber(L, 1)));
 		return 1;
@@ -293,18 +284,13 @@ namespace {
 	int det_math_asin(lua_State* L) {
 		const double x = luaL_checknumber(L, 1);
 		const double t = 1.0 - x * x;
-<<<<<<< Updated upstream
 		lua_pushnumber(L, DeterministicAtan2(x, DeterministicSqrt(t < 0.0 ? 0.0 : t)));
-=======
-		lua_pushnumber(L, DeterministicAtan2(x, std::sqrt(t < 0.0 ? 0.0 : t)));
->>>>>>> Stashed changes
 		return 1;
 	}
 
 	int det_math_acos(lua_State* L) {
 		const double x = luaL_checknumber(L, 1);
 		const double t = 1.0 - x * x;
-<<<<<<< Updated upstream
 		lua_pushnumber(L, DeterministicAtan2(DeterministicSqrt(t < 0.0 ? 0.0 : t), x));
 		return 1;
 	}
@@ -326,14 +312,6 @@ namespace {
 	int det_math_cosh(lua_State* L) {
 		const double x = luaL_checknumber(L, 1);
 		lua_pushnumber(L, (DeterministicExp(x) + DeterministicExp(-x)) * 0.5);
-=======
-		lua_pushnumber(L, DeterministicAtan2(std::sqrt(t < 0.0 ? 0.0 : t), x));
-		return 1;
-	}
-
-	int det_math_exp(lua_State* L) {
-		lua_pushnumber(L, DeterministicExp(luaL_checknumber(L, 1)));
->>>>>>> Stashed changes
 		return 1;
 	}
 
@@ -343,13 +321,10 @@ namespace {
 		lua_setfield(L, -2, "atan");
 		lua_pushcfunction(L, det_math_atan2);
 		lua_setfield(L, -2, "atan2");
-<<<<<<< Updated upstream
 		lua_pushcfunction(L, det_math_exp);
 		lua_setfield(L, -2, "exp");
 		lua_pushcfunction(L, det_math_pow);
 		lua_setfield(L, -2, "pow");
-=======
->>>>>>> Stashed changes
 		lua_pushcfunction(L, det_math_sin);
 		lua_setfield(L, -2, "sin");
 		lua_pushcfunction(L, det_math_cos);
@@ -360,17 +335,12 @@ namespace {
 		lua_setfield(L, -2, "asin");
 		lua_pushcfunction(L, det_math_acos);
 		lua_setfield(L, -2, "acos");
-<<<<<<< Updated upstream
 		lua_pushcfunction(L, det_math_tanh);
 		lua_setfield(L, -2, "tanh");
 		lua_pushcfunction(L, det_math_sinh);
 		lua_setfield(L, -2, "sinh");
 		lua_pushcfunction(L, det_math_cosh);
 		lua_setfield(L, -2, "cosh");
-=======
-		lua_pushcfunction(L, det_math_exp);
-		lua_setfield(L, -2, "exp");
->>>>>>> Stashed changes
 		lua_pop(L, 1);
 	}
 } // namespace
