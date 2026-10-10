@@ -223,6 +223,47 @@ Controller::Controller(const Controller& source, CheckpointNativeSnapshot& snaps
 	snapshot.BindValue(source, this);
 }
 
+void Controller::AssignCheckpointNative(const Controller& source, CheckpointNativeSnapshot& snapshot) {
+	m_CheckpointOwner = nullptr; m_CheckpointValueTrap = false;
+	snapshot.BindValue(source, this);
+	m_AnalogMove = snapshot.Freeze(source.m_AnalogMove);
+	m_AnalogAim = snapshot.Freeze(source.m_AnalogAim);
+	m_AnalogCursor = snapshot.Freeze(source.m_AnalogCursor);
+	m_ControlStates = snapshot.Freeze(source.m_ControlStates);
+	m_Disabled = snapshot.Freeze(source.m_Disabled);
+	m_SyncedOrderDisableTick = snapshot.Freeze(source.m_SyncedOrderDisableTick);
+	m_WireApplyTick = snapshot.Freeze(source.m_WireApplyTick);
+	m_WireSchemeValid = snapshot.Freeze(source.m_WireSchemeValid);
+	m_WireDeviceClass = snapshot.Freeze(source.m_WireDeviceClass);
+	m_WireDigitalAimSpeed = snapshot.Freeze(source.m_WireDigitalAimSpeed);
+	m_InputMode = snapshot.Freeze(source.m_InputMode);
+	m_SeatMode = snapshot.Freeze(source.m_SeatMode);
+	m_ControlledActor = snapshot.Freeze(source.m_ControlledActor);
+	m_Player = snapshot.Freeze(source.m_Player);
+	m_SeatPlayer = snapshot.Freeze(source.m_SeatPlayer);
+	m_Team = snapshot.Freeze(source.m_Team);
+	m_NextIgnore = snapshot.Freeze(source.m_NextIgnore);
+	m_PrevIgnore = snapshot.Freeze(source.m_PrevIgnore);
+	m_WeaponChangeNextIgnore = snapshot.Freeze(source.m_WeaponChangeNextIgnore);
+	m_WeaponChangePrevIgnore = snapshot.Freeze(source.m_WeaponChangePrevIgnore);
+	m_WeaponPickupIgnore = snapshot.Freeze(source.m_WeaponPickupIgnore);
+	m_WeaponDropIgnore = snapshot.Freeze(source.m_WeaponDropIgnore);
+	m_WeaponReloadIgnore = snapshot.Freeze(source.m_WeaponReloadIgnore);
+	m_WeaponPrimaryHotkeyIgnore = snapshot.Freeze(source.m_WeaponPrimaryHotkeyIgnore);
+	m_ReleaseTimer.AssignCheckpointNative(source.m_ReleaseTimer, snapshot);
+	m_JoyAccelTimer.AssignCheckpointNative(source.m_JoyAccelTimer, snapshot);
+	m_KeyAccelTimer.AssignCheckpointNative(source.m_KeyAccelTimer, snapshot);
+	m_MouseMovement = snapshot.Freeze(source.m_MouseMovement);
+	m_LocalProduction = snapshot.Freeze(source.m_LocalProduction);
+	m_LocalProductionSeatMode = snapshot.Freeze(source.m_LocalProductionSeatMode);
+	m_LocalProductionSeatPlayer = snapshot.Freeze(source.m_LocalProductionSeatPlayer);
+	m_LocalProductionValid = snapshot.Freeze(source.m_LocalProductionValid);
+	m_CommittedInput = snapshot.Freeze(source.m_CommittedInput);
+	m_ProducingLocalInput = snapshot.Freeze(source.m_ProducingLocalInput);
+	m_AnalogCursorAngleLimits = snapshot.Freeze(source.m_AnalogCursorAngleLimits);
+	m_CheckpointInitialized = snapshot.Freeze(source.m_CheckpointInitialized);
+}
+
 std::string Controller::SaveCheckpoint() const {
 	CheckpointWriter writer("Controller3");
 	VisitCheckpoint(writer, *this);
