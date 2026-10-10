@@ -103,6 +103,10 @@ namespace RTE {
 				const uint64_t heard = LastAuthenticatedTraffic(peer);
 				const auto applied = m_PeerAppliedThrough.find(peer);
 				if (nowMs < heard || nowMs - heard > 1000 || applied == m_PeerAppliedThrough.end()) continue;
+				// A pre-outage sample can still be inside the buffered runway.
+				// Require the reader to have displayed certified bridge history
+				// before admitting its next producible input again.
+				if (applied->second < bridge.fromFrame) continue;
 				// Compare displayed progress on both sides. The prepared horizon
 				// already includes this group's input buffer; comparing it with a
 				// private reader's displayed tick demands that the reader overtake

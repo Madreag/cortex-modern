@@ -28495,9 +28495,11 @@ namespace {
 		struct Wire : LoopbackTransport {
 			uint64_t dropSentFrom = UINT64_MAX, dropReceivedFrom = UINT64_MAX;
 			bool dropSentHeartbeat = false, dropReceivedHeartbeat = false;
+			bool dropSentTraffic = false, dropReceivedTraffic = false;
 			bool dropOneAck = false;
 			uint64_t acceptanceSent = 0, acceptanceReceived = 0, lostAcks = 0;
 			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
+				if (dropSentTraffic) return true;
 				const auto decoded = NetLockstepCodec::Decode(bytes);
 				if (decoded.ok) {
 					if (dropSentHeartbeat && std::holds_alternative<NetLockstepAck>(decoded.packet.payload)) return true;
@@ -28512,6 +28514,7 @@ namespace {
 			std::vector<NetTransportEvent> PollEvents() override {
 				auto events = LoopbackTransport::PollEvents();
 				std::erase_if(events, [&](const NetTransportEvent& event) {
+					if (dropReceivedTraffic && event.type == NetTransportEventType::PacketReceived) return true;
 					const auto decoded = NetLockstepCodec::Decode(event.bytes);
 					if (!decoded.ok) return false;
 					if (dropReceivedHeartbeat && std::holds_alternative<NetLockstepAck>(decoded.packet.payload)) return true;
@@ -28586,7 +28589,7 @@ namespace {
 				pair.host.NoteFrameWait(missing, pair.now); pair.Step(5);
 				if (pair.client.IsLocalSeatHeld() || pair.clientWorld.applied >= missing) { error = "live control traffic held or advanced the unaccepted input"; return false; }
 			}
-			if (receiving) pair.hostWire.dropReceivedHeartbeat = true; else pair.clientWire.dropSentHeartbeat = true;
+			if (receiving) pair.hostWire.dropReceivedTraffic = true; else pair.clientWire.dropSentTraffic = true;
 			const uint64_t deadline = pair.now + c_NetSeatDisconnectSilenceMs + 100;
 			while (pair.now <= deadline && !pair.client.IsLocalSeatHeld()) {
 				pair.host.NoteFrameWait(missing, pair.now); pair.Step(5);
@@ -28661,7 +28664,9 @@ namespace {
 		});
 		row("reclaim_seed", [&](std::string& error) {
 			Pair pair; if (!pair.Start(47555, 4, error) || !pair.Warm(error)) return false;
-			pair.clientWire.dropSentFrom = 105; pair.clientWire.dropSentHeartbeat = true;
+			pair.clientWire.dropSentFrom = 105; pair.clientWire.dropSentTraffic = true;
+			// Drain traffic already in flight before measuring authenticated silence.
+			pair.Step(20);
 			const uint64_t deadline = pair.host.LastAuthenticatedTraffic(2) + c_NetSeatDisconnectSilenceMs;
 			while (pair.now < deadline) {
 				if (pair.host.HasHeldAISeat(2)) { error = "the reclaim fixture held a seat before authenticated silence expired"; return false; }

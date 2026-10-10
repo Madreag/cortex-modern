@@ -4421,6 +4421,7 @@ namespace RTE {
 			}
 			// A drop in the running match is a revision every other holder hears.
 			wire.host.SetLiveMatch(true);
+			wire.host.NotePlacementPhase(false, 0);
 			wire.host.NotifyDisconnect(second.connection, 120);
 			second.connected = false;
 			if (!wire.Pump(&error)) {

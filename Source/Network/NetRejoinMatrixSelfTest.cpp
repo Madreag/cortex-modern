@@ -820,15 +820,20 @@ namespace RTE {
 					return "ok";
 				}
 				case Event::SeatRelease: r.host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, r.now); return "ok";
-				case Event::OwnCap:
+				case Event::OwnCap: {
+					const auto returns = r.host.ReclaimTransactions();
+					const bool beforeActivation = returns.contains(2) && r.hostSimulated < returns.at(2).activationFrame;
 					r.client.Complete("e2e complete");
 					r.clientSession->Close("own cap reached");
 					// The scripted process exits at its cap; it cannot keep sending
 					// gameplay while the test waits for the retained-seat outcome.
 					r.clientLive = false; r.keepSessionAlive = false;
 					r.clientWire.Stop();
-					Pump(r, c_NetSeatDisconnectSilenceMs + 400);
+					// This row observes a cap before the agreed return activates.
+					// Other cap rows observe the later retained-seat disconnect.
+					if (!beforeActivation) Pump(r, c_NetSeatDisconnectSilenceMs + 400);
 					return "ok";
+				}
 				case Event::MatchOver: {
 					const NetPeerId peer = HostSessionPeer(r);
 					const std::string goodbye = "match over through frame " + std::to_string(r.hostSimulated);

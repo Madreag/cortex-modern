@@ -544,7 +544,8 @@ namespace RTE {
 		}
 		if (row.adminDirectory && (fixture.hub.firstAdminRequestMs + 2 < fixture.hub.faultAt + 15000 ||
 		    fixture.firstAdminChangeMs[1] < fixture.hub.faultAt + 16500)) {
-			if (error) *error = "the directory verdict was bypassed before its forced release"; return false;
+			if (error) *error = "the directory verdict was bypassed before its forced release: request_ms=" + std::to_string(fixture.hub.firstAdminRequestMs) +
+			    " activation_ms=" + std::to_string(fixture.firstAdminChangeMs[1]) + " fault_ms=" + std::to_string(fixture.hub.faultAt); return false;
 		}
 		std::cout << "[net-lockstep-selftest] PASS certified_admin_continuity arm=" << arm
 		          << " silence_ms=15000 directory_wait_ms=" << (row.adminDirectory ? 1500 : 0)

@@ -6001,6 +6001,8 @@ namespace RTE {
 			std::map<uint64_t, std::string> trace;        //!< Every tick this round committed, as the sim applied it.
 			uint64_t nextProduce = 0;
 			uint64_t lastApplied = 0;
+			uint64_t simulationAtMs = 0;
+			double simulationCredits = 0;
 			bool startParkPublished = false;
 
 			uint8_t LockstepId() const { return static_cast<uint8_t>(session.GetLocalPeerId() + 1); }
@@ -6397,6 +6399,7 @@ namespace RTE {
 			round.SetSessionEventSink([owner](const NetTransportEvent& event) { owner->handover.push_back(event); });
 			peer.nextProduce = round.GetConfig().startFrame;
 			peer.lastApplied = round.GetConfig().startFrame > 0 ? round.GetConfig().startFrame - 1 : 0;
+			peer.simulationAtMs = NetLockstepNowMs(); peer.simulationCredits = 0;
 			peer.startParkPublished = false;
 		}
 
@@ -6569,12 +6572,22 @@ namespace RTE {
 				++peer.nextProduce;
 			}
 			round.Tick(NetLockstepNowMs());
+			const uint64_t simulationNow = NetLockstepNowMs();
+			const bool catchingUp = []<class Peer>(const Peer& value) {
+				if constexpr (requires { value.PeerFrameCatchUpActive(); }) return value.PeerFrameCatchUpActive();
+				else return false;
+			}(round);
+			if (simulationNow >= peer.simulationAtMs)
+				peer.simulationCredits = std::min(6.0, peer.simulationCredits +
+				    (simulationNow - peer.simulationAtMs) * (catchingUp ? 3.0 : 1.0) / round.GetConfig().simTickMs);
+			peer.simulationAtMs = simulationNow;
 			NetLockstepReadyFrame ready;
-			while (round.PopReadyFrame(ready)) {
+			while (peer.simulationCredits >= 1 && round.PopReadyFrame(ready)) {
 				round.FinishFrameWait(NetLockstepNowMs());
 				peer.trace[ready.frame] = DescribeRematchFrame(ready, round.GetConfig().localPeerId);
 				peer.lastApplied = ready.frame;
 				(void)round.FinishSimulationTick(ready.frame);
+				peer.simulationCredits -= 1;
 				if (peer.host) for (const uint8_t held: ready.aiHeldPeerIds)
 					peer.admission.NoteSeatHeldInPlace(held, NetSeatHoldCause::LinkDrop);
 			}
