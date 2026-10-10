@@ -23,6 +23,8 @@ void MovableMan::CheckEffectsLingerForSelfTest() {
 			std::array<MovableObject*, 2> spawns{};
 			std::array<PreviewEventLedger::Key, 2> keys{};
 			std::array<unsigned long, 2> lifetimes{};
+			std::array<long, 2> identities{};
+			const long long birthTime = g_TimerMan.GetSimTimeTicks();
 			bool setup = true;
 			for (size_t index = 0; index < spawns.size(); ++index) {
 				const Entity* preset = index == 0 ?
@@ -42,6 +44,7 @@ void MovableMan::CheckEffectsLingerForSelfTest() {
 				if (index == 0) spawn->SetLifetime(100);
 				lifetimes[index] = spawn->GetLifetime();
 				spawns[index] = spawn;
+				identities[index] = spawn->GetUniqueID();
 				keys[index] = {PreviewEventLedger::Projectile, emitter, 0,
 					Hash(spawn->GetPresetName() + "@" + std::to_string(spawn->GetModuleID())),
 					static_cast<uint64_t>(static_cast<int64_t>(tick) + shift), 0};
@@ -91,7 +94,8 @@ void MovableMan::CheckEffectsLingerForSelfTest() {
 					if (step == ticks) latePixels = std::max(latePixels, pixels);
 					for (const PreviewGhost& ghost: m_PreviewGhosts) {
 						const bool expired = ghost.object && ghost.object->GetLifetime() &&
-							heldTime > ghost.object->GetAgeTimerStart() + static_cast<long long>(ghost.object->GetLifetime());
+							static_cast<double>(g_TimerMan.GetSimTimeTicks() - ghost.object->GetAgeTimerStart()) * 1000.0 /
+							g_TimerMan.GetTicksPerSecond() > ghost.object->GetLifetime();
 						const bool old = static_cast<uint64_t>(heldTick) > ghost.key.tick &&
 							static_cast<uint64_t>(heldTick) - ghost.key.tick > static_cast<uint64_t>(maxTicks);
 						expiredGhosts += expired;
@@ -104,8 +108,8 @@ void MovableMan::CheckEffectsLingerForSelfTest() {
 					clockHeld &= heldTick == g_TimerMan.GetSimUpdateCount() && heldTime == g_TimerMan.GetSimTimeMS();
 				}
 				for (size_t index = 0; index < spawns.size(); ++index) {
-					const double age = static_cast<double>(step) * g_TimerMan.GetDeltaTimeMS();
-					if (age > lifetimes[index] + 1) worldLifetime &= !IsParticle(spawns[index]);
+					const double age = static_cast<double>(g_TimerMan.GetSimTimeTicks() - birthTime) * 1000.0 / g_TimerMan.GetTicksPerSecond();
+					if (age > lifetimes[index]) worldLifetime &= !IsParticle(FindObjectByUniqueID(identities[index]));
 				}
 				if (step == ticks) break;
 				g_TimerMan.AdvanceSimTickForPreview();
