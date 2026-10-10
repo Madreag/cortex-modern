@@ -6974,7 +6974,10 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	return passed;
 }
 
+#include "LocalPredictionEffectsLingerTest.h"
+
 void MovableMan::Update() {
+	CheckEffectsLingerForSelfTest();
 	ZoneScoped;
 
 	// Don't update if paused
