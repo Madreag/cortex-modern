@@ -55,6 +55,7 @@ def main():
              '-net-match-service-e2e', '-net-port', str(args.port), '-net-match-ticks', str(args.ticks), '-net-match-humans', '2',
              '-net-match-peers', '2', '-net-match-cpu-slots', '0', '-net-match-service-preset', 'Determinism FeelBaseline',
              '-net-match-service-module', 'UserScenes.rte', '-net-match-auto-delay', '-net-local-prediction', 'on',
+             '-net-match-service-scene', 'Grasslands', '-net-match-service-scene-module', 'Base.rte',
              '-net-reconnect-ticket', str(args.out / 'seat.private'), '-net-match-report', str(args.out / 'match.json'),
              '-net-ice', 'on', '-net-rendezvous-log', '6']
     if args.role == 'host':
