@@ -258,10 +258,10 @@ namespace RTE {
 					credits[id - 1] = std::min(credits[id - 1], 6.0);
 					while (credits[id - 1] >= 1) {
 						const uint64_t next = world.applied + 1;
-						if (queued[id - 1] != next) {
+						if (queued[id - 1] != next && !peer.TimingDecisionPendingAt(next)) {
 							ControllerFrame input; input.actorUniqueID = 1000 + id; input.analogMoveX = id * 100;
 							input.stateMask = (1ULL << MOVE_RIGHT) | (1ULL << WEAPON_FIRE) | (1ULL << BODY_JUMP);
-							if (!peer.QueueLocalInput(next, {input}, {}, &error)) return false;
+							if (!peer.DeferLocalInput(next, {input}) && !peer.QueueLocalInput(next, {input}, {}, &error)) return false;
 							queued[id - 1] = next;
 						}
 						NetLockstepReadyFrame ready;
