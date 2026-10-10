@@ -80,7 +80,8 @@ def emit(number, title, host, joiner, host_probe, join_probe, checklist, timeout
 
 
 def lobby_probe(mark):
-    return probe([wait(service="Lobby", scope="menu"), dict(op="assert_relay", scope="menu"),
+    return probe([wait(service="Lobby", scope="menu"), wait(elapsed_ms=18000, scope="menu"),
+                  dict(op="assert_relay", scope="menu"),
                   menu(f"video_mark {mark}"), wait(elapsed_ms=1200, scope="menu"),
                   dict(op="screenshot_pair", name=mark, scope="menu"), dict(op="finish")])
 
@@ -94,14 +95,16 @@ def lobby_scenes():
                   "assert_text_fits LabelLobbyPlayer0", "assert_text_fits LabelLobbyPlayer1",
                   "assert_no_overlap LabelLobbyPlayer0 LabelLobbyPlayer1", f"video_mark lobby-{peer}",
                   f"chat all {peer} answers", "wait_ms 1200"]
-    host += ["wait_label LabelLobbyChatAny joiner answers", "activate ButtonLobbyOptions",
+    host += ["wait_label LabelLobbyChatAny joiner answers"] + assert_watches("lobby-host")
+    host += ["wait_ms 2000", "activate ButtonLobbyOptions",
              "activate TabHostPageSeats", "assert_visible CollectionBoxHostPageSeats 1",
              "assert_text_fits LabelHostOptionsTitle", "video_mark seats-host", "wait_ms 1400",
-             "activate ButtonHostOptBack", "wait_ms 1400"] + assert_watches("lobby-host")
-    joiner += ["wait_label LabelLobbyChatAny host answers", "activate ButtonLobbyEditSetup",
+             "activate ButtonHostOptBack", "wait_ms 1400"]
+    joiner += ["wait_label LabelLobbyChatAny host answers"] + assert_watches("lobby-joiner")
+    joiner += ["activate ButtonLobbyEditSetup",
                "activate TabHostPageSeats", "assert_visible CollectionBoxHostPageSeats 1",
                "assert_enabled ButtonHostOptApply 0", "video_mark seats-joiner", "wait_ms 1400",
-               "activate ButtonHostOptBack", "wait_ms 1400"] + assert_watches("lobby-joiner")
+               "activate ButtonHostOptBack", "wait_ms 1400"]
     for lines in (host, joiner):
         lines += ["wait_file {PROBE_DIR}/done.json 120", "wait_ms 1400", "exit"]
     checks = [dict(id=f"lobby-{peer}", peer=peer, mark=f"lobby-{peer}", screen="MultiplayerScreen",
@@ -174,7 +177,8 @@ def click(button="left"):
 
 
 def capture(mark):
-    return [menu(f"video_mark {mark}"), wait(elapsed_ms=1200), dict(op="screenshot_pair", name=mark)]
+    return [menu(f"video_mark {mark}"), wait(elapsed_ms=1200, scope="menu"),
+            dict(op="screenshot_pair", name=mark, scope="menu")]
 
 
 def game_menu(peer, timeout=360):
