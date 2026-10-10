@@ -120,14 +120,23 @@ namespace RTE {
 		GFX_VTABLE table{};
 		mutable std::vector<uint8_t*> lines;
 		std::shared_ptr<const BitmapSnapshot> snapshot;
+		const BITMAP* loaded = nullptr;
+		size_t rowBytes = 0;
 		CheckpointText text;
 		std::array<std::optional<std::string>, 2> paths;
 		mutable std::once_flag ready;
 		mutable std::string bytes;
+		static std::string Rows(const BITMAP* source, size_t rowBytes) {
+			std::string rows;
+			rows.reserve(rowBytes * static_cast<size_t>(source->h));
+			for (int row = 0; row < source->h; ++row) rows.append(reinterpret_cast<const char*>(source->line[row]), rowBytes);
+			return rows;
+		}
 		void Materialize() const {
 			std::call_once(ready, [this] {
-				bytes = snapshot->PixelBytes();
-				for (size_t row = 0; row < lines.size(); ++row) lines[row] = reinterpret_cast<uint8_t*>(bytes.data()) + row * snapshot->rowBytes;
+				bytes = loaded ? Rows(loaded, rowBytes) : snapshot->PixelBytes();
+				const size_t stride = loaded ? rowBytes : snapshot->rowBytes;
+				for (size_t row = 0; row < lines.size(); ++row) lines[row] = reinterpret_cast<uint8_t*>(bytes.data()) + row * stride;
 			});
 		}
 	};
@@ -150,7 +159,13 @@ namespace RTE {
 			int requested = depth;
 			if (const auto* path = ContentFile::LoadedBitmapPath(source, requested)) pixel->paths[depth] = *path;
 		}
-		if (auto captured = BitmapPixelCaptureScope::Capture(source, {})) { pixel->snapshot = captured->first; pixel->text = captured->second; }
+		const int depth = bitmap_color_depth(source);
+		if ((pixel->paths[0] || pixel->paths[1]) && source->w > 0 && source->h > 0 && (depth == 8 || depth == 15 || depth == 16 || depth == 24 || depth == 32)) {
+			// A loaded image keeps its pixels while it is loaded (a save names its file and a load refuses other pixels), so the saver reads it.
+			pixel->loaded = source;
+			pixel->rowBytes = static_cast<size_t>(source->w) * ((depth + 7) / 8);
+			pixel->text = CheckpointText::Deferred([source, rowBytes = pixel->rowBytes] { return Pixel::Rows(source, rowBytes); }, pixel->rowBytes * static_cast<size_t>(source->h));
+		} else if (auto captured = BitmapPixelCaptureScope::Capture(source, {})) { pixel->snapshot = captured->first; pixel->text = captured->second; }
 		else {
 			pixel->snapshot = BitmapSnapshot::Freeze(source);
 			pixel->text = CheckpointText::Deferred([snapshot = pixel->snapshot] { return snapshot->PixelBytes(); }, pixel->snapshot->LogicalBytes());
