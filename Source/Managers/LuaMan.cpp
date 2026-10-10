@@ -7459,6 +7459,8 @@ std::vector<long> LuaStateWrapper::ListScriptGraphRoots(const std::string& text)
 bool LuaStateWrapper::ValidateScriptGraph(const std::string& text, std::vector<std::string>& problems) {
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
+	static const bool reportBirths = [] { const char* value = std::getenv("CCCP_CHECKPOINT_VALIDATE_BIRTHS"); return value && std::string_view(value) == "1"; }();
+	const uint64_t births = reportBirths ? luaJIT_state_serial(m_State) : 0;
 	const int top = lua_gettop(m_State);
 	const size_t before = problems.size();
 	lua_getglobal(m_State, "_ScriptGraph");
@@ -7470,6 +7472,8 @@ bool LuaStateWrapper::ValidateScriptGraph(const std::string& text, std::vector<s
 		CollectStrings(m_State, -1, problems);
 	}
 	lua_settop(m_State, top);
+	if (reportBirths) System::PrintDiagnosticLine(std::format("[checkpoint-validate-births] bytes={} before={} after={} delta={}", text.size(), births,
+	    luaJIT_state_serial(m_State), static_cast<int64_t>(luaJIT_state_serial(m_State)) - static_cast<int64_t>(births)));
 	return problems.size() == before;
 }
 
