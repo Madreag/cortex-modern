@@ -3622,6 +3622,8 @@ namespace RTE {
 			wire.Add(&player);
 			if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) return Fail("the world's player was not seated: " + error);
 			wire.host.SetLiveMatch(true);
+			wire.host.NotePlacementPhase(false, 0);
+			if (wire.host.GetRoster().stage != NetRosterStage::Running) return Fail("the watcher fixture did not start its played round");
 			if (!player.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) return Fail("the world's player did not leave: " + error);
 			player.connected = false;
 			wire.Remove(player.connection);
@@ -3638,9 +3640,13 @@ namespace RTE {
 				return LastOf<NetH4TicketOffer>(delivered) ? "offered" : "nothing";
 			};
 			// The restart: the world is a lobby after a round until its players come back.
+			wire.host.SetMatchEnded();
+			if (wire.host.GetRoster().stage != NetRosterStage::Ended) return Fail("the watcher fixture did not end its played round");
 			wire.host.SetLiveMatch(false);
 			const std::string betweenRounds = answerTo(121, 0x81, &error);
 			wire.host.SetLiveMatch(true);
+			wire.host.NotePlacementPhase(false, 0);
+			if (wire.host.GetRoster().stage != NetRosterStage::Running) return Fail("the watcher fixture did not start its played round");
 			const std::string whileRunning = answerTo(122, 0x82, &error);
 			std::cout << "[net-reconnect-session-selftest] world_between_rounds newcomer=" << betweenRounds << " while_running=" << whileRunning << std::endl;
 			if (betweenRounds != "slots_held") return Fail("a newcomer to a world between rounds with every slot held was answered '" + betweenRounds + "'");
