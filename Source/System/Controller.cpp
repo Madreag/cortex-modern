@@ -689,7 +689,7 @@ void Controller::UpdatePlayerInput(std::array<bool, ControlState::CONTROLSTATECO
 	m_ControlStates[ControlState::RELEASE_PRIMARY] = released(InputElements::INPUT_FIRE);
 	m_ControlStates[ControlState::RELEASE_SECONDARY] = released(InputElements::INPUT_PIEMENU_DIGITAL);
 
-	UpdatePlayerAnalogInput();
+	UpdatePlayerAnalogInput(frameEdges);
 }
 
 void Controller::UpdatePlayerPieMenuInput(std::array<bool, ControlState::CONTROLSTATECOUNT> lastControlStates, bool frameEdges) {
@@ -817,7 +817,7 @@ void Controller::UpdatePlayerPieMenuInput(std::array<bool, ControlState::CONTROL
 	}
 }
 
-void Controller::UpdatePlayerAnalogInput() {
+void Controller::UpdatePlayerAnalogInput(bool frameEdges) {
 	// ANALOG joystick values
 	Vector move = g_UInputMan.AnalogMoveValues(GetInputPlayer());
 	Vector aim = g_UInputMan.AnalogAimValues(GetInputPlayer());
