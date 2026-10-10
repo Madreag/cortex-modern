@@ -104,6 +104,7 @@ namespace {
 	GUIControlManager* MenuControls() {
 		if (auto* panel = g_MenuMan.GetNetworkPanel(); panel && panel->IsChatEntryOpen()) return panel->OverlayManager();
 		if (auto* pause = g_MenuMan.GetActivePauseMenu()) return pause->AutomationManager();
+		if (auto* panel = g_MenuMan.GetNetworkPanel(); panel && g_MenuMan.IsNetworkPanelOpen()) return panel->AutomationManager();
 		return g_MenuMan.IsMainMenuInteractive() ? g_MenuMan.GetMainMenu()->AutomationManager() : nullptr;
 	}
 	std::string MenuScreen() {
@@ -574,7 +575,8 @@ namespace {
 	/// in-match draw, so their steps wait for it; `finish` ends a script that never leaves the menus.
 	bool MenuScopeStep(const Json& step) {
 		const std::string op = step.value("op", "");
-		return op == "menu" || op == "finish" || step.value("scope", "") == "menu";
+		return op == "menu" || op == "finish" || op == "wait" || op == "key_up" ||
+		    (op == "game_mouse" && step.contains("down") && step["down"] == false) || step.value("scope", "") == "menu";
 	}
 
 	bool Step(const Json& step, Json& observed) {
@@ -636,9 +638,15 @@ namespace {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("lockstep_frame_at_least") || step.contains("renders") ||
 		    step.contains("elapsed_ms") || step.contains("sim_advanced") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
 		    step.contains("editing") || step.contains("setup_ready") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
-			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer"),
+		    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer") || step.contains("returned_peer"),
 			    "wait has no predicate");
 			if (step.contains("held_peer") && !HeldPeer(step.at("held_peer"))) return false;
+			if (step.contains("returned_peer")) {
+				if (HeldPeer(step.at("returned_peer"))) return false;
+				const auto name = step.at("returned_peer").get<std::string>();
+				const auto found = std::find_if(observed["seats"].begin(), observed["seats"].end(), [&](const auto& seat) { return seat.at("name") == name; });
+				if (found == observed["seats"].end() || found->at("dropped") == true || found->at("reclaiming") == true) return false;
+			}
 			// The title screen's own scene reads as Gameplay too, paused; a started game runs.
 			if (step.contains("paused") && observed["paused"] != step["paused"]) return false;
 			if (step.contains("chat_entry_open") && observed["net_ui"].at("chat_entry_open") != step["chat_entry_open"]) return false;
@@ -724,6 +732,11 @@ namespace {
 				SDL_SetModState(static_cast<SDL_Keymod>(event.key.down ? SDL_GetModState() | modifier : SDL_GetModState() & ~modifier));
 			}
 			Push(event);
+		} else if (op == "wait_public_row") {
+			auto* main = g_MenuMan.IsMainMenuInteractive() ? g_MenuMan.GetMainMenu() : nullptr;
+			std::string list; int row = -1;
+			if (!main || !main->AutomationRowOf(step.at("name").get<std::string>(), list, row)) return false;
+			observed["public_row"] = {{"list", list}, {"row", row}};
 		} else if (op == "editor_pick") {
 			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 			auto* editor = game ? game->GetEditorGUI(LocalPlayer(step)) : nullptr;
@@ -755,8 +768,12 @@ namespace {
 				auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 				auto* editor = game ? game->GetEditorGUI(LocalPlayer(step)) : nullptr;
 				Require(editor && observed["editing"] == true, "relative editor motion has no local editor");
-				const float x = step.contains("x") ? step["x"].get<float>() : g_SceneMan.GetSceneWidth() * step.value("x_fraction", 0.5F);
-				const float y = step.contains("y") ? step["y"].get<float>() : g_SceneMan.FindAltitude(Vector(x, 0), 0, 1) - 20.0F;
+				float x = step.contains("x") ? step["x"].get<float>() : g_SceneMan.GetSceneWidth() * step.value("x_fraction", 0.5F);
+				float y = step.contains("y") ? step["y"].get<float>() : g_SceneMan.FindAltitude(Vector(x, 0), g_SceneMan.GetSceneHeight(), 10, true) - 20.0F;
+				if (step.contains("relative_to")) {
+					const auto& origin = probe.result.at("bookmarks").at(step.at("relative_to").get<std::string>()).at("editor_target");
+					x = origin[0].get<float>() + step.value("offset_x", 0.0F); y = origin[1].get<float>() + step.value("offset_y", 0.0F);
+				}
 				const Vector difference = Vector(x, y) - editor->GetCursorPos();
 				observed["editor_cursor"] = {editor->GetCursorPos().m_X, editor->GetCursorPos().m_Y};
 				observed["editor_target"] = {x, y};
@@ -862,6 +879,7 @@ namespace {
 				return false;
 			} else if (command == "activate" || command == "post_command") {
 				args >> name;
+				if (name.starts_with("NetworkSeat") && name.find('@') != std::string::npos) name = Control({{"control", name}})->GetName();
 				auto* main = g_MenuMan.IsMainMenuInteractive() ? g_MenuMan.GetMainMenu() : nullptr;
 			accepted = manager && MenuAutomation::HandClick(manager, name, !buy && !g_MenuMan.GetActivePauseMenu() && main ? main->AutomationModalDialog() : nullptr, detail);
 			} else if (command == "assert_enabled") {

@@ -1,0 +1,543 @@
+{
+  "schema": 1,
+  "name": "fight15-s10",
+  "title": "Twenty-minute stock endless AI fight with scripted bunker and brain setup",
+  "port_base": 49430,
+  "size": "960x540",
+  "timeout_s": 1750,
+  "peers": [
+    {
+      "name": "host",
+      "menu_script": "host.menu",
+      "probe": "host.probe",
+      "settings": {
+        "SessionDirectoryUrl": "directory.broserver.com",
+        "NetworkHostRelayMode": "Directory",
+        "NetworkConnectionMode": "RelayOnly",
+        "NetworkIceEnable": 1,
+        "NetworkPortMapEnable": 0,
+        "NetworkMatchStatusMode": "Always",
+        "NetworkDisplayName": "Captain"
+      }
+    },
+    {
+      "name": "joiner",
+      "menu_script": "joiner.menu",
+      "probe": "joiner.probe",
+      "settings": {
+        "SessionDirectoryUrl": "directory.broserver.com",
+        "NetworkHostRelayMode": "Directory",
+        "NetworkConnectionMode": "RelayOnly",
+        "NetworkIceEnable": 1,
+        "NetworkPortMapEnable": 0,
+        "NetworkMatchStatusMode": "Always",
+        "NetworkDisplayName": "Joiner"
+      }
+    }
+  ],
+  "scripts": {
+    "host.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nsettext TextMultiplayerName Captain\nactivate ButtonMultiplayerHostGame\ncombo_select ComboHostActivity Skirmish Defense\ncombo_select ComboHostScene Grasslands\nsetup_host_port {PORT}\ncombo_select ComboHostPlayers 4\nactivate ButtonHostOptions\nactivate TabHostPageConnection\ncombo_select ComboHostNetVisibility Public (default)\ncombo_select ComboHostNetRelay Game service (default)\nactivate TabHostPageSeats\ncombo_select ComboHostSeatType2 CPU\ncombo_select ComboHostSeatType3 CPU\nactivate TabHostPageRules\nslider_set SliderHostRulesDifficulty 0\nslider_set SliderHostRulesGold 31000\nsetcheck CheckHostRulesClearPath 0\nactivate ButtonHostOptApply\nactivate ButtonHostOptBack\nactivate ButtonMultiplayerCreate\nwait_substate Lobby 90\nvideo_mark fight15-host-listening\nwait_connected 2 90\nwait_ms 1200\nwait_remote_ready 90\nactivate ButtonMultiplayerStart\nwait_file {PROBE_DIR}/done.json 1600\nwait_ms 1400\nexit\n",
+    "joiner.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_row GameRowPort{PORT} 90\nclick_row GameRowPort{PORT}\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 2 90\nwait_substate Lobby 90\nwait_ms 1200\nactivate ButtonMultiplayerReady\nwait_file {PROBE_DIR}/done.json 1600\nwait_ms 1400\nexit\n",
+    "host.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 1600000,\n  \"steps\": [\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"BunkerAssembly\",\n      \"preset\": \"Brain Chamber Left 2x2 - 1\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"x_fraction\": 0.3,\n      \"remember\": \"bunker\"\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"x_fraction\": 0.3,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": 48,\n      \"offset_y\": 48\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 5,\n      \"elapsed_ms\": 1000\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark valid-preview-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"valid-preview-host\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"screen_text_contains\": \"Valid spot - click to INSTALL your brain\"\n    },\n    {\n      \"op\": \"assert_control\",\n      \"control\": \"LabelNetMatchStatus\",\n      \"text_contains\": \"0 of 2\",\n      \"fits\": true,\n      \"inside\": \"BoxNetMatchStatus\"\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"setup_ready\": 1\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark placed-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"placed-host\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"ready\": true,\n        \"submitted\": true\n      }\n    },\n    {\n      \"op\": \"assert_control\",\n      \"control\": \"LabelNetMatchStatus\",\n      \"text_contains\": \"1 of 2\",\n      \"fits\": true,\n      \"inside\": \"BoxNetMatchStatus\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"Return\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"Return\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": false,\n      \"paused\": false\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark playing-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"playing-host\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 1\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-01-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-01-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 2\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-02-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-02-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 3\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-03-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-03-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 4\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-04-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-04-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 5\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-05-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-05-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 6\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-06-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-06-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 7\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-07-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-07-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 8\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-08-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-08-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 9\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-09-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-09-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 10\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-10-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-10-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 11\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-11-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-11-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 12\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-12-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-12-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 13\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-13-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-13-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 14\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-14-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-14-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 15\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-15-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-15-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 16\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-16-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-16-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 17\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-17-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-17-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 18\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-18-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-18-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 19\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-19-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-19-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 20\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-20-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-20-host\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"Escape\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"Escape\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"screen\": \"Pause\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"activate ButtonEndMatch\"\n    },\n    {\n      \"op\": \"wait\",\n      \"screen\": \"PauseLeaveConfirm\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"activate ButtonLeaveConfirm\"\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Lobby\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark fight-ended-host\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"fight-ended-host\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"assert_label LabelLastMatchSummary host\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ],\n  \"activate_phase\": \"Running\",\n  \"sim_clock\": \"lockstep\"\n}\n",
+    "joiner.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 1600000,\n  \"steps\": [\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"BunkerAssembly\",\n      \"preset\": \"Brain Chamber Left 2x2 - 1\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"x_fraction\": 0.7,\n      \"remember\": \"bunker\"\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"x_fraction\": 0.7,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": 48,\n      \"offset_y\": 48\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 5,\n      \"elapsed_ms\": 1000\n    },\n    {\n      \"op\": \"wait\",\n      \"setup_ready\": 1\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark valid-preview-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"valid-preview-joiner\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"screen_text_contains\": \"Valid spot - click to INSTALL your brain\"\n    },\n    {\n      \"op\": \"assert_control\",\n      \"control\": \"LabelNetMatchStatus\",\n      \"text_contains\": \"1 of 2\",\n      \"fits\": true,\n      \"inside\": \"BoxNetMatchStatus\"\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"Return\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"Return\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": false,\n      \"paused\": false\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark playing-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"playing-joiner\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 1\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-01-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-01-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 2\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-02-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-02-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 3\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-03-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-03-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 4\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-04-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-04-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 5\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-05-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-05-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 6\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-06-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-06-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 7\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-07-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-07-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 8\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-08-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-08-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 9\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-09-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-09-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 10\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-10-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-10-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 11\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-11-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-11-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 12\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-12-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-12-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 13\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-13-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-13-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 14\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-14-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-14-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 15\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-15-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-15-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 16\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-16-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-16-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 17\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-17-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-17-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 18\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-18-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-18-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 19\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-19-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-19-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 20\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-20-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-20-joiner\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Lobby\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark fight-ended-joiner\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"fight-ended-joiner\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"assert_label LabelLastMatchSummary host\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ],\n  \"activate_phase\": \"Running\",\n  \"sim_clock\": \"lockstep\"\n}\n"
+  },
+  "checklist": [
+    {
+      "id": "host-valid-preview-host",
+      "peer": "host",
+      "mark": "valid-preview-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        15,
+        16
+      ]
+    },
+    {
+      "id": "host-placed-host",
+      "peer": "host",
+      "mark": "placed-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        25,
+        26,
+        32
+      ]
+    },
+    {
+      "id": "host-minute-01-host",
+      "peer": "host",
+      "mark": "minute-01-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        47,
+        48
+      ]
+    },
+    {
+      "id": "host-minute-02-host",
+      "peer": "host",
+      "mark": "minute-02-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        60,
+        61
+      ]
+    },
+    {
+      "id": "host-minute-03-host",
+      "peer": "host",
+      "mark": "minute-03-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        73,
+        74
+      ]
+    },
+    {
+      "id": "host-minute-04-host",
+      "peer": "host",
+      "mark": "minute-04-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        86,
+        87
+      ]
+    },
+    {
+      "id": "host-minute-05-host",
+      "peer": "host",
+      "mark": "minute-05-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        99,
+        100
+      ]
+    },
+    {
+      "id": "host-minute-06-host",
+      "peer": "host",
+      "mark": "minute-06-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        112,
+        113
+      ]
+    },
+    {
+      "id": "host-minute-07-host",
+      "peer": "host",
+      "mark": "minute-07-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        125,
+        126
+      ]
+    },
+    {
+      "id": "host-minute-08-host",
+      "peer": "host",
+      "mark": "minute-08-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        138,
+        139
+      ]
+    },
+    {
+      "id": "host-minute-09-host",
+      "peer": "host",
+      "mark": "minute-09-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        151,
+        152
+      ]
+    },
+    {
+      "id": "host-minute-10-host",
+      "peer": "host",
+      "mark": "minute-10-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        164,
+        165
+      ]
+    },
+    {
+      "id": "host-minute-11-host",
+      "peer": "host",
+      "mark": "minute-11-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        177,
+        178
+      ]
+    },
+    {
+      "id": "host-minute-12-host",
+      "peer": "host",
+      "mark": "minute-12-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        190,
+        191
+      ]
+    },
+    {
+      "id": "host-minute-13-host",
+      "peer": "host",
+      "mark": "minute-13-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        203,
+        204
+      ]
+    },
+    {
+      "id": "host-minute-14-host",
+      "peer": "host",
+      "mark": "minute-14-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        216,
+        217
+      ]
+    },
+    {
+      "id": "host-minute-15-host",
+      "peer": "host",
+      "mark": "minute-15-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        229,
+        230
+      ]
+    },
+    {
+      "id": "host-minute-16-host",
+      "peer": "host",
+      "mark": "minute-16-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        242,
+        243
+      ]
+    },
+    {
+      "id": "host-minute-17-host",
+      "peer": "host",
+      "mark": "minute-17-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        255,
+        256
+      ]
+    },
+    {
+      "id": "host-minute-18-host",
+      "peer": "host",
+      "mark": "minute-18-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        268,
+        269
+      ]
+    },
+    {
+      "id": "host-minute-19-host",
+      "peer": "host",
+      "mark": "minute-19-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        281,
+        282
+      ]
+    },
+    {
+      "id": "host-minute-20-host",
+      "peer": "host",
+      "mark": "minute-20-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        294,
+        295
+      ]
+    },
+    {
+      "id": "twenty-minutes-host",
+      "peer": "host",
+      "mark": "fight-ended-host",
+      "screen": "MultiplayerScreen",
+      "what": "Twenty full running minutes at >=58 ticks/s, living local player, AI weapon fire and named end reason.",
+      "log_regex": [
+        "\\[fight15-scene\\] minute=20 pace=",
+        "\\[net-match\\].*host"
+      ]
+    },
+    {
+      "id": "joiner-valid-preview-joiner",
+      "peer": "joiner",
+      "mark": "valid-preview-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        16,
+        17,
+        27
+      ]
+    },
+    {
+      "id": "joiner-minute-01-joiner",
+      "peer": "joiner",
+      "mark": "minute-01-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        42,
+        43
+      ]
+    },
+    {
+      "id": "joiner-minute-02-joiner",
+      "peer": "joiner",
+      "mark": "minute-02-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        55,
+        56
+      ]
+    },
+    {
+      "id": "joiner-minute-03-joiner",
+      "peer": "joiner",
+      "mark": "minute-03-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        68,
+        69
+      ]
+    },
+    {
+      "id": "joiner-minute-04-joiner",
+      "peer": "joiner",
+      "mark": "minute-04-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        81,
+        82
+      ]
+    },
+    {
+      "id": "joiner-minute-05-joiner",
+      "peer": "joiner",
+      "mark": "minute-05-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        94,
+        95
+      ]
+    },
+    {
+      "id": "joiner-minute-06-joiner",
+      "peer": "joiner",
+      "mark": "minute-06-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        107,
+        108
+      ]
+    },
+    {
+      "id": "joiner-minute-07-joiner",
+      "peer": "joiner",
+      "mark": "minute-07-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        120,
+        121
+      ]
+    },
+    {
+      "id": "joiner-minute-08-joiner",
+      "peer": "joiner",
+      "mark": "minute-08-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        133,
+        134
+      ]
+    },
+    {
+      "id": "joiner-minute-09-joiner",
+      "peer": "joiner",
+      "mark": "minute-09-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        146,
+        147
+      ]
+    },
+    {
+      "id": "joiner-minute-10-joiner",
+      "peer": "joiner",
+      "mark": "minute-10-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        159,
+        160
+      ]
+    },
+    {
+      "id": "joiner-minute-11-joiner",
+      "peer": "joiner",
+      "mark": "minute-11-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        172,
+        173
+      ]
+    },
+    {
+      "id": "joiner-minute-12-joiner",
+      "peer": "joiner",
+      "mark": "minute-12-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        185,
+        186
+      ]
+    },
+    {
+      "id": "joiner-minute-13-joiner",
+      "peer": "joiner",
+      "mark": "minute-13-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        198,
+        199
+      ]
+    },
+    {
+      "id": "joiner-minute-14-joiner",
+      "peer": "joiner",
+      "mark": "minute-14-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        211,
+        212
+      ]
+    },
+    {
+      "id": "joiner-minute-15-joiner",
+      "peer": "joiner",
+      "mark": "minute-15-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        224,
+        225
+      ]
+    },
+    {
+      "id": "joiner-minute-16-joiner",
+      "peer": "joiner",
+      "mark": "minute-16-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        237,
+        238
+      ]
+    },
+    {
+      "id": "joiner-minute-17-joiner",
+      "peer": "joiner",
+      "mark": "minute-17-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        250,
+        251
+      ]
+    },
+    {
+      "id": "joiner-minute-18-joiner",
+      "peer": "joiner",
+      "mark": "minute-18-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        263,
+        264
+      ]
+    },
+    {
+      "id": "joiner-minute-19-joiner",
+      "peer": "joiner",
+      "mark": "minute-19-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        276,
+        277
+      ]
+    },
+    {
+      "id": "joiner-minute-20-joiner",
+      "peer": "joiner",
+      "mark": "minute-20-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        289,
+        290
+      ]
+    },
+    {
+      "id": "twenty-minutes-joiner",
+      "peer": "joiner",
+      "mark": "fight-ended-joiner",
+      "screen": "MultiplayerScreen",
+      "what": "Twenty full running minutes at >=58 ticks/s, living local player, AI weapon fire and named end reason.",
+      "log_regex": [
+        "\\[fight15-scene\\] minute=20 pace=",
+        "\\[net-match\\].*host"
+      ]
+    }
+  ]
+}
