@@ -160,7 +160,7 @@ class DirectoryTests(unittest.TestCase):
             store.get_signals(sid, "host", 0, token, 635)
 
     def test_host_end_reply_is_distinct_from_an_unknown_session(self) -> None:
-        self.start(port=47549)
+        self.start(port=0)
         status, created = self.register()
         self.assertEqual(status, 200)
         sid, token = created["session_id"], created["token"]
@@ -483,9 +483,9 @@ class DirectoryTests(unittest.TestCase):
             session_directory.parse_args(["--insecure-http"])
         for mode in ("direct", "tunnel"):
             with self.assertRaises((ValueError, SystemExit), msg="T3: a public listener accepted an unsafe caller mode"):
-                running = spawn_server(bind="0.0.0.0", port=47465, caller_mode=mode)
+                running = spawn_server(bind="0.0.0.0", port=0, caller_mode=mode)
                 running.stop()
-            running = spawn_server(bind="127.0.0.1", port=47465, caller_mode=mode)
+            running = spawn_server(bind="127.0.0.1", port=0, caller_mode=mode)
             running.stop()
 
     def _U1_owner_transition(self, unlist: bool) -> None:
@@ -579,7 +579,7 @@ class DirectoryTests(unittest.TestCase):
             for _ in range(held): slots.release()
 
     def test_U3_saturation_logs_once_per_caller_per_minute(self) -> None:
-        self.start(port=47475)
+        self.start(port=0)
         slots = self.server.httpd._handler_slots
         held = 0
         while held < session_directory.MAX_ACTIVE_HANDLERS:
@@ -603,7 +603,7 @@ class DirectoryTests(unittest.TestCase):
             for _ in range(held): slots.release()
 
     def test_U4_unfinished_headers_leave_honest_capacity(self) -> None:
-        self.start(port=47471)
+        self.start(port=0)
         sockets = []
         try:
             for _ in range(64):
@@ -636,7 +636,7 @@ class DirectoryTests(unittest.TestCase):
             for connection in sockets: connection.close()
 
     def test_U3_all_200_callers_heartbeat_with_repeated_polls(self) -> None:
-        self.start(port=47472)
+        self.start(port=0)
         self.server.store.caller_mode = "tunnel"
         rows = []
         def request(index, method, path, body=None):
@@ -785,7 +785,7 @@ class DirectoryTests(unittest.TestCase):
             self.assertTrue(store.get_signals(row["session_id"], "host", 0, row["token"], 1) == before, "T4: a refused returning registration removed queued signaling")
 
     def test_T5_accept_deadline_closes_dripping_headers_and_bodies(self) -> None:
-        self.start(port=47467)
+        self.start(port=0)
         self.server.store.caller_mode = "tunnel"
         accepted_since = time.monotonic()
         connections = [socket.create_connection(("127.0.0.1", self.port), timeout=1) for _ in range(2)]
@@ -808,7 +808,7 @@ class DirectoryTests(unittest.TestCase):
             for connection in connections: connection.close()
 
     def test_T5_dripping_bodies_leave_an_honest_heartbeat_capacity(self) -> None:
-        self.start(port=47466)
+        self.start(port=0)
         self.server.store.caller_mode = "tunnel"
         honest = {"CF-Connecting-IP": "192.0.2.200"}
         status, row = self.call("POST", "/v1/sessions", sample_register(), headers=honest)
@@ -844,7 +844,7 @@ class DirectoryTests(unittest.TestCase):
             for connection in sockets: connection.close()
 
     def test_R1_tunnel_requires_the_callers_address(self) -> None:
-        self.start(port=47460)
+        self.start(port=0)
         self.server.store.caller_mode = "tunnel"
         status, _ = self.call("GET", "/v1/sessions")
         self.assertEqual(status, 400, "R1: tunnel request without a caller address used the loopback bucket")
@@ -858,7 +858,7 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual({row.observed_ip for row in self.server.store._sessions.values()}, {"192.0.2.1", "192.0.2.2"})
 
     def test_R2_waiters_leave_heartbeats_capacity(self) -> None:
-        self.start(port=47461)
+        self.start(port=0)
         self.server.store.caller_mode = "tunnel"
         address = {"CF-Connecting-IP": "192.0.2.250"}
         status, row = self.call("POST", "/v1/sessions", sample_register(), headers=address)
@@ -1001,7 +1001,7 @@ class DirectoryTests(unittest.TestCase):
             self.assertTrue(row["token"])
 
     def test_successor_resumes_row_only_with_its_sealed_token(self) -> None:
-        self.start(port=45799)
+        self.start(port=0)
         status, created = self.register()
         self.assertEqual(status, 200)
         sid, token = created["session_id"], created["token"]
@@ -1157,7 +1157,7 @@ class DirectoryTests(unittest.TestCase):
                 self.assertEqual(store._stored_signal_bytes, 0)
 
     def test_live_resume_wrong_token_leaves_the_row_unchanged(self) -> None:
-        self.start(port=45810)
+        self.start(port=0)
         status, created = self.register()
         self.assertEqual(status, 200)
         sid, token = created["session_id"], created["token"]
