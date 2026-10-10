@@ -70,6 +70,15 @@ def assert_watches(prefix):
     return [f"text_watch assert {prefix}-{kind}" for kind in ("state", "layout", "duplicates", "persistent")]
 
 
+def watch_pass(name):
+    return rf'text_watch .*"watch"\s*:\s*"{name}".*PASS'
+
+
+def lobby_wait(peer):
+    text = "Waiting for Joiner to press Ready" if peer == "host" else "Press Ready when you're ready to play"
+    return wait(scope="menu", screen="MultiplayerScreen", control="LabelMultiplayerStatus", text_contains=text)
+
+
 def probe(steps, timeout=180000):
     return json.dumps(dict(schema=1, timeout_ms=timeout, steps=steps), indent=2) + "\n"
 
@@ -87,7 +96,8 @@ def emit(number, title, host, joiner, host_probe, join_probe, checklist, timeout
 
 
 def lobby_probe(mark):
-    return probe([wait(service="Lobby", scope="menu"), wait(elapsed_ms=18000, scope="menu"),
+    peer = "host" if mark.endswith("host") else "joiner"
+    return probe([lobby_wait(peer), wait(elapsed_ms=18000, scope="menu"),
                   dict(op="assert_relay", scope="menu"),
                   menu(f"video_mark {mark}"), wait(elapsed_ms=1200, scope="menu"),
                   dict(op="screenshot_pair", name=mark, scope="menu"), dict(op="finish")])
@@ -117,10 +127,7 @@ def lobby_scenes():
     checks = [dict(id=f"lobby-{peer}", peer=peer, mark=f"lobby-{peer}", screen="MultiplayerScreen",
                    what="Names, exact waiting line, no duplicates, persistent state and panel bounds; both players answer.",
                    events=["assert_label LabelLobbyPlayer0.*PASS", "assert_label LabelLobbyPlayer1.*PASS",
-                           f"text_watch assert lobby-{peer}-state .*PASS",
-                           f"text_watch assert lobby-{peer}-layout .*PASS",
-                           f"text_watch assert lobby-{peer}-duplicates .*PASS",
-                           f"text_watch assert lobby-{peer}-persistent .*PASS"])
+                           *(watch_pass(f"lobby-{peer}-{kind}") for kind in ("state", "layout", "duplicates", "persistent"))])
               for peer in ("host", "joiner")]
     checks += [dict(id=f"seats-{peer}", peer=peer, mark=f"seats-{peer}", screen="MultiplayerScreen",
                     what="The real Seats page is visible on each peer.", events=["assert_visible CollectionBoxHostPageSeats.*PASS"])
@@ -141,7 +148,7 @@ def lobby_scenes():
     host.insert(-3, "assert_enabled ButtonMultiplayerStart 1")
     checks = [dict(id=f"ready-{peer}", peer=peer, mark=f"ready-after-{peer}", screen="MultiplayerScreen",
                    what="A held Ready click changes the exact state and it stays drawn inside the lobby.",
-                   events=[f"text_watch assert ready-{peer}-{kind} .*PASS" for kind in ("state", "layout", "duplicates", "persistent")])
+                   events=[watch_pass(f"ready-{peer}-{kind}") for kind in ("state", "layout", "duplicates", "persistent")])
               for peer in ("host", "joiner")]
     emit(2, "Joiner Ready and host immediate-start eligibility", host, joiner,
          lobby_probe("ready-relay-host"), lobby_probe("ready-relay-joiner"), checks)
@@ -168,7 +175,7 @@ def lobby_scenes():
     checks = [dict(id=f"countdown-{state}-{peer}", peer=peer, mark=f"countdown-{state}-{peer}", screen="MultiplayerScreen",
                    what="Countdown only follows Start, ticks visibly, and cancels on a later held click.",
                    events=["assert_text_fits LabelMultiplayerStatus .*PASS"] if state == "30" else
-                          [f"text_watch assert {'countdown-cancel' if peer == 'host' else 'countdown-joiner-cancel'}-state .*PASS"])
+                          [watch_pass(f"{'countdown-cancel' if peer == 'host' else 'countdown-joiner-cancel'}-state")])
               for state in ("30", "cancel") for peer in ("host", "joiner")]
     emit(3, "Unready Start counts down from thirty seconds and cancels", host, joiner,
          lobby_probe("countdown-relay-host"), lobby_probe("countdown-relay-joiner"), checks)
@@ -302,7 +309,7 @@ def game_scenes():
     host += [dict(op="aim_brain", input_player=0, target_player=1)]
     host += [dict(op="game_mouse", down=True), wait(elapsed_ms=12000), dict(op="game_mouse", down=False)]
     for peer, steps in (("host", host), ("joiner", joiner)):
-        steps += [wait(service="Lobby", scope="menu")]
+        steps += [lobby_wait(peer)]
         steps += capture(f"brain-loss-{peer}")
         steps += [menu("assert_label LabelLastMatchSummary Brain"), menu("assert_label LabelLastMatchSummary SkirmishDefense.lua:397"),
                   menu("assert_text_fits LabelLastMatchSummary"), dict(op="finish")]
@@ -334,7 +341,7 @@ def game_scenes():
     host, joiner = place("host"), place("joiner")
     host += pause_end()
     for peer, steps in (("host", host), ("joiner", joiner)):
-        steps += [wait(service="Lobby", scope="menu")]
+        steps += [lobby_wait(peer)]
         steps += capture(f"rematch-waiting-{peer}")
         expected = "Waiting for Joiner to press Ready" if peer == "host" else "Press Ready when you're ready to play"
         steps += [menu(f"text_watch start rematch-state equals substate:Lobby LabelMultiplayerStatus {expected}"),
@@ -372,7 +379,7 @@ def ai_fight():
             steps += capture(f"minute-{minute:02d}-{peer}")
             steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay")]
         if peer == "host": steps += pause_end()
-        steps += [wait(service="Lobby", scope="menu")]
+        steps += [lobby_wait(peer)]
         steps += capture(f"fight-ended-{peer}") + [menu("assert_label LabelLastMatchSummary host"), dict(op="finish")]
         probes[peer] = game_probe(steps, timeout=1600000)
         checks += scene_checks(peer, steps)
