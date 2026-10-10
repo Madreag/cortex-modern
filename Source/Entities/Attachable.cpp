@@ -66,7 +66,7 @@ Attachable::Attachable(const Attachable& source, CheckpointNativeSnapshot& snaps
 	m_PrevJointOffset(snapshot.Freeze(source.m_PrevJointOffset)),
 	m_PrevRotAngleOffset(snapshot.Freeze(source.m_PrevRotAngleOffset)),
 	m_PreUpdateHasRunThisFrame(snapshot.Freeze(source.m_PreUpdateHasRunThisFrame)),
-	m_PersistedAttachableRuntime(snapshot.Freeze(source.m_PersistedAttachableRuntime)),
+	m_PersistedAttachableRuntime(snapshot.Freeze(source.m_PersistedAttachableRuntime, &m_PersistedAttachableRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 	for (const auto& slice: source.m_PieSlices) m_FrozenPieSlices.push_back(snapshot.FreezeWriter(slice.get()));
 }

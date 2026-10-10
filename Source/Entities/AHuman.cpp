@@ -65,9 +65,9 @@ AHuman::AHuman(const AHuman& source, CheckpointNativeSnapshot& snapshot) :
 	m_PersistedBGFootResidue(snapshot.Freeze(source.m_PersistedBGFootResidue)),
 	m_PersistedLimbPathStates(snapshot.Freeze(source.m_PersistedLimbPathStates)),
 	m_PersistedLimbPathStatesFromFile(snapshot.Freeze(source.m_PersistedLimbPathStatesFromFile)),
-	m_PersistedLimbGroupPositions(snapshot.Freeze(source.m_PersistedLimbGroupPositions)),
-	m_PersistedLimbGroupInertia(snapshot.Freeze(source.m_PersistedLimbGroupInertia)),
-	m_PersistedWalkState(snapshot.Freeze(source.m_PersistedWalkState)),
+	m_PersistedLimbGroupPositions(snapshot.Freeze(source.m_PersistedLimbGroupPositions, &m_PersistedLimbGroupPositions)),
+	m_PersistedLimbGroupInertia(snapshot.Freeze(source.m_PersistedLimbGroupInertia, &m_PersistedLimbGroupInertia)),
+	m_PersistedWalkState(snapshot.Freeze(source.m_PersistedWalkState, &m_PersistedWalkState)),
 	m_StrideSound(snapshot.Freeze(source.m_StrideSound)),
 	m_pJetpack(snapshot.Freeze(source.m_pJetpack)),
 	m_CanActivateBGItem(snapshot.Freeze(source.m_CanActivateBGItem)),
@@ -98,7 +98,7 @@ AHuman::AHuman(const AHuman& source, CheckpointNativeSnapshot& snapshot) :
 	m_WalkPathOffset(snapshot.Freeze(source.m_WalkPathOffset)),
 	m_ArmSwingRate(snapshot.Freeze(source.m_ArmSwingRate)),
 	m_DeviceArmSwayRate(snapshot.Freeze(source.m_DeviceArmSwayRate)),
-	m_PersistedAHumanRuntime(snapshot.Freeze(source.m_PersistedAHumanRuntime)),
+	m_PersistedAHumanRuntime(snapshot.Freeze(source.m_PersistedAHumanRuntime, &m_PersistedAHumanRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 	CheckpointCloneCost cost("limb paths");
 	snapshot.FreezeArray(m_Paths, source.m_Paths);

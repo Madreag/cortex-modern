@@ -58,7 +58,7 @@ ACraft::ACraft(const ACraft& source, CheckpointNativeSnapshot& snapshot) :
 	m_HatchDelay(snapshot.Freeze(source.m_HatchDelay)),
 	m_HatchOpenSound(snapshot.Freeze(source.m_HatchOpenSound)),
 	m_HatchCloseSound(snapshot.Freeze(source.m_HatchCloseSound)),
-	m_CollectedInventory(snapshot.Freeze(source.m_CollectedInventory)),
+	m_CollectedInventory(snapshot.Freeze(source.m_CollectedInventory, &m_CollectedInventory)),
 	m_Exits(snapshot.Freeze(source.m_Exits)),
 	m_CurrentExit(std::next(m_Exits.begin(), std::distance(source.m_Exits.cbegin(), std::list<Exit>::const_iterator(source.m_CurrentExit)))),
 	m_PersistedCurrentExit(snapshot.Freeze(source.m_PersistedCurrentExit)),
@@ -85,7 +85,7 @@ ACraft::ACraft(const ACraft& source, CheckpointNativeSnapshot& snapshot) :
 	m_NetworkDeliveryTimer(snapshot.Freeze(source.m_NetworkDeliveryTimer)),
 	m_OffWireHatchTick(snapshot.Freeze(source.m_OffWireHatchTick)),
 	m_OffWireHatchOpen(snapshot.Freeze(source.m_OffWireHatchOpen)),
-	m_PersistedACraftRuntime(snapshot.Freeze(source.m_PersistedACraftRuntime)),
+	m_PersistedACraftRuntime(snapshot.Freeze(source.m_PersistedACraftRuntime, &m_PersistedACraftRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 }
 

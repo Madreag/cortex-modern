@@ -10,7 +10,7 @@ ConcreteClassInfo(Turret, Attachable, 20);
 
 Turret::Turret(const Turret& source, CheckpointNativeSnapshot& snapshot) :
 	Attachable(source, snapshot),
-	m_MountedDevices(snapshot.Freeze(source.m_MountedDevices)),
+	m_MountedDevices(snapshot.Freeze(source.m_MountedDevices, &m_MountedDevices)),
 	m_MountedDeviceRotationOffset(snapshot.Freeze(source.m_MountedDeviceRotationOffset)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 }

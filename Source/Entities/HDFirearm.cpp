@@ -78,7 +78,7 @@ HDFirearm::HDFirearm(const HDFirearm& source, CheckpointNativeSnapshot& snapshot
 	m_RoundsFired(snapshot.Freeze(source.m_RoundsFired)),
 	m_IsAnimatedManually(snapshot.Freeze(source.m_IsAnimatedManually)),
 	m_LegacyCompatibilityRoundsAlwaysFireUnflipped(snapshot.Freeze(source.m_LegacyCompatibilityRoundsAlwaysFireUnflipped)),
-	m_PersistedHDFirearmRuntime(snapshot.Freeze(source.m_PersistedHDFirearmRuntime)),
+	m_PersistedHDFirearmRuntime(snapshot.Freeze(source.m_PersistedHDFirearmRuntime, &m_PersistedHDFirearmRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 }
 

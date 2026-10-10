@@ -52,7 +52,7 @@ ADoor::ADoor(const ADoor& source, CheckpointNativeSnapshot& snapshot) :
 	m_DoorMoveSound(snapshot.Freeze(source.m_DoorMoveSound)),
 	m_DoorDirectionChangeSound(snapshot.Freeze(source.m_DoorDirectionChangeSound)),
 	m_DoorMoveEndSound(snapshot.Freeze(source.m_DoorMoveEndSound)),
-	m_PersistedADoorRuntime(snapshot.Freeze(source.m_PersistedADoorRuntime)),
+	m_PersistedADoorRuntime(snapshot.Freeze(source.m_PersistedADoorRuntime, &m_PersistedADoorRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 }
 

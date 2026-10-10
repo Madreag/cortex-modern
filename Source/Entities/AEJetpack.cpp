@@ -21,7 +21,7 @@ AEJetpack::AEJetpack(const AEJetpack& source, CheckpointNativeSnapshot& snapshot
 	m_JetAngleRange(snapshot.Freeze(source.m_JetAngleRange)),
 	m_CanAdjustAngleWhileFiring(snapshot.Freeze(source.m_CanAdjustAngleWhileFiring)),
 	m_AdjustsThrottleForWeight(snapshot.Freeze(source.m_AdjustsThrottleForWeight)),
-	m_PersistedAEJetpackRuntime(snapshot.Freeze(source.m_PersistedAEJetpackRuntime)),
+	m_PersistedAEJetpackRuntime(snapshot.Freeze(source.m_PersistedAEJetpackRuntime, &m_PersistedAEJetpackRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 }
 

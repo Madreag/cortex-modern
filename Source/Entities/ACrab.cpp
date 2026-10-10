@@ -55,8 +55,8 @@ ACrab::ACrab(const ACrab& source, CheckpointNativeSnapshot& snapshot) :
 	m_PersistedRBGFootResidue(snapshot.Freeze(source.m_PersistedRBGFootResidue)),
 	m_PersistedLimbPathStates(snapshot.Freeze(source.m_PersistedLimbPathStates)),
 	m_PersistedLimbPathStatesFromFile(snapshot.Freeze(source.m_PersistedLimbPathStatesFromFile)),
-	m_PersistedLimbGroupPositions(snapshot.Freeze(source.m_PersistedLimbGroupPositions)),
-	m_PersistedLimbGroupInertia(snapshot.Freeze(source.m_PersistedLimbGroupInertia)),
+	m_PersistedLimbGroupPositions(snapshot.Freeze(source.m_PersistedLimbGroupPositions, &m_PersistedLimbGroupPositions)),
+	m_PersistedLimbGroupInertia(snapshot.Freeze(source.m_PersistedLimbGroupInertia, &m_PersistedLimbGroupInertia)),
 	m_StrideSound(snapshot.Freeze(source.m_StrideSound)),
 	m_pJetpack(snapshot.Freeze(source.m_pJetpack)),
 	m_IconBlinkTimer(snapshot.Freeze(source.m_IconBlinkTimer)),
@@ -68,7 +68,7 @@ ACrab::ACrab(const ACrab& source, CheckpointNativeSnapshot& snapshot) :
 	m_AimRangeUpperLimit(snapshot.Freeze(source.m_AimRangeUpperLimit)),
 	m_AimRangeLowerLimit(snapshot.Freeze(source.m_AimRangeLowerLimit)),
 	m_LockMouseAimInput(snapshot.Freeze(source.m_LockMouseAimInput)),
-	m_PersistedACrabRuntime(snapshot.Freeze(source.m_PersistedACrabRuntime)),
+	m_PersistedACrabRuntime(snapshot.Freeze(source.m_PersistedACrabRuntime, &m_PersistedACrabRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 	snapshot.FreezeArray(m_Paths, source.m_Paths);
 	snapshot.FreezeArray(m_StrideStart, source.m_StrideStart);

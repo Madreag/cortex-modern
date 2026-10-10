@@ -26,7 +26,7 @@ Leg::Leg(const Leg& source, CheckpointNativeSnapshot& snapshot) :
 	m_AnkleOffset(snapshot.Freeze(source.m_AnkleOffset)),
 	m_WillIdle(snapshot.Freeze(source.m_WillIdle)),
 	m_MoveSpeed(snapshot.Freeze(source.m_MoveSpeed)),
-	m_PersistedLegRuntime(snapshot.Freeze(source.m_PersistedLegRuntime)),
+	m_PersistedLegRuntime(snapshot.Freeze(source.m_PersistedLegRuntime, &m_PersistedLegRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 }
 

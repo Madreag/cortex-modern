@@ -38,11 +38,11 @@ ACRocket::ACRocket(const ACRocket& source, CheckpointNativeSnapshot& snapshot) :
 	m_PersistedRFootResidue(snapshot.Freeze(source.m_PersistedRFootResidue)),
 	m_PersistedLFootResidue(snapshot.Freeze(source.m_PersistedLFootResidue)),
 	m_PersistedLimbPathStates(snapshot.Freeze(source.m_PersistedLimbPathStates)),
-	m_PersistedLimbGroupPositions(snapshot.Freeze(source.m_PersistedLimbGroupPositions)),
-	m_PersistedLimbGroupInertia(snapshot.Freeze(source.m_PersistedLimbGroupInertia)),
+	m_PersistedLimbGroupPositions(snapshot.Freeze(source.m_PersistedLimbGroupPositions, &m_PersistedLimbGroupPositions)),
+	m_PersistedLimbGroupInertia(snapshot.Freeze(source.m_PersistedLimbGroupInertia, &m_PersistedLimbGroupInertia)),
 	m_Paths{},
 	m_MaxGimbalAngle(snapshot.Freeze(source.m_MaxGimbalAngle)),
-	m_PersistedACRocketRuntime(snapshot.Freeze(source.m_PersistedACRocketRuntime)),
+	m_PersistedACRocketRuntime(snapshot.Freeze(source.m_PersistedACRocketRuntime, &m_PersistedACRocketRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 	snapshot.FreezeArray(m_Paths, source.m_Paths);
 }

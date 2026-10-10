@@ -22,7 +22,7 @@ Magazine::Magazine(const Magazine& source, CheckpointNativeSnapshot& snapshot) :
 	m_AIAimMaxDistance(snapshot.Freeze(source.m_AIAimMaxDistance)),
 	m_AIAimPenetration(snapshot.Freeze(source.m_AIAimPenetration)),
 	m_AIBlastRadius(snapshot.Freeze(source.m_AIBlastRadius)),
-	m_PersistedMagazineRuntime(snapshot.Freeze(source.m_PersistedMagazineRuntime)),
+	m_PersistedMagazineRuntime(snapshot.Freeze(source.m_PersistedMagazineRuntime, &m_PersistedMagazineRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 }
 

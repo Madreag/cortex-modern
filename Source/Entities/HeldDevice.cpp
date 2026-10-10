@@ -53,7 +53,7 @@ HeldDevice::HeldDevice(const HeldDevice& source, CheckpointNativeSnapshot& snaps
 	m_IsExplosiveWeapon(snapshot.Freeze(source.m_IsExplosiveWeapon)),
 	m_GetsHitByMOsWhenHeld(snapshot.Freeze(source.m_GetsHitByMOsWhenHeld)),
 	m_VisualRecoilMultiplier(snapshot.Freeze(source.m_VisualRecoilMultiplier)),
-	m_PersistedHeldDeviceRuntime(snapshot.Freeze(source.m_PersistedHeldDeviceRuntime)),
+	m_PersistedHeldDeviceRuntime(snapshot.Freeze(source.m_PersistedHeldDeviceRuntime, &m_PersistedHeldDeviceRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 }
 

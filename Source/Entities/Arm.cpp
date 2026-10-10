@@ -27,7 +27,7 @@ ConcreteClassInfo(Arm, Attachable, 50);
 
 Arm::Arm(const Arm& source, CheckpointNativeSnapshot& snapshot) :
 	Attachable(source, snapshot),
-	m_PersistedArmRuntime(snapshot.Freeze(source.m_PersistedArmRuntime)),
+	m_PersistedArmRuntime(snapshot.Freeze(source.m_PersistedArmRuntime, &m_PersistedArmRuntime)),
 	m_MaxLength(snapshot.Freeze(source.m_MaxLength)),
 	m_MoveSpeed(snapshot.Freeze(source.m_MoveSpeed)),
 	m_HandIdleOffset(snapshot.Freeze(source.m_HandIdleOffset)),
