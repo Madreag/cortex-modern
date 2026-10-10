@@ -7,7 +7,7 @@ end
 
 function ConnectionGuard:OnTick(tick)
     if tick == 4 then
-        ActivityMan:PauseActivity(true);
+        ActivityMan:PauseActivity(true, true);
     end
     return false, false;
 end

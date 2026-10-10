@@ -1,14 +1,17 @@
 """Connection pictures through the existing menu gestures, scene probes and hidden runner.
 
-The four-peer pictures require four explicitly assigned boxes. --single-engine runs
-preferences and the single-player guard without inventing multiplayer evidence.
+Four separately assigned boxes provide proof. --layout-detector permits shared
+boxes for layout only; --single-engine runs preferences and the pixel guard.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
 
@@ -19,12 +22,13 @@ from run_sim_test import make_run, seed_settings
 SIZES = ("640x360", "960x540", "1280x720", "1920x1080")
 BASE = "107dbdab7c7d780d40f6be4fb8f27e49db9e7a3a"
 STATES = {
-    "Good": (1, 250, "250 ms\nPresses arrive on time", "250 ms / Good\nPresses arrive on time", [105, 210, 120]),
+    "Good": (1, 250, "250 ms", "250 ms / Good\nPresses arrive on time", [105, 210, 120]),
     "Marginal": (2, 80, "80 ms / Unsteady\nPresses still arrive", "80 ms / Unsteady\nPresses still arrive", [245, 185, 70]),
     "Substituting": (3, 80, "80 ms / Inputs affected\nPresses may not register now", "80 ms / Inputs affected\nPresses may not register now", [245, 100, 100]),
     "Lost": (4, 0, "reconnecting\nThe AI plays your units", "-- ms / Reconnecting\nThe AI plays your units", [175, 180, 190]),
 }
 LEVER = "1:Good:250;2:Marginal:80;3:Substituting:80;4:Lost:0"
+SEAT_NAMES = ["Seat1", "Seat2", "Seat3", "Seat4"]
 ON_HINT = "Shows how your presses arrive in a match."
 OFF_HINT = "Hidden on your HUD; Seats still shows connections."
 GUARD_INDEX = (
@@ -80,18 +84,60 @@ def settings_steps(initial, pick=None):
     return steps
 
 
-def run_single(repo, root, steps, size, *, runtime=None, exe=None, guard=False):
+def saved_indicator(runtime):
+    values = re.findall(r"(?m)^\s*NetworkConnectionIndicator\s*=\s*(\S+)\s*$", (Path(runtime) / "Userdata/Settings.ini").read_text(encoding="utf-8-sig"))
+    return values[0] in ("1", "true") if len(values) == 1 and values[0] in ("0", "1", "false", "true") else None
+
+
+def recording_environment(registry):
+    from e2e_video import box_name, declared_tool_dirs, find_ffmpeg
+    import box_facts
+
+    environment = dict(os.environ)
+    prefixes = [str(path) for path in declared_tool_dirs()]
+    catalogs = [registry or environment.get("CORTEX_POOL_REGISTRY"), box_facts.file()]
+    for catalog in catalogs:
+        if not catalog or not Path(catalog).is_file():
+            continue
+        boxes = json.loads(Path(catalog).read_text(encoding="utf-8-sig")).get("boxes", [])
+        for box in boxes:
+            names = [box.get(key) for key in ("name", "hostname", "computer_name", "ssh", "instance")] + list(box.get("aliases") or [])
+            if box_name().casefold() not in {str(name).casefold() for name in names if name}:
+                continue
+            for entry in [box, box.get("runner") or {}, *(box.get("task_slots") or [])]:
+                prefixes.extend(entry.get("path_prepend") or [])
+    prefixes = list(dict.fromkeys(prefixes))
+    environment["PATH"] = os.pathsep.join(prefixes + [environment.get("PATH", "")])
+    wanted = environment.get("CCCP_FFMPEG") or "ffmpeg"
+    encoder = shutil.which(wanted, path=environment["PATH"])
+    if not encoder and not environment.get("CCCP_FFMPEG"):
+        encoder = find_ffmpeg()
+    if not encoder:
+        raise ValueError("ffmpeg is absent on " + box_name() + "; runner PATH prefix: " +
+                         (os.pathsep.join(prefixes) or "<undeclared; set path_prepend in the box registry>") + "; registry: " + str(catalogs[0]))
+    environment["CCCP_FFMPEG"] = encoder
+    print("[connection-pictures] ffmpeg " + encoder + "; runner PATH prefix: " + os.pathsep.join(prefixes), flush=True)
+    return environment
+
+
+def run_single(repo, root, steps, size, *, runtime=None, exe=None, guard=False, timeout=240, expected_saved=None):
+    root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=False)
     probe = root / "probe/probe.json"
-    write_json(probe, {"schema": 1, "timeout_ms": 25000, "steps": steps})
+    write_json(probe, {"schema": 1, "timeout_ms": 90000, "steps": steps})
     script = root / "hold.menu.txt"
-    # The bounded hold also lets a baseline's intentional missing-control failure exit.
-    script.write_text("wait_ms 14000\nexit\n", encoding="utf-8")
+    # Cold module loads finish before the probe's framed input and saved-file checks.
+    script.write_text(f"wait_file {probe.parent.as_posix()}/done.json {timeout - 10}\nwait_ms 250\nexit\n", encoding="utf-8")
     args = ["-menu-script", str(script), "-menu-script-out", str(root / "menu.json")]
     if guard:
         args += ["-scenario", "ConnectionGuard", "-seed", "42", "-max-ticks", "120", "-out", str(root / "trace.json")]
-    run = make_run(repo, args, root / "engine", 40, runtime=runtime,
+    run = make_run(repo, args, root / "engine", timeout, runtime=runtime,
                    env={"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe), "CC_TEST_LINK_QUALITY": LEVER})
+    settings_path = Path(run.cwd) / "Userdata/Settings.ini"
+    run.env["CCCP_SETTINGSPATH"] = str(settings_path.resolve())
+    if runtime is None and not guard:
+        text = settings_path.read_text(encoding="utf-8-sig")
+        settings_path.write_text(re.sub(r"(?m)^[ \t]*NetworkConnectionIndicator\s*=[^\r\n]*\r?\n?", "", text), encoding="utf-8")
     if exe:
         run.argv[0] = str(exe.resolve())
     width, height = (int(part) for part in size.split("x"))
@@ -108,20 +154,25 @@ def run_single(repo, root, steps, size, *, runtime=None, exe=None, guard=False):
     result_path = probe.parent / "net-ui-result.json"
     observed = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else {}
     result = {"pass": record.get("exit_code") == 0 and not record.get("timed_out") and observed.get("pass") is True and observed.get("complete") is True,
-              "record": record, "probe": observed, "runtime": str(run.cwd)}
+              "record": record, "probe": observed, "runtime": str(run.cwd), "settings_path": str(settings_path)}
+    if expected_saved is not None:
+        result["saved_indicator"] = saved_indicator(run.cwd)
+        result["pass"] &= result["saved_indicator"] is expected_saved
+        if result["saved_indicator"] is not expected_saved:
+            result["persistence_error"] = f"saved NetworkConnectionIndicator differs: expected {expected_saved}, observed {result['saved_indicator']}"
     write_json(root / "result.json", result)
     return result
 
 
 def failure_line(result):
-    return result.get("probe", {}).get("reason", result.get("probe", {}).get("error", "probe incomplete"))
+    return result.get("persistence_error") or result.get("probe", {}).get("reason", result.get("probe", {}).get("error", "probe incomplete"))
 
 
 def guard_steps():
-    return [{"op": "wait", "paused": True, "sim_at_least": 1},
-            {"op": "wait", "renders": 4},
-            {"op": "assert", "equals": {"service": "Idle"}, "connections_absent": True},
-            {"op": "screenshot_pair", "name": "guard"}, {"op": "signal", "name": "done"}, {"op": "finish"}]
+    return [{"op": "wait", "paused": True, "sim_at_least": 1, "scope": "menu"},
+            {"op": "wait", "renders": 4, "scope": "menu"},
+            {"op": "assert", "equals": {"service": "Idle", "activity_preset": "Determinism ConnectionGuard", "paused": True}, "connections_absent": True, "scope": "menu"},
+            {"op": "screenshot_pair", "name": "guard", "scope": "menu"}, {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]
 
 
 def compare_guard(before, after, size):
@@ -139,14 +190,22 @@ def compare_guard(before, after, size):
                 "after_rgb_sha256": hashlib.sha256(b.tobytes()).hexdigest()}
 
 
-def panel_steps(first):
+def panel_steps(first, held=False):
     steps = [{"op": "key_down", "key": "F6"}, {"op": "wait", "renders": 2}, {"op": "key_up", "key": "F6"},
              {"op": "wait", "panel_open": True, "renders": 4}]
-    ordered = [first] + [state for state in STATES if state != first]
+    ordered = [] if held else [first] + [state for state in STATES if state != first]
     for state in ordered:
         peer, _, _, text, rgb = STATES[state]
         others = ["NetworkSeatLink" + str(row[0]) for other, row in STATES.items() if other != state]
         steps.append(exact("NetworkSeatLink" + str(peer), text, inside="NetworkSeats", rgb=rgb, clear=others + ["NetworkSeatsRoster", "NetworkSeatsSummary"]))
+    if held:
+        step = exact("NetworkSeatLink", STATES["Lost"][3], inside="NetworkSeats", rgb=STATES["Lost"][4], clear=["NetworkSeatsRoster", "NetworkSeatsSummary"])
+        step["seat_name"] = "Seat4"
+        steps.append(step)
+    names = {"op": "assert", "equals": {"panel_open": True}, "no_duplicate_name": True, "names": SEAT_NAMES}
+    if held:
+        names.update(held_peer="Seat4", held_name="Seat4")
+    steps.append(names)
     return steps
 
 
@@ -162,6 +221,9 @@ def match_steps(surface, state, indicator=True):
         steps += panel_steps("Good")
     elif surface == "Seats":
         steps += panel_steps(state)
+    elif surface == "held":
+        steps += [{"op": "wait", "service": "Running", "held_peer": "Seat4"}]
+        steps += panel_steps("Lost", held=True)
     steps += [{"op": "screenshot_pair", "name": "connection"}, {"op": "signal", "name": "done"}, {"op": "finish"}]
     return steps
 
@@ -176,16 +238,21 @@ def scene_document():
         peers = []
         for index, who in enumerate(("host", "seat2", "seat3", "seat4")):
             key = name + "-" + who
-            steps = match_steps(surface, state, indicator) if who == "host" or surface in ("Seats", "toggle") else [
+            observes = who == "host" or surface in ("Seats", "toggle") or (surface == "held" and who != "seat4")
+            steps = match_steps(surface, state, indicator) if observes else [
                 {"op": "wait", "service": "Running", "sim_at_least": 1}, {"op": "signal", "name": "done"}, {"op": "finish"}]
             if who != "host" and surface == "toggle":
                 steps = match_steps("Seats", "Good")
             steps.insert(1, menu("video_mark " + name))
             scripts[key + ".probe.json"] = json.dumps({"schema": 1, "timeout_ms": 90000, "steps": steps})
             lever = LEVER if surface != "HUD" else "1:" + state + ":" + str(STATES[state][1]) + ";2:Good:40;3:Good:40;4:Good:40"
-            peer = {"name": who, "args": common + (["-net-host"] if index == 0 else ["-net-join", "{HOST_ADDRESS}"]),
-                    "probe": key + ".probe.json", "env": {"CC_TEST_LINK_QUALITY": lever},
-                    "settings": {"NetworkMatchStatusMode": "Auto", "NetworkShowDiagnostics": "0", "NetworkChatVisible": "0", "NetworkToastsEnabled": "0"}}
+            if surface == "held":
+                lever = "1:Good:250;2:Lost:0;3:Lost:0;4:Lost:0"
+            peer = {"name": who, "args": common + ["-net-player-name", SEAT_NAMES[index]] + (["-net-host"] if index == 0 else ["-net-join", "{HOST_ADDRESS}"]),
+                    "probe": key + ".probe.json", "env": {"CC_TEST_LINK_QUALITY": lever, "CCCP_SETTINGSPATH": "Userdata/Settings.ini"},
+                    "settings": {"NetworkDisplayName": SEAT_NAMES[index], "NetworkMatchStatusMode": "Auto", "NetworkShowDiagnostics": "0", "NetworkChatVisible": "0", "NetworkToastsEnabled": "0"}}
+            if surface == "held" and who == "seat4":
+                peer["args"] += ["-net-test-live-stall", "120:20000"]
             if retained and index == 0:
                 peer["retained_runtime"] = retained
             else:
@@ -198,12 +265,13 @@ def scene_document():
         for surface in ("HUD", "Seats"):
             for state in STATES:
                 add_match(surface + "_" + state + "_" + size, size, surface, state, surface == "HUD")
+        add_match("Seats_held_" + size, size, "held", "Lost", False)
     previous = None
     for name, initial, pick in (("toggle-off", True, False), ("toggle-on", False, True), ("toggle-on-relaunch", True, None)):
         key = name + ".probe.json"
-        scripts[key] = json.dumps({"schema": 1, "timeout_ms": 25000, "steps": settings_steps(initial, pick)})
-        scripts[name + ".menu.txt"] = "wait_file {PROBE_DIR}/done.json 30\nexit\n"
-        peer = {"name": "host", "args": [], "probe": key, "menu_script": name + ".menu.txt"}
+        scripts[key] = json.dumps({"schema": 1, "timeout_ms": 90000, "steps": settings_steps(initial, pick)})
+        scripts[name + ".menu.txt"] = "wait_file {PROBE_DIR}/done.json 120\nwait_ms 250\nexit\n"
+        peer = {"name": "host", "args": [], "probe": key, "menu_script": name + ".menu.txt", "env": {"CCCP_SETTINGSPATH": "Userdata/Settings.ini"}}
         if previous:
             peer["retained_runtime"] = previous
         runs.append({"name": name, "size": "640x360", "peers": [peer]})
@@ -213,7 +281,7 @@ def scene_document():
             previous = {"run": "toggle-off-match", "peer": "host"}
     add_match("toggle-on-match", "640x360", "toggle", "Good", True, previous)
     return {"schema": 1, "name": "connection-indicator", "title": "Connection feedback follows presses at every supported size",
-            "timeout_s": 120, "scripts": scripts, "runs": runs, "checklist": checklist}
+            "timeout_s": 240, "scripts": scripts, "runs": runs, "checklist": checklist}
 
 
 def run_multiplayer(options, out, repo):
@@ -224,7 +292,9 @@ def run_multiplayer(options, out, repo):
                "--token", "HOST_ADDRESS=" + options.host_address, "--port", str(options.port), "--port-block", str(options.port) + "-" + str(options.port + 79)]
     if options.pool_registry:
         command += ["--pool-registry", str(options.pool_registry)]
-    code = subprocess.run(command, check=False).returncode
+    if options.layout_detector:
+        command += ["--layout-detector"]
+    code = subprocess.run(command, check=False, env=options.recording_env).returncode
     capture_path = out / "capture/capture.json"
     capture = json.loads(capture_path.read_text(encoding="utf-8")) if capture_path.is_file() else {}
     cases = {}
@@ -235,7 +305,9 @@ def run_multiplayer(options, out, repo):
         native = json.loads(paths[0].read_text(encoding="utf-8")) if len(paths) == 1 else {}
         if baseline and name.startswith(("HUD_", "Seats_")):
             surface, state, size = name.split("_")
-            expected = "LabelOwnConnection" if surface == "HUD" else "NetworkSeatLink" + str(STATES[state][0])
+            expected = "LabelOwnConnection" if surface == "HUD" else "NetworkSeatLink"
+            if surface == "Seats" and state != "held":
+                expected += str(STATES[state][0])
             reason = native.get("error", "probe missing")
             red = native.get("pass") is False and "unknown control: " + expected in reason and native.get("failed_observation", {}).get("service") == "Running"
             line = ("RED " if red else "FAIL ") + name + " " + reason
@@ -269,7 +341,10 @@ def run_multiplayer(options, out, repo):
             cases[name] = {"pass": passed, "line": ("GREEN " if passed else "FAIL ") + name,
                            "saved_frame_colour_checks": len(png_checks)}
         print(cases[name]["line"], flush=True)
-    scored = {"cases": cases, "driver_exit_code": code, "capture": capture.get("name"), "pass": bool(cases) and all(row["pass"] for row in cases.values())}
+    passed = bool(cases) and all(row["pass"] for row in cases.values())
+    scored = {"cases": cases, "driver_exit_code": code, "capture": capture.get("name"), "pass": passed,
+              "topology": "single-box" if options.layout_detector else "spread", "proof": passed and not options.layout_detector,
+              "requested_peer_boxes": options.peer_boxes}
     write_json(out / "picture-results.json", scored)
     return scored
 
@@ -281,21 +356,37 @@ def main():
     parser.add_argument("--baseline-repo", type=Path)
     parser.add_argument("--baseline-exe", type=Path)
     parser.add_argument("--single-engine", action="store_true")
+    parser.add_argument("--layout-detector", action="store_true", help="share assigned boxes for text and layout only; topology=single-box, proof=false")
     parser.add_argument("--peer-boxes")
     parser.add_argument("--pool-registry", type=Path)
     parser.add_argument("--host-address")
     parser.add_argument("--port", type=int, default=49840)
+    parser.add_argument("--timeout", type=int, default=240, help="single-engine startup and probe budget, including cold module loads")
     options = parser.parse_args()
     if not options.single_engine and (not options.peer_boxes or not options.host_address):
         parser.error("four-seat pictures need --peer-boxes and --host-address assigned by the lead")
+    if options.layout_detector and options.single_engine:
+        parser.error("--layout-detector runs four seats; it cannot be combined with --single-engine")
+    if options.timeout < 120:
+        parser.error("--timeout must leave at least 120 seconds for cold loads and framed gestures")
     if options.baseline_repo:
         sha = subprocess.check_output(["git", "-C", str(options.baseline_repo), "rev-parse", "HEAD"], text=True).strip()
         if sha != BASE:
             parser.error("baseline checkout must be " + BASE)
     options.out.mkdir(parents=True, exist_ok=False)
-    result = {"base": BASE, "cases": {}, "needs_testing": [], "pass": False}
+    result = {"base": BASE, "cases": {}, "needs_testing": [], "pass": False,
+              "topology": "single-box" if options.layout_detector or options.single_engine else "spread", "proof": False,
+              "mode": "layout-detector" if options.layout_detector else "single-engine" if options.single_engine else "four-box-proof"}
+    if not options.single_engine:
+        try:
+            options.recording_env = recording_environment(options.pool_registry)
+        except (OSError, ValueError) as error:
+            result["error"] = str(error)
+            write_json(options.out / "result.json", result)
+            print("[connection-pictures] " + str(error), flush=True)
+            return 1
     if options.baseline_repo:
-        before = run_single(options.baseline_repo, options.out / "RED-toggle", settings_steps(True, False), "640x360", exe=options.baseline_exe)
+        before = run_single(options.baseline_repo, options.out / "RED-toggle", settings_steps(True, False), "640x360", exe=options.baseline_exe, timeout=options.timeout)
         red = not before["pass"] and "LabelNetworkConnectionIndicator" in failure_line(before)
         result["cases"]["toggle_RED"] = {"pass": red, "line": failure_line(before)}
         print(("RED" if red else "FAIL") + " toggle 640x360 " + failure_line(before), flush=True)
@@ -303,17 +394,18 @@ def main():
         result["needs_testing"].append("exact baseline executable and checkout for RED and whole-frame guards")
     runtime = None
     for name, initial, pick in (("default-on", True, False), ("off-relaunch", False, True), ("on-relaunch", True, None)):
-        current = run_single(options.repo, options.out / name, settings_steps(initial, pick), "640x360", runtime=runtime)
+        current = run_single(options.repo, options.out / name, settings_steps(initial, pick), "640x360", runtime=runtime,
+                             timeout=options.timeout, expected_saved=pick if pick is not None else initial)
         result["cases"][name] = {"pass": current["pass"], "line": "GREEN " + name if current["pass"] else failure_line(current)}
         runtime = Path(current["runtime"])
         print(result["cases"][name]["line"], flush=True)
     for size in SIZES:
         after_root = options.out / ("guard-tip-" + size)
-        after = run_single(options.repo, after_root, guard_steps(), size, guard=True)
+        after = run_single(options.repo, after_root, guard_steps(), size, guard=True, timeout=options.timeout)
         guard = {"pass": after["pass"], "compared": False}
         if options.baseline_repo:
             before_root = options.out / ("guard-base-" + size)
-            before = run_single(options.baseline_repo, before_root, guard_steps(), size, exe=options.baseline_exe, guard=True)
+            before = run_single(options.baseline_repo, before_root, guard_steps(), size, exe=options.baseline_exe, guard=True, timeout=options.timeout)
             guard = {**compare_guard(before_root, after_root, size), "compared": True, "base_probe_pass": before["pass"], "tip_probe_pass": after["pass"]}
             guard["pass"] &= before["pass"] and after["pass"]
         result["cases"]["guard_" + size] = guard
@@ -333,6 +425,7 @@ def main():
             base = run_multiplayer(options, options.out / "base", options.baseline_repo)
             result["cases"].update({"RED_" + name: row for name, row in base["cases"].items()})
     result["pass"] = not result["needs_testing"] and all(row.get("pass", False) for row in result["cases"].values())
+    result["proof"] = result["pass"] and not options.layout_detector and not options.single_engine
     write_json(options.out / "result.json", result)
     print(json.dumps({"pass": result["pass"], "needs_testing": result["needs_testing"]}), flush=True)
     return 0 if result["pass"] else 1

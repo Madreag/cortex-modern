@@ -53,6 +53,8 @@ namespace RTE {
 		size_t AutomationRowsImplied() const;
 		/// The controls a shown row must show for its player to be acted on, by name.
 		std::vector<std::string> AutomationRowControls(size_t slot) const;
+		/// The host's named rows across every page, for checks that a held peer appears once.
+		std::vector<std::string> AutomationRowNames() const;
 
 		/// The area an overlay element drew into on the last frame, in screen pixels.
 		struct OverlayRect {

@@ -9,6 +9,7 @@
 #include "GUI.h"
 #include "GUIButton.h"
 #include "GUIComboBox.h"
+#include "GUIControlManager.h"
 #include "GUIFont.h"
 #include "GUILabel.h"
 #include "GnsTransport.h"
@@ -422,8 +423,19 @@ namespace {
 		}
 		auto* menu = g_MenuMan.GetNetworkPanel();
 		Require(menu != nullptr, "network panel has not been constructed");
-		auto* control = menu->GetControl(step.at("control").get<std::string>());
-		Require(control != nullptr, "unknown control: " + step.at("control").get<std::string>());
+		std::string name = step.at("control").get<std::string>();
+		if (step.contains("seat_name")) {
+			bool found = false;
+			for (const auto& [peer, view]: g_NetMatchService.GetSeatViews()) {
+				if (view.name != step.at("seat_name").get<std::string>()) continue;
+				name = "NetworkSeatLink" + std::to_string(peer);
+				found = true;
+				break;
+			}
+			Require(found, "unknown seat name: " + step.at("seat_name").get<std::string>());
+		}
+		auto* control = menu->GetControl(name);
+		Require(control != nullptr, "unknown control: " + name);
 		return control;
 	}
 
@@ -496,6 +508,17 @@ namespace {
 
 	void Push(SDL_Event& event) {
 		Require(SDL_PushEvent(&event), std::string("SDL_PushEvent: ") + SDL_GetError());
+	}
+
+	bool HeldPeer(const Json& peer) {
+		const auto& views = g_NetMatchService.GetSeatViews();
+		if (peer.is_string()) {
+			return std::any_of(views.begin(), views.end(), [&](const auto& entry) {
+				return entry.second.name == peer.get<std::string>() && entry.second.seat.holdCause != NetSeatHoldCause::None;
+			});
+		}
+		const auto found = views.find(peer.get<uint8_t>());
+		return found != views.end() && found->second.seat.holdCause != NetSeatHoldCause::None;
 	}
 
 	Phase StepPhase(const Json& step) {
@@ -575,8 +598,9 @@ namespace {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("lockstep_frame_at_least") || step.contains("renders") ||
 			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
 			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
-			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most") || step.contains("paused"),
+			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer"),
 			    "wait has no predicate");
+			if (step.contains("held_peer") && !HeldPeer(step.at("held_peer"))) return false;
 			// The title screen's own scene reads as Gameplay too, paused; a started game runs.
 			if (step.contains("paused") && observed["paused"] != step["paused"]) return false;
 			if (step.contains("chat_entry_open") && observed["net_ui"].at("chat_entry_open") != step["chat_entry_open"]) return false;
@@ -781,6 +805,25 @@ namespace {
 			if (step.value("connections_absent", false)) {
 				const auto* panel = g_MenuMan.GetNetworkPanel();
 				Require(!panel || panel->GetControl("LabelOwnConnection") == nullptr, "connection controls were loaded outside a lockstep match");
+			}
+			if (step.contains("held_peer")) Require(HeldPeer(step.at("held_peer")), "the named seat is not held");
+			if (step.value("no_duplicate_name", false)) {
+				const auto* panel = g_MenuMan.GetNetworkPanel();
+				Require(panel && observed.at("panel_open") == true, "Seats is not open for the name assertion");
+				const auto rows = panel->AutomationRowNames();
+				observed["seat_row_names"] = rows;
+				for (const auto& name: rows) Require(std::count(rows.begin(), rows.end(), name) == 1, "duplicate Seats row name: " + name);
+				std::string text;
+				for (auto* item: *panel->AutomationManager()->GetControlList()) {
+					if (!item->GetVisible() || (item->GetName() != "NetworkSeatsRoster" && !item->GetName().starts_with("NetworkSeatName"))) continue;
+					if (auto* label = dynamic_cast<GUILabel*>(item)) text += label->GetText() + '\n';
+				}
+				for (const auto& name: step.at("names").get<std::vector<std::string>>()) {
+					size_t count = 0;
+					for (size_t at = text.find(name); at != std::string::npos; at = text.find(name, at + name.size())) ++count;
+					Require(count <= 1, "duplicate rendered seat name: " + name);
+					if (name == step.value("held_name", std::string{})) Require(count == 1, "held seat name is not drawn exactly once");
+				}
 			}
 			if (step.contains("name")) {
 				const std::string name = step.at("name").get<std::string>();

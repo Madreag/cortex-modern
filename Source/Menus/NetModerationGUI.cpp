@@ -137,6 +137,10 @@ namespace {
 			}
 		}
 	};
+	// Funds own the top-left corner of the match HUD.
+	constexpr EditorArea::Column c_FundsHudZone{0, 0, 152, 64};
+	// Controller icons own the top-right corner; x is relative to the right edge.
+	constexpr EditorArea::Column c_ControllerHudZone{-40, 0, 40, 64};
 
 	/// A seat-space rect translated into the window, the same offset the picker column already uses.
 	EditorArea::Column SeatWindowRect(int screen, int x, int y, int width, int height) {
@@ -540,12 +544,12 @@ void NetModerationGUI::DrawOwnConnection(const NetLobbySnapshot& snapshot) {
 	const auto words = NetLinkQualityPresentation::Describe(quality.state);
 	const std::string text = NetLinkQualityPresentation::HudText(quality);
 	const int width = m_ConnectionFont->CalculateWidth(text) + 12;
-	const int height = ConnectionRowHeight() + 10;
+	const int height = (quality.state == NetLinkQuality::State::Good ? m_ConnectionFont->GetFontHeight() + 2 : ConnectionRowHeight()) + 10;
 	EditorArea area = FreeArea(g_WindowMan.GetResX());
 	for (const auto& band: area.textBands) area.occupiers.push_back(band);
 	if (m_StatusRect.visible) area.occupiers.push_back({m_StatusRect.x, m_StatusRect.y, m_StatusRect.width, m_StatusRect.height});
-	area.occupiers.push_back({0, 0, 152, 64});
-	area.occupiers.push_back({g_WindowMan.GetResX() - 40, 0, 40, 64});
+	area.occupiers.push_back(c_FundsHudZone);
+	area.occupiers.push_back({g_WindowMan.GetResX() + c_ControllerHudZone.x, c_ControllerHudZone.y, c_ControllerHudZone.w, c_ControllerHudZone.h});
 	int left = 0, right = 0, top = 24;
 	for (; top + height <= g_WindowMan.GetResY() / 2; top += 4) {
 		area.FreeSpan(top, top + height, g_WindowMan.GetResX(), left, right);
@@ -953,8 +957,10 @@ std::vector<NetModerationGUI::PanelRow> NetModerationGUI::BuildRows(const NetLob
 	const std::vector<NetH4ModerationSeat> seats = g_NetMatchService.GetModerationSeats();
 	m_Model.Refresh(seats);
 	std::vector<PanelRow> held, playing;
+	std::set<uint8_t> listed;
 	for (const auto& member: snapshot.members) {
 		if (!member.cpu && (member.isLocal || member.peerId == snapshot.localPeerId)) continue;
+		if (m_ConnectionInMatch && !member.cpu && listed.contains(member.peerId)) continue;
 		PanelRow row;
 		row.peer = member.peerId;
 		row.team = member.team;
@@ -973,11 +979,12 @@ std::vector<NetModerationGUI::PanelRow> NetModerationGUI::BuildRows(const NetLob
 		for (const NetH4ModerationSeat& seat: seats) {
 			if (!member.cpu && !seat.cpu && seat.lockstepPeerId == member.peerId) row.seat = seat;
 		}
+		if (m_ConnectionInMatch && !member.cpu) listed.insert(member.peerId);
 		(row.decision ? held : playing).push_back(std::move(row));
 	}
 	if (m_ConnectionInMatch) {
 		for (const auto& [peer, view]: g_NetMatchService.GetSeatViews()) {
-			if (peer == snapshot.localPeerId || std::any_of(snapshot.members.begin(), snapshot.members.end(), [peer](const auto& member) { return !member.cpu && member.peerId == peer; })) continue;
+			if (peer == snapshot.localPeerId || listed.contains(peer) || std::any_of(snapshot.members.begin(), snapshot.members.end(), [peer](const auto& member) { return !member.cpu && member.peerId == peer; })) continue;
 			PanelRow row;
 			row.peer = view.peerId;
 			row.name = DisplayName(view.name);
@@ -993,6 +1000,7 @@ std::vector<NetModerationGUI::PanelRow> NetModerationGUI::BuildRows(const NetLob
 				cause.holdCause = view.seat.holdCause;
 				row.state += "  /  " + NetModerationUx::HoldCause(cause);
 			}
+			listed.insert(peer);
 			(row.decision ? held : playing).push_back(std::move(row));
 		}
 	}
@@ -1000,17 +1008,22 @@ std::vector<NetModerationGUI::PanelRow> NetModerationGUI::BuildRows(const NetLob
 	// The count the roster calls for, read apart from the rows above so a check can hold one against the other: every other
 	// player, and an opened place while somebody asks for it.
 	m_RowsImplied = 0;
+	std::set<uint8_t> expectedPeers;
 	for (const auto& member: snapshot.members) {
 		if (!member.cpu && (member.isLocal || member.peerId == snapshot.localPeerId)) continue;
+		if (m_ConnectionInMatch && !member.cpu && expectedPeers.contains(member.peerId)) continue;
 		const bool open = !member.cpu && (NetPlayerPresentation::Row(member) == "Open seat" || NetPlayerPresentation::Opened(member.peerId));
 		const bool asked = std::any_of(seats.begin(), seats.end(), [&](const NetH4ModerationSeat& seat) {
 			return !seat.cpu && seat.lockstepPeerId == member.peerId && !seat.applicants.empty();
 		});
-		if (!open || asked) ++m_RowsImplied;
+		if (!open || asked) {
+			++m_RowsImplied;
+			if (m_ConnectionInMatch && !member.cpu) expectedPeers.insert(member.peerId);
+		}
 	}
 	if (m_ConnectionInMatch) {
 		for (const auto& [peer, view]: g_NetMatchService.GetSeatViews()) {
-			if (peer != snapshot.localPeerId && std::none_of(snapshot.members.begin(), snapshot.members.end(), [peer](const auto& member) { return !member.cpu && member.peerId == peer; })) ++m_RowsImplied;
+			if (peer != snapshot.localPeerId && std::none_of(snapshot.members.begin(), snapshot.members.end(), [peer](const auto& member) { return !member.cpu && member.peerId == peer; }) && expectedPeers.insert(peer).second) ++m_RowsImplied;
 		}
 	}
 	return held;
@@ -2820,6 +2833,14 @@ bool NetModerationGUI::AutomationModerate(const std::string& action, int stableS
 
 size_t NetModerationGUI::AutomationRowsImplied() const {
 	return m_Open && !m_OptionsView ? m_RowsImplied : 0;
+}
+
+std::vector<std::string> NetModerationGUI::AutomationRowNames() const {
+	std::vector<std::string> names;
+	if (m_Open && !m_OptionsView) {
+		for (const auto& row: m_Rows) names.push_back(row.name);
+	}
+	return names;
 }
 
 std::vector<std::string> NetModerationGUI::AutomationRowControls(size_t slot) const {

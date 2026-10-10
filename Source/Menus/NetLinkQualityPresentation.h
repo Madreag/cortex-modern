@@ -30,7 +30,7 @@ namespace RTE::NetLinkQualityPresentation {
 	inline std::string HudText(const NetLinkQuality& quality) {
 		const std::string headline = quality.state == NetLinkQuality::State::Lost ? "reconnecting" :
 		    quality.state == NetLinkQuality::State::Good ? std::to_string(quality.rttMs) + " ms" : SeatText(quality);
-		return headline + '\n' + Describe(quality.state).hint;
+		return quality.state == NetLinkQuality::State::Good ? headline : headline + '\n' + Describe(quality.state).hint;
 	}
 
 	inline const char* ToggleHint(bool enabled) {
