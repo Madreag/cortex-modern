@@ -1326,7 +1326,7 @@ bool UInputMan::GetJoystickDirectionState(int whichJoy, int whichAxis, int which
 }
 
 bool UInputMan::IsNetworkGUIInputActive() const {
-	return ScenarioRunner::HasLockstepCoordinator() || g_NetMatchService.GetState() != NetMatchServiceState::Idle;
+	return ScenarioRunner::HasLockstepCoordinator() || (NetMatchService::IsConstructed() && g_NetMatchService.GetState() != NetMatchServiceState::Idle);
 }
 
 void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
