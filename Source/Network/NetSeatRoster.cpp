@@ -263,7 +263,12 @@ namespace RTE {
 				}
 				case NetRosterEventKind::HeldInPlace: {
 					// The authority publishes a combat bridge only after its visible interval or total silence.
-					if (next.stage != NetRosterStage::Running || !seat || seat->phase != NetSeatPhase::Running) return keep("only a combat seat is held by the round");
+					// An authenticated leave after the round ended is an explicit
+					// host reservation decision, with no new simulation authority.
+					const bool leftBetweenRounds = next.stage == NetRosterStage::Ended && event.cause == NetSeatHoldCause::Leave &&
+					    seat && seat->owner != 0 && (seat->phase == NetSeatPhase::RematchLobby || seat->phase == NetSeatPhase::RoundEnd);
+					if (!leftBetweenRounds && (next.stage != NetRosterStage::Running || !seat || seat->phase != NetSeatPhase::Running))
+						return keep("only a combat seat or an explicit rematch leave is held by the host");
 					seat->phase = NetSeatPhase::Held;
 					seat->holdCause = event.seat == next.hostSeat ? NetSeatHoldCause::OwnSeat :
 					    event.cause == NetSeatHoldCause::None ? NetSeatHoldCause::LinkDrop : event.cause;

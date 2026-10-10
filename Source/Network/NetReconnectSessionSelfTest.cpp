@@ -3633,6 +3633,7 @@ namespace RTE {
 			const uint16_t kickedSeat = kicked.client.GetRecord().stableSeat;
 			const uint16_t leaverSeat = leaver.client.GetRecord().stableSeat;
 			wire.host.SetLiveMatch(true);
+			wire.host.NotePlacementPhase(false, 0);
 			NetModerationSelection selected{};
 			for (const NetH4ModerationSeat& seat: wire.host.GetModerationView()) {
 				if (seat.stableSeat == kickedSeat) selected = NetSelectModerationSeat(seat);
@@ -3654,6 +3655,7 @@ namespace RTE {
 			}
 			// Between rounds a leave keeps the seat for its player, as a drop does.
 			wire.host.SetMatchEnded();
+			if (wire.host.GetRoster().stage != NetRosterStage::Ended) return Fail("the played match did not enter its between-rounds roster");
 			const uint32_t releasedBefore = wire.host.GetStats().seatsReleased;
 			if (!leaver.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) {
 				return Fail("the leave between rounds did not settle: " + error);
