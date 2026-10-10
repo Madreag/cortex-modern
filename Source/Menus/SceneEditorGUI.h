@@ -114,6 +114,7 @@ namespace RTE {
 		void SetCursorPos(const Vector& newCursorPos) {
 			if (!IsInert()) m_CursorPos = newCursorPos;
 		}
+		Vector GetCursorPos() const { return IsInert() ? Vector() : m_CursorPos; }
 
 		/// Sets the new Object to be held at the cursor of this Editor. Ownership
 		/// IS transferred!
