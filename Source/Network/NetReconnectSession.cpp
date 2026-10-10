@@ -2096,7 +2096,7 @@ namespace RTE {
 			return false;
 		}
 		// The roster holds the seat for its away player - lost, left, or held by the round with its link open - or the host opened it.
-		return (IsSeated(seat) && RosterHoldsSeat(seat)) || IsHostOpened(seat);
+		return (IsSeated(seat) && (RosterHoldsSeat(seat) || IsHolderAway(seat))) || IsHostOpened(seat);
 	}
 
 	void NetReconnectHost::BumpSeatGeneration(SeatState& seat) {
