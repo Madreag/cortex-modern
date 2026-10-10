@@ -1,5 +1,9 @@
 #include "Timer.h"
 
+RTE::Timer::Timer(const Timer& source, CheckpointNativeSnapshot&) :
+	m_StartRealTime(source.m_StartRealTime), m_StartSimTime(source.m_StartSimTime),
+	m_RealTimeLimit(source.m_RealTimeLimit), m_SimTimeLimit(source.m_SimTimeLimit), m_TicksPerMS(source.m_TicksPerMS) {}
+
 using namespace RTE;
 
 void Timer::Clear() {

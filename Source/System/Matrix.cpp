@@ -1,8 +1,15 @@
 #include "Matrix.h"
 #include "CheckpointArchive.h"
 #include "RTETools.h"
+#include <cstring>
 
 using namespace RTE;
+
+Matrix::Matrix(const Matrix& source, CheckpointNativeSnapshot&) :
+	m_Rotation(source.m_Rotation), m_ElementsUpdated(source.m_ElementsUpdated) {
+	std::memcpy(m_Flipped, source.m_Flipped, sizeof(m_Flipped));
+	std::memcpy(m_Elements, source.m_Elements, sizeof(m_Elements));
+}
 
 std::string Matrix::SaveCheckpoint() const {
 	CheckpointWriter archive("Matrix1");

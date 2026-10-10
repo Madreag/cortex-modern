@@ -1,4 +1,5 @@
 #include "SceneObject.h"
+#include "CheckpointNativeSnapshot.h"
 #include "CaptureSentinel.h"
 #include "PresetMan.h"
 #include "Matrix.h"
@@ -10,12 +11,25 @@ using namespace RTE;
 AbstractClassInfo(SceneObject, Entity);
 const std::string SceneObject::SOPlacer::c_ClassName = "SOPlacer";
 
+SceneObject::SceneObject(const SceneObject& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	m_Pos(snapshot.Freeze(source.m_Pos)),
+	m_OzValue(snapshot.Freeze(source.m_OzValue)),
+	m_Buyable(snapshot.Freeze(source.m_Buyable)),
+	m_BuyableMode(snapshot.Freeze(source.m_BuyableMode)),
+	m_Team(snapshot.Freeze(source.m_Team)),
+	m_PlacedByPlayer(snapshot.Freeze(source.m_PlacedByPlayer)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+
+}
+
 SceneObject::SceneObject() {
 	Clear();
 	CaptureSentinel::NoteCreation("SceneObject", this);
 }
 
 SceneObject::~SceneObject() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

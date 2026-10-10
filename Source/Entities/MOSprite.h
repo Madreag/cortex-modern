@@ -29,6 +29,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a MOSprite object in system
 		/// memory. Create() should be called before using the object.
 		MOSprite();
+		MOSprite(const MOSprite& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a MOSprite object before deletion
 		/// from system memory.

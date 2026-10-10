@@ -70,6 +70,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a MovableObject object in system
 		/// memory. Create() should be called before using the object.
 		MovableObject();
+		MovableObject(const MovableObject& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a MovableObject object before deletion
 		/// from system memory.
@@ -1396,6 +1397,7 @@ namespace RTE {
 		/// @return Our lua state. Can potentially be nullptr if we're not setup yet.
 		LuaStateWrapper* GetLuaState() { return m_ThreadedLuaState; }
 		const LuaStateWrapper* GetLuaState() const { return m_ThreadedLuaState; }
+		int FrozenCheckpointLuaStateIndex() const { return m_CheckpointLuaStateIndex; }
 
 		/// Method to be run when the game is saved via ActivityMan::SaveCurrentGame. Not currently used in metagame or editor saving.
 		virtual void OnSave() { RunScriptedFunctionInAppropriateScripts("OnSave"); }
@@ -1541,6 +1543,7 @@ namespace RTE {
 		bool m_IsTraveling; //!< Prevents self-intersection while traveling.
 
 		LuaStateWrapper* m_ThreadedLuaState; //!< The lua state that will runs our lua scripts.
+		int m_CheckpointLuaStateIndex = -1;
 		bool m_ForceIntoMasterLuaState; //!< This is awful, and only exists for automovers because they mangle global state all over the place. TODO - change automovers to use messages.
 
 		struct LuaFunction {

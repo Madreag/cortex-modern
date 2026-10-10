@@ -4,6 +4,7 @@
 #include "Vector.h"
 
 namespace RTE {
+	class CheckpointNativeSnapshot;
 
 	/// A 2x2 matrix to rotate 2D Vectors with.
 	class Matrix : public Serializable {
@@ -24,6 +25,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a Matrix object.
 		Matrix() { Clear(); }
+		Matrix(const Matrix& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Constructor method used to instantiate a Matrix object from an angle.
 		/// @param radAng A float of an angle in radians that this Matrix should be set to represent.

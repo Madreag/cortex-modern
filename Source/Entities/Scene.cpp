@@ -1874,7 +1874,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		if (movableObjectToSave->ObjectScriptsInitialized()) {
 			writer.NewPropertyWithValue("ScriptsRestored", true);
 		}
-		if (const int luaState = g_LuaMan.GetStateIndex(movableObjectToSave->GetLuaState()); luaState >= 0) {
+		if (const int luaState = movableObjectToSave->IsFrozenCheckpointNative() ? movableObjectToSave->FrozenCheckpointLuaStateIndex() : g_LuaMan.GetStateIndex(movableObjectToSave->GetLuaState()); luaState >= 0) {
 			writer.NewPropertyWithValue("LuaState", luaState);
 		}
 		// The place this object took in the registration order: a restoring peer keeps it, so two copies

@@ -120,6 +120,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a SceneObject object in system
 		/// memory. Create() should be called before using the object.
 		SceneObject();
+		SceneObject(const SceneObject& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a SceneObject object before deletion
 		/// from system memory.

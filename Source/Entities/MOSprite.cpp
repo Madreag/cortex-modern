@@ -1,5 +1,6 @@
 #include "DeterministicMath.h"
 #include "MOSprite.h"
+#include "CheckpointNativeSnapshot.h"
 #include "CheckpointProperties.h"
 #include "HDFirearm.h"
 #include "CheckpointArchive.h"
@@ -28,11 +29,50 @@ Matrix MOSprite::GetRenderRotMatrix() const {
 
 AbstractClassInfo(MOSprite, MovableObject);
 
+MOSprite::MOSprite(const MOSprite& source, CheckpointNativeSnapshot& snapshot) :
+	MovableObject(source, snapshot),
+	m_Rotation(snapshot.Freeze(source.m_Rotation)),
+	m_PrevRotation(snapshot.Freeze(source.m_PrevRotation)),
+	m_AngularVel(snapshot.Freeze(source.m_AngularVel)),
+	m_PrevAngVel(snapshot.Freeze(source.m_PrevAngVel)),
+	m_SpriteFile(snapshot.Freeze(source.m_SpriteFile)),
+	m_aSprite(snapshot.Freeze(source.m_aSprite)),
+	m_SpriteBitmapOwners{},
+	m_IconFile(snapshot.Freeze(source.m_IconFile)),
+	m_GraphicalIcon(snapshot.Freeze(source.m_GraphicalIcon)),
+	m_FrameCount(snapshot.Freeze(source.m_FrameCount)),
+	m_SpriteOffset(snapshot.Freeze(source.m_SpriteOffset)),
+	m_Frame(snapshot.Freeze(source.m_Frame)),
+	m_SpriteAnimMode(snapshot.Freeze(source.m_SpriteAnimMode)),
+	m_SpriteAnimDuration(snapshot.Freeze(source.m_SpriteAnimDuration)),
+	m_SpriteAnimTimer(snapshot.Freeze(source.m_SpriteAnimTimer)),
+	m_SpriteAnimIsReversingFrames(snapshot.Freeze(source.m_SpriteAnimIsReversingFrames)),
+	m_HFlipped(snapshot.Freeze(source.m_HFlipped)),
+	m_ForcedHFlip(snapshot.Freeze(source.m_ForcedHFlip)),
+	m_SpriteRadius(snapshot.Freeze(source.m_SpriteRadius)),
+	m_SpriteDiameter(snapshot.Freeze(source.m_SpriteDiameter)),
+	m_AngOscillations(snapshot.Freeze(source.m_AngOscillations)),
+	m_PersistedAngOscillations(snapshot.Freeze(source.m_PersistedAngOscillations)),
+	m_PersistedSpriteAnimTimerAnchor(snapshot.Freeze(source.m_PersistedSpriteAnimTimerAnchor)),
+	m_PersistedPrevAngVel(snapshot.Freeze(source.m_PersistedPrevAngVel)),
+	m_PersistedSpriteAnimIsReversingFrames(snapshot.Freeze(source.m_PersistedSpriteAnimIsReversingFrames)),
+	m_HasPersistedSpriteAnimState(snapshot.Freeze(source.m_HasPersistedSpriteAnimState)),
+	m_HasPersistedAngOscillations(snapshot.Freeze(source.m_HasPersistedAngOscillations)),
+	m_SettleMaterialDisabled(snapshot.Freeze(source.m_SettleMaterialDisabled)),
+	m_pEntryWound(snapshot.Freeze(source.m_pEntryWound)),
+	m_pExitWound(snapshot.Freeze(source.m_pExitWound)),
+	m_SpriteModified(snapshot.Freeze(source.m_SpriteModified)),
+	m_PersistedMOSpriteRuntime(snapshot.Freeze(source.m_PersistedMOSpriteRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+
+}
+
 MOSprite::MOSprite() {
 	Clear();
 }
 
 MOSprite::~MOSprite() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
