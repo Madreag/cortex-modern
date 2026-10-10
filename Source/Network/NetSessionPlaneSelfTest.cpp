@@ -251,7 +251,7 @@ namespace RTE {
 					auto& peer = *peers[id - 1]; auto& world = worlds[id - 1];
 					if (peer.IsFailed()) { error = "peer " + std::to_string(id) + " failed: " + peer.GetStats().timeoutReason; return false; }
 					if (peer.GetHostPeerId() != 1 && (!hub.row.gapMs || hub.row.subject != 1 || hub.row.gapMs < 15000)) { error = "lag changed the lobby host"; return false; }
-					if (peer.IsStopped() && !hub.row.frozen) { error = "lag ended participation or required a manual rejoin"; return false; }
+					if (peer.IsStopped()) { error = "lag ended participation or required a manual rejoin"; return false; }
 					if (!peer.IsRunning()) continue;
 					if (hub.row.frozen && id == hub.row.subject && hub.DuringFault()) { credits[id - 1] = 0; wasFrozen = true; continue; }
 					credits[id - 1] += (CatchingUp(peer) || (wasFrozen && id == hub.row.subject && hub.now >= hub.faultEnd) ? c_TestCatchUpRate : 1) / c_TestTickMs;
@@ -272,10 +272,14 @@ namespace RTE {
 						}
 						if (waitAt[id - 1]) { maxWait[id - 1] = std::max(maxWait[id - 1], hub.now - waitAt[id - 1]); waitAt[id - 1] = 0; }
 						peer.FinishFrameWait(hub.now);
+						if (hub.row.internet && hub.row.directoryDown && hub.DuringFault() && !Bridges(peer).empty()) {
+							error = "an unconfirmed internet side committed a substitute during the directory outage"; return false;
+						}
 						if (!CheckCommittedInputs(ready, id, error) || !world.Apply(ready, error)) return false;
 						peer.FinishSimulationTick(ready.frame); credits[id - 1] -= 1;
 					}
 					if (hub.now < hub.faultEnd && hub.row.gapMs < 5000 && HoldVisible(peer, hub.row.subject, hub.now)) { error = "a short hiccup showed a held seat"; return false; }
+					if (hub.row.frozen && HoldVisible(peer, hub.row.subject, hub.now)) { error = "flowing keepalives showed a held seat"; return false; }
 					if (hub.now == hub.faultAt - 1) {
 						settledDelay[id - 1] = peer.InputDelayAt(id, world.applied + 1); settledChanges[id - 1] = SenderResizes(peer, id);
 						settledHostWaits[id - 1] = peer.GetStats().peers.contains(1) ? peer.GetStats().peers.at(1).waits : 0;
@@ -309,6 +313,7 @@ namespace RTE {
 					if (row.gapMs <= 3000 && caughtAt[id - 1] > hub.faultEnd + c_TestReturnAllowanceMs) { error = "return exceeded the spike plus its catch-up allowance"; return false; }
 				}
 				if (row.gapMs == 150 && shortGapSubstitutes) { error = "a spike inside the input delay committed a substitute"; return false; }
+				if (row.gapMs == 150 && maxWait[row.subject - 1]) { error = "a spike inside the input delay hitched the spiking player's view"; return false; }
 				if (row.gapMs >= 400 && row.gapMs < c_TestContinuityMs && !continuityFrames) { error = "a short gap did not use its continuity stage"; return false; }
 				if (row.gapMs >= 3000 && !row.directoryDown && (!continuityFrames || !aiFrames)) { error = "the committed tail did not contain both continuity and AI stages"; return false; }
 				if (row.lossPercent) {

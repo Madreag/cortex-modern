@@ -117,7 +117,6 @@ namespace RTE {
 			m_MigrationResult.activationFrame = ready.frame; m_MigrationResult.hostPeerId = authority->peerId;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((authority->members & AdminBit(peer)) != 0) {
 				m_MigrationResult.members.push_back(peer);
-				
 			}
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (peer != m_Config.localPeerId && !m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) m_MigrationResult.transports[peer] = peer;
 			m_MigrationNotice = true; m_MigrationPhase = NetHostMigrationPhase::Complete;
