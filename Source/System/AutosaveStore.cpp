@@ -888,6 +888,20 @@ namespace RTE {
 			std::cout << Tag << " FAIL match=" << matchId << " restorable=" << held.size() << " (two checkpoints are needed)" << std::endl;
 			return false;
 		}
+		AutosaveDescriptor allocationRetry = held.front();
+		std::string allocationError;
+		allocationError.reserve(32);
+		bool allocationRefused = false;
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::ArchiveValidation);
+			allocationRefused = !Validate(held.front().path, allocationRetry, &allocationError);
+		}
+		const bool allocationHeld = allocationRetry.savedTick == held.front().savedTick && allocationRetry.path == held.front().path &&
+		                            allocationRetry.worldStructureHash == held.front().worldStructureHash;
+		const bool allocationRecovered = allocationRefused && allocationHeld && Validate(held.front().path, allocationRetry) &&
+		                                 allocationRetry.worldStructureHash == held.front().worldStructureHash;
+		std::cout << Tag << (allocationRecovered ? " PASS" : " FAIL") << " allocation_failure_preserves_archive_validation_and_retry" << std::endl;
+		if (!allocationRecovered) return false;
 		// The rows below name the ticks the default keeps, so the peer's own option stands aside for them.
 		const size_t option = RetainedAutosaves();
 		SetRetainedAutosaves(c_RetainedAutosaves);

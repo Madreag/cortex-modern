@@ -7,7 +7,7 @@ namespace RTE {
 	/// Allocation failures used by checkpoint selftests, confined to the calling thread.
 	class CheckpointFailure {
 	public:
-		enum class Point { None, NativePages, LuaPages, LuaSubmission, LuaAllocation, ArchiveValidation };
+		enum class Point { None, NativePages, LuaPages, LuaSubmission, LuaAllocation, ArchiveSubmission, ArchiveValidation };
 		class Scope {
 		public:
 			explicit Scope(Point point, size_t after = 0) : m_Point(s_Point), m_After(s_After) { s_Point = point; s_After = after; }

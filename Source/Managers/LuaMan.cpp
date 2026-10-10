@@ -10443,49 +10443,68 @@ end
 	}
 
 	if (m_CheckpointHeap) {
-		bool failuresHeld = true;
-		for (const auto point: {CheckpointFailure::Point::LuaPages, CheckpointFailure::Point::LuaSubmission}) {
-			const auto before = m_CheckpointHeap->Stats();
-			const uint64_t serial = luaJIT_state_serial(m_State);
-			bool refused = false;
-			{
-				CheckpointFailure::Scope failure(point);
-				try { m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit, true); }
-				catch (const std::bad_alloc&) { refused = true; }
+		{
+			bool failuresHeld = true;
+			for (const auto point: {CheckpointFailure::Point::LuaPages, CheckpointFailure::Point::LuaSubmission}) {
+				const auto before = m_CheckpointHeap->Stats();
+				const uint64_t serial = luaJIT_state_serial(m_State);
+				bool refused = false;
+				{
+					CheckpointFailure::Scope failure(point);
+					try { m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit, true); }
+					catch (const std::bad_alloc&) { refused = true; }
+				}
+				failuresHeld = refused && m_CheckpointHeap->Stats().bytes == before.bytes && luaJIT_state_serial(m_State) == serial && failuresHeld;
+				failuresHeld = RunScriptString("_ScriptGraphAllocationRetry = { held = 97 }") == 0 && failuresHeld;
+				const auto retry = m_CheckpointHeap->Freeze({}, true);
+				failuresHeld = retry.State() == m_State && retry.ByteCount() > 0 && failuresHeld;
+				RunScriptString("_ScriptGraphAllocationRetry = nil");
 			}
-			failuresHeld = refused && m_CheckpointHeap->Stats().bytes == before.bytes && luaJIT_state_serial(m_State) == serial && failuresHeld;
-			failuresHeld = RunScriptString("_ScriptGraphAllocationRetry = { held = 97 }") == 0 && failuresHeld;
-			const auto retry = m_CheckpointHeap->Freeze({}, true);
-			failuresHeld = retry.State() == m_State && retry.ByteCount() > 0 && failuresHeld;
-			RunScriptString("_ScriptGraphAllocationRetry = nil");
+			std::cout << "[script-graph-selftest] " << (failuresHeld ? "PASS" : "FAIL") << " failed_page_setup_leaves_the_vm_writable_and_retryable" << std::endl;
+			checkpointValues = failuresHeld && checkpointValues;
+			const uint64_t liveSerial = luaJIT_state_serial(m_State);
+			CheckpointText refusedGraph;
+			std::vector<std::string> liveProblems;
+			bool liveRefused = false;
+			{
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::LuaAllocation);
+				liveRefused = !CaptureScriptGraph(refusedGraph, liveProblems, true);
+			}
+			const bool liveHeld = liveRefused && !liveProblems.empty() && luaJIT_state_serial(m_State) == liveSerial &&
+			                      RunScriptString("_ScriptGraphAllocationRetry = { held = 97 }; assert(_ScriptGraphAllocationRetry.held == 97); _ScriptGraphAllocationRetry = nil") == 0;
+			std::cout << "[script-graph-selftest] " << (liveHeld ? "PASS" : "FAIL") << " live_lua_allocation_failure_preserves_vm_entry_and_births" << std::endl;
+			checkpointValues = liveHeld && checkpointValues;
+			CheckpointText expectedGraph, failedGraph;
+			std::vector<std::string> failures;
+			bool retryHeld = CaptureScriptGraph(expectedGraph, failures, true);
+			const std::string expected = retryHeld ? expectedGraph.Text() : std::string();
+			retryHeld = CaptureScriptGraph(failedGraph, failures, true) && retryHeld;
+			bool workerRefused = false;
+			{
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::LuaAllocation);
+				try { (void)failedGraph.Text(); } catch (const std::bad_alloc&) { workerRefused = true; }
+			}
+			retryHeld = workerRefused && !m_FrozenCaptureUnavailable->load(std::memory_order_relaxed) && failedGraph.Text() == expected && retryHeld;
+			std::cout << "[script-graph-selftest] " << (retryHeld ? "PASS" : "FAIL") << " worker_lua_allocation_failure_retries_the_exact_frozen_graph" << std::endl;
+			checkpointValues = retryHeld && checkpointValues;
 		}
-		std::cout << "[script-graph-selftest] " << (failuresHeld ? "PASS" : "FAIL") << " failed_page_setup_leaves_the_vm_writable_and_retryable" << std::endl;
-		checkpointValues = failuresHeld && checkpointValues;
-		const uint64_t liveSerial = luaJIT_state_serial(m_State);
-		CheckpointText refusedGraph;
-		std::vector<std::string> liveProblems;
-		bool liveRefused = false;
 		{
-			CheckpointFailure::Scope failure(CheckpointFailure::Point::LuaAllocation);
-			liveRefused = !CaptureScriptGraph(refusedGraph, liveProblems, true);
+			const auto owner = CheckpointLua::HeapOwner::Create();
+			std::array<CheckpointLua::Snapshot, CheckpointLua::HeapOwner::c_LiveSlabs + 1> held;
+			for (auto& snapshot: held) snapshot = owner->Freeze({}, true, true);
+			const auto before = held.front().ReadBytes(owner->State(), sizeof(lua_State));
+			std::vector<std::byte> expected(before.begin(), before.end());
+			bool refused = false;
+			try { owner->Freeze({}, true, true); } catch (const std::bad_alloc&) { refused = true; }
+			const auto after = held.front().ReadBytes(owner->State(), sizeof(lua_State));
+			bool bounded = refused && owner->LiveSlabs() == held.size() && after.size() == expected.size() &&
+			               std::memcmp(after.data(), expected.data(), expected.size()) == 0;
+			held.front() = {};
+			const auto retry = owner->Freeze({}, true, true);
+			bounded = retry.State() == owner->State() && owner->LiveSlabs() == held.size() && bounded;
+			std::cout << "[script-graph-selftest] " << (bounded ? "PASS" : "FAIL") << " frozen_heap_retention_is_bounded_and_retryable" << std::endl;
+			checkpointValues = bounded && checkpointValues;
 		}
-		const bool liveHeld = liveRefused && !liveProblems.empty() && luaJIT_state_serial(m_State) == liveSerial &&
-		                      RunScriptString("_ScriptGraphAllocationRetry = { held = 97 }; assert(_ScriptGraphAllocationRetry.held == 97); _ScriptGraphAllocationRetry = nil") == 0;
-		std::cout << "[script-graph-selftest] " << (liveHeld ? "PASS" : "FAIL") << " live_lua_allocation_failure_preserves_vm_entry_and_births" << std::endl;
-		checkpointValues = liveHeld && checkpointValues;
-		CheckpointText expectedGraph, failedGraph;
-		std::vector<std::string> failures;
-		bool retryHeld = CaptureScriptGraph(expectedGraph, failures, true);
-		const std::string expected = retryHeld ? expectedGraph.Text() : std::string();
-		retryHeld = CaptureScriptGraph(failedGraph, failures, true) && retryHeld;
-		bool workerRefused = false;
-		{
-			CheckpointFailure::Scope failure(CheckpointFailure::Point::LuaAllocation);
-			try { (void)failedGraph.Text(); } catch (const std::bad_alloc&) { workerRefused = true; }
-		}
-		retryHeld = workerRefused && !m_FrozenCaptureUnavailable->load(std::memory_order_relaxed) && failedGraph.Text() == expected && retryHeld;
-		std::cout << "[script-graph-selftest] " << (retryHeld ? "PASS" : "FAIL") << " worker_lua_allocation_failure_retries_the_exact_frozen_graph" << std::endl;
-		checkpointValues = retryHeld && checkpointValues;
 		// A frozen heap is copied off the thread that froze it. Until the copy lands, the state's lock is the
 		// gate: a script run through it waits, so its writes are never in the image. The copy threads are
 		// kept busy first, so the copy is still queued when the script asks for the state.

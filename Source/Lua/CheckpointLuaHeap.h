@@ -340,7 +340,7 @@ namespace RTE::CheckpointLua {
 				const size_t pageBytes = PageWriteFence::SystemPageBytes();
 				if (!pageBytes || m_Base % pageBytes || data->committed % pageBytes)
 					throw std::runtime_error("the Lua heap is not aligned for a page copy fence");
-				auto slab = TakeSlab(data->committed / Snapshot::c_PageBytes);
+				auto slab = TakeSlab(data->committed / Snapshot::c_PageBytes, batchCopy);
 				data->pages = slab->pages;
 				data->buffer = std::move(slab);
 				data->faults = std::make_shared<CopyFaultStats>();
@@ -654,9 +654,17 @@ namespace RTE::CheckpointLua {
 			static std::atomic<size_t> calls{0};
 			return calls;
 		}
-		std::shared_ptr<Slab> TakeSlab(size_t pages) {
+		std::shared_ptr<Slab> TakeSlab(size_t pages, bool bounded = false) {
 			CheckpointFailure::Check(CheckpointFailure::Point::LuaPages);
 			if (pages > std::numeric_limits<size_t>::max() / Snapshot::c_PageBytes) throw std::bad_alloc();
+			const size_t held = m_LiveSlabs.fetch_add(1, std::memory_order_relaxed);
+			struct Reservation {
+				std::atomic<size_t>& count;
+				bool transferred = false;
+				~Reservation() { if (!transferred) count.fetch_sub(1, std::memory_order_relaxed); }
+			} reservation{m_LiveSlabs};
+			// The writing and waiting captures leave one slot for the boundary being frozen.
+			if (bounded && held >= c_LiveSlabs + 1) throw std::bad_alloc();
 			std::unique_ptr<Slab> slab;
 			{
 				std::lock_guard lock(m_SlabMutex);
@@ -664,6 +672,10 @@ namespace RTE::CheckpointLua {
 				if (fit != m_IdleSlabs.end()) {
 					slab = std::move(*fit);
 					CopyBytes(true).fetch_sub(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
+				}
+				if (!slab) for (auto& idle: m_IdleSlabs) if (idle) {
+					CopyBytes(true).fetch_sub(idle->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
+					idle.reset();
 				}
 			}
 			if (!slab) {
@@ -675,7 +687,7 @@ namespace RTE::CheckpointLua {
 				m_FreshBytes += slab->capacity * Snapshot::c_PageBytes;
 				CopyBytes(false).fetch_add(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 			}
-			m_LiveSlabs.fetch_add(1, std::memory_order_relaxed);
+			reservation.transferred = true;
 			return std::shared_ptr<Slab>(slab.release(), [](Slab* returned) { ReturnSlab(returned->owner, returned); });
 		}
 		// A buffer goes back to its heap only while that heap exists; one released after it is unmapped instead.

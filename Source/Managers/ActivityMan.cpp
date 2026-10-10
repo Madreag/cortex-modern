@@ -14,6 +14,7 @@
 #include "Base64/base64.h"
 
 #include <filesystem>
+#include <list>
 #include "Activity.h"
 
 #include "CameraMan.h"
@@ -277,7 +278,16 @@ namespace {
 			std::optional<uint64_t> writingTick; //!< The capture the writer held when this one arrived.
 		};
 
-		AutosaveArchiveWriter() : m_Worker(FloatingPointEnvironment::StartThread([this] { Write(); })), m_Releaser(FloatingPointEnvironment::StartThread([this] { Release(); })) {}
+		AutosaveArchiveWriter() {
+			m_Worker = FloatingPointEnvironment::StartThread([this] { Write(); });
+			try { m_Releaser = FloatingPointEnvironment::StartThread([this] { Release(); }); }
+			catch (...) {
+				{ std::lock_guard lock(m_Mutex); m_Stopping = true; }
+				m_Ready.notify_all();
+				m_Worker.join();
+				throw;
+			}
+		}
 		~AutosaveArchiveWriter() {
 			{
 				std::lock_guard lock(m_Mutex);
@@ -292,20 +302,52 @@ namespace {
 		Submitted Submit(std::function<bool(bool)> writer, std::string series = {}, uint64_t tick = 0) {
 			Task task(std::move(writer));
 			Submitted submitted{task.get_future().share()};
+			CheckpointFailure::Check(CheckpointFailure::Point::ArchiveSubmission);
+			std::list<Waiting> incoming;
+			incoming.push_back(Waiting{std::move(task), std::move(series), tick});
 			{
 				std::lock_guard lock(m_Mutex);
-				const auto sameSeries = [&series](const Waiting& waiting) { return waiting.series == series; };
-				if (!series.empty() && static_cast<size_t>(std::count_if(m_Tasks.begin(), m_Tasks.end(), sameSeries)) >= c_WaitingPerSeries) {
+				const auto sameSeries = [&incoming](const Waiting& waiting) { return waiting.series == incoming.front().series; };
+				if (!incoming.front().series.empty() && static_cast<size_t>(std::count_if(m_Tasks.begin(), m_Tasks.end(), sameSeries)) >= c_WaitingPerSeries) {
 					const auto oldest = std::find_if(m_Tasks.begin(), m_Tasks.end(), sameSeries);
 					submitted.replacedTick = oldest->tick;
-					m_Replaced.push_back(std::move(oldest->task));
-					m_Tasks.erase(oldest);
+					m_Replaced.splice(m_Replaced.end(), m_Tasks, oldest);
 				}
-				m_Tasks.push_back(Waiting{std::move(task), std::move(series), tick});
+				m_Tasks.splice(m_Tasks.end(), incoming);
 				if (m_Writing) submitted.writingTick = m_WritingTick;
 			}
 			m_Ready.notify_all();
 			return submitted;
+		}
+		static bool RunAdmissionSelfTest() {
+			AutosaveArchiveWriter writer;
+			std::promise<void> started, release;
+			const auto gate = release.get_future().share();
+			struct Unblock {
+				std::promise<void>& release;
+				bool done = false;
+				void Run() { if (!done) { done = true; release.set_value(); } }
+				~Unblock() { Run(); }
+			} unblock{release};
+			const auto writing = writer.Submit([&started, gate](bool replaced) {
+				if (replaced) return false;
+				started.set_value();
+				gate.wait();
+				return true;
+			}, "allocation-probe", 1);
+			started.get_future().wait();
+			const auto waiting = writer.Submit([](bool replaced) { return !replaced; }, "allocation-probe", 2);
+			bool refused = false;
+			{
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::ArchiveSubmission);
+				try { writer.Submit([](bool replaced) { return !replaced; }, "allocation-probe", 3); }
+				catch (const std::bad_alloc&) { refused = true; }
+			}
+			const bool held = waiting.verdict.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
+			unblock.Run();
+			const bool prior = writing.verdict.get() && waiting.verdict.get();
+			const auto retry = writer.Submit([](bool replaced) { return !replaced; }, "allocation-probe", 4);
+			return refused && held && prior && retry.verdict.get();
 		}
 
 	private:
@@ -345,7 +387,7 @@ namespace {
 					std::unique_lock lock(m_Mutex);
 					m_Ready.wait(lock, [this] { return m_Stopping || !m_Replaced.empty(); });
 					if (m_Replaced.empty()) return;
-					task = std::move(m_Replaced.front());
+					task = std::move(m_Replaced.front().task);
 					m_Replaced.pop_front();
 				}
 				task(true);
@@ -354,8 +396,8 @@ namespace {
 
 		std::mutex m_Mutex;
 		std::condition_variable m_Ready;
-		std::deque<Waiting> m_Tasks;
-		std::deque<Task> m_Replaced;
+		std::list<Waiting> m_Tasks;
+		std::list<Waiting> m_Replaced;
 		bool m_Writing = false;
 		uint64_t m_WritingTick = 0;
 		bool m_Stopping = false;
@@ -746,26 +788,26 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity) {
 	if (!AutosaveStore::ValidMatchId(matchId) || tick == 0) return false;
 	try {
-	std::erase_if(m_AutosaveTasks, [](const auto& task) {
-		return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-	});
-	const std::string fileName = matchId + "-" + std::to_string(tick);
-	const std::string path = AutosaveStore::ArchivePath(matchId, tick).string();
-	std::shared_future<bool> task;
-	size_t bytes = 0;
-	const auto captureStart = std::chrono::steady_clock::now();
-	std::promise<int64_t> simDone;
-	const auto captureClock = std::make_shared<CheckpointCaptureClock>(CheckpointCaptureClock{captureStart, simDone.get_future().share()});
-	struct SimulationDone {
-		std::promise<int64_t>& done;
-		std::chrono::steady_clock::time_point started;
-		~SimulationDone() { done.set_value(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()); }
-	} simulationDone{simDone, captureStart};
+		std::erase_if(m_AutosaveTasks, [](const auto& task) {
+			return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+		});
+		const std::string fileName = matchId + "-" + std::to_string(tick);
+		const std::string path = AutosaveStore::ArchivePath(matchId, tick).string();
+		std::shared_future<bool> task;
+		size_t bytes = 0;
+		const auto captureStart = std::chrono::steady_clock::now();
+		std::promise<int64_t> simDone;
+		const auto captureClock = std::make_shared<CheckpointCaptureClock>(CheckpointCaptureClock{captureStart, simDone.get_future().share()});
+		struct SimulationDone {
+			std::promise<int64_t>& done;
+			std::chrono::steady_clock::time_point started;
+			~SimulationDone() { done.set_value(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()); }
+		} simulationDone{simDone, captureStart};
 #ifdef _WIN32
-	const char* phases = std::getenv("CCCP_CHECKPOINT_PHASES");
-	const bool phaseClock = phases && std::string_view(phases) == "1";
-	LARGE_INTEGER clockStart{};
-	if (phaseClock) QueryPerformanceCounter(&clockStart);
+		const char* phases = std::getenv("CCCP_CHECKPOINT_PHASES");
+		const bool phaseClock = phases && std::string_view(phases) == "1";
+		LARGE_INTEGER clockStart{};
+		if (phaseClock) QueryPerformanceCounter(&clockStart);
 #endif
 		if (!QueueIncrementalAutosave(fileName, path, matchId, tick, task, bytes, SaveCompression::Fast, &identity, false, captureClock)) {
 			{
@@ -1429,6 +1471,9 @@ size_t ActivityMan::UnwrittenAutosaves() {
 
 bool ActivityMan::RunCheckpointCaptureSelfTest(uint64_t tick) {
 	try {
+		const bool admission = AutosaveArchiveWriter::RunAdmissionSelfTest();
+		System::PrintDiagnosticLine(std::string("[checkpoint-capture-selftest] ") + (admission ? "PASS" : "FAIL") + " allocation_failure_preserves_queued_archive_and_retry\n");
+		if (!admission) return false;
 		AudioCheckpoint::MixerLock mixer(g_AudioMan.IsAudioEnabled() ? g_AudioMan.GetAudioSystem() : nullptr);
 		Scene* scene = g_SceneMan.GetScene();
 		Activity* activity = GetActivity();
