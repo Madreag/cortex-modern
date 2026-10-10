@@ -74,6 +74,8 @@ def main():
         flags += ['-net-join-session', rows[0]['session_id']]
     begun = datetime.datetime.now(datetime.timezone.utc).isoformat()
     if args.app_template:
+        render_flag = flags.index('-feel-render-settings')
+        del flags[render_flag:render_flag + 2]
         app = runtime / 'CortexFight.app'
         (app / 'Contents/MacOS').mkdir(parents=True)
         info = plistlib.loads((args.app_template / 'Contents/Info.plist').read_bytes())
