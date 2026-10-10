@@ -29,6 +29,7 @@ sources += files(
 'NetLobbySession.cpp',
 'NetLockstep.cpp',
 'NetLockstepSelfTest.cpp',
+'NetLinkQuality.cpp',
 'NetMatchConfig.cpp',
 'NetMatchReplay.cpp',
 'NetMatchRunner.cpp',

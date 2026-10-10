@@ -595,6 +595,12 @@
     <ClInclude Include="Source\Network\NetMatchConfig.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetLinkQuality.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Menus\NetLinkQualityPresentation.h">
+      <Filter>Menus</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetMatchRunner.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -1004,6 +1010,9 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetMatchConfig.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetLinkQuality.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetMatchRunner.cpp">

@@ -79,6 +79,8 @@ namespace RTE {
 		GUICheckbox* m_PredictionCheckbox;
 		GUICheckbox* m_DiagnosticsCheckbox;
 		GUIComboBox* m_StatusModeCombo;
+		GUIComboBox* m_ConnectionIndicatorCombo;
+		GUILabel* m_ConnectionIndicatorHint;
 		/// Every row drawn under the fixed-delay row, with the y it sits at while that row is drawn.
 		std::array<std::pair<GUIControl*, int>, 10> m_RowsUnderFixedDelay;
 

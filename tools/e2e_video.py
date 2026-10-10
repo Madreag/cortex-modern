@@ -2264,8 +2264,9 @@ def run_one(options, scenario, run, run_index, out):
         raise ValueError("--capture-peer must name a peer of this run")
     # The engine records its rendered texture on every platform. The capture
     # peer and every recorder are isolated on the lead's explicitly named boxes.
+    detector = getattr(options, "layout_detector", False)
     peers = [spread.Peer(peer["name"], os="any", size=size,
-                         reviewed=peer["name"] == capture_peer, readback=True, share_ok=False,
+                         reviewed=not detector and peer["name"] == capture_peer, readback=True, share_ok=detector,
                          timeout=run.get("timeout_s") or scenario.get("timeout_s") or 300)
              for peer in definitions]
     previous = getattr(options, "remote_capture", None)
@@ -2273,10 +2274,11 @@ def run_one(options, scenario, run, run_index, out):
         options.remote_capture = case
         try:
             result = _run_one(options, scenario, run, run_index, out, case_root=case.out)
-            result.update(topology="spread", peer_boxes=case.result()["peer_boxes"], repo=str(Path(options.repo).resolve()))
+            result.update(topology="single-box" if detector else "spread", proof=not detector,
+                          peer_boxes=case.result()["peer_boxes"], repo=str(Path(options.repo).resolve()))
             for peer in result["peers"]:
-                peer.update(topology="spread", box=result["peer_boxes"][peer["peer"]])
-                peer["record"]["topology"] = "spread"
+                peer.update(topology=result["topology"], proof=not detector, box=result["peer_boxes"][peer["peer"]])
+                peer["record"].update(topology=result["topology"], proof=not detector)
             return result
         finally:
             options.remote_capture = previous
@@ -2887,11 +2889,14 @@ def main():
                         help=f"positive byte allowance; default {SCRATCH_LIMIT}, or the retained allowance when finalizing")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--which-ffmpeg", action="store_true", help="print the ffmpeg this box records with and where it was found")
+    parser.add_argument("--layout-detector", action="store_true", help="allow assigned peers to share boxes for layout only; record proof=false")
     parser.add_argument("--fullstate-every", type=int, default=0,
                         help="multi-peer runs: every N committed ticks each peer hashes its whole capture (-net-fullstate-hash-every); "
                              "a pair that differs is an engine finding; 0 is off")
     options = parser.parse_args()
     spread.configure(options)
+    if options.layout_detector and not spread.enabled(options):
+        parser.error('--layout-detector needs explicitly assigned --peer-boxes')
     if options.win_cause_log and not spread.enabled(options):
         parser.error('--win-cause-log requires --peer-boxes and private native Data overlays')
     if spread.enabled(options) and (options.host_box or options.client_box or options.peer):
@@ -2993,6 +2998,8 @@ def main():
                "scratch_root": str(options.scratch_root), "scratch_limit_bytes": options.scratch_limit_bytes,
                "started": stamp(), "command": [sys.executable, *sys.argv], "scenario_definition": scenario}
     capture["topology"] = ("spread" if options.host_box else spread.topology(options, max(len(run.get("peers") or scenario.get("peers") or []) for run in runs)))
+    if options.layout_detector:
+        capture.update(topology="single-box", proof=False)
     from relay_private import public_value
     capture=public_value(capture,capture_book.values if scenario.get('relay_secret_scan') else ())
     missing = requirement_findings(options.repo, scenario)
