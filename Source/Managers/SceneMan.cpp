@@ -3195,6 +3195,15 @@ namespace {
     };
 }
 
+void SceneMan::VisitCheckpointMaterialOwners(const std::function<void(const Material*, int, size_t)>& visit) const {
+	for (size_t index = 0; index < m_apMatPalette.size(); ++index) if (m_apMatPalette[index]) visit(m_apMatPalette[index], 1, index);
+	for (const auto& [material, index]: m_MaterialCopyIndices) visit(material, 2, index);
+	if (PresetMan::IsConstructed()) {
+		const auto presets = CheckpointMaterialPresets();
+		for (size_t index = 0; index < presets.size(); ++index) visit(presets[index], 3, index);
+	}
+}
+
 std::string SceneMan::SaveMaterialReference(const Material* material) const {
 	if (const auto* snapshot = CheckpointNativeSnapshot::Current()) {
 		if (const auto* reference = snapshot->MaterialReference(material)) return reference->Text();
@@ -3398,6 +3407,17 @@ bool SceneMan::RunMaterialCheckpointSelfTest() {
         if (!after.LoadCheckpoint(before.SaveCheckpoint())) throw std::runtime_error("copied material Atom checkpoint was rejected");
         after.ResolveCheckpointLinks();
         if (after.GetMaterial() != first) throw std::runtime_error("Atom material resolved to a palette entry");
+		Material inlineValue;
+		const std::string inlineBytes = inlineValue.SaveCheckpoint();
+		auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
+		const Material* inlineFrozen = snapshot->Object(&inlineValue);
+		const Material* ownedFrozen = snapshot->Object(first);
+		CheckpointNativeSnapshot::ReadScope frozen(snapshot.get());
+		bool unownedRefused = false;
+		try { SaveMaterialReference(inlineFrozen); } catch (const std::logic_error&) { unownedRefused = true; }
+		const bool exact = inlineFrozen->SaveCheckpoint() == inlineBytes && SaveMaterialReference(ownedFrozen) == firstReference && unownedRefused;
+		std::cout << "[material-checkpoint] " << (exact ? "PASS" : "FAIL") << " inline_material_values_freeze_without_inventing_reference_owners" << std::endl;
+		passed = exact && passed;
     } catch (const std::exception& error) {
         passed = false;
         std::cout << "[material-checkpoint] failure: " << error.what() << std::endl;

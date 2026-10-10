@@ -81,6 +81,8 @@ namespace RTE {
         bool LoadMaterialCatalog(std::string_view text, bool validateOnly = false);
         bool PrepareCheckpointMaterials(std::string_view sceneManCheckpoint, bool validateOnly = false);
         std::string SaveMaterialReference(const Material* material) const;
+		/// Visits material reference identities in the existing palette, copy and preset order.
+		void VisitCheckpointMaterialOwners(const std::function<void(const Material*, int, size_t)>& visit) const;
         static bool ValidateMaterialReference(std::string_view text);
         const Material* ResolveMaterialReference(std::string_view text, bool allowMissing = false) const;
         bool RunMaterialCheckpointSelfTest();

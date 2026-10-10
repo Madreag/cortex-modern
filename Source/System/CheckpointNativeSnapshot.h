@@ -253,6 +253,7 @@ namespace RTE {
 		std::unordered_map<const BITMAP*, std::shared_ptr<Pixel>> m_BitmapSources;
 		std::unordered_map<const Serializable*, CheckpointText> m_WriterValues;
 		std::unordered_map<const Material*, CheckpointText> m_MaterialReferences;
+		std::unordered_map<const Material*, std::pair<int, size_t>> m_MaterialOwners;
 		std::unordered_map<long, MovableObject*> m_UIDs;
 		CheckpointFrozenClock m_Clock;
 		std::list<Entity*> m_Owners;
