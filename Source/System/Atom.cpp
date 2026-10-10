@@ -134,8 +134,9 @@ Atom::Atom(const Atom& source, CheckpointNativeSnapshot& snapshot) :
 	m_DomSteps(snapshot.Freeze(source.m_DomSteps)),
 	m_SubSteps(snapshot.Freeze(source.m_SubSteps)),
 	m_SubStepped(snapshot.Freeze(source.m_SubStepped)),
-	m_CheckpointMaterialReferences(source.CaptureCheckpointMaterialReferences()),
-	m_HasCheckpointMaterials(true),
+	// The frozen materials name themselves on the saver through the snapshot; only carried names are copied here.
+	m_CheckpointMaterialReferences(source.m_HasCheckpointMaterials ? source.m_CheckpointMaterialReferences : std::array<std::string, 3>{}),
+	m_HasCheckpointMaterials(source.m_HasCheckpointMaterials),
 	m_CheckpointLinkIDs(source.CaptureCheckpointLinkIDs()),
 	m_HasCheckpointLinks(true),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {

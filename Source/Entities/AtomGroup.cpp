@@ -46,7 +46,8 @@ AtomGroup::AtomGroup(const AtomGroup& source, CheckpointNativeSnapshot& snapshot
 	m_AreaDistributionType(snapshot.Freeze(source.m_AreaDistributionType)),
 	m_AreaDistributionSurfaceAreaMultiplier(snapshot.Freeze(source.m_AreaDistributionSurfaceAreaMultiplier)),
 	m_FrozenAtoms(Atom::FreezeList(source.m_Atoms)),
-	m_CheckpointMaterialReference(source.m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(source.m_Material) : source.m_CheckpointMaterialReference),
+	// The frozen material names itself on the saver through the snapshot.
+	m_CheckpointMaterialReference(source.m_CheckpointMaterialReference),
 	m_CheckpointOwnerID(snapshot.Freeze(source.m_CheckpointOwnerID)),
 	m_HasCheckpointOwner(snapshot.Freeze(source.m_HasCheckpointOwner)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
