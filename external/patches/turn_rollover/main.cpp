@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
 	if (!GameNetworkingSockets_Init(nullptr, error)) return 66;
 	auto* utils = SteamNetworkingUtils();
 	utils->SetDebugOutputFunction(k_ESteamNetworkingSocketsDebugOutputType_Debug, Debug);
-	utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_LogLevel_P2PRendezvous, 5);
+	utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_LogLevel_P2PRendezvous, 6);
 	utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_IP_AllowWithoutAuth, 1);
 	SteamNetworkingConfigValue_t values[8];
 	values[0].SetInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_Relay);
@@ -112,7 +112,7 @@ int main(int argc, char** argv) {
 	double nextSend = 0, lastHost = 0, lastJoiner = 0;
 	int receivedHost = 0, receivedJoiner = 0;
 	bool gap = false, relay = true;
-	while (Seconds() < 85 && !drops && !gap) {
+	while (Seconds() < 85 && !drops) {
 		Deliver(toHost, hostContext); Deliver(toJoiner, joinerContext); sockets->RunCallbacks();
 		const double now = Seconds();
 		if (connects == 2) {
@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
 				rotated = Update(host, argv[1], nextUser, nextPassword) && Update(joiner, argv[1], nextUser, nextPassword);
 				std::printf("[turn-check] login queued same_connections=%u,%u t=%.3f\n", host, joiner, now);
 			}
-			gap = now - lastHost > 5 || now - lastJoiner > 5;
+			gap = gap || now - lastHost > 5 || now - lastJoiner > 5;
 		} else if (now > 20) break;
 		std::this_thread::sleep_for(std::chrono::milliseconds(10));
 	}

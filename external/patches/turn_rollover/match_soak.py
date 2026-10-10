@@ -56,7 +56,7 @@ def main():
              '-net-match-peers', '2', '-net-match-cpu-slots', '0', '-net-match-service-preset', 'Determinism FeelBaseline',
              '-net-match-service-module', 'UserScenes.rte', '-net-match-auto-delay', '-net-local-prediction', 'on',
              '-net-reconnect-ticket', str(args.out / 'seat.private'), '-net-match-report', str(args.out / 'match.json'),
-             '-net-ice', 'on', '-net-rendezvous-log', '5']
+             '-net-ice', 'on', '-net-rendezvous-log', '6']
     if args.role == 'host':
         flags += ['-net-host']
     else:
