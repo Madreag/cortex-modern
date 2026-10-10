@@ -3,6 +3,7 @@
 #include "Vector.h"
 
 namespace RTE {
+	class CheckpointNativeSnapshot;
 
 	class MovableObject;
 	class MOSRotating;

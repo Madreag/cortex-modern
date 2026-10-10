@@ -96,7 +96,6 @@ namespace RTE {
 					T::PrepareCheckpointNative(source, reinterpret_cast<T*>(memory), *this);
 				new(memory) T(source, *this);
 				constructed = true;
-				target->m_CheckpointPreset = Object(source.GetPresetForCopy());
 				return target;
 			} catch (...) {
 				if (constructed) std::launder(reinterpret_cast<T*>(memory))->~T();

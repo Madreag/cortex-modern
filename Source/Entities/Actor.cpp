@@ -686,7 +686,9 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 void Actor::SaveSnapshotConfiguration(Writer& writer) const {
 	MOSRotating::SaveSnapshotConfiguration(writer);
-	if (m_PieMenu) writer.NewPropertyWithValue("PieMenu", m_PieMenu.get());
+	if (m_FrozenPieMenu) {
+		writer.NewProperty("PieMenu"); writer.Append(m_FrozenPieMenu->ReindentWriter(writer.GetIndent() - 1));
+	} else if (m_PieMenu) writer.NewPropertyWithValue("PieMenu", m_PieMenu.get());
 	writer.NewPropertyWithValue("GoldCarried", m_GoldCarried);
 	writer.NewPropertyWithValue("AIMode", m_AIMode);
 	writer.NewPropertyWithValue("SpecialBehaviour_ClearAIOrders", true);

@@ -33,6 +33,8 @@ namespace RTE {
 
 		/// Public member variable, method and friend function declarations
 	public:
+		const std::optional<CheckpointText>& FrozenCheckpointPieMenu() const { return m_FrozenPieMenu; }
+		const std::string& FrozenCheckpointPieMenuState() const { return m_FrozenPieMenuState; }
 		enum Status {
 			STABLE = 0,
 			UNSTABLE,
@@ -1349,6 +1351,8 @@ namespace RTE {
 		bool LoadActorRuntime(std::string_view text, bool validateOnly = false);
 
 		std::unique_ptr<PieMenu> m_PieMenu;
+		std::optional<CheckpointText> m_FrozenPieMenu;
+		std::string m_FrozenPieMenuState;
 
 		bool m_CheckpointInitialized = false;
 

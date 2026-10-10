@@ -89,6 +89,7 @@ namespace RTE {
 		m_CheckpointWriteGeneration(source.m_CheckpointWriteGeneration), m_FrozenCheckpointNative(true), m_CheckpointSnapshot(&snapshot),
 		m_CheckpointModuleAndPreset(source.GetModuleAndPresetName()) {
 		m_CheckpointOwnerSlot = snapshot.Bind(source, this);
+		m_CheckpointPreset = snapshot.Object(source.GetPresetForCopy());
 	}
 	Entity* Entity::FreezeCheckpointNative(CheckpointNativeSnapshot&) const {
 		throw std::runtime_error("native checkpoint snapshot is not implemented for " + GetClassName());

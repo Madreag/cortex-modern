@@ -1,5 +1,9 @@
 #include "DeterministicMath.h"
 #include "MOSRotating.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "Gib.h"
 #include "CheckpointProperties.h"
 #include "MetricsCollector.h"
 #include "CheckpointArchive.h"
@@ -47,11 +51,77 @@ BITMAP* MOSRotating::m_spTempBitmapS128 = 0;
 BITMAP* MOSRotating::m_spTempBitmapS256 = 0;
 BITMAP* MOSRotating::m_spTempBitmapS512 = 0;
 
+MOSRotating::MOSRotating(const MOSRotating& source, CheckpointNativeSnapshot& snapshot) :
+	MOSprite(source, snapshot),
+	m_pAtomGroup(snapshot.Freeze(source.m_pAtomGroup)),
+	m_PersistedAtomGroupCheckpoint(snapshot.Freeze(source.m_PersistedAtomGroupCheckpoint)),
+	m_PersistedDeepGroupCheckpoint(snapshot.Freeze(source.m_PersistedDeepGroupCheckpoint)),
+	m_PersistedAtomGroupResidue(snapshot.Freeze(source.m_PersistedAtomGroupResidue)),
+	m_PersistedAtomGroupOffsets(snapshot.Freeze(source.m_PersistedAtomGroupOffsets)),
+	m_PersistedAtomGroupSubIDs(snapshot.Freeze(source.m_PersistedAtomGroupSubIDs)),
+	m_PersistedAtomGroupMaterials(snapshot.Freeze(source.m_PersistedAtomGroupMaterials)),
+	m_PersistedGroupMomentOfInertia(snapshot.Freeze(source.m_PersistedGroupMomentOfInertia)),
+	m_PersistedGroupStoredMass(snapshot.Freeze(source.m_PersistedGroupStoredMass)),
+	m_HasPersistedGroupInertia(snapshot.Freeze(source.m_HasPersistedGroupInertia)),
+	m_FaithfulAttachableOrder(snapshot.Freeze(source.m_FaithfulAttachableOrder)),
+	m_FaithfulRadiusAffectingAttachableUID(snapshot.Freeze(source.m_FaithfulRadiusAffectingAttachableUID)),
+	m_FaithfulAttachableAndWoundMass(snapshot.Freeze(source.m_FaithfulAttachableAndWoundMass)),
+	m_FaithfulFarthestAttachableDistanceAndRadius(snapshot.Freeze(source.m_FaithfulFarthestAttachableDistanceAndRadius)),
+	m_PersistedAttachableAndWoundMass(snapshot.Freeze(source.m_PersistedAttachableAndWoundMass)),
+	m_HasPersistedAttachableAndWoundMass(snapshot.Freeze(source.m_HasPersistedAttachableAndWoundMass)),
+	m_pDeepGroup(snapshot.Freeze(source.m_pDeepGroup)),
+	m_DeepCheck(snapshot.Freeze(source.m_DeepCheck)),
+	m_ForceDeepCheck(snapshot.Freeze(source.m_ForceDeepCheck)),
+	m_DeepHardness(snapshot.Freeze(source.m_DeepHardness)),
+	m_TravelImpulse(snapshot.Freeze(source.m_TravelImpulse)),
+	m_SpriteCenter(snapshot.Freeze(source.m_SpriteCenter)),
+	m_OrientToVel(snapshot.Freeze(source.m_OrientToVel)),
+	m_Recoiled(snapshot.Freeze(source.m_Recoiled)),
+	m_RecoilForce(snapshot.Freeze(source.m_RecoilForce)),
+	m_RecoilOffset(snapshot.Freeze(source.m_RecoilOffset)),
+	m_Wounds(snapshot.Freeze(source.m_Wounds)),
+	m_EntryWoundBurstSoundPlayedThisFrame(snapshot.Freeze(source.m_EntryWoundBurstSoundPlayedThisFrame)),
+	m_ExitWoundBurstSoundPlayedThisFrame(snapshot.Freeze(source.m_ExitWoundBurstSoundPlayedThisFrame)),
+	m_Attachables(snapshot.Freeze(source.m_Attachables)),
+	m_ReferenceHardcodedAttachableUniqueIDs(snapshot.Freeze(source.m_ReferenceHardcodedAttachableUniqueIDs)),
+	m_RadiusAffectingAttachable(snapshot.Freeze(source.m_RadiusAffectingAttachable)),
+	m_FarthestAttachableDistanceAndRadius(snapshot.Freeze(source.m_FarthestAttachableDistanceAndRadius)),
+	m_AttachableAndWoundMass(snapshot.Freeze(source.m_AttachableAndWoundMass)),
+	m_Gibs(snapshot.Freeze(source.m_Gibs)),
+	m_GibImpulseLimit(snapshot.Freeze(source.m_GibImpulseLimit)),
+	m_GibWoundLimit(snapshot.Freeze(source.m_GibWoundLimit)),
+	m_GibBlastStrength(snapshot.Freeze(source.m_GibBlastStrength)),
+	m_GibScreenShakeAmount(snapshot.Freeze(source.m_GibScreenShakeAmount)),
+	m_WoundCountAffectsImpulseLimitRatio(snapshot.Freeze(source.m_WoundCountAffectsImpulseLimitRatio)),
+	m_DetachAttachablesBeforeGibbingFromWounds(snapshot.Freeze(source.m_DetachAttachablesBeforeGibbingFromWounds)),
+	m_GibAtEndOfLifetime(snapshot.Freeze(source.m_GibAtEndOfLifetime)),
+	m_GibSound(snapshot.Freeze(source.m_GibSound)),
+	m_EffectOnGib(snapshot.Freeze(source.m_EffectOnGib)),
+	m_LoudnessOnGib(snapshot.Freeze(source.m_LoudnessOnGib)),
+	m_DamageMultiplier(snapshot.Freeze(source.m_DamageMultiplier)),
+	m_NoSetDamageMultiplier(snapshot.Freeze(source.m_NoSetDamageMultiplier)),
+	m_FlashWhiteTimer(snapshot.Freeze(source.m_FlashWhiteTimer)),
+	m_pFlipBitmap(snapshot.Freeze(source.m_pFlipBitmap)),
+	m_pFlipBitmapS(snapshot.Freeze(source.m_pFlipBitmapS)),
+	m_pTempBitmap(nullptr),
+	m_pTempBitmapS(nullptr),
+	m_PersistedMOSRotatingRuntime(snapshot.Freeze(source.m_PersistedMOSRotatingRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	for (const auto& [uid, function]: source.m_HardcodedAttachableUniqueIDsAndSetters) m_HardcodedAttachableUniqueIDsAndSetters.emplace(uid, nullptr);
+	for (const auto& [uid, function]: source.m_HardcodedAttachableUniqueIDsAndRemovers) m_HardcodedAttachableUniqueIDsAndRemovers.emplace(uid, nullptr);
+}
+
+Entity* MOSRotating::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 MOSRotating::MOSRotating() {
 	Clear();
 }
 
 MOSRotating::~MOSRotating() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

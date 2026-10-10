@@ -42,6 +42,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a MOSRotating object in system
 		/// memory. Create() should be called before using the object.
 		MOSRotating();
+		CheckpointSnapshotMethods(MOSRotating);
 
 		/// Destructor method used to clean up a MOSRotating object before deletion
 		/// from system memory.

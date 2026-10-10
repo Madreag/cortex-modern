@@ -2384,7 +2384,9 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				writer.NewPropertyWithValue("SpecialBehaviour_SharpAimMaxedOut", actorToSave->GetSharpAimMaxedOut());
 				writer.NewPropertyWithValue("SharpAimTimerStart", actorToSave->GetSharpAimTimerStart());
 			}
-			if (const PieMenu* pieMenu = actorToSave->GetPieMenu()) {
+			if (actorToSave->FrozenCheckpointPieMenu()) {
+				writer.NewPropertyWithValue("PieMenuState", actorToSave->FrozenCheckpointPieMenuState());
+			} else if (const PieMenu* pieMenu = actorToSave->GetPieMenu()) {
 				writer.NewPropertyWithValue("PieMenuState", pieMenu->PackInteractionState());
 			}
 			if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {

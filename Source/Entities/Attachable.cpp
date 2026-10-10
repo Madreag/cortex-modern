@@ -1,4 +1,8 @@
 #include "Attachable.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "PieSlice.h"
+#include "MOSRotating.h"
 #include "CheckpointProperties.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -21,11 +25,63 @@ using namespace RTE;
 
 ConcreteClassInfo(Attachable, MOSRotating, 0);
 
+Attachable::Attachable(const Attachable& source, CheckpointNativeSnapshot& snapshot) :
+	MOSRotating(source, snapshot),
+	m_Parent(snapshot.Freeze(source.m_Parent)),
+	m_ParentOffset(snapshot.Freeze(source.m_ParentOffset)),
+	m_PersistedParentOffset(snapshot.Freeze(source.m_PersistedParentOffset)),
+	m_HasPersistedParentOffset(snapshot.Freeze(source.m_HasPersistedParentOffset)),
+	m_DrawAfterParent(snapshot.Freeze(source.m_DrawAfterParent)),
+	m_DrawnNormallyByParent(snapshot.Freeze(source.m_DrawnNormallyByParent)),
+	m_DeleteWhenRemovedFromParent(snapshot.Freeze(source.m_DeleteWhenRemovedFromParent)),
+	m_GibWhenRemovedFromParent(snapshot.Freeze(source.m_GibWhenRemovedFromParent)),
+	m_ApplyTransferredForcesAtOffset(snapshot.Freeze(source.m_ApplyTransferredForcesAtOffset)),
+	m_GibWithParentChance(snapshot.Freeze(source.m_GibWithParentChance)),
+	m_ParentGibBlastStrengthMultiplier(snapshot.Freeze(source.m_ParentGibBlastStrengthMultiplier)),
+	m_IsWound(snapshot.Freeze(source.m_IsWound)),
+	m_JointStrength(snapshot.Freeze(source.m_JointStrength)),
+	m_JointStiffness(snapshot.Freeze(source.m_JointStiffness)),
+	m_JointOffset(snapshot.Freeze(source.m_JointOffset)),
+	m_JointPos(snapshot.Freeze(source.m_JointPos)),
+	m_DamageCount(snapshot.Freeze(source.m_DamageCount)),
+	m_BreakWound(snapshot.Freeze(source.m_BreakWound)),
+	m_ParentBreakWound(snapshot.Freeze(source.m_ParentBreakWound)),
+	m_OwnedBreakWound(snapshot.Freeze(source.m_OwnedBreakWound)),
+	m_OwnedParentBreakWound(snapshot.Freeze(source.m_OwnedParentBreakWound)),
+	m_PersistedBreakWoundUID(snapshot.Freeze(source.m_PersistedBreakWoundUID)),
+	m_PersistedParentBreakWoundUID(snapshot.Freeze(source.m_PersistedParentBreakWoundUID)),
+	m_InheritsHFlipped(snapshot.Freeze(source.m_InheritsHFlipped)),
+	m_InheritsRotAngle(snapshot.Freeze(source.m_InheritsRotAngle)),
+	m_InheritedRotAngleOffset(snapshot.Freeze(source.m_InheritedRotAngleOffset)),
+	m_MountedRotAngleOffset(snapshot.Freeze(source.m_MountedRotAngleOffset)),
+	m_InheritsFrame(snapshot.Freeze(source.m_InheritsFrame)),
+	m_InheritsVelWhenDetached(snapshot.Freeze(source.m_InheritsVelWhenDetached)),
+	m_InheritsAngularVelWhenDetached(snapshot.Freeze(source.m_InheritsAngularVelWhenDetached)),
+	m_AtomSubgroupID(snapshot.Freeze(source.m_AtomSubgroupID)),
+	m_CollidesWithTerrainWhileAttached(snapshot.Freeze(source.m_CollidesWithTerrainWhileAttached)),
+	m_IgnoresParticlesWhileAttached(snapshot.Freeze(source.m_IgnoresParticlesWhileAttached)),
+	m_PieSlices{},
+	m_FrozenPieSlices(snapshot.Freeze(source.m_FrozenPieSlices)),
+	m_PrevParentOffset(snapshot.Freeze(source.m_PrevParentOffset)),
+	m_PrevJointOffset(snapshot.Freeze(source.m_PrevJointOffset)),
+	m_PrevRotAngleOffset(snapshot.Freeze(source.m_PrevRotAngleOffset)),
+	m_PreUpdateHasRunThisFrame(snapshot.Freeze(source.m_PreUpdateHasRunThisFrame)),
+	m_PersistedAttachableRuntime(snapshot.Freeze(source.m_PersistedAttachableRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	for (const auto& slice: source.m_PieSlices) m_FrozenPieSlices.push_back(snapshot.FreezeWriter(slice.get()));
+}
+
+Entity* Attachable::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 Attachable::Attachable() {
 	Clear();
 }
 
 Attachable::~Attachable() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -327,6 +383,9 @@ int Attachable::Save(Writer& writer) const {
 
 	for (const std::unique_ptr<PieSlice>& pieSlice: m_PieSlices) {
 		writer.NewPropertyWithValue("AddPieSlice", pieSlice.get());
+	}
+	for (const auto& slice: m_FrozenPieSlices) {
+		writer.NewProperty("AddPieSlice"); writer.Append(slice.ReindentWriter(writer.GetIndent() - 1));
 	}
 
 	return 0;
