@@ -806,8 +806,7 @@ class SessionDirectory:
                     self._persist_session(sess, now)
             answer["host"] = self.connection_bootstrap(session_id, now)
             answer["relay_current"] = not renew
-            # A fixed pair has the host's chosen lifetime. Provider credentials
-            # are minted for this seat, independent of its previous route.
+            # A fixed credential keeps the expiry the host supplied.
             fixed = sess.ice_offer if sess.ice_fixed else None
             relay_enabled = sess.ice_offer is not None
             if not renew or not relay_enabled:
@@ -819,9 +818,11 @@ class SessionDirectory:
             self.turn_limiter.commit(install_key, now, False)
         try:
             if fixed is not None:
-                offer = dict(fixed, expires_at=int(wall) + min(600, self.turn_max_ttl))
+                if fixed["expires_at"] <= int(wall):
+                    raise TurnError(503, "relay_credential_expired")
+                offer = dict(fixed)
             else:
-                offer = self.turn_provider.mint(session_id, min(600, self.turn_max_ttl), int(wall))
+                offer = self.turn_provider.mint(session_id, self.turn_max_ttl, int(wall))
         except TurnError as error:
             answer["relay_error"] = error.body["error"]
             answer["relay_retry_after_s"] = 5
@@ -830,6 +831,9 @@ class SessionDirectory:
             if self.connections.set_relay(session_id, answer["seat"], answer["generation"], offer, time.time()):
                 answer["relay"] = offer
                 answer["relay_current"] = True
+                LOGGER.info('relay_seat_offer_issued %s', json.dumps(dict(seat=answer["seat"],
+                    generation=answer["generation"], expires_at=offer["expires_at"],
+                    ttl_s=offer["expires_at"] - int(wall), server_count=len(offer["iceServers"])), sort_keys=True))
                 current = self._signalling(session_id, now)
                 if hosting and current is sess and tokens_equal(host_claim["token"], current.token):
                     current.ice_offer = offer

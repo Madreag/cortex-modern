@@ -27,7 +27,7 @@
 #include <steam/steamnetworkingcustomsignaling.h>
 #include <steam/steamnetworkingsockets.h>
 // A relayed route dies once its TURN permission lapses unless the library refreshes it.
-#if !defined(STEAMNETWORKINGSOCKETS_TURN_LIFETIME) || STEAMNETWORKINGSOCKETS_TURN_LIFETIME < 2 || !defined(STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY) || STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY < 2 || !defined(STEAMNETWORKINGSOCKETS_TURN_STREAMS) || STEAMNETWORKINGSOCKETS_TURN_STREAMS < 2 || !defined(STEAMNETWORKINGSOCKETS_NETWORK_RECOVERY)
+#if !defined(STEAMNETWORKINGSOCKETS_TURN_LIFETIME) || STEAMNETWORKINGSOCKETS_TURN_LIFETIME < 3 || !defined(STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY) || STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY < 2 || !defined(STEAMNETWORKINGSOCKETS_TURN_STREAMS) || STEAMNETWORKINGSOCKETS_TURN_STREAMS < 2 || !defined(STEAMNETWORKINGSOCKETS_NETWORK_RECOVERY)
 #error "GameNetworkingSockets without external/patches/gns-turn-lifetime.patch; build it into <GNS_ROOT>-turnfix, see docs/turn-relay.md"
 #endif
 #endif
@@ -281,6 +281,8 @@ namespace RTE {
 
 		// GNS calls this on its service thread while holding its lock: print, nothing else.
 		void GnsDebugOutput(ESteamNetworkingSocketsDebugOutputType type, const char* message) {
+			// ICE authentication stays out of the relay diagnostics.
+			if (message && (std::string_view(message).find("pwd_frag") != std::string_view::npos || std::string_view(message).find("key_data") != std::string_view::npos)) return;
 			static std::mutex mutex;
 			std::istringstream lines(message ? message : "");
 			std::lock_guard<std::mutex> lock(mutex);
@@ -1245,17 +1247,14 @@ namespace RTE {
 		void UpdateLiveTurnLogins(const GnsP2PConfig& config) {
 			const std::string login = config.turnServerList + '\n' + config.turnUserList + '\n' + config.turnPassList;
 			if (m_P2PMode < 0 || !m_Interface || config.turnServerList.empty() || login == m_LiveTurnLogin) return;
-			m_LiveTurnLogin = login;
-			auto* utils = SteamNetworkingUtils();
 			int renewed = 0;
 			for (const auto& [connection, peerId] : m_PeersByConnection) {
 				(void)peerId;
 				m_ConnectionOffers[connection] = config.relayOffer;
-				renewed += utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_ServerList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnServerList.c_str()) &&
-				           utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_UserList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnUserList.c_str()) &&
-				           utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_PassList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnPassList.c_str());
+				renewed += SteamNetworkingSockets_SetTURNConfig(connection, config.turnServerList.c_str(), config.turnUserList.c_str(), config.turnPassList.c_str());
 			}
-			if (renewed > 0) DiagnosticLine() << "[net-relay] relay login renewed on " << renewed << " live connection(s)" << std::endl;
+			if (renewed == static_cast<int>(m_PeersByConnection.size())) m_LiveTurnLogin = login;
+			if (renewed > 0) DiagnosticLine() << "[net-relay] relay login queued on " << renewed << " live connection(s); traffic continues during allocation handover" << std::endl;
 		}
 
 		/// CC_TEST_ICE_GATHER_RELAY_ONLY=1 stands for a network no direct route can cross: this end offers relay candidates only, while
