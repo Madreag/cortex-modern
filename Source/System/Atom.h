@@ -97,7 +97,8 @@ namespace RTE {
 		/// Freezes native pages while the live capture records its small owned inputs.
 		class SnapshotScope {
 		public:
-			explicit SnapshotScope(bool enabled);
+			/// @param armLater Leaves the pages' fences to Pages()->Arm(), which must finish before the simulation runs again.
+			explicit SnapshotScope(bool enabled, bool armLater = false);
 			~SnapshotScope();
 			std::shared_ptr<const CheckpointPagePool::Snapshot> Pages() const;
 			SnapshotScope(const SnapshotScope&) = delete;

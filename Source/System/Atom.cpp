@@ -64,12 +64,12 @@ struct Atom::FreezeState : std::enable_shared_from_this<FreezeState> {
 	const uint64_t serial = [] { static std::atomic<uint64_t> serials{0}; return ++serials; }();
 };
 
-Atom::SnapshotScope::SnapshotScope(bool enabled) {
+Atom::SnapshotScope::SnapshotScope(bool enabled, bool armLater) {
 	if (!enabled) return;
 	m_State = std::make_shared<FreezeState>();
 	{
 		std::lock_guard lock(s_MemoryPoolMutex);
-		if (s_NativeAtomPool) m_State->pages = s_NativeAtomPool->pages.Freeze();
+		if (s_NativeAtomPool) m_State->pages = s_NativeAtomPool->pages.Freeze(!armLater);
 	}
 	m_Previous = s_FreezeState.exchange(m_State.get(), std::memory_order_acq_rel);
 }

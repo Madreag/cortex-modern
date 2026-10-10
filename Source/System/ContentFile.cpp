@@ -15,6 +15,7 @@
 #include "fmod/fmod.hpp"
 #include "fmod/fmod_errors.h"
 
+#include <mutex>
 #include <iostream>
 #include <SDL3_image/SDL_image.h>
 
@@ -65,6 +66,7 @@ namespace {
 		uint64_t version = ~uint64_t{0};
 		std::unordered_map<const BITMAP*, std::array<const std::string*, 2>> paths;
 		std::atomic<int> scopes{0};
+		std::mutex rebuild;
 	};
 	LoadedBitmapIndex& Index() {
 		static LoadedBitmapIndex index;
@@ -72,11 +74,23 @@ namespace {
 	}
 }
 
+void ContentFile::LoadedBitmapIndexScope::Refresh() {
+	LoadedBitmapIndex& index = Index();
+	std::lock_guard lock(index.rebuild);
+	if (index.scopes.load() == 0) RebuildLoadedBitmapIndex();
+}
+
 ContentFile::LoadedBitmapIndexScope::LoadedBitmapIndexScope() {
+	LoadedBitmapIndex& index = Index();
+	std::lock_guard lock(index.rebuild);
+	if (index.scopes.fetch_add(1) == 0) RebuildLoadedBitmapIndex();
+}
+
+void ContentFile::RebuildLoadedBitmapIndex() {
 	LoadedBitmapIndex& index = Index();
 	const auto& registry = std::as_const(s_LoadedBitmaps);
 	static_assert(std::tuple_size_v<std::decay_t<decltype(registry)>> == 2);
-	if (index.scopes.fetch_add(1) == 0 && index.version != LoadedBitmaps::Version()) {
+	if (index.version != LoadedBitmaps::Version()) {
 		CaptureSentinel::NoteCreation("loaded-bitmap index", &index);
 		index.paths.clear();
 		size_t count = 0;

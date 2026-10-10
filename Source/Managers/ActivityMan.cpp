@@ -918,7 +918,14 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	MovableMan::KnownObjectsScope known;
 	LuaScriptGraphNativeCaptureScope lookups;
 	CaptureAllocationState allocation(false);
-	ContentFile::LoadedBitmapIndexScope bitmapIndex;
+	// The loaded-bitmap index and the atom pages' fences are made beside this thread's own boundary work.
+	std::future<void> bitmapIndexReady, pagesArmed;
+	struct Joined {
+		std::future<void>& index;
+		std::future<void>& pages;
+		~Joined() { if (index.valid()) index.wait(); if (pages.valid()) pages.wait(); }
+	} joined{bitmapIndexReady, pagesArmed};
+	std::optional<ContentFile::LoadedBitmapIndexScope> bitmapIndex;
 	CheckpointWriter::BatchScope batches(true, true);
 	CheckpointWriter::CacheScope cache(nullptr);
 	CheckpointLua::CopyPool::PauseScope copies(true);
@@ -928,14 +935,17 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	const uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 	phase("sim_native_pages");
 	const auto nativeStarted = std::chrono::steady_clock::now();
-	Atom::SnapshotScope atoms(true);
+	Atom::SnapshotScope atoms(true, true);
 	image->nativePages = atoms.Pages();
+	if (image->nativePages) pagesArmed = g_ThreadMan.GetPriorityThreadPool().submit([pages = image->nativePages] { pages->Arm(); });
 	image->nativeBoundaryUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
 	if (image->nativePages) image->nativeReady = CheckpointLua::CopyPool::Submit([pages = image->nativePages] { pages->Drain(); }).share();
 	std::vector<MovableObject*> held;
 	g_LuaMan.VisitScriptHeldMovableObjects([&held](MovableObject* object) { held.push_back(object); }, false);
 	MovableMan::ScriptHeldScope scriptHeld(std::move(held));
 	LuaScriptGraphNativeCaptureScope::PreTouch();
+	// Nothing loads a bitmap from here on, so the index can be read while this thread captures the audio.
+	bitmapIndexReady = g_ThreadMan.GetPriorityThreadPool().submit([] { ContentFile::LoadedBitmapIndexScope::Refresh(); });
 	phase("sim_manager_values");
 	auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
 	CheckpointNativeSnapshot::BoundaryScope boundary(snapshot);
@@ -944,6 +954,8 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	g_AudioMan.FreezeCheckpointCapture(*audio, soundCursor);
 	std::unordered_set<uint64_t> managerSounds;
 	g_AudioMan.CollectManagerSoundIdentities(managerSounds);
+	bitmapIndexReady.get();
+	bitmapIndex.emplace();
 	phase("sim_native_and_lua_values");
 	const auto& savers = RuntimeManagerSavers();
 	std::vector<CheckpointText> managers(savers.size());
@@ -967,14 +979,16 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 				managerUs[index] = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
 			});
 		}
+		parts.emplace_back([&] {
+			scene = snapshot->Object(sourceScene);
+			const auto addLayer = [&image](std::string name, const SceneLayer* layer) {
+				if (layer) image->layers.emplace_back(std::move(name), layer->CaptureBitmapSnapshot(nullptr, true));
+			};
+			CheckpointCloneCost cost("scene layers");
+			addLayer("Mat", scene->GetTerrain()); addLayer("FG", scene->GetTerrain()->GetFGSceneLayer()); addLayer("BG", scene->GetTerrain()->GetBGSceneLayer());
+			for (int team = 0; team < Activity::MaxTeamCount; ++team) addLayer("UST" + std::to_string(team), scene->GetUnseenLayer(team));
+		});
 		FreezeBoundaryParts(*snapshot, carried.get(), parts);
-		scene = snapshot->Object(sourceScene);
-		const auto addLayer = [&image](std::string name, const SceneLayer* layer) {
-			if (layer) image->layers.emplace_back(std::move(name), layer->CaptureBitmapSnapshot(nullptr, true));
-		};
-		CheckpointCloneCost cost("scene layers");
-		addLayer("Mat", scene->GetTerrain()); addLayer("FG", scene->GetTerrain()->GetFGSceneLayer()); addLayer("BG", scene->GetTerrain()->GetBGSceneLayer());
-		for (int team = 0; team < Activity::MaxTeamCount; ++team) addLayer("UST" + std::to_string(team), scene->GetUnseenLayer(team));
 	};
 	const auto graphStart = std::chrono::steady_clock::now();
 	g_LuaMan.ArmCheckpointWriteTrap();
@@ -983,6 +997,7 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	const bool graphsCaptured = g_MovableMan.CaptureScriptGraphs(image->graphs, problems, &frozenGraphs, freezeNative, &image->frozenGraphObservations);
 	// A walk that could not use the frozen states never ran the world beside them.
 	if (!nativeFrozen) freezeNative();
+	if (pagesArmed.valid()) pagesArmed.get();
 	if (!graphsCaptured) {
 		QueueDeferredSaveRefusal(SaveKind::Autosave, std::move(problems));
 		return false;

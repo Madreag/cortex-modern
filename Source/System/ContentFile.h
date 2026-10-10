@@ -210,6 +210,8 @@ namespace RTE {
 		/// opens. The loaded bitmaps may not change while one lives; a capture opens one at its fence.
 		class LoadedBitmapIndexScope {
 		public:
+			/// Brings the index up to date while no scope is open, so a capture's next scope opens without rebuilding it.
+			static void Refresh();
 			LoadedBitmapIndexScope();
 			~LoadedBitmapIndexScope();
 			LoadedBitmapIndexScope(const LoadedBitmapIndexScope&) = delete;
@@ -248,6 +250,8 @@ namespace RTE {
 		static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.
 
 		static std::unordered_map<size_t, std::string> s_PathHashes; //!< Static map containing the hash values of paths of all loaded data files.
+		/// Rebuilds the loaded-bitmap index when it is stale; the caller holds the rebuild lock and no scope reads it.
+		static void RebuildLoadedBitmapIndex();
 		/// One depth's loaded bitmaps. Every change made through them moves a version all depths share, so an index
 		/// built from them knows when it went stale; reading through a const reference moves nothing.
 		class LoadedBitmaps : public std::unordered_map<std::string, BITMAP*> {
