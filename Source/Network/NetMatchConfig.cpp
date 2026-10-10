@@ -266,6 +266,14 @@ namespace RTE {
 		return nowMs - *m_BelowSince >= c_WindowMs ? std::optional<uint16_t>{needed} : std::nullopt;
 	}
 
+	uint32_t NetInputDelayEstimator::SenderRequiredFrames(double tickMs, uint16_t bound, uint16_t floor) const {
+		if (!std::isfinite(tickMs) || tickMs <= 0) return std::numeric_limits<uint32_t>::max();
+		const uint32_t rtt = std::max(P95Ms(), m_Samples.empty() ? 0U : m_Samples.back().second);
+		// The reserve absorbs a short spike before a quorum has to substitute a press.
+		const double margin = std::max(c_NetInputJitterReserveMs, JitterMs()) + std::ceil((bound + 1) * tickMs);
+		return static_cast<uint32_t>(std::clamp(std::ceil((rtt + margin) / tickMs), static_cast<double>(floor), static_cast<double>(NetMatchConfigUtil::c_MaxInputDelayFrames)));
+	}
+
 	namespace {
 		using json = nlohmann::json;
 

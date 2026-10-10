@@ -18,6 +18,7 @@ namespace RTE {
 
 	/// Combat waits at most this many ticks after a sender's delayed input is due.
 	inline constexpr uint16_t c_NetSlowPlayerBoundTicks = 3;
+	inline constexpr uint32_t c_NetInputJitterReserveMs = 200;
 
 	struct NetHostMigrationTimeouts {
 		static constexpr uint64_t c_IceStepMs = 8000;
@@ -72,6 +73,7 @@ namespace RTE {
 		void ObserveSilence(uint64_t nowMs, uint32_t silenceMs);
 		void Rebase(uint64_t nowMs);
 		uint32_t RequiredFrames(double tickMs, uint16_t floor = 0) const;
+		uint32_t SenderRequiredFrames(double tickMs, uint16_t bound, uint16_t floor = 0) const;
 		uint32_t P95Ms() const;
 		uint32_t JitterMs() const;
 		/// The longest silence of the input stream within the window; 0 when none was seen.

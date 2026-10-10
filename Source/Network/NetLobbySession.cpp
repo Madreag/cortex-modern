@@ -1048,14 +1048,22 @@ namespace RTE {
 		NetMatchConfig next = m_Config.matchConfig;
 		if (next.peerInputDelayFrames.empty()) next.peerInputDelayFrames.resize(next.peerCount, std::max<uint16_t>(1, next.inputDelayFrames));
 		bool changed = false;
+		uint16_t hostDelay = std::max<uint16_t>(1, next.inputDelayFrames);
 		for (const auto& [peer, transport]: m_RemoteTransports) {
 			if (peer == 0 || peer > next.peerCount) continue;
 			auto& sample = m_InputDelaySamples[peer];
 			sample.Observe(nowMs, m_Transport->GetPeerPingMs(transport));
-			if (const auto delay = sample.Change(nowMs, next.peerInputDelayFrames[peer - 1], g_TimerMan.GetDeltaTimeMS(), next.inputDelayFrames)) {
-				next.peerInputDelayFrames[peer - 1] = *delay;
+			const auto delay = static_cast<uint16_t>(sample.SenderRequiredFrames(g_TimerMan.GetDeltaTimeMS(), next.slowPlayerBoundTicks, next.inputDelayFrames));
+			hostDelay = std::max(hostDelay, delay);
+			if (delay > next.peerInputDelayFrames[peer - 1]) {
+				next.peerInputDelayFrames[peer - 1] = delay;
 				changed = true;
 			}
+		}
+		// The administrator sends presses across these paths too, before the first combat tick.
+		if (next.hostPeerId > 0 && next.hostPeerId <= next.peerCount && hostDelay > next.peerInputDelayFrames[next.hostPeerId - 1]) {
+			next.peerInputDelayFrames[next.hostPeerId - 1] = hostDelay;
+			changed = true;
 		}
 		if (!changed || next.configRevision == UINT64_MAX) return;
 		++next.configRevision;
@@ -1137,9 +1145,10 @@ namespace RTE {
 				const uint32_t rttMs = m_Transport->GetPeerPingMs(peer.transportPeerId);
 				auto& sample = m_InputDelaySamples[peerId];
 				sample.Observe(m_TimingClockMs, rttMs);
-				const uint16_t delay = static_cast<uint16_t>(std::min<uint32_t>(sample.RequiredFrames(g_TimerMan.GetDeltaTimeMS(), m_Config.matchConfig.inputDelayFrames) +
-				    NetMatchConfigUtil::HoldMarginFrames(m_Config.matchConfig), NetMatchConfigUtil::c_MaxInputDelayFrames));
+				const uint16_t delay = static_cast<uint16_t>(sample.SenderRequiredFrames(g_TimerMan.GetDeltaTimeMS(), m_Config.matchConfig.slowPlayerBoundTicks, m_Config.matchConfig.inputDelayFrames));
 				delays.at(peerId - 1) = std::max(m_Config.matchConfig.inputDelayFrames, delay);
+				if (m_Config.matchConfig.hostPeerId > 0 && m_Config.matchConfig.hostPeerId <= delays.size())
+					delays.at(m_Config.matchConfig.hostPeerId - 1) = std::max(delays.at(m_Config.matchConfig.hostPeerId - 1), delay);
 			}
 		}
 		std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end());
