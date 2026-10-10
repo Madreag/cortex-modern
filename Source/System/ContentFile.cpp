@@ -1,4 +1,5 @@
 #include "ContentFile.h"
+#include "CheckpointNativeSnapshot.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "Base64/base64.h"
@@ -153,6 +154,7 @@ std::string ContentFile::LoadedBitmapChangeMissedByIndex() {
 }
 
 const std::string* ContentFile::LoadedBitmapPath(const BITMAP* bitmap, int& depth) {
+	if (const auto* snapshot = CheckpointNativeSnapshot::Current()) if (auto path = snapshot->BitmapPath(bitmap, depth)) return *path;
 	const auto& registry = std::as_const(s_LoadedBitmaps);
 	const LoadedBitmapIndex& index = Index();
 	const auto least = [&](size_t at) -> const std::string* {

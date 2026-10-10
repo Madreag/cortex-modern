@@ -5,6 +5,7 @@
 #include "CheckpointProperties.h"
 #include "CheckpointPagePool.h"
 #include "CheckpointImage.h"
+#include "CheckpointNativeSnapshot.h"
 #include "ThreadMan.h"
 #include "PresetMan.h"
 #include "CaptureSentinel.h"
@@ -1319,6 +1320,7 @@ const Entity* BitmapPixelCaptureScope::FindPreset(const std::string& type, const
 }
 std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> BitmapPixelCaptureScope::Capture(
     const BITMAP* bitmap, const std::shared_ptr<const BitmapSnapshot>& previous) {
+	if (const auto* snapshot = CheckpointNativeSnapshot::Current()) if (auto pixels = snapshot->Pixels(bitmap)) return pixels;
 	State* state = s_Current.load();
 	if (!state) return std::nullopt;
 	std::shared_ptr<State::Cell> cell;

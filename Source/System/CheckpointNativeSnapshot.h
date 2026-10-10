@@ -19,15 +19,31 @@
 #include <utility>
 #include <vector>
 
-namespace RTE {
+struct BITMAP;
 
-	// Snapshot constructors copy fields without Create, registration or gameplay callbacks.
+namespace RTE {
+	struct BitmapSnapshot;
+
+	// Snapshot constructors own archived fields without gameplay creation or callbacks.
 	class CheckpointNativeSnapshot {
 	public:
 		CheckpointNativeSnapshot() = default;
 		~CheckpointNativeSnapshot();
 		CheckpointNativeSnapshot(const CheckpointNativeSnapshot&) = delete;
 		CheckpointNativeSnapshot& operator=(const CheckpointNativeSnapshot&) = delete;
+		class ReadScope {
+		public:
+			explicit ReadScope(const CheckpointNativeSnapshot* snapshot) : m_Previous(s_Current) { if (snapshot) s_Current = snapshot; }
+			~ReadScope() { s_Current = m_Previous; }
+		private:
+			const CheckpointNativeSnapshot* m_Previous;
+		};
+		static const CheckpointNativeSnapshot* Current() { return s_Current; }
+		BITMAP* Freeze(BITMAP* source);
+		const BITMAP* Freeze(const BITMAP* source) { return Freeze(const_cast<BITMAP*>(source)); }
+		std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> Pixels(const BITMAP* bitmap) const;
+		std::optional<const std::string*> BitmapPath(const BITMAP* bitmap, int& depth) const;
+		void MaterializePixels() const;
 
 		template<class T> T* Object(const T* source) {
 			static_assert(std::is_base_of_v<Entity, std::remove_const_t<T>>);
@@ -65,13 +81,17 @@ namespace RTE {
 			if (!memory) throw std::bad_alloc();
 			const ptrdiff_t offset = reinterpret_cast<const char*>(static_cast<const Entity*>(&source)) - reinterpret_cast<const char*>(&source);
 			Entity* target = reinterpret_cast<Entity*>(static_cast<char*>(memory) + offset);
+			bool constructed = false;
 			try {
 				m_Objects.emplace(&source, target);
 				m_Slots.emplace(target, slot);
 				*slot = target;
 				new(memory) T(source, *this);
+				constructed = true;
+				target->m_CheckpointPreset = Object(source.GetPresetForCopy());
 				return target;
 			} catch (...) {
+				if (constructed) std::launder(reinterpret_cast<T*>(memory))->~T();
 				*slot = nullptr;
 				m_Objects.erase(&source);
 				m_Slots.erase(target);
@@ -155,6 +175,10 @@ namespace RTE {
 		}
 
 	private:
+		struct Pixel;
+		inline static thread_local const CheckpointNativeSnapshot* s_Current = nullptr;
+		std::unordered_map<const BITMAP*, std::shared_ptr<Pixel>> m_Bitmaps;
+		std::unordered_map<const BITMAP*, std::shared_ptr<Pixel>> m_BitmapSources;
 		std::list<Entity*> m_Owners;
 		std::unordered_map<const Entity*, Entity*> m_Objects;
 		std::unordered_map<Entity*, Entity**> m_Slots;

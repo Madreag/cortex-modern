@@ -8,11 +8,66 @@
 #include "DataModule.h"
 #include "Base64/base64.h"
 #include "MovableObject.h"
+#include "BitmapCheckpoint.h"
 
 #include <algorithm>
 #include <vector>
 
 namespace RTE {
+	struct CheckpointNativeSnapshot::Pixel {
+		BITMAP bitmap{};
+		GFX_VTABLE table{};
+		mutable std::vector<uint8_t*> lines;
+		std::shared_ptr<const BitmapSnapshot> snapshot;
+		CheckpointText text;
+		std::array<std::optional<std::string>, 2> paths;
+		mutable std::once_flag ready;
+		mutable std::string bytes;
+		void Materialize() const {
+			std::call_once(ready, [this] {
+				bytes = snapshot->PixelBytes();
+				for (size_t row = 0; row < lines.size(); ++row) lines[row] = reinterpret_cast<uint8_t*>(bytes.data()) + row * snapshot->rowBytes;
+			});
+		}
+	};
+	BITMAP* CheckpointNativeSnapshot::Freeze(BITMAP* source) {
+		if (!source) return nullptr;
+		if (const auto known = m_BitmapSources.find(source); known != m_BitmapSources.end()) return &known->second->bitmap;
+		auto pixel = std::make_shared<Pixel>();
+		pixel->bitmap = *source; pixel->table = *source->vtable;
+		pixel->bitmap.vtable = &pixel->table;
+		pixel->lines.resize(source->h);
+		pixel->bitmap.line = pixel->lines.data();
+		pixel->bitmap.dat = nullptr; pixel->bitmap.extra = nullptr;
+		for (int depth = 0; depth < 2; ++depth) {
+			int requested = depth;
+			if (const auto* path = ContentFile::LoadedBitmapPath(source, requested)) pixel->paths[depth] = *path;
+		}
+		if (auto captured = BitmapPixelCaptureScope::Capture(source, {})) { pixel->snapshot = captured->first; pixel->text = captured->second; }
+		else {
+			pixel->snapshot = BitmapSnapshot::Freeze(source);
+			pixel->text = CheckpointText::Deferred([snapshot = pixel->snapshot] { return snapshot->PixelBytes(); }, pixel->snapshot->LogicalBytes());
+		}
+		m_Bitmaps.emplace(&pixel->bitmap, pixel);
+		m_BitmapSources.emplace(source, pixel);
+		return &pixel->bitmap;
+	}
+	std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> CheckpointNativeSnapshot::Pixels(const BITMAP* bitmap) const {
+		const auto found = m_Bitmaps.find(bitmap);
+		if (found == m_Bitmaps.end()) return {};
+		return std::pair{found->second->snapshot, found->second->text};
+	}
+	std::optional<const std::string*> CheckpointNativeSnapshot::BitmapPath(const BITMAP* bitmap, int& depth) const {
+		const auto found = m_Bitmaps.find(bitmap);
+		if (found == m_Bitmaps.end()) return {};
+		const auto& paths = found->second->paths;
+		if (depth < 0) for (size_t index = 0; index < paths.size(); ++index) if (paths[index]) { depth = static_cast<int>(index); return &*paths[index]; }
+		if (depth >= 0 && static_cast<size_t>(depth) < paths.size() && paths[depth]) return &*paths[depth];
+		return static_cast<const std::string*>(nullptr);
+	}
+	void CheckpointNativeSnapshot::MaterializePixels() const {
+		for (const auto& [bitmap, pixel]: m_Bitmaps) pixel->Materialize();
+	}
 	CheckpointNativeSnapshot::~CheckpointNativeSnapshot() {
 		for (auto& object: m_Owners) if (Entity* value = std::exchange(object, nullptr)) delete value;
 		for (auto& [value, destroy]: m_ValueOwners) if (value) destroy(value);
@@ -23,7 +78,8 @@ namespace RTE {
 		m_PresetDescription(source.m_PresetDescription), m_FormattedReaderPosition(source.m_FormattedReaderPosition),
 		m_IsOriginalPreset(source.m_IsOriginalPreset), m_DefinedInModule(source.m_DefinedInModule),
 		m_Groups(source.m_Groups), m_RandomWeight(source.m_RandomWeight),
-		m_CheckpointWriteGeneration(source.m_CheckpointWriteGeneration), m_FrozenCheckpointNative(true) {
+		m_CheckpointWriteGeneration(source.m_CheckpointWriteGeneration), m_FrozenCheckpointNative(true), m_CheckpointSnapshot(&snapshot),
+		m_CheckpointModuleAndPreset(source.GetModuleAndPresetName()) {
 		m_CheckpointOwnerSlot = snapshot.Bind(source, this);
 	}
 	Entity* Entity::FreezeCheckpointNative(CheckpointNativeSnapshot&) const {
@@ -216,6 +272,7 @@ namespace RTE {
 	}
 
 	const Entity* Entity::GetPresetForCopy() const {
+		if (m_FrozenCheckpointNative) return m_CheckpointPreset;
 		const std::string& name = m_IsOriginalPreset || m_CopiedFromPresetName.empty() ? m_PresetName : m_CopiedFromPresetName;
 		if (CheckpointWriter::BatchEnabled() && !name.empty() && name != "None") {
 			if (auto* cache = CheckpointWriter::CurrentCache()) return cache->FindPreset(GetClassName(), name, m_DefinedInModule);
@@ -261,6 +318,7 @@ namespace RTE {
 	}
 
 	std::string Entity::GetModuleAndPresetName() const {
+		if (m_FrozenCheckpointNative) return m_CheckpointModuleAndPreset;
 		if (m_DefinedInModule < 0) {
 			return GetPresetName();
 		}

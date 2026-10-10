@@ -84,6 +84,7 @@ namespace RTE {
 
 	/// The base class that specifies certain common creation/destruction patterns and simple reflection support for virtually all RTE classes.
 	class Entity : public Serializable {
+		friend class CheckpointNativeSnapshot;
 		friend struct ContractAudit;
 
 		friend class DataModule;
@@ -91,6 +92,7 @@ namespace RTE {
 	public:
 		virtual Entity* FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const;
 		bool IsFrozenCheckpointNative() const { return m_FrozenCheckpointNative; }
+		const CheckpointNativeSnapshot* FrozenCheckpointNativeOwner() const { return m_CheckpointSnapshot; }
 		static bool IsCheckpointClone();
 		struct CheckpointCloneScope {
 			explicit CheckpointCloneScope(bool enabled) : m_Enabled(enabled) { if (m_Enabled) ++s_CheckpointCloneDepth; }
@@ -438,6 +440,9 @@ namespace RTE {
 		bool m_CheckpointValueTrap = false; //!< Set while a cached script graph chunk carries this object's text.
 		bool m_FrozenCheckpointNative = false;
 		Entity** m_CheckpointOwnerSlot = nullptr;
+		const CheckpointNativeSnapshot* m_CheckpointSnapshot = nullptr;
+		const Entity* m_CheckpointPreset = nullptr;
+		std::string m_CheckpointModuleAndPreset;
 
 		// Forbidding copying
 		Entity(const Entity& reference) {}
