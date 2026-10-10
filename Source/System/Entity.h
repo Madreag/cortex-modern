@@ -18,6 +18,7 @@
 #endif
 
 namespace RTE {
+	class CheckpointNativeSnapshot;
 
 	typedef std::function<void*()> MemoryAllocate; //!< Convenient name definition for the memory allocation callback function.
 	typedef std::function<void(void*)> MemoryDeallocate; //!< Convenient name definition for the memory deallocation callback function.
@@ -36,6 +37,10 @@ namespace RTE {
 #define ClassInfoGetters \
 	const Entity::ClassInfo& GetClass() const override { return m_sClass; } \
 	const std::string& GetClassName() const override { return m_sClass.GetName(); }
+
+#define CheckpointSnapshotMethods(TYPE) \
+	TYPE(const TYPE& source, CheckpointNativeSnapshot& snapshot); \
+	Entity* FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const override;
 
 /// Static method used in conjunction with ClassInfo to allocate an Entity.
 /// This function is passed into the constructor of this Entity's static ClassInfo's constructor, so that it can instantiate MovableObjects.
@@ -84,6 +89,8 @@ namespace RTE {
 		friend class DataModule;
 
 	public:
+		virtual Entity* FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const;
+		bool IsFrozenCheckpointNative() const { return m_FrozenCheckpointNative; }
 		static bool IsCheckpointClone();
 		struct CheckpointCloneScope {
 			explicit CheckpointCloneScope(bool enabled) : m_Enabled(enabled) { if (m_Enabled) ++s_CheckpointCloneDepth; }
@@ -169,6 +176,7 @@ namespace RTE {
 			/// Grabs from the pre-allocated pool, an available chunk of memory the exact size of the Entity this ClassInfo represents. OWNERSHIP IS TRANSFERRED!
 			/// @return A pointer to the pre-allocated pool memory. OWNERSHIP IS TRANSFERRED!
 			void* GetPoolMemory();
+			void* GetCheckpointPoolMemory();
 
 			/// Returns a raw chunk of memory back to the pre-allocated available pool.
 			/// @param returnedMemory The raw chunk of memory that is being returned. Needs to be the same size as the type this ClassInfo describes. OWNERSHIP IS TRANSFERRED!
@@ -412,6 +420,7 @@ namespace RTE {
 #pragma endregion
 
 	protected:
+		Entity(const Entity& source, CheckpointNativeSnapshot& snapshot);
 		static Entity::ClassInfo m_sClass; //!< Type description of this Entity.
 
 		std::string m_PresetName; //!< The name of the Preset data this was cloned from, if any.
@@ -427,6 +436,8 @@ namespace RTE {
 		int m_RandomWeight; //!< Random weight used when picking item using PresetMan::GetRandomBuyableOfGroupFromTech. From 0 to 100. 0 means item won't be ever picked.
 		uint64_t m_CheckpointWriteGeneration = 0;
 		bool m_CheckpointValueTrap = false; //!< Set while a cached script graph chunk carries this object's text.
+		bool m_FrozenCheckpointNative = false;
+		Entity** m_CheckpointOwnerSlot = nullptr;
 
 		// Forbidding copying
 		Entity(const Entity& reference) {}

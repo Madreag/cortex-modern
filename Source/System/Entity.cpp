@@ -1,4 +1,5 @@
 #include "Entity.h"
+#include "CheckpointNativeSnapshot.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "CheckpointImage.h"
@@ -12,6 +13,21 @@
 #include <vector>
 
 namespace RTE {
+	CheckpointNativeSnapshot::~CheckpointNativeSnapshot() {
+		for (auto& object: m_Owners) if (Entity* value = std::exchange(object, nullptr)) delete value;
+	}
+
+	Entity::Entity(const Entity& source, CheckpointNativeSnapshot& snapshot) :
+		m_PresetName(source.m_PresetName), m_CopiedFromPresetName(source.m_CopiedFromPresetName),
+		m_PresetDescription(source.m_PresetDescription), m_FormattedReaderPosition(source.m_FormattedReaderPosition),
+		m_IsOriginalPreset(source.m_IsOriginalPreset), m_DefinedInModule(source.m_DefinedInModule),
+		m_Groups(source.m_Groups), m_RandomWeight(source.m_RandomWeight),
+		m_CheckpointWriteGeneration(source.m_CheckpointWriteGeneration), m_FrozenCheckpointNative(true) {
+		m_CheckpointOwnerSlot = snapshot.Bind(source, this);
+	}
+	Entity* Entity::FreezeCheckpointNative(CheckpointNativeSnapshot&) const {
+		throw std::runtime_error("native checkpoint snapshot is not implemented for " + GetClassName());
+	}
 	thread_local unsigned int Entity::s_CheckpointCloneDepth = 0;
 	bool Entity::IsCheckpointClone() { return s_CheckpointCloneDepth != 0 || MovableObject::IsFaithfulClone(); }
 
@@ -48,6 +64,7 @@ namespace RTE {
 	}
 
 	Entity::~Entity() {
+		if (m_FrozenCheckpointNative) { if (m_CheckpointOwnerSlot) *m_CheckpointOwnerSlot = nullptr; return; }
 		Destroy(true);
 	}
 
@@ -409,13 +426,32 @@ namespace RTE {
 		m_Deallocate(returnedMemory);
 #else
 		std::lock_guard<std::mutex> guard(m_Mutex);
-		m_AllocatedPool.push_back(returnedMemory);
+		try { m_AllocatedPool.push_back(returnedMemory); }
+		catch (const std::bad_alloc&) { m_Deallocate(returnedMemory); }
 #endif
 
 		// Keep track of the number of instances passed in
 		m_InstancesInUse--;
 
 		return m_InstancesInUse;
+	}
+
+	void* Entity::ClassInfo::GetCheckpointPoolMemory() {
+		if (!IsConcrete()) throw std::runtime_error("cannot allocate an abstract native checkpoint value");
+#ifndef __SANITIZE_ADDRESS__
+		std::lock_guard<std::mutex> guard(m_Mutex);
+		if (!m_AllocatedPool.empty()) {
+			void* memory = m_AllocatedPool.back();
+			m_AllocatedPool.pop_back();
+			if (!memory) throw std::bad_alloc();
+			++m_InstancesInUse;
+			return memory;
+		}
+#endif
+		void* memory = m_Allocate();
+		if (!memory) throw std::bad_alloc();
+		++m_InstancesInUse;
+		return memory;
 	}
 
 	void Entity::ClassInfo::DumpPoolMemoryInfo(const Writer& fileWriter) {
