@@ -7197,30 +7197,30 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 		    std::chrono::duration_cast<std::chrono::microseconds>(start - phaseOrigin).count(),
 		    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()};
 	};
-	const bool boundaryOnly = static_cast<bool>(CheckpointNativeSnapshot::Boundary());
+	const std::shared_ptr<CheckpointNativeSnapshot> boundary = CheckpointNativeSnapshot::Boundary();
+	// An armed injected failure counts on this thread, so its states are captured here, in order.
+	const bool serial = CaptureTrace::Serial() || CheckpointFailure::Current() != CheckpointFailure::Point::None;
 	// Each state is its own VM behind its own lock, so the states are captured side by side; this thread takes the states
 	// no pool thread has started once its own work is done.
 	size_t caller = 0;
-	if (CheckpointWriter::BatchEnabled() && !CaptureTrace::Serial()) {
+	if (CheckpointWriter::BatchEnabled() && !serial) {
 		// The caller captures the largest heap while workers capture the rest.
 		for (size_t index = 1; index < order.size(); ++index) {
 			if (G(order[index]->m_State)->gc.total > G(order[caller]->m_State)->gc.total) caller = index;
 		}
 	}
 	std::optional<ParallelWork> states;
-	if (!boundaryOnly && !CaptureTrace::Serial()) {
-		states.emplace(g_ThreadMan.GetPriorityThreadPool(), order.size() - 1, [&capture, caller](size_t index) {
+	if (!serial) {
+		states.emplace(g_ThreadMan.GetPriorityThreadPool(), order.size() - 1, [&capture, &boundary, caller](size_t index) {
 			CaptureSentinel::WorkerScope worker("script-graph-state");
+			CheckpointNativeSnapshot::BoundaryScope boundaryScope(boundary);
 			capture(index < caller ? index : index + 1);
 		});
 	}
 	std::exception_ptr failure;
 	try {
-		if (boundaryOnly) for (size_t index = 0; index < order.size(); ++index) capture(index);
-		else {
-			capture(caller);
-			if (CaptureTrace::Serial()) for (size_t index = 1; index < order.size(); ++index) capture(index);
-		}
+		capture(caller);
+		if (serial) for (size_t index = 0; index < order.size(); ++index) if (index != caller) capture(index);
 		CaptureTrace::Span span("graph_while_waiting");
 		if (whileWaiting) whileWaiting();
 	} catch (...) {
@@ -7232,7 +7232,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 		states->Finish(!failure);
 	}
 	if (failure) std::rethrow_exception(failure);
-	if (phaseCosts && boundaryOnly && shared) {
+	if (phaseCosts && boundary && shared) {
 		const auto [vectors, controllers] = shared->DirectOwnerCounts();
 		System::PrintDiagnosticLine(std::format("[checkpoint-native-lookups] direct_vectors={} direct_controllers={} full_owner_index={}", vectors, controllers, shared->HasOwnerIndex()));
 	}

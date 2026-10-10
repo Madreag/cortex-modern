@@ -180,6 +180,8 @@ namespace RTE {
 			void* GetPoolMemory();
 			/// Allocates a snapshot value without taking a gameplay pool slot.
 			void* AllocateCheckpointMemory();
+			/// Frees a snapshot value's storage that was never constructed.
+			void DeallocateCheckpointMemory(void* memory) { m_Deallocate(memory); }
 
 			/// Returns a raw chunk of memory back to the pre-allocated available pool.
 			/// @param returnedMemory The raw chunk of memory that is being returned. Needs to be the same size as the type this ClassInfo describes. OWNERSHIP IS TRANSFERRED!

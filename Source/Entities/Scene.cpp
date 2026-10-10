@@ -342,7 +342,10 @@ Scene::Scene(const Scene& source, CheckpointNativeSnapshot& snapshot) :
 	snapshot.FreezeArray(m_SeenPixels, source.m_SeenPixels);
 	snapshot.FreezeArray(m_CleanedPixels, source.m_CleanedPixels);
 	snapshot.FreezeArray(m_ScanScheduled, source.m_ScanScheduled);
-	for (size_t index = 0; index < m_FrozenPathFinders.size(); ++index) m_FrozenPathFinders[index] = source.m_pPathFinders[index] ? source.m_pPathFinders[index]->FreezeCheckpoint() : CheckpointText(std::string());
+	{
+		CheckpointCloneCost cost("scene path finders");
+		for (size_t index = 0; index < m_FrozenPathFinders.size(); ++index) m_FrozenPathFinders[index] = source.m_pPathFinders[index] ? source.m_pPathFinders[index]->FreezeCheckpoint() : CheckpointText(std::string());
+	}
 	if (&source == g_SceneMan.GetScene()) { std::list<SceneObject*> roots; g_MovableMan.GetAllActors(false, roots); g_MovableMan.GetAllItems(false, roots); g_MovableMan.GetAllParticles(false, roots); m_FrozenSaveRoots = snapshot.Freeze(roots); }
 }
 

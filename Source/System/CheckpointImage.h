@@ -95,6 +95,8 @@ namespace RTE {
 		int64_t activityUs = 0;
 		int64_t graphUs = 0;
 		std::vector<std::pair<std::string, int64_t>> simParts;
+		/// What the boundary freeze spent per kind of value, for the phases report.
+		std::vector<std::pair<const char*, std::array<int64_t, 3>>> cloneCosts;
 		int64_t graphWalkUs = 0;
 		int64_t graphTextUs = 0;
 		uint64_t graphSerial = 0;

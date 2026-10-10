@@ -10,12 +10,15 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <queue>
 #include <set>
 #include <span>
 #include <string>
+#include <thread>
 #include <type_traits>
+#include <typeinfo>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -31,7 +34,89 @@ namespace RTE {
 	class Material;
 	class MovableObject;
 
-	// Snapshot constructors own archived fields without gameplay creation or callbacks.
+	/// Times what a boundary freeze spends per kind of value; off unless CCCP_CHECKPOINT_PHASES=1.
+	class CheckpointCloneCost {
+	public:
+		explicit CheckpointCloneCost(const char* kind) : m_Kind(kind && Enabled() ? kind : nullptr) { if (m_Kind) Begin(); }
+		~CheckpointCloneCost() { if (m_Kind) End(); }
+		CheckpointCloneCost(const CheckpointCloneCost&) = delete;
+		CheckpointCloneCost& operator=(const CheckpointCloneCost&) = delete;
+		using Totals = std::vector<std::pair<const char*, std::array<int64_t, 3>>>;
+		static bool Enabled();
+		/// Takes the costs gathered so far, as count, inclusive and exclusive nanoseconds per kind.
+		static Totals Take();
+		/// Prints taken costs, the largest exclusive cost first.
+		static void Report(uint64_t tick, Totals totals);
+	private:
+		void Begin();
+		void End();
+		const char* m_Kind;
+		int64_t m_Start = 0, m_Children = 0;
+		CheckpointCloneCost* m_Parent = nullptr;
+	};
+
+	/// A map the freezing threads share; each key's shard has its own lock, so threads freezing different objects rarely meet.
+	template<class Key, class Value> class CheckpointSharedMap {
+	public:
+		std::optional<Value> Find(const Key& key) const {
+			const Shard& shard = For(key);
+			std::lock_guard lock(shard.mutex);
+			const auto found = shard.map.find(key);
+			if (found == shard.map.end()) return std::nullopt;
+			return found->second;
+		}
+		/// The stored value's address, which stays put until its key is erased.
+		const Value* FindStored(const Key& key) const {
+			const Shard& shard = For(key);
+			std::lock_guard lock(shard.mutex);
+			const auto found = shard.map.find(key);
+			return found == shard.map.end() ? nullptr : &found->second;
+		}
+		/// The value the key holds after this call, and whether this call put it there.
+		std::pair<Value, bool> TryEmplace(const Key& key, Value value) {
+			Shard& shard = For(key);
+			std::lock_guard lock(shard.mutex);
+			const auto [found, inserted] = shard.map.try_emplace(key, std::move(value));
+			return {found->second, inserted};
+		}
+		void InsertOrAssign(const Key& key, Value value) {
+			Shard& shard = For(key);
+			std::lock_guard lock(shard.mutex);
+			shard.map.insert_or_assign(key, std::move(value));
+		}
+		void Erase(const Key& key) {
+			Shard& shard = For(key);
+			std::lock_guard lock(shard.mutex);
+			shard.map.erase(key);
+		}
+		size_t Size() const {
+			size_t size = 0;
+			for (const Shard& shard: m_Shards) {
+				std::lock_guard lock(shard.mutex);
+				size += shard.map.size();
+			}
+			return size;
+		}
+		template<class Visit> void ForEach(Visit visit) const {
+			for (const Shard& shard: m_Shards) {
+				std::lock_guard lock(shard.mutex);
+				for (const auto& [key, value]: shard.map) visit(key, value);
+			}
+		}
+
+	private:
+		static constexpr size_t c_ShardBits = 6;
+		struct alignas(64) Shard {
+			mutable std::mutex mutex;
+			std::unordered_map<Key, Value> map;
+		};
+		static size_t ShardOf(const Key& key) { return static_cast<size_t>((static_cast<uint64_t>(std::hash<Key>{}(key)) * 0x9E3779B97F4A7C15ULL) >> (64 - c_ShardBits)); }
+		const Shard& For(const Key& key) const { return m_Shards[ShardOf(key)]; }
+		Shard& For(const Key& key) { return m_Shards[ShardOf(key)]; }
+		std::array<Shard, size_t{1} << c_ShardBits> m_Shards;
+	};
+
+	// Snapshot constructors own archived fields without gameplay creation or callbacks; several threads may freeze at once.
 	class CheckpointNativeSnapshot {
 	public:
 		CheckpointNativeSnapshot();
@@ -73,44 +158,110 @@ namespace RTE {
 			if (!source) return nullptr;
 			const Entity* base = source;
 			const ptrdiff_t offset = reinterpret_cast<const char*>(source) - reinterpret_cast<const char*>(base);
-			Entity* target = nullptr;
-			if (const auto known = m_Objects.find(base); known != m_Objects.end()) target = known->second;
-			else target = source->FreezeCheckpointNative(*this);
+			auto& slot = Recent(base);
+			Entity* target = static_cast<Entity*>(slot.second);
+			if (slot.first != base) {
+				if (const auto known = m_Objects.Find(base)) target = *known;
+				else {
+					CheckpointCloneCost cost(CheckpointCloneCost::Enabled() ? base->GetClassName().c_str() : nullptr);
+					target = source->FreezeCheckpointNative(*this);
+				}
+				slot = {base, target};
+			}
 			return reinterpret_cast<T*>(reinterpret_cast<char*>(target) + offset);
 		}
 		template<class T> T* ValueObject(const T* source) {
 			if (!source) return nullptr;
-			if (const auto known = m_Values.find(source); known != m_Values.end()) return static_cast<T*>(known->second);
-			m_ValueOwners.push_back({nullptr, [](void* value) noexcept { static_cast<T*>(value)->~T(); ::operator delete(value); }});
-			auto& owner = m_ValueOwners.back();
+			if (const auto known = m_Values.Find(source)) return static_cast<T*>(*known);
+			CheckpointCloneCost cost(CheckpointCloneCost::Enabled() ? typeid(T).name() : nullptr);
+			auto& owner = AddValueOwner([](void* value) noexcept { static_cast<T*>(value)->~T(); ::operator delete(value); });
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 			void* memory = ::operator new(sizeof(T));
+			std::pair<void*, bool> claim;
 			try {
-				m_Values.emplace(source, memory);
+				claim = m_Values.TryEmplace(source, memory);
+			} catch (...) {
+				::operator delete(memory);
+				throw;
+			}
+			if (!claim.second) {
+				::operator delete(memory);
+				return static_cast<T*>(claim.first);
+			}
+			try {
 				if constexpr (requires { T::PrepareCheckpointNative(*source, static_cast<T*>(memory), *this); })
 					T::PrepareCheckpointNative(*source, static_cast<T*>(memory), *this);
 				::new(memory) T(*source, *this);
 				owner.first = memory;
 				return static_cast<T*>(memory);
 			} catch (...) {
-				m_Values.erase(source);
+				m_Values.Erase(source);
 				::operator delete(memory);
 				throw;
 			}
 		}
 
+		/// Claims a top-level object's frozen storage before any thread freezes it: a reference from another object then
+		/// names it without freezing it there, and the thread given the object freezes it with Construct.
+		void Reserve(const Entity& source) {
+			auto& type = const_cast<Entity::ClassInfo&>(source.GetClass());
+			Entity** slot = AddOwner();
+			void* memory = type.AllocateCheckpointMemory();
+			Entity* target = reinterpret_cast<Entity*>(static_cast<char*>(memory) + (reinterpret_cast<const char*>(&source) - static_cast<const char*>(dynamic_cast<const void*>(&source))));
+			try {
+				if (!m_Objects.TryEmplace(&source, target).second) {
+					type.DeallocateCheckpointMemory(memory);
+					return;
+				}
+				m_Slots.InsertOrAssign(target, slot);
+				m_Reserved.InsertOrAssign(&source, Reservation{memory, slot, &type});
+			} catch (...) {
+				m_Objects.Erase(&source);
+				m_Slots.Erase(target);
+				type.DeallocateCheckpointMemory(memory);
+				throw;
+			}
+		}
+		/// Freezes a reserved object on this thread.
+		void Construct(const Entity& source) {
+			if (m_Reserved.Find(&source)) {
+				CheckpointCloneCost cost(CheckpointCloneCost::Enabled() ? source.GetClassName().c_str() : nullptr);
+				source.FreezeCheckpointNative(*this);
+			}
+		}
+
 		template<class T> Entity* Make(const T& source) {
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
-			m_Owners.push_back(nullptr);
-			Entity** slot = &m_Owners.back();
-			void* memory = const_cast<Entity::ClassInfo&>(source.GetClass()).AllocateCheckpointMemory();
-			if (!memory) throw std::bad_alloc();
 			const ptrdiff_t offset = reinterpret_cast<const char*>(static_cast<const Entity*>(&source)) - reinterpret_cast<const char*>(&source);
-			Entity* target = reinterpret_cast<Entity*>(static_cast<char*>(memory) + offset);
+			Entity** slot = nullptr;
+			void* memory = nullptr;
+			Entity* target = nullptr;
+			if (const auto reserved = m_Reserved.Find(&source)) {
+				m_Reserved.Erase(&source);
+				memory = reserved->memory;
+				slot = reserved->slot;
+				target = reinterpret_cast<Entity*>(static_cast<char*>(memory) + offset);
+			} else {
+				slot = AddOwner();
+				memory = const_cast<Entity::ClassInfo&>(source.GetClass()).AllocateCheckpointMemory();
+				if (!memory) throw std::bad_alloc();
+				target = reinterpret_cast<Entity*>(static_cast<char*>(memory) + offset);
+				// Two threads can reach one object through different owners; the first to claim it freezes it.
+				std::pair<Entity*, bool> claim;
+				try {
+					claim = m_Objects.TryEmplace(&source, target);
+				} catch (...) {
+					T::Deallocate(memory);
+					throw;
+				}
+				if (!claim.second) {
+					T::Deallocate(memory);
+					return claim.first;
+				}
+			}
 			bool constructed = false;
 			try {
-				m_Objects.emplace(&source, target);
-				m_Slots.emplace(target, slot);
+				m_Slots.InsertOrAssign(target, slot);
 				*slot = target;
 				if constexpr (requires { T::PrepareCheckpointNative(source, reinterpret_cast<T*>(memory), *this); })
 					T::PrepareCheckpointNative(source, reinterpret_cast<T*>(memory), *this);
@@ -121,8 +272,8 @@ namespace RTE {
 			} catch (...) {
 				if (constructed) std::launder(reinterpret_cast<T*>(memory))->~T();
 				*slot = nullptr;
-				m_Objects.erase(&source);
-				m_Slots.erase(target);
+				m_Objects.Erase(&source);
+				m_Slots.Erase(target);
 				if (Entity::s_DeletedCheckpointMemory == memory) Entity::s_DeletedCheckpointMemory = nullptr;
 				T::Deallocate(memory);
 				throw;
@@ -130,35 +281,31 @@ namespace RTE {
 		}
 
 		Entity** Bind(const Entity& source, Entity* target) {
-			m_Objects.insert_or_assign(&source, target);
-			if (const auto slot = m_Slots.find(target); slot != m_Slots.end()) return slot->second;
-			return nullptr;
+			m_Objects.InsertOrAssign(&source, target);
+			return m_Slots.Find(target).value_or(nullptr);
 		}
-		template<class T> void BindValue(const T& source, T* target) { m_Values.insert_or_assign(&source, target); }
+		template<class T> void BindValue(const T& source, T* target) { m_Values.InsertOrAssign(&source, target); }
 		template<class T> T* CopyValue(const T* source) {
 			if (!source) return nullptr;
-			if (const auto known = m_Values.find(source); known != m_Values.end()) return static_cast<T*>(known->second);
-			m_ValueOwners.push_back({nullptr, [](void* value) noexcept { delete static_cast<T*>(value); }});
-			auto& owner = m_ValueOwners.back();
+			if (const auto known = m_Values.Find(source)) return static_cast<T*>(*known);
+			auto& owner = AddValueOwner([](void* value) noexcept { delete static_cast<T*>(value); });
 			auto value = std::make_unique<T>(Freeze(*source));
-			m_Values.emplace(source, value.get());
+			const auto [winner, claimed] = m_Values.TryEmplace(source, value.get());
+			if (!claimed) return static_cast<T*>(winner);
 			owner.first = value.release();
 			return static_cast<T*>(owner.first);
 		}
 		void AssignEntity(Entity& target, const Entity& source);
 		template<class T> requires (!std::is_array_v<T>) void Prepare(const T& source, T* target) {
-			if constexpr (std::is_base_of_v<Entity, T>) m_Objects.insert_or_assign(&source, target);
-			else m_Values.insert_or_assign(&source, target);
+			if constexpr (std::is_base_of_v<Entity, T>) m_Objects.InsertOrAssign(&source, target);
+			else m_Values.InsertOrAssign(&source, target);
 			if constexpr (requires { T::PrepareCheckpointNative(source, target, *this); }) T::PrepareCheckpointNative(source, target, *this);
 		}
 		template<class T, size_t Size> void Prepare(const T (&source)[Size], T (*target)[Size]) {
 			for (size_t index = 0; index < Size; ++index) Prepare(source[index], &(*target)[index]);
 		}
-		const Entity* Find(const Entity* source) const {
-			const auto found = m_Objects.find(source);
-			return found == m_Objects.end() ? nullptr : found->second;
-		}
-		size_t ObjectCount() const { return m_Objects.size(); }
+		const Entity* Find(const Entity* source) const { return m_Objects.Find(source).value_or(nullptr); }
+		size_t ObjectCount() const { return m_Objects.Size(); }
 
 		template<class T> auto Freeze(const T& source) {
 			if constexpr (requires { FreezeCheckpointValue(source, *this); }) return FreezeCheckpointValue(source, *this);
@@ -247,20 +394,61 @@ namespace RTE {
 
 	private:
 		struct Pixel;
+		using ValueOwner = std::pair<void*, void (*)(void*) noexcept>;
+		/// This thread's recent answers of this snapshot, read without a shard lock: the shared objects many owners
+		/// name (materials, presets, sprites) would otherwise keep every thread on the same few locks.
+		template<int Kind = 0> std::pair<const void*, void*>& Recent(const void* key) {
+			struct Cache {
+				uint64_t snapshot = 0;
+				std::array<std::pair<const void*, void*>, 1024> slots{};
+			};
+			thread_local Cache cache;
+			if (cache.snapshot != m_Serial) {
+				cache.slots.fill({});
+				cache.snapshot = m_Serial;
+			}
+			return cache.slots[(reinterpret_cast<uintptr_t>(key) >> 4) % cache.slots.size()];
+		}
+		const uint64_t m_Serial;
+		/// The owner lists of the freezing thread; a slot keeps its address while other threads add theirs.
+		struct alignas(64) OwnerShard {
+			std::mutex mutex;
+			std::list<Entity*> owners;
+			std::list<ValueOwner> values;
+		};
+		OwnerShard& Owners() { return m_OwnerShards[std::hash<std::thread::id>{}(std::this_thread::get_id()) % m_OwnerShards.size()]; }
+		Entity** AddOwner() {
+			OwnerShard& shard = Owners();
+			std::lock_guard lock(shard.mutex);
+			shard.owners.push_back(nullptr);
+			return &shard.owners.back();
+		}
+		ValueOwner& AddValueOwner(void (*destroy)(void*) noexcept) {
+			OwnerShard& shard = Owners();
+			std::lock_guard lock(shard.mutex);
+			shard.values.push_back({nullptr, destroy});
+			return shard.values.back();
+		}
 		inline static thread_local const CheckpointNativeSnapshot* s_Current = nullptr;
 		inline static thread_local std::shared_ptr<CheckpointNativeSnapshot> s_Boundary;
-		std::unordered_map<const BITMAP*, std::shared_ptr<Pixel>> m_Bitmaps;
-		std::unordered_map<const BITMAP*, std::shared_ptr<Pixel>> m_BitmapSources;
-		std::unordered_map<const Serializable*, CheckpointText> m_WriterValues;
-		std::unordered_map<const Material*, CheckpointText> m_MaterialReferences;
+		CheckpointSharedMap<const BITMAP*, std::shared_ptr<Pixel>> m_Bitmaps;
+		CheckpointSharedMap<const BITMAP*, std::shared_ptr<Pixel>> m_BitmapSources;
+		CheckpointSharedMap<const Serializable*, CheckpointText> m_WriterValues;
+		CheckpointSharedMap<const Material*, CheckpointText> m_MaterialReferences;
 		std::unordered_map<const Material*, std::pair<int, size_t>> m_MaterialOwners;
-		std::unordered_map<long, MovableObject*> m_UIDs;
+		CheckpointSharedMap<long, MovableObject*> m_UIDs;
 		CheckpointFrozenClock m_Clock;
-		std::list<Entity*> m_Owners;
-		std::unordered_map<const Entity*, Entity*> m_Objects;
-		std::unordered_map<Entity*, Entity**> m_Slots;
-		std::unordered_map<const void*, void*> m_Values;
-		std::list<std::pair<void*, void (*)(void*) noexcept>> m_ValueOwners;
+		std::array<OwnerShard, 32> m_OwnerShards;
+		CheckpointSharedMap<const Entity*, Entity*> m_Objects;
+		CheckpointSharedMap<Entity*, Entity**> m_Slots;
+		CheckpointSharedMap<const void*, void*> m_Values;
+		struct Reservation {
+			void* memory;
+			Entity** slot;
+			Entity::ClassInfo* type;
+		};
+		CheckpointSharedMap<const Entity*, Reservation> m_Reserved;
+
 	};
 
 }

@@ -132,6 +132,43 @@ using namespace RTE;
 #define HACK_MZ_COMPRESS_METHOD_DEFLATE 8
 
 namespace {
+	/// Freezes the world's top-level objects side by side, each with everything it owns, beside the other boundary parts
+	/// that only read; the scene that names the objects afterwards finds every one frozen. An armed injected failure
+	/// runs everything on this thread, where it counts.
+	void FreezeBoundaryParts(CheckpointNativeSnapshot& snapshot, AudioMan::SoundCheckpointSaveScope* sounds, const std::vector<std::function<void()>>& parts) {
+		std::list<SceneObject*> roots;
+		g_MovableMan.GetAllActors(false, roots);
+		g_MovableMan.GetAllItems(false, roots);
+		g_MovableMan.GetAllParticles(false, roots);
+		const std::vector<const SceneObject*> order(roots.begin(), roots.end());
+		// Every object a thread may meet in another's tree is claimed first, so no thread freezes a tree that is not its own.
+		if (CheckpointFailure::Current() != CheckpointFailure::Point::None || CaptureTrace::Serial()) {
+			for (const SceneObject* root: order) snapshot.Reserve(*root);
+			for (const SceneObject* root: order) snapshot.Construct(*root);
+			for (const auto& part: parts) part();
+			return;
+		}
+		const size_t chunks = std::min<size_t>(order.size(), 128);
+		const auto range = [&order, chunks](size_t chunk) { return std::pair{chunk * order.size() / chunks, (chunk + 1) * order.size() / chunks}; };
+		ParallelWork(g_ThreadMan.GetPriorityThreadPool(), chunks, [&snapshot, &order, &range](size_t chunk) {
+			for (auto [index, end] = range(chunk); index < end; ++index) snapshot.Reserve(*order[index]);
+		}).Finish();
+		// The parts start first, being the longest single items.
+		const bool batch = CheckpointWriter::BatchEnabled();
+		const std::shared_ptr<CheckpointNativeSnapshot> boundary = CheckpointNativeSnapshot::Boundary();
+		ParallelWork work(g_ThreadMan.GetPriorityThreadPool(), parts.size() + chunks, [&snapshot, &order, &parts, &boundary, &range, sounds, batch](size_t item) {
+			CaptureSentinel::WorkerScope worker("native-freeze");
+			CheckpointNativeSnapshot::BoundaryScope boundaryScope(boundary);
+			AudioMan::SoundCheckpointSaveScope::Lend lend(sounds, batch);
+			if (item < parts.size()) {
+				parts[item]();
+				return;
+			}
+			for (auto [index, end] = range(item - parts.size()); index < end; ++index) snapshot.Construct(*order[index]);
+		});
+		work.Finish();
+	}
+
 	uint64_t CheckpointCaptureCpuUnits() {
 #ifdef _WIN32
 		ULONG64 cycles = 0;
@@ -902,24 +939,38 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	phase("sim_native_values");
 	auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
 	CheckpointNativeSnapshot::BoundaryScope boundary(snapshot);
-	Scene* const scene = snapshot->Object(sourceScene);
-	const GAScripted* const activity = snapshot->Object(sourceActivity);
-	const std::string sceneName = SceneArchiveName(sourceScene, fileName);
+	const auto& savers = RuntimeManagerSavers();
+	std::vector<CheckpointText> managers(savers.size());
+	std::vector<int64_t> managerUs(savers.size());
+	const GAScripted* activity = nullptr;
+	const Activity* startActivity = nullptr;
 	const bool hasStart = m_StartActivity != nullptr;
-	const Activity* const startActivity = snapshot->Object(m_StartActivity.get());
+	{
+		std::vector<std::function<void()>> parts;
+		parts.reserve(savers.size() + 2);
+		parts.emplace_back([&] { activity = snapshot->Object(sourceActivity); });
+		if (hasStart) parts.emplace_back([&] { startActivity = snapshot->Object(m_StartActivity.get()); });
+		for (size_t index = 0; index < savers.size(); ++index) {
+			parts.emplace_back([&savers, &managers, &managerUs, index] {
+				const auto start = std::chrono::steady_clock::now();
+				managers[index] = CheckpointWriter::CaptureNative(savers[index].save);
+				managerUs[index] = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+			});
+		}
+		FreezeBoundaryParts(*snapshot, carried.get(), parts);
+	}
+	for (size_t index = 0; index < savers.size(); ++index) image->globalParts.emplace_back(savers[index].name, managerUs[index]);
+	Scene* const scene = snapshot->Object(sourceScene);
+	const std::string sceneName = SceneArchiveName(sourceScene, fileName);
 	const auto addLayer = [&image](std::string name, const SceneLayer* layer) {
 		if (layer) image->layers.emplace_back(std::move(name), layer->CaptureBitmapSnapshot(nullptr, true));
 	};
-	addLayer("Mat", scene->GetTerrain()); addLayer("FG", scene->GetTerrain()->GetFGSceneLayer()); addLayer("BG", scene->GetTerrain()->GetBGSceneLayer());
-	for (int team = 0; team < Activity::MaxTeamCount; ++team) addLayer("UST" + std::to_string(team), scene->GetUnseenLayer(team));
-	phase("sim_manager_values");
-	std::vector<CheckpointText> managers;
-	managers.reserve(RuntimeManagerSavers().size());
-	for (const auto& saver: RuntimeManagerSavers()) {
-		const auto start = std::chrono::steady_clock::now();
-		managers.push_back(CheckpointWriter::CaptureNative(saver.save));
-		image->globalParts.emplace_back(saver.name, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+	{
+		CheckpointCloneCost cost("scene layers");
+		addLayer("Mat", scene->GetTerrain()); addLayer("FG", scene->GetTerrain()->GetFGSceneLayer()); addLayer("BG", scene->GetTerrain()->GetBGSceneLayer());
+		for (int team = 0; team < Activity::MaxTeamCount; ++team) addLayer("UST" + std::to_string(team), scene->GetUnseenLayer(team));
 	}
+	phase("sim_manager_values");
 	auto audio = g_AudioMan.CaptureCheckpointState(false);
 	auto samples = g_AudioMan.CaptureCheckpointSamples();
 	g_AudioMan.FreezeCheckpointCapture(*audio, soundCursor);
@@ -993,6 +1044,7 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	};
 	image->freezeUs = freezeSpan.Stop() / 1000;
 	phase(nullptr);
+	image->cloneCosts = CheckpointCloneCost::Take();
 	return SubmitCheckpointArchiveImage(fileName, path, matchId, tick, task, compression, identity, std::move(image), complete, {}, {}, {}, {}, pixels.TakeStorage());
 }
 
@@ -1498,6 +1550,7 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 					System::PrintDiagnosticLine(std::format("[checkpoint-sim-phase] tick={} part={} us={}", tick, part, micros));
 				}
 				System::PrintDiagnosticLine(std::format("[checkpoint-sim-phase] tick={} part=sim_return_tail us={}", tick, simUs - simPartsUs));
+				CheckpointCloneCost::Report(tick, std::move(image->cloneCosts));
 				for (const auto& [name, layer]: image->layers) {
 					System::PrintDiagnosticLine(std::format("[checkpoint-layer-completion] name={} freeze_copy_bytes={} worker_copy_bytes={} compare_bytes={} dirty_bytes={} unmarked_dirty_bytes={}",
 					    name, layer->copiedBytes, layer->workerCopyBytes, layer->scannedBytes, layer->dirtyBytes, layer->unmarkedDirtyBytes));
