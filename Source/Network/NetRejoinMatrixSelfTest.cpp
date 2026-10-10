@@ -36,7 +36,7 @@ namespace RTE {
 	bool TestAStartHeldSeatsReturnCompletes(std::string* error);
 	bool TestASeatKnockingWhileTheRoundFormsIsAnswered(std::string* error);
 	bool TestAQueuedReturnLeavesALaterHold(std::string* error);
-	bool TestHostOwnHoldIsRejectedOnEveryWirePhase(std::string* error);
+	bool TestHostSeatBridgeIsAuthenticatedOnEveryWirePhase(std::string* error);
 	bool TestAPreviouslyHeldHostTakesItsSeatBack(std::string* error);
 	bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
 	bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
@@ -1171,8 +1171,8 @@ namespace RTE {
 		const Row abandoned{"a_lobby_drops_an_abandoned_transfers_tail", &TestALobbyDropsAnAbandonedTransfersTail}, laterLobby{"a_later_lobbys_transfer_is_new_to_its_peers", &TestALaterLobbysTransferIsNewToItsPeers};
 		const Row traffic{"lobby_traffic_keeps_a_host_link_alive", &TestLobbyTrafficKeepsAHostLinkAlive}, startHeld{"a_start_held_seats_return_completes", &TestAStartHeldSeatsReturnCompletes};
 		const Row knocking{"a_seat_knocking_while_the_round_forms_is_answered", &TestASeatKnockingWhileTheRoundFormsIsAnswered}, queued{"a_queued_return_leaves_a_later_hold", &TestAQueuedReturnLeavesALaterHold};
-		const Row ownSeat{"recorded_host_return_and_live_own_hold_rejection", [](std::string* error) {
-			return TestAPreviouslyHeldHostTakesItsSeatBack(error) && TestHostOwnHoldIsRejectedOnEveryWirePhase(error);
+		const Row ownSeat{"recorded_host_return_and_authenticated_live_bridge", [](std::string* error) {
+			return TestAPreviouslyHeldHostTakesItsSeatBack(error) && TestHostSeatBridgeIsAuthenticatedOnEveryWirePhase(error);
 		}}, nobodyWaits{"a_host_nobody_waits_on_keeps_its_seat", &TestAHostNobodyWaitsOnKeepsItsSeat};
 		const Row hearsHost{"a_held_seat_hears_its_host_until_its_catch_up_opens", &TestAHeldSeatHearsItsHostUntilItsCatchUpOpens}, crossesMigration{"a_held_hosts_frame_crosses_a_migration", &TestAHeldHostsFrameCrossesAMigration};
 		const Row lease{"end_match_with_held_seat_keeps_its_lease", &TestEndMatchWithHeldSeatKeepsItsLease}, toldOver{"a_returner_told_the_match_is_over_gets_its_record", &TestAReturnerToldTheMatchIsOverGetsItsRecord};
