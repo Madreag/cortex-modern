@@ -1197,6 +1197,7 @@ namespace RTE {
 		void DisposeSpeculativeSpawns();
 		void TakePreviewSpawn(MovableObject* particle);
 		void CheckEffectsLingerForSelfTest();
+		void CheckPreviewEffectsLingerForSelfTest();
 		/// Piles a resting particle the way its material piles and draws it into the terrain; the world's settle and the preview's share it.
 		void SettleIntoTerrain(MovableObject* particle);
 		struct PreviewGhost {
