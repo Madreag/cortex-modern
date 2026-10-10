@@ -1899,9 +1899,11 @@ void InitializeManagers() {
 /// <summary>
 /// Destroys all the managers and frees all loaded data before termination.
 /// </summary>
+static bool s_MatchDestroyedForQuit = false;
+
 void DestroyManagers() {
 	g_SimChecksum.Destroy();
-	g_NetMatchService.Destroy();
+	if (!s_MatchDestroyedForQuit) g_NetMatchService.Destroy();
 	g_MetricsCollector.Destroy();
 	g_MetaMan.Destroy();
 	g_PerformanceMan.Destroy();
@@ -1963,6 +1965,12 @@ int ShutDown(int exitCode) {
 			System::PrintDiagnosticLine(line.str());
 		}
 		if (!saved || !s_saveMenuSelfTestPassed) exitCode = EXIT_FAILURE;
+	}
+	// Cancel the session's work before draining jobs that may depend on it stopping.
+	if (g_NetMatchService.GetState() != NetMatchServiceState::Idle) {
+		ScenarioRunner::CloseLockstepReplayRecord();
+		g_NetMatchService.Destroy();
+		s_MatchDestroyedForQuit = true;
 	}
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
 	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
@@ -3530,6 +3538,7 @@ void PollSDLEvents() {
 				System::SetQuit(true);
 				return;
 			case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+				if (g_UInputMan.IsNetworkGUIInputActive()) System::PrintDiagnosticLine("[net-match] window close requested at tick " + std::to_string(g_TimerMan.GetSimUpdateCount()));
 				System::SetQuit(true);
 				return;
 			case SDL_EVENT_KEY_UP :
@@ -4225,6 +4234,7 @@ void RunMenuLoop() {
 		HarnessCost::BeginFrame();
 		g_WindowMan.ClearBackbuffer();
 		PollSDLEvents();
+		if (System::IsSetToQuit() && g_UInputMan.IsNetworkGUIInputActive()) break;
 
 		g_WindowMan.Update();
 		RTEError::DispatchPendingWorkerMessages();
@@ -7455,6 +7465,7 @@ void RunGameLoop() {
 		std::optional<NetLockstepPlane::Window> frameHeadWindow;
 		frameHeadWindow.emplace("frame head");
 		PollSDLEvents();
+		if (System::IsSetToQuit() && g_UInputMan.IsNetworkGUIInputActive()) break;
 		g_WindowMan.Update();
 		g_WindowMan.ClearBackbuffer();
 
