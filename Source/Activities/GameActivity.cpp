@@ -1772,6 +1772,8 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 	if (!std::isfinite(placement.posX) || !std::isfinite(placement.posY)) {
 		return false;
 	}
+	const uint8_t seatPeer = LockstepSeatPeerId(player);
+	const uint8_t ownerPeer = seatPeer != 0 ? seatPeer : ScenarioRunner::GetLockstepHostPeerId();
 	// A refusal is silent on the wire, so the player who tried reads the reason on their own screen.
 	const auto refuse = [&](const std::string& reason) {
 		{
@@ -1781,11 +1783,23 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 			System::PrintDiagnosticLine(line.str());
 		}
 		RefuseBrainPlacement(player, reason, senderPeerId == ScenarioRunner::GetLockstepLocalPeerId());
+		if (senderPeerId == ownerPeer && IsLocalHumanSeat(player) && !m_ReadyToStart[player]) {
+			// Two previews can choose a free spot together; the second seat gets its brain back to move.
+			m_LockstepPlacementSubmitted[player] = false;
+			if (m_pEditorGUI[player]) {
+				const ScopedEditorRNG editorRNG(true);
+				if (SceneObject* resident = scene->GetResidentBrain(player)) {
+					m_pEditorGUI[player]->SetCurrentObject(static_cast<SceneObject*>(resident->Clone()));
+					m_pEditorGUI[player]->SetCursorPos(resident->GetPos());
+					scene->SetResidentBrain(player, nullptr);
+				}
+				m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::INSTALLINGBRAIN);
+			}
+		}
 		return false;
 	};
 	// Only the peer holding the seat may place its brain; every peer resolves that the same way.
-	const uint8_t seatPeer = LockstepSeatPeerId(player);
-	if (senderPeerId != (seatPeer != 0 ? seatPeer : ScenarioRunner::GetLockstepHostPeerId())) {
+	if (senderPeerId != ownerPeer) {
 		return refuse("Rejected a brain placement for seat " + std::to_string(player) + " from a peer that does not hold it");
 	}
 	if (!g_PresetMan.GetEntityPreset(placement.className, placement.preset, placement.module)) {
@@ -1988,8 +2002,8 @@ void GameActivity::UpdateEditingInput(bool frameInput) {
 		    m_pEditorGUI[player]->GetEditorGUIMode() != SceneEditorGUI::PICKINGOBJECT &&
 		    m_pEditorGUI[player]->GetEditorGUIMode() != SceneEditorGUI::INACTIVE &&
 		    !(SDL_GetModState() & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) &&
-	    ((g_UInputMan.NetworkGUIKeyPressed(SDL_SCANCODE_RETURN) && IsPlacementConfirmKeyAvailable(player, SDL_SCANCODE_RETURN)) ||
-	     (g_UInputMan.NetworkGUIKeyPressed(SDL_SCANCODE_KP_ENTER) && IsPlacementConfirmKeyAvailable(player, SDL_SCANCODE_KP_ENTER)))) {
+		    ((g_UInputMan.NetworkGUIKeyPressed(SDL_SCANCODE_RETURN) && IsPlacementConfirmKeyAvailable(player, SDL_SCANCODE_RETURN)) ||
+		     (g_UInputMan.NetworkGUIKeyPressed(SDL_SCANCODE_KP_ENTER) && IsPlacementConfirmKeyAvailable(player, SDL_SCANCODE_KP_ENTER)))) {
 			m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::DONEEDITING);
 		}
 
@@ -2029,13 +2043,15 @@ void GameActivity::UpdateEditingInput(bool frameInput) {
 					continue;
 				}
 				if (!m_ReadyToStart[player] && !m_LockstepPlacementSubmitted[player] && !SubmitLockstepBrainPlacement(player)) {
-					const Entity* pBrain = g_PresetMan.GetEntityPreset("Actor", "Brain Case");
-					if (pBrain)
-						m_pEditorGUI[player]->SetCurrentObject(dynamic_cast<SceneObject*>(pBrain->Clone()));
+					SceneObject* resident = g_SceneMan.GetScene()->GetResidentBrain(player);
+					const SceneObject* brain = resident ? resident : m_pEditorGUI[player]->GetCurrentObject();
+					const std::string reason = MatchBrainPlacementReason(player, brain ? brain->GetPos() : m_pEditorGUI[player]->GetCursorPos(), brain);
+					if (resident) {
+						m_pEditorGUI[player]->SetCurrentObject(static_cast<SceneObject*>(resident->Clone()));
+						g_SceneMan.GetScene()->SetResidentBrain(player, nullptr);
+					}
 					m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::INSTALLINGBRAIN);
-					g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
-					g_FrameMan.SetScreenText("PLACE YOUR BRAIN IN A VALID SPOT FIRST!", ScreenOfPlayer(player), 250, 3500);
-					m_MessageTimer[player].Reset();
+					RefuseBrainPlacement(player, reason.empty() ? "No clear path to orbit - choose another spot" : reason, true);
 				} else if (m_LockstepPlacementSubmitted[player]) {
 					g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
 					g_FrameMan.SetScreenText(m_ReadyToStart[player] ? "READY to start - wait for others to finish..." : "Placement sent - waiting for confirmation...", ScreenOfPlayer(player), 333);
@@ -4465,7 +4481,7 @@ bool GameActivity::RunSetupEditorSelfTest(bool confirmOnly) {
 			if (!ScenarioRunner::HasLockstepCoordinator() && g_UInputMan.KeyPressed(SDLK_RETURN)) singlePlayerReceivedReturn = true;
 			game->RenderUpdate();
 			if (!delayedSharedTick) game->UpdateEditing();
-			if (g_UInputMan.KeyPressed(SDLK_RETURN) && g_FrameMan.GetScreenText(0).find("Place your brain in a valid spot first") != std::string::npos) refusedUnplacedBrain = true;
+			if (g_UInputMan.KeyPressed(SDLK_RETURN) && g_FrameMan.GetScreenText(0).find("Click to install your brain before continuing") != std::string::npos) refusedUnplacedBrain = true;
 			editor->Draw(g_FrameMan.GetBackBuffer32(), Vector());
 			MenuAutomation::AfterDrawnFrame();
 			g_UInputMan.EndFrame();
