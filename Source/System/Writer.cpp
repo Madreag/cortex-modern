@@ -902,6 +902,24 @@ const std::string& CheckpointText::Text() const {
 	return root->Output().text;
 }
 
+CheckpointText CheckpointText::Compact() const {
+	if (!m_Data) return {};
+	// Completed images keep their bytes for readers, but never need their boundary allocations again.
+	auto data = std::make_shared<Data>();
+	data->deferred = true;
+	data->Output().text = Text();
+	if (HasPeerRuns()) {
+		std::string shared = SharedText();
+		if (shared != data->Output().text) {
+			data->hasPeer = true;
+			data->Output().sharedValues = std::move(shared);
+		}
+	}
+	data->ownedBytes = data->Output().text.size() + (data->Output().sharedValues ? data->Output().sharedValues->size() : 0);
+	data->Output().formatted.store(true, std::memory_order_release);
+	return CheckpointText(std::move(data));
+}
+
 std::string CheckpointText::SharedText(int64_t simTimeTicks) const {
 	if (!m_Data || !m_Data->hasPeer) return BindSimTime(simTimeTicks).Text();
 	return m_Data->usesSimTime ? AtSimTime(simTimeTicks).SharedText() : SharedText();
@@ -1629,6 +1647,18 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		const CheckpointText captured = CheckpointWriter::CaptureNative(save);
 		value = 91; binary.assign("changed");
 		check(captured.Text() == reference, "owned_checkpoint_copies_native_values");
+		{
+			CheckpointText values = Writer::Capture([](Writer& writer) {
+				writer.NewPropertyWithValue("Binary", std::string("x\0y\xff", 4));
+				writer.PerPeerBegin(); writer.NewPropertyWithValue("Seat", 19); writer.PerPeerEnd();
+			});
+			const std::string full = values.Text(), shared = values.SharedText();
+			const std::weak_ptr<CheckpointText::Data> fields = values.m_Data;
+			const CheckpointText compact = values.Compact();
+			values = {};
+			check(fields.expired() && compact.Text() == full && compact.SharedText() == shared,
+			      "completed_checkpoint_releases_fields_and_keeps_full_and_shared_bytes");
+		}
 		{
 			const auto record = [](int indent) {
 				CheckpointWriter::BatchOverride ordinary(false);

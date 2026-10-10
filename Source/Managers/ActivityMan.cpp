@@ -831,15 +831,6 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 		std::erase_if(m_AutosaveTasks, [](const auto& task) {
 			return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
 		});
-		// One capture's image is held at a time: an autosave due while the last one still writes waits for it, which only an
-		// interval far shorter than any a host can choose ever does.
-		if (!m_AutosaveTasks.empty()) {
-			const auto waitStart = std::chrono::steady_clock::now();
-			WaitForAutosaveTasks();
-			m_AutosaveTasks.clear();
-			System::PrintDiagnosticLine(std::format("[autosave] tick={} waited for the previous save ms={:.3f}", tick,
-			    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitStart).count()));
-		}
 		m_AutosaveTasks.reserve(m_AutosaveTasks.size() + 1);
 		const std::string fileName = matchId + "-" + std::to_string(tick);
 		std::string path = AutosaveStore::ArchivePath(matchId, tick).string();
@@ -1544,6 +1535,7 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 			if (automatic) NoteAutosaveVerdict(tick, false);
 			return false;
 		}
+		const bool frozenNative = static_cast<bool>(complete);
 		const auto start = std::chrono::steady_clock::now();
 		const auto sinceStart = [&start] {
 			return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
@@ -1563,8 +1555,6 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 			const std::string& saveText = main.Text();
 			const std::string& indexText = index.Text();
 			if (complete) {
-				auto previous = CheckpointCow::Get().FinishImage(image, true);
-				previous.reset();
 				complete = {};
 			}
 			if (layerCosts && image->captureClock) {
@@ -1597,6 +1587,15 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 				    return true;
 			    },
 			    automatic ? &descriptor : nullptr, pinnedCheckpointSource, automatic ? &manifest : nullptr);
+			if (frozenNative) {
+				image->activity = image->activity.Compact(); image->scene = image->scene.Compact();
+				image->structure = image->structure.Compact(); image->sceneRuntime = image->sceneRuntime.Compact();
+				image->globals = image->globals.Compact();
+				for (auto& graph: image->graphs) graph = graph.Compact();
+				image->nativePages.reset(); image->nativeReady = {};
+				auto previous = CheckpointCow::Get().FinishImage(image, true);
+				previous.reset();
+			}
 			System::PrintDiagnosticLine(std::format("[autosave-split] tick={} serialize_scene_ms={:.3f} serialize_mos_ms={:.3f} lua_graph_ms={:.3f} compress_write_ms={:.3f} freeze_ms={:.3f} bytes={}\n",
 			    tick, (image->sceneUs - image->movableUs) / 1000.0, image->movableUs / 1000.0, image->graphUs / 1000.0,
 			    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - archiveStart).count(), image->freezeUs / 1000.0, image->imageBytes));

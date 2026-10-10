@@ -99,6 +99,8 @@ namespace RTE {
 		CheckpointText();
 		explicit CheckpointText(std::string text);
 		const std::string& Text() const;
+		/// Keeps completed full and shared bytes without retaining the capture's fields and native owners.
+		CheckpointText Compact() const;
 		CheckpointText ReindentWriter(int delta) const;
 		size_t OwnedBytes() const;
 		bool HasPeerRuns() const;
