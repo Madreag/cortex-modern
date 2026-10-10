@@ -383,6 +383,20 @@ int Atom::Create(const Atom& reference) {
 	return 0;
 }
 
+long Atom::LinkIDs::Of(const MovableObject* object) {
+	if (!object) return 0;
+	for (const auto& [known, id]: this->known) if (known == object) return id;
+	// The last collision may have destroyed its other body, so the registry decides before anything reads it.
+	const long id = g_MovableMan.IsKnownObject(object) ? object->GetUniqueID() : 0L;
+	this->known[next++ % this->known.size()] = {object, id};
+	return id;
+}
+
+std::array<long, 5> Atom::CaptureCheckpointLinkIDs(LinkIDs& ids) const {
+	if (m_HasCheckpointLinks) return m_CheckpointLinkIDs;
+	return {m_OwnerMO ? m_OwnerMO->GetUniqueID() : 0L, ids.Of(m_LastHit.Body[0]), ids.Of(m_LastHit.Body[1]), ids.Of(m_LastHit.RootBody[0]), ids.Of(m_LastHit.RootBody[1])};
+}
+
 std::array<long, 5> Atom::CaptureCheckpointLinkIDs() const {
 	if (m_HasCheckpointLinks) return m_CheckpointLinkIDs;
 	// The last collision may have destroyed its other body. Never dereference a
@@ -660,8 +674,9 @@ std::shared_ptr<const Atom::FrozenList> Atom::FreezeList(const std::vector<Atom*
 	list->materials.reserve(3);
 	std::array<const Material*, 3> lastMaterials{};
 	std::array<bool, 3> haveMaterial{};
+	LinkIDs ids;
 	for (const Atom* atom: atoms) {
-		FrozenList::Record record{atom, FrozenList::none, FrozenList::none, values ? atom->CaptureCheckpointLinkIDs() : std::array<long, 5>{}};
+		FrozenList::Record record{atom, FrozenList::none, FrozenList::none, values ? atom->CaptureCheckpointLinkIDs(ids) : std::array<long, 5>{}};
 		if (!list->state->pages || !list->state->pages->CanBorrow(atom, sizeof(Atom))) {
 			record.backup = list->backup.size();
 			const char* source = reinterpret_cast<const char*>(atom);

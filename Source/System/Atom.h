@@ -523,6 +523,13 @@ namespace RTE {
 		std::array<long, 5> m_CheckpointLinkIDs{};
 		bool m_HasCheckpointLinks = false;
 		std::array<long, 5> CaptureCheckpointLinkIDs() const;
+		/// The live IDs an atom list's links name, each object looked up once for the whole list.
+		struct LinkIDs {
+			std::array<std::pair<const MovableObject*, long>, 8> known{};
+			size_t next = 0;
+			long Of(const MovableObject* object);
+		};
+		std::array<long, 5> CaptureCheckpointLinkIDs(LinkIDs& ids) const;
 
 		template <class Archive, class Self> static decltype(auto) VisitCheckpoint(Archive& archive, Self& self) {
 			return archive(self.m_Offset, self.m_OriginalOffset, self.m_Normal, self.m_SubgroupID,
