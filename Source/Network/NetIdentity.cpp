@@ -26,6 +26,7 @@
 #include <iostream>
 #include <locale>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <sstream>
@@ -208,7 +209,9 @@ namespace RTE {
 			return hasher.Finalize();
 		}
 
-		bool ReadFileIntoHasher(const fs::path& path, CanonicalHasher& hasher, std::string* error) {
+		bool StopRequested(const std::atomic<bool>* stop) { return stop && stop->load(std::memory_order_relaxed); }
+
+		bool ReadFileIntoHasher(const fs::path& path, CanonicalHasher& hasher, std::string* error, const std::atomic<bool>* stop) {
 			std::ifstream in(path, std::ios::binary);
 			if (!in.is_open()) {
 				if (error) *error = "unreadable module file: " + path.generic_string();
@@ -216,6 +219,10 @@ namespace RTE {
 			}
 			std::array<char, 64 * 1024> buffer{};
 			while (in) {
+				if (StopRequested(stop)) {
+					if (error) *error = "manifest walk cancelled while reading " + path.generic_string();
+					return false;
+				}
 				in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
 				const std::streamsize count = in.gcount();
 				if (count > 0) {
@@ -229,7 +236,7 @@ namespace RTE {
 			return true;
 		}
 
-		bool CollectModuleFiles(const fs::path& root, std::vector<ModuleFileRecord>& outFiles, std::string* error) {
+		bool CollectModuleFiles(const fs::path& root, std::vector<ModuleFileRecord>& outFiles, std::string* error, const std::atomic<bool>* stop) {
 			std::error_code ec;
 			if (!fs::exists(root, ec) || !fs::is_directory(root, ec)) {
 				if (error) *error = "module root is not a directory: " + root.generic_string();
@@ -245,6 +252,10 @@ namespace RTE {
 			}
 
 			for (; it != end; it.increment(ec)) {
+				if (StopRequested(stop)) {
+					if (error) *error = "manifest walk cancelled inside " + root.generic_string();
+					return false;
+				}
 				if (ec) {
 					if (error) *error = "failed while walking module root: " + root.generic_string() + ": " + ec.message();
 					return false;
@@ -297,35 +308,36 @@ namespace RTE {
 			return true;
 		}
 
-		std::atomic<uint64_t> s_ModuleContentHashes{0};
-
 		/// One module's finished file work, keyed by what it was read for.
 		struct PrimedModule {
 			uint64_t fileCount = 0;
 			uint64_t totalBytes = 0;
 			NetHash32 contentHash{};
 		};
-		std::mutex s_PrimedMutex;
-		std::map<std::string, PrimedModule> s_PrimedModules; // key: index|fileName|root
+		struct PrimedManifestStore {
+			std::mutex mutex;
+			std::map<std::string, PrimedModule> modules; // key: index|fileName|root
+			std::atomic<uint64_t> contentHashes{0};
+		};
+		// An abandoned disk job retains its cache through service and process teardown.
+		const auto s_PrimedStore = std::make_shared<PrimedManifestStore>();
 		// A future from std::async waits in its own destructor, so process exit cannot meet a joinable
 		// thread and terminate; the stop below is what keeps that wait short.
 		std::future<void> s_Priming;
 		bool s_PrimingStarted = false;
-		// Only the priming pass reads this; a caller building its own manifest is never cut short.
+		// The priming pass owns this flag; setup walks own their separate cancellation flag.
 		std::atomic<bool> s_PrimingStopRequested{false};
-
-		bool StopRequested(const std::atomic<bool>* stop) { return stop && stop->load(std::memory_order_relaxed); }
 
 		std::string PrimedKey(const NetIdentityModuleEntry& module) {
 			return std::to_string(module.index) + "|" + module.fileName + "|" + module.root;
 		}
 
-		bool HashModuleContent(const NetIdentityModuleEntry& module, const fs::path& root, NetHash32& outHash, std::string* error, const std::atomic<bool>* stop = nullptr) {
+		bool HashModuleContent(const NetIdentityModuleEntry& module, const fs::path& root, NetHash32& outHash, std::string* error, std::atomic<uint64_t>& contentHashes, const std::atomic<bool>* stop) {
 			std::vector<ModuleFileRecord> files;
-			if (!CollectModuleFiles(root, files, error)) {
+			if (!CollectModuleFiles(root, files, error, stop)) {
 				return false;
 			}
-			++s_ModuleContentHashes;
+			++contentHashes;
 
 			CanonicalHasher hasher;
 			hasher.UpdateLine("NetIdentityModuleContent/v1");
@@ -342,7 +354,7 @@ namespace RTE {
 				}
 				AppendField(hasher, "file.path", file.relativePath);
 				AppendInt(hasher, "file.size", file.size);
-				if (!ReadFileIntoHasher(file.absolutePath, hasher, error)) {
+				if (!ReadFileIntoHasher(file.absolutePath, hasher, error, stop)) {
 					return false;
 				}
 			}
@@ -536,12 +548,9 @@ namespace RTE {
 		return true;
 	}
 
-	// The walk itself. `stop` is the priming pass's own flag and nothing else's: a caller building its
-	// own manifest passes nullptr and is never cut short.
-	static bool WalkManifestModules(NetIdentityManifest& manifest, std::string* error, const NetIdentityBuildOptions& options, const std::atomic<bool>* stop) {
+	// The walk uses captured inputs and an owned cache; cancellation never leaves a partial module cached.
+	static bool WalkManifestModules(NetIdentityManifest& manifest, std::string* error, const NetIdentityBuildOptions& options, const std::atomic<bool>* stop, const std::shared_ptr<PrimedManifestStore>& store, const std::string& workingDirectory) {
 		const auto started = std::chrono::steady_clock::now();
-		// The working directory is fixed at startup, so the file work below reads nothing live.
-		const std::string workingDirectory = System::GetWorkingDirectory();
 		for (NetIdentityModuleEntry& module : manifest.modules) {
 			if (StopRequested(stop)) {
 				if (error) *error = "manifest priming stopped before " + module.fileName;
@@ -551,8 +560,8 @@ namespace RTE {
 			// modules do not change under a running game, and the disk walk is what stalls the menu.
 			bool primed = false;
 			{
-				std::lock_guard<std::mutex> lock(s_PrimedMutex);
-				if (const auto found = s_PrimedModules.find(PrimedKey(module)); found != s_PrimedModules.end()) {
+				std::lock_guard<std::mutex> lock(store->mutex);
+				if (const auto found = store->modules.find(PrimedKey(module)); found != store->modules.end()) {
 					module.fileCount = found->second.fileCount;
 					module.totalBytes = found->second.totalBytes;
 					module.contentHash = found->second.contentHash;
@@ -562,7 +571,7 @@ namespace RTE {
 			if (!primed) {
 				const fs::path rootAbsolute = fs::path(workingDirectory) / fs::path(module.root);
 				std::vector<ModuleFileRecord> files;
-				if (!CollectModuleFiles(rootAbsolute, files, error)) {
+				if (!CollectModuleFiles(rootAbsolute, files, error, stop)) {
 					return false;
 				}
 				module.fileCount = static_cast<uint64_t>(files.size());
@@ -570,12 +579,13 @@ namespace RTE {
 				for (const ModuleFileRecord& file : files) {
 					module.totalBytes += file.size;
 				}
-				if (!HashModuleContent(module, rootAbsolute, module.contentHash, error, stop)) {
+				if (!HashModuleContent(module, rootAbsolute, module.contentHash, error, store->contentHashes, stop)) {
 					return false;
 				}
 				// Only a module whose whole hash finished reaches the store.
-				std::lock_guard<std::mutex> lock(s_PrimedMutex);
-				s_PrimedModules[PrimedKey(module)] = {module.fileCount, module.totalBytes, module.contentHash};
+				std::lock_guard<std::mutex> lock(store->mutex);
+				if (StopRequested(stop)) return false;
+				store->modules[PrimedKey(module)] = {module.fileCount, module.totalBytes, module.contentHash};
 			}
 
 			const std::string zipCandidate = module.root + ".zip";
@@ -593,8 +603,47 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetIdentity::CompleteManifestFromInputs(NetIdentityManifest& manifest, std::string* error, NetIdentityBuildOptions options) {
-		return WalkManifestModules(manifest, error, options, nullptr);
+	bool NetIdentity::CompleteManifestFromInputs(NetIdentityManifest& manifest, std::string* error, NetIdentityBuildOptions options, const std::atomic<bool>* cancelRequested) {
+		const auto store = s_PrimedStore;
+		const std::string workingDirectory = System::GetWorkingDirectory();
+		if (!cancelRequested) return WalkManifestModules(manifest, error, options, nullptr, store, workingDirectory);
+		if (StopRequested(cancelRequested)) {
+			if (error) *error = "manifest walk cancelled";
+			return false;
+		}
+		struct Result { NetIdentityManifest manifest; std::string error; bool ok = false; };
+		const auto stop = std::make_shared<std::atomic<bool>>(false);
+		// The disk task owns every input, result and lifetime. It never borrows this caller's
+		// manifest, error string or cancellation flag, so a stopped session can leave it behind.
+		std::packaged_task<Result()> task([work = manifest, options = std::move(options), store, workingDirectory, stop]() mutable {
+			Result result;
+			result.ok = WalkManifestModules(work, &result.error, options, stop.get(), store, workingDirectory);
+			result.manifest = std::move(work);
+			return result;
+		});
+		auto finished = task.get_future();
+		std::thread walk(std::move(task));
+		while (finished.wait_for(std::chrono::milliseconds(10)) != std::future_status::ready) {
+			if (StopRequested(cancelRequested)) {
+				stop->store(true, std::memory_order_relaxed);
+				walk.detach(); // A slow filesystem operation must not extend session shutdown.
+				if (error) *error = "manifest walk cancelled";
+				return false;
+			}
+		}
+		walk.join(); // Ready means all disk work is over; only the owned task is being released.
+		try {
+			Result result = finished.get();
+			if (!result.ok || StopRequested(cancelRequested)) {
+				if (error) *error = StopRequested(cancelRequested) ? "manifest walk cancelled" : result.error;
+				return false;
+			}
+			manifest = std::move(result.manifest);
+			return true;
+		} catch (const std::exception& failure) {
+			if (error) *error = failure.what();
+			return false;
+		}
 	}
 
 	void NetIdentity::PrimeManifest() {
@@ -606,10 +655,10 @@ namespace RTE {
 		// The latch is set only once there is a pass to latch: a failed capture must be retryable.
 		if (!CaptureManifestInputs(*inputs, nullptr, options)) return;
 		s_PrimingStarted = true;
-		s_Priming = std::async(std::launch::async, [inputs, options]() {
+		s_Priming = std::async(std::launch::async, [inputs, options, store = s_PrimedStore, workingDirectory = System::GetWorkingDirectory()]() {
 			std::string error;
 			NetIdentityManifest work = *inputs;
-			if (!WalkManifestModules(work, &error, options, &s_PrimingStopRequested)) {
+			if (!WalkManifestModules(work, &error, options, &s_PrimingStopRequested, store, workingDirectory)) {
 				// A worker thread: the whole line under the print lock, never formatted output racing the main thread's.
 				System::PrintDiagnosticLine("[net-identity] manifest priming stopped: " + error);
 			}
@@ -633,12 +682,12 @@ namespace RTE {
 		if (s_Priming.valid()) s_Priming.wait();
 	}
 
-	uint64_t NetIdentity::ModuleContentHashCount() { return s_ModuleContentHashes.load(); }
+	uint64_t NetIdentity::ModuleContentHashCount() { return s_PrimedStore->contentHashes.load(); }
 
 	void NetIdentity::DropPrimedManifest() {
 		StopManifestPriming();
-		std::lock_guard<std::mutex> lock(s_PrimedMutex);
-		s_PrimedModules.clear();
+		std::lock_guard<std::mutex> lock(s_PrimedStore->mutex);
+		s_PrimedStore->modules.clear();
 	}
 
 	bool NetIdentity::BuildCurrentManifest(NetIdentityManifest& outManifest, std::string* error, NetIdentityBuildOptions options) {
