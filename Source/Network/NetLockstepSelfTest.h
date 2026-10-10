@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 namespace RTE {
 
 	class NetLockstepSelfTest {
@@ -18,6 +20,7 @@ namespace RTE {
 		static int RunSeatSuccession();
 		static int RunSeatAdmission();
 		static int RunRecoveryAfterReclaim();
+		static bool CheckSessionRecoveryGuard(unsigned arm, std::string* error);
 	};
 
 } // namespace RTE

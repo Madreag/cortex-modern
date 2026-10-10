@@ -1,5 +1,6 @@
 #include "NetReplayTestUtils.h"
 #include "NetLockstepSelfTest.h"
+#include <SDL3/SDL_stdinc.h>
 
 #include "allegro.h"
 #include "LoopbackTransport.h"
@@ -86,6 +87,204 @@
 #include <vector>
 
 namespace RTE {
+	struct SessionPlaneRecoveryTest {
+		struct Wire final : LoopbackTransport {
+			std::vector<std::vector<uint8_t>> sent;
+			bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>& bytes, std::string* = nullptr, bool* = nullptr) override {
+				sent.push_back(bytes);
+				return true;
+			}
+		};
+
+		static void Configure(NetLockstepCoordinator& peer, Wire& wire) {
+			peer.m_Config.sessionId = 0x60584422;
+			peer.m_Config.matchConfig = NetMatchConfigUtil::MakeDefault(peer.m_Config.sessionId);
+			peer.m_Config.matchConfig.peerCount = 3;
+			peer.m_Config.matchConfig.players.push_back({3, 2, false, "Third"});
+			peer.m_Config.matchConfig.successorOrder = {2, 3};
+			peer.m_Config.matchConfig.roundId = 77;
+			peer.m_Config.localPeerId = 2;
+			peer.m_Config.peerCount = 3;
+			peer.m_Config.startFrame = 1;
+			peer.m_Config.simTickMs = 1000.0 / 60;
+			peer.m_Config.migrationKey.fill(0x39);
+			peer.m_State = NetLockstepState::Running;
+			peer.m_Transport = &wire;
+			peer.m_RemotePeerIds = {1, 3};
+			peer.m_RemoteTransports = {{1, 42}};
+			peer.m_RoundId = 77;
+			peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+			peer.m_LastCompletedSimulationTick = 4422;
+			peer.m_Stats.nextFrame = 4423;
+			peer.m_MigrationPhase = NetHostMigrationPhase::Recovering;
+			peer.m_MigrationSuccessor = 2;
+			peer.m_MigrationGeneration = 1;
+			peer.m_MigrationWireRound = 77;
+			peer.m_MigrationBoundary = 6058;
+			peer.m_MigrationPeers = {{3, 43}};
+			peer.m_MigrationQuorumMask = 7;
+			peer.m_MigrationVoterMask = 6;
+			peer.m_MigrationResult = {1, 6058, 2, {2, 3}, {}, {{3, 43}}};
+			for (uint8_t id : {2, 3}) {
+				auto answer = peer.MigrationMessage(NetHostMigrationMessageType::Answer);
+				answer.senderPeerId = id;
+				peer.m_MigrationAnswers[id] = answer;
+			}
+		}
+
+		static bool Boundary(std::string* error) {
+			for (unsigned arm = 0; arm < 3; ++arm) {
+				Wire original;
+				NetLockstepCoordinator peer;
+				Configure(peer, original);
+				auto migration = std::make_unique<Wire>();
+				Wire* sent = migration.get();
+				peer.m_MigrationTransport = std::move(migration);
+				peer.m_MigrationNeedsResync = arm == 0;
+				if (arm != 0) {
+					peer.m_LastCompletedSimulationTick = 6058;
+					peer.m_Stats.nextFrame = 6059;
+				}
+				if (arm == 1) peer.m_GrantedSimulationTick = 6059;
+				if (arm != 2) peer.m_MigrationReady.insert(3);
+				peer.TickHostMigration(100);
+				for (const auto& bytes : sent->sent) {
+					NetHostMigrationMessage message;
+					if (!NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, message)) { *error = "handover emitted an undecodable packet"; return false; }
+					if (message.type == NetHostMigrationMessageType::Commit || message.type == NetHostMigrationMessageType::Rejoin) {
+						*error = "successor published authority before validating its simulation boundary";
+						return false;
+					}
+				}
+				if (peer.m_MigrationReady.contains(2) != (arm == 2)) { *error = "successor readiness did not require an applied boundary with no granted update"; return false; }
+			}
+			return true;
+		}
+
+		template<class Peer> static bool PeerBoundary(std::string* error) {
+			if constexpr (requires(Peer& peer) { peer.m_Config.peerFrameGroups; }) {
+				for (unsigned arm = 0; arm < 3; ++arm) {
+					Wire wire; Peer peer; Configure(peer, wire);
+					peer.m_Config.peerFrameGroups = true; peer.m_Config.migrationGeneration = 1;
+					peer.m_TimingNowMs = 16000; peer.m_AuthorityLastHeardMs = 0; peer.m_PeerLastHeardMs[3] = 16000;
+					peer.m_MigrationHistory[6058] = {1, 2, 3};
+					if (arm != 0) { peer.m_LastCompletedSimulationTick = 6058; peer.m_Stats.nextFrame = 6059; }
+					if (arm == 1) peer.m_GrantedSimulationTick = 6059;
+					auto proposal = peer.MigrationMessage(NetHostMigrationMessageType::Answer);
+					proposal.preparedFrame = 3; proposal.frame = 6080; proposal.boundary = 6058; proposal.completeFrom = 2;
+					proposal.successorPeerId = 2; proposal.connectedMask = 6; proposal.members = {2, 3};
+					const auto prefix = peer.PeerFramePrefix(6058); proposal.bytes.assign(prefix.begin(), prefix.end());
+					if (peer.ValidatePeerAdmin(proposal) != (arm == 2)) { *error = "the peer-group successor did not validate its applied boundary before voting"; return false; }
+				}
+			}
+			return true;
+		}
+
+		static bool Leave(std::string* error) {
+			for (auto phase : {NetHostMigrationPhase::Contacting, NetHostMigrationPhase::Recovering, NetHostMigrationPhase::WaitingForReady, NetHostMigrationPhase::ResyncAdmission}) {
+				Wire wire;
+				NetLockstepCoordinator peer;
+				Configure(peer, wire);
+				peer.m_MigrationPhase = phase;
+				peer.m_MigrationNotice = true;
+				peer.m_DeferredMigrationMs = 100;
+				peer.Leave("leave during handover");
+				if (peer.GetState() != NetLockstepState::Stopped || peer.IsMigrating() || peer.m_MigrationPhase != NetHostMigrationPhase::None ||
+				    peer.m_MigrationNotice || peer.m_DeferredMigrationMs.has_value()) {
+					*error = "Leave retained a migration phase that suppresses the session exit";
+					return false;
+				}
+			}
+			return true;
+		}
+
+		static bool AuthenticatedSilence(std::string* error) {
+			Wire wire;
+			NetLockstepCoordinator peer;
+			Configure(peer, wire);
+			peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_AuthorityLastHeardMs = 100;
+			peer.m_PeerLastHeardMs[1] = peer.m_PeerLinkHeardMs[1] = peer.m_Stats.peers[1].lastHeardMs = 100;
+			peer.HandleEvent({NetTransportEventType::PacketReceived, 42, NetTransportLane::ControlReliable, {0, 0, 0, 0}, {}}, 500);
+			if (peer.m_AuthorityLastHeardMs != 100 || peer.LastAuthenticatedTraffic(1) != 100 || !peer.IsFailed()) { *error = "undecodable traffic renewed an authenticated silence deadline or escaped protocol rejection"; return false; }
+			NetLockstepCoordinator valid;
+			Configure(valid, wire);
+			valid.m_MigrationPhase = NetHostMigrationPhase::None;
+			valid.m_AuthorityLastHeardMs = 100;
+			NetLockstepChecksum checksum;
+			checksum.senderPeerId = 1; checksum.frame = 4422; checksum.roundId = 77;
+			std::vector<uint8_t> bytes;
+			if (!NetLockstepCodec::Encode({checksum}, bytes)) { *error = "could not encode the authenticated-traffic control"; return false; }
+			valid.HandleEvent({NetTransportEventType::PacketReceived, 42, NetTransportLane::ControlReliable, std::move(bytes), {}}, 500);
+			if (valid.m_AuthorityLastHeardMs != 500 || valid.IsFailed()) { *error = "a decoded packet from the bound host did not renew its silence deadline"; return false; }
+			return true;
+		}
+
+		static bool AppliedInputPrefix(std::string* error) {
+			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+			peer.m_Config.peerFrameGroups = true;
+			NetLockstepReadyFrame ready; ready.frame = 4422; ready.localPeerId = 2; ready.authorityPeerId = ready.updateAuthorityPeerId = 1;
+			ready.hasLocalInput = true; ready.localFrames.push_back(ControllerFrame{});
+			peer.RetainMigrationFrame(ready);
+			const auto prepared = peer.PeerFramePrefix(ready.frame);
+			ready.localFrames.front().analogMoveX = 1; peer.m_LastDeliveredFrame = ready.frame;
+			peer.RememberAppliedFrameInputs(ready);
+			NetLockstepCoordinator replay; Configure(replay, wire); replay.m_Playback = true;
+			replay.RetainMigrationFrame(ready);
+			if (replay.PeerAppliedFramePrefix(ready.frame) != peer.PeerAppliedFramePrefix(ready.frame)) {
+				*error = "the private replay lost the completed boundary needed for a certified return"; return false;
+			}
+			if (peer.PeerFramePrefix(ready.frame) != prepared || peer.PeerAppliedFramePrefix(ready.frame) == prepared) {
+				*error = "filling applied inputs changed the agreed frame prefix or lost the replay record"; return false;
+			}
+			peer.SendPeerFrameWitness(ready.frame);
+			const auto& witness = peer.m_PeerFrameWitnesses.at(ready.frame).at(2);
+			if (witness.bytes.size() != 64 || !std::equal(prepared.begin(), prepared.end(), witness.bytes.begin() + 32)) {
+				*error = "the committed tail witness lost the immutable input prefix"; return false;
+			}
+			return true;
+		}
+
+		static bool LinkQuality(std::string* error) {
+			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+			peer.m_Config.peerFrameGroups = true; peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_Config.inputDelayFrames = 12; peer.m_Config.peerInputDelayFrames = {{1, 12}, {2, 12}, {3, 12}};
+			for (uint8_t id: {1, 2, 3}) {
+				peer.m_Stats.peers[id].pingMs = 97; peer.m_Stats.peers[id].jitterMs = 103;
+				peer.m_PeerLastHeardMs[id] = peer.m_PeerLinkHeardMs[id] = 20000;
+			}
+			for (uint8_t id: {1, 2, 3}) {
+				const auto good = peer.LinkQualityForSeat(id, 20000);
+				if (good.state != NetLinkQuality::State::Good || good.rttMs != 97 || good.jitterMs != 103 || good.delayFrames != 12) { *error = "measured quality lost a sender's own timing"; return false; }
+				peer.m_LastDelayResizeMs[id] = 20000;
+				if (peer.LinkQualityForSeat(id, 21000).state != NetLinkQuality::State::Marginal) { *error = "a recent delay resize was not marginal"; return false; }
+				peer.m_LastDelayResizeMs.erase(id); peer.m_PeerArrivalLatencyMs[id] = {20000, 98};
+				if (peer.LinkQualityForSeat(id, 20000).state != NetLinkQuality::State::Marginal) { *error = "arrival inside the jitter reserve was not marginal"; return false; }
+				peer.m_PeerArrivalLatencyMs.erase(id); peer.m_LastSubstituteCommittedMs[id] = 20000;
+				if (peer.LinkQualityForSeat(id, 21000).state != NetLinkQuality::State::Substituting) { *error = "a committed substitute was not reported"; return false; }
+				peer.m_LastSubstituteCommittedMs.erase(id);
+			}
+			peer.m_PeerLastHeardMs.clear(); peer.m_PeerLinkHeardMs.clear();
+			for (uint8_t id: {1, 2, 3}) if (peer.LinkQualityForSeat(id, 25000).state != NetLinkQuality::State::Lost) { *error = "zero authenticated traffic was not lost, including our own link"; return false; }
+			struct SavedLever {
+				std::optional<std::string> value;
+				~SavedLever() { if (value) SDL_setenv_unsafe("CC_TEST_LINK_QUALITY", value->c_str(), 1); else SDL_unsetenv_unsafe("CC_TEST_LINK_QUALITY"); }
+			} saved;
+			if (const char* prior = std::getenv("CC_TEST_LINK_QUALITY")) saved.value = prior;
+			SDL_setenv_unsafe("CC_TEST_LINK_QUALITY", "1:Good:21;2:Marginal:97;3:Substituting:250;4:Lost:0", 1);
+			const std::array states{NetLinkQuality::State::Good, NetLinkQuality::State::Marginal, NetLinkQuality::State::Substituting, NetLinkQuality::State::Lost};
+			const std::array<uint32_t, 4> rtts{21, 97, 250, 0};
+			for (uint8_t id = 1; id <= 4; ++id) {
+				const auto forced = NetLinkQualityForSeat(id);
+				if (forced.state != states[id - 1] || forced.rttMs != rtts[id - 1]) { *error = "the public quality lever did not override measurements first"; return false; }
+			}
+			return true;
+		}
+	};
+
+	bool NetLockstepSelfTest::CheckSessionRecoveryGuard(unsigned arm, std::string* error) {
+		return arm == 0 ? SessionPlaneRecoveryTest::Boundary(error) && SessionPlaneRecoveryTest::PeerBoundary<NetLockstepCoordinator>(error) : arm == 1 ? SessionPlaneRecoveryTest::Leave(error) : SessionPlaneRecoveryTest::AuthenticatedSilence(error);
+	}
 
 	// Return/recording fixtures begin with a real absence in their simulated clock.
 	// The subject sends no events for five seconds. Keep every later timestamp
@@ -28942,6 +29141,11 @@ namespace {
 			rowsPassed = false;
 		};
 		row([](std::string* why) { return TestOwnerSilenceThreshold(0, why); }, "client_2s_bridge_survivor_tick_bound_automatic_return");
+		row(&SessionPlaneRecoveryTest::Boundary, "successor_refuses_unvalidated_boundary_before_publish");
+		row(&SessionPlaneRecoveryTest::Leave, "leave_clears_every_live_handover_phase");
+		row(&SessionPlaneRecoveryTest::AuthenticatedSilence, "undecodable_packet_does_not_refresh_authenticated_silence");
+		row(&SessionPlaneRecoveryTest::LinkQuality, "measured_local_and_remote_link_quality_and_override");
+		row(&SessionPlaneRecoveryTest::AppliedInputPrefix, "applied_inputs_preserve_the_agreed_prefix_and_tail_witness");
 		row([](std::string* why) { return TestOwnerSilenceThreshold(1, why); }, "client_6s_silence_silent_bridge_then_visible_held");
 		row([](std::string* why) { return TestOwnerSilenceThreshold(2, why); }, "client_loop_10s_keepalive_bridge_automatic_return");
 		row([](std::string* why) { return TestOwnerSilenceThreshold(3, why); }, "host_sim_3s_plane_bridge_survivor_tick_bound_automatic_return");

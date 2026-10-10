@@ -11,6 +11,7 @@
 #include "NetLockstep.h"
 #include "NetMatchRunner.h"
 #include "NetParticipantCrypto.h"
+#include "NetPeerSessionWire.h"
 #include "NetSession.h"
 #include "System/FaultInjection.h"
 #include "System/System.h"
@@ -1080,6 +1081,107 @@ namespace RTE {
 				*error = "one peer timeout did not preserve the ready peer";
 				return false;
 			}
+			return true;
+		}
+
+		template<class Session>
+		void InstallHandoverClassifier(Session& session, const NetHash32& key, uint64_t sessionId) {
+			const std::function<bool(const std::vector<uint8_t>&)> validator = [key, sessionId](const std::vector<uint8_t>& bytes) {
+				NetHostMigrationMessage message;
+				return NetHostMigrationCodec::LooksLikePacket(bytes) && NetHostMigrationCodec::Decode(bytes, key, message) && message.sessionId == sessionId;
+			};
+			if constexpr (requires { session.SetAuxiliaryPacketValidator(validator); }) session.SetAuxiliaryPacketValidator(validator);
+		}
+
+		bool TestAuthenticatedHandoverDoesNotRejectAdmission(std::string* error) {
+			for (unsigned arm = 0; arm < 4; ++arm) {
+				const uint16_t port = static_cast<uint16_t>(42240 + arm);
+				LoopbackTransport hostWire, clientWire;
+				NetSession host, client;
+				const auto config = MakeConfig(port, 901, "Host");
+				if (!StartPair(port, host, client, hostWire, clientWire, config, MakeConfig(port, 902, "Returner"), error) ||
+				    !DrivePair(hostWire, clientWire, host, client, [&] { return host.IsReady() && client.IsReady(); }, error)) return false;
+				const NetHash32 key = MakeHash(17);
+				InstallHandoverClassifier(host, key, config.sessionId);
+				InstallHandoverClassifier(client, key, config.sessionId);
+				if (arm == 3 && (!StartPair(port, host, client, hostWire, clientWire, config, MakeConfig(port, 902, "Returner"), error) ||
+				    !DrivePair(hostWire, clientWire, host, client, [&] { return host.IsReady() && client.IsReady(); }, error))) return false;
+				NetHostMigrationMessage message;
+				message.type = NetHostMigrationMessageType::Hello;
+				message.sessionId = config.sessionId; message.roundId = 77; message.generation = 1;
+				message.senderPeerId = 2; message.successorPeerId = 1; message.configHash = MakeHash(65);
+				std::vector<uint8_t> bytes;
+				if (!NetHostMigrationCodec::Encode(message, key, bytes)) { *error = "cannot encode the shared-wire handover fixture"; return false; }
+				if (arm == 1) bytes.back() ^= 1;
+				if (arm == 2) {
+					message.roundId = 76;
+					if (!NetHostMigrationCodec::Encode(message, key, bytes)) return false;
+				}
+				const auto before = host.GetStats();
+				if (!clientWire.Send(1, NetTransportLane::ControlReliable, bytes, error)) return false;
+				host.Tick(100);
+				if (arm == 1) {
+					if (host.GetStats().malformedMessages != before.malformedMessages + 1 || !host.HasReject() || host.GetRejectReason() != NetRejectReason::MalformedMessage) {
+						*error = "a damaged handover MAC escaped the malformed-packet oracle"; return false;
+					}
+				} else if (!host.IsReady() || host.HasReject() || host.GetStats().malformedMessages != before.malformedMessages ||
+				           host.GetStats().ignoredPhasePackets != before.ignoredPhasePackets + 1) {
+					*error = "authenticated handover traffic rejected a returning seat with BadMagic"; return false;
+				}
+				if (arm != 1) {
+					message.senderPeerId = 1;
+					const auto clientBefore = client.GetStats();
+					if (!NetHostMigrationCodec::Encode(message, key, bytes) || !hostWire.Send(1, NetTransportLane::ControlReliable, bytes, error)) return false;
+					client.Tick(100);
+					if (!client.IsReady() || client.HasReject() || client.GetStats().malformedMessages != clientBefore.malformedMessages ||
+					    client.GetStats().ignoredPhasePackets != clientBefore.ignoredPhasePackets + 1) {
+						*error = "authenticated handover traffic rejected the client's recovery admission with BadMagic"; return false;
+					}
+				}
+			}
+			std::cout << "[net-session-selftest] PASS authenticated_handover_preserves_admission_and_rejects_bad_mac" << std::endl;
+			return true;
+		}
+
+		bool TestRetainedSessionWire(std::string* error) {
+			LoopbackTransport nativeHost, nativeClient;
+			if (!nativeHost.StartHost(42248, error) || !nativeClient.Connect("loopback", 42248, error)) return false;
+			std::array<NetLockstepCoordinator, 2> peers;
+			std::array<std::shared_ptr<NetPeerSessionLinks>, 2> links{std::make_shared<NetPeerSessionLinks>(), std::make_shared<NetPeerSessionLinks>()};
+			for (uint8_t id = 1; id <= 2; ++id) {
+				NetLockstepConfig config; config.matchConfig = NetMatchConfigUtil::MakeDefault(0x42248);
+				config.sessionId = config.matchConfig.sessionId; config.localPeerId = id; config.peerCount = 2; config.roundId = id == 1 ? 77 : 0;
+				config.startFrame = 1; config.inputDelayFrames = 1; config.peerInputDelayFrames = {{1, 1}, {2, 1}};
+				config.peerFrameGroups = config.substituteSlowPeers = true; config.peerSessionLinks = links[id - 1]; config.migrationKey.fill(0x39);
+				config.remoteTransportPeerIds = {{static_cast<uint8_t>(3 - id), 1}};
+				if (!peers[id - 1].Start(id == 1 ? nativeHost : nativeClient, config, error)) return false;
+			}
+			for (uint64_t now = 0; now < 10; ++now) { peers[0].Tick(now); peers[1].Tick(now); }
+			if (!peers[0].IsRunning() || !peers[1].IsRunning()) { *error = "the retained wire fixture never started"; return false; }
+			NetPeerSessionWire host(links[0]), client(links[1]);
+			if (!host.StartHost(0, error) || !client.StartHost(0, error)) return false;
+			std::vector<uint8_t> first, second;
+			if (!NetProtocol::Encode({1, 0, NetPing{17, 10}}, first) || !NetProtocol::Encode({2, 0, NetPing{18, 10}}, second) ||
+			    !host.Send(1, NetTransportLane::ControlReliable, first, error) || !host.Send(1, NetTransportLane::ControlReliable, second, error)) return false;
+			std::vector<std::vector<uint8_t>> received;
+			for (uint64_t now = 10; now < 150; ++now) {
+				peers[0].Tick(now); peers[1].Tick(now);
+				for (const auto& event: client.PollEvents()) if (event.type == NetTransportEventType::PacketReceived) received.push_back(event.bytes);
+			}
+			if (received != std::vector<std::vector<uint8_t>>{first, second} || links[0]->pendingBytes != 0) { *error = "retained session messages were reordered, duplicated or left unacknowledged"; return false; }
+			host.Stop(); client.Stop();
+			if (!nativeHost.IsPeerConnected(1) || !nativeClient.IsPeerConnected(1)) { *error = "a session restart closed a frame link"; return false; }
+			if (!host.StartHost(0, error) || !client.Connect("retained", 0, error) || !host.Send(1, NetTransportLane::ControlReliable, first, error)) return false;
+			const auto connected = client.PollEvents();
+			if (connected.size() != 1 || connected.front().type != NetTransportEventType::PeerConnected || connected.front().peerId != 1) { *error = "the rematch did not attach its authenticated host route"; return false; }
+			peers[0].Complete("round ended"); peers[1].Complete("round ended");
+			received.clear();
+			for (uint64_t now = 150; now < 300; ++now) {
+				peers[0].Tick(now); peers[1].Tick(now);
+				for (const auto& event: client.PollEvents()) if (event.type == NetTransportEventType::PacketReceived) received.push_back(event.bytes);
+			}
+			if (received != std::vector<std::vector<uint8_t>>{first} || !nativeHost.IsPeerConnected(1) || links[0]->pendingBytes != 0) { *error = "the ended round stopped the rematch session wire"; return false; }
+			std::cout << "[net-session-selftest] PASS retained_links_order_ack_restart_and_completed_round" << std::endl;
 			return true;
 		}
 
@@ -2354,6 +2456,8 @@ namespace RTE {
 		if (!TestDuplicateNonce(&error)) return fail(error);
 		if (!TestPeerTimeoutDoesNotStopHost(&error)) return fail(error);
 		if (!TestMalformedHandshake(&error)) return fail(error);
+		if (!TestAuthenticatedHandoverDoesNotRejectAdmission(&error)) return fail(error);
+		if (!TestRetainedSessionWire(&error)) return fail(error);
 		if (!TestTimeout(&error)) return fail(error);
 		if (!TestARejoinPhaseSuspendsOnlyItsOwnSilence(&error)) return fail(error);
 		if (!TestARejoinPhaseEndsAtItsCeiling(&error)) return fail(error);
