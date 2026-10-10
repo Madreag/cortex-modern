@@ -207,6 +207,7 @@ void SettingsMan::Clear() {
 	m_NetworkDiagnosticsDirectory.clear();
 	m_NetworkMatchStatusMode = NetworkMatchStatusMode::Auto;
 	m_NetworkShowDiagnostics = false;
+	m_NetworkConnectionIndicator = true;
 	m_NetworkSlowPlayerBoundTicks = 3;
 	m_NetworkSlowPlayerPolicy = NetworkSlowPlayerPolicy::Substitute;
 	m_NetworkChatDefaultScope = NetworkChatDefaultScope::All;
@@ -426,6 +427,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("NetworkDisplayName", { SetNetworkDisplayName(reader.ReadPropValue()); });
 	MatchProperty("NetworkMatchStatusMode", { m_NetworkMatchStatusMode = ParseMatchStatusMode(reader.ReadPropValue()); });
 	MatchProperty("NetworkShowDiagnostics", { reader >> m_NetworkShowDiagnostics; });
+	MatchProperty("NetworkConnectionIndicator", { reader >> m_NetworkConnectionIndicator; });
 	MatchProperty("NetworkSlowPlayerBoundTicks", { int ticks = 3; reader >> ticks; SetNetworkSlowPlayerBoundTicks(ticks); });
 	MatchProperty("NetworkSlowPlayerPolicy", { m_NetworkSlowPlayerPolicy = ParseSlowPolicy(reader.ReadPropValue()); });
 	MatchProperty("NetworkToastsEnabled", { reader >> m_NetworkToastsEnabled; });
@@ -791,6 +793,7 @@ void SettingsMan::WriteNetworkPreferences(Writer& writer) const {
 	writer.NewPropertyWithValue("NetworkDisplayName", m_NetworkDisplayName);
 	writer.NewPropertyWithValue("NetworkMatchStatusMode", MatchStatusText(m_NetworkMatchStatusMode));
 	writer.NewPropertyWithValue("NetworkShowDiagnostics", m_NetworkShowDiagnostics);
+	writer.NewPropertyWithValue("NetworkConnectionIndicator", m_NetworkConnectionIndicator);
 	writer.NewPropertyWithValue("NetworkSlowPlayerBoundTicks", m_NetworkSlowPlayerBoundTicks);
 	writer.NewPropertyWithValue("NetworkSlowPlayerPolicy", SlowPolicyText(m_NetworkSlowPlayerPolicy));
 	writer.NewPropertyWithValue("NetworkToastsEnabled", m_NetworkToastsEnabled);

@@ -1197,6 +1197,8 @@ namespace RTE {
 		void DestroySpeculativeSpawn(MovableObject* mo);
 		void DisposeSpeculativeSpawns();
 		void TakePreviewSpawn(MovableObject* particle);
+		void CheckEffectsLingerForSelfTest();
+		void CheckPreviewEffectsLingerForSelfTest();
 		/// Piles a resting particle the way its material piles and draws it into the terrain; the world's settle and the preview's share it.
 		void SettleIntoTerrain(MovableObject* particle);
 		struct PreviewGhost {
@@ -1215,6 +1217,7 @@ namespace RTE {
 		void AdoptPreviewGhost(const PreviewEventLedger::Key& key, MovableObject* adoptee, uint64_t committedTick);
 		/// Puts a held adoptee back on the frame, because the ghost standing in for it is going away.
 		void ReleaseAdoptionHold(PreviewGhost& ghost);
+		bool PreviewGhostExpired(const PreviewGhost& ghost, uint64_t committedTick) const;
 		std::vector<PreviewGhost> m_PreviewGhosts;
 		uint64_t m_PreviewGhostPeak = 0;
 		PreviewSwap m_LastPreviewSwap;
@@ -1286,6 +1289,7 @@ namespace RTE {
 		bool m_MOSubtractionEnabled;
 
 		unsigned int m_SimUpdateFrameNumber;
+		bool m_LockstepPostEffectsPresented = false;
 		uint64_t m_ValueObservationsRejected;
 
 		std::vector<long> m_LastChecksumCensus; //!< The unique ids the last tick-end checksum census covered.

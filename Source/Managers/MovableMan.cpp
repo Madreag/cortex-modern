@@ -2106,6 +2106,7 @@ void MovableMan::Clear() {
 	m_MOSubtractionEnabled = true;
 	// HitWhatMOID / HitWhatTerrMaterial compare against this each tick; it's otherwise only incremented.
 	m_SimUpdateFrameNumber = 0;
+	m_LockstepPostEffectsPresented = false;
 	m_ValueObservationsRejected = 0;
 }
 
@@ -3396,23 +3397,56 @@ void MovableMan::ReposePreviewGhost(const PreviewEventLedger::Key& key, const Mo
 }
 
 void MovableMan::AdoptPreviewGhost(const PreviewEventLedger::Key& key, MovableObject* adoptee, uint64_t committedTick) {
+	size_t match = m_PreviewGhosts.size();
 	for (size_t index = 0; index < m_PreviewGhosts.size(); ++index) {
-		PreviewGhost& ghost = m_PreviewGhosts[index];
-		if (!SameGhostKey(ghost.key, key)) {
-			continue;
+		if (SameGhostKey(m_PreviewGhosts[index].key, key)) {
+			match = index;
+			break;
 		}
-		// Nothing to lead with: the ghost is at or behind the spawn, so the pixel changes hands this tick.
-		if (!adoptee || !ghost.object || ghost.poseTick <= committedTick) {
-			DropPreviewGhost(key);
-			return;
+	}
+	// The ledger accepts a unique emission one tick either side, so its ghost follows the same handoff.
+	if (match == m_PreviewGhosts.size()) {
+		for (size_t index = 0; index < m_PreviewGhosts.size(); ++index) {
+			const PreviewGhost& ghost = m_PreviewGhosts[index];
+			const auto& candidate = ghost.key;
+			if (ghost.adopted || candidate.kind != key.kind || candidate.emitterUID != key.emitterUID ||
+			    candidate.presetHash != key.presetHash || candidate.seq != key.seq ||
+			    !(candidate.tick + 1 == key.tick || candidate.tick == key.tick + 1)) {
+				continue;
+			}
+			if (match != m_PreviewGhosts.size()) {
+				return;
+			}
+			match = index;
 		}
-		ghost.adopted = true;
-		ghost.adoptionTick = committedTick;
-		ghost.adoptee = adoptee;
-		adoptee->HoldForPreviewAdoption(key, ghost.poseTick);
+	}
+	if (match == m_PreviewGhosts.size()) {
 		return;
 	}
+	PreviewGhost& ghost = m_PreviewGhosts[match];
+	if (!adoptee || !ghost.object || ghost.poseTick <= committedTick) {
+		DropPreviewGhost(ghost.key);
+		return;
+	}
+	ghost.adopted = true;
+	ghost.adoptionTick = committedTick;
+	ghost.adoptee = adoptee;
+	adoptee->HoldForPreviewAdoption(ghost.key, ghost.poseTick);
 }
+
+bool MovableMan::PreviewGhostExpired(const PreviewGhost& ghost, uint64_t committedTick) const {
+	const MovableObject* object = ghost.object;
+	if (!object || object->IsSetToDelete()) {
+		return true;
+	}
+	// A preview can be born ahead of the committed clock, so age stays signed until that clock reaches it.
+	const bool lifetimeEnded = object->GetLifetime() &&
+		static_cast<double>(g_TimerMan.GetSimTimeTicks() - object->GetAgeTimerStart()) * 1000.0 /
+		g_TimerMan.GetTicksPerSecond() > object->GetLifetime();
+	const uint64_t maxTicks = static_cast<uint64_t>(std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks()));
+	return lifetimeEnded || (committedTick > ghost.key.tick && committedTick - ghost.key.tick > maxTicks);
+}
+
 
 void MovableMan::ReleaseAdoptionHold(PreviewGhost& ghost) {
 	MovableObject* adoptee = const_cast<MovableObject*>(ghost.adoptee.get());
@@ -3427,11 +3461,11 @@ void MovableMan::ResolvePreviewAdoptions(uint64_t committedTick) {
 	for (size_t index = 0; index < m_PreviewGhosts.size();) {
 		PreviewGhost& ghost = m_PreviewGhosts[index];
 		const MovableObject* adoptee = ghost.adoptee.get();
-		if (!ghost.adopted || (adoptee && committedTick < ghost.poseTick)) {
+		if (!PreviewGhostExpired(ghost, committedTick) && (!ghost.adopted || (adoptee && committedTick < ghost.poseTick))) {
 			++index;
 			continue;
 		}
-		if (adoptee && ghost.object) {
+		if (adoptee && ghost.object && ghost.adopted && !PreviewGhostExpired(ghost, committedTick)) {
 			m_LastPreviewSwap.tick = committedTick;
 			m_LastPreviewSwap.adoptionTick = ghost.adoptionTick;
 			m_LastPreviewSwap.leadTicks = ghost.poseTick - ghost.adoptionTick;
@@ -6976,7 +7010,10 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	return passed;
 }
 
+#include "LocalPredictionEffectsLingerTest.h"
+
 void MovableMan::Update() {
+	CheckEffectsLingerForSelfTest();
 	ZoneScoped;
 
 	// Don't update if paused
@@ -6987,9 +7024,11 @@ void MovableMan::Update() {
 	m_SimUpdateFrameNumber++;
 
 	// If this is the first sim update since a drawn one, then clear the post effects
-	if (g_TimerMan.SimUpdatesSinceDrawn() == 0) {
+	if (g_TimerMan.SimUpdatesSinceDrawn() == 0 ||
+	    (m_LockstepPostEffectsPresented && (ScenarioRunner::IsLockstepControllerSyncActive() || s_EffectsLingerLockstep))) {
 		g_PostProcessMan.ClearScenePostEffects();
 	}
+	m_LockstepPostEffectsPresented = false;
 
 	// Reset the draw HUD roster line settings
 	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
@@ -8030,6 +8069,10 @@ void MovableMan::CompleteQueuedMOIDDrawings() {
 
 void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 	ScopedRenderRNG renderRNG;
+	// A lockstep wait draws while the timer still owes updates, so this draw closes the glow frame.
+	if (ScenarioRunner::IsLockstepControllerSyncActive() || s_EffectsLingerLockstep) {
+		m_LockstepPostEffectsPresented = true;
+	}
 	ZoneScoped;
 
 	// Draw objects to accumulation bitmap, in reverse order so actors appear on top.
@@ -8043,7 +8086,7 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 			}
 		}
 		for (const PreviewGhost& ghost: m_PreviewGhosts) {
-			if (ghost.object) {
+			if (!PreviewGhostExpired(ghost, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()))) {
 				ghost.object->Draw(pTargetBitmap, targetPos);
 			}
 		}

@@ -1048,6 +1048,7 @@ namespace RTE {
 		NetMatchConfig next = m_Config.matchConfig;
 		if (next.peerInputDelayFrames.empty()) next.peerInputDelayFrames.resize(next.peerCount, std::max<uint16_t>(1, next.inputDelayFrames));
 		bool changed = false;
+		uint16_t slowestRemoteDelay = 0;
 		for (const auto& [peer, transport]: m_RemoteTransports) {
 			if (peer == 0 || peer > next.peerCount) continue;
 			auto& sample = m_InputDelaySamples[peer];
@@ -1056,7 +1057,11 @@ namespace RTE {
 				next.peerInputDelayFrames[peer - 1] = *delay;
 				changed = true;
 			}
+			slowestRemoteDelay = std::max(slowestRemoteDelay, next.peerInputDelayFrames[peer - 1]);
 		}
+		// The host's presses cross the same links: when a link's delay grows, the host's window follows it in the same revision.
+		if (changed && next.hostPeerId > 0 && next.hostPeerId <= next.peerCount && next.peerInputDelayFrames[next.hostPeerId - 1] < slowestRemoteDelay)
+			next.peerInputDelayFrames[next.hostPeerId - 1] = slowestRemoteDelay;
 		if (!changed || next.configRevision == UINT64_MAX) return;
 		++next.configRevision;
 		(void)RepublishMatchConfig(next);
@@ -1140,6 +1145,9 @@ namespace RTE {
 				const uint16_t delay = static_cast<uint16_t>(std::min<uint32_t>(sample.RequiredFrames(g_TimerMan.GetDeltaTimeMS(), m_Config.matchConfig.inputDelayFrames) +
 				    NetMatchConfigUtil::HoldMarginFrames(m_Config.matchConfig), NetMatchConfigUtil::c_MaxInputDelayFrames));
 				delays.at(peerId - 1) = std::max(m_Config.matchConfig.inputDelayFrames, delay);
+				// The host's sender window covers the slowest link so its frames do not feed a peer's wait back into its stream.
+				const uint8_t hostPeerId = m_Config.matchConfig.hostPeerId;
+				if (hostPeerId > 0 && hostPeerId <= delays.size()) delays.at(hostPeerId - 1) = std::max(delays.at(hostPeerId - 1), delays.at(peerId - 1));
 			}
 		}
 		std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end());

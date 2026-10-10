@@ -3,6 +3,7 @@
 #include "NetMatchConfig.h"
 #include "NetMatchService.h"
 #include "NetHostOptionsText.h"
+#include "NetLinkQualityPresentation.h"
 #include "NetReconnectUx.h"
 #include "NetLockstep.h"
 #include "TelemetryBundle.h"
@@ -15,6 +16,7 @@
 #include "GUICheckbox.h"
 #include "GUIComboBox.h"
 #include "GUILabel.h"
+#include "GUISkin.h"
 #include "GUIRadioButton.h"
 #include "GUITab.h"
 #include "GUITextBox.h"
@@ -167,7 +169,8 @@ std::vector<std::string> SettingsNetworkGUI::MissingControls(GUIControlManager* 
 	    "LabelNetworkPathHorizon", "LabelNetworkPathHorizonHint", "LabelNetworkRelayHint", "RadioNetworkDelayAuto",
 	    "RadioNetworkDelayFixed", "TextNetworkAutosavesKept", "TextNetworkChatKey", "TextNetworkDiagDir", "TextNetworkDirPin",
 	    "TextNetworkDirUrl", "TextNetworkDisplayName", "TextNetworkFixedDelay", "TextNetworkIdleWait", "TextNetworkPathHorizon",
-	    "TextNetworkRelayAddress", "TextNetworkRelayPass", "TextNetworkRelayUser", "TextNetworkStunServers"};
+	    "TextNetworkRelayAddress", "TextNetworkRelayPass", "TextNetworkRelayUser", "TextNetworkStunServers",
+	    "LabelNetworkConnectionIndicator", "ComboNetworkConnectionIndicator", "LabelNetworkConnectionIndicatorHint"};
 	std::vector<std::string> missing;
 	for (const char* name : requiredControls) {
 		if (!parentControlManager->GetControl(name)) missing.emplace_back(name);
@@ -229,6 +232,13 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_StatusModeCombo->AddItem("Off");
 	m_StatusModeCombo->AddItem("When needed");
 	m_StatusModeCombo->AddItem("Always");
+	m_ConnectionIndicatorCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboNetworkConnectionIndicator"));
+	m_ConnectionIndicatorCombo->AddItem("On");
+	m_ConnectionIndicatorCombo->AddItem("Off");
+	auto* indicatorLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkConnectionIndicator"));
+	indicatorLabel->SetText(NetLinkQualityPresentation::c_ToggleTitle);
+	m_ConnectionIndicatorHint = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkConnectionIndicatorHint"));
+	m_ConnectionIndicatorHint->SetFont(m_GUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 
 	m_ChatVisibleCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkChatVisible"));
 	m_ChatSoundCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkChatSound"));
@@ -333,6 +343,8 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_PredictionCheckbox->SetCheck(g_SettingsMan.LocalPredictionEnabled());
 	m_DiagnosticsCheckbox->SetCheck(g_SettingsMan.GetNetworkShowDiagnostics());
 	m_StatusModeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkMatchStatusMode()));
+	m_ConnectionIndicatorCombo->SetSelectedIndex(g_SettingsMan.GetNetworkConnectionIndicator() ? 0 : 1);
+	m_ConnectionIndicatorHint->SetText(NetLinkQualityPresentation::ToggleHint(g_SettingsMan.GetNetworkConnectionIndicator()));
 	m_ChatVisibleCheckbox->SetCheck(g_SettingsMan.GetNetworkChatVisible());
 	m_ChatSoundCheckbox->SetCheck(g_SettingsMan.GetNetworkChatSound());
 	m_ChatNotifyCheckbox->SetCheck(g_SettingsMan.GetNetworkChatNotify());
@@ -566,6 +578,10 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		g_SettingsMan.SetNetworkShowDiagnostics(m_DiagnosticsCheckbox->GetCheck());
 	} else if (guiEvent.GetControl() == m_StatusModeCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
 		g_SettingsMan.SetNetworkMatchStatusMode(static_cast<SettingsMan::NetworkMatchStatusMode>(m_StatusModeCombo->GetSelectedIndex()));
+	} else if (guiEvent.GetControl() == m_ConnectionIndicatorCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
+		g_SettingsMan.SetNetworkConnectionIndicator(m_ConnectionIndicatorCombo->GetSelectedIndex() == 0);
+		m_ConnectionIndicatorHint->SetText(NetLinkQualityPresentation::ToggleHint(g_SettingsMan.GetNetworkConnectionIndicator()));
+		g_SettingsMan.UpdateSettingsFile();
 	} else if (guiEvent.GetControl() == m_ChatVisibleCheckbox) {
 		g_SettingsMan.SetNetworkChatVisible(m_ChatVisibleCheckbox->GetCheck());
 	} else if (guiEvent.GetControl() == m_ChatSoundCheckbox) {
