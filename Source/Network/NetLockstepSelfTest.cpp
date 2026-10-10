@@ -312,6 +312,7 @@ namespace RTE {
 	bool TestFourPlayerHoldDoesNotWaitForPolicyReceipts(std::string* error);
 	bool TestFourPeersCommitPlacement(std::string* error);
 	bool TestPlacementSessionSequence(unsigned fight, std::string* error);
+	bool TestOwnerSilenceThreshold(unsigned check, std::string* error);
 	bool TestHeldHostMarkerPrecedesItsHold(std::string* error);
 	bool TestHeldHostReturnsPastThePreparedHorizon(std::string* error);
 	bool TestAPreviouslyHeldHostTakesItsSeatBack(std::string* error);
@@ -24270,8 +24271,6 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 
 
-	bool TestOwnerSilenceThreshold(unsigned check, std::string* error);
-
 	bool TestOwnerHostChange(unsigned mode, std::string* error) {
 		QuorumRig r;
 		if (!StartQuorumRig(r, 4, static_cast<uint16_t>(49810 + mode * 10), error)) return false;
@@ -27225,6 +27224,8 @@ namespace {
 		}
 	};
 
+}
+
 	// The same paced three-seat round covers late input, silence, a stopped client loop,
 	// and a stopped host simulation. Only the stopped simulation misses ticks; the
 	// host's production plane and the existing private-return service make every decision.
@@ -27439,6 +27440,7 @@ namespace {
 	}
 
 
+namespace {
 	bool DriveTicketedFormerHost(ReleasePathRound& round, size_t hostIndex, uint16_t port, bool twice, std::string* error) {
 		const auto fail = [&](const std::string& why) { if (error) *error = why; return why.empty(); };
 		HostReturnAdmission admission;
