@@ -4,6 +4,7 @@
 #include "NetMatchConfig.h"
 #include "NetProtocol.h"
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -125,8 +126,9 @@ namespace RTE {
 		static bool CaptureManifestInputs(NetIdentityManifest& outManifest, std::string* error = nullptr, NetIdentityBuildOptions options = {});
 
 		/// Hashes the captured modules' files and fills the manifest's hashes. Touches no manager, so a
-		/// worker thread can do this work while the game thread keeps its frame budget.
-		static bool CompleteManifestFromInputs(NetIdentityManifest& manifest, std::string* error = nullptr, NetIdentityBuildOptions options = {});
+		/// worker thread can do this work while the game thread keeps its frame budget. A cancellable
+		/// caller abandons the owned disk job within a 10 ms wait slice; that job borrows no caller state.
+		static bool CompleteManifestFromInputs(NetIdentityManifest& manifest, std::string* error = nullptr, NetIdentityBuildOptions options = {}, const std::atomic<bool>* cancelRequested = nullptr);
 
 		/// Starts the file work for the loaded modules on a worker thread, so the menu that needs a
 		/// manifest does not pay a disk walk of every module on its draw thread. Captures its inputs

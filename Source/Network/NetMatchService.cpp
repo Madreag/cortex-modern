@@ -10178,7 +10178,7 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest, NetIdentityBuildOptions identityOptions) {
 		std::string identityError;
-		const bool identityReady = !m_CancelRequested.load() && NetIdentity::CompleteManifestFromInputs(manifest, &identityError, identityOptions);
+		const bool identityReady = !m_CancelRequested.load() && NetIdentity::CompleteManifestFromInputs(manifest, &identityError, identityOptions, &m_CancelRequested);
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_IdentityPending = false;
