@@ -255,6 +255,8 @@ namespace RTE {
 		void SetNetworkMatchStatusMode(NetworkMatchStatusMode mode) { m_NetworkMatchStatusMode = mode; }
 		bool GetNetworkShowDiagnostics() const { return m_NetworkShowDiagnostics; }
 		void SetNetworkShowDiagnostics(bool enabled) { m_NetworkShowDiagnostics = enabled; }
+		bool GetNetworkConnectionIndicator() const { return m_NetworkConnectionIndicator; }
+		void SetNetworkConnectionIndicator(bool enabled) { m_NetworkConnectionIndicator = enabled; }
 		/// Informational multiplayer toasts. Default on.
 		bool GetNetworkToastsEnabled() const { return m_NetworkToastsEnabled; } void SetNetworkToastsEnabled(bool enabled) { m_NetworkToastsEnabled = enabled; }
 		/// Chat history visibility. Default on.
@@ -662,6 +664,7 @@ namespace RTE {
 		std::string m_NetworkDiagnosticsDirectory;
 		NetworkMatchStatusMode m_NetworkMatchStatusMode;
 		bool m_NetworkShowDiagnostics;
+		bool m_NetworkConnectionIndicator;
 		int m_NetworkSlowPlayerBoundTicks;
 		NetworkSlowPlayerPolicy m_NetworkSlowPlayerPolicy;
 		NetworkChatDefaultScope m_NetworkChatDefaultScope;
