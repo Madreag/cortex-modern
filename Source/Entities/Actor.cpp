@@ -1,5 +1,12 @@
 #include "DeterministicMath.h"
 #include "Actor.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "SoundContainer.h"
+#include "MovableObjectReference.h"
+#include "MovableObject.h"
+#include "Icon.h"
 #include "CheckpointProperties.h"
 #include "MetricsCollector.h"
 #include <iostream>
@@ -93,11 +100,135 @@ bool Actor::m_sIconsLoaded = false;
 
 #define ARROWTIME 1000
 
+Actor::Actor(const Actor& source, CheckpointNativeSnapshot& snapshot) :
+	MOSRotating(source, snapshot),
+	m_pHitBody(nullptr),
+	m_Controller(snapshot.Freeze(source.m_Controller)),
+	m_PersistedControllerCheckpoint(snapshot.Freeze(source.m_PersistedControllerCheckpoint)),
+	m_PersistedControllerInputMode(snapshot.Freeze(source.m_PersistedControllerInputMode)),
+	m_PersistedControllerQuickDisabled(snapshot.Freeze(source.m_PersistedControllerQuickDisabled)),
+	m_PersistedPieMenuState(snapshot.Freeze(source.m_PersistedPieMenuState)),
+	m_PersistedViewPoint(snapshot.Freeze(source.m_PersistedViewPoint)),
+	m_HasPersistedViewPoint(snapshot.Freeze(source.m_HasPersistedViewPoint)),
+	m_HasPersistedMovePath(snapshot.Freeze(source.m_HasPersistedMovePath)),
+	m_PersistedControllerPlayer(snapshot.Freeze(source.m_PersistedControllerPlayer)),
+	m_PlayerControllable(snapshot.Freeze(source.m_PlayerControllable)),
+	m_BodyHitSound(snapshot.Freeze(source.m_BodyHitSound)),
+	m_AlarmSound(snapshot.Freeze(source.m_AlarmSound)),
+	m_PainSound(snapshot.Freeze(source.m_PainSound)),
+	m_DeathSound(snapshot.Freeze(source.m_DeathSound)),
+	m_DeviceSwitchSound(snapshot.Freeze(source.m_DeviceSwitchSound)),
+	m_Status(snapshot.Freeze(source.m_Status)),
+	m_Health(snapshot.Freeze(source.m_Health)),
+	m_MaxHealth(snapshot.Freeze(source.m_MaxHealth)),
+	m_PrevHealth(snapshot.Freeze(source.m_PrevHealth)),
+	m_pTeamIcon(snapshot.Freeze(source.m_pTeamIcon)),
+	m_pControllerIcon(snapshot.Freeze(source.m_pControllerIcon)),
+	m_LastSecondTimer(snapshot.Freeze(source.m_LastSecondTimer)),
+	m_LastSecondPos(snapshot.Freeze(source.m_LastSecondPos)),
+	m_RecentMovement(snapshot.Freeze(source.m_RecentMovement)),
+	m_TravelImpulseDamage(snapshot.Freeze(source.m_TravelImpulseDamage)),
+	m_StableRecoverTimer(snapshot.Freeze(source.m_StableRecoverTimer)),
+	m_StableVel(snapshot.Freeze(source.m_StableVel)),
+	m_StableRecoverDelay(snapshot.Freeze(source.m_StableRecoverDelay)),
+	m_HeartBeat(snapshot.Freeze(source.m_HeartBeat)),
+	m_NewControlTmr(snapshot.Freeze(source.m_NewControlTmr)),
+	m_DeathTmr(snapshot.Freeze(source.m_DeathTmr)),
+	m_GoldCarried(snapshot.Freeze(source.m_GoldCarried)),
+	m_GoldPicked(snapshot.Freeze(source.m_GoldPicked)),
+	m_CanRun(snapshot.Freeze(source.m_CanRun)),
+	m_CrouchWalkSpeedMultiplier(snapshot.Freeze(source.m_CrouchWalkSpeedMultiplier)),
+	m_AimState(snapshot.Freeze(source.m_AimState)),
+	m_AimRange(snapshot.Freeze(source.m_AimRange)),
+	m_AimAngle(snapshot.Freeze(source.m_AimAngle)),
+	m_AimDistance(snapshot.Freeze(source.m_AimDistance)),
+	m_AimTmr(snapshot.Freeze(source.m_AimTmr)),
+	m_SharpAimTimer(snapshot.Freeze(source.m_SharpAimTimer)),
+	m_PersistedSharpAimTimerAnchor(snapshot.Freeze(source.m_PersistedSharpAimTimerAnchor)),
+	m_PersistedAimTimerAnchor(snapshot.Freeze(source.m_PersistedAimTimerAnchor)),
+	m_SharpAimDelay(snapshot.Freeze(source.m_SharpAimDelay)),
+	m_SharpAimProgress(snapshot.Freeze(source.m_SharpAimProgress)),
+	m_SharpAimMaxedOut(snapshot.Freeze(source.m_SharpAimMaxedOut)),
+	m_PointingTarget(snapshot.Freeze(source.m_PointingTarget)),
+	m_SeenTargetPos(snapshot.Freeze(source.m_SeenTargetPos)),
+	m_AlarmTimer(snapshot.Freeze(source.m_AlarmTimer)),
+	m_LastAlarmPos(snapshot.Freeze(source.m_LastAlarmPos)),
+	m_SightDistance(snapshot.Freeze(source.m_SightDistance)),
+	m_Perceptiveness(snapshot.Freeze(source.m_Perceptiveness)),
+	m_PainThreshold(snapshot.Freeze(source.m_PainThreshold)),
+	m_CanRevealUnseen(snapshot.Freeze(source.m_CanRevealUnseen)),
+	m_CharHeight(snapshot.Freeze(source.m_CharHeight)),
+	m_HolsterOffset(snapshot.Freeze(source.m_HolsterOffset)),
+	m_ReloadOffset(snapshot.Freeze(source.m_ReloadOffset)),
+	m_ViewPoint(snapshot.Freeze(source.m_ViewPoint)),
+	m_Inventory(snapshot.Freeze(source.m_Inventory)),
+	m_MaxInventoryMass(snapshot.Freeze(source.m_MaxInventoryMass)),
+	m_pItemInReach(snapshot.Freeze(source.m_pItemInReach)),
+	m_FaithfulItemInReachUID(snapshot.Freeze(source.m_FaithfulItemInReachUID)),
+	m_OffWireAimTick(snapshot.Freeze(source.m_OffWireAimTick)),
+	m_OffWireAim(snapshot.Freeze(source.m_OffWireAim)),
+	m_OffWireFlipTick(snapshot.Freeze(source.m_OffWireFlipTick)),
+	m_OffWireFlip(snapshot.Freeze(source.m_OffWireFlip)),
+	m_FaithfulMOMoveTargetUID(snapshot.Freeze(source.m_FaithfulMOMoveTargetUID)),
+	m_FaithfulWaypointUIDs(snapshot.Freeze(source.m_FaithfulWaypointUIDs)),
+	m_HotkeyActivated(snapshot.Freeze(source.m_HotkeyActivated)),
+	m_HUDStack(snapshot.Freeze(source.m_HUDStack)),
+	m_DeploymentID(snapshot.Freeze(source.m_DeploymentID)),
+	m_PassengerSlots(snapshot.Freeze(source.m_PassengerSlots)),
+	m_AIBaseDigStrength(snapshot.Freeze(source.m_AIBaseDigStrength)),
+	m_BaseMass(snapshot.Freeze(source.m_BaseMass)),
+	m_AIMode(snapshot.Freeze(source.m_AIMode)),
+	m_Waypoints(snapshot.Freeze(source.m_Waypoints)),
+	m_PendingDeferredWaypoints{},
+	m_InflightWaypoints{},
+	m_PendingDeferredAIModes{},
+	m_PendingDeferredScriptMessages{},
+	m_PendingDeferredGibs{},
+	m_InflightAIMode(AIMODE_NONE),
+	m_InflightAIModeUntil(-1),
+	m_LastOrderedWaypoint(snapshot.Freeze(source.m_LastOrderedWaypoint)),
+	m_HasOrderedWaypoint(snapshot.Freeze(source.m_HasOrderedWaypoint)),
+	m_LastOrderedWaypointUID(snapshot.Freeze(source.m_LastOrderedWaypointUID)),
+	m_WaypointCursor(snapshot.Freeze(source.m_WaypointCursor)),
+	m_DrawWaypoints(snapshot.Freeze(source.m_DrawWaypoints)),
+	m_MoveTarget(snapshot.Freeze(source.m_MoveTarget)),
+	m_pMOMoveTarget(snapshot.Freeze(source.m_pMOMoveTarget)),
+	m_PrevPathTarget(snapshot.Freeze(source.m_PrevPathTarget)),
+	m_MoveVector(snapshot.Freeze(source.m_MoveVector)),
+	m_MovePath(snapshot.Freeze(source.m_MovePath)),
+	m_PathRequest{},
+	m_UpdateMovePath(snapshot.Freeze(source.m_UpdateMovePath)),
+	m_MoveProximityLimit(snapshot.Freeze(source.m_MoveProximityLimit)),
+	m_MovementState(snapshot.Freeze(source.m_MovementState)),
+	m_Organic(snapshot.Freeze(source.m_Organic)),
+	m_Mechanical(snapshot.Freeze(source.m_Mechanical)),
+	m_LimbPushForcesAndCollisionsDisabled(snapshot.Freeze(source.m_LimbPushForcesAndCollisionsDisabled)),
+	m_PersistedActorRuntime(snapshot.Freeze(source.m_PersistedActorRuntime)),
+	m_PersistedActorIconReferences(snapshot.Freeze(source.m_PersistedActorIconReferences)),
+	m_PieMenu{},
+	m_FrozenPieMenu(snapshot.Freeze(source.m_FrozenPieMenu)),
+	m_FrozenPieMenuState(snapshot.Freeze(source.m_FrozenPieMenuState)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	if (source.m_PieMenu) { m_FrozenPieMenu = snapshot.FreezeWriter(source.m_PieMenu.get()); m_FrozenPieMenuState = source.m_PieMenu->PackInteractionState(); }
+	for (size_t index = 0; index < m_PersistedActorIconReferences.size(); ++index) if (m_PersistedActorIconReferences[index].empty()) m_PersistedActorIconReferences[index] = CaptureActorIconReference(index ? source.m_pControllerIcon : source.m_pTeamIcon);
+}
+
+Entity* Actor::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
+void Actor::PrepareCheckpointNative(const Actor& source, Actor* target, CheckpointNativeSnapshot& snapshot) {
+	snapshot.Prepare(static_cast<const MOSRotating&>(source), static_cast<MOSRotating*>(target));
+	snapshot.Prepare(source.m_Controller, &target->m_Controller);
+}
+
 Actor::Actor() {
 	Clear();
 }
 
 Actor::~Actor() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

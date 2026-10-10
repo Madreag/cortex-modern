@@ -1,5 +1,12 @@
 #include "DeterministicMath.h"
 #include "AHuman.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "SoundContainer.h"
+#include "Matrix.h"
+#include "LimbPath.h"
+#include "Attachable.h"
 #include "CheckpointProperties.h"
 #include "MetricsCollector.h"
 #include "CheckpointArchive.h"
@@ -37,11 +44,82 @@ using namespace RTE;
 
 ConcreteClassInfo(AHuman, Actor, 20);
 
+AHuman::AHuman(const AHuman& source, CheckpointNativeSnapshot& snapshot) :
+	Actor(source, snapshot),
+	m_pHead(snapshot.Freeze(source.m_pHead)),
+	m_LookToAimRatio(snapshot.Freeze(source.m_LookToAimRatio)),
+	m_pFGArm(snapshot.Freeze(source.m_pFGArm)),
+	m_pBGArm(snapshot.Freeze(source.m_pBGArm)),
+	m_PendingDeferredEquips{},
+	m_pFGLeg(snapshot.Freeze(source.m_pFGLeg)),
+	m_pBGLeg(snapshot.Freeze(source.m_pBGLeg)),
+	m_pFGHandGroup(snapshot.Freeze(source.m_pFGHandGroup)),
+	m_pBGHandGroup(snapshot.Freeze(source.m_pBGHandGroup)),
+	m_pFGFootGroup(snapshot.Freeze(source.m_pFGFootGroup)),
+	m_BackupFGFootGroup(snapshot.Freeze(source.m_BackupFGFootGroup)),
+	m_pBGFootGroup(snapshot.Freeze(source.m_pBGFootGroup)),
+	m_BackupBGFootGroup(snapshot.Freeze(source.m_BackupBGFootGroup)),
+	m_PersistedFGHandResidue(snapshot.Freeze(source.m_PersistedFGHandResidue)),
+	m_PersistedBGHandResidue(snapshot.Freeze(source.m_PersistedBGHandResidue)),
+	m_PersistedFGFootResidue(snapshot.Freeze(source.m_PersistedFGFootResidue)),
+	m_PersistedBGFootResidue(snapshot.Freeze(source.m_PersistedBGFootResidue)),
+	m_PersistedLimbPathStates(snapshot.Freeze(source.m_PersistedLimbPathStates)),
+	m_PersistedLimbPathStatesFromFile(snapshot.Freeze(source.m_PersistedLimbPathStatesFromFile)),
+	m_PersistedLimbGroupPositions(snapshot.Freeze(source.m_PersistedLimbGroupPositions)),
+	m_PersistedLimbGroupInertia(snapshot.Freeze(source.m_PersistedLimbGroupInertia)),
+	m_PersistedWalkState(snapshot.Freeze(source.m_PersistedWalkState)),
+	m_StrideSound(snapshot.Freeze(source.m_StrideSound)),
+	m_pJetpack(snapshot.Freeze(source.m_pJetpack)),
+	m_CanActivateBGItem(snapshot.Freeze(source.m_CanActivateBGItem)),
+	m_TriggerPulled(snapshot.Freeze(source.m_TriggerPulled)),
+	m_WaitingToReloadOffhand(snapshot.Freeze(source.m_WaitingToReloadOffhand)),
+	m_IconBlinkTimer(snapshot.Freeze(source.m_IconBlinkTimer)),
+	m_ArmsState(snapshot.Freeze(source.m_ArmsState)),
+	m_ProneState(snapshot.Freeze(source.m_ProneState)),
+	m_ProneTimer(snapshot.Freeze(source.m_ProneTimer)),
+	m_MaxWalkPathCrouchShift(snapshot.Freeze(source.m_MaxWalkPathCrouchShift)),
+	m_CrouchAmount(snapshot.Freeze(source.m_CrouchAmount)),
+	m_CrouchAmountOverride(snapshot.Freeze(source.m_CrouchAmountOverride)),
+	m_Paths{},
+	m_RotAngleTargets(snapshot.Freeze(source.m_RotAngleTargets)),
+	m_Aiming(snapshot.Freeze(source.m_Aiming)),
+	m_ArmClimbing{},
+	m_StrideFrame(snapshot.Freeze(source.m_StrideFrame)),
+	m_StrideStart(snapshot.Freeze(source.m_StrideStart)),
+	m_StrideTimer(snapshot.Freeze(source.m_StrideTimer)),
+	m_ThrowTmr(snapshot.Freeze(source.m_ThrowTmr)),
+	m_ThrowPrepTime(snapshot.Freeze(source.m_ThrowPrepTime)),
+	m_SharpAimRevertTimer(snapshot.Freeze(source.m_SharpAimRevertTimer)),
+	m_PersistedSharpAimRevertTimerAnchor(snapshot.Freeze(source.m_PersistedSharpAimRevertTimerAnchor)),
+	m_FGArmFlailScalar(snapshot.Freeze(source.m_FGArmFlailScalar)),
+	m_BGArmFlailScalar(snapshot.Freeze(source.m_BGArmFlailScalar)),
+	m_EquipHUDTimer(snapshot.Freeze(source.m_EquipHUDTimer)),
+	m_WalkAngle(snapshot.Freeze(source.m_WalkAngle)),
+	m_WalkPathOffset(snapshot.Freeze(source.m_WalkPathOffset)),
+	m_ArmSwingRate(snapshot.Freeze(source.m_ArmSwingRate)),
+	m_DeviceArmSwayRate(snapshot.Freeze(source.m_DeviceArmSwayRate)),
+	m_PersistedAHumanRuntime(snapshot.Freeze(source.m_PersistedAHumanRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	snapshot.FreezeArray(m_Paths, source.m_Paths);
+	snapshot.FreezeArray(m_ArmClimbing, source.m_ArmClimbing);
+}
+
+Entity* AHuman::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
+void AHuman::PrepareCheckpointNative(const AHuman& source, AHuman* target, CheckpointNativeSnapshot& snapshot) {
+	snapshot.Prepare(static_cast<const Actor&>(source), static_cast<Actor*>(target));
+	snapshot.Prepare(source.m_Paths, &target->m_Paths);
+}
+
 AHuman::AHuman() {
 	Clear();
 }
 
 AHuman::~AHuman() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

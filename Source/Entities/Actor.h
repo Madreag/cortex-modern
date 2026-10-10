@@ -94,6 +94,8 @@ namespace RTE {
 		/// Constructor method used to instantiate a Actor object in system
 		/// memory. Create() should be called before using the object.
 		Actor();
+		CheckpointSnapshotMethods(Actor);
+		static void PrepareCheckpointNative(const Actor& source, Actor* target, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a Actor object before deletion
 		/// from system memory.

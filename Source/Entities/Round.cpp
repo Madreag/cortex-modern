@@ -31,6 +31,10 @@ Entity* Round::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const 
 	return snapshot.Make(*this);
 }
 
+void Round::PrepareCheckpointNative(const Round& source, Round* target, CheckpointNativeSnapshot& snapshot) {
+	snapshot.Prepare(source.m_FireSound, &target->m_FireSound);
+}
+
 Round::Round() {
 	Clear();
 }

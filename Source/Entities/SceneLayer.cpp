@@ -1,4 +1,5 @@
 #include "SceneLayer.h"
+#include "PageWriteFence.h"
 
 #include "FrameMan.h"
 #include "SceneMan.h"

@@ -66,6 +66,8 @@ namespace RTE {
 		/// Constructor method used to instantiate a AHuman object in system
 		/// memory. Create() should be called before using the object.
 		AHuman();
+		CheckpointSnapshotMethods(AHuman);
+		static void PrepareCheckpointNative(const AHuman& source, AHuman* target, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a AHuman object before deletion
 		/// from system memory.
