@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import shutil
 import subprocess
 import sys
 import time
@@ -79,10 +80,10 @@ def main():
         info.pop('LSEnvironment', None)
         executable = info['CFBundleExecutable']
         (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
-        (app / 'Contents/MacOS' / executable).symlink_to(args.binary)
+        shutil.copy2(args.binary, app / 'Contents/MacOS' / executable)
         environment = dict(os.environ)
         environment.pop('CCCP_HEADLESS', None)
-        result = subprocess.run(['open', '-W', '-n', '-o', str(args.out / 'stdout.log'), '--stderr', str(args.out / 'stderr.log'), str(app), '--args', *flags], env=environment, timeout=2200)
+        result = subprocess.run(['open', '-W', '-n', '-o', str(args.out / 'stdout.log'), '--stderr', str(args.out / 'stderr.log'), str(app), '--args', '-headed', *flags], env=environment, timeout=2200)
         code = result.returncode
     else:
         record = runner.run([str(args.binary), '-headless', *flags], cwd=runtime, out=args.out / 'native', timeout=2200, env={'CCCP_HEADLESS': '1'})
