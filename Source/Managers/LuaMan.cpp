@@ -10523,6 +10523,45 @@ end
 
 	if (m_CheckpointHeap) {
 		{
+			for (bool custom: {false, true}) {
+				MovableMan::ConstructionRegistryScope world;
+				auto actor = std::make_unique<Actor>();
+				actor->TakeNextUniqueID(); actor->SetPos(Vector(-0.0F, 7.25F));
+				LuaStateWrapper plain;
+				plain.Initialize(); plain.LoadScriptGraphHelper();
+				lua_State* state = plain.GetLuaState();
+				luabind::object(state, actor.get()).push(state); lua_setglobal(state, "_BoundaryNativeOwner");
+				bool exact = plain.RunScriptString("_BoundaryNativeValues = { actor = _BoundaryNativeOwner, controller = _BoundaryNativeOwner:GetController(), position = _BoundaryNativeOwner.Pos }; _BoundaryNativeValues.alias = _BoundaryNativeValues.position") == 0;
+				if (custom) exact = plain.RunScriptString("local meta = debug.getmetatable(_BoundaryNativeValues.position); local previous = meta.__index; meta.__index = function(self, key) if key == 'X' then return previous(self, key) + 1 end return previous(self, key) end") == 0 && exact;
+				std::string reference;
+				std::vector<std::string> problems;
+				exact = plain.SerializeScriptGraph(reference, problems) && exact;
+				CheckpointText captured;
+				FrozenCaptureStats stats;
+				{
+					CheckpointWriter::BatchScope batch(true);
+					CheckpointNativeSnapshot::BoundaryScope boundary(std::make_shared<CheckpointNativeSnapshot>());
+					LuaScriptGraphNativeCaptureScope lookups;
+					CheckpointFailure::Scope failure(CheckpointFailure::Point::ParallelSubmission);
+					LuaScriptGraphNativeCaptureScope::PreTouch();
+					LuaScriptGraphNativeCaptureScope::BuildWorld(LuaScriptGraphNativeCaptureScope::Current());
+					LuaScriptGraphNativeCaptureScope::BuildOwners(LuaScriptGraphNativeCaptureScope::Current());
+					struct RestoreStats {
+						FrozenCaptureStats* previous = LuaMan::s_FrozenCaptureStats;
+						~RestoreStats() { LuaMan::s_FrozenCaptureStats = previous; }
+					} restoreStats;
+					LuaMan::s_FrozenCaptureStats = &stats;
+					exact = plain.CaptureScriptGraph(captured, problems, true) && exact;
+				}
+				plain.RunScriptString("_BoundaryNativeOwner = nil; _BoundaryNativeValues = nil");
+				actor->SetPos(Vector(101, 103)); actor.reset();
+				exact = problems.empty() && stats.plainStates == (custom ? 0 : 1) &&
+				    std::async(std::launch::async, [captured] { return captured.Text(); }).get() == reference && exact;
+				std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " borrowed_native_boundary_keeps_aliases_without_bulk_helpers custom=" << custom << std::endl;
+				checkpointValues = exact && checkpointValues;
+			}
+		}
+		{
 			LuaStateWrapper plain;
 			plain.Initialize();
 			plain.RunScriptString("_CheckpointPlainValues = { Vector(-0.0, 7.25), Timer() }");
