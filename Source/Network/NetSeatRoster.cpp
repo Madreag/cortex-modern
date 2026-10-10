@@ -51,8 +51,11 @@ namespace RTE {
 			seat.failedReturns = static_cast<uint8_t>(std::min<int>(seat.failedReturns + 1, 255));
 			seat.returnAfterMs = nowMs + BackoffMs(seat.failedReturns);
 			const bool wasHeld = seat.holdCause != NetSeatHoldCause::None && seat.seatId != hostSeat;
+			const bool imageFailed = seat.phase == NetSeatPhase::RejoinImage;
 			seat.phase = wasHeld ? NetSeatPhase::Held : PresentPhase(stage);
-			if (wasHeld) seat.holdCause = NetSeatHoldCause::RejoinFailed;
+			// An abort during image transfer reports that failure. Once the image
+			// is accepted, a canceled catch-up retains the existing hold cause.
+			if (wasHeld && imageFailed) seat.holdCause = NetSeatHoldCause::RejoinFailed;
 		}
 
 		/// The phase a returning or newly seated owner enters at the match's stage.
@@ -910,6 +913,27 @@ namespace RTE {
 			const auto disconnected = ApplyRosterEvent(roster, drop);
 			const bool ok = !disconnected.refused && disconnected.roster.hostSeat == 1 && disconnected.roster.Find(1)->phase == NetSeatPhase::Running && ApplyRosterEvent(roster, lost).refused;
 			check("seq no election from one member's link", ok, "");
+		}
+		// Image failure and cancellation after image acceptance retain the same
+		// ownership/backoff rules, with no new hold on an unheld human seat.
+		for (const bool wasHeld: {false, true}) for (const bool imageAccepted: {false, true}) {
+			NetSeatRoster roster = RosterForRow(5);
+			roster.Find(2)->holdCause = wasHeld ? NetSeatHoldCause::LinkDrop : NetSeatHoldCause::None;
+			if (imageAccepted) {
+				NetRosterEvent loaded; loaded.kind = NetRosterEventKind::ImageLoaded; loaded.seat = 2;
+				roster = ApplyRosterEvent(roster, loaded).roster;
+			}
+			const NetRosterSeat before = *roster.Find(2);
+			NetRosterEvent aborted; aborted.kind = NetRosterEventKind::TransferAborted; aborted.seat = 2; aborted.nowMs = 10000;
+			const NetRosterResult result = ApplyRosterEvent(roster, aborted);
+			const NetRosterSeat* after = result.roster.Find(2);
+			const NetSeatHoldCause expected = !wasHeld ? NetSeatHoldCause::None : imageAccepted ? NetSeatHoldCause::LinkDrop : NetSeatHoldCause::RejoinFailed;
+			const bool ok = !result.refused && after && after->owner == before.owner && after->ticket == before.ticket &&
+			    after->incarnation == before.incarnation && after->link == before.link && after->heldSinceMs == before.heldSinceMs &&
+			    after->phase == (wasHeld ? NetSeatPhase::Held : NetSeatPhase::Running) && after->holdCause == expected &&
+			    after->failedReturns == before.failedReturns + 1 && after->returnAfterMs == aborted.nowMs + c_RosterReturnBackoffMs;
+			check("seq return failure stage held=" + std::to_string(wasHeld) + " image_accepted=" + std::to_string(imageAccepted), ok,
+			      "cause=" + std::string(after ? NetSeatHoldCauseName(after->holdCause) : "missing"));
 		}
 		{
 			// Failed returns back off and never remove the seat; past the bound the return is still offered at the longest backoff.
