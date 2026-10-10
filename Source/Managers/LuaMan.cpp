@@ -1602,7 +1602,9 @@ local function visitUserdata(value, ctx)
 	local kind = native[1]
 	-- These kinds write the object's own engine values into the chunk; every other kind writes a
 	-- reference its owner carries. Only the first sort can go stale without a table being written.
-	if VALUE_KINDS[kind] and _ScriptGraphNoteValue then _ScriptGraphNoteValue(value) end
+	if VALUE_KINDS[kind] and _ScriptGraphNoteValue and _ScriptGraphNoteValue(value) then
+		ctx.rootUnwatched = ctx.rootUnwatched or "custom native getter"
+	end
 	if kind == "copy" and native[6] then ctx.ownedPointers[native[6]] = value end
 	if kind == "area-ref" or (kind == "copy" and native[2] == "Area") then
 		for index, address in ipairs(_ScriptGraphAreaBoxes(value)) do ctx.areaBoxes[address] = { owner = value, index = index } end
@@ -4496,11 +4498,25 @@ static Entity* ScriptGraphCheckpointEntity(luabind::detail::object_rep* rep) {
 	return nullptr;
 }
 
-// (userdata) -> nothing. The chunk carries this native's engine values as text, so the root that
-// holds it is stale the moment anything writes them. The write barrier sees tables only.
+// A value depends on its binding tables; a custom getter can also read unwatched state.
 static int ScriptGraphNoteValue(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	if (!rep || !rep->ptr()) return 0;
+	bool customGetter = false;
+	if (lua_getmetatable(L, 1)) {
+		CheckpointGraphIndex::Get().NoteTable(lua_topointer(L, -1));
+		luaJIT_arm_tab_write(L, -1);
+		lua_pushliteral(L, "__index"); lua_rawget(L, -2);
+		customGetter = lua_tocfunction(L, -1) != luabind::detail::class_rep::gettable_dispatcher;
+		lua_pop(L, 2);
+	}
+	const auto noteTable = [L] {
+		CheckpointGraphIndex::Get().NoteTable(lua_topointer(L, -1));
+		luaJIT_arm_tab_write(L, -1);
+		lua_pop(L, 1);
+	};
+	rep->crep()->get_table(L); noteTable();
+	if (rep->get_lua_table().is_valid()) { rep->get_lua_table().get(L); noteTable(); }
 	CheckpointGraphIndex::Get().NoteValue(rep->ptr());
 	rep->set_flags(rep->flags() | luabind::detail::object_rep::checkpoint_trap);
 	if (ClassDerivesFrom(rep->crep(), "Controller")) static_cast<Controller*>(rep->ptr())->ArmCheckpointValueTrap();
@@ -4511,7 +4527,8 @@ static int ScriptGraphNoteValue(lua_State* L) {
 		CheckpointGraphIndex::Get().NoteValue(entity);
 		entity->ArmCheckpointValueTrap();
 	}
-	return 0;
+	lua_pushboolean(L, customGetter);
+	return 1;
 }
 
 static thread_local std::unordered_set<const MovableObject*>* s_CarriedScriptOwnedObjects = nullptr;
@@ -10762,7 +10779,7 @@ assert(coroutine.resume(_BoundaryOwnedIterator.thread))
 			    << " refusal=" << stats.plainRefusal << " problems=" << problems.size() << " bytes_exact=" << (actual == reference) << std::endl;
 			showMismatch("plain-native", reference, actual);
 			checkpointValues = exact && checkpointValues;
-			plain.RunScriptString("local meta = debug.getmetatable(_CheckpointPlainValues[1]); local previous = meta.__index; meta.__index = function(self, key) if key == 'X' then return previous(self, key) + 1 end return previous(self, key) end");
+			plain.RunScriptString("local shift = 1; _CheckpointBumpGetter = function() shift = shift + 1 end; local meta = debug.getmetatable(_CheckpointPlainValues[1]); local previous = meta.__index; meta.__index = function(self, key) if key == 'X' then return previous(self, key) + shift end return previous(self, key) end");
 			problems.clear(); stats = {}; reference.clear(); captured = {};
 			bool fallback = plain.SerializeScriptGraph(reference, problems);
 			{
@@ -10780,6 +10797,18 @@ assert(coroutine.resume(_BoundaryOwnedIterator.thread))
 			    << " refusal=" << stats.plainRefusal << " problems=" << problems.size() << " bytes_exact=" << (customized == reference) << std::endl;
 			showMismatch("custom-native", reference, customized);
 			checkpointValues = fallback && checkpointValues;
+			plain.RunScriptString("_CheckpointBumpGetter()");
+			problems.clear(); reference.clear(); captured = {};
+			bool changed = plain.SerializeScriptGraph(reference, problems);
+			{
+				CheckpointWriter::BatchScope batch(true);
+				changed = plain.CaptureScriptGraph(captured, problems, true) && changed;
+			}
+			const std::string shifted = captured.Text();
+			changed = problems.empty() && reference.find(";v2,7.25;") != std::string::npos && shifted == reference && changed;
+			std::cout << "[script-graph-selftest] " << (changed ? "PASS" : "FAIL") << " custom_getter_upvalues_are_read_again_without_a_native_write" << std::endl;
+			showMismatch("changed-getter", reference, shifted);
+			checkpointValues = changed && checkpointValues;
 		}
 		{
 			bool failuresHeld = true;
