@@ -688,6 +688,13 @@ namespace {
 			if (step.contains("sim_advanced") && g_TimerMan.GetSimUpdateCount() - probe.stepSim < step["sim_advanced"].get<uint64_t>()) return false;
 			if (step.contains("elapsed_ms") && NowMs() - probe.stepMs < step["elapsed_ms"].get<uint64_t>()) return false;
 			if (step.contains("panel_open") && observed["panel_open"] != step["panel_open"]) return false;
+			if (step.contains("chat_text_once")) {
+				const std::string text = step.at("chat_text_once").get<std::string>();
+				const auto& history = observed.at("chat_history");
+				const size_t count = std::count_if(history.begin(), history.end(), [&](const Json& line) { return line.at("text") == text; });
+				Require(count <= 1, "the player's held Enter sent the same chat line twice");
+				if (count == 0) return false;
+			}
 			if (step.contains("control")) {
 				observed["control"] = ReadControl(Control(step));
 				if (step.contains("equals")) {

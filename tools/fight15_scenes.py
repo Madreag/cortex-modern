@@ -306,16 +306,33 @@ def pause_end():
                               wait(screen="PauseLeaveConfirm"), menu("activate ButtonLeaveConfirm")]
 
 
+def say(text):
+    return key("CHAT") + [wait(chat_entry_open=True), menu(f"type_text TextMatchChatInput enter {text}"),
+                          wait(chat_text_once=text)]
+
+
+def complete_live_scene(peer, number):
+    # The menu script resumes only after the activity returns to the lobby.
+    # The joiner acknowledges its captured result before the host ends the match.
+    joined = f"joiner answers scene {number}"
+    hosted = f"host answers scene {number}"
+    captured = f"joiner captured scene {number}"
+    steps = say(joined) + [wait(chat_text_once=hosted)] if peer == "joiner" else [wait(chat_text_once=joined)] + say(hosted)
+    steps += capture(f"answered-{peer}") + [dict(op="assert_scene", input_player=0, equals=dict(alive=True)), dict(op="assert_relay")]
+    steps += say(captured) if peer == "joiner" else [wait(chat_text_once=captured)] + pause_end()
+    return steps + [lobby_wait(peer), dict(op="finish")]
+
+
 def game_scenes():
     host, joiner = place("host"), place("joiner", occupied=True)
     for peer, steps in (("host", host), ("joiner", joiner)):
-        steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="finish")]
+        steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2))] + complete_live_scene(peer, 4)
     emit(4, "One held brain click, valid preview, shared count and occupied-spot refusal",
          game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner),
          scene_checks("host", host) + scene_checks("joiner", joiner))
 
     host, joiner = place("host") + buy("host"), place("joiner") + buy("joiner")
-    for steps in (host, joiner): steps += [dict(op="assert_relay"), dict(op="finish")]
+    for peer, steps in (("host", host), ("joiner", joiner)): steps += complete_live_scene(peer, 5)
     emit(5, "Brain pie, own funds, soldier and weapon delivery, selection and firing",
          game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner),
          scene_checks("host", host) + scene_checks("joiner", joiner))
@@ -342,11 +359,11 @@ def game_scenes():
     host += capture("left-seat-held") + [dict(op="assert", equals=dict(service="Running", local_actor_alive=True), held_peer="Joiner"),
             dict(op="assert_control", control="NetworkSeatDetail@Joiner", text_contains="AI", fits=True, inside="NetworkSeats"),
             wait(returned_peer="Joiner")]
-    host += capture("rejoined-host") + [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay"), dict(op="finish")]
+    host += capture("rejoined-host") + [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay")] + complete_live_scene("host", 7)
     joiner += key("Escape") + [wait(screen="Pause"), menu("activate ButtonLeaveMatch"), wait(screen="PauseLeaveConfirm")]
     joiner += capture("leave-consequence") + [menu("assert_text_fits ButtonLeaveConfirm"), menu("activate ButtonLeaveConfirm"),
                wait(screen="MultiplayerScreen", scope="menu"), menu("activate ButtonMultiplayerReconnect"), wait(service="Running")]
-    joiner += capture("rejoined-joiner") + [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay"), dict(op="finish")]
+    joiner += capture("rejoined-joiner") + [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay")] + complete_live_scene("joiner", 7)
     emit(7, "Leave holds the live seat to AI and Rejoin Match returns the same player",
          game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner),
          scene_checks("host", host) + scene_checks("joiner", joiner))
@@ -389,8 +406,8 @@ def ai_fight():
         steps += place(peer, x=fraction, relative_to="bunker")
         for minute in range(1, 21):
             steps += [dict(op="measure_minute")]
-            steps += key("CHAT") + [wait(chat_entry_open=True), menu(f"type_text TextMatchChatInput enter {peer} answers minute {minute}"),
-                                    wait(elapsed_ms=1500)]
+            other = "joiner" if peer == "host" else "host"
+            steps += say(f"{peer} answers minute {minute}") + [wait(chat_text_once=f"{other} answers minute {minute}"), wait(elapsed_ms=1500)]
             steps += capture(f"minute-{minute:02d}-{peer}")
             steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay")]
         if peer == "host": steps += pause_end()
@@ -412,7 +429,8 @@ def moderation_scene():
         button = f"NetworkSeat{part}@Joiner"
         host += key("F6") + [wait(panel_open=True), menu(f"activate {button}")]
         host += capture(f"confirm-{action}") + [dict(op="assert_control", control=button, text_contains=f"Confirm: {'remove' if action == 'kick' else 'ban'} Joiner", fits=True, inside="NetworkSeats"),
-                menu(f"activate {button}"), wait(elapsed_ms=25000), dict(op="assert_scene", input_player=0, equals=dict(alive=True)), dict(op="finish")]
+                menu(f"activate {button}"), wait(elapsed_ms=25000), dict(op="assert_scene", input_player=0, equals=dict(alive=True))]
+        host += pause_end() + [wait(screen="MultiplayerScreen", scope="menu"), dict(op="finish")]
         joiner += [wait(screen="MultiplayerScreen", scope="menu")]
         joiner += capture(f"{action}-joiner") + [menu(f"assert_label LabelJoinSelected The host {reason} you from this session")]
         if action == "ban":
