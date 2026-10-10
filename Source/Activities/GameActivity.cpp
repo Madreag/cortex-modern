@@ -3934,14 +3934,30 @@ void GameActivity::Delivery::AssignCheckpointNative(const Delivery& source, Chec
 
 void GameActivity::FreezeCheckpointUI(const GameActivity& source) {
 	if (source.IsFrozenCheckpointNative()) return;
-	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
-		m_FrozenUI[player][0] = CheckpointWriter::CaptureNative([&] { return source.m_pBuyGUI[player] ? source.m_pBuyGUI[player]->SaveCheckpoint() : std::string(); });
-		m_FrozenUI[player][1] = CheckpointWriter::CaptureNative([&] { return source.m_pEditorGUI[player] ? source.m_pEditorGUI[player]->SaveCheckpoint() : std::string(); });
-		m_FrozenUI[player][2] = CheckpointWriter::CaptureNative([&] { return source.m_InventoryMenuGUI[player] ? source.m_InventoryMenuGUI[player]->SaveCheckpoint() : std::string(); });
-		m_FrozenUI[player][3] = CheckpointWriter::CaptureNative([&] { return source.m_pBannerRed[player] ? source.m_pBannerRed[player]->SaveCheckpoint() : std::string(); });
-		m_FrozenUI[player][4] = CheckpointWriter::CaptureNative([&] { return source.m_pBannerYellow[player] ? source.m_pBannerYellow[player]->SaveCheckpoint() : std::string(); });
-		m_FrozenStrategicMenus[player] = SaveActivityOwnedEntity(source.m_StrategicModePieMenu[player].get());
+	const auto freeze = [this, &source](size_t item) {
+		const int player = static_cast<int>(item / 6);
+		switch (item % 6) {
+			case 0: m_FrozenUI[player][0] = CheckpointWriter::CaptureNative([&] { return source.m_pBuyGUI[player] ? source.m_pBuyGUI[player]->SaveCheckpoint() : std::string(); }); break;
+			case 1: m_FrozenUI[player][1] = CheckpointWriter::CaptureNative([&] { return source.m_pEditorGUI[player] ? source.m_pEditorGUI[player]->SaveCheckpoint() : std::string(); }); break;
+			case 2: m_FrozenUI[player][2] = CheckpointWriter::CaptureNative([&] { return source.m_InventoryMenuGUI[player] ? source.m_InventoryMenuGUI[player]->SaveCheckpoint() : std::string(); }); break;
+			case 3: m_FrozenUI[player][3] = CheckpointWriter::CaptureNative([&] { return source.m_pBannerRed[player] ? source.m_pBannerRed[player]->SaveCheckpoint() : std::string(); }); break;
+			case 4: m_FrozenUI[player][4] = CheckpointWriter::CaptureNative([&] { return source.m_pBannerYellow[player] ? source.m_pBannerYellow[player]->SaveCheckpoint() : std::string(); }); break;
+			default: m_FrozenStrategicMenus[player] = SaveActivityOwnedEntity(source.m_StrategicModePieMenu[player].get());
+		}
+	};
+	constexpr size_t items = static_cast<size_t>(Players::MaxPlayerCount) * 6;
+	// Each player's menus are frozen apart from the others, side by side unless an armed injected failure counts here.
+	if (CaptureTrace::Serial() || CheckpointFailure::Current() != CheckpointFailure::Point::None) {
+		for (size_t item = 0; item < items; ++item) freeze(item);
+		return;
 	}
+	const std::shared_ptr<CheckpointNativeSnapshot> boundary = CheckpointNativeSnapshot::Boundary();
+	const char* task = CaptureSentinel::CurrentTask();
+	ParallelWork(g_ThreadMan.GetPriorityThreadPool(), items, [&freeze, &boundary, task](size_t item) {
+		CaptureSentinel::WorkerScope worker(task ? task : "activity-ui-freeze");
+		CheckpointNativeSnapshot::BoundaryScope boundaryScope(boundary);
+		freeze(item);
+	}).Finish();
 }
 
 bool GameActivity::LoadCheckpoint(std::string_view text, bool validateOnly) {
