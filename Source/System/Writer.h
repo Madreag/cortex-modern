@@ -114,6 +114,8 @@ namespace RTE {
 		std::string SharedText(int64_t simTimeTicks) const;
 		static CheckpointText Deferred(std::function<std::string()> produce, size_t ownedBytes = 0, std::string identity = {});
 		static CheckpointText DeferredValues(std::function<CheckpointText()> produce, size_t ownedBytes = 0);
+		/// Runs the writer once off the boundary and relocates only its owned property tape.
+		static CheckpointText DeferredWriter(std::function<CheckpointText()> produce);
 		/// Captured callables use native storage instead of function-wrapper allocations.
 		template<class Function> requires (!std::is_same_v<std::remove_cvref_t<Function>, std::function<std::string()>> && std::is_invocable_r_v<std::string, std::decay_t<Function>&>)
 		static CheckpointText Deferred(Function&& produce, size_t ownedBytes = 0, std::string identity = {}) {

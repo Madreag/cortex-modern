@@ -373,6 +373,15 @@ struct CheckpointBuffer::ValueChunk {
 
 struct CheckpointText::Data {
 	struct Legacy;
+	struct WriterFields {
+		std::once_flag ready;
+		std::function<CheckpointText()> produce;
+		CheckpointText values;
+		const CheckpointText& Read() {
+			std::call_once(ready, [this] { values = produce(); produce = {}; });
+			return values;
+		}
+	};
 	struct Formatting {
 		std::mutex ready;
 		std::atomic<bool> formatted{false};
@@ -403,6 +412,8 @@ struct CheckpointText::Data {
 	// A deferred node's producer, dropped once it has produced: what it captured (a frozen heap, a pixel snapshot) goes with it.
 	mutable std::variant<std::monostate, std::function<std::string()>, CapturedProducer, std::function<CheckpointText()>> produce;
 	bool deferred = false;
+	std::shared_ptr<WriterFields> writerFields;
+	int writerDelta = 0;
 	std::string peerMark;
 	std::string identity;
 	size_t ownedBytes = 0;
@@ -518,6 +529,14 @@ CheckpointText CheckpointText::DeferredValues(std::function<CheckpointText()> pr
 	data->hasPeer = true;
 	data->ownedBytes = ownedBytes;
 	return CheckpointText(std::move(data));
+}
+
+CheckpointText CheckpointText::DeferredWriter(std::function<CheckpointText()> produce) {
+	auto fields = std::make_shared<Data::WriterFields>();
+	fields->produce = std::move(produce);
+	auto result = DeferredValues([fields] { return fields->Read(); });
+	result.m_Data->writerFields = std::move(fields);
+	return result;
 }
 
 std::pmr::memory_resource* CheckpointText::ProducerStorage() {
@@ -711,9 +730,18 @@ CheckpointText CheckpointText::ReindentWriter(int delta) const {
 	if (!delta || !m_Data) return *this;
 	std::unordered_map<const Data*, CheckpointText> converted;
 	const auto convert = [&](const auto& self, const CheckpointText& source) -> CheckpointText {
-		if (!source.m_Data || source.m_Data->deferred || source.m_Data->Values().empty()) return source;
+		if (!source.m_Data) return source;
 		if (const auto known = converted.find(source.m_Data.get()); known != converted.end()) return known->second;
 		const Data& node = *source.m_Data;
+		if (node.writerFields) {
+			const int relocated = node.writerDelta + delta;
+			auto result = DeferredValues([fields = node.writerFields, relocated] { return fields->Read().ReindentWriter(relocated); });
+			result.m_Data->writerFields = node.writerFields;
+			result.m_Data->writerDelta = relocated;
+			converted.emplace(source.m_Data.get(), result);
+			return result;
+		}
+		if (node.deferred || node.Values().empty()) return source;
 		CheckpointBuffer buffer;
 		buffer.m_HasPeer = node.hasPeer;
 		buffer.m_UsesSimTime = node.usesSimTime;
@@ -1677,6 +1705,14 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			const auto baseline = record(1), deeper = record(5);
 			const auto relocated = baseline.ReindentWriter(4);
 			check(relocated.Text() == deeper.Text() && relocated.SharedText() == deeper.SharedText(), "frozen_writer_indent_preserves_literal_bytes_and_peer_runs");
+			int calls = 0;
+			const auto deferred = CheckpointText::DeferredWriter([&] { ++calls; return record(1); });
+			const auto late = deferred.ReindentWriter(2).ReindentWriter(2);
+			const bool lazy = calls == 0;
+			const auto written = std::async(std::launch::async, [late] { return std::pair{late.Text(), late.SharedText()}; }).get();
+			check(lazy && calls == 1 && written.first == deeper.Text() && written.second == deeper.SharedText() &&
+			      deferred.Text() == baseline.Text() && deferred.ReindentWriter(4).Text() == deeper.Text() && calls == 1,
+			      "deferred_writer_relocates_owned_properties_once_without_rewriting_literal_bytes");
 		}
 		{
 			std::vector<int> source{7, -19, 31}, values;
