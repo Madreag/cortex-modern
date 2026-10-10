@@ -1,4 +1,4 @@
-The design of record is section 3.8 of [MENU-UX.md](../MENU-UX.md).
+The design of record is section 3.8 of [MENU-UX.md](../../MENU-UX.md).
 
 `test_connection_indicator.py` runs the existing hidden runner and e2e scene driver. Every HUD state has its own case at 640x360, 960x540, 1280x720 and 1920x1080. Every Seats case has four seats in four different states and checks every column on the host and clients. The quality lever deliberately makes 250 ms Good and 80 ms Substituting. Exact strings and RGB expectations are written independently of the presentation functions.
 

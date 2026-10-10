@@ -548,7 +548,8 @@ void NetModerationGUI::DrawOwnConnection(const NetLobbySnapshot& snapshot) {
 	area.occupiers.push_back({g_WindowMan.GetResX() - 40, 0, 40, 64});
 	int left = 0, right = 0, top = 24;
 	for (; top + height <= g_WindowMan.GetResY() / 2; top += 4) {
-		if (area.FreeSpan(top, top + height, g_WindowMan.GetResX(), left, right) && right - left >= width + 12) break;
+		area.FreeSpan(top, top + height, g_WindowMan.GetResX(), left, right);
+		if (right - left >= width + 12) break;
 	}
 	if (top + height > g_WindowMan.GetResY() / 2) return;
 	const int x = right - width - 6;

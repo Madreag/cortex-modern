@@ -119,7 +119,7 @@ def failure_line(result):
 
 def guard_steps():
     return [{"op": "wait", "paused": True, "sim_at_least": 1},
-            {"op": "mouse_move", "x": 8, "y": 8}, {"op": "wait", "renders": 4},
+            {"op": "wait", "renders": 4},
             {"op": "assert", "equals": {"service": "Idle"}, "connections_absent": True},
             {"op": "screenshot_pair", "name": "guard"}, {"op": "signal", "name": "done"}, {"op": "finish"}]
 
