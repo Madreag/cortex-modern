@@ -68,6 +68,14 @@ namespace RTE {
 	void CheckpointNativeSnapshot::MaterializePixels() const {
 		for (const auto& [bitmap, pixel]: m_Bitmaps) pixel->Materialize();
 	}
+	CheckpointText CheckpointNativeSnapshot::FreezeWriter(const Serializable* source) {
+		if (const auto known = m_WriterValues.find(source); known != m_WriterValues.end()) return known->second;
+		CheckpointWriter::BatchOverride ordinary(false);
+		CheckpointWriter::CacheScope uncached(nullptr);
+		auto values = Writer::Capture([source](Writer& writer) { writer << source; }, 1);
+		m_WriterValues.emplace(source, values);
+		return values;
+	}
 	CheckpointNativeSnapshot::~CheckpointNativeSnapshot() {
 		for (auto& object: m_Owners) if (Entity* value = std::exchange(object, nullptr)) delete value;
 		for (auto& [value, destroy]: m_ValueOwners) if (value) destroy(value);
@@ -84,6 +92,22 @@ namespace RTE {
 	}
 	Entity* Entity::FreezeCheckpointNative(CheckpointNativeSnapshot&) const {
 		throw std::runtime_error("native checkpoint snapshot is not implemented for " + GetClassName());
+	}
+	void CheckpointNativeSnapshot::AssignEntity(Entity& target, const Entity& source) {
+		target.m_FrozenCheckpointNative = true;
+		target.m_CheckpointSnapshot = this;
+		target.m_CheckpointOwnerSlot = Bind(source, &target);
+		target.m_PresetName = source.m_PresetName;
+		target.m_CopiedFromPresetName = source.m_CopiedFromPresetName;
+		target.m_PresetDescription = source.m_PresetDescription;
+		target.m_FormattedReaderPosition = source.m_FormattedReaderPosition;
+		target.m_IsOriginalPreset = source.m_IsOriginalPreset;
+		target.m_DefinedInModule = source.m_DefinedInModule;
+		target.m_Groups = source.m_Groups;
+		target.m_RandomWeight = source.m_RandomWeight;
+		target.m_CheckpointWriteGeneration = source.m_CheckpointWriteGeneration;
+		target.m_CheckpointModuleAndPreset = source.GetModuleAndPresetName();
+		target.m_CheckpointPreset = Object(source.GetPresetForCopy());
 	}
 	thread_local unsigned int Entity::s_CheckpointCloneDepth = 0;
 	bool Entity::IsCheckpointClone() { return s_CheckpointCloneDepth != 0 || MovableObject::IsFaithfulClone(); }

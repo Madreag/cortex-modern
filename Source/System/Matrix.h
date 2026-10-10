@@ -26,6 +26,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a Matrix object.
 		Matrix() { Clear(); }
 		Matrix(const Matrix& source, CheckpointNativeSnapshot& snapshot);
+		void AssignCheckpointNative(const Matrix& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Constructor method used to instantiate a Matrix object from an angle.
 		/// @param radAng A float of an angle in radians that this Matrix should be set to represent.

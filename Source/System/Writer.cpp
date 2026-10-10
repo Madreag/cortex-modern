@@ -694,6 +694,68 @@ CheckpointText CheckpointText::ReuseChildren(const CheckpointText& previous) con
 	return CheckpointText(results.at({m_Data.get(), previous.m_Data.get()}).value);
 }
 
+CheckpointText CheckpointText::ReindentWriter(int delta) const {
+	if (!delta || !m_Data) return *this;
+	std::unordered_map<const Data*, CheckpointText> converted;
+	const auto convert = [&](const auto& self, const CheckpointText& source) -> CheckpointText {
+		if (!source.m_Data || source.m_Data->deferred || source.m_Data->Values().empty()) return source;
+		if (const auto known = converted.find(source.m_Data.get()); known != converted.end()) return known->second;
+		const Data& node = *source.m_Data;
+		CheckpointBuffer buffer;
+		buffer.m_HasPeer = node.hasPeer;
+		buffer.m_UsesSimTime = node.usesSimTime;
+		buffer.m_SimTimeTicks = node.simTimeTicks;
+		buffer.m_HasPrimitiveBlocks = node.hasPrimitiveBlocks;
+		buffer.m_OwnedBlocks.assign(node.ownedBlocks.begin(), node.ownedBlocks.end());
+		buffer.m_OwnedBlockBytes = node.ownedBytes - node.Values().size();
+		for (const auto& child: node.children) buffer.m_OwnedBlockBytes -= child.OwnedBytes();
+		const std::string_view values = node.Values();
+		size_t cursor = 0;
+		while (cursor < values.size()) {
+			const size_t first = cursor;
+			const auto kind = ReadCaptureValue<CaptureValue>(values, cursor);
+			if (kind == CaptureValue::Property) {
+				const int oldIndent = ReadCaptureValue<int>(values, cursor);
+				const int indent = oldIndent > 0 ? oldIndent + delta : oldIndent;
+				if (indent < 0) throw std::logic_error("negative frozen writer indent");
+				buffer.Property(ReadCaptureString(values, cursor), indent);
+				continue;
+			}
+			if (kind == CaptureValue::NewLine) {
+				const int oldIndent = ReadCaptureValue<int>(values, cursor), count = ReadCaptureValue<int>(values, cursor);
+				const int indent = oldIndent > 0 ? oldIndent + delta : oldIndent;
+				if (indent < 0) throw std::logic_error("negative frozen writer indent");
+				buffer.NewLine(indent, count);
+				continue;
+			}
+			if (kind == CaptureValue::Child || kind == CaptureValue::SizedChild || kind == CaptureValue::Base64 || kind == CaptureValue::UrlBase64 || kind == CaptureValue::GraphString) {
+				const auto& child = node.children.at(static_cast<size_t>(ReadCaptureValue<uint64_t>(values, cursor)));
+				if (kind == CaptureValue::Child) buffer.Child(self(self, child));
+				else if (kind == CaptureValue::SizedChild) buffer.Child(child, true);
+				else if (kind == CaptureValue::GraphString) buffer.GraphString(child);
+				else buffer.Base64(child, kind == CaptureValue::UrlBase64);
+				continue;
+			}
+			switch (kind) {
+				case CaptureValue::Raw: case CaptureValue::String: ReadCaptureString(values, cursor); break;
+				case CaptureValue::Integer: case CaptureValue::SpacedInteger: ReadCaptureValue<int64_t>(values, cursor); break;
+				case CaptureValue::Unsigned: case CaptureValue::SpacedUnsigned: ReadCaptureValue<uint64_t>(values, cursor); break;
+				case CaptureValue::Float: ReadCaptureValue<float>(values, cursor); break;
+				case CaptureValue::Double: ReadCaptureValue<double>(values, cursor); break;
+				case CaptureValue::ElapsedSimTime: ReadCaptureValue<int64_t>(values, cursor); ReadCaptureValue<double>(values, cursor); break;
+				case CaptureValue::PrimitiveBlock: ReadCaptureValue<CheckpointBuffer::PrimitiveDecoder>(values, cursor); ReadCaptureString(values, cursor); break;
+				case CaptureValue::PeerBegin: case CaptureValue::PeerEnd: case CaptureValue::SizedRunBegin: case CaptureValue::SizedRunEnd: break;
+				default: throw std::logic_error("invalid frozen writer tape");
+			}
+			buffer.AppendValues(values.substr(first, cursor - first));
+		}
+		const auto result = buffer.Finish();
+		converted.emplace(source.m_Data.get(), result);
+		return result;
+	};
+	return convert(convert, *this);
+}
+
 const std::string& CheckpointText::Text() const {
 	static const std::string empty;
 	if (!m_Data) return empty;
@@ -1546,6 +1608,21 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		const CheckpointText captured = CheckpointWriter::CaptureNative(save);
 		value = 91; binary.assign("changed");
 		check(captured.Text() == reference, "owned_checkpoint_copies_native_values");
+		{
+			const auto record = [](int indent) {
+				CheckpointWriter::BatchOverride ordinary(false);
+				return Writer::Capture([](Writer& writer) {
+					writer.ObjectStart("FrozenMenuProbe");
+					writer.NewPropertyWithValue("Literal", std::string("line\n\tlooks = like a property\0tail", 34));
+					writer.PerPeerBegin(); writer.NewPropertyWithValue("Peer", 17); writer.PerPeerEnd();
+					writer.NewPropertyWithValue("Child", Writer::Capture([](Writer& child) { child.NewPropertyWithValue("UnindentedNative", "same"); }));
+					writer.ObjectEnd();
+				}, indent);
+			};
+			const auto baseline = record(1), deeper = record(5);
+			const auto relocated = baseline.ReindentWriter(4);
+			check(relocated.Text() == deeper.Text() && relocated.SharedText() == deeper.SharedText(), "frozen_writer_indent_preserves_literal_bytes_and_peer_runs");
+		}
 		{
 			CheckpointText frozen;
 			std::string full, shared;

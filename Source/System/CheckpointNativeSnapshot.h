@@ -44,6 +44,7 @@ namespace RTE {
 		std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> Pixels(const BITMAP* bitmap) const;
 		std::optional<const std::string*> BitmapPath(const BITMAP* bitmap, int& depth) const;
 		void MaterializePixels() const;
+		CheckpointText FreezeWriter(const Serializable* source);
 
 		template<class T> T* Object(const T* source) {
 			static_assert(std::is_base_of_v<Entity, std::remove_const_t<T>>);
@@ -58,8 +59,9 @@ namespace RTE {
 		template<class T> T* ValueObject(const T* source) {
 			if (!source) return nullptr;
 			if (const auto known = m_Values.find(source); known != m_Values.end()) return static_cast<T*>(known->second);
-			m_ValueOwners.push_back({nullptr, [](void* value) noexcept { delete static_cast<T*>(value); }});
+			m_ValueOwners.push_back({nullptr, [](void* value) noexcept { static_cast<T*>(value)->~T(); ::operator delete(value); }});
 			auto& owner = m_ValueOwners.back();
+			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 			void* memory = ::operator new(sizeof(T));
 			try {
 				m_Values.emplace(source, memory);
@@ -86,6 +88,8 @@ namespace RTE {
 				m_Objects.emplace(&source, target);
 				m_Slots.emplace(target, slot);
 				*slot = target;
+				if constexpr (requires { T::PrepareCheckpointNative(source, reinterpret_cast<T*>(memory), *this); })
+					T::PrepareCheckpointNative(source, reinterpret_cast<T*>(memory), *this);
 				new(memory) T(source, *this);
 				constructed = true;
 				target->m_CheckpointPreset = Object(source.GetPresetForCopy());
@@ -104,6 +108,26 @@ namespace RTE {
 			m_Objects.insert_or_assign(&source, target);
 			if (const auto slot = m_Slots.find(target); slot != m_Slots.end()) return slot->second;
 			return nullptr;
+		}
+		template<class T> void BindValue(const T& source, T* target) { m_Values.insert_or_assign(&source, target); }
+		template<class T> T* CopyValue(const T* source) {
+			if (!source) return nullptr;
+			if (const auto known = m_Values.find(source); known != m_Values.end()) return static_cast<T*>(known->second);
+			m_ValueOwners.push_back({nullptr, [](void* value) noexcept { delete static_cast<T*>(value); }});
+			auto& owner = m_ValueOwners.back();
+			auto value = std::make_unique<T>(Freeze(*source));
+			m_Values.emplace(source, value.get());
+			owner.first = value.release();
+			return static_cast<T*>(owner.first);
+		}
+		void AssignEntity(Entity& target, const Entity& source);
+		template<class T> void Prepare(const T& source, T* target) {
+			if constexpr (std::is_base_of_v<Entity, T>) m_Objects.insert_or_assign(&source, target);
+			else m_Values.insert_or_assign(&source, target);
+			if constexpr (requires { T::PrepareCheckpointNative(source, target, *this); }) T::PrepareCheckpointNative(source, target, *this);
+		}
+		template<class T, size_t Size> void Prepare(const T (&source)[Size], T (*target)[Size]) {
+			for (size_t index = 0; index < Size; ++index) Prepare(source[index], &(*target)[index]);
 		}
 		const Entity* Find(const Entity* source) const {
 			const auto found = m_Objects.find(source);
@@ -171,7 +195,11 @@ namespace RTE {
 		}
 		template<class T> auto Freeze(const std::optional<T>& source) { return source ? std::optional<T>(Freeze(*source)) : std::optional<T>(); }
 		template<class T, size_t Size> void FreezeArray(T (&target)[Size], const T (&source)[Size]) {
-			for (size_t index = 0; index < Size; ++index) target[index] = Freeze(source[index]);
+			for (size_t index = 0; index < Size; ++index) {
+				if constexpr (std::is_array_v<T>) FreezeArray(target[index], source[index]);
+				else if constexpr (requires { target[index].AssignCheckpointNative(source[index], *this); }) target[index].AssignCheckpointNative(source[index], *this);
+				else target[index] = Freeze(source[index]);
+			}
 		}
 
 	private:
@@ -179,6 +207,7 @@ namespace RTE {
 		inline static thread_local const CheckpointNativeSnapshot* s_Current = nullptr;
 		std::unordered_map<const BITMAP*, std::shared_ptr<Pixel>> m_Bitmaps;
 		std::unordered_map<const BITMAP*, std::shared_ptr<Pixel>> m_BitmapSources;
+		std::unordered_map<const Serializable*, CheckpointText> m_WriterValues;
 		std::list<Entity*> m_Owners;
 		std::unordered_map<const Entity*, Entity*> m_Objects;
 		std::unordered_map<Entity*, Entity**> m_Slots;

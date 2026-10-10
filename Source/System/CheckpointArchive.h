@@ -65,7 +65,14 @@ namespace RTE {
 			bool m_Enabled;
 			CheckpointBuffer::ArenaPoolScope m_Arenas;
 		};
-		static bool BatchEnabled() { return s_Batches.load(std::memory_order_relaxed) != 0; }
+		class BatchOverride {
+		public:
+			explicit BatchOverride(bool enabled) : m_Previous(s_BatchOverride) { s_BatchOverride = enabled; }
+			~BatchOverride() { s_BatchOverride = m_Previous; }
+		private:
+			std::optional<bool> m_Previous;
+		};
+		static bool BatchEnabled() { return s_BatchOverride.value_or(s_Batches.load(std::memory_order_relaxed) != 0); }
 		class CacheScope {
 		public:
 			explicit CacheScope(CheckpointCache* cache) : m_Previous(s_Cache) { s_Cache = cache; }
@@ -493,6 +500,7 @@ namespace RTE {
 		inline static thread_local CaptureScope* s_Capture = nullptr;
 		inline static thread_local CheckpointCache* s_Cache = nullptr;
 		inline static std::atomic<unsigned> s_Batches{0};
+		inline static thread_local std::optional<bool> s_BatchOverride;
 		bool m_Recording = false;
 		mutable CheckpointBuffer m_Capture;
 		CheckpointBuffer* m_Output;

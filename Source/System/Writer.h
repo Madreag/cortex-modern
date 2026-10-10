@@ -99,6 +99,7 @@ namespace RTE {
 		CheckpointText();
 		explicit CheckpointText(std::string text);
 		const std::string& Text() const;
+		CheckpointText ReindentWriter(int delta) const;
 		size_t OwnedBytes() const;
 		bool HasPeerRuns() const;
 		bool SameValues(const CheckpointText& other) const;
