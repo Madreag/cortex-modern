@@ -32,8 +32,8 @@ ConcreteClassInfo(AtomGroup, Entity, 500);
 AtomGroup::AtomGroup(const AtomGroup& source, CheckpointNativeSnapshot& snapshot) :
 	Entity(source, snapshot),
 	// Atoms stay identities; their frozen values are read from m_FrozenAtoms.
-	m_Atoms(source.m_Atoms),
-	m_SubGroups(source.m_SubGroups),
+	m_Atoms(snapshot.Retain(source.m_Atoms, &m_Atoms)),
+	m_SubGroups(snapshot.Retain(source.m_SubGroups, &m_SubGroups)),
 	m_OwnerMOSR(snapshot.Freeze(source.m_OwnerMOSR)),
 	m_StoredOwnerMass(snapshot.Freeze(source.m_StoredOwnerMass)),
 	m_Material(snapshot.Freeze(source.m_Material)),

@@ -391,6 +391,32 @@ namespace RTE {
 				return std::list<T, Allocator>(source.get_allocator());
 			} else return Freeze(source);
 		}
+		/// Keeps pointer identities as owned bytes; no reader dereferences them after the boundary.
+		template<class T, class Allocator> auto Retain(const std::vector<T*, Allocator>& source, std::vector<T*, Allocator>* target) {
+			if (!source.empty()) {
+				const auto* values = OwnValues<true>(source);
+				AfterBoundary([target, values] { target->assign(values->Data(), values->Data() + values->size); });
+			}
+			return std::vector<T*, Allocator>(source.get_allocator());
+		}
+		template<class Key, class T, class VectorAllocator, class Hash, class Equal, class Allocator>
+		auto Retain(const std::unordered_map<Key, std::vector<T*, VectorAllocator>, Hash, Equal, Allocator>& source,
+		            std::unordered_map<Key, std::vector<T*, VectorAllocator>, Hash, Equal, Allocator>* target) {
+			using Map = std::unordered_map<Key, std::vector<T*, VectorAllocator>, Hash, Equal, Allocator>;
+			if (!source.empty()) {
+				std::vector<std::pair<Key, std::span<T* const>>> groups;
+				groups.reserve(source.size());
+				for (const auto& [key, group]: source) {
+					const auto* values = OwnValues<true>(group);
+					groups.emplace_back(key, std::span<T* const>(values->Data(), values->size));
+				}
+				AfterBoundary([target, groups = std::move(groups)] {
+					target->clear(); target->reserve(groups.size());
+					for (const auto& [key, values]: groups) (*target)[key].assign(values.begin(), values.end());
+				});
+			}
+			return Map(0, source.hash_function(), source.key_eq(), source.get_allocator());
+		}
 		template<class T> requires (!std::is_array_v<T>) void Prepare(const T& source, T* target) {
 			if constexpr (std::is_base_of_v<Entity, T>) m_Objects.InsertOrAssign(&source, target);
 			else m_Values.InsertOrAssign(&source, target);
@@ -497,7 +523,7 @@ namespace RTE {
 			const T* Data() const { return data; }
 			~OwnedValues() { for (size_t index = 0; index < size; ++index) std::destroy_at(Data() + index); }
 		};
-		template<class Range> auto OwnValues(const Range& source) {
+		template<bool retainPointers = false, class Range> auto OwnValues(const Range& source) {
 			using Source = typename Range::value_type;
 			using T = std::conditional_t<std::is_same_v<Source, std::string>, std::string_view, Source>;
 			using Record = OwnedValues<T>;
@@ -517,6 +543,9 @@ namespace RTE {
 			owner.first = record;
 			if constexpr (std::is_same_v<Source, std::string>) {
 				for (const auto& value: source) { ::new(record->Data() + record->size) T(OwnBytes(value)); ++record->size; }
+			} else if constexpr (retainPointers) {
+				static_assert(std::is_pointer_v<T>);
+				for (const auto& value: source) { ::new(record->Data() + record->size) T(value); ++record->size; }
 			} else if constexpr (requires(const T& value) { T(value, *this); }) {
 				size_t index = 0;
 				for (const auto& value: source) Prepare(value, record->Data() + index++);
