@@ -88,6 +88,11 @@ namespace RTE::CheckpointLua {
 		std::atomic<int64_t> us{0};
 	};
 
+	struct LibraryHandlers {
+		lua_CFunction panic = nullptr, finalizerError = nullptr;
+		uint8_t eventMask = 0;
+	};
+
 	// The VM's memory at one freeze: a copy of every committed page. Addresses identify the source VM; only the copy is read.
 	class Snapshot {
 	public:
@@ -96,6 +101,7 @@ namespace RTE::CheckpointLua {
 
 		Snapshot() = default;
 		lua_State* State() const { return m_Data ? m_Data->state : nullptr; }
+		LibraryHandlers Handlers() const { return m_Data ? m_Data->handlers : LibraryHandlers{}; }
 		uint64_t StateSerial() const { return m_Data ? m_Data->serial : 0; }
 		size_t ByteCount() const { return m_Data ? m_Data->committed : 0; }
 		size_t BlockCount() const { return m_Data ? m_Data->copied.load(std::memory_order_relaxed) : 0; }
@@ -134,6 +140,7 @@ namespace RTE::CheckpointLua {
 	private:
 		struct Data {
 			lua_State* state = nullptr;
+			LibraryHandlers handlers;
 			uint64_t serial = 0;
 			uintptr_t base = 0;
 			size_t committed = 0;
@@ -304,6 +311,7 @@ namespace RTE::CheckpointLua {
 			if (!keepCow) WaitCopy(true);
 			auto data = std::make_shared<Snapshot::Data>();
 			data->state = m_State;
+			data->handlers = m_LibraryHandlers;
 			data->serial = G(m_State)->objserial;
 			data->base = m_Base;
 			data->committed = m_Committed;
@@ -497,6 +505,7 @@ namespace RTE::CheckpointLua {
 		HeapOwner() = default;
 		std::unique_ptr<lua_State, decltype(&lua_close)> m_Bootstrap{nullptr, lua_close};
 		lua_State* m_State = nullptr;
+		LibraryHandlers m_LibraryHandlers;
 		uintptr_t m_Reservation = 0;
 		uintptr_t m_Base = 0;
 		size_t m_Committed = 0;
@@ -777,6 +786,7 @@ namespace RTE::CheckpointLua {
 			m_Bootstrap.reset(luaL_newstate());
 			if (!m_Bootstrap) throw std::runtime_error("could not create the Lua allocator bootstrap");
 			const lua_CFunction panic = G(m_Bootstrap.get())->panic;
+			m_LibraryHandlers.panic = panic;
 #ifndef LUAJIT_DISABLE_VMEVENT
 			lua_getfield(m_Bootstrap.get(), LUA_REGISTRYINDEX, LJ_VMEVENTS_REGKEY);
 			if (!lua_istable(m_Bootstrap.get(), -1)) throw std::runtime_error("the Lua bootstrap supplied no finalizer event table");
@@ -785,6 +795,8 @@ namespace RTE::CheckpointLua {
 			if (!finalizerError || lua_getupvalue(m_Bootstrap.get(), -1, 1))
 				throw std::runtime_error("the Lua bootstrap finalizer handler cannot be transferred");
 			lua_pop(m_Bootstrap.get(), 2);
+			m_LibraryHandlers.finalizerError = finalizerError;
+			m_LibraryHandlers.eventMask = G(m_Bootstrap.get())->vmevmask;
 #endif
 			m_State = lua_newstate(&Allocate, this);
 			if (!m_State) throw std::runtime_error("could not create the tracked Lua state");

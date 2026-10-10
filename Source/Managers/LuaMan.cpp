@@ -10550,6 +10550,25 @@ end
 			retryHeld = workerRefused && !m_FrozenCaptureUnavailable->load(std::memory_order_relaxed) && failedGraph.Text() == expected && retryHeld;
 			std::cout << "[script-graph-selftest] " << (retryHeld ? "PASS" : "FAIL") << " worker_lua_allocation_failure_retries_the_exact_frozen_graph" << std::endl;
 			checkpointValues = retryHeld && checkpointValues;
+			bool bootstrapHeld = retryHeld;
+			for (size_t allowed: {size_t(1), size_t(3), size_t(32)}) {
+				CheckpointText bootstrapGraph;
+				bootstrapHeld = CaptureScriptGraph(bootstrapGraph, failures, true) && bootstrapHeld;
+				if (!m_GraphWorker) { bootstrapHeld = false; break; }
+				{
+					std::lock_guard lock(m_GraphWorker->mutex);
+					m_GraphWorker->state.reset();
+					m_GraphWorker->context.reset();
+				}
+				bool refused = false;
+				{
+					CheckpointFailure::Scope failure(CheckpointFailure::Point::LuaAllocation, allowed);
+					try { (void)bootstrapGraph.Text(); } catch (const std::bad_alloc&) { refused = true; }
+				}
+				bootstrapHeld = refused && bootstrapGraph.Text() == expected && bootstrapHeld;
+			}
+			std::cout << "[script-graph-selftest] " << (bootstrapHeld ? "PASS" : "FAIL") << " worker_bootstrap_allocation_failure_retries_the_exact_frozen_graph" << std::endl;
+			checkpointValues = bootstrapHeld && checkpointValues;
 		}
 		{
 			const auto owner = CheckpointLua::HeapOwner::Create();

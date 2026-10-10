@@ -61,16 +61,26 @@ namespace RTE::CheckpointLua {
 			const bool first = !owner->state;
 			if (first) {
 				CheckpointFailure::Check(CheckpointFailure::Point::LuaAllocation);
-				owner->state.reset(luaL_newstate());
+				owner->state.reset(luaL_newstate_raw());
 				if (!owner->state) throw std::bad_alloc();
 				owner->allocator = lua_getallocf(owner->state.get(), &owner->allocatorContext);
 				lua_setallocf(owner->state.get(), GraphWorker::Allocate, owner.get());
+				lua_atpanic(owner->state.get(), heap.Handlers().panic);
 			}
 			lua_State* worker = owner->state.get();
 			std::string result;
 			try {
 				ProtectedCall(worker, [&] {
 					if (first) {
+#ifndef LUAJIT_DISABLE_VMEVENT
+						const auto handlers = heap.Handlers();
+						if (!handlers.finalizerError || luaL_findtable(worker, LUA_REGISTRYINDEX, LJ_VMEVENTS_REGKEY, LJ_VMEVENTS_HSIZE))
+							throw std::runtime_error("could not create the graph worker finalizer event table");
+						lua_pushcfunction(worker, handlers.finalizerError);
+						lua_rawseti(worker, -2, VMEVENT_HASH(LJ_VMEVENT_ERRFIN));
+						G(worker)->vmevmask = handlers.eventMask;
+						lua_pop(worker, 1);
+#endif
 						luaL_openlibs(worker);
 						owner->context = std::make_shared<Context>(*this, carried);
 					}
