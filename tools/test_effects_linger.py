@@ -54,17 +54,17 @@ def detector(repo, root, executable):
     stage_scene(run, "EffectsLinger", repo / "tools/fixtures/EffectsLinger.lua")
     record = execute(run)
     observed = json.loads(native.read_text(encoding="utf-8")) if native.is_file() else {}
-    healthy = record.get("exit_code") == 0 and not record.get("timed_out") and len(observed.get("cases", [])) == 6
+    healthy = record.get("exit_code") == 0 and not record.get("timed_out") and len(observed.get("cases", [])) == 2
     result = {"record": record, "native": observed, "complete": healthy, "pass": healthy and observed.get("pass") is True,
-              "topology": "single-box", "proof": False, "scope": "production MO adoption, update and draw with held sim clock"}
+              "topology": "single-box", "proof": False, "scope": "production shot, MO lifetime and glow draw list with held input and ticks owed"}
     write_json(root / "result.json", result)
     for rate in (8, 60):
         cases = [row for row in observed.get("cases", []) if row["tps"] == rate]
-        passed = healthy and len(cases) == 3 and all(row["pass"] for row in cases)
-        late = sum(row["late_overlay_pixels"] for row in cases)
-        expired = sum(row["expired_ghost_observations"] for row in cases)
-        old = sum(row["old_ghost_observations"] for row in cases)
-        print(f"{'GREEN' if passed else 'RED'} {rate} tps: late_pixels={late} expired_ghosts={expired} older_than_max={old}", flush=True)
+        passed = healthy and len(cases) == 1 and all(row["pass"] for row in cases)
+        late = sum(row.get("late_glows", 0) for row in cases)
+        expired = sum(row.get("stale_flash_observations", 0) + row.get("stale_explosion_observations", 0) for row in cases)
+        old = sum(not row.get("preview_bound", False) for row in cases)
+        print(f"{'GREEN' if passed else 'RED'} {rate} tps: late_glows={late} stale_effects={expired} older_than_max={old}", flush=True)
     return result
 
 
