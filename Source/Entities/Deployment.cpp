@@ -22,7 +22,7 @@ std::vector<BITMAP*> Deployment::m_apArrowRightBitmap;
 
 Deployment::Deployment(const Deployment& source, CheckpointNativeSnapshot& snapshot) :
 	SceneObject(source, snapshot),
-	m_LoadoutName(snapshot.Freeze(source.m_LoadoutName)),
+	m_LoadoutName(snapshot.Freeze(source.m_LoadoutName, &m_LoadoutName)),
 	m_Icon(snapshot.Freeze(source.m_Icon)),
 	m_SpawnRadius(snapshot.Freeze(source.m_SpawnRadius)),
 	m_WalkRadius(snapshot.Freeze(source.m_WalkRadius)),

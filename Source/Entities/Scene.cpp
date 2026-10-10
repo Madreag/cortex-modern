@@ -101,7 +101,7 @@ ConcreteClassInfo(Scene, Entity, 0);
 const std::string Scene::Area::c_ClassName = "Area";
 
 Scene::Area::Area(const Area& source, CheckpointNativeSnapshot& snapshot) :
-	m_BoxList(snapshot.Freeze(source.m_BoxList)), m_Name(source.m_Name), m_FrozenNative(true) {
+	m_BoxList(snapshot.Freeze(source.m_BoxList, &m_BoxList)), m_Name(source.m_Name), m_FrozenNative(true) {
 	snapshot.BindValue(source, this);
 }
 
@@ -312,13 +312,13 @@ Scene::Scene(const Scene& source, CheckpointNativeSnapshot& snapshot) :
 	m_PartialPathUpdateTimer(snapshot.Freeze(source.m_PartialPathUpdateTimer)),
 	m_HorizonTerrainBoxes{},
 	m_PlacedObjects{},
-	m_BackLayerList(snapshot.Freeze(source.m_BackLayerList)),
+	m_BackLayerList(snapshot.Freeze(source.m_BackLayerList, &m_BackLayerList)),
 	m_UnseenPixelSize{},
 	m_apUnseenLayer{},
 	m_SeenPixels{},
 	m_CleanedPixels{},
 	m_ScanScheduled{},
-	m_AreaList(snapshot.Freeze(source.m_AreaList)),
+	m_AreaList(snapshot.Freeze(source.m_AreaList, &m_AreaList)),
 	m_NavigableAreas(snapshot.Freeze(source.m_NavigableAreas)),
 	m_NavigableAreasUpToDate(snapshot.Freeze(source.m_NavigableAreasUpToDate)),
 	m_GlobalAcc(snapshot.Freeze(source.m_GlobalAcc)),
@@ -326,10 +326,10 @@ Scene::Scene(const Scene& source, CheckpointNativeSnapshot& snapshot) :
 	m_AssembliesCounts(snapshot.Freeze(source.m_AssembliesCounts)),
 	m_pPreviewBitmap(snapshot.Freeze(source.m_pPreviewBitmap)),
 	m_PreviewBitmapFile(snapshot.Freeze(source.m_PreviewBitmapFile)),
-	m_MetasceneParent(snapshot.Freeze(source.m_MetasceneParent)),
+	m_MetasceneParent(snapshot.Freeze(source.m_MetasceneParent, &m_MetasceneParent)),
 	m_IsMetagameInternal(snapshot.Freeze(source.m_IsMetagameInternal)),
 	m_IsSavedGameInternal(snapshot.Freeze(source.m_IsSavedGameInternal)),
-	m_Deployments(snapshot.Freeze(source.m_Deployments)),
+	m_Deployments(snapshot.Freeze(source.m_Deployments, &m_Deployments)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 	m_FrozenSaveModuleID = source.IsFrozenCheckpointNative() ? source.m_FrozenSaveModuleID : g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName);
 	m_FrozenSaveModulePath = source.IsFrozenCheckpointNative() ? source.m_FrozenSaveModulePath : g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName);
@@ -346,7 +346,7 @@ Scene::Scene(const Scene& source, CheckpointNativeSnapshot& snapshot) :
 		CheckpointCloneCost cost("scene path finders");
 		for (size_t index = 0; index < m_FrozenPathFinders.size(); ++index) m_FrozenPathFinders[index] = source.m_pPathFinders[index] ? source.m_pPathFinders[index]->FreezeCheckpoint() : CheckpointText(std::string());
 	}
-	if (&source == g_SceneMan.GetScene()) { std::list<SceneObject*> roots; g_MovableMan.GetAllActors(false, roots); g_MovableMan.GetAllItems(false, roots); g_MovableMan.GetAllParticles(false, roots); m_FrozenSaveRoots = snapshot.Freeze(roots); }
+	if (&source == g_SceneMan.GetScene()) { std::list<SceneObject*> roots; g_MovableMan.GetAllActors(false, roots); g_MovableMan.GetAllItems(false, roots); g_MovableMan.GetAllParticles(false, roots); m_FrozenSaveRoots = snapshot.Freeze(roots, &m_FrozenSaveRoots); }
 }
 
 Entity* Scene::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {

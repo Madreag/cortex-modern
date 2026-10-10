@@ -17,8 +17,8 @@ ConcreteClassInfo(GlobalScript, Entity, 10);
 
 GlobalScript::GlobalScript(const GlobalScript& source, CheckpointNativeSnapshot& snapshot) :
 	Entity(source, snapshot),
-	m_ScriptPath(snapshot.Freeze(source.m_ScriptPath)),
-	m_LuaClassName(snapshot.Freeze(source.m_LuaClassName)),
+	m_ScriptPath(snapshot.Freeze(source.m_ScriptPath, &m_ScriptPath)),
+	m_LuaClassName(snapshot.Freeze(source.m_LuaClassName, &m_LuaClassName)),
 	m_IsActive(snapshot.Freeze(source.m_IsActive)),
 	m_HasStarted(snapshot.Freeze(source.m_HasStarted)),
 	m_LateUpdate(snapshot.Freeze(source.m_LateUpdate)),

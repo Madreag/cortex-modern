@@ -52,15 +52,15 @@ AbstractClassInfo(Activity, Entity);
 
 Activity::Activity(const Activity& source, CheckpointNativeSnapshot& snapshot) :
 	Entity(source, snapshot),
-	m_PendingRuntimeCheckpoint(snapshot.Freeze(source.m_PendingRuntimeCheckpoint)),
+	m_PendingRuntimeCheckpoint(snapshot.Freeze(source.m_PendingRuntimeCheckpoint, &m_PendingRuntimeCheckpoint)),
 	m_CheckpointActorIDs(snapshot.Freeze(source.m_CheckpointActorIDs)),
 	m_HasCheckpointActorIDs(snapshot.Freeze(source.m_HasCheckpointActorIDs)),
 	m_ActivityState(snapshot.Freeze(source.m_ActivityState)),
 	m_Paused(snapshot.Freeze(source.m_Paused)),
 	m_AllowsUserSaving(snapshot.Freeze(source.m_AllowsUserSaving)),
 	m_IsTestActivity(snapshot.Freeze(source.m_IsTestActivity)),
-	m_Description(snapshot.Freeze(source.m_Description)),
-	m_SceneName(snapshot.Freeze(source.m_SceneName)),
+	m_Description(snapshot.Freeze(source.m_Description, &m_Description)),
+	m_SceneName(snapshot.Freeze(source.m_SceneName, &m_SceneName)),
 	m_MaxPlayerSupport(snapshot.Freeze(source.m_MaxPlayerSupport)),
 	m_MinTeamsRequired(snapshot.Freeze(source.m_MinTeamsRequired)),
 	m_Difficulty(snapshot.Freeze(source.m_Difficulty)),

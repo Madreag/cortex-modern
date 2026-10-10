@@ -35,8 +35,8 @@ BunkerAssemblyScheme::BunkerAssemblyScheme(const BunkerAssemblyScheme& source, C
 	m_Limit(snapshot.Freeze(source.m_Limit)),
 	m_BitmapOffset(snapshot.Freeze(source.m_BitmapOffset)),
 	m_MaxDeployments(snapshot.Freeze(source.m_MaxDeployments)),
-	m_SymmetricScheme(snapshot.Freeze(source.m_SymmetricScheme)),
-	m_AssemblyGroup(snapshot.Freeze(source.m_AssemblyGroup)),
+	m_SymmetricScheme(snapshot.Freeze(source.m_SymmetricScheme, &m_SymmetricScheme)),
+	m_AssemblyGroup(snapshot.Freeze(source.m_AssemblyGroup, &m_AssemblyGroup)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 }
 

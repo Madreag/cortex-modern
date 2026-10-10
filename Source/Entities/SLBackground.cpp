@@ -22,7 +22,7 @@ ConcreteClassInfo(SLBackground, StaticSceneLayer, 0);
 SLBackground::SLBackground(const SLBackground& source, CheckpointNativeSnapshot& snapshot) :
 	StaticSceneLayer(source, snapshot),
 	m_CheckpointBitmaps{},
-	m_Bitmaps(snapshot.Freeze(source.m_Bitmaps)),
+	m_Bitmaps(snapshot.Freeze(source.m_Bitmaps, &m_Bitmaps)),
 	m_FrameCount(snapshot.Freeze(source.m_FrameCount)),
 	m_Frame(snapshot.Freeze(source.m_Frame)),
 	m_SpriteAnimMode(snapshot.Freeze(source.m_SpriteAnimMode)),

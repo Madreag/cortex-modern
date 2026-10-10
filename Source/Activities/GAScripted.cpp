@@ -40,12 +40,12 @@ ConcreteClassInfo(GAScripted, GameActivity, 0);
 
 GAScripted::GAScripted(const GAScripted& source, CheckpointNativeSnapshot& snapshot) :
 	GameActivity(source, snapshot),
-	m_ScriptPath(snapshot.Freeze(source.m_ScriptPath)),
-	m_LuaClassName(snapshot.Freeze(source.m_LuaClassName)),
+	m_ScriptPath(snapshot.Freeze(source.m_ScriptPath, &m_ScriptPath)),
+	m_LuaClassName(snapshot.Freeze(source.m_LuaClassName, &m_LuaClassName)),
 	m_RequiredAreas(snapshot.Freeze(source.m_RequiredAreas)),
 	m_FrozenPieSlices(snapshot.Freeze(source.m_FrozenPieSlices)),
 	m_PieSlicesToAdd{},
-	m_GlobalScriptsList(snapshot.Freeze(source.m_GlobalScriptsList)),
+	m_GlobalScriptsList(snapshot.Freeze(source.m_GlobalScriptsList, &m_GlobalScriptsList)),
 	m_HasSavedGlobalScripts(snapshot.Freeze(source.m_HasSavedGlobalScripts)),
 	m_ScriptFunctions{} {
 	for (const auto& slice: source.m_PieSlicesToAdd) m_FrozenPieSlices.push_back(snapshot.FreezeWriter(slice.get()));

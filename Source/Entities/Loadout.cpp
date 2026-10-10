@@ -11,7 +11,7 @@ Loadout::Loadout(const Loadout& source, CheckpointNativeSnapshot& snapshot) :
 	Entity(source, snapshot),
 	m_Complete(snapshot.Freeze(source.m_Complete)),
 	m_pDeliveryCraft(snapshot.Freeze(source.m_pDeliveryCraft)),
-	m_CargoItems(snapshot.Freeze(source.m_CargoItems)),
+	m_CargoItems(snapshot.Freeze(source.m_CargoItems, &m_CargoItems)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 }
 

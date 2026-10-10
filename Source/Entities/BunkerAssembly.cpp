@@ -26,11 +26,11 @@ namespace {
 
 BunkerAssembly::BunkerAssembly(const BunkerAssembly& source, CheckpointNativeSnapshot& snapshot) :
 	TerrainObject(source, snapshot),
-	m_PlacedObjects(snapshot.Freeze(source.m_PlacedObjects)),
-	m_ParentAssemblyScheme(snapshot.Freeze(source.m_ParentAssemblyScheme)),
-	m_ParentSchemeGroup(snapshot.Freeze(source.m_ParentSchemeGroup)),
+	m_PlacedObjects(snapshot.Freeze(source.m_PlacedObjects, &m_PlacedObjects)),
+	m_ParentAssemblyScheme(snapshot.Freeze(source.m_ParentAssemblyScheme, &m_ParentAssemblyScheme)),
+	m_ParentSchemeGroup(snapshot.Freeze(source.m_ParentSchemeGroup, &m_ParentSchemeGroup)),
 	m_pPresentationBitmap(snapshot.Freeze(source.m_pPresentationBitmap)),
-	m_SymmetricAssembly(snapshot.Freeze(source.m_SymmetricAssembly)),
+	m_SymmetricAssembly(snapshot.Freeze(source.m_SymmetricAssembly, &m_SymmetricAssembly)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 }
 

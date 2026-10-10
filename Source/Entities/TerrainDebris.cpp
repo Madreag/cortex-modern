@@ -11,7 +11,7 @@ ConcreteClassInfo(TerrainDebris, Entity, 0);
 TerrainDebris::TerrainDebris(const TerrainDebris& source, CheckpointNativeSnapshot& snapshot) :
 	Entity(source, snapshot),
 	m_DebrisFile(snapshot.Freeze(source.m_DebrisFile)),
-	m_Bitmaps(snapshot.Freeze(source.m_Bitmaps)),
+	m_Bitmaps(snapshot.Freeze(source.m_Bitmaps, &m_Bitmaps)),
 	m_BitmapCount(snapshot.Freeze(source.m_BitmapCount)),
 	m_Material(snapshot.Freeze(source.m_Material)),
 	m_TargetMaterial(snapshot.Freeze(source.m_TargetMaterial)),

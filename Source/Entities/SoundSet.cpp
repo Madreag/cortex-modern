@@ -63,7 +63,7 @@ SoundSet::SoundSet(const SoundSet& source, CheckpointNativeSnapshot& snapshot) :
 	m_PendingCycleModeWritten(false),
 	m_SoundData(snapshot.Freeze(source.m_SoundData)),
 	m_SoundDataSource(source.m_SoundDataSource),
-	m_SubSoundSets(snapshot.Freeze(source.m_SubSoundSets)),
+	m_SubSoundSets(snapshot.Freeze(source.m_SubSoundSets, &m_SubSoundSets)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)),
 	m_CheckpointValueTrap(false),
 	m_CheckpointOwner(nullptr) {
