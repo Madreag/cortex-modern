@@ -1216,6 +1216,7 @@ namespace RTE {
 		void AdoptPreviewGhost(const PreviewEventLedger::Key& key, MovableObject* adoptee, uint64_t committedTick);
 		/// Puts a held adoptee back on the frame, because the ghost standing in for it is going away.
 		void ReleaseAdoptionHold(PreviewGhost& ghost);
+		bool PreviewGhostExpired(const PreviewGhost& ghost, uint64_t committedTick) const;
 		std::vector<PreviewGhost> m_PreviewGhosts;
 		uint64_t m_PreviewGhostPeak = 0;
 		PreviewSwap m_LastPreviewSwap;
