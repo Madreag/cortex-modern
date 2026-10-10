@@ -15,11 +15,15 @@ def main():
     sha = subprocess.check_output(["git", "-C", str(baseline), "rev-parse", "HEAD"], text=True).strip()
     if not sha.startswith("107dbdab7c"):
         raise SystemExit("The probes require the recorded integration baseline")
-    proof_path = baseline.parent / "baseline-probes.json"
+    metadata = subprocess.check_output(["git", "-C", str(baseline), "rev-parse", "--git-path", "session-plane-baseline-probes.json"], text=True).strip()
+    proof_path = Path(metadata)
+    if not proof_path.is_absolute():
+        proof_path = baseline / proof_path
+    previous_path = proof_path if proof_path.exists() else baseline.parent / "baseline-probes.json"
     if subprocess.check_output(["git", "-C", str(baseline), "status", "--porcelain"], text=True).strip():
-        if not proof_path.exists():
+        if not previous_path.exists():
             raise SystemExit("The baseline must be clean before adding probes")
-        previous = json.loads(proof_path.read_text(encoding="utf-8"))
+        previous = json.loads(previous_path.read_text(encoding="utf-8"))
         for relative, digest in previous["files"].items():
             target = (baseline / relative).resolve()
             if not target.is_relative_to(baseline) or hashlib.sha256(target.read_bytes()).hexdigest() != digest:
