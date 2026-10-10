@@ -868,7 +868,8 @@ namespace {
 			}
 			observed["scene"] = state;
 			bool good = true;
-			for (const auto& [key, expected]: step.value("equals", Json::object()).items()) good &= state.at(key) == expected;
+			const Json expectedValues = step.value("equals", Json::object());
+			for (const auto& [key, expected]: expectedValues.items()) good &= state.at(key) == expected;
 			if (step.contains("delivered")) good &= std::find(state["team_actors"].begin(), state["team_actors"].end(), step.at("delivered")) != state["team_actors"].end();
 			if (step.contains("funds_delta_from")) {
 				const auto& order = probe.result.at("bookmarks").at(step.at("funds_delta_from").get<std::string>()).at("scope");

@@ -226,12 +226,12 @@ def place(peer, occupied=False, x=None, relative_to=None):
     if peer == "joiner" and occupied:
         steps += [wait(setup_ready=1), dict(op="editor_move", input_player=0, x_fraction=0.35)]
         steps += capture("occupied-preview")
-        steps += [dict(op="assert_editor", input_player=0, screen_text_contains="Occupied by Captain's brain - choose another spot")]
+        steps += [dict(op="assert_editor", input_player=0, equals=dict(screen_text="Occupied by Captain's brain - choose another spot"))]
         steps += click()
         steps += [dict(op="assert_editor", input_player=0, equals=dict(ready=False, submitted=False)),
                   dict(op="editor_move", input_player=0, x_fraction=fraction), wait(renders=5, elapsed_ms=1000)]
     steps += capture(f"valid-preview-{peer}")
-    steps += [dict(op="assert_editor", input_player=0, screen_text_contains="Valid spot - click to INSTALL your brain"),
+    steps += [dict(op="assert_editor", input_player=0, equals=dict(screen_text="Valid spot - click to INSTALL your brain")),
               dict(op="assert_control", control="LabelNetMatchStatus", text_contains="0 of 2" if peer == "host" else "1 of 2", fits=True, inside="BoxNetMatchStatus")]
     steps += click()
     if peer == "host":
@@ -408,7 +408,7 @@ def moderation_scene():
         host, joiner = place("host"), place("joiner")
         button = f"NetworkSeat{part}@Joiner"
         host += key("F6") + [wait(panel_open=True), menu(f"activate {button}")]
-        host += capture(f"confirm-{action}") + [dict(op="assert_control", control=button, text_contains=f"Confirm: {'remove' if action == 'kick' else 'ban'} Joiner", fits=True),
+        host += capture(f"confirm-{action}") + [dict(op="assert_control", control=button, text_contains=f"Confirm: {'remove' if action == 'kick' else 'ban'} Joiner", fits=True, inside="NetworkSeats"),
                 menu(f"activate {button}"), wait(elapsed_ms=25000), dict(op="assert_scene", input_player=0, equals=dict(alive=True)), dict(op="finish")]
         joiner += [wait(screen="MultiplayerScreen", scope="menu")]
         joiner += capture(f"{action}-joiner") + [menu(f"assert_label LabelJoinSelected The host {reason} you from this session")]
