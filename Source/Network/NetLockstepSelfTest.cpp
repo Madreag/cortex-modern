@@ -28072,6 +28072,7 @@ namespace {
 			if (seeded.at("seat_removal_undo").empty()) return done("the seed removal has no rollback record");
 			const auto undo = seeded.at("seat_removal_undo").at(0);
 			bool refused = false, crossed = false;
+			size_t lastSealableCount = 0;
 			const size_t maxRecords = 32 * 1024 / json::to_cbor(undo).size() + 2;
 			for (size_t count = 1; count <= maxRecords; ++count) {
 				auto state = initial; state["seat_removal_undo"] = json::array();
@@ -28081,6 +28082,7 @@ namespace {
 				if (!service.m_ReconnectHost.ImportMigrationState(bytes, service.m_SeatAuth, round.match, 1, round.peers[0].RemoteTransports(), admission.nowMs)) return done("the legal high-byte history did not import");
 				std::vector<uint8_t> before;
 				if (!service.SealMigrationCapsule(2, round.peers[0].GetRoundConfigHash(), before)) break;
+				lastSealableCount = count;
 				for (const auto& seat: service.m_ReconnectHost.GetModerationView()) if (seat.lockstepPeerId == 4) selected = NetSelectModerationSeat(seat);
 				const auto snapshot = service.m_ReconnectHost.ExportMigrationState();
 				const auto result = service.m_ReconnectHost.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, admission.nowMs, admission.wallMs,
@@ -28096,6 +28098,71 @@ namespace {
 					if (!service.SealMigrationCapsule(2, round.peers[0].GetRoundConfigHash(), after)) return done("capacity refusal leaves an unsealable capsule");
 				}
 				crossed |= retained.size() > bytes.size();
+			}
+			if (lastSealableCount != 0) {
+				// A whole undo record can skip the narrow reservation boundary. Refine
+				// the last sealable history with legal display names, one character at
+				// a time; every capacity and credential assertion below stays strict.
+				const auto original = json::from_cbor(undo.get<std::vector<uint8_t>>());
+				NetSeatRoster priorRoster;
+				if (!DecodeRoster(original.at("roster_bytes").get<std::vector<uint8_t>>(), priorRoster, &round.failure)) return done(round.failure);
+				const auto stableSeat = original.at("seat").at("seat").get<uint16_t>();
+				auto* priorSeat = priorRoster.Find(NetRosterIdOf(stableSeat));
+				const auto display = original.at("seat").at("display").get<std::string>();
+				if (!priorSeat || priorSeat->name != display || display.size() >= 64) return done("the historical display name has no legal refinement room");
+				const size_t nameRoom = 64 - display.size();
+				std::vector<json> variants(nameRoom + 1);
+				for (size_t extra = 0; extra <= nameRoom; ++extra) {
+					auto history = original;
+					priorSeat->name = display + std::string(extra, 'x');
+					history["seat"]["display"] = priorSeat->name;
+					history["roster_bytes"] = EncodeRoster(priorRoster);
+					variants[extra] = json::to_cbor(history);
+				}
+				if (variants.front() != undo) return done("the zero-padding history changed rollback fields");
+				const auto importRefinement = [&](size_t padding, bool& sealable) {
+					auto state = initial; state["seat_removal_undo"] = json::array();
+					for (size_t index = 0; index < lastSealableCount; ++index) {
+						const size_t extra = std::min(padding, nameRoom);
+						state["seat_removal_undo"].push_back(variants[extra]); padding -= extra;
+					}
+					const auto bytes = json::to_cbor(state);
+					sealable = false;
+					if (bytes.size() > 32 * 1024) return true;
+					if (!service.m_ReconnectHost.ImportMigrationState(bytes, service.m_SeatAuth, round.match, 1, round.peers[0].RemoteTransports(), admission.nowMs)) return false;
+					std::vector<uint8_t> capsule;
+					sealable = service.SealMigrationCapsule(2, round.peers[0].GetRoundConfigHash(), capsule);
+					return true;
+				};
+				// Find the largest still sealable input, using the real import and
+				// seal paths. No synthetic refusal or capacity predicate stands in.
+				size_t low = 0, high = lastSealableCount * nameRoom;
+				while (low < high) {
+					const size_t middle = low + (high - low + 1) / 2;
+					bool sealable = false;
+					if (!importRefinement(middle, sealable)) return done("the refined legal history did not import");
+					if (sealable) low = middle; else high = middle - 1;
+				}
+				bool sealable = false;
+				if (!importRefinement(low, sealable) || !sealable) return done("the refined reservation boundary is not sealable");
+				for (const auto& seat: service.m_ReconnectHost.GetModerationView()) if (seat.lockstepPeerId == 4) selected = NetSelectModerationSeat(seat);
+				const auto snapshot = service.m_ReconnectHost.ExportMigrationState();
+				const auto result = service.m_ReconnectHost.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, admission.nowMs, admission.wallMs,
+				    round.match.sessionId, static_cast<uint32_t>(round.peers[0].GetRoundId()), 100000, issue);
+				std::vector<uint8_t> after;
+				const auto retained = service.m_ReconnectHost.ExportMigrationState();
+				if (result == NetKickBanResult::Ok && (retained.size() > 32 * 1024 || !service.SealMigrationCapsule(2, round.peers[0].GetRoundConfigHash(), after)))
+					return done("a permitted refined undo history exceeds the encoded capsule cap");
+				if (result != NetKickBanResult::ActionUnavailable) return done("the refined boundary did not exercise the encoded-capacity refusal");
+				if (result == NetKickBanResult::ActionUnavailable) {
+					refused = true;
+					if (issue.refusal.find("encoded") == std::string::npos || retained != snapshot) return done("capacity refusal changes admission state or has no named encoded-capacity reason");
+					if (!service.m_SeatAuth.MatchesActiveCredential(admission.clients[2].GetRecord().stableSeat, admission.clients[2].GetRecord().holderGeneration, admission.clients[2].GetRecord().credential)) return done("capacity refusal revokes the retained credential");
+					if (!service.SealMigrationCapsule(2, round.peers[0].GetRoundConfigHash(), after)) return done("capacity refusal leaves an unsealable capsule");
+				}
+				crossed |= retained.size() > snapshot.size();
+				std::cout << "[net-lockstep-selftest] encoded_removal_refinement prior_undo=" << lastSealableCount
+				          << " padding=" << low << " inner=" << snapshot.size() << " refused=" << refused << std::endl;
 			}
 			if (!refused || !crossed) return done("the high-byte detector did not reach the reservation boundary");
 			return done("");
