@@ -72,6 +72,11 @@ def main():
     native = native.replace(visible, "([]<class Peer>(const Peer& p, uint8_t seat) { "
                             "if constexpr (requires { p.IsSeatHoldVisible(seat, 1083); }) return p.IsSeatHoldVisible(seat, 1083); "
                             "else return p.HasHeldAISeat(seat); })(host, late)")
+    # The two recorded-host-return probes call the same pre-existing operation
+    # under its baseline name. Their horizon and claim assertions stay intact.
+    if native.count("host.ReclaimHostSeat(") != 2:
+        raise SystemExit("The baseline recorded-host-return probe anchors differ")
+    native = native.replace("host.ReclaimHostSeat(", "host.ReclaimRecordedHostSeat(")
     write("Source/Network/NetLockstepSelfTest.cpp", native)
     # Access declarations let current probes inspect the old state without
     # changing a single baseline decision or transport path.
