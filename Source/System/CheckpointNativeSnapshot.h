@@ -37,6 +37,14 @@ namespace RTE {
 		~CheckpointNativeSnapshot();
 		CheckpointNativeSnapshot(const CheckpointNativeSnapshot&) = delete;
 		CheckpointNativeSnapshot& operator=(const CheckpointNativeSnapshot&) = delete;
+		class BoundaryScope {
+		public:
+			explicit BoundaryScope(std::shared_ptr<CheckpointNativeSnapshot> snapshot) : m_Previous(std::move(s_Boundary)) { s_Boundary = std::move(snapshot); }
+			~BoundaryScope() { s_Boundary = std::move(m_Previous); }
+		private:
+			std::shared_ptr<CheckpointNativeSnapshot> m_Previous;
+		};
+		static const std::shared_ptr<CheckpointNativeSnapshot>& Boundary() { return s_Boundary; }
 		class ReadScope {
 		public:
 			explicit ReadScope(const CheckpointNativeSnapshot* snapshot) : m_Previous(s_Current), m_Clock(snapshot ? &snapshot->m_Clock : nullptr) { if (snapshot) s_Current = snapshot; }
@@ -237,6 +245,7 @@ namespace RTE {
 	private:
 		struct Pixel;
 		inline static thread_local const CheckpointNativeSnapshot* s_Current = nullptr;
+		inline static thread_local std::shared_ptr<CheckpointNativeSnapshot> s_Boundary;
 		std::unordered_map<const BITMAP*, std::shared_ptr<Pixel>> m_Bitmaps;
 		std::unordered_map<const BITMAP*, std::shared_ptr<Pixel>> m_BitmapSources;
 		std::unordered_map<const Serializable*, CheckpointText> m_WriterValues;

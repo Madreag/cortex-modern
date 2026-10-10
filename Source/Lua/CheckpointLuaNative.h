@@ -4,6 +4,7 @@
 #include "CheckpointLuaAddresses.h"
 #include "CaptureSentinel.h"
 #include "CheckpointCast.h"
+#include "CheckpointNativeSnapshot.h"
 #include "MOPixel.h"
 
 #include <algorithm>
@@ -242,9 +243,12 @@ namespace RTE::CheckpointLua {
 		struct ScalarEntry {
 			uint64_t serial = 0;
 			TValue kind{}, instance{}, address{}, singletonName{};
+			std::array<TValue, 5> nativeTail{};
 			std::array<TValue, 2> members{};
 			std::array<TValue, 4> properties{};
 			unsigned memberCount = 0;
+			unsigned nativeTailCount = 0, propertyCount = 0;
+			NativeId movable = 0;
 			bool timer = false, singleton = false;
 			mutable std::unique_ptr<Entry> expanded;
 			const Entry* Expand() const {
@@ -254,14 +258,16 @@ namespace RTE::CheckpointLua {
 					const auto answer = [](const TValue& token) { Result result; result.values.push_back(Value{token}); return result; };
 					entry->native[0] = answer(kind);
 					if (singleton) entry->native[0].values.push_back(Value{singletonName});
+					for (unsigned index = 0; index < nativeTailCount; ++index) entry->native[0].values.push_back(Value{nativeTail[index]});
 					entry->native[1] = entry->native[0];
+					entry->movable = movable;
 					for (unsigned index = 0; index < memberCount; ++index) entry->members.values.push_back(Value{members[index]});
 					entry->helpers.emplace("_ScriptGraphInstance", answer(instance));
 					entry->helpers.emplace("_ScriptGraphNativeAddress", answer(address));
 					static constexpr std::array vectorNames{"X", "Y"};
 					static constexpr std::array timerNames{"StartSimTimeTicks", "SimTimeLimitTicks", "StartRealTimeTicks", "RealTimeLimitTicks"};
 					const std::span<const char* const> names = timer ? std::span<const char* const>(timerNames) : std::span<const char* const>(vectorNames);
-					if (!singleton) for (size_t index = 0; index < names.size(); ++index) entry->properties.emplace(names[index], answer(properties[index]));
+					for (size_t index = 0; index < propertyCount; ++index) entry->properties.emplace(names[index], answer(properties[index]));
 					expanded = std::move(entry);
 				}
 				return expanded.get();
@@ -527,6 +533,7 @@ namespace RTE::CheckpointLua {
 			if (!m_ClassMarker) m_ClassMarker = key("__luabind_class");
 			const auto* iteratorKey = key("__iterator_snapshot");
 			std::pmr::vector<TValue> values(m_TransientResource);
+			std::pmr::vector<TValue> iterators(m_TransientResource);
 			bool plain = true;
 			ForEachUserdata(State(), false, true, [&](GCudata* data) {
 				if (!plain) return;
@@ -546,7 +553,7 @@ namespace RTE::CheckpointLua {
 					                    (type->type() == LUABIND_TYPEID(Vector) || type->type() == LUABIND_TYPEID(Timer));
 					if (scalar) {
 						Push(value); plain = PlainScalarProperties(value, object); lua_pop(State(), 1);
-					} else plain = PlainSingleton(object);
+					} else plain = PlainSingleton(object) || PlainBorrowed(value, object);
 				}
 				if (plain) values.push_back(value);
 			});
@@ -555,7 +562,9 @@ namespace RTE::CheckpointLua {
 				if (object->gch.gct != ~LJ_TFUNC) continue;
 				const auto* function = gco2func(object);
 				if (!IteratorCandidate(function)) continue;
-				if (function->c.f == ScriptGraphValueIteratorNext) { plain = false; break; }
+				if (function->c.f == ScriptGraphValueIteratorNext) {
+					TValue value; setgcVraw(&value, object, LJ_TFUNC); iterators.push_back(value); continue;
+				}
 				const auto* meta = tabref(udataV(&function->c.upvalue[0])->metatable);
 				if (!meta) continue;
 				const auto* hook = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(iteratorKey));
@@ -589,6 +598,11 @@ namespace RTE::CheckpointLua {
 					lua_pop(State(), 1);
 					CaptureUserdata(value);
 				}
+			}
+			for (const TValue& value: iterators) CaptureIterator(value);
+			for (size_t index = 0; index < m_Queue.size(); ++index) {
+				const TValue value = m_Queue[index];
+				if (tvisudata(&value) && std::none_of(values.begin(), values.end(), [&](const TValue& captured) { return captured.u64 == value.u64; })) CaptureUserdata(value);
 			}
 			m_Image->m_AnswerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - answers).count();
 			m_Captured = true;
@@ -712,6 +726,87 @@ namespace RTE::CheckpointLua {
 		}
 
 	private:
+		bool PlainDependencies(const luabind::detail::object_rep* object) {
+			if (!object->get_dependencies().is_valid()) return true;
+			const int top = lua_gettop(State());
+			struct Restore { lua_State* state; int top; ~Restore() { lua_settop(state, top); } } restore{State(), top};
+			object->get_dependencies().get(State());
+			if (!lua_istable(State(), -1) || tabref(tabV(&State()->top[-1])->metatable)) return false;
+			lua_pushnil(State());
+			while (lua_next(State(), -2)) {
+				const TValue value = At(-1);
+				if (tvisudata(&value)) {
+					const auto* data = udataV(&value);
+					const auto* meta = tabref(data->metatable);
+					const TValue* marker = meta && m_ClassMarker ? lj_tab_getstr(const_cast<GCtab*>(meta), m_ClassMarker) : nullptr;
+					if (data->len < sizeof(luabind::detail::object_rep) || !marker || tvisnil(marker) || tvisfalse(marker) || tabref(meta->metatable)) return false;
+					const auto* owner = static_cast<const luabind::detail::object_rep*>(uddata(data));
+					if (!owner->crep() || owner->crep()->get_class_type() != luabind::detail::class_rep::cpp_class ||
+					    ClassDerivesFrom(owner->crep(), "Activity") || std::strcmp(owner->crep()->name(), "SceneEditorGUI") == 0) return false;
+				}
+				lua_pop(State(), 1);
+			}
+			return true;
+		}
+		bool PlainBorrowed(const TValue& subject, const luabind::detail::object_rep* object) {
+			if (!CheckpointNativeSnapshot::Boundary() || !s_GraphNativeCapture || !object || !object->ptr() || !object->crep() ||
+			    (object->flags() & luabind::detail::object_rep::owner) || object->crep()->get_class_type() != luabind::detail::class_rep::cpp_class ||
+			    !DirectClassMarker(subject) || s_GraphNativeCapture->SpecialOwner(object->ptr()) || !PlainDependencies(object)) return false;
+			const auto* type = object->crep();
+			if (ClassDerivesFrom(type, "MovableObject")) return true;
+			if (type->type() == LUABIND_TYPEID(Vector)) return s_GraphNativeCapture->VectorOwner(object->ptr()) && PlainScalarProperties(subject, object) && ScriptGraphNativeAlive(State(), object);
+			if (type->type() == LUABIND_TYPEID(Controller)) return s_GraphNativeCapture->ControllerOwner(object->ptr()) != nullptr;
+			if (type->type() == LUABIND_TYPEID(DataModule)) return true;
+			if (ClassDerivesFrom(type, "Activity") && object->ptr() == g_ActivityMan.GetActivity()) return true;
+			if (type->type() == LUABIND_TYPEID(Scene) && object->ptr() == g_SceneMan.GetScene()) return true;
+			if (type->type() == LUABIND_TYPEID(GlobalScript)) {
+				if (const auto* activity = dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity()))
+					if (std::find(activity->GetGlobalScripts().begin(), activity->GetGlobalScripts().end(), object->ptr()) != activity->GetGlobalScripts().end()) return true;
+			}
+			return ClassDerivesFrom(type, "Entity") && s_GraphNativeCapture->Preset(object->ptr());
+		}
+		bool CaptureBorrowed(const TValue& subject, const luabind::detail::object_rep* object) {
+			if (!CheckpointWriter::BatchEnabled() || !PlainBorrowed(subject, object)) return false;
+			NativeImage::ScalarEntry entry;
+			entry.serial = udataV(&subject)->serial;
+			const auto token = [&](const char* text) { return ScalarToken([&] { lua_pushstring(State(), text); }); };
+			const auto number = [](lua_Number value) { TValue result; setnumV(&result, value); if (tvisnan(&result)) setnanV(&result); return result; };
+			object->crep()->get_table(State()); entry.members[entry.memberCount++] = At(-1); Keep(-1); lua_pop(State(), 1);
+			if (object->get_lua_table().is_valid()) {
+				object->get_lua_table().get(State()); entry.instance = At(-1); Keep(-1); lua_pop(State(), 1); entry.members[entry.memberCount++] = entry.instance;
+			} else setnilV(&entry.instance);
+			entry.address = ScalarToken([&] { lua_pushlightuserdata(State(), object->ptr()); });
+			const auto* type = object->crep();
+			if (ClassDerivesFrom(type, "MovableObject")) {
+				const auto* mo = static_cast<const MovableObject*>(object->ptr());
+				const bool known = s_GraphNativeCapture->Known(mo);
+				entry.kind = token(known ? "entity" : "invalid");
+				if (known) { entry.nativeTail[entry.nativeTailCount++] = number(mo->GetUniqueID()); entry.movable = reinterpret_cast<uintptr_t>(mo); }
+				entry.nativeTail[entry.nativeTailCount++] = token(type->name());
+			} else if (type->type() == LUABIND_TYPEID(Vector)) {
+				const auto* owner = s_GraphNativeCapture->VectorOwner(object->ptr());
+				entry.kind = token("vector-ref"); entry.nativeTail[entry.nativeTailCount++] = number(owner->uid); entry.nativeTail[entry.nativeTailCount++] = token(owner->property);
+				entry.propertyCount = 2; entry.properties[0] = ScalarPropertyToken(object, "X"); entry.properties[1] = ScalarPropertyToken(object, "Y");
+			} else if (type->type() == LUABIND_TYPEID(Controller)) {
+				entry.kind = token("controller-ref"); entry.nativeTail[entry.nativeTailCount++] = number(*s_GraphNativeCapture->ControllerOwner(object->ptr()));
+			} else if (type->type() == LUABIND_TYPEID(DataModule)) {
+				entry.kind = token("module-ref"); entry.nativeTail[entry.nativeTailCount++] = token(static_cast<const DataModule*>(object->ptr())->GetFileName().c_str());
+			} else if (ClassDerivesFrom(type, "Activity") && object->ptr() == g_ActivityMan.GetActivity()) entry.kind = token("activity");
+			else if (type->type() == LUABIND_TYPEID(Scene) && object->ptr() == g_SceneMan.GetScene()) entry.kind = token("scene");
+			else if (type->type() == LUABIND_TYPEID(GlobalScript) && dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity()) &&
+			         std::find(static_cast<const GAScripted*>(g_ActivityMan.GetActivity())->GetGlobalScripts().begin(), static_cast<const GAScripted*>(g_ActivityMan.GetActivity())->GetGlobalScripts().end(), object->ptr()) != static_cast<const GAScripted*>(g_ActivityMan.GetActivity())->GetGlobalScripts().end()) {
+				const auto& scripts = static_cast<const GAScripted*>(g_ActivityMan.GetActivity())->GetGlobalScripts();
+				entry.kind = token("global-script"); entry.nativeTail[entry.nativeTailCount++] = number(1 + std::distance(scripts.begin(), std::find(scripts.begin(), scripts.end(), object->ptr())));
+			} else {
+				const auto* entity = static_cast<const Entity*>(object->ptr());
+				const auto* preset = entity->GetPresetForCopy();
+				entry.kind = token("preset"); entry.nativeTail[entry.nativeTailCount++] = token(entity->GetClassName().c_str());
+				entry.nativeTail[entry.nativeTailCount++] = token(preset ? preset->GetPresetName().c_str() : ""); entry.nativeTail[entry.nativeTailCount++] = token(preset ? preset->GetModuleName().c_str() : "");
+			}
+			if (s_GraphNativeCapture->frozenWorld) m_Image->m_World = std::static_pointer_cast<const NativeImage::World>(s_GraphNativeCapture->frozenWorld);
+			m_Image->m_Scalars.emplace_back(gcval(&subject), std::move(entry));
+			return true;
+		}
 		static bool PlainSingleton(const luabind::detail::object_rep* object) {
 			if (!object || !object->ptr() || !object->crep() || (object->flags() & luabind::detail::object_rep::owner) ||
 			    object->crep()->get_class_type() != luabind::detail::class_rep::cpp_class) return false;
@@ -725,8 +820,8 @@ namespace RTE::CheckpointLua {
 			uint64_t serial;
 			int count = 0;
 			explicit References(lua_State* source) : state(source), threshold(G(source)->gc.threshold), serial(luaJIT_state_serial(source)) {
-				G(state)->gc.threshold = std::numeric_limits<decltype(threshold)>::max();
 				CheckpointFailure::Check(CheckpointFailure::Point::NativeRoots);
+				G(state)->gc.threshold = std::numeric_limits<decltype(threshold)>::max();
 				// This capture's own address keys its table, for the reason the cache's does.
 				lua_pushlightuserdata(state, this);
 				lua_newtable(state);
@@ -1108,6 +1203,7 @@ namespace RTE::CheckpointLua {
 			NativeImage::ScalarEntry entry;
 			entry.serial = luaJIT_value_serial(State(), -1);
 			entry.timer = timer;
+			entry.propertyCount = static_cast<unsigned>(names.size());
 			auto& tokens = m_ScalarKeys[timer ? 1 : 0];
 			if (tokens.type != type) {
 				type->get_table(State()); tokens.members = At(-1); Keep(-1); lua_pop(State(), 1); tokens.type = type;
@@ -1141,6 +1237,7 @@ namespace RTE::CheckpointLua {
 			// Only a luabind instance can change its answers; a class descriptor or a plain userdata is answered once.
 			const auto* object = ClassObject(value);
 			if (CaptureOwnedScalar(value, object)) { lua_pop(State(), 1); return; }
+			if (CaptureBorrowed(value, object)) { lua_pop(State(), 1); return; }
 			const bool immutable = luabind::detail::is_class_rep(State(), -1) || !object;
 			// A fresh reference to a live object that another reference of its class already answered for answers the same.
 			std::optional<SharedHit> shared;
@@ -1418,6 +1515,17 @@ namespace RTE::CheckpointLua {
 		}
 
 	public:
+		static std::shared_ptr<const void> FreezeWorld(const std::vector<MovableObject*>& known) {
+			auto world = std::make_shared<NativeImage::World>();
+			world->frozen = true;
+			world->records.reserve(known.size()); world->objects.reserve(known.size()); world->addresses.Reserve(known.size());
+			for (const MovableObject* source: known) {
+				if (!g_MovableMan.ValidMO(source)) continue;
+				world->objects.push_back(reinterpret_cast<uintptr_t>(source));
+				DescribeFrozen(source, world->records, world->addresses);
+			}
+			return world;
+		}
 		static bool FrozenTopologySelfTest() {
 			NativeEffects effects;
 			auto world = std::make_shared<NativeImage::World>();

@@ -5,6 +5,7 @@
 #include "LuabindObjectWrapper.h"
 #include "CaptureSentinel.h"
 #include "LuaBindingRegisterDefinitions.h"
+#include "CheckpointNativeSnapshot.h"
 #include "ThreadMan.h"
 #include "System.h"
 #include "MetricsCollector.h"
@@ -4226,6 +4227,38 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	/// Makes the known-objects copy and lookup on this thread, before any worker asks.
 	void PreTouch() const { Known(nullptr); }
 	void BuildOwners() const { Owners(); }
+	bool SpecialOwner(const void* address) const {
+		Once(m_SpecialBuilt, m_SpecialReady, [this] {
+			const auto add = [this](const void* value) { if (value) m_Special.insert(value); };
+			if (const auto* activity = g_ActivityMan.GetActivity()) {
+				for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+					add(activity->GetPlayerController(player));
+					if (const auto* game = dynamic_cast<const GameActivity*>(activity)) {
+						add(game->GetBuyGUI(player)); add(game->GetEditorGUI(player));
+						add(game->GetBanner(GameActivity::YELLOW, player)); add(game->GetBanner(GameActivity::RED, player));
+						if (auto* editor = game->GetEditorGUI(player)) {
+							add(editor->GetCheckpointPieMenu());
+							const auto parts = [this, &add](const Entity* root) {
+								add(root);
+								if (root) {
+									const auto owned = Owned(root);
+									for (const auto* part: owned->objects) add(part);
+									for (const auto& [controller, actor]: owned->controllers) add(controller);
+								}
+							};
+							parts(editor->GetCurrentObject());
+							for (const auto& root: editor->GetCheckpointRetainedOwners()) parts(root.get());
+						}
+					}
+				}
+			}
+			if (const Scene* scene = g_SceneMan.GetScene()) {
+				add(scene->GetTerrain());
+				for (const auto* layer: scene->GetBackLayers()) add(layer);
+			}
+		});
+		return m_Special.contains(address) || g_PrimitiveMan.FindCheckpointPrimitive(address) >= 0 || g_PrimitiveMan.FindCheckpointVertex(address) >= 0;
+	}
 	/// Whether an address is a loaded activity preset; only the pointer is read.
 	bool ActivityPreset(const void* address) const {
 		Once(m_ActivityPresetsBuilt, m_ActivityPresetsReady, [this] { m_ActivityPresets = LoadedActivityPresets(); });
@@ -4362,6 +4395,9 @@ private:
 	mutable std::vector<const MovableObject*> m_Known;
 	mutable std::mutex m_OwnedMutex;
 	mutable std::unordered_map<const Entity*, std::shared_ptr<const OwnedParts>> m_Owned;
+	mutable std::once_flag m_SpecialBuilt;
+	mutable std::atomic<bool> m_SpecialReady{false};
+	mutable std::unordered_set<const void*> m_Special;
 };
 static thread_local const LuaScriptGraphNativeCaptureData* s_GraphNativeCapture = nullptr;
 
@@ -7002,7 +7038,8 @@ void LuaScriptGraphNativeCaptureScope::BuildWorld(const LuaScriptGraphNativeCapt
 	if (!shared) return;
 	std::lock_guard worldLock(shared->frozenWorldMutex);
 	CaptureTrace::Span span("build_world_body");
-	if (!shared->frozenWorld) shared->frozenWorld = CheckpointLua::CaptureScope::BuildWorld(shared->KnownObjects());
+	if (!shared->frozenWorld) shared->frozenWorld = CheckpointNativeSnapshot::Boundary()
+	    ? CheckpointLua::CaptureScope::FreezeWorld(shared->KnownObjects()) : CheckpointLua::CaptureScope::BuildWorld(shared->KnownObjects());
 }
 
 void LuaScriptGraphNativeCaptureScope::BuildOwners(const LuaScriptGraphNativeCaptureData* shared) {
@@ -7031,9 +7068,10 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	if (!CaptureSentinel::InParallelPhase()) LuaScriptGraphNativeCaptureScope::PreTouch();
 	CaptureSentinel::ParallelPhase parallel;
 	// A match's states can describe their heaps while the native worker walks the world.
-	if (!CheckpointWriter::BatchEnabled()) {
+	if (!CheckpointWriter::BatchEnabled() || CheckpointNativeSnapshot::Boundary()) {
 		CaptureTrace::Span span("graph_build_world_wait");
 		LuaScriptGraphNativeCaptureScope::BuildWorld(shared);
+		if (CheckpointNativeSnapshot::Boundary()) LuaScriptGraphNativeCaptureScope::BuildOwners(shared);
 	}
 	const auto capture = [&](size_t index) {
 		CaptureTrace::Span span("graph_state", std::to_string(index));
@@ -7050,6 +7088,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 		    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()};
 		LuaMan::s_FrozenCaptureStats = previous;
 	};
+	const bool boundaryOnly = static_cast<bool>(CheckpointNativeSnapshot::Boundary());
 	// Each state is its own VM behind its own lock, so the states are captured side by side; this thread takes the states
 	// no pool thread has started once its own work is done.
 	size_t caller = 0;
@@ -7060,7 +7099,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 		}
 	}
 	std::optional<ParallelWork> states;
-	if (!CaptureTrace::Serial()) {
+	if (!boundaryOnly && !CaptureTrace::Serial()) {
 		states.emplace(g_ThreadMan.GetPriorityThreadPool(), order.size() - 1, [&capture, caller](size_t index) {
 			CaptureSentinel::WorkerScope worker("script-graph-state");
 			capture(index < caller ? index : index + 1);
@@ -7068,8 +7107,11 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	}
 	std::exception_ptr failure;
 	try {
-		capture(caller);
-		if (CaptureTrace::Serial()) for (size_t index = 1; index < order.size(); ++index) capture(index);
+		if (boundaryOnly) for (size_t index = 0; index < order.size(); ++index) capture(index);
+		else {
+			capture(caller);
+			if (CaptureTrace::Serial()) for (size_t index = 1; index < order.size(); ++index) capture(index);
+		}
 		CaptureTrace::Span span("graph_while_waiting");
 		if (whileWaiting) whileWaiting();
 	} catch (...) {
