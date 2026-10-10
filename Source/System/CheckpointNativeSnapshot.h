@@ -183,10 +183,11 @@ namespace RTE {
 		}
 		template<class T> T* ValueObject(const T* source) {
 			if (!source) return nullptr;
-			if (const auto known = m_Values.Find(source)) return static_cast<T*>(*known);
-			CheckpointCloneCost cost(CheckpointCloneCost::Enabled() ? typeid(T).name() : nullptr);
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 			void* memory = AllocateFrozen(sizeof(T), alignof(T));
+			// Snapshot storage is cheap to abandon, so a value is claimed without looking for it first.
+			if (!memory) if (const auto known = m_Values.Find(source)) return static_cast<T*>(*known);
+			CheckpointCloneCost cost(CheckpointCloneCost::Enabled() ? typeid(T).name() : nullptr);
 			const bool frozenStorage = memory != nullptr;
 			void (*destroy)(void*) noexcept = [](void* value) noexcept { static_cast<T*>(value)->~T(); ::operator delete(value); };
 			if (frozenStorage) destroy = [](void* value) noexcept { static_cast<T*>(value)->~T(); };
@@ -242,6 +243,8 @@ namespace RTE {
 		void Construct(const Entity& source) {
 			if (m_Reserved.Find(&source)) {
 				CheckpointCloneCost cost(CheckpointCloneCost::Enabled() ? source.GetClassName().c_str() : nullptr);
+				const Entity* previous = std::exchange(t_Constructing, &source);
+				struct Restore { const Entity* previous; ~Restore() { t_Constructing = previous; } } restore{previous};
 				source.FreezeCheckpointNative(*this);
 			}
 		}
@@ -253,7 +256,8 @@ namespace RTE {
 			void* memory = nullptr;
 			Entity* target = nullptr;
 			bool frozenStorage = false;
-			if (const auto reserved = m_Reserved.Find(&source)) {
+			// Only Construct freezes a reserved object, and it names the one it freezes.
+			if (const auto reserved = t_Constructing == static_cast<const Entity*>(&source) ? m_Reserved.Find(&source) : std::nullopt) {
 				m_Reserved.Erase(&source);
 				memory = reserved->memory;
 				slot = reserved->slot;
@@ -455,6 +459,7 @@ namespace RTE {
 			return shard.values.back();
 		}
 		inline static thread_local const CheckpointNativeSnapshot* s_Current = nullptr;
+		inline static thread_local const Entity* t_Constructing = nullptr;
 		inline static thread_local std::shared_ptr<CheckpointNativeSnapshot> s_Boundary;
 		CheckpointSharedMap<const BITMAP*, std::shared_ptr<Pixel>> m_Bitmaps;
 		CheckpointSharedMap<const BITMAP*, std::shared_ptr<Pixel>> m_BitmapSources;
