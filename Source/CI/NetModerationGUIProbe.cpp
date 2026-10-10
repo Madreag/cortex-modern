@@ -782,12 +782,14 @@ namespace {
 			}
 			SDL_Event event{}; event.type = SDL_EVENT_MOUSE_MOTION;
 			event.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+			event.motion.which = 1;
 			event.motion.x = g_WindowMan.GetResX() / 2; event.motion.y = g_WindowMan.GetResY() / 2;
 			event.motion.xrel = motion.m_X; event.motion.yrel = motion.m_Y;
 			Push(event);
 			if (step.contains("down")) {
 				event.type = step["down"].get<bool>() ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
 				event.button.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+				event.button.which = 1;
 				event.button.button = step.value("button", std::string("left")) == "right" ? SDL_BUTTON_RIGHT : SDL_BUTTON_LEFT;
 				event.button.down = step["down"].get<bool>();
 				event.button.x = g_WindowMan.GetResX() / 2; event.button.y = g_WindowMan.GetResY() / 2;
