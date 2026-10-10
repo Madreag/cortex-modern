@@ -100,6 +100,11 @@ namespace RTE {
 		for (uint16_t member: m_MigrationChoice->members) if (member != m_Config.localPeerId) {
 			const auto progress = m_PeerAppliedAtMs.find(static_cast<uint8_t>(member));
 			if (progress == m_PeerAppliedAtMs.end() || progress->second < m_MigrationSinceMs) return;
+			if (!MigrationUsesDirectory()) {
+				const auto ready = m_PeerAdminReady.find(static_cast<uint8_t>(member));
+				if (ready == m_PeerAdminReady.end() || ready->second.first != m_MigrationChoice->generation ||
+				    ready->second.second < m_MigrationSinceMs) return;
+			}
 		}
 		auto proposal = PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
 		proposal.preparedFrame = 3; proposal.completeFrom = m_MigrationChoice->generation; proposal.boundary = m_MigrationChoice->boundary;
@@ -135,6 +140,8 @@ namespace RTE {
 		proposal.voterMask = AdminBit(m_Config.localPeerId);
 		if (!ValidatePeerAdmin(proposal)) { RequestPeerCommittedTail(nowMs); return; }
 		m_PeerAdminOwnVote = proposal;
+		DiagnosticLine() << "[net-admin] vote peer=" << static_cast<int>(m_Config.localPeerId) << " generation=" << proposal.completeFrom
+		                 << " boundary=" << proposal.boundary << " activation=" << proposal.frame << " voters=" << proposal.connectedMask << std::endl;
 		m_PeerBridgeVotes[{proposal.frame, 3}].emplace(m_Config.localPeerId, proposal);
 		SendPeerFrameMessage(proposal); TryCommitPeerBridge(proposal.frame, nowMs, 3);
 	}

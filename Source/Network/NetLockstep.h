@@ -1723,6 +1723,7 @@ namespace RTE {
 		uint32_t PeerAdminSurvivors(uint64_t nowMs) const;
 		std::optional<NetHostChangeRequest> m_PeerAdminRequest;
 		std::optional<NetHostMigrationMessage> m_PeerAdminOwnVote;
+		std::map<uint8_t, std::pair<uint64_t, uint64_t>> m_PeerAdminReady; //!< Nonvoting generation eligibility and its local receipt time.
 		uint32_t m_PeerAdminFrameMembers = 0;
 		size_t m_MigrationNextAddress = 0;
 		std::string m_MigrationAddress;

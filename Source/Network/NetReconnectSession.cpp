@@ -1610,7 +1610,9 @@ namespace RTE {
 		// the link may stay up at the leaver's menu, so the drop runs now.
 		seat->activeConnection = c_InvalidNetPeerId;
 		ApplySeatEvent(*seat, NetRosterEventKind::LinkDropped, true);
-		if (!liveLeave && m_Roster.stage == NetRosterStage::Ended)
+		const NetRosterSeat* retained = RosterSeatOf(*seat);
+		if (!liveLeave && m_Roster.stage == NetRosterStage::Ended && retained &&
+		    retained->phase == NetSeatPhase::RoundEnd && retained->holdCause != NetSeatHoldCause::None)
 			ApplySeatEvent(*seat, NetRosterEventKind::HeldInPlace, true, false, NetSeatHoldCause::Leave);
 		BumpSeatGeneration(*seat);
 		if (liveLeave) RecordDrop(*seat, m_LockstepFrame);

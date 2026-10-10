@@ -164,6 +164,13 @@ namespace RTE {
 		if (nowMs >= m_PeerHeartbeatAtMs) {
 			m_PeerHeartbeatAtMs = nowMs + 250;
 			auto heartbeat = PeerFrameMessage(NetHostMigrationMessageType::PeerHeartbeat);
+			// Restored survivors can receive queued host traffic on a later local
+			// clock. Advertise eligibility before anyone fixes an immutable vote;
+			// this report grants no authority and does not replace voter validation.
+			if (m_Config.localPeerId != GetHostPeerId() && m_LastCompletedSimulationTick &&
+			    nowMs >= m_AuthorityLastHeardMs && nowMs - m_AuthorityLastHeardMs >= c_NetHostLossSilenceMs &&
+			    m_Config.migrationGeneration != UINT64_MAX)
+				heartbeat.completeFrom = m_Config.migrationGeneration + 1;
 			PutSize(heartbeat.bytes, m_Stats.peers[m_Config.localPeerId].pingMs); PutSize(heartbeat.bytes, m_Stats.peers[m_Config.localPeerId].jitterMs);
 			heartbeat.totalBytes = static_cast<uint32_t>(heartbeat.bytes.size());
 			SendPeerFrameMessage(std::move(heartbeat));

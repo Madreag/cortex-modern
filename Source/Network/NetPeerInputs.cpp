@@ -203,6 +203,7 @@ namespace RTE {
 			if (!TakeSize(message.bytes, offset, rtt) || !TakeSize(message.bytes, offset, jitter) || rtt > 60000 || jitter > 60000) return true;
 			heard();
 			m_Stats.peers[message.senderPeerId].pingMs = rtt; m_Stats.peers[message.senderPeerId].jitterMs = jitter;
+			m_PeerAdminReady[message.senderPeerId] = {message.completeFrom, nowMs};
 			m_Stats.peers[message.senderPeerId].pingMeasured = rtt != 0;
 			// Only this authenticated heartbeat names a prepared horizon. Bridge
 			// kinds and receipt witnesses reuse that field for other purposes.

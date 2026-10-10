@@ -75,7 +75,8 @@ def main():
     # Access declarations let current probes inspect the old state without
     # changing a single baseline decision or transport path.
     for name, anchor in (("NetLockstep.h", "class NetLockstepCoordinator {"),
-                         ("NetMatchService.h", "class NetMatchService : public Singleton<NetMatchService> {")):
+                         ("NetMatchService.h", "class NetMatchService : public Singleton<NetMatchService> {"),
+                         ("NetReconnectSession.h", "class NetReconnectHost {")):
         relative = "Source/Network/" + name
         current = (tip / relative).read_text(encoding="utf-8")
         original = (baseline / relative).read_text(encoding="utf-8")

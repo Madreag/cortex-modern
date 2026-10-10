@@ -26036,8 +26036,17 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return peers[0].IsRunning() && peers[0].GetStats().nextFrame >= 15;
 			}
 			void Pump() {
-				for (size_t index = 0; index < peers.size(); ++index) if (alive[index] && produced[index] <= produceThrough[index]) {
-					const uint16_t delay = peers[index].InputDelayAt(index + 1, produced[index]);
+				for (size_t index = 0; index < peers.size(); ++index) if (alive[index]) {
+					uint16_t delay = peers[index].InputDelayAt(index + 1, produced[index]);
+					// Succession primes its startup targets. Resume production at the
+					// next unqueued sample rather than retrying that primed target.
+					const uint64_t sent = peers[index].SentInputThrough();
+					if (peers[index].IsRunning() && !peers[index].IsMigrating() && sent != UINT64_MAX &&
+					    produced[index] <= UINT64_MAX - delay && produced[index] + delay <= sent) {
+						produced[index] = sent + 1 - delay;
+						delay = peers[index].InputDelayAt(index + 1, produced[index]);
+					}
+					if (produced[index] > produceThrough[index]) continue;
 					if (produced[index] > preparedThrough[index] || delay > preparedThrough[index] - produced[index]) continue;
 					if (!inputReadings.empty() || (index == 3 && hostWire.fourthFutureOnlyToFirst)) {
 						std::vector<NetSoundObservation> readings;
@@ -26348,6 +26357,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 	struct SeatSuccessionTestAccess {
 		static void RunLive(NetLockstepCoordinator& peer) { peer.m_Playback = false; }
+		static INetTransport* Transport(NetLockstepCoordinator& peer) { return peer.m_Transport; }
 		static void RestoreHostHold(NetLockstepCoordinator& peer, const NetLockstepTiming& held) {
 			peer.ApplyTiming(held, true);
 			peer.m_TimingDecisions[held.revision] = {held, 0, true, 0};
@@ -27709,10 +27719,16 @@ namespace {
 			size_t hostIndex = round.peers[1].GetHostPeerId() - 1;
 			for (size_t index = 0; index < round.peers.size(); ++index)
 				if (round.alive[index] && round.peers[index].IsRunning() && round.peers[index].GetHostPeerId() == index + 1) hostIndex = index;
-			NetPeerId connection = 1;
-			for (const auto& [peer, transport]: round.peers[hostIndex].RemoteTransports()) connection = std::max(connection, transport + 1);
+			NetPeerId connection = c_InvalidNetPeerId;
 			LoopbackTransport wire;
 			if (!wire.Connect(ticket.hostAddress, port, error)) return false;
+			auto* listener = SeatSuccessionTestAccess::Transport(round.peers[hostIndex]);
+			if (!listener) return fail("the successor has no listener for its retained player");
+			for (const auto& event: listener->PollEvents()) {
+				if (event.type == NetTransportEventType::PeerConnected) connection = event.peerId;
+				round.peers[hostIndex].InjectEvent(event, round.now);
+			}
+			if (connection == c_InvalidNetPeerId) return fail("the successor did not accept the returner's actual connection");
 			NetReconnectTicketStore store;
 			store.SetPath("Userdata/host-ticket-return/admission-return.ticket");
 			if (!store.Store(ticket, error)) return false;

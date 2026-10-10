@@ -263,10 +263,10 @@ namespace RTE {
 				}
 				case NetRosterEventKind::HeldInPlace: {
 					// The authority publishes a combat bridge only after its visible interval or total silence.
-					// An authenticated leave after the round ended is an explicit
-					// host reservation decision, with no new simulation authority.
+					// An authenticated leave can keep an existing combat hold after
+					// the end. An ordinary rematch reservation creates no AI hold.
 					const bool leftBetweenRounds = next.stage == NetRosterStage::Ended && event.cause == NetSeatHoldCause::Leave &&
-					    seat && seat->owner != 0 && (seat->phase == NetSeatPhase::RematchLobby || seat->phase == NetSeatPhase::RoundEnd);
+					    seat && seat->owner != 0 && seat->phase == NetSeatPhase::RoundEnd && seat->holdCause != NetSeatHoldCause::None;
 					if (!leftBetweenRounds && (next.stage != NetRosterStage::Running || !seat || seat->phase != NetSeatPhase::Running))
 						return keep("only a combat seat or an explicit rematch leave is held by the host");
 					seat->phase = NetSeatPhase::Held;

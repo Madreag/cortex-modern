@@ -5349,6 +5349,7 @@ namespace RTE {
 		m_FrameGroupChanges.clear(); m_PeerDelayBelowSinceMs.clear();
 		m_PeerFrameTie.reset(); m_PeerFrameTieWinners.clear(); m_PeerFrameTieSinceMs = 0;
 		m_PeerAdminRequest.reset(); m_PeerAdminOwnVote.reset(); m_PeerAdminFrameMembers = 0;
+		m_PeerAdminReady.clear();
 		m_PeerInputSentAtMs.clear(); m_PeerReceiptDelaySamples.clear();
 		m_PeerHeartbeatAtMs = m_PeerTailRequestAtMs = m_PeerVoteRetryAtMs = 0; m_FrameGroupMembers = 0;
 		m_AuthenticatedPeerMessage = 0;

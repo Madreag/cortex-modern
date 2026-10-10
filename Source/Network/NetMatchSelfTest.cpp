@@ -12248,6 +12248,8 @@ namespace RTE {
 		NetSession stayingSession;
 		// Three seats: the host, the member the kick removes, and one that stays to be re-acked.
 		NetMatchConfig matchConfig = MakeConfig();
+		// This row measures one roster revision, with a fixed sender delay.
+		matchConfig.delayPolicy = NetMatchDelayPolicy::Fixed;
 		matchConfig.peerCount = 3;
 		matchConfig.players[1].displayName = NetMatchConfigUtil::UnseatedSlotName(2, false);
 		matchConfig.players.push_back(NetMatchPlayerSlot{3, 2, false, NetMatchConfigUtil::UnseatedSlotName(3, false)});
@@ -13401,6 +13403,8 @@ namespace RTE {
 		NetSession stayingSession;
 		// Three seats: the host, the member the kick removes, and one that stays to be re-acked.
 		NetMatchConfig matchConfig = MakeConfig();
+		// This row measures one roster revision, with a fixed sender delay.
+		matchConfig.delayPolicy = NetMatchDelayPolicy::Fixed;
 		matchConfig.peerCount = 3;
 		matchConfig.players[1].displayName = NetMatchConfigUtil::UnseatedSlotName(2, false);
 		matchConfig.players.push_back(NetMatchPlayerSlot{3, 2, false, NetMatchConfigUtil::UnseatedSlotName(3, false)});
