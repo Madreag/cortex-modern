@@ -1,4 +1,8 @@
 #include "GAScripted.h"
+#include "CheckpointNativeSnapshot.h"
+#include "PieSlice.h"
+#include "LuabindObjectWrapper.h"
+#include "GlobalScript.h"
 #include "ActivityMan.h"
 
 #include "SceneMan.h"
@@ -34,11 +38,30 @@ using namespace RTE;
 
 ConcreteClassInfo(GAScripted, GameActivity, 0);
 
+GAScripted::GAScripted(const GAScripted& source, CheckpointNativeSnapshot& snapshot) :
+	GameActivity(source, snapshot),
+	m_ScriptPath(snapshot.Freeze(source.m_ScriptPath)),
+	m_LuaClassName(snapshot.Freeze(source.m_LuaClassName)),
+	m_RequiredAreas(snapshot.Freeze(source.m_RequiredAreas)),
+	m_FrozenPieSlices(snapshot.Freeze(source.m_FrozenPieSlices)),
+	m_PieSlicesToAdd{},
+	m_GlobalScriptsList(snapshot.Freeze(source.m_GlobalScriptsList)),
+	m_HasSavedGlobalScripts(snapshot.Freeze(source.m_HasSavedGlobalScripts)),
+	m_ScriptFunctions{} {
+	for (const auto& slice: source.m_PieSlicesToAdd) m_FrozenPieSlices.push_back(snapshot.FreezeWriter(slice.get()));
+}
+
+Entity* GAScripted::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 GAScripted::GAScripted() {
 	Clear();
 }
 
 GAScripted::~GAScripted() {
+	if (IsFrozenCheckpointNative()) return;
 	// The global named after the Lua class holds whichever instance bound it last: the preset as PresetMan read it in, before
 	// keeping a copy and deleting the read one, or a running activity. It goes to the kept preset, with the script table it
 	// carries; a preset whose module is no longer loaded has nothing to go to.
@@ -141,6 +164,10 @@ int GAScripted::Save(Writer& writer) const {
 
 	for (const std::unique_ptr<PieSlice>& pieSliceToAdd: m_PieSlicesToAdd) {
 		writer.NewPropertyWithValue("AddPieSlice", pieSliceToAdd.get());
+	}
+	for (const CheckpointText& slice: m_FrozenPieSlices) {
+		writer.NewProperty("AddPieSlice");
+		writer.Append(slice.ReindentWriter(writer.GetIndentCount() - 1));
 	}
 
 	for (const std::string& requiredArea: m_RequiredAreas) {

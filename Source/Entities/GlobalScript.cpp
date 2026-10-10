@@ -1,4 +1,5 @@
 #include "GlobalScript.h"
+#include "CheckpointNativeSnapshot.h"
 
 #include "LuaMan.h"
 #include "MovableMan.h"
@@ -14,11 +15,30 @@ using namespace RTE;
 
 ConcreteClassInfo(GlobalScript, Entity, 10);
 
+GlobalScript::GlobalScript(const GlobalScript& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	m_ScriptPath(snapshot.Freeze(source.m_ScriptPath)),
+	m_LuaClassName(snapshot.Freeze(source.m_LuaClassName)),
+	m_IsActive(snapshot.Freeze(source.m_IsActive)),
+	m_HasStarted(snapshot.Freeze(source.m_HasStarted)),
+	m_LateUpdate(snapshot.Freeze(source.m_LateUpdate)),
+	m_FrozenPieSlices(snapshot.Freeze(source.m_FrozenPieSlices)),
+	m_PieSlicesToAdd{},
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	for (const auto& slice: source.m_PieSlicesToAdd) m_FrozenPieSlices.push_back(snapshot.FreezeWriter(slice.get()));
+}
+
+Entity* GlobalScript::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 GlobalScript::GlobalScript() {
 	Clear();
 }
 
 GlobalScript::~GlobalScript() {
+	if (IsFrozenCheckpointNative()) return;
 	// The global named after the Lua class holds the running copy that bound it; when that copy goes, it goes to the preset.
 	if (!m_LuaClassName.empty()) {
 		const Entity* preset = GetModuleID() < g_PresetMan.GetTotalModuleCount() ? GetPresetForCopy() : nullptr;
@@ -82,6 +102,10 @@ int GlobalScript::Save(Writer& writer) const {
 
 	for (const std::unique_ptr<PieSlice>& pieSliceToAdd: m_PieSlicesToAdd) {
 		writer.NewPropertyWithValue("AddPieSlice", pieSliceToAdd.get());
+	}
+	for (const CheckpointText& slice: m_FrozenPieSlices) {
+		writer.NewProperty("AddPieSlice");
+		writer.Append(slice.ReindentWriter(writer.GetIndentCount() - 1));
 	}
 
 	return 0;

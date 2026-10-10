@@ -36,6 +36,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a GAScripted object in system
 		/// memory. Create() should be called before using the object.
 		GAScripted();
+		CheckpointSnapshotMethods(GAScripted);
 
 		/// Destructor method used to clean up a GAScripted object before deletion
 		/// from system memory.

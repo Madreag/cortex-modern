@@ -3921,12 +3921,15 @@ std::string GameActivity::SaveCheckpoint() const {
 }
 
 GameActivity::Delivery RTE::FreezeCheckpointValue(const GameActivity::Delivery& source, CheckpointNativeSnapshot& snapshot) {
-	GameActivity::Delivery value{};
+	return {snapshot.Object(source.pCraft), source.orderedByPlayer, source.landingZone, source.multiOrderYOffset,
+		source.delay, Timer(source.timer, snapshot)};
+}
+
+void RTE::AssignCheckpointValue(GameActivity::Delivery& value, const GameActivity::Delivery& source, CheckpointNativeSnapshot& snapshot) {
 	value.pCraft = snapshot.Object(source.pCraft);
 	value.orderedByPlayer = source.orderedByPlayer; value.landingZone = source.landingZone;
 	value.multiOrderYOffset = source.multiOrderYOffset; value.delay = source.delay;
 	value.timer.AssignCheckpointNative(source.timer, snapshot);
-	return value;
 }
 
 void GameActivity::FreezeCheckpointUI(const GameActivity& source) {

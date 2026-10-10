@@ -167,7 +167,9 @@ namespace RTE {
 		template<class T, class Allocator> auto Freeze(const std::vector<T, Allocator>& source) {
 			std::vector<T, Allocator> result(source.get_allocator());
 			result.reserve(source.size());
-			if constexpr (requires(const T& value) { T(value, *this); }) {
+			if constexpr (requires(T& target, const T& value) { AssignCheckpointValue(target, value, *this); }) {
+				for (const auto& value: source) { result.emplace_back(); AssignCheckpointValue(result.back(), value, *this); }
+			} else if constexpr (requires(const T& value) { T(value, *this); }) {
 				for (size_t index = 0; index < source.size(); ++index) Prepare(source[index], result.data() + index);
 				for (const auto& value: source) result.emplace_back(value, *this);
 			} else for (const auto& value: source) result.push_back(Freeze(static_cast<const T&>(value)));
@@ -175,13 +177,17 @@ namespace RTE {
 		}
 		template<class T, class Allocator> auto Freeze(const std::deque<T, Allocator>& source) {
 			std::deque<T, Allocator> result(source.get_allocator());
-			if constexpr (requires(const T& value) { T(value, *this); }) for (const auto& value: source) result.emplace_back(value, *this);
+			if constexpr (requires(T& target, const T& value) { AssignCheckpointValue(target, value, *this); })
+				for (const auto& value: source) { result.emplace_back(); AssignCheckpointValue(result.back(), value, *this); }
+			else if constexpr (requires(const T& value) { T(value, *this); }) for (const auto& value: source) result.emplace_back(value, *this);
 			else for (const auto& value: source) result.push_back(Freeze(value));
 			return result;
 		}
 		template<class T, class Allocator> auto Freeze(const std::list<T, Allocator>& source) {
 			std::list<T, Allocator> result(source.get_allocator());
-			if constexpr (requires(const T& value) { T(value, *this); }) for (const auto& value: source) result.emplace_back(value, *this);
+			if constexpr (requires(T& target, const T& value) { AssignCheckpointValue(target, value, *this); })
+				for (const auto& value: source) { result.emplace_back(); AssignCheckpointValue(result.back(), value, *this); }
+			else if constexpr (requires(const T& value) { T(value, *this); }) for (const auto& value: source) result.emplace_back(value, *this);
 			else for (const auto& value: source) result.push_back(Freeze(value));
 			return result;
 		}

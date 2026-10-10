@@ -885,5 +885,6 @@ namespace RTE {
 		void Clear();
 	};
 	GameActivity::Delivery FreezeCheckpointValue(const GameActivity::Delivery& source, CheckpointNativeSnapshot& snapshot);
+	void AssignCheckpointValue(GameActivity::Delivery& value, const GameActivity::Delivery& source, CheckpointNativeSnapshot& snapshot);
 
 } // namespace RTE
