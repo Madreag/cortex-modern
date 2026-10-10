@@ -1403,13 +1403,13 @@ std::string AudioMan::RegistryScopeMissedChange() {
 
 thread_local AudioMan::SoundCheckpointSaveScope* AudioMan::SoundCheckpointSaveScope::s_Current = nullptr;
 
-AudioMan::SoundCheckpointSaveScope::SoundCheckpointSaveScope(bool remember) : m_Previous(s_Current), m_Remember(remember) {
-	s_Current = this;
+AudioMan::SoundCheckpointSaveScope::SoundCheckpointSaveScope(bool remember, bool activate) : m_Previous(s_Current), m_Remember(remember), m_Active(activate) {
+	if (m_Active) s_Current = this;
 }
 
 AudioMan::SoundCheckpointSaveScope::~SoundCheckpointSaveScope() {
 	if (m_Remember) g_AudioMan.RememberCarriedSoundIdentities(m_Carried);
-	s_Current = m_Previous;
+	if (m_Active) s_Current = m_Previous;
 }
 
 void AudioMan::SoundCheckpointSaveScope::Note(uint64_t identity) {
@@ -2443,7 +2443,16 @@ struct RTE::AudioCheckpointCapture {
 	AudioRuntime state;
 	std::vector<const SoundContainer*> owners; //!< Each voice's owner, which the filter judges.
 	std::optional<std::vector<CheckpointText>> samples; //!< The samples' texts, when written ahead of the rest.
+	std::vector<std::string> ownerPresets;
+	bool frozen = false;
 };
+
+void AudioMan::FreezeCheckpointCapture(AudioCheckpointCapture& capture, uint64_t cursor) const {
+	capture.ownerPresets.reserve(capture.owners.size());
+	for (const auto* owner: capture.owners) capture.ownerPresets.push_back(owner ? owner->GetPresetName() : "");
+	capture.state.nextSoundContainer = cursor;
+	capture.frozen = true;
+}
 
 void AudioMan::ReadCheckpointSamples(AudioCheckpointCapture& captured) const {
 	std::map<std::string, FMOD::Sound*> samples(ContentFile::s_LoadedSamples.begin(), ContentFile::s_LoadedSamples.end());
@@ -2477,16 +2486,17 @@ std::string AudioMan::SaveCaptured(AudioCheckpointCapture& captured, const std::
 		const SoundContainer* owner = captured.owners[index];
 		uint64_t& ownerIdentity = state.voices[index].owner;
 		if (contained && ownerIdentity && !contained(ownerIdentity, owner)) {
-			if (disownedPresets.insert(owner->GetPresetName()).second) {
+			const std::string& preset = captured.frozen ? captured.ownerPresets[index] : owner->GetPresetName();
+			if (disownedPresets.insert(preset).second) {
 				std::ostringstream line;
-				line << "[audio-checkpoint] disowned voice owner " << owner->GetPresetName();
+				line << "[audio-checkpoint] disowned voice owner " << preset;
 				System::PrintDiagnosticLine(line.str());
 			}
 			ownerIdentity = 0;
 		}
 	}
 	// One snapshot of both: the cursor is read after the voices and never below an owner this archive names.
-	state.nextSoundContainer = GetCheckpointSoundContainerCursor();
+	if (!captured.frozen) state.nextSoundContainer = GetCheckpointSoundContainerCursor();
 	for (const AudioCheckpoint::Voice& voice: state.voices) state.nextSoundContainer = std::max(state.nextSoundContainer, voice.owner);
 	const AudioCheckpointCapture& written = samples ? *samples : captured;
 	return state.Save(written.samples ? &*written.samples : nullptr);

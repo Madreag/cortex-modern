@@ -47,6 +47,7 @@ namespace RTE {
 		std::shared_ptr<AudioCheckpointCapture> CaptureCheckpointState(bool samples = true) const;
 		/// The loaded samples a checkpoint archives, read and written on any thread; they need no mixer lock.
 		std::shared_ptr<AudioCheckpointCapture> CaptureCheckpointSamples() const;
+		void FreezeCheckpointCapture(AudioCheckpointCapture& capture, uint64_t cursor) const;
 		/// Writes a captured state as SaveCheckpoint would have at its instant, once the sound owners the rest of the
 		/// capture carries are known; the capture's disowned voices are cleared in place. Samples read apart are given.
 		std::string SaveCaptured(AudioCheckpointCapture& captured, const std::function<bool(uint64_t, const SoundContainer*)>& contained, const AudioCheckpointCapture* samples = nullptr) const;
@@ -148,7 +149,7 @@ namespace RTE {
 		class SoundCheckpointSaveScope {
 		public:
 			/// A scope that does not remember its notes when it ends only collects them for its owner.
-			explicit SoundCheckpointSaveScope(bool remember = true);
+			explicit SoundCheckpointSaveScope(bool remember = true, bool activate = true);
 			~SoundCheckpointSaveScope();
 			SoundCheckpointSaveScope(const SoundCheckpointSaveScope&) = delete;
 			SoundCheckpointSaveScope& operator=(const SoundCheckpointSaveScope&) = delete;
@@ -176,6 +177,7 @@ namespace RTE {
 			std::exception_ptr m_Failure;
 			SoundCheckpointSaveScope* m_Previous = nullptr;
 			bool m_Remember = true;
+			bool m_Active = true;
 		};
 		class RestoredSoundRegistryScope {
 		public:
