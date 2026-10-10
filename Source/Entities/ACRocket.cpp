@@ -1,4 +1,6 @@
 #include "ACRocket.h"
+#include "CheckpointNativeSnapshot.h"
+#include "LimbPath.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "RTETools.h"
@@ -20,11 +22,47 @@ using namespace RTE;
 
 ConcreteClassInfo(ACRocket, ACraft, 10);
 
+ACRocket::ACRocket(const ACRocket& source, CheckpointNativeSnapshot& snapshot) :
+	ACraft(source, snapshot),
+	m_pRLeg(snapshot.Freeze(source.m_pRLeg)),
+	m_pLLeg(snapshot.Freeze(source.m_pLLeg)),
+	m_pBodyAG(snapshot.Freeze(source.m_pBodyAG)),
+	m_pRFootGroup(snapshot.Freeze(source.m_pRFootGroup)),
+	m_pLFootGroup(snapshot.Freeze(source.m_pLFootGroup)),
+	m_pMThruster(snapshot.Freeze(source.m_pMThruster)),
+	m_pRThruster(snapshot.Freeze(source.m_pRThruster)),
+	m_pLThruster(snapshot.Freeze(source.m_pLThruster)),
+	m_pURThruster(snapshot.Freeze(source.m_pURThruster)),
+	m_pULThruster(snapshot.Freeze(source.m_pULThruster)),
+	m_GearState(snapshot.Freeze(source.m_GearState)),
+	m_PersistedRFootResidue(snapshot.Freeze(source.m_PersistedRFootResidue)),
+	m_PersistedLFootResidue(snapshot.Freeze(source.m_PersistedLFootResidue)),
+	m_PersistedLimbPathStates(snapshot.Freeze(source.m_PersistedLimbPathStates)),
+	m_PersistedLimbGroupPositions(snapshot.Freeze(source.m_PersistedLimbGroupPositions)),
+	m_PersistedLimbGroupInertia(snapshot.Freeze(source.m_PersistedLimbGroupInertia)),
+	m_Paths{},
+	m_MaxGimbalAngle(snapshot.Freeze(source.m_MaxGimbalAngle)),
+	m_PersistedACRocketRuntime(snapshot.Freeze(source.m_PersistedACRocketRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	snapshot.FreezeArray(m_Paths, source.m_Paths);
+}
+
+Entity* ACRocket::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
+void ACRocket::PrepareCheckpointNative(const ACRocket& source, ACRocket* target, CheckpointNativeSnapshot& snapshot) {
+	snapshot.Prepare(static_cast<const ACraft&>(source), static_cast<ACraft*>(target));
+	snapshot.Prepare(source.m_Paths, &target->m_Paths);
+}
+
 ACRocket::ACRocket() {
 	Clear();
 }
 
 ACRocket::~ACRocket() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

@@ -1,4 +1,8 @@
 #include "ADoor.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "ADSensor.h"
 #include "MetricsCollector.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -16,11 +20,53 @@ using namespace RTE;
 
 ConcreteClassInfo(ADoor, Actor, 20);
 
+ADoor::ADoor(const ADoor& source, CheckpointNativeSnapshot& snapshot) :
+	Actor(source, snapshot),
+	m_InitialSpriteAnimDuration(snapshot.Freeze(source.m_InitialSpriteAnimDuration)),
+	m_Sensors(snapshot.Freeze(source.m_Sensors)),
+	m_SensorTimer(snapshot.Freeze(source.m_SensorTimer)),
+	m_SensorInterval(snapshot.Freeze(source.m_SensorInterval)),
+	m_Door(snapshot.Freeze(source.m_Door)),
+	m_DoorState(snapshot.Freeze(source.m_DoorState)),
+	m_DoorStateOnStop(snapshot.Freeze(source.m_DoorStateOnStop)),
+	m_ClosedByDefault(snapshot.Freeze(source.m_ClosedByDefault)),
+	m_OpenOffset(snapshot.Freeze(source.m_OpenOffset)),
+	m_ClosedOffset(snapshot.Freeze(source.m_ClosedOffset)),
+	m_OpenAngle(snapshot.Freeze(source.m_OpenAngle)),
+	m_ClosedAngle(snapshot.Freeze(source.m_ClosedAngle)),
+	m_DoorMoveTimer(snapshot.Freeze(source.m_DoorMoveTimer)),
+	m_DoorMoveTime(snapshot.Freeze(source.m_DoorMoveTime)),
+	m_ResumeAfterStop(snapshot.Freeze(source.m_ResumeAfterStop)),
+	m_ChangedDirectionAfterStop(snapshot.Freeze(source.m_ChangedDirectionAfterStop)),
+	m_DoorMoveStopTime(snapshot.Freeze(source.m_DoorMoveStopTime)),
+	m_ResetToDefaultStateTimer(snapshot.Freeze(source.m_ResetToDefaultStateTimer)),
+	m_ResetToDefaultStateDelay(snapshot.Freeze(source.m_ResetToDefaultStateDelay)),
+	m_DrawMaterialLayerWhenOpen(snapshot.Freeze(source.m_DrawMaterialLayerWhenOpen)),
+	m_DrawMaterialLayerWhenClosed(snapshot.Freeze(source.m_DrawMaterialLayerWhenClosed)),
+	m_DoorMaterialID(snapshot.Freeze(source.m_DoorMaterialID)),
+	m_DoorMaterialDrawn(snapshot.Freeze(source.m_DoorMaterialDrawn)),
+	m_DoorMaterialTempErased(snapshot.Freeze(source.m_DoorMaterialTempErased)),
+	m_DoorMaterialRedrawTimer(snapshot.Freeze(source.m_DoorMaterialRedrawTimer)),
+	m_LastDoorMaterialPos(snapshot.Freeze(source.m_LastDoorMaterialPos)),
+	m_DoorMoveStartSound(snapshot.Freeze(source.m_DoorMoveStartSound)),
+	m_DoorMoveSound(snapshot.Freeze(source.m_DoorMoveSound)),
+	m_DoorDirectionChangeSound(snapshot.Freeze(source.m_DoorDirectionChangeSound)),
+	m_DoorMoveEndSound(snapshot.Freeze(source.m_DoorMoveEndSound)),
+	m_PersistedADoorRuntime(snapshot.Freeze(source.m_PersistedADoorRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* ADoor::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 ADoor::ADoor() {
 	Clear();
 }
 
 ADoor::~ADoor() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

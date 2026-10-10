@@ -1,5 +1,9 @@
 #include "DeterministicMath.h"
 #include "ACraft.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Timer.h"
+#include "SoundContainer.h"
+#include "MovableObject.h"
 #include "MetricsCollector.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -30,6 +34,14 @@
 
 using namespace RTE;
 
+ACraft::Exit::Exit(const Exit& source, CheckpointNativeSnapshot& snapshot) :
+	m_Offset(source.m_Offset), m_Velocity(source.m_Velocity), m_VelSpread(source.m_VelSpread),
+	m_Radius(source.m_Radius), m_Range(source.m_Range), m_Clear(source.m_Clear),
+	m_pIncomingMO(snapshot.Object(source.m_pIncomingMO)), m_FaithfulIncomingMOUID(source.m_FaithfulIncomingMOUID),
+	m_CheckpointOwner(nullptr) {
+	snapshot.BindValue(source, this);
+}
+
 AbstractClassInfo(ACraft, Actor);
 
 const std::string ACraft::Exit::c_ClassName = "Exit";
@@ -39,11 +51,50 @@ bool ACraft::s_CrabBombInEffect = false;
 #define EXITLINESPACING 7
 #define EXITSUCKDELAYMS 1500
 
+ACraft::ACraft(const ACraft& source, CheckpointNativeSnapshot& snapshot) :
+	Actor(source, snapshot),
+	m_HatchState(snapshot.Freeze(source.m_HatchState)),
+	m_HatchTimer(snapshot.Freeze(source.m_HatchTimer)),
+	m_HatchDelay(snapshot.Freeze(source.m_HatchDelay)),
+	m_HatchOpenSound(snapshot.Freeze(source.m_HatchOpenSound)),
+	m_HatchCloseSound(snapshot.Freeze(source.m_HatchCloseSound)),
+	m_CollectedInventory(snapshot.Freeze(source.m_CollectedInventory)),
+	m_Exits(snapshot.Freeze(source.m_Exits)),
+	m_CurrentExit(std::next(m_Exits.begin(), std::distance(source.m_Exits.cbegin(), std::list<Exit>::const_iterator(source.m_CurrentExit)))),
+	m_PersistedCurrentExit(snapshot.Freeze(source.m_PersistedCurrentExit)),
+	m_ExitInterval(snapshot.Freeze(source.m_ExitInterval)),
+	m_ExitTimer(snapshot.Freeze(source.m_ExitTimer)),
+	m_PersistedHatchTimerAnchor(snapshot.Freeze(source.m_PersistedHatchTimerAnchor)),
+	m_PersistedExitTimerAnchor(snapshot.Freeze(source.m_PersistedExitTimerAnchor)),
+	m_ReadExitIncomingCursor(snapshot.Freeze(source.m_ReadExitIncomingCursor)),
+	m_ExitLinePhase(snapshot.Freeze(source.m_ExitLinePhase)),
+	m_HasDelivered(snapshot.Freeze(source.m_HasDelivered)),
+	m_LandingCraft(snapshot.Freeze(source.m_LandingCraft)),
+	m_FlippedTimer(snapshot.Freeze(source.m_FlippedTimer)),
+	m_CrashTimer(snapshot.Freeze(source.m_CrashTimer)),
+	m_CrashSound(snapshot.Freeze(source.m_CrashSound)),
+	m_CanEnterOrbit(snapshot.Freeze(source.m_CanEnterOrbit)),
+	m_MaxPassengers(snapshot.Freeze(source.m_MaxPassengers)),
+	m_ScuttleIfFlippedTime(snapshot.Freeze(source.m_ScuttleIfFlippedTime)),
+	m_ScuttleOnDeath(snapshot.Freeze(source.m_ScuttleOnDeath)),
+	m_DeliveryState(snapshot.Freeze(source.m_DeliveryState)),
+	m_AltitudeMoveState(snapshot.Freeze(source.m_AltitudeMoveState)),
+	m_AltitudeControl(snapshot.Freeze(source.m_AltitudeControl)),
+	m_DeliveryDelayMultiplier(snapshot.Freeze(source.m_DeliveryDelayMultiplier)),
+	m_NetworkDelivery(snapshot.Freeze(source.m_NetworkDelivery)),
+	m_NetworkDeliveryTimer(snapshot.Freeze(source.m_NetworkDeliveryTimer)),
+	m_OffWireHatchTick(snapshot.Freeze(source.m_OffWireHatchTick)),
+	m_OffWireHatchOpen(snapshot.Freeze(source.m_OffWireHatchOpen)),
+	m_PersistedACraftRuntime(snapshot.Freeze(source.m_PersistedACraftRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
 ACraft::ACraft() {
 	Clear();
 }
 
 ACraft::~ACraft() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

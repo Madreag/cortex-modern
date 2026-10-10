@@ -1,5 +1,9 @@
 #include "DeterministicMath.h"
 #include "ACrab.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Timer.h"
+#include "SoundContainer.h"
+#include "LimbPath.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 
@@ -30,11 +34,63 @@ using namespace RTE;
 
 ConcreteClassInfo(ACrab, Actor, 20);
 
+ACrab::ACrab(const ACrab& source, CheckpointNativeSnapshot& snapshot) :
+	Actor(source, snapshot),
+	m_pTurret(snapshot.Freeze(source.m_pTurret)),
+	m_pLFGLeg(snapshot.Freeze(source.m_pLFGLeg)),
+	m_pLBGLeg(snapshot.Freeze(source.m_pLBGLeg)),
+	m_pRFGLeg(snapshot.Freeze(source.m_pRFGLeg)),
+	m_pRBGLeg(snapshot.Freeze(source.m_pRBGLeg)),
+	m_pLFGFootGroup(snapshot.Freeze(source.m_pLFGFootGroup)),
+	m_BackupLFGFootGroup(snapshot.Freeze(source.m_BackupLFGFootGroup)),
+	m_pLBGFootGroup(snapshot.Freeze(source.m_pLBGFootGroup)),
+	m_BackupLBGFootGroup(snapshot.Freeze(source.m_BackupLBGFootGroup)),
+	m_pRFGFootGroup(snapshot.Freeze(source.m_pRFGFootGroup)),
+	m_BackupRFGFootGroup(snapshot.Freeze(source.m_BackupRFGFootGroup)),
+	m_pRBGFootGroup(snapshot.Freeze(source.m_pRBGFootGroup)),
+	m_BackupRBGFootGroup(snapshot.Freeze(source.m_BackupRBGFootGroup)),
+	m_PersistedLFGFootResidue(snapshot.Freeze(source.m_PersistedLFGFootResidue)),
+	m_PersistedLBGFootResidue(snapshot.Freeze(source.m_PersistedLBGFootResidue)),
+	m_PersistedRFGFootResidue(snapshot.Freeze(source.m_PersistedRFGFootResidue)),
+	m_PersistedRBGFootResidue(snapshot.Freeze(source.m_PersistedRBGFootResidue)),
+	m_PersistedLimbPathStates(snapshot.Freeze(source.m_PersistedLimbPathStates)),
+	m_PersistedLimbPathStatesFromFile(snapshot.Freeze(source.m_PersistedLimbPathStatesFromFile)),
+	m_PersistedLimbGroupPositions(snapshot.Freeze(source.m_PersistedLimbGroupPositions)),
+	m_PersistedLimbGroupInertia(snapshot.Freeze(source.m_PersistedLimbGroupInertia)),
+	m_StrideSound(snapshot.Freeze(source.m_StrideSound)),
+	m_pJetpack(snapshot.Freeze(source.m_pJetpack)),
+	m_IconBlinkTimer(snapshot.Freeze(source.m_IconBlinkTimer)),
+	m_StrideFrame(snapshot.Freeze(source.m_StrideFrame)),
+	m_Paths{},
+	m_Aiming(snapshot.Freeze(source.m_Aiming)),
+	m_StrideStart{},
+	m_StrideTimer{},
+	m_AimRangeUpperLimit(snapshot.Freeze(source.m_AimRangeUpperLimit)),
+	m_AimRangeLowerLimit(snapshot.Freeze(source.m_AimRangeLowerLimit)),
+	m_LockMouseAimInput(snapshot.Freeze(source.m_LockMouseAimInput)),
+	m_PersistedACrabRuntime(snapshot.Freeze(source.m_PersistedACrabRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	snapshot.FreezeArray(m_Paths, source.m_Paths);
+	snapshot.FreezeArray(m_StrideStart, source.m_StrideStart);
+	snapshot.FreezeArray(m_StrideTimer, source.m_StrideTimer);
+}
+
+Entity* ACrab::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
+void ACrab::PrepareCheckpointNative(const ACrab& source, ACrab* target, CheckpointNativeSnapshot& snapshot) {
+	snapshot.Prepare(static_cast<const Actor&>(source), static_cast<Actor*>(target));
+	snapshot.Prepare(source.m_Paths, &target->m_Paths);
+}
+
 ACrab::ACrab() {
 	Clear();
 }
 
 ACrab::~ACrab() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

@@ -63,6 +63,7 @@ namespace RTE {
 			/// Constructor method used to instantiate a Exit object in system
 			/// memory. Create() should be called before using the object.
 			Exit() { Clear(); }
+			Exit(const Exit& source, CheckpointNativeSnapshot& snapshot);
 
 			/// Makes the Exit object ready for use.
 			/// @return An error return value signaling sucess or any particular failure.
@@ -154,6 +155,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a ACraft object in system
 		/// memory. Create() should be called before using the object.
 		ACraft();
+		ACraft(const ACraft& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a ACraft object before deletion
 		/// from system memory.

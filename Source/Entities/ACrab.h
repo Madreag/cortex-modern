@@ -48,6 +48,8 @@ namespace RTE {
 		/// Constructor method used to instantiate a ACrab object in system
 		/// memory. Create() should be called before using the object.
 		ACrab();
+		CheckpointSnapshotMethods(ACrab);
+		static void PrepareCheckpointNative(const ACrab& source, ACrab* target, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a ACrab object before deletion
 		/// from system memory.

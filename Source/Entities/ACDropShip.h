@@ -31,6 +31,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a ACDropShip object in system
 		/// memory. Create() should be called before using the object.
 		ACDropShip();
+		CheckpointSnapshotMethods(ACDropShip);
 
 		/// Destructor method used to clean up a ACDropShip object before deletion
 		/// from system memory.

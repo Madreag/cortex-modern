@@ -42,6 +42,8 @@ namespace RTE {
 		/// Constructor method used to instantiate a ACRocket object in system
 		/// memory. Create() should be called before using the object.
 		ACRocket();
+		CheckpointSnapshotMethods(ACRocket);
+		static void PrepareCheckpointNative(const ACRocket& source, ACRocket* target, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a ACRocket object before deletion
 		/// from system memory.
