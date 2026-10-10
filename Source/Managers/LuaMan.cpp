@@ -10703,7 +10703,7 @@ end
 				{
 					CheckpointFailure::Scope failure(point);
 					try { m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit, true); }
-					catch (const std::bad_alloc&) { refused = true; }
+					catch (const std::bad_alloc&) { refused = failure.Triggered(); }
 				}
 				failuresHeld = refused && m_CheckpointHeap->Stats().bytes == before.bytes && luaJIT_state_serial(m_State) == serial && failuresHeld;
 				failuresHeld = RunScriptString("_ScriptGraphAllocationRetry = { held = 97 }") == 0 && failuresHeld;
@@ -10719,9 +10719,10 @@ end
 			bool liveRefused = false;
 			{
 				CheckpointFailure::Scope failure(CheckpointFailure::Point::LuaAllocation);
-				liveRefused = !CaptureScriptGraph(refusedGraph, liveProblems, true);
+				try { CaptureScriptGraph(refusedGraph, liveProblems, true); }
+				catch (const std::bad_alloc&) { liveRefused = failure.Triggered(); }
 			}
-			const bool liveHeld = liveRefused && !liveProblems.empty() && luaJIT_state_serial(m_State) == liveSerial &&
+			const bool liveHeld = liveRefused && liveProblems.empty() && luaJIT_state_serial(m_State) == liveSerial &&
 			                      RunScriptString("_ScriptGraphAllocationRetry = { held = 97 }; assert(_ScriptGraphAllocationRetry.held == 97); _ScriptGraphAllocationRetry = nil") == 0;
 			std::cout << "[script-graph-selftest] " << (liveHeld ? "PASS" : "FAIL") << " live_lua_allocation_failure_preserves_vm_entry_and_births" << std::endl;
 			checkpointValues = liveHeld && checkpointValues;
@@ -10738,9 +10739,10 @@ end
 			bool nativeRefused = false;
 			{
 				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeRoots);
-				nativeRefused = !CaptureScriptGraph(refusedGraph, nativeProblems, true);
+				try { CaptureScriptGraph(refusedGraph, nativeProblems, true); }
+				catch (const std::bad_alloc&) { nativeRefused = failure.Triggered(); }
 			}
-			const bool nativeHeld = nativeRefused && G(m_State)->gc.threshold == probeThreshold && luaJIT_state_serial(m_State) == nativeSerial;
+			const bool nativeHeld = nativeRefused && nativeProblems.empty() && G(m_State)->gc.threshold == probeThreshold && luaJIT_state_serial(m_State) == nativeSerial;
 			std::cout << "[script-graph-selftest] " << (nativeHeld ? "PASS" : "FAIL") << " native_root_allocation_failure_restores_gc_policy_and_births" << std::endl;
 			checkpointValues = nativeHeld && checkpointValues;
 			CheckpointText expectedGraph, failedGraph;
@@ -10751,7 +10753,7 @@ end
 			bool workerRefused = false;
 			{
 				CheckpointFailure::Scope failure(CheckpointFailure::Point::LuaAllocation);
-				try { (void)failedGraph.Text(); } catch (const std::bad_alloc&) { workerRefused = true; }
+				try { (void)failedGraph.Text(); } catch (const std::bad_alloc&) { workerRefused = failure.Triggered(); }
 			}
 			retryHeld = workerRefused && !m_FrozenCaptureUnavailable->load(std::memory_order_relaxed) && failedGraph.Text() == expected && retryHeld;
 			std::cout << "[script-graph-selftest] " << (retryHeld ? "PASS" : "FAIL") << " worker_lua_allocation_failure_retries_the_exact_frozen_graph" << std::endl;
@@ -10769,7 +10771,7 @@ end
 				bool refused = false;
 				{
 					CheckpointFailure::Scope failure(CheckpointFailure::Point::LuaAllocation, allowed);
-					try { (void)bootstrapGraph.Text(); } catch (const std::bad_alloc&) { refused = true; }
+					try { (void)bootstrapGraph.Text(); } catch (const std::bad_alloc&) { refused = failure.Triggered(); }
 				}
 				bootstrapHeld = refused && bootstrapGraph.Text() == expected && bootstrapHeld;
 			}
