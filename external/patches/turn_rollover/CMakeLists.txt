@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+project(turn_rollover LANGUAGES CXX)
+find_package(GameNetworkingSockets CONFIG REQUIRED)
+add_executable(turn_rollover main.cpp)
+target_compile_features(turn_rollover PRIVATE cxx_std_17)
+target_compile_definitions(turn_rollover PRIVATE STEAMNETWORKINGSOCKETS_STATIC_LINK)
+target_link_libraries(turn_rollover PRIVATE GameNetworkingSockets::GameNetworkingSockets_s)
