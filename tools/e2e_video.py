@@ -2455,6 +2455,7 @@ def finalize_only(options):
 
 
 def scenario_manifest(capture, out, elapsed):
+    capture["proof"] = bool(capture["runs"]) and all(run.get("proof") is True for run in capture["runs"])
     peers = []
     for run in capture["runs"]:
         for peer in run["peers"]:
