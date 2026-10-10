@@ -36,7 +36,12 @@ namespace RTE::CheckpointLua {
 			m_Alive.insert(m_Heap.State());
 			if (const GCobj* last = gcref(globals.gc.mmudata)) {
 				const GCobj* object = last;
-				do { object = gcref(m_Heap.Read(&object->gch.nextgc)); m_Alive.insert(object); } while (object != last);
+				std::unordered_set<const GCobj*> finalizers;
+				do {
+					object = gcref(m_Heap.Read(&object->gch.nextgc));
+					if (!object || !finalizers.insert(object).second) throw std::runtime_error("invalid frozen finalizer GC chain");
+					m_Alive.insert(object);
+				} while (object != last);
 			}
 			if (m_Proxies == LUA_NOREF) return;
 			lua_rawgeti(state, LUA_REGISTRYINDEX, m_Proxies);
