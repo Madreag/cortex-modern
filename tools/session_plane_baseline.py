@@ -49,16 +49,40 @@ def main():
             raise SystemExit(f"The baseline anchor differs: {relative}")
         write(relative, text.replace(needle, needle + addition, 1))
 
-    for name in ("NetSessionPlaneSelfTest.cpp", "NetSessionPlaneSelfTest.h"):
+    for name in ("NetSessionPlaneSelfTest.cpp", "NetSessionPlaneSelfTest.h", "NetLockstepSelfTest.h",
+                 "NetMatchSelfTest.cpp", "NetReconnectSessionSelfTest.cpp", "NetRejoinMatrixSelfTest.cpp"):
         write("Source/Network/" + name, (tip / "Source/Network" / name).read_text(encoding="utf-8"))
     native = (tip / "Source/Network/NetLockstepSelfTest.cpp").read_text(encoding="utf-8")
-    guards = native[native.index("\tstruct SessionPlaneRecoveryTest {"):native.index("\t\tstatic bool AppliedInputPrefix(")]
-    guards += "\t};\n\n"
-    begin = native.index("\tbool NetLockstepSelfTest::CheckSessionRecoveryGuard(")
-    guards += native[begin:native.index("\n\t// Return/recording fixtures", begin)]
-    insert("Source/Network/NetLockstepSelfTest.cpp", "namespace RTE {", "\n" + guards)
-    insert("Source/Network/NetLockstep.h", "class NetLockstepCoordinator {", "\n\t\tfriend struct SessionPlaneRecoveryTest;")
-    insert("Source/Network/NetLockstepSelfTest.h", "static int Run();", "\n\t\tstatic bool CheckSessionRecoveryGuard(unsigned arm, std::string* error);")
+    # Run the rewritten assertions themselves, including their unchanged claim,
+    # controller, ticket and replay comparisons. No coordinator implementation
+    # is backported. These two unchanged, tip-only readout checks need APIs that
+    # do not exist on the baseline; retain their rows as explicit unavailability,
+    # and never credit those messages as behavioral red evidence.
+    unavailable = ("AppliedInputPrefix", "LinkQuality")
+    for method in unavailable:
+        signature = "\t\tstatic bool " + method + "(std::string* error) {"
+        begin = native.index(signature) + len(signature)
+        end = native.index("\n\t\t}", begin)
+        native = (native[:begin] + '\n#if __has_include("NetPeerSessionWire.h")' + native[begin:end]
+                  + '\n#else\n\t\t\t*error = "BASELINE-UNAVAILABLE: ' + method
+                  + ' requires the new peer protocol API; not behavioral evidence";\n\t\t\treturn false;\n#endif' + native[end:])
+    visible = "host.IsSeatHoldVisible(late, 1083)"
+    if native.count(visible) != 1:
+        raise SystemExit("The baseline visibility probe anchor differs")
+    native = native.replace(visible, "([]<class Peer>(const Peer& p, uint8_t seat) { "
+                            "if constexpr (requires { p.IsSeatHoldVisible(seat, 1083); }) return p.IsSeatHoldVisible(seat, 1083); "
+                            "else return p.HasHeldAISeat(seat); })(host, late)")
+    write("Source/Network/NetLockstepSelfTest.cpp", native)
+    # Access declarations let current probes inspect the old state without
+    # changing a single baseline decision or transport path.
+    for name, anchor in (("NetLockstep.h", "class NetLockstepCoordinator {"), ("NetMatchService.h", "class NetMatchService")):
+        relative = "Source/Network/" + name
+        current = (tip / relative).read_text(encoding="utf-8")
+        original = (baseline / relative).read_text(encoding="utf-8")
+        friends = [line for line in current.splitlines() if line.strip().startswith("friend ") and line not in original.splitlines()]
+        if name == "NetMatchService.h":
+            anchor = original[original.index(anchor):original.index("{", original.index(anchor)) + 1]
+        insert(relative, anchor, "\n" + "\n".join(friends))
     insert("Source/Main.cpp", '#include "NetLockstepSelfTest.h"', '\n#include "NetSessionPlaneSelfTest.h"')
     needle = '\t\tif (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-selftest") {'
     text = (baseline / "Source/Main.cpp").read_text(encoding="utf-8")
@@ -67,9 +91,14 @@ def main():
     insert("RTEA.vcxproj", '<ClCompile Include="Source\\Network\\NetLockstepSelfTest.cpp" />', '\n    <ClCompile Include="Source\\Network\\NetSessionPlaneSelfTest.cpp" />')
     # Launch routing changes only; no baseline controller, session, or decision code is replaced.
     write("tools/posix_test_runner.py", (tip / "tools/posix_test_runner.py").read_text(encoding="utf-8"))
+    write("tools/session_directory/test_session_directory.py", (tip / "tools/session_directory/test_session_directory.py").read_text(encoding="utf-8"))
     proof = {"baseline": sha, "probe_source": subprocess.check_output(["git", "-C", str(tip), "rev-parse", "HEAD"], text=True).strip(),
              "files": {name: hashlib.sha256((baseline / name).read_bytes()).hexdigest() for name in changed},
-             "behavior_changes": False, "launch_change": "visible POSIX routing"}
+             "behavior_changes": False, "launch_change": "visible POSIX routing",
+             "unavailable_not_credited": list(unavailable),
+             "probe_suites": ["net-session-plane", "net-lockstep", "net-input-acceptance", "net-lockstep-released-claims",
+                              "net-lockstep-release-paths", "net-lockstep-seat-succession", "net-lockstep-seat-admission",
+                              "net-match", "net-reconnect-session", "net-rejoin-matrix", "net-directory"]}
     proof_path.write_text(json.dumps(proof, indent=2) + "\n", encoding="utf-8")
 
 
