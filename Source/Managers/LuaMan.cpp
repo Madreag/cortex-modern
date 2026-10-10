@@ -10651,9 +10651,10 @@ end
 				}
 				plain.RunScriptString("_BoundaryNativeOwner = nil; _BoundaryNativeValues = nil");
 				actor->SetPos(Vector(101, 103)); actor.reset();
-				exact = problems.empty() && stats.plainStates == (custom ? 0 : 1) &&
-				    std::async(std::launch::async, [captured] { return captured.Text(); }).get() == reference && exact;
-				std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " borrowed_native_boundary_keeps_aliases_without_bulk_helpers custom=" << custom << std::endl;
+				const std::string actual = std::async(std::launch::async, [captured] { return captured.Text(); }).get();
+				exact = problems.empty() && stats.plainStates == (custom ? 0 : 1) && actual == reference && exact;
+				std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " borrowed_native_boundary_keeps_aliases_without_bulk_helpers custom=" << custom
+				    << " plain=" << stats.plainStates << " problems=" << problems.size() << " bytes_exact=" << (actual == reference) << std::endl;
 				checkpointValues = exact && checkpointValues;
 			}
 		}
@@ -10675,8 +10676,10 @@ end
 				CheckpointWriter::BatchScope batch(true);
 				exact = plain.CaptureScriptGraph(captured, problems, true) && exact;
 			}
-			exact = problems.empty() && stats.plainStates == 1 && captured.Text() == reference && exact;
-			std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " plain_native_seeds_match_the_live_graph" << std::endl;
+			const std::string actual = captured.Text();
+			exact = problems.empty() && stats.plainStates == 1 && actual == reference && exact;
+			std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " plain_native_seeds_match_the_live_graph plain=" << stats.plainStates
+			    << " problems=" << problems.size() << " bytes_exact=" << (actual == reference) << std::endl;
 			checkpointValues = exact && checkpointValues;
 			plain.RunScriptString("local meta = debug.getmetatable(_CheckpointPlainValues[1]); local previous = meta.__index; meta.__index = function(self, key) if key == 'X' then return previous(self, key) + 1 end return previous(self, key) end");
 			problems.clear(); stats = {}; reference.clear(); captured = {};
@@ -10690,8 +10693,10 @@ end
 				CheckpointWriter::BatchScope batch(true);
 				fallback = plain.CaptureScriptGraph(captured, problems, true) && fallback;
 			}
-			fallback = problems.empty() && stats.plainStates == 0 && captured.Text() == reference && fallback;
-			std::cout << "[script-graph-selftest] " << (fallback ? "PASS" : "FAIL") << " custom_native_getters_keep_the_filtered_live_capture" << std::endl;
+			const std::string customized = captured.Text();
+			fallback = problems.empty() && stats.plainStates == 0 && customized == reference && fallback;
+			std::cout << "[script-graph-selftest] " << (fallback ? "PASS" : "FAIL") << " custom_native_getters_keep_the_filtered_live_capture plain=" << stats.plainStates
+			    << " problems=" << problems.size() << " bytes_exact=" << (customized == reference) << std::endl;
 			checkpointValues = fallback && checkpointValues;
 		}
 		{

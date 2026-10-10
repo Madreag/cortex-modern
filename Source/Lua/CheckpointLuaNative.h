@@ -538,14 +538,19 @@ namespace RTE::CheckpointLua {
 			ForEachUserdata(State(), false, true, [&](GCudata* data) {
 				if (!plain) return;
 				const auto* meta = tabref(data->metatable);
-				if (!meta) { plain = false; return; }
+				if (!meta) { TValue value; setgcVraw(&value, obj2gco(data), LJ_TUDATA); values.push_back(value); return; }
 				const auto* marker = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(classKey));
 				const bool descriptor = marker && !tvisnil(marker) && !tvisfalse(marker);
 				if (descriptor && data->len != sizeof(luabind::detail::class_rep)) { plain = false; return; }
 				TValue value; setgcVraw(&value, obj2gco(data), LJ_TUDATA);
 				if (!descriptor) {
 					const auto* objectMarker = lj_tab_getstr(const_cast<GCtab*>(meta), m_ClassMarker);
-					if (data->len < sizeof(luabind::detail::object_rep) || tabref(meta->metatable) || !objectMarker || tvisnil(objectMarker) || tvisfalse(objectMarker)) { plain = false; return; }
+					if (!objectMarker || tvisnil(objectMarker) || tvisfalse(objectMarker)) {
+						const auto* hook = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(iteratorKey));
+						if (tabref(meta->metatable) || (hook && tvisfunc(hook))) { plain = false; return; }
+						values.push_back(value); return;
+					}
+					if (data->len < sizeof(luabind::detail::object_rep) || tabref(meta->metatable)) { plain = false; return; }
 					const auto* object = static_cast<const luabind::detail::object_rep*>(uddata(data));
 					const auto* type = object->crep();
 					if (!object->ptr() || !type || type->get_class_type() != luabind::detail::class_rep::cpp_class) { plain = false; return; }
