@@ -46,7 +46,7 @@ AtomGroup::AtomGroup(const AtomGroup& source, CheckpointNativeSnapshot& snapshot
 	m_IgnoreMOIDs(snapshot.Freeze(source.m_IgnoreMOIDs)),
 	m_AreaDistributionType(snapshot.Freeze(source.m_AreaDistributionType)),
 	m_AreaDistributionSurfaceAreaMultiplier(snapshot.Freeze(source.m_AreaDistributionSurfaceAreaMultiplier)),
-	m_FrozenAtoms(Atom::FreezeList(source.m_Atoms)),
+	m_FrozenAtoms([&source] { CheckpointCloneCost cost("atom lists"); return Atom::FreezeList(source.m_Atoms); }()),
 	// The frozen material names itself on the saver through the snapshot.
 	m_CheckpointMaterialReference(source.m_CheckpointMaterialReference),
 	m_CheckpointOwnerID(snapshot.Freeze(source.m_CheckpointOwnerID)),

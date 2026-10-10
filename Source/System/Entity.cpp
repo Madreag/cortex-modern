@@ -167,9 +167,12 @@ namespace RTE {
 		pixel->bitmap.vtable = &pixel->table;
 		pixel->bitmap.line = nullptr;
 		pixel->bitmap.dat = nullptr; pixel->bitmap.extra = nullptr;
-		for (int depth = 0; depth < 2; ++depth) {
-			int requested = depth;
-			if (const auto* path = ContentFile::LoadedBitmapPath(source, requested)) pixel->paths[depth] = *path;
+		{
+			CheckpointCloneCost paths("bitmap paths");
+			for (int depth = 0; depth < 2; ++depth) {
+				int requested = depth;
+				if (const auto* path = ContentFile::LoadedBitmapPath(source, requested)) pixel->paths[depth] = *path;
+			}
 		}
 		const int depth = bitmap_color_depth(source);
 		if ((pixel->paths[0] || pixel->paths[1]) && source->w > 0 && source->h > 0 && (depth == 8 || depth == 15 || depth == 16 || depth == 24 || depth == 32)) {
@@ -177,6 +180,7 @@ namespace RTE {
 			pixel->loaded = source;
 			pixel->rowBytes = static_cast<size_t>(source->w) * ((depth + 7) / 8);
 		} else {
+			CheckpointCloneCost pixels("bitmap pixels");
 			pixel->snapshot = BitmapSnapshot::Freeze(source);
 		}
 		// Another thread freezing an owner of the same image may have frozen it first; its copy is the one kept.

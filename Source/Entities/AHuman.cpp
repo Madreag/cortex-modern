@@ -100,6 +100,7 @@ AHuman::AHuman(const AHuman& source, CheckpointNativeSnapshot& snapshot) :
 	m_DeviceArmSwayRate(snapshot.Freeze(source.m_DeviceArmSwayRate)),
 	m_PersistedAHumanRuntime(snapshot.Freeze(source.m_PersistedAHumanRuntime)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	CheckpointCloneCost cost("limb paths");
 	snapshot.FreezeArray(m_Paths, source.m_Paths);
 	snapshot.FreezeArray(m_ArmClimbing, source.m_ArmClimbing);
 }
