@@ -676,6 +676,7 @@ namespace RTE {
 		uint64_t holdNoticeBudgetMs = 0;
 		bool holdDeadlineFeasible = true;
 		uint64_t lastHoldDeclarationMs = 0; //!< Authenticated silence elapsed when the host last ordered a hold.
+		uint64_t lastBridgeDueMs = 0; //!< Input due time used by the latest bounded combat bridge.
 		uint32_t ownParksExcluded = 0; //!< Gaps in our own ticks that were not charged to a peer.
 		uint64_t longestOwnParkMs = 0; //!< The longest of them; the start work a peer's machine is also doing.
 		uint64_t localTickOverruns = 0;

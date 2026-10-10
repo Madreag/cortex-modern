@@ -1802,15 +1802,32 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::ArmSessionLivenessLocked() {
 		INetTransport* wire = ActiveWireLocked();
-		const bool hosting = wire && m_Coordinator && (m_Coordinator->IsRunning() || m_WorldCatchUp.active) && !m_Coordinator->IsMigrating();
+		const bool hosting = wire && m_Coordinator && (m_Coordinator->IsRunning() || m_WorldCatchUp.active) &&
+		    (!m_Coordinator->IsMigrating() || m_Coordinator->UsesPeerFrameGroups());
 		std::vector<uint8_t> bytes;
 		std::vector<NetPeerId> targets;
+		std::shared_ptr<NetPeerSessionLinks> links;
 		if (hosting) {
-			NetLockstepAck alive;
-			alive.senderPeerId = m_Coordinator->GetConfig().localPeerId;
-			alive.highestContiguousFrame = m_Coordinator->GetStats().nextFrame;
-			if (!NetLockstepCodec::Encode({alive}, bytes)) bytes.clear();
-			for (const auto& [peer, transport]: m_Coordinator->RemoteTransports()) targets.push_back(transport);
+			const auto& config = m_Coordinator->GetConfig();
+			if (m_Coordinator->UsesPeerFrameGroups()) {
+				links = config.peerSessionLinks;
+				NetHostMigrationMessage alive;
+				alive.type = NetHostMigrationMessageType::PeerHeartbeat;
+				alive.sessionId = config.sessionId; alive.roundId = config.matchConfig.roundId; alive.generation = 1;
+				alive.senderPeerId = alive.successorPeerId = config.localPeerId;
+				alive.configHash = m_Coordinator->GetRoundConfigHash();
+				alive.appliedFrame = m_Coordinator->GetResumeFrame() > 0 ? m_Coordinator->GetResumeFrame() - 1 : 0;
+				alive.preparedFrame = m_Coordinator->GetStats().nextFrame > 0 ? m_Coordinator->GetStats().nextFrame - 1 : 0;
+				alive.bytes.resize(8); alive.totalBytes = 8;
+				if (!NetHostMigrationCodec::Encode(alive, config.migrationKey, bytes)) bytes.clear();
+				for (uint8_t peer = 1; peer <= config.peerCount; ++peer) if (peer != config.localPeerId) targets.push_back(peer);
+			} else {
+				NetLockstepAck alive;
+				alive.senderPeerId = config.localPeerId;
+				alive.highestContiguousFrame = m_Coordinator->GetStats().nextFrame;
+				if (!NetLockstepCodec::Encode({alive}, bytes)) bytes.clear();
+				for (const auto& [peer, transport]: m_Coordinator->RemoteTransports()) targets.push_back(transport);
+			}
 		}
 		const uint64_t nowMs = SteadyNowMs();
 		uint64_t sentWhileBusy = 0, busyMs = 0;
@@ -1820,6 +1837,7 @@ static std::string ResyncSaveName() {
 			busyMs = nowMs >= m_Liveness.pumpMs ? nowMs - m_Liveness.pumpMs : 0;
 			m_Liveness.sentWhileBusy = 0;
 			m_Liveness.wire = hosting && !bytes.empty() && !targets.empty() ? wire : nullptr;
+			m_Liveness.links = std::move(links);
 			m_Liveness.targets = std::move(targets);
 			m_Liveness.bytes = std::move(bytes);
 			if (hosting) {
@@ -1838,15 +1856,23 @@ static std::string ResyncSaveName() {
 		m_LivenessThread = std::jthread([this](std::stop_token stop) {
 			while (!stop.stop_requested()) {
 				{
+					// Native routes can change under the plane. Lock in the same
+					// order as its main-thread arm, then send the immutable heartbeat
+					// directly; a paused sim cannot flush a session outbox.
+					std::unique_lock plane(NetLockstepPlane::Lock(), std::try_to_lock);
+					// Teardown may join this sender while holding the plane. Never
+					// block on that lock; the next short pass can retry a busy route.
+					if (!plane.owns_lock()) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); continue; }
 					std::lock_guard<std::mutex> lock(m_LivenessMutex);
 					SessionLiveness& live = m_Liveness;
 					const uint64_t nowMs = SteadyNowMs();
 					// A main-loop stall is not a disconnect. Keep every authenticated link alive until explicit teardown.
-					if (live.wire && nowMs >= live.pumpMs && nowMs - live.pumpMs >= 2 * live.tickMs &&
+					if (live.wire && (!live.links || !live.links->frameBlackout) && nowMs >= live.pumpMs && nowMs - live.pumpMs >= 2 * live.tickMs &&
 					    (nowMs < live.sentMs || nowMs - live.sentMs >= live.tickMs)) {
 						for (const NetPeerId target: live.targets) {
 							std::string ignored;
-							(void)live.wire->Send(target, live.lane, live.bytes, &ignored);
+							if (live.links) (void)live.links->SendTo(static_cast<uint8_t>(target), live.lane, live.bytes);
+							else (void)live.wire->Send(target, live.lane, live.bytes, &ignored);
 						}
 						live.sentMs = nowMs;
 						++live.sentWhileBusy;
@@ -1862,6 +1888,7 @@ static std::string ResyncSaveName() {
 	void NetMatchService::DisarmSessionLiveness() {
 		std::lock_guard<std::mutex> lock(m_LivenessMutex);
 		m_Liveness.wire = nullptr;
+		m_Liveness.links.reset();
 		m_Liveness.targets.clear();
 	}
 
@@ -10386,7 +10413,7 @@ static std::string ResyncSaveName() {
 				return;
 			config.migrationKey = m_MigrationKey;
 			config.migrationGeneration = m_MigrationGeneration;
-			config.peerFrameGroups = config.substituteSlowPeers && !config.matchConfig.dedicated && !config.matchConfig.persistentWorld;
+			config.peerFrameGroups = NetMatchRunner::UsesPeerFraming(config.matchConfig);
 			if (config.peerFrameGroups) {
 				if (!m_PeerSessionLinks) m_PeerSessionLinks = std::make_shared<NetPeerSessionLinks>();
 				config.peerSessionLinks = m_PeerSessionLinks;

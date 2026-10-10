@@ -5917,6 +5917,69 @@ namespace RTE {
 			}
 		};
 
+		bool TestScriptedMatchUsesTheLiveFrameProtocol(std::string* error) {
+			std::array<LockedLoopback, 2> wires;
+			std::array<NetSession, 2> sessions;
+			std::array<NetMatchRunner, 2> runners;
+			std::array<NetLockstepCoordinator, 2> rounds;
+			std::array<NetMatchRunnerConfig, 2> configs;
+			std::array<std::string, 2> failures;
+			std::array<bool, 2> started{};
+			RematchClock clock;
+			for (size_t index = 0; index < 2; ++index) {
+				auto& config = configs[index];
+				config.host = index == 0; config.joinAddress = index == 0 ? "" : "loopback";
+				config.matchConfig = MakeConfig(); config.matchConfig.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
+				config.useLobbyProtocol = false; // Exercise the ordinary CLI defaults.
+				config.startFrame = 1; config.autoInputDelay = true;
+				config.nowMs = [&] { return clock.NowMs(); };
+				config.sessionWaitMs = config.lobbyWaitMs = config.lockstepWaitMs = 4000;
+				config.postSessionSettleMs = config.postLobbySettleMs = 0;
+				config.sessionConfig.port = 47960; config.sessionConfig.sessionId = config.matchConfig.sessionId;
+				config.sessionConfig.localNonce += index;
+				config.sessionConfig.displayName = index == 0 ? "Host" : "Joiner";
+				config.sessionConfig.heartbeatIntervalMs = 25;
+				auto& identity = config.sessionConfig.localIdentity;
+				identity.gameVersion = "7.0.0-test"; identity.networkProtocolVersion = NetProtocol::c_Version;
+				identity.controllerFrameVersion = ControllerFrame::c_Version; identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+				identity.buildId = "scripted-peer-framing"; identity.platform = "test";
+			}
+			std::jthread host([&] { started[0] = runners[0].Start(wires[0], sessions[0], rounds[0], configs[0], &failures[0]); });
+			while (!wires[0].IsHosting() && clock.NowMs() < 1000) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			std::jthread joiner([&] { started[1] = runners[1].Start(wires[1], sessions[1], rounds[1], configs[1], &failures[1]); });
+			host.join(); joiner.join();
+			if (!started[0] || !started[1]) { *error = "scripted frame setup: host=" + failures[0] + " joiner=" + failures[1]; return false; }
+			const auto usesFrames = []<class Config>(const Config& config) {
+				if constexpr (requires { config.peerFrameGroups; config.peerSessionLinks; }) return config.peerFrameGroups && bool(config.peerSessionLinks);
+				else return false;
+			};
+			for (const auto& round: rounds) if (!usesFrames(round.GetConfig()) || round.GetConfig().migrationKey == NetHash32{} ||
+			    !round.GetConfig().migrationTransportFactory || round.GetConfig().matchConfig.migrationPeers.size() != 2) {
+				*error = "the scripted match bypassed the live peer framing defaults or its authenticated routes"; return false;
+			}
+			if (rounds[0].GetConfig().migrationKey != rounds[1].GetConfig().migrationKey) { *error = "the CLI lobby did not agree one private frame credential"; return false; }
+			for (auto& round: rounds) round.NoteLocalStartPark(0);
+			std::array<uint64_t, 2> produced{1, 1}, applied{};
+			const auto deadline = clock.NowMs() + 4000;
+			while (clock.NowMs() < deadline && (applied[0] < 60 || applied[1] < 60)) {
+				for (size_t index = 0; index < 2; ++index) {
+					auto& round = rounds[index]; const uint64_t now = NetLockstepNowMs();
+					round.Tick(now);
+					for (const auto& event: runners[index].TakeSessionTraffic()) sessions[index].InjectEvent(event, clock.NowMs());
+					sessions[index].TickKeepalive(clock.NowMs());
+					if (round.IsRunning() && produced[index] <= round.GetResumeFrame() + 1 && round.QueueLocalInput(produced[index], {}, {}, &failures[index])) ++produced[index];
+					NetLockstepReadyFrame ready;
+					while (round.PopReadyFrame(ready)) { round.FinishSimulationTick(ready.frame); applied[index] = ready.frame; }
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			if (applied[0] < 60 || applied[1] < 60 || rounds[0].IsFailed() || rounds[1].IsFailed()) {
+				*error = "the scripted peer protocol did not commit sixty ticks: " + failures[0] + "; " + failures[1]; return false;
+			}
+			std::cout << "[net-match-selftest] PASS scripted_match_uses_live_peer_framing topology=single-box proof=false ticks=" << applied[0] << '/' << applied[1] << std::endl;
+			return true;
+		}
+
 		// One peer's match objects, pumped the way NetMatchService and the sim thread pump them.
 		struct RematchPeer {
 			std::string name;
@@ -8147,7 +8210,13 @@ namespace RTE {
 		firstConfig.localNonce += 1;
 		secondConfig.displayName = "Joiner B";
 		secondConfig.localNonce += 2;
-		if (!host.m_Session->StartHost(*host.m_Transport, config, error) || !joiner.m_Session->StartClient(*joiner.m_Transport, "127.0.0.1", firstConfig, error) ||
+		bool listening = false;
+		for (uint16_t port = 49538; port < 49546 && !listening; ++port) {
+			config.port = port;
+			listening = host.m_Session->StartHost(*host.m_Transport, config, error);
+		}
+		firstConfig.port = secondConfig.port = config.port;
+		if (!listening || !joiner.m_Session->StartClient(*joiner.m_Transport, "127.0.0.1", firstConfig, error) ||
 		    !second.StartClient(secondLink, "127.0.0.1", secondConfig, error)) {
 			return false;
 		}
@@ -18819,6 +18888,7 @@ namespace RTE {
 		row(&TestTickHashTraceIsBoundedAndLossless, "tick_hash_trace_is_bounded_and_lossless");
 		row(&TestWrittenConfigsHoldNoRelayLogin, "a_written_config_holds_no_relay_login");
 		row(&TestTheReportListsEveryConnection, "report_lists_every_connection");
+		row(&TestScriptedMatchUsesTheLiveFrameProtocol, "scripted_match_uses_live_peer_framing");
 		row(&TestAJoiningLobbyWaitsForHostConfig, "joining_lobby_waits_for_host_config");
 		if (!rowsPassed) return fail("a reporting row failed");
 		std::string menuError, routeError;

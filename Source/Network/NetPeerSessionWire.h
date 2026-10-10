@@ -27,6 +27,7 @@ namespace RTE {
 		std::map<NetPeerId, uint8_t> listenerBindings, primaryBindings;
 		INetTransport* primary = nullptr;
 		bool primaryListener = false, sessionAttached = false;
+		bool frameBlackout = false;
 		uint64_t sessionId = 0, nextSequence = 1;
 		uint8_t localPeerId = 0, hostPeerId = 1;
 		std::array<uint8_t, 32> key{};

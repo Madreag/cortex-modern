@@ -1,4 +1,5 @@
 #include "NetRejoinMatrixSelfTest.h"
+#include "NetSessionPlaneSelfTest.h"
 
 #include "ControllerFrame.h"
 #include "LoopbackTransport.h"
@@ -166,7 +167,7 @@ namespace RTE {
 						set("legal: the survivors leave to the landing with 'The host left the match'", "HOSTLOSS-HELD");
 						x.notWalked = "no in-process lever fails a migration short of losing every successor";
 						break;
-					case Event::SuccessorLost: set("sub=unreachable subhost=1", "QUORUM"); break;
+					case Event::SuccessorLost: set("sub=migrating subhost=1", "ALL-SURVIVORS", "losing an uncommitted successor waits for agreement and cannot end or re-elect the match"); break;
 					case Event::MigrationBegin: set("sub=run subhost=2", "DESIGN-MIGRATION"); break;
 					case Event::HostLost: set("sub=run subhost=2", "HOSTLOSS-HELD"); break;
 					case Event::HostGoodbye:
@@ -912,6 +913,7 @@ namespace RTE {
 
 		bool EnterMigrating(StarRig& r) {
 			std::string error;
+			if (!NetSessionPlaneSelfTest::CheckHostAdministration(0, &r.error)) return false;
 			if (!r.hostWire.StartHost(r.port, &error) || !r.successorWire.Connect("loopback", r.port, &error) || !r.subjectWire.Connect("loopback", r.port, &error)) {
 				r.error = "star loopback: " + error;
 				return false;
@@ -929,7 +931,14 @@ namespace RTE {
 			}
 			// The host's process dies: no close, no last packet.
 			r.live[0] = false;
-			if (!PumpStar(r, 4000, [&r] { return r.subject.IsMigrating(); })) {
+			const uint64_t silentAt = r.now;
+			while (r.now < silentAt + c_NetHostLossSilenceMs - 100) {
+				StepStar(r);
+				if (r.subject.IsMigrating() || r.successor.IsMigrating() || r.subject.GetHostPeerId() != 1 || r.successor.GetHostPeerId() != 1) {
+					r.error = "host change began before fifteen seconds of authenticated silence"; return false;
+				}
+			}
+			if (!PumpStar(r, 1100, [&r] { return r.subject.IsMigrating(); })) {
 				r.error = "the survivors never began a migration" + StarReport(r);
 				return false;
 			}

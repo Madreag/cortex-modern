@@ -843,6 +843,7 @@ namespace RTE {
 				if (peer->state == NetSessionState::Handshake) {
 					RejectPeer(*peer, NetRejectReason::MalformedMessage, "decode", "valid message", summary, summary);
 				} else {
+					RecordReject(NetRejectReason::MalformedMessage, "decode", "valid message", summary, summary);
 					Send(peerId, NetDisconnect{static_cast<uint16_t>(NetRejectReason::MalformedMessage), summary});
 					m_Transport->Disconnect(peerId, summary);
 					peer->state = NetSessionState::Failed;

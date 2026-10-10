@@ -1541,6 +1541,7 @@ namespace RTE {
 		/// as a busy host, never a gone one. The session pump arms it every tick and it is disarmed around every transport change.
 		struct SessionLiveness {
 			INetTransport* wire = nullptr;
+			std::shared_ptr<NetPeerSessionLinks> links;
 			std::vector<NetPeerId> targets;
 			std::vector<uint8_t> bytes;
 			NetTransportLane lane = NetTransportLane::InputUnreliable;
@@ -1551,6 +1552,7 @@ namespace RTE {
 		SessionLiveness m_Liveness;
 		std::jthread m_LivenessThread;
 		void ArmSessionLivenessLocked();
+		friend class NetSessionPlaneSelfTest;
 		void DisarmSessionLiveness();
 		struct WireOwners;
 		std::unique_ptr<WireOwners> DetachWireOwnersLocked();

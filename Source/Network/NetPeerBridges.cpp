@@ -101,7 +101,10 @@ namespace RTE {
 		if (!ValidatePeerBridge(proposal)) return false;
 		auto& votes = m_PeerBridgeVotes[{proposal.frame, DecisionKind(proposal)}];
 		const auto own = votes.find(m_Config.localPeerId);
-		if (own != votes.end()) return SameBridge(own->second, proposal);
+		// A matching proposal is still pending until its certificate is installed.
+		// Reporting it as progress makes AdvanceReadyFrames spin on the same frame
+		// and prevents the wire from delivering the other voters' answers.
+		if (own != votes.end()) return m_PeerBridgeCertificates.contains({frame, 0});
 		proposal.voterMask = SeatBit(m_Config.localPeerId);
 		votes.emplace(m_Config.localPeerId, proposal);
 		if (proposal.preparedFrame == 0) for (uint8_t peer: proposal.members) m_PeerRejectedInputs[frame] |= SeatBit(peer);

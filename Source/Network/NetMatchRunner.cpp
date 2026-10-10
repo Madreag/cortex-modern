@@ -2,7 +2,10 @@
 #include "DiagnosticLine.h"
 
 #include "GnsTransport.h"
+#include "NetAuthCrypto.h"
 #include "NetIdentity.h"
+#include "NetLanDiscovery.h"
+#include "NetPeerSessionWire.h"
 #include "NetWorldJoin.h"
 #include "NetRoundStartScripts.h"
 #include "TimerMan.h"
@@ -49,7 +52,39 @@ namespace RTE {
 	bool NetMatchRunner::Start(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error) {
 		m_Config = config;
 		m_HostOptionsRefused = false;
-		m_UseLobbyProtocol = config.useLobbyProtocol;
+		// V1 always obtains its frame credentials and peer routes through the
+		// lobby, including scripted launches that previously skipped that exchange.
+		m_UseLobbyProtocol = config.useLobbyProtocol || UsesPeerFraming(config.matchConfig);
+		m_PeerFrameKey = {};
+		m_PeerFrameLinks.reset();
+		if (UsesPeerFraming(config.matchConfig)) {
+			m_Config.enableMigration = true;
+			if (m_Config.migrationListenAddrs.empty())
+				m_Config.migrationListenAddrs = NetLockstepCoordinator::MigrationListenAddrs(NetLanDiscovery::GetPrimaryLocalAddress(), false);
+			if (!m_Config.configureMigration) {
+				if (config.host && !GetNetAuthCrypto().RandomBytes(m_PeerFrameKey.data(), m_PeerFrameKey.size())) {
+					SetFailed("could not create the match frame credential");
+					if (error) *error = m_SetupError;
+					return false;
+				}
+				// The CLI has an established encrypted GNS session but no saved
+				// admission state. Its existing lobby capsule carries only this
+				// match's random frame key; service capsules also carry seat state.
+				m_Config.sealMigration = [this](uint8_t, const NetHash32&, std::vector<uint8_t>& sealed) {
+					sealed.assign(m_PeerFrameKey.begin(), m_PeerFrameKey.end());
+					return m_PeerFrameKey != NetHash32{};
+				};
+				m_Config.openMigration = [this, &session](const NetLobbyMigration& capsule) {
+					if (capsule.peerId != LocalLockstepPeerId(session) || capsule.sealedState.size() != m_PeerFrameKey.size()) return false;
+					std::copy(capsule.sealedState.begin(), capsule.sealedState.end(), m_PeerFrameKey.begin());
+					return m_PeerFrameKey != NetHash32{};
+				};
+				m_Config.configureMigration = [this](NetLockstepConfig& framing) {
+					framing.migrationKey = m_PeerFrameKey;
+					framing.migrationTransportFactory = [] { return std::make_unique<GnsTransport>(); };
+				};
+			}
+		}
 		// A round opened on a checkpoint resumes from a snapshot exactly as a healed round does.
 		// A round's start scripts ride the same stream as a match image, but the round starts fresh.
 		m_ResyncRound = !m_StateToStream.empty() && !IsRoundStartScriptBlob(m_StateToStream);
@@ -142,7 +177,7 @@ namespace RTE {
 		}
 
 		m_State = NetMatchRuntimeState::LockstepStarting;
-		if (!StartLockstep(transport, session, coordinator, config, error) || !WaitForLockstepRunning(coordinator, config.lockstepWaitMs, error, &session)) {
+		if (!StartLockstep(transport, session, coordinator, m_Config, error) || !WaitForLockstepRunning(coordinator, config.lockstepWaitMs, error, &session)) {
 			return false;
 		}
 		m_State = NetMatchRuntimeState::Running;
@@ -812,6 +847,7 @@ namespace RTE {
 			m_MatchConfigHash = NetMatchConfigUtil::HashConfig(live);
 		};
 		lockstepConfig.substituteSlowPeers = m_MatchConfig.version >= NetMatchConfigUtil::c_TimingOptionsVersion && m_MatchConfig.slowPlayerPolicy == NetSlowPlayerPolicy::Substitute;
+		lockstepConfig.peerFrameGroups = UsesPeerFraming(m_MatchConfig);
 		lockstepConfig.slowPlayerBoundTicks = m_MatchConfig.slowPlayerBoundTicks;
 		lockstepConfig.requirePublishedStart = (m_UseLobbyProtocol || config.requirePublishedStart) && !m_WorldJoinStarting;
 		// The host's redundancy window rides the agreed config, so every peer repeats the same ticks.
@@ -853,6 +889,21 @@ namespace RTE {
 			lockstepConfig.hostChangeReferee = previous.hostChangeReferee;
 		} else if (m_Config.configureMigration) {
 			m_Config.configureMigration(lockstepConfig);
+		}
+		if (lockstepConfig.peerFrameGroups) {
+			if (lockstepConfig.peerCount > 1 && lockstepConfig.migrationKey == NetHash32{}) {
+				SetFailed("the match frame credential was not received");
+				if (error) *error = m_SetupError;
+				return false;
+			}
+			if (!lockstepConfig.peerSessionLinks) {
+				if (!m_PeerFrameLinks) m_PeerFrameLinks = std::make_shared<NetPeerSessionLinks>();
+				lockstepConfig.peerSessionLinks = m_PeerFrameLinks;
+			}
+			session.SetAuxiliaryPacketValidator([key = lockstepConfig.migrationKey, id = lockstepConfig.sessionId](const std::vector<uint8_t>& bytes) {
+				NetHostMigrationMessage message;
+				return NetHostMigrationCodec::Decode(bytes, key, message) && message.sessionId == id;
+			});
 		}
 		// The host tags each round so a late packet from the previous round cannot join this one.
 		if (config.host) {

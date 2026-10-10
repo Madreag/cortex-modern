@@ -108,6 +108,9 @@ namespace RTE {
 					if (!seat) return refuse("no such seat");
 					if (seat->link == NetSeatLink::Dropped) return keep("the link is already closed");
 					seat->link = NetSeatLink::Dropped;
+					// A seat already held by a committed bridge stays held at the
+					// same boundary; its closed link changes the reason for waiting.
+					if (seat->phase == NetSeatPhase::Held) seat->holdCause = NetSeatHoldCause::LinkDrop;
 					if (seat->phase == NetSeatPhase::RejoinImage || seat->phase == NetSeatPhase::RejoinCatchUp)
 						FailReturn(*seat, event.nowMs, next.stage, next.hostSeat);
 					return commit("Connection lost - waiting for the host's ordered recovery");

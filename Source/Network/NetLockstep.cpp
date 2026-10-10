@@ -3813,9 +3813,9 @@ namespace RTE {
 					if (UsesPeerFrameGroups()) {
 						const auto [bound, inserted] = PeerListenerBindings().try_emplace(event.peerId, request.senderPeerId);
 						if (!inserted && bound->second != request.senderPeerId) continue;
-						m_PeerLastHeardMs[request.senderPeerId] = nowMs;
-						if (request.senderPeerId == GetHostPeerId()) NoteAuthorityHeard(nowMs);
 					}
+					m_PeerLastHeardMs[request.senderPeerId] = nowMs;
+					if (request.senderPeerId == GetHostPeerId()) NoteAuthorityHeard(nowMs);
 					auto reply = request; reply.senderPeerId = m_Config.localPeerId;
 					std::vector<uint8_t> bytes;
 					if (NetHostMigrationCodec::Encode(reply, m_Config.migrationKey, bytes)) (void)listener->Send(event.peerId, NetTransportLane::ControlReliable, bytes);
@@ -3862,7 +3862,8 @@ namespace RTE {
 				if (authenticated(event, answer) && answer.senderPeerId == peer && answer.type == NetHostMigrationMessageType::Hello &&
 				    answer.generation == (UsesPeerFrameGroups() ? 1 : m_MigrationGeneration + (IsMigrating() ? 0 : 1)) && answer.bytes.empty() && !m_RemovedPeers.contains(peer)) {
 					dial.answered = true;
-					if (UsesPeerFrameGroups()) { m_PeerLastHeardMs[peer] = nowMs; if (peer == GetHostPeerId()) NoteAuthorityHeard(nowMs); }
+					m_PeerLastHeardMs[peer] = nowMs;
+					if (peer == GetHostPeerId()) NoteAuthorityHeard(nowMs);
 				}
 			}
 			if (blackout || dial.connection == c_InvalidNetPeerId || (dial.lastHelloMs != 0 && nowMs < dial.lastHelloMs + 1000)) continue;
@@ -5976,6 +5977,14 @@ namespace RTE {
 	void NetLockstepCoordinator::NoteAuthorityHeard(uint64_t nowMs) {
 		NET_PLANE_CHECK();
 		m_AuthorityLastHeardMs = std::max(m_AuthorityLastHeardMs, nowMs);
+		if (UsesPeerFrameGroups() && m_PeerAdminRequest && !m_PeerAdminOwnVote && !MigrationUsesDirectory() &&
+		    m_CertifiedSupersedingGeneration <= m_Config.migrationGeneration) {
+			// No decision or signed vote exists to carry forward. A live host
+			// closes this unanswered contact attempt without moving a frame.
+			m_PeerAdminRequest.reset();
+			m_MigrationChoice.reset();
+			m_MigrationPhase = NetHostMigrationPhase::None;
+		}
 	}
 
 	void NetLockstepCoordinator::NoteAnnouncedCapture(uint64_t tick) {
@@ -6981,7 +6990,9 @@ namespace RTE {
 				if (applyFrame <= frame) due = std::max(due, committedMs + stats.pingMs + stats.jitterMs + static_cast<uint64_t>(std::ceil(m_Config.simTickMs)));
 			if (nowMs < due || nowMs - due < boundMs) continue;
 			if (ProposePeerHold(peer, nowMs, nullptr, frame, "combat_bridge")) {
-				m_Stats.lastHoldDeclarationMs = nowMs - firstMissingMs;
+				const uint64_t heard = LastAuthenticatedTraffic(peer);
+				m_Stats.lastHoldDeclarationMs = nowMs >= heard ? nowMs - heard : 0;
+				m_Stats.lastBridgeDueMs = due;
 				held |= IsSeatUnderAI(peer, frame);
 			}
 		}
@@ -7181,6 +7192,10 @@ namespace RTE {
 		auto found = m_TimingDecisions.find(revision);
 		if (found == m_TimingDecisions.end() || found->second.committed || m_Config.localPeerId != GetHostPeerId()) return;
 		auto& decision = found->second;
+		// A world activation must reach every surviving acknowledger before
+		// its slot can become active. Combat holds use their ordered boundary.
+		if (decision.proposal.action == NetTimingAction::WorldAdmission &&
+		    (decision.acknowledgedPeers & decision.proposal.requiredPeers) != decision.proposal.requiredPeers) return;
 		// The current host alone orders this boundary; receipts only track its delivery.
 		NetLockstepTiming commit = decision.proposal;
 		if (commit.action == NetTimingAction::Reclaim && commit.peerId == GetHostPeerId() && !IsOrderedHostReturn(commit)) {
@@ -7331,7 +7346,8 @@ namespace RTE {
 			}
 			return;
 		}
-		if (authority && timing.action == NetTimingAction::WorldAdmission && (timing.phase == NetTimingPhase::Propose || timing.phase == NetTimingPhase::Commit)) {
+		if (authority && (timing.action == NetTimingAction::WorldAdmission || timing.action == NetTimingAction::Reclaim) &&
+		    (timing.phase == NetTimingPhase::Propose || timing.phase == NetTimingPhase::Commit)) {
 			const auto applied = m_ReclaimTransactions.find(timing.peerId);
 			const NetGameSeatReclaim expected{timing.peerId, timing.authorityGeneration, timing.revision, timing.seatIncarnations[timing.peerId - 1],
 			    timing.applyFrame, timing.delayFrames, timing.neutralThroughFrame, timing.worldTransition};
@@ -9790,7 +9806,7 @@ namespace RTE {
 			std::string ignored;
 			(void)SendPacket({stop}, NetTransportLane::ControlReliable, &ignored);
 		}
-		if (!m_Playback && m_Config.localPeerId != GetHostPeerId()) return;
+		if (!m_Playback && m_Config.localPeerId != GetHostPeerId() && !m_GoodbyeDrain) return;
 		m_PendingCompleteStop.reset();
 		m_AgreedEndDeadlineMs = 0;
 		m_State = NetLockstepState::Stopped;

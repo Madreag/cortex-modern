@@ -1,6 +1,7 @@
 #include "NetLinkQuality.h"
 
 #include "NetMatchService.h"
+#include <SDL3/SDL_stdinc.h>
 
 #include <charconv>
 #include <cstdlib>
@@ -11,7 +12,7 @@ namespace RTE {
 
 	namespace {
 		std::optional<NetLinkQuality> ForcedQuality(uint8_t peerId) {
-			const char* lever = std::getenv("CC_TEST_LINK_QUALITY");
+			const char* lever = SDL_getenv_unsafe("CC_TEST_LINK_QUALITY");
 			if (!lever) return std::nullopt;
 			std::string_view entries(lever);
 			while (!entries.empty()) {

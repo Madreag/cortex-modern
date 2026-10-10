@@ -35,7 +35,7 @@ CHECK_IN_SECONDS = 5
 INSTANCE_GRACE_SECONDS = 20
 REQUEST_WINDOW_SECONDS = 60
 HOST_DISCONNECT_SECONDS = 15  # Keep aligned with the engine host-silence policy.
-FRAME_TIE_COLLECT_SECONDS = 0.25
+FRAME_TIE_COLLECT_SECONDS = 1.0
 MAX_FRAME_TIES = 64
 MAX_SEATS = 7 + 16 + 1  # Match slots, world watchers, and the world's unused seat zero.
 MAX_MATCHES = 4096
@@ -371,9 +371,18 @@ class ConnectionAuthority:
                 or (not query_only and answer["seat"] not in members)):
             raise ConnectionErrorReply(400, "frame_tie_request", "The tied groups did not name retained seats. Reconnecting will retry.")
         key = f"{generation}:{round_id}:{config_hash}:{frame}"
-        deadline = time.monotonic() + FRAME_TIE_COLLECT_SECONDS
         with self._lock:
             record = self._match(sid, now)
+            ties = record.setdefault("frame_ties", {})
+            prior = ties.get(key)
+            if prior is not None and "winner" in prior:
+                if prior["owners"] != owners or prior["host"] != host:
+                    raise ConnectionErrorReply(409, "frame_tie_mismatch", "The groups disagree about the retained seats. Reconnecting will retry.")
+                # A newer admin generation or roster cannot rewrite an already
+                # displayed decision. The caller's current seat authentication
+                # above still has to succeed before this history is disclosed.
+                return dict(connection_protocol=CONNECTION_PROTOCOL, generation=generation, round_id=round_id,
+                            frame=frame, config_hash=config_hash, status="decided", members=prior["winner"])
             session = record.get("session") or {}
             if (generation != session.get("migration_gen", 0) or host != record.get("host_seat")
                     or config_hash != session.get("fields", {}).get("match_config_hash")):
@@ -383,35 +392,27 @@ class ConnectionAuthority:
             retained = sorted(int(seat) for seat, lease in record["seats"].items() if int(seat) < 4 and lease["participant"] not in record["removed"])
             if owners != retained:
                 raise ConnectionErrorReply(409, "frame_tie_owners", "The check-in did not name every retained seat. Reconnecting will retry.")
-            ties = record.setdefault("frame_ties", {})
             if key not in ties and query_only:
                 return dict(connection_protocol=CONNECTION_PROTOCOL, generation=generation, round_id=round_id,
                             frame=frame, config_hash=config_hash, status="waiting")
             if key not in ties:
-                while len(ties) >= MAX_FRAME_TIES:
-                    del ties[next(iter(ties))]
                 ties[key] = {"owners": owners, "host": host, "until": now + FRAME_TIE_COLLECT_SECONDS, "groups": []}
             tie = ties[key]
             if tie["owners"] != owners or tie["host"] != host:
                 raise ConnectionErrorReply(409, "frame_tie_mismatch", "The groups disagree about the retained seats. Reconnecting will retry.")
-            if "winner" not in tie and not query_only and now < tie["until"]:
+            # Finalize an expired window before accepting another check-in: a
+            # host arriving after the full second cannot replace its winner.
+            if "winner" not in tie and now >= tie["until"] and tie["groups"]:
+                tie["winner"] = tie["groups"][0]
+            if "winner" not in tie and not query_only:
                 groups = tie["groups"]
                 if members not in groups and (not groups or set(members).isdisjoint(groups[0])):
                     groups.append(members)
-            self._save(sid, record)
-            collect = "winner" not in tie and len(tie["groups"]) < 2 and not query_only
-        # Collect complementary check-ins within this HTTP exchange, without holding either directory lock.
-        if collect:
-            threading.Event().wait(max(0.0, deadline - time.monotonic()))
-        with self._lock:
-            record = self._match(sid, now)
-            tie = record["frame_ties"][key]
-            if "winner" not in tie and (not query_only or now >= tie["until"]):
-                groups = tie["groups"]
-                if len(groups) == 1:
-                    tie["winner"] = groups[0]
-                elif len(groups) == 2:
-                    tie["winner"] = next(group for group in groups if host in group)
+                if members in groups and host in members:
+                    tie["winner"] = members
+            # Return waiting immediately; no HTTP worker sleeps on a tie.
+            # Keep every decision for the match's lifetime, including after
+            # later ties, so an old observer can never reopen a decided tie.
             result = {"connection_protocol": CONNECTION_PROTOCOL, "generation": generation, "round_id": round_id,
                       "frame": frame, "config_hash": config_hash, "status": "decided" if "winner" in tie else "waiting"}
             if "winner" in tie:

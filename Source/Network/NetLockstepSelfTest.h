@@ -1,8 +1,11 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 namespace RTE {
+	class NetLockstepCoordinator;
+	struct NetLockstepReadyFrame;
 
 	class NetLockstepSelfTest {
 	public:
@@ -21,6 +24,8 @@ namespace RTE {
 		static int RunSeatAdmission();
 		static int RunRecoveryAfterReclaim();
 		static bool CheckSessionRecoveryGuard(unsigned arm, std::string* error);
+		static bool CheckSeatControllerState(bool returned, NetLockstepCoordinator& first, const NetLockstepReadyFrame& firstFrame,
+		    NetLockstepCoordinator& second, const NetLockstepReadyFrame& secondFrame, uint8_t peer, std::string* error);
 	};
 
 } // namespace RTE

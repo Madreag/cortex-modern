@@ -23,15 +23,18 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::PeerAdminCertificateValid(const NetHostMigrationMessage& proposal, uint32_t voters) const {
 		if (proposal.preparedFrame != 3 || proposal.completeFrom != m_Config.migrationGeneration + 1 || proposal.successorPeerId == GetHostPeerId() ||
-		    voters != proposal.connectedMask || voters != AdminMask(proposal.members) || (voters & AdminBit(proposal.successorPeerId)) == 0) return false;
+		    voters != proposal.connectedMask || voters != AdminMask(proposal.members) || (voters & AdminBit(proposal.successorPeerId)) == 0 ||
+		    (voters & AdminBit(GetHostPeerId())) != 0 || (voters >> m_Config.peerCount) != 0 || std::popcount(voters) != proposal.members.size()) return false;
 		if (MigrationUsesDirectory()) {
 			uint32_t selected = 0; for (uint16_t member: m_MigrationChoice->members) selected |= AdminBit(static_cast<uint8_t>(member));
 			return m_MigrationChoice->generation == proposal.completeFrom && m_MigrationChoice->host == proposal.successorPeerId &&
 			    m_MigrationChoice->boundary == proposal.boundary && selected == voters;
 		}
-		if (m_TimingNowMs < m_AuthorityLastHeardMs || m_TimingNowMs - m_AuthorityLastHeardMs < c_NetHostLossSilenceMs || voters != PeerAdminSurvivors(m_TimingNowMs)) return false;
-		// The two-seat fallback is safe because the old host has displayed no unconfirmed frames.
-		return m_Config.peerCount == 2 || std::popcount(voters) >= 2;
+		// Each signer checks silence and the complete survivor set before voting.
+		// An already signed certificate remains valid when the old host returns.
+		// A lone direct joiner cannot distinguish a dead host from a partitioned
+		// host that still owns the frame tie. Only the directory can fence it.
+		return std::popcount(voters) >= 2;
 	}
 
 	bool NetLockstepCoordinator::ValidatePeerAdmin(const NetHostMigrationMessage& proposal) const {
@@ -40,6 +43,9 @@ namespace RTE {
 		    *m_LastCompletedSimulationTick < proposal.boundary || m_GrantedSimulationTick ||
 		    !m_MigrationHistory.contains(proposal.boundary) || (proposal.connectedMask & AdminBit(m_Config.localPeerId)) == 0 ||
 		    !PeerAdminCertificateValid(proposal, proposal.connectedMask)) return false;
+		if (!MigrationUsesDirectory() && !m_PeerAdminOwnVote &&
+		    (m_TimingNowMs < m_AuthorityLastHeardMs || m_TimingNowMs - m_AuthorityLastHeardMs < c_NetHostLossSilenceMs ||
+		     proposal.connectedMask != PeerAdminSurvivors(m_TimingNowMs))) return false;
 		if (m_PeerAdminOwnVote && m_PeerAdminOwnVote->completeFrom == proposal.completeFrom &&
 		    (m_PeerAdminOwnVote->frame != proposal.frame || m_PeerAdminOwnVote->boundary != proposal.boundary || m_PeerAdminOwnVote->successorPeerId != proposal.successorPeerId ||
 		     m_PeerAdminOwnVote->connectedMask != proposal.connectedMask || m_PeerAdminOwnVote->bytes != proposal.bytes)) return false;
@@ -51,7 +57,8 @@ namespace RTE {
 		if (!UsesPeerFrameGroups() || !IsRunning() || m_PlaneTicking || m_GrantedSimulationTick || !m_LastCompletedSimulationTick) return;
 		const bool superseded = m_CertifiedSupersedingGeneration > m_Config.migrationGeneration;
 		if (m_Config.localPeerId == GetHostPeerId() && !superseded) return;
-		if (!superseded && (nowMs < m_AuthorityLastHeardMs || nowMs - m_AuthorityLastHeardMs < c_NetHostLossSilenceMs)) return;
+		if (!superseded && !m_PeerAdminOwnVote && !MigrationUsesDirectory() &&
+		    (nowMs < m_AuthorityLastHeardMs || nowMs - m_AuthorityLastHeardMs < c_NetHostLossSilenceMs)) return;
 		if (!m_PeerAdminRequest) {
 			m_MigrationChoice.reset();
 			m_PeerAdminRequest = NetHostChangeRequest{};
@@ -67,7 +74,7 @@ namespace RTE {
 				if (choice.generation != m_Config.migrationGeneration + 1 || choice.host == 0 || choice.host > m_Config.peerCount || choice.boundary == UINT64_MAX || choice.members.empty()) return;
 			} else {
 				const uint32_t survivors = PeerAdminSurvivors(nowMs);
-				if (survivors == 0 || (m_Config.peerCount > 2 && std::popcount(survivors) < 2)) return;
+				if (std::popcount(survivors) < 2) return;
 				choice.generation = m_Config.migrationGeneration + 1; choice.boundary = *m_LastCompletedSimulationTick;
 				for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((survivors & AdminBit(peer)) != 0) {
 					choice.members.push_back(peer);

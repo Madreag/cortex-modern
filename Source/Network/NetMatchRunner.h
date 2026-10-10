@@ -143,6 +143,10 @@ namespace RTE {
 
 	class NetMatchRunner {
 	public:
+		static bool UsesPeerFraming(const NetMatchConfig& config) {
+			return config.version >= NetMatchConfigUtil::c_TimingOptionsVersion &&
+			       config.slowPlayerPolicy == NetSlowPlayerPolicy::Substitute && !config.dedicated && !config.persistentWorld;
+		}
 		/// Keeps lobby wait intervals separate from admission's session-elapsed deadlines.
 		static NetMatchRunnerClocks ResolveRoundClocks(uint64_t roundMs, bool hasSessionClock, uint64_t sessionClockMs) {
 			return {roundMs, hasSessionClock ? sessionClockMs : roundMs, roundMs};
@@ -296,6 +300,8 @@ namespace RTE {
 
 		NetMatchRuntimeState m_State = NetMatchRuntimeState::Idle;
 		NetMatchRunnerConfig m_Config;
+		NetHash32 m_PeerFrameKey{};
+		std::shared_ptr<NetPeerSessionLinks> m_PeerFrameLinks;
 		NetLobbySession m_Lobby;
 		std::vector<NetTransportEvent> m_RoundEventsBeforeStart; //!< The round's own packets read while its roster was agreed, before its coordinator started.
 		NetMatchConfig m_MatchConfig;

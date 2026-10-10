@@ -95,6 +95,7 @@ namespace RTE {
 		std::vector<uint16_t> members;
 	};
 	constexpr uint64_t c_NetFrameTieDeadlineMs = 1000;
+	constexpr uint64_t c_NetFrameTieHttpTimeoutMs = 250;
 
 	/// One connection control plane, shared by admission and recovery. Every HTTP
 	/// operation is asynchronous. A direct match never starts a directory request.
@@ -189,6 +190,9 @@ namespace RTE {
 		std::vector<std::unique_ptr<NetHttpClient>> m_RetiredFrameTies;
 		std::optional<NetFrameTieRequest> m_FrameTieRequest;
 		NetFrameTieReply m_FrameTieReply;
+		bool m_FrameTieCheckedIn = false;
+		std::optional<uint64_t> m_FrameTieFirstPollMs;
+		bool m_FrameTieFinalQuerySent = false;
 		uint64_t m_NextFrameTie = 0;
 		uint64_t m_NextHostChange = 0;
 		uint64_t m_NextCheckIn = 0, m_NextBootstrap = 0, m_CheckIns = 0;

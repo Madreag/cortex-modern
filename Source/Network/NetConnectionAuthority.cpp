@@ -485,6 +485,8 @@ namespace RTE {
 			// A query on the sim thread retires an old request without joining its worker.
 			if (m_FrameTie) m_RetiredFrameTies.push_back(std::move(m_FrameTie));
 			m_FrameTieRequest = request; m_NextFrameTie = 0;
+			m_FrameTieCheckedIn = false;
+			m_FrameTieFirstPollMs.reset(); m_FrameTieFinalQuerySent = false;
 			m_FrameTieReply = {}; m_FrameTieReply.state = NetFrameTieReply::State::Waiting;
 		}
 		return m_FrameTieReply;
@@ -504,6 +506,8 @@ namespace RTE {
 				NetHash32 hash{};
 				if (!Protocol(body, error) || body.at("round_id") != expected.roundId || body.at("generation") != expected.generation ||
 				    body.at("frame") != expected.frame || !Unhex(body.at("config_hash").get<std::string>(), hash) || hash != expected.configHash) return;
+				if (body.at("status") != "waiting" && body.at("status") != "decided") return;
+				m_FrameTieCheckedIn = true;
 				m_FrameTieReply.state = NetFrameTieReply::State::Waiting;
 				if (body.at("status") == "decided") {
 					auto members = body.at("members").get<std::vector<uint16_t>>();
@@ -513,9 +517,21 @@ namespace RTE {
 				}
 			} catch (const json::exception&) { m_FrameTieReply = {}; }
 		}
-		if (m_FrameTie || steadyMs < m_NextFrameTie || m_FrameTieReply.state == NetFrameTieReply::State::Decided) return;
-		const std::string body = SignedSeatRequest("frame-tie", unixSeconds, nullptr, &*m_FrameTieRequest);
-		if (!body.empty()) m_FrameTie = StartRequest("POST", body, static_cast<int>(c_NetFrameTieDeadlineMs));
+		if (m_FrameTie || m_FrameTieFinalQuerySent || m_FrameTieReply.state == NetFrameTieReply::State::Decided) return;
+		const bool finalQuery = m_FrameTieFirstPollMs && steadyMs >= *m_FrameTieFirstPollMs + c_NetFrameTieDeadlineMs;
+		if (!finalQuery && steadyMs < m_NextFrameTie) return;
+		auto request = *m_FrameTieRequest;
+		// Retry an unacknowledged check-in, then only query the frozen tie.
+		// Keep the original request as the identity of this asynchronous operation.
+		request.queryOnly = request.queryOnly || m_FrameTieCheckedIn || finalQuery;
+		const std::string body = SignedSeatRequest("frame-tie", unixSeconds, nullptr, &request);
+		if (!body.empty()) {
+			m_FrameTie = StartRequest("POST", body, static_cast<int>(c_NetFrameTieHttpTimeoutMs));
+			if (!m_FrameTieFirstPollMs) m_FrameTieFirstPollMs = steadyMs;
+			// At the full bound send one last status query and drain its bounded
+			// exchange. A missing answer never supplies frame authority.
+			m_FrameTieFinalQuerySent = finalQuery;
+		}
 	}
 
 	void NetConnectionAuthority::PollHostChange(uint64_t steadyMs, uint64_t unixSeconds) {

@@ -91,13 +91,17 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::PeerFrameBlackout(uint64_t nowMs) {
-		if (m_TestBlackoutDurationMs == 0 || m_TestBlackoutFrame == UINT64_MAX) return false;
+		if (m_TestBlackoutDurationMs == 0 || m_TestBlackoutFrame == UINT64_MAX) {
+			if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->frameBlackout = false;
+			return false;
+		}
 		if (!m_TestBlackoutAtMs && m_LastCompletedSimulationTick && *m_LastCompletedSimulationTick >= m_TestBlackoutFrame) {
 			m_TestBlackoutAtMs = nowMs; m_TestBlackoutEnded = false;
 			DiagnosticLine() << "[net-link-blackout] begin peer=" << static_cast<int>(m_Config.localPeerId) << " frame=" << *m_LastCompletedSimulationTick << " duration_ms=" << m_TestBlackoutDurationMs << std::endl;
 		}
 		if (!m_TestBlackoutAtMs) return false;
 		const bool active = nowMs >= *m_TestBlackoutAtMs && nowMs - *m_TestBlackoutAtMs < m_TestBlackoutDurationMs;
+		if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->frameBlackout = active;
 		if (!active && !m_TestBlackoutEnded) {
 			m_TestBlackoutEnded = true;
 			DiagnosticLine() << "[net-link-blackout] end peer=" << static_cast<int>(m_Config.localPeerId) << " elapsed_ms=" << nowMs - *m_TestBlackoutAtMs << std::endl;

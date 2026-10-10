@@ -9209,28 +9209,43 @@ namespace RTE {
 
 	int TestLocalHostPresence() {
 		ScriptedAuthCrypto crypto; ScopedTestCrypto scoped(&crypto);
+		std::string error;
+		if (!ResetLaneDirectory(&error)) return Fail(error);
 		NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0x134);
 		match.players = {{1, 0, false, "Host"}, {2, 1, false, "Client"}};
-		NetSeatAuthRegistry registry;
-		if (!registry.BeginHostedSession()) return Fail("local host presence registry");
-		NetReconnectHost host;
-		host.Configure(&registry, match.sessionId, MakeIdentity());
-		host.SetSeatTable(NetH4BuildSeatTable(match), match.mode); host.SetLiveMatch(true);
+		Wire wire; ConfigureWire(wire, match.sessionId);
+		auto& host = wire.host;
+		host.SetSeatTable(NetH4BuildSeatTable(match), match.mode);
+		uint64_t unixNow = 1'700'000'000'000ULL;
+		host.SetUnixClock(&FixedUnixClock, &unixNow);
 		NetH4TicketRecord ticket;
 		if (!host.EnsureLocalTicket(ticket)) return Fail("local host presence ticket");
+		Endpoint player; player.connection = 41;
+		ConfigureEndpoint(player, "presence-successor", &unixNow); wire.Add(&player);
+		if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error) || !player.client.IsAdmitted()) return Fail("local host presence survivor admission: " + error);
+		host.SetLiveMatch(true); host.NotePlacementPhase(false, 0);
 		for (uint64_t frame = 0; frame < 300; ++frame) {
-			host.Tick(frame * 17);
+			wire.nowMs = frame * 17;
+			if (!wire.Pump(&error)) return Fail(error);
 			const auto statuses = host.GetSeatStatuses(); const auto seats = host.GetModerationView();
 			if (statuses.empty() || seats.empty() || statuses.front().dropped || seats.front().dropped) return Fail("the committing host is disconnected because it has no remote socket");
 		}
 		const auto state = host.ExportMigrationState();
+		// Import is the admission consumer of an agreed host change. Its source
+		// is a running round and its successor is an authenticated retained owner.
+		// No local presence or transport close can substitute for the full silence.
+		if (NetHostLinkLost(false, c_NetHostLossSilenceMs - 1, 0) || !NetHostLinkLost(false, c_NetHostLossSilenceMs, 0)) return Fail("host-loss evidence did not require fifteen seconds");
 		NetReconnectHost successor; NetSeatAuthRegistry successorRegistry;
 		match.hostPeerId = 2;
-		if (!successor.ImportMigrationState(state, successorRegistry, match, 2, {}, 5100)) return Fail("local host presence migration import");
+		if (!successor.ImportMigrationState(state, successorRegistry, match, 2, {}, wire.nowMs + c_NetHostLossSilenceMs)) return Fail("local host presence migration import");
 		const auto seats = successor.GetModerationView();
 		const auto lost = std::find_if(seats.begin(), seats.end(), [](const auto& seat) { return seat.lockstepPeerId == 1; });
 		if (lost == seats.end() || !lost->dropped) return Fail("a real host loss was hidden by local presence");
-		std::cout << "[net-reconnect-session-selftest] PASS local_host_presence frames=300 migrated_old_host=dropped" << std::endl;
+		const auto* former = successor.GetRoster().Find(1);
+		const auto* before = host.GetRoster().Find(1);
+		if (!former || !before || former->owner == 0 || former->owner != before->owner || former->ticket != before->ticket || successor.GetRoster().hostSeat != 2)
+			return Fail("the agreed host change lost the former host's retained owner or ticket");
+		std::cout << "[net-reconnect-session-selftest] PASS local_host_presence frames=300 host_silence_ms=15000 migrated_old_host=dropped ticket=retained" << std::endl;
 		return 0;
 	}
 
