@@ -1071,7 +1071,7 @@ namespace RTE::MenuAutomation {
 		return true;
 	}
 
-	bool HandRow(GUIControlManager* manager, const std::string& listName, int index, int presses, GUIControl* modal, std::string& observation) {
+	bool HandRow(GUIControlManager* manager, const std::string& listName, int index, int presses, GUIControl* modal, std::string& observation, std::function<bool()> taken) {
 		GUIControl* control = manager ? manager->GetControl(listName) : nullptr;
 		auto* list = dynamic_cast<GUIListPanel*>(control);
 		std::string why;
@@ -1092,11 +1092,16 @@ namespace RTE::MenuAutomation {
 		});
 		for (int press = 0; press < presses; ++press) {
 			phases.push_back([](std::string&) { return Hand::Button(true) ? Hand::Beat::Next : Hand::Beat::Fail; });
+			if (taken) phases.push_back([list, index](std::string& note) {
+				if (list->GetSelectedIndex() == index) return Hand::Beat::Next;
+				note = "the press selected row " + std::to_string(list->GetSelectedIndex());
+				return Hand::Beat::Fail;
+			});
 			phases.push_back([](std::string&) { return Hand::Button(false) ? Hand::Beat::Next : Hand::Beat::Fail; });
 		}
-		phases.push_back([list, index](std::string& note) {
-			if (list->GetSelectedIndex() == index) return Hand::Beat::Next;
-			note = "the list selected row " + std::to_string(list->GetSelectedIndex());
+		for (int frame = 0; frame < (taken ? 3 : 1); ++frame) phases.push_back([list, index, taken](std::string& note) {
+			if (taken ? taken() : list->GetSelectedIndex() == index) return Hand::Beat::Next;
+			note = taken ? "the release did not produce the requested result" : "the list selected row " + std::to_string(list->GetSelectedIndex());
 			return Hand::Beat::Fail;
 		});
 		Hand::Start((presses > 1 ? "double-click row " : "click row ") + std::to_string(index) + " of " + listName, std::move(phases));

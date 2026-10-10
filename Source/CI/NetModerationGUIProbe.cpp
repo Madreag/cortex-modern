@@ -996,7 +996,23 @@ namespace {
 				for (size_t row = 0; row < items->size(); ++row) if ((*items)[row]->m_ExtraIndex == moduleId && !(*items)[row]->m_pEntity) { index = static_cast<int>(row); break; }
 			}
 			Require(index >= 0, "the selected catalog does not contain " + preset);
-			Require(MenuAutomation::HandRow(buy->AutomationManager(), "CatalogLB", index, 1, nullptr, detail), "the shop row cannot be reached: " + detail);
+			const bool header = probe.shopHeader;
+			const auto cartCount = [buy, preset] {
+				int count = 0;
+				auto* cart = dynamic_cast<GUIListBox*>(buy->AutomationManager()->GetControl("OrderLB"));
+				if (cart) for (const auto* item: *cart->GetItemList()) if (item->m_pEntity && item->m_pEntity->GetModuleAndPresetName() == preset) ++count;
+				return count;
+			};
+			const int before = cartCount();
+			const auto taken = [buy, list, preset, header, cartCount, before] {
+				if (header) {
+					for (const auto* item: *list->GetItemList()) if (item->m_pEntity && item->m_pEntity->GetModuleAndPresetName() == preset) return true;
+					return false;
+				}
+				const auto* craft = buy->GetDeliveryCraftPreset();
+				return (craft && craft->GetModuleAndPresetName() == preset) || cartCount() == before + 1;
+			};
+			Require(MenuAutomation::HandRow(buy->AutomationManager(), "CatalogLB", index, 1, nullptr, detail, taken), "the shop row cannot be reached: " + detail);
 			probe.handIndex = probe.index;
 			return false;
 		} else if (op == "show_row") {
