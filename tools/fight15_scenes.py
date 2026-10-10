@@ -38,7 +38,7 @@ def host_setup(players=2, cpu=False):
     ]
     if cpu:
         lines += ["activate TabHostPageSeats", "combo_select ComboHostSeatType2 CPU",
-                  "combo_select ComboHostSeatType3 CPU"]
+                  "combo_select ComboHostSeatType3 CPU", "activate TabHostPageConnection"]
     lines += ["assert_label ComboHostNetVisibility Public (default)",
               "assert_label ComboHostNetRelay Game service (default)"]
     if cpu:
