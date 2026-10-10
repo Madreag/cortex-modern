@@ -936,16 +936,26 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	g_LuaMan.VisitScriptHeldMovableObjects([&held](MovableObject* object) { held.push_back(object); }, false);
 	MovableMan::ScriptHeldScope scriptHeld(std::move(held));
 	LuaScriptGraphNativeCaptureScope::PreTouch();
-	phase("sim_native_values");
+	phase("sim_manager_values");
 	auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
 	CheckpointNativeSnapshot::BoundaryScope boundary(snapshot);
+	auto audio = g_AudioMan.CaptureCheckpointState(false);
+	auto samples = g_AudioMan.CaptureCheckpointSamples();
+	g_AudioMan.FreezeCheckpointCapture(*audio, soundCursor);
+	std::unordered_set<uint64_t> managerSounds;
+	g_AudioMan.CollectManagerSoundIdentities(managerSounds);
+	phase("sim_native_and_lua_values");
 	const auto& savers = RuntimeManagerSavers();
 	std::vector<CheckpointText> managers(savers.size());
 	std::vector<int64_t> managerUs(savers.size());
 	const GAScripted* activity = nullptr;
 	const Activity* startActivity = nullptr;
 	const bool hasStart = m_StartActivity != nullptr;
-	{
+	Scene* scene = nullptr;
+	bool nativeFrozen = false;
+	// The world freezes on this thread and its helpers while the pool captures the script states beside it.
+	const auto freezeNative = [&] {
+		nativeFrozen = true;
 		std::vector<std::function<void()>> parts;
 		parts.reserve(savers.size() + 2);
 		parts.emplace_back([&] { activity = snapshot->Object(sourceActivity); });
@@ -958,33 +968,27 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 			});
 		}
 		FreezeBoundaryParts(*snapshot, carried.get(), parts);
-	}
-	for (size_t index = 0; index < savers.size(); ++index) image->globalParts.emplace_back(savers[index].name, managerUs[index]);
-	Scene* const scene = snapshot->Object(sourceScene);
-	const std::string sceneName = SceneArchiveName(sourceScene, fileName);
-	const auto addLayer = [&image](std::string name, const SceneLayer* layer) {
-		if (layer) image->layers.emplace_back(std::move(name), layer->CaptureBitmapSnapshot(nullptr, true));
-	};
-	{
+		scene = snapshot->Object(sourceScene);
+		const auto addLayer = [&image](std::string name, const SceneLayer* layer) {
+			if (layer) image->layers.emplace_back(std::move(name), layer->CaptureBitmapSnapshot(nullptr, true));
+		};
 		CheckpointCloneCost cost("scene layers");
 		addLayer("Mat", scene->GetTerrain()); addLayer("FG", scene->GetTerrain()->GetFGSceneLayer()); addLayer("BG", scene->GetTerrain()->GetBGSceneLayer());
 		for (int team = 0; team < Activity::MaxTeamCount; ++team) addLayer("UST" + std::to_string(team), scene->GetUnseenLayer(team));
-	}
-	phase("sim_manager_values");
-	auto audio = g_AudioMan.CaptureCheckpointState(false);
-	auto samples = g_AudioMan.CaptureCheckpointSamples();
-	g_AudioMan.FreezeCheckpointCapture(*audio, soundCursor);
-	std::unordered_set<uint64_t> managerSounds;
-	g_AudioMan.CollectManagerSoundIdentities(managerSounds);
-	phase("sim_lua_values");
+	};
 	const auto graphStart = std::chrono::steady_clock::now();
 	g_LuaMan.ArmCheckpointWriteTrap();
 	std::vector<std::string> problems;
 	bool frozenGraphs = false;
-	if (!g_MovableMan.CaptureScriptGraphs(image->graphs, problems, &frozenGraphs, {}, &image->frozenGraphObservations)) {
+	const bool graphsCaptured = g_MovableMan.CaptureScriptGraphs(image->graphs, problems, &frozenGraphs, freezeNative, &image->frozenGraphObservations);
+	// A walk that could not use the frozen states never ran the world beside them.
+	if (!nativeFrozen) freezeNative();
+	if (!graphsCaptured) {
 		QueueDeferredSaveRefusal(SaveKind::Autosave, std::move(problems));
 		return false;
 	}
+	for (size_t index = 0; index < savers.size(); ++index) image->globalParts.emplace_back(savers[index].name, managerUs[index]);
+	const std::string sceneName = SceneArchiveName(sourceScene, fileName);
 	image->graphUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - graphStart).count();
 	image->graphWalkUs = image->graphUs;
 	image->graphScopes.assign(image->graphs.size(), CheckpointScope::Shared);

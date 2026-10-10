@@ -7210,7 +7210,15 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 		}
 	}
 	std::optional<ParallelWork> states;
-	if (!serial) {
+	// With work of its own to run beside them, this thread leaves every state to the pool, the largest first.
+	const bool poolTakesAll = !serial && whileWaiting;
+	if (poolTakesAll) {
+		states.emplace(g_ThreadMan.GetPriorityThreadPool(), order.size(), [&capture, &boundary, caller](size_t index) {
+			CaptureSentinel::WorkerScope worker("script-graph-state");
+			CheckpointNativeSnapshot::BoundaryScope boundaryScope(boundary);
+			capture(index == 0 ? caller : index <= caller ? index - 1 : index);
+		});
+	} else if (!serial) {
 		states.emplace(g_ThreadMan.GetPriorityThreadPool(), order.size() - 1, [&capture, &boundary, caller](size_t index) {
 			CaptureSentinel::WorkerScope worker("script-graph-state");
 			CheckpointNativeSnapshot::BoundaryScope boundaryScope(boundary);
@@ -7219,7 +7227,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	}
 	std::exception_ptr failure;
 	try {
-		capture(caller);
+		if (!poolTakesAll) capture(caller);
 		if (serial) for (size_t index = 0; index < order.size(); ++index) if (index != caller) capture(index);
 		CaptureTrace::Span span("graph_while_waiting");
 		if (whileWaiting) whileWaiting();
