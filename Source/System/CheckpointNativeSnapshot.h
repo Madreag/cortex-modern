@@ -10,6 +10,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <queue>
@@ -109,7 +110,9 @@ namespace RTE {
 		static constexpr size_t c_ShardBits = 6;
 		struct alignas(64) Shard {
 			mutable std::mutex mutex;
-			std::unordered_map<Key, Value> map;
+			// Entries live as long as the snapshot, so the shard takes their storage from its own growing buffer.
+			std::pmr::monotonic_buffer_resource memory{1024};
+			std::pmr::unordered_map<Key, Value> map{&memory};
 		};
 		static size_t ShardOf(const Key& key) { return static_cast<size_t>((static_cast<uint64_t>(std::hash<Key>{}(key)) * 0x9E3779B97F4A7C15ULL) >> (64 - c_ShardBits)); }
 		const Shard& For(const Key& key) const { return m_Shards[ShardOf(key)]; }
@@ -182,18 +185,23 @@ namespace RTE {
 			if (!source) return nullptr;
 			if (const auto known = m_Values.Find(source)) return static_cast<T*>(*known);
 			CheckpointCloneCost cost(CheckpointCloneCost::Enabled() ? typeid(T).name() : nullptr);
-			auto& owner = AddValueOwner([](void* value) noexcept { static_cast<T*>(value)->~T(); ::operator delete(value); });
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
-			void* memory = ::operator new(sizeof(T));
+			void* memory = AllocateFrozen(sizeof(T), alignof(T));
+			const bool frozenStorage = memory != nullptr;
+			void (*destroy)(void*) noexcept = [](void* value) noexcept { static_cast<T*>(value)->~T(); ::operator delete(value); };
+			if (frozenStorage) destroy = [](void* value) noexcept { static_cast<T*>(value)->~T(); };
+			auto& owner = AddValueOwner(destroy);
+			if (!frozenStorage) memory = ::operator new(sizeof(T));
+			const auto release = [frozenStorage, memory] { if (!frozenStorage) ::operator delete(memory); };
 			std::pair<void*, bool> claim;
 			try {
 				claim = m_Values.TryEmplace(source, memory);
 			} catch (...) {
-				::operator delete(memory);
+				release();
 				throw;
 			}
 			if (!claim.second) {
-				::operator delete(memory);
+				release();
 				return static_cast<T*>(claim.first);
 			}
 			try {
@@ -204,7 +212,7 @@ namespace RTE {
 				return static_cast<T*>(memory);
 			} catch (...) {
 				m_Values.Erase(source);
-				::operator delete(memory);
+				release();
 				throw;
 			}
 		}
@@ -244,6 +252,7 @@ namespace RTE {
 			Entity** slot = nullptr;
 			void* memory = nullptr;
 			Entity* target = nullptr;
+			bool frozenStorage = false;
 			if (const auto reserved = m_Reserved.Find(&source)) {
 				m_Reserved.Erase(&source);
 				memory = reserved->memory;
@@ -251,7 +260,9 @@ namespace RTE {
 				target = reinterpret_cast<Entity*>(static_cast<char*>(memory) + offset);
 			} else {
 				slot = AddOwner();
-				memory = const_cast<Entity::ClassInfo&>(source.GetClass()).AllocateCheckpointMemory();
+				memory = AllocateFrozen(sizeof(T), alignof(T));
+				frozenStorage = memory != nullptr;
+				if (!frozenStorage) memory = const_cast<Entity::ClassInfo&>(source.GetClass()).AllocateCheckpointMemory();
 				if (!memory) throw std::bad_alloc();
 				target = reinterpret_cast<Entity*>(static_cast<char*>(memory) + offset);
 				// Two threads can reach one object through different owners; the first to claim it freezes it.
@@ -259,11 +270,11 @@ namespace RTE {
 				try {
 					claim = m_Objects.TryEmplace(&source, target);
 				} catch (...) {
-					T::Deallocate(memory);
+					if (!frozenStorage) T::Deallocate(memory);
 					throw;
 				}
 				if (!claim.second) {
-					T::Deallocate(memory);
+					if (!frozenStorage) T::Deallocate(memory);
 					return claim.first;
 				}
 			}
@@ -275,18 +286,23 @@ namespace RTE {
 					T::PrepareCheckpointNative(source, reinterpret_cast<T*>(memory), *this);
 				new(memory) T(source, *this);
 				constructed = true;
-				target->m_CheckpointAllocation = memory;
+				target->m_CheckpointAllocation = frozenStorage ? FrozenStorageMark(memory) : memory;
 				return target;
 			} catch (...) {
 				if (constructed) std::launder(reinterpret_cast<T*>(memory))->~T();
 				*slot = nullptr;
 				m_Objects.Erase(&source);
 				m_Slots.Erase(target);
-				if (Entity::s_DeletedCheckpointMemory == memory) Entity::s_DeletedCheckpointMemory = nullptr;
-				T::Deallocate(memory);
+				if (Entity::s_DeletedCheckpointMemory == memory || Entity::s_DeletedCheckpointMemory == FrozenStorageMark(memory)) Entity::s_DeletedCheckpointMemory = nullptr;
+				if (!frozenStorage) T::Deallocate(memory);
 				throw;
 			}
 		}
+
+		/// Storage for one frozen object that lives until the snapshot ends, or null when the object is too large for it.
+		void* AllocateFrozen(size_t bytes, size_t alignment);
+		/// What a frozen object built in snapshot storage records as its allocation; deleting it then frees nothing.
+		static void* FrozenStorageMark(void* memory) { return static_cast<char*>(memory) + 1; }
 
 		Entity** Bind(const Entity& source, Entity* target) {
 			m_Objects.InsertOrAssign(&source, target);
@@ -421,8 +437,9 @@ namespace RTE {
 		/// The owner lists of the freezing thread; a slot keeps its address while other threads add theirs.
 		struct alignas(64) OwnerShard {
 			std::mutex mutex;
-			std::list<Entity*> owners;
-			std::list<ValueOwner> values;
+			std::deque<Entity*> owners;
+			std::deque<ValueOwner> values;
+			std::vector<std::shared_ptr<void>> storage;
 		};
 		OwnerShard& Owners() { return m_OwnerShards[std::hash<std::thread::id>{}(std::this_thread::get_id()) % m_OwnerShards.size()]; }
 		Entity** AddOwner() {

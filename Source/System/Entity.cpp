@@ -16,6 +16,8 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <format>
 #include <mutex>
@@ -191,6 +193,27 @@ namespace RTE {
 	}
 	void CheckpointNativeSnapshot::MaterializePixels() const {
 		m_Bitmaps.ForEach([](const BITMAP*, const std::shared_ptr<Pixel>& pixel) { pixel->Materialize(); });
+	}
+	void* CheckpointNativeSnapshot::AllocateFrozen(size_t bytes, size_t alignment) {
+		static constexpr size_t c_StorageBytes = size_t{256} << 10;
+		if (bytes > c_StorageBytes / 8 || alignment > alignof(std::max_align_t)) return nullptr;
+		struct Cursor { uint64_t snapshot = 0; uintptr_t at = 0, end = 0; };
+		thread_local Cursor cursor;
+		if (cursor.snapshot != m_Serial) cursor = {m_Serial, 0, 0};
+		uintptr_t at = (cursor.at + alignment - 1) & ~(alignment - 1);
+		if (!cursor.at || at + bytes > cursor.end) {
+			std::shared_ptr<void> storage = CheckpointBuffer::AllocateCaptureBytes(c_StorageBytes);
+			const uintptr_t base = reinterpret_cast<uintptr_t>(storage.get());
+			{
+				OwnerShard& shard = Owners();
+				std::lock_guard lock(shard.mutex);
+				shard.storage.push_back(std::move(storage));
+			}
+			cursor.end = base + c_StorageBytes;
+			at = (base + alignment - 1) & ~(alignment - 1);
+		}
+		cursor.at = at + bytes;
+		return reinterpret_cast<void*>(at);
 	}
 	CheckpointText CheckpointNativeSnapshot::FreezeWriter(const Serializable* source) {
 		if (const auto known = m_WriterValues.Find(source)) return *known;
@@ -643,6 +666,11 @@ namespace RTE {
 		if (s_DeletedCheckpointMemory == returnedMemory) {
 			s_DeletedCheckpointMemory = nullptr;
 			m_Deallocate(returnedMemory);
+			return 0;
+		}
+		// A frozen object built in its snapshot's storage gives nothing back; the snapshot frees the storage.
+		if (s_DeletedCheckpointMemory == CheckpointNativeSnapshot::FrozenStorageMark(returnedMemory)) {
+			s_DeletedCheckpointMemory = nullptr;
 			return 0;
 		}
 
