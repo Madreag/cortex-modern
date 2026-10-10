@@ -5332,7 +5332,7 @@ namespace RTE {
 		m_PeerReturnProofs.clear();
 		m_PeerPreparedPrefixes.clear(); m_PeerReplayAppliedPrefixes.clear(); m_PeerFrameWitnesses.clear();
 		m_PeerArrivalLatencyMs.clear(); m_PeerForwardedInputs.clear(); m_PeerAcceptedThrough.clear(); m_PeerInputReceipts.clear(); m_PeerAcceptedAhead.clear(); m_PeerSourceInputs.clear();
-		m_PeerCommittedTail.clear(); m_PeerFrameIncoming.clear(); m_PeerTailThrough.reset(); m_PeerAppliedThrough.clear();
+		m_PeerCommittedTail.clear(); m_PeerFrameIncoming.clear(); m_PeerTailThrough.reset(); m_PeerAppliedThrough.clear(); m_PeerAppliedAtMs.clear();
 		m_PeerTailPrefixes.clear(); m_PeerTailVotes.clear(); m_PeerTailDecisions.clear();
 		m_PeerPaceStartMs.reset(); m_PeerPaceStartFrame = 0; m_PeerHadHitch = false;
 		if (!m_Config.peerSessionLinks) { PeerListenerBindings().clear(); PeerPrimaryBindings().clear(); }
@@ -11627,9 +11627,18 @@ namespace RTE {
 								m_RemovedByHost = m_RemovedByHost || disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantRemoved) ||
 								                  disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantBanned);
 						}
-						// A loading authority keeps its authenticated connection alive through session heartbeats.
-						if (sessionPacket.ok && std::holds_alternative<NetHeartbeat>(sessionPacket.message.payload) &&
-						    !m_RelayHost && LockstepPeerOfTransport(event.peerId) == GetHostPeerId()) NoteAuthorityHeard(nowMs);
+						// A valid heartbeat on an admitted route keeps that seat alive,
+						// including while its simulation is parked. Malformed packets
+						// and unbound reconnect traffic do not refresh this clock.
+						if (sessionPacket.ok && std::holds_alternative<NetHeartbeat>(sessionPacket.message.payload)) {
+							const uint8_t peer = LockstepPeerOfTransport(event.peerId);
+							if (IsKnownRemotePeer(peer) && SenderOwnsTransport(peer, event.peerId)) {
+								m_PeerLastHeardMs[peer] = nowMs;
+								m_PeerLinkHeardMs[peer] = nowMs;
+								m_Stats.peers[peer].lastHeardMs = nowMs;
+								if (peer == GetHostPeerId()) NoteAuthorityHeard(nowMs);
+							}
+						}
 						// Session-protocol traffic mid-match is a reconnect handshake; hand it over.
 						if (m_SessionEventSink) {
 							m_SessionEventSink(event);
@@ -12868,7 +12877,7 @@ namespace RTE {
 	void NetLockstepCoordinator::StampFrameAuthority(NetLockstepReadyFrame& ready) {
 		const auto authority = m_ReplayAuthorities.find(ready.frame);
 		ready.authorityPeerId = authority == m_ReplayAuthorities.end() ? (UsesPeerFrameGroups() ? HostAuthorityAt(ready.frame) : GetHostPeerId()) : authority->second.first;
-		ready.updateAuthorityPeerId = authority == m_ReplayAuthorities.end() ? 0 : authority->second.second;
+		ready.updateAuthorityPeerId = authority == m_ReplayAuthorities.end() ? (UsesPeerFrameGroups() ? ready.authorityPeerId : 0) : authority->second.second;
 		if (authority != m_ReplayAuthorities.end()) m_ReplayAuthorities.erase(authority);
 	}
 

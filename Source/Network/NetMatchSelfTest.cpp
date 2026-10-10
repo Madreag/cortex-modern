@@ -6571,6 +6571,7 @@ namespace RTE {
 			round.Tick(NetLockstepNowMs());
 			NetLockstepReadyFrame ready;
 			while (round.PopReadyFrame(ready)) {
+				round.FinishFrameWait(NetLockstepNowMs());
 				peer.trace[ready.frame] = DescribeRematchFrame(ready, round.GetConfig().localPeerId);
 				peer.lastApplied = ready.frame;
 				(void)round.FinishSimulationTick(ready.frame);
@@ -6579,6 +6580,7 @@ namespace RTE {
 			}
 			if (round.IsRunning()) {
 				(void)round.WaivePendingPeersWhileWaiting(peer.lastApplied + 1);
+				if (!round.HasReadyFrame(peer.lastApplied + 1)) round.NoteFrameWait(peer.lastApplied + 1, NetLockstepNowMs());
 			}
 		}
 

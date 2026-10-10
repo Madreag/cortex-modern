@@ -157,6 +157,22 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		if (!UsesPeerFrameGroups() || !IsRunning() || !m_LastCompletedSimulationTick) return false;
 		if (m_PeerTailThrough && *m_LastCompletedSimulationTick < *m_PeerTailThrough) return true;
+		// The initial handshake reaches seats at different times. Follow one
+		// stable member's displayed clock so that difference cannot become a
+		// permanent phase offset. This only selects the existing 3x/six-tick
+		// consumer budget; every frame still needs its ordinary certificate.
+		if (m_FrameGroupMembers != 0 && m_Config.simTickMs > 0) {
+			const uint8_t reference = static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
+			const auto applied = m_PeerAppliedThrough.find(reference), observed = m_PeerAppliedAtMs.find(reference);
+			if (reference != m_Config.localPeerId && applied != m_PeerAppliedThrough.end() && observed != m_PeerAppliedAtMs.end() &&
+			    m_TimingNowMs >= observed->second && m_TimingNowMs - observed->second <= 250) {
+				const auto path = m_PeerReceiptDelaySamples.find(reference);
+				const double transit = path == m_PeerReceiptDelaySamples.end() ? 0.0 : path->second.P95Ms() / 2.0;
+				const uint64_t elapsed = static_cast<uint64_t>((m_TimingNowMs - observed->second + transit) / m_Config.simTickMs);
+				if (applied->second > *m_LastCompletedSimulationTick + 1 ||
+				    elapsed > *m_LastCompletedSimulationTick + 1 - std::min(applied->second, *m_LastCompletedSimulationTick + 1)) return true;
+			}
+		}
 		if (!m_PeerHadHitch || !m_PeerPaceStartMs || m_TimingNowMs < *m_PeerPaceStartMs || m_Config.simTickMs <= 0) return false;
 		const uint64_t due = m_PeerPaceStartFrame + static_cast<uint64_t>((m_TimingNowMs - *m_PeerPaceStartMs) / m_Config.simTickMs);
 		return *m_LastCompletedSimulationTick + 1 < due;

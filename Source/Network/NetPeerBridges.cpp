@@ -103,9 +103,13 @@ namespace RTE {
 				const uint64_t heard = LastAuthenticatedTraffic(peer);
 				const auto applied = m_PeerAppliedThrough.find(peer);
 				if (nowMs < heard || nowMs - heard > 1000 || applied == m_PeerAppliedThrough.end()) continue;
-				// The next sample is produced at applied + 1. A tail reader cannot
-				// get one displayed tick ahead of the group that supplies its tail.
-				if (frame > applied->second && frame - applied->second > delay + 1) continue;
+				// Compare displayed progress on both sides. The prepared horizon
+				// already includes this group's input buffer; comparing it with a
+				// private reader's displayed tick demands that the reader overtake
+				// its donor. A reader within the buffered runway can reach the
+				// future activation at the existing bounded catch-up rate.
+				const uint64_t displayed = m_LastCompletedSimulationTick.value_or(frame - 1);
+				if (displayed > applied->second && displayed - applied->second > delay + m_Config.slowPlayerBoundTicks) continue;
 				proposal.members.push_back(peer); proposal.connectedMask |= SeatBit(peer);
 			}
 			if (proposal.members.empty()) return false;

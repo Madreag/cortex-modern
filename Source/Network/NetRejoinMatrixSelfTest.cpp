@@ -200,8 +200,8 @@ namespace RTE {
 
 			switch (e) {
 				case Event::HoldProposed:
-					if (s == State::Active) set("seat=Held round=run peer=held holds>0 " + quiet, "HOLD");
-					else if (s == State::Parked) set("seat=Held round=run peer=held " + quiet, "HOLD LS-PARK");
+					if (s == State::Active) set("api=refused seat=Active round=run peer=run holds=0 " + quiet, "AUTHENTICATED-SILENCE");
+					else if (s == State::Parked) set("api=refused seat=Active round=run peer=run holds=0 " + quiet, "AUTHENTICATED-SILENCE LS-PARK");
 					else if (s == State::Draining) set("seat=Active round=run holds=0 " + quiet, "LS-DRAIN");
 					else if (heldLike) set(held + " round=run holds=0 " + quiet, "HOLD");
 					else if (s == State::Reclaiming) set("seat=Reclaiming round=run " + quiet, "GAP", "a hold proposed for a seat whose reclaim is agreed but not active yet (nothing is owed by it before E)");
@@ -418,6 +418,7 @@ namespace RTE {
 			uint64_t autoCompleteAtMs = UINT64_MAX;
 			bool hostLive = true;
 			bool clientLive = true;
+			bool keepSessionAlive = false;
 			bool clientFeeding = true;
 			bool waiting = false;
 			uint32_t holdsAtEntry = 0;
@@ -433,6 +434,7 @@ namespace RTE {
 		void Step(Rig& r) {
 			if (r.hostLive) { r.hostWire.AdvanceTimeMs(1); r.hostSessionWire.AdvanceTimeMs(1); }
 			if (r.clientLive) { r.clientWire.AdvanceTimeMs(1); r.clientSessionWire->AdvanceTimeMs(1); }
+			else if (r.keepSessionAlive) r.clientSessionWire->AdvanceTimeMs(1);
 			// A capture takes its time on every peer and then reports; the park is the window around it.
 			if (r.autoCompleteAtMs != UINT64_MAX && r.now >= r.autoCompleteAtMs && r.parkCompleted != UINT64_MAX) {
 				r.host.CompleteSynchronizedCapture(r.parkCompleted, 60.0);
@@ -448,6 +450,7 @@ namespace RTE {
 			}
 			if (r.hostLive) { r.host.Tick(r.now); r.hostSession.Tick(r.now); }
 			if (r.clientLive) { r.client.Tick(r.now); r.clientSession->Tick(r.now); }
+			else if (r.keepSessionAlive) r.clientSession->Tick(r.now);
 			NetLockstepReadyFrame ready;
 			// The host simulates one frame a tick at the sim's rate and waits like a live sim, so its runway drains the way a real one does.
 			if (r.hostLive && r.now >= r.nextHostSimMs && r.hostSimulated < r.finalFrame) {
@@ -651,9 +654,14 @@ namespace RTE {
 
 		bool EnterHeld(Rig& r) {
 			if (!EnterActive(r)) return false;
-			// The seat falls silent: the host holds it at the slow-player bound, then the seat hears the hold.
+			// This compatibility matrix enters a legacy silence hold. Its separate
+			// session remains connected while the frame transport stops answering.
+			// The V1 frame-group return is exercised by the controller fixture.
 			r.clientLive = false;
-			if (!Pump(r, 3000, [&r] { return r.host.HasHeldAISeat(2) && r.host.IsSeatUnderAI(2, r.hostSimulated + 1); })) return Fail(r, "the silent seat was never held");
+			r.keepSessionAlive = true;
+			if (!Pump(r, c_NetSeatDisconnectSilenceMs + 400, [&r] { return r.host.HasHeldAISeat(2) && r.host.IsSeatUnderAI(2, r.hostSimulated + 1); })) return Fail(r, "the silent seat was never held");
+			if (r.host.GetStats().lastHoldDeclarationMs < c_NetSeatDisconnectSilenceMs ||
+			    r.host.GetStats().lastHoldDeclarationMs > c_NetSeatDisconnectSilenceMs + 400) return Fail(r, "the hold missed its authenticated-silence deadline");
 			r.clientLive = true;
 			r.clientFeeding = false;
 			if (!Pump(r, 500, [&r] { return r.client.IsLocalSeatHeld(); })) return Fail(r, "the held seat never heard its hold");
@@ -736,7 +744,7 @@ namespace RTE {
 			if (!EnterActive(r)) return false;
 			r.client.Leave("rejoin matrix leave");
 			r.clientFeeding = false;
-			Pump(r, 300, [&r] { return r.host.HasHeldAISeat(2) || r.host.GetPeerLeaveFrames().contains(2); });
+			Pump(r, c_NetSeatDisconnectSilenceMs + 400, [&r] { return r.host.HasHeldAISeat(2) || r.host.GetPeerLeaveFrames().contains(2); });
 			if (CoordinatorLabel(r.client) != "stopped:PeerLeft") return Fail(r, "the client did not leave");
 			if (!r.host.HasHeldAISeat(2) && !r.host.GetPeerLeaveFrames().contains(2)) return Fail(r, "the host never recorded the leave");
 			// The leaver's leave exchange answers on its connection; the host must not close it under the leaver.
@@ -815,6 +823,11 @@ namespace RTE {
 				case Event::OwnCap:
 					r.client.Complete("e2e complete");
 					r.clientSession->Close("own cap reached");
+					// The scripted process exits at its cap; it cannot keep sending
+					// gameplay while the test waits for the retained-seat outcome.
+					r.clientLive = false; r.keepSessionAlive = false;
+					r.clientWire.Stop();
+					Pump(r, c_NetSeatDisconnectSilenceMs + 400);
 					return "ok";
 				case Event::MatchOver: {
 					const NetPeerId peer = HostSessionPeer(r);

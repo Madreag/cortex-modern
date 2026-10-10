@@ -26330,7 +26330,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	struct SeatSuccessionTestAccess {
 		static void RunLive(NetLockstepCoordinator& peer) { peer.m_Playback = false; }
 		static void RestoreHostHold(NetLockstepCoordinator& peer, const NetLockstepTiming& held) {
-			peer.ApplyTiming(held);
+			peer.ApplyTiming(held, true);
 			peer.m_TimingDecisions[held.revision] = {held, 0, true, 0};
 			peer.m_NextTimingRevision = std::max(peer.m_NextTimingRevision, held.revision + 1);
 		}
@@ -27482,8 +27482,13 @@ namespace {
 			ReleasePathRound round;
 			if (!round.Start(47430, true, false, heldOther ? 2 : 1)) return fail("the empty-match fixture did not start: " + round.failure);
 			if (heldOther) {
-				if (!round.peers[0].ProposePeerHold(2, round.now, &round.failure)) return fail(round.failure);
 				round.alive[1] = false;
+				const uint64_t deadline = round.peers[0].LastAuthenticatedTraffic(2) + c_NetSeatDisconnectSilenceMs;
+				while (round.now < deadline) {
+					if (round.peers[0].HasHeldAISeat(2)) return fail("the other seat was held before authenticated silence expired");
+					round.Pump();
+				}
+				if (!round.peers[0].HasHeldAISeat(2) && !round.peers[0].ProposePeerHold(2, round.now, &round.failure)) return fail(round.failure);
 				for (int turn = 0; turn < 80; ++turn) round.Pump();
 				if (!round.peers[0].HasHeldAISeat(2)) return fail("the only other player was not held");
 			}
@@ -28241,10 +28246,13 @@ namespace {
 			newcomer.SetUnixClock(&HostReturnAdmission::WallClock, &admission);
 			admission.nowMs = host.AdmissionNowMs();
 			admission.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
-			if (!newcomer.BeginApplication(3, admission.nowMs, &round.failure) || !admission.Pump(host.m_ReconnectHost, {{connection, &newcomer}}, &round.failure)) return done(round.failure);
+			if (!newcomer.BeginApplication(selected.stableSeat, admission.nowMs, &round.failure) || !admission.Pump(host.m_ReconnectHost, {{connection, &newcomer}}, &round.failure)) return done(round.failure);
 			for (const auto& seat: host.m_ReconnectHost.GetModerationView()) if (seat.lockstepPeerId == 4) selected = NetSelectModerationSeat(seat, connection);
-			if (host.ApplyModeration(selected, NetModerationAction::Substitute) != NetH4ModerationResult::Ok ||
-			    !admission.Pump(host.m_ReconnectHost, {{connection, &newcomer}}, &round.failure) || newcomer.GetState() != NetH4ClientState::Joined) return done("the host did not admit the opened seat's applicant: " + round.failure);
+			const auto moderation = host.ApplyModeration(selected, NetModerationAction::Substitute);
+			if (moderation != NetH4ModerationResult::Ok ||
+			    !admission.Pump(host.m_ReconnectHost, {{connection, &newcomer}}, &round.failure) || newcomer.GetState() != NetH4ClientState::Joined)
+				return done("the host did not admit the opened seat's applicant: " + round.failure + " moderation=" + std::to_string(static_cast<int>(moderation)) +
+				    " state=" + NetReconnectClientStateName(newcomer.GetState()) + " reason=" + NetProtocol::RejectReasonName(newcomer.GetLastRejectReason()));
 			auto remotes = round.peers[0].RemoteTransports(); remotes[4] = connection;
 			if (!host.m_Session->AdoptHostMigration(round.hostWire, 1, 1, round.match, remotes, round.now) ||
 			    !host.m_WorldJoin.ConfigureMatchRejoins(round.match, round.peers[0].GetRoundId(), 1000.0 / 60.0, &round.failure)) return done("the private image plane did not configure");
@@ -28486,11 +28494,13 @@ namespace {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		struct Wire : LoopbackTransport {
 			uint64_t dropSentFrom = UINT64_MAX, dropReceivedFrom = UINT64_MAX;
+			bool dropSentHeartbeat = false, dropReceivedHeartbeat = false;
 			bool dropOneAck = false;
 			uint64_t acceptanceSent = 0, acceptanceReceived = 0, lostAcks = 0;
 			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
 				const auto decoded = NetLockstepCodec::Decode(bytes);
 				if (decoded.ok) {
+					if (dropSentHeartbeat && std::holds_alternative<NetLockstepAck>(decoded.packet.payload)) return true;
 					if (const auto* frame = std::get_if<NetLockstepFrame>(&decoded.packet.payload); frame && frame->targetFrame >= dropSentFrom) return true;
 					if (const auto* ack = std::get_if<NetLockstepAck>(&decoded.packet.payload); ack && ack->receivedMask == NetLockstepCodec::c_InputAcceptedMask) {
 						++acceptanceSent;
@@ -28504,6 +28514,7 @@ namespace {
 				std::erase_if(events, [&](const NetTransportEvent& event) {
 					const auto decoded = NetLockstepCodec::Decode(event.bytes);
 					if (!decoded.ok) return false;
+					if (dropReceivedHeartbeat && std::holds_alternative<NetLockstepAck>(decoded.packet.payload)) return true;
 					if (const auto* ack = std::get_if<NetLockstepAck>(&decoded.packet.payload); ack && ack->receivedMask == NetLockstepCodec::c_InputAcceptedMask) ++acceptanceReceived;
 					const auto* frame = std::get_if<NetLockstepFrame>(&decoded.packet.payload);
 					return frame && frame->targetFrame >= dropReceivedFrom;
@@ -28568,7 +28579,16 @@ namespace {
 			if (receiving) pair.hostWire.dropReceivedFrom = missing; else pair.clientWire.dropSentFrom = missing;
 			for (uint64_t frame = 101; frame <= missing; ++frame) if (!pair.Drive(frame, error)) return false;
 			if (pair.clientWorld.applied >= missing) { error = "client simulated first unaccepted frame " + std::to_string(missing) + " through " + std::to_string(pair.clientWorld.applied); return false; }
-			for (int turn = 0; turn < 200 && !pair.client.IsLocalSeatHeld(); ++turn) {
+			// Cumulative acceptance remains a compatibility contract. Flowing
+			// control traffic cannot create its old silence hold; force the
+			// authenticated outage before checking the exact retained boundary.
+			for (int turn = 0; turn < 200; ++turn) {
+				pair.host.NoteFrameWait(missing, pair.now); pair.Step(5);
+				if (pair.client.IsLocalSeatHeld() || pair.clientWorld.applied >= missing) { error = "live control traffic held or advanced the unaccepted input"; return false; }
+			}
+			if (receiving) pair.hostWire.dropReceivedHeartbeat = true; else pair.clientWire.dropSentHeartbeat = true;
+			const uint64_t deadline = pair.now + c_NetSeatDisconnectSilenceMs + 100;
+			while (pair.now <= deadline && !pair.client.IsLocalSeatHeld()) {
 				pair.host.NoteFrameWait(missing, pair.now); pair.Step(5);
 			}
 			if (!pair.client.IsLocalSeatHeld() || pair.client.GetLocalHoldFrame() != missing || pair.client.GetResumeFrame() != missing) {
@@ -28641,7 +28661,13 @@ namespace {
 		});
 		row("reclaim_seed", [&](std::string& error) {
 			Pair pair; if (!pair.Start(47555, 4, error) || !pair.Warm(error)) return false;
-			if (!pair.host.ProposePeerHold(2, pair.now, &error, 105, "late_stream")) return false;
+			pair.clientWire.dropSentFrom = 105; pair.clientWire.dropSentHeartbeat = true;
+			const uint64_t deadline = pair.host.LastAuthenticatedTraffic(2) + c_NetSeatDisconnectSilenceMs;
+			while (pair.now < deadline) {
+				if (pair.host.HasHeldAISeat(2)) { error = "the reclaim fixture held a seat before authenticated silence expired"; return false; }
+				pair.Step();
+			}
+			if (!pair.host.HasHeldAISeat(2) && !pair.host.ProposePeerHold(2, pair.now, &error, 105, "late_stream")) return false;
 			for (int turn = 0; turn < 10; ++turn) pair.Step();
 			Wire returnWire; NetLockstepCoordinator returning;
 			if (!returnWire.Connect("loopback", 47555, &error) || !pair.host.SchedulePeerReclaim(2, 2, 2, 120, &error)) return false;

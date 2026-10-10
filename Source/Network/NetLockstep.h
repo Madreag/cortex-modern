@@ -1695,6 +1695,7 @@ namespace RTE {
 		uint64_t m_PeerPaceStartFrame = 0;
 		bool m_PeerHadHitch = false;
 		std::map<uint8_t, uint64_t> m_PeerAppliedThrough;
+		std::map<uint8_t, uint64_t> m_PeerAppliedAtMs;
 		uint64_t m_PeerHeartbeatAtMs = 0;
 		uint64_t m_PeerTailRequestAtMs = 0;
 		uint64_t m_PeerVoteRetryAtMs = 0;

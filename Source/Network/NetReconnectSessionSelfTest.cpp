@@ -4353,6 +4353,7 @@ namespace RTE {
 			// The player misses the round's start, which its config names; it hears the revision after it.
 			player.connected = false;
 			wire.host.SetLiveMatch(true);
+			wire.host.NotePlacementPhase(false, 0);
 			const uint32_t named = wire.host.GetRoster().revision;
 			const auto namedHash = HashRoster(wire.host.GetRoster());
 			if (!wire.Pump(&error)) {

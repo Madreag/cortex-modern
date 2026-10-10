@@ -247,6 +247,14 @@ namespace RTE {
 					if (round.ok && std::holds_alternative<NetLockstepStart>(round.packet.payload)) {
 						auto start = std::get<NetLockstepStart>(round.packet.payload);
 						start.localPeerId = 1; start.roundId = 73;
+						start.startupPublished = start.agreedStartRecord = true;
+						start.agreedFirstFrame = start.startFrame;
+						start.agreedEffectiveStartFrame = start.startFrame + 1;
+						start.publishedPeerMask = 3;
+						for (uint8_t peer = 0; peer < start.peerCount; ++peer) {
+							start.peerEffectiveStartFrames[peer] = start.agreedEffectiveStartFrame;
+							start.peerInputDelays[peer] = 1;
+						}
 						if (!NetLockstepCodec::Encode({start}, reply)) return false;
 					}
 				}

@@ -114,7 +114,11 @@ namespace RTE {
 			m_PeerLinkHeardMs[message.senderPeerId] = nowMs;
 			m_Stats.peers[message.senderPeerId].lastHeardMs = nowMs;
 			m_Stats.peers[m_Config.localPeerId].lastHeardMs = nowMs;
-			m_PeerAppliedThrough[message.senderPeerId] = std::max(m_PeerAppliedThrough[message.senderPeerId], message.appliedFrame);
+			auto& applied = m_PeerAppliedThrough[message.senderPeerId];
+			if (!m_PeerAppliedAtMs.contains(message.senderPeerId) || message.appliedFrame > applied) {
+				applied = std::max(applied, message.appliedFrame);
+				m_PeerAppliedAtMs[message.senderPeerId] = nowMs;
+			}
 			if (message.senderPeerId == GetHostPeerId()) NoteAuthorityHeard(nowMs);
 		};
 		if (message.type == NetHostMigrationMessageType::PeerReceipt) {
