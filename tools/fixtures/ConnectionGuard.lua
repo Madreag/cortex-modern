@@ -13,6 +13,13 @@ function ConnectionGuard:UpdateWatchCamera()
     CameraMan:SetScrollTarget(Vector(1200, 500), 1, 0);
 end
 
+function ConnectionGuard:PauseActivity(pause)
+    if pause then
+        -- Release the capture clock so the pause loop can run its exit.
+        TimerMan.TimeScale = 0.1;
+    end
+end
+
 function ConnectionGuard:OnTick(tick)
     if tick == 4 then
         TimerMan.TimeScale = 0;
