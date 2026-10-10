@@ -183,7 +183,9 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::FreezeRows(const BITMAP* s
 		if (depth != 8 && depth != 15 && depth != 16 && depth != 24 && depth != 32)
 			throw std::runtime_error("Unsupported scene layer bitmap snapshot");
 		const size_t rowBytes = static_cast<size_t>(source->w) * ((depth + 7) / 8);
-		if (const auto allocation = PixelAllocations::Find(source, rowBytes); allocation && allocation->Bytes() > PageWriteFence::SystemPageBytes()) {
+		if (rowBytes > std::numeric_limits<size_t>::max() / static_cast<size_t>(source->h)) throw std::bad_alloc();
+		// Small images take owned bytes without a page reservation and a shared fence registration apiece.
+		if (rowBytes * static_cast<size_t>(source->h) > (size_t{64} << 10)) if (const auto allocation = PixelAllocations::Find(source, rowBytes); allocation && allocation->Bytes() > PageWriteFence::SystemPageBytes()) {
 			auto snapshot = std::make_shared<BitmapSnapshot>();
 			snapshot->width = source->w; snapshot->height = source->h; snapshot->depth = depth; snapshot->rowBytes = rowBytes;
 			snapshot->fullCopyPercent = BitmapFullCopyPercent();
@@ -198,13 +200,12 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::FreezeRows(const BITMAP* s
 			snapshot->frozen = true;
 			return snapshot;
 		}
-		if (!previous && !markedRows && !markedAll) if (auto uniform = UniformRows(source, depth, rowBytes)) return uniform;
 	}
 	auto snapshot = std::const_pointer_cast<BitmapSnapshot>(CaptureRows(source, {}, markedRows, markedAll, true));
-	if (!snapshot || !previous || previous->width != snapshot->width || previous->height != snapshot->height || previous->depth != snapshot->depth) return snapshot;
+	if (!snapshot) return snapshot;
 	auto rows = std::make_unique<FrozenRows>();
 	rows->pixels = std::move(snapshot->fullPixels);
-	rows->previous = previous;
+	if (previous && previous->width == snapshot->width && previous->height == snapshot->height && previous->depth == snapshot->depth) rows->previous = previous;
 	rows->hasMarks = markedRows != nullptr;
 	if (markedRows) rows->marked = *markedRows;
 	rows->markedAll = markedAll;

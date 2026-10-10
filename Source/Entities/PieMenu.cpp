@@ -72,7 +72,7 @@ PieMenu::PieMenu(const PieMenu& source, CheckpointNativeSnapshot& snapshot) :
 	m_DrawBackgroundTransparent(source.m_DrawBackgroundTransparent), m_BackgroundColor(source.m_BackgroundColor),
 	m_BackgroundBorderColor(source.m_BackgroundBorderColor), m_SelectedItemBackgroundColor(source.m_SelectedItemBackgroundColor),
 	m_HoveredPieSlice(nullptr), m_ActivatedPieSlice(nullptr), m_AlreadyActivatedPieSlice(nullptr),
-	m_CurrentPieSlices(snapshot.Freeze(source.m_CurrentPieSlices, &m_CurrentPieSlices)), m_ActiveSubPieMenu(nullptr),
+	m_CurrentPieSlices{}, m_ActiveSubPieMenu(nullptr),
 	m_CurrentInnerRadius(source.m_CurrentInnerRadius), m_CursorInVisiblePosition(source.m_CursorInVisiblePosition),
 	m_CursorAngle(source.m_CursorAngle), m_CursorVisualAngle(source.m_CursorVisualAngle),
 	m_BGBitmap(snapshot.Freeze(source.m_BGBitmap)), m_BGRotationBitmap(snapshot.Freeze(source.m_BGRotationBitmap)),
@@ -80,6 +80,10 @@ PieMenu::PieMenu(const PieMenu& source, CheckpointNativeSnapshot& snapshot) :
 	m_BGBitmapNeedsRedrawing(source.m_BGBitmapNeedsRedrawing),
 	m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing(source.m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing),
 	m_CheckpointInitialized(source.m_CheckpointInitialized) {
+	std::vector<PieSlice*> savedSlices;
+	savedSlices.reserve(source.m_CurrentPieSlices.size());
+	for (PieSlice* slice: source.m_CurrentPieSlices) if (slice->GetOriginalSource() == source.m_Owner) savedSlices.push_back(slice);
+	m_CurrentPieSlices = snapshot.Freeze(savedSlices, &m_CurrentPieSlices);
 	for (size_t index = 0; index < m_PieQuadrants.size(); ++index) {
 		m_PieQuadrants[index].m_Enabled = source.m_PieQuadrants[index].m_Enabled;
 		m_PieQuadrants[index].m_Direction = source.m_PieQuadrants[index].m_Direction;
