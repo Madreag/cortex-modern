@@ -284,10 +284,12 @@ namespace RTE {
 			}
 			bool constructed = false;
 			try {
-				m_Slots.InsertOrAssign(target, slot);
 				*slot = target;
 				if constexpr (requires { T::PrepareCheckpointNative(source, reinterpret_cast<T*>(memory), *this); })
 					T::PrepareCheckpointNative(source, reinterpret_cast<T*>(memory), *this);
+				// The entity binds itself first thing; it is told its own slot instead of looking it up.
+				const Binding previous = std::exchange(t_Binding, Binding{static_cast<const Entity*>(&source), target, slot});
+				struct Restore { Binding previous; ~Restore() { t_Binding = previous; } } restore{previous};
 				new(memory) T(source, *this);
 				constructed = true;
 				target->m_CheckpointAllocation = frozenStorage ? FrozenStorageMark(memory) : memory;
@@ -309,6 +311,7 @@ namespace RTE {
 		static void* FrozenStorageMark(void* memory) { return static_cast<char*>(memory) + 1; }
 
 		Entity** Bind(const Entity& source, Entity* target) {
+			if (t_Binding.source == &source && t_Binding.target == target) return t_Binding.slot;
 			m_Objects.InsertOrAssign(&source, target);
 			return m_Slots.Find(target).value_or(nullptr);
 		}
@@ -460,6 +463,8 @@ namespace RTE {
 		}
 		inline static thread_local const CheckpointNativeSnapshot* s_Current = nullptr;
 		inline static thread_local const Entity* t_Constructing = nullptr;
+		struct Binding { const Entity* source = nullptr; Entity* target = nullptr; Entity** slot = nullptr; };
+		inline static thread_local Binding t_Binding;
 		inline static thread_local std::shared_ptr<CheckpointNativeSnapshot> s_Boundary;
 		CheckpointSharedMap<const BITMAP*, std::shared_ptr<Pixel>> m_Bitmaps;
 		CheckpointSharedMap<const BITMAP*, std::shared_ptr<Pixel>> m_BitmapSources;
