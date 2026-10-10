@@ -1,4 +1,7 @@
 #include "Leg.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Attachable.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "PresetMan.h"
@@ -10,11 +13,34 @@ using namespace RTE;
 
 ConcreteClassInfo(Leg, Attachable, 50);
 
+Leg::Leg(const Leg& source, CheckpointNativeSnapshot& snapshot) :
+	Attachable(source, snapshot),
+	m_Foot(snapshot.Freeze(source.m_Foot)),
+	m_ContractedOffset(snapshot.Freeze(source.m_ContractedOffset)),
+	m_ExtendedOffset(snapshot.Freeze(source.m_ExtendedOffset)),
+	m_MinExtension(snapshot.Freeze(source.m_MinExtension)),
+	m_MaxExtension(snapshot.Freeze(source.m_MaxExtension)),
+	m_NormalizedExtension(snapshot.Freeze(source.m_NormalizedExtension)),
+	m_TargetPosition(snapshot.Freeze(source.m_TargetPosition)),
+	m_IdleOffset(snapshot.Freeze(source.m_IdleOffset)),
+	m_AnkleOffset(snapshot.Freeze(source.m_AnkleOffset)),
+	m_WillIdle(snapshot.Freeze(source.m_WillIdle)),
+	m_MoveSpeed(snapshot.Freeze(source.m_MoveSpeed)),
+	m_PersistedLegRuntime(snapshot.Freeze(source.m_PersistedLegRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* Leg::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 Leg::Leg() {
 	Clear();
 }
 
 Leg::~Leg() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

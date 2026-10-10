@@ -1,15 +1,28 @@
 #include "TDExplosive.h"
+#include "CheckpointNativeSnapshot.h"
 #include "SoundContainer.h"
 
 using namespace RTE;
 
 ConcreteClassInfo(TDExplosive, ThrownDevice, 50);
 
+TDExplosive::TDExplosive(const TDExplosive& source, CheckpointNativeSnapshot& snapshot) :
+	ThrownDevice(source, snapshot),
+	m_IsAnimatedManually(snapshot.Freeze(source.m_IsAnimatedManually)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* TDExplosive::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 TDExplosive::TDExplosive() {
 	Clear();
 }
 
 TDExplosive::~TDExplosive() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

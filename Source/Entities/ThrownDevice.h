@@ -18,6 +18,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a ThrownDevice object in system memory. Create should be called before using the object.
 		ThrownDevice();
+		CheckpointSnapshotMethods(ThrownDevice);
 
 		/// Makes the ThrownDevice object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.

@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <queue>
 #include <set>
 #include <span>
 #include <string>
@@ -179,6 +180,12 @@ namespace RTE {
 			std::list<T, Allocator> result(source.get_allocator());
 			if constexpr (requires(const T& value) { T(value, *this); }) for (const auto& value: source) result.emplace_back(value, *this);
 			else for (const auto& value: source) result.push_back(Freeze(value));
+			return result;
+		}
+		template<class T, class Container> auto Freeze(const std::queue<T, Container>& source) {
+			auto remaining = source;
+			std::queue<T, Container> result;
+			while (!remaining.empty()) { result.push(Freeze(remaining.front())); remaining.pop(); }
 			return result;
 		}
 		template<class Key, class Value, class Compare, class Allocator> auto Freeze(const std::map<Key, Value, Compare, Allocator>& source) {

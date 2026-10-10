@@ -1,5 +1,10 @@
 #include "DeterministicMath.h"
 #include "Arm.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "HeldDevice.h"
+#include "ContentFile.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "FloatText.h"
@@ -20,11 +25,46 @@ using namespace RTE;
 
 ConcreteClassInfo(Arm, Attachable, 50);
 
+Arm::Arm(const Arm& source, CheckpointNativeSnapshot& snapshot) :
+	Attachable(source, snapshot),
+	m_PersistedArmRuntime(snapshot.Freeze(source.m_PersistedArmRuntime)),
+	m_MaxLength(snapshot.Freeze(source.m_MaxLength)),
+	m_MoveSpeed(snapshot.Freeze(source.m_MoveSpeed)),
+	m_HandIdleOffset(snapshot.Freeze(source.m_HandIdleOffset)),
+	m_HandIdleRotation(snapshot.Freeze(source.m_HandIdleRotation)),
+	m_HandCurrentOffset(snapshot.Freeze(source.m_HandCurrentOffset)),
+	m_HandPrevPos(snapshot.Freeze(source.m_HandPrevPos)),
+	m_HandPos(snapshot.Freeze(source.m_HandPos)),
+	m_HandTargets(snapshot.Freeze(source.m_HandTargets)),
+	m_HandMovementDelayTimer(snapshot.Freeze(source.m_HandMovementDelayTimer)),
+	m_HandHasReachedCurrentTarget(snapshot.Freeze(source.m_HandHasReachedCurrentTarget)),
+	m_PersistedHandMovementDelayTimerAnchor(snapshot.Freeze(source.m_PersistedHandMovementDelayTimerAnchor)),
+	m_PersistedHandCurrentOffset(snapshot.Freeze(source.m_PersistedHandCurrentOffset)),
+	m_HasPersistedHandCurrentOffset(snapshot.Freeze(source.m_HasPersistedHandCurrentOffset)),
+	m_PersistedHandPos(snapshot.Freeze(source.m_PersistedHandPos)),
+	m_PersistedHandPrevPos(snapshot.Freeze(source.m_PersistedHandPrevPos)),
+	m_HasPersistedHandPos(snapshot.Freeze(source.m_HasPersistedHandPos)),
+	m_HandSpriteFile(snapshot.Freeze(source.m_HandSpriteFile)),
+	m_HandSpriteBitmap(snapshot.Freeze(source.m_HandSpriteBitmap)),
+	m_GripStrength(snapshot.Freeze(source.m_GripStrength)),
+	m_ThrowStrength(snapshot.Freeze(source.m_ThrowStrength)),
+	m_HeldDevice(snapshot.Freeze(source.m_HeldDevice)),
+	m_HeldDeviceThisArmIsTryingToSupport(snapshot.Freeze(source.m_HeldDeviceThisArmIsTryingToSupport)),
+	m_FaithfulSupportedDeviceUID(snapshot.Freeze(source.m_FaithfulSupportedDeviceUID)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* Arm::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 Arm::Arm() {
 	Clear();
 }
 
 Arm::~Arm() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

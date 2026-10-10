@@ -22,6 +22,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a Leg object in system memory. Create() should be called before using the object.
 		Leg();
+		CheckpointSnapshotMethods(Leg);
 
 		/// Makes the Leg object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.

@@ -45,6 +45,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a HeldDevice object in system
 		/// memory. Create() should be called before using the object.
 		HeldDevice();
+		CheckpointSnapshotMethods(HeldDevice);
 
 		/// Destructor method used to clean up a HeldDevice object before deletion
 		/// from system memory.

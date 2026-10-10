@@ -1,4 +1,7 @@
 #include "HeldDevice.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
 #include "CheckpointProperties.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -22,11 +25,49 @@ using namespace RTE;
 
 ConcreteClassInfo(HeldDevice, Attachable, 50);
 
+HeldDevice::HeldDevice(const HeldDevice& source, CheckpointNativeSnapshot& snapshot) :
+	Attachable(source, snapshot),
+	m_HeldDeviceType(snapshot.Freeze(source.m_HeldDeviceType)),
+	m_Activated(snapshot.Freeze(source.m_Activated)),
+	m_HotkeyActivated(snapshot.Freeze(source.m_HotkeyActivated)),
+	m_ActivationTimer(snapshot.Freeze(source.m_ActivationTimer)),
+	m_PersistedActivationTimerAnchor(snapshot.Freeze(source.m_PersistedActivationTimerAnchor)),
+	m_HotkeyActivationTimer(snapshot.Freeze(source.m_HotkeyActivationTimer)),
+	m_OneHanded(snapshot.Freeze(source.m_OneHanded)),
+	m_DualWieldable(snapshot.Freeze(source.m_DualWieldable)),
+	m_StanceOffset(snapshot.Freeze(source.m_StanceOffset)),
+	m_SharpStanceOffset(snapshot.Freeze(source.m_SharpStanceOffset)),
+	m_SupportOffset(snapshot.Freeze(source.m_SupportOffset)),
+	m_UseSupportOffsetWhileReloading(snapshot.Freeze(source.m_UseSupportOffsetWhileReloading)),
+	m_SharpAim(snapshot.Freeze(source.m_SharpAim)),
+	m_MaxSharpLength(snapshot.Freeze(source.m_MaxSharpLength)),
+	m_Supportable(snapshot.Freeze(source.m_Supportable)),
+	m_Supported(snapshot.Freeze(source.m_Supported)),
+	m_SupportAvailable(snapshot.Freeze(source.m_SupportAvailable)),
+	m_IsUnPickupable(snapshot.Freeze(source.m_IsUnPickupable)),
+	m_SeenByPlayer(snapshot.Freeze(source.m_SeenByPlayer)),
+	m_PickupableByPresetNames(snapshot.Freeze(source.m_PickupableByPresetNames)),
+	m_GripStrengthMultiplier(snapshot.Freeze(source.m_GripStrengthMultiplier)),
+	m_BlinkTimer(snapshot.Freeze(source.m_BlinkTimer)),
+	m_Loudness(snapshot.Freeze(source.m_Loudness)),
+	m_IsExplosiveWeapon(snapshot.Freeze(source.m_IsExplosiveWeapon)),
+	m_GetsHitByMOsWhenHeld(snapshot.Freeze(source.m_GetsHitByMOsWhenHeld)),
+	m_VisualRecoilMultiplier(snapshot.Freeze(source.m_VisualRecoilMultiplier)),
+	m_PersistedHeldDeviceRuntime(snapshot.Freeze(source.m_PersistedHeldDeviceRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* HeldDevice::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 HeldDevice::HeldDevice() {
 	Clear();
 }
 
 HeldDevice::~HeldDevice() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

@@ -1,5 +1,8 @@
 #include "DeterministicMath.h"
 #include "ThrownDevice.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "MovableObject.h"
 #include "PresetMan.h"
 #include "SoundContainer.h"
 
@@ -9,11 +12,30 @@ using namespace RTE;
 
 ConcreteClassInfo(ThrownDevice, HeldDevice, 50);
 
+ThrownDevice::ThrownDevice(const ThrownDevice& source, CheckpointNativeSnapshot& snapshot) :
+	HeldDevice(source, snapshot),
+	m_ActivationSound(snapshot.Freeze(source.m_ActivationSound)),
+	m_StartThrowOffset(snapshot.Freeze(source.m_StartThrowOffset)),
+	m_EndThrowOffset(snapshot.Freeze(source.m_EndThrowOffset)),
+	m_MinThrowVel(snapshot.Freeze(source.m_MinThrowVel)),
+	m_MaxThrowVel(snapshot.Freeze(source.m_MaxThrowVel)),
+	m_TriggerDelay(snapshot.Freeze(source.m_TriggerDelay)),
+	m_ActivatesWhenReleased(snapshot.Freeze(source.m_ActivatesWhenReleased)),
+	m_StrikerLever(snapshot.Freeze(source.m_StrikerLever)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* ThrownDevice::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 ThrownDevice::ThrownDevice() {
 	Clear();
 }
 
 ThrownDevice::~ThrownDevice() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

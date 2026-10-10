@@ -22,6 +22,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate an Arm object in system memory. Create() should be called before using the object.
 		Arm();
+		CheckpointSnapshotMethods(Arm);
 
 		/// Makes the Arm object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
