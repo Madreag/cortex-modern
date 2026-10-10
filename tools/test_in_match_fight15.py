@@ -83,7 +83,7 @@ def main():
                 red = before["exit_code"] == 1 and bool(before["fails"]) and not before["timed_out"] and before["evidence_complete"]
                 green = after["exit_code"] == 0 and bool(after["passes"]) and not after["fails"] and not after["timed_out"] and after["evidence_complete"]
                 if row == "R7":
-                    green &= after["close_to_exit_ms"] is not None and 0 <= after["close_to_exit_ms"] < 5000
+                    green &= after["close_to_exit_ms"] is not None and 0 <= after["close_to_exit_ms"] < 1500
                 if row in ("R4", "R5"):
                     expected_size = list(map(int, size.split("x")))
                     green &= bool(after["pictures"]) and all(shot["size"] == expected_size and shot["ink_pixels"] > 1000 for shot in after["pictures"])
