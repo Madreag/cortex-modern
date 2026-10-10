@@ -66,6 +66,29 @@
       ]
     },
     {
+      "id": "host-rematch-waiting-host",
+      "peer": "host",
+      "mark": "rematch-waiting-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        45,
+        46,
+        47
+      ]
+    },
+    {
+      "id": "host-rematch-countdown-host",
+      "peer": "host",
+      "mark": "rematch-countdown-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        53,
+        57
+      ]
+    },
+    {
       "id": "joiner-valid-preview-joiner",
       "peer": "joiner",
       "mark": "valid-preview-joiner",
@@ -75,6 +98,29 @@
         9,
         10,
         20
+      ]
+    },
+    {
+      "id": "joiner-rematch-waiting-joiner",
+      "peer": "joiner",
+      "mark": "rematch-waiting-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        32,
+        33,
+        34
+      ]
+    },
+    {
+      "id": "joiner-rematch-countdown-joiner",
+      "peer": "joiner",
+      "mark": "rematch-countdown-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        39,
+        41
       ]
     }
   ]

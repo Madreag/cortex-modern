@@ -227,7 +227,9 @@ def scene_checks(peer, steps):
     for index, step in enumerate(steps + [menu("video_mark scene-end")]):
         if step.get("op") == "menu" and step.get("command", "").startswith("video_mark "):
             if mark is not None:
-                indices = [i for i in range(start, index) if steps[i]["op"].startswith("assert")]
+                indices = [i for i in range(start, index)
+                           if steps[i]["op"].startswith("assert") or
+                           (steps[i]["op"] == "menu" and steps[i].get("command", "").startswith(("assert_", "text_watch assert ")))]
                 if indices:
                     checks.append(dict(id=f"{peer}-{mark}", peer=peer, mark=mark, screen="game",
                                        what="Captured real scene state, exact label text, panel bounds and the live player.", probe_steps=indices))
@@ -235,7 +237,7 @@ def scene_checks(peer, steps):
     return checks
 
 
-def buy(peer):
+def buy(peer, fire=True):
     steps = [dict(op="game_mouse", button="right", down=True), wait(renders=3, sim_advanced=2),
              dict(op="pie_point", input_player=0, command=6), wait(renders=3, sim_advanced=2)]
     steps += capture(f"pie-buy-{peer}")
@@ -252,15 +254,17 @@ def buy(peer):
     steps += [dict(op="assert_buy", input_player=0, equals=dict(cart=["Coalition.rte/Soldier Light", "Coalition.rte/Assault Rifle"], craft="Base.rte/Rocket MK2", passengers=1), remember="order"),
               dict(op="assert_control", scope="buy", input_player=0, control="BuyButton", equals=dict(visible=True, enabled=True), fits=True, inside="BuyGUIBox"),
               menu("activate BuyButton", scope="buy", input_player=0),
+              dict(op="wait_scene", input_player=0, funds_delta_from="order"),
               dict(op="assert_scene", input_player=0, funds_delta_from="order"),
               dict(op="wait_scene", input_player=0, delivered="Coalition.rte/Soldier Light")]
     steps += capture(f"arrival-{peer}")
     steps += [dict(op="assert_scene", input_player=0, delivered="Coalition.rte/Soldier Light", equals=dict(alive=True))]
     steps += key("E")
     steps += [dict(op="wait_scene", input_player=0, equals=dict(preset="Coalition.rte/Soldier Light", weapon="Coalition.rte/Assault Rifle"))]
-    steps += [dict(op="game_mouse", down=True), wait(renders=5, sim_advanced=12)]
-    steps += capture(f"fire-{peer}")
-    steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, fired=True, weapon="Coalition.rte/Assault Rifle")), dict(op="game_mouse", down=False)]
+    if fire:
+        steps += [dict(op="game_mouse", down=True), wait(renders=5, sim_advanced=12)]
+        steps += capture(f"fire-{peer}")
+        steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, fired=True, weapon="Coalition.rte/Assault Rifle")), dict(op="game_mouse", down=False)]
     return steps
 
 
@@ -283,7 +287,7 @@ def game_scenes():
          game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner),
          scene_checks("host", host) + scene_checks("joiner", joiner))
 
-    host, joiner = place("host", x=0.48) + buy("host"), place("joiner", x=0.52)
+    host, joiner = place("host", x=0.48) + buy("host", fire=False), place("joiner", x=0.52)
     host += [dict(op="aim_brain", input_player=0, target_player=1)]
     host += [dict(op="game_mouse", down=True), wait(elapsed_ms=12000), dict(op="game_mouse", down=False)]
     for peer, steps in (("host", host), ("joiner", joiner)):

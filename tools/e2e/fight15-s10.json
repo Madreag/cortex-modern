@@ -286,6 +286,16 @@
       ]
     },
     {
+      "id": "host-fight-ended-host",
+      "peer": "host",
+      "mark": "fight-ended-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        308
+      ]
+    },
+    {
       "id": "twenty-minutes-host",
       "peer": "host",
       "mark": "fight-ended-host",
@@ -526,6 +536,16 @@
       "probe_steps": [
         289,
         290
+      ]
+    },
+    {
+      "id": "joiner-fight-ended-joiner",
+      "peer": "joiner",
+      "mark": "fight-ended-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        295
       ]
     },
     {

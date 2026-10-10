@@ -67,6 +67,17 @@
       "run": "kick"
     },
     {
+      "id": "kick-joiner-kick-joiner",
+      "peer": "joiner",
+      "mark": "kick-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        28
+      ],
+      "run": "kick"
+    },
+    {
       "id": "ban-host-valid-preview-host",
       "peer": "host",
       "mark": "valid-preview-host",
@@ -113,6 +124,29 @@
         9,
         10,
         20
+      ],
+      "run": "ban"
+    },
+    {
+      "id": "ban-joiner-ban-joiner",
+      "peer": "joiner",
+      "mark": "ban-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        28
+      ],
+      "run": "ban"
+    },
+    {
+      "id": "ban-joiner-banned-rejoin-refused",
+      "peer": "joiner",
+      "mark": "banned-rejoin-refused",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        37,
+        38
       ],
       "run": "ban"
     }
