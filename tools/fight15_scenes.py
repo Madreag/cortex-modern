@@ -265,7 +265,9 @@ def scene_checks(peer, steps):
 
 def buy(peer, fire=True):
     steps = [dict(op="game_mouse", button="right", down=True), wait(renders=3, sim_advanced=2),
-             dict(op="pie_point", input_player=0, command=6), wait(renders=3, sim_advanced=2)]
+             dict(op="wait_scene", input_player=0, equals=dict(pie_visible=True)),
+             dict(op="pie_point", input_player=0, command=6),
+             dict(op="wait_scene", input_player=0, equals=dict(pie_description="Buy Menu - click to open"))]
     steps += capture(f"pie-buy-{peer}")
     steps += [dict(op="assert_pie", input_player=0, equals=dict(visible=True, description="Buy Menu - click to open"))]
     steps += click()

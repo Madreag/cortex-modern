@@ -863,10 +863,12 @@ namespace {
 			Require(game != nullptr, "the scene has no activity");
 			const int player = LocalPlayer(step), team = game->GetTeamOfPlayer(player);
 			auto* actor = game->GetControlledActor(player);
+			const auto* pie = actor ? actor->GetPieMenu() : nullptr;
 			Json state = {{"team", team}, {"funds", game->GetTeamFunds(team)}, {"alive", actor && !actor->IsDead()}, {"brain_count", observed["brains"].size()},
 			    {"preset", actor ? actor->GetModuleAndPresetName() : ""}, {"team_actors", Json::array()}, {"weapon", ""}, {"fired", false},
 			    {"landing_zone_selection", game->GetViewState(player) == Activity::ViewState::LandingZoneSelect},
-			    {"screen_text", g_FrameMan.GetScreenText(game->ScreenOfPlayer(player))}};
+			    {"screen_text", g_FrameMan.GetScreenText(game->ScreenOfPlayer(player))},
+			    {"pie_visible", pie && pie->IsVisible()}, {"pie_description", pie ? pie->GetHoveredSliceDescription() : ""}};
 			for (const auto* member: *g_MovableMan.GetTeamRoster(team)) state["team_actors"].push_back(member->GetModuleAndPresetName());
 			if (const auto* human = dynamic_cast<const AHuman*>(actor)) {
 				if (const auto* gun = dynamic_cast<const HDFirearm*>(human->GetEquippedItem())) {
