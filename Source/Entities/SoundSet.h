@@ -47,6 +47,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a SoundSet object in system memory. Create() should be called before using the object.
 		SoundSet();
+		SoundSet(const SoundSet& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Copies a sound set and its owned subsets.
 		SoundSet(const SoundSet& reference) { Clear(); Create(reference); }
@@ -220,6 +221,7 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		bool m_FrozenNative = false;
 		static const std::string m_sClassName; //!< A string with the friendly-formatted type name of this object.
 		static const std::unordered_map<std::string, SoundSet::SoundSelectionCycleMode> c_SoundSelectionCycleModeMap; //!< A map of strings to SoundSelectionCycleModes to support string parsing for the SoundCycleMode enum. Populated in the implementing cpp file.
 

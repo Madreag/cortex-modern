@@ -1,4 +1,6 @@
 #include "SoundContainer.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "CheckpointProperties.h"
@@ -34,6 +36,54 @@ const std::unordered_map<std::string, SoundContainer::BusRouting> SoundContainer
     {"UI", SoundContainer::BusRouting::UI},
     {"Music", SoundContainer::BusRouting::MUSIC}};
 
+SoundContainer::SoundContainer(const SoundContainer& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	m_Pending{},
+	m_PendingOps{},
+	m_PendingMutex{},
+	m_PendingPlays(0),
+	m_PendingStopped(false),
+	m_PendingPositionWritten(false),
+	m_PendingHasSounds(-1),
+	m_SharedAliasHeld(false),
+	m_PendingActorUID(0),
+	m_PendingTeam(-1),
+	m_PendingAliasBaseline{},
+	m_SharedAliasBaseline{},
+	m_LogicalPlayback(snapshot.Freeze(source.m_LogicalPlayback)),
+	m_CheckpointIdentity(snapshot.Freeze(source.m_CheckpointIdentity)),
+	m_PreviewOrigin(nullptr),
+	m_CheckpointRegistered(false),
+	m_IsDestroying(false),
+	m_TopLevelSoundSet(snapshot.Freeze(source.m_TopLevelSoundSet)),
+	m_PlayingChannels(snapshot.Freeze(source.m_PlayingChannels)),
+	m_SoundOverlapMode(snapshot.Freeze(source.m_SoundOverlapMode)),
+	m_BusRouting(snapshot.Freeze(source.m_BusRouting)),
+	m_Immobile(snapshot.Freeze(source.m_Immobile)),
+	m_AttenuationStartDistance(snapshot.Freeze(source.m_AttenuationStartDistance)),
+	m_CustomPanValue(snapshot.Freeze(source.m_CustomPanValue)),
+	m_PanningStrengthMultiplier(snapshot.Freeze(source.m_PanningStrengthMultiplier)),
+	m_Loops(snapshot.Freeze(source.m_Loops)),
+	m_SoundPropertiesUpToDate(snapshot.Freeze(source.m_SoundPropertiesUpToDate)),
+	m_Priority(snapshot.Freeze(source.m_Priority)),
+	m_AffectedByGlobalPitch(snapshot.Freeze(source.m_AffectedByGlobalPitch)),
+	m_Pos(snapshot.Freeze(source.m_Pos)),
+	m_Pitch(snapshot.Freeze(source.m_Pitch)),
+	m_PitchVariation(snapshot.Freeze(source.m_PitchVariation)),
+	m_Volume(snapshot.Freeze(source.m_Volume)),
+	m_WasFadedOut(snapshot.Freeze(source.m_WasFadedOut)),
+	m_Paused(snapshot.Freeze(source.m_Paused)),
+	m_MusicPreEntryTime(snapshot.Freeze(source.m_MusicPreEntryTime)),
+	m_MusicExitTime(snapshot.Freeze(source.m_MusicExitTime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	std::erase_if(m_PlayingChannels, [](int identity) { return g_AudioMan.IsPredictedVoice(identity); });
+}
+
+Entity* SoundContainer::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 SoundContainer::SoundContainer() {
 	Clear();
 	CaptureSentinel::NoteCreation("SoundContainer", this);
@@ -51,6 +101,7 @@ SoundContainer& SoundContainer::operator=(const SoundContainer& reference) {
 }
 
 SoundContainer::~SoundContainer() {
+	if (IsFrozenCheckpointNative()) return;
 	m_IsDestroying = true;
 	g_AudioMan.DisownSoundContainerPlayingChannels(this);
 	Destroy(true);
@@ -1020,7 +1071,7 @@ std::string SoundContainer::SaveCheckpoint() const {
 	// A predicted voice exists on the predicting peer only, so no checkpoint may name it.
 	std::set<int> playing;
 	for (int identity: m_PlayingChannels) {
-		if (!g_AudioMan.IsPredictedVoice(identity)) playing.insert(identity);
+		if (IsFrozenCheckpointNative() || !g_AudioMan.IsPredictedVoice(identity)) playing.insert(identity);
 	}
 	archive(static_cast<const Entity&>(*this), m_CheckpointIdentity);
 	// The voices are this machine's playback; the logical playback below is what every peer shares.

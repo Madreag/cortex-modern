@@ -109,6 +109,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a SoundContainer object in system memory. Create() should be called before using the object.
 		SoundContainer();
+		CheckpointSnapshotMethods(SoundContainer);
 
 		/// Copy constructor method used to instantiate a SoundContainer object identical to an already existing one.
 		/// @param reference A reference to the SoundContainer to deep copy.

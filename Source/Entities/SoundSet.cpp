@@ -1,4 +1,5 @@
 #include "SoundSet.h"
+#include "CheckpointNativeSnapshot.h"
 #include "SoundContainer.h"
 #include "CheckpointImage.h"
 #include "CheckpointArchive.h"
@@ -13,6 +14,12 @@
 
 using namespace RTE;
 
+SoundData CheckpointNativeSnapshot::Freeze(const SoundData& source) {
+	SoundData value = source;
+	value.SoundObject = nullptr;
+	return value;
+}
+
 const std::string SoundSet::m_sClassName = "SoundSet";
 
 const std::unordered_map<std::string, SoundSet::SoundSelectionCycleMode> SoundSet::c_SoundSelectionCycleModeMap = {
@@ -20,11 +27,27 @@ const std::unordered_map<std::string, SoundSet::SoundSelectionCycleMode> SoundSe
     {"forwards", SoundSelectionCycleMode::FORWARDS},
     {"all", SoundSelectionCycleMode::ALL}};
 
+SoundSet::SoundSet(const SoundSet& source, CheckpointNativeSnapshot& snapshot) :
+	m_FrozenNative(true),
+	m_SoundSelectionCycleMode(snapshot.Freeze(source.m_SoundSelectionCycleMode)),
+	m_CurrentSelection(snapshot.Freeze(source.m_CurrentSelection)),
+	m_SimulationSelection(snapshot.Freeze(source.m_SimulationSelection)),
+	m_OwnerContainer(snapshot.Freeze(source.m_OwnerContainer)),
+	m_PendingCycleMode{},
+	m_PendingCycleModeWritten(false),
+	m_SoundData(snapshot.Freeze(source.m_SoundData)),
+	m_SubSoundSets(snapshot.Freeze(source.m_SubSoundSets)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)),
+	m_CheckpointValueTrap(false),
+	m_CheckpointOwner(nullptr) {
+}
+
 SoundSet::SoundSet() {
 	Clear();
 }
 
 SoundSet::~SoundSet() {
+	if (m_FrozenNative) return;
 	Destroy();
 }
 
