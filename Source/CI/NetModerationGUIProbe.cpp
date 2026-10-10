@@ -644,7 +644,7 @@ namespace {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("lockstep_frame_at_least") || step.contains("renders") ||
 		    step.contains("elapsed_ms") || step.contains("sim_advanced") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
 		    step.contains("editing") || step.contains("setup_ready") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
-		    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer") || step.contains("returned_peer"),
+		    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("chat_text_once") || step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer") || step.contains("returned_peer"),
 			    "wait has no predicate");
 			if (step.contains("held_peer") && !HeldPeer(step.at("held_peer"))) return false;
 			if (step.contains("returned_peer")) {
