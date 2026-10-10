@@ -37,6 +37,57 @@ def execute(run):
         run.close()
 
 
+def capture_guard(run, verdict):
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    watch = kernel.FindFirstChangeNotificationW
+    watch.argtypes = [wintypes.LPCWSTR, wintypes.BOOL, wintypes.DWORD]
+    watch.restype = wintypes.HANDLE
+    wait = kernel.WaitForSingleObject
+    wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    wait.restype = wintypes.DWORD
+    advance = kernel.FindNextChangeNotification
+    advance.argtypes = [wintypes.HANDLE]
+    advance.restype = wintypes.BOOL
+    close = kernel.FindCloseChangeNotification
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+    notification = watch(str(verdict.parent.parent), True, 0x19)
+    if notification == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        run.start()
+        while run.poll() is None:
+            try:
+                observed = json.loads(verdict.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError):
+                observed = {}
+            frames = list((Path(run.cwd) / "ScreenShots").glob("guard_composited*.png"))
+            saved = False
+            if len(frames) == 1:
+                try:
+                    with Image.open(frames[0]) as frame:
+                        frame.verify()
+                    saved = True
+                except OSError:
+                    pass
+            if observed.get("complete") is True and saved:
+                # Stop the frozen guard after its capture has finished writing.
+                run.terminate(0 if observed.get("pass") else 1, "frozen single player capture complete")
+                break
+            status = wait(notification, 45000)
+            if status == 258:
+                break
+            if status != 0 or not advance(notification):
+                raise ctypes.WinError(ctypes.get_last_error())
+        return run.finish()
+    finally:
+        close(notification)
+        run.close()
+
+
 def detector(repo, root, executable):
     root.mkdir(parents=True, exist_ok=False)
     native = root / "effects.json"
@@ -74,22 +125,25 @@ def single_player(repo, root, executable):
     root.mkdir(parents=True, exist_ok=False)
     probe = root / "probe/probe.json"
     steps = [
-        {"op": "wait_file", "path": "Userdata/UserScenes.rte/connection-guard-ready.json", "scope": "menu"},
-        {"op": "wait", "paused": True, "sim_at_least": 4, "scope": "menu"},
-        {"op": "wait", "renders": 4, "scope": "menu"},
-        {"op": "assert", "equals": {"service": "Idle", "screen": "Gameplay", "paused": True,
-                                  "sim_frame": 4, "local_actor_alive": True},
-         "connections_absent": True, "scope": "menu"},
-        {"op": "screenshot_pair", "name": "guard", "scope": "menu"},
+        {"op": "wait_file", "path": "Userdata/UserScenes.rte/connection-guard-ready.json"},
+        {"op": "wait", "paused": False, "sim_at_least": 4},
+        {"op": "wait", "renders": 4},
+        {"op": "assert", "equals": {"service": "Idle", "screen": "Gameplay", "paused": False,
+                                  "local_actor_alive": True},
+         "connections_absent": True},
+        {"op": "screenshot_pair", "name": "guard"},
+        {"op": "key_down", "key": "Escape"},
+        {"op": "key_up", "key": "Escape", "scope": "menu"},
+        {"op": "wait", "paused": True, "scope": "menu"},
         {"op": "signal", "name": "done", "scope": "menu"},
         {"op": "finish"},
     ]
-    write_json(probe, {"schema": 1, "timeout_ms": 90000, "steps": steps})
+    write_json(probe, {"schema": 1, "timeout_ms": 40000, "steps": steps})
     menu = root / "hold.menu.txt"
     menu.write_text(f"wait_file {probe.parent.as_posix()}/done.json 230\nwait_ms 250\nexit\n", encoding="utf-8")
     args = ["-scenario", "ConnectionGuard", "-seed", "42", "-max-ticks", "120", "-out", root / "trace.json",
             "-menu-script", menu, "-menu-script-out", root / "menu.json"]
-    run = make_run(repo, args, root / "engine", timeout=240,
+    run = make_run(repo, args, root / "engine", timeout=45,
                    env={"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)})
     if executable:
         run.argv[0] = str(executable.resolve())
@@ -97,11 +151,11 @@ def single_player(repo, root, executable):
     seed_settings(run, {"ResolutionX": 960, "ResolutionY": 540, "ResolutionMultiplier": 1,
                         "ShowAdvancedPerfStats": 0})
     stage_scene(run, "ConnectionGuard", repo / "tools/fixtures/EffectsLingerGuard.lua")
-    record = execute(run)
     output = probe.parent / "net-ui-result.json"
+    record = capture_guard(run, output)
     observed = json.loads(output.read_text(encoding="utf-8")) if output.is_file() else {}
     frames = list((Path(run.cwd) / "ScreenShots").glob("guard_composited*.png"))
-    # The paused guard exits through the menu before its scenario finishes.
+    # The frozen world remains drawable while the guard captures it.
     return {"record": record, "probe": observed, "frame": str(frames[0]) if len(frames) == 1 else None,
             "pass": record.get("exit_code") in (0, 1) and not record.get("timed_out") and
                     observed.get("pass") is True and observed.get("complete") is True and len(frames) == 1}
@@ -109,7 +163,10 @@ def single_player(repo, root, executable):
 
 def compare_guard(before, after):
     result = {"pass": False, "before": before, "after": after}
-    if before["pass"] and after["pass"]:
+    before_tick = next((row["observed"]["sim_frame"] for row in before["probe"].get("steps", []) if row.get("op") == "screenshot_pair"), None)
+    after_tick = next((row["observed"]["sim_frame"] for row in after["probe"].get("steps", []) if row.get("op") == "screenshot_pair"), None)
+    result["sim_frames"] = [before_tick, after_tick]
+    if before["pass"] and after["pass"] and before_tick == after_tick and before_tick is not None:
         with Image.open(before["frame"]) as a, Image.open(after["frame"]) as b:
             a, b = a.convert("RGB"), b.convert("RGB")
             if a.size == b.size == (960, 540):
