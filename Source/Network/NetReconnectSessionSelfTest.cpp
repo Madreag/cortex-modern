@@ -3401,6 +3401,9 @@ namespace RTE {
 				}
 				const uint8_t held = MakeSeatTable()[0].lockstepPeerId;
 				wire.host.SetLiveMatch(true);
+				wire.host.NotePlacementPhase(false, 0);
+				if (!wire.host.RosterSeatOfPeer(held) || wire.host.RosterSeatOfPeer(held)->phase != NetSeatPhase::Running)
+					return Fail(mode + ": the clean leaver never played the round");
 				if (!player.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error) || player.client.GetState() != NetH4ClientState::Left) {
 					return Fail(mode + ": the clean leave did not settle: " + error);
 				}
@@ -3421,6 +3424,15 @@ namespace RTE {
 				if (!wire.host.IsSeatHeldForReclaim(held)) {
 					return Fail(mode + ": the seat left on purpose was not held for its player");
 				}
+				const NetRosterSeat* left = wire.host.RosterSeatOfPeer(held);
+				if (!left || !left->leftByChoice || left->phase != NetSeatPhase::Running || left->holdCause != NetSeatHoldCause::None)
+					return Fail(mode + ": an authenticated leave lost its fact or granted early AI authority");
+				wire.nowMs += c_NetSeatDisconnectSilenceMs;
+				wire.host.Tick(wire.nowMs);
+				wire.host.NoteSeatHeldInPlace(held, NetSeatHoldCause::LateStream);
+				left = wire.host.RosterSeatOfPeer(held);
+				if (!left || left->phase != NetSeatPhase::Held || left->holdCause != NetSeatHoldCause::Leave)
+					return Fail(mode + ": the host's visible bridge lost the authenticated leave cause");
 				// The host's Seats panel names why the seat is held.
 				wire.nowMs += 125'000;
 				wire.host.Tick(wire.nowMs);
@@ -5340,6 +5352,70 @@ namespace RTE {
 			if (after.reclaiming || wire.host.GetSeatStatuses()[0].reclaiming || !after.dropped || !after.heldForReclaim ||
 			    wire.host.GetStats().reclaimsAccepted != 0) return Fail("a consumed bad proof remained publicly reconnecting or acquired authority");
 			if (!wire.SendRaw(returning.connection, *validProof, &error) || wire.host.GetStats().reclaimsAccepted != 0) return Fail("a failed proof challenge was usable again");
+			return 0;
+		}
+
+		int TestCleanLeaveFactTravelsWithRoster() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) return Fail(error);
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0x138);
+			match.players = {{1, 0, false, "Host"}, {2, 1, false, "Successor"}, {3, 2, false, "Leaver"}};
+			match.peerCount = 3;
+			Wire wire;
+			if (!wire.registry.BeginHostedSession()) return Fail("the leave capsule has no epoch");
+			wire.host.Configure(&wire.registry, match.sessionId, MakeIdentity());
+			wire.host.SetSeatTable(NetH4BuildSeatTable(match), match.mode);
+			const auto wallClock = [](void* context) -> uint64_t { return 1'700'000'000'000ULL + static_cast<Wire*>(context)->nowMs; };
+			wire.host.SetUnixClock(wallClock, &wire);
+			NetH4TicketRecord own;
+			if (!wire.host.EnsureLocalTicket(own)) return Fail("the leave capsule has no host owner");
+			Endpoint successor, leaver;
+			successor.connection = 175;
+			leaver.connection = 176;
+			ConfigureEndpoint(successor, "leave-capsule-successor", &unixNow);
+			ConfigureEndpoint(leaver, "leave-capsule-leaver", &unixNow);
+			for (Endpoint* link: {&successor, &leaver}) {
+				wire.Add(link);
+				wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				if (!link->client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) return Fail(error);
+			}
+			const uint16_t stableSeat = leaver.client.GetRecord().stableSeat;
+			uint8_t leaverPeer = 0, successorPeer = 0;
+			for (const NetH4Seat& seat: wire.host.GetSeatTable()) {
+				if (seat.stableSeat == stableSeat) leaverPeer = seat.lockstepPeerId;
+				if (seat.stableSeat == successor.client.GetRecord().stableSeat) successorPeer = seat.lockstepPeerId;
+			}
+			wire.host.SetLiveMatch(true);
+			wire.host.NotePlacementPhase(false, 0);
+			if (!leaver.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) return Fail(error);
+			leaver.connected = false;
+			wire.Remove(leaver.connection);
+			const auto* left = wire.host.RosterSeatOfPeer(leaverPeer);
+			if (!left || !left->leftByChoice || left->phase != NetSeatPhase::Running || left->holdCause != NetSeatHoldCause::None)
+				return Fail("the leave capsule was seeded with early AI authority or no leave fact");
+			auto replica = wire.host.GetRoster();
+			replica.Find(NetRosterIdOf(stableSeat))->leftByChoice = false;
+			if (EncodeRoster(replica) != EncodeRoster(wire.host.GetRoster()) || HashRoster(replica) != HashRoster(wire.host.GetRoster()))
+				return Fail("the host-only leave fact changed replica bytes or their authority hash");
+			const auto capsule = wire.host.ExportMigrationState();
+			wire.nowMs += c_NetSeatDisconnectSilenceMs;
+			match.hostPeerId = successorPeer;
+			NetSeatAuthRegistry nextRegistry;
+			NetReconnectHost next;
+			next.SetUnixClock(wallClock, &wire);
+			if (!next.ImportMigrationState(capsule, nextRegistry, match, successorPeer, {}, wire.nowMs))
+				return Fail("the successor refused the authenticated leave capsule");
+			left = next.RosterSeatOfPeer(leaverPeer);
+			if (!left || !left->leftByChoice || left->phase != NetSeatPhase::Running || left->holdCause != NetSeatHoldCause::None)
+				return Fail("the successor lost the leave fact or converted it to AI authority");
+			next.NoteSeatHeldInPlace(leaverPeer, NetSeatHoldCause::LateStream);
+			left = next.RosterSeatOfPeer(leaverPeer);
+			if (!left || left->phase != NetSeatPhase::Held || left->holdCause != NetSeatHoldCause::Leave)
+				return Fail("the successor's visible host hold lost its authenticated leave cause");
+			std::cout << "[net-reconnect-session-selftest] PASS clean_leave_fact_travels_with_roster no_early_AI=true replica_bytes_unchanged=true" << std::endl;
 			return 0;
 		}
 
@@ -9732,6 +9808,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestCleanLeaverKeepsTheSeat(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCleanLeaveFactTravelsWithRoster(); result != 0) {
 			return result;
 		}
 		if (const int result = TestLeaveExchangeBeatsTeardown(); result != 0) {

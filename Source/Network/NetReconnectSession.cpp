@@ -335,6 +335,13 @@ namespace RTE {
 			if (!object.contains("roster_bytes") || !DecodeRoster(object.at("roster_bytes").get<std::vector<uint8_t>>(), carried, &rosterError) || carried.seats.size() != next.m_Seats.size())
 				return false;
 			next.m_Roster = std::move(carried);
+			// The existing private capsule field carries the authenticated leave fact;
+			// replica bytes carry only the host's separately ordered hold authority.
+			for (const auto& row: object.at("seats")) {
+				NetRosterSeat* seat = next.m_Roster.Find(RosterIdOf(row.at("seat").get<uint16_t>()));
+				if (!seat) return false;
+				seat->leftByChoice = row.value("left", false);
+			}
 			next.m_UnixClock = m_UnixClock;
 			next.m_UnixClockContext = m_UnixClockContext;
 			const int64_t unixNow = static_cast<int64_t>(next.UnixNowMs());
@@ -677,7 +684,7 @@ namespace RTE {
 
 	bool NetReconnectHost::HolderLeftByChoice(const SeatState& seat) const {
 		const NetRosterSeat* held = RosterSeatOf(seat);
-		return IsHolderAway(seat) && held->holdCause == NetSeatHoldCause::Leave;
+		return IsHolderAway(seat) && (held->leftByChoice || held->holdCause == NetSeatHoldCause::Leave);
 	}
 
 	uint64_t NetReconnectHost::HolderAwaySinceMs(const SeatState& seat) const {
