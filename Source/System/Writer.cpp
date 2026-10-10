@@ -422,12 +422,17 @@ struct CheckpointText::Data {
 	bool usesSimTime = false;
 	int64_t simTimeTicks = 0;
 	mutable std::atomic<Formatting*> output{nullptr};
-	bool ownsOutput = true;
+	mutable std::once_flag outputReady;
+	mutable std::shared_ptr<Formatting> outputOwner;
+	std::optional<std::string> compactSharedValues;
 	Formatting& Output() const {
 		Formatting* current = output.load(std::memory_order_acquire);
 		if (!current) {
-			auto candidate = std::make_unique<Formatting>();
-			if (output.compare_exchange_strong(current, candidate.get(), std::memory_order_acq_rel, std::memory_order_acquire)) current = candidate.release();
+			std::call_once(outputReady, [this] {
+				outputOwner = std::make_shared<Formatting>();
+				output.store(outputOwner.get(), std::memory_order_release);
+			});
+			current = output.load(std::memory_order_acquire);
 		}
 		return *current;
 	}
@@ -468,7 +473,6 @@ struct CheckpointText::Data {
 	}
 
 	~Data() {
-		if (ownsOutput) delete output.load(std::memory_order_relaxed);
 		std::shared_ptr<Data> pending;
 		const auto enqueue = [&pending](Data& node) {
 			for (auto& child: node.children) {
@@ -491,7 +495,6 @@ struct CheckpointText::Data {
 
 struct CheckpointText::Data::Legacy : Data {
 	explicit Legacy(std::pmr::memory_resource* resource = std::pmr::get_default_resource()) : Data(resource) {
-		ownsOutput = false;
 		output.store(&initialOutput, std::memory_order_relaxed);
 	}
 	Formatting initialOutput;
@@ -933,17 +936,25 @@ const std::string& CheckpointText::Text() const {
 CheckpointText CheckpointText::Compact() const {
 	if (!m_Data) return {};
 	// Completed images keep their bytes for readers, but never need their boundary allocations again.
+	const std::string& text = Text();
 	auto data = std::make_shared<Data>();
 	data->deferred = true;
-	data->Output().text = Text();
+	if (m_Data->outputOwner) {
+		data->outputOwner = m_Data->outputOwner;
+		data->output.store(data->outputOwner.get(), std::memory_order_release);
+	} else data->Output().text = text;
 	if (HasPeerRuns()) {
-		std::string shared = SharedText();
-		if (shared != data->Output().text) {
-			data->hasPeer = true;
-			data->Output().sharedValues = std::move(shared);
+		if (m_Data->outputOwner && m_Data->deferred && !m_Data->compactSharedValues && m_Data->Output().sharedValues) data->hasPeer = true;
+		else {
+			std::string shared = SharedText();
+			if (shared != text) {
+				data->hasPeer = true;
+				data->compactSharedValues = std::move(shared);
+			}
 		}
 	}
-	data->ownedBytes = data->Output().text.size() + (data->Output().sharedValues ? data->Output().sharedValues->size() : 0);
+	data->ownedBytes = text.size() + (data->compactSharedValues ? data->compactSharedValues->size() :
+	    data->hasPeer && data->Output().sharedValues ? data->Output().sharedValues->size() : 0);
 	data->Output().formatted.store(true, std::memory_order_release);
 	return CheckpointText(std::move(data));
 }
@@ -958,6 +969,7 @@ std::string CheckpointText::SharedText() const {
 	if (m_Data->usesSimTime) return AtSimTime(m_Data->simTimeTicks).SharedText();
 	if (m_Data->deferred) {
 		const std::string& text = Text();
+		if (m_Data->compactSharedValues) return *m_Data->compactSharedValues;
 		if (m_Data->Output().sharedValues) return *m_Data->Output().sharedValues;
 		std::string shared;
 		size_t at = 0;
@@ -1690,6 +1702,20 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			values = {};
 			check(fields.expired() && compact.Text() == full && compact.SharedText() == shared,
 			      "completed_checkpoint_releases_fields_and_keeps_full_and_shared_bytes");
+		}
+		{
+			CheckpointWriter::BatchOverride batch(true);
+			auto values = Writer::Capture([](Writer& writer) {
+				writer.NewPropertyWithValue("Owned", std::string(65536, 'x'));
+				writer.PerPeerBegin(); writer.NewPropertyWithValue("Seat", 31); writer.PerPeerEnd();
+			});
+			const std::string full = values.Text(), shared = values.SharedText();
+			const char* bytes = values.Text().data();
+			const std::weak_ptr<CheckpointText::Data> fields = values.m_Data;
+			const auto compact = values.Compact();
+			values = {};
+			check(fields.expired() && compact.Text().data() == bytes && compact.Text() == full && compact.SharedText() == shared,
+			      "completed_checkpoint_shares_immutable_output_without_retaining_fields");
 		}
 		{
 			const auto record = [](int indent) {

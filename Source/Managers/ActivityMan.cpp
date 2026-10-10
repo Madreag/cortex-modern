@@ -1549,15 +1549,20 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 			previousImage.reset();
 			sceneCache.reset();
 			if (image->nativeReady.valid()) image->nativeReady.get();
-			if (complete) complete();
+			if (complete) {
+				complete();
+				image->activity = image->activity.Compact(); image->scene = image->scene.Compact();
+				image->structure = image->structure.Compact(); image->sceneRuntime = image->sceneRuntime.Compact();
+				image->globals = image->globals.Compact();
+				for (auto& graph: image->graphs) graph = graph.Compact();
+				complete = {};
+				image->nativePages.reset(); image->nativeReady = {};
+			}
 			const CheckpointText main = AssembleOwnedSave(*image);
 			const CheckpointText index = AssembleOwnedIndex(*image);
 			const auto images = ReuseAutosaveImages(matchId, image->layers, palette);
 			const std::string& saveText = main.Text();
 			const std::string& indexText = index.Text();
-			if (complete) {
-				complete = {};
-			}
 			if (layerCosts && image->captureClock) {
 				for (const auto& [name, layer]: image->layers) layer->Finalize();
 				const int64_t simUs = image->captureClock->simulationUs.get();
@@ -1581,13 +1586,6 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 			const auto archiveStart = std::chrono::steady_clock::now();
 			if (automatic) {
 				descriptor.worldStructureHash = NetIdentity::HashHex(NetIdentity::HashCanonicalText("autosave-world", {{"structure", image->structure.Text()}}));
-			}
-			if (frozenNative) {
-				image->activity = image->activity.Compact(); image->scene = image->scene.Compact();
-				image->structure = image->structure.Compact(); image->sceneRuntime = image->sceneRuntime.Compact();
-				image->globals = image->globals.Compact();
-				for (auto& graph: image->graphs) graph = graph.Compact();
-				image->nativePages.reset(); image->nativeReady = {};
 			}
 			WriteCheckpointArchive(fileName, path, zipLevel, matchId, saveText, indexText, layerNames,
 			    [&](size_t i, std::vector<unsigned char>& png) {
