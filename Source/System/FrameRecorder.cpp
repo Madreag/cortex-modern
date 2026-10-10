@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <future>
 #include <iomanip>
 #include <sstream>
 #include <utility>
@@ -268,7 +269,53 @@ namespace RTE {
 		WriteManifest();
 		// An encoder takes the frames in order on one pipe, so it has one writer; PNGs encode on a pool.
 		const std::size_t writers = m_EncoderPath.empty() ? WriterCount() : 1;
-		for (std::size_t writer = 0; writer < writers; ++writer) m_Writers.push_back(FloatingPointEnvironment::StartThread(&FrameRecorder::WriterLoop, this));
+#if defined(_WIN32)
+		if (m_ReadbackContext) {
+			// Scripted writers complete a transfer during setup, before any frame is rendered.
+			HarnessCost::SimulationSpan setupCost;
+			int width = 0, height = 0;
+			SDL_GetWindowSizeInPixels(SDL_GL_GetCurrentWindow(), &width, &height);
+			GLint previousTexture = 0;
+			glad_glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+			GLuint texture = 0;
+			glad_glGenTextures(1, &texture);
+			glad_glBindTexture(GL_TEXTURE_2D, texture);
+			glad_glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+			glad_glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+			std::string setupError;
+			std::vector<std::shared_ptr<QueuedTextureReadback>> transfers;
+			std::vector<std::future<std::string>> ready;
+			for (std::size_t writer = 0; writer < writers; ++writer) {
+				auto transfer = std::shared_ptr<QueuedTextureReadback>(FrameReadbackContext::Submit(texture, width, height, setupError));
+				if (!transfer) break;
+				transfers.push_back(transfer);
+				auto started = std::make_shared<std::promise<std::string>>();
+				ready.push_back(started->get_future());
+				m_Writers.push_back(FloatingPointEnvironment::StartThread([this, transfer, started, width, height] {
+					const int64_t cpuBefore = ThreadCpuNanoseconds();
+					std::string error;
+					try {
+						std::vector<unsigned char> pixels(static_cast<std::size_t>(width) * height * 3);
+						if (!m_ReadbackContext->Complete(*transfer, pixels, error) && error.empty()) error = "capture writer setup failed";
+					} catch (const std::exception& failure) { error = failure.what(); }
+					HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - cpuBefore);
+					started->set_value(error);
+					if (error.empty()) WriterLoop();
+				}));
+			}
+			for (auto& writer: ready) {
+				const std::string error = writer.get();
+				if (!error.empty() && setupError.empty()) setupError = error;
+			}
+			for (const auto& transfer: transfers) if (transfer->buffer || transfer->ready) FrameReadbackContext::Discard(*transfer);
+			glad_glDeleteTextures(1, &texture);
+			HarnessCost::Charge(HarnessCost::Recorder, setupCost.Stop());
+			if (!setupError.empty()) { Finish(); return refuse(setupError); }
+		} else
+#endif
+		{
+			for (std::size_t writer = 0; writer < writers; ++writer) m_Writers.push_back(FloatingPointEnvironment::StartThread(&FrameRecorder::WriterLoop, this));
+		}
 		return true;
 	}
 
