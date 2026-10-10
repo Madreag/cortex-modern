@@ -115,7 +115,32 @@ namespace RTE::CheckpointLua {
 				if (!tvisfunc(&*value)) throw std::runtime_error("frozen iterator snapshot requires a function");
 				// Only iterators were described; the live helper answers any other function with nothing.
 				const auto found = m_Iterators.find(gcval(&*value));
-				return found == m_Iterators.end() ? 0 : found->second.Push(destination, view, carried);
+				if (found != m_Iterators.end()) return found->second.Push(destination, view, carried);
+				const auto* function = funcV(&*value);
+				const auto& heap = view.Heap();
+				if (heap.Read(&function->c.ffid) != FF_C || heap.Read(&function->c.f) != ScriptGraphValueIteratorNext) return 0;
+				// A restored range already owns its values in the frozen Lua heap.
+				const TValue values = heap.Read(&function->c.upvalue[0]);
+				const TValue owner = heap.Read(&function->c.upvalue[1]);
+				const TValue position = heap.Read(&function->c.upvalue[2]);
+				const TValue origin = heap.Read(&function->c.upvalue[3]);
+				view.Push(destination, values);
+				const int table = lua_gettop(destination);
+				lua_getfield(destination, table, "count");
+				const int count = lua_tointeger(destination, -1); lua_pop(destination, 1);
+				const int index = static_cast<int>(numberVnum(&position)), first = static_cast<int>(numberVnum(&origin));
+				lua_newtable(destination);
+				lua_pushboolean(destination, true); lua_setfield(destination, -2, "owned");
+				lua_pushinteger(destination, first + index); lua_setfield(destination, -2, "first");
+				lua_pushinteger(destination, count - index); lua_setfield(destination, -2, "count");
+				view.Push(destination, owner); lua_setfield(destination, -2, "owner");
+				lua_newtable(destination);
+				for (int item = index + 1; item <= count; ++item) {
+					lua_pushinteger(destination, item); lua_gettable(destination, table);
+					lua_rawseti(destination, -2, item - index);
+				}
+				lua_setfield(destination, -2, "values");
+				return 1;
 			}
 			if (!value || !tvisudata(&*value)) {
 				if (name == "_ScriptGraphMembers" || name == "_ScriptGraphInstance" || name == "_ScriptGraphNative" || name == "_ScriptGraphNativeAddress") {
@@ -536,7 +561,6 @@ namespace RTE::CheckpointLua {
 			if (!m_ClassMarker) m_ClassMarker = key("__luabind_class");
 			const auto* iteratorKey = key("__iterator_snapshot");
 			std::pmr::vector<TValue> values(m_TransientResource);
-			std::pmr::vector<TValue> iterators(m_TransientResource);
 			bool plain = true;
 			ForEachUserdata(State(), false, true, [&](GCudata* data) {
 				if (!plain) return;
@@ -570,13 +594,11 @@ namespace RTE::CheckpointLua {
 				if (plain) values.push_back(value);
 			});
 			// Iterator hooks can execute mod code and retain the filtered live walk.
-			for (GCobj* object = gcnext(obj2gco(mainthread(G(State())))); plain && object; object = gcnext(object)) {
+			for (GCobj* object = gcref(G(State())->gc.root); plain && object; object = gcnext(object)) {
 				if (object->gch.gct != ~LJ_TFUNC) continue;
 				const auto* function = gco2func(object);
 				if (!IteratorCandidate(function)) continue;
-				if (function->c.f == ScriptGraphValueIteratorNext) {
-					TValue value; setgcVraw(&value, object, LJ_TFUNC); iterators.push_back(value); continue;
-				}
+				if (function->c.f == ScriptGraphValueIteratorNext) continue;
 				const auto* meta = tabref(udataV(&function->c.upvalue[0])->metatable);
 				if (!meta) continue;
 				const auto* hook = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(iteratorKey));
@@ -611,7 +633,6 @@ namespace RTE::CheckpointLua {
 					CaptureUserdata(value);
 				}
 			}
-			for (const TValue& value: iterators) CaptureIterator(value);
 			for (size_t index = 0; index < m_Queue.size(); ++index) {
 				const TValue value = m_Queue[index];
 				if (tvisudata(&value) && std::none_of(values.begin(), values.end(), [&](const TValue& captured) { return captured.u64 == value.u64; })) CaptureUserdata(value);

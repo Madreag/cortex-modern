@@ -10662,6 +10662,43 @@ end
 			checkpointValues = exact && checkpointValues;
 		}
 		{
+			LuaStateWrapper plain;
+			plain.Initialize(); plain.LoadScriptGraphHelper();
+			bool exact = plain.RunScriptString(R"lua(
+local next = _ScriptGraphIteratorFromValues({Vector(1, 2), Vector(3, 4), Vector(5, 6)}, nil, 150, 3)
+next()
+_BoundaryOwnedIterator = { next = next, alias = next, thread = coroutine.create(function()
+	local value = next()
+	coroutine.yield(value)
+	return next()
+end) }
+assert(coroutine.resume(_BoundaryOwnedIterator.thread))
+)lua") == 0;
+			std::string reference;
+			std::vector<std::string> problems;
+			exact = plain.SerializeScriptGraph(reference, problems) && exact;
+			CheckpointText captured;
+			FrozenCaptureStats stats;
+			{
+				struct RestoreStats {
+					FrozenCaptureStats* previous = LuaMan::s_FrozenCaptureStats;
+					~RestoreStats() { LuaMan::s_FrozenCaptureStats = previous; }
+				} restoreStats;
+				LuaMan::s_FrozenCaptureStats = &stats;
+				CheckpointWriter::BatchScope batch(true);
+				CheckpointNativeSnapshot::BoundaryScope boundary(std::make_shared<CheckpointNativeSnapshot>());
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::ParallelSubmission);
+				exact = plain.CaptureScriptGraph(captured, problems, true) && exact;
+			}
+			plain.RunScriptString("_BoundaryOwnedIterator.next(); _BoundaryOwnedIterator = nil; collectgarbage('collect')");
+			const std::string actual = std::async(std::launch::async, [captured] { return captured.Text(); }).get();
+			exact = problems.empty() && stats.plainStates == 1 && actual == reference && exact;
+			std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " restored_iterator_ranges_finish_from_the_frozen_heap plain=" << stats.plainStates
+			    << " refusal=" << stats.plainRefusal << " problems=" << problems.size() << " bytes_exact=" << (actual == reference) << std::endl;
+			showMismatch("owned-iterator", reference, actual);
+			checkpointValues = exact && checkpointValues;
+		}
+		{
 			for (bool custom: {false, true}) {
 				MovableMan::ConstructionRegistryScope world;
 				auto actor = std::make_unique<Actor>();
