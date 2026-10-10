@@ -565,6 +565,12 @@ namespace RTE::CheckpointLua {
 			const auto* iteratorKey = key("__iterator_snapshot");
 			std::pmr::vector<TValue> values(m_TransientResource);
 			bool plain = true;
+			// A C closure can hold iterator state only in a userdata, and every userdata is judged here, so a hooked
+			// metatable refuses whether or not a closure still holds the userdata.
+			const auto hooked = [&](const GCtab* meta) {
+				const auto* hook = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(iteratorKey));
+				return tabref(meta->metatable) || (hook && tvisfunc(hook));
+			};
 			ForEachUserdata(State(), false, true, [&](GCudata* data) {
 				if (!plain) return;
 				const auto* meta = tabref(data->metatable);
@@ -572,15 +578,16 @@ namespace RTE::CheckpointLua {
 				const auto* marker = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(classKey));
 				const bool descriptor = marker && !tvisnil(marker) && !tvisfalse(marker);
 				if (descriptor && data->len != sizeof(luabind::detail::class_rep)) { m_PlainRefusal = "descriptor layout"; plain = false; return; }
+				if (descriptor && hooked(meta)) { m_PlainRefusal = "iterator hook"; plain = false; return; }
 				TValue value; setgcVraw(&value, obj2gco(data), LJ_TUDATA);
 				if (!descriptor) {
 					const auto* objectMarker = lj_tab_getstr(const_cast<GCtab*>(meta), m_ClassMarker);
 					if (!objectMarker || tvisnil(objectMarker) || tvisfalse(objectMarker)) {
-						const auto* hook = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(iteratorKey));
-						if (tabref(meta->metatable) || (hook && tvisfunc(hook))) { m_PlainRefusal = "userdata hook"; plain = false; return; }
+						if (hooked(meta)) { m_PlainRefusal = "userdata hook"; plain = false; return; }
 						values.push_back(value); return;
 					}
 					if (data->len < sizeof(luabind::detail::object_rep) || tabref(meta->metatable)) { m_PlainRefusal = "binding metatable"; plain = false; return; }
+					if (hooked(meta)) { m_PlainRefusal = "iterator hook"; plain = false; return; }
 					const auto* object = static_cast<const luabind::detail::object_rep*>(uddata(data));
 					const auto* type = object->crep();
 					if (!object->ptr() || !type || type->get_class_type() != luabind::detail::class_rep::cpp_class) { m_PlainRefusal = "binding lifetime or Lua class"; plain = false; return; }
@@ -596,20 +603,23 @@ namespace RTE::CheckpointLua {
 				}
 				if (plain) values.push_back(value);
 			});
-			// Iterator hooks can execute mod code and retain the filtered live walk.
-			for (GCobj* object = gcref(G(State())->gc.root); plain && object; object = gcnext(object)) {
-				if (object->gch.gct != ~LJ_TFUNC) continue;
-				const auto* function = gco2func(object);
-				if (!IteratorCandidate(function)) continue;
-				if (function->c.f == ScriptGraphValueIteratorNext) {
-					const TValue& values = function->c.upvalue[0];
-					if (!tvistab(&values) || tabref(tabV(&values)->metatable)) { m_PlainRefusal = "iterator values metatable"; plain = false; }
-					continue;
+			// The value iterators registered themselves when made; a values table with a metatable can run mod code.
+			if (plain) {
+				const int top = lua_gettop(State());
+				lua_getfield(State(), LUA_REGISTRYINDEX, "_ScriptGraphIterators");
+				if (lua_istable(State(), -1)) {
+					lua_pushnil(State());
+					while (lua_next(State(), top + 1)) {
+						const TValue key = At(-2);
+						lua_pop(State(), 1);
+						if (!tvisfunc(&key)) continue;
+						const GCfunc* function = funcV(&key);
+						if (!iscfunc(function) || function->c.f != ScriptGraphValueIteratorNext) continue;
+						const TValue& iterated = function->c.upvalue[0];
+						if (!tvistab(&iterated) || tabref(tabV(&iterated)->metatable)) { m_PlainRefusal = "iterator values metatable"; plain = false; break; }
+					}
 				}
-				const auto* meta = tabref(udataV(&function->c.upvalue[0])->metatable);
-				if (!meta) continue;
-				const auto* hook = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(iteratorKey));
-				if (tabref(meta->metatable) || (hook && tvisfunc(hook))) { m_PlainRefusal = "iterator hook"; plain = false; }
+				lua_settop(State(), top);
 			}
 			if (!plain) return false;
 			const auto answers = std::chrono::steady_clock::now();
