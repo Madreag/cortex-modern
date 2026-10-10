@@ -1152,6 +1152,7 @@ namespace RTE {
 				NetLockstepConfig config; config.matchConfig = NetMatchConfigUtil::MakeDefault(0x42248);
 				config.sessionId = config.matchConfig.sessionId; config.localPeerId = id; config.peerCount = 2; config.roundId = id == 1 ? 77 : 0;
 				config.startFrame = 1; config.inputDelayFrames = 1; config.peerInputDelayFrames = {{1, 1}, {2, 1}};
+				config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = c_NetSlowPlayerBoundTicks;
 				config.peerFrameGroups = config.substituteSlowPeers = true; config.peerSessionLinks = links[id - 1]; config.migrationKey.fill(0x39);
 				config.remoteTransportPeerIds = {{static_cast<uint8_t>(3 - id), 1}};
 				if (!peers[id - 1].Start(id == 1 ? nativeHost : nativeClient, config, error)) return false;

@@ -174,7 +174,7 @@ namespace RTE {
 			std::map<int64_t, int64_t> positions;
 			std::map<uint64_t, NetHash32> hashes;
 			bool Apply(const NetLockstepReadyFrame& ready, std::string& error) {
-				if (ready.frame != applied + 1) { error = "a displayed frame was skipped or undone"; return false; }
+				if (ready.frame != applied + 1) { error = "a displayed frame was skipped or undone: expected=" + std::to_string(applied + 1) + " actual=" + std::to_string(ready.frame); return false; }
 				for (const auto* inputs: {&ready.localFrames, &ready.remoteFrames}) for (const auto& input: *inputs) positions[input.actorUniqueID] += input.analogMoveX;
 				applied = ready.frame;
 				std::string state = std::to_string(applied);
@@ -422,7 +422,11 @@ namespace RTE {
 					if (!IsAffected(id) && !doubleFailure && maxWait[id - 1] > (row.internet && row.seats == 2 ? 1000 : static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs)))) {
 						error = "non-lagging peer " + std::to_string(id) + " stalled " + std::to_string(maxWait[id - 1]) + "ms past its bound"; return false;
 					}
-					if (!caughtAt[id - 1]) { error = "a retained seat did not return automatically"; return false; }
+					if (!caughtAt[id - 1]) {
+						error = "a retained seat did not return automatically: peer=" + std::to_string(id) + " applied=" + std::to_string(worlds[id - 1].applied) +
+						    " prepared=" + std::to_string(peers[id - 1]->GetStats().nextFrame) + " bridge_count=" + std::to_string(Bridges(*peers[id - 1]).size());
+						return false;
+					}
 					const uint8_t held = row.seats == 2 && !row.internet ? 2 : row.subject;
 					if (peers[id - 1]->HasHeldAISeat(held) || Bridges(*peers[id - 1]).contains(held)) { error = "the returning human seat stayed bridged after catch-up"; return false; }
 					if (row.gapMs <= 3000 && caughtAt[id - 1] > hub.faultEnd + c_TestReturnAllowanceMs) { error = "return exceeded the spike plus its catch-up allowance"; return false; }

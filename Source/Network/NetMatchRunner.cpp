@@ -89,6 +89,9 @@ namespace RTE {
 		// A round's start scripts ride the same stream as a match image, but the round starts fresh.
 		m_ResyncRound = !m_StateToStream.empty() && !IsRoundStartScriptBlob(m_StateToStream);
 		m_MatchConfig = config.matchConfig;
+		// Publish the runner's initial policy with its delays. A later lobby
+		// revision must not turn a manually sized launch into an automatic one.
+		if (config.host) m_MatchConfig.delayPolicy = config.autoInputDelay ? NetMatchDelayPolicy::Auto : NetMatchDelayPolicy::Fixed;
 		m_ActivePeerIds = m_MatchConfig.activePeerIds;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
 		m_SetupError.clear();

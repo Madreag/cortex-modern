@@ -1321,7 +1321,7 @@ namespace RTE {
 		uint8_t HostAuthorityAt(uint64_t frame) const;
 		uint8_t SimulationHostPeerId() const { NET_PLANE_CHECK(); return HostAuthorityAt(m_GrantedSimulationTick.value_or(GetResumeFrame())); }
 		bool IsMigrating() const { NET_PLANE_CHECK(); return m_State == NetLockstepState::Running && (m_MigrationPhase == NetHostMigrationPhase::Contacting || m_MigrationPhase == NetHostMigrationPhase::Recovering || m_MigrationPhase == NetHostMigrationPhase::WaitingForReady || m_MigrationPhase == NetHostMigrationPhase::ResyncAdmission); }
-		bool IsMigrationCatchUp() const { NET_PLANE_CHECK(); return IsMigrating() && GetResumeFrame() <= m_MigrationBoundary; }
+		bool IsMigrationCatchUp() const { NET_PLANE_CHECK(); return !UsesPeerFrameGroups() && IsMigrating() && GetResumeFrame() <= m_MigrationBoundary; }
 		NetHostMigrationPhase GetMigrationPhase() const { NET_PLANE_CHECK(); return m_MigrationPhase; }
 		NetHostMigrationResult GetMigrationResult() const { NET_PLANE_CHECK(); return m_MigrationResult; }
 		std::string GetMigrationAddress() const { NET_PLANE_CHECK(); return m_MigrationAddress; }

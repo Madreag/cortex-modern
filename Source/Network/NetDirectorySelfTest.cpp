@@ -195,7 +195,20 @@ namespace RTE {
 		class DirectHost final : public INetTransport {
 		public:
 			bool connected = false;
+			bool lobbyAccepted = false, lobbyReady = false, lobbyStarted = false;
+			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(73);
 			std::vector<NetTransportEvent> pending;
+			DirectHost() {
+				match.inputDelayFrames = 1; match.delayPolicy = NetMatchDelayPolicy::Fixed;
+				match.successorOrder = {2};
+				match.migrationPeers = {{1, 47468, {"127.0.0.1"}}, {2, 47469, {"127.0.0.1"}}};
+			}
+			bool ReplyLobby(const NetLobbyMessage& message) {
+				std::vector<uint8_t> encoded;
+				if (!NetLobbyProtocol::Encode(message, encoded)) return false;
+				pending.push_back({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, std::move(encoded)});
+				return true;
+			}
 			bool StartHost(uint16_t, std::string*) override { return true; }
 			bool Connect(const std::string& address, uint16_t port, std::string*) override {
 				connected = address == "127.0.0.1" && port == 47468;
@@ -210,6 +223,24 @@ namespace RTE {
 					accepted.payload = NetJoinAccepted{73, 1, 2, NetProtocol::c_Version, 1000, 4000};
 					if (!NetProtocol::Encode(accepted, reply)) return false;
 				} else {
+					// The direct fallback speaks the same lobby and frame-credential
+					// exchange as every V1 match; its route assertions stay below.
+					const auto lobby = NetLobbyProtocol::Decode(bytes);
+					if (lobby.ok) {
+						if (std::holds_alternative<NetLobbyHello>(lobby.message.payload)) {
+							NetLobbyMigration capsule; capsule.kind = 2; capsule.peerId = 2;
+							capsule.configHash = NetMatchConfigUtil::HashConfig(match); capsule.sealedState.assign(32, 0x5A);
+							if (!ReplyLobby({NetLobbyMatchConfig{match}}) || !ReplyLobby({capsule})) return false;
+						}
+						if (const auto* ack = std::get_if<NetLobbyConfigAck>(&lobby.message.payload))
+							lobbyAccepted = ack->peerId == 2 && ack->accepted && ack->matchConfigHash == NetMatchConfigUtil::HashConfig(match);
+						if (const auto* ready = std::get_if<NetLobbyReady>(&lobby.message.payload)) lobbyReady = ready->peerId == 2 && ready->ready;
+						if (lobbyAccepted && lobbyReady && !lobbyStarted) {
+							lobbyStarted = true;
+							if (!ReplyLobby({NetLobbyStart{73, 0, 1, NetMatchConfigUtil::HashConfig(match)}})) return false;
+						}
+						return true;
+					}
 					const auto round = NetLockstepCodec::Decode(bytes);
 					if (round.ok && std::holds_alternative<NetLockstepStart>(round.packet.payload)) {
 						auto start = std::get<NetLockstepStart>(round.packet.payload);

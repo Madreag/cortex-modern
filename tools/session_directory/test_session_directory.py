@@ -556,7 +556,7 @@ class DirectoryTests(unittest.TestCase):
         self.assertIn("--create-owner-key", strings, "U2: the fresh ICE directory omits owner-key creation")
 
     def test_U3_parsed_saturation_answers_503_with_retry(self) -> None:
-        self.start(port=47470)
+        self.start()  # The socket number is not part of the saturation oracle.
         slots = self.server.httpd._handler_slots
         held = 0
         while held < session_directory.MAX_ACTIVE_HANDLERS:
@@ -3411,7 +3411,9 @@ class ConnectionAuthorityTests(unittest.TestCase):
         self.referee_fixture()
         self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [0, 1])
         for frame in range(100, 165):
-            self.now += 1; self.wall += 1
+            # Cross the old 64-tie retention limit without also exhausting
+            # the independent 64-request replay/rate window for one seat.
+            self.now += 3; self.wall += 3
             self.assertEqual(self.frame_check_in(2, [2, 3], frame=frame)["status"], "waiting")
         self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [0, 1])
         record = dict(self.store.connections.records())[self.sid]

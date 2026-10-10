@@ -6606,6 +6606,9 @@ namespace RTE {
 			timing.requiredPeers |= static_cast<uint8_t>(1U << (survivor - 1));
 		m_RemoteTransports[peer] = transport;
 		m_TimingDecisions[timing.revision] = {timing, static_cast<uint8_t>(1U << (GetHostPeerId() - 1)), false, m_TimingNowMs};
+		// The host orders the future admission immediately. Its pending timing
+		// decision still gates the boundary until the residents receive it.
+		ApplyTiming(timing);
 		QueueTiming(timing);
 		CommitTiming(timing.revision);
 		return true;
@@ -7195,8 +7198,11 @@ namespace RTE {
 		auto& decision = found->second;
 		// A world activation must reach every surviving acknowledger before
 		// its slot can become active. Combat holds use their ordered boundary.
-		if (decision.proposal.action == NetTimingAction::WorldAdmission &&
-		    (decision.acknowledgedPeers & decision.proposal.requiredPeers) != decision.proposal.requiredPeers) return;
+		if (decision.proposal.action == NetTimingAction::WorldAdmission) {
+			uint8_t required = decision.proposal.requiredPeers;
+			for (uint8_t peer: m_RemotePeerIds) if (IsPeerGoneAtFrame(peer, decision.proposal.applyFrame)) required &= static_cast<uint8_t>(~(1U << (peer - 1)));
+			if ((decision.acknowledgedPeers & required) != required) return;
+		}
 		// The current host alone orders this boundary; receipts only track its delivery.
 		NetLockstepTiming commit = decision.proposal;
 		if (commit.action == NetTimingAction::Reclaim && commit.peerId == GetHostPeerId() && !IsOrderedHostReturn(commit)) {
@@ -7216,7 +7222,7 @@ namespace RTE {
 			while (m_DecisionCommittedAtMs.size() > 64) m_DecisionCommittedAtMs.erase(m_DecisionCommittedAtMs.begin());
 		}
 		FlushTimingOutgoing();
-		ApplyTiming(commit);
+		if (commit.action != NetTimingAction::WorldAdmission || !HasWorldAdmission(commit.peerId, commit.applyFrame)) ApplyTiming(commit);
 		if (commit.action == NetTimingAction::Hold) {
 			std::vector<uint64_t> waiting;
 			for (const auto& [other, pending]: m_TimingDecisions) if (!pending.committed) waiting.push_back(other);

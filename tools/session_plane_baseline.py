@@ -50,7 +50,7 @@ def main():
         write(relative, text.replace(needle, needle + addition, 1))
 
     for name in ("NetSessionPlaneSelfTest.cpp", "NetSessionPlaneSelfTest.h", "NetLockstepSelfTest.h",
-                 "NetMatchSelfTest.cpp", "NetReconnectSessionSelfTest.cpp", "NetRejoinMatrixSelfTest.cpp"):
+                 "NetMatchSelfTest.cpp", "NetReconnectSessionSelfTest.cpp", "NetRejoinMatrixSelfTest.cpp", "NetDirectorySelfTest.cpp"):
         write("Source/Network/" + name, (tip / "Source/Network" / name).read_text(encoding="utf-8"))
     native = (tip / "Source/Network/NetLockstepSelfTest.cpp").read_text(encoding="utf-8")
     # Run the rewritten assertions themselves, including their unchanged claim,

@@ -25749,7 +25749,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		// Recovery carries an applied release to the survivor that missed its commit.
 		bool TestAReleaseTheHostTookWithItEndsOnOneFrame(std::string* error) {
 			const char* name = "a_release_the_host_took_with_it_ends_on_one_frame";
-			if (!NetSessionPlaneSelfTest::CheckHostAdministration(0, error)) return false;
+			if (!NetSessionPlaneSelfTest::CheckHostAdministration(0, error)) return ReportReleasedClaimsRow(name, *error, error);
 			EnsureSwitchTestManagers();
 			NetActorOwnership::ClearSeededOwners();
 			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow(name, why, error); };
@@ -26256,7 +26256,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!ScenarioRunner::BeginLockstepReplayRecord(round.match, &round.failure)) return fail(round.failure);
 			round.recording = true;
 			for (int turn = 0; turn < 15; ++turn) round.Pump();
-			if (!round.Migrate()) return fail("the recording fixture did not migrate");
+			if (!round.Migrate()) return fail("the recording fixture did not migrate: " + round.failure);
 			const uint64_t boundary = round.peers[1].GetMigrationResult().boundary;
 			if (!round.HoldFourth()) return fail(round.failure);
 			for (int turn = 0; turn < 25; ++turn) round.Pump();
@@ -26315,7 +26315,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		const auto agreed = round.hostWire.Last(NetTimingAction::Release, NetTimingPhase::Commit);
 		if (!agreed || round.peers[1].SeatReleases().empty() || round.peers[1].m_ReleasedAiSeats.contains(4) ||
 		    round.peers[1].GetResumeFrame() >= agreed->applyFrame) return fail("the successor did not learn only a future release Commit");
-		if (!round.Migrate()) return fail("the commit-only survivor did not become host");
+		if (!round.Migrate()) return fail("the commit-only survivor did not become host: " + round.failure);
 		const auto settlePrefix = [&] {
 			// A successor waits for retained-input receipts; its survivor may have applied one more tick. Stop both at the
 			// same completed prefix so the claim comparison neither reapplies that tick nor compares unequal ranges.

@@ -101,7 +101,11 @@ namespace RTE {
 				if (bridge.returnFrame || peer == m_Config.localPeerId) continue;
 				const uint64_t delay = InputDelayAt(peer, frame);
 				const uint64_t heard = LastAuthenticatedTraffic(peer);
-				if (nowMs < heard || nowMs - heard > 1000 || !m_PeerAppliedThrough.contains(peer) || m_PeerAppliedThrough.at(peer) + delay < frame) continue;
+				const auto applied = m_PeerAppliedThrough.find(peer);
+				if (nowMs < heard || nowMs - heard > 1000 || applied == m_PeerAppliedThrough.end()) continue;
+				// The next sample is produced at applied + 1. A tail reader cannot
+				// get one displayed tick ahead of the group that supplies its tail.
+				if (frame > applied->second && frame - applied->second > delay + 1) continue;
 				proposal.members.push_back(peer); proposal.connectedMask |= SeatBit(peer);
 			}
 			if (proposal.members.empty()) return false;
@@ -119,7 +123,10 @@ namespace RTE {
 				if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end()) agreementMs = std::max<uint64_t>(agreementMs, path->second.P95Ms());
 			// Votes spend the buffered runway, so a healthy relay round trip fits inside the consumer's bound.
 			if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame) {
-				const double dueMs = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
+				double dueMs = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
+				// Catch-up can ask for this tick before its original pacing slot.
+				// Its actual consumer wait still has the same three-tick bound.
+				if (m_ConsumerWaitingFrame == frame) dueMs = std::min(dueMs, static_cast<double>(m_ConsumerWaitStartMs));
 				if (nowMs + agreementMs < dueMs + boundMs) return false;
 			} else if (m_ConsumerWaitingFrame != frame || nowMs < m_ConsumerWaitStartMs ||
 			    nowMs - m_ConsumerWaitStartMs < boundMs - std::min(boundMs, agreementMs)) return false;

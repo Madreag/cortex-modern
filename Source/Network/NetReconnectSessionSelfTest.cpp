@@ -1966,22 +1966,30 @@ namespace RTE {
 					}
 					return false;
 				};
-				// Peer 2's socket goes away: the relay host adjudicates it as a leave, and from there on
-				// ResolveActorOwner renames its units.
+				// Losing the socket orders a held seat at the first missing tick.
 				aT.Stop();
 				if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(2) != 0; })) {
 					*error = "the drop was never adjudicated as a leave";
+					return false;
+				}
+				const uint64_t boundary = host.GetPeerLeaveFrames().at(2);
+				for (uint64_t frame = host.GetResumeFrame(); frame <= boundary; ++frame)
+					if (!host.QueueLocalInput(frame, {}, {}, error) || !clientB.QueueLocalInput(frame, {}, {}, error)) return false;
+				if (!drive(2000, [&] {
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) host.FinishSimulationTick(ready.frame);
+					return host.GetResumeFrame() > boundary;
+				})) {
+					*error = "the ledger fixture did not apply the held boundary";
 					return false;
 				}
 				return true;
 			}
 		};
 
-		// The ledger records who HELD a seat's units at the drop. The round renames a leaver's units the
-		// moment it adjudicates the leave - to a surviving teammate, or to the relay host while the round
-		// runs - so a census taken after that names anyone but the leaver, and a ledger filtered on the
-		// leaver's id comes back empty. An empty record makes IssueReseat return before it issues, which
-		// is a returner reseated onto nothing.
+		// The held seat keeps its claims while the host produces its AI input. The
+		// ledger must census those claims, not mistake the substitute producer for
+		// their owner; otherwise a returning player would be reseated onto nothing.
 		int TestLedgerRecordsWhatTheLeaverHeld() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -1993,14 +2001,13 @@ namespace RTE {
 				const char* label;
 				uint16_t port;
 				std::vector<NetMatchPlayerSlot> players;
-				uint8_t renamedOwner;    //!< Who the leave hands peer 2's units to.
+				uint8_t renamedOwner;    //!< The held seat's AI input producer.
 				int64_t handedToPeerThree; //!< A unit peer 3 already holds, so it is not peer 2's to get back.
 				std::vector<int64_t> expected;
 			};
 			const std::vector<Arm> arms = {
-			    // Co-op shape: peers 2 and 3 share team 1, so the leave hands peer 2's units to peer 3 and
-			    // they must hand back per the ledger.
-			    {"survivor", 42180, {{1, 0, false, "Host"}, {2, 1, false, "A"}, {3, 1, false, "B"}}, 3, 103, {101, 102}},
+			    // The teammate's earlier handoff remains theirs; the held seat keeps its other claims.
+			    {"survivor", 42180, {{1, 0, false, "Host"}, {2, 1, false, "A"}, {3, 1, false, "B"}}, 1, 103, {101, 102}},
 			    // The 1v1 shape the H4 gates run: nobody is left on team 1, so the relay host plays its units.
 			    {"no-survivor", 42184, {{1, 0, false, "Host"}, {2, 1, false, "A"}, {3, 2, false, "B"}}, 1, 0, {101, 102, 103}},
 			};
@@ -2021,7 +2028,11 @@ namespace RTE {
 					ScenarioRunner::SetLockstepCoordinator(nullptr);
 					return Fail(message + where);
 				};
-				// The rename is the whole point: without it the census would still name the leaver.
+				// The producer changes at the applied boundary while the claim stays reclaimable.
+				const uint64_t boundary = round.host.GetPeerLeaveFrames().at(2);
+				if (!round.host.IsSeatUnderAI(2, boundary) || !round.host.IsSeatReclaimableAt(2, boundary) ||
+				    round.host.IsSeatReleased(2) || round.host.ResolveActorOwnerBeforeLeaves(101, 1, false) != 2)
+					return fail("the held boundary lost the seat's reclaimable claim");
 				if (round.host.ResolveActorOwner(101, 1, false) != arm.renamedOwner) {
 					return fail("the leave did not rename the dropped peer's units");
 				}
