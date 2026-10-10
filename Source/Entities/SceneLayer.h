@@ -69,6 +69,8 @@ namespace RTE {
 	private:
 		template <bool, bool> friend class SceneLayerImpl;
 		static std::shared_ptr<const BitmapSnapshot> CaptureRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll, std::optional<bool> packed = {});
+		/// Shares one row for a bitmap of a single colour, or returns none.
+		static std::shared_ptr<const BitmapSnapshot> UniformRows(const BITMAP* source, int depth, size_t rowBytes);
 		static std::shared_ptr<const BitmapSnapshot> FreezeRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll);
 		struct Pixels {
 			Pixels(size_t size, size_t rowBytes);

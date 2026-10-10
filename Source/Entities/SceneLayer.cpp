@@ -155,12 +155,35 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::Freeze(const BITMAP* sourc
 	return FreezeRows(source, previous, nullptr, false);
 }
 
+std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::UniformRows(const BITMAP* source, int depth, size_t rowBytes) {
+	const size_t pixelBytes = static_cast<size_t>((depth + 7) / 8);
+	const auto* first = static_cast<const uint8_t*>(source->line[0]);
+	// One row of the first pixel, which every row of a single-colour bitmap equals.
+	thread_local std::vector<uint8_t> pattern;
+	pattern.resize(rowBytes);
+	for (size_t offset = 0; offset < rowBytes; offset += pixelBytes) std::memcpy(pattern.data() + offset, first, pixelBytes);
+	for (int y = 0; y < source->h; ++y) {
+		if (std::memcmp(source->line[y], pattern.data(), rowBytes) != 0) return {};
+	}
+	auto row = std::make_shared<Pixels>(rowBytes, rowBytes);
+	std::memcpy(row->At(0), pattern.data(), rowBytes);
+	auto snapshot = std::make_shared<BitmapSnapshot>();
+	snapshot->width = source->w; snapshot->height = source->h; snapshot->depth = depth; snapshot->rowBytes = rowBytes;
+	snapshot->fullCopyPercent = BitmapFullCopyPercent();
+	snapshot->dirtyBytes = snapshot->unmarkedDirtyBytes = snapshot->LogicalBytes();
+	snapshot->dirtyRegionCount = 1;
+	snapshot->copiedBytes = rowBytes;
+	snapshot->rows.assign(source->h, Row{row, 0});
+	return snapshot;
+}
+
 std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::FreezeRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll) {
 	if (source && source->w > 0 && source->h > 0) {
 		const int depth = bitmap_color_depth(const_cast<BITMAP*>(source));
 		if (depth != 8 && depth != 15 && depth != 16 && depth != 24 && depth != 32)
 			throw std::runtime_error("Unsupported scene layer bitmap snapshot");
 		const size_t rowBytes = static_cast<size_t>(source->w) * ((depth + 7) / 8);
+		if (!previous && !markedRows && !markedAll) if (auto uniform = UniformRows(source, depth, rowBytes)) return uniform;
 		if (const auto allocation = PixelAllocations::Find(source, rowBytes); allocation && allocation->Bytes() > PageWriteFence::SystemPageBytes()) {
 			auto snapshot = std::make_shared<BitmapSnapshot>();
 			snapshot->width = source->w; snapshot->height = source->h; snapshot->depth = depth; snapshot->rowBytes = rowBytes;
