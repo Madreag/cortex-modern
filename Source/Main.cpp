@@ -1900,6 +1900,10 @@ void InitializeManagers() {
 /// Destroys all the managers and frees all loaded data before termination.
 /// </summary>
 static bool s_MatchDestroyedForQuit = false;
+static bool s_Fight15CloseSelfTest = false;
+static void ObserveFight15Close(const char* phase) {
+	if (s_Fight15CloseSelfTest) System::PrintDiagnosticLine("[fight15-selftest] R7 shutdown " + std::string(phase) + " ticks_ms=" + std::to_string(SDL_GetTicks()));
+}
 
 void DestroyManagers() {
 	g_SimChecksum.Destroy();
@@ -1930,9 +1934,11 @@ void DestroyManagers() {
 }
 
 int ShutDown(int exitCode) {
+	ObserveFight15Close("begin");
 	// A quit during the identity walk must not sit through the rest of the disk pass; what it finished
 	// is kept. This runs before the statics are torn down, where the future would wait unasked.
 	NetIdentity::StopManifestPriming();
+	ObserveFight15Close("manifest_stopped");
 	// The writer holds frames the run has already presented, so it drains while SDL is still up.
 	FrameRecorder::Instance().Finish();
 	MenuAutomation::ReportWatches();
@@ -1972,9 +1978,16 @@ int ShutDown(int exitCode) {
 		g_NetMatchService.Destroy();
 		s_MatchDestroyedForQuit = true;
 	}
+	if (s_Fight15CloseSelfTest) {
+		const bool idle = g_NetMatchService.GetState() == NetMatchServiceState::Idle;
+		System::PrintDiagnosticLine("[fight15-selftest] " + std::string(idle ? "PASS" : "FAIL") + " R7 session_is_idle_before_waiting_background_work");
+		if (!idle) exitCode = EXIT_FAILURE;
+	}
+	ObserveFight15Close("session_stopped");
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
 	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
 	g_ActivityMan.WaitForAutosaveTasks();
+	ObserveFight15Close("jobs_drained");
 	LocalPrediction::Clear();
 	PreviewEventLedger::Clear();
 	if (s_rbProbeOriginals.held) {
@@ -1996,10 +2009,13 @@ int ShutDown(int exitCode) {
 	if (!TelemetryBundle::Flush()) exitCode = EXIT_FAILURE;
 	g_ConsoleMan.SaveAllText("LogConsole.txt");
 	UInputMan::StopJoystickUpdater();
+	ObserveFight15Close("input_stopped");
 	DestroyManagers();
+	ObserveFight15Close("managers_destroyed");
 	TelemetryBundle::Finish();
 	allegro_exit();
 	SDL_Quit();
+	ObserveFight15Close("sdl_stopped");
 	std::cout.flush();
 	std::cerr.flush();
 	return exitCode;
@@ -11435,7 +11451,10 @@ int main(int argc, char** argv) {
 	}
 	if (netSeatSuccessionSelfTest) return ShutDown(NetLockstepSelfTest::RunSeatSuccession());
 	if (netSeatAdmissionSelfTest) return ShutDown(NetLockstepSelfTest::RunSeatAdmission());
-	if (!fight15SelfTest.empty()) return ShutDown(GameActivity::RunFight15SelfTest(fight15SelfTest) ? EXIT_SUCCESS : EXIT_FAILURE);
+	if (!fight15SelfTest.empty()) {
+		s_Fight15CloseSelfTest = fight15SelfTest == "R7";
+		return ShutDown(GameActivity::RunFight15SelfTest(fight15SelfTest) ? EXIT_SUCCESS : EXIT_FAILURE);
+	}
 	if (netMatchSelfTest) {
 		NetMatchService::Destruct();
 		const int result = netMatchLeaveCatchUpSelfTest ? NetMatchSelfTest::RunLeaveCatchUp() :

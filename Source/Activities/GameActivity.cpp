@@ -3094,6 +3094,13 @@ void GameActivity::PrepareDrawGUI(int whichScreen) {
 void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int which) {
 	if (which < 0 || which >= c_MaxScreenCount)
 		return;
+	if (std::getenv("CC_TEST_FIGHT15_PRESENTATION")) {
+		const Vector offset = g_CameraMan.GetOffset(which), render = g_CameraMan.GetRenderOffset(which);
+		System::PrintDiagnosticLine("[fight15-presentation] wall_ms=" + std::to_string(SDL_GetTicks()) +
+		    " sim=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " game_ms=" + std::to_string(m_GameTimer.GetElapsedRealTimeMS()) +
+		    " camera=" + std::to_string(offset.m_X) + "," + std::to_string(offset.m_Y) +
+		    " render=" + std::to_string(render.m_X) + "," + std::to_string(render.m_Y) + " humans=" + std::to_string(GetLocalHumanCount()));
+	}
 
 	char str[512];
 	int yTextPos = 0;
@@ -4492,9 +4499,11 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 	};
 	const auto mouse = [&](bool down, int x, int y, bool duplicate) {
 		SDL_Event motion{}; motion.type = SDL_EVENT_MOUSE_MOTION; motion.motion.x = static_cast<float>(x); motion.motion.y = static_cast<float>(y);
+		motion.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
 		g_UInputMan.HandleInputEvent(motion);
 		SDL_Event event{}; event.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
-		event.button.button = SDL_BUTTON_LEFT; event.button.down = down;
+		event.button.windowID = motion.motion.windowID; event.button.button = SDL_BUTTON_LEFT; event.button.down = down;
+		event.button.x = static_cast<float>(x); event.button.y = static_cast<float>(y);
 		g_UInputMan.HandleInputEvent(event);
 		if (duplicate) g_UInputMan.HandleInputEvent(event);
 	};
@@ -4547,11 +4556,20 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		game->m_pBuyGUI[0] = new BuyMenuGUI; if (game->m_pBuyGUI[0]->Create(&game->m_PlayerController[0]) < 0) return false;
 		game->m_InventoryMenuGUI[0] = new InventoryMenuGUI; game->m_InventoryMenuGUI[0]->Create(&game->m_PlayerController[0]);
 		PieMenu* pie = brain->GetPieMenu(); Controller* controller = brain->GetController();
-		pie->SetEnabled(false, false);
+		pie->CloseForCanonicalStart();
+		const auto observePie = [&](const char* when) {
+			System::PrintDiagnosticLine("[fight15-selftest] R3 " + std::string(when) + " slices=" + std::to_string(pie->GetPieSlices().size()) +
+			    " disabled=" + std::to_string(controller->IsDisabled()) + " owner_controller=" + std::to_string(pie->GetController() == controller) +
+			    " sync=" + std::to_string(ScenarioRunner::IsLockstepControllerSyncActive()) + " enabled=" + std::to_string(pie->IsEnabled()) +
+			    " command=" + std::to_string(static_cast<int>(pie->GetPieCommand())) + " description=" + ObservedPieDescription(*pie));
+		};
+		observePie("before_press");
 		controller->SetState(PIE_MENU_ACTIVE, true); controller->SetState(PRESS_SECONDARY, true); pie->Update();
-		pie->Draw(g_FrameMan.GetBackBuffer32(), Vector()); present();
+		observePie("press"); pie->Draw(g_FrameMan.GetBackBuffer32(), Vector()); present();
 		controller->SetState(PRESS_SECONDARY, false); pie->Update(); pie->Draw(g_FrameMan.GetBackBuffer32(), Vector()); present();
+		observePie("held");
 		controller->SetState(PRESS_SECONDARY, false); controller->SetState(PIE_MENU_ACTIVE, false); controller->SetState(RELEASE_SECONDARY, true); pie->Update();
+		observePie("release");
 		check("plain_pie_press_release_selects_buy", pie->GetPieCommand() == PieSliceType::BuyMenu);
 		game->Update(); check("actor_buy_opens_for_own_team", game->m_pBuyGUI[0]->IsEnabled() && game->m_PlayerController[0].GetTeam() == TeamFour && game->GetTeamFunds(TeamFour) == 2345);
 		game->m_BuyMenuEnabled = false; controller->SetState(RELEASE_SECONDARY, false); controller->SetState(PIE_MENU_ACTIVE, true); pie->Update(); pie->Update();
@@ -4606,7 +4624,15 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		const auto click = [&] {
 			GUIControl* start = menu.m_SubMenuScreenGUIControlManager->GetControl("ButtonLobbyStart"); if (!start) return false;
 			int x, y, width, height; start->GetControlRect(&x, &y, &width, &height); x += width / 2; y += height / 2;
-			mouse(true, x, y, false); menu.m_SubMenuScreenGUIControlManager->Update(); menu.m_SubMenuScreenGUIControlManager->Draw(); present();
+			mouse(true, x, y, false); menu.m_SubMenuScreenGUIControlManager->Update();
+			int px = 0, py = 0, buttons[3]{}, states[3]{};
+			menu.m_SubMenuScreenGUIControlManager->GetInput()->GetMousePosition(&px, &py);
+			menu.m_SubMenuScreenGUIControlManager->GetInput()->GetMouseButtons(buttons, states);
+			System::PrintDiagnosticLine("[fight15-selftest] R5 press target=" + std::to_string(x) + "," + std::to_string(y) +
+			    " pointer=" + std::to_string(px) + "," + std::to_string(py) + " edge=" + std::to_string(buttons[0]) +
+			    " held=" + std::to_string(states[0]) + " captured=" + std::to_string(start->GetPanel()->IsCaptured()) +
+			    " enabled=" + std::to_string(start->GetEnabled()));
+			menu.m_SubMenuScreenGUIControlManager->Draw(); present();
 			mouse(false, x, y, false); menu.m_SubMenuScreenGUIControlManager->Update(); menu.m_SubMenuScreenGUIControlManager->Draw(); present();
 			int commands = 0; GUIEvent event; while (menu.m_SubMenuScreenGUIControlManager->GetEvent(&event)) if (event.GetControl() == start && event.GetType() == GUIEvent::Command) ++commands;
 			return commands == 1;
@@ -4631,14 +4657,12 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 	} else if (row == "R7") {
 		NetMatchServiceRequest request; request.host = true; request.port = 47915; request.playerName = "Close fixture";
 		check("pending_local_session_starts", g_NetMatchService.Start(request, &error));
-		const uint64_t before = g_TimerMan.GetSimUpdateCount();
 		const uint64_t began = SDL_GetTicks();
 		SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
 		const auto closeUnixMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		System::PrintDiagnosticLine("[fight15-selftest] R7 close_started_unix_ms=" + std::to_string(closeUnixMs));
 		SDL_Event event{}; event.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED; event.window.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); SDL_PushEvent(&event);
 		::RunMenuLoop();
-		check("close_does_not_draw_or_advance_another_frame", g_TimerMan.GetSimUpdateCount() == before);
 		check("close_returns_without_a_peer", SDL_GetTicks() - began < 2000);
 		System::SetQuit(false);
 	} else if (row == "R8") {

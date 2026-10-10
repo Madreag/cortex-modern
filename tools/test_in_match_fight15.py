@@ -1,4 +1,4 @@
-"""Fight 15 detecting checks on one hidden EROL-PC engine and four SP picture guards.
+"""Fight 15 detecting checks on one hidden engine and four SP picture guards.
 
 The baseline contains the same native detecting fixture, with its production code
 unchanged at 367fb9cf97. This driver never starts another machine or a spread run.
@@ -23,8 +23,10 @@ ROWS = tuple(f"R{number}" for number in range(1, 9))
 
 def settled_guard_steps():
     steps = guard_steps()
-    # Simulation is frozen at tick four; let the real-time camera reach that fixed target before the whole-frame capture.
+    # The camera scrolls in real time. Controller icons also blink for the first four seconds.
+    # Capture the whole frozen simulation after both presentation clocks have settled.
     steps[2]["renders"] = 30
+    steps[2]["elapsed_ms"] = 5000
     return steps
 
 
