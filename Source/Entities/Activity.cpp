@@ -1,6 +1,12 @@
 #include "CheckpointArchive.h"
 #include "Base64/base64.h"
 #include "Activity.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Timer.h"
+#include "Icon.h"
+#include "GenericSavedData.h"
+#include "Controller.h"
+#include "Actor.h"
 #include "MetricsCollector.h"
 #include "CaptureSentinel.h"
 #include "GameActivity.h"
@@ -44,11 +50,89 @@ using namespace RTE;
 
 AbstractClassInfo(Activity, Entity);
 
+Activity::Activity(const Activity& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	m_PendingRuntimeCheckpoint(snapshot.Freeze(source.m_PendingRuntimeCheckpoint)),
+	m_CheckpointActorIDs(snapshot.Freeze(source.m_CheckpointActorIDs)),
+	m_HasCheckpointActorIDs(snapshot.Freeze(source.m_HasCheckpointActorIDs)),
+	m_ActivityState(snapshot.Freeze(source.m_ActivityState)),
+	m_Paused(snapshot.Freeze(source.m_Paused)),
+	m_AllowsUserSaving(snapshot.Freeze(source.m_AllowsUserSaving)),
+	m_IsTestActivity(snapshot.Freeze(source.m_IsTestActivity)),
+	m_Description(snapshot.Freeze(source.m_Description)),
+	m_SceneName(snapshot.Freeze(source.m_SceneName)),
+	m_MaxPlayerSupport(snapshot.Freeze(source.m_MaxPlayerSupport)),
+	m_MinTeamsRequired(snapshot.Freeze(source.m_MinTeamsRequired)),
+	m_Difficulty(snapshot.Freeze(source.m_Difficulty)),
+	m_CraftOrbitAtTheEdge(snapshot.Freeze(source.m_CraftOrbitAtTheEdge)),
+	m_InCampaignStage(snapshot.Freeze(source.m_InCampaignStage)),
+	m_PlayerCount(snapshot.Freeze(source.m_PlayerCount)),
+	m_IsActive{},
+	m_IsHuman{},
+	m_SharedPlayerSeats(snapshot.Freeze(source.m_SharedPlayerSeats)),
+	m_SharedSeatsEngaged(snapshot.Freeze(source.m_SharedSeatsEngaged)),
+	m_LocalInputPlayers(snapshot.Freeze(source.m_LocalInputPlayers)),
+	m_PlayerScreen{},
+	m_ViewState{},
+	m_DeathTimer{},
+	m_TeamNames{},
+	m_TeamIcons{},
+	m_TeamCount(snapshot.Freeze(source.m_TeamCount)),
+	m_TeamActive{},
+	m_Team{},
+	m_TeamDeaths{},
+	m_TeamAISkillLevels{},
+	m_TeamFunds{},
+	m_TeamFundsShare{},
+	m_FundsChanged{},
+	m_FundsContribution{},
+	m_Brain{},
+	m_HadBrain{},
+	m_BrainRecordReconciled(snapshot.Freeze(source.m_BrainRecordReconciled)),
+	m_BrainEvacuated{},
+	m_ControlledActor{},
+	m_RenderSubstituteActor{},
+	m_PresentationView{},
+	m_LockstepControlUID(snapshot.Freeze(source.m_LockstepControlUID)),
+	m_PlayerController{},
+	m_MessageTimer{},
+	m_SavedValues(snapshot.Freeze(source.m_SavedValues)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	snapshot.FreezeArray(m_IsActive, source.m_IsActive);
+	snapshot.FreezeArray(m_IsHuman, source.m_IsHuman);
+	snapshot.FreezeArray(m_PlayerScreen, source.m_PlayerScreen);
+	snapshot.FreezeArray(m_ViewState, source.m_ViewState);
+	snapshot.FreezeArray(m_DeathTimer, source.m_DeathTimer);
+	snapshot.FreezeArray(m_TeamNames, source.m_TeamNames);
+	snapshot.FreezeArray(m_TeamIcons, source.m_TeamIcons);
+	snapshot.FreezeArray(m_TeamActive, source.m_TeamActive);
+	snapshot.FreezeArray(m_Team, source.m_Team);
+	snapshot.FreezeArray(m_TeamDeaths, source.m_TeamDeaths);
+	snapshot.FreezeArray(m_TeamAISkillLevels, source.m_TeamAISkillLevels);
+	snapshot.FreezeArray(m_TeamFunds, source.m_TeamFunds);
+	snapshot.FreezeArray(m_TeamFundsShare, source.m_TeamFundsShare);
+	snapshot.FreezeArray(m_FundsChanged, source.m_FundsChanged);
+	snapshot.FreezeArray(m_FundsContribution, source.m_FundsContribution);
+	snapshot.FreezeArray(m_Brain, source.m_Brain);
+	snapshot.FreezeArray(m_HadBrain, source.m_HadBrain);
+	snapshot.FreezeArray(m_BrainEvacuated, source.m_BrainEvacuated);
+	snapshot.FreezeArray(m_ControlledActor, source.m_ControlledActor);
+	snapshot.FreezeArray(m_PlayerController, source.m_PlayerController);
+	snapshot.FreezeArray(m_MessageTimer, source.m_MessageTimer);
+}
+
+void Activity::PrepareCheckpointNative(const Activity& source, Activity* target, CheckpointNativeSnapshot& snapshot) {
+	snapshot.Prepare(static_cast<const Entity&>(source), static_cast<Entity*>(target));
+	snapshot.Prepare(source.m_TeamIcons, &target->m_TeamIcons);
+	snapshot.Prepare(source.m_PlayerController, &target->m_PlayerController);
+}
+
 Activity::Activity() {
 	Clear();
 }
 
 Activity::~Activity() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 

@@ -163,6 +163,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a GameActivity object in system
 		/// memory. Create() should be called before using the object.
 		GameActivity();
+		GameActivity(const GameActivity& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a GameActivity object before deletion
 		/// from system memory.
@@ -849,6 +850,9 @@ namespace RTE {
 		std::string SaveValueCheckpoint() const;
 		bool LoadValueCheckpoint(std::string_view text, bool validateOnly = false);
 		std::array<long, Players::MaxPlayerCount> m_CheckpointMarkedActorIDs{};
+		std::array<std::array<CheckpointText, 5>, Players::MaxPlayerCount> m_FrozenUI;
+		std::array<CheckpointText, Players::MaxPlayerCount> m_FrozenStrategicMenus;
+		void FreezeCheckpointUI(const GameActivity& source);
 		bool m_HasCheckpointMarkedActorIDs = false;
 
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
@@ -880,5 +884,6 @@ namespace RTE {
 		/// resetting the members of this abstraction level only.
 		void Clear();
 	};
+	GameActivity::Delivery FreezeCheckpointValue(const GameActivity::Delivery& source, CheckpointNativeSnapshot& snapshot);
 
 } // namespace RTE

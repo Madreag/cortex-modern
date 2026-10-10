@@ -1,6 +1,10 @@
 #include "CheckpointArchive.h"
 #include "CaptureSentinel.h"
 #include "GameActivity.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "SceneObject.h"
 #include "MetricsCollector.h"
 
 #include "CameraMan.h"
@@ -105,11 +109,109 @@ static void IssueAIOrder(const Actor* actor, NetGameAIOrder::Op op, const Vector
 
 AbstractClassInfo(GameActivity, Activity);
 
+GameActivity::GameActivity(const GameActivity& source, CheckpointNativeSnapshot& snapshot) :
+	Activity(source, snapshot),
+	m_CPUTeam(snapshot.Freeze(source.m_CPUTeam)),
+	m_TeamIsCPU{},
+	m_ObservationTarget{},
+	m_ObserveFreezeHeld{},
+	m_DeathViewTarget{},
+	m_SpectatorTarget{},
+	m_ActorSelectTimer{},
+	m_ActorCursor{},
+	m_pLastMarkedActor{},
+	m_LandingZone{},
+	m_AIReturnCraft{},
+	m_NextMultiOrderYOffset{},
+	m_StrategicModePieMenu{},
+	m_InventoryMenuGUI{},
+	m_pBuyGUI{},
+	m_pEditorGUI{},
+	m_LuaLockActor{},
+	m_LuaLockActorMode{},
+	m_pBannerRed{},
+	m_pBannerYellow{},
+	m_SeatStubBuyGUI{},
+	m_SeatStubEditorGUI{},
+	m_SeatStubBanner{},
+	m_BannerRepeats{},
+	m_ReadyToStart{},
+	m_PurchaseOverride{},
+	m_Deliveries{},
+	m_LandingZoneArea{},
+	m_BrainLZWidth{},
+	m_Objectives(snapshot.Freeze(source.m_Objectives)),
+	m_TeamTech{},
+	m_TeamTechSwitchEnabled{},
+	m_StartingGold(snapshot.Freeze(source.m_StartingGold)),
+	m_FogOfWarEnabled(snapshot.Freeze(source.m_FogOfWarEnabled)),
+	m_RequireClearPathToOrbit(snapshot.Freeze(source.m_RequireClearPathToOrbit)),
+	m_DefaultFogOfWar(snapshot.Freeze(source.m_DefaultFogOfWar)),
+	m_DefaultRequireClearPathToOrbit(snapshot.Freeze(source.m_DefaultRequireClearPathToOrbit)),
+	m_DefaultDeployUnits(snapshot.Freeze(source.m_DefaultDeployUnits)),
+	m_DefaultGoldCakeDifficulty(snapshot.Freeze(source.m_DefaultGoldCakeDifficulty)),
+	m_DefaultGoldEasyDifficulty(snapshot.Freeze(source.m_DefaultGoldEasyDifficulty)),
+	m_DefaultGoldMediumDifficulty(snapshot.Freeze(source.m_DefaultGoldMediumDifficulty)),
+	m_DefaultGoldHardDifficulty(snapshot.Freeze(source.m_DefaultGoldHardDifficulty)),
+	m_DefaultGoldNutsDifficulty(snapshot.Freeze(source.m_DefaultGoldNutsDifficulty)),
+	m_DefaultGoldMaxDifficulty(snapshot.Freeze(source.m_DefaultGoldMaxDifficulty)),
+	m_FogOfWarSwitchEnabled(snapshot.Freeze(source.m_FogOfWarSwitchEnabled)),
+	m_DeployUnitsSwitchEnabled(snapshot.Freeze(source.m_DeployUnitsSwitchEnabled)),
+	m_GoldSwitchEnabled(snapshot.Freeze(source.m_GoldSwitchEnabled)),
+	m_RequireClearPathToOrbitSwitchEnabled(snapshot.Freeze(source.m_RequireClearPathToOrbitSwitchEnabled)),
+	m_BuyMenuEnabled(snapshot.Freeze(source.m_BuyMenuEnabled)),
+	m_aLZCursor{},
+	m_LZCursorWidth(snapshot.Freeze(source.m_LZCursorWidth)),
+	m_aObjCursor{},
+	m_DeliveryDelay(snapshot.Freeze(source.m_DeliveryDelay)),
+	m_CursorTimer(snapshot.Freeze(source.m_CursorTimer)),
+	m_GameTimer(snapshot.Freeze(source.m_GameTimer)),
+	m_GameOverTimer(snapshot.Freeze(source.m_GameOverTimer)),
+	m_GameOverPeriod(snapshot.Freeze(source.m_GameOverPeriod)),
+	m_WinnerTeam(snapshot.Freeze(source.m_WinnerTeam)),
+	m_NetworkPlayerNames{},
+	m_pLastHighlightDrawActor{},
+	m_LockstepPlacementSubmitted(snapshot.Freeze(source.m_LockstepPlacementSubmitted)),
+	m_LockstepSeatBrains(snapshot.Freeze(source.m_LockstepSeatBrains)),
+	m_LockstepPlacementUidBase(snapshot.Freeze(source.m_LockstepPlacementUidBase)),
+	m_LockstepPlacementSeeded(snapshot.Freeze(source.m_LockstepPlacementSeeded)),
+	m_CheckpointMarkedActorIDs(snapshot.Freeze(source.m_CheckpointMarkedActorIDs)),
+	m_FrozenUI(snapshot.Freeze(source.m_FrozenUI)),
+	m_FrozenStrategicMenus(snapshot.Freeze(source.m_FrozenStrategicMenus)),
+	m_HasCheckpointMarkedActorIDs(snapshot.Freeze(source.m_HasCheckpointMarkedActorIDs)) {
+	snapshot.FreezeArray(m_TeamIsCPU, source.m_TeamIsCPU);
+	snapshot.FreezeArray(m_ObservationTarget, source.m_ObservationTarget);
+	snapshot.FreezeArray(m_ObserveFreezeHeld, source.m_ObserveFreezeHeld);
+	snapshot.FreezeArray(m_DeathViewTarget, source.m_DeathViewTarget);
+	snapshot.FreezeArray(m_SpectatorTarget, source.m_SpectatorTarget);
+	snapshot.FreezeArray(m_ActorSelectTimer, source.m_ActorSelectTimer);
+	snapshot.FreezeArray(m_ActorCursor, source.m_ActorCursor);
+	snapshot.FreezeArray(m_pLastMarkedActor, source.m_pLastMarkedActor);
+	snapshot.FreezeArray(m_LandingZone, source.m_LandingZone);
+	snapshot.FreezeArray(m_AIReturnCraft, source.m_AIReturnCraft);
+	snapshot.FreezeArray(m_NextMultiOrderYOffset, source.m_NextMultiOrderYOffset);
+	snapshot.FreezeArray(m_LuaLockActor, source.m_LuaLockActor);
+	snapshot.FreezeArray(m_LuaLockActorMode, source.m_LuaLockActorMode);
+	snapshot.FreezeArray(m_BannerRepeats, source.m_BannerRepeats);
+	snapshot.FreezeArray(m_ReadyToStart, source.m_ReadyToStart);
+	snapshot.FreezeArray(m_PurchaseOverride, source.m_PurchaseOverride);
+	snapshot.FreezeArray(m_Deliveries, source.m_Deliveries);
+	snapshot.FreezeArray(m_LandingZoneArea, source.m_LandingZoneArea);
+	snapshot.FreezeArray(m_BrainLZWidth, source.m_BrainLZWidth);
+	snapshot.FreezeArray(m_TeamTech, source.m_TeamTech);
+	snapshot.FreezeArray(m_TeamTechSwitchEnabled, source.m_TeamTechSwitchEnabled);
+	snapshot.FreezeArray(m_aLZCursor, source.m_aLZCursor);
+	snapshot.FreezeArray(m_aObjCursor, source.m_aObjCursor);
+	snapshot.FreezeArray(m_NetworkPlayerNames, source.m_NetworkPlayerNames);
+	FreezeCheckpointUI(source);
+}
+
 GameActivity::GameActivity() {
 	Clear();
 }
 
 GameActivity::~GameActivity() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -3669,7 +3771,9 @@ std::string GameActivity::SaveValueCheckpoint() const {
 	// them in the same order.
 	std::vector<CheckpointText> menus;
 	std::optional<ParallelWork> menuWork;
-	if (CheckpointWriter::IsCapturing() && !CaptureTrace::Serial()) {
+	if (IsFrozenCheckpointNative()) {
+		for (const auto& player: m_FrozenUI) menus.insert(menus.end(), player.begin(), player.end());
+	} else if (CheckpointWriter::IsCapturing() && !CaptureTrace::Serial()) {
 		menus.resize(Players::MaxPlayerCount * c_MenuParts);
 		AudioMan::SoundCheckpointSaveScope* const sounds = AudioMan::SoundCheckpointSaveScope::Current();
 		menuWork.emplace(g_ThreadMan.GetPriorityThreadPool(), menus.size(), [&menus, &menu, sounds, task = CaptureSentinel::CurrentTask()](size_t index) {
@@ -3803,7 +3907,7 @@ std::string GameActivity::SaveCheckpoint() const {
         writer(m_pLastMarkedActor[player] ? m_pLastMarkedActor[player]->GetUniqueID() : 0);
         writer(m_PurchaseOverride[player].size());
         for (const SceneObject* preset: m_PurchaseOverride[player]) writer(preset->GetClassName(), preset->GetPresetName(), preset->GetModuleName());
-        writer(SaveActivityOwnedEntity(m_StrategicModePieMenu[player].get()));
+        writer(IsFrozenCheckpointNative() ? m_FrozenStrategicMenus[player] : SaveActivityOwnedEntity(m_StrategicModePieMenu[player].get()));
     }
     span.emplace("activity_deliveries");
     for (int team = 0; team < Teams::MaxTeamCount; ++team) {
@@ -3814,6 +3918,27 @@ std::string GameActivity::SaveCheckpoint() const {
         }
     }
     return writer.Text();
+}
+
+GameActivity::Delivery RTE::FreezeCheckpointValue(const GameActivity::Delivery& source, CheckpointNativeSnapshot& snapshot) {
+	GameActivity::Delivery value{};
+	value.pCraft = snapshot.Object(source.pCraft);
+	value.orderedByPlayer = source.orderedByPlayer; value.landingZone = source.landingZone;
+	value.multiOrderYOffset = source.multiOrderYOffset; value.delay = source.delay;
+	value.timer.AssignCheckpointNative(source.timer, snapshot);
+	return value;
+}
+
+void GameActivity::FreezeCheckpointUI(const GameActivity& source) {
+	if (source.IsFrozenCheckpointNative()) return;
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		m_FrozenUI[player][0] = CheckpointWriter::CaptureNative([&] { return source.m_pBuyGUI[player] ? source.m_pBuyGUI[player]->SaveCheckpoint() : std::string(); });
+		m_FrozenUI[player][1] = CheckpointWriter::CaptureNative([&] { return source.m_pEditorGUI[player] ? source.m_pEditorGUI[player]->SaveCheckpoint() : std::string(); });
+		m_FrozenUI[player][2] = CheckpointWriter::CaptureNative([&] { return source.m_InventoryMenuGUI[player] ? source.m_InventoryMenuGUI[player]->SaveCheckpoint() : std::string(); });
+		m_FrozenUI[player][3] = CheckpointWriter::CaptureNative([&] { return source.m_pBannerRed[player] ? source.m_pBannerRed[player]->SaveCheckpoint() : std::string(); });
+		m_FrozenUI[player][4] = CheckpointWriter::CaptureNative([&] { return source.m_pBannerYellow[player] ? source.m_pBannerYellow[player]->SaveCheckpoint() : std::string(); });
+		m_FrozenStrategicMenus[player] = SaveActivityOwnedEntity(source.m_StrategicModePieMenu[player].get());
+	}
 }
 
 bool GameActivity::LoadCheckpoint(std::string_view text, bool validateOnly) {

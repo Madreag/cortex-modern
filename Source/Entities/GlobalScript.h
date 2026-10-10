@@ -107,6 +107,7 @@ namespace RTE {
 		bool m_IsActive; //!< Whether this GlobalScript is currently allowed to run.
 		bool m_HasStarted; //!< Whether this script has already been started.
 		bool m_LateUpdate; //!< Whether or not this GlobalScript should be updated late, i.e. after the standard MovableMan update.
+		std::vector<CheckpointText> m_FrozenPieSlices;
 
 		std::vector<std::unique_ptr<PieSlice>> m_PieSlicesToAdd; //!< A vector of PieSlices that should be added to any PieMenus opened while this GlobalScript is active.
 

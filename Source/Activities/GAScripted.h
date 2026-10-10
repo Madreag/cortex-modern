@@ -157,6 +157,7 @@ namespace RTE {
 		std::string m_LuaClassName;
 		// The list of Area:s required in a Scene to play this Activity on it
 		std::set<std::string> m_RequiredAreas;
+		std::vector<CheckpointText> m_FrozenPieSlices;
 		std::vector<std::unique_ptr<PieSlice>> m_PieSlicesToAdd; //!< A vector of PieSlices that should be added to any PieMenus opened while this GAScripted is running.
 		// The list of global scripts allowed to run during this activity
 		std::vector<GlobalScript*> m_GlobalScriptsList;

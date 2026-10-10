@@ -150,7 +150,8 @@ namespace RTE {
 		size_t ObjectCount() const { return m_Objects.size(); }
 
 		template<class T> auto Freeze(const T& source) {
-			if constexpr (std::is_base_of_v<Entity, T> || requires { T(source, *this); }) return T(source, *this);
+			if constexpr (requires { FreezeCheckpointValue(source, *this); }) return FreezeCheckpointValue(source, *this);
+			else if constexpr (std::is_base_of_v<Entity, T> || requires { T(source, *this); }) return T(source, *this);
 			else { static_assert(std::is_copy_constructible_v<T>); return T(source); }
 		}
 		template<class T> T* Freeze(T* source) {
