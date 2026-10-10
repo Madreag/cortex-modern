@@ -553,7 +553,7 @@ namespace RTE::CheckpointLua {
 					                    (type->type() == LUABIND_TYPEID(Vector) || type->type() == LUABIND_TYPEID(Timer));
 					if (scalar) {
 						Push(value); plain = PlainScalarProperties(value, object); lua_pop(State(), 1);
-					} else plain = PlainSingleton(object) || PlainBorrowed(value, object);
+					} else plain = PlainSingleton(object) || PlainBorrowed(value, object) || PlainBoundaryReference(value, object);
 				}
 				if (plain) values.push_back(value);
 			});
@@ -742,11 +742,20 @@ namespace RTE::CheckpointLua {
 					if (data->len < sizeof(luabind::detail::object_rep) || !marker || tvisnil(marker) || tvisfalse(marker) || tabref(meta->metatable)) return false;
 					const auto* owner = static_cast<const luabind::detail::object_rep*>(uddata(data));
 					if (!owner->crep() || owner->crep()->get_class_type() != luabind::detail::class_rep::cpp_class ||
-					    ClassDerivesFrom(owner->crep(), "Activity") || std::strcmp(owner->crep()->name(), "SceneEditorGUI") == 0) return false;
+					    (ClassDerivesFrom(owner->crep(), "Activity") && owner->ptr() != g_ActivityMan.GetActivity()) || std::strcmp(owner->crep()->name(), "SceneEditorGUI") == 0) return false;
 				}
 				lua_pop(State(), 1);
 			}
 			return true;
+		}
+		bool PlainBoundaryReference(const TValue& subject, const luabind::detail::object_rep* object) {
+			if (!CheckpointNativeSnapshot::Boundary() || !object || !object->ptr() || !object->crep() ||
+			    (object->flags() & luabind::detail::object_rep::owner) || object->crep()->get_class_type() != luabind::detail::class_rep::cpp_class ||
+			    !DirectClassMarker(subject) || !PlainDependencies(object)) return false;
+			const auto* type = object->crep();
+			if (ClassDerivesFrom(type, "Entity")) return true;
+			static constexpr std::array names{"Gib", "SoundSet", "LimbPath", "Box", "Area", "Controller", "DataModule", "BuyMenuGUI", "SceneEditorGUI", "GUIBanner"};
+			return std::find(names.begin(), names.end(), std::string_view(type->name())) != names.end();
 		}
 		bool PlainBorrowed(const TValue& subject, const luabind::detail::object_rep* object) {
 			if (!CheckpointNativeSnapshot::Boundary() || !s_GraphNativeCapture || !object || !object->ptr() || !object->crep() ||
