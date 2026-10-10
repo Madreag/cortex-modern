@@ -112,6 +112,25 @@ namespace RTE {
 			prepared = std::max(prepared, report->second.reportedNextFrame);
 		if (prepared > UINT64_MAX - lead) return;
 		proposal.frame = prepared + lead;
+		// Every signer must be able to accept this future frame before any
+		// immutable vote exists. A fresh but distant tail reader is not ready.
+		for (uint8_t peer: proposal.members) if (peer != m_Config.localPeerId) {
+			const auto report = m_Stats.peers.find(peer);
+			if (report == m_Stats.peers.end() || report->second.reportedNextFrame == 0 ||
+			    proposal.frame <= report->second.reportedNextFrame ||
+			    proposal.frame - report->second.reportedNextFrame > NetLockstepCodec::c_MaxFutureFrameSkew) return;
+		}
+		if (!MigrationUsesDirectory()) {
+			// No vote has been published. Select the current common displayed
+			// prefix so a long catch-up cannot age an unvoted choice out of history.
+			proposal.boundary = *m_LastCompletedSimulationTick;
+			for (uint8_t peer: proposal.members) if (peer != m_Config.localPeerId) {
+				const auto applied = m_PeerAppliedThrough.find(peer);
+				if (applied == m_PeerAppliedThrough.end()) return;
+				proposal.boundary = std::min(proposal.boundary, applied->second);
+			}
+			m_MigrationChoice->boundary = proposal.boundary;
+		}
 		const auto prefix = PeerAppliedFramePrefix(proposal.boundary); proposal.bytes.assign(prefix.begin(), prefix.end()); proposal.totalBytes = static_cast<uint32_t>(proposal.bytes.size());
 		proposal.voterMask = AdminBit(m_Config.localPeerId);
 		if (!ValidatePeerAdmin(proposal)) { RequestPeerCommittedTail(nowMs); return; }

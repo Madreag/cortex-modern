@@ -4339,6 +4339,7 @@ namespace RTE {
 			std::vector<std::unique_ptr<QuorumWire>> wires;
 			std::vector<std::unique_ptr<NetLockstepCoordinator>> peers;
 			std::vector<uint64_t> queued, simulated;
+			std::vector<uint64_t> logicalQueued; // V1 captures logical ticks; queued names their prepared target boundary.
 			std::vector<std::string> queueErrors;
 			std::vector<bool> live;
 			std::vector<std::map<uint64_t, uint64_t>> folds; // frame -> the frame's committed membership, as each peer applied it.
@@ -4393,6 +4394,7 @@ namespace RTE {
 			r.peerFrames = peerFrames;
 			r.credits.assign(count, 0);
 			r.queued.assign(count, 1);
+			r.logicalQueued.assign(count, 1);
 			r.queueErrors.assign(count, "");
 			r.simulated.assign(count, 0);
 			r.live.assign(count, true);
@@ -4418,9 +4420,9 @@ namespace RTE {
 					// Reserve the loopback path, 200 ms jitter and the three-tick
 					// V1 bound. Classic encoding fixtures keep their zero delay.
 					config.inputDelayFrames = config.matchConfig.inputDelayFrames = 17;
+					config.matchConfig.peerInputDelayFrames.assign(count, 17);
 					for (uint8_t member = 1; member <= count; ++member) {
 						config.peerInputDelayFrames[member] = 17;
-						config.matchConfig.peerInputDelayFrames[member - 1] = 17;
 					}
 				}
 				if (!r.Peer(peer).Start(*r.wires[peer - 1], config, error)) return false;
@@ -4463,9 +4465,10 @@ namespace RTE {
 					if (r.peerFrames) {
 						if (!peer.IsRunning() || r.credits[i] < 1) break;
 						const uint64_t next = r.simulated[i] + 1;
-						if (r.queued[i] <= next && !peer.TimingDecisionPendingAt(next)) {
+						if (r.logicalQueued[i] <= next && !peer.TimingDecisionPendingAt(next)) {
 							if (!peer.DeferLocalInput(next, {}) && !peer.QueueLocalInput(next, {}, {}, &r.queueErrors[i])) break;
-							r.queued[i] = next + 1;
+							r.logicalQueued[i] = next + 1;
+							r.queued[i] = std::max(r.queued[i], next + peer.InputDelayAt(i + 1, next) + 1);
 						}
 						if (next < peer.GetStats().effectiveStartFrame) { ready = {}; ready.frame = next; ready.localPeerId = i + 1; }
 						else if (!peer.PopReadyFrame(ready)) { peer.NoteFrameWait(next, r.now); break; }
@@ -25963,6 +25966,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			std::array<NetLockstepCoordinator, 4> peers;
 			std::array<uint64_t, 4> produced{1, 1, 1, 1};
 			std::array<uint64_t, 4> produceThrough{UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX};
+			std::array<uint64_t, 4> preparedThrough{UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX};
 			std::array<bool, 4> alive{true, true, true, true};
 			std::array<std::map<uint64_t, NetLockstepReadyFrame>, 4> committed;
 			std::vector<NetSoundObservation> inputReadings;
@@ -26033,6 +26037,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			}
 			void Pump() {
 				for (size_t index = 0; index < peers.size(); ++index) if (alive[index] && produced[index] <= produceThrough[index]) {
+					const uint16_t delay = peers[index].InputDelayAt(index + 1, produced[index]);
+					if (produced[index] > preparedThrough[index] || delay > preparedThrough[index] - produced[index]) continue;
 					if (!inputReadings.empty() || (index == 3 && hostWire.fourthFutureOnlyToFirst)) {
 						std::vector<NetSoundObservation> readings;
 						for (const auto& reading: inputReadings) if (reading.senderPeerId == index + 1) readings.push_back(reading);
@@ -26484,6 +26490,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			round.hostPlaneOnly = true;
 			round.drainThrough = 29;
 			round.produceThrough[1] = round.produceThrough[2] = 29;
+			round.preparedThrough[1] = round.preparedThrough[2] = 29;
 			const uint64_t lastProduced = 31 - round.peers[3].GetConfig().inputDelayFrames;
 			round.produceThrough[3] = lastProduced;
 			round.hostWire.fourthFutureOnlyToFirst = true;
@@ -26502,6 +26509,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return fail("the unequal survivors did not succeed at boundary 29: " + round.failure);
 			round.drainThrough = UINT64_MAX;
 			round.produceThrough[1] = round.produceThrough[2] = UINT64_MAX;
+			round.preparedThrough[1] = round.preparedThrough[2] = UINT64_MAX;
 			for (int turn = 0; turn < 30; ++turn) round.Pump();
 			std::string failures;
 			for (size_t index: {size_t{1}, size_t{2}}) {
@@ -27931,6 +27939,8 @@ namespace {
 		static bool LeaverWalksTwoSuccessors(std::string* error) {
 			const auto done = [&](const std::string& why) { return ReportReleasedClaimsRow("ordinary_rejoin_walks_two_successions", why, error); };
 			ReleasePathRound round;
+			// Freeze before the timed hold; a later cap cannot retract an applied prefix.
+			round.drainThrough = 29; round.preparedThrough.fill(29);
 			if (!round.Start(47430) || !round.HoldFourth()) return done(round.failure);
 			HostReturnAdmission admission;
 			admission.wallMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
@@ -27948,12 +27958,16 @@ namespace {
 			Reset(); round.drainThrough = 29;
 			for (int pass = 0; pass < 400 && round.peers[2].GetResumeFrame() != 30; ++pass) round.Pump();
 			if (!round.Migrate()) return done("first succession failed: " + round.failure);
+			// A positive-delay successor may already owe neutral startup input.
+			// Display that certified prefix before the next succession fences it.
+			round.drainThrough = UINT64_MAX;
 			round.alive[1] = false;
 			auto firstSuccessor = round.peers[1].TakeMigrationTransport();
 			if (!firstSuccessor) return done("the first successor has no transport");
 			firstSuccessor->Stop();
 			for (int pass = 0; pass < 4000 && (round.peers[2].GetHostPeerId() != 3 || round.peers[2].IsMigrating()); ++pass) round.Pump();
 			if (!round.peers[2].IsRunning() || round.peers[2].GetHostPeerId() != 3) return done("the second successor did not carry the round");
+			round.preparedThrough.fill(UINT64_MAX);
 			NetH4TicketRecord retained;
 			service.m_TicketStore.SetPath(NetMatchService::s_TicketStorePath);
 			if (service.m_TicketStore.Load(admission.wallMs, retained, &round.failure) != NetH4TicketLoadResult::Loaded) return done("the client leaver lost its ticket");

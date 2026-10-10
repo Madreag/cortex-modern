@@ -12372,6 +12372,8 @@ namespace RTE {
 		if (!hostLobby.Start(hostTransport, lobbyConfig, error)) {
 			return false;
 		}
+		// Settle the normal sender window before measuring the removal's one revision.
+		hostLobby.Tick(now);
 		const auto slotName = [&hostLobby](uint8_t peerId) {
 			for (const NetMatchPlayerSlot& slot: hostLobby.GetMatchConfig().players) {
 				if (slot.peerId == peerId) return slot.displayName;
@@ -13480,6 +13482,8 @@ namespace RTE {
 		if (!hostLobby.Start(hostTransport, lobbyConfig, error)) {
 			return false;
 		}
+		// Settle the normal sender window before measuring the removal's one revision.
+		hostLobby.Tick(now);
 		const auto slotName = [&hostLobby](uint8_t peerId) {
 			for (const NetMatchPlayerSlot& slot: hostLobby.GetMatchConfig().players) {
 				if (slot.peerId == peerId) return slot.displayName;
