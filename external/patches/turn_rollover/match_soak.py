@@ -81,6 +81,9 @@ def main():
         executable = info['CFBundleExecutable']
         (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
         shutil.copy2(args.binary, app / 'Contents/MacOS' / executable)
+        libraries = app / 'Contents/external/lib/macos'
+        libraries.mkdir(parents=True)
+        shutil.copy2(args.repo / 'external/lib/macos/libfmod.dylib', libraries / 'libfmod.dylib')
         environment = dict(os.environ)
         environment.pop('CCCP_HEADLESS', None)
         result = subprocess.run(['open', '-W', '-n', '-o', str(args.out / 'stdout.log'), '--stderr', str(args.out / 'stderr.log'), str(app), '--args', '-headed', *flags], env=environment, timeout=2200)
