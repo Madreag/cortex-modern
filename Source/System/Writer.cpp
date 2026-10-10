@@ -1745,29 +1745,32 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			std::vector<int> source{7, -19, 31}, values;
 			std::deque<Vector> vectors{Vector(-0.0F, 13.5F), Vector(17.25F, -23.5F)}, copiedVectors;
 			std::string bytes("line\n\tvalue\0\xff", 13), copiedBytes;
+			std::vector<std::string> strings{std::string("x\0y\xff", 4), "", "last"}, copiedStrings;
 			const auto expected = source;
 			const auto expectedVectors = vectors;
 			const auto expectedBytes = bytes;
+			const auto expectedStrings = strings;
 			CheckpointNativeSnapshot snapshot;
 			values = snapshot.Freeze(source, &values);
 			copiedVectors = snapshot.Freeze(vectors, &copiedVectors);
 			copiedBytes = snapshot.Freeze(bytes, &copiedBytes);
+			copiedStrings = snapshot.Freeze(strings, &copiedStrings);
 			bool earlyRefused = false, lateRefused = false, partialRefused = false;
 			try { CheckpointNativeSnapshot::ReadScope early(&snapshot); } catch (const std::logic_error&) { earlyRefused = true; }
-			source.assign(1, 99); vectors.clear(); bytes.assign("changed");
+			source.assign(1, 99); vectors.clear(); bytes.assign("changed"); strings.assign(1, "changed");
 			snapshot.SealBoundary();
 			try {
 				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
 				CheckpointNativeSnapshot::ReadScope failed(&snapshot);
 			} catch (const std::bad_alloc&) { lateRefused = true; }
-			const bool unexpanded = values.empty() && copiedVectors.empty() && copiedBytes.empty();
+			const bool unexpanded = values.empty() && copiedVectors.empty() && copiedBytes.empty() && copiedStrings.empty();
 			try {
 				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects, 1);
 				CheckpointNativeSnapshot::ReadScope failed(&snapshot);
 			} catch (const std::bad_alloc&) { partialRefused = true; }
 			const bool retried = std::async(std::launch::async, [&] {
 				CheckpointNativeSnapshot::ReadScope read(&snapshot);
-				bool exact = values == expected && copiedBytes == expectedBytes && copiedVectors.size() == expectedVectors.size();
+				bool exact = values == expected && copiedBytes == expectedBytes && copiedStrings == expectedStrings && copiedVectors.size() == expectedVectors.size();
 				for (size_t index = 0; exact && index < copiedVectors.size(); ++index) exact =
 				    std::bit_cast<uint32_t>(copiedVectors[index].m_X) == std::bit_cast<uint32_t>(expectedVectors[index].m_X) &&
 				    std::bit_cast<uint32_t>(copiedVectors[index].m_Y) == std::bit_cast<uint32_t>(expectedVectors[index].m_Y);

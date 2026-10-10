@@ -488,7 +488,7 @@ namespace RTE {
 		}
 
 	private:
-		template<class T> static constexpr bool DeferredElement = std::is_arithmetic_v<T> || std::is_enum_v<T> || std::is_pointer_v<T> || std::is_same_v<T, Vector> || std::is_same_v<T, Gib>;
+		template<class T> static constexpr bool DeferredElement = std::is_arithmetic_v<T> || std::is_enum_v<T> || std::is_pointer_v<T> || std::is_same_v<T, Vector> || std::is_same_v<T, Gib> || std::is_same_v<T, std::string>;
 		std::string_view OwnBytes(std::string_view source);
 		template<class T> struct alignas(alignof(T) > alignof(size_t) ? alignof(T) : alignof(size_t)) OwnedValues {
 			size_t size = 0;
@@ -498,7 +498,8 @@ namespace RTE {
 			~OwnedValues() { for (size_t index = 0; index < size; ++index) std::destroy_at(Data() + index); }
 		};
 		template<class Range> auto OwnValues(const Range& source) {
-			using T = typename Range::value_type;
+			using Source = typename Range::value_type;
+			using T = std::conditional_t<std::is_same_v<Source, std::string>, std::string_view, Source>;
 			using Record = OwnedValues<T>;
 			if (source.size() > ((std::numeric_limits<size_t>::max)() - sizeof(Record)) / sizeof(T)) throw std::bad_alloc();
 			const size_t bytes = sizeof(Record) + source.size() * sizeof(T);
@@ -514,7 +515,9 @@ namespace RTE {
 			auto* record = ::new(memory) Record;
 			record->data = reinterpret_cast<T*>(static_cast<std::byte*>(memory) + sizeof(Record));
 			owner.first = record;
-			if constexpr (requires(const T& value) { T(value, *this); }) {
+			if constexpr (std::is_same_v<Source, std::string>) {
+				for (const auto& value: source) { ::new(record->Data() + record->size) T(OwnBytes(value)); ++record->size; }
+			} else if constexpr (requires(const T& value) { T(value, *this); }) {
 				size_t index = 0;
 				for (const auto& value: source) Prepare(value, record->Data() + index++);
 				for (const auto& value: source) { ::new(record->Data() + record->size) T(value, *this); ++record->size; }
