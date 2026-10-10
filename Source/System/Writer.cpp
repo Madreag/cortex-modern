@@ -2755,6 +2755,26 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		}
 
 		{
+			struct ScriptPreset : MOPixel {
+				void SetScripts(std::vector<std::string> names) { m_AllLoadedScripts = std::move(names); }
+			};
+			auto preset = std::make_unique<ScriptPreset>();
+			preset->SetPresetName(std::string("mod\0preset", 10)); preset->SetScripts({"mod.rte/first.lua", "mod.rte/second.lua"});
+			const std::string name = preset->GetPresetName(), module = preset->GetModuleName();
+			auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
+			const Entity* identity = snapshot->PresetIdentity(preset.get());
+			const bool aliases = identity == snapshot->PresetIdentity(preset.get());
+			preset->SetPresetName("changed"); preset->SetScripts({"mod.rte/changed.lua"}); preset.reset();
+			snapshot->SealBoundary();
+			const bool exact = std::async(std::launch::async, [snapshot, identity, name, module] {
+				CheckpointNativeSnapshot::ReadScope read(snapshot.get());
+				return identity->GetPresetName() == name && identity->GetModuleName() == module &&
+				    snapshot->PresetHasScript(identity, "mod.rte/first.lua") && snapshot->PresetHasScript(identity, "mod.rte/second.lua") &&
+				    !snapshot->PresetHasScript(identity, "mod.rte/changed.lua");
+			}).get();
+			check(aliases && exact, "frozen_preset_references_own_names_and_script_membership_after_source_death");
+		}
+		{
 			GATutorial source;
 			const auto baseline = Writer::Capture([&](Writer& writer) { writer.NewPropertyWithValue("Activity", &source); });
 			auto snapshot = std::make_shared<CheckpointNativeSnapshot>();

@@ -164,6 +164,9 @@ namespace RTE {
 		const CheckpointText* MaterialReference(const Material* target) const;
 		/// The preset an entity was copied from, looked up once per name for the whole capture.
 		const Entity* PresetFor(const Entity& source);
+		/// Owns only the identity and script names that an archived CopyOf reference reads.
+		const Entity* PresetIdentity(const Entity* source);
+		bool PresetHasScript(const Entity* identity, const std::string& path) const;
 		void RememberUID(const MovableObject* source, MovableObject* target);
 		MovableObject* FindUID(long uid) const;
 
@@ -594,6 +597,9 @@ namespace RTE {
 		};
 		struct PresetShard { std::mutex mutex; std::unordered_map<PresetKey, const Entity*, PresetHash, PresetEqual> presets; };
 		std::array<PresetShard, 16> m_Presets;
+		struct PresetReference { Entity identity; std::vector<std::string> scripts; };
+		CheckpointSharedMap<const Entity*, std::shared_ptr<PresetReference>> m_PresetReferences;
+		CheckpointSharedMap<const Entity*, std::shared_ptr<PresetReference>> m_PresetScripts;
 		struct Metadata {
 			std::string name, copied, description, reader;
 			std::unordered_set<std::string> groups;

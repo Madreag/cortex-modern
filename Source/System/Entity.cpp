@@ -267,7 +267,7 @@ namespace RTE {
 			CheckpointCloneCost cost("preset lookup");
 			preset = snapshot.PresetFor(source);
 		}
-		m_CheckpointPreset = snapshot.Object(preset);
+		m_CheckpointPreset = snapshot.PresetIdentity(preset);
 	}
 	size_t CheckpointNativeSnapshot::PresetHash::operator()(const PresetName& key) const noexcept {
 		return std::hash<std::string_view>{}(key.name) ^ (std::hash<const void*>{}(key.type) * 31) ^ (static_cast<size_t>(key.module) * 0x9E3779B97F4A7C15ULL);
@@ -287,6 +287,30 @@ namespace RTE {
 		shard.presets.try_emplace(PresetKey{key.type, key.module, name}, preset);
 		return preset;
 	}
+	const Entity* CheckpointNativeSnapshot::PresetIdentity(const Entity* source) {
+		if (!source) return nullptr;
+		auto& recent = Recent<2>(source);
+		if (recent.first == source) return static_cast<const Entity*>(recent.second);
+		auto reference = m_PresetReferences.Find(source);
+		if (!reference) {
+			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+			auto values = std::make_shared<PresetReference>();
+			values->identity.m_FrozenCheckpointNative = true;
+			values->identity.m_PresetName = source->m_PresetName;
+			values->identity.m_DefinedInModule = source->m_DefinedInModule;
+			if (const auto* movable = dynamic_cast<const MovableObject*>(source)) values->scripts = movable->GetAllLoadedScripts();
+			reference = m_PresetReferences.TryEmplace(source, std::move(values)).first;
+			m_PresetScripts.TryEmplace(&(*reference)->identity, *reference);
+		}
+		recent = {source, &(*reference)->identity};
+		return &(*reference)->identity;
+	}
+	bool CheckpointNativeSnapshot::PresetHasScript(const Entity* identity, const std::string& path) const {
+		const auto reference = m_PresetScripts.Find(identity);
+		if (!reference) throw std::logic_error("unknown frozen preset reference");
+		const auto& scripts = (*reference)->scripts;
+		return std::find(scripts.begin(), scripts.end(), path) != scripts.end();
+	}
 	Entity* Entity::FreezeCheckpointNative(CheckpointNativeSnapshot&) const {
 		throw UnsupportedCheckpointNative("native checkpoint snapshot is not implemented for " + GetClassName());
 	}
@@ -299,7 +323,7 @@ namespace RTE {
 		FreezeMetadata(target, source);
 		target.m_RandomWeight = source.m_RandomWeight;
 		target.m_CheckpointWriteGeneration = source.m_CheckpointWriteGeneration;
-		target.m_CheckpointPreset = Object(PresetFor(source));
+		target.m_CheckpointPreset = PresetIdentity(PresetFor(source));
 	}
 	void CheckpointNativeSnapshot::FreezeMetadata(Entity& target, const Entity& source) {
 		CheckpointCloneCost cost("entity metadata");

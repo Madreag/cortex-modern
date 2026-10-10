@@ -1954,7 +1954,9 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		// The scripts added or disabled since the preset made it; CopyOf already loads the preset's own.
 		const MovableObject* presetObject = CheckpointCast<const MovableObject>(sourcePreset);
 		for (const std::string& scriptPath: movableObjectToSave->GetAllLoadedScripts()) {
-			if (!presetObject || !presetObject->HasScript(scriptPath)) {
+			const bool presetHasScript = sourcePreset && (movableObjectToSave->IsFrozenCheckpointNative()
+			    ? CheckpointNativeSnapshot::Current()->PresetHasScript(sourcePreset, scriptPath) : presetObject && presetObject->HasScript(scriptPath));
+			if (!presetHasScript) {
 				writer.NewPropertyWithValue("ScriptPath", scriptPath);
 			}
 		}
