@@ -4457,6 +4457,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 	g_ActivityMan.SwapCheckpointActivity(next);
 	auto* game = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
 	if (g_SceneMan.LoadScene("Null Scene", false, false) < 0) return false;
+	if (game->Create() < 0) return false;
 	LoopbackTransport wire;
 	NetLockstepCoordinator coordinator;
 	NetLockstepConfig config;
@@ -4483,9 +4484,11 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		System::PrintDiagnosticLine("[fight15-selftest] " + std::string(value ? "PASS " : "FAIL ") + row + " " + name);
 		passed = passed && value; return value;
 	};
-	const auto present = [&] {
-		g_WindowMan.GetScreenBuffer()->End(); g_WindowMan.UploadFrame(); g_WindowMan.GetScreenBuffer()->Begin();
+	const auto present = [&](const char* capture = nullptr) {
+		g_WindowMan.GetScreenBuffer()->End(); g_WindowMan.UploadFrame();
+		if (capture) g_FrameMan.SaveScreenToPNG(capture);
 		MenuAutomation::AfterDrawnFrame(); g_UInputMan.EndFrame(); g_UInputMan.EndSimUpdate();
+		g_FrameMan.ClearBackBuffer32(); g_WindowMan.GetScreenBuffer()->Begin();
 	};
 	const auto mouse = [&](bool down, int x, int y, bool duplicate) {
 		SDL_Event motion{}; motion.type = SDL_EVENT_MOUSE_MOTION; motion.motion.x = static_cast<float>(x); motion.motion.y = static_cast<float>(y);
@@ -4523,6 +4526,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		placement.className = brainPreset->GetClassName(); placement.preset = brainPreset->GetPresetName(); placement.module = brainPreset->GetModuleName();
 		if (one) placement = std::get<NetGamePlaceBrain>(commands.front().payload);
 		game->m_IsActive[1] = game->m_IsHuman[1] = true; game->m_Team[1] = TeamTwo; game->m_PlayerCount = game->m_TeamCount = 2;
+		game->m_pEditorGUI[1] = new SceneEditorGUI;
 		auto first = placement; first.player = 1; first.team = TeamTwo;
 		check("first_shared_commit_is_accepted", game->ApplyNetBrainPlacement(first, 1) && game->m_ReadyToStart[1]);
 		check("occupied_spot_refused_on_shared_commit", !game->ApplyNetBrainPlacement(placement, 1) && !game->m_ReadyToStart[0]);
@@ -4534,6 +4538,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		check("refused_seat_can_install_elsewhere", retry.size() == 1 && std::holds_alternative<NetGamePlaceBrain>(retry.front().payload) &&
 		      game->ApplyNetBrainPlacement(std::get<NetGamePlaceBrain>(retry.front().payload), 1) && game->m_ReadyToStart[0]);
 	} else if (row == "R3") {
+		g_MenuMan.SetIsInMenuScreen(false);
 		game->m_ActivityState = ActivityState::Running; game->m_Team[0] = TeamFour; game->m_TeamFunds[TeamFour] = 2345;
 		game->m_PlayerController[0].SetTeam(TeamFour);
 		auto* brain = static_cast<Actor*>(brainPreset->Clone()); brain->SetTeam(TeamFour); brain->SetPos(Vector(120, 120));
@@ -4542,8 +4547,10 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		game->m_pBuyGUI[0] = new BuyMenuGUI; if (game->m_pBuyGUI[0]->Create(&game->m_PlayerController[0]) < 0) return false;
 		game->m_InventoryMenuGUI[0] = new InventoryMenuGUI; game->m_InventoryMenuGUI[0]->Create(&game->m_PlayerController[0]);
 		PieMenu* pie = brain->GetPieMenu(); Controller* controller = brain->GetController();
+		pie->SetEnabled(false, false);
 		controller->SetState(PIE_MENU_ACTIVE, true); controller->SetState(PRESS_SECONDARY, true); pie->Update();
 		pie->Draw(g_FrameMan.GetBackBuffer32(), Vector()); present();
+		controller->SetState(PRESS_SECONDARY, false); pie->Update(); pie->Draw(g_FrameMan.GetBackBuffer32(), Vector()); present();
 		controller->SetState(PRESS_SECONDARY, false); controller->SetState(PIE_MENU_ACTIVE, false); controller->SetState(RELEASE_SECONDARY, true); pie->Update();
 		check("plain_pie_press_release_selects_buy", pie->GetPieCommand() == PieSliceType::BuyMenu);
 		game->Update(); check("actor_buy_opens_for_own_team", game->m_pBuyGUI[0]->IsEnabled() && game->m_PlayerController[0].GetTeam() == TeamFour && game->GetTeamFunds(TeamFour) == 2345);
@@ -4584,17 +4591,18 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		check("metrics_clear_chat_toasts_and_players", panel.GetChatRect().visible && panel.GetToastRect().visible && panel.GetSeatsPanelRect().visible &&
 		      !overlap(panel.GetStatusRect(), panel.GetChatRect()) && !overlap(panel.GetStatusRect(), panel.GetToastRect()) && !overlap(panel.GetStatusRect(), panel.GetSeatsPanelRect()));
 		g_SettingsMan.SetNetworkMatchStatusMode(SettingsMan::NetworkMatchStatusMode::Always); panel.m_Open = false;
-		check("always_shows_numbers", panel.MatchStatusWanted()); g_FrameMan.SaveScreenToPNG("fight15_R4"); present();
+		check("always_shows_numbers", panel.MatchStatusWanted()); present("fight15_R4");
 		System::PrintDiagnosticLine("[fight15-selftest] observed status: " + text);
 	} else if (row == "R5") {
 		g_MenuMan.SetIsInMenuScreen(true); g_UInputMan.TrapMousePos(false);
 		AllegroScreen screen(g_FrameMan.GetBackBuffer32()); GUIInputWrapper input(-1); MainMenuGUI menu(&screen, &input);
-		menu.ShowMultiplayerScreen(); menu.m_MultiplayerSubScreen = MainMenuGUI::MultiplayerSubScreen::Lobby;
+		menu.SetActiveMenuScreen(MainMenuGUI::MenuScreen::MultiplayerScreen, false); menu.ShowMultiplayerScreen();
+		menu.m_MultiplayerSubScreen = MainMenuGUI::MultiplayerSubScreen::Lobby;
 		NetLobbySnapshot snapshot; snapshot.isHost = snapshot.inLobby = snapshot.occupancyComplete = true; snapshot.localPeerId = snapshot.hostPeerId = 1;
 		snapshot.activityPreset = "Skirmish Defense"; snapshot.sceneName = "Grasslands";
 		NetLobbyMember host; host.peerId = 1; host.displayName = "Captain"; host.isLocal = host.connected = host.ready = true;
 		NetLobbyMember player; player.peerId = 2; player.displayName = "Edith"; player.connected = true; snapshot.members = {host, player};
-		const auto draw = [&] { menu.RefreshMultiplayerScreenControls(snapshot); menu.m_SubMenuScreenGUIControlManager->Draw(); g_FrameMan.SaveScreenToPNG("fight15_R5"); present(); };
+		const auto draw = [&] { menu.RefreshMultiplayerScreenControls(snapshot); menu.m_SubMenuScreenGUIControlManager->Draw(); present("fight15_R5"); };
 		const auto click = [&] {
 			GUIControl* start = menu.m_SubMenuScreenGUIControlManager->GetControl("ButtonLobbyStart"); if (!start) return false;
 			int x, y, width, height; start->GetControlRect(&x, &y, &width, &height); x += width / 2; y += height / 2;
@@ -4625,6 +4633,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		check("pending_local_session_starts", g_NetMatchService.Start(request, &error));
 		const uint64_t before = g_TimerMan.GetSimUpdateCount();
 		const uint64_t began = SDL_GetTicks();
+		SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
 		const auto closeUnixMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		System::PrintDiagnosticLine("[fight15-selftest] R7 close_started_unix_ms=" + std::to_string(closeUnixMs));
 		SDL_Event event{}; event.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED; event.window.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); SDL_PushEvent(&event);

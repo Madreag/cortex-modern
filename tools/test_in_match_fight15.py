@@ -12,11 +12,20 @@ import os
 from pathlib import Path
 import re
 
+from PIL import Image
+
 from run_sim_test import file_sha256, make_run, seed_settings
 from test_connection_indicator import SIZES, compare_guard, guard_steps, run_single
 
 BASE = "367fb9cf97e06a7d701653ac90c2f6f268290956"
 ROWS = tuple(f"R{number}" for number in range(1, 9))
+
+
+def settled_guard_steps():
+    steps = guard_steps()
+    # Simulation is frozen at tick four; let the real-time camera reach that fixed target before the whole-frame capture.
+    steps[2]["renders"] = 30
+    return steps
 
 
 def native_case(repo, root, row, size, exe=None):
@@ -37,10 +46,15 @@ def native_case(repo, root, row, size, exe=None):
     passes = [line for line in lines if f"PASS {row} " in line]
     close = re.search(r"R7 close_started_unix_ms=(\d+)", log)
     close_ms = datetime.fromisoformat(record["ended_utc"]).timestamp() * 1000 - int(close[1]) if close else None
+    pictures = []
+    for path in sorted((Path(run.cwd) / "ScreenShots").glob("fight15_" + row + "_*.png")):
+        with Image.open(path) as shot:
+            pictures.append({"path": str(path), "size": list(shot.size),
+                             "ink_pixels": sum(pixel != (0, 0, 0) for pixel in shot.convert("RGB").get_flattened_data())})
     return {"exit_code": record.get("exit_code"), "timed_out": record.get("timed_out"),
             "evidence_complete": record.get("evidence_complete"), "passes": passes,
             "fails": fails, "lines": lines, "size": size, "close_to_exit_ms": close_ms,
-            "runtime": str(run.cwd), "exe_sha256": file_sha256(run.argv[0])}
+            "pictures": pictures, "runtime": str(run.cwd), "exe_sha256": file_sha256(run.argv[0])}
 
 
 def main():
@@ -68,6 +82,9 @@ def main():
                 green = after["exit_code"] == 0 and bool(after["passes"]) and not after["fails"] and not after["timed_out"] and after["evidence_complete"]
                 if row == "R7":
                     green &= after["close_to_exit_ms"] is not None and 0 <= after["close_to_exit_ms"] < 5000
+                if row in ("R4", "R5"):
+                    expected_size = list(map(int, size.split("x")))
+                    green &= bool(after["pictures"]) and all(shot["size"] == expected_size and shot["ink_pixels"] > 1000 for shot in after["pictures"])
                 case = {"base": before, "tip": after, "red": red, "green": green, "pass": bool(red and green)}
                 result["cases"][name] = case
                 result["pass"] &= case["pass"]
@@ -76,8 +93,8 @@ def main():
     if not options.skip_guards and not options.case:
         for size in SIZES:
             before_root, after_root = options.out / ("guard-base-" + size), options.out / ("guard-tip-" + size)
-            before = run_single(options.baseline_repo, before_root, guard_steps(), size, exe=options.baseline_exe, guard=True)
-            after = run_single(options.repo, after_root, guard_steps(), size, guard=True)
+            before = run_single(options.baseline_repo, before_root, settled_guard_steps(), size, exe=options.baseline_exe, guard=True)
+            after = run_single(options.repo, after_root, settled_guard_steps(), size, guard=True)
             guard = {**compare_guard(before_root, after_root, size), "base_probe_pass": before["pass"], "tip_probe_pass": after["pass"]}
             guard["pass"] &= before["pass"] and after["pass"]
             result["guards"][size] = guard
