@@ -329,6 +329,7 @@ namespace RTE::CheckpointLua {
 		static constexpr size_t c_LiveSlabs = 2;
 		/// Buffers handed back to a heap that no longer exists; any is a use after free.
 		static size_t CallsIntoDestroyedHeaps() { return DeadHeapCalls().load(std::memory_order_relaxed); }
+		static bool RunBatchOpenSelfTest();
 
 		using Submit = std::function<std::future<void>(std::function<void()>)>;
 
@@ -651,8 +652,8 @@ namespace RTE::CheckpointLua {
 						std::fill(copy->saved.begin() + begin, copy->saved.begin() + page, 1);
 					}
 				}
-				// The final copied generation opens the heap once; live writes open their saved pages.
-				return true;
+				// Every active generation owns this batch before live writes resume on it.
+				return PageWriteFence::OpenCopiedPage(base + first * pageBytes, count * pageBytes);
 			}
 			bool Complete(const std::shared_ptr<CowCopy>& copy, bool openHeap) {
 				Locked guard(lock);
@@ -991,6 +992,48 @@ namespace RTE::CheckpointLua {
 		if (!pages) return;
 		HeapOwner::Unmap(pages, capacity * Snapshot::c_PageBytes);
 		HeapOwner::CopyBytes(false).fetch_sub(capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
+	}
+
+	inline bool HeapOwner::RunBatchOpenSelfTest() {
+		const size_t page = PageWriteFence::SystemPageBytes(), bytes = page * 2;
+		if (!page) return false;
+		const auto release = [bytes](void* memory) { if (memory) Unmap(memory, bytes); };
+		std::unique_ptr<void, decltype(release)> live(MapPages(bytes), release), firstBytes(MapPages(bytes), release), secondBytes(MapPages(bytes), release);
+		if (!live || !firstBytes || !secondBytes) throw std::bad_alloc();
+		auto* source = static_cast<unsigned char*>(live.get());
+		std::memset(source, 3, bytes);
+		CowCoordinator coordinator;
+		coordinator.base = reinterpret_cast<uintptr_t>(source); coordinator.pageBytes = page;
+		struct Observer { CowCoordinator& coordinator; size_t faults = 0; } observer{coordinator};
+		const auto observe = [](void* context, uintptr_t address) noexcept {
+			auto& value = *static_cast<Observer*>(context);
+			++value.faults;
+			return value.coordinator.CopyPage((address - value.coordinator.base) / value.coordinator.pageBytes, true);
+		};
+		struct Unwatch { void* owner; ~Unwatch() { PageWriteFence::UnwatchCopies(owner); } } unwatch{&observer};
+		const auto prepare = [&](void* destination) {
+			auto copy = std::make_shared<CowCopy>();
+			copy->base = coordinator.base; copy->pageBytes = page; copy->destination = static_cast<Snapshot::Page*>(destination);
+			copy->saved.assign(2, 0); copy->faults = std::make_shared<CopyFaultStats>();
+			CowCoordinator::Prepared prepared{&coordinator, copy};
+			if (!PageWriteFence::WatchCopies(&observer, {source, bytes}, observe, &observer, CowCoordinator::Arm, &prepared)) return std::shared_ptr<CowCopy>();
+			return copy;
+		};
+		const auto first = prepare(firstBytes.get());
+		if (!first || !coordinator.CopyPages(0, 1)) return false;
+		source[0] = 5;
+		if (observer.faults) return false;
+		source[page] = 7;
+		if (observer.faults != 1) return false;
+		const auto second = prepare(secondBytes.get());
+		if (!second || !coordinator.CopyPages(0, 1)) return false;
+		source[0] = 9;
+		if (observer.faults != 1) return false;
+		source[page] = 13;
+		if (observer.faults != 2 || !coordinator.Complete(first, true) || !coordinator.Complete(second, true)) return false;
+		const auto* old = static_cast<const unsigned char*>(firstBytes.get());
+		const auto* next = static_cast<const unsigned char*>(secondBytes.get());
+		return old[0] == 3 && old[page] == 3 && next[0] == 5 && next[page] == 7 && source[0] == 9 && source[page] == 13;
 	}
 
 	// Every userdata hangs after the main thread in the GC chain; nothing before it is one.

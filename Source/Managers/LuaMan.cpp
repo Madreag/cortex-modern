@@ -9591,6 +9591,11 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = exact && checkpointValues;
 	}
 	{
+		const bool exact = CheckpointLua::HeapOwner::RunBatchOpenSelfTest();
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " copied_heap_batches_resume_live_writes_before_the_whole_heap_finishes" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
 		const bool exact = CheckpointLua::CaptureScope::FrozenTopologySelfTest();
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " owned_world_topology_indexes_after_source_death_for_concurrent_readers" << std::endl;
 		checkpointValues = exact && checkpointValues;
