@@ -3816,9 +3816,25 @@ namespace RTE {
 				return back;
 			};
 			const auto drop = [&](Endpoint* link) {
+				const bool wasRunning = held() && held()->phase == NetSeatPhase::Running;
 				wire.host.NotifyDisconnect(link->connection, 200);
 				link->connected = false;
 				wire.Remove(link->connection);
+				if (wasRunning) {
+					if (!held() || held()->phase != NetSeatPhase::Running) {
+						error = "a fresh drop held the returning seat before its liveness interval";
+						return false;
+					}
+					wire.nowMs += c_NetSeatDisconnectSilenceMs;
+					wire.host.Tick(wire.nowMs);
+					wire.host.NoteSeatHeldInPlace(peer, NetSeatHoldCause::LinkDrop);
+					if (!held() || held()->phase != NetSeatPhase::Held) {
+						error = "the returning seat has no visible host hold after its drop";
+						return false;
+					}
+					// An already held failed return keeps its original early-backoff clock.
+				}
+				return true;
 			};
 			Endpoint* first = reclaim(162);
 			if (!first || first->client.GetState() != NetH4ClientState::Joined) {
@@ -3836,7 +3852,7 @@ namespace RTE {
 				return Fail("a return that plays again is not playing: the roster reads " + phaseText());
 			}
 			// The seat drops again; this return's transfer is abandoned with its player still connected.
-			drop(first);
+			if (!drop(first)) return Fail(error);
 			Endpoint* second = reclaim(163);
 			if (!second || second->client.GetState() != NetH4ClientState::Joined || held()->phase != NetSeatPhase::RejoinImage) {
 				return Fail("the second return was not admitted: " + error + " (" + phaseText() + ")");
@@ -3850,7 +3866,7 @@ namespace RTE {
 				return Fail("a failed return was offered again inside its backoff");
 			}
 			// A return its player starts again inside the backoff is the roster's to refuse.
-			drop(second);
+			if (!drop(second)) return Fail(error);
 			const uint64_t earlyAtMs = wire.nowMs + NetReconnectAdmission::c_AttemptIntervalMs;
 			Endpoint* early = reclaim(164);
 			if (!early) {
@@ -5362,8 +5378,21 @@ namespace RTE {
 			for (const NetH4Seat& seat: wire.host.GetSeatTable())
 				if (seat.stableSeat == successor.client.GetRecord().stableSeat) successorPeer = seat.lockstepPeerId;
 			wire.host.SetLiveMatch(true);
+			wire.host.NotePlacementPhase(false, 0);
 			if (!wire.Pump(&error)) return Fail(error);
 			wire.host.NotifyDisconnect(dropped.connection, 300);
+			dropped.connected = false;
+			wire.Remove(dropped.connection);
+			uint8_t droppedPeer = 0;
+			for (const NetH4Seat& seat: wire.host.GetSeatTable())
+				if (seat.stableSeat == heldSeat) droppedPeer = seat.lockstepPeerId;
+			if (!wire.host.RosterSeatOfPeer(droppedPeer) || wire.host.RosterSeatOfPeer(droppedPeer)->phase != NetSeatPhase::Running)
+				return Fail("the capsule fixture held a dropped seat before its liveness interval");
+			wire.nowMs += c_NetSeatDisconnectSilenceMs;
+			wire.host.Tick(wire.nowMs);
+			wire.host.NoteSeatHeldInPlace(droppedPeer, NetSeatHoldCause::LinkDrop);
+			if (!wire.host.RosterSeatOfPeer(droppedPeer) || wire.host.RosterSeatOfPeer(droppedPeer)->phase != NetSeatPhase::Held)
+				return Fail("the capsule fixture has no visible host hold for the applied-for seat");
 			wire.ClearDelivered();
 			// Two players apply for the held seat, the first a second before the second.
 			if (!wire.SendRaw(181, MakeApplicant(heldSeat, 0x40, "first"), &error)) return Fail(error);
@@ -5699,7 +5728,12 @@ namespace RTE {
 			}
 			// The substitute plays the seat before it drops, as the service reports it.
 			for (const NetH4Seat& seat: wire.host.GetSeatTable())
-				if (seat.stableSeat == 0) wire.host.NoteReturnCaughtUp(seat.lockstepPeerId);
+				if (seat.stableSeat == 0) {
+					wire.host.NoteReturnWorldReady(seat.lockstepPeerId);
+					wire.host.NoteReturnCaughtUp(seat.lockstepPeerId);
+					if (!wire.host.RosterSeatOfPeer(seat.lockstepPeerId) || wire.host.RosterSeatOfPeer(seat.lockstepPeerId)->phase != NetSeatPhase::Running)
+						return Fail("the substitute did not play before its later drop");
+				}
 			wire.host.NotifyDisconnect(substitute.connection, 200);
 			substitute.connected = false;
 			wire.Remove(substitute.connection);
@@ -6628,6 +6662,7 @@ namespace RTE {
 				return Fail("the second seat was never taken");
 			}
 			wire.host.SetLiveMatch(true);
+			wire.host.NotePlacementPhase(false, 0);
 			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
 			g_Census = {};
 			if (!leaver.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) {
@@ -6636,6 +6671,11 @@ namespace RTE {
 			if (wire.host.IsSeatClosed(1) || !wire.host.IsSeatHeldForReclaim(MakeSeatTable()[1].lockstepPeerId)) {
 				return Fail("a clean mid-match leave did not hold the seat for its player");
 			}
+			wire.nowMs += c_NetSeatDisconnectSilenceMs;
+			wire.host.Tick(wire.nowMs);
+			wire.host.NoteSeatHeldInPlace(MakeSeatTable()[1].lockstepPeerId, NetSeatHoldCause::Leave);
+			if (!wire.host.RosterSeatOfPeer(MakeSeatTable()[1].lockstepPeerId) || wire.host.RosterSeatOfPeer(MakeSeatTable()[1].lockstepPeerId)->phase != NetSeatPhase::Held)
+				return Fail("the no-ledger control has no visible host hold for its leaving player");
 			if (!second.client.BeginApplication(1, wire.nowMs, &error) || !wire.Pump(&error)) {
 				return Fail("the application for the vacated seat did not settle: " + error);
 			}
@@ -7757,7 +7797,10 @@ namespace RTE {
 				return Fail("the reclaim left no record to come back with: " + error);
 			}
 			// The first return plays the round again before the seat drops on the next round's setup, as the service reports it.
+			wire.host.NoteReturnWorldReady(leaverPeer);
 			wire.host.NoteReturnCaughtUp(leaverPeer);
+			if (!wire.host.RosterSeatOfPeer(leaverPeer) || wire.host.RosterSeatOfPeer(leaverPeer)->phase != NetSeatPhase::Running)
+				return Fail("the first return did not play before its off-tick second drop");
 
 			// The off-tick second drop: the census refuses, so the seat records nothing.
 			const std::vector<NetH4LedgerActor> live = census;
@@ -7947,11 +7990,19 @@ namespace RTE {
 				// A return plays on before its link goes again; one dropped mid-return would be a failed return the roster backs off.
 				const auto drop = [&](Endpoint& gone) {
 					for (const NetH4Seat& seat: MakeSeatTable())
-						if (seat.stableSeat == seeded.stableSeat) wire.host.NoteReturnCaughtUp(seat.lockstepPeerId);
+						if (seat.stableSeat == seeded.stableSeat) {
+							wire.host.NoteReturnWorldReady(seat.lockstepPeerId);
+							wire.host.NoteReturnCaughtUp(seat.lockstepPeerId);
+							if (!wire.host.RosterSeatOfPeer(seat.lockstepPeerId) || wire.host.RosterSeatOfPeer(seat.lockstepPeerId)->phase != NetSeatPhase::Running) {
+								error = "the moved return did not play before its next route drop";
+								return false;
+							}
+						}
 					wire.host.NotifyDisconnect(gone.connection, wire.nowMs);
 					gone.connected = false;
 					wire.Remove(gone.connection);
 					gone.client.NotifyAmbiguousLoss();
+					return true;
 				};
 				Endpoint moved;
 				if (!returnAt(moved, 62, second, hostSession)) return Fail("the return at a new address did not begin: " + error);
@@ -7976,14 +8027,14 @@ namespace RTE {
 				}
 
 				// The next relaunch dials what the ticket names, with no session hint, and the ticket alone finds the seat.
-				drop(moved);
+				if (!drop(moved)) return Fail(error);
 				Endpoint back;
 				if (!returnAt(back, 63, rejoin.address, 0) || !wire.Pump(&error) || back.client.GetState() != NetH4ClientState::Joined || !back.client.UsedStoredTicket()) {
 					return Fail("a return to the address the ticket names did not reclaim the seat: " + error);
 				}
 
 				// A write that fails leaves the proven ticket in place and lands once the store can take it.
-				drop(back);
+				if (!drop(back)) return Fail(error);
 				const std::filesystem::path blocker = StorePath(name) + ".tmp";
 				std::error_code code;
 				std::filesystem::create_directories(blocker, code);
