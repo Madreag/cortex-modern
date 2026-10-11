@@ -224,7 +224,9 @@ namespace RTE {
 				heartbeat.completeFrom = m_Config.migrationGeneration + 1;
 			PutSize(heartbeat.bytes, m_Stats.peers[m_Config.localPeerId].pingMs); PutSize(heartbeat.bytes, m_Stats.peers[m_Config.localPeerId].jitterMs);
 			heartbeat.totalBytes = static_cast<uint32_t>(heartbeat.bytes.size());
-			SendPeerFrameMessage(std::move(heartbeat));
+			// A newer displayed prefix replaces this progress report. Keep it
+			// arriving while older ordered decisions or history are delayed.
+			SendPeerFrameMessage(std::move(heartbeat), NetTransportLane::InputUnreliable);
 		}
 		const bool retryVotes = nowMs >= m_PeerVoteRetryAtMs;
 		if (retryVotes) m_PeerVoteRetryAtMs = nowMs + 100;

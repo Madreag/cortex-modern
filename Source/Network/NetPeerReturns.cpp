@@ -248,6 +248,10 @@ namespace RTE {
 			if (const auto ready = m_PeerCommittedTail.lower_bound(frame); ready != m_PeerCommittedTail.end()) end = std::min(end, ready->first);
 			request.completeFrom = end;
 			if (!SendPeerFrameMessage(request, NetTransportLane::BulkUnreliable, donor)) break;
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && frame == m_Stats.nextFrame)
+				DiagnosticLine() << "[net-peer-tail-request] reader=" << static_cast<int>(m_Config.localPeerId)
+				    << " donor=" << static_cast<int>(donor) << " from=" << frame << " until=" << end
+				    << " retry_ms=" << retryMs << " now_ms=" << nowMs << std::endl;
 			++requestsInBatch;
 			++m_PeerTailRequests;
 			for (; frame < end; ++frame) m_PeerTailRequestedUntil[frame] = nowMs + retryMs;
