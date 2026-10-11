@@ -53,7 +53,8 @@ namespace RTE {
 			return false;
 		}
 
-		Actor* ResolveWaypointTarget(const std::string& token, const std::deque<Actor*>& actors, const Actor* writer) {
+		template<class Allocator>
+		Actor* ResolveWaypointTarget(const std::string& token, const std::deque<Actor*, Allocator>& actors, const Actor* writer) {
 			if (token.rfind("slot=", 0) == 0) {
 				const int slot = std::atoi(token.c_str() + 5);
 				std::vector<Actor*> ranked(actors.begin(), actors.end());
@@ -150,7 +151,8 @@ namespace RTE {
 		return true;
 	}
 
-	void AIWriteScript::RunTick(uint64_t simTick, const std::deque<Actor*>& actors, const std::function<bool(const Actor*)>& isLocal) {
+	template<class Allocator>
+	void AIWriteScript::RunTick(uint64_t simTick, const std::deque<Actor*, Allocator>& actors, const std::function<bool(const Actor*)>& isLocal) {
 		if (!s_Active) {
 			return;
 		}
@@ -196,4 +198,6 @@ namespace RTE {
 			std::cout << " on uid " << target->GetUniqueID() << std::endl;
 		}
 	}
+	template void AIWriteScript::RunTick(uint64_t, const std::deque<Actor*>&, const std::function<bool(const Actor*)>&);
+	template void AIWriteScript::RunTick(uint64_t, const CheckpointDeque<Actor*>&, const std::function<bool(const Actor*)>&);
 } // namespace RTE

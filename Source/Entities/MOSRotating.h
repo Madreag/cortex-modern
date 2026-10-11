@@ -559,7 +559,7 @@ namespace RTE {
 		/// 0 means that this MO is the root, ie it is owned by MovableMan.
 		/// @param makeNewMOID Whether this MO should make a new MOID to use for itself, or to use (default: true)
 		/// the same as the last one in the index (presumably its parent),
-		void UpdateChildMOIDs(std::vector<MovableObject*>& MOIDIndex, MOID rootMOID = g_NoMOID, bool makeNewMOID = true) override;
+		void UpdateChildMOIDs(CheckpointVector<MovableObject*>& MOIDIndex, MOID rootMOID = g_NoMOID, bool makeNewMOID = true) override;
 
 		/// Creates the particles specified by this MOSRotating's list of Gibs and adds them to MovableMan with appropriately randomized velocities, based on this MOSRotating's gib blast strength.
 		/// @param impactImpulse The impulse (kg * m/s) of the impact that caused the gibbing to happen.

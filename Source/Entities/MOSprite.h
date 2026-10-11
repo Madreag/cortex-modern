@@ -96,7 +96,10 @@ namespace RTE {
 		/// @param whichFrame Which frame to get. (default: 0)
 		/// @return A pointer to the requested frame of this MOSprite's BITMAP array.
 		/// Ownership is NOT transferred!
-		BITMAP* GetSpriteFrame(unsigned int whichFrame = 0) const { return whichFrame < m_aSprite.size() ? m_aSprite[whichFrame] : nullptr; }
+		BITMAP* GetSpriteFrame(unsigned int whichFrame = 0) const {
+			if (whichFrame >= m_aSprite.size()) return nullptr;
+			return CheckpointNativeStorage::IsView(this) ? *static_cast<BITMAP* const*>(CheckpointNativeStorage::View(m_aSprite.data() + whichFrame, sizeof(BITMAP*))) : m_aSprite[whichFrame];
+		}
 		std::shared_ptr<BITMAP> ShareSpriteBitmap(BITMAP* bitmap) const;
 		static bool RunCheckpointSelfTest();
 

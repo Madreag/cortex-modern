@@ -23,7 +23,7 @@ namespace RTE {
 		static bool IsActive() { return s_Active; }
 
 		/// Runs the lines due at the tick; called by the AI pass for the actors this machine drives.
-		static void RunTick(uint64_t simTick, const std::deque<Actor*>& actors, const std::function<bool(const Actor*)>& isLocal);
+		template<class Allocator> static void RunTick(uint64_t simTick, const std::deque<Actor*, Allocator>& actors, const std::function<bool(const Actor*)>& isLocal);
 
 	private:
 		static bool s_Active;

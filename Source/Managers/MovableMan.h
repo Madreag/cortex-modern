@@ -18,6 +18,7 @@
 #include "SpatialPartitionGrid.h"
 #include "PreviewEventLedger.h"
 #include "MovableObjectReference.h"
+#include "CheckpointFrozenContainers.h"
 
 #include "BS_thread_pool.hpp"
 
@@ -59,7 +60,7 @@ namespace RTE {
 	class LuabindObjectWrapper;
 
 	/// A struct to keep all data about a an alarming event for the AI Actors.
-	struct AlarmEvent {
+	struct AlarmEvent : CheckpointNativeAllocated {
 		friend struct ContractAudit;
 
 		AlarmEvent() {
@@ -175,7 +176,7 @@ namespace RTE {
 			/// Keeps every UniqueID the staged objects drew taken once the scope ends, for objects that keep the IDs they were read with.
 			void KeepDrawnUniqueIDs();
 		private:
-			std::map<long, MovableObject*> m_Original;
+			CheckpointMap<long, MovableObject*> m_Original;
 			CheckpointSoundRegistry m_OriginalSounds;
 			uint64_t m_SoundCursor;
 			std::array<size_t, 4> m_QueueSizes{};
@@ -257,23 +258,23 @@ namespace RTE {
 			std::vector<MovableObject*> pendingLinks;
 			std::shared_ptr<LuaPathCallbackContext> pathCallbacks;
 			Scene::AreaState sceneAreas;
-			std::deque<Actor*> actors;
-			std::deque<MovableObject*> items;
-			std::deque<MovableObject*> particles;
-			std::deque<Actor*> addedActors;
-			std::deque<MovableObject*> addedItems;
-			std::deque<MovableObject*> addedParticles;
-			std::vector<AlarmEvent*> alarmEvents;
-			std::vector<AlarmEvent*> addedAlarmEvents;
-			std::list<Actor*> rosters[Activity::MaxTeamCount];
+			CheckpointDeque<Actor*> actors;
+			CheckpointDeque<MovableObject*> items;
+			CheckpointDeque<MovableObject*> particles;
+			CheckpointDeque<Actor*> addedActors;
+			CheckpointDeque<MovableObject*> addedItems;
+			CheckpointDeque<MovableObject*> addedParticles;
+			CheckpointVector<AlarmEvent*> alarmEvents;
+			CheckpointVector<AlarmEvent*> addedAlarmEvents;
+			CheckpointList<Actor*> rosters[Activity::MaxTeamCount];
 			bool sortRoster[Activity::MaxTeamCount] = {};
-			std::vector<std::pair<uint64_t, long int>> joinQuarantine;
-			std::map<long int, MovableObject*> knownObjects;
-			std::vector<MovableObject*> moidIndex;
-			std::unordered_map<const Actor*, int> contiguousActorIDs;
-			std::unordered_set<const MovableObject*> validActors;
-			std::unordered_set<const MovableObject*> validItems;
-			std::unordered_set<const MovableObject*> validParticles;
+			CheckpointVector<std::pair<uint64_t, long int>> joinQuarantine;
+			CheckpointMap<long int, MovableObject*> knownObjects;
+			CheckpointVector<MovableObject*> moidIndex;
+			CheckpointUnorderedMap<const Actor*, int> contiguousActorIDs;
+			CheckpointUnorderedSet<const MovableObject*> validActors;
+			CheckpointUnorderedSet<const MovableObject*> validItems;
+			CheckpointUnorderedSet<const MovableObject*> validParticles;
 			std::array<int, Activity::MaxTeamCount> teamMOIDCount{};
 			SpatialPartitionGrid moidGrid;
 			std::vector<std::string> luaGraphs; //!< Each Lua state's script graph as the originals left it.
@@ -522,7 +523,7 @@ namespace RTE {
 		/// @return A pointer to the list of all the actors on the specified team, sorted
 		/// ascending by their X posistions. Ownership of the list or contained
 		/// actors is NOT transferred!
-		std::list<Actor*>* GetTeamRoster(int team = 0) { return &(m_ActorRoster[team]); }
+		CheckpointList<Actor*>* GetTeamRoster(int team = 0) { return &(m_ActorRoster[team]); }
 
 		/// Get a pointer to the first Actor in the internal Actor list that is
 		/// of a specifc team, alternatively the first one AFTER a specific actor!
@@ -869,7 +870,7 @@ namespace RTE {
 
 		/// Gets the list of AlarmEvent:s from last frame's update.
 		/// @return The const list of AlarmEvent:s.
-		const std::vector<AlarmEvent*>& GetAlarmEvents() const { return m_AlarmEvents; }
+		const CheckpointVector<AlarmEvent*>& GetAlarmEvents() const { return m_AlarmEvents; }
 
 		/// Whether an alarm event is one of last frame's or this frame's; a script can keep one past its frame.
 		/// @param event The event, compared by address only.
@@ -924,7 +925,7 @@ namespace RTE {
 		/// Hands every controller this machine produces for to the producing pass, and names the set it
 		/// began with by unique ID: what the pass ends on cannot depend on a team or an owner a script
 		/// changes meanwhile, and an actor handed out of the world in between is not touched again.
-		static std::vector<long int> BeginLockstepProducingPass(const std::deque<Actor*>& actors, const std::function<bool(const Actor*)>& isLocal);
+		template<class Allocator> static std::vector<long int> BeginLockstepProducingPass(const std::deque<Actor*, Allocator>& actors, const std::function<bool(const Actor*)>& isLocal);
 
 		/// Ends the producing pass for exactly that set, skipping anything that left the world meanwhile.
 		static void EndLockstepProducingPass(const std::vector<long int>& producing);
@@ -937,8 +938,8 @@ namespace RTE {
 		/// Empties the lockstep join quarantine — a restore's objects were residents at the
 		/// captured tick, not mid-tick joiners.
 		void ClearLockstepJoinQuarantine();
-		const std::vector<std::pair<uint64_t, long int>>& GetLockstepJoinQuarantine() const { return m_LockstepJoinQuarantine; }
-		void RestoreLockstepJoinQuarantine(std::vector<std::pair<uint64_t, long int>> quarantine) { m_LockstepJoinQuarantine = std::move(quarantine); }
+		std::vector<std::pair<uint64_t, long int>> GetLockstepJoinQuarantine() const { const auto values = CheckpointValues(m_LockstepJoinQuarantine); return {values.begin(), values.end()}; }
+		void RestoreLockstepJoinQuarantine(std::vector<std::pair<uint64_t, long int>> quarantine) { m_LockstepJoinQuarantine.assign(quarantine.begin(), quarantine.end()); }
 
 		/// While set, the Add paths place snapshot residents verbatim (no spawn normalization, no
 		/// join quarantine) and each object adopts its saved identity. Only a rollback restore
@@ -1137,21 +1138,21 @@ namespace RTE {
 		/// Protected member variable and method declarations
 	protected:
 		// All actors in the scene
-		std::deque<Actor*> m_Actors;
+		CheckpointDeque<Actor*> m_Actors;
 		// A map to give a unique contiguous identifier per-actor. This is re-created per frame.
-		std::unordered_map<const Actor*, int> m_ContiguousActorIDs;
+		CheckpointUnorderedMap<const Actor*, int> m_ContiguousActorIDs;
 		// List of items that are pickup-able by actors
-		std::deque<MovableObject*> m_Items;
+		CheckpointDeque<MovableObject*> m_Items;
 		// List of free, dead particles flying around
-		std::deque<MovableObject*> m_Particles;
+		CheckpointDeque<MovableObject*> m_Particles;
 		// These are the actors/items/particles which were added during a frame.
 		// They are moved to the containers above at the end of the frame.
-		std::deque<Actor*> m_AddedActors;
+		CheckpointDeque<Actor*> m_AddedActors;
 		// Actors that joined mid-tick during a lockstep match (join tick, unique id), quarantined off
 		// their per-machine controllers until the next tick's controller update hands them to the wire.
-		std::vector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
+		CheckpointVector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
 		// The unique ids of the brains human players depend on, every seat's, on every peer.
-		std::set<long> m_PlayerBrainIDs;
+		CheckpointSet<long> m_PlayerBrainIDs;
 		WorldSetAside* m_WorldSetAside = nullptr; //!< The record holding the world aside, if any; the hold is its to reinstate or discard.
 		/// Withdraws the copies a held world would swap back, so no later destruction writes into them.
 		void ForgetHeldWorld(WorldSetAside& in);
@@ -1168,23 +1169,23 @@ namespace RTE {
 				uint64_t tick = 0;
 			};
 			bool active = false;
-			std::unordered_map<const MovableObject*, Shadow> shadows; //!< Resident -> its shadow.
-			std::unordered_map<const MovableObject*, MovableObject*> residents; //!< Shadow -> its resident.
-			std::unordered_map<const MovableObject*, Spawn> spawnMeta;
+			CheckpointUnorderedMap<const MovableObject*, Shadow> shadows; //!< Resident -> its shadow.
+			CheckpointUnorderedMap<const MovableObject*, MovableObject*> residents; //!< Shadow -> its resident.
+			CheckpointUnorderedMap<const MovableObject*, Spawn> spawnMeta;
 			std::vector<Spawn> spawns;
 			std::vector<MovableObject*> travelers; //!< Shadows of the world's particles in flight, travelling with the speculation.
 			int travelerSteps = 0; //!< The steps the travelers still move; past them they stand as the rest of the world does.
 			bool travelersMoved = false; //!< They moved this step, so only now can one have come to rest.
 			std::vector<MovableObject*> taken;
 			AddQueueMark mark;
-			std::list<Actor*> rosters[Activity::MaxTeamCount];
+			CheckpointList<Actor*> rosters[Activity::MaxTeamCount];
 			bool sortRoster[Activity::MaxTeamCount] = {};
 		};
 		Speculation m_Speculation;
 		SpeculationStats m_SpeculationStats;
 		ControllerBoundaryStats m_ControllerBoundaryStats;
-		std::unordered_set<const MovableObject*> m_RenderHidden;
-		std::unordered_set<const MovableObject*> m_RenderSubstitutes;
+		CheckpointUnorderedSet<const MovableObject*> m_RenderHidden;
+		CheckpointUnorderedSet<const MovableObject*> m_RenderSubstitutes;
 		MovableObject* m_LinkRoot = nullptr;
 		void (*m_ShadowMadeHook)(MovableObject* resident, MovableObject* shadow) = nullptr;
 
@@ -1224,16 +1225,16 @@ namespace RTE {
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		bool m_PurgingAllMOs = false;
 		std::vector<MovableObject*> m_PendingLinkResolves; //!< Restored adds whose saved links resolve once the whole world is in.
-		std::deque<MovableObject*> m_AddedItems;
-		std::deque<MovableObject*> m_AddedParticles;
+		CheckpointDeque<MovableObject*> m_AddedItems;
+		CheckpointDeque<MovableObject*> m_AddedParticles;
 
 		// Currently active MOs in the simulation. This is required because the code is awful and ownership isn't transported to/from lua in any sensible way.
 		// It's entirely possible that stuff is deleted in the game but a reference to it is kept in Lua. Which is awful. Obviously.
 		// Or perhaps even more concerningly, stuff can be deleted, re-allocated over the same space, and then readded to movableman. Which even this solution does nothing to fix.
 		// Anyways, until we fix up ownership semantics... this is the best we can do.
-		std::unordered_set<const MovableObject*> m_ValidActors;
-		std::unordered_set<const MovableObject*> m_ValidItems;
-		std::unordered_set<const MovableObject*> m_ValidParticles;
+		CheckpointUnorderedSet<const MovableObject*> m_ValidActors;
+		CheckpointUnorderedSet<const MovableObject*> m_ValidItems;
+		CheckpointUnorderedSet<const MovableObject*> m_ValidParticles;
 
 		// Mutexes to ensure MOs aren't being removed from separate threads at the same time
 		std::mutex m_ActorsMutex;
@@ -1258,7 +1259,7 @@ namespace RTE {
 		BS::multi_future<void> m_ActorsSeeFuture;
 
 		// Roster of each team's actors, sorted by their X positions in the scene. Actors not owned here
-		std::list<Actor*> m_ActorRoster[Activity::MaxTeamCount];
+		CheckpointList<Actor*> m_ActorRoster[Activity::MaxTeamCount];
 		// Whether to draw HUD lines between the actors of a specific team
 		bool m_SortTeamRoster[Activity::MaxTeamCount];
 		// Every team's MO footprint
@@ -1266,16 +1267,16 @@ namespace RTE {
 
 		// The alarm events on the scene where something alarming happened, for use with AI firings awareness os they react to shots fired etc.
 		// This is the last frame's events, is the one for Actors to poll for events, should be cleaned out and refilled each frame.
-		std::vector<AlarmEvent*> m_AlarmEvents;
+		CheckpointVector<AlarmEvent*> m_AlarmEvents;
 		// The alarm events on the scene where something alarming happened, for use with AI firings awareness os they react to shots fired etc.
 		// This is the current frame's events, will be filled up during MovableMan Updates, should be transferred to Last Frame at end of update.
-		std::vector<AlarmEvent*> m_AddedAlarmEvents;
+		CheckpointVector<AlarmEvent*> m_AddedAlarmEvents;
 
 		// Mutexes to ensure alarm events aren't being added from separate threads at the same time
 		std::mutex m_AddedAlarmEventsMutex;
 
 		// The list created each frame to register all the current MO's
-		std::vector<MovableObject*> m_MOIDIndex;
+		CheckpointVector<MovableObject*> m_MOIDIndex;
 
 		// The ration of terrain pixels to be converted into MOPixel:s upon
 		// deep impact of MO.
@@ -1296,14 +1297,15 @@ namespace RTE {
 		uint64_t m_LastChecksumCensusTick = 0; //!< The tick that census was taken at.
 
 		// Global map which stores all objects so they could be foud by their unique ID
-		std::map<long int, MovableObject*> m_KnownObjects;
+		CheckpointMap<long int, MovableObject*> m_KnownObjects;
 		std::atomic<uint64_t> m_KnownObjectsVersion{0}; //!< Moves with every change to m_KnownObjects, under its lock.
 		std::unordered_map<const MovableObject*, uint32_t> m_KnownAddresses; //!< How many entries of m_KnownObjects name each object, as of m_KnownAddressesVersion.
 		uint64_t m_KnownAddressesVersion = UINT64_MAX; //!< The m_KnownObjectsVersion m_KnownAddresses answers for; any other rebuilds it at its next use.
 		/// Drops one entry's count of an object from the address index. Called with the registry locked.
 		void ForgetKnownAddress(const MovableObject* mo);
+		std::atomic<const std::vector<MovableObject*>*> m_CaptureScriptHeld{nullptr};
 		std::atomic<KnownObjectsScope*> m_KnownObjectsScope{nullptr}; //!< The innermost live known-objects scope.
-		std::vector<std::map<long int, MovableObject*>*> m_HeldRegistries; //!< Registry copies a scope will put back.
+		std::vector<CheckpointMap<long int, MovableObject*>*> m_HeldRegistries; //!< Registry copies a scope will put back.
 		std::string m_ScriptGraphFailure; //!< Why the last set-aside could not carry the script graphs, empty when it could.
 
 		/// Private member variable and method declarations

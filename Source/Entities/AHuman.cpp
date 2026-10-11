@@ -940,6 +940,14 @@ bool AHuman::HasObject(std::string objectName) const {
 bool AHuman::HasObjectInGroup(std::string groupName) const {
 	bool found = Actor::HasObjectInGroup(groupName);
 
+	if (CheckpointNativeStorage::Reading()) {
+		for (const Arm* original: {m_pFGArm, m_pBGArm}) {
+			const auto* arm = CheckpointNativeStorage::Source(original);
+			if (arm && arm->IsAttached() && arm->GetHeldDevice()) found = found || CheckpointNativeStorage::Source(arm->GetHeldDevice())->HasObjectInGroup(groupName);
+		}
+		return found;
+	}
+
 	// If holding something, then check that too
 	if (m_pFGArm && m_pFGArm->IsAttached() && m_pFGArm->GetHeldDevice())
 		found = found || m_pFGArm->GetHeldDevice()->HasObjectInGroup(groupName);

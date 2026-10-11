@@ -1204,7 +1204,7 @@ namespace RTE {
 
 		/// Updates this' and its its childrens' MOID's and foorprint. Should
 		/// be done every frame.
-		void UpdateMOID(std::vector<MovableObject*>& MOIDIndex, MOID rootMOID = g_NoMOID, bool makeNewMOID = true);
+		void UpdateMOID(CheckpointVector<MovableObject*>& MOIDIndex, MOID rootMOID = g_NoMOID, bool makeNewMOID = true);
 
 		/// Draws this' current graphical HUD overlay representation to a
 		/// BITMAP of choice.
@@ -1436,7 +1436,7 @@ namespace RTE {
 		/// 0 means that this MO is the root, ie it is owned by MovableMan.
 		/// @param makeNewMOID Whether this MO should make a new MOID to use for itself, or to use (default: true)
 		/// the same as the last one in the index (presumably its parent),
-		virtual void UpdateChildMOIDs(std::vector<MovableObject*>& MOIDIndex, MOID rootMOID = g_NoMOID, bool makeNewMOID = true) {}
+		virtual void UpdateChildMOIDs(CheckpointVector<MovableObject*>& MOIDIndex, MOID rootMOID = g_NoMOID, bool makeNewMOID = true) {}
 
 		/// Makes this MO register itself in the MOID register and get ID:s for
 		/// itself and its children for this frame.
@@ -1446,7 +1446,7 @@ namespace RTE {
 		/// 0 means that this MO is the root, ie it is owned by MovableMan.
 		/// @param makeNewMOID Whether this MO should make a new MOID to use for itself, or to use (default: true)
 		/// the same as the last one in the index (presumably its parent),
-		void RegMOID(std::vector<MovableObject*>& MOIDIndex, MOID rootMOID = g_NoMOID, bool makeNewMOID = true);
+		void RegMOID(CheckpointVector<MovableObject*>& MOIDIndex, MOID rootMOID = g_NoMOID, bool makeNewMOID = true);
 
 		/// Copy constructor method used to instantiate a MovableObject object
 		/// identical to an already existing one.

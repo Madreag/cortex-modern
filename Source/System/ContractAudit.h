@@ -1760,7 +1760,7 @@ void Visit(const GraphicalPrimitive& object, const std::string& path) {
 static State Observe(const std::string& gapPath) {
     ContractAudit audit;
     std::map<long int, MovableObject*> objects;
-    { std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex); objects = g_MovableMan.m_KnownObjects; }
+    { std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex); objects.insert(g_MovableMan.m_KnownObjects.begin(), g_MovableMan.m_KnownObjects.end()); }
     size_t invalid = 0;
     for (const auto& [uid, object]: objects) {
         if (!object || uid <= 0 || object->GetUniqueID() != uid) {

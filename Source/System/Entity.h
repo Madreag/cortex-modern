@@ -378,7 +378,8 @@ namespace RTE {
 		/// Gets whether this is part of a specific group or not.
 		/// @param whichGroup A string which describes the group to check for.
 		/// @return Whether this Entity is in the specified group or not.
-		bool IsInGroup(const std::string& whichGroup) const { return whichGroup == "None" ? false : (whichGroup == "All" || whichGroup == "Any" || m_Groups.contains(whichGroup)); }
+		bool IsInGroup(const std::string& whichGroup) const { return whichGroup == "None" ? false : (whichGroup == "All" || whichGroup == "Any" || (CheckpointNativeStorage::Reading() ? IsInFrozenGroup(whichGroup) : m_Groups.contains(whichGroup))); }
+		bool IsInFrozenGroup(const std::string& whichGroup) const;
 
 		/// Adds this Entity to a new grouping.
 		/// @param newGroup A string which describes the group to add this to. Duplicates will be ignored.

@@ -1032,6 +1032,11 @@ bool Actor::HasObjectInGroup(std::string groupName) const {
 	if (MOSRotating::HasObjectInGroup(groupName))
 		return true;
 
+	if (CheckpointNativeStorage::Reading()) {
+		for (const auto* item: CheckpointValues(m_Inventory)) if (item && CheckpointNativeStorage::Source(item)->HasObjectInGroup(groupName)) return true;
+		return false;
+	}
+
 	for (std::deque<MovableObject*>::const_iterator itr = m_Inventory.begin(); itr != m_Inventory.end(); ++itr) {
 		if ((*itr) && (*itr)->HasObjectInGroup(groupName))
 			return true;
@@ -3011,7 +3016,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 
 		Actor* pPrevAdj = 0;
 		Actor* pNextAdj = 0;
-		std::list<Actor*>* pRoster = g_MovableMan.GetTeamRoster(m_Team);
+		auto* pRoster = g_MovableMan.GetTeamRoster(m_Team);
 
 		if (pRoster->size() > 1) {
 			// Find this in the list, both ways

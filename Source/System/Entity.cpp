@@ -841,3 +841,7 @@ namespace RTE {
 		}
 	}
 } // namespace RTE
+
+bool RTE::Entity::IsInFrozenGroup(const std::string& whichGroup) const {
+	return CheckpointContains(CheckpointNativeStorage::Source(this)->m_Groups, whichGroup);
+}

@@ -1649,7 +1649,7 @@ void GameActivity::DriveScriptedActorSelect(int player) {
 	}
 	ACraft* craft = nullptr;
 	Actor* passenger = nullptr;
-	std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(m_Team[player]);
+	auto* roster = g_MovableMan.GetTeamRoster(m_Team[player]);
 	if (roster) {
 		for (Actor* actor: *roster) {
 			auto* candidate = dynamic_cast<ACraft*>(actor);
@@ -2199,7 +2199,7 @@ static Actor* NextSpectatorActor(const Actor* current, bool forward) {
 	bool seenCurrent = false;
 
 	for (int team = Activity::Teams::TeamOne; team < Activity::Teams::MaxTeamCount; ++team) {
-		const std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(team);
+		const auto* roster = g_MovableMan.GetTeamRoster(team);
 		if (!roster) {
 			continue;
 		}
@@ -4094,17 +4094,18 @@ bool GameActivity::ResolveCheckpointReferences() {
 }
 
 void GameActivity::VisitCheckpointOwnedObjects(const std::function<void(const Entity*)>& visit) const {
-    for (const auto& queue: m_Deliveries) for (const Delivery& delivery: queue) visit(delivery.pCraft);
+    for (const auto& queue: m_Deliveries) for (const Delivery& delivery: CheckpointValues(queue)) visit(delivery.pCraft);
     for (const SceneEditorGUI* editor: m_pEditorGUI) if (editor) {
+        editor = CheckpointNativeStorage::Source(editor);
         visit(editor->GetCurrentObject());
-        for (const auto& owner: editor->GetCheckpointRetainedOwners()) visit(owner.get());
+        for (const auto& owner: CheckpointValues(editor->GetCheckpointRetainedOwners())) visit(owner.get());
     }
 }
 
 // A delivery queue is sim state, so every peer's activity owns the same crafts and cargo; a seat's
 // setup editor holds objects only its own peer ever had, and those stay out.
 void GameActivity::VisitCheckpointSharedObjects(const std::function<void(const Entity*)>& visit) const {
-    for (const auto& queue: m_Deliveries) for (const Delivery& delivery: queue) visit(delivery.pCraft);
+    for (const auto& queue: m_Deliveries) for (const Delivery& delivery: CheckpointValues(queue)) visit(delivery.pCraft);
 }
 
 bool GameActivity::RunDeliveryReferenceSelfTest() {

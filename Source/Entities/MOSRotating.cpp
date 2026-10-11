@@ -1919,7 +1919,7 @@ void MOSRotating::PostUpdate() {
 }
 
 // TODO This should just be defined in MOSR instead of having an empty definition in MO. MOSR would need to override UpdateMOID accordingly, but this would clean things up a little.
-void MOSRotating::UpdateChildMOIDs(std::vector<MovableObject*>& MOIDIndex, MOID rootMOID, bool makeNewMOID) {
+void MOSRotating::UpdateChildMOIDs(CheckpointVector<MovableObject*>& MOIDIndex, MOID rootMOID, bool makeNewMOID) {
 	MOSprite::UpdateChildMOIDs(MOIDIndex, m_RootMOID, makeNewMOID);
 
 	for (Attachable* attachable: m_Attachables) {

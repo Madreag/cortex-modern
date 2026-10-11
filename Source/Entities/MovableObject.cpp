@@ -2088,7 +2088,7 @@ int MovableObject::WhilePieMenuOpenListener(const PieMenu* pieMenu) {
 	return RunScriptedFunctionInAppropriateScripts("WhilePieMenuOpen", false, false, {pieMenu});
 }
 
-void MovableObject::UpdateMOID(std::vector<MovableObject*>& MOIDIndex, MOID rootMOID, bool makeNewMOID) {
+void MovableObject::UpdateMOID(CheckpointVector<MovableObject*>& MOIDIndex, MOID rootMOID, bool makeNewMOID) {
 	// Register the own MOID
 	RegMOID(MOIDIndex, rootMOID, makeNewMOID);
 
@@ -2125,7 +2125,7 @@ void MovableObject::SetHitWhatParticleUniqueID(long int id) {
 	m_LastCollisionSimFrameNumber = g_MovableMan.GetSimUpdateFrameNumber();
 }
 
-void MovableObject::RegMOID(std::vector<MovableObject*>& MOIDIndex, MOID rootMOID, bool makeNewMOID) {
+void MovableObject::RegMOID(CheckpointVector<MovableObject*>& MOIDIndex, MOID rootMOID, bool makeNewMOID) {
 	if (!makeNewMOID && GetParent()) {
 		m_MOID = GetParent()->GetID();
 	} else {

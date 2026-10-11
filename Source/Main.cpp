@@ -7325,7 +7325,7 @@ static Actor* FindE2eSwitchControlTarget(Activity* activity, int player) {
 		brain = g_MovableMan.GetFirstBrainActor(team);
 	}
 	Actor* best = nullptr;
-	if (std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(team)) {
+	if (auto* roster = g_MovableMan.GetTeamRoster(team)) {
 		for (Actor* actor: *roster) {
 			if (!actor || actor == brain || actor->IsInGroup("Brains") || actor->IsPlayerControlled()) {
 				continue;
@@ -7347,7 +7347,7 @@ static void NoteE2eSwitchOwnerLog(uint64_t tick) {
 	}
 	if (s_netMatchE2eSwitchUid == 0) {
 		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
-			std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(team);
+			auto* roster = g_MovableMan.GetTeamRoster(team);
 			if (!roster) {
 				continue;
 			}
