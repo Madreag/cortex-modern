@@ -67,7 +67,7 @@ namespace {
 	struct Probe {
 		bool loaded = false, enabled = false, done = false, resultStarted = false;
 		size_t index = 0, gestureIndex = SIZE_MAX, handIndex = SIZE_MAX; //!< handIndex: the step whose hand gesture is still running.
-		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0, stepSim = 0, resultWrittenMs = 0;
+		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0, stepSim = 0, resultWrittenMs = 0, pendingWrittenMs = 0;
 		Clock::time_point started;
 		Clock::time_point loadedAt; //!< The label dump's one clock: the script's load, which the activation and a round's reset never move.
 		uint64_t labelDumpMs = 0, labelWrittenMs = 0;
@@ -1457,7 +1457,7 @@ namespace {
 				probe.round = round; probe.index = 0; probe.done = false; probe.phaseArmed = false;
 				probe.result["steps"] = Json::array(); probe.result["complete"] = false; probe.result["pass"] = false;
 				probe.result["round"] = round; probe.started = Clock::now();
-				probe.stepMs = probe.resultWrittenMs = 0; probe.gestureIndex = SIZE_MAX; probe.handIndex = SIZE_MAX;
+				probe.stepMs = probe.resultWrittenMs = probe.pendingWrittenMs = 0; probe.gestureIndex = SIZE_MAX; probe.handIndex = SIZE_MAX;
 				probe.roundEndArmed = false; probe.roundEndSignals.clear();
 			}
 			if (probe.done) return;
@@ -1482,10 +1482,14 @@ namespace {
 			Json observed = Observe();
 			try {
 				if (!Step(step, observed)) {
-					if (NowMs() >= probe.resultWrittenMs + 1000) {
+					if (NowMs() >= probe.pendingWrittenMs + 1000) {
 						probe.result["pending"] = {{"index", probe.index}, {"op", step.at("op")}, {"observed", observed}};
-						WriteResult();
-						probe.resultWrittenMs = NowMs();
+						// A stalled action needs its latest observation, not another copy of every completed action.
+						const std::string name = probe.script.value("repeat_rounds", false) ? "net-ui-pending.round" + std::to_string(probe.round) + ".json" : "net-ui-pending.json";
+						std::ofstream output(probe.directory / name);
+						output << probe.result["pending"].dump(2) << '\n';
+						Require(static_cast<bool>(output), "cannot write pending probe observation");
+						probe.pendingWrittenMs = NowMs();
 					}
 					return;
 				}
