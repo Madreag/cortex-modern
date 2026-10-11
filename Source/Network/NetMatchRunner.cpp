@@ -16,6 +16,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <random>
 #include <thread>

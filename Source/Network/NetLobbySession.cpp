@@ -18,6 +18,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <cstdlib>
 #include <optional>
 #include <sstream>
 #include <string_view>

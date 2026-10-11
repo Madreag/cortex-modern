@@ -8,6 +8,7 @@
 #include "lz4.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 
 namespace RTE {

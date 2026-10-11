@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <chrono>
+#include <cstdlib>
 #include <limits>
 
 namespace RTE {
