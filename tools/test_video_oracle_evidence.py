@@ -9,6 +9,22 @@ import e2e_video as video
 
 
 class VideoOracleEvidence(unittest.TestCase):
+    def test_census_note_does_not_change_the_measured_cost_verdict(self):
+        from feel.test_harness_cost import complete_cost_log
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            peer = dict(peer='host', root=str(root))
+            for cost, expected in ((2.8, 'pass'), (50.1, 'fail')):
+                with self.subTest(cost=cost):
+                    log = complete_cost_log(first=1, last=2, costs={'census': cost})
+                    log += '[mem-census] tick=1 census_us=lua:2700\n'
+                    (root / 'stdout.log').write_text(log)
+                    with patch.object(video, 'freeze_scan', return_value=[]):
+                        rows = video.capture_evidence_items({}, dict(name='unit'), peer)
+                    measured = next(row for row in rows if row['id'] == 'harness-cost-host')
+                    self.assertIn('census instant=', measured['instrumentation']['reason'])
+                    self.assertEqual(measured['probe'], expected, measured)
+
     def test_declared_capture_minimum_and_each_watch_summary_are_required(self):
         from feel.test_harness_cost import complete_cost_log
         with tempfile.TemporaryDirectory() as folder:

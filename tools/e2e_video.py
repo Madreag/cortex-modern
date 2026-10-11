@@ -1188,7 +1188,7 @@ def capture_evidence_items(scenario, capture, peer):
     output = []
     from feel.harness_cost import reduce_costs
     cost = reduce_costs([Path(peer['root']) / 'stdout.log'])
-    output.append(item(f'harness-cost-{name}', cost['rule'], cost['reason'],
+    output.append(item(f'harness-cost-{name}', cost['rule'], cost['reason'] if cost['status'] != 'PASS' else '',
                        incomplete=cost['status'] == 'INCOMPLETE', instrumentation=cost))
     health, error = None, ''
     try:
