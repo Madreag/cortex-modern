@@ -4638,7 +4638,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	};
 	const auto compose = [&]() {
 		std::string sentence;
-		if (!snapshot.transferLine.empty() || !snapshot.waitLine.empty()) {
+		const bool countingDown = snapshot.inLobby && snapshot.startCountdownRunning;
+		// The countdown stays visible while its world is prepared.
+		if (!countingDown && (!snapshot.transferLine.empty() || !snapshot.waitLine.empty())) {
 			// A join in progress names what it waits on: the world's image, or one of its held slots and the seconds left.
 			sentence = !snapshot.transferLine.empty() ? snapshot.transferLine : snapshot.waitLine;
 		} else if (snapshot.awaitingHostConfig) {
@@ -4659,7 +4661,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			} else {
 				sentence = "Waiting for " + names(notReady) + " to press Ready";
 			}
-		} else if (snapshot.joiningWorld) {
+		} else if (snapshot.joiningWorld && !countingDown) {
 			sentence = PlayerFacingStatus(snapshot.statusText);
 		} else {
 			const bool ready = g_NetMatchService.IsReadyRequested();

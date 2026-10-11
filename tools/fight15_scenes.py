@@ -69,9 +69,9 @@ def join_setup(connected=2):
             f"wait_connected {connected} 90", "wait_substate Lobby 90", "wait_ms 1200"]
 
 
-def watches(prefix, text, state="substate:Lobby"):
+def watches(prefix, text, state="substate:Lobby", rule="equals"):
     text = "json:" + json.dumps(text) if "\n" in text else text
-    return [f"text_watch start {prefix}-state equals {state} LabelMultiplayerStatus {text}",
+    return [f"text_watch start {prefix}-state {rule} {state} LabelMultiplayerStatus {text}",
             f"text_watch start {prefix}-layout layout {state}",
             f"text_watch start {prefix}-duplicates duplicates {state}",
             f"text_watch start {prefix}-persistent shown {state} LabelMultiplayerStatus"]
@@ -174,25 +174,40 @@ def lobby_scenes():
     host += ["video_mark countdown-before-host", "wait_ms 4000"] + assert_watches("countdown-before")
     host += ["activate ButtonMultiplayerStart", "wait_label LabelMultiplayerStatus Starting in 30 s",
              "video_mark countdown-30-host", "assert_label ButtonMultiplayerStart Cancel Start",
-             "assert_text_fits LabelMultiplayerStatus", "wait_label LabelMultiplayerStatus Starting in 28 s",
-             "video_mark countdown-28-host", "wait_ms 1200", "activate ButtonMultiplayerStart", "wait_ms 1200"]
+             "assert_label LabelMultiplayerStatus Starting in 30 s - waiting for Joiner to press Ready",
+             "assert_text_fits LabelMultiplayerStatus"]
+    host += watches("countdown-active-host", "Starting in", rule="contains")
+    host += ["wait_label LabelMultiplayerStatus Starting in 28 s", "video_mark countdown-28-host",
+             "assert_label LabelMultiplayerStatus Starting in 28 s - waiting for Joiner to press Ready", "wait_ms 1200"]
+    host += assert_watches("countdown-active-host") + ["activate ButtonMultiplayerStart", "wait_ms 1200"]
     host += watches("countdown-cancel", "Waiting for Joiner to press Ready")
     host += ["video_mark countdown-cancel-host", "wait_ms 3000"] + assert_watches("countdown-cancel")
     joiner += ["video_mark countdown-before-joiner", "assert_label LabelMultiplayerStatus Press Ready when you're ready to play",
                "wait_label LabelMultiplayerStatus The host is starting the match in 30 s",
-               "video_mark countdown-30-joiner", "assert_text_fits LabelMultiplayerStatus",
-               "wait_label LabelMultiplayerStatus The host is starting the match in 28 s",
-               "video_mark countdown-28-joiner", "wait_ms 1200",
-               "wait_label LabelMultiplayerStatus Press Ready when you're ready to play"]
+               "video_mark countdown-30-joiner", "assert_label LabelMultiplayerStatus The host is starting the match in 30 s - press Ready",
+               "assert_text_fits LabelMultiplayerStatus"]
+    joiner += watches("countdown-active-joiner", "The host is starting the match in", rule="contains")
+    joiner += ["wait_label LabelMultiplayerStatus The host is starting the match in 28 s", "video_mark countdown-28-joiner",
+               "assert_label LabelMultiplayerStatus The host is starting the match in 28 s - press Ready"]
+    joiner += assert_watches("countdown-active-joiner") + ["wait_ms 1200", "wait_label LabelMultiplayerStatus Press Ready when you're ready to play"]
     joiner += watches("countdown-joiner-cancel", "Press Ready when you're ready to play")
     joiner += ["video_mark countdown-cancel-joiner", "wait_ms 2500"] + assert_watches("countdown-joiner-cancel")
     for lines in (host, joiner):
         lines += ["wait_file {PROBE_DIR}/done.json 120", "wait_ms 1400", "exit"]
-    checks = [dict(id=f"countdown-{state}-{peer}", peer=peer, mark=f"countdown-{state}-{peer}", screen="MultiplayerScreen",
-                   what="Countdown only follows Start, ticks visibly, and cancels on a later held click.",
-                   events=["assert_text_fits LabelMultiplayerStatus .*PASS"] if state == "30" else
-                          [watch_pass(f"{'countdown-cancel' if peer == 'host' else 'countdown-joiner-cancel'}-state")])
-              for state in ("30", "cancel") for peer in ("host", "joiner")]
+    checks = []
+    for peer in ("host", "joiner"):
+        for state in ("30", "28", "cancel"):
+            text = (f"Starting in {state} s - waiting for Joiner to press Ready" if peer == "host" else
+                    f"The host is starting the match in {state} s - press Ready")
+            events = [rf'^assert_label LabelMultiplayerStatus "{text}" text="{text}" PASS$'] if state != "cancel" else []
+            if state == "30": events += ["assert_text_fits LabelMultiplayerStatus .*PASS"]
+            if state == "28": events += [watch_pass(f"countdown-active-{peer}-{kind}") for kind in ("state", "layout", "duplicates", "persistent")]
+            if state == "cancel":
+                prefix = "countdown-cancel" if peer == "host" else "countdown-joiner-cancel"
+                events += [watch_pass(f"{prefix}-{kind}") for kind in ("state", "layout", "duplicates", "persistent")]
+            checks.append(dict(id=f"countdown-{state}-{peer}", peer=peer, mark=f"countdown-{state}-{peer}", screen="MultiplayerScreen",
+                               what="Exact countdown text stays visible during world preparation, ticks from thirty to twenty-eight, and cancels on a later held click.",
+                               events=events))
     emit(3, "Unready Start counts down from thirty seconds and cancels", host, joiner,
          lobby_probe("countdown-relay-host"), lobby_probe("countdown-relay-joiner"), checks)
 
@@ -407,11 +422,17 @@ def game_scenes():
                   menu("text_watch start rematch-layout layout substate:Lobby"), wait(elapsed_ms=4000, scope="menu"),
                   menu("text_watch assert rematch-state"), menu("text_watch assert rematch-duplicates"), menu("text_watch assert rematch-layout")]
     host += [menu("activate ButtonMultiplayerStart"), wait(scope="menu", control="LabelMultiplayerStatus", text_contains="Starting in 30 s")]
-    host += capture("rematch-countdown-host", "MultiplayerScreen") + [menu("assert_label ButtonMultiplayerStart Cancel Start"), wait(elapsed_ms=2200, scope="menu"),
-            menu("activate ButtonMultiplayerStart"), wait(elapsed_ms=1200, scope="menu"), menu("assert_label LabelMultiplayerStatus Waiting for Joiner to press Ready"), dict(op="finish")]
+    host += [menu("assert_label LabelMultiplayerStatus Starting in 30 s - waiting for Joiner to press Ready")]
+    host += [menu(command) for command in watches("rematch-active-host", "Starting in", rule="contains")]
+    host += capture("rematch-countdown-host", "MultiplayerScreen") + [menu("assert_label ButtonMultiplayerStart Cancel Start"), wait(elapsed_ms=2200, scope="menu")]
+    host += [menu(command) for command in assert_watches("rematch-active-host")]
+    host += [menu("activate ButtonMultiplayerStart"), wait(elapsed_ms=1200, scope="menu"), menu("assert_label LabelMultiplayerStatus Waiting for Joiner to press Ready"), dict(op="finish")]
     joiner += [wait(scope="menu", control="LabelMultiplayerStatus", text_contains="The host is starting the match in 30 s")]
-    joiner += capture("rematch-countdown-joiner", "MultiplayerScreen") + [menu("assert_text_fits LabelMultiplayerStatus"), wait(elapsed_ms=4000, scope="menu"),
-              menu("assert_label LabelMultiplayerStatus Press Ready when you're ready to play"), dict(op="finish")]
+    joiner += [menu("assert_label LabelMultiplayerStatus The host is starting the match in 30 s - press Ready")]
+    joiner += [menu(command) for command in watches("rematch-active-joiner", "The host is starting the match in", rule="contains")]
+    joiner += capture("rematch-countdown-joiner", "MultiplayerScreen") + [menu("assert_text_fits LabelMultiplayerStatus")]
+    joiner += [menu(command) for command in assert_watches("rematch-active-joiner")]
+    joiner += [wait(elapsed_ms=4000, scope="menu"), menu("assert_label LabelMultiplayerStatus Press Ready when you're ready to play"), dict(op="finish")]
     emit(9, "Rematch waiting names, no premature countdown, thirty-second Start and Cancel",
          game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner),
          scene_checks("host", host) + scene_checks("joiner", joiner))

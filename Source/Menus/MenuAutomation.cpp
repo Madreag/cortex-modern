@@ -1621,12 +1621,13 @@ namespace RTE::MenuAutomation {
 				detail = "no shown line carries the text";
 			} else if (watch.rule == "forbid" && carries(watch.text)) {
 				detail = "a shown line carries the text";
-			} else if (watch.rule == "equals" || watch.rule == "shown") {
+			} else if (watch.rule == "equals" || watch.rule == "contains" || watch.rule == "shown") {
 				GUIControl* control = WatchedControl(menu, watch.control);
 				std::string text;
 				const bool shown = control && Shown(control) && Text(control, text);
 				if (!shown) detail = watch.control + " is not shown";
 				else if (watch.rule == "equals" && text != watch.text) detail = watch.control + " reads " + Json(text).dump();
+				else if (watch.rule == "contains" && text.find(watch.text) == std::string::npos) detail = watch.control + " reads " + Json(text).dump();
 			} else if (watch.rule == "duplicates") {
 				detail = DuplicateLine(lines);
 			} else if (watch.rule == "rtt") {
@@ -1995,7 +1996,7 @@ namespace RTE::MenuAutomation {
 			if (mode == "start") {
 				TextWatch watch;
 				args >> watch.rule >> watch.state;
-				if (watch.rule == "equals" || watch.rule == "shown") args >> watch.control;
+				if (watch.rule == "equals" || watch.rule == "contains" || watch.rule == "shown") args >> watch.control;
 				std::getline(args >> std::ws, watch.text);
 				// JSON preserves an exact multiline label in a one-line input script.
 				if (watch.text.starts_with("json:")) {
@@ -2003,9 +2004,9 @@ namespace RTE::MenuAutomation {
 					if (!text.is_string()) { observation = "invalid watch text JSON"; return false; }
 					watch.text = text.get<std::string>();
 				}
-				const bool textRule = watch.rule == "require" || watch.rule == "forbid" || watch.rule == "equals";
+				const bool textRule = watch.rule == "require" || watch.rule == "forbid" || watch.rule == "equals" || watch.rule == "contains";
 				const bool known = textRule || watch.rule == "shown" || watch.rule == "duplicates" || watch.rule == "rtt" || watch.rule == "layout" || watch.rule == "overlap" || watch.rule == "seat_rows";
-				if (!known || watch.state.empty() || (textRule && watch.text.empty()) || ((watch.rule == "equals" || watch.rule == "shown") && watch.control.empty())) {
+				if (!known || watch.state.empty() || (textRule && watch.text.empty()) || ((watch.rule == "equals" || watch.rule == "contains" || watch.rule == "shown") && watch.control.empty())) {
 					observation = "unknown or incomplete watch";
 					return false;
 				}

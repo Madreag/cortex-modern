@@ -4683,6 +4683,12 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		snapshot.startCountdownMs = 27000; draw(); check("countdown_counts_down", menu.m_MultiplayerStatusLabel->GetText().starts_with("Starting in 27 s"));
 		check("host_can_press_cancel", menu.m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart") && click());
 		snapshot.startCountdownRunning = false; draw(); check("canceled_countdown_returns_to_waiting", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Edith to press Ready");
+		snapshot.isHost = false; snapshot.localPeerId = 2; snapshot.members[0].isLocal = false; snapshot.members[1].isLocal = true;
+		snapshot.joiningWorld = snapshot.startCountdownRunning = true; snapshot.startCountdownMs = 30000;
+		snapshot.transferLine = "Receiving the world: 0.0 of 1.7 MB"; draw();
+		check("joiner_countdown_survives_world_transfer", menu.m_MultiplayerStatusLabel->GetText().starts_with("The host is starting the match in 30 s") && menu.m_MultiplayerStatusLabel->GetText().ends_with("press Ready"));
+		snapshot.startCountdownMs = 27000; draw(); check("joiner_countdown_counts_during_transfer", menu.m_MultiplayerStatusLabel->GetText().starts_with("The host is starting the match in 27 s"));
+		snapshot.startCountdownRunning = false; draw(); check("joiner_transfer_progress_returns_after_cancel", menu.m_MultiplayerStatusLabel->GetText() == snapshot.transferLine);
 	} else if (row == "R6") {
 		game->m_ActivityState = ActivityState::Running; g_MenuMan.SetIsInMenuScreen(true); g_UInputMan.TrapMousePos(false);
 		AllegroScreen screen(g_FrameMan.GetBackBuffer32()); GUIInputWrapper input(-1); PauseMenuGUI pause(&screen, &input); pause.SetNetworkMatchMode(true);
