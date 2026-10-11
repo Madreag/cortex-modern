@@ -114,6 +114,9 @@ namespace RTE {
 			for (const auto& [seat, bridge]: m_PeerBridges) if (bridge.fromFrame <= kept->first) proofs.emplace(bridge.fromFrame, 0);
 			std::vector<std::vector<uint8_t>> certificates;
 			for (const auto& key: proofs) if (const auto proof = m_PeerBridgeCertificates.find(key); proof != m_PeerBridgeCertificates.end()) {
+				// The reader has already applied these decisions. Its confirmed
+				// prefix lets later replies carry only decisions it still needs.
+				if (key.second != 3 && m_PeerAppliedThrough.contains(peer) && key.first <= m_PeerAppliedThrough.at(peer)) continue;
 				std::vector<uint8_t> bytes;
 				if (NetHostMigrationCodec::Encode(proof->second, m_Config.migrationKey, bytes)) certificates.push_back(std::move(bytes));
 			}
