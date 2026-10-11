@@ -9297,9 +9297,7 @@ void RunGameLoop() {
 			}
 		}
 		// The frame's budget ran out with ticks still due: the round is behind its schedule, not waiting on a peer.
-		// A held seat's private replay also owes work beyond the ordinary clock.
-		// Keep the existing presentation floor while it spends its catch-up budget.
-		const bool ticksOwed = pacedRound && (g_TimerMan.SimFrameBudgetSpent() || ScenarioRunner::IsLockstepOwnSeatHeld());
+		const bool ticksOwed = pacedRound && g_TimerMan.SimFrameBudgetSpent();
 		g_TimerMan.BeginSimFrame(0);
 
 		if (returnToMenuAfterNetworkEnd && !System::IsSetToQuit()) {

@@ -119,10 +119,12 @@ namespace RTE {
 				// Compare displayed progress on both sides. The prepared horizon
 				// already includes this group's input buffer; comparing it with a
 				// private reader's displayed tick demands that the reader overtake
-				// its donor. A reader within the buffered runway can reach the
-				// future activation at the existing bounded catch-up rate.
+				// its donor. The remaining trail fits the capped neutral interval,
+				// where the reader keeps catching up before producing live input.
 				const uint64_t displayed = m_LastCompletedSimulationTick.value_or(frame - 1);
-				if (displayed > applied->second && displayed - applied->second > delay + m_Config.slowPlayerBoundTicks) continue;
+				const uint64_t allowance = std::max<uint64_t>(delay + m_Config.slowPlayerBoundTicks,
+				    static_cast<uint64_t>(std::ceil(c_NetSeatCatchUpAllowanceMs / m_Config.simTickMs)));
+				if (displayed > applied->second && displayed - applied->second > allowance) continue;
 				proposal.members.push_back(peer); proposal.connectedMask |= SeatBit(peer);
 			}
 			if (proposal.members.empty()) return false;
