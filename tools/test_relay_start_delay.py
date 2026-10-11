@@ -12,7 +12,7 @@ import subprocess
 from run_sim_test import make_run, engine_executable
 
 
-def run_case(repo, out, case, timeout, lag_ms, initial_delay):
+def run_case(repo, out, case, timeout, lag_ms, initial_delay, engine_tip):
     out.mkdir(parents=True, exist_ok=False)
     runs = []
     participants = []
@@ -23,7 +23,8 @@ def run_case(repo, out, case, timeout, lag_ms, initial_delay):
         initial_delay = 26
     schedule = out / 'path.json'
     schedule.write_text(json.dumps([dict(id='longer-path', action='lag', tick=600,
-        lag_ms=lag_ms, duration_ms=120000, duration_ticks=10000)]))
+        lag_ms=lag_ms, percent=2 if case == 'blackout-return' else 0,
+        duration_ms=120000, duration_ticks=10000)]))
     common = ['-net-match-service-e2e', '-net-port', '47631', '-net-match-peers', '3',
               '-net-match-mode', 'coop-pve', '-net-match-ticks', str(ticks),
               '-max-ticks', str(ticks), '-net-match-input-delay', str(initial_delay),
@@ -128,7 +129,8 @@ def run_case(repo, out, case, timeout, lag_ms, initial_delay):
     if hash_mismatches:
         errors.append('the participants disagree on shared tick hashes')
     result = dict(case=case, lag_ms=lag_ms, initial_delay=initial_delay, pass_=not errors, errors=errors, participants=participants,
-                  source_tip=subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
+                  source_tip=engine_tip or subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
+                  collector_tip=subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
                   binary_sha256=hashlib.sha256(engine_executable(repo).read_bytes()).hexdigest(),
                   shared_ticks=sum(len(values) > 1 for values in shared_hashes.values()), hash_mismatches=sorted(hash_mismatches),
                   topology='three engines on one Linux box', relay_proof=False,
@@ -147,9 +149,10 @@ def main():
     parser.add_argument('--timeout', type=int, default=180)
     parser.add_argument('--lag-ms', type=int, default=500)
     parser.add_argument('--initial-delay', type=int, default=1)
+    parser.add_argument('--engine-tip', help='The source tip of a retained detecting engine')
     options = parser.parse_args()
     return run_case(options.repo.resolve(), options.out.resolve(), options.case, options.timeout,
-                    options.lag_ms, options.initial_delay)
+                    options.lag_ms, options.initial_delay, options.engine_tip)
 
 
 if __name__ == '__main__':
