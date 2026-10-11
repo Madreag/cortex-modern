@@ -491,8 +491,10 @@ namespace RTE {
 			for (unsigned arm = 0; arm < 3; ++arm) {
 				Fixture ended;
 				if (!ended.Start(row, error)) return false;
-				while (ended.hub.now <= ended.hub.faultEnd + 500) if (!ended.Step(error)) return false;
 				auto& host = *ended.peers[0];
+				// Wait for the reader to consume the hold boundary. With 250 ms
+				// RTT, half a second after the outage is still before that frame.
+				while (ended.hub.now <= ended.hub.faultEnd + 3000 && !host.HasHeldAISeat(1)) if (!ended.Step(error)) return false;
 				if (!host.HasHeldAISeat(1)) { error = "departure lever did not leave the host reading a held seat"; return false; }
 				const uint64_t applied = ended.worlds[0].applied, at = ended.hub.now;
 				if (arm == 0) {

@@ -197,7 +197,11 @@ namespace RTE {
 		// permanent phase offset. This only selects the existing 3x/six-tick
 		// consumer budget; every frame still needs its ordinary certificate.
 		if (m_FrameGroupMembers != 0 && m_Config.simTickMs > 0) {
-			const uint8_t reference = static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
+			// Keep following the current administrator when it belongs to the
+			// active group. A lower-numbered former host returning must not
+			// abruptly make its still-catching-up clock the pacing reference.
+			const uint8_t reference = (m_FrameGroupMembers & SeatBit(GetHostPeerId())) != 0 ? GetHostPeerId() :
+			    static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
 			const auto applied = m_PeerAppliedThrough.find(reference), observed = m_PeerAppliedAtMs.find(reference);
 			if (reference != m_Config.localPeerId && applied != m_PeerAppliedThrough.end() && observed != m_PeerAppliedAtMs.end() &&
 			    m_TimingNowMs >= observed->second && m_TimingNowMs - observed->second <= 250) {
