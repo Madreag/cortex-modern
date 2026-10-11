@@ -50,6 +50,7 @@ namespace RTE::CheckpointLua {
 			State expected = State::Ready;
 			if (!m_State.compare_exchange_strong(expected, State::Claimed, std::memory_order_acq_rel)) return false;
 			try {
+				m_Plan->failure = CheckpointFailure::Capture();
 				fill(m_Plan->header);
 				if (m_Plan->boundary->Arm()) {
 					// Prepared slots retain immutable owners without constructing their payloads here.
@@ -73,6 +74,7 @@ namespace RTE::CheckpointLua {
 			std::promise<bool> done;
 			std::shared_future<bool> result;
 			Header header{};
+			CheckpointFailure::Token failure;
 		};
 		Prepare m_Prepare;
 		Complete m_Complete;
@@ -106,6 +108,7 @@ namespace RTE::CheckpointLua {
 					Publish(State::Working);
 					bool completed = false;
 					try {
+						CheckpointFailure::ForwardScope failure(m_Plan->failure);
 						CheckpointNativeStorage::CaptureScope allocations;
 						m_Plan->boundary->Drain();
 						completed = m_Complete(m_Plan->header, *m_Plan->boundary);
@@ -208,6 +211,19 @@ namespace RTE::CheckpointLua {
 		if (!filledOnSimulation) return "queued request did not copy at its simulation boundary";
 		request.identity.reset();
 		root.tick = 4; value.reset();
-		return overlap.get() ? std::string() : "retried queued boundary did not survive source destruction";
+		if (!overlap.get()) return "retried queued boundary did not survive source destruction";
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::CopyWatch, 1);
+			const auto token = CheckpointFailure::Capture();
+			const bool refused = std::async(std::launch::async, [token] {
+				CheckpointFailure::ForwardScope forward(token);
+				if (CheckpointFailure::Fails(CheckpointFailure::Point::CopyWatch)) return false;
+				try { CheckpointFailure::Check(CheckpointFailure::Point::CopyWatch); }
+				catch (const std::bad_alloc&) { return true; }
+				return false;
+			}).get();
+			if (!refused || !failure.Triggered()) return "worker allocation refusal lost its capture count";
+		}
+		return CheckpointFailure::Current() == CheckpointFailure::Point::None ? std::string() : "worker refusal changed the next capture";
 	}
 }

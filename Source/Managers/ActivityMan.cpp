@@ -1536,8 +1536,8 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 	// are one series; a save the player asked for has none and is always written.
 	const AutosaveArchiveWriter::Submitted submitted = AutosaveWriter().Submit([this, image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel, kind,
 	                                automatic, descriptor, manifest, pinnedCheckpointSource, sceneCache, previousImage, complete = std::move(complete),
-	                                retired = std::move(retired), retiredLayers = std::move(retiredLayers), failure = CheckpointFailure::Current(), pixelStorage = std::move(pixelStorage)](bool replaced) mutable {
-		CheckpointFailure::Scope failureScope(failure);
+	                                retired = std::move(retired), retiredLayers = std::move(retiredLayers), failure = CheckpointFailure::Capture(), pixelStorage = std::move(pixelStorage)](bool replaced) mutable {
+		CheckpointFailure::ForwardScope failureScope(failure);
 		pixelStorage.reset();
 		if (replaced) {
 			complete = {};

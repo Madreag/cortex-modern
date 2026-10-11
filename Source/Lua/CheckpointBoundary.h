@@ -77,6 +77,7 @@ namespace RTE::CheckpointLua {
 			try {
 				for (const auto& pages: m_Native->Pages()) pages->Drain();
 				for (Heap& heap: m_Heaps) heap.prepared->Drain();
+				CheckpointFailure::Check(CheckpointFailure::Point::NativeRoots);
 				m_ReadRoots = m_Roots;
 				m_ReadRoots.reserve(m_Roots.size() + m_Heaps.size());
 				for (const Heap& heap: m_Heaps) {
