@@ -77,13 +77,13 @@ def watch_pass(name):
 
 def lobby_wait(peer):
     text = "Waiting for Joiner to press Ready" if peer == "host" else "Press Ready when you're ready to play"
-    return wait(scope="menu", screen="MultiplayerScreen", control="LabelMultiplayerStatus", text_contains=text)
+    return wait(scope="menu", screen="MultiplayerScreen", control="LabelMultiplayerStatus", text_contains=text, within_ms=90000)
 
 
 def probe(steps, timeout=180000):
     steps = [part for step in steps for part in
              ([dict(op="signal", name="done", scope="menu"), step] if step["op"] == "finish" else [step])]
-    return json.dumps(dict(schema=1, timeout_ms=timeout, label_dump=dict(every_ms=5000), steps=steps), indent=2) + "\n"
+    return json.dumps(dict(schema=1, timeout_ms=timeout, step_timeout_ms=60000, label_dump=dict(every_ms=5000), steps=steps), indent=2) + "\n"
 
 
 def emit(number, title, host, joiner, host_probe, join_probe, checklist, timeout=220):
@@ -282,7 +282,7 @@ def buy(peer, fire=True):
     steps += [dict(op="assert_buy", input_player=0, equals=dict(cart=["Coalition.rte/Soldier Light", "Coalition.rte/Assault Rifle"], craft="Base.rte/Rocket MK2", passengers=1), remember="order"),
               dict(op="assert_control", scope="buy", input_player=0, control="BuyButton", equals=dict(visible=True, enabled=True), fits=True, inside="BuyGUIBox"),
               menu("activate BuyButton", scope="buy", input_player=0),
-              dict(op="landing_zone_move", input_player=0)]
+              dict(op="landing_zone_move", input_player=0, within_ms=15000)]
     steps += capture(f"landing-zone-{peer}")
     steps += [dict(op="assert_scene", input_player=0, equals=dict(landing_zone_selection=True,
               screen_text="Choose your landing zone... Hold UP or DOWN to place multiple orders"))]
@@ -360,7 +360,7 @@ def game_scenes():
     host += key("F6") + [wait(panel_open=True), wait(held_peer="Joiner")]
     host += capture("left-seat-held") + [dict(op="assert", equals=dict(service="Running", local_actor_alive=True), held_peer="Joiner"),
             dict(op="assert_control", control="NetworkSeatDetail@Joiner", text_contains="AI", fits=True, inside="NetworkSeats"),
-            wait(returned_peer="Joiner")]
+            wait(returned_peer="Joiner", within_ms=90000)] + key("F6") + [wait(panel_open=False)]
     host += capture("rejoined-host") + [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay")] + complete_live_scene("host", 7)
     joiner += key("Escape") + [wait(screen="Pause"), menu("activate ButtonLeaveMatch"), wait(screen="PauseLeaveConfirm")]
     joiner += capture("leave-consequence") + [menu("assert_text_fits ButtonLeaveConfirm"), menu("activate ButtonLeaveConfirm"),
@@ -407,7 +407,7 @@ def ai_fight():
                  dict(op="editor_move", input_player=0, x_fraction=fraction, remember="bunker")] + click()
         steps += place(peer, x=fraction, relative_to="bunker")
         for minute in range(1, 21):
-            steps += [dict(op="measure_minute")]
+            steps += [dict(op="measure_minute", within_ms=70000)]
             other = "joiner" if peer == "host" else "host"
             steps += say(f"{peer} answers minute {minute}") + [wait(chat_text_once=f"{other} answers minute {minute}"), wait(elapsed_ms=1500)]
             steps += capture(f"minute-{minute:02d}-{peer}")
@@ -431,14 +431,19 @@ def moderation_scene():
         button = f"NetworkSeat{part}@Joiner"
         host += key("F6") + [wait(panel_open=True), menu(f"activate {button}")]
         host += capture(f"confirm-{action}") + [dict(op="assert_control", control=button, text_contains=f"Confirm: {'remove' if action == 'kick' else 'ban'} Joiner", fits=True, inside="NetworkSeats"),
-                menu(f"activate {button}"), wait(elapsed_ms=25000), dict(op="assert_scene", input_player=0, equals=dict(alive=True))]
+                menu(f"activate {button}")]
+        host += [wait(error_contains="banned from this session", within_ms=90000)] if action == "ban" else [wait(elapsed_ms=25000)]
+        host += [dict(op="assert_scene", input_player=0, equals=dict(alive=True))] + key("F6") + [wait(panel_open=False)]
         host += pause_end() + [wait(screen="MultiplayerScreen", scope="menu"), dict(op="finish")]
         joiner += [wait(screen="MultiplayerScreen", scope="menu")]
-        joiner += capture(f"{action}-joiner") + [menu(f"assert_label LabelJoinSelected The host {reason} you from this session")]
+        joiner += capture(f"{action}-joiner") + [dict(op="assert_control", scope="menu", control="LabelMultiplayerLandingStatus",
+                equals=dict(text=f"The host {reason} you from this session", visible=True), fits=True, inside="MultiplayerLandingPanel")]
         if action == "ban":
             joiner += [menu("activate ButtonMultiplayerJoinGame"), dict(op="wait_public_row", scope="menu", name="PublicGameRowPort{PORT}"),
-                       menu("click_row PublicGameRowPort{PORT}"), menu("activate ButtonMultiplayerConnect"), wait(elapsed_ms=12000, scope="menu")]
-            joiner += capture("banned-rejoin-refused") + [menu("assert_label LabelJoinSelected The host banned you from this session"), menu("assert_text_fits LabelJoinSelected")]
+                       menu("click_row PublicGameRowPort{PORT}"), menu("activate ButtonMultiplayerConnect"),
+                       wait(scope="menu", control="LabelJoinSelected", text_contains="The host banned you from this session")]
+            joiner += capture("banned-rejoin-refused") + [dict(op="assert_control", scope="menu", control="LabelJoinSelected",
+                    equals=dict(text="The host banned you from this session", visible=True), fits=True)]
         joiner += [dict(op="finish")]
         emit(8, "Held kick and ban clicks and public-list refused readmission",
              game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner), [])
