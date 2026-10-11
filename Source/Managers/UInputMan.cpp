@@ -43,8 +43,8 @@
 
 using namespace RTE;
 
-std::vector<Gamepad> UInputMan::s_PrevJoystickStates(Players::MaxPlayerCount);
-std::vector<Gamepad> UInputMan::s_ChangedJoystickStates(Players::MaxPlayerCount);
+CheckpointVector<Gamepad> UInputMan::s_PrevJoystickStates(Players::MaxPlayerCount);
+CheckpointVector<Gamepad> UInputMan::s_ChangedJoystickStates(Players::MaxPlayerCount);
 std::vector<Gamepad> UInputMan::s_ScriptedPadStates;
 std::vector<Gamepad> UInputMan::s_ChangedScriptedPadStates;
 
@@ -1128,7 +1128,7 @@ bool UInputMan::GetKeyboardButtonState(SDL_Scancode scancodeToTest, InputState w
 		return false;
 	}
 
-	std::unordered_map<SDL_KeyboardID, Keyboard>::const_iterator keyboardIterator;
+	CheckpointUnorderedMap<SDL_KeyboardID, Keyboard>::const_iterator keyboardIterator;
 
 	if (m_EnableMultiMouseKeyboard && keyboardID == 0 && (playerDevice == InputDevice::DEVICE_KEYB_ONLY || playerDevice == InputDevice::DEVICE_MOUSE_KEYB)) {
 		if(playerDevice == InputDevice::DEVICE_KEYB_ONLY) {
@@ -1230,7 +1230,7 @@ bool UInputMan::GetMouseButtonState(int whichPlayer, int whichButton, InputState
 		return false;
 	}
 
-	std::unordered_map<SDL_MouseID, Mouse>::const_iterator mouseIterator;
+	CheckpointUnorderedMap<SDL_MouseID, Mouse>::const_iterator mouseIterator;
 
 	if (m_EnableMultiMouseKeyboard && mouseID == 0 && (playerDevice == InputDevice::DEVICE_MOUSE_KEYB)) {
 		mouseID = m_ControlScheme.at(whichPlayer).GetDeviceID().mouseKeyboard.mouse;
@@ -1463,7 +1463,7 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 		}
 		case SDL_EVENT_GAMEPAD_AXIS_MOTION:
 		case SDL_EVENT_JOYSTICK_AXIS_MOTION:
-			if (std::vector<Gamepad>::iterator device = std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), inputEvent.type == SDL_EVENT_GAMEPAD_AXIS_MOTION ? inputEvent.gaxis.which : inputEvent.jaxis.which); device != s_PrevJoystickStates.end()) {
+			if (CheckpointVector<Gamepad>::iterator device = std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), inputEvent.type == SDL_EVENT_GAMEPAD_AXIS_MOTION ? inputEvent.gaxis.which : inputEvent.jaxis.which); device != s_PrevJoystickStates.end()) {
 				if (IsGamepadDevice(device->m_JoystickID) && inputEvent.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
 					UpdateJoystickAxis(device, inputEvent.gaxis.axis, inputEvent.gaxis.value);
 				} else if (!IsGamepadDevice(device->m_JoystickID)) {
@@ -1479,7 +1479,7 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 			if (RecordScriptedPadButton(inputEvent)) {
 				break;
 			}
-			if (std::vector<Gamepad>::iterator device = std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), joystickEvent ? inputEvent.jbutton.which : inputEvent.gbutton.which); device != s_PrevJoystickStates.end()) {
+			if (CheckpointVector<Gamepad>::iterator device = std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), joystickEvent ? inputEvent.jbutton.which : inputEvent.gbutton.which); device != s_PrevJoystickStates.end()) {
 				int button = -1;
 				int down = false;
 				if (IsGamepadDevice(device->m_JoystickID)) {
@@ -1510,7 +1510,7 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 		}
 		case SDL_EVENT_JOYSTICK_REMOVED:
 		case SDL_EVENT_GAMEPAD_REMOVED:
-			if (std::vector<Gamepad>::iterator prevDevice = std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), inputEvent.jdevice.which); prevDevice != s_PrevJoystickStates.end()) {
+			if (CheckpointVector<Gamepad>::iterator prevDevice = std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), inputEvent.jdevice.which); prevDevice != s_PrevJoystickStates.end()) {
 				g_ConsoleMan.PrintString("INFO: Gamepad " + std::to_string(prevDevice - s_PrevJoystickStates.begin() + 1) + " disconnected!");
 				SDL_CloseGamepad(SDL_GetGamepadFromID(prevDevice->m_JoystickID));
 				s_IsGamepad.erase(prevDevice->m_JoystickID);
@@ -1519,7 +1519,7 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 				std::fill(prevDevice->m_Buttons.begin(), prevDevice->m_Buttons.end(), false);
 				m_NumJoysticks--;
 			}
-			if (std::vector<Gamepad>::iterator changedDevice = std::find(s_ChangedJoystickStates.begin(), s_ChangedJoystickStates.end(), inputEvent.jdevice.which); changedDevice != s_ChangedJoystickStates.end()) {
+			if (CheckpointVector<Gamepad>::iterator changedDevice = std::find(s_ChangedJoystickStates.begin(), s_ChangedJoystickStates.end(), inputEvent.jdevice.which); changedDevice != s_ChangedJoystickStates.end()) {
 				changedDevice->m_JoystickID = -1;
 				std::fill(changedDevice->m_Axis.begin(), changedDevice->m_Axis.end(), false);
 				std::fill(changedDevice->m_Buttons.begin(), changedDevice->m_Buttons.end(), false);
@@ -1778,7 +1778,7 @@ void UInputMan::UpdateMouseInput() {
 	}
 }
 
-void UInputMan::UpdateJoystickAxis(std::vector<Gamepad>::iterator device, int axis, int value) {
+void UInputMan::UpdateJoystickAxis(CheckpointVector<Gamepad>::iterator device, int axis, int value) {
 	if (device != s_PrevJoystickStates.end()) {
 		int joystickIndex = device - s_PrevJoystickStates.begin();
 
@@ -1975,9 +1975,13 @@ bool UInputMan::Mouse::LoadCheckpoint(std::string_view text, bool validateOnly) 
     } catch (const std::exception&) { return false; }
 }
 
+std::array<std::pair<const void*, size_t>, 2> UInputMan::CheckpointRootSources() {
+    return {{{&s_PrevJoystickStates, sizeof(s_PrevJoystickStates)}, {&s_ChangedJoystickStates, sizeof(s_ChangedJoystickStates)}}};
+}
+
 std::string UInputMan::SaveCheckpoint() const {
     CheckpointWriter archive("UInputMan1");
-    archive(m_KeyboardStates, m_MouseStates, s_PrevJoystickStates, s_ChangedJoystickStates,
+    archive(m_KeyboardStates, m_MouseStates, *CheckpointNativeStorage::Source(&s_PrevJoystickStates), *CheckpointNativeStorage::Source(&s_ChangedJoystickStates),
         m_SkipHandlingSpecialInput, m_NumJoysticks, m_TextInput, m_OverrideInput, m_ControlScheme,
         m_MouseSensitivity, m_TrapMousePos, m_MouseTrapRadius,
         m_PlayerScreenMouseBounds.x, m_PlayerScreenMouseBounds.y, m_PlayerScreenMouseBounds.w, m_PlayerScreenMouseBounds.h,
@@ -1989,9 +1993,9 @@ std::string UInputMan::SaveCheckpoint() const {
 bool UInputMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
     try {
         CheckpointReader archive(text, "UInputMan1", validateOnly);
-        std::unordered_map<SDL_KeyboardID, Keyboard> keyboards;
-        std::unordered_map<SDL_MouseID, Mouse> mice;
-        std::vector<Gamepad> previous, changed;
+        CheckpointUnorderedMap<SDL_KeyboardID, Keyboard> keyboards;
+        CheckpointUnorderedMap<SDL_MouseID, Mouse> mice;
+        CheckpointVector<Gamepad> previous, changed;
         archive.Value(keyboards); archive.Value(mice);
         archive.Value(previous); archive.Value(changed);
         if (!keyboards.contains(0) || !mice.contains(0) || previous.size() != changed.size()) return false;

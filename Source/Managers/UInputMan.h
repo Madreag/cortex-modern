@@ -8,6 +8,7 @@
 #include "Vector.h"
 #include "InputScheme.h"
 #include "Gamepad.h"
+#include "CheckpointString.h"
 #include "allegro/keyboard.h"
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_events.h>
@@ -35,6 +36,8 @@ namespace RTE {
 
 		friend struct ContractAudit;
 	public:
+		static std::array<std::pair<const void*, size_t>, 2> CheckpointRootSources();
+
 		/// Enumeration for the mouse cursor actions in menus.
 		enum MenuCursorButtons {
 			MENU_PRIMARY,
@@ -626,7 +629,7 @@ namespace RTE {
 			std::array<bool, SDL_SCANCODE_COUNT> pressedSinceSim{}; //!< Press events accumulated since last EndSimUpdate.
 			std::array<bool, SDL_SCANCODE_COUNT> releasedSinceSim{}; //!< Release events accumulated since last EndSimUpdate.
 		};
-		std::unordered_map<SDL_KeyboardID, Keyboard> m_KeyboardStates; //!< Keyboard state when multi keyboard support is enabled.
+		CheckpointUnorderedMap<SDL_KeyboardID, Keyboard> m_KeyboardStates; //!< Keyboard state when multi keyboard support is enabled.
 
 		struct Mouse {
 		std::string SaveCheckpoint() const;
@@ -643,10 +646,10 @@ namespace RTE {
 			float wheelChange{0.0f};
 			bool relativeMode{};
 		};
-		std::unordered_map<SDL_MouseID, Mouse> m_MouseStates; //!< Mouse states. Only MouseStates[0] is guaranteed to exist and contains the combined mouse input.
+		CheckpointUnorderedMap<SDL_MouseID, Mouse> m_MouseStates; //!< Mouse states. Only MouseStates[0] is guaranteed to exist and contains the combined mouse input.
 
-		static std::vector<Gamepad> s_PrevJoystickStates; //!< Joystick states as they were the previous update.
-		static std::vector<Gamepad> s_ChangedJoystickStates; //!< Joystick states that have changed.
+		static CheckpointVector<Gamepad> s_PrevJoystickStates; //!< Joystick states as they were the previous update.
+		static CheckpointVector<Gamepad> s_ChangedJoystickStates; //!< Joystick states that have changed.
 
 		static std::vector<Gamepad> s_ScriptedPadStates; //!< Device-level states of the pads a script attached. These take no seat slot.
 		static std::vector<Gamepad> s_ChangedScriptedPadStates; //!< Scripted pad states that have changed.
@@ -661,7 +664,7 @@ namespace RTE {
 
 		int m_NumJoysticks; //!< The number of currently connected gamepads.
 
-		std::string m_TextInput; //!< Buffer for passing text input from SDL event handling to the GUI.
+		CheckpointString m_TextInput; //!< Buffer for passing text input from SDL event handling to the GUI.
 
 		bool m_OverrideInput; //!< If true then this instance operates in multiplayer mode and the input is overridden by network input.
 
@@ -765,7 +768,7 @@ namespace RTE {
 		void UpdateMouseInput();
 
 		/// Handles a joystick axis input. This is called from Update().
-		void UpdateJoystickAxis(std::vector<Gamepad>::iterator device, int axis, int newValue);
+		void UpdateJoystickAxis(CheckpointVector<Gamepad>::iterator device, int axis, int newValue);
 
 		/// Updates simulated digital joystick axis. This is called from Update().
 		void UpdateJoystickDigitalAxis();
