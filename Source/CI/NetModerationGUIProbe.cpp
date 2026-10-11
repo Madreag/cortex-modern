@@ -55,6 +55,8 @@
 #include <stdexcept>
 #include <sstream>
 
+std::string BuildLoopPaceJson();
+
 namespace RTE::NetModerationGUIProbe {
 namespace {
 	using Json = nlohmann::json;
@@ -84,7 +86,7 @@ namespace {
 		bool pageDown = false; //!< show_row holds the More players press it made.
 		bool shopHeader = false; //!< The pending shop click expands a module before choosing its item.
 		size_t minuteIndex = SIZE_MAX;
-		uint64_t minuteMs = 0, minuteTick = 0, fightSamples = 0, aiFiredFrames = 0;
+		uint64_t minuteMs = 0, minuteTick = 0, minuteProbeNs = 0, fightSamples = 0, aiFiredFrames = 0;
 		size_t landingMoveIndex = SIZE_MAX, actorCycleIndex = SIZE_MAX, aimIndex = SIZE_MAX;
 		uint64_t landingMoveTick = 0, actorCycleTick = 0, actorCycleRender = 0, aimTick = 0;
 		int actorCycleStage = 0, actorCyclePresses = 0;
@@ -93,6 +95,13 @@ namespace {
 	};
 	Probe probe;
 	std::atomic<uint64_t> rendezvousCount{0};
+	std::atomic<uint64_t> probeWallNs{0};
+	struct ProbeCost {
+		Clock::time_point start = Clock::now();
+		~ProbeCost() {
+			if (probe.enabled) probeWallNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count(), std::memory_order_relaxed);
+		}
+	};
 
 	// The moment this peer's script stops waiting on another peer: named on its own line, and
 	// counted so an engine watchdog can measure the wait that follows it, not the one before.
@@ -937,6 +946,7 @@ namespace {
 			        "the AI fight stopped or its local player lost their actor");
 			if (probe.minuteIndex != probe.index) {
 				probe.minuteIndex = probe.index; probe.minuteMs = NowMs(); probe.minuteTick = observed["lockstep_frame"].get<uint64_t>();
+				probe.minuteProbeNs = probeWallNs.load(std::memory_order_relaxed);
 			}
 			auto* activity = g_ActivityMan.GetActivity();
 			for (int team = 0; team < Activity::MaxTeamCount; ++team) {
@@ -950,6 +960,10 @@ namespace {
 			if (elapsed < 60000) return false;
 			const double pace = (observed["lockstep_frame"].get<uint64_t>() - probe.minuteTick) * 1000.0 / elapsed;
 			observed["minute"] = {{"number", ++probe.fightSamples}, {"elapsed_ms", elapsed}, {"pace", pace}, {"ai_fired_frames", probe.aiFiredFrames}};
+			// Keep the cost of observing this fight beside its pace, including when the pace fails.
+			observed["minute"]["probe_wall_ms"] = (probeWallNs.load(std::memory_order_relaxed) - probe.minuteProbeNs) / 1000000.0;
+			observed["minute"]["loop_pace"] = Json::parse(::BuildLoopPaceJson());
+			observed["minute"]["actors"] = g_MovableMan.GetActorCount();
 			System::PrintDiagnosticLine("[fight15-scene] minute=" + std::to_string(probe.fightSamples) + " pace=" + std::to_string(pace) + " ai_fired_frames=" + std::to_string(probe.aiFiredFrames));
 			Require(pace >= 58.0, "a peer's full minute fell below 58 ticks per second");
 			if (probe.fightSamples == 20) Require(probe.aiFiredFrames > 0, "twenty minutes passed without the AI firing a weapon");
@@ -1475,6 +1489,7 @@ namespace {
 	}
 
 	void Process(Phase phase, bool menuScopeOnly = false) {
+		const ProbeCost cost;
 		try {
 			if (!probe.loaded) {
 				if (phase == Phase::Sim) return;
