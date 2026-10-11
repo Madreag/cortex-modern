@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointBoundary.h"
+#include "FloatingPointEnvironment.h"
 
 #include <atomic>
 #include <functional>
@@ -85,6 +86,8 @@ namespace RTE::CheckpointLua {
 			} catch (...) { Publish(State::Failed); }
 		}
 		void Work(std::stop_token stop) noexcept {
+			FloatingPointEnvironment::Initialize();
+			const FloatingPointEnvironment::Scope environment("checkpoint saver");
 			while (!stop.stop_requested()) {
 				const uint64_t wake = m_Wake.load(std::memory_order_acquire);
 				const State state = m_State.load(std::memory_order_acquire);
@@ -143,7 +146,7 @@ namespace RTE::CheckpointLua {
 		};
 		ProtectedCall(lua, [&] { lua_pushinteger(lua, 11); lua_setglobal(lua, "queuedBoundaryValue"); });
 		BoundaryQueue<Header> queue([&] {
-			wrongThread.store(std::this_thread::get_id() == simulation, std::memory_order_release);
+			if (std::this_thread::get_id() == simulation || !FloatingPointEnvironment::IsValid()) wrongThread.store(true, std::memory_order_release);
 			if (inject.exchange(false)) {
 				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
 				try { Boundary::Prepare(states, roots); }
@@ -151,7 +154,7 @@ namespace RTE::CheckpointLua {
 			}
 			return Boundary::Prepare(states, roots);
 		}, [&](const Header& header, const Boundary& boundary) {
-			if (std::this_thread::get_id() == simulation) return false;
+			if (std::this_thread::get_id() == simulation || !FloatingPointEnvironment::IsValid()) return false;
 			const size_t capture = completions.fetch_add(1);
 			if (capture == 0) { entered.set_value(); released.wait(); }
 			CheckpointNativeStorage::ReadScope read(boundary.NativeViews());
