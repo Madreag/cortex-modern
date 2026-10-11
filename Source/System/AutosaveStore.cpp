@@ -16,6 +16,7 @@
 #include <string_view>
 #include <system_error>
 #include <tuple>
+#include <type_traits>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -28,6 +29,58 @@
 #endif
 
 namespace RTE {
+	std::string AutosaveIdentity::FreezeSelfTestMismatch() {
+		static_assert(std::is_nothrow_copy_constructible_v<AutosaveIdentity>);
+		static_assert(std::is_nothrow_copy_assignable_v<AutosaveIdentity>);
+		AutosaveIdentity live;
+		live.sessionId = 7; live.roundId = 11; live.worldBoot = 13; live.migrationGen = 17; live.intervalSeconds = 60;
+		const std::string text(4096, 'a');
+		live.configHash = text; live.configPayload = text; live.buildId = text;
+		live.deterministicConfigHash = text; live.moduleManifestHash = text; live.sessionIdentityHash = text;
+		live.peerNames.push_back("first"); live.peerNames.push_back("second");
+		AutosaveSideState side;
+		side.controlOwners.emplace(19, 1); side.droppedControlOwners.emplace(23, 2);
+		side.appliedCommands.emplace(1, 29); side.firstTransferUid = 31; side.playerBindings.emplace(1, text);
+		live.sideState = side;
+		auto pin = std::make_shared<AutosavePinSource>(); pin->Store(11, 37); live.pinnedCheckpointSource = pin;
+		AutosaveIdentity frozen;
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			frozen = live;
+			if (failure.Triggered() || frozen.configPayload.Value().data() != live.configPayload.Value().data() ||
+			    &frozen.sideState.Value() != &live.sideState.Value()) return "autosave identity copy allocates or walks values";
+		}
+		live.peerNames.push_back("third"); live.configHash = "changed"; live.configPayload.clear();
+		live.buildId.clear(); live.deterministicConfigHash.clear(); live.moduleManifestHash.clear(); live.sessionIdentityHash.clear();
+		side.controlOwners[19] = 3; live.sideState = side;
+		live.sessionId = 41; live.roundId = 43; live.worldBoot = 47; live.migrationGen = 53;
+		pin->Store(11, 59); live = AutosaveIdentity{};
+		if (frozen.sessionId != 7 || frozen.roundId != 11 || frozen.worldBoot != 13 || frozen.migrationGen != 17 ||
+		    frozen.configHash != text || frozen.configPayload != text || frozen.buildId != text ||
+		    frozen.deterministicConfigHash != text || frozen.moduleManifestHash != text || frozen.sessionIdentityHash != text ||
+		    frozen.peerNames.Value() != std::vector<std::string>{"first", "second"} || frozen.sideState.Value().controlOwners.at(19) != 1 ||
+		    frozen.pinnedCheckpointSource->Load().tick != 59) return "frozen autosave identity changed with its live owner";
+		const AutosaveIdentity retained = frozen;
+		bool refused = false;
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			try { frozen.peerNames.push_back("refused"); }
+			catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+		}
+		if (!refused || frozen.peerNames.Value() != std::vector<std::string>{"first", "second"})
+			return "autosave peer allocation refusal changed the retained values";
+		refused = false;
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			try { frozen.sideState = side; }
+			catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+		}
+		if (!refused || frozen.sideState.Value().controlOwners.at(19) != 1) return "autosave side allocation refusal changed the retained values";
+		frozen.sideState = side; frozen.peerNames.push_back("retry");
+		return frozen.sideState.Value() == side && frozen.peerNames.Value().back() == "retry" &&
+		       retained.sideState.Value().controlOwners.at(19) == 1 && retained.peerNames.size() == 2 ? std::string() : "autosave identity retry differs";
+	}
+
 	namespace {
 		// A process id nothing holds names a writer that is gone; one the system refuses to open still exists.
 		bool ProcessAlive(unsigned long pid) {
