@@ -3,6 +3,8 @@
 #include "GUICheckpoint.h"
 #include "CheckpointFrozenContainers.h"
 #include "CheckpointNativeSnapshot.h"
+#include "SceneEditorGUI.h"
+#include "PieMenu.h"
 #include "AllegroScreen.h"
 #include <iostream>
 #include "Scene.h"
@@ -1805,8 +1807,26 @@ bool GUICheckpoint::RunSelfTest() {
 			banner->m_aaFontChars[GUIBanner::REGULAR]['A'] = {5, 7, 11};
 			const std::string bannerText = banner->SaveCheckpoint();
 			const GUIBanner* bannerAddress = banner.get();
+			auto editor = std::make_unique<SceneEditorGUI>();
+			editor->m_pPicker = new ObjectPickerGUI();
+			editor->m_pCurrentObject = new TerrainObject();
+			editor->m_pObjectToBlink = editor->m_pCurrentObject;
+			editor->m_PieMenu.reset(new PieMenu());
+			editor->m_CursorPos = Vector(17, 31);
+			editor->m_PathRequest = MakeCheckpointNativeShared<PathRequest>();
+			editor->m_PathRequest->complete = true; editor->m_PathRequest->status = 0;
+			const_cast<PathRequest*>(editor->m_PathRequest.get())->path.push_back(Vector(11, 19));
+			editor->m_DrawBitmap.reset(create_bitmap_ex(8, 3, 2));
+			if (!editor->m_DrawBitmap) throw std::bad_alloc();
+			clear_to_color(editor->m_DrawBitmap.get(), 37);
+			const std::string editorText = editor->SaveCheckpoint();
+			const SceneEditorGUI* editorAddress = editor.get();
+			const ObjectPickerGUI* pickerAddress = editor->m_pPicker;
+			const SceneObject* currentAddress = editor->m_pCurrentObject;
 			const GUIControlManager* address = controls.get();
 			const BITMAP* imageAddress = image.get();
+			auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
+			snapshot->SealBoundary();
 			CheckpointNativeStorage::Root<decltype(ContentFile::s_LoadedBitmaps)> bitmapRoot(&ContentFile::s_LoadedBitmaps);
 			const auto [pathSource, pathSize] = ContentFile::PathHashRegistry();
 			std::vector<std::byte> pathHeader(pathSize);
@@ -1814,10 +1834,8 @@ bool GUICheckpoint::RunSelfTest() {
 			for (const auto& part: pages) part->Arm();
 			bitmapRoot.Freeze(); std::memcpy(pathHeader.data(), pathSource, pathSize);
 			const std::array roots{bitmapRoot.Range(), CheckpointNativeStorage::RootRange{pathSource, pathHeader.data(), pathSize}};
-			controls.reset(); input.reset(); screen.reset(); image.reset(); banner.reset();
+			controls.reset(); input.reset(); screen.reset(); image.reset(); banner.reset(); editor.reset();
 			CheckpointNativeStorage::ReadScope read(pages, roots);
-			auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
-			snapshot->SealBoundary();
 			BITMAP* savedImage = snapshot->ReadBitmap(imageAddress);
 			auto savedScreen = std::make_unique<AllegroScreen>(savedImage);
 			auto savedInput = std::make_unique<GUIInputWrapper>(0);
@@ -1834,6 +1852,9 @@ bool GUICheckpoint::RunSelfTest() {
 			check("saved_controls_survive_source_destruction", Save(*rebuilt) == expected && rebuiltText && rebuiltText->GetText() == "captured text" && SaveBitmap(savedImage) == pixels);
 			auto* savedBanner = snapshot->ValueObject(bannerAddress);
 			check("saved_banner_keeps_text_animation_fonts_and_aliases", savedBanner->SaveCheckpoint() == bannerText && savedBanner->GetBannerText() == "captured banner" && savedBanner->IsVisible() && savedBanner->CalculateWidth('A', GUIBanner::REGULAR) == 8 && savedBanner->m_pFontImage[0] == savedBanner->m_pFontImage[1]);
+			auto* savedEditor = snapshot->ValueObject(editorAddress);
+			CheckpointNativeSnapshot::ReadScope values(snapshot.get());
+			check("saved_editor_keeps_object_picker_path_and_pixel_values", savedEditor->SaveCheckpoint() == editorText && savedEditor->m_pCurrentObject == savedEditor->m_pObjectToBlink && savedEditor->GetCurrentObject() == snapshot->Object(currentAddress) && savedEditor->GetCheckpointPicker() == snapshot->ValueObject(pickerAddress) && savedEditor->m_PathRequest->complete && getpixel(savedEditor->m_DrawBitmap.get(), 1, 1) == 37);
 		}
 		{
 			const std::string path = "checkpoint-selftest/absent-shared-bitmap.png";

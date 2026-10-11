@@ -35,6 +35,7 @@ namespace RTE {
 
 	/// A full menu system that represents the scene editing GUI for Cortex Command
 	class SceneEditorGUI : public CheckpointNativeAllocated {
+		friend class GUICheckpoint;
 
 		/// Public member variable, method and friend function declarations
 	public:
@@ -68,6 +69,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a SceneEditorGUI object in system
 		/// memory. Create() should be called before using the object.
 		SceneEditorGUI();
+		SceneEditorGUI(const SceneEditorGUI& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a SceneEditorGUI object before deletion
 		/// from system memory.
@@ -191,6 +193,8 @@ namespace RTE {
 
 		/// Protected member variable and method declarations
 	protected:
+		ObjectPickerGUI* m_SavedPicker = nullptr;
+		std::vector<const Entity*> m_SavedEntityOwners;
 		mutable CheckpointVector<std::unique_ptr<Entity>> m_NetRetainedOwners;
 		CheckpointVector<bool> m_NetRetainedPrivateOwners;
 		bool m_NetPrivateCurrentObject = false;

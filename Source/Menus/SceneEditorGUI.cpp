@@ -1,6 +1,7 @@
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "GUICheckpoint.h"
+#include "CheckpointNativeSnapshot.h"
 #include <iostream>
 #include "SceneEditorGUI.h"
 #include "OwnedMovableObjects.h"
@@ -59,11 +60,58 @@ SceneEditorGUI::SceneEditorGUI() {
 	Clear();
 }
 
+SceneEditorGUI::SceneEditorGUI(const SceneEditorGUI& source, CheckpointNativeSnapshot& snapshot) : SceneEditorGUI() {
+	if (!CheckpointNativeStorage::Reading()) throw std::logic_error("saved editors need their frozen pages");
+	m_PendingCheckpoint = source.m_PendingCheckpoint; m_CheckpointInitialized = source.m_CheckpointInitialized;
+	m_pController = snapshot.ValueObject(source.m_pController);
+	m_FeatureSet = source.m_FeatureSet; m_EditMade = source.m_EditMade; m_EditorGUIMode = source.m_EditorGUIMode;
+	m_PreviousMode = source.m_PreviousMode; m_ModeChanged = source.m_ModeChanged;
+	m_BlinkTimer = source.m_BlinkTimer; m_BlinkMode = source.m_BlinkMode;
+	m_RepeatStartTimer = source.m_RepeatStartTimer; m_RepeatTimer = source.m_RepeatTimer;
+	m_RevealTimer = source.m_RevealTimer; m_RevealIndex = source.m_RevealIndex;
+	m_RequireClearPathToOrbit = source.m_RequireClearPathToOrbit;
+	m_NativeTechModule = source.m_NativeTechModule; m_ForeignCostMult = source.m_ForeignCostMult;
+	m_GridSnapping = source.m_GridSnapping; m_CursorPos = source.m_CursorPos; m_CursorOffset = source.m_CursorOffset;
+	m_CursorInAir = source.m_CursorInAir; m_FacingLeft = source.m_FacingLeft; m_PlaceTeam = source.m_PlaceTeam;
+	m_ObjectListOrder = source.m_ObjectListOrder; m_DrawCurrentObject = source.m_DrawCurrentObject;
+	m_pObjectToBlink = snapshot.Object(source.m_pObjectToBlink);
+	m_BrainSkyPath = snapshot.Freeze(source.m_BrainSkyPath); m_BrainSkyPathCost = source.m_BrainSkyPathCost;
+	m_NetRetainedPrivateOwners = snapshot.Freeze(source.m_NetRetainedPrivateOwners);
+	m_NetPrivateCurrentObject = source.m_NetPrivateCurrentObject;
+	const auto owners = CheckpointValues(source.m_NetRetainedOwners);
+	m_SavedEntityOwners.reserve(owners.size() + 2);
+	m_NetRetainedOwners.reserve(owners.size());
+	for (const auto& owner: owners) {
+		Entity* value = snapshot.Object(owner.get());
+		m_SavedEntityOwners.push_back(value);
+		m_NetRetainedOwners.emplace_back(value);
+	}
+	PieMenu* pie = snapshot.Object(source.m_PieMenu.get());
+	m_SavedEntityOwners.push_back(pie); m_PieMenu.reset(pie);
+	m_pCurrentObject = snapshot.Object(source.m_pCurrentObject);
+	m_SavedEntityOwners.push_back(m_pCurrentObject);
+	m_pPicker = snapshot.ValueObject(source.m_pPicker); m_SavedPicker = m_pPicker;
+	if (source.m_PathRequest) {
+		const auto* address = const_cast<const PathRequest*>(source.m_PathRequest.get());
+		auto* request = snapshot.RebuildValue(address, [&snapshot](const PathRequest& values) {
+			auto result = std::make_unique<PathRequest>();
+			result->complete = values.complete; result->status = values.status; result->path = snapshot.Freeze(values.path);
+			result->pathLength = values.pathLength; result->totalCost = values.totalCost;
+			result->startPos = values.startPos; result->targetPos = values.targetPos; result->horizonGeneration = values.horizonGeneration;
+			return result;
+		});
+		m_PathRequest = std::shared_ptr<volatile PathRequest>(request, [](volatile PathRequest*) {});
+	}
+	m_DrawBitmap.reset(GUICheckpoint::LoadBitmap(GUICheckpoint::SaveBitmap(source.m_DrawBitmap.get())));
+}
+
 SceneEditorGUI::~SceneEditorGUI() {
 	Destroy();
 }
 
 void SceneEditorGUI::Clear() {
+	m_SavedPicker = nullptr;
+	m_SavedEntityOwners.clear();
 	m_NetRetainedOwners.clear();
 	m_NetRetainedPrivateOwners.clear();
 	m_NetPrivateCurrentObject = false;
@@ -163,6 +211,13 @@ int SceneEditorGUI::Create(Controller* pController, FeatureSets featureSet, int 
 }
 
 void SceneEditorGUI::Destroy() {
+	if (!m_SavedEntityOwners.empty() || m_SavedPicker) {
+		const auto saved = [this](const Entity* value) { return std::find(m_SavedEntityOwners.begin(), m_SavedEntityOwners.end(), value) != m_SavedEntityOwners.end(); };
+		if (m_pPicker == m_SavedPicker) m_pPicker = nullptr;
+		if (saved(m_pCurrentObject)) m_pCurrentObject = nullptr;
+		if (saved(m_PieMenu.get())) m_PieMenu.release();
+		for (auto& owner: m_NetRetainedOwners) if (saved(owner.get())) owner.release();
+	}
 	delete m_pPicker;
 
 	delete m_pCurrentObject;
@@ -1607,7 +1662,7 @@ bool SceneEditorGUI::RunRetainedOwnerCaptureSelfTest() {
 }
 
 std::string SceneEditorGUI::SaveCheckpoint() const {
-	if (CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::IsView(this)) return CheckpointNativeStorage::Source(this)->SaveCheckpoint();
+	if (CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::IsView(this) && !CheckpointNativeStorage::Private(this)) return CheckpointNativeStorage::Source(this)->SaveCheckpoint();
 	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
 	// A capture reclaims before its workers start; while they run they read these owners, so nothing drops one.
 	if (!CheckpointNativeStorage::Reading() && !g_MovableMan.IsRestoringSnapshot() && !CaptureSentinel::InParallelPhase()) ReclaimNetRetainedOwners();
