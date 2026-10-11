@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -9,6 +10,47 @@ import e2e_video as video
 
 
 class VideoOracleEvidence(unittest.TestCase):
+    def test_motion_between_matching_endpoints_is_visible(self):
+        ffmpeg = video.find_ffmpeg()
+        self.assertIsNotNone(ffmpeg, video.missing_ffmpeg())
+        real_run = subprocess.run
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'motion.mkv'
+            for pixels, expected in ((1280, 1280), (400, 400), (0, 0)):
+                with self.subTest(pixels=pixels):
+                    frames = []
+                    for index in range(11):
+                        frame = bytearray(64 * 64)
+                        if index == 4:
+                            for pixel in range(pixels):
+                                frame[pixel] = 255
+                        frames.append(frame)
+                    encoded = real_run([ffmpeg, '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+                                        '-f', 'rawvideo', '-pixel_format', 'gray', '-video_size', '64x64',
+                                        '-framerate', '5', '-i', '-', '-c:v', 'ffv1', str(path)],
+                                       input=b''.join(frames), capture_output=True, timeout=60)
+                    self.assertEqual(encoded.returncode, 0, encoded.stderr)
+                    rows = [dict(frame=i, wall_ms=i * 200, screen='game', service_state='Running') for i in range(11)]
+                    def decode(command, **kwargs):
+                        if '-vf' in command:
+                            return SimpleNamespace(returncode=0, stderr='freeze_start: 0\nfreeze_end: 2\n')
+                        return real_run(command, **kwargs)
+                    with patch.object(video.subprocess, 'run', side_effect=decode):
+                        stills = video.freeze_scan(ffmpeg, path, rows)
+                    self.assertEqual(len(stills), 1)
+                    self.assertEqual(stills[0]['changed_pixels'], expected)
+                    self.assertEqual(stills[0]['changed_pixels'] >= video.MOTION_PIXELS, pixels == 1280)
+
+    def test_setup_frames_are_distinct_from_running_play(self):
+        rows = [dict(frame=i, wall_ms=i * 200, screen='game', service_state='Running', activity_editing=True) for i in range(11)]
+        self.assertEqual(video.running_stills([(0, 2)], rows), [])
+        for row in rows:
+            row['activity_editing'] = False
+        self.assertTrue(video.running_stills([(0, 2)], rows))
+        for row in rows:
+            row.pop('activity_editing')
+        self.assertTrue(video.running_stills([(0, 2)], rows), 'missing state must not excuse a frozen game')
+
     def test_census_note_does_not_change_the_measured_cost_verdict(self):
         from feel.test_harness_cost import complete_cost_log
         with tempfile.TemporaryDirectory() as folder:

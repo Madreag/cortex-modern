@@ -580,7 +580,7 @@ CAPPED_STOP_SLACK_S = 0.2
 
 
 def running_stills(spans, rows, minimum_s=1.0, capped_stop_ms=None, allowed=None, named=None):
-    """The stills that fall while this screen's match runs: every saved frame over the span shows the game with the service Running.
+    """The stills that fall during play: every saved frame shows the game with the service Running, beyond its setup editor.
     A still over a menu, a load or a stopped service is not the match freezing; the one still that holds the harness's capped stop
     is the run ending, recorded in `allowed` with its reason, and is not a freeze either."""
     saved = [row for row in rows if row.get("saved", True) and "wall_ms" in row]
@@ -594,7 +594,7 @@ def running_stills(spans, rows, minimum_s=1.0, capped_stop_ms=None, allowed=None
         if stop - start < minimum_s:
             continue
         inside = [row for row in saved if origin + start * 1000 <= row["wall_ms"] <= origin + stop * 1000]
-        if inside and all(row.get("screen") == "game" and row.get("service_state") == "Running" for row in inside):
+        if inside and all(row.get("screen") == "game" and row.get("service_state") == "Running" and row.get("activity_editing") is not True for row in inside):
             still = {"start_s": round(start, 3), "end_s": round(stop, 3), "frames": [inside[0].get("frame"), inside[-1].get("frame")]}
             if capped_s is not None and capped_s - CAPPED_STOP_SLACK_S <= start and capped_s <= stop:
                 if allowed is not None:
@@ -648,7 +648,7 @@ def capped_stop_ms(video_dir):
     return None
 
 
-# A still is confirmed on the picture: a frozen one changes no pixel by more than this many levels between its ends, while
+# A still is confirmed on every picture: a frozen one changes no pixel by more than this many levels over its span, while
 # encoder noise stays far below it; this many such pixels is a picture that moved (a soldier walking on a 4K whole-map view).
 MOTION_LEVELS = 40
 MOTION_PIXELS = 1000
@@ -673,9 +673,27 @@ def changed_pixels(ffmpeg, video, start_s, end_s):
     return round(float(found[1]) / 255 * int(size[1]) * int(size[2]))
 
 
+def span_changed_pixels(ffmpeg, video, start_s, end_s):
+    """The greatest visible motion from the span's first picture, including motion that returns to its starting point."""
+    seek = max(0, int(start_s) - 1)
+    graph = (f"setpts=PTS+{seek}/TB,trim=start={start_s:.3f}:end={end_s:.3f},format=gray,setpts=PTS-STARTPTS,split[frames][copy];"
+             "[copy]select='eq(n,0)'[reference];[frames][reference]blend=all_mode=difference,"
+             f"lutyuv=y='if(gt(val\\,{MOTION_LEVELS})\\,255\\,0)',signalstats,metadata=print:key=lavfi.signalstats.YAVG")
+    result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-ss", str(seek), "-i", str(video),
+                             "-filter_complex", graph, "-f", "null", "-"],
+                            capture_output=True, text=True, errors="replace", timeout=600)
+    if result.returncode != 0:
+        return None
+    values = [float(value) for value in re.findall(r"lavfi\.signalstats\.YAVG=([0-9.]+)", result.stderr)]
+    size = re.search(r"Stream #0:0.*?, (\d+)x(\d+)", result.stderr)
+    if not values or not size:
+        return None
+    return round(max(values) / 255 * int(size[1]) * int(size[2]))
+
+
 def freeze_scan(ffmpeg, video, rows, video_dir=None, allowed=None, named=None):
     """ffmpeg's freezedetect over one peer's encoded capture: a still picture over one second while the match runs. Each
-    span it calls still is confirmed on the picture; one whose ends differ in MOTION_PIXELS pixels moved and is kept as moved."""
+    span it calls still is confirmed on every picture; a span with MOTION_PIXELS changed pixels moved and is kept as moved."""
     if not ffmpeg or not video or not Path(video).is_file():
         return None
     result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-i", str(video), "-vf", "freezedetect=n=-60dB:d=1", "-map", "0:v:0", "-f", "null", "-"],
@@ -687,7 +705,7 @@ def freeze_scan(ffmpeg, video, rows, video_dir=None, allowed=None, named=None):
     for still in stills:
         # The span's last picture shows a little before its end time; a span open to the end of the video stays a still.
         if still.get("end_s") is not None and still["end_s"] - still["start_s"] > 0.1:
-            still["changed_pixels"] = changed_pixels(ffmpeg, video, still["start_s"], still["end_s"] - 0.05)
+            still["changed_pixels"] = span_changed_pixels(ffmpeg, video, still["start_s"], still["end_s"] - 0.05)
     return stills
 
 

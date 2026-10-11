@@ -33,6 +33,7 @@ namespace RTE {
 			unsigned long long simTick = 0;
 			std::string screen;
 			std::string serviceState;
+			std::optional<bool> activityEditing;
 			int width = 0;
 			int height = 0;
 		};

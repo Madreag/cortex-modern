@@ -1372,6 +1372,9 @@ void FrameMan::RecordVideoFrame(const std::string& screen, const std::string& se
 	meta.simTick = static_cast<unsigned long long>(g_TimerMan.GetSimUpdateCount());
 	meta.screen = screen;
 	meta.serviceState = serviceState;
+	if (screen == "game" && g_ActivityMan.GetActivity()) {
+		meta.activityEditing = g_ActivityMan.GetActivity()->GetActivityState() == Activity::Editing;
+	}
 	meta.width = width;
 	meta.height = height;
 	recorder.EndFrame(meta);

@@ -516,6 +516,7 @@ namespace RTE {
 		nlohmann::json line = {{"frame", frame.index}, {"wall_ms", frame.meta.wallMS}, {"sim_tick", frame.meta.simTick},
 		    {"screen", frame.meta.screen}, {"resolution", {frame.meta.width, frame.meta.height}}, {"saved", saved}};
 		if (!frame.meta.serviceState.empty()) line["service_state"] = frame.meta.serviceState;
+		if (frame.meta.activityEditing.has_value()) line["activity_editing"] = *frame.meta.activityEditing;
 
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (saved) {
@@ -564,6 +565,7 @@ namespace RTE {
 		nlohmann::json line = {{"frame", frame.index}, {"video_frame", frame.slot - m_FirstSlot}, {"wall_ms", frame.meta.wallMS}, {"sim_tick", frame.meta.simTick},
 		    {"screen", frame.meta.screen}, {"resolution", {frame.meta.width, frame.meta.height}}, {"saved", written}};
 		if (!frame.meta.serviceState.empty()) line["service_state"] = frame.meta.serviceState;
+		if (frame.meta.activityEditing.has_value()) line["activity_editing"] = *frame.meta.activityEditing;
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (written) {
 			++m_Saved;

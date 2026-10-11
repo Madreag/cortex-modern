@@ -3411,6 +3411,7 @@ static bool RunFrameRecorderSelfTest() {
 			meta.wallMS = index * 100;
 			meta.simTick = static_cast<unsigned long long>(index);
 			meta.screen = "game";
+			meta.activityEditing = index < 4;
 			meta.width = width;
 			meta.height = height;
 			if (unsigned char* pixels = recorder.BeginFrame(meta.wallMS, bytes)) {
@@ -3461,6 +3462,9 @@ static bool RunFrameRecorderSelfTest() {
 			return FrameRecorderSelfTestFail("frame index line " + std::to_string(lines) + " is incomplete: " + line);
 		}
 		if (parsed.value("frame", std::size_t(99)) != lines) return FrameRecorderSelfTestFail("frame numbers are not contiguous at " + line);
+		if (!parsed.contains("activity_editing") || parsed["activity_editing"] != (parsed.value("sim_tick", 99) < 4)) {
+			return FrameRecorderSelfTestFail("frame index loses the setup editor state: " + line);
+		}
 		++lines;
 	}
 	if (lines != 5) return FrameRecorderSelfTestFail("frame index has " + std::to_string(lines) + " lines, expected 5");
