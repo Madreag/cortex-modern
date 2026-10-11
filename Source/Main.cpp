@@ -314,6 +314,14 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 	};
 	PROCESS_MEMORY_COUNTERS_EX counters{};
 	K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters));
+	PERFORMANCE_INFORMATION memory{};
+	memory.cb = sizeof(memory);
+	std::string commitFigures;
+	if (K32GetPerformanceInfo(&memory, sizeof(memory))) {
+		commitFigures = std::format(" system_commit_mb={} system_commit_limit_mb={} system_commit_free_mb={}",
+		    (memory.CommitTotal * memory.PageSize) >> 20, (memory.CommitLimit * memory.PageSize) >> 20,
+		    ((memory.CommitLimit - memory.CommitTotal) * memory.PageSize) >> 20);
+	}
 	lap("heap_counters");
 	// Summing a heap holds its lock for as long as the heap is large, and every thread that allocates waits on it, the simulation's
 	// included: the heaps are summed only with the census's heap walk.
@@ -397,7 +405,7 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 		histogram += " heap_top=";
 		for (size_t index = 0; index < std::min<size_t>(top.size(), 12); ++index) histogram += (index ? "," : "") + top[index].second;
 	}
-	return std::format(" private_mb={}{} threads={} handles={}{}", counters.PrivateUsage >> 20, heapFigures, threads, handles, histogram);
+	return std::format(" private_mb={}{}{} threads={} handles={}{}", counters.PrivateUsage >> 20, commitFigures, heapFigures, threads, handles, histogram);
 #elif defined(__APPLE__)
 	mach_task_basic_info_data_t info{};
 	mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
@@ -4385,6 +4393,8 @@ static ActorHistory& GetActorHistory() {
 	return history;
 }
 
+static void SaveActorHistory(bool final);
+
 static void RecordLandingZones(uint64_t tick, std::ostream& out) {
 	static const bool enabled = std::getenv("CC_TEST_LANDING_ZONE_HISTORY") != nullptr;
 	if (!enabled) return;
@@ -4443,6 +4453,28 @@ static void RecordLandingZones(uint64_t tick, std::ostream& out) {
 	}
 	lua_settop(state, top);
 	std::sort(fields.begin(), fields.end());
+	static std::ofstream changes(ActorHistoryPath() + ".landing-zone-changes.txt", std::ios::binary | std::ios::trunc);
+	static std::vector<std::string> previous;
+	static uint64_t lastTick = 0;
+	if (tick <= lastTick) {
+		changes << tick << " reset\n";
+		previous.clear();
+	}
+	changes << tick << " state\n";
+	size_t before = 0, after = 0;
+	while (before < previous.size() || after < fields.size()) {
+		if (after == fields.size() || (before < previous.size() && previous[before] < fields[after])) {
+			changes << tick << " remove " << previous[before++] << "\n";
+		} else if (before == previous.size() || fields[after] < previous[before]) {
+			changes << tick << " add " << fields[after++] << "\n";
+		} else {
+			++before;
+			++after;
+		}
+	}
+	changes.flush();
+	previous = fields;
+	lastTick = tick;
 	for (const std::string& field: fields) out << tick << " landing_zone " << field << "\n";
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		const Actor* brain = activity->GetPlayerBrain(player);
@@ -4477,10 +4509,15 @@ static void RecordActorHistory(uint64_t tick) {
 		history.bytes -= history.frames.front().second.size();
 		history.frames.pop_front();
 	}
+	static const uint64_t saveEvery = [] {
+		const char* value = std::getenv("CC_TEST_ACTOR_HISTORY_EVERY");
+		return value ? std::strtoull(value, nullptr, 10) : uint64_t{0};
+	}();
+	if (saveEvery != 0 && tick % saveEvery == 0) SaveActorHistory(false);
 	HarnessCost::Charge(HarnessCost::SimDump, span.Stop());
 }
 
-static void SaveActorHistory() {
+static void SaveActorHistory(bool final = true) {
 	if (ActorHistoryPath().empty()) return;
 	auto& history = GetActorHistory();
 	if (history.saved || history.frames.empty()) return;
@@ -4491,7 +4528,7 @@ static void SaveActorHistory() {
 		System::PrintDiagnosticErrorLine("[actor-history] save failed: " + ActorHistoryPath());
 		return;
 	}
-	history.saved = true;
+	history.saved = final;
 	System::PrintDiagnosticLine("[actor-history] saved frames=" + std::to_string(history.frames.size()) +
 	    " first_tick=" + std::to_string(history.frames.front().first) + " last_tick=" + std::to_string(history.frames.back().first) +
 	    " bytes=" + std::to_string(history.bytes) + " path=" + ActorHistoryPath());
