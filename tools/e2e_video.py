@@ -2769,6 +2769,12 @@ def native_behavior(root, spec):
 
 
 def feel_probes(run, capture, source):
+    if run.get('fight_hash_gate'):
+        from e2e.fight_hashes import compare_fight_hashes
+        result = compare_fight_hashes(Path(capture['root']), run['fight_hash_gate'])
+        write_json(Path(capture['root']) / 'fight-hashes.json', result)
+        for peer in capture['peers']:
+            peer.setdefault('gates', {})['fight-hashes'] = result
     if run.get('backdrop_refit_gate'):
         from test_backdrop_refit import verdict
         config = run['backdrop_refit_gate']
