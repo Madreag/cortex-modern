@@ -168,7 +168,14 @@ namespace RTE {
 
 	void NetLockstepCoordinator::RequestPeerCommittedTail(uint64_t nowMs) {
 		if (nowMs < m_PeerTailRequestAtMs) return;
-		m_PeerTailRequestAtMs = nowMs + 25;
+		uint64_t roundTripMs = 100;
+		for (const auto& [peer, applied]: m_PeerAppliedThrough) {
+			if (peer == m_Config.localPeerId || !HasPeerFrameRoute(peer)) continue;
+			const auto [wire, route] = PeerFrameRoute(peer);
+			if (wire && wire->IsPeerPingMeasured(route)) roundTripMs = std::max<uint64_t>(roundTripMs, wire->GetPeerPingMs(route));
+		}
+		// At most two contiguous ranges are requested in one measured round trip.
+		m_PeerTailRequestAtMs = nowMs + roundTripMs;
 		m_PeerTailRequestedUntil.erase(m_PeerTailRequestedUntil.begin(), m_PeerTailRequestedUntil.lower_bound(m_Stats.nextFrame));
 		// A bounded subscription includes future history, sent only after the donor displays it.
 		const uint64_t horizon = m_Stats.nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew;

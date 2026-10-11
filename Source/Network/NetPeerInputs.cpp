@@ -424,7 +424,13 @@ namespace RTE {
 			uint32_t size = 0;
 			if (!TakeSize(body, offset, size) || offset > body.size() || size > body.size() - offset) return true;
 			NetLockstepFrame input;
-			if (!NetLockstepCodec::DecodeRecoveryInput({body.begin() + offset, body.begin() + offset + size}, input) || input.senderPeerId != owner ||
+			NetLockstepError readError;
+			if (!NetLockstepCodec::DecodeRecoveryInput({body.begin() + offset, body.begin() + offset + size}, input, &readError)) {
+				DiagnosticLine() << "[net-peer-input-read] local=" << static_cast<int>(m_Config.localPeerId) << " owner=" << static_cast<int>(owner)
+				    << " through=" << message.frame << " bytes=" << size << " reason=" << readError.message << std::endl;
+				return true;
+			}
+			if (input.senderPeerId != owner ||
 			    input.roundId != m_RoundId || input.targetFrame > message.frame || (n > 0 && input.targetFrame <= inputs.back().targetFrame)) return true;
 			inputs.push_back(std::move(input)); offset += size;
 		}
