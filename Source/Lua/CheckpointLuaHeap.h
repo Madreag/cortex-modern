@@ -34,6 +34,7 @@ extern "C" {
 #include <thread>
 #include <type_traits>
 #include <unordered_set>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -285,7 +286,7 @@ namespace RTE::CheckpointLua {
 			owner->Initialize();
 			{
 				std::lock_guard lock(RegistryMutex());
-				LiveHeaps().insert(owner.get());
+				LiveHeaps().emplace(owner.get(), owner->m_Identity);
 			}
 			return owner;
 		}
@@ -336,6 +337,7 @@ namespace RTE::CheckpointLua {
 		static size_t CallsIntoDestroyedHeaps() { return DeadHeapCalls().load(std::memory_order_relaxed); }
 		static bool RunBatchOpenSelfTest();
 		static bool RunPreparedSelfTest();
+		static bool RunReusedOwnerSelfTest();
 		/// Prepares storage and watches on the saver; Arm reads no Lua objects and allocates nothing.
 		std::shared_ptr<Prepared> PrepareFreeze();
 
@@ -564,6 +566,11 @@ namespace RTE::CheckpointLua {
 		}
 
 		HeapOwner() = default;
+		static uint64_t NextIdentity() {
+			static std::atomic<uint64_t> next{0};
+			return next.fetch_add(1, std::memory_order_relaxed) + 1;
+		}
+		const uint64_t m_Identity = NextIdentity();
 		std::unique_ptr<lua_State, decltype(&lua_close)> m_Bootstrap{nullptr, lua_close};
 		lua_State* m_State = nullptr;
 		LibraryHandlers m_LibraryHandlers;
@@ -582,6 +589,7 @@ namespace RTE::CheckpointLua {
 			Snapshot::Page* pages = nullptr;
 			size_t capacity = 0;
 			HeapOwner* owner = nullptr;
+			uint64_t ownerIdentity = 0;
 			~Slab();
 		};
 		static constexpr size_t c_IdleSlabs = 1; // With one capture in flight, the next freeze reuses the buffer the last one gave back.
@@ -733,8 +741,8 @@ namespace RTE::CheckpointLua {
 			static std::mutex* mutex = new std::mutex();
 			return *mutex;
 		}
-		static std::unordered_set<const HeapOwner*>& LiveHeaps() {
-			static auto* heaps = new std::unordered_set<const HeapOwner*>();
+		static std::unordered_map<const HeapOwner*, uint64_t>& LiveHeaps() {
+			static auto* heaps = new std::unordered_map<const HeapOwner*, uint64_t>();
 			return *heaps;
 		}
 		static std::atomic<size_t>& DeadHeapCalls() {
@@ -768,6 +776,7 @@ namespace RTE::CheckpointLua {
 			if (!slab) {
 				slab = std::make_unique<Slab>();
 				slab->owner = this;
+				slab->ownerIdentity = m_Identity;
 				slab->capacity = pages;
 				slab->pages = static_cast<Snapshot::Page*>(MapPages(slab->capacity * Snapshot::c_PageBytes));
 				if (!slab->pages) throw std::bad_alloc();
@@ -781,7 +790,8 @@ namespace RTE::CheckpointLua {
 		static void ReturnSlab(HeapOwner* owner, Slab* slab) {
 			{
 				std::lock_guard lock(RegistryMutex());
-				if (LiveHeaps().contains(owner)) {
+				const auto found = LiveHeaps().find(owner);
+				if (found != LiveHeaps().end() && found->second == slab->ownerIdentity) {
 					owner->GiveSlab(slab);
 					return;
 				}
@@ -791,7 +801,8 @@ namespace RTE::CheckpointLua {
 		}
 		// The caller holds RegistryMutex.
 		void GiveSlab(Slab* slab) {
-			if (!LiveHeaps().contains(this)) {
+			const auto found = LiveHeaps().find(this);
+			if (found == LiveHeaps().end() || found->second != slab->ownerIdentity) {
 				// Only the address is read: the heap behind it is gone, so the buffer is left mapped rather than touch it.
 				DeadHeapCalls().fetch_add(1, std::memory_order_relaxed);
 				return;
@@ -1212,6 +1223,28 @@ namespace RTE::CheckpointLua {
 		owner.reset();
 		retry->Drain();
 		return first.Read(value).n == 23 && second.Read(value).n == 37;
+	}
+
+	inline bool HeapOwner::RunReusedOwnerSelfTest() {
+		alignas(HeapOwner) std::byte storage[sizeof(HeapOwner)];
+		const auto create = [&] {
+			const auto destroy = [](HeapOwner* owner) { owner->~HeapOwner(); };
+			std::unique_ptr<HeapOwner, decltype(destroy)> owner(new (storage) HeapOwner, destroy);
+			owner->Initialize();
+			std::lock_guard lock(RegistryMutex());
+			LiveHeaps().emplace(owner.get(), owner->m_Identity);
+			return owner;
+		};
+		auto firstOwner = create();
+		auto prepared = firstOwner->PrepareFreeze();
+		if (!prepared->Arm(*firstOwner)) return false;
+		Snapshot retained = prepared->Image();
+		firstOwner.reset();
+		prepared.reset();
+		const size_t retainedBytes = retained.ByteCount(), before = MappedCopyBytes();
+		auto replacement = create();
+		retained = {};
+		return replacement->LiveSlabs() == 0 && MappedCopyBytes() + retainedBytes == before;
 	}
 
 	// Every userdata hangs after the main thread in the GC chain; nothing before it is one.
