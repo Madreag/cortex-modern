@@ -3754,6 +3754,15 @@ namespace RTE {
 		return false; // An uncommitted successor is not a new host whose loss authorizes another election.
 	}
 
+	bool NetLockstepCoordinator::HasPeerFrameRoute(uint8_t peer) {
+		const auto bound = [peer](const auto& routes) {
+			return std::any_of(routes.begin(), routes.end(), [peer](const auto& route) { return route.second == peer; });
+		};
+		if (bound(PeerPrimaryBindings()) || bound(PeerListenerBindings()) || m_RemoteTransports.contains(peer)) return true;
+		const auto dial = PeerProbes().find(peer);
+		return dial != PeerProbes().end() && dial->second.answered && dial->second.connection != c_InvalidNetPeerId;
+	}
+
 	void NetLockstepCoordinator::WarmMigrationLinks(uint64_t nowMs) {
 		if ((!IsRunning() && !(UsesPeerFrameGroups() && m_Config.peerSessionLinks && m_Config.peerSessionLinks->sessionAttached)) || (IsMigrating() && !UsesPeerFrameGroups()) || (m_Config.localPeerId == GetHostPeerId() && !UsesPeerFrameGroups()) || m_Config.matchConfig.dedicated ||
 		    m_Config.matchConfig.persistentWorld || m_Config.matchConfig.successorOrder.empty() || !m_Config.migrationTransportFactory ||
@@ -3774,8 +3783,12 @@ namespace RTE {
 		const uint32_t owners = UsesPeerFrameGroups() ? (1U << m_Config.peerCount) - 1 : MigrationElectorate();
 		for (const auto& agreed: m_Config.matchConfig.migrationPeers) {
 			if (agreed.peerId == m_Config.localPeerId || m_RemovedPeers.contains(agreed.peerId) || IsSeatReleased(agreed.peerId) || (owners & (1u << (agreed.peerId - 1))) == 0) continue;
+			// The original host links and authenticated inbound peer links are
+			// already session routes. Replacing an unused dial every second
+			// drains its directory channel on the simulation thread.
+			if (UsesPeerFrameGroups() && HasPeerFrameRoute(agreed.peerId)) continue;
 			auto& probe = PeerProbes()[agreed.peerId];
-			const uint64_t patience = UsesPeerFrameGroups() ? 1000 : IsMigrationIceEndpoint(probe.address) ? c_MigrationIceDialMs : NetHostMigrationTimeouts::c_RetryMs;
+			const uint64_t patience = IsMigrationIceEndpoint(probe.address) ? c_MigrationIceDialMs : NetHostMigrationTimeouts::c_RetryMs;
 			if (probe.connection != c_InvalidNetPeerId || (probe.lastDialMs != 0 && nowMs < probe.lastDialMs + patience)) continue;
 			const auto endpoint = MigrationEndpoint(agreed.peerId);
 			if (!endpoint || endpoint->listenAddrs.empty()) continue;

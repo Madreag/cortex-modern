@@ -9463,7 +9463,9 @@ static std::string ResyncSaveName() {
 			if (error) *error = "the handover has no ICE route: " + std::string(!mux || !mux->P2PGns() ? "its transport has no ICE half" : "no directory session reached this peer");
 			return false;
 		}
-		auto dispatcher = std::make_shared<GnsDirectorySignalDispatcher>();
+		// A superseded background route must not drain an HTTP request while
+		// the frame plane owns the simulation lock.
+		auto dispatcher = GnsDirectorySignalDispatcher::MakeMigrationStandby();
 		GnsDirectorySignalDispatcher::Config config;
 		config.role = GnsDirectorySignalDispatcher::Role::Joiner;
 		config.baseUrl = g_SettingsMan.GetSessionDirectoryUrl();

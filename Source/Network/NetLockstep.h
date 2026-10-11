@@ -1626,6 +1626,7 @@ namespace RTE {
 		std::map<NetPeerId, uint8_t>& PeerListenerBindings() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->listenerBindings : m_PeerListenerBindings; }
 		std::map<NetPeerId, uint8_t>& PeerPrimaryBindings() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryBindings : m_PeerPrimaryBindings; }
 		bool& PeerPrimaryListener() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryListener : m_PeerPrimaryListener; }
+		bool HasPeerFrameRoute(uint8_t peer);
 		bool HandlePeerSessionMessage(const NetHostMigrationMessage& message, uint64_t nowMs);
 		void TickPeerSessionWire(uint64_t nowMs);
 		uint64_t m_PeerSessionSendAtMs = 0;
