@@ -18917,6 +18917,7 @@ namespace RTE {
 		row(&TestAHostWithNoRouterReadsNoRouterMapping, "a_host_with_no_router_reads_no_router_mapping");
 		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");
 		row(&TestInMatchPresentation, "in_match_presentation_results_teams_causes_and_chat");
+		row(&TestPauseNavigationDuringRecovery, "pause_menu_script_keeps_drawn_gestures");
 		row(&TestChatReceipts<NetSession>, "chat_send_receipts");
 		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
 		row(&RunCrossRosterSelfTest, "cross_mixed_roster_preserves_seats_and_cpu_rules");
