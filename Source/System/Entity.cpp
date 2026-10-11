@@ -364,20 +364,35 @@ namespace RTE {
 	}
 	void CheckpointNativeSnapshot::MaterializeMetadata() const {
 		if (!m_BoundarySealed.load(std::memory_order_acquire)) throw std::logic_error("native checkpoint values read before the boundary was sealed");
-		std::call_once(m_MetadataReady, [this] {
-			for (const auto& shard: m_OwnerShards) for (const auto& [value, apply]: shard->deferred) {
-				CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
-				apply(value);
-			}
-			m_Objects.ForEach([](const Entity*, Entity* target) {
-				if (const auto* value = static_cast<const Metadata*>(target->m_CheckpointMetadata)) {
-					target->m_PresetName = value->name;
-					target->m_CopiedFromPresetName = value->copied;
-					target->m_PresetDescription = value->description;
-					target->m_FormattedReaderPosition = value->reader;
-					target->m_Groups = value->groups;
+		std::lock_guard ready(m_MetadataReady);
+		std::vector<OwnerShard*> shards;
+		{
+			std::lock_guard lock(m_OwnerRegistryMutex);
+			for (const auto& shard: m_OwnerShards) shards.push_back(shard.get());
+		}
+		for (OwnerShard* shard: shards) {
+			for (;;) {
+				std::pair<void*, void (*)(void*)> work;
+				{
+					std::lock_guard lock(shard->mutex);
+					if (shard->deferredReady == shard->deferred.size()) break;
+					work = shard->deferred[shard->deferredReady];
 				}
-			});
+				CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+				work.second(work.first);
+				++shard->deferredReady;
+			}
+		}
+		m_Objects.ForEach([](const Entity*, Entity* target) {
+			if (const auto* value = static_cast<const Metadata*>(target->m_CheckpointMetadata)) {
+				target->m_PresetName = value->name;
+				target->m_CopiedFromPresetName = value->copied;
+				target->m_PresetDescription = value->description;
+				target->m_FormattedReaderPosition = value->reader;
+				target->m_Groups = value->groups;
+				// Later saved values must not replace fields a private getter has changed.
+				target->m_CheckpointMetadata = nullptr;
+			}
 		});
 	}
 	std::string_view CheckpointNativeSnapshot::OwnBytes(std::string_view source) {

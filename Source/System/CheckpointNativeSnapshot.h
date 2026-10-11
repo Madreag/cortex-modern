@@ -665,6 +665,7 @@ namespace RTE {
 			std::pmr::deque<ValueOwner> values{&memory};
 			std::pmr::vector<std::shared_ptr<void>> storage{&memory};
 			std::pmr::vector<std::pair<void*, void (*)(void*)>> deferred{&memory};
+			size_t deferredReady = 0;
 		};
 		OwnerShard& Owners() {
 			struct RecentOwner { uint64_t snapshot = 0; OwnerShard* shard = nullptr; };
@@ -732,9 +733,9 @@ namespace RTE {
 		};
 		struct MetadataShard { std::mutex mutex; std::unordered_multimap<size_t, std::unique_ptr<Metadata>> values; };
 		std::array<MetadataShard, 16> m_Metadata;
-		mutable std::once_flag m_MetadataReady;
+		mutable std::mutex m_MetadataReady;
 		std::atomic<bool> m_BoundarySealed{false};
-		std::mutex m_OwnerRegistryMutex;
+		mutable std::mutex m_OwnerRegistryMutex;
 		std::vector<std::unique_ptr<OwnerShard>> m_OwnerShards;
 		CheckpointSharedMap<const Entity*, Entity*> m_Objects;
 		CheckpointSharedMap<const void*, void*> m_Values;

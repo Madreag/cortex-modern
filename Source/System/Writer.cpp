@@ -1787,6 +1787,25 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			check(earlyRefused && lateRefused && partialRefused && unexpanded && retried, "boundary_sequences_expand_from_owned_bytes_after_mutation_and_failed_worker_retry");
 		}
 		{
+			MOSRotating first, second;
+			first.SetPresetName("first saved value"); second.SetPresetName("later saved value");
+			auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
+			auto* earlier = snapshot->Object(&first);
+			snapshot->SealBoundary(); snapshot->MaterializeMetadata();
+			earlier->SetPresetName("changed by a private getter");
+			auto* later = snapshot->Object(&second);
+			std::string pending;
+			snapshot->Freeze(std::string("later saved text"), &pending);
+			bool refused = false;
+			try {
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+				snapshot->MaterializeMetadata();
+			} catch (const std::bad_alloc&) { refused = true; }
+			snapshot->MaterializeMetadata();
+			check(refused && pending == "later saved text" && later->GetPresetName() == "later saved value" &&
+			      earlier->GetPresetName() == "changed by a private getter", "later_saved_values_expand_without_resetting_private_getter_changes_after_refusal");
+		}
+		{
 			CheckpointText frozen;
 			std::string full, shared;
 			{
