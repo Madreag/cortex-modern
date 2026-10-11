@@ -56,9 +56,7 @@ namespace RTE {
 		auto range = m_PeerTailSendRanges.try_emplace(peer, fromFrame, fromFrame + 1).first;
 		range->second.first = std::min(range->second.first, fromFrame);
 		range->second.second = std::max(range->second.second, fromFrame + 1);
-		// A later request can extend this range while an earlier answer is
-		// still being prepared. Resume the earliest needed record so that
-		// advancing the range never skips an unsent part of the history.
+		// Resume the earliest pending record when a later request extends the range.
 		const uint64_t firstNeeded = range->second.first;
 		// A future subscription waits until this donor has displayed its first frame.
 		if (!m_LastCompletedSimulationTick || firstNeeded > *m_LastCompletedSimulationTick) return;
@@ -94,8 +92,7 @@ namespace RTE {
 			const auto witnesses = m_PeerFrameWitnesses.find(kept->first);
 			uint32_t witnessed = 0;
 			if (witnesses != m_PeerFrameWitnesses.end()) for (const auto& [sender, witness]: witnesses->second) witnessed |= SeatBit(sender);
-			// One donor carries the majority's witnesses, so a second copy of
-			// every frame is unnecessary. Wait for the final witness locally.
+			// One donor waits for the majority's witnesses before sending the needed history.
 			if ((witnessed & ~members) != 0 || 2 * std::popcount(witnessed) <= std::popcount(members)) {
 				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && m_TimingNowMs >= m_PeerTailLogAtMs) {
 					m_PeerTailLogAtMs = m_TimingNowMs + 1000;
@@ -118,8 +115,7 @@ namespace RTE {
 			for (const auto& [seat, bridge]: m_PeerBridges) if (bridge.fromFrame <= kept->first) proofs.emplace(bridge.fromFrame, 0);
 			std::vector<std::vector<uint8_t>> certificates;
 			for (const auto& key: proofs) if (const auto proof = m_PeerBridgeCertificates.find(key); proof != m_PeerBridgeCertificates.end()) {
-				// The reader has already applied these decisions. Its confirmed
-				// prefix lets later replies carry only decisions it still needs.
+				// The reader's confirmed prefix omits decisions it has already applied.
 				if (key.second != 3 && m_PeerAppliedThrough.contains(peer) && key.first <= m_PeerAppliedThrough.at(peer)) continue;
 				std::vector<uint8_t> bytes;
 				if (NetHostMigrationCodec::Encode(proof->second, m_Config.migrationKey, bytes)) certificates.push_back(std::move(bytes));
@@ -174,9 +170,7 @@ namespace RTE {
 			for (auto item = queued.begin(); item != queued.end() && handedOver < 64 * 1024;) {
 				if (handedOver != 0 && std::chrono::steady_clock::now() >= sendEnd) break;
 				auto& body = item->second;
-				// Small certified records arrive independently. A missing record
-				// is requested again after one round trip instead of delaying
-				// every later record on the reliable stream.
+				// Small records arrive independently and repeat within the measured request interval.
 				const bool independentRecord = body.bytes.size() <= 4096;
 				const bool smallRepeat = sent.contains(item->first) && independentRecord;
 				const size_t end = std::min(body.bytes.size(), body.offset + NetHostMigrationCodec::c_ChunkBytes);
@@ -212,9 +206,7 @@ namespace RTE {
 		// Two batches of at most eight needed ranges fit in one measured round trip.
 		m_PeerTailRequestAtMs = nowMs + std::max<uint64_t>(100, roundTripMs / 2);
 		m_PeerTailRequestedUntil.erase(m_PeerTailRequestedUntil.begin(), m_PeerTailRequestedUntil.lower_bound(m_Stats.nextFrame));
-		// Repair every missing range behind a received record after one
-		// round trip. Waiting until a gap reaches the consumer would spend
-		// another round trip at each missing record in sequence.
+		// Repair missing buffered ranges before they reach the consumer.
 		if (!m_PeerCommittedTail.empty()) {
 			const uint64_t lastBuffered = m_PeerCommittedTail.rbegin()->first;
 			for (auto pending = m_PeerTailRequestedUntil.lower_bound(m_Stats.nextFrame);
@@ -299,8 +291,7 @@ namespace RTE {
 			ahead.erase(ahead.begin(), ahead.lower_bound(through));
 			while (through != UINT64_MAX && ahead.erase(through) != 0) ++through;
 			m_PeerInputReceipts[peer][m_Config.localPeerId] = through;
-			// The held reader is outside the live receipt quorum; its displayed
-			// progress acknowledges this certified history to the donor instead.
+			// An excluded reader acknowledges history through its displayed progress.
 			if (privateReader) continue;
 			auto receipt = PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
 			receipt.successorPeerId = peer; receipt.frame = through;

@@ -1546,9 +1546,7 @@ namespace RTE {
 		NetLockstepPlaneGuard plane;
 		if (s_OwnSeatCatchUpBudget <= 0 || !s_LockstepCoordinator || !s_LockstepCoordinator->HasReadyFrame(nextSimTick)) return false;
 		if (s_LockstepCoordinator->PeerFrameCatchUpActive()) return true;
-		// A frame-group return follows the surviving displayed clock even
-		// through its neutral interval. Ready future inputs do not grant a
-		// second catch-up budget after that clock has been reached.
+		// A returned reader's neutral interval follows the surviving displayed clock.
 		if (s_LockstepCoordinator->UsesPeerFrameGroups()) return false;
 		// A seat that came back from the committed tail stands a trip behind the round's inputs: it closes that trip through its reclaim gap.
 		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;

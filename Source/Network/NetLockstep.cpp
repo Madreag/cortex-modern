@@ -13000,10 +13000,7 @@ namespace RTE {
 					}
 					const bool privateRunway = !own->second.returnFrame ||
 					    (back != m_ReclaimTransactions.end() && *m_LastCompletedSimulationTick <= back->second.neutralThroughFrame);
-					// An excluded reader has no live input to produce. Its certified
-					// history can fill the bounded pipeline before the human return.
-					// Once a return is known, keep preparation inside its producer
-					// window so the first live input cannot be prepared past.
+					// Keep private history bounded; an agreed return also stays inside its input producer's window.
 					const uint64_t runway = !own->second.returnFrame ? NetLockstepCodec::c_MaxFutureFrameSkew :
 					    std::max<uint16_t>(1, InputDelayAt(m_Config.localPeerId, *m_LastCompletedSimulationTick + 1));
 					if (privateRunway && m_Stats.nextFrame > *m_LastCompletedSimulationTick + runway) {

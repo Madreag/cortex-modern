@@ -224,8 +224,7 @@ namespace RTE {
 				heartbeat.completeFrom = m_Config.migrationGeneration + 1;
 			PutSize(heartbeat.bytes, m_Stats.peers[m_Config.localPeerId].pingMs); PutSize(heartbeat.bytes, m_Stats.peers[m_Config.localPeerId].jitterMs);
 			heartbeat.totalBytes = static_cast<uint32_t>(heartbeat.bytes.size());
-			// A newer displayed prefix replaces this progress report. Keep it
-			// arriving while older ordered decisions or history are delayed.
+			// A newer progress report replaces an older one without waiting on the ordered stream.
 			SendPeerFrameMessage(std::move(heartbeat), NetTransportLane::InputUnreliable);
 		}
 		const bool retryVotes = nowMs >= m_PeerVoteRetryAtMs;
@@ -307,8 +306,7 @@ namespace RTE {
 			auto& sample = m_PeerReceiptDelaySamples[peer];
 			sample.Observe(nowMs, 0);
 			const auto [wire, route] = PeerFrameRoute(peer);
-			// A held reader's receipts measure its catch-up. Its measured transport
-			// still sizes the runway it will need when it rejoins these senders.
+			// Size a held reader's future live runway from transport, outside its catch-up receipts.
 			if ((m_FrameGroupMembers & SeatBit(peer)) != 0 && sample.P95Ms() != 0) paths.emplace_back(sample.P95Ms(), sample.JitterMs());
 			else if (wire && wire->IsPeerPingMeasured(route)) paths.emplace_back(wire->GetPeerPingMs(route), 0);
 		}

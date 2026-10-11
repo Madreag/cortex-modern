@@ -116,11 +116,7 @@ namespace RTE {
 				// Require the reader to have displayed certified bridge history
 				// before admitting its next producible input again.
 				if (applied->second < bridge.fromFrame) continue;
-				// Compare displayed progress on both sides. The prepared horizon
-				// already includes this group's input buffer; comparing it with a
-				// private reader's displayed tick demands that the reader overtake
-				// its donor. The remaining trail fits the capped neutral interval,
-				// where the reader keeps catching up before producing live input.
+				// Compare displayed progress; the remaining trail fits the return's capped neutral interval.
 				const uint64_t displayed = m_LastCompletedSimulationTick.value_or(frame - 1);
 				const uint64_t allowance = std::max<uint64_t>(delay + m_Config.slowPlayerBoundTicks,
 				    static_cast<uint64_t>(std::ceil(c_NetSeatCatchUpAllowanceMs / m_Config.simTickMs)));
@@ -133,8 +129,7 @@ namespace RTE {
 			uint64_t lead = m_Config.slowPlayerBoundTicks;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 				if (peer == m_Config.localPeerId || (m_FrameGroupMembers & SeatBit(peer)) == 0) continue;
-				// Only surviving voters agree this return. The held reader's
-				// transit and remaining trail already size its neutral interval.
+				// Only surviving voters size the return's agreement lead.
 				uint32_t rtt = 0;
 				const auto [wire, route] = PeerFrameRoute(peer);
 				if (wire && wire->IsPeerPingMeasured(route)) rtt = wire->GetPeerPingMs(route);
@@ -158,17 +153,13 @@ namespace RTE {
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (peer != m_Config.localPeerId && (proposal.connectedMask & SeatBit(peer)) != 0)
 			{
 				anotherVoter = true;
-				// The vote travels between the surviving signers. Input receipts
-				// can include a different seat's wait and must not bring this vote
-				// forward while that signer's next input is still arriving.
+				// Size the vote from the surviving signers' transport, outside another seat's input wait.
 				const auto [wire, route] = PeerFrameRoute(peer);
 				if (wire && wire->IsPeerPingMeasured(route)) agreementMs = std::max<uint64_t>(agreementMs, wire->GetPeerPingMs(route));
 				else if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end())
 					agreementMs = std::max<uint64_t>(agreementMs, path->second.P95Ms());
 			}
-			// The measured trip excludes the two voters' next pump and the
-			// consumer's next slot. Spend this scheduling reserve before the
-			// deadline rather than adding it to the player's fifty-ms wait.
+			// Spend the voters' scheduling reserve inside the consumer's three-tick bound.
 			if (anotherVoter) agreementMs = std::max<uint64_t>(1, agreementMs) + boundMs;
 			// Votes spend the buffered runway, so a healthy relay round trip fits inside the consumer's bound.
 			if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame) {
@@ -306,8 +297,7 @@ namespace RTE {
 		if (!DecodePeerBridgeCertificate(certificate, agreed, voters) || (agreed.preparedFrame == 3 ? !PeerAdminCertificateValid(agreed, voters) : !PeerGroupHasAuthority(voters))) return;
 		if (agreed.preparedFrame == 0 && certificate.frame > m_Stats.nextFrame) { RequestPeerCommittedTail(nowMs); return; }
 		if (agreed.preparedFrame != 0 && certificate.frame < m_Stats.nextFrame) {
-			// A private reader may have prepared the certified tail past the return,
-			// while its display still owes that tick. Install before it displays it.
+			// Install a private return before its displayed tick, even if preparation has passed it.
 			const auto own = m_PeerBridges.find(m_Config.localPeerId);
 			const bool privateReader = own != m_PeerBridges.end() && own->second.committedHold && !own->second.returnFrame;
 			if (agreed.preparedFrame != 1 || !privateReader ||
@@ -341,8 +331,7 @@ namespace RTE {
 		m_FrameGroupChanges[agreed.frame] = agreed.connectedMask;
 		if (agreed.preparedFrame == 0) {
 			m_FrameGroupMembers = agreed.connectedMask;
-			// Keep the surviving display clock when the held seat returns.
-			// The certificate can arrive after this frame was prepared.
+			// Retain the surviving display clock even when a certificate arrives after preparation.
 			if ((agreed.connectedMask & SeatBit(m_PeerPaceReference)) == 0)
 				m_PeerPaceReference = static_cast<uint8_t>(std::countr_zero(agreed.connectedMask) + 1);
 			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-pace] local=" << static_cast<int>(m_Config.localPeerId)

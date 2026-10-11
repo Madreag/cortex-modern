@@ -70,8 +70,7 @@ namespace RTE {
 			message.offset = static_cast<uint32_t>(offset);
 			const size_t end = std::min(body.size(), offset + NetHostMigrationCodec::c_ChunkBytes);
 			message.bytes.assign(body.begin() + offset, body.begin() + end);
-			// The repeated input window repairs a missing small message without
-			// making later inputs wait behind it on the ordered stream.
+			// Repeated input windows repair missing small messages without delaying later inputs.
 			SendPeerFrameMessage(std::move(message), body.size() <= 4096 ? NetTransportLane::InputUnreliable : NetTransportLane::ControlReliable);
 		}
 		m_PeerSourceInputs[frame.targetFrame][m_Config.localPeerId] = std::move(current);
@@ -89,8 +88,7 @@ namespace RTE {
 		receipt.successorPeerId = frame.senderPeerId;
 		receipt.frame = accepted->second;
 		m_PeerInputReceipts[frame.senderPeerId][m_Config.localPeerId] = accepted->second;
-		// Every new receipt carries the complete accepted prefix. A later
-		// receipt replaces a missing one instead of waiting behind it.
+		// Each cumulative receipt replaces a missing one without waiting on the ordered stream.
 		SendPeerFrameMessage(std::move(receipt), NetTransportLane::InputUnreliable);
 	}
 
