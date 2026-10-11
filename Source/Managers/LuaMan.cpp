@@ -6776,6 +6776,7 @@ namespace RTE::CheckpointLua {
 }
 
 #include "CheckpointLuaGraph.h"
+#include "CheckpointLuaValues.h"
 
 void LuaStateWrapper::LoadScriptGraphHelper() {
 	if (!m_ScriptGraphHelperLoaded) {
@@ -9808,6 +9809,13 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	{
 		const std::string mismatch = MovableMan::CheckpointScopesSelfTestMismatch();
 		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " frozen_saver_object_lists_do_not_replace_simulation_lists";
+		if (!mismatch.empty()) std::cout << " reason=" << mismatch;
+		std::cout << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
+	}
+	{
+		const std::string mismatch = CheckpointLua::SavedValues::SelfTestMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " saved_getters_keep_private_tables_shared_upvalues_and_aliases_after_source_death";
 		if (!mismatch.empty()) std::cout << " reason=" << mismatch;
 		std::cout << std::endl;
 		checkpointValues = mismatch.empty() && checkpointValues;
