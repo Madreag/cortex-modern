@@ -4808,7 +4808,11 @@ namespace RTE {
 	bool NetLockstepCoordinator::PlaneShouldTick(uint64_t nowMs) const {
 		NET_PLANE_CHECK();
 		if (m_State != NetLockstepState::Running || !m_Transport || m_Playback || (IsMigrating() && !UsesPeerFrameGroups())) return false;
-		if (IsOwnHostSeatHeld()) return true;
+		// A held reader with certified frames ready is already pumping on
+		// the simulation thread as it applies them. Repeating the complete
+		// session pump in every short window spends its replay headroom.
+		// A reader waiting for history keeps the fast background cadence.
+		if (IsOwnHostSeatHeld() && (!UsesPeerFrameGroups() || m_ReadyFrames.empty())) return true;
 		const uint64_t simTickedMs = m_SimTickedMs.load(std::memory_order_acquire);
 		return simTickedMs != 0 && nowMs >= simTickedMs && static_cast<double>(nowMs - simTickedMs) >= std::max(1.0, m_Config.simTickMs);
 	}
