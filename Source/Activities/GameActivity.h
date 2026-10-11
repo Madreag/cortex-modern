@@ -737,6 +737,10 @@ namespace RTE {
 		mutable std::unique_ptr<BuyMenuGUI> m_SeatStubBuyGUI[Players::MaxPlayerCount];
 		mutable std::unique_ptr<SceneEditorGUI> m_SeatStubEditorGUI[Players::MaxPlayerCount];
 		mutable std::unique_ptr<GUIBanner> m_SeatStubBanner[2][Players::MaxPlayerCount];
+		// Saved getters share menu identities with graph handles while the snapshot keeps their owners.
+		std::array<BuyMenuGUI*, Players::MaxPlayerCount> m_SavedStubBuy{};
+		std::array<SceneEditorGUI*, Players::MaxPlayerCount> m_SavedStubEditor{};
+		std::array<std::array<GUIBanner*, Players::MaxPlayerCount>, 2> m_SavedStubBanner{};
 		// How many times a banner has been repeated.. so we dont' annoy by repeating forever
 		int m_BannerRepeats[Players::MaxPlayerCount];
 		// Whether each player has marked himself as ready to start. Can still edit while this is set, but when all are set, the game starts

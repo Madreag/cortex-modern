@@ -205,6 +205,18 @@ GameActivity::GameActivity(const GameActivity& source, CheckpointNativeSnapshot&
 	snapshot.FreezeArray(m_aLZCursor, source.m_aLZCursor);
 	snapshot.FreezeArray(m_aObjCursor, source.m_aObjCursor);
 	snapshot.FreezeArray(m_NetworkPlayerNames, source.m_NetworkPlayerNames);
+	if (CheckpointNativeStorage::Reading()) {
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			m_pBuyGUI[player] = snapshot.ValueObject(source.m_pBuyGUI[player]);
+			m_pEditorGUI[player] = snapshot.ValueObject(source.m_pEditorGUI[player]);
+			m_pBannerRed[player] = snapshot.ValueObject(source.m_pBannerRed[player]);
+			m_pBannerYellow[player] = snapshot.ValueObject(source.m_pBannerYellow[player]);
+			m_SavedStubBuy[player] = snapshot.ValueObject(source.m_SeatStubBuyGUI[player].get());
+			m_SavedStubEditor[player] = snapshot.ValueObject(source.m_SeatStubEditorGUI[player].get());
+			for (size_t color = 0; color < m_SavedStubBanner.size(); ++color)
+				m_SavedStubBanner[color][player] = snapshot.ValueObject(source.m_SeatStubBanner[color][player].get());
+		}
+	}
 	FreezeCheckpointUI(source);
 }
 
@@ -580,12 +592,14 @@ void GameActivity::PrepareCheckpointCapture() const {
 BuyMenuGUI* GameActivity::GetBuyGUI(unsigned int which) const {
 	if (which >= Players::MaxPlayerCount) return nullptr;
 	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
+	if (IsFrozenCheckpointNative() && !(presented && m_pBuyGUI[which]) && m_SavedStubBuy[which]) return m_SavedStubBuy[which];
 	return presented && m_pBuyGUI[which] ? m_pBuyGUI[which] : SeatStub(m_SeatStubBuyGUI[which]);
 }
 
 SceneEditorGUI* GameActivity::GetEditorGUI(unsigned int which) const {
 	if (which >= Players::MaxPlayerCount) return nullptr;
 	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
+	if (IsFrozenCheckpointNative() && !(presented && m_pEditorGUI[which]) && m_SavedStubEditor[which]) return m_SavedStubEditor[which];
 	return presented && m_pEditorGUI[which] ? m_pEditorGUI[which] : SeatStub(m_SeatStubEditorGUI[which]);
 }
 
@@ -593,6 +607,8 @@ GUIBanner* GameActivity::GetBanner(int whichColor, int player) const {
 	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return nullptr;
 	GUIBanner* const live = whichColor == YELLOW ? m_pBannerYellow[player] : m_pBannerRed[player];
 	const bool presented = LocalInputOfPlayer(player) != Players::NoPlayer;
+	if (IsFrozenCheckpointNative() && !(presented && live) && m_SavedStubBanner[whichColor == YELLOW ? YELLOW : RED][player])
+		return m_SavedStubBanner[whichColor == YELLOW ? YELLOW : RED][player];
 	return presented && live ? live : SeatStub(m_SeatStubBanner[whichColor == YELLOW ? YELLOW : RED][player]);
 }
 
