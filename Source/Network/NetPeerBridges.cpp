@@ -127,8 +127,12 @@ namespace RTE {
 			proposal.preparedFrame = 1;
 			proposal.boundary = m_LastCompletedSimulationTick.value_or(frame - 1);
 			uint64_t lead = m_Config.slowPlayerBoundTicks;
-			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
-				lead = std::max<uint64_t>(lead, static_cast<uint64_t>(std::ceil(m_Stats.peers[peer].pingMs / m_Config.simTickMs)) + m_Config.slowPlayerBoundTicks);
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+				uint32_t rtt = m_Stats.peers[peer].pingMs;
+				const auto [wire, route] = PeerFrameRoute(peer);
+				if (wire && wire->IsPeerPingMeasured(route)) rtt = std::max(rtt, wire->GetPeerPingMs(route));
+				lead = std::max<uint64_t>(lead, static_cast<uint64_t>(std::ceil(rtt / m_Config.simTickMs)) + m_Config.slowPlayerBoundTicks);
+			}
 			uint64_t prepared = frame;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((m_FrameGroupMembers & SeatBit(peer)) != 0)
 				prepared = std::max(prepared, m_Stats.peers[peer].reportedNextFrame);
@@ -180,9 +184,6 @@ namespace RTE {
 			if (neutral > NetLockstepCodec::c_MaxFutureFrameSkew) return false;
 			PutSize(proposal.bytes, delay); PutSize(proposal.bytes, neutral);
 			PutSize(proposal.bytes, std::max<uint32_t>(1, m_Config.peerIncarnations[peer]));
-			DiagnosticLine() << "[net-peer-return-runway] peer=" << static_cast<int>(peer) << " activation=" << proposal.frame
-			    << " rtt_ms=" << rtt << " margin_ms=" << margin << " trail_ticks=" << trail << " delay_ticks=" << delay
-			    << " neutral_through=" << proposal.frame + neutral << std::endl;
 		}
 		proposal.totalBytes = static_cast<uint32_t>(proposal.bytes.size());
 		if (!ValidatePeerBridge(proposal)) return false;
@@ -194,6 +195,15 @@ namespace RTE {
 		if (own != votes.end()) return m_PeerBridgeCertificates.contains({frame, 0});
 		proposal.voterMask = SeatBit(m_Config.localPeerId);
 		votes.emplace(m_Config.localPeerId, proposal);
+		if (proposal.preparedFrame == 1) {
+			size_t offset = NetHash32{}.size();
+			for (uint8_t peer: proposal.members) {
+				uint32_t delay = 0, neutral = 0, incarnation = 0;
+				if (!TakeSize(proposal.bytes, offset, delay) || !TakeSize(proposal.bytes, offset, neutral) || !TakeSize(proposal.bytes, offset, incarnation)) return false;
+				DiagnosticLine() << "[net-peer-return-runway] peer=" << static_cast<int>(peer) << " activation=" << proposal.frame
+				    << " delay_ticks=" << delay << " neutral_through=" << proposal.frame + neutral << std::endl;
+			}
+		}
 		if (proposal.preparedFrame == 0) for (uint8_t peer: proposal.members) m_PeerRejectedInputs[frame] |= SeatBit(peer);
 		SendPeerFrameMessage(proposal);
 		TryCommitPeerBridge(proposal.frame, nowMs, DecisionKind(proposal));

@@ -29194,7 +29194,10 @@ namespace {
 		if (selectedCase) {
 			if (std::string_view(selectedCase) == "seat-return-pacing") {
 				std::string error;
-				return TestALateVoterResyncsAfterTheMajorityCloses(&error) && TestPlacementBarrierReleasesPeerBridging(&error) ? 0 : fail(error);
+				const bool passed = TestALateVoterResyncsAfterTheMajorityCloses(&error) && TestPlacementBarrierReleasesPeerBridging(&error);
+				if (!passed) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
 			}
 			if (std::string_view(selectedCase) == "catch-up-script-control") {
 				std::string error;
