@@ -79,6 +79,7 @@ namespace RTE {
 		public:
 			bool Current() const noexcept;
 			bool Arm() const;
+			void Cancel() const noexcept;
 			std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> Pages() const { return m_Pages; }
 		private:
 			friend class CheckpointNativeStorage;

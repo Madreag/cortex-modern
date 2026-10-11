@@ -81,6 +81,7 @@ extern "C" {
 #undef LoadBitmap
 
 #include "CheckpointLuaHeap.h"
+#include "CheckpointBoundary.h"
 #include "CheckpointLuaBindings.h"
 #include "CheckpointLuaScratch.h"
 #include "CheckpointLuaView.h"
@@ -9829,6 +9830,12 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		const bool exact = CheckpointLua::HeapOwner::RunPreparedSelfTest() && CheckpointLua::HeapOwner::RunReusedOwnerSelfTest() && CheckpointLua::HeapOwner::RunPreparationLifetimeSelfTest();
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " prepared_lua_pages_freeze_without_allocation_reject_growth_and_survive_source_death" << std::endl;
 		checkpointValues = exact && checkpointValues;
+	}
+	{
+		const std::string mismatch = CheckpointLua::Boundary::SelfTestMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " prepared_boundary_keeps_native_and_lua_values_at_one_tick" << std::endl;
+		if (!mismatch.empty()) std::cout << "[script-graph-selftest] detail=" << mismatch << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
 	}
 	{
 		auto owner = CheckpointLua::HeapOwner::Create();

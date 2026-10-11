@@ -583,6 +583,10 @@ bool CheckpointNativeStorage::Prepared::Arm() const {
 	return false;
 }
 
+void CheckpointNativeStorage::Prepared::Cancel() const noexcept {
+	for (const auto& pages: m_Pages) pages->Cancel();
+}
+
 std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> CheckpointNativeStorage::Prepare() {
 	return std::move(PrepareInventory()->m_Pages);
 }
