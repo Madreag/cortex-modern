@@ -107,6 +107,10 @@ namespace RTE {
 		void PrepareCheckpointLookupValues();
 		const void* CheckpointOwnedLookupValues() const { return m_OwnedCheckpointLookup.get(); }
 		static std::string CheckpointLookupStorageSelfTestMismatch();
+		/// Owns saved world options before a multiplayer capture.
+		void PrepareCheckpointOptionsValues();
+		const void* CheckpointOwnedOptionsValues() const { return m_OwnedCheckpointOptions.get(); }
+		static std::string CheckpointOptionsStorageSelfTestMismatch();
 		/// Owns world indices and event membership before a multiplayer capture.
 		void PrepareCheckpointMembershipValues();
 		const void* CheckpointOwnedMembershipValues() const { return m_OwnedCheckpointMembership.get(); }
@@ -708,17 +712,17 @@ namespace RTE {
 		/// Gets the global setting for how much splash MOPixels should be created
 		/// an MO penetrates the terrain deeply.
 		/// @return A float with the global splash amount setting, form 1.0 to 0.0.
-		float GetSplashRatio() const { return m_SplashRatio; }
+		float GetSplashRatio() const { return CheckpointOptionsValues().m_SplashRatio; }
 
 		/// Sets the max number of dropped items that will be reached before the
 		/// first dropped with be copied to the terrain.
 		/// @param newLimit An int spefifying the limit.
-		void SetMaxDroppedItems(int newLimit) { m_MaxDroppedItems = newLimit; }
+		void SetMaxDroppedItems(int newLimit) { CheckpointOptionsValues().m_MaxDroppedItems = newLimit; }
 
 		/// Gets the max number of dropped items that will be reached before the
 		/// first dropped with be copied to the terrain.
 		/// @return An int spefifying the limit.
-		int GetMaxDroppedItems() const { return m_MaxDroppedItems; }
+		int GetMaxDroppedItems() const { return CheckpointOptionsValues().m_MaxDroppedItems; }
 
 		/// Sets this to draw HUD lines for a specific team's roster this frame.
 		/// @param team Which team to have lines drawn of.
@@ -912,15 +916,15 @@ namespace RTE {
 		/// Shows whetehr particles are set to get copied to the terrain upon
 		/// settling
 		/// @return Whether enabled or not.
-		bool IsParticleSettlingEnabled() { return m_SettlingEnabled; }
+		bool IsParticleSettlingEnabled() const { return CheckpointOptionsValues().m_SettlingEnabled; }
 
 		/// Sets whether particles will get copied into the terrain upon them settling down.
 		/// @param enable Whether to enable or not. (default: true)
-		void EnableParticleSettling(bool enable = true) { m_SettlingEnabled = enable; }
+		void EnableParticleSettling(bool enable = true) { CheckpointOptionsValues().m_SettlingEnabled = enable; }
 
 		/// Shows whether MO's sihouettes can get subtracted from the terrain at all.
 		/// @return Whether enabled or not.
-		bool IsMOSubtractionEnabled() { return m_MOSubtractionEnabled; }
+		bool IsMOSubtractionEnabled() const { return CheckpointOptionsValues().m_MOSubtractionEnabled; }
 
 		/// Updates the state of this MovableMan. Supposed to be done every frame.
 		void Update();
@@ -1093,7 +1097,7 @@ namespace RTE {
 
 		/// Returns the current sim update frame number
 		/// @return Current sim update frame number.
-		unsigned int GetSimUpdateFrameNumber() const { return m_SimUpdateFrameNumber; }
+		unsigned int GetSimUpdateFrameNumber() const { return CheckpointOptionsValues().m_SimUpdateFrameNumber; }
 
 		/// Starts the sim update count over, as every peer does when a fresh round starts.
 		void RestartSimUpdateFrameNumber();
@@ -1166,6 +1170,24 @@ namespace RTE {
 
 		/// Protected member variable and method declarations
 	protected:
+		struct CheckpointOptions : CheckpointNativeAllocated {
+			float m_SplashRatio; //!< The terrain pixels converted to MOPixels on deep impact.
+			int m_MaxDroppedItems; //!< The maximum number of loose items.
+			bool m_SettlingEnabled; //!< Whether particles may settle into terrain.
+			bool m_MOSubtractionEnabled; //!< Whether MO silhouettes may subtract terrain.
+			unsigned int m_SimUpdateFrameNumber;
+		};
+		CheckpointOptions m_OrdinaryCheckpointOptions;
+		std::unique_ptr<CheckpointOptions> m_OwnedCheckpointOptions;
+		CheckpointOptions& CheckpointOptionsValues() {
+			if (CheckpointNativeStorage::Reading()) throw std::logic_error("a frozen registry cannot change live world options");
+			return m_OwnedCheckpointOptions ? *m_OwnedCheckpointOptions : m_OrdinaryCheckpointOptions;
+		}
+		const CheckpointOptions& CheckpointOptionsValues() const {
+			const auto* source = m_OwnedCheckpointOptions ? m_OwnedCheckpointOptions.get() : &m_OrdinaryCheckpointOptions;
+			return *CheckpointNativeStorage::Source(source);
+		}
+
 		struct CheckpointMembership : CheckpointNativeAllocated {
 			// Membership and ordering stay at the captured tick while the live world advances.
 			CheckpointUnorderedMap<const Actor*, int> m_ContiguousActorIDs;
@@ -1336,18 +1358,6 @@ namespace RTE {
 		// Mutexes to ensure alarm events aren't being added from separate threads at the same time
 		std::mutex m_AddedAlarmEventsMutex;
 
-		// The ration of terrain pixels to be converted into MOPixel:s upon
-		// deep impact of MO.
-		float m_SplashRatio;
-		// The maximum number of loose items allowed.
-		int m_MaxDroppedItems;
-
-		// Whether settling of particles is enabled or not
-		bool m_SettlingEnabled;
-		// Whtehr MO's vcanng et subtracted form the terrain at all
-		bool m_MOSubtractionEnabled;
-
-		unsigned int m_SimUpdateFrameNumber;
 		bool m_LockstepPostEffectsPresented = false;
 		uint64_t m_ValueObservationsRejected;
 
@@ -1375,8 +1385,9 @@ namespace RTE {
 
 
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
-			archive(self.m_SplashRatio, self.m_MaxDroppedItems, self.m_SettlingEnabled, self.m_MOSubtractionEnabled,
-				self.m_SimUpdateFrameNumber);
+			auto& values = self.CheckpointOptionsValues();
+			archive(values.m_SplashRatio, values.m_MaxDroppedItems, values.m_SettlingEnabled, values.m_MOSubtractionEnabled,
+				values.m_SimUpdateFrameNumber);
 		}
 		static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.
 

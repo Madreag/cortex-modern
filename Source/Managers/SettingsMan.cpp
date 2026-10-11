@@ -346,7 +346,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("ShowForeignItems", { reader >> m_ShowForeignItems; });
 	MatchProperty("FlashOnBrainDamage", { reader >> m_FlashOnBrainDamage; });
 	MatchProperty("BlipOnRevealUnseen", { reader >> m_BlipOnRevealUnseen; });
-	MatchProperty("MaxUnheldItems", { reader >> g_MovableMan.m_MaxDroppedItems; });
+	MatchProperty("MaxUnheldItems", { reader >> g_MovableMan.CheckpointOptionsValues().m_MaxDroppedItems; });
 	MatchProperty("UnheldItemsHUDDisplayRange", { SetUnheldItemsHUDDisplayRange(ReadSettingFloat(reader.ReadPropValue())); });
 	MatchProperty("AlwaysDisplayUnheldItemsInStrategicMode", { reader >> m_AlwaysDisplayUnheldItemsInStrategicMode; });
 	MatchProperty("SubPieMenuHoverOpenDelay", { reader >> m_SubPieMenuHoverOpenDelay; });
@@ -455,8 +455,8 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	// Retired, and read only so an old settings file still parses: the count is a build constant.
 	MatchProperty("NumberOfLuaStatesOverride", { reader >> m_NumberOfLuaStatesOverride; });
 	MatchProperty("ForceImmediatePathingRequestCompletion", { reader >> m_ForceImmediatePathingRequestCompletion; });
-	MatchProperty("EnableParticleSettling", { reader >> g_MovableMan.m_SettlingEnabled; });
-	MatchProperty("EnableMOSubtraction", { reader >> g_MovableMan.m_MOSubtractionEnabled; });
+	MatchProperty("EnableParticleSettling", { reader >> g_MovableMan.CheckpointOptionsValues().m_SettlingEnabled; });
+	MatchProperty("EnableMOSubtraction", { reader >> g_MovableMan.CheckpointOptionsValues().m_MOSubtractionEnabled; });
 	MatchProperty("DeltaTime", { g_TimerMan.SetDeltaTimeSecs(ReadSettingFloat(reader.ReadPropValue())); });
 	MatchProperty("AllowSavingToBase", { reader >> m_AllowSavingToBase; });
 	MatchProperty("ShowMetaScenes", { reader >> m_ShowMetaScenes; });
@@ -536,7 +536,7 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("ShowForeignItems", m_ShowForeignItems);
 	writer.NewPropertyWithValue("FlashOnBrainDamage", m_FlashOnBrainDamage);
 	writer.NewPropertyWithValue("BlipOnRevealUnseen", m_BlipOnRevealUnseen);
-	writer.NewPropertyWithValue("MaxUnheldItems", g_MovableMan.m_MaxDroppedItems);
+	writer.NewPropertyWithValue("MaxUnheldItems", g_MovableMan.CheckpointOptionsValues().m_MaxDroppedItems);
 	writer.NewPropertyWithValue("UnheldItemsHUDDisplayRange", m_UnheldItemsHUDDisplayRange);
 	writer.NewPropertyWithValue("AlwaysDisplayUnheldItemsInStrategicMode", m_AlwaysDisplayUnheldItemsInStrategicMode);
 	writer.NewPropertyWithValue("SubPieMenuHoverOpenDelay", m_SubPieMenuHoverOpenDelay);
@@ -601,8 +601,8 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("LocalPredictionMaxTicks", m_LocalPredictionMaxTicks);
 	WriteNetworkPreferences(writer);
 	writer.NewPropertyWithValue("ForceImmediatePathingRequestCompletion", m_ForceImmediatePathingRequestCompletion);
-	writer.NewPropertyWithValue("EnableParticleSettling", g_MovableMan.m_SettlingEnabled);
-	writer.NewPropertyWithValue("EnableMOSubtraction", g_MovableMan.m_MOSubtractionEnabled);
+	writer.NewPropertyWithValue("EnableParticleSettling", g_MovableMan.CheckpointOptionsValues().m_SettlingEnabled);
+	writer.NewPropertyWithValue("EnableMOSubtraction", g_MovableMan.CheckpointOptionsValues().m_MOSubtractionEnabled);
 	writer.NewPropertyWithValue("DeltaTime", g_TimerMan.GetDeltaTimeSecs());
 
 	// No experimental settings right now :)

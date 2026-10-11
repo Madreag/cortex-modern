@@ -1820,7 +1820,7 @@ static State Observe(const std::string& gapPath) {
     audit.Field("world.sort_rosters", g_MovableMan.CheckpointMembershipValues().m_SortTeamRoster);
     audit.Field("world.quarantine", g_MovableMan.CheckpointMembershipValues().m_LockstepJoinQuarantine);
     audit.Field("world.moid_index", g_MovableMan.CheckpointMembershipValues().m_MOIDIndex);
-    audit.Field("world.update_number", g_MovableMan.m_SimUpdateFrameNumber);
+    audit.Field("world.update_number", g_MovableMan.CheckpointOptionsValues().m_SimUpdateFrameNumber);
     audit.Field("world.roster", g_MovableMan.DescribeTeamRosters());
     audit.Field("scene.global_acc", g_SceneMan.GetScene()->GetGlobalAcc());
     TerrainLayerSnapshot terrain;

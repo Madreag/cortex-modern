@@ -2081,6 +2081,34 @@ MovableMan::~MovableMan() {
 	Destroy();
 }
 
+void MovableMan::PrepareCheckpointOptionsValues() {
+	if (!CheckpointNativeStorage::Enabled() || m_OwnedCheckpointOptions) return;
+	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	auto prepared = std::make_unique<CheckpointOptions>(m_OrdinaryCheckpointOptions);
+	m_OwnedCheckpointOptions = std::move(prepared);
+}
+
+std::string MovableMan::CheckpointOptionsStorageSelfTestMismatch() {
+	CheckpointNativeStorage::AllocationScope allocations(true);
+	auto source = std::make_unique<CheckpointOptions>();
+	source->m_SplashRatio = -0.0F; source->m_MaxDroppedItems = 117;
+	source->m_SettlingEnabled = true; source->m_MOSubtractionEnabled = false; source->m_SimUpdateFrameNumber = 81;
+	const auto save = [](const CheckpointOptions& values) {
+		CheckpointWriter writer("MovableMan1");
+		writer(values.m_SplashRatio, values.m_MaxDroppedItems, values.m_SettlingEnabled, values.m_MOSubtractionEnabled, values.m_SimUpdateFrameNumber);
+		return writer.Text();
+	};
+	const auto expected = save(*source);
+	const auto* identity = source.get();
+	auto prepared = CheckpointNativeStorage::PrepareInventory();
+	if (!prepared->Arm()) return "world option inventory is stale";
+	source->m_SplashRatio = 0.75F; source->m_MaxDroppedItems = 100;
+	source->m_SettlingEnabled = false; source->m_MOSubtractionEnabled = true; source->m_SimUpdateFrameNumber = 82;
+	source.reset();
+	CheckpointNativeStorage::ReadScope reads(prepared->Pages());
+	return save(*CheckpointNativeStorage::Source(identity)) == expected ? std::string{} : "saved world options follow the next tick";
+}
+
 void MovableMan::PrepareCheckpointMembershipValues() {
 	if (!CheckpointNativeStorage::Enabled() || m_OwnedCheckpointMembership) return;
 	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
@@ -2230,12 +2258,12 @@ void MovableMan::Clear() {
 	CheckpointMembershipValues().m_AddedAlarmEvents.clear();
 	CheckpointMembershipValues().m_AlarmEvents.clear();
 	CheckpointMembershipValues().m_MOIDIndex.clear();
-	m_SplashRatio = 0.75;
-	m_MaxDroppedItems = 100;
-	m_SettlingEnabled = true;
-	m_MOSubtractionEnabled = true;
+	CheckpointOptionsValues().m_SplashRatio = 0.75;
+	CheckpointOptionsValues().m_MaxDroppedItems = 100;
+	CheckpointOptionsValues().m_SettlingEnabled = true;
+	CheckpointOptionsValues().m_MOSubtractionEnabled = true;
 	// HitWhatMOID / HitWhatTerrMaterial compare against this each tick; it's otherwise only incremented.
-	m_SimUpdateFrameNumber = 0;
+	CheckpointOptionsValues().m_SimUpdateFrameNumber = 0;
 	m_LockstepPostEffectsPresented = false;
 	m_ValueObservationsRejected = 0;
 }
@@ -2254,7 +2282,7 @@ int MovableMan::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("AddAmmo", { g_PresetMan.GetEntityPreset(reader); });
 	MatchProperty("AddDevice", { g_PresetMan.GetEntityPreset(reader); });
 	MatchProperty("AddActor", { g_PresetMan.GetEntityPreset(reader); });
-	MatchProperty("SplashRatio", { reader >> m_SplashRatio; });
+	MatchProperty("SplashRatio", { reader >> CheckpointOptionsValues().m_SplashRatio; });
 
 	EndPropertyList;
 }
@@ -3428,7 +3456,7 @@ void MovableMan::ShadowParticlesNear(const std::vector<Vector>& points, float ha
 }
 
 void MovableMan::SettleSpeculativeParticles() {
-	if (!m_Speculation.active || !m_SettlingEnabled) {
+	if (!m_Speculation.active || !CheckpointOptionsValues().m_SettlingEnabled) {
 		return;
 	}
 	const auto settle = [this](MovableObject* particle) {
@@ -4219,7 +4247,7 @@ bool MovableMan::RunPurgeSelfTest() {
 void MovableMan::RestartSimUpdateFrameNumber() {
 	std::lock_guard<std::mutex> lock(m_ObjectRegisteredMutex);
 	for (const auto& [id, object]: CheckpointLookupValues().m_KnownObjects) object->ResetCollisionResults();
-	m_SimUpdateFrameNumber = 0;
+	CheckpointOptionsValues().m_SimUpdateFrameNumber = 0;
 }
 
 static void ForgetActivitySlots(MovableObject* object);
@@ -7254,7 +7282,7 @@ void MovableMan::Update() {
 		return;
 	}
 
-	m_SimUpdateFrameNumber++;
+	CheckpointOptionsValues().m_SimUpdateFrameNumber++;
 
 	// If this is the first sim update since a drawn one, then clear the post effects
 	if (g_TimerMan.SimUpdatesSinceDrawn() == 0 ||
@@ -7395,7 +7423,7 @@ void MovableMan::Update() {
 			ZoneScopedN("Items Update");
 
 			int count = 0;
-			int itemLimit = CheckpointLooseValues().m_Items.size() - m_MaxDroppedItems;
+			int itemLimit = CheckpointLooseValues().m_Items.size() - CheckpointOptionsValues().m_MaxDroppedItems;
 			for (iIt = CheckpointLooseValues().m_Items.begin(); iIt != CheckpointLooseValues().m_Items.end(); ++iIt, ++count) {
 				UpdateStage(*iIt);
 				if (count <= itemLimit) {
@@ -7569,7 +7597,7 @@ void MovableMan::Update() {
 
 		// SETTLE PARTICLES //////////////////////////////////////////////////
 		// Only settle after all updates and deletions are done
-		if (m_SettlingEnabled) {
+		if (CheckpointOptionsValues().m_SettlingEnabled) {
 			parIt = partition(CheckpointLooseValues().m_Particles.begin(), CheckpointLooseValues().m_Particles.end(), std::not_fn(std::mem_fn(&MovableObject::ToSettle)));
 			midIt = parIt;
 
