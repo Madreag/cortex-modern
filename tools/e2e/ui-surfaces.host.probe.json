@@ -31,6 +31,10 @@
       "elapsed_ms": 300
     },
     {
+      "op": "menu",
+      "command": "video_mark ui-f6-overlay"
+    },
+    {
       "op": "key_down",
       "key": "F6"
     },
@@ -46,10 +50,6 @@
     {
       "op": "wait",
       "panel_open": true
-    },
-    {
-      "op": "menu",
-      "command": "video_mark ui-f6-overlay"
     },
     {
       "op": "wait",
