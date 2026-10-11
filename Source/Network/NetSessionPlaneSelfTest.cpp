@@ -910,9 +910,11 @@ namespace RTE {
 			}
 			const bool named = clientSession.HasReject() && clientSession.GetRejectReason() == NetRejectReason::ParticipantRemoved;
 			const bool released = host.SeatReleases().contains(2);
+			const uint64_t finalWait = hub.now - displayedAt[0];
 			std::cout << "[net-session-scene] kick-pending before=" << before << " after=" << applied[0] << " two_updates_ms=" << firstTwoAt
-			          << " greatest_gap_ms=" << greatestGap << " removed_repairs=" << host.m_PeerReceiptRepairs - repairs << " released=" << released << " named=" << named << std::endl;
-			if (!firstTwoAt || firstTwoAt > 50 || greatestGap > 50 || !released || !named || host.m_PeerReceiptRepairs != repairs) {
+			          << " greatest_gap_ms=" << greatestGap << " final_wait_ms=" << finalWait << " removed_repairs=" << host.m_PeerReceiptRepairs - repairs << " released=" << released << " named=" << named << std::endl;
+			if (!firstTwoAt || firstTwoAt > 50 || greatestGap > 50 || finalWait > 50 || applied[0] < before + 110 ||
+			    !released || !named || host.m_PeerReceiptRepairs != repairs) {
 				*error = "a kick kept the host waiting on the removed seat or failed to tell that player why"; return false;
 			}
 			return true;
