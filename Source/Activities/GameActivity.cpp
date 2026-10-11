@@ -73,6 +73,7 @@
 #include "MainMenuGUI.h"
 #include "GUILabel.h"
 #include "GUIButton.h"
+#include "GUIListBox.h"
 #include "SettingsMan.h"
 #include "RenderTarget.h"
 #include <SDL3/SDL_timer.h>
@@ -2892,14 +2893,14 @@ void GameActivity::Update() {
 		if (!skipBuyUpdate) {
 			if (g_MenuMan.IsLiveMenuOwningInput()) m_pBuyGUI[player]->SetEnabled(false);
 			//            m_pBuyGUI[player]->SetEnabled(m_ControlledActor[player] == m_Brain[player] && m_ViewState[player] != ViewState::LandingZoneSelect && m_ActivityState != ActivityState::Over);
-			m_pBuyGUI[player]->Update();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) m_pBuyGUI[player]->Update();
 		}
 
 		// Trap the mouse if we're in gameplay and not in menus
 		g_UInputMan.TrapMousePos(!g_MenuMan.IsLiveMenuOwningInput() && !m_pBuyGUI[player]->IsEnabled() && !m_InventoryMenuGUI[player]->IsEnabledAndNotCarousel() && !m_LuaLockActor[player], LocalInputOfPlayer(player));
 
 		// Start LZ picking mode if a purchase was made
-		if (m_pBuyGUI[player]->PurchaseMade()) {
+		if (ScenarioRunner::IsLockstepControllerSyncActive() ? m_pBuyGUI[player]->ConsumePurchase() : m_pBuyGUI[player]->PurchaseMade()) {
 			// Store the delivery's own width; the window clamp belongs to the draw, since this is checkpointed state.
 			m_LZCursorWidth[player] = m_pBuyGUI[player]->GetDeliveryWidth();
 			m_pBuyGUI[player]->SetEnabled(false);
@@ -3084,6 +3085,20 @@ void GameActivity::RenderUpdate() {
 	if (m_ActivityState == ActivityState::Editing && IsLockstepPlacement()) {
 		SeedPlacement();
 		UpdateEditingInput(true);
+	}
+	if (ScenarioRunner::IsLockstepControllerSyncActive() && m_ActivityState != ActivityState::Editing) {
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			auto* buy = m_pBuyGUI[player];
+			if (!(IsSeatActive(player) && IsLocalHumanSeat(player)) || !buy || buy->IsInert() || buy->PurchaseMade()) continue;
+			if (g_MenuMan.IsLiveMenuOwningInput()) buy->SetEnabled(false);
+			// Buy reads frame input while the shared controller keeps its committed tick.
+			Controller committed;
+			committed.CopyCheckpointFrom(m_PlayerController[player]);
+			m_PlayerController[player].UpdateEditorInput();
+			const ScopedEditorRNG localRNG(true);
+			buy->Update();
+			m_PlayerController[player].CopyCheckpointFrom(committed);
+		}
 	}
 }
 
@@ -4609,6 +4624,44 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		observePie("release");
 		check("plain_pie_press_release_selects_buy", pie->GetPieCommand() == PieSliceType::BuyMenu);
 		game->Update(); check("actor_buy_opens_for_own_team", game->m_pBuyGUI[0]->IsEnabled() && game->m_PlayerController[0].GetTeam() == TeamFour && game->GetTeamFunds(TeamFour) == 2345);
+		controller->SetState(RELEASE_SECONDARY, false);
+		auto* shop = game->m_pBuyGUI[0];
+		shop->LoadAllLoadoutsFromFile();
+		shop->SetModuleExpanded(g_PresetMan.GetModuleID("Coalition.rte"));
+		g_UInputMan.TrapMousePos(false, 0);
+		SDL_Delay(250); game->Update();
+		const uint64_t shopTick = g_TimerMan.GetSimUpdateCount();
+		const std::string committedController = game->m_PlayerController[0].SaveCheckpoint();
+		const std::string sharedRNG = g_SimRNG.SerializeStateForHashing();
+		const auto shopFrame = [&] {
+			g_UInputMan.Update(false); g_UInputMan.EndSimUpdate();
+			game->RenderUpdate(); shop->Draw(g_FrameMan.GetBackBuffer32()); present();
+		};
+		const auto clickShop = [&](const char* name) {
+			auto* control = shop->AutomationManager()->GetControl(name);
+			if (!control) return false;
+			int x, y, width, height; control->GetControlRect(&x, &y, &width, &height);
+			mouse(true, x + width / 2, y + height / 2, false); shopFrame();
+			mouse(false, x + width / 2, y + height / 2, false); shopFrame();
+			return true;
+		};
+		const auto catalogContains = [&](const char* preset) {
+			auto* catalog = dynamic_cast<GUIListBox*>(shop->AutomationManager()->GetControl("CatalogLB"));
+			if (catalog) for (const auto* item: *catalog->GetItemList()) {
+				if (item->m_pEntity && item->m_pEntity->GetModuleAndPresetName() == preset) return true;
+			}
+			return false;
+		};
+		check("craft_click_between_ticks_changes_catalog", clickShop("CraftTab") && catalogContains("Base.rte/Rocket MK2"));
+		check("bodies_click_between_ticks_contains_soldier", clickShop("BodiesTab") && catalogContains("Coalition.rte/Soldier Light"));
+		check("buy_click_between_ticks_confirms", clickShop("BuyButton") && shop->PurchaseMade());
+		shopFrame(); shopFrame();
+		check("purchase_waits_for_a_simulation_tick", shop->PurchaseMade() && game->GetViewState(0) != ViewState::LandingZoneSelect && g_TimerMan.GetSimUpdateCount() == shopTick);
+		check("shop_frames_keep_the_committed_controller", game->m_PlayerController[0].SaveCheckpoint() == committedController);
+		check("shop_frames_keep_the_shared_random_stream", g_SimRNG.SerializeStateForHashing() == sharedRNG);
+		game->Update();
+		check("simulation_consumes_the_purchase_once", !shop->PurchaseMade() && game->GetViewState(0) == ViewState::LandingZoneSelect);
+		game->m_ViewState[0] = ViewState::Normal;
 		game->m_pBuyGUI[0]->SetEnabled(false); controller->SetState(RELEASE_SECONDARY, false);
 		// Returning from a landing order plays this closing animation while its click is still crossing.
 		pie->CloseForCanonicalStart(); pie->DoDisableAnimation();
