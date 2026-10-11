@@ -8272,6 +8272,12 @@ void RunGameLoop() {
 					const bool catchUpTick = ScenarioRunner::WorldCatchUpActive();
 					if (!observation.contains("phase")) observation["phase"] = catchUpTick ? "catchup" : "live";
 					observation["player_visible"] = !catchUpTick;
+					// A final report can show a returned seat as human. Retain the
+					// ownership at each displayed tick so a blackout's AI interval is observable.
+					observation["ai_held_peer_ids"] = nlohmann::json::array();
+					if (const auto config = ScenarioRunner::GetLockstepMatchConfig())
+						for (uint8_t peer = 1; peer <= config->peerCount; ++peer)
+							if (ScenarioRunner::IsLockstepSeatUnderAI(peer, simTick)) observation["ai_held_peer_ids"].push_back(peer);
 					observation.update(nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
 					    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()},
 					    {"peer", ScenarioRunner::GetLockstepLocalPeerId()}, {"paused", lockstepPausedTick},
