@@ -301,6 +301,8 @@ std::string ContentFile::LoadedBitmapChangeMissedByIndex() {
 			CheckpointNativeSnapshot::ReadScope savedValues(snapshot.get());
 			ContentFile saved;
 			saved.m_DataPath = path;
+			saved.m_IsMemoryPNG = true; saved.m_DataPathIsImageFile = true;
+			way("frozen memory image info", saved.GetImageBitDepth() == 8 && saved.GetImageWidth() == 7 && saved.GetImageHeight() == 5);
 			BITMAP* captured = saved.GetAsBitmap();
 			way("frozen image getter", captured && captured->line[4][6] == 37 && captured == saved.GetAsBitmap());
 			auto owned = std::unique_ptr<BITMAP, void(*)(BITMAP*)>(saved.GetAsBitmap(0, false), destroy_bitmap);
@@ -474,6 +476,13 @@ int ContentFile::GetImageFileInfo(ImageFileInfoType infoTypeToGet) {
 	}
 	if (fetchFileInfo) {
 		if (m_IsMemoryPNG) {
+			if (CheckpointNativeStorage::Reading()) {
+				const BITMAP* image = ReadLoadedBitmap(m_DataPath.Value(), BitDepths::Eight);
+				if (!image) throw UnsupportedCheckpointNative("saved memory image has no frozen bitmap");
+				image = CheckpointNativeStorage::Source(image);
+				m_ImageFileInfo = {8, image->w, image->h};
+				return m_ImageFileInfo[infoTypeToGet];
+			}
 			if (const SDL_Surface* png = s_MemoryPNGs[m_DataPath]) {
 				m_ImageFileInfo[ImageFileInfoType::ImageBitDepth] = static_cast<int>(SDL_BITSPERPIXEL(png->format));
 				m_ImageFileInfo[ImageFileInfoType::ImageWidth] = static_cast<int>(png->w);
