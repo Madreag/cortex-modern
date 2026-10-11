@@ -1251,6 +1251,9 @@ namespace RTE::CheckpointLua {
 		if (!data->state || !pageBytes || !data->committed || data->base % pageBytes || data->committed % pageBytes)
 			throw std::runtime_error("the prepared Lua heap has no aligned committed range");
 		auto slab = TakeSlab(data->committed / Snapshot::c_PageBytes, true);
+		// A later live write copies into resident storage without first touching its shadow pages.
+		auto* destination = reinterpret_cast<volatile std::byte*>(slab->pages);
+		for (size_t offset = 0; offset < data->committed; offset += pageBytes) destination[offset] = std::byte{};
 		data->pages = slab->pages; data->buffer = std::move(slab);
 		data->faults = std::make_shared<CopyFaultStats>();
 		auto copy = std::make_shared<CowCopy>();

@@ -46,6 +46,7 @@ namespace RTE::CheckpointLua {
 				result->m_Heaps.push_back({lease, lease.Prepare()});
 			}
 			result->m_Native = CheckpointNativeStorage::PrepareInventory();
+			for (const auto& pages: result->m_Native->Pages()) pages->WarmShadow();
 			return result;
 		}
 		~Boundary() { Cancel(); }

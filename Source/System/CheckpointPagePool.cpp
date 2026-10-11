@@ -370,6 +370,15 @@ void CheckpointPagePool::Snapshot::Arm() const {
 	}
 }
 
+void CheckpointPagePool::Snapshot::WarmShadow() const {
+	for (const auto& part: m_Parts) {
+		if (part.copy->armed.load(std::memory_order_acquire) || part.copy->abandoned)
+			throw std::logic_error("native checkpoint shadow warming after its boundary");
+		auto* destination = static_cast<volatile unsigned char*>(part.copy->pages.data);
+		for (size_t offset = 0; offset < part.copy->pages.bytes; offset += part.block->pageBytes) destination[offset] = 0;
+	}
+}
+
 void CheckpointPagePool::Snapshot::Cancel() const noexcept {
 	for (const auto& part: m_Parts) part.block->Abandon(part.copy);
 }
@@ -416,10 +425,15 @@ std::string CheckpointPagePool::SelfTestMismatch() {
 				if (!refused) return "inventory ignored an injected shadow allocation failure";
 			}
 			values[0] = 127;
-			snapshot = std::async(std::launch::async, [&] { return PrepareInventory(generation); }).get();
+			snapshot = std::async(std::launch::async, [&] {
+				auto prepared = PrepareInventory(generation); prepared->WarmShadow(); return prepared;
+			}).get();
 			if (generation != InventoryGeneration() || !snapshot->Contains(values, 4096) || snapshot->Contains(transient.Data(), 4096))
 				return "owned page inventory included transient storage or lost a registered range";
 			snapshot->Arm();
+			bool refused = false;
+			try { snapshot->WarmShadow(); } catch (const std::logic_error&) { refused = true; }
+			if (!refused) return "armed native shadow accepted a preparation write";
 			values[0] = 149; values[511] = 991;
 		}
 		snapshot->Drain();

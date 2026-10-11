@@ -35,6 +35,8 @@ namespace RTE {
 			bool CanBorrow(const void* source, size_t bytes) const;
 			/// Materializes the remaining pages on the calling worker.
 			void Drain() const;
+			/// Makes prepared shadow pages resident before any live page is fenced.
+			void WarmShadow() const;
 			/// Fences prepared ranges without allocating; writers pause only until this returns.
 			void Arm() const;
 			void Cancel() const noexcept;
