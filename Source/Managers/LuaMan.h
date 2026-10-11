@@ -191,11 +191,11 @@ namespace RTE {
 		std::string GetRandomGeneratorStateForHashing() const;
 
 		/// Captures this state's random generator for restoration.
-		std::string GetRandomGeneratorCheckpoint() const { return m_RandomGenerator.SerializeCheckpoint(); }
+		std::string GetRandomGeneratorCheckpoint() const { return CheckpointStateValues().randomGenerator.SerializeCheckpoint(); }
 		CheckpointText CaptureRandomGeneratorCheckpoint() const;
 
 		/// Restores this state's random generator from a checkpoint.
-		bool RestoreRandomGeneratorCheckpoint(std::string_view text) { return m_RandomGenerator.RestoreCheckpoint(text); }
+		bool RestoreRandomGeneratorCheckpoint(std::string_view text) { return CheckpointStateValues().randomGenerator.RestoreCheckpoint(text); }
 
 		/// Gets m_ScriptTimings.
 		/// @return m_ScriptTimings.
@@ -209,20 +209,20 @@ namespace RTE {
 #pragma region Script Responsibility Handling
 		/// Registers an MO as using us.
 		/// @param moToRegister The MO to register with us. Ownership is NOT transferred!
-		void RegisterMO(MovableObject* moToRegister) { m_AddedRegisteredMOs.insert(moToRegister); }
+		void RegisterMO(MovableObject* moToRegister) { CheckpointStateValues().addedRegisteredMOs.insert(moToRegister); }
 
 		/// Unregisters an MO as using us.
 		/// @param moToUnregister The MO to unregister as using us. Ownership is NOT transferred!
 		void UnregisterMO(MovableObject* moToUnregister) {
-			if (m_RegisteredMOs.erase(moToUnregister) > 0) {
+			if (CheckpointStateValues().registeredMOs.erase(moToUnregister) > 0) {
 				s_RegisteredMOUnregistrations.fetch_add(1, std::memory_order_relaxed);
 			}
-			m_AddedRegisteredMOs.erase(moToUnregister);
+			CheckpointStateValues().addedRegisteredMOs.erase(moToUnregister);
 		}
 
 		/// Whether this MO is in the live registration set. The pending set is not part of a pass.
 		/// @param mo The MO to look for. Only its address is read, so a freed one is safe to ask about.
-		bool IsRegisteredMO(MovableObject* mo) const { return m_RegisteredMOs.find(mo) != m_RegisteredMOs.end(); }
+		bool IsRegisteredMO(MovableObject* mo) const { return CheckpointStateValues().registeredMOs.find(mo) != CheckpointStateValues().registeredMOs.end(); }
 
 		/// Counts removals from any state's live registration set, a destroyed MO's included. A pass
 		/// that sees it unchanged since it read the sets knows every pointer it holds is still live.
@@ -237,20 +237,20 @@ namespace RTE {
 
 		/// Gets a list of the MOs registed as using us.
 		/// @return The MOs registed as using us.
-		const CheckpointUnorderedSet<MovableObject*>& GetRegisteredMOs() const { return m_RegisteredMOs; }
+		const CheckpointUnorderedSet<MovableObject*>& GetRegisteredMOs() const { return CheckpointStateValues().registeredMOs; }
 		/// Gets the objects waiting to join the script update list.
-		const CheckpointUnorderedSet<MovableObject*>& GetPendingRegisteredMOs() const { return m_AddedRegisteredMOs; }
+		const CheckpointUnorderedSet<MovableObject*>& GetPendingRegisteredMOs() const { return CheckpointStateValues().addedRegisteredMOs; }
 		/// Swaps both script update lists between worlds while the simulation is stopped.
 		void SwapRegisteredMOs(CheckpointUnorderedSet<MovableObject*>& registered, CheckpointUnorderedSet<MovableObject*>& pending) {
-			m_RegisteredMOs.swap(registered);
-			m_AddedRegisteredMOs.swap(pending);
+			CheckpointStateValues().registeredMOs.swap(registered);
+			CheckpointStateValues().addedRegisteredMOs.swap(pending);
 			// A whole set left the live list, so no snapshot taken before this may skip its liveness check.
 			s_RegisteredMOUnregistrations.fetch_add(1, std::memory_order_relaxed);
 		}
 		/// Hands both lists to a set-aside world and marks them held, so nothing can be destroyed in between.
 		void SwapAndHoldRegisteredMOs(CheckpointUnorderedSet<MovableObject*>& registered, CheckpointUnorderedSet<MovableObject*>& pending) {
-			m_RegisteredMOs.swap(registered);
-			m_AddedRegisteredMOs.swap(pending);
+			CheckpointStateValues().registeredMOs.swap(registered);
+			CheckpointStateValues().addedRegisteredMOs.swap(pending);
 			m_HeldRegisteredMOs.push_back(&registered);
 			m_HeldRegisteredMOs.push_back(&pending);
 			s_RegisteredMOUnregistrations.fetch_add(1, std::memory_order_relaxed);
@@ -322,9 +322,13 @@ namespace RTE {
 		/// Exposes cached functions and object callbacks to the script graph.
 		void CaptureScriptCallbacks(uint64_t liveSerial = 0, CheckpointLua::CallbackImage* deferredObjects = nullptr);
 		void PrepareCheckpointBindings();
-		CheckpointLua::CallbackRoots RebuildFrozenScriptCallbacks(const CheckpointLua::Snapshot& heap, CheckpointLua::ScratchImage& scratch,
-		    const TValue& async, const GAScripted* activity, const std::vector<MovableObject*>& known,
-		    const std::function<TValue(const TValue&, std::string_view)>& lookup) const;
+		/// Owns saved native values before the first multiplayer capture.
+		void PrepareCheckpointValues();
+		/// Records the native value pointer without copying the state's wrapper.
+		const void* CheckpointOwnedValues() const { return m_OwnedCheckpointValues.get(); }
+		static CheckpointLua::CallbackRoots RebuildFrozenScriptCallbacks(const CheckpointLua::Snapshot& heap, CheckpointLua::ScratchImage& scratch,
+		    const void* values, const TValue& async, const GAScripted* activity, const std::vector<MovableObject*>& known,
+		    const std::function<TValue(const TValue&, std::string_view)>& lookup);
 
 		/// Rebinds cached functions and object callbacks from the restored graph.
 		/// @param rebound Filled with the objects whose callbacks the graph carried and that took them.
@@ -560,9 +564,24 @@ namespace RTE {
 
 		inline static std::atomic<uint64_t> s_RegisteredMOUnregistrations{0}; //!< Every removal from any state's live registration set, so a pass can tell when nothing it holds can have died.
 
-		CheckpointUnorderedSet<MovableObject*> m_RegisteredMOs; //!< The objects using our lua state.
+		struct LuaScriptFunctionObjects {
+			CheckpointUnorderedMap<CheckpointString, LuabindObjectWrapper*> functionNamesAndObjects;
+		};
+		struct CheckpointState : CheckpointNativeAllocated {
+			const LuaStateWrapper* owner = nullptr;
+			lua_State* state = nullptr;
+			CheckpointUnorderedSet<MovableObject*> registeredMOs, addedRegisteredMOs;
+			CheckpointUnorderedMap<CheckpointString, LuaScriptFunctionObjects> scriptCache;
+			RandomGenerator randomGenerator;
+		};
+		CheckpointState m_OrdinaryCheckpointValues;
+		std::unique_ptr<CheckpointState> m_OwnedCheckpointValues;
+		CheckpointState& CheckpointStateValues() { return m_OwnedCheckpointValues ? *m_OwnedCheckpointValues : m_OrdinaryCheckpointValues; }
+		const CheckpointState& CheckpointStateValues() const {
+			const auto* source = m_OwnedCheckpointValues ? m_OwnedCheckpointValues.get() : &m_OrdinaryCheckpointValues;
+			return *CheckpointNativeStorage::Source(source);
+		}
 		std::vector<CheckpointUnorderedSet<MovableObject*>*> m_HeldRegisteredMOs; //!< Script update lists a set-aside world will swap back.
-		CheckpointUnorderedSet<MovableObject*> m_AddedRegisteredMOs; //!< The objects using our lua state that were recently added.
 
 		lua_State* m_State;
 		std::unique_ptr<CheckpointLua::HeapOwner> m_CheckpointHeap;
@@ -588,15 +607,7 @@ namespace RTE {
 		// This mutex is more for safety, and with new script/AI architecture we shouldn't ever be locking on a mutex. As such we use this primarily to fire asserts.
 		std::recursive_mutex m_Mutex; //!< Mutex to ensure multiple threads aren't running something in this lua state simultaneously.
 
-		struct LuaScriptFunctionObjects {
-			CheckpointUnorderedMap<CheckpointString, LuabindObjectWrapper*> functionNamesAndObjects;
-		};
-		CheckpointUnorderedMap<CheckpointString, LuaScriptFunctionObjects> m_ScriptCache;
-
 		std::unordered_map<std::string, PerformanceMan::ScriptTiming> m_ScriptTimings; //!< Internal map of script timings.
-
-		// For determinism, every Lua state has it's own random number generator.
-		RandomGenerator m_RandomGenerator; //!< The random number generator used for this lua state.
 	};
 
 	typedef std::vector<LuaStateWrapper> LuaStatesArray;
@@ -689,6 +700,8 @@ namespace RTE {
 
 		/// Makes the next table write in any state mark itself for the checkpoint.
 		void ArmCheckpointWriteTrap();
+		/// Owns each state's saved native values during multiplayer setup.
+		void PrepareCheckpointValues();
 		static thread_local FrozenCaptureStats* s_FrozenCaptureStats; //!< Where the frozen captures of one world capture add their cost.
 
 		/// Tables born in the master state so far. The archive names its tables by this sequence.

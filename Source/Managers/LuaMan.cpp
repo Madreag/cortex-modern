@@ -7015,8 +7015,8 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 			const auto rootsStarted = std::chrono::steady_clock::now();
 			lua_newtable(m_State);
 			const int roots = lua_gettop(m_State);
-			CheckpointUnorderedSet<MovableObject*> objects = m_RegisteredMOs;
-			objects.insert(m_AddedRegisteredMOs.begin(), m_AddedRegisteredMOs.end());
+			CheckpointUnorderedSet<MovableObject*> objects = CheckpointStateValues().registeredMOs;
+			objects.insert(CheckpointStateValues().addedRegisteredMOs.begin(), CheckpointStateValues().addedRegisteredMOs.end());
 			for (const MovableObject* mo: objects) {
 				if (!mo->ObjectScriptsInitialized()) continue;
 				lua_pushstring(m_State, std::to_string(mo->GetUniqueID()).c_str());
@@ -7329,7 +7329,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 }
 
 CheckpointText LuaStateWrapper::CaptureRandomGeneratorCheckpoint() const {
-	const RandomGenerator random = m_RandomGenerator;
+	const RandomGenerator random = CheckpointStateValues().randomGenerator;
 	auto engine = random.GetEngineState();
 	std::string identity = "LuaRandomGenerator1";
 	const auto scalar = [&identity](const auto& value) { identity.append(reinterpret_cast<const char*>(&value), sizeof(value)); };
@@ -7372,8 +7372,8 @@ bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText
 	if (serialized) serialized->clear();
 	if (captured) *captured = CheckpointText();
 	lua_newtable(m_State);
-	CheckpointUnorderedSet<MovableObject*> objects = m_RegisteredMOs;
-	objects.insert(m_AddedRegisteredMOs.begin(), m_AddedRegisteredMOs.end());
+	CheckpointUnorderedSet<MovableObject*> objects = CheckpointStateValues().registeredMOs;
+	objects.insert(CheckpointStateValues().addedRegisteredMOs.begin(), CheckpointStateValues().addedRegisteredMOs.end());
 	for (const MovableObject* mo: objects) {
 		if (!mo->ObjectScriptsInitialized()) {
 			continue;
@@ -7694,13 +7694,43 @@ void LuaStateWrapper::PrepareCheckpointBindings() {
 	});
 }
 
+void LuaStateWrapper::PrepareCheckpointValues() {
+	if (!CheckpointNativeStorage::Enabled()) return;
+	std::lock_guard lock(GetMutex());
+	if (m_OwnedCheckpointValues) return;
+	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	auto prepared = std::make_unique<CheckpointState>();
+	prepared->owner = this;
+	prepared->state = m_State;
+	const auto identity = [](const auto& value) { return value; };
+	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	prepared->registeredMOs = CheckpointRebuildHash(m_OrdinaryCheckpointValues.registeredMOs, identity);
+	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	prepared->addedRegisteredMOs = CheckpointRebuildHash(m_OrdinaryCheckpointValues.addedRegisteredMOs, identity);
+	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	prepared->scriptCache = CheckpointRebuildHash(m_OrdinaryCheckpointValues.scriptCache, [&](const auto& entry) {
+		LuaScriptFunctionObjects functions;
+		CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+		functions.functionNamesAndObjects = CheckpointRebuildHash(entry.second.functionNamesAndObjects, identity);
+		return decltype(prepared->scriptCache)::value_type(entry.first, std::move(functions));
+	});
+	prepared->randomGenerator = m_OrdinaryCheckpointValues.randomGenerator;
+	// Publish all headers together so a refused allocation leaves every live callback and RNG where it was.
+	m_OwnedCheckpointValues = std::move(prepared);
+	m_OrdinaryCheckpointValues.registeredMOs.clear();
+	m_OrdinaryCheckpointValues.addedRegisteredMOs.clear();
+	m_OrdinaryCheckpointValues.scriptCache.clear();
+}
+
 CheckpointLua::CallbackRoots LuaStateWrapper::RebuildFrozenScriptCallbacks(const CheckpointLua::Snapshot& heap, CheckpointLua::ScratchImage& scratch,
-    const TValue& async, const GAScripted* activity, const std::vector<MovableObject*>& known,
-    const std::function<TValue(const TValue&, std::string_view)>& lookup) const {
+    const void* values, const TValue& async, const GAScripted* activity, const std::vector<MovableObject*>& known,
+    const std::function<TValue(const TValue&, std::string_view)>& lookup) {
 	if (!CheckpointNativeStorage::Reading()) throw std::logic_error("callback reconstruction needs frozen native pages");
 	if (!lookup) throw std::logic_error("callback reconstruction has no frozen table lookup");
-	const auto* source = CheckpointNativeStorage::Source(this);
-	if (heap.State() != source->m_State) throw std::logic_error("callback reconstruction has a different Lua heap");
+	if (!values) throw std::logic_error("callback reconstruction has no owned native state");
+	const auto* source = CheckpointNativeStorage::Source(static_cast<const CheckpointState*>(values));
+	if (!source->owner || heap.State() != source->state)
+		throw std::logic_error("callback reconstruction has a different Lua heap");
 	CheckpointLua::FrozenBindings bindings(heap);
 	using Fields = std::map<std::string, TValue>;
 	const auto object = [&scratch](const Fields& fields) {
@@ -7726,11 +7756,11 @@ CheckpointLua::CallbackRoots LuaStateWrapper::RebuildFrozenScriptCallbacks(const
 	Fields receivers, roots, empty;
 	CheckpointUnorderedSet<MovableObject*> registered;
 	bool perPeer = false;
-	for (MovableObject* mo: CheckpointValues(source->m_RegisteredMOs)) {
+	for (MovableObject* mo: CheckpointValues(source->registeredMOs)) {
 		registered.insert(mo);
 		perPeer = perPeer || CheckpointNativeStorage::Source(mo)->IsActor();
 	}
-	for (MovableObject* mo: CheckpointValues(source->m_AddedRegisteredMOs)) registered.insert(mo);
+	for (MovableObject* mo: CheckpointValues(source->addedRegisteredMOs)) registered.insert(mo);
 	for (const MovableObject* live: registered) {
 		const auto* mo = CheckpointNativeStorage::Source(live);
 		if (!mo->ObjectScriptsInitialized()) continue;
@@ -7755,12 +7785,12 @@ CheckpointLua::CallbackRoots LuaStateWrapper::RebuildFrozenScriptCallbacks(const
 		callbacks.emplace("globals", scratch.Array(scripts));
 	}
 	Fields cache;
-	for (const auto& [path, saved]: CheckpointValues(source->m_ScriptCache)) cache.insert_or_assign(key(path), functions(saved.functionNamesAndObjects));
+	for (const auto& [path, saved]: CheckpointValues(source->scriptCache)) cache.insert_or_assign(key(path), functions(saved.functionNamesAndObjects));
 	callbacks.emplace("cache", object(cache));
 	Fields objects;
 	for (const MovableObject* live: known) {
 		const auto* mo = CheckpointNativeStorage::Source(live);
-		if (CheckpointNativeStorage::Original(mo->GetLuaState()) != CheckpointNativeStorage::Original(this) || mo->IsOriginalPreset() ||
+		if (CheckpointNativeStorage::Original(mo->GetLuaState()) != source->owner || mo->IsOriginalPreset() ||
 		    mo->GetPendingPersistedUniqueID() > 0 || mo->m_FunctionsAndScripts.empty()) continue;
 		Fields groups;
 		for (const auto& [name, saved]: CheckpointValues(mo->m_FunctionsAndScripts)) {
@@ -7799,8 +7829,8 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial, CheckpointLua:
 	PushScriptGraphScratchTable(m_State);
 	lua_getglobal(m_State, "_ScriptedObjects");
 	if (lua_istable(m_State, -1)) {
-		CheckpointUnorderedSet<MovableObject*> objects = m_RegisteredMOs;
-		objects.insert(m_AddedRegisteredMOs.begin(), m_AddedRegisteredMOs.end());
+		CheckpointUnorderedSet<MovableObject*> objects = CheckpointStateValues().registeredMOs;
+		objects.insert(CheckpointStateValues().addedRegisteredMOs.begin(), CheckpointStateValues().addedRegisteredMOs.end());
 		for (const MovableObject* mo: objects) {
 			if (!mo->ObjectScriptsInitialized()) continue;
 			const std::string key = std::to_string(mo->GetUniqueID());
@@ -7846,8 +7876,8 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial, CheckpointLua:
 	lua_setfield(m_State, callbacks, "async");
 	if (stats) part(stats->asyncUs);
 	PushScriptGraphScratchTable(m_State);
-	if (stats) stats->cachedScripts += m_ScriptCache.size();
-	for (const auto& [path, cached]: m_ScriptCache) {
+	if (stats) stats->cachedScripts += CheckpointStateValues().scriptCache.size();
+	for (const auto& [path, cached]: CheckpointStateValues().scriptCache) {
 		PushScriptGraphScratchTable(m_State);
 		for (const auto& [name, function]: cached.functionNamesAndObjects) {
 			function->GetLuabindObject()->push(m_State);
@@ -8015,7 +8045,7 @@ void LuaStateWrapper::RestoreScriptCallbacks(std::vector<std::string>& problems,
 		while (lua_next(m_State, -2)) {
 			if (lua_isstring(m_State, -2) && lua_istable(m_State, -1)) {
 				const std::string path = lua_tostring(m_State, -2);
-				auto& cached = m_ScriptCache[path];
+				auto& cached = CheckpointStateValues().scriptCache[path];
 				lua_pushnil(m_State);
 				while (lua_next(m_State, -2)) {
 					if (lua_isstring(m_State, -2) && lua_isfunction(m_State, -1)) {
@@ -8154,6 +8184,8 @@ LuaStateWrapper::~LuaStateWrapper() {
 
 void LuaStateWrapper::Clear() {
 	m_State = nullptr;
+	CheckpointStateValues().owner = this;
+	CheckpointStateValues().state = nullptr;
 	m_TempEntity = nullptr;
 	m_TempEntityVector.clear();
 	m_LastError.clear();
@@ -8441,6 +8473,7 @@ void LuaStateWrapper::Initialize() {
 	m_GraphWorker.reset();
 	m_CheckpointHeap = CheckpointLua::HeapOwner::Create();
 	m_State = m_CheckpointHeap->State();
+	CheckpointStateValues().state = m_State;
 	RegisterFloatingPointChecks(m_State);
 	luabind::open(m_State);
 	tracy::LuaRegister(m_State);
@@ -8671,7 +8704,7 @@ void LuaStateWrapper::Initialize() {
 	luabind::globals(m_State)["MetricsCollector"] = InstanceOrNull<MetricsCollector>();
 
 	// Don't draw from the sim RNG here — it would couple the RNG stream to thread count (SeedAllLuaRNGs re-seeds per state at activity start)
-	m_RandomGenerator.Seed(0);
+	CheckpointStateValues().randomGenerator.Seed(0);
 
 	luaL_dostring(m_State,
 	              "package.path = package.path .. \";Data/Base.rte/LuaIntegration/?.lua;Data/Base.rte/LuaIntegration/?/?.lua;\"\n"
@@ -8758,35 +8791,36 @@ void LuaStateWrapper::Destroy() {
 	LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(m_State);
 	m_CheckpointHeap.reset();
 	m_State = nullptr;
+	CheckpointStateValues().state = nullptr;
 }
 
 // During a threaded per-MO hook these draw from the per-MO generator; else this state's RNG.
 int LuaStateWrapper::SelectRand(int minInclusive, int maxInclusive) {
-	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : m_RandomGenerator;
+	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : CheckpointStateValues().randomGenerator;
 	return rng.RandomNum<int>(minInclusive, maxInclusive);
 }
 
 double LuaStateWrapper::RangeRand(double minInclusive, double maxInclusive) {
-	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : m_RandomGenerator;
+	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : CheckpointStateValues().randomGenerator;
 	return rng.RandomNum<double>(minInclusive, maxInclusive);
 }
 
 double LuaStateWrapper::NormalRand() {
-	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : m_RandomGenerator;
+	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : CheckpointStateValues().randomGenerator;
 	return rng.RandomNormalNum<double>();
 }
 
 double LuaStateWrapper::PosRand() {
-	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : m_RandomGenerator;
+	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : CheckpointStateValues().randomGenerator;
 	return rng.RandomNum<double>();
 }
 
 void LuaStateWrapper::SeedRandomGenerator(uint64_t seed) {
-	m_RandomGenerator.Seed(seed);
+	CheckpointStateValues().randomGenerator.Seed(seed);
 }
 
 std::string LuaStateWrapper::GetRandomGeneratorStateForHashing() const {
-	return m_RandomGenerator.SerializeStateForHashing();
+	return CheckpointStateValues().randomGenerator.SerializeStateForHashing();
 }
 
 // Passthrough LuaMan Functions
@@ -9879,25 +9913,34 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		callbacksState.Initialize();
 		const bool planted = callbacksState.RunScriptString("local value = 71; _FrozenCacheCallback = function() return value end") == 0;
 		lua_getglobal(callbacksState.m_State, "_FrozenCacheCallback");
-		callbacksState.m_ScriptCache["frozen cache path"].functionNamesAndObjects.emplace("Update", new LuabindObjectWrapper(
+		callbacksState.CheckpointStateValues().scriptCache["frozen cache path"].functionNamesAndObjects.emplace("Update", new LuabindObjectWrapper(
 		    new luabind::object(luabind::from_stack(callbacksState.m_State, -1)), "frozen cache path"));
 		lua_pop(callbacksState.m_State, 1);
-		CheckpointNativeStorage::Root<LuaStateWrapper> root(&callbacksState);
+		const auto randomBefore = callbacksState.GetRandomGeneratorCheckpoint();
+		for (size_t after: {size_t{0}, size_t{1}, size_t{2}, size_t{3}, size_t{4}}) {
+			bool refused = false;
+			try {
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects, after);
+				callbacksState.PrepareCheckpointValues();
+			} catch (const std::bad_alloc&) { refused = true; }
+			if (!refused || callbacksState.CheckpointOwnedValues() || callbacksState.GetRandomGeneratorCheckpoint() != randomBefore)
+				throw std::runtime_error("a refused native Lua state promotion changed the live state");
+		}
+		callbacksState.PrepareCheckpointValues();
+		const void* values = callbacksState.CheckpointOwnedValues();
 		auto pages = CheckpointNativeStorage::PrepareInventory();
 		auto prepared = callbacksState.m_CheckpointHeap->PrepareFreeze();
-		root.Freeze();
 		if (!pages->Arm() || !prepared->Arm(*callbacksState.m_CheckpointHeap)) throw std::runtime_error("could not freeze the callback cache probe");
 		prepared->Drain();
 		const auto heap = prepared->Image();
 		callbacksState.Destroy();
-		bool exact = planted;
+		bool exact = planted && values && CheckpointNativeStorage::Owns(values) && callbacksState.GetRandomGeneratorCheckpoint() == randomBefore;
 		CheckpointLua::CallbackRoots saved;
 		CheckpointLua::Snapshot image;
 		{
-			const std::array roots{root.Range()};
-			CheckpointNativeStorage::ReadScope read(pages->Pages(), roots);
+			CheckpointNativeStorage::ReadScope read(pages->Pages());
 			CheckpointLua::ScratchImage scratch(heap.StateSerial());
-			saved = callbacksState.RebuildFrozenScriptCallbacks(heap, scratch, scratch.Object({}), nullptr, {}, [&heap](const TValue& table, std::string_view key) {
+			saved = callbacksState.RebuildFrozenScriptCallbacks(heap, scratch, values, scratch.Object({}), nullptr, {}, [&heap](const TValue& table, std::string_view key) {
 				if (!tvistab(&table)) throw std::runtime_error("a callback cache probe lookup has no table");
 				return heap.TableValue(tabV(&table), key);
 			});
@@ -13047,8 +13090,8 @@ _PrimitiveQueueCapture = nil
 		const bool graphsKept = observed && g_MovableMan.SerializeScriptGraphs(graphsAfter, problems) && graphsAfter == graphsBefore;
 		// One function, not the window's copy in the cache and the original in the globals.
 		bool sameFunction = false;
-		auto entry = m_ScriptCache.find(reloadPath);
-		if (entry != m_ScriptCache.end()) {
+		auto entry = CheckpointStateValues().scriptCache.find(reloadPath);
+		if (entry != CheckpointStateValues().scriptCache.end()) {
 			const auto function = entry->second.functionNamesAndObjects.find(reloadFunction);
 			if (function != entry->second.functionNamesAndObjects.end()) {
 				const int top = lua_gettop(m_State);
@@ -13065,11 +13108,11 @@ _PrimitiveQueueCapture = nil
 		          << " graphs_kept=" << graphsKept << " same_function=" << sameFunction << " graph_problems=" << problems.size() << std::endl;
 		previewLateScriptLoadLeavesStatesAsFound = cached && fenced && reloaded == 0 && graphsKept && sameFunction && previewLateScriptLoadLeavesStatesAsFound;
 		// Leave the cache and the globals as this arm found them.
-		if (entry != m_ScriptCache.end()) {
+		if (entry != CheckpointStateValues().scriptCache.end()) {
 			for (const auto& [name, function]: entry->second.functionNamesAndObjects) {
 				delete function;
 			}
-			m_ScriptCache.erase(entry);
+			CheckpointStateValues().scriptCache.erase(entry);
 		}
 		lua_pushnil(m_State);
 		lua_setglobal(m_State, reloadPath.c_str());
@@ -13134,11 +13177,11 @@ _PrimitiveQueueCapture = nil
 			delete function;
 		}
 		// Leave the cache and the globals as this arm found them.
-		if (auto entry = m_ScriptCache.find(reloadPath); entry != m_ScriptCache.end()) {
+		if (auto entry = CheckpointStateValues().scriptCache.find(reloadPath); entry != CheckpointStateValues().scriptCache.end()) {
 			for (const auto& [name, function]: entry->second.functionNamesAndObjects) {
 				delete function;
 			}
-			m_ScriptCache.erase(entry);
+			CheckpointStateValues().scriptCache.erase(entry);
 		}
 		lua_pushnil(m_State);
 		lua_setglobal(m_State, reloadPath.c_str());
@@ -13283,11 +13326,11 @@ _PrimitiveQueueCapture = nil
 			delete function;
 		}
 		// Leave the cache and the globals as this arm found them.
-		if (auto entry = m_ScriptCache.find(firePath); entry != m_ScriptCache.end()) {
+		if (auto entry = CheckpointStateValues().scriptCache.find(firePath); entry != CheckpointStateValues().scriptCache.end()) {
 			for (const auto& [name, function]: entry->second.functionNamesAndObjects) {
 				delete function;
 			}
-			m_ScriptCache.erase(entry);
+			CheckpointStateValues().scriptCache.erase(entry);
 		}
 		lua_pushnil(m_State);
 		lua_setglobal(m_State, firePath.c_str());
@@ -14450,12 +14493,12 @@ void LuaStateWrapper::ClearUserModuleCache() {
 }
 
 void LuaStateWrapper::ClearLuaScriptCache() {
-	for (const auto& [path, cached]: m_ScriptCache) {
+	for (const auto& [path, cached]: CheckpointStateValues().scriptCache) {
 		for (const auto& [name, function]: cached.functionNamesAndObjects) {
 			delete function;
 		}
 	}
-	m_ScriptCache.clear();
+	CheckpointStateValues().scriptCache.clear();
 }
 
 Entity* LuaStateWrapper::GetTempEntity() const {
@@ -14870,7 +14913,7 @@ bool LuaStateWrapper::RetrieveFunctions(const std::string& funcObjectName, const
 		return false;
 	}
 
-	auto& newScript = m_ScriptCache[funcObjectName.c_str()];
+	auto& newScript = CheckpointStateValues().scriptCache[funcObjectName.c_str()];
 	// A reload inside a preview window sets the state's own function objects aside, so the release can put them back.
 	if (m_PreviewGlobalFenceArmed && m_PreviewScriptCacheKeys.count(funcObjectName) > 0 &&
 	    m_PreviewScriptCacheHeld.count(funcObjectName) == 0) {
@@ -14903,7 +14946,7 @@ bool LuaStateWrapper::RetrieveFunctions(const std::string& funcObjectName, const
 std::vector<std::pair<std::string, std::vector<std::string>>> LuaStateWrapper::DescribeScriptCache() {
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	std::vector<std::pair<std::string, std::vector<std::string>>> described;
-	for (const auto& [owner, cached]: m_ScriptCache) {
+	for (const auto& [owner, cached]: CheckpointStateValues().scriptCache) {
 		lua_getglobal(m_State, owner.c_str());
 		const bool held = !lua_isnil(m_State, -1);
 		lua_pop(m_State, 1);
@@ -14972,8 +15015,8 @@ int LuaStateWrapper::RunScriptFileAndRetrieveFunctions(const std::string& filePa
 
 	// If it's already cached, we don't need to run it again
 	// TODO - fix activity restarting needing to force reload
-	auto cachedScript = m_ScriptCache.find(filePath);
-	if (!forceReload && cachedScript != m_ScriptCache.end()) {
+	auto cachedScript = CheckpointStateValues().scriptCache.find(filePath);
+	if (!forceReload && cachedScript != CheckpointStateValues().scriptCache.end()) {
 		for (auto& pair: cachedScript->second.functionNamesAndObjects) {
 			if (std::find(functionNamesToLookFor.begin(), functionNamesToLookFor.end(), pair.first) != functionNamesToLookFor.end()) {
 				luabind::object* functionObjectCopyForStoring = new luabind::object(*pair.second->GetLuabindObject());
@@ -15002,10 +15045,10 @@ int LuaStateWrapper::RunScriptFileAndRetrieveFunctions(const std::string& filePa
 }
 
 void LuaStateWrapper::Update() {
-	for (MovableObject* mo: m_AddedRegisteredMOs) {
-		m_RegisteredMOs.insert(mo);
+	for (MovableObject* mo: CheckpointStateValues().addedRegisteredMOs) {
+		CheckpointStateValues().registeredMOs.insert(mo);
 	}
-	m_AddedRegisteredMOs.clear();
+	CheckpointStateValues().addedRegisteredMOs.clear();
 }
 
 void LuaStateWrapper::ClearScriptTimings() {
@@ -15624,6 +15667,11 @@ void LuaMan::SeedAllLuaRNGs(uint64_t baseSeed) {
 	for (LuaStateWrapper& luaState: m_ScriptStates) {
 		luaState.SeedRandomGenerator(derive());
 	}
+}
+
+void LuaMan::PrepareCheckpointValues() {
+	m_MasterScriptState.PrepareCheckpointValues();
+	for (LuaStateWrapper& state: m_ScriptStates) state.PrepareCheckpointValues();
 }
 
 static std::vector<uint64_t> HashScriptObjectGraphs(LuaStateWrapper& master, LuaStatesArray& threaded);
@@ -17439,7 +17487,7 @@ void LuaStateWrapper::CapturePreviewGlobalFence(bool rootRegistry) {
 	const auto& skipped = PreviewGlobalFenceSkips();
 	m_PreviewScriptCacheKeys.clear();
 	m_PreviewScriptCacheHeld.clear();
-	for (const auto& [path, cached]: m_ScriptCache) {
+	for (const auto& [path, cached]: CheckpointStateValues().scriptCache) {
 		m_PreviewScriptCacheKeys.insert(path);
 	}
 	if (!luaJIT_preview_begin(m_State, skipped.data(), skipped.size(), rootRegistry ? LUAJIT_PREVIEW_REGISTRY_ROOT : 0u)) {
@@ -17501,8 +17549,8 @@ int LuaStateWrapper::DropPreviewWindowReferences() {
 	}
 	// The cache holds function objects the Lua heap no longer names, so the window's own go and the held ones come back.
 	for (auto& [path, held]: m_PreviewScriptCacheHeld) {
-		auto cached = m_ScriptCache.find(path);
-		if (cached == m_ScriptCache.end()) {
+		auto cached = CheckpointStateValues().scriptCache.find(path);
+		if (cached == CheckpointStateValues().scriptCache.end()) {
 			for (const auto& [name, function]: held) {
 				delete function;
 			}
@@ -17515,7 +17563,7 @@ int LuaStateWrapper::DropPreviewWindowReferences() {
 		++changes;
 	}
 	m_PreviewScriptCacheHeld.clear();
-	for (auto entry = m_ScriptCache.begin(); entry != m_ScriptCache.end();) {
+	for (auto entry = CheckpointStateValues().scriptCache.begin(); entry != CheckpointStateValues().scriptCache.end();) {
 		if (m_PreviewScriptCacheKeys.count(entry->first) > 0) {
 			++entry;
 			continue;
@@ -17523,7 +17571,7 @@ int LuaStateWrapper::DropPreviewWindowReferences() {
 		for (const auto& [name, function]: entry->second.functionNamesAndObjects) {
 			delete function;
 		}
-		entry = m_ScriptCache.erase(entry);
+		entry = CheckpointStateValues().scriptCache.erase(entry);
 		++changes;
 	}
 	m_PreviewScriptCacheKeys.clear();
@@ -17550,7 +17598,7 @@ int LuaStateWrapper::ReleasePreviewGlobalFence() {
 			continue; // The caller's copy died inside the window and took itself off the list.
 		}
 		luabind::object* restored = nullptr;
-		if (const auto cached = m_ScriptCache.find(copy.scriptPath); cached != m_ScriptCache.end()) {
+		if (const auto cached = CheckpointStateValues().scriptCache.find(copy.scriptPath); cached != CheckpointStateValues().scriptCache.end()) {
 			const auto function = cached->second.functionNamesAndObjects.find(copy.functionName);
 			if (function != cached->second.functionNamesAndObjects.end()) {
 				restored = new luabind::object(*function->second->GetLuabindObject());
