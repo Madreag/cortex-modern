@@ -2500,8 +2500,17 @@ namespace RTE {
 			while (now < 7000) step();
 			if (client.IsLocalReady() || host.IsRemoteReady(2)) { *error = "an actual setup edit did not require the player's Ready again"; return false; }
 			client.SetLocalReady(true);
+			lag.latencyMs = 100;
+			hostWire.SetFaultConfig(lag);
+			clientWire.SetFaultConfig(lag);
+			measured.SetPingMs(200);
 			host.RequestStart();
-			return DriveLobbyPair(hostWire, clientWire, host, client, error, now);
+			if (!DriveLobbyPair(hostWire, clientWire, host, client, error, now)) return false;
+			if (NetMatchConfigUtil::PeerInputDelay(host.GetMatchConfig(), 2) > NetLockstepCodec::c_MaxPeerInputDelayFrames) {
+				*error = "the ready lobby started above the live delay bound";
+				return false;
+			}
+			return true;
 		}
 
 		// The host presses Start once, as the menu and the match service do. An automatic delay re-size
@@ -2515,12 +2524,12 @@ namespace RTE {
 				return false;
 			}
 			LoopbackTransportConfig lag;
-			lag.latencyMs = 200; // symmetric legs: one config/ack round trip costs 400 ms
+			lag.latencyMs = 50;
 			hostInner.SetFaultConfig(lag);
 			clientInner.SetFaultConfig(lag);
 			PingingLoopbackTransport hostTransport(hostInner);
 			PingingLoopbackTransport clientTransport(clientInner);
-			hostTransport.SetPingMs(200);
+			hostTransport.SetPingMs(100);
 
 			NetMatchConfig matchConfig = MakeConfig();
 			matchConfig.delayPolicy = NetMatchDelayPolicy::Auto;
@@ -2545,11 +2554,16 @@ namespace RTE {
 				return false;
 			}
 			const uint16_t firstDelay = NetMatchConfigUtil::PeerInputDelay(hostLobby.GetMatchConfig(), 2);
+			uint64_t requestedRevision = 0;
 			for (uint64_t now = 0; now <= 20000; now += 10) {
 				if (now == 1000) {
 					// The one press, then the link's round trip doubles: the re-size lands on a lobby that
 					// is already waiting to start.
 					hostLobby.RequestStart();
+					requestedRevision = hostLobby.GetMatchConfig().configRevision;
+					lag.latencyMs = 100;
+					hostInner.SetFaultConfig(lag);
+					clientInner.SetFaultConfig(lag);
 					hostTransport.SetPingMs(401);
 				}
 				hostLobby.Tick(now);
@@ -2565,6 +2579,8 @@ namespace RTE {
 						return false;
 					}
 					if (NetMatchConfigUtil::PeerInputDelay(hostLobby.GetMatchConfig(), 2) <= firstDelay ||
+					    NetMatchConfigUtil::PeerInputDelay(hostLobby.GetMatchConfig(), 2) > NetLockstepCodec::c_MaxPeerInputDelayFrames ||
+					    hostLobby.GetMatchConfig().configRevision <= requestedRevision ||
 					    hostLobby.GetMatchConfigHash() != clientLobby.GetMatchConfigHash()) {
 						*error = "the started round did not carry the re-sized delay on both peers";
 						return false;

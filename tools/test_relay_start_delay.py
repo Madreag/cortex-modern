@@ -62,6 +62,8 @@ def run_case(repo, out, case, timeout, lag_ms, initial_delay):
         for run in runs:
             run.close()
     errors = []
+    shared_hashes = {}
+    hash_mismatches = set()
     host_log = (out / 'peer1/stdout.log').read_text(errors='replace')
     end = re.search(r'\[net-link-blackout\] end peer=1 .*unix_ms=(\d+)', host_log)
     end_ms = int(end[1]) if end else None
@@ -78,6 +80,11 @@ def run_case(repo, out, case, timeout, lag_ms, initial_delay):
         elapsed = returned['unix_ms'] - end_ms if returned and end_ms else None
         report = json.loads((folder / 'report.json').read_text()) if (folder / 'report.json').exists() else {}
         locked = report.get('service', {}).get('runner', {}).get('lockstep', {})
+        for row in rows:
+            previous = shared_hashes.setdefault(row['tick'], [])
+            if previous and previous[0] != row['total']:
+                hash_mismatches.add(row['tick'])
+            previous.append(row['total'])
         hold_counts = {key: value['holds'] for key, value in locked.get('peers', {}).items()}
         first_delay = rows[0]['input_delay_ticks'] if rows else None
         duplicate_tails = locked.get('peer_tail_duplicate_frames')
@@ -112,9 +119,12 @@ def run_case(repo, out, case, timeout, lag_ms, initial_delay):
                 errors.append(f'peer {peer} did not remove the excess delay within 30 seconds')
         if record.get('exit_code') != 0 or record.get('timed_out'):
             errors.append(f'peer {peer} did not finish normally')
+    if hash_mismatches:
+        errors.append('the participants disagree on shared tick hashes')
     result = dict(case=case, lag_ms=lag_ms, initial_delay=initial_delay, pass_=not errors, errors=errors, participants=participants,
                   source_tip=subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
                   binary_sha256=hashlib.sha256(engine_executable(repo).read_bytes()).hexdigest(),
+                  shared_ticks=sum(len(values) > 1 for values in shared_hashes.values()), hash_mismatches=sorted(hash_mismatches),
                   topology='three engines on one Linux box', relay_proof=False)
     result['pass'] = result.pop('pass_')
     (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')

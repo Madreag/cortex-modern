@@ -199,14 +199,14 @@ namespace RTE {
 
 	void NetInputDelayEstimator::Observe(uint64_t nowMs, uint32_t rttMs) {
 		ForgetSilencesBefore(nowMs);
-		if (rttMs == 0) return;
 		if (!m_Samples.empty() && nowMs < m_Samples.back().first) {
 			m_Samples.clear();
 			m_BelowSince.reset();
 		}
+		while (!m_Samples.empty() && nowMs - m_Samples.front().first > c_WindowMs) m_Samples.pop_front();
+		if (rttMs == 0) return;
 		if (!m_Samples.empty() && nowMs - m_Samples.back().first < c_SampleMs) return;
 		m_Samples.emplace_back(nowMs, rttMs);
-		while (!m_Samples.empty() && nowMs - m_Samples.front().first > c_WindowMs) m_Samples.pop_front();
 	}
 
 	void NetInputDelayEstimator::ObserveSilence(uint64_t nowMs, uint32_t silenceMs) {

@@ -118,6 +118,8 @@ namespace RTE {
 		}
 		if (!m_TestBlackoutAtMs && m_LastCompletedSimulationTick && *m_LastCompletedSimulationTick >= m_TestBlackoutFrame) {
 			m_TestBlackoutAtMs = nowMs; m_TestBlackoutEnded = false;
+			m_PeerReceiptDelaySamples.clear(); m_PeerOwnReceiptProgress.clear();
+			for (uint8_t receiver = 1; receiver <= m_Config.peerCount; ++receiver) m_PeerReceiptSampleFloorMs[receiver] = nowMs;
 			DiagnosticLine() << "[net-link-blackout] begin peer=" << static_cast<int>(m_Config.localPeerId) << " frame=" << *m_LastCompletedSimulationTick << " duration_ms=" << m_TestBlackoutDurationMs
 			    << " now_ms=" << nowMs << " unix_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
 		}
@@ -126,6 +128,8 @@ namespace RTE {
 		if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->frameBlackout = active;
 		if (!active && !m_TestBlackoutEnded) {
 			m_TestBlackoutEnded = true;
+			m_PeerReceiptDelaySamples.clear(); m_PeerOwnReceiptProgress.clear();
+			for (uint8_t receiver = 1; receiver <= m_Config.peerCount; ++receiver) m_PeerReceiptSampleFloorMs[receiver] = nowMs;
 			DiagnosticLine() << "[net-link-blackout] end peer=" << static_cast<int>(m_Config.localPeerId) << " elapsed_ms=" << nowMs - *m_TestBlackoutAtMs
 			    << " now_ms=" << nowMs << " unix_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
 		}
@@ -285,7 +289,14 @@ namespace RTE {
 		if (!m_Config.adaptiveInputDelay || WaitsForPlacement() || !std::isfinite(m_Config.simTickMs) || m_Config.simTickMs <= 0) return;
 		if ((m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) == 0) return;
 		std::vector<std::pair<uint32_t, uint32_t>> paths;
-		for (const auto& [peer, sample]: m_PeerReceiptDelaySamples) if ((m_FrameGroupMembers & SeatBit(peer)) != 0) paths.emplace_back(sample.P95Ms(), sample.JitterMs());
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+			if (peer == m_Config.localPeerId || (m_FrameGroupMembers & SeatBit(peer)) == 0) continue;
+			auto& sample = m_PeerReceiptDelaySamples[peer];
+			sample.Observe(nowMs, 0);
+			const auto [wire, route] = PeerFrameRoute(peer);
+			if (sample.P95Ms() != 0) paths.emplace_back(sample.P95Ms(), sample.JitterMs());
+			else if (wire && wire->IsPeerPingMeasured(route)) paths.emplace_back(wire->GetPeerPingMs(route), 0);
+		}
 		const size_t needed = std::popcount(m_FrameGroupMembers) - 1;
 		if (needed == 0 || paths.size() < needed) return;
 		std::sort(paths.begin(), paths.end());
@@ -306,7 +317,11 @@ namespace RTE {
 			(void)ProposePeerInputDelay(m_Config.localPeerId, required, FutureTimingFrame());
 		} else if (required < current) {
 			const auto [since, inserted] = m_PeerDelayBelowSinceMs.try_emplace(m_Config.localPeerId, nowMs);
-			if (nowMs >= since->second + c_DelayShrinkIntervalMs && ProposePeerInputDelay(m_Config.localPeerId, current - c_DelayShrinkStep, FutureTimingFrame())) since->second = nowMs;
+			const uint16_t gap = current - required;
+			const uint64_t interval = gap > 2 ? std::max<uint64_t>(c_DelayResizeIntervalMs, c_DelayShrinkIntervalMs / gap) : c_DelayShrinkIntervalMs;
+			const uint16_t delay = gap > 2 ? std::min<uint16_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames, required + std::max<uint16_t>(2, gap / 2))
+			                             : current - std::min(current, c_DelayShrinkStep);
+			if (nowMs >= since->second + interval && ProposePeerInputDelay(m_Config.localPeerId, delay, FutureTimingFrame())) since->second = nowMs;
 		} else m_PeerDelayBelowSinceMs.erase(m_Config.localPeerId);
 	}
 
