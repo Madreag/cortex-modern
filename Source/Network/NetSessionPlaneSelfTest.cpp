@@ -41,7 +41,7 @@ namespace RTE {
 			bool adminDirectory = false, adminDirectoryDown = false;
 			unsigned asymmetricBridge = 0;
 			uint32_t planeIntervalMs = 1, recoveryRttMs = 0;
-			bool advanceStartup = false;
+			bool delayStartup = false;
 		};
 		struct Wire;
 		struct Hub {
@@ -281,6 +281,7 @@ namespace RTE {
 			std::vector<uint64_t> queued, waitAt, maxWait, caughtAt;
 			std::vector<uint64_t> displayedAt, blackoutGap, returnedAt, postReturnWait;
 			std::vector<uint64_t> firstDisplayedAt;
+			std::vector<uint64_t> startupResumeAt;
 			std::vector<int64_t> preFaultPaceLeadMs;
 			std::vector<bool> seenAI;
 			std::vector<uint16_t> settledDelay;
@@ -296,7 +297,7 @@ namespace RTE {
 				worlds.resize(row.seats); committed.resize(row.seats); credits.resize(row.seats); queued.resize(row.seats); waitAt.resize(row.seats);
 				maxWait.resize(row.seats); caughtAt.resize(row.seats); settledDelay.resize(row.seats); settledChanges.resize(row.seats);
 				displayedAt.resize(row.seats); blackoutGap.resize(row.seats); returnedAt.resize(row.seats); postReturnWait.resize(row.seats); seenAI.resize(row.seats);
-				firstDisplayedAt.resize(row.seats); preFaultPaceLeadMs.resize(row.seats);
+				firstDisplayedAt.resize(row.seats); startupResumeAt.resize(row.seats); preFaultPaceLeadMs.resize(row.seats);
 				settledHostWaits.resize(row.seats); paceBegin.resize(row.seats); paceEnd.resize(row.seats);
 				firstAdminChangeMs.assign(row.seats, UINT64_MAX);
 				for (uint8_t peer = 1; peer <= row.seats; ++peer) { wires.push_back(std::make_unique<Wire>(hub, peer)); peers.push_back(std::make_unique<NetLockstepCoordinator>()); }
@@ -409,9 +410,15 @@ namespace RTE {
 					}
 					if (peer.IsStopped()) { error = "lag ended participation or required a manual rejoin"; return false; }
 					if (!peer.IsRunning()) continue;
+					// A joiner reaches its first displayed tick later, then the
+					// normal 3x consumer catches it up to the host. This reproduces
+					// the stale first-tick anchor without forcing it ahead of play.
+					if (hub.row.delayStartup && id > 1 && !world.applied) {
+						if (!startupResumeAt[id - 1]) startupResumeAt[id - 1] = hub.now + (id - 1) * 70;
+						if (hub.now < startupResumeAt[id - 1]) continue;
+					}
 					if (hub.row.frozen && id == hub.row.subject && hub.DuringFault()) { credits[id - 1] = 0; wasFrozen = true; continue; }
-					const bool startupAdvance = hub.row.advanceStartup && id > 1 && hub.now >= 1000 && hub.now < 1000 + (id - 1) * 35;
-					credits[id - 1] += (startupAdvance || CatchingUp(peer) || (wasFrozen && id == hub.row.subject && hub.now >= hub.faultEnd) ? c_TestCatchUpRate : 1) / c_TestTickMs;
+					credits[id - 1] += (CatchingUp(peer) || (wasFrozen && id == hub.row.subject && hub.now >= hub.faultEnd) ? c_TestCatchUpRate : 1) / c_TestTickMs;
 					credits[id - 1] = std::min(credits[id - 1], 6.0);
 					while (credits[id - 1] >= 1) {
 						const uint64_t next = world.applied + 1;
@@ -538,7 +545,7 @@ namespace RTE {
 			phaseRow.name = "relay_phased_return";
 			phaseRow.rttMs = 98; phaseRow.otherRttMs = 150;
 			phaseRow.planeIntervalMs = 8; phaseRow.recoveryRttMs = 306;
-			phaseRow.advanceStartup = true;
+			phaseRow.delayStartup = true;
 			Fixture phased;
 			if (!phased.Run(phaseRow, error)) return false;
 			for (uint8_t id = 1; id <= 3; ++id) {
