@@ -28,7 +28,7 @@ namespace RTE {
 			message.totalBytes = static_cast<uint32_t>(body.size()); message.offset = static_cast<uint32_t>(offset);
 			const size_t end = std::min(body.size(), offset + NetHostMigrationCodec::c_ChunkBytes);
 			message.bytes.assign(body.begin() + offset, body.begin() + end);
-			SendPeerFrameMessage(std::move(message), NetTransportLane::ControlReliable, onlyPeer);
+			SendPeerFrameMessage(std::move(message), body.size() <= 4096 ? NetTransportLane::InputUnreliable : NetTransportLane::ControlReliable, onlyPeer);
 		}
 	}
 
@@ -70,7 +70,9 @@ namespace RTE {
 			message.offset = static_cast<uint32_t>(offset);
 			const size_t end = std::min(body.size(), offset + NetHostMigrationCodec::c_ChunkBytes);
 			message.bytes.assign(body.begin() + offset, body.begin() + end);
-			SendPeerFrameMessage(std::move(message), body.size() > NetHostMigrationCodec::c_ChunkBytes ? NetTransportLane::ControlReliable : m_Config.frameLane);
+			// The repeated input window repairs a missing small message without
+			// making later inputs wait behind it on the ordered stream.
+			SendPeerFrameMessage(std::move(message), body.size() <= 4096 ? NetTransportLane::InputUnreliable : NetTransportLane::ControlReliable);
 		}
 		m_PeerSourceInputs[frame.targetFrame][m_Config.localPeerId] = std::move(current);
 		m_PeerInputSentAtMs.try_emplace(frame.targetFrame, m_TimingNowMs);
@@ -87,7 +89,9 @@ namespace RTE {
 		receipt.successorPeerId = frame.senderPeerId;
 		receipt.frame = accepted->second;
 		m_PeerInputReceipts[frame.senderPeerId][m_Config.localPeerId] = accepted->second;
-		SendPeerFrameMessage(std::move(receipt));
+		// Every new receipt carries the complete accepted prefix. A later
+		// receipt replaces a missing one instead of waiting behind it.
+		SendPeerFrameMessage(std::move(receipt), NetTransportLane::InputUnreliable);
 	}
 
 	bool NetLockstepCoordinator::PeerInputAccepted(uint64_t frame, uint8_t owner) const {
@@ -486,7 +490,7 @@ namespace RTE {
 				forwarded.totalBytes = static_cast<uint32_t>(wireBody.size()); forwarded.offset = static_cast<uint32_t>(start);
 				const size_t end = std::min(wireBody.size(), start + NetHostMigrationCodec::c_ChunkBytes);
 				forwarded.bytes.assign(wireBody.begin() + start, wireBody.begin() + end);
-				SendPeerFrameMessage(std::move(forwarded), wireBody.size() > NetHostMigrationCodec::c_ChunkBytes ? NetTransportLane::ControlReliable : m_Config.frameLane);
+				SendPeerFrameMessage(std::move(forwarded), wireBody.size() <= 4096 ? NetTransportLane::InputUnreliable : NetTransportLane::ControlReliable);
 			}
 		}
 		for (const auto& input: inputs) {

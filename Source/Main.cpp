@@ -7580,7 +7580,7 @@ void RunGameLoop() {
 		// A paced round sheds frames, never ticks: it keeps up to a second of what it owes, runs it back to back and presents
 		// at least 15 times a second. One whose frames fit spreads a catch-up burst over frames a tick apart.
 		const bool pacedRound = ScenarioRunner::HasLockstepCoordinator() && !freeRunLockstep && !ScenarioRunner::WorldCatchUpActive();
-		const bool shedsFrames = pacedRound && g_PerformanceMan.GetMSPFAverage() > g_TimerMan.GetDeltaTimeMS();
+		const bool shedsFrames = pacedRound && (g_PerformanceMan.GetMSPFAverage() > g_TimerMan.GetDeltaTimeMS() || ScenarioRunner::IsLockstepOwnSeatHeld());
 		constexpr double c_FloorFrameMs = 1000.0 / 15.0;
 		constexpr double c_OwedKeptMs = 1000.0;
 		g_TimerMan.SetOwedTicksKept(pacedRound ? static_cast<int>(c_OwedKeptMs / g_TimerMan.GetDeltaTimeMS()) : 0);
