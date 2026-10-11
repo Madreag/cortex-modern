@@ -16,7 +16,8 @@ namespace RTE::CheckpointLua {
 	public:
 		using Prepare = std::function<std::unique_ptr<Boundary>()>;
 		using Complete = std::function<bool(const Header&, const Boundary&)>;
-		BoundaryQueue(Prepare prepare, Complete complete) : m_Prepare(std::move(prepare)), m_Complete(std::move(complete)),
+		using Refused = std::function<void(const Header&, std::exception_ptr)>;
+		BoundaryQueue(Prepare prepare, Complete complete, Refused refused = {}) : m_Prepare(std::move(prepare)), m_Complete(std::move(complete)), m_Refused(std::move(refused)),
 		    m_Worker([this](std::stop_token stop) { Work(stop); }) {}
 		~BoundaryQueue() {
 			m_Worker.request_stop(); Wake(); m_Worker.join();
@@ -52,7 +53,9 @@ namespace RTE::CheckpointLua {
 			try {
 				m_Plan->failure = CheckpointFailure::Capture();
 				fill(m_Plan->header);
-				if (m_Plan->boundary->Arm()) {
+				std::array<int64_t, 7>* parts = nullptr;
+				if constexpr (requires { m_Plan->header.BoundaryParts(); }) parts = m_Plan->header.BoundaryParts();
+				if (m_Plan->boundary->Arm(parts)) {
 					// Prepared slots retain immutable owners without constructing their payloads here.
 					result = m_Plan->result;
 					Publish(State::Armed); Wake();
@@ -78,6 +81,7 @@ namespace RTE::CheckpointLua {
 		};
 		Prepare m_Prepare;
 		Complete m_Complete;
+		Refused m_Refused;
 		std::unique_ptr<Plan> m_Plan;
 		std::atomic<State> m_State{State::Preparing};
 		std::atomic<bool> m_Refresh{false};
@@ -112,7 +116,9 @@ namespace RTE::CheckpointLua {
 						CheckpointNativeStorage::CaptureScope allocations;
 						m_Plan->boundary->Drain();
 						completed = m_Complete(m_Plan->header, *m_Plan->boundary);
-					} catch (...) {}
+					} catch (...) {
+						if (m_Refused) { try { m_Refused(m_Plan->header, std::current_exception()); } catch (...) {} }
+					}
 					m_Plan->done.set_value(completed);
 					// The image and all its fences retire before the next preparation.
 					Publish(State::Preparing); continue;

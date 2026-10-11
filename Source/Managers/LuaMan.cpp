@@ -90,6 +90,9 @@ extern "C" {
 #include "CheckpointLuaThread.h"
 #include "CheckpointLuaAddresses.h"
 
+RTE::CheckpointLua::BindingLease RTE::CheckpointLua::BindingLease::Prepare() { return BindingMetadata::PrepareLease(); }
+bool RTE::CheckpointLua::BindingLease::Current() const noexcept { return m_Generation == BindingMetadata::Generation(); }
+
 #include <atomic>
 #include <algorithm>
 #include <cctype>
@@ -7836,6 +7839,41 @@ CheckpointLua::CallbackRoots LuaStateWrapper::RebuildFrozenScriptCallbacks(const
 	}
 	callbacks.emplace("objects", object(objects));
 	return {object(roots), object(callbacks), perPeer};
+}
+
+std::vector<MovableObject*> LuaStateWrapper::PreparedScriptHeldObjects(const CheckpointLua::Boundary& boundary) {
+	std::vector<MovableObject*> held;
+	for (size_t index = 0; index < boundary.StateCount(); ++index) {
+		const auto heap = boundary.LuaHeap(index);
+		const CheckpointLua::FrozenBindings bindings(heap, &boundary.Bindings());
+		const auto state = heap.Read(heap.State());
+		const auto global = heap.Read(mref(state.glref, global_State));
+		const TValue classes = heap.TableValue(tabV(&global.registrytv), "__luabind_classes");
+		if (!tvisudata(&classes)) throw std::logic_error("the saved script registry has no class bindings");
+		const auto* registry = static_cast<const luabind::detail::class_registry*>(CheckpointNativeStorage::View(uddata(udataV(&classes)), sizeof(luabind::detail::class_registry)));
+		const TValue cpp = heap.RegistryValue(registry->cpp_instance()), lua = heap.RegistryValue(registry->lua_instance());
+		const auto visit = [&](const GCobj* object) {
+			const auto* source = reinterpret_cast<const GCudata*>(object);
+			const auto data = heap.Read(source);
+			if (data.len < sizeof(luabind::detail::object_rep) ||
+			    (tabref(data.metatable) != tabV(&cpp) && tabref(data.metatable) != tabV(&lua))) return;
+			const auto* handle = bindings.Object(source);
+			if (!handle->ptr() || !handle->crep() || !(handle->flags() & luabind::detail::object_rep::owner)) return;
+			if (const auto offset = bindings.BaseOffset(handle->crep(), "MovableObject"))
+				held.push_back(reinterpret_cast<MovableObject*>(static_cast<char*>(handle->ptr()) + *offset));
+		};
+		const lua_State* main = &gcref(global.mainthref)->th;
+		for (const GCobj* object = gcref(heap.Read(&main->nextgc)); object;) {
+			const auto head = heap.Read(&object->gch);
+			if (head.gct == static_cast<uint8_t>(~LJ_TUDATA) && !(head.marked & LJ_GC_FINALIZED)) visit(object);
+			object = gcref(head.nextgc);
+		}
+		if (const GCobj* last = gcref(global.gc.mmudata)) {
+			const GCobj* object = last;
+			do { object = gcref(heap.Read(&object->gch.nextgc)); if (heap.Read(&object->gch.gct) == static_cast<uint8_t>(~LJ_TUDATA)) visit(object); } while (object != last);
+		}
+	}
+	return held;
 }
 
 bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary& boundary, std::span<const LuaStateWrapper* const> states,

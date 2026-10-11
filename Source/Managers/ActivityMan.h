@@ -41,6 +41,7 @@ namespace RTE {
 	public:
 		/// Prepares saved strings before the multiplayer page inventory is built.
 		void PrepareCheckpointValues();
+		void NotifyCheckpointTick();
 #pragma region Creation
 		/// Constructor method used to instantiate an ActivityMan object in system memory. Create() should be called before using the object.
 		ActivityMan();
@@ -472,6 +473,10 @@ namespace RTE {
 		int m_StaleActivitySlots = 0;
 
 		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.
+		struct PreparedAutosave;
+		std::unique_ptr<PreparedAutosave> m_PreparedAutosave;
+		void PrepareAutosave();
+		void CollectPreparedAutosave();
 		std::vector<std::shared_future<bool>> m_AutosaveTasks; //!< Captured checkpoints awaiting disk IO.
 		std::vector<std::shared_future<bool>> m_FullStateTasks; //!< The oracle's captures awaiting their hash.
 		std::string m_FullStateDumpDirectory; //!< Where the oracle's capture writes its sections; empty writes none.

@@ -61,7 +61,9 @@ namespace RTE::CheckpointLua {
 		SavedValues m_Values;
 		luabind::detail::saved_object_copy m_PreviousCopies;
 		std::unordered_map<const luabind::detail::class_rep*, luabind::detail::class_rep*> m_Classes;
+		std::unordered_map<const luabind::detail::class_rep*, const luabind::detail::class_rep*> m_ClassSources;
 		void* CopyNative(const luabind::detail::class_rep* type, const void* pointer) {
+			if (const auto source = m_ClassSources.find(type); source != m_ClassSources.end()) type = source->second;
 			void* value = m_Copy(type, pointer);
 			CheckpointNativeStorage::BorrowPrivate(value);
 			return value;
@@ -92,6 +94,7 @@ namespace RTE::CheckpointLua {
 			const int destination = lua_gettop(m_State);
 			m_Values.Remember(value, destination);
 			m_Classes.emplace(source, target);
+			m_ClassSources.emplace(target, source);
 			if (view->get_class_type() == luabind::detail::class_rep::lua_class) {
 				for (const auto& base: CheckpointValues(metadata.bases)) {
 					const TValue token = m_Heap.RegistryValue(m_Bindings.Class(base.base)->checkpoint_self_reference());

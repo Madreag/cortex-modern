@@ -301,6 +301,7 @@ namespace RTE {
 		static bool CapturePreparedScriptGraphs(const CheckpointLua::Boundary& boundary, std::span<const LuaStateWrapper* const> states,
 		    const std::shared_ptr<CheckpointNativeSnapshot>& snapshot, std::vector<CheckpointText>& graphs,
 		    std::vector<CheckpointScope>& scopes, std::vector<std::string>& problems);
+		static std::vector<MovableObject*> PreparedScriptHeldObjects(const CheckpointLua::Boundary& boundary);
 
 		/// The unique ids of the objects a graph text holds fields for.
 		std::vector<long> ListScriptGraphRoots(const std::string& text);

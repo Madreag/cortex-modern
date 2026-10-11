@@ -1,10 +1,12 @@
 #pragma once
 
 #include "CheckpointLuaHeap.h"
-#include "CheckpointLuaBindings.h"
+#include "CheckpointBindingLease.h"
 #include "CheckpointNativeStorage.h"
 
 #include <bit>
+#include <array>
+#include <chrono>
 
 namespace RTE::CheckpointLua {
 	// The saver prepares ranges and header storage while the live pages stay writable.
@@ -18,7 +20,7 @@ namespace RTE::CheckpointLua {
 		};
 		static std::unique_ptr<Boundary> Prepare(std::span<const lua_State* const> states, std::span<const Root> roots) {
 			auto result = std::unique_ptr<Boundary>(new Boundary);
-			result->m_Bindings = BindingMetadata::PrepareLease();
+			result->m_Bindings = BindingLease::Prepare();
 			size_t bytes = 0, alignment = 1;
 			for (const Root& root: roots) {
 				if (!root.source || !root.bytes || !std::has_single_bit(root.alignment))
@@ -60,14 +62,20 @@ namespace RTE::CheckpointLua {
 			for (const Heap& heap: m_Heaps) if (!heap.lease.Current(*heap.prepared)) return false;
 			return true;
 		}
-		bool Arm() {
+		bool Arm(std::array<int64_t, 7>* parts = nullptr) {
+			const auto started = std::chrono::steady_clock::now();
 			if (!Current()) return false;
 			Status expected = Status::Prepared;
 			if (!m_Status.compare_exchange_strong(expected, Status::Arming, std::memory_order_acq_rel)) return false;
 			try {
 				if (!m_Native->Arm()) { Cancel(); return false; }
 				for (Heap& heap: m_Heaps) if (!heap.lease.Arm(*heap.prepared)) { Cancel(); return false; }
+				const auto fenced = std::chrono::steady_clock::now();
 				for (const auto& root: m_Roots) std::memcpy(const_cast<void*>(root.view), root.source, root.bytes);
+				if (parts) {
+					(*parts)[1] = std::chrono::duration_cast<std::chrono::microseconds>(fenced - started).count();
+					(*parts)[2] = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - fenced).count();
+				}
 				m_Status.store(Status::Armed, std::memory_order_release);
 				return true;
 			} catch (...) { Cancel(); throw; }
@@ -102,7 +110,7 @@ namespace RTE::CheckpointLua {
 			return m_Heaps.at(index).prepared->Image();
 		}
 		size_t StateCount() const { return m_Heaps.size(); }
-		const BindingMetadata::Lease& Bindings() const { return m_Bindings; }
+		const BindingLease& Bindings() const { return m_Bindings; }
 		static std::string SelfTestMismatch() {
 			CheckpointNativeStorage::AllocationScope allocations(true);
 			auto state = HeapOwner::Create();
@@ -174,7 +182,7 @@ namespace RTE::CheckpointLua {
 		struct Heap { HeapOwner::PreparationLease lease; std::shared_ptr<HeapOwner::Prepared> prepared; };
 		std::atomic<Status> m_Status{Status::Prepared};
 		std::unique_ptr<CheckpointNativeStorage::Prepared> m_Native;
-		BindingMetadata::Lease m_Bindings;
+		BindingLease m_Bindings;
 		std::vector<Heap> m_Heaps;
 		std::unique_ptr<std::byte[]> m_HeaderBytes;
 		std::vector<CheckpointNativeStorage::RootRange> m_Roots;

@@ -5,6 +5,8 @@
 
 #include <string>
 #include <string_view>
+#include <array>
+#include <utility>
 
 namespace RTE {
 
@@ -14,6 +16,9 @@ namespace RTE {
 	public:
 
 		static std::string SaveSharedCheckpoint();
+		static std::array<std::pair<const void*, size_t>, 6> CheckpointRootSources();
+		static void PrepareCheckpointTextInput();
+		static void UpdateCheckpointTextInput();
 		static bool LoadSharedCheckpoint(std::string_view text, bool validateOnly = false);
 		virtual std::string SaveCheckpoint() const;
 		virtual bool LoadCheckpoint(std::string_view text, bool validateOnly = false);

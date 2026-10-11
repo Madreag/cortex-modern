@@ -4,6 +4,7 @@
 #include "CheckpointLuaHeap.h"
 #include "CheckpointNativeStorage.h"
 #include "CheckpointString.h"
+#include "CheckpointBindingLease.h"
 
 #include <luabind/detail/class_rep.hpp>
 
@@ -27,15 +28,8 @@ namespace RTE::CheckpointLua {
 				for (const auto& [name, getter]: source.properties()) getters.emplace(name, getter);
 			}
 		};
-		class Lease {
-		public:
-			bool Current() const noexcept { return m_Generation == RegistryGeneration().load(std::memory_order_acquire); }
-			bool Keeps(const Callbacks* callbacks) const { return m_Callbacks.contains(callbacks); }
-		private:
-			friend struct BindingMetadata;
-			uint64_t m_Generation = 0;
-			std::map<const Callbacks*, std::shared_ptr<const Callbacks>> m_Callbacks;
-		};
+		using Lease = BindingLease;
+		static uint64_t Generation() noexcept { return RegistryGeneration().load(std::memory_order_acquire); }
 		CheckpointString name;
 		CheckpointVector<luabind::detail::class_rep::base_info> bases;
 		const std::shared_ptr<const Callbacks> callbacks;

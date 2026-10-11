@@ -8435,6 +8435,7 @@ void RunGameLoop() {
 
 			// Sim consumed this tick's accumulated input edges; clear before next tick reads
 			g_UInputMan.EndSimUpdate();
+			g_ActivityMan.NotifyCheckpointTick();
 			if (probeTickResult) RollbackProbeOnHashedTick(simTick, *probeTickResult);
 			if (s_checkpointAudioEffects && simTick == 1) {
 				s_checkpointAudioEffectsPassed = g_AudioMan.RunCheckpointEffectsSelfTest();
