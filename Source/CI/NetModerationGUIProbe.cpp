@@ -851,10 +851,22 @@ namespace {
 			const uint64_t tick = g_TimerMan.GetSimUpdateCount();
 			const SDL_Scancode key = static_cast<SDL_Scancode>(g_UInputMan.GetControlScheme(input)->GetKeyMapping(InputElements::INPUT_NEXT));
 			Require(key > SDL_SCANCODE_UNKNOWN && key < SDL_SCANCODE_COUNT, "Next Actor has no keyboard binding");
+			const Actor* actor = game->GetControlledActor(player);
+			const Controller* controller = game->GetPlayerController(player);
+			observed["actor_selection"] = {{"presses", probe.actorCyclePresses}, {"stage", probe.actorCycleStage},
+			    {"preset", actor ? actor->GetModuleAndPresetName() : ""}, {"player", player}, {"key", static_cast<int>(key)},
+			    {"device", static_cast<int>(g_UInputMan.GetControlScheme(input)->GetDevice())}, {"local_seat", game->IsLocalHumanSeat(player)},
+			    {"view_state", static_cast<int>(game->GetViewState(player))}, {"buy_visible", game->IsBuyGUIVisible(player)},
+			    {"typing", g_UInputMan.SeatInputTypedInto(input)}, {"raw_key_held", g_UInputMan.KeyHeldScancode(key)},
+			    {"next_held", g_UInputMan.ElementHeld(input, InputElements::INPUT_NEXT)},
+			    {"next_released", g_UInputMan.ElementReleasedSim(input, InputElements::INPUT_NEXT)},
+			    {"controller_disabled", controller->IsDisabled()}, {"controller_mode", static_cast<int>(controller->GetInputMode())},
+			    {"controller_next", controller->IsState(ACTOR_NEXT)}, {"controller_prep", controller->IsState(ACTOR_NEXT_PREP)}};
 			const auto pushKey = [&](bool down) {
 				SDL_Event event{}; event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
 				event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.key.scancode = key;
 				event.key.key = SDL_GetKeyFromScancode(key, SDL_KMOD_NONE, false); event.key.down = down; Push(event);
+				probe.result["actor_selection_events"].push_back({{"tick", tick}, {"down", down}, {"before", observed["actor_selection"]}});
 				probe.actorCycleTick = tick; probe.actorCycleRender = probe.renders;
 			};
 			if (probe.actorCycleStage == 1) {
@@ -865,8 +877,6 @@ namespace {
 				if (tick < probe.actorCycleTick + ScenarioRunner::GetLockstepLocalInputDelay() + 5) return false;
 				probe.actorCycleStage = 0;
 			}
-			const Actor* actor = game->GetControlledActor(player);
-			observed["actor_selection"] = {{"presses", probe.actorCyclePresses}, {"preset", actor ? actor->GetModuleAndPresetName() : ""}};
 			if (actor && actor->GetModuleAndPresetName() == step.at("preset").get<std::string>()) return true;
 			Require(probe.actorCyclePresses < 32, "thirty-two held Next Actor presses did not select the purchased unit");
 			pushKey(true); ++probe.actorCyclePresses; probe.actorCycleStage = 1; return false;
