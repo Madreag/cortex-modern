@@ -172,3 +172,29 @@ The engine recorder now records the activity's actual setup-editor flag beside e
 Build tip-capture-state-1 passes in 7.35 minutes, executable 92121c13786ee5599b554a5919afde5f6fe34d0fdf3e9acd29f67ca23c05e71d. recorder-after-cut-1 passes its native frame-index assertion. horizon-costs-after-cut-1 passes all 25 lines, and emitter-clock-after-cut-1 passes all seven. feel-hashes-after-cut-1 matches every component for all 320 single-player ticks and the pre-change 5445623-byte dump: hash stream ddd5a0c7a4d20b9ef5f3be9cdd6d30376f97304c4feaa93283409adc0dc0d89f, dump f2c46632cd337cfd5bc2eec5307bc4661c715d54a4ce3c251c4b6e9f86bcce79. All four close normally, without a timeout. Each run is after the cut and is pushed as a milestone.
 
 s10-closed-hash-archives-1.json losslessly archives four individual hash streams from closed earlier diagnostics. Each decompressed SHA256 is verified before replacing its original leaf; every directory stays. The fresh running-ticks-2 evidence remains in place.
+
+## Merged scene reruns after the cut
+
+S1-S4 pass once on executable 92121c13786e: 33/33, 31/31, 47/47 and 29/29 checks, in scenes-tip-s01-after-s10-1 through scenes-tip-s04-after-s10-1. These are single-box detectors with proof=false. No input, deadline or assertion is changed for these reruns.
+
+### S5: the earlier acceptance stall no longer reproduces
+
+scenes-tip-s05-after-s10-1 passes all 38 checks: the brain's held right press, the pie's Buy choice, the player's own funds, a weapon-bearing soldier and its delivery. The merged receipt/repair changes named in the earlier S5 section explain that class of stall; this successful real-game rerun proves the Buy sequence now reaches its end. It does not prove the precise missing receipt in the earlier run.
+
+### S6: the earlier acceptance stall no longer reproduces
+
+scenes-tip-s06-after-s10-1 passes all 36 checks after the merge, including real firing, brain loss and the named end on both peers. The earlier frame-654 acceptance failure does not reproduce. The earlier S6 section names the changed receipt predicate and repair path; no protected file is changed here.
+
+### S7: Leave ends the world before Rejoin
+
+scenes-tip-s07-after-s10-1 is RED. Host stdout.log:4853 records [net-peer-departure] all-remote-ended applied=442; :4854 changes the roster to RoundEnded, and :4856 closes the 412-frame gameplay replay. The host never reaches its held-seat assertion (probe step 37). The joiner confirms the real pause-menu Leave, logs Leaving (ticket kept) at :6597, and later reports the host ended this match at :11995. This is earlier than the former return-runway stall and is not proof that rejoin completed. No brain-loss or desync line precedes the end. NetLockstep.cpp:3782-3789 completes the world when every remote peer has an end record, without checking whether that departure promised a held, returnable seat. The session-plane fix to consider is committing the voluntary hold before departure and excluding that held seat from final round-end adjudication; this finding stops at that protected boundary. The unchanged 60-second step bound expires at host step 37. Forced peer cleanup leaves the joiner capture incomplete; no missing image is accepted.
+
+### S8: acceptance stops before Kick
+
+scenes-tip-s08-after-s10-1 is RED in its kick run, before the Kick action. Host completes frame 454 and repeatedly repairs its frame 455; joiner completes 455 and waits for its frame 456. Joiner stdout's terminal [net-frame-wait] reports blocked=own-input-acceptance and wait_ms=60262. Its probe step 26 times out. The runner then stops the host (exit 137), so the host's MP4 has no completed moov atom; this is not a native crash. NetPeerInputs.cpp:93-103 computes the authority receipt predicate; NetLockstep.cpp:13020-13026 stops on it. The retained log localizes the stop, not which certificate was lost. That receipt/repair finding is for the session plane, not an excuse to drop the sim_advanced or image assertion. The ban run is not reached.
+
+### S9: the rematch chat send does not arrive
+
+scenes-tip-s09-after-s10-1 is RED, 30/34 available checks. The native rematch waiting line, duplicate and layout watches each cover four seconds with zero offences. Joiner probe step 37 types and submits its countdown chat. Its service chat history contains exactly that local echo, and s09-rematch-chat-after-send.png (the retained engine capture at 80 seconds) shows the cleared field and the echo. The host's same-time s09-rematch-chat-host-after-send.png has no chat line, and its service ChatHistory remains empty. Host step 51 therefore expires before it can press Start; joiner step 38 expires waiting for that countdown. This is a delivery failure, not evidence of a broken Enter key. NetMatchService.cpp:8836-8847 accepts the send in Starting; NetSession.cpp:1249/1258-1261 labels a successful transport enqueue Sent and echoes it locally. WorkerRematchMain at NetMatchService.cpp:2146 hands the active session to StartNextMatch, whose rematch lobby runs at NetMatchRunner.cpp:430/446. Inspect receive routing and pumping through that handoff, and require delivery evidence before declaring the send successful. The first lost receive is not logged; no specific packet-loss cause is invented. These session files remain unchanged.
+
+The protected session files and NetLinkQuality files still have zero diff against the merged efd69d9d5b. S7-S9 are preserved RED, not retried into a claimed pass. Their actions, deadlines and picture requirements are unchanged.
