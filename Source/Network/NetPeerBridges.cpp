@@ -154,7 +154,13 @@ namespace RTE {
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (peer != m_Config.localPeerId && (proposal.connectedMask & SeatBit(peer)) != 0)
 			{
 				anotherVoter = true;
-				if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end()) agreementMs = std::max<uint64_t>(agreementMs, path->second.P95Ms());
+				// The vote travels between the surviving signers. Input receipts
+				// can include a different seat's wait and must not bring this vote
+				// forward while that signer's next input is still arriving.
+				const auto [wire, route] = PeerFrameRoute(peer);
+				if (wire && wire->IsPeerPingMeasured(route)) agreementMs = std::max<uint64_t>(agreementMs, wire->GetPeerPingMs(route));
+				else if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end())
+					agreementMs = std::max<uint64_t>(agreementMs, path->second.P95Ms());
 			}
 			// The receipt RTT excludes the two voters' next pump and the
 			// consumer's next slot. Spend this scheduling reserve before the
