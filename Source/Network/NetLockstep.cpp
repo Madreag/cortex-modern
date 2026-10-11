@@ -10812,10 +10812,14 @@ namespace RTE {
 			out << (it == m_PeerLeaveFrames.begin() ? "" : ",") << "\"" << static_cast<int>(it->first) << "\":" << it->second;
 		}
 		out << "},\"ai_held_peer_ids\":[";
-		for (auto it = m_AiHeldSeats.begin(); it != m_AiHeldSeats.end(); ++it) {
-			out << (it == m_AiHeldSeats.begin() ? "" : ",") << static_cast<int>(it->first);
+		bool firstHeld = true;
+		const uint64_t ownershipFrame = m_LastCompletedSimulationTick.value_or(m_Config.startFrame - 1);
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+			if (!IsSeatUnderAI(peer, ownershipFrame)) continue;
+			out << (firstHeld ? "" : ",") << static_cast<int>(peer);
+			firstHeld = false;
 		}
-		out << "],\"reclaim_activation_frames\":{";
+		out << "],\"ownership_frame\":" << ownershipFrame << ",\"reclaim_activation_frames\":{";
 		for (auto it = m_ReclaimTransactions.begin(); it != m_ReclaimTransactions.end(); ++it) {
 			out << (it == m_ReclaimTransactions.begin() ? "" : ",") << "\"" << static_cast<int>(it->first) << "\":" << it->second.activationFrame;
 		}

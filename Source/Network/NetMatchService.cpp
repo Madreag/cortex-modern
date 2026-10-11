@@ -2756,6 +2756,9 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::LeaveMatch(const std::string& result) {
+		DiagnosticLine() << "[net-match-leave] peer=" << static_cast<int>(ScenarioRunner::GetLockstepLocalPeerId())
+		    << " frame=" << ScenarioRunner::GetLockstepCompletedFrame() << " now_ms=" << NetLockstepNowMs()
+		    << " reason=" << result << std::endl;
 		std::string displayResult = result;
 		// The host's leave does what its confirmation showed when it was pressed, or what it reads now when no menu asked.
 		std::optional<NetHostLeaveOutcome> confirmed;

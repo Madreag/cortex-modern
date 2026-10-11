@@ -1278,6 +1278,7 @@ static bool s_menuScriptFailed = false;
 static bool s_menuScriptObserveStep = false;
 static bool s_menuHashCapture = false;
 static bool s_menuScriptComplete = false;
+static bool s_menuScriptInPlay = false;
 static std::string s_menuScriptHandStep; //!< The step whose hand gesture is still running, as the log names it.
 static bool s_menuScriptHandObserve = false;
 static bool s_menuScriptHoldE2ePause = false;
@@ -3695,15 +3696,16 @@ static bool StartMenuScriptClick(const std::string& control, std::string& observ
 }
 
 // Menu scripts use real controls and the normal screenshot render path.
-void ProcessMenuScript() {
+void ProcessMenuScript(bool inPlay = false) {
+	if (s_menuScriptComplete || s_menuScriptFailed || (inPlay && !s_menuScriptInPlay)) return;
 	s_menuScriptObserveStep = false;
 	ScenarioGUI* scenarioMenu = ScenarioGUI::AutomationActive();
-	if (FrameRecorder::Instance().Enabled()) {
+	if (!inPlay && FrameRecorder::Instance().Enabled()) {
 		PauseMenuGUI* pause = g_MenuMan.GetActivePauseMenu();
 		g_FrameMan.RecordVideoFrame(pause ? pause->AutomationActiveScreenName() : scenarioMenu ? scenarioMenu->AutomationScreen() : g_MenuMan.GetMainMenu()->AutomationActiveScreenName(),
 		                           g_NetMatchService.GetLobbySnapshot().serviceState);
 	}
-	NetModerationGUIProbe::AfterMenuDraw();
+	if (!inPlay) NetModerationGUIProbe::AfterMenuDraw();
 	static std::vector<std::string> steps;
 	static std::map<std::string, std::vector<std::string>> macros; //!< "define NAME" ... "end" blocks, run by "run NAME".
 	static size_t stepIndex = 0;
@@ -3742,7 +3744,7 @@ void ProcessMenuScript() {
 	}
 	static bool introSkipped = false;
 	PauseMenuGUI* pauseMenu = g_MenuMan.GetActivePauseMenu();
-	if (!g_MenuMan.IsMainMenuInteractive() && !pauseMenu && !scenarioMenu) {
+	if (!inPlay && !g_MenuMan.IsMainMenuInteractive() && !pauseMenu && !scenarioMenu) {
 		// A pause transition follows the title state machine even after a long match.
 		if (!introSkipped && !g_ActivityMan.ActivityPaused()) {
 			g_MenuMan.SkipTitleIntroForAutomation();
@@ -3779,6 +3781,8 @@ void ProcessMenuScript() {
 		std::string seen;
 		if (waitCond.starts_with("file:")) {
 			met = MenuScriptFileExists(waitCond.substr(5));
+		} else if (waitCond.starts_with("lockstep:")) {
+			met = ScenarioRunner::GetLockstepCompletedFrame() >= std::stoull(waitCond.substr(9));
 		} else if (waitCond.starts_with("row:")) {
 			std::string listName;
 			int row = -1;
@@ -3836,7 +3840,18 @@ void ProcessMenuScript() {
 		iss >> cmd;
 	}
 	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
-	if (MenuAutomation::Handles(cmd)) {
+	if (cmd == "in_play") {
+		// Opt in explicitly: existing menu-only scripts still wait for the
+		// menu to return. Gestures use the same drawn-frame hand in play.
+		s_menuScriptInPlay = true;
+		MenuScriptPrint("in_play enabled");
+	} else if (cmd == "wait_lockstep") {
+		uint64_t frame = 0;
+		unsigned seconds = 0;
+		if (!(iss >> frame >> seconds) || frame == 0 || seconds == 0) return MenuScriptFail("wait_lockstep requires a frame and positive timeout");
+		waitCond = "lockstep:" + std::to_string(frame);
+		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000;
+	} else if (MenuAutomation::Handles(cmd)) {
 		std::string observation;
 		const bool pass = MenuAutomation::Execute(pauseMenu ? pauseMenu->AutomationManager() : scenarioMenu ? scenarioMenu->AutomationManager() : menu->AutomationManager(),
 			pauseMenu ? pauseMenu->AutomationActiveScreenName() : scenarioMenu ? scenarioMenu->AutomationScreen() : menu->AutomationActiveScreenName(), cmd, iss, observation);
@@ -5020,6 +5035,7 @@ static void DrawFrameWithPreviews() {
 	g_SceneMan.SetRenderDrawContext(false);
 	t_simRNGOverride = prevSimRNG;
 	NetModerationGUIProbe::AfterDraw();
+	if (!s_menuScriptPath.empty()) ProcessMenuScript(true);
 }
 
 /// Draws the network wait; returns whether the player explicitly left through the local menu.
@@ -5055,6 +5071,7 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 		g_FrameMan.RecordVideoFrame(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", g_NetMatchService.GetLobbySnapshot().serviceState);
 	}
 	NetModerationGUIProbe::AfterDraw();
+	if (!s_menuScriptPath.empty()) ProcessMenuScript(true);
 	g_UInputMan.EndFrame();
 	g_UInputMan.EndSimUpdate();
 	return leave;
