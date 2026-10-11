@@ -816,20 +816,30 @@ namespace {
 			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 			const int player = LocalPlayer(step);
 			Require(game && observed["service"] == "Running", "landing-zone input has no running activity");
+			observed["landing_zone"] = {{"view_state", static_cast<int>(game->GetViewState(player))}, {"x", game->GetLandingZone(player).m_X}};
 			if (game->GetViewState(player) != Activity::ViewState::LandingZoneSelect) return false;
 			const Actor* brain = game->GetPlayerBrain(player);
 			Require(brain && g_MovableMan.ValidMO(brain), "landing-zone input has no living brain");
 			const uint64_t tick = g_TimerMan.GetSimUpdateCount();
-			if (probe.landingMoveIndex == probe.index && tick < probe.landingMoveTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4) return false;
+			if (probe.landingMoveIndex != probe.index) { probe.landingMoveIndex = probe.index; probe.landingMoveTick = 0; }
 			const float target = brain->GetPos().m_X + step.value("offset_x", -80.0F);
 			const float difference = target - game->GetLandingZone(player).m_X;
-			observed["landing_zone"] = {{"x", game->GetLandingZone(player).m_X}, {"target_x", target}};
-			if (std::abs(difference) <= 3.0F) return true;
+			observed["landing_zone"]["target_x"] = target;
+			observed["landing_zone"]["controller_dx"] = game->GetPlayerController(player)->GetMouseMovement().m_X;
+			observed["landing_zone"]["device_dx"] = g_UInputMan.GetMouseMovement(step.value("input_player", 0)).m_X;
+			if (probe.landingMoveTick && tick < probe.landingMoveTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4) return false;
+			if (std::abs(difference) <= 3.0F) {
+				if (probe.landingMoveTick) return true;
+				probe.landingMoveTick = tick;
+				return false;
+			}
+			probe.landingMoveTick = 0;
+			// A hand moves through consecutive frames, then rests while the cursor settles.
 			SDL_Event event{}; event.type = SDL_EVENT_MOUSE_MOTION;
 			event.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.motion.which = 1;
 			event.motion.x = g_WindowMan.GetResX() / 2; event.motion.y = g_WindowMan.GetResY() / 2;
-			event.motion.xrel = std::clamp(difference, -80.0F, 80.0F) / g_UInputMan.GetMouseSensitivity();
-			Push(event); probe.landingMoveIndex = probe.index; probe.landingMoveTick = tick;
+			event.motion.xrel = std::clamp(difference, -2.0F, 2.0F) / g_UInputMan.GetMouseSensitivity();
+			Push(event);
 			return false;
 		} else if (op == "actor_next_until") {
 			auto* game = g_ActivityMan.GetActivity();
