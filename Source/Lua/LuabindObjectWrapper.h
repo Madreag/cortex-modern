@@ -1,4 +1,5 @@
 #pragma once
+#include "CheckpointString.h"
 
 #include <cstdint>
 #include <string>
@@ -25,7 +26,7 @@ namespace RTE {
 #pragma endregion
 
 	/// A wrapper for luabind objects, to avoid include problems with luabind.
-	class LuabindObjectWrapper {
+	class LuabindObjectWrapper : public CheckpointNativeAllocated {
 
 	public:
 #pragma region Creation
@@ -114,7 +115,7 @@ namespace RTE {
 	private:
 		bool m_OwnsObject = false; //!< Whether or not we own the luabind object this is wrapping.
 		luabind::adl::object* m_LuabindObject = nullptr; //!< The luabind object this is wrapping.
-		std::string m_FilePath; //!< The filepath the wrapped luabind object represents, if it's a function.
+		CheckpointString m_FilePath; //!< The filepath the wrapped luabind object represents, if it's a function.
 		LuabindObjectWrapper* m_PreviousStored = nullptr;
 		LuabindObjectWrapper* m_NextStored = nullptr;
 		bool m_Stored = false;

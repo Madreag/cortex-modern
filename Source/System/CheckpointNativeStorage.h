@@ -61,6 +61,24 @@ namespace RTE {
 		static thread_local ReadState* s_Read;
 	};
 
+	class CheckpointNativeAllocated {
+	public:
+		static void* operator new(size_t bytes) {
+			return CheckpointNativeStorage::Enabled() ? CheckpointNativeStorage::Allocate(bytes, __STDCPP_DEFAULT_NEW_ALIGNMENT__) : ::operator new(bytes);
+		}
+		static void operator delete(void* address) noexcept { if (!CheckpointNativeStorage::Deallocate(address)) ::operator delete(address); }
+		static void* operator new(size_t bytes, std::align_val_t alignment) {
+			return CheckpointNativeStorage::Enabled() ? CheckpointNativeStorage::Allocate(bytes, static_cast<size_t>(alignment)) : ::operator new(bytes, alignment);
+		}
+		static void operator delete(void* address, std::align_val_t alignment) noexcept { if (!CheckpointNativeStorage::Deallocate(address)) ::operator delete(address, alignment); }
+		static void* operator new[](size_t bytes) { return operator new(bytes); }
+		static void operator delete[](void* address) noexcept { operator delete(address); }
+		static void* operator new[](size_t bytes, std::align_val_t alignment) { return operator new(bytes, alignment); }
+		static void operator delete[](void* address, std::align_val_t alignment) noexcept { operator delete(address, alignment); }
+		static void* operator new(size_t, void* address) noexcept { return address; }
+		static void operator delete(void*, void*) noexcept {}
+	};
+
 	template<class T> class CheckpointNativeAllocator {
 	public:
 		using value_type = T;

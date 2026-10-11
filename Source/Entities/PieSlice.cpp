@@ -13,7 +13,7 @@ PieSlice::PieSlice(const PieSlice& source, CheckpointNativeSnapshot& snapshot) :
 	Entity(source, snapshot), m_Type(source.m_Type), m_Direction(source.m_Direction),
 	m_CanBeMiddleSlice(source.m_CanBeMiddleSlice), m_OriginalSource(snapshot.Object(source.m_OriginalSource)),
 	m_Enabled(source.m_Enabled), m_Icon(snapshot.Freeze(source.m_Icon)),
-	m_LuabindFunctionObject(source.m_LuabindFunctionObject ? std::make_unique<LuabindObjectWrapper>(nullptr, source.m_LuabindFunctionObject->GetFilePath()) : nullptr),
+	m_LuabindFunctionObject(source.m_LuabindFunctionObject ? std::make_unique<LuabindObjectWrapper>(nullptr, static_cast<const LuabindObjectWrapper*>(CheckpointNativeStorage::View(source.m_LuabindFunctionObject.get(), sizeof(LuabindObjectWrapper)))->GetFilePath()) : nullptr),
 	m_FunctionName(snapshot.Freeze(source.m_FunctionName, &m_FunctionName)),
 	m_SubPieMenu(snapshot.Object(source.m_SubPieMenu.get()), [] { PieMenuCustomDeleter deleter; deleter.owned = true; return deleter; }()),
 	m_StartAngle(source.m_StartAngle), m_SlotCount(source.m_SlotCount), m_MidAngle(source.m_MidAngle),
