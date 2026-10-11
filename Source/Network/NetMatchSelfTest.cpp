@@ -18328,7 +18328,18 @@ namespace RTE {
 			bool passed = false;
 			return MenuAutomation::HandFinished(passed, observation) && passed;
 		};
-		if (!MenuAutomation::HandGameKey("Escape", [] { return g_MenuMan.IsLocalPauseMenuOpen(); }, "recovering match pause menu", observation) || !finishHand()) {
+		const auto scriptPause = [&] {
+			const char* headless = SDL_getenv("CCCP_HEADLESS");
+			const bool wasHeadless = headless != nullptr;
+			const std::string savedHeadless = headless ? headless : "";
+			SDL_unsetenv_unsafe("CCCP_HEADLESS");
+			const bool recordingOff = !MenuAutomation::FireAssertAllowed();
+			std::istringstream args;
+			const bool started = MenuAutomation::Execute(nullptr, "Gameplay", "open_local_pause", args, observation);
+			if (wasHeadless) SDL_setenv_unsafe("CCCP_HEADLESS", savedHeadless.c_str(), 1);
+			return recordingOff && started;
+		};
+		if (!scriptPause() || !finishHand()) {
 			*error = "Escape paused or left the recovering match instead of opening its local menu: " + observation;
 			return false;
 		}
@@ -18357,7 +18368,7 @@ namespace RTE {
 		}
 		g_NetMatchService.m_State = NetMatchServiceState::Running;
 		g_NetMatchService.m_HeldRejoinDriving = false;
-		if (!MenuAutomation::HandGameKey("Escape", [] { return g_MenuMan.IsLocalPauseMenuOpen(); }, "leave menu", observation) || !finishHand() ||
+		if (!scriptPause() || !finishHand() ||
 		    !MenuAutomation::HandClick(g_MenuMan.GetActivePauseMenu()->AutomationManager(), "ButtonLeaveMatch", nullptr, observation) || !finishHand() ||
 		    !MenuAutomation::HandClick(g_MenuMan.GetActivePauseMenu()->AutomationManager(), "ButtonLeaveConfirm", nullptr, observation) || !finishHand() ||
 		    !leftWait || g_ActivityMan.IsInActivity()) {

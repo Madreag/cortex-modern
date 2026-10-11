@@ -3782,7 +3782,13 @@ void ProcessMenuScript(bool inPlay = false) {
 		if (waitCond.starts_with("file:")) {
 			met = MenuScriptFileExists(waitCond.substr(5));
 		} else if (waitCond.starts_with("lockstep:")) {
-			met = ScenarioRunner::GetLockstepCompletedFrame() >= std::stoull(waitCond.substr(9));
+			const uint64_t completed = ScenarioRunner::GetLockstepCompletedFrame();
+			NetLockstepPlane::Gap plane("menu round wait");
+			const auto summary = g_NetMatchService.GetLastMatchSummary();
+			met = std::max<uint64_t>(completed, summary ? summary->runningTicks : 0) >= std::stoull(waitCond.substr(9));
+		} else if (waitCond == "round-ended") {
+			NetLockstepPlane::Gap plane("menu round wait");
+			met = g_NetMatchService.GetLastMatchSummary().has_value();
 		} else if (waitCond.starts_with("row:")) {
 			std::string listName;
 			int row = -1;
@@ -3850,6 +3856,11 @@ void ProcessMenuScript(bool inPlay = false) {
 		unsigned seconds = 0;
 		if (!(iss >> frame >> seconds) || frame == 0 || seconds == 0) return MenuScriptFail("wait_lockstep requires a frame and positive timeout");
 		waitCond = "lockstep:" + std::to_string(frame);
+		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000;
+	} else if (cmd == "wait_round_end") {
+		unsigned seconds = 0;
+		if (!(iss >> seconds) || seconds == 0) return MenuScriptFail("wait_round_end requires a positive timeout");
+		waitCond = "round-ended";
 		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000;
 	} else if (MenuAutomation::Handles(cmd)) {
 		std::string observation;
