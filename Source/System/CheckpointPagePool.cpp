@@ -158,6 +158,58 @@ struct CheckpointPagePool::Block {
 	}
 };
 
+struct CheckpointPagePool::Registry {
+	std::mutex mutex;
+	std::map<uintptr_t, std::weak_ptr<Block>> blocks;
+	std::atomic<uint64_t> generation{0};
+	static inline std::atomic<Registry*> current{nullptr};
+	static Registry& Get() {
+		static auto* registry = [] { auto* value = new Registry; current.store(value, std::memory_order_release); return value; }();
+		return *registry;
+	}
+};
+
+void CheckpointPagePool::Register(const std::shared_ptr<Block>& block) {
+	auto& registry = Registry::Get();
+	std::lock_guard lock(registry.mutex);
+	const auto address = reinterpret_cast<uintptr_t>(block->live.data);
+	if (const auto found = registry.blocks.find(address); found != registry.blocks.end() && found->second.lock() == block) return;
+	registry.blocks.insert_or_assign(address, block);
+	registry.generation.fetch_add(1, std::memory_order_release);
+}
+
+void CheckpointPagePool::IncludeInInventory() {
+	if (m_InInventory) return;
+	for (const auto& block: m_Blocks) Register(block);
+	m_InInventory = true;
+}
+
+uint64_t CheckpointPagePool::InventoryGeneration() noexcept {
+	const auto* registry = Registry::current.load(std::memory_order_acquire);
+	return registry ? registry->generation.load(std::memory_order_acquire) : 0;
+}
+
+std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::PrepareInventory(uint64_t& generation) {
+	auto snapshot = std::make_shared<Snapshot>();
+	{
+		auto& registry = Registry::Get();
+		std::lock_guard lock(registry.mutex);
+		snapshot->m_Parts.reserve(registry.blocks.size());
+		for (auto it = registry.blocks.begin(); it != registry.blocks.end();) {
+			if (auto block = it->second.lock()) { snapshot->m_Parts.push_back({std::move(block), {}}); ++it; }
+			else it = registry.blocks.erase(it);
+		}
+		generation = registry.generation.load(std::memory_order_relaxed);
+	}
+	// Shadow storage and page watches are built after releasing the live allocation inventory.
+	for (auto& part: snapshot->m_Parts) {
+		part.copy = std::make_shared<Copy>(part.block->live.bytes, part.block->pageBytes);
+		part.block->Prepare(part.copy);
+	}
+	snapshot->Index();
+	return snapshot;
+}
+
 void CheckpointPagePool::Grow(size_t slotBytes, size_t minimumSlots, std::vector<void*>& free, size_t blockBytes) {
 	const size_t pageBytes = PageWriteFence::SystemPageBytes();
 	if (!slotBytes || !pageBytes || minimumSlots > (std::numeric_limits<size_t>::max() - pageBytes) / slotBytes)
@@ -167,6 +219,7 @@ void CheckpointPagePool::Grow(size_t slotBytes, size_t minimumSlots, std::vector
 	const size_t bytes = (slots * slotBytes + pageBytes - 1) / pageBytes * pageBytes;
 	auto block = std::make_shared<Block>(bytes, slotBytes);
 	free.reserve(m_Slots + slots);
+	if (m_InInventory) Register(block);
 	m_Blocks.push_back(block);
 	for (size_t slot = 0; slot < slots; ++slot) free.push_back(block->live.data + slot * slotBytes);
 	m_Slots += slots;
@@ -176,20 +229,23 @@ bool CheckpointPagePool::Contains(const void* address) const {
 	return std::any_of(m_Blocks.begin(), m_Blocks.end(), [&](const auto& block) { return block->Contains(address, 1); });
 }
 
-CheckpointPagePool::Allocation::Allocation(size_t bytes) {
+CheckpointPagePool::Allocation::Allocation(size_t bytes, bool inventory) {
 	const size_t page = PageWriteFence::SystemPageBytes();
 	if (!page || bytes > std::numeric_limits<size_t>::max() - page) throw std::bad_alloc();
 	m_Block = std::make_shared<Block>(std::max(page, (bytes + page - 1) / page * page));
+	if (inventory) Register(m_Block);
 }
 void* CheckpointPagePool::Allocation::Data() const { return m_Block->live.data; }
 size_t CheckpointPagePool::Allocation::Bytes() const { return m_Block->live.bytes; }
 bool CheckpointPagePool::Allocation::Contains(const void* source, size_t bytes) const { return m_Block->Contains(source, bytes); }
+void CheckpointPagePool::Allocation::IncludeInInventory() const { Register(m_Block); }
 std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::Allocation::Freeze(bool arm) const {
 	auto snapshot = std::make_shared<Snapshot>();
 	snapshot->m_Parts.reserve(1);
 	auto copy = std::make_shared<Copy>(m_Block->live.bytes, m_Block->pageBytes);
 	snapshot->m_Parts.push_back({m_Block, std::move(copy)});
 	m_Block->Prepare(snapshot->m_Parts.back().copy);
+	snapshot->Index();
 	if (arm) snapshot->Arm();
 	return snapshot;
 }
@@ -222,11 +278,20 @@ std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::Freeze(b
 		snapshot->m_Parts.push_back({block, std::move(copy)});
 		block->Prepare(snapshot->m_Parts.back().copy);
 	}
-	std::sort(snapshot->m_Parts.begin(), snapshot->m_Parts.end(), [](const auto& a, const auto& b) {
-		return reinterpret_cast<uintptr_t>(a.block->live.data) < reinterpret_cast<uintptr_t>(b.block->live.data);
-	});
+	snapshot->Index();
 	if (arm) snapshot->Arm();
 	return snapshot;
+}
+
+void CheckpointPagePool::Snapshot::Index() {
+	std::sort(m_Parts.begin(), m_Parts.end(), [](const auto& a, const auto& b) {
+		return reinterpret_cast<uintptr_t>(a.block->live.data) < reinterpret_cast<uintptr_t>(b.block->live.data);
+	});
+	m_Views.resize(m_Parts.size());
+	for (size_t index = 0; index < m_Views.size(); ++index) m_Views[index] = index;
+	std::sort(m_Views.begin(), m_Views.end(), [this](size_t a, size_t b) {
+		return reinterpret_cast<uintptr_t>(m_Parts[a].copy->pages.data) < reinterpret_cast<uintptr_t>(m_Parts[b].copy->pages.data);
+	});
 }
 
 const void* CheckpointPagePool::Snapshot::ReadAllocation(const void* source) const {
@@ -252,11 +317,14 @@ bool CheckpointPagePool::Snapshot::Contains(const void* source, size_t bytes) co
 
 const void* CheckpointPagePool::Snapshot::Original(const void* view, size_t bytes) const {
 	const uintptr_t address = reinterpret_cast<uintptr_t>(view);
-	for (const auto& part: m_Parts) {
-		const uintptr_t first = reinterpret_cast<uintptr_t>(part.copy->pages.data);
-		if (address >= first && address - first <= part.copy->pages.bytes && bytes <= part.copy->pages.bytes - (address - first))
-			return part.block->live.data + (address - first);
-	}
+	const auto end = std::upper_bound(m_Views.begin(), m_Views.end(), address, [this](uintptr_t address, size_t index) {
+		return address < reinterpret_cast<uintptr_t>(m_Parts[index].copy->pages.data);
+	});
+	if (end == m_Views.begin()) return nullptr;
+	const auto& part = m_Parts[*std::prev(end)];
+	const uintptr_t first = reinterpret_cast<uintptr_t>(part.copy->pages.data);
+	if (address - first <= part.copy->pages.bytes && bytes <= part.copy->pages.bytes - (address - first))
+		return part.block->live.data + (address - first);
 	return nullptr;
 }
 
@@ -277,7 +345,7 @@ bool CheckpointPagePool::Snapshot::CanBorrow(const void* source, size_t bytes) c
 }
 
 CheckpointPagePool::Snapshot::~Snapshot() {
-	for (const auto& part: m_Parts) part.block->Abandon(part.copy);
+	for (const auto& part: m_Parts) if (part.copy) part.block->Abandon(part.copy);
 }
 
 bool CheckpointPagePool::Snapshot::Read(const void* source, void* destination, size_t bytes) const {
@@ -332,6 +400,36 @@ CheckpointPagePool::Costs CheckpointPagePool::Snapshot::Cost() const {
 }
 
 std::string CheckpointPagePool::SelfTestMismatch() {
+	{
+		std::shared_ptr<const Snapshot> snapshot;
+		const uint64_t* source = nullptr;
+		{
+			Allocation owned(4096, true), transient(4096);
+			auto* values = static_cast<uint64_t*>(owned.Data());
+			values[0] = 113; values[511] = 997;
+			source = values;
+			uint64_t generation = 0;
+			{
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativePages);
+				bool refused = false;
+				try { PrepareInventory(generation); } catch (const std::bad_alloc&) { refused = true; }
+				if (!refused) return "inventory ignored an injected shadow allocation failure";
+			}
+			values[0] = 127;
+			snapshot = std::async(std::launch::async, [&] { return PrepareInventory(generation); }).get();
+			if (generation != InventoryGeneration() || !snapshot->Contains(values, 4096) || snapshot->Contains(transient.Data(), 4096))
+				return "owned page inventory included transient storage or lost a registered range";
+			snapshot->Arm();
+			values[0] = 149; values[511] = 991;
+		}
+		snapshot->Drain();
+		std::array<uint64_t, 512> values{};
+		if (!snapshot->Read(source, values.data(), sizeof(values)) || values[0] != 127 || values[511] != 997)
+			return "registered allocation destruction changed its frozen range";
+		const void* view = snapshot->ReadAllocation(source);
+		if (snapshot->Original(view) != source || snapshot->Original(static_cast<const std::byte*>(view) + 4088) != source + 511)
+			return "frozen range index lost its canonical address";
+	}
 	std::shared_ptr<const Snapshot> first, second;
 	std::vector<unsigned char> expected(20003), restored(expected.size());
 	for (size_t byte = 0; byte < expected.size(); ++byte) expected[byte] = static_cast<unsigned char>(byte * 37);
@@ -392,13 +490,13 @@ namespace {
 	struct NativeStoragePool {
 		CheckpointPagePool pages;
 		std::vector<void*> free;
+		NativeStoragePool() { pages.IncludeInInventory(); }
 	};
 	struct NativeStoragePools {
 		std::mutex mutex;
 		std::array<NativeStoragePool, std::numeric_limits<size_t>::digits> sizes;
 	};
 	std::atomic<NativeStoragePools*> s_NativeStoragePools{nullptr};
-	std::atomic<uint64_t> s_NativeInventoryGeneration{0};
 	thread_local bool s_NativeStorageAllocation = false;
 	thread_local bool s_NativeStorageCapture = false;
 	NativeStoragePools& NativePools() {
@@ -435,7 +533,6 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 	auto& pool = pools.sizes[std::countr_zero(slot)];
 	if (pool.free.empty()) {
 		pool.pages.Grow(slot, 1, pool.free, size_t{1} << 20);
-		s_NativeInventoryGeneration.fetch_add(1, std::memory_order_release);
 	}
 	void* address = pool.free.back();
 	pool.free.pop_back();
@@ -464,21 +561,12 @@ bool CheckpointNativeStorage::Owns(const void* address) {
 
 std::unique_ptr<CheckpointNativeStorage::Prepared> CheckpointNativeStorage::PrepareInventory() {
 	auto prepared = std::make_unique<Prepared>();
-	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
-	if (!pools) return prepared;
-	std::array<CheckpointPagePool, std::numeric_limits<size_t>::digits> inventory;
-	{
-		std::lock_guard lock(pools->mutex);
-		for (size_t index = 0; index < inventory.size(); ++index) inventory[index] = pools->sizes[index].pages;
-		prepared->m_Generation = s_NativeInventoryGeneration.load(std::memory_order_relaxed);
-	}
-	prepared->m_Pages.reserve(inventory.size());
-	for (const auto& pool: inventory) prepared->m_Pages.push_back(pool.Freeze(false));
+	prepared->m_Pages.push_back(CheckpointPagePool::PrepareInventory(prepared->m_Generation));
 	return prepared;
 }
 
 bool CheckpointNativeStorage::Prepared::Current() const noexcept {
-	return m_Generation == s_NativeInventoryGeneration.load(std::memory_order_acquire);
+	return m_Generation == CheckpointPagePool::InventoryGeneration();
 }
 
 bool CheckpointNativeStorage::Prepared::Arm() const {

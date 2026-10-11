@@ -43,6 +43,7 @@ namespace {
 	struct NativeAtomPool {
 		CheckpointPagePool pages;
 		std::vector<void*> free;
+		NativeAtomPool() { pages.IncludeInInventory(); }
 	};
 	NativeAtomPool* s_NativeAtomPool = nullptr;
 	thread_local bool s_NativeAtomAllocation = false;

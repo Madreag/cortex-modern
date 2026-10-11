@@ -52,6 +52,7 @@ namespace RTE {
 		static std::shared_ptr<const BitmapSnapshot> Capture(const BITMAP* source, std::shared_ptr<const BitmapSnapshot> previous = {});
 		/// Owns raw rows at the tick boundary and compares them on the reading worker.
 		static std::shared_ptr<const BitmapSnapshot> Freeze(const BITMAP* source, std::shared_ptr<const BitmapSnapshot> previous = {});
+		static void PreparePixelInventory();
 		/// Completes exact row comparison from owned bytes before reading its statistics.
 		void Finalize() const;
 		/// Compares owned pixels exactly, using shared rows as the fast path.

@@ -139,6 +139,18 @@ int RTE::SceneLayerBackBufferCount() {
 	return s_BackBuffers.load(std::memory_order_relaxed);
 }
 
+void BitmapSnapshot::PreparePixelInventory() {
+	auto* owner = PixelAllocations::storage.load();
+	if (!owner) return;
+	std::vector<std::shared_ptr<CheckpointPagePool::Allocation>> allocations;
+	{
+		std::lock_guard lock(owner->mutex);
+		allocations.reserve(owner->values.size());
+		for (const auto& [address, allocation]: owner->values) allocations.push_back(allocation);
+	}
+	for (const auto& allocation: allocations) allocation->IncludeInInventory();
+}
+
 void BitmapSnapshot::BitmapDeleter::operator()(BITMAP* bitmap) const {
 	if (bitmap) destroy_bitmap(bitmap);
 }

@@ -13,6 +13,7 @@ namespace RTE {
 	class CheckpointPagePool {
 		struct Block;
 		struct Copy;
+		struct Registry;
 
 	public:
 		class Allocation;
@@ -43,14 +44,17 @@ namespace RTE {
 			friend class Allocation;
 			struct Part { std::shared_ptr<Block> block; std::shared_ptr<Copy> copy; };
 			std::vector<Part> m_Parts;
+			std::vector<size_t> m_Views;
+			void Index();
 		};
 		class Allocation {
 		public:
-			explicit Allocation(size_t bytes);
+			explicit Allocation(size_t bytes, bool inventory = false);
 			void* Data() const;
 			size_t Bytes() const;
 			bool Contains(const void* source, size_t bytes) const;
 			std::shared_ptr<const Snapshot> Freeze(bool arm = true) const;
+			void IncludeInInventory() const;
 		private:
 			std::shared_ptr<Block> m_Block;
 		};
@@ -60,9 +64,14 @@ namespace RTE {
 		bool Contains(const void* address) const;
 		/// @param arm False prepares writable ranges; Snapshot::Arm records their later tick boundary.
 		std::shared_ptr<const Snapshot> Freeze(bool arm = true) const;
+		void IncludeInInventory();
+		static std::shared_ptr<const Snapshot> PrepareInventory(uint64_t& generation);
+		static uint64_t InventoryGeneration() noexcept;
 		static std::string SelfTestMismatch();
 	private:
 		std::vector<std::shared_ptr<Block>> m_Blocks;
 		size_t m_Slots = 0;
+		bool m_InInventory = false;
+		static void Register(const std::shared_ptr<Block>& block);
 	};
 }
