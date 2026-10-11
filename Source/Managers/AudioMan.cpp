@@ -1325,7 +1325,14 @@ void AudioMan::PrepareCheckpointRegistryValues() {
 	if (m_OwnedCheckpointRegistry) return;
 	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 	auto prepared = std::make_unique<CheckpointRegistryState<CheckpointNativeAllocator>>(m_OrdinaryCheckpointRegistry);
+	std::vector<std::unique_ptr<OwnedCheckpointSoundRegistry>> backups;
+	backups.reserve(m_OrdinaryCheckpointRegistry.m_RegistryScopes.size());
+	for (const auto* scope: m_OrdinaryCheckpointRegistry.m_RegistryScopes) {
+		backups.push_back(std::make_unique<OwnedCheckpointSoundRegistry>(CopySoundRegistry<OwnedCheckpointSoundRegistry>(
+			scope->m_Original ? *scope->m_Original : m_OrdinaryCheckpointRegistry.m_CheckpointSoundContainers)));
+	}
 	m_OwnedCheckpointRegistry = std::move(prepared);
+	for (size_t index = 0; index < backups.size(); ++index) m_OrdinaryCheckpointRegistry.m_RegistryScopes[index]->m_OwnedOriginal = std::move(backups[index]);
 	m_OrdinaryCheckpointRegistry.m_RegistryScopes.clear();
 	m_OrdinaryCheckpointRegistry.m_CheckpointSoundContainers.clear();
 	m_OrdinaryCheckpointRegistry.m_LiveCheckpointSoundContainers.clear();
@@ -1454,10 +1461,21 @@ std::string AudioMan::CheckpointRegistryStorageSelfTestMismatch() {
 		if (g_AudioMan.GetCheckpointSoundContainerCursor() != 41 || g_AudioMan.FindCheckpointSoundContainer(21) != owner(1) ||
 			g_AudioMan.FindRestoredCheckpointSoundContainer(21) != owner(0) || !g_AudioMan.RestoredSoundRegistryActive() ||
 			g_AudioMan.LastCarriedSoundIdentities() != std::unordered_set<uint64_t>{37, 41}) return "saved sound registry follows live values";
+		refused = false;
 		{
-			CheckpointRegistryScope restore;
-			g_AudioMan.RegisterCheckpointSoundContainer(owner(2), 43);
-			if (g_AudioMan.FindCheckpointSoundContainer(43) != owner(2)) return "private sound owner registration failed";
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			try { CheckpointRegistryScope failed; }
+			catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+		}
+		if (!refused || g_AudioMan.GetCheckpointSoundContainerCursor() != 41 || g_AudioMan.FindCheckpointSoundContainer(21) != owner(1))
+			return "sound registry backup refusal changes the frozen values";
+		auto restore = std::make_unique<CheckpointRegistryScope>();
+		g_AudioMan.RegisterCheckpointSoundContainer(owner(2), 43);
+		if (g_AudioMan.FindCheckpointSoundContainer(43) != owner(2)) return "private sound owner registration failed";
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			restore.reset();
+			if (failure.Triggered()) return "sound registry rollback requests another allocation";
 		}
 		if (g_AudioMan.GetCheckpointSoundContainerCursor() != 41 || g_AudioMan.FindCheckpointSoundContainer(43)) return "private sound registry rollback differs";
 		{
@@ -1486,7 +1504,9 @@ uint64_t AudioMan::AllocateCheckpointSoundContainerID() {
 void AudioMan::SaveRegistryForScopes() {
 	return WithCheckpointRegistry([&](auto& values) {
 		for (CheckpointRegistryScope* scope: values.m_RegistryScopes) {
-			if (!scope->m_Original) scope->m_Original = CaptureCheckpointSoundRegistry();
+			if constexpr (std::is_same_v<std::remove_reference_t<decltype(values.m_CheckpointSoundContainers)>, CheckpointSoundRegistry>) {
+				if (!scope->m_Original) scope->m_Original = values.m_CheckpointSoundContainers;
+			}
 		}
 	});
 }
@@ -1577,7 +1597,14 @@ thread_local int s_SkipCarriedSoundNotes = 0;
 AudioMan::CheckpointRegistryScope::CheckpointRegistryScope(bool skipCarriedNotes) : m_Cursor(g_AudioMan.GetCheckpointSoundContainerCursor()), m_SkipCarriedNotes(skipCarriedNotes) {
 	{
 		auto lock = g_AudioMan.RegistryLock();
-		g_AudioMan.WithCheckpointRegistry([&](auto& values) { values.m_RegistryScopes.push_back(this); });
+		g_AudioMan.WithCheckpointRegistry([&](auto& values) {
+			if constexpr (!std::is_same_v<std::remove_reference_t<decltype(values.m_CheckpointSoundContainers)>, CheckpointSoundRegistry>) {
+				// Rollback keeps its own nodes before any capture can fail.
+				CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+				m_OwnedOriginal = std::make_unique<OwnedCheckpointSoundRegistry>(values.m_CheckpointSoundContainers);
+			}
+			values.m_RegistryScopes.push_back(this);
+		});
 	}
 	if (m_SkipCarriedNotes) ++s_SkipCarriedSoundNotes;
 }
@@ -1589,7 +1616,18 @@ AudioMan::CheckpointRegistryScope::~CheckpointRegistryScope() {
 		auto lock = g_AudioMan.RegistryLock();
 		g_AudioMan.WithCheckpointRegistry([&](auto& values) {
 			std::erase(values.m_RegistryScopes, this);
-			original = std::move(m_Original);
+			if constexpr (std::is_same_v<std::remove_reference_t<decltype(values.m_CheckpointSoundContainers)>, CheckpointSoundRegistry>) {
+				original = std::move(m_Original);
+			} else if (m_OwnedOriginal) {
+				for (auto entry = m_OwnedOriginal->begin(); entry != m_OwnedOriginal->end();) {
+					std::erase_if(entry->second, [&](const SoundContainer* owner) {
+						const auto live = values.m_LiveCheckpointSoundContainers.find(owner);
+						return live == values.m_LiveCheckpointSoundContainers.end() || live->second != entry->first;
+					});
+					if (entry->second.empty()) entry = m_OwnedOriginal->erase(entry); else ++entry;
+				}
+				values.m_CheckpointSoundContainers.swap(*m_OwnedOriginal);
+			}
 		});
 	}
 	// Retired containers stay retired when the earlier registry is restored.

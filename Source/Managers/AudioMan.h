@@ -39,6 +39,7 @@ namespace RTE {
 	/// The singleton manager of sound effect and music playback.
 	class AudioMan : public Singleton<AudioMan> {
 		template<template<class> class Allocator> struct CheckpointRegistryState;
+		using OwnedCheckpointSoundRegistry = CheckpointMap<uint64_t, CheckpointVector<SoundContainer*>>;
 		friend class SettingsMan;
 		friend class SoundContainer;
 
@@ -149,6 +150,7 @@ namespace RTE {
 			CheckpointRegistryScope& operator=(const CheckpointRegistryScope&) = delete;
 		private:
 			std::optional<CheckpointSoundRegistry> m_Original;
+			std::unique_ptr<OwnedCheckpointSoundRegistry> m_OwnedOriginal;
 			uint64_t m_Cursor;
 			bool m_SkipCarriedNotes = true;
 		};
