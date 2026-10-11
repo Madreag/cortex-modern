@@ -290,11 +290,13 @@ namespace RTE {
 		if ((m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) == 0) return;
 		std::vector<std::pair<uint32_t, uint32_t>> paths;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
-			if (peer == m_Config.localPeerId || (m_FrameGroupMembers & SeatBit(peer)) == 0) continue;
+			if (peer == m_Config.localPeerId || m_RemovedPeers.contains(peer) || IsSeatReleased(peer)) continue;
 			auto& sample = m_PeerReceiptDelaySamples[peer];
 			sample.Observe(nowMs, 0);
 			const auto [wire, route] = PeerFrameRoute(peer);
-			if (sample.P95Ms() != 0) paths.emplace_back(sample.P95Ms(), sample.JitterMs());
+			// A held reader's receipts measure its catch-up. Its measured transport
+			// still sizes the runway it will need when it rejoins these senders.
+			if ((m_FrameGroupMembers & SeatBit(peer)) != 0 && sample.P95Ms() != 0) paths.emplace_back(sample.P95Ms(), sample.JitterMs());
 			else if (wire && wire->IsPeerPingMeasured(route)) paths.emplace_back(wire->GetPeerPingMs(route), 0);
 		}
 		const size_t needed = std::popcount(m_FrameGroupMembers) - 1;
