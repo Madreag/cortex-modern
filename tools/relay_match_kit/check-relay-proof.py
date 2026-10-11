@@ -108,7 +108,7 @@ try:
  def uneven_intervals(rows):
   elapsed=0
   for row in rows:
-   elapsed+=1000/55 if ((row['tick']-1)//60)%20<11 else 14.8
+   elapsed+=1000/54 if ((row['tick']-1)//60)%20<11 else 14.4
    row['wall_ms']=elapsed
  rate_case('median_interval_more_than_one_ms_off',uneven_intervals,'median 60-tick average interval')
  assert entry['cases'][-1]['in_play_tps']>=59.9
