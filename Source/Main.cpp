@@ -78,9 +78,6 @@
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
-#include "PathFinder.h"
-#include "luabind.hpp"
-#include "luabind/detail/object_rep.hpp"
 extern "C" {
 #include "lua.h"
 }
@@ -4500,23 +4497,7 @@ static void RecordLandingZones(uint64_t tick, std::ostream& out) {
 		if (lua_type(source, index) == LUA_TNUMBER) value << lua_tonumber(source, index);
 		else if (lua_type(source, index) == LUA_TBOOLEAN) value << (lua_toboolean(source, index) ? "true" : "false");
 		else if (lua_type(source, index) == LUA_TSTRING) value << std::quoted(lua_tostring(source, index));
-		else if (lua_isuserdata(source, index)) {
-			const auto* object = luabind::detail::is_class_object(source, index);
-			if (object && object->ptr() && object->crep() && (object->flags() & luabind::detail::object_rep::owner)) {
-				const char* name = object->crep()->name();
-				if (std::strcmp(name, "Vector") == 0) {
-					const auto* vector = static_cast<const Vector*>(object->ptr());
-					value << "Vector(" << vector->GetX() << ',' << vector->GetY() << ')';
-				} else if (std::strcmp(name, "PathRequest") == 0) {
-					const auto* request = static_cast<const PathRequest*>(object->ptr());
-					value << "PathRequest(" << request->complete << ',' << request->status << ',' << request->pathLength << ',' << request->totalCost
-					      << ',' << request->horizonGeneration << ',' << request->startPos.GetX() << ',' << request->startPos.GetY()
-					      << ',' << request->targetPos.GetX() << ',' << request->targetPos.GetY();
-					for (const Vector& point: request->path) value << ';' << point.GetX() << ',' << point.GetY();
-					value << ')';
-				} else value << name;
-			} else value << "userdata";
-		} else value << lua_typename(source, lua_type(source, index));
+		else value << lua_typename(source, lua_type(source, index));
 		fields.push_back(path + "=" + value.str());
 	};
 	if (lua_istable(state, -1)) {
