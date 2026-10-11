@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <new>
@@ -83,6 +84,7 @@ namespace RTE {
 		static const void* Original(const void* view);
 		static bool IsView(const void* address) { return Original(address) != address; }
 		static const std::string* ReadString(const char* source, size_t bytes);
+		static std::shared_ptr<const void> ReadIndex(const void* source, const void* kind, const std::function<std::shared_ptr<const void>()>& build);
 		static std::string SelfTestMismatch();
 	private:
 		static thread_local ReadState* s_Read;

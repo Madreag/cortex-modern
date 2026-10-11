@@ -472,6 +472,7 @@ struct CheckpointNativeStorage::ReadState {
 	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> pages;
 	std::vector<RootRange> roots;
 	std::map<std::pair<uintptr_t, size_t>, std::string> strings;
+	std::map<std::pair<uintptr_t, uintptr_t>, std::shared_ptr<const void>> indices;
 };
 
 thread_local CheckpointNativeStorage::ReadState* CheckpointNativeStorage::s_Read = nullptr;
@@ -489,6 +490,13 @@ CheckpointNativeStorage::ReadScope::ReadScope(ReadViews views) : m_Capture(views
 
 CheckpointNativeStorage::ReadViews CheckpointNativeStorage::CurrentViews() {
 	return s_Read ? ReadViews{true, s_Read->pages, s_Read->roots} : ReadViews{};
+}
+
+std::shared_ptr<const void> CheckpointNativeStorage::ReadIndex(const void* source, const void* kind, const std::function<std::shared_ptr<const void>()>& build) {
+	if (!s_Read) throw std::logic_error("a frozen index needs its snapshot scope");
+	const auto key = std::pair{reinterpret_cast<uintptr_t>(Original(source)), reinterpret_cast<uintptr_t>(kind)};
+	if (const auto found = s_Read->indices.find(key); found != s_Read->indices.end()) return found->second;
+	return s_Read->indices.emplace(key, build()).first->second;
 }
 
 const void* CheckpointNativeStorage::RootView(const void* source, size_t bytes) {
@@ -716,7 +724,18 @@ std::string RTE::CheckpointFrozenContainersSelfTestMismatch() {
 		const auto& frozen = *static_cast<const Container*>(CheckpointNativeStorage::View(address, sizeof(Container)));
 		if (CheckpointNativeStorage::Original(&frozen) != address) return std::string(name) + " lost its original address";
 		std::vector<std::string> found;
-		for (const auto& value: CheckpointValues(frozen)) found.push_back(render(value));
+		for (const auto& value: CheckpointValues(frozen)) {
+			found.push_back(render(value));
+			if constexpr (requires { typename Container::key_type; }) {
+				const auto& key = [&]() -> const auto& { if constexpr (requires { typename Container::mapped_type; }) return value.first; else return value; }();
+				for (int repeat = 0; repeat < 2; ++repeat) if (CheckpointFind(frozen, key) != &value) return std::string(name) + " lookup escaped its frozen generation";
+			}
+		}
+		if constexpr (requires { typename Container::key_type; }) {
+			using Key = typename Container::key_type;
+			const Key missing = [] { if constexpr (std::is_integral_v<Key>) return Key{-1}; else return Key("missing checkpoint lookup key"); }();
+			if (CheckpointContains(frozen, missing)) return std::string(name) + " frozen index invented a value";
+		}
 		if constexpr (requires { frozen.hash_function(); }) {
 			const auto rebuilt = CheckpointRebuildHash(frozen, [](const auto& value) { return value; });
 			std::vector<std::string> copied;

@@ -267,6 +267,34 @@ namespace RTE {
 	template<class K, class H, class E, class A> auto CheckpointValues(const std::unordered_set<K, H, E, A>& source) { return CheckpointHashValues(source); }
 	template<class K, class V, class H, class E, class A> auto CheckpointValues(const std::unordered_map<K, V, H, E, A>& source) { return CheckpointHashValues(source); }
 
+	// Lookup indices are rebuilt once on each reader; the live container keeps its normal lookup.
+	template<class Container, class Key> const typename Container::value_type* CheckpointFind(const Container& source, const Key& key) {
+		if (!CheckpointNativeStorage::IsView(&source)) {
+			const auto found = source.find(key);
+			return found == source.end() ? nullptr : std::addressof(*found);
+		}
+		using K = typename Container::key_type;
+		using V = typename Container::value_type;
+		const auto lookup = [&](auto make) -> const V* {
+			using Index = typename decltype(make())::element_type;
+			static char kind;
+			const auto frozen = std::static_pointer_cast<const Index>(CheckpointNativeStorage::ReadIndex(&source, &kind, [&] {
+				auto result = make();
+				for (const V& value: CheckpointValues(source)) {
+					if constexpr (requires { typename Container::mapped_type; }) result->emplace(value.first, &value);
+					else result->emplace(value, &value);
+				}
+				return result;
+			}));
+			const auto found = frozen->find(key);
+			return found == frozen->end() ? nullptr : found->second;
+		};
+		if constexpr (requires { source.hash_function(); }) return lookup([&] { return std::make_shared<std::unordered_map<K, const V*, typename Container::hasher, typename Container::key_equal>>(0, source.hash_function(), source.key_eq()); });
+		else return lookup([&] { return std::make_shared<std::map<K, const V*, typename Container::key_compare>>(source.key_comp()); });
+	}
+
+	template<class Container, class Key> bool CheckpointContains(const Container& source, const Key& key) { return CheckpointFind(source, key) != nullptr; }
+
 	template<class Container, class Convert> Container CheckpointRebuildHash(const Container& source, Convert convert) {
 		Container result(source.bucket_count(), source.hash_function(), source.key_eq(), source.get_allocator());
 		result.max_load_factor(source.max_load_factor());
