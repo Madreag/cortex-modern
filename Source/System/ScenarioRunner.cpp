@@ -1538,12 +1538,7 @@ namespace RTE {
 		if (tickMs <= 0 || !std::isfinite(tickMs)) { s_OwnSeatCatchUpBudget = 0; return; }
 		const uint64_t elapsed = nowMs >= s_PeerCatchUpBudgetAtMs ? std::min<uint64_t>(nowMs - s_PeerCatchUpBudgetAtMs, 100) : 0;
 		s_PeerCatchUpBudgetAtMs = nowMs;
-		// Only the held local seat replays this larger bounded burst. Ordinary
-		// live peers retain their existing display-clock synchronization rate.
-		const bool heldReader = s_LockstepCoordinator->UsesPeerFrameGroups() && IsLockstepOwnSeatHeld();
-		const double burstTicks = heldReader ? 12.0 : c_NetSeatCatchUpBurstTicks;
-		const double rate = heldReader ? 6.0 : c_NetSeatCatchUpRate;
-		s_PeerCatchUpCredit = std::min(burstTicks, s_PeerCatchUpCredit + rate * elapsed / tickMs);
+		s_PeerCatchUpCredit = std::min(static_cast<double>(c_NetSeatCatchUpBurstTicks), s_PeerCatchUpCredit + c_NetSeatCatchUpRate * elapsed / tickMs);
 		s_OwnSeatCatchUpBudget = static_cast<int>(s_PeerCatchUpCredit);
 	}
 
