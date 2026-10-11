@@ -5935,6 +5935,14 @@ namespace RTE {
 			}
 		}
 		if (IsSeatReclaimGap(m_Config.localPeerId, target)) { m_DeferredControllerFrames.clear(); return true; }
+		if (UsesPeerFrameGroups()) {
+			const auto own = m_PeerBridges.find(m_Config.localPeerId);
+			if (own != m_PeerBridges.end() && own->second.committedHold &&
+			    (!own->second.returnFrame || producedFrame < *own->second.returnFrame)) {
+				m_DeferredControllerFrames.clear();
+				return true;
+			}
+		}
 		// A machine that judged itself too slow sends nothing more: the host's bound holds its silent seat.
 		// A host whose own seat the AI holds catches up in place: its input for the frames the AI played is discarded, as on every peer.
 		if (!UsesPeerFrameGroups() && m_Config.localPeerId == GetHostPeerId() && IsSeatUnderAI(m_Config.localPeerId, target)) { m_DeferredControllerFrames.clear(); return true; }
@@ -12979,6 +12987,18 @@ namespace RTE {
 		MaybeSendControlHeartbeat(nowMs);
 		while (true) {
 			if (UsesPeerFrameGroups()) {
+				const auto own = m_PeerBridges.find(m_Config.localPeerId);
+				if (own != m_PeerBridges.end() && own->second.committedHold && m_LastCompletedSimulationTick) {
+					const auto back = m_ReclaimTransactions.find(m_Config.localPeerId);
+					const bool privateRunway = !own->second.returnFrame ||
+					    (back != m_ReclaimTransactions.end() && *m_LastCompletedSimulationTick <= back->second.neutralThroughFrame);
+					const uint64_t runway = std::max<uint16_t>(1, InputDelayAt(m_Config.localPeerId, *m_LastCompletedSimulationTick + 1));
+					if (privateRunway && m_Stats.nextFrame > *m_LastCompletedSimulationTick + runway) {
+						RequestPeerCommittedTail(nowMs);
+						m_AdvanceBlock = "private-input-runway";
+						break;
+					}
+				}
 				if (ApplyPeerCommittedTail(m_Stats.nextFrame, nowMs)) continue;
 				PreparePeerBridgeInputs(m_Stats.nextFrame, nowMs);
 				if ((m_FrameGroupMembers & (1U << (m_Config.localPeerId - 1))) == 0) { RequestPeerCommittedTail(nowMs); m_AdvanceBlock = "private-peer-tail"; break; }

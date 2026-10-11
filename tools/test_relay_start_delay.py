@@ -78,6 +78,7 @@ def run_case(repo, out, case, timeout, lag_ms, initial_delay):
         elapsed = returned['unix_ms'] - end_ms if returned and end_ms else None
         report = json.loads((folder / 'report.json').read_text()) if (folder / 'report.json').exists() else {}
         locked = report.get('service', {}).get('runner', {}).get('lockstep', {})
+        hold_counts = {key: value['holds'] for key, value in locked.get('peers', {}).items()}
         first_delay = rows[0]['input_delay_ticks'] if rows else None
         duplicate_tails = locked.get('peer_tail_duplicate_frames')
         recovery_frames = returned['tick'] - first_held if returned and first_held else 0
@@ -88,6 +89,7 @@ def run_case(repo, out, case, timeout, lag_ms, initial_delay):
                                  first_delay=first_delay, last_delay=rows[-1]['input_delay_ticks'] if rows else None,
                                  shrink_ms=shrink_ms, tail_frames_sent=locked.get('peer_tail_frames_sent'),
                                  duplicate_tails=duplicate_tails, recovery_frames=recovery_frames,
+                                 holds=hold_counts,
                                  return_after_end_ms=elapsed, exit_code=record.get('exit_code'),
                                  timed_out=record.get('timed_out')))
         if returning and not held:
@@ -95,6 +97,8 @@ def run_case(repo, out, case, timeout, lag_ms, initial_delay):
         if returning and (elapsed is None or elapsed > (10000 if case == 'slow-return' else 12000)):
             seconds = 10 if case == 'slow-return' else 12
             errors.append(f'peer {peer} did not return the host within {seconds} seconds after the blackout')
+        if returning and (hold_counts.get('1') != 1 or any(value != 0 for key, value in hold_counts.items() if key != '1')):
+            errors.append(f'peer {peer} records an unintended hold')
         if case == 'slow-return' and (duplicate_tails is None or recovery_frames <= 0 or duplicate_tails >= recovery_frames):
             errors.append(f'peer {peer} has at least 1000 duplicate tail replies per 1000 recovery frames')
         if case in ('clean-start', 'saturated-start'):
