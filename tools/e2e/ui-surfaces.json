@@ -393,7 +393,7 @@
       "peer": "host",
       "mark": "ui-pause-match-options",
       "screen": "PauseMatchOptions",
-      "what": "Pause Match Details draws the rules, repair hint and Close button.",
+      "what": "Pause Rules draws the rules and Close button; the repair hint stays hidden until Connection Details.",
       "assert": "probe assertions in the marked interval",
       "run": [
         "640x360",
@@ -449,7 +449,7 @@
       "peer": "client",
       "mark": "ui-pause-match-options",
       "screen": "PauseMatchOptions",
-      "what": "Pause Match Details draws the rules, repair hint and Close button.",
+      "what": "Pause Rules draws the rules and Close button; the repair hint stays hidden until Connection Details.",
       "assert": "probe assertions in the marked interval",
       "run": [
         "640x360",
@@ -575,6 +575,34 @@
       "screen": "PauseLeaveConfirm",
       "what": "The client reads the leave consequence and confirms; both capture processes then finish.",
       "assert": "probe asserts ButtonLeaveConfirm and activates it; both launch records end without a timeout"
+    },
+    {
+      "id": "ui-pause-connection-host",
+      "peer": "host",
+      "mark": "ui-pause-connection",
+      "screen": "PauseMatchOptions",
+      "what": "Connection Details shows its exact heading and connection fields; the visible repair hint fits and stays inside its panel.",
+      "assert": "probe assertions in the marked interval",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720",
+        "1920x1080"
+      ]
+    },
+    {
+      "id": "ui-pause-connection-client",
+      "peer": "client",
+      "mark": "ui-pause-connection",
+      "screen": "PauseMatchOptions",
+      "what": "Connection Details shows its exact heading and connection fields; the visible repair hint fits and stays inside its panel.",
+      "assert": "probe assertions in the marked interval",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720",
+        "1920x1080"
+      ]
     }
   ],
   "directory_port": 49479,

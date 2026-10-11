@@ -235,6 +235,75 @@
     },
     {
       "op": "menu",
+      "command": "assert_label LabelMatchOptionsTitle RULES FOR THIS ROUND"
+    },
+    {
+      "op": "menu",
+      "command": "assert_label LabelMatchOptions Activity: P4 Alpha Duel"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible LabelMatchRepairHint 0"
+    },
+    {
+      "op": "menu",
+      "command": "assert_rect_inside ButtonConnectionDetails MatchOptionsBox"
+    },
+    {
+      "op": "menu",
+      "command": "assert_text_fits ButtonConnectionDetails"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 1200
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonConnectionDetails"
+    },
+    {
+      "op": "wait",
+      "screen": "PauseMatchOptions",
+      "elapsed_ms": 450
+    },
+    {
+      "op": "menu",
+      "command": "video_mark ui-pause-connection"
+    },
+    {
+      "op": "menu",
+      "command": "assert_label LabelMatchOptionsTitle CONNECTION DETAILS"
+    },
+    {
+      "op": "menu",
+      "command": "assert_label LabelMatchOptions Frame redundancy:"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible LabelMatchRepairHint 1"
+    },
+    {
+      "op": "menu",
+      "command": "assert_rect_inside MatchOptionsBox viewport"
+    },
+    {
+      "op": "menu",
+      "command": "assert_rect_inside LabelMatchOptions MatchOptionsBox"
+    },
+    {
+      "op": "menu",
+      "command": "assert_rect_inside ButtonConnectionDetails MatchOptionsBox"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible ButtonMatchRepairNow 1"
+    },
+    {
+      "op": "menu",
+      "command": "assert_text_fits LabelMatchRepairHint"
+    },
+    {
+      "op": "menu",
       "command": "assert_rect_inside LabelMatchRepairHint MatchOptionsBox"
     },
     {
