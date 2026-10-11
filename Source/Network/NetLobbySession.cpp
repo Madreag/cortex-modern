@@ -890,11 +890,13 @@ namespace RTE {
 			return false;
 		}
 		const bool setupChanged = SetupDiffers(m_Config.matchConfig, config);
+		const bool delayPolicyChanged = config.delayPolicy != m_Config.matchConfig.delayPolicy;
 		if (setupChanged || config.delayPolicy != m_Config.matchConfig.delayPolicy ||
 		    config.inputDelayFrames != m_Config.matchConfig.inputDelayFrames) ResetStartDelaySamples();
 		if (setupChanged) ++m_ActivitySerial;
+		// A roster revision preserves the caller's automatic timing choice.
+		if (delayPolicyChanged) m_Config.autoInputDelay = config.delayPolicy == NetMatchDelayPolicy::Auto;
 		m_Config.matchConfig = config;
-		m_Config.autoInputDelay = config.delayPolicy == NetMatchDelayPolicy::Auto;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(config);
 		// Every peer acknowledges this exact revision before it counts again: HandleConfigAck drops an
 		// ack whose hash is the old one, so a delayed ack cannot accept a config its sender never saw.

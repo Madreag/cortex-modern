@@ -13134,6 +13134,10 @@ namespace RTE {
 			lobby.HandleConfigAck(ack);
 			lobby.HandleReady(NetLobbyReady{peerId, true});
 		}
+		if (lobby.m_Config.autoInputDelay) {
+			*error = "a roster revision enabled automatic timing that this lobby did not request";
+			return false;
+		}
 		pump(100, &lobby);
 		std::cout << "[net-match-selftest] start_intent kept_through_drop=" << keptThroughDrop << " kept_through_join=" << keptThroughJoin
 		          << " started=" << lobby.IsStarted() << " revision=" << lobby.GetMatchConfig().configRevision << std::endl;
