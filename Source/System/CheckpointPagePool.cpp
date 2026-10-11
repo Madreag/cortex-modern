@@ -712,6 +712,7 @@ struct CheckpointNativeStorage::PrivateValues {
 };
 
 struct CheckpointNativeStorage::ReadState : std::enable_shared_from_this<ReadState> {
+	std::shared_ptr<const void> sourceOwner;
 	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> pages;
 	std::vector<RootRange> roots;
 	std::map<std::pair<uintptr_t, size_t>, std::string> strings;
@@ -727,6 +728,7 @@ CheckpointNativeStorage::ReadScope::ReadScope(std::span<const std::shared_ptr<co
 CheckpointNativeStorage::ReadScope::ReadScope(ReadViews views) : m_Capture(views.active), m_Previous(s_Read) {
 	if (!views.active) return;
 	m_State = std::make_shared<ReadState>();
+	m_State->sourceOwner = std::move(views.owner);
 	m_State->pages.assign(views.pages.begin(), views.pages.end());
 	m_State->roots.assign(views.roots.begin(), views.roots.end());
 	m_State->privateValues = views.privateValues ? std::move(views.privateValues) : (m_Previous ? m_Previous->privateValues : std::make_shared<PrivateValues>());
@@ -1110,6 +1112,20 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 		ReadScope read(views);
 		value.reset();
 		if (!readLater || PrivateAllocationCount() != 0) return "saved read values did not retain and release their private storage";
+	}
+	{
+		ReadViews child;
+		std::weak_ptr<const void> parent;
+		{
+			ReadScope first(ReadViews{true, {}, {}});
+			const auto views = CurrentViews();
+			parent = views.owner;
+			ReadScope second(views);
+			child = CurrentViews();
+		}
+		if (parent.expired()) return "a saved child reader lost its parent's stored values";
+		child = {};
+		if (!parent.expired()) return "a finished saved child reader retained its parent";
 	}
 	if (const auto mismatch = CheckpointString::SelfTestMismatch(); !mismatch.empty()) return mismatch;
 	return CheckpointFrozenContainersSelfTestMismatch();
