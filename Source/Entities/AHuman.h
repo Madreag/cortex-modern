@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the AHuman class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -712,11 +714,11 @@ namespace RTE {
 		AtomGroup* m_BackupFGFootGroup;
 		AtomGroup* m_pBGFootGroup;
 		AtomGroup* m_BackupBGFootGroup;
-		std::vector<long long> m_PersistedFGHandResidue; //!< Saved limb-group travel residue, applied on snapshot adopt.
-		std::vector<long long> m_PersistedBGHandResidue;
-		std::vector<long long> m_PersistedFGFootResidue;
-		std::vector<long long> m_PersistedBGFootResidue;
-		std::vector<std::string> m_PersistedLimbPathStates; //!< Saved limb-path traversal state, applied on snapshot adopt.
+		CheckpointVector<long long> m_PersistedFGHandResidue; //!< Saved limb-group travel residue, applied on snapshot adopt.
+		CheckpointVector<long long> m_PersistedBGHandResidue;
+		CheckpointVector<long long> m_PersistedFGFootResidue;
+		CheckpointVector<long long> m_PersistedBGFootResidue;
+		CheckpointVector<std::string> m_PersistedLimbPathStates; //!< Saved limb-path traversal state, applied on snapshot adopt.
 		bool m_PersistedLimbPathStatesFromFile = false; //!< Whether the stash holds file values rather than a copy capture.
 		std::string m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
 		std::string m_PersistedLimbGroupInertia; //!< Saved limb-group inertia pairs, applied on snapshot adopt.

@@ -6565,8 +6565,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					}
 				}
 			}
-			const std::list<std::pair<Vector, MovableObjectReference>>& ownerQueue = ownerView->GetWaypointList();
-			const std::list<std::pair<Vector, MovableObjectReference>>& peerQueue = peerView->GetWaypointList();
+			const auto& ownerQueue = ownerView->GetWaypointList();
+			const auto& peerQueue = peerView->GetWaypointList();
 			if (ownerQueue.size() != 2 || peerQueue.size() != 2) {
 				return finish("the applied queue is not the two waypoints the AI asked for");
 			}

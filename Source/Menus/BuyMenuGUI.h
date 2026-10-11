@@ -149,7 +149,7 @@ namespace RTE {
 		/// Ownership of the Object:s is NOT TRANSFERRED!
 		/// @return Whetehr any items were put in the list at all. false if there are no
 		/// items in the order listbox.
-		bool GetOrderList(std::list<const SceneObject*>& listToFill) const;
+		template<class Allocator> bool GetOrderList(std::list<const SceneObject*, Allocator>& listToFill) const;
 
 		/// Return the list of loadouts currently saved as presets.
 		/// @return A reference to the list of loadout presets.

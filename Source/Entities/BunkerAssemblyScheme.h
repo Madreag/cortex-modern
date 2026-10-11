@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the BunkerAssemblyScheme class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -157,7 +159,7 @@ namespace RTE {
 		BITMAP* m_pIconBitmap;
 
 		// The objects that are placed along with this in the scene
-		std::list<SOPlacer> m_ChildObjects;
+		CheckpointList<SOPlacer> m_ChildObjects;
 
 		// If this is true then sceneman must select a single assembly for this scheme and use it everywhere on the scene
 		bool m_IsOneTypePerScene;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "SceneLayer.h"
 #include "Timer.h"
 
@@ -162,7 +164,7 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 
 		std::vector<std::shared_ptr<BITMAP>> m_CheckpointBitmaps;
-		std::vector<BITMAP*> m_Bitmaps; //!< Vector containing all the BITMAPs of this SLBackground. Not owned.
+		CheckpointVector<BITMAP*> m_Bitmaps; //!< Vector containing all the BITMAPs of this SLBackground. Not owned.
 		int m_FrameCount; //!< The total number of frames in this SLBackground's animation.
 		int m_Frame; //!< The frame that is currently being shown/drawn.
 

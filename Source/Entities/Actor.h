@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the Actor class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -588,7 +590,7 @@ namespace RTE {
 
 		/// Gets the list of waypoints for this Actor.
 		/// @return The list of waypoints for this Actor.
-		const std::list<std::pair<Vector, MovableObjectReference>>& GetWaypointList() const;
+		const CheckpointList<std::pair<Vector, MovableObjectReference>>& GetWaypointList() const;
 
 		/// Gets how many waypoints this actor have.
 		/// @return How many waypoints.
@@ -790,7 +792,7 @@ namespace RTE {
 
 		/// Gets the deque of inventory of this. Ownership is NOT transferred.
 		/// @return A const pointer to the inventory deque of this. OWNERSHIP IS NOT TRANSFERRED!
-		const std::deque<MovableObject*>* GetInventory() const { return &m_Inventory; }
+		const CheckpointDeque<MovableObject*>* GetInventory() const { return &m_Inventory; }
 
 		/// Returns the maximum total mass this Actor can carry in its inventory.
 		/// @return The maximum carriable mass of this Actor.
@@ -1222,7 +1224,7 @@ namespace RTE {
 		// In absolute scene coordinates.
 		Vector m_ViewPoint;
 		// The inventory of carried MovableObjects of this Actor. They are also Owned by this.
-		std::deque<MovableObject*> m_Inventory;
+		CheckpointDeque<MovableObject*> m_Inventory;
 		float m_MaxInventoryMass; //!< The mass limit for this Actor's inventory. -1 means there's no limit.
 		// The device that can/will be picked up
 		HeldDevice* m_pItemInReach;
@@ -1232,7 +1234,7 @@ namespace RTE {
 		long long m_OffWireFlipTick = -1;
 		bool m_OffWireFlip = false;
 		long m_FaithfulMOMoveTargetUID = 0; //!< Snapshot link for m_pMOMoveTarget, resolved after a restore.
-		std::vector<long> m_FaithfulWaypointUIDs; //!< Snapshot links for the waypoint objects, resolved after a restore.
+		CheckpointVector<long> m_FaithfulWaypointUIDs; //!< Snapshot links for the waypoint objects, resolved after a restore.
 		// An array that holds activation states for the various hotkey actions of this Actor.
 		std::array<bool, ACTORHOTKEYTYPECOUNT> m_HotkeyActivated;
 		// HUD positioning aid
@@ -1283,7 +1285,7 @@ namespace RTE {
 		AIMode m_AIMode;
 		// The list of waypoints remaining between which the paths are made. If this is empty, the last path is in teh MovePath
 		// The MO pointer in the pair is nonzero if the waypoint is tied to an MO in the scene, and gets updated each UpdateAI. This needs to be checked for validity/existence each UpdateAI
-		std::list<std::pair<Vector, MovableObjectReference>> m_Waypoints;
+		CheckpointList<std::pair<Vector, MovableObjectReference>> m_Waypoints;
 		// Waypoint calls the AI pass queued; the owner sends them over the wire so every peer's queue matches.
 		std::vector<DeferredWaypoint> m_PendingDeferredWaypoints;
 		// Sent calls still in flight; the running actor's reads keep seeing them until the apply lands.
@@ -1317,7 +1319,7 @@ namespace RTE {
 		// The relative, scene-wrapped difference between the current m_Pos and the m_MoveTarget.
 		Vector m_MoveVector;
 		// The calculated path to get to that move-to target
-		std::list<Vector> m_MovePath;
+		CheckpointList<Vector> m_MovePath;
 		// The current pathfinding request
 		std::shared_ptr<volatile PathRequest> m_PathRequest;
 		// Whether it's time to update the path

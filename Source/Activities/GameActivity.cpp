@@ -686,7 +686,7 @@ int GameActivity::AddOverridePurchase(const SceneObject* pPurchase, int player) 
 
 		// Calculate the total list cost for this player
 		int totalListCost = 0;
-		for (std::list<const SceneObject*>::iterator itr = m_PurchaseOverride[player].begin(); itr != m_PurchaseOverride[player].end(); ++itr)
+		for (CheckpointList<const SceneObject*>::iterator itr = m_PurchaseOverride[player].begin(); itr != m_PurchaseOverride[player].end(); ++itr)
 			totalListCost += (*itr)->GetGoldValue(nativeModule, foreignCostMult, nativeCostMult);
 
 		return totalListCost;
@@ -729,8 +729,8 @@ int GameActivity::SetOverridePurchaseList(const Loadout* pLoadout, int player) {
 	finalListCost = AddOverridePurchase(pCraftPreset, player);
 
 	// Add the rest of the cargo list
-	std::list<const SceneObject*>* pCargoList = const_cast<Loadout*>(pLoadout)->GetCargoList();
-	for (std::list<const SceneObject*>::iterator itr = pCargoList->begin(); itr != pCargoList->end(); ++itr)
+	CheckpointList<const SceneObject*>* pCargoList = const_cast<Loadout*>(pLoadout)->GetCargoList();
+	for (CheckpointList<const SceneObject*>::iterator itr = pCargoList->begin(); itr != pCargoList->end(); ++itr)
 		finalListCost = AddOverridePurchase(*itr, player);
 
 	return finalListCost;
@@ -767,12 +767,12 @@ bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor*
 
 	// Prepare the Craft, stuff everything into it and add it to the queue
 	// Retrieve the ordered craft and its inventory
-	std::list<const SceneObject*> purchaseList;
+	CheckpointList<const SceneObject*> purchaseList;
 
 	const ACraft* pCraftPreset = nullptr;
 	// If we have a list to purchase that overrides the buy GUI, then use it and clear it
 	if (!m_PurchaseOverride[player].empty()) {
-		for (std::list<const SceneObject*>::iterator itr = m_PurchaseOverride[player].begin(); itr != m_PurchaseOverride[player].end(); ++itr) {
+		for (CheckpointList<const SceneObject*>::iterator itr = m_PurchaseOverride[player].begin(); itr != m_PurchaseOverride[player].end(); ++itr) {
 			// Find the first craft to use as the delivery craft
 			const ACraft* pCraft = dynamic_cast<const ACraft*>(*itr);
 			if (!pCraftPreset && pCraft)
@@ -820,7 +820,7 @@ bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor*
 
 	// Tally the ordered items and keep the ones actually purchasable
 	std::list<const SceneObject*> boughtList;
-	for (std::list<const SceneObject*>::iterator itr = purchaseList.begin(); itr != purchaseList.end(); ++itr) {
+	for (CheckpointList<const SceneObject*>::iterator itr = purchaseList.begin(); itr != purchaseList.end(); ++itr) {
 		bool purchaseItem = true;
 
 		// Add to the total cost tally
@@ -911,7 +911,7 @@ bool GameActivity::QueuePurchaseDelivery(ACraft* pDeliveryCraft, const PurchaseO
 	Actor* pPassenger = nullptr;
 	Actor* pLastPassenger = nullptr;
 
-	for (std::list<const SceneObject*>::const_iterator itr = order.purchases.begin(); itr != order.purchases.end(); ++itr) {
+	for (auto itr = order.purchases.begin(); itr != order.purchases.end(); ++itr) {
 		// Make copy of the preset instance in the list
 		pInventoryObject = dynamic_cast<MovableObject*>((*itr)->Clone());
 
@@ -3968,7 +3968,7 @@ bool GameActivity::LoadCheckpoint(std::string_view text, bool validateOnly) {
         reader.Value(values);
         if (!LoadValueCheckpoint(values, true)) return false;
         std::array<long, Players::MaxPlayerCount> marked{};
-        std::array<std::list<const SceneObject*>, Players::MaxPlayerCount> purchases;
+        std::array<CheckpointList<const SceneObject*>, Players::MaxPlayerCount> purchases;
         std::array<std::string, Players::MaxPlayerCount> menus;
         struct SavedDelivery { Delivery metadata{}; std::string native; std::unique_ptr<ACraft> craft; };
         std::array<std::vector<SavedDelivery>, Teams::MaxTeamCount> deliveries;
@@ -4227,7 +4227,7 @@ bool GameActivity::LoadNetLocalGameState(std::string_view text) {
 		struct Slot {
 			int64_t marked = 0;
 			std::string buy, editor, inventory, red, yellow, strategic;
-			std::list<const SceneObject*> purchases;
+			CheckpointList<const SceneObject*> purchases;
 		};
 		std::array<Slot, Players::MaxPlayerCount> slots;
 		for (auto& slot: slots) {
@@ -4390,7 +4390,7 @@ bool GameActivity::RunNetInventoryRelaunchProbe(std::string_view phase) {
 			auto* collected = static_cast<Actor*>(brainPreset->Clone());
 			ordinary->SetTeam(index); collected->SetTeam(index);
 			craft->AddInventoryItem(ordinary);
-			const_cast<std::deque<MovableObject*>&>(craft->GetCollectedInventory()).push_back(collected);
+			const_cast<CheckpointDeque<MovableObject*>&>(craft->GetCollectedInventory()).push_back(collected);
 			state.carriers[index] = uid(craft);
 			state.ordinary[index] = uid(ordinary);
 			state.collected[index] = uid(collected);

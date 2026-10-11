@@ -111,8 +111,8 @@ int GlobalScript::Save(Writer& writer) const {
 	return 0;
 }
 
-const std::vector<std::unique_ptr<PieSlice>>& GlobalScript::GetPieSlicesToAdd() const {
-	static const std::vector<std::unique_ptr<PieSlice>> emptyVector;
+const CheckpointVector<std::unique_ptr<PieSlice>>& GlobalScript::GetPieSlicesToAdd() const {
+	static const CheckpointVector<std::unique_ptr<PieSlice>> emptyVector;
 	if (!m_HasStarted || !m_IsActive || !g_SettingsMan.IsGlobalScriptEnabled(GetModuleAndPresetName())) {
 		return emptyVector;
 	}

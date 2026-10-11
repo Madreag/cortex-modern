@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "PieSlice.h"
 
 namespace RTE {
@@ -68,7 +70,7 @@ namespace RTE {
 
 		/// Gets the list of PieSlices this GlobalScript adds to any active Actor PieMenus.
 		/// @return The list of PieSilces this GlobalScript adds to any active Actor PieMenus
-		const std::vector<std::unique_ptr<PieSlice>>& GetPieSlicesToAdd() const;
+		const CheckpointVector<std::unique_ptr<PieSlice>>& GetPieSlicesToAdd() const;
 #pragma endregion
 
 #pragma region Concrete Methods
@@ -110,7 +112,7 @@ namespace RTE {
 		bool m_LateUpdate; //!< Whether or not this GlobalScript should be updated late, i.e. after the standard MovableMan update.
 		std::vector<CheckpointText> m_FrozenPieSlices;
 
-		std::vector<std::unique_ptr<PieSlice>> m_PieSlicesToAdd; //!< A vector of PieSlices that should be added to any PieMenus opened while this GlobalScript is active.
+		CheckpointVector<std::unique_ptr<PieSlice>> m_PieSlicesToAdd; //!< A vector of PieSlices that should be added to any PieMenus opened while this GlobalScript is active.
 
 		bool m_CheckpointInitialized = false;
 

@@ -121,7 +121,7 @@ void SoundSet::SetCheckpointOwner(SoundContainer* owner) {
 	for (SoundSet* child: m_SubSoundSets) child->SetCheckpointOwner(owner);
 }
 
-uint64_t SoundSet::NameSoundData(const std::vector<SoundData>& data) {
+uint64_t SoundSet::NameSoundData(std::span<const SoundData> data) {
 	if (data.empty()) return 0;
 	// Equal sound data, byte for byte, always gets the same name; the backend sound is not part of it.
 	struct Names { std::mutex mutex; std::unordered_map<std::string, uint64_t> values; };

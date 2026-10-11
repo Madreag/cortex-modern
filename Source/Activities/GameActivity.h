@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include <string>
 #include <string_view>
 
@@ -741,10 +743,10 @@ namespace RTE {
 		bool m_ReadyToStart[Players::MaxPlayerCount];
 		// An override purchase list that can be set by a script and will be used instead of what's in the buy menu. Object held in here are NOT OWNED
 		// Once a delivery is made with anything in here, this list is automatically cleared out, and the next delivery will be what's set in the buy menu.
-		std::list<const SceneObject*> m_PurchaseOverride[Players::MaxPlayerCount];
+		CheckpointList<const SceneObject*> m_PurchaseOverride[Players::MaxPlayerCount];
 
 		// The delivery queue which contains all the info about all the made orders currently in transit to delivery
-		std::deque<Delivery> m_Deliveries[Teams::MaxTeamCount];
+		CheckpointDeque<Delivery> m_Deliveries[Teams::MaxTeamCount];
 		// The box within where landing zones can be put
 		Scene::Area m_LandingZoneArea[Teams::MaxTeamCount];
 		// What a team outside the roster lands within: nowhere
@@ -752,7 +754,7 @@ namespace RTE {
 		// How wide around the brain the automatic LZ is following
 		int m_BrainLZWidth[Players::MaxPlayerCount];
 		// The objective points for each team
-		std::list<ObjectivePoint> m_Objectives;
+		CheckpointList<ObjectivePoint> m_Objectives;
 
 		// Tech of player
 		std::string m_TeamTech[Teams::MaxTeamCount];
@@ -786,10 +788,10 @@ namespace RTE {
 		bool m_BuyMenuEnabled;
 
 		// The cursor animations for the LZ indicators
-		std::vector<BITMAP*> m_aLZCursor[4];
+		CheckpointVector<BITMAP*> m_aLZCursor[4];
 		std::array<int, Players::MaxPlayerCount> m_LZCursorWidth; //!< The width of each players' LZ cursor.
 		// The cursor animations for the objective indications
-		std::vector<BITMAP*> m_aObjCursor[4];
+		CheckpointVector<BITMAP*> m_aObjCursor[4];
 
 		// Time it takes for a delivery to be made, in ms
 		long m_DeliveryDelay;

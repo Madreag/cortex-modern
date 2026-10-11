@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the ACrab class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -337,11 +339,11 @@ namespace RTE {
 		AtomGroup* m_BackupRFGFootGroup;
 		AtomGroup* m_pRBGFootGroup;
 		AtomGroup* m_BackupRBGFootGroup;
-		std::vector<long long> m_PersistedLFGFootResidue; //!< Saved limb-group travel residue, applied on snapshot adopt.
-		std::vector<long long> m_PersistedLBGFootResidue;
-		std::vector<long long> m_PersistedRFGFootResidue;
-		std::vector<long long> m_PersistedRBGFootResidue;
-		std::vector<std::string> m_PersistedLimbPathStates; //!< Saved limb-path traversal state, applied on snapshot adopt.
+		CheckpointVector<long long> m_PersistedLFGFootResidue; //!< Saved limb-group travel residue, applied on snapshot adopt.
+		CheckpointVector<long long> m_PersistedLBGFootResidue;
+		CheckpointVector<long long> m_PersistedRFGFootResidue;
+		CheckpointVector<long long> m_PersistedRBGFootResidue;
+		CheckpointVector<std::string> m_PersistedLimbPathStates; //!< Saved limb-path traversal state, applied on snapshot adopt.
 		bool m_PersistedLimbPathStatesFromFile = false; //!< Whether the stash holds file values rather than a copy capture.
 		std::string m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
 		std::string m_PersistedLimbGroupInertia; //!< Saved limb-group inertia pairs, applied on snapshot adopt.

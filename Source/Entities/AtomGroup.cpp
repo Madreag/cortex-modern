@@ -151,7 +151,7 @@ int AtomGroup::Create(const AtomGroup& reference, bool onlyCopyOwnerAtoms) {
 			long subgroupID = atomCopy->GetSubID();
 			if (subgroupID != 0) {
 				if (m_SubGroups.find(subgroupID) == m_SubGroups.end()) {
-					m_SubGroups.insert({subgroupID, std::vector<Atom*>()});
+					m_SubGroups.insert({subgroupID, CheckpointVector<Atom*>()});
 				}
 
 				m_SubGroups.find(subgroupID)->second.push_back(atomCopy);
@@ -213,7 +213,7 @@ std::string AtomGroup::SaveCheckpoint() const {
 		writer.AppendFields(m_FrozenAtoms ? Atom::CaptureFrozenList(m_FrozenAtoms) : Atom::CaptureCheckpointList(m_Atoms));
 		if (m_SubGroups.empty()) writer(size_t{0});
 		else {
-			std::vector<std::pair<long, std::vector<Atom*>>> groups(m_SubGroups.begin(), m_SubGroups.end());
+			std::vector<std::pair<long, CheckpointVector<Atom*>>> groups(m_SubGroups.begin(), m_SubGroups.end());
 			size_t bytes = m_Atoms.size() * sizeof(Atom*) + groups.size() * sizeof(groups.front());
 			for (const auto& group: groups) bytes += group.second.size() * sizeof(Atom*);
 			writer.AppendFields(CheckpointText::Deferred([order = m_Atoms, groups = std::move(groups)] {
@@ -281,8 +281,8 @@ bool AtomGroup::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		for (const std::string& atom: savedAtoms) if (!validator.LoadCheckpoint(atom, true)) return false;
 		for (const auto& [id, indices]: savedSubgroups) for (size_t index: indices) if (index >= savedAtoms.size()) return false;
 		std::vector<std::unique_ptr<Atom>> candidates;
-		std::vector<Atom*> atoms;
-		std::unordered_map<long, std::vector<Atom*>> subgroups;
+		CheckpointVector<Atom*> atoms;
+		CheckpointUnorderedMap<long, CheckpointVector<Atom*>> subgroups;
 		if (!validateOnly) {
 			candidates.reserve(savedAtoms.size()); atoms.reserve(savedAtoms.size());
 			for (const std::string& saved: savedAtoms) {
@@ -420,12 +420,12 @@ void AtomGroup::BindCheckpointOwner(Atom* atom) {
 	atom->SetCheckpointOwner(m_OwnerMOSR);
 }
 
-void AtomGroup::SetAtomList(const std::vector<Atom*>& newAtoms) {
-	if (m_Atoms != newAtoms) TouchCheckpoint();
+void AtomGroup::SetAtomList(std::span<Atom* const> newAtoms) {
+	if (!std::equal(m_Atoms.begin(), m_Atoms.end(), newAtoms.begin(), newAtoms.end())) TouchCheckpoint();
 	for (const Atom* atom: m_Atoms) {
 		delete atom;
 	}
-	m_Atoms = newAtoms;
+	m_Atoms.assign(newAtoms.begin(), newAtoms.end());
 	for (Atom* atom: m_Atoms) atom->SetCheckpointOwner(m_OwnerMOSR);
 }
 
@@ -474,7 +474,7 @@ void AtomGroup::CaptureSnapshotProperties(Writer& writer) const {
 // saved subIDs ride, by plain vector index otherwise. Live subgroup order records attach
 // history, so a reconstructed group cannot rely on matching indices.
 template <typename ValueType, typename ApplyFunc>
-static void ApplyPerAtomState(std::vector<Atom*>& atoms, const std::vector<ValueType>& values, const std::vector<long long>& subIDs, ApplyFunc&& apply) {
+static void ApplyPerAtomState(std::span<Atom* const> atoms, std::span<const ValueType> values, std::span<const long long> subIDs, ApplyFunc&& apply) {
 	if (subIDs.size() != values.size()) {
 		size_t index = 0;
 		for (Atom* atom: atoms) {
@@ -503,7 +503,7 @@ static void ApplyPerAtomState(std::vector<Atom*>& atoms, const std::vector<Value
 	}
 }
 
-void AtomGroup::SetTravelResidue(const std::vector<long long>& residue, const std::vector<long long>& subIDs) {
+void AtomGroup::SetTravelResidue(std::span<const long long> residue, std::span<const long long> subIDs) {
 	ApplyPerAtomState(m_Atoms, residue, subIDs, [](Atom* atom, long long value) { atom->ApplyTravelResidue(value); });
 }
 
@@ -520,7 +520,7 @@ std::vector<Vector> AtomGroup::GetAtomOffsets() const {
 	return offsets;
 }
 
-void AtomGroup::SetAtomOffsets(const std::vector<Vector>& offsets, const std::vector<long long>& subIDs) {
+void AtomGroup::SetAtomOffsets(std::span<const Vector> offsets, std::span<const long long> subIDs) {
 	ApplyPerAtomState(m_Atoms, offsets, subIDs, [](Atom* atom, const Vector& offset) { atom->SetOffset(offset); });
 	// The saved sequence is the live attach history; the reload attached in declaration order, and collision walks the list.
 	if (subIDs.size() == m_Atoms.size()) {
@@ -529,7 +529,7 @@ void AtomGroup::SetAtomOffsets(const std::vector<Vector>& offsets, const std::ve
 			buckets[atom->GetSubID()].push_back(atom);
 		}
 		std::unordered_map<long, size_t> cursors;
-		std::vector<Atom*> ordered;
+		CheckpointVector<Atom*> ordered;
 		ordered.reserve(m_Atoms.size());
 		for (const long long subID: subIDs) {
 			auto bucket = buckets.find(static_cast<long>(subID));
@@ -551,7 +551,7 @@ void AtomGroup::SetAtomOffsets(const std::vector<Vector>& offsets, const std::ve
 	}
 }
 
-void AtomGroup::RebuildFromPersisted(const std::vector<Vector>& offsets, const std::vector<long long>& subIDs, const std::vector<int>& materials) {
+void AtomGroup::RebuildFromPersisted(std::span<const Vector> offsets, std::span<const long long> subIDs, std::span<const int> materials) {
 	if (m_Atoms.empty() || offsets.empty() || subIDs.size() != offsets.size()) {
 		SetAtomOffsets(offsets, subIDs);
 		return;
@@ -561,7 +561,7 @@ void AtomGroup::RebuildFromPersisted(const std::vector<Vector>& offsets, const s
 		buckets[atom->GetSubID()].push_back(atom);
 	}
 	std::unordered_map<long, size_t> cursors;
-	std::vector<Atom*> rebuilt;
+	CheckpointVector<Atom*> rebuilt;
 	rebuilt.reserve(offsets.size());
 	for (size_t index = 0; index < offsets.size(); ++index) {
 		const long subID = static_cast<long>(subIDs[index]);
@@ -671,10 +671,10 @@ float AtomGroup::GetMomentOfInertia() {
 	return m_MomentOfInertia;
 }
 
-void AtomGroup::AddAtoms(const std::vector<Atom*>& atomList, long subgroupID, const Vector& offset, const Matrix& offsetRotation) {
+void AtomGroup::AddAtoms(std::span<Atom* const> atomList, long subgroupID, const Vector& offset, const Matrix& offsetRotation) {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Atoms.size(), m_SubGroups.size(), m_MomentOfInertia, m_StoredOwnerMass); });
 	if (m_SubGroups.count(subgroupID) == 0) {
-		m_SubGroups.insert({subgroupID, std::vector<Atom*>()});
+		m_SubGroups.insert({subgroupID, CheckpointVector<Atom*>()});
 	}
 
 	Atom* atomToAdd;
@@ -732,7 +732,7 @@ bool AtomGroup::RenameSubgroup(long oldID, long newID) {
 		std::cout << "[restore] subgroup rename collision " << oldID << " -> " << newID << std::endl;
 		return false;
 	}
-	std::vector<Atom*> atoms = std::move(subGroup->second);
+	auto atoms = std::move(subGroup->second);
 	for (Atom* atom: atoms) {
 		atom->SetSubID(newID);
 	}

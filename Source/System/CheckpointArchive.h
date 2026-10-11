@@ -167,14 +167,14 @@ namespace RTE {
 		template <class T, size_t N> void Value(const std::array<T, N>& values) { for (const auto& value: values) Value(value); }
 		template <class T, size_t N> void Value(const T (&values)[N]) { for (const auto& value: values) Value(value); }
 		template <class T, class U> void Value(const std::pair<T, U>& value) { (*this)(value.first, value.second); }
-		template <class T> void Value(const std::vector<T>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
+		template <class T, class Allocator> void Value(const std::vector<T, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
 		// vector<bool> packs bits, so its elements have no storage byte of their own to copy.
-		void Value(const std::vector<bool>& values) { Value(values.size()); for (bool value: values) Value(value ? 1u : 0u); }
-		template <class T> void Value(const std::list<T>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
-		template <class T> void Value(const std::deque<T>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
-		template <class T> void Value(const std::set<T>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
-		template <class K, class V> void Value(const std::map<K, V>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& [key, value]: values) (*this)(key, value); }
-		template <class K, class V> void Value(const std::unordered_map<K, V>& values) {
+		template <class Allocator> void Value(const std::vector<bool, Allocator>& values) { Value(values.size()); for (bool value: values) Value(value ? 1u : 0u); }
+		template <class T, class Allocator> void Value(const std::list<T, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
+		template <class T, class Allocator> void Value(const std::deque<T, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
+		template <class T, class Compare, class Allocator> void Value(const std::set<T, Compare, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
+		template <class K, class V, class Compare, class Allocator> void Value(const std::map<K, V, Compare, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& [key, value]: values) (*this)(key, value); }
+		template <class K, class V, class Hash, class Equal, class Allocator> void Value(const std::unordered_map<K, V, Hash, Equal, Allocator>& values) {
 			constexpr bool plainKey = (std::is_integral_v<K> && !std::is_same_v<K, bool>) || std::is_enum_v<K> || std::is_same_v<K, std::string>;
 			constexpr bool plainValue = (std::is_integral_v<V> && !std::is_same_v<V, bool>) || std::is_enum_v<V> || std::is_same_v<V, float> || std::is_same_v<V, double> || std::is_same_v<V, std::string>;
 			if constexpr (plainKey && plainValue) {
@@ -607,27 +607,27 @@ namespace RTE {
 		template <class T, size_t N> void Value(std::array<T, N>& values) { for (auto& value: values) Value(value); }
 		template <class T, size_t N> void Value(T (&values)[N]) { for (auto& value: values) Value(value); }
 		template <class T, class U> void Value(std::pair<T, U>& value) { Value(value.first); Value(value.second); }
-		template <class T> void Value(std::vector<T>& values) {
+		template <class T, class Allocator> void Value(std::vector<T, Allocator>& values) {
 			size_t size = 0;
 			Value(size);
 			if (size > m_Text.size()) throw std::runtime_error("invalid runtime checkpoint count");
-			std::vector<T> candidate(size);
+			std::vector<T, Allocator> candidate(size, values.get_allocator());
 			for (auto& value: candidate) Value(value);
 			values = std::move(candidate);
 		}
-		void Value(std::vector<bool>& values) {
+		template <class Allocator> void Value(std::vector<bool, Allocator>& values) {
 			const size_t size = Count();
 			values.assign(size, false);
 			for (size_t index = 0; index < size; ++index) { bool value; Value(value); values[index] = value; }
 		}
-		template <class T> void Value(std::list<T>& values) { Sequence(values); }
-		template <class T> void Value(std::deque<T>& values) { Sequence(values); }
-		template <class T> void Value(std::set<T>& values) {
+		template <class T, class Allocator> void Value(std::list<T, Allocator>& values) { Sequence(values); }
+		template <class T, class Allocator> void Value(std::deque<T, Allocator>& values) { Sequence(values); }
+		template <class T, class Compare, class Allocator> void Value(std::set<T, Compare, Allocator>& values) {
 			const size_t size = Count();
 			for (size_t index = 0; index < size; ++index) { T value{}; Value(value); if (!values.insert(std::move(value)).second) throw std::runtime_error("duplicate runtime checkpoint set value"); }
 		}
-		template <class K, class V> void Value(std::map<K, V>& values) { Mapping(values); }
-		template <class K, class V> void Value(std::unordered_map<K, V>& values) { Mapping(values); }
+		template <class K, class V, class Compare, class Allocator> void Value(std::map<K, V, Compare, Allocator>& values) { Mapping(values); }
+		template <class K, class V, class Hash, class Equal, class Allocator> void Value(std::unordered_map<K, V, Hash, Equal, Allocator>& values) { Mapping(values); }
 		template <class T> requires requires(T& value) { value.LoadCheckpoint(std::string_view{}, false); }
 		void Value(T& value) {
 			std::string text;

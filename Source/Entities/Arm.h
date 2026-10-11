@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "Attachable.h"
 
 #include <queue>
@@ -276,7 +278,7 @@ namespace RTE {
 		Vector m_HandPrevPos; //!< The position of this Arm's hand in the previous update
 		Vector m_HandPos; //!< The current position of this Arm's hand in absolute Scene coordinates.
 
-		std::queue<HandTarget> m_HandTargets; // A queue of target positions this Arm's hand is reaching towards. If it's empty, the Arm isn't reaching towards anything.
+		CheckpointQueue<HandTarget> m_HandTargets; // A queue of target positions this Arm's hand is reaching towards. If it's empty, the Arm isn't reaching towards anything.
 		Timer m_HandMovementDelayTimer; //!< A Timer for making the hand wait at its current HandTarget.
 		bool m_HandHasReachedCurrentTarget; //!< A flag for whether or not the hand has reached its current target. The target is either the front of the HandTarget queue, or the appropriate target to move to if the queue is empty.
 		PersistedTimerAnchor m_PersistedHandMovementDelayTimerAnchor;

@@ -354,7 +354,7 @@ bool SLBackground::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		GUICheckpoint::LoadBitmap(mainBitmap, true); GUICheckpoint::LoadBitmap(backBitmap, true);
 		if (validateOnly) { reader.Finish(); return true; }
 		std::vector<std::shared_ptr<BITMAP>> owned;
-		std::vector<BITMAP*> bitmaps;
+		CheckpointVector<BITMAP*> bitmaps;
 		for (const auto& image: frames) {
 			owned.emplace_back(GUICheckpoint::LoadBitmap(image), destroy_bitmap);
 			if (!owned.back()) return false;

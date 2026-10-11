@@ -33,7 +33,7 @@ bool LimbPath::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		if (!Entity::LoadCheckpoint(identity, true)) return false;
 		archive.OnCommit([this, identity] { Entity::LoadCheckpoint(identity); });
 		archive(m_Start, m_StartSegCount, m_FootCollisionsDisabledSegment, m_SegProgress, m_TravelSpeed, m_SegmentEndedThreshold, m_BaseTravelSpeedMultiplier, m_CurrentTravelSpeedMultiplier, m_BaseScaleMultiplier, m_CurrentScaleMultiplier, m_PushForce, m_JointPos, m_JointVel, m_Rotation, m_RotationOffset, m_PositionOffset, m_TimeLeft, m_PathTimer, m_SegTimer, m_TotalLength, m_RegularLength, m_SegmentDone, m_Ended, m_HFlipped);
-		std::deque<Vector> segments;
+		CheckpointDeque<Vector> segments;
 		size_t currentSegment;
 		archive.Value(segments);
 		archive.Value(currentSegment);

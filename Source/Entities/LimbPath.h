@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the LimbPath class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -399,10 +401,10 @@ namespace RTE {
 		/// yields a starting position that is clear of terrain is found.
 		size_t m_StartSegCount;
 
-		std::deque<Vector> m_Segments; //!< Array containing the actual 'waypoints' or segments for the path.
+		CheckpointDeque<Vector> m_Segments; //!< Array containing the actual 'waypoints' or segments for the path.
 
 		/// The iterator to the segment of the path that the limb ended up on the end of.
-		std::deque<Vector>::iterator m_CurrentSegment;
+		CheckpointDeque<Vector>::iterator m_CurrentSegment;
 
 		/// Count of segments at the end of the segments list for which foot collisions should be disabled
 		/// for this limbpath, if it's for legs.

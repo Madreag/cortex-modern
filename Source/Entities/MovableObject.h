@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the MovableObject class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -204,7 +206,7 @@ namespace RTE {
 		bool HasAnyScripts() const { return !m_AllLoadedScripts.empty(); }
 
 		/// Gets every script loaded onto this MO, in load order.
-		const std::vector<std::string>& GetAllLoadedScripts() const { return m_AllLoadedScripts; }
+		const CheckpointVector<std::string>& GetAllLoadedScripts() const { return m_AllLoadedScripts; }
 
 		/// Checks if the script at the given path is one of the scripts on this MO.
 		/// @param scriptPath The path to the script to check.
@@ -1003,10 +1005,10 @@ namespace RTE {
 
 		/// Gets the pairs of impulse forces and their offsets that have to be applied.
 		/// @return A constant reference to the deque of impulses for this MovableObject.
-		const std::deque<std::pair<Vector, Vector>>& GetImpulses() { return m_ImpulseForces; }
+		const CheckpointDeque<std::pair<Vector, Vector>>& GetImpulses() { return m_ImpulseForces; }
 
 		/// The forces queued for the next travel, for snapshot forensics.
-		const std::deque<std::pair<Vector, Vector>>& GetForces() const { return m_Forces; }
+		const CheckpointDeque<std::pair<Vector, Vector>>& GetForces() const { return m_Forces; }
 
 		/// Returns the number of ImpulseForces vectors to apply.
 		/// @return Number of entries in ImpulseForces list.
@@ -1086,11 +1088,11 @@ namespace RTE {
 
 		/// Gets a const reference to this MOSRotating's map of string values.
 		/// @return A const reference to this MOSRotating's map of string values.
-		const std::unordered_map<std::string, std::string>& GetStringValueMap() const { return m_StringValueMap; }
+		const CheckpointUnorderedMap<std::string, std::string>& GetStringValueMap() const { return m_StringValueMap; }
 
 		/// Gets a const reference to this MOSRotating's map of number values.
 		/// @return A const reference to this MOSRotating's map of number values.
-		const std::unordered_map<std::string, double>& GetNumberValueMap() const { return m_NumberValueMap; }
+		const CheckpointUnorderedMap<std::string, double>& GetNumberValueMap() const { return m_NumberValueMap; }
 
 		/// Gets a custom value map's entries in key order, the order saved text names them in, so the text never follows the map's insertion history.
 		/// @param map The map to order.
@@ -1477,8 +1479,8 @@ namespace RTE {
 		// The forces acting on this MovableObject, the first vector being the force in
 		// In kg * m/s^2 (Newtons), and the second one being the offset the force is being
 		// applied from the m_Pos, IN METERS (not pixels!).
-		std::deque<std::pair<Vector, Vector>> m_Forces;
-		std::deque<std::pair<Vector, Vector>> m_ImpulseForces; // First in kg * m/s, second vector in meters.
+		CheckpointDeque<std::pair<Vector, Vector>> m_Forces;
+		CheckpointDeque<std::pair<Vector, Vector>> m_ImpulseForces; // First in kg * m/s, second vector in meters.
 		Timer m_AgeTimer;
 		Timer m_RestTimer;
 
@@ -1528,7 +1530,7 @@ namespace RTE {
 		// Whether or not this object has ever been added to MovableMan. Does not take into account the object being removed from MovableMan, though in practice it usually will, cause objects are usually only removed when they're deleted.
 		bool m_HasEverBeenAddedToMovableMan;
 		// A set of ID:s of MO:s that already have collided with this MO during this frame.
-		std::set<MOID> m_AlreadyHitBy;
+		CheckpointSet<MOID> m_AlreadyHitBy;
 		int m_VelOscillations; //!< A counter for oscillations in translational velocity, in order to detect settling.
 		// Mark to have the MovableMan copy this the terrain layers at the end
 		// of update.
@@ -1557,15 +1559,15 @@ namespace RTE {
 		long m_ScriptRegistrationSerial; //!< The place this object took in its Lua state's registration order.
 		int m_HookCallDepth; //!< How many hook loops of this object are running.
 		bool m_DeleteWhenHookReturns; //!< A script deleted this object from inside its own hook.
-		std::vector<std::string> m_AllLoadedScripts; //!< A vector of script for scripts applied to this object, in order of insertion.
-		std::unordered_map<std::string, bool> m_EnabledScripts; //!< A map of script paths to the enabled state of the given script.
+		CheckpointVector<std::string> m_AllLoadedScripts; //!< A vector of script for scripts applied to this object, in order of insertion.
+		CheckpointUnorderedMap<std::string, bool> m_EnabledScripts; //!< A map of script paths to the enabled state of the given script.
 		std::unordered_map<std::string, std::vector<LuaFunction>> m_FunctionsAndScripts; //!< A map of function names to vectors of Lua functions. Used to maintain script execution order and avoid extraneous Lua calls.
 
 		volatile bool m_RequestedSyncedUpdate; //!< For optimisation purposes, scripts explicitly request a synced update if they want one.
 
-		std::unordered_map<std::string, std::string> m_StringValueMap; //<! Map to store any generic strings available from script
-		std::unordered_map<std::string, double> m_NumberValueMap; //<! Map to store any generic numbers available from script
-		std::unordered_map<std::string, Entity*> m_ObjectValueMap; //<! Map to store any generic object pointers available from script
+		CheckpointUnorderedMap<std::string, std::string> m_StringValueMap; //<! Map to store any generic strings available from script
+		CheckpointUnorderedMap<std::string, double> m_NumberValueMap; //<! Map to store any generic numbers available from script
+		CheckpointUnorderedMap<std::string, Entity*> m_ObjectValueMap; //<! Map to store any generic object pointers available from script
 		// Local-AI value writes stay here until the settled observation commits.
 		struct ValueOverlayKey {
 			ValueMapKind map = ValueMapKind::Number;

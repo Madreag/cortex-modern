@@ -592,8 +592,8 @@ namespace {
 
 struct Atom::FrozenList {
 	struct Tail {
-		std::vector<MOID> ignored;
-		std::vector<std::pair<int, int>> previous, trail;
+		CheckpointVector<MOID> ignored;
+		CheckpointVector<std::pair<int, int>> previous, trail;
 		std::array<std::string, 3> materials;
 	};
 	struct Record { const Atom* address; size_t backup, tail; std::array<long, 5> links; };
@@ -646,7 +646,7 @@ struct Atom::FrozenList {
 	}
 };
 
-std::shared_ptr<const Atom::FrozenList> Atom::FreezeList(const std::vector<Atom*>& atoms, bool values) {
+std::shared_ptr<const Atom::FrozenList> Atom::FreezeList(std::span<Atom* const> atoms, bool values) {
 	auto list = std::make_shared<FrozenList>();
 	list->state = s_FreezeState.load(std::memory_order_acquire)->shared_from_this();
 	list->records.reserve(atoms.size());
@@ -759,7 +759,7 @@ CheckpointText Atom::CaptureFrozenList(const std::shared_ptr<const FrozenList>& 
 	}, list->Bytes());
 }
 
-bool Atom::CaptureFrozenProperties(Writer& writer, const std::vector<Atom*>& atoms) {
+bool Atom::CaptureFrozenProperties(Writer& writer, std::span<Atom* const> atoms) {
 	if (!CheckpointWriter::BatchEnabled() || !s_FreezeState.load(std::memory_order_acquire)) return false;
 	return CaptureFrozenListProperties(writer, FreezeList(atoms, false));
 }
@@ -809,7 +809,7 @@ void Atom::SaveFrozenAtoms(Writer& writer, const std::shared_ptr<const FrozenLis
 	}
 }
 
-CheckpointText Atom::CaptureCheckpointList(const std::vector<Atom*>& atoms) {
+CheckpointText Atom::CaptureCheckpointList(std::span<Atom* const> atoms) {
 	if (CheckpointWriter::BatchEnabled() && s_FreezeState.load(std::memory_order_acquire)) return CaptureFrozenList(FreezeList(atoms));
 	const auto types = [](const auto&... values) { return std::type_identity<std::tuple<std::remove_cvref_t<decltype(values)>...>>{}; };
 	using Types = decltype(VisitCheckpoint(types, std::declval<const Atom&>()));
@@ -976,7 +976,7 @@ std::string Atom::CheckpointListSelfTestMismatch() {
 		first->m_CheckpointLinkIDs = {0, 41, 0, 51, 61};
 		first->m_HasCheckpointMaterials = true;
 		first->m_CheckpointMaterialReferences = {std::string("named\0material", 14), "", "same"};
-		std::vector<MOID> ignored = {23};
+		CheckpointVector<MOID> ignored = {23};
 		first->m_IgnoreMOIDsByGroup = &ignored;
 		std::vector<Atom*> atoms = {first.get(), second.get(), first.get()};
 		const auto ordinary = [](const std::vector<Atom*>& values) {
@@ -1274,7 +1274,7 @@ void Atom::DrawTrail(BITMAP* targetBitmap, const Vector& targetPos) const {
 	// Might be better to have one list for the trailpoints and keep track of the divide between last and current, but this is simpler
 	// TODO, improve this so that we don't suddenly have the trail dissapear when the atom despawns, we need to continue rendering this for one extra sim update
 	int endPoint = m_LastTrailPoints.size() + (m_TrailPoints.size() * g_TimerMan.GetSimUpdateProportion());
-	std::vector<std::pair<int, int>> allTrailPoints = m_LastTrailPoints;
+	std::vector<std::pair<int, int>> allTrailPoints(m_LastTrailPoints.begin(), m_LastTrailPoints.end());
 	allTrailPoints.insert(allTrailPoints.end(), m_TrailPoints.begin(), m_TrailPoints.end());
 	for (int i = endPoint - std::min(length, static_cast<int>(endPoint)); i < endPoint; ++i) {
 		Vector trailPointPos = Vector(allTrailPoints[i].first, allTrailPoints[i].second) - targetPos;

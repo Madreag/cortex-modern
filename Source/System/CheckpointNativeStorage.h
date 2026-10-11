@@ -23,6 +23,15 @@ namespace RTE {
 		private:
 			bool m_Previous;
 		};
+		class CaptureScope {
+		public:
+			explicit CaptureScope(bool enabled = true);
+			~CaptureScope();
+			CaptureScope(const CaptureScope&) = delete;
+			CaptureScope& operator=(const CaptureScope&) = delete;
+		private:
+			bool m_Previous;
+		};
 		static bool Enabled();
 		static void* Allocate(size_t bytes, size_t alignment);
 		static bool Deallocate(void* address) noexcept;

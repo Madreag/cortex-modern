@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "Attachable.h"
 
 namespace RTE {
@@ -59,7 +61,7 @@ namespace RTE {
 
 		/// Gets the vector of mounted HeldDevices for this Turret.
 		/// @return The vector of mounted HeldDevices for this Turret.
-		const std::vector<HeldDevice*>& GetMountedDevices() const { return m_MountedDevices; }
+		const CheckpointVector<HeldDevice*>& GetMountedDevices() const { return m_MountedDevices; }
 
 		/// Adds a HeldDevice to be mounted on this Turret. Ownership IS transferred!
 		/// Will not remove any other HeldDevices mounted on this Turret.
@@ -97,7 +99,7 @@ namespace RTE {
 
 	private:
 		// TODO I think things would be cleaner if this (and all hardcoded attachable pointers) used weak_ptrs. It would solve some weird ownership stuff, particularly with this. However, for that to be possible, m_Attachables has to be shared_ptrs though.
-		std::vector<HeldDevice*> m_MountedDevices; //!< Vector of pointers to the mounted HeldDevices of this Turret, if any. Owned here.
+		CheckpointVector<HeldDevice*> m_MountedDevices; //!< Vector of pointers to the mounted HeldDevices of this Turret, if any. Owned here.
 		float m_MountedDeviceRotationOffset; //!< The relative offset angle (in radians) of the mounted HeldDevice from this Turret's rotation.
 
 		/// Removes the HeldDevice from this turret's vector of mounted devices if it's in there. This releases the unique_ptr for it, leaving the caller to take care of it.

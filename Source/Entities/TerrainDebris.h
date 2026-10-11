@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "Entity.h"
 #include "Material.h"
 
@@ -68,7 +70,7 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 
 		ContentFile m_DebrisFile; //!< ContentFile containing the path to the debris sprites.
-		std::vector<BITMAP*> m_Bitmaps; //!< All the different bitmaps of this debris. Not owned.
+		CheckpointVector<BITMAP*> m_Bitmaps; //!< All the different bitmaps of this debris. Not owned.
 		int m_BitmapCount; //!< How many individual pieces this debris has.
 
 		Material m_Material; //!< The Material of the debris.

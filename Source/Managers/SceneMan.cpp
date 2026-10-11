@@ -3020,7 +3020,7 @@ void SceneMan::Draw(BITMAP* targetBitmap, BITMAP* targetGUIBitmap, const Vector&
 			static bool s_drawNoGravBoxes = false;
 			if (s_drawNoGravBoxes) {
 				if (Scene::Area* noGravArea = m_pCurrentScene->GetArea("NoGravityArea")) {
-					const std::vector<Box*>& boxList = noGravArea->GetBoxes();
+					const auto& boxList = noGravArea->GetBoxes();
 					g_FrameMan.SetTransTableFromPreset(TransparencyPreset::MoreTrans);
 					drawing_mode(DRAW_MODE_TRANS, 0, 0, 0);
 

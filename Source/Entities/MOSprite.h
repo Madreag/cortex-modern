@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the MOSprite class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -393,7 +395,7 @@ namespace RTE {
 		float m_PrevAngVel; // Previous frame's angular velocity.
 		ContentFile m_SpriteFile;
 		// Vector of pointers to BITMAPs representing the multiple frames of this sprite.
-		std::vector<BITMAP*> m_aSprite;
+		CheckpointVector<BITMAP*> m_aSprite;
 		std::vector<std::shared_ptr<BITMAP>> m_SpriteBitmapOwners;
 		ContentFile m_IconFile; //!< The file containing the GUI icon.
 		BITMAP* m_GraphicalIcon; //!< The GUI representation of this MOSprite as a BITMAP.

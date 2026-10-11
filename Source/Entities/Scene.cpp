@@ -219,7 +219,7 @@ bool Scene::LoadRuntimeCheckpoint(std::string_view text, bool validateOnly, bool
 			m_IsMetagameInternal, m_IsSavedGameInternal);
 		std::map<std::string, std::string> assemblyNames;
 		reader.Value(assemblyNames);
-		std::map<std::string, const BunkerAssembly*> assemblies;
+		CheckpointMap<std::string, const BunkerAssembly*> assemblies;
 		for (const auto& [name, preset]: assemblyNames) {
 			const auto* assembly = preset.empty() ? nullptr : dynamic_cast<const BunkerAssembly*>(g_PresetMan.GetEntityPreset("BunkerAssembly", preset));
 			if (!preset.empty() && !assembly) return false;
@@ -346,7 +346,7 @@ Scene::Scene(const Scene& source, CheckpointNativeSnapshot& snapshot) :
 		CheckpointCloneCost cost("scene path finders");
 		for (size_t index = 0; index < m_FrozenPathFinders.size(); ++index) m_FrozenPathFinders[index] = source.m_pPathFinders[index] ? source.m_pPathFinders[index]->FreezeCheckpoint() : CheckpointText(std::string());
 	}
-	if (&source == g_SceneMan.GetScene()) { std::list<SceneObject*> roots; g_MovableMan.GetAllActors(false, roots); g_MovableMan.GetAllItems(false, roots); g_MovableMan.GetAllParticles(false, roots); m_FrozenSaveRoots = snapshot.Freeze(roots, &m_FrozenSaveRoots); }
+	if (&source == g_SceneMan.GetScene()) { CheckpointList<SceneObject*> roots; g_MovableMan.GetAllActors(false, roots); g_MovableMan.GetAllItems(false, roots); g_MovableMan.GetAllParticles(false, roots); m_FrozenSaveRoots = snapshot.Freeze(roots, &m_FrozenSaveRoots); }
 }
 
 Entity* Scene::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
@@ -1512,7 +1512,7 @@ int Scene::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("TotalInvestment", m_TotalInvestment);
 	writer.NewPropertyWithValue("Terrain", m_pTerrain);
 
-	std::list<SceneObject*> liveObjects;
+	CheckpointList<SceneObject*> liveObjects;
 	if (writer.IsSavedScene(this)) {
 		if (IsFrozenCheckpointNative()) liveObjects = m_FrozenSaveRoots;
 		else {
@@ -1773,7 +1773,7 @@ int64_t Scene::LastObjectCaptureUs() {
 	return s_LastObjectCaptureUs;
 }
 
-std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, const std::list<SceneObject*>& objects, const std::function<bool(const SceneObject*)>& placeable, bool saveFullData) {
+std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, const CheckpointList<SceneObject*>& objects, const std::function<bool(const SceneObject*)>& placeable, bool saveFullData) {
 	const auto started = std::chrono::steady_clock::now();
 	static const bool cpuRequested = [] { const char* value = std::getenv("CCCP_CHECKPOINT_NATIVE_CPU"); return value && std::string_view(value) == "1"; }();
 	const bool cpuTrace = (CaptureTrace::Active() || cpuRequested) && CheckpointWriter::BatchEnabled();
@@ -2175,7 +2175,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("DeepCheck", mosRotatingToSave->GetDeepCheck());
 			writer.NewPropertyWithValue("SpecialBehaviour_ForceDeepCheck", mosRotatingToSave->GetForceDeepCheck());
 
-			const std::list<Attachable*>& attachablesToSave = mosRotatingToSave->GetAttachableList();
+			const auto& attachablesToSave = mosRotatingToSave->GetAttachableList();
 
 			// If this MOSRotating has any Attachables, we have to add a special behaviour property that'll delete them all so they can be re-read. This will allow us to handle Attachables with our limited serialization.
 			// Alternatively, if the MOSRotating has no Attachables but its preset does, we need to set the flag, because that means this is missing Attachables, and we don't want to magically regenerate them when a game is loaded.

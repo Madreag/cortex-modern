@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the ACRocket class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -205,9 +207,9 @@ namespace RTE {
 		AEmitter* m_pULThruster;
 		// Current landing gear action state.
 		unsigned int m_GearState;
-		std::vector<long long> m_PersistedRFootResidue; //!< Saved per-atom travel residue, applied on snapshot adopt.
-		std::vector<long long> m_PersistedLFootResidue;
-		std::vector<std::string> m_PersistedLimbPathStates; //!< Saved gear-path traversal state, applied on snapshot adopt.
+		CheckpointVector<long long> m_PersistedRFootResidue; //!< Saved per-atom travel residue, applied on snapshot adopt.
+		CheckpointVector<long long> m_PersistedLFootResidue;
+		CheckpointVector<std::string> m_PersistedLimbPathStates; //!< Saved gear-path traversal state, applied on snapshot adopt.
 		std::string m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
 		std::string m_PersistedLimbGroupInertia; //!< Saved limb-group inertia pairs, applied on snapshot adopt.
 		// Limb paths for different movement states.

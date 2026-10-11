@@ -1249,14 +1249,14 @@ void SceneEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 	}
 	clear_to_color(m_DrawBitmap.get(), 0);
 	// The get a std::list of the currently edited set of placed objects in the Scene
-	const std::list<SceneObject*>* pSceneObjectList = 0;
+	const CheckpointList<SceneObject*>* pSceneObjectList = 0;
 	if (m_FeatureSet == ONLOADEDIT)
 		pSceneObjectList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::PLACEONLOAD);
 	else if (m_FeatureSet == BLUEPRINTEDIT) {
 		pSceneObjectList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::BLUEPRINT);
 		// Draw the 'original' set of placed scene objects as solid before the blueprints
-		const std::list<SceneObject*>* pOriginalsList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::PLACEONLOAD);
-		for (std::list<SceneObject*>::const_iterator itr = pOriginalsList->begin(); itr != pOriginalsList->end(); ++itr) {
+		const CheckpointList<SceneObject*>* pOriginalsList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::PLACEONLOAD);
+		for (CheckpointList<SceneObject*>::const_iterator itr = pOriginalsList->begin(); itr != pOriginalsList->end(); ++itr) {
 			(*itr)->Draw(m_DrawBitmap.get(), targetPos);
 			// Draw basic HUD if an actor
 			Actor* pActor = dynamic_cast<Actor*>(*itr);
@@ -1266,8 +1266,8 @@ void SceneEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 	} else if (m_FeatureSet == AIPLANEDIT) {
 		pSceneObjectList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::AIPLAN);
 		// Draw the 'original' set of placed scene objects as solid before the planned base
-		const std::list<SceneObject*>* pOriginalsList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::PLACEONLOAD);
-		for (std::list<SceneObject*>::const_iterator itr = pOriginalsList->begin(); itr != pOriginalsList->end(); ++itr) {
+		const CheckpointList<SceneObject*>* pOriginalsList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::PLACEONLOAD);
+		for (CheckpointList<SceneObject*>::const_iterator itr = pOriginalsList->begin(); itr != pOriginalsList->end(); ++itr) {
 			(*itr)->Draw(m_DrawBitmap.get(), targetPos);
 			// Draw basic HUD if an actor
 			Actor* pActor = dynamic_cast<Actor*>(*itr);
@@ -1282,7 +1282,7 @@ void SceneEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 		int i = 0;
 		Actor* pActor = 0;
 		//        HeldDevice *pDevice = 0;
-		for (std::list<SceneObject*>::const_iterator itr = pSceneObjectList->begin(); itr != pSceneObjectList->end(); ++itr, ++i) {
+		for (CheckpointList<SceneObject*>::const_iterator itr = pSceneObjectList->begin(); itr != pSceneObjectList->end(); ++itr, ++i) {
 			// Draw the currently held object into the order of the std::list if it is to be placed inside
 			if (m_pCurrentObject && m_DrawCurrentObject && i == m_ObjectListOrder) {
 				g_FrameMan.SetTransTableFromPreset(m_BlinkTimer.AlternateReal(333) || m_EditorGUIMode == PLACINGOBJECT ? TransparencyPreset::LessTrans : TransparencyPreset::HalfTrans);

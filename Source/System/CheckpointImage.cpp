@@ -975,7 +975,8 @@ end
 		} owner;
 		owner.SetMass(2.0F);
 		AtomGroup* group = owner.GetAtomGroup();
-		group->SetAtomList({new Atom(Vector(3.0F, 4.0F), g_SceneMan.GetMaterialFromID(g_MaterialAir), &owner)});
+		const std::array initialAtoms{new Atom(Vector(3.0F, 4.0F), g_SceneMan.GetMaterialFromID(g_MaterialAir), &owner)};
+		group->SetAtomList(initialAtoms);
 		CheckpointCache cache;
 		const auto capture = [&owner](CheckpointCache* cache) {
 			CheckpointWriter::CacheScope scope(cache);

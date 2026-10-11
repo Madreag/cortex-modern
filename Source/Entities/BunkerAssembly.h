@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the BunkerAssembly class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -82,7 +84,7 @@ namespace RTE {
 
 		/// Gets the list of SceneObject:s which are placed in this assembly on loading.
 		/// @return The list of of placed objects. Ownership is NOT transferred!
-		const std::list<SceneObject*>* GetPlacedObjects() const { return &m_PlacedObjects; }
+		const CheckpointList<SceneObject*>* GetPlacedObjects() const { return &m_PlacedObjects; }
 
 		/// Adds placed object to the internallist of placed objects for this assembly,
 		/// applies it's image to presentation bitmap and sets assembly price accordingly.
@@ -118,7 +120,7 @@ namespace RTE {
 		// Member variables
 		static Entity::ClassInfo m_sClass;
 		// SceneObject:s to be placed in the scene, OWNED HERE
-		std::list<SceneObject*> m_PlacedObjects;
+		CheckpointList<SceneObject*> m_PlacedObjects;
 		// Parent bunker assembly scheme
 		std::string m_ParentAssemblyScheme;
 		// Group proveded by parent scheme to which this assembly was added

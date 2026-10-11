@@ -484,7 +484,8 @@ BITMAP* ContentFile::GetAsBitmap(int conversionMode, bool storeBitmap, const std
 	return returnBitmap;
 }
 
-void ContentFile::GetAsAnimation(std::vector<BITMAP*>& vectorToFill, int frameCount, int conversionMode) {
+template<class Allocator>
+void ContentFile::GetAsAnimation(std::vector<BITMAP*, Allocator>& vectorToFill, int frameCount, int conversionMode) {
 	if (m_DataPath.empty() || frameCount < 1) {
 		return;
 	}
@@ -511,6 +512,9 @@ void ContentFile::GetAsAnimation(std::vector<BITMAP*>& vectorToFill, int frameCo
 		}
 	}
 }
+template void ContentFile::GetAsAnimation(std::vector<BITMAP*>&, int, int);
+template void ContentFile::GetAsAnimation(CheckpointVector<BITMAP*>&, int, int);
+
 SDL_Palette* ContentFile::DefaultPaletteToSDL(bool preMask) {
 	SDL_Palette* palette = SDL_CreatePalette(256);
 	std::array<SDL_Color, 256> paletteColor;

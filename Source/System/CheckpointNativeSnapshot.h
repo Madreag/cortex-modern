@@ -150,17 +150,19 @@ namespace RTE {
 		CheckpointNativeSnapshot& operator=(const CheckpointNativeSnapshot&) = delete;
 		class BoundaryScope {
 		public:
-			explicit BoundaryScope(std::shared_ptr<CheckpointNativeSnapshot> snapshot) : m_Previous(std::move(s_Boundary)) { s_Boundary = std::move(snapshot); }
+			explicit BoundaryScope(std::shared_ptr<CheckpointNativeSnapshot> snapshot) : m_Allocation(snapshot != nullptr), m_Previous(std::move(s_Boundary)) { s_Boundary = std::move(snapshot); }
 			~BoundaryScope() { s_Boundary = std::move(m_Previous); }
 		private:
+			CheckpointNativeStorage::CaptureScope m_Allocation;
 			std::shared_ptr<CheckpointNativeSnapshot> m_Previous;
 		};
 		static const std::shared_ptr<CheckpointNativeSnapshot>& Boundary() { return s_Boundary; }
 		class ReadScope {
 		public:
-			explicit ReadScope(const CheckpointNativeSnapshot* snapshot) : m_Previous(s_Current), m_Clock(snapshot ? &snapshot->m_Clock : nullptr) { if (snapshot) { snapshot->MaterializeMetadata(); s_Current = snapshot; } }
+			explicit ReadScope(const CheckpointNativeSnapshot* snapshot) : m_Allocation(snapshot != nullptr), m_Previous(s_Current), m_Clock(snapshot ? &snapshot->m_Clock : nullptr) { if (snapshot) { snapshot->MaterializeMetadata(); s_Current = snapshot; } }
 			~ReadScope() { s_Current = m_Previous; }
 		private:
+			CheckpointNativeStorage::CaptureScope m_Allocation;
 			const CheckpointNativeSnapshot* m_Previous;
 			CheckpointFrozenClock::Scope m_Clock;
 		};
@@ -209,6 +211,7 @@ namespace RTE {
 		}
 		template<class T> T* ValueObject(const T* source) {
 			if (!source) return nullptr;
+			CheckpointNativeStorage::CaptureScope allocation;
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 			void* memory = AllocateFrozen(sizeof(T), alignof(T));
 			// Snapshot storage is cheap to abandon, so a value is claimed without looking for it first.
@@ -277,6 +280,7 @@ namespace RTE {
 		}
 
 		template<class T> Entity* Make(const T& source) {
+			CheckpointNativeStorage::CaptureScope allocation;
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 			const ptrdiff_t offset = reinterpret_cast<const char*>(static_cast<const Entity*>(&source)) - reinterpret_cast<const char*>(&source);
 			Entity** slot = nullptr;
@@ -346,6 +350,7 @@ namespace RTE {
 		template<class T> void BindValue(const T& source, T* target) { m_Values.InsertOrAssign(&source, target); }
 		template<class T> T* CopyValue(const T* source) {
 			if (!source) return nullptr;
+			CheckpointNativeStorage::CaptureScope allocation;
 			if (const auto known = m_Values.Find(source)) return static_cast<T*>(*known);
 			auto& owner = AddValueOwner([](void* value) noexcept { delete static_cast<T*>(value); });
 			auto value = std::make_unique<T>(Freeze(*source));
@@ -666,7 +671,7 @@ namespace RTE {
 		CheckpointSharedMap<const Entity*, std::shared_ptr<PresetReference>> m_PresetScripts;
 		struct Metadata {
 			std::string name, copied, description, reader;
-			std::unordered_set<std::string> groups;
+			CheckpointUnorderedSet<std::string> groups;
 		};
 		struct MetadataShard { std::mutex mutex; std::unordered_multimap<size_t, std::unique_ptr<Metadata>> values; };
 		std::array<MetadataShard, 16> m_Metadata;

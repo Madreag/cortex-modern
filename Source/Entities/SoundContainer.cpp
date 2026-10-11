@@ -851,7 +851,7 @@ bool SoundContainer::QueuePendingSelectSounds(std::vector<uint16_t> soundSetPath
 
 static bool FindSoundSetPathIn(const SoundSet& parent, const SoundSet& target, std::vector<uint16_t>& path) {
 	if (&parent == &target) return true;
-	const std::vector<SoundSet*>& subSoundSets = const_cast<SoundSet&>(parent).GetSubSoundSets();
+	const auto& subSoundSets = const_cast<SoundSet&>(parent).GetSubSoundSets();
 	for (size_t index = 0; index < subSoundSets.size(); ++index) {
 		path.push_back(static_cast<uint16_t>(index));
 		if (FindSoundSetPathIn(*subSoundSets[index], target, path)) return true;

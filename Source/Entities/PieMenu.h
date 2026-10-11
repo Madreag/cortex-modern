@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "PieQuadrant.h"
 #include "Controller.h"
 #include "Matrix.h"
@@ -235,7 +237,7 @@ namespace RTE {
 
 		/// Gets a const reference to the vector containing pointers to all the PieSlices in this PieMenu.
 		/// @return A const reference to the vector containing pointers to all the PieSlices in this PieMenu.
-		const std::vector<PieSlice*>& GetPieSlices() const { return m_CurrentPieSlices; }
+		const CheckpointVector<PieSlice*>& GetPieSlices() const { return m_CurrentPieSlices; }
 
 		/// Packs the enabled state, mode, timers, cursor and slice pointers (by slice index) as one save line, the active sub-menu nested.
 		std::string PackInteractionState() const;
@@ -398,7 +400,7 @@ namespace RTE {
 		const PieSlice* m_HoveredPieSlice; //!< The PieSlice currently being hovered over.
 		const PieSlice* m_ActivatedPieSlice; //!< The currently activated PieSlice, if there is one, or 0 if there's not.
 		const PieSlice* m_AlreadyActivatedPieSlice; //!< The PieSlice that was most recently activated by pressing primary. Used to avoid duplicate activation when disabling.
-		std::vector<PieSlice*> m_CurrentPieSlices; //!< All the PieSlices in this PieMenu in INI order. Not owned here, just pointing to the ones above.
+		CheckpointVector<PieSlice*> m_CurrentPieSlices; //!< All the PieSlices in this PieMenu in INI order. Not owned here, just pointing to the ones above.
 
 		PieMenu* m_ActiveSubPieMenu; //!< The currently active sub-PieMenu, if any.
 

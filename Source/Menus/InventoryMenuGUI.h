@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "Timer.h"
+#include "CheckpointNativeContainers.h"
 #include "Vector.h"
 
 #include "GUI.h"
@@ -323,15 +324,15 @@ namespace RTE {
 
 		/// Handles hiding and showing the scrollbar, and calculating everything related to it in Full MenuMode.
 		/// @param inventory A pointer to the inventory this InventoryMenuGUI is displaying.
-		void UpdateFullModeScrollbar(const std::deque<MovableObject*>* inventory);
+		void UpdateFullModeScrollbar(const CheckpointDeque<MovableObject*>* inventory);
 
 		/// Handles content and enabled status for inventory item buttons in Full MenuMode. Does not deal with button input.
 		/// @param inventory A pointer to the inventory this InventoryMenuGUI is displaying.
-		void UpdateFullModeInventoryItemButtons(const std::deque<MovableObject*>* inventory);
+		void UpdateFullModeInventoryItemButtons(const CheckpointDeque<MovableObject*>* inventory);
 
 		/// Handles everything for displaying information text in Full MenuMode.
 		/// @param inventory A pointer to the inventory this InventoryMenuGUI is displaying.
-		void UpdateFullModeInformationText(const std::deque<MovableObject*>* inventory);
+		void UpdateFullModeInformationText(const CheckpointDeque<MovableObject*>* inventory);
 
 		/// Handles updating icons and widths to support higlighting, for non-item buttons in Full MenuMode.
 		void UpdateFullModeNonItemButtonIconsAndHighlightWidths();

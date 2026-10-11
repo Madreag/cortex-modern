@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the ACraft class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -23,7 +25,7 @@ namespace RTE {
 
 		/// Public member variable, method and friend function declarations
 	public:
-		const std::deque<MovableObject*>& GetCollectedInventory() const { return m_CollectedInventory; }
+		const CheckpointDeque<MovableObject*>& GetCollectedInventory() const { return m_CollectedInventory; }
 		MovableObject* FindPartByUniqueID(long uid) override;
 		void DestroyScriptState() override;
 		SerializableOverrideMethods;
@@ -419,11 +421,11 @@ namespace RTE {
 		SoundContainer* m_HatchOpenSound;
 		// Sound for closing the hatch
 		SoundContainer* m_HatchCloseSound;
-		std::deque<MovableObject*> m_CollectedInventory; //!< A separate inventory to temporarily store newly collected items, so that they don't get immediately ejected from the main inventory while the hatch is still open.
+		CheckpointDeque<MovableObject*> m_CollectedInventory; //!< A separate inventory to temporarily store newly collected items, so that they don't get immediately ejected from the main inventory while the hatch is still open.
 		// All the possible exits for when ejecting stuff out of this.
-		std::list<Exit> m_Exits;
+		CheckpointList<Exit> m_Exits;
 		// Last used exit so we can alternate/cycle
-		std::list<Exit>::iterator m_CurrentExit;
+		CheckpointList<Exit>::iterator m_CurrentExit;
 		int m_PersistedCurrentExit = -1;
 		// The delay between each exiting passenger Actor
 		long m_ExitInterval;

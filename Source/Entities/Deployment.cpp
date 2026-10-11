@@ -269,7 +269,8 @@ SceneObject* Deployment::CreateDeployedObject(int player, float& costTally) {
 	return pReturnObject;
 }
 
-bool Deployment::DeploymentBlocked(int player, const std::list<SceneObject*>& existingObjects) {
+template<class Allocator>
+bool Deployment::DeploymentBlocked(int player, const std::list<SceneObject*, Allocator>& existingObjects) {
 	bool blocked = false;
 
 	// Take metaplayer tech modifiers into account when calculating costs of this Deployment spawn
@@ -312,13 +313,13 @@ bool Deployment::DeploymentBlocked(int player, const std::list<SceneObject*>& ex
 	Loadout* pLoadout = dynamic_cast<Loadout*>(g_PresetMan.GetEntityPreset("Loadout", m_LoadoutName, nativeModule)->Clone());
 	if (pLoadout) {
 		// Now go through the Loadout list of items and tally the cost of all devices that would go into inventory of the first Actor found in the list
-		const std::list<const SceneObject*>* pMOList = pLoadout->GetCargoList();
+		const CheckpointList<const SceneObject*>* pMOList = pLoadout->GetCargoList();
 		if (pMOList && !pMOList->empty()) {
 			// Go through the list of things ordered, and give any actors all the items that is present after them,
 			// until the next actor. Also, the first actor gets all stuff in the list above him.
 			const MovableObject* pInventoryObject = 0;
 			const Actor* pActor = 0;
-			for (std::list<const SceneObject*>::const_iterator itr = pMOList->begin(); itr != pMOList->end(); ++itr) {
+			for (CheckpointList<const SceneObject*>::const_iterator itr = pMOList->begin(); itr != pMOList->end(); ++itr) {
 				// Save pointer of the preset in the list
 				pInventoryObject = dynamic_cast<const MovableObject*>(*itr);
 				// See if it's actually a passenger, as opposed to a regular item
@@ -342,7 +343,7 @@ bool Deployment::DeploymentBlocked(int player, const std::list<SceneObject*>& ex
 			// If there's no Actor in this Deployment's Loadout at all, then we should just count the first Item or device in the Loadout
 			if (!pSpawnObject) {
 				// Find the first non-actor
-				for (std::list<const SceneObject*>::const_iterator itr = pMOList->begin(); itr != pMOList->end(); ++itr) {
+				for (CheckpointList<const SceneObject*>::const_iterator itr = pMOList->begin(); itr != pMOList->end(); ++itr) {
 					// If not an Actor, then we should count it and then stop
 					if (!dynamic_cast<const Actor*>(*itr)) {
 						pSpawnObject = *itr;
@@ -386,14 +387,14 @@ float Deployment::GetTotalValue(int nativeModule, float foreignMult, float nativ
 	Loadout* pLoadout = dynamic_cast<Loadout*>(g_PresetMan.GetEntityPreset("Loadout", m_LoadoutName, nativeModule)->Clone());
 	if (pLoadout) {
 		// Now go through the Loadout list of items and tally the cost ofall devices that would go into inventory of the first Actor found in the list
-		const std::list<const SceneObject*>* pMOList = pLoadout->GetCargoList();
+		const CheckpointList<const SceneObject*>* pMOList = pLoadout->GetCargoList();
 		if (pMOList && !pMOList->empty()) {
 			// Go through the list of things ordered, and give any actors all the items that is present after them,
 			// until the next actor. Also, the first actor gets all stuff in the list above him.
 			const MovableObject* pInventoryObject = 0;
 			const Actor* pActor = 0;
 			std::list<const MovableObject*> cargoItems;
-			for (std::list<const SceneObject*>::const_iterator itr = pMOList->begin(); itr != pMOList->end(); ++itr) {
+			for (CheckpointList<const SceneObject*>::const_iterator itr = pMOList->begin(); itr != pMOList->end(); ++itr) {
 				// Save pointer of the preset in the list
 				pInventoryObject = dynamic_cast<const MovableObject*>(*itr);
 				// See if it's actually a passenger, as opposed to a regular item
@@ -450,7 +451,7 @@ float Deployment::GetTotalValue(int nativeModule, float foreignMult, float nativ
 			if (!pFirstActor) {
 				// Start over the count; we might have only had items/devices in the Loadout list, but no Actors yet
 				totalValue = 0;
-				for (std::list<const SceneObject*>::const_iterator itr = pMOList->begin(); itr != pMOList->end(); ++itr) {
+				for (CheckpointList<const SceneObject*>::const_iterator itr = pMOList->begin(); itr != pMOList->end(); ++itr) {
 					// If not an Actor, then we should count it and then stop
 					if (!dynamic_cast<const Actor*>(*itr)) {
 						// Add to the total cost tally
@@ -645,3 +646,7 @@ void Deployment::Draw(BITMAP* pTargetBitmap, const Vector& targetPos, DrawMode m
 		}
 	}
 }
+
+template bool Deployment::DeploymentBlocked(int, const std::list<SceneObject*>&);
+
+template bool Deployment::DeploymentBlocked(int, const CheckpointList<SceneObject*>&);

@@ -111,7 +111,7 @@ std::string Icon::SaveCheckpoint() const {
 	writer(static_cast<const Entity&>(*this), m_BitmapFile, m_FrameCount);
 	std::vector<BITMAP*> images;
 	std::unordered_map<BITMAP*, size_t> indices;
-	const auto references = [&](const std::vector<BITMAP*>& bitmaps) {
+	const auto references = [&](const auto& bitmaps) {
 		std::vector<size_t> result;
 		for (BITMAP* bitmap: bitmaps) {
 			if (!bitmap) { result.push_back(0); continue; }
@@ -147,7 +147,7 @@ bool Icon::LoadCheckpoint(std::string_view text, bool validateOnly) {
 std::string Icon::SaveCheckpointSet(std::span<const Icon> icons) {
 	std::vector<CheckpointText> values, images;
 	std::unordered_map<BITMAP*, size_t> indices;
-	const auto references = [&](const std::vector<BITMAP*>& bitmaps) {
+	const auto references = [&](const auto& bitmaps) {
 		std::vector<size_t> result;
 		for (BITMAP* bitmap: bitmaps) {
 			if (!bitmap) { result.push_back(0); continue; }
@@ -217,7 +217,7 @@ std::function<void()> Icon::PrepareCheckpointSet(std::string_view text, std::spa
 		if (!icon->Entity::LoadCheckpoint(state.entity) || !icon->m_BitmapFile.LoadCheckpoint(state.file, false, false)) throw std::runtime_error("could not prepare icon metadata");
 		icon->m_FrameCount = state.frameCount;
 		std::vector<bool> retained(pool.images.size(), false);
-		const auto resolve = [&](const std::vector<size_t>& references, std::vector<BITMAP*>& bitmaps) {
+		const auto resolve = [&](const std::vector<size_t>& references, auto& bitmaps) {
 			bitmaps.reserve(references.size());
 			for (size_t index: references) {
 				bitmaps.push_back(index ? pool.images[index - 1].get() : nullptr);

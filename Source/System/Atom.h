@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "Matrix.h"
 #include <array>
 #include <atomic>
@@ -71,7 +73,7 @@ namespace RTE {
 
 	public:
 		struct FrozenList;
-		static std::shared_ptr<const FrozenList> FreezeList(const std::vector<Atom*>& atoms, bool values = true);
+		static std::shared_ptr<const FrozenList> FreezeList(std::span<Atom* const> atoms, bool values = true);
 		static CheckpointText CaptureFrozenList(const std::shared_ptr<const FrozenList>& list);
 		static bool CaptureFrozenListProperties(Writer& writer, const std::shared_ptr<const FrozenList>& list);
 		/// The per-atom values an AtomGroup reports, read from frozen atom pages.
@@ -83,7 +85,7 @@ namespace RTE {
 		SerializableOverrideMethods;
 		std::string SaveCheckpoint() const;
 		/// Owns atom fields before the saver thread formats the existing list.
-		static CheckpointText CaptureCheckpointList(const std::vector<Atom*>& atoms);
+		static CheckpointText CaptureCheckpointList(std::span<Atom* const> atoms);
 		/// Keeps restored multiplayer atoms in pages that can outlive the live capture.
 		class AllocationScope {
 		public:
@@ -107,7 +109,7 @@ namespace RTE {
 			std::shared_ptr<FreezeState> m_State;
 			FreezeState* m_Previous = nullptr;
 		};
-		static bool CaptureFrozenProperties(Writer& writer, const std::vector<Atom*>& atoms);
+		static bool CaptureFrozenProperties(Writer& writer, std::span<Atom* const> atoms);
 		static std::string CheckpointListSelfTestMismatch();
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		void ResolveCheckpointLinks();
@@ -302,7 +304,7 @@ namespace RTE {
 
 		/// AtomGroup may set this shared list of ignored MOIDs to avoid setting and removing ignored MOIDs for every atom one by one. The list is maintained only by AtomGroup, Atom never owns it.
 		/// @param ignoreMOIDsByGroup New MOIDs list to ignore.
-		void SetIgnoreMOIDsByGroup(std::vector<MOID> const* ignoreMOIDsByGroup) { if (m_IgnoreMOIDsByGroup != ignoreMOIDsByGroup) TouchCheckpoint(); m_IgnoreMOIDsByGroup = ignoreMOIDsByGroup; };
+		void SetIgnoreMOIDsByGroup(CheckpointVector<MOID> const* ignoreMOIDsByGroup) { if (m_IgnoreMOIDsByGroup != ignoreMOIDsByGroup) TouchCheckpoint(); m_IgnoreMOIDsByGroup = ignoreMOIDsByGroup; };
 
 		/// Clear the list of MOIDs that this Atom is set to ignore collisions with during its next travel sequence.
 		/// This should be done each frame so that fresh MOIDs can be re-added. (MOIDs are only valid during a frame).
@@ -475,11 +477,11 @@ namespace RTE {
 		/// Counts a construction and keeps its stack when it is a sampled one.
 		static void NoteConstruction();
 		MOID m_IgnoreMOID; //!< Special ignored MOID.
-		std::vector<MOID> m_IgnoreMOIDs; //!< ignore hits with MOs of these IDs.
-		std::vector<MOID> const* m_IgnoreMOIDsByGroup; //!< Also ignore hits with MOs of these IDs. This one may be set externally by atom group.
+		CheckpointVector<MOID> m_IgnoreMOIDs; //!< ignore hits with MOs of these IDs.
+		CheckpointVector<MOID> const* m_IgnoreMOIDsByGroup; //!< Also ignore hits with MOs of these IDs. This one may be set externally by atom group.
 
-		std::vector<std::pair<int, int>> m_LastTrailPoints; //!< Every point in our trail during the last sim update.
-		std::vector<std::pair<int, int>> m_TrailPoints; //!< Every point in our trail during the current sim update.
+		CheckpointVector<std::pair<int, int>> m_LastTrailPoints; //!< Every point in our trail during the last sim update.
+		CheckpointVector<std::pair<int, int>> m_TrailPoints; //!< Every point in our trail during the current sim update.
 
 		HitData m_LastHit; //!< Data containing information on the last collision experienced by this Atom.
 		MOID m_MOIDHit; //!< The MO, if any, this Atom hit on the last step.

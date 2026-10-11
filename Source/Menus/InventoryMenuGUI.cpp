@@ -479,7 +479,7 @@ void InventoryMenuGUI::UpdateCarouselMode() {
 	for (const std::unique_ptr<CarouselItemBox>& carouselItemBox: m_CarouselItemBoxes) {
 		carouselItemBox->Item = nullptr;
 	}
-	const std::deque<MovableObject*>* inventory = m_InventoryActor->GetInventory();
+	const CheckpointDeque<MovableObject*>* inventory = m_InventoryActor->GetInventory();
 	if (inventory && !inventory->empty()) {
 		int leftSideItemCount = std::min(static_cast<int>(std::floor(static_cast<float>(inventory->size()) / 2)), c_ItemsPerRow / 2);
 		int rightSideItemCount = std::min(static_cast<int>(std::ceil(static_cast<float>(inventory->size()) / 2)), c_ItemsPerRow / 2 + (m_InventoryActorEquippedItems.empty() ? 1 : 0));
@@ -605,7 +605,7 @@ void InventoryMenuGUI::UpdateFullMode() {
 
 	UpdateFullModeEquippedItemButtons();
 
-	const std::deque<MovableObject*>* inventory = m_InventoryActor->GetInventory();
+	const CheckpointDeque<MovableObject*>* inventory = m_InventoryActor->GetInventory();
 
 	UpdateFullModeScrollbar(inventory);
 
@@ -689,7 +689,7 @@ void InventoryMenuGUI::UpdateFullModeEquippedItemButtons() {
 	}
 }
 
-void InventoryMenuGUI::UpdateFullModeScrollbar(const std::deque<MovableObject*>* inventory) {
+void InventoryMenuGUI::UpdateFullModeScrollbar(const CheckpointDeque<MovableObject*>* inventory) {
 	if (inventory->size() > c_FullViewPageItemLimit) {
 		m_GUIInventoryItemsScrollbar->SetMaximum(static_cast<int>(std::ceil(static_cast<float>(inventory->size() - c_FullViewPageItemLimit) / static_cast<float>(c_ItemsPerRow))) + 1);
 		if (!m_GUIInventoryItemsScrollbar->GetVisible()) {
@@ -716,7 +716,7 @@ void InventoryMenuGUI::UpdateFullModeScrollbar(const std::deque<MovableObject*>*
 	}
 }
 
-void InventoryMenuGUI::UpdateFullModeInventoryItemButtons(const std::deque<MovableObject*>* inventory) {
+void InventoryMenuGUI::UpdateFullModeInventoryItemButtons(const CheckpointDeque<MovableObject*>* inventory) {
 	int startIndex = m_GUIInventoryItemsScrollbar->GetValue() * c_ItemsPerRow;
 	int lastPopulatedIndex = static_cast<int>(inventory->size() - 1);
 	GUIButton* itemButton;
@@ -745,7 +745,7 @@ void InventoryMenuGUI::UpdateFullModeInventoryItemButtons(const std::deque<Movab
 	}
 }
 
-void InventoryMenuGUI::UpdateFullModeInformationText(const std::deque<MovableObject*>* inventory) {
+void InventoryMenuGUI::UpdateFullModeInformationText(const CheckpointDeque<MovableObject*>* inventory) {
 	if (!m_GUIShowInformationText && m_GUIInformationText->GetVisible()) {
 		m_GUIInformationText->SetVisible(false);
 	} else if (m_GUIShowInformationText) {

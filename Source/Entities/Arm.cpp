@@ -522,7 +522,7 @@ void Arm::DrawHand(BITMAP* targetBitmap, const Vector& targetPos, DrawMode mode)
 
 std::vector<std::string> Arm::GetHandTargetsForSave() const {
 	std::vector<std::string> packed;
-	for (std::queue<HandTarget> targets = m_HandTargets; !targets.empty(); targets.pop()) {
+	for (CheckpointQueue<HandTarget> targets = m_HandTargets; !targets.empty(); targets.pop()) {
 		const HandTarget& target = targets.front();
 		// A stream's hexfloat takes its decimal point from the global locale; this saved state must not.
 		packed.push_back(HexFloatString(target.TargetOffset.m_X) + "|" + HexFloatString(target.TargetOffset.m_Y) + "|" + HexFloatString(target.DelayAtTarget) + "|" + (target.HFlippedWhenTargetWasCreated ? "1" : "0") + "|" + target.Description);
@@ -533,7 +533,7 @@ std::vector<std::string> Arm::GetHandTargetsForSave() const {
 std::vector<CheckpointText> Arm::CaptureHandTargetsForSave() const {
 	std::vector<CheckpointText> packed;
 	packed.reserve(m_HandTargets.size());
-	for (std::queue<HandTarget> targets = m_HandTargets; !targets.empty(); targets.pop()) {
+	for (CheckpointQueue<HandTarget> targets = m_HandTargets; !targets.empty(); targets.pop()) {
 		HandTarget target = std::move(targets.front());
 		const std::array<uint32_t, 4> values = {
 			std::bit_cast<uint32_t>(target.TargetOffset.m_X), std::bit_cast<uint32_t>(target.TargetOffset.m_Y),
@@ -645,7 +645,7 @@ bool Arm::LoadArmRuntime(std::string_view text, bool validateOnly) {
 		archive(m_HandMovementDelayTimer, m_HandHasReachedCurrentTarget, m_GripStrength, m_ThrowStrength);
 		std::vector<std::string> savedTargets;
 		archive.Value(savedTargets);
-		std::queue<HandTarget> targets;
+		CheckpointQueue<HandTarget> targets;
 		for (const std::string& text: savedTargets) {
 			std::string description;
 			Vector offset;

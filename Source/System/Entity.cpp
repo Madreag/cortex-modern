@@ -306,7 +306,7 @@ namespace RTE {
 			values->identity.m_FrozenCheckpointNative = true;
 			values->identity.m_PresetName = source->m_PresetName;
 			values->identity.m_DefinedInModule = source->m_DefinedInModule;
-			if (const auto* movable = dynamic_cast<const MovableObject*>(source)) values->scripts = movable->GetAllLoadedScripts();
+			if (const auto* movable = dynamic_cast<const MovableObject*>(source)) values->scripts.assign(movable->GetAllLoadedScripts().begin(), movable->GetAllLoadedScripts().end());
 			reference = m_PresetReferences.TryEmplace(source, std::move(values)).first;
 			m_PresetScripts.TryEmplace(&(*reference)->identity, *reference);
 		}

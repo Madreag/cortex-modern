@@ -827,18 +827,18 @@ namespace RTE {
 		/// @param onlyTeam The team to get Actors of. If NoTeam, then all teams will be used.
 		/// @param noBrains Whether or not to get brain Actors.
 		/// @return The number of Actors added to the list.
-		int GetAllActors(bool transferOwnership, std::list<SceneObject*>& actorList, int onlyTeam = -1, bool noBrains = false);
+		template<class Allocator> int GetAllActors(bool transferOwnership, std::list<SceneObject*, Allocator>& actorList, int onlyTeam = -1, bool noBrains = false);
 
 		/// @param transferOwnership Whether or not ownershp of the items shoudl be transferred from MovableMan to the list.
 		/// @param itemList The list to be filled with items.
 		/// @return The number of items added to the list.
-		int GetAllItems(bool transferOwnership, std::list<SceneObject*>& itemList);
+		template<class Allocator> int GetAllItems(bool transferOwnership, std::list<SceneObject*, Allocator>& itemList);
 
 		/// Adds all particles in MovableMan to the given list.
 		/// @param transferOwnership Whether or not ownership of the particles should be transferred from MovableMan to the list.
 		/// @param particleList The list to be filled with particles.
 		/// @return The number of particles added to the list.
-		int GetAllParticles(bool transferOwnership, std::list<SceneObject*>& particleList);
+		template<class Allocator> int GetAllParticles(bool transferOwnership, std::list<SceneObject*, Allocator>& particleList);
 
 		/// Opens all doors and keeps them open until this is called again with false.
 		/// @param open Whether to open all doors (true), or close all doors (false).

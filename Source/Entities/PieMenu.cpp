@@ -80,7 +80,7 @@ PieMenu::PieMenu(const PieMenu& source, CheckpointNativeSnapshot& snapshot) :
 	m_BGBitmapNeedsRedrawing(source.m_BGBitmapNeedsRedrawing),
 	m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing(source.m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing),
 	m_CheckpointInitialized(source.m_CheckpointInitialized) {
-	std::vector<PieSlice*> savedSlices;
+	CheckpointVector<PieSlice*> savedSlices;
 	savedSlices.reserve(source.m_CurrentPieSlices.size());
 	for (PieSlice* slice: source.m_CurrentPieSlices) if (slice->GetOriginalSource() == source.m_Owner) savedSlices.push_back(slice);
 	m_CurrentPieSlices = snapshot.Freeze(savedSlices, &m_CurrentPieSlices);
@@ -2008,7 +2008,7 @@ bool PieMenu::PreparePieSliceSubPieMenuForUse(const PieSlice* pieSliceWithSubPie
 			pieQuadrant.m_Enabled = false;
 		}
 	}
-	std::vector<PieSlice*> existingPieSlices = subPieMenu->GetPieSlices();
+	auto existingPieSlices = subPieMenu->GetPieSlices();
 	std::vector<PieSlice*> pieSlicesToReadd;
 	pieSlicesToReadd.reserve(existingPieSlices.size());
 	for (const PieSlice* existingPieSlice: existingPieSlices) {

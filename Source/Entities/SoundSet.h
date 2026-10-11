@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "Vector.h"
 #include "ContentFile.h"
 #include "LuaMan.h"
@@ -201,7 +203,7 @@ namespace RTE {
 
 		/// Gets the vector of SubSoundSets for this SoundSet.
 		/// @return The vector of SubSoundSets for this SoundSet.
-		std::vector<SoundSet*>& GetSubSoundSets() { return m_SubSoundSets; }
+		CheckpointVector<SoundSet*>& GetSubSoundSets() { return m_SubSoundSets; }
 #pragma endregion
 
 #pragma region Miscellaneous
@@ -245,11 +247,11 @@ namespace RTE {
         std::pair<bool, int>& CurrentSelection() { return SoundSimulationScope::IsSimulation() ? m_SimulationSelection : m_CurrentSelection; }
         const std::pair<bool, int>& CurrentSelection() const { return SoundSimulationScope::IsSimulation() ? m_SimulationSelection : m_CurrentSelection; }
 
-		std::vector<SoundData> m_SoundData; //!< The SoundData available for selection in this SoundSet.
+		CheckpointVector<SoundData> m_SoundData; //!< The SoundData available for selection in this SoundSet.
 		uint64_t m_SoundDataSource = 0; //!< Names the sound data this set holds; sets with equal sound data share the name.
 		/// The name of this exact sound data, the same for every equal copy; 0 for none.
-		static uint64_t NameSoundData(const std::vector<SoundData>& data);
-		std::vector<SoundSet*> m_SubSoundSets; //!< The sub SoundSets available for selection in this SoundSet.
+		static uint64_t NameSoundData(std::span<const SoundData> data);
+		CheckpointVector<SoundSet*> m_SubSoundSets; //!< The sub SoundSets available for selection in this SoundSet.
 
 		bool m_CheckpointInitialized = false;
 		bool m_CheckpointValueTrap = false;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "Entity.h"
 #include "ContentFile.h"
 #include <memory>
@@ -67,11 +69,11 @@ namespace RTE {
 
 		/// Gets the array of 8-bit bitmaps of this Icon, as many as GetFrameCount says. Neither the array nor the BITMAPs are transferred ownership!
 		/// @return The BITMAPs in 8bpp of this Icon.
-		const std::vector<BITMAP*>& GetBitmaps8() const { return m_BitmapsIndexed; }
+		const CheckpointVector<BITMAP*>& GetBitmaps8() const { return m_BitmapsIndexed; }
 
 		/// Gets the array of 32-bit bitmaps of this Icon, as many as GetFrameCount says. Neither the array nor the BITMAPs are transferred ownership!
 		/// @return The BITMAPs in 32bpp of this Icon.
-		const std::vector<BITMAP*>& GetBitmaps32() const { return m_BitmapsTrueColor; }
+		const CheckpointVector<BITMAP*>& GetBitmaps32() const { return m_BitmapsTrueColor; }
 #pragma endregion
 
 #pragma region Operator Overloads
@@ -93,8 +95,8 @@ namespace RTE {
 		ContentFile m_BitmapFile; //!< ContentFile containing the bitmap file of this Icon.
 		unsigned int m_FrameCount; //!< Number of frames in this Icon's animation.
 
-		std::vector<BITMAP*> m_BitmapsIndexed; //!< Vector containing the 8bpp BITMAPs of this Icon. BITMAPs are NOT owned!
-		std::vector<BITMAP*> m_BitmapsTrueColor; //!< Vector containing the 32bpp BITMAPs of this Icon. BITMAPs are NOT owned!
+		CheckpointVector<BITMAP*> m_BitmapsIndexed; //!< Vector containing the 8bpp BITMAPs of this Icon. BITMAPs are NOT owned!
+		CheckpointVector<BITMAP*> m_BitmapsTrueColor; //!< Vector containing the 32bpp BITMAPs of this Icon. BITMAPs are NOT owned!
 		std::vector<std::shared_ptr<BITMAP>> m_CheckpointBitmapOwners; //!< Keeps restored images alive across icon copies.
 
 	private:

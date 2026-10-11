@@ -202,7 +202,7 @@ namespace {
 		j["view_point"] = {actor->GetViewPoint().m_X, actor->GetViewPoint().m_Y};
 
 		json inventory = json::array();
-		if (const std::deque<MovableObject*>* items = actor->GetInventory()) {
+		if (const CheckpointDeque<MovableObject*>* items = actor->GetInventory()) {
 			for (const MovableObject* item: *items) {
 				inventory.push_back(MovableObjectDebugJson(item));
 			}
@@ -5155,7 +5155,8 @@ int MovableMan::KillAllEnemyActors(int teamNotToKill) const {
 	return killCount;
 }
 
-int MovableMan::GetAllActors(bool transferOwnership, std::list<SceneObject*>& actorList, int onlyTeam, bool noBrains) {
+template<class Allocator>
+int MovableMan::GetAllActors(bool transferOwnership, std::list<SceneObject*, Allocator>& actorList, int onlyTeam, bool noBrains) {
 	int addedCount = 0;
 
 	// Add all regular Actors
@@ -5198,7 +5199,8 @@ int MovableMan::GetAllActors(bool transferOwnership, std::list<SceneObject*>& ac
 	return addedCount;
 }
 
-int MovableMan::GetAllItems(bool transferOwnership, std::list<SceneObject*>& itemList) {
+template<class Allocator>
+int MovableMan::GetAllItems(bool transferOwnership, std::list<SceneObject*, Allocator>& itemList) {
 	int addedCount = 0;
 
 	// Add all regular Items
@@ -5223,7 +5225,8 @@ int MovableMan::GetAllItems(bool transferOwnership, std::list<SceneObject*>& ite
 	return addedCount;
 }
 
-int MovableMan::GetAllParticles(bool transferOwnership, std::list<SceneObject*>& particleList) {
+template<class Allocator>
+int MovableMan::GetAllParticles(bool transferOwnership, std::list<SceneObject*, Allocator>& particleList) {
 	int addedCount = 0;
 
 	// Add all regular particles
@@ -8706,3 +8709,15 @@ bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
 	}
 	return restored;
 }
+
+template int MovableMan::GetAllActors(bool, std::list<SceneObject*>&, int, bool);
+
+template int MovableMan::GetAllActors(bool, CheckpointList<SceneObject*>&, int, bool);
+
+template int MovableMan::GetAllItems(bool, std::list<SceneObject*>&);
+
+template int MovableMan::GetAllItems(bool, CheckpointList<SceneObject*>&);
+
+template int MovableMan::GetAllParticles(bool, std::list<SceneObject*>&);
+
+template int MovableMan::GetAllParticles(bool, CheckpointList<SceneObject*>&);

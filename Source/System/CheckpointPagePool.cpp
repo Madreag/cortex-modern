@@ -344,6 +344,7 @@ namespace {
 	};
 	std::atomic<NativeStoragePools*> s_NativeStoragePools{nullptr};
 	thread_local bool s_NativeStorageAllocation = false;
+	thread_local bool s_NativeStorageCapture = false;
 	NativeStoragePools& NativePools() {
 		static NativeStoragePools* const pools = [] {
 			auto* value = new NativeStoragePools;
@@ -360,7 +361,13 @@ CheckpointNativeStorage::AllocationScope::AllocationScope(bool enabled) : m_Prev
 
 CheckpointNativeStorage::AllocationScope::~AllocationScope() { s_NativeStorageAllocation = m_Previous; }
 
-bool CheckpointNativeStorage::Enabled() { return s_NativeStorageAllocation || ScenarioRunner::HasLockstepCoordinator(); }
+CheckpointNativeStorage::CaptureScope::CaptureScope(bool enabled) : m_Previous(s_NativeStorageCapture) {
+	s_NativeStorageCapture = s_NativeStorageCapture || enabled;
+}
+
+CheckpointNativeStorage::CaptureScope::~CaptureScope() { s_NativeStorageCapture = m_Previous; }
+
+bool CheckpointNativeStorage::Enabled() { return !s_NativeStorageCapture && (s_NativeStorageAllocation || ScenarioRunner::HasLockstepCoordinator()); }
 
 void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 	const size_t requested = std::max({bytes, alignment, size_t{16}});

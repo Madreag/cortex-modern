@@ -255,7 +255,7 @@ namespace RTE {
 		/// @param boxList The deque of Boxes representing the updated areas.
 		/// @param nodeUpdateLimit The maximum number of PathNodes we'll try to update this frame. True PathNode update count can be higher if we received a big box, as we always do at least 1 box.
 		/// @return The set of PathNode ids that were updated.
-		std::vector<int> RecalculateAreaCosts(std::deque<Box>& boxList, size_t nodeUpdateLimit);
+		template<class Allocator> std::vector<int> RecalculateAreaCosts(std::deque<Box, Allocator>& boxList, size_t nodeUpdateLimit);
 
 		/// Updates a set of PathNodes, adjusting their transitions.
 		/// This does NOT update the pather, which is required if PathNode costs changed.

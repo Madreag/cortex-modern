@@ -339,7 +339,8 @@ int AHuman::Create(const AHuman& reference) {
 	m_CanActivateBGItem = reference.m_CanActivateBGItem;
 	m_TriggerPulled = reference.m_TriggerPulled;
 	if ((reference.HasEverBeenAddedToMovableMan() || IsFaithfulClone()) && reference.m_PersistedLimbPathStates.empty()) {
-		m_PersistedLimbPathStates = reference.GetLimbPathStates();
+		const auto states = reference.GetLimbPathStates();
+		m_PersistedLimbPathStates.assign(states.begin(), states.end());
 		m_PersistedLimbGroupPositions = reference.GetLimbGroupPositions();
 		m_PersistedLimbGroupInertia = reference.GetLimbGroupInertia();
 		m_PersistedWalkState = reference.GetWalkState();
@@ -421,7 +422,7 @@ int AHuman::GetLimbPathIndex(const LimbPath* path) const {
 
 std::vector<std::string> AHuman::GetLimbPathStates(bool forHashing) const {
 	if (!m_PersistedLimbPathStates.empty()) {
-		return m_PersistedLimbPathStates;
+		return {m_PersistedLimbPathStates.begin(), m_PersistedLimbPathStates.end()};
 	}
 	std::vector<std::string> states;
 	states.reserve(2 * MOVEMENTSTATECOUNT);
@@ -603,7 +604,7 @@ void AHuman::AdoptPersistedUniqueID() {
 }
 
 void AHuman::AdoptCarriedWalkState() {
-	auto applyResidue = [](AtomGroup* group, std::vector<long long>& residue) {
+	auto applyResidue = [](AtomGroup* group, auto& residue) {
 		if (!residue.empty()) {
 			if (group) {
 				group->SetTravelResidue(residue);

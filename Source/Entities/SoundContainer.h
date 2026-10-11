@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "Entity.h"
 #include "AudioMan.h"
 #include "LogicalSound.h"
@@ -190,7 +192,7 @@ namespace RTE {
 
 		/// Gets the channels playing sounds from this SoundContainer.
 		/// @return The channels currently being used.
-		std::unordered_set<int> const* GetPlayingChannels() const { return &m_PlayingChannels; }
+		CheckpointUnorderedSet<int> const* GetPlayingChannels() const { return &m_PlayingChannels; }
 
 		/// Indicates whether any sound in this SoundContainer is currently being played.
 		/// @return Whether any sounds are playing.
@@ -624,7 +626,7 @@ namespace RTE {
 
 		std::shared_ptr<SoundSet> m_TopLevelSoundSet; // The top level SoundSet that handles all SoundData and sub SoundSets in this SoundContainer.
 
-		std::unordered_set<int> m_PlayingChannels; //!< The channels this SoundContainer is currently using.
+		CheckpointUnorderedSet<int> m_PlayingChannels; //!< The channels this SoundContainer is currently using.
 		SoundOverlapMode m_SoundOverlapMode; //!< The SoundOverlapMode for this SoundContainer, used to determine how it should handle overlapping play calls.
 
 		BusRouting m_BusRouting; //!< What bus this sound routes to.

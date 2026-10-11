@@ -2767,7 +2767,7 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 
 		{
 			struct ScriptPreset : MOPixel {
-				void SetScripts(std::vector<std::string> names) { m_AllLoadedScripts = std::move(names); }
+				void SetScripts(std::vector<std::string> names) { m_AllLoadedScripts.assign(std::make_move_iterator(names.begin()), std::make_move_iterator(names.end())); }
 			};
 			auto preset = std::make_unique<ScriptPreset>();
 			preset->SetPresetName(std::string("mod\0preset", 10)); preset->SetScripts({"mod.rte/first.lua", "mod.rte/second.lua"});

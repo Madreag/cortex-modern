@@ -589,7 +589,8 @@ void BuyMenuGUI::SetModuleExpanded(int whichModule, bool expanded) {
 	}
 }
 
-bool BuyMenuGUI::GetOrderList(std::list<const SceneObject*>& listToFill) const {
+template<class Allocator>
+bool BuyMenuGUI::GetOrderList(std::list<const SceneObject*, Allocator>& listToFill) const {
 	if (IsInert()) return false;
 	if (m_pCartList->GetItemList()->empty())
 		return false;
@@ -2185,7 +2186,7 @@ bool BuyMenuGUI::DeployLoadout(int index) {
 	}
 
 	// Get and add all the stuff in the selected loadout
-	std::list<const SceneObject*>* pCargo = m_Loadouts[index].GetCargoList();
+	auto* pCargo = m_Loadouts[index].GetCargoList();
 	AllegroBitmap* pItemBitmap = 0;
 	for (std::list<const SceneObject*>::iterator cItr = pCargo->begin(); cItr != pCargo->end(); ++cItr) {
 		// Get a good icon and wrap it, while not passing ownership into the AllegroBitmap
@@ -2621,3 +2622,7 @@ bool BuyMenuGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		return true;
 	} catch (const std::exception& exception) { std::cout << "[gui-checkpoint] buy-menu validation=" << validateOnly << " error=" << exception.what() << std::endl; return false; }
 }
+
+template bool BuyMenuGUI::GetOrderList(std::list<const SceneObject*>&) const;
+
+template bool BuyMenuGUI::GetOrderList(CheckpointList<const SceneObject*>&) const;

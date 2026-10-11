@@ -892,7 +892,8 @@ void PathFinder::RecalculateAllCosts() {
 	UpdateNodeList(pathNodesIdsVec);
 }
 
-std::vector<int> PathFinder::RecalculateAreaCosts(std::deque<Box>& boxList, size_t nodeUpdateLimit) {
+template<class Allocator>
+std::vector<int> PathFinder::RecalculateAreaCosts(std::deque<Box, Allocator>& boxList, size_t nodeUpdateLimit) {
 	ZoneScoped;
 
 	std::unordered_set<int> nodeIDsToUpdate;
@@ -2975,3 +2976,7 @@ void PathFinder::DebugRender(BITMAP* targetBitmap, const Vector& targetPos) cons
 		line(targetBitmap, startPos.GetX(), startPos.GetY(), endPos.GetX(), endPos.GetY(), g_BlackColor);
 	}
 }
+
+template std::vector<int> PathFinder::RecalculateAreaCosts(std::deque<Box>&, size_t);
+
+template std::vector<int> PathFinder::RecalculateAreaCosts(CheckpointDeque<Box>&, size_t);

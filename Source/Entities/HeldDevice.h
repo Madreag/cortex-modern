@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the HeldDevice class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -417,7 +419,7 @@ namespace RTE {
 		bool m_IsUnPickupable; //!< Whether or not this HeldDevice should be able to be picked up at all.
 		// TODO: move this smelly thing elsewhere
 		std::array<bool, Players::MaxPlayerCount> m_SeenByPlayer; //!< An array of players that can currently see the pickup HUD of this HeldDevice.
-		std::unordered_set<std::string> m_PickupableByPresetNames; //!< The unordered set of PresetNames that can pick up this HeldDevice if it's dropped. An empty set means there are no PresetName limitations.
+		CheckpointUnorderedSet<std::string> m_PickupableByPresetNames; //!< The unordered set of PresetNames that can pick up this HeldDevice if it's dropped. An empty set means there are no PresetName limitations.
 		float m_GripStrengthMultiplier; //!< The multiplier for how well this HeldDevice can be gripped by Arms.
 		// Blink timer for the icon
 		Timer m_BlinkTimer;

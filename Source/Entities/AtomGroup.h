@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "Atom.h"
 
 namespace RTE {
@@ -80,11 +82,11 @@ namespace RTE {
 #pragma region Getters and Setters
 		/// Gets the current list of Atoms that make up the group.
 		/// @return A const reference to the Atom list.
-		const std::vector<Atom*>& GetAtomList() const { return m_Atoms; }
+		const CheckpointVector<Atom*>& GetAtomList() const { return m_Atoms; }
 
 		/// Sets the a new list of Atoms that make up the group.
 		/// @param newAtoms List of Atoms that make up the group.
-		void SetAtomList(const std::vector<Atom*>& newAtoms);
+		void SetAtomList(std::span<Atom* const> newAtoms);
 
 		/// Gets the current number of Atoms that make up the group.
 		/// @return The number of Atoms that make up the group.
@@ -94,16 +96,16 @@ namespace RTE {
 		std::vector<long long> GetTravelResidue() const;
 		/// Captures the four per-atom property sequences in one owned traversal.
 		void CaptureSnapshotProperties(Writer& writer) const;
-		void SetTravelResidue(const std::vector<long long>& residue) { SetTravelResidue(residue, std::vector<long long>()); }
-		void SetTravelResidue(const std::vector<long long>& residue, const std::vector<long long>& subIDs);
+		void SetTravelResidue(std::span<const long long> residue) { SetTravelResidue(residue, std::span<const long long>()); }
+		void SetTravelResidue(std::span<const long long> residue, std::span<const long long> subIDs);
 
 		/// The per-atom offsets (attachable subgroup folds drift from the preset), in atom order, for full-game saves.
 		std::vector<Vector> GetAtomOffsets() const;
-		void SetAtomOffsets(const std::vector<Vector>& offsets) { SetAtomOffsets(offsets, std::vector<long long>()); }
-		void SetAtomOffsets(const std::vector<Vector>& offsets, const std::vector<long long>& subIDs);
+		void SetAtomOffsets(std::span<const Vector> offsets) { SetAtomOffsets(offsets, std::span<const long long>()); }
+		void SetAtomOffsets(std::span<const Vector> offsets, std::span<const long long> subIDs);
 
 		/// Rebuilds the atom list to exactly the saved atoms, in saved order: existing atoms of a subgroup are reused, missing ones cloned from a template, extras dropped.
-		void RebuildFromPersisted(const std::vector<Vector>& offsets, const std::vector<long long>& subIDs, const std::vector<int>& materials);
+		void RebuildFromPersisted(std::span<const Vector> offsets, std::span<const long long> subIDs, std::span<const int> materials);
 
 		std::vector<int> GetAtomMaterialIndices() const;
 
@@ -194,7 +196,7 @@ namespace RTE {
 		/// @param subgroupID The desired subgroup ID for the Atoms being added.
 		/// @param offset An offset that should be applied to all added Atoms.
 		/// @param offsetRotation The rotation of the placed Atoms around the specified offset.
-		void AddAtoms(const std::vector<Atom*>& atomList, long subgroupID = 0, const Vector& offset = Vector(), const Matrix& offsetRotation = Matrix());
+		void AddAtoms(std::span<Atom* const> atomList, long subgroupID = 0, const Vector& offset = Vector(), const Matrix& offsetRotation = Matrix());
 
 		/// Removes all Atoms of a specific subgroup ID from this AtomGroup.
 		/// @param removeID The ID of the subgroup of Atoms to remove.
@@ -310,7 +312,7 @@ namespace RTE {
 		void ClearMOIDIgnoreList() { if (!m_IgnoreMOIDs.empty()) TouchCheckpoint(); m_IgnoreMOIDs.clear(); }
 
 		/// The MOIDs this group ignores, for snapshot forensics.
-		const std::vector<MOID>& GetIgnoreMOIDs() const { return m_IgnoreMOIDs; }
+		const CheckpointVector<MOID>& GetIgnoreMOIDs() const { return m_IgnoreMOIDs; }
 
 		/// Gets whether any of the Atoms in this AtomGroup are on top of terrain pixels.
 		/// @return Whether any Atom of this AtomGroup is on top of a terrain pixel.
@@ -359,8 +361,8 @@ namespace RTE {
 
 		// TODO: It's probably worth trying out changing this from a list to a vector. m_Atoms is iterated over often and we could probably get some big gainz by doing this swap.
 		// The downside is anytime attachables with atoms get added we may have the cost of resizing the vector but that's an uncommon use case while iterating over atoms happens multiple times per frame.
-		std::vector<Atom*> m_Atoms; //!< List of Atoms that constitute the group. Owned by this.
-		std::unordered_map<long, std::vector<Atom*>> m_SubGroups; //!< Sub groupings of Atoms. Points to Atoms owned in m_Atoms. Not owned.
+		CheckpointVector<Atom*> m_Atoms; //!< List of Atoms that constitute the group. Owned by this.
+		CheckpointUnorderedMap<long, CheckpointVector<Atom*>> m_SubGroups; //!< Sub groupings of Atoms. Points to Atoms owned in m_Atoms. Not owned.
 
 		MOSRotating* m_OwnerMOSR = nullptr; //!< The owner of this AtomGroup. The owner is obviously not owned by this AtomGroup.
 		float m_StoredOwnerMass; //!< The stored mass for the owner MOSR. Used to figure out when the moment of inertia needs to be recalculated due to significant mass changes.
@@ -381,7 +383,7 @@ namespace RTE {
 
 		float m_MomentOfInertia; //!< Moment of Inertia for this AtomGroup.
 
-		std::vector<MOID> m_IgnoreMOIDs; //!< List of MOIDs this AtomGroup will ignore collisions with.
+		CheckpointVector<MOID> m_IgnoreMOIDs; //!< List of MOIDs this AtomGroup will ignore collisions with.
 
 		AreaDistributionType m_AreaDistributionType; //!< How this AtomGroup will distribute energy when it collides with something.
 

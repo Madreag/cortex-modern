@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the MOSRotating class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -155,8 +157,8 @@ namespace RTE {
 
 		/// Gets direct access to the list of object this is to generate upon gibbing.
 		/// @return A pointer to the list of gibs. Ownership is NOT transferred!
-		std::list<Gib*>* GetGibList() { return &m_Gibs; }
-		const std::list<Gib*>* GetGibList() const { return &m_Gibs; }
+		CheckpointList<Gib*>* GetGibList() { return &m_Gibs; }
+		const CheckpointList<Gib*>* GetGibList() const { return &m_Gibs; }
 
 		/// Adds graphical recoil offset to this MOSprite according to its angle.
 		void AddRecoil();
@@ -254,7 +256,7 @@ namespace RTE {
 
 		/// Gets the list of Attachables on this MOSRotating.
 		/// @return The list of Attachables on this MOSRotating.
-		const std::list<Attachable*>& GetAttachables() const { return m_Attachables; }
+		const CheckpointList<Attachable*>& GetAttachables() const { return m_Attachables; }
 		float GetFarthestAttachableDistanceAndRadius() const { return m_FarthestAttachableDistanceAndRadius; }
 		float GetDeepHardness() const { return m_DeepHardness; }
 		const Attachable* GetRadiusAffectingAttachable() const { return m_RadiusAffectingAttachable; }
@@ -441,11 +443,11 @@ namespace RTE {
 
 		/// Gets a const reference to the list of Attachables on this MOSRotating.
 		/// @return A const reference to the list of Attachables on this MOSRotating.
-		const std::list<Attachable*>& GetAttachableList() const { return m_Attachables; }
+		const CheckpointList<Attachable*>& GetAttachableList() const { return m_Attachables; }
 
 		/// Gets a const reference to the list of wounds on this MOSRotating.
 		/// @return A const reference to the list of wounds on this MOSRotating.
-		const std::vector<AEmitter*>& GetWoundList() const { return m_Wounds; }
+		const CheckpointVector<AEmitter*>& GetWoundList() const { return m_Wounds; }
 
 		/// Gets the number of wounds attached to this MOSRotating.
 		/// Includes any Attachables (and their Attachables, etc.) that have a positive damage multiplier.
@@ -577,14 +579,14 @@ namespace RTE {
 		AtomGroup* m_pAtomGroup;
 		std::string m_PersistedAtomGroupCheckpoint;
 		std::string m_PersistedDeepGroupCheckpoint;
-		std::vector<long long> m_PersistedAtomGroupResidue; //!< Saved per-atom travel residue, applied on snapshot adopt.
-		std::vector<Vector> m_PersistedAtomGroupOffsets; //!< Saved per-atom offsets, applied on snapshot adopt.
-		std::vector<long long> m_PersistedAtomGroupSubIDs; //!< Saved per-atom subgroup IDs binding the arrays above by identity.
-		std::vector<int> m_PersistedAtomGroupMaterials; //!< Saved per-atom material indices, applied on snapshot adopt.
+		CheckpointVector<long long> m_PersistedAtomGroupResidue; //!< Saved per-atom travel residue, applied on snapshot adopt.
+		CheckpointVector<Vector> m_PersistedAtomGroupOffsets; //!< Saved per-atom offsets, applied on snapshot adopt.
+		CheckpointVector<long long> m_PersistedAtomGroupSubIDs; //!< Saved per-atom subgroup IDs binding the arrays above by identity.
+		CheckpointVector<int> m_PersistedAtomGroupMaterials; //!< Saved per-atom material indices, applied on snapshot adopt.
 		float m_PersistedGroupMomentOfInertia; //!< Saved group moment of inertia, applied on snapshot adopt.
 		float m_PersistedGroupStoredMass; //!< Saved owner-mass anchor for the inertia recompute gate.
 		bool m_HasPersistedGroupInertia; //!< Whether a saved moment of inertia is pending application.
-		std::vector<long> m_FaithfulAttachableOrder; //!< The live attachable order a faithful clone lays back in ResolveFaithfulLinks.
+		CheckpointVector<long> m_FaithfulAttachableOrder; //!< The live attachable order a faithful clone lays back in ResolveFaithfulLinks.
 		long m_FaithfulRadiusAffectingAttachableUID = 0; //!< The radius-affecting attachable a faithful clone relinks in ResolveFaithfulLinks.
 		std::optional<float> m_FaithfulAttachableAndWoundMass; //!< The live attachable and wound mass a faithful clone takes back in ResolveFaithfulLinks, once its parts are re-attached.
 		float m_FaithfulFarthestAttachableDistanceAndRadius = 0.0F; //!< The live farthest distance a faithful clone lays back with the link above.
@@ -611,21 +613,21 @@ namespace RTE {
 		// The vector that the recoil offsets the sprite when m_Recoiled is true.
 		Vector m_RecoilOffset;
 		// The list of wound AEmitters currently attached to this MOSRotating, and owned here as well.
-		std::vector<AEmitter*> m_Wounds;
+		CheckpointVector<AEmitter*> m_Wounds;
 		// Whether we added an entry wound with a BurstSound this frame or not, so we can disable further ones to avoid audio spam.
 		bool m_EntryWoundBurstSoundPlayedThisFrame;
 		// Whether we added an exit wound with a BurstSound this frame or not.
 		bool m_ExitWoundBurstSoundPlayedThisFrame;
 		// The list of Attachables currently attached and Owned by this.
-		std::list<Attachable*> m_Attachables;
-		std::unordered_set<unsigned long> m_ReferenceHardcodedAttachableUniqueIDs; //!< An unordered set is filled with the Unique IDs of all of the reference object's hardcoded Attachables when using the copy Create.
+		CheckpointList<Attachable*> m_Attachables;
+		CheckpointUnorderedSet<unsigned long> m_ReferenceHardcodedAttachableUniqueIDs; //!< An unordered set is filled with the Unique IDs of all of the reference object's hardcoded Attachables when using the copy Create.
 		std::unordered_map<unsigned long, std::function<void(MOSRotating*, Attachable*)>> m_HardcodedAttachableUniqueIDsAndSetters; //!< An unordered map of Unique IDs to setter lambda functions, used to call the appropriate hardcoded Attachable setter when a hardcoded Attachable is removed.
 		std::unordered_map<unsigned long, std::function<void(MOSRotating*, Attachable*)>> m_HardcodedAttachableUniqueIDsAndRemovers; //!< An unordered map of Unique IDs to remove lambda functions, used to call the appropriate hardcoded Attachable remover when a hardcoded Attachable is removed and calling the setter with nullptr won't work.
 		const Attachable* m_RadiusAffectingAttachable; //!< A pointer to the Attachable that is currently affecting the radius. Used for some efficiency benefits.
 		float m_FarthestAttachableDistanceAndRadius; //!< The distance + radius of the radius affecting Attachable.
 		float m_AttachableAndWoundMass; //!< The mass of all Attachables and wounds on this MOSRotating. Used in combination with its actual mass and any other affecting factors to get its total mass.
 		// The list of Gib:s this will create when gibbed
-		std::list<Gib*> m_Gibs;
+		CheckpointList<Gib*> m_Gibs;
 		// The amount of impulse force required to gib this, in kg * (m/s). 0 means no limit
 		float m_GibImpulseLimit;
 		int m_GibWoundLimit; //!< The number of wounds that will gib this MOSRotating. 0 means that it can't be gibbed via wounds.

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "SceneObject.h"
 #include "ContentFile.h"
 #include <algorithm>
@@ -84,7 +86,7 @@ namespace RTE {
 
 		/// Gets the list of child objects that should be placed when this TerrainObject is placed.
 		/// @return A reference to the list of child objects. Ownership of the list is NOT transferred!
-		const std::vector<SceneObject::SOPlacer>& GetChildObjects() const { return m_ChildObjects; }
+		const CheckpointVector<SceneObject::SOPlacer>& GetChildObjects() const { return m_ChildObjects; }
 
 		/// Gets a BITMAP showing a good identifiable icon of this, for use in GUI lists.
 		/// @return A good identifiable graphical representation of this in a BITMAP, if available. If not, nullptr is returned. Ownership is NOT transferred!
@@ -131,7 +133,7 @@ namespace RTE {
 		Vector m_BitmapOffset; //!< Offset from the position of this to the top left corner of the bitmap. The inversion of this should point to a corner or pattern in the bitmaps which will snap well with a 24px grid.
 		bool m_OffsetDefined; //!< Whether the offset has been defined and shouldn't be automatically set.
 
-		std::vector<SceneObject::SOPlacer> m_ChildObjects; //!< The objects that are placed along with this TerrainObject on the Scene.
+		CheckpointVector<SceneObject::SOPlacer> m_ChildObjects; //!< The objects that are placed along with this TerrainObject on the Scene.
 
 	private:
 		/// Draws this TerrainObject's graphical and material representations to the specified SLTerrain's respective layers.

@@ -138,7 +138,7 @@ namespace RTE {
 		/// this.
 		/// @return Whether the deployment spawning is blocked by one of the Objects in
 		/// the list.
-		bool DeploymentBlocked(int player, const std::list<SceneObject*>& existingObjects);
+		template<class Allocator> bool DeploymentBlocked(int player, const std::list<SceneObject*, Allocator>& existingObjects);
 
 		/// Gets the cost to purchase this item, in oz's of gold.
 		/// @param nativeModule If this is supposed to be adjusted for a specific Tech's subjective (default: 0)

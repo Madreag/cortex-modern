@@ -841,7 +841,7 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsPosition(const SoundContainer*
 	FMOD::Channel* soundChannel;
 	FMOD::Sound* sound;
 
-	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
+	const CheckpointUnorderedSet<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
 		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		result = GetVoiceChannel(channelIndex, &soundChannel);
@@ -867,7 +867,7 @@ float AudioMan::GetSoundContainerAudibleVolume(const SoundContainer* soundContai
 	FMOD::Channel* soundChannel;
 	float audibleVolume;
 
-	const std::unordered_set<int> channels = *soundContainer->GetPlayingChannels();
+	const CheckpointUnorderedSet<int> channels = *soundContainer->GetPlayingChannels();
 	for (int channel: channels) {
 		if (!VoiceMatchesContext(channel, soundContainer)) continue;
 		result = GetVoiceChannel(channel, &soundChannel);
@@ -897,7 +897,7 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsVolume(const SoundContainer* s
 	float soundContainerOldVolume = soundContainer->GetVolume() == 0 ? 1.0F : soundContainer->GetVolume();
 	float soundChannelCurrentVolume;
 
-	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
+	const CheckpointUnorderedSet<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
 		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		result = GetVoiceChannel(channelIndex, &soundChannel);
@@ -929,7 +929,7 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsPitch(const SoundContainer* so
 	FMOD_RESULT result = FMOD_OK;
 	FMOD::Channel* soundChannel;
 
-	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
+	const CheckpointUnorderedSet<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
 		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		if (const auto found = m_PlayingVoices.find(channelIndex); found != m_PlayingVoices.end() && found->second.hasLifetime) {
@@ -957,7 +957,7 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsCustomPanValue(const SoundCont
 	FMOD_RESULT result = FMOD_OK;
 	FMOD::Channel* soundChannel;
 
-	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
+	const CheckpointUnorderedSet<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
 		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		result = GetVoiceChannel(channelIndex, &soundChannel);
@@ -986,8 +986,8 @@ bool AudioMan::StopSoundContainerPlayingChannels(SoundContainer* soundContainer,
 	FMOD_RESULT result = FMOD_OK;
 	FMOD::Channel* soundChannel;
 
-	const std::unordered_set<int>* channels = soundContainer->GetPlayingChannels();
-	for (std::unordered_set<int>::const_iterator channelIterator = channels->begin(); channelIterator != channels->end();) {
+	const CheckpointUnorderedSet<int>* channels = soundContainer->GetPlayingChannels();
+	for (CheckpointUnorderedSet<int>::const_iterator channelIterator = channels->begin(); channelIterator != channels->end();) {
 		const int identity = *channelIterator;
 		++channelIterator; // NOTE - stopping the sound will remove the channel, screwing things up if we don't move to the next iterator preemptively
 		if (!VoiceMatchesContext(identity, soundContainer)) continue;
@@ -1039,7 +1039,7 @@ void AudioMan::FadeOutSoundContainerPlayingChannels(SoundContainer* soundContain
 	unsigned long long parentClock;
 	float currentVolume;
 
-	const std::unordered_set<int> channels = *soundContainer->GetPlayingChannels();
+	const CheckpointUnorderedSet<int> channels = *soundContainer->GetPlayingChannels();
 	for (int channel: channels) {
 		if (!VoiceMatchesContext(channel, soundContainer)) continue;
 		result = GetVoiceChannel(channel, &soundChannel);
@@ -1059,7 +1059,7 @@ void AudioMan::SetPausedSoundContainerPlayingChannels(SoundContainer* soundConta
 	FMOD_RESULT result = FMOD_OK;
 	FMOD::Channel* soundChannel;
 
-	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
+	const CheckpointUnorderedSet<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
 		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		if (const auto found = m_PlayingVoices.find(channelIndex); found != m_PlayingVoices.end() && found->second.hasLifetime) {
@@ -2603,7 +2603,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		std::map<int, AudioCheckpoint::Voice> awaitingVoices;
 		std::map<std::string, AudioCheckpoint::Sample> pendingSamples;
 		std::map<int, PlayingVoice> candidates;
-		std::map<SoundContainer*, std::unordered_set<int>> ownerChannels;
+		std::map<SoundContainer*, CheckpointUnorderedSet<int>> ownerChannels;
 		for (const auto& [identity, voice]: m_PlayingVoices) if (voice.owner) ownerChannels.try_emplace(voice.owner);
 		std::map<int, const AudioCheckpoint::Voice*> descriptions;
 		std::map<int, FMOD::Channel*> backendCandidates;
@@ -3794,7 +3794,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 			const int woundVoice = *burst->GetPlayingChannels()->begin();
 			Attachable* kept = actor->RemoveAttachable(wound, false, false);
 			if (!kept) throw std::runtime_error("RemoveAttachable did not keep the wound");
-			auto& wounds = const_cast<std::vector<AEmitter*>&>(actor->GetWoundList());
+			auto& wounds = const_cast<CheckpointVector<AEmitter*>&>(actor->GetWoundList());
 			std::erase(wounds, wound);
 			{
 				SoundCheckpointSaveScope scope;

@@ -1301,8 +1301,8 @@ int MovableObject::ReloadScripts() {
 		movableObjectPreset->ReloadScripts();
 	}
 
-	std::unordered_map<std::string, bool> enabledScriptsCopy = m_EnabledScripts;
-	std::vector<std::string> loadedScriptsCopy = m_AllLoadedScripts;
+	auto enabledScriptsCopy = m_EnabledScripts;
+	auto loadedScriptsCopy = m_AllLoadedScripts;
 	m_EnabledScripts.clear();
 	m_AllLoadedScripts.clear();
 	m_FunctionsAndScripts.clear();
@@ -1381,8 +1381,8 @@ void MovableObject::MoveScriptsToState(LuaStateWrapper& state) {
 		return;
 	}
 	RTEAssert(!ObjectScriptsInitialized(), "Cannot move an object's scripts to another state once they run.");
-	const std::vector<std::string> scripts = m_AllLoadedScripts;
-	const std::unordered_map<std::string, bool> enabled = m_EnabledScripts;
+	const auto scripts = m_AllLoadedScripts;
+	const auto enabled = m_EnabledScripts;
 	if (m_ThreadedLuaState) {
 		std::lock_guard<std::recursive_mutex> lock(m_ThreadedLuaState->GetMutex());
 		m_FunctionsAndScripts.clear();

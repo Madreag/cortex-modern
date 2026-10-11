@@ -1596,11 +1596,11 @@ const MovableObject* Actor::GetOrderedMOMoveTarget() const {
 	return nullptr;
 }
 
-const std::list<std::pair<Vector, MovableObjectReference>>& Actor::GetWaypointList() const {
+const CheckpointList<std::pair<Vector, MovableObjectReference>>& Actor::GetWaypointList() const {
 	if (!SeeingLogicalWaypoints()) {
 		return m_Waypoints;
 	}
-	static thread_local std::list<std::pair<Vector, MovableObjectReference>> logicalList;
+	static thread_local CheckpointList<std::pair<Vector, MovableObjectReference>> logicalList;
 	logicalList.clear();
 	std::vector<std::pair<Vector, const MovableObject*>> items;
 	BuildLogicalWaypoints(items);
@@ -2403,7 +2403,8 @@ void Actor::OnNewMovePath() {
 
 void Actor::PreControllerUpdate() {
 	if (m_PathRequest && m_PathRequest->complete) {
-		m_MovePath = const_cast<std::list<Vector>&>(m_PathRequest->path);
+		const auto& path = const_cast<const std::list<Vector>&>(m_PathRequest->path);
+		m_MovePath.assign(path.begin(), path.end());
 		m_PathRequest.reset();
 		OnNewMovePath();
 	}
@@ -2878,7 +2879,8 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 				// Get the Icon bitmaps of this Actor's team, if any
 				std::vector<BITMAP*> apIconBitmaps;
 				if (m_pTeamIcon) {
-					apIconBitmaps = m_pTeamIcon->GetBitmaps8();
+					const auto& bitmaps = m_pTeamIcon->GetBitmaps8();
+					apIconBitmaps.assign(bitmaps.begin(), bitmaps.end());
 				}
 
 				// Team Icon could not be found, or of no team, so use the static noteam Icon instead

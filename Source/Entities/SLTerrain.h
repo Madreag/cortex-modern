@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "SceneLayer.h"
 #include "Matrix.h"
 
@@ -171,7 +173,7 @@ namespace RTE {
 #pragma region Concrete Methods
 		/// Gets a deque of unwrapped boxes which show the areas where the material layer has had objects applied to it since last call to ClearUpdatedMaterialAreas().
 		/// @return Reference to the deque that has been filled with Boxes which are unwrapped and may be out of bounds of the scene!
-		std::deque<Box>& GetUpdatedMaterialAreas() { return m_UpdatedMaterialAreas; }
+		CheckpointDeque<Box>& GetUpdatedMaterialAreas() { return m_UpdatedMaterialAreas; }
 
 		/// Adds a notification that an area of the material terrain has been updated.
 		/// @param newArea The Box defining the newly updated material area that can be unwrapped and may be out of bounds of the scene.
@@ -236,11 +238,11 @@ namespace RTE {
 		ContentFile m_DefaultBGTextureFile; //!< The background texture file that will be used to texturize Materials that have no defined background texture.
 
 		// A preset and its clones share the placement entries; the last SLTerrain holding one deletes it.
-		std::vector<std::shared_ptr<TerrainFrosting>> m_TerrainFrostings; //!< The TerrainFrostings that need to be placed on this SLTerrain.
-		std::vector<std::shared_ptr<TerrainDebris>> m_TerrainDebris; //!< The TerrainDebris that need to be  placed on this SLTerrain.
-		std::vector<std::shared_ptr<TerrainObject>> m_TerrainObjects; //!< The TerrainObjects that need to be placed on this SLTerrain.
+		CheckpointVector<std::shared_ptr<TerrainFrosting>> m_TerrainFrostings; //!< The TerrainFrostings that need to be placed on this SLTerrain.
+		CheckpointVector<std::shared_ptr<TerrainDebris>> m_TerrainDebris; //!< The TerrainDebris that need to be  placed on this SLTerrain.
+		CheckpointVector<std::shared_ptr<TerrainObject>> m_TerrainObjects; //!< The TerrainObjects that need to be placed on this SLTerrain.
 
-		std::deque<Box> m_UpdatedMaterialAreas; //!< List of areas of the material layer (main bitmap) which have been affected by new objects copied to it. These boxes are NOT wrapped, and can be out of bounds!
+		CheckpointDeque<Box> m_UpdatedMaterialAreas; //!< List of areas of the material layer (main bitmap) which have been affected by new objects copied to it. These boxes are NOT wrapped, and can be out of bounds!
 
 		Directions m_OrbitDirection; //!< The direction of the out-of-bounds "orbit" for this scene, where the brain must path to and where dropships/rockets come from.
 

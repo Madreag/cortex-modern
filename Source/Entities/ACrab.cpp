@@ -286,7 +286,8 @@ int ACrab::Create(const ACrab& reference) {
 	// The LimbPath copy terminates traversal, so a save clone of a WORLD actor carries the live
 	// state in the stash; preset copies just pass any stash along.
 	if ((reference.HasEverBeenAddedToMovableMan() || IsFaithfulClone()) && reference.m_PersistedLimbPathStates.empty()) {
-		m_PersistedLimbPathStates = reference.GetLimbPathStates();
+		const auto states = reference.GetLimbPathStates();
+		m_PersistedLimbPathStates.assign(states.begin(), states.end());
 		m_PersistedLimbGroupPositions = reference.GetLimbGroupPositions();
 		m_PersistedLimbGroupInertia = reference.GetLimbGroupInertia();
 	} else {
@@ -486,7 +487,7 @@ int ACrab::GetLimbPathIndex(const LimbPath* path) const {
 
 std::vector<std::string> ACrab::GetLimbPathStates(bool forHashing) const {
 	if (!m_PersistedLimbPathStates.empty()) {
-		return m_PersistedLimbPathStates;
+		return {m_PersistedLimbPathStates.begin(), m_PersistedLimbPathStates.end()};
 	}
 	std::vector<std::string> states;
 	states.reserve(SIDECOUNT * LAYERCOUNT * MOVEMENTSTATECOUNT);
@@ -515,7 +516,7 @@ void ACrab::AdoptPersistedUniqueID() {
 }
 
 void ACrab::AdoptCarriedWalkState() {
-	auto applyResidue = [](AtomGroup* group, std::vector<long long>& residue) {
+	auto applyResidue = [](AtomGroup* group, auto& residue) {
 		if (!residue.empty()) {
 			if (group) {
 				group->SetTravelResidue(residue);

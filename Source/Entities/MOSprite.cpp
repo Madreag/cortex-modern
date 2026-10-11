@@ -589,7 +589,7 @@ bool MOSprite::SetSpritePixelIndex(int x, int y, int whichFrame, int colorIndex,
 	if (m_aSprite.empty()) return false;
 	if (!m_SpriteModified) {
 		TouchCheckpoint();
-		std::vector<BITMAP*> spriteList;
+		CheckpointVector<BITMAP*> spriteList;
 		std::vector<std::shared_ptr<BITMAP>> owners;
 
 		for (BITMAP* sprite : m_aSprite) {
@@ -818,7 +818,7 @@ bool MOSprite::LoadMOSpriteRuntime(std::string_view text, bool validateOnly) {
 				owners.push_back(std::move(bitmap));
 			}
 			archive.OnCommit([this, spriteFile = std::move(spriteFile), iconFile = std::move(iconFile), owners = std::move(owners), frames = std::move(frames), icon]() mutable {
-				std::vector<BITMAP*> sprites;
+				CheckpointVector<BITMAP*> sprites;
 				for (size_t frame: frames) sprites.push_back(frame ? owners[frame - 1].get() : nullptr);
 				m_SpriteFile.LoadCheckpoint(spriteFile); m_IconFile.LoadCheckpoint(iconFile);
 				m_aSprite = std::move(sprites);
