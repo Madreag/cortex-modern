@@ -375,6 +375,20 @@
       ]
     },
     {
+      "id": "ui-f6-connection-host",
+      "peer": "host",
+      "mark": "ui-f6-connection",
+      "screen": "game",
+      "what": "A held second click opens Connection details and exposes the unchanged frame redundancy and scrolling assertions.",
+      "assert": "probe assertions in the marked interval",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720",
+        "1920x1080"
+      ]
+    },
+    {
       "id": "ui-pause-match-options-host",
       "peer": "host",
       "mark": "ui-pause-match-options",
@@ -408,6 +422,20 @@
       "mark": "ui-f6-options",
       "screen": "game",
       "what": "The F6 Options view shows the live rules.",
+      "assert": "probe assertions in the marked interval",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720",
+        "1920x1080"
+      ]
+    },
+    {
+      "id": "ui-f6-connection-client",
+      "peer": "client",
+      "mark": "ui-f6-connection",
+      "screen": "game",
+      "what": "A held second click opens Connection details and exposes the unchanged frame redundancy and scrolling assertions.",
       "assert": "probe assertions in the marked interval",
       "run": [
         "640x360",

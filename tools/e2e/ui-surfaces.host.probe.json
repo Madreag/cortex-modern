@@ -17,6 +17,11 @@
       "sim_at_least": 1
     },
     {
+      "op": "wait",
+      "renders": 3,
+      "elapsed_ms": 50
+    },
+    {
       "op": "key_up",
       "key": "P",
       "sim_at_least": 1
@@ -28,6 +33,11 @@
     {
       "op": "key_down",
       "key": "F6"
+    },
+    {
+      "op": "wait",
+      "renders": 3,
+      "elapsed_ms": 50
     },
     {
       "op": "key_up",
@@ -74,6 +84,47 @@
     {
       "op": "assert_control",
       "control": "NetworkSeatsOptionsText",
+      "text_contains": "Activity: P4 Alpha Duel  (Base.rte)"
+    },
+    {
+      "op": "assert_control",
+      "control": "NetworkSeatsOptionsText",
+      "text_contains": "When every human brain is lost: Keep playing, humans spectate"
+    },
+    {
+      "op": "assert_control",
+      "control": "NetworkSeatsOptions",
+      "equals": {
+        "text": "Connection details",
+        "visible": true,
+        "enabled": true
+      },
+      "fits": true
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 1200
+    },
+    {
+      "op": "menu",
+      "command": "activate NetworkSeatsOptions"
+    },
+    {
+      "op": "wait",
+      "control": "NetworkSeatsOptionsText",
+      "text_contains": "Frame redundancy:"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark ui-f6-connection"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 1200
+    },
+    {
+      "op": "assert_control",
+      "control": "NetworkSeatsOptionsText",
       "text_contains": "Frame redundancy:"
     },
     {
@@ -89,6 +140,11 @@
       "key": "F6"
     },
     {
+      "op": "wait",
+      "renders": 3,
+      "elapsed_ms": 50
+    },
+    {
       "op": "key_up",
       "key": "F6"
     },
@@ -99,6 +155,11 @@
     {
       "op": "key_down",
       "key": "Escape"
+    },
+    {
+      "op": "wait",
+      "renders": 3,
+      "elapsed_ms": 50
     },
     {
       "op": "key_up",
@@ -260,6 +321,11 @@
     {
       "op": "key_down",
       "key": "Escape"
+    },
+    {
+      "op": "wait",
+      "renders": 3,
+      "elapsed_ms": 50
     },
     {
       "op": "key_up",
