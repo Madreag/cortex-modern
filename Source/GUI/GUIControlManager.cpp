@@ -2,6 +2,7 @@
 #include "CaptureSentinel.h"
 #include "GUICheckpoint.h"
 #include "CheckpointFrozenContainers.h"
+#include "CheckpointNativeSnapshot.h"
 #include "AllegroScreen.h"
 #include <iostream>
 #include "Scene.h"
@@ -267,6 +268,18 @@ std::shared_ptr<BITMAP> GUICheckpoint::LoadSharedBitmap(std::string_view text, b
 	bool present; image.Value(present);
 	if (!present && cacheSlot >= 0) throw std::runtime_error("null cached bitmap owner");
 	reader.Finish();
+	if (CheckpointNativeStorage::Reading()) {
+		if (cacheSlot >= 0) if (BITMAP* source = ContentFile::ReadLoadedBitmap(path, cacheSlot)) {
+			const auto* snapshot = CheckpointNativeSnapshot::Current();
+			if (!snapshot) throw std::logic_error("a saved shared image needs its snapshot owner");
+			BITMAP* bitmap = const_cast<CheckpointNativeSnapshot*>(snapshot)->ReadBitmap(source);
+			if (SaveBitmap(bitmap) != pixels) throw std::runtime_error("shared bitmap cache pixels differ: " + path);
+			if (validateOnly) return {};
+			return std::shared_ptr<BITMAP>(bitmap, [](BITMAP*) {});
+		}
+		if (validateOnly) return {};
+		return std::shared_ptr<BITMAP>(LoadBitmap(pixels), [](BITMAP* bitmap) { if (bitmap) destroy_bitmap(bitmap); });
+	}
 	if (cacheSlot >= 0) {
 		auto& cache = ContentFile::s_LoadedBitmaps[cacheSlot];
 		const auto found = cache.find(path);
@@ -312,10 +325,18 @@ std::vector<std::shared_ptr<BITMAP>> GUICheckpoint::LoadSharedBitmapPool(const s
 
 GUICheckpoint::PreparedBitmapPool GUICheckpoint::PrepareSharedBitmapPool(const std::vector<std::string>& images) {
 	LoadSharedBitmapPool(images, true);
+	if (CheckpointNativeStorage::Reading()) {
+		PreparedBitmapPool result;
+		result.images.reserve(images.size());
+		for (const auto& image: images) result.images.push_back(LoadSharedBitmap(image));
+		result.commit = [] {};
+		return result;
+	}
 	struct Pending {
-		std::array<std::unordered_map<std::string, BITMAP*>, ContentFile::BitDepths::BitDepthCount> cached;
+		std::array<ContentFile::LoadedBitmaps::Base, ContentFile::BitDepths::BitDepthCount> cached;
 		std::vector<std::unique_ptr<BITMAP, void(*)(BITMAP*)>> allocations;
 	};
+	CheckpointNativeStorage::AllocationScope resources(true);
 	auto pending = std::make_shared<Pending>();
 	PreparedBitmapPool result;
 	result.images.reserve(images.size());
@@ -396,6 +417,11 @@ const Entity* GUICheckpoint::LoadEntityReference(std::string_view text, bool val
 	}
 	if (kind == 1 && IsRestoringNetLocalUI() && (!entity || (dynamic_cast<const Actor*>(entity) && static_cast<const Actor*>(entity)->IsDead()))) return nullptr;
 	if (!entity || entity->GetClassName() != type) throw std::runtime_error("a GUI entity reference is missing");
+	if (CheckpointNativeStorage::Reading()) {
+		const auto* snapshot = CheckpointNativeSnapshot::Current();
+		if (!snapshot) throw std::logic_error("a saved GUI entity needs its snapshot owner");
+		return const_cast<CheckpointNativeSnapshot*>(snapshot)->Object(entity);
+	}
 	return entity;
 }
 
@@ -1555,6 +1581,21 @@ bool GUICheckpoint::Validate(std::string_view text) {
 	return Load(manager, text, true);
 }
 
+std::unique_ptr<GUIControlManager> GUICheckpoint::Rebuild(const GUIControlManager& live, GUIScreen* screen, GUIInput* input, CheckpointNativeSnapshot& snapshot) {
+	if (!CheckpointNativeStorage::Reading()) throw std::logic_error("saved controls need their frozen pages");
+	CheckpointNativeSnapshot::ReadScope values(&snapshot);
+	const auto* source = CheckpointNativeStorage::Source(&live);
+	auto manager = std::make_unique<GUIControlManager>();
+	if (!source->m_GUIManager) return manager;
+	if (!screen || !input) throw std::logic_error("saved controls need their screen and input values");
+	manager->m_Screen = screen;
+	manager->m_Input = input;
+	manager->m_Skin = new GUISkin(screen);
+	manager->m_GUIManager = new GUIManager(input);
+	if (!Load(*manager, Save(*source))) throw std::runtime_error("could not rebuild saved GUI controls");
+	return manager;
+}
+
 std::string GUICheckpoint::FirstMissingControl(std::string_view text, const std::vector<std::string>& required) {
 	try {
 		CheckpointReader reader(text, "GUIControls1", true);
@@ -1741,6 +1782,47 @@ bool GUICheckpoint::RunSelfTest() {
 			CheckpointNativeStorage::ReadScope read(pages);
 			check("frozen_panel_properties_survive_destruction", SavePanel(*panelAddress) == panelText);
 			check("frozen_plain_bitmap_survives_destruction", SaveBitmap(imageAddress) == imageText);
+		}
+		{
+			CheckpointNativeStorage::AllocationScope allocation(true);
+			auto image = std::unique_ptr<BITMAP, decltype(&destroy_bitmap)>(create_bitmap_ex(8, 96, 64), &destroy_bitmap);
+			if (!image) throw std::bad_alloc();
+			clear_to_color(image.get(), 37);
+			auto screen = std::make_unique<AllegroScreen>(image.get());
+			auto input = std::make_unique<GUIInputWrapper>(0);
+			auto controls = std::make_unique<GUIControlManager>();
+			if (!controls->Create(screen.get(), input.get(), "Base.rte/GUIs/Skins", "DefaultSkin.ini")) throw std::runtime_error("saved fixture skin unavailable");
+			auto* text = dynamic_cast<GUITextBox*>(controls->AddControl("saved-text", "TEXTBOX", nullptr, 3, 4, 81, 27));
+			if (!text) throw std::runtime_error("saved fixture control unavailable");
+			text->SetText("captured text"); text->SetCursorPos(5); text->SetSelection(1, 4);
+			const std::string expected = Save(*controls), pixels = SaveBitmap(image.get());
+			const GUIControlManager* address = controls.get();
+			const BITMAP* imageAddress = image.get();
+			CheckpointNativeStorage::Root<decltype(ContentFile::s_LoadedBitmaps)> bitmapRoot(&ContentFile::s_LoadedBitmaps);
+			const auto [pathSource, pathSize] = ContentFile::PathHashRegistry();
+			std::vector<std::byte> pathHeader(pathSize);
+			const auto pages = CheckpointNativeStorage::Prepare();
+			for (const auto& part: pages) part->Arm();
+			bitmapRoot.Freeze(); std::memcpy(pathHeader.data(), pathSource, pathSize);
+			const std::array roots{bitmapRoot.Range(), CheckpointNativeStorage::RootRange{pathSource, pathHeader.data(), pathSize}};
+			controls.reset(); input.reset(); screen.reset(); image.reset();
+			CheckpointNativeStorage::ReadScope read(pages, roots);
+			auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
+			snapshot->SealBoundary();
+			BITMAP* savedImage = snapshot->ReadBitmap(imageAddress);
+			auto savedScreen = std::make_unique<AllegroScreen>(savedImage);
+			auto savedInput = std::make_unique<GUIInputWrapper>(0);
+			bool refused = false;
+			const size_t before = CheckpointNativeStorage::PrivateAllocationCount();
+			{
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+				try { auto rejected = Rebuild(*address, savedScreen.get(), savedInput.get(), *snapshot); }
+				catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+			}
+			check("saved_controls_refusal_releases_private_storage", refused && CheckpointNativeStorage::PrivateAllocationCount() == before);
+			auto rebuilt = Rebuild(*address, savedScreen.get(), savedInput.get(), *snapshot);
+			auto* rebuiltText = dynamic_cast<GUITextBox*>(rebuilt->GetControl("saved-text"));
+			check("saved_controls_survive_source_destruction", Save(*rebuilt) == expected && rebuiltText && rebuiltText->GetText() == "captured text" && SaveBitmap(savedImage) == pixels);
 		}
 		{
 			const std::string path = "checkpoint-selftest/absent-shared-bitmap.png";

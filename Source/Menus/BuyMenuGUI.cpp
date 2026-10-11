@@ -1,5 +1,6 @@
 #include "CheckpointArchive.h"
 #include "GUICheckpoint.h"
+#include "CheckpointNativeSnapshot.h"
 #include <iostream>
 #include "BuyMenuGUI.h"
 
@@ -47,6 +48,76 @@ BuyMenuGUI::BuyMenuGUI() {
 	Clear();
 }
 
+BuyMenuGUI::BuyMenuGUI(const BuyMenuGUI& source, CheckpointNativeSnapshot& snapshot) : BuyMenuGUI() {
+	if (!CheckpointNativeStorage::Reading()) throw std::logic_error("saved buy menus need their frozen pages");
+	m_PendingCheckpoint = source.m_PendingCheckpoint;
+	m_CheckpointInitialized = source.m_CheckpointInitialized;
+	m_pController = snapshot.ValueObject(source.m_pController);
+	m_MenuEnabled = source.m_MenuEnabled;
+	m_MenuFocus = source.m_MenuFocus;
+	m_FocusChange = source.m_FocusChange;
+	m_MenuCategory = source.m_MenuCategory;
+	m_MenuSpeed = source.m_MenuSpeed;
+	m_ListItemIndex = source.m_ListItemIndex;
+	m_DraggedItemIndex = source.m_DraggedItemIndex;
+	m_IsDragging = source.m_IsDragging;
+	m_LastHoveredMouseIndex = source.m_LastHoveredMouseIndex;
+	std::copy(std::begin(source.m_CategoryItemIndex), std::end(source.m_CategoryItemIndex), std::begin(m_CategoryItemIndex));
+	m_MetaPlayer = source.m_MetaPlayer;
+	m_NativeTechModule = source.m_NativeTechModule;
+	m_ForeignCostMult = source.m_ForeignCostMult;
+	m_aExpandedModules = snapshot.Freeze(source.m_aExpandedModules);
+	m_BlinkTimer = source.m_BlinkTimer;
+	m_BlinkMode = source.m_BlinkMode;
+	m_MenuTimer = source.m_MenuTimer;
+	m_RepeatStartTimer = source.m_RepeatStartTimer;
+	m_RepeatTimer = source.m_RepeatTimer;
+	m_SelectingEquipment = source.m_SelectingEquipment;
+	m_LastVisitedEquipmentTab = source.m_LastVisitedEquipmentTab;
+	m_LastVisitedMainTab = source.m_LastVisitedMainTab;
+	m_LastEquipmentScrollPosition = source.m_LastEquipmentScrollPosition;
+	m_LastMainScrollPosition = source.m_LastMainScrollPosition;
+	m_FirstMainTab = source.m_FirstMainTab;
+	m_LastMainTab = source.m_LastMainTab;
+	m_FirstEquipmentTab = source.m_FirstEquipmentTab;
+	m_LastEquipmentTab = source.m_LastEquipmentTab;
+	m_pSelectedCraft = snapshot.Object(source.m_pSelectedCraft);
+	m_Loadouts = snapshot.Freeze(source.m_Loadouts);
+	m_SelectedLoadoutIndex = source.m_SelectedLoadoutIndex;
+	m_PurchaseMade = source.m_PurchaseMade;
+	m_DeliveryWidth = source.m_DeliveryWidth;
+	m_EnforceMaxPassengersConstraint = source.m_EnforceMaxPassengersConstraint;
+	m_EnforceMaxMassConstraint = source.m_EnforceMaxMassConstraint;
+	m_OnlyShowOwnedItems = source.m_OnlyShowOwnedItems;
+	m_AllowedItems = snapshot.Freeze(source.m_AllowedItems);
+	m_AlwaysAllowedItems = snapshot.Freeze(source.m_AlwaysAllowedItems);
+	m_ProhibitedItems = snapshot.Freeze(source.m_ProhibitedItems);
+	m_OwnedItems = snapshot.Freeze(source.m_OwnedItems);
+	if (!source.m_pGUIController) return;
+	const auto* sourceScreen = CheckpointNativeStorage::Source(source.m_pGUIScreen);
+	const auto* sourceBitmap = sourceScreen ? dynamic_cast<const AllegroBitmap*>(CheckpointNativeStorage::Source(sourceScreen->GetBitmap())) : nullptr;
+	auto screen = std::make_unique<AllegroScreen>(sourceBitmap ? snapshot.ReadBitmap(sourceBitmap->GetBitmap()) : nullptr);
+	auto input = std::make_unique<GUIInputWrapper>(m_pController ? m_pController->GetInputPlayer() : Players::NoPlayer);
+	auto manager = GUICheckpoint::Rebuild(*source.m_pGUIController, screen.get(), input.get(), snapshot);
+	m_pGUIScreen = screen.release(); m_pGUIInput = input.release(); m_pGUIController = manager.release();
+	const auto control = [this]<class T>(T* pointer) -> T* {
+		if (!pointer) return nullptr;
+		auto* value = dynamic_cast<T*>(m_pGUIController->GetControl(CheckpointNativeStorage::Source(pointer)->GetName()));
+		if (!value) throw std::runtime_error("a saved buy menu control is missing");
+		return value;
+	};
+	m_pParentBox = control(source.m_pParentBox); m_pPopupBox = control(source.m_pPopupBox); m_pPopupText = control(source.m_pPopupText);
+	m_Banner = control(source.m_Banner); m_Logo = control(source.m_Logo);
+	for (size_t index = 0; index < CATEGORYCOUNT; ++index) m_pCategoryTabs[index] = control(source.m_pCategoryTabs[index]);
+	m_pShopList = control(source.m_pShopList); m_pCartList = control(source.m_pCartList); m_pCraftBox = control(source.m_pCraftBox);
+	m_pCraftCollectionBox = control(source.m_pCraftCollectionBox); m_pCraftNameLabel = control(source.m_pCraftNameLabel);
+	m_pCraftPriceLabel = control(source.m_pCraftPriceLabel); m_pCraftPassengersCaptionLabel = control(source.m_pCraftPassengersCaptionLabel);
+	m_pCraftPassengersLabel = control(source.m_pCraftPassengersLabel); m_pCraftMassCaptionLabel = control(source.m_pCraftMassCaptionLabel);
+	m_pCraftMassLabel = control(source.m_pCraftMassLabel); m_pCraftLabel = control(source.m_pCraftLabel);
+	m_pCostLabel = control(source.m_pCostLabel); m_pBuyButton = control(source.m_pBuyButton); m_ClearOrderButton = control(source.m_ClearOrderButton);
+	m_pSaveButton = control(source.m_pSaveButton); m_pDeleteButton = control(source.m_pDeleteButton);
+}
+
 BuyMenuGUI::~BuyMenuGUI() {
 	Destroy();
 }
@@ -84,7 +155,8 @@ void BuyMenuGUI::Clear() {
 	m_MetaPlayer = Players::NoPlayer;
 	m_NativeTechModule = 0;
 	m_ForeignCostMult = 4.0;
-	SeatModuleFlags(m_aExpandedModules, g_PresetMan.GetTotalModuleCount());
+	if (CheckpointNativeStorage::Reading()) m_aExpandedModules.clear();
+	else SeatModuleFlags(m_aExpandedModules, g_PresetMan.GetTotalModuleCount());
 	m_pShopList = 0;
 	m_pCartList = 0;
 	m_pCraftBox = 0;
@@ -2493,7 +2565,7 @@ void BuyMenuGUI::TryPurchase() {
 }
 
 std::string BuyMenuGUI::SaveCheckpoint() const {
-	if (CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::IsView(this)) return CheckpointNativeStorage::Source(this)->SaveCheckpoint();
+	if (CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::IsView(this) && !CheckpointNativeStorage::Private(this)) return CheckpointNativeStorage::Source(this)->SaveCheckpoint();
 	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
 	CheckpointWriter writer("BuyMenuGUI3");
 	writer(m_CheckpointInitialized);
