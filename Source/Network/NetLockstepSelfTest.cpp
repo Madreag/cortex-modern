@@ -4392,7 +4392,7 @@ namespace RTE {
 			return config;
 		}
 
-		bool StartQuorumRig(QuorumRig& r, uint8_t count, uint16_t port, std::string* error, bool peerFrames = false) {
+		bool StartQuorumRig(QuorumRig& r, uint8_t count, uint16_t port, std::string* error, bool peerFrames = false, NetTransportLane frameLane = NetTransportLane::ControlReliable) {
 			r.count = count;
 			r.port = port;
 			r.peerFrames = peerFrames;
@@ -4419,6 +4419,7 @@ namespace RTE {
 			const uint64_t session = 0x51A00000ULL + port;
 			for (uint8_t peer = 1; peer <= count; ++peer) {
 				auto config = QuorumConfig(peer, count, port, session, r.partition);
+				config.frameLane = frameLane;
 				if (peerFrames) {
 					[]<class Config>(Config& c) { if constexpr (requires { c.peerFrameGroups; }) c.peerFrameGroups = true; }(config);
 					// Reserve the loopback path, 200 ms jitter and the three-tick
@@ -4527,7 +4528,7 @@ namespace RTE {
 
 		bool TestPlacementBarrierReleasesPeerBridging(std::string* error) {
 			QuorumRig r;
-			if (!StartQuorumRig(r, 3, 47380, error, true)) return false;
+			if (!StartQuorumRig(r, 3, 47380, error, true, NetTransportLane::InputUnreliable)) return false;
 			std::array<NetSeatRoster, 3> rosters;
 			for (size_t i = 0; i < rosters.size(); ++i) {
 				auto& roster = rosters[i];
@@ -4542,7 +4543,7 @@ namespace RTE {
 				r.Peer(i + 1).SetRosterReader([&, i] { return &rosters[i]; });
 				if (!r.Peer(i + 1).WaitsForPlacement()) { *error = "a peer bypassed the placement barrier"; return false; }
 			}
-			if (!PumpQuorumRig(r, 4000, [&] { return *std::min_element(r.simulated.begin(), r.simulated.end()) >= 60; })) return false;
+			if (!PumpQuorumRig(r, 4000, [&] { return *std::min_element(r.simulated.begin(), r.simulated.end()) >= 60; })) { *error = "placement startup stalled:" + r.Report(); return false; }
 			r.partition->Split({1}, {2, 3});
 			(void)PumpQuorumRig(r, 1500, [] { return false; });
 			for (uint8_t peer = 1; peer <= 3; ++peer) if (r.Peer(peer).IsSeatUnderAI(1, r.Peer(peer).GetStats().nextFrame)) {
@@ -4550,17 +4551,17 @@ namespace RTE {
 			}
 			r.partition->cut.clear();
 			const uint64_t resumed = *std::max_element(r.simulated.begin(), r.simulated.end()) + 60;
-			if (!PumpQuorumRig(r, 4000, [&] { return *std::min_element(r.simulated.begin(), r.simulated.end()) >= resumed; })) return false;
+			if (!PumpQuorumRig(r, 4000, [&] { return *std::min_element(r.simulated.begin(), r.simulated.end()) >= resumed; })) { *error = "placement recovery stalled:" + r.Report(); return false; }
 			for (size_t i = 0; i < rosters.size(); ++i) {
 				NetRosterEvent event{NetRosterEventKind::CombatStarted}; event.frame = resumed;
 				const auto running = ApplyRosterEvent(rosters[i], event);
 				if (running.refused) { *error = "placement did not enter combat"; return false; }
 				rosters[i] = running.roster;
 			}
-			if (!PumpQuorumRig(r, 1000, [&] { return *std::min_element(r.simulated.begin(), r.simulated.end()) > resumed + 10; })) return false;
+			if (!PumpQuorumRig(r, 1000, [&] { return *std::min_element(r.simulated.begin(), r.simulated.end()) > resumed + 10; })) { *error = "combat boundary stalled:" + r.Report(); return false; }
 			for (uint8_t peer = 1; peer <= 3; ++peer) if (r.Peer(peer).WaitsForPlacement()) { *error = "combat retained the placement bridge guard"; return false; }
 			const auto before = r.simulated;
-			r.Peer(1).SetPeerFrameBlackoutForTest(r.simulated[0], 8000);
+			[]<class Peer>(Peer& peer, uint64_t frame) { if constexpr (requires { peer.SetPeerFrameBlackoutForTest(frame, 8000); }) peer.SetPeerFrameBlackoutForTest(frame, 8000); }(r.Peer(1), r.simulated[0]);
 			(void)PumpQuorumRig(r, 7500, [] { return false; });
 			for (uint8_t peer: {2, 3}) if (r.simulated[peer - 1] < before[peer - 1] + 440 || !r.Peer(peer).IsSeatUnderAI(1, r.simulated[peer - 1])) {
 				*error = "the three-seat combat majority waited on the host:" + r.Report(); return false;
@@ -29057,7 +29058,8 @@ namespace {
 	int NetLockstepSelfTest::RunFirstStart() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		std::string error;
-		const bool passed = TestFirstStartWaitsForPublishedStartup(&error);
+		const bool passed = TestFirstStartWaitsForPublishedStartup(&error) && TestFirstStartWaitsForPublishedStartup(&error, true) &&
+		    TestPlacementBarrierReleasesPeerBridging(&error);
 		std::cout << "[net-lockstep-first-start-selftest] " << (passed ? "PASS" : "FAIL: " + error) << std::endl;
 		return passed ? 0 : 1;
 	}
