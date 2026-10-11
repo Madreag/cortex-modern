@@ -24,6 +24,7 @@
 #include <string_view>
 #include <type_traits>
 #include <thread>
+#include <variant>
 #include <vector>
 
 namespace RTE {
@@ -88,6 +89,7 @@ namespace RTE {
 			// a prepared bridge may exist before the display reaches that range.
 			std::map<uint8_t, std::map<uint64_t, bool>> bridgeBoundaries;
 			uint64_t receiptGapFrame = 0, receiptGapDrops = 0;
+			uint64_t receiptGapAtMs = 0, receiptGapRequestDrops = 0;
 			uint64_t tailQueuePeak = 0;
 		};
 		struct Wire final : INetTransport {
@@ -158,7 +160,7 @@ namespace RTE {
 				if (!hub.row.receiptGap || owner != 3 || packet.type != NetHostMigrationMessageType::PeerInput || packet.offset != 0 || packet.totalBytes != packet.bytes.size()) return false;
 				const auto returns = hub.bridgeBoundaries.find(1);
 				if (returns == hub.bridgeBoundaries.end() || returns->second.empty() || returns->second.rbegin()->second || packet.frame < returns->second.rbegin()->first + 200) return false;
-				if (!hub.receiptGapFrame) hub.receiptGapFrame = packet.frame;
+				if (!hub.receiptGapFrame) { hub.receiptGapFrame = packet.frame; hub.receiptGapAtMs = hub.now; }
 				if (packet.frame >= hub.receiptGapFrame + 64) return false;
 				std::vector<uint8_t> body = packet.bytes;
 				const auto take = [](const std::vector<uint8_t>& data, size_t& at, uint32_t& value) {
@@ -202,6 +204,19 @@ namespace RTE {
 				std::vector<uint8_t> delivered = bytes;
 				NetHostMigrationMessage decision; NetHash32 key; key.fill(0x39);
 				if (hub.row.receiptGap && NetHostMigrationCodec::Decode(bytes, key, decision) && RemoveReceiptGap(decision, delivered)) return true;
+#if __has_include("NetPeerSessionWire.h")
+				// The first frame requests are unavailable for one second. Sender
+				// receipt repair must keep the human inputs accepted through that gap.
+				if (hub.row.receiptGap && hub.receiptGapFrame && other->owner == 3 && hub.now < hub.receiptGapAtMs + 1000 &&
+				    NetHostMigrationCodec::Decode(delivered, key, decision) && decision.type == NetHostMigrationMessageType::PeerControl) {
+					const auto decoded = NetLockstepCodec::Decode(decision.bytes, ControllerFrame::c_Version);
+					const auto* request = decoded.ok ? std::get_if<NetLockstepAck>(&decoded.packet.payload) : nullptr;
+					if (request && request->highestContiguousFrame == hub.receiptGapFrame &&
+					    (request->receivedMask & ~0xFFU) == NetLockstepCodec::c_FrameResendRequestMask && (request->receivedMask & 0xFFU) == 3) {
+						++hub.receiptGapRequestDrops; return true;
+					}
+				}
+#endif
 				if (lane == NetTransportLane::ControlReliable && NetHostMigrationCodec::Decode(bytes, key, decision)) {
 					[]<class Message>(Hub& hub, const Message& packet) {
 						using Type = std::decay_t<decltype(packet.type)>;
@@ -631,16 +646,17 @@ namespace RTE {
 			receiptRow.name = "relay_receipt_gap_after_return"; receiptRow.receiptGap = true; receiptRow.postReturnMs = 200000;
 			Fixture receipts;
 			if (!receipts.Run(receiptRow, error)) { error = "receipt gap: " + error; return false; }
-			if (!receipts.hub.receiptGapFrame || !receipts.hub.receiptGapDrops) { error = "the post-return receipt gap was not exercised"; return false; }
+			if (!receipts.hub.receiptGapFrame || !receipts.hub.receiptGapDrops || !receipts.hub.receiptGapRequestDrops) { error = "the post-return receipt gap and its missing frame requests were not exercised"; return false; }
 			if (!receipts.hub.tailQueuePeak || receipts.hub.tailQueuePeak > 256 * 1024) { error = "duplicate recovery requests exceeded the reliable queue bound"; return false; }
 			for (uint8_t id = 1; id <= 3; ++id) {
 				const auto& peer = *receipts.peers[id - 1];
 				const auto report = peer.BuildReportJson();
 				if (!AcceptedThrough(peer) || *AcceptedThrough(peer) < receipts.worlds[id - 1].applied ||
 				    peer.InputDelayAt(id, receipts.worlds[id - 1].applied) > 36 ||
-				    peer.GetStats().peers.at(3).substitutions != 0 || (id == 3 && report.find("\"peer_receipt_repairs\":0,") != std::string::npos)) {
+				    peer.GetStats().peers.at(3).substitutions != 0) {
 					error = "post-return input acceptance stopped, exceeded its delay bound, or held the healthy sender"; return false;
 				}
+				if (id == 3 && report.find("\"peer_receipt_repairs\":0,") != std::string::npos) { error = "receipt gap repair path was not exercised"; return false; }
 				std::cout << "[net-session-plane-selftest] relay-receipt peer=" << static_cast<int>(id) << " gap_frame=" << receipts.hub.receiptGapFrame
 				    << " applied=" << receipts.worlds[id - 1].applied << " accepted_through=" << *AcceptedThrough(peer)
 				    << " delay_ticks=" << peer.InputDelayAt(id, receipts.worlds[id - 1].applied) << " result=PASS" << std::endl;
