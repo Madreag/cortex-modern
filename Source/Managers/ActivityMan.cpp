@@ -818,7 +818,7 @@ struct ActivityMan::PreparedAutosave {
 		std::unordered_set<uint64_t> managerSounds; audioManager->CollectManagerSoundIdentities(managerSounds);
 		const auto graphStart = std::chrono::steady_clock::now();
 		std::vector<std::string> problems;
-		if (!LuaStateWrapper::CapturePreparedScriptGraphs(boundary, states, snapshot, image->graphs, image->graphScopes, problems))
+		if (!LuaStateWrapper::CapturePreparedScriptGraphs(boundary, states, snapshot, image->graphs, image->graphScopes, problems, header.clock->call->simulation))
 			throw ScriptGraphRefusal(std::move(problems));
 		image->graphUs = image->graphWalkUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - graphStart).count();
 		image->graphSerial = boundary.LuaHeap(0).StateSerial();

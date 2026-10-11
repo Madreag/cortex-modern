@@ -14,6 +14,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -300,7 +301,7 @@ namespace RTE {
 		static bool CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats, const std::function<void()>& whileWaiting = {});
 		static bool CapturePreparedScriptGraphs(const CheckpointLua::Boundary& boundary, std::span<const LuaStateWrapper* const> states,
 		    const std::shared_ptr<CheckpointNativeSnapshot>& snapshot, std::vector<CheckpointText>& graphs,
-		    std::vector<CheckpointScope>& scopes, std::vector<std::string>& problems);
+		    std::vector<CheckpointScope>& scopes, std::vector<std::string>& problems, std::thread::id captureThread);
 		static std::vector<MovableObject*> PreparedScriptHeldObjects(const CheckpointLua::Boundary& boundary);
 
 		/// The unique ids of the objects a graph text holds fields for.

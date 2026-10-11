@@ -4233,6 +4233,7 @@ static std::vector<const void*> LoadedPresets(const char* type) {
 static std::vector<const void*> LoadedActivityPresets() { return LoadedPresets("Activity"); }
 
 struct RTE::LuaScriptGraphNativeCaptureData {
+	mutable std::thread::id captureThread = std::this_thread::get_id();
 	/// The objects that existed when the capture began, copied by the first question asked of them.
 	const std::vector<MovableObject*>& KnownObjects() const {
 		Once(m_KnownObjectsCopied, m_KnownObjectsReady, [this] {
@@ -7878,11 +7879,12 @@ std::vector<MovableObject*> LuaStateWrapper::PreparedScriptHeldObjects(const Che
 
 bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary& boundary, std::span<const LuaStateWrapper* const> states,
     const std::shared_ptr<CheckpointNativeSnapshot>& snapshot, std::vector<CheckpointText>& graphs,
-    std::vector<CheckpointScope>& scopes, std::vector<std::string>& problems) {
+    std::vector<CheckpointScope>& scopes, std::vector<std::string>& problems, std::thread::id captureThread) {
 	if (!CheckpointNativeStorage::Reading() || states.size() != boundary.StateCount() || !snapshot)
 		throw std::logic_error("saved script graphs need their frozen world and states");
 	snapshot->SealBoundary();
 	LuaScriptGraphNativeCaptureScope lookups;
+	lookups.Current()->captureThread = captureThread;
 	LuaScriptGraphNativeCaptureScope::BuildOwners(lookups.Current());
 	const auto known = g_MovableMan.SnapshotKnownObjects();
 	graphs.resize(states.size()); scopes.resize(states.size());
@@ -8026,6 +8028,11 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 #endif
 			    CheckpointThreadCpuUnits() - cpu, part.callbacksCpu, part.nativeCpu, part.descriptorCpu, part.heapCpu, CheckpointThreadAccountedCpu() - accounted));
 		}
+	}
+	if (CheckpointPhaseCostsRequested()) {
+		const auto* shared = lookups.Current();
+		const auto [vectors, controllers] = shared->DirectOwnerCounts();
+		System::PrintDiagnosticLine(std::format("[checkpoint-native-lookups] direct_vectors={} direct_controllers={} full_owner_index={}", vectors, controllers, shared->HasOwnerIndex()));
 	}
 	return problems.empty();
 }

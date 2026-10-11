@@ -1582,6 +1582,7 @@ namespace RTE::CheckpointLua {
 	public:
 		static std::shared_ptr<const void> FreezeWorld(const std::vector<MovableObject*>& known) {
 			auto world = std::make_shared<NativeImage::World>();
+			if (s_GraphNativeCapture) world->captureThread = s_GraphNativeCapture->captureThread;
 			world->frozen = true;
 			world->records.reserve(known.size()); world->objects.reserve(known.size()); world->addresses.Reserve(known.size());
 			for (const MovableObject* source: known) {
