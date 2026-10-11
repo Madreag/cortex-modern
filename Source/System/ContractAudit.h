@@ -1760,7 +1760,7 @@ void Visit(const GraphicalPrimitive& object, const std::string& path) {
 static State Observe(const std::string& gapPath) {
     ContractAudit audit;
     std::map<long int, MovableObject*> objects;
-    { std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex); objects.insert(g_MovableMan.m_KnownObjects.begin(), g_MovableMan.m_KnownObjects.end()); }
+    { std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex); objects.insert(g_MovableMan.CheckpointLookupValues().m_KnownObjects.begin(), g_MovableMan.CheckpointLookupValues().m_KnownObjects.end()); }
     size_t invalid = 0;
     for (const auto& [uid, object]: objects) {
         if (!object || uid <= 0 || object->GetUniqueID() != uid) {
@@ -1957,7 +1957,7 @@ static State Identity() {
     state["lua"] = g_MovableMan.DescribeLuaIdentity();
     std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex);
     std::map<const MovableObject*, long> addresses;
-    for (const auto& [uid, object]: g_MovableMan.m_KnownObjects) {
+    for (const auto& [uid, object]: g_MovableMan.CheckpointLookupValues().m_KnownObjects) {
         state["uid:" + std::to_string(uid)] = std::to_string(reinterpret_cast<uintptr_t>(object));
         if (object) addresses.emplace(object, uid);
     }
@@ -1967,7 +1967,7 @@ static State Identity() {
             " registered_uid:" + std::to_string(found != addresses.end() ? found->second : 0) +
             " captured_uid:" + std::to_string(capturedUID);
     };
-    for (const auto& [uid, object]: g_MovableMan.m_KnownObjects) {
+    for (const auto& [uid, object]: g_MovableMan.CheckpointLookupValues().m_KnownObjects) {
         if (!object) continue;
         const std::string prefix = "borrowed[" + std::to_string(uid) + "]";
         borrowed(prefix + ".ignore", object->m_pMOToNotHit, object->m_MOToNotHitUID);

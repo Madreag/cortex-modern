@@ -103,6 +103,10 @@ namespace RTE {
 		const CheckpointDeque<MovableObject*>& GetAddedItems() const { return CheckpointLooseValues().m_AddedItems; }
 		const CheckpointDeque<MovableObject*>& GetParticles() const { return CheckpointLooseValues().m_Particles; }
 		const CheckpointDeque<MovableObject*>& GetAddedParticles() const { return CheckpointLooseValues().m_AddedParticles; }
+		/// Owns object lookup tables before a multiplayer capture.
+		void PrepareCheckpointLookupValues();
+		const void* CheckpointOwnedLookupValues() const { return m_OwnedCheckpointLookup.get(); }
+		static std::string CheckpointLookupStorageSelfTestMismatch();
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		SerializableClassNameGetter;
@@ -1068,7 +1072,7 @@ namespace RTE {
 
 		/// Returns the size of the object registry collection
 		/// @return Size of the objects registry.
-		unsigned int GetKnownObjectsCount() { return m_KnownObjects.size(); }
+		unsigned int GetKnownObjectsCount() const { return CheckpointLookupValues().m_KnownObjects.size(); }
 
 		/// How many entries the last threaded SyncedUpdate pass left alone because a script in that
 		/// same pass had freed the object. Zero on an ordinary tick.
@@ -1150,6 +1154,23 @@ namespace RTE {
 
 		/// Protected member variable and method declarations
 	protected:
+		struct CheckpointLookup : CheckpointNativeAllocated {
+			CheckpointMap<long int, MovableObject*> m_KnownObjects;
+			CheckpointUnorderedSet<const MovableObject*> m_ValidActors;
+			CheckpointUnorderedSet<const MovableObject*> m_ValidItems;
+			CheckpointUnorderedSet<const MovableObject*> m_ValidParticles;
+		};
+		CheckpointLookup m_OrdinaryCheckpointLookup;
+		std::unique_ptr<CheckpointLookup> m_OwnedCheckpointLookup;
+		CheckpointLookup& CheckpointLookupValues() {
+			if (CheckpointNativeStorage::Reading()) throw std::logic_error("a frozen registry cannot change live object lookup");
+			return m_OwnedCheckpointLookup ? *m_OwnedCheckpointLookup : m_OrdinaryCheckpointLookup;
+		}
+		const CheckpointLookup& CheckpointLookupValues() const {
+			const auto* source = m_OwnedCheckpointLookup ? m_OwnedCheckpointLookup.get() : &m_OrdinaryCheckpointLookup;
+			return *CheckpointNativeStorage::Source(source);
+		}
+
 		struct CheckpointLoose : CheckpointNativeAllocated {
 			CheckpointDeque<MovableObject*> m_Items;
 			CheckpointDeque<MovableObject*> m_Particles;
@@ -1266,9 +1287,6 @@ namespace RTE {
 		// It's entirely possible that stuff is deleted in the game but a reference to it is kept in Lua. Which is awful. Obviously.
 		// Or perhaps even more concerningly, stuff can be deleted, re-allocated over the same space, and then readded to movableman. Which even this solution does nothing to fix.
 		// Anyways, until we fix up ownership semantics... this is the best we can do.
-		CheckpointUnorderedSet<const MovableObject*> m_ValidActors;
-		CheckpointUnorderedSet<const MovableObject*> m_ValidItems;
-		CheckpointUnorderedSet<const MovableObject*> m_ValidParticles;
 
 		// Mutexes to ensure MOs aren't being removed from separate threads at the same time
 		std::mutex m_ActorsMutex;
@@ -1331,9 +1349,8 @@ namespace RTE {
 		uint64_t m_LastChecksumCensusTick = 0; //!< The tick that census was taken at.
 
 		// Global map which stores all objects so they could be foud by their unique ID
-		CheckpointMap<long int, MovableObject*> m_KnownObjects;
-		std::atomic<uint64_t> m_KnownObjectsVersion{0}; //!< Moves with every change to m_KnownObjects, under its lock.
-		std::unordered_map<const MovableObject*, uint32_t> m_KnownAddresses; //!< How many entries of m_KnownObjects name each object, as of m_KnownAddressesVersion.
+		std::atomic<uint64_t> m_KnownObjectsVersion{0}; //!< Moves with every registry change under its lock.
+		std::unordered_map<const MovableObject*, uint32_t> m_KnownAddresses; //!< The number of registry entries naming each object at m_KnownAddressesVersion.
 		uint64_t m_KnownAddressesVersion = UINT64_MAX; //!< The m_KnownObjectsVersion m_KnownAddresses answers for; any other rebuilds it at its next use.
 		/// Drops one entry's count of an object from the address index. Called with the registry locked.
 		void ForgetKnownAddress(const MovableObject* mo);
