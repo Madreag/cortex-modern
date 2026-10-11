@@ -1489,13 +1489,13 @@ namespace {
 	}
 
 	void Process(Phase phase, bool menuScopeOnly = false) {
-		const ProbeCost cost;
 		try {
 			if (!probe.loaded) {
 				if (phase == Phase::Sim) return;
 				Load();
 			}
 			if (!probe.enabled) return;
+			const ProbeCost cost;
 			if (phase == Phase::Draw && !probe.done) LabelDump();
 			const uint64_t round = ScenarioRunner::GetLockstepRoundId();
 			if (probe.script.value("repeat_rounds", false) && round > 0 && round != probe.round) {
