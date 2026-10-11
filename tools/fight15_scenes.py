@@ -49,18 +49,18 @@ def host_setup(players=2, cpu=False):
         lines += ["activate ButtonHostOptApply", "wait_ms 400"]
     lines += ["activate ButtonHostOptBack", "wait_ms 500",
               "activate ButtonMultiplayerCreate", "wait_substate Lobby 90",
-              "video_mark fight15-host-listening", "wait_connected 2 90", "wait_ms 1200"]
+              "video_mark fight15-host-listening", f"wait_connected {players if cpu else 2} 90", "wait_ms 1200"]
     return lines
 
 
-def join_setup():
+def join_setup(connected=2):
     return ["wait_ms 1800", "activate ButtonMainToMultiplayer", "wait_ms 600", "assert_substate Landing",
             "settext TextMultiplayerName Joiner", "activate ButtonMultiplayerJoinGame",
             "wait_ms 600", "assert_substate JoinSetup",
             "wait_row PublicGameRowPort{PORT} 90", "click_row PublicGameRowPort{PORT}",
             "assert_label LabelJoinSelected internet",
             "assert_enabled ButtonMultiplayerConnect 1", "activate ButtonMultiplayerConnect",
-            "wait_connected 2 90", "wait_substate Lobby 90", "wait_ms 1200"]
+            f"wait_connected {connected} 90", "wait_substate Lobby 90", "wait_ms 1200"]
 
 
 def watches(prefix, text, state="substate:Lobby"):
@@ -407,7 +407,7 @@ def game_scenes():
 
 
 def ai_fight():
-    host_menu, join_menu = host_setup(4, cpu=True), join_setup()
+    host_menu, join_menu = host_setup(4, cpu=True), join_setup(4)
     # These are stock activity options: Infinite gold selects Skirmish Defense's endless AI mode.
     insert = host_menu.index("activate ButtonHostOptApply")
     host_menu[insert:insert] = ["activate TabHostPageRules", "slider_set SliderHostRulesDifficulty 0",
