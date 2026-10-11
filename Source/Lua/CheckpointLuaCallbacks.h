@@ -17,6 +17,7 @@
 #include <thread>
 
 namespace RTE::CheckpointLua {
+	struct CallbackRoots { TValue roots, callbacks; bool perPeer = false; };
 	// The saver builds callback tables from owned fields and frozen function tokens.
 	struct CallbackImage {
 		struct Function {

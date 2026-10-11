@@ -21,9 +21,10 @@
 #define g_LuaMan LuaMan::Instance()
 
 struct lua_State;
+union TValue;
 
 namespace RTE {
-	namespace CheckpointLua { class HeapOwner; class NativeCache; struct CopyReceipt; struct GraphWorker; struct CallbackImage; }
+	namespace CheckpointLua { class HeapOwner; class NativeCache; class Snapshot; class ScratchImage; struct CopyReceipt; struct GraphWorker; struct CallbackImage; struct CallbackRoots; }
 	struct GraphDirt;
 
 	/// Elapsed costs of the frozen states; concurrent states overlap.
@@ -93,6 +94,7 @@ namespace RTE {
 	class LuabindObjectWrapper;
 	class MovableObject;
 	class Scene;
+	class GAScripted;
 	class CheckpointText;
 	class Entity;
 	struct PathRequest;
@@ -320,6 +322,9 @@ namespace RTE {
 		/// Exposes cached functions and object callbacks to the script graph.
 		void CaptureScriptCallbacks(uint64_t liveSerial = 0, CheckpointLua::CallbackImage* deferredObjects = nullptr);
 		void PrepareCheckpointBindings();
+		CheckpointLua::CallbackRoots RebuildFrozenScriptCallbacks(const CheckpointLua::Snapshot& heap, CheckpointLua::ScratchImage& scratch,
+		    const TValue& async, const GAScripted* activity, const std::vector<MovableObject*>& known,
+		    const std::function<TValue(const TValue&, std::string_view)>& lookup) const;
 
 		/// Rebinds cached functions and object callbacks from the restored graph.
 		/// @param rebound Filled with the objects whose callbacks the graph carried and that took them.

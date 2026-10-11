@@ -7694,6 +7694,91 @@ void LuaStateWrapper::PrepareCheckpointBindings() {
 	});
 }
 
+CheckpointLua::CallbackRoots LuaStateWrapper::RebuildFrozenScriptCallbacks(const CheckpointLua::Snapshot& heap, CheckpointLua::ScratchImage& scratch,
+    const TValue& async, const GAScripted* activity, const std::vector<MovableObject*>& known,
+    const std::function<TValue(const TValue&, std::string_view)>& lookup) const {
+	if (!CheckpointNativeStorage::Reading()) throw std::logic_error("callback reconstruction needs frozen native pages");
+	if (!lookup) throw std::logic_error("callback reconstruction has no frozen table lookup");
+	const auto* source = CheckpointNativeStorage::Source(this);
+	if (heap.State() != source->m_State) throw std::logic_error("callback reconstruction has a different Lua heap");
+	CheckpointLua::FrozenBindings bindings(heap);
+	using Fields = std::map<std::string, TValue>;
+	const auto object = [&scratch](const Fields& fields) {
+		std::vector<CheckpointLua::ScratchImage::Field> values;
+		values.reserve(fields.size());
+		for (const auto& [name, value]: fields) values.emplace_back(name, value);
+		return scratch.Object(values);
+	};
+	const auto key = [](std::string_view value) { return std::string(value.substr(0, value.find('\0'))); };
+	const auto function = [&heap](const auto& wrapper) {
+		if (!wrapper) throw std::runtime_error("a saved callback has no function wrapper");
+		if constexpr (std::is_pointer_v<std::remove_cvref_t<decltype(wrapper)>>)
+			return heap.RegistryValue(CheckpointNativeStorage::Source(wrapper)->GetCheckpointReference());
+		else return heap.RegistryValue(CheckpointNativeStorage::Source(wrapper.get())->GetCheckpointReference());
+	};
+	const auto functions = [&](const auto& saved) {
+		Fields result;
+		for (const auto& [name, callback]: CheckpointValues(saved)) result.insert_or_assign(key(name), function(callback));
+		return object(result);
+	};
+	TValue globals; setgcVraw(&globals, gcref(heap.Read(heap.State()).env), LJ_TTAB);
+	const TValue scripted = lookup(globals, "_ScriptedObjects");
+	Fields receivers, roots, empty;
+	CheckpointUnorderedSet<MovableObject*> registered;
+	bool perPeer = false;
+	for (MovableObject* mo: CheckpointValues(source->m_RegisteredMOs)) {
+		registered.insert(mo);
+		perPeer = perPeer || CheckpointNativeStorage::Source(mo)->IsActor();
+	}
+	for (MovableObject* mo: CheckpointValues(source->m_AddedRegisteredMOs)) registered.insert(mo);
+	for (const MovableObject* live: registered) {
+		const auto* mo = CheckpointNativeStorage::Source(live);
+		if (!mo->ObjectScriptsInitialized()) continue;
+		const std::string uid = std::to_string(mo->GetUniqueID());
+		const TValue receiver = tvistab(&scripted) ? lookup(scripted, uid) : scratch.Nil();
+		receivers.emplace(uid, receiver);
+		TValue fields = tvisudata(&receiver) ? bindings.Instance(udataV(&receiver)) : scratch.Nil();
+		if (tvisnil(&fields)) { fields = scratch.Object({}); empty.emplace(uid, scratch.Boolean(true)); }
+		roots.emplace(uid, fields);
+	}
+	Fields callbacks{{"roots", object(receivers)}, {"emptyRoots", object(empty)}, {"async", async}};
+	if (heap.StateSerial()) callbacks.emplace("liveSerial", scratch.Number(static_cast<lua_Number>(heap.StateSerial())));
+	if (activity) {
+		activity = CheckpointNativeStorage::Source(activity);
+		callbacks.emplace("activity", scratch.Object({{"class", scratch.String(key(activity->GetLuaClassName()))}, {"functions", functions(activity->m_ScriptFunctions)}}));
+		std::vector<TValue> scripts;
+		for (const GlobalScript* live: CheckpointValues(activity->GetGlobalScripts())) {
+			const auto* script = CheckpointNativeStorage::Source(live);
+			scripts.push_back(scratch.Object({{"class", scratch.String(key(script->m_LuaClassName))}, {"active", scratch.Boolean(script->m_IsActive)},
+			    {"started", scratch.Boolean(script->m_HasStarted)}, {"late", scratch.Boolean(script->m_LateUpdate)}}));
+		}
+		callbacks.emplace("globals", scratch.Array(scripts));
+	}
+	Fields cache;
+	for (const auto& [path, saved]: CheckpointValues(source->m_ScriptCache)) cache.insert_or_assign(key(path), functions(saved.functionNamesAndObjects));
+	callbacks.emplace("cache", object(cache));
+	Fields objects;
+	for (const MovableObject* live: known) {
+		const auto* mo = CheckpointNativeStorage::Source(live);
+		if (CheckpointNativeStorage::Original(mo->GetLuaState()) != CheckpointNativeStorage::Original(this) || mo->IsOriginalPreset() ||
+		    mo->GetPendingPersistedUniqueID() > 0 || mo->m_FunctionsAndScripts.empty()) continue;
+		Fields groups;
+		for (const auto& [name, saved]: CheckpointValues(mo->m_FunctionsAndScripts)) {
+			std::vector<TValue> entries;
+			for (const auto& item: CheckpointValues(saved)) {
+				const auto* callback = CheckpointNativeStorage::Source(item.m_LuaFunction.get());
+				if (!callback) throw std::runtime_error("a saved object callback has no function wrapper");
+				entries.push_back(scratch.Object({{"function", heap.RegistryValue(callback->GetCheckpointReference())},
+				    {"path", scratch.String(key(callback->GetFilePath()))}, {"enabled", scratch.Boolean(item.m_ScriptIsEnabled)}}));
+			}
+			groups.insert_or_assign(key(name), scratch.Array(entries));
+		}
+		objects.emplace(std::to_string(mo->GetUniqueID()), object(groups));
+	}
+	callbacks.emplace("objects", object(objects));
+	return {object(roots), object(callbacks), perPeer};
+}
+
 void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial, CheckpointLua::CallbackImage* deferredObjects) {
 	const int top = lua_gettop(m_State);
 	FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats;
@@ -9786,6 +9871,50 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		const TValue absent = heap.RegistryLightUserdataValue(&owner);
 		const bool exact = ScriptGraphBirthHorizon(heap) == horizon && tvisnumber(&nullKey) && numberVnum(&nullKey) == 17 && tvisnil(&absent);
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " frozen_birth_horizon_and_null_registry_key_survive_live_changes" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
+		CheckpointNativeStorage::AllocationScope allocations(true);
+		LuaStateWrapper callbacksState;
+		callbacksState.Initialize();
+		const bool planted = callbacksState.RunScriptString("local value = 71; _FrozenCacheCallback = function() return value end") == 0;
+		lua_getglobal(callbacksState.m_State, "_FrozenCacheCallback");
+		callbacksState.m_ScriptCache["frozen cache path"].functionNamesAndObjects.emplace("Update", new LuabindObjectWrapper(
+		    new luabind::object(luabind::from_stack(callbacksState.m_State, -1)), "frozen cache path"));
+		lua_pop(callbacksState.m_State, 1);
+		CheckpointNativeStorage::Root<LuaStateWrapper> root(&callbacksState);
+		auto pages = CheckpointNativeStorage::PrepareInventory();
+		auto prepared = callbacksState.m_CheckpointHeap->PrepareFreeze();
+		root.Freeze();
+		if (!pages->Arm() || !prepared->Arm(*callbacksState.m_CheckpointHeap)) throw std::runtime_error("could not freeze the callback cache probe");
+		prepared->Drain();
+		const auto heap = prepared->Image();
+		callbacksState.Destroy();
+		bool exact = planted;
+		CheckpointLua::CallbackRoots saved;
+		CheckpointLua::Snapshot image;
+		{
+			const std::array roots{root.Range()};
+			CheckpointNativeStorage::ReadScope read(pages->Pages(), roots);
+			CheckpointLua::ScratchImage scratch(heap.StateSerial());
+			saved = callbacksState.RebuildFrozenScriptCallbacks(heap, scratch, scratch.Object({}), nullptr, {}, [&heap](const TValue& table, std::string_view key) {
+				if (!tvistab(&table)) throw std::runtime_error("a callback cache probe lookup has no table");
+				return heap.TableValue(tabV(&table), key);
+			});
+			image = scratch.Finish(heap);
+		}
+		std::unique_ptr<lua_State, decltype(&lua_close)> worker(luaL_newstate_raw(), lua_close);
+		if (!worker) throw std::bad_alloc();
+		CheckpointLua::View view(image, [](lua_State*, auto&, auto) -> int { throw std::runtime_error("unexpected callback cache native lookup"); }, {});
+		CheckpointLua::ProtectedCall(worker.get(), [&] {
+			luaL_openlibs(worker.get()); view.Reset(worker.get(), image); view.Install(worker.get());
+			view.Push(worker.get(), saved.callbacks); lua_setglobal(worker.get(), "probe");
+			view.Push(worker.get(), saved.roots); lua_setglobal(worker.get(), "roots");
+			const char* script = "assert(next(roots) == nil and next(probe.roots) == nil and next(probe.objects) == nil and next(probe.emptyRoots) == nil); assert(type(probe.cache['frozen cache path'].Update) == 'function'); local _, value = debug.getupvalue(probe.cache['frozen cache path'].Update, 1); assert(value == 71); assert(type(probe.liveSerial) == 'number' and probe.activity == nil and probe.globals == nil)";
+			if (luaL_loadstring(worker.get(), script) || lua_pcall(worker.get(), 0, 0, 0)) exact = false;
+		});
+		exact = !saved.perPeer && exact;
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " callback_cache_rebuilds_after_live_wrappers_and_state_are_destroyed" << std::endl;
 		checkpointValues = exact && checkpointValues;
 	}
 	{
