@@ -1511,7 +1511,7 @@ void SceneEditorGUI::RequestBrainSkyPath(Scene& scene, const Vector& start, cons
 	m_PathRequest = scene.CalculatePathAsyncForEditor(
 	    start, end, FLT_MAX, c_PathFindingDefaultDigStrength, static_cast<Activity::Teams>(team),
 	    [this](std::shared_ptr<volatile PathRequest> pathRequest) {
-		    const auto& path = const_cast<const std::list<Vector>&>(pathRequest->path);
+		    const auto& path = const_cast<const CheckpointList<Vector>&>(pathRequest->path);
 		    m_BrainSkyPath.assign(path.begin(), path.end());
 		    m_BrainSkyPathCost = pathRequest->totalCost;
 	    });
@@ -1663,7 +1663,7 @@ bool SceneEditorGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		GUICheckpoint::LoadEntityReference(blink, true);
 		std::shared_ptr<PathRequest> request;
 		if (hasRequest) {
-			request = std::make_shared<PathRequest>();
+			request = MakeCheckpointNativeShared<PathRequest>();
 			reader.Value(request->complete); reader.Value(request->status); reader.Value(request->path); reader.Value(request->pathLength); reader.Value(request->totalCost); reader.Value(request->startPos); reader.Value(request->targetPos);
 			if (!request->complete) return false;
 		}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Box.h"
+#include "CheckpointNativeContainers.h"
 #include "System/MicroPather/micropather.h"
 
 #include <array>
@@ -23,10 +24,10 @@ namespace RTE {
 	class Material;
 
 	/// Information required to make an async pathing request.
-	struct PathRequest {
+	struct PathRequest : CheckpointNativeAllocated {
 		bool complete = false;
 		int status = MicroPather::NO_SOLUTION;
-		std::list<Vector> path;
+		CheckpointList<Vector> path;
 		float pathLength = 0.0f;
 		float totalCost = 0.0f;
 		Vector startPos;
@@ -114,7 +115,7 @@ namespace RTE {
 	};
 
 	/// A class encapsulating and implementing the MicroPather A* pathfinding library.
-	class PathFinder : public Graph {
+	class PathFinder : public Graph, public CheckpointNativeAllocated {
 		friend struct ContractAudit;
 
 	public:
@@ -309,7 +310,7 @@ namespace RTE {
 		static constexpr float c_NodeCostChangeEpsilon = 5.0F; //!< The minimum change in a PathNodes's cost for the pathfinder to recognize a change and reset itself. This is so minor changes (e.g. blood particles) don't force constant pathfinder resets.
 
 		MicroPather* m_Pather; //!< The actual pathing object that does the pathfinding work. Owned.
-		std::vector<PathNode> m_NodeGrid; //!< The array of PathNodes representing the grid on the scene.
+		CheckpointVector<PathNode> m_NodeGrid; //!< The array of PathNodes representing the grid on the scene.
 		unsigned int m_NodeDimension; //!< The width and height of each PathNode, in pixels on the scene.
 		Vector m_Offset;
 		int m_GridWidth; //!< The width of the pathing grid, in PathNodes.
@@ -355,7 +356,7 @@ namespace RTE {
 			uint64_t completeTick = 0;
 			uint64_t sequence = 0;
 			std::atomic<bool> solved{false};
-			std::list<Vector> path;
+			CheckpointList<Vector> path;
 			float totalCost = 0.0F;
 			int status = MicroPather::NO_SOLUTION;
 			// The query, so a commit whose solver never answers can solve it here instead of parking the tick.
@@ -393,7 +394,7 @@ namespace RTE {
 		MicroPather* GetPather();
 
 		/// Calculates a path within an already registered request.
-		int CalculatePathImpl(Vector start, Vector end, std::list<Vector>& pathResult, float& totalCostResult, float jumpHeight, float digStrength);
+		template<class Allocator> int CalculatePathImpl(Vector start, Vector end, std::list<Vector, Allocator>& pathResult, float& totalCostResult, float jumpHeight, float digStrength);
 
 #pragma region Path Cost Updates
 		/// Helper function for getting the strongest material we need to path though between PathNodes.

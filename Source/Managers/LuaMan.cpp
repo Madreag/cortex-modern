@@ -13907,7 +13907,7 @@ void LuaMan::StartPathCallback(const std::shared_ptr<LuaPathCallbackContext>& co
 }
 
 void LuaMan::CompletePathCallback(const std::shared_ptr<LuaPathCallbackContext>& context, lua_State* state, int id, const PathRequest& result) {
-	auto copy = std::make_shared<PathRequest>(result);
+	auto copy = MakeCheckpointNativeShared<PathRequest>(result);
 	copy->complete = true;
 	std::scoped_lock lock(context->mutex);
 	context->incoming.push_back({state, id, 0, std::move(copy)});
@@ -14028,7 +14028,7 @@ bool LuaMan::RestorePathCallbacks(lua_State* state, int index) {
 		lua_getfield(state, -1, "result");
 		const auto* value = luabind::detail::is_class_object(state, -1);
 		valid = id >= 0 && id < nextId && order < nextOrder && value && std::strcmp(value->crep()->name(), "PathRequest") == 0;
-		if (valid) callbacks.push_back({state, id, order, std::make_shared<PathRequest>(*static_cast<const PathRequest*>(value->ptr()))});
+		if (valid) callbacks.push_back({state, id, order, MakeCheckpointNativeShared<PathRequest>(*static_cast<const PathRequest*>(value->ptr()))});
 		lua_pop(state, 2);
 	}
 	lua_settop(state, top);

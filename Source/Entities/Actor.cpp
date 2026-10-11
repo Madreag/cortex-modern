@@ -2403,7 +2403,7 @@ void Actor::OnNewMovePath() {
 
 void Actor::PreControllerUpdate() {
 	if (m_PathRequest && m_PathRequest->complete) {
-		const auto& path = const_cast<const std::list<Vector>&>(m_PathRequest->path);
+		const auto& path = const_cast<const CheckpointList<Vector>&>(m_PathRequest->path);
 		m_MovePath.assign(path.begin(), path.end());
 		m_PathRequest.reset();
 		OnNewMovePath();
