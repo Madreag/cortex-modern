@@ -13,6 +13,9 @@ spec = importlib.util.spec_from_file_location('timeline', Path(__file__).with_na
 timeline = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(timeline)
 ROLES = ('ally', 'linux', 'mac')
+MIN_PLAY_TPS = 59.9
+SIM_TICK_MS = 1000 / 60
+RATE_POLICY = 'Full in-play and each consecutive 60-second window: at least 59.9 tps; median of 60-tick average intervals: within 1 ms of 1000/60 ms. Raw gaps and sliding-window rates remain evidence.'
 
 
 def score(roots):
@@ -99,13 +102,19 @@ def score(roots):
             require(rows[0]['peer'] in (1, 2, 3) and (role != 'ally' or rows[0]['peer'] == 1), role + ': wrong local peer')
             require(timing['span_s'] + 1 / 60 >= 200, role + ': less than 200 seconds of full-match ticks')
             require(600 in index and index[600]['paused'] is False, role + ': blackout did not begin in play at tick 600')
-            tps, span = timing['in_play_tps'], timing['in_play_span_s']
+            tps = timing['in_play_tps']
             truncated = result.get('timed_out') or result.get('exit_code') != 0 or not report
             detail['rate_status'] = 'unscored_truncated' if truncated else 'complete'
             # A killed run already fails participation. Its cut-off endpoint
             # cannot establish a full-match pacing verdict.
             if not truncated:
-                require(tps is not None and abs(tps - 60) * span <= 1, role + ': full-match rate is not 60 tps within one endpoint tick')
+                require(tps is not None and tps >= MIN_PLAY_TPS, role + ': full-match in-play rate below 59.9 tps')
+                windows = timing['consecutive_60s']
+                require(bool(windows) and all(window['tps'] >= MIN_PLAY_TPS for window in windows),
+                        role + ': consecutive 60-second in-play window below 59.9 tps')
+                median = timing['median_60_tick_interval_ms']
+                require(median is not None and abs(median - SIM_TICK_MS) <= 1,
+                        role + ': median 60-tick average interval differs from the sim tick by more than 1 ms')
             blackout_gaps = [g for g in timing['gaps_over_50ms'] if 600 <= g['ending_tick'] <= 1081 and g['in_play']]
             steady_gaps = [g for g in timing['gaps_over_50ms'] if not 600 <= g['ending_tick'] <= 1081 and g['gap_ms'] > 100 and g['in_play']]
             detail.update(blackout_gaps=blackout_gaps, steady_gaps_over_100ms=steady_gaps)
@@ -232,6 +241,7 @@ def score(roots):
     return {'pass': not errors, 'errors': errors, 'placement_confirmations': matrix, 'commits': commits,
             'common_ticks': len(common), 'compared_ticks': len(compared), 'hash_mismatches': mismatch,
             'hash_coverage': coverage, 'hash_exclusions': exclusions, 'leave_test': leave_score, 'details': details,
+            'rate_policy': RATE_POLICY,
             'physics_policy': 'The gate requires zero unaffected pauses over 50 ms during blackout. Pauses outside blackout remain measured path data.'}
 
 

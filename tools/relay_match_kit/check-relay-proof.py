@@ -85,6 +85,35 @@ try:
  entry['survivor_mismatch_detected']={'tick':12099,'pass':result['pass'],'errors':result['errors']}
 finally:
  for p,content in saved.items():p.write_bytes(content)
+live=roots['linux']/'engine/live.jsonl';old=live.read_bytes()
+try:
+ live.write_bytes(rows_change(old,lambda rows:[r.update(wall_ms=r['tick']*1000/60.1) for r in rows]))
+ result=check('catch_up_rate_60_1_and_pacing_bounds',True)
+ entry=checks[-1]
+ entry['positive_rate']=result['details']['linux']['timing']['in_play_tps']
+ entry['cases']=[]
+ def rate_case(name,change,needle):
+  live.write_bytes(rows_change(old,change))
+  result=proof.score(roots)
+  assert not result['pass'] and any(needle in error for error in result['errors']),(name,result['errors'])
+  timing=result['details']['linux']['timing']
+  entry['cases'].append({'name':name,'pass':True,'expected_verdict':False,'errors':result['errors'],
+                         'in_play_tps':timing['in_play_tps'],'median_60_tick_interval_ms':timing['median_60_tick_interval_ms'],
+                         'consecutive_60s':timing['consecutive_60s']})
+ rate_case('full_span_below_59_9',lambda rows:[r.update(wall_ms=r['tick']*1000/59.8) for r in rows],'full-match in-play rate below 59.9')
+ rate_case('one_minute_deficit_with_full_span_above_59_9',lambda rows:[r.update(wall_ms=r['tick']*1000/60 if r['tick']<=40 else
+           40*1000/60+min(r['tick']-40,3600)*1000/59.7+max(r['tick']-3640,0)*1000/60.5) for r in rows],
+           '60-second in-play window below 59.9')
+ assert entry['cases'][-1]['in_play_tps']>=59.9
+ def uneven_intervals(rows):
+  elapsed=0
+  for row in rows:
+   elapsed+=1000/55 if ((row['tick']-1)//60)%20<11 else 14.8
+   row['wall_ms']=elapsed
+ rate_case('median_interval_more_than_one_ms_off',uneven_intervals,'median 60-tick average interval')
+ assert entry['cases'][-1]['in_play_tps']>=59.9
+ assert all(window['tps']>=59.9 for window in entry['cases'][-1]['consecutive_60s'])
+finally:live.write_bytes(old)
 mutate('host_never_returns','ally','engine/live.jsonl',lambda b:rows_change(b,lambda rows:[r.update(ai_held_peer_ids=[1]) for r in rows if r['tick']>=724]),'host never returned')
 mutate('quorum_receipt_stuck','linux','engine/live.jsonl',lambda b:rows_change(b,lambda rows:[r.update(input_accepted_through=1599) for r in rows if r['tick']>=2000]),'acceptance stopped advancing')
 mutate('delay_exceeds_bound','mac','engine/live.jsonl',lambda b:rows_change(b,lambda rows:rows[1999].update(input_delay_ticks=37)),'1..36 tick bound')
