@@ -63,7 +63,7 @@ namespace RTE {
 		if (proposal.frame != m_Config.startFrame && !m_MigrationHistory.contains(prefixFrame)) return false;
 		if (!std::equal(prefix.begin(), prefix.end(), proposal.bytes.begin())) return false;
 		if (proposal.preparedFrame == 2) return proposal.members.size() == 1 && proposal.successorPeerId == proposal.members.front() &&
-		    proposal.members.front() > 0 && proposal.members.front() <= m_Config.peerCount && proposal.completeFrom > 0 && proposal.completeFrom <= NetLockstepCodec::c_MaxInputDelayFrames &&
+		    proposal.members.front() > 0 && proposal.members.front() <= m_Config.peerCount && proposal.completeFrom > 0 && proposal.completeFrom <= NetLockstepCodec::c_MaxPeerInputDelayFrames &&
 		    (proposal.connectedMask & SeatBit(proposal.members.front())) != 0;
 		uint32_t named = 0;
 		for (uint8_t peer: proposal.members) named |= SeatBit(peer);
@@ -129,6 +129,10 @@ namespace RTE {
 			uint64_t agreementMs = 1;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (peer != m_Config.localPeerId && (proposal.connectedMask & SeatBit(peer)) != 0)
 				if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end()) agreementMs = std::max<uint64_t>(agreementMs, path->second.P95Ms());
+			// The receipt RTT excludes the two voters' next pump and the
+			// consumer's next slot. Spend this scheduling reserve before the
+			// deadline rather than adding it to the player's fifty-ms wait.
+			agreementMs += boundMs;
 			// Votes spend the buffered runway, so a healthy relay round trip fits inside the consumer's bound.
 			if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame) {
 				double dueMs = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
@@ -160,16 +164,16 @@ namespace RTE {
 			const uint64_t displayed = m_LastCompletedSimulationTick.value_or(frame - 1);
 			const uint64_t applied = m_PeerAppliedThrough.at(peer);
 			const uint32_t trail = static_cast<uint32_t>(displayed - std::min(displayed, applied));
-			const uint32_t margin = std::max(c_NetInputJitterReserveMs, m_Stats.peers[peer].jitterMs) +
-			    static_cast<uint32_t>(std::ceil((m_Config.slowPlayerBoundTicks + 1) * m_Config.simTickMs));
+			// Advertised jitter already includes the scheduling reserve.
+			const uint32_t margin = std::max(c_NetInputJitterReserveMs +
+			    static_cast<uint32_t>(std::ceil((m_Config.slowPlayerBoundTicks + 1) * m_Config.simTickMs)), m_Stats.peers[peer].jitterMs);
 			const uint32_t transit = static_cast<uint32_t>(std::ceil((rtt + margin) / m_Config.simTickMs));
-			// The returning reader is still behind the live producers. Its
-			// first human input needs that trail as well as the measured path
-			// and jitter reserve. A pre-outage delay alone can immediately
-			// exclude the seat again when the neutral return interval ends.
-			const uint32_t delay = std::max<uint32_t>(InputDelayAt(peer, proposal.frame), transit + trail);
+			// The private reader's trail belongs in its temporary neutral
+			// interval. It must not become every human input's permanent delay.
+			const uint32_t delay = std::min<uint32_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
+			    std::max<uint32_t>(InputDelayAt(peer, proposal.frame), transit));
 			const uint32_t neutral = delay + transit + trail + m_Config.slowPlayerBoundTicks;
-			if (delay > NetLockstepCodec::c_MaxInputDelayFrames || neutral > NetLockstepCodec::c_MaxFutureFrameSkew) return false;
+			if (neutral > NetLockstepCodec::c_MaxFutureFrameSkew) return false;
 			PutSize(proposal.bytes, delay); PutSize(proposal.bytes, neutral);
 			PutSize(proposal.bytes, std::max<uint32_t>(1, m_Config.peerIncarnations[peer]));
 			DiagnosticLine() << "[net-peer-return-runway] peer=" << static_cast<int>(peer) << " activation=" << proposal.frame
@@ -262,13 +266,13 @@ namespace RTE {
 		if (agreed.preparedFrame == 1) for (uint8_t peer: agreed.members) {
 			uint32_t delay = 0, neutral = 0, incarnation = 0;
 			if (!TakeSize(agreed.bytes, returnOffset, delay) || !TakeSize(agreed.bytes, returnOffset, neutral) || !TakeSize(agreed.bytes, returnOffset, incarnation) || incarnation == 0 ||
-			    delay > NetLockstepCodec::c_MaxInputDelayFrames || neutral < delay || neutral > NetLockstepCodec::c_MaxFutureFrameSkew || agreed.frame > UINT64_MAX - neutral) return;
+			    delay > NetLockstepCodec::c_MaxPeerInputDelayFrames || neutral < delay || neutral > NetLockstepCodec::c_MaxFutureFrameSkew || agreed.frame > UINT64_MAX - neutral) return;
 			returnDelays[peer] = {static_cast<uint16_t>(delay), agreed.frame + neutral, incarnation};
 		}
 		m_PeerBridgeCertificates.emplace(PeerDecisionKey{certificate.frame, DecisionKind(certificate)}, certificate);
 		if (agreed.preparedFrame == 3) { InstallPeerAdmin(agreed, voters, nowMs); return; }
 		if (agreed.preparedFrame == 2) {
-			if (agreed.members.size() != 1 || agreed.completeFrom == 0 || agreed.completeFrom > NetLockstepCodec::c_MaxInputDelayFrames) return;
+			if (agreed.members.size() != 1 || agreed.completeFrom == 0 || agreed.completeFrom > NetLockstepCodec::c_MaxPeerInputDelayFrames) return;
 			const uint8_t peer = agreed.members.front();
 			m_DelayChanges[peer][agreed.frame] = static_cast<uint16_t>(agreed.completeFrom);
 			m_LastDelayResizeMs[peer] = nowMs; ++m_Stats.delayChangesCommitted;
@@ -284,7 +288,13 @@ namespace RTE {
 		if (agreed.preparedFrame == 1 && agreed.connectedMask == owners && agreed.frame <= m_Stats.nextFrame) m_PeerAdminFrameMembers = 0;
 		for (uint8_t peer: agreed.members) {
 			m_PeerReceiptDelaySamples.erase(peer);
+			m_PeerReceiptSampleFloorMs[peer] = nowMs;
+			m_PeerOwnReceiptProgress.erase(peer);
 			if (agreed.preparedFrame == 1) {
+				if (peer == m_Config.localPeerId) {
+					m_PeerReceiptDelaySamples.clear(); m_PeerOwnReceiptProgress.clear();
+					for (uint8_t receiver = 1; receiver <= m_Config.peerCount; ++receiver) m_PeerReceiptSampleFloorMs[receiver] = nowMs;
+				}
 				if (!m_PeerBridges.contains(peer)) continue;
 				m_PeerBridges[peer].returnFrame = agreed.frame;
 				m_PeerAcceptedThrough[peer] = agreed.frame;

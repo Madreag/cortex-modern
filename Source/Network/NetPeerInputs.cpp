@@ -102,6 +102,49 @@ namespace RTE {
 		return PeerGroupHasAuthority(accepted);
 	}
 
+	std::optional<uint64_t> NetLockstepCoordinator::GetLocalInputAcceptedThrough() const {
+		NET_PLANE_CHECK();
+		if (!UsesPeerFrameGroups()) return m_HostAcceptedLocalFrames.empty() ? std::nullopt : std::optional(*m_HostAcceptedLocalFrames.rbegin());
+		const uint8_t owner = m_Config.localPeerId;
+		uint64_t through = EffectiveStartOf(owner);
+		if (const auto reclaim = m_ReclaimTransactions.find(owner); reclaim != m_ReclaimTransactions.end())
+			through = std::max(through, reclaim->second.neutralThroughFrame + 1);
+		if (const auto found = m_PeerInputReceipts.find(owner); found != m_PeerInputReceipts.end()) {
+			for (const auto& [receiver, candidate]: found->second) {
+				uint32_t voters = SeatBit(owner);
+				for (const auto& [peer, accepted]: found->second) if (accepted >= candidate) voters |= SeatBit(peer);
+				if (PeerGroupHasAuthority(voters)) through = std::max(through, candidate);
+			}
+		}
+		return through == 0 ? std::nullopt : std::optional(through - 1);
+	}
+
+	void NetLockstepCoordinator::RepairPeerReceiptHoles(uint64_t nowMs) {
+		if ((m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) == 0 || m_LastQueuedTargetFrame == UINT64_MAX) return;
+		for (auto& [peer, progress]: m_PeerOwnReceiptProgress) {
+			if ((m_FrameGroupMembers & SeatBit(peer)) == 0 || progress.through >= m_LastQueuedTargetFrame ||
+			    progress.through < EffectiveStartOf(m_Config.localPeerId) || IsSeatReclaimGap(m_Config.localPeerId, progress.through)) continue;
+			uint32_t rtt = 0;
+			if (m_Config.peerSessionLinks) {
+				const auto [wire, route] = m_Config.peerSessionLinks->RouteTo(peer);
+				if (wire && wire->IsPeerPingMeasured(route)) rtt = wire->GetPeerPingMs(route);
+			}
+			// A repeating cumulative receipt names a hole, not a growing RTT.
+			// Repair its exact original input before the consumer drains its
+			// runway. One reliable copy per two round trips avoids a resend flood.
+			const uint64_t retryMs = std::clamp<uint64_t>(2ULL * rtt, 50, 1000);
+			const uint64_t since = std::max(progress.advancedAtMs, progress.repairedAtMs);
+			if (nowMs < since || nowMs - since < retryMs) continue;
+			NetLockstepFrame input;
+			if (!FindLocalInput(progress.through, input)) continue;
+			SendForwardedPeerInput(input, peer);
+			progress.repairedAtMs = nowMs;
+			++m_PeerReceiptRepairs;
+			DiagnosticLine() << "[net-peer-input-repair] owner=" << static_cast<int>(m_Config.localPeerId)
+			    << " receiver=" << static_cast<int>(peer) << " frame=" << progress.through << " stagnant_ms=" << nowMs - progress.advancedAtMs << std::endl;
+		}
+	}
+
 	bool NetLockstepCoordinator::HandlePeerFrameMessage(const NetHostMigrationMessage& message, uint64_t nowMs) {
 		if (HandlePeerSessionMessage(message, nowMs)) return true;
 		if (!UsesPeerFrameGroups() || message.type < NetHostMigrationMessageType::PeerInput ||
@@ -132,7 +175,13 @@ namespace RTE {
 			if (message.successorPeerId > 0 && message.successorPeerId <= m_Config.peerCount && message.bytes.empty() &&
 			    message.frame >= m_Config.startFrame && message.frame <= m_Stats.nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew + 1) {
 				heard();
-				if (message.successorPeerId == m_Config.localPeerId && message.frame > 0) if (const auto sent = m_PeerInputSentAtMs.find(message.frame - 1); sent != m_PeerInputSentAtMs.end() && nowMs >= sent->second)
+				auto& receipt = m_PeerInputReceipts[message.successorPeerId][message.senderPeerId];
+				const bool advanced = message.frame > receipt;
+				if (message.successorPeerId == m_Config.localPeerId && advanced) {
+					auto& progress = m_PeerOwnReceiptProgress[message.senderPeerId];
+					progress = {message.frame, nowMs, 0};
+				}
+				if (message.successorPeerId == m_Config.localPeerId && advanced && message.frame > 0) if (const auto sent = m_PeerInputSentAtMs.find(message.frame - 1); sent != m_PeerInputSentAtMs.end() && nowMs >= sent->second)
 				{
 					const auto group = m_FrameGroupChanges.upper_bound(message.frame - 1);
 					const uint32_t members = group == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(group)->second;
@@ -140,13 +189,13 @@ namespace RTE {
 					const bool live = bridge == m_PeerBridges.end() || (bridge->second.returnFrame && message.appliedFrame >= *bridge->second.returnFrame);
 					// A private tail reader's delayed receipt measures its catch-up,
 					// not the live sender's transport round trip.
-					if (live && (members & m_FrameGroupMembers & SeatBit(message.senderPeerId)) != 0) {
+					if (live && sent->second >= m_PeerReceiptSampleFloorMs[message.senderPeerId] && (members & m_FrameGroupMembers & SeatBit(message.senderPeerId)) != 0) {
 						const auto delay = static_cast<uint32_t>(std::min<uint64_t>(nowMs - sent->second, UINT32_MAX));
 						m_PeerReceiptDelaySamples[message.senderPeerId].Observe(nowMs, delay);
 						m_PeerArrivalLatencyMs[m_Config.localPeerId] = {nowMs, delay};
 					}
 				}
-				m_PeerInputReceipts[message.successorPeerId][message.senderPeerId] = std::max(m_PeerInputReceipts[message.successorPeerId][message.senderPeerId], message.frame);
+				receipt = std::max(receipt, message.frame);
 				ResolvePeerBridgeInputConflicts(nowMs);
 			}
 			return true;

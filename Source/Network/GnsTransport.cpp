@@ -659,6 +659,16 @@ namespace RTE {
 			return m_Interface->GetConnectionRealTimeStatus(connectionIt->second, &status, 0, nullptr) == k_EResultOK && status.m_nPing >= 0;
 		}
 
+		NetTransportQueueStats GetPeerQueueStats(NetPeerId peerId) {
+			const auto connection = m_ConnectionsByPeer.find(peerId);
+			SteamNetConnectionRealTimeStatus_t status{};
+			if (!m_Interface || connection == m_ConnectionsByPeer.end() ||
+			    m_Interface->GetConnectionRealTimeStatus(connection->second, &status, 0, nullptr) != k_EResultOK) return {};
+			return {static_cast<uint64_t>(std::max(0, status.m_cbPendingReliable)) + static_cast<uint64_t>(std::max(0, status.m_cbSentUnackedReliable)),
+			    static_cast<uint64_t>(std::max<SteamNetworkingMicroseconds>(0, status.m_usecQueueTime)) / 1000,
+			    static_cast<uint32_t>(std::max(0, status.m_nSendRateBytesPerSecond))};
+		}
+
 		bool Acquire(std::string* error) {
 			if (m_HasGnsRef) {
 				return true;
@@ -1425,6 +1435,7 @@ namespace RTE {
 		std::vector<NetTransportEvent> PollEvents() { return {}; }
 		uint32_t GetPeerPingMs(NetPeerId) { return 0; }
 		bool IsPeerPingMeasured(NetPeerId) { return false; }
+		NetTransportQueueStats GetPeerQueueStats(NetPeerId) { return {}; }
 
 		bool StartHostP2P(int, const GnsP2PConfig&, std::string* error) {
 			SetError(error, "GameNetworkingSockets support is not compiled in; rebuild with CCCP_WITH_GNS");
@@ -1517,6 +1528,11 @@ namespace RTE {
 	bool GnsTransport::IsPeerPingMeasured(NetPeerId peerId) const {
 		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		return m_Impl->IsPeerPingMeasured(peerId);
+	}
+
+	NetTransportQueueStats GnsTransport::GetPeerQueueStats(NetPeerId peerId) const {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
+		return m_Impl->GetPeerQueueStats(peerId);
 	}
 
 	bool GnsTransport::StartHostP2P(int virtualPort, const GnsP2PConfig& config, std::string* error) {

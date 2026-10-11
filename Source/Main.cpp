@@ -8295,6 +8295,8 @@ void RunGameLoop() {
 					// ownership at each displayed tick so a blackout's AI interval is observable.
 					observation["ai_held_peer_ids"] = nlohmann::json::array();
 					observation["net_clock_ms"] = NetLockstepNowMs();
+					observation["input_delay_ticks"] = ScenarioRunner::GetLockstepInputDelayFrames();
+					if (const auto accepted = ScenarioRunner::GetLockstepInputAcceptedThrough()) observation["input_accepted_through"] = *accepted;
 					observation["unix_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 					if (const auto config = ScenarioRunner::GetLockstepMatchConfig())
 						for (uint8_t peer = 1; peer <= config->peerCount; ++peer)

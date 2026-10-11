@@ -140,7 +140,8 @@ namespace RTE {
 				const uint32_t rttMs = transport.GetPeerPingMs(transportId);
 				NetInputDelayEstimator estimate;
 				estimate.Observe(0, rttMs);
-				const uint16_t neededDelay = static_cast<uint16_t>(estimate.SenderRequiredFrames(tickMs, m_MatchConfig.slowPlayerBoundTicks, floorDelay));
+				const uint16_t neededDelay = static_cast<uint16_t>(std::min<uint32_t>(UsesPeerFraming(m_MatchConfig) ? NetLockstepCodec::c_MaxPeerInputDelayFrames : NetLockstepCodec::c_MaxInputDelayFrames,
+				    estimate.SenderRequiredFrames(tickMs, m_MatchConfig.slowPlayerBoundTicks, floorDelay)));
 				delays[peerId - 1] = std::max(delays[peerId - 1], neededDelay);
 				slowestRemoteDelay = std::max(slowestRemoteDelay, neededDelay);
 				DiagnosticLine() << "[net-match] auto input delay: peer " << static_cast<int>(peerId) << " rtt " << rttMs

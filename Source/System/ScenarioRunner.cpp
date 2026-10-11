@@ -2005,6 +2005,11 @@ namespace RTE {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().localPeerId : 0;
 	}
 
+	std::optional<uint64_t> ScenarioRunner::GetLockstepInputAcceptedThrough() {
+		NetLockstepPlaneGuard plane;
+		return s_LockstepCoordinator ? s_LockstepCoordinator->GetLocalInputAcceptedThrough() : std::nullopt;
+	}
+
 	std::optional<NetMatchConfig> ScenarioRunner::GetLockstepMatchConfig() {
 		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {

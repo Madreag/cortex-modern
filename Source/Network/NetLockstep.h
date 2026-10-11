@@ -830,6 +830,9 @@ namespace RTE {
 		static constexpr size_t c_MaxSoundSetPath = 32;
 		static constexpr size_t c_MaxSoundStructureBytes = 65536;
 		static constexpr uint16_t c_MaxInputDelayFrames = 60;
+		// The live peer plane never asks a healthy player to buffer a second
+		// of input. The larger codec limit remains for historical recordings.
+		static constexpr uint16_t c_MaxPeerInputDelayFrames = 36;
 		static constexpr uint8_t c_MaxPeerCount = 16;
 		// How far ahead of the committed frame a received frame/checksum may legitimately target
 		// (input-delay lead plus jitter); anything beyond is dropped so one peer cannot grow the
@@ -1165,6 +1168,8 @@ namespace RTE {
 		bool UsesPeerFrameGroups() const { NET_PLANE_CHECK(); return m_Config.peerFrameGroups && !m_Playback; }
 		void SetPeerFrameBlackoutForTest(uint64_t frame, uint64_t durationMs) { NET_PLANE_CHECK(); m_TestBlackoutFrame = frame; m_TestBlackoutDurationMs = durationMs; m_TestBlackoutAtMs.reset(); }
 		bool PeerFrameCatchUpActive() const;
+		/// The latest local input accepted by the current peer authority, inclusive.
+		std::optional<uint64_t> GetLocalInputAcceptedThrough() const;
 		/// @param fromFrame The first frame the hold covers, when the seat named it; 0 for the first frame the host lacks its input.
 		/// cause names the rule that holds the seat, printed with the proposal so a reader can tell a design hold from an unexplained one.
 		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr, uint64_t fromFrame = 0, const char* cause = "unnamed");
@@ -1655,6 +1660,7 @@ namespace RTE {
 		void InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs);
 		void PreparePeerBridgeInputs(uint64_t frame, uint64_t nowMs);
 		void NotePeerInputAccepted(const NetLockstepFrame& frame);
+		void RepairPeerReceiptHoles(uint64_t nowMs);
 		bool ApplyPeerCommittedTail(uint64_t frame, uint64_t nowMs);
 		void SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame);
 		void RequestPeerCommittedTail(uint64_t nowMs);
@@ -1676,6 +1682,10 @@ namespace RTE {
 		std::map<uint64_t, uint32_t> m_PeerRejectedInputs;
 		std::map<uint64_t, std::map<uint8_t, NetLockstepFrame>> m_PeerPendingBridgeInputs;
 		std::map<uint8_t, uint64_t> m_PeerAcceptedThrough;
+		struct PeerReceiptProgress { uint64_t through = 0, advancedAtMs = 0, repairedAtMs = 0; };
+		std::map<uint8_t, PeerReceiptProgress> m_PeerOwnReceiptProgress;
+		std::map<uint8_t, uint64_t> m_PeerReceiptSampleFloorMs;
+		uint64_t m_PeerReceiptRepairs = 0;
 		std::map<uint8_t, std::map<uint8_t, uint64_t>> m_PeerInputReceipts;
 		std::map<uint8_t, std::set<uint64_t>> m_PeerAcceptedAhead;
 		std::map<uint64_t, std::map<uint8_t, NetLockstepFrame>> m_PeerSourceInputs;
@@ -1705,6 +1715,7 @@ namespace RTE {
 		uint64_t m_PeerHeartbeatAtMs = 0;
 		uint64_t m_PeerTailRequestAtMs = 0;
 		std::map<uint64_t, uint64_t> m_PeerTailRequestedUntil;
+		std::map<uint8_t, std::map<uint64_t, uint64_t>> m_PeerTailLastSentMs;
 		uint64_t m_PeerTailRequests = 0, m_PeerTailFramesSent = 0, m_PeerTailBytesSent = 0, m_PeerTailLogAtMs = 0, m_PeerPathLogAtMs = 0;
 		uint64_t m_PeerVoteRetryAtMs = 0;
 		uint32_t m_FrameGroupMembers = 0;

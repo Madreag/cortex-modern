@@ -205,8 +205,12 @@ namespace RTE {
 			const auto applied = m_PeerAppliedThrough.find(reference), observed = m_PeerAppliedAtMs.find(reference);
 			if (reference != m_Config.localPeerId && applied != m_PeerAppliedThrough.end() && observed != m_PeerAppliedAtMs.end() &&
 			    m_TimingNowMs >= observed->second && m_TimingNowMs - observed->second <= 250) {
-				const auto path = m_PeerReceiptDelaySamples.find(reference);
-				const double transit = path == m_PeerReceiptDelaySamples.end() ? 0.0 : path->second.P95Ms() / 2.0;
+				double transit = 0.0;
+				if (m_Config.peerSessionLinks) {
+					const auto [wire, route] = m_Config.peerSessionLinks->RouteTo(reference);
+					if (wire && wire->IsPeerPingMeasured(route)) transit = wire->GetPeerPingMs(route) / 2.0;
+				} else if (const auto path = m_PeerReceiptDelaySamples.find(reference); path != m_PeerReceiptDelaySamples.end())
+					transit = std::min<uint32_t>(path->second.P95Ms(), 2 * c_NetInputJitterReserveMs) / 2.0;
 				const uint64_t elapsed = static_cast<uint64_t>((m_TimingNowMs - observed->second + transit) / m_Config.simTickMs);
 				if (applied->second > *m_LastCompletedSimulationTick + 1 ||
 				    elapsed > *m_LastCompletedSimulationTick + 1 - std::min(applied->second, *m_LastCompletedSimulationTick + 1)) return true;
@@ -229,7 +233,7 @@ namespace RTE {
 		proposal.preparedFrame = 1; proposal.frame = frame; proposal.boundary = m_LastCompletedSimulationTick.value_or(m_Stats.nextFrame - 1);
 		proposal.members = {peer}; proposal.connectedMask = m_FrameGroupMembers | SeatBit(peer);
 		const auto prefix = PeerAppliedFramePrefix(proposal.boundary); proposal.bytes.assign(prefix.begin(), prefix.end());
-		const uint32_t delay = std::max<uint16_t>(InputDelayAt(peer, frame), ReturnDelayFloor(peer, transport));
+		const uint32_t delay = std::min<uint16_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames, std::max<uint16_t>(InputDelayAt(peer, frame), ReturnDelayFloor(peer, transport)));
 		const uint64_t transit = static_cast<uint64_t>(std::ceil((m_Stats.peers[peer].pingMs + m_Stats.peers[peer].jitterMs) / m_Config.simTickMs));
 		const uint64_t neutral = delay + transit + trailFrames + m_Config.slowPlayerBoundTicks;
 		if (neutral > NetLockstepCodec::c_MaxFutureFrameSkew) { if (error) *error = "the private return is still too far behind its activation"; return false; }

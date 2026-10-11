@@ -166,10 +166,13 @@ namespace RTE {
 			m_PeerPathLogAtMs = nowMs + 5000;
 			for (const auto& [peer, path]: m_PeerReceiptDelaySamples) {
 				const auto [wire, native] = m_Config.peerSessionLinks->RouteTo(peer);
+				const auto queue = wire ? wire->GetPeerQueueStats(native) : NetTransportQueueStats{};
 				DiagnosticLine() << "[net-peer-path] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer)
 				    << " now_ms=" << nowMs << " frame=" << m_LastCompletedSimulationTick.value_or(0)
 				    << " transport_rtt_ms=" << (wire && wire->IsPeerPingMeasured(native) ? static_cast<int64_t>(wire->GetPeerPingMs(native)) : -1)
-				    << " receipt_p95_ms=" << path.P95Ms() << " input_delay_ticks=" << InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame) << std::endl;
+				    << " receipt_p95_ms=" << path.P95Ms() << " input_delay_ticks=" << InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame)
+				    << " accepted_through=" << GetLocalInputAcceptedThrough().value_or(0) << " reliable_bytes=" << queue.reliableBytes
+				    << " queue_ms=" << queue.queueMs << " send_rate_bytes_s=" << queue.sendRateBytesPerSecond << std::endl;
 			}
 		}
 		ResolvePeerBridgeInputConflicts(nowMs);
@@ -218,6 +221,7 @@ namespace RTE {
 				SendPeerFrameMessage(certificate);
 			}
 		}
+		RepairPeerReceiptHoles(nowMs);
 		TickPeerInputDelay(nowMs);
 		TickPeerAdmin(nowMs);
 
@@ -240,7 +244,7 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::ProposePeerInputDelay(uint8_t peer, uint16_t delay, uint64_t frame) {
-		if (peer != m_Config.localPeerId || delay == 0 || delay > NetLockstepCodec::c_MaxInputDelayFrames || frame <= m_Stats.nextFrame || !PeerGroupHasAuthority(m_FrameGroupMembers)) return false;
+		if (peer != m_Config.localPeerId || delay == 0 || delay > NetLockstepCodec::c_MaxPeerInputDelayFrames || frame <= m_Stats.nextFrame || !PeerGroupHasAuthority(m_FrameGroupMembers)) return false;
 		for (const auto& [key, votes]: m_PeerBridgeVotes) if (key.second == 8 + peer && key.first >= m_Stats.nextFrame) return false;
 		auto proposal = PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
 		proposal.preparedFrame = 2; proposal.frame = frame; proposal.boundary = m_LastCompletedSimulationTick.value_or(m_Stats.nextFrame - 1);
@@ -271,7 +275,7 @@ namespace RTE {
 		auto& local = m_Stats.peers[m_Config.localPeerId];
 		local.pingMs = rtt; local.pingMeasured = true;
 		const uint16_t current = InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame);
-		const uint16_t required = static_cast<uint16_t>(std::min<uint32_t>(NetLockstepCodec::c_MaxInputDelayFrames,
+		const uint16_t required = static_cast<uint16_t>(std::min<uint32_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
 		    std::max<uint32_t>(m_Config.matchConfig.inputDelayFrames, static_cast<uint32_t>(std::ceil((rtt + margin) / m_Config.simTickMs)))));
 		local.jitterMs = std::max<uint32_t>(margin, static_cast<uint32_t>(std::ceil(required * m_Config.simTickMs)) - std::min<uint32_t>(rtt, static_cast<uint32_t>(std::ceil(required * m_Config.simTickMs))));
 		const auto last = m_LastDelayResizeMs.find(m_Config.localPeerId);

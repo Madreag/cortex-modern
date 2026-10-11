@@ -222,6 +222,7 @@ namespace RTE {
 		static uint8_t ResolveTeamCommandAuthority(int team);
 		static bool SubmitLockstepChecksum(uint64_t tick, const std::array<uint8_t, 32>& hash);
 		static uint16_t GetLockstepInputDelayFrames();
+		static std::optional<uint64_t> GetLockstepInputAcceptedThrough();
 		static uint8_t GetLockstepLocalPeerId();
 		/// The synced match roster, or null when no roster is attached.
 		/// A copy of the running match's config, read under the plane's lock: the coordinator's own may change while the caller reads it.

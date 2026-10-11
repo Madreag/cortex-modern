@@ -5387,8 +5387,9 @@ namespace RTE {
 		m_PeerReturnProofs.clear();
 		m_PeerPreparedPrefixes.clear(); m_PeerReplayAppliedPrefixes.clear(); m_PeerFrameWitnesses.clear();
 		m_PeerArrivalLatencyMs.clear(); m_PeerForwardedInputs.clear(); m_PeerAcceptedThrough.clear(); m_PeerInputReceipts.clear(); m_PeerAcceptedAhead.clear(); m_PeerSourceInputs.clear();
+		m_PeerOwnReceiptProgress.clear(); m_PeerReceiptSampleFloorMs.clear(); m_PeerReceiptRepairs = 0;
 		m_PeerCommittedTail.clear(); m_PeerFrameIncoming.clear(); m_PeerTailThrough.reset(); m_PeerAppliedThrough.clear(); m_PeerAppliedAtMs.clear();
-		m_PeerTailRequestedUntil.clear();
+		m_PeerTailRequestedUntil.clear(); m_PeerTailLastSentMs.clear();
 		m_PeerTailRequests = m_PeerTailFramesSent = m_PeerTailBytesSent = m_PeerTailLogAtMs = m_PeerPathLogAtMs = 0;
 		m_PeerRoundEnds.clear();
 		m_PeerTailPrefixes.clear(); m_PeerTailVotes.clear(); m_PeerTailDecisions.clear();
@@ -7058,7 +7059,7 @@ namespace RTE {
 			m_LastInputAcceptanceWait = frame;
 			++m_InputAcceptanceWaits;
 			DiagnosticLine() << "[input-acceptance-wait] frame=" << frame << " accepted_through="
-			                 << (m_HostAcceptedLocalFrames.empty() ? "none" : std::to_string(*m_HostAcceptedLocalFrames.rbegin())) << std::endl;
+			                 << (GetLocalInputAcceptedThrough() ? std::to_string(*GetLocalInputAcceptedThrough()) : "none") << std::endl;
 		}
 		NET_PLANE_CHECK();
 		if (!UsesBoundedWait()) return false;
@@ -10693,7 +10694,8 @@ namespace RTE {
 		out << "\"input_acceptance_waits\":" << m_InputAcceptanceWaits << ",";
 		out << "\"input_acceptance_required\":" << (!m_Playback && UsesBoundedWait() && m_Config.localPeerId != GetHostPeerId() ? "true" : "false") << ",";
 		out << "\"input_acceptance_receipts\":" << m_InputAcceptanceReceipts << ",";
-		out << "\"input_accepted_through\":" << (m_HostAcceptedLocalFrames.empty() ? "null" : std::to_string(*m_HostAcceptedLocalFrames.rbegin())) << ",";
+		out << "\"input_accepted_through\":" << (GetLocalInputAcceptedThrough() ? std::to_string(*GetLocalInputAcceptedThrough()) : "null") << ",";
+		out << "\"peer_receipt_repairs\":" << m_PeerReceiptRepairs << ",";
 		out << "\"input_acceptance_rejections\":{";
 		bool firstAcceptanceRejection = true;
 		for (const auto& [reason, count] : m_InputAcceptanceRejections) {
