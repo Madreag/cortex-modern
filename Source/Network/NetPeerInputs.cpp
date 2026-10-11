@@ -325,6 +325,12 @@ namespace RTE {
 		if (incoming.bytes.size() != incoming.totalBytes) return true;
 		std::vector<uint8_t> body = std::move(incoming.bytes); m_PeerFrameIncoming.erase(key);
 		if (message.type == NetHostMigrationMessageType::PeerTail) {
+			const auto readFailed = [&](const char* reason) {
+				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-tail-read] local=" << static_cast<int>(m_Config.localPeerId)
+				    << " donor=" << static_cast<int>(message.senderPeerId) << " frame=" << message.frame << " prepared=" << m_Stats.nextFrame
+				    << " reason=" << reason << " now_ms=" << nowMs << std::endl;
+				return true;
+			};
 			if (message.completeFrom > 1) return true;
 			if (message.completeFrom == 1) {
 				size_t offset = 0; uint32_t expandedSize = 0;
@@ -341,7 +347,7 @@ namespace RTE {
 			if (!TakeSize(body, at, size) || size > NetHostMigrationCodec::c_MaxFrameBytes || at > body.size() || size > body.size() - at) return true;
 			std::vector<uint8_t> record(body.begin() + at, body.begin() + at + size); at += size;
 			NetLockstepReadyFrame decoded;
-			if (!DecodeMigrationFrame(record, message.frame, decoded) || at == body.size()) return true;
+			if (!DecodeMigrationFrame(record, message.frame, decoded) || at == body.size()) return readFailed("frame-record");
 			const uint8_t count = body[at++]; if (count > 32) return true;
 			std::vector<NetHostMigrationMessage> proofs;
 			for (uint8_t n = 0; n < count; ++n) {
@@ -349,7 +355,7 @@ namespace RTE {
 				NetHostMigrationMessage proof, agreed; uint32_t voters = 0;
 				if (!NetHostMigrationCodec::Decode({body.begin() + at, body.begin() + at + size}, m_Config.migrationKey, proof) ||
 				    proof.type != NetHostMigrationMessageType::PeerBridgeCommit || !DecodePeerBridgeCertificate(proof, agreed, voters) ||
-				    (proof.frame > message.frame && agreed.preparedFrame != 3)) return true;
+				    (proof.frame > message.frame && agreed.preparedFrame != 3)) return readFailed("bridge-record");
 				if (agreed.preparedFrame == 3 && agreed.completeFrom > m_Config.migrationGeneration) {
 					NoteSuperseded(agreed.completeFrom);
 					if (PeerAdminCertificateValid(agreed, voters) && 2 * std::popcount(voters) >= static_cast<int>(m_Config.peerCount)) m_PeerAdminFrameMembers = voters;
@@ -371,7 +377,7 @@ namespace RTE {
 				    witness.frame != message.frame || witness.appliedFrame != message.frame || witness.voterMask != message.voterMask ||
 				    witness.senderPeerId == 0 || witness.senderPeerId > m_Config.peerCount || (witnessed & SeatBit(witness.senderPeerId)) != 0 ||
 				    (message.voterMask & SeatBit(witness.senderPeerId)) == 0 || witness.bytes.size() != 64 ||
-				    !std::equal(digest, digest + 32, witness.bytes.begin()) || !std::equal(prepared.begin(), prepared.end(), witness.bytes.begin() + 32)) return true;
+				    !std::equal(digest, digest + 32, witness.bytes.begin()) || !std::equal(prepared.begin(), prepared.end(), witness.bytes.begin() + 32)) return readFailed("witness-record");
 				witnessed |= SeatBit(witness.senderPeerId); at += size;
 			}
 			if (at != body.size()) return true;

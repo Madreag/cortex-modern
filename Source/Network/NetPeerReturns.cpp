@@ -47,11 +47,7 @@ namespace RTE {
 		const auto applied = PeerAppliedFramePrefix(frame), prepared = PeerFramePrefix(frame);
 		witness.bytes.assign(applied.begin(), applied.end()); witness.bytes.insert(witness.bytes.end(), prepared.begin(), prepared.end());
 		m_PeerFrameWitnesses[frame][m_Config.localPeerId] = witness;
-		// A missing witness must not stop a donor's certified history stream.
-		// Only members of this frame group need the reliable witness copy.
-		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
-			if (peer != m_Config.localPeerId && (witness.voterMask & SeatBit(peer)) != 0)
-				SendPeerFrameMessage(witness, NetTransportLane::ControlReliable, peer);
+		SendPeerFrameMessage(std::move(witness), m_Config.frameLane);
 	}
 
 	void NetLockstepCoordinator::SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame) {
