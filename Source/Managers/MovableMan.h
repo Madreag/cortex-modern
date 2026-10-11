@@ -94,6 +94,15 @@ namespace RTE {
 		void PrepareCheckpointActorValues();
 		const void* CheckpointOwnedActorValues() const { return m_OwnedCheckpointActors.get(); }
 		static std::string CheckpointActorStorageSelfTestMismatch();
+		/// Owns item and particle membership before a multiplayer capture.
+		void PrepareCheckpointLooseValues();
+		const void* CheckpointOwnedLooseValues() const { return m_OwnedCheckpointLoose.get(); }
+		const CheckpointDeque<Actor*>& GetActors() const { return CheckpointActorValues().m_Actors; }
+		const CheckpointDeque<Actor*>& GetAddedActors() const { return CheckpointActorValues().m_AddedActors; }
+		const CheckpointDeque<MovableObject*>& GetItems() const { return CheckpointLooseValues().m_Items; }
+		const CheckpointDeque<MovableObject*>& GetAddedItems() const { return CheckpointLooseValues().m_AddedItems; }
+		const CheckpointDeque<MovableObject*>& GetParticles() const { return CheckpointLooseValues().m_Particles; }
+		const CheckpointDeque<MovableObject*>& GetAddedParticles() const { return CheckpointLooseValues().m_AddedParticles; }
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		SerializableClassNameGetter;
@@ -679,7 +688,7 @@ namespace RTE {
 
 		/// Gets the number of particles (MOPixel:s) currently held.
 		/// @return The number of particles.
-		long GetParticleCount() const { return m_Particles.size(); }
+		long GetParticleCount() const { return CheckpointLooseValues().m_Particles.size(); }
 
 		/// The object registries and their counts, for the memory census.
 		std::string Census() const;
@@ -1141,6 +1150,23 @@ namespace RTE {
 
 		/// Protected member variable and method declarations
 	protected:
+		struct CheckpointLoose : CheckpointNativeAllocated {
+			CheckpointDeque<MovableObject*> m_Items;
+			CheckpointDeque<MovableObject*> m_Particles;
+			CheckpointDeque<MovableObject*> m_AddedItems;
+			CheckpointDeque<MovableObject*> m_AddedParticles;
+		};
+		CheckpointLoose m_OrdinaryCheckpointLoose;
+		std::unique_ptr<CheckpointLoose> m_OwnedCheckpointLoose;
+		CheckpointLoose& CheckpointLooseValues() {
+			if (CheckpointNativeStorage::Reading()) throw std::logic_error("a frozen registry cannot change live item membership");
+			return m_OwnedCheckpointLoose ? *m_OwnedCheckpointLoose : m_OrdinaryCheckpointLoose;
+		}
+		const CheckpointLoose& CheckpointLooseValues() const {
+			const auto* source = m_OwnedCheckpointLoose ? m_OwnedCheckpointLoose.get() : &m_OrdinaryCheckpointLoose;
+			return *CheckpointNativeStorage::Source(source);
+		}
+
 		struct CheckpointActors : CheckpointNativeAllocated {
 			// All actors in the scene and the actors added during this tick.
 			CheckpointDeque<Actor*> m_Actors;
@@ -1159,10 +1185,6 @@ namespace RTE {
 
 		// A map to give a unique contiguous identifier per-actor. This is re-created per frame.
 		CheckpointUnorderedMap<const Actor*, int> m_ContiguousActorIDs;
-		// List of items that are pickup-able by actors
-		CheckpointDeque<MovableObject*> m_Items;
-		// List of free, dead particles flying around
-		CheckpointDeque<MovableObject*> m_Particles;
 		// Actors that joined mid-tick during a lockstep match (join tick, unique id), quarantined off
 		// their per-machine controllers until the next tick's controller update hands them to the wire.
 		CheckpointVector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
@@ -1240,9 +1262,6 @@ namespace RTE {
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		bool m_PurgingAllMOs = false;
 		std::vector<MovableObject*> m_PendingLinkResolves; //!< Restored adds whose saved links resolve once the whole world is in.
-		CheckpointDeque<MovableObject*> m_AddedItems;
-		CheckpointDeque<MovableObject*> m_AddedParticles;
-
 		// Currently active MOs in the simulation. This is required because the code is awful and ownership isn't transported to/from lua in any sensible way.
 		// It's entirely possible that stuff is deleted in the game but a reference to it is kept in Lua. Which is awful. Obviously.
 		// Or perhaps even more concerningly, stuff can be deleted, re-allocated over the same space, and then readded to movableman. Which even this solution does nothing to fix.

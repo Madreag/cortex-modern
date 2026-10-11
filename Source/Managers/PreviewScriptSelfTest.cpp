@@ -981,7 +981,7 @@ if not ok then error(err) end
 				add(reacquired);
 				MovableObject* removed = g_MovableMan.RemoveItem(reacquired);
 				guard->AddInventoryItem(removed);
-				armed("metadata_only_reacquired", removed == reacquired && g_MovableMan.m_Speculation.spawnMeta.count(reacquired) == 1 && g_MovableMan.GetSpeculativeSpawnCount() == 0 && std::find(g_MovableMan.m_AddedItems.begin(), g_MovableMan.m_AddedItems.end(), reacquired) == g_MovableMan.m_AddedItems.end(), "target=" + address(reacquired) + " metadata=" + std::to_string(g_MovableMan.m_Speculation.spawnMeta.count(reacquired)));
+				armed("metadata_only_reacquired", removed == reacquired && g_MovableMan.m_Speculation.spawnMeta.count(reacquired) == 1 && g_MovableMan.GetSpeculativeSpawnCount() == 0 && std::find(g_MovableMan.CheckpointLooseValues().m_AddedItems.begin(), g_MovableMan.CheckpointLooseValues().m_AddedItems.end(), reacquired) == g_MovableMan.CheckpointLooseValues().m_AddedItems.end(), "target=" + address(reacquired) + " metadata=" + std::to_string(g_MovableMan.m_Speculation.spawnMeta.count(reacquired)));
 				weak("reacquired_spawn_meta_key", reacquired, reacquired);
 				HeldDevice* stale = deviceCopy();
 				add(stale);

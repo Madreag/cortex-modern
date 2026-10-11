@@ -204,8 +204,8 @@ void MovableMan::CheckEffectsLingerForSelfTest() {
 				}
 			}
 		};
-		collect(m_Particles);
-		collect(m_AddedParticles);
+		collect(CheckpointLooseValues().m_Particles);
+		collect(CheckpointLooseValues().m_AddedParticles);
 		bool clockHeld = true;
 		bool worldLifetime = true;
 		bool flashLifetime = true;

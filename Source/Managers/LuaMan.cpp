@@ -15687,6 +15687,7 @@ void LuaMan::SeedAllLuaRNGs(uint64_t baseSeed) {
 void LuaMan::PrepareCheckpointValues() {
 	if (CheckpointNativeStorage::Enabled()) g_TimerMan.PrepareCheckpointValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointActorValues();
+	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLooseValues();
 	m_MasterScriptState.PrepareCheckpointValues();
 	m_MasterScriptState.PrepareCheckpointBindings();
 	for (LuaStateWrapper& state: m_ScriptStates) {

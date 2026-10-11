@@ -1808,12 +1808,12 @@ static State Observe(const std::string& gapPath) {
     audit.Field("allocator.uid", MovableObject::GetUniqueIDCounter());
     audit.Field("checkpoint.restoring", g_MovableMan.IsRestoringSnapshot());
     audit.Field("checkpoint.pending_graph", g_ActivityMan.HasFullScriptGraphToRestore());
-    audit.Field("world.actors", g_MovableMan.m_Actors);
-    audit.Field("world.items", g_MovableMan.m_Items);
-    audit.Field("world.particles", g_MovableMan.m_Particles);
-    audit.Field("world.added_actors", g_MovableMan.m_AddedActors);
-    audit.Field("world.added_items", g_MovableMan.m_AddedItems);
-    audit.Field("world.added_particles", g_MovableMan.m_AddedParticles);
+    audit.Field("world.actors", g_MovableMan.CheckpointActorValues().m_Actors);
+    audit.Field("world.items", g_MovableMan.CheckpointLooseValues().m_Items);
+    audit.Field("world.particles", g_MovableMan.CheckpointLooseValues().m_Particles);
+    audit.Field("world.added_actors", g_MovableMan.CheckpointActorValues().m_AddedActors);
+    audit.Field("world.added_items", g_MovableMan.CheckpointLooseValues().m_AddedItems);
+    audit.Field("world.added_particles", g_MovableMan.CheckpointLooseValues().m_AddedParticles);
     audit.Field("world.alarms", g_MovableMan.m_AlarmEvents);
     audit.Field("world.added_alarms", g_MovableMan.m_AddedAlarmEvents);
     audit.Field("world.rosters", g_MovableMan.m_ActorRoster);
