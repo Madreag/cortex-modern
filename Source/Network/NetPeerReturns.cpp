@@ -68,7 +68,11 @@ namespace RTE {
 			SendPeerFrameMessage(std::move(missing), NetTransportLane::ControlReliable, peer);
 			return;
 		}
+		const auto workEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+		uint32_t preparedFrames = 0;
 		for (auto kept = first; kept != m_MigrationHistory.end() && kept->first < range->second.second && m_LastCompletedSimulationTick && kept->first <= *m_LastCompletedSimulationTick; ++kept) {
+			// The donor's live seat keeps its next update while a reader catches up.
+			if (preparedFrames >= 4 || (preparedFrames != 0 && std::chrono::steady_clock::now() >= workEnd)) break;
 			const auto [wire, route] = PeerFrameRoute(peer);
 			const uint64_t retryMs = wire && wire->IsPeerPingMeasured(route) ? std::max<uint64_t>(1000, 3ULL * wire->GetPeerPingMs(route) + 200) : 1000;
 			if ((m_PeerAppliedThrough.contains(peer) && kept->first <= m_PeerAppliedThrough.at(peer)) || queued.contains(kept->first) ||
@@ -124,6 +128,7 @@ namespace RTE {
 			if (!queued.empty() && queuedBytes + body.size() > 4 * 1024 * 1024) break;
 			queuedBytes += body.size();
 			queued.emplace(kept->first, PeerTailOutgoing{std::move(body), members, 0, compressedBody});
+			++preparedFrames;
 			range->second.first = std::max(range->second.first, kept->first + 1);
 		}
 	}
@@ -145,7 +150,9 @@ namespace RTE {
 			auto& sent = m_PeerTailLastSentMs[peer];
 			sent.erase(sent.begin(), sent.upper_bound(applied));
 			uint64_t handedOver = 0;
-			for (auto item = queued.begin(); item != queued.end() && handedOver < reliableQueueCap;) {
+			const auto sendEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+			for (auto item = queued.begin(); item != queued.end() && handedOver < 64 * 1024;) {
+				if (handedOver != 0 && std::chrono::steady_clock::now() >= sendEnd) break;
 				auto& body = item->second;
 				const size_t end = std::min(body.bytes.size(), body.offset + NetHostMigrationCodec::c_ChunkBytes);
 				NetTransportQueueStats queue;
