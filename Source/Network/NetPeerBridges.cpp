@@ -132,6 +132,13 @@ namespace RTE {
 			// Votes spend the buffered runway, so a healthy relay round trip fits inside the consumer's bound.
 			if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame) {
 				double dueMs = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
+				// Startup synchronization can permanently advance the display
+				// beyond its first-tick pacing anchor. Spend the runway before
+				// the consumer's actual next slot, not that stale later deadline.
+				// Keep the original anchor for a reader still catching up from
+				// behind; its earlier deadline must not be postponed either.
+				if (m_PeerConsumerAtMs && m_LastCompletedSimulationTick && frame > *m_LastCompletedSimulationTick)
+					dueMs = std::min(dueMs, *m_PeerConsumerAtMs + (frame - *m_LastCompletedSimulationTick) * m_Config.simTickMs);
 				// Catch-up can ask for this tick before its original pacing slot.
 				// Its actual consumer wait still has the same three-tick bound.
 				if (m_ConsumerWaitingFrame == frame) dueMs = std::min(dueMs, static_cast<double>(m_ConsumerWaitStartMs));

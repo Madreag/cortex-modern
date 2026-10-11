@@ -5392,7 +5392,7 @@ namespace RTE {
 		m_PeerTailRequests = m_PeerTailFramesSent = m_PeerTailBytesSent = m_PeerTailLogAtMs = m_PeerPathLogAtMs = 0;
 		m_PeerRoundEnds.clear();
 		m_PeerTailPrefixes.clear(); m_PeerTailVotes.clear(); m_PeerTailDecisions.clear();
-		m_PeerPaceStartMs.reset(); m_PeerPaceStartFrame = 0; m_PeerHadHitch = false;
+		m_PeerPaceStartMs.reset(); m_PeerConsumerAtMs.reset(); m_PeerPaceStartFrame = 0; m_PeerHadHitch = false;
 		if (!m_Config.peerSessionLinks) { PeerListenerBindings().clear(); PeerPrimaryBindings().clear(); }
 		m_FrameGroupChanges.clear(); m_PeerDelayBelowSinceMs.clear();
 		m_PeerFrameTie.reset(); m_PeerFrameTieWinners.clear(); m_PeerFrameTieSinceMs = 0;
@@ -10029,6 +10029,7 @@ namespace RTE {
 		// A tick the sim applied counts even once the round has failed: the heal resumes from it.
 		if (IsRunning() || IsFailed()) m_LastCompletedSimulationTick = completedTick;
 		if (UsesPeerFrameGroups() && IsRunning()) SendPeerFrameWitness(completedTick);
+		if (UsesPeerFrameGroups()) m_PeerConsumerAtMs = m_TimingNowMs;
 		if (UsesPeerFrameGroups() && !m_PeerPaceStartMs) { m_PeerPaceStartMs = m_TimingNowMs; m_PeerPaceStartFrame = completedTick; }
 		if (IsRunning() && m_Config.localPeerId == GetHostPeerId()) PublishPreparedFrame(m_TimingNowMs);
 		if (!UsesPeerFrameGroups() && m_SeatBridgeSinceMs.contains(m_Config.localPeerId)) ReclaimHostSeat(m_TimingNowMs);

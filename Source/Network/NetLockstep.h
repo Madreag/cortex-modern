@@ -1697,6 +1697,7 @@ namespace RTE {
 		std::map<std::tuple<uint8_t, NetHostMigrationMessageType, uint64_t>, PeerFrameIncoming> m_PeerFrameIncoming;
 		std::optional<uint64_t> m_PeerTailThrough;
 		std::optional<uint64_t> m_PeerPaceStartMs;
+		std::optional<uint64_t> m_PeerConsumerAtMs; //!< Local time of the latest displayed tick, including startup catch-up.
 		uint64_t m_PeerPaceStartFrame = 0;
 		bool m_PeerHadHitch = false;
 		std::map<uint8_t, uint64_t> m_PeerAppliedThrough;

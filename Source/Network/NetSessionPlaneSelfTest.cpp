@@ -41,6 +41,7 @@ namespace RTE {
 			bool adminDirectory = false, adminDirectoryDown = false;
 			unsigned asymmetricBridge = 0;
 			uint32_t planeIntervalMs = 1, recoveryRttMs = 0;
+			bool advanceStartup = false;
 		};
 		struct Wire;
 		struct Hub {
@@ -266,6 +267,8 @@ namespace RTE {
 			std::vector<double> credits;
 			std::vector<uint64_t> queued, waitAt, maxWait, caughtAt;
 			std::vector<uint64_t> displayedAt, blackoutGap, returnedAt, postReturnWait;
+			std::vector<uint64_t> firstDisplayedAt;
+			std::vector<int64_t> preFaultPaceLeadMs;
 			std::vector<bool> seenAI;
 			std::vector<uint16_t> settledDelay;
 			std::vector<uint32_t> settledChanges, settledHostWaits;
@@ -280,6 +283,7 @@ namespace RTE {
 				worlds.resize(row.seats); committed.resize(row.seats); credits.resize(row.seats); queued.resize(row.seats); waitAt.resize(row.seats);
 				maxWait.resize(row.seats); caughtAt.resize(row.seats); settledDelay.resize(row.seats); settledChanges.resize(row.seats);
 				displayedAt.resize(row.seats); blackoutGap.resize(row.seats); returnedAt.resize(row.seats); postReturnWait.resize(row.seats); seenAI.resize(row.seats);
+				firstDisplayedAt.resize(row.seats); preFaultPaceLeadMs.resize(row.seats);
 				settledHostWaits.resize(row.seats); paceBegin.resize(row.seats); paceEnd.resize(row.seats);
 				firstAdminChangeMs.assign(row.seats, UINT64_MAX);
 				for (uint8_t peer = 1; peer <= row.seats; ++peer) { wires.push_back(std::make_unique<Wire>(hub, peer)); peers.push_back(std::make_unique<NetLockstepCoordinator>()); }
@@ -387,7 +391,8 @@ namespace RTE {
 					if (peer.IsStopped()) { error = "lag ended participation or required a manual rejoin"; return false; }
 					if (!peer.IsRunning()) continue;
 					if (hub.row.frozen && id == hub.row.subject && hub.DuringFault()) { credits[id - 1] = 0; wasFrozen = true; continue; }
-					credits[id - 1] += (CatchingUp(peer) || (wasFrozen && id == hub.row.subject && hub.now >= hub.faultEnd) ? c_TestCatchUpRate : 1) / c_TestTickMs;
+					const bool startupAdvance = hub.row.advanceStartup && id > 1 && hub.now >= 1000 && hub.now < 1000 + (id - 1) * 35;
+					credits[id - 1] += (startupAdvance || CatchingUp(peer) || (wasFrozen && id == hub.row.subject && hub.now >= hub.faultEnd) ? c_TestCatchUpRate : 1) / c_TestTickMs;
 					credits[id - 1] = std::min(credits[id - 1], 6.0);
 					while (credits[id - 1] >= 1) {
 						const uint64_t next = world.applied + 1;
@@ -418,12 +423,15 @@ namespace RTE {
 						peer.FinishSimulationTick(ready.frame); credits[id - 1] -= 1;
 						if (displayedAt[id - 1] && hub.DuringFault()) blackoutGap[id - 1] = std::max(blackoutGap[id - 1], hub.now - displayedAt[id - 1]);
 						displayedAt[id - 1] = hub.now;
+						if (!firstDisplayedAt[id - 1]) firstDisplayedAt[id - 1] = hub.now;
 						if (peer.IsSeatUnderAI(hub.row.subject, ready.frame)) seenAI[id - 1] = true;
 						else if (seenAI[id - 1] && !returnedAt[id - 1]) returnedAt[id - 1] = hub.now;
 					}
 					if (hub.now < hub.faultEnd && hub.row.gapMs < 5000 && HoldVisible(peer, hub.row.subject, hub.now)) { error = "a short hiccup showed a held seat"; return false; }
 					if (hub.row.frozen && HoldVisible(peer, hub.row.subject, hub.now)) { error = "flowing keepalives showed a held seat"; return false; }
 					if (hub.now == hub.faultAt - 1) {
+						preFaultPaceLeadMs[id - 1] = static_cast<int64_t>(std::llround((world.applied - 1) * c_TestTickMs)) -
+						    static_cast<int64_t>(displayedAt[id - 1] - firstDisplayedAt[id - 1]);
 						settledDelay[id - 1] = peer.InputDelayAt(id, world.applied + 1); settledChanges[id - 1] = SenderResizes(peer, id);
 						settledHostWaits[id - 1] = peer.GetStats().peers.contains(1) ? peer.GetStats().peers.at(1).waits : 0;
 						paceBegin[id - 1] = world.applied;
@@ -511,17 +519,19 @@ namespace RTE {
 			phaseRow.name = "relay_phased_return";
 			phaseRow.rttMs = 98; phaseRow.otherRttMs = 150;
 			phaseRow.planeIntervalMs = 8; phaseRow.recoveryRttMs = 306;
+			phaseRow.advanceStartup = true;
 			Fixture phased;
 			if (!phased.Run(phaseRow, error)) return false;
 			for (uint8_t id = 1; id <= 3; ++id) {
 				const auto& peer = *phased.peers[id - 1];
 				if (!phased.returnedAt[id - 1] || phased.returnedAt[id - 1] > phased.hub.faultEnd + 10000 ||
 				    phased.postReturnWait[id - 1] > 100 || peer.GetStats().peers.at(1).rejoins != 1 ||
-				    (id != 1 && phased.blackoutGap[id - 1] > 50)) {
+				    (id != 1 && (phased.blackoutGap[id - 1] > 50 || phased.preFaultPaceLeadMs[id - 1] < 60))) {
 					error = "phased relay return failed: peer=" + std::to_string(id) + " blackout_gap_ms=" + std::to_string(phased.blackoutGap[id - 1]) +
 					    " post_return_wait_ms=" + std::to_string(phased.postReturnWait[id - 1]) + " returns=" + std::to_string(peer.GetStats().peers.at(1).rejoins); return false;
 				}
 				std::cout << "[net-session-plane-selftest] relay-phased peer=" << static_cast<int>(id) << " blackout_gap_ms=" << phased.blackoutGap[id - 1]
+				          << " pre_fault_pace_lead_ms=" << phased.preFaultPaceLeadMs[id - 1]
 				          << " post_return_wait_ms=" << phased.postReturnWait[id - 1] << " return_ms=" << phased.returnedAt[id - 1] - phased.hub.faultEnd
 				          << " returns=" << peer.GetStats().peers.at(1).rejoins << " result=PASS" << std::endl;
 			}
