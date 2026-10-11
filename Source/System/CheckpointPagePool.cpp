@@ -553,6 +553,12 @@ std::string CheckpointFrozenContainersSelfTestMismatch() {
 		if (CheckpointNativeStorage::Original(&frozen) != address) return std::string(name) + " lost its original address";
 		std::vector<std::string> found;
 		for (const auto& value: CheckpointValues(frozen)) found.push_back(render(value));
+		if constexpr (requires { frozen.hash_function(); }) {
+			const auto rebuilt = CheckpointRebuildHash(frozen, [](const auto& value) { return value; });
+			std::vector<std::string> copied;
+			for (const auto& value: rebuilt) copied.push_back(render(value));
+			if (copied != expected || rebuilt.bucket_count() != frozen.bucket_count()) return std::string(name) + " changed order or buckets when rebuilt";
+		}
 		return found == expected ? std::string() : std::string(name) + " changed values or order after destruction";
 	};
 	struct Collisions {

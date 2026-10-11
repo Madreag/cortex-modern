@@ -337,8 +337,10 @@ namespace RTE {
 		CheckpointCloneCost cost("entity metadata");
 		static const Metadata empty;
 		if (source.m_PresetName.empty() && source.m_CopiedFromPresetName.empty() && source.m_PresetDescription.empty() && source.m_FormattedReaderPosition.empty() && source.m_Groups.empty()) { target.m_CheckpointMetadata = &empty; return; }
-		const auto equal = [&source](const Metadata& value) {
-			return value.name == source.m_PresetName && value.copied == source.m_CopiedFromPresetName && value.description == source.m_PresetDescription && value.reader == source.m_FormattedReaderPosition && value.groups == source.m_Groups;
+		const auto sourceGroups = CheckpointValues(source.m_Groups);
+		const auto equal = [&source, &sourceGroups](const Metadata& value) {
+			return value.name == source.m_PresetName && value.copied == source.m_CopiedFromPresetName && value.description == source.m_PresetDescription && value.reader == source.m_FormattedReaderPosition && value.groups.size() == sourceGroups.size() &&
+			    std::all_of(sourceGroups.begin(), sourceGroups.end(), [&value](const auto& group) { return value.groups.contains(group); });
 		};
 		struct Cache { uint64_t snapshot = 0; std::array<const Metadata*, 1024> values{}; };
 		thread_local Cache cache;
@@ -347,13 +349,13 @@ namespace RTE {
 		    std::hash<std::string>{}(source.m_FormattedReaderPosition) ^ (reinterpret_cast<uintptr_t>(&source.GetClass()) >> 4)) % cache.values.size();
 		if (const Metadata* recent = cache.values[local]; recent && equal(*recent)) { target.m_CheckpointMetadata = recent; return; }
 		size_t groups = 0;
-		for (const std::string& group: source.m_Groups) groups += std::hash<std::string>{}(group);
+		for (const std::string& group: sourceGroups) groups += std::hash<std::string>{}(group);
 		const size_t hash = std::hash<std::string>{}(source.m_PresetDescription) ^ (std::hash<std::string>{}(source.m_FormattedReaderPosition) * 31) ^ groups ^ std::hash<std::string>{}(source.m_PresetName) ^ (std::hash<std::string>{}(source.m_CopiedFromPresetName) * 17);
 		auto& shard = m_Metadata[hash % m_Metadata.size()];
 		std::lock_guard lock(shard.mutex);
 		const auto [first, last] = shard.values.equal_range(hash);
 		for (auto at = first; at != last; ++at) if (equal(*at->second)) { cache.values[local] = at->second.get(); target.m_CheckpointMetadata = cache.values[local]; return; }
-		auto value = std::make_unique<Metadata>(Metadata{source.m_PresetName, source.m_CopiedFromPresetName, source.m_PresetDescription, source.m_FormattedReaderPosition, source.m_Groups});
+		auto value = std::make_unique<Metadata>(Metadata{source.m_PresetName, source.m_CopiedFromPresetName, source.m_PresetDescription, source.m_FormattedReaderPosition, Freeze(source.m_Groups)});
 		const Metadata* kept = value.get();
 		shard.values.emplace(hash, std::move(value));
 		cache.values[local] = kept; target.m_CheckpointMetadata = kept;

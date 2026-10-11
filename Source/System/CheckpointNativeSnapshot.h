@@ -3,6 +3,7 @@
 #include "Entity.h"
 #include "CheckpointFailure.h"
 #include "CheckpointFrozenClock.h"
+#include "CheckpointFrozenContainers.h"
 
 #include <array>
 #include <atomic>
@@ -81,7 +82,8 @@ namespace RTE {
 	/// A map the freezing threads share; each key's shard has its own lock, so threads freezing different objects rarely meet.
 	template<class Key, class Value> class CheckpointSharedMap {
 	public:
-		std::optional<Value> Find(const Key& key) const {
+		std::optional<Value> Find(Key key) const {
+			key = Identity(key);
 			const Shard& shard = For(key);
 			std::lock_guard lock(shard.mutex);
 			const auto found = shard.map.find(key);
@@ -89,25 +91,29 @@ namespace RTE {
 			return found->second;
 		}
 		/// The stored value's address, which stays put until its key is erased.
-		const Value* FindStored(const Key& key) const {
+		const Value* FindStored(Key key) const {
+			key = Identity(key);
 			const Shard& shard = For(key);
 			std::lock_guard lock(shard.mutex);
 			const auto found = shard.map.find(key);
 			return found == shard.map.end() ? nullptr : &found->second;
 		}
 		/// The value the key holds after this call, and whether this call put it there.
-		std::pair<Value, bool> TryEmplace(const Key& key, Value value) {
+		std::pair<Value, bool> TryEmplace(Key key, Value value) {
+			key = Identity(key);
 			Shard& shard = For(key);
 			std::lock_guard lock(shard.mutex);
 			const auto [found, inserted] = shard.map.try_emplace(key, std::move(value));
 			return {found->second, inserted};
 		}
-		void InsertOrAssign(const Key& key, Value value) {
+		void InsertOrAssign(Key key, Value value) {
+			key = Identity(key);
 			Shard& shard = For(key);
 			std::lock_guard lock(shard.mutex);
 			shard.map.insert_or_assign(key, std::move(value));
 		}
-		void Erase(const Key& key) {
+		void Erase(Key key) {
+			key = Identity(key);
 			Shard& shard = For(key);
 			std::lock_guard lock(shard.mutex);
 			shard.map.erase(key);
@@ -128,6 +134,10 @@ namespace RTE {
 		}
 
 	private:
+		static Key Identity(Key key) {
+			if constexpr (std::is_pointer_v<Key>) return static_cast<Key>(CheckpointNativeStorage::Original(key));
+			else return key;
+		}
 		static constexpr size_t c_ShardBits = 6;
 		struct alignas(64) Shard {
 			mutable std::mutex mutex;
@@ -186,24 +196,35 @@ namespace RTE {
 		bool PresetHasScript(const Entity* identity, const std::string& path) const;
 		void RememberUID(const MovableObject* source, MovableObject* target);
 		MovableObject* FindUID(long uid) const;
+		static const Entity* Source(const Entity* source) {
+			if (!source) return nullptr;
+			const auto* base = static_cast<const Entity*>(CheckpointNativeStorage::View(source, sizeof(Entity)));
+			const auto* complete = static_cast<const char*>(dynamic_cast<const void*>(base));
+			const size_t bytes = base->GetClass().CheckpointInstanceBytes();
+			if (!bytes) return base;
+			const ptrdiff_t offset = reinterpret_cast<const char*>(base) - complete;
+			const auto* view = static_cast<const char*>(CheckpointNativeStorage::View(CheckpointNativeStorage::Original(complete), bytes));
+			return reinterpret_cast<const Entity*>(view + offset);
+		}
 
 		template<class T> T* Object(const T* source) {
 			static_assert(std::is_base_of_v<Entity, std::remove_const_t<T>>);
 			if (!source) return nullptr;
-			const Entity* base = source;
-			const ptrdiff_t offset = reinterpret_cast<const char*>(source) - reinterpret_cast<const char*>(base);
+			const Entity* base = static_cast<const Entity*>(CheckpointNativeStorage::Original(static_cast<const Entity*>(source)));
+			const ptrdiff_t offset = static_cast<const char*>(CheckpointNativeStorage::Original(source)) - reinterpret_cast<const char*>(base);
+			const Entity* view = Source(base);
 			auto& slot = Recent(base);
 			Entity* target = static_cast<Entity*>(slot.second);
 			if (slot.first != base) {
 				if (const auto known = m_Objects.Find(base)) target = *known;
 				else {
 					thread_local bool insidePreset = false;
-					const bool preset = CheckpointCloneCost::Enabled() && !insidePreset && base->IsOriginalPreset();
+					const bool preset = CheckpointCloneCost::Enabled() && !insidePreset && view->IsOriginalPreset();
 					CheckpointCloneCost presets(preset ? "preset clones (inclusive)" : nullptr);
 					if (preset) insidePreset = true;
 					struct Leave { bool active; ~Leave() { if (active) insidePreset = false; } } leave{preset};
-					CheckpointCloneCost cost(CheckpointCloneCost::Enabled() ? base->GetClassName().c_str() : nullptr);
-					target = source->FreezeCheckpointNative(*this);
+					CheckpointCloneCost cost(CheckpointCloneCost::Enabled() ? view->GetClassName().c_str() : nullptr);
+					target = view->FreezeCheckpointNative(*this);
 				}
 				slot = {base, target};
 			}
@@ -211,6 +232,7 @@ namespace RTE {
 		}
 		template<class T> T* ValueObject(const T* source) {
 			if (!source) return nullptr;
+			source = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
 			CheckpointNativeStorage::CaptureScope allocation;
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 			void* memory = AllocateFrozen(sizeof(T), alignof(T));
@@ -249,7 +271,8 @@ namespace RTE {
 
 		/// Claims a top-level object's frozen storage before any thread freezes it: a reference from another object then
 		/// names it without freezing it there, and the thread given the object freezes it with Construct.
-		void Reserve(const Entity& source) {
+		void Reserve(const Entity& input) {
+			const Entity& source = *Source(&input);
 			auto& type = const_cast<Entity::ClassInfo&>(source.GetClass());
 			Entity** slot = AddOwner();
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
@@ -270,16 +293,18 @@ namespace RTE {
 			}
 		}
 		/// Freezes a reserved object on this thread.
-		void Construct(const Entity& source) {
+		void Construct(const Entity& input) {
+			const Entity& source = *Source(&input);
 			if (m_Reserved.Find(&source)) {
 				CheckpointCloneCost cost(CheckpointCloneCost::Enabled() ? source.GetClassName().c_str() : nullptr);
-				const Entity* previous = std::exchange(t_Constructing, &source);
+				const Entity* previous = std::exchange(t_Constructing, static_cast<const Entity*>(CheckpointNativeStorage::Original(&source)));
 				struct Restore { const Entity* previous; ~Restore() { t_Constructing = previous; } } restore{previous};
 				source.FreezeCheckpointNative(*this);
 			}
 		}
 
-		template<class T> Entity* Make(const T& source) {
+		template<class T> Entity* Make(const T& input) {
+			const T& source = *static_cast<const T*>(CheckpointNativeStorage::View(&input, sizeof(T)));
 			CheckpointNativeStorage::CaptureScope allocation;
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 			const ptrdiff_t offset = reinterpret_cast<const char*>(static_cast<const Entity*>(&source)) - reinterpret_cast<const char*>(&source);
@@ -288,7 +313,7 @@ namespace RTE {
 			Entity* target = nullptr;
 			bool frozenStorage = false;
 			// Only Construct freezes a reserved object, and it names the one it freezes.
-			if (const auto reserved = t_Constructing == static_cast<const Entity*>(&source) ? m_Reserved.Find(&source) : std::nullopt) {
+			if (const auto reserved = t_Constructing == CheckpointNativeStorage::Original(static_cast<const Entity*>(&source)) ? m_Reserved.Find(&source) : std::nullopt) {
 				m_Reserved.Erase(&source);
 				memory = reserved->memory;
 				slot = reserved->slot;
@@ -320,7 +345,7 @@ namespace RTE {
 				if constexpr (requires { T::PrepareCheckpointNative(source, reinterpret_cast<T*>(memory), *this); })
 					T::PrepareCheckpointNative(source, reinterpret_cast<T*>(memory), *this);
 				// The entity binds itself first thing; it is told its own slot instead of looking it up.
-				const Binding previous = std::exchange(t_Binding, Binding{static_cast<const Entity*>(&source), target, slot});
+				const Binding previous = std::exchange(t_Binding, Binding{static_cast<const Entity*>(CheckpointNativeStorage::Original(static_cast<const Entity*>(&source))), target, slot});
 				struct Restore { Binding previous; ~Restore() { t_Binding = previous; } } restore{previous};
 				new(memory) T(source, *this);
 				constructed = true;
@@ -342,7 +367,7 @@ namespace RTE {
 		static void* FrozenStorageMark(void* memory) { return static_cast<char*>(memory) + 1; }
 
 		Entity** Bind(const Entity& source, Entity* target) {
-			if (t_Binding.source == &source && t_Binding.target == target) return t_Binding.slot;
+			if (t_Binding.source == CheckpointNativeStorage::Original(&source) && t_Binding.target == target) return t_Binding.slot;
 			// Only an entity Make builds owns a slot; one built in place inside its owner has none.
 			m_Objects.InsertOrAssign(&source, target);
 			return nullptr;
@@ -353,7 +378,7 @@ namespace RTE {
 			CheckpointNativeStorage::CaptureScope allocation;
 			if (const auto known = m_Values.Find(source)) return static_cast<T*>(*known);
 			auto& owner = AddValueOwner([](void* value) noexcept { delete static_cast<T*>(value); });
-			auto value = std::make_unique<T>(Freeze(*source));
+			auto value = std::make_unique<T>(Freeze(*static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)))));
 			const auto [winner, claimed] = m_Values.TryEmplace(source, value.get());
 			if (!claimed) return static_cast<T*>(winner);
 			owner.first = value.release();
@@ -436,7 +461,7 @@ namespace RTE {
 			if (!source.empty()) {
 				std::vector<std::pair<Key, std::span<T* const>>> groups;
 				groups.reserve(source.size());
-				for (const auto& [key, group]: source) {
+				for (const auto& [key, group]: CheckpointValues(source)) {
 					const auto* values = OwnValues<true>(group);
 					groups.emplace_back(key, std::span<T* const>(values->Data(), values->size));
 				}
@@ -477,52 +502,55 @@ namespace RTE {
 			std::vector<T, Allocator> result(source.get_allocator());
 			result.reserve(source.size());
 			if constexpr (requires(T& target, const T& value) { AssignCheckpointValue(target, value, *this); }) {
-				for (const auto& value: source) { result.emplace_back(); AssignCheckpointValue(result.back(), value, *this); }
+				for (const auto& value: CheckpointValues(source)) { result.emplace_back(); AssignCheckpointValue(result.back(), value, *this); }
 			} else if constexpr (requires(const T& value) { T(value, *this); }) {
-				for (size_t index = 0; index < source.size(); ++index) Prepare(source[index], result.data() + index);
-				for (const auto& value: source) result.emplace_back(value, *this);
-			} else for (const auto& value: source) result.push_back(Freeze(static_cast<const T&>(value)));
+				const auto values = CheckpointValues(source);
+				for (size_t index = 0; index < values.size(); ++index) Prepare(values[index], result.data() + index);
+				for (const auto& value: CheckpointValues(source)) result.emplace_back(value, *this);
+			} else for (const auto& value: CheckpointValues(source)) result.push_back(Freeze(static_cast<const T&>(value)));
 			return result;
 		}
 		template<class T, class Allocator> auto Freeze(const std::deque<T, Allocator>& source) {
 			std::deque<T, Allocator> result(source.get_allocator());
 			if constexpr (requires(T& target, const T& value) { AssignCheckpointValue(target, value, *this); })
-				for (const auto& value: source) { result.emplace_back(); AssignCheckpointValue(result.back(), value, *this); }
-			else if constexpr (requires(const T& value) { T(value, *this); }) for (const auto& value: source) result.emplace_back(value, *this);
-			else for (const auto& value: source) result.push_back(Freeze(value));
+				for (const auto& value: CheckpointValues(source)) { result.emplace_back(); AssignCheckpointValue(result.back(), value, *this); }
+			else if constexpr (requires(const T& value) { T(value, *this); }) for (const auto& value: CheckpointValues(source)) result.emplace_back(value, *this);
+			else for (const auto& value: CheckpointValues(source)) result.push_back(Freeze(value));
 			return result;
 		}
 		template<class T, class Allocator> auto Freeze(const std::list<T, Allocator>& source) {
 			std::list<T, Allocator> result(source.get_allocator());
 			if constexpr (requires(T& target, const T& value) { AssignCheckpointValue(target, value, *this); })
-				for (const auto& value: source) { result.emplace_back(); AssignCheckpointValue(result.back(), value, *this); }
-			else if constexpr (requires(const T& value) { T(value, *this); }) for (const auto& value: source) result.emplace_back(value, *this);
-			else for (const auto& value: source) result.push_back(Freeze(value));
+				for (const auto& value: CheckpointValues(source)) { result.emplace_back(); AssignCheckpointValue(result.back(), value, *this); }
+			else if constexpr (requires(const T& value) { T(value, *this); }) for (const auto& value: CheckpointValues(source)) result.emplace_back(value, *this);
+			else for (const auto& value: CheckpointValues(source)) result.push_back(Freeze(value));
 			return result;
 		}
 		template<class T, class Container> auto Freeze(const std::queue<T, Container>& source) {
-			auto remaining = source;
 			std::queue<T, Container> result;
-			while (!remaining.empty()) { result.push(Freeze(remaining.front())); remaining.pop(); }
+			for (const auto& value: CheckpointValues(source)) result.push(Freeze(value));
 			return result;
 		}
 		template<class Key, class Value, class Compare, class Allocator> auto Freeze(const std::map<Key, Value, Compare, Allocator>& source) {
 			std::map<Key, Value, Compare, Allocator> result(source.key_comp(), source.get_allocator());
-			for (const auto& [key, value]: source) result.emplace(key, Freeze(value));
+			for (const auto& [key, value]: CheckpointValues(source)) result.emplace(key, Freeze(value));
 			return result;
 		}
 		template<class Key, class Value, class Hash, class Compare, class Allocator> auto Freeze(const std::unordered_map<Key, Value, Hash, Compare, Allocator>& source) {
-			// Copying first preserves the source's iteration order and buckets.
+			if (CheckpointNativeStorage::IsView(&source)) return CheckpointRebuildHash(source, [this](const auto& value) { return std::pair{Freeze(value.first), Freeze(value.second)}; });
 			auto result = source;
 			for (auto& [key, value]: result) value = Freeze(source.at(key));
 			return result;
 		}
 		template<class Key, class Compare, class Allocator> auto Freeze(const std::set<Key, Compare, Allocator>& source) {
 			static_assert(!std::is_pointer_v<Key>, "native pointer sets need a recorded order");
-			return source;
+			std::set<Key, Compare, Allocator> result(source.key_comp(), source.get_allocator());
+			for (const auto& value: CheckpointValues(source)) result.insert(Freeze(value));
+			return result;
 		}
 		template<class Key, class Hash, class Compare, class Allocator> auto Freeze(const std::unordered_set<Key, Hash, Compare, Allocator>& source) {
 			static_assert(!std::is_pointer_v<Key>, "native pointer sets need a recorded order");
+			if (CheckpointNativeStorage::IsView(&source)) return CheckpointRebuildHash(source, [this](const auto& value) { return Freeze(value); });
 			return source;
 		}
 		template<class T, class Delete> auto Freeze(const std::unique_ptr<T, Delete>& source) {
@@ -572,16 +600,16 @@ namespace RTE {
 			record->data = reinterpret_cast<T*>(static_cast<std::byte*>(memory) + sizeof(Record));
 			owner.first = record;
 			if constexpr ((std::is_same_v<Source, std::string> || std::is_same_v<Source, CheckpointString>)) {
-				for (const auto& value: source) { ::new(record->Data() + record->size) T(OwnBytes(value)); ++record->size; }
+				for (const auto& value: CheckpointValues(source)) { ::new(record->Data() + record->size) T(OwnBytes(value)); ++record->size; }
 			} else if constexpr (retainPointers) {
 				static_assert(std::is_pointer_v<T>);
-				for (const auto& value: source) { ::new(record->Data() + record->size) T(value); ++record->size; }
+				for (const auto& value: CheckpointValues(source)) { ::new(record->Data() + record->size) T(value); ++record->size; }
 			} else if constexpr (requires(const T& value) { T(value, *this); }) {
 				size_t index = 0;
-				for (const auto& value: source) Prepare(value, record->Data() + index++);
-				for (const auto& value: source) { ::new(record->Data() + record->size) T(value, *this); ++record->size; }
+				for (const auto& value: CheckpointValues(source)) Prepare(value, record->Data() + index++);
+				for (const auto& value: CheckpointValues(source)) { ::new(record->Data() + record->size) T(value, *this); ++record->size; }
 			} else {
-				for (const auto& value: source) {
+				for (const auto& value: CheckpointValues(source)) {
 					::new(record->Data() + record->size) T(Freeze(value));
 					++record->size;
 				}

@@ -226,6 +226,30 @@ namespace RTE {
 	template<class K, class H, class E, class A> auto CheckpointValues(const std::unordered_set<K, H, E, A>& source) { return CheckpointHashValues(source); }
 	template<class K, class V, class H, class E, class A> auto CheckpointValues(const std::unordered_map<K, V, H, E, A>& source) { return CheckpointHashValues(source); }
 
+	template<class Container, class Convert> Container CheckpointRebuildHash(const Container& source, Convert convert) {
+		Container result(source.bucket_count(), source.hash_function(), source.key_eq(), source.get_allocator());
+		result.max_load_factor(source.max_load_factor());
+		const auto values = CheckpointValues(source);
+#ifdef _MSVC_STL_VERSION
+		const auto key = [](const auto& value) -> const auto& {
+			if constexpr (requires { typename Container::mapped_type; }) return value.first;
+			else return value;
+		};
+		// MSVC appends new buckets, but prepends each new value inside its bucket.
+		for (size_t first = 0; first < values.size();) {
+			size_t last = first + 1;
+			const size_t bucket = result.bucket(key(values[first]));
+			while (last < values.size() && result.bucket(key(values[last])) == bucket) ++last;
+			for (size_t index = last; index != first;) result.insert(convert(values[--index]));
+			first = last;
+		}
+#else
+		// These libraries prepend both new buckets and new values inside a bucket.
+		for (size_t index = values.size(); index != 0;) result.insert(convert(values[--index]));
+#endif
+		return result;
+	}
+
 	template<class T, class Container> const Container& CheckpointQueueValues(const std::queue<T, Container>& source) {
 		struct Access : std::queue<T, Container> { static const Container& Get(const std::queue<T, Container>& queue) { return queue.*&Access::c; } };
 		return Access::Get(source);
