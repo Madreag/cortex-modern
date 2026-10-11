@@ -285,7 +285,9 @@ namespace RTE {
 		if (agreed.preparedFrame != 0 && certificate.frame < m_Stats.nextFrame) {
 			// A private reader may have prepared the certified tail past the return,
 			// while its display still owes that tick. Install before it displays it.
-			if (agreed.preparedFrame != 1 || (m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) != 0 ||
+			const auto own = m_PeerBridges.find(m_Config.localPeerId);
+			const bool privateReader = own != m_PeerBridges.end() && own->second.committedHold && !own->second.returnFrame;
+			if (agreed.preparedFrame != 1 || !privateReader ||
 			    certificate.frame <= m_LastCompletedSimulationTick.value_or(0)) return;
 		}
 		const uint64_t prefixFrame = agreed.preparedFrame != 0 ? agreed.boundary : certificate.frame - 1;
