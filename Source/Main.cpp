@@ -449,6 +449,8 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 		for (size_t index = 0; index < std::min<size_t>(grew.size(), 10); ++index) histogram += (index ? "," : "") + grew[index].second;
 		histogram += " heap_top=";
 		for (size_t index = 0; index < std::min<size_t>(top.size(), 12); ++index) histogram += (index ? "," : "") + top[index].second;
+		histogram += " entity_pools_used_free=" + Entity::ClassInfo::GetPoolMemoryCounts() + " atom_pool_used_free=" + Atom::GetPoolMemoryCounts() +
+		    " mopixel_bytes=" + std::to_string(sizeof(MOPixel)) + " atom_bytes=" + std::to_string(sizeof(Atom));
 	}
 	return std::format(" private_mb={}{}{} threads={} handles={}{}", counters.PrivateUsage >> 20, commitFigures, heapFigures, threads, handles, histogram);
 #elif defined(__APPLE__)
@@ -8524,6 +8526,11 @@ void RunGameLoop() {
 				g_MovableMan.StartMOIDDrawTask();
 			}
 
+			if (ScenarioRunner::IsLockstepControllerSyncActive() && simTick % 300 == 0) {
+				// A particle wave can leave hundreds of thousands of returned blocks. Keep two refills, not the wave's peak.
+				Entity::ClassInfo::ReleaseUnusedPoolMemory();
+				Atom::ReleaseUnusedPoolMemory();
+			}
 			RecordActorHistory(simTick);
 			DumpSimStateIfArmed(simTick);
 			LocalPrediction::CompareFidelityAtTick(simTick);

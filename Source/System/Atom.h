@@ -133,6 +133,9 @@ namespace RTE {
 		/// @param returnedMemory The raw chunk of memory that is being returned. Needs to be the same size as an Atom. OWNERSHIP IS TRANSFERRED!
 		/// @return The count of outstanding memory chunks after this was returned.
 		static int ReturnPoolMemory(void* returnedMemory);
+
+		static std::string GetPoolMemoryCounts();
+		static void ReleaseUnusedPoolMemory();
 #pragma endregion
 
 #pragma region Getters and Setters

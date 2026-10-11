@@ -442,6 +442,20 @@ int Atom::ReturnPoolMemory(void* returnedMemory) {
 	return s_InstancesInUse;
 }
 
+std::string Atom::GetPoolMemoryCounts() {
+	std::lock_guard lock(s_MemoryPoolMutex);
+	return std::to_string(s_InstancesInUse) + '/' + std::to_string(s_AllocatedPool.size());
+}
+
+void Atom::ReleaseUnusedPoolMemory() {
+	std::lock_guard lock(s_MemoryPoolMutex);
+	const size_t reserve = static_cast<size_t>(s_PoolAllocBlockCount > 0 ? s_PoolAllocBlockCount : 10) * 2;
+	while (s_AllocatedPool.size() > reserve) {
+		free(s_AllocatedPool.back());
+		s_AllocatedPool.pop_back();
+	}
+}
+
 bool Atom::CalculateNormal(BITMAP* sprite, Vector spriteCenter) {
 	RTEAssert(sprite, "Trying to set up Atom normal without passing in bitmap");
 
