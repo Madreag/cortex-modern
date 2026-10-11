@@ -265,7 +265,9 @@ namespace RTE {
 		const auto back = m_ReclaimTransactions.find(m_Config.localPeerId);
 		// The reader keeps its catch-up budget while the neutral interval carries its return.
 		if (back != m_ReclaimTransactions.end() && *m_LastCompletedSimulationTick <= back->second.neutralThroughFrame) return true;
-		if (m_PeerTailThrough && *m_LastCompletedSimulationTick < *m_PeerTailThrough) return true;
+		const auto own = m_PeerBridges.find(m_Config.localPeerId);
+		if (own != m_PeerBridges.end() && own->second.committedHold && !own->second.returnFrame &&
+		    m_PeerTailThrough && *m_LastCompletedSimulationTick < *m_PeerTailThrough) return true;
 		// The initial handshake reaches seats at different times. Follow one
 		// stable member's displayed clock so that difference cannot become a
 		// permanent phase offset. This only selects the existing 3x/six-tick
