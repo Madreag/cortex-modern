@@ -401,10 +401,7 @@ namespace RTE {
 #pragma region Music Getters and Setters
 		/// Reports whether any music stream is currently playing.
 		/// @return Whether any music stream is currently playing.
-		bool IsMusicPlaying() const {
-			bool isPlayingMusic;
-			return m_AudioEnabled && m_MusicChannelGroup->isPlaying(&isPlayingMusic) == FMOD_OK ? isPlayingMusic : false;
-		}
+		bool IsMusicPlaying() const;
 
 		/// Gets whether the music channel is muted or not.
 		/// @return Whether the music channel is muted or not.
@@ -559,6 +556,7 @@ namespace RTE {
 		struct PlayingVoice;
 		AudioCheckpoint::Control* CheckpointGroup(size_t index);
 		void RecordCheckpointListener(int index, const FMOD_VECTOR& position, const FMOD_VECTOR* velocity, const FMOD_VECTOR& forward, const FMOD_VECTOR& up);
+		FMOD::ChannelControl* ReadCheckpointPlayback(int identity) const;
 		static AudioCheckpoint::Voice CaptureStoredVoice(int identity, const PlayingVoice& voice, uint64_t owner, int bus);
 		std::shared_ptr<AudioCheckpointCapture> CaptureFrozenCheckpointState(bool samples) const;
 		std::vector<std::pair<FMOD::ChannelGroup*, FMOD::DSP*>> m_GroupEffects; //!< Effects owned by the mixer groups.

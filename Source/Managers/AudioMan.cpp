@@ -430,6 +430,17 @@ void AudioMan::Update() {
 	}
 }
 
+bool AudioMan::IsMusicPlaying() const {
+	if (CheckpointNativeStorage::Reading()) {
+		const auto* source = CheckpointNativeStorage::Source(this);
+		if (!source->m_AudioEnabled) return false;
+		bool playing = false;
+		return source->ReadCheckpointPlayback(0)->isPlaying(&playing) == FMOD_OK && playing;
+	}
+	bool isPlayingMusic;
+	return m_AudioEnabled && m_MusicChannelGroup->isPlaying(&isPlayingMusic) == FMOD_OK ? isPlayingMusic : false;
+}
+
 void AudioMan::SetGlobalPitch(float pitch, bool includeImmobileSounds, bool includeMusic) {
 	if (!m_AudioEnabled) {
 		return;
@@ -870,6 +881,19 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsPosition(const SoundContainer*
 }
 
 float AudioMan::GetSoundContainerAudibleVolume(const SoundContainer* soundContainer) {
+	if (CheckpointNativeStorage::Reading()) {
+		const auto* source = CheckpointNativeStorage::Source(this);
+		if (!source->m_AudioEnabled || !soundContainer) return 0;
+		for (int identity: CheckpointValues(*soundContainer->GetPlayingChannels())) {
+			for (const auto& [savedIdentity, voice]: CheckpointValues(source->m_PlayingVoices)) {
+				if (savedIdentity != identity || CheckpointNativeStorage::Original(voice.owner) != CheckpointNativeStorage::Original(soundContainer) ||
+				    (SoundSimulationScope::Domain() == SoundExecutionDomain::SharedSimulation && voice.domain != SoundExecutionDomain::SharedSimulation)) continue;
+				float volume;
+				if (auto* channel = source->ReadCheckpointPlayback(identity); channel && channel->getAudibility(&volume) == FMOD_OK) return volume;
+			}
+		}
+		return 0;
+	}
 	if (!m_AudioEnabled || !soundContainer || !soundContainer->IsBeingPlayed()) {
 		return 0.0F;
 	}
@@ -2091,6 +2115,10 @@ int AudioMan::FindVoiceIdentity(const FMOD::Channel* channel) const {
 }
 
 FMOD_RESULT AudioMan::GetVoiceChannel(int voiceIdentity, FMOD::Channel** channel) const {
+	if (CheckpointNativeStorage::Reading()) {
+		*channel = voiceIdentity > 0 ? static_cast<FMOD::Channel*>(ReadCheckpointPlayback(voiceIdentity)) : nullptr;
+		return *channel ? FMOD_OK : FMOD_ERR_INVALID_HANDLE;
+	}
 	const auto found = m_PlayingVoices.find(voiceIdentity);
 	FMOD::Channel* live = found == m_PlayingVoices.end() ? nullptr : found->second.Channel();
 	// A mixer-ended voice stays mapped with a null channel.
@@ -2140,11 +2168,23 @@ FMOD_RESULT AudioMan::StopDetached(FMOD::Channel* channel) {
 }
 
 bool AudioMan::OwnsVoice(int voiceIdentity, const SoundContainer* owner) const {
+	if (CheckpointNativeStorage::Reading()) {
+		for (const auto& [identity, voice]: CheckpointValues(CheckpointNativeStorage::Source(this)->m_PlayingVoices))
+			if (identity == voiceIdentity) return CheckpointNativeStorage::Original(voice.owner) == CheckpointNativeStorage::Original(owner);
+		return false;
+	}
 	const auto found = m_PlayingVoices.find(voiceIdentity);
 	return found != m_PlayingVoices.end() && found->second.owner == owner;
 }
 
 bool AudioMan::VoiceMatchesContext(int identity, const SoundContainer* owner) const {
+	if (CheckpointNativeStorage::Reading()) {
+		for (const auto& [savedIdentity, voice]: CheckpointValues(CheckpointNativeStorage::Source(this)->m_PlayingVoices)) {
+			if (savedIdentity == identity && CheckpointNativeStorage::Original(voice.owner) == CheckpointNativeStorage::Original(owner))
+				return SoundSimulationScope::Domain() != SoundExecutionDomain::SharedSimulation || voice.domain == SoundExecutionDomain::SharedSimulation;
+		}
+		return false;
+	}
 	const auto found = m_PlayingVoices.find(identity);
 	if (found == m_PlayingVoices.end() || found->second.owner != owner) return false;
 	// Only a shared simulation call is confined to the shared cohort's voices. An AI hook mutates
@@ -3035,6 +3075,63 @@ std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureFrozenCheckpointState(b
 			if (std::any_of(state.voices.begin(), state.voices.end(), [&](const auto& voice) { return voice.identity == identity; })) state.minimumDistances.emplace(identity, distance);
 	}
 	return result;
+}
+
+FMOD::ChannelControl* AudioMan::ReadCheckpointPlayback(int identity) const {
+	struct Playback {
+		FMOD::System* system = nullptr;
+		std::array<FMOD::ChannelGroup*, 4> groups{};
+		std::map<int, FMOD::Channel*> channels;
+		~Playback() { if (system) system->release(); }
+	};
+	static const char kind{};
+	const auto playback = std::static_pointer_cast<const Playback>(CheckpointNativeStorage::ReadIndex(CheckpointNativeStorage::Original(this), &kind, [this] {
+		auto values = std::make_shared<Playback>();
+		const auto captured = CheckpointNativeStorage::Source(this)->CaptureFrozenCheckpointState(true);
+		const auto& state = captured->state;
+		const auto require = [](FMOD_RESULT result) { if (result == FMOD_ERR_MEMORY) throw std::bad_alloc(); AudioCheckpoint::Require(result); };
+		CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+		require(FMOD::System_Create(&values->system));
+		require(values->system->setOutput(FMOD_OUTPUTTYPE_NOSOUND_NRT));
+		require(values->system->set3DSettings(1, c_PPM, 1));
+		require(values->system->setSoftwareChannels(c_MaxSoftwareChannels));
+		require(values->system->init(c_MaxVirtualChannels * 2, FMOD_INIT_VOL0_BECOMES_VIRTUAL, nullptr));
+		require(values->system->getMasterChannelGroup(&values->groups[0]));
+		for (size_t bus = 1; bus < values->groups.size(); ++bus) {
+			require(values->system->createChannelGroup(nullptr, &values->groups[bus]));
+			require(values->groups[0]->addGroup(values->groups[bus]));
+		}
+		require(values->system->set3DNumListeners(static_cast<int>(state.listeners.size())));
+		for (size_t index = 0; index < state.listeners.size(); ++index) {
+			const auto& listener = state.listeners[index];
+			const auto position = AudioCheckpoint::Unpack(listener[0]), velocity = AudioCheckpoint::Unpack(listener[1]);
+			const auto forward = AudioCheckpoint::Unpack(listener[2]), up = AudioCheckpoint::Unpack(listener[3]);
+			require(values->system->set3DListenerAttributes(static_cast<int>(index), &position, &velocity, &forward, &up));
+		}
+		for (size_t index = 0; index < values->groups.size(); ++index) state.groups[index].Apply(values->system, values->groups[index], true);
+		std::map<std::string, FMOD::Sound*> sounds;
+		for (const auto& voice: state.voices) {
+			if (!voice.playing) continue;
+			FMOD::Sound* sound = nullptr;
+			if (const auto found = sounds.find(voice.path); found != sounds.end()) sound = found->second;
+			else {
+				CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+				require(values->system->createSound(voice.path.c_str(), FMOD_CREATESAMPLE | FMOD_3D, nullptr, &sound));
+				for (const auto& sample: state.samples) if (sample.path == voice.path) { sample.Apply(sound); break; }
+				sounds.emplace(voice.path, sound);
+			}
+			FMOD::Channel* channel = nullptr;
+			require(values->system->playSound(sound, values->groups.at(voice.bus + 1), true, &channel));
+			voice.Apply(values->system, channel);
+			require(channel->setPaused(voice.control.paused));
+			values->channels.emplace(voice.identity, channel);
+		}
+		require(values->system->update());
+		return values;
+	}));
+	if (!identity) return playback->groups[3];
+	const auto found = playback->channels.find(identity);
+	return found == playback->channels.end() ? nullptr : found->second;
 }
 
 std::string AudioMan::CheckpointBackendSelfTestMismatch() {

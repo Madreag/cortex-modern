@@ -1094,15 +1094,26 @@ FMOD::Sound* ContentFile::LoadSavedSound(bool abortGameForInvalidSound) {
 		System::PrintDiagnosticLine("[autosave] sound file is absent or empty: " + path);
 		return nullptr;
 	}
+	if (const auto found = saved->sounds.find(path); found != saved->sounds.end()) return found->second;
 	const auto require = [](FMOD_RESULT result) { if (result == FMOD_ERR_MEMORY) throw std::bad_alloc(); AudioCheckpoint::Require(result); };
 	if (!saved->system) {
 		CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
-		require(FMOD::System_Create(&saved->system));
-		require(saved->system->setOutput(FMOD_OUTPUTTYPE_NOSOUND_NRT));
-		require(saved->system->init(1, FMOD_INIT_NORMAL, nullptr));
+		FMOD::System* candidate = nullptr;
+		try {
+			require(FMOD::System_Create(&candidate));
+			require(candidate->setOutput(FMOD_OUTPUTTYPE_NOSOUND_NRT));
+			require(candidate->init(1, FMOD_INIT_NORMAL, nullptr));
+		} catch (...) { if (candidate) candidate->release(); throw; }
+		saved->system = candidate;
 	}
 	FMOD::Sound* sound = nullptr;
-	require(saved->system->createSound(path.c_str(), FMOD_CREATESAMPLE | FMOD_3D, nullptr, &sound));
+	const FMOD_RESULT loaded = saved->system->createSound(path.c_str(), FMOD_CREATESAMPLE | FMOD_3D, nullptr, &sound);
+	if (loaded != FMOD_OK) {
+		if (sound) sound->release();
+		if (loaded == FMOD_ERR_MEMORY || abortGameForInvalidSound) require(loaded);
+		System::PrintDiagnosticLine("[autosave] sound load failed: " + path + ": " + FMOD_ErrorString(loaded));
+		return nullptr;
+	}
 	try {
 		if (const auto found = saved->values.find(path); found != saved->values.end()) found->second.Apply(sound);
 		saved->sounds.emplace(path, sound);
