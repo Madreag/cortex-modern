@@ -12990,6 +12990,14 @@ namespace RTE {
 				const auto own = m_PeerBridges.find(m_Config.localPeerId);
 				if (own != m_PeerBridges.end() && own->second.committedHold && m_LastCompletedSimulationTick) {
 					const auto back = m_ReclaimTransactions.find(m_Config.localPeerId);
+					if (own->second.returnFrame && back != m_ReclaimTransactions.end() && m_Stats.nextFrame > back->second.neutralThroughFrame) {
+						const auto source = m_PeerSourceInputs.find(m_Stats.nextFrame);
+						// A returned seat supplies its own live input before history prepares that tick.
+						if (source == m_PeerSourceInputs.end() || !source->second.contains(m_Config.localPeerId)) {
+							m_AdvanceBlock = "return-input-production";
+							break;
+						}
+					}
 					const bool privateRunway = !own->second.returnFrame ||
 					    (back != m_ReclaimTransactions.end() && *m_LastCompletedSimulationTick <= back->second.neutralThroughFrame);
 					const uint64_t runway = std::max<uint16_t>(1, InputDelayAt(m_Config.localPeerId, *m_LastCompletedSimulationTick + 1));

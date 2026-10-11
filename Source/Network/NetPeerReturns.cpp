@@ -174,8 +174,8 @@ namespace RTE {
 			const auto [wire, route] = PeerFrameRoute(peer);
 			if (wire && wire->IsPeerPingMeasured(route)) roundTripMs = std::max<uint64_t>(roundTripMs, wire->GetPeerPingMs(route));
 		}
-		// At most two contiguous ranges are requested in one measured round trip.
-		m_PeerTailRequestAtMs = nowMs + roundTripMs;
+		// Two batches of at most two contiguous ranges fit in one measured round trip.
+		m_PeerTailRequestAtMs = nowMs + std::max<uint64_t>(100, roundTripMs / 2);
 		m_PeerTailRequestedUntil.erase(m_PeerTailRequestedUntil.begin(), m_PeerTailRequestedUntil.lower_bound(m_Stats.nextFrame));
 		// A bounded subscription includes future history, sent only after the donor displays it.
 		const uint64_t horizon = m_Stats.nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew;
