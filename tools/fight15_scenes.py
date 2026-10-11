@@ -25,7 +25,7 @@ def wait(**kwargs):
     return dict(op="wait", **kwargs)
 
 
-def host_setup(players=2, cpu=False):
+def host_setup(players=2, cpu=False, brain_loss=False):
     lines = [
         "wait_ms 1800", "activate ButtonMainToMultiplayer", "wait_ms 600", "assert_substate Landing",
         "settext TextMultiplayerName Captain", "activate ButtonMultiplayerHostGame",
@@ -48,7 +48,10 @@ def host_setup(players=2, cpu=False):
                    "assert_label ComboHostSeatType3 CPU", "wait_ms 1400", "activate TabHostPageConnection"]
     lines += ["assert_label ComboHostNetVisibility Public (default)",
               "assert_label ComboHostNetRelay Game service (default)"]
-    if cpu:
+    if brain_loss:
+        lines += ["activate TabHostPageRules", "combo_select ComboHostRulesBrainless End the match",
+                  "assert_label ComboHostRulesBrainless End the match"]
+    if cpu or brain_loss:
         lines += ["activate ButtonHostOptApply", "wait_ms 400"]
     lines += ["activate ButtonHostOptBack", "wait_ms 500",
               "activate ButtonMultiplayerCreate", "wait_substate Lobby 90",
@@ -93,7 +96,7 @@ def probe(steps, timeout=180000):
     return json.dumps(dict(schema=1, timeout_ms=timeout, step_timeout_ms=60000, label_dump=dict(every_ms=5000), steps=steps), indent=2) + "\n"
 
 
-def emit(number, title, host, joiner, host_probe, join_probe, checklist, timeout=220):
+def emit(number, title, host, joiner, host_probe, join_probe, checklist, timeout=220, matching_log_lines=()):
     name = f"fight15-s{number:02d}"
     scripts = {"host.menu": "\n".join(host) + "\n", "joiner.menu": "\n".join(joiner) + "\n",
                "host.probe": host_probe, "joiner.probe": join_probe}
@@ -103,6 +106,8 @@ def emit(number, title, host, joiner, host_probe, join_probe, checklist, timeout
              for peer in ("host", "joiner")]
     document = dict(schema=1, name=name, title=title, port_base=49410 + number * 2,
                     size="960x540", timeout_s=timeout, public_directory=True, peers=peers, scripts=scripts, checklist=checklist)
+    if matching_log_lines:
+        document["matching_log_lines"] = list(matching_log_lines)
     (ROOT / f"{name}.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
 
 
@@ -206,8 +211,8 @@ def capture(mark, screen="game"):
             dict(op="screenshot_pair", name=mark, scope="menu")]
 
 
-def game_menu(peer, timeout=360):
-    lines = host_setup() if peer == "host" else join_setup()
+def game_menu(peer, timeout=360, brain_loss=False):
+    lines = host_setup(brain_loss=brain_loss) if peer == "host" else join_setup()
     if peer == "host":
         lines += ["wait_remote_ready 90", "activate ButtonMultiplayerStart"]
     else:
@@ -370,7 +375,8 @@ def game_scenes():
                                r"\[net-match\] activity end: Skirmish Defense ended at tick .*SkirmishDefense.lua:397.*Brain Case"])
                for peer in ("host", "joiner")]
     emit(6, "Actual weapon damage ends by the activity's brain-loss rule on both peers",
-         game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner), checks)
+         game_menu("host", brain_loss=True), game_menu("joiner"), game_probe(host), game_probe(joiner), checks,
+         matching_log_lines=[r"^\[net-match\] brain lost: .+$", r"^\[net-match\] activity end: .+$"])
 
     host, joiner = place("host"), place("joiner")
     host += key("F6") + [wait(panel_open=True), wait(held_peer="Joiner")]

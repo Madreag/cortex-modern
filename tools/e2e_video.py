@@ -1668,6 +1668,22 @@ def item_evidence(record, item, port=None):
     return frame_range(rows, item), evidence
 
 
+def matching_peer_log_evidence(scenario, capture):
+    items = []
+    for index, pattern in enumerate(scenario.get("matching_log_lines", [])):
+        observed = {}
+        for peer in capture["peers"]:
+            path = Path(peer["root"]) / "stdout.log"
+            text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+            observed[peer["peer"]] = re.findall(pattern, text, re.MULTILINE)
+        passed = (len(observed) >= 2 and all(len(lines) == 1 for lines in observed.values())
+                  and len({lines[0] for lines in observed.values() if len(lines) == 1}) == 1)
+        items.append(dict(id=f"matching-peer-log-{index}", run=capture["name"], peer="all", screen="any",
+                          what="Every peer records exactly the same shared event, once.", pattern=pattern,
+                          observed=observed, kind="log", state="checked", probe="pass" if passed else "fail"))
+    return items
+
+
 def review(scenario, capture, out):
     """The reviewing agent's first read: every checklist item, where to look, and what the probe said."""
     items = []
@@ -1749,6 +1765,7 @@ def review(scenario, capture, out):
         expected_evidence += [f'recording-rate-{peer["peer"]}', f'recording-stills-{peer["peer"]}',
                               *[f'screen-{name}-{peer["peer"]}' for name in sorted(expected_screen_watches(peer))]]
         items.extend(capture_evidence_items(scenario, capture, peer))
+    items.extend(matching_peer_log_evidence(scenario, capture))
     run_findings = []
     for peer in capture["peers"]:
         record = peer.get("record", {})

@@ -1118,7 +1118,8 @@ void GameActivity::SetPaused(bool pause) {
 }
 
 void GameActivity::NoteMatchBrainLoss(const Actor& brain, const char* cause) {
-	if (!ScenarioRunner::IsLockstepControllerSyncActive()) return;
+	// A preview can gib a shadow; only the shared world's loss belongs in the result.
+	if (!ScenarioRunner::IsLockstepControllerSyncActive() || g_MovableMan.IsSpeculative()) return;
 	std::string owner;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (m_Brain[player] == &brain) owner += (owner.empty() ? "" : " and ") + LockstepSeatName(player);
@@ -1141,7 +1142,7 @@ void GameActivity::NoteMatchBrainLoss(const Actor& brain, const char* cause) {
 }
 
 void GameActivity::End() {
-	if (ScenarioRunner::IsLockstepControllerSyncActive() && !IsOver()) {
+	if (ScenarioRunner::IsLockstepControllerSyncActive() && !g_MovableMan.IsSpeculative() && !IsOver()) {
 		// The script chooses the result; keep its call site beside the brains that led to it.
 		std::string rule = "activity end";
 		if (LuaStateWrapper* wrapper = g_LuaMan.GetThreadCurrentLuaState()) {
@@ -4528,10 +4529,17 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		g_MovableMan.AddActor(brain); game->SetPlayerBrain(brain, 0);
 		const long uid = brain->GetUniqueID();
 		check("brain_registered_and_healthy_before_gib", game->GetPlayerBrain(0) == brain && brain->GetHealth() == 100);
+		g_MovableMan.BeginSpeculation();
+		auto* preview = static_cast<Actor*>(g_MovableMan.ViewIfSpeculating(brain));
+		check("preview_uses_a_shadow_of_the_same_brain", preview && preview != brain && preview->GetUniqueID() == uid);
+		if (preview && preview != brain) { preview->SetHealth(12); preview->GibThis(); }
+		g_MovableMan.EndSpeculation();
+		check("preview_leaves_the_registered_brain_healthy", game->GetPlayerBrain(0) == brain && brain->GetHealth() == 100 && !brain->IsSetToDelete());
 		brain->GibThis(); game->SetWinnerTeam(TeamTwo); game->End();
 		const std::string reason = ObservedMatchEndReason(*game);
 		check("end_names_brain_rule_tick_and_winner", reason.find("Brain Case") != std::string::npos && reason.find("uid " + std::to_string(uid)) != std::string::npos &&
 		      reason.find("was gibbed") != std::string::npos && reason.find("ended at tick") != std::string::npos && reason.find("by activity end") != std::string::npos && reason.find("team 2 wins") != std::string::npos);
+		check("end_uses_the_shared_loss_instead_of_the_preview", reason.find("health 100,") != std::string::npos && reason.find("health 12,") == std::string::npos);
 		System::PrintDiagnosticLine("[fight15-selftest] observed end: " + reason);
 	} else if (row == "R2") {
 		game->m_pEditorGUI[0] = new SceneEditorGUI;
