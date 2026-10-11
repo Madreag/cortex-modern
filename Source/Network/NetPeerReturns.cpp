@@ -60,6 +60,7 @@ namespace RTE {
 		if (!m_LastCompletedSimulationTick || fromFrame > *m_LastCompletedSimulationTick) return;
 		auto& queued = m_PeerTailOutgoing[peer];
 		auto& sent = m_PeerTailLastSentMs[peer];
+		auto& repeats = m_PeerTailResendFrames[peer];
 		uint64_t queuedBytes = 0;
 		for (const auto& [frame, item]: queued) queuedBytes += item.bytes.size();
 		const auto first = m_MigrationHistory.lower_bound(fromFrame);
@@ -75,9 +76,9 @@ namespace RTE {
 			// The donor's live seat keeps its next update while a reader catches up.
 			if (preparedFrames >= 4 || (preparedFrames != 0 && std::chrono::steady_clock::now() >= workEnd)) break;
 			const auto [wire, route] = PeerFrameRoute(peer);
-			const uint64_t retryMs = wire && wire->IsPeerPingMeasured(route) ? std::max<uint64_t>(500, wire->GetPeerPingMs(route) + 200ULL) : 1000;
+			const uint64_t retryMs = wire && wire->IsPeerPingMeasured(route) ? std::max<uint64_t>(500, wire->GetPeerPingMs(route)) : 1000;
 			if ((m_PeerAppliedThrough.contains(peer) && kept->first <= m_PeerAppliedThrough.at(peer)) || queued.contains(kept->first) ||
-			    (sent.contains(kept->first) && m_TimingNowMs < sent.at(kept->first) + retryMs)) {
+			    (sent.contains(kept->first) && (!repeats.contains(kept->first) || m_TimingNowMs < sent.at(kept->first) + retryMs))) {
 				range->second.first = std::max(range->second.first, kept->first + 1);
 				continue;
 			}
@@ -137,6 +138,7 @@ namespace RTE {
 			if (!queued.empty() && queuedBytes + body.size() > 4 * 1024 * 1024) break;
 			queuedBytes += body.size();
 			queued.emplace(kept->first, PeerTailOutgoing{std::move(body), members, 0, compressedBody});
+			repeats.erase(kept->first);
 			++preparedFrames;
 			range->second.first = std::max(range->second.first, kept->first + 1);
 		}
@@ -158,21 +160,29 @@ namespace RTE {
 			queued.erase(queued.begin(), queued.upper_bound(applied));
 			auto& sent = m_PeerTailLastSentMs[peer];
 			sent.erase(sent.begin(), sent.upper_bound(applied));
+			auto& repeats = m_PeerTailResendFrames[peer];
+			repeats.erase(repeats.begin(), repeats.upper_bound(applied));
 			uint64_t handedOver = 0;
 			const auto sendEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
 			for (auto item = queued.begin(); item != queued.end() && handedOver < 64 * 1024;) {
 				if (handedOver != 0 && std::chrono::steady_clock::now() >= sendEnd) break;
 				auto& body = item->second;
+				// A small requested repeat can arrive independently of an older
+				// reliable packet. Its full frame and majority witnesses still agree.
+				const bool smallRepeat = sent.contains(item->first) && body.bytes.size() <= 4096;
 				const size_t end = std::min(body.bytes.size(), body.offset + NetHostMigrationCodec::c_ChunkBytes);
 				NetTransportQueueStats queue;
 				const auto [wire, route] = PeerFrameRoute(peer);
 				if (wire) queue = wire->GetPeerQueueStats(route);
-				if (queue.reliableBytes + end - body.offset + 512 > reliableQueueCap) { ++m_PeerTailDeferredSends; break; }
+				if (!smallRepeat && queue.reliableBytes + end - body.offset + 512 > reliableQueueCap) { ++m_PeerTailDeferredSends; break; }
 				auto tail = PeerFrameMessage(NetHostMigrationMessageType::PeerTail);
 				tail.frame = item->first; tail.voterMask = body.members; tail.completeFrom = body.compressed ? 1 : 0;
 				tail.totalBytes = static_cast<uint32_t>(body.bytes.size()); tail.offset = body.offset;
 				tail.bytes.assign(body.bytes.begin() + body.offset, body.bytes.begin() + end);
-				if (!SendPeerFrameMessage(std::move(tail), NetTransportLane::ControlReliable, peer)) break;
+				if (!SendPeerFrameMessage(std::move(tail), smallRepeat ? NetTransportLane::BulkUnreliable : NetTransportLane::ControlReliable, peer)) break;
+				if (smallRepeat && std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-tail-repeat] donor=" << static_cast<int>(m_Config.localPeerId)
+				    << " reader=" << static_cast<int>(peer) << " frame=" << item->first << " bytes=" << body.bytes.size()
+				    << " age_ms=" << nowMs - sent.at(item->first) << " now_ms=" << nowMs << std::endl;
 				const size_t bytes = end - body.offset;
 				handedOver += bytes; m_PeerTailBytesSent += bytes; body.offset = static_cast<uint32_t>(end);
 				if (end == body.bytes.size()) {
@@ -193,9 +203,16 @@ namespace RTE {
 		// Two batches of at most two contiguous ranges fit in one measured round trip.
 		m_PeerTailRequestAtMs = nowMs + std::max<uint64_t>(100, roundTripMs / 2);
 		m_PeerTailRequestedUntil.erase(m_PeerTailRequestedUntil.begin(), m_PeerTailRequestedUntil.lower_bound(m_Stats.nextFrame));
+		const auto buffered = m_PeerCommittedTail.lower_bound(m_Stats.nextFrame);
+		if (buffered != m_PeerCommittedTail.end() && buffered->first > m_Stats.nextFrame) {
+			const auto pending = m_PeerTailRequestedUntil.find(m_Stats.nextFrame);
+			if (pending != m_PeerTailRequestedUntil.end() && pending->second <= nowMs + roundTripMs + 200)
+				pending->second = std::min(pending->second, nowMs);
+		}
 		// A bounded subscription includes future history, sent only after the donor displays it.
 		const uint64_t horizon = m_Stats.nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew;
-		for (uint64_t frame = m_Stats.nextFrame; frame < horizon;) {
+		uint32_t requestsInBatch = 0;
+		for (uint64_t frame = m_Stats.nextFrame; frame < horizon && requestsInBatch < 2;) {
 			const auto pending = m_PeerTailRequestedUntil.find(frame);
 			if (m_PeerCommittedTail.contains(frame) || (pending != m_PeerTailRequestedUntil.end() && nowMs < pending->second)) { ++frame; continue; }
 			uint8_t donor = 0; uint64_t through = 0, retryMs = 500;
@@ -218,9 +235,11 @@ namespace RTE {
 			m_PeerTailDonor = donor;
 			auto request = PeerFrameMessage(NetHostMigrationMessageType::PeerTailRequest);
 			request.frame = frame;
-			const uint64_t end = std::min(horizon, frame + 128);
+			uint64_t end = std::min(horizon, frame + 128);
+			if (const auto ready = m_PeerCommittedTail.lower_bound(frame); ready != m_PeerCommittedTail.end()) end = std::min(end, ready->first);
 			request.completeFrom = end;
 			if (!SendPeerFrameMessage(request, NetTransportLane::ControlReliable, donor)) break;
+			++requestsInBatch;
 			++m_PeerTailRequests;
 			for (; frame < end; ++frame) m_PeerTailRequestedUntil[frame] = nowMs + retryMs;
 		}

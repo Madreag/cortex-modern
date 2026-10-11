@@ -1722,6 +1722,7 @@ namespace RTE {
 		uint64_t m_PeerTailDuplicateFrames = 0;
 		std::map<uint64_t, uint64_t> m_PeerTailRequestedUntil;
 		std::map<uint8_t, std::map<uint64_t, uint64_t>> m_PeerTailLastSentMs;
+		std::map<uint8_t, std::set<uint64_t>> m_PeerTailResendFrames;
 		std::map<uint8_t, std::pair<uint64_t, uint64_t>> m_PeerTailSendRanges;
 		struct PeerTailOutgoing { std::vector<uint8_t> bytes; uint32_t members = 0, offset = 0; bool compressed = false; };
 		std::map<uint8_t, std::map<uint64_t, PeerTailOutgoing>> m_PeerTailOutgoing;

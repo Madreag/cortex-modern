@@ -253,6 +253,10 @@ namespace RTE {
 			if (message.bytes.empty() && message.frame <= UINT64_MAX - 128 && message.completeFrom > message.frame &&
 			    message.completeFrom - message.frame <= 128) {
 				heard();
+				auto& repeats = m_PeerTailResendFrames[message.senderPeerId];
+				const auto& sent = m_PeerTailLastSentMs[message.senderPeerId];
+				for (uint64_t frame = message.frame; frame < message.completeFrom; ++frame)
+					if (sent.contains(frame) && repeats.size() < NetLockstepCodec::c_MaxFutureFrameSkew) repeats.insert(frame);
 				auto [range, inserted] = m_PeerTailSendRanges.try_emplace(message.senderPeerId, message.frame, message.completeFrom);
 				if (!inserted) {
 					range->second.first = std::min(range->second.first, message.frame);
