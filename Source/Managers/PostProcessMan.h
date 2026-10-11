@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "Singleton.h"
 #include "Box.h"
 #include "glad/gl.h"
@@ -162,13 +164,13 @@ namespace RTE {
 		bool RunCheckpointSelfTest();
 
 	protected:
-		std::list<PostEffect> m_PostScreenEffects; //!< List of effects to apply at the end of each frame. This list gets cleared out and re-filled each frame.
-		std::list<PostEffect> m_PostSceneEffects; //!< All post-processing effects registered for this draw frame in the scene.
+		CheckpointList<PostEffect> m_PostScreenEffects; //!< List of effects to apply at the end of each frame. This list gets cleared out and re-filled each frame.
+		CheckpointList<PostEffect> m_PostSceneEffects; //!< All post-processing effects registered for this draw frame in the scene.
 
-		std::list<Box> m_PostScreenGlowBoxes; //!< List of areas that will be processed with glow.
-		std::list<IntRect> m_GlowAreas; //!< All the areas to do post glow pixel effects on, in scene coordinates.
+		CheckpointList<Box> m_PostScreenGlowBoxes; //!< List of areas that will be processed with glow.
+		CheckpointList<IntRect> m_GlowAreas; //!< All the areas to do post glow pixel effects on, in scene coordinates.
 
-		std::array<std::list<PostEffect>, c_MaxScreenCount> m_ScreenRelativeEffects; //!< List of screen relative effects for each player in online multiplayer.
+		std::array<CheckpointList<PostEffect>, c_MaxScreenCount> m_ScreenRelativeEffects; //!< List of screen relative effects for each player in online multiplayer.
 		std::array<std::mutex, c_MaxScreenCount> ScreenRelativeEffectsMutex; //!< Mutex for the ScreenRelativeEffects list when accessed by multiple threads in online multiplayer.
 
 		BITMAP* m_YellowGlow; //!< Bitmap for the yellow dot glow effect.
@@ -179,8 +181,8 @@ namespace RTE {
 		size_t m_RedGlowHash; //!< Hash value for the red dot glow effect bitmap.
 		size_t m_BlueGlowHash; //!< Hash value for the blue dot glow effect bitmap.
 
-		std::unordered_map<int, std::shared_ptr<BITMAP>> m_TempEffectBitmaps; //!< Owns temporary bitmaps to rotate post effects in for quick access.
-		std::vector<std::shared_ptr<BITMAP>> m_CheckpointBitmaps; //!< Owns restored effect pixels; queued and standard glow pointers may alias these images.
+		CheckpointUnorderedMap<int, std::shared_ptr<BITMAP>> m_TempEffectBitmaps; //!< Owns temporary bitmaps to rotate post effects in for quick access.
+		CheckpointVector<std::shared_ptr<BITMAP>> m_CheckpointBitmaps; //!< Owns restored effect pixels; queued and standard glow pointers may alias these images.
 
 	private:
 		/// Whether this effect is registered now: a previewed actor's is shown on the preview that

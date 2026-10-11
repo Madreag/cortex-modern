@@ -10,6 +10,7 @@
 #include "ContentFile.h"
 #include "Matrix.h"
 #include "CheckpointArchive.h"
+#include "CheckpointFrozenContainers.h"
 #include "GUICheckpoint.h"
 
 #include "PresetMan.h"
@@ -158,25 +159,26 @@ std::string PostProcessMan::SaveCheckpoint() const {
 		return entry->second;
 	};
 	CheckpointWriter queues("PostProcessQueues1");
-	auto effects = [&](const std::list<PostEffect>& values) {
+	auto effects = [&](const CheckpointList<PostEffect>& values) {
 		queues(values.size());
-		for (const auto& effect: values) {
+		for (const auto& effect: CheckpointValues(values)) {
 			const auto* attached = effect.m_AttachedToMOID >= 0 ? g_MovableMan.GetMOFromID(effect.m_AttachedToMOID) : nullptr;
 			queues(bitmapID(effect.m_Bitmap), effect.m_BitmapHash, effect.m_Angle, effect.m_Strength, effect.m_Pos,
-			       effect.m_AttachedToMOID, attached ? attached->GetUniqueID() : 0L);
+			       effect.m_AttachedToMOID, attached ? CheckpointNativeStorage::Source(attached)->GetUniqueID() : 0L);
 		}
 	};
 	effects(m_PostSceneEffects); effects(m_PostScreenEffects);
 	for (const auto& values: m_ScreenRelativeEffects) effects(values);
 	queues(m_PostScreenGlowBoxes, m_GlowAreas.size());
-	for (const auto& rect: m_GlowAreas) queues(rect.m_Left, rect.m_Top, rect.m_Right, rect.m_Bottom);
+	for (const auto& rect: CheckpointValues(m_GlowAreas)) queues(rect.m_Left, rect.m_Top, rect.m_Right, rect.m_Bottom);
 	const std::array<size_t, 3> glowIDs{bitmapID(m_YellowGlow), bitmapID(m_RedGlow), bitmapID(m_BlueGlow)};
 	queues(glowIDs[0], m_YellowGlowHash, glowIDs[1], m_RedGlowHash, glowIDs[2], m_BlueGlowHash);
-	const std::map<int, std::shared_ptr<BITMAP>> temporary(m_TempEffectBitmaps.begin(), m_TempEffectBitmaps.end());
+	std::map<int, const BITMAP*> temporary;
+	for (const auto& [size, bitmap]: CheckpointValues(m_TempEffectBitmaps)) temporary.emplace(size, bitmap.get());
 	queues(temporary.size());
-	for (const auto& [size, bitmap]: temporary) queues(size, bitmapID(bitmap.get()));
+	for (const auto& [size, bitmap]: temporary) queues(size, bitmapID(bitmap));
 	CheckpointWriter writer("PostProcessMan2");
-	writer(s_RegistrationSuppressed, bitmaps.size());
+	writer(*CheckpointNativeStorage::Source(&s_RegistrationSuppressed), bitmaps.size());
 	const CaptureTrace::Span span("post_bitmaps", std::to_string(bitmaps.size()));
 	for (const auto* bitmap: bitmaps) writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveSharedBitmap(bitmap); }));
 	writer(CheckpointWriter::Native([&] { return queues.Text(); }));
@@ -189,14 +191,14 @@ bool PostProcessMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		struct State {
 			bool suppressed;
 			std::vector<std::string> images;
-			std::vector<std::shared_ptr<BITMAP>> bitmaps;
+			CheckpointVector<std::shared_ptr<BITMAP>> bitmaps;
 			std::array<std::vector<EffectState>, c_MaxScreenCount + 2> records;
-			std::array<std::list<PostEffect>, c_MaxScreenCount + 2> effects;
-			std::list<Box> boxes;
-			std::list<IntRect> areas;
+			std::array<CheckpointList<PostEffect>, c_MaxScreenCount + 2> effects;
+			CheckpointList<Box> boxes;
+			CheckpointList<IntRect> areas;
 			std::array<size_t, 3> glow{}, hashes{};
 			std::map<int, size_t> temporary;
-			std::unordered_map<int, std::shared_ptr<BITMAP>> temporaryImages;
+			CheckpointUnorderedMap<int, std::shared_ptr<BITMAP>> temporaryImages;
 		};
 		auto state = std::make_shared<State>();
 		const bool legacy = text.starts_with("15 PostProcessMan1 ");
