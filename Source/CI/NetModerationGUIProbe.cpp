@@ -85,8 +85,8 @@ namespace {
 		bool shopHeader = false; //!< The pending shop click expands a module before choosing its item.
 		size_t minuteIndex = SIZE_MAX;
 		uint64_t minuteMs = 0, minuteTick = 0, fightSamples = 0, aiFiredFrames = 0;
-		size_t landingMoveIndex = SIZE_MAX, actorCycleIndex = SIZE_MAX;
-		uint64_t landingMoveTick = 0, actorCycleTick = 0, actorCycleRender = 0;
+		size_t landingMoveIndex = SIZE_MAX, actorCycleIndex = SIZE_MAX, aimIndex = SIZE_MAX;
+		uint64_t landingMoveTick = 0, actorCycleTick = 0, actorCycleRender = 0, aimTick = 0;
 		int actorCycleStage = 0, actorCyclePresses = 0;
 		uint64_t pageRender = 0; //!< The render show_row acts again at.
 		int pageTurns = 0; //!< Pages show_row has turned for the row it looks for.
@@ -775,8 +775,21 @@ namespace {
 				auto* actor = game ? dynamic_cast<AHuman*>(game->GetControlledActor(LocalPlayer(step))) : nullptr;
 				auto* brain = game ? game->GetPlayerBrain(step.value("target_player", 1)) : nullptr;
 				Require(actor && brain && g_MovableMan.ValidMO(brain), "aiming needs a living soldier and target brain");
-				const Vector target = g_SceneMan.ShortestDistance(actor->GetPos() + Vector(0, -10), brain->GetPos(), false).GetNormalized();
-				motion = (target - g_UInputMan.AnalogAimValues(step.value("input_player", 0))) * g_UInputMan.GetMouseTrapRadius() / g_UInputMan.GetMouseSensitivity();
+				const auto* gun = dynamic_cast<const HDFirearm*>(actor->GetEquippedItem());
+				Require(gun, "aiming needs the soldier's equipped firearm");
+				const uint64_t tick = g_TimerMan.GetSimUpdateCount();
+				if (probe.aimIndex != probe.index) { probe.aimIndex = probe.index; probe.aimTick = tick; }
+				const Vector distance = g_SceneMan.ShortestDistance(gun->GetMuzzlePos(), brain->GetPos(), false);
+				const Vector target = distance.GetNormalized();
+				const Vector input = g_UInputMan.AnalogAimValues(step.value("input_player", 0));
+				const Vector ray = Vector(gun->GetFlipFactor(), 0).RadRotate(gun->GetRotAngle());
+				const float miss = std::abs(ray.m_X * distance.m_Y - ray.m_Y * distance.m_X);
+				observed["aim"] = {{"device", {input.m_X, input.m_Y}}, {"target", {target.m_X, target.m_Y}},
+				    {"muzzle", {gun->GetMuzzlePos().m_X, gun->GetMuzzlePos().m_Y}}, {"ray", {ray.m_X, ray.m_Y}}, {"miss_pixels", miss}};
+				if (tick >= probe.aimTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4 &&
+				    (target - input).GetMagnitude() < 0.01F && miss <= 2.0F && ray.m_X * distance.m_X + ray.m_Y * distance.m_Y > 0) return true;
+				// UpdateMouseInput adds three times the device motion to its analog aim.
+				motion = (target - input) * g_UInputMan.GetMouseTrapRadius() / (3.0F * g_UInputMan.GetMouseSensitivity());
 			}
 			if (op == "pie_point") {
 				auto* game = g_ActivityMan.GetActivity();
@@ -785,7 +798,7 @@ namespace {
 				auto* slice = pie ? pie->GetFirstPieSliceByType(static_cast<PieSliceType>(step.value("command", 6))) : nullptr;
 				Require(slice && pie->IsVisible(), "the pie has no requested visible slice");
 				const Vector target = Vector(0.9F, 0).RadRotate(slice->GetMidAngle() + pie->GetRotAngle());
-				motion = (target - g_UInputMan.AnalogAimValues(step.value("input_player", 0))) * g_UInputMan.GetMouseTrapRadius() / g_UInputMan.GetMouseSensitivity();
+				motion = (target - g_UInputMan.AnalogAimValues(step.value("input_player", 0))) * g_UInputMan.GetMouseTrapRadius() / (3.0F * g_UInputMan.GetMouseSensitivity());
 			}
 			if (op == "editor_move") {
 				auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
@@ -818,7 +831,7 @@ namespace {
 				event.button.x = g_WindowMan.GetResX() / 2; event.button.y = g_WindowMan.GetResY() / 2;
 				Push(event);
 			}
-			if (op == "editor_move") return false;
+			if (op == "editor_move" || op == "aim_brain") return false;
 		} else if (op == "landing_zone_move") {
 			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 			const int player = LocalPlayer(step);
