@@ -63,10 +63,14 @@
 std::string BuildLoopPaceJson();
 
 namespace RTE::NetModerationGUIProbe {
+namespace {
+	const char* lifetimeTracePreset = std::getenv("CC_TEST_MO_LIFETIME_TRACE");
+	std::atomic<bool> lifetimeTraceActive = false;
+}
+
 void TraceObjectLifetime(const MovableObject* object, const char* stage, bool objectAlive) {
-	static const char* target = std::getenv("CC_TEST_MO_LIFETIME_TRACE");
-	if (!target || !*target || !std::getenv("CC_TEST_NET_UI_SCRIPT") || !ScenarioRunner::IsLockstepControllerSyncActive()) return;
-	if (objectAlive && object->GetPresetName() != target) return;
+	if (!lifetimeTraceActive.load(std::memory_order_relaxed)) return;
+	if (objectAlive && object->GetPresetName() != lifetimeTracePreset) return;
 	std::ostringstream line;
 	line << "[mo-lifetime] " << stage << " tick=" << g_TimerMan.GetSimUpdateCount() << " pointer=" << object;
 	if (objectAlive) line << " uid=" << object->GetUniqueID() << " preset=" << object->GetPresetName();
@@ -1742,6 +1746,10 @@ void AfterMenuDraw() {
 }
 
 void OnSimTick(uint64_t simUpdateCount) {
+	// Destructors may run on a capture thread holding a Lua state; only the sim thread enters the plane.
+	if (lifetimeTracePreset && *lifetimeTracePreset) {
+		lifetimeTraceActive.store(probe.enabled && !probe.done && ScenarioRunner::IsLockstepControllerSyncActive(), std::memory_order_relaxed);
+	}
 	if (!probe.enabled || probe.done) return;
 	probe.simTick = simUpdateCount;
 	Process(Phase::Sim);
