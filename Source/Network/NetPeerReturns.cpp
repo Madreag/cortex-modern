@@ -205,11 +205,15 @@ namespace RTE {
 		// Two batches of at most eight needed ranges fit in one measured round trip.
 		m_PeerTailRequestAtMs = nowMs + std::max<uint64_t>(100, roundTripMs / 2);
 		m_PeerTailRequestedUntil.erase(m_PeerTailRequestedUntil.begin(), m_PeerTailRequestedUntil.lower_bound(m_Stats.nextFrame));
-		const auto buffered = m_PeerCommittedTail.lower_bound(m_Stats.nextFrame);
-		if (buffered != m_PeerCommittedTail.end() && buffered->first > m_Stats.nextFrame) {
-			const auto pending = m_PeerTailRequestedUntil.find(m_Stats.nextFrame);
-			if (pending != m_PeerTailRequestedUntil.end() && pending->second <= nowMs + roundTripMs + 200)
-				pending->second = std::min(pending->second, nowMs);
+		// Repair every missing range behind a received record after one
+		// round trip. Waiting until a gap reaches the consumer would spend
+		// another round trip at each missing record in sequence.
+		if (!m_PeerCommittedTail.empty()) {
+			const uint64_t lastBuffered = m_PeerCommittedTail.rbegin()->first;
+			for (auto pending = m_PeerTailRequestedUntil.lower_bound(m_Stats.nextFrame);
+			     pending != m_PeerTailRequestedUntil.end() && pending->first < lastBuffered; ++pending)
+				if (!m_PeerCommittedTail.contains(pending->first) && pending->second <= nowMs + roundTripMs + 200)
+					pending->second = std::min(pending->second, nowMs);
 		}
 		// A bounded subscription includes future history, sent only after the donor displays it.
 		const uint64_t horizon = m_Stats.nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew;
