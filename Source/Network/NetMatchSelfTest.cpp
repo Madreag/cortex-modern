@@ -2405,7 +2405,7 @@ namespace RTE {
 			bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
 				if (m_MissingTimingReplies) {
 					const auto decoded = NetLobbyProtocol::Decode(bytes);
-					const auto* reply = decoded.ok ? std::get_if<NetLobbyConfigAck>(&decoded.packet.payload) : nullptr;
+					const auto* reply = decoded.ok ? std::get_if<NetLobbyConfigAck>(&decoded.message.payload) : nullptr;
 					if (reply && reply->reason.starts_with("timing:") && reply->reason.ends_with(":reply")) {
 						if (congested) *congested = false;
 						++m_TimingRepliesDropped;
