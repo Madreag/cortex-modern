@@ -7464,15 +7464,36 @@ bool LuaStateWrapper::ValidateScriptGraph(const std::string& text, std::vector<s
 	const uint64_t births = reportBirths ? luaJIT_state_serial(m_State) : 0;
 	const int top = lua_gettop(m_State);
 	const size_t before = problems.size();
-	lua_getglobal(m_State, "_ScriptGraph");
-	lua_getfield(m_State, -1, "validate");
-	lua_pushlstring(m_State, text.data(), text.size());
-	if (lua_pcall(m_State, 1, 1, 0) != 0) {
-		problems.push_back(std::string("script graph validation failed: ") + (lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?"));
+	const bool frozen = CheckpointNativeStorage::Enabled();
+	const auto validate = [&] {
+		lua_getglobal(m_State, "_ScriptGraph");
+		lua_getfield(m_State, -1, "validate");
+		lua_pushlstring(m_State, text.data(), text.size());
+		const int result = lua_pcall(m_State, 1, 1, 0);
+		if (frozen && result == LUA_ERRMEM) throw std::bad_alloc();
+		if (result != 0) problems.push_back(std::string("script graph validation failed: ") + (lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?"));
+		else CollectStrings(m_State, -1, problems);
+	};
+	if (frozen) {
+		// Parsing an archive must not advance the live VM or run its pending finalizers.
+		struct RestoreValidation {
+			lua_State* state;
+			int top;
+			uint64_t serial;
+			decltype(std::declval<global_State&>().gc.threshold) threshold;
+			~RestoreValidation() {
+				lua_settop(state, top);
+				luaJIT_set_state_serial(state, serial);
+				G(state)->gc.threshold = threshold;
+			}
+		} restore{m_State, top, luaJIT_state_serial(m_State), G(m_State)->gc.threshold};
+		G(m_State)->gc.threshold = std::numeric_limits<decltype(restore.threshold)>::max();
+		LuaCheckpointBarrierPause barrierPause;
+		CheckpointLua::ProtectedCall(m_State, validate);
 	} else {
-		CollectStrings(m_State, -1, problems);
+		validate();
+		lua_settop(m_State, top);
 	}
-	lua_settop(m_State, top);
 	if (reportBirths) System::PrintDiagnosticLine(std::format("[checkpoint-validate-births] bytes={} before={} after={} delta={}", text.size(), births,
 	    luaJIT_state_serial(m_State), static_cast<int64_t>(luaJIT_state_serial(m_State)) - static_cast<int64_t>(births)));
 	return problems.size() == before;
@@ -10944,6 +10965,32 @@ debug.setupvalue(next, 4, "150")
 			                      RunScriptString("_ScriptGraphAllocationRetry = { held = 97 }; assert(_ScriptGraphAllocationRetry.held == 97); _ScriptGraphAllocationRetry = nil") == 0;
 			std::cout << "[script-graph-selftest] " << (liveHeld ? "PASS" : "FAIL") << " live_lua_allocation_failure_preserves_vm_entry_and_births" << std::endl;
 			checkpointValues = liveHeld && checkpointValues;
+			{
+				CheckpointNativeStorage::AllocationScope allocation(true);
+				std::string reference, retry;
+				std::vector<std::string> problems;
+				bool held = SerializeScriptGraph(reference, problems);
+				const uint64_t serial = luaJIT_state_serial(m_State);
+				const int top = lua_gettop(m_State);
+				const auto threshold = G(m_State)->gc.threshold;
+				const auto unchanged = [&] { return luaJIT_state_serial(m_State) == serial && lua_gettop(m_State) == top && G(m_State)->gc.threshold == threshold; };
+				held = ValidateScriptGraph(reference, problems) && problems.empty() && unchanged() && held;
+				std::vector<std::string> invalid;
+				held = !ValidateScriptGraph("SG7;", invalid) && !invalid.empty() && unchanged() && held;
+				for (size_t after: {size_t{0}, size_t{8}, size_t{32}}) {
+					bool refused = false;
+					{
+						CheckpointFailure::Scope failure(CheckpointFailure::Point::LuaAllocation, after);
+						try { ValidateScriptGraph(reference, problems); }
+						catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+					}
+					held = refused && unchanged() && problems.empty() && held;
+					held = ValidateScriptGraph(reference, problems) && unchanged() && held;
+				}
+				held = SerializeScriptGraph(retry, problems) && reference == retry && problems.empty() && unchanged() && held;
+				std::cout << "[script-graph-selftest] " << (held ? "PASS" : "FAIL") << " archive_validation_preserves_births_stack_gc_and_retry_bytes" << std::endl;
+				checkpointValues = held && checkpointValues;
+			}
 			const auto gcThreshold = G(m_State)->gc.threshold;
 			struct RestoreGcThreshold {
 				lua_State* state;
