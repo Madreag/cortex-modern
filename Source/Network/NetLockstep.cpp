@@ -3763,6 +3763,32 @@ namespace RTE {
 		return dial != PeerProbes().end() && dial->second.answered && dial->second.connection != c_InvalidNetPeerId;
 	}
 
+	void NetLockstepCoordinator::NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink) {
+		if (!UsesPeerFrameGroups() || peer == m_Config.localPeerId || !IsKnownRemotePeer(peer)) return;
+		if (closedLink && HasPeerFrameRoute(peer)) return;
+		if (!m_PeerRoundEnds.try_emplace(peer, PeerRoundEnd{frame, nowMs, closedLink}).second) return;
+		DiagnosticLine() << "[net-peer-departure] peer=" << static_cast<int>(peer) << " frame=" << frame << " now_ms=" << nowMs
+		    << " unix_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()
+		    << " source=" << (closedLink ? "remote-close" : "round-notice") << std::endl;
+	}
+
+	void NetLockstepCoordinator::AdjudicatePeerRoundEnds(uint64_t nowMs) {
+		if (!UsesPeerFrameGroups() || !IsRunning() || m_Config.localPeerId != GetHostPeerId() || m_RemotePeerIds.empty()) return;
+		// A closed duplicate route says nothing about a seat still talking on
+		// another route. Uncertain silence never supplies an end declaration.
+		std::erase_if(m_PeerRoundEnds, [&](const auto& ended) {
+			return ended.second.closedLink && (HasPeerFrameRoute(ended.first) || LastAuthenticatedTraffic(ended.first) > ended.second.atMs);
+		});
+		if (!std::all_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) { return m_PeerRoundEnds.contains(peer); })) return;
+		// The administrator may finish its own round when everybody else has
+		// left it. A private reader must not invent their missing history or
+		// wait for a future end frame whose last donors have already stopped.
+		DiagnosticLine() << "[net-peer-departure] all-remote-ended applied=" << m_LastCompletedSimulationTick.value_or(0)
+		    << " now_ms=" << nowMs << " unix_ms="
+		    << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
+		Complete("all other players left the round");
+	}
+
 	void NetLockstepCoordinator::WarmMigrationLinks(uint64_t nowMs) {
 		if ((!IsRunning() && !(UsesPeerFrameGroups() && m_Config.peerSessionLinks && m_Config.peerSessionLinks->sessionAttached)) || (IsMigrating() && !UsesPeerFrameGroups()) || (m_Config.localPeerId == GetHostPeerId() && !UsesPeerFrameGroups()) || m_Config.matchConfig.dedicated ||
 		    m_Config.matchConfig.persistentWorld || m_Config.matchConfig.successorOrder.empty() || !m_Config.migrationTransportFactory ||
@@ -3810,7 +3836,12 @@ namespace RTE {
 		if (PeerListener()) {
 			INetTransport* listener = PeerListener().get();
 			for (const auto& event: listener->PollEvents()) {
-				if (event.type == NetTransportEventType::PeerDisconnected) PeerListenerBindings().erase(event.peerId);
+				if (event.type == NetTransportEventType::PeerDisconnected) {
+					const auto bound = PeerListenerBindings().find(event.peerId);
+					const uint8_t peer = bound == PeerListenerBindings().end() ? 0 : bound->second;
+					PeerListenerBindings().erase(event.peerId);
+					if (peer != 0 && event.closedByPeer) NotePeerRoundEnd(peer, m_Stats.nextFrame, nowMs, true);
+				}
 				if (blackout && event.type == NetTransportEventType::PacketReceived) continue;
 				NetHostMigrationMessage request;
 				if (UsesPeerFrameGroups() && m_Config.peerSessionLinks && event.type == NetTransportEventType::PacketReceived && !NetHostMigrationCodec::LooksLikePacket(event.bytes) &&
@@ -3865,6 +3896,7 @@ namespace RTE {
 				if (event.type == NetTransportEventType::PeerConnected) { dial.connection = event.peerId; dial.lastHelloMs = 0; }
 				if (event.type == NetTransportEventType::PeerDisconnected || event.type == NetTransportEventType::ConnectionFailed) {
 					dial.connection = c_InvalidNetPeerId; dial.answered = false;
+					if (event.closedByPeer) NotePeerRoundEnd(peer, m_Stats.nextFrame, nowMs, true);
 				}
 				if (blackout && event.type == NetTransportEventType::PacketReceived) continue;
 				NetHostMigrationMessage answer;
@@ -5358,6 +5390,7 @@ namespace RTE {
 		m_PeerCommittedTail.clear(); m_PeerFrameIncoming.clear(); m_PeerTailThrough.reset(); m_PeerAppliedThrough.clear(); m_PeerAppliedAtMs.clear();
 		m_PeerTailRequestedUntil.clear();
 		m_PeerTailRequests = m_PeerTailFramesSent = m_PeerTailBytesSent = m_PeerTailLogAtMs = 0;
+		m_PeerRoundEnds.clear();
 		m_PeerTailPrefixes.clear(); m_PeerTailVotes.clear(); m_PeerTailDecisions.clear();
 		m_PeerPaceStartMs.reset(); m_PeerPaceStartFrame = 0; m_PeerHadHitch = false;
 		if (!m_Config.peerSessionLinks) { PeerListenerBindings().clear(); PeerPrimaryBindings().clear(); }
@@ -9761,6 +9794,8 @@ namespace RTE {
 		}
 		RefreshLeftSeatHolds();
 		HandleTransportEvents(nowMs);
+		AdjudicatePeerRoundEnds(nowMs);
+		if (UsesPeerFrameGroups() && IsStopped()) return;
 		CheckHostSilence(nowMs);
 		if (IsMigrating()) {
 			TickHostMigration(nowMs);
@@ -10759,6 +10794,11 @@ namespace RTE {
 		out << "\"relay_observation_overflows\":" << m_Stats.relayObservationOverflows << ",";
 		out << "\"last_relay_error\":\"" << EscapeJson(m_Stats.lastRelayError) << "\",";
 		out << "\"peer_silence_leave_ms\":" << PeerSilenceLeaveMs() << ",";
+		out << "\"peer_round_ends\":{";
+		for (auto it = m_PeerRoundEnds.begin(); it != m_PeerRoundEnds.end(); ++it)
+			out << (it == m_PeerRoundEnds.begin() ? "" : ",") << "\"" << static_cast<int>(it->first) << "\":{\"frame\":" << it->second.frame
+			    << ",\"at_ms\":" << it->second.atMs << ",\"remote_close\":" << (it->second.closedLink ? "true" : "false") << "}";
+		out << "},";
 		out << "\"peer_tail_requests\":" << m_PeerTailRequests << ",\"peer_tail_frames_sent\":" << m_PeerTailFramesSent
 		    << ",\"peer_tail_bytes_sent\":" << m_PeerTailBytesSent << ",";
 		out << "\"peers_dropped_silent\":" << m_Stats.peersDroppedSilent << ",";
@@ -11486,6 +11526,7 @@ namespace RTE {
 				if (UsesPeerFrameGroups() && lockstepPeer != 0) {
 					m_RemoteTransports.erase(lockstepPeer);
 					m_RemoteFrameWindow.erase(lockstepPeer);
+					if (event.closedByPeer) NotePeerRoundEnd(lockstepPeer, m_Stats.nextFrame, nowMs, true);
 					return;
 				}
 				if (lockstepPeer == GetHostPeerId() && event.reason.find("slow player:") != std::string::npos) {
@@ -12386,6 +12427,8 @@ namespace RTE {
 			return;
 		}
 		if (!IsKnownRemotePeer(stop.senderPeerId)) return;
+		if (stop.reason == NetLockstepStopReason::PeerLeft || stop.reason == NetLockstepStopReason::Complete)
+			NotePeerRoundEnd(stop.senderPeerId, stop.frame, nowMs, false);
 		// A seat the round has already dropped cannot end it: a link that fails one way leaves the evicted
 		// peer able to send, and its own grace runs out on a round it is no longer in.
 		if (stop.reason == NetLockstepStopReason::PeerLeft && m_AnnouncedLeavers.insert(stop.senderPeerId).second)

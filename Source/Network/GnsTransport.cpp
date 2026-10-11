@@ -858,7 +858,7 @@ namespace RTE {
 					// application closes it. Retiring only our maps leaks its ICE
 					// requests and relay allocations into every later retry.
 					m_Interface->CloseConnection(info->m_hConn, 0, nullptr, false);
-					HandleConnectionClosed(info->m_hConn, reason, info->m_eOldState);
+					HandleConnectionClosed(info->m_hConn, reason, info->m_eOldState, info->m_info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer);
 					break;
 				}
 				case k_ESteamNetworkingConnectionState_None:
@@ -933,7 +933,7 @@ namespace RTE {
 			AnnounceConnected(connection, 1);
 		}
 
-		void HandleConnectionClosed(HSteamNetConnection connection, const std::string& reason, ESteamNetworkingConnectionState oldState) {
+		void HandleConnectionClosed(HSteamNetConnection connection, const std::string& reason, ESteamNetworkingConnectionState oldState, bool closedByPeer = false) {
 			const auto peerIt = m_PeersByConnection.find(connection);
 			if (peerIt == m_PeersByConnection.end()) {
 				if (oldState == k_ESteamNetworkingConnectionState_Connecting) {
@@ -953,7 +953,7 @@ namespace RTE {
 			}
 			ForgetConnection(connection);
 			DiagnosticLine() << "[net-transport] closed peer=" << peerId << " reason=" << reason << std::endl;
-			m_PendingEvents.push_back({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason});
+			m_PendingEvents.push_back({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason, closedByPeer});
 		}
 
 		void ForgetConnection(HSteamNetConnection connection) {

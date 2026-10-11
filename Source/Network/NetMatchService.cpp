@@ -236,6 +236,9 @@ namespace RTE {
 			peer.holds = totals.holds; peer.substitutions = totals.substitutions; peer.rejoins = totals.rejoins; peer.longestWaitMs = totals.longestWaitMs;
 		}
 		m_LastMatchSummary = m_CurrentMatchSummary;
+		// The next lobby retires the coordinator. Preserve the completed
+		// round's counters before that transition, including clean leaves.
+		if (m_Runner && m_Session && m_Coordinator) m_CapturedRunnerReport = m_Runner->BuildReportJson(*m_Session, *m_Coordinator);
 	}
 
 	std::string NetRejoinAddress(const std::string& address, uint16_t port) {
@@ -2529,7 +2532,7 @@ static std::string ResyncSaveName() {
 			m_MigrationRepairPending = false;
 			DrainPendingSessionEventsLocked(false);
 			AccumulateLockstepTotalsLocked();
-			if (m_CapturedRunnerReport.empty() && m_Runner && m_Session && m_Coordinator) {
+			if (m_Runner && m_Session && m_Coordinator) {
 				m_CapturedRunnerReport = m_Runner->BuildReportJson(*m_Session, *m_Coordinator);
 			}
 			// Only the host's departure lands a seat that committed nothing; an error on this peer's own side keeps

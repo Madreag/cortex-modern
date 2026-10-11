@@ -36,6 +36,7 @@ namespace RTE {
 		NetTransportLane lane = NetTransportLane::ControlReliable;
 		std::vector<uint8_t> bytes;
 		std::string reason;
+		bool closedByPeer = false; //!< An explicit remote close, not a local timeout or our own Disconnect.
 	};
 
 	class INetTransport {
