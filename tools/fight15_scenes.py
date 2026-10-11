@@ -42,7 +42,10 @@ def host_setup(players=2, cpu=False):
                   "assert_label ComboHostSeatType0 Open", "assert_label ComboHostSeatType1 Open",
                   "assert_label ComboHostSeatType2 CPU", "assert_label ComboHostSeatType3 CPU",
                   "assert_text_fits LabelHostSeatState2", "assert_text_fits LabelHostSeatState3",
-                  "wait_ms 1400", "activate TabHostPageConnection"]
+                   "wait_ms 1400", "assert_label LabelHostSeatPlayers Human players",
+                   "combo_select ComboHostSeatPlayers 2", "video_mark cpu-human-count-host",
+                   "assert_label ComboHostSeatPlayers 2", "assert_label ComboHostSeatType2 CPU",
+                   "assert_label ComboHostSeatType3 CPU", "wait_ms 1400", "activate TabHostPageConnection"]
     lines += ["assert_label ComboHostNetVisibility Public (default)",
               "assert_label ComboHostNetRelay Game service (default)"]
     if cpu:
@@ -417,7 +420,11 @@ def ai_fight():
     probes, checks = {}, [dict(id="cpu-seats-host", peer="host", mark="cpu-seats-host", screen="MultiplayerScreen",
                               what="Two held picks replace the open seats with CPU teams and remain selected after refresh.",
                               events=["combo_select ComboHostSeatType2 CPU.*PASS", "combo_select ComboHostSeatType3 CPU.*PASS",
-                                      "assert_label ComboHostSeatType2 CPU.*PASS", "assert_label ComboHostSeatType3 CPU.*PASS"])]
+                                       "assert_label ComboHostSeatType2 CPU.*PASS", "assert_label ComboHostSeatType3 CPU.*PASS"]),
+                         dict(id="cpu-human-count-host", peer="host", mark="cpu-human-count-host", screen="MultiplayerScreen",
+                              what="The Human players count is two while both CPU seats remain selected.",
+                              events=["assert_label ComboHostSeatPlayers.*PASS", "assert_label ComboHostSeatType2 CPU.*PASS",
+                                      "assert_label ComboHostSeatType3 CPU.*PASS"])]
     for peer, fraction in (("host", 0.3), ("joiner", 0.7)):
         steps = [wait(editing=True), dict(op="editor_pick", input_player=0, brain=False, **{"class": "BunkerAssembly"}, preset="Brain Chamber Left 2x2 - 1"),
                  dict(op="editor_move", input_player=0, x_fraction=fraction, remember="bunker")] + click()
