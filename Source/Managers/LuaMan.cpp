@@ -9626,6 +9626,11 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = exact && checkpointValues;
 	}
 	{
+		const bool exact = CheckpointLua::HeapOwner::RunPreparedSelfTest();
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " prepared_lua_pages_freeze_without_allocation_reject_growth_and_survive_source_death" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
 		MovableMan::ConstructionRegistryScope world;
 		CheckpointWriter::BatchScope batch(true);
 		auto actor = std::make_unique<Actor>();

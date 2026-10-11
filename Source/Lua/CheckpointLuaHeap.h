@@ -276,7 +276,10 @@ namespace RTE::CheckpointLua {
 	struct HeapFreezeCosts { int64_t setupUs = 0; PageWriteFence::CopyWatchCosts watch; };
 
 	class HeapOwner {
+		struct CowCopy;
+		struct CowCoordinator;
 	public:
+		class Prepared;
 		static std::unique_ptr<HeapOwner> Create() {
 			auto owner = std::unique_ptr<HeapOwner>(new HeapOwner());
 			owner->Initialize();
@@ -288,6 +291,8 @@ namespace RTE::CheckpointLua {
 		}
 
 		~HeapOwner() {
+			std::lock_guard preparations(m_PrepareMutex);
+			FinishPrepared();
 			WaitCopy(true);
 			PageWriteFence::UnwatchCopies(this);
 			m_CowCopy.reset();
@@ -330,6 +335,9 @@ namespace RTE::CheckpointLua {
 		/// Buffers handed back to a heap that no longer exists; any is a use after free.
 		static size_t CallsIntoDestroyedHeaps() { return DeadHeapCalls().load(std::memory_order_relaxed); }
 		static bool RunBatchOpenSelfTest();
+		static bool RunPreparedSelfTest();
+		/// Prepares storage and watches on the saver; Arm reads no Lua objects and allocates nothing.
+		std::shared_ptr<Prepared> PrepareFreeze();
 
 		using Submit = std::function<std::future<void>(std::function<void()>)>;
 
@@ -338,6 +346,8 @@ namespace RTE::CheckpointLua {
 		/// @param armLater When given, the page fences are left to the returned work instead of being set here; it must finish
 		/// before the VM runs again and before the copy task can start.
 		Snapshot Freeze(const Submit& submit, bool copyOnWrite = false, bool batchCopy = false, HeapFreezeCosts* costs = nullptr, std::function<void()>* armLater = nullptr) {
+			std::lock_guard preparations(m_PrepareMutex);
+			FinishPrepared();
 			const auto started = std::chrono::steady_clock::now();
 			if (!m_State) throw std::runtime_error("a Lua heap capture has no state");
 			void* allocatorData = nullptr;
@@ -402,6 +412,7 @@ namespace RTE::CheckpointLua {
 				}
 				if (costs) costs->setupUs = MicrosecondsSince(started);
 				m_CowCopy = cow;
+				m_CowCoordinator->Prepare(cow);
 				if (armLater && submit) {
 					*armLater = [this, cow, coordinator = m_CowCoordinator, committed = data->committed] {
 						CowCoordinator::Prepared prepared{coordinator.get(), cow};
@@ -559,6 +570,7 @@ namespace RTE::CheckpointLua {
 		uintptr_t m_Reservation = 0;
 		uintptr_t m_Base = 0;
 		size_t m_Committed = 0;
+		std::atomic<size_t> m_PublishedCommitted{0};
 		size_t m_Used = 0;
 		size_t m_Bytes = 0;
 		size_t m_Blocks = 0;
@@ -582,6 +594,9 @@ namespace RTE::CheckpointLua {
 		uint64_t m_CopyGeneration = 0;
 		std::atomic<bool> m_CopyPending{false};
 		std::atomic<bool> m_CowGateFree{false};
+		std::mutex m_PrepareMutex;
+		std::vector<std::weak_ptr<Prepared>> m_Prepared;
+		void FinishPrepared() noexcept;
 		struct CowCopy {
 			uintptr_t base = 0;
 			size_t pageBytes = 0;
@@ -603,20 +618,21 @@ namespace RTE::CheckpointLua {
 				~Locked() { flag.clear(std::memory_order_release); }
 			};
 			struct Prepared { CowCoordinator* coordinator; std::shared_ptr<CowCopy> copy; };
+			void Prepare(const std::shared_ptr<CowCopy>& copy) {
+				Locked guard(lock);
+				std::erase_if(copies, [](const auto& value) { return value->completed; });
+				copies.push_back(copy);
+			}
 			static bool Arm(void* context, uintptr_t address, size_t bytes) noexcept {
 				auto& prepared = *static_cast<Prepared*>(context);
 				auto& coordinator = *prepared.coordinator;
 				Locked guard(coordinator.lock);
-				try {
-					std::erase_if(coordinator.copies, [](const auto& copy) { return copy->completed; });
-					coordinator.copies.push_back(prepared.copy);
-				} catch (...) { return false; }
+				if (prepared.copy->completed || prepared.copy->armed.load(std::memory_order_relaxed) != 0) return false;
 				if (PageWriteFence::ProtectCopyPages(address, bytes)) {
 					prepared.copy->armed.store(1, std::memory_order_release);
 					prepared.copy->armed.notify_all();
 					return true;
 				}
-				coordinator.copies.pop_back();
 				return false;
 			}
 
@@ -626,6 +642,7 @@ namespace RTE::CheckpointLua {
 				const uintptr_t address = base + page * pageBytes;
 				bool savedAny = false;
 				for (const auto& copy: copies) {
+					if (copy->armed.load(std::memory_order_relaxed) != 1 || copy->completed) continue;
 					if (page >= copy->saved.size() || copy->saved[page]) continue;
 					// An unsaved generation's page has never been opened for a
 					// write. Materialize every such generation before opening it.
@@ -642,6 +659,7 @@ namespace RTE::CheckpointLua {
 			bool CopyPages(size_t first, size_t count) noexcept {
 				Locked guard(lock);
 				for (const auto& copy: copies) {
+					if (copy->armed.load(std::memory_order_relaxed) != 1 || copy->completed) continue;
 					const size_t last = std::min(first + count, copy->saved.size());
 					for (size_t page = first; page < last;) {
 						if (copy->saved[page]) { ++page; continue; }
@@ -662,6 +680,7 @@ namespace RTE::CheckpointLua {
 				if (!openHeap) return true;
 				size_t pages = 0;
 				for (const auto& generation: copies) {
+					if (generation->armed.load(std::memory_order_relaxed) != 1) continue;
 					if (!generation->completed) return true;
 					pages = std::max(pages, generation->saved.size());
 				}
@@ -675,7 +694,7 @@ namespace RTE::CheckpointLua {
 					copy->armed.notify_all();
 					copy->completed = true; copy->buffer.reset();
 				}
-				if (std::all_of(copies.begin(), copies.end(), [](const auto& generation) { return generation->completed; }) && copy)
+				if (std::all_of(copies.begin(), copies.end(), [](const auto& generation) { return generation->armed.load(std::memory_order_relaxed) != 1 || generation->completed; }) && copy)
 					PageWriteFence::OpenCopiedPage(base, copy->saved.size() * pageBytes);
 			}
 			static bool OnWrite(void* context, uintptr_t address) noexcept {
@@ -915,6 +934,7 @@ namespace RTE::CheckpointLua {
 				const size_t step = std::max(c_CommitStep, (needed + c_CommitStep - 1) / c_CommitStep * c_CommitStep);
 				if (m_Committed + step > c_ReserveBytes || !Commit(step)) return nullptr;
 				m_Committed += step;
+				m_PublishedCommitted.store(m_Committed, std::memory_order_release);
 			}
 			void* result = reinterpret_cast<void*>(m_Base + m_Used);
 			m_Used += bytes;
@@ -988,6 +1008,116 @@ namespace RTE::CheckpointLua {
 		}
 	};
 
+	class HeapOwner::Prepared {
+	public:
+		~Prepared() { Cancel(); }
+		Prepared(const Prepared&) = delete;
+		Prepared& operator=(const Prepared&) = delete;
+		bool Current(const HeapOwner& owner) const noexcept {
+			return m_Data->state == owner.m_State && m_Data->committed == owner.m_PublishedCommitted.load(std::memory_order_acquire);
+		}
+		bool Arm(HeapOwner& owner) noexcept {
+			std::unique_lock preparations(owner.m_PrepareMutex, std::try_to_lock);
+			if (!preparations || !Current(owner) || owner.m_CowCoordinator != m_Coordinator) return false;
+			if (owner.m_CopyPending.load(std::memory_order_acquire) && !owner.m_CowGateFree.load(std::memory_order_acquire)) return false;
+			std::unique_lock lock(m_Mutex, std::try_to_lock);
+			if (!lock || m_Finished || m_Copy->armed.load(std::memory_order_relaxed) != 0) return false;
+			const auto started = std::chrono::steady_clock::now();
+			m_Data->serial = G(owner.m_State)->objserial;
+			CowCoordinator::Prepared prepared{m_Coordinator.get(), m_Copy};
+			if (!CowCoordinator::Arm(&prepared, m_Data->base, m_Data->committed)) return false;
+			owner.m_CowGateFree.store(true, std::memory_order_release);
+			m_Data->freezeUs = MicrosecondsSince(started);
+			return true;
+		}
+		Snapshot Image() const { return Snapshot(m_Data); }
+		void Drain() {
+			std::lock_guard lock(m_Mutex);
+			if (m_Finished) { m_Data->WaitCopied(); return; }
+			if (m_Copy->armed.load(std::memory_order_acquire) != 1) throw std::logic_error("Lua heap copy requested before its prepared boundary");
+			try {
+				const auto started = std::chrono::steady_clock::now();
+				constexpr size_t batchPages = 64;
+				for (size_t page = 0; page < m_Copy->saved.size(); page += batchPages) {
+					if (!m_Coordinator->CopyPages(page, std::min(batchPages, m_Copy->saved.size() - page)))
+						throw std::runtime_error("could not open prepared Lua heap pages");
+				}
+				if (!m_Coordinator->Complete(m_Copy, true)) throw std::runtime_error("could not open a prepared Lua heap");
+				m_Data->copied.store(m_Data->committed / Snapshot::c_PageBytes, std::memory_order_relaxed);
+				m_Data->copyUs.store(MicrosecondsSince(started), std::memory_order_relaxed);
+				m_Ready.set_value();
+				m_Finished = true;
+			} catch (...) {
+				m_Coordinator->Cancel(m_Copy);
+				m_Ready.set_exception(std::current_exception());
+				m_Finished = true;
+				throw;
+			}
+		}
+		void Cancel() noexcept {
+			std::lock_guard lock(m_Mutex);
+			if (m_Finished) return;
+			m_Coordinator->Cancel(m_Copy);
+			m_Ready.set_exception(m_Cancelled);
+			m_Finished = true;
+		}
+	private:
+		friend class HeapOwner;
+		Prepared(std::shared_ptr<Snapshot::Data> data, std::shared_ptr<CowCopy> copy, std::shared_ptr<CowCoordinator> coordinator) :
+		    m_Data(std::move(data)), m_Copy(std::move(copy)), m_Coordinator(std::move(coordinator)),
+		    m_Cancelled(std::make_exception_ptr(std::runtime_error("prepared Lua heap capture was cancelled"))) {
+			m_Data->ready = m_Ready.get_future().share();
+		}
+		std::shared_ptr<Snapshot::Data> m_Data;
+		std::shared_ptr<CowCopy> m_Copy;
+		std::shared_ptr<CowCoordinator> m_Coordinator;
+		std::promise<void> m_Ready;
+		std::exception_ptr m_Cancelled;
+		std::mutex m_Mutex;
+		bool m_Finished = false;
+	};
+
+	inline std::shared_ptr<HeapOwner::Prepared> HeapOwner::PrepareFreeze() {
+		std::lock_guard preparations(m_PrepareMutex);
+		auto data = std::make_shared<Snapshot::Data>();
+		data->state = m_State; data->handlers = m_LibraryHandlers; data->base = m_Base;
+		data->committed = m_PublishedCommitted.load(std::memory_order_acquire);
+		const size_t pageBytes = PageWriteFence::SystemPageBytes();
+		if (!data->state || !pageBytes || !data->committed || data->base % pageBytes || data->committed % pageBytes)
+			throw std::runtime_error("the prepared Lua heap has no aligned committed range");
+		auto slab = TakeSlab(data->committed / Snapshot::c_PageBytes, true);
+		data->pages = slab->pages; data->buffer = std::move(slab);
+		data->faults = std::make_shared<CopyFaultStats>();
+		auto copy = std::make_shared<CowCopy>();
+		copy->base = data->base; copy->pageBytes = pageBytes;
+		copy->destination = const_cast<Snapshot::Page*>(data->pages);
+		copy->saved.assign(data->committed / pageBytes, 0);
+		copy->faults = data->faults; copy->buffer = data->buffer;
+		if (!m_CowCoordinator) {
+			m_CowCoordinator = std::make_shared<CowCoordinator>();
+			m_CowCoordinator->base = m_Base; m_CowCoordinator->pageBytes = pageBytes;
+		}
+		auto prepared = std::shared_ptr<Prepared>(new Prepared(std::move(data), std::move(copy), m_CowCoordinator));
+		const auto keepWritable = [](void*, uintptr_t, size_t) noexcept { return true; };
+		if (!PageWriteFence::WatchCopies(this, {reinterpret_cast<uint8_t*>(m_Base), prepared->m_Data->committed}, CowCoordinator::OnWrite, m_CowCoordinator.get(), keepWritable))
+			throw std::runtime_error("could not prepare Lua heap page watches");
+		m_CowCoordinator->Prepare(prepared->m_Copy);
+		std::erase_if(m_Prepared, [](const auto& value) { return value.expired(); });
+		m_Prepared.push_back(prepared);
+		return prepared;
+	}
+
+	inline void HeapOwner::FinishPrepared() noexcept {
+		// Closing a VM first lands armed readers and cancels preparations that never reached a boundary.
+		for (const auto& weak: m_Prepared) if (auto prepared = weak.lock()) {
+			try {
+				if (prepared->m_Copy->armed.load(std::memory_order_acquire) == 1) prepared->Drain();
+				else prepared->Cancel();
+			} catch (...) { prepared->Cancel(); }
+		}
+		m_Prepared.clear();
+	}
+
 	inline HeapOwner::Slab::~Slab() {
 		if (!pages) return;
 		HeapOwner::Unmap(pages, capacity * Snapshot::c_PageBytes);
@@ -1015,6 +1145,7 @@ namespace RTE::CheckpointLua {
 			auto copy = std::make_shared<CowCopy>();
 			copy->base = coordinator.base; copy->pageBytes = page; copy->destination = static_cast<Snapshot::Page*>(destination);
 			copy->saved.assign(2, 0); copy->faults = std::make_shared<CopyFaultStats>();
+			coordinator.Prepare(copy);
 			CowCoordinator::Prepared prepared{&coordinator, copy};
 			if (!PageWriteFence::WatchCopies(&observer, {source, bytes}, observe, &observer, CowCoordinator::Arm, &prepared)) return std::shared_ptr<CowCopy>();
 			return copy;
@@ -1034,6 +1165,53 @@ namespace RTE::CheckpointLua {
 		const auto* old = static_cast<const unsigned char*>(firstBytes.get());
 		const auto* next = static_cast<const unsigned char*>(secondBytes.get());
 		return old[0] == 3 && old[page] == 3 && next[0] == 5 && next[page] == 7 && source[0] == 9 && source[page] == 13;
+	}
+
+	inline bool HeapOwner::RunPreparedSelfTest() {
+		auto owner = Create();
+		lua_pushnumber(owner->State(), 11);
+		TValue* value = owner->State()->top - 1;
+		auto prepared = owner->PrepareFreeze();
+		setnumV(value, 23);
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::LuaPages);
+			if (!prepared->Arm(*owner) || failure.Triggered()) return false;
+		}
+		const Snapshot first = prepared->Image();
+		setnumV(value, 37);
+		prepared->Drain();
+		if (first.Read(value).n != 23 || value->n != 37) return false;
+		prepared.reset();
+		{
+			auto cancelled = owner->PrepareFreeze();
+			const Snapshot abandoned = cancelled->Image();
+			cancelled->Cancel();
+			if (cancelled->Arm(*owner)) return false;
+			bool refused = false;
+			try { abandoned.Read(value); } catch (const std::runtime_error&) { refused = true; }
+			if (!refused) return false;
+		}
+		auto stale = owner->PrepareFreeze();
+		if (!owner->Bump(owner->m_Committed - owner->m_Used + Snapshot::c_PageBytes)) throw std::bad_alloc();
+		if (stale->Current(*owner) || stale->Arm(*owner)) return false;
+		stale.reset();
+		bool refused = false;
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::LuaPages);
+			try { owner->PrepareFreeze(); } catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+		}
+		if (!refused || value->n != 37) return false;
+		auto retry = owner->PrepareFreeze();
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::CopyWatch);
+			if (!retry->Arm(*owner) || failure.Triggered()) return false;
+		}
+		const Snapshot second = retry->Image();
+		setnumV(value, 59);
+		// Source destruction must complete a reader even when its saver has not started yet.
+		owner.reset();
+		retry->Drain();
+		return first.Read(value).n == 23 && second.Read(value).n == 37;
 	}
 
 	// Every userdata hangs after the main thread in the GC chain; nothing before it is one.
