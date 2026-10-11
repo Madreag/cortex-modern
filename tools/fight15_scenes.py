@@ -478,7 +478,8 @@ def ai_fight():
             steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay")]
         if peer == "host": steps += pause_end()
         steps += [lobby_wait(peer)]
-        steps += capture(f"fight-ended-{peer}", "MultiplayerScreen") + [menu("assert_label LabelLastMatchSummary host"), dict(op="finish")]
+        steps += capture(f"fight-ended-{peer}", "MultiplayerScreen") + [menu("assert_label LabelLastMatchSummary Match ended by host"),
+                                                                    menu("assert_text_fits LabelLastMatchSummary"), dict(op="finish")]
         probes[peer] = game_probe(steps, timeout=1600000)
         checks += scene_checks(peer, steps)
         checks.append(dict(id=f"shared-bunkers-{peer}", peer=peer, mark=f"playing-{peer}", screen="game",
