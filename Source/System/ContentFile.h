@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointString.h"
+#include "CheckpointNativeContainers.h"
 
 #include "Serializable.h"
 
@@ -218,11 +219,14 @@ namespace RTE {
 			~LoadedBitmapIndexScope();
 			LoadedBitmapIndexScope(const LoadedBitmapIndexScope&) = delete;
 			LoadedBitmapIndexScope& operator=(const LoadedBitmapIndexScope&) = delete;
+		private:
+			bool m_Saved = false;
 		};
 
 		/// The least path the loaded-bitmap cache of one depth holds a bitmap under, or with depth -1 that of the lowest
 		/// depth holding it, which is written back. Null when none does.
 		static const std::string* LoadedBitmapPath(const BITMAP* bitmap, int& depth);
+		static std::pair<const void*, size_t> LoadedBitmapRegistry();
 
 		/// Changes the loaded bitmaps by each way in, on a scratch entry, and checks the next index sees each change.
 		/// @return The first way whose change the index missed, or empty. The loaded bitmaps are left as they were.
@@ -256,12 +260,12 @@ namespace RTE {
 		static void RebuildLoadedBitmapIndex();
 		/// One depth's loaded bitmaps. Every change made through them moves a version all depths share, so an index
 		/// built from them knows when it went stale; reading through a const reference moves nothing.
-		class LoadedBitmaps : public std::unordered_map<std::string, BITMAP*> {
+		class LoadedBitmaps : public CheckpointUnorderedMap<CheckpointString, BITMAP*> {
 		public:
-			using Base = std::unordered_map<std::string, BITMAP*>;
-			using Base::Base;
+			using Base = CheckpointUnorderedMap<CheckpointString, BITMAP*>;
+			LoadedBitmaps() : Base(Empty()) {}
 			static uint64_t Version() { return s_Version.load(std::memory_order_acquire); }
-			mapped_type& operator[](const key_type& key) { Changed(); return Base::operator[](key); }
+			mapped_type& operator[](const key_type& key) { CheckpointNativeStorage::AllocationScope storage(true); Changed(); return Base::operator[](key); }
 			mapped_type& at(const key_type& key) { Changed(); return Base::at(key); }
 			const mapped_type& at(const key_type& key) const { return Base::at(key); }
 			iterator find(const key_type& key) { Changed(); return Base::find(key); }
@@ -273,12 +277,13 @@ namespace RTE {
 			size_type erase(const key_type& key) { Changed(); return Base::erase(key); }
 			iterator erase(const_iterator position) { Changed(); return Base::erase(position); }
 			void clear() noexcept { Changed(); Base::clear(); }
-			template <class... Args> std::pair<iterator, bool> try_emplace(const key_type& key, Args&&... args) { Changed(); return Base::try_emplace(key, std::forward<Args>(args)...); }
-			template <class... Args> std::pair<iterator, bool> emplace(Args&&... args) { Changed(); return Base::emplace(std::forward<Args>(args)...); }
-			template <class Value> std::pair<iterator, bool> insert(Value&& value) { Changed(); return Base::insert(std::forward<Value>(value)); }
+			template <class... Args> std::pair<iterator, bool> try_emplace(const key_type& key, Args&&... args) { CheckpointNativeStorage::AllocationScope storage(true); Changed(); return Base::try_emplace(key, std::forward<Args>(args)...); }
+			template <class... Args> std::pair<iterator, bool> emplace(Args&&... args) { CheckpointNativeStorage::AllocationScope storage(true); Changed(); return Base::emplace(std::forward<Args>(args)...); }
+			template <class Value> std::pair<iterator, bool> insert(Value&& value) { CheckpointNativeStorage::AllocationScope storage(true); Changed(); return Base::insert(std::forward<Value>(value)); }
 			template <class Source> void merge(Source& source) { Changed(); Base::merge(source); }
 			void swap(Base& other) noexcept { Changed(); Base::swap(other); }
 		private:
+			static Base Empty() { CheckpointNativeStorage::AllocationScope storage(true); return {}; }
 			static inline std::atomic<uint64_t> s_Version{0};
 			static void Changed() noexcept { s_Version.fetch_add(1, std::memory_order_acq_rel); }
 		};

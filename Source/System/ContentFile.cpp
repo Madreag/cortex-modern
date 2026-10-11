@@ -1,5 +1,6 @@
 #include "ContentFile.h"
 #include "CheckpointNativeSnapshot.h"
+#include "CheckpointFrozenContainers.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "Base64/base64.h"
@@ -72,15 +73,42 @@ namespace {
 		static LoadedBitmapIndex index;
 		return index;
 	}
+	struct SavedBitmapIndex {
+		std::unordered_map<const BITMAP*, std::array<std::optional<std::string>, 2>> paths;
+	};
+	std::shared_ptr<const SavedBitmapIndex> SavedIndex() {
+		static const char kind{};
+		const auto [source, bytes] = ContentFile::LoadedBitmapRegistry();
+		return std::static_pointer_cast<const SavedBitmapIndex>(CheckpointNativeStorage::ReadIndex(source, &kind, [&] {
+			auto index = std::make_shared<SavedBitmapIndex>();
+			using Registry = CheckpointUnorderedMap<CheckpointString, BITMAP*>;
+			static_assert(sizeof(Registry) * 2 == sizeof(std::array<Registry, 2>));
+			if (bytes != sizeof(std::array<Registry, 2>)) throw std::logic_error("saved bitmap registry size changed");
+			const auto* registry = static_cast<const Registry*>(CheckpointNativeStorage::View(source, bytes));
+			for (size_t depth = 0; depth < 2; ++depth) CheckpointForEachValue(registry[depth], [&](const auto& entry) {
+				const auto& path = entry.first.Value();
+				auto& least = index->paths[entry.second][depth];
+				if (!least || path < *least) least = path;
+			});
+			return index;
+		}));
+	}
+}
+
+std::pair<const void*, size_t> ContentFile::LoadedBitmapRegistry() {
+	static_assert(sizeof(LoadedBitmaps) == sizeof(LoadedBitmaps::Base));
+	return {s_LoadedBitmaps.data(), sizeof(s_LoadedBitmaps)};
 }
 
 void ContentFile::LoadedBitmapIndexScope::Refresh() {
+	if (CheckpointNativeStorage::Reading()) { SavedIndex(); return; }
 	LoadedBitmapIndex& index = Index();
 	std::lock_guard lock(index.rebuild);
 	if (index.scopes.load() == 0) RebuildLoadedBitmapIndex();
 }
 
-ContentFile::LoadedBitmapIndexScope::LoadedBitmapIndexScope() {
+ContentFile::LoadedBitmapIndexScope::LoadedBitmapIndexScope() : m_Saved(CheckpointNativeStorage::Reading()) {
+	if (m_Saved) { SavedIndex(); return; }
 	LoadedBitmapIndex& index = Index();
 	std::lock_guard lock(index.rebuild);
 	if (index.scopes.fetch_add(1) == 0) RebuildLoadedBitmapIndex();
@@ -99,7 +127,7 @@ void ContentFile::RebuildLoadedBitmapIndex() {
 		for (size_t depth = 0; depth < registry.size(); ++depth) {
 			for (const auto& [path, bitmap]: registry[depth]) {
 				const std::string*& least = index.paths[bitmap][depth];
-				if (!least || path < *least) least = &path;
+				if (!least || path < *least) least = &path.Value();
 			}
 		}
 		index.version = LoadedBitmaps::Version();
@@ -107,10 +135,11 @@ void ContentFile::RebuildLoadedBitmapIndex() {
 }
 
 ContentFile::LoadedBitmapIndexScope::~LoadedBitmapIndexScope() {
-	--Index().scopes;
+	if (!m_Saved) --Index().scopes;
 }
 
 std::string ContentFile::LoadedBitmapChangeMissedByIndex() {
+	CheckpointNativeStorage::AllocationScope storage(true);
 	// Only the scratch bitmaps' addresses are compared; nothing reads through them.
 	static const std::array<char, 2> scratch{};
 	BITMAP* first = reinterpret_cast<BITMAP*>(const_cast<char*>(&scratch[0]));
@@ -163,12 +192,38 @@ std::string ContentFile::LoadedBitmapChangeMissedByIndex() {
 	registry.merge(emptied);
 	way("merge", present(first));
 	registry.clear();
+	registry[key] = first;
+	{
+		CheckpointNativeStorage::Root<decltype(s_LoadedBitmaps)> root(&s_LoadedBitmaps);
+		auto inventory = CheckpointNativeStorage::PrepareInventory();
+		if (!inventory->Arm()) way("frozen inventory", false);
+		else {
+			root.Freeze();
+			registry.clear(); registry[key + ".later"] = second;
+			const std::array headers{root.Range()};
+			CheckpointNativeStorage::ReadScope read(inventory->Pages(), headers);
+			way("frozen path after cache removal", present(first) && absent(second));
+		}
+	}
+	registry.clear();
 	registry.swap(live);
 	return missed;
 }
 
 const std::string* ContentFile::LoadedBitmapPath(const BITMAP* bitmap, int& depth) {
 	if (const auto* snapshot = CheckpointNativeSnapshot::Current()) if (auto path = snapshot->BitmapPath(bitmap, depth)) return *path;
+	if (CheckpointNativeStorage::Reading()) {
+		const auto index = SavedIndex();
+		const auto found = index->paths.find(static_cast<const BITMAP*>(CheckpointNativeStorage::Original(bitmap)));
+		if (found == index->paths.end()) return nullptr;
+		if (depth >= 0) {
+			if (static_cast<size_t>(depth) >= found->second.size()) throw std::logic_error("saved bitmap depth is out of range");
+			const auto& path = found->second[depth];
+			return path ? &*path : nullptr;
+		}
+		for (size_t at = 0; at < found->second.size(); ++at) if (const auto& path = found->second[at]) { depth = static_cast<int>(at); return &*path; }
+		return nullptr;
+	}
 	const auto& registry = std::as_const(s_LoadedBitmaps);
 	const LoadedBitmapIndex& index = Index();
 	const auto least = [&](size_t at) -> const std::string* {
@@ -177,7 +232,7 @@ const std::string* ContentFile::LoadedBitmapPath(const BITMAP* bitmap, int& dept
 			return found == index.paths.end() ? nullptr : found->second[at];
 		}
 		const std::string* result = nullptr;
-		for (const auto& [path, image]: registry[at]) if (image == bitmap && (!result || path < *result)) result = &path;
+		for (const auto& [path, image]: registry[at]) if (image == bitmap && (!result || path < *result)) result = &path.Value();
 		return result;
 	};
 	if (depth >= 0) return least(static_cast<size_t>(depth));
@@ -423,7 +478,7 @@ ContentFile::MemoryPNGScope::~MemoryPNGScope() {
 }
 
 void ContentFile::ReloadAllBitmaps() {
-	for (const std::unordered_map<std::string, BITMAP*>& bitmapCache: s_LoadedBitmaps) {
+	for (const auto& bitmapCache: s_LoadedBitmaps) {
 		for (const auto& [filePath, oldBitmap]: bitmapCache) {
 			ReloadBitmap(filePath);
 		}
@@ -450,7 +505,7 @@ BITMAP* ContentFile::GetAsBitmap(int conversionMode, bool storeBitmap, const std
 		if (storeBitmap) {
 			returnBitmap = (*foundBitmap).second;
 		} else if (SDL_Surface* surface = s_MemoryPNGs[dataPathToLoad]) {
-			std::unordered_map<std::string, BITMAP*>::iterator foundBitmap = s_LoadedBitmaps[BitDepths::Eight].find(dataPathToLoad);
+			auto foundBitmap = s_LoadedBitmaps[BitDepths::Eight].find(dataPathToLoad);
 			if (foundBitmap != s_LoadedBitmaps[BitDepths::Eight].end()) {
 				returnBitmap = foundBitmap->second;
 				s_LoadedBitmaps[BitDepths::Eight].erase(dataPathToLoad);
