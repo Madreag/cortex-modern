@@ -299,7 +299,7 @@ namespace RTE {
 		if (required > current) {
 			m_PeerDelayBelowSinceMs.erase(m_Config.localPeerId);
 			(void)ProposePeerInputDelay(m_Config.localPeerId, required, FutureTimingFrame());
-		} else if (required + c_DelayShrinkStep < current) {
+		} else if (required < current) {
 			const auto [since, inserted] = m_PeerDelayBelowSinceMs.try_emplace(m_Config.localPeerId, nowMs);
 			if (nowMs >= since->second + c_DelayShrinkIntervalMs && ProposePeerInputDelay(m_Config.localPeerId, current - c_DelayShrinkStep, FutureTimingFrame())) since->second = nowMs;
 		} else m_PeerDelayBelowSinceMs.erase(m_Config.localPeerId);

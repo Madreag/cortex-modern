@@ -274,7 +274,7 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::ProposePeerReclaim(uint8_t peer, NetPeerId transport, uint32_t incarnation, uint64_t frame, uint64_t trailFrames, std::string* error) {
 		if (!IsRunning() || m_Config.localPeerId != GetHostPeerId() || peer == 0 || peer > m_Config.peerCount ||
-		    !m_PeerBridges.contains(peer) || transport == c_InvalidNetPeerId || incarnation == 0 || frame <= m_Stats.nextFrame ||
+		    !m_PeerBridges.contains(peer) || !m_PeerBridges.at(peer).committedHold || transport == c_InvalidNetPeerId || incarnation == 0 || frame <= m_Stats.nextFrame ||
 		    frame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew || !PeerGroupHasAuthority(m_FrameGroupMembers)) {
 			if (error) *error = "the private return needs an authoritative group and a future frame";
 			return false;
@@ -284,7 +284,8 @@ namespace RTE {
 		proposal.preparedFrame = 1; proposal.frame = frame; proposal.boundary = m_LastCompletedSimulationTick.value_or(m_Stats.nextFrame - 1);
 		proposal.members = {peer}; proposal.connectedMask = m_FrameGroupMembers | SeatBit(peer);
 		const auto prefix = PeerAppliedFramePrefix(proposal.boundary); proposal.bytes.assign(prefix.begin(), prefix.end());
-		const uint32_t delay = std::min<uint16_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames, std::max<uint16_t>(InputDelayAt(peer, frame), ReturnDelayFloor(peer, transport)));
+		const uint32_t delay = m_Config.adaptiveInputDelay ? std::min<uint16_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
+		    std::max<uint16_t>(InputDelayAt(peer, frame), ReturnDelayFloor(peer, transport))) : PeerInputDelay(peer);
 		const uint64_t transit = static_cast<uint64_t>(std::ceil((m_Stats.peers[peer].pingMs + m_Stats.peers[peer].jitterMs) / m_Config.simTickMs));
 		const uint64_t neutral = delay + transit + trailFrames + m_Config.slowPlayerBoundTicks;
 		if (neutral > NetLockstepCodec::c_MaxFutureFrameSkew) { if (error) *error = "the private return is still too far behind its activation"; return false; }

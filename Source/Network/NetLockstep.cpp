@@ -5457,8 +5457,10 @@ namespace RTE {
 			DropRecordedHeldSeat(peer);
 			if (m_Config.peerFrameGroups) {
 				PeerBridge bridge; bridge.fromFrame = bridge.aiFrame = hold.cutoffFrame;
+				bridge.committedHold = true;
 				bridge.members = ((1U << m_Config.peerCount) - 1) & ~(1U << (peer - 1));
 				m_PeerBridges[peer] = std::move(bridge);
+				++m_Stats.peers[peer].holds;
 			}
 		}
 		m_ReclaimTransactions = m_Config.initialSeatReclaims;

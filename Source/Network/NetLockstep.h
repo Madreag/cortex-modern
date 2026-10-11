@@ -1672,6 +1672,7 @@ namespace RTE {
 		struct PeerBridge {
 			uint64_t fromFrame = 0;
 			uint64_t aiFrame = 0;
+			bool committedHold = false;
 			std::optional<uint64_t> returnFrame;
 			std::vector<ControllerFrame> lastInput;
 			uint32_t members = 0;

@@ -72,7 +72,8 @@ namespace RTE {
 			const bool present = sources != m_PeerSourceInputs.end() && sources->second.contains(peer);
 			if (proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0 && present) return false;
 			if (proposal.preparedFrame == 0 && (proposal.connectedMask & SeatBit(peer)) != 0 && proposal.frame >= EffectiveStartOf(peer) && !present) return false;
-			if (proposal.preparedFrame == 1 && (named & SeatBit(peer)) != 0 && (!m_PeerBridges.contains(peer) || m_PeerBridges.at(peer).returnFrame)) return false;
+			if (proposal.preparedFrame == 1 && (named & SeatBit(peer)) != 0 &&
+			    (!m_PeerBridges.contains(peer) || !m_PeerBridges.at(peer).committedHold || m_PeerBridges.at(peer).returnFrame)) return false;
 		}
 		return proposal.preparedFrame == 1 ? (named & proposal.connectedMask) == named : (named & proposal.connectedMask) == 0;
 	}
@@ -98,7 +99,7 @@ namespace RTE {
 		if (proposal.members.empty()) {
 			if (m_FrameGroupMembers == 0 || std::countr_zero(m_FrameGroupMembers) + 1 != m_Config.localPeerId) return false;
 			for (const auto& [peer, bridge]: m_PeerBridges) {
-				if (bridge.returnFrame || peer == m_Config.localPeerId) continue;
+				if (!bridge.committedHold || bridge.returnFrame || peer == m_Config.localPeerId) continue;
 				uint64_t delay = InputDelayAt(peer, frame);
 				const auto [wire, route] = PeerFrameRoute(peer);
 				if (wire && wire->IsPeerPingMeasured(route)) {
@@ -140,13 +141,22 @@ namespace RTE {
 		}
 		if (proposal.preparedFrame == 0) {
 			const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
-			uint64_t agreementMs = 1;
+			// The startup consumer has no established buffered runway to spend.
+			// Its first missing inputs get the full bound from the actual wait.
+			const uint64_t displayed = m_LastCompletedSimulationTick.value_or(m_Config.startFrame - 1);
+			if (displayed < m_Stats.effectiveStartFrame + m_Config.slowPlayerBoundTicks &&
+			    (m_ConsumerWaitingFrame != frame || nowMs < m_ConsumerWaitStartMs || nowMs - m_ConsumerWaitStartMs < boundMs)) return false;
+			uint64_t agreementMs = 0;
+			bool anotherVoter = false;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (peer != m_Config.localPeerId && (proposal.connectedMask & SeatBit(peer)) != 0)
+			{
+				anotherVoter = true;
 				if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end()) agreementMs = std::max<uint64_t>(agreementMs, path->second.P95Ms());
+			}
 			// The receipt RTT excludes the two voters' next pump and the
 			// consumer's next slot. Spend this scheduling reserve before the
 			// deadline rather than adding it to the player's fifty-ms wait.
-			agreementMs += boundMs;
+			if (anotherVoter) agreementMs = std::max<uint64_t>(1, agreementMs) + boundMs;
 			// Votes spend the buffered runway, so a healthy relay round trip fits inside the consumer's bound.
 			if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame) {
 				double dueMs = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
@@ -178,8 +188,9 @@ namespace RTE {
 			const uint32_t transit = static_cast<uint32_t>(std::ceil((rtt + margin) / m_Config.simTickMs));
 			// The private reader's trail belongs in its temporary neutral
 			// interval. It must not become every human input's permanent delay.
-			const uint32_t delay = std::min<uint32_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
-			    std::max<uint32_t>(InputDelayAt(peer, proposal.frame), transit));
+			// Fixed rounds keep their agreed delay; return transit stays in the neutral interval.
+			const uint32_t delay = m_Config.adaptiveInputDelay ? std::min<uint32_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
+			    std::max<uint32_t>(InputDelayAt(peer, proposal.frame), transit)) : PeerInputDelay(peer);
 			const uint32_t neutral = delay + transit + trail + m_Config.slowPlayerBoundTicks;
 			if (neutral > NetLockstepCodec::c_MaxFutureFrameSkew) return false;
 			PutSize(proposal.bytes, delay); PutSize(proposal.bytes, neutral);
@@ -278,6 +289,8 @@ namespace RTE {
 		size_t returnOffset = prefix.size();
 		std::map<uint8_t, std::tuple<uint16_t, uint64_t, uint32_t>> returnDelays;
 		if (agreed.preparedFrame == 1) for (uint8_t peer: agreed.members) {
+			const auto held = m_PeerBridges.find(peer);
+			if (held == m_PeerBridges.end() || !held->second.committedHold || held->second.returnFrame) return;
 			uint32_t delay = 0, neutral = 0, incarnation = 0;
 			if (!TakeSize(agreed.bytes, returnOffset, delay) || !TakeSize(agreed.bytes, returnOffset, neutral) || !TakeSize(agreed.bytes, returnOffset, incarnation) || incarnation == 0 ||
 			    delay > NetLockstepCodec::c_MaxPeerInputDelayFrames || neutral < delay || neutral > NetLockstepCodec::c_MaxFutureFrameSkew || agreed.frame > UINT64_MAX - neutral) return;
@@ -317,7 +330,7 @@ namespace RTE {
 				const uint64_t revision = agreed.frame * 8 + peer;
 				const auto [delay, neutral, incarnation] = returnDelays.at(peer);
 				m_ReclaimTransactions[peer] = {peer, m_Config.migrationGeneration, revision, incarnation, agreed.frame, delay, neutral};
-				m_DelayChanges[peer][agreed.frame] = delay;
+				if (delay != InputDelayAt(peer, agreed.frame)) m_DelayChanges[peer][agreed.frame] = delay;
 				m_PeerEffectiveStart[peer] = agreed.frame + delay;
 				m_PeerAcceptedThrough[peer] = neutral + 1;
 				NoteSeatTransition(peer, agreed.frame, SeatTransition::Back);
@@ -325,6 +338,7 @@ namespace RTE {
 				PeerBridge bridge;
 				bridge.fromFrame = agreed.frame;
 				bridge.aiFrame = agreed.frame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs));
+				bridge.committedHold = true;
 				bridge.members = agreed.connectedMask;
 				if (agreed.frame > m_Config.startFrame) {
 					NetLockstepReadyFrame previous;
@@ -333,6 +347,7 @@ namespace RTE {
 				}
 				m_PeerBridges[peer] = std::move(bridge);
 				m_SeatBridgeSinceMs[peer] = nowMs;
+				++m_Stats.peers[peer].holds;
 				if (peer == m_Config.localPeerId) m_LocalFrames.erase(agreed.frame);
 			}
 		}
