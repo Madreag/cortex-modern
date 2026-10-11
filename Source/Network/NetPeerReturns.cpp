@@ -50,8 +50,13 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame) {
-		const auto range = m_PeerTailSendRanges.find(peer);
-		if (range == m_PeerTailSendRanges.end()) return;
+		if (fromFrame == UINT64_MAX) return;
+		// Standalone old-input requests retain a bounded one-frame reply too.
+		auto range = m_PeerTailSendRanges.try_emplace(peer, fromFrame, fromFrame + 1).first;
+		range->second.first = std::min(range->second.first, fromFrame);
+		range->second.second = std::max(range->second.second, fromFrame + 1);
+		// A future subscription waits until this donor has displayed its first frame.
+		if (!m_LastCompletedSimulationTick || fromFrame > *m_LastCompletedSimulationTick) return;
 		auto& queued = m_PeerTailOutgoing[peer];
 		auto& sent = m_PeerTailLastSentMs[peer];
 		uint64_t queuedBytes = 0;
@@ -177,7 +182,7 @@ namespace RTE {
 			request.completeFrom = end;
 			// Matching donor histories cover the newest frames while their witnesses are still in flight.
 			for (const auto& [peer, applied]: m_PeerAppliedThrough) {
-				if (peer != m_Config.localPeerId && (m_FrameGroupMembers & SeatBit(peer)) != 0 &&
+				if (peer != m_Config.localPeerId && (peer == donor || (m_FrameGroupMembers & SeatBit(peer)) != 0) &&
 				    frame - std::min(frame, applied) < 128 && HasPeerFrameRoute(peer)) {
 					SendPeerFrameMessage(request, NetTransportLane::ControlReliable, peer); ++m_PeerTailRequests;
 				}
