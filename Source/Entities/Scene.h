@@ -117,13 +117,15 @@ namespace RTE {
 			~Area() override {
 				if (m_FrozenNative) return;
 				Destroy(true);
-				Track(this, false);
+				if (!m_PrivateRegistry || CheckpointNativeStorage::Reading()) Track(this, false);
 			}
 
 			/// Whether an Area lives at an address; only the address is read, so a script's reference that outlived its scene can be asked.
 			/// @param area The address to look up.
 			/// @return Whether an Area is constructed there and not yet destroyed.
 			static bool IsLive(const Area* area);
+			static void RebuildCheckpointRegistry(CheckpointNativeSnapshot& snapshot);
+			static std::string CheckpointRegistrySelfTestMismatch();
 			Area& operator=(const Area& reference) {
 				if (this != &reference) {
 					Reset();
@@ -237,6 +239,7 @@ namespace RTE {
 		private:
 			static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.
 			bool m_FrozenNative = false;
+			bool m_PrivateRegistry = CheckpointNativeStorage::Reading();
 
 			/// Enters or leaves the set of live Areas IsLive reads.
 			static void Track(const Area* area, bool live);

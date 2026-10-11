@@ -366,25 +366,76 @@ Scene::~Scene() {
 namespace {
 	// Every constructed Area by address; allocated once and never freed, so an Area destroyed at exit can still leave it.
 	struct LiveAreas {
+		struct Values : CheckpointNativeAllocated { CheckpointUnorderedSet<const Scene::Area*> areas; };
 		std::mutex mutex;
-		std::unordered_set<const Scene::Area*> areas;
+		std::unique_ptr<Values> values;
+		LiveAreas() : values(std::make_unique<Values>()) {}
 	};
 	LiveAreas& GetLiveAreas() {
-		static LiveAreas* live = new LiveAreas;
-		return *live;
+		static auto live = [] {
+			CheckpointNativeStorage::AllocationScope storage(true);
+			return std::allocate_shared<LiveAreas>(CheckpointNativeAllocator<LiveAreas>{});
+		}();
+		// Exit-time area destructors still use this registry after ordinary managers have gone.
+		static auto* retained = new decltype(live)(live);
+		return **retained;
 	}
 } // namespace
 
 void Scene::Area::Track(const Area* area, bool live) {
 	LiveAreas& registry = GetLiveAreas();
+	if (CheckpointNativeStorage::Reading()) {
+		auto& values = CheckpointNativeStorage::PrivateValue(CheckpointNativeStorage::Source(&registry)->values.get());
+		area = static_cast<const Area*>(CheckpointNativeStorage::Original(area));
+		if (live) values.areas.insert(area); else values.areas.erase(area);
+		return;
+	}
+	CheckpointNativeStorage::AllocationScope storage(true);
 	std::scoped_lock lock(registry.mutex);
-	if (live) registry.areas.insert(area); else registry.areas.erase(area);
+	if (live) registry.values->areas.insert(area); else registry.values->areas.erase(area);
 }
 
 bool Scene::Area::IsLive(const Area* area) {
 	LiveAreas& registry = GetLiveAreas();
+	if (CheckpointNativeStorage::Reading()) {
+		const auto* values = CheckpointNativeStorage::Source(CheckpointNativeStorage::Source(&registry)->values.get());
+		return CheckpointContains(values->areas, static_cast<const Area*>(CheckpointNativeStorage::Original(area)));
+	}
 	std::scoped_lock lock(registry.mutex);
-	return registry.areas.contains(area);
+	return registry.values->areas.contains(area);
+}
+
+void Scene::Area::RebuildCheckpointRegistry(CheckpointNativeSnapshot& snapshot) {
+	const auto* registry = CheckpointNativeStorage::Source(&GetLiveAreas());
+	snapshot.RebuildValue(registry->values.get(), [](const LiveAreas::Values& source) {
+		auto values = std::make_unique<LiveAreas::Values>();
+		values->areas = CheckpointRebuildHash(source.areas, [](const auto* area) { return area; });
+		return values;
+	});
+}
+
+std::string Scene::Area::CheckpointRegistrySelfTestMismatch() {
+	CheckpointNativeStorage::AllocationScope storage(true);
+	auto area = std::make_unique<Area>("SavedArea");
+	const auto* identity = area.get();
+	auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
+	auto inventory = CheckpointNativeStorage::PrepareInventory();
+	if (!inventory->Arm()) return "the saved area registry is stale";
+	area.reset();
+	if (IsLive(identity)) return "a destroyed area remains in the live registry";
+	CheckpointNativeStorage::ReadScope read(inventory->Pages());
+	if (!IsLive(identity)) return "the saved area registry lost an area after its source died";
+	RebuildCheckpointRegistry(*snapshot);
+	auto roots = snapshot->ReadValues();
+	{
+		CheckpointNativeStorage::ReadScope privateValues(inventory->Pages(), roots);
+		auto created = std::make_unique<Area>("PrivateArea");
+		const auto* privateIdentity = created.get();
+		if (!IsLive(identity) || !IsLive(privateIdentity)) return "the saved area registry lost a private getter value";
+		created.reset();
+		if (IsLive(privateIdentity)) return "the saved area registry kept a destroyed private getter value";
+	}
+	return {};
 }
 
 void Scene::Area::Clear() {
