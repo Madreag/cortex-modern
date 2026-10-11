@@ -123,8 +123,14 @@ namespace {
 		int actorCycleStage = 0, actorCyclePresses = 0;
 		uint64_t pageRender = 0; //!< The render show_row acts again at.
 		int pageTurns = 0; //!< Pages show_row has turned for the row it looks for.
+		bool panScene = false, panSelecting = false;
+		int panPlayer = 0, panInput = 0, panDirection = 1;
+		float panY = 600.0F;
+		uint64_t panTick = 0, panMotionEvents = 0;
+		SDL_Scancode panKey = SDL_SCANCODE_UNKNOWN;
 	};
 	Probe probe;
+	void ReleasePanKey();
 	std::atomic<uint64_t> rendezvousCount{0};
 	std::atomic<uint64_t> probeWallNs{0};
 	struct ProbeCost {
@@ -287,6 +293,8 @@ namespace {
 		    {"panel_open", g_MenuMan.IsNetworkPanelOpen()},
 		    {"paused", g_ActivityMan.ActivityPaused()}, {"seats", Json::array()}};
 		observed["chat_history"] = Json::array();
+		observed["pan_scene"] = probe.panScene;
+		observed["pan_motion_events"] = probe.panMotionEvents;
 		observed["ai_held_peer_ids"] = Json::array();
 		for (uint8_t peer = 1; peer <= 4; ++peer)
 			if (ScenarioRunner::IsLockstepSeatUnderAI(peer, lockstepFrame)) observed["ai_held_peer_ids"].push_back(peer);
@@ -434,6 +442,7 @@ namespace {
 	/// Completes a script whose round ended while finish_on_round_end was armed: the steps it had left are recorded as
 	/// skipped and the signals it named are written, so a peer waiting on them goes on.
 	void FinishOnRoundEnd(const Json& observed) {
+		ReleasePanKey();
 		GUIInputWrapper::SetAutomationDriving(false);
 		ReleaseProbePad();
 		for (const std::string& name: probe.roundEndSignals) {
@@ -646,6 +655,18 @@ namespace {
 		const std::string op = step.value("op", "");
 		return op == "menu" || op == "finish" || op == "wait" || op == "key_up" || op == "measure_minute" ||
 		    (op == "game_mouse" && step.contains("down") && step["down"] == false) || step.value("scope", "") == "menu";
+	}
+
+	void ReleasePanKey() {
+		if (probe.panKey != SDL_SCANCODE_UNKNOWN) {
+			SDL_Event event{}; event.type = SDL_EVENT_KEY_UP;
+			event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.key.scancode = probe.panKey;
+			event.key.key = SDL_GetKeyFromScancode(probe.panKey, SDL_KMOD_NONE, false); event.key.down = false;
+			Push(event);
+		}
+		probe.panKey = SDL_SCANCODE_UNKNOWN;
+		probe.panScene = probe.panSelecting = false;
+		probe.panTick = 0;
 	}
 
 	bool Step(const Json& step, Json& observed) {
@@ -1008,6 +1029,35 @@ namespace {
 			}
 			if (op == "wait_scene" && !good) return false;
 			Require(good, "the player's live scene differs: " + state.dump());
+		} else if (op == "pan_scene") {
+			if (!step.value("enabled", true)) {
+				ReleasePanKey();
+				observed["pan_scene"] = false;
+				return true;
+			}
+			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			Require(game && observed["service"] == "Running" && ScenarioRunner::HasLockstepCoordinator(), "looking around needs a running match");
+			if (!probe.panScene) {
+				probe.panPlayer = LocalPlayer(step); probe.panInput = step.value("input_player", 0);
+				probe.panY = step.value("y", 600.0F); probe.panDirection = 1;
+				probe.panMotionEvents = 0;
+				probe.panKey = static_cast<SDL_Scancode>(g_UInputMan.GetControlScheme(probe.panInput)->GetKeyMapping(InputElements::INPUT_NEXT));
+				Require(probe.panKey > SDL_SCANCODE_UNKNOWN && probe.panKey < SDL_SCANCODE_COUNT, "Next Actor has no keyboard binding");
+				Require(g_UInputMan.GetMouseSensitivity() > 0, "looking around needs mouse sensitivity");
+				SDL_Event event{}; event.type = SDL_EVENT_KEY_DOWN;
+				event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.key.scancode = probe.panKey;
+				event.key.key = SDL_GetKeyFromScancode(probe.panKey, SDL_KMOD_NONE, false); event.key.down = true;
+				Push(event);
+				probe.panScene = true;
+			}
+			if (!probe.panSelecting || g_TimerMan.GetSimUpdateCount() < probe.panTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4) return false;
+			const Vector cursor = g_CameraMan.GetScrollTarget(game->ScreenOfPlayer(probe.panPlayer));
+			if (std::abs(cursor.m_Y - probe.panY) > 2.0F) return false;
+			const std::string text = g_FrameMan.GetScreenText(game->ScreenOfPlayer(probe.panPlayer));
+			Require(text == "Select a body to switch control to...", "looking around lost its actor selection message");
+			Require(g_UInputMan.KeyHeldScancode(probe.panKey), "looking around lost its held Next Actor key");
+			observed["pan_scene"] = true; observed["pan_motion_events"] = probe.panMotionEvents;
+			observed["pan_view"] = {{"cursor", {cursor.m_X, cursor.m_Y}}, {"screen_text", text}, {"next_key_held", g_UInputMan.KeyHeldScancode(probe.panKey)}};
 		} else if (op == "measure_minute") {
 			Require(observed["service"] == "Running" && observed["paused"] == false && observed["editing"] == false && observed["local_actor_alive"] == true,
 			        "the AI fight stopped or its local player lost their actor");
@@ -1541,6 +1591,7 @@ namespace {
 			if (!std::filesystem::is_regular_file(path)) return false;
 			NoteRendezvous(std::filesystem::path(path).stem().generic_string());
 		} else if (op == "finish") {
+			ReleasePanKey();
 			if (probe.fightSamples != 0) {
 				observed["fight_summary"] = {{"minutes", probe.fightSamples}, {"minimum_pace", probe.minimumFightPace}, {"ai_fired_frames", probe.aiFiredFrames}};
 				Require(probe.fightSamples == 20, "the AI fight did not measure twenty full minutes");
@@ -1577,6 +1628,7 @@ namespace {
 			if (phase == Phase::Draw && !probe.done) LabelDump();
 			const uint64_t round = ScenarioRunner::GetLockstepRoundId();
 			if (probe.script.value("repeat_rounds", false) && round > 0 && round != probe.round) {
+				ReleasePanKey();
 				probe.round = round; probe.index = 0; probe.done = false; probe.phaseArmed = false;
 				probe.result["steps"] = Json::array(); probe.result["complete"] = false; probe.result["pass"] = false;
 				probe.result["round"] = round; probe.started = Clock::now();
@@ -1595,6 +1647,25 @@ namespace {
 				return;
 			}
 			if (phase == Phase::Draw) ++probe.renders;
+			if (phase == Phase::Draw && probe.panScene) {
+				auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+				const bool selecting = game && game->GetViewState(probe.panPlayer) == Activity::ViewState::ActorSelect;
+				if (!selecting) probe.panSelecting = false;
+				if (selecting && !g_ActivityMan.ActivityPaused() && !g_UInputMan.SeatInputTypedInto(probe.panInput)) {
+					const Vector cursor = g_CameraMan.GetScrollTarget(game->ScreenOfPlayer(probe.panPlayer));
+					if (cursor.m_X < 400) probe.panDirection = 1;
+					else if (cursor.m_X > g_SceneMan.GetSceneWidth() - 400) probe.panDirection = -1;
+					SDL_Event event{}; event.type = SDL_EVENT_MOUSE_MOTION;
+					event.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.motion.which = 1;
+					event.motion.x = g_WindowMan.GetResX() / 2; event.motion.y = g_WindowMan.GetResY() / 2;
+					event.motion.xrel = probe.panDirection * 2.0F / g_UInputMan.GetMouseSensitivity();
+					event.motion.yrel = probe.panSelecting ? 0 : (probe.panY - cursor.m_Y) / g_UInputMan.GetMouseSensitivity();
+					Push(event);
+					if (!probe.panSelecting) probe.panTick = g_TimerMan.GetSimUpdateCount();
+					probe.panSelecting = true;
+					++probe.panMotionEvents;
+				}
+			}
 			Require(NowMs() <= probe.script.at("timeout_ms").get<uint64_t>(), "script deadline at step " + std::to_string(probe.index));
 			Require(probe.index < probe.script["steps"].size(), "script did not finish explicitly");
 			const auto& step = probe.script["steps"][probe.index];
@@ -1646,6 +1717,7 @@ namespace {
 			}
 			if (probe.done) System::PrintDiagnosticLine("[net-ui-probe] PASS: completed " + std::to_string(probe.index) + " steps");
 		} catch (const std::exception& error) {
+			try { ReleasePanKey(); } catch (...) {}
 			GUIInputWrapper::SetAutomationDriving(false);
 			ReleaseProbePad();
 			probe.done = true;
