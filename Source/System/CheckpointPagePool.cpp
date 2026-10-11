@@ -916,8 +916,21 @@ std::string CheckpointString::SelfTestMismatch() {
 	{
 		CheckpointNativeStorage::AllocationScope allocation(true);
 		auto live = std::allocate_shared<CheckpointString>(CheckpointNativeAllocator<CheckpointString>{}, before);
+		{
+			CheckpointNativeStorage::CaptureScope ordinary;
+			*live = before;
+		}
 		source = live.get();
 		const std::string& alias = *live;
+		const char* originalBytes = alias.data();
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			bool refused = false;
+			try { live->PrepareCheckpointStorage(); } catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+			if (!refused || alias != before || live->m_Mirrored || alias.data() != originalBytes) return "refused string preparation changed its live value";
+		}
+		live->PrepareCheckpointStorage();
+		if (&alias != &live->Value() || alias.data() != originalBytes) return "string preparation replaced a legacy reference";
 		first = CheckpointNativeStorage::Prepare();
 		for (const auto& pages: first) pages->Arm();
 		*live = after;

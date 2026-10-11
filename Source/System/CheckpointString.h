@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointNativeStorage.h"
+#include "CheckpointFailure.h"
 
 #include <compare>
 #include <istream>
@@ -20,6 +21,9 @@ namespace RTE {
 		using const_iterator = std::string::const_iterator;
 		static constexpr size_type npos = std::string::npos;
 		static std::string SelfTestMismatch();
+		class PreparedMirror;
+		/// Prepares owned bytes without replacing the legacy string or its references.
+		void PrepareCheckpointStorage();
 		CheckpointString() : m_Mirrored(CheckpointNativeStorage::Enabled()) {}
 		CheckpointString(const CheckpointString& other) { Assign(other.Value()); }
 		CheckpointString(CheckpointString&& other) { Assign(std::move(other)); }
@@ -122,6 +126,29 @@ namespace RTE {
 		Bytes m_Bytes;
 		bool m_Mirrored = false;
 	};
+
+	class CheckpointString::PreparedMirror {
+	public:
+		explicit PreparedMirror(CheckpointString& source) : m_Source(source), m_Ready(CheckpointNativeStorage::Enabled() && !source.m_Mirrored) {
+			if (!m_Ready) return;
+			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+			m_Bytes.assign(source.m_Value.begin(), source.m_Value.end());
+		}
+		PreparedMirror(const PreparedMirror&) = delete;
+		PreparedMirror& operator=(const PreparedMirror&) = delete;
+		void Commit() noexcept {
+			if (!m_Ready) return;
+			m_Source.m_Bytes.swap(m_Bytes);
+			m_Source.m_Mirrored = true;
+			m_Ready = false;
+		}
+	private:
+		CheckpointString& m_Source;
+		Bytes m_Bytes;
+		bool m_Ready;
+	};
+
+	inline void CheckpointString::PrepareCheckpointStorage() { PreparedMirror prepared(*this); prepared.Commit(); }
 }
 
 template<> struct std::hash<RTE::CheckpointString> {
