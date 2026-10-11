@@ -48,7 +48,7 @@ namespace RTE {
 			std::optional<bool> m_Previous;
 		};
 		// Manager headers use prepared storage; their pointees stay on frozen pages.
-		struct RootRange { const void* source; const void* view; size_t bytes; };
+		struct RootRange { const void* source; const void* view; size_t bytes; bool privateValues = false; };
 		template<class T> class Root {
 		public:
 			explicit Root(const T* source) : m_Source(source) {}
@@ -107,7 +107,7 @@ namespace RTE {
 		template<class T> static T* Source(T* source) { return static_cast<T*>(const_cast<void*>(ViewObject(source))); }
 		static std::shared_ptr<const CheckpointPagePool::Snapshot> PagesFor(const void* source, size_t bytes);
 		static const void* Original(const void* view);
-		static bool IsView(const void* address) { return Original(address) != address; }
+		static bool IsView(const void* address);
 		static const std::string* ReadString(const char* source, size_t bytes);
 		static std::shared_ptr<const void> ReadIndex(const void* source, const void* kind, const std::function<std::shared_ptr<const void>()>& build);
 		static std::string SelfTestMismatch();

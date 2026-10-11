@@ -765,6 +765,14 @@ const void* CheckpointNativeStorage::Original(const void* view) {
 	return view;
 }
 
+bool CheckpointNativeStorage::IsView(const void* address) {
+	if (s_Read && address) for (const RootRange& root: s_Read->roots) {
+		const auto pointer = reinterpret_cast<uintptr_t>(address), start = reinterpret_cast<uintptr_t>(root.view);
+		if (root.privateValues && pointer >= start && pointer - start < root.bytes) return false;
+	}
+	return Original(address) != address;
+}
+
 const void* CheckpointNativeStorage::View(const void* source, size_t bytes) {
 	if (!s_Read || !source) return source;
 	if (const void* root = RootView(source, bytes)) return root;
@@ -887,6 +895,29 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 			if (!worker) return "frozen root scope changed another thread or lost its worker view";
 		}
 		if (&RootValues::Instance() != &live || live.tick != 31) return "frozen root scope changed its live singleton";
+	}
+	{
+		struct Values : CheckpointNativeAllocated { CheckpointVector<int> numbers; };
+		AllocationScope allocation(true);
+		auto live = std::make_unique<Values>();
+		live->numbers.assign({17, 31});
+		const auto* identity = live.get();
+		auto prepared = PrepareInventory();
+		if (!prepared->Arm()) return "private value preparation refused";
+		live->numbers.assign({43});
+		for (const auto& page: prepared->Pages()) page->Drain();
+		CaptureScope capture;
+		Values owned;
+		{
+			ReadScope read(prepared->Pages());
+			for (int number: CheckpointValues(Source(identity)->numbers)) owned.numbers.push_back(number);
+		}
+		live.reset();
+		const std::array roots{RootRange{identity, &owned, sizeof(owned), true}};
+		ReadScope read(prepared->Pages(), roots);
+		if (Source(identity) != &owned || Original(&owned) != identity || IsView(&owned.numbers)) return "private value lost its original identity";
+		const auto numbers = CheckpointValues(owned.numbers);
+		if (numbers.size() != 2 || numbers.front() != 17 || numbers.back() != 31) return "private value containers read source nodes";
 	}
 	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> first, second;
 	const void* address = nullptr;

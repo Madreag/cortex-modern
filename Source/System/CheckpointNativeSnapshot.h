@@ -257,6 +257,7 @@ namespace RTE {
 				return static_cast<T*>(claim.first);
 			}
 			try {
+				RememberReadValues(source, static_cast<T*>(memory));
 				if constexpr (requires { T::PrepareCheckpointNative(*source, static_cast<T*>(memory), *this); })
 					T::PrepareCheckpointNative(*source, static_cast<T*>(memory), *this);
 				::new(memory) T(*source, *this);
@@ -372,7 +373,10 @@ namespace RTE {
 			m_Objects.InsertOrAssign(&source, target);
 			return nullptr;
 		}
-		template<class T> void BindValue(const T& source, T* target) { m_Values.InsertOrAssign(&source, target); }
+		template<class T> void BindValue(const T& source, T* target) {
+			m_Values.InsertOrAssign(&source, target);
+			RememberReadValues(&source, target);
+		}
 		template<class T> T* CopyValue(const T* source) {
 			if (!source) return nullptr;
 			CheckpointNativeStorage::CaptureScope allocation;
@@ -381,6 +385,7 @@ namespace RTE {
 			auto value = std::make_unique<T>(Freeze(*static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)))));
 			const auto [winner, claimed] = m_Values.TryEmplace(source, value.get());
 			if (!claimed) return static_cast<T*>(winner);
+			RememberReadValues(source, value.get());
 			owner.first = value.release();
 			return static_cast<T*>(owner.first);
 		}
@@ -474,7 +479,7 @@ namespace RTE {
 		}
 		template<class T> requires (!std::is_array_v<T>) void Prepare(const T& source, T* target) {
 			if constexpr (std::is_base_of_v<Entity, T>) m_Objects.InsertOrAssign(&source, target);
-			else m_Values.InsertOrAssign(&source, target);
+			else BindValue(source, target);
 			if constexpr (requires { T::PrepareCheckpointNative(source, target, *this); }) T::PrepareCheckpointNative(source, target, *this);
 		}
 		template<class T, size_t Size> void Prepare(const T (&source)[Size], T (*target)[Size]) {
@@ -482,6 +487,23 @@ namespace RTE {
 		}
 		const Entity* Find(const Entity* source) const { return m_Objects.Find(source).value_or(nullptr); }
 		size_t ObjectCount() const { return m_Objects.Size(); }
+		/// Reads owned copies with their original identities and private containers.
+		std::vector<CheckpointNativeStorage::RootRange> ReadValues() const {
+			std::vector<CheckpointNativeStorage::RootRange> roots;
+			{
+				std::lock_guard lock(m_ReadValuesMutex);
+				roots = m_ReadValues;
+			}
+			m_Objects.ForEach([&](const Entity* source, const Entity* target) {
+				if (!target) return;
+				const auto* base = Source(source);
+				const auto* complete = dynamic_cast<const void*>(base);
+				const size_t bytes = target->GetClass().CheckpointInstanceBytes();
+				if (bytes != base->GetClass().CheckpointInstanceBytes()) return;
+				if (bytes) roots.push_back({CheckpointNativeStorage::Original(complete), dynamic_cast<const void*>(target), bytes, true});
+			});
+			return roots;
+		}
 
 		template<class T> auto Freeze(const T& source) {
 			if constexpr (requires { FreezeCheckpointValue(source, *this); }) return FreezeCheckpointValue(source, *this);
@@ -715,6 +737,13 @@ namespace RTE {
 		std::vector<std::unique_ptr<OwnerShard>> m_OwnerShards;
 		CheckpointSharedMap<const Entity*, Entity*> m_Objects;
 		CheckpointSharedMap<const void*, void*> m_Values;
+		mutable std::mutex m_ReadValuesMutex;
+		std::vector<CheckpointNativeStorage::RootRange> m_ReadValues;
+		template<class T> void RememberReadValues(const T* source, const T* target) {
+			if (!CheckpointNativeStorage::Reading()) return;
+			std::lock_guard lock(m_ReadValuesMutex);
+			m_ReadValues.push_back({CheckpointNativeStorage::Original(source), target, sizeof(T), true});
+		}
 		struct Reservation {
 			void* memory;
 			Entity** slot;
