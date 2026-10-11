@@ -247,11 +247,12 @@
       "peer": "host",
       "mark": "ui-seat-dialog-other",
       "screen": "MultiplayerScreen",
-      "what": "The other seat offers Kick and Ban, and Close dismisses the dialog.",
+      "what": "Before the first round, the empty seat names its absent holder, disables Kick and Ban, and Close dismisses the dialog.",
       "assert": "menu assertions in the marked interval",
       "events": [
-        "assert_enabled ButtonHostSeatDlgKick expected=1 actual=1 PASS",
-        "assert_enabled ButtonHostSeatDlgBan expected=1 actual=1 PASS"
+        "assert_label LabelHostSeatDlgActionHint .*No player holds this seat[.].*PASS",
+        "assert_enabled ButtonHostSeatDlgKick expected=0 actual=0 PASS",
+        "assert_enabled ButtonHostSeatDlgBan expected=0 actual=0 PASS"
       ],
       "run": [
         "640x360",
