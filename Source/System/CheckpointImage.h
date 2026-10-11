@@ -5,6 +5,7 @@
 #include "CheckpointPagePool.h"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -14,6 +15,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -60,6 +62,23 @@ namespace RTE {
 	struct CheckpointCaptureClock {
 		std::chrono::steady_clock::time_point started;
 		std::shared_future<int64_t> simulationUs;
+		struct Call {
+			std::atomic<int64_t> durationUs{-1};
+			std::array<int64_t, 7> parts{};
+			std::thread::id simulation;
+			uint64_t thread = 0;
+			int64_t begin = 0, end = 0, frequency = 0;
+			void Finish(int64_t elapsed) noexcept {
+				durationUs.store(elapsed, std::memory_order_release); durationUs.notify_all();
+			}
+			int64_t Duration() const {
+				int64_t duration = durationUs.load(std::memory_order_acquire);
+				while (duration < 0) { durationUs.wait(duration, std::memory_order_acquire); duration = durationUs.load(std::memory_order_acquire); }
+				return duration;
+			}
+		};
+		std::shared_ptr<Call> call;
+		int64_t SimulationUs() const { return call ? call->Duration() : simulationUs.get(); }
 	};
 
 	/// Frozen checkpoint values at one sim tick. The worker formats this image.

@@ -40,13 +40,19 @@ namespace RTE::CheckpointLua {
 		}
 		bool Ready() const noexcept { return m_State.load(std::memory_order_acquire) == State::Ready; }
 		bool TryCapture(const Header& header, std::shared_future<bool>& result) {
+			return TryCapture(result, [&header](Header& target) noexcept {
+				if constexpr (std::is_trivially_copyable_v<Header>) std::memcpy(&target, &header, sizeof(Header));
+				else target = header;
+			});
+		}
+		template<class Fill> bool TryCapture(std::shared_future<bool>& result, const Fill& fill) {
+			static_assert(std::is_nothrow_invocable_v<Fill, Header&>);
 			State expected = State::Ready;
 			if (!m_State.compare_exchange_strong(expected, State::Claimed, std::memory_order_acq_rel)) return false;
 			try {
+				fill(m_Plan->header);
 				if (m_Plan->boundary->Arm()) {
 					// Prepared slots retain immutable owners without constructing their payloads here.
-					if constexpr (std::is_trivially_copyable_v<Header>) std::memcpy(&m_Plan->header, &header, sizeof(Header));
-					else m_Plan->header = header;
 					result = m_Plan->result;
 					Publish(State::Armed); Wake();
 					return true;
@@ -194,7 +200,12 @@ namespace RTE::CheckpointLua {
 		if (queue.WaitUntilPrepared() || !refused.load(std::memory_order_acquire)) return "queued inventory allocation refusal was not retained";
 		queue.NotifyNextTick();
 		if (!queue.WaitUntilPrepared()) return "queued inventory could not retry allocation refusal";
-		if (!queue.TryCapture(request, overlap)) return "retried queued boundary refused";
+		bool filledOnSimulation = false;
+		if (!queue.TryCapture(overlap, [&](Header& prepared) noexcept {
+			filledOnSimulation = std::this_thread::get_id() == simulation;
+			prepared.tick = request.tick; prepared.identity = request.identity;
+		})) return "retried queued boundary refused";
+		if (!filledOnSimulation) return "queued request did not copy at its simulation boundary";
 		request.identity.reset();
 		root.tick = 4; value.reset();
 		return overlap.get() ? std::string() : "retried queued boundary did not survive source destruction";

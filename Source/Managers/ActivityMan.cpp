@@ -1489,7 +1489,7 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 	static const bool layerCosts = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
 	const CheckpointPalette palette = CaptureCheckpointPalette();
 	const int zipLevel = ZipLevelFor(compression);
-	const auto simThread = std::this_thread::get_id();
+	const auto simThread = image->captureClock && image->captureClock->call ? image->captureClock->call->simulation : std::this_thread::get_id();
 	const bool automatic = !matchId.empty();
 	AutosaveDescriptor descriptor;
 	if (automatic) {
@@ -1581,7 +1581,7 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 			const std::string& indexText = index.Text();
 			if (layerCosts && image->captureClock) {
 				for (const auto& [name, layer]: image->layers) layer->Finalize();
-				const int64_t simUs = image->captureClock->simulationUs.get();
+				const int64_t simUs = image->captureClock->SimulationUs();
 				const int64_t totalUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - image->captureClock->started).count();
 				if (image->nativePages) native = image->nativePages->Cost();
 				System::PrintDiagnosticLine(std::format("[checkpoint-completion] tick={} sim_call_us={} total_capture_us={} native_boundary_us={} native_copy_worker_us={} native_sim_fault_observer_us={} native_other_fault_observer_us={} native_sim_faults={} native_other_faults={} native_bytes={} serializer_off_sim={}",
