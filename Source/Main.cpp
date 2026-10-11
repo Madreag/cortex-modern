@@ -78,6 +78,8 @@
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
+#include "PathFinder.h"
+#include "luabind/detail/object_rep.hpp"
 extern "C" {
 #include "lua.h"
 }
@@ -169,6 +171,7 @@ extern "C" {
 #ifdef _WIN32
 #include "windows.h"
 #include <crtdbg.h>
+#include <new.h>
 #include <processsnapshot.h>
 #include <psapi.h>
 #endif
@@ -302,6 +305,50 @@ static void RetractAbandonedTickHashes() {
 static uint64_t s_memoryCensusTicks = 0; //!< Every this many ticks one line names what each record holds; 0 = never.
 static bool s_memoryCensusHistogram = false; //!< The census also sums the process heaps, walks the default one and names the block sizes holding the most.
 static size_t s_memoryCensusProbeSize = 0; //!< Blocks of this size have their first bytes printed, so a leaked object can be named.
+
+#ifdef _WIN32
+static int __cdecl RecordFailedAllocation(size_t requested) noexcept {
+	static std::atomic_flag writing = ATOMIC_FLAG_INIT;
+	if (writing.test_and_set()) return 0;
+	PROCESS_MEMORY_COUNTERS_EX process{};
+	K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&process), sizeof(process));
+	PERFORMANCE_INFORMATION system{};
+	system.cb = sizeof(system);
+	K32GetPerformanceInfo(&system, sizeof(system));
+	JOBOBJECT_EXTENDED_LIMIT_INFORMATION job{};
+	QueryInformationJobObject(nullptr, JobObjectExtendedLimitInformation, &job, sizeof(job), nullptr);
+	char line[1024];
+	const auto write = [&line](int length) {
+		if (length <= 0) return;
+		DWORD written = 0;
+		WriteFile(GetStdHandle(STD_ERROR_HANDLE), line, static_cast<DWORD>(std::min<int>(length, sizeof(line) - 1)), &written, nullptr);
+	};
+	write(std::snprintf(line, sizeof(line), "[allocation-failed] requested_bytes=%zu private_bytes=%zu system_commit_bytes=%zu system_limit_bytes=%zu process_limit_bytes=%zu process_peak_bytes=%zu job_limit_bytes=%zu job_peak_bytes=%zu thread=%lu\n",
+	    requested, process.PrivateUsage, system.CommitTotal * system.PageSize, system.CommitLimit * system.PageSize,
+	    job.ProcessMemoryLimit, job.PeakProcessMemoryUsed, job.JobMemoryLimit, job.PeakJobMemoryUsed, GetCurrentThreadId()));
+	void* frames[40];
+	const USHORT count = CaptureStackBackTrace(0, 40, frames, nullptr);
+	const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+	const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
+	const uintptr_t end = base + headers->OptionalHeader.SizeOfImage;
+	for (USHORT index = 0; index < count; ++index) {
+		const uintptr_t address = reinterpret_cast<uintptr_t>(frames[index]);
+		write(address >= base && address < end
+		    ? std::snprintf(line, sizeof(line), "[allocation-stack] frame=%u exe+0x%zX\n", index, address - base)
+		    : std::snprintf(line, sizeof(line), "[allocation-stack] frame=%u address=0x%zX\n", index, address));
+	}
+	writing.clear();
+	return 0;
+}
+
+static void InstallAllocationFailureRecord() {
+	if (!std::getenv("CC_TEST_ALLOCATION_FAILURE")) return;
+	void* frame;
+	CaptureStackBackTrace(0, 1, &frame, nullptr);
+	_set_new_handler(RecordFailedAllocation);
+	_set_new_mode(1);
+}
+#endif
 
 // Private bytes, and what the process heaps hold allocated and committed, for the memory census; costs gets each part's microseconds.
 static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
@@ -4411,29 +4458,68 @@ static void RecordLandingZones(uint64_t tick, std::ostream& out) {
 	}
 	lua_getfield(state, -1, "LZmap");
 	std::vector<std::string> fields;
-	const auto readTable = [&](auto&& self, int table, const std::string& path, int depth) -> void {
-		lua_pushnil(state);
-		while (lua_next(state, table) != 0) {
-			std::ostringstream key;
-			if (lua_type(state, -2) == LUA_TNUMBER) key << lua_tonumber(state, -2);
-			else if (lua_type(state, -2) == LUA_TSTRING) key << lua_tostring(state, -2);
-			else key << lua_typename(state, lua_type(state, -2));
-			const std::string name = path + "/" + key.str();
-			if (lua_istable(state, -1) && depth < 4) {
-				self(self, lua_gettop(state), name, depth + 1);
-			} else {
-				std::ostringstream value;
-				if (lua_type(state, -1) == LUA_TNUMBER) value << std::hexfloat << lua_tonumber(state, -1);
-				else if (lua_type(state, -1) == LUA_TBOOLEAN) value << (lua_toboolean(state, -1) ? "true" : "false");
-				else if (lua_type(state, -1) == LUA_TSTRING) value << std::quoted(lua_tostring(state, -1));
-				else value << lua_typename(state, lua_type(state, -1));
-				fields.push_back(name + "=" + value.str());
+	const auto readValue = [&](auto&& self, lua_State* source, int index, const std::string& path, int depth) -> void {
+		if (index < 0) index += lua_gettop(source) + 1;
+		if (lua_istable(source, index) && depth < 4) {
+			lua_pushnil(source);
+			while (lua_next(source, index) != 0) {
+				std::ostringstream key;
+				if (lua_type(source, -2) == LUA_TNUMBER) key << lua_tonumber(source, -2);
+				else if (lua_type(source, -2) == LUA_TSTRING) key << lua_tostring(source, -2);
+				else key << lua_typename(source, lua_type(source, -2));
+				self(self, source, -1, path + "/" + key.str(), depth + 1);
+				lua_pop(source, 1);
 			}
-			lua_pop(state, 1);
+			return;
 		}
+		if (lua_isthread(source, index) && depth == 1) {
+			lua_State* coroutine = lua_tothread(source, index);
+			const int coroutineTop = lua_gettop(coroutine);
+			fields.push_back(path + "/status=" + std::to_string(lua_status(coroutine)));
+			lua_Debug frame{};
+			for (int level = 0; level < 8 && lua_getstack(coroutine, level, &frame); ++level) {
+				lua_getinfo(coroutine, "Sl", &frame);
+				const std::string framePath = path + "/frame" + std::to_string(level);
+				fields.push_back(framePath + "/source=" + (frame.source ? frame.source : ""));
+				fields.push_back(framePath + "/line=" + std::to_string(frame.currentline));
+				for (int local = 1; local <= 64; ++local) {
+					const char* name = lua_getlocal(coroutine, &frame, local);
+					if (!name) break;
+					if (name[0] != '(' && std::strcmp(name, "self") != 0) {
+						self(self, coroutine, -1, framePath + "/" + name + std::to_string(local), depth + 1);
+					}
+					lua_pop(coroutine, 1);
+				}
+			}
+			lua_settop(coroutine, coroutineTop);
+			return;
+		}
+		std::ostringstream value;
+		value << std::hexfloat;
+		if (lua_type(source, index) == LUA_TNUMBER) value << lua_tonumber(source, index);
+		else if (lua_type(source, index) == LUA_TBOOLEAN) value << (lua_toboolean(source, index) ? "true" : "false");
+		else if (lua_type(source, index) == LUA_TSTRING) value << std::quoted(lua_tostring(source, index));
+		else if (lua_isuserdata(source, index)) {
+			const auto* object = luabind::detail::is_class_object(source, index);
+			if (object && object->ptr() && object->crep() && (object->flags() & luabind::detail::object_rep::owner)) {
+				const char* name = object->crep()->name();
+				if (std::strcmp(name, "Vector") == 0) {
+					const auto* vector = static_cast<const Vector*>(object->ptr());
+					value << "Vector(" << vector->GetX() << ',' << vector->GetY() << ')';
+				} else if (std::strcmp(name, "PathRequest") == 0) {
+					const auto* request = static_cast<const PathRequest*>(object->ptr());
+					value << "PathRequest(" << request->complete << ',' << request->status << ',' << request->pathLength << ',' << request->totalCost
+					      << ',' << request->horizonGeneration << ',' << request->startPos.GetX() << ',' << request->startPos.GetY()
+					      << ',' << request->targetPos.GetX() << ',' << request->targetPos.GetY();
+					for (const Vector& point: request->path) value << ';' << point.GetX() << ',' << point.GetY();
+					value << ')';
+				} else value << name;
+			} else value << "userdata";
+		} else value << lua_typename(source, lua_type(source, index));
+		fields.push_back(path + "=" + value.str());
 	};
 	if (lua_istable(state, -1)) {
-		readTable(readTable, lua_gettop(state), "LZmap", 0);
+		readValue(readValue, state, lua_gettop(state), "LZmap", 0);
 		lua_getfield(state, -1, "LZs");
 		if (lua_istable(state, -1)) {
 			const int zones = lua_gettop(state);
@@ -11253,6 +11339,9 @@ int RunNetPortMapProbe() {
 /// </summary>
 int main(int argc, char** argv) {
 	FloatingPointEnvironment::Initialize();
+#ifdef _WIN32
+	InstallAllocationFailureRecord();
+#endif
 	bool netMatchSelfTest = false;
 	std::string fight15SelfTest;
 	bool netSeatSuccessionSelfTest = false;
