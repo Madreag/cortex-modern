@@ -4006,8 +4006,11 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		request.peerCount = m_HostSetupOptions->peerCount;
 		request.inputDelayFrames = m_HostSetupOptions->inputDelayFrames;
 		request.autoInputDelay = m_HostSetupOptions->delayPolicy == NetMatchDelayPolicy::Auto;
-		uint32_t cpuSeats = 0;
-		for (const NetMatchPlayerSlot& slot : m_HostSetupOptions->players) cpuSeats += slot.cpu ? 1 : 0;
+		uint32_t humanSeats = 0, cpuSeats = 0;
+		for (const NetMatchPlayerSlot& slot : m_HostSetupOptions->players) {
+			(slot.cpu ? cpuSeats : humanSeats)++;
+		}
+		request.humans = humanSeats;
 		request.cpuSlots = cpuSeats;
 		request.frameRedundancyTicks = m_HostSetupOptions->frameRedundancyTicks;
 		// What Advanced accepted is what the lobby gets: the seats, their teams and delays, the rule for a lost brain, all of it.
