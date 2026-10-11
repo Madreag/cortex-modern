@@ -162,7 +162,7 @@ namespace RTE {
 				else if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end())
 					agreementMs = std::max<uint64_t>(agreementMs, path->second.P95Ms());
 			}
-			// The receipt RTT excludes the two voters' next pump and the
+			// The measured trip excludes the two voters' next pump and the
 			// consumer's next slot. Spend this scheduling reserve before the
 			// deadline rather than adding it to the player's fifty-ms wait.
 			if (anotherVoter) agreementMs = std::max<uint64_t>(1, agreementMs) + boundMs;
