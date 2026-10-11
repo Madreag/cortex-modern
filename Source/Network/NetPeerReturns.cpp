@@ -41,7 +41,7 @@ namespace RTE {
 			// A private reader cannot witness this group's frame. Advertise its
 			// newly applied prefix on the next pump so return eligibility can
 			// follow its catch-up instead of a stale periodic heartbeat.
-			m_PeerHeartbeatAtMs = std::min(m_PeerHeartbeatAtMs, m_TimingNowMs);
+			m_PeerHeartbeatAtMs = std::min(m_PeerHeartbeatAtMs, m_TimingNowMs + 25);
 			return;
 		}
 		const auto applied = PeerAppliedFramePrefix(frame), prepared = PeerFramePrefix(frame);
@@ -241,6 +241,9 @@ namespace RTE {
 			Fail(NetLockstepStopReason::ProtocolError, frame, "invalid committed peer tail"); return false;
 		}
 		StoreMigrationFrame(frame, kept->second);
+		const auto own = m_PeerBridges.find(m_Config.localPeerId);
+		const bool privateReader = own != m_PeerBridges.end() && own->second.committedHold &&
+		    (!own->second.returnFrame || frame < *own->second.returnFrame);
 		// Certified history advances receipts for the original inputs it contains.
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			if (peer == m_Config.localPeerId || !IsRemoteRequiredForFrame(peer, frame)) continue;
@@ -252,6 +255,9 @@ namespace RTE {
 			ahead.erase(ahead.begin(), ahead.lower_bound(through));
 			while (through != UINT64_MAX && ahead.erase(through) != 0) ++through;
 			m_PeerInputReceipts[peer][m_Config.localPeerId] = through;
+			// The held reader is outside the live receipt quorum; its displayed
+			// progress acknowledges this certified history to the donor instead.
+			if (privateReader) continue;
 			auto receipt = PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
 			receipt.successorPeerId = peer; receipt.frame = through;
 			SendPeerFrameMessage(std::move(receipt));
@@ -263,7 +269,7 @@ namespace RTE {
 		m_RemoteFrames.erase(frame); m_RemoteCommands.erase(frame); m_RemoteObservations.erase(frame); m_RemoteValueObservations.erase(frame);
 		m_PeerCommittedTail.erase(kept);
 		m_PeerTailPrefixes.erase(frame); m_PeerTailVotes.erase(frame);
-		m_PeerHeartbeatAtMs = std::min(m_PeerHeartbeatAtMs, nowMs);
+		m_PeerHeartbeatAtMs = std::min(m_PeerHeartbeatAtMs, nowMs + 25);
 		return true;
 	}
 
