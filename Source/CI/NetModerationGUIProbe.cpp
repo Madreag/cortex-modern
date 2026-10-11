@@ -74,8 +74,9 @@ void TraceObjectLifetime(const MovableObject* object, const char* stage, bool ob
 	void* callers[16]{};
 	const USHORT count = CaptureStackBackTrace(1, 16, callers, nullptr);
 	const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+	line << " exe_base=0x" << std::hex << base << std::dec;
 	for (USHORT i = 0; i < count; ++i) {
-		line << " caller[" << i << "]=exe+0x" << std::hex << (reinterpret_cast<uintptr_t>(callers[i]) - base) << std::dec;
+		line << " caller[" << i << "]=0x" << std::hex << reinterpret_cast<uintptr_t>(callers[i]) << std::dec;
 	}
 #endif
 	std::cout << line.str() << std::endl;
