@@ -51,7 +51,11 @@ namespace RTE {
 			seat.failedReturns = static_cast<uint8_t>(std::min<int>(seat.failedReturns + 1, 255));
 			seat.returnAfterMs = nowMs + BackoffMs(seat.failedReturns);
 			const bool wasHeld = seat.holdCause != NetSeatHoldCause::None && seat.seatId != hostSeat;
+			const bool imageFailed = seat.phase == NetSeatPhase::RejoinImage;
 			seat.phase = wasHeld ? NetSeatPhase::Held : PresentPhase(stage);
+			// An abort during image transfer reports that failure. Once the image
+			// is accepted, a canceled catch-up retains the existing hold cause.
+			if (wasHeld && imageFailed) seat.holdCause = NetSeatHoldCause::RejoinFailed;
 		}
 
 		/// The phase a returning or newly seated owner enters at the match's stage.
@@ -108,6 +112,11 @@ namespace RTE {
 					if (!seat) return refuse("no such seat");
 					if (seat->link == NetSeatLink::Dropped) return keep("the link is already closed");
 					seat->link = NetSeatLink::Dropped;
+					seat->leftByChoice = event.byChoice;
+					if (seat->phase != NetSeatPhase::Held) seat->heldSinceMs = event.nowMs;
+					// A seat already held by a committed bridge stays held at the
+					// same boundary; its closed link changes the reason for waiting.
+					if (seat->phase == NetSeatPhase::Held) seat->holdCause = event.byChoice ? NetSeatHoldCause::Leave : NetSeatHoldCause::LinkDrop;
 					if (seat->phase == NetSeatPhase::RejoinImage || seat->phase == NetSeatPhase::RejoinCatchUp)
 						FailReturn(*seat, event.nowMs, next.stage, next.hostSeat);
 					return commit("Connection lost - waiting for the host's ordered recovery");
@@ -115,6 +124,7 @@ namespace RTE {
 				case NetRosterEventKind::ProcessRelaunched: {
 					if (!seat || seat->owner == 0) return refuse("the seat has no player");
 					if (seat->phase == NetSeatPhase::Relaunching) return keep("the player's game is already restarting");
+					seat->leftByChoice = false;
 					if (seat->seatId == next.hostSeat || !IsAway(seat->phase)) {
 						seat->link = NetSeatLink::Dropped;
 						return commit("The player's process restarted - waiting for the host's ordered recovery");
@@ -141,6 +151,7 @@ namespace RTE {
 					}
 					++seat->incarnation;
 					seat->link = NetSeatLink::Connected;
+					seat->leftByChoice = false;
 					seat->joining = false;
 					seat->phase = ReturnPhase(next.stage, event.keptWorld);
 					if (seat->phase != NetSeatPhase::RejoinImage && seat->phase != NetSeatPhase::RejoinCatchUp) {
@@ -160,6 +171,7 @@ namespace RTE {
 						return refuse("the host releases only a held seat");
 					if (event.kind == NetRosterEventKind::Banned && !IsBanned(next, seat->owner)) next.banned.push_back(seat->owner);
 					seat->owner = 0;
+					seat->leftByChoice = false;
 					seat->name.clear();
 					seat->ticket = 0;
 					seat->givenAwayTicket = 0;
@@ -259,17 +271,30 @@ namespace RTE {
 					return keep("silence does not close a transport link");
 				}
 				case NetRosterEventKind::HeldInPlace: {
-					// Only the authority emits this event after the combat disconnect-silence check.
-					if (next.stage != NetRosterStage::Running || !seat || seat->phase != NetSeatPhase::Running) return keep("only a combat seat is held by the round");
-					if (event.seat == next.hostSeat) return refuse("the host keeps its own human seat");
+					// The authority publishes a combat bridge only after its visible interval or total silence.
+					// An authenticated leave can keep an existing combat hold after
+					// the end. An ordinary rematch reservation creates no AI hold.
+					const bool leftBetweenRounds = next.stage == NetRosterStage::Ended && event.cause == NetSeatHoldCause::Leave &&
+					    seat && seat->owner != 0 && seat->phase == NetSeatPhase::RoundEnd && seat->holdCause != NetSeatHoldCause::None;
+					if (!leftBetweenRounds && (next.stage != NetRosterStage::Running || !seat || seat->phase != NetSeatPhase::Running))
+						return keep("only a combat seat or an explicit rematch leave is held by the host");
 					seat->phase = NetSeatPhase::Held;
-					seat->holdCause = event.cause == NetSeatHoldCause::None ? NetSeatHoldCause::LinkDrop : event.cause;
-					seat->heldSinceMs = event.nowMs;
+					seat->holdCause = event.seat == next.hostSeat ? NetSeatHoldCause::OwnSeat :
+					    seat->link == NetSeatLink::Dropped && seat->leftByChoice ? NetSeatHoldCause::Leave :
+					    event.cause == NetSeatHoldCause::None ? NetSeatHoldCause::LinkDrop : event.cause;
+					if (seat->link != NetSeatLink::Dropped || seat->heldSinceMs == 0) seat->heldSinceMs = event.nowMs;
 					return commit("Connection lost - the AI plays the seat until its owner returns");
 				}
-				case NetRosterEventKind::SlowMachine: return keep("late input waits without changing the human seat");
-				case NetRosterEventKind::HostStalled: return keep("the host keeps its human seat while its plane pumps");
-				case NetRosterEventKind::HostResumed: return keep("the host keeps its human seat");
+				case NetRosterEventKind::SlowMachine: return keep("a pace report waits for the host's ordered bridge");
+				case NetRosterEventKind::HostStalled: return keep("the session plane orders the host seat's bridge");
+				case NetRosterEventKind::HostResumed: {
+					if (!seat || event.seat != next.hostSeat || seat->phase != NetSeatPhase::Held || seat->holdCause != NetSeatHoldCause::OwnSeat)
+						return keep("no host seat return is due");
+					seat->phase = PresentPhase(next.stage);
+					seat->holdCause = NetSeatHoldCause::None;
+					seat->heldSinceMs = 0;
+					return commit("the host's player is back");
+				}
 				case NetRosterEventKind::HostLinkLost: {
 					if (!event.quorum) return refuse("the host is still the host: its replacement needs the directory or every survivor");
 					if (next.stage == NetRosterStage::Migrating) return keep("the round is already changing host");
@@ -317,6 +342,7 @@ namespace RTE {
 					if (event.kind == NetRosterEventKind::ApplicantAccepted && (open || !IsAway(seat->phase))) return refuse(open ? "the seat is open: the newcomer joins it" : "the seat's player is playing it");
 					if (!open) seat->givenAwayTicket = seat->ticket;
 					seat->owner = event.owner;
+					seat->leftByChoice = false;
 					seat->ticket = event.ticket;
 					seat->name = BoundedName(event.name);
 					++seat->incarnation;
@@ -392,7 +418,8 @@ namespace RTE {
 			if (was.owner != is.owner && !ownerMoves) return fail("seat " + std::to_string(was.seatId) + " changed owner on a " + NetRosterEventName(kind));
 			if (was.owner == is.owner && is.incarnation < was.incarnation) return fail("seat " + std::to_string(was.seatId) + " went back an incarnation");
 			// Connectivity is a fact; only a host decision changes human/AI authority.
-			if (is.seatId == after.hostSeat && is.phase == NetSeatPhase::Held) return fail("the host held its own seat");
+			if (was.phase != NetSeatPhase::Held && is.seatId == after.hostSeat && is.phase == NetSeatPhase::Held && kind != NetRosterEventKind::HeldInPlace)
+				return fail("the host seat changed without its ordered bridge");
 			if (was.holdCause == NetSeatHoldCause::None && is.phase == NetSeatPhase::Held &&
 			    (kind == NetRosterEventKind::LinkDropped || kind == NetRosterEventKind::TransferAborted || kind == NetRosterEventKind::ProcessRelaunched ||
 			     kind == NetRosterEventKind::MemberSetProposed)) return fail("a connectivity fact created a new AI hold");
@@ -571,7 +598,8 @@ namespace RTE {
 	std::array<uint8_t, 32> HashRoster(const NetSeatRoster& roster) {
 		std::vector<std::pair<std::string, std::string>> fields = {
 		    {"match", std::to_string(roster.matchId)}, {"round", std::to_string(roster.roundNo)}, {"revision", std::to_string(roster.revision)},
-		    {"stage", std::to_string(static_cast<int>(roster.stage))}, {"host", std::to_string(roster.hostSeat)}, {"migration", std::to_string(roster.migrationGen)}};
+		    {"stage", std::to_string(static_cast<int>(roster.stage))}, {"host", std::to_string(roster.hostSeat)}, {"migration", std::to_string(roster.migrationGen)},
+		    {"resume_stage", std::to_string(static_cast<int>(roster.resumeStage))}, {"stage_frame", std::to_string(roster.stageFrame)}};
 		for (const NetRosterSeat& seat: roster.seats) {
 			fields.emplace_back("seat." + std::to_string(seat.seatId), std::to_string(seat.owner) + ":" + std::to_string(seat.incarnation) + ":" + NetSeatPhaseName(seat.phase) + ":" +
 			                                                                   std::to_string(static_cast<int>(seat.holdCause)) + ":" + std::to_string(static_cast<int>(seat.link)) + ":" +
@@ -809,6 +837,33 @@ namespace RTE {
 				ok &= !failed.refused && failed.roster.Find(2)->phase == PresentPhase(stage) && failed.roster.Find(2)->holdCause == NetSeatHoldCause::None;
 			}
 			check("seq connectivity preserves human authority stage=" + std::to_string(static_cast<int>(stage)), ok, "");
+			NetRosterEvent leave = drop; leave.byChoice = true; leave.nowMs = 1200;
+			const auto left = ApplyRosterEvent(roster, leave);
+			const auto returnedLeft = ApplyRosterEvent(left.roster, back);
+			const bool keepsHuman = !left.refused && left.roster.Find(2)->leftByChoice &&
+			    left.roster.Find(2)->heldSinceMs == leave.nowMs && left.roster.Find(2)->phase == PresentPhase(stage) &&
+			    left.roster.Find(2)->holdCause == NetSeatHoldCause::None && !returnedLeft.refused &&
+			    !returnedLeft.roster.Find(2)->leftByChoice && returnedLeft.roster.Find(2)->holdCause == NetSeatHoldCause::None;
+			check("seq authenticated leave fact preserves human authority stage=" + std::to_string(static_cast<int>(stage)), keepsHuman, "");
+		}
+		{
+			const NetSeatRoster running = RosterForRow(3);
+			NetRosterEvent stalled; stalled.kind = NetRosterEventKind::HostStalled; stalled.seat = 1;
+			NetRosterEvent bridge = stalled; bridge.kind = NetRosterEventKind::HeldInPlace; bridge.nowMs = 6000;
+			const auto held = ApplyRosterEvent(running, bridge);
+			NetRosterEvent resumed = bridge; resumed.kind = NetRosterEventKind::HostResumed;
+			const auto back = ApplyRosterEvent(held.roster, resumed);
+			NetSeatRoster placing = running; placing.stage = NetRosterStage::Placement;
+			for (auto& seat: placing.seats) seat.phase = NetSeatPhase::Placement;
+			std::string why;
+			const bool ok = !ApplyRosterEvent(running, stalled).changed && !ApplyRosterEvent(placing, bridge).changed &&
+			    held.changed && !held.refused && held.roster.Find(1)->phase == NetSeatPhase::Held && held.roster.Find(1)->holdCause == NetSeatHoldCause::OwnSeat &&
+			    CheckRosterInvariants(running, held.roster, bridge.kind, &why) && back.changed && !back.refused &&
+			    back.roster.Find(1)->phase == NetSeatPhase::Running && back.roster.Find(1)->holdCause == NetSeatHoldCause::None &&
+			    back.roster.hostSeat == running.hostSeat && back.roster.Find(1)->owner == running.Find(1)->owner &&
+			    back.roster.Find(1)->ticket == running.Find(1)->ticket && back.roster.Find(1)->incarnation == running.Find(1)->incarnation &&
+			    CheckRosterInvariants(held.roster, back.roster, resumed.kind, &why);
+			check("seq an ordered combat host bridge returns without changing authority or ownership", ok, why);
 		}
 		// The sequences the findings walked, each a path through the cells above.
 		const auto phaseOf = [](const NetSeatRoster& roster, uint8_t id) { const NetRosterSeat* seat = roster.Find(id); return seat ? seat->phase : NetSeatPhase::Count; };
@@ -858,6 +913,27 @@ namespace RTE {
 			const auto disconnected = ApplyRosterEvent(roster, drop);
 			const bool ok = !disconnected.refused && disconnected.roster.hostSeat == 1 && disconnected.roster.Find(1)->phase == NetSeatPhase::Running && ApplyRosterEvent(roster, lost).refused;
 			check("seq no election from one member's link", ok, "");
+		}
+		// Image failure and cancellation after image acceptance retain the same
+		// ownership/backoff rules, with no new hold on an unheld human seat.
+		for (const bool wasHeld: {false, true}) for (const bool imageAccepted: {false, true}) {
+			NetSeatRoster roster = RosterForRow(5);
+			roster.Find(2)->holdCause = wasHeld ? NetSeatHoldCause::LinkDrop : NetSeatHoldCause::None;
+			if (imageAccepted) {
+				NetRosterEvent loaded; loaded.kind = NetRosterEventKind::ImageLoaded; loaded.seat = 2;
+				roster = ApplyRosterEvent(roster, loaded).roster;
+			}
+			const NetRosterSeat before = *roster.Find(2);
+			NetRosterEvent aborted; aborted.kind = NetRosterEventKind::TransferAborted; aborted.seat = 2; aborted.nowMs = 10000;
+			const NetRosterResult result = ApplyRosterEvent(roster, aborted);
+			const NetRosterSeat* after = result.roster.Find(2);
+			const NetSeatHoldCause expected = !wasHeld ? NetSeatHoldCause::None : imageAccepted ? NetSeatHoldCause::LinkDrop : NetSeatHoldCause::RejoinFailed;
+			const bool ok = !result.refused && after && after->owner == before.owner && after->ticket == before.ticket &&
+			    after->incarnation == before.incarnation && after->link == before.link && after->heldSinceMs == before.heldSinceMs &&
+			    after->phase == (wasHeld ? NetSeatPhase::Held : NetSeatPhase::Running) && after->holdCause == expected &&
+			    after->failedReturns == before.failedReturns + 1 && after->returnAfterMs == aborted.nowMs + c_RosterReturnBackoffMs;
+			check("seq return failure stage held=" + std::to_string(wasHeld) + " image_accepted=" + std::to_string(imageAccepted), ok,
+			      "cause=" + std::string(after ? NetSeatHoldCauseName(after->holdCause) : "missing"));
 		}
 		{
 			// Failed returns back off and never remove the seat; past the bound the return is still offered at the longest backoff.
@@ -936,9 +1012,16 @@ namespace RTE {
 			NetSeatRoster moved = host;
 			moved.seats[1].phase = NetSeatPhase::RejoinImage;
 			ok = ok && !replica.Agrees(HashRoster(moved), &why) && why.find("differs from the host's") != std::string::npos;
-			// The first seat's phase byte, past the header (22 bytes) and the seat's id, owner and incarnation.
+			// The stage boundary belongs to the whole revision, so changing it must break agreement too.
+			NetSeatRoster anotherBoundary = host;
+			++anotherBoundary.stageFrame;
+			ok = ok && !replica.Agrees(HashRoster(anotherBoundary), &why);
+			anotherBoundary = host;
+			anotherBoundary.resumeStage = NetRosterStage::Placement;
+			ok = ok && !replica.Agrees(HashRoster(anotherBoundary), &why);
+			// The phase follows the 31-byte header, id, owner and incarnation.
 			std::vector<uint8_t> bad = wire;
-			bad[33] = 0xFF;
+			bad[42] = 0xFF;
 			NetSeatRoster rejected;
 			ok = ok && !DecodeRoster(bad, rejected, &error);
 			check("seq the roster replicates whole, in order, refused by name when it differs", ok, "wire_bytes=" + std::to_string(wire.size()) + " error='" + error + "' why='" + why + "'");

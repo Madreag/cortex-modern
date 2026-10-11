@@ -356,6 +356,7 @@ namespace RTE {
 	/// system-authored reseat a returning holder has earned. It owns no transport and no clock -
 	/// NetSession feeds it messages and time and sends whatever it produces.
 	class NetReconnectHost {
+		friend struct NetReconnectSessionSelfTestAccess;
 	public:
 		// P3: each handshake step retransmits at the codebase's existing cadence and gives up inside
 		// the session heartbeat timeout, so the handshake fails before - not because of - the transport.

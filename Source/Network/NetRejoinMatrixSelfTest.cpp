@@ -1,4 +1,5 @@
 #include "NetRejoinMatrixSelfTest.h"
+#include "NetSessionPlaneSelfTest.h"
 
 #include "ControllerFrame.h"
 #include "LoopbackTransport.h"
@@ -36,7 +37,7 @@ namespace RTE {
 	bool TestAStartHeldSeatsReturnCompletes(std::string* error);
 	bool TestASeatKnockingWhileTheRoundFormsIsAnswered(std::string* error);
 	bool TestAQueuedReturnLeavesALaterHold(std::string* error);
-	bool TestHostOwnHoldIsRejectedOnEveryWirePhase(std::string* error);
+	bool TestHostSeatBridgeIsAuthenticatedOnEveryWirePhase(std::string* error);
 	bool TestAPreviouslyHeldHostTakesItsSeatBack(std::string* error);
 	bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
 	bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
@@ -166,7 +167,7 @@ namespace RTE {
 						set("legal: the survivors leave to the landing with 'The host left the match'", "HOSTLOSS-HELD");
 						x.notWalked = "no in-process lever fails a migration short of losing every successor";
 						break;
-					case Event::SuccessorLost: set("sub=unreachable subhost=1", "QUORUM"); break;
+					case Event::SuccessorLost: set("sub=migrating subhost=1", "ALL-SURVIVORS", "losing an uncommitted successor waits for agreement and cannot end or re-elect the match"); break;
 					case Event::MigrationBegin: set("sub=run subhost=2", "DESIGN-MIGRATION"); break;
 					case Event::HostLost: set("sub=run subhost=2", "HOSTLOSS-HELD"); break;
 					case Event::HostGoodbye:
@@ -199,8 +200,8 @@ namespace RTE {
 
 			switch (e) {
 				case Event::HoldProposed:
-					if (s == State::Active) set("seat=Held round=run peer=held holds>0 " + quiet, "HOLD");
-					else if (s == State::Parked) set("seat=Held round=run peer=held " + quiet, "HOLD LS-PARK");
+					if (s == State::Active) set("api=refused seat=Active round=run peer=run holds=0 " + quiet, "AUTHENTICATED-SILENCE");
+					else if (s == State::Parked) set("api=refused seat=Active round=run peer=run holds=0 " + quiet, "AUTHENTICATED-SILENCE LS-PARK");
 					else if (s == State::Draining) set("seat=Active round=run holds=0 " + quiet, "LS-DRAIN");
 					else if (heldLike) set(held + " round=run holds=0 " + quiet, "HOLD");
 					else if (s == State::Reclaiming) set("seat=Reclaiming round=run " + quiet, "GAP", "a hold proposed for a seat whose reclaim is agreed but not active yet (nothing is owed by it before E)");
@@ -417,6 +418,7 @@ namespace RTE {
 			uint64_t autoCompleteAtMs = UINT64_MAX;
 			bool hostLive = true;
 			bool clientLive = true;
+			bool keepSessionAlive = false;
 			bool clientFeeding = true;
 			bool waiting = false;
 			uint32_t holdsAtEntry = 0;
@@ -432,6 +434,7 @@ namespace RTE {
 		void Step(Rig& r) {
 			if (r.hostLive) { r.hostWire.AdvanceTimeMs(1); r.hostSessionWire.AdvanceTimeMs(1); }
 			if (r.clientLive) { r.clientWire.AdvanceTimeMs(1); r.clientSessionWire->AdvanceTimeMs(1); }
+			else if (r.keepSessionAlive) r.clientSessionWire->AdvanceTimeMs(1);
 			// A capture takes its time on every peer and then reports; the park is the window around it.
 			if (r.autoCompleteAtMs != UINT64_MAX && r.now >= r.autoCompleteAtMs && r.parkCompleted != UINT64_MAX) {
 				r.host.CompleteSynchronizedCapture(r.parkCompleted, 60.0);
@@ -447,6 +450,7 @@ namespace RTE {
 			}
 			if (r.hostLive) { r.host.Tick(r.now); r.hostSession.Tick(r.now); }
 			if (r.clientLive) { r.client.Tick(r.now); r.clientSession->Tick(r.now); }
+			else if (r.keepSessionAlive) r.clientSession->Tick(r.now);
 			NetLockstepReadyFrame ready;
 			// The host simulates one frame a tick at the sim's rate and waits like a live sim, so its runway drains the way a real one does.
 			if (r.hostLive && r.now >= r.nextHostSimMs && r.hostSimulated < r.finalFrame) {
@@ -610,6 +614,7 @@ namespace RTE {
 			}
 			if (key == "holds") return value == "0" ? o.holds == 0 : value == ">0" ? o.holds > 0 : false;
 			if (key == "sub") {
+				if (value == "migrating") return o.sub == "migrating";
 				if (value == "unreachable") return o.sub == "stopped:PeerHeld";
 				return value == "run" ? o.sub == "run" : value == "over" ? o.sub == "stopped:Complete" : value == "ended" ? o.sub != "run" && o.sub != "migrating" : false;
 			}
@@ -650,9 +655,14 @@ namespace RTE {
 
 		bool EnterHeld(Rig& r) {
 			if (!EnterActive(r)) return false;
-			// The seat falls silent: the host holds it at the slow-player bound, then the seat hears the hold.
+			// This compatibility matrix enters a legacy silence hold. Its separate
+			// session remains connected while the frame transport stops answering.
+			// The V1 frame-group return is exercised by the controller fixture.
 			r.clientLive = false;
-			if (!Pump(r, 3000, [&r] { return r.host.HasHeldAISeat(2) && r.host.IsSeatUnderAI(2, r.hostSimulated + 1); })) return Fail(r, "the silent seat was never held");
+			r.keepSessionAlive = true;
+			if (!Pump(r, c_NetSeatDisconnectSilenceMs + 400, [&r] { return r.host.HasHeldAISeat(2) && r.host.IsSeatUnderAI(2, r.hostSimulated + 1); })) return Fail(r, "the silent seat was never held");
+			if (r.host.GetStats().lastHoldDeclarationMs < c_NetSeatDisconnectSilenceMs ||
+			    r.host.GetStats().lastHoldDeclarationMs > c_NetSeatDisconnectSilenceMs + 400) return Fail(r, "the hold missed its authenticated-silence deadline");
 			r.clientLive = true;
 			r.clientFeeding = false;
 			if (!Pump(r, 500, [&r] { return r.client.IsLocalSeatHeld(); })) return Fail(r, "the held seat never heard its hold");
@@ -735,7 +745,7 @@ namespace RTE {
 			if (!EnterActive(r)) return false;
 			r.client.Leave("rejoin matrix leave");
 			r.clientFeeding = false;
-			Pump(r, 300, [&r] { return r.host.HasHeldAISeat(2) || r.host.GetPeerLeaveFrames().contains(2); });
+			Pump(r, c_NetSeatDisconnectSilenceMs + 400, [&r] { return r.host.HasHeldAISeat(2) || r.host.GetPeerLeaveFrames().contains(2); });
 			if (CoordinatorLabel(r.client) != "stopped:PeerLeft") return Fail(r, "the client did not leave");
 			if (!r.host.HasHeldAISeat(2) && !r.host.GetPeerLeaveFrames().contains(2)) return Fail(r, "the host never recorded the leave");
 			// The leaver's leave exchange answers on its connection; the host must not close it under the leaver.
@@ -811,10 +821,20 @@ namespace RTE {
 					return "ok";
 				}
 				case Event::SeatRelease: r.host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, r.now); return "ok";
-				case Event::OwnCap:
+				case Event::OwnCap: {
+					const auto returns = r.host.ReclaimTransactions();
+					const bool beforeActivation = returns.contains(2) && r.hostSimulated < returns.at(2).activationFrame;
 					r.client.Complete("e2e complete");
 					r.clientSession->Close("own cap reached");
+					// The scripted process exits at its cap; it cannot keep sending
+					// gameplay while the test waits for the retained-seat outcome.
+					r.clientLive = false; r.keepSessionAlive = false;
+					r.clientWire.Stop();
+					// This row observes a cap before the agreed return activates.
+					// Other cap rows observe the later retained-seat disconnect.
+					if (!beforeActivation) Pump(r, c_NetSeatDisconnectSilenceMs + 400);
 					return "ok";
+				}
 				case Event::MatchOver: {
 					const NetPeerId peer = HostSessionPeer(r);
 					const std::string goodbye = "match over through frame " + std::to_string(r.hostSimulated);
@@ -912,6 +932,7 @@ namespace RTE {
 
 		bool EnterMigrating(StarRig& r) {
 			std::string error;
+			if (!NetSessionPlaneSelfTest::CheckHostAdministration(0, &r.error)) return false;
 			if (!r.hostWire.StartHost(r.port, &error) || !r.successorWire.Connect("loopback", r.port, &error) || !r.subjectWire.Connect("loopback", r.port, &error)) {
 				r.error = "star loopback: " + error;
 				return false;
@@ -929,7 +950,14 @@ namespace RTE {
 			}
 			// The host's process dies: no close, no last packet.
 			r.live[0] = false;
-			if (!PumpStar(r, 4000, [&r] { return r.subject.IsMigrating(); })) {
+			const uint64_t silentAt = r.now;
+			while (r.now < silentAt + c_NetHostLossSilenceMs - 100) {
+				StepStar(r);
+				if (r.subject.IsMigrating() || r.successor.IsMigrating() || r.subject.GetHostPeerId() != 1 || r.successor.GetHostPeerId() != 1) {
+					r.error = "host change began before fifteen seconds of authenticated silence"; return false;
+				}
+			}
+			if (!PumpStar(r, 1100, [&r] { return r.subject.IsMigrating(); })) {
 				r.error = "the survivors never began a migration" + StarReport(r);
 				return false;
 			}
@@ -971,7 +999,9 @@ namespace RTE {
 				case Event::Kick: successor.EvictRemovedPeer(3, "kicked", r.now); return "ok";
 				case Event::Ban: successor.EvictRemovedPeer(3, "banned", r.now); return "ok";
 				case Event::SeatRelease: successor.ResolveHeldSeat(3, NetLockstepHoldResolution::Expired, r.now); return "ok";
-				case Event::OwnCap: r.subject.Complete("e2e complete"); return "ok";
+				case Event::OwnCap:
+					r.subject.SetGoodbyeDrain(true); // The runtime's cap enters its final drain before Complete.
+					r.subject.Complete("e2e complete"); r.live[2] = false; return "ok";
 				case Event::LinkBlip:
 					r.live[2] = false;
 					PumpStar(r, 30);
@@ -1171,8 +1201,8 @@ namespace RTE {
 		const Row abandoned{"a_lobby_drops_an_abandoned_transfers_tail", &TestALobbyDropsAnAbandonedTransfersTail}, laterLobby{"a_later_lobbys_transfer_is_new_to_its_peers", &TestALaterLobbysTransferIsNewToItsPeers};
 		const Row traffic{"lobby_traffic_keeps_a_host_link_alive", &TestLobbyTrafficKeepsAHostLinkAlive}, startHeld{"a_start_held_seats_return_completes", &TestAStartHeldSeatsReturnCompletes};
 		const Row knocking{"a_seat_knocking_while_the_round_forms_is_answered", &TestASeatKnockingWhileTheRoundFormsIsAnswered}, queued{"a_queued_return_leaves_a_later_hold", &TestAQueuedReturnLeavesALaterHold};
-		const Row ownSeat{"recorded_host_return_and_live_own_hold_rejection", [](std::string* error) {
-			return TestAPreviouslyHeldHostTakesItsSeatBack(error) && TestHostOwnHoldIsRejectedOnEveryWirePhase(error);
+		const Row ownSeat{"recorded_host_return_and_authenticated_live_bridge", [](std::string* error) {
+			return TestAPreviouslyHeldHostTakesItsSeatBack(error) && TestHostSeatBridgeIsAuthenticatedOnEveryWirePhase(error);
 		}}, nobodyWaits{"a_host_nobody_waits_on_keeps_its_seat", &TestAHostNobodyWaitsOnKeepsItsSeat};
 		const Row hearsHost{"a_held_seat_hears_its_host_until_its_catch_up_opens", &TestAHeldSeatHearsItsHostUntilItsCatchUpOpens}, crossesMigration{"a_held_hosts_frame_crosses_a_migration", &TestAHeldHostsFrameCrossesAMigration};
 		const Row lease{"end_match_with_held_seat_keeps_its_lease", &TestEndMatchWithHeldSeatKeepsItsLease}, toldOver{"a_returner_told_the_match_is_over_gets_its_record", &TestAReturnerToldTheMatchIsOverGetsItsRecord};

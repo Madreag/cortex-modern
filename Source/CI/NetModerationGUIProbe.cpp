@@ -59,7 +59,7 @@ namespace {
 		Sim
 	};
 	struct Probe {
-		bool loaded = false, enabled = false, done = false, resultStarted = false;
+		bool loaded = false, enabled = false, done = false, failed = false, resultStarted = false;
 		size_t index = 0, gestureIndex = SIZE_MAX, handIndex = SIZE_MAX; //!< handIndex: the step whose hand gesture is still running.
 		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0, resultWrittenMs = 0;
 		Clock::time_point started;
@@ -105,6 +105,18 @@ namespace {
 
 	void Require(bool condition, const std::string& reason) {
 		if (!condition) throw std::runtime_error(reason);
+	}
+
+	int ProbePlayer(const Json& selection, const Json& observed) {
+		if (selection == "local") {
+			const auto& seats = observed.at("editor_seats");
+			Require(seats.size() == 1, "local player selection requires exactly one local seat");
+			return seats.front().at("player").get<int>();
+		}
+		Require(selection.is_number_integer(), "player selection must be an index or local");
+		const int player = selection.get<int>();
+		Require(player >= 0 && player < Players::MaxPlayerCount, "player index is out of range");
+		return player;
 	}
 
 	void ScriptedPadCensus(int& scripted, bool& wrapper, bool& leftoverProbe) {
@@ -203,12 +215,16 @@ namespace {
 		// sim_frame counts every sim update since launch, lobby ticks included; lockstep_frame is the round's own.
 		const uint64_t lockstepFrame = ScenarioRunner::HasLockstepCoordinator() ? ScenarioRunner::GetLockstepCompletedFrame() : 0;
 		Json observed = {{"at_ms", NowMs()}, {"render", probe.renders}, {"sim_frame", g_TimerMan.GetSimUpdateCount()},
+		    {"unix_ms", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()},
 		    {"lockstep_frame", lockstepFrame},
 		    {"screen", MenuScreen()},
 		    {"service", snapshot.serviceState}, {"host", snapshot.isHost}, {"activity_preset", snapshot.activityPreset},
 		    {"panel_open", g_MenuMan.IsNetworkPanelOpen()},
 		    {"paused", g_ActivityMan.ActivityPaused()}, {"seats", Json::array()}};
 		observed["chat_history"] = Json::array();
+		observed["ai_held_peer_ids"] = Json::array();
+		for (uint8_t peer = 1; peer <= 4; ++peer)
+			if (ScenarioRunner::IsLockstepSeatUnderAI(peer, lockstepFrame)) observed["ai_held_peer_ids"].push_back(peer);
 		for (const auto& line: g_NetMatchService.ChatHistory()) observed["chat_history"].push_back({{"sender", line.senderPeerId}, {"scope", line.scope}, {"text", line.text}});
 		for (const auto& seat: g_NetMatchService.GetModerationSeats()) {
 			observed["seats"].push_back({{"seat", seat.stableSeat}, {"name", seat.displayName}, {"dropped", seat.dropped},
@@ -232,8 +248,11 @@ namespace {
 		auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 		observed["editing"] = game && game->GetActivityState() == Activity::Editing;
 		observed["editor_seats"] = Json::array();
+		observed["placement_seats"] = Json::array();
 		const Scene* scene = game ? g_SceneMan.GetScene() : nullptr;
 		for (int player = 0; game && player < Players::MaxPlayerCount; ++player) {
+			if (game->IsSeatActive(player) && game->IsHumanSeat(player))
+				observed["placement_seats"].push_back({{"player", player}, {"ready", game->IsReadyToStart(player)}});
 			if (!(game->IsSeatActive(player) && game->IsLocalHumanSeat(player))) continue;
 			const Json textBand = ScreenTextRect(game->ScreenOfPlayer(player));
 			observed["editor_seats"].push_back({{"player", player}, {"ready", game->IsReadyToStart(player)},
@@ -318,6 +337,7 @@ namespace {
 	/// screen, service state or image transfer, from the script's load (before its activation) to its end: what a joiner reads while
 	/// a world's image comes, while it loads and while it catches up.
 	void LabelDump() {
+		if (!probe.script.is_object()) return;
 		const Json config = probe.script.value("label_dump", Json());
 		if (!config.is_object()) return;
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
@@ -367,7 +387,7 @@ namespace {
 	}
 
 	void WriteResult() {
-		const bool repeat = probe.script.value("repeat_rounds", false);
+		const bool repeat = probe.script.is_object() && probe.script.value("repeat_rounds", false);
 		// A probe that repeats per round reports per round: before its first round it has only a failure to report.
 		if (repeat && probe.round == 0 && !probe.result.contains("error")) return;
 		const std::string name = repeat ? "net-ui-result.round" + std::to_string(probe.round) + ".json" : "net-ui-result.json";
@@ -597,30 +617,39 @@ namespace {
 		} else if (op == "wait") {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("lockstep_frame_at_least") || step.contains("renders") ||
 			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
-			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
-			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer"),
+			    step.contains("editing") || step.contains("seat_ready") || step.contains("brains_ready") || step.contains("seat_text_contains") ||
+			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer") || step.contains("ai_held_peer_ids"),
 			    "wait has no predicate");
 			if (step.contains("held_peer") && !HeldPeer(step.at("held_peer"))) return false;
+			if (step.contains("ai_held_peer_ids") && observed["ai_held_peer_ids"] != step["ai_held_peer_ids"]) return false;
 			// The title screen's own scene reads as Gameplay too, paused; a started game runs.
 			if (step.contains("paused") && observed["paused"] != step["paused"]) return false;
 			if (step.contains("chat_entry_open") && observed["net_ui"].at("chat_entry_open") != step["chat_entry_open"]) return false;
 			if (step.contains("screen") && observed["screen"] != step["screen"]) return false;
 			if (step.contains("picker_open")) {
+				const int player = ProbePlayer(step.value("player", Json(0)), observed);
 				const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
-				    [&](const Json& row) { return row.at("player") == step.value("player", 0); });
+				    [&](const Json& row) { return row.at("player") == player; });
 				if (seat == observed["editor_seats"].end() || seat->at("picker").at("visible") != step["picker_open"]) return false;
 			}
 			if (step.contains("seat_text_contains")) {
+				const int player = ProbePlayer(step.value("player", Json(0)), observed);
 				// A seat's screen carries both its editor's line and its activity's, so wait for the one asked for.
 				const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
-				    [&](const Json& row) { return row.at("player") == step.value("player", 0); });
+				    [&](const Json& row) { return row.at("player") == player; });
 				if (seat == observed["editor_seats"].end() ||
 				    seat->at("screen_text").get<std::string>().find(step["seat_text_contains"].get<std::string>()) == std::string::npos) return false;
 			}
 			if (step.contains("editing") && observed["editing"] != step["editing"]) return false;
+			if (step.contains("brains_ready")) {
+				const auto& seats = observed.at("placement_seats");
+				if (seats.size() != step.at("brains_ready").get<size_t>() ||
+				    !std::all_of(seats.begin(), seats.end(), [](const Json& seat) { return seat.at("ready") == true; })) return false;
+			}
 			if (step.contains("seat_ready")) {
+				const int player = ProbePlayer(step.at("seat_ready"), observed);
 				const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
-				    [&](const Json& row) { return row.at("player") == step["seat_ready"]; });
+				    [&](const Json& row) { return row.at("player") == player; });
 				if (seat == observed["editor_seats"].end() || seat->at("ready") != true) return false;
 			}
 			if (step.contains("service") && observed["service"] != step["service"]) return false;
@@ -910,7 +939,9 @@ namespace {
 			    "the match cannot take a placement command");
 		} else if (op == "editor_place_brain" || op == "editor_done" || op == "editor_place" || op == "actor_select") {
 			// The seat's own editor does the work: the gesture is queued once and the step waits it out.
-			const int player = step.value("player", 0);
+			const int player = ProbePlayer(step.value("player", Json(0)), observed);
+			Require(std::any_of(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+			    [player](const Json& row) { return row.at("player") == player; }), "editor gesture targets a nonlocal seat");
 			if (probe.gestureIndex != probe.index) {
 				if (op != "actor_select") {
 					Require(observed["editing"] == true, "the activity is not in the setup editor");
@@ -930,7 +961,7 @@ namespace {
 			Require(status != 2, "the seat could not carry out its editor gesture");
 			if (status == 1) return false;
 		} else if (op == "assert_editor") {
-			const int player = step.value("player", 0);
+			const int player = ProbePlayer(step.value("player", Json(0)), observed);
 			const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
 			    [player](const Json& row) { return row.at("player") == player; });
 			Require(seat != observed["editor_seats"].end(), "seat " + std::to_string(player) + " is not a local editor seat");
@@ -1145,6 +1176,9 @@ namespace {
 	}
 
 	void Process(Phase phase, bool menuScopeOnly = false) {
+		// A failed load has no usable script. Preserve its first error, including
+		// when repeat_rounds or label_dump would otherwise read a null JSON value.
+		if (probe.failed) return;
 		try {
 			if (!probe.loaded) {
 				if (phase == Phase::Sim) return;
@@ -1175,6 +1209,8 @@ namespace {
 			Require(NowMs() <= probe.script.at("timeout_ms").get<uint64_t>(), "script deadline at step " + std::to_string(probe.index));
 			Require(probe.index < probe.script["steps"].size(), "script did not finish explicitly");
 			const auto& step = probe.script["steps"][probe.index];
+			if (step.contains("within_ms")) Require(NowMs() - probe.stepMs <= step.at("within_ms").get<uint64_t>(),
+			    "step deadline at step " + std::to_string(probe.index));
 			if (StepPhase(step) != phase) return;
 			if (menuScopeOnly && !MenuScopeStep(step)) return;
 			Json observed = Observe();
@@ -1199,6 +1235,7 @@ namespace {
 			GUIInputWrapper::SetAutomationDriving(false);
 			ReleaseProbePad();
 			probe.done = true;
+			probe.failed = true;
 			probe.result["pass"] = false;
 			probe.result["error"] = error.what();
 			probe.result["failed_step"] = probe.index;
@@ -1232,6 +1269,77 @@ bool RunCrossScopeSelfTest(std::string* error) {
 	    !ActivationPending({{"activation_timeout_ms", 1}}, false, UINT64_MAX);
 	passed &= bounded;
 	System::PrintDiagnosticLine("[net-match-selftest] " + std::string(bounded ? "PASS" : "FAIL") + " probe_activation_wait_has_a_deadline");
+
+	// Join order determines local seats; a script may not assume machine -> player order.
+	{
+		bool selection = true;
+		for (int player: {0, 1, 2, 3}) {
+			const Json observed = {{"editor_seats", Json::array({Json{{"player", player}, {"ready", true}, {"resident", true}}})}};
+			selection &= ProbePlayer("local", observed) == player && ProbePlayer(player, observed) == player;
+			Json copy = observed;
+			selection &= Step({{"op", "wait"}, {"seat_ready", "local"}}, copy);
+			copy["editor_seats"][0]["ready"] = false;
+			selection &= !Step({{"op", "wait"}, {"seat_ready", "local"}}, copy);
+			selection &= Step({{"op", "assert_editor"}, {"player", "local"}, {"equals", {{"ready", false}, {"resident", true}}}}, copy);
+			copy["editing"] = true;
+			bool refused = false;
+			try { Step({{"op", "editor_done"}, {"player", (player + 1) % 4}}, copy); }
+			catch (const std::exception& e) { refused = std::string(e.what()) == "editor gesture targets a nonlocal seat"; }
+			selection &= refused;
+		}
+		for (const Json& seats: {Json::array(), Json::array({Json{{"player", 1}}, Json{{"player", 2}}})}) {
+			bool refused = false;
+			try { ProbePlayer("local", {{"editor_seats", seats}}); } catch (const std::exception&) { refused = true; }
+			selection &= refused;
+		}
+		passed &= selection;
+		if (!selection) *error = "probe local selection followed join order incorrectly or accepted a nonlocal gesture";
+		System::PrintDiagnosticLine("[net-match-selftest] " + std::string(selection ? "PASS" : "FAIL") + " probe_targets_actual_local_seat_in_every_join_order");
+	}
+	{
+		Probe saved = std::move(probe);
+		const auto root = std::filesystem::temp_directory_path() / ("net-ui-probe-load-" + std::to_string(System::GetProcessID()));
+		std::error_code ignored;
+		std::filesystem::remove_all(root, ignored);
+		std::filesystem::create_directories(root);
+		const char* original = std::getenv("CC_TEST_NET_UI_SCRIPT");
+		const std::optional<std::string> originalPath = original ? std::optional<std::string>(original) : std::nullopt;
+		const auto input = root / "probe.json", output = root / "net-ui-result.json";
+		SDL_setenv_unsafe("CC_TEST_NET_UI_SCRIPT", input.string().c_str(), 1);
+		bool loadErrors = true;
+		for (const std::string name: {"existing", "missing", "malformed", "over-cap"}) {
+			probe = Probe{};
+			std::filesystem::remove(input, ignored); std::filesystem::remove(output, ignored);
+			if (name == "existing") { std::ofstream file(output); file << "preserved receipt"; }
+			if (name == "malformed") { std::ofstream file(input); file << "{"; }
+			if (name == "over-cap") {
+				Json steps = Json::array(); for (int i = 0; i < 257; ++i) steps.push_back({{"op", "finish"}});
+				std::ofstream file(input); file << Json{{"schema", 1}, {"timeout_ms", 1000}, {"steps", steps}};
+			}
+			std::string failure;
+			try { Load(); } catch (const std::exception& e) { failure = e.what(); }
+			loadErrors &= !failure.empty() && !probe.done;
+			if (name == "existing") loadErrors &= failure == "probe result already exists" && !probe.resultStarted;
+			if (name == "missing") loadErrors &= failure == "cannot read input script";
+			if (name == "over-cap") loadErrors &= failure == "invalid script length";
+			probe.failed = probe.done = true;
+			probe.result["error"] = failure;
+			if (probe.resultStarted) WriteResult();
+			// A later render must neither read the invalid script nor replace the first error.
+			Process(Phase::Draw);
+			loadErrors &= probe.result.at("error") == failure;
+			std::ifstream file(output);
+			if (name == "existing") { std::string receipt; std::getline(file, receipt); loadErrors &= receipt == "preserved receipt"; }
+			else { Json receipt; file >> receipt; loadErrors &= receipt.at("error") == failure && receipt.at("pass") == false; }
+		}
+		if (originalPath) SDL_setenv_unsafe("CC_TEST_NET_UI_SCRIPT", originalPath->c_str(), 1); else SDL_unsetenv_unsafe("CC_TEST_NET_UI_SCRIPT");
+		probe = std::move(saved);
+		MenuAutomation::SetArtifactDirectory(probe.directory.string());
+		std::filesystem::remove_all(root, ignored);
+		passed &= loadErrors;
+		if (!loadErrors) *error = "probe load rejection lost its first error or overwrote an existing receipt";
+		System::PrintDiagnosticLine("[net-match-selftest] " + std::string(loadErrors ? "PASS" : "FAIL") + " probe_preserves_load_errors_and_existing_receipts");
+	}
 
 	// Lobby ticks cannot satisfy an opt-in round wait. The legacy clock remains the default.
 	{

@@ -36,6 +36,13 @@ namespace RTE {
 		NetTransportLane lane = NetTransportLane::ControlReliable;
 		std::vector<uint8_t> bytes;
 		std::string reason;
+		bool closedByPeer = false; //!< An explicit remote close, not a local timeout or our own Disconnect.
+	};
+
+	struct NetTransportQueueStats {
+		uint64_t reliableBytes = 0; //!< Queued and unacknowledged reliable bytes.
+		uint64_t queueMs = 0;
+		uint32_t sendRateBytesPerSecond = 0;
 	};
 
 	class INetTransport {
@@ -55,6 +62,7 @@ namespace RTE {
 		virtual uint32_t GetPeerPingMs(NetPeerId) const { return 0; }
 		/// Whether the link to a peer has a measured round trip: a link under a millisecond reads 0 ms and is measured.
 		virtual bool IsPeerPingMeasured(NetPeerId) const { return false; }
+		virtual NetTransportQueueStats GetPeerQueueStats(NetPeerId) const { return {}; }
 		virtual std::string GetConnectedRoute(NetPeerId) const { return {}; }
 	};
 

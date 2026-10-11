@@ -116,6 +116,7 @@
 #include "NetMatchReplay.h"
 #include "TelemetryBundle.h"
 #include "NetLockstepSelfTest.h"
+#include "NetSessionPlaneSelfTest.h"
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
 #include "NetMatchSelfTest.h"
@@ -1277,6 +1278,7 @@ static bool s_menuScriptFailed = false;
 static bool s_menuScriptObserveStep = false;
 static bool s_menuHashCapture = false;
 static bool s_menuScriptComplete = false;
+static bool s_menuScriptInPlay = false;
 static std::string s_menuScriptHandStep; //!< The step whose hand gesture is still running, as the log names it.
 static bool s_menuScriptHandObserve = false;
 static bool s_menuScriptHoldE2ePause = false;
@@ -3694,15 +3696,16 @@ static bool StartMenuScriptClick(const std::string& control, std::string& observ
 }
 
 // Menu scripts use real controls and the normal screenshot render path.
-void ProcessMenuScript() {
+void ProcessMenuScript(bool inPlay = false) {
+	if (s_menuScriptComplete || s_menuScriptFailed || (inPlay && !s_menuScriptInPlay)) return;
 	s_menuScriptObserveStep = false;
 	ScenarioGUI* scenarioMenu = ScenarioGUI::AutomationActive();
-	if (FrameRecorder::Instance().Enabled()) {
+	if (!inPlay && FrameRecorder::Instance().Enabled()) {
 		PauseMenuGUI* pause = g_MenuMan.GetActivePauseMenu();
 		g_FrameMan.RecordVideoFrame(pause ? pause->AutomationActiveScreenName() : scenarioMenu ? scenarioMenu->AutomationScreen() : g_MenuMan.GetMainMenu()->AutomationActiveScreenName(),
 		                           g_NetMatchService.GetLobbySnapshot().serviceState);
 	}
-	NetModerationGUIProbe::AfterMenuDraw();
+	if (!inPlay) NetModerationGUIProbe::AfterMenuDraw();
 	static std::vector<std::string> steps;
 	static std::map<std::string, std::vector<std::string>> macros; //!< "define NAME" ... "end" blocks, run by "run NAME".
 	static size_t stepIndex = 0;
@@ -3741,7 +3744,7 @@ void ProcessMenuScript() {
 	}
 	static bool introSkipped = false;
 	PauseMenuGUI* pauseMenu = g_MenuMan.GetActivePauseMenu();
-	if (!g_MenuMan.IsMainMenuInteractive() && !pauseMenu && !scenarioMenu) {
+	if (!inPlay && !g_MenuMan.IsMainMenuInteractive() && !pauseMenu && !scenarioMenu) {
 		// A pause transition follows the title state machine even after a long match.
 		if (!introSkipped && !g_ActivityMan.ActivityPaused()) {
 			g_MenuMan.SkipTitleIntroForAutomation();
@@ -3778,6 +3781,14 @@ void ProcessMenuScript() {
 		std::string seen;
 		if (waitCond.starts_with("file:")) {
 			met = MenuScriptFileExists(waitCond.substr(5));
+		} else if (waitCond.starts_with("lockstep:")) {
+			const uint64_t completed = ScenarioRunner::GetLockstepCompletedFrame();
+			NetLockstepPlane::Gap plane("menu round wait");
+			const auto summary = g_NetMatchService.GetLastMatchSummary();
+			met = std::max<uint64_t>(completed, summary ? summary->runningTicks : 0) >= std::stoull(waitCond.substr(9));
+		} else if (waitCond == "round-ended") {
+			NetLockstepPlane::Gap plane("menu round wait");
+			met = g_NetMatchService.GetLastMatchSummary().has_value();
 		} else if (waitCond.starts_with("row:")) {
 			std::string listName;
 			int row = -1;
@@ -3835,7 +3846,23 @@ void ProcessMenuScript() {
 		iss >> cmd;
 	}
 	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
-	if (MenuAutomation::Handles(cmd)) {
+	if (cmd == "in_play") {
+		// Opt in explicitly: existing menu-only scripts still wait for the
+		// menu to return. Gestures use the same drawn-frame hand in play.
+		s_menuScriptInPlay = true;
+		MenuScriptPrint("in_play enabled");
+	} else if (cmd == "wait_lockstep") {
+		uint64_t frame = 0;
+		unsigned seconds = 0;
+		if (!(iss >> frame >> seconds) || frame == 0 || seconds == 0) return MenuScriptFail("wait_lockstep requires a frame and positive timeout");
+		waitCond = "lockstep:" + std::to_string(frame);
+		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000;
+	} else if (cmd == "wait_round_end") {
+		unsigned seconds = 0;
+		if (!(iss >> seconds) || seconds == 0) return MenuScriptFail("wait_round_end requires a positive timeout");
+		waitCond = "round-ended";
+		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000;
+	} else if (MenuAutomation::Handles(cmd)) {
 		std::string observation;
 		const bool pass = MenuAutomation::Execute(pauseMenu ? pauseMenu->AutomationManager() : scenarioMenu ? scenarioMenu->AutomationManager() : menu->AutomationManager(),
 			pauseMenu ? pauseMenu->AutomationActiveScreenName() : scenarioMenu ? scenarioMenu->AutomationScreen() : menu->AutomationActiveScreenName(), cmd, iss, observation);
@@ -4206,6 +4233,8 @@ void ProcessMenuScript() {
 	} else if (cmd == "exit") {
 		std::string owed;
 		if (!MenuAutomation::OwedPressed(owed)) return MenuScriptFail("the script never pressed what its sweeps left to it: " + owed);
+		MenuScriptPrint("exit unix_ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()) +
+		    " lockstep_frame=" + std::to_string(ScenarioRunner::GetLockstepCompletedFrame()) + " peer=" + std::to_string(ScenarioRunner::GetLockstepLocalPeerId()));
 		CompleteMenuScript();
 	} else {
 		return MenuScriptFail("unknown command: " + cmd);
@@ -5017,6 +5046,7 @@ static void DrawFrameWithPreviews() {
 	g_SceneMan.SetRenderDrawContext(false);
 	t_simRNGOverride = prevSimRNG;
 	NetModerationGUIProbe::AfterDraw();
+	if (!s_menuScriptPath.empty()) ProcessMenuScript(true);
 }
 
 /// Draws the network wait; returns whether the player explicitly left through the local menu.
@@ -5034,7 +5064,7 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, resyncTitle, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncTitle);
 	// A held player's units are the AI's until the player is back; a repair pauses every player at once.
-	const std::string resyncLine = heldRejoin ? NetReconnectUx::HeldSeatReturnNotice()
+	const std::string resyncLine = heldRejoin ? (ScenarioRunner::IsLockstepHoldNoticeVisible() ? NetReconnectUx::HeldSeatReturnNotice() : std::string())
 	                                          : "Every player waits while the match is reloaded  /  " + std::to_string(elapsedSeconds) + " s  /  F6: Players";
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8, resyncLine, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncLine);
@@ -5052,6 +5082,7 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 		g_FrameMan.RecordVideoFrame(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", g_NetMatchService.GetLobbySnapshot().serviceState);
 	}
 	NetModerationGUIProbe::AfterDraw();
+	if (!s_menuScriptPath.empty()) ProcessMenuScript(true);
 	g_UInputMan.EndFrame();
 	g_UInputMan.EndSimUpdate();
 	return leave;
@@ -7033,7 +7064,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			}
 			if (heldRejoin) {
 				s_netMatchHeldFromTick = matchTick;
-				g_ConsoleMan.PrintString("NETWORK: Held - AI in control - rejoining");
+				if (ScenarioRunner::IsLockstepHoldNoticeVisible()) g_ConsoleMan.PrintString("NETWORK: Held - AI in control - rejoining");
 				ScenarioRunner::PushNetUiToast("seat_held", "Held - AI in control - rejoining");
 			} else {
 				s_netMatchHeals.Note(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
@@ -8271,6 +8302,16 @@ void RunGameLoop() {
 					const bool catchUpTick = ScenarioRunner::WorldCatchUpActive();
 					if (!observation.contains("phase")) observation["phase"] = catchUpTick ? "catchup" : "live";
 					observation["player_visible"] = !catchUpTick;
+					// A final report can show a returned seat as human. Retain the
+					// ownership at each displayed tick so a blackout's AI interval is observable.
+					observation["ai_held_peer_ids"] = nlohmann::json::array();
+					observation["net_clock_ms"] = NetLockstepNowMs();
+					observation["input_delay_ticks"] = ScenarioRunner::GetLockstepInputDelayFrames();
+					if (const auto accepted = ScenarioRunner::GetLockstepInputAcceptedThrough()) observation["input_accepted_through"] = *accepted;
+					observation["unix_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+					if (const auto config = ScenarioRunner::GetLockstepMatchConfig())
+						for (uint8_t peer = 1; peer <= config->peerCount; ++peer)
+							if (ScenarioRunner::IsLockstepSeatUnderAI(peer, simTick)) observation["ai_held_peer_ids"].push_back(peer);
 					observation.update(nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
 					    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()},
 					    {"peer", ScenarioRunner::GetLockstepLocalPeerId()}, {"paused", lockstepPausedTick},
@@ -9434,7 +9475,7 @@ int RunNetSessionCli() {
 	NetIdentityManifest manifest;
 	NetIdentityBuildOptions identityOptions;
 	identityOptions.buildId = "stage2-p2d-local";
-	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+	identityOptions.sessionRulesTag = "peer-session-plane-v1";
 	std::string error;
 	if (!NetIdentity::BuildCurrentManifest(manifest, &error, identityOptions)) {
 		{
@@ -9603,7 +9644,7 @@ bool PrepareNetLockstepScenario(GnsTransport& transport, NetSession& session, Ne
 	NetIdentityManifest manifest;
 	NetIdentityBuildOptions identityOptions;
 	identityOptions.buildId = "stage2-p2d-local";
-	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+	identityOptions.sessionRulesTag = "peer-session-plane-v1";
 	if (!NetIdentity::BuildCurrentManifest(manifest, error, identityOptions)) {
 		return false;
 	}
@@ -10505,7 +10546,7 @@ int RunNetDirectoryProbe(const std::string& baseUrlArg, const std::string& certP
 	NetIdentityManifest manifest;
 	NetIdentityBuildOptions identityOptions;
 	identityOptions.buildId = "stage2-p2d-local";
-	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+	identityOptions.sessionRulesTag = "peer-session-plane-v1";
 	if (!NetIdentity::BuildCurrentManifest(manifest, &reason, identityOptions)) {
 		{
 			std::ostringstream line;
@@ -10867,7 +10908,7 @@ int RunNetDirectoryList() {
 	NetIdentityManifest manifest;
 	NetIdentityBuildOptions identityOptions;
 	identityOptions.buildId = "stage2-p2d-local";
-	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+	identityOptions.sessionRulesTag = "peer-session-plane-v1";
 	NetIdentity::StampOptionsForTarget(identityOptions, false);
 	if (!NetIdentity::BuildCurrentManifest(manifest, &reason, identityOptions)) {
 		{
@@ -11068,6 +11109,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-selftest") {
 			return NetLockstepSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-session-plane-selftest") {
+			return NetSessionPlaneSelfTest::Run();
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-input-acceptance-selftest") {
 			return NetLockstepSelfTest::RunAcceptance();
@@ -11503,6 +11547,8 @@ int main(int argc, char** argv) {
 							std::ostringstream line;
 							line << "[net-replay-dump] frame=" << record.targetFrame << " uid=" << frame.actorUniqueID << " mode=" << static_cast<int>(frame.inputMode)
 							     << " player=" << static_cast<int>(frame.playerRaw) << " flags=0x" << std::hex << static_cast<int>(frame.flags) << std::dec
+							     << " state_mask=" << frame.stateMask << " left=" << ((frame.stateMask & (1ULL << MOVE_LEFT)) != 0)
+							     << " right=" << ((frame.stateMask & (1ULL << MOVE_RIGHT)) != 0) << " move_x=" << frame.analogMoveX << " move_y=" << frame.analogMoveY
 							     << " flip=" << (frame.IsActorHFlipped() ? 1 : 0) << " aim_intent=" << (frame.HasAimIntent() ? 1 : 0) << " flip_intent=" << (frame.HasFlipIntent() ? 1 : 0)
 							     << " aim=" << std::hexfloat << frame.aimAngle << std::defaultfloat << " fg=" << frame.equippedFGUniqueID << " bg=" << frame.equippedBGUniqueID
 							     << " device=" << static_cast<int>(frame.deviceClass) << " aim_speed=" << frame.digitalAimSpeed;

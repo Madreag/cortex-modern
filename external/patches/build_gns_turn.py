@@ -36,9 +36,9 @@ def main():
         run(['cmake', '--install', args.build, '--config', 'Release'])
     library = next(iter(args.install.glob('lib/*GameNetworkingSockets_s.*')))
     record = dict(upstream=revision, patch_sha256=hashlib.sha256(patch.read_bytes()).hexdigest(),
-                  library=str(library.resolve()), library_sha256=hashlib.sha256(library.read_bytes()).hexdigest(), lifetime_version=3)
+                  library=str(library.resolve()), library_sha256=hashlib.sha256(library.read_bytes()).hexdigest(), lifetime_version=4)
     (args.out / 'gns-build.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
-    print('[gns-build] complete lifetime_version=3', flush=True)
+    print('[gns-build] complete lifetime_version=4', flush=True)
     return 0
 
 
