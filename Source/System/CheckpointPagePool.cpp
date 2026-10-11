@@ -69,10 +69,12 @@ namespace {
 struct CheckpointPagePool::Copy {
 	Pages pages;
 	std::vector<std::atomic<unsigned char>> saved;
-	std::thread::id simThread = std::this_thread::get_id();
+	std::thread::id simThread;
+	std::atomic<bool> armed{false};
 	std::atomic<int64_t> workerUs{0}, simFaultNs{0}, otherFaultNs{0};
 	std::atomic<uint64_t> simFaults{0}, otherFaults{0};
 	bool completed = false;
+	bool abandoned = false;
 	Copy(size_t bytes, size_t pageBytes) : pages(bytes), saved(bytes / pageBytes) {
 		for (auto& page: saved) page.store(0, std::memory_order_relaxed);
 	}
@@ -85,24 +87,29 @@ struct CheckpointPagePool::Block {
 	std::vector<std::shared_ptr<Copy>> copies;
 	explicit Block(size_t bytes) : live(bytes) {}
 	~Block() { PageWriteFence::UnwatchCopies(this); }
-	struct Prepared { Block* block; std::shared_ptr<Copy> copy; };
-	static bool Arm(void* context, uintptr_t address, size_t bytes) noexcept {
-		auto& prepared = *static_cast<Prepared*>(context);
-		auto& block = *prepared.block;
-		Locked guard(block.lock);
-		try {
-			std::erase_if(block.copies, [](const auto& copy) { return copy->completed; });
-			block.copies.push_back(prepared.copy);
-		} catch (...) { return false; }
-		if (PageWriteFence::ProtectCopyPages(address, bytes)) return true;
-		block.copies.pop_back();
-		return false;
+	void Prepare(const std::shared_ptr<Copy>& copy) {
+		const auto keepWritable = [](void*, uintptr_t, size_t) noexcept { return true; };
+		if (!PageWriteFence::WatchCopies(this, {live.data, live.bytes}, OnWrite, this, keepWritable))
+			throw std::runtime_error("could not prepare native checkpoint page watches");
+		Locked guard(lock);
+		std::erase_if(copies, [](const auto& value) { return value->completed; });
+		copies.push_back(copy);
+	}
+	void Arm(const std::shared_ptr<Copy>& copy) {
+		Locked guard(lock);
+		if (copy->abandoned) throw std::logic_error("native checkpoint preparation was rolled back");
+		if (copy->armed.load(std::memory_order_relaxed)) return;
+		copy->simThread = std::this_thread::get_id();
+		if (!PageWriteFence::ProtectCopyPages(reinterpret_cast<uintptr_t>(live.data), live.bytes))
+			throw std::runtime_error("could not fence native checkpoint pages");
+		copy->armed.store(true, std::memory_order_release);
 	}
 	bool SavePages(size_t first, size_t count, bool fault) noexcept {
 		const auto started = fault ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		Locked guard(lock);
 		bool savedAny = false;
 		for (const auto& copy: copies) {
+			if (!copy->armed.load(std::memory_order_relaxed)) continue;
 			for (size_t page = first; page < first + count; ++page) {
 				if (copy->saved[page].load(std::memory_order_relaxed)) continue;
 				const size_t offset = page * pageBytes;
@@ -114,7 +121,7 @@ struct CheckpointPagePool::Block {
 		const bool opened = (!fault && !savedAny) || PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data + first * pageBytes), count * pageBytes);
 		if (fault) {
 			const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
-			for (const auto& copy: copies) if (!copy->completed) {
+			for (const auto& copy: copies) if (copy->armed.load(std::memory_order_relaxed) && !copy->completed) {
 				const bool simulation = std::this_thread::get_id() == copy->simThread;
 				(simulation ? copy->simFaults : copy->otherFaults).fetch_add(1, std::memory_order_relaxed);
 				(simulation ? copy->simFaultNs : copy->otherFaultNs).fetch_add(elapsed, std::memory_order_relaxed);
@@ -130,14 +137,16 @@ struct CheckpointPagePool::Block {
 	void Complete(const std::shared_ptr<Copy>& copy) {
 		Locked guard(lock);
 		copy->completed = true;
-		if (std::all_of(copies.begin(), copies.end(), [](const auto& value) { return value->completed; }) &&
+		if (std::all_of(copies.begin(), copies.end(), [](const auto& value) { return !value->armed.load(std::memory_order_relaxed) || value->completed; }) &&
 		    !PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data), live.bytes))
 			throw std::runtime_error("could not open copied native checkpoint pages");
 	}
 	void Abandon(const std::shared_ptr<Copy>& copy) noexcept {
 		Locked guard(lock);
 		std::erase(copies, copy);
-		if (std::all_of(copies.begin(), copies.end(), [](const auto& value) { return value->completed; }))
+		copy->abandoned = true;
+		copy->armed.store(false, std::memory_order_release);
+		if (std::all_of(copies.begin(), copies.end(), [](const auto& value) { return !value->armed.load(std::memory_order_relaxed) || value->completed; }))
 			PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data), live.bytes);
 	}
 	bool Contains(const void* source, size_t bytes) const {
@@ -172,14 +181,13 @@ CheckpointPagePool::Allocation::Allocation(size_t bytes) {
 void* CheckpointPagePool::Allocation::Data() const { return m_Block->live.data; }
 size_t CheckpointPagePool::Allocation::Bytes() const { return m_Block->live.bytes; }
 bool CheckpointPagePool::Allocation::Contains(const void* source, size_t bytes) const { return m_Block->Contains(source, bytes); }
-std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::Allocation::Freeze() const {
+std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::Allocation::Freeze(bool arm) const {
 	auto snapshot = std::make_shared<Snapshot>();
 	snapshot->m_Parts.reserve(1);
 	auto copy = std::make_shared<Copy>(m_Block->live.bytes, m_Block->pageBytes);
-	Block::Prepared prepared{m_Block.get(), copy};
-	if (!PageWriteFence::WatchCopies(m_Block.get(), {m_Block->live.data, m_Block->live.bytes}, Block::OnWrite, m_Block.get(), Block::Arm, &prepared))
-		throw std::runtime_error("could not fence checkpoint allocation pages");
 	snapshot->m_Parts.push_back({m_Block, std::move(copy)});
+	m_Block->Prepare(snapshot->m_Parts.back().copy);
+	if (arm) snapshot->Arm();
 	return snapshot;
 }
 
@@ -191,6 +199,7 @@ std::span<const std::byte> CheckpointPagePool::Snapshot::ReadBytes(const void* s
 	if (end == m_Parts.begin() || !std::prev(end)->block->Contains(source, bytes))
 		throw std::runtime_error("native checkpoint span lies outside its frozen allocation");
 	const auto& part = *std::prev(end);
+	if (!part.copy->armed.load(std::memory_order_acquire)) throw std::logic_error("native checkpoint read before its boundary");
 	const size_t offset = address - reinterpret_cast<uintptr_t>(part.block->live.data);
 	if (bytes) {
 		const size_t first = offset / part.block->pageBytes, last = (offset + bytes - 1) / part.block->pageBytes;
@@ -207,14 +216,13 @@ std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::Freeze(b
 	snapshot->m_Parts.reserve(m_Blocks.size());
 	for (const auto& block: m_Blocks) {
 		auto copy = std::make_shared<Copy>(block->live.bytes, block->pageBytes);
-		Block::Prepared prepared{block.get(), copy};
-		if (arm && !PageWriteFence::WatchCopies(block.get(), {block->live.data, block->live.bytes}, Block::OnWrite, block.get(), Block::Arm, &prepared))
-			throw std::runtime_error("could not fence native checkpoint pages");
 		snapshot->m_Parts.push_back({block, std::move(copy)});
+		block->Prepare(snapshot->m_Parts.back().copy);
 	}
 	std::sort(snapshot->m_Parts.begin(), snapshot->m_Parts.end(), [](const auto& a, const auto& b) {
 		return reinterpret_cast<uintptr_t>(a.block->live.data) < reinterpret_cast<uintptr_t>(b.block->live.data);
 	});
+	if (arm) snapshot->Arm();
 	return snapshot;
 }
 
@@ -244,6 +252,7 @@ bool CheckpointPagePool::Snapshot::CanBorrow(const void* source, size_t bytes) c
 	if (end == m_Parts.begin()) return false;
 	const Part& part = *std::prev(end);
 	if (!part.block->Contains(source, bytes)) return false;
+	if (!part.copy->armed.load(std::memory_order_acquire)) return false;
 	if (!bytes) return true;
 	const size_t first = (address - reinterpret_cast<uintptr_t>(part.block->live.data)) / part.block->pageBytes;
 	const size_t last = (address - reinterpret_cast<uintptr_t>(part.block->live.data) + bytes - 1) / part.block->pageBytes;
@@ -263,27 +272,23 @@ bool CheckpointPagePool::Snapshot::Read(const void* source, void* destination, s
 	if (end == m_Parts.begin()) return false;
 	const Part& part = *std::prev(end);
 	if (!part.block->Contains(source, bytes)) return false;
-	const size_t offset = address - reinterpret_cast<uintptr_t>(part.block->live.data);
-	for (size_t at = 0; at < bytes;) {
-		const size_t page = (offset + at) / part.block->pageBytes;
-		if (!part.block->SavePage(page, false)) throw std::runtime_error("could not copy native checkpoint page");
-		const size_t count = std::min(bytes - at, part.block->pageBytes - (offset + at) % part.block->pageBytes);
-		std::memcpy(static_cast<unsigned char*>(destination) + at, part.copy->pages.data + offset + at, count);
-		at += count;
-	}
+	const auto frozen = ReadBytes(source, bytes);
+	if (bytes) std::memcpy(destination, frozen.data(), bytes);
 	return true;
 }
 
 void CheckpointPagePool::Snapshot::Arm() const {
-	for (const auto& part: m_Parts) {
-		Block::Prepared prepared{part.block.get(), part.copy};
-		if (!PageWriteFence::WatchCopies(part.block.get(), {part.block->live.data, part.block->live.bytes}, Block::OnWrite, part.block.get(), Block::Arm, &prepared))
-			throw std::runtime_error("could not fence native checkpoint pages");
+	try {
+		for (const auto& part: m_Parts) part.block->Arm(part.copy);
+	} catch (...) {
+		for (const auto& part: m_Parts) part.block->Abandon(part.copy);
+		throw;
 	}
 }
 
 void CheckpointPagePool::Snapshot::Drain() const {
 	for (const auto& part: m_Parts) {
+		if (!part.copy->armed.load(std::memory_order_acquire)) throw std::logic_error("native checkpoint drain before its boundary");
 		const auto start = std::chrono::steady_clock::now();
 		const size_t batch = std::max<size_t>(1, (size_t{64} << 10) / part.block->pageBytes);
 		for (size_t page = 0; page < part.copy->saved.size(); page += batch)
@@ -328,11 +333,27 @@ std::string CheckpointPagePool::SelfTestMismatch() {
 			std::memset(source, 71, expected.size());
 			std::memcpy(source, expected.data(), expected.size());
 		}
-		first = pool.Freeze();
+		auto prepared = std::async(std::launch::async, [&] { return std::pair{pool.Freeze(false), pool.Freeze(false)}; }).get();
+		first = std::move(prepared.first);
+		second = std::move(prepared.second);
+		bool refusedRead = false, refusedDrain = false;
+		try { first->Read(source, restored.data(), restored.size()); } catch (const std::logic_error&) { refusedRead = true; }
+		try { first->Drain(); } catch (const std::logic_error&) { refusedDrain = true; }
+		if (!refusedRead || !refusedDrain || first->CanBorrow(source, expected.size())) return "prepared native pages became readable before the boundary";
+		std::memset(source, 23, expected.size());
+		std::memcpy(source, expected.data(), expected.size());
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativePages);
+			first->Arm();
+		}
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::CopyWatch);
+			first->Arm();
+		}
 		if (!first->CanBorrow(source, expected.size())) return "fresh native pages could not be borrowed";
 		std::memset(source, 71, expected.size());
 		if (first->CanBorrow(source, expected.size())) return "changed native pages were still borrowed";
-		second = pool.Freeze();
+		second->Arm();
 		std::memset(source, 99, expected.size());
 		if (!first->Read(source, restored.data(), restored.size()) || restored != expected) return "first native page generation differs";
 	}
@@ -421,9 +442,13 @@ std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> CheckpointNativ
 	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> snapshots;
 	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
 	if (!pools) return snapshots;
-	std::lock_guard lock(pools->mutex);
-	snapshots.reserve(pools->sizes.size());
-	for (const auto& pool: pools->sizes) snapshots.push_back(pool.pages.Freeze(false));
+	std::array<CheckpointPagePool, std::numeric_limits<size_t>::digits> inventory;
+	{
+		std::lock_guard lock(pools->mutex);
+		for (size_t index = 0; index < inventory.size(); ++index) inventory[index] = pools->sizes[index].pages;
+	}
+	snapshots.reserve(inventory.size());
+	for (const auto& pool: inventory) snapshots.push_back(pool.Freeze(false));
 	return snapshots;
 }
 

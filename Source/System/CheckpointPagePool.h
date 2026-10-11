@@ -33,7 +33,7 @@ namespace RTE {
 			bool CanBorrow(const void* source, size_t bytes) const;
 			/// Materializes the remaining pages on the calling worker.
 			void Drain() const;
-			/// Fences the pages of a snapshot frozen without its fences; nothing may write them until this returns.
+			/// Fences prepared ranges without allocating; writers pause only until this returns.
 			void Arm() const;
 			Costs Cost() const;
 		private:
@@ -48,7 +48,7 @@ namespace RTE {
 			void* Data() const;
 			size_t Bytes() const;
 			bool Contains(const void* source, size_t bytes) const;
-			std::shared_ptr<const Snapshot> Freeze() const;
+			std::shared_ptr<const Snapshot> Freeze(bool arm = true) const;
 		private:
 			std::shared_ptr<Block> m_Block;
 		};
@@ -56,7 +56,7 @@ namespace RTE {
 		/// Appends slots in allocation order; the caller owns its usual free-list order.
 		void Grow(size_t slotBytes, size_t minimumSlots, std::vector<void*>& free, size_t blockBytes = size_t{4} << 20);
 		bool Contains(const void* address) const;
-		/// @param arm False leaves the fences to Snapshot::Arm, which must run before anything writes the pages again.
+		/// @param arm False prepares writable ranges; Snapshot::Arm records their later tick boundary.
 		std::shared_ptr<const Snapshot> Freeze(bool arm = true) const;
 		static std::string SelfTestMismatch();
 	private:
