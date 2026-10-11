@@ -4411,7 +4411,13 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetText(savingDiagnostics ? "Saving report..." : "Save Support Report");
 	const bool lobby = m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby;
 	const auto summary = g_NetMatchService.GetLastMatchSummary();
-	m_LastMatchSummaryLabel->SetText(summary ? summary->LineText() : "");
+	std::string summaryText = summary ? summary->LineText() : "";
+	if (summary && summary->winnerTeam >= 0) {
+		// The compact result names the winner; keep the reason for that result visible too.
+		const size_t reason = summary->result.find(" - ");
+		if (reason != std::string::npos) summaryText += "\n" + summary->result.substr(reason + 3);
+	}
+	m_LastMatchSummaryLabel->SetText(summaryText);
 	m_LastMatchSummaryLabel->SetVisible(lobby && summary.has_value());
 	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetVisible(lobby && summary.has_value());
 	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetEnabled(summary.has_value());

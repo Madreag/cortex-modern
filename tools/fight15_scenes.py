@@ -372,7 +372,8 @@ def game_scenes():
     checks += [dict(id=f"brain-loss-console-{peer}", peer=peer, mark=f"brain-loss-{peer}", screen="MultiplayerScreen",
                     what="The activity's brain-loss rule, brain identity and tick appear in each peer's end reason.",
                     log_regex=[r"\[net-match\] brain lost: Joiner's Brain Case .* at tick ",
-                               r"\[net-match\] activity end: Skirmish Defense ended at tick .*SkirmishDefense.lua:397.*Brain Case"])
+                               r"\[net-match\] activity end: Skirmish Defense ended at tick .*SkirmishDefense.lua:397.*Brain Case",
+                               r"NETWORK: Match complete: " + (r"Victory!" if peer == "host" else r"Defeat") + r" - .*SkirmishDefense.lua:397.*Brain Case"])
                for peer in ("host", "joiner")]
     emit(6, "Actual weapon damage ends by the activity's brain-loss rule on both peers",
          game_menu("host", brain_loss=True), game_menu("joiner"), game_probe(host), game_probe(joiner), checks,

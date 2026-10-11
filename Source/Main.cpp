@@ -4327,11 +4327,13 @@ static std::string BuildNetMatchResultText() {
 }
 
 static std::string NetMatchEndReason(const Activity* activity) {
+	// A peer that played the ending knows its own result, including the activity's rule.
+	if (activity && activity->IsOver()) return BuildNetMatchResultText();
 	const std::string stopReason = ScenarioRunner::GetLockstepStopReason();
 	if (stopReason.starts_with("Complete:") && stopReason.size() > 9) {
 		return stopReason.substr(9);
 	}
-	return (activity && activity->IsOver()) ? BuildNetMatchResultText() : "The other player left the match";
+	return "The other player left the match";
 }
 
 /// <summary>

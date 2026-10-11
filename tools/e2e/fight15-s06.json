@@ -184,7 +184,8 @@
       "what": "The activity's brain-loss rule, brain identity and tick appear in each peer's end reason.",
       "log_regex": [
         "\\[net-match\\] brain lost: Joiner's Brain Case .* at tick ",
-        "\\[net-match\\] activity end: Skirmish Defense ended at tick .*SkirmishDefense.lua:397.*Brain Case"
+        "\\[net-match\\] activity end: Skirmish Defense ended at tick .*SkirmishDefense.lua:397.*Brain Case",
+        "NETWORK: Match complete: Victory! - .*SkirmishDefense.lua:397.*Brain Case"
       ]
     },
     {
@@ -195,7 +196,8 @@
       "what": "The activity's brain-loss rule, brain identity and tick appear in each peer's end reason.",
       "log_regex": [
         "\\[net-match\\] brain lost: Joiner's Brain Case .* at tick ",
-        "\\[net-match\\] activity end: Skirmish Defense ended at tick .*SkirmishDefense.lua:397.*Brain Case"
+        "\\[net-match\\] activity end: Skirmish Defense ended at tick .*SkirmishDefense.lua:397.*Brain Case",
+        "NETWORK: Match complete: Defeat - .*SkirmishDefense.lua:397.*Brain Case"
       ]
     }
   ],
