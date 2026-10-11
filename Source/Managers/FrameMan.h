@@ -4,6 +4,8 @@
 #include "Timer.h"
 #include "Box.h"
 #include "Hash.h"
+#include "CheckpointString.h"
+#include "CheckpointNativeContainers.h"
 
 #include <array>
 #include <cstdint>
@@ -36,6 +38,7 @@ namespace RTE {
         friend struct ContractAudit;
 
 	public:
+		static std::array<std::pair<const void*, size_t>, 14> CheckpointRootSources();
 		static constexpr int c_BPP = 32; //!< Color depth (bits per pixel).
 
 #pragma region Creation
@@ -216,7 +219,7 @@ namespace RTE {
 		/// Gets the message to be displayed on top of each player's screen.
 		/// @param whichScreen Which player screen to get message from.
 		/// @return Current message shown to player.
-		std::string GetScreenText(int whichScreen = 0) const { return (whichScreen >= 0 && whichScreen < c_MaxScreenCount) ? m_ScreenText[whichScreen] : ""; }
+		std::string GetScreenText(int whichScreen = 0) const { return (whichScreen >= 0 && whichScreen < c_MaxScreenCount) ? m_ScreenText[whichScreen].Value() : ""; }
 
 		/// The wrapped message and the box it occupies on a player's screen.
 		struct ScreenTextLayout {
@@ -408,14 +411,15 @@ namespace RTE {
 		PALETTE m_Palette; //!< The current array of RGB entries read from the palette file.
 		PALETTE m_DefaultPalette; //!< The default array of RGB entries read from the palette file at initialization.
 		RGB_MAP m_RGBTable; //!< RGB mapping table to speed up calculation of Allegro color maps.
-		std::unique_ptr<COLOR_MAP> m_CheckpointColorTable; //!< Owns a restored active table that was supplied outside the standard table cache.
+		struct CheckpointColorMap : COLOR_MAP, CheckpointNativeAllocated {};
+		std::unique_ptr<CheckpointColorMap> m_CheckpointColorTable; //!< Owns a restored active table that was supplied outside the standard table cache.
 
 		int m_BlackColor; //!< Palette index for the black color.
 		int m_AlmostBlackColor; //!< Palette index for the closest to black color.
 
 		/// Color tables for blended drawing in indexed color mode.
 		/// The key is an array of the RGBA values. The value is a pair of the color table itself and a time stamp of when it was last accessed for use during color table pruning.
-		std::array<std::unordered_map<std::array<int, 4>, std::pair<COLOR_MAP, long long>>, DrawBlendMode::BlendModeCount> m_ColorTables;
+		std::array<CheckpointUnorderedMap<std::array<int, 4>, std::pair<COLOR_MAP, long long>>, DrawBlendMode::BlendModeCount> m_ColorTables;
 		Timer m_ColorTablePruneTimer; //!< Timer for pruning unused color tables to prevent ridiculous memory usage.
 		int m_CurrentAlpha; //!< Current alpha level for emulating trans colortables.
 		std::string SavePaletteCheckpoint() const;
@@ -430,7 +434,7 @@ namespace RTE {
 		std::array<GUIFont*, 2> m_SmallFonts; //!< Pointers to the standard small font for quick access.
 		std::array<GUIFont*, 2> m_LargeFonts; //!< Pointers to the standard large font for quick access.
 
-		std::string m_ScreenText[c_MaxScreenCount]; //!< The text to be displayed on each player's screen.
+		CheckpointString m_ScreenText[c_MaxScreenCount]; //!< The text to be displayed on each player's screen.
 		bool m_TextCentered[c_MaxScreenCount]; //!< Whether screen text is centered vertically.
 		int m_TextDuration[c_MaxScreenCount]; //!< The minimum duration the current message is supposed to show before it can be overwritten.
 		Timer m_TextDurationTimer[c_MaxScreenCount]; //!< Screen text display duration time.

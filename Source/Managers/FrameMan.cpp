@@ -792,7 +792,7 @@ void FrameMan::Update() {
 	// Prune unused color tables every 5 real minutes to prevent ridiculous memory usage over time.
 	if (m_ColorTablePruneTimer.IsPastRealMS(300000)) {
 		long long currentTime = g_TimerMan.GetAbsoluteTime() / 10000;
-		for (std::unordered_map<std::array<int, 4>, std::pair<COLOR_MAP, long long>>& colorTableMap: m_ColorTables) {
+		for (auto& colorTableMap: m_ColorTables) {
 			if (colorTableMap.size() >= 100) {
 				std::vector<std::array<int, 4>> markedForDelete;
 				markedForDelete.reserve(colorTableMap.size());
@@ -1874,7 +1874,7 @@ FrameMan::ScreenTextLayout FrameMan::GetScreenTextLayout(int playerScreen, bool 
 	if (screenWidth <= g_WindowMan.GetResX() / 2) {
 		screenOcclusionOffsetX = 0;
 	}
-	layout.text = decorated ? ">>> " + m_ScreenText[playerScreen] + " <<<" : m_ScreenText[playerScreen];
+	layout.text = decorated ? ">>> " + m_ScreenText[playerScreen] + " <<<" : m_ScreenText[playerScreen].Value();
 	// The message is centred on what a slid-in panel leaves the seat, so it wraps to that band, not the screen.
 	const int band = screenOcclusionOffsetX < 0 ? screenWidth + screenOcclusionOffsetX : screenWidth - screenOcclusionOffsetX;
 	layout.text = SplitStringToFitWidth(layout.text, std::max(1, band), false);
@@ -2056,26 +2056,39 @@ std::string FrameMan::SavePaletteCheckpoint() const {
 	static_assert(sizeof(RGB) == 4);
 	CheckpointWriter writer("FramePalette1");
 	auto bytes = [](const auto& value) { return std::string(reinterpret_cast<const char*>(&value), sizeof(value)); };
-	PALETTE current; get_palette(current);
+	PALETTE current;
+	if (CheckpointNativeStorage::Reading()) std::memcpy(current, CheckpointNativeStorage::View(_current_palette, sizeof(current)), sizeof(current));
+	else get_palette(current);
 	writer(m_PaletteFile, bytes(m_Palette), bytes(m_DefaultPalette), bytes(current), bytes(m_RGBTable), m_BlackColor, m_AlmostBlackColor);
 	// The blend tables this machine drew with, the one selected and the blender state are its own draw's caches.
 	writer.BeginPerPeer();
 	writer(m_CurrentAlpha, m_ColorTablePruneTimer);
-	int selectedMode = color_map ? -2 : -1;
+	const auto* selected = *CheckpointNativeStorage::Source(&color_map);
+	int selectedMode = selected ? -2 : -1;
 	std::array<int, 4> selectedKey{};
 	for (size_t mode = 0; mode < m_ColorTables.size(); ++mode) {
 		std::map<std::array<int, 4>, std::pair<std::string, long long>> entries;
-		for (const auto& [key, value]: m_ColorTables[mode]) {
+		for (const auto& [key, value]: CheckpointValues(m_ColorTables[mode])) {
 			entries.emplace(key, std::make_pair(bytes(value.first), value.second));
-			if (color_map == &value.first) { selectedMode = mode; selectedKey = key; }
+			if (selected == CheckpointNativeStorage::Original(&value.first)) { selectedMode = mode; selectedKey = key; }
 		}
 		writer(entries);
 	}
-	writer(selectedMode, selectedKey, selectedMode == -2 ? bytes(*color_map) : std::string{});
-	for (const auto function: {_blender_func15, _blender_func16, _blender_func24, _blender_func32, _blender_func15x, _blender_func16x, _blender_func24x}) writer(CheckpointBlenderName(function));
-	writer(_blender_col_15, _blender_col_16, _blender_col_24, _blender_col_32, _blender_alpha);
+	writer(selectedMode, selectedKey, selectedMode == -2 ? bytes(*CheckpointNativeStorage::Source(selected)) : std::string{});
+	for (const auto* function: {&_blender_func15, &_blender_func16, &_blender_func24, &_blender_func32, &_blender_func15x, &_blender_func16x, &_blender_func24x})
+		writer(CheckpointBlenderName(*CheckpointNativeStorage::Source(function)));
+	writer(*CheckpointNativeStorage::Source(&_blender_col_15), *CheckpointNativeStorage::Source(&_blender_col_16),
+	    *CheckpointNativeStorage::Source(&_blender_col_24), *CheckpointNativeStorage::Source(&_blender_col_32), *CheckpointNativeStorage::Source(&_blender_alpha));
 	writer.EndPerPeer();
 	return writer.Text();
+}
+
+std::array<std::pair<const void*, size_t>, 14> FrameMan::CheckpointRootSources() {
+	return {{{_current_palette, sizeof(_current_palette)}, {&color_map, sizeof(color_map)},
+	    {&_blender_func15, sizeof(_blender_func15)}, {&_blender_func16, sizeof(_blender_func16)}, {&_blender_func24, sizeof(_blender_func24)},
+	    {&_blender_func32, sizeof(_blender_func32)}, {&_blender_func15x, sizeof(_blender_func15x)}, {&_blender_func16x, sizeof(_blender_func16x)},
+	    {&_blender_func24x, sizeof(_blender_func24x)}, {&_blender_col_15, sizeof(_blender_col_15)}, {&_blender_col_16, sizeof(_blender_col_16)},
+	    {&_blender_col_24, sizeof(_blender_col_24)}, {&_blender_col_32, sizeof(_blender_col_32)}, {&_blender_alpha, sizeof(_blender_alpha)}}};
 }
 
 bool FrameMan::LoadPaletteCheckpoint(std::string_view text, bool validateOnly) {
@@ -2084,9 +2097,9 @@ bool FrameMan::LoadPaletteCheckpoint(std::string_view text, bool validateOnly) {
 			std::string file, palette, defaultPalette, currentPalette, rgb;
 			int black, almostBlack, alpha, selectedMode;
 			Timer prune;
-			std::array<std::unordered_map<std::array<int, 4>, std::pair<COLOR_MAP, long long>>, DrawBlendMode::BlendModeCount> tables;
+			std::array<CheckpointUnorderedMap<std::array<int, 4>, std::pair<COLOR_MAP, long long>>, DrawBlendMode::BlendModeCount> tables;
 			std::array<int, 4> selectedKey;
-			std::unique_ptr<COLOR_MAP> external;
+			std::unique_ptr<CheckpointColorMap> external;
 			std::array<BLENDER_FUNC, 7> blenders;
 			std::array<int, 5> blendValues;
 		};
@@ -2109,7 +2122,7 @@ bool FrameMan::LoadPaletteCheckpoint(std::string_view text, bool validateOnly) {
 		std::string external; reader.Value(external);
 		if (state->selectedMode < -2 || state->selectedMode >= DrawBlendMode::BlendModeCount || (state->selectedMode == -2 ? external.size() != sizeof(COLOR_MAP) : !external.empty()) ||
 		    (state->selectedMode >= 0 && !state->tables[state->selectedMode].contains(state->selectedKey))) throw std::runtime_error("invalid active color table reference");
-		if (state->selectedMode == -2 && !validateOnly) { state->external = std::make_unique<COLOR_MAP>(); std::memcpy(state->external.get(), external.data(), sizeof(COLOR_MAP)); }
+		if (state->selectedMode == -2 && !validateOnly) { state->external = std::make_unique<CheckpointColorMap>(); std::memcpy(static_cast<COLOR_MAP*>(state->external.get()), external.data(), sizeof(COLOR_MAP)); }
 		for (auto& function: state->blenders) { std::string name; reader.Value(name); function = CheckpointBlenderFunction(name); }
 		reader.Value(state->blendValues);
 		reader.OnCommit([this, state] {
@@ -2159,6 +2172,27 @@ bool FrameMan::RunPaletteCheckpointSelfTest() {
 	COLOR_MAP external{}; external.data[29][43] = 137; color_map = &external; SetTrueAlphaBlender();
 	const auto externalState = SavePaletteCheckpoint(); external.data[29][43] = 0; color_map = nullptr; set_alpha_blender();
 	check(LoadPaletteCheckpoint(externalState, false) && color_map && color_map->data[29][43] == 137 && _blender_func32 == TrueAlphaBlender && SavePaletteCheckpoint() == externalState, "external_table_and_true_alpha_owner");
+	{
+		CheckpointNativeStorage::AllocationScope allocation(true);
+		check(LoadPaletteCheckpoint(checkpoint, false), "owned_palette_fixture");
+		const std::string expected = SavePaletteCheckpoint();
+		CheckpointNativeStorage::Root<FrameMan> header(this);
+		const auto sources = CheckpointRootSources();
+		struct GlobalValue { alignas(std::max_align_t) std::array<std::byte, sizeof(PALETTE)> bytes; };
+		std::array<GlobalValue, 14> values;
+		std::array<CheckpointNativeStorage::RootRange, 15> roots;
+		roots[0] = header.Range();
+		for (size_t index = 0; index < sources.size(); ++index) roots[index + 1] = {sources[index].first, values[index].bytes.data(), sources[index].second};
+		auto prepared = CheckpointNativeStorage::PrepareInventory();
+		check(prepared->Arm(), "owned_palette_ranges_armed");
+		header.Freeze();
+		for (const auto& root: roots) if (root.source != this) std::memcpy(const_cast<void*>(root.view), root.source, root.bytes);
+		check(LoadPaletteCheckpoint(original, false), "palette_live_generation_replaced");
+		{
+			CheckpointNativeStorage::ReadScope read(prepared->Pages(), roots);
+			check(CheckpointNativeStorage::Source(this)->SavePaletteCheckpoint() == expected, "frozen_palette_tables_and_alias_exact_after_replacement");
+		}
+	}
 	check(LoadPaletteCheckpoint(original, false) && SavePaletteCheckpoint() == original, "original_palette_restored");
 	return passed;
 }
