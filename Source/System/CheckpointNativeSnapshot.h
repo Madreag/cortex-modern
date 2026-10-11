@@ -232,12 +232,13 @@ namespace RTE {
 		}
 		template<class T> T* ValueObject(const T* source) {
 			if (!source) return nullptr;
+			const void* identity = CheckpointNativeStorage::Original(source);
 			source = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
 			CheckpointNativeStorage::CaptureScope allocation;
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 			void* memory = AllocateFrozen(sizeof(T), alignof(T));
 			// Snapshot storage is cheap to abandon, so a value is claimed without looking for it first.
-			if (!memory) if (const auto known = m_Values.Find(source)) return static_cast<T*>(*known);
+			if (!memory) if (const auto known = m_Values.Find(identity)) return static_cast<T*>(*known);
 			CheckpointCloneCost cost(CheckpointCloneCost::Enabled() ? typeid(T).name() : nullptr);
 			const bool frozenStorage = memory != nullptr;
 			void (*destroy)(void*) noexcept = [](void* value) noexcept { static_cast<T*>(value)->~T(); ::operator delete(value); };
@@ -247,7 +248,7 @@ namespace RTE {
 			const auto release = [frozenStorage, memory] { if (!frozenStorage) ::operator delete(memory); };
 			std::pair<void*, bool> claim;
 			try {
-				claim = m_Values.TryEmplace(source, memory);
+				claim = m_Values.TryEmplace(identity, memory);
 			} catch (...) {
 				release();
 				throw;
@@ -264,7 +265,7 @@ namespace RTE {
 				owner.first = memory;
 				return static_cast<T*>(memory);
 			} catch (...) {
-				m_Values.Erase(source);
+				m_Values.Erase(identity);
 				release();
 				throw;
 			}
@@ -374,19 +375,25 @@ namespace RTE {
 			return nullptr;
 		}
 		template<class T> void BindValue(const T& source, T* target) {
-			m_Values.InsertOrAssign(&source, target);
+			m_Values.InsertOrAssign(CheckpointNativeStorage::Original(&source), target);
 			RememberReadValues(&source, target);
 		}
 		template<class T> T* CopyValue(const T* source) {
+			return RebuildValue(source, [this](const T& values) { return std::make_unique<T>(Freeze(values)); });
+		}
+		template<class T, class Factory> T* RebuildValue(const T* source, const Factory& factory) {
 			if (!source) return nullptr;
+			const void* identity = CheckpointNativeStorage::Original(source);
 			source = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
 			CheckpointNativeStorage::CaptureScope allocation;
-			if (const auto known = m_Values.Find(source)) return static_cast<T*>(*known);
+			if (const auto known = m_Values.Find(identity)) return static_cast<T*>(*known);
 			auto& owner = AddValueOwner([](void* value) noexcept { delete static_cast<T*>(value); });
-			auto value = std::make_unique<T>(Freeze(*source));
-			const auto [winner, claimed] = m_Values.TryEmplace(source, value.get());
+			auto value = factory(*source);
+			if (!value) throw std::logic_error("a saved value factory returned no owner");
+			const auto [winner, claimed] = m_Values.TryEmplace(identity, value.get());
 			if (!claimed) return static_cast<T*>(winner);
-			RememberReadValues(source, value.get());
+			try { RememberReadValues(source, value.get()); }
+			catch (...) { m_Values.Erase(identity); throw; }
 			owner.first = value.release();
 			return static_cast<T*>(owner.first);
 		}

@@ -10279,7 +10279,8 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			const auto* position = fields.VectorOwner(&copy->GetPos());
 			const auto* controller = fields.ControllerOwner(copy->GetController());
 			const bool same = fields.Known(copy) && position && position->uid == copy->GetUniqueID() &&
-			    std::string_view(position->property) == "Pos" && controller && *controller == copy->GetUniqueID();
+			    std::string_view(position->property) == "Pos" && controller && *controller == copy->GetUniqueID() &&
+			    saved->CopyValue(&copy->GetPos()) == &copy->GetPos() && saved->CopyValue(&actor->GetPos()) == &copy->GetPos();
 			std::cout << "[script-graph-selftest] " << (same ? "PASS" : "FAIL") << " saved_native_handles_keep_their_object_and_field_owners" << std::endl;
 			checkpointValues = same && checkpointValues;
 		}
