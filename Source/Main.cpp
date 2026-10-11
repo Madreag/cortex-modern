@@ -4336,6 +4336,66 @@ static std::string NetMatchEndReason(const Activity* activity) {
 	return "The other player left the match";
 }
 
+static const std::string& ActorHistoryPath() {
+	static const std::string path = [] { const char* value = std::getenv("CC_TEST_ACTOR_HISTORY"); return value ? value : ""; }();
+	return path;
+}
+
+struct ActorHistory {
+	std::deque<std::pair<uint64_t, std::string>> frames;
+	size_t bytes = 0;
+	bool saved = false;
+};
+
+static ActorHistory& GetActorHistory() {
+	static ActorHistory history;
+	return history;
+}
+
+// The diagnostic keeps the actor trees before a desync, including its first differing tick rather than only the later detection.
+static void RecordActorHistory(uint64_t tick) {
+	if (ActorHistoryPath().empty() || !ScenarioRunner::IsLockstepControllerSyncActive()) return;
+	auto& history = GetActorHistory();
+	if (history.saved) return;
+	const HarnessCost::SimulationSpan span;
+	if (!history.frames.empty() && tick <= history.frames.back().first) {
+		history.frames.clear();
+		history.bytes = 0;
+	}
+	g_MovableMan.CompleteQueuedMOIDDrawings();
+	std::list<SceneObject*> actors;
+	g_MovableMan.GetAllActors(false, actors);
+	std::ostringstream text;
+	text.imbue(std::locale::classic());
+	for (SceneObject* object: actors) {
+		if (auto* actor = dynamic_cast<Actor*>(object)) g_MovableMan.DumpMOSimState(tick, "actor", actor, text);
+	}
+	history.frames.emplace_back(tick, std::move(text).str());
+	history.bytes += history.frames.back().second.size();
+	while (history.frames.size() > 96 || history.bytes > 16 * 1024 * 1024) {
+		history.bytes -= history.frames.front().second.size();
+		history.frames.pop_front();
+	}
+	HarnessCost::Charge(HarnessCost::SimDump, span.Stop());
+}
+
+static void SaveActorHistory() {
+	if (ActorHistoryPath().empty()) return;
+	auto& history = GetActorHistory();
+	if (history.saved || history.frames.empty()) return;
+	std::ofstream out(ActorHistoryPath(), std::ios::binary | std::ios::trunc);
+	for (const auto& [tick, text]: history.frames) out << text;
+	out.close();
+	if (!out) {
+		System::PrintDiagnosticErrorLine("[actor-history] save failed: " + ActorHistoryPath());
+		return;
+	}
+	history.saved = true;
+	System::PrintDiagnosticLine("[actor-history] saved frames=" + std::to_string(history.frames.size()) +
+	    " first_tick=" + std::to_string(history.frames.front().first) + " last_tick=" + std::to_string(history.frames.back().first) +
+	    " bytes=" + std::to_string(history.bytes) + " path=" + ActorHistoryPath());
+}
+
 /// <summary>
 /// Game simulation loop.
 // CC_SIM_DUMP=<from>:<to> writes every MO's exact-bit state per tick beside the -out trace
@@ -6872,6 +6932,7 @@ static bool IsCompleteControllerStop(const std::string& error) {
 static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 	const std::string error = ScenarioRunner::GetControllerReplayError();
 	if (error.find("Desync") != std::string::npos) {
+		SaveActorHistory();
 		if (TerrainDumpArmed()) {
 			DumpTerrainNow("desync");
 			DumpSimStateNow("desync");
@@ -8255,6 +8316,7 @@ void RunGameLoop() {
 				g_MovableMan.StartMOIDDrawTask();
 			}
 
+			RecordActorHistory(simTick);
 			DumpSimStateIfArmed(simTick);
 			LocalPrediction::CompareFidelityAtTick(simTick);
 			NoteE2eSwitchOwnerLog(simTick);
