@@ -82,6 +82,12 @@ namespace {
 	struct SavedPathHashes {
 		std::unordered_map<size_t, std::string> paths;
 	};
+	struct SavedSamples {
+		FMOD::System* system = nullptr;
+		std::unordered_map<std::string, FMOD::Sound*> sounds;
+		std::unordered_map<std::string, AudioCheckpoint::Sample> values;
+		~SavedSamples() { if (system) system->release(); }
+	};
 	struct LoadedSampleValues : CheckpointNativeAllocated {
 		FMOD::Sound* sound = nullptr;
 		AudioCheckpoint::SampleValues values;
@@ -1051,6 +1057,7 @@ FMOD::Sound* ContentFile::GetAsSound(bool abortGameForInvalidSound, bool asyncLo
 	if (m_DataPath.empty() || !g_AudioMan.IsAudioEnabled()) {
 		return nullptr;
 	}
+	if (CheckpointNativeStorage::Reading()) return LoadSavedSound(abortGameForInvalidSound);
 	FMOD::Sound* returnSample = nullptr;
 
 	std::unordered_map<std::string, FMOD::Sound*>::iterator foundSound = s_LoadedSamples.find(m_DataPath);
@@ -1064,6 +1071,43 @@ FMOD::Sound* ContentFile::GetAsSound(bool abortGameForInvalidSound, bool asyncLo
 	}
 	NoteLoadedSample(m_DataPath.Value(), returnSample);
 	return returnSample;
+}
+
+FMOD::Sound* ContentFile::LoadSavedSound(bool abortGameForInvalidSound) {
+	static const char kind{};
+	const auto [source, bytes] = LoadedSampleRegistry();
+	const auto saved = std::const_pointer_cast<SavedSamples>(std::static_pointer_cast<const SavedSamples>(CheckpointNativeStorage::ReadIndex(source, &kind, [] {
+		auto samples = std::make_shared<SavedSamples>();
+		for (auto& value: ReadCheckpointSamples()) samples->values.emplace(value.path, std::move(value));
+		return samples;
+	})));
+	std::string path = m_DataPath.Value();
+	if (const auto found = saved->sounds.find(path); found != saved->sounds.end()) return found->second;
+	if (!System::PathExistsCaseSensitive(path)) {
+		for (const char* extension: c_SupportedAudioFormats) {
+			const std::string alternate = m_DataPathWithoutExtension + extension;
+			if (System::PathExistsCaseSensitive(alternate)) { SetDataPath(alternate); path = m_DataPath.Value(); break; }
+		}
+	}
+	if (!System::PathExistsCaseSensitive(path) || std::filesystem::file_size(path) == 0) {
+		if (abortGameForInvalidSound) throw UnsupportedCheckpointNative("saved sound file is absent or empty: " + path);
+		System::PrintDiagnosticLine("[autosave] sound file is absent or empty: " + path);
+		return nullptr;
+	}
+	const auto require = [](FMOD_RESULT result) { if (result == FMOD_ERR_MEMORY) throw std::bad_alloc(); AudioCheckpoint::Require(result); };
+	if (!saved->system) {
+		CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+		require(FMOD::System_Create(&saved->system));
+		require(saved->system->setOutput(FMOD_OUTPUTTYPE_NOSOUND_NRT));
+		require(saved->system->init(1, FMOD_INIT_NORMAL, nullptr));
+	}
+	FMOD::Sound* sound = nullptr;
+	require(saved->system->createSound(path.c_str(), FMOD_CREATESAMPLE | FMOD_3D, nullptr, &sound));
+	try {
+		if (const auto found = saved->values.find(path); found != saved->values.end()) found->second.Apply(sound);
+		saved->sounds.emplace(path, sound);
+	} catch (...) { sound->release(); throw; }
+	return sound;
 }
 
 FMOD::Sound* ContentFile::LoadAndReleaseSound(bool abortGameForInvalidSound, bool asyncLoading) {

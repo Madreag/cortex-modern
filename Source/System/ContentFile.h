@@ -356,6 +356,7 @@ namespace RTE {
 		/// @param asyncLoading Whether to enable FMOD asynchronous loading or not. Should be disabled for loading audio files with Lua AddSound.
 		/// @return Pointer to the FSOUND_SAMPLE loaded from disk.
 		FMOD::Sound* LoadAndReleaseSound(bool abortGameForInvalidSound = true, bool asyncLoading = true);
+		FMOD::Sound* LoadSavedSound(bool abortGameForInvalidSound);
 
 		/// Reloads a specific BITMAP in the cache from disk, allowing any changes to be reflected at runtime.
 		/// @param filePath The filepath to the bitmap we want to reload.
