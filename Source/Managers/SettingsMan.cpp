@@ -355,7 +355,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("CrabBombThreshold", { reader >> m_CrabBombThreshold; });
 	MatchProperty("ShowEnemyHUD", { reader >> m_ShowEnemyHUD; });
 	MatchProperty("SmartBuyMenuNavigation", { reader >> m_EnableSmartBuyMenuNavigation; });
-	MatchProperty("ScrapCompactingHeight", { reader >> g_SceneMan.m_ScrapCompactingHeight; });
+	MatchProperty("ScrapCompactingHeight", { reader >> g_SceneMan.CheckpointOptionsValues().m_ScrapCompactingHeight; });
 	MatchProperty("AutomaticGoldDeposit", { reader >> m_AutomaticGoldDeposit; });
 	MatchProperty("BrainlessHumansSpectate", { reader >> m_BrainlessHumansSpectate; });
 	MatchProperty("ScreenShakeStrength", { reader >> g_CameraMan.m_ScreenShakeStrength; });
@@ -472,8 +472,8 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("DrawAtomGroupVisualizations", { reader >> m_DrawAtomGroupVisualizations; });
 	MatchProperty("DrawHandAndFootGroupVisualizations", { reader >> m_DrawHandAndFootGroupVisualizations; });
 	MatchProperty("DrawLimbPathVisualizations", { reader >> m_DrawLimbPathVisualizations; });
-	MatchProperty("DrawRaycastVisualizations", { reader >> g_SceneMan.m_DrawRayCastVisualizations; });
-	MatchProperty("DrawPixelCheckVisualizations", { reader >> g_SceneMan.m_DrawPixelCheckVisualizations; });
+	MatchProperty("DrawRaycastVisualizations", { reader >> g_SceneMan.CheckpointOptionsValues().m_DrawRayCastVisualizations; });
+	MatchProperty("DrawPixelCheckVisualizations", { reader >> g_SceneMan.CheckpointOptionsValues().m_DrawPixelCheckVisualizations; });
 	MatchProperty("PrintDebugInfo", { reader >> m_PrintDebugInfo; });
 	MatchProperty("MeasureModuleLoadTime", { reader >> m_MeasureModuleLoadTime; });
 	MatchProperty("VisibleAssemblyGroup", { m_VisibleAssemblyGroupsList.push_back(reader.ReadPropValue()); });
@@ -545,7 +545,7 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("CrabBombThreshold", m_CrabBombThreshold);
 	writer.NewPropertyWithValue("ShowEnemyHUD", m_ShowEnemyHUD);
 	writer.NewPropertyWithValue("SmartBuyMenuNavigation", m_EnableSmartBuyMenuNavigation);
-	writer.NewPropertyWithValue("ScrapCompactingHeight", g_SceneMan.m_ScrapCompactingHeight);
+	writer.NewPropertyWithValue("ScrapCompactingHeight", g_SceneMan.CheckpointOptionsValues().m_ScrapCompactingHeight);
 	writer.NewPropertyWithValue("AutomaticGoldDeposit", m_AutomaticGoldDeposit);
 	writer.NewPropertyWithValue("BrainlessHumansSpectate", m_BrainlessHumansSpectate);
 
@@ -640,8 +640,8 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("DrawAtomGroupVisualizations", m_DrawAtomGroupVisualizations);
 	writer.NewPropertyWithValue("DrawHandAndFootGroupVisualizations", m_DrawHandAndFootGroupVisualizations);
 	writer.NewPropertyWithValue("DrawLimbPathVisualizations", m_DrawLimbPathVisualizations);
-	writer.NewPropertyWithValue("DrawRaycastVisualizations", g_SceneMan.m_DrawRayCastVisualizations);
-	writer.NewPropertyWithValue("DrawPixelCheckVisualizations", g_SceneMan.m_DrawPixelCheckVisualizations);
+	writer.NewPropertyWithValue("DrawRaycastVisualizations", g_SceneMan.CheckpointOptionsValues().m_DrawRayCastVisualizations);
+	writer.NewPropertyWithValue("DrawPixelCheckVisualizations", g_SceneMan.CheckpointOptionsValues().m_DrawPixelCheckVisualizations);
 	writer.NewPropertyWithValue("PrintDebugInfo", m_PrintDebugInfo);
 	writer.NewPropertyWithValue("MeasureModuleLoadTime", m_MeasureModuleLoadTime);
 
