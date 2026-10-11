@@ -38,7 +38,11 @@ def host_setup(players=2, cpu=False):
     ]
     if cpu:
         lines += ["activate TabHostPageSeats", "combo_select ComboHostSeatType2 CPU",
-                  "combo_select ComboHostSeatType3 CPU", "activate TabHostPageConnection"]
+                  "combo_select ComboHostSeatType3 CPU", "video_mark cpu-seats-host",
+                  "assert_label ComboHostSeatType0 Open", "assert_label ComboHostSeatType1 Open",
+                  "assert_label ComboHostSeatType2 CPU", "assert_label ComboHostSeatType3 CPU",
+                  "assert_text_fits LabelHostSeatState2", "assert_text_fits LabelHostSeatState3",
+                  "wait_ms 1400", "activate TabHostPageConnection"]
     lines += ["assert_label ComboHostNetVisibility Public (default)",
               "assert_label ComboHostNetRelay Game service (default)"]
     if cpu:
@@ -411,7 +415,10 @@ def ai_fight():
                               "slider_set SliderHostRulesGold 31000", "setcheck CheckHostRulesClearPath 0"]
     host_menu += ["wait_remote_ready 90", "activate ButtonMultiplayerStart", "wait_file {PROBE_DIR}/done.json 1600", "wait_ms 1400", "exit"]
     join_menu += ["activate ButtonMultiplayerReady", "wait_file {PROBE_DIR}/done.json 1600", "wait_ms 1400", "exit"]
-    probes, checks = {}, []
+    probes, checks = {}, [dict(id="cpu-seats-host", peer="host", mark="cpu-seats-host", screen="MultiplayerScreen",
+                              what="Two held picks replace the open seats with CPU teams and remain selected after refresh.",
+                              events=["combo_select ComboHostSeatType2 CPU.*PASS", "combo_select ComboHostSeatType3 CPU.*PASS",
+                                      "assert_label ComboHostSeatType2 CPU.*PASS", "assert_label ComboHostSeatType3 CPU.*PASS"])]
     for peer, fraction in (("host", 0.3), ("joiner", 0.7)):
         steps = [wait(editing=True), dict(op="editor_pick", input_player=0, brain=False, **{"class": "BunkerAssembly"}, preset="Brain Chamber Left 2x2 - 1"),
                  dict(op="editor_move", input_player=0, x_fraction=fraction, remember="bunker")] + click()

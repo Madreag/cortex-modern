@@ -3394,11 +3394,13 @@ void MainMenuGUI::ChangeHostSeatType(int row, int typeIndex) {
 		}
 		return 0;
 	};
-	// A CPU seat wants a team no human seat holds and no other CPU seat claims.
-	auto freeCpuTeam = [this]() -> int {
+	// The seat being replaced gives up its team; every other seat keeps its claim.
+	auto freeCpuTeam = [this](int replacedRow) -> int {
 		for (int team = 0; team < 4; ++team) {
 			bool humanTeam = false, cpuTeam = false;
-			for (const NetMatchPlayerSlot& s : m_HostOptionsDraft.players) {
+			for (size_t index = 0; index < m_HostOptionsDraft.players.size(); ++index) {
+				if (static_cast<int>(index) == replacedRow) continue;
+				const NetMatchPlayerSlot& s = m_HostOptionsDraft.players[index];
 				if (s.team != team) continue;
 				(s.cpu ? cpuTeam : humanTeam) = true;
 			}
@@ -3426,7 +3428,7 @@ void MainMenuGUI::ChangeHostSeatType(int row, int typeIndex) {
 			seat.displayName = NetMatchConfigUtil::UnseatedSlotName(peerId, candidate.persistentWorld);
 			candidate.players.push_back(seat);
 		} else {
-			const int team = freeCpuTeam();
+			const int team = freeCpuTeam(-1);
 			if (team < 0) {
 				return refuse("No free team for a CPU seat");
 			}
@@ -3460,7 +3462,7 @@ void MainMenuGUI::ChangeHostSeatType(int row, int typeIndex) {
 		if (typeIndex == 1) {
 			candidate.players.erase(candidate.players.begin() + row);
 		} else if (typeIndex == 2) {
-			const int team = freeCpuTeam();
+			const int team = freeCpuTeam(row);
 			if (team < 0) {
 				return refuse("No free team for a CPU seat - every team is taken");
 			}
