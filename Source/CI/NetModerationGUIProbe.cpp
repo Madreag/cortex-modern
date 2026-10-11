@@ -127,6 +127,7 @@ namespace {
 		int panPlayer = 0, panInput = 0, panDirection = 1;
 		float panY = 600.0F;
 		uint64_t panTick = 0, panSteerTick = 0, panMotionEvents = 0;
+		float panSpeed = 2.0F;
 		SDL_Scancode panKey = SDL_SCANCODE_UNKNOWN;
 	};
 	Probe probe;
@@ -1040,6 +1041,7 @@ namespace {
 			if (!probe.panScene) {
 				probe.panPlayer = LocalPlayer(step); probe.panInput = step.value("input_player", 0);
 				probe.panY = step.value("y", 600.0F); probe.panDirection = 1;
+				probe.panSpeed = step.value("speed", 2.0F);
 				probe.panMotionEvents = 0;
 				probe.panKey = static_cast<SDL_Scancode>(g_UInputMan.GetControlScheme(probe.panInput)->GetKeyMapping(InputElements::INPUT_NEXT));
 				Require(probe.panKey > SDL_SCANCODE_UNKNOWN && probe.panKey < SDL_SCANCODE_COUNT, "Next Actor has no keyboard binding");
@@ -1662,7 +1664,7 @@ namespace {
 					SDL_Event event{}; event.type = SDL_EVENT_MOUSE_MOTION;
 					event.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.motion.which = 1;
 					event.motion.x = g_WindowMan.GetResX() / 2; event.motion.y = g_WindowMan.GetResY() / 2;
-					event.motion.xrel = probe.panDirection * 2.0F / g_UInputMan.GetMouseSensitivity();
+					event.motion.xrel = probe.panDirection * probe.panSpeed / g_UInputMan.GetMouseSensitivity();
 					// Rest while the last vertical motion reaches the committed input, then correct the height again.
 					const uint64_t tick = g_TimerMan.GetSimUpdateCount();
 					const bool steer = !probe.panSelecting || tick >= probe.panSteerTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4;
