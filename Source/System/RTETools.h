@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeStorage.h"
+
 #include "DeterministicMath.h"
 
 // Header file for global utility methods.
@@ -13,6 +15,7 @@
 #include <string_view>
 #include <type_traits>
 #include <cmath>
+#include <utility>
 
 namespace RTE {
 
@@ -25,38 +28,56 @@ namespace RTE {
 
 	class RandomGenerator {
 		friend struct ContractAudit;
-
-		std::mt19937 m_RNG; //!< The random number generator used for all random functions.
-		uint64_t m_Seed = 0; //!< The seed the generator was last seeded with.
-		uint64_t m_DrawCount = 0; //!< Raw 32-bit draws consumed since construction; observational only.
-		bool m_TraceDraws = false; //!< Routes each draw through g_RNGDrawHook when set.
-		bool m_SeedPending = false; //!< Whether m_Seed still has to be applied to m_RNG; until then m_RNG holds nothing a draw reads.
-
+		struct State : CheckpointNativeAllocated {
+			std::mt19937 m_RNG; //!< The random number generator used for all random functions.
+			uint64_t m_Seed = 0; //!< The seed the generator was last seeded with.
+			uint64_t m_DrawCount = 0; //!< Raw 32-bit draws consumed since construction; observational only.
+			bool m_TraceDraws = false; //!< Routes each draw through g_RNGDrawHook when set.
+			bool m_SeedPending = false; //!< Whether m_Seed still has to be applied to m_RNG; until then m_RNG holds nothing a draw reads.
+		};
+		State m_OrdinaryValues;
+		std::unique_ptr<State> m_OwnedValues;
+		static thread_local State* s_CaptureSim;
+		static thread_local State* s_CaptureRender;
+		State* PrivateValues() const;
+		State& CheckpointValues() {
+			if (auto* local = PrivateValues()) return *local;
+			if (CheckpointNativeStorage::Reading() && (m_OwnedValues || CheckpointNativeStorage::IsView(this)))
+				throw std::logic_error("a frozen generator cannot change the live random stream");
+			return m_OwnedValues ? *m_OwnedValues : m_OrdinaryValues;
+		}
+		const State& CheckpointValues() const {
+			if (auto* local = PrivateValues()) return *local;
+			return m_OwnedValues ? *CheckpointNativeStorage::Source(m_OwnedValues.get()) : m_OrdinaryValues;
+		}
 		// The engine as a draw finds it: a pending seed is applied first.
 		std::mt19937& Engine() {
-			if (m_SeedPending) {
-				m_RNG.seed(m_Seed);
-				m_SeedPending = false;
+			auto& values = CheckpointValues();
+			if (values.m_SeedPending) {
+				values.m_RNG.seed(values.m_Seed);
+				values.m_SeedPending = false;
 			}
-			return m_RNG;
+			return values.m_RNG;
 		}
 
 		// A copy of the engine as the next draw would find it, without applying a pending seed.
 		std::mt19937 EngineCopy() const {
-			if (!m_SeedPending) {
-				return m_RNG;
+			const auto& values = CheckpointValues();
+			if (!values.m_SeedPending) {
+				return values.m_RNG;
 			}
 			std::mt19937 engine;
-			engine.seed(m_Seed);
+			engine.seed(values.m_Seed);
 			return engine;
 		}
 
 		// One raw 32-bit draw. The mt19937 stream is portable; the std:: distributions are not,
 		// so the mappings below are explicit.
 		uint32_t DrawBits() {
-			++m_DrawCount;
-			if (m_TraceDraws && g_RNGDrawHook) {
-				g_RNGDrawHook(m_DrawCount);
+			auto& values = CheckpointValues();
+			++values.m_DrawCount;
+			if (values.m_TraceDraws && g_RNGDrawHook) {
+				g_RNGDrawHook(values.m_DrawCount);
 			}
 			return static_cast<uint32_t>(Engine()());
 		}
@@ -74,24 +95,35 @@ namespace RTE {
 		}
 
 	public:
+		class CheckpointScope;
+		RandomGenerator() = default;
+		RandomGenerator(const RandomGenerator& source) : m_OrdinaryValues(source.CheckpointValues()) {}
+		RandomGenerator& operator=(const RandomGenerator& source) {
+			if (this != &source) CheckpointValues() = source.CheckpointValues();
+			return *this;
+		}
+		/// Owns the global streams during multiplayer setup, preserving their bound addresses.
+		void PrepareCheckpointValues();
+		const void* CheckpointOwnedValues() const { return m_OwnedValues.get(); }
+		static std::string CheckpointStorageSelfTestMismatch();
 		/// Seed the random number generator.
 		void Seed(uint64_t seed) {
-			m_Seed = seed;
-			m_RNG.seed(seed);
-			m_SeedPending = false;
+			CheckpointValues().m_Seed = seed;
+			CheckpointValues().m_RNG.seed(seed);
+			CheckpointValues().m_SeedPending = false;
 		};
 
 		/// Seeds the generator at its first draw: every draw is the one Seed would have given, and a user that never
 		/// draws never pays for the 624-word seeding.
 		/// @param seed The seed.
 		void SeedOnFirstDraw(uint64_t seed) {
-			m_Seed = seed;
-			m_SeedPending = true;
+			CheckpointValues().m_Seed = seed;
+			CheckpointValues().m_SeedPending = true;
 		}
 
 		/// Gets the seed this generator was last seeded with.
 		/// @return The last seed.
-		uint64_t GetSeed() const { return m_Seed; }
+		uint64_t GetSeed() const { return CheckpointValues().m_Seed; }
 
 		/// Gets a copy of the engine state, for rollback snapshots.
 		/// @return The engine by value.
@@ -100,8 +132,8 @@ namespace RTE {
 		/// Restores a previously captured engine state.
 		/// @param state The engine state to restore.
 		void SetEngineState(const std::mt19937& state) {
-			m_RNG = state;
-			m_SeedPending = false;
+			CheckpointValues().m_RNG = state;
+			CheckpointValues().m_SeedPending = false;
 		}
 
 		/// Captures the portable engine state, seed and draw count.
@@ -112,12 +144,12 @@ namespace RTE {
 
 		/// Gets the number of raw 32-bit draws consumed since construction.
 		/// @return The draw count.
-		uint64_t GetDrawCount() const { return m_DrawCount; }
-		void SetDrawCount(uint64_t count) { m_DrawCount = count; }
+		uint64_t GetDrawCount() const { return CheckpointValues().m_DrawCount; }
+		void SetDrawCount(uint64_t count) { CheckpointValues().m_DrawCount = count; }
 
 		/// Sets whether each draw fires g_RNGDrawHook.
 		/// @param enabled Whether to trace draws.
-		void SetDrawTraceEnabled(bool enabled) { m_TraceDraws = enabled; }
+		void SetDrawTraceEnabled(bool enabled) { CheckpointValues().m_TraceDraws = enabled; }
 
 		/// Serialize the generator's full internal state to a string for hashing — byte-identical
 		/// across same-seed runs at the same tick once the determinism work has settled.
@@ -197,6 +229,19 @@ namespace RTE {
 			}
 			return static_cast<intType>(min + static_cast<intType>(draw));
 		}
+	};
+
+	/// Snapshot construction draws from thread-local streams and never rolls back a live generator.
+	class RandomGenerator::CheckpointScope {
+	public:
+		CheckpointScope();
+		~CheckpointScope();
+		CheckpointScope(const CheckpointScope&) = delete;
+		CheckpointScope& operator=(const CheckpointScope&) = delete;
+	private:
+		State m_Sim, m_Render;
+		State* m_PreviousSim;
+		State* m_PreviousRender;
 	};
 
 	// Sim/render RNG split: sim code draws g_SimRNG, cosmetic draws use g_RenderRNG,

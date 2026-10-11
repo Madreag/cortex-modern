@@ -9748,6 +9748,13 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	{
+		const std::string mismatch = RandomGenerator::CheckpointStorageSelfTestMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " frozen_random_streams_and_nested_worker_draws_preserve_live_state";
+		if (!mismatch.empty()) std::cout << " reason=" << mismatch;
+		std::cout << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
+	}
+	{
 		const std::string mismatch = MovableMan::CheckpointOptionsStorageSelfTestMismatch();
 		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " saved_world_options_survive_the_next_tick_and_source_death";
 		if (!mismatch.empty()) std::cout << " reason=" << mismatch;
@@ -15707,6 +15714,7 @@ void LuaMan::SeedAllLuaRNGs(uint64_t baseSeed) {
 
 void LuaMan::PrepareCheckpointValues() {
 	if (CheckpointNativeStorage::Enabled()) g_TimerMan.PrepareCheckpointValues();
+	if (CheckpointNativeStorage::Enabled()) { g_SimRNG.PrepareCheckpointValues(); g_RenderRNG.PrepareCheckpointValues(); }
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointActorValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLooseValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLookupValues();
