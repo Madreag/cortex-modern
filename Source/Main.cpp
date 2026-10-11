@@ -64,6 +64,7 @@
 #include "AHuman.h"
 #include "Attachable.h"
 #include "GameActivity.h"
+#include "GAScripted.h"
 #include "NetActivitySetup.h"
 #include "MovableObject.h"
 #include "MOPixel.h"
@@ -77,6 +78,9 @@
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
+extern "C" {
+#include "lua.h"
+}
 #include "MusicMan.h"
 #include "Atom.h"
 #include "AudioMan.h"
@@ -4381,6 +4385,73 @@ static ActorHistory& GetActorHistory() {
 	return history;
 }
 
+static void RecordLandingZones(uint64_t tick, std::ostream& out) {
+	static const bool enabled = std::getenv("CC_TEST_LANDING_ZONE_HISTORY") != nullptr;
+	if (!enabled) return;
+	const auto* activity = dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity());
+	if (!activity) return;
+	auto& master = g_LuaMan.GetMasterScriptState();
+	std::lock_guard lock(master.GetMutex());
+	lua_State* state = master.GetLuaState();
+	const int top = lua_gettop(state);
+	lua_getglobal(state, activity->GetLuaClassName().c_str());
+	if (!lua_isuserdata(state, -1) && !lua_istable(state, -1)) {
+		lua_settop(state, top);
+		return;
+	}
+	lua_getfield(state, -1, "LZmap");
+	std::vector<std::string> fields;
+	const auto readTable = [&](auto&& self, int table, const std::string& path, int depth) -> void {
+		lua_pushnil(state);
+		while (lua_next(state, table) != 0) {
+			std::ostringstream key;
+			if (lua_type(state, -2) == LUA_TNUMBER) key << lua_tonumber(state, -2);
+			else if (lua_type(state, -2) == LUA_TSTRING) key << lua_tostring(state, -2);
+			else key << lua_typename(state, lua_type(state, -2));
+			const std::string name = path + "/" + key.str();
+			if (lua_istable(state, -1) && depth < 4) {
+				self(self, lua_gettop(state), name, depth + 1);
+			} else {
+				std::ostringstream value;
+				if (lua_type(state, -1) == LUA_TNUMBER) value << std::hexfloat << lua_tonumber(state, -1);
+				else if (lua_type(state, -1) == LUA_TBOOLEAN) value << (lua_toboolean(state, -1) ? "true" : "false");
+				else if (lua_type(state, -1) == LUA_TSTRING) value << std::quoted(lua_tostring(state, -1));
+				else value << lua_typename(state, lua_type(state, -1));
+				fields.push_back(name + "=" + value.str());
+			}
+			lua_pop(state, 1);
+		}
+	};
+	if (lua_istable(state, -1)) {
+		readTable(readTable, lua_gettop(state), "LZmap", 0);
+		lua_getfield(state, -1, "LZs");
+		if (lua_istable(state, -1)) {
+			const int zones = lua_gettop(state);
+			lua_pushnil(state);
+			while (lua_next(state, zones) != 0) {
+				if (lua_istable(state, -1)) {
+					lua_getfield(state, -1, "X"); const int x = static_cast<int>(lua_tonumber(state, -1)); lua_pop(state, 1);
+					lua_getfield(state, -1, "Y"); const int y = static_cast<int>(lua_tonumber(state, -1)); lua_pop(state, 1);
+					for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+						fields.push_back("fog/" + std::to_string(team) + "/" + std::to_string(x) + "/" + std::to_string(y) + "=" +
+						    (g_SceneMan.IsUnseen(x, y, team) ? "unseen" : "seen"));
+					}
+				}
+				lua_pop(state, 1);
+			}
+		}
+	}
+	lua_settop(state, top);
+	std::sort(fields.begin(), fields.end());
+	for (const std::string& field: fields) out << tick << " landing_zone " << field << "\n";
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		const Actor* brain = activity->GetPlayerBrain(player);
+		const bool alive = brain && g_MovableMan.IsActor(brain);
+		out << tick << " brain_slot player=" << player << " active=" << activity->PlayerActive(player) << " team=" << activity->GetTeamOfPlayer(player)
+		    << " brain=" << (alive ? brain->GetUniqueID() : 0) << " actor=" << alive << "\n";
+	}
+}
+
 // The diagnostic keeps the actor trees before a desync, including its first differing tick rather than only the later detection.
 static void RecordActorHistory(uint64_t tick) {
 	if (ActorHistoryPath().empty() || !ScenarioRunner::IsLockstepControllerSyncActive()) return;
@@ -4399,6 +4470,7 @@ static void RecordActorHistory(uint64_t tick) {
 	for (SceneObject* object: actors) {
 		if (auto* actor = dynamic_cast<Actor*>(object)) g_MovableMan.DumpMOSimState(tick, "actor", actor, text);
 	}
+	RecordLandingZones(tick, text);
 	history.frames.emplace_back(tick, std::move(text).str());
 	history.bytes += history.frames.back().second.size();
 	while (history.frames.size() > 96 || history.bytes > 16 * 1024 * 1024) {
