@@ -292,7 +292,8 @@ def buy(peer, fire=True):
               dict(op="assert_scene", input_player=0, funds_delta_from="order"),
               dict(op="wait_scene", input_player=0, delivered="Coalition.rte/Soldier Light")]
     steps += capture(f"arrival-{peer}")
-    steps += [dict(op="assert_scene", input_player=0, delivered="Coalition.rte/Soldier Light", equals=dict(alive=True))]
+    steps += [dict(op="assert_scene", input_player=0, delivered="Coalition.rte/Soldier Light", equals=dict(alive=True)),
+              dict(op="assert_buy", input_player=0, equals=dict(visible=False, enabled=False))]
     steps += [dict(op="actor_next_until", input_player=0, preset="Coalition.rte/Soldier Light")]
     steps += [dict(op="wait_scene", input_player=0, equals=dict(preset="Coalition.rte/Soldier Light", weapon="Coalition.rte/Assault Rifle"))]
     if fire:

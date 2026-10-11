@@ -1166,7 +1166,7 @@ void PieMenu::Update() {
 		}
 
 		// A brain case has just one action; a click in its pie cannot choose anything else.
-		if (ScenarioRunner::IsLockstepControllerSyncActive() && m_EnabledState != EnabledState::Disabled && !m_HoveredPieSlice &&
+		if (ScenarioRunner::IsLockstepControllerSyncActive() && IsEnabled() && !m_HoveredPieSlice &&
 		    m_CurrentPieSlices.size() == 1 && m_CurrentPieSlices.front()->GetType() == PieSliceType::BuyMenu) {
 			SetHoveredPieSlice(m_CurrentPieSlices.front(), true);
 		}

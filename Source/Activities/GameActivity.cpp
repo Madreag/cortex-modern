@@ -4594,6 +4594,16 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		observePie("release");
 		check("plain_pie_press_release_selects_buy", pie->GetPieCommand() == PieSliceType::BuyMenu);
 		game->Update(); check("actor_buy_opens_for_own_team", game->m_pBuyGUI[0]->IsEnabled() && game->m_PlayerController[0].GetTeam() == TeamFour && game->GetTeamFunds(TeamFour) == 2345);
+		game->m_pBuyGUI[0]->SetEnabled(false); controller->SetState(RELEASE_SECONDARY, false);
+		// Returning from a landing order plays this closing animation while its click is still crossing.
+		pie->CloseForCanonicalStart(); pie->DoDisableAnimation();
+		controller->SetState(PRESS_PRIMARY, true); pie->Update();
+		check("landing_click_does_not_select_a_closing_pie", pie->GetPieCommand() == PieSliceType::NoType);
+		pie->Draw(g_FrameMan.GetBackBuffer32(), Vector()); present(); game->Update();
+		controller->SetState(PRESS_PRIMARY, false); controller->SetState(RELEASE_PRIMARY, true); pie->Update();
+		pie->Draw(g_FrameMan.GetBackBuffer32(), Vector()); present(); game->Update();
+		check("landing_release_keeps_buy_closed", !game->m_pBuyGUI[0]->IsEnabled());
+		controller->SetState(RELEASE_PRIMARY, false);
 		game->m_BuyMenuEnabled = false; controller->SetState(RELEASE_SECONDARY, false); controller->SetState(PIE_MENU_ACTIVE, true); pie->Update(); pie->Update();
 		const PieSlice* buy = pie->GetFirstPieSliceByType(PieSliceType::BuyMenu);
 		check("locked_buy_has_a_visible_reason", buy && !buy->IsEnabled() && ObservedPieDescription(*pie) == "Buying disabled by this activity");
