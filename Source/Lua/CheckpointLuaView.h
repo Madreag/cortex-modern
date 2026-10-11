@@ -290,17 +290,7 @@ namespace RTE::CheckpointLua {
 			return m_Tables.emplace(original, std::move(saved)).first->second;
 		}
 		void* LightUserdata(const TValue& value) const {
-#if LJ_64
-			const auto state = m_Heap.Read(m_Heap.State());
-			const auto globals = m_Heap.Read(mref(state.glref, global_State));
-			const uint64_t segment = lightudseg(value.u64);
-			if (segment == (1 << LJ_LIGHTUD_BITS_SEG) - 1) return nullptr;
-			if (segment > globals.gc.lightudnum) throw std::runtime_error("invalid frozen lightuserdata segment");
-			const uint32_t upper = m_Heap.Read(mref(globals.gc.lightudseg, uint32_t) + segment);
-			return reinterpret_cast<void*>((static_cast<uint64_t>(upper) << 32) | lightudlo(value.u64));
-#else
-			return gcrefp(value.gcr, void);
-#endif
+			return m_Heap.LightUserdata(value);
 		}
 
 		static View& Self(lua_State* state) { return *static_cast<View*>(lua_touserdata(state, lua_upvalueindex(1))); }

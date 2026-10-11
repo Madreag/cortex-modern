@@ -191,6 +191,10 @@ namespace {
 	uint64_t ScriptGraphBirthHorizon(lua_State* state, uint64_t sharedSerial) {
 		return std::max(sharedSerial, ScriptBirthCounter(state, &s_PeerScriptBirthKey));
 	}
+	uint64_t ScriptGraphBirthHorizon(const CheckpointLua::Snapshot& heap) {
+		const TValue peer = heap.RegistryLightUserdataValue(&s_PeerScriptBirthKey);
+		return std::max(heap.StateSerial(), tvisnumber(&peer) ? static_cast<uint64_t>(numberVnum(&peer)) : uint64_t{0});
+	}
 
 	class ScriptBirthDomainScope {
 	public:
@@ -9759,6 +9763,29 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			if (luaL_loadstring(worker.get(), script) || lua_pcall(worker.get(), 0, 0, 0)) exact = false;
 		});
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " saver_descriptor_tables_keep_frozen_functions_without_live_allocations" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
+		auto owner = CheckpointLua::HeapOwner::Create();
+		lua_State* state = owner->State();
+		CheckpointLua::ProtectedCall(state, [&] {
+			SetScriptBirthCounter(state, &s_PeerScriptBirthKey, c_PeerScriptBirthBand + 313);
+			lua_pushlightuserdata(state, nullptr); lua_pushinteger(state, 17); lua_rawset(state, LUA_REGISTRYINDEX);
+		});
+		const uint64_t horizon = ScriptGraphBirthHorizon(state, luaJIT_state_serial(state));
+		auto prepared = owner->PrepareFreeze();
+		if (!prepared->Arm(*owner)) throw std::runtime_error("could not freeze the birth horizon probe");
+		prepared->Drain();
+		const auto heap = prepared->Image();
+		CheckpointLua::ProtectedCall(state, [&] {
+			SetScriptBirthCounter(state, &s_PeerScriptBirthKey, c_PeerScriptBirthBand + 919);
+			lua_pushlightuserdata(state, nullptr); lua_pushinteger(state, 93); lua_rawset(state, LUA_REGISTRYINDEX);
+		});
+		owner.reset();
+		const TValue nullKey = heap.RegistryLightUserdataValue(nullptr);
+		const TValue absent = heap.RegistryLightUserdataValue(&owner);
+		const bool exact = ScriptGraphBirthHorizon(heap) == horizon && tvisnumber(&nullKey) && numberVnum(&nullKey) == 17 && tvisnil(&absent);
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " frozen_birth_horizon_and_null_registry_key_survive_live_changes" << std::endl;
 		checkpointValues = exact && checkpointValues;
 	}
 	{

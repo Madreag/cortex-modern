@@ -205,6 +205,32 @@ namespace RTE::CheckpointLua {
 			if (!tvistab(&globals.registrytv)) throw std::runtime_error("a frozen Lua registry is not a table");
 			return TableValue(tabV(&globals.registrytv), reference);
 		}
+		void* LightUserdata(const TValue& value) const {
+			if (!tvislightud(&value)) throw std::runtime_error("a frozen lightuserdata value has the wrong type");
+#if LJ_64
+			const auto state = Read(State());
+			const auto globals = Read(mref(state.glref, global_State));
+			const uint64_t segment = lightudseg(value.u64);
+			if (segment == (1 << LJ_LIGHTUD_BITS_SEG) - 1) return nullptr;
+			if (segment > globals.gc.lightudnum) throw std::runtime_error("invalid frozen lightuserdata segment");
+			const uint32_t upper = Read(mref(globals.gc.lightudseg, uint32_t) + segment);
+			return reinterpret_cast<void*>((static_cast<uint64_t>(upper) << 32) | lightudlo(value.u64));
+#else
+			return gcrefp(value.gcr, void);
+#endif
+		}
+		TValue RegistryLightUserdataValue(const void* key) const {
+			const auto state = Read(State());
+			const auto globals = Read(mref(state.glref, global_State));
+			if (!tvistab(&globals.registrytv)) throw std::runtime_error("a frozen Lua registry is not a table");
+			const auto table = Read(tabV(&globals.registrytv));
+			const Node* nodes = mref(table.node, Node);
+			for (MSize index = 0; index <= table.hmask; ++index) {
+				const auto node = Read(nodes + index);
+				if (!tvisnil(&node.val) && tvislightud(&node.key) && LightUserdata(node.key) == key) return node.val;
+			}
+			TValue nil; setnilV(&nil); return nil;
+		}
 		TValue GlobalValue(std::string_view name) const { return TableValue(tabref(Read(State()).env), name); }
 		TValue FunctionUpvalue(const GCfunc* source, size_t index) const {
 			if (index >= Read(&source->c.nupvalues)) throw std::out_of_range("frozen Lua upvalue index");
