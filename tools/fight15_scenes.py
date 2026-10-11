@@ -433,7 +433,12 @@ def ai_fight():
                                       "assert_label ComboHostSeatType3 CPU.*PASS"])]
     for peer, fraction in (("host", 0.3), ("joiner", 0.7)):
         steps = [wait(editing=True), dict(op="editor_pick", input_player=0, brain=False, **{"class": "BunkerAssembly"}, preset="Brain Chamber Left 2x2 - 1"),
-                 dict(op="editor_move", input_player=0, x_fraction=fraction, remember="bunker")] + click()
+                 dict(op="editor_move", input_player=0, x_fraction=fraction, y=1104, remember="bunker"),
+                 wait(picker_open=False, player=0 if peer == "host" else 1)]
+        steps += capture(f"bunker-preview-{peer}")
+        steps += [dict(op="assert_editor", input_player=0, equals=dict(screen_text="Click to ADD a new object - Drag for precision"))]
+        steps += click() + [wait(sim_advanced=90, elapsed_ms=1600)] + capture(f"bunker-installed-{peer}")
+        steps += [dict(op="assert_editor", input_player=0, equals=dict(placement_refused=False))]
         steps += place(peer, x=fraction, relative_to="bunker")
         for minute in range(1, 21):
             steps += [dict(op="measure_minute", within_ms=70000)]
@@ -446,6 +451,10 @@ def ai_fight():
         steps += capture(f"fight-ended-{peer}", "MultiplayerScreen") + [menu("assert_label LabelLastMatchSummary host"), dict(op="finish")]
         probes[peer] = game_probe(steps, timeout=1600000)
         checks += scene_checks(peer, steps)
+        checks.append(dict(id=f"shared-bunkers-{peer}", peer=peer, mark=f"playing-{peer}", screen="game",
+                           what="Both ordinary editor placements reached the shared scene before the brains started playing.",
+                           log_regex=[rf"\[net-match\] editor purchase applied: seat={seat} preset=Base.rte/Brain Chamber Left 2x2 - 1 funds="
+                                      for seat in (0, 1)]))
         checks.append(dict(id=f"twenty-minutes-{peer}", peer=peer, mark=f"fight-ended-{peer}", screen="MultiplayerScreen",
                            what="Twenty full running minutes at >=58 ticks/s, living local player, AI weapon fire and named end reason.",
                             continuous_minutes=dict(count=20, minimum_tps=58.0),
