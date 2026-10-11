@@ -530,7 +530,7 @@ void MovableMan::RecordA7UnitOwnership(uint64_t round, uint64_t frame) const {
 		}
 		NetA7Journal::Emit("local_control", std::move(view));
 	}
-	for (Actor* actor: m_Actors) {
+	for (Actor* actor: CheckpointActorValues().m_Actors) {
 		if (!actor) continue;
 		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
 		const bool alive = actor->GetHealth() > 0 && actor->GetStatus() != Actor::DYING && !actor->IsDead() && !actor->IsSetToDelete();
@@ -543,11 +543,11 @@ void MovableMan::RecordA7UnitOwnership(uint64_t round, uint64_t frame) const {
 }
 
 std::vector<MovableMan::LockstepActorOwner> MovableMan::BuildLockstepOwnershipCensus() const {
-	// Only the settled list: an actor still in m_AddedActors has not been agreed on by every peer yet,
+	// Only the settled list: an actor still in CheckpointActorValues().m_AddedActors has not been agreed on by every peer yet,
 	// and a ledger entry naming one would reseat something a returning peer never held.
 	std::vector<LockstepActorOwner> census;
-	census.reserve(m_Actors.size());
-	for (const Actor* actor: m_Actors) {
+	census.reserve(CheckpointActorValues().m_Actors.size());
+	for (const Actor* actor: CheckpointActorValues().m_Actors) {
 		if (!actor) {
 			continue;
 		}
@@ -1543,8 +1543,8 @@ bool MovableMan::RunLockstepPausedTick() {
 			return false;
 		}
 	}
-	ApplyLockstepSeatReclaimsImpl(readyFrame, m_Actors);
-	ApplyLockstepLeaveHandoffsImpl(readyFrame, m_Actors, true);
+	ApplyLockstepSeatReclaimsImpl(readyFrame, CheckpointActorValues().m_Actors);
+	ApplyLockstepLeaveHandoffsImpl(readyFrame, CheckpointActorValues().m_Actors, true);
 	// Only the game commands apply on a paused tick; the sim itself holds still.
 	g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 	CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
@@ -1566,12 +1566,12 @@ void MovableMan::FeedTickEndChecksum() {
 	// describe ONE instant: a held tick never drains its added deques, and a running tick can add
 	// to them after AbsorbAddedMOs in the same update.
 	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex);
-	FeedSimChecksum(m_Actors, m_AddedActors, m_Items, m_AddedItems, m_Particles, m_AddedParticles, m_ActorRoster);
+	FeedSimChecksum(CheckpointActorValues().m_Actors, CheckpointActorValues().m_AddedActors, m_Items, m_AddedItems, m_Particles, m_AddedParticles, m_ActorRoster);
 	// Keep the census the hash covered, so a capture can be held to describing the same objects.
 	m_LastChecksumCensus.clear();
-	m_LastChecksumCensus.reserve(m_Actors.size() + m_AddedActors.size() + m_Items.size() +
+	m_LastChecksumCensus.reserve(CheckpointActorValues().m_Actors.size() + CheckpointActorValues().m_AddedActors.size() + m_Items.size() +
 	                             m_AddedItems.size() + m_Particles.size() + m_AddedParticles.size());
-	for (const auto* deque: {&m_Actors, &m_AddedActors}) {
+	for (const auto* deque: {&CheckpointActorValues().m_Actors, &CheckpointActorValues().m_AddedActors}) {
 		for (const Actor* a: *deque) m_LastChecksumCensus.push_back(a->GetUniqueID());
 	}
 	for (const auto* deque: {&m_Items, &m_AddedItems, &m_Particles, &m_AddedParticles}) {
@@ -1913,8 +1913,8 @@ void MovableMan::CapturePhysicsHistory(uint64_t tick, uint64_t phase) const {
 	};
 	size_t neededRows = 0;
 	const auto countCohort = [&](const auto& objects) { for (const MovableObject* mo: objects) neededRows += countObject(countObject, mo); };
-	countCohort(m_Actors); countCohort(m_Items); countCohort(m_Particles);
-	countCohort(m_AddedActors); countCohort(m_AddedItems); countCohort(m_AddedParticles);
+	countCohort(CheckpointActorValues().m_Actors); countCohort(m_Items); countCohort(m_Particles);
+	countCohort(CheckpointActorValues().m_AddedActors); countCohort(m_AddedItems); countCohort(m_AddedParticles);
 	if (neededRows > maxRows) {
 		std::cout << "[physics-history-error] frame_exceeds_byte_bound tick=" << tick << " rows=" << neededRows << std::endl;
 		return;
@@ -1979,8 +1979,8 @@ void MovableMan::CapturePhysicsHistory(uint64_t tick, uint64_t phase) const {
 		}
 	};
 	const auto cohort = [&](const auto& objects, uint64_t kind) { for (MovableObject* mo: objects) record(record, mo, kind); };
-	cohort(m_Actors, 0); cohort(m_Items, 1); cohort(m_Particles, 2);
-	cohort(m_AddedActors, 3); cohort(m_AddedItems, 4); cohort(m_AddedParticles, 5);
+	cohort(CheckpointActorValues().m_Actors, 0); cohort(m_Items, 1); cohort(m_Particles, 2);
+	cohort(CheckpointActorValues().m_AddedActors, 3); cohort(m_AddedItems, 4); cohort(m_AddedParticles, 5);
 	const int64_t elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - entered).count();
 	maximumUs = std::max(maximumUs, elapsedUs); totalUs += elapsedUs; ++captures;
 	if (phase != 3) return;
@@ -2039,7 +2039,7 @@ void MovableMan::DumpSimLines(uint64_t tick, Out& out) const {
 		}
 		out << "\n";
 	}
-	for (Actor* actor: m_Actors) {
+	for (Actor* actor: CheckpointActorValues().m_Actors) {
 		dumpMO("actor", actor);
 	}
 	for (MovableObject* item: m_Items) {
@@ -2051,7 +2051,7 @@ void MovableMan::DumpSimLines(uint64_t tick, Out& out) const {
 }
 
 int64_t MovableMan::GetFirstCraftUniqueID(int team) const {
-	for (Actor* actor: m_Actors) {
+	for (Actor* actor: CheckpointActorValues().m_Actors) {
 		if (actor->GetTeam() == team && dynamic_cast<const ACraft*>(actor)) {
 			return static_cast<int64_t>(actor->GetUniqueID());
 		}
@@ -2060,7 +2060,7 @@ int64_t MovableMan::GetFirstCraftUniqueID(int team) const {
 }
 
 int64_t MovableMan::GetFirstUnloadingCraftUniqueID(int team) const {
-	for (Actor* actor: m_Actors) {
+	for (Actor* actor: CheckpointActorValues().m_Actors) {
 		if (actor->GetTeam() != team) {
 			continue;
 		}
@@ -2081,6 +2081,36 @@ MovableMan::~MovableMan() {
 	Destroy();
 }
 
+void MovableMan::PrepareCheckpointActorValues() {
+	if (!CheckpointNativeStorage::Enabled() || m_OwnedCheckpointActors) return;
+	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	auto prepared = std::make_unique<CheckpointActors>(m_OrdinaryCheckpointActors);
+	m_OwnedCheckpointActors = std::move(prepared);
+	m_OrdinaryCheckpointActors.m_Actors.clear();
+	m_OrdinaryCheckpointActors.m_AddedActors.clear();
+}
+
+std::string MovableMan::CheckpointActorStorageSelfTestMismatch() {
+	CheckpointNativeStorage::AllocationScope allocations(true);
+	auto owned = std::make_unique<CheckpointActors>();
+	Actor* first = reinterpret_cast<Actor*>(uintptr_t{0xA000});
+	Actor* second = reinterpret_cast<Actor*>(uintptr_t{0xB000});
+	owned->m_Actors = {first, second};
+	owned->m_AddedActors = {second};
+	const auto* source = owned.get();
+	auto inventory = CheckpointNativeStorage::PrepareInventory();
+	if (!inventory->Arm()) return "the owned actor inventory did not arm";
+	owned->m_Actors = {second};
+	owned->m_AddedActors.clear();
+	owned.reset();
+	CheckpointNativeStorage::ReadScope read(inventory->Pages());
+	const auto* saved = CheckpointNativeStorage::Source(source);
+	const auto actors = CheckpointValues(saved->m_Actors);
+	const auto added = CheckpointValues(saved->m_AddedActors);
+	return actors.size() == 2 && actors[0] == first && actors[1] == second && added.size() == 1 && added[0] == second ?
+	    std::string() : "owned actor membership changed after its source died";
+}
+
 void MovableMan::Clear() {
 	m_Speculation = Speculation();
 	DropAllPreviewGhosts();
@@ -2090,11 +2120,11 @@ void MovableMan::Clear() {
 	m_RenderSubstitutes.clear();
 	m_LinkRoot = nullptr;
 	m_WorldSetAside = nullptr;
-	m_Actors.clear();
+	CheckpointActorValues().m_Actors.clear();
 	m_ContiguousActorIDs.clear();
 	m_Items.clear();
 	m_Particles.clear();
-	m_AddedActors.clear();
+	CheckpointActorValues().m_AddedActors.clear();
 	m_AddedItems.clear();
 	m_AddedParticles.clear();
 	m_ValidActors.clear();
@@ -2143,8 +2173,8 @@ int MovableMan::ReadProperty(const std::string_view& propName, Reader& reader) {
 int MovableMan::Save(Writer& writer) const {
 	Serializable::Save(writer);
 
-	writer << m_Actors.size();
-	for (CheckpointDeque<Actor*>::const_iterator itr = m_Actors.begin(); itr != m_Actors.end(); ++itr)
+	writer << CheckpointActorValues().m_Actors.size();
+	for (CheckpointDeque<Actor*>::const_iterator itr = CheckpointActorValues().m_Actors.begin(); itr != CheckpointActorValues().m_Actors.end(); ++itr)
 		writer << **itr;
 
 	writer << m_Particles.size();
@@ -2155,7 +2185,7 @@ int MovableMan::Save(Writer& writer) const {
 }
 
 void MovableMan::Destroy() {
-	for (CheckpointDeque<Actor*>::iterator it1 = m_Actors.begin(); it1 != m_Actors.end(); ++it1)
+	for (CheckpointDeque<Actor*>::iterator it1 = CheckpointActorValues().m_Actors.begin(); it1 != CheckpointActorValues().m_Actors.end(); ++it1)
 		delete (*it1);
 	for (CheckpointDeque<MovableObject*>::iterator it2 = m_Items.begin(); it2 != m_Items.end(); ++it2)
 		delete (*it2);
@@ -2396,7 +2426,7 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 		MovableObject::FaithfulCloneScope scope(false);
 		if (const Activity* activity = g_ActivityMan.GetActivity()) out.activity.reset(static_cast<Activity*>(activity->Clone()));
 		if (const Activity* activity = g_ActivityMan.GetCheckpointStartActivity()) out.startActivity.reset(static_cast<Activity*>(activity->Clone()));
-		out.actors.reserve(m_Actors.size());
+		out.actors.reserve(CheckpointActorValues().m_Actors.size());
 		out.items.reserve(m_Items.size());
 		out.particles.reserve(m_Particles.size());
 		const bool profileCapture = std::getenv("CC_CAPTURE_PROFILE") != nullptr;
@@ -2409,7 +2439,7 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 			++slot.first;
 			slot.second += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		};
-		for (const Actor* actor: m_Actors) {
+		for (const Actor* actor: CheckpointActorValues().m_Actors) {
 			timed(actor, [&] { out.actors.push_back(dynamic_cast<Actor*>(actor->Clone())); });
 		}
 		for (const MovableObject* item: m_Items) {
@@ -2418,7 +2448,7 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 		for (const MovableObject* particle: m_Particles) {
 			timed(particle, [&] { out.particles.push_back(dynamic_cast<MovableObject*>(particle->Clone())); });
 		}
-		for (const Actor* actor: m_AddedActors) out.addedActors.push_back(dynamic_cast<Actor*>(actor->Clone()));
+		for (const Actor* actor: CheckpointActorValues().m_AddedActors) out.addedActors.push_back(dynamic_cast<Actor*>(actor->Clone()));
 		for (const MovableObject* item: m_AddedItems) out.addedItems.push_back(dynamic_cast<MovableObject*>(item->Clone()));
 		for (const MovableObject* particle: m_AddedParticles) out.addedParticles.push_back(dynamic_cast<MovableObject*>(particle->Clone()));
 		if (profileCapture) {
@@ -2502,7 +2532,7 @@ bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in, const std::vecto
 	if (!in.terrain.Restore()) return false;
 
 	CompleteQueuedMOIDDrawings();
-	if (!m_Actors.empty() || !m_Items.empty() || !m_Particles.empty() || !m_AddedActors.empty() || !m_AddedItems.empty() || !m_AddedParticles.empty()) {
+	if (!CheckpointActorValues().m_Actors.empty() || !m_Items.empty() || !m_Particles.empty() || !CheckpointActorValues().m_AddedActors.empty() || !m_AddedItems.empty() || !m_AddedParticles.empty()) {
 		PurgeAllMOs();
 	}
 	if (Scene* scene = g_SceneMan.GetScene()) {
@@ -2518,7 +2548,7 @@ bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in, const std::vecto
 		for (const Actor* actor: in.actors) {
 			Actor* live = dynamic_cast<Actor*>(actor->Clone());
 			live->AdoptPersistedUniqueID();
-			m_Actors.push_back(live);
+			CheckpointActorValues().m_Actors.push_back(live);
 			m_ValidActors.insert(live);
 			AddActorToTeamRoster(live);
 		}
@@ -2536,7 +2566,7 @@ bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in, const std::vecto
 		}
 		for (const Actor* actor: in.addedActors) {
 			Actor* live = dynamic_cast<Actor*>(actor->Clone());
-			live->AdoptPersistedUniqueID(); m_AddedActors.push_back(live); m_ValidActors.insert(live);
+			live->AdoptPersistedUniqueID(); CheckpointActorValues().m_AddedActors.push_back(live); m_ValidActors.insert(live);
 		}
 		for (const MovableObject* item: in.addedItems) {
 			MovableObject* live = dynamic_cast<MovableObject*>(item->Clone());
@@ -2558,7 +2588,7 @@ bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in, const std::vecto
 		return false;
 	}
 	MovableObject::PinUniqueIDCounter(in.uniqueIDCounter);
-	for (Actor* actor: m_Actors) {
+	for (Actor* actor: CheckpointActorValues().m_Actors) {
 		actor->ResolveFaithfulLinks();
 	}
 	for (MovableObject* item: m_Items) {
@@ -2567,7 +2597,7 @@ bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in, const std::vecto
 	for (MovableObject* particle: m_Particles) {
 		particle->ResolveFaithfulLinks();
 	}
-	for (Actor* actor: m_AddedActors) actor->ResolveFaithfulLinks();
+	for (Actor* actor: CheckpointActorValues().m_AddedActors) actor->ResolveFaithfulLinks();
 	for (MovableObject* item: m_AddedItems) item->ResolveFaithfulLinks();
 	for (MovableObject* particle: m_AddedParticles) particle->ResolveFaithfulLinks();
 	if (Activity* activity = g_ActivityMan.GetActivity()) {
@@ -2637,10 +2667,10 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 		stashState(state);
 	}
 	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex, m_AddedAlarmEventsMutex);
-	out.actors.swap(m_Actors);
+	out.actors.swap(CheckpointActorValues().m_Actors);
 	out.items.swap(m_Items);
 	out.particles.swap(m_Particles);
-	out.addedActors.swap(m_AddedActors);
+	out.addedActors.swap(CheckpointActorValues().m_AddedActors);
 	out.addedItems.swap(m_AddedItems);
 	out.addedParticles.swap(m_AddedParticles);
 	out.alarmEvents.swap(m_AlarmEvents);
@@ -2775,10 +2805,10 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	}
 	in.scriptObjects.clear();
 	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex, m_AddedAlarmEventsMutex);
-	m_Actors.swap(in.actors);
+	CheckpointActorValues().m_Actors.swap(in.actors);
 	m_Items.swap(in.items);
 	m_Particles.swap(in.particles);
-	m_AddedActors.swap(in.addedActors);
+	CheckpointActorValues().m_AddedActors.swap(in.addedActors);
 	m_AddedItems.swap(in.addedItems);
 	m_AddedParticles.swap(in.addedParticles);
 	m_AlarmEvents.swap(in.alarmEvents);
@@ -2790,7 +2820,7 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	m_LockstepJoinQuarantine.swap(in.joinQuarantine);
 	m_PendingLinkResolves.swap(in.pendingLinks);
 	in.pendingLinks.clear();
-	for (Actor* actor: m_Actors) {
+	for (Actor* actor: CheckpointActorValues().m_Actors) {
 		m_ValidActors.insert(actor);
 	}
 	for (MovableObject* item: m_Items) {
@@ -2799,7 +2829,7 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	for (MovableObject* particle: m_Particles) {
 		m_ValidParticles.insert(particle);
 	}
-	for (Actor* actor: m_AddedActors) {
+	for (Actor* actor: CheckpointActorValues().m_AddedActors) {
 		m_ValidActors.insert(actor);
 	}
 	for (MovableObject* item: m_AddedItems) {
@@ -3145,14 +3175,14 @@ std::string MovableMan::DescribeLuaIdentity() const {
 
 MovableMan::AddQueueMark MovableMan::MarkAddQueues() {
 	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex, m_AddedAlarmEventsMutex);
-	return {m_AddedActors.size(), m_AddedItems.size(), m_AddedParticles.size(), m_AddedAlarmEvents.size()};
+	return {CheckpointActorValues().m_AddedActors.size(), m_AddedItems.size(), m_AddedParticles.size(), m_AddedAlarmEvents.size()};
 }
 
 void MovableMan::DiscardAddedSince(const AddQueueMark& mark) {
 	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex, m_AddedAlarmEventsMutex);
-	while (m_AddedActors.size() > mark.actors) {
-		Actor* actor = m_AddedActors.back();
-		m_AddedActors.pop_back();
+	while (CheckpointActorValues().m_AddedActors.size() > mark.actors) {
+		Actor* actor = CheckpointActorValues().m_AddedActors.back();
+		CheckpointActorValues().m_AddedActors.pop_back();
 		if (actor->GetTeam() >= 0) {
 			RemoveActorFromTeamRoster(actor);
 		}
@@ -3184,8 +3214,8 @@ void MovableMan::DiscardAddedSince(const AddQueueMark& mark) {
 std::string MovableMan::DescribeAddedSince(const AddQueueMark& mark) const {
 	std::string out;
 	const auto append = [&out](const MovableObject* mo) { out += (out.empty() ? "" : ",") + mo->GetPresetName(); };
-	for (size_t i = mark.actors; i < m_AddedActors.size(); ++i) {
-		append(m_AddedActors[i]);
+	for (size_t i = mark.actors; i < CheckpointActorValues().m_AddedActors.size(); ++i) {
+		append(CheckpointActorValues().m_AddedActors[i]);
 	}
 	for (size_t i = mark.items; i < m_AddedItems.size(); ++i) {
 		append(m_AddedItems[i]);
@@ -3245,7 +3275,7 @@ void MovableMan::HarvestSpeculativeSpawns() {
 		}
 		queue.resize(mark);
 	};
-	take(m_AddedActors, m_Speculation.mark.actors);
+	take(CheckpointActorValues().m_AddedActors, m_Speculation.mark.actors);
 	take(m_AddedItems, m_Speculation.mark.items);
 	take(m_AddedParticles, m_Speculation.mark.particles);
 }
@@ -3674,8 +3704,8 @@ void MovableMan::DisposeSpeculativeSpawns() {
 }
 
 bool MovableMan::SwapActorForRender(Actor* original, Actor* substitute) {
-	const auto found = std::find(m_Actors.begin(), m_Actors.end(), original);
-	if (found == m_Actors.end()) {
+	const auto found = std::find(CheckpointActorValues().m_Actors.begin(), CheckpointActorValues().m_Actors.end(), original);
+	if (found == CheckpointActorValues().m_Actors.end()) {
 		return false;
 	}
 	*found = substitute;
@@ -3819,8 +3849,8 @@ std::unordered_set<const MovableObject*> MovableMan::RetiringOverlayObjects() {
 	for (const Speculation::Spawn& spawn: m_Speculation.spawns) {
 		retire(spawn.object);
 	}
-	for (size_t i = m_Speculation.mark.actors; i < m_AddedActors.size(); ++i) {
-		retire(m_AddedActors[i]);
+	for (size_t i = m_Speculation.mark.actors; i < CheckpointActorValues().m_AddedActors.size(); ++i) {
+		retire(CheckpointActorValues().m_AddedActors[i]);
 	}
 	for (size_t i = m_Speculation.mark.items; i < m_AddedItems.size(); ++i) {
 		retire(m_AddedItems[i]);
@@ -3853,8 +3883,8 @@ int MovableMan::ResidentKind(const MovableObject* mo) const {
 				return 0;
 			}
 		}
-		for (size_t i = m_Speculation.mark.actors; i < m_AddedActors.size(); ++i) {
-			if (m_AddedActors[i] == mo) {
+		for (size_t i = m_Speculation.mark.actors; i < CheckpointActorValues().m_AddedActors.size(); ++i) {
+			if (CheckpointActorValues().m_AddedActors[i] == mo) {
 				return 0;
 			}
 		}
@@ -4057,7 +4087,7 @@ std::string MovableMan::DescribeTeamRosters() const {
 }
 
 bool MovableMan::RunPurgeSelfTest() {
-	if (m_Actors.empty()) return false;
+	if (CheckpointActorValues().m_Actors.empty()) return false;
 	auto report = std::make_unique<MOPixel>();
 	if (report->Create() < 0) return false;
 	const auto* actorPreset = g_PresetMan.GetEntityPreset("AHuman", "Green Dummy", "Base.rte");
@@ -4067,7 +4097,7 @@ bool MovableMan::RunPurgeSelfTest() {
 	auto item = std::unique_ptr<HeldDevice>(dynamic_cast<HeldDevice*>(itemPreset->Clone()));
 	auto particle = std::make_unique<MOPixel>();
 	if (!actor || !item || particle->Create() < 0) return false;
-	MovableObject* objects[] = {m_Actors.front(), actor.get(), item.get(), particle.get()};
+	MovableObject* objects[] = {CheckpointActorValues().m_Actors.front(), actor.get(), item.get(), particle.get()};
 	std::vector<long> ids;
 	for (size_t i = 0; i < std::size(objects); ++i) {
 		MovableObject* object = objects[i];
@@ -4088,8 +4118,8 @@ bool MovableMan::RunPurgeSelfTest() {
 		const long spawnedUID = static_cast<long>(report->GetNumberValue("purge_spawn_" + std::to_string(i)));
 		spawned &= spawnedUID > 0 && FindObjectByUniqueID(spawnedUID) == nullptr;
 	}
-	const bool empty = m_Actors.empty() && m_Items.empty() && m_Particles.empty() &&
-	                   m_AddedActors.empty() && m_AddedItems.empty() && m_AddedParticles.empty();
+	const bool empty = CheckpointActorValues().m_Actors.empty() && m_Items.empty() && m_Particles.empty() &&
+	                   CheckpointActorValues().m_AddedActors.empty() && m_AddedItems.empty() && m_AddedParticles.empty();
 	const bool retained = FindObjectByUniqueID(report->GetUniqueID()) == report.get();
 	const bool passed = callbacks && removed && spawned && empty && retained;
 	std::cout << "[purge-selftest] " << (passed ? "PASS" : "FAIL") << " callbacks=" << callbacks << " removed=" << removed
@@ -4127,10 +4157,10 @@ void MovableMan::PurgeAllMOs() {
 				if (visited.insert(object->GetUniqueID()).second) callbacks.push_back(object->GetUniqueID());
 			}
 		};
-		collect(m_Actors);
+		collect(CheckpointActorValues().m_Actors);
 		collect(m_Items);
 		collect(m_Particles);
-		collect(m_AddedActors);
+		collect(CheckpointActorValues().m_AddedActors);
 		collect(m_AddedItems);
 		collect(m_AddedParticles);
 		if (callbacks.empty()) break;
@@ -4146,10 +4176,10 @@ void MovableMan::PurgeAllMOs() {
 			delete object;
 		}
 	};
-	deleteObjects(m_Actors);
+	deleteObjects(CheckpointActorValues().m_Actors);
 	deleteObjects(m_Items);
 	deleteObjects(m_Particles);
-	deleteObjects(m_AddedActors);
+	deleteObjects(CheckpointActorValues().m_AddedActors);
 	deleteObjects(m_AddedItems);
 	deleteObjects(m_AddedParticles);
 	m_ValidActors.clear();
@@ -4184,39 +4214,39 @@ Actor* MovableMan::GetNextActorInGroup(std::string group, Actor* pAfterThis) {
 		return 0;
 
 	// Begin at the beginning
-	CheckpointDeque<Actor*>::const_iterator aIt = m_Actors.begin();
+	CheckpointDeque<Actor*>::const_iterator aIt = CheckpointActorValues().m_Actors.begin();
 
 	// Search for the actor to start search from, if specified
 	if (pAfterThis) {
 		// Make the iterator point to the specified starting point actor
-		for (; aIt != m_Actors.end() && !((*aIt)->IsInGroup(group) && *aIt == pAfterThis); ++aIt)
+		for (; aIt != CheckpointActorValues().m_Actors.end() && !((*aIt)->IsInGroup(group) && *aIt == pAfterThis); ++aIt)
 			;
 
 		// If we couldn't find the one to search for,
 		// then just start at the beginning again and get the first actor at the next step
-		if (aIt == m_Actors.end())
-			aIt = m_Actors.begin();
+		if (aIt == CheckpointActorValues().m_Actors.end())
+			aIt = CheckpointActorValues().m_Actors.begin();
 		// Go one more step so we're not pointing at the one we're not supposed to get
 		else
 			++aIt;
 	}
 
 	// Now search for the first actor of the team from the search point (beginning or otherwise)
-	for (; aIt != m_Actors.end() && !(*aIt)->IsInGroup(group); ++aIt)
+	for (; aIt != CheckpointActorValues().m_Actors.end() && !(*aIt)->IsInGroup(group); ++aIt)
 		;
 
 	// If nothing found between a specified actor and the end,
 	// then restart and see if there's anything between beginning and that specified actor
-	if (pAfterThis && aIt == m_Actors.end()) {
-		for (aIt = m_Actors.begin(); aIt != m_Actors.end() && !(*aIt)->IsInGroup(group); ++aIt)
+	if (pAfterThis && aIt == CheckpointActorValues().m_Actors.end()) {
+		for (aIt = CheckpointActorValues().m_Actors.begin(); aIt != CheckpointActorValues().m_Actors.end() && !(*aIt)->IsInGroup(group); ++aIt)
 			;
 
 		// Still nothing?? Should at least get the specified actor and return it! - EDIT No becuase it just may not be there!
-		//        RTEAssert(aIt != m_Actors.end(), "Search for something after specified actor, and didn't even find the specified actor!?");
+		//        RTEAssert(aIt != CheckpointActorValues().m_Actors.end(), "Search for something after specified actor, and didn't even find the specified actor!?");
 	}
 
 	// Still nothing, so return nothing
-	if (aIt == m_Actors.end())
+	if (aIt == CheckpointActorValues().m_Actors.end())
 		return 0;
 
 	if ((*aIt)->IsInGroup(group))
@@ -4233,39 +4263,39 @@ Actor* MovableMan::GetPrevActorInGroup(std::string group, Actor* pBeforeThis) {
 		return 0;
 
 	// Begin at the reverse beginning
-	CheckpointDeque<Actor*>::reverse_iterator aIt = m_Actors.rbegin();
+	CheckpointDeque<Actor*>::reverse_iterator aIt = CheckpointActorValues().m_Actors.rbegin();
 
 	// Search for the actor to start search from, if specified
 	if (pBeforeThis) {
 		// Make the iterator point to the specified starting point actor
-		for (; aIt != m_Actors.rend() && !((*aIt)->IsInGroup(group) && *aIt == pBeforeThis); ++aIt)
+		for (; aIt != CheckpointActorValues().m_Actors.rend() && !((*aIt)->IsInGroup(group) && *aIt == pBeforeThis); ++aIt)
 			;
 
 		// If we couldn't find the one to search for,
 		// then just start at the beginning again and get the first actor at the next step
-		if (aIt == m_Actors.rend())
-			aIt = m_Actors.rbegin();
+		if (aIt == CheckpointActorValues().m_Actors.rend())
+			aIt = CheckpointActorValues().m_Actors.rbegin();
 		// Go one more step so we're not pointing at the one we're not supposed to get
 		else
 			++aIt;
 	}
 
 	// Now search for the first actor of the team from the search point (beginning or otherwise)
-	for (; aIt != m_Actors.rend() && !(*aIt)->IsInGroup(group); ++aIt)
+	for (; aIt != CheckpointActorValues().m_Actors.rend() && !(*aIt)->IsInGroup(group); ++aIt)
 		;
 
 	// If nothing found between a specified actor and the end,
 	// then restart and see if there's anything between beginning and that specified actor
-	if (pBeforeThis && aIt == m_Actors.rend()) {
-		for (aIt = m_Actors.rbegin(); aIt != m_Actors.rend() && !(*aIt)->IsInGroup(group); ++aIt)
+	if (pBeforeThis && aIt == CheckpointActorValues().m_Actors.rend()) {
+		for (aIt = CheckpointActorValues().m_Actors.rbegin(); aIt != CheckpointActorValues().m_Actors.rend() && !(*aIt)->IsInGroup(group); ++aIt)
 			;
 
 		// Still nothing?? Should at least get the specified actor and return it! - EDIT No becuase it just may not be there!
-		//        RTEAssert(aIt != m_Actors.rend(), "Search for something after specified actor, and didn't even find the specified actor!?");
+		//        RTEAssert(aIt != CheckpointActorValues().m_Actors.rend(), "Search for something after specified actor, and didn't even find the specified actor!?");
 	}
 
 	// Still nothing, so return nothing
-	if (aIt == m_Actors.rend())
+	if (aIt == CheckpointActorValues().m_Actors.rend())
 		return 0;
 
 	if ((*aIt)->IsInGroup(group))
@@ -4282,41 +4312,41 @@ Actor* MovableMan::GetNextTeamActor(int team, Actor* pAfterThis) {
 		return 0;
 	/*
 	    // Begin at the beginning
-	    std::deque<Actor *>::const_iterator aIt = m_Actors.begin();
+	    std::deque<Actor *>::const_iterator aIt = CheckpointActorValues().m_Actors.begin();
 
 	    // Search for the actor to start search from, if specified
 	    if (pAfterThis)
 	    {
 	        // Make the iterator point to the specified starting point actor
-	        for (; aIt != m_Actors.end() && !((*aIt)->GetTeam() == team && *aIt == pAfterThis); ++aIt)
+	        for (; aIt != CheckpointActorValues().m_Actors.end() && !((*aIt)->GetTeam() == team && *aIt == pAfterThis); ++aIt)
 	            ;
 
 	        // If we couldn't find the one to search for,
 	        // then just start at the beginning again and get the first actor at the next step
-	        if (aIt == m_Actors.end())
-	            aIt = m_Actors.begin();
+	        if (aIt == CheckpointActorValues().m_Actors.end())
+	            aIt = CheckpointActorValues().m_Actors.begin();
 	        // Go one more step so we're not pointing at the one we're not supposed to get
 	        else
 	            ++aIt;
 	    }
 
 	    // Now search for the first actor of the team from the search point (beginning or otherwise)
-	    for (; aIt != m_Actors.end() && (*aIt)->GetTeam() != team; ++aIt)
+	    for (; aIt != CheckpointActorValues().m_Actors.end() && (*aIt)->GetTeam() != team; ++aIt)
 	        ;
 
 	    // If nothing found between a specified actor and the end,
 	    // then restart and see if there's anything between beginning and that specified actor
-	    if (pAfterThis && aIt == m_Actors.end())
+	    if (pAfterThis && aIt == CheckpointActorValues().m_Actors.end())
 	    {
-	        for (aIt = m_Actors.begin(); aIt != m_Actors.end() && (*aIt)->GetTeam() != team; ++aIt)
+	        for (aIt = CheckpointActorValues().m_Actors.begin(); aIt != CheckpointActorValues().m_Actors.end() && (*aIt)->GetTeam() != team; ++aIt)
 	            ;
 
 	        // Still nothing?? Should at least get the specified actor and return it! - EDIT No becuase it just may not be there!
-	//        RTEAssert(aIt != m_Actors.end(), "Search for something after specified actor, and didn't even find the specified actor!?");
+	//        RTEAssert(aIt != CheckpointActorValues().m_Actors.end(), "Search for something after specified actor, and didn't even find the specified actor!?");
 	    }
 
 	    // Still nothing, so return nothing
-	    if (aIt == m_Actors.end())
+	    if (aIt == CheckpointActorValues().m_Actors.end())
 	        return 0;
 
 	    if ((*aIt)->GetTeam() == team)
@@ -4356,45 +4386,45 @@ Actor* MovableMan::GetPrevTeamActor(int team, Actor* pBeforeThis) {
 	if (LuaMan::IsRunningPreviewHook()) {
 		ReportSpeculationViolation("GetPrevTeamActor", pBeforeThis);
 	}
-	if (team < Activity::TeamOne || team >= Activity::MaxTeamCount || m_Actors.empty() || m_ActorRoster[team].empty())
+	if (team < Activity::TeamOne || team >= Activity::MaxTeamCount || CheckpointActorValues().m_Actors.empty() || m_ActorRoster[team].empty())
 		return 0;
 	/* Obsolete, now uses team rosters which are sorted
 	    // Begin at the reverse beginning
-	    std::deque<Actor *>::const_reverse_iterator aIt = m_Actors.rbegin();
+	    std::deque<Actor *>::const_reverse_iterator aIt = CheckpointActorValues().m_Actors.rbegin();
 
 	    // Search for the actor to start search from, if specified
 	    if (pBeforeThis)
 	    {
 	        // Make the iterator point to the specified starting point actor
-	        for (; aIt != m_Actors.rend() && !((*aIt)->GetTeam() == team && *aIt == pBeforeThis); ++aIt)
+	        for (; aIt != CheckpointActorValues().m_Actors.rend() && !((*aIt)->GetTeam() == team && *aIt == pBeforeThis); ++aIt)
 	            ;
 
 	        // If we couldn't find the one to search for,
 	        // then just start at the beginning again and get the first actor at the next step
-	        if (aIt == m_Actors.rend())
-	            aIt = m_Actors.rbegin();
+	        if (aIt == CheckpointActorValues().m_Actors.rend())
+	            aIt = CheckpointActorValues().m_Actors.rbegin();
 	        // Go one more step so we're not pointing at the one we're not supposed to get
 	        else
 	            ++aIt;
 	    }
 
 	    // Now search for the first actor of the team from the search point (beginning or otherwise)
-	    for (; aIt != m_Actors.rend() && (*aIt)->GetTeam() != team; ++aIt)
+	    for (; aIt != CheckpointActorValues().m_Actors.rend() && (*aIt)->GetTeam() != team; ++aIt)
 	        ;
 
 	    // If nothing found between a specified actor and the end,
 	    // then restart and see if there's anything between beginning and that specified actor
-	    if (pBeforeThis && aIt == m_Actors.rend())
+	    if (pBeforeThis && aIt == CheckpointActorValues().m_Actors.rend())
 	    {
-	        for (aIt = m_Actors.rbegin(); aIt != m_Actors.rend() && (*aIt)->GetTeam() != team; ++aIt)
+	        for (aIt = CheckpointActorValues().m_Actors.rbegin(); aIt != CheckpointActorValues().m_Actors.rend() && (*aIt)->GetTeam() != team; ++aIt)
 	            ;
 
 	        // Still nothing?? Should at least get the specified actor and return it! - EDIT No becuase it just may not be there!
-	//        RTEAssert(aIt != m_Actors.rend(), "Search for something after specified actor, and didn't even find the specified actor!?");
+	//        RTEAssert(aIt != CheckpointActorValues().m_Actors.rend(), "Search for something after specified actor, and didn't even find the specified actor!?");
 	    }
 
 	    // Still nothing, so return nothing
-	    if (aIt == m_Actors.rend())
+	    if (aIt == CheckpointActorValues().m_Actors.rend())
 	        return 0;
 
 	    if ((*aIt)->GetTeam() == team)
@@ -4431,7 +4461,7 @@ Actor* MovableMan::GetPrevTeamActor(int team, Actor* pBeforeThis) {
 }
 
 Actor* MovableMan::GetClosestTeamActor(int team, int player, const Vector& scenePoint, int maxRadius, Vector& getDistance, bool onlyPlayerControllableActors, const Actor* excludeThis) {
-	if (team < Activity::NoTeam || team >= Activity::MaxTeamCount || m_Actors.empty() || m_ActorRoster[team].empty())
+	if (team < Activity::NoTeam || team >= Activity::MaxTeamCount || CheckpointActorValues().m_Actors.empty() || m_ActorRoster[team].empty())
 		return 0;
 
 	Activity* pActivity = g_ActivityMan.GetActivity();
@@ -4442,7 +4472,7 @@ Actor* MovableMan::GetClosestTeamActor(int team, int player, const Vector& scene
 
 	// If we're looking for a noteam actor, then go through the entire actor list instead
 	if (team == Activity::NoTeam) {
-		for (CheckpointDeque<Actor*>::iterator aIt = m_Actors.begin(); aIt != m_Actors.end(); ++aIt) {
+		for (CheckpointDeque<Actor*>::iterator aIt = CheckpointActorValues().m_Actors.begin(); aIt != CheckpointActorValues().m_Actors.end(); ++aIt) {
 			if ((*aIt) == excludeThis || (*aIt)->GetTeam() != Activity::NoTeam || (onlyPlayerControllableActors && !(*aIt)->IsPlayerControllable())) {
 				continue;
 			}
@@ -4478,7 +4508,7 @@ Actor* MovableMan::GetClosestTeamActor(int team, int player, const Vector& scene
 }
 
 Actor* MovableMan::GetClosestEnemyActor(int team, const Vector& scenePoint, int maxRadius, Vector& getDistance) {
-	if (team < Activity::NoTeam || team >= Activity::MaxTeamCount || m_Actors.empty())
+	if (team < Activity::NoTeam || team >= Activity::MaxTeamCount || CheckpointActorValues().m_Actors.empty())
 		return 0;
 
 	Activity* pActivity = g_ActivityMan.GetActivity();
@@ -4487,7 +4517,7 @@ Actor* MovableMan::GetClosestEnemyActor(int team, const Vector& scenePoint, int 
 	float sqrShortestDistance = static_cast<float>(maxRadius) * static_cast<float>(maxRadius);
 	Actor* pClosestActor = 0;
 
-	for (CheckpointDeque<Actor*>::iterator aIt = m_Actors.begin(); aIt != m_Actors.end(); ++aIt) {
+	for (CheckpointDeque<Actor*>::iterator aIt = CheckpointActorValues().m_Actors.begin(); aIt != CheckpointActorValues().m_Actors.end(); ++aIt) {
 		if ((*aIt)->GetTeam() == team)
 			continue;
 
@@ -4506,7 +4536,7 @@ Actor* MovableMan::GetClosestEnemyActor(int team, const Vector& scenePoint, int 
 }
 
 Actor* MovableMan::GetClosestActor(const Vector& scenePoint, int maxRadius, Vector& getDistance, const Actor* pExcludeThis) {
-	if (m_Actors.empty())
+	if (CheckpointActorValues().m_Actors.empty())
 		return 0;
 
 	Activity* pActivity = g_ActivityMan.GetActivity();
@@ -4515,7 +4545,7 @@ Actor* MovableMan::GetClosestActor(const Vector& scenePoint, int maxRadius, Vect
 	float sqrShortestDistance = static_cast<float>(maxRadius) * static_cast<float>(maxRadius);
 	Actor* pClosestActor = 0;
 
-	for (CheckpointDeque<Actor*>::iterator aIt = m_Actors.begin(); aIt != m_Actors.end(); ++aIt) {
+	for (CheckpointDeque<Actor*>::iterator aIt = CheckpointActorValues().m_Actors.begin(); aIt != CheckpointActorValues().m_Actors.end(); ++aIt) {
 		if ((*aIt) == pExcludeThis)
 			continue;
 
@@ -4558,7 +4588,7 @@ Actor* MovableMan::GetClosestBrainActor(int team, const Vector& scenePoint) cons
 }
 
 Actor* MovableMan::GetClosestOtherBrainActor(int notOfTeam, const Vector& scenePoint) const {
-	if (notOfTeam < Activity::TeamOne || notOfTeam >= Activity::MaxTeamCount || m_Actors.empty())
+	if (notOfTeam < Activity::TeamOne || notOfTeam >= Activity::MaxTeamCount || CheckpointActorValues().m_Actors.empty())
 		return 0;
 
 	float sqrShortestDistance = std::numeric_limits<float>::infinity();
@@ -4613,12 +4643,12 @@ Actor* MovableMan::GetUnassignedBrainByID(int team) const {
 			!g_ActivityMan.GetActivity()->IsAssignedBrain(candidate) && (!brain || candidate->GetUniqueID() < brain->GetUniqueID())) brain = candidate;
 	};
 	for (Actor* actor: m_ActorRoster[team]) consider(actor);
-	for (Actor* actor: m_AddedActors) consider(actor);
+	for (Actor* actor: CheckpointActorValues().m_AddedActors) consider(actor);
 	return static_cast<Actor*>(ViewIfSpeculating(brain));
 }
 
 Actor* MovableMan::GetUnassignedBrain(int team) const {
-	if (/*m_Actors.empty() || */ m_ActorRoster[team].empty())
+	if (/*CheckpointActorValues().m_Actors.empty() || */ m_ActorRoster[team].empty())
 		return 0;
 
 	for (CheckpointList<Actor*>::const_iterator aIt = m_ActorRoster[team].begin(); aIt != m_ActorRoster[team].end(); ++aIt) {
@@ -4628,7 +4658,7 @@ Actor* MovableMan::GetUnassignedBrain(int team) const {
 
 	// Also need to look through all the actors added this frame, one might be a brain.
 	int actorTeam = Activity::NoTeam;
-	for (CheckpointDeque<Actor*>::const_iterator aaIt = m_AddedActors.begin(); aaIt != m_AddedActors.end(); ++aaIt) {
+	for (CheckpointDeque<Actor*>::const_iterator aaIt = CheckpointActorValues().m_AddedActors.begin(); aaIt != CheckpointActorValues().m_AddedActors.end(); ++aaIt) {
 		int actorTeam = (*aaIt)->GetTeam();
 		// Accept no-team brains too - ACTUALLY, DON'T
 		if ((actorTeam == team /* || actorTeam == Activity::NoTeam*/) && (*aaIt)->HasObjectInGroup("Brains") && !g_ActivityMan.GetActivity()->IsAssignedBrain(*aaIt))
@@ -4656,10 +4686,10 @@ bool MovableMan::AddMO(MovableObject* movableObjectToAdd) {
 }
 
 void MovableMan::ReapplyPersistedControllerModes() {
-	for (Actor* actor: m_Actors) {
+	for (Actor* actor: CheckpointActorValues().m_Actors) {
 		actor->ApplyPersistedControllerMode();
 	}
-	for (Actor* actor: m_AddedActors) {
+	for (Actor* actor: CheckpointActorValues().m_AddedActors) {
 		actor->ApplyPersistedControllerMode();
 	}
 }
@@ -4701,7 +4731,7 @@ void MovableMan::AddActor(Actor* actorToAdd) {
 		{
 			std::lock_guard<std::mutex> lock(m_AddedActorsMutex);
 			RecordSpeculativeSpawnMeta(actorToAdd);
-			m_AddedActors.push_back(actorToAdd);
+			CheckpointActorValues().m_AddedActors.push_back(actorToAdd);
 			m_ValidActors.insert(actorToAdd);
 
 			// A joiner's per-machine controller must not drive sim effects on its join tick; the
@@ -4804,25 +4834,25 @@ Actor* MovableMan::RemoveActor(MovableObject* pActorToRem) {
 		}
 	}
 	if (pActorToRem) {
-		for (CheckpointDeque<Actor*>::iterator itr = m_Actors.begin(); itr != m_Actors.end(); ++itr) {
+		for (CheckpointDeque<Actor*>::iterator itr = CheckpointActorValues().m_Actors.begin(); itr != CheckpointActorValues().m_Actors.end(); ++itr) {
 			if (*itr == pActorToRem) {
 				std::lock_guard<std::mutex> lock(m_ActorsMutex);
 				removed = *itr;
 				m_ValidActors.erase(*itr);
 				m_ContiguousActorIDs.erase(*itr);
-				m_Actors.erase(itr);
+				CheckpointActorValues().m_Actors.erase(itr);
 				break;
 			}
 		}
 		// Try the newly added actors if we couldn't find it in the regular deque
 		if (!removed) {
-			for (CheckpointDeque<Actor*>::iterator itr = m_AddedActors.begin(); itr != m_AddedActors.end(); ++itr) {
+			for (CheckpointDeque<Actor*>::iterator itr = CheckpointActorValues().m_AddedActors.begin(); itr != CheckpointActorValues().m_AddedActors.end(); ++itr) {
 				if (*itr == pActorToRem) {
 					std::lock_guard<std::mutex> lock(m_AddedActorsMutex);
 					removed = *itr;
 					m_ValidActors.erase(*itr);
 					m_ContiguousActorIDs.erase(*itr);
-					m_AddedActors.erase(itr);
+					CheckpointActorValues().m_AddedActors.erase(itr);
 					break;
 				}
 			}
@@ -5125,7 +5155,7 @@ bool MovableMan::IsOfActor(MOID checkMOID) {
 	if (pMO) {
 		MOID rootMOID = pMO->GetRootID();
 		if (checkMOID != g_NoMOID) {
-			for (CheckpointDeque<Actor*>::iterator itr = m_Actors.begin(); !found && itr != m_Actors.end(); ++itr) {
+			for (CheckpointDeque<Actor*>::iterator itr = CheckpointActorValues().m_Actors.begin(); !found && itr != CheckpointActorValues().m_Actors.end(); ++itr) {
 				if ((*itr)->GetID() == checkMOID || (*itr)->GetID() == rootMOID) {
 					found = true;
 					break;
@@ -5133,7 +5163,7 @@ bool MovableMan::IsOfActor(MOID checkMOID) {
 			}
 			// Check actors just added this frame
 			if (!found) {
-				for (CheckpointDeque<Actor*>::iterator itr = m_AddedActors.begin(); !found && itr != m_AddedActors.end(); ++itr) {
+				for (CheckpointDeque<Actor*>::iterator itr = CheckpointActorValues().m_AddedActors.begin(); !found && itr != CheckpointActorValues().m_AddedActors.end(); ++itr) {
 					if ((*itr)->GetID() == checkMOID || (*itr)->GetID() == rootMOID) {
 						found = true;
 						break;
@@ -5157,7 +5187,7 @@ int MovableMan::GetContiguousActorID(const Actor* actor) const {
 void MovableMan::RebuildContiguousActorIDs() {
 	m_ContiguousActorIDs.clear();
 	int actorID = 0;
-	for (const Actor* actor: m_Actors) {
+	for (const Actor* actor: CheckpointActorValues().m_Actors) {
 		m_ContiguousActorIDs[actor] = actorID++;
 	}
 }
@@ -5186,7 +5216,7 @@ bool MovableMan::RemoveMO(MovableObject* pMOToRem) {
 int MovableMan::KillAllTeamActors(int teamToKill) const {
 	int killCount = 0;
 
-	for (CheckpointDeque<Actor*> actorList: {m_Actors, m_AddedActors}) {
+	for (CheckpointDeque<Actor*> actorList: {CheckpointActorValues().m_Actors, CheckpointActorValues().m_AddedActors}) {
 		for (Actor* actor: actorList) {
 			if (actor->GetTeam() == teamToKill) {
 				const AHuman* actorAsHuman = dynamic_cast<AHuman*>(actor);
@@ -5210,7 +5240,7 @@ int MovableMan::KillAllEnemyActors(int teamNotToKill) const {
 	}
 	int killCount = 0;
 
-	for (CheckpointDeque<Actor*> actorList: {m_Actors, m_AddedActors}) {
+	for (CheckpointDeque<Actor*> actorList: {CheckpointActorValues().m_Actors, CheckpointActorValues().m_AddedActors}) {
 		for (Actor* actor: actorList) {
 			if (actor->GetTeam() != teamNotToKill) {
 				const AHuman* actorAsHuman = dynamic_cast<AHuman*>(actor);
@@ -5232,13 +5262,13 @@ int MovableMan::GetAllActors(bool transferOwnership, std::list<SceneObject*, All
 	if (CheckpointNativeStorage::Reading()) {
 		if (transferOwnership) throw std::logic_error("frozen world membership cannot transfer live ownership");
 		int count = 0;
-		for (auto* original: CheckpointValues(m_Actors)) {
+		for (auto* original: CheckpointValues(CheckpointActorValues().m_Actors)) {
 			const auto* actor = CheckpointNativeStorage::Source(original);
 			if ((onlyTeam == Activity::NoTeam || actor->GetTeam() == onlyTeam) && (!noBrains || !actor->HasObjectInGroup("Brains"))) {
 				actorList.push_back(original); ++count;
 			}
 		}
-		for (auto* original: CheckpointValues(m_AddedActors)) {
+		for (auto* original: CheckpointValues(CheckpointActorValues().m_AddedActors)) {
 			const auto* actor = CheckpointNativeStorage::Source(original);
 			if ((onlyTeam == Activity::NoTeam || actor->GetTeam() == onlyTeam) && (!noBrains || !actor->HasObjectInGroup("Brains"))) {
 				actorList.push_back(original); ++count;
@@ -5249,7 +5279,7 @@ int MovableMan::GetAllActors(bool transferOwnership, std::list<SceneObject*, All
 	int addedCount = 0;
 
 	// Add all regular Actors
-	for (CheckpointDeque<Actor*>::iterator aIt = m_Actors.begin(); aIt != m_Actors.end(); ++aIt) {
+	for (CheckpointDeque<Actor*>::iterator aIt = CheckpointActorValues().m_Actors.begin(); aIt != CheckpointActorValues().m_Actors.end(); ++aIt) {
 		Actor* actor = *aIt;
 		// Only grab ones of a specific team; delete all others
 		if ((onlyTeam == Activity::NoTeam || actor->GetTeam() == onlyTeam) && (!noBrains || !actor->HasObjectInGroup("Brains"))) {
@@ -5261,7 +5291,7 @@ int MovableMan::GetAllActors(bool transferOwnership, std::list<SceneObject*, All
 	}
 
 	// Add all Actors added this frame
-	for (CheckpointDeque<Actor*>::iterator aIt = m_AddedActors.begin(); aIt != m_AddedActors.end(); ++aIt) {
+	for (CheckpointDeque<Actor*>::iterator aIt = CheckpointActorValues().m_AddedActors.begin(); aIt != CheckpointActorValues().m_AddedActors.end(); ++aIt) {
 		Actor* actor = *aIt;
 		// Only grab ones of a specific team; delete all others
 		if ((onlyTeam == Activity::NoTeam || actor->GetTeam() == onlyTeam) && (!noBrains || !actor->HasObjectInGroup("Brains"))) {
@@ -5274,8 +5304,8 @@ int MovableMan::GetAllActors(bool transferOwnership, std::list<SceneObject*, All
 
 	if (transferOwnership) {
 		// Clear the internal Actor lists; we transferred the ownership of them
-		m_Actors.clear();
-		m_AddedActors.clear();
+		CheckpointActorValues().m_Actors.clear();
+		CheckpointActorValues().m_AddedActors.clear();
 		m_ValidActors.clear();
 		m_ContiguousActorIDs.clear();
 
@@ -5370,7 +5400,7 @@ int MovableMan::GetTeamMOIDCount(int team) const {
 }
 
 void MovableMan::OpenAllDoors(bool open, int team) const {
-	for (CheckpointDeque<Actor*> actorDeque: {m_Actors, m_AddedActors}) {
+	for (CheckpointDeque<Actor*> actorDeque: {CheckpointActorValues().m_Actors, CheckpointActorValues().m_AddedActors}) {
 		for (Actor* actor: actorDeque) {
 			if (ADoor* actorAsADoor = dynamic_cast<ADoor*>(actor); actorAsADoor && actorAsADoor->GetTeam() == team) {
 				if (actorAsADoor->GetDoorState() != (open ? ADoor::DoorState::OPEN : ADoor::DoorState::CLOSED)) {
@@ -5392,7 +5422,7 @@ void MovableMan::OpenAllDoors(bool open, int team) const {
 // It shouldn't belong to MovableMan, instead it probably ought to be on the pathfinder. On that note, pathfinders shouldn't be part of the scene!
 // AIMan? PathingMan? Something like that. Ideally, we completely tear out this hack, and allow for doors in a completely different way.
 void MovableMan::OverrideMaterialDoors(bool eraseDoorMaterial, int team) const {
-	for (CheckpointDeque<Actor*> actorDeque: {m_Actors, m_AddedActors}) {
+	for (CheckpointDeque<Actor*> actorDeque: {CheckpointActorValues().m_Actors, CheckpointActorValues().m_AddedActors}) {
 		for (Actor* actor: actorDeque) {
 			if (ADoor* actorAsDoor = dynamic_cast<ADoor*>(actor); actorAsDoor && (team == Activity::NoTeam || actorAsDoor->GetTeam() == team)) {
 				actorAsDoor->TempEraseOrRedrawDoorMaterial(eraseDoorMaterial);
@@ -5423,7 +5453,7 @@ bool MovableMan::TeamHasDoorMaterialInBox(int team, const Box& box) const {
 		shifts[shiftCount++] = Vector(-sceneWidth, sceneHeight);
 		shifts[shiftCount++] = Vector(-sceneWidth, -sceneHeight);
 	}
-	for (const CheckpointDeque<Actor*>* actorDeque: {&m_Actors, &m_AddedActors}) {
+	for (const CheckpointDeque<Actor*>* actorDeque: {&CheckpointActorValues().m_Actors, &CheckpointActorValues().m_AddedActors}) {
 		for (const Actor* actor: *actorDeque) {
 			const ADoor* actorAsDoor = dynamic_cast<const ADoor*>(actor);
 			// An override only moves pixels for a door whose material is currently drawn.
@@ -5473,7 +5503,7 @@ void callLuaFunctionOnMORecursive(MovableObject* mo, const std::string& function
 
 void MovableMan::RunLuaFunctionOnAllMOs(const std::string& functionName, bool includeAdded, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
 	if (includeAdded) {
-		for (Actor* actor: m_AddedActors) {
+		for (Actor* actor: CheckpointActorValues().m_AddedActors) {
 			callLuaFunctionOnMORecursive(actor, functionName, functionEntityArguments, functionLiteralArguments, functionObjectArguments);
 		}
 
@@ -5486,7 +5516,7 @@ void MovableMan::RunLuaFunctionOnAllMOs(const std::string& functionName, bool in
 		}
 	}
 
-	for (Actor* actor: m_Actors) {
+	for (Actor* actor: CheckpointActorValues().m_Actors) {
 		callLuaFunctionOnMORecursive(actor, functionName, functionEntityArguments, functionLiteralArguments, functionObjectArguments);
 	}
 
@@ -5522,7 +5552,7 @@ void reloadLuaFunctionsOnMORecursive(MovableObject* mo) {
 };
 
 void MovableMan::ReloadLuaScripts() {
-	for (Actor* actor: m_AddedActors) {
+	for (Actor* actor: CheckpointActorValues().m_AddedActors) {
 		reloadLuaFunctionsOnMORecursive(actor);
 	}
 
@@ -5534,7 +5564,7 @@ void MovableMan::ReloadLuaScripts() {
 		reloadLuaFunctionsOnMORecursive(particle);
 	}
 
-	for (Actor* actor: m_Actors) {
+	for (Actor* actor: CheckpointActorValues().m_Actors) {
 		reloadLuaFunctionsOnMORecursive(actor);
 	}
 
@@ -5577,15 +5607,15 @@ static void TraceTrackedPhase(const char* tag) {
 void MovableMan::AbsorbAddedMOs() {
 	// Sort the added queues before the drain so the transfer order is stable across runs; a restored world arrives in its saved live order.
 	if (m_PendingLinkResolves.empty()) {
-		std::sort(m_AddedActors.begin(), m_AddedActors.end(), MOUniqueIDLess());
+		std::sort(CheckpointActorValues().m_AddedActors.begin(), CheckpointActorValues().m_AddedActors.end(), MOUniqueIDLess());
 		std::sort(m_AddedItems.begin(), m_AddedItems.end(), MOUniqueIDLess());
 		std::sort(m_AddedParticles.begin(), m_AddedParticles.end(), MOUniqueIDLess());
 	}
 
-	for (Actor* addedActor: m_AddedActors) {
+	for (Actor* addedActor: CheckpointActorValues().m_AddedActors) {
 		// Delete instead if it's marked for it
 		if (!addedActor->IsSetToDelete()) {
-			m_Actors.push_back(addedActor);
+			CheckpointActorValues().m_Actors.push_back(addedActor);
 		} else {
 			if (addedActor->GetTeam() >= 0) {
 				RemoveActorFromTeamRoster(addedActor);
@@ -5596,7 +5626,7 @@ void MovableMan::AbsorbAddedMOs() {
 			m_ValidActors.erase(addedActor);
 		}
 	}
-	m_AddedActors.clear();
+	CheckpointActorValues().m_AddedActors.clear();
 
 	for (MovableObject* addedItem: m_AddedItems) {
 		if (!addedItem->IsSetToDelete()) {
@@ -7160,7 +7190,7 @@ void MovableMan::Update() {
 	m_AddedAlarmEvents.clear();
 
 	// Lock iteration order before the sim passes so same-seed runs visit MOs identically.
-	std::sort(m_Actors.begin(), m_Actors.end(), MOUniqueIDLess());
+	std::sort(CheckpointActorValues().m_Actors.begin(), CheckpointActorValues().m_Actors.end(), MOUniqueIDLess());
 	std::sort(m_Items.begin(), m_Items.end(), MOUniqueIDLess());
 	std::sort(m_Particles.begin(), m_Particles.end(), MOUniqueIDLess());
 
@@ -7266,7 +7296,7 @@ void MovableMan::Update() {
 			ZoneScopedN("Actors Update");
 
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsUpdate);
-			for (Actor* actor: m_Actors) {
+			for (Actor* actor: CheckpointActorValues().m_Actors) {
 				UpdateStage(actor, true);
 			}
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsUpdate);
@@ -7303,7 +7333,7 @@ void MovableMan::Update() {
 		{
 			ZoneScopedN("Post Update");
 
-			for (Actor* actor: m_Actors) {
+			for (Actor* actor: CheckpointActorValues().m_Actors) {
 				PostUpdateStage(actor);
 			}
 
@@ -7334,12 +7364,12 @@ void MovableMan::Update() {
 		{
 			// DEATH //////////////////////////////////////////////////////////
 			// Transfer dead actors from Actor list to particle list
-			aIt = partition(m_Actors.begin(), m_Actors.end(), std::not_fn(std::mem_fn(&Actor::IsDead)));
+			aIt = partition(CheckpointActorValues().m_Actors.begin(), CheckpointActorValues().m_Actors.end(), std::not_fn(std::mem_fn(&Actor::IsDead)));
 			amidIt = aIt;
 
 			// Move dead Actor to particles list
-			if (amidIt != m_Actors.end() /* && m_Actors.size() > 1*/) {
-				while (aIt != m_Actors.end()) {
+			if (amidIt != CheckpointActorValues().m_Actors.end() /* && CheckpointActorValues().m_Actors.size() > 1*/) {
+				while (aIt != CheckpointActorValues().m_Actors.end()) {
 					// Report the death of the actor to the game
 					g_ActivityMan.GetActivity()->ReportDeath((*aIt)->GetTeam());
 
@@ -7364,8 +7394,8 @@ void MovableMan::Update() {
 					aIt++;
 				}
 				// Try to set the existing iterator to a safer value, erase can crash in debug mode otherwise?
-				aIt = m_Actors.begin();
-				m_Actors.erase(amidIt, m_Actors.end());
+				aIt = CheckpointActorValues().m_Actors.begin();
+				CheckpointActorValues().m_Actors.erase(amidIt, CheckpointActorValues().m_Actors.end());
 			}
 
 			// ITEM SETTLE //////////////////////////////////////////////////////////
@@ -7391,10 +7421,10 @@ void MovableMan::Update() {
 			// DELETE //////////////////////////////////////////////////////////
 			// Only delete after all travels & updates are done
 			// Actors
-			aIt = partition(m_Actors.begin(), m_Actors.end(), std::not_fn(std::mem_fn(&MovableObject::ToDelete)));
+			aIt = partition(CheckpointActorValues().m_Actors.begin(), CheckpointActorValues().m_Actors.end(), std::not_fn(std::mem_fn(&MovableObject::ToDelete)));
 			amidIt = aIt;
 
-			while (aIt != m_Actors.end()) {
+			while (aIt != CheckpointActorValues().m_Actors.end()) {
 				// Set brain to 0 to avoid crashes due to brain deletion
 				Activity* pActivity = g_ActivityMan.GetActivity();
 				if (pActivity) {
@@ -7418,8 +7448,8 @@ void MovableMan::Update() {
 				aIt++;
 			}
 			// Try to set the existing iterator to a safer value, erase can crash in debug mode otherwise?
-			aIt = m_Actors.begin();
-			m_Actors.erase(amidIt, m_Actors.end());
+			aIt = CheckpointActorValues().m_Actors.begin();
+			CheckpointActorValues().m_Actors.erase(amidIt, CheckpointActorValues().m_Actors.end());
 
 			// Items
 			iIt = stable_partition(m_Items.begin(), m_Items.end(), std::not_fn(std::mem_fn(&MovableObject::ToDelete)));
@@ -7477,7 +7507,7 @@ void MovableMan::Update() {
 	// The RNG snapshot has to be taken here, before the see-ray and MOID-draw futures launch below;
 	// the object census is taken at the tick's end instead, where the checkpoint archive is written.
 	if (g_SimChecksum.IsActive()) {
-		DumpControllerDebugSnapshot("end_tick_before_checksum", static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), m_Actors, nullptr, nullptr, &m_Particles);
+		DumpControllerDebugSnapshot("end_tick_before_checksum", static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), CheckpointActorValues().m_Actors, nullptr, nullptr, &m_Particles);
 		FeedSimChecksumRandomness();
 	}
 
@@ -7491,7 +7521,7 @@ void MovableMan::Update() {
 	WaitForActorsSeeTask();
 	SeeRayPass& pass = s_SeeRayPass;
 	const uint64_t seeTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-	for (Actor* actor: m_Actors) {
+	for (Actor* actor: CheckpointActorValues().m_Actors) {
 		actor->PrepareSeeRays(seeTick, pass.rays);
 	}
 	if (Scene* scene = g_SceneMan.GetScene(); scene && !pass.rays.empty()) {
@@ -7543,7 +7573,7 @@ void MovableMan::Travel() {
 		ZoneScopedN("Actors Travel");
 
 		g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsTravel);
-		for (Actor* actor: m_Actors) {
+		for (Actor* actor: CheckpointActorValues().m_Actors) {
 			TravelStage(actor, true);
 		}
 		g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsTravel);
@@ -7650,7 +7680,7 @@ void MovableMan::UpdateControllers() {
 	ZoneScoped;
 
 	// Re-sort: ExecuteLuaScriptCallbacks may have added or removed actors since the frame-start sort.
-	std::sort(m_Actors.begin(), m_Actors.end(), MOUniqueIDLess());
+	std::sort(CheckpointActorValues().m_Actors.begin(), CheckpointActorValues().m_Actors.end(), MOUniqueIDLess());
 	std::sort(m_Items.begin(), m_Items.end(), MOUniqueIDLess());
 	std::sort(m_Particles.begin(), m_Particles.end(), MOUniqueIDLess());
 
@@ -7659,23 +7689,23 @@ void MovableMan::UpdateControllers() {
 	RebuildContiguousActorIDs();
 
 	const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-	DumpControllerDebugSnapshot("controller_pre", simTick, m_Actors);
+	DumpControllerDebugSnapshot("controller_pre", simTick, CheckpointActorValues().m_Actors);
 
 	auto applyReplayFrame = [&](const char* phase) -> bool {
 		std::vector<ControllerFrame> frames;
 		std::string error;
 		if (!ScenarioRunner::GetReplayControllerFrames(simTick, frames, &error)) {
-			DumpControllerDebugSnapshot(std::string(phase) + "_missing_frame", simTick, m_Actors, nullptr, &error);
+			DumpControllerDebugSnapshot(std::string(phase) + "_missing_frame", simTick, CheckpointActorValues().m_Actors, nullptr, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " " + phase + ": " + error);
 			return false;
 		}
-		DumpControllerDebugSnapshot(std::string(phase) + "_pre_apply", simTick, m_Actors, &frames);
-		if (!ApplyControllerFramesToActors(m_Actors, frames, error)) {
-			DumpControllerDebugSnapshot(std::string(phase) + "_apply_error", simTick, m_Actors, &frames, &error);
+		DumpControllerDebugSnapshot(std::string(phase) + "_pre_apply", simTick, CheckpointActorValues().m_Actors, &frames);
+		if (!ApplyControllerFramesToActors(CheckpointActorValues().m_Actors, frames, error)) {
+			DumpControllerDebugSnapshot(std::string(phase) + "_apply_error", simTick, CheckpointActorValues().m_Actors, &frames, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " " + phase + ": " + error);
 			return false;
 		}
-		DumpControllerDebugSnapshot(std::string(phase) + "_post_apply", simTick, m_Actors, &frames);
+		DumpControllerDebugSnapshot(std::string(phase) + "_post_apply", simTick, CheckpointActorValues().m_Actors, &frames);
 		return true;
 	};
 
@@ -7723,7 +7753,7 @@ void MovableMan::UpdateControllers() {
 	// over: the policy would otherwise re-derive it from the control mode a switch is about to change.
 	// A live claim is not the owner to return to, so the entry takes the policy's peer, not the claimant.
 	if (lockstepActive) {
-		for (const Actor* actor: m_Actors) {
+		for (const Actor* actor: CheckpointActorValues().m_Actors) {
 			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
 			// The ownership query normalizes a negative team to 0; the seed records the team it was resolved at.
 			const uint8_t team = actor->GetTeam() < 0 ? uint8_t{0} : static_cast<uint8_t>(actor->GetTeam());
@@ -7741,12 +7771,12 @@ void MovableMan::UpdateControllers() {
 	// the frame the wire committed for this tick until the frames are snapshotted.
 	std::vector<long int> producingActors;
 	if (lockstepActive) {
-		producingActors = BeginLockstepProducingPass(m_Actors, isLocalControllerActor);
+		producingActors = BeginLockstepProducingPass(CheckpointActorValues().m_Actors, isLocalControllerActor);
 	}
 
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsAI);
 	{
-		for (Actor* actor: m_Actors) {
+		for (Actor* actor: CheckpointActorValues().m_Actors) {
 			if (isLocalControllerActor(actor)) {
 				actor->GetController()->Update();
 			}
@@ -7757,7 +7787,7 @@ void MovableMan::UpdateControllers() {
 		// (this one included) applies them at the committed tick.
 		std::vector<ControllerBoundaryBaseline> directBefore;
 		if (lockstepActive) {
-			for (Actor* actor: m_Actors) {
+			for (Actor* actor: CheckpointActorValues().m_Actors) {
 				if (isLocalControllerActor(actor)) {
 					directBefore.push_back(CaptureControllerBoundary(actor));
 				}
@@ -7765,7 +7795,7 @@ void MovableMan::UpdateControllers() {
 		}
 		auto drainDeferredEquips = [&]() {
 			// The equip calls the AI queued, in MOID order: performed now, or sent as commands under lockstep.
-			for (Actor* actor: m_Actors) {
+			for (Actor* actor: CheckpointActorValues().m_Actors) {
 				if (!isLocalControllerActor(actor)) {
 					continue;
 				}
@@ -7795,7 +7825,7 @@ void MovableMan::UpdateControllers() {
 		auto drainDeferredWaypoints = [&]() {
 			// The waypoint calls the AI queued, in MOID order: the owner sends them so every peer's
 			// queue takes the same writes at the same tick. A non-owner's queued calls are dropped.
-			for (Actor* actor: m_Actors) {
+			for (Actor* actor: CheckpointActorValues().m_Actors) {
 				if (isLocalControllerActor(actor)) {
 					actor->SendDeferredWaypoints();
 				} else {
@@ -7806,7 +7836,7 @@ void MovableMan::UpdateControllers() {
 		auto drainDeferredAIModes = [&]() {
 			// The AI modes the AI pass wrote, in MOID order: the owner sends them as synced requests so
 			// every peer takes the mode at the same tick. A non-owner's queued writes are dropped.
-			for (Actor* actor: m_Actors) {
+			for (Actor* actor: CheckpointActorValues().m_Actors) {
 				if (isLocalControllerActor(actor)) {
 					actor->SendDeferredAIModes();
 				} else {
@@ -7817,7 +7847,7 @@ void MovableMan::UpdateControllers() {
 		auto drainDeferredScriptMessages = [&]() {
 			// The messages the AI pass sent, in MOID order: the owner sends them so every peer's receiver
 			// script hears them at the same tick. A non-owner's queued messages are dropped.
-			for (Actor* actor: m_Actors) {
+			for (Actor* actor: CheckpointActorValues().m_Actors) {
 				if (isLocalControllerActor(actor)) {
 					actor->SendDeferredScriptMessages();
 				} else {
@@ -7828,7 +7858,7 @@ void MovableMan::UpdateControllers() {
 		auto drainDeferredGibs = [&]() {
 			// The gibs the AI pass asked for, in MOID order: the owner sends them so every peer gibs at the
 			// same tick. A non-owner's queued gibs are dropped.
-			for (Actor* actor: m_Actors) {
+			for (Actor* actor: CheckpointActorValues().m_Actors) {
 				if (isLocalControllerActor(actor)) {
 					actor->SendDeferredGibs();
 				} else {
@@ -7870,13 +7900,13 @@ void MovableMan::UpdateControllers() {
 		// Scripts initialize here, at one deterministic point on the sim thread on every peer, so a
 		// freshly added actor keeps its first AI pass and every peer numbers its sound scopes alike.
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
-		for (Actor* actor: m_Actors) {
+		for (Actor* actor: CheckpointActorValues().m_Actors) {
 			actor->InitializeObjectScriptsIfNeeded();
 		}
 		// The shared hooks' sound writes land here, after the last shared script of the tick and before
 		// the first AI one, so everything the drain finds afterwards was written by an AI pass.
 		g_AudioMan.SettleSharedSoundWrites();
-		for (Actor* actor: m_Actors) {
+		for (Actor* actor: CheckpointActorValues().m_Actors) {
 			if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
 				// Mark the running AI actor so its Equip* mutators defer the mutation to the post-pass drain.
 				g_CurrentAIActor = actor;
@@ -7892,7 +7922,7 @@ void MovableMan::UpdateControllers() {
 			                                                     RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
 			                                                     LuaStateWrapper& luaState = luaStates[start];
 			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState, true);
-			                                                     for (Actor* actor: m_Actors) {
+			                                                     for (Actor* actor: CheckpointActorValues().m_Actors) {
 				                                                     if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetLuaState() == &luaState && actor->GetController()->ShouldUpdateAIThisFrame()) {
 					                                                     g_CurrentAIActor = actor;
 					                                                     actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
@@ -7912,7 +7942,7 @@ void MovableMan::UpdateControllers() {
 		drainDeferredSoundOps();
 
 		// The serial UpdateAI pass mutates directly outside lockstep; under it the calls defer like the threaded ones.
-		for (Actor* actor: m_Actors) {
+		for (Actor* actor: CheckpointActorValues().m_Actors) {
 			if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetController()->ShouldUpdateAIThisFrame()) {
 				if (lockstepActive) {
 					g_CurrentAIActor = actor;
@@ -7931,7 +7961,7 @@ void MovableMan::UpdateControllers() {
 		drainDeferredSoundOps();
 		// A fixture's scripted writes come last, so they are the pass's final word on the actor.
 		if (AIWriteScript::IsActive()) {
-			AIWriteScript::RunTick(simTick, m_Actors, isLocalControllerActor);
+			AIWriteScript::RunTick(simTick, CheckpointActorValues().m_Actors, isLocalControllerActor);
 			drainDeferredEquips();
 			drainDeferredWaypoints();
 			drainDeferredAIModes();
@@ -7959,13 +7989,13 @@ void MovableMan::UpdateControllers() {
 			return;
 		}
 		std::unordered_set<int64_t> applied;
-		ApplyLockstepSeatReclaimsImpl(readyFrame, m_Actors);
-		if (!ApplyControllerFramesToLockstepActors(m_Actors, CommittedControllerFramesInSenderOrder(readyFrame, ScenarioRunner::GetLockstepLocalPeerId()), applied, error)) {
+		ApplyLockstepSeatReclaimsImpl(readyFrame, CheckpointActorValues().m_Actors);
+		if (!ApplyControllerFramesToLockstepActors(CheckpointActorValues().m_Actors, CommittedControllerFramesInSenderOrder(readyFrame, ScenarioRunner::GetLockstepLocalPeerId()), applied, error)) {
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " world catch-up apply: " + error);
 			return;
 		}
-		NeutralizeUnframedLockstepActors(m_Actors, applied);
-		ApplyLockstepLeaveHandoffsImpl(readyFrame, m_Actors, false);
+		NeutralizeUnframedLockstepActors(CheckpointActorValues().m_Actors, applied);
+		ApplyLockstepLeaveHandoffsImpl(readyFrame, CheckpointActorValues().m_Actors, false);
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 		CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
 		ApplyLockstepGameCommands(readyFrame);
@@ -7979,39 +8009,39 @@ void MovableMan::UpdateControllers() {
 		// now (QueueLocalInput stamps targetFrame = simTick + D). Actors are then driven this tick by
 		// the frame COMMITTED for simTick — sampled D ticks ago — so local and remote apply in phase.
 		// At D=0 the committed local frame is this tick's snapshot, so behavior is unchanged.
-		std::vector<ControllerFrame> localFrames = SnapshotLockstepControllerFrames(m_Actors, true);
+		std::vector<ControllerFrame> localFrames = SnapshotLockstepControllerFrames(CheckpointActorValues().m_Actors, true);
 		EndLockstepProducingPass(producingActors);
-		DumpControllerDebugSnapshot("lockstep_local_pre_canonicalize", simTick, m_Actors, &localFrames);
+		DumpControllerDebugSnapshot("lockstep_local_pre_canonicalize", simTick, CheckpointActorValues().m_Actors, &localFrames);
 		if (!CanonicalizeControllerFramesThroughWire(localFrames, error)) {
-			DumpControllerDebugSnapshot("lockstep_local_canonicalize_error", simTick, m_Actors, &localFrames, &error);
+			DumpControllerDebugSnapshot("lockstep_local_canonicalize_error", simTick, CheckpointActorValues().m_Actors, &localFrames, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep canonicalize: " + error);
 			return;
 		}
 		if (!ScenarioRunner::QueueLockstepLocalControllerFrames(simTick, localFrames, &error)) {
-			DumpControllerDebugSnapshot("lockstep_local_queue_error", simTick, m_Actors, &localFrames, &error);
+			DumpControllerDebugSnapshot("lockstep_local_queue_error", simTick, CheckpointActorValues().m_Actors, &localFrames, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep queue: " + error);
 			return;
 		}
 
 		NetLockstepReadyFrame readyFrame;
 		if (!ScenarioRunner::WaitForLockstepControllerFrame(simTick, readyFrame, &error)) {
-			DumpControllerDebugSnapshot("lockstep_remote_wait_error", simTick, m_Actors, nullptr, &error);
+			DumpControllerDebugSnapshot("lockstep_remote_wait_error", simTick, CheckpointActorValues().m_Actors, nullptr, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep wait: " + error);
 			return;
 		}
 		std::unordered_set<int64_t> applied;
-		ApplyLockstepSeatReclaimsImpl(readyFrame, m_Actors);
-		if (!ApplyControllerFramesToLockstepActors(m_Actors, CommittedControllerFramesInSenderOrder(readyFrame, ScenarioRunner::GetLockstepLocalPeerId()), applied, error)) {
-			DumpControllerDebugSnapshot("lockstep_apply_error", simTick, m_Actors, &readyFrame.remoteFrames, &error);
+		ApplyLockstepSeatReclaimsImpl(readyFrame, CheckpointActorValues().m_Actors);
+		if (!ApplyControllerFramesToLockstepActors(CheckpointActorValues().m_Actors, CommittedControllerFramesInSenderOrder(readyFrame, ScenarioRunner::GetLockstepLocalPeerId()), applied, error)) {
+			DumpControllerDebugSnapshot("lockstep_apply_error", simTick, CheckpointActorValues().m_Actors, &readyFrame.remoteFrames, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep apply: " + error);
 			return;
 		}
 		const bool canonicalStartup = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) < ScenarioRunner::GetLockstepCanonicalStartFrame();
-		NeutralizeUnframedLockstepActors(m_Actors, applied, canonicalStartup);
+		NeutralizeUnframedLockstepActors(CheckpointActorValues().m_Actors, applied, canonicalStartup);
 		// The round's opening actors join after this apply; before the first frame they take the same route on every peer.
-		if (canonicalStartup) NeutralizeUnframedLockstepActors(m_AddedActors, applied, true);
-		ApplyLockstepLeaveHandoffsImpl(readyFrame, m_Actors, false);
-		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
+		if (canonicalStartup) NeutralizeUnframedLockstepActors(CheckpointActorValues().m_AddedActors, applied, true);
+		ApplyLockstepLeaveHandoffsImpl(readyFrame, CheckpointActorValues().m_Actors, false);
+		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, CheckpointActorValues().m_Actors, &readyFrame.remoteFrames);
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 		CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
 		ApplyLockstepGameCommands(readyFrame);
@@ -8019,7 +8049,7 @@ void MovableMan::UpdateControllers() {
 		ReconcileLockstepControlBindings();
 
 		if (ScenarioRunner::IsControllerLogRecording()) {
-			std::vector<ControllerFrame> frames = SnapshotControllerFrames(m_Actors);
+			std::vector<ControllerFrame> frames = SnapshotControllerFrames(CheckpointActorValues().m_Actors);
 			ScenarioRunner::RecordControllerFrames(simTick, std::move(frames));
 		}
 		return;
@@ -8032,22 +8062,22 @@ void MovableMan::UpdateControllers() {
 	}
 
 	if (ScenarioRunner::IsControllerLogRecording()) {
-		std::vector<ControllerFrame> frames = SnapshotControllerFrames(m_Actors);
-		DumpControllerDebugSnapshot("record_pre_canonicalize", simTick, m_Actors, &frames);
+		std::vector<ControllerFrame> frames = SnapshotControllerFrames(CheckpointActorValues().m_Actors);
+		DumpControllerDebugSnapshot("record_pre_canonicalize", simTick, CheckpointActorValues().m_Actors, &frames);
 		if (ScenarioRunner::ShouldCanonicalizeControllerLog()) {
 			std::string error;
 			if (!CanonicalizeControllerFramesThroughWire(frames, error)) {
-				DumpControllerDebugSnapshot("record_canonicalize_error", simTick, m_Actors, &frames, &error);
+				DumpControllerDebugSnapshot("record_canonicalize_error", simTick, CheckpointActorValues().m_Actors, &frames, &error);
 				ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " record canonicalize: " + error);
 				return;
 			}
-			if (!ApplyControllerFramesToActors(m_Actors, frames, error)) {
-				DumpControllerDebugSnapshot("record_canonicalize_apply_error", simTick, m_Actors, &frames, &error);
+			if (!ApplyControllerFramesToActors(CheckpointActorValues().m_Actors, frames, error)) {
+				DumpControllerDebugSnapshot("record_canonicalize_apply_error", simTick, CheckpointActorValues().m_Actors, &frames, &error);
 				ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " record canonicalize: " + error);
 				return;
 			}
 		}
-		DumpControllerDebugSnapshot("record_post_canonicalize", simTick, m_Actors, &frames);
+		DumpControllerDebugSnapshot("record_post_canonicalize", simTick, CheckpointActorValues().m_Actors, &frames);
 		ScenarioRunner::RecordControllerFrames(simTick, std::move(frames));
 	}
 }
@@ -8056,7 +8086,7 @@ void MovableMan::PreControllerUpdate() {
 	ZoneScoped;
 
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsUpdate);
-	for (Actor* actor: m_Actors) {
+	for (Actor* actor: CheckpointActorValues().m_Actors) {
 		PreControllerStage(actor);
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsUpdate);
@@ -8075,7 +8105,7 @@ void MovableMan::PreControllerUpdate() {
 void MovableMan::DrawMatter(BITMAP* pTargetBitmap, Vector& targetPos) {
 	ScopedRenderRNG renderRNG;
 	// Draw objects to accumulation bitmap
-	for (CheckpointDeque<Actor*>::iterator aIt = --m_Actors.end(); aIt != --m_Actors.begin(); --aIt)
+	for (CheckpointDeque<Actor*>::iterator aIt = --CheckpointActorValues().m_Actors.end(); aIt != --CheckpointActorValues().m_Actors.begin(); --aIt)
 		(*aIt)->Draw(pTargetBitmap, targetPos, g_DrawMaterial);
 
 	for (CheckpointDeque<MovableObject*>::iterator parIt = --m_Particles.end(); parIt != --m_Particles.begin(); --parIt)
@@ -8122,7 +8152,7 @@ void MovableMan::UpdateDrawMOIDs() {
 
 	MOID currentMOID = 1;
 
-	for (Actor* actor: m_Actors) {
+	for (Actor* actor: CheckpointActorValues().m_Actors) {
 		if (!actor->IsSetToDelete()) {
 			actor->UpdateMOID(m_MOIDIndex);
 			actor->Draw(nullptr, Vector(), g_DrawMOID, true);
@@ -8219,7 +8249,7 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 	{
 		ZoneScopedN("Actors Draw");
 
-		for (CheckpointDeque<Actor*>::reverse_iterator aIt = m_Actors.rbegin(); aIt != m_Actors.rend(); ++aIt) {
+		for (CheckpointDeque<Actor*>::reverse_iterator aIt = CheckpointActorValues().m_Actors.rbegin(); aIt != CheckpointActorValues().m_Actors.rend(); ++aIt) {
 			if (!IsHiddenFromRender(*aIt)) {
 				(*aIt)->Draw(pTargetBitmap, targetPos);
 			}
@@ -8238,7 +8268,7 @@ void MovableMan::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whi
 		}
 	}
 
-	for (CheckpointDeque<Actor*>::reverse_iterator aIt = m_Actors.rbegin(); aIt != m_Actors.rend(); ++aIt) {
+	for (CheckpointDeque<Actor*>::reverse_iterator aIt = CheckpointActorValues().m_Actors.rbegin(); aIt != CheckpointActorValues().m_Actors.rend(); ++aIt) {
 		if (!IsHiddenFromRender(*aIt)) {
 			(*aIt)->DrawHUD(pTargetBitmap, targetPos, which);
 		}
@@ -8261,8 +8291,8 @@ std::string MovableMan::SaveCheckpoint() const {
 	const auto collect = [&visited, &carried](const auto& roots) {
 		CheckpointForEachValue(roots, [&](const Entity* root) { CollectOwnedMovableObjects(root, visited, carried); });
 	};
-	collect(m_Actors); collect(m_Items); collect(m_Particles);
-	collect(m_AddedActors); collect(m_AddedItems); collect(m_AddedParticles);
+	collect(CheckpointActorValues().m_Actors); collect(m_Items); collect(m_Particles);
+	collect(CheckpointActorValues().m_AddedActors); collect(m_AddedItems); collect(m_AddedParticles);
 	CollectOwnedMovableObjects(g_SceneMan.GetScene(), visited, carried);
 	if (const std::vector<MovableObject*>* held = ScriptHeldScope::Current()) {
 		for (const MovableObject* object: *held) CollectOwnedMovableObjects(object, visited, carried);
@@ -8376,8 +8406,8 @@ std::string MovableMan::SaveWorldStructure() const {
 	const auto identities = [](const auto& source, auto& target) {
 		CheckpointForEachValue(source, [&](const auto* object) { target.insert(target.end(), object ? CheckpointNativeStorage::Source(object)->GetUniqueID() : 0); });
 	};
-	identities(m_Actors, state.cohorts[0]); identities(m_Items, state.cohorts[1]); identities(m_Particles, state.cohorts[2]);
-	identities(m_AddedActors, state.cohorts[3]); identities(m_AddedItems, state.cohorts[4]); identities(m_AddedParticles, state.cohorts[5]);
+	identities(CheckpointActorValues().m_Actors, state.cohorts[0]); identities(m_Items, state.cohorts[1]); identities(m_Particles, state.cohorts[2]);
+	identities(CheckpointActorValues().m_AddedActors, state.cohorts[3]); identities(m_AddedItems, state.cohorts[4]); identities(m_AddedParticles, state.cohorts[5]);
 	identities(m_ValidActors, state.validObjects[0]); identities(m_ValidItems, state.validObjects[1]); identities(m_ValidParticles, state.validObjects[2]);
 	// A slot can outlive the object drawn into it (a script that took the object may have freed it), so only a
 	// registered object names its slot; a freed one is never read.
@@ -8400,7 +8430,7 @@ std::string MovableMan::SaveWorldStructure() const {
 		state.teamMOIDCount[team] = m_TeamMOIDCount[team];
 	}
 	// Derived from the live actors, not from the index's keys: a key is only as alive as the actor it points at.
-	for (const Actor* actor: CheckpointValues(m_Actors)) {
+	for (const Actor* actor: CheckpointValues(CheckpointActorValues().m_Actors)) {
 		if (const auto* entry = CheckpointFind(m_ContiguousActorIDs, actor)) state.contiguousActorIDs.emplace(CheckpointNativeStorage::Source(actor)->GetUniqueID(), entry->second);
 	}
 	// Only a live actor's owner travels: a seeded owner for a removed actor would fail the load's live-actor check.
@@ -8410,14 +8440,14 @@ std::string MovableMan::SaveWorldStructure() const {
 			state.actorOwners.emplace(static_cast<long>(uid), std::pair{static_cast<int>(owner), static_cast<int>(NetActorOwnership::GetSeededOwnerTeam(uid))});
 		}
 	};
-	for (const Actor* actor: CheckpointValues(m_Actors)) saveOwner(actor);
-	for (const Actor* actor: CheckpointValues(m_AddedActors)) saveOwner(actor);
+	for (const Actor* actor: CheckpointValues(CheckpointActorValues().m_Actors)) saveOwner(actor);
+	for (const Actor* actor: CheckpointValues(CheckpointActorValues().m_AddedActors)) saveOwner(actor);
 	// Same rule for the brain record: only a live actor's entry travels.
 	const auto saveBrain = [this, &state](const Actor* actor) {
 		if (CheckpointContains(m_PlayerBrainIDs, CheckpointNativeStorage::Source(actor)->GetUniqueID())) state.playerBrains.insert(CheckpointNativeStorage::Source(actor)->GetUniqueID());
 	};
-	for (const Actor* actor: CheckpointValues(m_Actors)) saveBrain(actor);
-	for (const Actor* actor: CheckpointValues(m_AddedActors)) saveBrain(actor);
+	for (const Actor* actor: CheckpointValues(CheckpointActorValues().m_Actors)) saveBrain(actor);
+	for (const Actor* actor: CheckpointValues(CheckpointActorValues().m_AddedActors)) saveBrain(actor);
 	for (const AlarmEvent* event: CheckpointValues(m_AlarmEvents)) state.alarms[0].emplace_back(CheckpointNativeStorage::Source(event)->m_ScenePos, std::pair{static_cast<int>(CheckpointNativeStorage::Source(event)->m_Team), CheckpointNativeStorage::Source(event)->m_Range});
 	for (const AlarmEvent* event: CheckpointValues(m_AddedAlarmEvents)) state.alarms[1].emplace_back(CheckpointNativeStorage::Source(event)->m_ScenePos, std::pair{static_cast<int>(CheckpointNativeStorage::Source(event)->m_Team), CheckpointNativeStorage::Source(event)->m_Range});
 	const auto quarantine = CheckpointValues(m_LockstepJoinQuarantine);
@@ -8461,7 +8491,7 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 		};
 		std::set<long> present;
 		const auto collect = [&present](const auto& objects) { for (const auto* object: objects) present.insert(object->GetUniqueID()); };
-		collect(m_Actors); collect(m_Items); collect(m_Particles); collect(m_AddedActors); collect(m_AddedItems); collect(m_AddedParticles);
+		collect(CheckpointActorValues().m_Actors); collect(m_Items); collect(m_Particles); collect(CheckpointActorValues().m_AddedActors); collect(m_AddedItems); collect(m_AddedParticles);
 		if (present != incoming) throw std::runtime_error("loaded world membership differs from checkpoint");
 		std::array<CheckpointDeque<MovableObject*>, 6> cohorts;
 		for (int kind = 0; kind < 6; ++kind) for (long uid: state.cohorts[kind]) cohorts[kind].push_back(kind % 3 == 0 ? actor(uid) : resolve(uid));
@@ -8490,9 +8520,9 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 		}
 		CheckpointVector<std::pair<uint64_t, long int>> quarantine(state.quarantine.begin(), state.quarantine.end());
 		CheckpointSet<long> brains(state.playerBrains.begin(), state.playerBrains.end());
-		m_Actors.clear(); m_AddedActors.clear();
-		for (MovableObject* object: cohorts[0]) m_Actors.push_back(static_cast<Actor*>(object));
-		for (MovableObject* object: cohorts[3]) m_AddedActors.push_back(static_cast<Actor*>(object));
+		CheckpointActorValues().m_Actors.clear(); CheckpointActorValues().m_AddedActors.clear();
+		for (MovableObject* object: cohorts[0]) CheckpointActorValues().m_Actors.push_back(static_cast<Actor*>(object));
+		for (MovableObject* object: cohorts[3]) CheckpointActorValues().m_AddedActors.push_back(static_cast<Actor*>(object));
 		m_Items.swap(cohorts[1]); m_Particles.swap(cohorts[2]); m_AddedItems.swap(cohorts[4]); m_AddedParticles.swap(cohorts[5]);
 		m_ValidActors.clear(); m_ValidItems.clear(); m_ValidParticles.clear();
 		for (long uid: state.validObjects[0]) m_ValidActors.insert(actor(uid));
@@ -8548,7 +8578,7 @@ bool MovableMan::RunLegacyBrainRecordSelfTest(const Actor* seatBrain) {
 
 bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	if (!craft) return false;
-	if (m_Actors.empty()) {
+	if (CheckpointActorValues().m_Actors.empty()) {
 		delete craft;
 		return false;
 	}
@@ -8556,7 +8586,7 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	AbsorbAddedMOs();
 	RebuildContiguousActorIDs();
 	const long craftUID = craft->GetUniqueID();
-	const bool indexed = std::find(m_Actors.begin(), m_Actors.end(), craft) != m_Actors.end() && GetContiguousActorID(craft) >= 0;
+	const bool indexed = std::find(CheckpointActorValues().m_Actors.begin(), CheckpointActorValues().m_Actors.end(), craft) != CheckpointActorValues().m_Actors.end() && GetContiguousActorID(craft) >= 0;
 
 	const bool cleared = RemoveActor(craft) == craft && GetContiguousActorID(craft) < 0;
 
@@ -8576,7 +8606,7 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	}
 
 	// The brain record travels with the world: note a live actor, save, drop it, and read it back from the record.
-	Actor* const recordActor = m_Actors.empty() ? nullptr : m_Actors.front();
+	Actor* const recordActor = CheckpointActorValues().m_Actors.empty() ? nullptr : CheckpointActorValues().m_Actors.front();
 	const long recordUID = recordActor ? recordActor->GetUniqueID() : 0;
 	const bool recordWasBrain = recordActor && IsPlayerBrain(recordActor);
 	bool brainArchived = false;
@@ -8598,10 +8628,10 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	// last-ditch placement have to reach the record too.
 	bool brainLegacyReseeded = false;
 	bool brainLastDitch = false;
-	const bool brainSeats = g_ActivityMan.GetActivity() && recordActor && m_Actors.size() > 1 &&
-	                        g_ActivityMan.GetActivity()->RunPlayerBrainRecordSelfTest(recordActor, m_Actors[1], &brainLegacyReseeded, &brainLastDitch);
+	const bool brainSeats = g_ActivityMan.GetActivity() && recordActor && CheckpointActorValues().m_Actors.size() > 1 &&
+	                        g_ActivityMan.GetActivity()->RunPlayerBrainRecordSelfTest(recordActor, CheckpointActorValues().m_Actors[1], &brainLegacyReseeded, &brainLastDitch);
 	Actor* switchable = nullptr;
-	for (Actor* actor: m_Actors) if (IsActor(actor) && actor->IsPlayerControllable() && !actor->GetController()->IsPlayerControlled()) { switchable = actor; break; }
+	for (Actor* actor: CheckpointActorValues().m_Actors) if (IsActor(actor) && actor->IsPlayerControllable() && !actor->GetController()->IsPlayerControlled()) { switchable = actor; break; }
 	const bool sharedSeats = Activity::RunSharedSeatSelfTest(switchable);
 
 	// The shape the crashed resync archives carried: an index entry for an actor the world does not have.
@@ -8710,7 +8740,7 @@ void MovableMan::RedrawRestoredMOIDs() {
 	const auto draw = [](const auto& objects) {
 		for (const auto* object: objects) if (!object->IsSetToDelete()) object->Draw(nullptr, Vector(), g_DrawMOID, true);
 	};
-	draw(m_Actors); draw(m_Items); draw(m_Particles);
+	draw(CheckpointActorValues().m_Actors); draw(m_Items); draw(m_Particles);
 }
 
 MovableMan::ConstructionRegistryScope::ConstructionRegistryScope() :

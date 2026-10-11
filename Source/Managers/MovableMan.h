@@ -90,6 +90,10 @@ namespace RTE {
 		/// Public member variable, method and friend function declarations
 	public:
 
+		/// Owns actor membership before a multiplayer capture.
+		void PrepareCheckpointActorValues();
+		const void* CheckpointOwnedActorValues() const { return m_OwnedCheckpointActors.get(); }
+		static std::string CheckpointActorStorageSelfTestMismatch();
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		SerializableClassNameGetter;
@@ -659,7 +663,7 @@ namespace RTE {
 
 		/// Gets the number of actors currently held.
 		/// @return The number of actors.
-		long GetActorCount() const { return m_Actors.size(); }
+		long GetActorCount() const { return CheckpointActorValues().m_Actors.size(); }
 
 		/// One live actor and the lockstep peer that held it, with no sim state attached.
 		struct LockstepActorOwner {
@@ -853,9 +857,9 @@ namespace RTE {
 		void OverrideMaterialDoors(bool eraseDoorMaterial, int team = Activity::NoTeam) const;
 
 		/// Places a borrowed Actor in the added-actor queue for a detecting test. Ownership is NOT transferred.
-		void TestAddBorrowedActor(Actor* actor) { m_AddedActors.push_back(actor); }
+		void TestAddBorrowedActor(Actor* actor) { CheckpointActorValues().m_AddedActors.push_back(actor); }
 		/// Takes a borrowed Actor back out of the added-actor queue.
-		void TestRemoveBorrowedActor(Actor* actor) { m_AddedActors.erase(std::remove(m_AddedActors.begin(), m_AddedActors.end(), actor), m_AddedActors.end()); }
+		void TestRemoveBorrowedActor(Actor* actor) { CheckpointActorValues().m_AddedActors.erase(std::remove(CheckpointActorValues().m_AddedActors.begin(), CheckpointActorValues().m_AddedActors.end(), actor), CheckpointActorValues().m_AddedActors.end()); }
 
 		/// Whether a team's door material is drawn anywhere inside a box, so an override of that team would change the terrain there.
 		/// @param team Which team to look for, NoTeam means all teams.
@@ -1137,17 +1141,28 @@ namespace RTE {
 
 		/// Protected member variable and method declarations
 	protected:
-		// All actors in the scene
-		CheckpointDeque<Actor*> m_Actors;
+		struct CheckpointActors : CheckpointNativeAllocated {
+			// All actors in the scene and the actors added during this tick.
+			CheckpointDeque<Actor*> m_Actors;
+			CheckpointDeque<Actor*> m_AddedActors;
+		};
+		CheckpointActors m_OrdinaryCheckpointActors;
+		std::unique_ptr<CheckpointActors> m_OwnedCheckpointActors;
+		CheckpointActors& CheckpointActorValues() {
+			if (CheckpointNativeStorage::Reading()) throw std::logic_error("a frozen registry cannot change live actor membership");
+			return m_OwnedCheckpointActors ? *m_OwnedCheckpointActors : m_OrdinaryCheckpointActors;
+		}
+		const CheckpointActors& CheckpointActorValues() const {
+			const auto* source = m_OwnedCheckpointActors ? m_OwnedCheckpointActors.get() : &m_OrdinaryCheckpointActors;
+			return *CheckpointNativeStorage::Source(source);
+		}
+
 		// A map to give a unique contiguous identifier per-actor. This is re-created per frame.
 		CheckpointUnorderedMap<const Actor*, int> m_ContiguousActorIDs;
 		// List of items that are pickup-able by actors
 		CheckpointDeque<MovableObject*> m_Items;
 		// List of free, dead particles flying around
 		CheckpointDeque<MovableObject*> m_Particles;
-		// These are the actors/items/particles which were added during a frame.
-		// They are moved to the containers above at the end of the frame.
-		CheckpointDeque<Actor*> m_AddedActors;
 		// Actors that joined mid-tick during a lockstep match (join tick, unique id), quarantined off
 		// their per-machine controllers until the next tick's controller update hands them to the wire.
 		CheckpointVector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
