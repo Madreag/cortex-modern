@@ -79,6 +79,9 @@ namespace RTE {
 			uint32_t asymmetricVoters = 0;
 			uint32_t asymmetricDropped = 0, asymmetricResent = 0;
 			bool asymmetricReleased = false;
+			// Signed wire decisions name the actual substituted frame range;
+			// a prepared bridge may exist before the display reaches that range.
+			std::map<uint8_t, std::map<uint64_t, bool>> bridgeBoundaries;
 		};
 		struct Wire final : INetTransport {
 			Hub& hub;
@@ -149,6 +152,16 @@ namespace RTE {
 				const auto found = connections.find(id);
 				if (found == connections.end()) { if (error) *error = "the fixture connection is absent"; return false; }
 				auto [other, remote] = found->second;
+				NetHostMigrationMessage decision; NetHash32 key; key.fill(0x39);
+				if (lane == NetTransportLane::ControlReliable && NetHostMigrationCodec::Decode(bytes, key, decision)) {
+					[]<class Message>(Hub& hub, const Message& packet) {
+						using Type = std::decay_t<decltype(packet.type)>;
+						if constexpr (requires { Type::PeerBridgeCommit; }) {
+							if (packet.type == Type::PeerBridgeCommit && packet.preparedFrame <= 1)
+								for (uint8_t peer: packet.members) hub.bridgeBoundaries[peer][packet.frame] = packet.preparedFrame == 0;
+						}
+					}(hub, decision);
+				}
 				unsigned asymmetric = 0;
 				if (hub.row.asymmetricBridge && hub.DuringFault()) {
 					NetHostMigrationMessage packet; NetHash32 key; key.fill(0x39);
@@ -330,6 +343,12 @@ namespace RTE {
 				const uint8_t subject = hub.row.seats == 2 && !hub.row.internet ? 2 : hub.row.subject;
 				const auto bridge = Bridges(*peers[observer - 1]);
 				if (!bridge.contains(subject)) return true;
+				uint64_t continuityStart = 0;
+				if (const auto changes = hub.bridgeBoundaries.find(subject); changes != hub.bridgeBoundaries.end()) {
+					const auto at = changes->second.upper_bound(ready.frame);
+					if (at == changes->second.begin() || !std::prev(at)->second) return true;
+					continuityStart = std::prev(at)->first;
+				}
 				if (peers[observer - 1]->IsSeatUnderAI(subject, ready.frame)) { ++aiFrames; ++substitutes; return true; }
 				std::vector<ControllerFrame> frames;
 				if (ready.localPeerId == subject) frames = ready.localFrames;
@@ -339,7 +358,7 @@ namespace RTE {
 				}
 				if (frames.empty()) return true;
 				const auto [first, inserted] = continuityFrom.try_emplace(observer, ready.frame);
-				const uint64_t elapsed = static_cast<uint64_t>(std::llround((ready.frame - first->second) * c_TestTickMs));
+				const uint64_t elapsed = static_cast<uint64_t>(std::llround((ready.frame - (continuityStart ? continuityStart : first->second)) * c_TestTickMs));
 				for (const auto& frame: frames) {
 					if (frame.analogMoveX != subject * 100 || frame.mouseDeltaX || frame.mouseDeltaY) { error = "the short substitute changed movement or repeated a delta"; return false; }
 					if (elapsed >= c_TestReleaseMs && (frame.stateMask & ((1ULL << WEAPON_FIRE) | (1ULL << BODY_JUMP)))) { error = "a held fire or jump continued past its release bound"; return false; }
