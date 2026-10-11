@@ -147,6 +147,15 @@ namespace RTE {
 		if (HandlePeerSessionMessage(message, nowMs)) return true;
 		if (!UsesPeerFrameGroups() || message.type < NetHostMigrationMessageType::PeerInput ||
 		    (message.type > NetHostMigrationMessageType::PeerControl && message.type != NetHostMigrationMessageType::PeerForwardInput)) return false;
+		const uint8_t detailOwner = message.type == NetHostMigrationMessageType::PeerForwardInput ? message.successorPeerId : message.senderPeerId;
+		const auto detailBack = m_ReclaimTransactions.find(detailOwner);
+		if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && (message.type == NetHostMigrationMessageType::PeerInput || message.type == NetHostMigrationMessageType::PeerForwardInput) &&
+		    detailBack != m_ReclaimTransactions.end() && message.frame > detailBack->second.neutralThroughFrame && message.frame <= detailBack->second.neutralThroughFrame + 3) {
+			DiagnosticLine() << "[net-return-input-read] local=" << static_cast<int>(m_Config.localPeerId) << " owner=" << static_cast<int>(detailOwner)
+			    << " frame=" << message.frame << " prepared=" << m_Stats.nextFrame << " session_matches=" << (message.sessionId == m_Config.sessionId)
+			    << " round_matches=" << (message.roundId == m_Config.matchConfig.roundId) << " setup_matches=" << (message.configHash == m_RoundConfigHash)
+			    << " removed=" << m_RemovedPeers.contains(message.senderPeerId) << " now_ms=" << nowMs << std::endl;
+		}
 		if (PeerFrameBlackout(nowMs)) return true;
 		if (message.sessionId != m_Config.sessionId || message.roundId != m_Config.matchConfig.roundId || message.configHash != m_RoundConfigHash ||
 		    message.senderPeerId == 0 || message.senderPeerId == m_Config.localPeerId || message.senderPeerId > m_Config.peerCount || message.generation != 1 || m_RemovedPeers.contains(message.senderPeerId)) return true;

@@ -47,14 +47,25 @@ namespace RTE {
 		std::vector<uint8_t> bytes;
 		if (!NetHostMigrationCodec::Encode(message, m_Config.migrationKey, bytes)) return false;
 		const bool liveInput = message.type == NetHostMigrationMessageType::PeerInput || message.type == NetHostMigrationMessageType::PeerForwardInput;
+		const auto back = m_ReclaimTransactions.find(m_Config.localPeerId);
+		const bool details = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && message.type == NetHostMigrationMessageType::PeerInput &&
+		    back != m_ReclaimTransactions.end() && message.frame > back->second.neutralThroughFrame && message.frame <= back->second.neutralThroughFrame + 3;
 		const auto wantsInput = [&](uint8_t peer) {
 			const auto held = m_PeerBridges.find(peer);
 			return !liveInput || held == m_PeerBridges.end() || !held->second.committedHold || held->second.returnFrame.has_value();
 		};
 		if (m_Config.peerSessionLinks) {
 			bool sent = false;
-			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
-				if (peer != m_Config.localPeerId && !m_RemovedPeers.contains(peer) && wantsInput(peer) && (onlyPeer == 0 || onlyPeer == peer)) sent |= m_Config.peerSessionLinks->SendTo(peer, lane, bytes);
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+				if (peer == m_Config.localPeerId) continue;
+				const bool wanted = !m_RemovedPeers.contains(peer) && wantsInput(peer) && (onlyPeer == 0 || onlyPeer == peer);
+				const bool delivered = wanted && m_Config.peerSessionLinks->SendTo(peer, lane, bytes);
+				sent |= delivered;
+				if (details) DiagnosticLine() << "[net-return-input-send] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer)
+				    << " frame=" << message.frame << " wanted=" << wanted << " sent=" << delivered << " prepared=" << m_Stats.nextFrame
+				    << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " reference=" << static_cast<int>(m_PeerPaceReference)
+				    << " catching_up=" << PeerFrameCatchUpActive() << " now_ms=" << m_TimingNowMs << std::endl;
+			}
 			return sent;
 		}
 		std::set<uint8_t> sent;

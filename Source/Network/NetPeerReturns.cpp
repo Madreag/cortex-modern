@@ -262,6 +262,9 @@ namespace RTE {
 	bool NetLockstepCoordinator::PeerFrameCatchUpActive() const {
 		NET_PLANE_CHECK();
 		if (!UsesPeerFrameGroups() || !IsRunning() || !m_LastCompletedSimulationTick) return false;
+		const auto back = m_ReclaimTransactions.find(m_Config.localPeerId);
+		// The reader keeps its catch-up budget while the neutral interval carries its return.
+		if (back != m_ReclaimTransactions.end() && *m_LastCompletedSimulationTick <= back->second.neutralThroughFrame) return true;
 		if (m_PeerTailThrough && *m_LastCompletedSimulationTick < *m_PeerTailThrough) return true;
 		// The initial handshake reaches seats at different times. Follow one
 		// stable member's displayed clock so that difference cannot become a

@@ -39,6 +39,8 @@ def run_case(repo, out, case, timeout, lag_ms, initial_delay):
             if peer == 1:
                 flags += ['-net-fake-lag', '100']
             env = {'CCCP_HEADLESS': '1', 'CC_TEST_NET_MATCH_E2E_WAIT_PEERS': '1'}
+            if returning:
+                env['CC_TEST_RETURN_INPUT_DETAILS'] = '1'
             if peer == 1 and returning:
                 env['CC_TEST_LINK_BLACKOUT'] = '1:600:8000'
                 env['CC_TEST_SCENE_PATH_RTT_MS'] = '450'
