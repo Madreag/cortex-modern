@@ -147,12 +147,12 @@ struct RTE::LuaPathCallbackContext {
 		std::shared_ptr<const PathRequest> result;
 	};
 	std::mutex mutex;
-	std::unordered_map<lua_State*, int> nextId;
+	CheckpointUnorderedMap<lua_State*, int> nextId;
 	uint64_t nextOrder = 0;
 	bool orderPending = false;
-	std::vector<Callback> callbacks;
-	std::vector<Callback> incoming;
-	std::vector<Request> pending;
+	CheckpointVector<Callback> callbacks;
+	CheckpointVector<Callback> incoming;
+	CheckpointVector<Request> pending;
 };
 
 const std::unordered_set<std::string> LuaMan::c_FileAccessModes = {"r", "r+", "w", "w+", "a", "a+", "rt", "wt"};
@@ -13956,7 +13956,7 @@ void LuaMan::CompletePathCallback(const std::shared_ptr<LuaPathCallbackContext>&
 }
 
 void LuaMan::ResetPathCallbacks(bool clearLua) {
-	m_PathCallbacks = std::make_shared<LuaPathCallbackContext>();
+	m_PathCallbacks = MakeCheckpointNativeShared<LuaPathCallbackContext>();
 	if (clearLua) {
 		const auto clear = [](LuaStateWrapper& state) { if (state.GetLuaState()) state.RunScriptString("_AsyncPathCallbacks = {}"); };
 		clear(m_MasterScriptState);
@@ -13970,7 +13970,7 @@ void LuaMan::SwapPathCallbacks(std::shared_ptr<LuaPathCallbackContext>& context)
 }
 
 void LuaMan::BeginPathCallbackCapture() {
-	m_PathCallbackCapture = std::make_shared<LuaPathCallbackContext>();
+	m_PathCallbackCapture = MakeCheckpointNativeShared<LuaPathCallbackContext>();
 	std::scoped_lock lock(m_PathCallbacks->mutex);
 	m_PathCallbackCapture->nextId = m_PathCallbacks->nextId;
 	m_PathCallbackCapture->nextOrder = m_PathCallbacks->nextOrder;
@@ -14147,7 +14147,7 @@ void LuaMan::ExecuteLuaScriptCallbacks() {
 	}
 	static const long holdUntil = []() { const char* value = std::getenv("CC_TEST_ASYNC_PATH_DELIVERY_TICK"); return value ? std::strtol(value, nullptr, 10) : 0L; }();
 	if (holdUntil > 0 && g_TimerMan.GetSimUpdateCount() < holdUntil) return;
-	std::vector<LuaPathCallbackContext::Callback> callbacks;
+	CheckpointVector<LuaPathCallbackContext::Callback> callbacks;
 
 	{
 		std::scoped_lock lock(m_PathCallbacks->mutex);
