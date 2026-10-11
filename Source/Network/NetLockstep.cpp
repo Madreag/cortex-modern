@@ -10813,7 +10813,7 @@ namespace RTE {
 		}
 		out << "},\"ai_held_peer_ids\":[";
 		bool firstHeld = true;
-		const uint64_t ownershipFrame = m_LastCompletedSimulationTick.value_or(m_Config.startFrame - 1);
+		const uint64_t ownershipFrame = m_LastCompletedSimulationTick.value_or(m_Config.startFrame > 0 ? m_Config.startFrame - 1 : 0);
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			if (!IsSeatUnderAI(peer, ownershipFrame)) continue;
 			out << (firstHeld ? "" : ",") << static_cast<int>(peer);
