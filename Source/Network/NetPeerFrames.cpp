@@ -46,25 +46,30 @@ namespace RTE {
 		if (!UsesPeerFrameGroups() || PeerFrameBlackout(m_TimingNowMs)) return false;
 		std::vector<uint8_t> bytes;
 		if (!NetHostMigrationCodec::Encode(message, m_Config.migrationKey, bytes)) return false;
+		const bool liveInput = message.type == NetHostMigrationMessageType::PeerInput || message.type == NetHostMigrationMessageType::PeerForwardInput;
+		const auto wantsInput = [&](uint8_t peer) {
+			const auto held = m_PeerBridges.find(peer);
+			return !liveInput || held == m_PeerBridges.end() || !held->second.committedHold || held->second.returnFrame.has_value();
+		};
 		if (m_Config.peerSessionLinks) {
 			bool sent = false;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
-				if (peer != m_Config.localPeerId && !m_RemovedPeers.contains(peer) && (onlyPeer == 0 || onlyPeer == peer)) sent |= m_Config.peerSessionLinks->SendTo(peer, lane, bytes);
+				if (peer != m_Config.localPeerId && !m_RemovedPeers.contains(peer) && wantsInput(peer) && (onlyPeer == 0 || onlyPeer == peer)) sent |= m_Config.peerSessionLinks->SendTo(peer, lane, bytes);
 			return sent;
 		}
 		std::set<uint8_t> sent;
 		for (auto& [peer, dial]: PeerProbes()) {
-			if ((onlyPeer != 0 && onlyPeer != peer) || !dial.transport || !dial.answered || dial.connection == c_InvalidNetPeerId) continue;
+			if ((onlyPeer != 0 && onlyPeer != peer) || !wantsInput(peer) || !dial.transport || !dial.answered || dial.connection == c_InvalidNetPeerId) continue;
 			if (dial.transport->Send(dial.connection, lane, bytes)) sent.insert(peer);
 		}
 		if (PeerListener()) for (const auto& [connection, peer]: PeerListenerBindings()) {
-			if ((onlyPeer != 0 && onlyPeer != peer) || sent.contains(peer)) continue;
+			if ((onlyPeer != 0 && onlyPeer != peer) || !wantsInput(peer) || sent.contains(peer)) continue;
 			if (PeerListener()->Send(connection, lane, bytes)) sent.insert(peer);
 		}
 		if (m_Transport) for (const auto& [peer, connection]: m_RemoteTransports)
-			if ((onlyPeer == 0 || onlyPeer == peer) && !sent.contains(peer) && m_Transport->Send(connection, lane, bytes)) sent.insert(peer);
+			if ((onlyPeer == 0 || onlyPeer == peer) && wantsInput(peer) && !sent.contains(peer) && m_Transport->Send(connection, lane, bytes)) sent.insert(peer);
 		if (m_Transport) for (const auto& [connection, peer]: PeerPrimaryBindings())
-			if ((onlyPeer == 0 || onlyPeer == peer) && !sent.contains(peer) && m_Transport->Send(connection, lane, bytes)) sent.insert(peer);
+			if ((onlyPeer == 0 || onlyPeer == peer) && wantsInput(peer) && !sent.contains(peer) && m_Transport->Send(connection, lane, bytes)) sent.insert(peer);
 		return !sent.empty();
 	}
 

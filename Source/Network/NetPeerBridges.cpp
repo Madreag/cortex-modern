@@ -282,7 +282,12 @@ namespace RTE {
 		NetHostMigrationMessage agreed; uint32_t voters = 0;
 		if (!DecodePeerBridgeCertificate(certificate, agreed, voters) || (agreed.preparedFrame == 3 ? !PeerAdminCertificateValid(agreed, voters) : !PeerGroupHasAuthority(voters))) return;
 		if (agreed.preparedFrame == 0 && certificate.frame > m_Stats.nextFrame) { RequestPeerCommittedTail(nowMs); return; }
-		if (agreed.preparedFrame != 0 && certificate.frame < m_Stats.nextFrame) return;
+		if (agreed.preparedFrame != 0 && certificate.frame < m_Stats.nextFrame) {
+			// A private reader may have prepared the certified tail past the return,
+			// while its display still owes that tick. Install before it displays it.
+			if (agreed.preparedFrame != 1 || (m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) != 0 ||
+			    certificate.frame <= m_LastCompletedSimulationTick.value_or(0)) return;
+		}
 		const uint64_t prefixFrame = agreed.preparedFrame != 0 ? agreed.boundary : certificate.frame - 1;
 		const NetHash32 prefix = certificate.frame == m_Config.startFrame ? NetHash32{} : agreed.preparedFrame != 0 ? PeerAppliedFramePrefix(prefixFrame) : PeerFramePrefix(prefixFrame);
 		if (agreed.bytes.size() != prefix.size() + (agreed.preparedFrame == 1 ? 12 * agreed.members.size() : 0) || !std::equal(prefix.begin(), prefix.end(), agreed.bytes.begin())) return;
@@ -335,6 +340,8 @@ namespace RTE {
 				m_PeerAcceptedThrough[peer] = neutral + 1;
 				NoteSeatTransition(peer, agreed.frame, SeatTransition::Back);
 			} else {
+				const auto prior = m_PeerBridges.find(peer);
+				const bool alreadyHeld = prior != m_PeerBridges.end() && prior->second.committedHold && !prior->second.returnFrame;
 				PeerBridge bridge;
 				bridge.fromFrame = agreed.frame;
 				bridge.aiFrame = agreed.frame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs));
@@ -347,7 +354,7 @@ namespace RTE {
 				}
 				m_PeerBridges[peer] = std::move(bridge);
 				m_SeatBridgeSinceMs[peer] = nowMs;
-				++m_Stats.peers[peer].holds;
+				if (!alreadyHeld) ++m_Stats.peers[peer].holds;
 				if (peer == m_Config.localPeerId) m_LocalFrames.erase(agreed.frame);
 			}
 		}

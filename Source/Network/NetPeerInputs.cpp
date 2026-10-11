@@ -396,7 +396,10 @@ namespace RTE {
 				own.fromFrame = m_Stats.nextFrame;
 				own.aiFrame = own.fromFrame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs));
 				own.members = message.voterMask;
+				// The matching majority's committed history already excludes this seat.
+				own.committedHold = true;
 				m_PeerBridges.emplace(m_Config.localPeerId, std::move(own));
+				++m_Stats.peers[m_Config.localPeerId].holds;
 				m_SeatBridgeSinceMs[m_Config.localPeerId] = nowMs;
 			}
 			return true;

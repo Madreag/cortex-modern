@@ -69,14 +69,24 @@ namespace RTE {
 			return;
 		}
 		for (auto kept = first; kept != m_MigrationHistory.end() && kept->first < range->second.second && m_LastCompletedSimulationTick && kept->first <= *m_LastCompletedSimulationTick; ++kept) {
+			const auto [wire, route] = PeerFrameRoute(peer);
+			const uint64_t retryMs = wire && wire->IsPeerPingMeasured(route) ? std::max<uint64_t>(1000, 3ULL * wire->GetPeerPingMs(route) + 200) : 1000;
 			if ((m_PeerAppliedThrough.contains(peer) && kept->first <= m_PeerAppliedThrough.at(peer)) || queued.contains(kept->first) ||
-			    (sent.contains(kept->first) && m_TimingNowMs < sent.at(kept->first) + 1000)) {
+			    (sent.contains(kept->first) && m_TimingNowMs < sent.at(kept->first) + retryMs)) {
 				range->second.first = std::max(range->second.first, kept->first + 1);
 				continue;
 			}
 			// Bound application work even when several pipelined requests
 			// overlap. A large record resumes at its last queued chunk.
 			if (queued.size() >= 128 || queuedBytes >= 4 * 1024 * 1024) break;
+			const auto membership = m_FrameGroupChanges.upper_bound(kept->first);
+			const uint32_t members = membership == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(membership)->second;
+			const auto witnesses = m_PeerFrameWitnesses.find(kept->first);
+			uint32_t witnessed = 0;
+			if (witnesses != m_PeerFrameWitnesses.end()) for (const auto& [sender, witness]: witnesses->second) witnessed |= SeatBit(sender);
+			// One donor carries the majority's witnesses, so a second copy of
+			// every frame is unnecessary. Wait for the final witness locally.
+			if ((witnessed & ~members) != 0 || 2 * std::popcount(witnessed) <= std::popcount(members)) break;
 			const auto prefix = kept->first == m_Config.startFrame ? NetHash32{} : PeerFramePrefix(kept->first - 1);
 			const auto prepared = PeerFramePrefix(kept->first);
 			std::vector<uint8_t> body(prefix.begin(), prefix.end()); body.insert(body.end(), prepared.begin(), prepared.end());
@@ -96,7 +106,6 @@ namespace RTE {
 			if (certificates.size() > 32) return;
 			body.push_back(static_cast<uint8_t>(certificates.size()));
 			for (const auto& bytes: certificates) { PutSize(body, static_cast<uint32_t>(bytes.size())); body.insert(body.end(), bytes.begin(), bytes.end()); }
-			const auto witnesses = m_PeerFrameWitnesses.find(kept->first);
 			body.push_back(witnesses == m_PeerFrameWitnesses.end() ? 0 : static_cast<uint8_t>(witnesses->second.size()));
 			if (witnesses != m_PeerFrameWitnesses.end()) for (const auto& [sender, witness]: witnesses->second) {
 				std::vector<uint8_t> bytes;
@@ -112,8 +121,6 @@ namespace RTE {
 				std::vector<uint8_t> packed; PutSize(packed, static_cast<uint32_t>(body.size()));
 				packed.insert(packed.end(), compressed.begin(), compressed.begin() + size); body = std::move(packed); compressedBody = true;
 			}
-			const auto membership = m_FrameGroupChanges.upper_bound(kept->first);
-			const uint32_t members = membership == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(membership)->second;
 			if (!queued.empty() && queuedBytes + body.size() > 4 * 1024 * 1024) break;
 			queuedBytes += body.size();
 			queued.emplace(kept->first, PeerTailOutgoing{std::move(body), members, 0, compressedBody});
@@ -164,30 +171,35 @@ namespace RTE {
 		m_PeerTailRequestAtMs = nowMs + 25;
 		m_PeerTailRequestedUntil.erase(m_PeerTailRequestedUntil.begin(), m_PeerTailRequestedUntil.lower_bound(m_Stats.nextFrame));
 		// A bounded subscription includes future history, sent only after the donor displays it.
-		const uint64_t horizon = m_Stats.nextFrame + std::min<uint64_t>(128, NetLockstepCodec::c_MaxFutureFrameSkew);
+		const uint64_t horizon = m_Stats.nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew;
 		for (uint64_t frame = m_Stats.nextFrame; frame < horizon;) {
 			const auto pending = m_PeerTailRequestedUntil.find(frame);
 			if (m_PeerCommittedTail.contains(frame) || (pending != m_PeerTailRequestedUntil.end() && nowMs < pending->second)) { ++frame; continue; }
-			uint8_t donor = 0; uint64_t through = 0, retryMs = 250;
+			uint8_t donor = 0; uint64_t through = 0, retryMs = 500;
 			for (const auto& [peer, applied]: m_PeerAppliedThrough) {
 				if (peer == m_Config.localPeerId || applied < frame || !HasPeerFrameRoute(peer)) continue;
 				if (donor == 0 || applied > through) { donor = peer; through = applied; }
+				const auto [wire, route] = PeerFrameRoute(peer);
+				if (wire && wire->IsPeerPingMeasured(route)) retryMs = std::max<uint64_t>(retryMs, 3ULL * wire->GetPeerPingMs(route) + 200);
 				if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end())
 					retryMs = std::max<uint64_t>(retryMs, 2 * path->second.P95Ms() + 100);
 			}
 			if (donor == 0) break;
+			if (m_PeerTailDonor != 0 && m_PeerAppliedThrough.contains(m_PeerTailDonor) &&
+			    m_PeerAppliedThrough.at(m_PeerTailDonor) >= frame && HasPeerFrameRoute(m_PeerTailDonor)) {
+				donor = m_PeerTailDonor;
+				if (pending != m_PeerTailRequestedUntil.end())
+					for (const auto& [peer, applied]: m_PeerAppliedThrough)
+						if (peer != donor && peer != m_Config.localPeerId && applied >= frame && HasPeerFrameRoute(peer)) { donor = peer; break; }
+			}
+			m_PeerTailDonor = donor;
 			auto request = PeerFrameMessage(NetHostMigrationMessageType::PeerTailRequest);
 			request.frame = frame;
 			const uint64_t end = std::min(horizon, frame + 128);
 			request.completeFrom = end;
-			// Matching donor histories cover the newest frames while their witnesses are still in flight.
-			for (const auto& [peer, applied]: m_PeerAppliedThrough) {
-				if (peer != m_Config.localPeerId && (peer == donor || (m_FrameGroupMembers & SeatBit(peer)) != 0) &&
-				    frame - std::min(frame, applied) < 128 && HasPeerFrameRoute(peer)) {
-					SendPeerFrameMessage(request, NetTransportLane::ControlReliable, peer); ++m_PeerTailRequests;
-				}
-			}
-			for (; frame < end; ++frame) m_PeerTailRequestedUntil[frame] = nowMs + std::min<uint64_t>(retryMs, 1000);
+			if (!SendPeerFrameMessage(request, NetTransportLane::ControlReliable, donor)) break;
+			++m_PeerTailRequests;
+			for (; frame < end; ++frame) m_PeerTailRequestedUntil[frame] = nowMs + retryMs;
 		}
 		if ((m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) == 0 && nowMs >= m_PeerTailLogAtMs) {
 			m_PeerTailLogAtMs = nowMs + 1000;
