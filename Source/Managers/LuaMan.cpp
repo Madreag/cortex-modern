@@ -82,6 +82,7 @@ extern "C" {
 
 #include "CheckpointLuaHeap.h"
 #include "CheckpointBoundary.h"
+#include "CheckpointBoundaryQueue.h"
 #include "CheckpointLuaBindings.h"
 #include "CheckpointLuaScratch.h"
 #include "CheckpointLuaView.h"
@@ -9834,6 +9835,12 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	{
 		const std::string mismatch = CheckpointLua::Boundary::SelfTestMismatch();
 		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " prepared_boundary_keeps_native_and_lua_values_at_one_tick" << std::endl;
+		if (!mismatch.empty()) std::cout << "[script-graph-selftest] detail=" << mismatch << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
+	}
+	{
+		const std::string mismatch = CheckpointLua::BoundaryQueueSelfTestMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " prepared_boundary_returns_while_the_saver_builds_and_retries_refusals" << std::endl;
 		if (!mismatch.empty()) std::cout << "[script-graph-selftest] detail=" << mismatch << std::endl;
 		checkpointValues = mismatch.empty() && checkpointValues;
 	}
