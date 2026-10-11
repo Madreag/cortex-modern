@@ -116,6 +116,9 @@ namespace RTE {
 		void SwapCheckpointSoundRegistry(CheckpointSoundRegistry& registry, std::unordered_map<const SoundContainer*, uint64_t>& live);
 		/// Promotes saved registry storage before the multiplayer inventory is prepared.
 		void PrepareCheckpointRegistryValues();
+		void PrepareCheckpointBackendValues();
+		void RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) const;
+		static std::string CheckpointBackendSelfTestMismatch();
 		static std::string CheckpointRegistryStorageSelfTestMismatch();
 		class CheckpointRegistryReadScope {
 			friend class AudioMan;
@@ -343,7 +346,8 @@ namespace RTE {
 		void SetMasterMuted(bool muteOrUnmute = true) {
 			m_MuteMaster = muteOrUnmute;
 			if (m_AudioEnabled) {
-				m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced);
+				if (CheckpointNativeStorage::Reading() || m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced) == FMOD_OK)
+					if (auto* values = CheckpointGroup(0)) values->muted = m_MuteMaster || m_OutputSilenced;
 			}
 		}
 
@@ -352,7 +356,8 @@ namespace RTE {
 		void SetOutputSilenced(bool silenced) {
 			m_OutputSilenced = silenced && !m_InaudibleTestOutputVerified;
 			if (m_AudioEnabled) {
-				m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced);
+				if (CheckpointNativeStorage::Reading() || m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced) == FMOD_OK)
+					if (auto* values = CheckpointGroup(0)) values->muted = m_MuteMaster || m_OutputSilenced;
 			}
 		}
 
@@ -365,7 +370,8 @@ namespace RTE {
 		void SetMasterVolume(float volume = 1.0F) {
 			m_MasterVolume = std::clamp(volume, 0.0F, 1.0F);
 			if (m_AudioEnabled) {
-				m_MasterChannelGroup->setVolume(m_MasterVolume);
+				if (CheckpointNativeStorage::Reading() || m_MasterChannelGroup->setVolume(m_MasterVolume) == FMOD_OK)
+					if (auto* values = CheckpointGroup(0)) values->volume = m_MasterVolume;
 			}
 		}
 
@@ -409,7 +415,8 @@ namespace RTE {
 		void SetMusicMuted(bool muteOrUnmute = true) {
 			m_MuteMusic = muteOrUnmute;
 			if (m_AudioEnabled) {
-				m_MusicChannelGroup->setMute(m_MuteMusic);
+				if (CheckpointNativeStorage::Reading() || m_MusicChannelGroup->setMute(m_MuteMusic) == FMOD_OK)
+					if (auto* values = CheckpointGroup(3)) values->muted = m_MuteMusic;
 			}
 		}
 
@@ -422,7 +429,8 @@ namespace RTE {
 		void SetMusicVolume(float volume = 1.0F) {
 			m_MusicVolume = std::clamp(volume, 0.0F, 1.0F);
 			if (m_AudioEnabled) {
-				m_MusicChannelGroup->setVolume(m_MusicVolume);
+				if (CheckpointNativeStorage::Reading() || m_MusicChannelGroup->setVolume(m_MusicVolume) == FMOD_OK)
+					if (auto* values = CheckpointGroup(3)) values->volume = m_MusicVolume;
 			}
 		}
 
@@ -443,8 +451,10 @@ namespace RTE {
 			m_MuteSounds = muteOrUnmute;
 			if (m_AudioEnabled) {
 				// TODO: We may or may not wanna separate this out and add a UI sound slider
-				m_SFXChannelGroup->setMute(m_MuteSounds);
-				m_UIChannelGroup->setMute(m_MuteSounds);
+				if (CheckpointNativeStorage::Reading() || m_SFXChannelGroup->setMute(m_MuteSounds) == FMOD_OK)
+					if (auto* values = CheckpointGroup(1)) values->muted = m_MuteSounds;
+				if (CheckpointNativeStorage::Reading() || m_UIChannelGroup->setMute(m_MuteSounds) == FMOD_OK)
+					if (auto* values = CheckpointGroup(2)) values->muted = m_MuteSounds;
 			}
 		}
 
@@ -457,8 +467,10 @@ namespace RTE {
 		void SetSoundsVolume(float volume = 1.0F) {
 			m_SoundsVolume = volume;
 			if (m_AudioEnabled) {
-				m_SFXChannelGroup->setVolume(m_SoundsVolume);
-				m_UIChannelGroup->setVolume(m_SoundsVolume);
+				if (CheckpointNativeStorage::Reading() || m_SFXChannelGroup->setVolume(m_SoundsVolume) == FMOD_OK)
+					if (auto* values = CheckpointGroup(1)) values->volume = m_SoundsVolume;
+				if (CheckpointNativeStorage::Reading() || m_UIChannelGroup->setVolume(m_SoundsVolume) == FMOD_OK)
+					if (auto* values = CheckpointGroup(2)) values->volume = m_SoundsVolume;
 			}
 		}
 #pragma endregion
@@ -536,6 +548,19 @@ namespace RTE {
 		FMOD::ChannelGroup* m_SFXChannelGroup; //!< The FMOD ChannelGroup for diegetic gameplay sounds.
 		FMOD::ChannelGroup* m_UIChannelGroup; //!< The FMOD ChannelGroup for UI sounds.
 		FMOD::ChannelGroup* m_MusicChannelGroup; //!< The FMOD ChannelGroup for music.
+		struct CheckpointBackend : CheckpointNativeAllocated {
+			std::array<AudioCheckpoint::Control, 4> groups;
+			std::array<std::array<AudioCheckpoint::Position, 4>, 8> listeners{};
+			int listenerCount = 0;
+			CheckpointBackend() = default;
+			CheckpointBackend(const CheckpointBackend& source, CheckpointNativeSnapshot& snapshot);
+		};
+		std::unique_ptr<CheckpointBackend> m_CheckpointBackend;
+		struct PlayingVoice;
+		AudioCheckpoint::Control* CheckpointGroup(size_t index);
+		void RecordCheckpointListener(int index, const FMOD_VECTOR& position, const FMOD_VECTOR* velocity, const FMOD_VECTOR& forward, const FMOD_VECTOR& up);
+		static AudioCheckpoint::Voice CaptureStoredVoice(int identity, const PlayingVoice& voice, uint64_t owner, int bus);
+		std::shared_ptr<AudioCheckpointCapture> CaptureFrozenCheckpointState(bool samples) const;
 		std::vector<std::pair<FMOD::ChannelGroup*, FMOD::DSP*>> m_GroupEffects; //!< Effects owned by the mixer groups.
 
 		bool m_AudioEnabled; //!< Bool to tell whether audio is enabled or not.

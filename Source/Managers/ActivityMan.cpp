@@ -782,7 +782,7 @@ struct ActivityMan::PreparedAutosave {
 		snapshot->SealBoundary();
 		CheckpointNativeSnapshot::ReadScope saved(snapshot.get(), false);
 		g_TimerMan.RebuildCheckpointValues(*snapshot); g_SceneMan.RebuildCheckpointValues(*snapshot);
-		g_MovableMan.RebuildCheckpointValues(*snapshot); Scene::Area::RebuildCheckpointRegistry(*snapshot);
+		g_MovableMan.RebuildCheckpointValues(*snapshot); g_AudioMan.RebuildCheckpointValues(*snapshot); Scene::Area::RebuildCheckpointRegistry(*snapshot);
 		auto roots = snapshot->ReadValues();
 		const auto views = CheckpointNativeStorage::CurrentViews();
 		roots.insert(roots.end(), views.roots.begin(), views.roots.end());
@@ -881,7 +881,7 @@ struct ActivityMan::PreparedAutosave {
 void ActivityMan::PrepareAutosave() {
 	if (!CheckpointNativeStorage::WorldEnabled()) return;
 	try {
-		g_LuaMan.PrepareCheckpointValues(); NetActorOwnership::PrepareCheckpointValues(); GUIInput::PrepareCheckpointTextInput();
+		g_LuaMan.PrepareCheckpointValues(); g_AudioMan.PrepareCheckpointBackendValues(); NetActorOwnership::PrepareCheckpointValues(); GUIInput::PrepareCheckpointTextInput();
 		auto saver = std::make_unique<PreparedAutosave>(*this);
 		if (!saver->queue.WaitUntilPrepared()) std::fputs("[autosave] inventory preparation refused\n", stdout);
 		m_PreparedAutosave = std::move(saver);

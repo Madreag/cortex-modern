@@ -1,4 +1,5 @@
 #include "AudioMan.h"
+#include "CheckpointNativeSnapshot.h"
 #include <cstdlib>
 #include <cstring>
 #include "SoundSimulation.h"
@@ -165,6 +166,7 @@ void AudioMan::Clear() {
 	m_CommittedAudibility.clear();
 	m_LastSentAudibility.clear();
 	m_AudioEnabled = false;
+	m_CheckpointBackend.reset();
 	m_PlayingVoices.clear();
 	ClearPendingAudioArchives();
 	m_BackendVoiceIdentities.clear();
@@ -361,9 +363,10 @@ void AudioMan::Update() {
 		FMOD_RESULT status = FMOD_OK;
 
 		if (m_MuteAudioOnFocusLoss && !g_WindowMan.AnyWindowHasFocus()) {
-			m_MasterChannelGroup->setMute(true);
+			if (m_MasterChannelGroup->setMute(true) == FMOD_OK) if (auto* values = CheckpointGroup(0)) values->muted = true;
 		} else {
-			m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced);
+			if (m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced) == FMOD_OK)
+				if (auto* values = CheckpointGroup(0)) values->muted = m_MuteMaster || m_OutputSilenced;
 		}
 
 		float globalPitch = 1.0F;
@@ -381,6 +384,7 @@ void AudioMan::Update() {
 
 			if (m_CurrentActivityHumanPlayerPositions.size() != currentActivityHumanCount) {
 				status = status == FMOD_OK ? m_AudioSystem->set3DNumListeners(currentActivityHumanCount) : status;
+				if (status == FMOD_OK && m_CheckpointBackend && CheckpointNativeStorage::WorldEnabled()) m_CheckpointBackend->listenerCount = currentActivityHumanCount;
 			}
 
 			m_CurrentActivityHumanPlayerPositions.clear();
@@ -400,6 +404,7 @@ void AudioMan::Update() {
 				if (status == FMOD_OK) {
 					FMOD_VECTOR playerPosition = GetAsFMODVector(*(humanPlayerPosition.get()), m_ListenerZOffset);
 					status = m_AudioSystem->set3DListenerAttributes(listenerNumber, &playerPosition, nullptr, &c_FMODForward, &c_FMODUp);
+					if (status == FMOD_OK) RecordCheckpointListener(listenerNumber, playerPosition, nullptr, c_FMODForward, c_FMODUp);
 				}
 				listenerNumber++;
 			}
@@ -409,10 +414,12 @@ void AudioMan::Update() {
 			if (!m_CurrentActivityHumanPlayerPositions.empty()) {
 				m_CurrentActivityHumanPlayerPositions.clear();
 				status = status == FMOD_OK ? m_AudioSystem->set3DNumListeners(1) : status;
+				if (status == FMOD_OK && m_CheckpointBackend && CheckpointNativeStorage::WorldEnabled()) m_CheckpointBackend->listenerCount = 1;
 			}
 			if (status == FMOD_OK) {
 				FMOD_VECTOR scrollTarget = GetAsFMODVector(g_CameraMan.GetScrollTarget(), m_ListenerZOffset);
 				status = m_AudioSystem->set3DListenerAttributes(0, &scrollTarget, nullptr, &c_FMODForward, &c_FMODUp);
+				if (status == FMOD_OK) RecordCheckpointListener(0, scrollTarget, nullptr, c_FMODForward, c_FMODUp);
 			}
 		}
 
@@ -433,14 +440,17 @@ void AudioMan::SetGlobalPitch(float pitch, bool includeImmobileSounds, bool incl
 
 	m_GlobalPitch = std::clamp(pitch, 0.125F, 8.0F);
 
-	m_SFXChannelGroup->setPitch(m_GlobalPitch);
+	if (CheckpointNativeStorage::Reading() || m_SFXChannelGroup->setPitch(m_GlobalPitch) == FMOD_OK)
+		if (auto* values = CheckpointGroup(1)) values->pitch = m_GlobalPitch;
 
 	if (includeImmobileSounds) {
-		m_UIChannelGroup->setPitch(m_GlobalPitch);
+		if (CheckpointNativeStorage::Reading() || m_UIChannelGroup->setPitch(m_GlobalPitch) == FMOD_OK)
+			if (auto* values = CheckpointGroup(2)) values->pitch = m_GlobalPitch;
 	}
 
 	if (includeMusic) {
-		m_MusicChannelGroup->setPitch(m_GlobalPitch);
+		if (CheckpointNativeStorage::Reading() || m_MusicChannelGroup->setPitch(m_GlobalPitch) == FMOD_OK)
+			if (auto* values = CheckpointGroup(3)) values->pitch = m_GlobalPitch;
 	}
 }
 
@@ -450,7 +460,8 @@ bool AudioMan::SetMusicPitch(float pitch) {
 	}
 
 	pitch = Limit(pitch, 8, 0.125); // Limit pitch change to 8 octaves up or down
-	FMOD_RESULT result = m_MusicChannelGroup->setPitch(pitch);
+	FMOD_RESULT result = CheckpointNativeStorage::Reading() ? FMOD_OK : m_MusicChannelGroup->setPitch(pitch);
+	if (result == FMOD_OK) if (auto* values = CheckpointGroup(3)) values->pitch = pitch;
 
 	if (result != FMOD_OK) {
 		g_ConsoleMan.PrintString("ERROR: Could not set music pitch: " + std::string(FMOD_ErrorString(result)));
@@ -1237,15 +1248,21 @@ FMOD_RESULT F_CALLBACK AudioMan::SoundChannelEndedCallback(FMOD_CHANNELCONTROL* 
 FMOD_RESULT AudioMan::SetMusicMuffledState(bool musicMuffledState) {
 	FMOD_RESULT status = FMOD_OK;
 	if (musicMuffledState != m_MusicMuffled) {
-		FMOD::DSP* dsp_multibandeq;
-		status = (status == FMOD_OK) ? m_MusicChannelGroup->getDSP(0, &dsp_multibandeq) : status;
 		float frequency = 22000.0F;
 
 		if (musicMuffledState) {
 			frequency = 1000.0F;
 		}
 
-		status = (status == FMOD_OK) ? dsp_multibandeq->setParameterFloat(1, frequency) : status;
+		if (!CheckpointNativeStorage::Reading()) {
+			FMOD::DSP* dsp_multibandeq;
+			status = m_MusicChannelGroup->getDSP(0, &dsp_multibandeq);
+			status = status == FMOD_OK ? dsp_multibandeq->setParameterFloat(1, frequency) : status;
+		}
+		if (status == FMOD_OK) if (auto* values = CheckpointGroup(3)) {
+			for (auto& effect: values->effects) if (effect.index == 0 && effect.type == FMOD_DSP_TYPE_MULTIBAND_EQ)
+				for (auto& parameter: effect.parameters) if (parameter.index == 1) parameter.number = frequency;
+		}
 		m_MusicMuffled = musicMuffledState;
 	}
 	return status;
@@ -1339,6 +1356,47 @@ void AudioMan::PrepareCheckpointRegistryValues() {
 	m_OrdinaryCheckpointRegistry.m_RestoredSoundContainers.clear();
 	m_OrdinaryCheckpointRegistry.m_RestoredManagerIdentities.clear();
 	m_OrdinaryCheckpointRegistry.m_LastCarriedSoundIdentities.clear();
+}
+
+AudioMan::CheckpointBackend::CheckpointBackend(const CheckpointBackend& source, CheckpointNativeSnapshot&) {
+	const auto* values = CheckpointNativeStorage::Source(&source);
+	listeners = values->listeners; listenerCount = values->listenerCount;
+	for (size_t index = 0; index < groups.size(); ++index) groups[index] = values->groups[index].CopyCheckpointValues();
+}
+
+void AudioMan::PrepareCheckpointBackendValues() {
+	if (!CheckpointNativeStorage::Enabled() || CheckpointNativeStorage::Reading()) return;
+	auto values = std::make_unique<CheckpointBackend>();
+	if (m_AudioEnabled) {
+		AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+		AudioCheckpoint::Require(m_AudioSystem->get3DNumListeners(&values->listenerCount));
+		if (values->listenerCount < 0 || values->listenerCount > static_cast<int>(values->listeners.size())) throw std::runtime_error("invalid saved audio listener count");
+		for (int index = 0; index < values->listenerCount; ++index) {
+			FMOD_VECTOR position, velocity, forward, up;
+			AudioCheckpoint::Require(m_AudioSystem->get3DListenerAttributes(index, &position, &velocity, &forward, &up));
+			values->listeners[index] = {AudioCheckpoint::Pack(position), AudioCheckpoint::Pack(velocity), AudioCheckpoint::Pack(forward), AudioCheckpoint::Pack(up)};
+		}
+		const std::array groups{m_MasterChannelGroup, m_SFXChannelGroup, m_UIChannelGroup, m_MusicChannelGroup};
+		for (size_t index = 0; index < groups.size(); ++index) values->groups[index] = AudioCheckpoint::Control::Capture(groups[index], false);
+	}
+	m_CheckpointBackend = std::move(values);
+}
+
+void AudioMan::RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) const {
+	if (!CheckpointNativeStorage::Reading() || !m_CheckpointBackend) return;
+	snapshot.ValueObject(m_CheckpointBackend.get());
+}
+
+AudioCheckpoint::Control* AudioMan::CheckpointGroup(size_t index) {
+	if (!m_CheckpointBackend || (!CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::WorldEnabled())) return nullptr;
+	return &CheckpointNativeStorage::PrivateValue(m_CheckpointBackend.get()).groups.at(index);
+}
+
+void AudioMan::RecordCheckpointListener(int index, const FMOD_VECTOR& position, const FMOD_VECTOR* velocity, const FMOD_VECTOR& forward, const FMOD_VECTOR& up) {
+	if (!m_CheckpointBackend || !CheckpointNativeStorage::WorldEnabled()) return;
+	auto& values = m_CheckpointBackend->listeners.at(index);
+	values[0] = AudioCheckpoint::Pack(position); if (velocity) values[1] = AudioCheckpoint::Pack(*velocity);
+	values[2] = AudioCheckpoint::Pack(forward); values[3] = AudioCheckpoint::Pack(up);
 }
 
 AudioMan::CheckpointRegistryReadScope::CheckpointRegistryReadScope(const AudioMan& source)
@@ -2226,7 +2284,8 @@ std::string AudioMan::Census() const {
 }
 
 void AudioMan::PauseIngameSounds(bool pause) {
-	if (m_AudioEnabled && !s_PlaybackSuppressed) m_SFXChannelGroup->setPaused(pause);
+	if (m_AudioEnabled && !s_PlaybackSuppressed && (CheckpointNativeStorage::Reading() || m_SFXChannelGroup->setPaused(pause) == FMOD_OK))
+		if (auto* values = CheckpointGroup(1)) values->paused = pause;
 }
 
 namespace {
@@ -2864,6 +2923,7 @@ std::string AudioMan::SaveCaptured(AudioCheckpointCapture& captured, const std::
 }
 
 std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureCheckpointState(bool samples) const {
+	if (CheckpointNativeStorage::Reading()) return CaptureFrozenCheckpointState(samples);
 	auto result = std::make_shared<AudioCheckpointCapture>();
 	AudioRuntime& state = result->state;
 	state.enabled = m_AudioEnabled; state.nextVoice = m_NextVoiceIdentity;
@@ -2927,6 +2987,84 @@ std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureCheckpointState(bool sa
 		TraceCheckpointBoundary("save-captured");
 	}
 	return result;
+}
+
+AudioCheckpoint::Voice AudioMan::CaptureStoredVoice(int identity, const PlayingVoice& voice, uint64_t owner, int bus) {
+	AudioCheckpoint::Voice value; value.identity = identity; value.owner = owner; value.path = voice.soundPath;
+	value.minimumAudibleDistance = voice.minimumAudibleDistance; value.bus = bus; value.playing = true;
+	if (voice.hasArchive) { value.priority = voice.priority; value.control = voice.control.CopyCheckpointValues(); }
+	else if (!voice.awaitingSample) throw std::logic_error("a saved playing voice has no owned controls");
+	if (voice.hasLifetime) {
+		const auto progress = voice.lifetime.At(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
+		value.position = static_cast<unsigned>(std::max(0.0, progress.position)); value.loops = progress.loops;
+		value.frequency = voice.lifetime.sampleRate; value.loopStart = voice.lifetime.loopStart; value.loopEnd = voice.lifetime.loopEnd;
+	}
+	return value;
+}
+
+std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureFrozenCheckpointState(bool samples) const {
+	auto result = std::make_shared<AudioCheckpointCapture>();
+	AudioRuntime& state = result->state;
+	state.enabled = m_AudioEnabled; state.nextVoice = m_NextVoiceIdentity;
+	state.deferredSoundOpTick = m_DeferredSoundOpTick; state.deferredSoundOpOrdinal = m_DeferredSoundOpOrdinal;
+	state.muteMaster = m_MuteMaster; state.muteMusic = m_MuteMusic; state.muteSounds = m_MuteSounds; state.muteOnFocusLoss = m_MuteAudioOnFocusLoss;
+	state.masterVolume = m_MasterVolume; state.musicVolume = m_MusicVolume; state.soundsVolume = m_SoundsVolume; state.globalPitch = m_GlobalPitch;
+	state.panning = m_SoundPanningEffectStrength; state.listenerZ = m_ListenerZOffset; state.minimumPanning = m_MinimumDistanceForPanning;
+	state.musicMuffled = m_MusicMuffled; state.multiplayer = m_IsInMultiplayerMode;
+	for (const auto& [key, readings]: CheckpointValues(m_CommittedAudibility))
+		for (const auto& [peer, reading]: CheckpointValues(readings)) state.audibility.push_back({key, peer, reading.frame, reading.value});
+	for (const auto& position: CheckpointValues(m_CurrentActivityHumanPlayerPositions)) if (position) state.playerPositions.push_back(*CheckpointNativeStorage::Source(position.get()));
+	for (int player = 0; player < c_MaxClients; ++player)
+		for (const NetworkSoundData& event: CheckpointValues(m_SoundEvents[player])) state.events[player].push_back({event});
+	if (m_AudioEnabled) {
+		if (!m_CheckpointBackend) throw std::logic_error("the saved audio has no owned backend values");
+		const auto* values = CheckpointNativeStorage::Source(m_CheckpointBackend.get());
+		for (int index = 0; index < values->listenerCount; ++index) state.listeners.push_back(values->listeners[index]);
+		for (size_t index = 0; index < state.groups.size(); ++index) state.groups[index] = values->groups[index].CopyCheckpointValues();
+		if (samples) ReadCheckpointSamples(*result);
+		for (const auto& [identity, voice]: CheckpointValues(m_PlayingVoices)) {
+			if (voice.predicted || !VoiceSimLive(voice)) continue;
+			const auto* owner = static_cast<const SoundContainer*>(CheckpointNativeSnapshot::Source(voice.owner));
+			const int bus = voice.hasLifetime ? voice.lifetime.bus : owner ? owner->GetBusRouting() : 0;
+			result->owners.push_back(owner);
+			state.voices.push_back(CaptureStoredVoice(identity, voice, owner ? owner->GetCheckpointIdentity() : 0, bus));
+		}
+		for (const auto& [identity, distance]: CheckpointValues(m_SoundChannelMinimumAudibleDistances))
+			if (std::any_of(state.voices.begin(), state.voices.end(), [&](const auto& voice) { return voice.identity == identity; })) state.minimumDistances.emplace(identity, distance);
+	}
+	return result;
+}
+
+std::string AudioMan::CheckpointBackendSelfTestMismatch() {
+	CheckpointNativeStorage::AllocationScope allocations(true);
+	auto backend = std::make_unique<CheckpointBackend>();
+	backend->listenerCount = 1; backend->listeners[0][0] = {3, 5, 7};
+	auto& group = backend->groups[0]; group.volume = 0.375F; group.mix = {0.25F, 0.5F}; group.fades = {{0, 0.75F}, {17, 0.5F}};
+	AudioCheckpoint::Effect effect; effect.index = 2; effect.type = FMOD_DSP_TYPE_LIMITER;
+	effect.parameters.push_back({3, FMOD_DSP_PARAMETER_TYPE_FLOAT, 0, 0.625F, false}); group.effects.push_back(std::move(effect));
+	struct VoiceValues : CheckpointNativeAllocated { PlayingVoice voice; };
+	auto values = std::make_unique<VoiceValues>();
+	values->voice.soundPath = "saved voice"; values->voice.awaitingSample = true; values->voice.hasArchive = true;
+	values->voice.priority = 37; values->voice.control = group;
+	const auto groupText = group.SaveCheckpoint(), voiceText = CaptureStoredVoice(11, values->voice, 0, 2).SaveCheckpoint();
+	const auto pages = CheckpointNativeStorage::Prepare();
+	group.volume = 0.875F; group.mix.clear(); group.fades.clear(); group.effects.clear(); backend->listeners[0][0] = {11, 13, 17};
+	values->voice.soundPath = "later voice"; values->voice.control.mix.clear(); values->voice.control.effects[0].parameters[0].number = 0.125F;
+	auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
+	{
+		CheckpointNativeStorage::ReadScope read(pages);
+		CheckpointNativeSnapshot::BoundaryScope boundary(snapshot);
+		const auto* captured = CheckpointNativeStorage::Source(backend.get());
+		if (captured->listeners[0][0] != AudioCheckpoint::Position{3, 5, 7} || captured->groups[0].CopyCheckpointValues().SaveCheckpoint() != groupText ||
+		    CaptureStoredVoice(11, CheckpointNativeStorage::Source(values.get())->voice, 0, 2).SaveCheckpoint() != voiceText)
+			return "saved audio follows later mixer values or container links";
+		snapshot->ValueObject(backend.get());
+		const auto roots = snapshot->ReadValues();
+		CheckpointNativeStorage::ReadScope privateValues(pages, roots);
+		CheckpointNativeStorage::PrivateValue(backend.get()).groups[0].volume = 0.5F;
+		if (CheckpointNativeStorage::Source(backend.get())->groups[0].volume != 0.5F) return "saved audio control changes lost their private values";
+	}
+	return group.volume == 0.875F && backend->listeners[0][0] == AudioCheckpoint::Position{11, 13, 17} ? std::string() : "saved audio changes the playing mixer values";
 }
 
 bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings, std::string* refusal) {
@@ -3067,6 +3205,17 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		std::vector<std::array<FMOD_VECTOR, 4>> oldListeners;
 		const std::array<FMOD::ChannelGroup*, 4> groups = {m_MasterChannelGroup, m_SFXChannelGroup, m_UIChannelGroup, m_MusicChannelGroup};
 		PreservedGroupEffects originalEffects(groups);
+		std::unique_ptr<CheckpointBackend> preparedBackend;
+		if (m_CheckpointBackend && CheckpointNativeStorage::Enabled()) {
+			preparedBackend = std::make_unique<CheckpointBackend>();
+			preparedBackend->groups = m_CheckpointBackend->groups;
+			preparedBackend->listeners = m_CheckpointBackend->listeners; preparedBackend->listenerCount = m_CheckpointBackend->listenerCount;
+			if (m_AudioEnabled && state.enabled) {
+				preparedBackend->groups = state.groups; preparedBackend->groups[0].muted = state.muteMaster || m_OutputSilenced;
+				preparedBackend->listenerCount = static_cast<int>(state.listeners.size());
+				std::copy(state.listeners.begin(), state.listeners.end(), preparedBackend->listeners.begin());
+			}
+		}
 		if (m_AudioEnabled) {
 			for (const auto& sample: state.samples) oldSamples.emplace_back(sounds.at(sample.path), AudioCheckpoint::Sample::Capture(sample.path, sounds.at(sample.path)));
 			for (size_t index = 0; index < groups.size(); ++index) oldGroups[index] = AudioCheckpoint::Control::Capture(groups[index], false);
@@ -3114,6 +3263,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			}
 		}
 		// Nothing that can reject the checkpoint remains after this ownership transfer.
+		if (preparedBackend) m_CheckpointBackend = std::move(preparedBackend);
 		for (const auto& [data, sound]: stagedSamples) data->SoundObject = sound;
 		for (auto& [identity, voice]: m_PlayingVoices) {
 			if (FMOD::Channel* live = voice.Channel()) StopDetached(live);
@@ -3309,6 +3459,14 @@ bool AudioMan::RunCheckpointPlaybackContinuationSelfTest() const {
 
 std::string AudioMan::GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const {
 	std::vector<std::string> voices;
+	if (CheckpointNativeStorage::Reading()) {
+		const auto* owner = static_cast<const SoundContainer*>(CheckpointNativeSnapshot::Source(container));
+		for (const auto& [identity, voice]: CheckpointValues(m_PlayingVoices)) {
+			if (CheckpointNativeStorage::Original(voice.owner) != CheckpointNativeStorage::Original(container) || !VoiceSimLive(voice)) continue;
+			voices.push_back(CaptureStoredVoice(identity, voice, owner ? owner->GetCheckpointIdentity() : 0, owner ? owner->GetBusRouting() : 0).SaveCheckpoint());
+		}
+		CheckpointWriter writer("SoundPlayback1"); writer(voices); return writer.Text();
+	}
 	AudioCheckpoint::MixerLock mixer(m_AudioEnabled ? m_AudioSystem : nullptr);
 	for (const auto& [identity, voice]: m_PlayingVoices) {
 		if (voice.owner != container || !VoiceSimLive(voice)) continue;

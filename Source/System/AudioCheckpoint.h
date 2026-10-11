@@ -148,6 +148,29 @@ struct Control {
 	// A backend capture always reports a 2D or 3D mode. An archive written from the owner alone (the 2026-09-20 writer, or a
 	// voice captured before its sample loaded) has none, so the channel it starts on supplies what it never recorded.
 	bool Captured() const { return (mode & (FMOD_2D | FMOD_3D)) != 0; }
+	Control CopyCheckpointValues() const {
+		if (!CheckpointNativeStorage::Reading()) return *this;
+		const auto* source = CheckpointNativeStorage::Source(this);
+		Control value;
+		value.paused = source->paused; value.muted = source->muted; value.ramp = source->ramp;
+		value.volume = source->volume; value.pitch = source->pitch; value.lowPassGain = source->lowPassGain; value.reverb = source->reverb;
+		value.mode = source->mode; value.outputs = source->outputs; value.inputs = source->inputs;
+		value.hasDelayStart = source->hasDelayStart; value.hasDelayEnd = source->hasDelayEnd; value.delayStops = source->delayStops;
+		value.delayStart = source->delayStart; value.delayEnd = source->delayEnd;
+		value.spatial = source->spatial; value.position = source->position; value.velocity = source->velocity; value.coneOrientation = source->coneOrientation;
+		value.minimumDistance = source->minimumDistance; value.maximumDistance = source->maximumDistance; value.cone = source->cone;
+		value.directOcclusion = source->directOcclusion; value.reverbOcclusion = source->reverbOcclusion; value.spread = source->spread;
+		value.level = source->level; value.doppler = source->doppler; value.customDistanceFilter = source->customDistanceFilter;
+		value.customLevel = source->customLevel; value.centerFrequency = source->centerFrequency;
+		for (const auto item: CheckpointValues(source->mix)) value.mix.push_back(item);
+		for (const auto& item: CheckpointValues(source->fades)) value.fades.push_back(item);
+		for (const auto& item: CheckpointValues(source->effects)) {
+			Effect effect; effect.index = item.index; effect.type = item.type; effect.active = item.active; effect.bypass = item.bypass; effect.wetDry = item.wetDry;
+			for (const auto& parameter: CheckpointValues(item.parameters)) effect.parameters.push_back(parameter);
+			value.effects.push_back(std::move(effect));
+		}
+		return value;
+	}
 	std::string SaveCheckpoint() const { CheckpointWriter archive("AudioControl1"); const_cast<Control*>(this)->Fields(archive); return archive.Text(); }
 	bool LoadCheckpoint(std::string_view text, bool validateOnly = false) {
 		try {
