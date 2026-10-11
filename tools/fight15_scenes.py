@@ -442,6 +442,7 @@ def ai_fight():
         checks += scene_checks(peer, steps)
         checks.append(dict(id=f"twenty-minutes-{peer}", peer=peer, mark=f"fight-ended-{peer}", screen="MultiplayerScreen",
                            what="Twenty full running minutes at >=58 ticks/s, living local player, AI weapon fire and named end reason.",
+                            continuous_minutes=dict(count=20, minimum_tps=58.0),
                            log_regex=[r"\[fight15-scene\] minute=20 pace=", r"\[net-match\].*host"]))
     emit(10, "Twenty-minute stock endless AI fight with scripted bunker and brain setup",
          host_menu, join_menu, probes["host"], probes["joiner"], checks, timeout=1750)

@@ -336,6 +336,10 @@
       "mark": "fight-ended-host",
       "screen": "MultiplayerScreen",
       "what": "Twenty full running minutes at >=58 ticks/s, living local player, AI weapon fire and named end reason.",
+      "continuous_minutes": {
+        "count": 20,
+        "minimum_tps": 58.0
+      },
       "log_regex": [
         "\\[fight15-scene\\] minute=20 pace=",
         "\\[net-match\\].*host"
@@ -591,6 +595,10 @@
       "mark": "fight-ended-joiner",
       "screen": "MultiplayerScreen",
       "what": "Twenty full running minutes at >=58 ticks/s, living local player, AI weapon fire and named end reason.",
+      "continuous_minutes": {
+        "count": 20,
+        "minimum_tps": 58.0
+      },
       "log_regex": [
         "\\[fight15-scene\\] minute=20 pace=",
         "\\[net-match\\].*host"

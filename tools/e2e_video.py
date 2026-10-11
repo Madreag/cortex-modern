@@ -1474,7 +1474,29 @@ def report_toast_evidence(record, spec):
 
 # What decides an item without eyes: a log line, a numeric gate, a probe step or an engine record. Such an item is a LOG item,
 # judged by its probe alone; every other item names what the screen must show and is a PICTURE item for the reviewer.
-LOG_EVIDENCE = ("gate", "log_regex", "forbidden_log_regex", "events", "readback", "probe_steps", "sim_progress", "peer_drop", "drop_tick", "ownership_reclaim")
+LOG_EVIDENCE = ("gate", "log_regex", "forbidden_log_regex", "events", "readback", "probe_steps", "sim_progress", "peer_drop", "drop_tick", "ownership_reclaim", "continuous_minutes")
+
+
+def continuous_minute_evidence(probe_path, spec):
+    """Include the captures and player actions between the engine's full-minute samples."""
+    document = json.loads(probe_path.read_text(encoding="utf-8")) if probe_path.is_file() else {}
+    samples = [step.get("observed", {}) for step in document.get("steps", [])
+               if step.get("op") == "measure_minute" and "minute" in step.get("observed", {})]
+    intervals, previous = [], None
+    for number, sample in enumerate(samples, 1):
+        minute = sample["minute"]
+        elapsed = sample["at_ms"] - previous["at_ms"] if previous else minute["elapsed_ms"]
+        pace = ((sample["lockstep_frame"] - previous["lockstep_frame"]) * 1000.0 / elapsed
+                if previous and elapsed > 0 else minute["pace"])
+        passed = (minute["number"] == number and minute["elapsed_ms"] >= 60000 and elapsed >= 60000
+                  and minute["pace"] >= spec["minimum_tps"] and pace >= spec["minimum_tps"]
+                  and sample.get("service") == "Running" and sample.get("paused") is False
+                  and sample.get("editing") is False and sample.get("local_actor_alive") is True)
+        intervals.append({"number": number, "elapsed_ms": elapsed, "pace": pace, "pass": passed})
+        previous = sample
+    passed = len(intervals) == spec["count"] and all(row["pass"] for row in intervals)
+    return {"pass": passed, "minimum_tps": spec["minimum_tps"], "intervals": intervals,
+            "reason": None if passed else "The full fight, including captures and chat, did not sustain every required minute"}
 
 
 def dropped_index_evidence(record, drop_tick):
@@ -1576,6 +1598,13 @@ def item_evidence(record, item, port=None):
         evidence["log_assertions"] = assertions
         if not passed or evidence.get("probe") in ("none", "awaiting-review"):
             evidence["probe"] = "pass" if passed else "fail"
+    if item.get("continuous_minutes"):
+        evidence["continuous_minutes"] = continuous_minute_evidence(probe_path, item["continuous_minutes"])
+        passed = evidence["continuous_minutes"]["pass"]
+        if not passed or evidence.get("probe") in ("none", "awaiting-review"):
+            evidence["probe"] = "pass" if passed else "fail"
+        if not passed:
+            evidence["reason"] = evidence["continuous_minutes"]["reason"]
     if item.get("report_toasts"):
         evidence["report_toasts"] = report_toast_evidence(record, item["report_toasts"])
         passed = evidence["report_toasts"]["pass"]
