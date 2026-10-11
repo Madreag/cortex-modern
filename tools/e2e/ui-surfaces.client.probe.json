@@ -70,6 +70,16 @@
     {
       "op": "assert_control",
       "control": "NetworkSeatsOptionsText",
+      "text_contains": "Team 1 technology: All factions   AI skill: 50"
+    },
+    {
+      "op": "assert_control",
+      "control": "NetworkSeatsOptionsText",
+      "text_contains": "Team 2 technology: All factions   AI skill: 50"
+    },
+    {
+      "op": "assert_control",
+      "control": "NetworkSeatsOptionsText",
       "text_contains": "When every human brain is lost: Keep playing, humans spectate"
     },
     {
