@@ -9748,6 +9748,13 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	{
+		const std::string mismatch = SceneMan::CheckpointOptionsStorageSelfTestMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " saved_scene_options_survive_mutation_and_source_death";
+		if (!mismatch.empty()) std::cout << " reason=" << mismatch;
+		std::cout << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
+	}
+	{
 		const std::string mismatch = MovableObject::CheckpointCounterStorageSelfTestMismatch();
 		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " frozen_object_counters_and_nested_worker_allocations_preserve_live_state";
 		if (!mismatch.empty()) std::cout << " reason=" << mismatch;
@@ -15723,6 +15730,7 @@ void LuaMan::PrepareCheckpointValues() {
 	if (CheckpointNativeStorage::Enabled()) g_TimerMan.PrepareCheckpointValues();
 	if (CheckpointNativeStorage::Enabled()) { g_SimRNG.PrepareCheckpointValues(); g_RenderRNG.PrepareCheckpointValues(); }
 	if (CheckpointNativeStorage::Enabled()) MovableObject::PrepareCheckpointCounters();
+	if (CheckpointNativeStorage::Enabled()) g_SceneMan.PrepareCheckpointValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointActorValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLooseValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLookupValues();

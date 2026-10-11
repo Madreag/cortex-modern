@@ -2,6 +2,7 @@
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "SceneMan.h"
+#include "CheckpointFailure.h"
 #include "CheckpointNativeSnapshot.h"
 #include "MetricsCollector.h"
 #include "PostProcessMan.h"
@@ -213,7 +214,7 @@ void SceneMan::Clear() {
 	m_pMOColorLayer = nullptr;
 	m_pDebugLayer = nullptr;
 
-	m_LayerDrawMode = g_LayerNormal;
+	CheckpointOptionsValues().m_LayerDrawMode = g_LayerNormal;
 
 	m_MatNameMap.clear();
 	m_apMatPalette.fill(nullptr);
@@ -225,18 +226,18 @@ void SceneMan::Clear() {
 	for (auto& retired: m_RetiredPaletteMaterials) retired.clear();
 
 	m_pUnseenRevealSound = nullptr;
-	m_DrawRayCastVisualizations = false;
-	m_DrawPixelCheckVisualizations = false;
-	m_LastUpdatedScreen = 0;
-	m_SecondStructPass = false;
-	//    m_CalcTimer.Reset();
-	m_CleanTimer.Reset();
+	CheckpointOptionsValues().m_DrawRayCastVisualizations = false;
+	CheckpointOptionsValues().m_DrawPixelCheckVisualizations = false;
+	CheckpointOptionsValues().m_LastUpdatedScreen = 0;
+	CheckpointOptionsValues().m_SecondStructPass = false;
+	//    CheckpointOptionsValues().m_CalcTimer.Reset();
+	CheckpointOptionsValues().m_CleanTimer.Reset();
 
 	if (m_pOrphanSearchBitmap)
 		destroy_bitmap(m_pOrphanSearchBitmap);
 	m_pOrphanSearchBitmap = create_bitmap_ex(8, MAXORPHANRADIUS, MAXORPHANRADIUS);
 
-	m_ScrapCompactingHeight = 25;
+	CheckpointOptionsValues().m_ScrapCompactingHeight = 25;
 
 	m_CarveBatchDepth = 0;
 	m_CarveBatchHasBox = false;
@@ -368,7 +369,7 @@ int SceneMan::LoadScene(Scene* pNewScene, bool placeObjects, bool placeUnits) {
 	m_MOIDsGrid = SpatialPartitionGrid(GetSceneWidth(), GetSceneHeight(), cellSize);
 
 	// Create the Debug SceneLayer
-	if (m_DrawRayCastVisualizations || m_DrawPixelCheckVisualizations) {
+	if (CheckpointOptionsValues().m_DrawRayCastVisualizations || CheckpointOptionsValues().m_DrawPixelCheckVisualizations) {
 		delete m_pDebugLayer;
 		pBitmap = create_bitmap_ex(8, GetSceneWidth(), GetSceneHeight());
 		clear_to_color(pBitmap, g_MaskColor);
@@ -585,7 +586,7 @@ unsigned char SceneMan::GetTerrMatter(int pixelX, int pixelY) {
 
 	WrapPosition(pixelX, pixelY);
 
-	if (m_pDebugLayer && m_DrawPixelCheckVisualizations) {
+	if (m_pDebugLayer && CheckpointOptionsValues().m_DrawPixelCheckVisualizations) {
 		m_pDebugLayer->SetPixel(pixelX, pixelY, 5);
 	}
 
@@ -614,7 +615,7 @@ unsigned char SceneMan::GetTerrMatter(int pixelX, int pixelY) {
 MOID SceneMan::GetMOIDPixel(int pixelX, int pixelY, int ignoreTeam) {
 	WrapPosition(pixelX, pixelY);
 
-	if (m_pDebugLayer && m_DrawPixelCheckVisualizations) {
+	if (m_pDebugLayer && CheckpointOptionsValues().m_DrawPixelCheckVisualizations) {
 		m_pDebugLayer->SetPixel(pixelX, pixelY, 5);
 	}
 
@@ -944,7 +945,7 @@ bool SceneMan::TryPenetrate(int posX,
 		}
 
 		// If this is a scrap pixel, or there is no background pixel 'supporting' the knocked-loose pixel, make the column above also turn into particles.
-		if (m_ScrapCompactingHeight > 0 && (sceneMat->IsScrap() || _getpixel(m_pCurrentScene->GetTerrain()->GetBGColorBitmap(), posX, posY) == g_MaskColor)) {
+		if (CheckpointOptionsValues().m_ScrapCompactingHeight > 0 && (sceneMat->IsScrap() || _getpixel(m_pCurrentScene->GetTerrain()->GetBGColorBitmap(), posX, posY) == g_MaskColor)) {
 			// Get quicker direct access to bitmaps
 			BITMAP* pFGColor = m_pCurrentScene->GetTerrain()->GetFGColorBitmap();
 			BITMAP* pBGColor = m_pCurrentScene->GetTerrain()->GetBGColorBitmap();
@@ -956,7 +957,7 @@ bool SceneMan::TryPenetrate(int posX,
 			float sprayMag = DeterministicSqrt(velocity.GetMagnitude() * sprayScale);
 			Vector sprayVel;
 
-			for (int testY = posY - 1; testY > posY - m_ScrapCompactingHeight && testY >= 0; --testY) {
+			for (int testY = posY - 1; testY > posY - CheckpointOptionsValues().m_ScrapCompactingHeight && testY >= 0; --testY) {
 				if ((testMaterialID = _getpixel(pMaterial, posX, testY)) != g_MaterialAir) {
 					sceneMat = GetMaterialFromID(testMaterialID);
 
@@ -970,7 +971,7 @@ bool SceneMan::TryPenetrate(int posX,
 							}
 							if (spawnColor.GetIndex() != g_MaskColor) {
 								// Send terrain pixels flying at a diminishing rate the higher the column goes.
-								sprayVel.SetXY(0, -sprayMag * (1.0F - (static_cast<float>(posY - testY) / static_cast<float>(m_ScrapCompactingHeight))));
+								sprayVel.SetXY(0, -sprayMag * (1.0F - (static_cast<float>(posY - testY) / static_cast<float>(CheckpointOptionsValues().m_ScrapCompactingHeight))));
 								sprayVel.RadRotate(RandomNum(-c_HalfPI, c_HalfPI));
 
 								pixelMO = new MOPixel(spawnColor, spawnMat->GetPixelDensity(), Vector(posX, testY), sprayVel, new Atom(Vector(), spawnMat->GetIndex(), 0, spawnColor, 2), 0);
@@ -1449,7 +1450,7 @@ bool SceneMan::CastTerrainPenetrationRay(const Vector& start, const Vector& ray,
 			}
 			// Reset skip counter
 			skipped = 0;
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -1566,7 +1567,7 @@ bool SceneMan::CastUnseenRay(int team, const Vector& start, const Vector& ray, V
 		}
 	};
 	const auto passed = [this](int x, int y) {
-		if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+		if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 			m_pDebugLayer->SetPixel(x, y, 13);
 		}
 	};
@@ -1601,7 +1602,7 @@ void SceneMan::RevealSeeRay(int team, const SeeRayTrace& trace) {
 	for (const auto& [x, y]: trace.reveals) {
 		RevealUnseenBox(x - trace.size / 2, y - trace.size / 2, trace.size, trace.size, team);
 	}
-	if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+	if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 		for (const auto& [x, y]: trace.visualized) m_pDebugLayer->SetPixel(x, y, 13);
 	}
 }
@@ -1687,7 +1688,7 @@ bool SceneMan::CastMaterialRay(const Vector& start, const Vector& ray, unsigned 
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -1780,7 +1781,7 @@ bool SceneMan::CastNotMaterialRay(const Vector& start, const Vector& ray, unsign
 			}
 
 			skipped = 0;
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -1872,7 +1873,7 @@ float SceneMan::CastStrengthSumRay(const Vector& start, const Vector& end, int s
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -1958,7 +1959,7 @@ const Material* SceneMan::CastMaxStrengthRayMaterial(const Vector& start, const 
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -2047,7 +2048,7 @@ bool SceneMan::CastStrengthRay(const Vector& start, const Vector& ray, float str
 			}
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -2137,7 +2138,7 @@ bool SceneMan::CastWeaknessRay(const Vector& start, const Vector& ray, float str
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -2241,7 +2242,7 @@ MOID SceneMan::CastMORay(const Vector& start, const Vector& ray, const std::vect
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -2333,7 +2334,7 @@ bool SceneMan::CastFindMORay(const Vector& start, const Vector& ray, MOID target
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -2435,7 +2436,7 @@ const std::vector<MovableObject*>*  SceneMan::CastAllMOsRay(const Vector& start,
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -2535,7 +2536,7 @@ float SceneMan::CastObstacleRay(const Vector& start, const Vector& ray, Vector& 
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		} else {
@@ -2914,7 +2915,7 @@ void SceneMan::Update(int screenId) {
 		return;
 	}
 
-	m_LastUpdatedScreen = screenId;
+	CheckpointOptionsValues().m_LastUpdatedScreen = screenId;
 
 	const Vector offset = g_CameraMan.GetRenderOffset(screenId);
 	m_pMOColorLayer->SetOffset(offset);
@@ -2942,12 +2943,12 @@ void SceneMan::Update(int screenId) {
 
 void SceneMan::UpdateCleanAir() {
 	SLTerrain* terrain = m_pCurrentScene ? m_pCurrentScene->GetTerrain() : nullptr;
-	if (!terrain || m_CleanTimer.GetElapsedSimTimeMS() <= CLEANAIRINTERVAL) {
+	if (!terrain || CheckpointOptionsValues().m_CleanTimer.GetElapsedSimTimeMS() <= CLEANAIRINTERVAL) {
 		return;
 	}
 	TraceTerrainEvent("clean", 0, 0);
 	terrain->CleanAir();
-	m_CleanTimer.Reset();
+	CheckpointOptionsValues().m_CleanTimer.Reset();
 }
 
 void SceneMan::Draw(BITMAP* targetBitmap, BITMAP* targetGUIBitmap, const Vector& targetPos, bool skipBackgroundLayers, bool skipTerrain) {
@@ -2972,7 +2973,7 @@ void SceneMan::Draw(BITMAP* targetBitmap, BITMAP* targetGUIBitmap, const Vector&
 		targetBox.SetHeight(static_cast<float>(GetSceneHeight()));
 	}
 
-	switch (m_LayerDrawMode) {
+	switch (CheckpointOptionsValues().m_LayerDrawMode) {
 		case LayerDrawMode::g_LayerTerrainMatter:
 			terrain->SetLayerToDraw(SLTerrain::LayerType::MaterialLayer);
 			terrain->Draw(targetDimensions, targetBox);
@@ -2990,7 +2991,7 @@ void SceneMan::Draw(BITMAP* targetBitmap, BITMAP* targetGUIBitmap, const Vector&
 
 			// TODO- it would really be much nicer to draw direct-to-screen, with no intermediate MO layer
 			// but this is awkward with draw order due to how the GPU interacts
-			if (m_LastUpdatedScreen == 0) {
+			if (CheckpointOptionsValues().m_LastUpdatedScreen == 0) {
 				g_SceneMan.ClearMOColorLayer();
 				g_MovableMan.Draw(g_SceneMan.GetMOColorBitmap());
 			}
@@ -3002,19 +3003,19 @@ void SceneMan::Draw(BITMAP* targetBitmap, BITMAP* targetGUIBitmap, const Vector&
 				terrain->Draw(targetDimensions, targetBox);
 			}
 			
-			int teamId = g_CameraMan.GetScreenTeam(m_LastUpdatedScreen);
+			int teamId = g_CameraMan.GetScreenTeam(CheckpointOptionsValues().m_LastUpdatedScreen);
 			if (SceneLayer* unseenLayer = (teamId != Activity::NoTeam) ? m_pCurrentScene->GetUnseenLayer(teamId) : nullptr) {
 				unseenLayer->Draw(targetDimensions, targetBox);
 			}
 
-			bool shouldDrawHUD = !g_FrameMan.IsHudDisabled(m_LastUpdatedScreen);
+			bool shouldDrawHUD = !g_FrameMan.IsHudDisabled(CheckpointOptionsValues().m_LastUpdatedScreen);
 			if (shouldDrawHUD) {
-				g_ActivityMan.GetActivity()->PrepareDrawGUI(m_LastUpdatedScreen);
-				g_MovableMan.DrawHUD(targetGUIBitmap, targetPos, m_LastUpdatedScreen);
+				g_ActivityMan.GetActivity()->PrepareDrawGUI(CheckpointOptionsValues().m_LastUpdatedScreen);
+				g_MovableMan.DrawHUD(targetGUIBitmap, targetPos, CheckpointOptionsValues().m_LastUpdatedScreen);
 			}
 
 			if (shouldDrawHUD) {
-				g_ActivityMan.GetActivity()->DrawGUI(targetGUIBitmap, targetPos, m_LastUpdatedScreen);
+				g_ActivityMan.GetActivity()->DrawGUI(targetGUIBitmap, targetPos, CheckpointOptionsValues().m_LastUpdatedScreen);
 			}
 
 			static bool s_drawNoGravBoxes = false;
@@ -3087,6 +3088,36 @@ namespace {
 		return "SceneMan3";
 	}
 } // namespace
+
+void SceneMan::PrepareCheckpointValues() {
+	if (!CheckpointNativeStorage::Enabled() || m_OwnedCheckpointOptions) return;
+	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	auto prepared = std::make_unique<CheckpointOptions>(m_OrdinaryCheckpointOptions);
+	m_OwnedCheckpointOptions = std::move(prepared);
+}
+
+std::string SceneMan::CheckpointOptionsStorageSelfTestMismatch() {
+	CheckpointNativeStorage::AllocationScope allocations(true);
+	auto values = std::make_unique<CheckpointOptions>();
+	values->m_LayerDrawMode = g_LayerTerrainMatter;
+	values->m_DrawRayCastVisualizations = true; values->m_DrawPixelCheckVisualizations = false;
+	values->m_LastUpdatedScreen = 3; values->m_SecondStructPass = true; values->m_ScrapCompactingHeight = 17;
+	values->m_CalcTimer.SetStartSimTimeTicks(-31); values->m_CleanTimer.SetStartSimTimeTicks(71);
+	const auto capture = [](const auto& options) {
+		return CheckpointWriter::CaptureNative([&] { CheckpointWriter writer("FrozenSceneOptions"); VisitCheckpoint(writer, options); return writer.Text(); }).Text();
+	};
+	const auto expected = capture(*values);
+	const auto* identity = values.get();
+	auto prepared = CheckpointNativeStorage::PrepareInventory();
+	if (!prepared->Arm()) return "scene option inventory is stale";
+	values->m_LayerDrawMode = g_LayerNormal;
+	values->m_DrawRayCastVisualizations = false; values->m_DrawPixelCheckVisualizations = true;
+	values->m_LastUpdatedScreen = 1; values->m_SecondStructPass = false; values->m_ScrapCompactingHeight = 25;
+	values->m_CalcTimer.SetStartSimTimeTicks(32); values->m_CleanTimer.SetStartSimTimeTicks(72);
+	values.reset();
+	CheckpointNativeStorage::ReadScope read(prepared->Pages());
+	return capture(*CheckpointNativeStorage::Source(identity)) == expected ? std::string{} : "saved scene options follow live state";
+}
 
 std::string SceneMan::SaveCheckpoint() const {
     CheckpointWriter writer("SceneMan3");
