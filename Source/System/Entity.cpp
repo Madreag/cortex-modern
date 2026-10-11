@@ -255,6 +255,16 @@ namespace RTE {
 		uintptr_t at = (cursor.at + alignment - 1) & ~(alignment - 1);
 		if (!cursor.at || at + bytes > cursor.end) {
 			std::shared_ptr<void> storage = CheckpointBuffer::AllocateCaptureBytes(c_StorageBytes);
+			if (CheckpointNativeStorage::Reading()) {
+				const auto values = CheckpointNativeStorage::CurrentViews().privateValues;
+				void* data = storage.get();
+				CheckpointNativeStorage::RememberPrivate(data, c_StorageBytes);
+				try {
+					storage = std::shared_ptr<void>(data, [keep = storage, values](void* address) noexcept {
+						CheckpointNativeStorage::ForgetPrivate(values, address);
+					});
+				} catch (...) { CheckpointNativeStorage::ForgetPrivate(values, data); throw; }
+			}
 			const uintptr_t base = reinterpret_cast<uintptr_t>(storage.get());
 			{
 				OwnerShard& shard = Owners();

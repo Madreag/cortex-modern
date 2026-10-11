@@ -1806,6 +1806,33 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			      earlier->GetPresetName() == "changed by a private getter", "later_saved_values_expand_without_resetting_private_getter_changes_after_refusal");
 		}
 		{
+			auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
+			CheckpointNativeStorage::ReadViews views;
+			uint64_t* value = nullptr;
+			bool refused = false, exact = false;
+			{
+				CheckpointNativeStorage::ReadScope read(CheckpointNativeStorage::ReadViews{true, {}, {}});
+				try {
+					CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+					snapshot->AllocateFrozen(sizeof(uint64_t), alignof(uint64_t));
+				} catch (const std::bad_alloc&) { refused = true; }
+				exact = CheckpointNativeStorage::PrivateAllocationCount() == 0;
+				value = static_cast<uint64_t*>(snapshot->AllocateFrozen(sizeof(uint64_t), alignof(uint64_t)));
+				if (!value) throw std::bad_alloc();
+				*value = 37;
+				views = CheckpointNativeStorage::CurrentViews();
+			}
+			exact = std::async(std::launch::async, [views, value] {
+				CheckpointNativeStorage::ReadScope read(views);
+				uint64_t result = 0;
+				return CheckpointNativeStorage::ReadBytes(value, &result, sizeof(result)) && result == 37;
+			}).get() && exact;
+			snapshot.reset();
+			CheckpointNativeStorage::ReadScope read(views);
+			check(refused && exact && CheckpointNativeStorage::PrivateAllocationCount() == 0,
+				"saved_native_storage_retries_and_releases_its_private_worker_ranges");
+		}
+		{
 			CheckpointText frozen;
 			std::string full, shared;
 			{

@@ -742,9 +742,13 @@ void CheckpointNativeStorage::RememberPrivate(void* address, size_t bytes) {
 }
 
 bool CheckpointNativeStorage::ForgetPrivate(void* address) noexcept {
-	if (!s_Read) return false;
-	std::lock_guard lock(s_Read->privateValues->mutex);
-	return s_Read->privateValues->ranges.erase(reinterpret_cast<uintptr_t>(address)) != 0;
+	return s_Read && ForgetPrivate(s_Read->privateValues, address);
+}
+
+bool CheckpointNativeStorage::ForgetPrivate(const std::shared_ptr<PrivateValues>& values, void* address) noexcept {
+	if (!values) return false;
+	std::lock_guard lock(values->mutex);
+	return values->ranges.erase(reinterpret_cast<uintptr_t>(address)) != 0;
 }
 
 size_t CheckpointNativeStorage::PrivateAllocationCount() noexcept {
