@@ -296,6 +296,20 @@ def selected_boxes(value, path):
     return result
 
 
+def collect_player(out, name, role, player):
+    box, request, process, remote, tool, log = player
+    process.wait()
+    log.close()
+    result = ssh(box, [box["python"], tool, "--pack", remote], check=True, capture_output=True, text=True)
+    package = json.loads(result.stdout)
+    archive = out / "commands" / (name + "-" + role + ".tar")
+    copy_file(box, archive, package["path"], download=True)
+    if video.file_evidence(archive).get("sha256") != package["sha256"]:
+        raise ValueError("collected player files differ from their box")
+    unpack(archive, out)
+    archive.unlink()
+
+
 def capture_scene(args):
     document = scene(args.scenario)
     check_scene(document)
@@ -320,7 +334,7 @@ def capture_scene(args):
     video.write_json(out / "capture.json", capture)
     for index, run in enumerate(scene_runs(document)):
         name = run.get("name", "run" + str(index))
-        players = {}
+        players, collected = {}, set()
         try:
             for role in ("host", "joiner"):
                 box = boxes[role]
@@ -337,17 +351,9 @@ def capture_scene(args):
                     ready = ssh(box, [box["python"], tool, "--wait-start", remote], capture_output=True, text=True)
                     if ready.returncode:
                         raise RuntimeError("host launch refused: " + ready.stdout.strip())
-            for role, (box, request, process, remote, tool, log) in players.items():
-                process.wait()
-                log.close()
-                result = ssh(box, [box["python"], tool, "--pack", remote], check=True, capture_output=True, text=True)
-                package = json.loads(result.stdout)
-                archive = controls / (name + "-" + role + ".tar")
-                copy_file(box, archive, package["path"], download=True)
-                if video.file_evidence(archive).get("sha256") != package["sha256"]:
-                    raise ValueError("collected player files differ from their box")
-                unpack(archive, out)
-                archive.unlink()
+            for role, player in players.items():
+                collected.add(role)
+                collect_player(out, name, role, player)
             halves = [move_paths(read(out / name / (role + "-capture.json")), players[role][1]["out"], out)
                       for role in ("host", "joiner")]
             captured = {**halves[0], "peers": [peer for half in halves for peer in half["peers"]],
@@ -363,16 +369,26 @@ def capture_scene(args):
             video.write_json(out / "capture.json", capture)
         except Exception as error:
             capture["interrupted"] = str(error)
-            raise
         finally:
-            for box, request, process, remote, tool, log in players.values():
+            for role, player in players.items():
+                box, request, process, remote, tool, log = player
                 process.wait()
                 log.close()
+                if role not in collected:
+                    collected.add(role)
+                    try:
+                        collect_player(out, name, role, player)
+                    except Exception as error:
+                        capture["interrupted"] += "; could not collect " + role + ": " + str(error)
             video.write_json(out / "capture.json", capture)
+        if capture.get("interrupted"):
+            break
     check = spread_check(capture)
     video.write_json(out / "spread-check.json", check)
     video.scenario_manifest(capture, out, time.monotonic() - started)
     review = video.aggregate_review(capture, out)
+    if capture.get("interrupted"):
+        review["run_findings"].append({"class": "harness", "reason": capture["interrupted"]})
     if not check["passed"]:
         review["run_findings"].append({"class": "harness", "reason": "; ".join(check["reasons"])})
     for peer in review["peers"]:
