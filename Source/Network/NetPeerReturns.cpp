@@ -75,7 +75,7 @@ namespace RTE {
 			// The donor's live seat keeps its next update while a reader catches up.
 			if (preparedFrames >= 4 || (preparedFrames != 0 && std::chrono::steady_clock::now() >= workEnd)) break;
 			const auto [wire, route] = PeerFrameRoute(peer);
-			const uint64_t retryMs = wire && wire->IsPeerPingMeasured(route) ? std::max<uint64_t>(1000, 3ULL * wire->GetPeerPingMs(route) + 200) : 1000;
+			const uint64_t retryMs = wire && wire->IsPeerPingMeasured(route) ? std::max<uint64_t>(500, wire->GetPeerPingMs(route) + 200ULL) : 1000;
 			if ((m_PeerAppliedThrough.contains(peer) && kept->first <= m_PeerAppliedThrough.at(peer)) || queued.contains(kept->first) ||
 			    (sent.contains(kept->first) && m_TimingNowMs < sent.at(kept->first) + retryMs)) {
 				range->second.first = std::max(range->second.first, kept->first + 1);
@@ -195,7 +195,7 @@ namespace RTE {
 				if (peer == m_Config.localPeerId || applied < frame || !HasPeerFrameRoute(peer)) continue;
 				if (donor == 0 || applied > through) { donor = peer; through = applied; }
 				const auto [wire, route] = PeerFrameRoute(peer);
-				if (wire && wire->IsPeerPingMeasured(route)) retryMs = std::max<uint64_t>(retryMs, 3ULL * wire->GetPeerPingMs(route) + 200);
+				if (wire && wire->IsPeerPingMeasured(route)) retryMs = std::max<uint64_t>(retryMs, 2ULL * wire->GetPeerPingMs(route) + 200);
 				if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end())
 					retryMs = std::max<uint64_t>(retryMs, 2 * path->second.P95Ms() + 100);
 			}
