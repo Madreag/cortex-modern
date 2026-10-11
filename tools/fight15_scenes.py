@@ -442,7 +442,10 @@ def moderation_scene():
         host += key("F6") + [wait(panel_open=True), menu(f"activate {button}")]
         host += capture(f"confirm-{action}") + [dict(op="assert_control", control=button, text_contains=f"Confirm: {'remove' if action == 'kick' else 'ban'} Joiner", fits=True, inside="NetworkSeats"),
                 menu(f"activate {button}")]
-        host += [wait(error_contains="banned from this session", within_ms=90000)] if action == "ban" else [wait(elapsed_ms=25000)]
+        # Refusing a banned connection is an admission event, not an error in the host's running match.
+        # The joiner checks its refusal screen; the host's retained log must name that admission refusal.
+        host += ([wait(elapsed_ms=90000, sim_advanced=120, within_ms=95000)] + capture("ban-refused-host")
+                 if action == "ban" else [wait(elapsed_ms=25000)])
         host += [dict(op="assert_scene", input_player=0, equals=dict(alive=True))] + key("F6") + [wait(panel_open=False)]
         host += pause_end() + [wait(screen="MultiplayerScreen", scope="menu"), dict(op="finish")]
         joiner += [wait(screen="MultiplayerScreen", scope="menu")]
@@ -470,6 +473,10 @@ def moderation_scene():
         runs.append(dict(name=action, peers=peers))
         for check in scene_checks("host", host) + scene_checks("joiner", joiner):
             check["run"] = action; check["id"] = f"{action}-{check['id']}"; checks.append(check)
+        if action == "ban":
+            checks.append(dict(id="ban-host-refuses-readmission", run=action, peer="host", mark="ban-refused-host", screen="game",
+                               what="The live host refuses the banned player's new admission while its own match keeps running.",
+                               log_regex=[r"\[net-session\] admission refused reason=ParticipantBanned role=host .*The host banned you from this session"]))
     document.pop("peers", None)
     document.update(runs=runs, scripts=scripts, checklist=checks)
     (ROOT / "fight15-s08.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
