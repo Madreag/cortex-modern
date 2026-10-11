@@ -302,7 +302,12 @@ namespace RTE {
 		    (message.frame >= m_Stats.nextFrame && message.frame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew) ||
 		    (message.frame < m_Stats.nextFrame && m_Stats.nextFrame - message.frame > NetHostMigrationCodec::c_PeerHistoryFrames) ||
 		    (message.type == NetHostMigrationMessageType::PeerInput && message.totalBytes > NetLockstepCodec::c_InputWindowByteCap)) return true;
-		if (!m_PeerFrameIncoming.contains(key) && m_PeerFrameIncoming.size() >= 2 * m_Config.peerCount) return true;
+		if (!m_PeerFrameIncoming.contains(key) && m_PeerFrameIncoming.size() >= 2 * m_Config.peerCount) {
+			if (inputMessage) DiagnosticLine() << "[net-peer-input-room] local=" << static_cast<int>(m_Config.localPeerId)
+			    << " sender=" << static_cast<int>(message.senderPeerId) << " owner=" << static_cast<int>(message.successorPeerId)
+			    << " through=" << message.frame << " partial=" << m_PeerFrameIncoming.size() << std::endl;
+			return true;
+		}
 		auto& incoming = m_PeerFrameIncoming[key];
 		incoming.lastReceivedMs = nowMs;
 		if (message.offset == 0) { incoming.totalBytes = message.totalBytes; incoming.bytes.clear(); }
@@ -430,8 +435,12 @@ namespace RTE {
 				    << " through=" << message.frame << " bytes=" << size << " reason=" << readError.message << std::endl;
 				return true;
 			}
-			if (input.senderPeerId != owner ||
-			    input.roundId != m_RoundId || input.targetFrame > message.frame || (n > 0 && input.targetFrame <= inputs.back().targetFrame)) return true;
+			if (input.senderPeerId != owner || input.roundId != m_RoundId || input.targetFrame > message.frame || (n > 0 && input.targetFrame <= inputs.back().targetFrame)) {
+				DiagnosticLine() << "[net-peer-input-shape] local=" << static_cast<int>(m_Config.localPeerId) << " owner=" << static_cast<int>(owner)
+				    << " through=" << message.frame << " input=" << input.targetFrame << " sender=" << static_cast<int>(input.senderPeerId)
+				    << " round_matches=" << (input.roundId == m_RoundId) << " index=" << static_cast<int>(n) << std::endl;
+				return true;
+			}
 			inputs.push_back(std::move(input)); offset += size;
 		}
 		if (offset != body.size() || inputs.back().targetFrame != message.frame) return true;
