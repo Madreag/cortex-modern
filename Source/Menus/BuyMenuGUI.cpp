@@ -43,14 +43,6 @@ uint64_t BuyMenuGUI::s_ModuleFlagAllocations = 0;
 const std::string BuyMenuGUI::c_DefaultBannerImagePath = "Base.rte/GUIs/BuyMenu/BuyMenuBanner.png";
 const std::string BuyMenuGUI::c_DefaultLogoImagePath = "Base.rte/GUIs/BuyMenu/BuyMenuLogo.png";
 
-void BuyMenuGUI::SeatModuleFlags(std::vector<bool>& flags, int moduleCount) {
-	const size_t storage = flags.capacity();
-	flags.assign(static_cast<size_t>(std::max(moduleCount, 0)), false);
-	if (flags.capacity() != storage) ++s_ModuleFlagAllocations;
-	// The base module is the one a fresh menu opens with.
-	if (!flags.empty()) flags[0] = true;
-}
-
 BuyMenuGUI::BuyMenuGUI() {
 	Clear();
 }
@@ -2296,7 +2288,7 @@ void BuyMenuGUI::AddObjectsToItemList(std::vector<std::list<Entity*>>& moduleLis
 			for (std::list<Entity*>::iterator itr = moduleList[moduleID].begin(); itr != moduleList[moduleID].end(); ++itr) {
 				bool allowed = false;
 
-				for (std::map<std::string, int>::iterator itrA = m_OwnedItems.begin(); itrA != m_OwnedItems.end(); ++itrA) {
+				for (auto itrA = m_OwnedItems.begin(); itrA != m_OwnedItems.end(); ++itrA) {
 					if ((*itr)->GetModuleAndPresetName() == (*itrA).first && (*itrA).second > 0)
 						allowed = true;
 				}
@@ -2501,19 +2493,19 @@ void BuyMenuGUI::TryPurchase() {
 }
 
 std::string BuyMenuGUI::SaveCheckpoint() const {
+	if (CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::IsView(this)) return CheckpointNativeStorage::Source(this)->SaveCheckpoint();
 	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
 	CheckpointWriter writer("BuyMenuGUI3");
 	writer(m_CheckpointInitialized);
 	VisitCheckpoint(writer, *this);
 	writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(m_pSelectedCraft); }));
-	std::vector<bool> expanded;
-	for (size_t i = 0; i < m_aExpandedModules.size(); ++i) expanded.push_back(m_aExpandedModules[i]);
+	const auto expanded = CheckpointValues(m_aExpandedModules);
 	// The menu holds its flag store for its whole life, which is what this byte has always said: it is
 	// true at every module count, including none, and the load side rebuilds the flags themselves.
 	writer(true, GUICheckpoint::SaveModuleFlags(expanded), m_Loadouts.size());
-	for (const auto& loadout: m_Loadouts) {
+	for (const auto& loadout: CheckpointValues(m_Loadouts)) {
 		std::vector<CheckpointText> cargo;
-		for (const auto* item: loadout.m_CargoItems) cargo.push_back(CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(item); }));
+		for (const auto* item: CheckpointValues(loadout.m_CargoItems)) cargo.push_back(CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(item); }));
 		writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveOwnedEntity(&loadout); }), loadout.m_Complete,
 			CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(loadout.m_pDeliveryCraft); }), cargo);
 	}
@@ -2561,7 +2553,7 @@ bool BuyMenuGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		if (hasControls) { reader.Value(controls); if (!GUICheckpoint::Validate(controls)) return false; }
 		if (validateOnly) { reader.Finish(); return true; }
 		if (!m_pController) { reader.Finish(); m_PendingCheckpoint.assign(text); return true; }
-		std::vector<Loadout> candidates;
+		CheckpointVector<Loadout> candidates;
 		for (const auto& item: loadouts) {
 			auto entity = GUICheckpoint::LoadOwnedEntity(item.native);
 			auto* loadout = dynamic_cast<Loadout*>(entity.get());
@@ -2617,7 +2609,7 @@ bool BuyMenuGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		}
 		reader.Finish();
 		m_Loadouts = std::move(candidates); m_pSelectedCraft = craft;
-		m_aExpandedModules = expanded;
+		m_aExpandedModules.assign(expanded.begin(), expanded.end());
 		m_PendingCheckpoint.clear();
 		return true;
 	} catch (const std::exception& exception) { std::cout << "[gui-checkpoint] buy-menu validation=" << validateOnly << " error=" << exception.what() << std::endl; return false; }

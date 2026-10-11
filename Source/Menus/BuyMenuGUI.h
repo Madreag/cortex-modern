@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointString.h"
+#include "CheckpointNativeContainers.h"
+
 #include <string>
 #include <string_view>
 
@@ -34,7 +37,7 @@ namespace RTE {
 	class ACraft;
 
 	/// A full menu system that represents a purchasing GUI for Cortex Command
-	class BuyMenuGUI {
+	class BuyMenuGUI : public CheckpointNativeAllocated {
 		friend class GUICheckpoint;
 
 		/// Public member variable, method and friend function declarations
@@ -52,7 +55,13 @@ namespace RTE {
 		/// Seats a module-expansion flag store for a module count, reusing the storage it already holds.
 		/// @param flags The store to seat.
 		/// @param moduleCount How many modules the store answers for; a negative count seats nothing.
-		static void SeatModuleFlags(std::vector<bool>& flags, int moduleCount);
+		template<class Allocator> static void SeatModuleFlags(std::vector<bool, Allocator>& flags, int moduleCount) {
+			const size_t storage = flags.capacity();
+			flags.assign(static_cast<size_t>(std::max(moduleCount, 0)), false);
+			if (flags.capacity() != storage) ++s_ModuleFlagAllocations;
+			// The base module is the one a fresh menu opens with.
+			if (!flags.empty()) flags[0] = true;
+		}
 		/// Whether the cached control pointers are the ones the loaded control manager owns.
 		bool HasLiveCachedControls();
 		std::string SaveCheckpoint() const;
@@ -153,7 +162,7 @@ namespace RTE {
 
 		/// Return the list of loadouts currently saved as presets.
 		/// @return A reference to the list of loadout presets.
-		std::vector<Loadout>& GetLoadoutPresets() { return m_Loadouts; }
+		CheckpointVector<Loadout>& GetLoadoutPresets() { return m_Loadouts; }
 
 		/// Saves the current loadout into a Set.
 		void SaveCurrentLoadout();
@@ -450,7 +459,7 @@ namespace RTE {
 		// The multiplier of costs of any foreign tech items
 		float m_ForeignCostMult;
 		// Arry of bools showing which modules that have been expanded in the item list
-		std::vector<bool> m_aExpandedModules;
+		CheckpointVector<bool> m_aExpandedModules;
 		// Notification blink timer
 		Timer m_BlinkTimer;
 		// What we're blinking
@@ -522,7 +531,7 @@ namespace RTE {
 		// The clear set button
 		GUIButton* m_pDeleteButton;
 		// Sets of user-defined loadouts that can be selected quickly.
-		std::vector<Loadout> m_Loadouts;
+		CheckpointVector<Loadout> m_Loadouts;
 		// The selected loadout index, -1 if no loadout is selected
 		int m_SelectedLoadoutIndex;
 		// Purchase has been made
@@ -541,18 +550,18 @@ namespace RTE {
 		// Only show items that owned
 		bool m_OnlyShowOwnedItems;
 		// If not empty then only shows items present in this list
-		std::map<std::string, bool> m_AllowedItems;
+		CheckpointMap<CheckpointString, bool> m_AllowedItems;
 		// If not empty then items from this list are always shown int he buy menu no matter what other constraints there are
-		std::map<std::string, bool> m_AlwaysAllowedItems;
+		CheckpointMap<CheckpointString, bool> m_AlwaysAllowedItems;
 		// If not empty then removes items from ths list the buy menu
-		std::map<std::string, bool> m_ProhibitedItems;
+		CheckpointMap<CheckpointString, bool> m_ProhibitedItems;
 		// A map of owned items, for which the gold will not be deducted when bought
-		std::map<std::string, int> m_OwnedItems;
+		CheckpointMap<CheckpointString, int> m_OwnedItems;
 
 		/// Private member variable and method declarations
 	private:
 
-		std::string m_PendingCheckpoint;
+		CheckpointString m_PendingCheckpoint;
 		bool m_CheckpointInitialized = false;
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_MenuEnabled, self.m_MenuFocus, self.m_FocusChange, self.m_MenuCategory,

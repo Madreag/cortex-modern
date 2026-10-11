@@ -440,7 +440,7 @@ void InventoryMenuGUI::Draw(BITMAP* targetBitmap, const Vector& targetPos) const
 			equippedItems.push_back({human->GetEquippedItem(), human->GetEquippedBGItem()});
 		}
 	} else {
-		equippedItems = m_InventoryActorEquippedItems;
+		equippedItems.assign(m_InventoryActorEquippedItems.begin(), m_InventoryActorEquippedItems.end());
 	}
 	s_LastDrawActor = drawActor;
 	s_LastDrawCenter = center;
@@ -1470,6 +1470,7 @@ void InventoryMenuGUI::DrawFullMode(BITMAP* targetBitmap, const Vector& drawPos)
 }
 
 std::string InventoryMenuGUI::SaveCheckpoint() const {
+	if (CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::IsView(this)) return CheckpointNativeStorage::Source(this)->SaveCheckpoint();
 	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
 	CheckpointWriter writer("InventoryMenuGUI2");
 	writer(m_CheckpointInitialized);
@@ -1478,9 +1479,10 @@ std::string InventoryMenuGUI::SaveCheckpoint() const {
 	// world is already gone; a snapshot must not carry it, because no load could produce it back.
 	const auto reference = [](const Entity* entity) { return CheckpointWriter::Native([entity] { return GUICheckpoint::SaveEntityReference(entity); }); };
 	writer(reference(GUICheckpoint::LiveObject(m_InventoryActor)), m_InventoryActorEquippedItems.size());
-	for (const auto& [item, offhand]: m_InventoryActorEquippedItems) writer(reference(GUICheckpoint::LiveObject(item)), reference(GUICheckpoint::LiveObject(offhand)));
-	const auto saveBox = [&reference](const std::unique_ptr<CarouselItemBox>& box) {
-		return CheckpointWriter::Native([&box, &reference] {
+	for (const auto& [item, offhand]: CheckpointValues(m_InventoryActorEquippedItems)) writer(reference(GUICheckpoint::LiveObject(item)), reference(GUICheckpoint::LiveObject(offhand)));
+	const auto saveBox = [&reference](const std::unique_ptr<CarouselItemBox>& owner) {
+		const auto* box = CheckpointNativeStorage::Source(owner.get());
+		return CheckpointWriter::Native([box, &reference] {
 			CheckpointWriter state("CarouselItemBox1");
 			state(box != nullptr);
 			if (box) state(reference(GUICheckpoint::LiveObject(box->Item)), box->IsForEquippedItems, box->FullSize, box->CurrentSize, box->Pos, box->IconCenterPosition, box->RoundedAndBorderedSides);
@@ -1490,13 +1492,14 @@ std::string InventoryMenuGUI::SaveCheckpoint() const {
 	for (const auto& box: m_CarouselItemBoxes) writer(saveBox(box));
 	writer(saveBox(m_CarouselExitingItemBox), CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(m_CarouselBitmap.get()); }),
 		CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(m_CarouselBGBitmap.get()); }));
-	const auto buttonName = [](GUIButton* button) { return button ? button->GetName() : std::string{}; };
+	const auto buttonName = [](GUIButton* button) { return button ? CheckpointNativeStorage::Source(button)->GetName() : std::string{}; };
 	writer(buttonName(m_NonMouseHighlightedButton), buttonName(m_NonMousePreviousEquippedItemsBoxButton), buttonName(m_NonMousePreviousInventoryItemsBoxButton), buttonName(m_NonMousePreviousReloadOrDropButton));
 	writer(reference(m_GUIInformationToggleButtonIcon), reference(m_GUIReloadButtonIcon), reference(m_GUIDropButtonIcon));
 	writer(m_GUISelectedItem != nullptr);
-	if (m_GUISelectedItem) writer(buttonName(m_GUISelectedItem->Button), reference(GUICheckpoint::LiveObject(m_GUISelectedItem->Object)), m_GUISelectedItem->InventoryIndex, m_GUISelectedItem->EquippedItemIndex, m_GUISelectedItem->IsBeingDragged, m_GUISelectedItem->DragHoldCount);
+	if (const auto* selected = CheckpointNativeStorage::Source(m_GUISelectedItem.get()))
+		writer(buttonName(selected->Button), reference(GUICheckpoint::LiveObject(selected->Object)), selected->InventoryIndex, selected->EquippedItemIndex, selected->IsBeingDragged, selected->DragHoldCount);
 	writer(m_GUIInventoryItemButtons.size());
-	for (const auto& [item, button]: m_GUIInventoryItemButtons) writer(reference(GUICheckpoint::LiveObject(item)), buttonName(button));
+	for (const auto& [item, button]: CheckpointValues(m_GUIInventoryItemButtons)) writer(reference(GUICheckpoint::LiveObject(item)), buttonName(button));
 	writer(m_GUIControlManager != nullptr);
 	if (m_GUIControlManager) writer(CheckpointWriter::Native([&] { return m_GUIControlManager->SaveCheckpoint(); }));
 	return writer.Text();
@@ -1561,7 +1564,7 @@ bool InventoryMenuGUI::LoadCheckpoint(std::string_view text, bool validateOnly) 
 		if (!m_MenuController) { reader.Finish(); m_PendingCheckpoint.assign(text); return true; }
 		const auto movable = [](const std::string& value) { return const_cast<MovableObject*>(dynamic_cast<const MovableObject*>(GUICheckpoint::LoadEntityReference(value))); };
 		auto* restoredActor = dynamic_cast<Actor*>(movable(actor));
-		std::vector<std::pair<MovableObject*, MovableObject*>> restoredEquipment;
+		CheckpointVector<std::pair<MovableObject*, MovableObject*>> restoredEquipment;
 		for (const auto& [item, offhand]: equipment) restoredEquipment.emplace_back(movable(item), movable(offhand));
 		for (size_t index = 0; index < boxes.size(); ++index) if (boxes[index]) boxes[index]->Item = movable(boxItems[index]);
 		std::unique_ptr<BITMAP, void(*)(BITMAP*)> restoredCarousel(GUICheckpoint::LoadBitmap(carousel), destroy_bitmap);
@@ -1581,7 +1584,7 @@ bool InventoryMenuGUI::LoadCheckpoint(std::string_view text, bool validateOnly) 
 		std::array<GUIButton*, 4> restoredButtons;
 		for (size_t index = 0; index < buttonNames.size(); ++index) restoredButtons[index] = button(buttonNames[index]);
 		if (selected) { selected->Object = movable(selectedObject); selected->Button = button(selectedButton); }
-		std::vector<std::pair<MovableObject*, GUIButton*>> itemButtons;
+		CheckpointVector<std::pair<MovableObject*, GUIButton*>> itemButtons;
 		for (const auto& [item, name]: buttons) itemButtons.emplace_back(movable(item), button(name));
 		reader.Finish();
 		m_InventoryActor = restoredActor; m_InventoryActorEquippedItems = std::move(restoredEquipment);

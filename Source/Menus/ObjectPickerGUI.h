@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointString.h"
+#include "CheckpointNativeContainers.h"
+
 #include <string>
 #include <string_view>
 
@@ -19,7 +22,7 @@ namespace RTE {
 	class SceneObject;
 
 	/// A GUI for picking object instances for placement to the Scene in various editors.
-	class ObjectPickerGUI {
+	class ObjectPickerGUI : public CheckpointNativeAllocated {
 		friend class GUICheckpoint;
 
 	public:
@@ -137,7 +140,7 @@ namespace RTE {
 
 	private:
 
-		std::string m_PendingCheckpoint;
+		CheckpointString m_PendingCheckpoint;
 		bool m_CheckpointInitialized = false;
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_PickerState, self.m_PickerFocus, self.m_OpenCloseSpeed, self.m_ModuleSpaceID,
@@ -176,7 +179,7 @@ namespace RTE {
 		float m_OpenCloseSpeed; //!< Speed at which the picker appears and disappears.
 
 		int m_ModuleSpaceID; //!< The DataModule ID of the non-official module that this picker should be restricted to, in addition to all the official modules as well. If -1, the picker will be able to pick from ALL loaded DataModules.
-		std::string m_ShowType; //!< Only show objects of this type. Empty string or "All" will show objects of all types.
+		CheckpointString m_ShowType; //!< Only show objects of this type. Empty string or "All" will show objects of all types.
 		int m_NativeTechModuleID; //!< The ID of the DataModule that contains the native Tech of the Player using this menu.
 		float m_ForeignCostMult; //!< The multiplier of costs of any foreign tech items.
 
@@ -188,7 +191,7 @@ namespace RTE {
 		Timer m_RepeatStartTimer; //!< Measures the time to when to start repeating inputs when they're held down.
 		Timer m_RepeatTimer; //!< Measures the interval between input repeats.
 
-		std::vector<bool> m_ExpandedModules; //!< The modules that have been expanded in the item list.
+		CheckpointVector<bool> m_ExpandedModules; //!< The modules that have been expanded in the item list.
 
 #pragma region General List Handling
 		/// Sets the currently focused list in the picker. For list item highlighting and non-mouse input handling.

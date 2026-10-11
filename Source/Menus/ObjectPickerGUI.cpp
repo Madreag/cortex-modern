@@ -619,11 +619,12 @@ void ObjectPickerGUI::Draw(BITMAP* drawBitmap) const {
 }
 
 std::string ObjectPickerGUI::SaveCheckpoint() const {
+	if (CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::IsView(this)) return CheckpointNativeStorage::Source(this)->SaveCheckpoint();
 	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
 	CheckpointWriter writer("ObjectPickerGUI3");
 	writer(m_CheckpointInitialized);
 	VisitCheckpoint(writer, *this);
-	writer(GUICheckpoint::SaveModuleFlags(m_ExpandedModules), CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(m_PickedObject); }), m_GUIControlManager != nullptr);
+	writer(GUICheckpoint::SaveModuleFlags(CheckpointValues(m_ExpandedModules)), CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(m_PickedObject); }), m_GUIControlManager != nullptr);
 	if (m_GUIControlManager) writer(CheckpointWriter::Native([&] { return m_GUIControlManager->SaveCheckpoint(); }));
 	return writer.Text();
 }
@@ -644,7 +645,7 @@ bool ObjectPickerGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 				reader.Value(saved);
 				flags = GUICheckpoint::LoadModuleFlags(saved);
 			}
-			reader.OnCommit([this, flags] { m_ExpandedModules = flags; });
+			reader.OnCommit([this, flags] { m_ExpandedModules.assign(flags.begin(), flags.end()); });
 		};
 		if (text.starts_with("16 ObjectPickerGUI1 ")) {
 			CheckpointReader reader(text, "ObjectPickerGUI1", validateOnly); VisitCheckpoint(reader, *this); expanded(reader, true); reader.Finish(); return true;

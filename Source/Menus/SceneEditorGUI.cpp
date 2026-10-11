@@ -652,12 +652,12 @@ void SceneEditorGUI::Update() {
 		        if (!m_BrainSkyPath.empty())
 		        {
 		            // Smash all airborne waypoints down to just above the ground, except for when it makes the path intersect terrain or it is the final destination
-		            std::list<Vector>::iterator finalItr = m_BrainSkyPath.end();
+		            CheckpointList<Vector>::iterator finalItr = m_BrainSkyPath.end();
 		            finalItr--;
 		            Vector smashedPoint;
 		            Vector previousPoint = *(m_BrainSkyPath.begin());
-		            std::list<Vector>::iterator nextItr = m_BrainSkyPath.begin();
-		            for (std::list<Vector>::iterator lItr = m_BrainSkyPath.begin(); lItr != finalItr; ++lItr)
+		            CheckpointList<Vector>::iterator nextItr = m_BrainSkyPath.begin();
+		            for (CheckpointList<Vector>::iterator lItr = m_BrainSkyPath.begin(); lItr != finalItr; ++lItr)
 		            {
 		                nextItr++;
 		                smashedPoint = g_SceneMan.MovePointToGround((*lItr), 20, 10);
@@ -1346,8 +1346,8 @@ void SceneEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 	// Always draw the path so the player can see what he would be blocking off when building
 	if (m_RequireClearPathToOrbit && !m_BrainSkyPath.empty()) {
 		int skipPhase = 0;
-		std::list<Vector>::const_reverse_iterator lLast = m_BrainSkyPath.rbegin();
-		std::list<Vector>::const_reverse_iterator lItr = m_BrainSkyPath.rbegin();
+		CheckpointList<Vector>::const_reverse_iterator lLast = m_BrainSkyPath.rbegin();
+		CheckpointList<Vector>::const_reverse_iterator lItr = m_BrainSkyPath.rbegin();
 		for (; lItr != m_BrainSkyPath.rend(); ++lItr) {
 			// Draw these backwards so the skip phase works
 			skipPhase = g_FrameMan.DrawDotLine(pTargetBitmap, (*lLast) - targetPos, (*lItr) - targetPos, m_BrainSkyPathCost <= MAXBRAINPATHCOST ? s_pValidPathDot : s_pInvalidPathDot, 16, skipPhase, true);
@@ -1511,7 +1511,8 @@ void SceneEditorGUI::RequestBrainSkyPath(Scene& scene, const Vector& start, cons
 	m_PathRequest = scene.CalculatePathAsyncForEditor(
 	    start, end, FLT_MAX, c_PathFindingDefaultDigStrength, static_cast<Activity::Teams>(team),
 	    [this](std::shared_ptr<volatile PathRequest> pathRequest) {
-		    m_BrainSkyPath = const_cast<std::list<Vector>&>(pathRequest->path);
+		    const auto& path = const_cast<const std::list<Vector>&>(pathRequest->path);
+		    m_BrainSkyPath.assign(path.begin(), path.end());
 		    m_BrainSkyPathCost = pathRequest->totalCost;
 	    });
 }
@@ -1606,9 +1607,10 @@ bool SceneEditorGUI::RunRetainedOwnerCaptureSelfTest() {
 }
 
 std::string SceneEditorGUI::SaveCheckpoint() const {
+	if (CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::IsView(this)) return CheckpointNativeStorage::Source(this)->SaveCheckpoint();
 	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
 	// A capture reclaims before its workers start; while they run they read these owners, so nothing drops one.
-	if (!g_MovableMan.IsRestoringSnapshot() && !CaptureSentinel::InParallelPhase()) ReclaimNetRetainedOwners();
+	if (!CheckpointNativeStorage::Reading() && !g_MovableMan.IsRestoringSnapshot() && !CaptureSentinel::InParallelPhase()) ReclaimNetRetainedOwners();
 	const bool retainedOwners = !GUICheckpoint::IsCapturingNetLocalUI() && !m_NetRetainedOwners.empty();
 	const bool netOwners = retainedOwners || m_NetPrivateCurrentObject;
 	CheckpointWriter writer(netOwners ? "SceneEditorGUI3" : "SceneEditorGUI2");
@@ -1621,15 +1623,19 @@ std::string SceneEditorGUI::SaveCheckpoint() const {
 	writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(m_pObjectToBlink == m_pCurrentObject ? nullptr : m_pObjectToBlink); }));
 	writer(m_PathRequest != nullptr);
 	if (m_PathRequest) {
-		const auto& request = const_cast<const PathRequest&>(*m_PathRequest);
+		const auto& request = *CheckpointNativeStorage::Source(const_cast<const PathRequest*>(m_PathRequest.get()));
 		if (!request.complete) throw std::runtime_error("an editor path request is still running at checkpoint capture");
 		writer(request.complete, request.status, request.path, request.pathLength, request.totalCost, request.startPos, request.targetPos);
 	}
 	writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(m_DrawBitmap.get()); }));
 	if (netOwners) {
 		writer(m_NetPrivateCurrentObject, retainedOwners ? m_NetRetainedOwners.size() : size_t{0});
-		if (retainedOwners) for (size_t index = 0; index < m_NetRetainedOwners.size(); ++index) writer(static_cast<bool>(m_NetRetainedPrivateOwners[index]),
-			CheckpointWriter::Native([&] { return GUICheckpoint::SaveOwnedEntity(m_NetRetainedOwners[index].get()); }));
+		if (retainedOwners) {
+			const auto owners = CheckpointValues(m_NetRetainedOwners);
+			const auto privateOwners = CheckpointValues(m_NetRetainedPrivateOwners);
+			for (size_t index = 0; index < owners.size(); ++index) writer(static_cast<bool>(privateOwners[index]),
+				CheckpointWriter::Native([&] { return GUICheckpoint::SaveOwnedEntity(owners[index].get()); }));
+		}
 	}
 	return writer.Text();
 }
@@ -1663,7 +1669,7 @@ bool SceneEditorGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		}
 		reader.Value(bitmap); GUICheckpoint::LoadBitmap(bitmap, true);
 		std::vector<std::string> retained;
-		std::vector<bool> retainedPrivate;
+		CheckpointVector<bool> retainedPrivate;
 		bool privateCurrent = false;
 		if (retainedOwners) {
 			size_t count = 0;
@@ -1686,7 +1692,7 @@ bool SceneEditorGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		if ((object && !dynamic_cast<SceneObject*>(object.get())) || (menu && !dynamic_cast<PieMenu*>(menu.get()))) return false;
 		const auto* objectToBlink = blinkCurrent ? (keepObject ? m_pCurrentObject : static_cast<const SceneObject*>(object.get())) : dynamic_cast<const SceneObject*>(GUICheckpoint::LoadEntityReference(blink));
 		std::unique_ptr<BITMAP, BitmapDeleter> image(GUICheckpoint::LoadBitmap(bitmap));
-		std::vector<std::unique_ptr<Entity>> restoredRetained;
+		CheckpointVector<std::unique_ptr<Entity>> restoredRetained;
 		std::vector<bool> keepRetained;
 		if (!GUICheckpoint::IsRestoringNetLocalUI()) {
 			restoredRetained.resize(retained.size());

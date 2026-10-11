@@ -2114,7 +2114,7 @@ int PathFinder::RunHorizonGridSelfTest() {
 		struct BrainPathEditor : SceneEditorGUI {
 			using SceneEditorGUI::RequestBrainSkyPath;
 			bool Complete() const { return m_PathRequest && m_PathRequest->complete; }
-			bool Matches(const std::list<Vector>& path, float cost) const { return m_BrainSkyPath == path && m_BrainSkyPathCost == cost; }
+			bool Matches(const std::list<Vector>& path, float cost) const { return std::equal(m_BrainSkyPath.begin(), m_BrainSkyPath.end(), path.begin(), path.end()) && m_BrainSkyPathCost == cost; }
 			uint64_t Generation() const { return m_PathRequest->horizonGeneration; }
 		};
 		LoopbackTransport idle;

@@ -2143,7 +2143,7 @@ bool GUICheckpoint::RunSelfTest() {
 			BuyMenuGUI menu;
 			ObjectPickerGUI picker;
 			const auto moduleFlags = [](int count, int expandedModule) {
-				std::vector<bool> flags(count > 0 ? count : 0, false);
+				CheckpointVector<bool> flags(count > 0 ? count : 0, false);
 				if (expandedModule >= 0 && expandedModule < count) flags[expandedModule] = true;
 				return flags;
 			};
@@ -2162,7 +2162,7 @@ bool GUICheckpoint::RunSelfTest() {
 			check("object_picker_module_flags_sized", sized);
 			check("object_picker_module_flags_kept", sized && moduleCount > 2 && picker.m_ExpandedModules[1] && !picker.m_ExpandedModules[moduleCount - 1]);
 			picker.m_PendingCheckpoint.clear();
-			const std::vector<bool> chosen = moduleFlags(moduleCount, moduleCount - 1);
+			const auto chosen = moduleFlags(moduleCount, moduleCount - 1);
 			picker.m_ExpandedModules = chosen;
 			check("object_picker_module_flags_round_trip", picker.LoadCheckpoint(picker.SaveCheckpoint()) && picker.m_ExpandedModules == chosen);
 		}
