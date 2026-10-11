@@ -107,6 +107,14 @@ namespace RTE {
 		void PrepareCheckpointLookupValues();
 		const void* CheckpointOwnedLookupValues() const { return m_OwnedCheckpointLookup.get(); }
 		static std::string CheckpointLookupStorageSelfTestMismatch();
+		/// Owns world indices and event membership before a multiplayer capture.
+		void PrepareCheckpointMembershipValues();
+		const void* CheckpointOwnedMembershipValues() const { return m_OwnedCheckpointMembership.get(); }
+		static std::string CheckpointMembershipStorageSelfTestMismatch();
+		/// Gets the alarm events from the last update.
+		const CheckpointVector<AlarmEvent*>& GetAlarmEvents() const { return CheckpointMembershipValues().m_AlarmEvents; }
+		/// Gets the alarm events added during this update.
+		const CheckpointVector<AlarmEvent*>& GetAddedAlarmEvents() const { return CheckpointMembershipValues().m_AddedAlarmEvents; }
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		SerializableClassNameGetter;
@@ -142,7 +150,7 @@ namespace RTE {
 
 		/// Gets the number of MOID's currently in use this frame.
 		/// @return The count of MOIDs in use this frame.
-		int GetMOIDCount() { return m_MOIDIndex.size(); }
+		int GetMOIDCount() const { return CheckpointMembershipValues().m_MOIDIndex.size(); }
 
 		/// Gets a MOID from pixel coordinates in the Scene.
 		/// @param pixelX The X coordinate of the Scene pixel to get the MOID of.
@@ -536,11 +544,11 @@ namespace RTE {
 		Actor* GetPrevActorInGroup(std::string group, Actor* pBeforeThis = 0);
 
 		/// Gets the list of all actors on one team, ordered by their X positions.
-		/// @param team Which team to try to get the roster for. (default: 0) { return &(m_ActorRoster[team])
+		/// @param team Which team to get the roster for, by default 0.
 		/// @return A pointer to the list of all the actors on the specified team, sorted
 		/// ascending by their X posistions. Ownership of the list or contained
 		/// actors is NOT transferred!
-		CheckpointList<Actor*>* GetTeamRoster(int team = 0) { return &(m_ActorRoster[team]); }
+		CheckpointList<Actor*>* GetTeamRoster(int team = 0) { return &(CheckpointMembershipValues().m_ActorRoster[team]); }
 
 		/// Get a pointer to the first Actor in the internal Actor list that is
 		/// of a specifc team, alternatively the first one AFTER a specific actor!
@@ -714,7 +722,7 @@ namespace RTE {
 
 		/// Sets this to draw HUD lines for a specific team's roster this frame.
 		/// @param team Which team to have lines drawn of.
-		void SortTeamRoster(int team) { m_SortTeamRoster[team] = true; }
+		void SortTeamRoster(int team) { CheckpointMembershipValues().m_SortTeamRoster[team] = true; }
 
 		/// Adds a MovableObject to this, after it is determined what it is and the best way to add it is. E.g. if it's an Actor, it will be added as such. Ownership IS transferred!
 		/// @param movableObjectToAdd A pointer to the MovableObject to add. Ownership IS transferred!
@@ -885,16 +893,20 @@ namespace RTE {
 		/// @param newEvent The AlarmEvent to register.
 		void RegisterAlarmEvent(const AlarmEvent& newEvent);
 
-		/// Gets the list of AlarmEvent:s from last frame's update.
-		/// @return The const list of AlarmEvent:s.
-		const CheckpointVector<AlarmEvent*>& GetAlarmEvents() const { return m_AlarmEvents; }
-
 		/// Whether an alarm event is one of last frame's or this frame's; a script can keep one past its frame.
 		/// @param event The event, compared by address only.
 		bool IsLiveAlarmEvent(const AlarmEvent* event) {
-			if (std::find(m_AlarmEvents.begin(), m_AlarmEvents.end(), event) != m_AlarmEvents.end()) return true;
+			if (CheckpointNativeStorage::Reading()) {
+				const auto& saved = std::as_const(*this).CheckpointMembershipValues();
+				const auto contains = [event](const auto& events) {
+					const auto values = CheckpointValues(events);
+					return std::find(values.begin(), values.end(), event) != values.end();
+				};
+				return contains(saved.m_AlarmEvents) || contains(saved.m_AddedAlarmEvents);
+			}
+			if (std::find(CheckpointMembershipValues().m_AlarmEvents.begin(), CheckpointMembershipValues().m_AlarmEvents.end(), event) != CheckpointMembershipValues().m_AlarmEvents.end()) return true;
 			std::lock_guard<std::mutex> lock(m_AddedAlarmEventsMutex);
-			return std::find(m_AddedAlarmEvents.begin(), m_AddedAlarmEvents.end(), event) != m_AddedAlarmEvents.end();
+			return std::find(CheckpointMembershipValues().m_AddedAlarmEvents.begin(), CheckpointMembershipValues().m_AddedAlarmEvents.end(), event) != CheckpointMembershipValues().m_AddedAlarmEvents.end();
 		}
 
 		/// Shows whetehr particles are set to get copied to the terrain upon
@@ -955,8 +967,8 @@ namespace RTE {
 		/// Empties the lockstep join quarantine — a restore's objects were residents at the
 		/// captured tick, not mid-tick joiners.
 		void ClearLockstepJoinQuarantine();
-		std::vector<std::pair<uint64_t, long int>> GetLockstepJoinQuarantine() const { const auto values = CheckpointValues(m_LockstepJoinQuarantine); return {values.begin(), values.end()}; }
-		void RestoreLockstepJoinQuarantine(std::vector<std::pair<uint64_t, long int>> quarantine) { m_LockstepJoinQuarantine.assign(quarantine.begin(), quarantine.end()); }
+		std::vector<std::pair<uint64_t, long int>> GetLockstepJoinQuarantine() const { const auto values = CheckpointValues(CheckpointMembershipValues().m_LockstepJoinQuarantine); return {values.begin(), values.end()}; }
+		void RestoreLockstepJoinQuarantine(std::vector<std::pair<uint64_t, long int>> quarantine) { CheckpointMembershipValues().m_LockstepJoinQuarantine.assign(quarantine.begin(), quarantine.end()); }
 
 		/// While set, the Add paths place snapshot residents verbatim (no spawn normalization, no
 		/// join quarantine) and each object adopts its saved identity. Only a rollback restore
@@ -1154,6 +1166,29 @@ namespace RTE {
 
 		/// Protected member variable and method declarations
 	protected:
+		struct CheckpointMembership : CheckpointNativeAllocated {
+			// Membership and ordering stay at the captured tick while the live world advances.
+			CheckpointUnorderedMap<const Actor*, int> m_ContiguousActorIDs;
+			CheckpointVector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
+			CheckpointSet<long> m_PlayerBrainIDs;
+			CheckpointList<Actor*> m_ActorRoster[Activity::MaxTeamCount];
+			bool m_SortTeamRoster[Activity::MaxTeamCount];
+			int m_TeamMOIDCount[Activity::MaxTeamCount];
+			CheckpointVector<AlarmEvent*> m_AlarmEvents;
+			CheckpointVector<AlarmEvent*> m_AddedAlarmEvents;
+			CheckpointVector<MovableObject*> m_MOIDIndex;
+		};
+		CheckpointMembership m_OrdinaryCheckpointMembership;
+		std::unique_ptr<CheckpointMembership> m_OwnedCheckpointMembership;
+		CheckpointMembership& CheckpointMembershipValues() {
+			if (CheckpointNativeStorage::Reading()) throw std::logic_error("a frozen registry cannot change live world membership");
+			return m_OwnedCheckpointMembership ? *m_OwnedCheckpointMembership : m_OrdinaryCheckpointMembership;
+		}
+		const CheckpointMembership& CheckpointMembershipValues() const {
+			const auto* source = m_OwnedCheckpointMembership ? m_OwnedCheckpointMembership.get() : &m_OrdinaryCheckpointMembership;
+			return *CheckpointNativeStorage::Source(source);
+		}
+
 		struct CheckpointLookup : CheckpointNativeAllocated {
 			CheckpointMap<long int, MovableObject*> m_KnownObjects;
 			CheckpointUnorderedSet<const MovableObject*> m_ValidActors;
@@ -1204,13 +1239,6 @@ namespace RTE {
 			return *CheckpointNativeStorage::Source(source);
 		}
 
-		// A map to give a unique contiguous identifier per-actor. This is re-created per frame.
-		CheckpointUnorderedMap<const Actor*, int> m_ContiguousActorIDs;
-		// Actors that joined mid-tick during a lockstep match (join tick, unique id), quarantined off
-		// their per-machine controllers until the next tick's controller update hands them to the wire.
-		CheckpointVector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
-		// The unique ids of the brains human players depend on, every seat's, on every peer.
-		CheckpointSet<long> m_PlayerBrainIDs;
 		WorldSetAside* m_WorldSetAside = nullptr; //!< The record holding the world aside, if any; the hold is its to reinstate or discard.
 		/// Withdraws the copies a held world would swap back, so no later destruction writes into them.
 		void ForgetHeldWorld(WorldSetAside& in);
@@ -1283,11 +1311,6 @@ namespace RTE {
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		bool m_PurgingAllMOs = false;
 		std::vector<MovableObject*> m_PendingLinkResolves; //!< Restored adds whose saved links resolve once the whole world is in.
-		// Currently active MOs in the simulation. This is required because the code is awful and ownership isn't transported to/from lua in any sensible way.
-		// It's entirely possible that stuff is deleted in the game but a reference to it is kept in Lua. Which is awful. Obviously.
-		// Or perhaps even more concerningly, stuff can be deleted, re-allocated over the same space, and then readded to movableman. Which even this solution does nothing to fix.
-		// Anyways, until we fix up ownership semantics... this is the best we can do.
-
 		// Mutexes to ensure MOs aren't being removed from separate threads at the same time
 		std::mutex m_ActorsMutex;
 		std::mutex m_ItemsMutex;
@@ -1310,25 +1333,8 @@ namespace RTE {
 		// Async to have actors see in parallel
 		BS::multi_future<void> m_ActorsSeeFuture;
 
-		// Roster of each team's actors, sorted by their X positions in the scene. Actors not owned here
-		CheckpointList<Actor*> m_ActorRoster[Activity::MaxTeamCount];
-		// Whether to draw HUD lines between the actors of a specific team
-		bool m_SortTeamRoster[Activity::MaxTeamCount];
-		// Every team's MO footprint
-		int m_TeamMOIDCount[Activity::MaxTeamCount];
-
-		// The alarm events on the scene where something alarming happened, for use with AI firings awareness os they react to shots fired etc.
-		// This is the last frame's events, is the one for Actors to poll for events, should be cleaned out and refilled each frame.
-		CheckpointVector<AlarmEvent*> m_AlarmEvents;
-		// The alarm events on the scene where something alarming happened, for use with AI firings awareness os they react to shots fired etc.
-		// This is the current frame's events, will be filled up during MovableMan Updates, should be transferred to Last Frame at end of update.
-		CheckpointVector<AlarmEvent*> m_AddedAlarmEvents;
-
 		// Mutexes to ensure alarm events aren't being added from separate threads at the same time
 		std::mutex m_AddedAlarmEventsMutex;
-
-		// The list created each frame to register all the current MO's
-		CheckpointVector<MovableObject*> m_MOIDIndex;
 
 		// The ration of terrain pixels to be converted into MOPixel:s upon
 		// deep impact of MO.

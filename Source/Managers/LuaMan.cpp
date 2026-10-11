@@ -9748,6 +9748,13 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	{
+		const std::string mismatch = MovableMan::CheckpointMembershipStorageSelfTestMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " owned_world_membership_survives_source_destruction";
+		if (!mismatch.empty()) std::cout << " reason=" << mismatch;
+		std::cout << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
+	}
+	{
 		const std::string mismatch = MovableMan::CheckpointLookupStorageSelfTestMismatch();
 		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " owned_object_lookup_survives_source_mutation_and_destruction";
 		if (!mismatch.empty()) std::cout << " reason=" << mismatch;
@@ -15696,6 +15703,7 @@ void LuaMan::PrepareCheckpointValues() {
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointActorValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLooseValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLookupValues();
+	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointMembershipValues();
 	m_MasterScriptState.PrepareCheckpointValues();
 	m_MasterScriptState.PrepareCheckpointBindings();
 	for (LuaStateWrapper& state: m_ScriptStates) {
