@@ -1410,11 +1410,7 @@ void PathFinder::ApplyHorizonJob(const HorizonJob& job, const std::vector<std::a
 		if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size() || index >= materials.size()) {
 			continue;
 		}
-		// A node the live grid already carries needs no cell; every live write of one is preceded by a Note that pins it again.
-		if (m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials == materials[index]) {
-			m_HorizonNodes.erase(nodeId);
-			continue;
-		}
+		// A later terrain change can already be queued, so the live grid may move again before that change commits.
 		HorizonNode& overlay = m_HorizonNodes[nodeId];
 		overlay.committedMaterials = materials[index];
 		overlay.generation = generation;
@@ -1446,7 +1442,12 @@ HorizonNodeSnapshot PathFinder::SnapshotNode(int nodeId) const {
 	snap.nodeId = nodeId;
 	snap.pos = node.Pos;
 	snap.navigable = node.m_Navigable;
-	snap.materials = node.AdjacentNodeBlockingMaterials;
+	{
+		std::lock_guard lock(m_HorizonMutex);
+		const auto committed = m_HorizonNodes.find(nodeId);
+		// Local path workers can delay live updates. A terrain note must start from the same committed costs on every peer.
+		snap.materials = committed != m_HorizonNodes.end() ? committed->second.committedMaterials : node.AdjacentNodeBlockingMaterials;
+	}
 	for (int dir = 0; dir < PathNode::c_MaxAdjacentNodeCount; ++dir) {
 		if (!node.AdjacentNodes[dir]) {
 			continue;
