@@ -264,17 +264,16 @@ namespace {
 		/// A capture whose carried-sound scope does not remember its notes leaves the last carried set alone, so it need
 		/// not be kept here.
 		explicit CaptureAllocationState(bool keepCarried = true) {
-			if (keepCarried) carried = g_AudioMan.LastCarriedSoundIdentities();
+			if (keepCarried) carried.emplace();
 		}
 		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
 		long uid = MovableObject::GetUniqueIDCounter();
 		// The registry and its cursor come back as they were, saved only if the capture changes them.
 		AudioMan::CheckpointRegistryScope sounds{false};
-		std::optional<std::unordered_set<uint64_t>> carried;
+		std::optional<AudioMan::CheckpointCarriedScope> carried;
 		void RestoreCounters() const { g_SimRNG = sim; g_RenderRNG = render; MovableObject::PinUniqueIDCounter(uid); }
 		~CaptureAllocationState() {
 			RestoreCounters();
-			if (carried) g_AudioMan.RememberCarriedSoundIdentities(std::move(*carried));
 		}
 	};
 

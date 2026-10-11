@@ -40,6 +40,7 @@ namespace RTE {
 	class AudioMan : public Singleton<AudioMan> {
 		template<template<class> class Allocator> struct CheckpointRegistryState;
 		using OwnedCheckpointSoundRegistry = CheckpointMap<uint64_t, CheckpointVector<SoundContainer*>>;
+		using OwnedCheckpointSoundIdentities = CheckpointUnorderedSet<uint64_t>;
 		friend class SettingsMan;
 		friend class SoundContainer;
 
@@ -136,6 +137,17 @@ namespace RTE {
 		void CollectManagerSoundIdentities(std::unordered_set<uint64_t>& out) const;
 		void RememberCarriedSoundIdentities(std::unordered_set<uint64_t> carried);
 		std::unordered_set<uint64_t> LastCarriedSoundIdentities() const;
+		/// Keeps the carried set's original nodes for allocation-free rollback.
+		class CheckpointCarriedScope {
+		public:
+			CheckpointCarriedScope();
+			~CheckpointCarriedScope();
+			CheckpointCarriedScope(const CheckpointCarriedScope&) = delete;
+			CheckpointCarriedScope& operator=(const CheckpointCarriedScope&) = delete;
+		private:
+			std::optional<std::unordered_set<uint64_t>> m_Ordinary;
+			std::unique_ptr<OwnedCheckpointSoundIdentities> m_Owned;
+		};
 		void StopRecordingRestoredSoundRegistry();
 		bool RestoredSoundRegistryActive() const;
 		/// While one lives, the sound registry is saved before the first change made to it, and put back when the scope
@@ -185,7 +197,9 @@ namespace RTE {
 			static thread_local SoundCheckpointSaveScope* s_Current;
 			std::mutex m_NoteMutex;
 			std::unordered_set<uint64_t> m_Carried;
+			std::unique_ptr<OwnedCheckpointSoundIdentities> m_OwnedCarried;
 			std::exception_ptr m_Failure;
+			int m_ExceptionCount = 0;
 			SoundCheckpointSaveScope* m_Previous = nullptr;
 			bool m_Remember = true;
 			bool m_Active = true;
