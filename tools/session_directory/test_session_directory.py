@@ -160,7 +160,7 @@ class DirectoryTests(unittest.TestCase):
             store.get_signals(sid, "host", 0, token, 635)
 
     def test_host_end_reply_is_distinct_from_an_unknown_session(self) -> None:
-        self.start(port=47549)
+        self.start(port=0)
         status, created = self.register()
         self.assertEqual(status, 200)
         sid, token = created["session_id"], created["token"]
@@ -483,9 +483,9 @@ class DirectoryTests(unittest.TestCase):
             session_directory.parse_args(["--insecure-http"])
         for mode in ("direct", "tunnel"):
             with self.assertRaises((ValueError, SystemExit), msg="T3: a public listener accepted an unsafe caller mode"):
-                running = spawn_server(bind="0.0.0.0", port=47465, caller_mode=mode)
+                running = spawn_server(bind="0.0.0.0", port=0, caller_mode=mode)
                 running.stop()
-            running = spawn_server(bind="127.0.0.1", port=47465, caller_mode=mode)
+            running = spawn_server(bind="127.0.0.1", port=0, caller_mode=mode)
             running.stop()
 
     def _U1_owner_transition(self, unlist: bool) -> None:
@@ -556,7 +556,7 @@ class DirectoryTests(unittest.TestCase):
         self.assertIn("--create-owner-key", strings, "U2: the fresh ICE directory omits owner-key creation")
 
     def test_U3_parsed_saturation_answers_503_with_retry(self) -> None:
-        self.start(port=47470)
+        self.start()  # The socket number is not part of the saturation oracle.
         slots = self.server.httpd._handler_slots
         held = 0
         while held < session_directory.MAX_ACTIVE_HANDLERS:
@@ -579,7 +579,7 @@ class DirectoryTests(unittest.TestCase):
             for _ in range(held): slots.release()
 
     def test_U3_saturation_logs_once_per_caller_per_minute(self) -> None:
-        self.start(port=47475)
+        self.start(port=0)
         slots = self.server.httpd._handler_slots
         held = 0
         while held < session_directory.MAX_ACTIVE_HANDLERS:
@@ -603,7 +603,7 @@ class DirectoryTests(unittest.TestCase):
             for _ in range(held): slots.release()
 
     def test_U4_unfinished_headers_leave_honest_capacity(self) -> None:
-        self.start(port=47471)
+        self.start(port=0)
         sockets = []
         try:
             for _ in range(64):
@@ -636,7 +636,7 @@ class DirectoryTests(unittest.TestCase):
             for connection in sockets: connection.close()
 
     def test_U3_all_200_callers_heartbeat_with_repeated_polls(self) -> None:
-        self.start(port=47472)
+        self.start(port=0)
         self.server.store.caller_mode = "tunnel"
         rows = []
         def request(index, method, path, body=None):
@@ -785,7 +785,7 @@ class DirectoryTests(unittest.TestCase):
             self.assertTrue(store.get_signals(row["session_id"], "host", 0, row["token"], 1) == before, "T4: a refused returning registration removed queued signaling")
 
     def test_T5_accept_deadline_closes_dripping_headers_and_bodies(self) -> None:
-        self.start(port=47467)
+        self.start(port=0)
         self.server.store.caller_mode = "tunnel"
         accepted_since = time.monotonic()
         connections = [socket.create_connection(("127.0.0.1", self.port), timeout=1) for _ in range(2)]
@@ -808,7 +808,7 @@ class DirectoryTests(unittest.TestCase):
             for connection in connections: connection.close()
 
     def test_T5_dripping_bodies_leave_an_honest_heartbeat_capacity(self) -> None:
-        self.start(port=47466)
+        self.start(port=0)
         self.server.store.caller_mode = "tunnel"
         honest = {"CF-Connecting-IP": "192.0.2.200"}
         status, row = self.call("POST", "/v1/sessions", sample_register(), headers=honest)
@@ -844,7 +844,7 @@ class DirectoryTests(unittest.TestCase):
             for connection in sockets: connection.close()
 
     def test_R1_tunnel_requires_the_callers_address(self) -> None:
-        self.start(port=47460)
+        self.start(port=0)
         self.server.store.caller_mode = "tunnel"
         status, _ = self.call("GET", "/v1/sessions")
         self.assertEqual(status, 400, "R1: tunnel request without a caller address used the loopback bucket")
@@ -858,7 +858,7 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual({row.observed_ip for row in self.server.store._sessions.values()}, {"192.0.2.1", "192.0.2.2"})
 
     def test_R2_waiters_leave_heartbeats_capacity(self) -> None:
-        self.start(port=47461)
+        self.start(port=0)
         self.server.store.caller_mode = "tunnel"
         address = {"CF-Connecting-IP": "192.0.2.250"}
         status, row = self.call("POST", "/v1/sessions", sample_register(), headers=address)
@@ -1001,7 +1001,7 @@ class DirectoryTests(unittest.TestCase):
             self.assertTrue(row["token"])
 
     def test_successor_resumes_row_only_with_its_sealed_token(self) -> None:
-        self.start(port=45799)
+        self.start(port=0)
         status, created = self.register()
         self.assertEqual(status, 200)
         sid, token = created["session_id"], created["token"]
@@ -1157,7 +1157,7 @@ class DirectoryTests(unittest.TestCase):
                 self.assertEqual(store._stored_signal_bytes, 0)
 
     def test_live_resume_wrong_token_leaves_the_row_unchanged(self) -> None:
-        self.start(port=45810)
+        self.start(port=0)
         status, created = self.register()
         self.assertEqual(status, 200)
         sid, token = created["session_id"], created["token"]
@@ -3293,9 +3293,9 @@ class ConnectionAuthorityTests(unittest.TestCase):
     def check(self, **kwargs):
         return self.store.connection_request(self.sid, self.envelope(**kwargs), self.now, INSTALL_KEY)
 
-    def referee_fixture(self):
+    def referee_fixture(self, seats=4):
         self.referee_players = {1: (self.player, self.lease["seat_token"])}
-        for seat in (0, 2, 3):
+        for seat in (seat for seat in range(seats) if seat != 1):
             key = Ed25519PrivateKey.generate()
             lease = self.store.connection_request(self.sid, dict(self.issue, seat=seat,
                 participant=key.public_key().public_bytes_raw().hex(), name=f"Seat {seat}"), self.now, INSTALL_KEY)
@@ -3337,6 +3337,98 @@ class ConnectionAuthorityTests(unittest.TestCase):
             self.assertEqual(self.referee_request(seat)["reason"], "host_alive")
         self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["host_generation"], 0)
 
+    def frame_check_in(self, seat, members, *, frame=88, owners=None, query_only=False):
+        envelope = self.referee_envelope(seat, check_in=True)
+        data = json.loads(base64.b64decode(envelope["signed_request"]))
+        data["frame_tie"] = dict(generation=0, round_id=7, frame=frame, host_seat=0,
+            config_hash=sample_register()["match_config_hash"], owners=owners or sorted(self.referee_players), members=members, query_only=query_only)
+        raw = json.dumps(data, separators=(",", ":")).encode()
+        envelope.update(operation="frame-tie", signed_request=base64.b64encode(raw).decode(), signature=self.referee_players[seat][0].sign(REQUEST_DOMAIN + raw).hex())
+        return self.store.connection_request(self.sid, envelope, self.now, INSTALL_KEY)
+
+    def test_frame_tie_nonhost_waits_the_full_second_without_blocking_http(self):
+        self.referee_fixture()
+        started = time.monotonic()
+        answer = self.frame_check_in(2, [2, 3])
+        self.assertEqual(answer["status"], "waiting")
+        self.assertLess(time.monotonic() - started, 0.25)
+        self.now += 0.999; self.wall += 0.999
+        self.assertEqual(self.frame_check_in(2, [2, 3], query_only=True)["status"], "waiting")
+        self.now += 0.001; self.wall += 0.001
+        answer = self.frame_check_in(2, [2, 3], query_only=True)
+        self.assertEqual((answer["status"], answer["members"]), ("decided", [2, 3]))
+        self.assertEqual(self.frame_check_in(0, [2, 3], query_only=True)["members"], [2, 3])
+        self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [2, 3])
+
+    def test_frame_tie_both_confirmed_sides_choose_host_and_keep_admin_generation(self):
+        self.referee_fixture()
+        self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [0, 1])
+        self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [0, 1])
+        self.assertEqual(self.frame_check_in(2, [2, 3], frame=89)["status"], "waiting")
+        self.now += 0.3; self.wall += 0.3
+        self.assertEqual(self.frame_check_in(0, [0, 1], frame=89)["members"], [0, 1])
+        self.assertEqual(self.frame_check_in(2, [2, 3], frame=89, query_only=True)["members"], [0, 1])
+        self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["host_generation"], 0)
+
+    def test_frame_tie_query_never_confirms_a_missing_side(self):
+        self.referee_fixture()
+        answer = self.frame_check_in(0, [2, 3], query_only=True)
+        self.assertEqual(answer["status"], "waiting")
+        self.assertNotIn("members", answer)
+        self.now += 2; self.wall += 2
+        self.assertEqual(self.frame_check_in(2, [0, 1], query_only=True)["status"], "waiting")
+        self.assertFalse(dict(self.store.connections.records())[self.sid].get("frame_ties"))
+
+    def test_frame_tie_cannot_omit_retained_seats_or_confirm_overlapping_groups(self):
+        self.referee_fixture()
+        with self.assertRaises(ConnectionErrorReply): self.frame_check_in(0, [0], owners=[0, 1])
+        self.assertEqual(self.frame_check_in(1, [1, 2], frame=89)["status"], "waiting")
+        self.assertEqual(self.frame_check_in(0, [0, 1], frame=89)["status"], "waiting")
+        self.now += 1; self.wall += 1
+        for seat in (0, 1):
+            self.assertEqual(self.frame_check_in(seat, [1, 2], frame=89, query_only=True)["members"], [1, 2])
+
+    def test_frame_tie_two_seats_uses_the_same_full_window(self):
+        self.referee_fixture(seats=2)
+        self.assertEqual(self.frame_check_in(0, [0])["members"], [0])
+        self.assertEqual(self.frame_check_in(1, [1])["members"], [0])
+        self.assertEqual(self.frame_check_in(1, [1], frame=89)["status"], "waiting")
+        self.now += 0.3; self.wall += 0.3
+        self.assertEqual(self.frame_check_in(0, [0], frame=89)["members"], [0])
+        self.assertEqual(self.frame_check_in(1, [1], frame=89, query_only=True)["members"], [0])
+        self.assertEqual(self.frame_check_in(1, [1], frame=90)["status"], "waiting")
+        self.now += 0.999; self.wall += 0.999
+        self.assertEqual(self.frame_check_in(1, [1], frame=90, query_only=True)["status"], "waiting")
+        self.now += 0.001; self.wall += 0.001
+        self.assertEqual(self.frame_check_in(1, [1], frame=90, query_only=True)["members"], [1])
+        self.assertEqual(self.frame_check_in(0, [0], frame=90)["members"], [1])
+        for seat in (0, 1):
+            self.assertEqual(self.frame_check_in(seat, [1 - seat], frame=91, query_only=True)["status"], "waiting")
+        ties = dict(self.store.connections.records())[self.sid]["frame_ties"]
+        self.assertEqual(len(ties), 3)
+
+    def test_frame_tie_decision_survives_later_ties_and_reload(self):
+        self.referee_fixture()
+        self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [0, 1])
+        for frame in range(100, 165):
+            # Cross the old 64-tie retention limit without also exhausting
+            # the independent 64-request replay/rate window for one seat.
+            self.now += 3; self.wall += 3
+            self.assertEqual(self.frame_check_in(2, [2, 3], frame=frame)["status"], "waiting")
+        self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [0, 1])
+        record = dict(self.store.connections.records())[self.sid]
+        self.assertEqual(len(record["frame_ties"]), 66)
+        self.store.stop()
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        self.assertEqual(self.frame_check_in(2, [2, 3], query_only=True)["members"], [0, 1])
+        # Generation fencing changes administration, never the recorded tie.
+        with self.store.connections._lock:
+            record = self.store.connections._records[self.sid]
+            record["session"]["migration_gen"] = 1
+            record["host_seat"] = 2
+            self.store.connections._save(self.sid, record)
+        self.assertEqual(self.frame_check_in(3, [2, 3], query_only=True)["members"], [0, 1])
+
     def test_host_referee_names_one_host_boundary_and_fences_old_owner(self):
         self.referee_fixture(); self.referee_silent_host()
         before = dict(self.store.connections.records())[self.sid]["seats"]
@@ -3376,6 +3468,19 @@ class ConnectionAuthorityTests(unittest.TestCase):
             self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["host_generation"], 0)
         self.assertEqual(self.referee_agreement(3)["decision"]["host_seat"], 1)
         self.assertTrue(bool(self.referee_agreement(1).get("host_token")))
+
+    def test_former_host_follows_each_validated_generation_without_receiving_current_admin_token(self):
+        self.referee_fixture(); self.referee_silent_host()
+        self.referee_request(2); self.referee_request(3)
+        first = self.referee_request(1)
+        self.wall += 16; self.now += 16
+        for seat in (2, 3): self.referee_request(seat, check_in=True)
+        self.referee_request(2, generation=1)
+        second = self.referee_request(3, generation=1)
+        self.assertEqual(second["decision"]["generation"], 2)
+        old = self.referee_request(1, generation=0)
+        self.assertEqual(old["decision"], first["decision"])
+        self.assertNotIn("host_token", old)
 
     def test_host_referee_undelivered_choice_requires_every_fallback_attestation(self):
         self.referee_fixture()

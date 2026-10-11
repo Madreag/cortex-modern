@@ -1752,7 +1752,10 @@ namespace RTE::MenuAutomation {
 		}
 		if (command == "open_local_pause") {
 			// A player opens the match's own menu with Escape.
-			if (!FireAssertAllowed() || g_MenuMan.IsLocalPauseMenuOpen()) return false;
+			if (!g_ActivityMan.IsInActivity() || g_MenuMan.IsLocalPauseMenuOpen()) {
+				observation = "the match must be in play with its local menu closed";
+				return false;
+			}
 			return HandGameKey("Escape", [] { return g_MenuMan.IsLocalPauseMenuOpen(); }, "the match menu", observation);
 		}
 		if (command == "window_event") {

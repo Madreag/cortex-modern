@@ -570,18 +570,27 @@ class IsolatedRun:
         extra = dict(env or {})
         self.env = dict(os.environ)
         self.env.update(extra)
-        self.env["CCCP_HEADLESS"] = "1"
         env_set = dict(extra)
-        env_set["CCCP_HEADLESS"] = "1"
+        visible = self.env.get("CC_TEST_VISIBLE_WINDOW") == "1"
+        if visible:
+            self.argv = [arg for arg in self.argv if arg != "-headless"]
+            self.env.pop("CCCP_HEADLESS", None)
+            env_set.pop("CCCP_HEADLESS", None)
+        else:
+            self.env["CCCP_HEADLESS"] = "1"
+            env_set["CCCP_HEADLESS"] = "1"
         # Headless GL must not create even a hidden X11 window on an autologin display.
         # SDL's offscreen driver uses an EGL device and pbuffer, without a display server.
         if sys.platform.startswith("linux"):
-            self.env["SDL_VIDEODRIVER"] = "offscreen"
-            env_set["SDL_VIDEODRIVER"] = "offscreen"
+            self.env["SDL_VIDEODRIVER"] = "x11" if visible else "offscreen"
+            env_set["SDL_VIDEODRIVER"] = self.env["SDL_VIDEODRIVER"]
+            if visible:
+                self.env.setdefault("DISPLAY", ":0")
+                env_set["DISPLAY"] = self.env["DISPLAY"]
         elif sys.platform == "darwin":
             self.env["SDL_VIDEODRIVER"] = "cocoa"
-            self.env["SDL_MAC_BACKGROUND_APP"] = "1"
-            env_set.update(SDL_VIDEODRIVER="cocoa", SDL_MAC_BACKGROUND_APP="1")
+            self.env["SDL_MAC_BACKGROUND_APP"] = "0" if visible else "1"
+            env_set.update(SDL_VIDEODRIVER="cocoa", SDL_MAC_BACKGROUND_APP=self.env["SDL_MAC_BACKGROUND_APP"])
             if "-record-video" in self.argv:
                 self.env["SDL_MAC_OPENGL_ASYNC_DISPATCH"] = "1"
                 env_set["SDL_MAC_OPENGL_ASYNC_DISPATCH"] = "1"
@@ -605,7 +614,8 @@ class IsolatedRun:
             "private_desktop": "n/a",
             "input_desktop_before": "n/a",
             "created_utc": utc_now(),
-            "headless_env": "1",
+            "headless_env": "0" if visible else "1",
+            "visible_window": visible,
             "env_set": env_set,
             "desktop_switch_restricted": True,
             "job_kill_on_close": True,

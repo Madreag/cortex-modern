@@ -1,6 +1,12 @@
 # In-match investigation
 
-The current fixes are on cm-wip/in-match-fight15. The session branch is reviewed read-only at ac26fb2d4b863d4f92620ac4f83d5eee1a3d0d4a; it has not been merged into this branch. S5, S6 and S7 wait for the lead's cm-dev merge notice.
+The current fixes are on cm-wip/in-match-fight15. The session branch was reviewed read-only at ac26fb2d4b863d4f92620ac4f83d5eee1a3d0d4a. The lead released S5, S6 and S7 after cm-dev moved to efd69d9d5b; they rerun after the S10 investigation.
+
+## Merged session changes
+
+The stop interrupted the landing-zone history edit. That edit was preserved before a plain merge of origin/cm-dev at efd69d9d5b. The only content conflict was in NetModerationGUIProbe.cpp: both sets of wait predicates, input-player and actual-local-seat selection, explicit step deadlines and the default step deadline remain. The protected session-plane files, NetIdentity and NetMatchService are byte-identical to cm-dev. No incoming hunk is discarded to compile.
+
+Build tip-merged-1 passes in 8.78 minutes; executable SHA256 f7dc1034f36bc4f7acdb3928f1c06623d06afc512099a38b6be877bf5304b123. S2 scenes-tip-s02-merged-2 passes 31/31 picture and text checks; both eight-step probes complete successfully. The capture records topology single-box, proof false. Its first attempt stops before engine launch when Python decodes the uncommitted merge diff as cp1252; the rerun uses -X utf8 with the unchanged scene and assertions. S2 capture and review are retained in that run folder.
 
 ## Windows suite baseline
 

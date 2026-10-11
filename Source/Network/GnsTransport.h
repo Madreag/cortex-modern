@@ -110,6 +110,7 @@ namespace RTE {
 		std::vector<NetTransportEvent> PollEvents() override;
 		uint32_t GetPeerPingMs(NetPeerId peerId) const override;
 		bool IsPeerPingMeasured(NetPeerId peerId) const override;
+		NetTransportQueueStats GetPeerQueueStats(NetPeerId peerId) const override;
 		std::string GetConnectedRoute(NetPeerId peerId) const override { return GetPeerConnectionInfo(peerId).connectedRoute; }
 
 		/// P2P host: listens on a virtual port; connect requests arrive through ReceiveP2PSignal.
