@@ -2089,6 +2089,59 @@ void MovableMan::PrepareCheckpointOptionsValues() {
 	m_OwnedCheckpointOptions = std::move(prepared);
 }
 
+void MovableMan::RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) const {
+	const auto copy = [&](const auto* source, auto... members) {
+		return snapshot.RebuildValue(source, [&](const auto& frozen) {
+			using Values = std::remove_cvref_t<decltype(frozen)>;
+			auto values = std::make_unique<Values>();
+			const auto member = [&](auto field) {
+				if constexpr (std::is_array_v<std::remove_reference_t<decltype(frozen.*field)>>)
+					snapshot.FreezeArray(values.get()->*field, frozen.*field);
+				else values.get()->*field = snapshot.Freeze(frozen.*field);
+			};
+			(member(members), ...);
+			return values;
+		});
+	};
+	snapshot.CopyValue(m_OwnedCheckpointOptions ? m_OwnedCheckpointOptions.get() : &m_OrdinaryCheckpointOptions);
+	copy(m_OwnedCheckpointActors ? m_OwnedCheckpointActors.get() : &m_OrdinaryCheckpointActors,
+	    &CheckpointActors::m_Actors, &CheckpointActors::m_AddedActors);
+	copy(m_OwnedCheckpointLoose ? m_OwnedCheckpointLoose.get() : &m_OrdinaryCheckpointLoose,
+	    &CheckpointLoose::m_Items, &CheckpointLoose::m_Particles, &CheckpointLoose::m_AddedItems, &CheckpointLoose::m_AddedParticles);
+	snapshot.RebuildValue(m_OwnedCheckpointMembership ? m_OwnedCheckpointMembership.get() : &m_OrdinaryCheckpointMembership,
+	    [&](const CheckpointMembership& frozen) {
+		    auto values = std::make_unique<CheckpointMembership>();
+		    values->m_ContiguousActorIDs = snapshot.Freeze(frozen.m_ContiguousActorIDs);
+		    values->m_LockstepJoinQuarantine = snapshot.Freeze(frozen.m_LockstepJoinQuarantine);
+		    values->m_PlayerBrainIDs = snapshot.Freeze(frozen.m_PlayerBrainIDs);
+		    snapshot.FreezeArray(values->m_ActorRoster, frozen.m_ActorRoster);
+		    snapshot.FreezeArray(values->m_SortTeamRoster, frozen.m_SortTeamRoster);
+		    snapshot.FreezeArray(values->m_TeamMOIDCount, frozen.m_TeamMOIDCount);
+		    const auto alarms = [&](const auto& source, auto& target) {
+			    target.reserve(source.size());
+			    for (const auto* event: CheckpointValues(source)) target.push_back(snapshot.CopyValue(event));
+		    };
+		    alarms(frozen.m_AlarmEvents, values->m_AlarmEvents);
+		    alarms(frozen.m_AddedAlarmEvents, values->m_AddedAlarmEvents);
+		    values->m_MOIDIndex = snapshot.Freeze(frozen.m_MOIDIndex);
+		    return values;
+	    });
+	snapshot.RebuildValue(m_OwnedCheckpointLookup ? m_OwnedCheckpointLookup.get() : &m_OrdinaryCheckpointLookup,
+	    [&](const CheckpointLookup& frozen) {
+		    auto values = std::make_unique<CheckpointLookup>();
+		    // Lookup keys keep the captured identities; callers map their saved copies back to those identities.
+		    for (const auto& entry: CheckpointValues(frozen.m_KnownObjects)) values->m_KnownObjects.insert(entry);
+		    const auto identities = [](const auto& source) {
+			    if (CheckpointNativeStorage::IsView(&source)) return CheckpointRebuildHash(source, [](auto value) { return value; });
+			    return source;
+		    };
+		    values->m_ValidActors = identities(frozen.m_ValidActors);
+		    values->m_ValidItems = identities(frozen.m_ValidItems);
+		    values->m_ValidParticles = identities(frozen.m_ValidParticles);
+		    return values;
+	    });
+}
+
 std::string MovableMan::CheckpointOptionsStorageSelfTestMismatch() {
 	CheckpointNativeStorage::AllocationScope allocations(true);
 	auto source = std::make_unique<CheckpointOptions>();
@@ -2101,13 +2154,42 @@ std::string MovableMan::CheckpointOptionsStorageSelfTestMismatch() {
 	};
 	const auto expected = save(*source);
 	const auto* identity = source.get();
+	MovableMan header;
+	header.m_OwnedCheckpointOptions = std::move(source);
+	header.PrepareCheckpointActorValues(); header.PrepareCheckpointLooseValues();
+	header.PrepareCheckpointMembershipValues(); header.PrepareCheckpointLookupValues();
+	auto alarm = std::make_unique<AlarmEvent>();
+	alarm->m_ScenePos.SetXY(7.25F, -0.0F); alarm->m_Team = Activity::TeamTwo; alarm->m_Range = 3.25F;
+	const auto* alarmIdentity = alarm.get();
+	header.m_OwnedCheckpointMembership->m_AlarmEvents.push_back(alarm.get());
+	CheckpointNativeStorage::Root<MovableMan> root(&header);
+	auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
 	auto prepared = CheckpointNativeStorage::PrepareInventory();
 	if (!prepared->Arm()) return "world option inventory is stale";
-	source->m_SplashRatio = 0.75F; source->m_MaxDroppedItems = 100;
-	source->m_SettlingEnabled = false; source->m_MOSubtractionEnabled = true; source->m_SimUpdateFrameNumber = 82;
-	source.reset();
-	CheckpointNativeStorage::ReadScope reads(prepared->Pages());
-	return save(*CheckpointNativeStorage::Source(identity)) == expected ? std::string{} : "saved world options follow the next tick";
+	root.Freeze();
+	header.m_OwnedCheckpointOptions->m_SplashRatio = 0.75F; header.m_OwnedCheckpointOptions->m_MaxDroppedItems = 100;
+	header.m_OwnedCheckpointOptions->m_SettlingEnabled = false; header.m_OwnedCheckpointOptions->m_MOSubtractionEnabled = true;
+	header.m_OwnedCheckpointOptions->m_SimUpdateFrameNumber = 82;
+	header.m_OwnedCheckpointOptions.reset();
+	header.m_OwnedCheckpointMembership->m_AlarmEvents.clear(); alarm.reset();
+	const std::array headers{root.Range()};
+	CheckpointNativeStorage::ReadScope reads(prepared->Pages(), headers);
+	if (save(*CheckpointNativeStorage::Source(identity)) != expected) return "saved world options follow the next tick";
+	auto* manager = CheckpointNativeStorage::Source(&header);
+	manager->RebuildCheckpointValues(*snapshot);
+	snapshot->SealBoundary(); snapshot->MaterializeMetadata();
+	auto roots = snapshot->ReadValues(); roots.push_back(root.Range());
+	CheckpointNativeStorage::ReadScope privateValues(prepared->Pages(), roots);
+	if (save(manager->CheckpointOptionsValues()) != expected) return "the rebuilt world options changed their archive";
+	const auto& alarms = manager->CheckpointMembershipValues().m_AlarmEvents;
+	if (alarms.size() != 1 || alarms[0] != snapshot->CopyValue(alarmIdentity) || alarms[0]->m_ScenePos.GetX() != 7.25F ||
+	    !std::signbit(alarms[0]->m_ScenePos.GetY()) || alarms[0]->m_Team != Activity::TeamTwo || alarms[0]->m_Range != 3.25F)
+		return "the saved world lost its alarm values or aliases";
+	manager->CheckpointOptionsValues().m_MaxDroppedItems = 222;
+	manager->CheckpointMembershipValues().m_AlarmEvents.clear();
+	if (header.m_OrdinaryCheckpointOptions.m_MaxDroppedItems == 222 || !header.m_OwnedCheckpointMembership->m_AlarmEvents.empty())
+		return "a saved world getter changed live membership or options";
+	return {};
 }
 
 void MovableMan::PrepareCheckpointMembershipValues() {
@@ -2376,6 +2458,10 @@ void MovableMan::RegisterObject(MovableObject* mo) {
 	if (!mo) {
 		return;
 	}
+	if (CheckpointNativeStorage::Reading()) {
+		CheckpointNativeStorage::Source(this)->CheckpointLookupValues().m_KnownObjects.insert_or_assign(mo->GetUniqueID(), mo);
+		return;
+	}
 
 	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 	// Register and unregister keep the address index current; every other change leaves it to be rebuilt.
@@ -2400,6 +2486,12 @@ void MovableMan::UnregisterObject(MovableObject* mo) {
 	if (!mo) {
 		return;
 	}
+	if (CheckpointNativeStorage::Reading()) {
+		auto& known = CheckpointNativeStorage::Source(this)->CheckpointLookupValues().m_KnownObjects;
+		const auto entry = known.find(mo->GetUniqueID());
+		if (entry != known.end() && CheckpointNativeStorage::Original(entry->second) == CheckpointNativeStorage::Original(mo)) known.erase(entry);
+		return;
+	}
 
 	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 	// Only drop the entry this object owns; an off-world snapshot clone shares its UniqueID with the live resident.
@@ -2416,6 +2508,7 @@ void MovableMan::UnregisterObject(MovableObject* mo) {
 // Only a destruction may take an object out of a held copy. Unregistering also happens to live objects:
 // a restore detaches every Lua-owned tree, and those have to come back with the world that named them.
 void MovableMan::ForgetDestroyedObject(MovableObject* mo) {
+	if (CheckpointNativeStorage::Reading()) { UnregisterObject(mo); return; }
 	if (m_LinkRoot == mo) {
 		m_LinkRoot = nullptr;
 	}
@@ -5293,6 +5386,11 @@ bool MovableMan::IsParticle(const MovableObject* pMOToCheck) {
 }
 
 MovableObject* MovableMan::FindObjectByUniqueID(long int id) {
+	if (CheckpointNativeStorage::Reading()) {
+		const auto* manager = CheckpointNativeStorage::Source(this);
+		const auto* known = CheckpointFind(manager->CheckpointLookupValues().m_KnownObjects, id);
+		if (known && CheckpointNativeStorage::Private(known->second)) return known->second;
+	}
 	if (const auto* snapshot = CheckpointNativeSnapshot::Current()) return snapshot->FindUID(id);
 	if (m_LinkRoot) {
 		if (MovableObject* part = m_LinkRoot->FindPartByUniqueID(id)) {

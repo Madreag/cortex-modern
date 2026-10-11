@@ -115,6 +115,7 @@ namespace RTE {
 		void PrepareCheckpointMembershipValues();
 		const void* CheckpointOwnedMembershipValues() const { return m_OwnedCheckpointMembership.get(); }
 		static std::string CheckpointMembershipStorageSelfTestMismatch();
+		void RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) const;
 		/// Gets the alarm events from the last update.
 		const CheckpointVector<AlarmEvent*>& GetAlarmEvents() const { return CheckpointMembershipValues().m_AlarmEvents; }
 		/// Gets the alarm events added during this update.
@@ -1185,8 +1186,7 @@ namespace RTE {
 		CheckpointOptions m_OrdinaryCheckpointOptions;
 		std::unique_ptr<CheckpointOptions> m_OwnedCheckpointOptions;
 		CheckpointOptions& CheckpointOptionsValues() {
-			if (CheckpointNativeStorage::Reading()) throw std::logic_error("a frozen registry cannot change live world options");
-			return m_OwnedCheckpointOptions ? *m_OwnedCheckpointOptions : m_OrdinaryCheckpointOptions;
+			return CheckpointNativeStorage::PrivateValue(m_OwnedCheckpointOptions ? m_OwnedCheckpointOptions.get() : &m_OrdinaryCheckpointOptions);
 		}
 		const CheckpointOptions& CheckpointOptionsValues() const {
 			const auto* source = m_OwnedCheckpointOptions ? m_OwnedCheckpointOptions.get() : &m_OrdinaryCheckpointOptions;
@@ -1208,8 +1208,7 @@ namespace RTE {
 		CheckpointMembership m_OrdinaryCheckpointMembership;
 		std::unique_ptr<CheckpointMembership> m_OwnedCheckpointMembership;
 		CheckpointMembership& CheckpointMembershipValues() {
-			if (CheckpointNativeStorage::Reading()) throw std::logic_error("a frozen registry cannot change live world membership");
-			return m_OwnedCheckpointMembership ? *m_OwnedCheckpointMembership : m_OrdinaryCheckpointMembership;
+			return CheckpointNativeStorage::PrivateValue(m_OwnedCheckpointMembership ? m_OwnedCheckpointMembership.get() : &m_OrdinaryCheckpointMembership);
 		}
 		const CheckpointMembership& CheckpointMembershipValues() const {
 			const auto* source = m_OwnedCheckpointMembership ? m_OwnedCheckpointMembership.get() : &m_OrdinaryCheckpointMembership;
@@ -1225,8 +1224,7 @@ namespace RTE {
 		CheckpointLookup m_OrdinaryCheckpointLookup;
 		std::unique_ptr<CheckpointLookup> m_OwnedCheckpointLookup;
 		CheckpointLookup& CheckpointLookupValues() {
-			if (CheckpointNativeStorage::Reading()) throw std::logic_error("a frozen registry cannot change live object lookup");
-			return m_OwnedCheckpointLookup ? *m_OwnedCheckpointLookup : m_OrdinaryCheckpointLookup;
+			return CheckpointNativeStorage::PrivateValue(m_OwnedCheckpointLookup ? m_OwnedCheckpointLookup.get() : &m_OrdinaryCheckpointLookup);
 		}
 		const CheckpointLookup& CheckpointLookupValues() const {
 			const auto* source = m_OwnedCheckpointLookup ? m_OwnedCheckpointLookup.get() : &m_OrdinaryCheckpointLookup;
@@ -1242,8 +1240,7 @@ namespace RTE {
 		CheckpointLoose m_OrdinaryCheckpointLoose;
 		std::unique_ptr<CheckpointLoose> m_OwnedCheckpointLoose;
 		CheckpointLoose& CheckpointLooseValues() {
-			if (CheckpointNativeStorage::Reading()) throw std::logic_error("a frozen registry cannot change live item membership");
-			return m_OwnedCheckpointLoose ? *m_OwnedCheckpointLoose : m_OrdinaryCheckpointLoose;
+			return CheckpointNativeStorage::PrivateValue(m_OwnedCheckpointLoose ? m_OwnedCheckpointLoose.get() : &m_OrdinaryCheckpointLoose);
 		}
 		const CheckpointLoose& CheckpointLooseValues() const {
 			const auto* source = m_OwnedCheckpointLoose ? m_OwnedCheckpointLoose.get() : &m_OrdinaryCheckpointLoose;
@@ -1258,8 +1255,7 @@ namespace RTE {
 		CheckpointActors m_OrdinaryCheckpointActors;
 		std::unique_ptr<CheckpointActors> m_OwnedCheckpointActors;
 		CheckpointActors& CheckpointActorValues() {
-			if (CheckpointNativeStorage::Reading()) throw std::logic_error("a frozen registry cannot change live actor membership");
-			return m_OwnedCheckpointActors ? *m_OwnedCheckpointActors : m_OrdinaryCheckpointActors;
+			return CheckpointNativeStorage::PrivateValue(m_OwnedCheckpointActors ? m_OwnedCheckpointActors.get() : &m_OrdinaryCheckpointActors);
 		}
 		const CheckpointActors& CheckpointActorValues() const {
 			const auto* source = m_OwnedCheckpointActors ? m_OwnedCheckpointActors.get() : &m_OrdinaryCheckpointActors;
