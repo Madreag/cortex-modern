@@ -79,6 +79,7 @@
 #include "ThreadMan.h"
 #include "LuaMan.h"
 #include "PathFinder.h"
+#include "luabind/detail/class_rep.hpp"
 #include "luabind/detail/object_rep.hpp"
 extern "C" {
 #include "lua.h"
