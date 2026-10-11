@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <future>
 #include <iomanip>
 #include <sstream>
 #include <utility>
@@ -268,7 +269,36 @@ namespace RTE {
 		WriteManifest();
 		// An encoder takes the frames in order on one pipe, so it has one writer; PNGs encode on a pool.
 		const std::size_t writers = m_EncoderPath.empty() ? WriterCount() : 1;
-		for (std::size_t writer = 0; writer < writers; ++writer) m_Writers.push_back(FloatingPointEnvironment::StartThread(&FrameRecorder::WriterLoop, this));
+#if defined(_WIN32)
+		if (m_ReadbackContext && !m_EncoderPath.empty()) {
+			// The scripted encoder owns one writer. Bind its context during setup and keep it there; rebinding it
+			// after the render context starts drawing can stall the driver on the first captured frame.
+			auto ready = std::make_shared<std::promise<std::string>>();
+			auto result = ready->get_future();
+			m_Writers.push_back(FloatingPointEnvironment::StartThread([this, ready] {
+				const int64_t setupCPU = ThreadCpuNanoseconds();
+				std::string error;
+				const bool bound = m_ReadbackContext->BeginWriter(error);
+				HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - setupCPU);
+				ready->set_value(error);
+				if (!bound) return;
+				WriterLoop();
+				const int64_t finishCPU = ThreadCpuNanoseconds();
+				const bool released = m_ReadbackContext->EndWriter(error);
+				HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - finishCPU);
+				if (!released) {
+					std::lock_guard<std::mutex> lock(m_Mutex);
+					if (m_ReadbackError.empty()) m_ReadbackError = error;
+					++m_WriteFailures;
+				}
+			}));
+			const std::string setupError = result.get();
+			if (!setupError.empty()) { Finish(); return refuse(setupError); }
+		} else
+#endif
+		{
+			for (std::size_t writer = 0; writer < writers; ++writer) m_Writers.push_back(FloatingPointEnvironment::StartThread(&FrameRecorder::WriterLoop, this));
+		}
 		return true;
 	}
 
@@ -411,6 +441,11 @@ namespace RTE {
 		const bool profileReadback = std::getenv("CCCP_TEST_READBACK_TIMING") != nullptr;
 		const char* script = std::getenv("CC_TEST_NET_UI_SCRIPT");
 		const bool scriptedReadback = script && *script;
+#if defined(_WIN32)
+		const bool writerCurrent = scriptedReadback && m_ReadbackContext && !m_EncoderPath.empty();
+#else
+		const bool writerCurrent = false;
+#endif
 		for (;;) {
 			QueuedFrame frame;
 			{
@@ -431,7 +466,7 @@ namespace RTE {
 			const int64_t cpuBefore = ThreadCpuNanoseconds();
 			std::string readbackError = frame.readbackError;
 			std::array<int64_t, 6> readbackPhases{};
-			const bool pixelsReady = readbackError.empty() && (!frame.textureReadback || (frame.readback && m_ReadbackContext->Complete(*frame.readback, frame.pixels, readbackError, scriptedReadback, profileReadback ? &readbackPhases : nullptr, profileReadback ? &ThreadCpuNanoseconds : nullptr)));
+			const bool pixelsReady = readbackError.empty() && (!frame.textureReadback || (frame.readback && m_ReadbackContext->Complete(*frame.readback, frame.pixels, readbackError, scriptedReadback, profileReadback ? &readbackPhases : nullptr, profileReadback ? &ThreadCpuNanoseconds : nullptr, writerCurrent)));
 			if (frame.textureReadback && !frame.readback) readbackError = "admitted texture frame has no queued pixel transfer";
 			const int64_t cpuAfterReadback = profileReadback ? ThreadCpuNanoseconds() : 0;
 			std::string row;

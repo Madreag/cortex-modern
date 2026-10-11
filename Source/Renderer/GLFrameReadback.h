@@ -287,8 +287,12 @@ namespace RTE {
 			return result;
 		}
 
+		/// A single encoder writer may keep its private context current until it finishes.
+		bool BeginWriter(std::string& error) { return MakeWriterCurrent(error); }
+		bool EndWriter(std::string& error) { return ReleaseWriterContext(error); }
+
 		bool Complete(QueuedTextureReadback& frame, std::span<unsigned char> rgb, std::string& error, bool yieldWhilePending = false,
-		              std::array<int64_t, 6>* costs = nullptr, int64_t (*cpuClock)() = nullptr) {
+		              std::array<int64_t, 6>* costs = nullptr, int64_t (*cpuClock)() = nullptr, bool writerCurrent = false) {
 			int64_t previous = cpuClock ? cpuClock() : 0;
 			const auto noteCost = [&](std::size_t phase) {
 				if (costs && cpuClock) {
@@ -298,7 +302,7 @@ namespace RTE {
 				}
 			};
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			if (!MakeWriterCurrent(error)) return false;
+			if (!writerCurrent && !MakeWriterCurrent(error)) return false;
 			noteCost(0);
 			bool done = false;
 			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
@@ -337,7 +341,7 @@ namespace RTE {
 				done = false;
 			}
 			noteCost(4);
-			if (!ReleaseWriterContext(error)) done = false;
+			if (!writerCurrent && !ReleaseWriterContext(error)) done = false;
 			noteCost(5);
 			return done;
 		}
