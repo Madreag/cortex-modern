@@ -527,9 +527,9 @@ namespace {
 	// lifetime, including its checkpoint clones, without changing its reflected type.
 	class ArchiveScene final : public Scene {
 	public:
-		std::string archiveName;
-		static void* operator new(size_t size) { return ::operator new(size); }
-		static void operator delete(void* value) { ::operator delete(value); }
+		CheckpointString archiveName;
+		static void* operator new(size_t size) { return CheckpointNativeAllocated::operator new(size); }
+		static void operator delete(void* value) { CheckpointNativeAllocated::operator delete(value); }
 		Entity* Clone(Entity* cloneTo = nullptr) const override {
 			if (cloneTo) {
 				Entity* result = Scene::Clone(cloneTo);
@@ -545,7 +545,7 @@ namespace {
 
 	const std::string& SceneArchiveName(const Scene* scene, const std::string& fileName) {
 		const auto* saved = dynamic_cast<const ArchiveScene*>(scene);
-		return saved && !saved->archiveName.empty() ? saved->archiveName : fileName;
+		return saved && !saved->archiveName.empty() ? saved->archiveName.Value() : fileName;
 	}
 
 	void WriteCheckpointArchive(const std::string& fileName, const std::filesystem::path& savePath, int zipLevel,
