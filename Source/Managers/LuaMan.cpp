@@ -15731,6 +15731,7 @@ void LuaMan::PrepareCheckpointValues() {
 	if (CheckpointNativeStorage::Enabled()) { g_SimRNG.PrepareCheckpointValues(); g_RenderRNG.PrepareCheckpointValues(); }
 	if (CheckpointNativeStorage::Enabled()) MovableObject::PrepareCheckpointCounters();
 	if (CheckpointNativeStorage::Enabled()) g_SceneMan.PrepareCheckpointValues();
+	if (CheckpointNativeStorage::Enabled()) g_ActivityMan.PrepareCheckpointValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointActorValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLooseValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLookupValues();

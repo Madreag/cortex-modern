@@ -2979,6 +2979,12 @@ void ActivityMan::EndLockstepRelaunch() {
 	if (m_Activity) m_Activity->ClearCheckpointActorIDs();
 }
 
+void ActivityMan::PrepareCheckpointValues() {
+	if (!CheckpointNativeStorage::Enabled()) return;
+	CheckpointString::PreparedMirror type(m_DefaultActivityType), name(m_DefaultActivityName);
+	type.Commit(); name.Commit();
+}
+
 void ActivityMan::Update() {
 	ReportDeferredSaveRefusals();
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActivityUpdate);

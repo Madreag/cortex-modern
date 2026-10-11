@@ -39,6 +39,8 @@ namespace RTE {
 		friend class SettingsMan;
 
 	public:
+		/// Prepares saved strings before the multiplayer page inventory is built.
+		void PrepareCheckpointValues();
 #pragma region Creation
 		/// Constructor method used to instantiate an ActivityMan object in system memory. Create() should be called before using the object.
 		ActivityMan();
@@ -435,8 +437,8 @@ namespace RTE {
 		/// Match toast in lockstep, screen text otherwise.
 		void ShowSaveRefusalToPlayer(const SaveRefusalRecord& record, bool lockstep);
 
-		std::string m_DefaultActivityType; //!< The type name of the default Activity to be loaded if nothing else is available.
-		std::string m_DefaultActivityName; //!< The preset name of the default Activity to be loaded if nothing else is available.
+		CheckpointString m_DefaultActivityType; //!< The type name of the default Activity to be loaded if nothing else is available.
+		CheckpointString m_DefaultActivityName; //!< The preset name of the default Activity to be loaded if nothing else is available.
 
 		std::unique_ptr<Activity> m_Activity; //!< The currently active Activity.
 		std::unique_ptr<Activity> m_StartActivity; //!< The starting condition of the next Activity to be (re)started.
