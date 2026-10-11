@@ -607,7 +607,7 @@ namespace RTE::CheckpointLua {
 				}
 				try {
 					CheckpointFailure::Check(CheckpointFailure::Point::LuaSubmission);
-					submit([copy = std::move(copy), done, cow = m_CowCopy, coordinator = m_CowCoordinator] {
+					auto submitted = submit([copy = std::move(copy), done, cow = m_CowCopy, coordinator = m_CowCoordinator] {
 						try {
 							copy();
 							done->set_value();
@@ -616,6 +616,8 @@ namespace RTE::CheckpointLua {
 							done->set_exception(std::current_exception());
 						}
 					});
+					// A deferred copy must run before its submission future is released.
+					if (submitted.valid() && submitted.wait_for(std::chrono::seconds(0)) == std::future_status::deferred) submitted.get();
 				} catch (...) {
 					done->set_exception(std::current_exception());
 					throw;

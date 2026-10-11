@@ -4298,12 +4298,14 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	/// The object a Vector field belongs to, if it is one of a known object's aliased fields.
 	const VectorField* VectorOwner(const void* address) const {
 		address = CheckpointNativeStorage::Original(address);
+		if (HasOwnerIndex()) return Find(m_Owners.vectors, address);
 		if (CheckpointNativeSnapshot::Boundary()) if (const auto* field = DirectVectorOwner(address)) return field;
 		return Find(Owners().vectors, address);
 	}
 	/// The actor a Controller belongs to, if it is a known actor's.
 	const long* ControllerOwner(const void* address) const {
 		address = CheckpointNativeStorage::Original(address);
+		if (HasOwnerIndex()) return Find(m_Owners.controllers, address);
 		if (CheckpointNativeSnapshot::Boundary() && address) {
 			PrepareFieldOffsets();
 			const uintptr_t pointer = reinterpret_cast<uintptr_t>(address);
@@ -7377,8 +7379,15 @@ bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText
 	struct CaptureSerial {
 		lua_State* state;
 		uint64_t value;
-		~CaptureSerial() { luaJIT_set_state_serial(state, value); }
-	} captureSerial{m_State, luaJIT_state_serial(m_State)};
+		std::optional<decltype(std::declval<global_State&>().gc.threshold)> threshold;
+		~CaptureSerial() {
+			luaJIT_set_state_serial(state, value);
+			if (threshold) G(state)->gc.threshold = *threshold;
+		}
+	} captureSerial{m_State, luaJIT_state_serial(m_State), CheckpointNativeStorage::Enabled() ?
+	    std::optional{G(m_State)->gc.threshold} : std::nullopt};
+	// A native checkpoint keeps the collector at the same tick boundary on success and refusal.
+	if (captureSerial.threshold) G(m_State)->gc.threshold = std::numeric_limits<decltype(G(m_State)->gc.threshold)>::max();
 	ScriptGraphScratchScope scratch(m_State);
 	ScriptCallbackRootScope callbackRoot{m_State};
 	CaptureScriptCallbacks(captureSerial.value);
@@ -9915,7 +9924,11 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			CheckpointNativeStorage::ReadScope read(pages->Pages());
 			const auto* frozen = CheckpointNativeStorage::Source(source);
 			const TValue function = image.RegistryValue(frozen->GetCheckpointReference());
-			exact = tvisfunc(&function) && image.FunctionUpvalue(funcV(&function), 0).n == 71 && frozen->GetFilePath() == "frozen callback";
+			exact = false;
+			if (tvisfunc(&function)) {
+				const TValue value = image.FunctionUpvalue(funcV(&function), 0);
+				exact = tvisnumber(&value) && numberVnum(&value) == 71 && frozen->GetFilePath() == "frozen callback";
+			}
 		}
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " frozen_callback_handles_survive_live_unref_and_collection" << std::endl;
 		checkpointValues = exact && checkpointValues;
@@ -10004,14 +10017,16 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		lua_State* state = worker->State();
 		bool exact = false;
 		{
-			CheckpointNativeStorage::ReadScope read(pages->Pages());
+			const auto [heapSource, heapBytes] = heap.NativeBytes();
+			const std::array roots{CheckpointNativeStorage::RootRange{heapSource, heapBytes.data(), heapBytes.size()}};
+			CheckpointNativeStorage::ReadScope read(pages->Pages(), roots);
 			CheckpointNativeStorage::CaptureScope privateStorage;
 			std::unordered_map<const void*, std::unique_ptr<Vector>> vectors;
 			CheckpointLua::ProtectedCall(state, [&] {
 				bind(state); LuaThreadCodec::Register(state);
 				CheckpointLua::SavedObjects objects(state, heap, callbacks, [&](const auto*, const void* pointer) -> void* {
 					auto& value = vectors[pointer];
-					if (!value) { Vector frozen; const auto bytes = heap.ReadBytes(pointer, sizeof(frozen)); std::memcpy(&frozen, bytes.data(), sizeof(frozen)); value = std::make_unique<Vector>(frozen); }
+					if (!value) value = std::make_unique<Vector>(*CheckpointNativeStorage::Source(static_cast<const Vector*>(pointer)));
 					return value.get();
 				});
 				objects.Prepare(); objects.Values().Push(heap.GlobalValue("savedNativeGetter")); objects.Values().Finish();
@@ -10157,13 +10172,15 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			bool refused = false;
 			try {
 				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects, after);
-				CheckpointNativeSnapshot failed;
+				auto failedOwner = std::make_unique<CheckpointNativeSnapshot>();
+				CheckpointNativeSnapshot& failed = *failedOwner;
 				failed.Reserve(*actor); failed.Construct(*actor);
 			} catch (const std::bad_alloc&) { refused = true; }
 			exact = refused && actor->GetPresetName() == "reserved native storage survives its source" && exact;
 		}
 		{
-			CheckpointNativeSnapshot retry;
+			auto retryOwner = std::make_unique<CheckpointNativeSnapshot>();
+			CheckpointNativeSnapshot& retry = *retryOwner;
 			retry.Reserve(*actor); retry.Construct(*actor);
 			const Actor* frozen = retry.Object(actor.get());
 			retry.SealBoundary();
@@ -11512,7 +11529,9 @@ debug.setupvalue(next, 4, "150")
 				const int top = lua_gettop(m_State);
 				const auto threshold = G(m_State)->gc.threshold;
 				const auto unchanged = [&] { return luaJIT_state_serial(m_State) == serial && lua_gettop(m_State) == top && G(m_State)->gc.threshold == threshold; };
-				held = ValidateScriptGraph(reference, problems) && problems.empty() && unchanged() && held;
+				const bool valid = ValidateScriptGraph(reference, problems);
+				std::cout << "[checkpoint-validation-selftest] initial valid=" << valid << " problems=" << problems.size() << " unchanged=" << unchanged() << std::endl;
+				held = valid && problems.empty() && unchanged() && held;
 				std::vector<std::string> invalid;
 				held = !ValidateScriptGraph("SG7;", invalid) && !invalid.empty() && unchanged() && held;
 				for (size_t after: {size_t{0}, size_t{8}, size_t{32}}) {
@@ -11522,10 +11541,15 @@ debug.setupvalue(next, 4, "150")
 						try { ValidateScriptGraph(reference, problems); }
 						catch (const std::bad_alloc&) { refused = failure.Triggered(); }
 					}
+					std::cout << "[checkpoint-validation-selftest] after=" << after << " refused=" << refused << " unchanged=" << unchanged() << " problems=" << problems.size() << std::endl;
 					held = refused && unchanged() && problems.empty() && held;
 					held = ValidateScriptGraph(reference, problems) && unchanged() && held;
 				}
-				held = SerializeScriptGraph(retry, problems) && reference == retry && problems.empty() && unchanged() && held;
+				const bool retried = SerializeScriptGraph(retry, problems);
+				std::cout << "[checkpoint-validation-selftest] retry=" << retried << " equal=" << (reference == retry) << " unchanged=" << unchanged()
+				          << " serial=" << luaJIT_state_serial(m_State) << "/" << serial << " top=" << lua_gettop(m_State) << "/" << top
+				          << " gc=" << G(m_State)->gc.threshold << "/" << threshold << " problems=" << problems.size() << std::endl;
+				held = retried && reference == retry && problems.empty() && unchanged() && held;
 				std::cout << "[script-graph-selftest] " << (held ? "PASS" : "FAIL") << " archive_validation_preserves_births_stack_gc_and_retry_bytes" << std::endl;
 				checkpointValues = held && checkpointValues;
 			}

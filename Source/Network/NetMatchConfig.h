@@ -16,6 +16,10 @@
 
 namespace RTE {
 
+	/// Combat waits at most this many ticks after a sender's delayed input is due.
+	inline constexpr uint16_t c_NetSlowPlayerBoundTicks = 3;
+	inline constexpr uint32_t c_NetInputJitterReserveMs = 200;
+
 	struct NetHostMigrationTimeouts {
 		static constexpr uint64_t c_IceStepMs = 8000;
 		static constexpr uint64_t c_IceDialMs = 30000;
@@ -69,6 +73,7 @@ namespace RTE {
 		void ObserveSilence(uint64_t nowMs, uint32_t silenceMs);
 		void Rebase(uint64_t nowMs);
 		uint32_t RequiredFrames(double tickMs, uint16_t floor = 0) const;
+		uint32_t SenderRequiredFrames(double tickMs, uint16_t bound, uint16_t floor = 0) const;
 		uint32_t P95Ms() const;
 		uint32_t JitterMs() const;
 		/// The longest silence of the input stream within the window; 0 when none was seen.
@@ -132,7 +137,7 @@ namespace RTE {
 		uint16_t inputDelayFrames = 0;
 		std::vector<uint16_t> peerInputDelayFrames; // Per-sender delay by peerId-1 (size 0 or peerCount); empty = uniform inputDelayFrames.
 		NetMatchDelayPolicy delayPolicy = NetMatchDelayPolicy::Auto;
-		uint16_t slowPlayerBoundTicks = 3;
+		uint16_t slowPlayerBoundTicks = c_NetSlowPlayerBoundTicks;
 		NetSlowPlayerPolicy slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 		bool autosaveEnabled = false;
 		uint32_t autosaveIntervalSeconds = 0;
@@ -174,7 +179,7 @@ namespace RTE {
 			return version == c_WorldLayoutVersion || version == c_PreRosterWorldVersion || version == c_PersistentWorldVersion;
 		}
 		static constexpr uint16_t c_TimingOptionsVersion = 6;
-		static constexpr uint16_t c_DefaultSlowPlayerBoundTicks = 3;
+		static constexpr uint16_t c_DefaultSlowPlayerBoundTicks = c_NetSlowPlayerBoundTicks;
 		static constexpr uint16_t c_MaxSlowPlayerBoundTicks = 120;
 		// Reserved values are 1 dedicated, 2 path, 4 world (v5), 8 redundancy, 16 migration and 32 return window.
 		static constexpr uint16_t c_ReservedDedicatedBit = 1;

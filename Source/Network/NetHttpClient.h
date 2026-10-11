@@ -41,7 +41,7 @@ namespace RTE {
 		/// certificate and verifies it before any request byte is sent, otherwise the system chain
 		/// must validate. Only https URLs are accepted. A second Start() on a used object finishes
 		/// an error response and runs nothing.
-		void Start(const std::string& method, const std::string& url, const std::vector<std::pair<std::string, std::string>>& headers, const std::string& body, const std::string& certPinSha256 = "");
+		void Start(const std::string& method, const std::string& url, const std::vector<std::pair<std::string, std::string>>& headers, const std::string& body, const std::string& certPinSha256 = "", int timeoutMs = c_TotalTimeoutMs);
 		PollResult Poll();
 		Response GetResponse() const;
 		void Cancel();
@@ -52,6 +52,7 @@ namespace RTE {
 		void Finish(const Response& response);
 
 		std::thread m_Worker;
+		int m_TimeoutMs = c_TotalTimeoutMs;
 		std::atomic<bool> m_Started{false};
 		std::atomic<bool> m_Done{false};
 		std::atomic<bool> m_CancelRequested{false};

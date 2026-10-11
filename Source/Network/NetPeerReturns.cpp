@@ -1,0 +1,326 @@
+#include "NetPeerFrameHelpers.h"
+
+#include "DiagnosticLine.h"
+#include "NetAuthCrypto.h"
+#include "NetLobbyProtocol.h"
+#include "NetProtocol.h"
+
+#include "lz4.h"
+
+#include <cmath>
+#include <limits>
+
+namespace RTE {
+
+	using namespace NetPeerFrameDetail;
+
+	NetHash32 NetLockstepCoordinator::PeerFramePrefix(uint64_t frame) const {
+		if (const auto prepared = m_PeerPreparedPrefixes.find(frame); prepared != m_PeerPreparedPrefixes.end()) return prepared->second;
+		return PeerAppliedFramePrefix(frame);
+	}
+
+	NetHash32 NetLockstepCoordinator::PeerAppliedFramePrefix(uint64_t frame) const {
+		if (m_Playback) if (const auto applied = m_PeerReplayAppliedPrefixes.find(frame); applied != m_PeerReplayAppliedPrefixes.end()) return applied->second;
+		NetHash32 hash{};
+		const auto kept = m_MigrationHistory.find(frame);
+		if (kept == m_MigrationHistory.end()) return hash;
+		uint8_t mac[32]{};
+		if (GetNetAuthCrypto().HmacSha256(m_Config.migrationKey.data(), m_Config.migrationKey.size(), kept->second.data(), kept->second.size(), mac))
+			std::copy_n(mac, hash.size(), hash.begin());
+		return hash;
+	}
+
+	void NetLockstepCoordinator::SendPeerFrameWitness(uint64_t frame) {
+		if (!m_MigrationHistory.contains(frame)) return;
+		auto witness = PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
+		witness.preparedFrame = UINT64_MAX; witness.frame = witness.appliedFrame = frame;
+		const auto group = m_FrameGroupChanges.upper_bound(frame);
+		witness.voterMask = group == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(group)->second;
+		if ((witness.voterMask & SeatBit(m_Config.localPeerId)) == 0) {
+			// A private reader cannot witness this group's frame. Advertise its
+			// newly applied prefix on the next pump so return eligibility can
+			// follow its catch-up instead of a stale periodic heartbeat.
+			m_PeerHeartbeatAtMs = std::min(m_PeerHeartbeatAtMs, m_TimingNowMs);
+			return;
+		}
+		const auto applied = PeerAppliedFramePrefix(frame), prepared = PeerFramePrefix(frame);
+		witness.bytes.assign(applied.begin(), applied.end()); witness.bytes.insert(witness.bytes.end(), prepared.begin(), prepared.end());
+		m_PeerFrameWitnesses[frame][m_Config.localPeerId] = witness;
+		SendPeerFrameMessage(std::move(witness), m_Config.frameLane);
+	}
+
+	void NetLockstepCoordinator::SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame) {
+		if (fromFrame == UINT64_MAX) return;
+		// Standalone old-input requests retain a bounded one-frame reply too.
+		auto range = m_PeerTailSendRanges.try_emplace(peer, fromFrame, fromFrame + 1).first;
+		range->second.first = std::min(range->second.first, fromFrame);
+		range->second.second = std::max(range->second.second, fromFrame + 1);
+		// A future subscription waits until this donor has displayed its first frame.
+		if (!m_LastCompletedSimulationTick || fromFrame > *m_LastCompletedSimulationTick) return;
+		auto& queued = m_PeerTailOutgoing[peer];
+		auto& sent = m_PeerTailLastSentMs[peer];
+		uint64_t queuedBytes = 0;
+		for (const auto& [frame, item]: queued) queuedBytes += item.bytes.size();
+		const auto first = m_MigrationHistory.lower_bound(fromFrame);
+		if (first == m_MigrationHistory.end() || first->first != fromFrame) {
+			auto missing = PeerFrameMessage(NetHostMigrationMessageType::PeerTailMissing);
+			missing.frame = fromFrame;
+			SendPeerFrameMessage(std::move(missing), NetTransportLane::ControlReliable, peer);
+			return;
+		}
+		for (auto kept = first; kept != m_MigrationHistory.end() && kept->first < range->second.second && m_LastCompletedSimulationTick && kept->first <= *m_LastCompletedSimulationTick; ++kept) {
+			if ((m_PeerAppliedThrough.contains(peer) && kept->first <= m_PeerAppliedThrough.at(peer)) || queued.contains(kept->first) ||
+			    (sent.contains(kept->first) && m_TimingNowMs < sent.at(kept->first) + 1000)) {
+				range->second.first = std::max(range->second.first, kept->first + 1);
+				continue;
+			}
+			// Bound application work even when several pipelined requests
+			// overlap. A large record resumes at its last queued chunk.
+			if (queued.size() >= 128 || queuedBytes >= 4 * 1024 * 1024) break;
+			const auto prefix = kept->first == m_Config.startFrame ? NetHash32{} : PeerFramePrefix(kept->first - 1);
+			const auto prepared = PeerFramePrefix(kept->first);
+			std::vector<uint8_t> body(prefix.begin(), prefix.end()); body.insert(body.end(), prepared.begin(), prepared.end());
+			PutSize(body, static_cast<uint32_t>(kept->second.size()));
+			body.insert(body.end(), kept->second.begin(), kept->second.end());
+			std::map<uint8_t, const NetHostMigrationMessage*> latest;
+			for (const auto& [key, decision]: m_PeerBridgeCertificates) if (key.first <= kept->first) latest[key.second] = &decision;
+			std::set<PeerDecisionKey> proofs;
+			for (const auto& [kind, decision]: latest) proofs.emplace(decision->frame, kind);
+			for (const auto& [key, decision]: m_PeerBridgeCertificates) if (key.second == 3) proofs.insert(key);
+			for (const auto& [seat, bridge]: m_PeerBridges) if (bridge.fromFrame <= kept->first) proofs.emplace(bridge.fromFrame, 0);
+			std::vector<std::vector<uint8_t>> certificates;
+			for (const auto& key: proofs) if (const auto proof = m_PeerBridgeCertificates.find(key); proof != m_PeerBridgeCertificates.end()) {
+				std::vector<uint8_t> bytes;
+				if (NetHostMigrationCodec::Encode(proof->second, m_Config.migrationKey, bytes)) certificates.push_back(std::move(bytes));
+			}
+			if (certificates.size() > 32) return;
+			body.push_back(static_cast<uint8_t>(certificates.size()));
+			for (const auto& bytes: certificates) { PutSize(body, static_cast<uint32_t>(bytes.size())); body.insert(body.end(), bytes.begin(), bytes.end()); }
+			const auto witnesses = m_PeerFrameWitnesses.find(kept->first);
+			body.push_back(witnesses == m_PeerFrameWitnesses.end() ? 0 : static_cast<uint8_t>(witnesses->second.size()));
+			if (witnesses != m_PeerFrameWitnesses.end()) for (const auto& [sender, witness]: witnesses->second) {
+				std::vector<uint8_t> bytes;
+				if (!NetHostMigrationCodec::Encode(witness, m_Config.migrationKey, bytes)) return;
+				PutSize(body, static_cast<uint32_t>(bytes.size())); body.insert(body.end(), bytes.begin(), bytes.end());
+			}
+			if (body.size() > NetHostMigrationCodec::c_MaxPeerTailBytes) return;
+			m_PeerTailRawBytesSent += body.size();
+			bool compressedBody = false;
+			std::vector<uint8_t> compressed(LZ4_compressBound(static_cast<int>(body.size())));
+			const int size = LZ4_compress_default(reinterpret_cast<const char*>(body.data()), reinterpret_cast<char*>(compressed.data()), static_cast<int>(body.size()), static_cast<int>(compressed.size()));
+			if (size > 0 && static_cast<size_t>(size) + 4 < body.size()) {
+				std::vector<uint8_t> packed; PutSize(packed, static_cast<uint32_t>(body.size()));
+				packed.insert(packed.end(), compressed.begin(), compressed.begin() + size); body = std::move(packed); compressedBody = true;
+			}
+			const auto membership = m_FrameGroupChanges.upper_bound(kept->first);
+			const uint32_t members = membership == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(membership)->second;
+			if (!queued.empty() && queuedBytes + body.size() > 4 * 1024 * 1024) break;
+			queuedBytes += body.size();
+			queued.emplace(kept->first, PeerTailOutgoing{std::move(body), members, 0, compressedBody});
+			range->second.first = std::max(range->second.first, kept->first + 1);
+		}
+	}
+
+	void NetLockstepCoordinator::FlushPeerCommittedTails(uint64_t nowMs) {
+		constexpr uint64_t reliableQueueCap = 256 * 1024;
+		for (auto range = m_PeerTailSendRanges.begin(); range != m_PeerTailSendRanges.end();) {
+			if (m_RemovedPeers.contains(range->first) || range->second.first >= range->second.second) {
+				range = m_PeerTailSendRanges.erase(range);
+				continue;
+			}
+			if (m_LastCompletedSimulationTick && range->second.first <= *m_LastCompletedSimulationTick)
+				SendPeerCommittedTail(range->first, range->second.first);
+			++range;
+		}
+		for (auto& [peer, queued]: m_PeerTailOutgoing) {
+			const uint64_t applied = m_PeerAppliedThrough.contains(peer) ? m_PeerAppliedThrough.at(peer) : 0;
+			queued.erase(queued.begin(), queued.upper_bound(applied));
+			auto& sent = m_PeerTailLastSentMs[peer];
+			sent.erase(sent.begin(), sent.upper_bound(applied));
+			uint64_t handedOver = 0;
+			for (auto item = queued.begin(); item != queued.end() && handedOver < reliableQueueCap;) {
+				auto& body = item->second;
+				const size_t end = std::min(body.bytes.size(), body.offset + NetHostMigrationCodec::c_ChunkBytes);
+				NetTransportQueueStats queue;
+				const auto [wire, route] = PeerFrameRoute(peer);
+				if (wire) queue = wire->GetPeerQueueStats(route);
+				if (queue.reliableBytes + end - body.offset + 512 > reliableQueueCap) { ++m_PeerTailDeferredSends; break; }
+				auto tail = PeerFrameMessage(NetHostMigrationMessageType::PeerTail);
+				tail.frame = item->first; tail.voterMask = body.members; tail.completeFrom = body.compressed ? 1 : 0;
+				tail.totalBytes = static_cast<uint32_t>(body.bytes.size()); tail.offset = body.offset;
+				tail.bytes.assign(body.bytes.begin() + body.offset, body.bytes.begin() + end);
+				if (!SendPeerFrameMessage(std::move(tail), NetTransportLane::ControlReliable, peer)) break;
+				const size_t bytes = end - body.offset;
+				handedOver += bytes; m_PeerTailBytesSent += bytes; body.offset = static_cast<uint32_t>(end);
+				if (end == body.bytes.size()) {
+					++m_PeerTailFramesSent; sent[item->first] = nowMs; item = queued.erase(item);
+				}
+			}
+		}
+	}
+
+	void NetLockstepCoordinator::RequestPeerCommittedTail(uint64_t nowMs) {
+		if (nowMs < m_PeerTailRequestAtMs) return;
+		m_PeerTailRequestAtMs = nowMs + 25;
+		m_PeerTailRequestedUntil.erase(m_PeerTailRequestedUntil.begin(), m_PeerTailRequestedUntil.lower_bound(m_Stats.nextFrame));
+		// A bounded subscription includes future history, sent only after the donor displays it.
+		const uint64_t horizon = m_Stats.nextFrame + std::min<uint64_t>(128, NetLockstepCodec::c_MaxFutureFrameSkew);
+		for (uint64_t frame = m_Stats.nextFrame; frame < horizon;) {
+			const auto pending = m_PeerTailRequestedUntil.find(frame);
+			if (m_PeerCommittedTail.contains(frame) || (pending != m_PeerTailRequestedUntil.end() && nowMs < pending->second)) { ++frame; continue; }
+			uint8_t donor = 0; uint64_t through = 0, retryMs = 250;
+			for (const auto& [peer, applied]: m_PeerAppliedThrough) {
+				if (peer == m_Config.localPeerId || applied < frame || !HasPeerFrameRoute(peer)) continue;
+				if (donor == 0 || applied > through) { donor = peer; through = applied; }
+				if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end())
+					retryMs = std::max<uint64_t>(retryMs, 2 * path->second.P95Ms() + 100);
+			}
+			if (donor == 0) break;
+			auto request = PeerFrameMessage(NetHostMigrationMessageType::PeerTailRequest);
+			request.frame = frame;
+			const uint64_t end = std::min(horizon, frame + 128);
+			request.completeFrom = end;
+			// Matching donor histories cover the newest frames while their witnesses are still in flight.
+			for (const auto& [peer, applied]: m_PeerAppliedThrough) {
+				if (peer != m_Config.localPeerId && (peer == donor || (m_FrameGroupMembers & SeatBit(peer)) != 0) &&
+				    frame - std::min(frame, applied) < 128 && HasPeerFrameRoute(peer)) {
+					SendPeerFrameMessage(request, NetTransportLane::ControlReliable, peer); ++m_PeerTailRequests;
+				}
+			}
+			for (; frame < end; ++frame) m_PeerTailRequestedUntil[frame] = nowMs + std::min<uint64_t>(retryMs, 1000);
+		}
+		if ((m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) == 0 && nowMs >= m_PeerTailLogAtMs) {
+			m_PeerTailLogAtMs = nowMs + 1000;
+			DiagnosticLine() << "[net-peer-recovery] peer=" << static_cast<int>(m_Config.localPeerId)
+			    << " now_ms=" << nowMs << " applied=" << m_LastCompletedSimulationTick.value_or(0) << " prepared=" << m_Stats.nextFrame
+			    << " donor_applied=" << m_PeerTailThrough.value_or(0) << " certified_ahead=" << m_PeerCommittedTail.size()
+			    << " requests=" << m_PeerTailRequests << std::endl;
+		}
+	}
+
+	bool NetLockstepCoordinator::ApplyPeerCommittedTail(uint64_t frame, uint64_t nowMs) {
+		const auto kept = m_PeerCommittedTail.find(frame);
+		if (kept == m_PeerCommittedTail.end()) return false;
+		if (frame > m_Config.startFrame && (!m_PeerTailPrefixes.contains(frame) || m_PeerTailPrefixes.at(frame) != PeerFramePrefix(frame - 1))) {
+			Fail(NetLockstepStopReason::ProtocolError, frame, "the committed tail differs from displayed history at frame " + std::to_string(frame)); return false;
+		}
+		NetLockstepReadyFrame ready;
+		if (const auto decisions = m_PeerTailDecisions.find(frame); decisions != m_PeerTailDecisions.end()) {
+			for (const auto& decision: decisions->second) InstallPeerBridge(decision, nowMs);
+			m_PeerTailDecisions.erase(decisions);
+		}
+		PreparePeerBridgeInputs(frame, nowMs);
+		if (!DecodeMigrationFrame(kept->second, frame, ready)) {
+			Fail(NetLockstepStopReason::ProtocolError, frame, "invalid committed peer tail"); return false;
+		}
+		StoreMigrationFrame(frame, kept->second);
+		// Certified history advances receipts for the original inputs it contains.
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+			if (peer == m_Config.localPeerId || !IsRemoteRequiredForFrame(peer, frame)) continue;
+			if (const auto bridge = m_PeerBridges.find(peer); bridge != m_PeerBridges.end() && frame >= bridge->second.fromFrame &&
+			    (!bridge->second.returnFrame || frame < *bridge->second.returnFrame)) continue;
+			auto& through = m_PeerAcceptedThrough[peer];
+			through = std::max(through, frame + 1);
+			auto& ahead = m_PeerAcceptedAhead[peer];
+			ahead.erase(ahead.begin(), ahead.lower_bound(through));
+			while (through != UINT64_MAX && ahead.erase(through) != 0) ++through;
+			m_PeerInputReceipts[peer][m_Config.localPeerId] = through;
+			auto receipt = PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
+			receipt.successorPeerId = peer; receipt.frame = through;
+			SendPeerFrameMessage(std::move(receipt));
+		}
+		m_Stats.nextFrame = frame + 1;
+		RememberCommittedFrame(ready);
+		m_ReadyFrames.push_back(std::move(ready));
+		m_LocalFrames.erase(frame); m_LocalCommands.erase(frame); m_LocalObservations.erase(frame); m_LocalValueObservations.erase(frame);
+		m_RemoteFrames.erase(frame); m_RemoteCommands.erase(frame); m_RemoteObservations.erase(frame); m_RemoteValueObservations.erase(frame);
+		m_PeerCommittedTail.erase(kept);
+		m_PeerTailPrefixes.erase(frame); m_PeerTailVotes.erase(frame);
+		m_PeerHeartbeatAtMs = std::min(m_PeerHeartbeatAtMs, nowMs);
+		return true;
+	}
+
+	bool NetLockstepCoordinator::PeerFrameCatchUpActive() const {
+		NET_PLANE_CHECK();
+		if (!UsesPeerFrameGroups() || !IsRunning() || !m_LastCompletedSimulationTick) return false;
+		if (m_PeerTailThrough && *m_LastCompletedSimulationTick < *m_PeerTailThrough) return true;
+		// The initial handshake reaches seats at different times. Follow one
+		// stable member's displayed clock so that difference cannot become a
+		// permanent phase offset. This only selects the existing 3x/six-tick
+		// consumer budget; every frame still needs its ordinary certificate.
+		if (m_FrameGroupMembers != 0 && m_Config.simTickMs > 0) {
+			// Keep the surviving display clock when its former host returns.
+			const uint8_t reference = (m_FrameGroupMembers & SeatBit(m_PeerPaceReference)) != 0 ? m_PeerPaceReference :
+			    static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
+			// The pace leader advances at the ordinary rate after a shared pause.
+			// No displayed peer clock justifies replaying the group's paused time.
+			if (reference == m_Config.localPeerId) return false;
+			const auto applied = m_PeerAppliedThrough.find(reference), observed = m_PeerAppliedAtMs.find(reference);
+			if (reference != m_Config.localPeerId && applied != m_PeerAppliedThrough.end() && observed != m_PeerAppliedAtMs.end() &&
+			    m_TimingNowMs >= observed->second && m_TimingNowMs - observed->second <= 250) {
+				double transit = 0.0;
+				const auto [wire, route] = PeerFrameRoute(reference);
+				if (wire && wire->IsPeerPingMeasured(route)) transit = wire->GetPeerPingMs(route) / 2.0;
+				const uint64_t elapsed = static_cast<uint64_t>((m_TimingNowMs - observed->second + transit) / m_Config.simTickMs);
+				if (applied->second > *m_LastCompletedSimulationTick + 1 ||
+				    elapsed > *m_LastCompletedSimulationTick + 1 - std::min(applied->second, *m_LastCompletedSimulationTick + 1)) return true;
+				return false;
+			}
+		}
+		if (!m_PeerHadHitch || !m_PeerPaceStartMs || m_TimingNowMs < *m_PeerPaceStartMs || m_Config.simTickMs <= 0) return false;
+		const uint64_t due = m_PeerPaceStartFrame + static_cast<uint64_t>((m_TimingNowMs - *m_PeerPaceStartMs) / m_Config.simTickMs);
+		return *m_LastCompletedSimulationTick + 1 < due;
+	}
+
+	bool NetLockstepCoordinator::ProposePeerReclaim(uint8_t peer, NetPeerId transport, uint32_t incarnation, uint64_t frame, uint64_t trailFrames, std::string* error) {
+		if (!IsRunning() || m_Config.localPeerId != GetHostPeerId() || peer == 0 || peer > m_Config.peerCount ||
+		    !m_PeerBridges.contains(peer) || !m_PeerBridges.at(peer).committedHold || transport == c_InvalidNetPeerId || incarnation == 0 || frame <= m_Stats.nextFrame ||
+		    frame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew || !PeerGroupHasAuthority(m_FrameGroupMembers)) {
+			if (error) *error = "the private return needs an authoritative group and a future frame";
+			return false;
+		}
+		if (HasAgreedSeatReclaim(peer, frame)) return true;
+		auto proposal = PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+		proposal.preparedFrame = 1; proposal.frame = frame; proposal.boundary = m_LastCompletedSimulationTick.value_or(m_Stats.nextFrame - 1);
+		proposal.members = {peer}; proposal.connectedMask = m_FrameGroupMembers | SeatBit(peer);
+		const auto prefix = PeerAppliedFramePrefix(proposal.boundary); proposal.bytes.assign(prefix.begin(), prefix.end());
+		const uint32_t delay = m_Config.adaptiveInputDelay ? std::min<uint16_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
+		    std::max<uint16_t>(InputDelayAt(peer, frame), ReturnDelayFloor(peer, transport))) : PeerInputDelay(peer);
+		const uint64_t transit = static_cast<uint64_t>(std::ceil((m_Stats.peers[peer].pingMs + m_Stats.peers[peer].jitterMs) / m_Config.simTickMs));
+		const uint64_t neutral = delay + transit + trailFrames + m_Config.slowPlayerBoundTicks;
+		if (neutral > NetLockstepCodec::c_MaxFutureFrameSkew) { if (error) *error = "the private return is still too far behind its activation"; return false; }
+		PutSize(proposal.bytes, delay); PutSize(proposal.bytes, static_cast<uint32_t>(neutral)); PutSize(proposal.bytes, incarnation);
+		proposal.totalBytes = static_cast<uint32_t>(proposal.bytes.size()); proposal.voterMask = SeatBit(m_Config.localPeerId);
+		if (!ValidatePeerBridge(proposal)) { if (error) *error = "the private return does not match the committed boundary"; return false; }
+		if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->BindAdmission(peer, transport);
+		m_RemoteTransports[peer] = transport;
+		auto& votes = m_PeerBridgeVotes[{frame, 1}];
+		if (const auto own = votes.find(m_Config.localPeerId); own != votes.end()) return SameBridge(own->second, proposal);
+		votes.emplace(m_Config.localPeerId, proposal); SendPeerFrameMessage(std::move(proposal)); TryCommitPeerBridge(frame, m_TimingNowMs, 1);
+		return true;
+	}
+
+	bool NetLockstepCoordinator::AdoptPeerReturnConfig(NetLockstepConfig& config, const NetLockstepCoordinator& replay, uint64_t activation) const {
+		NET_PLANE_CHECK();
+		NetLockstepPlane::Check(&replay, "AdoptPeerReturnConfig (the replay)");
+		const auto kept = m_PeerReturnProofs.find(activation);
+		if (!UsesPeerFrameGroups() || kept == m_PeerReturnProofs.end()) return false;
+		NetHostMigrationMessage agreed; uint32_t voters = 0;
+		if (!DecodePeerBridgeCertificate(kept->second, agreed, voters) || !PeerGroupHasAuthority(voters) ||
+		    agreed.sessionId != config.sessionId || agreed.roundId != config.matchConfig.roundId || agreed.configHash != config.originalRoundConfigHash ||
+		    agreed.preparedFrame != 1 || (!replay.m_MigrationHistory.contains(agreed.boundary) && !replay.m_PeerReplayAppliedPrefixes.contains(agreed.boundary))) return false;
+		const auto prefix = replay.PeerAppliedFramePrefix(agreed.boundary);
+		if (!std::equal(prefix.begin(), prefix.end(), agreed.bytes.begin())) return false;
+		size_t offset = prefix.size();
+		for (uint8_t peer: agreed.members) {
+			uint32_t delay = 0, neutral = 0, incarnation = 0;
+			if (!TakeSize(agreed.bytes, offset, delay) || !TakeSize(agreed.bytes, offset, neutral) || !TakeSize(agreed.bytes, offset, incarnation) ||
+			    peer == 0 || peer > config.peerCount || delay == 0 || delay > NetLockstepCodec::c_MaxInputDelayFrames ||
+			    neutral < delay || neutral > NetLockstepCodec::c_MaxFutureFrameSkew || incarnation == 0 || activation > UINT64_MAX - neutral) return false;
+			config.initialSeatReclaims[peer] = {peer, config.migrationGeneration, activation * 8 + peer, incarnation, activation, static_cast<uint16_t>(delay), activation + neutral};
+			config.peerIncarnations[peer] = incarnation;
+		}
+		return offset == agreed.bytes.size() && config.initialSeatReclaims.contains(config.localPeerId);
+	}
+
+} // namespace RTE

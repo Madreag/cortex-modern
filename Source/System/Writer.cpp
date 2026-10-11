@@ -1757,7 +1757,8 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			const auto expectedVectors = vectors;
 			const auto expectedBytes = bytes;
 			const auto expectedStrings = strings;
-			CheckpointNativeSnapshot snapshot;
+			auto snapshotOwner = std::make_unique<CheckpointNativeSnapshot>();
+			CheckpointNativeSnapshot& snapshot = *snapshotOwner;
 			values = snapshot.Freeze(source, &values);
 			copiedVectors = snapshot.Freeze(vectors, &copiedVectors);
 			copiedBytes = snapshot.Freeze(bytes, &copiedBytes);
@@ -2736,7 +2737,8 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			for (size_t after: {size_t{0}, size_t{1}}) {
 				bool failed = false;
 				try {
-					CheckpointNativeSnapshot partial;
+					auto partialOwner = std::make_unique<CheckpointNativeSnapshot>();
+					CheckpointNativeSnapshot& partial = *partialOwner;
 					CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects, after);
 					partial.Object(actor.get());
 				} catch (const std::bad_alloc&) { failed = true; }

@@ -335,6 +335,13 @@ namespace RTE {
 			if (!object.contains("roster_bytes") || !DecodeRoster(object.at("roster_bytes").get<std::vector<uint8_t>>(), carried, &rosterError) || carried.seats.size() != next.m_Seats.size())
 				return false;
 			next.m_Roster = std::move(carried);
+			// The existing private capsule field carries the authenticated leave fact;
+			// replica bytes carry only the host's separately ordered hold authority.
+			for (const auto& row: object.at("seats")) {
+				NetRosterSeat* seat = next.m_Roster.Find(RosterIdOf(row.at("seat").get<uint16_t>()));
+				if (!seat) return false;
+				seat->leftByChoice = row.value("left", false);
+			}
 			next.m_UnixClock = m_UnixClock;
 			next.m_UnixClockContext = m_UnixClockContext;
 			const int64_t unixNow = static_cast<int64_t>(next.UnixNowMs());
@@ -677,7 +684,7 @@ namespace RTE {
 
 	bool NetReconnectHost::HolderLeftByChoice(const SeatState& seat) const {
 		const NetRosterSeat* held = RosterSeatOf(seat);
-		return IsHolderAway(seat) && held->holdCause == NetSeatHoldCause::Leave;
+		return IsHolderAway(seat) && (held->leftByChoice || held->holdCause == NetSeatHoldCause::Leave);
 	}
 
 	uint64_t NetReconnectHost::HolderAwaySinceMs(const SeatState& seat) const {
@@ -817,14 +824,14 @@ namespace RTE {
 
 	namespace {
 		bool IsInPlaceCause(NetSeatHoldCause cause) {
-			return cause == NetSeatHoldCause::Capacity || cause == NetSeatHoldCause::LateStream || cause == NetSeatHoldCause::Quiet || cause == NetSeatHoldCause::TimingAck;
+			return cause == NetSeatHoldCause::Capacity || cause == NetSeatHoldCause::LateStream || cause == NetSeatHoldCause::Quiet || cause == NetSeatHoldCause::TimingAck || cause == NetSeatHoldCause::OwnSeat;
 		}
 	}
 
 	void NetReconnectHost::NoteSeatHeldInPlace(uint8_t lockstepPeerId, NetSeatHoldCause cause) {
 		const SeatState* seat = SeatOfPeer(lockstepPeerId);
 		const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr;
-		if (!held || held->owner == 0 || held->phase != NetSeatPhase::Running || seat->seat.local) return;
+		if (!held || held->owner == 0 || held->phase != NetSeatPhase::Running) return;
 		if (cause == NetSeatHoldCause::Capacity) {
 			NetRosterEvent event;
 			event.kind = NetRosterEventKind::SlowMachine;
@@ -846,6 +853,7 @@ namespace RTE {
 		const SeatState* seat = SeatOfPeer(lockstepPeerId);
 		const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr;
 		if (!held || held->phase != NetSeatPhase::Held || held->link != NetSeatLink::Connected || !IsInPlaceCause(held->holdCause)) return;
+		if (seat->seat.local) { ApplySeatEvent(*seat, NetRosterEventKind::HostResumed); return; }
 		ApplySeatEvent(*seat, NetRosterEventKind::Returned, false, true);
 		if (const NetRosterSeat* back = RosterSeatOf(*seat); back && back->phase == NetSeatPhase::RejoinCatchUp) ApplySeatEvent(*seat, NetRosterEventKind::CaughtUp);
 	}
@@ -853,7 +861,7 @@ namespace RTE {
 	std::vector<uint8_t> NetReconnectHost::PlayingPeers() const {
 		std::vector<uint8_t> playing;
 		for (const SeatState& seat: m_Seats) {
-			const NetRosterSeat* held = seat.seat.cpu || seat.seat.local ? nullptr : RosterSeatOf(seat);
+			const NetRosterSeat* held = seat.seat.cpu ? nullptr : RosterSeatOf(seat);
 			if (held && held->owner != 0 && held->phase == NetSeatPhase::Running) playing.push_back(SimIdentityOfSeat(seat.seat).peerId);
 		}
 		return playing;
@@ -862,7 +870,7 @@ namespace RTE {
 	std::vector<uint8_t> NetReconnectHost::HeldInPlacePeers() const {
 		std::vector<uint8_t> held;
 		for (const SeatState& seat: m_Seats) {
-			const NetRosterSeat* row = seat.seat.cpu || seat.seat.local ? nullptr : RosterSeatOf(seat);
+			const NetRosterSeat* row = seat.seat.cpu ? nullptr : RosterSeatOf(seat);
 			if (row && row->phase == NetSeatPhase::Held && row->link == NetSeatLink::Connected && IsInPlaceCause(row->holdCause)) held.push_back(SimIdentityOfSeat(seat.seat).peerId);
 		}
 		return held;
@@ -1609,6 +1617,10 @@ namespace RTE {
 		// the link may stay up at the leaver's menu, so the drop runs now.
 		seat->activeConnection = c_InvalidNetPeerId;
 		ApplySeatEvent(*seat, NetRosterEventKind::LinkDropped, true);
+		const NetRosterSeat* retained = RosterSeatOf(*seat);
+		if (!liveLeave && m_Roster.stage == NetRosterStage::Ended && retained &&
+		    retained->phase == NetSeatPhase::RoundEnd && retained->holdCause != NetSeatHoldCause::None)
+			ApplySeatEvent(*seat, NetRosterEventKind::HeldInPlace, true, false, NetSeatHoldCause::Leave);
 		BumpSeatGeneration(*seat);
 		if (liveLeave) RecordDrop(*seat, m_LockstepFrame);
 		++m_Stats.seatsDropped;
@@ -2095,7 +2107,7 @@ namespace RTE {
 			return false;
 		}
 		// The roster holds the seat for its away player - lost, left, or held by the round with its link open - or the host opened it.
-		return (IsSeated(seat) && RosterHoldsSeat(seat)) || IsHostOpened(seat);
+		return (IsSeated(seat) && (RosterHoldsSeat(seat) || IsHolderAway(seat))) || IsHostOpened(seat);
 	}
 
 	void NetReconnectHost::BumpSeatGeneration(SeatState& seat) {

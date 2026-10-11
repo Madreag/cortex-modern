@@ -29,6 +29,8 @@ namespace RTE::CheckpointLua {
 			lua_pushvalue(m_State, LUA_GLOBALSINDEX);
 			m_Values.RememberLibraries(m_Heap.GlobalValue("_G"), -1); lua_pop(m_State, 1);
 			for (const auto& [source, target]: m_Classes) {
+				lua_rawgeti(m_State, LUA_REGISTRYINDEX, target->metatable_ref());
+				m_Values.RememberLibraries(m_Heap.RegistryValue(m_Bindings.Class(source)->metatable_ref()), -1); lua_pop(m_State, 1);
 				target->get_table(m_State);
 				m_Values.RememberLibraries(m_Bindings.Members(source), -1); lua_pop(m_State, 1);
 				target->get_default_table(m_State);
@@ -125,8 +127,18 @@ namespace RTE::CheckpointLua {
 				else PushObject(value);
 				return;
 			}
-			if (tvisfunc(&value) && m_Heap.Read(&funcV(&value)->c.nupvalues) == 0 && m_Heap.Read(&funcV(&value)->c.ffid) == FF_C) {
-				lua_pushcfunction(m_State, m_Heap.Read(&funcV(&value)->c.f)); return;
+			if (tvisfunc(&value) && m_Heap.Read(&funcV(&value)->c.ffid) == FF_C) {
+				const auto* source = funcV(&value);
+				const int count = m_Heap.Read(&source->c.nupvalues);
+				for (int index = 0; index < count; ++index) lua_pushnil(m_State);
+				lua_pushcclosure(m_State, m_Heap.Read(&source->c.f), count);
+				const int destination = lua_gettop(m_State);
+				m_Values.Remember(value, destination);
+				for (int index = 0; index < count; ++index) {
+					m_Values.Push(m_Heap.Read(&source->c.upvalue[index]));
+					if (!lua_setupvalue(m_State, destination, index + 1)) throw std::runtime_error("a saved native closure lost an upvalue");
+				}
+				return;
 			}
 			throw std::runtime_error("a saved native closure has no retained game binding");
 		}

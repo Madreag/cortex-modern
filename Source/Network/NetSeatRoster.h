@@ -50,6 +50,7 @@ namespace RTE {
 		uint64_t givenAwayTicket = 0;                          ///< The ticket of the player the host gave this seat away from.
 		uint64_t heldSinceMs = 0;                              ///< When its owner went away, on the host's clock; the host's own, never sent.
 		std::string name;                                      ///< Its owner's display name as the host seated it; empty while the seat is open.
+		bool leftByChoice = false;                             ///< Host-only authenticated leave fact; never grants AI authority and is never sent to a replica.
 	};
 
 	/// Who holds which seat, in what phase: owned by the host's session plane and replicated by revision.
