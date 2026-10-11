@@ -75,6 +75,8 @@ namespace {
 	}
 	struct SavedBitmapIndex {
 		std::unordered_map<const BITMAP*, std::array<std::optional<std::string>, 2>> paths;
+		std::unordered_map<std::string, std::array<BITMAP*, 2>> images;
+		std::vector<std::unique_ptr<BITMAP, void(*)(BITMAP*)>> owned;
 	};
 	struct SavedPathHashes {
 		std::unordered_map<size_t, std::string> paths;
@@ -102,6 +104,7 @@ namespace {
 			const auto* registry = static_cast<const Registry*>(CheckpointNativeStorage::View(source, bytes));
 			for (size_t depth = 0; depth < 2; ++depth) CheckpointForEachValue(registry[depth], [&](const auto& entry) {
 				const auto& path = entry.first.Value();
+				index->images[path][depth] = entry.second;
 				auto& least = index->paths[entry.second][depth];
 				if (!least || path < *least) least = path;
 			});
@@ -116,6 +119,13 @@ std::pair<const void*, size_t> ContentFile::LoadedBitmapRegistry() {
 }
 
 std::pair<const void*, size_t> ContentFile::PathHashRegistry() { return {&s_PathHashes, sizeof(s_PathHashes)}; }
+
+BITMAP* ContentFile::ReadLoadedBitmap(const std::string& path, int depth) {
+	if (!CheckpointNativeStorage::Reading() || depth < 0 || depth >= BitDepths::BitDepthCount) throw std::logic_error("saved bitmap lookup needs its frozen registry");
+	const auto index = SavedIndex();
+	const auto found = index->images.find(path);
+	return found == index->images.end() ? nullptr : found->second[depth];
+}
 
 std::string ContentFile::GetPathFromHash(size_t hash) {
 	if (CheckpointNativeStorage::Reading()) {
@@ -268,6 +278,42 @@ std::string ContentFile::LoadedBitmapChangeMissedByIndex() {
 		way("live path stays unchanged", GetPathFromHash(hash) == "live path after capture");
 		way("private path stays private", GetPathFromHash(privateHash) == privateBefore);
 		if (previous) s_PathHashes[hash] = *previous; else s_PathHashes.erase(hash);
+	}
+	{
+		const std::string path = "checkpoint-selftest/saved-image.png";
+		auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
+		auto image = std::unique_ptr<BITMAP, void(*)(BITMAP*)>(create_bitmap_ex(8, 7, 5), destroy_bitmap);
+		if (!image) throw std::bad_alloc();
+		clear_to_color(image.get(), 37);
+		const auto existing = std::as_const(registry).find(path);
+		BITMAP* previous = existing == std::as_const(registry).end() ? nullptr : existing->second;
+		registry[path] = image.get();
+		CheckpointNativeStorage::Root<decltype(s_LoadedBitmaps)> root(&s_LoadedBitmaps);
+		auto inventory = CheckpointNativeStorage::PrepareInventory();
+		if (!inventory->Arm()) way("frozen image inventory", false);
+		else {
+			root.Freeze();
+			clear_to_color(image.get(), 41);
+			registry.erase(path);
+			const std::array headers{root.Range()};
+			CheckpointNativeStorage::ReadScope read(inventory->Pages(), headers);
+			snapshot->SealBoundary();
+			CheckpointNativeSnapshot::ReadScope savedValues(snapshot.get());
+			ContentFile saved;
+			saved.m_DataPath = path;
+			BITMAP* captured = saved.GetAsBitmap();
+			way("frozen image getter", captured && captured->line[4][6] == 37 && captured == saved.GetAsBitmap());
+			auto owned = std::unique_ptr<BITMAP, void(*)(BITMAP*)>(saved.GetAsBitmap(0, false), destroy_bitmap);
+			way("private image copy", owned && owned.get() != captured && owned->line[4][6] == 37);
+			bool refused = false;
+			try {
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+				saved.GetAsBitmap(0, false);
+			} catch (const std::bad_alloc&) { refused = true; }
+			way("private image refusal", refused);
+		}
+		way("image cache stays unchanged", std::as_const(registry).find(path) == std::as_const(registry).end() && image->line[4][6] == 41);
+		if (previous) registry[path] = previous; else registry.erase(path);
 	}
 	return missed;
 }
@@ -559,6 +605,39 @@ BITMAP* ContentFile::GetAsBitmap(int conversionMode, bool storeBitmap, const std
 	BITMAP* returnBitmap = nullptr;
 	const int bitDepth = conversionMode == COLORCONV_8_TO_32 ? BitDepths::ThirtyTwo : BitDepths::Eight;
 	std::string dataPathToLoad = dataPathToSpecificFrame.empty() ? m_DataPath.Value() : dataPathToSpecificFrame;
+	if (CheckpointNativeStorage::Reading()) {
+		auto index = std::const_pointer_cast<SavedBitmapIndex>(SavedIndex());
+		BITMAP* bitmap = ReadLoadedBitmap(dataPathToLoad, bitDepth);
+		if (!bitmap) {
+			if (!System::PathExistsCaseSensitive(dataPathToLoad)) {
+				const std::string extension = m_DataPathExtension == ".png" ? ".bmp" : ".png";
+				const std::string alternate = dataPathToLoad.substr(0, dataPathToLoad.length() - m_DataPathExtension.length()) + extension;
+				if (System::PathExistsCaseSensitive(alternate)) {
+					SetDataPath(m_DataPathWithoutExtension + extension);
+					dataPathToLoad = alternate;
+					bitmap = ReadLoadedBitmap(dataPathToLoad, bitDepth);
+				}
+			}
+			if (!bitmap) {
+				auto loaded = std::unique_ptr<BITMAP, void(*)(BITMAP*)>(LoadSavedBitmap(conversionMode, dataPathToLoad), destroy_bitmap);
+				if (!loaded) return nullptr;
+				if (!storeBitmap) return loaded.release();
+				bitmap = loaded.get();
+				index->owned.push_back(std::move(loaded));
+				index->images[dataPathToLoad][bitDepth] = bitmap;
+				index->paths[bitmap][bitDepth] = dataPathToLoad;
+			}
+		}
+		if (const auto* snapshot = CheckpointNativeSnapshot::Current()) bitmap = const_cast<CheckpointNativeSnapshot*>(snapshot)->ReadBitmap(bitmap);
+		else if (!CheckpointNativeStorage::Private(bitmap, sizeof(BITMAP))) throw std::logic_error("a saved image needs its snapshot pixel owner");
+		if (storeBitmap) return bitmap;
+		const auto* saved = CheckpointNativeStorage::Source(bitmap);
+		BITMAP* copy = create_bitmap_ex(bitmap_color_depth(const_cast<BITMAP*>(saved)), saved->w, saved->h);
+		if (!copy) throw std::bad_alloc();
+		const size_t stride = static_cast<size_t>(saved->w) * ((bitmap_color_depth(const_cast<BITMAP*>(saved)) + 7) / 8);
+		for (int row = 0; row < saved->h; ++row) std::memcpy(copy->line[row], saved->line[row], stride);
+		return copy;
+	}
 
 	if (g_PresetMan.GetReloadEntityPresetCalledThisUpdate()) {
 		ReloadBitmap(dataPathToLoad, conversionMode);
@@ -743,10 +822,20 @@ BITMAP* ContentFile::LoadAndReleaseBitmap(int conversionMode, const std::string&
 		memcpy(returnBitmap->line[y], static_cast<unsigned char*>(image->pixels) + image->pitch * y, image->w * SDL_GetPixelFormatDetails(image->format)->bytes_per_pixel);
 	}
 	SDL_DestroySurface(image);
-
 	RTEAssert(returnBitmap, "Failed to load image file with following path and name:\n\n" + m_DataPathAndReaderPosition + "\nThe file may be corrupt, incorrectly converted or saved with unsupported parameters.");
 
 	return returnBitmap;
+}
+
+BITMAP* ContentFile::LoadSavedBitmap(int conversionMode, const std::string& path) {
+	std::unique_ptr<SDL_Surface, void(*)(SDL_Surface*)> image(LoadImageAsSurface(conversionMode, path), SDL_DestroySurface);
+	if (!image) return nullptr;
+	const int depth = SDL_GetPixelFormatDetails(image->format)->bits_per_pixel;
+	BITMAP* bitmap = create_bitmap_ex(depth, image->w, image->h);
+	if (!bitmap) throw std::bad_alloc();
+	const size_t stride = static_cast<size_t>(image->w) * SDL_GetPixelFormatDetails(image->format)->bytes_per_pixel;
+	for (int row = 0; row < image->h; ++row) std::memcpy(bitmap->line[row], static_cast<unsigned char*>(image->pixels) + image->pitch * row, stride);
+	return bitmap;
 }
 
 bool ContentFile::RunImageLoadSelfTest() {

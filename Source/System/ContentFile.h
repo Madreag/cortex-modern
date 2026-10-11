@@ -228,6 +228,7 @@ namespace RTE {
 		static const std::string* LoadedBitmapPath(const BITMAP* bitmap, int& depth);
 		static std::pair<const void*, size_t> LoadedBitmapRegistry();
 		static std::pair<const void*, size_t> PathHashRegistry();
+		static BITMAP* ReadLoadedBitmap(const std::string& path, int depth);
 
 		/// Changes the loaded bitmaps by each way in, on a scratch entry, and checks the next index sees each change.
 		/// @return The first way whose change the index missed, or empty. The loaded bitmaps are left as they were.
@@ -338,6 +339,7 @@ namespace RTE {
 		/// @param dataPathToSpecificFrame Path to a specific frame when loading an animation to avoid overwriting the original preset DataPath when loading each frame.
 		/// @return Pointer to the BITMAP loaded from disk.
 		BITMAP* LoadAndReleaseBitmap(int conversionMode = 0, const std::string& dataPathToSpecificFrame = "");
+		BITMAP* LoadSavedBitmap(int conversionMode, const std::string& path);
 
 		/// Loads and transfers the data represented by this ContentFile object as an FMOD FSOUND_SAMPLE. Ownership of the FSOUND_SAMPLE is NOT transferred!
 		/// @param abortGameForInvalidSound Whether to abort the game if the sound couldn't be added, or just show a console error. Default true.
