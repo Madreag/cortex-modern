@@ -73,11 +73,11 @@ namespace RTE {
 #pragma region Getters and Setters
 		/// Gets the vector of TransitionSoundContainers for this DynamicSongSection.
 		/// @return The vector of TransitionSoundContainers for this DynamicSongSection.
-		std::vector<SoundContainer>& GetTransitionSoundContainers() { return m_TransitionSoundContainers; }
+		CheckpointVector<SoundContainer>& GetTransitionSoundContainers() { return m_TransitionSoundContainers; }
 
 		/// Gets the vector of SoundContainers for this DynamicSongSection.
 		/// @return The vector of SoundContainers for this DynamicSongSection.
-		std::vector<SoundContainer>& GetSoundContainers() { return m_SoundContainers; }
+		CheckpointVector<SoundContainer>& GetSoundContainers() { return m_SoundContainers; }
 
 		/// Gets the SoundContainerSelectionCycleMode of this DynamicSongSection.
 		/// @return The SoundContainerSelectionCycleMode of this DynamicSongSection.
@@ -129,12 +129,12 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 		static const std::unordered_map<std::string, SoundContainerSelectionCycleMode> c_SoundContainerSelectionCycleModeMap; //!< A map of strings to SoundContainerSelectionCycleModes to support string parsing for the SoundContainerSelectionCycleMode enum. Populated in the implementing cpp file.
 
-		std::vector<SoundContainer> m_TransitionSoundContainers; //!< The SoundContainers that will play when first switching to this DynamicSongSection.
+		CheckpointVector<SoundContainer> m_TransitionSoundContainers; //!< The SoundContainers that will play when first switching to this DynamicSongSection.
 		unsigned int m_LastTransitionSoundContainerIndex; //!< The last index used to select a TransitionSoundContainer.
-		std::vector<unsigned int> m_TransitionShuffleUnplayedIndices; //!< Indices left to play if in Shuffle mode.
-		std::vector<SoundContainer> m_SoundContainers; //!< The SoundContainers making up this DynamicSongSection.
+		CheckpointVector<unsigned int> m_TransitionShuffleUnplayedIndices; //!< Indices left to play if in Shuffle mode.
+		CheckpointVector<SoundContainer> m_SoundContainers; //!< The SoundContainers making up this DynamicSongSection.
 		unsigned int m_LastSoundContainerIndex; //!< The last index used to select a SoundContainer.
-		std::vector<unsigned int> m_ShuffleUnplayedIndices; //!< Indices left to play if in Shuffle mode.
+		CheckpointVector<unsigned int> m_ShuffleUnplayedIndices; //!< Indices left to play if in Shuffle mode.
 
 		SoundContainerSelectionCycleMode m_SoundContainerSelectionCycleMode; //!< The selection cycle mode to use when selecting the next SoundContainer.
 		CheckpointString m_SectionType; //!< The name of the type of dynamic music this is.
@@ -216,14 +216,14 @@ namespace RTE {
 
 		/// Gets the vector of DynamicSongSections for this DynamicSong.
 		/// @return The vector of DynamicSongSections for this DynamicSong.
-		std::vector<DynamicSongSection>& GetSongSections() { return m_SongSections; }
+		CheckpointVector<DynamicSongSection>& GetSongSections() { return m_SongSections; }
 #pragma endregion
 
 	private:
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 
 		DynamicSongSection m_DefaultSongSection; //!< The fallback DynamicSongSection if one with the desired Type can't be found.
-		std::vector<DynamicSongSection> m_SongSections; //!< The DynamicSongSections making up this DynamicSong.
+		CheckpointVector<DynamicSongSection> m_SongSections; //!< The DynamicSongSections making up this DynamicSong.
 
 		bool m_CheckpointInitialized = false;
 

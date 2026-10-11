@@ -418,7 +418,7 @@ struct MusicCheckpoint {
         bool playing = false;
         std::unique_ptr<SoundContainer> interrupting;
         std::unique_ptr<DynamicSong> song;
-        std::string nextType, currentType;
+        CheckpointString nextType, currentType;
         DynamicSongSection* nextSection = nullptr;
         std::unique_ptr<SoundContainer> previous, current;
         SoundContainer* nextSound = nullptr;
@@ -458,7 +458,7 @@ struct MusicCheckpoint {
         for (const auto& sound: source.m_TransitionSoundContainers) value.transitions.push_back(CaptureSound(sound));
         for (const auto& sound: source.m_SoundContainers) value.sounds.push_back(CaptureSound(sound));
         value.lastTransition = source.m_LastTransitionSoundContainerIndex; value.lastSound = source.m_LastSoundContainerIndex;
-        value.transitionQueue = source.m_TransitionShuffleUnplayedIndices; value.queue = source.m_ShuffleUnplayedIndices;
+        value.transitionQueue.assign(source.m_TransitionShuffleUnplayedIndices.begin(), source.m_TransitionShuffleUnplayedIndices.end()); value.queue.assign(source.m_ShuffleUnplayedIndices.begin(), source.m_ShuffleUnplayedIndices.end());
         value.cycle = source.m_SoundContainerSelectionCycleMode; value.type = source.m_SectionType; return value;
     }
     static Record Capture(const MusicMan& source) {
@@ -484,10 +484,11 @@ struct MusicCheckpoint {
         if (!sectionFound || !soundFound) throw std::runtime_error("music points outside its owned song");
         return value;
     }
-    static std::string SaveCapturedSet(const SoundSet& source) {
+    static std::string SaveCapturedSet(const SoundSet& original) {
+        const auto& source = *CheckpointNativeStorage::Source(&original);
         CheckpointWriter writer("MusicSet1");
         writer(source.m_SoundSelectionCycleMode, source.m_CurrentSelection, source.m_SoundData.size());
-        for (const auto& sample: source.m_SoundData) {
+        for (const auto& sample: CheckpointValues(source.m_SoundData)) {
             std::string path;
             if (sample.SoundObject) {
                 for (const auto& [candidate, sound]: ContentFile::s_LoadedSamples) if (sound == sample.SoundObject && (path.empty() || candidate < path)) path = candidate;
@@ -500,26 +501,28 @@ struct MusicCheckpoint {
             }));
         }
         writer(source.m_SubSoundSets.size());
-        for (const auto* subset: source.m_SubSoundSets) {
+        for (const auto* subset: CheckpointValues(source.m_SubSoundSets)) {
             if (!subset) throw std::runtime_error("null music sound subset");
-            writer(CheckpointWriter::Native([&] { return SaveCapturedSet(*subset); }));
+            writer(CheckpointWriter::Native([&] { return SaveCapturedSet(*CheckpointNativeStorage::Source(subset)); }));
         }
         return writer.Text();
     }
-    static std::string SaveCapturedSound(const SoundContainer& source) {
+    static std::string SaveCapturedSound(const SoundContainer& original) {
+        const auto& source = *CheckpointNativeStorage::Source(&original);
         CheckpointWriter writer("MusicSound1");
-        writer(source, CheckpointWriter::Native([&] { return SaveCapturedSet(*source.m_TopLevelSoundSet); }));
+        writer(source, CheckpointWriter::Native([&] { return SaveCapturedSet(*CheckpointNativeStorage::Source(source.m_TopLevelSoundSet.get())); }));
         return writer.Text();
     }
     static CheckpointText CaptureOwnedSound(const std::unique_ptr<SoundContainer>& source) {
-        return source ? CheckpointWriter::Native([&] { return SaveCapturedSound(*source); }) : CheckpointText{};
+        return source ? CheckpointWriter::Native([&] { return SaveCapturedSound(*CheckpointNativeStorage::Source(source.get())); }) : CheckpointText{};
     }
-    static std::string SaveCapturedSection(const DynamicSongSection& source) {
+    static std::string SaveCapturedSection(const DynamicSongSection& original) {
+        const auto& source = *CheckpointNativeStorage::Source(&original);
         CheckpointWriter writer("MusicSection1");
         writer(CheckpointWriter::Native([&] { return source.Entity::SaveCheckpoint(); }), source.m_TransitionSoundContainers.size());
-        for (const auto& sound: source.m_TransitionSoundContainers) writer(CheckpointWriter::Native([&] { return SaveCapturedSound(sound); }));
+        for (const auto& sound: CheckpointValues(source.m_TransitionSoundContainers)) writer(CheckpointWriter::Native([&] { return SaveCapturedSound(sound); }));
         writer(source.m_LastTransitionSoundContainerIndex, source.m_TransitionShuffleUnplayedIndices, source.m_SoundContainers.size());
-        for (const auto& sound: source.m_SoundContainers) writer(CheckpointWriter::Native([&] { return SaveCapturedSound(sound); }));
+        for (const auto& sound: CheckpointValues(source.m_SoundContainers)) writer(CheckpointWriter::Native([&] { return SaveCapturedSound(sound); }));
         writer(source.m_LastSoundContainerIndex, source.m_ShuffleUnplayedIndices, source.m_SoundContainerSelectionCycleMode, source.m_SectionType);
         return writer.Text();
     }
@@ -531,21 +534,24 @@ struct MusicCheckpoint {
         std::array<int, 3> nextSound{-2, 0, -1};
         bool sectionFound = source.m_NextSongSection == nullptr, soundFound = source.m_NextSoundContainer == nullptr;
         if (source.m_CurrentSong) {
-            const auto& currentSong = *source.m_CurrentSong;
+            const auto& currentSong = *CheckpointNativeStorage::Source(source.m_CurrentSong.get());
             song = CheckpointWriter::Native([&] {
                 CheckpointWriter writer("MusicSong1");
                 writer(CheckpointWriter::Native([&] { return currentSong.Entity::SaveCheckpoint(); }),
                     CheckpointWriter::Native([&] { return SaveCapturedSection(currentSong.m_DefaultSongSection); }), currentSong.m_SongSections.size());
-                for (const auto& section: currentSong.m_SongSections) writer(CheckpointWriter::Native([&] { return SaveCapturedSection(section); }));
+                for (const auto& section: CheckpointValues(currentSong.m_SongSections)) writer(CheckpointWriter::Native([&] { return SaveCapturedSection(section); }));
                 return writer.Text();
             });
             const auto inspect = [&](const DynamicSongSection& section, int index) {
-                if (&section == source.m_NextSongSection) { nextSection = index; sectionFound = true; }
-                for (size_t i = 0; i < section.m_TransitionSoundContainers.size(); ++i) if (&section.m_TransitionSoundContainers[i] == source.m_NextSoundContainer) { nextSound = {index, 1, static_cast<int>(i)}; soundFound = true; }
-                for (size_t i = 0; i < section.m_SoundContainers.size(); ++i) if (&section.m_SoundContainers[i] == source.m_NextSoundContainer) { nextSound = {index, 0, static_cast<int>(i)}; soundFound = true; }
+                if (CheckpointNativeStorage::Original(&section) == source.m_NextSongSection) { nextSection = index; sectionFound = true; }
+                const auto transitions = CheckpointValues(section.m_TransitionSoundContainers);
+                for (size_t i = 0; i < transitions.size(); ++i) if (CheckpointNativeStorage::Original(&transitions[i]) == source.m_NextSoundContainer) { nextSound = {index, 1, static_cast<int>(i)}; soundFound = true; }
+                const auto sounds = CheckpointValues(section.m_SoundContainers);
+                for (size_t i = 0; i < sounds.size(); ++i) if (CheckpointNativeStorage::Original(&sounds[i]) == source.m_NextSoundContainer) { nextSound = {index, 0, static_cast<int>(i)}; soundFound = true; }
             };
             inspect(currentSong.m_DefaultSongSection, -1);
-            for (size_t i = 0; i < currentSong.m_SongSections.size(); ++i) inspect(currentSong.m_SongSections[i], static_cast<int>(i));
+            const auto sections = CheckpointValues(currentSong.m_SongSections);
+            for (size_t i = 0; i < sections.size(); ++i) inspect(sections[i], static_cast<int>(i));
         }
         if (!sectionFound || !soundFound) throw std::runtime_error("music points outside its owned song");
         CheckpointWriter writer("MusicMan1");
@@ -560,17 +566,18 @@ struct MusicCheckpoint {
         bool sectionFound = source.m_NextSongSection == nullptr, soundFound = source.m_NextSoundContainer == nullptr;
         if (source.m_CurrentSong) {
             const auto section = [&](const DynamicSongSection& value) {
-                sectionFound |= &value == source.m_NextSongSection;
-                for (const auto& sound: value.m_TransitionSoundContainers) { sounds.push_back(&sound); soundFound |= &sound == source.m_NextSoundContainer; }
-                for (const auto& sound: value.m_SoundContainers) { sounds.push_back(&sound); soundFound |= &sound == source.m_NextSoundContainer; }
+                sectionFound |= CheckpointNativeStorage::Original(&value) == source.m_NextSongSection;
+                for (const auto& sound: CheckpointValues(value.m_TransitionSoundContainers)) { sounds.push_back(&sound); soundFound |= CheckpointNativeStorage::Original(&sound) == source.m_NextSoundContainer; }
+                for (const auto& sound: CheckpointValues(value.m_SoundContainers)) { sounds.push_back(&sound); soundFound |= CheckpointNativeStorage::Original(&sound) == source.m_NextSoundContainer; }
             };
-            section(source.m_CurrentSong->m_DefaultSongSection);
-            for (const auto& value: source.m_CurrentSong->m_SongSections) section(value);
+            const auto& song = *CheckpointNativeStorage::Source(source.m_CurrentSong.get());
+            section(song.m_DefaultSongSection);
+            for (const auto& value: CheckpointValues(song.m_SongSections)) section(value);
         }
         if (!sectionFound || !soundFound) throw std::runtime_error("music points outside its owned song");
         if (source.m_PreviousSoundContainer) sounds.push_back(source.m_PreviousSoundContainer.get());
         if (source.m_CurrentSoundContainer) sounds.push_back(source.m_CurrentSoundContainer.get());
-        for (const auto* sound: sounds) visit(*sound);
+        for (const auto* sound: sounds) visit(*CheckpointNativeStorage::Source(sound));
     }
 
     static bool ValidateSet(const Set& value, int depth = 0) {
@@ -643,7 +650,7 @@ struct MusicCheckpoint {
         for (size_t i = 0; i < record.transitions.size(); ++i) BuildSound(record.transitions[i], value.m_TransitionSoundContainers[i], bindings);
         for (size_t i = 0; i < record.sounds.size(); ++i) BuildSound(record.sounds[i], value.m_SoundContainers[i], bindings);
         value.m_LastTransitionSoundContainerIndex = record.lastTransition; value.m_LastSoundContainerIndex = record.lastSound;
-        value.m_TransitionShuffleUnplayedIndices = record.transitionQueue; value.m_ShuffleUnplayedIndices = record.queue;
+        value.m_TransitionShuffleUnplayedIndices.assign(record.transitionQueue.begin(), record.transitionQueue.end()); value.m_ShuffleUnplayedIndices.assign(record.queue.begin(), record.queue.end());
         value.m_SoundContainerSelectionCycleMode = static_cast<DynamicSongSection::SoundContainerSelectionCycleMode>(record.cycle); value.m_SectionType = record.type;
     }
     static std::unique_ptr<State> Build(const Record& record) {
@@ -732,7 +739,7 @@ struct MusicCheckpoint {
             manager.m_CurrentSong->m_DefaultSongSection.m_ShuffleUnplayedIndices = {0}; manager.m_NextSoundContainer = &section.m_SoundContainers[0]; manager.m_MusicPausedTime = -5;
             if (!manager.LoadCheckpointWithAudio(music, audio) || manager.SaveCheckpoint() != music || manager.m_CurrentSoundContainer.get() == originalCurrent || g_AudioMan.GetSoundContainerPlaybackCheckpoint(manager.m_CurrentSoundContainer.get()) != playback) throw std::runtime_error("music state, queue, alias or playback changed after restore");
             auto& restoredSection = manager.m_CurrentSong->m_DefaultSongSection;
-            if (restoredSection.m_ShuffleUnplayedIndices != std::vector<unsigned int>{2, 0} || restoredSection.m_TransitionShuffleUnplayedIndices != std::vector<unsigned int>{1} || manager.m_NextSoundContainer != &restoredSection.m_SoundContainers[2] || manager.m_NextSongSection != &restoredSection || manager.m_MusicPausedTime != 137.125 || manager.m_MusicTimer.GetStartSimTimeMS() != 73 || manager.m_MusicFadeTimer.GetRealTimeLimitTicks() != 271) throw std::runtime_error("native music continuation values were not restored");
+            if (restoredSection.m_ShuffleUnplayedIndices != CheckpointVector<unsigned int>{2, 0} || restoredSection.m_TransitionShuffleUnplayedIndices != CheckpointVector<unsigned int>{1} || manager.m_NextSoundContainer != &restoredSection.m_SoundContainers[2] || manager.m_NextSongSection != &restoredSection || manager.m_MusicPausedTime != 137.125 || manager.m_MusicTimer.GetStartSimTimeMS() != 73 || manager.m_MusicFadeTimer.GetRealTimeLimitTicks() != 271) throw std::runtime_error("native music continuation values were not restored");
             SoundContainer* heldCurrent = manager.m_CurrentSoundContainer.get();
             auto held = manager.TakeCheckpointOwners();
             if (manager.m_CurrentSoundContainer || !manager.RestoreCheckpointOwners(held) || held || manager.m_CurrentSoundContainer.get() != heldCurrent || manager.SaveCheckpoint() != music || g_AudioMan.GetSoundContainerPlaybackCheckpoint(heldCurrent) != playback) throw std::runtime_error("music hold/reinstate lost original owner identity");
