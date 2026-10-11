@@ -151,13 +151,16 @@ namespace {
 		}
 		const size_t chunks = std::min<size_t>(order.size(), 128);
 		const auto range = [&order, chunks](size_t chunk) { return std::pair{chunk * order.size() / chunks, (chunk + 1) * order.size() / chunks}; };
-		ParallelWork(g_ThreadMan.GetPriorityThreadPool(), chunks, [&snapshot, &order, &range](size_t chunk) {
+		const auto views = CheckpointNativeStorage::CurrentViews();
+		ParallelWork(g_ThreadMan.GetPriorityThreadPool(), chunks, [&snapshot, &order, &range, views](size_t chunk) {
+			CheckpointNativeStorage::ReadScope read(views);
 			for (auto [index, end] = range(chunk); index < end; ++index) snapshot.Reserve(*order[index]);
 		}).Finish();
 		// The parts start first, being the longest single items.
 		const bool batch = CheckpointWriter::BatchEnabled();
 		const std::shared_ptr<CheckpointNativeSnapshot> boundary = CheckpointNativeSnapshot::Boundary();
-		ParallelWork work(g_ThreadMan.GetPriorityThreadPool(), parts.size() + chunks, [&snapshot, &order, &parts, &boundary, &range, sounds, batch](size_t item) {
+		ParallelWork work(g_ThreadMan.GetPriorityThreadPool(), parts.size() + chunks, [&snapshot, &order, &parts, &boundary, &range, sounds, batch, views](size_t item) {
+			CheckpointNativeStorage::ReadScope read(views);
 			CaptureSentinel::WorkerScope worker("native-freeze");
 			CheckpointNativeSnapshot::BoundaryScope boundaryScope(boundary);
 			AudioMan::SoundCheckpointSaveScope::Lend lend(sounds, batch);

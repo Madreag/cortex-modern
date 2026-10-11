@@ -3952,8 +3952,10 @@ void GameActivity::FreezeCheckpointUI(const GameActivity& source) {
 		return;
 	}
 	const std::shared_ptr<CheckpointNativeSnapshot> boundary = CheckpointNativeSnapshot::Boundary();
+	const auto views = CheckpointNativeStorage::CurrentViews();
 	const char* task = CaptureSentinel::CurrentTask();
-	ParallelWork(g_ThreadMan.GetPriorityThreadPool(), items, [&freeze, &boundary, task](size_t item) {
+	ParallelWork(g_ThreadMan.GetPriorityThreadPool(), items, [&freeze, &boundary, views, task](size_t item) {
+		CheckpointNativeStorage::ReadScope read(views);
 		CaptureSentinel::WorkerScope worker(task ? task : "activity-ui-freeze");
 		CheckpointNativeSnapshot::BoundaryScope boundaryScope(boundary);
 		freeze(item);

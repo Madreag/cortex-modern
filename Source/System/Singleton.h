@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RTEError.h"
+#include "CheckpointNativeStorage.h"
 
 namespace RTE {
 
@@ -19,7 +20,12 @@ namespace RTE {
 
 		/// Returns the sole instance of this Singleton.
 		/// @return A reference to the sole instance of this Singleton.
-		inline static Type& Instance() { return *s_Instance; }
+		inline static Type& Instance() {
+			if (CheckpointNativeStorage::Reading()) {
+				if (const void* frozen = CheckpointNativeStorage::RootView(s_Instance, sizeof(Type))) return *static_cast<Type*>(const_cast<void*>(frozen));
+			}
+			return *s_Instance;
+		}
 
 		/// Constructs this Singleton.
 		inline static void Construct() { s_Instance = new Type(); }

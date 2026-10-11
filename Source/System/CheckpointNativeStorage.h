@@ -2,7 +2,9 @@
 
 #include "CheckpointPagePool.h"
 
+#include <array>
 #include <cstddef>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <new>
@@ -34,10 +36,29 @@ namespace RTE {
 		private:
 			bool m_Previous;
 		};
+		// Manager headers use prepared storage; their pointees stay on frozen pages.
+		struct RootRange { const void* source; const void* view; size_t bytes; };
+		template<class T> class Root {
+		public:
+			explicit Root(const T* source) : m_Source(source) {}
+			Root(const Root&) = delete;
+			Root& operator=(const Root&) = delete;
+			void Freeze() noexcept { std::memcpy(m_Bytes.data(), m_Source, m_Bytes.size()); }
+			RootRange Range() const { return {m_Source, m_Bytes.data(), m_Bytes.size()}; }
+		private:
+			const T* m_Source;
+			alignas(T) std::array<std::byte, sizeof(T)> m_Bytes;
+		};
+		struct ReadViews {
+			bool active = false;
+			std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> pages;
+			std::span<const RootRange> roots;
+		};
 		struct ReadState;
 		class ReadScope {
 		public:
-			explicit ReadScope(std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> pages);
+			explicit ReadScope(std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> pages, std::span<const RootRange> roots = {});
+			explicit ReadScope(ReadViews views);
 			~ReadScope();
 			ReadScope(const ReadScope&) = delete;
 			ReadScope& operator=(const ReadScope&) = delete;
@@ -48,6 +69,8 @@ namespace RTE {
 		};
 		static bool Enabled();
 		static bool Reading() { return s_Read != nullptr; }
+		static ReadViews CurrentViews();
+		static const void* RootView(const void* source, size_t bytes = 1);
 		static void* Allocate(size_t bytes, size_t alignment);
 		static bool Deallocate(void* address) noexcept;
 		static bool Owns(const void* address);

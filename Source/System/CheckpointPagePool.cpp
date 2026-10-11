@@ -6,6 +6,7 @@
 #include "CheckpointString.h"
 #include "CheckpointFrozenContainers.h"
 #include "CheckpointArchive.h"
+#include "Singleton.h"
 #include "ScenarioRunner.h"
 #include "Vector.h"
 
@@ -469,32 +470,60 @@ std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> CheckpointNativ
 
 struct CheckpointNativeStorage::ReadState {
 	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> pages;
+	std::vector<RootRange> roots;
 	std::map<std::pair<uintptr_t, size_t>, std::string> strings;
 };
 
 thread_local CheckpointNativeStorage::ReadState* CheckpointNativeStorage::s_Read = nullptr;
 
-CheckpointNativeStorage::ReadScope::ReadScope(std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> pages)
-	: m_State(std::make_unique<ReadState>()), m_Previous(s_Read) {
-	m_State->pages.assign(pages.begin(), pages.end());
+CheckpointNativeStorage::ReadScope::ReadScope(std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> pages, std::span<const RootRange> roots)
+	: ReadScope(ReadViews{true, pages, roots}) {}
+
+CheckpointNativeStorage::ReadScope::ReadScope(ReadViews views) : m_Capture(views.active), m_Previous(s_Read) {
+	if (!views.active) return;
+	m_State = std::make_unique<ReadState>();
+	m_State->pages.assign(views.pages.begin(), views.pages.end());
+	m_State->roots.assign(views.roots.begin(), views.roots.end());
 	s_Read = m_State.get();
+}
+
+CheckpointNativeStorage::ReadViews CheckpointNativeStorage::CurrentViews() {
+	return s_Read ? ReadViews{true, s_Read->pages, s_Read->roots} : ReadViews{};
+}
+
+const void* CheckpointNativeStorage::RootView(const void* source, size_t bytes) {
+	if (!s_Read || !source) return nullptr;
+	source = Original(source);
+	const uintptr_t address = reinterpret_cast<uintptr_t>(source);
+	for (const RootRange& root: s_Read->roots) {
+		const uintptr_t start = reinterpret_cast<uintptr_t>(root.source);
+		if (address >= start && address - start <= root.bytes && bytes <= root.bytes - (address - start))
+			return static_cast<const std::byte*>(root.view) + (address - start);
+	}
+	return nullptr;
 }
 
 CheckpointNativeStorage::ReadScope::~ReadScope() { s_Read = m_Previous; }
 
 bool CheckpointNativeStorage::ReadBytes(const void* source, void* target, size_t bytes) {
 	source = Original(source);
+	if (const void* root = RootView(source, bytes)) { std::memcpy(target, root, bytes); return true; }
 	if (s_Read) for (const auto& pages: s_Read->pages) if (pages->Read(source, target, bytes)) return true;
 	return false;
 }
 
 const void* CheckpointNativeStorage::Original(const void* view) {
+	if (s_Read && view) for (const RootRange& root: s_Read->roots) {
+		const uintptr_t address = reinterpret_cast<uintptr_t>(view), start = reinterpret_cast<uintptr_t>(root.view);
+		if (address >= start && address - start < root.bytes) return static_cast<const std::byte*>(root.source) + (address - start);
+	}
 	if (s_Read) for (const auto& pages: s_Read->pages) if (const void* source = pages->Original(view)) return source;
 	return view;
 }
 
 const void* CheckpointNativeStorage::View(const void* source, size_t bytes) {
 	if (!s_Read || !source) return source;
+	if (const void* root = RootView(source, bytes)) return root;
 	for (const auto& pages: s_Read->pages) if (pages->Original(source, bytes)) return source;
 	for (const auto& pages: s_Read->pages) if (pages->Contains(source, bytes)) return pages->ReadBytes(source, bytes).data();
 	throw std::logic_error("native value is outside the frozen inventory");
@@ -509,6 +538,7 @@ std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointNativeStorage::Pag
 const void* CheckpointNativeStorage::ViewObject(const void* source) {
 	if (!s_Read || !source) return source;
 	source = Original(source);
+	if (const void* root = RootView(source)) return root;
 	for (const auto& pages: s_Read->pages) if (const void* view = pages->ReadAllocation(source)) return view;
 	throw std::logic_error("native object is outside the frozen inventory");
 }
@@ -526,6 +556,37 @@ const std::string* CheckpointNativeStorage::ReadString(const char* source, size_
 }
 
 std::string CheckpointNativeStorage::SelfTestMismatch() {
+	{
+		struct RootValues : Singleton<RootValues> { int tick = 0; CheckpointVector<CheckpointString> names; };
+		RootValues::Construct();
+		struct Release { ~Release() { RootValues::Destruct(); } } release;
+		CheckpointNativeStorage::AllocationScope allocation(true);
+		auto& live = RootValues::Instance();
+		live.tick = 29; live.names.emplace_back(std::string(337, 'a'));
+		Root<RootValues> prepared(&live);
+		const auto roots = std::array{prepared.Range()};
+		const auto pages = Prepare();
+		for (const auto& part: pages) part->Arm();
+		prepared.Freeze();
+		live.tick = 31; live.names.assign(3, CheckpointString("later"));
+		{
+			ReadScope read(pages, roots);
+			const auto exact = [&] {
+				const auto& frozen = RootValues::Instance();
+				const auto names = CheckpointValues(frozen.names);
+				return frozen.tick == 29 && names.size() == 1 && names.front() == std::string(337, 'a') && Original(&frozen.names) == &live.names;
+			};
+			if (!exact()) return "frozen manager header lost its values or container identity";
+			const ReadViews views = CurrentViews();
+			const bool worker = std::async(std::launch::async, [views, &exact] {
+				if (Reading() || RootValues::Instance().tick != 31) return false;
+				ReadScope read(views);
+				return exact();
+			}).get();
+			if (!worker) return "frozen root scope changed another thread or lost its worker view";
+		}
+		if (&RootValues::Instance() != &live || live.tick != 31) return "frozen root scope changed its live singleton";
+	}
 	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> first, second;
 	const void* address = nullptr;
 	const std::vector<uint64_t> expected{3, 5, 7, 11};
