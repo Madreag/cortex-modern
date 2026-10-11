@@ -77,6 +77,12 @@ namespace RTE::CheckpointLua {
 			try {
 				for (const auto& pages: m_Native->Pages()) pages->Drain();
 				for (Heap& heap: m_Heaps) heap.prepared->Drain();
+				m_ReadRoots = m_Roots;
+				m_ReadRoots.reserve(m_Roots.size() + m_Heaps.size());
+				for (const Heap& heap: m_Heaps) {
+					const auto [source, bytes] = heap.prepared->Image().NativeBytes();
+					m_ReadRoots.push_back({source, bytes.data(), bytes.size()});
+				}
 				m_Status.store(Status::Frozen, std::memory_order_release);
 			} catch (...) { Cancel(); throw; }
 		}
@@ -88,7 +94,7 @@ namespace RTE::CheckpointLua {
 		}
 		CheckpointNativeStorage::ReadViews NativeViews() const {
 			if (m_Status.load(std::memory_order_acquire) != Status::Frozen) throw std::logic_error("checkpoint boundary is not drained");
-			return {true, m_Native->Pages(), m_Roots};
+			return {true, m_Native->Pages(), m_ReadRoots};
 		}
 		Snapshot LuaHeap(size_t index) const {
 			if (m_Status.load(std::memory_order_acquire) != Status::Frozen) throw std::logic_error("checkpoint boundary is not drained");
@@ -108,11 +114,17 @@ namespace RTE::CheckpointLua {
 			struct Header { const Value* value; uint64_t tick; } header{identity, 1};
 			const std::array<const lua_State*, 2> states{lua, otherLua};
 			const std::array roots{Root::Of(header)};
-			ProtectedCall(lua, [&] { lua_pushinteger(lua, 11); lua_setglobal(lua, "boundaryValue"); });
+			uint64_t* inlineValue = nullptr;
+			ProtectedCall(lua, [&] {
+				lua_pushinteger(lua, 11); lua_setglobal(lua, "boundaryValue");
+				inlineValue = static_cast<uint64_t*>(lua_newuserdata(lua, sizeof(uint64_t)));
+				*inlineValue = 29; lua_setglobal(lua, "boundaryNativeValue");
+			});
 			auto prepared = std::async(std::launch::async, [&] { return Prepare(states, roots); }).get();
 			header.tick = 2; value->number = 13;
 			ProtectedCall(lua, [&] { lua_pushinteger(lua, 17); lua_setglobal(lua, "boundaryValue"); });
 			if (!prepared->Arm()) return "prepared native and Lua boundary refused";
+			*inlineValue = 31;
 			header.tick = 3; value->number = 19;
 			ProtectedCall(lua, [&] { lua_pushinteger(lua, 23); lua_setglobal(lua, "boundaryValue"); });
 			value.reset();
@@ -122,6 +134,9 @@ namespace RTE::CheckpointLua {
 				const auto* frozenHeader = CheckpointNativeStorage::Source(&header);
 				if (frozenHeader->tick != 2 || frozenHeader->value != identity || CheckpointNativeStorage::Source(identity)->number != 13)
 					return "native boundary lost its tick or object identity";
+				const auto* frozenInline = CheckpointNativeStorage::Source(inlineValue);
+				if (*frozenInline != 29 || CheckpointNativeStorage::Original(frozenInline) != inlineValue)
+					return "native values in the Lua heap lost their frozen identity";
 				const TValue number = prepared->LuaHeap(0).GlobalValue("boundaryValue");
 				if (!tvisnumber(&number) || numberVnum(&number) != 17) return "Lua boundary differs from the native tick";
 			}
@@ -162,5 +177,6 @@ namespace RTE::CheckpointLua {
 		std::vector<Heap> m_Heaps;
 		std::unique_ptr<std::byte[]> m_HeaderBytes;
 		std::vector<CheckpointNativeStorage::RootRange> m_Roots;
+		std::vector<CheckpointNativeStorage::RootRange> m_ReadRoots;
 	};
 }

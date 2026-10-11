@@ -129,6 +129,11 @@ namespace RTE::CheckpointLua {
 		LibraryHandlers Handlers() const { return m_Data ? m_Data->handlers : LibraryHandlers{}; }
 		uint64_t StateSerial() const { return m_Data ? m_Data->serial : 0; }
 		size_t ByteCount() const { return m_Data ? m_Data->committed : 0; }
+		std::pair<const void*, std::span<const std::byte>> NativeBytes() const {
+			if (!m_Data) throw std::logic_error("a Lua heap snapshot is empty");
+			m_Data->WaitCopied();
+			return {reinterpret_cast<const void*>(m_Data->base), {reinterpret_cast<const std::byte*>(m_Data->pages), m_Data->committed}};
+		}
 		size_t BlockCount() const { return m_Data ? m_Data->copied.load(std::memory_order_relaxed) : 0; }
 		int64_t FreezeUs() const { return m_Data ? m_Data->freezeUs : 0; }
 		int64_t CopyUs() const { return m_Data ? m_Data->copyUs.load(std::memory_order_relaxed) : 0; }
