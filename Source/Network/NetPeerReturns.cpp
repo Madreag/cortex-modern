@@ -85,6 +85,7 @@ namespace RTE {
 				PutSize(body, static_cast<uint32_t>(bytes.size())); body.insert(body.end(), bytes.begin(), bytes.end());
 			}
 			if (body.size() > NetHostMigrationCodec::c_MaxPeerTailBytes) return;
+			++m_PeerTailFramesSent; m_PeerTailBytesSent += body.size();
 			for (size_t offset = 0; offset < body.size(); offset += NetHostMigrationCodec::c_ChunkBytes) {
 				auto tail = PeerFrameMessage(NetHostMigrationMessageType::PeerTail);
 				tail.frame = kept->first;
@@ -100,12 +101,46 @@ namespace RTE {
 
 	void NetLockstepCoordinator::RequestPeerCommittedTail(uint64_t nowMs) {
 		if (nowMs < m_PeerTailRequestAtMs) return;
-		m_PeerTailRequestAtMs = nowMs + 100;
-		auto request = PeerFrameMessage(NetHostMigrationMessageType::PeerTailRequest);
-		request.frame = m_Stats.nextFrame;
-		for (const auto& [peer, applied]: m_PeerAppliedThrough) {
-			if (peer == m_Config.localPeerId || applied < m_Stats.nextFrame) continue;
-			SendPeerFrameMessage(request, NetTransportLane::ControlReliable, peer);
+		m_PeerTailRequestAtMs = nowMs + 25;
+		m_PeerTailRequestedUntil.erase(m_PeerTailRequestedUntil.begin(), m_PeerTailRequestedUntil.lower_bound(m_Stats.nextFrame));
+		// Keep four existing 32-frame replies in flight. Waiting until the
+		// consumer drains each reply spends another round trip every 32 ticks
+		// and can keep a relay reader permanently outside its return runway.
+		// Requests name only history a donor already reports as applied; every
+		// received frame still needs the same witnesses and prefix checks.
+		const uint64_t horizon = m_Stats.nextFrame + std::min<uint64_t>(128, NetLockstepCodec::c_MaxFutureFrameSkew);
+		for (uint64_t frame = m_Stats.nextFrame; frame < horizon;) {
+			const auto pending = m_PeerTailRequestedUntil.find(frame);
+			if (m_PeerCommittedTail.contains(frame) || (pending != m_PeerTailRequestedUntil.end() && nowMs < pending->second)) { ++frame; continue; }
+			uint8_t donor = 0; uint64_t through = 0, retryMs = 250;
+			for (const auto& [peer, applied]: m_PeerAppliedThrough) {
+				if (peer == m_Config.localPeerId || applied < frame || !HasPeerFrameRoute(peer)) continue;
+				if (donor == 0 || applied > through) { donor = peer; through = applied; }
+				if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end())
+					retryMs = std::max<uint64_t>(retryMs, 2 * path->second.P95Ms() + 100);
+			}
+			if (donor == 0) break;
+			auto request = PeerFrameMessage(NetHostMigrationMessageType::PeerTailRequest);
+			request.frame = frame;
+			// A single donor normally carries the group's signed witnesses.
+			// A missing witness or lost reply retries across all eligible donors;
+			// a lone authenticated sender still cannot certify a minority tail.
+			if (pending == m_PeerTailRequestedUntil.end()) {
+				SendPeerFrameMessage(request, NetTransportLane::ControlReliable, donor); ++m_PeerTailRequests;
+			} else for (const auto& [peer, applied]: m_PeerAppliedThrough) {
+				if (peer != m_Config.localPeerId && applied >= frame && HasPeerFrameRoute(peer)) {
+					SendPeerFrameMessage(request, NetTransportLane::ControlReliable, peer); ++m_PeerTailRequests;
+				}
+			}
+			const uint64_t end = std::min({horizon, frame + 32, through + 1});
+			for (; frame < end; ++frame) m_PeerTailRequestedUntil[frame] = nowMs + std::min<uint64_t>(retryMs, 1000);
+		}
+		if ((m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) == 0 && nowMs >= m_PeerTailLogAtMs) {
+			m_PeerTailLogAtMs = nowMs + 1000;
+			DiagnosticLine() << "[net-peer-recovery] peer=" << static_cast<int>(m_Config.localPeerId)
+			    << " now_ms=" << nowMs << " applied=" << m_LastCompletedSimulationTick.value_or(0) << " prepared=" << m_Stats.nextFrame
+			    << " donor_applied=" << m_PeerTailThrough.value_or(0) << " certified_ahead=" << m_PeerCommittedTail.size()
+			    << " requests=" << m_PeerTailRequests << std::endl;
 		}
 	}
 

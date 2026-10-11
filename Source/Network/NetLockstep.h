@@ -1699,6 +1699,8 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerAppliedAtMs;
 		uint64_t m_PeerHeartbeatAtMs = 0;
 		uint64_t m_PeerTailRequestAtMs = 0;
+		std::map<uint64_t, uint64_t> m_PeerTailRequestedUntil;
+		uint64_t m_PeerTailRequests = 0, m_PeerTailFramesSent = 0, m_PeerTailBytesSent = 0, m_PeerTailLogAtMs = 0;
 		uint64_t m_PeerVoteRetryAtMs = 0;
 		uint32_t m_FrameGroupMembers = 0;
 		std::map<uint64_t, uint32_t> m_FrameGroupChanges;

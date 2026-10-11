@@ -5356,6 +5356,8 @@ namespace RTE {
 		m_PeerPreparedPrefixes.clear(); m_PeerReplayAppliedPrefixes.clear(); m_PeerFrameWitnesses.clear();
 		m_PeerArrivalLatencyMs.clear(); m_PeerForwardedInputs.clear(); m_PeerAcceptedThrough.clear(); m_PeerInputReceipts.clear(); m_PeerAcceptedAhead.clear(); m_PeerSourceInputs.clear();
 		m_PeerCommittedTail.clear(); m_PeerFrameIncoming.clear(); m_PeerTailThrough.reset(); m_PeerAppliedThrough.clear(); m_PeerAppliedAtMs.clear();
+		m_PeerTailRequestedUntil.clear();
+		m_PeerTailRequests = m_PeerTailFramesSent = m_PeerTailBytesSent = m_PeerTailLogAtMs = 0;
 		m_PeerTailPrefixes.clear(); m_PeerTailVotes.clear(); m_PeerTailDecisions.clear();
 		m_PeerPaceStartMs.reset(); m_PeerPaceStartFrame = 0; m_PeerHadHitch = false;
 		if (!m_Config.peerSessionLinks) { PeerListenerBindings().clear(); PeerPrimaryBindings().clear(); }
@@ -10757,6 +10759,8 @@ namespace RTE {
 		out << "\"relay_observation_overflows\":" << m_Stats.relayObservationOverflows << ",";
 		out << "\"last_relay_error\":\"" << EscapeJson(m_Stats.lastRelayError) << "\",";
 		out << "\"peer_silence_leave_ms\":" << PeerSilenceLeaveMs() << ",";
+		out << "\"peer_tail_requests\":" << m_PeerTailRequests << ",\"peer_tail_frames_sent\":" << m_PeerTailFramesSent
+		    << ",\"peer_tail_bytes_sent\":" << m_PeerTailBytesSent << ",";
 		out << "\"peers_dropped_silent\":" << m_Stats.peersDroppedSilent << ",";
 		out << "\"stops_from_left_peers\":" << m_Stats.stopsFromLeftPeers << ",";
 		out << "\"stops_adjudicated_as_leaves\":" << m_Stats.stopsAdjudicatedAsLeaves << ",";
