@@ -15,7 +15,10 @@ namespace RTE::CheckpointLua {
 	public:
 		using Native = std::function<void(lua_State*, const TValue&)>;
 		SavedValues(lua_State* state, Snapshot heap, Native native) : m_State(state), m_Heap(std::move(heap)), m_Prototypes(m_Heap), m_Native(std::move(native)) {}
-		~SavedValues() { for (const auto& [source, reference]: m_Values) luaL_unref(m_State, LUA_REGISTRYINDEX, reference); }
+		~SavedValues() {
+			for (const auto& [source, reference]: m_Values) luaL_unref(m_State, LUA_REGISTRYINDEX, reference);
+			for (const auto& [value, reference]: m_Returned) luaL_unref(m_State, LUA_REGISTRYINDEX, reference);
+		}
 		SavedValues(const SavedValues&) = delete;
 		SavedValues& operator=(const SavedValues&) = delete;
 
@@ -26,13 +29,20 @@ namespace RTE::CheckpointLua {
 			if (found != m_Values.end()) throw std::logic_error("saved identity is already remembered");
 			lua_pushvalue(m_State, index);
 			const int reference = luaL_ref(m_State, LUA_REGISTRYINDEX);
+			const void* identity = lua_topointer(m_State, index);
+			bool originalInserted = false;
 			try {
 				m_Values.emplace(gcval(&source), reference);
-				m_Originals.emplace(lua_topointer(m_State, index), source);
+				originalInserted = m_Originals.emplace(identity, source).second;
 				TValue& target = m_State->base[index - 1];
 				if (tvisudata(&source) && tvisudata(&target)) udataV(&target)->serial = m_Heap.Read(&udataV(&source)->serial);
 				else if (tvisfunc(&source) && tvisfunc(&target)) funcV(&target)->c.serial = m_Heap.Read(&funcV(&source)->c.serial);
-			} catch (...) { m_Values.erase(gcval(&source)); luaL_unref(m_State, LUA_REGISTRYINDEX, reference); throw; }
+			} catch (...) {
+				m_Values.erase(gcval(&source));
+				if (originalInserted) m_Originals.erase(identity);
+				luaL_unref(m_State, LUA_REGISTRYINDEX, reference);
+				throw;
+			}
 		}
 		bool Remembered(const TValue& value) const { return tvisgcv(&value) && m_Values.contains(gcval(&value)); }
 		void UseHeap(Snapshot heap) { m_Heap = std::move(heap); m_Prototypes = PrototypeCapture(m_Heap); }
@@ -125,7 +135,18 @@ namespace RTE::CheckpointLua {
 			if (!source) {
 				const TValue value = *(m_State->top - 1);
 				if (tvispri(&value) || tvisnumber(&value)) { lua_settop(m_State, top); return value; }
-				lua_settop(m_State, top); throw std::runtime_error("saved lookup returned a new value without recorded storage");
+				try {
+					if (!tvisgcv(&value)) throw std::runtime_error("a saved getter returned a pointer without an owned value");
+					m_Heap.Read(&gcval(&value)->gch);
+					if (!tvisstr(&value)) Remember(value, -1);
+					else if (!m_Returned.contains(gcval(&value))) {
+						lua_pushvalue(m_State, -1);
+						const int reference = luaL_ref(m_State, LUA_REGISTRYINDEX);
+						try { m_Returned.emplace(gcval(&value), reference); }
+						catch (...) { luaL_unref(m_State, LUA_REGISTRYINDEX, reference); throw; }
+					}
+				} catch (...) { lua_settop(m_State, top); throw; }
+				lua_settop(m_State, top); return value;
 			}
 			lua_settop(m_State, top); return *source;
 		}
@@ -136,7 +157,7 @@ namespace RTE::CheckpointLua {
 			lua_State* const live = source->State();
 			ProtectedCall(live, [&] {
 				luaL_openlibs(live);
-				if (luaL_dostring(live, "savedTable={value=11}; savedAlias=savedTable; local n=7; savedGetter=function() n=n+1; savedTable.value=savedTable.value+n; return n,savedTable,savedAlias end; savedOther=function() return n end; savedThread=coroutine.create(function() local value=23; savedCell=function(n) if n then value=n end return value end; savedCellAlias=function() return value end; coroutine.yield(value); return value end); assert(coroutine.resume(savedThread))") != 0)
+				if (luaL_dostring(live, "savedTable={value=11}; savedAlias=savedTable; savedGenerated=setmetatable({}, {__index=function(_,key) if key=='text' then return 'private-'..tostring(37) end return {answer=37} end}); local n=7; savedGetter=function() n=n+1; savedTable.value=savedTable.value+n; return n,savedTable,savedAlias end; savedOther=function() return n end; savedThread=coroutine.create(function() local value=23; savedCell=function(n) if n then value=n end return value end; savedCellAlias=function() return value end; coroutine.yield(value); return value end); assert(coroutine.resume(savedThread))") != 0)
 					throw std::runtime_error("could not create saved getters");
 			});
 			const Snapshot heap = source->Freeze([](std::function<void()> work) {
@@ -151,7 +172,7 @@ namespace RTE::CheckpointLua {
 			ProtectedCall(state, [&] {
 				luaL_openlibs(state);
 				LuaThreadCodec::Register(state);
-				SavedValues values(state, heap, [](lua_State*, const TValue&) { throw std::runtime_error("saved getter touched native state"); });
+				SavedValues values(state, heap.WithPrivate(worker->PrivateReader()), [](lua_State*, const TValue&) { throw std::runtime_error("saved getter touched native state"); });
 				lua_pushvalue(state, LUA_GLOBALSINDEX); values.RememberLibraries(heap.GlobalValue("_G"), -1); lua_pop(state, 1);
 				values.Push(getter); values.Push(other); lua_pop(state, 1);
 				if (lua_pcall(state, 0, 3, 0) != 0) throw std::runtime_error(lua_tostring(state, -1));
@@ -168,7 +189,26 @@ namespace RTE::CheckpointLua {
 				if (lua_pcall(state, 0, 1, 0) != 0 || lua_tointeger(state, -1) != 31) mismatch = "saved open upvalue lost a closure alias";
 				lua_settop(state, 0); lua_getglobal(state, "coroutine"); lua_getfield(state, -1, "resume"); values.Push(heap.GlobalValue("savedThread"));
 				if (lua_pcall(state, 1, 2, 0) != 0 || !lua_toboolean(state, -2) || lua_tointeger(state, -1) != 31) mismatch = "saved coroutine lost its shared open upvalue";
+				lua_settop(state, 0);
+				const auto generated = heap.GlobalValue("savedGenerated");
+				const TValue text = values.Lookup(generated, "text"), table = values.Lookup(generated, "table");
+				lua_gc(state, LUA_GCCOLLECT, 0);
+				const TValue answer = values.Heap().TableValue(tabV(&table), "answer");
+				if (!tvisstr(&text) || values.Heap().ReadString(strdata(strV(&text)), values.Heap().Read(&strV(&text)->len)) != "private-37" ||
+				    !tvistab(&table) || !tvisnumber(&answer) || numberVnum(&answer) != 37)
+					mismatch = "saved getter returned storage that did not survive private collection";
+				values.Push(table); lua_setfield(state, LUA_GLOBALSINDEX, "savedPinned");
+				if (luaL_dostring(state, "assert(savedPinned.answer==37); savedPinned.answer=41") != 0)
+					throw std::runtime_error("the saved getter table lost its retained identity");
+				const TValue changed = values.Heap().TableValue(tabV(&table), "answer");
+				if (!tvisnumber(&changed) || numberVnum(&changed) != 41) mismatch = "saved getter table changes went to a different value";
 			});
+			const Snapshot privateHeap = heap.WithPrivate(worker->PrivateReader());
+			const auto* closed = state;
+			worker.reset();
+			bool refused = false;
+			try { privateHeap.Read(closed); } catch (const std::runtime_error&) { refused = true; }
+			if (!refused) mismatch = "saved getter storage stayed readable after its private VM closed";
 			return mismatch;
 		}
 
@@ -179,6 +219,7 @@ namespace RTE::CheckpointLua {
 		Native m_Native;
 		std::unordered_map<const GCobj*, int> m_Values;
 		std::unordered_map<const void*, TValue> m_Originals;
+		std::unordered_map<const GCobj*, int> m_Returned;
 		struct Cell { int function; int index; };
 		std::unordered_map<const GCupval*, Cell> m_Cells;
 		std::unordered_map<const GCupval*, std::vector<Cell>> m_CellUses;

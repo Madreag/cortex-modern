@@ -121,6 +121,7 @@ namespace RTE::CheckpointLua {
 	// The VM's memory at one freeze: a copy of every committed page. Addresses identify the source VM; only the copy is read.
 	class Snapshot {
 	public:
+		using Reader = std::function<std::span<const std::byte>(const void*, size_t)>;
 		static constexpr size_t c_PageBytes = 4096;
 		struct Page { std::byte bytes[c_PageBytes]; };
 
@@ -149,7 +150,7 @@ namespace RTE::CheckpointLua {
 			return value;
 		}
 
-		// The view stays valid while a copy of this snapshot remains alive.
+		// Frozen views stay with the snapshot; private getter views last only until their VM closes.
 		std::span<const std::byte> ReadBytes(const void* address, size_t size) const {
 			if (!m_Data) throw std::runtime_error("a Lua heap snapshot is empty");
 			if (size == 0) return {};
@@ -159,7 +160,14 @@ namespace RTE::CheckpointLua {
 				return {reinterpret_cast<const std::byte*>(m_Data->pages) + (source - m_Data->base), size};
 			}
 			for (const auto& values: m_Scratch) if (const auto* bytes = values->Find(address, size)) return {bytes, size};
+			for (const auto& reader: m_Private) if (const auto bytes = reader(address, size); !bytes.empty()) return bytes;
 			throw std::runtime_error("a Lua heap read lies outside the recorded heap");
+		}
+		Snapshot WithPrivate(Reader reader) const {
+			if (!m_Data || !reader) throw std::logic_error("a saved getter needs a recorded heap and private reader");
+			Snapshot result = *this;
+			result.m_Private.push_back(std::move(reader));
+			return result;
 		}
 		Snapshot WithScratch(std::shared_ptr<const ScratchData> values) const {
 			if (!m_Data || !values || !values->sealed) throw std::logic_error("unfinished frozen Lua descriptors");
@@ -270,6 +278,7 @@ namespace RTE::CheckpointLua {
 		};
 		std::shared_ptr<const Data> m_Data;
 		std::vector<std::shared_ptr<const ScratchData>> m_Scratch;
+		std::vector<Reader> m_Private;
 		explicit Snapshot(std::shared_ptr<const Data> data) : m_Data(std::move(data)) {}
 
 		friend class HeapOwner;
@@ -448,6 +457,7 @@ namespace RTE::CheckpointLua {
 			}
 			// The wrapper keeps lua_close from destroying the bootstrap's shared arena.
 			if (m_State) lua_close(std::exchange(m_State, nullptr));
+			if (m_PrivateRead) m_PrivateRead->base.store(0, std::memory_order_release);
 			m_Bootstrap.reset();
 			Release();
 		}
@@ -457,6 +467,22 @@ namespace RTE::CheckpointLua {
 		HeapOwner& operator=(HeapOwner&&) = delete;
 
 		lua_State* State() const { return m_State; }
+		Snapshot::Reader PrivateReader() const {
+			if (!m_PrivateRead) {
+				m_PrivateRead = std::make_shared<PrivateReadLife>();
+				m_PrivateRead->committed.store(m_Committed, std::memory_order_release);
+				m_PrivateRead->base.store(m_Base, std::memory_order_release);
+			}
+			return [life = m_PrivateRead](const void* address, size_t bytes) -> std::span<const std::byte> {
+				if (life->thread != std::this_thread::get_id()) throw std::logic_error("a saved getter heap belongs to its saver thread");
+				const uintptr_t base = life->base.load(std::memory_order_acquire);
+				const size_t committed = life->committed.load(std::memory_order_acquire);
+				const uintptr_t at = reinterpret_cast<uintptr_t>(address);
+				if (base && at >= base && bytes <= committed && at - base <= committed - bytes)
+					return {reinterpret_cast<const std::byte*>(address), bytes};
+				return {};
+			};
+		}
 
 		AllocationStats Stats() const { return {m_Bytes, m_Blocks}; }
 
@@ -708,6 +734,12 @@ namespace RTE::CheckpointLua {
 			return next.fetch_add(1, std::memory_order_relaxed) + 1;
 		}
 		const uint64_t m_Identity = NextIdentity();
+		struct PrivateReadLife {
+			const std::thread::id thread = std::this_thread::get_id();
+			std::atomic<uintptr_t> base{0};
+			std::atomic<size_t> committed{0};
+		};
+		mutable std::shared_ptr<PrivateReadLife> m_PrivateRead;
 		std::shared_ptr<PreparationLife> m_PreparationLife = std::make_shared<PreparationLife>();
 		std::unique_ptr<lua_State, decltype(&lua_close)> m_Bootstrap{nullptr, lua_close};
 		lua_State* m_State = nullptr;
@@ -1088,6 +1120,7 @@ namespace RTE::CheckpointLua {
 				if (m_Committed + step > c_ReserveBytes || !Commit(step)) return nullptr;
 				m_Committed += step;
 				m_PublishedCommitted.store(m_Committed, std::memory_order_release);
+				if (m_PrivateRead) m_PrivateRead->committed.store(m_Committed, std::memory_order_release);
 			}
 			void* result = reinterpret_cast<void*>(m_Base + m_Used);
 			m_Used += bytes;
