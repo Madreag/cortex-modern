@@ -215,6 +215,7 @@ namespace {
 		// sim_frame counts every sim update since launch, lobby ticks included; lockstep_frame is the round's own.
 		const uint64_t lockstepFrame = ScenarioRunner::HasLockstepCoordinator() ? ScenarioRunner::GetLockstepCompletedFrame() : 0;
 		Json observed = {{"at_ms", NowMs()}, {"render", probe.renders}, {"sim_frame", g_TimerMan.GetSimUpdateCount()},
+		    {"unix_ms", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()},
 		    {"lockstep_frame", lockstepFrame},
 		    {"screen", MenuScreen()},
 		    {"service", snapshot.serviceState}, {"host", snapshot.isHost}, {"activity_preset", snapshot.activityPreset},
@@ -613,7 +614,7 @@ namespace {
 		} else if (op == "wait") {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("lockstep_frame_at_least") || step.contains("renders") ||
 			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
-			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
+			    step.contains("editing") || step.contains("seat_ready") || step.contains("brains_ready") || step.contains("seat_text_contains") ||
 			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer"),
 			    "wait has no predicate");
 			if (step.contains("held_peer") && !HeldPeer(step.at("held_peer"))) return false;
@@ -636,6 +637,11 @@ namespace {
 				    seat->at("screen_text").get<std::string>().find(step["seat_text_contains"].get<std::string>()) == std::string::npos) return false;
 			}
 			if (step.contains("editing") && observed["editing"] != step["editing"]) return false;
+			if (step.contains("brains_ready")) {
+				const auto& seats = observed.at("placement_seats");
+				if (seats.size() != step.at("brains_ready").get<size_t>() ||
+				    !std::all_of(seats.begin(), seats.end(), [](const Json& seat) { return seat.at("ready") == true; })) return false;
+			}
 			if (step.contains("seat_ready")) {
 				const int player = ProbePlayer(step.at("seat_ready"), observed);
 				const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),

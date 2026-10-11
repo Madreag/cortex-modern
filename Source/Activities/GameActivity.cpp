@@ -3,6 +3,8 @@
 #include "GameActivity.h"
 #include "MetricsCollector.h"
 
+#include <chrono>
+
 #include "CameraMan.h"
 #include "PresetMan.h"
 #include "MovableMan.h"
@@ -1279,7 +1281,9 @@ bool GameActivity::CommitLockstepBrainPlacement(int player, const std::string& c
 		std::ostringstream line;
 		line << "[net-match] brain placement committed: seat=" << player << " team=" << placement.team
 		     << " preset=" << placement.module << "/" << placement.preset
-		     << " pos=" << placement.posX << "," << placement.posY << " via=" << via;
+		     << " pos=" << placement.posX << "," << placement.posY << " via=" << via
+		     << " frame=" << ScenarioRunner::GetLockstepCompletedFrame()
+		     << " unix_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		System::PrintDiagnosticLine(line.str());
 	}
 	return true;
@@ -1750,7 +1754,9 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 		std::ostringstream line;
 		line << "[net-match] brain placement applied: seat=" << player << " team=" << m_Team[player]
 		     << " peer=" << static_cast<int>(senderPeerId) << " preset=" << placement.module << "/" << placement.preset
-		     << " pos=" << placement.posX << "," << placement.posY;
+		     << " pos=" << placement.posX << "," << placement.posY
+		     << " frame=" << ScenarioRunner::GetLockstepAppliedFrame()
+		     << " unix_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		System::PrintDiagnosticLine(line.str());
 	}
 	// Presentation only: every peer names the seat that just placed, and the waiting strip counts down.
