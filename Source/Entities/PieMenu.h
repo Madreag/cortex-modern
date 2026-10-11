@@ -241,6 +241,7 @@ namespace RTE {
 
 		/// Packs the enabled state, mode, timers, cursor and slice pointers (by slice index) as one save line, the active sub-menu nested.
 		std::string PackInteractionState() const;
+		std::string PackCheckpointInteractionState() const;
 
 		/// Restores the state packed by PackInteractionState onto this menu's current slices.
 		void UnpackInteractionState(const std::string& packed);

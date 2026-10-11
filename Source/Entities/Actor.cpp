@@ -209,7 +209,7 @@ Actor::Actor(const Actor& source, CheckpointNativeSnapshot& snapshot) :
 	m_FrozenPieMenu(snapshot.Freeze(source.m_FrozenPieMenu)),
 	m_FrozenPieMenuState(snapshot.Freeze(source.m_FrozenPieMenuState)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
-	if (source.m_PieMenu) { m_FrozenPieMenu = snapshot.FreezeWriter(source.m_PieMenu.get()); m_FrozenPieMenuState = source.m_PieMenu->PackInteractionState(); }
+	if (source.m_PieMenu) { m_FrozenPieMenu = snapshot.FreezeWriter(source.m_PieMenu.get()); m_FrozenPieMenuState = source.m_PieMenu->PackCheckpointInteractionState(); }
 	for (size_t index = 0; index < m_PersistedActorIconReferences.size(); ++index) if (m_PersistedActorIconReferences[index].empty()) m_PersistedActorIconReferences[index] = CaptureActorIconReference(index ? source.m_pControllerIcon : source.m_pTeamIcon);
 }
 

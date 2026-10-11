@@ -48,7 +48,7 @@ GAScripted::GAScripted(const GAScripted& source, CheckpointNativeSnapshot& snaps
 	m_GlobalScriptsList(snapshot.Freeze(source.m_GlobalScriptsList, &m_GlobalScriptsList)),
 	m_HasSavedGlobalScripts(snapshot.Freeze(source.m_HasSavedGlobalScripts)),
 	m_ScriptFunctions{} {
-	for (const auto& slice: source.m_PieSlicesToAdd) m_FrozenPieSlices.push_back(snapshot.FreezeWriter(slice.get()));
+	for (const auto& slice: CheckpointValues(source.m_PieSlicesToAdd)) m_FrozenPieSlices.push_back(snapshot.FreezeWriter(slice.get()));
 }
 
 Entity* GAScripted::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {

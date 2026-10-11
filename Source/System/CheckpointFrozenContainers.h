@@ -71,6 +71,16 @@ namespace RTE {
 			return Read(static_cast<const Links*>(node))->next;
 		}
 		inline const void* HashNext(const void* node) { return *Read(static_cast<const void* const*>(node)); }
+#ifdef _LIBCPP_VERSION
+		template<class T> struct DequeHeader { const T* const* first; const T* const* begin; const T* const* end; const T* const* capacity; size_t start; size_t size; };
+		template<class T, class A> DequeHeader<T> Deque(const std::deque<T, A>& source) {
+			static_assert(std::is_empty_v<A> && sizeof(source) == sizeof(DequeHeader<T>));
+			DequeHeader<T> header;
+			std::memcpy(&header, &source, sizeof(header));
+			if (header.size != source.size()) throw std::logic_error("unsupported frozen deque layout");
+			return header;
+		}
+#endif
 	}
 
 	template<class T> class CheckpointFrozenRange {
@@ -134,15 +144,11 @@ namespace RTE {
 			values.Add(CheckpointContainerDetail::Read(block + at % blockSize));
 		}
 #elif defined(_LIBCPP_VERSION)
-		struct IteratorFields { const T* const* map; const T* value; };
-		static_assert(sizeof(typename std::deque<T, Allocator>::const_iterator) == sizeof(IteratorFields));
-		const auto first = std::bit_cast<IteratorFields>(source.begin());
+		const auto header = CheckpointContainerDetail::Deque(source);
 		const size_t blockSize = std::__deque_block_size<T, ptrdiff_t>::value;
-		const T* initial = *CheckpointContainerDetail::Read(first.map);
-		const size_t offset = first.value - initial;
 		for (size_t index = 0; index < source.size(); ++index) {
-			const size_t at = offset + index;
-			const T* block = *CheckpointContainerDetail::Read(first.map + at / blockSize);
+			const size_t at = header.start + index;
+			const T* block = *CheckpointContainerDetail::Read(header.begin + at / blockSize);
 			values.Add(CheckpointContainerDetail::Read(block + at % blockSize));
 		}
 #endif
@@ -255,4 +261,33 @@ namespace RTE {
 		return Access::Get(source);
 	}
 	template<class T, class Container> auto CheckpointValues(const std::queue<T, Container>& source) { return CheckpointValues(CheckpointQueueValues(source)); }
+
+	template<class T, class A, class Iterator> size_t CheckpointIteratorIndex(const std::list<T, A>& source, Iterator position) {
+		const void* wanted = CheckpointContainerDetail::Node(position);
+		const auto end = CheckpointContainerDetail::End(source);
+		if (wanted == CheckpointNativeStorage::Original(CheckpointContainerDetail::Node(end))) return source.size();
+		const auto* value = CheckpointNativeStorage::Original(CheckpointContainerDetail::Value(end, wanted));
+		const auto values = CheckpointValues(source);
+		for (size_t index = 0; index < values.size(); ++index) if (CheckpointNativeStorage::Original(&values[index]) == value) return index;
+		throw std::logic_error("frozen list iterator lies outside its container");
+	}
+
+	template<class T, class A, class Iterator> size_t CheckpointIteratorIndex(const std::deque<T, A>& source, Iterator position) {
+#ifdef _MSVC_STL_VERSION
+		const auto first = source._Unchecked_begin();
+		return position._Myoff - first._Myoff;
+#elif defined(_LIBCPP_VERSION)
+		if (!CheckpointNativeStorage::IsView(&source)) return static_cast<size_t>(typename std::deque<T, A>::const_iterator(position) - source.begin());
+		struct Fields { const T* const* map; const T* value; };
+		static_assert(sizeof(Iterator) == sizeof(Fields));
+		const auto fields = std::bit_cast<Fields>(position);
+		const auto header = CheckpointContainerDetail::Deque(source);
+		if (!header.size) return 0;
+		const size_t blockSize = std::__deque_block_size<T, ptrdiff_t>::value;
+		const T* block = *CheckpointContainerDetail::Read(fields.map);
+		return (fields.map - header.begin) * blockSize + (fields.value - block) - header.start;
+#else
+		return static_cast<size_t>(typename std::deque<T, A>::const_iterator(position) - source.begin());
+#endif
+	}
 }

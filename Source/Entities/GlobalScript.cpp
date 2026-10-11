@@ -25,7 +25,7 @@ GlobalScript::GlobalScript(const GlobalScript& source, CheckpointNativeSnapshot&
 	m_FrozenPieSlices(snapshot.Freeze(source.m_FrozenPieSlices)),
 	m_PieSlicesToAdd{},
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
-	for (const auto& slice: source.m_PieSlicesToAdd) m_FrozenPieSlices.push_back(snapshot.FreezeWriter(slice.get()));
+	for (const auto& slice: CheckpointValues(source.m_PieSlicesToAdd)) m_FrozenPieSlices.push_back(snapshot.FreezeWriter(slice.get()));
 }
 
 Entity* GlobalScript::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {

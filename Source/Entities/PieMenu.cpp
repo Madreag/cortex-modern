@@ -82,7 +82,7 @@ PieMenu::PieMenu(const PieMenu& source, CheckpointNativeSnapshot& snapshot) :
 	m_CheckpointInitialized(source.m_CheckpointInitialized) {
 	CheckpointVector<PieSlice*> savedSlices;
 	savedSlices.reserve(source.m_CurrentPieSlices.size());
-	for (PieSlice* slice: source.m_CurrentPieSlices) if (slice->GetOriginalSource() == source.m_Owner) savedSlices.push_back(slice);
+	for (PieSlice* slice: CheckpointValues(source.m_CurrentPieSlices)) if (static_cast<const PieSlice*>(snapshot.Source(slice))->GetOriginalSource() == source.m_Owner) savedSlices.push_back(slice);
 	m_CurrentPieSlices = snapshot.Freeze(savedSlices, &m_CurrentPieSlices);
 	for (size_t index = 0; index < m_PieQuadrants.size(); ++index) {
 		m_PieQuadrants[index].m_Enabled = source.m_PieQuadrants[index].m_Enabled;
@@ -298,6 +298,29 @@ std::string PieMenu::PackInteractionState() const {
 	if (m_ActiveSubPieMenu) {
 		out << "|{" << m_ActiveSubPieMenu->PackInteractionState() << "}";
 	}
+	return out.str();
+}
+
+std::string PieMenu::PackCheckpointInteractionState() const {
+	const auto& source = *static_cast<const PieMenu*>(CheckpointNativeSnapshot::Source(this));
+	const auto slices = CheckpointValues(source.m_CurrentPieSlices);
+	const auto indexOf = [&slices](const PieSlice* slice) {
+		for (size_t index = 0; index < slices.size(); ++index) if (slices[index] == slice) return static_cast<int>(index);
+		return -1;
+	};
+	int activeSubMenuSlice = -1;
+	for (size_t index = 0; source.m_ActiveSubPieMenu && index < slices.size(); ++index) {
+		if (static_cast<const PieSlice*>(CheckpointNativeSnapshot::Source(slices[index]))->GetSubPieMenu() == source.m_ActiveSubPieMenu) activeSubMenuSlice = static_cast<int>(index);
+	}
+	std::ostringstream out;
+	out << static_cast<int>(source.m_EnabledState) << "|" << static_cast<int>(source.m_MenuMode) << "|";
+	AppendPackedTicks(out, source.m_EnableDisableAnimationTimer.GetStartSimTimeMS());
+	out << "|";
+	AppendPackedTicks(out, source.m_HoverTimer.GetStartSimTimeMS());
+	out << "|";
+	AppendPackedTicks(out, source.m_SubPieMenuHoverOpenTimer.GetStartSimTimeMS());
+	out << "|" << HexFloatString(source.m_CursorAngle) << "|" << (source.m_CursorInVisiblePosition ? 1 : 0) << "|" << indexOf(source.m_HoveredPieSlice) << "|" << indexOf(source.m_ActivatedPieSlice) << "|" << indexOf(source.m_AlreadyActivatedPieSlice) << "|" << activeSubMenuSlice;
+	if (source.m_ActiveSubPieMenu) out << "|{" << source.m_ActiveSubPieMenu->PackCheckpointInteractionState() << "}";
 	return out.str();
 }
 

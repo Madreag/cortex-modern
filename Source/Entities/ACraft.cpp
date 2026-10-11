@@ -60,7 +60,7 @@ ACraft::ACraft(const ACraft& source, CheckpointNativeSnapshot& snapshot) :
 	m_HatchCloseSound(snapshot.Freeze(source.m_HatchCloseSound)),
 	m_CollectedInventory(snapshot.Freeze(source.m_CollectedInventory, &m_CollectedInventory)),
 	m_Exits(snapshot.Freeze(source.m_Exits)),
-	m_CurrentExit(std::next(m_Exits.begin(), std::distance(source.m_Exits.cbegin(), std::list<Exit>::const_iterator(source.m_CurrentExit)))),
+	m_CurrentExit(std::next(m_Exits.begin(), CheckpointIteratorIndex(source.m_Exits, source.m_CurrentExit))),
 	m_PersistedCurrentExit(snapshot.Freeze(source.m_PersistedCurrentExit)),
 	m_ExitInterval(snapshot.Freeze(source.m_ExitInterval)),
 	m_ExitTimer(snapshot.Freeze(source.m_ExitTimer)),

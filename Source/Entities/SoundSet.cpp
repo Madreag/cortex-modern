@@ -140,9 +140,11 @@ uint64_t SoundSet::NameSoundData(std::span<const SoundData> data) {
 }
 
 void SoundSet::AppendFreezeKey(std::vector<uint64_t>& key) const {
+	const auto* source = static_cast<const SoundSet*>(CheckpointNativeStorage::View(this, sizeof(SoundSet)));
+	if (source != this) { source->AppendFreezeKey(key); return; }
 	key.insert(key.end(), {m_SoundDataSource, static_cast<uint64_t>(m_SoundSelectionCycleMode), m_CurrentSelection.first, static_cast<uint32_t>(m_CurrentSelection.second),
 	    m_SimulationSelection.first, static_cast<uint32_t>(m_SimulationSelection.second), m_CheckpointInitialized, m_SubSoundSets.size()});
-	for (const SoundSet* child: m_SubSoundSets) child->AppendFreezeKey(key);
+	for (const SoundSet* child: CheckpointValues(m_SubSoundSets)) child->AppendFreezeKey(key);
 }
 
 std::vector<std::pair<bool, int>> SoundSet::CheckpointSelections() const {
