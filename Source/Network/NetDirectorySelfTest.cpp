@@ -3189,6 +3189,11 @@ namespace RTE {
 					*error = "signal long-poll: the sink took " + Taken(s) + ", expected 1:one";
 					return false;
 				}
+				s.channel.Update(2); // The second reply is empty even if the server returns it early.
+				s.channel.Update(7000);
+				if (s.sent->size() != 2) { *error = "an immediate empty long poll ignored its seven-second idle cadence"; return false; }
+				s.channel.Update(7001);
+				if (s.sent->size() != 3) { *error = "the empty long poll did not resume at its idle deadline"; return false; }
 				// The wait is clamped under the HTTP client's total request timeout.
 				ScriptedChannel clamped(false);
 				clamped.channel.SetPollWait(60);

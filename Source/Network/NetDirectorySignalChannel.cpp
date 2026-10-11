@@ -409,7 +409,7 @@ namespace RTE {
 		}
 		m_BackoffMs = 0;
 		// A server that answers an empty long poll immediately must still respect the idle cadence.
-		m_NextPollMs = m_PollWaitS > 0 ? (inbound.empty() ? std::max(nowMs, m_PollStartedMs + c_PollIntervalMs) : nowMs) : nowMs + c_PollIntervalMs;
+		m_NextPollMs = m_PollWaitS > 0 ? (inbound.empty() ? std::max(nowMs, m_PollStartedMs + std::max<uint64_t>(c_PollIntervalMs, m_PollWaitS * 1000ULL)) : nowMs) : nowMs + c_PollIntervalMs;
 		for (const Signal& signal : inbound) {
 			if (signal.seq <= m_Cursor) {
 				continue; // re-delivered: the sink already took it
