@@ -482,8 +482,12 @@ namespace RTE {
 		for (const auto& input: inputs) {
 			if (input.targetFrame < m_Stats.nextFrame || input.targetFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew) continue;
 			if ((m_PeerRejectedInputs[input.targetFrame] & SeatBit(input.senderPeerId)) != 0) {
-				if (!m_PeerBridgeCertificates.contains({input.targetFrame, 0}))
-					m_PeerPendingBridgeInputs[input.targetFrame].try_emplace(input.senderPeerId, input);
+				if (!m_PeerBridgeCertificates.contains({input.targetFrame, 0})) {
+					const auto pending = m_PeerPendingBridgeInputs[input.targetFrame].try_emplace(input.senderPeerId, input);
+					if (pending.second && std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-input-at-vote] local=" << static_cast<int>(m_Config.localPeerId)
+					    << " owner=" << static_cast<int>(input.senderPeerId) << " frame=" << input.targetFrame << " prepared=" << m_Stats.nextFrame
+					    << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " now_ms=" << nowMs << std::endl;
+				}
 				continue;
 			}
 			const auto bridge = m_PeerBridges.find(input.senderPeerId);

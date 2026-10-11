@@ -215,7 +215,17 @@ namespace RTE {
 				    << " delay_ticks=" << delay << " neutral_through=" << proposal.frame + neutral << std::endl;
 			}
 		}
-		if (proposal.preparedFrame == 0) for (uint8_t peer: proposal.members) m_PeerRejectedInputs[frame] |= SeatBit(peer);
+		if (proposal.preparedFrame == 0) {
+			for (uint8_t peer: proposal.members) m_PeerRejectedInputs[frame] |= SeatBit(peer);
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+				DiagnosticLine detail;
+				detail << "[net-peer-hold-vote] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << frame
+				    << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " reference=" << static_cast<int>(m_PeerPaceReference)
+				    << " now_ms=" << nowMs << " members=" << proposal.connectedMask;
+				for (uint8_t peer: proposal.members) detail << " missing=" << static_cast<int>(peer) << ":" << m_Stats.peers[peer].highestTargetFrame
+				    << "/" << m_PeerAppliedThrough[peer];
+			}
+		}
 		SendPeerFrameMessage(proposal);
 		TryCommitPeerBridge(proposal.frame, nowMs, DecisionKind(proposal));
 		return m_PeerBridgeCertificates.contains({frame, 0});
