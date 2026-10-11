@@ -7,6 +7,7 @@
 
 #include "lz4.h"
 
+#include <chrono>
 #include <cmath>
 #include <limits>
 

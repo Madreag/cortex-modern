@@ -27,9 +27,13 @@ def run_case(repo, out, case, timeout, lag_ms, initial_delay):
     common = ['-net-match-service-e2e', '-net-port', '47631', '-net-match-peers', '3',
               '-net-match-mode', 'coop-pve', '-net-match-ticks', str(ticks),
               '-max-ticks', str(ticks), '-net-match-input-delay', str(initial_delay),
-              '-net-match-auto-delay', '-net-match-service-preset', 'Skirmish Defense',
-              '-net-match-service-scene', 'Grasslands', '-net-match-e2e-brain-placement',
+              '-net-match-auto-delay', '-net-match-service-preset', 'Net Lifecycle Test' if returning else 'Skirmish Defense',
+              '-net-match-service-scene', 'Grasslands',
               '-seed', '42', '-num-lua-states', '4']
+    if returning:
+        common += ['-net-match-service-module', 'Tests.rte']
+    else:
+        common += ['-net-match-e2e-brain-placement']
     try:
         for peer in range(1, 4):
             folder = out / f'peer{peer}'
@@ -127,7 +131,8 @@ def run_case(repo, out, case, timeout, lag_ms, initial_delay):
                   source_tip=subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
                   binary_sha256=hashlib.sha256(engine_executable(repo).read_bytes()).hexdigest(),
                   shared_ticks=sum(len(values) > 1 for values in shared_hashes.values()), hash_mismatches=sorted(hash_mismatches),
-                  topology='three engines on one Linux box', relay_proof=False)
+                  topology='three engines on one Linux box', relay_proof=False,
+                  activity='Net Lifecycle Test' if returning else 'Skirmish Defense')
     result['pass'] = result.pop('pass_')
     (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result), flush=True)
