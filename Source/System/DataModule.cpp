@@ -1,4 +1,5 @@
 #include "DataModule.h"
+#include "CheckpointFrozenContainers.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
 #include "LuaMan.h"
@@ -249,6 +250,11 @@ std::string DataModule::GetEntityDataLocation(const std::string& exactType, cons
 	if (foundEntity == nullptr) {
 		return "";
 	}
+	if (CheckpointNativeStorage::Reading()) {
+		for (const auto& preset: CheckpointValues(CheckpointNativeStorage::Source(this)->m_PresetList))
+			if (preset.m_EntityPreset == foundEntity) return preset.m_FileReadFrom.Value();
+		throw std::logic_error("saved preset has no source file");
+	}
 
 	// Search for entity in instanceList
 	for (const PresetEntry& presetListEntry: m_PresetList) {
@@ -263,6 +269,15 @@ std::string DataModule::GetEntityDataLocation(const std::string& exactType, cons
 
 const Entity* DataModule::GetEntityPreset(const std::string& exactType, const std::string& instance) {
 	if (exactType.empty() || instance == "None" || instance.empty()) {
+		return nullptr;
+	}
+	if (CheckpointNativeStorage::Reading()) {
+		const auto* source = CheckpointNativeStorage::Source(this);
+		if (const auto* type = CheckpointFind(source->m_TypeMap, exactType)) {
+			for (const auto& [name, entity]: CheckpointValues(type->second)) {
+				if (name == instance && CheckpointNativeStorage::Source(entity)->GetClassName() == exactType) return entity;
+			}
+		}
 		return nullptr;
 	}
 	if (auto classItr = m_TypeMap.find(exactType); classItr != m_TypeMap.end()) {
@@ -294,7 +309,7 @@ bool DataModule::AddEntityPreset(Entity* entityToAdd, bool overwriteSame, const 
 			existingEntity->m_IsOriginalPreset = true;
 			// Alter the instance entry to reflect the data file location of the new definition
 			if (readFromFile != "Same") {
-				std::list<PresetEntry>::iterator itr = m_PresetList.begin();
+				auto itr = m_PresetList.begin();
 				for (; itr != m_PresetList.end(); ++itr) {
 					// When we find the correct entry, alter its data file location
 					if ((*itr).m_EntityPreset == existingEntity) {
@@ -318,7 +333,7 @@ bool DataModule::AddEntityPreset(Entity* entityToAdd, bool overwriteSame, const 
 			RTEAbort("Tried to add first entity instance to data module " + m_FileName + " without specifying a data file!");
 		}
 
-		m_PresetList.push_back(PresetEntry(entityClone, readFromFile != "Same" ? readFromFile : m_PresetList.back().m_FileReadFrom));
+		m_PresetList.push_back(PresetEntry(entityClone, readFromFile != "Same" ? readFromFile : m_PresetList.back().m_FileReadFrom.Value()));
 		m_EntityList.push_back(entityClone);
 		entityAdded = AddToTypeMap(entityClone);
 		RTEAssert(entityAdded, "Unexpected problem while adding Entity instance \"" + entityToAdd->GetPresetName() + "\" to the type map of data module: " + m_FileName);
@@ -396,6 +411,12 @@ bool DataModule::GetAllOfOrNotOfGroups(std::list<Entity*>& entityList, const std
 bool DataModule::GetAllOfType(std::list<Entity*>& entityList, const std::string& type) {
 	if (type.empty()) {
 		return false;
+	}
+	if (CheckpointNativeStorage::Reading()) {
+		const auto* found = CheckpointFind(CheckpointNativeStorage::Source(this)->m_TypeMap, type);
+		if (!found) return false;
+		for (const auto& [name, entity]: CheckpointValues(found->second)) entityList.push_back(entity);
+		return true;
 	}
 
 	if (auto classItr = m_TypeMap.find(type); classItr != m_TypeMap.end()) {
@@ -484,7 +505,7 @@ bool DataModule::AddToTypeMap(Entity* entityToAdd) {
 
 		// No instances of this entity have been added yet so add a class category for it
 		if (classItr == m_TypeMap.end()) {
-			classItr = (m_TypeMap.insert(std::pair<std::string, std::list<std::pair<std::string, Entity*>>>(pClass->GetName(), std::list<std::pair<std::string, Entity*>>()))).first;
+			classItr = m_TypeMap.try_emplace(pClass->GetName()).first;
 		}
 
 		// NOTE We're adding the entity to the class category list but not transferring ownership. Also, we're not checking for collisions as they're assumed to have been checked for already
