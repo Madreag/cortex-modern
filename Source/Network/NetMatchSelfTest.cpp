@@ -2402,17 +2402,69 @@ namespace RTE {
 			explicit PingingLoopbackTransport(LoopbackTransport& inner) : m_Inner(inner) {}
 			bool StartHost(uint16_t port, std::string* error = nullptr) override { return m_Inner.StartHost(port, error); }
 			bool Connect(const std::string& address, uint16_t port, std::string* error = nullptr) override { return m_Inner.Connect(address, port, error); }
-			bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override { return m_Inner.Send(peerId, lane, bytes, error, congested); }
+			bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
+				if (m_MissingTimingReplies) {
+					const auto decoded = NetLobbyProtocol::Decode(bytes);
+					const auto* reply = decoded.ok ? std::get_if<NetLobbyConfigAck>(&decoded.packet.payload) : nullptr;
+					if (reply && reply->reason.starts_with("timing:") && reply->reason.ends_with(":reply")) {
+						if (congested) *congested = false;
+						++m_TimingRepliesDropped;
+						return true;
+					}
+				}
+				return m_Inner.Send(peerId, lane, bytes, error, congested);
+			}
 			void Disconnect(NetPeerId peerId, const std::string& reason) override { m_Inner.Disconnect(peerId, reason); }
 			void Stop() override { m_Inner.Stop(); }
 			std::vector<NetTransportEvent> PollEvents() override { return m_Inner.PollEvents(); }
 			uint32_t GetPeerPingMs(NetPeerId) const override { return m_PingMs; }
 			void SetPingMs(uint32_t pingMs) { m_PingMs = pingMs; }
+			void SetMissingTimingReplies() { m_MissingTimingReplies = true; }
+			uint32_t TimingRepliesDropped() const { return m_TimingRepliesDropped; }
 
 		private:
 			LoopbackTransport& m_Inner;
 			uint32_t m_PingMs = 0;
+			bool m_MissingTimingReplies = false;
+			uint32_t m_TimingRepliesDropped = 0;
 		};
+
+		bool TestLobbyStartTimingEnds(std::string* error) {
+			for (unsigned row = 0; row < 4; ++row) {
+				LoopbackTransport a, b; NetPeerId ar, br;
+				if (!StartLoopbackTransports(static_cast<uint16_t>(43570 + row), a, b, ar, br, error)) return false;
+				PingingLoopbackTransport measured(a), missing(b);
+				measured.SetPingMs(row == 1 ? 0 : row == 2 ? 800 : 120);
+				missing.SetMissingTimingReplies();
+				NetLobbySession host, client;
+				NetLobbySessionConfig hc;
+				hc.host = true; hc.localPeerId = 1; hc.remotePeerId = 2; hc.remoteTransportPeerId = ar;
+				hc.matchConfig = MakeConfig(); hc.autoStart = false; hc.autoInputDelay = true;
+				hc.startCountdownMs = row == 3 ? 500 : 0;
+				auto cc = hc; cc.host = false; cc.localPeerId = 2; cc.remotePeerId = 1; cc.remoteTransportPeerId = br;
+				cc.autoReady = row != 3;
+				if (!host.Start(measured, hc, error) || !client.Start(missing, cc, error)) return false;
+				uint64_t now = 0;
+				const auto step = [&] {
+					host.Tick(now); client.Tick(now); a.AdvanceTimeMs(10); b.AdvanceTimeMs(10); now += 10;
+				};
+				while (now < 200) step();
+				if (!host.IsConfigAcked(2) || host.IsStarted()) { *error = "the timing fixture has no agreed waiting lobby"; return false; }
+				host.RequestStart();
+				const uint64_t deadline = row == 3 ? 800 : 2300;
+				while (now <= deadline && !(host.IsStarted() && client.IsStarted())) step();
+				const uint16_t expected = row == 1 ? 1 : row == 2 ? 36 : 24;
+				if (!host.IsStarted() || !client.IsStarted() || host.GetMatchConfigHash() != client.GetMatchConfigHash() ||
+				    NetMatchConfigUtil::PeerInputDelay(host.GetMatchConfig(), 1) != expected ||
+				    NetMatchConfigUtil::PeerInputDelay(host.GetMatchConfig(), 2) != expected ||
+				    (row != 3 && (missing.TimingRepliesDropped() != 3 || now < 2200)) ||
+				    (row == 3 && (host.IsRemoteReady(2) || now < 690))) {
+					*error = "missing timing replies kept Start waiting or changed its bounded fallback, case=" + std::to_string(row);
+					return false;
+				}
+			}
+			return true;
+		}
 
 		bool TestNetworkRevisionsKeepReady(std::string* error) {
 			// A reconnect validates the setup on its first host config, before advertising the retained Ready.
@@ -2510,7 +2562,7 @@ namespace RTE {
 				*error = "the ready lobby started above the live delay bound";
 				return false;
 			}
-			return true;
+			return TestLobbyStartTimingEnds(error);
 		}
 
 		// The host presses Start once, as the menu and the match service do. An automatic delay re-size

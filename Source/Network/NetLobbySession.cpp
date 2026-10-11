@@ -29,6 +29,7 @@ namespace RTE {
 
 	namespace {
 		using json = nlohmann::json;
+		constexpr uint64_t c_StartPathWaitMs = 2000;
 
 		bool IsCatchUpReport(const NetLobbyPayload& payload) {
 			const auto* chunk = std::get_if<NetLobbyStateChunk>(&payload);
@@ -1054,7 +1055,8 @@ namespace RTE {
 		m_InputDelaySamples.clear();
 		m_StartPathPending.clear();
 		m_StartPathCounts.clear();
-		m_LastStartPathSendMs = 0;
+		m_LastStartPathSendMs = UINT64_MAX;
+		m_StartPathSamplingAtMs = 0;
 		m_StartPathSampling = false;
 		m_StartDelayMeasured = false;
 	}
@@ -1070,6 +1072,7 @@ namespace RTE {
 		const uint16_t bound = NetLockstepCodec::c_MaxPeerInputDelayFrames;
 		const uint16_t floor = std::clamp<uint16_t>(next.inputDelayFrames, 1, bound);
 		if (next.peerInputDelayFrames.empty()) next.peerInputDelayFrames.resize(next.peerCount, floor);
+		bool measurementDue = false;
 		if (IsStartRequested()) {
 			if (m_StartDelayMeasured || !AllConfigAcked() || !HasRequiredOccupancy() || m_SetupOpen) return;
 			const bool countedDown = m_StartCountdownDeadlineMs != 0 && nowMs >= m_StartCountdownDeadlineMs;
@@ -1077,42 +1080,51 @@ namespace RTE {
 			if (!m_StartPathSampling) {
 				ResetStartDelaySamples();
 				m_StartPathSampling = true;
+				m_StartPathSamplingAtMs = nowMs;
 			}
-			if (nowMs >= m_LastStartPathSendMs + 200) {
+			measurementDue = countedDown || nowMs - m_StartPathSamplingAtMs >= c_StartPathWaitMs;
+			if (!measurementDue && (m_LastStartPathSendMs == UINT64_MAX || nowMs >= m_LastStartPathSendMs + 100)) {
 				m_LastStartPathSendMs = nowMs;
 				for (const auto& [peer, transport]: m_RemoteTransports) {
 					if (m_Transport->GetPeerQueueStats(transport).reliableBytes > 16384) continue;
-					const auto pending = m_StartPathPending.find(peer);
+					auto& pending = m_StartPathPending[peer];
 					const uint64_t retryMs = std::max<uint64_t>(2000, 3ULL * m_Transport->GetPeerPingMs(transport) + 200);
-					if (pending != m_StartPathPending.end() && nowMs < pending->second.second + retryMs) continue;
+					std::erase_if(pending, [&](const auto& ask) { return nowMs >= ask.second + retryMs; });
+					if (m_StartPathCounts[peer] + pending.size() >= 3) continue;
 					if (m_StartPathSerial == UINT64_MAX) return;
 					const uint64_t serial = ++m_StartPathSerial;
 					// The reply follows the completed scene transfer on the same ordered path.
 					if (SendPayloadTo(peer, NetLobbyConfigAck{m_Config.localPeerId, true, m_MatchConfigHash,
-					    "timing:" + std::to_string(serial) + ":ask"})) m_StartPathPending[peer] = {serial, nowMs};
+					    "timing:" + std::to_string(serial) + ":ask"})) pending.emplace(serial, nowMs);
 				}
 			}
-			for (uint8_t peer: m_RemotePeerIds) if (m_StartPathCounts[peer] < 3) return;
+			if (!measurementDue) for (uint8_t peer: m_RemotePeerIds) if (m_StartPathCounts[peer] < 3) return;
 		}
 		uint16_t hostDelay = floor;
 		for (const auto& [peer, transport]: m_RemoteTransports) {
 			if (peer == 0 || peer > next.peerCount) continue;
 			auto& sample = m_InputDelaySamples[peer];
-			uint32_t rtt = IsStartRequested() ? 0 : m_Transport->GetPeerPingMs(transport);
+			uint32_t rtt = !IsStartRequested() || (measurementDue && m_StartPathCounts[peer] == 0) ? m_Transport->GetPeerPingMs(transport) : 0;
 			if (const char* value = std::getenv("CC_TEST_SCENE_PATH_RTT_MS"); value &&
 			    (HasPendingStateChunks() || HasUnreceivedStartState())) {
 				const unsigned long measured = std::strtoul(value, nullptr, 10);
 				if (measured > 0 && measured <= 20000) rtt = static_cast<uint32_t>(measured);
 			}
 			sample.Observe(nowMs, rtt);
-			const uint32_t needed = sample.SenderRequiredFrames(g_TimerMan.GetDeltaTimeMS(), next.slowPlayerBoundTicks, floor);
-			if (IsStartRequested() && (sample.P95Ms() == 0 || needed > bound)) return;
+			const uint32_t needed = measurementDue && sample.P95Ms() == 0 ? floor :
+			    sample.SenderRequiredFrames(g_TimerMan.GetDeltaTimeMS(), next.slowPlayerBoundTicks, floor);
+			if (IsStartRequested() && !measurementDue && (sample.P95Ms() == 0 || needed > bound)) return;
 			const uint16_t delay = static_cast<uint16_t>(std::min<uint32_t>(bound, needed));
 			hostDelay = std::max(hostDelay, delay);
 			next.peerInputDelayFrames[peer - 1] = delay;
 		}
 		if (next.hostPeerId > 0 && next.hostPeerId <= next.peerCount) next.peerInputDelayFrames[next.hostPeerId - 1] = hostDelay;
-		if (IsStartRequested()) m_StartDelayMeasured = true;
+		if (IsStartRequested()) {
+			m_StartDelayMeasured = true;
+			m_StartPathPending.clear();
+			if (measurementDue) DiagnosticLine() << "[net-start-path] measurement ended wait_ms=" << nowMs - m_StartPathSamplingAtMs
+			    << " bound_ms=" << c_StartPathWaitMs << " delay_ticks=" << hostDelay << " fallback=timing-or-ping-or-floor" << std::endl;
+		}
 		if (next.peerInputDelayFrames == m_Config.matchConfig.peerInputDelayFrames || next.configRevision == UINT64_MAX) return;
 		++next.configRevision;
 		(void)RepublishMatchConfig(next);
@@ -2028,13 +2040,15 @@ namespace RTE {
 			if (!m_Config.host && kind == "ask") {
 				(void)SendPayloadTo(message.peerId, NetLobbyConfigAck{m_Config.localPeerId, true, m_MatchConfigHash,
 				    "timing:" + std::to_string(serial) + ":reply"});
-			} else if (m_Config.host && kind == "reply" && m_StartPathSampling && !HasPendingStateChunks() && !HasUnreceivedStartState()) {
+			} else if (m_Config.host && kind == "reply" && m_StartPathSampling && !m_StartDelayMeasured && !HasPendingStateChunks() && !HasUnreceivedStartState()) {
 				const auto pending = m_StartPathPending.find(message.peerId);
-				if (pending == m_StartPathPending.end() || pending->second.first != serial || m_TimingClockMs < pending->second.second) return;
-				const uint32_t rtt = static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX, m_TimingClockMs - pending->second.second));
+				if (pending == m_StartPathPending.end()) return;
+				const auto ask = pending->second.find(serial);
+				if (ask == pending->second.end() || m_TimingClockMs < ask->second) return;
+				const uint32_t rtt = static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX, m_TimingClockMs - ask->second));
 				m_InputDelaySamples[message.peerId].Observe(m_TimingClockMs, std::max<uint32_t>(1, rtt));
 				++m_StartPathCounts[message.peerId];
-				m_StartPathPending.erase(pending);
+				pending->second.erase(ask);
 				DiagnosticLine() << "[net-start-path] peer=" << static_cast<int>(message.peerId) << " rtt_ms=" << rtt
 				    << " samples=" << m_StartPathCounts[message.peerId] << " clock_ms=" << m_TimingClockMs << std::endl;
 			}
