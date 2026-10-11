@@ -360,6 +360,12 @@ namespace RTE {
 				m_RemoteObservations[frame][peer].clear();
 				m_RemoteValueObservations[frame][peer].clear();
 			} else if (!m_AiHeldSeats.contains(peer)) {
+				// This hold ends the earlier return while retaining its preceding neutral frames.
+				if (const auto back = m_ReclaimTransactions.find(peer); back != m_ReclaimTransactions.end() && back->second.activationFrame < bridge.aiFrame) {
+					const uint64_t gapEnd = std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames);
+					m_RetiredReclaimGaps[peer][back->second.activationFrame] = std::min(gapEnd, bridge.aiFrame - 1);
+					m_ReclaimTransactions.erase(back);
+				}
 				m_AiHeldSeats[peer] = bridge.aiFrame;
 				m_PeerLeaveFrames[peer] = bridge.aiFrame;
 				const uint64_t revision = bridge.fromFrame * 8 + peer;

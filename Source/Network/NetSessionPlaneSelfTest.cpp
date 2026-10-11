@@ -558,6 +558,9 @@ namespace RTE {
 			}
 			bool Run(const Case& row, std::string& error) {
 				if (!Start(row, error)) return false;
+				return RunStarted(row, error);
+			}
+			bool RunStarted(const Case& row, std::string& error) {
 				const uint64_t end = hub.faultEnd + (row.gapMs > 5000 ? row.gapMs / 2 : 0) + c_TestReturnAllowanceMs + 4000 + row.postReturnMs;
 				while (hub.now <= end) if (!Step(error)) return false;
 				if (row.asymmetricBridge && row.asymmetricBridge < 3 && !hub.asymmetricReleased) { error = "the asymmetric input lever did not force both pending bridge votes"; return false; }
@@ -641,6 +644,30 @@ namespace RTE {
 				          << " pre_fault_pace_lead_ms=" << phased.preFaultPaceLeadMs[id - 1]
 				          << " post_return_wait_ms=" << phased.postReturnWait[id - 1] << " return_ms=" << phased.returnedAt[id - 1] - phased.hub.faultEnd
 				          << " returns=" << peer.GetStats().peers.at(1).rejoins << " result=PASS" << std::endl;
+			}
+			// A returned seat can go silent again while its consumers wait on the next AI frame.
+			Case repeatRow = phaseRow;
+			repeatRow.name = "relay_repeated_hold_return";
+			Fixture repeated;
+			if (!repeated.Run(repeatRow, error)) return false;
+			repeated.hub.faultAt = repeated.hub.now + 4000;
+			repeated.hub.faultEnd = repeated.hub.faultAt + repeatRow.gapMs;
+			std::fill(repeated.caughtAt.begin(), repeated.caughtAt.end(), 0);
+			std::fill(repeated.returnedAt.begin(), repeated.returnedAt.end(), 0);
+			std::fill(repeated.blackoutGap.begin(), repeated.blackoutGap.end(), 0);
+			std::fill(repeated.postReturnWait.begin(), repeated.postReturnWait.end(), 0);
+			std::fill(repeated.seenAI.begin(), repeated.seenAI.end(), false);
+			if (!repeated.RunStarted(repeatRow, error)) { error = "repeated blocked consumer: " + error; return false; }
+			for (uint8_t id = 1; id <= 3; ++id) {
+				const auto& peer = *repeated.peers[id - 1];
+				if (!repeated.seenAI[id - 1] || peer.GetStats().peers.at(1).rejoins != 2 ||
+				    repeated.returnedAt[id - 1] > repeated.hub.faultEnd + 10000 ||
+				    (id != 1 && repeated.blackoutGap[id - 1] > 50)) {
+					error = "the repeated hold did not preserve its consumer bound and automatic return: peer=" + std::to_string(id); return false;
+				}
+				std::cout << "[net-session-plane-selftest] relay-repeated peer=" << static_cast<int>(id)
+				    << " blackout_gap_ms=" << repeated.blackoutGap[id - 1] << " max_wait_ms=" << repeated.maxWait[id - 1]
+				    << " returns=" << peer.GetStats().peers.at(1).rejoins << " result=PASS" << std::endl;
 			}
 			Case receiptRow = phaseRow;
 			receiptRow.name = "relay_receipt_gap_after_return"; receiptRow.receiptGap = true; receiptRow.postReturnMs = 200000;
