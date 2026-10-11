@@ -29,14 +29,15 @@ namespace RTE {
 		return message;
 	}
 
-	void NetLockstepCoordinator::SendPeerFrameMessage(NetHostMigrationMessage message, NetTransportLane lane, uint8_t onlyPeer) {
-		if (!UsesPeerFrameGroups() || PeerFrameBlackout(m_TimingNowMs)) return;
+	bool NetLockstepCoordinator::SendPeerFrameMessage(NetHostMigrationMessage message, NetTransportLane lane, uint8_t onlyPeer) {
+		if (!UsesPeerFrameGroups() || PeerFrameBlackout(m_TimingNowMs)) return false;
 		std::vector<uint8_t> bytes;
-		if (!NetHostMigrationCodec::Encode(message, m_Config.migrationKey, bytes)) return;
+		if (!NetHostMigrationCodec::Encode(message, m_Config.migrationKey, bytes)) return false;
 		if (m_Config.peerSessionLinks) {
+			bool sent = false;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
-				if (peer != m_Config.localPeerId && !m_RemovedPeers.contains(peer) && (onlyPeer == 0 || onlyPeer == peer)) (void)m_Config.peerSessionLinks->SendTo(peer, lane, bytes);
-			return;
+				if (peer != m_Config.localPeerId && !m_RemovedPeers.contains(peer) && (onlyPeer == 0 || onlyPeer == peer)) sent |= m_Config.peerSessionLinks->SendTo(peer, lane, bytes);
+			return sent;
 		}
 		std::set<uint8_t> sent;
 		for (auto& [peer, dial]: PeerProbes()) {
@@ -48,9 +49,10 @@ namespace RTE {
 			if (PeerListener()->Send(connection, lane, bytes)) sent.insert(peer);
 		}
 		if (m_Transport) for (const auto& [peer, connection]: m_RemoteTransports)
-			if ((onlyPeer == 0 || onlyPeer == peer) && !sent.contains(peer)) (void)m_Transport->Send(connection, lane, bytes);
+			if ((onlyPeer == 0 || onlyPeer == peer) && !sent.contains(peer) && m_Transport->Send(connection, lane, bytes)) sent.insert(peer);
 		if (m_Transport) for (const auto& [connection, peer]: PeerPrimaryBindings())
-			if ((onlyPeer == 0 || onlyPeer == peer) && !sent.contains(peer)) (void)m_Transport->Send(connection, lane, bytes);
+			if ((onlyPeer == 0 || onlyPeer == peer) && !sent.contains(peer) && m_Transport->Send(connection, lane, bytes)) sent.insert(peer);
+		return !sent.empty();
 	}
 
 	bool NetLockstepCoordinator::PeerGroupHasAuthority(uint32_t voters) const {
@@ -224,6 +226,7 @@ namespace RTE {
 		RepairPeerReceiptHoles(nowMs);
 		TickPeerInputDelay(nowMs);
 		TickPeerAdmin(nowMs);
+		FlushPeerCommittedTails(nowMs);
 
 		if (m_PeerTailThrough && m_Stats.nextFrame <= *m_PeerTailThrough) RequestPeerCommittedTail(nowMs);
 		const uint64_t kept = m_Stats.nextFrame > NetHostMigrationCodec::c_PeerHistoryFrames ? m_Stats.nextFrame - NetHostMigrationCodec::c_PeerHistoryFrames : 0;

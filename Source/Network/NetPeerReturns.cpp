@@ -50,6 +50,10 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame) {
+		auto& queued = m_PeerTailOutgoing[peer];
+		auto& sent = m_PeerTailLastSentMs[peer];
+		uint64_t queuedBytes = 0;
+		for (const auto& [frame, item]: queued) queuedBytes += item.bytes.size();
 		const auto first = m_MigrationHistory.lower_bound(fromFrame);
 		if (first == m_MigrationHistory.end() || first->first != fromFrame) {
 			auto missing = PeerFrameMessage(NetHostMigrationMessageType::PeerTailMissing);
@@ -58,6 +62,12 @@ namespace RTE {
 			return;
 		}
 		for (auto kept = first; kept != m_MigrationHistory.end() && kept->first - fromFrame < 32 && m_LastCompletedSimulationTick && kept->first <= *m_LastCompletedSimulationTick; ++kept) {
+			if (const auto applied = m_PeerAppliedThrough.find(peer); applied != m_PeerAppliedThrough.end() && kept->first <= applied->second) continue;
+			if (queued.contains(kept->first)) continue;
+			if (const auto previous = sent.find(kept->first); previous != sent.end() && m_TimingNowMs < previous->second + 1000) continue;
+			// Bound application work even when several pipelined requests
+			// overlap. A large record resumes at its last queued chunk.
+			if (queued.size() >= 128 || queuedBytes >= 4 * 1024 * 1024) break;
 			const auto prefix = kept->first == m_Config.startFrame ? NetHash32{} : PeerFramePrefix(kept->first - 1);
 			const auto prepared = PeerFramePrefix(kept->first);
 			std::vector<uint8_t> body(prefix.begin(), prefix.end()); body.insert(body.end(), prepared.begin(), prepared.end());
@@ -85,16 +95,48 @@ namespace RTE {
 				PutSize(body, static_cast<uint32_t>(bytes.size())); body.insert(body.end(), bytes.begin(), bytes.end());
 			}
 			if (body.size() > NetHostMigrationCodec::c_MaxPeerTailBytes) return;
-			++m_PeerTailFramesSent; m_PeerTailBytesSent += body.size();
-			for (size_t offset = 0; offset < body.size(); offset += NetHostMigrationCodec::c_ChunkBytes) {
+			m_PeerTailRawBytesSent += body.size();
+			bool compressedBody = false;
+			std::vector<uint8_t> compressed(LZ4_compressBound(static_cast<int>(body.size())));
+			const int size = LZ4_compress_default(reinterpret_cast<const char*>(body.data()), reinterpret_cast<char*>(compressed.data()), static_cast<int>(body.size()), static_cast<int>(compressed.size()));
+			if (size > 0 && static_cast<size_t>(size) + 4 < body.size()) {
+				std::vector<uint8_t> packed; PutSize(packed, static_cast<uint32_t>(body.size()));
+				packed.insert(packed.end(), compressed.begin(), compressed.begin() + size); body = std::move(packed); compressedBody = true;
+			}
+			const auto membership = m_FrameGroupChanges.upper_bound(kept->first);
+			const uint32_t members = membership == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(membership)->second;
+			queuedBytes += body.size();
+			queued.emplace(kept->first, PeerTailOutgoing{std::move(body), members, 0, compressedBody});
+		}
+	}
+
+	void NetLockstepCoordinator::FlushPeerCommittedTails(uint64_t nowMs) {
+		constexpr uint64_t reliableQueueCap = 256 * 1024;
+		for (auto& [peer, queued]: m_PeerTailOutgoing) {
+			const uint64_t applied = m_PeerAppliedThrough.contains(peer) ? m_PeerAppliedThrough.at(peer) : 0;
+			queued.erase(queued.begin(), queued.upper_bound(applied));
+			auto& sent = m_PeerTailLastSentMs[peer];
+			sent.erase(sent.begin(), sent.upper_bound(applied));
+			uint64_t handedOver = 0;
+			for (auto item = queued.begin(); item != queued.end() && handedOver < reliableQueueCap;) {
+				auto& body = item->second;
+				const size_t end = std::min(body.bytes.size(), body.offset + NetHostMigrationCodec::c_ChunkBytes);
+				NetTransportQueueStats queue;
+				if (m_Config.peerSessionLinks) {
+					const auto [wire, route] = m_Config.peerSessionLinks->RouteTo(peer);
+					if (wire) queue = wire->GetPeerQueueStats(route);
+				}
+				if (queue.reliableBytes + end - body.offset + 512 > reliableQueueCap) { ++m_PeerTailDeferredSends; break; }
 				auto tail = PeerFrameMessage(NetHostMigrationMessageType::PeerTail);
-				tail.frame = kept->first;
-				tail.totalBytes = static_cast<uint32_t>(body.size()); tail.offset = static_cast<uint32_t>(offset);
-				const auto membership = m_FrameGroupChanges.upper_bound(kept->first);
-				tail.voterMask = membership == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(membership)->second;
-				const size_t end = std::min(body.size(), offset + NetHostMigrationCodec::c_ChunkBytes);
-				tail.bytes.assign(body.begin() + offset, body.begin() + end);
-				SendPeerFrameMessage(std::move(tail), NetTransportLane::ControlReliable, peer);
+				tail.frame = item->first; tail.voterMask = body.members; tail.completeFrom = body.compressed ? 1 : 0;
+				tail.totalBytes = static_cast<uint32_t>(body.bytes.size()); tail.offset = body.offset;
+				tail.bytes.assign(body.bytes.begin() + body.offset, body.bytes.begin() + end);
+				if (!SendPeerFrameMessage(std::move(tail), NetTransportLane::ControlReliable, peer)) break;
+				const size_t bytes = end - body.offset;
+				handedOver += bytes; m_PeerTailBytesSent += bytes; body.offset = static_cast<uint32_t>(end);
+				if (end == body.bytes.size()) {
+					++m_PeerTailFramesSent; sent[item->first] = nowMs; item = queued.erase(item);
+				}
 			}
 		}
 	}

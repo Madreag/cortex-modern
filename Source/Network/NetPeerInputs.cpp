@@ -292,6 +292,15 @@ namespace RTE {
 		if (incoming.bytes.size() != incoming.totalBytes) return true;
 		std::vector<uint8_t> body = std::move(incoming.bytes); m_PeerFrameIncoming.erase(key);
 		if (message.type == NetHostMigrationMessageType::PeerTail) {
+			if (message.completeFrom > 1) return true;
+			if (message.completeFrom == 1) {
+				size_t offset = 0; uint32_t expandedSize = 0;
+				if (!TakeSize(body, offset, expandedSize) || expandedSize < 70 || expandedSize > NetHostMigrationCodec::c_MaxPeerTailBytes) return true;
+				std::vector<uint8_t> expanded(expandedSize);
+				if (LZ4_decompress_safe(reinterpret_cast<const char*>(body.data() + offset), reinterpret_cast<char*>(expanded.data()),
+				    static_cast<int>(body.size() - offset), static_cast<int>(expanded.size())) != static_cast<int>(expanded.size())) return true;
+				body = std::move(expanded);
+			}
 			if ((message.voterMask & SeatBit(message.senderPeerId)) == 0 || message.appliedFrame < message.frame || body.size() < 70) return true;
 			NetHash32 prefix{}, prepared{}; std::copy_n(body.begin(), prefix.size(), prefix.begin());
 			std::copy_n(body.begin() + prefix.size(), prepared.size(), prepared.begin());

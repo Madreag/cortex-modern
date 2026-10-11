@@ -1642,7 +1642,7 @@ namespace RTE {
 		std::map<NetPeerId, uint8_t> m_PeerListenerBindings;
 		std::map<NetPeerId, uint8_t> m_PeerPrimaryBindings;
 		NetHostMigrationMessage PeerFrameMessage(NetHostMigrationMessageType type) const;
-		void SendPeerFrameMessage(NetHostMigrationMessage message, NetTransportLane lane = NetTransportLane::ControlReliable, uint8_t onlyPeer = 0);
+		bool SendPeerFrameMessage(NetHostMigrationMessage message, NetTransportLane lane = NetTransportLane::ControlReliable, uint8_t onlyPeer = 0);
 		bool HandlePeerFrameMessage(const NetHostMigrationMessage& message, uint64_t nowMs);
 		void SendPeerInput(const NetLockstepFrame& frame);
 		void TickPeerFrameGroups(uint64_t nowMs);
@@ -1663,6 +1663,7 @@ namespace RTE {
 		void RepairPeerReceiptHoles(uint64_t nowMs);
 		bool ApplyPeerCommittedTail(uint64_t frame, uint64_t nowMs);
 		void SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame);
+		void FlushPeerCommittedTails(uint64_t nowMs);
 		void RequestPeerCommittedTail(uint64_t nowMs);
 		NetHash32 PeerFramePrefix(uint64_t frame) const;
 		NetHash32 PeerAppliedFramePrefix(uint64_t frame) const;
@@ -1716,6 +1717,9 @@ namespace RTE {
 		uint64_t m_PeerTailRequestAtMs = 0;
 		std::map<uint64_t, uint64_t> m_PeerTailRequestedUntil;
 		std::map<uint8_t, std::map<uint64_t, uint64_t>> m_PeerTailLastSentMs;
+		struct PeerTailOutgoing { std::vector<uint8_t> bytes; uint32_t members = 0, offset = 0; bool compressed = false; };
+		std::map<uint8_t, std::map<uint64_t, PeerTailOutgoing>> m_PeerTailOutgoing;
+		uint64_t m_PeerTailRawBytesSent = 0, m_PeerTailDeferredSends = 0;
 		uint64_t m_PeerTailRequests = 0, m_PeerTailFramesSent = 0, m_PeerTailBytesSent = 0, m_PeerTailLogAtMs = 0, m_PeerPathLogAtMs = 0;
 		uint64_t m_PeerVoteRetryAtMs = 0;
 		uint32_t m_FrameGroupMembers = 0;
