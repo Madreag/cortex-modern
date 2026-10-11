@@ -1,4 +1,6 @@
 #include "MovableObject.h"
+
+#include <future>
 #include "CheckpointNativeSnapshot.h"
 #include "CheckpointProperties.h"
 #include "CaptureSentinel.h"
@@ -45,6 +47,69 @@
 using namespace RTE;
 
 AbstractClassInfo(MovableObject, SceneObject);
+
+std::unique_ptr<MovableObject::CheckpointCounters> MovableObject::s_OwnedCheckpointCounters;
+thread_local std::atomic<long>* MovableObject::s_PrivateUID = nullptr;
+thread_local std::atomic<long>* MovableObject::s_PrivateRegistration = nullptr;
+
+MovableObject::CounterReferences MovableObject::MutableCheckpointCounters() {
+	if (s_PrivateUID) return {*s_PrivateUID, *s_PrivateRegistration};
+	if (CheckpointNativeStorage::Reading()) throw std::logic_error("snapshot allocation needs its private object counters");
+	if (s_OwnedCheckpointCounters) return {s_OwnedCheckpointCounters->uid, s_OwnedCheckpointCounters->registration};
+	return {m_UniqueIDCounter, s_ScriptRegistrationSerial};
+}
+
+MovableObject::FrozenCounters MovableObject::FrozenCheckpointCounters() {
+	if (s_PrivateUID) return {*s_PrivateUID, *s_PrivateRegistration};
+	if (s_OwnedCheckpointCounters) {
+		const auto* values = CheckpointNativeStorage::Source(s_OwnedCheckpointCounters.get());
+		return {values->uid, values->registration};
+	}
+	return {m_UniqueIDCounter, s_ScriptRegistrationSerial};
+}
+
+void MovableObject::PrepareCheckpointCounters() {
+	if (!CheckpointNativeStorage::Enabled() || s_OwnedCheckpointCounters) return;
+	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	auto prepared = std::make_unique<CheckpointCounters>();
+	prepared->uid = m_UniqueIDCounter.load(); prepared->registration = s_ScriptRegistrationSerial.load();
+	s_OwnedCheckpointCounters = std::move(prepared);
+}
+
+MovableObject::CheckpointCounterScope::CheckpointCounterScope() :
+    m_UID(GetUniqueIDCounter()), m_Registration(GetScriptRegistrationSerialCounter()),
+    m_PreviousUID(s_PrivateUID), m_PreviousRegistration(s_PrivateRegistration) {
+	s_PrivateUID = &m_UID; s_PrivateRegistration = &m_Registration;
+}
+MovableObject::CheckpointCounterScope::~CheckpointCounterScope() { s_PrivateUID = m_PreviousUID; s_PrivateRegistration = m_PreviousRegistration; }
+
+std::string MovableObject::CheckpointCounterStorageSelfTestMismatch() {
+	CheckpointNativeStorage::AllocationScope allocations(true);
+	auto values = std::make_unique<CheckpointCounters>();
+	values->uid = 81; values->registration = 29;
+	const auto* identity = values.get();
+	auto prepared = CheckpointNativeStorage::PrepareInventory();
+	if (!prepared->Arm()) return "object counter inventory is stale";
+	++values->uid; values->registration.fetch_add(1, std::memory_order_relaxed); values.reset();
+	{
+		CheckpointNativeStorage::ReadScope read(prepared->Pages());
+		const auto* frozen = CheckpointNativeStorage::Source(identity);
+		if (frozen->uid != 81 || frozen->registration != 29) return "saved allocation counters follow the next tick";
+	}
+	const auto uid = GetUniqueIDCounter(), registration = GetScriptRegistrationSerialCounter();
+	const auto exact = std::async(std::launch::async, [uid, registration] {
+		CheckpointCounterScope local;
+		if (GetNextUniqueID() != uid + 1) return false;
+		PinScriptRegistrationSerial(registration + 1);
+		{
+			CheckpointCounterScope nested;
+			if (GetNextUniqueID() != uid + 2) return false;
+			PinUniqueIDCounter(91); PinScriptRegistrationSerial(31);
+		}
+		return GetUniqueIDCounter() == uid + 1 && GetScriptRegistrationSerialCounter() == registration + 1;
+	}).get();
+	return exact && GetUniqueIDCounter() == uid && GetScriptRegistrationSerialCounter() == registration ? std::string{} : "snapshot allocation changes live object counters";
+}
 
 std::atomic<long> MovableObject::m_UniqueIDCounter = 1;
 // Registrations are ordered by the sim, so the serial says which of two objects sharing an identity came first.
@@ -769,7 +834,7 @@ bool MovableObject::PublishNetPrivateObjectGraph() {
 		}
 		for (const auto& [state, identities]: scriptIdentities) if (!state->RekeyScriptObjects(identities, true)) return false;
 		long expected = counter;
-		if (m_UniqueIDCounter.compare_exchange_strong(expected, counter + static_cast<long>(objects.size()))) break;
+		if (MutableCheckpointCounters().uid.compare_exchange_strong(expected, counter + static_cast<long>(objects.size()))) break;
 	}
 	for (const auto& [state, identities]: scriptIdentities) if (!state->RekeyScriptObjects(identities)) return false;
 	for (size_t index = 0; index < objects.size(); ++index) {
@@ -1341,10 +1406,10 @@ int MovableObject::InitializeObjectScripts(bool runCreate) {
 	// The place this object takes in the registration order: the image's when it carried one, so a
 	// restored peer keeps the writer's order, otherwise the next one this machine draws.
 	if (m_ScriptRegistrationSerial > 0) {
-		long counter = s_ScriptRegistrationSerial.load(std::memory_order_relaxed);
-		while (counter < m_ScriptRegistrationSerial && !s_ScriptRegistrationSerial.compare_exchange_weak(counter, m_ScriptRegistrationSerial)) {}
+		long counter = MutableCheckpointCounters().registration.load(std::memory_order_relaxed);
+		while (counter < m_ScriptRegistrationSerial && !MutableCheckpointCounters().registration.compare_exchange_weak(counter, m_ScriptRegistrationSerial)) {}
 	} else {
-		m_ScriptRegistrationSerial = s_ScriptRegistrationSerial.fetch_add(1, std::memory_order_relaxed) + 1;
+		m_ScriptRegistrationSerial = MutableCheckpointCounters().registration.fetch_add(1, std::memory_order_relaxed) + 1;
 	}
 	m_ThreadedLuaState->RegisterMO(this);
 	m_ThreadedLuaState->SetTempEntity(this);

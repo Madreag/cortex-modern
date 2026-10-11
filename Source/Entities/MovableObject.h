@@ -161,8 +161,8 @@ namespace RTE {
 		bool LoadRuntimeImage(std::string_view text) { return LoadMovableObjectRuntime(text); }
 
 		/// The registration counter, saved and restored with an image the way the unique-ID counter is.
-		static long GetScriptRegistrationSerialCounter() { return s_ScriptRegistrationSerial; }
-		static void PinScriptRegistrationSerial(long serial) { s_ScriptRegistrationSerial = serial; }
+		static long GetScriptRegistrationSerialCounter() { return FrozenCheckpointCounters().registration.load(); }
+		static void PinScriptRegistrationSerial(long serial) { MutableCheckpointCounters().registration = serial; }
 
 		/// Moves this object's live script object to another unique ID's key, so its hooks keep finding
 		/// self when the identity changes under them. Returns false when the key could not be moved.
@@ -1222,18 +1222,35 @@ namespace RTE {
 		/// @param newRestThreshold New rest threshold value
 		void SetRestThreshold(int newRestThreshold) { if (m_RestThreshold != newRestThreshold) TouchCheckpoint(); m_RestThreshold = newRestThreshold; }
 
+		/// Owns allocation counters during multiplayer setup without changing their atomic operations.
+		static void PrepareCheckpointCounters();
+		static const void* CheckpointOwnedCounters() { return s_OwnedCheckpointCounters.get(); }
+		static std::string CheckpointCounterStorageSelfTestMismatch();
+		/// Snapshot constructors consume private counters on their own thread.
+		class CheckpointCounterScope {
+		public:
+			CheckpointCounterScope();
+			~CheckpointCounterScope();
+			CheckpointCounterScope(const CheckpointCounterScope&) = delete;
+			CheckpointCounterScope& operator=(const CheckpointCounterScope&) = delete;
+		private:
+			std::atomic<long> m_UID, m_Registration;
+			std::atomic<long>* m_PreviousUID;
+			std::atomic<long>* m_PreviousRegistration;
+		};
+
 		/// Returns the next unique id for MO's and increments unique ID counter
 		/// @return Returns the next unique id.
-		static long GetNextUniqueID() { return ++m_UniqueIDCounter; }
+		static long GetNextUniqueID() { return ++MutableCheckpointCounters().uid; }
 
 		/// Pins the unique ID counter to a fixed base so a deterministic match hands out the same
 		/// IDs on every peer regardless of how many MOs each process created beforehand.
 		/// @param base The value the next created MO's ID will follow.
-		static void PinUniqueIDCounter(long base) { m_UniqueIDCounter = base; }
+		static void PinUniqueIDCounter(long base) { MutableCheckpointCounters().uid = base; }
 
 		/// Gets the current unique ID counter value, for rollback snapshots.
 		/// @return The counter's current base.
-		static long GetUniqueIDCounter() { return m_UniqueIDCounter; }
+		static long GetUniqueIDCounter() { return FrozenCheckpointCounters().uid.load(); }
 
 		/// Gets the highest saved UniqueID this thread has read since the last call, and starts the count again.
 		/// @return The highest saved UniqueID read, or 0 when none was.
@@ -1454,6 +1471,16 @@ namespace RTE {
 		// Member variables
 		static Entity::ClassInfo m_sClass;
 		// Global counter with unique ID's
+		struct CheckpointCounters : CheckpointNativeAllocated {
+			std::atomic<long> uid{1}, registration{0};
+		};
+		struct CounterReferences { std::atomic<long>& uid; std::atomic<long>& registration; };
+		struct FrozenCounters { const std::atomic<long>& uid; const std::atomic<long>& registration; };
+		static std::unique_ptr<CheckpointCounters> s_OwnedCheckpointCounters;
+		static thread_local std::atomic<long>* s_PrivateUID;
+		static thread_local std::atomic<long>* s_PrivateRegistration;
+		static CounterReferences MutableCheckpointCounters();
+		static FrozenCounters FrozenCheckpointCounters();
 		static std::atomic<long> m_UniqueIDCounter;
 		static std::atomic<long> s_ScriptRegistrationSerial; //!< Counts registrations, so a shared identity still has an order.
 		static std::atomic<uint64_t> s_HookLoopsEndedOnADestroyedObject; //!< Loops whose object was destroyed under them.
