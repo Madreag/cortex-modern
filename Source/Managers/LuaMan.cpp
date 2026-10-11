@@ -15740,6 +15740,7 @@ void LuaMan::SeedAllLuaRNGs(uint64_t baseSeed) {
 }
 
 void LuaMan::PrepareCheckpointValues() {
+	CheckpointNativeStorage::AllocationScope ownedValues(CheckpointNativeStorage::Enabled());
 	if (CheckpointNativeStorage::Enabled()) g_TimerMan.PrepareCheckpointValues();
 	if (CheckpointNativeStorage::Enabled()) { g_SimRNG.PrepareCheckpointValues(); g_RenderRNG.PrepareCheckpointValues(); }
 	if (CheckpointNativeStorage::Enabled()) MovableObject::PrepareCheckpointCounters();

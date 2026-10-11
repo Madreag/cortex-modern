@@ -499,6 +499,8 @@ namespace {
 	std::atomic<NativeStoragePools*> s_NativeStoragePools{nullptr};
 	thread_local bool s_NativeStorageAllocation = false;
 	thread_local bool s_NativeStorageCapture = false;
+	thread_local std::optional<bool> s_NativeStorageWorldAllocation;
+	std::atomic<bool> s_NativeStorageWorldEnabled{false};
 	NativeStoragePools& NativePools() {
 		static NativeStoragePools* const pools = [] {
 			auto* value = new NativeStoragePools;
@@ -521,7 +523,24 @@ CheckpointNativeStorage::CaptureScope::CaptureScope(bool enabled) : m_Previous(s
 
 CheckpointNativeStorage::CaptureScope::~CaptureScope() { s_NativeStorageCapture = m_Previous; }
 
-bool CheckpointNativeStorage::Enabled() { return !s_NativeStorageCapture && (s_NativeStorageAllocation || ScenarioRunner::HasLockstepCoordinator()); }
+CheckpointNativeStorage::WorldAllocationScope::WorldAllocationScope(bool enabled) : m_Previous(s_NativeStorageWorldAllocation) {
+	s_NativeStorageWorldAllocation = enabled;
+}
+
+CheckpointNativeStorage::WorldAllocationScope::~WorldAllocationScope() { s_NativeStorageWorldAllocation = m_Previous; }
+
+bool CheckpointNativeStorage::WorldEnabled() noexcept { return s_NativeStorageWorldEnabled.load(std::memory_order_acquire); }
+bool CheckpointNativeStorage::SetWorldEnabled(bool enabled) noexcept { return s_NativeStorageWorldEnabled.exchange(enabled, std::memory_order_acq_rel); }
+
+bool CheckpointNativeStorage::RetainingAllocations() noexcept {
+	return !s_NativeStorageCapture && (s_NativeStorageAllocation || s_NativeStorageWorldAllocation.value_or(WorldEnabled()));
+}
+
+bool CheckpointNativeStorage::Enabled(bool retained) {
+	if (s_NativeStorageCapture) return false;
+	if (retained || s_NativeStorageAllocation) return true;
+	return s_NativeStorageWorldAllocation.value_or(WorldEnabled() || ScenarioRunner::HasLockstepCoordinator());
+}
 
 void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 	const size_t requested = std::max({bytes, alignment, size_t{16}});
@@ -687,6 +706,33 @@ const std::string* CheckpointNativeStorage::ReadString(const char* source, size_
 }
 
 std::string CheckpointNativeStorage::SelfTestMismatch() {
+	{
+		struct RestoreMode { bool previous; ~RestoreMode() { SetWorldEnabled(previous); } } restore{SetWorldEnabled(true)};
+		WorldAllocationScope ordinary(false);
+		std::unique_ptr<CheckpointVector<uint64_t>> owned;
+		{
+			WorldAllocationScope multiplayer(true);
+			owned = std::make_unique<CheckpointVector<uint64_t>>(4, 17);
+		}
+		owned->resize(4096, 31);
+		if (!Owns(owned->data())) return "owned container growth escapes its original storage";
+		CheckpointVector<uint64_t> plain(4, 41), copied(*owned);
+		if (Owns(plain.data()) || Owns(copied.data())) return "ordinary container copies enter multiplayer storage";
+		const bool workerOwned = std::async(std::launch::async, [] {
+			struct Value : CheckpointNativeAllocated {};
+			auto value = std::make_unique<Value>();
+			return Owns(value.get());
+		}).get();
+		if (!workerOwned) return "restored world allocations lose their mode on another thread";
+		{
+			CaptureScope capture;
+			auto allocator = owned->get_allocator();
+			auto* privateValues = allocator.allocate(4);
+			const bool privateOwned = Owns(privateValues);
+			allocator.deallocate(privateValues, 4);
+			if (privateOwned) return "capture copies allocate in the live world inventory";
+		}
+	}
 	{
 		AllocationScope allocation(true);
 		auto value = std::make_unique<Vector>(17, 31);

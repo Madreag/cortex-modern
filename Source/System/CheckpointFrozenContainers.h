@@ -73,13 +73,11 @@ namespace RTE {
 		}
 		inline const void* HashNext(const void* node) { return *Read(static_cast<const void* const*>(node)); }
 #ifdef _LIBCPP_VERSION
-		template<class T> struct DequeHeader { const T* const* first; const T* const* begin; const T* const* end; const T* const* capacity; size_t start; size_t size; };
-		template<class T, class A> DequeHeader<T> Deque(const std::deque<T, A>& source) {
-			static_assert(std::is_empty_v<A> && sizeof(source) == sizeof(DequeHeader<T>));
-			DequeHeader<T> header;
-			std::memcpy(&header, &source, sizeof(header));
-			if (header.size != source.size()) throw std::logic_error("unsupported frozen deque layout");
-			return header;
+		template<class T> struct DequePosition { const T* const* map; const T* value; };
+		template<class T, class A> DequePosition<T> Deque(const std::deque<T, A>& source) {
+			const auto first = source.begin();
+			static_assert(std::is_trivially_copyable_v<decltype(first)> && sizeof(first) == sizeof(DequePosition<T>));
+			return std::bit_cast<DequePosition<T>>(first);
 		}
 #endif
 	}
@@ -181,9 +179,12 @@ namespace RTE {
 #elif defined(_LIBCPP_VERSION)
 		const auto header = CheckpointContainerDetail::Deque(source);
 		const size_t blockSize = std::__deque_block_size<T, ptrdiff_t>::value;
+		const T* first = *CheckpointContainerDetail::Read(header.map);
+		const size_t offset = header.value - first;
+		if (offset >= blockSize) throw std::logic_error("invalid frozen deque position");
 		for (size_t index = 0; index < source.size(); ++index) {
-			const size_t at = header.start + index;
-			const T* block = *CheckpointContainerDetail::Read(header.begin + at / blockSize);
+			const size_t at = offset + index;
+			const T* block = *CheckpointContainerDetail::Read(header.map + at / blockSize);
 			values.Add(CheckpointContainerDetail::Read(block + at % blockSize));
 		}
 #endif

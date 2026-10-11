@@ -9,6 +9,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <optional>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -36,6 +37,15 @@ namespace RTE {
 			CaptureScope& operator=(const CaptureScope&) = delete;
 		private:
 			bool m_Previous;
+		};
+		class WorldAllocationScope {
+		public:
+			explicit WorldAllocationScope(bool enabled);
+			~WorldAllocationScope();
+			WorldAllocationScope(const WorldAllocationScope&) = delete;
+			WorldAllocationScope& operator=(const WorldAllocationScope&) = delete;
+		private:
+			std::optional<bool> m_Previous;
 		};
 		// Manager headers use prepared storage; their pointees stay on frozen pages.
 		struct RootRange { const void* source; const void* view; size_t bytes; };
@@ -68,7 +78,10 @@ namespace RTE {
 			std::unique_ptr<ReadState> m_State;
 			ReadState* m_Previous;
 		};
-		static bool Enabled();
+		static bool Enabled(bool retained = false);
+		static bool RetainingAllocations() noexcept;
+		static bool WorldEnabled() noexcept;
+		static bool SetWorldEnabled(bool enabled) noexcept;
 		static bool Reading() { return s_Read != nullptr; }
 		static ReadViews CurrentViews();
 		static const void* RootView(const void* source, size_t bytes = 1);
@@ -125,17 +138,21 @@ namespace RTE {
 		using value_type = T;
 		using is_always_equal = std::true_type;
 		using propagate_on_container_move_assignment = std::true_type;
-		CheckpointNativeAllocator() noexcept = default;
-		template<class U> CheckpointNativeAllocator(const CheckpointNativeAllocator<U>&) noexcept {}
+		CheckpointNativeAllocator() noexcept : m_Owned(CheckpointNativeStorage::RetainingAllocations()) {}
+		template<class U> CheckpointNativeAllocator(const CheckpointNativeAllocator<U>& source) noexcept : m_Owned(source.m_Owned) {}
+		CheckpointNativeAllocator select_on_container_copy_construction() const noexcept { return {}; }
 		[[nodiscard]] T* allocate(size_t count) {
 			if (count > (std::numeric_limits<size_t>::max)() / sizeof(T)) throw std::bad_array_new_length();
-			if (CheckpointNativeStorage::Enabled()) return static_cast<T*>(CheckpointNativeStorage::Allocate(count * sizeof(T), alignof(T)));
+			if (CheckpointNativeStorage::Enabled(m_Owned)) return static_cast<T*>(CheckpointNativeStorage::Allocate(count * sizeof(T), alignof(T)));
 			return std::allocator<T>{}.allocate(count);
 		}
 		void deallocate(T* address, size_t count) noexcept {
 			if (!CheckpointNativeStorage::Deallocate(address)) std::allocator<T>{}.deallocate(address, count);
 		}
 		template<class U> bool operator==(const CheckpointNativeAllocator<U>&) const noexcept { return true; }
+	private:
+		template<class> friend class CheckpointNativeAllocator;
+		bool m_Owned;
 	};
 
 	template<class T, class... Args> std::shared_ptr<T> MakeCheckpointNativeShared(Args&&... args) {

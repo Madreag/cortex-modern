@@ -277,6 +277,16 @@ namespace {
 		}
 	};
 
+	struct NativeWorldMode {
+		explicit NativeWorldMode(bool enabled) : previous(CheckpointNativeStorage::SetWorldEnabled(enabled)) {}
+		~NativeWorldMode() { Rollback(); }
+		void Commit() noexcept { pending = false; }
+		void Rollback() noexcept {
+			if (pending) { CheckpointNativeStorage::SetWorldEnabled(previous); pending = false; }
+		}
+		bool previous, pending = true;
+	};
+
 	/// Lowers the calling thread below normal priority, so the archive work never competes with the simulation.
 	void YieldToSimulation() {
 #ifdef _WIN32
@@ -1948,7 +1958,7 @@ bool ActivityMan::ReadSavedGameArchive(const std::string& archivePath, const std
 			nativeSnapshotStorage = archive.ReadEntry(AutosaveStore::c_DescriptorEntry, descriptorText, false) && AutosaveStore::ParseDescriptor(descriptorText, descriptor);
 		} catch (const std::exception&) {}
 		Atom::AllocationScope nativeAtoms(nativeSnapshotStorage);
-		CheckpointNativeStorage::AllocationScope nativeValues(nativeSnapshotStorage);
+		CheckpointNativeStorage::WorldAllocationScope nativeValues(nativeSnapshotStorage || ScenarioRunner::HasLockstepCoordinator());
 
 		using Image = std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)>;
 		std::vector<std::pair<std::string, Image>> images;
@@ -3254,9 +3264,17 @@ bool ActivityMan::RestartActivity() {
 	if (!m_RestartRestoresSnapshot && !m_LockstepRelaunchInProgress) {
 		ScenarioRunner::ResetRetiredChecksumCounters();
 	}
-	if (!m_RestartRestoresSnapshot) return RestartActivityCandidate();
+	if (!m_RestartRestoresSnapshot) {
+		const bool nativeWorld = ScenarioRunner::HasLockstepCoordinator();
+		CheckpointNativeStorage::WorldAllocationScope values(nativeWorld);
+		NativeWorldMode mode(nativeWorld);
+		const bool restarted = RestartActivityCandidate();
+		if (restarted) mode.Commit();
+		return restarted;
+	}
 	Atom::AllocationScope nativeAtoms(m_PendingCheckpoint.nativeSnapshotStorage);
-	CheckpointNativeStorage::AllocationScope nativeValues(m_PendingCheckpoint.nativeSnapshotStorage);
+	const bool nativeWorld = m_PendingCheckpoint.nativeSnapshotStorage || ScenarioRunner::HasLockstepCoordinator();
+	CheckpointNativeStorage::WorldAllocationScope nativeValues(nativeWorld);
 	std::string error;
 	try {
 		if (CheckpointNativeStorage::Enabled()) g_LuaMan.PrepareCheckpointValues();
@@ -3289,6 +3307,7 @@ bool ActivityMan::RestartActivity() {
 	g_SceneMan.SetAsideScene(originalScene);
 	auto originalActivity = std::move(m_Activity);
 	auto originalStart = std::move(m_StartActivity);
+	NativeWorldMode mode(nativeWorld);
 	bool restored = false;
 	try {
 		Entity::CheckpointCloneScope checkpointClones(true);
@@ -3345,9 +3364,12 @@ bool ActivityMan::RestartActivity() {
 			g_AudioMan.PauseIngameSounds(m_Activity && m_Activity->IsPaused());
 		}
 		// Under the full-state oracle the restored world logs its state before it runs a tick, against the save it came from.
+		mode.Commit();
 		if (m_FullStateLever) CaptureFullStateHash(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), m_FullStateRound, {}, "restored");
 		return true;
 	}
+	mode.Rollback();
+	CheckpointNativeStorage::WorldAllocationScope originalValues(mode.previous);
 	auto rejectedActivity = std::move(m_Activity);
 	m_Activity = std::move(originalActivity);
 	m_StartActivity = std::move(originalStart);
