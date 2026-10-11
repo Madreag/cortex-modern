@@ -895,6 +895,7 @@ void ActivityMan::PrepareAutosave() {
 
 void ActivityMan::NotifyCheckpointTick() {
 	if (!m_PreparedAutosave) return;
+	NetActorOwnership::RetryCheckpointValues();
 	if (!ContentFile::CheckpointSamplesReady()) ContentFile::PrepareCheckpointSamples();
 	GUIInput::UpdateCheckpointTextInput();
 	m_PreparedAutosave->queue.NotifyNextTick();

@@ -28,6 +28,7 @@ namespace RTE {
 		void StoreSavedOwners() noexcept {
 			if (!s_SavedOwners || !CheckpointNativeStorage::Enabled()) return;
 			try {
+				CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 				CheckpointMap<int64_t, NetSeededActorOwner> values(s_SeededOwners.begin(), s_SeededOwners.end());
 				s_SavedOwners->values.swap(values); s_SavedOwners->ready = true;
 			} catch (const std::bad_alloc&) { s_SavedOwners->ready = false; }
@@ -96,6 +97,10 @@ namespace RTE {
 
 	bool NetActorOwnership::CheckpointValuesReady() noexcept { return s_SavedOwners && s_SavedOwners->ready; }
 
+	void NetActorOwnership::RetryCheckpointValues() noexcept {
+		if (CheckpointNativeStorage::WorldEnabled() && !CheckpointNativeStorage::Reading() && !CheckpointValuesReady()) StoreSavedOwners();
+	}
+
 	std::string NetActorOwnership::CheckpointSelfTestMismatch() {
 		CheckpointNativeStorage::AllocationScope allocations(true);
 		struct Restore { std::map<int64_t, NetSeededActorOwner> values; ~Restore() { RestoreSeededOwners(std::move(values)); } } restore{s_SeededOwners};
@@ -109,7 +114,17 @@ namespace RTE {
 			SeedOwner(71, 3, 2); ClearSeededOwners(); RestoreSeededOwners({{75, {2, 1}}});
 			if (GetSeededOwner(75) != 2 || GetSeededOwners().size() != 1) return "saved actor owner changes lost their private values";
 		}
-		return GetSeededOwner(71) == 1 && GetSeededOwner(73) == 3 && GetSeededOwner(75) == 0 ? std::string() : "saved actor owners changed the running world";
+		if (GetSeededOwner(71) != 1 || GetSeededOwner(73) != 3 || GetSeededOwner(75) != 0) return "saved actor owners changed the running world";
+		{
+			CheckpointFailure::Scope refusal(CheckpointFailure::Point::NativeObjects);
+			RestoreSeededOwners({{79, {3, 2}}});
+			if (!refusal.Triggered() || CheckpointValuesReady() || GetSeededOwner(79) != 3) return "refused saved actor owners changed the live seed";
+		}
+		PrepareCheckpointValues();
+		if (!CheckpointValuesReady()) return "saved actor owners could not retry a refused copy";
+		const auto retry = CheckpointNativeStorage::Prepare();
+		CheckpointNativeStorage::ReadScope read(retry);
+		return GetSeededOwners().size() == 1 && GetSeededOwner(79) == 3 && GetSeededOwnerTeam(79) == 2 ? std::string() : "saved actor owner retry lost the latest seed";
 	}
 
 	uint8_t NetActorOwnership::ResolveOwnerPeer(const NetMatchConfig& config, const NetActorOwnershipQuery& query) {

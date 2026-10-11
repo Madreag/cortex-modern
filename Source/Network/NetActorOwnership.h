@@ -48,6 +48,8 @@ namespace RTE {
 		static void ClearSeededOwners();
 		static void PrepareCheckpointValues();
 		static bool CheckpointValuesReady() noexcept;
+		/// Retries a refused owner mirror during ordinary multiplayer updates.
+		static void RetryCheckpointValues() noexcept;
 		static std::string CheckpointSelfTestMismatch();
 
 		/// Resolves which peer is allowed to issue economy commands (funds, deploy, delivery) for a team:
