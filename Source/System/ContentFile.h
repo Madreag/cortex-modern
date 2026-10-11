@@ -102,7 +102,7 @@ namespace RTE {
 		/// Converts hash values into file paths to ContentFiles.
 		/// @param hash Hash value to get file path from.
 		/// @return Path to ContentFile.
-		static std::string GetPathFromHash(size_t hash) { return (s_PathHashes.find(hash) == s_PathHashes.end()) ? "" : s_PathHashes[hash]; }
+		static std::string GetPathFromHash(size_t hash);
 
 		/// Sets this ContentFile to be a memory file, meaning we won't try loading from disk and instead will let external code set us up.
 		/// @param isMemoryFile Whether we'll be considered a memory file.
@@ -227,6 +227,7 @@ namespace RTE {
 		/// depth holding it, which is written back. Null when none does.
 		static const std::string* LoadedBitmapPath(const BITMAP* bitmap, int& depth);
 		static std::pair<const void*, size_t> LoadedBitmapRegistry();
+		static std::pair<const void*, size_t> PathHashRegistry();
 
 		/// Changes the loaded bitmaps by each way in, on a scratch entry, and checks the next index sees each change.
 		/// @return The first way whose change the index missed, or empty. The loaded bitmaps are left as they were.
@@ -255,7 +256,8 @@ namespace RTE {
 
 		static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.
 
-		static std::unordered_map<size_t, std::string> s_PathHashes; //!< Static map containing the hash values of paths of all loaded data files.
+		static CheckpointUnorderedMap<size_t, CheckpointString> s_PathHashes; //!< Static map containing the hash values of paths of all loaded data files.
+		void RegisterPath() const;
 		/// Rebuilds the loaded-bitmap index when it is stale; the caller holds the rebuild lock and no scope reads it.
 		static void RebuildLoadedBitmapIndex();
 		/// One depth's loaded bitmaps. Every change made through them moves a version all depths share, so an index

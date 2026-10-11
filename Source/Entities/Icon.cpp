@@ -205,9 +205,10 @@ std::function<void()> Icon::PrepareCheckpointSet(std::string_view text, std::spa
 	struct Preparation {
 		std::vector<std::unique_ptr<Icon>> icons;
 		GUICheckpoint::PreparedBitmapPool pool;
-		std::unordered_map<size_t, std::string> paths;
+		CheckpointUnorderedMap<size_t, CheckpointString> paths;
 		bool applied = false;
 	};
+	CheckpointNativeStorage::AllocationScope resources(true);
 	auto prepared = std::make_shared<Preparation>();
 	prepared->pool = GUICheckpoint::PrepareSharedBitmapPool(images);
 	auto& pool = prepared->pool;

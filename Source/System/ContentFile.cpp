@@ -43,7 +43,7 @@ bool ContentFile::LoadCheckpoint(std::string_view text, bool validateOnly, bool 
 	try {
 		CheckpointReader archive(text, "ContentFile1", validateOnly);
 		archive(m_DataPath, m_DataPathExtension, m_DataPathWithoutExtension, m_DataPathIsImageFile, m_ImageFileInfo, m_FormattedReaderPosition, m_DataPathAndReaderPosition, m_DataModuleID, m_IsMemoryPNG);
-		if (registerPath) archive.OnCommit([this] { if (!m_DataPath.empty()) s_PathHashes[GetHash()] = m_DataPath; });
+		if (registerPath) archive.OnCommit([this] { if (!m_DataPath.empty()) RegisterPath(); });
 		archive.Finish();
 		return true;
 	} catch (const std::exception&) { return false; }
@@ -76,6 +76,21 @@ namespace {
 	struct SavedBitmapIndex {
 		std::unordered_map<const BITMAP*, std::array<std::optional<std::string>, 2>> paths;
 	};
+	struct SavedPathHashes {
+		std::unordered_map<size_t, std::string> paths;
+	};
+	std::shared_ptr<SavedPathHashes> SavedPaths() {
+		static const char kind{};
+		const auto [source, bytes] = ContentFile::PathHashRegistry();
+		return std::const_pointer_cast<SavedPathHashes>(std::static_pointer_cast<const SavedPathHashes>(CheckpointNativeStorage::ReadIndex(source, &kind, [&] {
+			using Registry = CheckpointUnorderedMap<size_t, CheckpointString>;
+			if (bytes != sizeof(Registry)) throw std::logic_error("saved path registry size changed");
+			auto values = std::make_shared<SavedPathHashes>();
+			const auto* registry = static_cast<const Registry*>(CheckpointNativeStorage::View(source, bytes));
+			CheckpointForEachValue(*registry, [&](const auto& value) { values->paths.emplace(value.first, value.second.Value()); });
+			return values;
+		})));
+	}
 	std::shared_ptr<const SavedBitmapIndex> SavedIndex() {
 		static const char kind{};
 		const auto [source, bytes] = ContentFile::LoadedBitmapRegistry();
@@ -98,6 +113,26 @@ namespace {
 std::pair<const void*, size_t> ContentFile::LoadedBitmapRegistry() {
 	static_assert(sizeof(LoadedBitmaps) == sizeof(LoadedBitmaps::Base));
 	return {s_LoadedBitmaps.data(), sizeof(s_LoadedBitmaps)};
+}
+
+std::pair<const void*, size_t> ContentFile::PathHashRegistry() { return {&s_PathHashes, sizeof(s_PathHashes)}; }
+
+std::string ContentFile::GetPathFromHash(size_t hash) {
+	if (CheckpointNativeStorage::Reading()) {
+		const auto values = SavedPaths();
+		const auto found = values->paths.find(hash);
+		return found == values->paths.end() ? std::string{} : found->second;
+	}
+	const auto found = s_PathHashes.find(hash);
+	return found == s_PathHashes.end() ? std::string{} : found->second.Value();
+}
+
+void ContentFile::RegisterPath() const {
+	if (CheckpointNativeStorage::Reading()) SavedPaths()->paths[GetHash()] = m_DataPath.Value();
+	else {
+		CheckpointNativeStorage::AllocationScope resources(true);
+		s_PathHashes[GetHash()] = m_DataPath;
+	}
 }
 
 void ContentFile::LoadedBitmapIndexScope::Refresh() {
@@ -207,6 +242,33 @@ std::string ContentFile::LoadedBitmapChangeMissedByIndex() {
 	}
 	registry.clear();
 	registry.swap(live);
+	{
+		const std::string path = "checkpoint-selftest/saved-path.png";
+		const std::string privatePath = path + ".private";
+		const size_t hash = Hash(path);
+		const size_t privateHash = Hash(privatePath);
+		const std::string privateBefore = GetPathFromHash(privateHash);
+		const auto existing = s_PathHashes.find(hash);
+		const std::optional<CheckpointString> previous = existing == s_PathHashes.end() ? std::nullopt : std::optional(existing->second);
+		s_PathHashes[hash] = path;
+		CheckpointNativeStorage::Root<decltype(s_PathHashes)> root(&s_PathHashes);
+		auto inventory = CheckpointNativeStorage::PrepareInventory();
+		if (!inventory->Arm()) way("frozen path inventory", false);
+		else {
+			root.Freeze();
+			s_PathHashes[hash] = "live path after capture";
+			const std::array headers{root.Range()};
+			CheckpointNativeStorage::ReadScope read(inventory->Pages(), headers);
+			way("frozen path value", GetPathFromHash(hash) == path);
+			ContentFile saved;
+			saved.m_DataPath = privatePath;
+			saved.RegisterPath();
+			way("private path registration", GetPathFromHash(saved.GetHash()) == saved.m_DataPath.Value());
+		}
+		way("live path stays unchanged", GetPathFromHash(hash) == "live path after capture");
+		way("private path stays private", GetPathFromHash(privateHash) == privateBefore);
+		if (previous) s_PathHashes[hash] = *previous; else s_PathHashes.erase(hash);
+	}
 	return missed;
 }
 
@@ -246,7 +308,10 @@ const std::string* ContentFile::LoadedBitmapPath(const BITMAP* bitmap, int& dept
 }
 std::unordered_map<std::string, SDL_Surface*> ContentFile::s_MemoryPNGs;
 std::unordered_map<std::string, FMOD::Sound*> ContentFile::s_LoadedSamples;
-std::unordered_map<size_t, std::string> ContentFile::s_PathHashes;
+CheckpointUnorderedMap<size_t, CheckpointString> ContentFile::s_PathHashes = [] {
+	CheckpointNativeStorage::AllocationScope resources(true);
+	return CheckpointUnorderedMap<size_t, CheckpointString>{};
+}();
 
 void ContentFile::Clear() {
 	m_DataPath.clear();
@@ -340,7 +405,7 @@ void ContentFile::SetDataPath(const std::string& newDataPath) {
 	m_DataPathIsImageFile = m_DataPathExtension == ".png" || m_DataPathExtension == ".bmp";
 
 	m_DataPathWithoutExtension = m_DataPath.substr(0, m_DataPath.length() - m_DataPathExtension.length());
-	s_PathHashes[GetHash()] = m_DataPath;
+	RegisterPath();
 	m_DataModuleID = g_PresetMan.GetModuleIDFromPath(m_DataPath);
 }
 
