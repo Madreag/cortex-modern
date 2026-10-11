@@ -170,6 +170,7 @@ void ContentFile::RefreshCheckpointSample(const std::string& path, FMOD::Sound* 
 }
 
 void ContentFile::NoteLoadedSample(const std::string& path, FMOD::Sound* sound, bool changed) noexcept {
+	if (!CheckpointNativeStorage::WorldEnabled() || CheckpointNativeStorage::Reading()) return;
 	try {
 		CheckpointNativeStorage::AllocationScope resources(true);
 		auto& record = s_SampleValues[path];
@@ -1153,7 +1154,7 @@ FMOD::Sound* ContentFile::LoadAndReleaseSound(bool abortGameForInvalidSound, boo
 
 	FMOD_MODE fmodFlags = FMOD_CREATESAMPLE | FMOD_3D | (asyncLoading ? FMOD_NONBLOCKING : FMOD_DEFAULT);
 	FMOD_CREATESOUNDEXINFO info{}; info.cbsize = sizeof(info); info.nonblockcallback = SampleLoaded;
-	FMOD_RESULT result = g_AudioMan.GetAudioSystem()->createSound(m_DataPath.c_str(), fmodFlags, asyncLoading ? &info : nullptr, &returnSample);
+	FMOD_RESULT result = g_AudioMan.GetAudioSystem()->createSound(m_DataPath.c_str(), fmodFlags, asyncLoading && CheckpointNativeStorage::WorldEnabled() ? &info : nullptr, &returnSample);
 
 	if (result != FMOD_OK) {
 		const std::string errorMessage = "Failed to create sound because of FMOD error:\n" + std::string(FMOD_ErrorString(result)) + "\nThe path and name were: ";
