@@ -47,7 +47,11 @@ namespace RTE {
 		const auto applied = PeerAppliedFramePrefix(frame), prepared = PeerFramePrefix(frame);
 		witness.bytes.assign(applied.begin(), applied.end()); witness.bytes.insert(witness.bytes.end(), prepared.begin(), prepared.end());
 		m_PeerFrameWitnesses[frame][m_Config.localPeerId] = witness;
-		SendPeerFrameMessage(std::move(witness), m_Config.frameLane);
+		// A missing witness must not stop a donor's certified history stream.
+		// Only members of this frame group need the reliable witness copy.
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+			if (peer != m_Config.localPeerId && (witness.voterMask & SeatBit(peer)) != 0)
+				SendPeerFrameMessage(witness, NetTransportLane::ControlReliable, peer);
 	}
 
 	void NetLockstepCoordinator::SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame) {
@@ -91,7 +95,15 @@ namespace RTE {
 			if (witnesses != m_PeerFrameWitnesses.end()) for (const auto& [sender, witness]: witnesses->second) witnessed |= SeatBit(sender);
 			// One donor carries the majority's witnesses, so a second copy of
 			// every frame is unnecessary. Wait for the final witness locally.
-			if ((witnessed & ~members) != 0 || 2 * std::popcount(witnessed) <= std::popcount(members)) break;
+			if ((witnessed & ~members) != 0 || 2 * std::popcount(witnessed) <= std::popcount(members)) {
+				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && m_TimingNowMs >= m_PeerTailLogAtMs) {
+					m_PeerTailLogAtMs = m_TimingNowMs + 1000;
+					DiagnosticLine() << "[net-peer-tail-witness-wait] donor=" << static_cast<int>(m_Config.localPeerId)
+					    << " reader=" << static_cast<int>(peer) << " frame=" << kept->first << " witnessed=" << witnessed
+					    << " members=" << members << " now_ms=" << m_TimingNowMs << std::endl;
+				}
+				break;
+			}
 			const auto prefix = kept->first == m_Config.startFrame ? NetHash32{} : PeerFramePrefix(kept->first - 1);
 			const auto prepared = PeerFramePrefix(kept->first);
 			std::vector<uint8_t> body(prefix.begin(), prefix.end()); body.insert(body.end(), prepared.begin(), prepared.end());
