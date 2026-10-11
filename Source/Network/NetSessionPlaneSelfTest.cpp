@@ -356,7 +356,6 @@ namespace RTE {
 			std::map<uint8_t, uint64_t> continuityFrom;
 			uint64_t substitutes = 0, continuityFrames = 0, aiFrames = 0, hostChanges = 0, firstLostPressMs = UINT64_MAX;
 			uint64_t shortGapSubstitutes = 0;
-			bool wasFrozen = false;
 			bool Start(const Case& row, std::string& error) {
 				hub.row = row; hub.faultEnd = hub.faultAt + (row.steadyMs ? row.steadyMs : row.gapMs);
 				worlds.resize(row.seats); committed.resize(row.seats); credits.resize(row.seats); queued.resize(row.seats); waitAt.resize(row.seats);
@@ -482,8 +481,8 @@ namespace RTE {
 						if (!startupResumeAt[id - 1]) startupResumeAt[id - 1] = hub.now + (id - 1) * 70;
 						if (hub.now < startupResumeAt[id - 1]) continue;
 					}
-					if (hub.row.frozen && id == hub.row.subject && hub.DuringFault()) { credits[id - 1] = 0; wasFrozen = true; continue; }
-					credits[id - 1] += (CatchingUp(peer) || (wasFrozen && id == hub.row.subject && hub.now >= hub.faultEnd) ? c_TestCatchUpRate : 1) / c_TestTickMs;
+					if (hub.row.frozen && id == hub.row.subject && hub.DuringFault()) { credits[id - 1] = 0; continue; }
+					credits[id - 1] += (CatchingUp(peer) ? c_TestCatchUpRate : 1) / c_TestTickMs;
 					credits[id - 1] = std::min(credits[id - 1], 6.0);
 					while (credits[id - 1] >= 1) {
 						const uint64_t next = world.applied + 1;
@@ -629,7 +628,7 @@ namespace RTE {
 			Case receiptRow = phaseRow;
 			receiptRow.name = "relay_receipt_gap_after_return"; receiptRow.receiptGap = true; receiptRow.postReturnMs = 200000;
 			Fixture receipts;
-			if (!receipts.Run(receiptRow, error)) return false;
+			if (!receipts.Run(receiptRow, error)) { error = "receipt gap: " + error; return false; }
 			if (!receipts.hub.receiptGapFrame || !receipts.hub.receiptGapDrops) { error = "the post-return receipt gap was not exercised"; return false; }
 			if (!receipts.hub.tailQueuePeak || receipts.hub.tailQueuePeak > 256 * 1024) { error = "duplicate recovery requests exceeded the reliable queue bound"; return false; }
 			for (uint8_t id = 1; id <= 3; ++id) {

@@ -5394,7 +5394,7 @@ namespace RTE {
 		m_PeerTailRequests = m_PeerTailFramesSent = m_PeerTailBytesSent = m_PeerTailLogAtMs = m_PeerPathLogAtMs = 0;
 		m_PeerRoundEnds.clear();
 		m_PeerTailPrefixes.clear(); m_PeerTailVotes.clear(); m_PeerTailDecisions.clear();
-		m_PeerPaceStartMs.reset(); m_PeerConsumerAtMs.reset(); m_PeerPaceStartFrame = 0; m_PeerHadHitch = false;
+		m_PeerPaceStartMs.reset(); m_PeerConsumerAtMs.reset(); m_PeerPaceStartFrame = 0; m_PeerPaceReference = GetHostPeerId(); m_PeerHadHitch = false;
 		if (!m_Config.peerSessionLinks) { PeerListenerBindings().clear(); PeerPrimaryBindings().clear(); }
 		m_FrameGroupChanges.clear(); m_PeerDelayBelowSinceMs.clear();
 		m_PeerFrameTie.reset(); m_PeerFrameTieWinners.clear(); m_PeerFrameTieSinceMs = 0;

@@ -1711,6 +1711,7 @@ namespace RTE {
 		std::optional<uint64_t> m_PeerPaceStartMs;
 		std::optional<uint64_t> m_PeerConsumerAtMs; //!< Local time of the latest displayed tick, including startup catch-up.
 		uint64_t m_PeerPaceStartFrame = 0;
+		uint8_t m_PeerPaceReference = 0;
 		bool m_PeerHadHitch = false;
 		std::map<uint8_t, uint64_t> m_PeerAppliedThrough;
 		std::map<uint8_t, uint64_t> m_PeerAppliedAtMs;

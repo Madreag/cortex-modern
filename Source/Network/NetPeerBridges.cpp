@@ -328,6 +328,8 @@ namespace RTE {
 
 	void NetLockstepCoordinator::PreparePeerBridgeInputs(uint64_t frame, uint64_t nowMs) {
 		if (const auto change = m_FrameGroupChanges.upper_bound(frame); change != m_FrameGroupChanges.begin()) m_FrameGroupMembers = std::prev(change)->second;
+		if (m_FrameGroupMembers != 0 && (m_FrameGroupMembers & SeatBit(m_PeerPaceReference)) == 0)
+			m_PeerPaceReference = static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
 		uint32_t owners = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= SeatBit(peer);
 		if (m_FrameGroupMembers == owners) m_PeerAdminFrameMembers = 0;

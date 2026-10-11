@@ -175,12 +175,8 @@ namespace RTE {
 			request.frame = frame;
 			const uint64_t end = std::min(horizon, frame + 128);
 			request.completeFrom = end;
-			// A single donor normally carries the group's signed witnesses.
-			// A missing witness or lost reply retries across all eligible donors;
-			// a lone authenticated sender still cannot certify a minority tail.
-			if (pending == m_PeerTailRequestedUntil.end()) {
-				SendPeerFrameMessage(request, NetTransportLane::ControlReliable, donor); ++m_PeerTailRequests;
-			} else for (const auto& [peer, applied]: m_PeerAppliedThrough) {
+			// Matching donor histories cover the newest frames while their witnesses are still in flight.
+			for (const auto& [peer, applied]: m_PeerAppliedThrough) {
 				if (peer != m_Config.localPeerId && applied >= frame && HasPeerFrameRoute(peer)) {
 					SendPeerFrameMessage(request, NetTransportLane::ControlReliable, peer); ++m_PeerTailRequests;
 				}
@@ -247,10 +243,8 @@ namespace RTE {
 		// permanent phase offset. This only selects the existing 3x/six-tick
 		// consumer budget; every frame still needs its ordinary certificate.
 		if (m_FrameGroupMembers != 0 && m_Config.simTickMs > 0) {
-			// Keep following the current administrator when it belongs to the
-			// active group. A lower-numbered former host returning must not
-			// abruptly make its still-catching-up clock the pacing reference.
-			const uint8_t reference = (m_FrameGroupMembers & SeatBit(GetHostPeerId())) != 0 ? GetHostPeerId() :
+			// Keep the surviving display clock when its former host returns.
+			const uint8_t reference = (m_FrameGroupMembers & SeatBit(m_PeerPaceReference)) != 0 ? m_PeerPaceReference :
 			    static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
 			const auto applied = m_PeerAppliedThrough.find(reference), observed = m_PeerAppliedAtMs.find(reference);
 			if (reference != m_Config.localPeerId && applied != m_PeerAppliedThrough.end() && observed != m_PeerAppliedAtMs.end() &&
@@ -261,6 +255,7 @@ namespace RTE {
 				const uint64_t elapsed = static_cast<uint64_t>((m_TimingNowMs - observed->second + transit) / m_Config.simTickMs);
 				if (applied->second > *m_LastCompletedSimulationTick + 1 ||
 				    elapsed > *m_LastCompletedSimulationTick + 1 - std::min(applied->second, *m_LastCompletedSimulationTick + 1)) return true;
+				return false;
 			}
 		}
 		if (!m_PeerHadHitch || !m_PeerPaceStartMs || m_TimingNowMs < *m_PeerPaceStartMs || m_Config.simTickMs <= 0) return false;
