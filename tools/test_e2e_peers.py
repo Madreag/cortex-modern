@@ -20,7 +20,7 @@ class SceneBoxesTest(unittest.TestCase):
             root.mkdir()
             record = dict(pid=42, exe_sha256=role + "-binary", box=box, engine_hostname=host,
                           source_commit="scene-commit", scene_sha256="scene-hash")
-            (root / "record.json").write_text(json.dumps(record))
+            (root / "launch.json").write_text(json.dumps(record))
             run["peers"].append(dict(peer=role, box=box, box_hostname=host, root=str(root), record=record))
 
     def tearDown(self):
@@ -32,7 +32,7 @@ class SceneBoxesTest(unittest.TestCase):
     def test_two_labels_on_one_host(self):
         joiner = self.capture["runs"][0]["peers"][1]
         joiner["box_hostname"] = joiner["record"]["engine_hostname"] = "host-computer"
-        (Path(joiner["root"]) / "record.json").write_text(json.dumps(joiner["record"]))
+        (Path(joiner["root"]) / "launch.json").write_text(json.dumps(joiner["record"]))
         check = peers.spread_check(self.capture)
         self.assertFalse(check["passed"])
         self.assertIn("run0: peers ran on one engine host", check["reasons"])
@@ -45,7 +45,7 @@ class SceneBoxesTest(unittest.TestCase):
         host = self.capture["runs"][0]["peers"][0]
         record = copy.deepcopy(host["record"])
         record["pid"] += 1
-        (Path(host["root"]) / "record.json").write_text(json.dumps(record))
+        (Path(host["root"]) / "launch.json").write_text(json.dumps(record))
         self.assertIn("run0/host: retained engine record differs at pid", peers.spread_check(self.capture)["reasons"])
 
     def test_missing_player(self):

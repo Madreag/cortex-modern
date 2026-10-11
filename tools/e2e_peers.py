@@ -84,6 +84,13 @@ class PlayerRun:
         start = run.start
 
         def start_player():
+            if self.request["box"]["os"] == "darwin":
+                # The headed player's window uses the game's normal presentation settings.
+                flag = "-feel-render-settings"
+                if flag in run.argv:
+                    position = run.argv.index(flag)
+                    del run.argv[position:position + 2]
+                run.record.update(headed=True, headless_render_settings_applied=False)
             result = start()
             video.write_json(self.started, {"peer": self.request["role"], "box": self.request["box"]["name"],
                                            "engine_hostname": socket.gethostname(), "pid": run.record.get("pid")})
@@ -140,11 +147,13 @@ def play(request_path):
     captured = video._run_one(options, local_scene, run, index, out)
     captured.update(repo=str(options.repo), topology="spread", proof=False, peer_boxes={role: request["box"]["name"]})
     for peer in captured["peers"]:
-        record_path = Path(peer["root"]) / "record.json"
+        record_path = Path(peer["root"]) / "launch.json"
         record = read(record_path) if record_path.is_file() else {}
         peer["record"].update({key: record.get(key) for key in ("box", "engine_hostname", "source_commit", "scene_sha256")})
         peer.update(box=request["box"]["name"], box_hostname=request["box"]["hostname"],
                     native_source=source, native_exe=executable, build_receipt=receipt)
+        if request["box"]["os"] == "darwin":
+            peer.update(render_cap=None, presentation="headed")
     video.finish_run(local_scene, run, captured, source, options)
     (Path(captured["root"]) / "review.json").rename(Path(captured["root"]) / (role + "-review.json"))
     video.write_json(Path(captured["root"]) / (role + "-capture.json"), captured)
@@ -169,7 +178,7 @@ def spread_check(capture):
         for peer in peers:
             label = run["name"] + "/" + peer["peer"]
             box = peer.get("box")
-            path = Path(peer["root"]) / "record.json"
+            path = Path(peer["root"]) / "launch.json"
             record = read(path) if path.is_file() else {}
             host = record.get("engine_hostname")
             boxes.append(str(box or "").casefold())
@@ -247,7 +256,7 @@ def ssh(box, args, **kwargs):
 
 
 def copy_file(box, source, destination, download=False):
-    remote = box["ssh"] + ":" + str(destination)
+    remote = box["ssh"] + ":" + str(destination).replace("\\", "/")
     args = [remote, str(source)] if download else [str(source), remote]
     subprocess.run(["scp", "-q", "-o", "BatchMode=yes", *args], check=True)
 
