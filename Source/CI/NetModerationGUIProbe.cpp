@@ -87,6 +87,8 @@ namespace {
 		bool pageDown = false; //!< show_row holds the More players press it made.
 		bool shopHeader = false; //!< The pending shop click expands a module before choosing its item.
 		size_t minuteIndex = SIZE_MAX;
+		size_t minuteObservedIndex = SIZE_MAX;
+		uint64_t minuteObservedFrame = UINT64_MAX;
 		uint64_t minuteMs = 0, minuteTick = 0, minuteProbeNs = 0, fightSamples = 0, aiFiredFrames = 0;
 		double minimumFightPace = std::numeric_limits<double>::infinity();
 		size_t landingMoveIndex = SIZE_MAX, actorCycleIndex = SIZE_MAX, aimIndex = SIZE_MAX;
@@ -222,6 +224,17 @@ namespace {
 		return Rect(rect.x, rect.y, rect.width, rect.height, rect.visible);
 	}
 
+	bool LocalActorAlive() {
+		if (Activity* activity = g_ActivityMan.GetActivity()) {
+			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+				if (!activity->IsLocalHumanSeat(player)) continue;
+				const Actor* actor = activity->GetControlledActor(player);
+				return actor && !actor->IsDead();
+			}
+		}
+		return false;
+	}
+
 	Json Observe() {
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 		// sim_frame counts every sim update since launch, lobby ticks included; lockstep_frame is the round's own.
@@ -242,16 +255,7 @@ namespace {
 			    {"holder_generation", seat.holderGeneration}, {"seat_generation", seat.seatGeneration}});
 		}
 		// This peer's own player plays on only while its controlled actor is there and alive.
-		bool localActorAlive = false;
-		if (Activity* activity = g_ActivityMan.GetActivity()) {
-			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-				if (!activity->IsLocalHumanSeat(player)) continue;
-				const Actor* actor = activity->GetControlledActor(player);
-				localActorAlive = actor && !actor->IsDead();
-				break;
-			}
-		}
-		observed["local_actor_alive"] = localActorAlive;
+		observed["local_actor_alive"] = LocalActorAlive();
 		observed["local_peer"] = snapshot.localPeerId;
 		// The setup editor a lockstep match holds in, so a script can drive and read this peer's own seats.
 		auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
@@ -1536,6 +1540,16 @@ namespace {
 			Require(stepLimit == 0 || NowMs() - probe.stepMs <= stepLimit, "step deadline at " + std::to_string(probe.index) + " (" + step.at("op").get<std::string>() + ")");
 			if (StepPhase(step) != phase) return;
 			if (menuScopeOnly && !MenuScopeStep(step)) return;
+			if (step.at("op") == "measure_minute" && ScenarioRunner::HasLockstepCoordinator()) {
+				const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
+				const bool sameFrame = probe.minuteObservedIndex == probe.index && probe.minuteObservedFrame == frame;
+				probe.minuteObservedIndex = probe.index;
+				probe.minuteObservedFrame = frame;
+				// Polls between commits have the same game state. Keep the deadlines and live-state guards on every poll.
+				if (sameFrame && probe.minuteIndex == probe.index && NowMs() - probe.minuteMs < 60000 &&
+				    g_NetMatchService.GetState() == NetMatchServiceState::Running && !g_ActivityMan.ActivityPaused() && LocalActorAlive() &&
+				    g_ActivityMan.GetActivity()->GetActivityState() != Activity::Editing) return;
+			}
 			Json observed = Observe();
 			try {
 				if (!Step(step, observed)) {
