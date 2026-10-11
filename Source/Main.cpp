@@ -7539,6 +7539,14 @@ void RunGameLoop() {
 			}
 		}
 		frameHeadWindow.reset();
+		// Leaving is local: a missing peer's next input must not hold the confirmed menu action.
+		const bool localMatchLeft = ScenarioRunner::HasLockstepCoordinator() && g_MenuMan.TakeLocalMatchLeaveRequest() &&
+		                            g_NetMatchService.GetState() == NetMatchServiceState::Running;
+		if (localMatchLeft) {
+			g_ConsoleMan.PrintString("NETWORK: Match left");
+			g_NetMatchService.LeaveMatch("Match left");
+			returnToMenuAfterNetworkEnd = true;
+		}
 
 		g_TimerMan.Update();
 		MemoryCensusByUptime();
@@ -7602,7 +7610,7 @@ void RunGameLoop() {
 		g_TimerMan.BeginSimFrame(!pacedRound ? 0 : !shedsFrames ? g_TimerMan.GetDeltaTimeTicks() :
 		                         std::max(g_TimerMan.GetDeltaTimeTicks(), static_cast<long long>((c_FloorFrameMs - g_PerformanceMan.GetMSPDAverage()) * 1000.0)));
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
-		while (true) {
+		while (!localMatchLeft) {
 			if (g_TimerMan.SimFrameBudgetSpent()) {
 				break;
 			}
@@ -9316,7 +9324,7 @@ void RunGameLoop() {
 			}
 			if (!g_ActivityMan.ActivitySetToRestart()) {
 				// A failed match belongs on Multiplayer, where its removal or connection reason is shown.
-				g_MenuMan.HandleTransitionIntoMenuLoop(!s_netReplayReturnPending && g_NetMatchService.GetState() == NetMatchServiceState::Failed);
+				g_MenuMan.HandleTransitionIntoMenuLoop(localMatchLeft || (!s_netReplayReturnPending && g_NetMatchService.GetState() == NetMatchServiceState::Failed));
 				RunMenuLoop();
 			}
 			if (!System::IsSetToQuit()) {

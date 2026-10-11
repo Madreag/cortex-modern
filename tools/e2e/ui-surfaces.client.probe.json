@@ -420,7 +420,9 @@
     {
       "op": "wait",
       "elapsed_ms": 450,
-      "scope": "menu"
+      "scope": "menu",
+      "service": "Completed",
+      "within_ms": 1500
     },
     {
       "op": "signal",

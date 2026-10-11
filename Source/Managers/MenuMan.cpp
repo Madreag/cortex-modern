@@ -164,6 +164,12 @@ void MenuMan::RequestLocalPauseMenuBack() {
 	}
 }
 
+bool MenuMan::TakeLocalMatchLeaveRequest() {
+	const bool requested = m_LocalMatchLeaveRequested;
+	m_LocalMatchLeaveRequested = false;
+	return requested;
+}
+
 void MenuMan::UpdateLocalPauseMenu() {
 	if (!m_LocalPauseMenuOpen) {
 		return;
@@ -195,7 +201,7 @@ void MenuMan::UpdateLocalPauseMenu() {
 			break;
 		case PauseMenuGUI::PauseMenuUpdateResult::MatchLeft:
 			CloseLocalPauseMenu();
-			// The leave itself is the running-service path the game loop takes when the activity is no longer in play.
+			m_LocalMatchLeaveRequested = true;
 			g_ActivityMan.PauseActivity(true, true);
 			break;
 		case PauseMenuGUI::PauseMenuUpdateResult::MatchEnded:
@@ -236,6 +242,7 @@ void MenuMan::DrawLocalPauseMenu() const {
 }
 
 void MenuMan::HandleTransitionIntoMenuLoop(bool networkMatchLeft) {
+	m_LocalMatchLeaveRequested = false;
 	// Whatever sends us to the menus ends the match this menu was local to.
 	CloseLocalPauseMenu();
 	if (networkMatchLeft) {

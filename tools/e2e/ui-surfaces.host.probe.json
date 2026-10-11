@@ -482,7 +482,8 @@
     {
       "op": "wait",
       "service": "Completed",
-      "scope": "menu"
+      "scope": "menu",
+      "within_ms": 1500
     },
     {
       "op": "finish"
