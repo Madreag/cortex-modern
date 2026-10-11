@@ -262,9 +262,6 @@ namespace RTE {
 	bool NetLockstepCoordinator::PeerFrameCatchUpActive() const {
 		NET_PLANE_CHECK();
 		if (!UsesPeerFrameGroups() || !IsRunning() || !m_LastCompletedSimulationTick) return false;
-		const auto back = m_ReclaimTransactions.find(m_Config.localPeerId);
-		// The reader keeps its catch-up budget while the neutral interval carries its return.
-		if (back != m_ReclaimTransactions.end() && *m_LastCompletedSimulationTick <= back->second.neutralThroughFrame) return true;
 		const auto own = m_PeerBridges.find(m_Config.localPeerId);
 		if (own != m_PeerBridges.end() && own->second.committedHold && !own->second.returnFrame &&
 		    m_PeerTailThrough && *m_LastCompletedSimulationTick < *m_PeerTailThrough) return true;
@@ -280,11 +277,13 @@ namespace RTE {
 			// No displayed peer clock justifies replaying the group's paused time.
 			if (reference == m_Config.localPeerId) return false;
 			const auto applied = m_PeerAppliedThrough.find(reference), observed = m_PeerAppliedAtMs.find(reference);
+			const auto [wire, route] = PeerFrameRoute(reference);
+			const bool measured = wire && wire->IsPeerPingMeasured(route);
+			const uint64_t freshnessMs = measured ? std::max<uint64_t>(250, wire->GetPeerPingMs(route) + 250ULL) : 250;
 			if (reference != m_Config.localPeerId && applied != m_PeerAppliedThrough.end() && observed != m_PeerAppliedAtMs.end() &&
-			    m_TimingNowMs >= observed->second && m_TimingNowMs - observed->second <= 250) {
+			    m_TimingNowMs >= observed->second && m_TimingNowMs - observed->second <= freshnessMs) {
 				double transit = 0.0;
-				const auto [wire, route] = PeerFrameRoute(reference);
-				if (wire && wire->IsPeerPingMeasured(route)) transit = wire->GetPeerPingMs(route) / 2.0;
+				if (measured) transit = wire->GetPeerPingMs(route) / 2.0;
 				const uint64_t elapsed = static_cast<uint64_t>((m_TimingNowMs - observed->second + transit) / m_Config.simTickMs);
 				if (applied->second > *m_LastCompletedSimulationTick + 1 ||
 				    elapsed > *m_LastCompletedSimulationTick + 1 - std::min(applied->second, *m_LastCompletedSimulationTick + 1)) return true;

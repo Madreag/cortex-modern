@@ -70,8 +70,9 @@ namespace RTE {
 		const auto sources = m_PeerSourceInputs.find(proposal.frame);
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			const bool present = sources != m_PeerSourceInputs.end() && sources->second.contains(peer);
-			if (proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0 && present) return false;
-			if (proposal.preparedFrame == 0 && (proposal.connectedMask & SeatBit(peer)) != 0 && proposal.frame >= EffectiveStartOf(peer) && !present) return false;
+			const bool neutral = IsSeatReclaimGap(peer, proposal.frame);
+			if (proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0 && (present || neutral)) return false;
+			if (proposal.preparedFrame == 0 && (proposal.connectedMask & SeatBit(peer)) != 0 && proposal.frame >= EffectiveStartOf(peer) && !neutral && !present) return false;
 			if (proposal.preparedFrame == 1 && (named & SeatBit(peer)) != 0 &&
 			    (!m_PeerBridges.contains(peer) || !m_PeerBridges.at(peer).committedHold || m_PeerBridges.at(peer).returnFrame)) return false;
 		}
@@ -91,7 +92,7 @@ namespace RTE {
 			const auto bridge = m_PeerBridges.find(peer);
 			const bool held = bridge != m_PeerBridges.end() && frame >= bridge->second.fromFrame && (!bridge->second.returnFrame || frame < *bridge->second.returnFrame);
 			if (held) continue;
-			if (frame < EffectiveStartOf(peer) || sources->second.contains(peer)) proposal.connectedMask |= SeatBit(peer);
+			if (frame < EffectiveStartOf(peer) || IsSeatReclaimGap(peer, frame) || sources->second.contains(peer)) proposal.connectedMask |= SeatBit(peer);
 			else proposal.members.push_back(peer);
 		}
 		if (returningOnly && !proposal.members.empty()) return false;
