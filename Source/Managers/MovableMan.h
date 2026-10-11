@@ -279,7 +279,7 @@ namespace RTE {
 			SpatialPartitionGrid moidGrid;
 			std::vector<std::string> luaGraphs; //!< Each Lua state's script graph as the originals left it.
 			//!< A deque so the lists stay put: each state is handed its own the moment it hands them over.
-			std::deque<std::pair<std::unordered_set<MovableObject*>, std::unordered_set<MovableObject*>>> scriptRegistrations;
+			std::deque<std::pair<CheckpointUnorderedSet<MovableObject*>, CheckpointUnorderedSet<MovableObject*>>> scriptRegistrations;
 			std::vector<std::pair<LuaStateWrapper*, long>> scriptObjects;
 			long uniqueIDCounter = 0;
 			bool held = false;

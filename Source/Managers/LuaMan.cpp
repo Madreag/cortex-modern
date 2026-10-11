@@ -7009,7 +7009,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 			const auto rootsStarted = std::chrono::steady_clock::now();
 			lua_newtable(m_State);
 			const int roots = lua_gettop(m_State);
-			std::unordered_set<MovableObject*> objects = m_RegisteredMOs;
+			CheckpointUnorderedSet<MovableObject*> objects = m_RegisteredMOs;
 			objects.insert(m_AddedRegisteredMOs.begin(), m_AddedRegisteredMOs.end());
 			for (const MovableObject* mo: objects) {
 				if (!mo->ObjectScriptsInitialized()) continue;
@@ -7366,7 +7366,7 @@ bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText
 	if (serialized) serialized->clear();
 	if (captured) *captured = CheckpointText();
 	lua_newtable(m_State);
-	std::unordered_set<MovableObject*> objects = m_RegisteredMOs;
+	CheckpointUnorderedSet<MovableObject*> objects = m_RegisteredMOs;
 	objects.insert(m_AddedRegisteredMOs.begin(), m_AddedRegisteredMOs.end());
 	for (const MovableObject* mo: objects) {
 		if (!mo->ObjectScriptsInitialized()) {
@@ -7690,7 +7690,7 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial, CheckpointLua:
 	PushScriptGraphScratchTable(m_State);
 	lua_getglobal(m_State, "_ScriptedObjects");
 	if (lua_istable(m_State, -1)) {
-		std::unordered_set<MovableObject*> objects = m_RegisteredMOs;
+		CheckpointUnorderedSet<MovableObject*> objects = m_RegisteredMOs;
 		objects.insert(m_AddedRegisteredMOs.begin(), m_AddedRegisteredMOs.end());
 		for (const MovableObject* mo: objects) {
 			if (!mo->ObjectScriptsInitialized()) continue;

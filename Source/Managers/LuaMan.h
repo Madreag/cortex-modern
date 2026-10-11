@@ -235,25 +235,25 @@ namespace RTE {
 
 		/// Gets a list of the MOs registed as using us.
 		/// @return The MOs registed as using us.
-		const std::unordered_set<MovableObject*>& GetRegisteredMOs() const { return m_RegisteredMOs; }
+		const CheckpointUnorderedSet<MovableObject*>& GetRegisteredMOs() const { return m_RegisteredMOs; }
 		/// Gets the objects waiting to join the script update list.
-		const std::unordered_set<MovableObject*>& GetPendingRegisteredMOs() const { return m_AddedRegisteredMOs; }
+		const CheckpointUnorderedSet<MovableObject*>& GetPendingRegisteredMOs() const { return m_AddedRegisteredMOs; }
 		/// Swaps both script update lists between worlds while the simulation is stopped.
-		void SwapRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
+		void SwapRegisteredMOs(CheckpointUnorderedSet<MovableObject*>& registered, CheckpointUnorderedSet<MovableObject*>& pending) {
 			m_RegisteredMOs.swap(registered);
 			m_AddedRegisteredMOs.swap(pending);
 			// A whole set left the live list, so no snapshot taken before this may skip its liveness check.
 			s_RegisteredMOUnregistrations.fetch_add(1, std::memory_order_relaxed);
 		}
 		/// Hands both lists to a set-aside world and marks them held, so nothing can be destroyed in between.
-		void SwapAndHoldRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
+		void SwapAndHoldRegisteredMOs(CheckpointUnorderedSet<MovableObject*>& registered, CheckpointUnorderedSet<MovableObject*>& pending) {
 			m_RegisteredMOs.swap(registered);
 			m_AddedRegisteredMOs.swap(pending);
 			m_HeldRegisteredMOs.push_back(&registered);
 			m_HeldRegisteredMOs.push_back(&pending);
 			s_RegisteredMOUnregistrations.fetch_add(1, std::memory_order_relaxed);
 		}
-		void ForgetHeldRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
+		void ForgetHeldRegisteredMOs(CheckpointUnorderedSet<MovableObject*>& registered, CheckpointUnorderedSet<MovableObject*>& pending) {
 			std::erase(m_HeldRegisteredMOs, &registered);
 			std::erase(m_HeldRegisteredMOs, &pending);
 		}
@@ -554,9 +554,9 @@ namespace RTE {
 
 		inline static std::atomic<uint64_t> s_RegisteredMOUnregistrations{0}; //!< Every removal from any state's live registration set, so a pass can tell when nothing it holds can have died.
 
-		std::unordered_set<MovableObject*> m_RegisteredMOs; //!< The objects using our lua state.
-		std::vector<std::unordered_set<MovableObject*>*> m_HeldRegisteredMOs; //!< Script update lists a set-aside world will swap back.
-		std::unordered_set<MovableObject*> m_AddedRegisteredMOs; //!< The objects using our lua state that were recently added.
+		CheckpointUnorderedSet<MovableObject*> m_RegisteredMOs; //!< The objects using our lua state.
+		std::vector<CheckpointUnorderedSet<MovableObject*>*> m_HeldRegisteredMOs; //!< Script update lists a set-aside world will swap back.
+		CheckpointUnorderedSet<MovableObject*> m_AddedRegisteredMOs; //!< The objects using our lua state that were recently added.
 
 		lua_State* m_State;
 		std::unique_ptr<CheckpointLua::HeapOwner> m_CheckpointHeap;
@@ -569,7 +569,7 @@ namespace RTE {
 		bool m_PreviewRegistryRooted = false; //!< Whether a barrier this state armed held the registry as a rollback root, as the VM reported it.
 		bool m_PreviewStatsReported = false; //!< Whether this state's barrier stats row has been printed.
 		std::unordered_set<std::string> m_PreviewScriptCacheKeys; //!< The script files this state had cached when the preview's record was taken.
-		std::unordered_map<std::string, std::unordered_map<std::string, LuabindObjectWrapper*>> m_PreviewScriptCacheHeld; //!< The cached function objects a reload replaced inside the preview, held for the release to put back.
+		std::unordered_map<std::string, CheckpointUnorderedMap<CheckpointString, LuabindObjectWrapper*>> m_PreviewScriptCacheHeld; //!< The cached function objects a reload replaced inside the preview, held for the release to put back.
 		std::vector<PreviewCallerCopy> m_PreviewCallerCopies; //!< The caller copies the rollback still owes a function, between the drop and the release.
 		uint64_t m_PreviewCallerCopiesRolledBack = 0; //!< Caller-held function objects the preview pointed back at the function they named before it.
 		uint64_t m_PreviewCallerCopiesKept = 0; //!< Caller-held function objects that name a function the window never reloaded.
@@ -583,9 +583,9 @@ namespace RTE {
 		std::recursive_mutex m_Mutex; //!< Mutex to ensure multiple threads aren't running something in this lua state simultaneously.
 
 		struct LuaScriptFunctionObjects {
-			std::unordered_map<std::string, LuabindObjectWrapper*> functionNamesAndObjects;
+			CheckpointUnorderedMap<CheckpointString, LuabindObjectWrapper*> functionNamesAndObjects;
 		};
-		std::unordered_map<std::string, LuaScriptFunctionObjects> m_ScriptCache;
+		CheckpointUnorderedMap<CheckpointString, LuaScriptFunctionObjects> m_ScriptCache;
 
 		std::unordered_map<std::string, PerformanceMan::ScriptTiming> m_ScriptTimings; //!< Internal map of script timings.
 
