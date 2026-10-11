@@ -14,6 +14,7 @@ namespace RTE {
 		struct Block;
 		struct Copy;
 		struct Registry;
+		struct ArmGate;
 
 	public:
 		class Allocation;
@@ -47,6 +48,9 @@ namespace RTE {
 			struct Part { std::shared_ptr<Block> block; std::shared_ptr<Copy> copy; };
 			std::vector<Part> m_Parts;
 			std::vector<size_t> m_Views;
+			struct Range { uintptr_t first; size_t bytes; };
+			std::vector<Range> m_Ranges;
+			std::shared_ptr<ArmGate> m_ArmGate;
 			void Index();
 		};
 		class Allocation {

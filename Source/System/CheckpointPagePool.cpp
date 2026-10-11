@@ -68,6 +68,13 @@ namespace {
 	};
 }
 
+struct CheckpointPagePool::ArmGate {
+	enum class State { Prepared, Arming, Armed, Cancelled };
+	std::atomic<State> state{State::Prepared};
+	std::thread::id simThread;
+	void Publish(State next) { state.store(next, std::memory_order_release); state.notify_all(); }
+};
+
 struct CheckpointPagePool::Copy {
 	Pages pages;
 	std::vector<std::atomic<unsigned char>> saved;
@@ -77,9 +84,13 @@ struct CheckpointPagePool::Copy {
 	std::atomic<uint64_t> simFaults{0}, otherFaults{0};
 	bool completed = false;
 	bool abandoned = false;
-	Copy(size_t bytes, size_t pageBytes) : pages(bytes), saved(bytes / pageBytes) {
+	const std::shared_ptr<ArmGate> gate;
+	Copy(size_t bytes, size_t pageBytes, std::shared_ptr<ArmGate> gate = {}) : pages(bytes), saved(bytes / pageBytes), gate(std::move(gate)) {
 		for (auto& page: saved) page.store(0, std::memory_order_relaxed);
 	}
+	bool Arming() const noexcept { return gate && gate->state.load(std::memory_order_acquire) == ArmGate::State::Arming; }
+	bool Armed() const noexcept { return gate ? gate->state.load(std::memory_order_acquire) == ArmGate::State::Armed : armed.load(std::memory_order_acquire); }
+	std::thread::id SimulationThread() const noexcept { return gate ? gate->simThread : simThread; }
 };
 
 struct CheckpointPagePool::Block {
@@ -109,28 +120,40 @@ struct CheckpointPagePool::Block {
 	}
 	bool SavePages(size_t first, size_t count, bool fault) noexcept {
 		const auto started = fault ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-		Locked guard(lock);
-		bool savedAny = false;
-		for (const auto& copy: copies) {
-			if (!copy->armed.load(std::memory_order_relaxed)) continue;
-			for (size_t page = first; page < first + count; ++page) {
-				if (copy->saved[page].load(std::memory_order_relaxed)) continue;
-				const size_t offset = page * pageBytes;
-				std::memcpy(copy->pages.data + offset, live.data + offset, pageBytes);
-				copy->saved[page].store(1, std::memory_order_release);
-				savedAny = true;
+		for (;;) {
+			std::shared_ptr<ArmGate> arming;
+			{
+				Locked guard(lock);
+				for (const auto& copy: copies) if (copy->gate && copy->gate->state.load(std::memory_order_acquire) == ArmGate::State::Arming) {
+					arming = copy->gate; break;
+				}
+				if (!arming) {
+					bool savedAny = false;
+					for (const auto& copy: copies) {
+						if (!copy->Armed()) continue;
+						for (size_t page = first; page < first + count; ++page) {
+							if (copy->saved[page].load(std::memory_order_relaxed)) continue;
+							const size_t offset = page * pageBytes;
+							std::memcpy(copy->pages.data + offset, live.data + offset, pageBytes);
+							copy->saved[page].store(1, std::memory_order_release);
+							savedAny = true;
+						}
+					}
+					const bool opened = (!fault && !savedAny) || PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data + first * pageBytes), count * pageBytes);
+					if (fault) {
+						const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
+						for (const auto& copy: copies) if (copy->Armed() && !copy->completed) {
+							const bool simulation = std::this_thread::get_id() == copy->SimulationThread();
+							(simulation ? copy->simFaults : copy->otherFaults).fetch_add(1, std::memory_order_relaxed);
+							(simulation ? copy->simFaultNs : copy->otherFaultNs).fetch_add(elapsed, std::memory_order_relaxed);
+						}
+					}
+					return opened;
+				}
 			}
+			// An older generation cannot open a range while its next boundary arms it.
+			arming->state.wait(ArmGate::State::Arming, std::memory_order_acquire);
 		}
-		const bool opened = (!fault && !savedAny) || PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data + first * pageBytes), count * pageBytes);
-		if (fault) {
-			const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
-			for (const auto& copy: copies) if (copy->armed.load(std::memory_order_relaxed) && !copy->completed) {
-				const bool simulation = std::this_thread::get_id() == copy->simThread;
-				(simulation ? copy->simFaults : copy->otherFaults).fetch_add(1, std::memory_order_relaxed);
-				(simulation ? copy->simFaultNs : copy->otherFaultNs).fetch_add(elapsed, std::memory_order_relaxed);
-			}
-		}
-		return opened;
 	}
 	bool SavePage(size_t page, bool fault) noexcept { return SavePages(page, 1, fault); }
 	static bool OnWrite(void* context, uintptr_t address) noexcept {
@@ -140,7 +163,7 @@ struct CheckpointPagePool::Block {
 	void Complete(const std::shared_ptr<Copy>& copy) {
 		Locked guard(lock);
 		copy->completed = true;
-		if (std::all_of(copies.begin(), copies.end(), [](const auto& value) { return !value->armed.load(std::memory_order_relaxed) || value->completed; }) &&
+		if (std::all_of(copies.begin(), copies.end(), [](const auto& value) { return !value->Arming() && (!value->Armed() || value->completed); }) &&
 		    !PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data), live.bytes))
 			throw std::runtime_error("could not open copied native checkpoint pages");
 	}
@@ -149,7 +172,7 @@ struct CheckpointPagePool::Block {
 		std::erase(copies, copy);
 		copy->abandoned = true;
 		copy->armed.store(false, std::memory_order_release);
-		if (std::all_of(copies.begin(), copies.end(), [](const auto& value) { return !value->armed.load(std::memory_order_relaxed) || value->completed; }))
+		if (std::all_of(copies.begin(), copies.end(), [](const auto& value) { return !value->Arming() && (!value->Armed() || value->completed); }))
 			PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data), live.bytes);
 	}
 	bool Contains(const void* source, size_t bytes) const {
@@ -191,6 +214,7 @@ uint64_t CheckpointPagePool::InventoryGeneration() noexcept {
 
 std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::PrepareInventory(uint64_t& generation) {
 	auto snapshot = std::make_shared<Snapshot>();
+	snapshot->m_ArmGate = std::make_shared<ArmGate>();
 	{
 		auto& registry = Registry::Get();
 		std::lock_guard lock(registry.mutex);
@@ -203,10 +227,21 @@ std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::PrepareI
 	}
 	// Shadow storage and page watches are built after releasing the live allocation inventory.
 	for (auto& part: snapshot->m_Parts) {
-		part.copy = std::make_shared<Copy>(part.block->live.bytes, part.block->pageBytes);
+		part.copy = std::make_shared<Copy>(part.block->live.bytes, part.block->pageBytes, snapshot->m_ArmGate);
 		part.block->Prepare(part.copy);
 	}
 	snapshot->Index();
+	snapshot->m_Ranges.reserve(snapshot->m_Parts.size());
+	for (const auto& part: snapshot->m_Parts) {
+		const uintptr_t first = reinterpret_cast<uintptr_t>(part.block->live.data);
+#ifndef _WIN32
+		if (!snapshot->m_Ranges.empty() && snapshot->m_Ranges.back().first + snapshot->m_Ranges.back().bytes == first)
+			snapshot->m_Ranges.back().bytes += part.block->live.bytes;
+		else
+#endif
+		// VirtualProtect cannot span independently reserved Windows allocations.
+		snapshot->m_Ranges.push_back({first, part.block->live.bytes});
+	}
 	return snapshot;
 }
 
@@ -258,7 +293,7 @@ std::span<const std::byte> CheckpointPagePool::Snapshot::ReadBytes(const void* s
 	if (end == m_Parts.begin() || !std::prev(end)->block->Contains(source, bytes))
 		throw std::runtime_error("native checkpoint span lies outside its frozen allocation");
 	const auto& part = *std::prev(end);
-	if (!part.copy->armed.load(std::memory_order_acquire)) throw std::logic_error("native checkpoint read before its boundary");
+	if (!part.copy->Armed()) throw std::logic_error("native checkpoint read before its boundary");
 	const size_t offset = address - reinterpret_cast<uintptr_t>(part.block->live.data);
 	if (bytes) {
 		const size_t first = offset / part.block->pageBytes, last = (offset + bytes - 1) / part.block->pageBytes;
@@ -336,7 +371,7 @@ bool CheckpointPagePool::Snapshot::CanBorrow(const void* source, size_t bytes) c
 	if (end == m_Parts.begin()) return false;
 	const Part& part = *std::prev(end);
 	if (!part.block->Contains(source, bytes)) return false;
-	if (!part.copy->armed.load(std::memory_order_acquire)) return false;
+	if (!part.copy->Armed()) return false;
 	if (!bytes) return true;
 	const size_t first = (address - reinterpret_cast<uintptr_t>(part.block->live.data)) / part.block->pageBytes;
 	const size_t last = (address - reinterpret_cast<uintptr_t>(part.block->live.data) + bytes - 1) / part.block->pageBytes;
@@ -345,7 +380,7 @@ bool CheckpointPagePool::Snapshot::CanBorrow(const void* source, size_t bytes) c
 }
 
 CheckpointPagePool::Snapshot::~Snapshot() {
-	for (const auto& part: m_Parts) if (part.copy) part.block->Abandon(part.copy);
+	Cancel();
 }
 
 bool CheckpointPagePool::Snapshot::Read(const void* source, void* destination, size_t bytes) const {
@@ -362,6 +397,20 @@ bool CheckpointPagePool::Snapshot::Read(const void* source, void* destination, s
 }
 
 void CheckpointPagePool::Snapshot::Arm() const {
+	if (m_ArmGate) {
+		ArmGate::State expected = ArmGate::State::Prepared;
+		if (!m_ArmGate->state.compare_exchange_strong(expected, ArmGate::State::Arming, std::memory_order_acq_rel)) {
+			if (expected == ArmGate::State::Armed) return;
+			throw std::logic_error("native checkpoint inventory is no longer prepared");
+		}
+		try {
+			m_ArmGate->simThread = std::this_thread::get_id();
+			for (const auto& range: m_Ranges) if (!PageWriteFence::ProtectCopyPages(range.first, range.bytes))
+				throw std::runtime_error("could not fence native checkpoint inventory");
+			m_ArmGate->Publish(ArmGate::State::Armed);
+			return;
+		} catch (...) { Cancel(); throw; }
+	}
 	try {
 		for (const auto& part: m_Parts) part.block->Arm(part.copy);
 	} catch (...) {
@@ -372,7 +421,7 @@ void CheckpointPagePool::Snapshot::Arm() const {
 
 void CheckpointPagePool::Snapshot::WarmShadow() const {
 	for (const auto& part: m_Parts) {
-		if (part.copy->armed.load(std::memory_order_acquire) || part.copy->abandoned)
+		if (part.copy->Armed() || part.copy->abandoned)
 			throw std::logic_error("native checkpoint shadow warming after its boundary");
 		auto* destination = static_cast<volatile unsigned char*>(part.copy->pages.data);
 		for (size_t offset = 0; offset < part.copy->pages.bytes; offset += part.block->pageBytes) destination[offset] = 0;
@@ -380,12 +429,13 @@ void CheckpointPagePool::Snapshot::WarmShadow() const {
 }
 
 void CheckpointPagePool::Snapshot::Cancel() const noexcept {
-	for (const auto& part: m_Parts) part.block->Abandon(part.copy);
+	if (m_ArmGate) m_ArmGate->Publish(ArmGate::State::Cancelled);
+	for (const auto& part: m_Parts) if (part.copy) part.block->Abandon(part.copy);
 }
 
 void CheckpointPagePool::Snapshot::Drain() const {
 	for (const auto& part: m_Parts) {
-		if (!part.copy->armed.load(std::memory_order_acquire)) throw std::logic_error("native checkpoint drain before its boundary");
+		if (!part.copy->Armed()) throw std::logic_error("native checkpoint drain before its boundary");
 		const auto start = std::chrono::steady_clock::now();
 		const size_t batch = std::max<size_t>(1, (size_t{64} << 10) / part.block->pageBytes);
 		for (size_t page = 0; page < part.copy->saved.size(); page += batch)
@@ -409,6 +459,35 @@ CheckpointPagePool::Costs CheckpointPagePool::Snapshot::Cost() const {
 }
 
 std::string CheckpointPagePool::SelfTestMismatch() {
+	{
+		Allocation owned(4096, true);
+		auto* value = static_cast<uint64_t*>(owned.Data());
+		*value = 211;
+		uint64_t generation = 0;
+		auto first = PrepareInventory(generation);
+		first->Arm();
+		*value = 223;
+		first->Drain();
+		auto next = PrepareInventory(generation);
+		next->m_ArmGate->Publish(ArmGate::State::Arming);
+		for (const auto& range: next->m_Ranges) if (!PageWriteFence::ProtectCopyPages(range.first, range.bytes)) {
+			next->Cancel();
+			return "prepared inventory could not protect its ranges";
+		}
+		for (const auto& part: first->m_Parts) part.block->Complete(part.copy);
+		first->Cancel();
+		next->m_ArmGate->simThread = std::this_thread::get_id();
+		next->m_ArmGate->Publish(ArmGate::State::Armed);
+		*value = 227;
+		next->Drain();
+		uint64_t saved = 0;
+		if (!next->Read(value, &saved, sizeof(saved)) || saved != 223)
+			return "retired native inventory opened the next generation's arming range";
+		next->Cancel();
+		bool refused = false;
+		try { next->Arm(); } catch (const std::logic_error&) { refused = true; }
+		if (!refused) return "cancelled inventory was armed again";
+	}
 	{
 		std::shared_ptr<const Snapshot> snapshot;
 		const uint64_t* source = nullptr;
