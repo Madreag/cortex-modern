@@ -4207,6 +4207,8 @@ void ProcessMenuScript() {
 	} else if (cmd == "exit") {
 		std::string owed;
 		if (!MenuAutomation::OwedPressed(owed)) return MenuScriptFail("the script never pressed what its sweeps left to it: " + owed);
+		MenuScriptPrint("exit unix_ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()) +
+		    " lockstep_frame=" + std::to_string(ScenarioRunner::GetLockstepCompletedFrame()) + " peer=" + std::to_string(ScenarioRunner::GetLockstepLocalPeerId()));
 		CompleteMenuScript();
 	} else {
 		return MenuScriptFail("unknown command: " + cmd);
@@ -8275,6 +8277,8 @@ void RunGameLoop() {
 					// A final report can show a returned seat as human. Retain the
 					// ownership at each displayed tick so a blackout's AI interval is observable.
 					observation["ai_held_peer_ids"] = nlohmann::json::array();
+					observation["net_clock_ms"] = NetLockstepNowMs();
+					observation["unix_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 					if (const auto config = ScenarioRunner::GetLockstepMatchConfig())
 						for (uint8_t peer = 1; peer <= config->peerCount; ++peer)
 							if (ScenarioRunner::IsLockstepSeatUnderAI(peer, simTick)) observation["ai_held_peer_ids"].push_back(peer);

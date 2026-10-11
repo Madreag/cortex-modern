@@ -8,6 +8,7 @@
 #include "lz4.h"
 
 #include <cmath>
+#include <chrono>
 #include <limits>
 
 namespace RTE {
@@ -97,14 +98,16 @@ namespace RTE {
 		}
 		if (!m_TestBlackoutAtMs && m_LastCompletedSimulationTick && *m_LastCompletedSimulationTick >= m_TestBlackoutFrame) {
 			m_TestBlackoutAtMs = nowMs; m_TestBlackoutEnded = false;
-			DiagnosticLine() << "[net-link-blackout] begin peer=" << static_cast<int>(m_Config.localPeerId) << " frame=" << *m_LastCompletedSimulationTick << " duration_ms=" << m_TestBlackoutDurationMs << std::endl;
+			DiagnosticLine() << "[net-link-blackout] begin peer=" << static_cast<int>(m_Config.localPeerId) << " frame=" << *m_LastCompletedSimulationTick << " duration_ms=" << m_TestBlackoutDurationMs
+			    << " now_ms=" << nowMs << " unix_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
 		}
 		if (!m_TestBlackoutAtMs) return false;
 		const bool active = nowMs >= *m_TestBlackoutAtMs && nowMs - *m_TestBlackoutAtMs < m_TestBlackoutDurationMs;
 		if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->frameBlackout = active;
 		if (!active && !m_TestBlackoutEnded) {
 			m_TestBlackoutEnded = true;
-			DiagnosticLine() << "[net-link-blackout] end peer=" << static_cast<int>(m_Config.localPeerId) << " elapsed_ms=" << nowMs - *m_TestBlackoutAtMs << std::endl;
+			DiagnosticLine() << "[net-link-blackout] end peer=" << static_cast<int>(m_Config.localPeerId) << " elapsed_ms=" << nowMs - *m_TestBlackoutAtMs
+			    << " now_ms=" << nowMs << " unix_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
 		}
 		return active;
 	}
@@ -159,6 +162,16 @@ namespace RTE {
 	void NetLockstepCoordinator::TickPeerFrameGroups(uint64_t nowMs) {
 		TickPeerSessionWire(nowMs);
 		if (!UsesPeerFrameGroups() || !IsRunning()) return;
+		if (m_Config.peerSessionLinks && nowMs >= m_PeerPathLogAtMs) {
+			m_PeerPathLogAtMs = nowMs + 5000;
+			for (const auto& [peer, path]: m_PeerReceiptDelaySamples) {
+				const auto [wire, native] = m_Config.peerSessionLinks->RouteTo(peer);
+				DiagnosticLine() << "[net-peer-path] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer)
+				    << " now_ms=" << nowMs << " frame=" << m_LastCompletedSimulationTick.value_or(0)
+				    << " transport_rtt_ms=" << (wire && wire->IsPeerPingMeasured(native) ? static_cast<int64_t>(wire->GetPeerPingMs(native)) : -1)
+				    << " receipt_p95_ms=" << path.P95Ms() << " input_delay_ticks=" << InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame) << std::endl;
+			}
+		}
 		ResolvePeerBridgeInputConflicts(nowMs);
 		if (m_FrameGroupChanges.empty()) { m_FrameGroupMembers = (1U << m_Config.peerCount) - 1; m_FrameGroupChanges[m_Config.startFrame] = m_FrameGroupMembers; }
 		if (nowMs >= m_PeerHeartbeatAtMs) {

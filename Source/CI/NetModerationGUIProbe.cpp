@@ -222,6 +222,9 @@ namespace {
 		    {"panel_open", g_MenuMan.IsNetworkPanelOpen()},
 		    {"paused", g_ActivityMan.ActivityPaused()}, {"seats", Json::array()}};
 		observed["chat_history"] = Json::array();
+		observed["ai_held_peer_ids"] = Json::array();
+		for (uint8_t peer = 1; peer <= 4; ++peer)
+			if (ScenarioRunner::IsLockstepSeatUnderAI(peer, lockstepFrame)) observed["ai_held_peer_ids"].push_back(peer);
 		for (const auto& line: g_NetMatchService.ChatHistory()) observed["chat_history"].push_back({{"sender", line.senderPeerId}, {"scope", line.scope}, {"text", line.text}});
 		for (const auto& seat: g_NetMatchService.GetModerationSeats()) {
 			observed["seats"].push_back({{"seat", seat.stableSeat}, {"name", seat.displayName}, {"dropped", seat.dropped},
@@ -615,9 +618,10 @@ namespace {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("lockstep_frame_at_least") || step.contains("renders") ||
 			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
 			    step.contains("editing") || step.contains("seat_ready") || step.contains("brains_ready") || step.contains("seat_text_contains") ||
-			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer"),
+			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer") || step.contains("ai_held_peer_ids"),
 			    "wait has no predicate");
 			if (step.contains("held_peer") && !HeldPeer(step.at("held_peer"))) return false;
+			if (step.contains("ai_held_peer_ids") && observed["ai_held_peer_ids"] != step["ai_held_peer_ids"]) return false;
 			// The title screen's own scene reads as Gameplay too, paused; a started game runs.
 			if (step.contains("paused") && observed["paused"] != step["paused"]) return false;
 			if (step.contains("chat_entry_open") && observed["net_ui"].at("chat_entry_open") != step["chat_entry_open"]) return false;

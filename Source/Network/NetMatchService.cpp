@@ -238,7 +238,11 @@ namespace RTE {
 		m_LastMatchSummary = m_CurrentMatchSummary;
 		// The next lobby retires the coordinator. Preserve the completed
 		// round's counters before that transition, including clean leaves.
-		if (m_Runner && m_Session && m_Coordinator) m_CapturedRunnerReport = m_Runner->BuildReportJson(*m_Session, *m_Coordinator);
+		if (m_Runner && m_Session && m_Coordinator) {
+			auto captured = nlohmann::json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
+			captured["directory_at_end"] = nlohmann::json::parse(m_Directory.BuildReportJson());
+			m_CapturedRunnerReport = captured.dump();
+		}
 	}
 
 	std::string NetRejoinAddress(const std::string& address, uint16_t port) {

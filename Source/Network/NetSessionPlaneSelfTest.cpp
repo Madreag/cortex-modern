@@ -48,6 +48,8 @@ namespace RTE {
 			Case row;
 			std::map<uint16_t, Wire*> listeners;
 			std::set<Wire*> wires;
+			std::map<std::pair<uint8_t, uint8_t>, unsigned> dials;
+			bool cleanRemoteClose = true;
 			bool DuringFault() const { return now >= faultAt && now < faultEnd; }
 			bool Split(uint8_t a, uint8_t b) const {
 				if (!DuringFault() || row.frozen || row.blackout || !row.gapMs) return false;
@@ -90,6 +92,7 @@ namespace RTE {
 				const auto found = hub.listeners.find(wanted);
 				if (found == hub.listeners.end()) { if (error) *error = "the fixture peer has no listener"; return false; }
 				Wire* other = found->second;
+				++hub.dials[{owner, other->owner}];
 				const NetPeerId local = next++, remote = other->next++;
 				connections[local] = {other, remote}; other->connections[remote] = {this, local};
 				events.push_back({hub.now, {NetTransportEventType::PeerConnected, local, NetTransportLane::ControlReliable, {}, {}}});
@@ -154,7 +157,9 @@ namespace RTE {
 			void Disconnect(NetPeerId id, const std::string& reason) override {
 				const auto found = connections.find(id); if (found == connections.end()) return;
 				auto [other, remote] = found->second; connections.erase(found); other->connections.erase(remote);
-				other->events.push_back({hub.now, {NetTransportEventType::PeerDisconnected, remote, NetTransportLane::ControlReliable, {}, reason}});
+				NetTransportEvent closed{NetTransportEventType::PeerDisconnected, remote, NetTransportLane::ControlReliable, {}, reason};
+				[]<class Event>(Event& event, bool clean) { if constexpr (requires { event.closedByPeer; }) event.closedByPeer = clean; }(closed, hub.cleanRemoteClose);
+				other->events.push_back({hub.now, std::move(closed)});
 			}
 			void Stop() override { while (!connections.empty()) Disconnect(connections.begin()->first, "fixture closes"); if (port && hub.listeners[port] == this) hub.listeners.erase(port); port = 0; events.clear(); }
 			std::vector<NetTransportEvent> PollEvents() override {
@@ -466,6 +471,46 @@ namespace RTE {
 				return true;
 			}
 		};
+
+		bool CheckRelayReturnAndDepartures(std::string& error) {
+			Case row{"three_peer_relay_host_return"};
+			row.seats = 3; row.subject = 1; row.gapMs = 8000; row.blackout = true;
+			row.rttMs = 250; row.otherRttMs = 100;
+			Fixture recovered;
+			if (!recovered.Run(row, error)) return false;
+			for (uint8_t id = 1; id <= 3; ++id) {
+				if (!recovered.caughtAt[id - 1] || recovered.caughtAt[id - 1] > recovered.hub.faultEnd + 10000) {
+					error = "relay host did not return to every observer within ten seconds"; return false;
+				}
+				if (id != 1 && recovered.hub.dials[{id, 1}] != 1) {
+					error = "a healthy primary host route was redialed"; return false;
+				}
+			}
+			// Both an announced round end and an explicit transport close must
+			// release an excluded reader. Unannounced loss remains a partition.
+			for (unsigned arm = 0; arm < 3; ++arm) {
+				Fixture ended;
+				if (!ended.Start(row, error)) return false;
+				while (ended.hub.now <= ended.hub.faultEnd + 500) if (!ended.Step(error)) return false;
+				auto& host = *ended.peers[0];
+				if (!host.HasHeldAISeat(1)) { error = "departure lever did not leave the host reading a held seat"; return false; }
+				const uint64_t applied = ended.worlds[0].applied, at = ended.hub.now;
+				if (arm == 0) {
+					ended.peers[1]->Complete("member reached its end"); ended.peers[2]->Complete("member reached its end");
+				} else {
+					ended.hub.cleanRemoteClose = arm == 1;
+					for (auto* wire: ended.hub.wires) if (wire->owner != 1) wire->Stop();
+				}
+				while (ended.hub.now <= at + 10000 && host.IsRunning()) { host.Tick(ended.hub.now); ++ended.hub.now; }
+				if (host.IsFailed() || host.GetResumeFrame() != applied + 1 ||
+				    (arm == 2 ? !host.IsRunning() : !host.IsStopped() || !host.GetStats().timeoutReason.starts_with("Complete:"))) {
+					error = "last-donor departure was not bounded, rewrote progress, or treated a partition as an end: arm=" + std::to_string(arm); return false;
+				}
+				std::cout << "[net-session-plane-selftest] relay-departure arm=" << arm << " elapsed_ms=" << ended.hub.now - at
+				          << " applied=" << applied << " stopped=" << host.IsStopped() << " result=PASS" << std::endl;
+			}
+			return true;
+		}
 	}
 
 	bool NetSessionPlaneSelfTest::CheckOwnerHitch(unsigned arm, std::string* error) {
@@ -589,6 +634,7 @@ namespace RTE {
 		std::cout << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=29" << std::endl;
 		for (const auto& row: rows) {
 			std::string error; Fixture fixture; bool ok = fixture.Run(row, error);
+			if (ok && row.name == std::string("relay_link_blackout_return")) ok = CheckRelayReturnAndDepartures(error);
 			if (row.name == std::string("partition_3_1") || row.name == std::string("host_absent_3s"))
 			    for (unsigned order = row.subject == 1 ? 3 : 1; order <= 3; ++order) {
 				auto asymmetric = row; asymmetric.asymmetricBridge = order; asymmetric.rttMs = asymmetric.otherRttMs = 4;

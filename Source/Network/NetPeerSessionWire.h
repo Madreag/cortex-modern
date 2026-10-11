@@ -40,6 +40,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> received;
 		std::deque<NetTransportEvent> events;
 		bool SendTo(uint8_t peer, NetTransportLane lane, const std::vector<uint8_t>& bytes);
+		std::pair<INetTransport*, NetPeerId> RouteTo(uint8_t peer) const;
 		NetPeerId SessionRoute(uint8_t peer) const;
 		void ForwardAdmission(INetTransport& wire, const NetTransportEvent& event);
 		void BindAdmission(uint8_t peer, NetPeerId sessionRoute);

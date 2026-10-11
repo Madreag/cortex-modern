@@ -5389,7 +5389,7 @@ namespace RTE {
 		m_PeerArrivalLatencyMs.clear(); m_PeerForwardedInputs.clear(); m_PeerAcceptedThrough.clear(); m_PeerInputReceipts.clear(); m_PeerAcceptedAhead.clear(); m_PeerSourceInputs.clear();
 		m_PeerCommittedTail.clear(); m_PeerFrameIncoming.clear(); m_PeerTailThrough.reset(); m_PeerAppliedThrough.clear(); m_PeerAppliedAtMs.clear();
 		m_PeerTailRequestedUntil.clear();
-		m_PeerTailRequests = m_PeerTailFramesSent = m_PeerTailBytesSent = m_PeerTailLogAtMs = 0;
+		m_PeerTailRequests = m_PeerTailFramesSent = m_PeerTailBytesSent = m_PeerTailLogAtMs = m_PeerPathLogAtMs = 0;
 		m_PeerRoundEnds.clear();
 		m_PeerTailPrefixes.clear(); m_PeerTailVotes.clear(); m_PeerTailDecisions.clear();
 		m_PeerPaceStartMs.reset(); m_PeerPaceStartFrame = 0; m_PeerHadHitch = false;

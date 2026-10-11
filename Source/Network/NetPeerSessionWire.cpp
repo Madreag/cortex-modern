@@ -4,6 +4,14 @@
 
 namespace RTE {
 
+	std::pair<INetTransport*, NetPeerId> NetPeerSessionLinks::RouteTo(uint8_t peer) const {
+		if (const auto dial = probes.find(peer); dial != probes.end() && dial->second.answered && dial->second.transport && dial->second.connection != c_InvalidNetPeerId)
+			return {dial->second.transport.get(), dial->second.connection};
+		if (listener) for (const auto& [native, bound]: listenerBindings) if (bound == peer) return {listener.get(), native};
+		if (primary) for (const auto& [native, bound]: primaryBindings) if (bound == peer) return {primary, native};
+		return {};
+	}
+
 	bool NetPeerSessionLinks::SendTo(uint8_t peer, NetTransportLane lane, const std::vector<uint8_t>& bytes) {
 		if (const auto dial = probes.find(peer); dial != probes.end() && dial->second.answered && dial->second.transport &&
 		    dial->second.connection != c_InvalidNetPeerId && dial->second.transport->Send(dial->second.connection, lane, bytes)) return true;
@@ -103,22 +111,22 @@ namespace RTE {
 		const NetLockstepPlaneGuard guard;
 		const auto peer = m_Links->sessionRoutes.find(route);
 		if (peer == m_Links->sessionRoutes.end()) return 0;
-		const auto dial = m_Links->probes.find(peer->second);
-		return dial != m_Links->probes.end() && dial->second.transport ? dial->second.transport->GetPeerPingMs(dial->second.connection) : 0;
+		const auto [wire, native] = m_Links->RouteTo(peer->second);
+		return wire ? wire->GetPeerPingMs(native) : 0;
 	}
 	bool NetPeerSessionWire::IsPeerPingMeasured(NetPeerId route) const {
 		const NetLockstepPlaneGuard guard;
 		const auto peer = m_Links->sessionRoutes.find(route);
 		if (peer == m_Links->sessionRoutes.end()) return false;
-		const auto dial = m_Links->probes.find(peer->second);
-		return dial != m_Links->probes.end() && dial->second.transport && dial->second.transport->IsPeerPingMeasured(dial->second.connection);
+		const auto [wire, native] = m_Links->RouteTo(peer->second);
+		return wire && wire->IsPeerPingMeasured(native);
 	}
 	std::string NetPeerSessionWire::GetConnectedRoute(NetPeerId route) const {
 		const NetLockstepPlaneGuard guard;
 		const auto peer = m_Links->sessionRoutes.find(route);
 		if (peer == m_Links->sessionRoutes.end()) return {};
-		const auto dial = m_Links->probes.find(peer->second);
-		return dial != m_Links->probes.end() && dial->second.transport ? dial->second.transport->GetConnectedRoute(dial->second.connection) : std::string{};
+		const auto [wire, native] = m_Links->RouteTo(peer->second);
+		return wire ? wire->GetConnectedRoute(native) : std::string{};
 	}
 
 } // namespace RTE
