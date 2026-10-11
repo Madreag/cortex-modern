@@ -116,6 +116,10 @@ int AEmitter::Create(const AEmitter& reference) {
 	m_BurstTriggered = reference.m_BurstTriggered;
 	m_BurstTimer = reference.m_BurstTimer;
 	m_LastEmitTmr = reference.m_LastEmitTmr;
+	if (!IsFaithfulClone() && reference.IsOriginalPreset() && ScenarioRunner::IsLockstepControllerSyncActive()) {
+		// The preset has waited since loading. A new match emitter must not emit that old backlog.
+		m_LastEmitTmr.Reset();
+	}
 	m_PersistedBurstTimerAnchor = reference.m_PersistedBurstTimerAnchor;
 	m_PersistedLastEmitTimerAnchor = reference.m_PersistedLastEmitTimerAnchor;
 	m_PersistedEmissionAccumulators = reference.m_PersistedEmissionAccumulators;
