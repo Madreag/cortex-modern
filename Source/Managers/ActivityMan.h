@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -416,7 +417,8 @@ namespace RTE {
 		bool SubmitCheckpointArchiveImage(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
 		    std::shared_future<bool>& task, SaveCompression compression, const AutosaveIdentity* identity, std::shared_ptr<CheckpointImage> image,
 		    std::function<void()> complete = {}, std::shared_ptr<CheckpointCache> sceneCache = {}, std::shared_ptr<const CheckpointImage> previousImage = {},
-		    std::vector<CheckpointText> retired = {}, std::vector<std::shared_ptr<const BitmapSnapshot>> retiredLayers = {}, std::shared_ptr<const void> pixelStorage = {});
+		    std::vector<CheckpointText> retired = {}, std::vector<std::shared_ptr<const BitmapSnapshot>> retiredLayers = {}, std::shared_ptr<const void> pixelStorage = {},
+		    std::shared_ptr<std::list<AutosaveVerdict>> verdict = {});
 		/// Sections, when given with the manager parts, receives every part the globals carry under its name and scope.
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage,
 		    std::vector<std::pair<std::string, int64_t>>* timings = nullptr, const std::vector<CheckpointText>* managerParts = nullptr,
@@ -499,9 +501,9 @@ namespace RTE {
 		std::mutex m_DeferredRefusalMutex; //!< The checkpoint worker hands its refusals through it.
 		std::vector<std::pair<SaveKind, std::vector<std::string>>> m_DeferredRefusals; //!< Found off the simulation thread, reported on it.
 		std::vector<std::string> m_DeferredSaveErrors; //!< The writer reports file errors on the simulation thread.
-		std::deque<AutosaveVerdict> m_AutosaveVerdicts; //!< One per finished automatic capture, in the order the writer finished them.
+		std::list<AutosaveVerdict> m_AutosaveVerdicts; //!< One per finished automatic capture, in the order the writer finished them.
 		void QueueDeferredSaveRefusal(SaveKind kind, std::vector<std::string> problems);
-		void NoteAutosaveVerdict(uint64_t tick, bool archived);
+		void NoteAutosaveVerdict(uint64_t tick, bool archived, const std::shared_ptr<std::list<AutosaveVerdict>>& prepared = {});
 		static constexpr size_t c_SaveRefusalRecordLimit = 16;
 		long long m_LastSaveMainMs = 0;
 		long long m_LastSaveZipMs = 0;

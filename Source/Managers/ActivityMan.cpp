@@ -681,7 +681,11 @@ ActivityMan::~ActivityMan() {
 }
 
 struct ActivityMan::PreparedAutosave {
-	struct Written { std::string path; size_t bytes = 0; };
+	struct Written {
+		std::string path;
+		size_t bytes = 0;
+		std::shared_ptr<std::list<AutosaveVerdict>> verdict = std::make_shared<std::list<AutosaveVerdict>>(1);
+	};
 	struct Header {
 		std::array<char, AutosaveStore::c_MaxMatchIdBytes + 1> match{};
 		uint64_t tick = 0;
@@ -762,11 +766,11 @@ struct ActivityMan::PreparedAutosave {
 
 	void Refused(const Header& header, std::exception_ptr error) noexcept {
 		try {
+			owner.NoteAutosaveVerdict(header.tick, false, header.written->verdict);
 			try { std::rethrow_exception(error); }
 			catch (const ScriptGraphRefusal& refusal) { owner.QueueDeferredSaveRefusal(SaveKind::Autosave, refusal.problems); }
 			catch (const std::bad_alloc&) { std::fputs("[autosave] failed reason=out of memory\n", stdout); }
 			catch (const std::exception& failure) { System::PrintDiagnosticLine(std::format("[autosave] failed tick={} reason={}", header.tick, failure.what())); }
-			owner.NoteAutosaveVerdict(header.tick, false);
 		} catch (...) { std::fputs("[autosave] failed reason=out of memory\n", stdout); }
 	}
 
@@ -872,7 +876,7 @@ struct ActivityMan::PreparedAutosave {
 		image->cloneCosts = CheckpointCloneCost::Take(&image->cloneThreadCosts);
 		header.written->bytes = image->imageBytes; header.written->path = path;
 		std::shared_future<bool> archived;
-		if (!owner.SubmitCheckpointArchiveImage(file, path, match, header.tick, archived, SaveCompression::Fast, &header.identity, std::move(image), [] {})) return false;
+		if (!owner.SubmitCheckpointArchiveImage(file, path, match, header.tick, archived, SaveCompression::Fast, &header.identity, std::move(image), [] {}, {}, {}, {}, {}, {}, header.written->verdict)) return false;
 		// One frozen image remains owned until its archive has finished.
 		return archived.get();
 	}
@@ -984,9 +988,13 @@ void ActivityMan::QueueDeferredSaveRefusal(SaveKind kind, std::vector<std::strin
 }
 
 // The writer thread's verdict on an automatic capture, taken by the simulation thread a tick or more later.
-void ActivityMan::NoteAutosaveVerdict(uint64_t tick, bool archived) {
+void ActivityMan::NoteAutosaveVerdict(uint64_t tick, bool archived, const std::shared_ptr<std::list<AutosaveVerdict>>& prepared) {
 	std::lock_guard lock(m_DeferredRefusalMutex);
-	m_AutosaveVerdicts.push_back(AutosaveVerdict{tick, archived});
+	if (prepared) {
+		if (prepared->empty()) return;
+		prepared->front() = {tick, archived};
+		m_AutosaveVerdicts.splice(m_AutosaveVerdicts.end(), *prepared);
+	} else m_AutosaveVerdicts.push_back(AutosaveVerdict{tick, archived});
 }
 
 std::optional<ActivityMan::AutosaveVerdict> ActivityMan::TakeAutosaveVerdict() {
@@ -1718,7 +1726,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
     std::shared_future<bool>& task, SaveCompression compression, const AutosaveIdentity* identity, std::shared_ptr<CheckpointImage> image,
     std::function<void()> complete, std::shared_ptr<CheckpointCache> sceneCache, std::shared_ptr<const CheckpointImage> previousImage,
-    std::vector<CheckpointText> retired, std::vector<std::shared_ptr<const BitmapSnapshot>> retiredLayers, std::shared_ptr<const void> pixelStorage) {
+    std::vector<CheckpointText> retired, std::vector<std::shared_ptr<const BitmapSnapshot>> retiredLayers, std::shared_ptr<const void> pixelStorage,
+    std::shared_ptr<std::list<AutosaveVerdict>> verdict) {
 	std::vector<std::string> layerNames;
 	for (const auto& [name, snapshot]: image->layers) layerNames.push_back(name);
 	const SaveKind kind = matchId.empty() ? (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual) : SaveKind::Autosave;
@@ -1772,7 +1781,7 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 	// are one series; a save the player asked for has none and is always written.
 	const AutosaveArchiveWriter::Submitted submitted = AutosaveWriter().Submit([this, image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel, kind,
 	                                automatic, descriptor, manifest, pinnedCheckpointSource, sceneCache, previousImage, complete = std::move(complete),
-	                                retired = std::move(retired), retiredLayers = std::move(retiredLayers), failure = CheckpointFailure::Capture(), pixelStorage = std::move(pixelStorage)](bool replaced) mutable {
+                                retired = std::move(retired), retiredLayers = std::move(retiredLayers), failure = CheckpointFailure::Capture(), pixelStorage = std::move(pixelStorage), verdict = std::move(verdict)](bool replaced) mutable {
 		CheckpointFailure::ForwardScope failureScope(failure);
 		pixelStorage.reset();
 		if (replaced) {
@@ -1783,7 +1792,7 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 			sceneCache.reset();
 			image.reset();
 			// The capture that replaced it carries a later tick; this one's archive never lands.
-			if (automatic) NoteAutosaveVerdict(tick, false);
+			if (automatic) NoteAutosaveVerdict(tick, false, verdict);
 			return false;
 		}
 		const bool frozenNative = static_cast<bool>(complete);
@@ -1791,6 +1800,7 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 		const auto sinceStart = [&start] {
 			return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
 		};
+		bool archived = false;
 		try {
 			if (std::this_thread::get_id() == simThread) throw std::logic_error("autosave serializer missing a worker thread");
 			if (automatic) CrossCaptureBarrierFromEnvironment("writer_pending", tick, descriptor.roundId);
@@ -1874,7 +1884,8 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 			// The archive exists only now. What a world publishes is this output, never a guess at the file.
 			if (automatic) {
 				PublishCompletedAutosave(tick, path);
-				NoteAutosaveVerdict(tick, true);
+				NoteAutosaveVerdict(tick, true, verdict);
+				archived = true;
 			}
 			if (matchId.empty()) g_ConsoleMan.PrintString("SYSTEM: Game saved to \"" + fileName + "\"!");
 			const char* metrics = std::getenv("CCCP_CHECKPOINT_METRICS");
@@ -1900,14 +1911,14 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 		} catch (const std::bad_alloc&) {
 			image.reset();
 			std::fputs("[autosave] failed reason=out of memory\n", stdout);
-			if (automatic) { try { NoteAutosaveVerdict(tick, false); } catch (const std::bad_alloc&) {} }
-			return false;
+			if (automatic) { try { NoteAutosaveVerdict(tick, false, verdict); } catch (const std::bad_alloc&) {} }
+			return verdict && archived;
 		} catch (const ScriptGraphRefusal& refusal) {
 			CheckpointCow::Get().RecordWorker(sinceStart());
 			System::PrintDiagnosticLine("[autosave] failed tick=" + std::to_string(tick) + " reason=capture refused\n");
 			for (const std::string& problem: refusal.problems) System::PrintDiagnosticLine("[autosave] refusal: " + problem + "\n");
 			QueueDeferredSaveRefusal(kind, refusal.problems);
-			if (automatic) NoteAutosaveVerdict(tick, false);
+			if (automatic) NoteAutosaveVerdict(tick, false, verdict);
 			image.reset();
 			return false;
 		} catch (const std::exception& error) {
@@ -1917,7 +1928,7 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 				std::lock_guard lock(m_DeferredRefusalMutex);
 				m_DeferredSaveErrors.push_back("ERROR: Could not save game \"" + fileName + "\": " + error.what());
 			}
-			if (automatic) NoteAutosaveVerdict(tick, false);
+			if (automatic) NoteAutosaveVerdict(tick, false, verdict);
 			image.reset();
 			return false;
 		}
