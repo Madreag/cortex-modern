@@ -33,6 +33,7 @@
 #include "ACrab.h"
 #include "ACRocket.h"
 #include "ACDropShip.h"
+#include "AEmitter.h"
 #include "HeldDevice.h"
 #include "Loadout.h"
 #include "Deployment.h"
@@ -4721,6 +4722,38 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 			int releases = 0; while (controls.GetEvent(&notification)) if (notification.GetMsg() == GUITextBox::Enter && notification.GetControl() == field) ++releases;
 			check("release_does_not_send_again", releases == 0); present();
 		}
+	} else if (row == "emitter-clock") {
+		const auto* preset = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset("AEmitter", "Dent Metal", "Base.rte"));
+		if (!check("emitter_preset_loaded", preset != nullptr)) return false;
+		struct OldEmitter : AEmitter {
+			void AgeEmissionClock() { m_LastEmitTmr.SetElapsedSimTimeMS(60000); }
+		} source;
+		if (!check("emitter_source_created", source.Create(*preset) == 0)) return false;
+		source.SetPresetName("Old emission clock");
+		source.AgeEmissionClock();
+		const double oldElapsed = source.GetLastEmitTimerElapsedSimMS();
+		check("match_clock_active", ScenarioRunner::IsLockstepControllerSyncActive());
+		{
+			AEmitter fresh;
+			check("fresh_match_emitter_starts_its_own_clock", fresh.Create(source) == 0 && fresh.GetLastEmitTimerElapsedSimMS() == 0);
+		}
+		{
+			const MovableObject::FaithfulCloneScope clone(false);
+			AEmitter saved;
+			check("saved_emitter_keeps_its_clock", saved.Create(source) == 0 && saved.GetLastEmitTimerElapsedSimMS() == oldElapsed);
+		}
+		source.ResetOriginalPresetFlag();
+		{
+			AEmitter live;
+			check("live_emitter_copy_keeps_its_clock", live.Create(source) == 0 && live.GetLastEmitTimerElapsedSimMS() == oldElapsed);
+		}
+		source.SetPresetName("Old emission clock");
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		{
+			AEmitter single;
+			check("single_player_emitter_keeps_its_clock", single.Create(source) == 0 && single.GetLastEmitTimerElapsedSimMS() == oldElapsed);
+		}
+		ScenarioRunner::SetLockstepCoordinator(&coordinator);
 	} else return check("known_row", false);
 	return passed;
 }
