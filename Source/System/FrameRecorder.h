@@ -61,11 +61,12 @@ namespace RTE {
 		static bool SaveRgbPng(const std::string& path, const unsigned char* pixels, int width, int height, std::size_t stride);
 
 		/// Opens directory/frames and starts the writer. The directory must exist and be empty.
+		/// Scripted input prepares the encoder's transfers before the first drawn frame.
 		/// @return Whether recording started; error names the directory and the reason when it did not.
-		bool Start(const std::string& directory, int fps, std::string* error);
+		bool Start(const std::string& directory, int fps, std::string* error, bool scriptedInput = false);
 
 		/// Same, with an explicit queue bound. A bound of zero drops every frame.
-		bool Start(const std::string& directory, int fps, std::size_t queueBound, std::string* error);
+		bool Start(const std::string& directory, int fps, std::size_t queueBound, std::string* error, bool scriptedInput = false);
 
 		bool Enabled() const { return m_Enabled; }
 		/// The directory this run's frames go to.
@@ -120,6 +121,7 @@ namespace RTE {
 
 		bool m_Enabled = false;
 		bool m_Finished = false;
+		bool m_ScriptedReadback = false;
 		std::function<void()> m_FinishAction;
 		int m_Fps = c_DefaultFps;
 		std::size_t m_QueueBound = c_DefaultQueueBound;

@@ -11391,7 +11391,7 @@ int main(int argc, char** argv) {
 	// The managers are up, so the recorder takes the run's own resolution from the first frame on.
 	if (!s_recordVideoDirectory.empty()) {
 		std::string recorderError;
-		if (!FrameRecorder::Instance().Start(s_recordVideoDirectory, s_recordVideoFps, &recorderError)) {
+		if (!FrameRecorder::Instance().Start(s_recordVideoDirectory, s_recordVideoFps, &recorderError, !s_menuScriptPath.empty())) {
 			{
 				std::ostringstream line;
 				line << "[record-video] refused: " << recorderError;

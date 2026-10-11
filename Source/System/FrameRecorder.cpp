@@ -221,11 +221,11 @@ namespace RTE {
 		Finish();
 	}
 
-	bool FrameRecorder::Start(const std::string& directory, int fps, std::string* error) {
-		return Start(directory, fps, c_DefaultQueueBound, error);
+	bool FrameRecorder::Start(const std::string& directory, int fps, std::string* error, bool scriptedInput) {
+		return Start(directory, fps, c_DefaultQueueBound, error, scriptedInput);
 	}
 
-	bool FrameRecorder::Start(const std::string& directory, int fps, std::size_t queueBound, std::string* error) {
+	bool FrameRecorder::Start(const std::string& directory, int fps, std::size_t queueBound, std::string* error, bool scriptedInput) {
 		const auto refuse = [error](const std::string& reason) {
 			if (error) *error = reason;
 			return false;
@@ -255,9 +255,11 @@ namespace RTE {
 		const char* codec = std::getenv("CCCP_TEST_RECORD_CODEC");
 		m_EncoderPath = encoder ? encoder : "";
 		m_EncoderCodec = codec && *codec ? codec : "libx264";
+		const char* probeScript = std::getenv("CC_TEST_NET_UI_SCRIPT");
+		m_ScriptedReadback = (probeScript && *probeScript) || (scriptedInput && !m_EncoderPath.empty());
 		// Scripted captures prepare their shared context before the first rendered frame.
 #if defined(_WIN32)
-		if (const char* script = std::getenv("CC_TEST_NET_UI_SCRIPT"); script && *script) {
+		if (m_ScriptedReadback) {
 			const int64_t cpuBefore = ThreadCpuNanoseconds();
 			std::string readbackError;
 			m_ReadbackContext = FrameReadbackContext::Create(readbackError);
@@ -439,8 +441,7 @@ namespace RTE {
 
 	void FrameRecorder::WriterLoop() {
 		const bool profileReadback = std::getenv("CCCP_TEST_READBACK_TIMING") != nullptr;
-		const char* script = std::getenv("CC_TEST_NET_UI_SCRIPT");
-		const bool scriptedReadback = script && *script;
+		const bool scriptedReadback = m_ScriptedReadback;
 #if defined(_WIN32)
 		const bool writerCurrent = scriptedReadback && m_ReadbackContext && !m_EncoderPath.empty();
 #else
