@@ -970,7 +970,7 @@ namespace RTE {
 				*error = "the last player's leave stopped the host or its returning dial was not answered within two seconds"; return false;
 			}
 			const uint64_t activation = rounds[0]->GetStats().nextFrame + 24;
-			if (!rounds[0]->BeginPrivatePeerReturn(2, ready.front().transportPeerId, 2, activation, 0, error)) return false;
+			if (!rounds[0]->SchedulePeerReclaim(2, ready.front().transportPeerId, 2, activation, error)) return false;
 			for (; hub.now < answerAt + 2500 && applied[0] < activation;) if (!step(false)) return false;
 			if (rounds[0]->HasHeldAISeat(2) || applied[0] < activation) { *error = "the answered returning seat did not reclaim its committed frame"; return false; }
 			return true;

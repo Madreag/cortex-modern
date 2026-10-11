@@ -1575,6 +1575,7 @@ namespace RTE {
 		friend bool TestASeatKnockingWhileTheRoundFormsIsAnswered(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
+		friend class NetSessionPlaneSelfTest;
 		friend bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error);
 		friend bool TestCommitOnlySuccessorReproposesRelease(std::string* error);
 		friend struct SeatSuccessionTestAccess;
