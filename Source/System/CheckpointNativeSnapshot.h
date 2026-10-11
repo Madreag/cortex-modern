@@ -379,10 +379,11 @@ namespace RTE {
 		}
 		template<class T> T* CopyValue(const T* source) {
 			if (!source) return nullptr;
+			source = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
 			CheckpointNativeStorage::CaptureScope allocation;
 			if (const auto known = m_Values.Find(source)) return static_cast<T*>(*known);
 			auto& owner = AddValueOwner([](void* value) noexcept { delete static_cast<T*>(value); });
-			auto value = std::make_unique<T>(Freeze(*static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)))));
+			auto value = std::make_unique<T>(Freeze(*source));
 			const auto [winner, claimed] = m_Values.TryEmplace(source, value.get());
 			if (!claimed) return static_cast<T*>(winner);
 			RememberReadValues(source, value.get());
