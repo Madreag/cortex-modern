@@ -750,8 +750,13 @@ namespace {
 		} else if (op == "wait_public_row") {
 			auto* main = g_MenuMan.IsMainMenuInteractive() ? g_MenuMan.GetMainMenu() : nullptr;
 			std::string list; int row = -1;
-			if (!main || !main->AutomationRowOf(step.at("name").get<std::string>(), list, row)) return false;
-			observed["public_row"] = {{"list", list}, {"row", row}};
+			NetDirectoryClient::GameRow game;
+			if (!main || !main->AutomationRowOf(step.at("name").get<std::string>(), list, row, &game)) return false;
+			observed["public_row"] = {{"list", list}, {"row", row}, {"state", game.state}, {"joinable", game.joinable},
+			    {"seats_free", game.seatsFree}, {"seats_held", game.seatsHeld}, {"reason", game.reason}};
+			if (step.contains("state") && game.state != step.at("state").get<std::string>()) return false;
+			if (step.contains("held_at_least") && game.seatsHeld < step.at("held_at_least").get<int64_t>()) return false;
+			if (step.contains("joinable") && game.joinable != step.at("joinable").get<bool>()) return false;
 		} else if (op == "editor_pick") {
 			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 			auto* editor = game ? game->GetEditorGUI(LocalPlayer(step)) : nullptr;

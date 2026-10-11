@@ -440,7 +440,9 @@ def moderation_scene():
         joiner += capture(f"{action}-joiner") + [dict(op="assert_control", scope="menu", control="LabelMultiplayerLandingStatus",
                 equals=dict(text=f"The host {reason} you from this session", visible=True), fits=True, inside="MultiplayerLandingPanel")]
         if action == "ban":
-            joiner += [menu("activate ButtonMultiplayerJoinGame"), dict(op="wait_public_row", scope="menu", name="PublicGameRowPort{PORT}"),
+            # The directory heartbeat must advertise the held seat before the new join can reach the host's ban check.
+            joiner += [menu("activate ButtonMultiplayerJoinGame"), dict(op="wait_public_row", scope="menu", name="PublicGameRowPort{PORT}",
+                       state="running", held_at_least=1, joinable=True),
                        menu("click_row PublicGameRowPort{PORT}"), menu("activate ButtonMultiplayerConnect"),
                        wait(scope="menu", control="LabelJoinSelected", text_contains="The host banned you from this session")]
             joiner += capture("banned-rejoin-refused") + [dict(op="assert_control", scope="menu", control="LabelJoinSelected",

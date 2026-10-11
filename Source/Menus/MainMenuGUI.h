@@ -90,7 +90,7 @@ namespace RTE {
 		/// Gets the control manager for the screen currently drawn.
 		GUIControlManager* AutomationManager() const;
 		/// The list and row a scripted row name stands for: GameRow<n>, GameRowPort<port> (the joinable game on that port) or LabelReplayRow<n>.
-		bool AutomationRowOf(const std::string& name, std::string& listName, int& row) const;
+		bool AutomationRowOf(const std::string& name, std::string& listName, int& row, NetDirectoryClient::GameRow* game = nullptr) const;
 		/// The games the Join screen lists, in list order: a row shows words, the join target is here.
 		const std::vector<NetDirectoryClient::GameRow>& AutomationGameRows() const { return m_GameRows; }
 		static std::string DiscoveredGameRowText(const NetDirectoryClient::GameRow& row, GUIFont* font, int width);
