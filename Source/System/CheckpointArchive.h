@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointString.h"
+#include "CheckpointFrozenContainers.h"
 
 #include "Timer.h"
 #include "Vector.h"
@@ -170,20 +171,22 @@ namespace RTE {
 		template <class T, size_t N> void Value(const std::array<T, N>& values) { for (const auto& value: values) Value(value); }
 		template <class T, size_t N> void Value(const T (&values)[N]) { for (const auto& value: values) Value(value); }
 		template <class T, class U> void Value(const std::pair<T, U>& value) { (*this)(value.first, value.second); }
-		template <class T, class Allocator> void Value(const std::vector<T, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
+		template <class T, class Allocator> void Value(const std::vector<T, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); CheckpointForEachValue(values, [&](const auto& value) { Value(value); }); }
 		// vector<bool> packs bits, so its elements have no storage byte of their own to copy.
-		template <class Allocator> void Value(const std::vector<bool, Allocator>& values) { Value(values.size()); for (bool value: values) Value(value ? 1u : 0u); }
-		template <class T, class Allocator> void Value(const std::list<T, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
-		template <class T, class Allocator> void Value(const std::deque<T, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
-		template <class T, class Compare, class Allocator> void Value(const std::set<T, Compare, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
-		template <class K, class V, class Compare, class Allocator> void Value(const std::map<K, V, Compare, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& [key, value]: values) (*this)(key, value); }
+		template <class Allocator> void Value(const std::vector<bool, Allocator>& values) { Value(values.size()); CheckpointForEachValue(values, [&](bool value) { Value(value ? 1u : 0u); }); }
+		template <class T, class Allocator> void Value(const std::list<T, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); CheckpointForEachValue(values, [&](const auto& value) { Value(value); }); }
+		template <class T, class Allocator> void Value(const std::deque<T, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); CheckpointForEachValue(values, [&](const auto& value) { Value(value); }); }
+		template <class T, class Compare, class Allocator> void Value(const std::set<T, Compare, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); CheckpointForEachValue(values, [&](const auto& value) { Value(value); }); }
+		template <class K, class V, class Compare, class Allocator> void Value(const std::map<K, V, Compare, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); CheckpointForEachValue(values, [&](const auto& entry) { (*this)(entry.first, entry.second); }); }
 		template <class K, class V, class Hash, class Equal, class Allocator> void Value(const std::unordered_map<K, V, Hash, Equal, Allocator>& values) {
 			constexpr bool plainKey = (std::is_integral_v<K> && !std::is_same_v<K, bool>) || std::is_enum_v<K> || (std::is_same_v<K, std::string> || std::is_same_v<K, CheckpointString>);
 			constexpr bool plainValue = (std::is_integral_v<V> && !std::is_same_v<V, bool>) || std::is_enum_v<V> || std::is_same_v<V, float> || std::is_same_v<V, double> || (std::is_same_v<V, std::string> || std::is_same_v<V, CheckpointString>);
 			if constexpr (plainKey && plainValue) {
 				if (m_Recording && BatchEnabled()) {
 					if (values.empty()) { Value(size_t{0}); return; }
-					std::vector<std::pair<K, V>> owned(values.begin(), values.end());
+					std::vector<std::pair<K, V>> owned;
+					owned.reserve(values.size());
+					CheckpointForEachValue(values, [&](const auto& entry) { owned.emplace_back(entry.first, entry.second); });
 					size_t bytes = owned.size() * sizeof(std::pair<K, V>);
 					if constexpr ((std::is_same_v<K, std::string> || std::is_same_v<K, CheckpointString>)) for (const auto& entry: owned) bytes += entry.first.size();
 					if constexpr ((std::is_same_v<V, std::string> || std::is_same_v<V, CheckpointString>)) for (const auto& entry: owned) bytes += entry.second.size();
@@ -199,7 +202,9 @@ namespace RTE {
 					return;
 				}
 			}
-			Value(std::map<K, V>(values.begin(), values.end()));
+			std::map<K, V> ordered;
+			CheckpointForEachValue(values, [&](const auto& entry) { ordered.emplace(entry.first, entry.second); });
+			Value(ordered);
 		}
 		template <class T> requires requires(const T& value) { value.SaveCheckpoint(); }
 		void Value(const T& value) {
@@ -237,7 +242,7 @@ namespace RTE {
 			else if constexpr (!(std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>) && requires { typename T::value_type; }) {
 				std::vector<decltype(OwnValue(std::declval<const typename T::value_type&>()))> owned;
 				owned.reserve(value.size());
-				for (const auto& field: value) owned.push_back(OwnValue(field));
+				CheckpointForEachValue(value, [&](const auto& field) { owned.push_back(OwnValue(field)); });
 				return owned;
 			} else return value;
 		}
@@ -284,10 +289,10 @@ namespace RTE {
 					auto owned = std::make_shared<Owned>();
 					owned->values.reserve(values.size());
 					size_t bytes = sizeof(Owned);
-					for (const auto& field: values) {
+					CheckpointForEachValue(values, [&](const auto& field) {
 						owned->values.push_back(OwnValue(field));
 						bytes += OwnedValueBytes(owned->values.back());
-					}
+					});
 					Buffer().OwnedPrimitiveBlock(owned, [](std::string& text, std::string_view data, bool tape) {
 						if (data.size() != sizeof(const void*)) throw std::logic_error("invalid owned collection block");
 						const void* address;

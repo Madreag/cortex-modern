@@ -3,6 +3,7 @@
 #include "CheckpointNativeContainers.h"
 
 #include <bit>
+#include <climits>
 #include <cstring>
 #include <iterator>
 #include <stdexcept>
@@ -118,6 +119,40 @@ namespace RTE {
 		const T* first = source.data();
 		if (!source.empty() && CheckpointNativeStorage::IsView(&source)) first = static_cast<const T*>(CheckpointNativeStorage::View(first, source.size() * sizeof(T)));
 		for (size_t index = 0; index < source.size(); ++index) values.Add(first + index);
+		return values;
+	}
+
+	template<class Allocator> std::vector<bool> CheckpointValues(const std::vector<bool, Allocator>& source) {
+		if (!CheckpointNativeStorage::IsView(&source)) return {source.begin(), source.end()};
+		std::vector<bool> values;
+		values.reserve(source.size());
+		if (source.empty()) return values;
+		const auto first = source.begin();
+#ifdef _MSVC_STL_VERSION
+		const auto* words = first._Myptr;
+		const size_t offset = first._Myoff;
+#elif defined(__GLIBCXX__)
+		const auto* words = first._M_p;
+		const size_t offset = first._M_offset;
+#elif defined(_LIBCPP_VERSION)
+		struct Fields { const typename std::vector<bool, Allocator>::size_type* words; unsigned offset; };
+		static_assert(sizeof(first) == sizeof(Fields) && std::is_trivially_copyable_v<decltype(first)>);
+		Fields fields;
+		std::memcpy(&fields, &first, sizeof(fields));
+		const auto* words = fields.words;
+		const size_t offset = fields.offset;
+#else
+#error The native checkpoint reader needs this standard library's packed bit iterator.
+#endif
+		using Word = std::remove_cvref_t<decltype(*words)>;
+		constexpr size_t bits = sizeof(Word) * CHAR_BIT;
+		if (offset >= bits) throw std::logic_error("invalid frozen bit offset");
+		const size_t count = (offset + source.size() + bits - 1) / bits;
+		words = static_cast<const Word*>(CheckpointNativeStorage::View(words, count * sizeof(Word)));
+		for (size_t index = 0; index < source.size(); ++index) {
+			const size_t at = offset + index;
+			values.push_back((words[at / bits] & (Word{1} << (at % bits))) != 0);
+		}
 		return values;
 	}
 
@@ -261,6 +296,16 @@ namespace RTE {
 		return Access::Get(source);
 	}
 	template<class T, class Container> auto CheckpointValues(const std::queue<T, Container>& source) { return CheckpointValues(CheckpointQueueValues(source)); }
+
+	template<class Container, class Visit> void CheckpointForEachValue(const Container& source, Visit visit) {
+		if constexpr (requires { CheckpointValues(source); }) {
+			if (CheckpointNativeStorage::IsView(&source)) {
+				for (const auto& value: CheckpointValues(source)) visit(value);
+				return;
+			}
+		}
+		for (const auto& value: source) visit(value);
+	}
 
 	template<class T, class A, class Iterator> size_t CheckpointIteratorIndex(const std::list<T, A>& source, Iterator position) {
 		const void* wanted = CheckpointContainerDetail::Node(position);

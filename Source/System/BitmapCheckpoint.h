@@ -1,6 +1,7 @@
 #pragma once
 #include "CheckpointArchive.h"
 #include "CheckpointPagePool.h"
+#include "SceneLayer.h"
 #include "allegro.h"
 #include <cstring>
 #include <iostream>
@@ -36,6 +37,7 @@ namespace RTE {
 		std::string pixels;
 		std::optional<CheckpointText> capturedPixels;
 		void Capture(BITMAP* bitmap) {
+            bitmap = CheckpointNativeStorage::Source(bitmap);
             if (!bitmap) { *this = BitmapCheckpoint{}; return; }
             width = bitmap->w; height = bitmap->h; depth = bitmap_color_depth(bitmap);
             clip = bitmap->clip; clipLeft = bitmap->cl; clipTop = bitmap->ct;
@@ -51,6 +53,7 @@ namespace RTE {
 				return;
 			}
 			capturedPixels.reset();
+			if (CheckpointNativeStorage::Reading()) { pixels = BitmapSnapshot::Freeze(bitmap)->PixelBytes(); return; }
 			const size_t stride = static_cast<size_t>(width) * ((depth + 7) / 8);
 			pixels.resize(stride * height);
 			for (int y = 0; y < height; ++y) std::memcpy(pixels.data() + y * stride, bitmap->line[y], stride);

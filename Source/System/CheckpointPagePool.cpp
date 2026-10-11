@@ -5,6 +5,7 @@
 #include "CheckpointNativeStorage.h"
 #include "CheckpointString.h"
 #include "CheckpointFrozenContainers.h"
+#include "CheckpointArchive.h"
 #include "ScenarioRunner.h"
 #include "Vector.h"
 
@@ -595,6 +596,40 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 }
 
 std::string RTE::CheckpointFrozenContainersSelfTestMismatch() {
+	{
+		CheckpointNativeStorage::AllocationScope allocation(true);
+		struct Values {
+			CheckpointVector<bool> flags;
+			CheckpointMap<int, CheckpointList<CheckpointString>> nested;
+			CheckpointUnorderedMap<int, CheckpointString> hash;
+		};
+		auto live = MakeCheckpointNativeShared<Values>();
+		for (int index = 0; index < 8197; ++index) live->flags.push_back((index % 3 == 0) != (index % 71 == 0));
+		for (int index = 0; index < 17; ++index) {
+			live->nested[index].push_back(std::string(117 + index, 'a' + index));
+			live->nested[index].push_back(std::to_string(index));
+			live->hash.emplace(index, std::string(151 + index, 'z' - index));
+		}
+		const auto save = [](const Values& values) {
+			CheckpointWriter writer("FrozenContainers1");
+			writer(values.flags, values.nested, values.hash);
+			return writer.Text();
+		};
+		const std::string expected = save(*live);
+		const Values* address = live.get();
+		const auto pages = CheckpointNativeStorage::Prepare();
+		for (const auto& part: pages) part->Arm();
+		live.reset();
+		auto reused = MakeCheckpointNativeShared<Values>();
+		reused->flags.assign(8197, true);
+		CheckpointNativeStorage::ReadScope read(pages);
+		const auto* frozen = CheckpointNativeStorage::Source(address);
+		if (save(*frozen) != expected) return "frozen nested or packed containers changed their archive bytes";
+		for (bool batched: {false, true}) {
+			CheckpointWriter::BatchOverride batch(batched);
+			if (CheckpointWriter::CaptureNative([&] { return save(*frozen); }).Text() != expected) return "frozen container capture changed its archive bytes";
+		}
+	}
 	const auto render = []<class T>(const T& value) -> std::string {
 		if constexpr (requires { value.first; value.second; }) return std::to_string(value.first) + ":" + value.second.Value();
 		else return value.Value();
