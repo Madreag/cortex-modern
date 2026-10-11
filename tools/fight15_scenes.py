@@ -263,7 +263,7 @@ def scene_checks(peer, steps):
     return checks
 
 
-def buy(peer, fire=True):
+def buy(peer, fire=True, landing_offset=None, control_on_delivery=False):
     steps = [dict(op="game_mouse", button="right", down=True), wait(renders=3, sim_advanced=2),
              dict(op="wait_scene", input_player=0, equals=dict(pie_visible=True)),
              dict(op="pie_point", input_player=0, command=6),
@@ -279,10 +279,12 @@ def buy(peer, fire=True):
               menu("activate BodiesTab", scope="buy", input_player=0), dict(op="shop_pick", input_player=0, preset="Coalition.rte/Soldier Light"),
               menu("activate GunsTab", scope="buy", input_player=0), dict(op="shop_pick", input_player=0, preset="Coalition.rte/Assault Rifle")]
     steps += capture(f"order-{peer}")
+    landing = dict(op="landing_zone_move", input_player=0, within_ms=15000)
+    if landing_offset is not None: landing["offset_x"] = landing_offset
     steps += [dict(op="assert_buy", input_player=0, equals=dict(cart=["Coalition.rte/Soldier Light", "Coalition.rte/Assault Rifle"], craft="Base.rte/Rocket MK2", passengers=1), remember="order"),
               dict(op="assert_control", scope="buy", input_player=0, control="BuyButton", equals=dict(visible=True, enabled=True), fits=True, inside="BuyGUIBox"),
               menu("activate BuyButton", scope="buy", input_player=0),
-              dict(op="landing_zone_move", input_player=0, within_ms=15000)]
+              landing]
     steps += capture(f"landing-zone-{peer}")
     steps += [dict(op="assert_scene", input_player=0, equals=dict(landing_zone_selection=True,
               screen_text="Choose your landing zone... Hold UP or DOWN to place multiple orders"))]
@@ -291,11 +293,13 @@ def buy(peer, fire=True):
               dict(op="wait_scene", input_player=0, funds_delta_from="order"),
               dict(op="assert_scene", input_player=0, funds_delta_from="order"),
               dict(op="wait_scene", input_player=0, delivered="Coalition.rte/Soldier Light")]
+    select = [dict(op="actor_next_until", input_player=0, preset="Coalition.rte/Soldier Light"),
+              dict(op="wait_scene", input_player=0, equals=dict(preset="Coalition.rte/Soldier Light", weapon="Coalition.rte/Assault Rifle"))]
+    if control_on_delivery: steps += select
     steps += capture(f"arrival-{peer}")
     steps += [dict(op="assert_scene", input_player=0, delivered="Coalition.rte/Soldier Light", equals=dict(alive=True)),
               dict(op="assert_buy", input_player=0, equals=dict(visible=False, enabled=False))]
-    steps += [dict(op="actor_next_until", input_player=0, preset="Coalition.rte/Soldier Light")]
-    steps += [dict(op="wait_scene", input_player=0, equals=dict(preset="Coalition.rte/Soldier Light", weapon="Coalition.rte/Assault Rifle"))]
+    if not control_on_delivery: steps += select
     if fire:
         steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset="Coalition.rte/Soldier Light", weapon="Coalition.rte/Assault Rifle"), remember="before-fire")]
         steps += [dict(op="game_mouse", down=True), wait(renders=5, sim_advanced=12)]
@@ -340,9 +344,14 @@ def game_scenes():
          game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner),
          scene_checks("host", host) + scene_checks("joiner", joiner))
 
-    host, joiner = place("host", x=0.48) + buy("host", fire=False), place("joiner", x=0.52)
+    # Both brains and the delivered soldier stand on the plateau, with no bank across the shot.
+    # Take control as the soldier arrives, before its AI can shoot during the capture wait.
+    host = place("host", x=0.4) + buy("host", fire=False, landing_offset=120, control_on_delivery=True)
+    joiner = place("joiner", x=0.48)
     host += [dict(op="aim_brain", input_player=0, target_player=1)]
-    host += [dict(op="game_mouse", down=True), wait(elapsed_ms=12000), dict(op="game_mouse", down=False)]
+    host += capture("aimed-at-brain-host") + [dict(op="assert_scene", input_player=0,
+             equals=dict(alive=True, preset="Coalition.rte/Soldier Light", weapon="Coalition.rte/Assault Rifle"))]
+    host += [dict(op="game_mouse", down=True), wait(scope="menu", screen="MultiplayerScreen", within_ms=15000), dict(op="game_mouse", down=False)]
     for peer, steps in (("host", host), ("joiner", joiner)):
         steps += [lobby_wait(peer)]
         steps += capture(f"brain-loss-{peer}", "MultiplayerScreen")
