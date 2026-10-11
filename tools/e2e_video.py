@@ -656,10 +656,14 @@ MOTION_PIXELS = 1000
 
 def changed_pixels(ffmpeg, video, start_s, end_s):
     """The pixels that changed by more than MOTION_LEVELS between the frames an encoded capture shows at two times."""
-    graph = (f"[0:v]select='gte(t\\,{start_s:.3f})',format=gray,setpts=N[a];[1:v]select='gte(t\\,{end_s:.3f})',format=gray,setpts=N[b];"
+    # Seek before each frame, then restore its original timestamp for the unchanged selection.
+    start_seek, end_seek = max(0, int(start_s) - 1), max(0, int(end_s) - 1)
+    graph = (f"[0:v]setpts=PTS+{start_seek}/TB,select='gte(t\\,{start_s:.3f})',format=gray,setpts=N[a];"
+             f"[1:v]setpts=PTS+{end_seek}/TB,select='gte(t\\,{end_s:.3f})',format=gray,setpts=N[b];"
              f"[a][b]blend=all_mode=difference,lutyuv=y='if(gt(val\\,{MOTION_LEVELS})\\,255\\,0)',signalstats,"
              "metadata=print:key=lavfi.signalstats.YAVG")
-    result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-i", str(video), "-i", str(video), "-filter_complex", graph,
+    result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-ss", str(start_seek), "-i", str(video),
+                             "-ss", str(end_seek), "-i", str(video), "-filter_complex", graph,
                              "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True, errors="replace", timeout=600)
     if result.returncode != 0: return None
     found = re.search(r"lavfi\.signalstats\.YAVG=([0-9.]+)", result.stderr)
