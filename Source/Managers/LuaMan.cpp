@@ -15661,6 +15661,7 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 }
 
 void LuaMan::SeedAllLuaRNGs(uint64_t baseSeed) {
+	if (CheckpointNativeStorage::Enabled()) PrepareCheckpointValues();
 	// Derive an independent per-state seed so states don't share a math.random sequence.
 	std::mt19937_64 derive(baseSeed);
 	m_MasterScriptState.SeedRandomGenerator(derive());
@@ -15671,7 +15672,11 @@ void LuaMan::SeedAllLuaRNGs(uint64_t baseSeed) {
 
 void LuaMan::PrepareCheckpointValues() {
 	m_MasterScriptState.PrepareCheckpointValues();
-	for (LuaStateWrapper& state: m_ScriptStates) state.PrepareCheckpointValues();
+	m_MasterScriptState.PrepareCheckpointBindings();
+	for (LuaStateWrapper& state: m_ScriptStates) {
+		state.PrepareCheckpointValues();
+		state.PrepareCheckpointBindings();
+	}
 }
 
 static std::vector<uint64_t> HashScriptObjectGraphs(LuaStateWrapper& master, LuaStatesArray& threaded);

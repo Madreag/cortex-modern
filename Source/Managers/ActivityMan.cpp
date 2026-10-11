@@ -3253,6 +3253,13 @@ bool ActivityMan::RestartActivity() {
 	Atom::AllocationScope nativeAtoms(m_PendingCheckpoint.nativeSnapshotStorage);
 	CheckpointNativeStorage::AllocationScope nativeValues(m_PendingCheckpoint.nativeSnapshotStorage);
 	std::string error;
+	try {
+		if (CheckpointNativeStorage::Enabled()) g_LuaMan.PrepareCheckpointValues();
+	} catch (const std::exception& exception) {
+		g_ConsoleMan.PrintString(std::string("ERROR: the saved script state could not be prepared: ") + exception.what());
+		m_ActivityNeedsRestart = false;
+		return false;
+	}
 	if (!m_PendingCheckpoint.activity || !m_PendingCheckpoint.scene || !g_MovableMan.ValidateScriptGraphs(m_PendingCheckpoint.scriptGraphs, &error)) {
 		g_ConsoleMan.PrintString("ERROR: the saved script state is invalid: " + error);
 		m_ActivityNeedsRestart = false;
