@@ -1609,6 +1609,7 @@ int FrameMan::SharedDrawLine(BITMAP* bitmap, const Vector& start, const Vector& 
 }
 
 GUIFont* FrameMan::GetFont(bool isSmall, bool trueColor) {
+	CheckpointNativeStorage::AllocationScope resources(true);
 	size_t colorIndex = trueColor ? 1 : 0;
 
 	if (!m_GUIScreens[colorIndex]) {

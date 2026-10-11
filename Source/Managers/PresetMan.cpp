@@ -74,6 +74,7 @@ void PresetMan::Destroy() {
 }
 
 bool PresetMan::LoadDataModule(const std::string& moduleName, bool official, bool userdata, const ProgressCallback& progressCallback) {
+	CheckpointNativeStorage::AllocationScope resources(true);
 	if (moduleName.empty()) {
 		return false;
 	}

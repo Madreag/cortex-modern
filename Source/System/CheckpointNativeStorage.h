@@ -17,7 +17,7 @@
 
 namespace RTE {
 
-	// Only native multiplayer allocations enter these pages; ordinary allocations keep their allocator.
+	// Saved resources and native multiplayer values use pages without moving their identities.
 	class CheckpointNativeStorage {
 	public:
 		class AllocationScope {

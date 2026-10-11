@@ -432,6 +432,7 @@ void ContentFile::ReloadAllBitmaps() {
 }
 
 BITMAP* ContentFile::GetAsBitmap(int conversionMode, bool storeBitmap, const std::string& dataPathToSpecificFrame) {
+	CheckpointNativeStorage::AllocationScope resources(true);
 	if (m_DataPath.empty()) {
 		return nullptr;
 	}
