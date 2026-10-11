@@ -9871,6 +9871,11 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = exact && checkpointValues;
 	}
 	{
+		const bool exact = CheckpointLua::HeapOwner::RunPrivateNativeSelfTest();
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " saved_lua_native_values_refuse_allocations_retry_and_leave_no_live_pages" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
 		const bool exact = CheckpointLua::HeapOwner::RunPreparedSelfTest() && CheckpointLua::HeapOwner::RunReusedOwnerSelfTest() && CheckpointLua::HeapOwner::RunPreparationLifetimeSelfTest();
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " prepared_lua_pages_freeze_without_allocation_reject_growth_and_survive_source_death" << std::endl;
 		checkpointValues = exact && checkpointValues;

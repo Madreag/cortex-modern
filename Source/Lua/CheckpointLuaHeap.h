@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeStorage.h"
+
 #include "FloatingPointEnvironment.h"
 extern "C" {
 #include "lua.h"
@@ -458,6 +460,7 @@ namespace RTE::CheckpointLua {
 			// The wrapper keeps lua_close from destroying the bootstrap's shared arena.
 			if (m_State) lua_close(std::exchange(m_State, nullptr));
 			if (m_PrivateRead) m_PrivateRead->base.store(0, std::memory_order_release);
+			for (const auto& [begin, bytes]: m_PrivateChunks) CheckpointNativeStorage::ForgetPrivate(reinterpret_cast<void*>(begin));
 			m_Bootstrap.reset();
 			Release();
 		}
@@ -483,6 +486,11 @@ namespace RTE::CheckpointLua {
 				return {};
 			};
 		}
+		CheckpointNativeStorage::RootRange PrivateNativeRange() const {
+			if (!m_PrivateNative) throw std::logic_error("only a saved getter VM owns private native heap values");
+			const auto* base = reinterpret_cast<const void*>(m_Base);
+			return {base, base, m_Committed, true};
+		}
 
 		AllocationStats Stats() const { return {m_Bytes, m_Blocks}; }
 
@@ -497,6 +505,7 @@ namespace RTE::CheckpointLua {
 		static size_t CallsIntoDestroyedHeaps() { return DeadHeapCalls().load(std::memory_order_relaxed); }
 		static bool RunBatchOpenSelfTest();
 		static bool RunPreparedSelfTest();
+		static bool RunPrivateNativeSelfTest();
 		static bool RunPreparationLifetimeSelfTest();
 		static bool RunReusedOwnerSelfTest();
 		/// Prepares storage and watches on the saver; Arm reads no Lua objects and allocates nothing.
@@ -740,6 +749,8 @@ namespace RTE::CheckpointLua {
 			std::atomic<size_t> committed{0};
 		};
 		mutable std::shared_ptr<PrivateReadLife> m_PrivateRead;
+		const bool m_PrivateNative = CheckpointNativeStorage::Reading();
+		std::vector<std::pair<uintptr_t, size_t>> m_PrivateChunks;
 		std::shared_ptr<PreparationLife> m_PreparationLife = std::make_shared<PreparationLife>();
 		std::unique_ptr<lua_State, decltype(&lua_close)> m_Bootstrap{nullptr, lua_close};
 		lua_State* m_State = nullptr;
@@ -1047,7 +1058,7 @@ namespace RTE::CheckpointLua {
 			Reserve(color * c_PageStride);
 			m_Used = color * c_ColorStride;
 			m_Bootstrap.reset(luaL_newstate());
-			if (!m_Bootstrap) throw std::runtime_error("could not create the Lua allocator bootstrap");
+			if (!m_Bootstrap) throw std::bad_alloc();
 			const lua_CFunction panic = G(m_Bootstrap.get())->panic;
 			m_LibraryHandlers.panic = panic;
 #ifndef LUAJIT_DISABLE_VMEVENT
@@ -1062,7 +1073,7 @@ namespace RTE::CheckpointLua {
 			m_LibraryHandlers.eventMask = G(m_Bootstrap.get())->vmevmask;
 #endif
 			m_State = lua_newstate(&Allocate, this);
-			if (!m_State) throw std::runtime_error("could not create the tracked Lua state");
+			if (!m_State) throw std::bad_alloc();
 			lua_atpanic(m_State, panic);
 #ifndef LUAJIT_DISABLE_VMEVENT
 			if (luaL_findtable(m_State, LUA_REGISTRYINDEX, LJ_VMEVENTS_REGKEY, LJ_VMEVENTS_HSIZE))
@@ -1118,6 +1129,17 @@ namespace RTE::CheckpointLua {
 				const size_t needed = m_Used + bytes - m_Committed;
 				const size_t step = std::max(c_CommitStep, (needed + c_CommitStep - 1) / c_CommitStep * c_CommitStep);
 				if (m_Committed + step > c_ReserveBytes || !Commit(step)) return nullptr;
+				if (m_PrivateNative) {
+					void* begin = reinterpret_cast<void*>(m_Base + m_Committed);
+					bool recorded = false;
+					try {
+						CheckpointNativeStorage::RememberPrivate(begin, step); recorded = true;
+						m_PrivateChunks.emplace_back(reinterpret_cast<uintptr_t>(begin), step);
+					} catch (...) {
+						if (recorded) CheckpointNativeStorage::ForgetPrivate(begin);
+						return nullptr;
+					}
+				}
 				m_Committed += step;
 				m_PublishedCommitted.store(m_Committed, std::memory_order_release);
 				if (m_PrivateRead) m_PrivateRead->committed.store(m_Committed, std::memory_order_release);
@@ -1330,6 +1352,29 @@ namespace RTE::CheckpointLua {
 		if (!pages) return;
 		HeapOwner::Unmap(pages, capacity * Snapshot::c_PageBytes);
 		HeapOwner::CopyBytes(false).fetch_sub(capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
+	}
+
+	inline bool HeapOwner::RunPrivateNativeSelfTest() {
+		const std::array<std::shared_ptr<const CheckpointPagePool::Snapshot>, 0> pages{};
+		CheckpointNativeStorage::ReadScope reads(pages);
+		bool refused = false;
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			try { Create(); } catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+		}
+		if (!refused) return false;
+		const auto generation = CheckpointPagePool::InventoryGeneration();
+		auto owner = Create();
+		struct Value { int n; };
+		Value* value = nullptr;
+		ProtectedCall(owner->State(), [&] {
+			value = static_cast<Value*>(lua_newuserdata(owner->State(), sizeof(Value))); value->n = 37;
+			lua_newuserdata(owner->State(), c_CommitStep + 12);
+		});
+		if (!CheckpointNativeStorage::Private(value, sizeof(Value)) || CheckpointNativeStorage::Source(value) != value ||
+		    CheckpointNativeStorage::Source(value)->n != 37 || owner->PrivateNativeRange().bytes <= c_CommitStep) return false;
+		owner.reset();
+		return !CheckpointNativeStorage::Private(value) && CheckpointPagePool::InventoryGeneration() == generation;
 	}
 
 	inline bool HeapOwner::RunBatchOpenSelfTest() {
