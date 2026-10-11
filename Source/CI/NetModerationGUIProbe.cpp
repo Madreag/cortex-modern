@@ -52,6 +52,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <sstream>
 
@@ -87,6 +88,7 @@ namespace {
 		bool shopHeader = false; //!< The pending shop click expands a module before choosing its item.
 		size_t minuteIndex = SIZE_MAX;
 		uint64_t minuteMs = 0, minuteTick = 0, minuteProbeNs = 0, fightSamples = 0, aiFiredFrames = 0;
+		double minimumFightPace = std::numeric_limits<double>::infinity();
 		size_t landingMoveIndex = SIZE_MAX, actorCycleIndex = SIZE_MAX, aimIndex = SIZE_MAX;
 		uint64_t landingMoveTick = 0, actorCycleTick = 0, actorCycleRender = 0, aimTick = 0;
 		int actorCycleStage = 0, actorCyclePresses = 0;
@@ -965,7 +967,8 @@ namespace {
 			observed["minute"]["loop_pace"] = Json::parse(::BuildLoopPaceJson());
 			observed["minute"]["actors"] = g_MovableMan.GetActorCount();
 			System::PrintDiagnosticLine("[fight15-scene] minute=" + std::to_string(probe.fightSamples) + " pace=" + std::to_string(pace) + " ai_fired_frames=" + std::to_string(probe.aiFiredFrames));
-			Require(pace >= 58.0, "a peer's full minute fell below 58 ticks per second");
+			// A slow minute still fails the run; retain the rest of the fight before reporting it.
+			probe.minimumFightPace = std::min(probe.minimumFightPace, pace);
 			if (probe.fightSamples == 20) Require(probe.aiFiredFrames > 0, "twenty minutes passed without the AI firing a weapon");
 		} else if (op == "assert_relay") {
 			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
@@ -1471,6 +1474,11 @@ namespace {
 			if (!std::filesystem::is_regular_file(path)) return false;
 			NoteRendezvous(std::filesystem::path(path).stem().generic_string());
 		} else if (op == "finish") {
+			if (probe.fightSamples != 0) {
+				observed["fight_summary"] = {{"minutes", probe.fightSamples}, {"minimum_pace", probe.minimumFightPace}, {"ai_fired_frames", probe.aiFiredFrames}};
+				Require(probe.fightSamples == 20, "the AI fight did not measure twenty full minutes");
+				Require(probe.minimumFightPace >= 58.0, "a peer's full minute fell below 58 ticks per second");
+			}
 			GUIInputWrapper::SetAutomationDriving(false);
 			ReleaseProbePad();
 			Require(ScriptedPadCount() == 0, "a scripted pad remained after finish");
