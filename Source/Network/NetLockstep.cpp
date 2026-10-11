@@ -5871,10 +5871,6 @@ namespace RTE {
 		const uint16_t delay = InputDelayAt(m_Config.localPeerId, producedFrame);
 		if (producedFrame > UINT64_MAX - delay) { if (error) *error = "input target overflow"; return false; }
 		const uint64_t target = producedFrame + delay;
-		if (UsesPeerFrameGroups() && (target < m_Stats.nextFrame || m_LocalInputHistory.contains(target))) {
-			m_DeferredControllerFrames.clear();
-			return true;
-		}
 		// Our return's first inputs past its gap, on the shared clock, so the host's reading of them can be timed.
 		if (const auto own = m_ReclaimTransactions.find(m_Config.localPeerId); own != m_ReclaimTransactions.end() && m_Config.localPeerId != GetHostPeerId() &&
 		    !IsSeatReclaimGap(m_Config.localPeerId, target)) {
@@ -5901,6 +5897,12 @@ namespace RTE {
 				auto& carried = m_ParkCarriedCommands[target];
 				carried.insert(carried.end(), commands.begin(), commands.end());
 			}
+			m_DeferredControllerFrames.clear();
+			return true;
+		}
+		// The agreed startup ramp must carry events before this catch-up shortcut:
+		// its targets are already behind nextFrame, but their editor commands are new.
+		if (UsesPeerFrameGroups() && (target < m_Stats.nextFrame || m_LocalInputHistory.contains(target))) {
 			m_DeferredControllerFrames.clear();
 			return true;
 		}

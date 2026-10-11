@@ -2963,7 +2963,7 @@ namespace RTE {
 			return play(48898, 0x9A0C, 250, 0, 300, error);
 		}
 
-		bool TestFirstStartWaitsForPublishedStartup(std::string* error) {
+		bool TestFirstStartWaitsForPublishedStartup(std::string* error, bool peerFrames = false) {
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
 			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A0D, 1, NetTransportLane::ControlReliable);
@@ -2977,6 +2977,10 @@ namespace RTE {
 			hostConfig.peerInputDelayFrames = clientConfig.peerInputDelayFrames = {{1, 1}, {2, 8}};
 			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A0D);
 			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
+			if (peerFrames) {
+				hostConfig.peerFrameGroups = clientConfig.peerFrameGroups = true;
+				hostConfig.migrationKey.fill(0x39); clientConfig.migrationKey = hostConfig.migrationKey;
+			}
 			if (!StartCoordinatorPair(48899, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
 			const auto formingConfig = host.GetConfig().matchConfig;
 			const auto formingHash = NetMatchConfigUtil::HashConfig(formingConfig);
@@ -29310,6 +29314,7 @@ namespace {
 		row([](std::string* rowError) { return TestBoundedWaitGivesASenderItsRampIn(rowError); }, "TestBoundedWaitGivesASenderItsRampIn");
 		row([](std::string* rowError) { return TestASlowStartingPeerIsJudgedByItsOwnRestart(rowError); }, "TestASlowStartingPeerIsJudgedByItsOwnRestart");
 		row([](std::string* rowError) { return TestFirstStartWaitsForPublishedStartup(rowError); }, "TestFirstStartWaitsForPublishedStartup");
+		row([](std::string* rowError) { return TestFirstStartWaitsForPublishedStartup(rowError, true); }, "TestPeerFramesCarryStartupEditorCommands");
 		row([](std::string* rowError) { return TestALongLinkedSurvivorDoesNotCollapseTheBound(rowError); }, "TestALongLinkedSurvivorDoesNotCollapseTheBound");
 		row([](std::string* rowError) { return TestAStarvedSeatIsNotLate(rowError); }, "TestAStarvedSeatIsNotLate");
 		row([](std::string* rowError) { return TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(rowError); }, "TestAHeldSeatHearsItsHostUntilItsCatchUpOpens");
