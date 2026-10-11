@@ -433,6 +433,12 @@ namespace RTE {
 				*error = "an unmeasured returning link loses its measured delay";
 				return false;
 			}
+			if (unmeasured.P95Ms() != 0) { *error = "an expired receipt window still carries old samples"; return false; }
+			unmeasured.Observe(6100, 100);
+			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 10 || unmeasured.P95Ms() != 100 || unmeasured.JitterMs() != 0) {
+				*error = "a new RTT reading did not replace the old unmeasured link estimate";
+				return false;
+			}
 			NetInputDelayEstimator estimate;
 			estimate.Observe(0, 401);
 			if (estimate.RequiredFrames(1000.0 / 60.0) != 38 || estimate.RequiredFrames(1000.0 / 120.0) != 74) {
