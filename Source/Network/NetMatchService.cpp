@@ -1,4 +1,5 @@
 #include "NetMatchService.h"
+#include "DiagnosticLine.h"
 #include "Controller.h"
 #include "LoopbackTransport.h"
 #include "NetA7Journal.h"
