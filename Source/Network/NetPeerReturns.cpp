@@ -247,6 +247,9 @@ namespace RTE {
 			// Keep the surviving display clock when its former host returns.
 			const uint8_t reference = (m_FrameGroupMembers & SeatBit(m_PeerPaceReference)) != 0 ? m_PeerPaceReference :
 			    static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
+			// The pace leader advances at the ordinary rate after a shared pause.
+			// No displayed peer clock justifies replaying the group's paused time.
+			if (reference == m_Config.localPeerId) return false;
 			const auto applied = m_PeerAppliedThrough.find(reference), observed = m_PeerAppliedAtMs.find(reference);
 			if (reference != m_Config.localPeerId && applied != m_PeerAppliedThrough.end() && observed != m_PeerAppliedAtMs.end() &&
 			    m_TimingNowMs >= observed->second && m_TimingNowMs - observed->second <= 250) {
