@@ -4237,6 +4237,7 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	mutable std::mutex frozenWorldMutex;
 	/// Whether an object existed when the capture began; only the pointer is read.
 	bool Known(const MovableObject* object) const {
+		object = static_cast<const MovableObject*>(CheckpointNativeStorage::Original(object));
 		Once(m_KnownBuilt, m_KnownReady, [this] {
 			CaptureSentinel::NoteCreation("capture known-objects lookup", &m_Known);
 			m_Known.assign(KnownObjects().begin(), KnownObjects().end());
@@ -4250,8 +4251,9 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	bool HasOwnerIndex() const { return m_OwnersReady.load(std::memory_order_acquire); }
 	std::pair<size_t, size_t> DirectOwnerCounts() const { return {m_DirectVectors.size(), m_DirectControllers.size()}; }
 	bool SpecialOwner(const void* address) const {
+		address = CheckpointNativeStorage::Original(address);
 		Once(m_SpecialBuilt, m_SpecialReady, [this] {
-			const auto add = [this](const void* value) { if (value) m_Special.insert(value); };
+			const auto add = [this](const void* value) { if (value) m_Special.insert(CheckpointNativeStorage::Original(value)); };
 			if (auto* activity = g_ActivityMan.GetActivity()) {
 				for (int player = 0; player < Players::MaxPlayerCount; ++player) {
 					add(activity->GetPlayerController(player));
@@ -4283,27 +4285,31 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	}
 	/// Whether an address is a loaded activity preset; only the pointer is read.
 	bool ActivityPreset(const void* address) const {
+		address = CheckpointNativeStorage::Original(address);
 		Once(m_ActivityPresetsBuilt, m_ActivityPresetsReady, [this] { m_ActivityPresets = LoadedActivityPresets(); });
 		return std::binary_search(m_ActivityPresets.begin(), m_ActivityPresets.end(), address);
 	}
 	/// Whether an address is a loaded preset of any type; only the pointer is read.
 	bool Preset(const void* address) const {
+		address = CheckpointNativeStorage::Original(address);
 		Once(m_PresetsBuilt, m_PresetsReady, [this] { m_Presets = LoadedPresets("Entity"); });
 		return std::binary_search(m_Presets.begin(), m_Presets.end(), address);
 	}
 	/// The object a Vector field belongs to, if it is one of a known object's aliased fields.
 	const VectorField* VectorOwner(const void* address) const {
+		address = CheckpointNativeStorage::Original(address);
 		if (CheckpointNativeSnapshot::Boundary()) if (const auto* field = DirectVectorOwner(address)) return field;
 		return Find(Owners().vectors, address);
 	}
 	/// The actor a Controller belongs to, if it is a known actor's.
 	const long* ControllerOwner(const void* address) const {
+		address = CheckpointNativeStorage::Original(address);
 		if (CheckpointNativeSnapshot::Boundary() && address) {
 			PrepareFieldOffsets();
 			const uintptr_t pointer = reinterpret_cast<uintptr_t>(address);
 			if (m_ControllerOffset && pointer >= *m_ControllerOffset) {
 				const auto* mo = reinterpret_cast<const MovableObject*>(pointer - *m_ControllerOffset);
-				if (Known(mo)) if (auto* actor = CheckpointCast<Actor>(const_cast<MovableObject*>(mo)); actor && actor->GetController() == address)
+				if (Known(mo)) if (auto* actor = CheckpointCast<Actor>(CheckpointNativeStorage::Source(const_cast<MovableObject*>(mo))); actor && CheckpointNativeStorage::Original(actor->GetController()) == address)
 					return &m_DirectControllers.try_emplace(address, actor->GetUniqueID()).first->second;
 			}
 		}
@@ -4347,13 +4353,14 @@ private:
 	void PrepareFieldOffsets() const {
 		Once(m_VectorOffsetsBuilt, m_VectorOffsetsReady, [this] {
 			size_t found = 0;
-			for (const MovableObject* mo: KnownObjects()) {
+			for (const MovableObject* original: KnownObjects()) {
+				const MovableObject* mo = CheckpointNativeStorage::Source(original);
 				if (!m_ControllerOffset) if (auto* actor = CheckpointCast<Actor>(const_cast<MovableObject*>(mo)))
-					m_ControllerOffset = reinterpret_cast<uintptr_t>(actor->GetController()) - reinterpret_cast<uintptr_t>(mo);
+					m_ControllerOffset = reinterpret_cast<uintptr_t>(CheckpointNativeStorage::Original(actor->GetController())) - reinterpret_cast<uintptr_t>(original);
 				for (size_t field = 0; field < c_VectorGetters.size(); ++field) {
 					if (m_VectorOffsets[field].has_value()) continue;
 					if (const auto* value = c_VectorGetters[field].get(mo)) {
-						m_VectorOffsets[field] = reinterpret_cast<uintptr_t>(value) - reinterpret_cast<uintptr_t>(mo);
+						m_VectorOffsets[field] = reinterpret_cast<uintptr_t>(CheckpointNativeStorage::Original(value)) - reinterpret_cast<uintptr_t>(original);
 						++found;
 					}
 				}
@@ -4368,8 +4375,10 @@ private:
 		for (size_t field = 0; field < c_VectorGetters.size(); ++field) {
 			if (!m_VectorOffsets[field] || pointer < *m_VectorOffsets[field]) continue;
 			const auto* mo = reinterpret_cast<const MovableObject*>(pointer - *m_VectorOffsets[field]);
-			if (!Known(mo) || c_VectorGetters[field].get(mo) != address) continue;
-			return &m_DirectVectors.try_emplace(address, VectorField{mo->GetUniqueID(), c_VectorGetters[field].name}).first->second;
+			if (!Known(mo)) continue;
+			const auto* saved = CheckpointNativeStorage::Source(mo);
+			if (CheckpointNativeStorage::Original(c_VectorGetters[field].get(saved)) != address) continue;
+			return &m_DirectVectors.try_emplace(address, VectorField{saved->GetUniqueID(), c_VectorGetters[field].name}).first->second;
 		}
 		return nullptr;
 	}
@@ -4402,7 +4411,8 @@ private:
 			auto& vectors = m_Owners.vectors.sorted;
 			auto& controllers = m_Owners.controllers.sorted;
 			vectors.reserve(KnownObjects().size() * (CheckpointWriter::BatchEnabled() ? 9 : 6));
-			for (MovableObject* mo: KnownObjects()) {
+			for (MovableObject* original: KnownObjects()) {
+				MovableObject* mo = CheckpointNativeStorage::Source(original);
 				const long uid = mo->GetUniqueID();
 				if (Actor* actor = CheckpointCast<Actor>(mo)) controllers.emplace_back(actor->GetController(), uid);
 				vectors.emplace_back(&mo->GetPos(), VectorField{uid, "Pos"});
@@ -4424,6 +4434,7 @@ private:
 			// A later object's entry wins an address, as the map it replaces let it.
 			const auto settle = [](auto& fields) {
 				auto& entries = fields.sorted;
+				for (auto& entry: entries) entry.first = CheckpointNativeStorage::Original(entry.first);
 				if (CheckpointWriter::BatchEnabled()) {
 					fields.index.emplace();
 					fields.index->Build(entries);
@@ -7776,7 +7787,7 @@ CheckpointLua::CallbackRoots LuaStateWrapper::RebuildFrozenScriptCallbacks(const
 		roots.emplace(uid, fields);
 	}
 	Fields callbacks{{"roots", object(receivers)}, {"emptyRoots", object(empty)}, {"async", async}};
-	if (heap.StateSerial()) callbacks.emplace("liveSerial", scratch.Number(static_cast<lua_Number>(heap.StateSerial())));
+	if (const uint64_t serial = ScriptGraphBirthHorizon(heap)) callbacks.emplace("liveSerial", scratch.Number(static_cast<lua_Number>(serial)));
 	if (activity) {
 		activity = CheckpointNativeStorage::Source(activity);
 		callbacks.emplace("activity", scratch.Object({{"class", scratch.String(key(activity->GetLuaClassName()))}, {"functions", functions(activity->m_ScriptFunctions)}}));
@@ -10238,6 +10249,23 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		}
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " checkpoint_owner_indexes_publish_once_for_concurrent_readers" << std::endl;
 		checkpointValues = exact && checkpointValues;
+		{
+			CheckpointWriter::BatchScope batch(true);
+			auto saved = std::make_shared<CheckpointNativeSnapshot>();
+			CheckpointNativeSnapshot::BoundaryScope boundary(saved);
+			auto* copy = saved->Object(actor.get());
+			saved->Object(part.get());
+			saved->SealBoundary();
+			CheckpointNativeSnapshot::ReadScope values(saved.get());
+			const auto roots = saved->ReadValues();
+			CheckpointNativeStorage::ReadScope read(std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>>{}, roots);
+			const auto* position = fields.VectorOwner(&copy->GetPos());
+			const auto* controller = fields.ControllerOwner(copy->GetController());
+			const bool same = fields.Known(copy) && position && position->uid == copy->GetUniqueID() &&
+			    std::string_view(position->property) == "Pos" && controller && *controller == copy->GetUniqueID();
+			std::cout << "[script-graph-selftest] " << (same ? "PASS" : "FAIL") << " saved_native_handles_keep_their_object_and_field_owners" << std::endl;
+			checkpointValues = same && checkpointValues;
+		}
 		{
 			LuaScriptGraphNativeCaptureData direct;
 			CheckpointWriter::BatchScope batch(true);
