@@ -297,9 +297,13 @@ void CheckpointPagePool::Snapshot::Arm() const {
 	try {
 		for (const auto& part: m_Parts) part.block->Arm(part.copy);
 	} catch (...) {
-		for (const auto& part: m_Parts) part.block->Abandon(part.copy);
+		Cancel();
 		throw;
 	}
+}
+
+void CheckpointPagePool::Snapshot::Cancel() const noexcept {
+	for (const auto& part: m_Parts) part.block->Abandon(part.copy);
 }
 
 void CheckpointPagePool::Snapshot::Drain() const {
@@ -394,6 +398,7 @@ namespace {
 		std::array<NativeStoragePool, std::numeric_limits<size_t>::digits> sizes;
 	};
 	std::atomic<NativeStoragePools*> s_NativeStoragePools{nullptr};
+	std::atomic<uint64_t> s_NativeInventoryGeneration{0};
 	thread_local bool s_NativeStorageAllocation = false;
 	thread_local bool s_NativeStorageCapture = false;
 	NativeStoragePools& NativePools() {
@@ -428,7 +433,10 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 	auto& pools = NativePools();
 	std::lock_guard lock(pools.mutex);
 	auto& pool = pools.sizes[std::countr_zero(slot)];
-	if (pool.free.empty()) pool.pages.Grow(slot, 1, pool.free, size_t{1} << 20);
+	if (pool.free.empty()) {
+		pool.pages.Grow(slot, 1, pool.free, size_t{1} << 20);
+		s_NativeInventoryGeneration.fetch_add(1, std::memory_order_release);
+	}
 	void* address = pool.free.back();
 	pool.free.pop_back();
 	return address;
@@ -454,18 +462,41 @@ bool CheckpointNativeStorage::Owns(const void* address) {
 	return std::any_of(pools->sizes.begin(), pools->sizes.end(), [&](const auto& pool) { return pool.pages.Contains(address); });
 }
 
-std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> CheckpointNativeStorage::Prepare() {
-	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> snapshots;
+std::unique_ptr<CheckpointNativeStorage::Prepared> CheckpointNativeStorage::PrepareInventory() {
+	auto prepared = std::make_unique<Prepared>();
 	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
-	if (!pools) return snapshots;
+	if (!pools) return prepared;
 	std::array<CheckpointPagePool, std::numeric_limits<size_t>::digits> inventory;
 	{
 		std::lock_guard lock(pools->mutex);
 		for (size_t index = 0; index < inventory.size(); ++index) inventory[index] = pools->sizes[index].pages;
+		prepared->m_Generation = s_NativeInventoryGeneration.load(std::memory_order_relaxed);
 	}
-	snapshots.reserve(inventory.size());
-	for (const auto& pool: inventory) snapshots.push_back(pool.Freeze(false));
-	return snapshots;
+	prepared->m_Pages.reserve(inventory.size());
+	for (const auto& pool: inventory) prepared->m_Pages.push_back(pool.Freeze(false));
+	return prepared;
+}
+
+bool CheckpointNativeStorage::Prepared::Current() const noexcept {
+	return m_Generation == s_NativeInventoryGeneration.load(std::memory_order_acquire);
+}
+
+bool CheckpointNativeStorage::Prepared::Arm() const {
+	// Growth after the worker's inventory must refuse before any range becomes readable.
+	if (!Current()) return false;
+	try {
+		for (const auto& pages: m_Pages) pages->Arm();
+	} catch (...) {
+		for (const auto& pages: m_Pages) pages->Cancel();
+		throw;
+	}
+	if (Current()) return true;
+	for (const auto& pages: m_Pages) pages->Cancel();
+	return false;
+}
+
+std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> CheckpointNativeStorage::Prepare() {
+	return std::move(PrepareInventory()->m_Pages);
 }
 
 struct CheckpointNativeStorage::ReadState {
@@ -564,6 +595,36 @@ const std::string* CheckpointNativeStorage::ReadString(const char* source, size_
 }
 
 std::string CheckpointNativeStorage::SelfTestMismatch() {
+	{
+		AllocationScope allocation(true);
+		auto value = std::make_unique<Vector>(17, 31);
+		auto prepared = std::async(std::launch::async, [] { return PrepareInventory(); }).get();
+		struct Returned {
+			std::vector<void*> addresses;
+			~Returned() { for (void* address: addresses) Deallocate(address); }
+		} returned;
+		size_t available;
+		{
+			auto& pools = NativePools();
+			std::lock_guard lock(pools.mutex);
+			available = pools.sizes[20].free.size();
+		}
+		returned.addresses.reserve(available + 1);
+		for (size_t index = 0; index <= available; ++index) returned.addresses.push_back(Allocate(size_t{1} << 20, alignof(std::max_align_t)));
+		if (prepared->Current() || prepared->Arm()) return "stale native inventory accepted a new allocation range";
+		for (const auto& pages: prepared->Pages()) if (pages->CanBorrow(value.get(), sizeof(Vector)))
+			return "stale native inventory fenced a partial boundary";
+		prepared.reset();
+		prepared = std::async(std::launch::async, [] { return PrepareInventory(); }).get();
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativePages);
+			if (!prepared->Arm()) return "prepared native inventory refused unchanged ranges";
+		}
+		value->m_X = 97;
+		ReadScope read(prepared->Pages());
+		if (Source(value.get())->m_X != 17 || Source(value.get())->m_Y != 31)
+			return "prepared native inventory did not preserve its boundary values";
+	}
 	{
 		struct RootValues : Singleton<RootValues> { int tick = 0; CheckpointVector<CheckpointString> names; };
 		RootValues::Construct();

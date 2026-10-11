@@ -75,6 +75,17 @@ namespace RTE {
 		static void* Allocate(size_t bytes, size_t alignment);
 		static bool Deallocate(void* address) noexcept;
 		static bool Owns(const void* address);
+		class Prepared {
+		public:
+			bool Current() const noexcept;
+			bool Arm() const;
+			std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> Pages() const { return m_Pages; }
+		private:
+			friend class CheckpointNativeStorage;
+			uint64_t m_Generation = 0;
+			std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> m_Pages;
+		};
+		static std::unique_ptr<Prepared> PrepareInventory();
 		static std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> Prepare();
 		static bool ReadBytes(const void* source, void* target, size_t bytes);
 		static const void* View(const void* source, size_t bytes);

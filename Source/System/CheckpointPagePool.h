@@ -36,6 +36,7 @@ namespace RTE {
 			void Drain() const;
 			/// Fences prepared ranges without allocating; writers pause only until this returns.
 			void Arm() const;
+			void Cancel() const noexcept;
 			Costs Cost() const;
 		private:
 			friend class CheckpointPagePool;
