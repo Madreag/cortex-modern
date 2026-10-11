@@ -849,6 +849,7 @@ namespace RTE {
 		std::array<NetSession*, 2> sessions{&hostSession, &clientSession};
 		std::array<INetTransport*, 2> nativeWires{&hostWire, &clientWire};
 		std::array<uint64_t, 2> produced{1, 1}, applied{}, displayedAt{};
+		std::array<double, 2> credits{};
 		for (size_t index = 0; index < 2; ++index) {
 			NetLockstepConfig config; config.sessionId = match.sessionId; config.matchConfig = match;
 			config.localPeerId = static_cast<uint8_t>(index + 1); config.peerCount = 2; config.roundId = index == 0 ? 77 : 0;
@@ -860,6 +861,7 @@ namespace RTE {
 			config.remoteTransportPeerIds[index == 0 ? 2 : 1] = index == 0 ? originalRoute : clientSession.GetRemoteTransportPeerId();
 			rounds[index] = std::make_unique<NetLockstepCoordinator>();
 			if (!rounds[index]->Start(*nativeWires[index], config, error)) return false;
+			rounds[index]->DeferStopsToTickBoundary();
 			rounds[index]->SetSessionEventSink([&, index](const NetTransportEvent& event) { sessions[index]->InjectEvent(event, hub.now); });
 		}
 		const auto step = [&](bool joinerPlaying) {
@@ -867,15 +869,20 @@ namespace RTE {
 				auto& round = *rounds[index]; round.Tick(hub.now);
 				sessions[index]->Tick(hub.now, false);
 				if (!round.IsRunning()) continue;
-				if (produced[index] <= hub.now * 60 / 1000 && produced[index] <= applied[index] + 1) {
-					if (!round.QueueLocalInput(produced[index], {}, {}, error)) return false;
-					++produced[index];
+				credits[index] = std::min(6.0, credits[index] + 1 / c_TestTickMs);
+				while (credits[index] >= 1) {
+					const uint64_t next = applied[index] + 1;
+					if (produced[index] == next) {
+						if (!round.QueueLocalInput(next, {}, {}, error)) return false;
+						++produced[index];
+					}
+					NetLockstepReadyFrame ready;
+					if (next < round.GetStats().effectiveStartFrame) ready.frame = next;
+					else if (!round.PopReadyFrame(ready)) { round.NoteFrameWait(next, hub.now); break; }
+					if (ready.frame != next) { *error = "the scene consumer skipped a frame"; return false; }
+					applied[index] = ready.frame; displayedAt[index] = hub.now;
+					round.FinishFrameWait(hub.now); round.FinishSimulationTick(ready.frame); credits[index] -= 1;
 				}
-				NetLockstepReadyFrame ready;
-				if (round.PopReadyFrame(ready)) {
-					if (ready.frame != applied[index] + 1) { *error = "the scene consumer skipped a frame"; return false; }
-					applied[index] = ready.frame; displayedAt[index] = hub.now; round.FinishSimulationTick(ready.frame);
-				} else round.NoteFrameWait(applied[index] + 1, hub.now);
 			}
 			++hub.now; return true;
 		};
