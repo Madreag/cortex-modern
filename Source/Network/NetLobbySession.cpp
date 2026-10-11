@@ -1052,7 +1052,13 @@ namespace RTE {
 		for (const auto& [peer, transport]: m_RemoteTransports) {
 			if (peer == 0 || peer > next.peerCount) continue;
 			auto& sample = m_InputDelaySamples[peer];
-			sample.Observe(nowMs, m_Transport->GetPeerPingMs(transport));
+			uint32_t rtt = m_Transport->GetPeerPingMs(transport);
+			if (const char* value = std::getenv("CC_TEST_SCENE_PATH_RTT_MS"); value &&
+			    (HasPendingStateChunks() || HasUnreceivedStartState())) {
+				const unsigned long measured = std::strtoul(value, nullptr, 10);
+				if (measured > 0 && measured <= 20000) rtt = static_cast<uint32_t>(measured);
+			}
+			sample.Observe(nowMs, rtt);
 			const auto delay = static_cast<uint16_t>(sample.SenderRequiredFrames(g_TimerMan.GetDeltaTimeMS(), next.slowPlayerBoundTicks, next.inputDelayFrames));
 			hostDelay = std::max(hostDelay, delay);
 			if (delay > next.peerInputDelayFrames[peer - 1]) {
