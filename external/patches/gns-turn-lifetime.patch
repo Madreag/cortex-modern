@@ -125,7 +125,7 @@ index 5ce6b59..70f48e3 100644
  	/// We *mostly* work on top of the sockets system, but in a few places we
  	/// need to break the abstraction and do things other clients of the API
 diff --git a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
-index de4b490..dcbbb92 100644
+index de4b490..c7ce0d2 100644
 --- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
 +++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
 @@ -5,12 +5,22 @@
@@ -1573,7 +1573,7 @@ index de4b490..dcbbb92 100644
  }
  
  void CSteamNetworkingICESession::Think_KeepAliveOnCandidates( SteamNetworkingMicroseconds usecNow )
-@@ -2331,6 +2948,158 @@ void CSteamNetworkingICESession::Think_KeepAliveOnCandidates( SteamNetworkingMic
+@@ -2331,6 +2948,161 @@ void CSteamNetworkingICESession::Think_KeepAliveOnCandidates( SteamNetworkingMic
      }
  }
  
@@ -1655,6 +1655,9 @@ index de4b490..dcbbb92 100644
 +{
 +    SteamNetworkingGlobalLock lock( "TURN refresh selftest" );
 +    CSteamNetworkingICESession session( k_EICERole_Controlling, nullptr, 0 );
++    // This fixture owns a mocked IPv4 allocation, not a live base UDP socket.
++    // Do not ask UpdateTURNServers to clone that absent socket for IPv6.
++    session.m_nPermittedCandidateTypes = k_EICECandidate_IPv4_Relay;
 +    session.m_vecInterfaces.emplace_back( new ICESessionInterface( session, 1, 24 ) );
 +    ICESessionInterface &old = *session.m_vecInterfaces.back();
 +    const auto now = SteamNetworkingSockets_GetLocalTimestamp();
@@ -1732,7 +1735,7 @@ index de4b490..dcbbb92 100644
  void CSteamNetworkingICESession::Think_TestPeerConnectivity()
  {
  	SteamNetworkingGlobalLock::AssertHeldByCurrentThread( "CSteamNetworkingICESession::Think_TestPeerConnectivity" );
-@@ -2343,22 +3112,28 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
+@@ -2343,22 +3115,28 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
          // make sure the pair is present.
          for ( const std::unique_ptr<ICESessionInterface> &pIntf : m_vecInterfaces )
          {
@@ -1766,7 +1769,7 @@ index de4b490..dcbbb92 100644
                          continue;
                      bool bFound = false;
                      for ( ICECandidatePair *pPair : m_vecCandidatePairs )
-@@ -2396,6 +3171,8 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
+@@ -2396,6 +3174,8 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
      {
          for ( ICECandidatePair *pCandidatePair : m_vecCandidatePairs )
          {
@@ -1775,7 +1778,7 @@ index de4b490..dcbbb92 100644
              if ( pCandidatePair->m_nState == kICECandidatePairState_Waiting )
              {
                  pPairToCheck = pCandidatePair;
-@@ -2406,31 +3183,39 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
+@@ -2406,31 +3186,39 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
  
      if ( pPairToCheck == nullptr )
      {
@@ -1830,7 +1833,7 @@ index de4b490..dcbbb92 100644
              pCandidatePair->m_nState = kICECandidatePairState_Waiting;
              if ( pPairToCheck == nullptr )
                  pPairToCheck = pCandidatePair;
-@@ -2439,6 +3224,15 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
+@@ -2439,6 +3227,15 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
  
      if ( pPairToCheck != nullptr )
      {
@@ -1846,7 +1849,7 @@ index de4b490..dcbbb92 100644
          // Trigger the connectivity check here...
          ICESessionInterface * const pIntf = pPairToCheck->m_localCandidate.m_pInterface;
          pPairToCheck->m_nState = kICECandidatePairState_InProgress;
-@@ -2529,17 +3323,22 @@ void CSteamNetworkingICESession::STUNRequestCallback_PeerConnectivityCheck( cons
+@@ -2529,17 +3326,22 @@ void CSteamNetworkingICESession::STUNRequestCallback_PeerConnectivityCheck( cons
  
      // Always update the pair state so it is never left stuck in InProgress with no
      // active request (which would break the invariant checked in OnPacketReceived).
@@ -1872,7 +1875,7 @@ index de4b490..dcbbb92 100644
      {
          return;
      }
-@@ -2550,12 +3349,12 @@ void CSteamNetworkingICESession::STUNRequestCallback_PeerConnectivityCheck( cons
+@@ -2550,12 +3352,12 @@ void CSteamNetworkingICESession::STUNRequestCallback_PeerConnectivityCheck( cons
      }
  	else if ( m_role == k_EICERole_Controlling )
      {
@@ -1888,7 +1891,7 @@ index de4b490..dcbbb92 100644
  		}
  		else
  		{
-@@ -2570,7 +3369,8 @@ void CSteamNetworkingICESession::STUNRequestCallback_PeerConnectivityCheck( cons
+@@ -2570,7 +3372,8 @@ void CSteamNetworkingICESession::STUNRequestCallback_PeerConnectivityCheck( cons
  			if ( !bAlreadyHaveANomination )
  			{
  				pPair->m_bNominated = true;
@@ -1898,7 +1901,7 @@ index de4b490..dcbbb92 100644
  			}
  		}
      }
-@@ -2634,6 +3434,8 @@ void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind,
+@@ -2634,6 +3437,8 @@ void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind,
              uCounter += stunIPv6[i];
          }
          nFoundation = ( m_boundAddr.GetPort() + m_addrSTUNServer.GetPort() ) + ( uCounter << 15 ) + (int)kind;
@@ -1907,7 +1910,7 @@ index de4b490..dcbbb92 100644
      }
  
      char connectionAddr[ k_ncchMaxNetAdrString ];
-@@ -2674,6 +3476,7 @@ void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind,
+@@ -2674,6 +3479,7 @@ void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind,
      }
      if ( !( eType & m_session.m_nPermittedCandidateTypes ) )
          return;
@@ -1915,7 +1918,7 @@ index de4b490..dcbbb92 100644
      pCallbacks->OnLocalCandidateDiscovered( eType, szCandidate );
  }
  
-@@ -2802,6 +3605,19 @@ void CConnectionTransportP2PICE_Valve::RecvRendezvous( const CMsgICERendezvous &
+@@ -2802,6 +3608,19 @@ void CConnectionTransportP2PICE_Valve::RecvRendezvous( const CMsgICERendezvous &
      }
  }
  
