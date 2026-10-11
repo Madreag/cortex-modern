@@ -5390,6 +5390,7 @@ namespace RTE {
 		m_PeerOwnReceiptProgress.clear(); m_PeerReceiptSampleFloorMs.clear(); m_PeerReceiptRepairs = 0;
 		m_PeerCommittedTail.clear(); m_PeerFrameIncoming.clear(); m_PeerTailThrough.reset(); m_PeerAppliedThrough.clear(); m_PeerAppliedAtMs.clear();
 		m_PeerTailRequestedUntil.clear(); m_PeerTailLastSentMs.clear(); m_PeerTailSendRanges.clear();
+		m_PeerTailDuplicateFrames = 0;
 		m_PeerTailOutgoing.clear(); m_PeerTailRawBytesSent = m_PeerTailDeferredSends = 0;
 		m_PeerTailRequests = m_PeerTailFramesSent = m_PeerTailBytesSent = m_PeerTailLogAtMs = m_PeerPathLogAtMs = 0;
 		m_PeerRoundEnds.clear();
@@ -10811,6 +10812,7 @@ namespace RTE {
 		out << "},";
 		out << "\"peer_tail_requests\":" << m_PeerTailRequests << ",\"peer_tail_frames_sent\":" << m_PeerTailFramesSent
 		    << ",\"peer_tail_bytes_sent\":" << m_PeerTailBytesSent << ",";
+		out << "\"peer_tail_duplicate_frames\":" << m_PeerTailDuplicateFrames << ",";
 		out << "\"peer_tail_raw_bytes_sent\":" << m_PeerTailRawBytesSent << ",\"peer_tail_deferred_sends\":" << m_PeerTailDeferredSends << ",";
 		out << "\"peers_dropped_silent\":" << m_Stats.peersDroppedSilent << ",";
 		out << "\"stops_from_left_peers\":" << m_Stats.stopsFromLeftPeers << ",";

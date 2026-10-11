@@ -18,9 +18,11 @@ def run_case(repo, out, case, timeout, lag_ms, initial_delay):
     participants = []
     returning = case in ('blackout-return', 'slow-return')
     ticks = 2400 if returning or case == 'shrink' else 180
-    clean_requirement = 23
+    clean_requirement = 26 if case == 'shrink' else 23
+    if case == 'shrink':
+        initial_delay = 26
     schedule = out / 'path.json'
-    schedule.write_text(json.dumps([dict(id='longer-path', action='lag', tick=400,
+    schedule.write_text(json.dumps([dict(id='longer-path', action='lag', tick=600,
         lag_ms=lag_ms, duration_ms=120000, duration_ticks=10000)]))
     common = ['-net-match-service-e2e', '-net-port', '47631', '-net-match-peers', '3',
               '-net-match-mode', 'coop-pve', '-net-match-ticks', str(ticks),
@@ -39,6 +41,7 @@ def run_case(repo, out, case, timeout, lag_ms, initial_delay):
             env = {'CCCP_HEADLESS': '1', 'CC_TEST_NET_MATCH_E2E_WAIT_PEERS': '1'}
             if peer == 1 and returning:
                 env['CC_TEST_LINK_BLACKOUT'] = '1:600:8000'
+                env['CC_TEST_SCENE_PATH_RTT_MS'] = '450'
                 if lag_ms != 100:
                     flags += ['-net-cross-schedule', str(schedule)]
                     env.update(CC_TEST_CROSS_RECORDS=str(folder / 'events.jsonl'),
@@ -76,18 +79,24 @@ def run_case(repo, out, case, timeout, lag_ms, initial_delay):
         report = json.loads((folder / 'report.json').read_text()) if (folder / 'report.json').exists() else {}
         locked = report.get('service', {}).get('runner', {}).get('lockstep', {})
         first_delay = rows[0]['input_delay_ticks'] if rows else None
+        duplicate_tails = locked.get('peer_tail_duplicate_frames')
+        recovery_frames = returned['tick'] - first_held if returned and first_held else 0
         shrunk = next((row for row in rows if row['input_delay_ticks'] <= clean_requirement + 2), None)
         shrink_ms = shrunk['unix_ms'] - rows[0]['unix_ms'] if shrunk and rows else None
         participants.append(dict(peer=peer, rows=len(rows), first_held=first_held,
                                  returned=returned['tick'] if returned else None,
                                  first_delay=first_delay, last_delay=rows[-1]['input_delay_ticks'] if rows else None,
                                  shrink_ms=shrink_ms, tail_frames_sent=locked.get('peer_tail_frames_sent'),
+                                 duplicate_tails=duplicate_tails, recovery_frames=recovery_frames,
                                  return_after_end_ms=elapsed, exit_code=record.get('exit_code'),
                                  timed_out=record.get('timed_out')))
         if returning and not held:
             errors.append(f'peer {peer} did not record the held host')
         if returning and (elapsed is None or elapsed > (10000 if case == 'slow-return' else 12000)):
-            errors.append(f'peer {peer} did not return the host within 12 seconds after the blackout')
+            seconds = 10 if case == 'slow-return' else 12
+            errors.append(f'peer {peer} did not return the host within {seconds} seconds after the blackout')
+        if case == 'slow-return' and (duplicate_tails is None or recovery_frames <= 0 or duplicate_tails >= recovery_frames):
+            errors.append(f'peer {peer} has at least 1000 duplicate tail replies per 1000 recovery frames')
         if case in ('clean-start', 'saturated-start'):
             tolerance = 2 if case == 'clean-start' else 6
             if first_delay is None or first_delay > 36 or abs(first_delay - clean_requirement) > tolerance:

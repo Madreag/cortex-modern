@@ -293,6 +293,8 @@ namespace RTE {
 		}
 		const auto key = std::tuple{message.senderPeerId, message.type, message.frame};
 		const bool inputMessage = message.type == NetHostMigrationMessageType::PeerInput || message.type == NetHostMigrationMessageType::PeerForwardInput;
+		if (message.type == NetHostMigrationMessageType::PeerTail && message.offset == 0 &&
+		    (message.frame < m_Stats.nextFrame || m_PeerCommittedTail.contains(message.frame))) ++m_PeerTailDuplicateFrames;
 		const size_t byteCap = inputMessage ? NetLockstepCodec::c_InputWindowByteCap : NetHostMigrationCodec::c_MaxPeerTailBytes;
 		if (message.totalBytes == 0 || message.totalBytes > byteCap || message.offset > message.totalBytes ||
 		    message.bytes.size() > message.totalBytes - message.offset) return true;
