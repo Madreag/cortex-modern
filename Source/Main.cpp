@@ -9315,7 +9315,8 @@ void RunGameLoop() {
 				}
 			}
 			if (!g_ActivityMan.ActivitySetToRestart()) {
-				g_MenuMan.HandleTransitionIntoMenuLoop();
+				// A failed match belongs on Multiplayer, where its removal or connection reason is shown.
+				g_MenuMan.HandleTransitionIntoMenuLoop(!s_netReplayReturnPending && g_NetMatchService.GetState() == NetMatchServiceState::Failed);
 				RunMenuLoop();
 			}
 			if (!System::IsSetToQuit()) {

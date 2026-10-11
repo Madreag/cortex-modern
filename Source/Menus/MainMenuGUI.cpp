@@ -97,7 +97,8 @@ static std::string PlayerFacingStatus(const std::string& text) {
 			const std::string name = refusedName(" is banned from this session");
 			return name.empty() ? "A banned player was refused." : name + " was refused: banned from this session.";
 		}
-		return wireReason ? "You are banned from this session" : text;
+		if (wireReason) return "You are banned from this session";
+		return text.find("banned from this session") != std::string::npos ? "The host banned you from this session" : text;
 	}
 	if (text.find("transport stopped") != std::string::npos || text == "Connection dropped") return "The host's connection was lost.";
 	return text;
