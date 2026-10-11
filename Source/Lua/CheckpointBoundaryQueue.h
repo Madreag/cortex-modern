@@ -12,7 +12,7 @@
 namespace RTE::CheckpointLua {
 
 	template<class Header> class BoundaryQueue {
-		static_assert(std::is_trivially_copyable_v<Header>);
+		static_assert(std::is_nothrow_copy_assignable_v<Header>);
 	public:
 		using Prepare = std::function<std::unique_ptr<Boundary>()>;
 		using Complete = std::function<bool(const Header&, const Boundary&)>;
@@ -44,7 +44,9 @@ namespace RTE::CheckpointLua {
 			if (!m_State.compare_exchange_strong(expected, State::Claimed, std::memory_order_acq_rel)) return false;
 			try {
 				if (m_Plan->boundary->Arm()) {
-					std::memcpy(&m_Plan->header, &header, sizeof(Header));
+					// Prepared slots retain immutable owners without constructing their payloads here.
+					if constexpr (std::is_trivially_copyable_v<Header>) std::memcpy(&m_Plan->header, &header, sizeof(Header));
+					else m_Plan->header = header;
 					result = m_Plan->result;
 					Publish(State::Armed); Wake();
 					return true;
@@ -64,7 +66,7 @@ namespace RTE::CheckpointLua {
 			std::unique_ptr<Boundary> boundary;
 			std::promise<bool> done;
 			std::shared_future<bool> result;
-			Header header;
+			Header header{};
 		};
 		Prepare m_Prepare;
 		Complete m_Complete;
@@ -130,7 +132,9 @@ namespace RTE::CheckpointLua {
 		auto value = std::make_unique<Value>();
 		const Value* const identity = value.get();
 		struct RootHeader { const Value* value; uint64_t tick; } root{identity, 1};
-		struct Header { uint64_t tick; };
+		struct Header { uint64_t tick; std::shared_ptr<const std::string> identity; };
+		Header request{2, std::make_shared<const std::string>("first queued identity")};
+		const std::weak_ptr<const std::string> firstIdentity = request.identity;
 		const std::array<const lua_State*, 1> states{lua};
 		const std::array roots{Boundary::Root::Of(root)};
 		const auto simulation = std::this_thread::get_id();
@@ -162,6 +166,7 @@ namespace RTE::CheckpointLua {
 			const TValue number = boundary.LuaHeap(0).GlobalValue("queuedBoundaryValue");
 			return frozen->tick == header.tick && frozen->value == identity &&
 			       CheckpointNativeStorage::Source(identity)->number == (capture ? 19 : 13) &&
+			       header.identity && *header.identity == (capture ? "second queued identity" : "first queued identity") &&
 			       tvisnumber(&number) && numberVnum(&number) == (capture ? 23 : 17);
 		});
 		Release unblock{release};
@@ -169,23 +174,28 @@ namespace RTE::CheckpointLua {
 		root.tick = 2; value->number = 13;
 		ProtectedCall(lua, [&] { lua_pushinteger(lua, 17); lua_setglobal(lua, "queuedBoundaryValue"); });
 		std::shared_future<bool> first, overlap;
-		if (!queue.TryCapture({2}, first)) return "prepared queued boundary refused";
+		if (!queue.TryCapture(request, first)) return "prepared queued boundary refused";
 		entered.get_future().wait();
-		if (first.wait_for(std::chrono::seconds(0)) == std::future_status::ready || queue.TryCapture({2}, overlap))
+		if (first.wait_for(std::chrono::seconds(0)) == std::future_status::ready || queue.TryCapture(request, overlap))
 			return "queued boundary joined the saver or accepted an overlapping image";
+		request.identity = std::make_shared<const std::string>("second queued identity");
+		if (firstIdentity.expired()) return "queued boundary borrowed its request identity";
 		root.tick = 3; value->number = 19;
 		ProtectedCall(lua, [&] { lua_pushinteger(lua, 23); lua_setglobal(lua, "queuedBoundaryValue"); });
 		unblock.Send();
 		if (!first.get() || !queue.WaitUntilPrepared()) return "deferred boundary lost its frozen tick";
+		if (!firstIdentity.expired()) return "queued boundary retained a completed request identity";
 		const size_t growthBytes = std::async(std::launch::async, [&] { return owner->PrepareFreeze()->Image().ByteCount() + Snapshot::c_PageBytes; }).get();
 		const std::string growth(growthBytes, 'x');
 		ProtectedCall(lua, [&] { lua_pushlstring(lua, growth.data(), growth.size()); lua_setglobal(lua, "queuedGrowth"); });
+		request.tick = 3;
 		inject.store(true);
-		if (queue.TryCapture({3}, overlap)) return "queued boundary accepted a grown heap inventory";
+		if (queue.TryCapture(request, overlap)) return "queued boundary accepted a grown heap inventory";
 		if (queue.WaitUntilPrepared() || !refused.load(std::memory_order_acquire)) return "queued inventory allocation refusal was not retained";
 		queue.NotifyNextTick();
 		if (!queue.WaitUntilPrepared()) return "queued inventory could not retry allocation refusal";
-		if (!queue.TryCapture({3}, overlap)) return "retried queued boundary refused";
+		if (!queue.TryCapture(request, overlap)) return "retried queued boundary refused";
+		request.identity.reset();
 		root.tick = 4; value.reset();
 		return overlap.get() ? std::string() : "retried queued boundary did not survive source destruction";
 	}
