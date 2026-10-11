@@ -9905,6 +9905,8 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		lua_getglobal(bindingState.m_State, "FrozenBindingMetadataLongClassName");
 		const auto* source = static_cast<const luabind::detail::class_rep*>(lua_touserdata(bindingState.m_State, -1));
 		lua_pop(bindingState.m_State, 1);
+		auto callbacks = CheckpointLua::BindingMetadata::PrepareLease();
+		const bool currentCallbacks = callbacks.Current();
 		auto pages = CheckpointNativeStorage::PrepareInventory();
 		auto heap = bindingState.m_CheckpointHeap->PrepareFreeze();
 		if (!pages->Arm() || !heap->Arm(*bindingState.m_CheckpointHeap)) throw std::runtime_error("could not freeze the binding metadata probe");
@@ -9919,6 +9921,28 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		}
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " frozen_binding_metadata_survives_source_state_close" << std::endl;
 		checkpointValues = exact && checkpointValues;
+		bool getterExact = currentCallbacks && !callbacks.Current();
+		if (source) {
+			CheckpointNativeStorage::ReadScope read(pages->Pages());
+			CheckpointLua::FrozenBindings bindings(image, &callbacks);
+			const auto* getter = bindings.Getter(source, "X");
+			getterExact = getterExact && getter;
+			if (getter) {
+				LuaCheckpointBarrierIgnore quiet;
+				CheckpointLua::ProtectedCall(m_State, [&] {
+					luabind::object(m_State, Vector(17.0F, 23.0F)).push(m_State);
+					lua_pushliteral(m_State, "X");
+					const int count = getter->func(m_State, getter->pointer_offset);
+					getterExact = getterExact && count == 1 && lua_tonumber(m_State, -1) == 17;
+				});
+			}
+			bool refused = false;
+			try { CheckpointLua::FrozenBindings(image).Getter(source, "X"); }
+			catch (const std::logic_error&) { refused = true; }
+			getterExact = getterExact && refused;
+		}
+		std::cout << "[script-graph-selftest] " << (getterExact ? "PASS" : "FAIL") << " frozen_binding_getter_owners_survive_close_without_borrowing_callbacks" << std::endl;
+		checkpointValues = getterExact && checkpointValues;
 	}
 	{
 		auto owner = CheckpointLua::HeapOwner::Create();
