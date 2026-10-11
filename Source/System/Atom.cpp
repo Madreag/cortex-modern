@@ -138,7 +138,7 @@ Atom::Atom(const Atom& source, CheckpointNativeSnapshot& snapshot) :
 	m_SubSteps(snapshot.Freeze(source.m_SubSteps)),
 	m_SubStepped(snapshot.Freeze(source.m_SubStepped)),
 	// The frozen materials name themselves on the saver through the snapshot; only carried names are copied here.
-	m_CheckpointMaterialReferences(source.m_HasCheckpointMaterials ? source.m_CheckpointMaterialReferences : std::array<std::string, 3>{}),
+	m_CheckpointMaterialReferences(source.m_HasCheckpointMaterials ? source.m_CheckpointMaterialReferences : std::array<CheckpointString, 3>{}),
 	m_HasCheckpointMaterials(source.m_HasCheckpointMaterials),
 	m_CheckpointLinkIDs(source.CaptureCheckpointLinkIDs()),
 	m_HasCheckpointLinks(true),
@@ -347,7 +347,8 @@ int Atom::Create(const Atom& reference) {
 		m_LastHit = reference.m_LastHit;
 		// The copied material pointers are what the names would resolve to, unless the reference itself still holds names.
 		if (!MovableObject::FaithfulCloneForPreview() || reference.m_HasCheckpointMaterials) {
-			m_CheckpointMaterialReferences = reference.CaptureCheckpointMaterialReferences();
+			const auto materials = reference.CaptureCheckpointMaterialReferences();
+			std::copy(materials.begin(), materials.end(), m_CheckpointMaterialReferences.begin());
 			m_HasCheckpointMaterials = true;
 		}
 		m_CheckpointLinkIDs = reference.CaptureCheckpointLinkIDs();
@@ -385,16 +386,17 @@ int Atom::Create(const Atom& reference) {
 
 long Atom::LinkIDs::Of(const MovableObject* object) {
 	if (!object) return 0;
+	object = static_cast<const MovableObject*>(CheckpointNativeStorage::Original(object));
 	for (const auto& [known, id]: this->known) if (known == object) return id;
 	// The last collision may have destroyed its other body, so the registry decides before anything reads it.
-	const long id = g_MovableMan.IsKnownObject(object) ? object->GetUniqueID() : 0L;
+	const long id = g_MovableMan.IsKnownObject(object) ? static_cast<const MovableObject*>(CheckpointNativeSnapshot::Source(object))->GetUniqueID() : 0L;
 	this->known[next++ % this->known.size()] = {object, id};
 	return id;
 }
 
 std::array<long, 5> Atom::CaptureCheckpointLinkIDs(LinkIDs& ids) const {
 	if (m_HasCheckpointLinks) return m_CheckpointLinkIDs;
-	return {m_OwnerMO ? m_OwnerMO->GetUniqueID() : 0L, ids.Of(m_LastHit.Body[0]), ids.Of(m_LastHit.Body[1]), ids.Of(m_LastHit.RootBody[0]), ids.Of(m_LastHit.RootBody[1])};
+	return {m_OwnerMO ? static_cast<const MovableObject*>(CheckpointNativeSnapshot::Source(m_OwnerMO))->GetUniqueID() : 0L, ids.Of(m_LastHit.Body[0]), ids.Of(m_LastHit.Body[1]), ids.Of(m_LastHit.RootBody[0]), ids.Of(m_LastHit.RootBody[1])};
 }
 
 std::array<long, 5> Atom::CaptureCheckpointLinkIDs() const {
@@ -402,15 +404,15 @@ std::array<long, 5> Atom::CaptureCheckpointLinkIDs() const {
 	// The last collision may have destroyed its other body. Never dereference a
 	// scratch pointer until the registry confirms that it still names a live MO.
 	const auto liveID = [](const MovableObject* object) {
-		return object && g_MovableMan.IsKnownObject(object) ? object->GetUniqueID() : 0L;
+		return object && g_MovableMan.IsKnownObject(object) ? static_cast<const MovableObject*>(CheckpointNativeSnapshot::Source(object))->GetUniqueID() : 0L;
 	};
-	return {m_OwnerMO ? m_OwnerMO->GetUniqueID() : 0L,
+	return {m_OwnerMO ? static_cast<const MovableObject*>(CheckpointNativeSnapshot::Source(m_OwnerMO))->GetUniqueID() : 0L,
 	    liveID(m_LastHit.Body[0]), liveID(m_LastHit.Body[1]),
 	    liveID(m_LastHit.RootBody[0]), liveID(m_LastHit.RootBody[1])};
 }
 
 std::array<std::string, 3> Atom::CaptureCheckpointMaterialReferences() const {
-    if (m_HasCheckpointMaterials) return m_CheckpointMaterialReferences;
+    if (m_HasCheckpointMaterials) return {m_CheckpointMaterialReferences[0].Value(), m_CheckpointMaterialReferences[1].Value(), m_CheckpointMaterialReferences[2].Value()};
     return {g_SceneMan.SaveMaterialReference(m_Material), g_SceneMan.SaveMaterialReference(m_LastHit.HitMaterial[0]), g_SceneMan.SaveMaterialReference(m_LastHit.HitMaterial[1])};
 }
 
@@ -429,7 +431,7 @@ std::string Atom::SaveCheckpoint() const {
                 continue;
             }
         }
-        CheckpointText reference = CheckpointWriter::Native([&] { return m_HasCheckpointMaterials ? m_CheckpointMaterialReferences[index] : g_SceneMan.SaveMaterialReference(sources[index]); });
+        CheckpointText reference = CheckpointWriter::Native([&] { return m_HasCheckpointMaterials ? m_CheckpointMaterialReferences[index].Value() : g_SceneMan.SaveMaterialReference(sources[index]); });
         materials[index] = cache ? cache->Remember(sources[index], materialChannel, std::move(reference)) : std::move(reference);
     }
     writer(materials, CaptureCheckpointLinkIDs(), m_IgnoreMOIDsByGroup != nullptr);
@@ -652,7 +654,7 @@ std::shared_ptr<const Atom::FrozenList> Atom::FreezeList(std::span<Atom* const> 
 	list->records.reserve(atoms.size());
 	if (!atoms.empty()) std::call_once(list->state->fieldsReady, [&] {
 		auto fields = std::make_shared<FrozenList>();
-		const Atom& atom = *atoms.front();
+		const Atom& atom = *static_cast<const Atom*>(CheckpointNativeStorage::View(atoms.front(), sizeof(Atom)));
 		const auto offset = [&](const auto& value) { return reinterpret_cast<const char*>(&value) - reinterpret_cast<const char*>(&atom); };
 		auto& layout = fields->layout;
 		layout.material = offset(atom.m_Material);
@@ -675,17 +677,25 @@ std::shared_ptr<const Atom::FrozenList> Atom::FreezeList(std::span<Atom* const> 
 	std::array<const Material*, 3> lastMaterials{};
 	std::array<bool, 3> haveMaterial{};
 	LinkIDs ids;
-	for (const Atom* atom: atoms) {
-		FrozenList::Record record{atom, FrozenList::none, FrozenList::none, values ? atom->CaptureCheckpointLinkIDs(ids) : std::array<long, 5>{}};
-		if (!list->state->pages || !list->state->pages->CanBorrow(atom, sizeof(Atom))) {
+	for (const Atom* address: atoms) {
+		const Atom* atom = static_cast<const Atom*>(CheckpointNativeStorage::View(address, sizeof(Atom)));
+		address = static_cast<const Atom*>(CheckpointNativeStorage::Original(address));
+		FrozenList::Record record{address, FrozenList::none, FrozenList::none, values ? atom->CaptureCheckpointLinkIDs(ids) : std::array<long, 5>{}};
+		if (!list->state->pages || !(CheckpointNativeStorage::IsView(atom) ? list->state->pages->Contains(address, sizeof(Atom)) : list->state->pages->CanBorrow(address, sizeof(Atom)))) {
 			record.backup = list->backup.size();
 			const char* source = reinterpret_cast<const char*>(atom);
 			list->backup.insert(list->backup.end(), source, source + sizeof(Atom));
 		}
 		if (values && (!atom->m_IgnoreMOIDs.empty() || !atom->m_LastTrailPoints.empty() || !atom->m_TrailPoints.empty() || atom->m_HasCheckpointMaterials)) {
 			record.tail = list->tails.size();
-			list->tails.push_back({atom->m_IgnoreMOIDs, atom->m_LastTrailPoints, atom->m_TrailPoints,
-			    atom->m_HasCheckpointMaterials ? atom->m_CheckpointMaterialReferences : std::array<std::string, 3>{}});
+			const auto copy = [](const auto& values) {
+				std::decay_t<decltype(values)> result;
+				result.reserve(values.size());
+				for (const auto& value: CheckpointValues(values)) result.push_back(value);
+				return result;
+			};
+			list->tails.push_back({copy(atom->m_IgnoreMOIDs), copy(atom->m_LastTrailPoints), copy(atom->m_TrailPoints),
+			    atom->m_HasCheckpointMaterials ? atom->CaptureCheckpointMaterialReferences() : std::array<std::string, 3>{}});
 		}
 		const Material* sources[] = {atom->m_Material, atom->m_LastHit.HitMaterial[0], atom->m_LastHit.HitMaterial[1]};
 		for (size_t index = 0; index < (values ? 3 : 1); ++index) {
@@ -708,7 +718,7 @@ std::shared_ptr<const Atom::FrozenList> Atom::FreezeList(std::span<Atom* const> 
 		auto& kept = list->state->materials[source];
 		if (!kept || (values && !kept->hasText)) {
 			const CheckpointText text = values ? CheckpointWriter::Native([source] { return g_SceneMan.SaveMaterialReference(source); }) : CheckpointText();
-			kept = std::make_shared<FreezeState::MaterialValue>(FreezeState::MaterialValue{text, source ? source->GetIndex() : -1, values});
+			kept = std::make_shared<FreezeState::MaterialValue>(FreezeState::MaterialValue{text, source ? static_cast<const Material*>(CheckpointNativeSnapshot::Source(source))->GetIndex() : -1, values});
 		}
 		material = kept;
 		if (found != known.values.end()) found->second = kept;
@@ -1077,7 +1087,7 @@ bool Atom::LoadCheckpoint(std::string_view text, bool validateOnly) {
         }
         for (long uid: links) if (uid < 0) return false;
         reader.OnCommit([this, materials, links, usesGroupIgnoreList] {
-			m_CheckpointMaterialReferences = materials; m_HasCheckpointMaterials = true;
+			std::copy(materials.begin(), materials.end(), m_CheckpointMaterialReferences.begin()); m_HasCheckpointMaterials = true;
 			m_CheckpointLinkIDs = links; m_HasCheckpointLinks = true;
             if (!usesGroupIgnoreList) m_IgnoreMOIDsByGroup = nullptr;
         });
@@ -1111,7 +1121,8 @@ int Atom::ReadProperty(const std::string_view& propName, Reader& reader) {
     MatchProperty("SpecialBehaviour_MaterialReference", {
         const std::string material = base64_decode(reader.ReadPropValue());
         if (!SceneMan::ValidateMaterialReference(material)) reader.ReportError("invalid Atom material checkpoint reference");
-        m_CheckpointMaterialReferences = CaptureCheckpointMaterialReferences();
+        const auto materials = CaptureCheckpointMaterialReferences();
+        std::copy(materials.begin(), materials.end(), m_CheckpointMaterialReferences.begin());
         m_CheckpointMaterialReferences[0] = material; m_HasCheckpointMaterials = true;
         if (const Material* found = g_SceneMan.ResolveMaterialReference(material, true)) m_Material = found;
     });
@@ -1137,7 +1148,7 @@ int Atom::Save(Writer& writer) const {
 
 	writer.NewPropertyWithValue("Offset", m_Offset);
 	writer.NewPropertyWithValue("OriginalOffset", m_OriginalOffset);
-    if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialReference", CheckpointWriter::Native([&] { return m_HasCheckpointMaterials ? m_CheckpointMaterialReferences[0] : g_SceneMan.SaveMaterialReference(m_Material); }).Base64(true));
+    if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialReference", CheckpointWriter::Native([&] { return m_HasCheckpointMaterials ? m_CheckpointMaterialReferences[0].Value() : g_SceneMan.SaveMaterialReference(m_Material); }).Base64(true));
     else writer.NewPropertyWithValue("Material", m_Material);
 	writer.NewPropertyWithValue("TrailColor", m_TrailColor);
 	writer.NewPropertyWithValue("TrailLength", m_TrailLength);

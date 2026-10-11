@@ -519,7 +519,7 @@ namespace RTE {
 		static inline std::atomic<FreezeState*> s_FreezeState{nullptr};
 		// Owner, collision bodies and their roots are resolved after the complete
 		// native world has adopted its saved identities.
-		std::array<std::string, 3> m_CheckpointMaterialReferences;
+		std::array<CheckpointString, 3> m_CheckpointMaterialReferences;
         bool m_HasCheckpointMaterials = false;
         std::array<std::string, 3> CaptureCheckpointMaterialReferences() const;
 		std::array<long, 5> m_CheckpointLinkIDs{};
