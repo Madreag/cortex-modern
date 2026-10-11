@@ -944,14 +944,13 @@ void MainMenuGUI::OfferStoredRejoinOnEntry() {
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 }
 
-void MainMenuGUI::OfferHostLeftLandingOnEntry() {
-	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen || g_NetMatchService.GetState() != NetMatchServiceState::Failed ||
-	    g_NetMatchService.GetLobbySnapshot().errorText != "The host left the match") {
+void MainMenuGUI::OfferFailedMatchLandingOnEntry() {
+	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen || g_NetMatchService.GetState() != NetMatchServiceState::Failed) {
 		return;
 	}
 	SetActiveMenuScreen(MenuScreen::MultiplayerScreen, false);
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
-	m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus("The host left the match"));
+	m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(g_NetMatchService.GetLobbySnapshot().errorText));
 }
 
 void MainMenuGUI::OfferRematchLobbyOnEntry() {

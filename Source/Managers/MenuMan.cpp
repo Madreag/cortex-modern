@@ -92,7 +92,7 @@ void MenuMan::SetActiveMenu() {
 				m_MainMenu->OfferRematchLobbyOnEntry();
 				// §11: the rejoin offer is put up on the way in, at process start and after a match.
 				m_MainMenu->OfferStoredRejoinOnEntry();
-				m_MainMenu->OfferHostLeftLandingOnEntry();
+				m_MainMenu->OfferFailedMatchLandingOnEntry();
 				break;
 			case ActiveMenu::ScenarioMenuActive:
 				m_ScenarioMenu->SetEnabled(m_TitleScreen->GetPlanetPos(), m_TitleScreen->GetPlanetRadius());
