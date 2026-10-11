@@ -6,6 +6,7 @@
 #include "Base64/base64.h"
 
 #include "AudioMan.h"
+#include "AudioCheckpoint.h"
 #include "PresetMan.h"
 #include "ConsoleMan.h"
 #include "RTETools.h"
@@ -81,6 +82,38 @@ namespace {
 	struct SavedPathHashes {
 		std::unordered_map<size_t, std::string> paths;
 	};
+	struct LoadedSampleValues : CheckpointNativeAllocated {
+		FMOD::Sound* sound = nullptr;
+		AudioCheckpoint::SampleValues values;
+		std::atomic<bool> published{false};
+		FMOD_RESULT failure = FMOD_OK;
+		void Publish(const AudioCheckpoint::SampleValues& captured) {
+			values = captured; failure = FMOD_OK;
+			published.store(captured.captured, std::memory_order_release);
+		}
+	};
+	using SampleRegistry = CheckpointUnorderedMap<CheckpointString, std::shared_ptr<LoadedSampleValues>>;
+	SampleRegistry s_SampleValues = [] { CheckpointNativeStorage::AllocationScope resources(true); return SampleRegistry{}; }();
+	std::atomic<bool> s_SampleValuesReady{true};
+	struct SampleLoadCallbacks {
+		std::mutex mutex;
+		std::unordered_map<FMOD::Sound*, std::shared_ptr<LoadedSampleValues>> values;
+	};
+	SampleLoadCallbacks& SampleCallbacks() { static SampleLoadCallbacks callbacks; return callbacks; }
+	FMOD_RESULT F_CALLBACK SampleLoaded(FMOD_SOUND* handle, FMOD_RESULT result) {
+		if (result != FMOD_OK) return FMOD_OK;
+		try {
+			auto& callbacks = SampleCallbacks();
+			std::shared_ptr<LoadedSampleValues> record;
+			{ std::lock_guard lock(callbacks.mutex); const auto found = callbacks.values.find(reinterpret_cast<FMOD::Sound*>(handle)); if (found != callbacks.values.end()) record = found->second; }
+			if (record) {
+				const auto values = AudioCheckpoint::SampleValues::Capture(record->sound, true);
+				std::lock_guard lock(callbacks.mutex);
+				if (!record->published.load(std::memory_order_acquire)) record->Publish(values);
+			}
+		} catch (...) { s_SampleValuesReady.store(false, std::memory_order_release); }
+		return FMOD_OK;
+	}
 	std::shared_ptr<SavedPathHashes> SavedPaths() {
 		static const char kind{};
 		const auto [source, bytes] = ContentFile::PathHashRegistry();
@@ -119,6 +152,79 @@ std::pair<const void*, size_t> ContentFile::LoadedBitmapRegistry() {
 }
 
 std::pair<const void*, size_t> ContentFile::PathHashRegistry() { return {&s_PathHashes, sizeof(s_PathHashes)}; }
+
+std::pair<const void*, size_t> ContentFile::LoadedSampleRegistry() { return {&s_SampleValues, sizeof(s_SampleValues)}; }
+
+bool ContentFile::CheckpointSamplesReady() noexcept { return s_SampleValuesReady.load(std::memory_order_acquire); }
+
+void ContentFile::InvalidateCheckpointSamples() noexcept { s_SampleValuesReady.store(false, std::memory_order_release); }
+
+void ContentFile::RefreshCheckpointSample(const std::string& path, FMOD::Sound* sound) noexcept {
+	if (CheckpointNativeStorage::WorldEnabled() && !CheckpointNativeStorage::Reading()) NoteLoadedSample(path, sound, true);
+}
+
+void ContentFile::NoteLoadedSample(const std::string& path, FMOD::Sound* sound, bool changed) noexcept {
+	try {
+		CheckpointNativeStorage::AllocationScope resources(true);
+		auto& record = s_SampleValues[path];
+		if (!record || record->sound != sound) { record = std::shared_ptr<LoadedSampleValues>(new LoadedSampleValues); record->sound = sound; changed = true; }
+		auto& callbacks = SampleCallbacks();
+		{ std::lock_guard lock(callbacks.mutex); if (sound) callbacks.values[sound] = record; }
+		if (changed || !record->published.load(std::memory_order_acquire)) {
+			const auto values = AudioCheckpoint::SampleValues::Capture(sound);
+			std::lock_guard lock(callbacks.mutex);
+			if (values.captured || !record->published.load(std::memory_order_acquire)) record->Publish(values);
+		}
+	} catch (...) { InvalidateCheckpointSamples(); }
+}
+
+void ContentFile::PrepareCheckpointSamples() {
+	if (CheckpointSamplesReady()) return;
+	s_SampleValuesReady.store(true, std::memory_order_release);
+	for (const auto& [path, sound]: s_LoadedSamples) NoteLoadedSample(path, sound, true);
+	std::erase_if(s_SampleValues, [](const auto& value) { return !s_LoadedSamples.contains(value.first.Value()); });
+}
+
+std::vector<AudioCheckpoint::Sample> ContentFile::ReadCheckpointSamples() {
+	if (!CheckpointNativeStorage::Reading()) throw std::logic_error("saved samples need their frozen registry");
+	const auto* registry = CheckpointNativeStorage::Source(&s_SampleValues);
+	std::map<std::string, AudioCheckpoint::Sample> ordered;
+	CheckpointForEachValue(*registry, [&](const auto& entry) {
+		const auto* record = CheckpointNativeStorage::Source(entry.second.get());
+		if (!record->sound) return;
+		if (record->failure != FMOD_OK) throw UnsupportedCheckpointNative("saved sample metadata could not be read");
+		AudioCheckpoint::Sample sample; sample.path = entry.first.Value();
+		if (record->published.load(std::memory_order_acquire)) static_cast<AudioCheckpoint::SampleValues&>(sample) = record->values;
+		ordered.emplace(sample.path, std::move(sample));
+	});
+	std::vector<AudioCheckpoint::Sample> values;
+	values.reserve(ordered.size());
+	for (auto& [path, sample]: ordered) values.push_back(std::move(sample));
+	return values;
+}
+
+std::string ContentFile::SavedSampleValuesMismatch() {
+	CheckpointNativeStorage::AllocationScope storage(true);
+	const std::string path = "checkpoint-selftest/saved-sample.wav";
+	auto record = std::shared_ptr<LoadedSampleValues>(new LoadedSampleValues);
+	record->sound = reinterpret_cast<FMOD::Sound*>(record.get());
+	record->values.frequency = 44100; record->values.priority = 17; record->values.loopEnd = 23; record->values.captured = true;
+	record->published.store(true);
+	auto previous = s_SampleValues.extract(path);
+	struct Restore { std::string path; SampleRegistry::node_type previous; ~Restore() { s_SampleValues.erase(path); if (previous) s_SampleValues.insert(std::move(previous)); } } restore{path, std::move(previous)};
+	s_SampleValues[path] = record;
+	AudioCheckpoint::Sample before; before.path = path; static_cast<AudioCheckpoint::SampleValues&>(before) = record->values;
+	CheckpointNativeStorage::Root<SampleRegistry> root(&s_SampleValues);
+	auto inventory = CheckpointNativeStorage::PrepareInventory();
+	if (!inventory->Arm()) return "saved sample inventory was refused";
+	root.Freeze();
+	record->values.frequency = 22050; record->values.loopEnd = 47; s_SampleValues.erase(path);
+	const std::array headers{root.Range()};
+	CheckpointNativeStorage::ReadScope read(inventory->Pages(), headers);
+	const auto values = ReadCheckpointSamples();
+	const auto saved = std::find_if(values.begin(), values.end(), [&](const auto& sample) { return sample.path == path; });
+	return saved != values.end() && saved->SaveCheckpoint() == before.SaveCheckpoint() ? std::string{} : "saved sample follows later values or cache removal";
+}
 
 BITMAP* ContentFile::ReadLoadedBitmap(const std::string& path, int depth) {
 	if (!CheckpointNativeStorage::Reading() || depth < 0 || depth >= BitDepths::BitDepthCount) throw std::logic_error("saved bitmap lookup needs its frozen registry");
@@ -400,6 +506,7 @@ void ContentFile::FreeAllLoaded() {
 void ContentFile::FreeAllLoadedSounds() {
 	for (const auto& [soundPath, sound]: s_LoadedSamples) {
 		if (sound) {
+			{ auto& callbacks = SampleCallbacks(); std::lock_guard lock(callbacks.mutex); callbacks.values.erase(sound); }
 			const FMOD_RESULT result = sound->release();
 			if (result != FMOD_OK) {
 				g_ConsoleMan.PrintString("ERROR: Could not release sound " + soundPath + ": " + FMOD_ErrorString(result));
@@ -407,6 +514,7 @@ void ContentFile::FreeAllLoadedSounds() {
 		}
 	}
 	s_LoadedSamples.clear();
+	s_SampleValues.clear(); s_SampleValuesReady.store(true, std::memory_order_release);
 }
 
 int ContentFile::ReadProperty(const std::string_view& propName, Reader& reader) {
@@ -916,7 +1024,9 @@ bool ContentFile::WaitForPendingSounds(const ProgressCallback& progressCallback)
 				success = false;
 				return true;
 			}
-			return state == FMOD_OPENSTATE_READY || state == FMOD_OPENSTATE_PLAYING;
+			const bool ready = state == FMOD_OPENSTATE_READY || state == FMOD_OPENSTATE_PLAYING;
+			if (ready) NoteLoadedSample(path, sound);
+			return ready;
 		});
 		if (firstPass) {
 			initiallyPending = pending.size();
@@ -952,6 +1062,7 @@ FMOD::Sound* ContentFile::GetAsSound(bool abortGameForInvalidSound, bool asyncLo
 		// Insert the Sound object into the map, PASSING OVER OWNERSHIP OF THE LOADED FILE
 		s_LoadedSamples.try_emplace(m_DataPath, returnSample);
 	}
+	NoteLoadedSample(m_DataPath.Value(), returnSample);
 	return returnSample;
 }
 
@@ -986,7 +1097,8 @@ FMOD::Sound* ContentFile::LoadAndReleaseSound(bool abortGameForInvalidSound, boo
 	FMOD::Sound* returnSample = nullptr;
 
 	FMOD_MODE fmodFlags = FMOD_CREATESAMPLE | FMOD_3D | (asyncLoading ? FMOD_NONBLOCKING : FMOD_DEFAULT);
-	FMOD_RESULT result = g_AudioMan.GetAudioSystem()->createSound(m_DataPath.c_str(), fmodFlags, nullptr, &returnSample);
+	FMOD_CREATESOUNDEXINFO info{}; info.cbsize = sizeof(info); info.nonblockcallback = SampleLoaded;
+	FMOD_RESULT result = g_AudioMan.GetAudioSystem()->createSound(m_DataPath.c_str(), fmodFlags, asyncLoading ? &info : nullptr, &returnSample);
 
 	if (result != FMOD_OK) {
 		const std::string errorMessage = "Failed to create sound because of FMOD error:\n" + std::string(FMOD_ErrorString(result)) + "\nThe path and name were: ";

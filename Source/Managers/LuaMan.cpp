@@ -10102,6 +10102,12 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = mismatch.empty() && checkpointValues;
 	}
 	{
+		const std::string mismatch = ContentFile::SavedSampleValuesMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " frozen_samples_keep_earlier_metadata_after_cache_removal" << std::endl;
+		if (!mismatch.empty()) std::cout << "[script-graph-selftest] detail=" << mismatch << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
+	}
+	{
 		const std::string mismatch = AutosaveIdentity::FreezeSelfTestMismatch();
 		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " autosave_identity_keeps_its_tick_values_without_copying_their_bytes" << std::endl;
 		if (!mismatch.empty()) std::cout << "[script-graph-selftest] detail=" << mismatch << std::endl;

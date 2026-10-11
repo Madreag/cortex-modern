@@ -716,8 +716,8 @@ struct ActivityMan::PreparedAutosave {
 			for (const auto& [source, bytes]: values) roots.push_back({source, bytes, alignof(std::max_align_t)});
 		};
 		ranges(FrameMan::CheckpointRootSources()); ranges(UInputMan::CheckpointRootSources()); ranges(GUIInput::CheckpointRootSources());
-		const auto bitmapNames = ContentFile::LoadedBitmapRegistry(), pathNames = ContentFile::PathHashRegistry();
-		ranges(std::array{bitmapNames, pathNames});
+		const auto bitmapNames = ContentFile::LoadedBitmapRegistry(), pathNames = ContentFile::PathHashRegistry(), sampleNames = ContentFile::LoadedSampleRegistry();
+		ranges(std::array{bitmapNames, pathNames, sampleNames});
 		states.clear(); states.push_back(&g_LuaMan.GetMasterScriptState());
 		for (const auto& state: g_LuaMan.GetThreadedScriptStates()) states.push_back(&state);
 		std::vector<const lua_State*> heaps;
@@ -742,7 +742,7 @@ struct ActivityMan::PreparedAutosave {
 				clock->call->Finish(elapsed);
 			}
 		} finish{owner, clock, began};
-		if (!NetActorOwnership::CheckpointValuesReady() || (result.valid() && result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)) return false;
+		if (!NetActorOwnership::CheckpointValuesReady() || !ContentFile::CheckpointSamplesReady() || (result.valid() && result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)) return false;
 		const long uid = MovableObject::GetUniqueIDCounter();
 		const uint64_t simDraws = g_SimRNG.GetDrawCount(), renderDraws = g_RenderRNG.GetDrawCount(), soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		const bool accepted = queue.TryCapture(result, [&](Header& header) noexcept {
@@ -885,7 +885,8 @@ struct ActivityMan::PreparedAutosave {
 void ActivityMan::PrepareAutosave() {
 	if (!CheckpointNativeStorage::WorldEnabled()) return;
 	try {
-		g_LuaMan.PrepareCheckpointValues(); g_AudioMan.PrepareCheckpointBackendValues(); NetActorOwnership::PrepareCheckpointValues(); GUIInput::PrepareCheckpointTextInput();
+		ContentFile::InvalidateCheckpointSamples();
+		g_LuaMan.PrepareCheckpointValues(); g_AudioMan.PrepareCheckpointBackendValues(); NetActorOwnership::PrepareCheckpointValues(); ContentFile::PrepareCheckpointSamples(); GUIInput::PrepareCheckpointTextInput();
 		auto saver = std::make_unique<PreparedAutosave>(*this);
 		if (!saver->queue.WaitUntilPrepared()) std::fputs("[autosave] inventory preparation refused\n", stdout);
 		m_PreparedAutosave = std::move(saver);
@@ -894,6 +895,7 @@ void ActivityMan::PrepareAutosave() {
 
 void ActivityMan::NotifyCheckpointTick() {
 	if (!m_PreparedAutosave) return;
+	if (!ContentFile::CheckpointSamplesReady()) ContentFile::PrepareCheckpointSamples();
 	GUIInput::UpdateCheckpointTextInput();
 	m_PreparedAutosave->queue.NotifyNextTick();
 }

@@ -1044,6 +1044,7 @@ FMOD_RESULT SoundContainer::UpdateSoundProperties() {
 			g_ConsoleMan.PrintString("ERROR: Sound property update failed for " + soundData->SoundFile.GetDataPath() + " (open state=" + std::to_string(static_cast<int>(openState)) + ", result=" + std::to_string(static_cast<int>(openResult)) + ")");
 			break;
 		}
+		ContentFile::RefreshCheckpointSample(soundData->SoundFile.GetDataPath(), soundData->SoundObject);
 	}
 	CurrentSoundPropertiesUpToDate() = result == FMOD_OK;
 

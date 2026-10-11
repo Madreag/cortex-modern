@@ -2576,6 +2576,7 @@ void AudioMan::StartAwaitingSampleVoices() {
 		}
 		if (!SampleReadyForPlayback(sound)) continue;
 		sample.Apply(sound);
+		ContentFile::NoteLoadedSample(path, sound, true);
 		appliedSamples.push_back(path);
 	}
 	for (const auto& path: appliedSamples) s_PendingSamples.erase(path);
@@ -2875,6 +2876,7 @@ void AudioMan::FreezeCheckpointCapture(AudioCheckpointCapture& capture, uint64_t
 }
 
 void AudioMan::ReadCheckpointSamples(AudioCheckpointCapture& captured) const {
+	if (CheckpointNativeStorage::Reading()) { captured.state.samples = ContentFile::ReadCheckpointSamples(); return; }
 	std::map<std::string, FMOD::Sound*> samples(ContentFile::s_LoadedSamples.begin(), ContentFile::s_LoadedSamples.end());
 	for (const auto& [path, sound]: samples) {
 		if (!sound) continue;
@@ -3282,6 +3284,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			if (old != ContentFile::s_LoadedSamples.end() && !old->second) ContentFile::s_LoadedSamples.erase(old);
 		}
 		ContentFile::s_LoadedSamples.merge(newSamples);
+		ContentFile::InvalidateCheckpointSamples();
 		m_SoundChannelMinimumAudibleDistances.swap(minimumDistances);
 		m_NextVoiceIdentity = state.nextVoice;
 		SetCheckpointSoundContainerCursor(state.nextSoundContainer);

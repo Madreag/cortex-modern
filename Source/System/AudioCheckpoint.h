@@ -302,13 +302,26 @@ struct Voice {
 	}
 };
 
-struct Sample {
-	std::string path;
+struct SampleValues {
 	unsigned int mode = 0, loopStart = 0, loopEnd = 0;
 	float frequency = 0, minimumDistance = 0, maximumDistance = 0;
 	int priority = 0, loops = 0;
 	std::array<float, 3> cone{};
 	bool captured = false;
+	static SampleValues Capture(FMOD::Sound* sound, bool loaded = false) {
+		SampleValues sample;
+		if (!sound) return sample;
+		FMOD_OPENSTATE open = FMOD_OPENSTATE_ERROR;
+		if (!loaded && (sound->getOpenState(&open, nullptr, nullptr, nullptr) != FMOD_OK || (open != FMOD_OPENSTATE_READY && open != FMOD_OPENSTATE_PLAYING))) return sample;
+		Require(sound->getMode(&sample.mode)); Require(sound->getLoopPoints(&sample.loopStart, FMOD_TIMEUNIT_PCM, &sample.loopEnd, FMOD_TIMEUNIT_PCM)); Require(sound->getLoopCount(&sample.loops));
+		Require(sound->getDefaults(&sample.frequency, &sample.priority)); Require(sound->get3DMinMaxDistance(&sample.minimumDistance, &sample.maximumDistance)); Require(sound->get3DConeSettings(&sample.cone[0], &sample.cone[1], &sample.cone[2]));
+		sample.captured = true;
+		return sample;
+	}
+};
+
+struct Sample : SampleValues {
+	std::string path;
 	template <class Archive> void Fields(Archive& archive) { archive(path, mode, loopStart, loopEnd, frequency, minimumDistance, maximumDistance, priority, loops, cone); }
 	static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("12 AudioSample2 ") ? "AudioSample2" : "AudioSample1"; }
 	std::string SaveCheckpoint() const { CheckpointWriter archive("AudioSample2"); const_cast<Sample*>(this)->Fields(archive); archive(captured); return archive.Text(); }
@@ -329,12 +342,7 @@ struct Sample {
 	}
 	static Sample Capture(const std::string& path, FMOD::Sound* sound) {
 		Sample sample; sample.path = path;
-		if (!sound) return sample;
-		FMOD_OPENSTATE open = FMOD_OPENSTATE_ERROR;
-		if (sound->getOpenState(&open, nullptr, nullptr, nullptr) != FMOD_OK || (open != FMOD_OPENSTATE_READY && open != FMOD_OPENSTATE_PLAYING)) return sample;
-		Require(sound->getMode(&sample.mode)); Require(sound->getLoopPoints(&sample.loopStart, FMOD_TIMEUNIT_PCM, &sample.loopEnd, FMOD_TIMEUNIT_PCM)); Require(sound->getLoopCount(&sample.loops));
-		Require(sound->getDefaults(&sample.frequency, &sample.priority)); Require(sound->get3DMinMaxDistance(&sample.minimumDistance, &sample.maximumDistance)); Require(sound->get3DConeSettings(&sample.cone[0], &sample.cone[1], &sample.cone[2]));
-		sample.captured = true;
+		static_cast<SampleValues&>(sample) = SampleValues::Capture(sound);
 		return sample;
 	}
 	void Apply(FMOD::Sound* sound) const {

@@ -21,9 +21,11 @@ struct SDL_Palette;
 struct SDL_Surface;
 
 namespace RTE {
+	namespace AudioCheckpoint { struct Sample; }
 
 	/// A representation of a content file that is stored directly on disk.
 	class ContentFile : public Serializable {
+		friend class ActivityMan;
 		friend struct MusicCheckpoint;
 		friend struct GUISoundCheckpoint;
 		friend class AudioMan;
@@ -228,6 +230,12 @@ namespace RTE {
 		static const std::string* LoadedBitmapPath(const BITMAP* bitmap, int& depth);
 		static std::pair<const void*, size_t> LoadedBitmapRegistry();
 		static std::pair<const void*, size_t> PathHashRegistry();
+		static std::pair<const void*, size_t> LoadedSampleRegistry();
+		static void PrepareCheckpointSamples();
+		static bool CheckpointSamplesReady() noexcept;
+		static void RefreshCheckpointSample(const std::string& path, FMOD::Sound* sound) noexcept;
+		static std::vector<AudioCheckpoint::Sample> ReadCheckpointSamples();
+		static std::string SavedSampleValuesMismatch();
 		static BITMAP* ReadLoadedBitmap(const std::string& path, int depth);
 
 		/// Changes the loaded bitmaps by each way in, on a scratch entry, and checks the next index sees each change.
@@ -293,6 +301,8 @@ namespace RTE {
 		static std::array<LoadedBitmaps, BitDepths::BitDepthCount> s_LoadedBitmaps; //!< Static map containing all the already loaded BITMAPs and their paths for each bit depth.
 		static std::unordered_map<std::string, SDL_Surface*> s_MemoryPNGs; //!< Static map containing in-memory PNG files for save/load
 		static std::unordered_map<std::string, FMOD::Sound*> s_LoadedSamples; //!< Static map containing all the already loaded FSOUND_SAMPLEs and their paths.
+		static void NoteLoadedSample(const std::string& path, FMOD::Sound* sound, bool changed = false) noexcept;
+		static void InvalidateCheckpointSamples() noexcept;
 
 		CheckpointString m_DataPath; //!< The path to this ContentFile's data file. In the case of an animation, this filename/name will be appended with 000, 001, 002 etc.
 		CheckpointString m_DataPathExtension; //!< The extension of the data file of this ContentFile's path.
