@@ -8,7 +8,7 @@
 namespace RTE {
 
 	class Entity;
-	struct PrimitiveQueuesSetAside { std::deque<std::unique_ptr<GraphicalPrimitive>> primitives; };
+	struct PrimitiveQueuesSetAside { CheckpointDeque<std::unique_ptr<GraphicalPrimitive>> primitives; };
 
 	/// Singleton manager responsible for all primitive drawing.
 	class PrimitiveMan : public Singleton<PrimitiveMan> {
@@ -466,7 +466,7 @@ namespace RTE {
 
 	protected:
 		mutable std::mutex m_Mutex; //!< Mutex so that mutiple threads (i.e multithreaded scripts) can safely queue up draws
-		std::deque<std::unique_ptr<GraphicalPrimitive>> m_ScheduledPrimitives; //!< List of graphical primitives scheduled to draw this frame, cleared every frame during FrameMan::Draw().
+		CheckpointDeque<std::unique_ptr<GraphicalPrimitive>> m_ScheduledPrimitives; //!< List of graphical primitives scheduled to draw this frame, cleared every frame during FrameMan::Draw().
 
 	private:
 		/// Constructs a unique_ptr of the appropriate derived type from the passed in GraphicalPrimitive raw pointer.

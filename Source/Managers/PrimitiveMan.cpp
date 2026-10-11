@@ -15,8 +15,10 @@
 #include "PresetMan.h"
 #include "CheckpointArchive.h"
 #include "GUICheckpoint.h"
+#include "CheckpointFrozenContainers.h"
 #include <iostream>
 #include <set>
+#include <future>
 #include <unordered_map>
 
 using namespace RTE;
@@ -286,13 +288,13 @@ namespace {
 		if (primitive.GetPrimitiveType() == PrimitiveType::Text) writer(pool.Image(static_cast<const TextPrimitive&>(primitive).m_TextBitmap));
 		else if (primitive.GetPrimitiveType() == PrimitiveType::Bitmap) {
 			const auto& bitmap = static_cast<const BitmapPrimitive&>(primitive);
-			const auto* owner = static_cast<const MOSprite*>(bitmap.m_SpriteOwner.get());
+			const auto* owner = CheckpointNativeStorage::Source(static_cast<const MOSprite*>(bitmap.m_SpriteOwner.get()));
 			if (owner && (bitmap.m_IconBitmap ? owner->GetGraphicalIcon() : owner->GetSpriteFrame(bitmap.m_SpriteFrame)) != bitmap.m_Bitmap) owner = nullptr;
 			writer(pool.Image(bitmap.m_Bitmap), bitmap.m_PendingSpriteReference.empty() ? CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(owner); }) : CheckpointText(bitmap.m_PendingSpriteReference));
 		} else if (primitive.GetPrimitiveType() == PrimitiveType::Polygon || primitive.GetPrimitiveType() == PrimitiveType::PolygonFill) {
 			const auto& vertices = primitive.GetPrimitiveType() == PrimitiveType::Polygon ? static_cast<const PolygonPrimitive&>(primitive).m_Vertices : static_cast<const PolygonFillPrimitive&>(primitive).m_Vertices;
 			writer(vertices.size());
-			for (const auto* vertex: vertices) writer(pool.Vertex(vertex));
+			for (const auto* vertex: CheckpointValues(vertices)) writer(pool.Vertex(vertex));
 		}
 		return writer.Text();
 	}
@@ -301,17 +303,17 @@ namespace {
 		std::vector<CheckpointText> records;
 		for (const auto* primitive: primitives) {
 			if (!primitive) throw std::runtime_error("null scheduled graphical primitive");
-			records.push_back(CheckpointWriter::Native([&] { return SavePrimitiveRecord(*primitive, pool); }));
+			records.push_back(CheckpointWriter::Native([&] { return SavePrimitiveRecord(*CheckpointNativeStorage::Source(primitive), pool); }));
 		}
 		CheckpointWriter writer(version);
 		writer(pool.images.size());
 		for (const auto* bitmap: pool.images) writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveSharedBitmap(bitmap); }));
 		writer(pool.vertices.size());
-		for (const auto* vertex: pool.vertices) writer(*vertex);
+		for (const auto* vertex: pool.vertices) writer(*CheckpointNativeStorage::Source(vertex));
 		writer(records);
 		return writer.Text();
 	}
-	std::deque<std::unique_ptr<GraphicalPrimitive>> LoadPrimitiveList(std::string_view text, const char* version, bool validateOnly) {
+	CheckpointDeque<std::unique_ptr<GraphicalPrimitive>> LoadPrimitiveList(std::string_view text, const char* version, bool validateOnly) {
 		CheckpointReader reader(text, version, true);
 		std::vector<std::string> imageValues, records;
 		std::vector<Vector> vertexValues;
@@ -327,7 +329,7 @@ namespace {
 		}
 		std::vector<std::shared_ptr<Vector>> vertices;
 		if (!validateOnly) for (const auto& value: vertexValues) vertices.push_back(GraphicalPrimitive::OwnVertices({new Vector(value)}).front());
-		std::deque<std::unique_ptr<GraphicalPrimitive>> primitives;
+		CheckpointDeque<std::unique_ptr<GraphicalPrimitive>> primitives;
 		for (const auto& record: records) {
 			CheckpointReader fields(record, "GraphicalPrimitive1", true);
 			PrimitiveType type; fields.Value(type);
@@ -358,14 +360,15 @@ namespace {
 		reader.Finish();
 		return primitives;
 	}
-	std::vector<Vector*> PrimitiveVertices(const std::deque<std::unique_ptr<GraphicalPrimitive>>& primitives) {
+	std::vector<Vector*> PrimitiveVertices(const CheckpointDeque<std::unique_ptr<GraphicalPrimitive>>& primitives) {
 		std::vector<Vector*> vertices;
 		std::set<Vector*> seen;
-		for (const auto& primitive: primitives) {
-			const std::vector<Vector*>* points = nullptr;
-			if (primitive->GetPrimitiveType() == PrimitiveType::Polygon) points = &static_cast<PolygonPrimitive&>(*primitive).m_Vertices;
-			else if (primitive->GetPrimitiveType() == PrimitiveType::PolygonFill) points = &static_cast<PolygonFillPrimitive&>(*primitive).m_Vertices;
-			if (points) for (auto* point: *points) if (point && seen.insert(point).second) vertices.push_back(point);
+		for (const auto& owner: CheckpointValues(primitives)) {
+			const auto* primitive = CheckpointNativeStorage::Source(owner.get());
+			const CheckpointVector<Vector*>* points = nullptr;
+			if (primitive->GetPrimitiveType() == PrimitiveType::Polygon) points = &static_cast<const PolygonPrimitive&>(*primitive).m_Vertices;
+			else if (primitive->GetPrimitiveType() == PrimitiveType::PolygonFill) points = &static_cast<const PolygonFillPrimitive&>(*primitive).m_Vertices;
+			if (points) for (auto* point: CheckpointValues(*points)) if (point && seen.insert(point).second) vertices.push_back(point);
 		}
 		return vertices;
 	}
@@ -440,9 +443,10 @@ bool GraphicalPrimitive::ResolveCheckpointReferences() {
 }
 
 std::string PrimitiveMan::SaveCheckpoint() const {
-	std::lock_guard<std::mutex> lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex, std::defer_lock);
+	if (!CheckpointNativeStorage::Reading()) lock.lock();
 	std::vector<const GraphicalPrimitive*> primitives;
-	for (const auto& value: m_ScheduledPrimitives) primitives.push_back(value.get());
+	CheckpointForEachValue(m_ScheduledPrimitives, [&](const auto& value) { primitives.push_back(value.get()); });
 	return SavePrimitiveList(primitives, "PrimitiveMan1");
 }
 
@@ -475,24 +479,37 @@ void PrimitiveMan::ReinstateQueues(QueuesSetAside& input) {
 }
 
 GraphicalPrimitive* PrimitiveMan::GetCheckpointPrimitive(size_t index) const {
+	if (CheckpointNativeStorage::Reading()) {
+		const auto values = CheckpointValues(m_ScheduledPrimitives);
+		return index < values.size() ? values[index].get() : nullptr;
+	}
 	std::lock_guard<std::mutex> lock(m_Mutex);
 	return index < m_ScheduledPrimitives.size() ? m_ScheduledPrimitives[index].get() : nullptr;
 }
 
 Vector* PrimitiveMan::GetCheckpointVertex(size_t index) const {
-	std::lock_guard<std::mutex> lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex, std::defer_lock);
+	if (!CheckpointNativeStorage::Reading()) lock.lock();
 	const auto vertices = PrimitiveVertices(m_ScheduledPrimitives);
 	return index < vertices.size() ? vertices[index] : nullptr;
 }
 
 int PrimitiveMan::FindCheckpointPrimitive(const void* primitive) const {
+	if (CheckpointNativeStorage::Reading()) {
+		const auto values = CheckpointValues(m_ScheduledPrimitives);
+		primitive = CheckpointNativeStorage::Original(primitive);
+		for (size_t index = 0; index < values.size(); ++index) if (values[index].get() == primitive) return static_cast<int>(index);
+		return -1;
+	}
 	std::lock_guard<std::mutex> lock(m_Mutex);
 	for (size_t index = 0; index < m_ScheduledPrimitives.size(); ++index) if (m_ScheduledPrimitives[index].get() == primitive) return index;
 	return -1;
 }
 
 int PrimitiveMan::FindCheckpointVertex(const void* vertex) const {
-	std::lock_guard<std::mutex> lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex, std::defer_lock);
+	if (!CheckpointNativeStorage::Reading()) lock.lock();
+	vertex = CheckpointNativeStorage::Original(vertex);
 	const auto vertices = PrimitiveVertices(m_ScheduledPrimitives);
 	const auto found = std::find(vertices.begin(), vertices.end(), vertex);
 	return found == vertices.end() ? -1 : static_cast<int>(std::distance(vertices.begin(), found));
@@ -544,6 +561,31 @@ bool PrimitiveMan::RunCheckpointSelfTest() {
 		check("repeat_preserves_adopted_identity", LoadCheckpoint(checkpoint) && same == GetCheckpointPrimitive(0));
 		ClearPrimitivesQueue(); ReinstateQueues(held);
 		check("held_vertices_preserve_identity", GetCheckpointVertex(0) == shared && shared->m_Y == -31.5F && SaveCheckpoint() == checkpoint);
+		{
+			CheckpointNativeStorage::AllocationScope owned(true);
+			ClearPrimitivesQueue();
+			CheckpointDeque<std::unique_ptr<GraphicalPrimitive>> empty;
+			m_ScheduledPrimitives.swap(empty);
+			auto* vertex = new Vector(7.25F, -9.5F);
+			SchedulePrimitive(std::make_unique<PolygonPrimitive>(2, Vector(3, 4), 17, std::vector<Vector*>{vertex, new Vector(5, 7), vertex}));
+			SchedulePrimitive(std::make_unique<TextPrimitive>(1, Vector(13, 19), std::string(80, 'q'), true, 1, 0.125F));
+			const auto before = SaveCheckpoint();
+			CheckpointNativeStorage::Root root(&m_ScheduledPrimitives);
+			auto pages = CheckpointNativeStorage::Prepare();
+			root.Freeze();
+			for (const auto& page: pages) page->Arm();
+			vertex->m_X = 103;
+			ClearPrimitivesQueue();
+			SchedulePrimitive(std::make_unique<PolygonPrimitive>(3, Vector(), 5, std::vector<Vector*>{new Vector(22, 33), new Vector(44, 55)}));
+			const bool exact = std::async(std::launch::async, [&] {
+				const std::array roots{root.Range()};
+				CheckpointNativeStorage::ReadScope read(pages, roots);
+				std::vector<const GraphicalPrimitive*> values;
+				for (const auto& value: CheckpointValues(*CheckpointNativeStorage::Source(&m_ScheduledPrimitives))) values.push_back(value.get());
+				return SavePrimitiveList(values, "PrimitiveMan1") == before;
+			}).get();
+			check("frozen_queue_after_destroy_and_reuse", exact);
+		}
 	} catch (const std::exception& error) { check("exception", false); std::cerr << "[primitive-checkpoint-selftest] " << error.what() << std::endl; }
 	return passed;
 }
