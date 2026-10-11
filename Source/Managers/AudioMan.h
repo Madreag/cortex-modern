@@ -516,8 +516,8 @@ namespace RTE {
 		bool m_AudioEnabled; //!< Bool to tell whether audio is enabled or not.
 		bool m_InaudibleTestOutputVerified = false;
 		bool m_OutputSilenced = false; //!< Whether this process's output is silenced (a headless run); not a saved setting.
-		std::vector<std::unique_ptr<const Vector>> m_CurrentActivityHumanPlayerPositions; //!< The stored positions of each human player in the current activity. Only filled when there's an activity running.
-		std::unordered_map<int, float> m_SoundChannelMinimumAudibleDistances; //!<  An unordered map of sound channel indices to floats representing each Sound Channel's minimum audible distances. This is necessary to keep safe data in case the SoundContainer is destroyed while the sound is still playing, as happens often with TDExplosives.
+		CheckpointVector<std::unique_ptr<const Vector>> m_CurrentActivityHumanPlayerPositions; //!< The stored positions of each human player in the current activity. Only filled when there's an activity running.
+		CheckpointUnorderedMap<int, float> m_SoundChannelMinimumAudibleDistances; //!<  An unordered map of sound channel indices to floats representing each Sound Channel's minimum audible distances. This is necessary to keep safe data in case the SoundContainer is destroyed while the sound is still playing, as happens often with TDExplosives.
 
 		bool m_MuteMaster; //!< Whether all the audio is muted.
 		bool m_MuteMusic; //!< Whether the music channel is muted.
@@ -539,7 +539,7 @@ namespace RTE {
 		bool m_MusicMuffled; //!< Whether the music bus is muffled.
 
 		bool m_IsInMultiplayerMode; //!< If true then the server is in multiplayer mode and will register sound and music events into internal lists.
-		std::list<NetworkSoundData> m_SoundEvents[c_MaxClients]; //!< Lists of per player sound events.
+		CheckpointList<NetworkSoundData> m_SoundEvents[c_MaxClients]; //!< Lists of per player sound events.
 
 		std::mutex g_SoundEventsListMutex[c_MaxClients]; //!< A list for locking sound events for multiplayer to avoid race conditions and other such problems.
 		std::mutex m_SoundChannelMinimumAudibleDistancesMutex; //!, As above but for m_SoundChannelMinimumAudibleDistances
@@ -557,7 +557,7 @@ namespace RTE {
 			};
 			std::shared_ptr<ChannelUserData> handle;
 			SoundContainer* owner = nullptr;
-			std::string soundPath;
+			CheckpointString soundPath;
 			float minimumAudibleDistance = 0;
 			SoundExecutionDomain domain = SoundExecutionDomain::Presentation;
 			bool predicted = false; //!< Started by a preview and not yet adopted, so it belongs to no checkpoint.
@@ -570,7 +570,7 @@ namespace RTE {
 			bool hasArchive = false;
 
 			void EnsureHandle() {
-				if (!handle) handle = std::make_shared<ChannelUserData>();
+				if (!handle) handle = MakeCheckpointNativeShared<ChannelUserData>();
 			}
 			void BindUserData(int identity) {
 				EnsureHandle();
@@ -585,7 +585,7 @@ namespace RTE {
 				handle->channel.store(ch, std::memory_order_relaxed);
 			}
 			PlayingVoice(const PlayingVoice& other) { *this = other; }
-			PlayingVoice(PlayingVoice&& other) noexcept { *this = other; }
+			PlayingVoice(PlayingVoice&& other) { *this = std::move(other); }
 			PlayingVoice& operator=(const PlayingVoice& other) {
 				if (this == &other) return *this;
 				EnsureHandle();
@@ -606,10 +606,9 @@ namespace RTE {
 				hasArchive = other.hasArchive;
 				return *this;
 			}
-			PlayingVoice& operator=(PlayingVoice&& other) noexcept {
+			PlayingVoice& operator=(PlayingVoice&& other) {
 				if (this == &other) return *this;
 				handle = std::move(other.handle);
-				EnsureHandle();
 				owner = other.owner;
 				soundPath = std::move(other.soundPath);
 				minimumAudibleDistance = other.minimumAudibleDistance;
@@ -627,7 +626,7 @@ namespace RTE {
 			FMOD::Channel* Channel() const { return handle ? handle->channel.load(std::memory_order_acquire) : nullptr; }
 			void SetChannel(FMOD::Channel* value) { EnsureHandle(); handle->channel.store(value, std::memory_order_release); }
 		};
-		std::map<int, PlayingVoice> m_PlayingVoices;
+		CheckpointMap<int, PlayingVoice> m_PlayingVoices;
 		std::unordered_map<int, int> m_BackendVoiceIdentities;
 		/// Where a channel came from, so one the positional pass finds dead can name who played it and when; a dead handle answers nothing.
 		struct ChannelOrigin {
@@ -677,7 +676,7 @@ namespace RTE {
 			uint64_t frame = 0;
 			float value = 0.0F;
 		};
-		std::map<SoundObservationKey, std::map<uint8_t, CommittedAudibility>> m_CommittedAudibility;
+		CheckpointMap<SoundObservationKey, CheckpointMap<uint8_t, CommittedAudibility>> m_CommittedAudibility;
 		std::map<SoundObservationKey, float> m_LastSentAudibility;
 		mutable std::mutex m_AudibilityMissMutex;
 		mutable std::set<SoundObservationKey> m_ReportedAudibilityMisses; //!< Keys already reported by the CC_TRACE_AUDIBILITY diagnostic; empty unless it is on.

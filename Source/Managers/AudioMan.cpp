@@ -2602,7 +2602,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		}
 		std::map<int, AudioCheckpoint::Voice> awaitingVoices;
 		std::map<std::string, AudioCheckpoint::Sample> pendingSamples;
-		std::map<int, PlayingVoice> candidates;
+		CheckpointMap<int, PlayingVoice> candidates;
 		std::map<SoundContainer*, CheckpointUnorderedSet<int>> ownerChannels;
 		for (const auto& [identity, voice]: m_PlayingVoices) if (voice.owner) ownerChannels.try_emplace(voice.owner);
 		std::map<int, const AudioCheckpoint::Voice*> descriptions;
@@ -2658,12 +2658,12 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			BindVoiceLifetime(candidate, frames, rate, voice.loopStart, voice.loopEnd, voice.control.pitch > 0 ? voice.control.pitch : 1.0F, voice.loops, voice.position, voice.control.paused);
 			descriptions.emplace(voice.identity, &voice);
 		}
-		std::vector<std::unique_ptr<const Vector>> playerPositions;
+		CheckpointVector<std::unique_ptr<const Vector>> playerPositions;
 		for (const Vector& position: state.playerPositions) playerPositions.emplace_back(std::make_unique<const Vector>(position));
-		std::array<std::list<NetworkSoundData>, c_MaxClients> events;
+		std::array<CheckpointList<NetworkSoundData>, c_MaxClients> events;
 		for (int player = 0; player < c_MaxClients; ++player) for (const auto& event: state.events[player]) events[player].push_back(event.data);
 		std::unordered_map<int, int> backendIdentities;
-		std::unordered_map<int, float> minimumDistances;
+		CheckpointUnorderedMap<int, float> minimumDistances;
 		backendIdentities.reserve(candidates.size()); minimumDistances.reserve(candidates.size());
 		// Allocate every replacement voice paused in reserved virtual slots. Originals retain
 		// their callbacks and owning pointers until all candidate channels are ready.

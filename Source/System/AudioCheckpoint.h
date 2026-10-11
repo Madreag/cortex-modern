@@ -53,7 +53,7 @@ struct Effect {
 	int index = 0, type = 0;
 	bool active = false, bypass = false;
 	std::array<float, 3> wetDry{};
-	std::vector<EffectParameter> parameters;
+	CheckpointVector<EffectParameter> parameters;
 	template <class Archive> void Fields(Archive& archive) { archive(index, type, active, bypass, wetDry, parameters); }
 	std::string SaveCheckpoint() const { CheckpointWriter archive("AudioEffect1"); const_cast<Effect*>(this)->Fields(archive); return archive.Text(); }
 	bool LoadCheckpoint(std::string_view text, bool validateOnly = false) {
@@ -64,9 +64,9 @@ struct Effect {
 	// FMOD idles a voice's DSP on the mixer thread, so getActive reads that machine's own mixing rather
 	// than shared state. The engine only ever adds a managed effect, so the archive carries that intent.
 	static constexpr bool c_IntendedActive = true;
-	static std::vector<Effect> Capture(FMOD::ChannelControl* control) {
+	static CheckpointVector<Effect> Capture(FMOD::ChannelControl* control) {
 		int count; Require(control->getNumDSPs(&count));
-		std::vector<Effect> effects;
+		CheckpointVector<Effect> effects;
 		for (int index = 0; index < count; ++index) {
 			FMOD::DSP* dsp; FMOD_DSP_TYPE type;
 			Require(control->getDSP(index, &dsp)); Require(dsp->getType(&type));
@@ -88,13 +88,13 @@ struct Effect {
 		}
 		return effects;
 	}
-	static void ApplyActivation(FMOD::ChannelControl* control, const std::vector<Effect>& effects) {
+	static void ApplyActivation(FMOD::ChannelControl* control, const CheckpointVector<Effect>& effects) {
 		for (const Effect& effect: effects) {
 			FMOD::DSP* dsp; Require(control->getDSP(effect.index, &dsp));
 			Require(dsp->setActive(effect.active)); Require(dsp->setBypass(effect.bypass));
 		}
 	}
-	static void Apply(FMOD::System* system, FMOD::ChannelControl* control, const std::vector<Effect>& effects) {
+	static void Apply(FMOD::System* system, FMOD::ChannelControl* control, const CheckpointVector<Effect>& effects) {
 		int count; Require(control->getNumDSPs(&count));
 		for (int index = count - 1; index >= 0; --index) {
 			FMOD::DSP* dsp; FMOD_DSP_TYPE type;
@@ -128,10 +128,10 @@ struct Control {
 	std::array<float, 4> reverb{};
 	unsigned int mode = 0;
 	int outputs = 0, inputs = 0;
-	std::vector<float> mix;
+	CheckpointVector<float> mix;
 	bool hasDelayStart = false, hasDelayEnd = false, delayStops = false;
 	int64_t delayStart = 0, delayEnd = 0;
-	std::vector<std::pair<int64_t, float>> fades;
+	CheckpointVector<std::pair<int64_t, float>> fades;
 	bool spatial = false;
 	Position position{}, velocity{}, coneOrientation{};
 	float minimumDistance = 0, maximumDistance = 0;
@@ -139,7 +139,7 @@ struct Control {
 	float directOcclusion = 0, reverbOcclusion = 0, spread = 0, level = 0, doppler = 0;
 	bool customDistanceFilter = false;
 	float customLevel = 0, centerFrequency = 0;
-	std::vector<Effect> effects;
+	CheckpointVector<Effect> effects;
 	template <class Archive> void Fields(Archive& archive) {
 		archive(paused, muted, ramp, volume, pitch, lowPassGain, reverb, mode, outputs, inputs, mix);
 		archive(hasDelayStart, hasDelayEnd, delayStops, delayStart, delayEnd, fades);
