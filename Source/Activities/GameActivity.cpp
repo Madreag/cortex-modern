@@ -4628,6 +4628,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		auto* shop = game->m_pBuyGUI[0];
 		shop->LoadAllLoadoutsFromFile();
 		shop->SetModuleExpanded(g_PresetMan.GetModuleID("Coalition.rte"));
+		shop->SetEnabled(true);
 		g_UInputMan.TrapMousePos(false, 0);
 		SDL_Delay(250); game->Update();
 		const uint64_t shopTick = g_TimerMan.GetSimUpdateCount();
