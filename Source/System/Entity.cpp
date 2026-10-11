@@ -412,14 +412,14 @@ namespace RTE {
 		}
 		for (OwnerShard* shard: shards) {
 			for (;;) {
-				std::pair<void*, void (*)(void*)> work;
+				DeferredValue work;
 				{
 					std::lock_guard lock(shard->mutex);
 					if (shard->deferredReady == shard->deferred.size()) break;
 					work = shard->deferred[shard->deferredReady];
 				}
 				CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
-				work.second(work.first);
+				if (work.run) work.run(work.value);
 				++shard->deferredReady;
 			}
 		}
@@ -434,6 +434,25 @@ namespace RTE {
 				target->m_CheckpointMetadata = nullptr;
 			}
 		});
+	}
+	void CheckpointNativeSnapshot::ForgetFailedValues(const void* target, size_t bytes) {
+		const auto contains = [start = reinterpret_cast<uintptr_t>(target), bytes](const void* value) {
+			const auto address = reinterpret_cast<uintptr_t>(value);
+			return address >= start && address - start < bytes;
+		};
+		std::lock_guard ready(m_MetadataReady);
+		m_Values.EraseIf(contains);
+		m_Objects.EraseIf(contains);
+		m_UIDs.EraseIf(contains);
+		{
+			std::lock_guard lock(m_ReadValuesMutex);
+			std::erase_if(m_ReadValues, [&](const auto& root) { return contains(root.view); });
+		}
+		std::lock_guard owners(m_OwnerRegistryMutex);
+		for (const auto& shard: m_OwnerShards) {
+			std::lock_guard lock(shard->mutex);
+			for (auto& work: shard->deferred) if (contains(work.target)) work.run = nullptr;
+		}
 	}
 	std::string_view CheckpointNativeSnapshot::OwnBytes(std::string_view source) {
 		void* memory = AllocateFrozen(source.size(), alignof(char));

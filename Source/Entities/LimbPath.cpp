@@ -79,7 +79,7 @@ LimbPath::LimbPath(const LimbPath& source, CheckpointNativeSnapshot& snapshot) :
 	m_HFlipped(snapshot.Freeze(source.m_HFlipped)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 	const auto current = CheckpointIteratorIndex(source.m_Segments, source.m_CurrentSegment);
-	if (!source.m_Segments.empty()) snapshot.AfterBoundary([this, current] { m_CurrentSegment = m_Segments.begin() + current; });
+	if (!source.m_Segments.empty()) snapshot.AfterBoundary([this, current] { m_CurrentSegment = m_Segments.begin() + current; }, this);
 }
 
 Entity* LimbPath::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
@@ -93,7 +93,7 @@ void LimbPath::AssignCheckpointNative(const LimbPath& source, CheckpointNativeSn
 	m_Segments = snapshot.Freeze(source.m_Segments, &m_Segments);
 	m_CurrentSegment = m_Segments.begin();
 	const auto current = CheckpointIteratorIndex(source.m_Segments, source.m_CurrentSegment);
-	if (!source.m_Segments.empty()) snapshot.AfterBoundary([this, current] { m_CurrentSegment = m_Segments.begin() + current; });
+	if (!source.m_Segments.empty()) snapshot.AfterBoundary([this, current] { m_CurrentSegment = m_Segments.begin() + current; }, this);
 	m_FootCollisionsDisabledSegment = source.m_FootCollisionsDisabledSegment;
 	m_SegProgress = source.m_SegProgress; m_TravelSpeed = source.m_TravelSpeed;
 	m_SegmentEndedThreshold = source.m_SegmentEndedThreshold;

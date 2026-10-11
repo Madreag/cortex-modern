@@ -1806,6 +1806,36 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			      earlier->GetPresetName() == "changed by a private getter", "later_saved_values_expand_without_resetting_private_getter_changes_after_refusal");
 		}
 		{
+			struct Value {
+				Vector position{13, 17};
+				std::string text;
+				Value() = default;
+				Value(const Value& source, CheckpointNativeSnapshot& snapshot) : position(source.position),
+				    text(snapshot.Freeze(std::string("saved retry text"), &text)) {
+					snapshot.BindValue(source.position, &position);
+					CheckpointFailure::Check(CheckpointFailure::Point::CopyWatch);
+				}
+			} source;
+			CheckpointNativeStorage::Root<Value> root(&source);
+			root.Freeze();
+			const std::array roots{root.Range()};
+			CheckpointNativeStorage::ReadScope read({}, roots);
+			auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
+			bool refused = false;
+			{
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::CopyWatch);
+				try { snapshot->ValueObject(&source); }
+				catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+			}
+			const bool retired = snapshot->ReadValues().empty();
+			snapshot->SealBoundary(); snapshot->MaterializeMetadata();
+			auto* retry = snapshot->ValueObject(&source);
+			snapshot->MaterializeMetadata();
+			check(refused && retired && retry->text == "saved retry text" &&
+			      snapshot->CopyValue(&source.position) == &retry->position && retry->position == Vector(13, 17),
+			      "refused_saved_values_retire_field_aliases_and_deferred_writes_before_retry");
+		}
+		{
 			auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
 			CheckpointNativeStorage::ReadViews views;
 			uint64_t* value = nullptr;

@@ -118,6 +118,12 @@ namespace RTE {
 			std::lock_guard lock(shard.mutex);
 			shard.map.erase(key);
 		}
+		template<class Match> void EraseIf(const Match& match) {
+			for (Shard& shard: m_Shards) {
+				std::lock_guard lock(shard.mutex);
+				std::erase_if(shard.map, [&](const auto& entry) { return match(entry.second); });
+			}
+		}
 		size_t Size() const {
 			size_t size = 0;
 			for (const Shard& shard: m_Shards) {
@@ -267,6 +273,7 @@ namespace RTE {
 				return static_cast<T*>(memory);
 			} catch (...) {
 				m_Values.Erase(identity);
+				ForgetFailedValues(memory, sizeof(T));
 				release();
 				throw;
 			}
@@ -358,6 +365,7 @@ namespace RTE {
 				if (constructed) std::launder(reinterpret_cast<T*>(memory))->~T();
 				*slot = nullptr;
 				m_Objects.Erase(&source);
+				ForgetFailedValues(memory, sizeof(T));
 				if (Entity::s_DeletedCheckpointMemory == memory || Entity::s_DeletedCheckpointMemory == FrozenStorageMark(memory)) Entity::s_DeletedCheckpointMemory = nullptr;
 				if (!frozenStorage) T::Deallocate(memory);
 				throw;
@@ -406,7 +414,7 @@ namespace RTE {
 		/// The boundary has finished owning every value before a frozen reader may expand its containers.
 		void SealBoundary() { m_BoundarySealed.store(true, std::memory_order_release); }
 		/// Runs from the first frozen reader, after the boundary, with only owned inputs.
-		template<class Work> void AfterBoundary(Work work) {
+		template<class Work> void AfterBoundary(Work work, const void* target = nullptr) {
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 			void* memory = AllocateFrozen(sizeof(Work), alignof(Work));
 			const bool pooled = memory != nullptr;
@@ -418,18 +426,18 @@ namespace RTE {
 			owner.first = memory;
 			OwnerShard& shard = Owners();
 			std::lock_guard lock(shard.mutex);
-			shard.deferred.push_back({memory, [](void* value) { (*static_cast<Work*>(value))(); }});
+			shard.deferred.push_back({memory, [](void* value) { (*static_cast<Work*>(value))(); }, target});
 		}
 		CheckpointString Freeze(const CheckpointString& source, CheckpointString* target) {
 			if (source.empty()) return {};
 			const auto bytes = OwnBytes(source.Value());
-			AfterBoundary([target, bytes] { target->assign(bytes); });
+			AfterBoundary([target, bytes] { target->assign(bytes); }, target);
 			return {};
 		}
 		std::string Freeze(const std::string& source, std::string* target) {
 			if (source.empty()) return {};
 			const auto bytes = OwnBytes(source);
-			AfterBoundary([target, bytes] { target->assign(bytes); });
+			AfterBoundary([target, bytes] { target->assign(bytes); }, target);
 			return {};
 		}
 		template<class T> auto Freeze(const T& source, T*) { return Freeze(source); }
@@ -437,7 +445,7 @@ namespace RTE {
 			if constexpr (DeferredElement<T>) {
 				if (!source.empty()) {
 					const auto* values = OwnValues(source);
-					AfterBoundary([target, values] { target->assign(values->Data(), values->Data() + values->size); });
+					AfterBoundary([target, values] { target->assign(values->Data(), values->Data() + values->size); }, target);
 				}
 				return std::vector<T, Allocator>(source.get_allocator());
 			} else return Freeze(source);
@@ -446,7 +454,7 @@ namespace RTE {
 			if constexpr (DeferredElement<T>) {
 				if (!source.empty()) {
 					const auto* values = OwnValues(source);
-					AfterBoundary([target, values] { target->assign(values->Data(), values->Data() + values->size); });
+					AfterBoundary([target, values] { target->assign(values->Data(), values->Data() + values->size); }, target);
 				}
 				return std::deque<T, Allocator>(source.get_allocator());
 			} else return Freeze(source);
@@ -455,7 +463,7 @@ namespace RTE {
 			if constexpr (DeferredElement<T>) {
 				if (!source.empty()) {
 					const auto* values = OwnValues(source);
-					AfterBoundary([target, values] { target->assign(values->Data(), values->Data() + values->size); });
+					AfterBoundary([target, values] { target->assign(values->Data(), values->Data() + values->size); }, target);
 				}
 				return std::list<T, Allocator>(source.get_allocator());
 			} else return Freeze(source);
@@ -464,7 +472,7 @@ namespace RTE {
 		template<class T, class Allocator> auto Retain(const std::vector<T*, Allocator>& source, std::vector<T*, Allocator>* target) {
 			if (!source.empty()) {
 				const auto* values = OwnValues<true>(source);
-				AfterBoundary([target, values] { target->assign(values->Data(), values->Data() + values->size); });
+				AfterBoundary([target, values] { target->assign(values->Data(), values->Data() + values->size); }, target);
 			}
 			return std::vector<T*, Allocator>(source.get_allocator());
 		}
@@ -482,7 +490,7 @@ namespace RTE {
 				AfterBoundary([target, groups = std::move(groups)] {
 					target->clear(); target->reserve(groups.size());
 					for (const auto& [key, values]: groups) (*target)[key].assign(values.begin(), values.end());
-				});
+				}, target);
 			}
 			return Map(0, source.hash_function(), source.key_eq(), source.get_allocator());
 		}
@@ -666,6 +674,8 @@ namespace RTE {
 			return cache.slots[(reinterpret_cast<uintptr_t>(key) >> 4) % cache.slots.size()];
 		}
 		const uint64_t m_Serial;
+		struct DeferredValue { void* value; void (*run)(void*); const void* target; };
+		void ForgetFailedValues(const void* target, size_t bytes);
 		/// The owner lists of the freezing thread; a slot keeps its address while other threads add theirs.
 		struct alignas(64) OwnerShard {
 			std::mutex mutex;
@@ -674,7 +684,7 @@ namespace RTE {
 			std::pmr::deque<Entity*> owners{&memory};
 			std::pmr::deque<ValueOwner> values{&memory};
 			std::pmr::vector<std::shared_ptr<void>> storage{&memory};
-			std::pmr::vector<std::pair<void*, void (*)(void*)>> deferred{&memory};
+			std::pmr::vector<DeferredValue> deferred{&memory};
 			size_t deferredReady = 0;
 		};
 		OwnerShard& Owners() {
