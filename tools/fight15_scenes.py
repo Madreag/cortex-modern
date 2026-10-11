@@ -194,8 +194,8 @@ def click(button="left"):
             dict(op="game_mouse", button=button, down=False), wait(renders=3)]
 
 
-def capture(mark):
-    return [menu(f"video_mark {mark}"), wait(elapsed_ms=1200, scope="menu"),
+def capture(mark, screen="game"):
+    return [menu(f"video_mark {mark}", capture_screen=screen), wait(elapsed_ms=1200, scope="menu"),
             dict(op="screenshot_pair", name=mark, scope="menu")]
 
 
@@ -249,7 +249,7 @@ def place(peer, occupied=False, x=None, relative_to=None):
 
 def scene_checks(peer, steps):
     checks = []
-    mark, start = None, 0
+    mark, start, screen = None, 0, "game"
     for index, step in enumerate(steps + [menu("video_mark scene-end")]):
         if step.get("op") == "menu" and step.get("command", "").startswith("video_mark "):
             if mark is not None:
@@ -257,9 +257,9 @@ def scene_checks(peer, steps):
                            if steps[i]["op"].startswith("assert") or
                            (steps[i]["op"] == "menu" and steps[i].get("command", "").startswith(("assert_", "text_watch assert ")))]
                 if indices:
-                    checks.append(dict(id=f"{peer}-{mark}", peer=peer, mark=mark, screen="game",
+                    checks.append(dict(id=f"{peer}-{mark}", peer=peer, mark=mark, screen=screen,
                                        what="Captured real scene state, exact label text, panel bounds and the live player.", probe_steps=indices))
-            mark, start = step["command"].split(" ", 1)[1], index
+            mark, start, screen = step["command"].split(" ", 1)[1], index, step.get("capture_screen", "game")
     return checks
 
 
@@ -345,7 +345,7 @@ def game_scenes():
     host += [dict(op="game_mouse", down=True), wait(elapsed_ms=12000), dict(op="game_mouse", down=False)]
     for peer, steps in (("host", host), ("joiner", joiner)):
         steps += [lobby_wait(peer)]
-        steps += capture(f"brain-loss-{peer}")
+        steps += capture(f"brain-loss-{peer}", "MultiplayerScreen")
         steps += [menu("assert_label LabelLastMatchSummary Brain"), menu("assert_label LabelLastMatchSummary SkirmishDefense.lua:397"),
                   menu("assert_text_fits LabelLastMatchSummary"), dict(op="finish")]
     checks = scene_checks("host", host) + scene_checks("joiner", joiner)
@@ -364,7 +364,7 @@ def game_scenes():
             wait(returned_peer="Joiner", within_ms=90000)] + key("F6") + [wait(panel_open=False)]
     host += capture("rejoined-host") + [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay")] + complete_live_scene("host", 7)
     joiner += key("Escape") + [wait(screen="Pause"), menu("activate ButtonLeaveMatch"), wait(screen="PauseLeaveConfirm")]
-    joiner += capture("leave-consequence") + [menu("assert_text_fits ButtonLeaveConfirm"), menu("activate ButtonLeaveConfirm"),
+    joiner += capture("leave-consequence", "PauseLeaveConfirm") + [menu("assert_text_fits ButtonLeaveConfirm"), menu("activate ButtonLeaveConfirm"),
                wait(screen="MultiplayerScreen", scope="menu"), menu("activate ButtonMultiplayerReconnect"), wait(service="Running")]
     joiner += capture("rejoined-joiner") + [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay")] + complete_live_scene("joiner", 7)
     emit(7, "Leave holds the live seat to AI and Rejoin Match returns the same player",
@@ -377,17 +377,17 @@ def game_scenes():
     host += pause_end()
     for peer, steps in (("host", host), ("joiner", joiner)):
         steps += [lobby_wait(peer)]
-        steps += capture(f"rematch-waiting-{peer}")
+        steps += capture(f"rematch-waiting-{peer}", "MultiplayerScreen")
         expected = "Waiting for Joiner to press Ready" if peer == "host" else "Press Ready when you're ready to play"
         steps += [menu(f"text_watch start rematch-state equals substate:Lobby LabelMultiplayerStatus {expected}"),
                   menu("text_watch start rematch-duplicates duplicates substate:Lobby"),
                   menu("text_watch start rematch-layout layout substate:Lobby"), wait(elapsed_ms=4000, scope="menu"),
                   menu("text_watch assert rematch-state"), menu("text_watch assert rematch-duplicates"), menu("text_watch assert rematch-layout")]
     host += [menu("activate ButtonMultiplayerStart"), wait(scope="menu", control="LabelMultiplayerStatus", text_contains="Starting in 30 s")]
-    host += capture("rematch-countdown-host") + [menu("assert_label ButtonMultiplayerStart Cancel Start"), wait(elapsed_ms=2200, scope="menu"),
+    host += capture("rematch-countdown-host", "MultiplayerScreen") + [menu("assert_label ButtonMultiplayerStart Cancel Start"), wait(elapsed_ms=2200, scope="menu"),
             menu("activate ButtonMultiplayerStart"), wait(elapsed_ms=1200, scope="menu"), menu("assert_label LabelMultiplayerStatus Waiting for Joiner to press Ready"), dict(op="finish")]
     joiner += [wait(scope="menu", control="LabelMultiplayerStatus", text_contains="The host is starting the match in 30 s")]
-    joiner += capture("rematch-countdown-joiner") + [menu("assert_text_fits LabelMultiplayerStatus"), wait(elapsed_ms=4000, scope="menu"),
+    joiner += capture("rematch-countdown-joiner", "MultiplayerScreen") + [menu("assert_text_fits LabelMultiplayerStatus"), wait(elapsed_ms=4000, scope="menu"),
               menu("assert_label LabelMultiplayerStatus Press Ready when you're ready to play"), dict(op="finish")]
     emit(9, "Rematch waiting names, no premature countdown, thirty-second Start and Cancel",
          game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner),
@@ -415,7 +415,7 @@ def ai_fight():
             steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay")]
         if peer == "host": steps += pause_end()
         steps += [lobby_wait(peer)]
-        steps += capture(f"fight-ended-{peer}") + [menu("assert_label LabelLastMatchSummary host"), dict(op="finish")]
+        steps += capture(f"fight-ended-{peer}", "MultiplayerScreen") + [menu("assert_label LabelLastMatchSummary host"), dict(op="finish")]
         probes[peer] = game_probe(steps, timeout=1600000)
         checks += scene_checks(peer, steps)
         checks.append(dict(id=f"twenty-minutes-{peer}", peer=peer, mark=f"fight-ended-{peer}", screen="MultiplayerScreen",
@@ -437,7 +437,7 @@ def moderation_scene():
         host += [dict(op="assert_scene", input_player=0, equals=dict(alive=True))] + key("F6") + [wait(panel_open=False)]
         host += pause_end() + [wait(screen="MultiplayerScreen", scope="menu"), dict(op="finish")]
         joiner += [wait(screen="MultiplayerScreen", scope="menu")]
-        joiner += capture(f"{action}-joiner") + [dict(op="assert_control", scope="menu", control="LabelMultiplayerLandingStatus",
+        joiner += capture(f"{action}-joiner", "MultiplayerScreen") + [dict(op="assert_control", scope="menu", control="LabelMultiplayerLandingStatus",
                 equals=dict(text=f"The host {reason} you from this session", visible=True), fits=True, inside="MultiplayerLandingPanel")]
         if action == "ban":
             # The directory heartbeat must advertise the held seat before the new join can reach the host's ban check.
@@ -445,7 +445,7 @@ def moderation_scene():
                        state="running", held_at_least=1, joinable=True),
                        menu("click_row PublicGameRowPort{PORT}"), menu("activate ButtonMultiplayerConnect"),
                        wait(scope="menu", control="LabelJoinSelected", text_contains="The host banned you from this session")]
-            joiner += capture("banned-rejoin-refused") + [dict(op="assert_control", scope="menu", control="LabelJoinSelected",
+            joiner += capture("banned-rejoin-refused", "MultiplayerScreen") + [dict(op="assert_control", scope="menu", control="LabelJoinSelected",
                     equals=dict(text="The host banned you from this session", visible=True), fits=True)]
         joiner += [dict(op="finish")]
         emit(8, "Held kick and ban clicks and public-list refused readmission",
