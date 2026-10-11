@@ -126,7 +126,7 @@ namespace {
 		bool panScene = false, panSelecting = false;
 		int panPlayer = 0, panInput = 0, panDirection = 1;
 		float panY = 600.0F;
-		uint64_t panTick = 0, panMotionEvents = 0;
+		uint64_t panTick = 0, panSteerTick = 0, panMotionEvents = 0;
 		SDL_Scancode panKey = SDL_SCANCODE_UNKNOWN;
 	};
 	Probe probe;
@@ -666,7 +666,7 @@ namespace {
 		}
 		probe.panKey = SDL_SCANCODE_UNKNOWN;
 		probe.panScene = probe.panSelecting = false;
-		probe.panTick = 0;
+		probe.panTick = probe.panSteerTick = 0;
 	}
 
 	bool Step(const Json& step, Json& observed) {
@@ -1050,14 +1050,18 @@ namespace {
 				Push(event);
 				probe.panScene = true;
 			}
-			if (!probe.panSelecting || g_TimerMan.GetSimUpdateCount() < probe.panTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4) return false;
 			const Vector cursor = g_CameraMan.GetScrollTarget(game->ScreenOfPlayer(probe.panPlayer));
+			const auto* controller = game->GetPlayerController(probe.panPlayer);
+			observed["pan_view"] = {{"cursor", {cursor.m_X, cursor.m_Y}}, {"target_y", probe.panY}, {"selecting", probe.panSelecting},
+			    {"next_key_held", g_UInputMan.KeyHeldScancode(probe.panKey)}, {"input_delay", ScenarioRunner::GetLockstepLocalInputDelay()},
+			    {"controller_motion", {controller->GetMouseMovement().m_X, controller->GetMouseMovement().m_Y}}};
+			if (!probe.panSelecting || g_TimerMan.GetSimUpdateCount() < probe.panTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4) return false;
 			if (std::abs(cursor.m_Y - probe.panY) > 2.0F) return false;
 			const std::string text = g_FrameMan.GetScreenText(game->ScreenOfPlayer(probe.panPlayer));
 			Require(text == "Select a body to switch control to...", "looking around lost its actor selection message");
 			Require(g_UInputMan.KeyHeldScancode(probe.panKey), "looking around lost its held Next Actor key");
 			observed["pan_scene"] = true; observed["pan_motion_events"] = probe.panMotionEvents;
-			observed["pan_view"] = {{"cursor", {cursor.m_X, cursor.m_Y}}, {"screen_text", text}, {"next_key_held", g_UInputMan.KeyHeldScancode(probe.panKey)}};
+			observed["pan_view"]["screen_text"] = text;
 		} else if (op == "measure_minute") {
 			Require(observed["service"] == "Running" && observed["paused"] == false && observed["editing"] == false && observed["local_actor_alive"] == true,
 			        "the AI fight stopped or its local player lost their actor");
@@ -1659,7 +1663,11 @@ namespace {
 					event.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.motion.which = 1;
 					event.motion.x = g_WindowMan.GetResX() / 2; event.motion.y = g_WindowMan.GetResY() / 2;
 					event.motion.xrel = probe.panDirection * 2.0F / g_UInputMan.GetMouseSensitivity();
-					event.motion.yrel = probe.panSelecting ? 0 : (probe.panY - cursor.m_Y) / g_UInputMan.GetMouseSensitivity();
+					// Rest while the last vertical motion reaches the committed input, then correct the height again.
+					const uint64_t tick = g_TimerMan.GetSimUpdateCount();
+					const bool steer = !probe.panSelecting || tick >= probe.panSteerTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4;
+					event.motion.yrel = steer ? std::clamp(probe.panY - cursor.m_Y, -20.0F, 20.0F) / g_UInputMan.GetMouseSensitivity() : 0;
+					if (steer) probe.panSteerTick = tick;
 					Push(event);
 					if (!probe.panSelecting) probe.panTick = g_TimerMan.GetSimUpdateCount();
 					probe.panSelecting = true;
