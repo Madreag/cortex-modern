@@ -5,6 +5,10 @@
 
 #include "Singleton.h"
 #include "CheckpointFrozenClock.h"
+#include "CheckpointNativeContainers.h"
+
+#include <memory>
+#include <stdexcept>
 
 #include <algorithm>
 #include <deque>
@@ -28,6 +32,11 @@ namespace RTE {
 	public:
 
 		std::string SaveCheckpoint() const;
+		/// Owns the running multiplayer clock before any capture.
+		void PrepareCheckpointValues();
+		/// Records the owned clock pointer without copying its header.
+		const void* CheckpointOwnedValues() const { return m_OwnedCheckpointValues.get(); }
+		static std::string CheckpointStorageSelfTestMismatch();
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 #pragma region Creation
 		/// Constructor method used to instantiate a TimerMan object in system memory. Initialize() should be called before using this object.
@@ -54,29 +63,29 @@ namespace RTE {
 		/// This also clears the accumulator, to avoid the case where the sim may update while paused when behind schedule.
 		/// @param pause Whether the sim should be paused or not.
 		void PauseSim(bool pause = false) {
-			m_SimPaused = pause;
+			CheckpointStateValues().m_SimPaused = pause;
 			if (pause)
-				m_SimAccumulator = 0.0F;
+				CheckpointStateValues().m_SimAccumulator = 0.0F;
 		}
 
 		/// Sets whether sim updates advance the update count but not sim time, so sim timers hold
 		/// still across the synced lockstep pause while the frame exchange keeps ticking.
 		/// @param frozen Frozen or not.
-		void SetSimTimeFrozen(bool frozen) { m_SimTimeFrozen = frozen; }
-		bool IsSimTimeFrozen() const { return m_SimTimeFrozen; }
+		void SetSimTimeFrozen(bool frozen) { CheckpointStateValues().m_SimTimeFrozen = frozen; }
+		bool IsSimTimeFrozen() const { return CheckpointStateValues().m_SimTimeFrozen; }
 
 		/// Sets whether the sim free-runs: updates stop gating on accumulated real time, so replay
 		/// playback and benches run ticks as fast as they compute. The fixed dt is untouched.
 		/// @param freeRun Free-running or not.
-		void SetFreeRunSim(bool freeRun) { m_FreeRunSim = freeRun; }
+		void SetFreeRunSim(bool freeRun) { CheckpointStateValues().m_FreeRunSim = freeRun; }
 
 		/// Whether the sim runs unpaced by real time.
-		bool IsFreeRunSim() const { return m_FreeRunSim; }
+		bool IsFreeRunSim() const { return CheckpointStateValues().m_FreeRunSim; }
 
 		/// Accrues extra fixed ticks so a world joiner can apply the tail faster than real time.
 		void GrantSimUpdates(int count) {
 			if (count > 0) {
-				m_SimAccumulator += static_cast<long long>(count) * m_DeltaTime;
+				CheckpointStateValues().m_SimAccumulator += static_cast<long long>(count) * CheckpointStateValues().m_DeltaTime;
 			}
 		}
 
@@ -86,41 +95,41 @@ namespace RTE {
 		/// @param simTimeTicks The captured sim time in ticks.
 		/// Advances one sim tick without touching the frame accumulator; the caller rewinds afterwards.
 		void AdvanceSimTickForPreview() {
-			if (!m_SimTimeFrozen) {
-				m_SimTimeTicks += m_DeltaTime;
+			if (!CheckpointStateValues().m_SimTimeFrozen) {
+				CheckpointStateValues().m_SimTimeTicks += CheckpointStateValues().m_DeltaTime;
 			}
-			++m_SimUpdateCount;
+			++CheckpointStateValues().m_SimUpdateCount;
 		}
 
 		/// Puts the sim tick back after a preview; the frame accumulator keeps whatever it had.
 		void RestoreSimTickAfterPreview(long long simUpdateCount, long long simTimeTicks) {
-			m_SimUpdateCount = simUpdateCount;
-			m_SimTimeTicks = simTimeTicks;
+			CheckpointStateValues().m_SimUpdateCount = simUpdateCount;
+			CheckpointStateValues().m_SimTimeTicks = simTimeTicks;
 		}
 
 		void RewindSimTo(long long simUpdateCount, long long simTimeTicks) {
-			m_SimUpdateCount = simUpdateCount;
-			m_SimTimeTicks = simTimeTicks;
-			m_SimAccumulator = 0;
+			CheckpointStateValues().m_SimUpdateCount = simUpdateCount;
+			CheckpointStateValues().m_SimTimeTicks = simTimeTicks;
+			CheckpointStateValues().m_SimAccumulator = 0;
 		}
 
 		/// Gets the sim time in timer ticks, for rollback snapshots.
 		/// @return The accumulated sim time in ticks.
-		long long GetSimTimeTicks() const { return CheckpointFrozenClock::current ? CheckpointFrozenClock::current->simTicks : m_SimTimeTicks; }
-		long long GetSimAccumulator() const { return m_SimAccumulator; }
+		long long GetSimTimeTicks() const { return CheckpointFrozenClock::current ? CheckpointFrozenClock::current->simTicks : CheckpointStateValues().m_SimTimeTicks; }
+		long long GetSimAccumulator() const { return CheckpointStateValues().m_SimAccumulator; }
 
 		/// Tells whether there is enough sim time accumulated to do at least one physics update.
 		/// @return Whether there is enough sim time to do a physics update.
-		bool TimeForSimUpdate() const { return m_FreeRunSim || m_SimAccumulator >= m_DeltaTime; }
+		bool TimeForSimUpdate() const { return CheckpointStateValues().m_FreeRunSim || CheckpointStateValues().m_SimAccumulator >= CheckpointStateValues().m_DeltaTime; }
 
 		/// Tells whether the current simulation update will be drawn in a frame. Use this to check if it is necessary to draw purely graphical things during the sim update.
 		/// @return Whether this is the last sim update before a frame with its results will appear.
-		bool DrawnSimUpdate() const { return m_DrawnSimUpdate; }
+		bool DrawnSimUpdate() const { return CheckpointStateValues().m_DrawnSimUpdate; }
 
 		/// Tells how many sim updates have been performed since the last one that ended up being a drawn frame.
 		/// If negative, it means no sim updates have happened, and a same frame will be drawn again.
 		/// @return The number of pure sim updates that have happened since the last drawn.
-		int SimUpdatesSinceDrawn() const { return m_SimUpdatesSinceDrawn; }
+		int SimUpdatesSinceDrawn() const { return CheckpointStateValues().m_SimUpdatesSinceDrawn; }
 
 		/// Starts a frame's sim updates. With a budget, the update that would run past it is the drawn one, so a machine
 		/// with owed ticks presents between them instead of freezing one frame on all of them.
@@ -129,7 +138,7 @@ namespace RTE {
 
 		/// Tells whether the sim update just run was drawn because the frame's budget ran out.
 		/// @return Whether the frame's budget ended its sim updates.
-		bool SimFrameBudgetSpent() const { return m_SimFrameBudgetSpent; }
+		bool SimFrameBudgetSpent() const { return CheckpointStateValues().m_SimFrameBudgetSpent; }
 
 		/// Drops the time the sim owes past the update about to run and holds its clock back a number of fixed ticks, so a lockstep peer
 		/// running ahead of its inputs gives them room to land before it needs them.
@@ -137,61 +146,61 @@ namespace RTE {
 		/// Sets how many ticks this clock keeps owing, past the one due, instead of dropping them: a lockstep machine that
 		/// cannot present every tick runs what it owes back to back and presents less often.
 		/// @param ticks The owed ticks kept, 0 for the sim's own estimate alone.
-		void SetOwedTicksKept(int ticks) { m_OwedTicksKept = ticks; }
+		void SetOwedTicksKept(int ticks) { CheckpointStateValues().m_OwedTicksKept = ticks; }
 
 		/// Sets the cost a tick is taken to have when capping what this clock owes: a lockstep round passes the median of its recent
 		/// ticks, which one spike (a capture, a first-tick load) does not move.
 		/// @param ms The tick cost in milliseconds, 0 for the sim's own estimate.
-		void SetOwedCapTickCostMS(float ms) { m_OwedCapTickCostMS = ms; }
+		void SetOwedCapTickCostMS(float ms) { CheckpointStateValues().m_OwedCapTickCostMS = ms; }
 
 		void HoldSimTicks(int ticks) {
-			m_SimAccumulator = std::min(m_SimAccumulator, m_DeltaTime);
-			m_SimHold += static_cast<long long>(std::max(0, ticks)) * m_DeltaTime;
+			CheckpointStateValues().m_SimAccumulator = std::min(CheckpointStateValues().m_SimAccumulator, CheckpointStateValues().m_DeltaTime);
+			CheckpointStateValues().m_SimHold += static_cast<long long>(std::max(0, ticks)) * CheckpointStateValues().m_DeltaTime;
 		}
 
 		/// Gets the simulation speed over real time.
 		/// @return The value of the simulation speed over real time.
-		float GetSimSpeed() const { return m_SimSpeed; }
+		float GetSimSpeed() const { return CheckpointStateValues().m_SimSpeed; }
 
 		/// Total real time accrued into the sim accumulator, in timer ticks (pace forensics).
-		long long GetPaceAccruedTicks() const { return m_PaceAccruedTicks; }
+		long long GetPaceAccruedTicks() const { return CheckpointStateValues().m_PaceAccruedTicks; }
 
 		/// Total accrued sim time discarded by the runaway trim, in timer ticks (pace forensics).
-		long long GetPaceTrimmedTicks() const { return m_PaceTrimmedTicks; }
+		long long GetPaceTrimmedTicks() const { return CheckpointStateValues().m_PaceTrimmedTicks; }
 
 		/// Total raw wall time seen across Update calls, in timer ticks (pace forensics).
-		long long GetPaceWallSeenTicks() const { return m_PaceWallSeenTicks; }
+		long long GetPaceWallSeenTicks() const { return CheckpointStateValues().m_PaceWallSeenTicks; }
 
 		/// Total wall time dropped by the real-to-sim cap, in timer ticks (pace forensics).
-		long long GetPaceCapLostTicks() const { return m_PaceCapLostTicks; }
+		long long GetPaceCapLostTicks() const { return CheckpointStateValues().m_PaceCapLostTicks; }
 
 		/// Total wall time elapsed while the sim was paused, in timer ticks (pace forensics).
-		long long GetPacePausedLostTicks() const { return m_PacePausedLostTicks; }
+		long long GetPacePausedLostTicks() const { return CheckpointStateValues().m_PacePausedLostTicks; }
 
 		/// Number of Update calls (pace forensics).
-		long long GetPaceUpdateCalls() const { return m_PaceUpdateCalls; }
+		long long GetPaceUpdateCalls() const { return CheckpointStateValues().m_PaceUpdateCalls; }
 
 		/// Number of ResetTime calls (pace forensics).
-		long long GetPaceResetCalls() const { return m_PaceResetCalls; }
+		long long GetPaceResetCalls() const { return CheckpointStateValues().m_PaceResetCalls; }
 
 		/// Zeroes the pace forensics counters, for per-round pace windows.
 		void ResetPaceCounters() {
-			m_PaceAccruedTicks = 0;
-			m_PaceTrimmedTicks = 0;
-			m_PaceWallSeenTicks = 0;
-			m_PaceCapLostTicks = 0;
-			m_PacePausedLostTicks = 0;
-			m_PaceUpdateCalls = 0;
-			m_PaceResetCalls = 0;
+			CheckpointStateValues().m_PaceAccruedTicks = 0;
+			CheckpointStateValues().m_PaceTrimmedTicks = 0;
+			CheckpointStateValues().m_PaceWallSeenTicks = 0;
+			CheckpointStateValues().m_PaceCapLostTicks = 0;
+			CheckpointStateValues().m_PacePausedLostTicks = 0;
+			CheckpointStateValues().m_PaceUpdateCalls = 0;
+			CheckpointStateValues().m_PaceResetCalls = 0;
 		}
 
 		/// Gets a time scale factor which will be used to speed up or slow down the progress of the simulation time in relation to the real world time.
 		/// @return A factor between the real world time, and the simulation time.
-		float GetTimeScale() const { return m_TimeScale; }
+		float GetTimeScale() const { return CheckpointStateValues().m_TimeScale; }
 
 		/// Sets a time scale factor which will be used to speed up or slow down the progress of the simulation time in relation to the real world time.
 		/// @param timeScale A factor between the real world time, and the simulation time. A value of 2.0 means simulation runs twice as fast as normal.
-		void SetTimeScale(float timeScale = 1.0F) { m_TimeScale = timeScale; }
+		void SetTimeScale(float timeScale = 1.0F) { CheckpointStateValues().m_TimeScale = timeScale; }
 
 		/// Gets the cap of the amount of seconds which can be transferred from the real time to the simulated time in one update.
 		/// @return A float describing the current cap in seconds.
@@ -204,11 +213,11 @@ namespace RTE {
 
 		/// Gets the number of ticks per second (the resolution of the timer).
 		/// @return The number of ticks per second.
-		long long GetTicksPerSecond() const { return m_TicksPerSecond; }
+		long long GetTicksPerSecond() const { return CheckpointStateValues().m_TicksPerSecond; }
 
 		/// Gets a current global real time measured in ticks from the start of the simulation up to the last Update of this TimerMan. Use TickFrequency to determine how many ticks go in a second.
 		/// @return The number of ticks passed since the simulation started.
-		long long GetRealTickCount() const { return CheckpointFrozenClock::current ? CheckpointFrozenClock::current->realTicks : m_RealTimeTicks; }
+		long long GetRealTickCount() const { return CheckpointFrozenClock::current ? CheckpointFrozenClock::current->realTicks : CheckpointStateValues().m_RealTimeTicks; }
 
 		/// Gets a current global simulation time measured in ticks from the start of the simulation up to the last Update of this TimerMan. Use TickFrequency to determine how many ticks go in a second.
 		/// @return The number of ticks passed since the simulation started.
@@ -216,30 +225,30 @@ namespace RTE {
 
 		/// Gets a current global simulation time, measured in sim updates, from the start of the simulation up to the last Update of this TimerMan.
 		/// @return The number of simulation updates that have occurred since the simulation started.
-		long long GetSimUpdateCount() const { return CheckpointFrozenClock::current ? CheckpointFrozenClock::current->simUpdates : m_SimUpdateCount; }
+		long long GetSimUpdateCount() const { return CheckpointFrozenClock::current ? CheckpointFrozenClock::current->simUpdates : CheckpointStateValues().m_SimUpdateCount; }
 
 		/// Gets a current global simulation time measured in ms ticks from the start of the simulation up to the last UpdateSim of this TimerMan.
 		/// @return The number of ms passed since the simulation started.
-		long long GetSimTimeMS() const { return GetSimTimeTicks() * 1000 / m_TicksPerSecond; }
+		long long GetSimTimeMS() const { return GetSimTimeTicks() * 1000 / CheckpointStateValues().m_TicksPerSecond; }
 
 		/// Gets the current number of ticks that the simulation should be updating with.
 		/// @return The current fixed delta time that the simulation should be updating with, in ticks.
-		long long GetDeltaTimeTicks() const { return m_DeltaTime; }
+		long long GetDeltaTimeTicks() const { return CheckpointStateValues().m_DeltaTime; }
 
 		/// Sets the number of ticks that a simulation update delta time should take.
 		/// @param newDelta The new delta time in ticks.
 		void SetDeltaTimeTicks(int newDelta) {
-			m_DeltaTime = newDelta;
-			m_DeltaTimeS = static_cast<float>(m_DeltaTime) / static_cast<float>(m_TicksPerSecond);
+			CheckpointStateValues().m_DeltaTime = newDelta;
+			CheckpointStateValues().m_DeltaTimeS = static_cast<float>(CheckpointStateValues().m_DeltaTime) / static_cast<float>(CheckpointStateValues().m_TicksPerSecond);
 		}
 
 		/// Gets the current fixed delta time of the simulation updates, in ms.
 		/// @return The current fixed delta time that the simulation should be updating with, in ms.
-		float GetDeltaTimeMS() const { return m_DeltaTimeS * 1000; }
+		float GetDeltaTimeMS() const { return CheckpointStateValues().m_DeltaTimeS * 1000; }
 
 		/// Gets the current fixed delta time of the simulation updates, in seconds.
 		/// @return The current fixed delta time that the simulation should be updating with, in seconds.
-		float GetDeltaTimeSecs() const { return m_DeltaTimeS; }
+		float GetDeltaTimeSecs() const { return CheckpointStateValues().m_DeltaTimeS; }
 
 		/// Gets the current fixed delta time of AI updates, in seconds.
 		/// @return The current fixed delta time of AI updates, in seconds.
@@ -252,8 +261,8 @@ namespace RTE {
 		/// Sets the number of seconds that a simulation update delta time should take.
 		/// @param newDelta The new delta time in seconds.
 		void SetDeltaTimeSecs(float newDelta) {
-			m_DeltaTimeS = newDelta;
-			m_DeltaTime = static_cast<long long>(m_DeltaTimeS * static_cast<float>(m_TicksPerSecond));
+			CheckpointStateValues().m_DeltaTimeS = newDelta;
+			CheckpointStateValues().m_DeltaTime = static_cast<long long>(CheckpointStateValues().m_DeltaTimeS * static_cast<float>(CheckpointStateValues().m_TicksPerSecond));
 		}
 #pragma endregion
 
@@ -271,44 +280,56 @@ namespace RTE {
 #pragma region Network Handling
 		/// Gets the duration the thread should be put to sleep. This is used when ServerSimSleepWhenIdle is true to put the thread to sleep if the sim frame is finished faster than it usually should.
 		/// @return The duration the thread should be put to sleep.
-		long long GetTimeToSleep() const { return (m_DeltaTime - m_SimAccumulator) / 2; };
+		long long GetTimeToSleep() const { return (CheckpointStateValues().m_DeltaTime - CheckpointStateValues().m_SimAccumulator) / 2; };
 #pragma endregion
 
-	protected:
-		std::chrono::steady_clock::time_point m_StartTime; //!< The point in real time when the simulation (re)started.
-		long long m_TicksPerSecond; //!< The frequency of ticks each second, ie the resolution of the timer.
-		long long m_RealTimeTicks; //!< The number of actual microseconds counted so far.
-		long long m_SimTimeTicks; //!< The number of simulation time ticks counted so far.
-		long long m_SimUpdateCount; //!< The number of whole simulation updates have been made since reset.
-		long long m_SimAccumulator; //!< Simulation time accumulator keeps track of how much actual time has passed and is chunked into whole DeltaTime:s upon UpdateSim.
+	private:
+		struct CheckpointState : CheckpointNativeAllocated {
+			std::chrono::steady_clock::time_point m_StartTime; //!< The point in real time when the simulation (re)started.
+			long long m_TicksPerSecond; //!< The frequency of ticks each second, ie the resolution of the timer.
+			long long m_RealTimeTicks; //!< The number of actual microseconds counted so far.
+			long long m_SimTimeTicks; //!< The number of simulation time ticks counted so far.
+			long long m_SimUpdateCount; //!< The number of whole simulation updates have been made since reset.
+			long long m_SimAccumulator; //!< Simulation time accumulator keeps track of how much actual time has passed and is chunked into whole DeltaTime:s upon UpdateSim.
 
-		long long m_DeltaTime; //!< The fixed delta time chunk of the simulation update.
-		float m_DeltaTimeS; //!< The simulation update step size, in seconds.
-		std::deque<float> m_DeltaBuffer; //!< Buffer for measuring the most recent real time differences, used for averaging out the readings.
+			long long m_DeltaTime; //!< The fixed delta time chunk of the simulation update.
+			float m_DeltaTimeS; //!< The simulation update step size, in seconds.
+			CheckpointDeque<float> m_DeltaBuffer; //!< Buffer for measuring the most recent real time differences, used for averaging out the readings.
 
-		int m_SimUpdatesSinceDrawn; //!< How many sim updates have been done since the last drawn one.
-		bool m_DrawnSimUpdate; //!< Tells whether the current simulation update will be drawn in a frame.
-		long long m_SimFrameBudget; //!< Wall time this frame's sim updates may take before one is drawn; 0 for no limit.
-		long long m_SimFrameStart; //!< When this frame's sim updates began.
-		long long m_LastSimUpdateStart; //!< When the latest sim update of this frame began, or 0 before one.
-		bool m_SimFrameBudgetSpent; //!< The frame's budget ended its sim updates at the drawn one.
-		long long m_SimHold; //!< Real time still to go by before the sim accrues time again.
-		int m_OwedTicksKept; //!< Owed ticks kept past the one due, whatever the sim's cost estimate says it can run.
-		float m_OwedCapTickCostMS; //!< The tick cost that caps what this clock owes, 0 for the sim's own estimate.
+			int m_SimUpdatesSinceDrawn; //!< How many sim updates have been done since the last drawn one.
+			bool m_DrawnSimUpdate; //!< Tells whether the current simulation update will be drawn in a frame.
+			long long m_SimFrameBudget; //!< Wall time this frame's sim updates may take before one is drawn; 0 for no limit.
+			long long m_SimFrameStart; //!< When this frame's sim updates began.
+			long long m_LastSimUpdateStart; //!< When the latest sim update of this frame began, or 0 before one.
+			bool m_SimFrameBudgetSpent; //!< The frame's budget ended its sim updates at the drawn one.
+			long long m_SimHold; //!< Real time still to go by before the sim accrues time again.
+			int m_OwedTicksKept; //!< Owed ticks kept past the one due, whatever the sim's cost estimate says it can run.
+			float m_OwedCapTickCostMS; //!< The tick cost that caps what this clock owes, 0 for the sim's own estimate.
 
-		float m_SimSpeed; //!< The simulation speed over real time.
-		float m_TimeScale; //!< The relationship between the real world actual time and the simulation time. A value of 2.0 means simulation runs twice as fast as normal, as perceived by a player.
+			float m_SimSpeed; //!< The simulation speed over real time.
+			float m_TimeScale; //!< The relationship between the real world actual time and the simulation time. A value of 2.0 means simulation runs twice as fast as normal, as perceived by a player.
 
-		bool m_SimPaused; //!< Simulation paused; no real time ticks will go to the sim accumulator.
-		bool m_SimTimeFrozen; //!< Sim updates advance the update count but not sim time (the synced lockstep pause).
-		bool m_FreeRunSim; //!< Sim updates run unpaced by real time (replay playback and benches).
-		long long m_PaceAccruedTicks; //!< Total real time accrued into the accumulator (pace forensics).
-		long long m_PaceTrimmedTicks; //!< Total accrued time discarded by the runaway trim (pace forensics).
-		long long m_PaceWallSeenTicks; //!< Total raw wall time seen across Update calls (pace forensics).
-		long long m_PaceCapLostTicks; //!< Total wall time dropped by the real-to-sim cap (pace forensics).
-		long long m_PacePausedLostTicks; //!< Total wall time elapsed while paused (pace forensics).
-		long long m_PaceUpdateCalls; //!< Number of Update calls (pace forensics).
-		long long m_PaceResetCalls; //!< Number of ResetTime calls (pace forensics).
+			bool m_SimPaused; //!< Simulation paused; no real time ticks will go to the sim accumulator.
+			bool m_SimTimeFrozen; //!< Sim updates advance the update count but not sim time (the synced lockstep pause).
+			bool m_FreeRunSim; //!< Sim updates run unpaced by real time (replay playback and benches).
+			long long m_PaceAccruedTicks; //!< Total real time accrued into the accumulator (pace forensics).
+			long long m_PaceTrimmedTicks; //!< Total accrued time discarded by the runaway trim (pace forensics).
+			long long m_PaceWallSeenTicks; //!< Total raw wall time seen across Update calls (pace forensics).
+			long long m_PaceCapLostTicks; //!< Total wall time dropped by the real-to-sim cap (pace forensics).
+			long long m_PacePausedLostTicks; //!< Total wall time elapsed while paused (pace forensics).
+			long long m_PaceUpdateCalls; //!< Number of Update calls (pace forensics).
+			long long m_PaceResetCalls; //!< Number of ResetTime calls (pace forensics).
+		};
+		CheckpointState m_OrdinaryCheckpointValues{};
+		std::unique_ptr<CheckpointState> m_OwnedCheckpointValues;
+		CheckpointState& CheckpointStateValues() {
+			if (CheckpointNativeStorage::Reading()) throw std::logic_error("a frozen timer cannot update the live clock");
+			return m_OwnedCheckpointValues ? *m_OwnedCheckpointValues : m_OrdinaryCheckpointValues;
+		}
+		const CheckpointState& CheckpointStateValues() const {
+			const auto* source = m_OwnedCheckpointValues ? m_OwnedCheckpointValues.get() : &m_OrdinaryCheckpointValues;
+			return *CheckpointNativeStorage::Source(source);
+		}
 
 	private:
 

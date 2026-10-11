@@ -9748,6 +9748,13 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	{
+		const std::string mismatch = TimerMan::CheckpointStorageSelfTestMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " owned_timer_values_survive_source_mutation_and_destruction";
+		if (!mismatch.empty()) std::cout << " reason=" << mismatch;
+		std::cout << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
+	}
+	{
 		const std::string mismatch = CheckpointNativeStorage::SelfTestMismatch();
 		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " live_native_container_pages_survive_mutation_destruction_and_reuse";
 		if (!mismatch.empty()) std::cout << " reason=" << mismatch;
@@ -15671,6 +15678,7 @@ void LuaMan::SeedAllLuaRNGs(uint64_t baseSeed) {
 }
 
 void LuaMan::PrepareCheckpointValues() {
+	if (CheckpointNativeStorage::Enabled()) g_TimerMan.PrepareCheckpointValues();
 	m_MasterScriptState.PrepareCheckpointValues();
 	m_MasterScriptState.PrepareCheckpointBindings();
 	for (LuaStateWrapper& state: m_ScriptStates) {
