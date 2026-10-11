@@ -178,6 +178,7 @@ namespace RTE {
 				auto& receipt = m_PeerInputReceipts[message.successorPeerId][message.senderPeerId];
 				const bool advanced = message.frame > receipt;
 				if (message.successorPeerId == m_Config.localPeerId && advanced) {
+					++m_InputAcceptanceReceipts;
 					auto& progress = m_PeerOwnReceiptProgress[message.senderPeerId];
 					progress = {message.frame, nowMs, 0};
 				}
