@@ -842,7 +842,7 @@ namespace {
 			Push(event);
 			return false;
 		} else if (op == "actor_next_until") {
-			auto* game = g_ActivityMan.GetActivity();
+			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 			const int player = LocalPlayer(step), input = step.value("input_player", 0);
 			Require(game && observed["service"] == "Running", "actor selection has no running activity");
 			if (probe.actorCycleIndex != probe.index) {
