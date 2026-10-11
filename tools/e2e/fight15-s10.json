@@ -22,7 +22,11 @@
         "NetworkPortMapEnable": 0,
         "NetworkMatchStatusMode": "Always",
         "NetworkDisplayName": "Captain"
-      }
+      },
+      "args": [
+        "-memory-census-seconds",
+        "60"
+      ]
     },
     {
       "name": "joiner",
@@ -39,7 +43,11 @@
         "NetworkPortMapEnable": 0,
         "NetworkMatchStatusMode": "Always",
         "NetworkDisplayName": "Joiner"
-      }
+      },
+      "args": [
+        "-memory-census-seconds",
+        "60"
+      ]
     }
   ],
   "scripts": {

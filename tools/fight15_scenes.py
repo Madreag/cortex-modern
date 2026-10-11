@@ -96,7 +96,7 @@ def probe(steps, timeout=180000):
     return json.dumps(dict(schema=1, timeout_ms=timeout, step_timeout_ms=60000, label_dump=dict(every_ms=5000), steps=steps), indent=2) + "\n"
 
 
-def emit(number, title, host, joiner, host_probe, join_probe, checklist, timeout=220, matching_log_lines=()):
+def emit(number, title, host, joiner, host_probe, join_probe, checklist, timeout=220, matching_log_lines=(), engine_args=()):
     name = f"fight15-s{number:02d}"
     scripts = {"host.menu": "\n".join(host) + "\n", "joiner.menu": "\n".join(joiner) + "\n",
                "host.probe": host_probe, "joiner.probe": join_probe}
@@ -104,6 +104,9 @@ def emit(number, title, host, joiner, host_probe, join_probe, checklist, timeout
                   env=dict(CCCP_TEST_READBACK_TIMING="1"),
                   settings=dict(SETTINGS, NetworkDisplayName="Captain" if peer == "host" else "Joiner"))
              for peer in ("host", "joiner")]
+    if engine_args:
+        for peer in peers:
+            peer["args"] = list(engine_args)
     document = dict(schema=1, name=name, title=title, port_base=49410 + number * 2,
                     size="960x540", timeout_s=timeout, public_directory=True, peers=peers, scripts=scripts, checklist=checklist)
     if matching_log_lines:
@@ -487,7 +490,8 @@ def ai_fight():
                             continuous_minutes=dict(count=20, minimum_tps=58.0),
                            log_regex=[r"\[fight15-scene\] minute=20 pace=", r"\[net-match\].*host"]))
     emit(10, "Twenty-minute stock endless AI fight with scripted bunker and brain setup",
-         host_menu, join_menu, probes["host"], probes["joiner"], checks, timeout=1750)
+         host_menu, join_menu, probes["host"], probes["joiner"], checks, timeout=1750,
+         engine_args=("-memory-census-seconds", "60"))
 
 
 def moderation_scene():
