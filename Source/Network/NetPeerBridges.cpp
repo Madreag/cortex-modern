@@ -145,10 +145,29 @@ namespace RTE {
 		const NetHash32 prefix = frame == m_Config.startFrame ? NetHash32{} : proposal.preparedFrame != 0 ? PeerAppliedFramePrefix(proposal.boundary) : PeerFramePrefix(frame - 1);
 		proposal.bytes.assign(prefix.begin(), prefix.end());
 		if (proposal.preparedFrame == 1) for (uint8_t peer: proposal.members) {
-			const uint32_t delay = InputDelayAt(peer, proposal.frame);
-			const uint32_t transit = static_cast<uint32_t>(std::ceil(m_Stats.peers[peer].pingMs / m_Config.simTickMs));
-			PutSize(proposal.bytes, delay); PutSize(proposal.bytes, delay + transit + m_Config.slowPlayerBoundTicks);
+			uint32_t rtt = m_Stats.peers[peer].pingMs;
+			if (m_Config.peerSessionLinks) {
+				const auto [wire, route] = m_Config.peerSessionLinks->RouteTo(peer);
+				if (wire && wire->IsPeerPingMeasured(route)) rtt = std::max(rtt, wire->GetPeerPingMs(route));
+			}
+			const uint64_t displayed = m_LastCompletedSimulationTick.value_or(frame - 1);
+			const uint64_t applied = m_PeerAppliedThrough.at(peer);
+			const uint32_t trail = static_cast<uint32_t>(displayed - std::min(displayed, applied));
+			const uint32_t margin = std::max(c_NetInputJitterReserveMs, m_Stats.peers[peer].jitterMs) +
+			    static_cast<uint32_t>(std::ceil((m_Config.slowPlayerBoundTicks + 1) * m_Config.simTickMs));
+			const uint32_t transit = static_cast<uint32_t>(std::ceil((rtt + margin) / m_Config.simTickMs));
+			// The returning reader is still behind the live producers. Its
+			// first human input needs that trail as well as the measured path
+			// and jitter reserve. A pre-outage delay alone can immediately
+			// exclude the seat again when the neutral return interval ends.
+			const uint32_t delay = std::max<uint32_t>(InputDelayAt(peer, proposal.frame), transit + trail);
+			const uint32_t neutral = delay + transit + trail + m_Config.slowPlayerBoundTicks;
+			if (delay > NetLockstepCodec::c_MaxInputDelayFrames || neutral > NetLockstepCodec::c_MaxFutureFrameSkew) return false;
+			PutSize(proposal.bytes, delay); PutSize(proposal.bytes, neutral);
 			PutSize(proposal.bytes, std::max<uint32_t>(1, m_Config.peerIncarnations[peer]));
+			DiagnosticLine() << "[net-peer-return-runway] peer=" << static_cast<int>(peer) << " activation=" << proposal.frame
+			    << " rtt_ms=" << rtt << " margin_ms=" << margin << " trail_ticks=" << trail << " delay_ticks=" << delay
+			    << " neutral_through=" << proposal.frame + neutral << std::endl;
 		}
 		proposal.totalBytes = static_cast<uint32_t>(proposal.bytes.size());
 		if (!ValidatePeerBridge(proposal)) return false;
@@ -267,6 +286,7 @@ namespace RTE {
 				const uint64_t revision = agreed.frame * 8 + peer;
 				const auto [delay, neutral, incarnation] = returnDelays.at(peer);
 				m_ReclaimTransactions[peer] = {peer, m_Config.migrationGeneration, revision, incarnation, agreed.frame, delay, neutral};
+				m_DelayChanges[peer][agreed.frame] = delay;
 				m_PeerEffectiveStart[peer] = agreed.frame + delay;
 				m_PeerAcceptedThrough[peer] = neutral + 1;
 				NoteSeatTransition(peer, agreed.frame, SeatTransition::Back);

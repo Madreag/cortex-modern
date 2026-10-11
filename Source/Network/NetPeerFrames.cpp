@@ -188,10 +188,15 @@ namespace RTE {
 			heartbeat.totalBytes = static_cast<uint32_t>(heartbeat.bytes.size());
 			SendPeerFrameMessage(std::move(heartbeat));
 		}
-		if (nowMs >= m_PeerVoteRetryAtMs) {
-			m_PeerVoteRetryAtMs = nowMs + 100;
+		const bool retryVotes = nowMs >= m_PeerVoteRetryAtMs;
+		if (retryVotes) m_PeerVoteRetryAtMs = nowMs + 100;
+		// A vote received ahead of our prepared frame becomes eligible as
+		// soon as that frame is ready. The retransmission timer must not add
+		// up to 100 ms to the first answer of an otherwise healthy voter.
+		{
 			for (auto& [key, votes]: m_PeerBridgeVotes) {
 				if (key.first < m_Stats.nextFrame || m_PeerBridgeCertificates.contains(key)) continue;
+				bool newVote = false;
 				if (!votes.contains(m_Config.localPeerId)) for (const auto& [peer, vote]: votes) {
 					if (!ValidatePeerBridge(vote)) continue;
 					auto own = vote;
@@ -199,12 +204,15 @@ namespace RTE {
 					own.appliedFrame = m_LastCompletedSimulationTick.value_or(0);
 					if (own.preparedFrame == 3) m_PeerAdminOwnVote = own;
 					votes.emplace(m_Config.localPeerId, std::move(own));
+					newVote = true;
 					if (vote.preparedFrame == 0) for (uint8_t held: vote.members) m_PeerRejectedInputs[vote.frame] |= SeatBit(held);
 					break;
 				}
-				if (const auto own = votes.find(m_Config.localPeerId); own != votes.end()) SendPeerFrameMessage(own->second);
+				if (const auto own = votes.find(m_Config.localPeerId); own != votes.end() && (newVote || retryVotes)) SendPeerFrameMessage(own->second);
 				TryCommitPeerBridge(key.first, nowMs, key.second);
 			}
+		}
+		if (retryVotes) {
 			for (const auto& [key, certificate]: m_PeerBridgeCertificates) {
 				if (key.first + NetLockstepCodec::c_MaxFutureFrameSkew < m_Stats.nextFrame) continue;
 				SendPeerFrameMessage(certificate);

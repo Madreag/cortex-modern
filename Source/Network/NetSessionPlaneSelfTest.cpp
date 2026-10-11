@@ -40,6 +40,7 @@ namespace RTE {
 			bool captureFrames = false, realFrozen = false;
 			bool adminDirectory = false, adminDirectoryDown = false;
 			unsigned asymmetricBridge = 0;
+			uint32_t planeIntervalMs = 1, recoveryRttMs = 0;
 		};
 		struct Wire;
 		struct Hub {
@@ -56,7 +57,11 @@ namespace RTE {
 				if (row.tie) return (a <= 2) != (b <= 2);
 				return a == row.subject || b == row.subject;
 			}
-			uint64_t Delay(uint8_t a, uint8_t b) const { return ((a == row.subject || b == row.subject ? row.rttMs : row.otherRttMs) + 1) / 2; }
+			uint64_t Delay(uint8_t a, uint8_t b) const {
+				uint32_t rtt = a == row.subject || b == row.subject ? row.rttMs : row.otherRttMs;
+				if (row.recoveryRttMs && now >= faultEnd && now < faultEnd + 8000 && (a == row.subject || b == row.subject)) rtt = row.recoveryRttMs;
+				return (rtt + 1) / 2;
+			}
 			bool DirectoryReachable(uint8_t peer) const {
 				if (!DuringFault()) return true;
 				if (row.directoryDown) return false;
@@ -260,6 +265,8 @@ namespace RTE {
 			uint64_t freezeWallMs = 0;
 			std::vector<double> credits;
 			std::vector<uint64_t> queued, waitAt, maxWait, caughtAt;
+			std::vector<uint64_t> displayedAt, blackoutGap, returnedAt, postReturnWait;
+			std::vector<bool> seenAI;
 			std::vector<uint16_t> settledDelay;
 			std::vector<uint32_t> settledChanges, settledHostWaits;
 			std::vector<uint64_t> paceBegin, paceEnd;
@@ -272,6 +279,7 @@ namespace RTE {
 				hub.row = row; hub.faultEnd = hub.faultAt + (row.steadyMs ? row.steadyMs : row.gapMs);
 				worlds.resize(row.seats); committed.resize(row.seats); credits.resize(row.seats); queued.resize(row.seats); waitAt.resize(row.seats);
 				maxWait.resize(row.seats); caughtAt.resize(row.seats); settledDelay.resize(row.seats); settledChanges.resize(row.seats);
+				displayedAt.resize(row.seats); blackoutGap.resize(row.seats); returnedAt.resize(row.seats); postReturnWait.resize(row.seats); seenAI.resize(row.seats);
 				settledHostWaits.resize(row.seats); paceBegin.resize(row.seats); paceEnd.resize(row.seats);
 				firstAdminChangeMs.assign(row.seats, UINT64_MAX);
 				for (uint8_t peer = 1; peer <= row.seats; ++peer) { wires.push_back(std::make_unique<Wire>(hub, peer)); peers.push_back(std::make_unique<NetLockstepCoordinator>()); }
@@ -359,6 +367,7 @@ namespace RTE {
 						peers[id - 1]->InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, heartbeat, {}}, hub.now);
 				}
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) {
+					if ((hub.now + id * 3) % hub.row.planeIntervalMs != 0) continue;
 					if (hub.row.realFrozen && id == hub.row.subject && hub.DuringFault()) continue;
 					if (hub.row.frozen && id == hub.row.subject && hub.DuringFault()) peers[id - 1]->PlaneTick(hub.now);
 					else peers[id - 1]->Tick(hub.now);
@@ -394,7 +403,12 @@ namespace RTE {
 							if (!waitAt[id - 1]) waitAt[id - 1] = hub.now;
 							peer.NoteFrameWait(next, hub.now); break;
 						}
-						if (waitAt[id - 1]) { maxWait[id - 1] = std::max(maxWait[id - 1], hub.now - waitAt[id - 1]); waitAt[id - 1] = 0; }
+						if (waitAt[id - 1]) {
+							const uint64_t wait = hub.now - waitAt[id - 1];
+							maxWait[id - 1] = std::max(maxWait[id - 1], wait);
+							if (returnedAt[id - 1]) postReturnWait[id - 1] = std::max(postReturnWait[id - 1], wait);
+							waitAt[id - 1] = 0;
+						}
 						peer.FinishFrameWait(hub.now);
 						if (hub.row.internet && hub.row.directoryDown && hub.DuringFault() && !Bridges(peer).empty()) {
 							error = "an unconfirmed internet side committed a substitute during the directory outage"; return false;
@@ -402,6 +416,10 @@ namespace RTE {
 						if (!CheckCommittedInputs(ready, id, error) || !world.Apply(ready, error)) return false;
 						if (hub.row.captureFrames) committed[id - 1][ready.frame] = ready;
 						peer.FinishSimulationTick(ready.frame); credits[id - 1] -= 1;
+						if (displayedAt[id - 1] && hub.DuringFault()) blackoutGap[id - 1] = std::max(blackoutGap[id - 1], hub.now - displayedAt[id - 1]);
+						displayedAt[id - 1] = hub.now;
+						if (peer.IsSeatUnderAI(hub.row.subject, ready.frame)) seenAI[id - 1] = true;
+						else if (seenAI[id - 1] && !returnedAt[id - 1]) returnedAt[id - 1] = hub.now;
 					}
 					if (hub.now < hub.faultEnd && hub.row.gapMs < 5000 && HoldVisible(peer, hub.row.subject, hub.now)) { error = "a short hiccup showed a held seat"; return false; }
 					if (hub.row.frozen && HoldVisible(peer, hub.row.subject, hub.now)) { error = "flowing keepalives showed a held seat"; return false; }
@@ -485,6 +503,27 @@ namespace RTE {
 				if (id != 1 && recovered.hub.dials[{id, 1}] != 1) {
 					error = "a healthy primary host route was redialed"; return false;
 				}
+			}
+			// Poll phases and the recovery RTT follow the measured relay path:
+			// an eligible early vote must not wait for a retransmission slot,
+			// and the first human input must survive the larger return path.
+			Case phaseRow = row;
+			phaseRow.name = "relay_phased_return";
+			phaseRow.rttMs = 98; phaseRow.otherRttMs = 150;
+			phaseRow.planeIntervalMs = 8; phaseRow.recoveryRttMs = 306;
+			Fixture phased;
+			if (!phased.Run(phaseRow, error)) return false;
+			for (uint8_t id = 1; id <= 3; ++id) {
+				const auto& peer = *phased.peers[id - 1];
+				if (!phased.returnedAt[id - 1] || phased.returnedAt[id - 1] > phased.hub.faultEnd + 10000 ||
+				    phased.postReturnWait[id - 1] > 100 || peer.GetStats().peers.at(1).rejoins != 1 ||
+				    (id != 1 && phased.blackoutGap[id - 1] > 50)) {
+					error = "phased relay return failed: peer=" + std::to_string(id) + " blackout_gap_ms=" + std::to_string(phased.blackoutGap[id - 1]) +
+					    " post_return_wait_ms=" + std::to_string(phased.postReturnWait[id - 1]) + " returns=" + std::to_string(peer.GetStats().peers.at(1).rejoins); return false;
+				}
+				std::cout << "[net-session-plane-selftest] relay-phased peer=" << static_cast<int>(id) << " blackout_gap_ms=" << phased.blackoutGap[id - 1]
+				          << " post_return_wait_ms=" << phased.postReturnWait[id - 1] << " return_ms=" << phased.returnedAt[id - 1] - phased.hub.faultEnd
+				          << " returns=" << peer.GetStats().peers.at(1).rejoins << " result=PASS" << std::endl;
 			}
 			// Both an announced round end and an explicit transport close must
 			// release an excluded reader. Unannounced loss remains a partition.
