@@ -43,7 +43,7 @@ namespace RTE {
 			unsigned asymmetricBridge = 0;
 			uint32_t planeIntervalMs = 1, recoveryRttMs = 0;
 			bool delayStartup = false;
-			bool receiptHole = false;
+			bool receiptGap = false;
 			uint64_t postReturnMs = 0;
 		};
 		struct Wire;
@@ -85,7 +85,7 @@ namespace RTE {
 			// Signed wire decisions name the actual substituted frame range;
 			// a prepared bridge may exist before the display reaches that range.
 			std::map<uint8_t, std::map<uint64_t, bool>> bridgeBoundaries;
-			uint64_t receiptHoleFrame = 0, receiptHoleDrops = 0;
+			uint64_t receiptGapFrame = 0, receiptGapDrops = 0;
 			uint64_t tailQueuePeak = 0;
 		};
 		struct Wire final : INetTransport {
@@ -151,13 +151,13 @@ namespace RTE {
 				}
 				return 0;
 			}
-			bool RemoveReceiptHole(NetHostMigrationMessage& packet, std::vector<uint8_t>& bytes) {
+			bool RemoveReceiptGap(NetHostMigrationMessage& packet, std::vector<uint8_t>& bytes) {
 #if __has_include("NetPeerSessionWire.h")
-				if (!hub.row.receiptHole || owner != 3 || packet.type != NetHostMigrationMessageType::PeerInput || packet.offset != 0 || packet.totalBytes != packet.bytes.size()) return false;
+				if (!hub.row.receiptGap || owner != 3 || packet.type != NetHostMigrationMessageType::PeerInput || packet.offset != 0 || packet.totalBytes != packet.bytes.size()) return false;
 				const auto returns = hub.bridgeBoundaries.find(1);
 				if (returns == hub.bridgeBoundaries.end() || returns->second.empty() || returns->second.rbegin()->second || packet.frame < returns->second.rbegin()->first + 200) return false;
-				if (!hub.receiptHoleFrame) hub.receiptHoleFrame = packet.frame;
-				if (packet.frame >= hub.receiptHoleFrame + 64) return false;
+				if (!hub.receiptGapFrame) hub.receiptGapFrame = packet.frame;
+				if (packet.frame >= hub.receiptGapFrame + 64) return false;
 				std::vector<uint8_t> body = packet.bytes;
 				const auto take = [](const std::vector<uint8_t>& data, size_t& at, uint32_t& value) {
 					if (at + 4 > data.size()) return false;
@@ -178,11 +178,11 @@ namespace RTE {
 					NetLockstepFrame input;
 					if (!NetLockstepCodec::DecodeRecoveryInput({body.begin() + at, body.begin() + at + size}, input)) return false;
 					at += size;
-					if (input.targetFrame == hub.receiptHoleFrame) { removed = true; continue; }
+					if (input.targetFrame == hub.receiptGapFrame) { removed = true; continue; }
 					++filtered[0]; filtered.insert(filtered.end(), body.begin() + begin, body.begin() + at);
 				}
 				if (!removed) return false;
-				++hub.receiptHoleDrops;
+				++hub.receiptGapDrops;
 				if (filtered[0] == 0) return true;
 				packet.bytes = std::move(filtered); packet.totalBytes = static_cast<uint32_t>(packet.bytes.size());
 				NetHash32 key; key.fill(0x39); NetHostMigrationCodec::Encode(packet, key, bytes);
@@ -199,7 +199,7 @@ namespace RTE {
 				auto [other, remote] = found->second;
 				std::vector<uint8_t> delivered = bytes;
 				NetHostMigrationMessage decision; NetHash32 key; key.fill(0x39);
-				if (hub.row.receiptHole && NetHostMigrationCodec::Decode(bytes, key, decision) && RemoveReceiptHole(decision, delivered)) return true;
+				if (hub.row.receiptGap && NetHostMigrationCodec::Decode(bytes, key, decision) && RemoveReceiptGap(decision, delivered)) return true;
 				if (lane == NetTransportLane::ControlReliable && NetHostMigrationCodec::Decode(bytes, key, decision)) {
 					[]<class Message>(Hub& hub, const Message& packet) {
 						using Type = std::decay_t<decltype(packet.type)>;
@@ -219,7 +219,7 @@ namespace RTE {
 				if (lane == NetTransportLane::InputUnreliable && hub.DuringFault() && hub.row.lossPercent &&
 				    (owner == hub.row.subject || other->owner == hub.row.subject) && ordinal % 100 < hub.row.lossPercent) return true;
 #if __has_include("NetPeerSessionWire.h")
-				if (hub.row.receiptHole && NetHostMigrationCodec::Decode(delivered, key, decision)) {
+				if (hub.row.receiptGap && NetHostMigrationCodec::Decode(delivered, key, decision)) {
 					if (decision.type == NetHostMigrationMessageType::PeerTail)
 						hub.tailQueuePeak = std::max(hub.tailQueuePeak, GetPeerQueueStats(id).reliableBytes + delivered.size());
 					if (decision.type == NetHostMigrationMessageType::PeerTailRequest)
@@ -627,10 +627,10 @@ namespace RTE {
 				          << " returns=" << peer.GetStats().peers.at(1).rejoins << " result=PASS" << std::endl;
 			}
 			Case receiptRow = phaseRow;
-			receiptRow.name = "relay_receipt_hole_after_return"; receiptRow.receiptHole = true; receiptRow.postReturnMs = 200000;
+			receiptRow.name = "relay_receipt_gap_after_return"; receiptRow.receiptGap = true; receiptRow.postReturnMs = 200000;
 			Fixture receipts;
 			if (!receipts.Run(receiptRow, error)) return false;
-			if (!receipts.hub.receiptHoleFrame || !receipts.hub.receiptHoleDrops) { error = "the post-return receipt hole was not exercised"; return false; }
+			if (!receipts.hub.receiptGapFrame || !receipts.hub.receiptGapDrops) { error = "the post-return receipt gap was not exercised"; return false; }
 			if (!receipts.hub.tailQueuePeak || receipts.hub.tailQueuePeak > 256 * 1024) { error = "duplicate recovery requests exceeded the reliable queue bound"; return false; }
 			for (uint8_t id = 1; id <= 3; ++id) {
 				const auto& peer = *receipts.peers[id - 1];
@@ -640,7 +640,7 @@ namespace RTE {
 				    peer.GetStats().peers.at(3).substitutions != 0 || (id == 3 && report.find("\"peer_receipt_repairs\":0,") != std::string::npos)) {
 					error = "post-return input acceptance stopped, exceeded its delay bound, or held the healthy sender"; return false;
 				}
-				std::cout << "[net-session-plane-selftest] relay-receipt peer=" << static_cast<int>(id) << " hole_frame=" << receipts.hub.receiptHoleFrame
+				std::cout << "[net-session-plane-selftest] relay-receipt peer=" << static_cast<int>(id) << " gap_frame=" << receipts.hub.receiptGapFrame
 				    << " applied=" << receipts.worlds[id - 1].applied << " accepted_through=" << *AcceptedThrough(peer)
 				    << " delay_ticks=" << peer.InputDelayAt(id, receipts.worlds[id - 1].applied) << " result=PASS" << std::endl;
 			}

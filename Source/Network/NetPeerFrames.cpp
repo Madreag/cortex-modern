@@ -15,6 +15,19 @@ namespace RTE {
 
 	using namespace NetPeerFrameDetail;
 
+	std::pair<INetTransport*, NetPeerId> NetLockstepCoordinator::PeerFrameRoute(uint8_t peer) const {
+		if (m_Config.peerSessionLinks) return m_Config.peerSessionLinks->RouteTo(peer);
+		if (const auto dial = m_MigrationProbes.find(peer); dial != m_MigrationProbes.end() && dial->second.transport &&
+		    dial->second.answered && dial->second.connection != c_InvalidNetPeerId) return {dial->second.transport.get(), dial->second.connection};
+		if (m_MigrationListener) for (const auto& [connection, owner]: m_PeerListenerBindings)
+			if (owner == peer) return {m_MigrationListener.get(), connection};
+		if (m_Transport) {
+			if (const auto connection = m_RemoteTransports.find(peer); connection != m_RemoteTransports.end()) return {m_Transport, connection->second};
+			for (const auto& [connection, owner]: m_PeerPrimaryBindings) if (owner == peer) return {m_Transport, connection};
+		}
+		return {nullptr, c_InvalidNetPeerId};
+	}
+
 	NetHostMigrationMessage NetLockstepCoordinator::PeerFrameMessage(NetHostMigrationMessageType type) const {
 		NetHostMigrationMessage message;
 		message.type = type;
@@ -223,7 +236,7 @@ namespace RTE {
 				SendPeerFrameMessage(certificate);
 			}
 		}
-		RepairPeerReceiptHoles(nowMs);
+		RepairPeerReceiptGaps(nowMs);
 		TickPeerInputDelay(nowMs);
 		TickPeerAdmin(nowMs);
 		FlushPeerCommittedTails(nowMs);

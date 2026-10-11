@@ -1295,7 +1295,7 @@ namespace RTE {
 	}
 
 	bool NetProtocol::IsMessageTypeInVersion(NetMessageType type, uint16_t headerVersion) {
-		if (type == NetMessageType::ConnectionLease) return headerVersion == c_Version;
+		if (type == NetMessageType::ConnectionLease) return headerVersion == 7 || headerVersion == c_Version;
 		if (headerVersion == 1) {
 			return !IsModuleDigestMessageType(type) && type != NetMessageType::Chat && type != NetMessageType::ParticipantRemoval &&
 			       type != NetMessageType::ParticipantChallenge && type != NetMessageType::ParticipantProof;
@@ -1309,7 +1309,7 @@ namespace RTE {
 		if (headerVersion == 3 || headerVersion == 4) {
 			return type != NetMessageType::RosterRevision && type != NetMessageType::RosterRevisionRequest;
 		}
-		return headerVersion == 5 || headerVersion == c_Version;
+		return headerVersion == 5 || headerVersion == 7 || headerVersion == c_Version;
 	}
 
 	NetMessageType NetProtocol::MessageTypeOf(const NetPayload& payload) {
@@ -1440,7 +1440,7 @@ namespace RTE {
 	bool NetProtocol::CanEncodeAtVersion(uint16_t headerVersion) {
 		// Every older version shares every payload it had with this build, so an older peer can still be told,
 		// in its own envelope, why it was refused.
-		return headerVersion == c_Version || (headerVersion >= 1 && headerVersion <= 5);
+		return headerVersion == c_Version || headerVersion == 7 || (headerVersion >= 1 && headerVersion <= 5);
 	}
 
 	bool NetProtocol::PeekHeaderVersion(const uint8_t* data, size_t size, uint16_t& outVersion) {

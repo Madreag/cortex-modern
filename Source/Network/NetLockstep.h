@@ -516,7 +516,7 @@ namespace RTE {
 	class NetHostMigrationCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x314D4843;
-		static constexpr uint16_t c_Version = 5;
+		static constexpr uint16_t c_Version = 6;
 		static constexpr size_t c_ChunkBytes = 64 * 1024;
 		static constexpr size_t c_MaxFrameBytes = 4 * 512 * 1024 + 256;
 		static constexpr size_t c_MaxPeerTailBytes = c_MaxFrameBytes + 64 * 1024;
@@ -1632,6 +1632,7 @@ namespace RTE {
 		std::map<NetPeerId, uint8_t>& PeerPrimaryBindings() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryBindings : m_PeerPrimaryBindings; }
 		bool& PeerPrimaryListener() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryListener : m_PeerPrimaryListener; }
 		bool HasPeerFrameRoute(uint8_t peer);
+		std::pair<INetTransport*, NetPeerId> PeerFrameRoute(uint8_t peer) const;
 		void NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink);
 		void AdjudicatePeerRoundEnds(uint64_t nowMs);
 		struct PeerRoundEnd { uint64_t frame = 0, atMs = 0; bool closedLink = false; };
@@ -1660,7 +1661,7 @@ namespace RTE {
 		void InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs);
 		void PreparePeerBridgeInputs(uint64_t frame, uint64_t nowMs);
 		void NotePeerInputAccepted(const NetLockstepFrame& frame);
-		void RepairPeerReceiptHoles(uint64_t nowMs);
+		void RepairPeerReceiptGaps(uint64_t nowMs);
 		bool ApplyPeerCommittedTail(uint64_t frame, uint64_t nowMs);
 		void SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame);
 		void FlushPeerCommittedTails(uint64_t nowMs);
@@ -1717,6 +1718,7 @@ namespace RTE {
 		uint64_t m_PeerTailRequestAtMs = 0;
 		std::map<uint64_t, uint64_t> m_PeerTailRequestedUntil;
 		std::map<uint8_t, std::map<uint64_t, uint64_t>> m_PeerTailLastSentMs;
+		std::map<uint8_t, std::pair<uint64_t, uint64_t>> m_PeerTailSendRanges;
 		struct PeerTailOutgoing { std::vector<uint8_t> bytes; uint32_t members = 0, offset = 0; bool compressed = false; };
 		std::map<uint8_t, std::map<uint64_t, PeerTailOutgoing>> m_PeerTailOutgoing;
 		uint64_t m_PeerTailRawBytesSent = 0, m_PeerTailDeferredSends = 0;

@@ -119,21 +119,19 @@ namespace RTE {
 		return through == 0 ? std::nullopt : std::optional(through - 1);
 	}
 
-	void NetLockstepCoordinator::RepairPeerReceiptHoles(uint64_t nowMs) {
+	void NetLockstepCoordinator::RepairPeerReceiptGaps(uint64_t nowMs) {
 		if ((m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) == 0 || m_LastQueuedTargetFrame == UINT64_MAX) return;
 		for (auto& [peer, progress]: m_PeerOwnReceiptProgress) {
 			if ((m_FrameGroupMembers & SeatBit(peer)) == 0 || progress.through >= m_LastQueuedTargetFrame ||
 			    progress.through < EffectiveStartOf(m_Config.localPeerId) || IsSeatReclaimGap(m_Config.localPeerId, progress.through)) continue;
 			uint32_t rtt = 0;
-			if (m_Config.peerSessionLinks) {
-				const auto [wire, route] = m_Config.peerSessionLinks->RouteTo(peer);
-				if (wire && wire->IsPeerPingMeasured(route)) rtt = wire->GetPeerPingMs(route);
-			}
-			// A repeating cumulative receipt names a hole, not a growing RTT.
-			// Repair its exact original input before the consumer drains its
-			// runway. One reliable copy per two round trips avoids a resend flood.
-			const uint64_t retryMs = std::clamp<uint64_t>(2ULL * rtt, 50, 1000);
-			const uint64_t since = std::max(progress.advancedAtMs, progress.repairedAtMs);
+			const auto [wire, route] = PeerFrameRoute(peer);
+			if (wire && wire->IsPeerPingMeasured(route)) rtt = wire->GetPeerPingMs(route);
+			// Start from the original send so the repair arrives inside the buffered runway.
+			const uint64_t retryMs = std::clamp<uint64_t>(rtt + static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)), 50, 1000);
+			const auto sent = m_PeerInputSentAtMs.find(progress.through);
+			if (sent == m_PeerInputSentAtMs.end()) continue;
+			const uint64_t since = std::max(sent->second, progress.repairedAtMs);
 			if (nowMs < since || nowMs - since < retryMs) continue;
 			NetLockstepFrame input;
 			if (!FindLocalInput(progress.through, input)) continue;
@@ -236,7 +234,16 @@ namespace RTE {
 			return true;
 		}
 		if (message.type == NetHostMigrationMessageType::PeerTailRequest) {
-			if (message.bytes.empty()) { heard(); SendPeerCommittedTail(message.senderPeerId, message.frame); }
+			if (message.bytes.empty() && message.frame <= UINT64_MAX - 128 && message.completeFrom > message.frame &&
+			    message.completeFrom - message.frame <= 128) {
+				heard();
+				auto [range, inserted] = m_PeerTailSendRanges.try_emplace(message.senderPeerId, message.frame, message.completeFrom);
+				if (!inserted) {
+					range->second.first = std::min(range->second.first, message.frame);
+					range->second.second = std::max(range->second.second, message.completeFrom);
+				}
+				SendPeerCommittedTail(message.senderPeerId, message.frame);
+			}
 			return true;
 		}
 		if (message.type == NetHostMigrationMessageType::PeerTailMissing) {
@@ -282,7 +289,9 @@ namespace RTE {
 		const size_t byteCap = inputMessage ? NetLockstepCodec::c_InputWindowByteCap : NetHostMigrationCodec::c_MaxPeerTailBytes;
 		if (message.totalBytes == 0 || message.totalBytes > byteCap || message.offset > message.totalBytes ||
 		    message.bytes.size() > message.totalBytes - message.offset) return true;
-		if (message.frame < m_Stats.nextFrame || message.frame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew ||
+		if ((!inputMessage && message.frame < m_Stats.nextFrame) ||
+		    (message.frame >= m_Stats.nextFrame && message.frame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew) ||
+		    (message.frame < m_Stats.nextFrame && m_Stats.nextFrame - message.frame > NetHostMigrationCodec::c_PeerHistoryFrames) ||
 		    (message.type == NetHostMigrationMessageType::PeerInput && message.totalBytes > NetLockstepCodec::c_InputWindowByteCap)) return true;
 		if (!m_PeerFrameIncoming.contains(key) && m_PeerFrameIncoming.size() >= 2 * m_Config.peerCount) return true;
 		auto& incoming = m_PeerFrameIncoming[key];
@@ -403,6 +412,11 @@ namespace RTE {
 		if (offset != body.size() || inputs.back().targetFrame != message.frame) return true;
 		heard();
 		if (owner == m_Config.localPeerId) return true;
+		if (message.frame < m_Stats.nextFrame) {
+			if (const auto through = m_PeerAcceptedThrough.find(owner); through != m_PeerAcceptedThrough.end() && through->second > message.frame)
+				NotePeerInputAccepted(inputs.back());
+			return true;
+		}
 		if (m_PeerPaceStartMs && m_Config.simTickMs > 0) {
 			const uint64_t produced = message.frame - std::min<uint64_t>(message.frame, InputDelayAt(owner, message.frame));
 			if (produced >= m_PeerPaceStartFrame) {

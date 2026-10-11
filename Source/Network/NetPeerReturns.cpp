@@ -50,6 +50,8 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame) {
+		const auto range = m_PeerTailSendRanges.find(peer);
+		if (range == m_PeerTailSendRanges.end()) return;
 		auto& queued = m_PeerTailOutgoing[peer];
 		auto& sent = m_PeerTailLastSentMs[peer];
 		uint64_t queuedBytes = 0;
@@ -61,10 +63,12 @@ namespace RTE {
 			SendPeerFrameMessage(std::move(missing), NetTransportLane::ControlReliable, peer);
 			return;
 		}
-		for (auto kept = first; kept != m_MigrationHistory.end() && kept->first - fromFrame < 32 && m_LastCompletedSimulationTick && kept->first <= *m_LastCompletedSimulationTick; ++kept) {
-			if (const auto applied = m_PeerAppliedThrough.find(peer); applied != m_PeerAppliedThrough.end() && kept->first <= applied->second) continue;
-			if (queued.contains(kept->first)) continue;
-			if (const auto previous = sent.find(kept->first); previous != sent.end() && m_TimingNowMs < previous->second + 1000) continue;
+		for (auto kept = first; kept != m_MigrationHistory.end() && kept->first < range->second.second && m_LastCompletedSimulationTick && kept->first <= *m_LastCompletedSimulationTick; ++kept) {
+			if ((m_PeerAppliedThrough.contains(peer) && kept->first <= m_PeerAppliedThrough.at(peer)) || queued.contains(kept->first) ||
+			    (sent.contains(kept->first) && m_TimingNowMs < sent.at(kept->first) + 1000)) {
+				range->second.first = std::max(range->second.first, kept->first + 1);
+				continue;
+			}
 			// Bound application work even when several pipelined requests
 			// overlap. A large record resumes at its last queued chunk.
 			if (queued.size() >= 128 || queuedBytes >= 4 * 1024 * 1024) break;
@@ -105,13 +109,24 @@ namespace RTE {
 			}
 			const auto membership = m_FrameGroupChanges.upper_bound(kept->first);
 			const uint32_t members = membership == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(membership)->second;
+			if (!queued.empty() && queuedBytes + body.size() > 4 * 1024 * 1024) break;
 			queuedBytes += body.size();
 			queued.emplace(kept->first, PeerTailOutgoing{std::move(body), members, 0, compressedBody});
+			range->second.first = std::max(range->second.first, kept->first + 1);
 		}
 	}
 
 	void NetLockstepCoordinator::FlushPeerCommittedTails(uint64_t nowMs) {
 		constexpr uint64_t reliableQueueCap = 256 * 1024;
+		for (auto range = m_PeerTailSendRanges.begin(); range != m_PeerTailSendRanges.end();) {
+			if (m_RemovedPeers.contains(range->first) || range->second.first >= range->second.second) {
+				range = m_PeerTailSendRanges.erase(range);
+				continue;
+			}
+			if (m_LastCompletedSimulationTick && range->second.first <= *m_LastCompletedSimulationTick)
+				SendPeerCommittedTail(range->first, range->second.first);
+			++range;
+		}
 		for (auto& [peer, queued]: m_PeerTailOutgoing) {
 			const uint64_t applied = m_PeerAppliedThrough.contains(peer) ? m_PeerAppliedThrough.at(peer) : 0;
 			queued.erase(queued.begin(), queued.upper_bound(applied));
@@ -122,10 +137,8 @@ namespace RTE {
 				auto& body = item->second;
 				const size_t end = std::min(body.bytes.size(), body.offset + NetHostMigrationCodec::c_ChunkBytes);
 				NetTransportQueueStats queue;
-				if (m_Config.peerSessionLinks) {
-					const auto [wire, route] = m_Config.peerSessionLinks->RouteTo(peer);
-					if (wire) queue = wire->GetPeerQueueStats(route);
-				}
+				const auto [wire, route] = PeerFrameRoute(peer);
+				if (wire) queue = wire->GetPeerQueueStats(route);
 				if (queue.reliableBytes + end - body.offset + 512 > reliableQueueCap) { ++m_PeerTailDeferredSends; break; }
 				auto tail = PeerFrameMessage(NetHostMigrationMessageType::PeerTail);
 				tail.frame = item->first; tail.voterMask = body.members; tail.completeFrom = body.compressed ? 1 : 0;
@@ -145,11 +158,7 @@ namespace RTE {
 		if (nowMs < m_PeerTailRequestAtMs) return;
 		m_PeerTailRequestAtMs = nowMs + 25;
 		m_PeerTailRequestedUntil.erase(m_PeerTailRequestedUntil.begin(), m_PeerTailRequestedUntil.lower_bound(m_Stats.nextFrame));
-		// Keep four existing 32-frame replies in flight. Waiting until the
-		// consumer drains each reply spends another round trip every 32 ticks
-		// and can keep a relay reader permanently outside its return runway.
-		// Requests name only history a donor already reports as applied; every
-		// received frame still needs the same witnesses and prefix checks.
+		// A bounded subscription includes future history, sent only after the donor displays it.
 		const uint64_t horizon = m_Stats.nextFrame + std::min<uint64_t>(128, NetLockstepCodec::c_MaxFutureFrameSkew);
 		for (uint64_t frame = m_Stats.nextFrame; frame < horizon;) {
 			const auto pending = m_PeerTailRequestedUntil.find(frame);
@@ -164,6 +173,8 @@ namespace RTE {
 			if (donor == 0) break;
 			auto request = PeerFrameMessage(NetHostMigrationMessageType::PeerTailRequest);
 			request.frame = frame;
+			const uint64_t end = std::min(horizon, frame + 128);
+			request.completeFrom = end;
 			// A single donor normally carries the group's signed witnesses.
 			// A missing witness or lost reply retries across all eligible donors;
 			// a lone authenticated sender still cannot certify a minority tail.
@@ -174,7 +185,6 @@ namespace RTE {
 					SendPeerFrameMessage(request, NetTransportLane::ControlReliable, peer); ++m_PeerTailRequests;
 				}
 			}
-			const uint64_t end = std::min({horizon, frame + 32, through + 1});
 			for (; frame < end; ++frame) m_PeerTailRequestedUntil[frame] = nowMs + std::min<uint64_t>(retryMs, 1000);
 		}
 		if ((m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) == 0 && nowMs >= m_PeerTailLogAtMs) {
@@ -202,9 +212,7 @@ namespace RTE {
 			Fail(NetLockstepStopReason::ProtocolError, frame, "invalid committed peer tail"); return false;
 		}
 		StoreMigrationFrame(frame, kept->second);
-		// The certified history also fills receipt gaps in the original senders'
-		// streams. Without this, reading a tick from the tail leaves their next
-		// live input waiting forever behind an already displayed tick.
+		// Certified history advances receipts for the original inputs it contains.
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			if (peer == m_Config.localPeerId || !IsRemoteRequiredForFrame(peer, frame)) continue;
 			if (const auto bridge = m_PeerBridges.find(peer); bridge != m_PeerBridges.end() && frame >= bridge->second.fromFrame &&
@@ -248,11 +256,8 @@ namespace RTE {
 			if (reference != m_Config.localPeerId && applied != m_PeerAppliedThrough.end() && observed != m_PeerAppliedAtMs.end() &&
 			    m_TimingNowMs >= observed->second && m_TimingNowMs - observed->second <= 250) {
 				double transit = 0.0;
-				if (m_Config.peerSessionLinks) {
-					const auto [wire, route] = m_Config.peerSessionLinks->RouteTo(reference);
-					if (wire && wire->IsPeerPingMeasured(route)) transit = wire->GetPeerPingMs(route) / 2.0;
-				} else if (const auto path = m_PeerReceiptDelaySamples.find(reference); path != m_PeerReceiptDelaySamples.end())
-					transit = std::min<uint32_t>(path->second.P95Ms(), 2 * c_NetInputJitterReserveMs) / 2.0;
+				const auto [wire, route] = PeerFrameRoute(reference);
+				if (wire && wire->IsPeerPingMeasured(route)) transit = wire->GetPeerPingMs(route) / 2.0;
 				const uint64_t elapsed = static_cast<uint64_t>((m_TimingNowMs - observed->second + transit) / m_Config.simTickMs);
 				if (applied->second > *m_LastCompletedSimulationTick + 1 ||
 				    elapsed > *m_LastCompletedSimulationTick + 1 - std::min(applied->second, *m_LastCompletedSimulationTick + 1)) return true;
