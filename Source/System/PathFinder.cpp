@@ -2161,6 +2161,62 @@ int PathFinder::RunHorizonGridSelfTest() {
 	}
 	std::cout << Tag << " PASS two-peer-determinism" << std::endl;
 
+	// A peer whose local solver held up the live update still has the same committed terrain.
+	{
+		PathFinder snapshotA;
+		PathFinder snapshotB;
+		snapshotA.TestInstallGrid(8, 4, 20, &air);
+		snapshotB.TestInstallGrid(8, 4, 20, &air);
+		snapshotA.QueueHorizonDelta(10, 4, wall, blocked);
+		snapshotB.QueueHorizonDelta(10, 4, wall, blocked);
+		snapshotA.TestApplyLiveUpdate(wall, blocked);
+		snapshotB.TestHoldPathingRequest();
+		snapshotB.TestApplyLiveUpdate(wall, blocked);
+		snapshotB.TestReleasePathingRequest();
+		snapshotA.CommitHorizonThrough(14);
+		snapshotB.CommitHorizonThrough(14);
+		const auto committedA = snapshotA.TestViewMaterials(wall, snapshotA.TestHorizonGeneration());
+		const auto committedB = snapshotB.TestViewMaterials(wall, snapshotB.TestHorizonGeneration());
+		if (committedA != blocked || committedB != blocked) return fail("shared snapshot fixture did not commit the same terrain");
+		const Box nextBox(Vector(50.0F, 30.0F), 40.0F, 40.0F);
+		snapshotA.PinHorizonFromLive(nextBox);
+		snapshotB.PinHorizonFromLive(nextBox);
+		std::vector<HorizonNodeSnapshot> nodesA;
+		std::vector<HorizonNodeSnapshot> nodesB;
+		snapshotA.CaptureHorizonNodeSnapshots(nextBox, nodesA);
+		snapshotB.CaptureHorizonNodeSnapshots(nextBox, nodesB);
+		bool sameSnapshots = nodesA.size() == nodesB.size();
+		for (size_t index = 0; sameSnapshots && index < nodesA.size(); ++index) {
+			sameSnapshots = nodesA[index].nodeId == nodesB[index].nodeId && nodesA[index].materials == nodesB[index].materials;
+		}
+		std::cout << Tag << (sameSnapshots ? " PASS" : " FAIL") << " shared-snapshot-costs" << std::endl;
+
+		// A later terrain change can be queued before the earlier one commits. Its live update must not show early.
+		PathFinder overlapA;
+		PathFinder overlapB;
+		overlapA.TestInstallGrid(8, 4, 20, &air);
+		overlapB.TestInstallGrid(8, 4, 20, &air);
+		std::array<const Material*, 8> cleared{};
+		cleared.fill(&air);
+		overlapA.QueueHorizonDelta(10, 4, wall, blocked);
+		overlapB.QueueHorizonDelta(10, 4, wall, blocked);
+		overlapA.QueueHorizonDelta(12, 4, wall, cleared);
+		overlapB.QueueHorizonDelta(12, 4, wall, cleared);
+		overlapA.TestApplyLiveUpdate(wall, blocked);
+		overlapA.CommitHorizonThrough(14);
+		overlapB.CommitHorizonThrough(14);
+		overlapA.TestApplyLiveUpdate(wall, cleared);
+		const auto beforeNextA = overlapA.TestViewMaterials(wall, overlapA.TestHorizonGeneration());
+		const auto beforeNextB = overlapB.TestViewMaterials(wall, overlapB.TestHorizonGeneration());
+		overlapA.CommitHorizonThrough(16);
+		overlapB.CommitHorizonThrough(16);
+		const auto afterNextA = overlapA.TestViewMaterials(wall, overlapA.TestHorizonGeneration());
+		const auto afterNextB = overlapB.TestViewMaterials(wall, overlapB.TestHorizonGeneration());
+		const bool sameCommits = beforeNextA == blocked && beforeNextB == blocked && afterNextA == cleared && afterNextB == cleared;
+		std::cout << Tag << (sameCommits ? " PASS" : " FAIL") << " overlapping-terrain-updates" << std::endl;
+		if (!sameSnapshots || !sameCommits) return 1;
+	}
+
 	// (ii) a change at T is visible at T+H and not at T+H-1 on both peers, and the live grid never carries it.
 	ResetHorizonWaitStats();
 	PathFinder horizonA;

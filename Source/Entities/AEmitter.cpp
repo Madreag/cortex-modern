@@ -9,6 +9,12 @@
 #include "PresetMan.h"
 #include "SoundContainer.h"
 #include "PostProcessMan.h"
+#include "ScenarioRunner.h"
+#include "System.h"
+
+#include <cstdlib>
+#include <locale>
+#include <sstream>
 
 using namespace RTE;
 
@@ -653,6 +659,18 @@ void AEmitter::Update() {
 				// We don't consider extra particles for our emission count, so add prior to multiply
 				emissionCountTotal += emissionCount;
 				emissionCount *= emission->GetParticleCount();
+				static const bool recordCounts = std::getenv("CC_TEST_EMISSION_COUNTS") != nullptr;
+				if (recordCounts && ScenarioRunner::IsLockstepControllerSyncActive() && emissionCount > 4096) {
+					std::ostringstream line;
+					line.imbue(std::locale::classic());
+					line << "[emission-count] tick=" << ScenarioRunner::GetLockstepAppliedFrame() << " uid=" << GetUniqueID()
+					     << " emitter=" << GetModuleAndPresetName() << " root=" << pRootParent->GetModuleAndPresetName()
+					     << " root_uid=" << pRootParent->GetUniqueID() << " count=" << emissionCount
+					     << " was_emitting=" << m_WasEmitting << " burst=" << m_BurstTriggered << " burst_size=" << emission->GetBurstSize()
+					     << std::hexfloat << " age_ms=" << GetAge() << " elapsed_s=" << m_LastEmitTmr.GetElapsedSimTimeS()
+					     << " rate=" << currentPPM << " accumulator=" << emission->m_Accumulator << " throttle=" << throttleFactor;
+					System::PrintDiagnosticLine(line.str());
+				}
 
 				pParticle = 0;
 				emitVel.Reset();
