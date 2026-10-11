@@ -248,17 +248,12 @@ namespace RTE {
 	}
 	void* CheckpointNativeSnapshot::AllocateFrozen(size_t bytes, size_t alignment) {
 		static constexpr size_t c_StorageBytes = size_t{256} << 10;
-		if (bytes > c_StorageBytes / 8 || alignment > alignof(std::max_align_t)) return nullptr;
-		struct Cursor { uint64_t snapshot = 0; uintptr_t at = 0, end = 0; };
-		thread_local Cursor cursor;
-		if (cursor.snapshot != m_Serial) cursor = {m_Serial, 0, 0};
-		uintptr_t at = (cursor.at + alignment - 1) & ~(alignment - 1);
-		if (!cursor.at || at + bytes > cursor.end) {
-			std::shared_ptr<void> storage = CheckpointBuffer::AllocateCaptureBytes(c_StorageBytes);
+		const auto own = [&](size_t size, size_t align) {
+			std::shared_ptr<void> storage = CheckpointBuffer::AllocateCaptureBytes(size, align);
 			if (CheckpointNativeStorage::Reading()) {
 				const auto values = CheckpointNativeStorage::CurrentViews().privateValues;
 				void* data = storage.get();
-				CheckpointNativeStorage::RememberPrivate(data, c_StorageBytes);
+				CheckpointNativeStorage::RememberPrivate(data, size, true);
 				try {
 					storage = std::shared_ptr<void>(data, [keep = storage, values](void* address) noexcept {
 						CheckpointNativeStorage::ForgetPrivate(values, address);
@@ -271,6 +266,15 @@ namespace RTE {
 				std::lock_guard lock(shard.mutex);
 				shard.storage.push_back(std::move(storage));
 			}
+			return base;
+		};
+		if (bytes > c_StorageBytes / 8 || alignment > alignof(std::max_align_t)) return reinterpret_cast<void*>(own(bytes, alignment));
+		struct Cursor { uint64_t snapshot = 0; uintptr_t at = 0, end = 0; };
+		thread_local Cursor cursor;
+		if (cursor.snapshot != m_Serial) cursor = {m_Serial, 0, 0};
+		uintptr_t at = (cursor.at + alignment - 1) & ~(alignment - 1);
+		if (!cursor.at || at + bytes > cursor.end) {
+			const uintptr_t base = own(c_StorageBytes, alignof(std::max_align_t));
 			cursor.end = base + c_StorageBytes;
 			at = (base + alignment - 1) & ~(alignment - 1);
 		}

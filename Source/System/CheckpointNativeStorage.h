@@ -86,7 +86,9 @@ namespace RTE {
 		static bool WorldEnabled() noexcept;
 		static bool SetWorldEnabled(bool enabled) noexcept;
 		static bool Reading() { return s_Read != nullptr; }
-		static void RememberPrivate(void* address, size_t bytes);
+		static void RememberPrivate(void* address, size_t bytes, bool borrowed = false);
+		static void BorrowPrivate(const void* address) noexcept;
+		static bool PrivateBorrowed(const void* address) noexcept;
 		static bool ForgetPrivate(void* address) noexcept;
 		static bool ForgetPrivate(const std::shared_ptr<PrivateValues>& values, void* address) noexcept;
 		static const void* PrivateAllocation(const void* address) noexcept;

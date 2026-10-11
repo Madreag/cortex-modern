@@ -10177,7 +10177,9 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		bool exact = false;
 		{
 			const auto [heapSource, heapBytes] = heap.NativeBytes();
-			const std::array roots{CheckpointNativeStorage::RootRange{heapSource, heapBytes.data(), heapBytes.size()}};
+			Vector returnedSource(29, 31);
+			CheckpointNativeStorage::Root<Vector> returnedRoot(&returnedSource); returnedRoot.Freeze();
+			const std::array roots{CheckpointNativeStorage::RootRange{heapSource, heapBytes.data(), heapBytes.size()}, returnedRoot.Range()};
 			CheckpointNativeStorage::ReadScope read(pages->Pages(), roots);
 			CheckpointNativeStorage::CaptureScope privateStorage;
 			std::unordered_map<const void*, std::unique_ptr<Vector>> vectors;
@@ -10191,6 +10193,15 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 				objects.Prepare(); objects.Values().Push(heap.GlobalValue("savedNativeGetter")); objects.Values().Finish();
 				if (lua_pcall(state, 0, 3, 0)) throw std::runtime_error(lua_tostring(state, -1));
 				exact = lua_tointeger(state, -3) == 18 && lua_tointeger(state, -2) == 18 && lua_tointeger(state, -1) == 8;
+				using Handle = luabind::detail::object_rep;
+				auto* type = luabind::detail::class_registry::get_registry(state)->find_class(LUABIND_TYPEID(Vector));
+				{
+					Handle first(&returnedSource, type, Handle::owner | Handle::constant, +[](void* value) { static_cast<Vector*>(value)->m_X = 991; });
+					Handle second(&returnedSource, type, 0, nullptr);
+					exact = exact && first.ptr() == second.ptr() && first.ptr() != &returnedSource && first.flags() == (Handle::owner | Handle::constant);
+					static_cast<Vector*>(first.ptr())->m_X = 37;
+				}
+				exact = exact && returnedSource.m_X == 29 && vectors.at(&returnedSource)->m_X == 37;
 				lua_settop(state, 0);
 			});
 			worker.reset();

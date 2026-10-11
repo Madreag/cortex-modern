@@ -269,6 +269,7 @@ namespace RTE {
 				if constexpr (requires { T::PrepareCheckpointNative(*source, static_cast<T*>(memory), *this); })
 					T::PrepareCheckpointNative(*source, static_cast<T*>(memory), *this);
 				::new(memory) T(*source, *this);
+				CheckpointNativeStorage::BorrowPrivate(memory);
 				owner.first = memory;
 				return static_cast<T*>(memory);
 			} catch (...) {
@@ -359,6 +360,7 @@ namespace RTE {
 				struct Restore { Binding previous; ~Restore() { t_Binding = previous; } } restore{previous};
 				new(memory) T(source, *this);
 				constructed = true;
+				CheckpointNativeStorage::BorrowPrivate(memory);
 				target->m_CheckpointAllocation = frozenStorage ? FrozenStorageMark(memory) : memory;
 				return target;
 			} catch (...) {
@@ -372,7 +374,7 @@ namespace RTE {
 			}
 		}
 
-		/// Storage for one frozen object that lives until the snapshot ends, or null when the object is too large for it.
+		/// Owned storage for saved objects, including separate blocks for large or aligned values.
 		void* AllocateFrozen(size_t bytes, size_t alignment);
 		/// What a frozen object built in snapshot storage records as its allocation; deleting it then frees nothing.
 		static void* FrozenStorageMark(void* memory) { return static_cast<char*>(memory) + 1; }
@@ -403,6 +405,7 @@ namespace RTE {
 			if (!claimed) return static_cast<T*>(winner);
 			try { RememberReadValues(source, value.get()); }
 			catch (...) { m_Values.Erase(identity); throw; }
+			CheckpointNativeStorage::BorrowPrivate(value.get());
 			owner.first = value.release();
 			return static_cast<T*>(owner.first);
 		}

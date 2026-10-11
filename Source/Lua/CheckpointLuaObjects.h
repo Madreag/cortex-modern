@@ -13,7 +13,17 @@ namespace RTE::CheckpointLua {
 		using Copy = std::function<void*(const luabind::detail::class_rep*, const void*)>;
 		SavedObjects(lua_State* state, Snapshot heap, const BindingMetadata::Lease& bindings, Copy copy) :
 		    m_State(state), m_Heap(std::move(heap)), m_Bindings(m_Heap, &bindings), m_Copy(std::move(copy)),
-		    m_Values(state, m_Heap, [this](lua_State*, const TValue& value) { PushNative(value); }) {}
+		    m_Values(state, m_Heap, [this](lua_State*, const TValue& value) { PushNative(value); }),
+		    m_PreviousCopies(luabind::detail::saved_objects) {
+			luabind::detail::saved_objects = {this, [](void* owner, luabind::detail::class_rep* type, void* value, bool& borrowed) -> void* {
+				if (CheckpointNativeStorage::Private(value)) { borrowed = CheckpointNativeStorage::PrivateBorrowed(value); return value; }
+				borrowed = true;
+				return static_cast<SavedObjects*>(owner)->CopyNative(type, CheckpointNativeStorage::Original(value));
+			}};
+		}
+		~SavedObjects() { luabind::detail::saved_objects = m_PreviousCopies; }
+		SavedObjects(const SavedObjects&) = delete;
+		SavedObjects& operator=(const SavedObjects&) = delete;
 		SavedValues& Values() { return m_Values; }
 		void Prepare() {
 			const auto state = m_Heap.Read(m_Heap.State());
@@ -49,7 +59,13 @@ namespace RTE::CheckpointLua {
 		FrozenBindings m_Bindings;
 		Copy m_Copy;
 		SavedValues m_Values;
+		luabind::detail::saved_object_copy m_PreviousCopies;
 		std::unordered_map<const luabind::detail::class_rep*, luabind::detail::class_rep*> m_Classes;
+		void* CopyNative(const luabind::detail::class_rep* type, const void* pointer) {
+			void* value = m_Copy(type, pointer);
+			CheckpointNativeStorage::BorrowPrivate(value);
+			return value;
+		}
 		TValue DefaultMembers(const luabind::detail::class_rep* source) const { return m_Heap.RegistryValue(m_Bindings.Class(source)->checkpoint_default_table_reference()); }
 		bool DeclaredClass(const GCudata* data) const {
 			if (m_Heap.Read(&data->len) != sizeof(luabind::detail::class_rep)) return false;
@@ -99,7 +115,7 @@ namespace RTE::CheckpointLua {
 			PushClass(type);
 			auto* targetClass = static_cast<luabind::detail::class_rep*>(lua_touserdata(m_State, -1));
 			lua_pop(m_State, 1);
-			void* native = source->ptr() ? m_Copy(source->crep(), source->ptr()) : nullptr;
+			void* native = source->ptr() ? CopyNative(source->crep(), source->ptr()) : nullptr;
 			void* storage = lua_newuserdata(m_State, sizeof(luabind::detail::object_rep));
 			auto* target = new(storage) luabind::detail::object_rep(native, targetClass, source->flags() & ~luabind::detail::object_rep::checkpoint_trap, [](void*) {});
 			const int destination = lua_gettop(m_State);

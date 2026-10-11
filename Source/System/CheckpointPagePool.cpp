@@ -708,7 +708,8 @@ std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> CheckpointNativ
 
 struct CheckpointNativeStorage::PrivateValues {
 	std::mutex mutex;
-	std::map<uintptr_t, size_t> ranges;
+	struct Range { size_t bytes; bool borrowed; };
+	std::map<uintptr_t, Range> ranges;
 };
 
 struct CheckpointNativeStorage::ReadState : std::enable_shared_from_this<ReadState> {
@@ -735,11 +736,11 @@ CheckpointNativeStorage::ReadScope::ReadScope(ReadViews views) : m_Capture(views
 	s_Read = m_State.get();
 }
 
-void CheckpointNativeStorage::RememberPrivate(void* address, size_t bytes) {
+void CheckpointNativeStorage::RememberPrivate(void* address, size_t bytes, bool borrowed) {
 	if (!s_Read || !address) throw std::logic_error("private native values need their saver scope");
 	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 	std::lock_guard lock(s_Read->privateValues->mutex);
-	if (!s_Read->privateValues->ranges.emplace(reinterpret_cast<uintptr_t>(address), bytes).second)
+	if (!s_Read->privateValues->ranges.emplace(reinterpret_cast<uintptr_t>(address), PrivateValues::Range{bytes, borrowed}).second)
 		throw std::logic_error("private native storage is already recorded");
 }
 
@@ -767,7 +768,38 @@ const void* CheckpointNativeStorage::PrivateAllocation(const void* address) noex
 	const auto after = ranges.upper_bound(pointer);
 	if (after == ranges.begin()) return nullptr;
 	const auto value = std::prev(after);
-	return pointer - value->first < value->second ? reinterpret_cast<const void*>(value->first) : nullptr;
+	return pointer - value->first < value->second.bytes ? reinterpret_cast<const void*>(value->first) : nullptr;
+}
+
+void CheckpointNativeStorage::BorrowPrivate(const void* address) noexcept {
+	if (!s_Read || !address) return;
+	const auto pointer = reinterpret_cast<uintptr_t>(address);
+	std::lock_guard lock(s_Read->privateValues->mutex);
+	auto& ranges = s_Read->privateValues->ranges;
+	const auto after = ranges.upper_bound(pointer);
+	if (after != ranges.begin()) {
+		const auto value = std::prev(after);
+		if (pointer - value->first < value->second.bytes) value->second.borrowed = true;
+	}
+}
+
+bool CheckpointNativeStorage::PrivateBorrowed(const void* address) noexcept {
+	if (!s_Read || !address) return false;
+	const auto pointer = reinterpret_cast<uintptr_t>(address);
+	{
+		std::lock_guard lock(s_Read->privateValues->mutex);
+		const auto& ranges = s_Read->privateValues->ranges;
+		const auto after = ranges.upper_bound(pointer);
+		if (after != ranges.begin()) {
+			const auto value = std::prev(after);
+			if (pointer - value->first < value->second.bytes) return value->second.borrowed;
+		}
+	}
+	for (const RootRange& root: s_Read->roots) {
+		const auto start = reinterpret_cast<uintptr_t>(root.view);
+		if (root.privateValues && pointer >= start && pointer - start < root.bytes) return true;
+	}
+	return false;
 }
 
 bool CheckpointNativeStorage::Private(const void* address, size_t bytes) noexcept {
@@ -779,7 +811,7 @@ bool CheckpointNativeStorage::Private(const void* address, size_t bytes) noexcep
 		const auto after = ranges.upper_bound(pointer);
 		if (after != ranges.begin()) {
 			const auto value = std::prev(after);
-			if (pointer - value->first < value->second && bytes <= value->second - (pointer - value->first)) return true;
+			if (pointer - value->first < value->second.bytes && bytes <= value->second.bytes - (pointer - value->first)) return true;
 		}
 	}
 	for (const RootRange& root: s_Read->roots) {
