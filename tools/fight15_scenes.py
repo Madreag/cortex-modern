@@ -267,7 +267,7 @@ def scene_checks(peer, steps):
     return checks
 
 
-def buy(peer, fire=True, landing_offset=None, control_on_delivery=False):
+def buy(peer, fire=True, landing_offset=None, craft="Base.rte/Rocket MK2"):
     steps = [dict(op="game_mouse", button="right", down=True), wait(renders=3, sim_advanced=2),
              dict(op="wait_scene", input_player=0, equals=dict(pie_visible=True)),
              dict(op="pie_point", input_player=0, command=6),
@@ -279,13 +279,13 @@ def buy(peer, fire=True, landing_offset=None, control_on_delivery=False):
     steps += capture(f"shop-{peer}")
     steps += [dict(op="assert_buy", input_player=0, equals=dict(visible=True, enabled=True, buy_allowed=True)),
               menu("activate OrderClearButton", scope="buy", input_player=0),
-              menu("activate CraftTab", scope="buy", input_player=0), dict(op="shop_pick", input_player=0, preset="Base.rte/Rocket MK2"),
+              menu("activate CraftTab", scope="buy", input_player=0), dict(op="shop_pick", input_player=0, preset=craft),
               menu("activate BodiesTab", scope="buy", input_player=0), dict(op="shop_pick", input_player=0, preset="Coalition.rte/Soldier Light"),
               menu("activate GunsTab", scope="buy", input_player=0), dict(op="shop_pick", input_player=0, preset="Coalition.rte/Assault Rifle")]
     steps += capture(f"order-{peer}")
     landing = dict(op="landing_zone_move", input_player=0, within_ms=15000)
     if landing_offset is not None: landing["offset_x"] = landing_offset
-    steps += [dict(op="assert_buy", input_player=0, equals=dict(cart=["Coalition.rte/Soldier Light", "Coalition.rte/Assault Rifle"], craft="Base.rte/Rocket MK2", passengers=1), remember="order"),
+    steps += [dict(op="assert_buy", input_player=0, equals=dict(cart=["Coalition.rte/Soldier Light", "Coalition.rte/Assault Rifle"], craft=craft, passengers=1), remember="order"),
               dict(op="assert_control", scope="buy", input_player=0, control="BuyButton", equals=dict(visible=True, enabled=True), fits=True, inside="BuyGUIBox"),
               menu("activate BuyButton", scope="buy", input_player=0),
               landing]
@@ -299,11 +299,10 @@ def buy(peer, fire=True, landing_offset=None, control_on_delivery=False):
               dict(op="wait_scene", input_player=0, delivered="Coalition.rte/Soldier Light")]
     select = [dict(op="actor_next_until", input_player=0, preset="Coalition.rte/Soldier Light"),
               dict(op="wait_scene", input_player=0, equals=dict(preset="Coalition.rte/Soldier Light", weapon="Coalition.rte/Assault Rifle"))]
-    if control_on_delivery: steps += select
     steps += capture(f"arrival-{peer}")
     steps += [dict(op="assert_scene", input_player=0, delivered="Coalition.rte/Soldier Light", equals=dict(alive=True)),
               dict(op="assert_buy", input_player=0, equals=dict(visible=False, enabled=False))]
-    if not control_on_delivery: steps += select
+    steps += select
     if fire:
         steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset="Coalition.rte/Soldier Light", weapon="Coalition.rte/Assault Rifle"), remember="before-fire")]
         steps += [dict(op="game_mouse", down=True), wait(renders=5, sim_advanced=12)]
@@ -348,9 +347,9 @@ def game_scenes():
          game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner),
          scene_checks("host", host) + scene_checks("joiner", joiner))
 
-    # Both brains and the delivered soldier stand on the plateau, with no bank across the shot.
-    # Take control as the soldier arrives, before its AI can shoot during the capture wait.
-    host = place("host", x=0.4) + buy("host", fire=False, landing_offset=120, control_on_delivery=True)
+    # The plateau gives the shot a clear path; the dropship keeps its engines beside the passenger.
+    # Let the passenger finish landing before taking control.
+    host = place("host", x=0.4) + buy("host", fire=False, landing_offset=120, craft="Base.rte/Dropship MK1")
     joiner = place("joiner", x=0.48)
     host += [dict(op="aim_brain", input_player=0, target_player=1)]
     host += capture("aimed-at-brain-host") + [dict(op="assert_scene", input_player=0,
