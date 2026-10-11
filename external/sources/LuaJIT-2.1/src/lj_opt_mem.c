@@ -109,6 +109,8 @@ static AliasRet aa_ahref(jit_State *J, IRIns *refa, IRIns *refb)
   IRRef ta, tb;
   if (refa == refb)
     return ALIAS_MUST;  /* Shortcut for same refs. */
+  /* Saved-key calls may point into any hash part and must retain intervening stores. */
+  if (refa->o == IR_CALLS || refb->o == IR_CALLS) return ALIAS_MAY;
   keya = IR(ka);
   if (keya->o == IR_KSLOT) { ka = keya->op1; keya = IR(ka); }
   keyb = IR(kb);
@@ -165,6 +167,7 @@ static TRef fwd_ahload(jit_State *J, IRRef xref)
   IRRef lim = xref;  /* Search limit. */
   IRRef ref;
 
+  if (xr->o == IR_CALLS) return 0;
   /* Search for conflicting stores. */
   ref = J->chain[fins->o+IRDELTA_L2S];
   while (ref > xref) {
@@ -403,6 +406,7 @@ TRef LJ_FASTCALL lj_opt_fwd_alen(jit_State *J)
   while (ref > lim) {
     IRIns *store = IR(ref);
     IRIns *href = IR(store->op1);
+    if (href->o == IR_CALLS) goto doemit;
     IRIns *key = IR(href->op2);
     if (irt_isnum(key->o == IR_KSLOT ? IR(key->op1)->t : key->t)) {
       lim = ref;  /* Conflicting store found, limits search for ALEN. */
@@ -955,6 +959,7 @@ int lj_opt_fwd_wasnonnil(jit_State *J, IROpT loadop, IRRef xref)
       /* A nil store MAY alias, but a non-nil store MUST alias. */
       return !irt_isnil(store->t);
     } else if (irt_isnil(store->t)) {  /* Must check any nil store. */
+      if (IR(store->op1)->o == IR_CALLS || IR(xref)->o == IR_CALLS) return 0;
       IRRef skref = IR(store->op1)->op2;
       IRRef xkref = IR(xref)->op2;
       /* Same key type MAY alias. Need ALOAD check due to multiple int types. */

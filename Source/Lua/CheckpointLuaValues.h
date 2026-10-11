@@ -4,6 +4,11 @@
 #include "CheckpointLuaPrototype.h"
 #include "CheckpointLuaThread.h"
 
+extern "C" {
+#include "lj_tab.h"
+}
+
+#include <bit>
 #include <functional>
 #include <optional>
 #include <unordered_map>
@@ -14,16 +19,21 @@ namespace RTE::CheckpointLua {
 	class SavedValues {
 	public:
 		using Native = std::function<void(lua_State*, const TValue&)>;
-		SavedValues(lua_State* state, Snapshot heap, Native native) : m_State(state), m_Heap(std::move(heap)), m_Prototypes(m_Heap), m_Native(std::move(native)) {}
+		SavedValues(lua_State* state, Snapshot heap, Native native) : m_State(state), m_Heap(std::move(heap)), m_Prototypes(m_Heap), m_Native(std::move(native)) {
+			PrepareStrings();
+			const luaJIT_SavedKeys keys{state, this, KeyHash};
+			m_PreviousKeys = luaJIT_set_saved_keys(&keys);
+		}
 		~SavedValues() {
 			for (const auto& [source, reference]: m_Values) luaL_unref(m_State, LUA_REGISTRYINDEX, reference);
 			for (const auto& [value, reference]: m_Returned) luaL_unref(m_State, LUA_REGISTRYINDEX, reference);
+			luaJIT_set_saved_keys(&m_PreviousKeys);
 		}
 		SavedValues(const SavedValues&) = delete;
 		SavedValues& operator=(const SavedValues&) = delete;
 
 		void Remember(const TValue& source, int index) {
-			if (!tvisgcv(&source) || tvisstr(&source)) throw std::logic_error("saved identity needs an object");
+			if (!tvisgcv(&source)) throw std::logic_error("saved identity needs an object");
 			index = Absolute(index);
 			const auto found = m_Values.find(gcval(&source));
 			if (found != m_Values.end()) throw std::logic_error("saved identity is already remembered");
@@ -50,8 +60,7 @@ namespace RTE::CheckpointLua {
 			if (!tvistab(&source) || !lua_istable(m_State, destination)) throw std::logic_error("saved table copy needs two tables");
 			destination = Absolute(destination);
 			if (!Remembered(source)) Remember(source, destination);
-			lua_pushnil(m_State);
-			while (lua_next(m_State, destination)) { lua_pop(m_State, 1); lua_pushvalue(m_State, -1); lua_pushnil(m_State); lua_rawset(m_State, destination); }
+			lj_tab_clear(m_State, tabV(m_State->base + destination - 1));
 			TableContents(source, destination);
 		}
 		std::optional<TValue> Original(int index) const {
@@ -68,6 +77,7 @@ namespace RTE::CheckpointLua {
 			if (tvisint(&value)) { lua_pushinteger(m_State, intV(&value)); return; }
 			if (tvisnum(&value)) { lua_pushnumber(m_State, numV(&value)); return; }
 			if (tvisstr(&value)) {
+				if (const auto found = m_Values.find(gcval(&value)); found != m_Values.end()) { lua_rawgeti(m_State, LUA_REGISTRYINDEX, found->second); return; }
 				const auto* string = strV(&value);
 				const auto bytes = m_Heap.ReadBytes(string + 1, m_Heap.Read(&string->len));
 				lua_pushlstring(m_State, reinterpret_cast<const char*>(bytes.data()), bytes.size()); return;
@@ -157,6 +167,20 @@ namespace RTE::CheckpointLua {
 			lua_State* const live = source->State();
 			ProtectedCall(live, [&] {
 				luaL_openlibs(live);
+				if (luaL_dostring(live, R"lua(
+savedOrder={}
+for i=1,48 do savedOrder['slot'..i]=i end
+for i=1,12 do savedOrder[3*i]=100+i end
+savedOrder.slot7=nil; savedOrder.slot31=nil
+savedKey={}; savedFunctionKey=function() return 23 end
+savedOrder[savedKey]=777; savedOrder[savedFunctionKey]=778
+savedWalk=function() local values={} for _,value in pairs(savedOrder) do values[#values+1]=value end return table.concat(values,',') end
+savedRead=function(key) local total=0 for i=1,192 do total=total+savedOrder[key] end return total end
+for i=1,80 do assert(savedRead(savedKey)==777*192) end
+savedOrderExpected=savedWalk()
+savedOrderThread=coroutine.create(function() for _,value in pairs(savedOrder) do coroutine.yield(value) end return 'done' end)
+assert(coroutine.resume(savedOrderThread))
+)lua") != 0) throw std::runtime_error("could not create saved table traversal");
 				if (luaL_dostring(live, "savedTable={value=11}; savedAlias=savedTable; savedGenerated=setmetatable({}, {__index=function(_,key) if key=='text' then return 'private-'..tostring(37) end return {answer=37} end}); local n=7; savedGetter=function() n=n+1; savedTable.value=savedTable.value+n; return n,savedTable,savedAlias end; savedOther=function() return n end; savedThread=coroutine.create(function() local value=23; savedCell=function(n) if n then value=n end return value end; savedCellAlias=function() return value end; coroutine.yield(value); return value end); assert(coroutine.resume(savedThread))") != 0)
 					throw std::runtime_error("could not create saved getters");
 			});
@@ -164,6 +188,8 @@ namespace RTE::CheckpointLua {
 				return std::async(std::launch::deferred, std::move(work));
 			});
 			const TValue getter = heap.GlobalValue("savedGetter"), other = heap.GlobalValue("savedOther");
+			const TValue order = heap.GlobalValue("savedOrderExpected");
+			const std::string expected = heap.ReadString(strdata(strV(&order)), heap.Read(&strV(&order)->len));
 			ProtectedCall(live, [&] { if (luaL_dostring(live, "savedTable.value=101; savedGetter(); savedGetter=nil; savedOther=nil; collectgarbage('collect')") != 0) throw std::runtime_error("could not change live getters"); });
 			source.reset();
 			auto worker = HeapOwner::Create();
@@ -174,6 +200,24 @@ namespace RTE::CheckpointLua {
 				LuaThreadCodec::Register(state);
 				SavedValues values(state, heap.WithPrivate(worker->PrivateReader()), [](lua_State*, const TValue&) { throw std::runtime_error("saved getter touched native state"); });
 				lua_pushvalue(state, LUA_GLOBALSINDEX); values.RememberLibraries(heap.GlobalValue("_G"), -1); lua_pop(state, 1);
+				values.Push(heap.GlobalValue("savedWalk"));
+				if (lua_pcall(state, 0, 1, 0) != 0 || !lua_isstring(state, -1) || expected != lua_tostring(state, -1))
+					mismatch = "saved table traversal changed its physical order";
+				lua_settop(state, 0);
+				for (const auto key: {"savedKey", "savedFunctionKey"}) {
+					values.Push(heap.GlobalValue("savedRead")); values.Push(heap.GlobalValue(key));
+					if (lua_pcall(state, 1, 1, 0) != 0 || lua_tointeger(state, -1) != (std::string_view(key) == "savedKey" ? 777 : 778) * 192)
+						mismatch = "saved compiled lookup lost a captured object key";
+					lua_settop(state, 0);
+				}
+				values.Push(heap.GlobalValue("savedOrderThread")); values.Finish();
+				lua_setglobal(state, "savedOrderResume");
+				if (luaL_dostring(state, "local values={} while coroutine.status(savedOrderResume)~='dead' do local ok,value=coroutine.resume(savedOrderResume); assert(ok,value); if value~='done' then values[#values+1]=value end end savedOrderRest=table.concat(values,',')") != 0)
+					throw std::runtime_error("saved table iterator could not resume");
+				lua_getglobal(state, "savedOrderRest");
+				if (!lua_isstring(state, -1) || expected.substr(expected.find(',') + 1) != lua_tostring(state, -1))
+					mismatch = "saved suspended iterator changed its following keys";
+				lua_settop(state, 0);
 				values.Push(getter); values.Push(other); lua_pop(state, 1);
 				if (lua_pcall(state, 0, 3, 0) != 0) throw std::runtime_error(lua_tostring(state, -1));
 				if (lua_tointeger(state, -3) != 8 || !lua_rawequal(state, -2, -1)) mismatch = "saved getter lost an upvalue or table alias";
@@ -220,10 +264,60 @@ namespace RTE::CheckpointLua {
 		std::unordered_map<const GCobj*, int> m_Values;
 		std::unordered_map<const void*, TValue> m_Originals;
 		std::unordered_map<const GCobj*, int> m_Returned;
+		std::unordered_set<const GCtab*> m_SavedTables;
+		luaJIT_SavedKeys m_PreviousKeys{};
 		struct Cell { int function; int index; };
 		std::unordered_map<const GCupval*, Cell> m_Cells;
 		std::unordered_map<const GCupval*, std::vector<Cell>> m_CellUses;
 		int Absolute(int index) const { return index < 0 ? lua_gettop(m_State) + index + 1 : index; }
+		static uint32_t KeyHash(void* owner, const void* table, uint64_t key, uint32_t ordinary) noexcept {
+			const auto& values = *static_cast<const SavedValues*>(owner);
+			if (!values.m_SavedTables.contains(static_cast<const GCtab*>(table))) return ordinary;
+			TValue token{};
+#if LJ_GC64
+			token.u64 = key;
+#else
+			token.gcr.gcptr32 = static_cast<uint32_t>(key);
+#endif
+			const auto found = values.m_Originals.find(gcval(&token));
+			if (found == values.m_Originals.end()) return ordinary;
+			const auto original = gcrefu(found->second.gcr);
+#if LJ_GC64
+			return hashrot(static_cast<uint32_t>(original), static_cast<uint32_t>(original >> 32));
+#else
+			return hashrot(original, original + HASH_BIAS);
+#endif
+		}
+		void PrepareStrings() {
+			const auto state = m_Heap.Read(m_Heap.State());
+			const auto* identity = mref(state.glref, global_State);
+			const auto global = m_Heap.Read(identity);
+			const auto string = [&](const GCstr* source) {
+				const auto value = m_Heap.Read(source);
+				const auto bytes = m_Heap.ReadBytes(source + 1, value.len);
+				lua_pushlstring(m_State, reinterpret_cast<const char*>(bytes.data()), bytes.size());
+				strV(m_State->top - 1)->sid = value.sid;
+				TValue token; setgcVraw(&token, const_cast<GCobj*>(obj2gco(source)), LJ_TSTR);
+				Remember(token, -1); lua_pop(m_State, 1);
+			};
+			string(&identity->strempty);
+			for (MSize slot = 0; slot <= global.str.mask; ++slot) {
+				for (const GCobj* item = gcref(m_Heap.Read(global.str.tab + slot)); item;) {
+					const auto* source = reinterpret_cast<const GCstr*>(item);
+					string(source); item = gcref(m_Heap.Read(&source->nextgc));
+				}
+			}
+			// Existing private library tables must follow the restored string IDs too.
+			for (GCobj* item = gcref(G(m_State)->gc.root); item;) {
+				GCobj* const next = gcref(item->gch.nextgc);
+				if (item->gch.gct == static_cast<uint8_t>(~LJ_TTAB)) {
+					auto* table = gco2tab(item);
+					lj_tab_resize(m_State, table, table->asize, table->hmask ? std::bit_width(table->hmask) : 0);
+				}
+				item = next;
+			}
+			G(m_State)->str.id = global.str.id; G(m_State)->str.idreseed = global.str.idreseed;
+		}
 		void Call(int arguments, int results) {
 			const int status = lua_pcall(m_State, arguments, results, 0);
 			if (status == LUA_ERRMEM) throw std::bad_alloc();
@@ -271,13 +365,14 @@ namespace RTE::CheckpointLua {
 		void Table(const TValue& value) {
 			const GCtab table = m_Heap.Read(tabV(&value));
 			if (table.asize > static_cast<MSize>((std::numeric_limits<int>::max)()) || table.hmask > static_cast<MSize>((std::numeric_limits<int>::max)())) throw std::length_error("saved table is too large");
-			lua_createtable(m_State, static_cast<int>(table.asize), static_cast<int>(table.hmask));
+			lua_createtable(m_State, 0, 0);
 			const int destination = lua_gettop(m_State);
 			Remember(value, destination);
 			TableContents(value, destination);
 		}
 		void TableContents(const TValue& value, int destination) {
 			const GCtab table = m_Heap.Read(tabV(&value));
+			if (m_Heap.OriginalBytes(tabV(&value), sizeof(GCtab))) { TableSlots(table, destination); return; }
 			const TValue* array = tvref(table.array);
 			for (MSize index = 0; index < table.asize; ++index) {
 				const TValue item = m_Heap.Read(array + index);
@@ -294,6 +389,43 @@ namespace RTE::CheckpointLua {
 			const TValue result = *(m_State->base + destination - 1);
 			tabV(&result)->serial = table.serial;
 		}
+		void TableSlots(const GCtab& source, int destination) {
+			GCtab* const target = tabV(m_State->base + destination - 1);
+			if (source.hmask && !std::has_single_bit(source.hmask + 1)) throw std::runtime_error("a saved table has an invalid hash size");
+			lj_tab_resize(m_State, target, source.asize, source.hmask ? std::bit_width(source.hmask) : 0);
+			m_SavedTables.insert(target);
+			for (MSize index = 0; index < source.asize; ++index) {
+				Push(m_Heap.Read(tvref(source.array) + index));
+				arrayslot(target, index)[0] = *(m_State->top - 1); lj_gc_anybarriert(m_State, target); lua_pop(m_State, 1);
+			}
+			if (source.hmask) {
+				const Node* const original = noderef(source.node);
+				Node* const nodes = noderef(target->node);
+				for (MSize index = 0; index <= source.hmask; ++index) {
+					const Node node = m_Heap.Read(original + index);
+					if (!tvisnil(&node.val)) {
+						Push(node.key); Push(node.val);
+						nodes[index].key = *(m_State->top - 2); nodes[index].val = *(m_State->top - 1);
+						lj_gc_anybarriert(m_State, target); lua_pop(m_State, 2);
+					} else {
+						// A nil slot may retain a dead key; it must never be dereferenced.
+						nodes[index].key = node.key; setnilV(&nodes[index].val);
+						if (Remembered(node.key)) { Push(node.key); nodes[index].key = *(m_State->top - 1); lua_pop(m_State, 1); }
+					}
+					const Node* const next = nextnode(&node);
+					if (next && (next < original || next > original + source.hmask)) throw std::runtime_error("a saved table has an invalid hash chain");
+					setmref(nodes[index].next, next ? nodes + (next - original) : nullptr);
+				}
+				const Node first = m_Heap.Read(original);
+				const Node* const top = getfreetop(&source, &first);
+				if (top < original || top > original + source.hmask + 1) throw std::runtime_error("a saved table has an invalid free slot");
+				setfreetop(target, nodes, nodes + (top - original));
+			}
+			if (const GCobj* meta = gcref(source.metatable)) {
+				TValue token; setgcVraw(&token, const_cast<GCobj*>(meta), LJ_TTAB); Push(token); lua_setmetatable(m_State, destination);
+			}
+			target->serial = source.serial; target->nomm = source.nomm;
+		}
 		void Function(const TValue& value) {
 			const GCfunc* source = funcV(&value);
 			const uint8_t upvalues = m_Heap.Read(&source->c.nupvalues);
@@ -306,6 +438,7 @@ namespace RTE::CheckpointLua {
 			if (luaL_loadbuffer(m_State, code.data(), code.size(), "saved getter") != 0) throw std::runtime_error(lua_tostring(m_State, -1));
 			const int destination = lua_gettop(m_State);
 			Remember(value, destination);
+			PrototypeTables(prototype, funcproto(funcV(m_State->base + destination - 1)));
 			const int reference = m_Values.at(gcval(&value));
 			funcV(m_State->base + destination - 1)->c.serial = m_Heap.Read(&source->c.serial);
 			for (int index = 1; index <= upvalues; ++index) {
@@ -324,6 +457,23 @@ namespace RTE::CheckpointLua {
 			}
 			TValue environment; setgcVraw(&environment, gcref(m_Heap.Read(&source->c.env)), LJ_TTAB);
 			Push(environment); lua_setfenv(m_State, destination);
+		}
+		void PrototypeTables(const GCproto* source, GCproto* target) {
+			const auto values = m_Heap.Read(source);
+			if (values.sizekgc != target->sizekgc) throw std::runtime_error("a saved function changed its constant count");
+			for (ptrdiff_t index = -static_cast<ptrdiff_t>(values.sizekgc); index < 0; ++index) {
+				const GCobj* const original = gcref(m_Heap.Read(mref(values.k, GCRef) + index));
+				GCobj* const copy = proto_kgc(target, index);
+				const auto type = m_Heap.Read(&original->gch.gct);
+				if (type != copy->gch.gct) throw std::runtime_error("a saved function changed a constant type");
+				if (type == static_cast<uint8_t>(~LJ_TPROTO)) PrototypeTables(gco2pt(original), gco2pt(copy));
+				else if (type == static_cast<uint8_t>(~LJ_TTAB)) {
+					TValue token; setgcVraw(&token, const_cast<GCobj*>(original), LJ_TTAB);
+					settabV(m_State, m_State->top, gco2tab(copy)); incr_top(m_State);
+					if (!Remembered(token)) Remember(token, -1);
+					TableContents(token, lua_gettop(m_State)); lua_pop(m_State, 1);
+				}
+			}
 		}
 	};
 }
