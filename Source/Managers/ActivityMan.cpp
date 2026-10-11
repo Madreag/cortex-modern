@@ -8,6 +8,7 @@
 #include "GUISound.h"
 #include "CheckpointArchive.h"
 #include "CheckpointNativeSnapshot.h"
+#include "CheckpointNativeStorage.h"
 #include "BitmapCheckpoint.h"
 #include "Atom.h"
 #include "NetIdentity.h"
@@ -1945,6 +1946,7 @@ bool ActivityMan::ReadSavedGameArchive(const std::string& archivePath, const std
 			nativeSnapshotStorage = archive.ReadEntry(AutosaveStore::c_DescriptorEntry, descriptorText, false) && AutosaveStore::ParseDescriptor(descriptorText, descriptor);
 		} catch (const std::exception&) {}
 		Atom::AllocationScope nativeAtoms(nativeSnapshotStorage);
+		CheckpointNativeStorage::AllocationScope nativeValues(nativeSnapshotStorage);
 
 		using Image = std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)>;
 		std::vector<std::pair<std::string, Image>> images;
@@ -3246,6 +3248,7 @@ bool ActivityMan::RestartActivity() {
 	}
 	if (!m_RestartRestoresSnapshot) return RestartActivityCandidate();
 	Atom::AllocationScope nativeAtoms(m_PendingCheckpoint.nativeSnapshotStorage);
+	CheckpointNativeStorage::AllocationScope nativeValues(m_PendingCheckpoint.nativeSnapshotStorage);
 	std::string error;
 	if (!m_PendingCheckpoint.activity || !m_PendingCheckpoint.scene || !g_MovableMan.ValidateScriptGraphs(m_PendingCheckpoint.scriptGraphs, &error)) {
 		g_ConsoleMan.PrintString("ERROR: the saved script state is invalid: " + error);

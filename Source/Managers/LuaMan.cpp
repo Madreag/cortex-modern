@@ -6,6 +6,7 @@
 #include "CaptureSentinel.h"
 #include "LuaBindingRegisterDefinitions.h"
 #include "CheckpointNativeSnapshot.h"
+#include "CheckpointNativeStorage.h"
 #include "ThreadMan.h"
 #include "System.h"
 #include "MetricsCollector.h"
@@ -9580,6 +9581,13 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 #endif
 	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
+	{
+		const std::string mismatch = CheckpointNativeStorage::SelfTestMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " live_native_container_pages_survive_mutation_destruction_and_reuse";
+		if (!mismatch.empty()) std::cout << " reason=" << mismatch;
+		std::cout << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
+	}
 	{
 		const bool exact = PathFinder::RunCheckpointFreezeSelfTest();
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " committed_path_grid_freezes_exactly_without_joining_a_pending_solver" << std::endl;

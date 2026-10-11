@@ -1,5 +1,6 @@
 #include "Entity.h"
 #include "CheckpointNativeSnapshot.h"
+#include "CheckpointNativeStorage.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "CheckpointImage.h"
@@ -753,14 +754,20 @@ namespace RTE {
 	}
 
 	void* Entity::ClassInfo::GetPoolMemory() {
+#ifndef __SANITIZE_ADDRESS__
+		std::lock_guard<std::mutex> guard(m_Mutex);
+#endif
+		if (CheckpointNativeStorage::Enabled() && m_InstanceBytes) {
+			void* memory = CheckpointNativeStorage::Allocate(m_InstanceBytes, m_InstanceAlignment);
+			++m_InstancesInUse;
+			return memory;
+		}
 #ifdef __SANITIZE_ADDRESS__
 		// If compiled with ASan, sidestep pooling and just use the allocator normally.
 
 		void* foundMemory = m_Allocate();
 		RTEAssert(foundMemory, "m_Allocate failed! to make memory!");
 #else
-
-		std::lock_guard<std::mutex> guard(m_Mutex);
 
 		RTEAssert(IsConcrete(), "Trying to get pool memory of an abstract Entity class!");
 
@@ -796,12 +803,15 @@ namespace RTE {
 			s_DeletedCheckpointMemory = nullptr;
 			return 0;
 		}
+#ifndef __SANITIZE_ADDRESS__
+		std::lock_guard<std::mutex> guard(m_Mutex);
+#endif
+		if (CheckpointNativeStorage::Deallocate(returnedMemory)) return --m_InstancesInUse;
 
 #ifdef __SANITIZE_ADDRESS__
 		// If compiled with ASan, sidestep pooling and just use the allocator normally.
 		m_Deallocate(returnedMemory);
 #else
-		std::lock_guard<std::mutex> guard(m_Mutex);
 		try { m_AllocatedPool.push_back(returnedMemory); }
 		catch (const std::bad_alloc&) { m_Deallocate(returnedMemory); }
 #endif

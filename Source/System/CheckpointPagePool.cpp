@@ -2,14 +2,19 @@
 
 #include "PageWriteFence.h"
 #include "CheckpointFailure.h"
+#include "CheckpointNativeStorage.h"
+#include "ScenarioRunner.h"
 
 #include <algorithm>
 #include <atomic>
+#include <array>
+#include <bit>
 #include <chrono>
 #include <cstring>
 #include <future>
 #include <iterator>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -137,16 +142,18 @@ struct CheckpointPagePool::Block {
 	}
 };
 
-void CheckpointPagePool::Grow(size_t slotBytes, size_t minimumSlots, std::vector<void*>& free) {
+void CheckpointPagePool::Grow(size_t slotBytes, size_t minimumSlots, std::vector<void*>& free, size_t blockBytes) {
 	const size_t pageBytes = PageWriteFence::SystemPageBytes();
 	if (!slotBytes || !pageBytes || minimumSlots > (std::numeric_limits<size_t>::max() - pageBytes) / slotBytes)
 		throw std::length_error("native checkpoint pool is too large");
-	const size_t slots = std::max(minimumSlots, (size_t{4} << 20) / slotBytes);
+	const size_t slots = std::max(minimumSlots, blockBytes / slotBytes);
+	if (slots > std::numeric_limits<size_t>::max() - m_Slots) throw std::bad_alloc();
 	const size_t bytes = (slots * slotBytes + pageBytes - 1) / pageBytes * pageBytes;
 	auto block = std::make_shared<Block>(bytes);
-	free.reserve(free.size() + slots);
+	free.reserve(m_Slots + slots);
 	m_Blocks.push_back(block);
 	for (size_t slot = 0; slot < slots; ++slot) free.push_back(block->live.data + slot * slotBytes);
+	m_Slots += slots;
 }
 
 bool CheckpointPagePool::Contains(const void* address) const {
@@ -323,5 +330,111 @@ std::string CheckpointPagePool::SelfTestMismatch() {
 	if (!second->Read(source, restored.data(), restored.size()) || !std::all_of(restored.begin(), restored.end(), [](auto byte) { return byte == 71; }))
 		return "native page snapshot did not survive its pool";
 	if (first->Read(expected.data(), restored.data(), restored.size())) return "native page snapshot accepted an unrelated address";
+	return {};
+}
+
+namespace {
+	struct NativeStoragePool {
+		CheckpointPagePool pages;
+		std::vector<void*> free;
+	};
+	struct NativeStoragePools {
+		std::mutex mutex;
+		std::array<NativeStoragePool, std::numeric_limits<size_t>::digits> sizes;
+	};
+	std::atomic<NativeStoragePools*> s_NativeStoragePools{nullptr};
+	thread_local bool s_NativeStorageAllocation = false;
+	NativeStoragePools& NativePools() {
+		static NativeStoragePools* const pools = [] {
+			auto* value = new NativeStoragePools;
+			s_NativeStoragePools.store(value, std::memory_order_release);
+			return value;
+		}();
+		return *pools;
+	}
+}
+
+CheckpointNativeStorage::AllocationScope::AllocationScope(bool enabled) : m_Previous(s_NativeStorageAllocation) {
+	s_NativeStorageAllocation = s_NativeStorageAllocation || enabled;
+}
+
+CheckpointNativeStorage::AllocationScope::~AllocationScope() { s_NativeStorageAllocation = m_Previous; }
+
+bool CheckpointNativeStorage::Enabled() { return s_NativeStorageAllocation || ScenarioRunner::HasLockstepCoordinator(); }
+
+void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
+	const size_t requested = std::max({bytes, alignment, size_t{16}});
+	if (requested > (size_t{1} << (std::numeric_limits<size_t>::digits - 1)) ||
+	    !std::has_single_bit(alignment) || alignment > PageWriteFence::SystemPageBytes()) throw std::bad_alloc();
+	const size_t slot = std::bit_ceil(requested);
+	auto& pools = NativePools();
+	std::lock_guard lock(pools.mutex);
+	auto& pool = pools.sizes[std::countr_zero(slot)];
+	if (pool.free.empty()) pool.pages.Grow(slot, 1, pool.free, size_t{1} << 20);
+	void* address = pool.free.back();
+	pool.free.pop_back();
+	return address;
+}
+
+bool CheckpointNativeStorage::Deallocate(void* address) noexcept {
+	if (!address) return false;
+	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
+	if (!pools) return false;
+	std::lock_guard lock(pools->mutex);
+	for (auto& pool: pools->sizes) if (pool.pages.Contains(address)) {
+		// Free lists reserve every slot at growth, so returning storage cannot allocate or discard frozen pages.
+		pool.free.push_back(address);
+		return true;
+	}
+	return false;
+}
+
+bool CheckpointNativeStorage::Owns(const void* address) {
+	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
+	if (!pools) return false;
+	std::lock_guard lock(pools->mutex);
+	return std::any_of(pools->sizes.begin(), pools->sizes.end(), [&](const auto& pool) { return pool.pages.Contains(address); });
+}
+
+std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> CheckpointNativeStorage::Prepare() {
+	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> snapshots;
+	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
+	if (!pools) return snapshots;
+	std::lock_guard lock(pools->mutex);
+	snapshots.reserve(pools->sizes.size());
+	for (const auto& pool: pools->sizes) snapshots.push_back(pool.pages.Freeze(false));
+	return snapshots;
+}
+
+std::string CheckpointNativeStorage::SelfTestMismatch() {
+	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> first, second;
+	const void* address = nullptr;
+	const std::vector<uint64_t> expected{3, 5, 7, 11};
+	{
+		AllocationScope allocation(true);
+		std::vector<uint64_t, CheckpointNativeAllocator<uint64_t>> live(expected.begin(), expected.end());
+		address = live.data();
+		if (!Owns(address)) return "native container storage escaped its owned pages";
+		first = Prepare();
+		for (const auto& pages: first) pages->Arm();
+		live[1] = 17;
+		second = Prepare();
+		for (const auto& pages: second) pages->Arm();
+		live.clear(); live.shrink_to_fit();
+		std::vector<uint64_t, CheckpointNativeAllocator<uint64_t>> reused(4, 99);
+	}
+	for (const auto& pages: first) pages->Drain();
+	for (const auto& pages: second) pages->Drain();
+	std::vector<uint64_t> read(expected.size());
+	bool foundFirst = false, foundSecond = false;
+	for (const auto& pages: first) if (pages->Read(address, read.data(), read.size() * sizeof(uint64_t))) {
+		foundFirst = true;
+		if (read != expected) return "native container mutation or destruction changed its first generation";
+	}
+	for (const auto& pages: second) if (pages->Read(address, read.data(), read.size() * sizeof(uint64_t))) {
+		foundSecond = true;
+		if (read != std::vector<uint64_t>{3, 17, 7, 11}) return "native container reuse changed its second generation";
+	}
+	if (!foundFirst || !foundSecond) return "native container generation lost its allocation";
 	return {};
 }

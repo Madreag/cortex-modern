@@ -53,12 +53,13 @@ namespace RTE {
 		};
 
 		/// Appends slots in allocation order; the caller owns its usual free-list order.
-		void Grow(size_t slotBytes, size_t minimumSlots, std::vector<void*>& free);
+		void Grow(size_t slotBytes, size_t minimumSlots, std::vector<void*>& free, size_t blockBytes = size_t{4} << 20);
 		bool Contains(const void* address) const;
 		/// @param arm False leaves the fences to Snapshot::Arm, which must run before anything writes the pages again.
 		std::shared_ptr<const Snapshot> Freeze(bool arm = true) const;
 		static std::string SelfTestMismatch();
 	private:
 		std::vector<std::shared_ptr<Block>> m_Blocks;
+		size_t m_Slots = 0;
 	};
 }
