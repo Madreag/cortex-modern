@@ -1388,6 +1388,7 @@ namespace RTE {
 		}
 
 		bool TestOwnershipPolicies(std::string* error) {
+			if (const auto problem = NetActorOwnership::CheckpointSelfTestMismatch(); !problem.empty()) { *error = problem; return false; }
 			NetMatchConfig config = MakeConfig();
 			config.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 			if (NetActorOwnership::ResolveOwnerPeer(config, {101, 0, false}) != 1 ||

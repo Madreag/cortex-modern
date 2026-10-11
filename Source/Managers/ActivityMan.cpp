@@ -69,6 +69,7 @@
 #endif
 #include "CheckpointLuaHeap.h"
 #include "CheckpointBoundaryQueue.h"
+#include "NetActorOwnership.h"
 
 #ifdef SYSTEM_MINIZIP
 #include <minizip/zip.h>
@@ -737,7 +738,7 @@ struct ActivityMan::PreparedAutosave {
 				clock->call->Finish(elapsed);
 			}
 		} finish{owner, clock, began};
-		if (result.valid() && result.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;
+		if (!NetActorOwnership::CheckpointValuesReady() || (result.valid() && result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)) return false;
 		const long uid = MovableObject::GetUniqueIDCounter();
 		const uint64_t simDraws = g_SimRNG.GetDrawCount(), renderDraws = g_RenderRNG.GetDrawCount(), soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		const bool accepted = queue.TryCapture(result, [&](Header& header) noexcept {
@@ -880,7 +881,7 @@ struct ActivityMan::PreparedAutosave {
 void ActivityMan::PrepareAutosave() {
 	if (!CheckpointNativeStorage::WorldEnabled()) return;
 	try {
-		g_LuaMan.PrepareCheckpointValues(); GUIInput::PrepareCheckpointTextInput();
+		g_LuaMan.PrepareCheckpointValues(); NetActorOwnership::PrepareCheckpointValues(); GUIInput::PrepareCheckpointTextInput();
 		auto saver = std::make_unique<PreparedAutosave>(*this);
 		if (!saver->queue.WaitUntilPrepared()) std::fputs("[autosave] inventory preparation refused\n", stdout);
 		m_PreparedAutosave = std::move(saver);
