@@ -1796,6 +1796,15 @@ bool GUICheckpoint::RunSelfTest() {
 			if (!text) throw std::runtime_error("saved fixture control unavailable");
 			text->SetText("captured text"); text->SetCursorPos(5); text->SetSelection(1, 4);
 			const std::string expected = Save(*controls), pixels = SaveBitmap(image.get());
+			auto banner = std::make_unique<GUIBanner>();
+			banner->m_pFontImage[GUIBanner::REGULAR] = image.get();
+			banner->m_pFontImage[GUIBanner::BLURRED] = image.get();
+			banner->m_FontHeight = 7; banner->m_Kerning = 3;
+			banner->m_BannerText = "captured banner";
+			banner->m_AnimState = GUIBanner::SHOW;
+			banner->m_aaFontChars[GUIBanner::REGULAR]['A'] = {5, 7, 11};
+			const std::string bannerText = banner->SaveCheckpoint();
+			const GUIBanner* bannerAddress = banner.get();
 			const GUIControlManager* address = controls.get();
 			const BITMAP* imageAddress = image.get();
 			CheckpointNativeStorage::Root<decltype(ContentFile::s_LoadedBitmaps)> bitmapRoot(&ContentFile::s_LoadedBitmaps);
@@ -1805,7 +1814,7 @@ bool GUICheckpoint::RunSelfTest() {
 			for (const auto& part: pages) part->Arm();
 			bitmapRoot.Freeze(); std::memcpy(pathHeader.data(), pathSource, pathSize);
 			const std::array roots{bitmapRoot.Range(), CheckpointNativeStorage::RootRange{pathSource, pathHeader.data(), pathSize}};
-			controls.reset(); input.reset(); screen.reset(); image.reset();
+			controls.reset(); input.reset(); screen.reset(); image.reset(); banner.reset();
 			CheckpointNativeStorage::ReadScope read(pages, roots);
 			auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
 			snapshot->SealBoundary();
@@ -1823,6 +1832,8 @@ bool GUICheckpoint::RunSelfTest() {
 			auto rebuilt = Rebuild(*address, savedScreen.get(), savedInput.get(), *snapshot);
 			auto* rebuiltText = dynamic_cast<GUITextBox*>(rebuilt->GetControl("saved-text"));
 			check("saved_controls_survive_source_destruction", Save(*rebuilt) == expected && rebuiltText && rebuiltText->GetText() == "captured text" && SaveBitmap(savedImage) == pixels);
+			auto* savedBanner = snapshot->ValueObject(bannerAddress);
+			check("saved_banner_keeps_text_animation_fonts_and_aliases", savedBanner->SaveCheckpoint() == bannerText && savedBanner->GetBannerText() == "captured banner" && savedBanner->IsVisible() && savedBanner->CalculateWidth('A', GUIBanner::REGULAR) == 8 && savedBanner->m_pFontImage[0] == savedBanner->m_pFontImage[1]);
 		}
 		{
 			const std::string path = "checkpoint-selftest/absent-shared-bitmap.png";

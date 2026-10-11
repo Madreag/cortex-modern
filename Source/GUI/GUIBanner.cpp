@@ -2,12 +2,27 @@
 #include "GUIBanner.h"
 #include "ContentFile.h"
 #include "GUICheckpoint.h"
+#include "CheckpointNativeSnapshot.h"
 #include <iostream>
 
 using namespace RTE;
 
 std::map<std::string, std::unique_ptr<GUIBanner::FontChar[]>> GUIBanner::m_sFontCache;
 std::map<std::string, int> GUIBanner::m_sCharCapCache;
+
+GUIBanner::GUIBanner(const GUIBanner& source, CheckpointNativeSnapshot& snapshot) : GUIBanner() {
+	if (!CheckpointNativeStorage::Reading()) throw std::logic_error("saved banners need their frozen pages");
+	for (size_t mode = 0; mode < FONTMODECOUNT; ++mode) {
+		m_pFontImage[mode] = snapshot.ReadBitmap(source.m_pFontImage[mode]);
+		m_CheckpointFontImages[mode] = std::shared_ptr<BITMAP>(m_pFontImage[mode], [](BITMAP*) {});
+		std::copy(std::begin(source.m_aaFontChars[mode]), std::end(source.m_aaFontChars[mode]), std::begin(m_aaFontChars[mode]));
+	}
+	m_CharIndexCap = source.m_CharIndexCap; m_FontHeight = source.m_FontHeight; m_Kerning = source.m_Kerning;
+	m_BannerText = source.m_BannerText; m_BannerChars = snapshot.Freeze(source.m_BannerChars);
+	m_TargetSize = source.m_TargetSize; m_BannerPosY = source.m_BannerPosY; m_FlySpeed = source.m_FlySpeed; m_FlySpacing = source.m_FlySpacing;
+	m_AnimMode = source.m_AnimMode; m_AnimState = source.m_AnimState;
+	m_TotalAnimTimer = source.m_TotalAnimTimer; m_DisplayTimer = source.m_DisplayTimer; m_SpacingTimer = source.m_SpacingTimer; m_FrameTimer = source.m_FrameTimer;
+}
 
 GUIBanner::GUIBanner() {
 	m_pFontImage[REGULAR] = 0;

@@ -89,6 +89,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a GUIBanner object in system
 		/// memory.
 		GUIBanner();
+		GUIBanner(const GUIBanner& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Create the font from an image file.
 		/// @param fontFilePath Path to the font bitmap file.

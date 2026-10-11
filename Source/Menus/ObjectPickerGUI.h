@@ -36,6 +36,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a ObjectPickerGUI object in system memory. Create() should be called before using the object.
 		ObjectPickerGUI() { Clear(); }
+		ObjectPickerGUI(const ObjectPickerGUI& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Makes the ObjectPickerGUI object ready for use.
 		/// @param controller A pointer to a Controller which will control this Menu. Ownership is NOT transferred!

@@ -1,5 +1,6 @@
 #include "CheckpointArchive.h"
 #include "GUICheckpoint.h"
+#include "CheckpointNativeSnapshot.h"
 #include <iostream>
 #include "ObjectPickerGUI.h"
 
@@ -30,6 +31,34 @@ using namespace RTE;
 
 BITMAP* ObjectPickerGUI::s_Cursor = nullptr;
 
+ObjectPickerGUI::ObjectPickerGUI(const ObjectPickerGUI& source, CheckpointNativeSnapshot& snapshot) : ObjectPickerGUI() {
+	if (!CheckpointNativeStorage::Reading()) throw std::logic_error("saved pickers need their frozen pages");
+	m_PendingCheckpoint = source.m_PendingCheckpoint;
+	m_CheckpointInitialized = source.m_CheckpointInitialized;
+	m_Controller = snapshot.ValueObject(source.m_Controller);
+	m_PickerState = source.m_PickerState; m_PickerFocus = source.m_PickerFocus; m_OpenCloseSpeed = source.m_OpenCloseSpeed;
+	m_ModuleSpaceID = source.m_ModuleSpaceID; m_ShowType = source.m_ShowType;
+	m_NativeTechModuleID = source.m_NativeTechModuleID; m_ForeignCostMult = source.m_ForeignCostMult;
+	m_ShownGroupIndex = source.m_ShownGroupIndex; m_SelectedGroupIndex = source.m_SelectedGroupIndex; m_SelectedObjectIndex = source.m_SelectedObjectIndex;
+	m_PickedObject = snapshot.Object(source.m_PickedObject);
+	m_RepeatStartTimer = source.m_RepeatStartTimer; m_RepeatTimer = source.m_RepeatTimer;
+	m_ExpandedModules = snapshot.Freeze(source.m_ExpandedModules);
+	if (!source.m_GUIControlManager) return;
+	const auto* screen = CheckpointNativeStorage::Source(source.m_GUIScreen.get());
+	const auto* bitmap = screen ? dynamic_cast<const AllegroBitmap*>(CheckpointNativeStorage::Source(screen->GetBitmap())) : nullptr;
+	m_GUIScreen = std::make_unique<AllegroScreen>(bitmap ? snapshot.ReadBitmap(bitmap->GetBitmap()) : nullptr);
+	m_GUIInput = std::make_unique<GUIInputWrapper>(m_Controller ? m_Controller->GetInputPlayer() : -1);
+	m_GUIControlManager = GUICheckpoint::Rebuild(*source.m_GUIControlManager, m_GUIScreen.get(), m_GUIInput.get(), snapshot);
+	const auto control = [this]<class T>(T* pointer) -> T* {
+		if (!pointer) return nullptr;
+		auto* value = dynamic_cast<T*>(m_GUIControlManager->GetControl(CheckpointNativeStorage::Source(pointer)->GetName()));
+		if (!value) throw std::runtime_error("a saved picker control is missing");
+		return value;
+	};
+	m_ParentBox = control(source.m_ParentBox); m_PopupBox = control(source.m_PopupBox); m_PopupText = control(source.m_PopupText);
+	m_GroupsList = control(source.m_GroupsList); m_ObjectsList = control(source.m_ObjectsList);
+}
+
 void ObjectPickerGUI::Clear() {
 	m_PendingCheckpoint.clear();
 	m_CheckpointInitialized = false;
@@ -56,6 +85,7 @@ void ObjectPickerGUI::Clear() {
 	m_RepeatStartTimer.Reset();
 	m_RepeatTimer.Reset();
 
+	if (CheckpointNativeStorage::Reading()) { m_ExpandedModules.clear(); return; }
 	m_ExpandedModules.resize(g_PresetMan.GetTotalModuleCount());
 	std::fill(m_ExpandedModules.begin(), m_ExpandedModules.end(), false);
 	if (!m_ExpandedModules.empty()) m_ExpandedModules[0] = true; // Base.rte is always expanded
@@ -619,7 +649,7 @@ void ObjectPickerGUI::Draw(BITMAP* drawBitmap) const {
 }
 
 std::string ObjectPickerGUI::SaveCheckpoint() const {
-	if (CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::IsView(this)) return CheckpointNativeStorage::Source(this)->SaveCheckpoint();
+	if (CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::IsView(this) && !CheckpointNativeStorage::Private(this)) return CheckpointNativeStorage::Source(this)->SaveCheckpoint();
 	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
 	CheckpointWriter writer("ObjectPickerGUI3");
 	writer(m_CheckpointInitialized);
