@@ -381,19 +381,45 @@ namespace RTE::CheckpointLua {
 	class HeapOwner {
 		struct CowCopy;
 		struct CowCoordinator;
+		struct PreparationLife {
+			std::mutex mutex;
+			HeapOwner* owner = nullptr;
+		};
 	public:
 		class Prepared;
+		/// A queued preparation keeps its original owner identity across VM closure and address reuse.
+		class PreparationLease {
+		public:
+			PreparationLease() = default;
+			std::shared_ptr<Prepared> Prepare() const;
+			bool Current(const Prepared& prepared) const noexcept;
+			bool Arm(Prepared& prepared) const noexcept;
+			explicit operator bool() const noexcept { return m_Life != nullptr; }
+		private:
+			friend class HeapOwner;
+			explicit PreparationLease(std::shared_ptr<PreparationLife> life) : m_Life(std::move(life)) {}
+			std::shared_ptr<PreparationLife> m_Life;
+		};
+		static PreparationLease LeasePreparation(lua_State* state) {
+			std::lock_guard lock(RegistryMutex());
+			const auto found = StatePreparations().find(state);
+			return found == StatePreparations().end() ? PreparationLease{} : PreparationLease(found->second.lock());
+		}
 		static std::unique_ptr<HeapOwner> Create() {
 			auto owner = std::unique_ptr<HeapOwner>(new HeapOwner());
 			owner->Initialize();
+			owner->m_PreparationLife->owner = owner.get();
 			{
 				std::lock_guard lock(RegistryMutex());
 				LiveHeaps().emplace(owner.get(), owner->m_Identity);
+				StatePreparations().emplace(owner->m_State, owner->m_PreparationLife);
 			}
 			return owner;
 		}
 
 		~HeapOwner() {
+			std::lock_guard alive(m_PreparationLife->mutex);
+			m_PreparationLife->owner = nullptr;
 			std::lock_guard preparations(m_PrepareMutex);
 			FinishPrepared();
 			WaitCopy(true);
@@ -404,6 +430,7 @@ namespace RTE::CheckpointLua {
 			{
 				std::lock_guard lock(RegistryMutex());
 				LiveHeaps().erase(this);
+				StatePreparations().erase(m_State);
 			}
 			{
 				std::lock_guard lock(m_SlabMutex);
@@ -439,6 +466,7 @@ namespace RTE::CheckpointLua {
 		static size_t CallsIntoDestroyedHeaps() { return DeadHeapCalls().load(std::memory_order_relaxed); }
 		static bool RunBatchOpenSelfTest();
 		static bool RunPreparedSelfTest();
+		static bool RunPreparationLifetimeSelfTest();
 		static bool RunReusedOwnerSelfTest();
 		/// Prepares storage and watches on the saver; Arm reads no Lua objects and allocates nothing.
 		std::shared_ptr<Prepared> PrepareFreeze();
@@ -673,6 +701,7 @@ namespace RTE::CheckpointLua {
 			return next.fetch_add(1, std::memory_order_relaxed) + 1;
 		}
 		const uint64_t m_Identity = NextIdentity();
+		std::shared_ptr<PreparationLife> m_PreparationLife = std::make_shared<PreparationLife>();
 		std::unique_ptr<lua_State, decltype(&lua_close)> m_Bootstrap{nullptr, lua_close};
 		lua_State* m_State = nullptr;
 		LibraryHandlers m_LibraryHandlers;
@@ -846,6 +875,10 @@ namespace RTE::CheckpointLua {
 		static std::unordered_map<const HeapOwner*, uint64_t>& LiveHeaps() {
 			static auto* heaps = new std::unordered_map<const HeapOwner*, uint64_t>();
 			return *heaps;
+		}
+		static std::unordered_map<lua_State*, std::weak_ptr<PreparationLife>>& StatePreparations() {
+			static auto* states = new std::unordered_map<lua_State*, std::weak_ptr<PreparationLife>>();
+			return *states;
 		}
 		static std::atomic<size_t>& DeadHeapCalls() {
 			static std::atomic<size_t> calls{0};
@@ -1190,6 +1223,25 @@ namespace RTE::CheckpointLua {
 		bool m_Finished = false;
 	};
 
+	inline std::shared_ptr<HeapOwner::Prepared> HeapOwner::PreparationLease::Prepare() const {
+		if (!m_Life) throw std::runtime_error("the queued Lua heap preparation has no owner");
+		std::lock_guard alive(m_Life->mutex);
+		if (!m_Life->owner) throw std::runtime_error("the Lua heap closed before its queued preparation");
+		return m_Life->owner->PrepareFreeze();
+	}
+
+	inline bool HeapOwner::PreparationLease::Current(const Prepared& prepared) const noexcept {
+		if (!m_Life) return false;
+		std::unique_lock alive(m_Life->mutex, std::try_to_lock);
+		return alive && m_Life->owner && prepared.Current(*m_Life->owner);
+	}
+
+	inline bool HeapOwner::PreparationLease::Arm(Prepared& prepared) const noexcept {
+		if (!m_Life) return false;
+		std::unique_lock alive(m_Life->mutex, std::try_to_lock);
+		return alive && m_Life->owner && prepared.Arm(*m_Life->owner);
+	}
+
 	inline std::shared_ptr<HeapOwner::Prepared> HeapOwner::PrepareFreeze() {
 		std::lock_guard preparations(m_PrepareMutex);
 		auto data = std::make_shared<Snapshot::Data>();
@@ -1278,6 +1330,33 @@ namespace RTE::CheckpointLua {
 		const auto* old = static_cast<const unsigned char*>(firstBytes.get());
 		const auto* next = static_cast<const unsigned char*>(secondBytes.get());
 		return old[0] == 3 && old[page] == 3 && next[0] == 5 && next[page] == 7 && source[0] == 9 && source[page] == 13;
+	}
+
+	inline bool HeapOwner::RunPreparationLifetimeSelfTest() {
+		auto owner = Create();
+		lua_pushnumber(owner->State(), 29);
+		const TValue* value = owner->State()->top - 1;
+		const auto lease = LeasePreparation(owner->State());
+		if (!lease) return false;
+		std::shared_ptr<Prepared> prepared;
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::LuaPages);
+			bool refused = false;
+			try { lease.Prepare(); } catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+			if (!refused || value->n != 29) return false;
+		}
+		prepared = std::async(std::launch::async, [&lease] { return lease.Prepare(); }).get();
+		if (!lease.Current(*prepared) || !lease.Arm(*prepared)) return false;
+		const Snapshot frozen = prepared->Image();
+		owner.reset();
+		if (lease.Current(*prepared) || lease.Arm(*prepared) || frozen.Read(value).n != 29) return false;
+		bool refused = false;
+		try { lease.Prepare(); } catch (const std::runtime_error&) { refused = true; }
+		if (!refused) return false;
+		owner = Create();
+		const auto replacement = LeasePreparation(owner->State());
+		auto next = replacement.Prepare();
+		return replacement.Current(*next) && !lease.Current(*next) && !lease.Arm(*next);
 	}
 
 	inline bool HeapOwner::RunPreparedSelfTest() {
