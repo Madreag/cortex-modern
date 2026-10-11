@@ -52,6 +52,9 @@ namespace RTE {
 		static bool Owns(const void* address);
 		static std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> Prepare();
 		static bool ReadBytes(const void* source, void* target, size_t bytes);
+		static const void* View(const void* source, size_t bytes);
+		static const void* Original(const void* view);
+		static bool IsView(const void* address) { return Original(address) != address; }
 		static const std::string* ReadString(const char* source, size_t bytes);
 		static std::string SelfTestMismatch();
 	private:
