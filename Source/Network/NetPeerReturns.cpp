@@ -56,17 +56,21 @@ namespace RTE {
 		auto range = m_PeerTailSendRanges.try_emplace(peer, fromFrame, fromFrame + 1).first;
 		range->second.first = std::min(range->second.first, fromFrame);
 		range->second.second = std::max(range->second.second, fromFrame + 1);
+		// A later request can extend this range while an earlier answer is
+		// still being prepared. Resume the earliest needed record so that
+		// advancing the range never skips an unsent part of the history.
+		const uint64_t firstNeeded = range->second.first;
 		// A future subscription waits until this donor has displayed its first frame.
-		if (!m_LastCompletedSimulationTick || fromFrame > *m_LastCompletedSimulationTick) return;
+		if (!m_LastCompletedSimulationTick || firstNeeded > *m_LastCompletedSimulationTick) return;
 		auto& queued = m_PeerTailOutgoing[peer];
 		auto& sent = m_PeerTailLastSentMs[peer];
 		auto& repeats = m_PeerTailResendFrames[peer];
 		uint64_t queuedBytes = 0;
 		for (const auto& [frame, item]: queued) queuedBytes += item.bytes.size();
-		const auto first = m_MigrationHistory.lower_bound(fromFrame);
-		if (first == m_MigrationHistory.end() || first->first != fromFrame) {
+		const auto first = m_MigrationHistory.lower_bound(firstNeeded);
+		if (first == m_MigrationHistory.end() || first->first != firstNeeded) {
 			auto missing = PeerFrameMessage(NetHostMigrationMessageType::PeerTailMissing);
-			missing.frame = fromFrame;
+			missing.frame = firstNeeded;
 			SendPeerFrameMessage(std::move(missing), NetTransportLane::ControlReliable, peer);
 			return;
 		}
