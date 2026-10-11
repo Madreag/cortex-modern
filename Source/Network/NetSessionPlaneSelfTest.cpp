@@ -8,6 +8,7 @@
 #endif
 #include "NetIdentity.h"
 #include "TimerMan.h"
+#include "lz4.h"
 
 #include <algorithm>
 #include <array>
@@ -42,6 +43,8 @@ namespace RTE {
 			unsigned asymmetricBridge = 0;
 			uint32_t planeIntervalMs = 1, recoveryRttMs = 0;
 			bool delayStartup = false;
+			bool receiptHole = false;
+			uint64_t postReturnMs = 0;
 		};
 		struct Wire;
 		struct Hub {
@@ -82,6 +85,8 @@ namespace RTE {
 			// Signed wire decisions name the actual substituted frame range;
 			// a prepared bridge may exist before the display reaches that range.
 			std::map<uint8_t, std::map<uint64_t, bool>> bridgeBoundaries;
+			uint64_t receiptHoleFrame = 0, receiptHoleDrops = 0;
+			uint64_t tailQueuePeak = 0;
 		};
 		struct Wire final : INetTransport {
 			Hub& hub;
@@ -146,13 +151,55 @@ namespace RTE {
 				}
 				return 0;
 			}
+			bool RemoveReceiptHole(NetHostMigrationMessage& packet, std::vector<uint8_t>& bytes) {
+#if __has_include("NetPeerSessionWire.h")
+				if (!hub.row.receiptHole || owner != 3 || packet.type != NetHostMigrationMessageType::PeerInput || packet.offset != 0 || packet.totalBytes != packet.bytes.size()) return false;
+				const auto returns = hub.bridgeBoundaries.find(1);
+				if (returns == hub.bridgeBoundaries.end() || returns->second.empty() || returns->second.rbegin()->second || packet.frame < returns->second.rbegin()->first + 200) return false;
+				if (!hub.receiptHoleFrame) hub.receiptHoleFrame = packet.frame;
+				if (packet.frame >= hub.receiptHoleFrame + 64) return false;
+				std::vector<uint8_t> body = packet.bytes;
+				const auto take = [](const std::vector<uint8_t>& data, size_t& at, uint32_t& value) {
+					if (at + 4 > data.size()) return false;
+					value = 0; for (unsigned i = 0; i < 4; ++i) value |= uint32_t(data[at++]) << (8 * i); return true;
+				};
+				if (body.empty()) return false;
+				if (body[0] == 0) {
+					size_t at = 1; uint32_t size = 0;
+					if (!take(body, at, size) || size > NetLockstepCodec::c_InputWindowByteCap) return false;
+					std::vector<uint8_t> expanded(size);
+					if (LZ4_decompress_safe(reinterpret_cast<const char*>(body.data() + at), reinterpret_cast<char*>(expanded.data()), static_cast<int>(body.size() - at), static_cast<int>(size)) != static_cast<int>(size)) return false;
+					body = std::move(expanded);
+				}
+				std::vector<uint8_t> filtered{0}; size_t at = 1; bool removed = false;
+				for (unsigned i = 0; i < body[0]; ++i) {
+					const size_t begin = at; uint32_t size = 0;
+					if (!take(body, at, size) || size > body.size() - at) return false;
+					NetLockstepFrame input;
+					if (!NetLockstepCodec::DecodeRecoveryInput({body.begin() + at, body.begin() + at + size}, input)) return false;
+					at += size;
+					if (input.targetFrame == hub.receiptHoleFrame) { removed = true; continue; }
+					++filtered[0]; filtered.insert(filtered.end(), body.begin() + begin, body.begin() + at);
+				}
+				if (!removed) return false;
+				++hub.receiptHoleDrops;
+				if (filtered[0] == 0) return true;
+				packet.bytes = std::move(filtered); packet.totalBytes = static_cast<uint32_t>(packet.bytes.size());
+				NetHash32 key; key.fill(0x39); NetHostMigrationCodec::Encode(packet, key, bytes);
+				return false;
+#else
+				return false;
+#endif
+			}
 			bool Send(NetPeerId id, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
 				std::lock_guard lock(hub.mutex);
 				if (congested) *congested = false;
 				const auto found = connections.find(id);
 				if (found == connections.end()) { if (error) *error = "the fixture connection is absent"; return false; }
 				auto [other, remote] = found->second;
+				std::vector<uint8_t> delivered = bytes;
 				NetHostMigrationMessage decision; NetHash32 key; key.fill(0x39);
+				if (hub.row.receiptHole && NetHostMigrationCodec::Decode(bytes, key, decision) && RemoveReceiptHole(decision, delivered)) return true;
 				if (lane == NetTransportLane::ControlReliable && NetHostMigrationCodec::Decode(bytes, key, decision)) {
 					[]<class Message>(Hub& hub, const Message& packet) {
 						using Type = std::decay_t<decltype(packet.type)>;
@@ -171,7 +218,16 @@ namespace RTE {
 				const uint32_t ordinal = ++sends;
 				if (lane == NetTransportLane::InputUnreliable && hub.DuringFault() && hub.row.lossPercent &&
 				    (owner == hub.row.subject || other->owner == hub.row.subject) && ordinal % 100 < hub.row.lossPercent) return true;
-				other->events.push_back({hub.now + hub.Delay(owner, other->owner), {NetTransportEventType::PacketReceived, remote, lane, bytes, {}}, asymmetric == 2}); return true;
+#if __has_include("NetPeerSessionWire.h")
+				if (hub.row.receiptHole && NetHostMigrationCodec::Decode(delivered, key, decision)) {
+					if (decision.type == NetHostMigrationMessageType::PeerTail)
+						hub.tailQueuePeak = std::max(hub.tailQueuePeak, GetPeerQueueStats(id).reliableBytes + delivered.size());
+					if (decision.type == NetHostMigrationMessageType::PeerTailRequest)
+						for (unsigned duplicate = 0; duplicate < 5; ++duplicate)
+							other->events.push_back({hub.now + hub.Delay(owner, other->owner), {NetTransportEventType::PacketReceived, remote, lane, delivered, {}}, false});
+				}
+#endif
+				other->events.push_back({hub.now + hub.Delay(owner, other->owner), {NetTransportEventType::PacketReceived, remote, lane, std::move(delivered), {}}, asymmetric == 2}); return true;
 			}
 			void Disconnect(NetPeerId id, const std::string& reason) override {
 				const auto found = connections.find(id); if (found == connections.end()) return;
@@ -192,6 +248,14 @@ namespace RTE {
 			}
 			uint32_t GetPeerPingMs(NetPeerId id) const override { return connections.contains(id) ? static_cast<uint32_t>(2 * hub.Delay(owner, connections.at(id).first->owner)) : 0; }
 			bool IsPeerPingMeasured(NetPeerId id) const override { return connections.contains(id); }
+#if __has_include("NetPeerSessionWire.h")
+			NetTransportQueueStats GetPeerQueueStats(NetPeerId id) const override {
+				const auto connection = connections.find(id); if (connection == connections.end()) return {};
+				const auto [other, remote] = connection->second; uint64_t bytes = 0;
+				for (const auto& event: other->events) if (event.value.peerId == remote && event.value.lane == NetTransportLane::ControlReliable) bytes += event.value.bytes.size();
+				return {bytes, 0, 0};
+			}
+#endif
 		};
 		struct World {
 			uint64_t applied = 0;
@@ -244,6 +308,7 @@ namespace RTE {
 			}
 		}
 		template<class Peer> bool CatchingUp(const Peer& peer) { if constexpr (requires { peer.PeerFrameCatchUpActive(); }) return peer.PeerFrameCatchUpActive(); else return false; }
+		template<class Peer> std::optional<uint64_t> AcceptedThrough(const Peer& peer) { if constexpr (requires { peer.GetLocalInputAcceptedThrough(); }) return peer.GetLocalInputAcceptedThrough(); else return std::nullopt; }
 		template<class Peer> uint32_t SenderResizes(const Peer& peer, uint8_t sender) {
 			if constexpr (requires { peer.GetStats().peers.at(sender).delayResizes; }) return peer.GetStats().peers.at(sender).delayResizes;
 			else return peer.GetStats().delayChangesCommitted;
@@ -477,7 +542,7 @@ namespace RTE {
 			}
 			bool Run(const Case& row, std::string& error) {
 				if (!Start(row, error)) return false;
-				const uint64_t end = hub.faultEnd + (row.gapMs > 5000 ? row.gapMs / 2 : 0) + c_TestReturnAllowanceMs + 4000;
+				const uint64_t end = hub.faultEnd + (row.gapMs > 5000 ? row.gapMs / 2 : 0) + c_TestReturnAllowanceMs + 4000 + row.postReturnMs;
 				while (hub.now <= end) if (!Step(error)) return false;
 				if (row.asymmetricBridge && row.asymmetricBridge < 3 && !hub.asymmetricReleased) { error = "the asymmetric input lever did not force both pending bridge votes"; return false; }
 				const uint32_t requesters = ((1U << row.seats) - 1) & ~(1U << (row.subject - 1)) & ~(1U << 2);
@@ -560,6 +625,24 @@ namespace RTE {
 				          << " pre_fault_pace_lead_ms=" << phased.preFaultPaceLeadMs[id - 1]
 				          << " post_return_wait_ms=" << phased.postReturnWait[id - 1] << " return_ms=" << phased.returnedAt[id - 1] - phased.hub.faultEnd
 				          << " returns=" << peer.GetStats().peers.at(1).rejoins << " result=PASS" << std::endl;
+			}
+			Case receiptRow = phaseRow;
+			receiptRow.name = "relay_receipt_hole_after_return"; receiptRow.receiptHole = true; receiptRow.postReturnMs = 200000;
+			Fixture receipts;
+			if (!receipts.Run(receiptRow, error)) return false;
+			if (!receipts.hub.receiptHoleFrame || !receipts.hub.receiptHoleDrops) { error = "the post-return receipt hole was not exercised"; return false; }
+			if (!receipts.hub.tailQueuePeak || receipts.hub.tailQueuePeak > 256 * 1024) { error = "duplicate recovery requests exceeded the reliable queue bound"; return false; }
+			for (uint8_t id = 1; id <= 3; ++id) {
+				const auto& peer = *receipts.peers[id - 1];
+				const auto report = peer.BuildReportJson();
+				if (!AcceptedThrough(peer) || *AcceptedThrough(peer) < receipts.worlds[id - 1].applied ||
+				    peer.InputDelayAt(id, receipts.worlds[id - 1].applied) > 36 ||
+				    peer.GetStats().peers.at(3).substitutions != 0 || (id == 3 && report.find("\"peer_receipt_repairs\":0,") != std::string::npos)) {
+					error = "post-return input acceptance stopped, exceeded its delay bound, or held the healthy sender"; return false;
+				}
+				std::cout << "[net-session-plane-selftest] relay-receipt peer=" << static_cast<int>(id) << " hole_frame=" << receipts.hub.receiptHoleFrame
+				    << " applied=" << receipts.worlds[id - 1].applied << " accepted_through=" << *AcceptedThrough(peer)
+				    << " delay_ticks=" << peer.InputDelayAt(id, receipts.worlds[id - 1].applied) << " result=PASS" << std::endl;
 			}
 			// Both an announced round end and an explicit transport close must
 			// release an excluded reader. Unannounced loss remains a partition.
