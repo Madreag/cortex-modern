@@ -1021,6 +1021,7 @@
     <ClInclude Include="Source\System\CheckpointPagePool.h" />
     <ClInclude Include="Source\System\CheckpointNativeStorage.h" />
     <ClInclude Include="Source\System\CheckpointNativeContainers.h" />
+    <ClInclude Include="Source\System\CheckpointString.h" />
     <ClInclude Include="Source\System\MicroPather\micropather.h" />
     <ClInclude Include="Source\Renderer\raylib\raylib.h" />
     <ClInclude Include="Source\Renderer\raylib\rlconfig.h" />

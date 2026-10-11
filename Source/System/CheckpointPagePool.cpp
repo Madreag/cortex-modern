@@ -3,6 +3,7 @@
 #include "PageWriteFence.h"
 #include "CheckpointFailure.h"
 #include "CheckpointNativeStorage.h"
+#include "CheckpointString.h"
 #include "ScenarioRunner.h"
 
 #include <algorithm>
@@ -14,6 +15,7 @@
 #include <future>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
@@ -413,6 +415,38 @@ std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> CheckpointNativ
 	return snapshots;
 }
 
+struct CheckpointNativeStorage::ReadState {
+	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> pages;
+	std::map<std::pair<uintptr_t, size_t>, std::string> strings;
+};
+
+thread_local CheckpointNativeStorage::ReadState* CheckpointNativeStorage::s_Read = nullptr;
+
+CheckpointNativeStorage::ReadScope::ReadScope(std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> pages)
+	: m_State(std::make_unique<ReadState>()), m_Previous(s_Read) {
+	m_State->pages.assign(pages.begin(), pages.end());
+	s_Read = m_State.get();
+}
+
+CheckpointNativeStorage::ReadScope::~ReadScope() { s_Read = m_Previous; }
+
+bool CheckpointNativeStorage::ReadBytes(const void* source, void* target, size_t bytes) {
+	if (s_Read) for (const auto& pages: s_Read->pages) if (pages->Read(source, target, bytes)) return true;
+	return false;
+}
+
+const std::string* CheckpointNativeStorage::ReadString(const char* source, size_t bytes) {
+	if (!s_Read) return nullptr;
+	static const std::string empty;
+	if (!bytes) return &empty;
+	const auto key = std::pair{reinterpret_cast<uintptr_t>(source), bytes};
+	if (const auto found = s_Read->strings.find(key); found != s_Read->strings.end()) return &found->second;
+	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	std::string value(bytes, '\0');
+	if (!ReadBytes(source, value.data(), bytes)) throw std::logic_error("native string is outside the frozen inventory");
+	return &s_Read->strings.emplace(key, std::move(value)).first->second;
+}
+
 std::string CheckpointNativeStorage::SelfTestMismatch() {
 	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> first, second;
 	const void* address = nullptr;
@@ -443,5 +477,37 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 		if (read != std::vector<uint64_t>{3, 17, 7, 11}) return "native container reuse changed its second generation";
 	}
 	if (!foundFirst || !foundSecond) return "native container generation lost its allocation";
+	return CheckpointString::SelfTestMismatch();
+}
+
+std::string CheckpointString::SelfTestMismatch() {
+	const std::string before = std::string(513, 'a') + std::string("\0saved", 6);
+	const std::string after(1025, 'b');
+	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> first, second;
+	const CheckpointString* source = nullptr;
+	{
+		CheckpointNativeStorage::AllocationScope allocation(true);
+		auto live = std::allocate_shared<CheckpointString>(CheckpointNativeAllocator<CheckpointString>{}, before);
+		source = live.get();
+		const std::string& alias = *live;
+		first = CheckpointNativeStorage::Prepare();
+		for (const auto& pages: first) pages->Arm();
+		*live = after;
+		if (alias != after || &alias != &live->Value()) return "native string lost its live reference";
+		second = CheckpointNativeStorage::Prepare();
+		for (const auto& pages: second) pages->Arm();
+		live->clear(); live.reset();
+		auto reused = std::allocate_shared<CheckpointString>(CheckpointNativeAllocator<CheckpointString>{}, "reused");
+	}
+	for (const auto& pages: first) pages->Drain();
+	for (const auto& pages: second) pages->Drain();
+	const auto check = [&](const auto& pages, const std::string& expected) {
+		CheckpointNativeStorage::ReadScope read(pages);
+		alignas(CheckpointString) std::array<std::byte, sizeof(CheckpointString)> header;
+		if (!CheckpointNativeStorage::ReadBytes(source, header.data(), header.size())) return false;
+		const auto& frozen = *reinterpret_cast<const CheckpointString*>(header.data());
+		return frozen.Value() == expected && std::hash<CheckpointString>{}(frozen) == std::hash<std::string>{}(expected);
+	};
+	if (!check(first, before) || !check(second, after)) return "native string edit or destruction changed its frozen bytes";
 	return {};
 }

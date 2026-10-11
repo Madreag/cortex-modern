@@ -6,6 +6,8 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <span>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -32,12 +34,28 @@ namespace RTE {
 		private:
 			bool m_Previous;
 		};
+		struct ReadState;
+		class ReadScope {
+		public:
+			explicit ReadScope(std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> pages);
+			~ReadScope();
+			ReadScope(const ReadScope&) = delete;
+			ReadScope& operator=(const ReadScope&) = delete;
+		private:
+			CaptureScope m_Capture;
+			std::unique_ptr<ReadState> m_State;
+			ReadState* m_Previous;
+		};
 		static bool Enabled();
 		static void* Allocate(size_t bytes, size_t alignment);
 		static bool Deallocate(void* address) noexcept;
 		static bool Owns(const void* address);
 		static std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> Prepare();
+		static bool ReadBytes(const void* source, void* target, size_t bytes);
+		static const std::string* ReadString(const char* source, size_t bytes);
 		static std::string SelfTestMismatch();
+	private:
+		static thread_local ReadState* s_Read;
 	};
 
 	template<class T> class CheckpointNativeAllocator {
