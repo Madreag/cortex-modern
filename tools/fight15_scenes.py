@@ -424,17 +424,22 @@ def game_scenes():
                   menu("text_watch start rematch-duplicates duplicates substate:Lobby"),
                   menu("text_watch start rematch-layout layout substate:Lobby"), wait(elapsed_ms=4000, scope="menu"),
                   menu("text_watch assert rematch-state"), menu("text_watch assert rematch-duplicates"), menu("text_watch assert rematch-layout")]
+    # Both peers have finished watching the rematch lobby before either starts its countdown.
+    joiner += [menu("chat all joiner watches the rematch countdown")]
+    host += [menu("wait_label LabelLobbyChatAny joiner watches the rematch countdown")]
     host += [menu("activate ButtonMultiplayerStart"), wait(scope="menu", control="LabelMultiplayerStatus", text_contains="Starting in 30 s")]
     host += [menu("assert_label LabelMultiplayerStatus Starting in 30 s - waiting for Joiner to press Ready")]
     host += [menu(command) for command in watches("rematch-active-host", "Starting in", rule="contains")]
     host += capture("rematch-countdown-host", "MultiplayerScreen") + [menu("assert_label ButtonMultiplayerStart Cancel Start"), wait(elapsed_ms=2200, scope="menu")]
     host += [menu(command) for command in assert_watches("rematch-active-host")]
+    host += [menu("wait_label LabelLobbyChatAny joiner checked the rematch countdown")]
     host += [menu("activate ButtonMultiplayerStart"), wait(elapsed_ms=1200, scope="menu"), menu("assert_label LabelMultiplayerStatus Waiting for Joiner to press Ready"), dict(op="finish")]
     joiner += [wait(scope="menu", control="LabelMultiplayerStatus", text_contains="The host is starting the match in 30 s")]
     joiner += [menu("assert_label LabelMultiplayerStatus The host is starting the match in 30 s - press Ready")]
     joiner += [menu(command) for command in watches("rematch-active-joiner", "The host is starting the match in", rule="contains")]
     joiner += capture("rematch-countdown-joiner", "MultiplayerScreen") + [menu("assert_text_fits LabelMultiplayerStatus")]
     joiner += [menu(command) for command in assert_watches("rematch-active-joiner")]
+    joiner += [menu("chat all joiner checked the rematch countdown")]
     joiner += [wait(elapsed_ms=4000, scope="menu"), menu("assert_label LabelMultiplayerStatus Press Ready when you're ready to play"), dict(op="finish")]
     emit(9, "Rematch waiting names, no premature countdown, thirty-second Start and Cancel",
          game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner),
