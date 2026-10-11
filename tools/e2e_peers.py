@@ -11,6 +11,7 @@ task; the Mac supplies binary. Builds come from each box's own checkout.
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import hashlib
 import json
@@ -23,6 +24,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 from types import SimpleNamespace
 import uuid
@@ -49,6 +51,17 @@ def scene_runs(document):
     return document.get("runs") or [{"name": "run0", "peers": document["peers"]}]
 
 
+def player_files(document, run):
+    files = set()
+    for peer in run.get("peers", document.get("peers", [])):
+        for key in ("menu_script", "probe", "input_script"):
+            if peer.get(key):
+                text = video.scenario_text(document, peer[key])
+                for role, name in re.findall(r'\{PROBE_DIR_(host|joiner)\}/([A-Za-z0-9_-]+\.(?:json|txt|mark))', text):
+                    files.add(role + "-stage/probe/" + name)
+    return sorted(files)
+
+
 def check_scene(document):
     if not document.get("public_directory"):
         raise ValueError("scene must use its public directory")
@@ -65,8 +78,12 @@ def check_scene(document):
             if any(peer.get(key) for key in ("start_when", "retain_runtime_from", "kill_when", "kill_after_s", "kill_at_tick")):
                 raise ValueError("scene needs another peer's process control; this launcher cannot run it")
             scripts = [video.scenario_text(document, peer[key]) for key in ("menu_script", "probe", "input_script") if peer.get(key)]
-            if any(re.search(r"\{(?:STAGE|PROBE_DIR|VIDEO)_(?:host|joiner)\}", text) for text in scripts):
-                raise ValueError("scene needs shared files between boxes; this launcher cannot run it")
+            if any(re.search(r"\{(?:STAGE|VIDEO)_(?:host|joiner)\}", text) for text in scripts):
+                raise ValueError("scene needs another player's runtime files; this launcher cannot run it")
+            for text in scripts:
+                remaining = re.sub(r'\{PROBE_DIR_(host|joiner)\}/[A-Za-z0-9_-]+\.(?:json|txt|mark)', '', text)
+                if re.search(r"\{PROBE_DIR_(?:host|joiner)\}", remaining):
+                    raise ValueError("another player's probe file must name one declared marker")
 
 
 class PlayerRun:
@@ -137,7 +154,9 @@ def play(request_path):
     local_scene["checklist"] = [item for item in document.get("checklist", []) if not item.get("peer") or item["peer"] == role]
     options = SimpleNamespace(repo=Path(request["box"]["repo"]), size=None, port=request["port"], fps=request["fps"],
                               setting=[], render_cap=60, fullstate_every=0, sheet_every=request["sheet_every"],
-                              tokens={}, resume_tokens={}, service_tokens={}, completed_runs=[],
+                              tokens={"PROBE_DIR_" + other: out / name / (other + "-stage/probe")
+                                      for other in ("host", "joiner")},
+                              resume_tokens={}, service_tokens={}, completed_runs=[],
                               scratch_root=Path(request["box"]["scratch"]), scratch_limit_bytes=video.SCRATCH_LIMIT,
                               remote_capture=PlayerRun(request, out / (role + "-started.json")))
     missing = video.requirement_findings(options.repo, document)
@@ -193,7 +212,8 @@ def spread_check(capture):
             if record.get("source_commit") != capture.get("source", {}).get("tip") or record.get("scene_sha256") != capture.get("scene_sha256"):
                 reasons.append(label + ": engine source or scene differs from the capture")
             observed.append({"run": run["name"], "peer": peer["peer"], "box": box, "engine_hostname": host,
-                             "pid": record.get("pid"), "record": str(path)})
+                             "pid": record.get("pid"), "engine_pid": (record.get("hop") or {}).get("engine_pid", record.get("pid")),
+                             "record": str(path)})
         if len(set(boxes)) != len(peers):
             reasons.append(run["name"] + ": peers ran on one named box")
         if len(set(hosts)) != len(peers):
@@ -224,7 +244,9 @@ def pack(request_path):
     run_name = scene_runs(scene(str(Path(request["box"]["repo"]) / request["scene_relative"])))[request["run_index"]].get("name", "run" + str(request["run_index"]))
     with tarfile.open(archive, "w") as output:
         for directory, folders, files in os.walk(root, followlinks=False):
-            folders[:] = [name for name in folders if name != "runtime" and not video.is_link(Path(directory) / name)]
+            other = "joiner" if request["role"] == "host" else "host"
+            folders[:] = [name for name in folders if name not in ("runtime", other + "-stage")
+                          and not video.is_link(Path(directory) / name)]
             for name in files:
                 path = Path(directory) / name
                 if not video.is_link(path) and stat.S_ISREG(path.stat().st_mode):
@@ -275,6 +297,51 @@ def wait_start(request_path):
             return 1
         time.sleep(2)
     raise RuntimeError("player start hang guard expired")
+
+
+def read_player_files(request_path):
+    from spread_peers import complete_signal
+    request = read(request_path)
+    out, role = Path(request["out"]), request["role"]
+    root = out / request["run_name"]
+    files = {}
+    for relative in request.get("signal_files", []):
+        path = root / relative
+        if relative.startswith(role + "-stage/probe/") and path.is_file():
+            data = path.read_bytes()
+            if complete_signal(data, relative):
+                files[relative] = base64.b64encode(data).decode()
+    return {"started": (out / (role + "-started.json")).is_file(), "files": files}
+
+
+def write_player_files(request_path, files):
+    from spread_peers import publish_signals
+    request = read(request_path)
+    out = Path(request["out"])
+    if not (out / (request["role"] + "-started.json")).is_file():
+        raise ValueError("player has not started its scene")
+    allowed = {relative for relative in request.get("signal_files", [])
+               if not relative.startswith(request["role"] + "-stage/")}
+    publish_signals(out / request["run_name"], files, allowed)
+
+
+def share_player_files(players, stop, errors):
+    sent = {role: {} for role in players}
+    try:
+        while not stop.is_set():
+            states = {}
+            for role, (box, request, process, remote, tool, log) in players.items():
+                result = ssh(box, [box["python"], tool, "--read-files", remote], check=True, capture_output=True, text=True)
+                states[role] = json.loads(result.stdout)
+            for role, (box, request, process, remote, tool, log) in players.items():
+                incoming = {path: data for other, state in states.items() if other != role for path, data in state["files"].items()}
+                if states[role]["started"] and incoming != sent[role]:
+                    ssh(box, [box["python"], tool, "--write-files", remote], check=True,
+                        input=json.dumps(incoming), capture_output=True, text=True)
+                    sent[role] = incoming
+            stop.wait(2)
+    except Exception as error:
+        errors.append(str(error))
 
 
 def launch(box, request_path, log):
@@ -344,13 +411,15 @@ def capture_scene(args):
     for index, run in enumerate(scene_runs(document)):
         name = run.get("name", "run" + str(index))
         players, collected = {}, set()
+        stop, file_errors, sharing = threading.Event(), [], None
         try:
             for role in ("host", "joiner"):
                 box = boxes[role]
                 remote_out = box["scratch"].rstrip("/") + "/" + out.name + "-" + name + "-" + uuid.uuid4().hex[:8]
                 request = dict(box=box, role=role, run_index=index, out=remote_out, commit=source["tip"],
                                scene_relative=relative, scene_sha256=scene_hash, fps=video.DEFAULT_FPS,
-                               sheet_every=15, port=int(document.get("port_base", video.PORT_LO)))
+                               sheet_every=15, port=int(document.get("port_base", video.PORT_LO)),
+                               run_name=name, signal_files=player_files(document, run))
                 request_path = controls / (name + "-" + role + ".json")
                 video.write_json(request_path, request)
                 log = (controls / (name + "-" + role + ".log")).open("w", encoding="utf-8")
@@ -360,6 +429,9 @@ def capture_scene(args):
                     ready = ssh(box, [box["python"], tool, "--wait-start", remote], capture_output=True, text=True)
                     if ready.returncode:
                         raise RuntimeError("host launch refused: " + ready.stdout.strip())
+            if player_files(document, run):
+                sharing = threading.Thread(target=share_player_files, args=(players, stop, file_errors))
+                sharing.start()
             for role, player in players.items():
                 collected.add(role)
                 collect_player(out, name, role, player)
@@ -389,6 +461,12 @@ def capture_scene(args):
                         collect_player(out, name, role, player)
                     except Exception as error:
                         capture["interrupted"] += "; could not collect " + role + ": " + str(error)
+            stop.set()
+            if sharing:
+                sharing.join()
+            if file_errors:
+                capture["interrupted"] = ((capture.get("interrupted") + "; ") if capture.get("interrupted") else "") + \
+                                         "could not share the scene's declared player files: " + "; ".join(file_errors)
             video.write_json(out / "capture.json", capture)
         if capture.get("interrupted"):
             break
@@ -426,12 +504,20 @@ def main():
     parser.add_argument("--pack", type=Path)
     parser.add_argument("--prepare", type=Path)
     parser.add_argument("--wait-start", type=Path)
+    parser.add_argument("--read-files", type=Path)
+    parser.add_argument("--write-files", type=Path)
     args = parser.parse_args()
     if args.prepare:
         args.prepare.mkdir(parents=True, exist_ok=False)
         return 0
     if args.wait_start:
         return wait_start(args.wait_start)
+    if args.read_files:
+        print(json.dumps(read_player_files(args.read_files)), flush=True)
+        return 0
+    if args.write_files:
+        write_player_files(args.write_files, json.load(sys.stdin))
+        return 0
     if args.play:
         return play(args.play)
     if args.pack:

@@ -61,6 +61,30 @@ class SceneBoxesTest(unittest.TestCase):
         self.assertIn('clear = (h == 0) or title in ("Program Manager", "") or state.value in (1, 5, 6, 7)', script)
         self.assertLess(script.index("if (`$fg -notmatch 'clear=True')"), script.index("`$env:CC_RUNNER_IGNORE_FULLSCREEN = '1'"))
 
+    def test_fight_completion_file_reaches_the_other_player(self):
+        document = peers.scene("fight15-s10")
+        peers.check_scene(document)
+        files = peers.player_files(document, peers.scene_runs(document)[0])
+        requests = {}
+        for role in ("host", "joiner"):
+            out = self.root / ("native-" + role)
+            (out / "run0" / (role + "-stage/probe")).mkdir(parents=True)
+            (out / (role + "-started.json")).write_text('{}')
+            request = out / "request.json"
+            request.write_text(json.dumps(dict(out=str(out), role=role, run_name="run0", signal_files=files)))
+            requests[role] = request
+        marker = self.root / 'native-host/run0/host-stage/probe/fight-ticks-complete.json'
+        marker.write_bytes(b'{')
+        self.assertEqual(peers.read_player_files(requests['host'])['files'], {})
+        content = b'{"frame":73000,"name":"fight-ticks-complete"}\n'
+        marker.write_bytes(content)
+        copied = peers.read_player_files(requests['host'])['files']
+        peers.write_player_files(requests['joiner'], copied)
+        received = self.root / 'native-joiner/run0/host-stage/probe/fight-ticks-complete.json'
+        self.assertEqual(received.read_bytes(), content)
+        with self.assertRaises(ValueError):
+            peers.write_player_files(requests['host'], copied)
+
 
 if __name__ == "__main__":
     unittest.main()
