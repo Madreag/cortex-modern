@@ -316,7 +316,15 @@ namespace RTE {
 			return;
 		}
 		m_FrameGroupChanges[agreed.frame] = agreed.connectedMask;
-		if (agreed.preparedFrame == 0) m_FrameGroupMembers = agreed.connectedMask;
+		if (agreed.preparedFrame == 0) {
+			m_FrameGroupMembers = agreed.connectedMask;
+			// Keep the surviving display clock when the held seat returns.
+			// The certificate can arrive after this frame was prepared.
+			if ((agreed.connectedMask & SeatBit(m_PeerPaceReference)) == 0)
+				m_PeerPaceReference = static_cast<uint8_t>(std::countr_zero(agreed.connectedMask) + 1);
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-pace] local=" << static_cast<int>(m_Config.localPeerId)
+				<< " frame=" << agreed.frame << " members=" << agreed.connectedMask << " reference=" << static_cast<int>(m_PeerPaceReference) << std::endl;
+		}
 		uint32_t owners = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= SeatBit(peer);
 		if (agreed.preparedFrame == 1 && agreed.connectedMask == owners && agreed.frame <= m_Stats.nextFrame) m_PeerAdminFrameMembers = 0;
