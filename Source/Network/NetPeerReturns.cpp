@@ -177,7 +177,8 @@ namespace RTE {
 			request.completeFrom = end;
 			// Matching donor histories cover the newest frames while their witnesses are still in flight.
 			for (const auto& [peer, applied]: m_PeerAppliedThrough) {
-				if (peer != m_Config.localPeerId && applied >= frame && HasPeerFrameRoute(peer)) {
+				if (peer != m_Config.localPeerId && (m_FrameGroupMembers & SeatBit(peer)) != 0 &&
+				    frame - std::min(frame, applied) < 128 && HasPeerFrameRoute(peer)) {
 					SendPeerFrameMessage(request, NetTransportLane::ControlReliable, peer); ++m_PeerTailRequests;
 				}
 			}

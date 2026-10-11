@@ -29192,6 +29192,10 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "seat-return-pacing") {
+				std::string error;
+				return TestALateVoterResyncsAfterTheMajorityCloses(&error) && TestPlacementBarrierReleasesPeerBridging(&error) ? 0 : fail(error);
+			}
 			if (std::string_view(selectedCase) == "catch-up-script-control") {
 				std::string error;
 				return TestCatchUpScriptSwitchKeepsSharedControl(&error) && TestCatchUpActorOwnerUsesAppliedTick(&error) ? 0 : fail(error);

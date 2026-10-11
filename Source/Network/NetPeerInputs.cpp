@@ -190,8 +190,15 @@ namespace RTE {
 					// not the live sender's transport round trip.
 					if (live && sent->second >= m_PeerReceiptSampleFloorMs[message.senderPeerId] && (members & m_FrameGroupMembers & SeatBit(message.senderPeerId)) != 0) {
 						const auto delay = static_cast<uint32_t>(std::min<uint64_t>(nowMs - sent->second, UINT32_MAX));
-						m_PeerReceiptDelaySamples[message.senderPeerId].Observe(nowMs, delay);
-						m_PeerArrivalLatencyMs[m_Config.localPeerId] = {nowMs, delay};
+						const auto [wire, route] = PeerFrameRoute(message.senderPeerId);
+						const uint64_t reserve = c_NetInputJitterReserveMs +
+						    static_cast<uint64_t>(std::ceil((m_Config.slowPlayerBoundTicks + 1) * m_Config.simTickMs));
+						// Receipts retained through a placement pause measure the pause,
+						// even when no combat bridge changed the sample floor.
+						if (!wire || !wire->IsPeerPingMeasured(route) || delay <= wire->GetPeerPingMs(route) + reserve) {
+							m_PeerReceiptDelaySamples[message.senderPeerId].Observe(nowMs, delay);
+							m_PeerArrivalLatencyMs[m_Config.localPeerId] = {nowMs, delay};
+						}
 					}
 				}
 				receipt = std::max(receipt, message.frame);

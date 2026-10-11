@@ -163,10 +163,8 @@ namespace RTE {
 		proposal.bytes.assign(prefix.begin(), prefix.end());
 		if (proposal.preparedFrame == 1) for (uint8_t peer: proposal.members) {
 			uint32_t rtt = m_Stats.peers[peer].pingMs;
-			if (m_Config.peerSessionLinks) {
-				const auto [wire, route] = m_Config.peerSessionLinks->RouteTo(peer);
-				if (wire && wire->IsPeerPingMeasured(route)) rtt = std::max(rtt, wire->GetPeerPingMs(route));
-			}
+			const auto [wire, route] = PeerFrameRoute(peer);
+			if (wire && wire->IsPeerPingMeasured(route)) rtt = std::max(rtt, wire->GetPeerPingMs(route));
 			const uint64_t displayed = m_LastCompletedSimulationTick.value_or(frame - 1);
 			const uint64_t applied = m_PeerAppliedThrough.at(peer);
 			const uint32_t trail = static_cast<uint32_t>(displayed - std::min(displayed, applied));

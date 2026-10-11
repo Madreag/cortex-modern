@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -20,6 +21,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <thread>
 #include <vector>
@@ -790,8 +792,10 @@ namespace RTE {
 		auto joiner = gap("two_joiner_3s_internet_and_direct", 2, 3000); joiner.seats = 2; joiner.internet = true; rows.push_back(joiner);
 		auto both = gap("two_internet_host_and_directory_3s", 1, 3000); both.seats = 2; both.internet = both.directoryDown = true; rows.push_back(both);
 		int passed = 0, failed = 0;
-		std::cout << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=29" << std::endl;
+		const char* selected = std::getenv("CC_TEST_SESSION_PLANE_CASE");
+		std::cout << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : 29) << std::endl;
 		for (const auto& row: rows) {
+			if (selected && std::string_view(selected) != row.name) continue;
 			std::string error; Fixture fixture; bool ok = fixture.Run(row, error);
 			if (ok && row.name == std::string("relay_link_blackout_return")) ok = CheckRelayReturnAndDepartures(error);
 			if (row.name == std::string("partition_3_1") || row.name == std::string("host_absent_3s"))
@@ -809,12 +813,13 @@ namespace RTE {
 		}
 		for (unsigned arm = 0; arm < 3; ++arm) {
 			const char* name = arm == 0 ? "successor_unvalidated_boundary_refused" : arm == 1 ? "leave_during_handover_exits" : "malformed_traffic_does_not_renew_authority";
+			if (selected && std::string_view(selected) != name) continue;
 			std::string error; const bool ok = NetLockstepSelfTest::CheckSessionRecoveryGuard(arm, &error);
 			std::cout << "[net-session-plane-selftest] " << (ok ? "PASS " : "FAIL ") << name << (error.empty() ? "" : ": " + error) << std::endl;
 			if (ok) ++passed; else ++failed;
 		}
 		std::cout << "[net-session-plane-selftest] " << passed << " of " << passed + failed << " passed" << std::endl;
 		std::cout << "[net-session-plane-selftest] " << (failed ? "FAIL" : "PASS") << std::endl;
-		return failed ? 1 : 0;
+		return failed || passed == 0 ? 1 : 0;
 	}
 }
