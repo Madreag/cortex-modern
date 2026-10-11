@@ -80,6 +80,7 @@ extern "C" {
 #include <execution>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <iomanip>
 #include <locale>
 #include <map>
@@ -3076,10 +3077,11 @@ bool MovableMan::SerializeScriptGraphs(std::vector<std::string>& graphs, std::ve
 	return complete;
 }
 
-MovableMan::KnownObjectsScope::KnownObjectsScope() {
+MovableMan::KnownObjectsScope::KnownObjectsScope() : m_Frozen(CheckpointNativeStorage::Reading()) {
+	// Frozen lists belong to the saver; simulation queries keep their live scope.
+	if (m_Frozen) return;
 	MovableMan& manager = g_MovableMan;
-	if (CheckpointNativeStorage::Reading()) m_Version = manager.m_KnownObjectsVersion.load();
-	else {
+	{
 		std::lock_guard<std::mutex> guard(manager.m_ObjectRegisteredMutex);
 		m_Version = manager.m_KnownObjectsVersion.load();
 	}
@@ -3110,19 +3112,62 @@ void MovableMan::KnownObjectsScope::Copy() const {
 }
 
 MovableMan::KnownObjectsScope::~KnownObjectsScope() {
-	g_MovableMan.m_KnownObjectsScope.store(m_Previous);
+	if (!m_Frozen) g_MovableMan.m_KnownObjectsScope.store(m_Previous);
 }
 
-MovableMan::ScriptHeldScope::ScriptHeldScope(std::vector<MovableObject*> held) : m_Held(std::move(held)), m_Previous(g_MovableMan.m_CaptureScriptHeld.load()) {
-	g_MovableMan.m_CaptureScriptHeld.store(&m_Held);
+MovableMan::ScriptHeldScope::ScriptHeldScope(std::vector<MovableObject*> held) : m_Held(std::move(held)), m_Frozen(CheckpointNativeStorage::Reading()) {
+	m_Previous = m_Frozen ? s_Frozen : g_MovableMan.m_CaptureScriptHeld.load();
+	if (m_Frozen) s_Frozen = &m_Held;
+	else g_MovableMan.m_CaptureScriptHeld.store(&m_Held);
 }
 
 MovableMan::ScriptHeldScope::~ScriptHeldScope() {
-	g_MovableMan.m_CaptureScriptHeld.store(m_Previous);
+	if (m_Frozen) s_Frozen = m_Previous;
+	else g_MovableMan.m_CaptureScriptHeld.store(m_Previous);
 }
 
 const std::vector<MovableObject*>* MovableMan::ScriptHeldScope::Current() {
-	return g_MovableMan.m_CaptureScriptHeld.load();
+	return CheckpointNativeStorage::Reading() ? s_Frozen : g_MovableMan.m_CaptureScriptHeld.load();
+}
+
+std::string MovableMan::CheckpointScopesSelfTestMismatch() {
+	KnownObjectsScope liveKnown;
+	ScriptHeldScope liveHeld({nullptr});
+	std::promise<void> entered, release;
+	auto ready = entered.get_future();
+	auto proceed = release.get_future();
+	auto worker = std::async(std::launch::async, [&]() -> std::string {
+		try {
+			CheckpointNativeStorage::ReadScope read(CheckpointNativeStorage::ReadViews{true, {}, {}});
+			KnownObjectsScope frozenKnown;
+			ScriptHeldScope frozenHeld({nullptr, nullptr});
+			entered.set_value();
+			proceed.wait();
+			if (g_MovableMan.m_KnownObjectsScope.load() != &liveKnown) return "frozen known list published to simulation";
+			if (!ScriptHeldScope::Current() || ScriptHeldScope::Current()->size() != 2) return "frozen held list lost";
+			{
+				ScriptHeldScope nested({});
+				if (!ScriptHeldScope::Current() || !ScriptHeldScope::Current()->empty()) return "nested frozen held list lost";
+			}
+			if (ScriptHeldScope::Current()->size() != 2) return "nested frozen held list not restored";
+			return {};
+		} catch (...) {
+			try { entered.set_exception(std::current_exception()); } catch (const std::future_error&) {}
+			throw;
+		}
+	});
+	struct ReleaseWorker {
+		std::promise<void>& release;
+		~ReleaseWorker() { try { release.set_value(); } catch (const std::future_error&) {} }
+	} releaseWorker{release};
+	ready.get();
+	const bool privateLists = g_MovableMan.m_KnownObjectsScope.load() == &liveKnown && ScriptHeldScope::Current() && ScriptHeldScope::Current()->size() == 1;
+	release.set_value();
+	const std::string mismatch = worker.get();
+	if (!mismatch.empty()) return mismatch;
+	if (!privateLists) return "simulation observed a frozen list";
+	if (g_MovableMan.m_KnownObjectsScope.load() != &liveKnown || !ScriptHeldScope::Current() || ScriptHeldScope::Current()->size() != 1) return "saver restored a simulation scope";
+	return {};
 }
 
 std::string MovableMan::KnownObjectsScopeMissedChange() {

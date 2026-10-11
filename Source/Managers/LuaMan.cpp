@@ -9806,6 +9806,13 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = mismatch.empty() && checkpointValues;
 	}
 	{
+		const std::string mismatch = MovableMan::CheckpointScopesSelfTestMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " frozen_saver_object_lists_do_not_replace_simulation_lists";
+		if (!mismatch.empty()) std::cout << " reason=" << mismatch;
+		std::cout << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
+	}
+	{
 		const std::string mismatch = CheckpointNativeStorage::SelfTestMismatch();
 		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " live_native_container_pages_survive_mutation_destruction_and_reuse";
 		if (!mismatch.empty()) std::cout << " reason=" << mismatch;

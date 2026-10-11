@@ -367,11 +367,14 @@ namespace RTE {
 			mutable std::vector<const MovableObject*> m_ByAddress; //!< Sorted by address, for IsKnownObject.
 			uint64_t m_Version = 0; //!< The known objects' version when the scope opened.
 			KnownObjectsScope* m_Previous = nullptr;
+			bool m_Frozen = false;
 		};
 
 		/// Changes the known objects by each way in while a known-objects scope lives, and checks IsKnownObject answers
 		/// as the registry does after each. @return The first way it did not, or empty.
 		std::string KnownObjectsScopeMissedChange();
+		/// Checks that a frozen saver cannot publish its object lists to simulation readers.
+		static std::string CheckpointScopesSelfTestMismatch();
 
 		/// While one lives, the checkpoint saver reads the objects the script states held from this list, gathered on the
 		/// capturing thread before any state froze, instead of entering each state (which waits for that state's page copy).
@@ -385,6 +388,8 @@ namespace RTE {
 		private:
 			std::vector<MovableObject*> m_Held;
 			const std::vector<MovableObject*>* m_Previous = nullptr;
+			bool m_Frozen;
+			inline static thread_local const std::vector<MovableObject*>* s_Frozen = nullptr;
 		};
 
 		struct AddQueueMark {
