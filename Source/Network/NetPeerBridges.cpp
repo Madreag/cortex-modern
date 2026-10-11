@@ -99,7 +99,14 @@ namespace RTE {
 			if (m_FrameGroupMembers == 0 || std::countr_zero(m_FrameGroupMembers) + 1 != m_Config.localPeerId) return false;
 			for (const auto& [peer, bridge]: m_PeerBridges) {
 				if (bridge.returnFrame || peer == m_Config.localPeerId) continue;
-				const uint64_t delay = InputDelayAt(peer, frame);
+				uint64_t delay = InputDelayAt(peer, frame);
+				const auto [wire, route] = PeerFrameRoute(peer);
+				if (wire && wire->IsPeerPingMeasured(route)) {
+					const uint32_t margin = std::max(c_NetInputJitterReserveMs +
+					    static_cast<uint32_t>(std::ceil((m_Config.slowPlayerBoundTicks + 1) * m_Config.simTickMs)), m_Stats.peers[peer].jitterMs);
+					delay = std::max<uint64_t>(delay, std::min<uint64_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
+					    static_cast<uint64_t>(std::ceil((wire->GetPeerPingMs(route) + margin) / m_Config.simTickMs))));
+				}
 				const uint64_t heard = LastAuthenticatedTraffic(peer);
 				const auto applied = m_PeerAppliedThrough.find(peer);
 				if (nowMs < heard || nowMs - heard > 1000 || applied == m_PeerAppliedThrough.end()) continue;
@@ -122,7 +129,10 @@ namespace RTE {
 			uint64_t lead = m_Config.slowPlayerBoundTicks;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 				lead = std::max<uint64_t>(lead, static_cast<uint64_t>(std::ceil(m_Stats.peers[peer].pingMs / m_Config.simTickMs)) + m_Config.slowPlayerBoundTicks);
-			proposal.frame = frame + lead;
+			uint64_t prepared = frame;
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((m_FrameGroupMembers & SeatBit(peer)) != 0)
+				prepared = std::max(prepared, m_Stats.peers[peer].reportedNextFrame);
+			proposal.frame = prepared + lead;
 		}
 		if (proposal.preparedFrame == 0) {
 			const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
@@ -136,13 +146,9 @@ namespace RTE {
 			// Votes spend the buffered runway, so a healthy relay round trip fits inside the consumer's bound.
 			if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame) {
 				double dueMs = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
-				// Startup synchronization can permanently advance the display
-				// beyond its first-tick pacing anchor. Spend the runway before
-				// the consumer's actual next slot, not that stale later deadline.
-				// Keep the original anchor for a reader still catching up from
-				// behind; its earlier deadline must not be postponed either.
+					// The current displayed slot includes pauses and startup synchronization.
 				if (m_PeerConsumerAtMs && m_LastCompletedSimulationTick && frame > *m_LastCompletedSimulationTick)
-					dueMs = std::min(dueMs, *m_PeerConsumerAtMs + (frame - *m_LastCompletedSimulationTick) * m_Config.simTickMs);
+						dueMs = *m_PeerConsumerAtMs + (frame - *m_LastCompletedSimulationTick) * m_Config.simTickMs;
 				// Catch-up can ask for this tick before its original pacing slot.
 				// Its actual consumer wait still has the same three-tick bound.
 				if (m_ConsumerWaitingFrame == frame) dueMs = std::min(dueMs, static_cast<double>(m_ConsumerWaitStartMs));

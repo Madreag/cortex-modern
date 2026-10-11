@@ -369,7 +369,14 @@ namespace RTE {
 				}
 			}
 			// An authenticated donor cannot commit a minority's tail by claiming somebody else's votes.
-			if ((agreeing & ~message.voterMask) != 0 || 2 * std::popcount(agreeing) <= std::popcount(message.voterMask)) return true;
+			if ((agreeing & ~message.voterMask) != 0 || 2 * std::popcount(agreeing) <= std::popcount(message.voterMask)) {
+				if (message.frame == m_Stats.nextFrame && nowMs >= m_PeerTailLogAtMs) {
+					m_PeerTailLogAtMs = nowMs + 1000;
+					DiagnosticLine() << "[net-peer-tail-wait] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << message.frame
+					    << " donors=" << votes.size() << " matching_voters=" << agreeing << " members=" << message.voterMask << std::endl;
+				}
+				return true;
+			}
 			m_PeerCommittedTail.try_emplace(message.frame, std::move(record));
 			m_PeerPreparedPrefixes.try_emplace(message.frame, prepared);
 			m_PeerTailPrefixes.try_emplace(message.frame, prefix); m_PeerTailDecisions.try_emplace(message.frame, std::move(proofs));
