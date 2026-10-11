@@ -60,7 +60,7 @@ void GUIButton::Create(const std::string& Name, int X, int Y, int Width, int Hei
 		m_Icon = std::make_unique<AllegroBitmap>();
 	}
 	if (!m_BorderSizes) {
-		m_BorderSizes = std::make_unique<GUIRect>();
+		m_BorderSizes = std::make_unique<SavedBorder>();
 	}
 }
 
@@ -95,7 +95,7 @@ void GUIButton::Create(GUIProperties* Props) {
 		m_Icon = std::make_unique<AllegroBitmap>();
 	}
 	if (!m_BorderSizes) {
-		m_BorderSizes = std::make_unique<GUIRect>();
+		m_BorderSizes = std::make_unique<SavedBorder>();
 	}
 
 	// Load the values

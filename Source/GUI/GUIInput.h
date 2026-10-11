@@ -1,12 +1,15 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 #include <string>
 #include <string_view>
 
 namespace RTE {
 
 	/// An interface class inherited by the different types of input methods.
-	class GUIInput {
+	class GUIInput : public CheckpointNativeAllocated {
 
 	public:
 
@@ -154,7 +157,7 @@ namespace RTE {
 		// Keyboard buffer holding the key states
 		unsigned char m_KeyboardBuffer[KEYBOARD_BUFFER_SIZE];
 		unsigned char m_ScanCodeState[KEYBOARD_BUFFER_SIZE];
-		std::string m_TextInput;
+		CheckpointString m_TextInput;
 		bool m_HasTextInput;
 		int m_TextInputActive{0};
 

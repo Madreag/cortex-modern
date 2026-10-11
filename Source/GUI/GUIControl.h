@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 #include "GUIWriter.h"
 
 namespace RTE {
@@ -7,7 +10,7 @@ namespace RTE {
 	class GUIControlManager;
 
 	/// A base class inherited by all controls.
-	class GUIControl {
+	class GUIControl : public CheckpointNativeAllocated {
 		friend class GUICheckpoint;
 
 	public:
@@ -68,7 +71,7 @@ namespace RTE {
 		void AddChild(GUIControl* Control);
 
 		/// Gets the children lst
-		std::vector<GUIControl*>* GetChildren();
+		CheckpointVector<GUIControl*>* GetChildren();
 
 		/// Returns the panel of the control.
 		/// @return 0 if the control does not have a panel, otherwise the topmost panel.
@@ -133,9 +136,9 @@ namespace RTE {
 		int m_SkinPreset;
 		GUIProperties m_Properties;
 		GUIControl* m_ControlParent;
-		std::vector<GUIControl*> m_ControlChildren;
+		CheckpointVector<GUIControl*> m_ControlChildren;
 
-		std::string m_ControlID;
+		CheckpointString m_ControlID;
 
 		bool m_IsContainer;
 

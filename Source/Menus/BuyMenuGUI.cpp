@@ -314,7 +314,7 @@ void BuyMenuGUI::DuplicateCartItem(const int itemIndex) {
 		return;
 	}
 
-	std::vector<GUIListPanel::Item*> addedItems;
+	CheckpointVector<GUIListPanel::Item*> addedItems;
 
 	auto addDuplicateItemAtEnd = [&](const GUIListPanel::Item* itemToCopy) {
 		GUIBitmap* pItemBitmap = new AllegroBitmap(dynamic_cast<AllegroBitmap*>(itemToCopy->m_pBitmap)->GetBitmap());
@@ -596,7 +596,7 @@ bool BuyMenuGUI::GetOrderList(std::list<const SceneObject*, Allocator>& listToFi
 		return false;
 
 	const SceneObject* pSObject = 0;
-	for (std::vector<GUIListPanel::Item*>::iterator itr = m_pCartList->GetItemList()->begin(); itr != m_pCartList->GetItemList()->end(); ++itr) {
+	for (CheckpointVector<GUIListPanel::Item*>::iterator itr = m_pCartList->GetItemList()->begin(); itr != m_pCartList->GetItemList()->end(); ++itr) {
 		if (pSObject = dynamic_cast<const SceneObject*>((*itr)->m_pEntity))
 			listToFill.push_back(pSObject);
 	}
@@ -623,7 +623,7 @@ float BuyMenuGUI::GetTotalCost(bool includeDelivery) const {
 	if (m_OwnedItems.size() > 0) {
 		std::map<std::string, int> orderedItems;
 
-		for (std::vector<GUIListPanel::Item*>::iterator itr = m_pCartList->GetItemList()->begin(); itr != m_pCartList->GetItemList()->end(); ++itr) {
+		for (CheckpointVector<GUIListPanel::Item*>::iterator itr = m_pCartList->GetItemList()->begin(); itr != m_pCartList->GetItemList()->end(); ++itr) {
 			bool needsToBePaid = true;
 			std::string presetName = (*itr)->m_pEntity->GetModuleAndPresetName();
 
@@ -659,7 +659,7 @@ float BuyMenuGUI::GetTotalCost(bool includeDelivery) const {
 			}
 		}
 	} else {
-		for (std::vector<GUIListPanel::Item*>::iterator itr = m_pCartList->GetItemList()->begin(); itr != m_pCartList->GetItemList()->end(); ++itr)
+		for (CheckpointVector<GUIListPanel::Item*>::iterator itr = m_pCartList->GetItemList()->begin(); itr != m_pCartList->GetItemList()->end(); ++itr)
 			totalCost += dynamic_cast<const MOSprite*>((*itr)->m_pEntity)->GetGoldValue(m_NativeTechModule, m_ForeignCostMult);
 
 		// Add the delivery craft's cost
@@ -701,7 +701,7 @@ float BuyMenuGUI::GetCraftMass() {
 int BuyMenuGUI::GetTotalOrderPassengers() const {
 	if (IsInert()) return 0;
 	int passengers = 0;
-	for (std::vector<GUIListPanel::Item*>::iterator itr = m_pCartList->GetItemList()->begin(); itr != m_pCartList->GetItemList()->end(); ++itr) {
+	for (CheckpointVector<GUIListPanel::Item*>::iterator itr = m_pCartList->GetItemList()->begin(); itr != m_pCartList->GetItemList()->end(); ++itr) {
 		const Actor* passenger = dynamic_cast<const Actor*>((*itr)->m_pEntity);
 		if (passenger) {
 			passengers += passenger->GetPassengerSlots();

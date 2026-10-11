@@ -82,10 +82,11 @@ struct CheckpointPagePool::Copy {
 
 struct CheckpointPagePool::Block {
 	Pages live;
+	size_t slotBytes;
 	size_t pageBytes = PageWriteFence::SystemPageBytes();
 	std::atomic_flag lock = ATOMIC_FLAG_INIT;
 	std::vector<std::shared_ptr<Copy>> copies;
-	explicit Block(size_t bytes) : live(bytes) {}
+	explicit Block(size_t bytes, size_t slotBytes = 0) : live(bytes), slotBytes(slotBytes ? slotBytes : bytes) {}
 	~Block() { PageWriteFence::UnwatchCopies(this); }
 	void Prepare(const std::shared_ptr<Copy>& copy) {
 		const auto keepWritable = [](void*, uintptr_t, size_t) noexcept { return true; };
@@ -162,7 +163,7 @@ void CheckpointPagePool::Grow(size_t slotBytes, size_t minimumSlots, std::vector
 	const size_t slots = std::max(minimumSlots, blockBytes / slotBytes);
 	if (slots > std::numeric_limits<size_t>::max() - m_Slots) throw std::bad_alloc();
 	const size_t bytes = (slots * slotBytes + pageBytes - 1) / pageBytes * pageBytes;
-	auto block = std::make_shared<Block>(bytes);
+	auto block = std::make_shared<Block>(bytes, slotBytes);
 	free.reserve(m_Slots + slots);
 	m_Blocks.push_back(block);
 	for (size_t slot = 0; slot < slots; ++slot) free.push_back(block->live.data + slot * slotBytes);
@@ -224,6 +225,19 @@ std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::Freeze(b
 	});
 	if (arm) snapshot->Arm();
 	return snapshot;
+}
+
+const void* CheckpointPagePool::Snapshot::ReadAllocation(const void* source) const {
+	const uintptr_t address = reinterpret_cast<uintptr_t>(source);
+	const auto end = std::upper_bound(m_Parts.begin(), m_Parts.end(), address, [](uintptr_t address, const Part& part) {
+		return address < reinterpret_cast<uintptr_t>(part.block->live.data);
+	});
+	if (end == m_Parts.begin() || !std::prev(end)->block->Contains(source, 1)) return nullptr;
+	const auto& block = *std::prev(end)->block;
+	const size_t offset = address - reinterpret_cast<uintptr_t>(block.live.data);
+	const size_t slot = offset / block.slotBytes * block.slotBytes;
+	const auto bytes = ReadBytes(block.live.data + slot, std::min(block.slotBytes, block.live.bytes - slot));
+	return bytes.data() + offset - slot;
 }
 
 bool CheckpointPagePool::Snapshot::Contains(const void* source, size_t bytes) const {
@@ -491,6 +505,13 @@ std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointNativeStorage::Pag
 	return {};
 }
 
+const void* CheckpointNativeStorage::ViewObject(const void* source) {
+	if (!s_Read || !source) return source;
+	source = Original(source);
+	for (const auto& pages: s_Read->pages) if (const void* view = pages->ReadAllocation(source)) return view;
+	throw std::logic_error("native object is outside the frozen inventory");
+}
+
 const std::string* CheckpointNativeStorage::ReadString(const char* source, size_t bytes) {
 	if (!s_Read) return nullptr;
 	static const std::string empty;
@@ -533,6 +554,22 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 		if (read != std::vector<uint64_t>{3, 17, 7, 11}) return "native container reuse changed its second generation";
 	}
 	if (!foundFirst || !foundSecond) return "native container generation lost its allocation";
+	{
+		CheckpointNativeStorage::AllocationScope allocation(true);
+		struct First { virtual ~First() = default; };
+		struct Second { virtual ~Second() = default; };
+		struct Whole : First, Second, CheckpointNativeAllocated { std::array<uint64_t, 700> fields{}; };
+		auto live = std::make_unique<Whole>();
+		live->fields.front() = 71; live->fields.back() = 139;
+		const Second* address = live.get();
+		const auto pages = Prepare();
+		for (const auto& part: pages) part->Arm();
+		live.reset();
+		auto reused = std::make_unique<Whole>();
+		CheckpointNativeStorage::ReadScope read(pages);
+		const auto* whole = dynamic_cast<const Whole*>(Source(address));
+		if (!whole || whole->fields.front() != 71 || whole->fields.back() != 139) return "frozen secondary base lost its complete allocation";
+	}
 	{
 		CheckpointNativeStorage::AllocationScope allocation(true);
 		struct alignas(64) AlignedValue : Vector {};

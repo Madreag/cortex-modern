@@ -27,6 +27,7 @@ namespace RTE {
 			/// Copies only from frozen pages; false means the address is outside this pool.
 			bool Read(const void* source, void* destination, size_t bytes) const;
 			std::span<const std::byte> ReadBytes(const void* source, size_t bytes) const;
+			const void* ReadAllocation(const void* source) const;
 			bool Contains(const void* source, size_t bytes) const;
 			const void* Original(const void* view, size_t bytes = 1) const;
 			/// Borrowed fields still match the live capture until a page has opened.

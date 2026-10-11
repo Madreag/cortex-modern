@@ -1,11 +1,14 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 namespace RTE {
 
 	class Timer;
 
 	/// The main manager that handles all the panels and inputs.
-	class GUIManager {
+	class GUIManager : public CheckpointNativeAllocated {
 		friend class GUICheckpoint;
 
 	public:
@@ -70,7 +73,7 @@ namespace RTE {
 		static bool RunComboKeyCommitSelfTest();
 
 	private:
-		std::vector<GUIPanel*> m_PanelList;
+		CheckpointVector<GUIPanel*> m_PanelList;
 		GUIPanel* m_CapturedPanel;
 		GUIPanel* m_FocusPanel;
 		GUIPanel* m_MouseOverPanel;

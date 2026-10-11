@@ -200,7 +200,7 @@ std::unique_ptr<GUIInputWrapper> GUIInputWrapper::CreateAutomationInput() {
 
 std::string GUIInputWrapper::SaveCheckpoint() const {
 	CheckpointWriter writer("GUIInputWrapper1");
-	writer(CheckpointWriter::Native([&] { return GUIInput::SaveCheckpoint(); }), m_KeyHoldDuration, *m_KeyTimer, *m_CursorAccelTimer);
+	writer(CheckpointWriter::Native([&] { return GUIInput::SaveCheckpoint(); }), m_KeyHoldDuration, *CheckpointNativeStorage::Source(m_KeyTimer.get()), *CheckpointNativeStorage::Source(m_CursorAccelTimer.get()));
 	return writer.Text();
 }
 
@@ -306,7 +306,8 @@ void GUIInputWrapper::UpdateKeyboardInput(float keyElapsedTime, const bool* keys
 			m_KeyboardBuffer[keyName] = GUIInput::Pushed;
 		}
 	}
-	m_HasTextInput = g_UInputMan.GetTextInput(m_TextInput);
+	m_TextInput = g_UInputMan.GetTextInput();
+	m_HasTextInput = !m_TextInput.empty();
 
 	ConvertKeyEvent(keys[SDL_SCANCODE_SPACE], ' ', keyElapsedTime);
 	ConvertKeyEvent(keys[SDL_SCANCODE_BACKSPACE], GUIInput::Key_Backspace, keyElapsedTime);

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 // Header file for abstract classes used by the GUI library.
 
 struct BITMAP;
@@ -8,7 +11,7 @@ namespace RTE {
 
 #pragma region GUIBitmap
 	/// An interface class inherited by the different types of bitmap methods.
-	class GUIBitmap {
+	class GUIBitmap : public CheckpointNativeAllocated {
 
 	public:
 #pragma region Creation

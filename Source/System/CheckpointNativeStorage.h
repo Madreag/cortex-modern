@@ -54,6 +54,8 @@ namespace RTE {
 		static std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> Prepare();
 		static bool ReadBytes(const void* source, void* target, size_t bytes);
 		static const void* View(const void* source, size_t bytes);
+		static const void* ViewObject(const void* source);
+		template<class T> static T* Source(T* source) { return static_cast<T*>(const_cast<void*>(ViewObject(source))); }
 		static std::shared_ptr<const CheckpointPagePool::Snapshot> PagesFor(const void* source, size_t bytes);
 		static const void* Original(const void* view);
 		static bool IsView(const void* address) { return Original(address) != address; }

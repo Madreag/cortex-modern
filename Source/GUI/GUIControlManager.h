@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 #include <string_view>
 
 #include "GUIWriter.h"
@@ -8,7 +11,7 @@
 namespace RTE {
 
 	/// A class used to manage the GUI as a whole and provide the interface between the GUI and the rest of the system.
-	class GUIControlManager {
+	class GUIControlManager : public CheckpointNativeAllocated {
 		friend class GUICheckpoint;
 		friend class GUIControl;
 
@@ -97,7 +100,7 @@ namespace RTE {
 
 		/// Gets the control list
 		/// @return vector<GUIControl *> Pointer.
-		std::vector<GUIControl*>* GetControlList();
+		CheckpointVector<GUIControl*>* GetControlList();
 
 		/// Checks if a control is under a specific point
 		/// @param pointX The absolute point coordinates to check under.
@@ -151,8 +154,8 @@ namespace RTE {
 		GUISkin* m_Skin;
 		GUIManager* m_GUIManager;
 
-		std::vector<GUIControl*> m_ControlList;
-		std::vector<GUIEvent*> m_EventQueue;
+		CheckpointVector<GUIControl*> m_ControlList;
+		CheckpointVector<GUIEvent*> m_EventQueue;
 
 		int m_CursorType;
 

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 #include <string>
 #include <string_view>
 
@@ -24,7 +27,7 @@ namespace RTE {
 
 	/// A class to handle the drawing of LARGE text banners that fly across
 	/// the screen, grabbing the player's attention.
-	class GUIBanner {
+	class GUIBanner : public CheckpointNativeAllocated {
 		friend class GUICheckpoint;
 
 		/// Public member variable, method and friend function declarations
@@ -216,9 +219,9 @@ namespace RTE {
 		int m_Kerning;
 
 		// The text string currently being displayed
-		std::string m_BannerText;
+		CheckpointString m_BannerText;
 		// The actual characters of this banner and their positions etc
-		std::list<FlyingChar> m_BannerChars;
+		CheckpointList<FlyingChar> m_BannerChars;
 		// The dimensions of the screen area that this banner is displayed on
 		Vector m_TargetSize;
 		// The pixel Y position that the banner has on the target

@@ -128,7 +128,7 @@ void GUIPanel::Setup(GUIManager* manager, int ZPos) {
 
 	// Set the manager for all the children
 	int Z = 0;
-	std::vector<GUIPanel*>::iterator it;
+	CheckpointVector<GUIPanel*>::iterator it;
 	for (it = m_Children.begin(); it != m_Children.end(); it++) {
 		GUIPanel* P = *it;
 		if (P) {
@@ -174,7 +174,7 @@ void GUIPanel::RemoveChild(const GUIPanel* pChild) {
 	// Note: We do NOT free the children because they are still linked in through their controls. This merely removes the panel from the list.
 	// This will cause a small memory leak, but this is only designed for the GUI Editor and is a bit of a hack
 
-	for (std::vector<GUIPanel*>::iterator itr = m_Children.begin(); itr != m_Children.end(); itr++) {
+	for (CheckpointVector<GUIPanel*>::iterator itr = m_Children.begin(); itr != m_Children.end(); itr++) {
 		const GUIPanel* pPanel = *itr;
 		if (pPanel && pPanel == pChild) {
 			m_Children.erase(itr);
@@ -215,7 +215,7 @@ void GUIPanel::Draw(GUIScreen* Screen) {
 	Screen->GetBitmap()->GetClipRect(&thisClip);
 
 	// Draw children
-	std::vector<GUIPanel*>::iterator it;
+	CheckpointVector<GUIPanel*>::iterator it;
 	for (it = m_Children.begin(); it != m_Children.end(); it++) {
 		GUIPanel* P = *it;
 
@@ -280,7 +280,7 @@ GUIPanel* GUIPanel::BottomPanelUnderPoint(int x, int y) {
 
 	// Go through the children
 	GUIPanel* CurPanel = nullptr;
-	std::vector<GUIPanel*>::iterator it;
+	CheckpointVector<GUIPanel*>::iterator it;
 	for (it = m_Children.begin(); it != m_Children.end(); it++) {
 		GUIPanel* P = *it;
 		if (P) {
@@ -305,7 +305,7 @@ GUIPanel* GUIPanel::TopPanelUnderPoint(int x, int y) {
 
 	// Go through the children
 	GUIPanel* CurPanel = nullptr;
-	std::vector<GUIPanel*>::reverse_iterator it;
+	CheckpointVector<GUIPanel*>::reverse_iterator it;
 	for (it = m_Children.rbegin(); it != m_Children.rend(); it++) {
 		GUIPanel* P = *it;
 		if (P) {
@@ -349,7 +349,7 @@ void GUIPanel::SetPositionAbs(int X, int Y, bool moveChildren) {
 
 	// Move children
 	if (moveChildren) {
-		std::vector<GUIPanel*>::iterator it;
+		CheckpointVector<GUIPanel*>::iterator it;
 		for (it = m_Children.begin(); it != m_Children.end(); it++) {
 			GUIPanel* P = *it;
 			P->SetPositionAbs(P->m_X + DX, P->m_Y + DY);
@@ -368,7 +368,7 @@ void GUIPanel::SetPositionRel(int X, int Y) {
 	m_Y = Y;
 
 	// Move children
-	std::vector<GUIPanel*>::iterator it;
+	CheckpointVector<GUIPanel*>::iterator it;
 	for (it = m_Children.begin(); it != m_Children.end(); it++) {
 		GUIPanel* P = *it;
 		P->SetPositionAbs(P->m_X + DX, P->m_Y + DY);
@@ -380,7 +380,7 @@ void GUIPanel::MoveRelative(int dX, int dY) {
 	m_Y += dY;
 
 	// Move children
-	std::vector<GUIPanel*>::iterator it;
+	CheckpointVector<GUIPanel*>::iterator it;
 	for (it = m_Children.begin(); it != m_Children.end(); it++) {
 		GUIPanel* P = *it;
 		P->SetPositionAbs(P->m_X + dX, P->m_Y + dY);
@@ -517,7 +517,7 @@ void GUIPanel::_ChangeZ(GUIPanel* Child, int Type) {
 	int Index = -1;
 
 	// Find the child in our children list
-	std::vector<GUIPanel*>::iterator it;
+	CheckpointVector<GUIPanel*>::iterator it;
 	int Count = 0;
 	for (it = m_Children.begin(); it != m_Children.end(); it++, Count++) {
 		const GUIPanel* P = *it;

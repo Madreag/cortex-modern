@@ -1591,7 +1591,7 @@ void MainMenuGUI::FitClosedComboText(GUIComboBox* combo) {
 	// The drop-down button covers 17 pixels of the panel the selected item reads in.
 	const int room = combo->GetWidth() - 2 * margin - 17;
 	const GUIListPanel::Item* item = combo->GetItem(combo->GetSelectedIndex());
-	std::string text = item ? item->m_Name : combo->GetText();
+	std::string text = item ? item->m_Name.Value() : combo->GetText();
 	if (font->CalculateWidth(text) > room) {
 		const size_t suffix = text.rfind(" - ");
 		if (suffix != std::string::npos && font->CalculateWidth(text.substr(0, suffix)) <= room) {
@@ -2269,7 +2269,7 @@ namespace {
 	void HostOptFitComboCaption(GUISkin* skin, GUIComboBox* combo) {
 		if (!skin || !combo) return;
 		const GUIListPanel::Item* item = combo->GetSelectedItem();
-		const std::string full = item ? item->m_Name : combo->GetText();
+		const std::string full = item ? item->m_Name.Value() : combo->GetText();
 		std::string fontName;
 		GUIFont* font = skin->GetValue("TextBox", "Font", &fontName) ? skin->GetFont(fontName) : nullptr;
 		if (!font) return;
@@ -3662,7 +3662,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 	// frame its change arrives, or the next frame puts the old value back under the player's hand. A list still open holds an
 	// uncommitted pick, and the team row's controls still show the team it left.
 	if (!m_HostOptionsReadOnly && guiEventControl != m_HostRulesTeamCombo) {
-		const std::vector<GUIControl*>& controls = *m_ActiveGUIControlManager->GetControlList();
+		const auto& controls = *m_ActiveGUIControlManager->GetControlList();
 		const bool listOpen = std::any_of(controls.begin(), controls.end(), [](GUIControl* control) {
 			GUIComboBox* combo = dynamic_cast<GUIComboBox*>(control);
 			return combo && combo->IsDropped();

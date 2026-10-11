@@ -177,7 +177,7 @@ namespace RTE::MenuAutomation {
 	GUIControl* FirstDrawn(GUIControl* control) {
 		if (!control || !control->GetPanel()) return nullptr;
 		if (PanelDrawnInLatestPass(control->GetPanel(), c_DrawWindowSeconds)) return control;
-		if (std::vector<GUIControl*>* children = control->GetChildren()) {
+		if (auto* children = control->GetChildren()) {
 			for (GUIControl* child: *children) {
 				if (GUIControl* drawn = FirstDrawn(child)) return drawn;
 			}
@@ -245,7 +245,7 @@ namespace RTE::MenuAutomation {
 		else if (auto* value = dynamic_cast<GUICheckbox*>(control)) text = value->GetText();
 		else if (auto* value = dynamic_cast<GUIRadioButton*>(control)) text = value->GetText();
 		else if (auto* value = dynamic_cast<GUITab*>(control)) text = value->GetText();
-		else if (auto* value = dynamic_cast<GUIComboBox*>(control)) text = value->GetSelectedItem() ? value->GetSelectedItem()->m_Name : value->GetText();
+		else if (auto* value = dynamic_cast<GUIComboBox*>(control)) text = value->GetSelectedItem() ? value->GetSelectedItem()->m_Name.Value() : value->GetText();
 		else return false;
 		return true;
 	}
@@ -1004,7 +1004,7 @@ namespace RTE::MenuAutomation {
 			return false;
 		}
 		const GUIListPanel::Item* before = combo->GetSelectedItem();
-		const std::string kept = before ? before->m_Name : std::string();
+		const std::string kept = before ? before->m_Name.Value() : std::string();
 		if (refused && kept == item) {
 			observation = name + " already reads " + Json(item).dump();
 			return false;
@@ -1059,7 +1059,7 @@ namespace RTE::MenuAutomation {
 					return Hand::Beat::Fail;
 				}
 				if (!shown || shown->m_Name != expected) {
-					note = "the drop-down reads " + Json(shown ? shown->m_Name : std::string()).dump() + " " + std::to_string(frame + 1) + " frame(s) after the pick";
+					note = "the drop-down reads " + Json(shown ? shown->m_Name.Value() : std::string()).dump() + " " + std::to_string(frame + 1) + " frame(s) after the pick";
 					return Hand::Beat::Fail;
 				}
 				return Hand::Beat::Next;
@@ -2189,7 +2189,7 @@ namespace RTE::MenuAutomation {
 			auto* network = g_MenuMan.GetNetworkPanel();
 			GUIControl* parent = manager ? manager->GetControl(parentName) : nullptr;
 			if (!parent && network) parent = network->GetControl(parentName);
-			std::vector<GUIControl*>* children = parent ? parent->GetChildren() : nullptr;
+			auto* children = parent ? parent->GetChildren() : nullptr;
 			if (!Visible(parent) || !children) { observation = parentName + " missing or hidden"; return false; }
 			std::vector<std::pair<std::string, Rect>> shown;
 			for (GUIControl* child: *children)
@@ -2583,7 +2583,7 @@ namespace RTE::MenuAutomation {
 							const GUIListPanel::Item* entry = combo->GetItem(i);
 							if (!entry) continue;
 							const int nameRoom = std::max(1, list ? list->RegularItemNameRoom(entry->m_OffsetX) : combo->GetWidth() - 8);
-							const std::string display = list ? list->RegularFittedName(entry->m_Name, entry->m_OffsetX) : entry->m_Name;
+							const std::string display = list ? list->RegularFittedName(entry->m_Name, entry->m_OffsetX) : entry->m_Name.Value();
 							const int rawWidth = listFont ? listFont->CalculateWidth(entry->m_Name) : 0;
 							const int drawnWidth = listFont ? listFont->CalculateWidth(display) : 0;
 							longest = std::max(longest, rawWidth);

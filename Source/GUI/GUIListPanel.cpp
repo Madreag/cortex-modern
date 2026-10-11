@@ -104,7 +104,7 @@ void GUIListPanel::Create(int X, int Y, int Width, int Height) {
 
 void GUIListPanel::Destroy() {
 	// Destroy the items
-	std::vector<Item*>::iterator it;
+	CheckpointVector<Item*>::iterator it;
 
 	for (it = m_Items.begin(); it != m_Items.end(); it++) {
 		Item* I = *it;
@@ -152,7 +152,7 @@ void GUIListPanel::Destroy() {
 
 void GUIListPanel::ClearList() {
 	// Destroy the items
-	std::vector<Item*>::iterator it;
+	CheckpointVector<Item*>::iterator it;
 
 	for (it = m_Items.begin(); it != m_Items.end(); it++) {
 		Item* I = *it;
@@ -287,7 +287,7 @@ void GUIListPanel::BuildBitmap(bool UpdateBase, bool UpdateText) {
 
 void GUIListPanel::BuildDrawBitmap() {
 	// Draw the items
-	std::vector<Item*>::iterator it;
+	CheckpointVector<Item*>::iterator it;
 	int Count = 0;
 	int Height = m_Height;
 	if (m_HorzScroll->_GetVisible()) {
@@ -452,7 +452,7 @@ void GUIListPanel::OnMouseWheelChange(int x, int y, int modifier, int mouseWheel
 }
 
 void GUIListPanel::SelectItem(int X, int Y, int Modifier) {
-	std::vector<Item*>::iterator it;
+	CheckpointVector<Item*>::iterator it;
 	bool Shift = Modifier & MODI_SHIFT;
 	bool Ctrl = Modifier & MODI_CTRL;
 
@@ -535,7 +535,7 @@ void GUIListPanel::SelectItem(int X, int Y, int Modifier) {
 						m_LastSelected = Count;
 					} else {
 						// Select a list of items
-						std::vector<Item*>::iterator sel;
+						CheckpointVector<Item*>::iterator sel;
 						int Num = 0;
 						for (sel = m_Items.begin(); sel != m_Items.end(); sel++, Num++) {
 							if (m_LastSelected <= Count) {
@@ -882,7 +882,7 @@ void GUIListPanel::OnKeyPress(int KeyCode, int Modifier) {
 	}
 
 	// Clear all the items
-	std::vector<Item*>::iterator it;
+	CheckpointVector<Item*>::iterator it;
 	for (it = m_Items.begin(); it != m_Items.end(); it++) {
 		Item* I = *it;
 		I->m_Selected = false;
@@ -989,11 +989,11 @@ GUIListPanel::Item* GUIListPanel::GetSelected() {
 	return m_SelectedList.at(0);
 }
 
-std::vector<GUIListPanel::Item*>* GUIListPanel::GetSelectionList() {
+CheckpointVector<GUIListPanel::Item*>* GUIListPanel::GetSelectionList() {
 	return &m_SelectedList;
 }
 
-std::vector<GUIListPanel::Item*>* GUIListPanel::GetItemList() {
+CheckpointVector<GUIListPanel::Item*>* GUIListPanel::GetItemList() {
 	return &m_Items;
 }
 
@@ -1021,7 +1021,7 @@ GUIListPanel::Item* GUIListPanel::GetItem(int X, int Y) {
 	}
 
 	int Count = 0;
-	for (std::vector<Item*>::iterator it = m_Items.begin(); it != m_Items.end(); it++, Count++) {
+	for (CheckpointVector<Item*>::iterator it = m_Items.begin(); it != m_Items.end(); it++, Count++) {
 		Item* pItem = *it;
 
 		// Return the item under the mouse
@@ -1091,7 +1091,7 @@ int GUIListPanel::GetItemHeight(Item* pItem) {
 int GUIListPanel::GetStackHeight(Item* pItem) {
 	int height = 0;
 
-	for (std::vector<Item*>::iterator iitr = m_Items.begin(); iitr != m_Items.end(); ++iitr) {
+	for (CheckpointVector<Item*>::iterator iitr = m_Items.begin(); iitr != m_Items.end(); ++iitr) {
 		if ((*iitr) == pItem) {
 			break;
 		}
@@ -1121,7 +1121,7 @@ int GUIListPanel::GetSelectedIndex() {
 void GUIListPanel::SetSelectedIndex(int Index) {
 	m_LastSelected = Index >= 0 && Index < static_cast<int>(m_Items.size()) ? Index : -1;
 	// Clear the old selection
-	std::vector<Item*>::iterator it;
+	CheckpointVector<Item*>::iterator it;
 	for (it = m_Items.begin(); it != m_Items.end(); it++) {
 		Item* I = *it;
 		I->m_Selected = false;
@@ -1151,7 +1151,7 @@ void GUIListPanel::DeleteItem(int Index) {
 		// If this item was selected, remove it from the selection list
 		if (I->m_Selected) {
 			// Find the item
-			std::vector<Item*>::iterator it;
+			CheckpointVector<Item*>::iterator it;
 			for (it = m_SelectedList.begin(); it != m_SelectedList.end(); it++) {
 				if (I->m_ID == (*it)->m_ID) {
 					m_SelectedList.erase(it);
@@ -1165,7 +1165,7 @@ void GUIListPanel::DeleteItem(int Index) {
 		m_Items.erase(m_Items.begin() + Index);
 
 		// Reset the id's
-		std::vector<Item*>::iterator it;
+		CheckpointVector<Item*>::iterator it;
 		int Count = 0;
 		for (it = m_Items.begin(); it != m_Items.end(); it++) {
 			Item* item = *it;

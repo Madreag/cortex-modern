@@ -246,8 +246,8 @@ void GUIBanner::Update() {
 	int flyDirection = m_AnimMode == FLYBYLEFTWARD ? -1 : 1;
 	int whichChar = 0;
 	// Go through every character, updating their positions and states
-	std::list<FlyingChar>::iterator prevItr = m_BannerChars.end();
-	for (std::list<FlyingChar>::iterator cItr = m_BannerChars.begin(); cItr != m_BannerChars.end(); ++cItr) {
+	CheckpointList<FlyingChar>::iterator prevItr = m_BannerChars.end();
+	for (CheckpointList<FlyingChar>::iterator cItr = m_BannerChars.begin(); cItr != m_BannerChars.end(); ++cItr) {
 		whichChar++;
 		// Start off each character's motion at the appropriate order and timing
 		if ((*cItr).m_MoveState == NOTSTARTED) {
@@ -324,7 +324,7 @@ void GUIBanner::Draw(BITMAP* pTargetBitmap) {
 	// Go through every character in the banner, drawing the ones that are showing
 	unsigned char c;
 	int mode, charWidth, offX, offY;
-	for (std::list<FlyingChar>::iterator cItr = m_BannerChars.begin(); cItr != m_BannerChars.end(); ++cItr) {
+	for (CheckpointList<FlyingChar>::iterator cItr = m_BannerChars.begin(); cItr != m_BannerChars.end(); ++cItr) {
 		// Only draw anything if the character is even visible
 		if ((*cItr).m_MoveState >= SHOWING && (*cItr).m_MoveState <= HIDING) {
 			// Validate the character

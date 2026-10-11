@@ -1,9 +1,12 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 namespace RTE {
 
 	/// A class to hold event information.
-	class GUIEvent {
+	class GUIEvent : public CheckpointNativeAllocated {
 		friend class GUICheckpoint;
 
 	public:

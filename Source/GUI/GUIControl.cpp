@@ -81,7 +81,7 @@ void GUIControl::AddChild(GUIControl* Control) {
 	m_ControlChildren.push_back(Control);
 }
 
-std::vector<GUIControl*>* GUIControl::GetChildren() {
+CheckpointVector<GUIControl*>* GUIControl::GetChildren() {
 	return &m_ControlChildren;
 }
 
@@ -266,7 +266,7 @@ bool GUIControl::IsContainer() {
 void GUIControl::RemoveChild(const std::string& Name) {
 	// Note: We do NOT free the children because they are still linked in through their panels. This merely removes the control from the list.
 	// This will cause a small memory leak, but this is only designed for the GUI Editor and is a bit of a hack.
-	std::vector<GUIControl*>::iterator it;
+	CheckpointVector<GUIControl*>::iterator it;
 
 	for (it = m_ControlChildren.begin(); it != m_ControlChildren.end(); it++) {
 		GUIControl* C = *it;
@@ -280,7 +280,7 @@ void GUIControl::RemoveChild(const std::string& Name) {
 void GUIControl::RemoveChildren() {
 	// Note: We do NOT free the children because they are still linked in through their panels. This merely removes the control from the list.
 	// This will cause a small memory leak, but this is only designed for the GUI Editor and is a bit of a hack.
-	std::vector<GUIControl*>::iterator it;
+	CheckpointVector<GUIControl*>::iterator it;
 
 	for (it = m_ControlChildren.begin(); it != m_ControlChildren.end(); it++) {
 		GUIControl* C = *it;

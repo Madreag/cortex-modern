@@ -92,7 +92,7 @@ bool GUISkin::Load(const std::string& directory, const std::string& fileName) {
 }
 
 bool GUISkin::GetValue(const std::string& Section, const std::string& Variable, std::string* Value) {
-	std::vector<GUIProperties*>::iterator it;
+	CheckpointVector<GUIProperties*>::iterator it;
 
 	// Find the property
 	for (it = m_PropList.begin(); it != m_PropList.end(); it++) {
@@ -108,7 +108,7 @@ bool GUISkin::GetValue(const std::string& Section, const std::string& Variable, 
 }
 
 int GUISkin::GetValue(const std::string& Section, const std::string& Variable, int* Array, int MaxArraySize) {
-	std::vector<GUIProperties*>::iterator it;
+	CheckpointVector<GUIProperties*>::iterator it;
 
 	// Find the property
 	for (it = m_PropList.begin(); it != m_PropList.end(); it++) {
@@ -124,7 +124,7 @@ int GUISkin::GetValue(const std::string& Section, const std::string& Variable, i
 }
 
 bool GUISkin::GetValue(const std::string& Section, const std::string& Variable, int* Value) {
-	std::vector<GUIProperties*>::iterator it;
+	CheckpointVector<GUIProperties*>::iterator it;
 
 	// Find the property
 	for (it = m_PropList.begin(); it != m_PropList.end(); it++) {
@@ -140,7 +140,7 @@ bool GUISkin::GetValue(const std::string& Section, const std::string& Variable, 
 }
 
 bool GUISkin::GetValue(const std::string& Section, const std::string& Variable, unsigned long* Value) {
-	std::vector<GUIProperties*>::iterator it;
+	CheckpointVector<GUIProperties*>::iterator it;
 
 	// Find the property
 	for (it = m_PropList.begin(); it != m_PropList.end(); it++) {
@@ -156,7 +156,7 @@ bool GUISkin::GetValue(const std::string& Section, const std::string& Variable, 
 }
 
 void GUISkin::Destroy() {
-	std::vector<GUIProperties*>::iterator it;
+	CheckpointVector<GUIProperties*>::iterator it;
 
 	// Free the properties
 	for (it = m_PropList.begin(); it != m_PropList.end(); it++) {
@@ -170,7 +170,7 @@ void GUISkin::Destroy() {
 	m_PropList.clear();
 
 	// Destroy the fonts in the list
-	std::vector<GUIFont*>::iterator itf;
+	CheckpointVector<GUIFont*>::iterator itf;
 
 	for (itf = m_FontCache.begin(); itf != m_FontCache.end(); itf++) {
 		GUIFont* F = *itf;
@@ -183,7 +183,7 @@ void GUISkin::Destroy() {
 	m_FontCache.clear();
 
 	// Destroy the images in the image cache
-	std::vector<GUIBitmap*>::iterator iti;
+	CheckpointVector<GUIBitmap*>::iterator iti;
 
 	for (iti = m_ImageCache.begin(); iti != m_ImageCache.end(); iti++) {
 		GUIBitmap* Surf = *iti;
@@ -205,7 +205,7 @@ GUIBitmap* GUISkin::CreateBitmap(const std::string& Filename) {
 	std::string File = m_Directory + Filename;
 
 	// Check if the image is in our cache
-	std::vector<GUIBitmap*>::iterator it;
+	CheckpointVector<GUIBitmap*>::iterator it;
 	for (it = m_ImageCache.begin(); it != m_ImageCache.end(); it++) {
 		GUIBitmap* Surf = *it;
 
@@ -227,7 +227,7 @@ GUIBitmap* GUISkin::CreateBitmap(const std::string& Filename) {
 
 GUIFont* GUISkin::GetFont(const std::string& Name) {
 	// Check if the font is already in the list
-	std::vector<GUIFont*>::iterator it;
+	CheckpointVector<GUIFont*>::iterator it;
 
 	for (it = m_FontCache.begin(); it != m_FontCache.end(); it++) {
 		GUIFont* F = *it;

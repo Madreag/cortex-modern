@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 #include "GUITextPanel.h"
 #include "GUIScrollPanel.h"
 
@@ -108,7 +111,7 @@ namespace RTE {
 		unsigned long m_LineColor;
 
 		GUIProperties m_PageValues;
-		std::vector<GUITextPanel*> m_TextPanelList;
+		CheckpointVector<GUITextPanel*> m_TextPanelList;
 		GUIScrollPanel* m_VertScroll;
 
 		/// Create the property page bitmap to draw.

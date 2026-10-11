@@ -293,8 +293,8 @@ void GUITab::SetCheck(bool Check) {
 
 	// Go through all my RadioButton siblings and un-check them
 	if (m_ControlParent) {
-		std::vector<GUIControl*>::iterator it;
-		std::vector<GUIControl*>* Children = m_ControlParent->GetChildren();
+		CheckpointVector<GUIControl*>::iterator it;
+		CheckpointVector<GUIControl*>* Children = m_ControlParent->GetChildren();
 
 		for (it = Children->begin(); it != Children->end(); it++) {
 			GUIControl* C = *it;

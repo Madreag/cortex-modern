@@ -1,9 +1,12 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 namespace RTE {
 
 	/// A class containing properties for controls and skins.
-	class GUIProperties {
+	class GUIProperties : public CheckpointNativeAllocated {
 		friend class GUICheckpoint;
 
 	public:
@@ -56,6 +59,12 @@ namespace RTE {
 		/// Gets a string value
 		/// @param Variable Variable, String pointer
 		bool GetValue(const std::string& Variable, std::string* Value);
+		bool GetValue(const std::string& variable, CheckpointString* value) {
+			std::string read;
+			if (!GetValue(variable, &read)) return false;
+			*value = std::move(read);
+			return true;
+		}
 
 		/// Gets a string array of values
 		/// @param Variable Variable, String array, max size of array
@@ -100,13 +109,13 @@ namespace RTE {
 
 	private:
 		// Variable structure
-		typedef struct {
-			std::string m_Name;
-			std::string m_Value;
-		} PropVariable;
+		struct PropVariable : CheckpointNativeAllocated {
+			CheckpointString m_Name;
+			CheckpointString m_Value;
+		};
 
-		std::string m_Name;
+		CheckpointString m_Name;
 
-		std::vector<PropVariable*> m_VariableList;
+		CheckpointVector<PropVariable*> m_VariableList;
 	};
 } // namespace RTE

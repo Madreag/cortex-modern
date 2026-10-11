@@ -1,12 +1,15 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 namespace RTE {
 
 	class GUIPanel;
 	class GUIManager;
 
 	/// A rectangle 'window' in the GUI that recieves mouse and keyboard events.
-	class GUIPanel {
+	class GUIPanel : public CheckpointNativeAllocated {
 		friend class GUICheckpoint;
 
 	public:
@@ -311,7 +314,7 @@ namespace RTE {
 		void _ApplyProperties(GUIProperties* Props);
 
 	private:
-		std::vector<GUIPanel*> m_Children;
+		CheckpointVector<GUIPanel*> m_Children;
 		GUIRect m_Rect;
 
 		int m_ID;

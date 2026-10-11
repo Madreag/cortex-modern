@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 namespace RTE {
 
 	/// A tab control class.
@@ -98,7 +101,7 @@ namespace RTE {
 
 		bool m_Selected;
 		int m_Mouseover;
-		std::string m_Text;
+		CheckpointString m_Text;
 
 		/// Create the checkbox bitmap to draw.
 		void BuildBitmap();

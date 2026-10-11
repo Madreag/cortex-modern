@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 namespace RTE {
 
 	/// A checkbox control class.
@@ -106,7 +109,7 @@ namespace RTE {
 		GUIRect m_ImageRects[4];
 
 		int m_Check;
-		std::string m_Text;
+		CheckpointString m_Text;
 		int m_Mouseover;
 
 		/// Create the checkbox bitmap to draw.
