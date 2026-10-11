@@ -219,6 +219,7 @@ namespace {
 		    {"lockstep_frame", lockstepFrame},
 		    {"screen", MenuScreen()},
 		    {"service", snapshot.serviceState}, {"host", snapshot.isHost}, {"activity_preset", snapshot.activityPreset},
+		    {"error_text", snapshot.errorText},
 		    {"panel_open", g_MenuMan.IsNetworkPanelOpen()},
 		    {"paused", g_ActivityMan.ActivityPaused()}, {"seats", Json::array()}};
 		observed["chat_history"] = Json::array();
@@ -644,8 +645,9 @@ namespace {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("lockstep_frame_at_least") || step.contains("renders") ||
 		    step.contains("elapsed_ms") || step.contains("sim_advanced") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
 		    step.contains("editing") || step.contains("setup_ready") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
-		    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("chat_text_once") || step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer") || step.contains("returned_peer"),
+		    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("chat_text_once") || step.contains("error_contains") || step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer") || step.contains("returned_peer"),
 			    "wait has no predicate");
+			if (step.contains("error_contains") && observed["error_text"].get<std::string>().find(step.at("error_contains").get<std::string>()) == std::string::npos) return false;
 			if (step.contains("held_peer") && !HeldPeer(step.at("held_peer"))) return false;
 			if (step.contains("returned_peer")) {
 				if (HeldPeer(step.at("returned_peer"))) return false;
@@ -1463,16 +1465,26 @@ namespace {
 			Require(NowMs() <= probe.script.at("timeout_ms").get<uint64_t>(), "script deadline at step " + std::to_string(probe.index));
 			Require(probe.index < probe.script["steps"].size(), "script did not finish explicitly");
 			const auto& step = probe.script["steps"][probe.index];
+			const uint64_t stepLimit = step.value("within_ms", probe.script.value("step_timeout_ms", uint64_t{0}));
+			Require(stepLimit == 0 || NowMs() - probe.stepMs <= stepLimit, "step deadline at " + std::to_string(probe.index) + " (" + step.at("op").get<std::string>() + ")");
 			if (StepPhase(step) != phase) return;
 			if (menuScopeOnly && !MenuScopeStep(step)) return;
 			Json observed = Observe();
 			try {
-				if (!Step(step, observed)) return;
+				if (!Step(step, observed)) {
+					if (NowMs() >= probe.resultWrittenMs + 1000) {
+						probe.result["pending"] = {{"index", probe.index}, {"op", step.at("op")}, {"observed", observed}};
+						WriteResult();
+						probe.resultWrittenMs = NowMs();
+					}
+					return;
+				}
 			} catch (...) {
 				probe.result["failed_observation"] = observed;
 				throw;
 			}
 			probe.result["steps"].push_back({{"index", probe.index}, {"op", step.at("op")}, {"observed", observed}});
+			probe.result.erase("pending");
 			if (step.contains("remember")) probe.result["bookmarks"][step.at("remember").get<std::string>()] = observed;
 			++probe.index;
 			probe.stepRender = probe.renders;
