@@ -2226,6 +2226,29 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			const auto actual = std::async(std::launch::async, [frozen] { return frozen.Text(); }).get();
 			check(exact && actual == expected, "parallel_bitmap_readers_share_one_fresh_copy_after_source_death");
 		}
+		{
+			auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
+			CheckpointNativeStorage::AllocationScope storage(true);
+			BITMAP* source = create_bitmap_ex(8, 7, 5);
+			if (!source) throw std::bad_alloc();
+			clear_to_color(source, 37);
+			BITMAP* frozen = snapshot->Freeze(source);
+			destroy_bitmap(source);
+			bool exact = false;
+			{
+				CheckpointNativeStorage::ReadScope read(CheckpointNativeStorage::ReadViews{true, {}, {}});
+				exact = snapshot->ReadBitmap(source) == frozen && frozen->line[4][6] == 37;
+			}
+			const auto roots = snapshot->ReadValues();
+			{
+				CheckpointNativeStorage::ReadScope read(CheckpointNativeStorage::ReadViews{true, {}, roots});
+				const auto* saved = CheckpointNativeStorage::Source(source);
+				uint8_t value = 0;
+				exact = saved == frozen && CheckpointNativeStorage::ReadBytes(saved->line[4] + 6, &value, 1) && value == 37 && exact;
+				exact = snapshot->ReadBitmap(saved) == frozen && snapshot->Pixels(saved).has_value() && exact;
+			}
+			check(exact, "saved_bitmap_getters_keep_owned_rows_and_aliases_after_source_death");
+		}
 
 		{
 			CheckpointBuffer::WaitForPreparedStorageRelease();

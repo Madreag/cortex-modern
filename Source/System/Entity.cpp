@@ -126,10 +126,10 @@ namespace RTE {
 	MovableObject* CheckpointNativeSnapshot::FindUID(long uid) const {
 		return m_UIDs.Find(uid).value_or(nullptr);
 	}
-	struct CheckpointNativeSnapshot::Pixel {
+	struct CheckpointNativeSnapshot::Pixel : CheckpointNativeAllocated {
 		mutable BITMAP bitmap{};
 		GFX_VTABLE table{};
-		mutable std::vector<uint8_t*> lines;
+		mutable CheckpointVector<uint8_t*> lines;
 		std::shared_ptr<const BitmapSnapshot> snapshot;
 		const BITMAP* loaded = nullptr;
 		size_t rowBytes = 0;
@@ -138,6 +138,9 @@ namespace RTE {
 		std::array<std::optional<std::string>, 2> paths;
 		mutable std::once_flag ready;
 		mutable std::string bytes;
+		mutable bool privateRows = false;
+		mutable std::atomic<bool> materialized{false};
+		~Pixel() { if (privateRows) CheckpointNativeStorage::ForgetPrivate(bytes.data()); }
 		static std::string Rows(const BITMAP* source, size_t rowBytes) {
 			std::string rows;
 			rows.reserve(rowBytes * static_cast<size_t>(source->h));
@@ -157,13 +160,19 @@ namespace RTE {
 				bytes = loaded ? Rows(loaded, rowBytes) : snapshot->PixelBytes();
 				const size_t stride = loaded ? rowBytes : snapshot->rowBytes;
 				lines.resize(bitmap.h);
+				if (CheckpointNativeStorage::Reading() && !bytes.empty()) {
+					CheckpointNativeStorage::RememberPrivate(bytes.data(), bytes.size());
+					privateRows = true;
+				}
 				for (size_t row = 0; row < lines.size(); ++row) lines[row] = reinterpret_cast<uint8_t*>(bytes.data()) + row * stride;
 				bitmap.line = lines.data();
+				materialized.store(true, std::memory_order_release);
 			});
 		}
 	};
 	BITMAP* CheckpointNativeSnapshot::Freeze(BITMAP* source) {
 		if (!source) return nullptr;
+		if (const auto known = m_Bitmaps.Find(source)) return &(*known)->bitmap;
 		const BITMAP* address = static_cast<const BITMAP*>(CheckpointNativeStorage::Original(source));
 		auto& recent = Recent<1>(source);
 		if (recent.first == source) return static_cast<BITMAP*>(recent.second);
@@ -173,7 +182,7 @@ namespace RTE {
 		}
 		CheckpointCloneCost cost("BITMAP");
 		source = const_cast<BITMAP*>(static_cast<const BITMAP*>(CheckpointNativeStorage::View(source, sizeof(BITMAP))));
-		auto pixel = std::make_shared<Pixel>();
+		auto pixel = std::shared_ptr<Pixel>(new Pixel());
 		pixel->bitmap = *source; pixel->table = *source->vtable;
 		pixel->bitmap.vtable = &pixel->table;
 		pixel->bitmap.line = nullptr;
@@ -200,13 +209,34 @@ namespace RTE {
 		recent = {source, &kept->bitmap};
 		return &kept->bitmap;
 	}
+	BITMAP* CheckpointNativeSnapshot::ReadBitmap(const BITMAP* source) {
+		BITMAP* bitmap = Freeze(const_cast<BITMAP*>(source));
+		if (!bitmap) return nullptr;
+		auto pixel = m_BitmapSources.Find(source);
+		if (!pixel) pixel = m_Bitmaps.Find(bitmap);
+		if (!pixel) throw std::logic_error("a saved bitmap has no pixel owner");
+		(*pixel)->Materialize();
+		return bitmap;
+	}
+	void CheckpointNativeSnapshot::AppendBitmapReadValues(std::vector<CheckpointNativeStorage::RootRange>& roots) const {
+		m_BitmapSources.ForEach([&](const BITMAP* source, const std::shared_ptr<Pixel>& pixel) {
+			roots.push_back({source, &pixel->bitmap, sizeof(BITMAP), true});
+			roots.push_back({&pixel->table, &pixel->table, sizeof(pixel->table), true});
+			if (pixel->materialized.load(std::memory_order_acquire)) {
+				roots.push_back({pixel->lines.data(), pixel->lines.data(), pixel->lines.size() * sizeof(uint8_t*), true});
+				roots.push_back({pixel->bytes.data(), pixel->bytes.data(), pixel->bytes.size(), true});
+			}
+		});
+	}
 	std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> CheckpointNativeSnapshot::Pixels(const BITMAP* bitmap) const {
-		const auto found = m_Bitmaps.Find(bitmap);
+		auto found = m_BitmapSources.Find(bitmap);
+		if (!found) found = m_Bitmaps.Find(bitmap);
 		if (!found) return {};
 		return std::pair{(*found)->snapshot, (*found)->Text()};
 	}
 	std::optional<const std::string*> CheckpointNativeSnapshot::BitmapPath(const BITMAP* bitmap, int& depth) const {
-		const auto found = m_Bitmaps.Find(bitmap);
+		auto found = m_BitmapSources.Find(bitmap);
+		if (!found) found = m_Bitmaps.Find(bitmap);
 		if (!found) return {};
 		const auto& paths = (*found)->paths;
 		if (depth < 0) for (size_t index = 0; index < paths.size(); ++index) if (paths[index]) { depth = static_cast<int>(index); return &*paths[index]; }

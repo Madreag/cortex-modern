@@ -178,6 +178,7 @@ namespace RTE {
 		};
 		static const CheckpointNativeSnapshot* Current() { return s_Current; }
 		BITMAP* Freeze(BITMAP* source);
+		BITMAP* ReadBitmap(const BITMAP* source);
 		const BITMAP* Freeze(const BITMAP* source) { return Freeze(const_cast<BITMAP*>(source)); }
 		std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> Pixels(const BITMAP* bitmap) const;
 		std::optional<const std::string*> BitmapPath(const BITMAP* bitmap, int& depth) const;
@@ -510,6 +511,7 @@ namespace RTE {
 				if (bytes != base->GetClass().CheckpointInstanceBytes()) return;
 				if (bytes) roots.push_back({CheckpointNativeStorage::Original(complete), dynamic_cast<const void*>(target), bytes, true});
 			});
+			AppendBitmapReadValues(roots);
 			return roots;
 		}
 
@@ -647,6 +649,7 @@ namespace RTE {
 			return record;
 		}
 		struct Pixel;
+		void AppendBitmapReadValues(std::vector<CheckpointNativeStorage::RootRange>& roots) const;
 		using ValueOwner = std::pair<void*, void (*)(void*) noexcept>;
 		/// This thread's recent answers of this snapshot, read without a shard lock: the shared objects many owners
 		/// name (materials, presets, sprites) would otherwise keep every thread on the same few locks.
