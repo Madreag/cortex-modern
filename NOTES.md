@@ -1,0 +1,48 @@
+# In-match investigation
+
+The current fixes are on cm-wip/in-match-fight15. The session branch is reviewed read-only at ac26fb2d4b863d4f92620ac4f83d5eee1a3d0d4a; it has not been merged into this branch. S5, S6 and S7 wait for the lead's cm-dev merge notice.
+
+## Windows suite baseline
+
+Both suite-base-2 and suite-tip-7 pass 42/49. Their seven failed rows are net-protocol, net-input-acceptance, net-lockstep-seat-succession, net-lockstep-seat-admission, net-reconnect-session, net-rejoin-matrix and net-roster. All seven are in the lead's eight known Windows baseline reds. The eighth known red, net-match, passes in both these runs. There are no new failed rows and no changed fatal diagnostics. No further suite run is needed for this baseline comparison.
+
+## S5: Buy and delivery stall
+
+Evidence: mx/sol-in-match-fight15-20261010/scenes-tip-s05-12/run0. The host stops at tick 690, the joiner at 689. Host stdout.log:4354 reports ConnectionDropped and :4422 reports the step-64 landing_zone_move deadline. Joiner stdout.log:5563 reports ConnectionDropped; :5671 reports the unchanged 15000-ms host-silence bound at next frame 691. Both brains remain at 100 health.
+
+The session changes address this stall class, but the old log does not identify the first missing receipt, so they do not yet prove the cause of this particular disconnect. NetPeerInputs.cpp:79 records contiguous accepted input and sends receipts; :93 requires group authority before an input is accepted; :122 repairs a stagnant receipt by reliably forwarding the original missing input. NetPeerFrames.cpp:177 pumps frame groups, :207 sends periodic authenticated heartbeats, :239 repairs receipt gaps and :242 flushes committed tails. NetLockstep.cpp:8439 delegates the former host-only acceptance check to these receipts; :13018 can propose a hold while blocked on acceptance. NetPeerBridges.cpp:193 avoids reporting a pending vote as progress, which otherwise spins the frame loop and prevents receipt delivery. These are relevant repairs to the old acceptance/traffic boundary, not a Buy-menu patch. Rerun S5 after the merge before claiming the delivery chain passes.
+
+## S6: input acceptance at frame 654
+
+Evidence: mx/sol-in-match-fight15-20261010/scenes-tip-s06-11/run0. Both simulations stop at 653. Joiner stdout.log:5613 explicitly reports frame=654 blocked=own-input-acceptance, local_sent_through=664; :5657 reports ConnectionDropped and :5765 the host-silence bound. Host stdout.log:4548 reports the same step-64 landing-zone deadline. Sent-through is not accepted-through.
+
+The new receipt and repair machinery directly explains how this recorded gap can be recovered. NetPeerInputs.cpp:105 exposes the accepted-through boundary separately from sending; :122 retransmits the first missing input after its measured retry interval; :176-181 advances the owner's receipt progress only on a newer receipt. NetPeerBridges.cpp:17 rejects a hold that conflicts with already accepted input; :28 restores pending inputs when that conflicting vote is abandoned. NetPeerReturns.cpp:201 applies certified committed history and :221-230 advances receipts for its original inputs. NetLockstep.cpp:12978 applies that history before preparing the next frame, and :13041 requires accepted remote input as well as its presence. This addresses the precise acceptance gate seen in S6; it does not prove which old receipt was lost. No acceptance or timeout change is made here. Rerun S6 after the merge.
+
+## S7: returning seat stalls at frame 1388
+
+Evidence: mx/sol-in-match-fight15-20261010/scenes-tip-s07-4/run0. Host stdout.log:4117 waits for the agreed input delay; :5727 names start/reclaim 1398 while next is 1396. Joiner stdout.log:8002-8005 names start 1398, adaptive delay 59 and configured delay 21; :8644 times out waiting for the returning player to answer. Both actors remain alive. The 59/21 numbers alone do not prove a mismatch.
+
+The new return certificate, neutral interval and committed-tail path address the recorded return stall. NetPeerBridges.cpp:113-125 compares the private reader's displayed progress with the donor's displayed progress, rather than requiring it to overtake a prepared horizon; :136-139 chooses activation beyond the group's prepared frames; :172-186 includes delay, transit and reader lag in a temporary neutral interval. Installation at :305-323 applies the agreed delay and accepts input through that neutral interval. NetPeerReturns.cpp:162 requests bounded future history, :201 applies it, :275 proposes a private return, and :302 adopts its certified delay/incarnation/neutral interval. NetMatchService.cpp:6372 adopts that certificate and :6380-6387 retains committed delay changes. NetLockstep.cpp:12978-12981 consumes certified history for the private reader. These changes explain the return timing and missing-input class. The legacy image-delay check is still present at NetLockstep.cpp:6948-6965 / NetMatchService.cpp:8195-8220, so a source review alone cannot claim S7 passes. Rerun it after the merge, keeping both sides' intent when resolving conflicts.
+
+## Recovery allocation finding for the save engineer
+
+At tick 23976 after the desync report for 23970, the host's frozen Lua graph capture fails MapPages(slab->capacity * Snapshot::c_PageBytes), Source/Lua/CheckpointLuaHeap.h:579-580. The slab reserves pages + pages/4. Host stdout.log:30785 records 30 states, bytes=243269632, copy_mapped=304087040, copy_idle=0. These are aggregate successful-capture sizes; the individual failed mapping's requested byte count is not logged and cannot be inferred precisely from the retained evidence.
+
+Exact lines in scenes-tip-s10-lifetime-1/run0/host/stdout.log:
+
+- 30783: [net-match] recovery requested tick=23976 catch_up=0 reason=Desync:sim state diverged at tick 23970 (Joiner)
+- 30786-30788: [frozen-graph] fallback: frozen graph capture failed: could not map a Lua heap copy
+- 30791 and 30793: [scriptgraph] save refused: not enough memory
+- 30796: [scriptgraph] save refused: script graph serialize failed: not enough memory
+- 30799: [checkpoint-capture] name=p5resync_25840 tick=23976 sim_block_ms=643.006 queued=false
+- 30800: [net-match] resync failed: resync snapshot save failed
+
+The last host census (stdout.log:30259, tick 23507) reports private_mb=4780 and lua_bytes=104651459. Its runner job limit is 5368709120 bytes; this does not establish the cause of the failed mapping or subsequent heap corruption. Both peers later exit 0xC0000374. This run has no nonzero crash dump. Earlier, separate tick-27601 dumps are retained at scenes-tip-s10-state-dump-1/run0/host/runtime/crash.dmp (11769712 bytes) and joiner/runtime/crash.dmp (11770627 bytes); they are not dumps of this recovery failure. The save engineer needs the failed mapping's byte count and allocation failure details. No checkpoint or recovery code is changed here.
+
+## S10 retained evidence and next measurement
+
+The lifetime run compares 799 thirty-tick samples and reports desync at 23970 in host stdout.log:30775 and joiner stdout.log:40979. Both local actors and brains are alive. Its launches contain no per-tick hash output, and it has no object dump near that tick. The older sim.simdump.txt files cover 3800-4500 and are byte-identical, SHA256 c3b95b0ed4a5f7c30dd7cea5e2888c670592a105a02314ffe5b7cfe737cde722. Neither retained run identifies the first differing component at 23970.
+
+The new diagnostic adds -net-live-tick-hashes and CC_SIM_DUMP=23969:23970 to the unchanged S10 scene, retaining the opt-in lifetime observer. This reads component hashes every tick without the -tick-hashes flag's forced immediate pathfinding (Main.cpp:2102), preserving the original pathfinding and Lua startup mode. No original input, timeout, memory, pace or image assertion changes. The default simulation seed remains SeedRNG's constant Bubble seed (RTETools.cpp:108-127). Single-box pace is reported, not chased; the lead's two-box run owns its pace gate.
+
+No directory tree under mx is removed. The four policy-refused folders remain for the lead to delete at merge. The earlier cleared-Luger crash is not called fixed or causally linked to this desync until the state comparison proves that link.
