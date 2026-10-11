@@ -205,7 +205,7 @@ namespace RTE {
 		std::unique_ptr<SoundContainer> m_DoorMoveEndSound; //!< Sound played when the door stops moving and is at fully open/closed position.
 
 	private:
-		std::string m_PersistedADoorRuntime;
+		CheckpointString m_PersistedADoorRuntime;
 		std::string SaveADoorRuntime() const;
 		bool LoadADoorRuntime(std::string_view text, bool validateOnly = false);
 

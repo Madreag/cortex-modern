@@ -465,7 +465,7 @@ void HDFirearm::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SpecialBehaviour_EmptySound", m_EmptySound);
 	writer.NewPropertyWithValue("SpecialBehaviour_ReloadStartSound", m_ReloadStartSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_ReloadEndSound", m_ReloadEndSound);
-	writer.NewPropertyWithValue("SpecialBehaviour_HDFirearmRuntime", CheckpointWriter::Native([&] { return m_PersistedHDFirearmRuntime.empty() ? SaveHDFirearmRuntime() : m_PersistedHDFirearmRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_HDFirearmRuntime", CheckpointWriter::Native([&] { return m_PersistedHDFirearmRuntime.empty() ? SaveHDFirearmRuntime() : m_PersistedHDFirearmRuntime.Value(); }).Base64(true));
 }
 
 int HDFirearm::Save(Writer& writer) const {

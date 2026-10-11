@@ -127,7 +127,7 @@ namespace RTE {
 		float m_MoveSpeed; //!< How fast the Leg moves to a reach target, 0 means it doesn't and 1 means it moves instantly.
 
 	private:
-		std::string m_PersistedLegRuntime;
+		CheckpointString m_PersistedLegRuntime;
 		std::string SaveLegRuntime() const;
 		bool LoadLegRuntime(std::string_view text, bool validateOnly = false);
 

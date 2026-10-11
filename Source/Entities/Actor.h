@@ -1122,10 +1122,10 @@ namespace RTE {
 
 		AtomGroup* m_pHitBody;
 		Controller m_Controller;
-		std::string m_PersistedControllerCheckpoint;
+		CheckpointString m_PersistedControllerCheckpoint;
 		long long m_PersistedControllerInputMode; //!< Saved wire-applied input mode, -1 when absent.
 		int m_PersistedControllerQuickDisabled; //!< Saved quick-disable flag, -1 when absent.
-		std::string m_PersistedPieMenuState; //!< Saved pie menu interaction state, applied on snapshot adopt.
+		CheckpointString m_PersistedPieMenuState; //!< Saved pie menu interaction state, applied on snapshot adopt.
 		Vector m_PersistedViewPoint; //!< Saved view point, applied on snapshot adopt (Create re-derives the live one).
 		bool m_HasPersistedViewPoint = false;
 		bool m_HasPersistedMovePath = false;
@@ -1349,14 +1349,14 @@ namespace RTE {
 		bool AlarmPointSeenByAIPass(Vector& seen) const;
 		AIMode PendingAIMode() const;
 
-		std::string m_PersistedActorRuntime;
-		std::array<std::string, 2> m_PersistedActorIconReferences;
+		CheckpointString m_PersistedActorRuntime;
+		std::array<CheckpointString, 2> m_PersistedActorIconReferences;
 		std::string SaveActorRuntime() const;
 		bool LoadActorRuntime(std::string_view text, bool validateOnly = false);
 
 		std::unique_ptr<PieMenu> m_PieMenu;
 		std::optional<CheckpointText> m_FrozenPieMenu;
-		std::string m_FrozenPieMenuState;
+		CheckpointString m_FrozenPieMenuState;
 
 		bool m_CheckpointInitialized = false;
 

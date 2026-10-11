@@ -254,7 +254,7 @@ bool GAScripted::SceneIsCompatible(Scene* pScene, int teams) {
 	}
 
 	// Check if all Areas required by this are defined in the Scene
-	for (std::set<std::string>::iterator itr = m_RequiredAreas.begin(); itr != m_RequiredAreas.end(); ++itr) {
+	for (auto itr = m_RequiredAreas.begin(); itr != m_RequiredAreas.end(); ++itr) {
 		// If Area is missing, this Scene is not up to par
 		if (!pScene->HasArea(*itr)) {
 			return false;

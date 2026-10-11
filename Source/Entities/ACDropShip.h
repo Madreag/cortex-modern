@@ -168,7 +168,7 @@ namespace RTE {
 		// Member variables
 		static Entity::ClassInfo m_sClass;
 		// Body AtomGroups.
-		std::string m_PersistedBodyGroupCheckpoint;
+		CheckpointString m_PersistedBodyGroupCheckpoint;
 		AtomGroup* m_pBodyAG;
 		// Thruster emitters.
 		// TODO when this class is cleaned up, these and their getters and setters should probably be renamed (I'd argue the lua bindings should be broken to match but that's debatable). L and R should be Left and Right and they should probably be Primary and Secondary.
@@ -200,7 +200,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		std::string m_PersistedACDropShipRuntime;
+		CheckpointString m_PersistedACDropShipRuntime;
 		std::string SaveACDropShipRuntime() const;
 		bool LoadACDropShipRuntime(std::string_view text, bool validateOnly = false);
 

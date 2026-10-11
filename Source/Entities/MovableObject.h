@@ -206,7 +206,7 @@ namespace RTE {
 		bool HasAnyScripts() const { return !m_AllLoadedScripts.empty(); }
 
 		/// Gets every script loaded onto this MO, in load order.
-		const CheckpointVector<std::string>& GetAllLoadedScripts() const { return m_AllLoadedScripts; }
+		const CheckpointVector<CheckpointString>& GetAllLoadedScripts() const { return m_AllLoadedScripts; }
 
 		/// Checks if the script at the given path is one of the scripts on this MO.
 		/// @param scriptPath The path to the script to check.
@@ -1088,11 +1088,11 @@ namespace RTE {
 
 		/// Gets a const reference to this MOSRotating's map of string values.
 		/// @return A const reference to this MOSRotating's map of string values.
-		const CheckpointUnorderedMap<std::string, std::string>& GetStringValueMap() const { return m_StringValueMap; }
+		const CheckpointUnorderedMap<CheckpointString, CheckpointString>& GetStringValueMap() const { return m_StringValueMap; }
 
 		/// Gets a const reference to this MOSRotating's map of number values.
 		/// @return A const reference to this MOSRotating's map of number values.
-		const CheckpointUnorderedMap<std::string, double>& GetNumberValueMap() const { return m_NumberValueMap; }
+		const CheckpointUnorderedMap<CheckpointString, double>& GetNumberValueMap() const { return m_NumberValueMap; }
 
 		/// Gets a custom value map's entries in key order, the order saved text names them in, so the text never follows the map's insertion history.
 		/// @param map The map to order.
@@ -1555,19 +1555,19 @@ namespace RTE {
 			std::unique_ptr<LuabindObjectWrapper> m_LuaFunction; //!< The lua function itself.
 		};
 
-		std::string m_ScriptObjectName; //!< The name of this object for script usage.
+		CheckpointString m_ScriptObjectName; //!< The name of this object for script usage.
 		long m_ScriptRegistrationSerial; //!< The place this object took in its Lua state's registration order.
 		int m_HookCallDepth; //!< How many hook loops of this object are running.
 		bool m_DeleteWhenHookReturns; //!< A script deleted this object from inside its own hook.
-		CheckpointVector<std::string> m_AllLoadedScripts; //!< A vector of script for scripts applied to this object, in order of insertion.
-		CheckpointUnorderedMap<std::string, bool> m_EnabledScripts; //!< A map of script paths to the enabled state of the given script.
+		CheckpointVector<CheckpointString> m_AllLoadedScripts; //!< A vector of script for scripts applied to this object, in order of insertion.
+		CheckpointUnorderedMap<CheckpointString, bool> m_EnabledScripts; //!< A map of script paths to the enabled state of the given script.
 		std::unordered_map<std::string, std::vector<LuaFunction>> m_FunctionsAndScripts; //!< A map of function names to vectors of Lua functions. Used to maintain script execution order and avoid extraneous Lua calls.
 
 		volatile bool m_RequestedSyncedUpdate; //!< For optimisation purposes, scripts explicitly request a synced update if they want one.
 
-		CheckpointUnorderedMap<std::string, std::string> m_StringValueMap; //<! Map to store any generic strings available from script
-		CheckpointUnorderedMap<std::string, double> m_NumberValueMap; //<! Map to store any generic numbers available from script
-		CheckpointUnorderedMap<std::string, Entity*> m_ObjectValueMap; //<! Map to store any generic object pointers available from script
+		CheckpointUnorderedMap<CheckpointString, CheckpointString> m_StringValueMap; //<! Map to store any generic strings available from script
+		CheckpointUnorderedMap<CheckpointString, double> m_NumberValueMap; //<! Map to store any generic numbers available from script
+		CheckpointUnorderedMap<CheckpointString, Entity*> m_ObjectValueMap; //<! Map to store any generic object pointers available from script
 		// Local-AI value writes stay here until the settled observation commits.
 		struct ValueOverlayKey {
 			ValueMapKind map = ValueMapKind::Number;
@@ -1622,9 +1622,9 @@ namespace RTE {
 		// Saved state waiting to be adopted when the object enters the world; survives the
 		// clones a restored scene goes through, unlike the live fields every copy re-derives.
 		long m_PersistedUniqueID;
-		std::string m_PersistedMovableObjectRuntime;
+		CheckpointString m_PersistedMovableObjectRuntime;
 		bool m_ScriptStateRestored; //!< The saved script graph carries this object's fields, so the scripts initialize without Create.
-		std::string m_PersistedScriptState; //!< Per-object script fields from older saves.
+		CheckpointString m_PersistedScriptState; //!< Per-object script fields from older saves.
 		int m_PersistedLuaStateIndex; //!< The Lua state index the save recorded for this object, -1 when none.
 		long m_FaithfulMOToNotHitUID = 0; //!< Snapshot link for m_pMOToNotHit, resolved after a restore.
 		inline static thread_local int s_ScriptLoadDeferralDepth = 0;

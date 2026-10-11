@@ -391,7 +391,7 @@ namespace RTE {
 
 	private:
 		std::shared_ptr<const Atom::FrozenList> m_FrozenAtoms;
-		std::string m_CheckpointMaterialReference;
+		CheckpointString m_CheckpointMaterialReference;
 		long m_CheckpointOwnerID = 0;
 		bool m_HasCheckpointOwner = false;
 

@@ -749,7 +749,7 @@ bool MovableObject::PublishNetPrivateObjectGraph() {
 	std::vector<std::unique_lock<std::recursive_mutex>> scriptLocks;
 	scriptLocks.emplace_back(g_LuaMan.GetMasterScriptState().GetMutex());
 	for (auto& state: g_LuaMan.GetThreadedScriptStates()) scriptLocks.emplace_back(state.GetMutex());
-	std::vector<std::string> scriptNames(objects.size());
+	std::vector<CheckpointString> scriptNames(objects.size());
 	std::map<LuaStateWrapper*, std::vector<std::pair<const MovableObject*, long>>> scriptIdentities;
 	long counter;
 	for (;;) {
@@ -1060,7 +1060,7 @@ bool MovableObject::LoadMovableObjectRuntime(std::string_view text, bool validat
 }
 
 void MovableObject::SaveSnapshotConfiguration(Writer& writer) const {
-	writer.NewPropertyWithValue("SpecialBehaviour_MovableObjectRuntime", CheckpointWriter::Native([&] { return m_PersistedMovableObjectRuntime.empty() ? SaveMovableObjectRuntime() : m_PersistedMovableObjectRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_MovableObjectRuntime", CheckpointWriter::Native([&] { return m_PersistedMovableObjectRuntime.empty() ? SaveMovableObjectRuntime() : m_PersistedMovableObjectRuntime.Value(); }).Base64(true));
 	WriteCapturedProperties(writer,
 		CheckpointProperty<"Mass">(m_Mass),
 		CheckpointProperty<"Scale">(m_Scale),

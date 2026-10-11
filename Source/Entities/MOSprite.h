@@ -437,7 +437,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		std::string m_PersistedMOSpriteRuntime;
+		CheckpointString m_PersistedMOSpriteRuntime;
 		std::string SaveMOSpriteRuntime() const;
 		bool LoadMOSpriteRuntime(std::string_view text, bool validateOnly = false);
 

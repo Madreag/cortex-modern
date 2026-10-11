@@ -7778,8 +7778,8 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial, CheckpointLua:
 }
 
 // Whether every function of an object's callback record comes from a script the object runs; a malformed record fits, so its problem is reported where it is read.
-template<class Allocator>
-static bool CallbacksFitScripts(lua_State* L, int index, const std::unordered_map<std::string, bool, std::hash<std::string>, std::equal_to<std::string>, Allocator>& scripts) {
+template<class Scripts>
+static bool CallbacksFitScripts(lua_State* L, int index, const Scripts& scripts) {
 	const int top = lua_gettop(L);
 	const int record = index < 0 ? top + index + 1 : index;
 	bool fits = true;

@@ -373,7 +373,7 @@ int Activity::Save(Writer& writer) const {
 	Entity::Save(writer);
 	if (writer.IsSnapshot()) {
 		CaptureTrace::Span span("activity_runtime");
-		writer.NewPropertyWithValue("SpecialBehaviour_RuntimeCheckpoint", CheckpointWriter::Native([&] { return m_PendingRuntimeCheckpoint.empty() ? SaveCheckpoint() : m_PendingRuntimeCheckpoint; }).Base64(true));
+		writer.NewPropertyWithValue("SpecialBehaviour_RuntimeCheckpoint", CheckpointWriter::Native([&] { return m_PendingRuntimeCheckpoint.empty() ? SaveCheckpoint() : m_PendingRuntimeCheckpoint.Value(); }).Base64(true));
 	}
 
 	writer.NewProperty("Description");

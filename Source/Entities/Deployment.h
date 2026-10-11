@@ -199,7 +199,7 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass;
 
 		// Name of the Loadout that shuold be placed at this' location in the Scene.
-		std::string m_LoadoutName;
+		CheckpointString m_LoadoutName;
 		// The Icon that graphically represents this
 		Icon m_Icon;
 		// The radius around this deployment that gets checked if another actor/item of the same type and name already exists and will block re-spawning a new one by this

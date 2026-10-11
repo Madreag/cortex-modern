@@ -718,11 +718,11 @@ namespace RTE {
 		CheckpointVector<long long> m_PersistedBGHandResidue;
 		CheckpointVector<long long> m_PersistedFGFootResidue;
 		CheckpointVector<long long> m_PersistedBGFootResidue;
-		CheckpointVector<std::string> m_PersistedLimbPathStates; //!< Saved limb-path traversal state, applied on snapshot adopt.
+		CheckpointVector<CheckpointString> m_PersistedLimbPathStates; //!< Saved limb-path traversal state, applied on snapshot adopt.
 		bool m_PersistedLimbPathStatesFromFile = false; //!< Whether the stash holds file values rather than a copy capture.
-		std::string m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
-		std::string m_PersistedLimbGroupInertia; //!< Saved limb-group inertia pairs, applied on snapshot adopt.
-		std::string m_PersistedWalkState; //!< Saved walk angles + path offset, applied on snapshot adopt.
+		CheckpointString m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
+		CheckpointString m_PersistedLimbGroupInertia; //!< Saved limb-group inertia pairs, applied on snapshot adopt.
+		CheckpointString m_PersistedWalkState; //!< Saved walk angles + path offset, applied on snapshot adopt.
 		// The sound of the actor taking a step (think robot servo)
 		SoundContainer* m_StrideSound;
 		// Jetpack booster.
@@ -835,7 +835,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		std::string m_PersistedAHumanRuntime;
+		CheckpointString m_PersistedAHumanRuntime;
 		std::string SaveAHumanRuntime() const;
 		bool LoadAHumanRuntime(std::string_view text, bool validateOnly = false);
 

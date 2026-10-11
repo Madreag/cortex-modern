@@ -646,7 +646,7 @@ namespace RTE {
 			void Draw(BITMAP* pTargetBitmap, BITMAP* pArrowBitmap, const Vector& arrowPoint, ObjectiveArrowDir arrowDir = ARROWDOWN);
 
 			// The description of this objective point
-			std::string m_Description;
+			CheckpointString m_Description;
 			// Absolute position in the scene where this is pointed
 			Vector m_ScenePos;
 			// The team this objective is relevant to
@@ -757,7 +757,7 @@ namespace RTE {
 		CheckpointList<ObjectivePoint> m_Objectives;
 
 		// Tech of player
-		std::string m_TeamTech[Teams::MaxTeamCount];
+		CheckpointString m_TeamTech[Teams::MaxTeamCount];
 		bool m_TeamTechSwitchEnabled[Teams::MaxTeamCount];
 
 		// Initial gold amount selected by player in scenario setup dialog
@@ -806,7 +806,7 @@ namespace RTE {
 		// The winning team number, when the game is over
 		int m_WinnerTeam;
 
-		std::string m_NetworkPlayerNames[Players::MaxPlayerCount];
+		CheckpointString m_NetworkPlayerNames[Players::MaxPlayerCount];
 
 		/// Private member variable and method declarations
 	private:

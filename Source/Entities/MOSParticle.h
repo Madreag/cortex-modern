@@ -126,7 +126,7 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 
 		Atom* m_Atom; //!< The Atom that will be the physical representation of this MOSParticle.
-		std::string m_PersistedAtomCheckpoint;
+		CheckpointString m_PersistedAtomCheckpoint;
 		long long m_PersistedAtomResidue = 0; //!< Saved travel residue, applied on snapshot adopt.
 		bool m_HasPersistedAtomResidue = false;
 

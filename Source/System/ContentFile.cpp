@@ -278,7 +278,7 @@ int ContentFile::GetDataModuleID() const {
 
 void ContentFile::SetDataPath(const std::string& newDataPath) {
 	m_DataPath = g_PresetMan.GetFullModulePath(newDataPath);
-	m_DataPathExtension = std::filesystem::path(m_DataPath).extension().string();
+	m_DataPathExtension = std::filesystem::path(m_DataPath.Value()).extension().string();
 
 	RTEAssert(!m_DataPathExtension.empty(), "Failed to find file extension when trying to find file with path and name:\n" + m_DataPath + "\n" + GetFormattedReaderPosition());
 
@@ -437,7 +437,7 @@ BITMAP* ContentFile::GetAsBitmap(int conversionMode, bool storeBitmap, const std
 	}
 	BITMAP* returnBitmap = nullptr;
 	const int bitDepth = conversionMode == COLORCONV_8_TO_32 ? BitDepths::ThirtyTwo : BitDepths::Eight;
-	std::string dataPathToLoad = dataPathToSpecificFrame.empty() ? m_DataPath : dataPathToSpecificFrame;
+	std::string dataPathToLoad = dataPathToSpecificFrame.empty() ? m_DataPath.Value() : dataPathToSpecificFrame;
 
 	if (g_PresetMan.GetReloadEntityPresetCalledThisUpdate()) {
 		ReloadBitmap(dataPathToLoad, conversionMode);
@@ -607,7 +607,7 @@ BITMAP* ContentFile::LoadAndReleaseBitmap(int conversionMode, const std::string&
 	if (m_DataPath.empty()) {
 		return nullptr;
 	}
-	const std::string dataPathToLoad = dataPathToSpecificFrame.empty() ? m_DataPath : dataPathToSpecificFrame;
+	const std::string dataPathToLoad = dataPathToSpecificFrame.empty() ? m_DataPath.Value() : dataPathToSpecificFrame;
 
 	SDL_Surface* image = LoadImageAsSurface(conversionMode, dataPathToLoad);
 	if (!image) {
@@ -758,7 +758,7 @@ FMOD::Sound* ContentFile::LoadAndReleaseSound(bool abortGameForInvalidSound, boo
 			return nullptr;
 		}
 	}
-	if (std::filesystem::file_size(m_DataPath) == 0) {
+	if (std::filesystem::file_size(m_DataPath.Value()) == 0) {
 		const std::string errorMessage = "Failed to create sound because the file was empty. The path and name were: ";
 		RTEAssert(!abortGameForInvalidSound, errorMessage + "\n\n" + m_DataPathAndReaderPosition);
 		g_ConsoleMan.PrintString("ERROR: " + errorMessage + m_DataPath);

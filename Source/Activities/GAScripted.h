@@ -94,7 +94,7 @@ namespace RTE {
 		const std::string& GetLuaClassName() const { return m_LuaClassName; }
 
 		/// Areas a scene must define before this activity will accept it.
-		const CheckpointSet<std::string>& GetRequiredAreas() const { return m_RequiredAreas; }
+		const CheckpointSet<CheckpointString>& GetRequiredAreas() const { return m_RequiredAreas; }
 
 		/// The native global scripts owned by this activity, in checkpoint order.
 		const CheckpointVector<GlobalScript*>& GetGlobalScripts() const { return m_GlobalScriptsList; }
@@ -159,7 +159,7 @@ namespace RTE {
 		// The name of the class (table) defining the logic of this in Lua, as specified in the script file
 		std::string m_LuaClassName;
 		// The list of Area:s required in a Scene to play this Activity on it
-		CheckpointSet<std::string> m_RequiredAreas;
+		CheckpointSet<CheckpointString> m_RequiredAreas;
 		std::vector<CheckpointText> m_FrozenPieSlices;
 		CheckpointVector<std::unique_ptr<PieSlice>> m_PieSlicesToAdd; //!< A vector of PieSlices that should be added to any PieMenus opened while this GAScripted is running.
 		// The list of global scripts allowed to run during this activity

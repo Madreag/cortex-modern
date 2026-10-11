@@ -447,7 +447,7 @@ int ACRocket::ReadProperty(const std::string_view& propName, Reader& reader) {
 void ACRocket::SaveSnapshotConfiguration(Writer& writer) const {
 	ACraft::SaveSnapshotConfiguration(writer);
 	writer.NewPropertyWithValue("SpecialBehaviour_MaxGimbalAngleRaw", m_MaxGimbalAngle);
-	writer.NewPropertyWithValue("SpecialBehaviour_ACRocketRuntime", CheckpointWriter::Native([&] { return m_PersistedACRocketRuntime.empty() ? SaveACRocketRuntime() : m_PersistedACRocketRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ACRocketRuntime", CheckpointWriter::Native([&] { return m_PersistedACRocketRuntime.empty() ? SaveACRocketRuntime() : m_PersistedACRocketRuntime.Value(); }).Base64(true));
 }
 
 int ACRocket::Save(Writer& writer) const {

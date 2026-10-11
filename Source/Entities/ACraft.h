@@ -491,7 +491,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		std::string m_PersistedACraftRuntime;
+		CheckpointString m_PersistedACraftRuntime;
 		std::string SaveACraftRuntime() const;
 		bool LoadACraftRuntime(std::string_view text, bool validateOnly = false);
 

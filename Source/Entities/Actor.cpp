@@ -870,7 +870,7 @@ void Actor::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SpecialBehaviour_PainSound", m_PainSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_DeathSound", m_DeathSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_DeviceSwitchSound", m_DeviceSwitchSound);
-	writer.NewPropertyWithValue("SpecialBehaviour_ActorRuntime", CheckpointWriter::Native([&] { return m_PersistedActorRuntime.empty() ? SaveActorRuntime() : m_PersistedActorRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ActorRuntime", CheckpointWriter::Native([&] { return m_PersistedActorRuntime.empty() ? SaveActorRuntime() : m_PersistedActorRuntime.Value(); }).Base64(true));
 }
 
 int Actor::Save(Writer& writer) const {
@@ -3096,8 +3096,8 @@ std::string Actor::SaveActorRuntime() const {
 	archive(m_LastOrderedWaypoint, m_HasOrderedWaypoint, m_LastOrderedWaypointUID);
 	archive.PerPeer(m_MoveVector, m_UpdateMovePath);
 	archive(m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
-	archive(CheckpointWriter::Native([&] { return m_PersistedActorIconReferences[0].empty() ? CaptureActorIconReference(m_pTeamIcon) : m_PersistedActorIconReferences[0]; }),
-	    CheckpointWriter::Native([&] { return m_PersistedActorIconReferences[1].empty() ? CaptureActorIconReference(m_pControllerIcon) : m_PersistedActorIconReferences[1]; }));
+	archive(CheckpointWriter::Native([&] { return m_PersistedActorIconReferences[0].empty() ? CaptureActorIconReference(m_pTeamIcon) : m_PersistedActorIconReferences[0].Value(); }),
+	    CheckpointWriter::Native([&] { return m_PersistedActorIconReferences[1].empty() ? CaptureActorIconReference(m_pControllerIcon) : m_PersistedActorIconReferences[1].Value(); }));
 	return archive.Text();
 }
 
@@ -3127,7 +3127,7 @@ bool Actor::LoadActorRuntime(std::string_view text, bool validateOnly) {
 			}
 		}
 		archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
-		std::array<std::string, 2> icons;
+		std::array<CheckpointString, 2> icons;
 		archive.Value(icons);
 		for (const std::string& icon: icons) { ActorIconReference reference; if (!reference.Load(icon)) return false; }
 		archive.OnCommit([this, icons = std::move(icons)] { m_PersistedActorIconReferences = icons; });

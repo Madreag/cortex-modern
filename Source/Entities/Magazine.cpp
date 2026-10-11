@@ -138,7 +138,7 @@ void Magazine::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("AIBlastRadius", m_AIBlastRadius);
 	writer.NewPropertyWithValue("SpecialBehaviour_AIAimVel", m_AIAimVel);
 	writer.NewPropertyWithValue("SpecialBehaviour_AIAimPenetration", m_AIAimPenetration);
-	writer.NewPropertyWithValue("SpecialBehaviour_MagazineRuntime", CheckpointWriter::Native([&] { return m_PersistedMagazineRuntime.empty() ? SaveMagazineRuntime() : m_PersistedMagazineRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_MagazineRuntime", CheckpointWriter::Native([&] { return m_PersistedMagazineRuntime.empty() ? SaveMagazineRuntime() : m_PersistedMagazineRuntime.Value(); }).Base64(true));
 }
 
 int Magazine::Save(Writer& writer) const {

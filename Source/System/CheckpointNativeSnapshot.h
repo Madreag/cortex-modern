@@ -381,6 +381,12 @@ namespace RTE {
 			std::lock_guard lock(shard.mutex);
 			shard.deferred.push_back({memory, [](void* value) { (*static_cast<Work*>(value))(); }});
 		}
+		CheckpointString Freeze(const CheckpointString& source, CheckpointString* target) {
+			if (source.empty()) return {};
+			const auto bytes = OwnBytes(source.Value());
+			AfterBoundary([target, bytes] { target->assign(bytes); });
+			return {};
+		}
 		std::string Freeze(const std::string& source, std::string* target) {
 			if (source.empty()) return {};
 			const auto bytes = OwnBytes(source);
@@ -538,7 +544,7 @@ namespace RTE {
 		}
 
 	private:
-		template<class T> static constexpr bool DeferredElement = std::is_arithmetic_v<T> || std::is_enum_v<T> || std::is_pointer_v<T> || std::is_same_v<T, Vector> || std::is_same_v<T, Gib> || std::is_same_v<T, std::string>;
+		template<class T> static constexpr bool DeferredElement = std::is_arithmetic_v<T> || std::is_enum_v<T> || std::is_pointer_v<T> || std::is_same_v<T, Vector> || std::is_same_v<T, Gib> || (std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>);
 		std::string_view OwnBytes(std::string_view source);
 		template<class T> struct alignas(alignof(T) > alignof(size_t) ? alignof(T) : alignof(size_t)) OwnedValues {
 			size_t size = 0;
@@ -549,7 +555,7 @@ namespace RTE {
 		};
 		template<bool retainPointers = false, class Range> auto OwnValues(const Range& source) {
 			using Source = typename Range::value_type;
-			using T = std::conditional_t<std::is_same_v<Source, std::string>, std::string_view, Source>;
+			using T = std::conditional_t<(std::is_same_v<Source, std::string> || std::is_same_v<Source, CheckpointString>), std::string_view, Source>;
 			using Record = OwnedValues<T>;
 			if (source.size() > ((std::numeric_limits<size_t>::max)() - sizeof(Record)) / sizeof(T)) throw std::bad_alloc();
 			const size_t bytes = sizeof(Record) + source.size() * sizeof(T);
@@ -565,7 +571,7 @@ namespace RTE {
 			auto* record = ::new(memory) Record;
 			record->data = reinterpret_cast<T*>(static_cast<std::byte*>(memory) + sizeof(Record));
 			owner.first = record;
-			if constexpr (std::is_same_v<Source, std::string>) {
+			if constexpr ((std::is_same_v<Source, std::string> || std::is_same_v<Source, CheckpointString>)) {
 				for (const auto& value: source) { ::new(record->Data() + record->size) T(OwnBytes(value)); ++record->size; }
 			} else if constexpr (retainPointers) {
 				static_assert(std::is_pointer_v<T>);
@@ -671,7 +677,7 @@ namespace RTE {
 		CheckpointSharedMap<const Entity*, std::shared_ptr<PresetReference>> m_PresetScripts;
 		struct Metadata {
 			std::string name, copied, description, reader;
-			CheckpointUnorderedSet<std::string> groups;
+			CheckpointUnorderedSet<CheckpointString> groups;
 		};
 		struct MetadataShard { std::mutex mutex; std::unordered_multimap<size_t, std::unique_ptr<Metadata>> values; };
 		std::array<MetadataShard, 16> m_Metadata;

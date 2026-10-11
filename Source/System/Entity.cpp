@@ -542,7 +542,7 @@ namespace RTE {
 
 		// Is an original preset definition
 		if (identity ? identity->original : m_IsOriginalPreset) {
-			writer.NewPropertyWithValue("PresetName", identity ? identity->name : m_PresetName);
+			writer.NewPropertyWithValue("PresetName", identity ? identity->name : m_PresetName.Value());
 
 			if (!m_PresetDescription.empty()) {
 				writer.NewPropertyWithValue("Description", m_PresetDescription);
@@ -590,7 +590,7 @@ namespace RTE {
 
 	void Entity::SaveSnapshotIdentity(Writer& writer) const {
 		const auto* identity = writer.IdentityOverride(this);
-		const auto& name = identity ? identity->name : m_PresetName;
+		const auto& name = identity ? identity->name : m_PresetName.Value();
 		if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
 			struct Fields {
 				std::string name, description;

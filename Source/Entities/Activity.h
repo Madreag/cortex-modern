@@ -793,7 +793,7 @@ namespace RTE {
 		std::array<long, 3> SlotActorIDs(int player) const;
 		/// Points a relaunch's pending actor links at the slots as they stand, so its deferred rebinds keep them.
 		void RefreshCheckpointActorIDs();
-		std::string m_PendingRuntimeCheckpoint;
+		CheckpointString m_PendingRuntimeCheckpoint;
 		std::array<std::array<long, 3>, Players::MaxPlayerCount> m_CheckpointActorIDs{};
 		bool m_HasCheckpointActorIDs = false;
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
@@ -805,8 +805,8 @@ namespace RTE {
 
 		bool m_IsTestActivity; //!< Whether this is a test activity, hidden from the regular scenarios menu.
 
-		std::string m_Description; //!< User-friendly description of what this Activity is all about.
-		std::string m_SceneName; //!< The name of the Scene in which this Activity takes place.
+		CheckpointString m_Description; //!< User-friendly description of what this Activity is all about.
+		CheckpointString m_SceneName; //!< The name of the Scene in which this Activity takes place.
 
 		int m_MaxPlayerSupport; //!< How many separate players this Activity can support at the same time.
 		int m_MinTeamsRequired; //!< How many separate teams this Activity can support at the same time.
@@ -826,7 +826,7 @@ namespace RTE {
 		ViewState m_ViewState[Players::MaxPlayerCount]; //!< What to be viewing for each player.
 		Timer m_DeathTimer[Players::MaxPlayerCount]; //!< Timers for measuring death view delays.
 
-		std::string m_TeamNames[Teams::MaxTeamCount]; //!< Names for each team.
+		CheckpointString m_TeamNames[Teams::MaxTeamCount]; //!< Names for each team.
 		Icon m_TeamIcons[Teams::MaxTeamCount]; //!< Icons for each team.
 
 		int m_TeamCount; //!< The number of teams in the current Activity.

@@ -274,7 +274,7 @@ void PEmitter::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SustainBurstSound", m_SustainBurstSound);
 	writer.NewPropertyWithValue("BurstSoundFollowsEmitter", m_BurstSoundFollowsEmitter);
 	writer.NewPropertyWithValue("LoudnessOnEmit", m_LoudnessOnEmit);
-	writer.NewPropertyWithValue("SpecialBehaviour_PEmitterRuntime", CheckpointWriter::Native([&] { return m_PersistedPEmitterRuntime.empty() ? SavePEmitterRuntime() : m_PersistedPEmitterRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_PEmitterRuntime", CheckpointWriter::Native([&] { return m_PersistedPEmitterRuntime.empty() ? SavePEmitterRuntime() : m_PersistedPEmitterRuntime.Value(); }).Base64(true));
 }
 
 int PEmitter::Save(Writer& writer) const {

@@ -229,7 +229,7 @@ void Arm::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("HandSprite", m_HandSpriteFile);
 	writer.NewPropertyWithValue("GripStrength", m_GripStrength);
 	writer.NewPropertyWithValue("ThrowStrength", m_ThrowStrength);
-	writer.NewPropertyWithValue("SpecialBehaviour_ArmRuntime", CheckpointWriter::Native([&] { return m_PersistedArmRuntime.empty() ? SaveArmRuntime() : m_PersistedArmRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ArmRuntime", CheckpointWriter::Native([&] { return m_PersistedArmRuntime.empty() ? SaveArmRuntime() : m_PersistedArmRuntime.Value(); }).Base64(true));
 }
 
 int Arm::Save(Writer& writer) const {

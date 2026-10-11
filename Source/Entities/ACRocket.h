@@ -209,9 +209,9 @@ namespace RTE {
 		unsigned int m_GearState;
 		CheckpointVector<long long> m_PersistedRFootResidue; //!< Saved per-atom travel residue, applied on snapshot adopt.
 		CheckpointVector<long long> m_PersistedLFootResidue;
-		CheckpointVector<std::string> m_PersistedLimbPathStates; //!< Saved gear-path traversal state, applied on snapshot adopt.
-		std::string m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
-		std::string m_PersistedLimbGroupInertia; //!< Saved limb-group inertia pairs, applied on snapshot adopt.
+		CheckpointVector<CheckpointString> m_PersistedLimbPathStates; //!< Saved gear-path traversal state, applied on snapshot adopt.
+		CheckpointString m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
+		CheckpointString m_PersistedLimbGroupInertia; //!< Saved limb-group inertia pairs, applied on snapshot adopt.
 		// Limb paths for different movement states.
 		// [0] is for the right limbs, and [1] is for left.
 		LimbPath m_Paths[2][GearStateCount];
@@ -219,7 +219,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		std::string m_PersistedACRocketRuntime;
+		CheckpointString m_PersistedACRocketRuntime;
 		std::string SaveACRocketRuntime() const;
 		bool LoadACRocketRuntime(std::string_view text, bool validateOnly = false);
 

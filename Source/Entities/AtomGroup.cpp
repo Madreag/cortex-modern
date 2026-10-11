@@ -171,7 +171,7 @@ int AtomGroup::Create(const AtomGroup& reference, bool onlyCopyOwnerAtoms) {
 
 	if (MovableObject::IsFaithfulClone()) {
 		m_Material = reference.m_Material;
-		m_CheckpointMaterialReference = reference.m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(reference.m_Material) : reference.m_CheckpointMaterialReference;
+		m_CheckpointMaterialReference = reference.m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(reference.m_Material) : reference.m_CheckpointMaterialReference.Value();
 		m_CheckpointOwnerID = reference.m_HasCheckpointOwner ? reference.m_CheckpointOwnerID : (reference.m_OwnerMOSR ? reference.m_OwnerMOSR->GetUniqueID() : 0);
 		m_HasCheckpointOwner = true;
 		m_SubGroups.clear();
@@ -204,7 +204,7 @@ int AtomGroup::Create(MOSRotating* ownerMOSRotating, Material const* material, i
 std::string AtomGroup::SaveCheckpoint() const {
 	CheckpointWriter writer("AtomGroup2");
 	VisitCheckpoint(writer, *this);
-	writer(std::set<std::string>(m_Groups.begin(), m_Groups.end()), CheckpointWriter::Native([&] { return m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference; }),
+	writer(std::set<std::string>(m_Groups.begin(), m_Groups.end()), CheckpointWriter::Native([&] { return m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference.Value(); }),
 	    m_HasCheckpointOwner ? m_CheckpointOwnerID : (m_OwnerMOSR ? m_OwnerMOSR->GetUniqueID() : 0));
 	std::vector<CheckpointText> atoms;
 	std::unordered_map<const Atom*, size_t> indices;
@@ -372,7 +372,7 @@ int AtomGroup::ReadProperty(const std::string_view& propName, Reader& reader) {
 int AtomGroup::Save(Writer& writer) const {
 	Entity::Save(writer);
 
-    if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialReference", CheckpointWriter::Native([&] { return m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference; }).Base64(true));
+    if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialReference", CheckpointWriter::Native([&] { return m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference.Value(); }).Base64(true));
     else { writer.NewProperty("Material"); writer << m_Material; }
 	writer.NewProperty("AutoGenerate");
 	writer << m_AutoGenerate;

@@ -829,7 +829,7 @@ void AHuman::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("CrouchRotAngleTarget", m_RotAngleTargets[CROUCH]);
 	writer.NewPropertyWithValue("JumpRotAngleTarget", m_RotAngleTargets[JUMP]);
 	writer.NewPropertyWithValue("SpecialBehaviour_StrideSound", m_StrideSound);
-	writer.NewPropertyWithValue("SpecialBehaviour_AHumanRuntime", CheckpointWriter::Native([&] { return m_PersistedAHumanRuntime.empty() ? SaveAHumanRuntime() : m_PersistedAHumanRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_AHumanRuntime", CheckpointWriter::Native([&] { return m_PersistedAHumanRuntime.empty() ? SaveAHumanRuntime() : m_PersistedAHumanRuntime.Value(); }).Base64(true));
 }
 
 int AHuman::Save(Writer& writer) const {

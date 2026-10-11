@@ -102,7 +102,7 @@ namespace RTE {
 
 		/// Gets the SectionType of this DynamicSongSection.
 		/// @return The SectionType of this DynamicSongSection.
-		std::string& GetSectionType() { return m_SectionType; }
+		const std::string& GetSectionType() const { return m_SectionType; }
 
 		/// Sets the SectionType of this DynamicSongSection.
 		/// @param newSectionType The new SectionType for this DynamicSongSection.
@@ -137,7 +137,7 @@ namespace RTE {
 		std::vector<unsigned int> m_ShuffleUnplayedIndices; //!< Indices left to play if in Shuffle mode.
 
 		SoundContainerSelectionCycleMode m_SoundContainerSelectionCycleMode; //!< The selection cycle mode to use when selecting the next SoundContainer.
-		std::string m_SectionType; //!< The name of the type of dynamic music this is.
+		CheckpointString m_SectionType; //!< The name of the type of dynamic music this is.
 
 		bool m_CheckpointInitialized = false;
 

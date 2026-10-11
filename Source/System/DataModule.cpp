@@ -337,7 +337,7 @@ bool DataModule::GetGroupsWithType(std::list<std::string>& groupList, const std:
 		}
 	} else {
 		if (auto classItr = m_TypeMap.find(withType); classItr != m_TypeMap.end()) {
-			const CheckpointUnorderedSet<std::string>* groupListPtr = nullptr;
+			const CheckpointUnorderedSet<CheckpointString>* groupListPtr = nullptr;
 			// Go through all the entities of that type, adding the groups they belong to
 			for (const auto& [instanceName, entity]: classItr->second) {
 				groupListPtr = entity->GetGroups();

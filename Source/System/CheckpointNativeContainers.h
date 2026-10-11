@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointNativeStorage.h"
+#include "CheckpointString.h"
 
 #include <deque>
 #include <list>

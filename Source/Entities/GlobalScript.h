@@ -105,8 +105,8 @@ namespace RTE {
 	private:
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 
-		std::string m_ScriptPath; //!< The path to the Lua script file that defines this' behaviors in update.
-		std::string m_LuaClassName; //!< The name of the class (table) defining the logic of this in Lua, as specified in the script file.
+		CheckpointString m_ScriptPath; //!< The path to the Lua script file that defines this' behaviors in update.
+		CheckpointString m_LuaClassName; //!< The name of the class (table) defining the logic of this in Lua, as specified in the script file.
 		bool m_IsActive; //!< Whether this GlobalScript is currently allowed to run.
 		bool m_HasStarted; //!< Whether this script has already been started.
 		bool m_LateUpdate; //!< Whether or not this GlobalScript should be updated late, i.e. after the standard MovableMan update.

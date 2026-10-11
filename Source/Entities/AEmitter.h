@@ -429,7 +429,7 @@ namespace RTE {
 		Timer m_BurstTimer;
 		PersistedTimerAnchor m_PersistedBurstTimerAnchor;
 		CheckpointVector<double> m_PersistedEmissionAccumulators;
-		CheckpointVector<std::string> m_PersistedEmissionTimers; //!< Saved per-emission start/stop timers, applied on snapshot adopt.
+		CheckpointVector<CheckpointString> m_PersistedEmissionTimers; //!< Saved per-emission start/stop timers, applied on snapshot adopt.
 		// Whether to play the BurstSound when a burst is triggered or not.
 		bool m_PlayBurstSound;
 		// The angle of the direction the emitted particles will head in.
@@ -461,7 +461,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		std::string m_PersistedAEmitterRuntime;
+		CheckpointString m_PersistedAEmitterRuntime;
 		std::string SaveAEmitterRuntime() const;
 		bool LoadAEmitterRuntime(std::string_view text, bool validateOnly = false);
 

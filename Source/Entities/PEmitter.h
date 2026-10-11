@@ -315,7 +315,7 @@ namespace RTE {
 		PersistedTimerAnchor m_PersistedBurstTimerAnchor;
 		PersistedTimerAnchor m_PersistedLastEmitTimerAnchor;
 		CheckpointVector<double> m_PersistedEmissionAccumulators;
-		CheckpointVector<std::string> m_PersistedEmissionTimers; //!< Saved per-emission start/stop timers, applied on snapshot adopt.
+		CheckpointVector<CheckpointString> m_PersistedEmissionTimers; //!< Saved per-emission start/stop timers, applied on snapshot adopt.
 		// The number of emissions emitted since emission was last enabled
 		long m_EmitCount;
 		// The max number of emissions to emit per emit being enabled
@@ -363,7 +363,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		std::string m_PersistedPEmitterRuntime;
+		CheckpointString m_PersistedPEmitterRuntime;
 		std::string SavePEmitterRuntime() const;
 		bool LoadPEmitterRuntime(std::string_view text, bool validateOnly = false);
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointString.h"
+
 #include "Timer.h"
 #include "Vector.h"
 #include "Box.h"
@@ -153,6 +155,7 @@ namespace RTE {
 		void Value(T value) { Value(static_cast<std::underlying_type_t<T>>(value)); }
 		void Value(float value) { Value(std::bit_cast<uint32_t>(value)); }
 		void Value(double value) { Value(std::bit_cast<uint64_t>(value)); }
+		void Value(const CheckpointString& value) { Value(value.Value()); }
 		void Value(const std::string& value) {
 			if (m_Recording) { RefuseDivertedValue(); Buffer().String(value); return; }
 			Value(value.size()); m_Text += value; m_Text.push_back(' ');
@@ -175,15 +178,15 @@ namespace RTE {
 		template <class T, class Compare, class Allocator> void Value(const std::set<T, Compare, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& value: values) Value(value); }
 		template <class K, class V, class Compare, class Allocator> void Value(const std::map<K, V, Compare, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); for (const auto& [key, value]: values) (*this)(key, value); }
 		template <class K, class V, class Hash, class Equal, class Allocator> void Value(const std::unordered_map<K, V, Hash, Equal, Allocator>& values) {
-			constexpr bool plainKey = (std::is_integral_v<K> && !std::is_same_v<K, bool>) || std::is_enum_v<K> || std::is_same_v<K, std::string>;
-			constexpr bool plainValue = (std::is_integral_v<V> && !std::is_same_v<V, bool>) || std::is_enum_v<V> || std::is_same_v<V, float> || std::is_same_v<V, double> || std::is_same_v<V, std::string>;
+			constexpr bool plainKey = (std::is_integral_v<K> && !std::is_same_v<K, bool>) || std::is_enum_v<K> || (std::is_same_v<K, std::string> || std::is_same_v<K, CheckpointString>);
+			constexpr bool plainValue = (std::is_integral_v<V> && !std::is_same_v<V, bool>) || std::is_enum_v<V> || std::is_same_v<V, float> || std::is_same_v<V, double> || (std::is_same_v<V, std::string> || std::is_same_v<V, CheckpointString>);
 			if constexpr (plainKey && plainValue) {
 				if (m_Recording && BatchEnabled()) {
 					if (values.empty()) { Value(size_t{0}); return; }
 					std::vector<std::pair<K, V>> owned(values.begin(), values.end());
 					size_t bytes = owned.size() * sizeof(std::pair<K, V>);
-					if constexpr (std::is_same_v<K, std::string>) for (const auto& entry: owned) bytes += entry.first.size();
-					if constexpr (std::is_same_v<V, std::string>) for (const auto& entry: owned) bytes += entry.second.size();
+					if constexpr ((std::is_same_v<K, std::string> || std::is_same_v<K, CheckpointString>)) for (const auto& entry: owned) bytes += entry.first.size();
+					if constexpr ((std::is_same_v<V, std::string> || std::is_same_v<V, CheckpointString>)) for (const auto& entry: owned) bytes += entry.second.size();
 					AppendFields(CheckpointText::Deferred([owned = std::move(owned)] {
 						// Owned keys and values preserve the ordered-map constructor's input order.
 						const std::map<K, V> ordered(owned.begin(), owned.end());
@@ -212,14 +215,15 @@ namespace RTE {
 	private:
 		CheckpointBuffer& Buffer() const { return m_Output ? *m_Output : m_Capture; }
 		template<class T> static constexpr bool PlainOwnedValue() {
-			if constexpr (std::is_arithmetic_v<T> || std::is_enum_v<T> || std::is_same_v<T, std::string> || std::is_same_v<T, Vector> || std::is_same_v<T, Box>) return true;
+			if constexpr (std::is_arithmetic_v<T> || std::is_enum_v<T> || (std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>) || std::is_same_v<T, Vector> || std::is_same_v<T, Box>) return true;
 			else if constexpr (CheckpointArray<T>) return PlainOwnedValue<typename T::value_type>();
 			else if constexpr (requires { typename T::first_type; typename T::second_type; }) return PlainOwnedValue<std::remove_const_t<typename T::first_type>>() && PlainOwnedValue<typename T::second_type>();
 			else if constexpr (requires { typename T::value_type; }) return PlainOwnedValue<typename T::value_type>();
 			else return false;
 		}
 		template<class T> static auto OwnValue(const T& value) {
-			if constexpr (std::is_same_v<T, bool>) {
+			if constexpr (std::is_same_v<T, CheckpointString>) return std::string(value.Value());
+			else if constexpr (std::is_same_v<T, bool>) {
 				unsigned char byte;
 				std::memcpy(&byte, &value, sizeof(byte));
 				return static_cast<unsigned int>(byte);
@@ -230,7 +234,7 @@ namespace RTE {
 				for (size_t index = 0; index < owned.size(); ++index) owned[index] = OwnValue(value[index]);
 				return owned;
 			} else if constexpr (requires { typename T::first_type; typename T::second_type; }) return std::pair{OwnValue(value.first), OwnValue(value.second)};
-			else if constexpr (!std::is_same_v<T, std::string> && requires { typename T::value_type; }) {
+			else if constexpr (!(std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>) && requires { typename T::value_type; }) {
 				std::vector<decltype(OwnValue(std::declval<const typename T::value_type&>()))> owned;
 				owned.reserve(value.size());
 				for (const auto& field: value) owned.push_back(OwnValue(field));
@@ -239,7 +243,7 @@ namespace RTE {
 		}
 		template<class T> static size_t OwnedValueBytes(const T& value) {
 			if constexpr (std::is_trivially_copyable_v<T>) return sizeof(T);
-			else if constexpr (std::is_same_v<T, std::string>) return sizeof(T) + value.size();
+			else if constexpr ((std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) return sizeof(T) + value.size();
 			else if constexpr (requires { typename T::first_type; typename T::second_type; }) return OwnedValueBytes(value.first) + OwnedValueBytes(value.second);
 			else if constexpr (requires { typename T::value_type; }) {
 				size_t bytes = sizeof(T);
@@ -252,10 +256,10 @@ namespace RTE {
 				for (const auto& field: value) ExpandOwnedValue(text, field, tape);
 			} else if constexpr (requires { typename T::first_type; typename T::second_type; }) {
 				ExpandOwnedValue(text, value.first, tape); ExpandOwnedValue(text, value.second, tape);
-			} else if constexpr (!std::is_same_v<T, std::string> && requires { typename T::value_type; }) {
+			} else if constexpr (!(std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>) && requires { typename T::value_type; }) {
 				ExpandOwnedValue(text, static_cast<uint64_t>(value.size()), tape);
 				for (const auto& field: value) ExpandOwnedValue(text, field, tape);
-			} else if constexpr (std::is_same_v<T, std::string>) {
+			} else if constexpr ((std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) {
 				std::string packed(sizeof(uint64_t) + value.size(), '\0');
 				size_t at = 0;
 				WritePrimitive(packed.data(), at, value);
@@ -308,7 +312,7 @@ namespace RTE {
 			Buffer().SizedRunEnd();
 		}
 		template<class T> static constexpr size_t PrimitiveWords() {
-			if constexpr (std::is_integral_v<T> || std::is_enum_v<T> || std::is_same_v<T, float> || std::is_same_v<T, double> || std::is_same_v<T, std::string>) return 1;
+			if constexpr (std::is_integral_v<T> || std::is_enum_v<T> || std::is_same_v<T, float> || std::is_same_v<T, double> || (std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) return 1;
 			else if constexpr (std::is_same_v<T, Vector>) return 2;
 			else if constexpr (std::is_same_v<T, Box>) return 4;
 			else if constexpr (std::is_array_v<T>) return std::extent_v<T> * PrimitiveWords<std::remove_extent_t<T>>();
@@ -384,7 +388,7 @@ namespace RTE {
 			}
 		}
 		template<class T> static void WritePrimitive(char* bytes, size_t& at, const T& value) {
-			if constexpr (std::is_same_v<T, std::string>) {
+			if constexpr ((std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) {
 				const uint64_t size = value.size();
 				WritePrimitive(bytes, at, size);
 				std::memcpy(bytes + at, value.data(), value.size());
@@ -401,7 +405,7 @@ namespace RTE {
 			}
 		}
 		template<class T> static constexpr size_t PrimitiveBytes() {
-			if constexpr (std::is_same_v<T, std::string>) return sizeof(uint64_t);
+			if constexpr ((std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) return sizeof(uint64_t);
 			else if constexpr (std::is_same_v<T, Vector>) return 2 * sizeof(float);
 			else if constexpr (std::is_same_v<T, Box>) return 4 * sizeof(float);
 			else if constexpr (std::is_array_v<T>) return std::extent_v<T> * PrimitiveBytes<std::remove_extent_t<T>>();
@@ -409,13 +413,13 @@ namespace RTE {
 			else return sizeof(T);
 		}
 		template<class T> static constexpr bool PrimitiveHasString() {
-			if constexpr (std::is_same_v<T, std::string>) return true;
+			if constexpr ((std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) return true;
 			else if constexpr (std::is_array_v<T>) return PrimitiveHasString<std::remove_extent_t<T>>();
 			else if constexpr (CheckpointArray<T>) return PrimitiveHasString<typename T::value_type>();
 			else return false;
 		}
 		template<class T> static size_t PrimitiveStringBytes(const T& value) {
-			if constexpr (std::is_same_v<T, std::string>) return value.size();
+			if constexpr ((std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) return value.size();
 			else if constexpr (std::is_array_v<T> || CheckpointArray<T>) {
 				size_t size = 0;
 				for (const auto& field: value) {
@@ -434,7 +438,7 @@ namespace RTE {
 			return value;
 		}
 		template<class T> static void DecodePrimitive(std::string& text, std::string_view& values, bool tape) {
-			if constexpr (std::is_same_v<T, std::string>) {
+			if constexpr ((std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) {
 				const uint64_t size = ReadPrimitive<uint64_t>(values);
 				if (size > values.size()) throw std::logic_error("truncated owned string block");
 				if (tape) {
@@ -589,6 +593,7 @@ namespace RTE {
 		void Value(T& value) { std::underlying_type_t<T> raw; Value(raw); value = static_cast<T>(raw); }
 		void Value(float& value) { uint32_t bits; Value(bits); value = std::bit_cast<float>(bits); }
 		void Value(double& value) { uint64_t bits; Value(bits); value = std::bit_cast<double>(bits); }
+		void Value(CheckpointString& value) { std::string read; Value(read); value = std::move(read); }
 		void Value(std::string& value) {
 			size_t size = 0;
 			Value(size);

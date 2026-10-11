@@ -314,7 +314,7 @@ void HeldDevice::SaveSnapshotConfiguration(Writer& writer) const {
 	for (const std::string& preset: pickupableBy) {
 		writer.NewPropertyWithValue("SpecialBehaviour_PickupableByPreset", preset);
 	}
-	writer.NewPropertyWithValue("SpecialBehaviour_HeldDeviceRuntime", CheckpointWriter::Native([&] { return m_PersistedHeldDeviceRuntime.empty() ? SaveHeldDeviceRuntime() : m_PersistedHeldDeviceRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_HeldDeviceRuntime", CheckpointWriter::Native([&] { return m_PersistedHeldDeviceRuntime.empty() ? SaveHeldDeviceRuntime() : m_PersistedHeldDeviceRuntime.Value(); }).Base64(true));
 }
 
 int HeldDevice::Save(Writer& writer) const {
@@ -384,7 +384,7 @@ bool HeldDevice::IsBeingHeld() const {
 
 void HeldDevice::RemovePickupableByPresetName(const std::string& actorPresetName) {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_PickupableByPresetNames.size()); });
-	std::unordered_set<std::string>::iterator pickupableByPresetNameEntry = m_PickupableByPresetNames.find(actorPresetName);
+	auto pickupableByPresetNameEntry = m_PickupableByPresetNames.find(actorPresetName);
 	if (pickupableByPresetNameEntry != m_PickupableByPresetNames.end()) {
 		m_PickupableByPresetNames.erase(pickupableByPresetNameEntry);
 	}

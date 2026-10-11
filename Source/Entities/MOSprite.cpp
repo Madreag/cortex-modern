@@ -374,7 +374,7 @@ void MOSprite::SaveSnapshotConfiguration(Writer& writer) const {
 		CheckpointProperty<"SettleMaterialDisabled">(m_SettleMaterialDisabled));
 	writer.NewPropertyWithValue("SpecialBehaviour_EntryWoundPreset", m_pEntryWound ? m_pEntryWound->GetModuleAndPresetName() : "None");
 	writer.NewPropertyWithValue("SpecialBehaviour_ExitWoundPreset", m_pExitWound ? m_pExitWound->GetModuleAndPresetName() : "None");
-	writer.NewPropertyWithValue("SpecialBehaviour_MOSpriteRuntime", CheckpointWriter::Native([&] { return m_PersistedMOSpriteRuntime.empty() ? SaveMOSpriteRuntime() : m_PersistedMOSpriteRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_MOSpriteRuntime", CheckpointWriter::Native([&] { return m_PersistedMOSpriteRuntime.empty() ? SaveMOSpriteRuntime() : m_PersistedMOSpriteRuntime.Value(); }).Base64(true));
 }
 
 int MOSprite::Save(Writer& writer) const {

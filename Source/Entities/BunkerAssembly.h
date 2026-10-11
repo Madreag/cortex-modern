@@ -122,13 +122,13 @@ namespace RTE {
 		// SceneObject:s to be placed in the scene, OWNED HERE
 		CheckpointList<SceneObject*> m_PlacedObjects;
 		// Parent bunker assembly scheme
-		std::string m_ParentAssemblyScheme;
+		CheckpointString m_ParentAssemblyScheme;
 		// Group proveded by parent scheme to which this assembly was added
-		std::string m_ParentSchemeGroup;
+		CheckpointString m_ParentSchemeGroup;
 		// Bitmap shown during draw and icon creation
 		BITMAP* m_pPresentationBitmap;
 		// Assembly symmetric to this one
-		std::string m_SymmetricAssembly;
+		CheckpointString m_SymmetricAssembly;
 
 		/// Private member variable and method declarations
 	private:

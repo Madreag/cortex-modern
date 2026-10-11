@@ -219,7 +219,7 @@ bool Scene::LoadRuntimeCheckpoint(std::string_view text, bool validateOnly, bool
 			m_IsMetagameInternal, m_IsSavedGameInternal);
 		std::map<std::string, std::string> assemblyNames;
 		reader.Value(assemblyNames);
-		CheckpointMap<std::string, const BunkerAssembly*> assemblies;
+		CheckpointMap<CheckpointString, const BunkerAssembly*> assemblies;
 		for (const auto& [name, preset]: assemblyNames) {
 			const auto* assembly = preset.empty() ? nullptr : dynamic_cast<const BunkerAssembly*>(g_PresetMan.GetEntityPreset("BunkerAssembly", preset));
 			if (!preset.empty() && !assembly) return false;
@@ -332,7 +332,7 @@ Scene::Scene(const Scene& source, CheckpointNativeSnapshot& snapshot) :
 	m_Deployments(snapshot.Freeze(source.m_Deployments, &m_Deployments)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
 	m_FrozenSaveModuleID = source.IsFrozenCheckpointNative() ? source.m_FrozenSaveModuleID : g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName);
-	m_FrozenSaveModulePath = source.IsFrozenCheckpointNative() ? source.m_FrozenSaveModulePath : g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName);
+	m_FrozenSaveModulePath = source.IsFrozenCheckpointNative() ? source.m_FrozenSaveModulePath.Value() : g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName);
 	snapshot.FreezeArray(m_ResidentBrains, source.m_ResidentBrains);
 	snapshot.FreezeArray(m_BuildBudget, source.m_BuildBudget);
 	snapshot.FreezeArray(m_BuildBudgetRatio, source.m_BuildBudgetRatio);
@@ -1461,7 +1461,7 @@ void Scene::SaveSavedScene(Writer& writer, const std::string& fileName) const {
 	Writer::SaveOverrides overrides;
 	overrides.scene = this;
 	const int module = IsFrozenCheckpointNative() ? m_FrozenSaveModuleID : g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName);
-	const std::string folder = IsFrozenCheckpointNative() ? m_FrozenSaveModulePath : g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName);
+	const std::string folder = IsFrozenCheckpointNative() ? m_FrozenSaveModulePath.Value() : g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName);
 	overrides.identities[this] = {fileName, module, true};
 	overrides.identities[m_pTerrain] = {fileName, module, true};
 	const auto layer = [&](SceneLayer* value, const std::string& name, bool terrain) {

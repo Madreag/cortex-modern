@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointString.h"
+
 #include "Serializable.h"
 
 #include <array>
@@ -284,15 +286,15 @@ namespace RTE {
 		static std::unordered_map<std::string, SDL_Surface*> s_MemoryPNGs; //!< Static map containing in-memory PNG files for save/load
 		static std::unordered_map<std::string, FMOD::Sound*> s_LoadedSamples; //!< Static map containing all the already loaded FSOUND_SAMPLEs and their paths.
 
-		std::string m_DataPath; //!< The path to this ContentFile's data file. In the case of an animation, this filename/name will be appended with 000, 001, 002 etc.
-		std::string m_DataPathExtension; //!< The extension of the data file of this ContentFile's path.
-		std::string m_DataPathWithoutExtension; //!< The path to this ContentFile's data file without the file's extension.
+		CheckpointString m_DataPath; //!< The path to this ContentFile's data file. In the case of an animation, this filename/name will be appended with 000, 001, 002 etc.
+		CheckpointString m_DataPathExtension; //!< The extension of the data file of this ContentFile's path.
+		CheckpointString m_DataPathWithoutExtension; //!< The path to this ContentFile's data file without the file's extension.
 
 		bool m_DataPathIsImageFile; //!< Whether the data file at this ContentFile's path is a supported image format.
 		std::array<int, ImageFileInfoType::ImageInfoTypeCount> m_ImageFileInfo; //!< Array that holds image file information read directly from the data file on disk.
 
-		std::string m_FormattedReaderPosition; //!< A string containing the currently read file path and the line being read. Formatted to be used for logging.
-		std::string m_DataPathAndReaderPosition; //!< The path to this ContentFile's data file combined with the ini file and line it is being read from. This is used for logging.
+		CheckpointString m_FormattedReaderPosition; //!< A string containing the currently read file path and the line being read. Formatted to be used for logging.
+		CheckpointString m_DataPathAndReaderPosition; //!< The path to this ContentFile's data file combined with the ini file and line it is being read from. This is used for logging.
 
 		int m_DataModuleID; //!< Data Module ID of where this was loaded from.
 		bool m_IsMemoryPNG; //!< If true, we will not attempt to read this file on disk, and instead will let external code set us up.

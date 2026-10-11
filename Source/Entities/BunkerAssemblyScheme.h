@@ -170,9 +170,9 @@ namespace RTE {
 		// How many deployments should be selected during placement
 		int m_MaxDeployments;
 		// Scheme symmetric to this one
-		std::string m_SymmetricScheme;
+		CheckpointString m_SymmetricScheme;
 		// To which group we should add assemblies linked to this scheme
-		std::string m_AssemblyGroup;
+		CheckpointString m_AssemblyGroup;
 
 		/// Private member variable and method declarations
 	private:

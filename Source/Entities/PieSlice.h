@@ -248,7 +248,7 @@ namespace RTE {
 		std::unique_ptr<Icon> m_Icon; //!< The icon of this PieSlice.
 
 		std::unique_ptr<LuabindObjectWrapper> m_LuabindFunctionObject; //!< The LuabindObjectWrapper holding the function this PieSlice runs when activated.
-		std::string m_FunctionName; //!< Name of the function in the script this PieSlice runs. Used for safely reloading scripts.
+		CheckpointString m_FunctionName; //!< Name of the function in the script this PieSlice runs. Used for safely reloading scripts.
 
 		std::unique_ptr<PieMenu, PieMenuCustomDeleter> m_SubPieMenu; //!< Unique pointer to the sub-PieMenu this should open when activated.
 

@@ -531,7 +531,7 @@ namespace RTE {
 		virtual void SetParent(MOSRotating* newParent);
 
 	private:
-		std::string m_PersistedAttachableRuntime;
+		CheckpointString m_PersistedAttachableRuntime;
 		std::string SaveAttachableRuntime() const;
 		bool LoadAttachableRuntime(std::string_view text, bool validateOnly = false);
 

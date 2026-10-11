@@ -691,7 +691,7 @@ void ACrab::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("AimRangeLowerLimit", m_AimRangeLowerLimit);
 	writer.NewPropertyWithValue("LockMouseAimInput", m_LockMouseAimInput);
 	writer.NewPropertyWithValue("StrideSound", m_StrideSound);
-	writer.NewPropertyWithValue("SpecialBehaviour_ACrabRuntime", CheckpointWriter::Native([&] { return m_PersistedACrabRuntime.empty() ? SaveACrabRuntime() : m_PersistedACrabRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ACrabRuntime", CheckpointWriter::Native([&] { return m_PersistedACrabRuntime.empty() ? SaveACrabRuntime() : m_PersistedACrabRuntime.Value(); }).Base64(true));
 }
 
 int ACrab::Save(Writer& writer) const {

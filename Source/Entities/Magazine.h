@@ -160,7 +160,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		std::string m_PersistedMagazineRuntime;
+		CheckpointString m_PersistedMagazineRuntime;
 		std::string SaveMagazineRuntime() const;
 		bool LoadMagazineRuntime(std::string_view text, bool validateOnly = false);
 

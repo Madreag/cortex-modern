@@ -423,7 +423,7 @@ namespace RTE {
 		bool m_HighlightWobble = false; //!< Draw-only far-cursor pulse.
 		int m_HighlightDrawRadius = 0; //!< Drawn freeze radius when the highlight is held.
 		Timer m_HighlightViewTimer; //!< Real-time pulse for the draw-only wobble.
-		std::string m_PersistedRuntime;
+		CheckpointString m_PersistedRuntime;
 		std::string SaveRuntimeCheckpoint() const;
 		bool LoadRuntimeCheckpoint(std::string_view text, bool validateOnly = false);
 		/// What LoadRuntimeCheckpoint(reference.SaveRuntimeCheckpoint()) leaves, copied field by field for a preview's clone.

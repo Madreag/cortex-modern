@@ -151,7 +151,7 @@ void Leg::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("IdleOffset", m_IdleOffset);
 	writer.NewPropertyWithValue("WillIdle", m_WillIdle);
 	writer.NewPropertyWithValue("MoveSpeed", m_MoveSpeed);
-	writer.NewPropertyWithValue("SpecialBehaviour_LegRuntime", CheckpointWriter::Native([&] { return m_PersistedLegRuntime.empty() ? SaveLegRuntime() : m_PersistedLegRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_LegRuntime", CheckpointWriter::Native([&] { return m_PersistedLegRuntime.empty() ? SaveLegRuntime() : m_PersistedLegRuntime.Value(); }).Base64(true));
 }
 
 int Leg::Save(Writer& writer) const {

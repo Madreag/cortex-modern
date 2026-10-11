@@ -248,7 +248,7 @@ namespace RTE {
 #pragma endregion
 
 	private:
-		std::string m_PersistedArmRuntime;
+		CheckpointString m_PersistedArmRuntime;
 		std::string SaveArmRuntime() const;
 		bool LoadArmRuntime(std::string_view text, bool validateOnly = false);
 

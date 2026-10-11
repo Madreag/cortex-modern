@@ -148,7 +148,7 @@ namespace RTE {
 		bool m_AdjustsThrottleForWeight; //!< Whether or not the jetpack throttle auto-adjusts for weight, at the cost of fuel usage.
 
 	private:
-		std::string m_PersistedAEJetpackRuntime;
+		CheckpointString m_PersistedAEJetpackRuntime;
 		std::string SaveAEJetpackRuntime() const;
 		bool LoadAEJetpackRuntime(std::string_view text, bool validateOnly = false);
 

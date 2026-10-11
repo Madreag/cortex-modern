@@ -577,8 +577,8 @@ namespace RTE {
 		//    float m_ImpulseTorque; // In kg * r/s.
 		// The group of Atom:s that will be the physical reperesentation of this MOSRotating.
 		AtomGroup* m_pAtomGroup;
-		std::string m_PersistedAtomGroupCheckpoint;
-		std::string m_PersistedDeepGroupCheckpoint;
+		CheckpointString m_PersistedAtomGroupCheckpoint;
+		CheckpointString m_PersistedDeepGroupCheckpoint;
 		CheckpointVector<long long> m_PersistedAtomGroupResidue; //!< Saved per-atom travel residue, applied on snapshot adopt.
 		CheckpointVector<Vector> m_PersistedAtomGroupOffsets; //!< Saved per-atom offsets, applied on snapshot adopt.
 		CheckpointVector<long long> m_PersistedAtomGroupSubIDs; //!< Saved per-atom subgroup IDs binding the arrays above by identity.
@@ -673,7 +673,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		std::string m_PersistedMOSRotatingRuntime;
+		CheckpointString m_PersistedMOSRotatingRuntime;
 		std::string SaveMOSRotatingRuntime() const;
 		bool LoadMOSRotatingRuntime(std::string_view text, bool validateOnly = false);
 

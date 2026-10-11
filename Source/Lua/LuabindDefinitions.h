@@ -14,6 +14,30 @@
 #include "luabind/out_value_policy.hpp"
 #include "luabind/iterator_policy.hpp"
 #include "luabind/return_reference_to_policy.hpp"
+#include "CheckpointString.h"
+
+namespace luabind::detail {
+
+	// Owned backing storage leaves Lua's string conversion and matching rules unchanged.
+	struct checkpoint_string_from_lua {
+		using type = checkpoint_string_from_lua;
+		using is_value_converter = boost::mpl::false_;
+		template<class Decorated> RTE::CheckpointString apply(lua_State* state, Decorated, int index) {
+			return primitive_converter<lua_to_cpp>{}.apply(state, by_value<std::string>{}, index);
+		}
+		template<class Decorated> static int match(lua_State* state, Decorated, int index) {
+			return primitive_converter<lua_to_cpp>::match(state, by_value<std::string>{}, index);
+		}
+		void converter_postcall(...) {}
+	};
+
+	template<> struct default_policy::apply<RTE::CheckpointString, cpp_to_lua> : primitive_converter<cpp_to_lua> {};
+	template<> struct default_policy::apply<const RTE::CheckpointString, cpp_to_lua> : primitive_converter<cpp_to_lua> {};
+	template<> struct default_policy::apply<const RTE::CheckpointString&, cpp_to_lua> : primitive_converter<cpp_to_lua> {};
+	template<> struct default_policy::apply<RTE::CheckpointString, lua_to_cpp> : checkpoint_string_from_lua {};
+	template<> struct default_policy::apply<const RTE::CheckpointString, lua_to_cpp> : checkpoint_string_from_lua {};
+	template<> struct default_policy::apply<const RTE::CheckpointString&, lua_to_cpp> : checkpoint_string_from_lua {};
+}
 
 namespace luabind {
 	/// Function that extracts the raw pointer from the smart pointer. This is needed when Lua calls member functions on held types, the 'this' pointer must be a raw pointer, it is also needed to allow the smart_pointer to raw_pointer conversion from Lua to C++.

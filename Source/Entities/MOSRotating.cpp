@@ -560,8 +560,8 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 
 void MOSRotating::SaveSnapshotConfiguration(Writer& writer) const {
 	MOSprite::SaveSnapshotConfiguration(writer);
-	writer.NewPropertyWithValue("SpecialBehaviour_AtomGroupCheckpoint", CheckpointWriter::Native([&] { return m_PersistedAtomGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pAtomGroup) : m_PersistedAtomGroupCheckpoint; }).Base64(true));
-	writer.NewPropertyWithValue("SpecialBehaviour_DeepGroupCheckpoint", CheckpointWriter::Native([&] { return m_PersistedDeepGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pDeepGroup) : m_PersistedDeepGroupCheckpoint; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_AtomGroupCheckpoint", CheckpointWriter::Native([&] { return m_PersistedAtomGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pAtomGroup) : m_PersistedAtomGroupCheckpoint.Value(); }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_DeepGroupCheckpoint", CheckpointWriter::Native([&] { return m_PersistedDeepGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pDeepGroup) : m_PersistedDeepGroupCheckpoint.Value(); }).Base64(true));
 	writer.NewPropertyWithValue("SpecialBehaviour_ClearGibs", true);
 	for (const Gib* gib: m_Gibs) writer.NewPropertyWithValue("AddGib", *gib);
 	WriteCapturedProperties(writer,
@@ -576,7 +576,7 @@ void MOSRotating::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SpecialBehaviour_GibSound", m_GibSound);
 	writer.NewPropertyWithValue("EffectOnGib", m_EffectOnGib);
 	writer.NewPropertyWithValue("LoudnessOnGib", m_LoudnessOnGib);
-	writer.NewPropertyWithValue("SpecialBehaviour_MOSRotatingRuntime", CheckpointWriter::Native([&] { return m_PersistedMOSRotatingRuntime.empty() ? SaveMOSRotatingRuntime() : m_PersistedMOSRotatingRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_MOSRotatingRuntime", CheckpointWriter::Native([&] { return m_PersistedMOSRotatingRuntime.empty() ? SaveMOSRotatingRuntime() : m_PersistedMOSRotatingRuntime.Value(); }).Base64(true));
 }
 
 int MOSRotating::Save(Writer& writer) const {

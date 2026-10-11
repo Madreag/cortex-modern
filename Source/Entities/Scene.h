@@ -231,7 +231,7 @@ namespace RTE {
 			// The list of Box:es defining the Area in the owner Scene
 			CheckpointVector<Box*> m_BoxList;
 			// The name tag of this Area
-			std::string m_Name;
+			CheckpointString m_Name;
 
 			/// Private member variable and method declarations
 		private:
@@ -573,7 +573,7 @@ namespace RTE {
 
 		struct AreaState {
 			std::vector<std::unique_ptr<Area>> areas;
-			CheckpointVector<std::string> navigableAreas;
+			CheckpointVector<CheckpointString> navigableAreas;
 			bool navigableAreasUpToDate = false;
 		};
 
@@ -856,7 +856,7 @@ namespace RTE {
 		CheckpointList<SceneObject*> m_FrozenSaveRoots;
 		bool m_FrozenFullGameSave = true;
 		int m_FrozenSaveModuleID = -1;
-		std::string m_FrozenSaveModulePath;
+		CheckpointString m_FrozenSaveModulePath;
 		// Is set to true on any frame the pathfinding data has been updated
 		bool m_PathfindingUpdated;
 		// Timer for when to do an update of the pathfinding data
@@ -882,15 +882,15 @@ namespace RTE {
 		CheckpointList<Area*> m_AreaList;
 
 		// List of navigable areas in the scene. If this list is empty, the entire scene is assumed to be navigable
-		CheckpointVector<std::string> m_NavigableAreas;
+		CheckpointVector<CheckpointString> m_NavigableAreas;
 		bool m_NavigableAreasUpToDate;
 
 		// The global acceleration vector in m/s^2. (think gravity/wind)
 		Vector m_GlobalAcc;
 		// Names of all Schemes and selected assemblies for them
-		CheckpointMap<std::string, const BunkerAssembly*> m_SelectedAssemblies;
+		CheckpointMap<CheckpointString, const BunkerAssembly*> m_SelectedAssemblies;
 		// Amounts of limited assemblies
-		CheckpointMap<std::string, int> m_AssembliesCounts;
+		CheckpointMap<CheckpointString, int> m_AssembliesCounts;
 		// Scene preview bitmap
 		BITMAP* m_pPreviewBitmap;
 		// Scene preview source file
@@ -898,7 +898,7 @@ namespace RTE {
 		// Name of a scene which can be replaced by this scene in MetaGame
 		// Scenes with m_MetaSceneParent field set will be invisible for editors and activities unless
 		// ShowMetaScenes flag in settings.ini is set
-		std::string m_MetasceneParent;
+		CheckpointString m_MetasceneParent;
 
 		// Whether this scene must be shown anywhere in UIs
 		bool m_IsMetagameInternal;
