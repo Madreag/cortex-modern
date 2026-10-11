@@ -46,6 +46,8 @@ public:
 
     lua_State* interpreter() const;
 
+    int checkpoint_reference() const { return m_index; }
+
     void replace(lua_State* interpreter, int stack_index);
 
 private:

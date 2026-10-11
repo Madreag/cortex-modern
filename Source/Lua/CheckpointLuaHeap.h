@@ -31,6 +31,7 @@ extern "C" {
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <unordered_set>
@@ -136,6 +137,42 @@ namespace RTE::CheckpointLua {
 		std::string ReadString(const char* address, size_t size) const {
 			const auto bytes = ReadBytes(address, size);
 			return size ? std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()) : std::string();
+		}
+		TValue TableValue(const GCtab* source, int key) const {
+			const auto table = Read(source);
+			if (key >= 0 && static_cast<MSize>(key) < table.asize) return Read(mref(table.array, TValue) + key);
+			const Node* nodes = mref(table.node, Node);
+			for (MSize index = 0; index <= table.hmask; ++index) {
+				const auto node = Read(nodes + index);
+				if (tvisnumber(&node.key) && numberVnum(&node.key) == key) return node.val;
+			}
+			TValue nil; setnilV(&nil); return nil;
+		}
+		TValue TableValue(const GCtab* source, std::string_view key) const {
+			const auto table = Read(source);
+			const Node* nodes = mref(table.node, Node);
+			for (MSize index = 0; index <= table.hmask; ++index) {
+				const auto node = Read(nodes + index);
+				if (tvisnil(&node.val) || !tvisstr(&node.key)) continue;
+				const auto* string = strV(&node.key);
+				if (Read(&string->len) != key.size()) continue;
+				const auto bytes = ReadBytes(string + 1, key.size());
+				if (key.empty() || std::memcmp(bytes.data(), key.data(), key.size()) == 0) return node.val;
+			}
+			TValue nil; setnilV(&nil); return nil;
+		}
+		TValue RegistryValue(int reference) const {
+			const auto state = Read(State());
+			const auto globals = Read(mref(state.glref, global_State));
+			if (!tvistab(&globals.registrytv)) throw std::runtime_error("a frozen Lua registry is not a table");
+			return TableValue(tabV(&globals.registrytv), reference);
+		}
+		TValue GlobalValue(std::string_view name) const { return TableValue(tabref(Read(State()).env), name); }
+		TValue FunctionUpvalue(const GCfunc* source, size_t index) const {
+			if (index >= Read(&source->c.nupvalues)) throw std::out_of_range("frozen Lua upvalue index");
+			if (Read(&source->c.ffid) != FF_LUA) return Read(&source->c.upvalue[index]);
+			const auto cell = Read(gco2uv(gcref(Read(&source->l.uvptr[index]))));
+			return cell.closed ? cell.tv : Read(mref(cell.v, TValue));
 		}
 
 	private:

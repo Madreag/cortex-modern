@@ -9631,6 +9631,43 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = exact && checkpointValues;
 	}
 	{
+		auto owner = CheckpointLua::HeapOwner::Create();
+		lua_State* state = owner->State();
+		CheckpointNativeStorage::AllocationScope allocations(true);
+		std::unique_ptr<LuabindObjectWrapper> callback;
+		struct CloseWrappers {
+			lua_State* state;
+			std::unique_ptr<LuabindObjectWrapper>& callback;
+			~CloseWrappers() { callback.reset(); LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(state); }
+		} closeWrappers{state, callback};
+		CheckpointLua::ProtectedCall(state, [&] {
+			luabind::open(state);
+			LuabindObjectWrapper::InstallSimThreadDeletion(state, -1);
+			if (luaL_loadstring(state, "local value = 71; return function() return value end") || lua_pcall(state, 0, 1, 0))
+				throw std::runtime_error("could not create the frozen callback probe");
+			callback = std::make_unique<LuabindObjectWrapper>(new luabind::object(luabind::from_stack(state, -1)), "frozen callback");
+		});
+		const auto* source = callback.get();
+		auto pages = CheckpointNativeStorage::PrepareInventory();
+		auto heap = owner->PrepareFreeze();
+		pages->Arm();
+		if (!heap->Arm(*owner)) throw std::runtime_error("could not freeze the callback probe");
+		const auto image = heap->Image();
+		callback.reset();
+		LuabindObjectWrapper::ApplyQueuedDeletions();
+		lua_gc(state, LUA_GCCOLLECT, 0);
+		heap->Drain();
+		bool exact;
+		{
+			CheckpointNativeStorage::ReadScope read(pages->Pages());
+			const auto* frozen = CheckpointNativeStorage::Source(source);
+			const TValue function = image.RegistryValue(frozen->GetCheckpointReference());
+			exact = tvisfunc(&function) && image.FunctionUpvalue(funcV(&function), 0).n == 71 && frozen->GetFilePath() == "frozen callback";
+		}
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " frozen_callback_handles_survive_live_unref_and_collection" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
 		MovableMan::ConstructionRegistryScope world;
 		CheckpointWriter::BatchScope batch(true);
 		auto actor = std::make_unique<Actor>();

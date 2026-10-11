@@ -385,6 +385,7 @@ uint64_t LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(lua_State* l
 				closing.emplace_back(wrapper->m_LuabindObject);
 				wrapper->UnlinkStoredObject();
 				wrapper->m_LuabindObject = nullptr;
+				wrapper->m_CheckpointReference = LUA_NOREF;
 				wrapper->m_OwnsObject = false;
 			}
 			wrapper = next;
@@ -416,7 +417,7 @@ void LuabindObjectWrapper::SetPreviewDeletionHook(void (*hook)(LuabindObjectWrap
 }
 
 LuabindObjectWrapper::LuabindObjectWrapper(luabind::adl::object* luabindObject, const std::string_view& filePath, bool ownsObject) :
-    m_OwnsObject(ownsObject), m_LuabindObject(luabindObject), m_FilePath(filePath) {
+    m_OwnsObject(ownsObject), m_LuabindObject(luabindObject), m_CheckpointReference(luabindObject ? luabindObject->checkpoint_reference() : LUA_NOREF), m_FilePath(filePath) {
 	if (m_OwnsObject && m_LuabindObject && !m_FilePath.empty()) {
 		std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
 		LinkStoredObject();
@@ -447,6 +448,7 @@ void LuabindObjectWrapper::ResetLuabindObject(luabind::adl::object* newLuabindOb
 		std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
 		UnlinkStoredObject();
 		m_LuabindObject = newLuabindObject;
+		m_CheckpointReference = newLuabindObject ? newLuabindObject->checkpoint_reference() : LUA_NOREF;
 		m_OwnsObject = ownsObject;
 		LinkStoredObject();
 	}

@@ -784,6 +784,8 @@ namespace adl
           m_handle.swap(other.m_handle);
       }
 
+      int checkpoint_reference() const { return m_handle.checkpoint_reference(); }
+
   private:
       handle m_handle;
   };

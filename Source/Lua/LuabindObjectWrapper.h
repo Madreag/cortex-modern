@@ -106,6 +106,8 @@ namespace RTE {
 		/// Gets the LuabindObjectWrapper's luabind object. Ownership is NOT transferred!
 		/// @return The LuabindObjectWrapper's luabind object.
 		luabind::adl::object* GetLuabindObject() const { return m_LuabindObject; }
+		/// The saver resolves the stored reference in its frozen registry without entering the live VM.
+		int GetCheckpointReference() const { return m_CheckpointReference; }
 
 		/// Gets the LuabindObjectWrapper's file path.
 		/// @return The LuabindObjectWrapper's file path.
@@ -115,6 +117,7 @@ namespace RTE {
 	private:
 		bool m_OwnsObject = false; //!< Whether or not we own the luabind object this is wrapping.
 		luabind::adl::object* m_LuabindObject = nullptr; //!< The luabind object this is wrapping.
+		int m_CheckpointReference = -2;
 		CheckpointString m_FilePath; //!< The filepath the wrapped luabind object represents, if it's a function.
 		LuabindObjectWrapper* m_PreviousStored = nullptr;
 		LuabindObjectWrapper* m_NextStored = nullptr;
