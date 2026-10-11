@@ -83,6 +83,11 @@ namespace RTE {
 		static bool WorldEnabled() noexcept;
 		static bool SetWorldEnabled(bool enabled) noexcept;
 		static bool Reading() { return s_Read != nullptr; }
+		static void RememberPrivate(void* address, size_t bytes);
+		static bool ForgetPrivate(void* address) noexcept;
+		static const void* PrivateAllocation(const void* address) noexcept;
+		static bool Private(const void* address, size_t bytes = 1) noexcept;
+		static void* AllocatePrivate(size_t bytes, size_t alignment, bool aligned = false);
 		static ReadViews CurrentViews();
 		static const void* RootView(const void* source, size_t bytes = 1);
 		static void* Allocate(size_t bytes, size_t alignment);
@@ -118,10 +123,12 @@ namespace RTE {
 	class CheckpointNativeAllocated {
 	public:
 		static void* operator new(size_t bytes) {
+			if (CheckpointNativeStorage::Reading()) return CheckpointNativeStorage::AllocatePrivate(bytes, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
 			return CheckpointNativeStorage::Enabled() ? CheckpointNativeStorage::Allocate(bytes, __STDCPP_DEFAULT_NEW_ALIGNMENT__) : ::operator new(bytes);
 		}
 		static void operator delete(void* address) noexcept { if (!CheckpointNativeStorage::Deallocate(address)) ::operator delete(address); }
 		static void* operator new(size_t bytes, std::align_val_t alignment) {
+			if (CheckpointNativeStorage::Reading()) return CheckpointNativeStorage::AllocatePrivate(bytes, static_cast<size_t>(alignment), true);
 			return CheckpointNativeStorage::Enabled() ? CheckpointNativeStorage::Allocate(bytes, static_cast<size_t>(alignment)) : ::operator new(bytes, alignment);
 		}
 		static void operator delete(void* address, std::align_val_t alignment) noexcept { if (!CheckpointNativeStorage::Deallocate(address)) ::operator delete(address, alignment); }
@@ -143,6 +150,7 @@ namespace RTE {
 		CheckpointNativeAllocator select_on_container_copy_construction() const noexcept { return {}; }
 		[[nodiscard]] T* allocate(size_t count) {
 			if (count > (std::numeric_limits<size_t>::max)() / sizeof(T)) throw std::bad_array_new_length();
+			if (CheckpointNativeStorage::Reading()) return static_cast<T*>(CheckpointNativeStorage::AllocatePrivate(count * sizeof(T), alignof(T)));
 			if (CheckpointNativeStorage::Enabled(m_Owned)) return static_cast<T*>(CheckpointNativeStorage::Allocate(count * sizeof(T), alignof(T)));
 			return std::allocator<T>{}.allocate(count);
 		}
@@ -156,7 +164,7 @@ namespace RTE {
 	};
 
 	template<class T, class... Args> std::shared_ptr<T> MakeCheckpointNativeShared(Args&&... args) {
-		if (CheckpointNativeStorage::Enabled()) return std::allocate_shared<T>(CheckpointNativeAllocator<T>{}, std::forward<Args>(args)...);
+		if (CheckpointNativeStorage::Reading() || CheckpointNativeStorage::Enabled()) return std::allocate_shared<T>(CheckpointNativeAllocator<T>{}, std::forward<Args>(args)...);
 		return std::make_shared<T>(std::forward<Args>(args)...);
 	}
 }

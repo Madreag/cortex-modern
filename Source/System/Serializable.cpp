@@ -8,12 +8,14 @@ namespace RTE {
 
 	// Native values outside the Entity pools need the same source-lifetime guarantee.
 	void* Serializable::operator new(size_t bytes) {
+		if (CheckpointNativeStorage::Reading()) return CheckpointNativeStorage::AllocatePrivate(bytes, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
 		return CheckpointNativeStorage::Enabled() ? CheckpointNativeStorage::Allocate(bytes, __STDCPP_DEFAULT_NEW_ALIGNMENT__) : ::operator new(bytes);
 	}
 	void Serializable::operator delete(void* address) noexcept {
 		if (!CheckpointNativeStorage::Deallocate(address)) ::operator delete(address);
 	}
 	void* Serializable::operator new(size_t bytes, std::align_val_t alignment) {
+		if (CheckpointNativeStorage::Reading()) return CheckpointNativeStorage::AllocatePrivate(bytes, static_cast<size_t>(alignment), true);
 		return CheckpointNativeStorage::Enabled() ? CheckpointNativeStorage::Allocate(bytes, static_cast<size_t>(alignment)) : ::operator new(bytes, alignment);
 	}
 	void Serializable::operator delete(void* address, std::align_val_t alignment) noexcept {

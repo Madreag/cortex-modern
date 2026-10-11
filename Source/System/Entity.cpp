@@ -439,6 +439,7 @@ namespace RTE {
 	Entity::ClassInfo* Entity::ClassInfo::s_ClassHead = 0;
 
 	Entity::Entity() {
+		if (CheckpointNativeStorage::Reading()) m_CheckpointAllocation = const_cast<void*>(CheckpointNativeStorage::PrivateAllocation(this));
 		Clear();
 		CaptureSentinel::NoteCreation("Entity", this);
 	}
@@ -450,6 +451,7 @@ namespace RTE {
 			return;
 		}
 		Destroy(true);
+		if (m_CheckpointAllocation) s_DeletedCheckpointMemory = m_CheckpointAllocation;
 	}
 
 	void Entity::Clear() {
@@ -773,6 +775,12 @@ namespace RTE {
 	}
 
 	void* Entity::ClassInfo::GetPoolMemory() {
+		if (CheckpointNativeStorage::Reading()) {
+			void* memory = AllocateCheckpointMemory();
+			try { CheckpointNativeStorage::RememberPrivate(memory, m_InstanceBytes); }
+			catch (...) { m_Deallocate(memory); throw; }
+			return memory;
+		}
 #ifndef __SANITIZE_ADDRESS__
 		std::lock_guard<std::mutex> guard(m_Mutex);
 #endif
@@ -814,6 +822,7 @@ namespace RTE {
 		}
 		if (s_DeletedCheckpointMemory == returnedMemory) {
 			s_DeletedCheckpointMemory = nullptr;
+			CheckpointNativeStorage::ForgetPrivate(returnedMemory);
 			m_Deallocate(returnedMemory);
 			return 0;
 		}
@@ -822,6 +831,7 @@ namespace RTE {
 			s_DeletedCheckpointMemory = nullptr;
 			return 0;
 		}
+		if (CheckpointNativeStorage::ForgetPrivate(returnedMemory)) { m_Deallocate(returnedMemory); return 0; }
 #ifndef __SANITIZE_ADDRESS__
 		std::lock_guard<std::mutex> guard(m_Mutex);
 #endif
