@@ -7,6 +7,9 @@
 #include "NetPeerSessionWire.h"
 #endif
 #include "NetIdentity.h"
+#include "NetLobbySession.h"
+#include "NetMuxTransport.h"
+#include "NetProtocol.h"
 #include "TimerMan.h"
 #include "lz4.h"
 
@@ -813,8 +816,176 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetSessionPlaneSelfTest::CheckSceneLifecycle(const std::string& name, std::string* error) {
+		Hub hub;
+		hub.row = Case{"scene_lifecycle"}; hub.row.seats = 2; hub.row.rttMs = hub.row.otherRttMs = 100;
+		auto ip = std::make_unique<Wire>(hub, 1);
+		auto relay = std::make_unique<Wire>(hub, 1);
+		NetMuxTransport hostWire(std::move(ip), std::move(relay));
+		GnsP2PConfig relayConfig; relayConfig.connectionMode = 2;
+		hostWire.SetHostP2P(3, relayConfig);
+		Wire clientWire(hub, 2), returningWire(hub, 2);
+		NetSession hostSession, clientSession, returningSession;
+		NetSessionConfig sessionConfig;
+		sessionConfig.port = 47919; sessionConfig.sessionId = 0x5343454E45ULL; sessionConfig.maxPeers = 1;
+		sessionConfig.displayName = "Captain"; sessionConfig.timeoutMs = 30000; sessionConfig.heartbeatIntervalMs = 100;
+		auto& identity = sessionConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test"; identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version; identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "scene-session-rows"; identity.platform = "test";
+		auto joinConfig = sessionConfig; joinConfig.displayName = "Joiner"; ++joinConfig.localNonce;
+		if (!hostSession.StartHost(hostWire, sessionConfig, error) || !clientSession.StartClient(clientWire, "fixture", joinConfig, error)) return false;
+		for (; hub.now < 2000 && (hostSession.GetReadyPeerCount() != 1 || !clientSession.IsReady()); ++hub.now) {
+			hostSession.Tick(hub.now); clientSession.Tick(hub.now);
+		}
+		if (!clientSession.IsReady() || hostSession.GetReadyPeerCount() != 1) { *error = "the scene row did not seat both players"; return false; }
+		const NetPeerId originalRoute = hostSession.GetReadyPeers().front().transportPeerId;
+		auto match = NetMatchConfigUtil::MakeDefault(sessionConfig.sessionId);
+		match.peerCount = 2; match.roundId = 77; match.players = {{1, 0, false, "Captain"}, {2, 1, false, "Joiner"}};
+		match.inputDelayFrames = 12; match.peerInputDelayFrames = {12, 12};
+		std::array<std::unique_ptr<NetLockstepCoordinator>, 2> rounds;
+		std::array<std::shared_ptr<NetPeerSessionLinks>, 2> links;
+		std::array<std::unique_ptr<NetPeerSessionWire>, 2> sessionWires;
+		std::array<NetSession*, 2> sessions{&hostSession, &clientSession};
+		std::array<INetTransport*, 2> nativeWires{&hostWire, &clientWire};
+		std::array<uint64_t, 2> produced{1, 1}, applied{}, displayedAt{};
+		for (size_t index = 0; index < 2; ++index) {
+			NetLockstepConfig config; config.sessionId = match.sessionId; config.matchConfig = match;
+			config.localPeerId = static_cast<uint8_t>(index + 1); config.peerCount = 2; config.roundId = index == 0 ? 77 : 0;
+			config.startFrame = 1; config.inputDelayFrames = 12; config.peerInputDelayFrames = {{1, 12}, {2, 12}};
+			config.peerIncarnations = {{1, 1}, {2, 1}}; config.timeoutMs = 30000;
+			config.peerFrameGroups = config.substituteSlowPeers = true; config.simTickMs = c_TestTickMs;
+			config.slowPlayerBoundTicks = 3; config.frameLane = NetTransportLane::InputUnreliable; config.relayToOtherPeers = index == 0;
+			config.migrationKey.fill(0x39); config.peerSessionLinks = links[index] = std::make_shared<NetPeerSessionLinks>();
+			config.remoteTransportPeerIds[index == 0 ? 2 : 1] = index == 0 ? originalRoute : clientSession.GetRemoteTransportPeerId();
+			rounds[index] = std::make_unique<NetLockstepCoordinator>();
+			if (!rounds[index]->Start(*nativeWires[index], config, error)) return false;
+			rounds[index]->SetSessionEventSink([&, index](const NetTransportEvent& event) { sessions[index]->InjectEvent(event, hub.now); });
+		}
+		const auto step = [&](bool joinerPlaying) {
+			for (size_t index = 0; index < (joinerPlaying ? 2 : 1); ++index) {
+				auto& round = *rounds[index]; round.Tick(hub.now);
+				sessions[index]->Tick(hub.now, false);
+				if (!round.IsRunning()) continue;
+				if (produced[index] <= hub.now * 60 / 1000 && produced[index] <= applied[index] + 1) {
+					if (!round.QueueLocalInput(produced[index], {}, {}, error)) return false;
+					++produced[index];
+				}
+				NetLockstepReadyFrame ready;
+				if (round.PopReadyFrame(ready)) {
+					if (ready.frame != applied[index] + 1) { *error = "the scene consumer skipped a frame"; return false; }
+					applied[index] = ready.frame; displayedAt[index] = hub.now; round.FinishSimulationTick(ready.frame);
+				} else round.NoteFrameWait(applied[index] + 1, hub.now);
+			}
+			++hub.now; return true;
+		};
+		for (; hub.now < 5000 && std::min(applied[0], applied[1]) < 150;) if (!step(true)) return false;
+		if (std::min(applied[0], applied[1]) < 150) { *error = "the scene row did not reach live play"; return false; }
+		for (size_t index = 0; index < 2; ++index) {
+			sessionWires[index] = std::make_unique<NetPeerSessionWire>(links[index]);
+			links[index]->sessionAttached = true; sessions[index]->RebindSessionWire(*sessionWires[index]);
+		}
+		if (name == "kick-pending") {
+			auto& host = *rounds[0]; const uint64_t boundary = host.GetStats().nextFrame;
+			// The removed player has receipted our next input, while its own next input is still pending.
+			host.m_PeerInputReceipts[1][2] = boundary + 1;
+			host.m_RemoteFrames[boundary].erase(2); host.m_PeerSourceInputs[boundary].erase(2);
+			host.EvictRemovedPeer(2, "removed from the session", hub.now);
+			hostSession.DisconnectReadyPeer(originalRoute, NetRejectReason::ParticipantRemoved, c_NetRemovedLinkText);
+			const uint64_t begin = hub.now, before = applied[0], repairs = host.m_PeerReceiptRepairs;
+			uint64_t firstTwoAt = 0, greatestGap = 0;
+			for (; hub.now < begin + 2000;) {
+				const uint64_t previous = displayedAt[0];
+				if (!step(false)) return false;
+				rounds[1]->Tick(hub.now); clientSession.Tick(hub.now, false);
+				if (displayedAt[0] != previous) greatestGap = std::max(greatestGap, displayedAt[0] - previous);
+				if (!firstTwoAt && applied[0] >= before + 2) firstTwoAt = hub.now - begin;
+			}
+			const bool named = clientSession.HasReject() && clientSession.GetRejectReason() == NetRejectReason::ParticipantRemoved;
+			const bool released = host.SeatReleases().contains(2);
+			std::cout << "[net-session-scene] kick-pending before=" << before << " after=" << applied[0] << " two_updates_ms=" << firstTwoAt
+			          << " greatest_gap_ms=" << greatestGap << " removed_repairs=" << host.m_PeerReceiptRepairs - repairs << " released=" << released << " named=" << named << std::endl;
+			if (!firstTwoAt || firstTwoAt > 50 || greatestGap > 50 || !released || !named || host.m_PeerReceiptRepairs != repairs) {
+				*error = "a kick kept the host waiting on the removed seat or failed to tell that player why"; return false;
+			}
+			return true;
+		}
+		if (name == "rematch-chat") {
+			rounds[0]->Complete("round ended");
+			for (const uint64_t until = hub.now + 300; hub.now < until; ++hub.now) for (auto& round: rounds) round->Tick(hub.now);
+			for (auto& round: rounds) round.reset();
+			std::array<NetLobbySession, 2> lobbies;
+			NetMatchConfig rematch;
+			if (!NetMatchConfigUtil::DeriveRematchConfig(match, rematch, error)) return false;
+			for (size_t index = 0; index < 2; ++index) {
+				NetLobbySessionConfig config; config.host = index == 0; config.localPeerId = static_cast<uint8_t>(index + 1);
+				config.matchConfig = rematch; config.startFrame = 1; config.autoReady = config.autoStart = false;
+				config.startCountdownMs = 30000; config.session = sessions[index]; config.sessionNowMs = [&] { return hub.now; };
+				config.remoteTransportPeerIds[index == 0 ? 2 : 1] = index == 0 ? originalRoute : clientSession.GetRemoteTransportPeerId();
+				config.displayName = index == 0 ? "Captain" : "Joiner";
+				if (!lobbies[index].Start(*sessionWires[index], config, error)) return false;
+			}
+			if (!clientSession.SendChat(c_NetChatScopeAll, "joiner watches the rematch countdown")) { *error = "the rematch chat was refused locally"; return false; }
+			const uint64_t begin = hub.now; unsigned hostLines = 0;
+			for (; hub.now < begin + 2000; ++hub.now) {
+				for (auto& lobby: lobbies) lobby.Tick(hub.now - begin);
+				for (const auto& line: hostSession.TakeChatEntries()) if (line.text == "joiner watches the rematch countdown") ++hostLines;
+			}
+			lobbies[0].SetLocalReady(true); lobbies[0].RequestStart();
+			for (const uint64_t until = hub.now + 1000; hub.now < until; ++hub.now) for (auto& lobby: lobbies) lobby.Tick(hub.now - begin);
+			const bool countdown = lobbies[1].IsStartCountdownRunning();
+			lobbies[0].CancelStart();
+			for (const uint64_t until = hub.now + 1000; hub.now < until; ++hub.now) for (auto& lobby: lobbies) lobby.Tick(hub.now - begin);
+			const bool canceled = !lobbies[1].IsStartCountdownRunning();
+			std::cout << "[net-session-scene] rematch-chat received=" << hostLines << " host_messages=" << lobbies[0].GetStats().messagesReceived
+			          << " joiner_messages=" << lobbies[1].GetStats().messagesReceived << " countdown=" << countdown << " canceled=" << canceled << std::endl;
+			if (hostLines != 1 || !countdown || !canceled) { *error = "the rematch lost the joiner's chat or its Start and Cancel exchange"; return false; }
+			return true;
+		}
+		if (name == "leave-rejoin") {
+			unsigned directorySteps = 0; bool waitingDial = true, answered = false;
+			hostWire.SetPump([&] {
+				++directorySteps;
+				if (waitingDial && hub.now >= 6500) {
+					waitingDial = false; auto config = joinConfig; ++config.localNonce;
+					answered = returningSession.StartClient(returningWire, "fixture", config, error);
+				}
+			});
+			const uint64_t departure = hub.now, before = applied[0];
+			rounds[1]->Leave("Match left");
+			for (; hub.now < departure + 250;) if (!step(false)) return false;
+			clientWire.Stop();
+			uint64_t answerAt = 0;
+			for (; hub.now < 8500;) {
+				if (!step(false)) return false;
+				if (answered) returningSession.Tick(hub.now);
+				if (!answerAt && returningSession.IsReady()) answerAt = hub.now;
+			}
+			const auto ready = hostSession.GetReadyPeers();
+			const bool live = rounds[0]->IsRunning() && applied[0] > before + 60;
+			const bool held = rounds[0]->HasHeldAISeat(2);
+			std::cout << "[net-session-scene] leave-rejoin live=" << live << " held=" << held << " directory_steps=" << directorySteps
+			          << " answered_ms=" << (answerAt ? answerAt - 6500 : 0) << " ready=" << ready.size() << " returning_seat=" << static_cast<int>(returningSession.GetLocalPeerId() + 1) << std::endl;
+			if (!live || !held || !answerAt || answerAt > 8500 || ready.size() != 1 || returningSession.GetLocalPeerId() != 1) {
+				*error = "the last player's leave stopped the host or its returning dial was not answered within two seconds"; return false;
+			}
+			const uint64_t activation = rounds[0]->GetStats().nextFrame + 24;
+			if (!rounds[0]->BeginPrivatePeerReturn(2, ready.front().transportPeerId, 2, activation, 0, error)) return false;
+			for (; hub.now < answerAt + 2500 && applied[0] < activation;) if (!step(false)) return false;
+			if (rounds[0]->HasHeldAISeat(2) || applied[0] < activation) { *error = "the answered returning seat did not reclaim its committed frame"; return false; }
+			return true;
+		}
+		*error = "unknown scene lifecycle row"; return false;
+	}
+
 	int NetSessionPlaneSelfTest::Run() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		if (const char* name = std::getenv("CC_TEST_SESSION_SCENE_CASE")) {
+			std::string error;
+			const bool passed = CheckSceneLifecycle(name, &error);
+			std::cout << "[net-session-plane-selftest] " << (passed ? "PASS " : "FAIL ") << name << (error.empty() ? "" : ": " + error) << std::endl;
+			return passed ? 0 : 1;
+		}
 		std::vector<Case> rows;
 		const auto gap = [&](const char* name, uint8_t subject, uint64_t ms) { Case row{name}; row.subject = subject; row.gapMs = ms; return row; };
 		rows.push_back(gap("peer_returns_2s", 2, 2000)); rows.push_back(gap("peer_returns_8s", 2, 8000)); rows.push_back(gap("peer_returns_40s", 2, 40000));
