@@ -29,7 +29,20 @@ namespace RTE::CheckpointLua {
 			try {
 				m_Values.emplace(gcval(&source), reference);
 				m_Originals.emplace(lua_topointer(m_State, index), source);
+				TValue& target = m_State->base[index - 1];
+				if (tvisudata(&source) && tvisudata(&target)) udataV(&target)->serial = m_Heap.Read(&udataV(&source)->serial);
+				else if (tvisfunc(&source) && tvisfunc(&target)) funcV(&target)->c.serial = m_Heap.Read(&funcV(&source)->c.serial);
 			} catch (...) { m_Values.erase(gcval(&source)); luaL_unref(m_State, LUA_REGISTRYINDEX, reference); throw; }
+		}
+		bool Remembered(const TValue& value) const { return tvisgcv(&value) && m_Values.contains(gcval(&value)); }
+		void UseHeap(Snapshot heap) { m_Heap = std::move(heap); m_Prototypes = PrototypeCapture(m_Heap); }
+		void FillTable(const TValue& source, int destination) {
+			if (!tvistab(&source) || !lua_istable(m_State, destination)) throw std::logic_error("saved table copy needs two tables");
+			destination = Absolute(destination);
+			if (!Remembered(source)) Remember(source, destination);
+			lua_pushnil(m_State);
+			while (lua_next(m_State, destination)) { lua_pop(m_State, 1); lua_pushvalue(m_State, -1); lua_pushnil(m_State); lua_rawset(m_State, destination); }
+			TableContents(source, destination);
 		}
 		std::optional<TValue> Original(int index) const {
 			const auto found = m_Originals.find(lua_topointer(m_State, index));
@@ -57,7 +70,7 @@ namespace RTE::CheckpointLua {
 			if (tvisfunc(&value)) { Function(value); return; }
 			if (tvisthread(&value)) { Thread(value); return; }
 			m_Native(m_State, value);
-			Remember(value, -1);
+			if (!Remembered(value)) Remember(value, -1);
 		}
 		void Push(lua_State* destination, const TValue& value) {
 			if (destination != m_State) throw std::logic_error("saved values belong to a different Lua state");
@@ -197,8 +210,10 @@ namespace RTE::CheckpointLua {
 				if (tvisfunc(&value) && m_Heap.Read(&funcV(&value)->c.ffid) != 0 && lua_iscfunction(m_State, -1)) {
 					const auto* target = funcV(m_State->top - 1);
 					if (target->c.f == m_Heap.Read(&funcV(&value)->c.f) && !m_Values.contains(gcval(&value))) Remember(value, -1);
-				} else if (tvisudata(&value) && lua_isuserdata(m_State, -1) && !m_Values.contains(gcval(&value))) Remember(value, -1);
-				else if (tvistab(&value)) Libraries(value, lua_gettop(m_State), seen);
+				} else if (tvisudata(&value) && m_Heap.Read(&udataV(&value)->udtype) == UDTYPE_IO_FILE && lua_isuserdata(m_State, -1)) {
+					const TValue target = *(m_State->top - 1);
+					if (tvisudata(&target) && udataV(&target)->udtype == UDTYPE_IO_FILE && !Remembered(value)) Remember(value, -1);
+				} else if (tvistab(&value)) Libraries(value, lua_gettop(m_State), seen);
 				lua_pop(m_State, 1);
 			};
 			const auto* array = tvref(table.array);
@@ -218,6 +233,10 @@ namespace RTE::CheckpointLua {
 			lua_createtable(m_State, static_cast<int>(table.asize), static_cast<int>(table.hmask));
 			const int destination = lua_gettop(m_State);
 			Remember(value, destination);
+			TableContents(value, destination);
+		}
+		void TableContents(const TValue& value, int destination) {
+			const GCtab table = m_Heap.Read(tabV(&value));
 			const TValue* array = tvref(table.array);
 			for (MSize index = 0; index < table.asize; ++index) {
 				const TValue item = m_Heap.Read(array + index);
@@ -239,7 +258,7 @@ namespace RTE::CheckpointLua {
 			const uint8_t upvalues = m_Heap.Read(&source->c.nupvalues);
 			if (m_Heap.Read(&source->c.ffid) != 0) {
 				// Native closures need their immutable binding or library owner supplied by the caller.
-				m_Native(m_State, value); Remember(value, -1); return;
+				m_Native(m_State, value); if (!Remembered(value)) Remember(value, -1); return;
 			}
 			const auto* prototype = reinterpret_cast<const GCproto*>(mref(m_Heap.Read(&source->l.pc), BCIns) - sizeof(GCproto) / sizeof(BCIns));
 			const std::string code = m_Prototypes.Dump(prototype);

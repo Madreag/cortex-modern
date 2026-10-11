@@ -6777,6 +6777,7 @@ namespace RTE::CheckpointLua {
 
 #include "CheckpointLuaGraph.h"
 #include "CheckpointLuaValues.h"
+#include "CheckpointLuaObjects.h"
 
 void LuaStateWrapper::LoadScriptGraphHelper() {
 	if (!m_ScriptGraphHelperLoaded) {
@@ -9958,6 +9959,59 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		}
 		std::cout << "[script-graph-selftest] " << (getterExact ? "PASS" : "FAIL") << " frozen_binding_getter_owners_survive_close_without_borrowing_callbacks" << std::endl;
 		checkpointValues = getterExact && checkpointValues;
+	}
+	{
+		CheckpointNativeStorage::AllocationScope allocations(true);
+		auto owner = CheckpointLua::HeapOwner::Create();
+		lua_State* source = owner->State();
+		const auto bind = [](lua_State* state) {
+			luaL_openlibs(state); luabind::open(state);
+			luabind::module(state)[RegisterLuaBindingsOfType(SystemLuaBindings, Vector)];
+		};
+		CheckpointLua::ProtectedCall(source, [&] {
+			bind(source);
+			if (luaL_dostring(source, "class 'SavedVectorClass' (Vector); function SavedVectorClass:__init(x,y) super(x,y); self.count=7 end; savedVector=SavedVectorClass(17,23); savedAlias=savedVector; savedNativeGetter=function() savedVector.X=savedVector.X+1; savedVector.count=savedVector.count+1; return savedVector.X,savedAlias.X,savedVector.count end"))
+				throw std::runtime_error("could not create saved native getters");
+			CheckpointLua::ForEachCapturedUserdata(source, [source](GCudata* value) {
+				if (value->len != sizeof(luabind::detail::class_rep)) return;
+				auto* type = static_cast<luabind::detail::class_rep*>(uddata(value));
+				const int reference = type->checkpoint_self_reference();
+				if (reference < 0) return;
+				lua_rawgeti(source, LUA_REGISTRYINDEX, reference);
+				const bool declared = lua_touserdata(source, -1) == type; lua_pop(source, 1);
+				if (declared) type->prepare_checkpoint_metadata();
+			});
+		});
+		auto callbacks = CheckpointLua::BindingMetadata::PrepareLease();
+		auto pages = CheckpointNativeStorage::PrepareInventory();
+		auto prepared = owner->PrepareFreeze();
+		if (!pages->Arm() || !prepared->Arm(*owner)) throw std::runtime_error("could not freeze saved native getters");
+		const auto heap = prepared->Image();
+		CheckpointLua::ProtectedCall(source, [&] { if (luaL_dostring(source, "savedVector.X=101; savedVector.count=103")) throw std::runtime_error("could not change native getter values"); });
+		owner.reset(); prepared->Drain();
+		auto worker = CheckpointLua::HeapOwner::Create();
+		lua_State* state = worker->State();
+		bool exact = false;
+		{
+			CheckpointNativeStorage::ReadScope read(pages->Pages());
+			CheckpointNativeStorage::CaptureScope privateStorage;
+			std::unordered_map<const void*, std::unique_ptr<Vector>> vectors;
+			CheckpointLua::ProtectedCall(state, [&] {
+				bind(state); LuaThreadCodec::Register(state);
+				CheckpointLua::SavedObjects objects(state, heap, callbacks, [&](const auto*, const void* pointer) -> void* {
+					auto& value = vectors[pointer];
+					if (!value) { Vector frozen; const auto bytes = heap.ReadBytes(pointer, sizeof(frozen)); std::memcpy(&frozen, bytes.data(), sizeof(frozen)); value = std::make_unique<Vector>(frozen); }
+					return value.get();
+				});
+				objects.Prepare(); objects.Values().Push(heap.GlobalValue("savedNativeGetter")); objects.Values().Finish();
+				if (lua_pcall(state, 0, 3, 0)) throw std::runtime_error(lua_tostring(state, -1));
+				exact = lua_tointeger(state, -3) == 18 && lua_tointeger(state, -2) == 18 && lua_tointeger(state, -1) == 8;
+				lua_settop(state, 0);
+			});
+			worker.reset();
+		}
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " saved_native_getters_keep_class_values_aliases_and_private_changes_after_source_death" << std::endl;
+		checkpointValues = exact && checkpointValues;
 	}
 	{
 		auto owner = CheckpointLua::HeapOwner::Create();

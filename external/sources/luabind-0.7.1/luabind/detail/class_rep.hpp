@@ -191,6 +191,7 @@ namespace luabind { namespace detail
 		void get_table(lua_State* L) const { m_table.push(L); }
 		void get_default_table(lua_State* L) const { m_default_table.push(L); }
 		int checkpoint_table_reference() const { return m_table.checkpoint_reference(); }
+		int checkpoint_default_table_reference() const { return m_default_table.checkpoint_reference(); }
 		int checkpoint_self_reference() const { return m_self_ref.checkpoint_reference(); }
 		const void* checkpoint_metadata() const { return m_checkpoint_metadata; }
 		void prepare_checkpoint_metadata();
