@@ -25,10 +25,14 @@ namespace RTE::CheckpointLua {
 			m_PreviousKeys = luaJIT_set_saved_keys(&keys);
 		}
 		~SavedValues() {
-			for (const auto& [source, reference]: m_Values) luaL_unref(m_State, LUA_REGISTRYINDEX, reference);
-			for (const auto& [value, reference]: m_Returned) luaL_unref(m_State, LUA_REGISTRYINDEX, reference);
+			if (m_State) {
+				for (const auto& [source, reference]: m_Values) luaL_unref(m_State, LUA_REGISTRYINDEX, reference);
+				for (const auto& [value, reference]: m_Returned) luaL_unref(m_State, LUA_REGISTRYINDEX, reference);
+			}
 			luaJIT_set_saved_keys(&m_PreviousKeys);
 		}
+		// Finalizers keep their saved aliases until the private state finishes closing.
+		void Closing() noexcept { m_State = nullptr; }
 		SavedValues(const SavedValues&) = delete;
 		SavedValues& operator=(const SavedValues&) = delete;
 

@@ -175,7 +175,7 @@ namespace RTE {
 		static const std::shared_ptr<CheckpointNativeSnapshot>& Boundary() { return s_Boundary; }
 		class ReadScope {
 		public:
-			explicit ReadScope(const CheckpointNativeSnapshot* snapshot) : m_Allocation(snapshot != nullptr), m_Previous(s_Current), m_Clock(snapshot ? &snapshot->m_Clock : nullptr) { if (snapshot) { snapshot->MaterializeMetadata(); s_Current = snapshot; } }
+			explicit ReadScope(const CheckpointNativeSnapshot* snapshot, bool expand = true) : m_Allocation(snapshot != nullptr), m_Previous(s_Current), m_Clock(snapshot ? &snapshot->m_Clock : nullptr) { if (snapshot) { if (expand) snapshot->MaterializeMetadata(); s_Current = snapshot; } }
 			~ReadScope() { s_Current = m_Previous; }
 		private:
 			CheckpointNativeStorage::CaptureScope m_Allocation;

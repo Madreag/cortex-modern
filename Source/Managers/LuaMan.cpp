@@ -7862,6 +7862,17 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 		roots.insert(roots.end(), views.roots.begin(), views.roots.end());
 		roots.push_back({states[index], &worker, sizeof(worker), true});
 		CheckpointNativeStorage::ReadScope read({true, views.pages, roots, views.privateValues, views.owner});
+		std::unique_ptr<CheckpointLua::SavedObjects> savedObjects;
+		struct CloseState {
+			LuaStateWrapper& worker;
+			std::unique_ptr<CheckpointLua::SavedObjects>& objects;
+			const CheckpointNativeSnapshot* snapshot;
+			~CloseState() {
+				if (objects) objects->Values().Closing();
+				CheckpointNativeSnapshot::ReadScope saved(snapshot, false);
+				worker.Destroy();
+			}
+		} closeState{worker, savedObjects, snapshot.get()};
 		worker.Initialize(); worker.LoadScriptGraphHelper();
 		worker.CheckpointStateValues().randomGenerator = sourceValues->randomGenerator;
 		lua_State* const state = worker.GetLuaState();
@@ -7869,7 +7880,7 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 		CheckpointLua::FrozenBindings bindings(heap, &boundary.Bindings());
 		part.nativeSetupUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		CheckpointLua::ProtectedCall(state, [&] {
-			const auto copy = [&](const luabind::detail::class_rep* type, const void* pointer) -> void* {
+			const auto copy = [&, bindings](const luabind::detail::class_rep* type, const void* pointer) -> void* {
 				const auto started = std::chrono::steady_clock::now();
 				struct Cost {
 					FrozenCaptureStats& part; std::chrono::steady_clock::time_point started; uint64_t cpu;
@@ -7906,7 +7917,8 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 			};
 			const auto heapStarted = std::chrono::steady_clock::now();
 			const uint64_t heapCpu = CheckpointThreadCpuUnits();
-			CheckpointLua::SavedObjects objects(state, heap, boundary.Bindings(), copy);
+			savedObjects = std::make_unique<CheckpointLua::SavedObjects>(state, heap, boundary.Bindings(), copy);
+			auto& objects = *savedObjects;
 			objects.Prepare();
 			auto& values = objects.Values();
 			const TValue globals = heap.GlobalValue("_G");
@@ -10153,7 +10165,7 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		};
 		CheckpointLua::ProtectedCall(source, [&] {
 			bind(source);
-			if (luaL_dostring(source, "class 'SavedVectorClass' (Vector); function SavedVectorClass:__init(x,y) super(x,y); self.count=7 end; savedVector=SavedVectorClass(17,23); savedAlias=savedVector; savedNativeGetter=function() savedVector.X=savedVector.X+1; savedVector.count=savedVector.count+1; return savedVector.X,savedAlias.X,savedVector.count end"))
+			if (luaL_dostring(source, "class 'SavedVectorClass' (Vector); function SavedVectorClass:__init(x,y) super(x,y); self.count=7 end; function SavedVectorClass:__finalize() self.X=self.X+100 end; savedVector=SavedVectorClass(17,23); savedAlias=savedVector; savedNativeGetter=function() savedVector.X=savedVector.X+1; savedVector.count=savedVector.count+1; return savedVector.X,savedAlias.X,savedVector.count end"))
 				throw std::runtime_error("could not create saved native getters");
 			CheckpointLua::ForEachCapturedUserdata(source, [source](GCudata* value) {
 				if (value->len != sizeof(luabind::detail::class_rep)) return;
@@ -10183,13 +10195,16 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			CheckpointNativeStorage::ReadScope read(pages->Pages(), roots);
 			CheckpointNativeStorage::CaptureScope privateStorage;
 			std::unordered_map<const void*, std::unique_ptr<Vector>> vectors;
+			std::unique_ptr<CheckpointLua::SavedObjects> retained;
+			Vector* finalized = nullptr;
 			CheckpointLua::ProtectedCall(state, [&] {
 				bind(state); LuaThreadCodec::Register(state);
-				CheckpointLua::SavedObjects objects(state, heap, callbacks, [&](const auto*, const void* pointer) -> void* {
+				retained = std::make_unique<CheckpointLua::SavedObjects>(state, heap, callbacks, [&](const auto*, const void* pointer) -> void* {
 					auto& value = vectors[pointer];
 					if (!value) value = std::make_unique<Vector>(*CheckpointNativeStorage::Source(static_cast<const Vector*>(pointer)));
 					return value.get();
 				});
+				auto& objects = *retained;
 				objects.Prepare(); objects.Values().Push(heap.GlobalValue("savedNativeGetter")); objects.Values().Finish();
 				if (lua_pcall(state, 0, 3, 0)) throw std::runtime_error(lua_tostring(state, -1));
 				exact = lua_tointeger(state, -3) == 18 && lua_tointeger(state, -2) == 18 && lua_tointeger(state, -1) == 8;
@@ -10202,9 +10217,12 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 					static_cast<Vector*>(first.ptr())->m_X = 37;
 				}
 				exact = exact && returnedSource.m_X == 29 && vectors.at(&returnedSource)->m_X == 37;
+				for (const auto& [identity, value]: vectors) if (identity != &returnedSource && value->m_X == 18) finalized = value.get();
 				lua_settop(state, 0);
 			});
+			retained->Values().Closing();
 			worker.reset();
+			exact = exact && finalized && finalized->m_X == 118 && returnedSource.m_X == 29;
 		}
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " saved_native_getters_keep_class_values_aliases_and_private_changes_after_source_death" << std::endl;
 		checkpointValues = exact && checkpointValues;
