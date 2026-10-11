@@ -95,6 +95,29 @@ namespace RTE::CheckpointLua {
 		uint8_t eventMask = 0;
 	};
 
+	// Saver-created descriptor tables hold frozen tokens without putting them in a running VM.
+	struct ScratchData {
+	private:
+		friend class Snapshot;
+		friend class ScratchImage;
+		struct Block {
+			std::unique_ptr<std::byte[]> bytes;
+			size_t size = 0;
+			size_t used = 0;
+		};
+		std::vector<Block> blocks;
+		std::vector<const GCobj*> objects;
+		bool sealed = false;
+		const std::byte* Find(const void* address, size_t bytes) const {
+			const auto pointer = reinterpret_cast<uintptr_t>(address);
+			for (const auto& block: blocks) {
+				const auto begin = reinterpret_cast<uintptr_t>(block.bytes.get());
+				if (pointer >= begin && bytes <= block.used && pointer - begin <= block.used - bytes) return block.bytes.get() + (pointer - begin);
+			}
+			return nullptr;
+		}
+	};
+
 	// The VM's memory at one freeze: a copy of every committed page. Addresses identify the source VM; only the copy is read.
 	class Snapshot {
 	public:
@@ -125,13 +148,27 @@ namespace RTE::CheckpointLua {
 		std::span<const std::byte> ReadBytes(const void* address, size_t size) const {
 			if (!m_Data) throw std::runtime_error("a Lua heap snapshot is empty");
 			if (size == 0) return {};
-			m_Data->WaitCopied();
 			const uintptr_t source = reinterpret_cast<uintptr_t>(address);
-			if (source < m_Data->base || size > m_Data->committed || source - m_Data->base > m_Data->committed - size)
-				throw std::runtime_error("a Lua heap read lies outside the recorded heap");
-			const size_t offset = source - m_Data->base;
-			// The copied pages occupy one contiguous mapping.
-			return {reinterpret_cast<const std::byte*>(m_Data->pages) + offset, size};
+			if (source >= m_Data->base && size <= m_Data->committed && source - m_Data->base <= m_Data->committed - size) {
+				m_Data->WaitCopied();
+				return {reinterpret_cast<const std::byte*>(m_Data->pages) + (source - m_Data->base), size};
+			}
+			for (const auto& values: m_Scratch) if (const auto* bytes = values->Find(address, size)) return {bytes, size};
+			throw std::runtime_error("a Lua heap read lies outside the recorded heap");
+		}
+		Snapshot WithScratch(std::shared_ptr<const ScratchData> values) const {
+			if (!m_Data || !values || !values->sealed) throw std::logic_error("unfinished frozen Lua descriptors");
+			for (const auto& block: values->blocks) {
+				const auto begin = reinterpret_cast<uintptr_t>(block.bytes.get());
+				if (begin < m_Data->base + m_Data->committed && m_Data->base < begin + block.size)
+					throw std::runtime_error("frozen Lua descriptor storage reused a source address");
+			}
+			Snapshot result = *this;
+			result.m_Scratch.push_back(std::move(values));
+			return result;
+		}
+		template<class Visitor> void VisitScratchObjects(Visitor visit) const {
+			for (const auto& values: m_Scratch) for (const auto* object: values->objects) visit(object);
 		}
 
 		std::string ReadString(const char* address, size_t size) const {
@@ -201,6 +238,7 @@ namespace RTE::CheckpointLua {
 			}
 		};
 		std::shared_ptr<const Data> m_Data;
+		std::vector<std::shared_ptr<const ScratchData>> m_Scratch;
 		explicit Snapshot(std::shared_ptr<const Data> data) : m_Data(std::move(data)) {}
 
 		friend class HeapOwner;

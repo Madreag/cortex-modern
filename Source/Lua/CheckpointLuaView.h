@@ -43,6 +43,7 @@ namespace RTE::CheckpointLua {
 					m_Alive.insert(object);
 				} while (object != last);
 			}
+			m_Heap.VisitScratchObjects([this](const GCobj* object) { m_Alive.insert(object); scratch.insert(object); });
 			if (m_Proxies == LUA_NOREF) return;
 			lua_rawgeti(state, LUA_REGISTRYINDEX, m_Proxies);
 			lua_pushnil(state);

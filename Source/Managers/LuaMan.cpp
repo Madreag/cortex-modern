@@ -82,6 +82,7 @@ extern "C" {
 
 #include "CheckpointLuaHeap.h"
 #include "CheckpointLuaBindings.h"
+#include "CheckpointLuaScratch.h"
 #include "CheckpointLuaView.h"
 #include "CheckpointLuaThread.h"
 #include "CheckpointLuaAddresses.h"
@@ -9712,6 +9713,52 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			exact = bindings.Metadata(source).name == "FrozenBindingMetadataLongClassName" && bindings.DerivesFrom(source, "Vector") && tvistab(&members);
 		}
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " frozen_binding_metadata_survives_source_state_close" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
+		auto owner = CheckpointLua::HeapOwner::Create();
+		lua_State* state = owner->State();
+		TValue function; setnilV(&function);
+		CheckpointLua::ProtectedCall(state, [&] {
+			if (luaL_loadstring(state, "local value = 71; return function() return value end") || lua_pcall(state, 0, 1, 0))
+				throw std::runtime_error("could not create the frozen descriptor probe");
+			function = state->top[-1];
+			lua_setglobal(state, "FrozenDescriptorCallback");
+		});
+		const uint64_t serial = luaJIT_state_serial(state);
+		auto prepared = owner->PrepareFreeze();
+		if (!prepared->Arm(*owner)) throw std::runtime_error("could not freeze the descriptor probe");
+		prepared->Drain();
+		const auto heap = prepared->Image();
+		bool refused = false;
+		try {
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::LuaAllocation, 0);
+			CheckpointLua::ScratchImage failed(serial);
+			failed.Object({{"callback", function}});
+		} catch (const std::bad_alloc&) { refused = true; }
+		CheckpointLua::ScratchImage scratch(serial);
+		const TValue opaque = scratch.Opaque();
+		const std::array values{scratch.Number(7), scratch.Boolean(false), scratch.String(std::string_view("a\0b", 3))};
+		const TValue root = scratch.Object({{"callback", function}, {"entries", scratch.Array(values)}, {"opaque", opaque}, {"empty", scratch.Object({})}});
+		const auto image = scratch.Finish(heap);
+		bool sealed = false;
+		try { scratch.String(std::string_view("a\0b", 3)); } catch (const std::logic_error&) { sealed = true; }
+		bool bounded = false;
+		try { heap.Read(tabV(&root)); } catch (const std::runtime_error&) { bounded = true; }
+		bool exact = refused && sealed && bounded && luaJIT_state_serial(state) == serial;
+		owner.reset();
+		std::unique_ptr<lua_State, decltype(&lua_close)> worker(luaL_newstate_raw(), lua_close);
+		if (!worker) throw std::bad_alloc();
+		CheckpointLua::View view(image, [](lua_State*, auto&, auto) -> int { throw std::runtime_error("unexpected native descriptor call"); }, {});
+		CheckpointLua::ProtectedCall(worker.get(), [&] {
+			luaL_openlibs(worker.get());
+			view.Reset(worker.get(), image);
+			view.Install(worker.get());
+			view.Push(worker.get(), root); lua_setglobal(worker.get(), "probe");
+			const char* script = "assert(type(probe) == 'table' and type(probe.callback) == 'function'); local _, value = debug.getupvalue(probe.callback, 1); assert(value == 71); assert(#probe.entries == 3 and probe.entries[1] == 7 and probe.entries[2] == false); assert(#probe.entries[3] == 3 and string.byte(probe.entries[3], 2) == 0); assert(type(probe.opaque) == 'userdata' and next(probe.empty) == nil and probe.absent == nil)";
+			if (luaL_loadstring(worker.get(), script) || lua_pcall(worker.get(), 0, 0, 0)) exact = false;
+		});
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " saver_descriptor_tables_keep_frozen_functions_without_live_allocations" << std::endl;
 		checkpointValues = exact && checkpointValues;
 	}
 	{
