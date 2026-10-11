@@ -6,6 +6,20 @@
 
 namespace RTE {
 
+	// Native values outside the Entity pools need the same source-lifetime guarantee.
+	void* Serializable::operator new(size_t bytes) {
+		return CheckpointNativeStorage::Enabled() ? CheckpointNativeStorage::Allocate(bytes, __STDCPP_DEFAULT_NEW_ALIGNMENT__) : ::operator new(bytes);
+	}
+	void Serializable::operator delete(void* address) noexcept {
+		if (!CheckpointNativeStorage::Deallocate(address)) ::operator delete(address);
+	}
+	void* Serializable::operator new(size_t bytes, std::align_val_t alignment) {
+		return CheckpointNativeStorage::Enabled() ? CheckpointNativeStorage::Allocate(bytes, static_cast<size_t>(alignment)) : ::operator new(bytes, alignment);
+	}
+	void Serializable::operator delete(void* address, std::align_val_t alignment) noexcept {
+		if (!CheckpointNativeStorage::Deallocate(address)) ::operator delete(address, alignment);
+	}
+
 	int Serializable::CreateSerializable(Reader& reader, bool checkType, bool doCreate, bool skipStartingObject) {
 		if (checkType && reader.ReadPropValue() != GetClassName()) {
 			reader.ReportError("Wrong type in Reader when passed to Serializable::Create()");

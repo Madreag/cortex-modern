@@ -140,7 +140,7 @@ void SoundContainer::Clear() {
 	if (!m_IsDestroying && (!MovableObject::IsFaithfulClone() || MovableObject::FaithfulCloneRegisters())) {
 		ReidentifyCheckpoint(g_AudioMan.AllocateCheckpointSoundContainerID());
 	}
-	m_TopLevelSoundSet = std::make_shared<SoundSet>();
+	m_TopLevelSoundSet = MakeCheckpointNativeShared<SoundSet>();
 	m_TopLevelSoundSet->Destroy();
 	m_TopLevelSoundSet->SetOwnerContainer(this);
 

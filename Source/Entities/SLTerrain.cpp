@@ -176,7 +176,7 @@ int SLTerrain::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader >> m_BGColorLayer.get();
 	});
 	MatchProperty("AddTerrainFrosting", {
-		std::shared_ptr<TerrainFrosting> terrainFrosting = std::make_shared<TerrainFrosting>();
+		std::shared_ptr<TerrainFrosting> terrainFrosting = MakeCheckpointNativeShared<TerrainFrosting>();
 		reader >> terrainFrosting.get();
 		m_TerrainFrostings.emplace_back(std::move(terrainFrosting));
 	});

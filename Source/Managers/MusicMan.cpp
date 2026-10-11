@@ -628,7 +628,7 @@ struct MusicCheckpoint {
         for (const auto& subset: record.subsets) { auto child = std::make_unique<SoundSet>(); BuildSet(subset, *child, bindings); value.m_SubSoundSets.push_back(child.release()); }
     }
     static void BuildSound(const Sound& record, SoundContainer& value, std::vector<std::pair<SoundData*, std::string>>& bindings) {
-        auto set = std::make_shared<SoundSet>(); BuildSet(record.set, *set, bindings);
+        auto set = MakeCheckpointNativeShared<SoundSet>(); BuildSet(record.set, *set, bindings);
         if (!value.LoadCheckpoint(record.native)) throw std::runtime_error("invalid music sound metadata");
         value.m_TopLevelSoundSet = std::move(set);
     }

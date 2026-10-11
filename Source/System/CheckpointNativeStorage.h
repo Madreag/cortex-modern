@@ -75,4 +75,9 @@ namespace RTE {
 		}
 		template<class U> bool operator==(const CheckpointNativeAllocator<U>&) const noexcept { return true; }
 	};
+
+	template<class T, class... Args> std::shared_ptr<T> MakeCheckpointNativeShared(Args&&... args) {
+		if (CheckpointNativeStorage::Enabled()) return std::allocate_shared<T>(CheckpointNativeAllocator<T>{}, std::forward<Args>(args)...);
+		return std::make_shared<T>(std::forward<Args>(args)...);
+	}
 }

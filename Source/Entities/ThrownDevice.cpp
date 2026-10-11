@@ -46,7 +46,7 @@ void ThrownDevice::Clear() {
 			m_StrikerLever, m_TriggerDelay);
 	}, m_CheckpointInitialized);
 	m_CheckpointInitialized = true;
-	m_ActivationSound = std::make_shared<SoundContainer>();
+	m_ActivationSound = MakeCheckpointNativeShared<SoundContainer>();
 	m_ActivationSound->Reset();
 	m_StartThrowOffset.Reset();
 	m_EndThrowOffset.Reset();

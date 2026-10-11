@@ -5,6 +5,7 @@
 #include "CheckpointNativeStorage.h"
 #include "CheckpointString.h"
 #include "ScenarioRunner.h"
+#include "Vector.h"
 
 #include <algorithm>
 #include <atomic>
@@ -477,6 +478,26 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 		if (read != std::vector<uint64_t>{3, 17, 7, 11}) return "native container reuse changed its second generation";
 	}
 	if (!foundFirst || !foundSecond) return "native container generation lost its allocation";
+	{
+		CheckpointNativeStorage::AllocationScope allocation(true);
+		struct alignas(64) AlignedValue : Vector {};
+		auto value = std::make_unique<AlignedValue>();
+		auto shared = MakeCheckpointNativeShared<Vector>(3.0F, 7.0F);
+		auto array = std::make_unique<Vector[]>(3);
+		value->m_X = 13; array[2].m_Y = 19;
+		const float* fields[] = {&value->m_X, &shared->m_Y, &array[2].m_Y};
+		if (reinterpret_cast<uintptr_t>(value.get()) % alignof(AlignedValue)) return "native value alignment changed";
+		const auto pages = Prepare();
+		for (const auto& part: pages) part->Arm();
+		value.reset(); shared.reset(); array.reset();
+		const float expected[] = {13, 7, 19};
+		for (size_t index = 0; index < std::size(fields); ++index) {
+			float read = 0;
+			bool found = false;
+			for (const auto& part: pages) if (part->Read(fields[index], &read, sizeof(read))) { found = true; break; }
+			if (!found || read != expected[index]) return "destroyed native value lost its frozen fields";
+		}
+	}
 	return CheckpointString::SelfTestMismatch();
 }
 
