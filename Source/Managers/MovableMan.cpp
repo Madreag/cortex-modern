@@ -4,6 +4,7 @@
 #include "Constants.h"
 #include "OwnedMovableObjects.h"
 #include "MovableMan.h"
+#include "NetModerationGUIProbe.h"
 #include <iostream>
 #include "SimDumpTape.h"
 #include "NetA7Journal.h"
@@ -4697,6 +4698,7 @@ void MovableMan::AddActor(Actor* actorToAdd) {
 
 void MovableMan::AddItem(HeldDevice* itemToAdd) {
 	if (itemToAdd && g_ActivityMan.GetActivity()) {
+		NetModerationGUIProbe::TraceObjectLifetime(itemToAdd, "add-item", true);
 		g_ActivityMan.GetActivity()->ForceSetTeamAsActive(itemToAdd->GetTeam());
 
 		itemToAdd->SetAsAddedToMovableMan();
@@ -4757,6 +4759,7 @@ void MovableMan::AddParticle(MovableObject* particleToAdd) {
 			TakePreviewSpawn(particleToAdd);
 		}
 		if (particleToAdd->IsDevice()) {
+			NetModerationGUIProbe::TraceObjectLifetime(particleToAdd, "add-device-particle", true);
 			std::lock_guard<std::mutex> lock(m_AddedItemsMutex);
 			m_AddedItems.push_back(particleToAdd);
 			m_ValidItems.insert(particleToAdd);
@@ -7313,6 +7316,7 @@ void MovableMan::Update() {
 			imidIt = iIt;
 
 			while (iIt != m_Items.end()) {
+				NetModerationGUIProbe::TraceObjectLifetime(*iIt, "retire-item", false);
 				ForgetActivitySlots(*iIt);
 				(*iIt)->DestroyScriptState();
 				delete (*iIt);

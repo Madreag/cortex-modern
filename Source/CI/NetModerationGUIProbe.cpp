@@ -56,9 +56,31 @@
 #include <stdexcept>
 #include <sstream>
 
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
 std::string BuildLoopPaceJson();
 
 namespace RTE::NetModerationGUIProbe {
+void TraceObjectLifetime(const MovableObject* object, const char* stage, bool objectAlive) {
+	static const char* target = std::getenv("CC_TEST_MO_LIFETIME_TRACE");
+	if (!target || !*target || !std::getenv("CC_TEST_NET_UI_SCRIPT") || !ScenarioRunner::IsLockstepControllerSyncActive()) return;
+	if (objectAlive && object->GetPresetName() != target) return;
+	std::ostringstream line;
+	line << "[mo-lifetime] " << stage << " tick=" << g_TimerMan.GetSimUpdateCount() << " pointer=" << object;
+	if (objectAlive) line << " uid=" << object->GetUniqueID() << " preset=" << object->GetPresetName();
+#ifdef _WIN32
+	void* callers[16]{};
+	const USHORT count = CaptureStackBackTrace(1, 16, callers, nullptr);
+	const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+	for (USHORT i = 0; i < count; ++i) {
+		line << " caller[" << i << "]=exe+0x" << std::hex << (reinterpret_cast<uintptr_t>(callers[i]) - base) << std::dec;
+	}
+#endif
+	std::cout << line.str() << std::endl;
+}
+
 namespace {
 	using Json = nlohmann::json;
 	using Clock = std::chrono::steady_clock;

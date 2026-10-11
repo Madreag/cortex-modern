@@ -3,7 +3,11 @@
 #include <cstdint>
 #include <string>
 
+namespace RTE { class MovableObject; }
+
 namespace RTE::NetModerationGUIProbe {
+	/// Names a scripted fight's item additions and destruction paths when its lifetime trace is requested.
+	void TraceObjectLifetime(const MovableObject* object, const char* stage, bool objectAlive);
 	/// Runs an opt-in input script through the ordinary SDL event queue.
 	void BeforePoll();
 	/// Checks the frame after the network panel has been drawn.
