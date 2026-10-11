@@ -60,10 +60,13 @@ namespace RTE {
 			const T* m_Source;
 			alignas(T) std::array<std::byte, sizeof(T)> m_Bytes;
 		};
+		struct PrivateValues;
 		struct ReadViews {
 			bool active = false;
 			std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> pages;
 			std::span<const RootRange> roots;
+			std::shared_ptr<PrivateValues> privateValues;
+			std::shared_ptr<const void> owner;
 		};
 		struct ReadState;
 		class ReadScope {
@@ -75,7 +78,7 @@ namespace RTE {
 			ReadScope& operator=(const ReadScope&) = delete;
 		private:
 			CaptureScope m_Capture;
-			std::unique_ptr<ReadState> m_State;
+			std::shared_ptr<ReadState> m_State;
 			ReadState* m_Previous;
 		};
 		static bool Enabled(bool retained = false);

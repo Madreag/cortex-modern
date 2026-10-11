@@ -706,8 +706,12 @@ std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> CheckpointNativ
 	return std::move(PrepareInventory()->m_Pages);
 }
 
-struct CheckpointNativeStorage::ReadState {
-	struct PrivateValues { std::map<uintptr_t, size_t> ranges; };
+struct CheckpointNativeStorage::PrivateValues {
+	std::mutex mutex;
+	std::map<uintptr_t, size_t> ranges;
+};
+
+struct CheckpointNativeStorage::ReadState : std::enable_shared_from_this<ReadState> {
 	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> pages;
 	std::vector<RootRange> roots;
 	std::map<std::pair<uintptr_t, size_t>, std::string> strings;
@@ -722,31 +726,37 @@ CheckpointNativeStorage::ReadScope::ReadScope(std::span<const std::shared_ptr<co
 
 CheckpointNativeStorage::ReadScope::ReadScope(ReadViews views) : m_Capture(views.active), m_Previous(s_Read) {
 	if (!views.active) return;
-	m_State = std::make_unique<ReadState>();
+	m_State = std::make_shared<ReadState>();
 	m_State->pages.assign(views.pages.begin(), views.pages.end());
 	m_State->roots.assign(views.roots.begin(), views.roots.end());
-	m_State->privateValues = m_Previous ? m_Previous->privateValues : std::make_shared<ReadState::PrivateValues>();
+	m_State->privateValues = views.privateValues ? std::move(views.privateValues) : (m_Previous ? m_Previous->privateValues : std::make_shared<PrivateValues>());
 	s_Read = m_State.get();
 }
 
 void CheckpointNativeStorage::RememberPrivate(void* address, size_t bytes) {
 	if (!s_Read || !address) throw std::logic_error("private native values need their saver scope");
 	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	std::lock_guard lock(s_Read->privateValues->mutex);
 	if (!s_Read->privateValues->ranges.emplace(reinterpret_cast<uintptr_t>(address), bytes).second)
 		throw std::logic_error("private native storage is already recorded");
 }
 
 bool CheckpointNativeStorage::ForgetPrivate(void* address) noexcept {
-	return s_Read && s_Read->privateValues->ranges.erase(reinterpret_cast<uintptr_t>(address)) != 0;
+	if (!s_Read) return false;
+	std::lock_guard lock(s_Read->privateValues->mutex);
+	return s_Read->privateValues->ranges.erase(reinterpret_cast<uintptr_t>(address)) != 0;
 }
 
 size_t CheckpointNativeStorage::PrivateAllocationCount() noexcept {
-	return s_Read ? s_Read->privateValues->ranges.size() : 0;
+	if (!s_Read) return 0;
+	std::lock_guard lock(s_Read->privateValues->mutex);
+	return s_Read->privateValues->ranges.size();
 }
 
 const void* CheckpointNativeStorage::PrivateAllocation(const void* address) noexcept {
 	if (!s_Read || !address) return nullptr;
 	const uintptr_t pointer = reinterpret_cast<uintptr_t>(address);
+	std::lock_guard lock(s_Read->privateValues->mutex);
 	const auto& ranges = s_Read->privateValues->ranges;
 	const auto after = ranges.upper_bound(pointer);
 	if (after == ranges.begin()) return nullptr;
@@ -757,9 +767,14 @@ const void* CheckpointNativeStorage::PrivateAllocation(const void* address) noex
 bool CheckpointNativeStorage::Private(const void* address, size_t bytes) noexcept {
 	if (!s_Read || !address) return false;
 	const uintptr_t pointer = reinterpret_cast<uintptr_t>(address);
-	if (const void* allocation = PrivateAllocation(address)) {
-		const uintptr_t start = reinterpret_cast<uintptr_t>(allocation);
-		return bytes <= s_Read->privateValues->ranges.find(start)->second - (pointer - start);
+	{
+		std::lock_guard lock(s_Read->privateValues->mutex);
+		const auto& ranges = s_Read->privateValues->ranges;
+		const auto after = ranges.upper_bound(pointer);
+		if (after != ranges.begin()) {
+			const auto value = std::prev(after);
+			if (pointer - value->first < value->second && bytes <= value->second - (pointer - value->first)) return true;
+		}
 	}
 	for (const RootRange& root: s_Read->roots) {
 		const uintptr_t start = reinterpret_cast<uintptr_t>(root.view);
@@ -780,7 +795,7 @@ void* CheckpointNativeStorage::AllocatePrivate(size_t bytes, size_t alignment, b
 }
 
 CheckpointNativeStorage::ReadViews CheckpointNativeStorage::CurrentViews() {
-	return s_Read ? ReadViews{true, s_Read->pages, s_Read->roots} : ReadViews{};
+	return s_Read ? ReadViews{true, s_Read->pages, s_Read->roots, s_Read->privateValues, s_Read->shared_from_this()} : ReadViews{};
 }
 
 std::shared_ptr<const void> CheckpointNativeStorage::ReadIndex(const void* source, const void* kind, const std::function<std::shared_ptr<const void>()>& build) {
@@ -1067,6 +1082,30 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 		retry->numbers.assign({43});
 		if (Source(retry.get())->numbers.front() != 43 || Source(value.get())->numbers.back() != 31)
 			return "a saved getter refusal changed its earlier private values";
+		const auto views = CurrentViews();
+		const bool workerRead = std::async(std::launch::async, [views, target = value.get()] {
+			ReadScope read(views);
+			if (Source(target) != target || Source(target)->numbers.back() != 31) return false;
+			int number = 0;
+			return ReadBytes(target->numbers.data(), &number, sizeof(number)) && number == 17;
+		}).get();
+		if (!workerRead) return "a saved worker lost its capture's private native values";
+	}
+	{
+		ReadViews views;
+		std::unique_ptr<Vector> value;
+		{
+			ReadScope read(ReadViews{true, {}, {}});
+			value = std::make_unique<Vector>(17, 31);
+			views = CurrentViews();
+		}
+		const bool readLater = std::async(std::launch::async, [views, target = value.get()] {
+			ReadScope read(views);
+			return Source(target) == target && Source(target)->m_X == 17 && Source(target)->m_Y == 31;
+		}).get();
+		ReadScope read(views);
+		value.reset();
+		if (!readLater || PrivateAllocationCount() != 0) return "saved read values did not retain and release their private storage";
 	}
 	if (const auto mismatch = CheckpointString::SelfTestMismatch(); !mismatch.empty()) return mismatch;
 	return CheckpointFrozenContainersSelfTestMismatch();
