@@ -9,6 +9,7 @@
 #include "SoundSimulation.h"
 #include "LogicalSound.h"
 #include "AudioCheckpoint.h"
+#include "CheckpointFrozenContainers.h"
 
 #include "fmod/fmod.hpp"
 #include <atomic>
@@ -37,6 +38,7 @@ namespace RTE {
 
 	/// The singleton manager of sound effect and music playback.
 	class AudioMan : public Singleton<AudioMan> {
+		template<template<class> class Allocator> struct CheckpointRegistryState;
 		friend class SettingsMan;
 		friend class SoundContainer;
 
@@ -103,31 +105,38 @@ namespace RTE {
 		void ClearCommittedAudibility();
 		/// A lockstep round starts with no committed readings on every peer: its objects and ticks restart, so an earlier round's could share a key.
 		void BeginLockstepRound();
-		uint64_t GetCheckpointSoundContainerCursor() const { std::lock_guard lock(m_CheckpointRegistryMutex); return m_NextSoundContainerIdentity; }
-		void SetCheckpointSoundContainerCursor(uint64_t value) { std::lock_guard lock(m_CheckpointRegistryMutex); m_NextSoundContainerIdentity = value; }
-		CheckpointSoundRegistry CaptureCheckpointSoundRegistry() const { std::lock_guard lock(m_CheckpointRegistryMutex); return m_CheckpointSoundContainers; }
-		/// The registry and the live container pairing behind it, taken together so neither can move between the two reads.
-		void CaptureCheckpointSoundRegistry(CheckpointSoundRegistry& registry, std::unordered_map<const SoundContainer*, uint64_t>& live) const {
-			std::lock_guard lock(m_CheckpointRegistryMutex);
-			registry = m_CheckpointSoundContainers;
-			live = m_LiveCheckpointSoundContainers;
-		}
-		/// Exchanges both halves of the registry in one step; a restore that swaps one without the other leaves identities resolving to freed containers.
-		void SwapCheckpointSoundRegistry(CheckpointSoundRegistry& registry, std::unordered_map<const SoundContainer*, uint64_t>& live) {
-			std::lock_guard lock(m_CheckpointRegistryMutex);
-			SaveRegistryForScopes();
-			m_CheckpointSoundContainers.swap(registry);
-			m_LiveCheckpointSoundContainers.swap(live);
-		}
+		uint64_t GetCheckpointSoundContainerCursor() const;
+		void SetCheckpointSoundContainerCursor(uint64_t value);
+		CheckpointSoundRegistry CaptureCheckpointSoundRegistry() const;
+		/// Copies both halves under the same registry lock.
+		void CaptureCheckpointSoundRegistry(CheckpointSoundRegistry& registry, std::unordered_map<const SoundContainer*, uint64_t>& live) const;
+		/// Exchanges both halves without publishing a partial conversion.
+		void SwapCheckpointSoundRegistry(CheckpointSoundRegistry& registry, std::unordered_map<const SoundContainer*, uint64_t>& live);
+		/// Promotes saved registry storage before the multiplayer inventory is prepared.
+		void PrepareCheckpointRegistryValues();
+		static std::string CheckpointRegistryStorageSelfTestMismatch();
+		class CheckpointRegistryReadScope {
+			friend class AudioMan;
+		public:
+			explicit CheckpointRegistryReadScope(const AudioMan& source);
+			~CheckpointRegistryReadScope();
+			CheckpointRegistryReadScope(const CheckpointRegistryReadScope&) = delete;
+			CheckpointRegistryReadScope& operator=(const CheckpointRegistryReadScope&) = delete;
+		private:
+			CheckpointRegistryReadScope(const AudioMan& source, const CheckpointRegistryState<CheckpointNativeAllocator>& values);
+			std::unique_ptr<CheckpointRegistryState<CheckpointNativeAllocator>> m_Values;
+			const AudioMan* m_PreviousOwner;
+			CheckpointRegistryState<CheckpointNativeAllocator>* m_PreviousValues;
+		};
 		CheckpointSoundRegistry AddedCheckpointSoundRegistrations(const CheckpointSoundRegistry& original) const;
 		void RestoreCheckpointSoundRegistry(CheckpointSoundRegistry original);
 		void ActivateCheckpointSoundRegistrations(const CheckpointSoundRegistry& candidates);
 		void NoteCarriedSoundIdentity(uint64_t identity);
 		void CollectManagerSoundIdentities(std::unordered_set<uint64_t>& out) const;
 		void RememberCarriedSoundIdentities(std::unordered_set<uint64_t> carried);
-		std::unordered_set<uint64_t> LastCarriedSoundIdentities() const { std::lock_guard lock(m_CheckpointRegistryMutex); return m_LastCarriedSoundIdentities; }
+		std::unordered_set<uint64_t> LastCarriedSoundIdentities() const;
 		void StopRecordingRestoredSoundRegistry();
-		bool RestoredSoundRegistryActive() const { std::lock_guard lock(m_CheckpointRegistryMutex); return m_RestoredSoundRegistryActive; }
+		bool RestoredSoundRegistryActive() const;
 		/// While one lives, the sound registry is saved before the first change made to it, and put back when the scope
 		/// ends less the containers gone by then; a registry nothing changed is left as it is.
 		class CheckpointRegistryScope {
@@ -653,19 +662,47 @@ namespace RTE {
 		void ReleaseStoppedVoiceEffects();
 		std::vector<std::shared_ptr<PlayingVoice::ChannelUserData>> m_RetiredHandles;
 		int m_NextVoiceIdentity = 0;
-		// A Lua GC finalizer frees sound containers on whichever pool thread collects its state, and several states collect at once, so the registry group down to m_NextSoundContainerIdentity is locked.
+		// Lua finalizers can retire owners on several workers at once.
 		mutable std::recursive_mutex m_CheckpointRegistryMutex;
-		std::vector<CheckpointRegistryScope*> m_RegistryScopes; //!< The live registry scopes, each saved into before the first change.
-		/// Saves the registry into every live scope that has not saved it yet; called under the registry lock before a change.
 		void SaveRegistryForScopes();
-		CheckpointSoundRegistry m_CheckpointSoundContainers;
-		std::unordered_map<const SoundContainer*, uint64_t> m_LiveCheckpointSoundContainers;
-		CheckpointSoundRegistry m_RestoredSoundContainers;
-		std::unordered_set<uint64_t> m_RestoredManagerIdentities;
-		std::unordered_set<uint64_t> m_LastCarriedSoundIdentities;
-		bool m_RestoredSoundRegistryActive = false;
-		bool m_RestoredSoundRegistryRecording = false;
-		uint64_t m_NextSoundContainerIdentity = 0;
+		template<template<class> class Allocator> struct CheckpointRegistryState : CheckpointNativeAllocated {
+			template<class T> using Vector = std::vector<T, Allocator<T>>;
+			template<class Key, class T> using Map = std::map<Key, T, std::less<Key>, Allocator<std::pair<const Key, T>>>;
+			template<class Key, class T> using Hash = std::unordered_map<Key, T, std::hash<Key>, std::equal_to<Key>, Allocator<std::pair<const Key, T>>>;
+			template<class Key> using Set = std::unordered_set<Key, std::hash<Key>, std::equal_to<Key>, Allocator<Key>>;
+			Vector<CheckpointRegistryScope*> m_RegistryScopes;
+			Map<uint64_t, Vector<SoundContainer*>> m_CheckpointSoundContainers;
+			Hash<const SoundContainer*, uint64_t> m_LiveCheckpointSoundContainers;
+			Map<uint64_t, Vector<SoundContainer*>> m_RestoredSoundContainers;
+			Set<uint64_t> m_RestoredManagerIdentities, m_LastCarriedSoundIdentities;
+			bool m_RestoredSoundRegistryActive = false, m_RestoredSoundRegistryRecording = false;
+			uint64_t m_NextSoundContainerIdentity = 0;
+			CheckpointRegistryState() = default;
+			CheckpointRegistryState(const CheckpointRegistryState& source);
+			template<template<class> class Other> explicit CheckpointRegistryState(const CheckpointRegistryState<Other>& source);
+			template<template<class> class Other> void Assign(const CheckpointRegistryState<Other>& source);
+		};
+		CheckpointRegistryState<std::allocator> m_OrdinaryCheckpointRegistry;
+		std::unique_ptr<CheckpointRegistryState<CheckpointNativeAllocator>> m_OwnedCheckpointRegistry;
+		inline static thread_local const AudioMan* s_PrivateRegistryOwner = nullptr;
+		inline static thread_local CheckpointRegistryState<CheckpointNativeAllocator>* s_PrivateRegistryValues = nullptr;
+		bool PrivateRegistry() const { return s_PrivateRegistryOwner && s_PrivateRegistryOwner == CheckpointNativeStorage::Original(this); }
+		std::unique_lock<std::recursive_mutex> RegistryLock() const {
+			std::unique_lock lock(m_CheckpointRegistryMutex, std::defer_lock);
+			if (!CheckpointNativeStorage::Reading() && !PrivateRegistry()) lock.lock();
+			return lock;
+		}
+		template<class Work> decltype(auto) WithCheckpointRegistry(Work&& work) {
+			if (PrivateRegistry()) return work(*s_PrivateRegistryValues);
+			if (CheckpointNativeStorage::Reading()) throw std::logic_error("frozen sound registry has no private writer");
+			if (m_OwnedCheckpointRegistry) return work(*m_OwnedCheckpointRegistry);
+			return work(m_OrdinaryCheckpointRegistry);
+		}
+		template<class Work> decltype(auto) WithCheckpointRegistry(Work&& work) const {
+			if (PrivateRegistry()) return work(std::as_const(*s_PrivateRegistryValues));
+			if (m_OwnedCheckpointRegistry) return work(std::as_const(*CheckpointNativeStorage::Source(m_OwnedCheckpointRegistry.get())));
+			return work(std::as_const(m_OrdinaryCheckpointRegistry));
+		}
 		mutable std::mutex m_LogicalSoundsMutex;
 		std::unordered_set<SoundContainer*> m_ActiveLogicalSounds;
 		mutable std::mutex m_PendingSoundOpsMutex;

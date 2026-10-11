@@ -9838,6 +9838,12 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = mismatch.empty() && checkpointValues;
 	}
 	{
+		const std::string mismatch = AudioMan::CheckpointRegistryStorageSelfTestMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " frozen_sound_registry_keeps_private_owner_changes_and_retries" << std::endl;
+		if (!mismatch.empty()) std::cout << "[script-graph-selftest] detail=" << mismatch << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
+	}
+	{
 		auto owner = CheckpointLua::HeapOwner::Create();
 		lua_State* state = owner->State();
 		CheckpointNativeStorage::AllocationScope allocations(true);
@@ -15739,6 +15745,7 @@ void LuaMan::PrepareCheckpointValues() {
 	if (CheckpointNativeStorage::Enabled()) MovableObject::PrepareCheckpointCounters();
 	if (CheckpointNativeStorage::Enabled()) g_SceneMan.PrepareCheckpointValues();
 	if (CheckpointNativeStorage::Enabled()) g_ActivityMan.PrepareCheckpointValues();
+	if (CheckpointNativeStorage::Enabled()) g_AudioMan.PrepareCheckpointRegistryValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointActorValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLooseValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLookupValues();
