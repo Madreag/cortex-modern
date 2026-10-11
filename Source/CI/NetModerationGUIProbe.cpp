@@ -782,9 +782,12 @@ namespace {
 			// Motion enters through the same event queue as a device. No cursor position or controller state is assigned.
 			Vector motion(step.value("dx", 0.0F), step.value("dy", 0.0F));
 			if (op == "aim_brain") {
+				const bool untilEnd = step.value("until_end", false);
+				if (untilEnd && RoundEnded()) return observed["screen"] == "MultiplayerScreen";
 				auto* game = g_ActivityMan.GetActivity();
 				auto* actor = game ? dynamic_cast<AHuman*>(game->GetControlledActor(LocalPlayer(step))) : nullptr;
 				auto* brain = game ? game->GetPlayerBrain(step.value("target_player", 1)) : nullptr;
+				if (untilEnd && (!brain || !g_MovableMan.ValidMO(brain))) return false;
 				Require(actor && brain && g_MovableMan.ValidMO(brain), "aiming needs a living soldier and target brain");
 				const auto* gun = dynamic_cast<const HDFirearm*>(actor->GetEquippedItem());
 				Require(gun, "aiming needs the soldier's equipped firearm");
@@ -796,8 +799,9 @@ namespace {
 				const Vector ray = Vector(gun->GetFlipFactor(), 0).RadRotate(gun->GetRotAngle());
 				const float miss = std::abs(ray.m_X * distance.m_Y - ray.m_Y * distance.m_X);
 				observed["aim"] = {{"device", {input.m_X, input.m_Y}}, {"target", {target.m_X, target.m_Y}},
-				    {"muzzle", {gun->GetMuzzlePos().m_X, gun->GetMuzzlePos().m_Y}}, {"ray", {ray.m_X, ray.m_Y}}, {"miss_pixels", miss}};
-				if (tick >= probe.aimTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4 &&
+				    {"muzzle", {gun->GetMuzzlePos().m_X, gun->GetMuzzlePos().m_Y}}, {"ray", {ray.m_X, ray.m_Y}}, {"miss_pixels", miss},
+				    {"brain_health", brain->GetHealth()}, {"rounds", gun->GetRoundInMagCount()}};
+				if (!untilEnd && tick >= probe.aimTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4 &&
 				    (target - input).GetMagnitude() < 0.01F && miss <= 2.0F && ray.m_X * distance.m_X + ray.m_Y * distance.m_Y > 0) return true;
 				// UpdateMouseInput adds three times the device motion to its analog aim.
 				motion = (target - input) * g_UInputMan.GetMouseTrapRadius() / (3.0F * g_UInputMan.GetMouseSensitivity());

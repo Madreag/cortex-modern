@@ -362,7 +362,8 @@ def game_scenes():
     host += [dict(op="aim_brain", input_player=0, target_player=1)]
     host += capture("aimed-at-brain-host") + [dict(op="assert_scene", input_player=0,
              equals=dict(alive=True, preset="Coalition.rte/Soldier Light", weapon="Coalition.rte/Assault Rifle"))]
-    host += [dict(op="game_mouse", down=True), wait(scope="menu", screen="MultiplayerScreen", within_ms=15000), dict(op="game_mouse", down=False)]
+    host += [dict(op="game_mouse", down=True), dict(op="aim_brain", input_player=0, target_player=1,
+             until_end=True, scope="menu", within_ms=15000), dict(op="game_mouse", down=False)]
     for peer, steps in (("host", host), ("joiner", joiner)):
         steps += [lobby_wait(peer)]
         steps += capture(f"brain-loss-{peer}", "MultiplayerScreen")
