@@ -25,6 +25,9 @@ extern void blit_end(void);   /* for LOCK_FUNCTION; defined in blit.c */
 
 static void *(*bitmap_pixel_allocate)(size_t) = NULL;
 static int (*bitmap_pixel_release)(void *) = NULL;
+static int (*bitmap_storage_enabled)(void) = NULL;
+static void *(*bitmap_storage_allocate)(size_t) = NULL;
+static int (*bitmap_storage_release)(void *) = NULL;
 
 void set_bitmap_pixel_allocator(void *(*allocate)(size_t), int (*release)(void *))
 {
@@ -35,6 +38,24 @@ void set_bitmap_pixel_allocator(void *(*allocate)(size_t), int (*release)(void *
 static void release_bitmap_pixels(void *pixels)
 {
    if (!bitmap_pixel_release || !bitmap_pixel_release(pixels)) _AL_FREE(pixels);
+}
+
+void set_bitmap_storage_allocator(int (*enabled)(void), void *(*allocate)(size_t), int (*release)(void *))
+{
+   bitmap_storage_enabled = enabled;
+   bitmap_storage_allocate = allocate;
+   bitmap_storage_release = release;
+}
+
+static void *allocate_bitmap_storage(size_t bytes)
+{
+   if (bitmap_storage_enabled && bitmap_storage_allocate && bitmap_storage_enabled()) return bitmap_storage_allocate(bytes);
+   return _AL_MALLOC(bytes);
+}
+
+static void release_bitmap_storage(void *address)
+{
+   if (!bitmap_storage_release || !bitmap_storage_release(address)) _AL_FREE(address);
 }
 
 
@@ -1060,7 +1081,7 @@ BITMAP *create_bitmap_ex(int color_depth, int width, int height)
    if (!vtable)
       return NULL;
 
-   bitmap = _AL_MALLOC(sizeof(BITMAP));
+   bitmap = allocate_bitmap_storage(sizeof(BITMAP));
    if (!bitmap)
       return NULL;
 
@@ -1072,7 +1093,7 @@ BITMAP *create_bitmap_ex(int color_depth, int width, int height)
    bitmap->dat = bitmap_pixel_allocate ? bitmap_pixel_allocate(width * height * BYTES_PER_PIXEL(color_depth) + padding) :
       _AL_MALLOC_ATOMIC(width * height * BYTES_PER_PIXEL(color_depth) + padding);
    if (!bitmap->dat) {
-      _AL_FREE(bitmap);
+      release_bitmap_storage(bitmap);
       return NULL;
    }
 
@@ -1081,10 +1102,10 @@ BITMAP *create_bitmap_ex(int color_depth, int width, int height)
       * pointer is always available.
       */
    nr_pointers = MAX(2, height);
-   bitmap->line = _AL_MALLOC(sizeof(char *) * nr_pointers);
+   bitmap->line = allocate_bitmap_storage(sizeof(char *) * nr_pointers);
    if (!bitmap->line) {
       release_bitmap_pixels(bitmap->dat);
-      _AL_FREE(bitmap);
+      release_bitmap_storage(bitmap);
       return NULL;
    }
 
@@ -1157,7 +1178,7 @@ BITMAP *create_sub_bitmap(BITMAP *parent, int x, int y, int width, int height)
    if (system_driver->create_sub_bitmap)
       return system_driver->create_sub_bitmap(parent, x, y, width, height);
 
-   bitmap = _AL_MALLOC(sizeof(BITMAP));
+   bitmap = allocate_bitmap_storage(sizeof(BITMAP));
    if (!bitmap)
       return NULL;
 
@@ -1200,9 +1221,9 @@ BITMAP *create_sub_bitmap(BITMAP *parent, int x, int y, int width, int height)
    /* setup line pointers: each line points to a line in the parent bitmap */
    /* (see create_bitmap for the reason we need at least two) */
    nr_pointers = MAX(2, height);
-   bitmap->line = _AL_MALLOC(sizeof(char *) * nr_pointers);
+   bitmap->line = allocate_bitmap_storage(sizeof(char *) * nr_pointers);
    if (!bitmap->line) {
-      _AL_FREE(bitmap);
+      release_bitmap_storage(bitmap);
       return NULL;
    }
 
@@ -1511,9 +1532,9 @@ void destroy_bitmap(BITMAP *bitmap)
 	    return;
       }
 
-      _AL_FREE(bitmap->line);
+      release_bitmap_storage(bitmap->line);
       release_bitmap_pixels(bitmap->dat);
-      _AL_FREE(bitmap);
+      release_bitmap_storage(bitmap);
    }
 }
 

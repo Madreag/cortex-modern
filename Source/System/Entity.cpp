@@ -164,6 +164,7 @@ namespace RTE {
 	};
 	BITMAP* CheckpointNativeSnapshot::Freeze(BITMAP* source) {
 		if (!source) return nullptr;
+		const BITMAP* address = static_cast<const BITMAP*>(CheckpointNativeStorage::Original(source));
 		auto& recent = Recent<1>(source);
 		if (recent.first == source) return static_cast<BITMAP*>(recent.second);
 		if (const auto* known = m_BitmapSources.FindStored(source)) {
@@ -171,6 +172,7 @@ namespace RTE {
 			return &(*known)->bitmap;
 		}
 		CheckpointCloneCost cost("BITMAP");
+		source = const_cast<BITMAP*>(static_cast<const BITMAP*>(CheckpointNativeStorage::View(source, sizeof(BITMAP))));
 		auto pixel = std::make_shared<Pixel>();
 		pixel->bitmap = *source; pixel->table = *source->vtable;
 		pixel->bitmap.vtable = &pixel->table;
@@ -180,11 +182,11 @@ namespace RTE {
 			CheckpointCloneCost paths("bitmap paths");
 			for (int depth = 0; depth < 2; ++depth) {
 				int requested = depth;
-				if (const auto* path = ContentFile::LoadedBitmapPath(source, requested)) pixel->paths[depth] = *path;
+				if (const auto* path = ContentFile::LoadedBitmapPath(address, requested)) pixel->paths[depth] = *path;
 			}
 		}
 		const int depth = bitmap_color_depth(source);
-		if ((pixel->paths[0] || pixel->paths[1]) && source->w > 0 && source->h > 0 && (depth == 8 || depth == 15 || depth == 16 || depth == 24 || depth == 32)) {
+		if (!CheckpointNativeStorage::Reading() && (pixel->paths[0] || pixel->paths[1]) && source->w > 0 && source->h > 0 && (depth == 8 || depth == 15 || depth == 16 || depth == 24 || depth == 32)) {
 			// A loaded image keeps its pixels while it is loaded (a save names its file and a load refuses other pixels), so the saver reads it.
 			pixel->loaded = source;
 			pixel->rowBytes = static_cast<size_t>(source->w) * ((depth + 7) / 8);

@@ -61,6 +61,7 @@ namespace {
 		static PixelAllocations& Get() { static auto* owner = [] { auto* value = new PixelAllocations; storage.store(value); return value; }(); return *owner; }
 		static void* Allocate(size_t bytes) noexcept {
 			try {
+				if (CheckpointNativeStorage::Enabled()) return CheckpointNativeStorage::Allocate(bytes, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
 				auto allocation = std::make_shared<CheckpointPagePool::Allocation>(bytes);
 				void* data = allocation->Data();
 				auto& storage = Get();
@@ -71,6 +72,7 @@ namespace {
 		}
 		static int Release(void* address) noexcept {
 			if (!address) return 0;
+			if (CheckpointNativeStorage::Deallocate(address)) return 1;
 			auto* owner = storage.load();
 			if (!owner) return 0;
 			auto& storage = *owner;
@@ -95,7 +97,14 @@ namespace {
 			return allocation;
 		}
 	};
-	const bool s_PixelAllocator = [] { set_bitmap_pixel_allocator(PixelAllocations::Allocate, PixelAllocations::Release); return true; }();
+	const bool s_PixelAllocator = [] {
+		set_bitmap_pixel_allocator(PixelAllocations::Allocate, PixelAllocations::Release);
+		set_bitmap_storage_allocator([]() -> int { return CheckpointNativeStorage::Enabled(); }, [](size_t bytes) noexcept -> void* {
+			try { return CheckpointNativeStorage::Allocate(bytes, __STDCPP_DEFAULT_NEW_ALIGNMENT__); }
+			catch (...) { return nullptr; }
+		}, [](void* address) noexcept -> int { return CheckpointNativeStorage::Deallocate(address); });
+		return true;
+	}();
 	std::atomic<int> s_BackBuffers{0};
 
 	BITMAP* NewBackBuffer(BITMAP* mainBitmap) {
@@ -178,6 +187,32 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::UniformRows(const BITMAP* 
 }
 
 std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::FreezeRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll) {
+	if (source && CheckpointNativeStorage::Reading()) {
+		source = static_cast<const BITMAP*>(CheckpointNativeStorage::View(source, sizeof(BITMAP)));
+		if (source->w <= 0 || source->h <= 0) return {};
+		const int depth = bitmap_color_depth(const_cast<BITMAP*>(source));
+		if (depth != 8 && depth != 15 && depth != 16 && depth != 24 && depth != 32)
+			throw std::runtime_error("Unsupported scene layer bitmap snapshot");
+		const size_t rowBytes = static_cast<size_t>(source->w) * ((depth + 7) / 8);
+		const auto* lines = static_cast<uint8_t* const*>(CheckpointNativeStorage::View(source->line, sizeof(uint8_t*) * source->h));
+		auto rows = std::make_unique<FrozenRows>();
+		rows->pages = CheckpointNativeStorage::PagesFor(lines[0], rowBytes);
+		if (!rows->pages) throw std::logic_error("bitmap pixels are outside the frozen inventory");
+		rows->sourceRows.reserve(source->h);
+		for (int row = 0; row < source->h; ++row) {
+			if (!rows->pages->Contains(lines[row], rowBytes)) throw std::logic_error("bitmap rows span unowned frozen storage");
+			rows->sourceRows.push_back(lines[row]);
+		}
+		rows->previous = previous;
+		rows->hasMarks = markedRows != nullptr; rows->markedAll = markedAll;
+		if (markedRows) rows->marked = *markedRows;
+		auto snapshot = std::make_shared<BitmapSnapshot>();
+		snapshot->width = source->w; snapshot->height = source->h; snapshot->depth = depth; snapshot->rowBytes = rowBytes;
+		snapshot->fullCopyPercent = BitmapFullCopyPercent();
+		snapshot->frozenRows = std::move(rows);
+		snapshot->frozen = true;
+		return snapshot;
+	}
 	if (source && source->w > 0 && source->h > 0) {
 		const int depth = bitmap_color_depth(const_cast<BITMAP*>(source));
 		if (depth != 8 && depth != 15 && depth != 16 && depth != 24 && depth != 32)
@@ -507,6 +542,27 @@ bool BitmapSnapshot::RunSelfTest() {
 			for (auto& reader: readers) exact = reader.get() && exact;
 			check("depth_" + std::to_string(colorDepth) + "_frozen_pixels_compare_unmarked_rows_on_workers_after_source_destruction", exact);
 		}
+		{
+			CheckpointNativeStorage::AllocationScope allocation(true);
+			BitmapPtr live(create_bitmap_ex(24, 83, 61));
+			if (!live) throw std::bad_alloc();
+			clear_to_color(live.get(), makecol24(31, 79, 127));
+			BitmapPtr child(create_sub_bitmap(live.get(), 7, 9, 29, 17));
+			if (!child) throw std::bad_alloc();
+			set_clip_rect(child.get(), 2, 3, 21, 12);
+			const auto expected = Capture(child.get())->PixelBytes();
+			const BITMAP* address = child.get();
+			const auto pages = CheckpointNativeStorage::Prepare();
+			for (const auto& part: pages) part->Arm();
+			set_clip_rect(child.get(), 0, 0, 28, 16);
+			clear_to_color(live.get(), 0);
+			child.reset(); live.reset();
+			BitmapPtr reused(create_bitmap_ex(24, 83, 61));
+			CheckpointNativeStorage::ReadScope read(pages);
+			const auto* frozen = static_cast<const BITMAP*>(CheckpointNativeStorage::View(address, sizeof(BITMAP)));
+			const auto image = Freeze(frozen);
+			check("frozen_bitmap_headers_rows_and_subimages_survive_reuse", frozen->cl == 2 && frozen->ct == 3 && frozen->cr == 22 && frozen->cb == 13 && image->PixelBytes() == expected);
+		}
 		// A layer's back buffer reaches saves before anything draws to it, so it never holds what its memory held before.
 		{
 			constexpr int width = 64, height = 64;
@@ -537,14 +593,14 @@ template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
 SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::SceneLayerImpl(const SceneLayerImpl& source, CheckpointNativeSnapshot& snapshot) :
 	Entity(source, snapshot), m_BitmapFile(source.m_BitmapFile), m_MainTexture{},
 	m_MainBitmap([&] {
-		if (source.m_BitmapClearTask.valid()) source.m_BitmapClearTask.wait();
+		if (!CheckpointNativeStorage::IsView(&source) && source.m_BitmapClearTask.valid()) source.m_BitmapClearTask.wait();
 		return snapshot.Freeze(source.m_MainBitmap);
 	}()), m_BackBitmap(snapshot.Freeze(source.m_BackBitmap)), m_BitmapClearTask{},
-	m_LastClearColor(source.m_LastClearColor), m_Drawings(source.m_Drawings), m_MainBitmapOwned(false),
+	m_LastClearColor(source.m_LastClearColor), m_Drawings(snapshot.Freeze(source.m_Drawings)), m_MainBitmapOwned(false),
 	m_MainBitmapUpdated(source.m_MainBitmapUpdated), m_DrawMasked(source.m_DrawMasked), m_WrapX(source.m_WrapX), m_WrapY(source.m_WrapY),
 	m_OriginOffset(source.m_OriginOffset), m_Offset(source.m_Offset), m_ZOrder(source.m_ZOrder),
 	m_ScrollInfo(source.m_ScrollInfo), m_ScrollRatio(source.m_ScrollRatio), m_ScaleFactor(source.m_ScaleFactor), m_ScaledDimensions(source.m_ScaledDimensions),
-	m_BitmapSnapshot(source.CaptureBitmapSnapshot(nullptr, true)), m_BitmapSnapshotDirtyRows{}, m_BitmapSnapshotAllDirty(false),
+	m_BitmapSnapshot(CheckpointNativeStorage::IsView(&source) ? BitmapSnapshot::Freeze(source.m_MainBitmap) : source.CaptureBitmapSnapshot(nullptr, true)), m_BitmapSnapshotDirtyRows{}, m_BitmapSnapshotAllDirty(false),
 	m_CheckpointInitialized(source.m_CheckpointInitialized) {}
 
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>

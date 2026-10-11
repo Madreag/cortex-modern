@@ -485,6 +485,12 @@ const void* CheckpointNativeStorage::View(const void* source, size_t bytes) {
 	throw std::logic_error("native value is outside the frozen inventory");
 }
 
+std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointNativeStorage::PagesFor(const void* source, size_t bytes) {
+	source = Original(source);
+	if (s_Read) for (const auto& pages: s_Read->pages) if (pages->Contains(source, bytes)) return pages;
+	return {};
+}
+
 const std::string* CheckpointNativeStorage::ReadString(const char* source, size_t bytes) {
 	if (!s_Read) return nullptr;
 	static const std::string empty;
@@ -551,7 +557,7 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 	return CheckpointFrozenContainersSelfTestMismatch();
 }
 
-std::string CheckpointFrozenContainersSelfTestMismatch() {
+std::string RTE::CheckpointFrozenContainersSelfTestMismatch() {
 	const auto render = []<class T>(const T& value) -> std::string {
 		if constexpr (requires { value.first; value.second; }) return std::to_string(value.first) + ":" + value.second.Value();
 		else return value.Value();
