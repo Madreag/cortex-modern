@@ -162,6 +162,7 @@ namespace RTE::CheckpointLua {
 			TValue nil; setnilV(&nil); return nil;
 		}
 		TValue RegistryValue(int reference) const {
+			if (reference < 0) { TValue nil; setnilV(&nil); return nil; }
 			const auto state = Read(State());
 			const auto globals = Read(mref(state.glref, global_State));
 			if (!tvistab(&globals.registrytv)) throw std::runtime_error("a frozen Lua registry is not a table");

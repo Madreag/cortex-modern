@@ -68,6 +68,10 @@ namespace luabind { namespace detail
 	int construct_lua_class_callback(lua_State* L);
 
 	struct class_registration;
+	class class_rep;
+	typedef void* (*checkpoint_class_metadata_fn)(const class_rep*);
+	extern LUABIND_API checkpoint_class_metadata_fn checkpoint_class_metadata;
+	extern LUABIND_API void (*checkpoint_class_metadata_delete)(void*);
 	
 	// this is class-specific information, poor man's vtable
 	// this is allocated statically (removed by the compiler)
@@ -186,6 +190,10 @@ namespace luabind { namespace detail
 
 		void get_table(lua_State* L) const { m_table.push(L); }
 		void get_default_table(lua_State* L) const { m_default_table.push(L); }
+		int checkpoint_table_reference() const { return m_table.checkpoint_reference(); }
+		int checkpoint_self_reference() const { return m_self_ref.checkpoint_reference(); }
+		const void* checkpoint_metadata() const { return m_checkpoint_metadata; }
+		void prepare_checkpoint_metadata();
 
 		void(*construct_holder() const)(void*, void*) { return m_construct_holder; }
 		void(*destructor() const)(void*) { return m_destructor; }
@@ -294,6 +302,9 @@ namespace luabind { namespace detail
 	private:
 
 		void cache_operators(lua_State*);
+		void refresh_checkpoint_metadata();
+		void* m_checkpoint_metadata = 0;
+		void (*m_checkpoint_metadata_delete)(void*) = 0;
 
 		// this is a pointer to the type_info structure for
 		// this type

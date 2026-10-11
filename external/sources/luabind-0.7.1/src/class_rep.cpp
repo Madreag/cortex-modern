@@ -30,6 +30,8 @@ using namespace luabind::detail;
 
 namespace luabind { namespace detail
 {
+	checkpoint_class_metadata_fn checkpoint_class_metadata = 0;
+	void (*checkpoint_class_metadata_delete)(void*) = 0;
 	struct method_name
 	{
 		method_name(char const* n): name(n) {}
@@ -157,6 +159,26 @@ luabind::detail::class_rep::class_rep(lua_State* L, const char* name)
 
 luabind::detail::class_rep::~class_rep()
 {
+	if (m_checkpoint_metadata) m_checkpoint_metadata_delete(m_checkpoint_metadata);
+}
+
+void luabind::detail::class_rep::prepare_checkpoint_metadata()
+{
+	if (!m_checkpoint_metadata) refresh_checkpoint_metadata();
+}
+
+void luabind::detail::class_rep::refresh_checkpoint_metadata()
+{
+	void* replacement = 0;
+	try { replacement = checkpoint_class_metadata ? checkpoint_class_metadata(this) : 0; }
+	catch (...) {
+		if (m_checkpoint_metadata) m_checkpoint_metadata_delete(m_checkpoint_metadata);
+		m_checkpoint_metadata = 0;
+		throw;
+	}
+	if (m_checkpoint_metadata) m_checkpoint_metadata_delete(m_checkpoint_metadata);
+	m_checkpoint_metadata = replacement;
+	m_checkpoint_metadata_delete = checkpoint_class_metadata_delete;
 }
 
 // leaves object on lua stack
@@ -968,6 +990,7 @@ void luabind::detail::class_rep::add_base_class(const luabind::detail::class_rep
 
 	// also, save the baseclass info to be used for typecasts
 	m_bases.push_back(binfo);
+	refresh_checkpoint_metadata();
 }
 
 int luabind::detail::class_rep::super_callback(lua_State* L)

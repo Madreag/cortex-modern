@@ -319,6 +319,7 @@ namespace RTE {
 
 		/// Exposes cached functions and object callbacks to the script graph.
 		void CaptureScriptCallbacks(uint64_t liveSerial = 0, CheckpointLua::CallbackImage* deferredObjects = nullptr);
+		void PrepareCheckpointBindings();
 
 		/// Rebinds cached functions and object callbacks from the restored graph.
 		/// @param rebound Filled with the objects whose callbacks the graph carried and that took them.

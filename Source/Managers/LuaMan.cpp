@@ -81,6 +81,7 @@ extern "C" {
 #undef LoadBitmap
 
 #include "CheckpointLuaHeap.h"
+#include "CheckpointLuaBindings.h"
 #include "CheckpointLuaView.h"
 #include "CheckpointLuaThread.h"
 #include "CheckpointLuaAddresses.h"
@@ -7670,6 +7671,24 @@ bool LuaStateWrapper::RestoreLegacyScriptObjectFields(long uniqueID, const std::
 // Set while a round's start scripts are captured or laid down.
 static bool s_RoundStartScripts = false;
 
+void LuaStateWrapper::PrepareCheckpointBindings() {
+	if (!CheckpointNativeStorage::Enabled()) return;
+	std::lock_guard lock(GetMutex());
+	const int top = lua_gettop(m_State);
+	struct RestoreStack { lua_State* state; int top; ~RestoreStack() { lua_settop(state, top); } } restore{m_State, top};
+	// A class keeps its own registry reference even when a mod changes its metatable.
+	CheckpointLua::ForEachCapturedUserdata(m_State, [this](GCudata* value) {
+		if (value->len != sizeof(luabind::detail::class_rep)) return;
+		auto* type = static_cast<luabind::detail::class_rep*>(uddata(value));
+		const int reference = type->checkpoint_self_reference();
+		if (reference < 0) return;
+		lua_rawgeti(m_State, LUA_REGISTRYINDEX, reference);
+		const bool declared = lua_touserdata(m_State, -1) == type;
+		lua_pop(m_State, 1);
+		if (declared) type->prepare_checkpoint_metadata();
+	});
+}
+
 void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial, CheckpointLua::CallbackImage* deferredObjects) {
 	const int top = lua_gettop(m_State);
 	FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats;
@@ -8323,6 +8342,7 @@ bool LuaStateWrapper::RunNumericPolicySelfTest() {
 
 void LuaStateWrapper::Initialize() {
 	FloatingPointEnvironment::Enter();
+	CheckpointLua::BindingMetadata::Install();
 	if (luaJIT_numeric_policy() != (LUAJIT_NUMERIC_DUAL | LUAJIT_NUMERIC_DOUBLE | (sizeof(void*) == 8 ? LUAJIT_NUMERIC_GC64 : 0))) {
 		RTEAbort("LuaJIT numeric policy mismatch");
 		std::abort();
@@ -9665,6 +9685,33 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			exact = tvisfunc(&function) && image.FunctionUpvalue(funcV(&function), 0).n == 71 && frozen->GetFilePath() == "frozen callback";
 		}
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " frozen_callback_handles_survive_live_unref_and_collection" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
+		LuaStateWrapper bindingState;
+		{
+			CheckpointNativeStorage::AllocationScope ordinary(false);
+			bindingState.Initialize();
+		}
+		CheckpointNativeStorage::AllocationScope allocations(true);
+		const bool planted = bindingState.RunScriptString("class 'FrozenBindingMetadataLongClassName' (Vector)") == 0;
+		bindingState.PrepareCheckpointBindings();
+		lua_getglobal(bindingState.m_State, "FrozenBindingMetadataLongClassName");
+		const auto* source = static_cast<const luabind::detail::class_rep*>(lua_touserdata(bindingState.m_State, -1));
+		lua_pop(bindingState.m_State, 1);
+		auto pages = CheckpointNativeStorage::PrepareInventory();
+		auto heap = bindingState.m_CheckpointHeap->PrepareFreeze();
+		if (!pages->Arm() || !heap->Arm(*bindingState.m_CheckpointHeap)) throw std::runtime_error("could not freeze the binding metadata probe");
+		const auto image = heap->Image();
+		bindingState.Destroy();
+		bool exact = planted && source;
+		if (exact) {
+			CheckpointNativeStorage::ReadScope read(pages->Pages());
+			CheckpointLua::FrozenBindings bindings(image);
+			const TValue members = bindings.Members(source);
+			exact = bindings.Metadata(source).name == "FrozenBindingMetadataLongClassName" && bindings.DerivesFrom(source, "Vector") && tvistab(&members);
+		}
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " frozen_binding_metadata_survives_source_state_close" << std::endl;
 		checkpointValues = exact && checkpointValues;
 	}
 	{
