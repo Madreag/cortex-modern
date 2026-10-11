@@ -7,6 +7,7 @@
 #include "SLTerrain.h"
 #include "ThreadMan.h"
 #include "CheckpointArchive.h"
+#include "CheckpointNativeSnapshot.h"
 #include "CheckpointImage.h"
 #include "FaultInjection.h"
 #include "System.h"
@@ -42,6 +43,11 @@
 #include <unordered_set>
 
 using namespace RTE;
+
+PathRequest::PathRequest(const PathRequest& source, CheckpointNativeSnapshot& snapshot) :
+	complete(source.complete), status(source.status), path(snapshot.Freeze(source.path)),
+	pathLength(source.pathLength), totalCost(source.totalCost), startPos(source.startPos), targetPos(source.targetPos),
+	horizonGeneration(source.horizonGeneration) {}
 
 namespace {
 	struct PathingRequestScope {

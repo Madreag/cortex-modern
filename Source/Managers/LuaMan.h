@@ -24,7 +24,7 @@ struct lua_State;
 union TValue;
 
 namespace RTE {
-	namespace CheckpointLua { class HeapOwner; class NativeCache; class Snapshot; class ScratchImage; struct CopyReceipt; struct GraphWorker; struct CallbackImage; struct CallbackRoots; }
+	namespace CheckpointLua { class HeapOwner; class NativeCache; class Snapshot; class ScratchImage; class Boundary; struct CopyReceipt; struct GraphWorker; struct CallbackImage; struct CallbackRoots; }
 	struct GraphDirt;
 
 	/// Elapsed costs of the frozen states; concurrent states overlap.
@@ -96,6 +96,8 @@ namespace RTE {
 	class Scene;
 	class GAScripted;
 	class CheckpointText;
+	class CheckpointNativeSnapshot;
+	enum class CheckpointScope : uint8_t;
 	class Entity;
 	struct PathRequest;
 	struct LuaPathCallbackContext;
@@ -296,6 +298,9 @@ namespace RTE {
 		CheckpointLua::CopyReceipt TakeFrozenCopyReceipt();
 		/// Captures frozen states in parallel; whileWaiting runs on the caller, false means capture failed.
 		static bool CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats, const std::function<void()>& whileWaiting = {});
+		static bool CapturePreparedScriptGraphs(const CheckpointLua::Boundary& boundary, std::span<const LuaStateWrapper* const> states,
+		    const std::shared_ptr<CheckpointNativeSnapshot>& snapshot, std::vector<CheckpointText>& graphs,
+		    std::vector<CheckpointScope>& scopes, std::vector<std::string>& problems);
 
 		/// The unique ids of the objects a graph text holds fields for.
 		std::vector<long> ListScriptGraphRoots(const std::string& text);
@@ -788,6 +793,7 @@ namespace RTE {
 
 		/// Pushes a Lua state's queued callbacks and allocation cursor.
 		void PushPathCallbacks(lua_State* state);
+		void PushPathCallbacks(lua_State* state, const lua_State* source, CheckpointNativeSnapshot* snapshot);
 
 		/// Restores a Lua state's queue from the table at index.
 		bool RestorePathCallbacks(lua_State* state, int index);

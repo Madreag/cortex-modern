@@ -101,6 +101,14 @@ namespace RTE::CheckpointLua {
 			for (const auto& base: CheckpointValues(metadata.bases)) if (base.base && DerivesFrom(base.base, name)) return true;
 			return false;
 		}
+		std::optional<ptrdiff_t> BaseOffset(const luabind::detail::class_rep* source, std::string_view name) const {
+			const auto& metadata = Metadata(source);
+			if (metadata.name == name) return 0;
+			for (const auto& base: CheckpointValues(metadata.bases)) {
+				if (base.base) if (const auto offset = BaseOffset(base.base, name)) return base.pointer_offset + *offset;
+			}
+			return std::nullopt;
+		}
 		TValue Members(const luabind::detail::class_rep* source) const { return m_Heap.RegistryValue(Class(source)->checkpoint_table_reference()); }
 		const luabind::detail::class_rep::callback* Getter(const luabind::detail::class_rep* source, std::string_view name) const {
 			const auto* callbacks = Metadata(source).callbacks.get();

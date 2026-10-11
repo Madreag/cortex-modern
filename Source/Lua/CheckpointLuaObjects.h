@@ -100,7 +100,6 @@ namespace RTE::CheckpointLua {
 			auto* targetClass = static_cast<luabind::detail::class_rep*>(lua_touserdata(m_State, -1));
 			lua_pop(m_State, 1);
 			void* native = source->ptr() ? m_Copy(source->crep(), source->ptr()) : nullptr;
-			if (source->ptr() && !native) throw std::runtime_error("a saved native handle has no private value");
 			void* storage = lua_newuserdata(m_State, sizeof(luabind::detail::object_rep));
 			auto* target = new(storage) luabind::detail::object_rep(native, targetClass, source->flags() & ~luabind::detail::object_rep::checkpoint_trap, [](void*) {});
 			const int destination = lua_gettop(m_State);

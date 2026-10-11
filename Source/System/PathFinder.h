@@ -22,9 +22,12 @@ namespace RTE {
 
 	class Scene;
 	class Material;
+	class CheckpointNativeSnapshot;
 
 	/// Information required to make an async pathing request.
 	struct PathRequest : CheckpointNativeAllocated {
+		PathRequest() = default;
+		PathRequest(const PathRequest& source, CheckpointNativeSnapshot& snapshot);
 		bool complete = false;
 		int status = MicroPather::NO_SOLUTION;
 		CheckpointList<Vector> path;

@@ -53,6 +53,7 @@
 #include "FrameMan.h"
 #include "BitmapCheckpoint.h"
 #include "BuyMenuGUI.h"
+#include "ObjectPickerGUI.h"
 #include "SceneEditorGUI.h"
 #include "GUIBanner.h"
 #include "GUICheckpoint.h"
@@ -196,6 +197,10 @@ namespace {
 	uint64_t ScriptGraphBirthHorizon(const CheckpointLua::Snapshot& heap) {
 		const TValue peer = heap.RegistryLightUserdataValue(&s_PeerScriptBirthKey);
 		return std::max(heap.StateSerial(), tvisnumber(&peer) ? static_cast<uint64_t>(numberVnum(&peer)) : uint64_t{0});
+	}
+	uint64_t ScriptBirthCounter(const CheckpointLua::Snapshot& heap, const void* key) {
+		const TValue value = heap.RegistryLightUserdataValue(key);
+		return tvisnumber(&value) ? static_cast<uint64_t>(numberVnum(&value)) : uint64_t{0};
 	}
 
 	class ScriptBirthDomainScope {
@@ -7833,6 +7838,148 @@ CheckpointLua::CallbackRoots LuaStateWrapper::RebuildFrozenScriptCallbacks(const
 	return {object(roots), object(callbacks), perPeer};
 }
 
+bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary& boundary, std::span<const LuaStateWrapper* const> states,
+    const std::shared_ptr<CheckpointNativeSnapshot>& snapshot, std::vector<CheckpointText>& graphs,
+    std::vector<CheckpointScope>& scopes, std::vector<std::string>& problems) {
+	if (!CheckpointNativeStorage::Reading() || states.size() != boundary.StateCount() || !snapshot)
+		throw std::logic_error("saved script graphs need their frozen world and states");
+	snapshot->SealBoundary();
+	LuaScriptGraphNativeCaptureScope lookups;
+	LuaScriptGraphNativeCaptureScope::BuildOwners(lookups.Current());
+	const auto known = g_MovableMan.SnapshotKnownObjects();
+	graphs.resize(states.size()); scopes.resize(states.size());
+	const auto origin = std::chrono::steady_clock::now();
+	for (size_t index = 0; index < states.size(); ++index) {
+		const auto started = std::chrono::steady_clock::now();
+		FrozenCaptureStats part;
+		const uint64_t cpu = CheckpointThreadCpuUnits(), accounted = CheckpointThreadAccountedCpu();
+		const auto* source = CheckpointNativeStorage::Source(states[index]);
+		const auto* sourceValues = CheckpointNativeStorage::Source(static_cast<const CheckpointState*>(source->CheckpointOwnedValues()));
+		if (!sourceValues) throw std::logic_error("a saved script state has no owned values");
+		LuaStateWrapper worker;
+		auto roots = snapshot->ReadValues();
+		const auto views = CheckpointNativeStorage::CurrentViews();
+		roots.insert(roots.end(), views.roots.begin(), views.roots.end());
+		roots.push_back({states[index], &worker, sizeof(worker), true});
+		CheckpointNativeStorage::ReadScope read({true, views.pages, roots, views.privateValues, views.owner});
+		worker.Initialize(); worker.LoadScriptGraphHelper();
+		worker.CheckpointStateValues().randomGenerator = sourceValues->randomGenerator;
+		lua_State* const state = worker.GetLuaState();
+		const auto heap = boundary.LuaHeap(index).WithPrivate(worker.m_CheckpointHeap->PrivateReader());
+		CheckpointLua::FrozenBindings bindings(heap, &boundary.Bindings());
+		part.nativeSetupUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+		CheckpointLua::ProtectedCall(state, [&] {
+			const auto copy = [&](const luabind::detail::class_rep* type, const void* pointer) -> void* {
+				const auto started = std::chrono::steady_clock::now();
+				struct Cost {
+					FrozenCaptureStats& part; std::chrono::steady_clock::time_point started; uint64_t cpu;
+					~Cost() { ++part.userdata; part.nativeUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count(); part.nativeCpu += CheckpointThreadCpuUnits() - cpu; }
+				} cost{part, started, CheckpointThreadCpuUnits()};
+				if (bindings.Class(type)->type() == LUABIND_TYPEID(LuaStateWrapper)) return &worker;
+				if (const auto offset = bindings.BaseOffset(type, "Entity")) {
+					const auto* entity = reinterpret_cast<const Entity*>(static_cast<const char*>(pointer) + *offset);
+					if (bindings.DerivesFrom(type, "MovableObject") && !LuaScriptGraphNativeCaptureScope::Current()->Known(static_cast<const MovableObject*>(entity))) return nullptr;
+					return reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
+				}
+				const auto value = [&]<class T>(T*) -> void* {
+					const auto* source = static_cast<const T*>(pointer);
+					if constexpr (requires { T(*source, *snapshot); }) return snapshot->ValueObject(source);
+					else return snapshot->CopyValue(source);
+				};
+				const auto id = bindings.Class(type)->type();
+				if (id == LUABIND_TYPEID(Vector)) return value(static_cast<Vector*>(nullptr));
+				if (id == LUABIND_TYPEID(Timer)) return value(static_cast<Timer*>(nullptr));
+				if (id == LUABIND_TYPEID(Matrix)) return value(static_cast<Matrix*>(nullptr));
+				if (id == LUABIND_TYPEID(Box)) return value(static_cast<Box*>(nullptr));
+				if (id == LUABIND_TYPEID(Scene::Area)) return value(static_cast<Scene::Area*>(nullptr));
+				if (id == LUABIND_TYPEID(Controller)) return value(static_cast<Controller*>(nullptr));
+				if (id == LUABIND_TYPEID(Gib)) return value(static_cast<Gib*>(nullptr));
+				if (id == LUABIND_TYPEID(SoundSet)) return value(static_cast<SoundSet*>(nullptr));
+				if (id == LUABIND_TYPEID(LimbPath)) return value(static_cast<LimbPath*>(nullptr));
+				if (id == LUABIND_TYPEID(PathRequest)) return value(static_cast<PathRequest*>(nullptr));
+				if (id == LUABIND_TYPEID(BuyMenuGUI)) return value(static_cast<BuyMenuGUI*>(nullptr));
+				if (id == LUABIND_TYPEID(SceneEditorGUI)) return value(static_cast<SceneEditorGUI*>(nullptr));
+				if (id == LUABIND_TYPEID(ObjectPickerGUI)) return value(static_cast<ObjectPickerGUI*>(nullptr));
+				if (id == LUABIND_TYPEID(GUIBanner)) return value(static_cast<GUIBanner*>(nullptr));
+				if (id == LUABIND_TYPEID(SLBackground)) return value(static_cast<SLBackground*>(nullptr));
+				return const_cast<void*>(CheckpointNativeStorage::ViewObject(pointer));
+			};
+			const auto heapStarted = std::chrono::steady_clock::now();
+			const uint64_t heapCpu = CheckpointThreadCpuUnits();
+			CheckpointLua::SavedObjects objects(state, heap, boundary.Bindings(), copy);
+			objects.Prepare();
+			auto& values = objects.Values();
+			const TValue globals = heap.GlobalValue("_G");
+			values.Push(globals); lua_replace(state, LUA_GLOBALSINDEX);
+			values.Finish();
+			part.heapUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - heapStarted).count() - part.nativeUs;
+			part.heapCpu = CheckpointThreadCpuUnits() - heapCpu - part.nativeCpu;
+			SetScriptBirthCounter(state, &s_SharedScriptBirthKey, ScriptBirthCounter(heap, &s_SharedScriptBirthKey));
+			SetScriptBirthCounter(state, &s_PeerScriptBirthKey, ScriptBirthCounter(heap, &s_PeerScriptBirthKey));
+			luaJIT_set_state_serial(state, heap.StateSerial());
+			const auto callbacksStarted = std::chrono::steady_clock::now();
+			const uint64_t callbacksCpu = CheckpointThreadCpuUnits();
+			CheckpointLua::ScratchImage scratch(ScriptGraphBirthHorizon(heap));
+			const auto callbacks = RebuildFrozenScriptCallbacks(heap, scratch, sourceValues, scratch.Object({}),
+			    index == 0 ? dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity()) : nullptr, known,
+			    [&values](const TValue& table, std::string_view key) { return values.Lookup(table, key); });
+			values.UseHeap(scratch.Finish(heap));
+			values.Push(callbacks.callbacks); lua_setglobal(state, "_ScriptGraphCallbacks");
+			values.Push(callbacks.roots);
+			snapshot->MaterializeMetadata();
+			ScriptGraphCaptureScope capture(true);
+			ScriptGraphScratchScope scratchValues(state);
+			g_LuaMan.PushPathCallbacks(state, heap.State(), snapshot.get());
+			lua_getglobal(state, "_ScriptGraphCallbacks"); lua_pushvalue(state, -2); lua_setfield(state, -2, "async"); lua_pop(state, 2);
+			part.callbacksUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - callbacksStarted).count();
+			part.callbacksCpu = CheckpointThreadCpuUnits() - callbacksCpu;
+			lua_getglobal(state, "_ScriptGraph"); lua_getfield(state, -1, "serialize");
+			lua_pushvalue(state, -3); lua_pushnumber(state, static_cast<lua_Number>(ScriptGraphBirthHorizon(heap)));
+			std::unordered_set<const MovableObject*> carried;
+			const auto* previous = s_CarriedScriptOwnedObjects;
+			struct RestoreCarried {
+				const std::unordered_set<const MovableObject*>* previous;
+				~RestoreCarried() { s_CarriedScriptOwnedObjects = const_cast<std::unordered_set<const MovableObject*>*>(previous); }
+			} restoreCarried{previous};
+			s_CarriedScriptOwnedObjects = &carried;
+			const auto answersStarted = std::chrono::steady_clock::now();
+			const uint64_t answersCpu = CheckpointThreadCpuUnits();
+			const int result = lua_pcall(state, 2, 2, 0);
+			part.answerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - answersStarted).count();
+			part.nativeCpu += CheckpointThreadCpuUnits() - answersCpu;
+			if (result == LUA_ERRMEM) throw std::bad_alloc();
+			if (result) {
+				if (s_SerialBeforeCapture.contains(state)) ScriptGraphEndCapture(state);
+				throw std::runtime_error(lua_tostring(state, -1) ? lua_tostring(state, -1) : "saved script graph capture failed");
+			}
+			CollectStrings(state, -1, problems);
+			CheckpointText* text = ScriptGraphCapturedText(state, -2);
+			if (!text) throw std::runtime_error("saved script graph returned no owned text");
+			const auto finishStarted = std::chrono::steady_clock::now();
+			const uint64_t finishCpu = CheckpointThreadCpuUnits();
+			CheckpointNativeSnapshot::ReadScope nativeValues(snapshot.get());
+			graphs[index] = text->Compact();
+			part.nativeFinishUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - finishStarted).count();
+			part.nativeCpu += CheckpointThreadCpuUnits() - finishCpu;
+			scopes[index] = callbacks.perPeer ? CheckpointScope::PerPeer : CheckpointScope::Shared;
+		});
+		if (CheckpointPhaseCostsRequested()) {
+			const auto total = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+			System::PrintDiagnosticLine(std::format("[checkpoint-lua-phase] state={} start_us={} total_us={} callbacks_us={} roots_us={} native_us={} native_setup_us={} descriptor_us={} enum_us={} world_us={} answers_us={} native_finish_us={} heap_us={} heap_setup_us={} heap_watch_setup_us={} heap_watch_arm_us={} userdata={} bytes={}", index,
+			    std::chrono::duration_cast<std::chrono::microseconds>(started - origin).count(), total, part.callbacksUs, 0,
+			    part.nativeUs + part.answerUs + part.nativeFinishUs, part.nativeSetupUs, 0, 0, 0, part.answerUs, part.nativeFinishUs, part.heapUs, 0, 0, 0, part.userdata, heap.ByteCount()));
+			System::PrintDiagnosticLine(std::format("[checkpoint-lua-cpu] state={} thread={} unit={} total={} callbacks={} native={} descriptor={} heap={} accounted_100ns={}", index, CheckpointThreadIdentity(),
+#ifdef _WIN32
+			    "cycles",
+#else
+			    "ns",
+#endif
+			    CheckpointThreadCpuUnits() - cpu, part.callbacksCpu, part.nativeCpu, part.descriptorCpu, part.heapCpu, CheckpointThreadAccountedCpu() - accounted));
+		}
+	}
+	return problems.empty();
+}
+
 void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial, CheckpointLua::CallbackImage* deferredObjects) {
 	const int top = lua_gettop(m_State);
 	FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats;
@@ -14516,12 +14663,31 @@ void LuaMan::EndPathCallbackCapture() {
 }
 
 void LuaMan::PushPathCallbacks(lua_State* state) {
-	const auto context = m_PathCallbackCapture ? m_PathCallbackCapture : m_PathCallbacks;
+	PushPathCallbacks(state, state, nullptr);
+}
+
+void LuaMan::PushPathCallbacks(lua_State* state, const lua_State* source, CheckpointNativeSnapshot* snapshot) {
+	const auto* values = snapshot ? CheckpointNativeStorage::Source(this) : this;
+	const auto context = values->m_PathCallbackCapture ? values->m_PathCallbackCapture : values->m_PathCallbacks;
 	int nextId;
 	uint64_t nextOrder;
 	std::vector<LuaPathCallbackContext::Callback> callbacks;
 	std::vector<LuaPathCallbackContext::Request> pending;
-	{
+	if (snapshot) {
+		const auto* saved = CheckpointNativeStorage::Source(context.get());
+		const auto* found = CheckpointFind(saved->nextId, const_cast<lua_State*>(source));
+		nextId = found ? found->second : 0;
+		nextOrder = 0;
+		for (const auto& callback: CheckpointValues(saved->callbacks)) if (callback.state == source) {
+			callbacks.push_back({state, callback.id, callback.order, std::shared_ptr<const PathRequest>(snapshot->ValueObject(callback.result.get()), [](const PathRequest*) {})});
+			nextOrder = std::max(nextOrder, callback.order + 1);
+		}
+		for (const auto& request: CheckpointValues(saved->pending)) if (request.state == source) {
+			auto copy = request;
+			copy.state = state; copy.scene = snapshot->Object(request.scene);
+			pending.push_back(std::move(copy));
+		}
+	} else {
 		std::scoped_lock lock(context->mutex);
 		const auto found = context->nextId.find(state);
 		nextId = found == context->nextId.end() ? 0 : found->second;
