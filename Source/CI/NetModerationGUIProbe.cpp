@@ -750,8 +750,10 @@ namespace {
 		} else if (op == "wait_public_row") {
 			auto* main = g_MenuMan.IsMainMenuInteractive() ? g_MenuMan.GetMainMenu() : nullptr;
 			std::string list; int row = -1;
-			NetDirectoryClient::GameRow game;
-			if (!main || !main->AutomationRowOf(step.at("name").get<std::string>(), list, row, &game)) return false;
+			if (!main || !main->AutomationRowOf(step.at("name").get<std::string>(), list, row)) return false;
+			const auto& games = main->AutomationGameRows();
+			Require(row >= 0 && static_cast<size_t>(row) < games.size(), "the public row is outside the displayed list");
+			const auto& game = games[static_cast<size_t>(row)];
 			observed["public_row"] = {{"list", list}, {"row", row}, {"state", game.state}, {"joinable", game.joinable},
 			    {"seats_free", game.seatsFree}, {"seats_held", game.seatsHeld}, {"reason", game.reason}};
 			if (step.contains("state") && game.state != step.at("state").get<std::string>()) return false;

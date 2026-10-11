@@ -5235,7 +5235,7 @@ static bool IsControlClickable(GUIControl* control) {
 	return MenuAutomation::Enabled(control);
 }
 
-bool MainMenuGUI::AutomationRowOf(const std::string& name, std::string& listName, int& row, NetDirectoryClient::GameRow* game) const {
+bool MainMenuGUI::AutomationRowOf(const std::string& name, std::string& listName, int& row) const {
 	// The list shows every engine beaconing on the network, so a scripted join names its own session's row by port.
 	const bool publicRow = name.starts_with("PublicGameRowPort");
 	if (publicRow || name.starts_with("GameRowPort")) {
@@ -5248,7 +5248,6 @@ bool MainMenuGUI::AutomationRowOf(const std::string& name, std::string& listName
 		if (found == m_GameRows.end()) return false;
 		listName = m_MultiplayerLanGamesList->GetName();
 		row = static_cast<int>(found - m_GameRows.begin());
-		if (game) *game = *found;
 		return true;
 	}
 	if (name.starts_with("GameRow")) {
