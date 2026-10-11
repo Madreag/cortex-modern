@@ -59,8 +59,22 @@ namespace {
 		std::map<uintptr_t, std::shared_ptr<CheckpointPagePool::Allocation>> values;
 		static inline std::atomic<PixelAllocations*> storage{nullptr};
 		static PixelAllocations& Get() { static auto* owner = [] { auto* value = new PixelAllocations; storage.store(value); return value; }(); return *owner; }
+		static void* AllocatePrivate(size_t bytes) {
+			void* data = std::malloc(bytes);
+			if (!data) throw std::bad_alloc();
+			try { CheckpointNativeStorage::RememberPrivate(data, bytes); }
+			catch (...) { std::free(data); throw; }
+			return data;
+		}
+		static bool ReleasePrivate(void* address) noexcept {
+			if (CheckpointNativeStorage::PrivateAllocation(address) != address) return false;
+			CheckpointNativeStorage::ForgetPrivate(address);
+			std::free(address);
+			return true;
+		}
 		static void* Allocate(size_t bytes) noexcept {
 			try {
+				if (CheckpointNativeStorage::Reading()) return AllocatePrivate(bytes);
 				if (CheckpointNativeStorage::Enabled()) return CheckpointNativeStorage::Allocate(bytes, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
 				auto allocation = std::make_shared<CheckpointPagePool::Allocation>(bytes);
 				void* data = allocation->Data();
@@ -72,6 +86,7 @@ namespace {
 		}
 		static int Release(void* address) noexcept {
 			if (!address) return 0;
+			if (ReleasePrivate(address)) return 1;
 			if (CheckpointNativeStorage::Deallocate(address)) return 1;
 			auto* owner = storage.load();
 			if (!owner) return 0;
@@ -99,10 +114,10 @@ namespace {
 	};
 	const bool s_PixelAllocator = [] {
 		set_bitmap_pixel_allocator(PixelAllocations::Allocate, PixelAllocations::Release);
-		set_bitmap_storage_allocator([]() -> int { return CheckpointNativeStorage::Enabled(); }, [](size_t bytes) noexcept -> void* {
-			try { return CheckpointNativeStorage::Allocate(bytes, __STDCPP_DEFAULT_NEW_ALIGNMENT__); }
+		set_bitmap_storage_allocator([]() -> int { return CheckpointNativeStorage::Reading() || CheckpointNativeStorage::Enabled(); }, [](size_t bytes) noexcept -> void* {
+			try { return CheckpointNativeStorage::Reading() ? PixelAllocations::AllocatePrivate(bytes) : CheckpointNativeStorage::Allocate(bytes, __STDCPP_DEFAULT_NEW_ALIGNMENT__); }
 			catch (...) { return nullptr; }
-		}, [](void* address) noexcept -> int { return CheckpointNativeStorage::Deallocate(address); });
+		}, [](void* address) noexcept -> int { return PixelAllocations::ReleasePrivate(address) || CheckpointNativeStorage::Deallocate(address); });
 		return true;
 	}();
 	std::atomic<int> s_BackBuffers{0};

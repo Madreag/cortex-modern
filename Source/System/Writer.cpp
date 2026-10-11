@@ -2249,6 +2249,28 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			}
 			check(exact, "saved_bitmap_getters_keep_owned_rows_and_aliases_after_source_death");
 		}
+		{
+			CheckpointNativeStorage::ReadScope read(CheckpointNativeStorage::ReadViews{true, {}, {}});
+			const size_t before = CheckpointNativeStorage::PrivateAllocationCount();
+			bool rollback = true;
+			for (size_t after = 0; after < 3; ++after) {
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects, after);
+				BITMAP* refused = create_bitmap_ex(8, 7, 5);
+				rollback = !refused && failure.Triggered() && rollback;
+				if (refused) destroy_bitmap(refused);
+				rollback = CheckpointNativeStorage::PrivateAllocationCount() == before && rollback;
+			}
+			BITMAP* image = create_bitmap_ex(8, 7, 5);
+			if (!image) throw std::bad_alloc();
+			clear_to_color(image, 41);
+			uint8_t pixel = 0;
+			const void* address = image;
+			const bool exact = CheckpointNativeStorage::Source(image) == image &&
+				CheckpointNativeStorage::ReadBytes(image->line[4] + 6, &pixel, 1) && pixel == 41;
+			destroy_bitmap(image);
+			check(exact && rollback && !CheckpointNativeStorage::Private(address) && CheckpointNativeStorage::PrivateAllocationCount() == before,
+				"saved_getter_bitmaps_own_and_release_private_headers_and_rows");
+		}
 
 		{
 			CheckpointBuffer::WaitForPreparedStorageRelease();

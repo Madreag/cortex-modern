@@ -87,6 +87,7 @@ namespace RTE {
 		static bool ForgetPrivate(void* address) noexcept;
 		static const void* PrivateAllocation(const void* address) noexcept;
 		static bool Private(const void* address, size_t bytes = 1) noexcept;
+		static size_t PrivateAllocationCount() noexcept;
 		static void* AllocatePrivate(size_t bytes, size_t alignment, bool aligned = false);
 		static ReadViews CurrentViews();
 		static const void* RootView(const void* source, size_t bytes = 1);

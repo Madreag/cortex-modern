@@ -740,6 +740,10 @@ bool CheckpointNativeStorage::ForgetPrivate(void* address) noexcept {
 	return s_Read && s_Read->privateValues->ranges.erase(reinterpret_cast<uintptr_t>(address)) != 0;
 }
 
+size_t CheckpointNativeStorage::PrivateAllocationCount() noexcept {
+	return s_Read ? s_Read->privateValues->ranges.size() : 0;
+}
+
 const void* CheckpointNativeStorage::PrivateAllocation(const void* address) noexcept {
 	if (!s_Read || !address) return nullptr;
 	const uintptr_t pointer = reinterpret_cast<uintptr_t>(address);
