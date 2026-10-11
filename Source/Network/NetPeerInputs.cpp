@@ -29,7 +29,8 @@ namespace RTE {
 			message.totalBytes = static_cast<uint32_t>(body.size()); message.offset = static_cast<uint32_t>(offset);
 			const size_t end = std::min(body.size(), offset + NetHostMigrationCodec::c_ChunkBytes);
 			message.bytes.assign(body.begin() + offset, body.begin() + end);
-			SendPeerFrameMessage(std::move(message), body.size() <= 4096 ? NetTransportLane::InputUnreliable : NetTransportLane::ControlReliable, onlyPeer);
+			// A requested repair must survive the missing input's original path.
+			SendPeerFrameMessage(std::move(message), NetTransportLane::ControlReliable, onlyPeer);
 		}
 	}
 
