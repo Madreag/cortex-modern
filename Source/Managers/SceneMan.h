@@ -28,6 +28,7 @@
 #define g_SceneMan SceneMan::Instance()
 
 namespace RTE {
+	class CheckpointNativeSnapshot;
 
 	class Scene;
 	class SceneLayer;
@@ -78,6 +79,7 @@ namespace RTE {
 
 		/// Owns saved scene options during multiplayer setup.
 		void PrepareCheckpointValues();
+		void RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) const;
 		const void* CheckpointOwnedValues() const { return m_OwnedCheckpointOptions.get(); }
 		static std::string CheckpointOptionsStorageSelfTestMismatch();
 		std::string SaveCheckpoint() const;
@@ -1118,8 +1120,7 @@ namespace RTE {
 		CheckpointOptions m_OrdinaryCheckpointOptions;
 		std::unique_ptr<CheckpointOptions> m_OwnedCheckpointOptions;
 		CheckpointOptions& CheckpointOptionsValues() {
-			if (CheckpointNativeStorage::Reading()) throw std::logic_error("saved scene options cannot change through a frozen view");
-			return m_OwnedCheckpointOptions ? *m_OwnedCheckpointOptions : m_OrdinaryCheckpointOptions;
+			return CheckpointNativeStorage::PrivateValue(m_OwnedCheckpointOptions ? m_OwnedCheckpointOptions.get() : &m_OrdinaryCheckpointOptions);
 		}
 		const CheckpointOptions& CheckpointOptionsValues() const {
 			return m_OwnedCheckpointOptions ? *CheckpointNativeStorage::Source(m_OwnedCheckpointOptions.get()) : m_OrdinaryCheckpointOptions;

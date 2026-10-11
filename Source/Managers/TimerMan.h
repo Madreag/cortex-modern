@@ -17,6 +17,7 @@
 #define g_TimerMan TimerMan::Instance()
 
 namespace RTE {
+	class CheckpointNativeSnapshot;
 
 	/// The centralized singleton manager of all Timers and overall timekeeping in RTE.
 	/// Uses QueryPerformanceCounter for sub-ms resolution timers and the model described in http://www.gaffer.org/game-physics/fix-your-timestep.
@@ -34,6 +35,7 @@ namespace RTE {
 		std::string SaveCheckpoint() const;
 		/// Owns the running multiplayer clock before any capture.
 		void PrepareCheckpointValues();
+		void RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) const;
 		/// Records the owned clock pointer without copying its header.
 		const void* CheckpointOwnedValues() const { return m_OwnedCheckpointValues.get(); }
 		static std::string CheckpointStorageSelfTestMismatch();
@@ -323,8 +325,7 @@ namespace RTE {
 		CheckpointState m_OrdinaryCheckpointValues{};
 		std::unique_ptr<CheckpointState> m_OwnedCheckpointValues;
 		CheckpointState& CheckpointStateValues() {
-			if (CheckpointNativeStorage::Reading()) throw std::logic_error("a frozen timer cannot update the live clock");
-			return m_OwnedCheckpointValues ? *m_OwnedCheckpointValues : m_OrdinaryCheckpointValues;
+			return CheckpointNativeStorage::PrivateValue(m_OwnedCheckpointValues ? m_OwnedCheckpointValues.get() : &m_OrdinaryCheckpointValues);
 		}
 		const CheckpointState& CheckpointStateValues() const {
 			const auto* source = m_OwnedCheckpointValues ? m_OwnedCheckpointValues.get() : &m_OrdinaryCheckpointValues;

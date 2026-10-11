@@ -3096,6 +3096,10 @@ void SceneMan::PrepareCheckpointValues() {
 	m_OwnedCheckpointOptions = std::move(prepared);
 }
 
+void SceneMan::RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) const {
+	snapshot.CopyValue(m_OwnedCheckpointOptions ? m_OwnedCheckpointOptions.get() : &m_OrdinaryCheckpointOptions);
+}
+
 std::string SceneMan::CheckpointOptionsStorageSelfTestMismatch() {
 	CheckpointNativeStorage::AllocationScope allocations(true);
 	auto values = std::make_unique<CheckpointOptions>();

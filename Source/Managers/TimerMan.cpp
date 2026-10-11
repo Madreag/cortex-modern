@@ -1,6 +1,7 @@
 #include "CheckpointArchive.h"
 #include "CheckpointFailure.h"
 #include "CheckpointFrozenContainers.h"
+#include "CheckpointNativeSnapshot.h"
 #include "TimerMan.h"
 #include "FloatingPointEnvironment.h"
 
@@ -10,6 +11,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <tuple>
 
 using namespace RTE;
 
@@ -21,6 +23,25 @@ void TimerMan::PrepareCheckpointValues() {
 	m_OrdinaryCheckpointValues.m_DeltaBuffer.clear();
 }
 
+void TimerMan::RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) const {
+	const auto fields = [](auto& values) {
+		return std::tie(values.m_StartTime, values.m_TicksPerSecond, values.m_RealTimeTicks, values.m_SimTimeTicks,
+		    values.m_SimUpdateCount, values.m_SimAccumulator, values.m_DeltaTime, values.m_DeltaTimeS,
+		    values.m_SimUpdatesSinceDrawn, values.m_DrawnSimUpdate, values.m_SimFrameBudget, values.m_SimFrameStart,
+		    values.m_LastSimUpdateStart, values.m_SimFrameBudgetSpent, values.m_SimHold, values.m_OwedTicksKept,
+		    values.m_OwedCapTickCostMS, values.m_SimSpeed, values.m_TimeScale, values.m_SimPaused, values.m_SimTimeFrozen,
+		    values.m_FreeRunSim, values.m_PaceAccruedTicks, values.m_PaceTrimmedTicks, values.m_PaceWallSeenTicks,
+		    values.m_PaceCapLostTicks, values.m_PacePausedLostTicks, values.m_PaceUpdateCalls, values.m_PaceResetCalls);
+	};
+	snapshot.RebuildValue(m_OwnedCheckpointValues ? m_OwnedCheckpointValues.get() : &m_OrdinaryCheckpointValues,
+	    [&](const CheckpointState& source) {
+		    auto value = std::make_unique<CheckpointState>();
+		    fields(*value) = fields(source);
+		    value->m_DeltaBuffer = snapshot.Freeze(source.m_DeltaBuffer);
+		    return value;
+	    });
+}
+
 std::string TimerMan::CheckpointStorageSelfTestMismatch() {
 	CheckpointNativeStorage::AllocationScope allocations(true);
 	CheckpointState ordinary{};
@@ -29,17 +50,33 @@ std::string TimerMan::CheckpointStorageSelfTestMismatch() {
 	ordinary.m_DeltaBuffer = {-0.0F, 8.25F};
 	auto owned = std::make_unique<CheckpointState>(ordinary);
 	const auto* source = owned.get();
+	TimerMan header;
+	header.m_OwnedCheckpointValues = std::move(owned);
+	CheckpointNativeStorage::Root<TimerMan> root(&header);
+	auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
 	auto inventory = CheckpointNativeStorage::PrepareInventory();
 	if (!inventory->Arm()) return "the owned timer inventory did not arm";
-	owned->m_SimTimeTicks = 903;
-	owned->m_SimUpdateCount = 61;
-	owned->m_DeltaBuffer.clear();
-	owned.reset();
-	CheckpointNativeStorage::ReadScope read(inventory->Pages());
+	root.Freeze();
+	header.m_OwnedCheckpointValues->m_SimTimeTicks = 903;
+	header.m_OwnedCheckpointValues->m_SimUpdateCount = 61;
+	header.m_OwnedCheckpointValues->m_DeltaBuffer.clear();
+	header.m_OwnedCheckpointValues.reset();
+	const std::array headers{root.Range()};
+	CheckpointNativeStorage::ReadScope read(inventory->Pages(), headers);
 	const auto* saved = CheckpointNativeStorage::Source(source);
 	const auto delta = CheckpointValues(saved->m_DeltaBuffer);
-	return saved->m_SimTimeTicks == 902 && saved->m_SimUpdateCount == 60 && delta.size() == 2 &&
-	    std::signbit(delta[0]) && delta[1] == 8.25F ? std::string() : "owned timer values changed after their source died";
+	if (saved->m_SimTimeTicks != 902 || saved->m_SimUpdateCount != 60 || delta.size() != 2 || !std::signbit(delta[0]) || delta[1] != 8.25F)
+		return "owned timer values changed after their source died";
+	auto* manager = CheckpointNativeStorage::Source(&header);
+	const std::string before = manager->SaveCheckpoint();
+	manager->RebuildCheckpointValues(*snapshot);
+	auto roots = snapshot->ReadValues(); roots.push_back(root.Range());
+	CheckpointNativeStorage::ReadScope privateValues(inventory->Pages(), roots);
+	if (manager->SaveCheckpoint() != before) return "the saved clock rebuild changed its archive";
+	manager->PauseSim(true);
+	if (!manager->CheckpointStateValues().m_SimPaused || header.m_OrdinaryCheckpointValues.m_SimPaused)
+		return "a saved timer getter changed the live clock";
+	return {};
 }
 
 void TimerMan::Clear() {
