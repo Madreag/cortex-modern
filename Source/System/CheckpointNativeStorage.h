@@ -163,7 +163,13 @@ namespace RTE {
 		CheckpointNativeAllocator select_on_container_copy_construction() const noexcept { return {}; }
 		[[nodiscard]] T* allocate(size_t count) {
 			if (count > (std::numeric_limits<size_t>::max)() / sizeof(T)) throw std::bad_array_new_length();
-			if (CheckpointNativeStorage::Reading()) return static_cast<T*>(CheckpointNativeStorage::AllocatePrivate(count * sizeof(T), alignof(T)));
+			if (CheckpointNativeStorage::Reading()) {
+				// The STL keeps its own alignment headers for large arrays.
+				T* address = std::allocator<T>{}.allocate(count);
+				try { CheckpointNativeStorage::RememberPrivate(address, count * sizeof(T)); }
+				catch (...) { std::allocator<T>{}.deallocate(address, count); throw; }
+				return address;
+			}
 			if (CheckpointNativeStorage::Enabled(m_Owned)) return static_cast<T*>(CheckpointNativeStorage::Allocate(count * sizeof(T), alignof(T)));
 			return std::allocator<T>{}.allocate(count);
 		}

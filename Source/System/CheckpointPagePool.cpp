@@ -993,6 +993,32 @@ const std::string* CheckpointNativeStorage::ReadString(const char* source, size_
 
 std::string CheckpointNativeStorage::SelfTestMismatch() {
 	{
+		CheckpointNativeAllocator<uint64_t> allocator;
+		uint64_t* values = nullptr;
+		constexpr size_t count = 2048;
+		{
+			ReadScope read(ReadViews{true, {}, {}});
+			const size_t before = PrivateAllocationCount();
+			bool refused = false;
+			{
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+				try { values = allocator.allocate(count); }
+				catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+			}
+			if (!refused || values || PrivateAllocationCount() != before) return "refused private array retained storage";
+			values = allocator.allocate(count);
+			if (!Private(values, count * sizeof(uint64_t))) return "large private array lost its saved owner";
+			values[0] = 37; values[count - 1] = 71;
+			if (values[0] != 37 || values[count - 1] != 71) return "large private array changed its values";
+			allocator.deallocate(values, count); values = nullptr;
+			if (PrivateAllocationCount() != before) return "large private array kept a released allocation";
+			values = allocator.allocate(count);
+			values[0] = 43; values[count - 1] = 79;
+		}
+		if (values[0] != 43 || values[count - 1] != 79) return "large private array lost its values after its reader closed";
+		allocator.deallocate(values, count);
+	}
+	{
 		struct Buffer { size_t bytes, alignment; std::unique_ptr<std::byte, decltype(&Deallocate)> owner; };
 		std::vector<Buffer> values;
 		for (const auto [bytes, alignment]: {std::pair<size_t, size_t>{113, 16}, {203, 32}, {1091, 64}, {3297, 1024}, {12277, 4096}, {131113, 16}}) {
