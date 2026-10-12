@@ -132,6 +132,7 @@ namespace RTE {
 			std::lock_guard lock(s_Mutex); auto& row = Find(url, install, nowMs);
 			if (nowMs < row.waits[budget].untilMs) return false;
 			if (budget == "admission" && row.pollFirst && nowMs < row.waits["general"].untilMs) return false;
+			if (budget == "heartbeat" && row.pollFirst && nowMs >= row.admissionWait.untilMs) return false;
 			if (budget == "general" && row.pollFirst) return false;
 			return true;
 		}

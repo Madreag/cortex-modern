@@ -350,7 +350,7 @@ namespace RTE {
 			host.generation = generation.get<uint32_t>();
 			host.relayEnabled = body.at("relay_enabled").get<bool>();
 			const uint64_t hostWait = body.value("host_retry_after_s", uint64_t{0});
-			host.directoryReadyMs = NetDirectoryRetry::After(NetDirectoryRetry::NowMs(), std::min<uint64_t>(hostWait, 3600) * 1000);
+			host.directoryReadyMs = hostWait == 0 ? 0 : NetDirectoryRetry::After(NetDirectoryRetry::NowMs(), std::min<uint64_t>(hostWait, 3600) * 1000);
 			if (hostWait != 0) NetDirectoryBudget::Refused(m_BaseUrl, m_InstallKey, "admission", NetDirectoryRetry::NowMs(), host.directoryReadyMs, "");
 			m_DirectoryKey = host.authority;
 			return true;

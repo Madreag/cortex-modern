@@ -262,11 +262,15 @@ def main():
                           no_missing_heartbeat=not any(event["kind"] == "heartbeat" and event["status"] == 404 for event in events))
             details.update(refused_heartbeats=len(beats), live_samples=samples, registers=len(registered))
         else:
+            until = max((event["at_ms"] + event["retry_after_s"] * 1000 for event in events
+                         if event["role"] == "host" and event["kind"] in ("issue", "signal", "signals") and event["status"] == 429), default=0)
+            resumed = [event for event in events if event["role"] == "host" and event["at_ms"] >= until]
             checks.update(waited_40s=requests.wait_from is not None and any(
                               event["kind"] == "signals" and event["status"] == 429 for event in events),
                           admitted=all("[menu-script] connected:2 -> OK" in text[role] for role in runs),
                           no_premature_refusal=all("did not answer this seat request" not in value for value in text.values()),
                           truthful_wait="The directory is busy" in reports.get("guest", {}).get("directory_wait_line", ""),
+                          admission_poll_first=bool(resumed) and resumed[0]["kind"] == "signals",
                           no_expired_seat=reports.get("host", {}).get("reconnect", {}).get("host_provisional_seats_expired") == 0)
             details.update(host_report=reports.get("host", {}))
     except Exception as error:
