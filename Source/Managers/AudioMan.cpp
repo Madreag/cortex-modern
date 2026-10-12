@@ -5212,7 +5212,7 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 			    restored.GetMusicPreEntryTime() == 0.0F && restored.GetMusicExitTime() == 0.0F &&
 			    restored.GetCheckpointIdentity() == 9144 &&
 			    restored.GetPlayingChannels()->size() == 1 && restored.GetPlayingChannels()->contains(13);
-			const std::vector<LogicalSoundVoice>& voices = restored.GetSharedLogicalVoices();
+			const auto& voices = restored.GetSharedLogicalVoices();
 			const bool playback = voices.size() == 1 && voices.front().sampleOrdinal == 0 && voices.front().sampleFrames == 38976 &&
 			    voices.front().loopStart == 0 && voices.front().loopEnd == 38975 && voices.front().sampleRate == 44100.0F &&
 			    voices.front().bus == 1 && voices.front().anchorTicks == 33332 && voices.front().anchorPosition == 0.0 &&
