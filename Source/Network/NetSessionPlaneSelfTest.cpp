@@ -51,6 +51,7 @@ namespace RTE {
 			bool delayStartup = false;
 			bool receiptGap = false;
 			uint64_t postReturnMs = 0;
+			bool laterSessionMessageFirst = false;
 		};
 		struct Wire;
 		struct Hub {
@@ -94,6 +95,7 @@ namespace RTE {
 			uint64_t receiptGapFrame = 0, receiptGapDrops = 0;
 			uint64_t receiptGapAtMs = 0, receiptGapRequestDrops = 0;
 			uint64_t tailQueuePeak = 0;
+			uint32_t delayedChatSends = 0;
 		};
 		struct Wire final : INetTransport {
 			Hub& hub;
@@ -204,8 +206,14 @@ namespace RTE {
 				const auto found = connections.find(id);
 				if (found == connections.end()) { if (error) *error = "the fixture connection is absent"; return false; }
 				auto [other, remote] = found->second;
+				uint64_t sessionDelay = 0;
 				std::vector<uint8_t> delivered = bytes;
 				NetHostMigrationMessage decision; NetHash32 key; key.fill(0x39);
+				if (hub.row.laterSessionMessageFirst && owner == 2 && NetHostMigrationCodec::Decode(bytes, key, decision) &&
+				    decision.type == NetHostMigrationMessageType::PeerSession) {
+					const auto decoded = NetProtocol::Decode(decision.bytes);
+					if (decoded.ok && std::holds_alternative<NetChat>(decoded.message.payload)) { sessionDelay = 300; ++hub.delayedChatSends; }
+				}
 				if (hub.row.receiptGap && NetHostMigrationCodec::Decode(bytes, key, decision) && RemoveReceiptGap(decision, delivered)) return true;
 #if __has_include("NetPeerSessionWire.h")
 				// The first frame requests are unavailable for one second. Sender
@@ -247,7 +255,7 @@ namespace RTE {
 							other->events.push_back({hub.now + hub.Delay(owner, other->owner), {NetTransportEventType::PacketReceived, remote, lane, delivered, {}}, false});
 				}
 #endif
-				other->events.push_back({hub.now + hub.Delay(owner, other->owner), {NetTransportEventType::PacketReceived, remote, lane, std::move(delivered), {}}, asymmetric == 2}); return true;
+				other->events.push_back({hub.now + hub.Delay(owner, other->owner) + sessionDelay, {NetTransportEventType::PacketReceived, remote, lane, std::move(delivered), {}}, asymmetric == 2}); return true;
 			}
 			void Disconnect(NetPeerId id, const std::string& reason) override {
 				const auto found = connections.find(id); if (found == connections.end()) return;
@@ -931,6 +939,7 @@ namespace RTE {
 			return true;
 		}
 		if (name == "rematch-chat") {
+			hub.row.laterSessionMessageFirst = true;
 			rounds[0]->Complete("round ended");
 			for (const uint64_t until = hub.now + 300; hub.now < until; ++hub.now) for (auto& round: rounds) round->Tick(hub.now);
 			for (auto& round: rounds) round.reset();
@@ -959,7 +968,20 @@ namespace RTE {
 			const bool canceled = !lobbies[1].IsStartCountdownRunning();
 			std::cout << "[net-session-scene] rematch-chat received=" << hostLines << " host_messages=" << lobbies[0].GetStats().messagesReceived
 			          << " joiner_messages=" << lobbies[1].GetStats().messagesReceived << " countdown=" << countdown << " canceled=" << canceled << std::endl;
-			if (hostLines != 1 || !countdown || !canceled) { *error = "the rematch lost the joiner's chat or its Start and Cancel exchange"; return false; }
+			if (hostLines != 1 || !countdown || !canceled || hub.delayedChatSends == 0) { *error = "the rematch lost the joiner's chat or its Start and Cancel exchange"; return false; }
+			const uint32_t sentBeforeQuiet = clientWire.sends;
+			for (const uint64_t until = hub.now + 1200; hub.now < until; ++hub.now) lobbies[1].Tick(hub.now - begin);
+			const uint32_t quietSends = clientWire.sends - sentBeforeQuiet;
+			if (quietSends > 64) { *error = "a silent lobby reader exceeded its bounded session window"; return false; }
+			if (!clientSession.SendChat(c_NetChatScopeAll, "back at the lobby")) { *error = "the resumed lobby chat was refused locally"; return false; }
+			unsigned resumedLines = 0;
+			for (const uint64_t until = hub.now + 2000; hub.now < until; ++hub.now) {
+				for (auto& lobby: lobbies) lobby.Tick(hub.now - begin);
+				for (const auto& line: hostSession.TakeChatEntries()) if (line.text == "back at the lobby") ++resumedLines;
+			}
+			std::cout << "[net-session-scene] lobby-order delayed_chat_sends=" << hub.delayedChatSends << " quiet_sends=" << quietSends
+			          << " resumed_chat=" << resumedLines << std::endl;
+			if (resumedLines != 1) { *error = "the lobby did not resume its chat after its reader returned"; return false; }
 			// A queued chat keeps working while the next round starts on a new key.
 			if (!clientSession.SendChat(c_NetChatScopeAll, "ready for the next round")) { *error = "the next-round chat was refused locally"; return false; }
 			const auto startRound = [&](size_t index) {
