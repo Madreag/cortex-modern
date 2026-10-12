@@ -1066,7 +1066,20 @@ namespace RTE {
 			config.peerSessionLinks = std::make_shared<NetPeerSessionLinks>();
 			config.peerSessionLinks->sessionClock = [&] { return hub.now; };
 			config.remoteTransportPeerIds[1] = returningSession.GetRemoteTransportPeerId();
-			if (!rounds[0]->AdoptPeerReturnConfig(config, *rounds[0], activation)) { *error = "the return row did not carry its committed return proof"; return false; }
+			// The new reader starts from the host's snapshot, whose activation has already been signed.
+			const auto certificate = rounds[0]->m_PeerBridgeCertificates.find({activation, 1});
+			NetHostMigrationMessage agreed; uint32_t voters = 0;
+			if (certificate == rounds[0]->m_PeerBridgeCertificates.end() ||
+			    !rounds[0]->DecodePeerBridgeCertificate(certificate->second, agreed, voters) || !rounds[0]->PeerGroupHasAuthority(voters) ||
+			    agreed.preparedFrame != 1 || agreed.frame != activation || agreed.members != std::vector<uint8_t>{2} ||
+			    agreed.configHash != config.originalRoundConfigHash || !rounds[0]->m_ReclaimTransactions.contains(2)) {
+				*error = "the return snapshot did not carry its committed activation"; return false;
+			}
+			config.initialSeatReclaims[2] = rounds[0]->m_ReclaimTransactions.at(2);
+			config.peerIncarnations[2] = config.initialSeatReclaims.at(2).seatIncarnation;
+			if (config.initialSeatReclaims.at(2).activationFrame != activation || config.peerIncarnations.at(2) != 2) {
+				*error = "the return snapshot changed its activation or player incarnation"; return false;
+			}
 			rounds[1] = std::make_unique<NetLockstepCoordinator>();
 			if (!rounds[1]->Start(returningWire, config, error)) return false;
 			rounds[1]->DeferStopsToTickBoundary();
