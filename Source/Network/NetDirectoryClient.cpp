@@ -223,6 +223,7 @@ namespace RTE {
 		m_RequestKind = RequestKind::None;
 		m_Listed = false;
 		m_ConnectionProtocolRefused = false;
+		m_SessionGone = false;
 		m_SessionId.clear();
 		m_Token.clear();
 		m_Row.resumeSessionId.clear();

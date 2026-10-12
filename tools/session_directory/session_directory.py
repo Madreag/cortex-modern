@@ -2118,7 +2118,7 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                 self._send(413, {"error": "payload_too_large"})
             elif isinstance(exc, ValueError):
                 self._send(400, {"error": "malformed_json"})
-            elif isinstance(exc, ConnectionError):
+            elif isinstance(exc, (ConnectionError, ssl.SSLEOFError)):
                 # The peer drops a long poll it no longer needs; that is the client's call, not a server error.
                 LOGGER.info("client aborted %s", redact_log_url(self.path))
                 self.close_connection = True
