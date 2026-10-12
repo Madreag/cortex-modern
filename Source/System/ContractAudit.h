@@ -856,6 +856,17 @@ Field(path + ".NetGamePlaceBrain.module", object.module);
 Field(path + ".NetGamePlaceBrain.hFlipped", object.hFlipped);
 Field(path + ".NetGamePlaceBrain.addedInventory", object.addedInventory);
 }
+void Visit(const GameActivity::SeatBrain& object, const std::string& path) {
+Field(path + ".NetGamePlaceBrain.team", object.team);
+Field(path + ".NetGamePlaceBrain.player", object.player);
+Field(path + ".NetGamePlaceBrain.posX", object.posX);
+Field(path + ".NetGamePlaceBrain.posY", object.posY);
+Field(path + ".NetGamePlaceBrain.className", object.className);
+Field(path + ".NetGamePlaceBrain.preset", object.preset);
+Field(path + ".NetGamePlaceBrain.module", object.module);
+Field(path + ".NetGamePlaceBrain.hFlipped", object.hFlipped);
+Field(path + ".NetGamePlaceBrain.addedInventory", object.addedInventory);
+}
 void Visit(const GameActivity::Delivery& object, const std::string& path) {
 Field(path + ".GameActivity::Delivery.pCraft", object.pCraft);
 Field(path + ".GameActivity::Delivery.orderedByPlayer", object.orderedByPlayer);

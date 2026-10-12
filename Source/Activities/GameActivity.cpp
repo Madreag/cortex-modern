@@ -3942,6 +3942,30 @@ std::string GameActivity::SaveCheckpoint() const {
     return writer.Text();
 }
 
+GameActivity::SeatBrain::SeatBrain(const NetGamePlaceBrain& placement) :
+    team(placement.team), player(placement.player), posX(placement.posX), posY(placement.posY), className(placement.className), preset(placement.preset),
+    module(placement.module), hFlipped(placement.hFlipped) {
+	addedInventory.reserve(placement.addedInventory.size());
+	for (const auto& [itemClass, itemPreset, itemModule]: placement.addedInventory) addedInventory.push_back({itemClass, itemPreset, itemModule});
+}
+
+GameActivity::SeatBrain::operator NetGamePlaceBrain() const {
+	NetGamePlaceBrain placement;
+	placement.team = team; placement.player = player; placement.posX = posX; placement.posY = posY;
+	placement.className = className.Value(); placement.preset = preset.Value(); placement.module = module.Value(); placement.hFlipped = hFlipped;
+	placement.addedInventory.reserve(addedInventory.size());
+	for (const auto& item: addedInventory) placement.addedInventory.push_back({item[0].Value(), item[1].Value(), item[2].Value()});
+	return placement;
+}
+
+GameActivity::SeatBrain GameActivity::SeatBrain::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	SeatBrain brain;
+	brain.team = team; brain.player = player; brain.posX = posX; brain.posY = posY;
+	brain.className = className; brain.preset = preset; brain.module = module; brain.hFlipped = hFlipped;
+	brain.addedInventory = snapshot.Freeze(addedInventory);
+	return brain;
+}
+
 GameActivity::Delivery GameActivity::Delivery::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
 	return {snapshot.Object(pCraft), orderedByPlayer, landingZone, multiOrderYOffset,
 		delay, Timer(timer, snapshot)};

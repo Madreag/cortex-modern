@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
 
 #include <string>
 #include <string_view>
@@ -60,6 +61,26 @@ namespace RTE {
 			void AssignCheckpointNative(const Delivery& source, CheckpointNativeSnapshot& snapshot);
 			friend Delivery FreezeCheckpointValue(const Delivery& source, CheckpointNativeSnapshot& snapshot) { return source.FreezeCheckpointNative(snapshot); }
 			friend void AssignCheckpointValue(Delivery& value, const Delivery& source, CheckpointNativeSnapshot& snapshot) { value.AssignCheckpointNative(source, snapshot); }
+		};
+
+		/// A seat's committed brain placement, kept on owned pages so a saver reads it frozen.
+		struct SeatBrain {
+			int32_t team = 0;
+			int32_t player = -1; //!< The seat the brain belongs to; a team can hold several.
+			float posX = 0.0F;
+			float posY = 0.0F;
+			CheckpointString className;
+			CheckpointString preset;
+			CheckpointString module;
+			bool hFlipped = false;
+			CheckpointVector<std::array<CheckpointString, 3>> addedInventory;
+
+			SeatBrain() = default;
+			SeatBrain(const NetGamePlaceBrain& placement);
+			operator NetGamePlaceBrain() const;
+			bool operator==(const SeatBrain&) const = default;
+			SeatBrain FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const;
+			friend SeatBrain FreezeCheckpointValue(const SeatBrain& source, CheckpointNativeSnapshot& snapshot) { return source.FreezeCheckpointNative(snapshot); }
 		};
 
 		/// Public member variable, method and friend function declarations
@@ -849,7 +870,7 @@ namespace RTE {
 		bool BuildLockstepSeatBrains();
 		static constexpr long c_SetupEditorUidReserve = 65536; //!< Ids a peer's own setup editor may spend before the shared ones resume.
 		std::array<bool, Players::MaxPlayerCount> m_LockstepPlacementSubmitted{}; //!< Per-seat, local only: this peer has committed that seat's placement.
-		std::array<NetGamePlaceBrain, Players::MaxPlayerCount> m_LockstepSeatBrains{}; //!< Per-seat committed placement; player < 0 means none yet.
+		std::array<SeatBrain, Players::MaxPlayerCount> m_LockstepSeatBrains{}; //!< Per-seat committed placement; player < 0 means none yet.
 		long m_LockstepPlacementUidBase = 0; //!< The unique-id counter as the editing phase opened, identical on every peer.
 		bool m_LockstepPlacementSeeded = false; //!< The one-time seed pass has run for this editing phase.
 
