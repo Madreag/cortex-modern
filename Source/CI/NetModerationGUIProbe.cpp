@@ -1667,16 +1667,12 @@ namespace {
 					event.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.motion.which = 1;
 					event.motion.x = g_WindowMan.GetResX() / 2; event.motion.y = g_WindowMan.GetResY() / 2;
 					event.motion.xrel = probe.panDirection * probe.panSpeed / g_UInputMan.GetMouseSensitivity();
-					// Rest while the last vertical motion reaches the committed input, then correct the height again.
 					const uint64_t tick = g_TimerMan.GetSimUpdateCount();
-					const bool steer = !probe.panSelecting || tick >= probe.panSteerTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4;
-					if (steer) {
-						const float error = probe.panY - cursor.m_Y;
-						// Finish with a whole mouse correction, then wait for its committed input.
-						probe.panSteerY = std::abs(error) > 2.0F ? (error < 0 ? -1.0F : 1.0F) * std::clamp(std::abs(error), 4.0F, 20.0F) : 0.0F;
-						probe.panSteerTick = tick;
-					}
-					event.motion.yrel = steer ? probe.panSteerY / g_UInputMan.GetMouseSensitivity() : 0;
+					const float error = probe.panY - cursor.m_Y;
+					// Sustain small mouse movements until the actual cursor reaches the target band.
+					probe.panSteerY = std::abs(error) > 2.0F ? std::clamp(error, -2.0F, 2.0F) : 0.0F;
+					probe.panSteerTick = tick;
+					event.motion.yrel = probe.panSteerY / g_UInputMan.GetMouseSensitivity();
 					Push(event);
 					if (!probe.panSelecting) probe.panTick = g_TimerMan.GetSimUpdateCount();
 					probe.panSelecting = true;
