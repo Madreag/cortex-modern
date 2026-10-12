@@ -4169,7 +4169,7 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 	g_NetMatchService.Update();
 	// A rematch needs another player; an empty session keeps the completed result on screen.
 	if (g_NetMatchService.GetState() == NetMatchServiceState::Completed && !g_NetMatchService.NeedsHostOptionsCorrection() &&
-	    g_NetMatchService.HasRematchPeer()) {
+	    g_NetMatchService.NeedsRematchAttempt()) {
 		g_NetMatchService.ReturnToLobby();
 	}
 	const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();

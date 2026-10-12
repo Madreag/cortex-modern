@@ -886,9 +886,10 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
-	bool NetMatchService::HasRematchPeer() const {
+	bool NetMatchService::NeedsRematchAttempt() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		return m_Session && m_Session->IsReady() && (!m_IsHost || m_Session->GetReadyPeerCount() != 0);
+		// A client still resolves a lost next lobby through ReturnToLobby.
+		return !m_IsHost || !m_LastMatchSummary || (m_Session && m_Session->GetReadyPeerCount() != 0);
 	}
 
 	bool NetMatchService::ReturnToLobby(std::string* error) {

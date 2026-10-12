@@ -590,7 +590,7 @@ namespace RTE {
 		/// Reconvenes a completed match's still-connected session in the lobby for a rematch.
 		/// Fails (and settles the service into Failed) when the session was lost.
 		bool ReturnToLobby(std::string* error = nullptr);
-		bool HasRematchPeer() const;
+		bool NeedsRematchAttempt() const;
 
 		/// Recovers a desynced match: the host snapshots its state and streams it through the lobby
 		/// round; every peer relaunches from the identical file. Requires the session to be alive.
