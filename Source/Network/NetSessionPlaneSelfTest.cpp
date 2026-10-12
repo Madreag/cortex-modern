@@ -860,6 +860,7 @@ namespace RTE {
 		match.peerCount = count; match.roundId = 77; match.players = {{1, 0, false, "Captain"}, {2, 1, false, "Joiner"}};
 		if (count == 3) match.players.push_back({3, 1, false, "Other joiner"});
 		for (uint8_t peer = 2; peer <= count; ++peer) match.successorOrder.push_back(peer);
+		for (uint8_t peer = 1; peer <= count; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(47919 + peer), {"fixture"}});
 		match.inputDelayFrames = 12; match.peerInputDelayFrames.assign(count, 12);
 		std::vector<std::unique_ptr<NetLockstepCoordinator>> rounds(count);
 		std::vector<NetLockstepConfig> roundConfigs(count);
