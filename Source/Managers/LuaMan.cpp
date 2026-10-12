@@ -5128,19 +5128,22 @@ static int ScriptGraphGibReferences(lua_State* L) {
 	luaL_checktype(L, 1, LUA_TTABLE);
 	std::optional<LuaScriptGraphNativeCaptureScope> standalone;
 	if (!s_GraphNativeCapture) standalone.emplace();
-	std::unordered_set<const MovableObject*> seen;
+	// A saved read walks the frozen objects and containers; the live ones keep changing while the saver runs.
+	const auto frozen = [](const auto* value) { return CheckpointNativeStorage::Reading() ? CheckpointNativeStorage::Source(value) : value; };
+	std::unordered_set<const void*> seen;
 	std::map<long, const MOSRotating*> owners;
 	std::function<void(const MovableObject*)> collect = [&](const MovableObject* object) {
-		if (!object || !seen.insert(object).second) return;
+		if (!object || !seen.insert(CheckpointNativeStorage::Original(object)).second) return;
+		object = frozen(object);
 		if (const auto* rotating = dynamic_cast<const MOSRotating*>(object)) {
 			if (object->GetUniqueID() > 0) owners.emplace(object->GetUniqueID(), rotating);
-			for (const Attachable* part: rotating->GetAttachables()) collect(part);
-			for (const AEmitter* wound: rotating->GetWoundList()) collect(wound);
+			for (const Attachable* part: CheckpointValues(rotating->GetAttachables())) collect(part);
+			for (const AEmitter* wound: CheckpointValues(rotating->GetWoundList())) collect(wound);
 		}
 		if (const auto* actor = dynamic_cast<const Actor*>(object)) {
-			for (const MovableObject* item: *actor->GetInventory()) collect(item);
+			for (const MovableObject* item: CheckpointValues(*actor->GetInventory())) collect(item);
 		}
-		if (const auto* craft = dynamic_cast<const ACraft*>(object)) for (const MovableObject* item: craft->GetCollectedInventory()) collect(item);
+		if (const auto* craft = dynamic_cast<const ACraft*>(object)) for (const MovableObject* item: CheckpointValues(craft->GetCollectedInventory())) collect(item);
 	};
 	for (const MovableObject* object: s_GraphNativeCapture->KnownObjects()) {
 		if (g_MovableMan.ValidMO(object)) collect(object);
@@ -5151,17 +5154,26 @@ static int ScriptGraphGibReferences(lua_State* L) {
 		if (rep && ClassDerivesFrom(rep->crep(), "MovableObject")) collect(static_cast<const MovableObject*>(rep->ptr()));
 		lua_pop(L, 1);
 	}
+	// The script's copies are keyed by the objects they stand for, as the frozen gibs name them.
+	lua_newtable(L);
+	const int owned = lua_gettop(L);
+	lua_pushnil(L);
+	while (lua_next(L, 1)) {
+		lua_pushlightuserdata(L, const_cast<void*>(CheckpointNativeStorage::Original(lua_touserdata(L, -2))));
+		lua_insert(L, -2);
+		lua_rawset(L, owned);
+	}
 	lua_newtable(L);
 	const int references = lua_gettop(L);
 	int count = 0;
 	for (const auto& [uid, owner]: owners) {
 		int index = 0;
-		for (const Gib* gib: *owner->GetGibList()) {
-			const MovableObject* particle = gib->GetParticlePreset();
-			if (particle && !particle->IsOriginalPreset() && particle->GetUniqueID() == 0) {
-				lua_pushlightuserdata(L, const_cast<MovableObject*>(particle));
-				lua_rawget(L, 1);
-				if (!lua_isnil(L, -1)) {
+		for (const Gib* gib: CheckpointValues(*owner->GetGibList())) {
+			const MovableObject* particle = frozen(gib)->GetParticlePreset();
+			if (particle) {
+				lua_pushlightuserdata(L, const_cast<void*>(CheckpointNativeStorage::Original(particle)));
+				lua_rawget(L, owned);
+				if (!lua_isnil(L, -1) && !frozen(particle)->IsOriginalPreset() && frozen(particle)->GetUniqueID() == 0) {
 					lua_newtable(L);
 					lua_pushnumber(L, static_cast<lua_Number>(uid));
 					lua_setfield(L, -2, "owner");
