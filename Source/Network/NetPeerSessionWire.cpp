@@ -1,6 +1,7 @@
 #include "NetPeerSessionWire.h"
 
 #include "NetLockstep.h"
+#include "DiagnosticLine.h"
 #include "NetLobbyProtocol.h"
 #include "NetProtocol.h"
 
@@ -9,23 +10,75 @@
 
 namespace RTE {
 
-	std::pair<INetTransport*, NetPeerId> NetPeerSessionLinks::RouteTo(uint8_t peer) const {
-		if (const auto current = admittedRoutes.find(SessionRoute(peer)); current != admittedRoutes.end()) return current->second;
-		if (const auto dial = probes.find(peer); dial != probes.end() && dial->second.answered && dial->second.transport && dial->second.connection != c_InvalidNetPeerId)
-			return {dial->second.transport.get(), dial->second.connection};
-		if (listener) for (const auto& [native, bound]: listenerBindings) if (bound == peer) return {listener.get(), native};
-		if (primary) for (const auto& [native, bound]: primaryBindings) if (bound == peer) return {primary, native};
-		return {};
+	std::vector<std::pair<INetTransport*, NetPeerId>> NetPeerSessionLinks::RoutesTo(uint8_t peer) const {
+		if (const auto current = admittedRoutes.find(SessionRoute(peer)); current != admittedRoutes.end()) return {current->second};
+		std::vector<std::pair<INetTransport*, NetPeerId>> routes;
+		const auto add = [&](INetTransport* wire, NetPeerId native) {
+			if (std::find(routes.begin(), routes.end(), std::pair{wire, native}) == routes.end()) routes.emplace_back(wire, native);
+		};
+		// The admitted host route stays in use; other pairs choose the higher seat's outgoing link.
+		if (primary) for (const auto& [native, bound]: primaryBindings) if (bound == peer) add(primary, native);
+		const auto outgoing = [&] {
+			if (const auto dial = probes.find(peer); dial != probes.end() && dial->second.answered && dial->second.transport && dial->second.connection != c_InvalidNetPeerId)
+				add(dial->second.transport.get(), dial->second.connection);
+		};
+		const auto incoming = [&] {
+			if (listener) for (const auto& [native, bound]: listenerBindings) if (bound == peer) add(listener.get(), native);
+		};
+		if (localPeerId > peer) { outgoing(); incoming(); }
+		else { incoming(); outgoing(); }
+		return routes;
 	}
 
-	bool NetPeerSessionLinks::SendTo(uint8_t peer, NetTransportLane lane, const std::vector<uint8_t>& bytes) {
-		if (const auto current = admittedRoutes.find(SessionRoute(peer)); current != admittedRoutes.end())
-			return current->second.first->Send(current->second.second, lane, bytes);
-		if (const auto dial = probes.find(peer); dial != probes.end() && dial->second.answered && dial->second.transport &&
-		    dial->second.connection != c_InvalidNetPeerId && dial->second.transport->Send(dial->second.connection, lane, bytes)) return true;
-		if (listener) for (const auto& [native, bound]: listenerBindings) if (bound == peer && listener->Send(native, lane, bytes)) return true;
-		if (primary) for (const auto& [native, bound]: primaryBindings) if (bound == peer && primary->Send(native, lane, bytes)) return true;
+	std::pair<INetTransport*, NetPeerId> NetPeerSessionLinks::RouteTo(uint8_t peer) const {
+		const auto routes = RoutesTo(peer);
+		return routes.empty() ? std::pair<INetTransport*, NetPeerId>{} : routes.front();
+	}
+
+	bool NetPeerSessionLinks::SendTo(uint8_t peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, bool framePacket) {
+		for (const auto& [wire, native]: RoutesTo(peer)) if (wire->Send(native, lane, bytes)) {
+			if (framePacket) { auto& flow = frameFlow[wire][native]; ++flow.sent; flow.sentAtMs = ClockMs(); }
+			return true;
+		}
 		return false;
+	}
+
+	void NetPeerSessionLinks::NoteFrameRead(const INetTransport& wire, NetPeerId native) {
+		auto& flow = frameFlow[&wire][native];
+		++flow.received; flow.heardAtMs = ClockMs();
+	}
+
+	void NetPeerSessionLinks::RetireSpareRoutes(uint8_t peer) {
+		if (!sessionAttached || frameBlackout) return;
+		const auto retained = RouteTo(peer);
+		const auto wire = frameFlow.find(retained.first);
+		if (!retained.first || wire == frameFlow.end()) return;
+		const auto flow = wire->second.find(retained.second);
+		const uint64_t nowMs = ClockMs();
+		if (flow == wire->second.end() || flow->second.sent == 0 || flow->second.received == 0 ||
+		    nowMs < flow->second.heardAtMs || nowMs - flow->second.heardAtMs >= c_NetLinkTimeoutMs / 2 ||
+		    nowMs < flow->second.sentAtMs || nowMs - flow->second.sentAtMs >= c_NetLinkTimeoutMs / 2) return;
+		for (const auto& route: RoutesTo(peer)) {
+			if (route == retained || route.first == primary) continue;
+			if (const auto prior = frameFlow.find(route.first); prior != frameFlow.end()) {
+				if (const auto recent = prior->second.find(route.second); recent != prior->second.end() &&
+				    ((recent->second.sent != 0 && recent->second.sentAtMs >= flow->second.sentAtMs) ||
+				     (recent->second.received != 0 && recent->second.heardAtMs >= flow->second.heardAtMs))) continue;
+			}
+			bool inAdmission = false;
+			for (const auto& [handle, admitted]: admissions) if (admitted == route) inAdmission = true;
+			for (const auto& [handle, admitted]: admittedRoutes) if (admitted == route) inAdmission = true;
+			if (inAdmission) continue;
+			if (route.first == listener.get()) listenerBindings.erase(route.second);
+			for (auto& [owner, dial]: probes) if (dial.transport.get() == route.first && dial.connection == route.second) {
+				dial.connection = c_InvalidNetPeerId; dial.answered = false;
+			}
+			DiagnosticLine() << "[net-peer-link] retiring local=" << static_cast<int>(localPeerId) << " peer=" << static_cast<int>(peer)
+			    << " retained_sent=" << flow->second.sent << " retained_received=" << flow->second.received
+			    << " spare_sent=" << frameFlow[route.first][route.second].sent << " spare_received=" << frameFlow[route.first][route.second].received << " reader_detached=1" << std::endl;
+			route.first->RetirePeerLink(route.second);
+			frameFlow[route.first].erase(route.second);
+		}
 	}
 
 	NetPeerId NetPeerSessionLinks::SessionRoute(uint8_t peer) const {
@@ -60,6 +113,7 @@ namespace RTE {
 		for (const auto& [handle, native]: admittedRoutes) if (native.first == &wire && native.second == event.peerId) route = handle;
 		for (const auto& [handle, native]: admissions) if (native.first == &wire && native.second == event.peerId) route = handle;
 		if (event.type == NetTransportEventType::PeerDisconnected || event.type == NetTransportEventType::ConnectionFailed) {
+			frameFlow[&wire].erase(event.peerId);
 			if (&wire == primary) primaryBindings.erase(event.peerId);
 			if (&wire == listener.get()) listenerBindings.erase(event.peerId);
 			for (auto& [owner, dial]: probes) if (dial.transport.get() == &wire && dial.connection == event.peerId) {

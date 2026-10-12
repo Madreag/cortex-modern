@@ -11,6 +11,7 @@ namespace RTE {
 	constexpr NetPeerId c_InvalidNetPeerId = 0;
 	/// How long a connected link hears nothing from its peer before it is judged lost.
 	constexpr uint32_t c_NetLinkTimeoutMs = 4000;
+	constexpr const char* c_NetPeerLinkRetiredText = "another confirmed peer link carries the match";
 
 	enum class NetTransportLane : uint8_t {
 		ControlReliable = 0,
@@ -55,6 +56,7 @@ namespace RTE {
 		/// taken and the caller should hold it, NOT give up on the peer. Anything else is a real fault.
 		virtual bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) = 0;
 		virtual void Disconnect(NetPeerId peerId, const std::string& reason) = 0;
+		virtual void RetirePeerLink(NetPeerId peerId) { Disconnect(peerId, c_NetPeerLinkRetiredText); }
 		virtual void Stop() = 0;
 		virtual std::vector<NetTransportEvent> PollEvents() = 0;
 
