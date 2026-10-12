@@ -18,6 +18,7 @@ namespace RTE {
 		constexpr char c_TokenDomain[] = "CortexSeatToken1";
 		constexpr char c_RequestDomain[] = "CortexCheckIn1";
 		constexpr size_t c_FieldsBytes = 130;
+		constexpr uint64_t c_SeatRequestIntervalMs = 5100;
 		constexpr const char* c_Waiting = "The directory is unavailable. Reconnecting will retry; Cancel returns to Multiplayer.";
 
 		std::string Hex(const uint8_t* bytes, size_t size) {
@@ -497,7 +498,7 @@ namespace RTE {
 		if (body.empty()) return;
 		m_CheckInGeneration = m_Route.generation;
 		m_CheckIn = StartRequest("POST", body);
-		if (m_CheckIn) { m_SeatRequests.push_back(steadyMs); m_NextSeatRequestMs = steadyMs + 5000; }
+		if (m_CheckIn) { m_SeatRequests.push_back(steadyMs); m_NextSeatRequestMs = steadyMs + c_SeatRequestIntervalMs; }
 	}
 	NetHostChangeReply NetConnectionAuthority::QueryHostChange(const NetHostChangeRequest& request) {
 		std::lock_guard lock(m_Mutex);
@@ -576,7 +577,7 @@ namespace RTE {
 			// At the full bound send one last status query and drain its bounded
 			// exchange. A missing answer never supplies frame authority.
 			m_FrameTieFinalQuerySent = finalQuery;
-			if (m_FrameTie) { m_SeatRequests.push_back(steadyMs); if (!request.queryOnly) m_NextSeatRequestMs = steadyMs + 5000; }
+			if (m_FrameTie) { m_SeatRequests.push_back(steadyMs); if (!request.queryOnly) m_NextSeatRequestMs = steadyMs + c_SeatRequestIntervalMs; }
 		}
 	}
 
@@ -621,7 +622,7 @@ namespace RTE {
 		}
 		if (!m_HostChange && m_HostChangeReply.state != NetHostChangeReply::State::Decided && steadyMs >= m_NextHostChange && steadyMs >= m_HostChangeRetry.nextMs && CanSeatRequest(steadyMs)) {
 			const std::string body = SignedSeatRequest("host-change", unixSeconds, &*m_HostChangeRequest);
-			if (!body.empty()) { m_HostChange = StartRequest("POST", body); if (m_HostChange) { m_SeatRequests.push_back(steadyMs); m_NextSeatRequestMs = steadyMs + 5000; } }
+			if (!body.empty()) { m_HostChange = StartRequest("POST", body); if (m_HostChange) { m_SeatRequests.push_back(steadyMs); m_NextSeatRequestMs = steadyMs + c_SeatRequestIntervalMs; } }
 		}
 	}
 

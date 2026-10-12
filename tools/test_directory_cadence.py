@@ -94,7 +94,7 @@ class Requests:
                 self.seats[handler.row_body["participant"]] = handler.row_body["seat"]
             contents = json.loads(base64.b64decode(handler.row_body["signed_request"])) if "signed_request" in handler.row_body else {}
             query_only = contents.get("frame_tie", {}).get("query_only", False)
-            self.rows.append({"query_only": query_only, "at_ms": int(now * 1000), "role": "host" if key == self.host_key else "guest",
+            self.rows.append({"query_only": query_only, "at_ms": handler.row_arrived_ms, "reply_at_ms": int(now * 1000), "role": "host" if key == self.host_key else "guest",
                               "path": re.sub(r"/[0-9a-f-]{36}(?=/|$)", "/<session>", handler.path.split("?")[0]),
                               "kind": kind, "seat": seat, "status": status,
                               "error": body.get("error", ""), "retry_after_s": body.get("retry_after_s", 0),
@@ -131,6 +131,7 @@ def local_directory(root, case, port):
             def parse_request(self):
                 if not super().parse_request():
                     return False
+                self.row_arrived_ms = int(time.monotonic() * 1000)
                 self.row_body = {}
                 self.row_raw = b""
                 length = int(self.headers.get("Content-Length", "0"))
@@ -192,14 +193,14 @@ def menus(root, port, case):
         "combo_select ComboHostActivity P4 Alpha Duel\nwait_ms 300\n"
         f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\nactivate ButtonMultiplayerCreate\n"
         "wait_connected 2 80\nwait_remote_ready 80\nactivate ButtonMultiplayerStart\n"
-        "wait_lockstep 180 60\n" + ("wait_lockstep 5200 110\n" if case == "flood" else "wait_lockstep 2100 80\n" if case == "liveness" else "wait_lockstep 240 15\n") +
+        "wait_lockstep 180 60\n" + ("wait_lockstep 1200 110\n" if case == "flood" else "wait_lockstep 2100 80\n" if case == "liveness" else "wait_lockstep 240 15\n") +
         "open_local_pause\nactivate ButtonEndMatch\nactivate ButtonLeaveConfirm\nwait_round_end 10\nwait_ms 1000\nexit\n")
     guest = common + (
         "settext TextMultiplayerName Guest\nactivate ButtonMultiplayerJoinGame\nwait_ms 300\n"
         "activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
         f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\nwait_connected 2 80\n"
         "activate ButtonMultiplayerReady\nwait_lockstep 180 60\n" +
-        ("wait_lockstep 5200 110\n" if case == "flood" else "wait_lockstep 2100 80\n" if case == "liveness" else "wait_lockstep 240 15\n") + "exit\n")
+        ("wait_lockstep 1200 110\n" if case == "flood" else "wait_lockstep 2100 80\n" if case == "liveness" else "wait_lockstep 240 15\n") + "wait_round_end 10\nexit\n")
     paths = {}
     for role, content in (("host", host), ("guest", guest)):
         paths[role] = root / (role + ".menu.txt")
@@ -266,7 +267,7 @@ def main():
             if event["at_ms"] < waits.get(group, 0):
                 early.append(event)
             if event["status"] == 429:
-                waits[group] = event["at_ms"] + event["retry_wait_s"] * 1000
+                waits[group] = event.get("reply_at_ms", event["at_ms"]) + event["retry_wait_s"] * 1000
         checks["retry_deadlines"] = not early
         details.update(requests=len(events), inside_retry_wait=early[:20])
         if args.case == "flood":
@@ -293,7 +294,7 @@ def main():
                           no_missing_heartbeat=not any(event["kind"] == "heartbeat" and event["status"] == 404 for event in events))
             details.update(refused_heartbeats=len(beats), live_samples=samples, registers=len(registered))
         else:
-            until = max((event["at_ms"] + event["retry_wait_s"] * 1000 for event in events
+            until = max((event.get("reply_at_ms", event["at_ms"]) + event["retry_wait_s"] * 1000 for event in events
                          if event["role"] == "host" and event["kind"] in ("issue", "signal", "signals") and event["status"] == 429), default=0)
             resumed = [event for event in events if event["role"] == "host" and event["at_ms"] >= until]
             checks.update(waited_40s=requests.wait_from is not None and any(

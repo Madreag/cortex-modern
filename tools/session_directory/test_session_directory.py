@@ -609,6 +609,19 @@ class DirectoryTests(unittest.TestCase):
     def test_U4_unfinished_headers_leave_honest_capacity(self) -> None:
         self.start(port=0)
         sockets = []
+        honest = threading.Event()
+        accepted = 0
+        accept_lock = threading.Lock()
+        get_request = self.server.httpd.get_request
+        def caller_address():
+            nonlocal accepted
+            connection, address = get_request()
+            with accept_lock:
+                accepted += 1
+            # Distinct callers use real local sockets without requiring a second loopback alias.
+            return connection, ("127.0.0.2" if honest.is_set() else address[0], address[1])
+        address_fixture = mock.patch.object(self.server.httpd, "get_request", side_effect=caller_address)
+        address_fixture.start()
         try:
             for _ in range(64):
                 connection = socket.create_connection(("127.0.0.1", self.port), timeout=1)
@@ -616,7 +629,10 @@ class DirectoryTests(unittest.TestCase):
                 try: connection.sendall(b"GET /v1/sessions HTTP/1.1\r\nX-Test: ")
                 except OSError: pass
             time.sleep(0.15)
-            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=1, source_address=("127.0.0.2", 0))
+            with accept_lock:
+                self.assertEqual(accepted, 64, "U4: not every unfinished local request reached the fixture")
+            honest.set()
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=1)
             started = time.monotonic()
             try:
                 conn.request("GET", "/v1/sessions", headers={"X-Install-Key": INSTALL_KEY})
@@ -627,7 +643,7 @@ class DirectoryTests(unittest.TestCase):
             finally:
                 conn.close()
             self.assertEqual(response.status, 200, "U4: unfinished headers blocked another caller")
-            self.assertLess(time.monotonic() - started, 1, "U4: the honest caller waited for the attacker's header deadline")
+            self.assertLess(time.monotonic() - started, 1, "U4: the honest caller waited for the unfinished header deadline")
             live = 0
             for connection in sockets:
                 connection.settimeout(0.02)
@@ -638,13 +654,19 @@ class DirectoryTests(unittest.TestCase):
             self.assertLessEqual(live, 2, "U4: one socket address kept more than two unfinished headers")
         finally:
             for connection in sockets: connection.close()
+            address_fixture.stop()
 
     def test_U3_all_200_callers_heartbeat_with_repeated_polls(self) -> None:
         self.start(port=0)
         self.server.store.caller_mode = "tunnel"
         rows = []
+        class LocalConnection(http.client.HTTPConnection):
+            def connect(self):
+                super().connect()
+                # Release completed load-row sockets without keeping their client ports in TIME_WAIT.
+                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
         def request(index, method, path, body=None):
-            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30 if method == "GET" else 14)
+            conn = LocalConnection("127.0.0.1", self.port, timeout=30 if method == "GET" else 14)
             headers = {"X-Install-Key": f"{index + 1000:016x}", "CF-Connecting-IP": f"198.51.{index // 250}.{index % 250 + 1}"}
             try:
                 conn.request(method, path, body=json.dumps(body) if body is not None else None, headers=headers)
@@ -669,7 +691,7 @@ class DirectoryTests(unittest.TestCase):
                     pause = int(retry or body.get("retry_after_s", 0))
                     if pause: stop.wait(pause)
                 except (OSError, http.client.HTTPException) as error:
-                    with result_lock: errors.append((index, "poll", type(error).__name__))
+                    with result_lock: errors.append((index, "poll", type(error).__name__, getattr(error, "errno", None), str(error)))
                     return
         def heartbeat(index):
             gate.wait()
@@ -685,7 +707,7 @@ class DirectoryTests(unittest.TestCase):
                     with result_lock: beats[index, wave] = (status, time.monotonic() - started)
                     if wave < 2: time.sleep(1)
                 except (OSError, http.client.HTTPException) as error:
-                    with result_lock: errors.append((index, "heartbeat", type(error).__name__))
+                    with result_lock: errors.append((index, "heartbeat", type(error).__name__, getattr(error, "errno", None), str(error)))
                     return
         pollers = [threading.Thread(target=polling, args=(index,)) for index in range(200)]
         workers = [threading.Thread(target=heartbeat, args=(index,)) for index in range(200)]
@@ -2149,7 +2171,19 @@ class DirectoryTests(unittest.TestCase):
         self.assertTrue(hasattr(sd, "make_server_ssl_context"))
         ctx = sd.make_server_ssl_context()
         self.assertEqual(ctx.minimum_version, ssl.TLSVersion.TLSv1_2)
-        self.assertTrue(ctx.options & ssl.OP_NO_COMPRESSION)
+        if ssl.OP_NO_COMPRESSION:
+            self.assertTrue(ctx.options & ssl.OP_NO_COMPRESSION)
+        cert, key = self._self_signed_cert()
+        self.start(cert=cert, key=key)
+        client = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        client.check_hostname = False
+        client.verify_mode = ssl.CERT_NONE
+        client.minimum_version = client.maximum_version = ssl.TLSVersion.TLSv1_2
+        client.options &= ~ssl.OP_NO_COMPRESSION
+        with socket.create_connection(("127.0.0.1", self.port), timeout=2) as connection:
+            with client.wrap_socket(connection, server_hostname="localhost") as stream:
+                self.assertEqual(stream.version(), "TLSv1.2")
+                self.assertIsNone(stream.compression(), "The directory negotiated TLS compression")
 
     def test_signal_heartbeat_logs_id_and_client_not_body(self) -> None:
         records: list[str] = []
