@@ -818,16 +818,17 @@ namespace RTE {
 
 	bool NetSessionPlaneSelfTest::CheckSceneLifecycle(const std::string& name, std::string* error) {
 		Hub hub;
-		hub.row = Case{"scene_lifecycle"}; hub.row.seats = 2; hub.row.rttMs = hub.row.otherRttMs = 100;
+		const uint8_t count = name == "leave-rejoin" ? 3 : 2;
+		hub.row = Case{"scene_lifecycle"}; hub.row.seats = count; hub.row.rttMs = hub.row.otherRttMs = 100;
 		auto ip = std::make_unique<Wire>(hub, 1);
 		auto relay = std::make_unique<Wire>(hub, 1);
 		NetMuxTransport hostWire(std::move(ip), std::move(relay));
 		GnsP2PConfig relayConfig; relayConfig.connectionMode = 2;
 		hostWire.SetHostP2P(3, relayConfig);
-		Wire clientWire(hub, 2), returningWire(hub, 2);
-		NetSession hostSession, clientSession, returningSession;
+		Wire clientWire(hub, 2), otherWire(hub, 3), returningWire(hub, 2);
+		NetSession hostSession, clientSession, otherSession, returningSession;
 		NetSessionConfig sessionConfig;
-		sessionConfig.port = 47919; sessionConfig.sessionId = 0x5343454E45ULL; sessionConfig.maxPeers = 1;
+		sessionConfig.port = 47919; sessionConfig.sessionId = 0x5343454E45ULL; sessionConfig.maxPeers = count - 1;
 		sessionConfig.displayName = "Captain"; sessionConfig.timeoutMs = 30000; sessionConfig.heartbeatIntervalMs = 100;
 		auto& identity = sessionConfig.localIdentity;
 		identity.gameVersion = "7.0.0-test"; identity.networkProtocolVersion = NetProtocol::c_Version;
@@ -835,32 +836,39 @@ namespace RTE {
 		identity.buildId = "scene-session-rows"; identity.platform = "test";
 		auto joinConfig = sessionConfig; joinConfig.displayName = "Joiner"; ++joinConfig.localNonce;
 		if (!hostSession.StartHost(hostWire, sessionConfig, error) || !clientSession.StartClient(clientWire, "fixture", joinConfig, error)) return false;
-		for (; hub.now < 2000 && (hostSession.GetReadyPeerCount() != 1 || !clientSession.IsReady()); ++hub.now) {
-			hostSession.Tick(hub.now); clientSession.Tick(hub.now);
+		if (count == 3) { auto config = joinConfig; config.displayName = "Other joiner"; config.localNonce += 2;
+			if (!otherSession.StartClient(otherWire, "fixture", config, error)) return false;
 		}
-		if (!clientSession.IsReady() || hostSession.GetReadyPeerCount() != 1) { *error = "the scene row did not seat both players"; return false; }
+		for (; hub.now < 2000 && (hostSession.GetReadyPeerCount() != count - 1 || !clientSession.IsReady() || (count == 3 && !otherSession.IsReady())); ++hub.now) {
+			hostSession.Tick(hub.now); clientSession.Tick(hub.now);
+			if (count == 3) otherSession.Tick(hub.now);
+		}
+		if (!clientSession.IsReady() || hostSession.GetReadyPeerCount() != count - 1 || (count == 3 && !otherSession.IsReady())) { *error = "the scene row did not seat every player"; return false; }
 		const NetPeerId originalRoute = hostSession.GetReadyPeers().front().transportPeerId;
 		auto match = NetMatchConfigUtil::MakeDefault(sessionConfig.sessionId);
-		match.peerCount = 2; match.roundId = 77; match.players = {{1, 0, false, "Captain"}, {2, 1, false, "Joiner"}};
-		match.inputDelayFrames = 12; match.peerInputDelayFrames = {12, 12};
-		std::array<std::unique_ptr<NetLockstepCoordinator>, 2> rounds;
-		std::array<NetLockstepConfig, 2> roundConfigs;
-		std::array<std::shared_ptr<NetPeerSessionLinks>, 2> links;
-		std::array<std::unique_ptr<NetPeerSessionWire>, 2> sessionWires;
-		std::array<NetSession*, 2> sessions{&hostSession, &clientSession};
-		std::array<INetTransport*, 2> nativeWires{&hostWire, &clientWire};
-		std::array<uint64_t, 2> produced{1, 1}, applied{}, displayedAt{};
-		std::array<double, 2> credits{};
-		for (size_t index = 0; index < 2; ++index) {
+		match.peerCount = count; match.roundId = 77; match.players = {{1, 0, false, "Captain"}, {2, 1, false, "Joiner"}};
+		if (count == 3) match.players.push_back({3, 1, false, "Other joiner"});
+		match.inputDelayFrames = 12; match.peerInputDelayFrames.assign(count, 12);
+		std::vector<std::unique_ptr<NetLockstepCoordinator>> rounds(count);
+		std::vector<NetLockstepConfig> roundConfigs(count);
+		std::vector<std::shared_ptr<NetPeerSessionLinks>> links(count);
+		std::vector<std::unique_ptr<NetPeerSessionWire>> sessionWires(count);
+		std::array<NetSession*, 3> sessions{&hostSession, &clientSession, &otherSession};
+		std::array<INetTransport*, 3> nativeWires{&hostWire, &clientWire, &otherWire};
+		std::vector<uint64_t> produced(count, 1), applied(count), displayedAt(count);
+		std::vector<double> credits(count);
+		for (size_t index = 0; index < count; ++index) {
 			NetLockstepConfig config; config.sessionId = match.sessionId; config.matchConfig = match;
-			config.localPeerId = static_cast<uint8_t>(index + 1); config.peerCount = 2; config.roundId = index == 0 ? 77 : 0;
+			config.localPeerId = static_cast<uint8_t>(index + 1); config.peerCount = count; config.roundId = index == 0 ? 77 : 0;
 			config.startFrame = 1; config.inputDelayFrames = 12; config.peerInputDelayFrames = {{1, 12}, {2, 12}};
 			config.peerIncarnations = {{1, 1}, {2, 1}}; config.timeoutMs = 30000;
+			if (count == 3) { config.peerInputDelayFrames[3] = 12; config.peerIncarnations[3] = 1; }
 			config.peerFrameGroups = config.substituteSlowPeers = true; config.simTickMs = c_TestTickMs;
 			config.slowPlayerBoundTicks = 3; config.frameLane = NetTransportLane::InputUnreliable; config.relayToOtherPeers = index == 0;
 			config.migrationKey.fill(0x39); config.peerSessionLinks = links[index] = std::make_shared<NetPeerSessionLinks>();
 			links[index]->sessionClock = [&] { return hub.now; };
-			config.remoteTransportPeerIds[index == 0 ? 2 : 1] = index == 0 ? originalRoute : clientSession.GetRemoteTransportPeerId();
+			if (index == 0) for (const auto& peer: hostSession.GetReadyPeers()) config.remoteTransportPeerIds[peer.assignedPeerId + 1] = peer.transportPeerId;
+			else config.remoteTransportPeerIds[1] = sessions[index]->GetRemoteTransportPeerId();
 			rounds[index] = std::make_unique<NetLockstepCoordinator>();
 			if (!rounds[index]->Start(*nativeWires[index], config, error)) return false;
 			roundConfigs[index] = config;
@@ -868,7 +876,7 @@ namespace RTE {
 			rounds[index]->SetSessionEventSink([&, index](const NetTransportEvent& event) { sessions[index]->InjectEvent(event, hub.now); });
 		}
 		const auto step = [&](bool joinerPlaying) {
-			for (size_t index = 0; index < (joinerPlaying ? 2 : 1); ++index) {
+			for (size_t index = 0; index < (joinerPlaying ? count : 1); ++index) {
 				auto& round = *rounds[index]; round.Tick(hub.now);
 				sessions[index]->Tick(hub.now, false);
 				if (!round.IsRunning()) continue;
@@ -889,9 +897,9 @@ namespace RTE {
 			}
 			++hub.now; return true;
 		};
-		for (; hub.now < 5000 && std::min(applied[0], applied[1]) < 150;) if (!step(true)) return false;
-		if (std::min(applied[0], applied[1]) < 150) { *error = "the scene row did not reach live play"; return false; }
-		for (size_t index = 0; index < 2; ++index) {
+		for (; hub.now < 5000 && *std::min_element(applied.begin(), applied.end()) < 150;) if (!step(true)) return false;
+		if (*std::min_element(applied.begin(), applied.end()) < 150) { *error = "the scene row did not reach live play"; return false; }
+		for (size_t index = 0; index < count; ++index) {
 			sessionWires[index] = std::make_unique<NetPeerSessionWire>(links[index]);
 			links[index]->sessionAttached = true; sessions[index]->RebindSessionWire(*sessionWires[index]);
 		}
@@ -990,8 +998,10 @@ namespace RTE {
 			});
 			const uint64_t departure = hub.now, before = applied[0];
 			rounds[1]->Leave("Match left");
+			rounds[2]->Leave("Match left");
 			for (; hub.now < departure + 250;) if (!step(false)) return false;
 			clientWire.Stop();
+			otherWire.Stop();
 			uint64_t answerAt = 0;
 			for (; hub.now < 8500;) {
 				if (!step(false)) return false;
@@ -1010,6 +1020,7 @@ namespace RTE {
 			if (!rounds[0]->SchedulePeerReclaim(2, ready.front().transportPeerId, 2, activation, error)) return false;
 			auto config = roundConfigs[1]; config.startFrame = activation; config.roundId = match.roundId;
 			config.joinsRunningRound = config.continuesMatch = true;
+			config.initialSeatHolds = rounds[0]->HeldTransactions(); config.initialPeerLeaves = rounds[0]->m_PeerLeaveFrames;
 			config.originalRoundConfigHash = rounds[0]->m_RoundConfigHash;
 			config.peerSessionLinks = std::make_shared<NetPeerSessionLinks>();
 			config.peerSessionLinks->sessionClock = [&] { return hub.now; };
