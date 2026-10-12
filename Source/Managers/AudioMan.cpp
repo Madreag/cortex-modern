@@ -59,6 +59,15 @@ using namespace RTE;
 
 namespace {
 	void ClearPendingAudioArchives();
+	struct SavedSoundOperations {
+		std::unordered_map<uint64_t, SoundContainer*> pending;
+		std::unordered_set<SoundContainer*> logical;
+	};
+	SavedSoundOperations& SavedSoundOps(const AudioMan* owner) {
+		static const char kind{};
+		const auto operations = CheckpointNativeStorage::ReadIndex(CheckpointNativeStorage::Original(owner), &kind, [] { return std::make_shared<SavedSoundOperations>(); });
+		return *const_cast<SavedSoundOperations*>(static_cast<const SavedSoundOperations*>(operations.get()));
+	}
 
 	// A headless run plays to nobody, so its FMOD threads need not outrank the desktop.
 	bool HeadlessAudioThreadsAtNormalPriority(const char* headless) {
@@ -2194,16 +2203,26 @@ bool AudioMan::VoiceMatchesContext(int identity, const SoundContainer* owner) co
 
 void AudioMan::NotePendingSoundOps(SoundContainer* container) {
 	if (!container->GetCheckpointIdentity()) return;
+	if (CheckpointNativeStorage::Reading()) { SavedSoundOps(this).pending[container->GetCheckpointIdentity()] = container; return; }
 	std::lock_guard lock(m_PendingSoundOpsMutex);
 	m_PendingSoundOpContainers[container->GetCheckpointIdentity()] = container;
 }
 
 void AudioMan::ClearPendingSoundOps(SoundContainer* container) {
+	if (CheckpointNativeStorage::Reading()) { std::erase_if(SavedSoundOps(this).pending, [container](const auto& entry) { return entry.second == container; }); return; }
 	std::lock_guard lock(m_PendingSoundOpsMutex);
 	std::erase_if(m_PendingSoundOpContainers, [container](const auto& entry) { return entry.second == container; });
 }
 
 std::vector<SoundContainer*> AudioMan::TakePendingSoundOpContainers() {
+	if (CheckpointNativeStorage::Reading()) {
+		auto& pending = SavedSoundOps(this).pending;
+		std::vector<SoundContainer*> containers;
+		containers.reserve(pending.size());
+		for (const auto& [identity, container]: pending) containers.push_back(container);
+		pending.clear();
+		return containers;
+	}
 	std::lock_guard lock(m_PendingSoundOpsMutex);
 	std::vector<SoundContainer*> containers;
 	containers.reserve(m_PendingSoundOpContainers.size());
@@ -2213,6 +2232,12 @@ std::vector<SoundContainer*> AudioMan::TakePendingSoundOpContainers() {
 }
 
 void AudioMan::SettleSharedSoundWrites() {
+	if (CheckpointNativeStorage::Reading()) {
+		std::vector<SoundContainer*> containers;
+		for (const auto& [identity, container]: SavedSoundOps(this).pending) containers.push_back(container);
+		for (SoundContainer* container: containers) container->SettleSharedWritesBeforeAIPass();
+		return;
+	}
 	std::vector<SoundContainer*> containers;
 	{
 		std::lock_guard lock(m_PendingSoundOpsMutex);
@@ -2232,12 +2257,19 @@ uint64_t AudioMan::NextDeferredSoundOpOrdinal() {
 }
 
 void AudioMan::RefreshLogicalSound(SoundContainer* container) {
+	if (CheckpointNativeStorage::Reading()) {
+		auto& logical = SavedSoundOps(this).logical;
+		if (container->m_CheckpointRegistered && !container->m_LogicalPlayback.voices.empty()) logical.insert(container);
+		else logical.erase(container);
+		return;
+	}
 	std::lock_guard lock(m_LogicalSoundsMutex);
 	if (container->m_CheckpointRegistered && !container->m_LogicalPlayback.voices.empty()) m_ActiveLogicalSounds.insert(container);
 	else m_ActiveLogicalSounds.erase(container);
 }
 
 void AudioMan::UnregisterLogicalSound(SoundContainer* container) {
+	if (CheckpointNativeStorage::Reading()) { SavedSoundOps(this).logical.erase(container); return; }
 	std::lock_guard lock(m_LogicalSoundsMutex);
 	m_ActiveLogicalSounds.erase(container);
 }
@@ -3163,7 +3195,27 @@ std::string AudioMan::CheckpointBackendSelfTestMismatch() {
 		CheckpointNativeStorage::PrivateValue(backend.get()).groups[0].volume = 0.5F;
 		if (CheckpointNativeStorage::Source(backend.get())->groups[0].volume != 0.5F) return "saved audio control changes lost their private values";
 	}
-	return group.volume == 0.875F && backend->listeners[0][0] == AudioCheckpoint::Position{11, 13, 17} ? std::string() : "saved audio changes the playing mixer values";
+	if (group.volume != 0.875F || backend->listeners[0][0] != AudioCheckpoint::Position{11, 13, 17}) return "saved audio changes the playing mixer values";
+	if (AudioMan::IsConstructed()) {
+		auto sound = std::make_unique<SoundContainer>();
+		auto& live = g_AudioMan;
+		live.NotePendingSoundOps(sound.get());
+		const auto pending = live.m_PendingSoundOpContainers;
+		const auto soundPages = CheckpointNativeStorage::Prepare();
+		auto sounds = std::make_shared<CheckpointNativeSnapshot>();
+		{
+			CheckpointNativeStorage::ReadScope read(soundPages);
+			CheckpointNativeSnapshot::BoundaryScope boundary(sounds);
+			auto* saved = sounds->Object(sound.get());
+			saved->GetScriptPosition();
+			const auto queued = live.TakePendingSoundOpContainers();
+			if (queued.size() != 1 || queued.front() != saved) return "saved position getter lost its private sound queue";
+			live.NotePendingSoundOps(saved); live.ClearPendingSoundOps(saved);
+			if (!live.TakePendingSoundOpContainers().empty()) return "saved sound queue did not clear its private owner";
+		}
+		if (live.m_PendingSoundOpContainers != pending) return "saved position getter changes the live sound queue";
+	}
+	return {};
 }
 
 bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings, std::string* refusal) {

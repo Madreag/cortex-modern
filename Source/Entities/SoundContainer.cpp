@@ -417,7 +417,11 @@ float SoundContainer::GetLength(LengthOfSoundType type) const {
 	float lengthMilliseconds = 0.0f;
 	for (const SoundData* selectedSoundData: flattenedSoundData) {
 		unsigned int length;
-		selectedSoundData->SoundObject->getLength(&length, FMOD_TIMEUNIT_MS);
+		if (CheckpointNativeStorage::Reading()) {
+			ContentFile file = selectedSoundData->SoundFile;
+			auto* sound = file.GetAsSound();
+			AudioCheckpoint::Require(sound ? sound->getLength(&length, FMOD_TIMEUNIT_MS) : FMOD_ERR_INVALID_HANDLE);
+		} else selectedSoundData->SoundObject->getLength(&length, FMOD_TIMEUNIT_MS);
 		lengthMilliseconds = std::max(lengthMilliseconds, static_cast<float>(length));
 	}
 
@@ -1024,6 +1028,10 @@ FMOD_RESULT SoundContainer::UpdateSoundProperties() {
 	std::vector<SoundData*> flattenedSoundData;
 	m_TopLevelSoundSet->GetFlattenedSoundData(flattenedSoundData, false);
 	for (SoundData* soundData: flattenedSoundData) {
+		if (CheckpointNativeStorage::Reading()) {
+			soundData->SoundObject = soundData->SoundFile.GetAsSound();
+			if (!soundData->SoundObject) return FMOD_ERR_INVALID_HANDLE;
+		}
 		FMOD_MODE soundMode = (std::as_const(*this).CurrentLoops() == 0) ? FMOD_LOOP_OFF : FMOD_LOOP_NORMAL;
 		if (std::as_const(*this).CurrentImmobile()) {
 			soundMode |= FMOD_2D;
