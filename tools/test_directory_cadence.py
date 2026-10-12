@@ -38,6 +38,19 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def stage_activity(repo, run):
+    module = Path(run.cwd) / "Mods" / "DirectoryCadence.rte"
+    module.mkdir()
+    source = (repo / "Data/Tests.rte/Activities.ini").read_text()
+    activity = source[source.index("AddActivity = GAScripted"):source.index("// Determinism baseline")]
+    activity = activity.replace("PresetName = Net Lifecycle Test", "PresetName = Directory Cadence")
+    activity = activity.replace("Tests.rte/Activities/NetLifecycleTest.lua", "DirectoryCadence.rte/DirectoryCadence.lua")
+    activity = activity.replace("IsTestActivity = 1", "IsTestActivity = 0")
+    (module / "Index.ini").write_text("DataModule\n\tModuleName = Directory Cadence\n\tSupportedGameVersion = 7.0.0\n\tIncludeFile = DirectoryCadence.rte/Activities.ini\n")
+    (module / "Activities.ini").write_text(activity)
+    (module / "DirectoryCadence.lua").write_bytes((repo / "Data/Tests.rte/Activities/NetLifecycleTest.lua").read_bytes())
+
+
 class Requests:
     def __init__(self, case):
         self.case = case
@@ -190,7 +203,7 @@ def menus(root, port, case):
     common = "in_play\nwait_ms 1000\nactivate ButtonMainToMultiplayer\nwait_ms 300\n"
     host = common + (
         "settext TextMultiplayerName Host\nactivate ButtonMultiplayerHostGame\nwait_ms 300\n"
-        "combo_select ComboHostActivity P4 Alpha Duel\nwait_ms 300\n"
+        "combo_select ComboHostActivity Directory Cadence\nwait_ms 300\n"
         f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\nactivate ButtonMultiplayerCreate\n"
         "wait_connected 2 80\nwait_remote_ready 80\nactivate ButtonMultiplayerStart\n"
         "wait_lockstep 180 60\n" + ("wait_lockstep 1200 110\n" if case == "flood" else "wait_lockstep 2100 80\n" if case == "liveness" else "wait_lockstep 240 15\n") +
@@ -237,7 +250,7 @@ def main():
                     paths[role].write_text(paths[role].read_text().replace("TextJoinAddress 127.0.0.1", "TextJoinAddress session:" + session))
                 out = root / role
                 env = {"CC_TEST_LINK_BLACKOUT": "2:180:60000"} if args.case == "flood" and role == "guest" else {}
-                run = make_run(repo, ["-menu-script", paths[role], "-num-lua-states", "4", "-net-match-ticks", "0",
+                run = make_run(repo, ["-module", "DirectoryCadence.rte", "-menu-script", paths[role], "-num-lua-states", "4", "-net-match-ticks", "0",
                                      "-net-match-report", out / "match-report.json", "-net-live-tick-hashes", out / "live.jsonl"],
                                out, timeout=145, env=env)
                 seed_settings(run, {"SessionDirectoryUrl": f"127.0.0.1:{args.port + 1}",
@@ -245,6 +258,7 @@ def main():
                                     "NetworkIceEnable": 1,
                                     "NetworkConnectionMode": 1, "NetworkHostRelayMode": 0,
                                     "NetworkStunServers": "", "NetworkInputDelayFrames": 3})
+                stage_activity(repo, run)
                 runs[role] = run.start()
                 if role == "host":
                     wait_for_log(run, "activate ButtonMultiplayerCreate click ButtonMultiplayerCreate PASS", 45)
