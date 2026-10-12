@@ -1647,6 +1647,8 @@ namespace RTE {
 		bool SendPeerFrameMessage(NetHostMigrationMessage message, NetTransportLane lane = NetTransportLane::ControlReliable, uint8_t onlyPeer = 0);
 		bool HandlePeerFrameMessage(const NetHostMigrationMessage& message, uint64_t nowMs, const NetHash32* readKey = nullptr);
 		void SendPeerInput(const NetLockstepFrame& frame);
+		bool PeerWantsLiveInput(uint8_t peer) const;
+		bool PeerReadsInputLive(uint8_t peer, uint64_t nowMs) const;
 		void TickPeerFrameGroups(uint64_t nowMs);
 		bool PeerFrameBlackout(uint64_t nowMs);
 		bool PeerInputAccepted(uint64_t frame, uint8_t owner = 0) const;
@@ -1743,6 +1745,7 @@ namespace RTE {
 		std::optional<uint64_t> m_TestBlackoutAtMs;
 		bool m_TestBlackoutEnded = false;
 		std::map<uint64_t, uint64_t> m_PeerInputSentAtMs;
+		std::map<uint8_t, uint64_t> m_PeerInputReliableThrough;
 		std::map<uint8_t, NetInputDelayEstimator> m_PeerReceiptDelaySamples;
 		void TickPeerInputDelay(uint64_t nowMs);
 		bool ProposePeerInputDelay(uint8_t peer, uint16_t delay, uint64_t frame);

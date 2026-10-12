@@ -1193,6 +1193,9 @@ namespace RTE {
 		std::atomic<bool> m_MigrationFallbackReady{false};
 		uint64_t m_MigrationGeneration = 0;
 		NetHash32 m_MigrationKey{};
+		// A returning seat's session reads the round's frame key the rejoin capsule delivers, from any thread.
+		struct RejoinFrameKey { std::mutex mutex; NetHash32 key{}; };
+		std::shared_ptr<RejoinFrameKey> m_RejoinFrameKey;
 		std::vector<uint8_t> m_MigrationAdmissionState;
 		std::vector<uint8_t> m_LastMigrationAdmissionState;
 		uint8_t m_MigrationAuthority = 0;
@@ -1390,6 +1393,7 @@ namespace RTE {
 		friend bool TestIceDefaultsAndOverrides(std::string* error);
 		friend bool TestRelayOfferAndPolicy(std::string* error);
 		friend bool TestRelayOfferRefresh(std::string* error);
+		friend bool TestRefusedRelayMintRetriesWhenAllowed(std::string* error);
 		friend bool TestIceConnectionFallback(std::string* error);
 		friend bool TestHandoverSnapshotStatus(std::string* error);
 		friend bool TestDiscoveryOccupancy(std::string* error);
@@ -1928,7 +1932,6 @@ namespace RTE {
 		uint64_t m_HeldRejoinRetryAtMs = 0;     //!< When the armed retry of the host begins; 0 when none is armed.
 		uint64_t m_HeldRejoinPriorInput = 0;
 		std::string m_HostEndReason; //!< The host's End Match reason while its round plays to the agreed end frame.
-		bool m_HostEndedRound = false; //!< The host chose End Match; keep the completed round until another match starts.
 		bool m_HeldRejoinDriving = false; //!< The held seat's rejoin loop owns the attempts until a launch or its last failure.
 		bool m_LaunchedFreshRound = false; //!< The last launch handed up starts a lobby's fresh round.
 		bool m_RematchReturnOwed = false; //!< Client: the last rematch setup lost its link and the seat returns through the rejoin.
