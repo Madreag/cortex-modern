@@ -315,7 +315,11 @@ namespace RTE {
 		}
 	}
 
-	size_t PageWriteFence::SystemPageBytes() { return PageBytes(); }
+	// Asked on every owned allocation; the system's page size never changes while it runs.
+	size_t PageWriteFence::SystemPageBytes() {
+		static const size_t bytes = PageBytes();
+		return bytes;
+	}
 	bool PageWriteFence::OpenCopiedPage(uintptr_t address, size_t bytes) noexcept { return Protect(address, bytes, false); }
 	bool PageWriteFence::ProtectCopyPages(uintptr_t address, size_t bytes) noexcept { return Protect(address, bytes, true); }
 
