@@ -82,7 +82,9 @@ class Requests:
         with self.lock:
             if kind == "issue" and status == 200:
                 self.seats[handler.row_body["participant"]] = handler.row_body["seat"]
-            self.rows.append({"at_ms": int(now * 1000), "role": "host" if key == self.host_key else "guest",
+            contents = json.loads(base64.b64decode(handler.row_body["signed_request"])) if "signed_request" in handler.row_body else {}
+            query_only = contents.get("frame_tie", {}).get("query_only", False)
+            self.rows.append({"query_only": query_only, "at_ms": int(now * 1000), "role": "host" if key == self.host_key else "guest",
                               "path": re.sub(r"/[0-9a-f-]{36}(?=/|$)", "/<session>", handler.path.split("?")[0]),
                               "kind": kind, "seat": seat, "status": status,
                               "error": body.get("error", ""), "retry_after_s": body.get("retry_after_s", 0)})
@@ -196,6 +198,13 @@ def main():
     try:
         with local_directory(root / "directory", args.case, args.port + 1) as (server, requests, pin):
             for role in ("host", "guest"):
+                if role == "guest":
+                    deadline = time.monotonic() + 20
+                    while not server.store._sessions and time.monotonic() < deadline:
+                        time.sleep(.05)
+                    with server.store._lock:
+                        session = next(iter(server.store._sessions))
+                    paths[role].write_text(paths[role].read_text().replace("TextJoinAddress 127.0.0.1", "TextJoinAddress session:" + session))
                 out = root / role
                 env = {"CC_TEST_LINK_BLACKOUT": "2:180:60000"} if args.case == "flood" and role == "guest" else {}
                 run = make_run(repo, ["-menu-script", paths[role], "-num-lua-states", "4", "-net-match-ticks", "0",
@@ -203,8 +212,8 @@ def main():
                                out, timeout=145, env=env)
                 seed_settings(run, {"SessionDirectoryUrl": f"127.0.0.1:{args.port + 1}",
                                     "SessionDirectoryCertSha256": pin, "NetworkHostVisibility": 1,
-                                    "NetworkIceEnable": 1 if args.case == "admission" and role == "host" else 0,
-                                    "NetworkConnectionMode": 0, "NetworkHostRelayMode": 0,
+                                    "NetworkIceEnable": 1,
+                                    "NetworkConnectionMode": 1, "NetworkHostRelayMode": 0,
                                     "NetworkStunServers": "", "NetworkInputDelayFrames": 3})
                 runs[role] = run.start()
                 if role == "host":
@@ -236,7 +245,7 @@ def main():
             waiting = "[input-acceptance-wait]" in text["guest"]
             seat_counts = {}
             for seat in (0, 1):
-                stamps = [event["at_ms"] for event in events if event["kind"] == "check-in" and event["seat"] == seat]
+                stamps = [event["at_ms"] for event in events if event["kind"] in ("check-in", "host-change", "frame-tie") and not event["query_only"] and event["seat"] == seat]
                 peak = max((sum(start <= at < start + 60000 for at in stamps) for start in stamps), default=0)
                 seat_counts[str(seat)] = peak
             busy = [event for event in events if event["error"] == "connection_busy"]
