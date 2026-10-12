@@ -6698,9 +6698,11 @@ static std::string ResyncSaveName() {
 				System::PrintDiagnosticLine(line.str());
 				m_Runner->ConfigureWorldJoinSeats(std::move(holds), std::move(leaves));
 			}
-			if (!m_Runner->IsWorldJoinLockstepStarting())
+			if (!m_Runner->IsWorldJoinLockstepStarting()) {
 				m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, m_WorldCatchUp.appliedThrough, &error);
-			else {
+				// The round's start reads the wire the catch-up reads: the tail it takes goes on to the catch-up, not to a lobby that has ended.
+				AttachCoordinatorSessionSink();
+			} else {
 				for (auto it = m_CatchUpWirePackets.begin(); it != m_CatchUpWirePackets.end();) {
 					if (NetLockstepCodec::LooksLikePacket(it->bytes) && it->bytes.size() >= NetLockstepCodec::c_HeaderBytes && (it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Start) || it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Timing))) {
 						m_Coordinator->InjectEvent(*it, NetLockstepNowMs()); m_CatchUpWireBytes -= it->bytes.size(); it = m_CatchUpWirePackets.erase(it);
