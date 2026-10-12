@@ -194,7 +194,7 @@ namespace RTE {
 			m_HiddenUnsupported = false;
 		}
 		if (!m_Listed) {
-			// m_NextAttemptMs stays: a 429 or backoff deadline binds every request, whatever the intent.
+			// A metadata refresh retains the current path's retry deadline.
 			// Repeated metadata cannot retry a protocol refusal or an unsupported hidden intent.
 			if (m_State == State::Failed && !m_ConnectionProtocolRefused && !m_SessionGone && (listed || !m_HiddenUnsupported)) {
 				SetState(State::Idle);
@@ -275,7 +275,8 @@ namespace RTE {
 			m_RequestKind = RequestKind::None;
 			HandleReply(kind, reply, nowMs);
 		}
-		if (m_Request || nowMs < m_NextAttemptMs) {
+		// Closing a listing uses its own retry slot and shared budget, even after a failed heartbeat.
+		if (m_Request || (m_Listed && nowMs < m_NextAttemptMs)) {
 			return;
 		}
 		switch (m_State) {

@@ -16449,6 +16449,9 @@ namespace RTE {
 				// The echo repeats the visibility the request asked for: a service that contradicts it
 				// is a protocol failure the client backs off from, which is not what these cases test.
 				if (m_Wire->replies.empty()) {
+					if (!m_Wire->sent.empty() && m_Wire->sent.back().method == "DELETE") {
+						return {200, R"({"ok":true})", ""};
+					}
 					bool listed = true;
 					if (!m_Wire->sent.empty()) {
 						try {
@@ -16779,7 +16782,8 @@ namespace RTE {
 		const NetDirectoryClient::Reply hidden{200, R"({"expires_in_s":15,"heartbeat_s":1,"listed":false})", ""};
 		const NetDirectoryClient::Reply listed{200, R"({"expires_in_s":15,"heartbeat_s":1,"listed":true})", ""};
 		const NetDirectoryClient::Reply deleted{200, R"({"ok":true})", ""};
-		const NetDirectoryClient::Reply gone{404, R"({"error":"not_found"})", ""};
+		// Legacy untyped replies keep the lease-recovery cases distinct from a named ended session.
+		const NetDirectoryClient::Reply gone{404, "", ""};
 		const auto count = [](const Wire& wire, const std::string& method, const std::string& path) {
 			return static_cast<size_t>(std::count_if(wire.sent.begin(), wire.sent.end(), [&](const NetDirectoryClient::Request& request) { return request.method == method && request.path == path; }));
 		};
