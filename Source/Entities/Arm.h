@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
 
 #include "Attachable.h"
 
@@ -165,7 +166,7 @@ namespace RTE {
 
 		/// Gets the name of this Arm's next HandTarget.
 		/// @return The name of this Arm's next HandTarget.
-		std::string GetNextHandTargetDescription() const { return m_HandTargets.empty() ? "" : m_HandTargets.front().Description; }
+		std::string GetNextHandTargetDescription() const { return m_HandTargets.empty() ? std::string() : m_HandTargets.front().Description.Value(); }
 
 		/// Gets the position, in absolute scene coordinates, of this Arm's next HandTarget.
 		/// @return The position of this Arm's next HandTarget.
@@ -260,7 +261,7 @@ namespace RTE {
 			HandTarget(const std::string_view& description, const Vector& targetOffset, float delayAtTarget, bool hFlippedWhenTargetWasCreated) :
 			    Description(description), TargetOffset(targetOffset), DelayAtTarget(delayAtTarget), HFlippedWhenTargetWasCreated(hFlippedWhenTargetWasCreated) {}
 
-			std::string Description = "";
+			CheckpointString Description;
 			Vector TargetOffset;
 			float DelayAtTarget = 0;
 			bool HFlippedWhenTargetWasCreated = false;
