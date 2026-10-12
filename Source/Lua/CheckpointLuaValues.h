@@ -188,9 +188,25 @@ assert(coroutine.resume(savedOrderThread))
 				if (luaL_dostring(live, "savedTable={value=11}; savedAlias=savedTable; savedGenerated=setmetatable({}, {__index=function(_,key) if key=='text' then return 'private-'..tostring(37) end return {answer=37} end}); local n=7; savedGetter=function() n=n+1; savedTable.value=savedTable.value+n; return n,savedTable,savedAlias end; savedOther=function() return n end; savedThread=coroutine.create(function() local value=23; savedCell=function(n) if n then value=n end return value end; savedCellAlias=function() return value end; coroutine.yield(value); return value end); assert(coroutine.resume(savedThread))") != 0)
 					throw std::runtime_error("could not create saved getters");
 			});
+			std::optional<MSize> occupied, empty;
+			GCRef* const strings = G(live)->str.tab;
+			for (MSize slot = 0; slot <= G(live)->str.mask && (!occupied || !empty); ++slot) {
+				if (gcrefu(strings[slot]) & ~uintptr_t{1}) { if (!occupied) occupied = slot; }
+				else if (!empty) empty = slot;
+			}
+			if (!occupied || !empty) throw std::runtime_error("saved string check needs occupied and empty buckets");
+			struct RestoreStrings {
+				GCRef* strings; MSize occupied, empty; GCRef first, second; bool pending = true;
+				void Restore() { if (pending) { strings[occupied] = first; strings[empty] = second; pending = false; } }
+				~RestoreStrings() { Restore(); }
+			} restore{strings, *occupied, *empty, strings[*occupied], strings[*empty]};
+			setgcrefp(strings[*occupied], gcrefu(restore.first) | uintptr_t{1});
+			setgcrefp(strings[*empty], uintptr_t{1});
 			const Snapshot heap = source->Freeze([](std::function<void()> work) {
 				return std::async(std::launch::deferred, std::move(work));
 			});
+			heap.NativeBytes();
+			restore.Restore();
 			const TValue getter = heap.GlobalValue("savedGetter"), other = heap.GlobalValue("savedOther");
 			const TValue order = heap.GlobalValue("savedOrderExpected");
 			const std::string expected = heap.ReadString(strdata(strV(&order)), heap.Read(&strV(&order)->len));
@@ -307,7 +323,8 @@ assert(coroutine.resume(savedOrderThread))
 			};
 			string(&identity->strempty);
 			for (MSize slot = 0; slot <= global.str.mask; ++slot) {
-				for (const GCobj* item = gcref(m_Heap.Read(global.str.tab + slot)); item;) {
+				const GCRef head = m_Heap.Read(global.str.tab + slot);
+				for (const GCobj* item = reinterpret_cast<const GCobj*>(gcrefu(head) & ~uintptr_t{1}); item;) {
 					const auto* source = reinterpret_cast<const GCstr*>(item);
 					string(source); item = gcref(m_Heap.Read(&source->nextgc));
 				}
