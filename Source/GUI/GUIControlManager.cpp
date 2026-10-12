@@ -1832,13 +1832,14 @@ bool GUICheckpoint::RunSelfTest() {
 			snapshot->SealBoundary();
 			g_TimerMan.PrepareCheckpointValues();
 			CheckpointNativeStorage::Root<TimerMan> timerRoot(&g_TimerMan);
+			CheckpointNativeStorage::Root<PresetMan> presetRoot(&g_PresetMan);
 			CheckpointNativeStorage::Root<decltype(ContentFile::s_LoadedBitmaps)> bitmapRoot(&ContentFile::s_LoadedBitmaps);
 			const auto [pathSource, pathSize] = ContentFile::PathHashRegistry();
 			std::vector<std::byte> pathHeader(pathSize);
 			const auto pages = CheckpointNativeStorage::Prepare();
 			for (const auto& part: pages) part->Arm();
-			bitmapRoot.Freeze(); timerRoot.Freeze(); std::memcpy(pathHeader.data(), pathSource, pathSize);
-			const std::array roots{bitmapRoot.Range(), timerRoot.Range(), CheckpointNativeStorage::RootRange{pathSource, pathHeader.data(), pathSize}};
+			bitmapRoot.Freeze(); timerRoot.Freeze(); presetRoot.Freeze(); std::memcpy(pathHeader.data(), pathSource, pathSize);
+			const std::array roots{bitmapRoot.Range(), timerRoot.Range(), presetRoot.Range(), CheckpointNativeStorage::RootRange{pathSource, pathHeader.data(), pathSize}};
 			controls.reset(); input.reset(); screen.reset(); image.reset(); banner.reset(); editor.reset();
 			CheckpointNativeStorage::ReadScope read(pages, roots);
 			BITMAP* savedImage = snapshot->ReadBitmap(imageAddress);

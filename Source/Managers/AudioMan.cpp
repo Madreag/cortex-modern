@@ -3179,6 +3179,7 @@ std::string AudioMan::CheckpointBackendSelfTestMismatch() {
 	values->voice.priority = 37; values->voice.control = group;
 	const auto groupText = group.SaveCheckpoint(), voiceText = CaptureStoredVoice(11, values->voice, 0, 2).SaveCheckpoint();
 	const auto pages = CheckpointNativeStorage::Prepare();
+	for (const auto& part: pages) part->Arm();
 	group.volume = 0.875F; group.mix.clear(); group.fades.clear(); group.effects.clear(); backend->listeners[0][0] = {11, 13, 17};
 	values->voice.soundPath = "later voice"; values->voice.control.mix.clear(); values->voice.control.effects[0].parameters[0].number = 0.125F;
 	auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
@@ -3202,6 +3203,7 @@ std::string AudioMan::CheckpointBackendSelfTestMismatch() {
 		live.NotePendingSoundOps(sound.get());
 		const auto pending = live.m_PendingSoundOpContainers;
 		const auto soundPages = CheckpointNativeStorage::Prepare();
+		for (const auto& part: soundPages) part->Arm();
 		auto sounds = std::make_shared<CheckpointNativeSnapshot>();
 		{
 			CheckpointNativeStorage::ReadScope read(soundPages);

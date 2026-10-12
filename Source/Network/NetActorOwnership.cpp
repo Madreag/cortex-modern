@@ -106,6 +106,7 @@ namespace RTE {
 		struct Restore { std::map<int64_t, NetSeededActorOwner> values; ~Restore() { RestoreSeededOwners(std::move(values)); } } restore{s_SeededOwners};
 		PrepareCheckpointValues(); ClearSeededOwners(); SeedOwner(71, 2, 3);
 		const auto pages = CheckpointNativeStorage::Prepare();
+		for (const auto& part: pages) part->Arm();
 		ClearSeededOwners(); SeedOwner(71, 1, 0); SeedOwner(73, 3, 1);
 		{
 			CheckpointNativeStorage::ReadScope read(pages);
@@ -123,6 +124,7 @@ namespace RTE {
 		PrepareCheckpointValues();
 		if (!CheckpointValuesReady()) return "saved actor owners could not retry a refused copy";
 		const auto retry = CheckpointNativeStorage::Prepare();
+		for (const auto& part: retry) part->Arm();
 		CheckpointNativeStorage::ReadScope read(retry);
 		return GetSeededOwners().size() == 1 && GetSeededOwner(79) == 3 && GetSeededOwnerTeam(79) == 2 ? std::string() : "saved actor owner retry lost the latest seed";
 	}
