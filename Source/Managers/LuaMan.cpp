@@ -10216,8 +10216,10 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		CheckpointNativeStorage::AllocationScope allocations(true);
 		auto owner = CheckpointLua::HeapOwner::Create();
 		lua_State* source = owner->State();
+		const void* librarySource = nullptr;
 		const auto bind = [](lua_State* state) {
 			luaL_openlibs(state); luabind::open(state);
+			if (luaL_dostring(state, "require('ffi')")) throw std::runtime_error("could not open the saved library probe");
 			luabind::module(state)[RegisterLuaBindingsOfType(SystemLuaBindings, Vector)];
 		};
 		CheckpointLua::ProtectedCall(source, [&] {
@@ -10229,6 +10231,9 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			lua_getglobal(source, "savedMatcher"); lua_newtable(source); lua_pushinteger(source, 43); lua_setfield(source, -2, "value");
 			if (!lua_setfenv(source, -2)) throw std::runtime_error("could not set the saved library environment");
 			lua_pop(source, 1);
+			if (luaL_dostring(source, "savedC=require('ffi').C; savedCLibraryAlias=savedC; savedCGet=function() return savedC,savedCLibraryAlias end"))
+				throw std::runtime_error("could not create saved library aliases");
+			lua_getglobal(source, "savedC"); librarySource = lua_topointer(source, -1); lua_pop(source, 1);
 			CheckpointLua::ForEachCapturedUserdata(source, [source](GCudata* value) {
 				if (value->len != sizeof(luabind::detail::class_rep)) return;
 				auto* type = static_cast<luabind::detail::class_rep*>(uddata(value));
@@ -10281,6 +10286,11 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 				if (lua_pcall(state, 0, 3, 0)) throw std::runtime_error(lua_tostring(state, -1));
 				exact = exact && lua_tointeger(state, -3) == 37 && lua_type(state, -2) == LUA_TSTRING && std::string_view(lua_tostring(state, -2)) == "two" &&
 				    lua_type(state, -1) == LUA_TSTRING && std::string_view(lua_tostring(state, -1)) == "17";
+				lua_settop(state, 0);
+				objects.Values().Push(heap.GlobalValue("savedCGet")); objects.Values().Finish();
+				if (lua_pcall(state, 0, 2, 0)) throw std::runtime_error(lua_tostring(state, -1));
+				lua_getglobal(state, "package"); lua_getfield(state, -1, "loaded"); lua_getfield(state, -1, "ffi"); lua_getfield(state, -1, "C");
+				exact = exact && lua_type(state, 1) == LUA_TUSERDATA && lua_rawequal(state, 1, 2) && lua_rawequal(state, 1, -1) && lua_topointer(state, 1) != librarySource;
 				using Handle = luabind::detail::object_rep;
 				auto* type = luabind::detail::class_registry::get_registry(state)->find_class(LUABIND_TYPEID(Vector));
 				{

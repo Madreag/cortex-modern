@@ -5,6 +5,7 @@
 #include "CheckpointLuaThread.h"
 
 extern "C" {
+#include "lj_clib.h"
 #include "lj_tab.h"
 }
 
@@ -392,6 +393,14 @@ assert(coroutine.resume(savedOrderThread))
 				} else if (tvisudata(&value) && m_Heap.Read(&udataV(&value)->udtype) == UDTYPE_IO_FILE && lua_isuserdata(m_State, -1)) {
 					const TValue target = *(m_State->top - 1);
 					if (tvisudata(&target) && udataV(&target)->udtype == UDTYPE_IO_FILE && !Remembered(value)) Remember(value, -1);
+#if LJ_HASFFI
+				} else if (tvisudata(&value) && m_Heap.Read(&udataV(&value)->udtype) == UDTYPE_FFI_CLIB && lua_isuserdata(m_State, -1)) {
+					const TValue target = *(m_State->top - 1);
+					if (tvisudata(&target) && udataV(&target)->udtype == UDTYPE_FFI_CLIB &&
+					    m_Heap.Read(&udataV(&value)->len) == sizeof(CLibrary) && udataV(&target)->len == sizeof(CLibrary) &&
+					    m_Heap.Read(&static_cast<const CLibrary*>(uddata(udataV(&value)))->handle) == static_cast<const CLibrary*>(uddata(udataV(&target)))->handle &&
+					    !Remembered(value)) Remember(value, -1);
+#endif
 				} else if (tvistab(&value)) Libraries(value, lua_gettop(m_State), seen);
 				lua_pop(m_State, 1);
 			};
