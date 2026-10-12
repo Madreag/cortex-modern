@@ -3551,8 +3551,12 @@ static std::string ResyncSaveName() {
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
 		m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
-		if (m_IsHost)
+		if (m_IsHost) {
 			m_ReconnectHost.SetMigrationHold(false, AdmissionNowMs());
+			// The directory referees this round's ties and host changes by the configuration every peer agreed.
+			const NetLockstepConfig& round = m_Coordinator->GetConfig();
+			m_DirectoryRow.matchConfigHash = NetIdentity::HashHex(round.originalRoundConfigHash.value_or(NetMatchConfigUtil::HashConfig(round.matchConfig)));
+		}
 		// A staged options draft is a lobby-round intent: the launch that ran without it retiring
 		// means its window closed, so it must not surface again in the rematch lobby.
 		m_PendingHostOptions.reset();

@@ -231,6 +231,7 @@ namespace RTE {
 		bool m_Running = false;
 		std::string m_SessionId;
 		std::string m_Token;
+		std::string m_SentMatchConfigHash, m_RegisteredMatchConfigHash; //!< The match the last register named, and the one the service holds.
 		std::string m_AuthorityKey;
 		std::string m_ObservedIp;
 		int64_t m_HeartbeatS = 0;

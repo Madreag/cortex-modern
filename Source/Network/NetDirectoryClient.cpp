@@ -190,6 +190,12 @@ namespace RTE {
 		ApplyRefusedResumes(m_Row);
 		m_Running = running;
 		m_DesiredListed = listed;
+		// The referee rules on ties and host changes for the match the row names, so an agreed new match registers again.
+		if (m_State == State::Registered && !m_Row.persistentWorld && !m_SessionId.empty() && !m_RegisteredMatchConfigHash.empty() &&
+		    m_Row.matchConfigHash != m_RegisteredMatchConfigHash) {
+			SetState(State::Registering);
+			ScheduleRetry(m_HttpTransport ? NetDirectoryRetry::NowMs() : m_NowMs);
+		}
 		if (listed) {
 			m_HiddenUnsupported = false;
 		}
@@ -612,6 +618,7 @@ namespace RTE {
 			ClearCapacityError();
 			m_BackoffMs = 0;
 			System::PrintDiagnosticLine("[net-directory] registered session_id=" + m_SessionId + " heartbeat_s=" + std::to_string(m_HeartbeatS));
+			m_RegisteredMatchConfigHash = m_SentMatchConfigHash;
 			SetState(State::Registered);
 			if (!m_Listed) {
 				// The unlist beat the response: delete the row we just created.
@@ -825,6 +832,7 @@ namespace RTE {
 		request.method = "POST";
 		request.path = "/v1/sessions";
 		request.body = NetDirectoryCodec::EncodeRegisterRequest(m_Row);
+		m_SentMatchConfigHash = m_Row.matchConfigHash;
 		++m_Registers;
 		SetState(State::Registering);
 		StartRequest(RequestKind::Register, request);
