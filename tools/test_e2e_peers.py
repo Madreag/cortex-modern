@@ -293,6 +293,13 @@ class JoinerBoxTest(unittest.TestCase):
         peers.copy_file(box, back, copied, download=True)
         self.assertEqual((copied.read_text(), back.read_text()), ("{}", "{}"))
 
+    def test_engine_levers_are_test_levers_only(self):
+        self.assertEqual(peers.engine_levers(["CC_TEST_LUA_RNG_TRACE=1"]), {"CC_TEST_LUA_RNG_TRACE": "1"})
+        self.assertEqual(peers.engine_levers([]), {})
+        for value in ("CCCP_HEADLESS=0", "CC_TEST_LUA_RNG_TRACE", "PATH=/tmp"):
+            with self.assertRaises(ValueError):
+                peers.engine_levers([value])
+
     def test_headed_player_environment(self):
         environment = peers.video.headed_environment({"CCCP_HEADLESS": "1", "CC_TEST_READBACK_TIMING": "1"})
         self.assertEqual(environment, {"CC_TEST_READBACK_TIMING": "1", "CC_TEST_VISIBLE_WINDOW": "1"})

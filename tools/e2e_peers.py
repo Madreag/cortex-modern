@@ -159,6 +159,9 @@ def play(request_path):
     run = copy.deepcopy(scene_runs(document)[index])
     name = run.get("name", "run" + str(index))
     run["peers"] = [peer for peer in run.get("peers", document.get("peers", [])) if peer["name"] == role]
+    for peer in run["peers"]:
+        # A diagnostic lever the collector names reaches this player's engine; the scene itself is unchanged.
+        peer["env"] = {**peer.get("env", {}), **request.get("engine_env", {})}
     local_scene = copy.deepcopy(document)
     local_scene["checklist"] = [item for item in document.get("checklist", []) if not item.get("peer") or item["peer"] == role]
     headed = request["box"]["os"] in JOINER_SYSTEMS
@@ -398,6 +401,17 @@ def launch(box, request_path, log):
     return process, remote, tool
 
 
+def engine_levers(values):
+    """Test levers for both players' engines; only CC_TEST_* names, which cost nothing when unset."""
+    levers = {}
+    for value in values or []:
+        name, separator, setting = value.partition("=")
+        if not separator or not re.fullmatch(r"CC_TEST_[A-Z0-9_]+", name):
+            raise ValueError("--engine-env takes CC_TEST_NAME=VALUE")
+        levers[name] = setting
+    return levers
+
+
 def selected_boxes(value, path):
     assignments = dict(part.split("=", 1) for part in value.split(","))
     if set(assignments) != {"host", "joiner"} or len(set(name.casefold() for name in assignments.values())) != 2:
@@ -429,6 +443,7 @@ def capture_scene(args):
     document = scene(args.scenario)
     check_scene(document)
     boxes = selected_boxes(args.peer_boxes, args.boxes_file)
+    engine_env = engine_levers(getattr(args, "engine_env", None))
     out, repo = args.out.resolve(), args.repo.resolve()
     source = video.source_evidence(repo)
     if source["dirty"]:
@@ -445,7 +460,8 @@ def capture_scene(args):
                "repo": str(repo), "out": str(out), "platform": sys.platform, "fps": video.DEFAULT_FPS,
                "size": document.get("size"), "settings": {}, "render_cap": 60, "started": video.stamp(),
                "command": [sys.executable, *sys.argv], "scratch_root": str(out.parent),
-               "scratch_limit_bytes": video.SCRATCH_LIMIT, "topology": "spread", "proof": False, "runs": []}
+               "scratch_limit_bytes": video.SCRATCH_LIMIT, "topology": "spread", "proof": False, "runs": [],
+               "engine_env": engine_env}
     video.write_json(out / "capture.json", capture)
     for index, run in enumerate(scene_runs(document)):
         name = run.get("name", "run" + str(index))
@@ -456,7 +472,7 @@ def capture_scene(args):
                 box = boxes[role]
                 remote_out = box["scratch"].rstrip("/") + "/" + out.name + "-" + name + "-" + uuid.uuid4().hex[:8]
                 request = dict(box=box, role=role, run_index=index, out=remote_out, commit=source["tip"],
-                               scene_relative=relative, scene_sha256=scene_hash, fps=video.DEFAULT_FPS,
+                               engine_env=engine_env, scene_relative=relative, scene_sha256=scene_hash, fps=video.DEFAULT_FPS,
                                sheet_every=15, port=int(document.get("port_base", video.PORT_LO)),
                                run_name=name, signal_files=player_files(document, run))
                 request_path = controls / (name + "-" + role + ".json")
@@ -540,6 +556,8 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--peer-boxes")
     parser.add_argument("--boxes-file", type=Path, default=os.environ.get("CORTEX_SCENE_BOXES"))
+    parser.add_argument("--engine-env", action="append", default=[], metavar="CC_TEST_NAME=VALUE",
+                        help="a test lever set in both players' engines; recorded in the capture")
     parser.add_argument("--check-spread", type=Path)
     parser.add_argument("--play", type=Path)
     parser.add_argument("--pack", type=Path)
