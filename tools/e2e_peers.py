@@ -47,6 +47,16 @@ def scene(name):
     return document
 
 
+def committed_scene_sha256(repo, commit, path):
+    path = Path(path).resolve()
+    relative = path.relative_to(Path(repo).resolve()).as_posix()
+    committed = subprocess.run(["git", "-C", str(repo), "show", commit + ":" + relative],
+                               check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+    if path.read_bytes().replace(b"\r\n", b"\n") != committed.replace(b"\r\n", b"\n"):
+        raise ValueError("scene working file differs from its committed blob")
+    return hashlib.sha256(committed).hexdigest()
+
+
 def scene_runs(document):
     return document.get("runs") or [{"name": "run0", "peers": document["peers"]}]
 
@@ -142,7 +152,7 @@ def play(request_path):
     request = read(request_path)
     source, executable, receipt = check_build(request)
     document = scene(str(Path(request["box"]["repo"]) / request["scene_relative"]))
-    if video.file_evidence(document["path"])["sha256"] != request["scene_sha256"]:
+    if committed_scene_sha256(request["box"]["repo"], request["commit"], document["path"]) != request["scene_sha256"]:
         raise ValueError("player scene differs from the original scene")
     check_scene(document)
     out = Path(request["out"])
@@ -396,7 +406,7 @@ def capture_scene(args):
         raise ValueError("commit the scene launcher before playing")
     scene_path = Path(document["path"])
     relative = scene_path.relative_to(repo).as_posix()
-    scene_hash = video.file_evidence(scene_path)["sha256"]
+    scene_hash = committed_scene_sha256(repo, source["tip"], scene_path)
     out.mkdir(parents=True, exist_ok=False)
     controls = out / "commands"
     controls.mkdir()

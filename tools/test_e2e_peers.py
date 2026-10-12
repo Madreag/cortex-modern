@@ -1,9 +1,13 @@
 """A capture cannot claim separate boxes by relabeling two local players."""
 import copy
+import hashlib
 import json
 from pathlib import Path
+import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 import e2e_peers as peers
 
@@ -84,6 +88,75 @@ class SceneBoxesTest(unittest.TestCase):
         self.assertEqual(received.read_bytes(), content)
         with self.assertRaises(ValueError):
             peers.write_player_files(requests['host'], copied)
+
+
+class SceneAccepted(Exception):
+    pass
+
+
+class CommittedSceneTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q")
+        self.git("config", "core.autocrlf", "input")
+        self.path = self.repo / "scene.json"
+        self.content = b'{\n  "schema": 1,\n  "name": "committed scene"\n}\n'
+        self.path.write_bytes(self.content)
+        self.git("add", "scene.json")
+        self.git("-c", "user.name=Scene check", "-c", "user.email=scene@example.invalid", "commit", "-qm", "Store the scene")
+        self.commit = self.git("rev-parse", "HEAD").strip()
+        self.digest = hashlib.sha256(self.content).hexdigest()
+        self.request = self.root / "request.json"
+        self.request.write_text(json.dumps(dict(box={"repo": str(self.repo)}, scene_relative="scene.json",
+                                                commit=self.commit, scene_sha256=self.digest)), encoding="utf-8")
+
+    def git(self, *args):
+        return subprocess.check_output(["git", "-C", str(self.repo), *args], text=True)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def crlf_working_copy(self):
+        self.path.write_bytes(self.content.replace(b"\n", b"\r\n"))
+        self.git("add", "scene.json")
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertEqual(self.git("show", self.commit + ":scene.json").encode(), self.content)
+
+    def test_player_accepts_crlf_working_copy(self):
+        self.crlf_working_copy()
+        with mock.patch.object(peers, "check_build", return_value=({}, {}, {})), \
+                mock.patch.object(peers, "check_scene", side_effect=SceneAccepted):
+            with self.assertRaises(SceneAccepted):
+                peers.play(self.request)
+
+    def test_orchestrator_hashes_committed_blob(self):
+        self.crlf_working_copy()
+        options = SimpleNamespace(scenario=str(self.path), repo=self.repo, out=self.root / "capture",
+                                  peer_boxes="host=Host,joiner=Joiner", boxes_file=self.root / "boxes.json")
+        with mock.patch.object(peers, "check_scene"), mock.patch.object(peers, "selected_boxes", return_value={}), \
+                mock.patch.object(peers.video, "write_json", side_effect=SceneAccepted) as write:
+            with self.assertRaises(SceneAccepted):
+                peers.capture_scene(options)
+        self.assertEqual(write.call_args.args[1]["scene_sha256"], self.digest)
+
+    def test_player_rejects_real_content_change(self):
+        self.path.write_bytes(self.content.replace(b"committed scene", b"different scene").replace(b"\n", b"\r\n"))
+        with mock.patch.object(peers, "check_build", return_value=({}, {}, {})), mock.patch.object(peers, "check_scene") as check:
+            with self.assertRaises(ValueError):
+                peers.play(self.request)
+        check.assert_not_called()
+
+    def test_player_rejects_different_committed_scene(self):
+        request = json.loads(self.request.read_text(encoding="utf-8"))
+        request["scene_sha256"] = hashlib.sha256(b"another committed scene").hexdigest()
+        self.request.write_text(json.dumps(request), encoding="utf-8")
+        with mock.patch.object(peers, "check_build", return_value=({}, {}, {})), mock.patch.object(peers, "check_scene") as check:
+            with self.assertRaisesRegex(ValueError, "player scene differs from the original scene"):
+                peers.play(self.request)
+        check.assert_not_called()
 
 
 if __name__ == "__main__":
