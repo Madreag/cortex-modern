@@ -109,6 +109,7 @@ struct CheckpointPagePool::Block {
 	std::atomic_flag lock = ATOMIC_FLAG_INIT;
 	std::vector<std::shared_ptr<Copy>> copies;
 	std::vector<PageState> states;
+	std::vector<uint64_t> digests; // Each written page's bytes at the last cooling pass; only the settler reads them.
 	explicit Block(size_t bytes, size_t slotBytes = 0) : live(bytes), slotBytes(slotBytes ? slotBytes : bytes), states(bytes / pageBytes, PageState::Open) {}
 	~Block() { PageWriteFence::UnwatchCopies(this); }
 	bool Watch() {
@@ -240,6 +241,56 @@ struct CheckpointPagePool::Block {
 		}
 		return fenced;
 	}
+	// Fences again the written pages whose bytes did not change since the last pass, so a boundary copies only the pages
+	// still being written; a page fenced too early costs one more write fault.
+	size_t Cool() {
+		constexpr size_t chunk = 1024;
+		if (digests.size() != states.size()) digests.assign(states.size(), 0);
+		std::array<PageState, chunk> seen;
+		std::vector<unsigned char> still(chunk);
+		size_t cooled = 0;
+		for (size_t first = 0; first < states.size(); first += chunk) {
+			const size_t count = std::min(chunk, states.size() - first);
+			{
+				Locked guard(lock);
+				std::copy_n(states.begin() + first, count, seen.begin());
+			}
+			bool any = false;
+			for (size_t index = 0; index < count; ++index) {
+				still[index] = 0;
+				if (seen[index] != PageState::Hot) continue;
+				const uint64_t digest = PageDigest(live.data + (first + index) * pageBytes, pageBytes);
+				still[index] = digest == digests[first + index];
+				digests[first + index] = digest;
+				any |= still[index] != 0;
+			}
+			if (!any) continue;
+			Locked guard(lock);
+			for (size_t index = 0; index < count;) {
+				const auto unchanged = [&](size_t at) { return still[at] && states[first + at] == PageState::Hot; };
+				if (!unchanged(index)) { ++index; continue; }
+				size_t end = index + 1;
+				while (end < count && unchanged(end)) ++end;
+				if (PageWriteFence::ProtectCopyPages(reinterpret_cast<uintptr_t>(live.data + (first + index) * pageBytes), (end - index) * pageBytes)) {
+					std::fill(states.begin() + first + index, states.begin() + first + end, PageState::Fenced);
+					cooled += end - index;
+				}
+				index = end;
+			}
+		}
+		return cooled;
+	}
+	static uint64_t PageDigest(const unsigned char* page, size_t bytes) noexcept {
+		uint64_t lanes[4] = {0x9E3779B97F4A7C15ull, 0xC2B2AE3D27D4EB4Full, 0x165667B19E3779F9ull, 0x27D4EB2F165667C5ull};
+		for (size_t offset = 0; offset + 32 <= bytes; offset += 32) {
+			for (size_t lane = 0; lane < 4; ++lane) {
+				uint64_t word;
+				std::memcpy(&word, page + offset + lane * 8, sizeof(word));
+				lanes[lane] = (lanes[lane] ^ word) * 0x100000001B3ull;
+			}
+		}
+		return lanes[0] ^ (lanes[1] * 3) ^ (lanes[2] * 5) ^ (lanes[3] * 7);
+	}
 	size_t OpenPages() {
 		Locked guard(lock);
 		return static_cast<size_t>(std::count(states.begin(), states.end(), PageState::Open));
@@ -291,14 +342,26 @@ uint64_t CheckpointPagePool::InventoryGeneration() noexcept {
 	return registry ? registry->generation.load(std::memory_order_acquire) : 0;
 }
 
-size_t CheckpointPagePool::SettleInventory(size_t budget) {
+std::vector<std::shared_ptr<CheckpointPagePool::Block>> CheckpointPagePool::LiveBlocks() {
 	std::vector<std::shared_ptr<Block>> blocks;
-	{
-		auto& registry = Registry::Get();
-		std::lock_guard lock(registry.mutex);
-		blocks.reserve(registry.blocks.size());
-		for (const auto& [address, weak]: registry.blocks) if (auto block = weak.lock()) blocks.push_back(std::move(block));
-	}
+	auto& registry = Registry::Get();
+	std::lock_guard lock(registry.mutex);
+	blocks.reserve(registry.blocks.size());
+	for (const auto& [address, weak]: registry.blocks) if (auto block = weak.lock()) blocks.push_back(std::move(block));
+	return blocks;
+}
+
+size_t CheckpointPagePool::CoolInventory() {
+	// One pass at a time: the digests are the pass's own.
+	static std::mutex passes;
+	std::lock_guard pass(passes);
+	size_t cooled = 0;
+	for (const auto& block: LiveBlocks()) if (block->Watch()) cooled += block->Cool();
+	return cooled;
+}
+
+size_t CheckpointPagePool::SettleInventory(size_t budget) {
+	const auto blocks = LiveBlocks();
 	size_t left = 0;
 	for (const auto& block: blocks) {
 		if (budget && block->Watch()) budget -= block->Settle(budget);
@@ -751,12 +814,18 @@ void CheckpointNativeStorage::StartSettling() {
 	// Faults on the newly fenced pages are spread over the slices instead of landing on one tick.
 	static std::jthread settler([](std::stop_token stop) {
 		uint64_t settled = UINT64_MAX;
+		auto cooled = std::chrono::steady_clock::now();
 		while (!stop.stop_requested()) {
 			const uint64_t generation = CheckpointPagePool::InventoryGeneration();
 			bool more = false;
 			if (WorldEnabled() && generation != settled) {
 				more = CheckpointPagePool::SettleInventory(2048) > 0;
 				if (!more) settled = generation;
+			}
+			// A page that stopped changing for a pass is fenced again, so the next boundary copies only pages still written.
+			if (WorldEnabled() && std::chrono::steady_clock::now() - cooled >= std::chrono::seconds(1)) {
+				CheckpointPagePool::CoolInventory();
+				cooled = std::chrono::steady_clock::now();
 			}
 			std::this_thread::sleep_for(more ? std::chrono::milliseconds(4) : std::chrono::milliseconds(50));
 		}
@@ -1555,6 +1624,9 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 			cold.get()[0] = 12; hot.get()[0] = 22;
 			if (read(first, cold.get()) != 11 || read(first, hot.get()) != 21) return "a first inventory boundary lost its fenced values";
 		}
+		// Written pages that stop changing are fenced again and still give the next boundary their bytes.
+		CheckpointPagePool::CoolInventory();
+		if (CheckpointPagePool::CoolInventory() == 0) return "written pages that stopped changing were never fenced again";
 		{
 			const auto second = Prepare();
 			for (const auto& page: second) page->WarmShadow();

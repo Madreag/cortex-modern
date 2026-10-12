@@ -16,6 +16,7 @@ namespace RTE {
 		struct Copy;
 		struct Registry;
 		struct ArmGate;
+		static std::vector<std::shared_ptr<Block>> LiveBlocks();
 
 	public:
 		class Allocation;
@@ -82,6 +83,8 @@ namespace RTE {
 		static uint64_t InventoryGeneration() noexcept;
 		/// Fences up to the given inventory pages no boundary has seen; returns how many such pages remain.
 		static size_t SettleInventory(size_t pages);
+		/// Fences again the written inventory pages that stopped changing since the last pass; returns how many.
+		static size_t CoolInventory();
 		static std::string SelfTestMismatch();
 	private:
 		std::vector<std::shared_ptr<Block>> m_Blocks;
