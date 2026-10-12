@@ -6,6 +6,9 @@
 #include <luabind/detail/class_registry.hpp>
 #include <luabind/detail/object_rep.hpp>
 
+#include <stdexcept>
+#include <string>
+
 extern "C" {
 #include "lj_dispatch.h"
 }
@@ -117,7 +120,10 @@ namespace RTE::CheckpointLua {
 		}
 		void PushObject(const TValue& value) {
 			const auto* source = m_Bindings.Object(udataV(&value));
-			if (!source || !source->crep()) throw std::runtime_error("a saved native handle has no class");
+			if (!source || !source->crep()) {
+				const auto data = m_Heap.Read(udataV(&value));
+				throw std::runtime_error("a saved native handle has no class (userdata type " + std::to_string(static_cast<int>(data.udtype)) + ", " + std::to_string(data.len) + " bytes)");
+			}
 			const TValue type = m_Heap.RegistryValue(m_Bindings.Class(source->crep())->checkpoint_self_reference());
 			PushClass(type);
 			auto* targetClass = static_cast<luabind::detail::class_rep*>(lua_touserdata(m_State, -1));
@@ -160,7 +166,8 @@ namespace RTE::CheckpointLua {
 				setmref(function->c.pc, NativeEntry(m_Heap.Read(&source->c.pc)));
 				m_Values.Remember(value, destination);
 				for (int index = 0; index < count; ++index) {
-					m_Values.Push(m_Heap.Read(&source->c.upvalue[index]));
+					try { m_Values.Push(m_Heap.Read(&source->c.upvalue[index])); }
+					catch (const std::runtime_error& error) { throw std::runtime_error(std::string(error.what()) + " in native closure upvalue " + std::to_string(index + 1)); }
 					if (!lua_setupvalue(m_State, destination, index + 1)) throw std::runtime_error("a saved native closure lost an upvalue");
 				}
 				TValue environment; setgcVraw(&environment, gcref(m_Heap.Read(&source->c.env)), LJ_TTAB);
