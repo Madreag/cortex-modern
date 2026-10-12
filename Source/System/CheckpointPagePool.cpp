@@ -418,7 +418,8 @@ std::pair<void*, size_t> CheckpointPagePool::Grow(size_t slotBytes, size_t minim
 	if (slots > std::numeric_limits<size_t>::max() - m_Slots) throw std::bad_alloc();
 	const size_t bytes = (slots * slotBytes + pageBytes - 1) / pageBytes * pageBytes;
 	auto block = std::make_shared<Block>(bytes, slotBytes);
-	free.reserve(m_Slots + slots);
+	// Room for every slot keeps a returned slot allocation-free; it grows by half again so a class's growth stays linear.
+	if (free.capacity() < m_Slots + slots) free.reserve(std::max(m_Slots + slots, free.capacity() + free.capacity() / 2));
 	if (m_InInventory) Register(block);
 	m_Blocks.push_back(block);
 	for (size_t slot = 0; slot < slots; ++slot) free.push_back(block->live.data + slot * slotBytes);
