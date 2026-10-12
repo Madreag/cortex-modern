@@ -3782,8 +3782,8 @@ namespace RTE {
 		});
 		if (!std::all_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) { return m_PeerRoundEnds.contains(peer); })) return;
 		// An ordinary leave keeps its seat with the AI while the remaining player continues.
-		// Explicit round ends, the planned last frame and a held host with no donors still end promptly.
-		if (!IsOwnHostSeatHeld() && !std::all_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
+		// The host's End Match, the planned last frame and a held host with no donors still end promptly.
+		if (!IsOwnHostSeatHeld() && !m_PendingCompleteStop && !std::all_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
 			const auto& ended = m_PeerRoundEnds.at(peer);
 			return ended.completedRound || (m_FinalFrame != UINT64_MAX && ended.frame > m_FinalFrame);
 		})) return;

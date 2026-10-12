@@ -1030,6 +1030,16 @@ namespace RTE {
 			    std::min(applied[0], applied[1]) < activation + 100 || accepted < activation + 100 || rounds[0]->GetStats().peers[2].holds != 1) {
 				*error = "the answered returning seat did not resume its accepted input and live play"; return false;
 			}
+			rounds[1]->Leave("Match left");
+			for (const uint64_t until = hub.now + 250; hub.now < until;) if (!step(false)) return false;
+			if (!rounds[0]->IsRunning() || !rounds[0]->CompleteAtAgreedEnd("Match ended by host")) { *error = "the host could not choose End Match after an ordinary leave"; return false; }
+			const uint64_t endAt = hub.now;
+			for (; hub.now < endAt + 200 && rounds[0]->IsRunning();) if (!step(false)) return false;
+			std::cout << "[net-session-scene] host-end completed=" << (rounds[0]->GetState() == NetLockstepState::Stopped)
+			          << " after_ms=" << hub.now - endAt << std::endl;
+			if (rounds[0]->GetState() != NetLockstepState::Stopped || rounds[0]->GetStats().timeoutReason.rfind("Complete:", 0) != 0) {
+				*error = "the host's End Match waited on a seat that had already left"; return false;
+			}
 			return true;
 		}
 		*error = "unknown scene lifecycle row"; return false;
