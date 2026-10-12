@@ -11244,7 +11244,7 @@ namespace RTE {
 	uint8_t NetLockstepCoordinator::LockstepPeerOfTransport(NetPeerId transportPeerId) const {
 		if (m_AuthenticatedPeerMessage != 0 && transportPeerId == c_InvalidNetPeerId) return m_AuthenticatedPeerMessage;
 		for (const auto& [peerId, transportId]: m_RemoteTransports) {
-			if (transportId == transportPeerId) {
+			if (transportId == transportPeerId || (m_Config.peerSessionLinks && m_Config.peerSessionLinks->IsNativeRoute(transportId, m_Config.peerSessionLinks->primary, transportPeerId))) {
 				return peerId;
 			}
 		}
@@ -11253,12 +11253,7 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::UsesTransportPeer(NetPeerId transportPeerId) const {
 		NET_PLANE_CHECK();
-		for (const auto& [peerId, transportId]: m_RemoteTransports) {
-			if (transportId == transportPeerId) {
-				return true;
-			}
-		}
-		return false;
+		return LockstepPeerOfTransport(transportPeerId) != 0;
 	}
 
 	// Host-star: forward a packet received from one remote to the OTHER remotes, preserving its
@@ -11859,7 +11854,8 @@ namespace RTE {
 		const auto it = m_RemoteTransports.find(claimedPeerId);
 		// Departed seats remain known logical peers, but their removed transport binding grants no
 		// authority. Rejoining peers acquire a new binding only after the session admits them.
-		return it != m_RemoteTransports.end() && it->second == fromTransport;
+		return it != m_RemoteTransports.end() && (it->second == fromTransport ||
+		    (m_Config.peerSessionLinks && m_Config.peerSessionLinks->IsNativeRoute(it->second, m_Config.peerSessionLinks->primary, fromTransport)));
 	}
 
 	void NetLockstepCoordinator::NameStaleStart(const NetLockstepStart& start, const std::string& why) {

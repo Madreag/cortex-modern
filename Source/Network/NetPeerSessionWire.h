@@ -38,6 +38,7 @@ namespace RTE {
 		std::deque<std::array<uint8_t, 32>> earlierKeys;
 		std::map<NetPeerId, uint8_t> sessionRoutes;
 		std::map<NetPeerId, std::pair<INetTransport*, NetPeerId>> admissions;
+		std::map<NetPeerId, std::pair<INetTransport*, NetPeerId>> admittedRoutes;
 		NetPeerId nextAdmission = 0x80000000U;
 		struct Pending { uint64_t sequence = 0; NetTransportLane lane; std::vector<uint8_t> bytes; uint64_t sendAfterMs = 0; std::array<uint8_t, 32> sendKey{}; };
 		std::map<uint8_t, std::deque<Pending>> pending;
@@ -50,6 +51,7 @@ namespace RTE {
 		std::pair<INetTransport*, NetPeerId> RouteTo(uint8_t peer) const;
 		NetPeerId SessionRoute(uint8_t peer) const;
 		uint8_t PeerOn(const INetTransport& wire, NetPeerId native) const;
+		bool IsNativeRoute(NetPeerId route, const INetTransport* wire, NetPeerId native) const;
 		void ForwardAdmission(INetTransport& wire, const NetTransportEvent& event);
 		void BindAdmission(uint8_t peer, NetPeerId sessionRoute);
 		void SetSessionKey(const std::array<uint8_t, 32>& next);

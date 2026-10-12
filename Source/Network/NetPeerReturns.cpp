@@ -367,6 +367,9 @@ namespace RTE {
 		if (!ValidatePeerBridge(proposal)) { if (error) *error = "the private return does not match the committed boundary"; return false; }
 		if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->BindAdmission(peer, transport);
 		m_RemoteTransports[peer] = transport;
+		m_PeerAdmissions[peer] = {frame, static_cast<uint16_t>(delay)};
+		m_RemoteStartsReceived.erase(peer); m_RemoteStarts.erase(peer);
+		m_PeersPlayedThisRound.erase(peer); m_LastStartAnswerMs.erase(peer);
 		auto& votes = m_PeerBridgeVotes[{frame, 1}];
 		if (const auto own = votes.find(m_Config.localPeerId); own != votes.end()) return SameBridge(own->second, proposal);
 		votes.emplace(m_Config.localPeerId, proposal); SendPeerFrameMessage(std::move(proposal)); TryCommitPeerBridge(frame, m_TimingNowMs, 1);

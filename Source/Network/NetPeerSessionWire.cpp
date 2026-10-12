@@ -10,6 +10,7 @@
 namespace RTE {
 
 	std::pair<INetTransport*, NetPeerId> NetPeerSessionLinks::RouteTo(uint8_t peer) const {
+		if (const auto current = admittedRoutes.find(SessionRoute(peer)); current != admittedRoutes.end()) return current->second;
 		if (const auto dial = probes.find(peer); dial != probes.end() && dial->second.answered && dial->second.transport && dial->second.connection != c_InvalidNetPeerId)
 			return {dial->second.transport.get(), dial->second.connection};
 		if (listener) for (const auto& [native, bound]: listenerBindings) if (bound == peer) return {listener.get(), native};
@@ -18,6 +19,8 @@ namespace RTE {
 	}
 
 	bool NetPeerSessionLinks::SendTo(uint8_t peer, NetTransportLane lane, const std::vector<uint8_t>& bytes) {
+		if (const auto current = admittedRoutes.find(SessionRoute(peer)); current != admittedRoutes.end())
+			return current->second.first->Send(current->second.second, lane, bytes);
 		if (const auto dial = probes.find(peer); dial != probes.end() && dial->second.answered && dial->second.transport &&
 		    dial->second.connection != c_InvalidNetPeerId && dial->second.transport->Send(dial->second.connection, lane, bytes)) return true;
 		if (listener) for (const auto& [native, bound]: listenerBindings) if (bound == peer && listener->Send(native, lane, bytes)) return true;
@@ -33,17 +36,27 @@ namespace RTE {
 	uint64_t NetPeerSessionLinks::ClockMs() const { return sessionClock ? sessionClock() : NetLockstepNowMs(); }
 
 	uint8_t NetPeerSessionLinks::PeerOn(const INetTransport& wire, NetPeerId native) const {
-		if (&wire == primary) if (const auto known = primaryBindings.find(native); known != primaryBindings.end()) return known->second;
-		if (&wire == listener.get()) if (const auto known = listenerBindings.find(native); known != listenerBindings.end()) return known->second;
+		const auto current = [&](uint8_t peer) {
+			const auto route = admittedRoutes.find(SessionRoute(peer));
+			return route == admittedRoutes.end() || (route->second.first == &wire && route->second.second == native) ? peer : uint8_t{0};
+		};
+		if (&wire == primary) if (const auto known = primaryBindings.find(native); known != primaryBindings.end()) return current(known->second);
+		if (&wire == listener.get()) if (const auto known = listenerBindings.find(native); known != listenerBindings.end()) return current(known->second);
 		for (const auto& [peer, dial]: probes)
-			if (dial.transport.get() == &wire && dial.answered && dial.connection == native) return peer;
+			if (dial.transport.get() == &wire && dial.answered && dial.connection == native) return current(peer);
 		return 0;
+	}
+
+	bool NetPeerSessionLinks::IsNativeRoute(NetPeerId route, const INetTransport* wire, NetPeerId native) const {
+		const auto bound = admittedRoutes.find(route);
+		return bound != admittedRoutes.end() && bound->second.first == wire && bound->second.second == native;
 	}
 
 	void NetPeerSessionLinks::ForwardAdmission(INetTransport& wire, const NetTransportEvent& event) {
 		if (!sessionAttached) return;
 		const uint8_t peer = PeerOn(wire, event.peerId);
 		NetPeerId route = SessionRoute(peer);
+		for (const auto& [handle, native]: admittedRoutes) if (native.first == &wire && native.second == event.peerId) route = handle;
 		for (const auto& [handle, native]: admissions) if (native.first == &wire && native.second == event.peerId) route = handle;
 		if (event.type == NetTransportEventType::PeerDisconnected || event.type == NetTransportEventType::ConnectionFailed) {
 			if (&wire == primary) primaryBindings.erase(event.peerId);
@@ -52,6 +65,7 @@ namespace RTE {
 				dial.connection = c_InvalidNetPeerId; dial.answered = false;
 			}
 			std::erase_if(admissions, [&](const auto& admitted) { return admitted.second == std::pair{&wire, event.peerId}; });
+			std::erase_if(admittedRoutes, [&](const auto& admitted) { return admitted.second == std::pair{&wire, event.peerId}; });
 			if (peer != 0) {
 				if (RouteTo(peer).first) return;
 				for (const auto& queued: pending[peer]) pendingBytes -= queued.bytes.size();
@@ -77,6 +91,7 @@ namespace RTE {
 		else if (wire == listener.get()) listenerBindings[native] = peer;
 		std::erase_if(sessionRoutes, [&](const auto& binding) { return binding.second == peer; });
 		sessionRoutes[route] = peer;
+		admittedRoutes[route] = admitted->second;
 		admissions.erase(admitted);
 		for (const auto& item: pending[peer]) pendingBytes -= item.bytes.size();
 		pending.erase(peer); closing.erase(peer);
@@ -211,6 +226,8 @@ namespace RTE {
 		}
 		if (const auto admitted = m_Links->admissions.find(peer); admitted != m_Links->admissions.end())
 			return admitted->second.first->Send(admitted->second.second, lane, bytes, error, congested);
+		if (const auto admitted = m_Links->admittedRoutes.find(peer); admitted != m_Links->admittedRoutes.end())
+			return admitted->second.first->Send(admitted->second.second, lane, bytes, error, congested);
 		if (error) *error = "the session connection has no authenticated seat";
 		return false;
 	}
@@ -233,6 +250,10 @@ namespace RTE {
 		if (const auto admitted = m_Links->admissions.find(peer); admitted != m_Links->admissions.end()) {
 			admitted->second.first->Disconnect(admitted->second.second, reason);
 			m_Links->admissions.erase(admitted);
+		}
+		else if (const auto admitted = m_Links->admittedRoutes.find(peer); admitted != m_Links->admittedRoutes.end()) {
+			admitted->second.first->Disconnect(admitted->second.second, reason);
+			m_Links->admittedRoutes.erase(admitted);
 		}
 	}
 

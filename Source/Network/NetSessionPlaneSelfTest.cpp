@@ -1008,8 +1008,28 @@ namespace RTE {
 			}
 			const uint64_t activation = rounds[0]->GetStats().nextFrame + 24;
 			if (!rounds[0]->SchedulePeerReclaim(2, ready.front().transportPeerId, 2, activation, error)) return false;
-			for (; hub.now < answerAt + 2500 && applied[0] < activation;) if (!step(false)) return false;
-			if (rounds[0]->HasHeldAISeat(2) || applied[0] < activation) { *error = "the answered returning seat did not reclaim its committed frame"; return false; }
+			auto config = roundConfigs[1]; config.startFrame = activation; config.roundId = match.roundId;
+			config.joinsRunningRound = config.continuesMatch = true;
+			config.originalRoundConfigHash = rounds[0]->m_RoundConfigHash;
+			config.peerSessionLinks = std::make_shared<NetPeerSessionLinks>();
+			config.peerSessionLinks->sessionClock = [&] { return hub.now; };
+			config.remoteTransportPeerIds[1] = returningSession.GetRemoteTransportPeerId();
+			if (!rounds[0]->AdoptPeerReturnConfig(config, *rounds[0], activation)) { *error = "the return row did not carry its committed return proof"; return false; }
+			rounds[1] = std::make_unique<NetLockstepCoordinator>();
+			if (!rounds[1]->Start(returningWire, config, error)) return false;
+			rounds[1]->DeferStopsToTickBoundary();
+			sessions[1] = &returningSession;
+			rounds[1]->SetSessionEventSink([&](const NetTransportEvent& event) { returningSession.InjectEvent(event, hub.now); });
+			applied[1] = activation - 1; produced[1] = activation; credits[1] = 0;
+			(void)rounds[0]->SendReturnerTheRoundFrom(2, activation);
+			for (const uint64_t until = hub.now + 3000; hub.now < until;) if (!step(true)) return false;
+			const uint64_t accepted = rounds[0]->m_PeerAcceptedThrough[2];
+			std::cout << "[net-session-scene] returned-input host_frame=" << applied[0] << " joiner_frame=" << applied[1]
+			          << " accepted_through=" << accepted << " holds=" << rounds[0]->GetStats().peers[2].holds << std::endl;
+			if (!rounds[0]->IsRunning() || !rounds[1]->IsRunning() || rounds[0]->HasHeldAISeat(2) || rounds[1]->HasHeldAISeat(2) ||
+			    std::min(applied[0], applied[1]) < activation + 100 || accepted < activation + 100 || rounds[0]->GetStats().peers[2].holds != 1) {
+				*error = "the answered returning seat did not resume its accepted input and live play"; return false;
+			}
 			return true;
 		}
 		*error = "unknown scene lifecycle row"; return false;
