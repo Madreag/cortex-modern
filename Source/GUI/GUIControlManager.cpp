@@ -1522,7 +1522,9 @@ bool GUICheckpoint::Load(GUIControlManager& manager, std::string_view text, bool
 			target.m_ControlList.push_back(control);
 		};
 		{
-			GUIControlManager topologyValidator;
+			GUIControlManager localValidator;
+			auto savedValidator = CheckpointNativeStorage::Reading() ? std::make_unique<GUIControlManager>() : nullptr;
+			auto& topologyValidator = savedValidator ? *savedValidator : localValidator;
 			topologyValidator.m_GUIManager = new GUIManager(nullptr);
 			for (const auto& control: controls) createControl(topologyValidator, control);
 			PrepareOwnedPanels(topologyValidator, ownedPanelKeys);
