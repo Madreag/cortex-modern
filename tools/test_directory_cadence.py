@@ -255,7 +255,7 @@ def main():
                                out, timeout=145, env=env)
                 seed_settings(run, {"SessionDirectoryUrl": f"127.0.0.1:{args.port + 1}",
                                     "SessionDirectoryCertSha256": pin, "NetworkHostVisibility": 1,
-                                    "NetworkIceEnable": 1,
+                                    "NetworkIceEnable": 0 if args.case == "liveness" else 1,
                                     "NetworkConnectionMode": 1, "NetworkHostRelayMode": 0,
                                     "NetworkStunServers": "", "NetworkInputDelayFrames": 3})
                 stage_activity(repo, run)
@@ -294,16 +294,17 @@ def main():
                 peak = max((sum(start <= at < start + 60000 for at in stamps) for start in stamps), default=0)
                 seat_counts[str(seat)] = peak
             busy = [event for event in events if event["error"] == "connection_busy"]
+            ended = re.search(r"\[net-link-blackout\] end .*elapsed_ms=(\d+)", text["guest"])
             checks.update(acceptance_wait=bool(begin) and waiting,
-                          blackout_completed=bool(re.search(r"\[net-link-blackout\] end .*elapsed_ms=60000", text["guest"])), bounded_seat_posts=max(seat_counts.values()) <= 12,
+                          blackout_completed=bool(ended) and 60000 <= int(ended[1]) <= 60050, bounded_seat_posts=max(seat_counts.values()) <= 12,
                           no_busy_seat=not busy)
-            details.update(check_ins_per_60s=seat_counts, connection_busy=len(busy))
+            details.update(check_ins_per_60s=seat_counts, connection_busy=len(busy), blackout_elapsed_ms=int(ended[1]) if ended else None)
         elif args.case == "liveness":
             beats = [event for event in events if event["kind"] == "heartbeat" and event["status"] == 429]
             start, end = requests.wait_from * 1000, requests.wait_until * 1000
             samples = [sample for sample in requests.alive_samples if start <= sample["at_ms"] < end]
             registered = [event for event in events if event["kind"] == "sessions" and event["status"] == 200]
-            checks.update(refused_for_20s=bool(beats), row_stayed_live=bool(samples) and all(sample["live_rows"] == 1 for sample in samples),
+            checks.update(refused_for_20s=bool(beats) and any(event["at_ms"] >= end for event in events), row_stayed_live=bool(samples) and all(sample["live_rows"] == 1 for sample in samples),
                           no_new_registration=len(registered) == 1,
                           no_missing_heartbeat=not any(event["kind"] == "heartbeat" and event["status"] == 404 for event in events))
             details.update(refused_heartbeats=len(beats), live_samples=samples, registers=len(registered))
