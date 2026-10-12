@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <chrono>
+#include <cstdlib>
 #include <limits>
 
 namespace RTE {
@@ -46,25 +47,41 @@ namespace RTE {
 		if (!UsesPeerFrameGroups() || PeerFrameBlackout(m_TimingNowMs)) return false;
 		std::vector<uint8_t> bytes;
 		if (!NetHostMigrationCodec::Encode(message, m_Config.migrationKey, bytes)) return false;
+		const bool liveInput = message.type == NetHostMigrationMessageType::PeerInput || message.type == NetHostMigrationMessageType::PeerForwardInput;
+		const auto back = m_ReclaimTransactions.find(m_Config.localPeerId);
+		const bool details = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && message.type == NetHostMigrationMessageType::PeerInput &&
+		    back != m_ReclaimTransactions.end() && message.frame > back->second.neutralThroughFrame && message.frame <= back->second.neutralThroughFrame + 3;
+		const auto wantsInput = [&](uint8_t peer) {
+			const auto held = m_PeerBridges.find(peer);
+			return !liveInput || held == m_PeerBridges.end() || !held->second.committedHold || held->second.returnFrame.has_value();
+		};
 		if (m_Config.peerSessionLinks) {
 			bool sent = false;
-			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
-				if (peer != m_Config.localPeerId && !m_RemovedPeers.contains(peer) && (onlyPeer == 0 || onlyPeer == peer)) sent |= m_Config.peerSessionLinks->SendTo(peer, lane, bytes);
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+				if (peer == m_Config.localPeerId) continue;
+				const bool wanted = !m_RemovedPeers.contains(peer) && wantsInput(peer) && (onlyPeer == 0 || onlyPeer == peer);
+				const bool delivered = wanted && m_Config.peerSessionLinks->SendTo(peer, lane, bytes);
+				sent |= delivered;
+				if (details) DiagnosticLine() << "[net-return-input-send] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer)
+				    << " frame=" << message.frame << " wanted=" << wanted << " sent=" << delivered << " prepared=" << m_Stats.nextFrame
+				    << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " reference=" << static_cast<int>(m_PeerPaceReference)
+				    << " catching_up=" << PeerFrameCatchUpActive() << " now_ms=" << m_TimingNowMs << std::endl;
+			}
 			return sent;
 		}
 		std::set<uint8_t> sent;
 		for (auto& [peer, dial]: PeerProbes()) {
-			if ((onlyPeer != 0 && onlyPeer != peer) || !dial.transport || !dial.answered || dial.connection == c_InvalidNetPeerId) continue;
+			if ((onlyPeer != 0 && onlyPeer != peer) || !wantsInput(peer) || !dial.transport || !dial.answered || dial.connection == c_InvalidNetPeerId) continue;
 			if (dial.transport->Send(dial.connection, lane, bytes)) sent.insert(peer);
 		}
 		if (PeerListener()) for (const auto& [connection, peer]: PeerListenerBindings()) {
-			if ((onlyPeer != 0 && onlyPeer != peer) || sent.contains(peer)) continue;
+			if ((onlyPeer != 0 && onlyPeer != peer) || !wantsInput(peer) || sent.contains(peer)) continue;
 			if (PeerListener()->Send(connection, lane, bytes)) sent.insert(peer);
 		}
 		if (m_Transport) for (const auto& [peer, connection]: m_RemoteTransports)
-			if ((onlyPeer == 0 || onlyPeer == peer) && !sent.contains(peer) && m_Transport->Send(connection, lane, bytes)) sent.insert(peer);
+			if ((onlyPeer == 0 || onlyPeer == peer) && wantsInput(peer) && !sent.contains(peer) && m_Transport->Send(connection, lane, bytes)) sent.insert(peer);
 		if (m_Transport) for (const auto& [connection, peer]: PeerPrimaryBindings())
-			if ((onlyPeer == 0 || onlyPeer == peer) && !sent.contains(peer) && m_Transport->Send(connection, lane, bytes)) sent.insert(peer);
+			if ((onlyPeer == 0 || onlyPeer == peer) && wantsInput(peer) && !sent.contains(peer) && m_Transport->Send(connection, lane, bytes)) sent.insert(peer);
 		return !sent.empty();
 	}
 
@@ -73,6 +90,10 @@ namespace RTE {
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= SeatBit(peer);
 		if (voters == 0 || (voters & ~owners) != 0) return false;
+		// A declared Leave keeps its AI seat but stops contributing to future frame votes.
+		for (const auto& [peer, ended]: m_PeerRoundEnds) if (!ended.closedLink && m_Stats.nextFrame >= ended.frame) owners &= ~SeatBit(peer);
+		voters &= owners;
+		if (voters == 0) return false;
 		if (m_PeerAdminFrameMembers != 0 && voters == m_PeerAdminFrameMembers) return true;
 		const int votes = std::popcount(voters), seats = std::popcount(owners);
 		if (2 * votes != seats) return 2 * votes > seats;
@@ -113,6 +134,8 @@ namespace RTE {
 		}
 		if (!m_TestBlackoutAtMs && m_LastCompletedSimulationTick && *m_LastCompletedSimulationTick >= m_TestBlackoutFrame) {
 			m_TestBlackoutAtMs = nowMs; m_TestBlackoutEnded = false;
+			m_PeerReceiptDelaySamples.clear(); m_PeerOwnReceiptProgress.clear();
+			for (uint8_t receiver = 1; receiver <= m_Config.peerCount; ++receiver) m_PeerReceiptSampleFloorMs[receiver] = nowMs;
 			DiagnosticLine() << "[net-link-blackout] begin peer=" << static_cast<int>(m_Config.localPeerId) << " frame=" << *m_LastCompletedSimulationTick << " duration_ms=" << m_TestBlackoutDurationMs
 			    << " now_ms=" << nowMs << " unix_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
 		}
@@ -121,57 +144,58 @@ namespace RTE {
 		if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->frameBlackout = active;
 		if (!active && !m_TestBlackoutEnded) {
 			m_TestBlackoutEnded = true;
+			m_PeerReceiptDelaySamples.clear(); m_PeerOwnReceiptProgress.clear();
+			for (uint8_t receiver = 1; receiver <= m_Config.peerCount; ++receiver) m_PeerReceiptSampleFloorMs[receiver] = nowMs;
 			DiagnosticLine() << "[net-link-blackout] end peer=" << static_cast<int>(m_Config.localPeerId) << " elapsed_ms=" << nowMs - *m_TestBlackoutAtMs
 			    << " now_ms=" << nowMs << " unix_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
 		}
 		return active;
 	}
 
-	bool NetLockstepCoordinator::HandlePeerSessionMessage(const NetHostMigrationMessage& message, uint64_t nowMs) {
+	bool NetLockstepCoordinator::ReadPeerMessage(const std::vector<uint8_t>& bytes, NetHostMigrationMessage& message, NetHash32* readKey) const {
+		if (NetHostMigrationCodec::Decode(bytes, m_Config.migrationKey, message)) {
+			if (readKey) *readKey = m_Config.migrationKey;
+			return true;
+		}
+		return m_Config.peerSessionLinks && m_Config.peerSessionLinks->ReadSessionPacket(bytes, message, readKey);
+	}
+
+	bool NetLockstepCoordinator::HandlePeerSessionMessage(const NetHostMigrationMessage& message, uint64_t nowMs, const NetHash32* readKey) {
 		if (message.type != NetHostMigrationMessageType::PeerSession && message.type != NetHostMigrationMessageType::PeerSessionAck) return false;
 		if (!UsesPeerFrameGroups() || !m_Config.peerSessionLinks || PeerFrameBlackout(nowMs)) return true;
 		auto& links = *m_Config.peerSessionLinks;
-		if (!links.sessionAttached || message.sessionId != links.sessionId || message.roundId != 1 || message.generation != 1 || message.configHash != NetHash32{} ||
-		    message.senderPeerId == 0 || message.senderPeerId > m_Config.peerCount || message.senderPeerId == m_Config.localPeerId || message.successorPeerId != m_Config.localPeerId || m_RemovedPeers.contains(message.senderPeerId)) return true;
-		if (message.type == NetHostMigrationMessageType::PeerSessionAck) {
-			if (!message.bytes.empty()) return true;
-			auto& pending = links.pending[message.senderPeerId];
-			if (!pending.empty() && pending.front().sequence == message.frame) {
-				links.pendingBytes -= pending.front().bytes.size(); pending.pop_front(); m_PeerSessionSendAtMs = nowMs;
-				m_PeerLastHeardMs[message.senderPeerId] = nowMs; m_PeerLinkHeardMs[message.senderPeerId] = nowMs;
-				if (message.senderPeerId == GetHostPeerId()) NoteAuthorityHeard(nowMs);
-			}
-			return true;
+		(void)links.HandleSessionMessage(message, readKey);
+		if (links.sessionAttached && message.sessionId == links.sessionId && message.roundId == 1 && message.generation == 1 &&
+		    message.configHash == NetHash32{} && message.senderPeerId > 0 && message.senderPeerId <= m_Config.peerCount &&
+		    message.senderPeerId != m_Config.localPeerId && message.successorPeerId == m_Config.localPeerId &&
+		    !m_RemovedPeers.contains(message.senderPeerId) && links.SessionRoute(message.senderPeerId) != c_InvalidNetPeerId) {
+			m_PeerLastHeardMs[message.senderPeerId] = nowMs; m_PeerLinkHeardMs[message.senderPeerId] = nowMs;
+			if (message.senderPeerId == GetHostPeerId()) NoteAuthorityHeard(nowMs);
 		}
-		if (message.frame == 0 || message.bytes.empty() || (!NetProtocol::Decode(message.bytes).ok && !NetLobbyProtocol::Decode(message.bytes).ok)) return true;
-		const NetPeerId route = links.SessionRoute(message.senderPeerId);
-		if (route == c_InvalidNetPeerId) return true;
-		if (message.frame > links.received[message.senderPeerId]) {
-			if (links.events.size() >= 512) return true;
-			links.received[message.senderPeerId] = message.frame;
-			links.events.push_back({NetTransportEventType::PacketReceived, route, NetTransportLane::ControlReliable, message.bytes, {}});
-		}
-		m_PeerLastHeardMs[message.senderPeerId] = nowMs; m_PeerLinkHeardMs[message.senderPeerId] = nowMs;
-		if (message.senderPeerId == GetHostPeerId()) NoteAuthorityHeard(nowMs);
-		auto ack = message; ack.type = NetHostMigrationMessageType::PeerSessionAck; ack.senderPeerId = m_Config.localPeerId; ack.successorPeerId = message.senderPeerId;
-		ack.bytes.clear(); ack.totalBytes = 0;
-		SendPeerFrameMessage(std::move(ack), NetTransportLane::ControlReliable, message.senderPeerId);
 		return true;
 	}
 
 	void NetLockstepCoordinator::TickPeerSessionWire(uint64_t nowMs) {
 		if (!UsesPeerFrameGroups() || !m_Config.peerSessionLinks || !m_Config.peerSessionLinks->sessionAttached) return;
 		auto& links = *m_Config.peerSessionLinks;
-		if (m_SessionEventSink) while (!links.events.empty()) { const auto event = std::move(links.events.front()); links.events.pop_front(); m_SessionEventSink(event); }
-		if (nowMs < m_PeerSessionSendAtMs) return;
-		m_PeerSessionSendAtMs = nowMs + 50;
-		for (const auto& [peer, pending]: links.pending) {
-			if (pending.empty()) continue;
-			auto message = PeerFrameMessage(NetHostMigrationMessageType::PeerSession);
-			message.roundId = message.generation = 1; message.configHash = {}; message.successorPeerId = peer;
-			message.frame = pending.front().sequence; message.bytes = pending.front().bytes; message.totalBytes = static_cast<uint32_t>(message.bytes.size());
-			SendPeerFrameMessage(std::move(message), NetTransportLane::ControlReliable, peer);
+		if (m_SessionEventSink) for (auto next = links.events.begin(); next != links.events.end();) {
+			// The next round reads its own start packets through the retained wire.
+			if (next->type == NetTransportEventType::PacketReceived && NetLockstepCodec::LooksLikePacket(next->bytes)) { ++next; continue; }
+			const auto event = std::move(*next); next = links.events.erase(next);
+			if (!m_RelayHost && event.peerId == links.SessionRoute(GetHostPeerId()) && event.type == NetTransportEventType::PacketReceived) {
+				const auto decoded = NetProtocol::Decode(event.bytes);
+				if (decoded.ok) {
+					if (const auto* removal = std::get_if<NetParticipantRemoval>(&decoded.message.payload)) m_RemovalBoundary = removal->boundaryFrame;
+					if (const auto* end = std::get_if<NetDisconnect>(&decoded.message.payload); end &&
+					    (end->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantRemoved) || end->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantBanned))) {
+						m_RemovedByHost = true; m_State = NetLockstepState::Stopped;
+						m_Stats.timeoutReason = "PeerRemoved:" + end->message;
+					}
+				}
+			}
+			m_SessionEventSink(event);
 		}
+		links.FlushSession(nowMs);
 	}
 
 	void NetLockstepCoordinator::TickPeerFrameGroups(uint64_t nowMs) {
@@ -204,7 +228,8 @@ namespace RTE {
 				heartbeat.completeFrom = m_Config.migrationGeneration + 1;
 			PutSize(heartbeat.bytes, m_Stats.peers[m_Config.localPeerId].pingMs); PutSize(heartbeat.bytes, m_Stats.peers[m_Config.localPeerId].jitterMs);
 			heartbeat.totalBytes = static_cast<uint32_t>(heartbeat.bytes.size());
-			SendPeerFrameMessage(std::move(heartbeat));
+			// A newer progress report replaces an older one without waiting on the ordered stream.
+			SendPeerFrameMessage(std::move(heartbeat), NetTransportLane::InputUnreliable);
 		}
 		const bool retryVotes = nowMs >= m_PeerVoteRetryAtMs;
 		if (retryVotes) m_PeerVoteRetryAtMs = nowMs + 100;
@@ -280,7 +305,15 @@ namespace RTE {
 		if (!m_Config.adaptiveInputDelay || WaitsForPlacement() || !std::isfinite(m_Config.simTickMs) || m_Config.simTickMs <= 0) return;
 		if ((m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) == 0) return;
 		std::vector<std::pair<uint32_t, uint32_t>> paths;
-		for (const auto& [peer, sample]: m_PeerReceiptDelaySamples) if ((m_FrameGroupMembers & SeatBit(peer)) != 0) paths.emplace_back(sample.P95Ms(), sample.JitterMs());
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+			if (peer == m_Config.localPeerId || m_RemovedPeers.contains(peer) || IsSeatReleased(peer)) continue;
+			auto& sample = m_PeerReceiptDelaySamples[peer];
+			sample.Observe(nowMs, 0);
+			const auto [wire, route] = PeerFrameRoute(peer);
+			// Size a held reader's future live runway from transport, outside its catch-up receipts.
+			if ((m_FrameGroupMembers & SeatBit(peer)) != 0 && sample.P95Ms() != 0) paths.emplace_back(sample.P95Ms(), sample.JitterMs());
+			else if (wire && wire->IsPeerPingMeasured(route)) paths.emplace_back(wire->GetPeerPingMs(route), 0);
+		}
 		const size_t needed = std::popcount(m_FrameGroupMembers) - 1;
 		if (needed == 0 || paths.size() < needed) return;
 		std::sort(paths.begin(), paths.end());
@@ -301,7 +334,11 @@ namespace RTE {
 			(void)ProposePeerInputDelay(m_Config.localPeerId, required, FutureTimingFrame());
 		} else if (required < current) {
 			const auto [since, inserted] = m_PeerDelayBelowSinceMs.try_emplace(m_Config.localPeerId, nowMs);
-			if (nowMs >= since->second + c_DelayShrinkIntervalMs && ProposePeerInputDelay(m_Config.localPeerId, current - c_DelayShrinkStep, FutureTimingFrame())) since->second = nowMs;
+			const uint16_t gap = current - required;
+			const uint64_t interval = gap > 2 ? std::max<uint64_t>(c_DelayResizeIntervalMs, c_DelayShrinkIntervalMs / gap) : c_DelayShrinkIntervalMs;
+			const uint16_t delay = gap > 2 ? std::min<uint16_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames, required + std::max<uint16_t>(2, gap / 2))
+			                             : current - std::min(current, c_DelayShrinkStep);
+			if (nowMs >= since->second + interval && ProposePeerInputDelay(m_Config.localPeerId, delay, FutureTimingFrame())) since->second = nowMs;
 		} else m_PeerDelayBelowSinceMs.erase(m_Config.localPeerId);
 	}
 

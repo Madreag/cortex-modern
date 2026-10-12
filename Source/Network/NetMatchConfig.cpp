@@ -199,14 +199,16 @@ namespace RTE {
 
 	void NetInputDelayEstimator::Observe(uint64_t nowMs, uint32_t rttMs) {
 		ForgetSilencesBefore(nowMs);
-		if (rttMs == 0) return;
 		if (!m_Samples.empty() && nowMs < m_Samples.back().first) {
 			m_Samples.clear();
+			m_LastMeasuredRttMs = 0;
 			m_BelowSince.reset();
 		}
+		while (!m_Samples.empty() && nowMs - m_Samples.front().first > c_WindowMs) m_Samples.pop_front();
+		if (rttMs == 0) return;
 		if (!m_Samples.empty() && nowMs - m_Samples.back().first < c_SampleMs) return;
 		m_Samples.emplace_back(nowMs, rttMs);
-		while (!m_Samples.empty() && nowMs - m_Samples.front().first > c_WindowMs) m_Samples.pop_front();
+		m_LastMeasuredRttMs = rttMs;
 	}
 
 	void NetInputDelayEstimator::ObserveSilence(uint64_t nowMs, uint32_t silenceMs) {
@@ -248,7 +250,8 @@ namespace RTE {
 
 	uint32_t NetInputDelayEstimator::RequiredFrames(double tickMs, uint16_t floor) const {
 		if (!std::isfinite(tickMs) || tickMs <= 0) return std::numeric_limits<uint32_t>::max();
-		const uint32_t rtt = std::max(P95Ms(), m_Samples.empty() ? 0U : m_Samples.back().second);
+		// Missing readings do not make a legacy link faster than its last measurement.
+		const uint32_t rtt = std::max(P95Ms(), m_Samples.empty() ? m_LastMeasuredRttMs : m_Samples.back().second);
 		// Cover one retransmission after the one-way trip and the input stream's own silences, which a smoothed round trip never
 		// shows; a link that keeps going silent carries twice its longest, since its next silence is not always as brief.
 		const uint32_t silenceMargin = std::min(m_Silences.size() > 1 ? 2 * SilenceMs() : SilenceMs(), c_MaxSilenceMarginMs);

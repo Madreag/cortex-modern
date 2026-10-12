@@ -1516,7 +1516,21 @@ namespace RTE {
 		s_OwnSeatCatchUpBudget = c_WorldCatchUpTicksPerRealFrame;
 		NetLockstepPlaneGuard plane;
 		const uint64_t nowMs = NetLockstepNowMs();
-		if (!s_LockstepCoordinator || !s_LockstepCoordinator->PeerFrameCatchUpActive()) {
+		const bool catchingUp = s_LockstepCoordinator && s_LockstepCoordinator->PeerFrameCatchUpActive();
+		static uint64_t detailAtMs = 0, detailCalls = 0, detailActive = 0, detailElapsedMs = 0;
+		if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+			++detailCalls;
+			detailActive += catchingUp;
+			if (catchingUp && nowMs >= s_PeerCatchUpBudgetAtMs) detailElapsedMs += nowMs - s_PeerCatchUpBudgetAtMs;
+			if (nowMs >= detailAtMs + 1000) {
+				System::PrintDiagnosticLine("[net-peer-catch-up-rate] frame=" + std::to_string(g_TimerMan.GetSimUpdateCount()) +
+				    " now_ms=" + std::to_string(nowMs) + " updates=" + std::to_string(detailCalls) +
+				    " active_updates=" + std::to_string(detailActive) + " elapsed_ms=" + std::to_string(detailElapsedMs) +
+				    " credit=" + std::to_string(s_PeerCatchUpCredit));
+				detailAtMs = nowMs; detailCalls = detailActive = detailElapsedMs = 0;
+			}
+		}
+		if (!catchingUp) {
 			s_PeerCatchUpBudgetAtMs = nowMs; s_PeerCatchUpCredit = 0;
 			return;
 		}
@@ -1532,6 +1546,8 @@ namespace RTE {
 		NetLockstepPlaneGuard plane;
 		if (s_OwnSeatCatchUpBudget <= 0 || !s_LockstepCoordinator || !s_LockstepCoordinator->HasReadyFrame(nextSimTick)) return false;
 		if (s_LockstepCoordinator->PeerFrameCatchUpActive()) return true;
+		// A returned reader's neutral interval follows the surviving displayed clock.
+		if (s_LockstepCoordinator->UsesPeerFrameGroups()) return false;
 		// A seat that came back from the committed tail stands a trip behind the round's inputs: it closes that trip through its reclaim gap.
 		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
 		if (!s_LockstepCoordinator->IsOwnHostSeatHeld() && !s_LockstepCoordinator->IsSeatReclaimGap(local, nextSimTick)) return false;

@@ -8,5 +8,6 @@ namespace RTE {
 		static int Run();
 		static bool CheckOwnerHitch(unsigned arm, std::string* error);
 		static bool CheckHostAdministration(unsigned arm, std::string* error);
+		static bool CheckSceneLifecycle(const std::string& name, std::string* error);
 	};
 }

@@ -1575,6 +1575,7 @@ namespace RTE {
 		friend bool TestASeatKnockingWhileTheRoundFormsIsAnswered(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
+		friend class NetSessionPlaneSelfTest;
 		friend bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error);
 		friend bool TestCommitOnlySuccessorReproposesRelease(std::string* error);
 		friend struct SeatSuccessionTestAccess;
@@ -1633,18 +1634,18 @@ namespace RTE {
 		bool& PeerPrimaryListener() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryListener : m_PeerPrimaryListener; }
 		bool HasPeerFrameRoute(uint8_t peer);
 		std::pair<INetTransport*, NetPeerId> PeerFrameRoute(uint8_t peer) const;
-		void NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink);
+		void NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink, bool completedRound = false);
 		void AdjudicatePeerRoundEnds(uint64_t nowMs);
-		struct PeerRoundEnd { uint64_t frame = 0, atMs = 0; bool closedLink = false; };
+		struct PeerRoundEnd { uint64_t frame = 0, atMs = 0; bool closedLink = false, completedRound = false; };
 		std::map<uint8_t, PeerRoundEnd> m_PeerRoundEnds;
-		bool HandlePeerSessionMessage(const NetHostMigrationMessage& message, uint64_t nowMs);
+		bool ReadPeerMessage(const std::vector<uint8_t>& bytes, NetHostMigrationMessage& message, NetHash32* readKey = nullptr) const;
+		bool HandlePeerSessionMessage(const NetHostMigrationMessage& message, uint64_t nowMs, const NetHash32* readKey = nullptr);
 		void TickPeerSessionWire(uint64_t nowMs);
-		uint64_t m_PeerSessionSendAtMs = 0;
 		std::map<NetPeerId, uint8_t> m_PeerListenerBindings;
 		std::map<NetPeerId, uint8_t> m_PeerPrimaryBindings;
 		NetHostMigrationMessage PeerFrameMessage(NetHostMigrationMessageType type) const;
 		bool SendPeerFrameMessage(NetHostMigrationMessage message, NetTransportLane lane = NetTransportLane::ControlReliable, uint8_t onlyPeer = 0);
-		bool HandlePeerFrameMessage(const NetHostMigrationMessage& message, uint64_t nowMs);
+		bool HandlePeerFrameMessage(const NetHostMigrationMessage& message, uint64_t nowMs, const NetHash32* readKey = nullptr);
 		void SendPeerInput(const NetLockstepFrame& frame);
 		void TickPeerFrameGroups(uint64_t nowMs);
 		bool PeerFrameBlackout(uint64_t nowMs);
@@ -1662,6 +1663,7 @@ namespace RTE {
 		void PreparePeerBridgeInputs(uint64_t frame, uint64_t nowMs);
 		void NotePeerInputAccepted(const NetLockstepFrame& frame);
 		void RepairPeerReceiptGaps(uint64_t nowMs);
+		void RemovePeerFrameSeat(uint8_t peer, uint64_t frame);
 		bool ApplyPeerCommittedTail(uint64_t frame, uint64_t nowMs);
 		void SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame);
 		void FlushPeerCommittedTails(uint64_t nowMs);
@@ -1718,8 +1720,11 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerAppliedAtMs;
 		uint64_t m_PeerHeartbeatAtMs = 0;
 		uint64_t m_PeerTailRequestAtMs = 0;
+		uint8_t m_PeerTailDonor = 0;
+		uint64_t m_PeerTailDuplicateFrames = 0;
 		std::map<uint64_t, uint64_t> m_PeerTailRequestedUntil;
 		std::map<uint8_t, std::map<uint64_t, uint64_t>> m_PeerTailLastSentMs;
+		std::map<uint8_t, std::set<uint64_t>> m_PeerTailResendFrames;
 		std::map<uint8_t, std::pair<uint64_t, uint64_t>> m_PeerTailSendRanges;
 		struct PeerTailOutgoing { std::vector<uint8_t> bytes; uint32_t members = 0, offset = 0; bool compressed = false; };
 		std::map<uint8_t, std::map<uint64_t, PeerTailOutgoing>> m_PeerTailOutgoing;
@@ -2352,7 +2357,11 @@ namespace RTE {
 		std::map<uint64_t, std::map<uint8_t, size_t>> m_PendingSourceCommandCounts;
 		std::map<uint64_t, NetLockstepReadyFrame> m_ReadyHistory;
 
-		bool AllRemoteStartsReceived() const { return m_RemoteStartsReceived.size() == m_RemotePeerIds.size(); }
+		bool AllRemoteStartsReceived() const {
+			return std::all_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
+				return m_RemoteStartsReceived.contains(peer) || (m_Config.joinsRunningRound && !IsRemoteRequiredForFrame(peer, m_Config.startFrame));
+			});
+		}
 		bool IsKnownRemotePeer(uint8_t peerId) const;
 		void RelayToOtherRemotes(const NetLockstepPacket& packet, uint8_t fromPeerId);
 		/// Relay host on the unreliable lane: sends each tick of an arrived packet on once, oldest first, with the ticks before it.
