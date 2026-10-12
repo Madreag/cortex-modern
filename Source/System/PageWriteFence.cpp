@@ -46,10 +46,14 @@ namespace RTE {
 			std::atomic<uint64_t> faults{0};
 		};
 
-		State& Fence() {
-			static State state;
-			return state;
+		// Page owners and the fault handler can outlive ordinary static destructors.
+		template<class T> T& KeepPageState() {
+			alignas(T) static unsigned char bytes[sizeof(T)];
+			static T* const state = ::new (static_cast<void*>(bytes)) T;
+			return *state;
 		}
+
+		State& Fence() { return KeepPageState<State>(); }
 
 		struct SpinLock {
 			explicit SpinLock(std::atomic_flag& flag) : flag(flag) {
@@ -73,14 +77,8 @@ namespace RTE {
 			std::atomic<size_t> count{0};
 			std::atomic_flag lock = ATOMIC_FLAG_INIT;
 		};
-		CopyWatches& Watches() {
-			static CopyWatches watches;
-			return watches;
-		}
-		std::mutex& HandlerMutex() {
-			static std::mutex mutex;
-			return mutex;
-		}
+		CopyWatches& Watches() { return KeepPageState<CopyWatches>(); }
+		std::mutex& HandlerMutex() { return KeepPageState<std::mutex>(); }
 
 #ifdef _WIN32
 		size_t PageBytes() {
