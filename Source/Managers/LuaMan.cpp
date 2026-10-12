@@ -5760,27 +5760,29 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 	}
 	if (const int index = g_PrimitiveMan.FindCheckpointPrimitive(rep->ptr()); index >= 0) return found(&g_PrimitiveMan, "primitive", index);
 	if (const int index = g_PrimitiveMan.FindCheckpointVertex(rep->ptr()); index >= 0) return found(&g_PrimitiveMan, "primitive-vertex", index);
+	// A saver hands scripts copies that keep their originals' addresses; outside a saved read every address is its own.
+	const void* const handle = CheckpointNativeStorage::Original(rep->ptr());
 	const auto editorMember = [&](SceneEditorGUI* editor) {
 		if (!editor) return 0;
-		if (rep->ptr() == editor->GetCheckpointPieMenu()) return found(editor, "editor-pie", 0);
+		if (handle == editor->GetCheckpointPieMenu()) return found(editor, "editor-pie", 0);
 		const auto owned = [&](const Entity* root, const char* property, int index) {
 			if (!root) return 0;
-			if (rep->ptr() == root) return found(editor, property, index);
+			if (handle == root) return found(editor, property, index);
 			const auto* movable = dynamic_cast<const MovableObject*>(root);
 			if (!movable) return 0;
 			// A world capture collects what a root owns once, for every question about it.
 			if (s_GraphNativeCapture) {
 				const auto parts = s_GraphNativeCapture->Owned(root);
-				for (const auto* object: parts->objects) if (rep->ptr() == object) return found(movable, ("owned-movable-part:" + std::to_string(object->GetUniqueID())).c_str(), 0);
-				for (const auto& [controller, actor]: parts->controllers) if (rep->ptr() == controller) return found(const_cast<Actor*>(actor), "actor-controller", 0);
+				for (const auto* object: parts->objects) if (handle == object) return found(movable, ("owned-movable-part:" + std::to_string(object->GetUniqueID())).c_str(), 0);
+				for (const auto& [controller, actor]: parts->controllers) if (handle == controller) return found(const_cast<Actor*>(actor), "actor-controller", 0);
 				return 0;
 			}
 			std::unordered_set<const Entity*> entities;
 			std::unordered_set<const MovableObject*> objects;
 			CollectOwnedMovableObjects(root, entities, objects);
 			for (const auto* object: objects) {
-				if (rep->ptr() == object) return found(movable, ("owned-movable-part:" + std::to_string(object->GetUniqueID())).c_str(), 0);
-				if (auto* actor = dynamic_cast<Actor*>(const_cast<MovableObject*>(object)); actor && rep->ptr() == actor->GetController()) return found(actor, "actor-controller", 0);
+				if (handle == object) return found(movable, ("owned-movable-part:" + std::to_string(object->GetUniqueID())).c_str(), 0);
+				if (auto* actor = dynamic_cast<Actor*>(const_cast<MovableObject*>(object)); actor && handle == actor->GetController()) return found(actor, "actor-controller", 0);
 			}
 			return 0;
 		};
@@ -5792,13 +5794,13 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 	const auto activityMember = [&](Activity* activity) {
 		if (!activity) return 0;
 		for (int index = 0; index < Players::MaxPlayerCount; ++index) {
-			if (rep->ptr() == activity->GetPlayerController(index)) return found(activity, "player-controller", index);
+			if (handle == activity->GetPlayerController(index)) return found(activity, "player-controller", index);
 			if (auto* game = dynamic_cast<GameActivity*>(activity)) {
-				if (rep->ptr() == game->GetBuyGUI(index)) return found(game, "buy-menu", index);
-				if (rep->ptr() == game->GetEditorGUI(index)) return found(game, "editor-menu", index);
+				if (handle == game->GetBuyGUI(index)) return found(game, "buy-menu", index);
+				if (handle == game->GetEditorGUI(index)) return found(game, "editor-menu", index);
 				if (const int count = editorMember(game->GetEditorGUI(index))) return count;
-				if (rep->ptr() == game->GetBanner(GameActivity::YELLOW, index)) return found(game, "yellow-banner", index);
-				if (rep->ptr() == game->GetBanner(GameActivity::RED, index)) return found(game, "red-banner", index);
+				if (handle == game->GetBanner(GameActivity::YELLOW, index)) return found(game, "yellow-banner", index);
+				if (handle == game->GetBanner(GameActivity::RED, index)) return found(game, "red-banner", index);
 			}
 		}
 		return 0;
@@ -5811,19 +5813,19 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 			const auto* owner = luabind::detail::is_class_object(L, -1);
 			if (!ScriptGraphReadableDependency(owner)) {
 			} else if (owner && ClassDerivesFrom(owner->crep(), "Activity")) {
-				if (const int count = activityMember(static_cast<Activity*>(owner->ptr()))) return count;
+				if (const int count = activityMember(static_cast<Activity*>(const_cast<void*>(CheckpointNativeStorage::Original(owner->ptr()))))) return count;
 			} else if (owner && std::strcmp(owner->crep()->name(), "SceneEditorGUI") == 0) {
-				if (const int count = editorMember(static_cast<SceneEditorGUI*>(owner->ptr()))) return count;
+				if (const int count = editorMember(static_cast<SceneEditorGUI*>(const_cast<void*>(CheckpointNativeStorage::Original(owner->ptr()))))) return count;
 			}
 			lua_pop(L, 1);
 		}
 		lua_pop(L, 1);
 	}
 	if (Scene* scene = g_SceneMan.GetScene()) {
-		if (rep->ptr() == scene->GetTerrain()) return found(scene, "terrain", 0);
+		if (handle == scene->GetTerrain()) return found(scene, "terrain", 0);
 		int index = 0;
 		for (SLBackground* layer: scene->GetBackLayers()) {
-			if (rep->ptr() == layer) return found(scene, "background", index);
+			if (handle == layer) return found(scene, "background", index);
 			++index;
 		}
 	}
@@ -5858,6 +5860,7 @@ static int ScriptGraphNative(lua_State* L) {
 	const luabind::detail::class_rep* crep = rep->crep();
 	const bool owned = (rep->flags() & luabind::detail::object_rep::owner) != 0;
 	const std::string className = crep->name();
+	const void* const handle = CheckpointNativeStorage::Original(rep->ptr());
 	// An Area a script kept past its scene's end is named, never read.
 	if (!owned && className == "Area" && !ScriptGraphNativeAlive(L, rep)) {
 		lua_pushstring(L, "invalid");
@@ -5867,7 +5870,7 @@ static int ScriptGraphNative(lua_State* L) {
 	if (!owned && className == "Material") {
 		const auto& palette = g_SceneMan.GetMaterialPalette();
 		for (size_t index = 0; index < palette.size(); ++index) {
-			if (palette[index] == rep->ptr()) {
+			if (palette[index] == handle) {
 				lua_pushliteral(L, "material-ref");
 				lua_pushinteger(L, index);
 				return 2;
@@ -5943,7 +5946,7 @@ static int ScriptGraphNative(lua_State* L) {
 	}
 	if (className == "Area" && g_SceneMan.GetScene()) {
 		const auto& areas = g_SceneMan.GetScene()->GetAreas();
-		const auto found = std::find(areas.begin(), areas.end(), rep->ptr());
+		const auto found = std::find(areas.begin(), areas.end(), handle);
 		if (found != areas.end()) {
 			lua_pushstring(L, "area-ref");
 			lua_pushstring(L, (*found)->GetName().c_str());
@@ -6013,7 +6016,7 @@ static int ScriptGraphNative(lua_State* L) {
 		if (const auto* activity = dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity())) {
 			const auto& scripts = activity->GetGlobalScripts();
 			for (size_t index = 0; index < scripts.size(); ++index) {
-				if (scripts[index] == rep->ptr()) {
+				if (scripts[index] == handle) {
 					lua_pushliteral(L, "global-script");
 					lua_pushinteger(L, index + 1);
 					return 2;
@@ -6021,11 +6024,11 @@ static int ScriptGraphNative(lua_State* L) {
 			}
 		}
 	}
-	if (ClassDerivesFrom(crep, "Activity") && rep->ptr() == g_ActivityMan.GetActivity()) {
+	if (ClassDerivesFrom(crep, "Activity") && handle == g_ActivityMan.GetActivity()) {
 		lua_pushstring(L, "activity");
 		return 1;
 	}
-	if (className == "Scene" && rep->ptr() == g_SceneMan.GetScene()) {
+	if (className == "Scene" && handle == g_SceneMan.GetScene()) {
 		lua_pushstring(L, "scene");
 		return 1;
 	}
