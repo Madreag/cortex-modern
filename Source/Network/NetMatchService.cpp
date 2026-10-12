@@ -9716,6 +9716,8 @@ static std::string ResyncSaveName() {
 				m_RelayError = m_Directory.IceError();
 				m_RelayReady = true;
 				m_RelayPublishPending = true;
+				// A room with no relay mints again when the directory allows, not at the renewal spacing.
+				if (!m_RelayOffer.Usable(wall) && m_Directory.IceRequestRetryable()) m_NextRelayRequestMs = nowMs + m_Directory.IceRetryDelayMs();
 			}
 			if (!m_RelayOffer.Empty() && !m_RelayOffer.Usable(wall)) {
 				SetRelayOfferLocked({});
@@ -9724,7 +9726,8 @@ static std::string ResyncSaveName() {
 			}
 			if (m_Directory.GetState() != NetDirectoryClient::State::Registered || m_Directory.IceRequestPending()) return;
 			// Once seated, each peer renews through its signed check-in. This request only configures the room's relay.
-			if (const auto lease = m_ConnectionAuthority.LocalLease(); lease && !lease->directorySessionId.empty() && !m_FreshRelayRequested.load()) return;
+			const bool roomLacksRelay = !m_RelayOffer.Usable(wall) && m_RelayReplies != 0 && m_Directory.IceRequestRetryable();
+			if (const auto lease = m_ConnectionAuthority.LocalLease(); lease && !lease->directorySessionId.empty() && !m_FreshRelayRequested.load() && !roomLacksRelay) return;
 			const bool fresh = m_FreshRelayRequested.load();
 			// Renew at half the offer's lifetime, so a connection opened on it still has the other half.
 			const uint64_t issued = std::min(m_RelayOfferIssuedAt, m_RelayOffer.expiresAt);
