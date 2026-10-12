@@ -307,6 +307,11 @@ int LuaAdaptersScene::CalculatePath(Scene* luaSelfObject, const Vector& start, c
 	// A shared lockstep query at tick T sees terrain as of T - H.
 	std::list<Vector>& threadScenePath = luaSelfObject->GetScenePath();
 	team = std::clamp(team, Activity::Teams::NoTeam, Activity::Teams::TeamFour);
+	if (LuaMan::SharedTraceEnabled()) {
+		LuaStateWrapper* caller = g_LuaMan.GetThreadCurrentLuaState();
+		LuaMan::TraceShared(caller ? caller->GetLuaState() : nullptr, "path-sync-query master=" + std::to_string(caller == &g_LuaMan.GetMasterScriptState()) +
+		                                                                   " ai=" + std::to_string(g_CurrentAIActor != nullptr));
+	}
 	luaSelfObject->CalculatePath(start, end, threadScenePath, jumpHeight, digStrength, team);
 	if (!threadScenePath.empty()) {
 		return static_cast<int>(threadScenePath.size());
@@ -321,6 +326,10 @@ void LuaAdaptersScene::CalculatePathAsync(Scene* luaSelfObject, const luabind::o
 
 	const auto context = g_LuaMan.GetPathCallbackContext();
 	const int thisCallbackId = LuaMan::AllocatePathCallback(context, luaState);
+	if (LuaMan::SharedTraceEnabled()) {
+		LuaMan::TraceShared(luaState, "path-query master=" + std::to_string(luaState == g_LuaMan.GetMasterScriptState().GetLuaState()) +
+		                                  " id=" + std::to_string(thisCallbackId) + " ai=" + std::to_string(g_CurrentAIActor != nullptr));
+	}
 	if (luabind::type(callback) == LUA_TFUNCTION && callback.is_valid()) {
 		luabind::call_function<void>(luaState, "_AddAsyncPathCallback", thisCallbackId, callback);
 	}

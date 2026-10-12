@@ -19,6 +19,7 @@
 #include "NetLockstep.h"
 #include "NetMatchConfig.h"
 #include "ScenarioRunner.h"
+#include "LuaMan.h"
 #include "TerrainLayerSnapshot.h"
 #include "AsyncLineWriter.h"
 #include "SceneEditorGUI.h"
@@ -727,6 +728,11 @@ void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
 		request.status = deferred.status;
 	}
 	request.pathLength = request.path.size();
+	if (LuaMan::SharedTraceEnabled()) {
+		LuaMan::TraceShared(nullptr, "path-publish applied=" + std::to_string(ScenarioRunner::GetLockstepAppliedFrame()) + " complete=" +
+		                                 std::to_string(deferred.completeTick) + " seq=" + std::to_string(deferred.sequence) + " length=" + std::to_string(request.pathLength) +
+		                                 " ai=" + std::to_string(g_CurrentAIActor != nullptr));
+	}
 	if (deferred.callback) {
 		const FloatingPointEnvironment::Scope scope("deferred path callback");
 		deferred.callback(deferred.request);
