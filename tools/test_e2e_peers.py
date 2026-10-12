@@ -282,6 +282,17 @@ class JoinerBoxTest(unittest.TestCase):
         self.assertIn("unset CCCP_HEADLESS", script)
         self.assertIn('export DISPLAY="${DISPLAY:-:0}"', script)
 
+    def test_the_collectors_own_box_plays_without_ssh(self):
+        box = dict(peers.selected_boxes("host=Ally,joiner=Linux", self.boxes)["joiner"], ssh="local")
+        self.assertEqual(peers.remote_command(box, ["/usr/bin/python3", "tool.py", "--pack", Path("/linux/mx/request.json")]),
+                         ["/usr/bin/python3", "tool.py", "--pack", "/linux/mx/request.json"])
+        self.assertEqual(peers.remote_command(dict(box, ssh="3090-ts"), ["python3", "a b"])[-2:], ["3090-ts", "python3 'a b'"])
+        source, copied, back = self.root / "source.json", self.root / "copied.json", self.root / "back.json"
+        source.write_text("{}")
+        peers.copy_file(box, source, copied)
+        peers.copy_file(box, back, copied, download=True)
+        self.assertEqual((copied.read_text(), back.read_text()), ("{}", "{}"))
+
     def test_headed_player_environment(self):
         environment = peers.video.headed_environment({"CCCP_HEADLESS": "1", "CC_TEST_READBACK_TIMING": "1"})
         self.assertEqual(environment, {"CC_TEST_READBACK_TIMING": "1", "CC_TEST_VISIBLE_WINDOW": "1"})

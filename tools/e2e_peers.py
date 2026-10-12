@@ -286,12 +286,24 @@ def unpack(archive, out):
                 shutil.copyfileobj(stream, destination)
 
 
+# A box whose ssh is "local" is the collector's own: one of its players plays on the box the collector runs on.
+LOCAL = "local"
+
+
+def remote_command(box, args):
+    args = list(map(str, args))
+    return args if box["ssh"] == LOCAL else ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", box["ssh"], shlex.join(args)]
+
+
 def ssh(box, args, **kwargs):
-    return subprocess.run(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", box["ssh"], shlex.join(list(map(str, args)))],
-                          **kwargs)
+    return subprocess.run(remote_command(box, args), **kwargs)
 
 
 def copy_file(box, source, destination, download=False):
+    if box["ssh"] == LOCAL:
+        import shutil
+        shutil.copyfile(*((destination, source) if download else (source, destination)))
+        return
     remote = box["ssh"] + ":" + str(destination).replace("\\", "/")
     args = [remote, str(source)] if download else [str(source), remote]
     subprocess.run(["scp", "-q", "-o", "BatchMode=yes", *args], check=True)
@@ -382,8 +394,7 @@ def launch(box, request_path, log):
     else:
         shell, script = PLAYER_SCRIPTS[box["os"]]
         args = [shell, box["repo"] + "/" + script, remote, box["repo"]]
-    process = subprocess.Popen(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", box["ssh"], shlex.join(args)],
-                               stdout=log, stderr=subprocess.STDOUT)
+    process = subprocess.Popen(remote_command(box, args), stdout=log, stderr=subprocess.STDOUT)
     return process, remote, tool
 
 
