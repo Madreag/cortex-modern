@@ -8303,7 +8303,8 @@ namespace RTE {
 		GnsTransport secondLink;
 		NetSession second;
 		NetSessionConfig config;
-		config.port = 49538;
+		// Below Windows' dynamic range, where the system reserves port blocks at boot.
+		config.port = 43538;
 		config.maxPeers = 2;
 		config.timeoutMs = 5000;
 		config.heartbeatIntervalMs = 25;
@@ -8322,7 +8323,7 @@ namespace RTE {
 		secondConfig.displayName = "Joiner B";
 		secondConfig.localNonce += 2;
 		bool listening = false;
-		for (uint16_t port = 49538; port < 49546 && !listening; ++port) {
+		for (uint16_t port = 43538; port < 43546 && !listening; ++port) {
 			config.port = port;
 			listening = host.m_Session->StartHost(*host.m_Transport, config, error);
 		}
