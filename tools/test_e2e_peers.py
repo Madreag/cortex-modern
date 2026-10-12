@@ -299,6 +299,14 @@ class JoinerBoxTest(unittest.TestCase):
                 self.assertEqual(peer["presentation"], "headed" if headed else "headless")
                 self.assertEqual(peer["render_cap"], None if headed else 60)
 
+    def test_collector_reads_a_players_early_pace_line(self):
+        out = self.root / "native-joiner"
+        (out / "run0" / "joiner").mkdir(parents=True)
+        request = out / "request.json"
+        request.write_text(json.dumps(dict(out=str(out), role="joiner", run_name="run0", signal_files=[])))
+        self.assertIsNone(peers.read_player_files(request)["pace"])
+        (out / "run0" / "joiner" / peers.video.PACE_REPORT).write_text(json.dumps({"line": "[fight-pace] RED"}))
+        self.assertEqual(peers.read_player_files(request)["pace"]["line"], "[fight-pace] RED")
 
 
 if __name__ == "__main__":

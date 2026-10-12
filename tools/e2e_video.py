@@ -1513,9 +1513,8 @@ def report_toast_evidence(record, spec):
 LOG_EVIDENCE = ("gate", "log_regex", "forbidden_log_regex", "events", "readback", "probe_steps", "sim_progress", "peer_drop", "drop_tick", "ownership_reclaim", "continuous_minutes")
 
 
-def continuous_minute_evidence(probe_path, spec):
-    """Include the captures and player actions between the engine's full-minute samples."""
-    document = json.loads(probe_path.read_text(encoding="utf-8")) if probe_path.is_file() else {}
+def minute_intervals(document, spec):
+    """Each engine full-minute sample, with the pace between it and the previous one (captures and chat included)."""
     samples = [step.get("observed", {}) for step in document.get("steps", [])
                if step.get("op") == "measure_minute" and "minute" in step.get("observed", {})]
     intervals, previous = [], None
@@ -1524,12 +1523,19 @@ def continuous_minute_evidence(probe_path, spec):
         elapsed = sample["at_ms"] - previous["at_ms"] if previous else minute["elapsed_ms"]
         pace = ((sample["lockstep_frame"] - previous["lockstep_frame"]) * 1000.0 / elapsed
                 if previous and elapsed > 0 else minute["pace"])
-        passed = (minute["number"] == number and minute["elapsed_ms"] >= 60000 and elapsed >= 60000
-                  and minute["pace"] >= spec["minimum_tps"] and pace >= spec["minimum_tps"]
+        slow = minute["pace"] < spec["minimum_tps"] or pace < spec["minimum_tps"]
+        passed = (minute["number"] == number and minute["elapsed_ms"] >= 60000 and elapsed >= 60000 and not slow
                   and sample.get("service") == "Running" and sample.get("paused") is False
                   and sample.get("editing") is False and sample.get("local_actor_alive") is True)
-        intervals.append({"number": number, "elapsed_ms": elapsed, "pace": pace, "pass": passed})
+        intervals.append({"number": number, "elapsed_ms": elapsed, "pace": pace, "minute_pace": minute["pace"], "slow": slow, "pass": passed})
         previous = sample
+    return intervals
+
+
+def continuous_minute_evidence(probe_path, spec):
+    """Include the captures and player actions between the engine's full-minute samples."""
+    document = json.loads(probe_path.read_text(encoding="utf-8")) if probe_path.is_file() else {}
+    intervals = minute_intervals(document, spec)
     passed = len(intervals) == spec["count"] and all(row["pass"] for row in intervals)
     return {"pass": passed, "minimum_tps": spec["minimum_tps"], "intervals": intervals,
             "reason": None if passed else "The full fight, including captures and chat, did not sustain every required minute"}
@@ -1567,6 +1573,59 @@ def pathfinding_waits(peer_root):
     return {"horizon_report": horizon, "report_path": str(report) if report.is_file() else None,
             "positive_waits": len(waits), "worst_wait": max(waits, key=lambda row: row["wait_us"], default=None),
             "wait_lines": [row["line"] for row in lines[:20]]}
+
+
+EARLY_PACE_MINUTES = 3
+PACE_REPORT = "fight-pace.json"
+
+
+def pace_specs(scenario, run_name, peer_name):
+    """The full-minute pace gates the scene's checklist holds for this player."""
+    specs = []
+    for item in scenario.get("checklist", []):
+        scope = item.get("run")
+        if not item.get("continuous_minutes") or item.get("peer") not in (None, peer_name):
+            continue
+        if scope and run_name not in ([scope] if isinstance(scope, str) else scope):
+            continue
+        specs.append({"item": item["id"], **item["continuous_minutes"]})
+    return specs
+
+
+def early_pace_verdict(document, spec, label):
+    """The fight's RED line once three of its measured minutes are below the gate; every slow minute already fails it."""
+    intervals = minute_intervals(document, spec)
+    slow = [row for row in intervals if row["slow"]]
+    if len(slow) < EARLY_PACE_MINUTES:
+        return None
+    paces = ", ".join(f"minute {row['number']} {min(row['pace'], row['minute_pace']):.1f}" for row in slow)
+    line = (f"[fight-pace] RED {label}: {len(slow)} of {len(intervals)} measured minutes below {spec['minimum_tps']:g} ticks a second "
+            f"({paces}); the fight plays on")
+    return {"line": line, "item": spec["item"], "minimum_tps": spec["minimum_tps"], "measured_minutes": len(intervals),
+            "slow_minutes": slow}
+
+
+def watch_pace(probe_path, specs, label, report, stop, poll_s=5.0):
+    """Write the fight's RED line the moment its pace fails, while the fight keeps playing to its own end."""
+    seen = None
+    while True:
+        stopping = stop.wait(poll_s)
+        try:
+            state = probe_path.stat().st_mtime_ns
+            if state != seen:
+                document = json.loads(probe_path.read_text(encoding="utf-8"))
+                seen = state
+                for spec in specs:
+                    verdict = early_pace_verdict(document, spec, label)
+                    if verdict:
+                        verdict.update(written=stamp(), during_play=not stopping)
+                        write_json(report, verdict)
+                        print(verdict["line"], flush=True)
+                        return verdict
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        if stopping:
+            return None
 
 
 def dropped_index_evidence(record, drop_tick):
@@ -1670,6 +1729,9 @@ def item_evidence(record, item, port=None):
             evidence["probe"] = "pass" if passed else "fail"
     if item.get("continuous_minutes"):
         evidence["continuous_minutes"] = continuous_minute_evidence(probe_path, item["continuous_minutes"])
+        early = Path(record["root"]) / PACE_REPORT
+        if early.is_file():
+            evidence["continuous_minutes"]["early_red"] = json.loads(early.read_text(encoding="utf-8"))
         passed = evidence["continuous_minutes"]["pass"]
         if not passed or evidence.get("probe") in ("none", "awaiting-review"):
             evidence["probe"] = "pass" if passed else "fail"
@@ -1844,6 +1906,13 @@ def review(scenario, capture, out):
             run_findings.append({"class": (capture.get("stop_finding") or {}).get("class", "unclassified"), "run": capture["name"], "peer": peer["peer"],
                                  "reason": (capture.get("stop_finding") or {}).get("reason") or peer.get("error") or f"Unexpected runner result: exit={record.get('exit_code')} timed_out={record.get('timed_out')}",
                                  "launch": peer.get("launch")})
+    for peer in capture["peers"]:
+        early = Path(peer["root"]) / PACE_REPORT
+        if early.is_file():
+            # The fight said so while it played; the line stays at the top of the run's findings.
+            verdict = json.loads(early.read_text(encoding="utf-8"))
+            run_findings.append({"class": "unclassified", "run": capture["name"], "peer": peer["peer"], "reason": verdict["line"],
+                                 "written": verdict.get("written"), "evidence": str(early), "launch": peer.get("launch")})
     declared_run = next((run for run in scenario.get("runs", []) if run.get("name") == capture["name"]), {})
     if declared_run.get("injected_desync") and capture.get("fullstate"):
         capture["fullstate"] = {pair: exempt_injected(verdict, pair, declared_run["injected_desync"], items)
@@ -2296,6 +2365,14 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
         measurer = threading.Thread(target=measure_footprint, daemon=True)
         measurer.start()
         killers.append(measurer)
+        for name in runs:
+            specs = pace_specs(scenario, root.name, name)
+            if specs:
+                watcher = threading.Thread(target=watch_pace, daemon=True,
+                                           args=(Path(shared[f"PROBE_DIR_{name}"]) / "net-ui-result.json", specs,
+                                                 f"{scenario['name']}/{root.name} {name}", root / name / PACE_REPORT, stop_watchers))
+                watcher.start()
+                killers.append(watcher)
         while any(thread.is_alive() for thread in threads):
             request = Path(out) / "stop-request.json"
             if request.is_file():

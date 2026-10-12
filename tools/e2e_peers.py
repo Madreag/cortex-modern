@@ -325,7 +325,12 @@ def read_player_files(request_path):
             data = path.read_bytes()
             if complete_signal(data, relative):
                 files[relative] = base64.b64encode(data).decode()
-    return {"started": (out / (role + "-started.json")).is_file(), "files": files}
+    pace = root / role / video.PACE_REPORT
+    try:
+        early = json.loads(pace.read_text(encoding="utf-8")) if pace.is_file() else None
+    except ValueError:
+        early = None
+    return {"started": (out / (role + "-started.json")).is_file(), "files": files, "pace": early}
 
 
 def write_player_files(request_path, files):
@@ -339,14 +344,22 @@ def write_player_files(request_path, files):
     publish_signals(out / request["run_name"], files, allowed)
 
 
-def share_player_files(players, stop, errors):
+def share_player_files(players, stop, errors, controls=None):
     sent = {role: {} for role in players}
+    told = set()
     try:
         while not stop.is_set():
             states = {}
             for role, (box, request, process, remote, tool, log) in players.items():
                 result = ssh(box, [box["python"], tool, "--read-files", remote], check=True, capture_output=True, text=True)
                 states[role] = json.loads(result.stdout)
+                early = states[role].get("pace")
+                if early and role not in told:
+                    # A player's fight fell below its pace gate; the collector says so now, not after the fight.
+                    told.add(role)
+                    print(role + ": " + early["line"], flush=True)
+                    if controls:
+                        video.write_json(controls / (request["run_name"] + "-" + role + "-" + video.PACE_REPORT), early)
             for role, (box, request, process, remote, tool, log) in players.items():
                 incoming = {path: data for other, state in states.items() if other != role for path, data in state["files"].items()}
                 if states[role]["started"] and incoming != sent[role]:
@@ -444,8 +457,8 @@ def capture_scene(args):
                     ready = ssh(box, [box["python"], tool, "--wait-start", remote], capture_output=True, text=True)
                     if ready.returncode:
                         raise RuntimeError("host launch refused: " + ready.stdout.strip())
-            if player_files(document, run):
-                sharing = threading.Thread(target=share_player_files, args=(players, stop, file_errors))
+            if player_files(document, run) or any(video.pace_specs(document, name, role) for role in players):
+                sharing = threading.Thread(target=share_player_files, args=(players, stop, file_errors, controls))
                 sharing.start()
             for role, player in players.items():
                 collected.add(role)
