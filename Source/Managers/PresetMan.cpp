@@ -23,6 +23,7 @@
 #include "RTETools.h"
 
 #include <array>
+#include <cstdlib>
 #include <iostream>
 
 using namespace RTE;
@@ -77,7 +78,9 @@ void PresetMan::Destroy() {
 }
 
 bool PresetMan::LoadDataModule(const std::string& moduleName, bool official, bool userdata, const ProgressCallback& progressCallback) {
-	CheckpointNativeStorage::AllocationScope resources(true);
+	// Test lever: measures what loading the modules into owned storage costs at startup.
+	static const bool s_PlainResources = std::getenv("CCCP_TEST_NO_OWNED_RESOURCES") != nullptr;
+	CheckpointNativeStorage::AllocationScope resources(!s_PlainResources);
 	if (moduleName.empty()) {
 		return false;
 	}
