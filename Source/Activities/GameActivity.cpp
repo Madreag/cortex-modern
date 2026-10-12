@@ -4630,11 +4630,15 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		shop->SetModuleExpanded(g_PresetMan.GetModuleID("Coalition.rte"));
 		shop->SetEnabled(true);
 		g_UInputMan.TrapMousePos(false, 0);
-		SDL_Delay(250); game->Update();
+		SDL_Delay(250); g_TimerMan.Update(); game->Update();
+		int tabX, tabY, tabWidth, tabHeight;
+		shop->AutomationManager()->GetControl("BodiesTab")->GetControlRect(&tabX, &tabY, &tabWidth, &tabHeight);
+		check("buy_controls_are_visible_before_the_frozen_tick", tabX >= 0 && tabY >= 0 && tabX + tabWidth <= g_WindowMan.GetResX() && tabY + tabHeight <= g_WindowMan.GetResY());
 		const uint64_t shopTick = g_TimerMan.GetSimUpdateCount();
 		const std::string committedController = game->m_PlayerController[0].SaveCheckpoint();
 		const std::string sharedRNG = g_SimRNG.SerializeStateForHashing();
 		const auto shopFrame = [&] {
+			g_TimerMan.Update();
 			g_UInputMan.Update(false); g_UInputMan.EndSimUpdate();
 			game->RenderUpdate(); shop->Draw(g_FrameMan.GetBackBuffer32()); present();
 		};
