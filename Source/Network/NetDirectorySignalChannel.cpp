@@ -40,7 +40,7 @@ namespace RTE {
 			bool Finished() override { return m_Client.Poll() == NetHttpClient::PollResult::Done; }
 			Reply Take() override {
 				const NetHttpClient::Response response = m_Client.GetResponse();
-				return {response.statusCode, response.body, response.error};
+				return {response.statusCode, response.body, response.error, response.retryAfter};
 			}
 			void Abort() override { m_Client.Cancel(); }
 
@@ -112,26 +112,12 @@ namespace RTE {
 			return code;
 		}
 
-		/// retry_after_s from a 429 body, held to the service's 1..60 s window; 1 s when absent or unreadable.
-		uint64_t RetryAfterMs(const std::string& body) {
-			const json parsed = json::parse(body, nullptr, false);
-			int64_t seconds = 1;
-			if (parsed.is_object()) {
-				if (const auto it = parsed.find("retry_after_s"); it != parsed.end() && it->is_number_integer()) {
-					seconds = it->get<int64_t>();
-				}
-			}
-			return static_cast<uint64_t>(std::clamp<int64_t>(seconds, 1, static_cast<int64_t>(NetDirectorySignalChannel::c_RetryMaxMs / 1000))) * 1000;
-		}
 
-		uint64_t NextBackoff(uint64_t backoffMs) {
-			return backoffMs == 0 ? NetDirectorySignalChannel::c_RetryBaseMs : std::min<uint64_t>(backoffMs * 2, NetDirectorySignalChannel::c_RetryMaxMs);
-		}
 	}
 
 	NetDirectorySignalChannel::~NetDirectorySignalChannel() { AbortRequest(); }
 
-	void NetDirectorySignalChannel::SetTransportFactory(NetDirectoryClient::TransportFactory factory) { m_Factory = std::move(factory); }
+	void NetDirectorySignalChannel::SetTransportFactory(NetDirectoryClient::TransportFactory factory) { m_Factory = std::move(factory); m_HttpTransport = false; }
 
 	void NetDirectorySignalChannel::ConfigureHost(std::string baseUrl, std::string installKey, std::string certPinSha256, std::string sessionId, std::string sessionToken, std::string signalPeer) {
 		m_JoinNonce.clear();
@@ -163,10 +149,7 @@ namespace RTE {
 		m_Outbox.clear();
 		m_Cursor = 0;
 		m_NextPollMs = 0;
-		m_NextAttemptMs = 0;
-		m_BackoffMs = 0;
-		m_NextPostMs = 0;
-		m_PostBackoffMs = 0;
+
 		m_PostBurst = 0;
 		m_ActivePollWaitS = 0;
 		m_DrainPolled = false;
@@ -188,6 +171,7 @@ namespace RTE {
 		m_SessionPath = "/v1/sessions/" + sessionId;
 		m_LocalPeer = std::move(localPeer);
 		m_Credential = std::move(credential);
+		m_InstallKey = installKey;
 		m_Headers = {{"Content-Type", "application/json"}, {"X-Install-Key", std::move(installKey)}, {"X-Signal-Peer", m_LocalPeer}};
 		if (IsHostPeer(m_LocalPeer)) {
 			m_Headers.emplace_back("X-Session-Token", m_Credential);
@@ -225,6 +209,9 @@ namespace RTE {
 		if (m_State != State::Open && m_State != State::Draining) {
 			return;
 		}
+        if (m_HttpTransport && NetDirectoryBudget::SessionEnded(m_BaseUrl, m_InstallKey, m_SessionPath.substr(13), nowMs)) {
+            Fail("This match is no longer in the directory. Choose another game."); return;
+        }
 		if (m_Request && m_Request->Finished()) {
 			const RequestKind kind = m_RequestKind;
 			const Reply reply = m_Request->Take();
@@ -233,6 +220,10 @@ namespace RTE {
 			if (reply.statusCode > 0) {
 				m_LastStatus = reply.statusCode;
 			}
+			// An answer proves the admission poll reached the service before another request is released.
+			if (kind == RequestKind::Poll && m_HttpTransport && IsHostPeer(m_LocalPeer) && reply.statusCode > 0 && reply.statusCode != 429)
+				NetDirectoryBudget::PollAnswered(m_BaseUrl, m_InstallKey, nowMs);
+			m_ReplyKind = kind; m_RetryReply = reply;
 			switch (kind) {
 				case RequestKind::Post: HandlePostReply(reply, nowMs); break;
 				case RequestKind::Poll: HandlePollReply(reply, nowMs); break;
@@ -242,10 +233,15 @@ namespace RTE {
 		if (m_Request) {
 			return;
 		}
+		if (nowMs < m_NextAttemptMs) return;
+		const bool host = IsHostPeer(m_LocalPeer);
+		const bool pollReady = nowMs >= m_PollRetry.nextMs && (!m_HttpTransport || NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, host ? "admission" : "general", nowMs));
+		const bool postReady = nowMs >= m_PostRetry.nextMs && (!m_HttpTransport || NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, "general", nowMs));
 		if (m_State == State::Draining) {
 			if (m_DrainPolled) {
 				SetState(State::Closed);
 			} else {
+				if (!pollReady) return;
 				m_DrainPolled = true;
 				IssuePoll(nowMs);
 			}
@@ -254,8 +250,8 @@ namespace RTE {
 		if (m_State != State::Open || nowMs < m_NextAttemptMs) {
 			return;
 		}
-		const bool pollDue = m_PollArmed && nowMs >= m_NextPollMs;
-		if (!m_Outbox.empty() && nowMs >= m_NextPostMs && (!pollDue || m_PostBurst < c_MaxPostBurst)) {
+		const bool pollDue = pollReady && m_PollArmed && (m_PollFirst || nowMs >= m_NextPollMs);
+		if (!m_Outbox.empty() && postReady && nowMs >= m_NextPostMs && (!pollDue || (!m_PollFirst && m_PostBurst < c_MaxPostBurst))) {
 			IssuePost();
 		} else if (pollDue) {
 			IssuePoll(nowMs);
@@ -307,12 +303,12 @@ namespace RTE {
 
 	void NetDirectorySignalChannel::NoteError(const std::string& error) {
 		m_LastError = error;
-		DiagnosticLine() << "[net-directory-signal] " << Role() << " " << error << std::endl;
+
 	}
 
 	void NetDirectorySignalChannel::Fail(const std::string& reason, const std::string& detail) {
 		m_LastError = reason;
-		DiagnosticLine() << "[net-directory-signal] " << Role() << " failed: " << reason << (detail.empty() ? "" : " (" + detail + ")") << std::endl;
+		if (m_ReplyKind == RequestKind::None) DiagnosticLine() << "[net-directory-signal] " << Role() << " failed: " << reason << (detail.empty() ? "" : " (" + detail + ")") << std::endl;
 		AbortRequest();
 		if (!IsHostPeer(m_LocalPeer)) m_Outbox.clear();
 		SetState(State::Failed);
@@ -327,8 +323,12 @@ namespace RTE {
 	}
 
 	void NetDirectorySignalChannel::ScheduleRetry(uint64_t nowMs) {
-		m_BackoffMs = NextBackoff(m_BackoffMs);
-		m_NextAttemptMs = nowMs + m_BackoffMs;
+		auto& retry = m_ReplyKind == RequestKind::Post ? m_PostRetry : m_PollRetry;
+		const uint64_t until = retry.Failed(nowMs, m_RetryReply.statusCode, m_RetryReply.body, m_RetryReply.retryAfter, m_ReplyKind == RequestKind::Post ? "signal-post" : "signal-poll");
+		const bool postQueueFull = m_ReplyKind == RequestKind::Post &&
+		    (m_RetryReply.statusCode == 400 || m_RetryReply.statusCode == 503) && ErrorCode(m_RetryReply.body) == "queue_full";
+		// A full post queue still needs its reader; other failed exchanges hold the whole channel.
+		if (!postQueueFull) m_NextAttemptMs = std::max(m_NextAttemptMs, until);
 	}
 
 	void NetDirectorySignalChannel::StartRequest(RequestKind kind, const Request& request) {
@@ -353,7 +353,7 @@ namespace RTE {
 	}
 
 	void NetDirectorySignalChannel::IssuePoll(uint64_t nowMs) {
-		m_PollStartedMs = nowMs;
+		m_PollStartedMs = nowMs; m_PollFirst = false;
 		m_PostBurst = 0;
 		++m_Polls;
 		// Queued offers still need their answers, without waiting behind an idle long poll.
@@ -386,7 +386,7 @@ namespace RTE {
 		m_Outbox.pop_front();
 		++m_SignalsPosted;
 		m_BackoffMs = 0;
-		m_PostBackoffMs = 0;
+		m_PostBackoffMs = 0; m_PostRetry.Succeeded();
 	}
 
 	void NetDirectorySignalChannel::HandlePollReply(const Reply& reply, uint64_t nowMs) {
@@ -407,7 +407,7 @@ namespace RTE {
 			ScheduleRetry(nowMs);
 			return;
 		}
-		m_BackoffMs = 0;
+		m_BackoffMs = 0; m_PollRetry.Succeeded();
 		// A server that answers an empty long poll immediately must still respect the idle cadence.
 		m_NextPollMs = m_PollWaitS > 0 ? (inbound.empty() ? std::max(nowMs, m_PollStartedMs + std::max<uint64_t>(c_PollIntervalMs, m_PollWaitS * 1000ULL)) : nowMs) : nowMs + c_PollIntervalMs;
 		for (const Signal& signal : inbound) {
@@ -424,33 +424,20 @@ namespace RTE {
 
 	void NetDirectorySignalChannel::HandleRefusal(const char* what, const Reply& reply, uint64_t nowMs) {
 		const std::string code = ErrorCode(reply.body);
-		const std::string status = std::string(what) + ": HTTP " + std::to_string(reply.statusCode) + (code.empty() ? "" : " " + code);
-		if (NetDirectoryClient::IsCapacityReply(reply)) {
-			NoteError(NetDirectoryClient::c_CapacityNotice);
-			m_PostBackoffMs = NextBackoff(m_PostBackoffMs);
-			m_NextPostMs = nowMs + m_PostBackoffMs;
-			if (std::string(what) != "post") ScheduleRetry(nowMs);
-		} else if (reply.statusCode == 429) {
-			const uint64_t waitMs = RetryAfterMs(reply.body);
-			NoteError(status + ", retrying in " + std::to_string(waitMs) + " ms");
-			m_NextAttemptMs = nowMs + waitMs;
-		} else if (reply.statusCode == 404) {
-			// Only the seat authority can declare the match ended. A restarting
-			// directory or a host handover may temporarily have no signal route.
-			NoteError("The directory is restoring this match's connection. Retrying; Cancel stops joining.");
-			ScheduleRetry(nowMs);
+		ScheduleRetry(nowMs);
+		if (reply.statusCode == 429) {
+			const uint64_t until = std::max(m_PostRetry.nextMs, m_PollRetry.nextMs);
+			m_NextAttemptMs = std::max(m_NextAttemptMs, until); m_BusyUntilMs.store(until);
+			m_PollFirst = IsHostPeer(m_LocalPeer);
+			if (m_HttpTransport) NetDirectoryBudget::Refused(m_BaseUrl, m_InstallKey, m_PollFirst && std::string(what) == "poll" ? "admission" : "general", nowMs, until, reply.body, m_PollFirst);
+			NoteError("The directory is busy. The host retries in " + std::to_string((until - nowMs + 999) / 1000) + " seconds. Cancel returns to Multiplayer.");
+		} else if (NetDirectoryRetry::SessionGone(reply.statusCode, reply.body)) {
+			if (m_HttpTransport) NetDirectoryBudget::EndSession(m_BaseUrl, m_InstallKey, m_SessionPath.substr(13), nowMs);
+			Fail("This match is no longer in the directory. Choose another game.");
 		} else if (reply.statusCode == 403) {
-			Fail("bad credential", status);
-		} else if (reply.statusCode == 400 && code == "queue_full") {
-			NoteError(status);
-			m_PostBackoffMs = NextBackoff(m_PostBackoffMs);
-			m_NextPostMs = nowMs + m_PostBackoffMs;
-		} else if (reply.statusCode >= 500) {
-			NoteError(status);
-			ScheduleRetry(nowMs);
-		} else {
-			Fail(status);
-		}
+			Fail("The directory could not confirm your place in this match. Choose another game.");
+		} else if (NetDirectoryClient::IsCapacityReply(reply)) NoteError(NetDirectoryClient::c_CapacityNotice);
+		else NoteError("The directory is unavailable. Joining will retry; Cancel returns to Multiplayer.");
 	}
 
 	bool NetDirectorySignalChannel::DecodeInbound(const NetDirectorySignalList& list, std::vector<Signal>& out, std::string& reason) const {

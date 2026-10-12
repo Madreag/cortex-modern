@@ -183,6 +183,7 @@ namespace RTE {
 			std::string requestBody;   //!< Must stay valid until the request handle is closed (lpOptional rule).
 			std::string readBuf;       //!< Scratch for the in-flight WinHttpReadData.
 			long statusCode = 0;
+			std::string retryAfter;
 			std::string body;
 			std::string error;
 		};
@@ -296,6 +297,11 @@ namespace RTE {
 						live = st->request != nullptr && !st->cancelRequested->load();
 						if (live) {
 							gotCode = WinHttpQueryHeaders(st->request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &code, &codeSize, WINHTTP_NO_HEADER_INDEX) != FALSE;
+							std::array<wchar_t, 256> retry{}; DWORD retrySize = sizeof(retry);
+							if (WinHttpQueryHeaders(st->request, WINHTTP_QUERY_CUSTOM, L"Retry-After", retry.data(), &retrySize, WINHTTP_NO_HEADER_INDEX)) {
+								std::lock_guard<std::mutex> dataLock(st->dataMutex);
+								for (wchar_t ch: retry) { if (ch == 0) break; if (ch < 128) st->retryAfter.push_back(static_cast<char>(ch)); }
+							}
 							if (!WinHttpQueryDataAvailable(st->request, nullptr)) {
 								failCode = GetLastError();
 								if (failCode != ERROR_IO_PENDING) failStep = "query data";
@@ -591,6 +597,7 @@ namespace RTE {
 				} else {
 					response.statusCode = async->statusCode;
 					response.body = std::move(async->body);
+					response.retryAfter = std::move(async->retryAfter);
 				}
 			}
 		}
@@ -599,10 +606,10 @@ namespace RTE {
 
 #elif defined(__APPLE__)
 
-	void NetHttpClient::AppleDone(void* context, long statusCode, const char* body, size_t bodySize, const char* error) {
+	void NetHttpClient::AppleDone(void* context, long statusCode, const char* body, size_t bodySize, const char* error, const char* retryAfter) {
 		NetHttpClient* client = static_cast<NetHttpClient*>(context);
 		try {
-			client->Finish(Response{statusCode, std::string(body, bodySize), error});
+			client->Finish(Response{statusCode, std::string(body, bodySize), error, retryAfter});
 		} catch (...) {
 			// Nothing may unwind into the NSURLSession frames; this short error needs no allocation.
 			try { client->Finish(Response{0, "", "out of memory"}); } catch (...) {}
@@ -647,6 +654,7 @@ namespace RTE {
 			std::atomic<bool>& cancelled;
 			std::array<unsigned char, 32> pin{};
 			std::string body;
+			std::string retryAfter;
 			const char* error = nullptr;
 		};
 
@@ -696,6 +704,20 @@ namespace RTE {
 			try { transfer.body.append(bytes, size * count); }
 			catch (...) { transfer.error = "out of memory"; return 0; }
 			return size * count;
+		}
+
+		size_t ReceiveCurlHeader(char* bytes, size_t size, size_t count, void* userdata) {
+			if (size != 0 && count > 65536 / size) return 0;
+			const size_t length = size * count;
+			std::string_view line(bytes, length);
+			constexpr std::string_view name = "retry-after:";
+			if (line.size() >= name.size() && std::equal(name.begin(), name.end(), line.begin(), [](char a, char b) { return a == std::tolower(static_cast<unsigned char>(b)); })) {
+				line.remove_prefix(name.size());
+				while (!line.empty() && std::isspace(static_cast<unsigned char>(line.front()))) line.remove_prefix(1);
+				while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back()))) line.remove_suffix(1);
+				try { static_cast<CurlTransfer*>(userdata)->retryAfter.assign(line); } catch (...) { return 0; }
+			}
+			return length;
 		}
 
 		int CurlProgress(void* userdata, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
@@ -764,6 +786,8 @@ namespace RTE {
 			handles.headers = next;
 		}
 		option(CURLOPT_HTTPHEADER, handles.headers);
+		option(CURLOPT_HEADERFUNCTION, &ReceiveCurlHeader);
+		option(CURLOPT_HEADERDATA, static_cast<void*>(&transfer));
 		if (!body.empty() || method == "POST" || method == "PUT" || method == "PATCH") {
 			if (body.size() > static_cast<size_t>(std::numeric_limits<curl_off_t>::max())) throw std::length_error("request body too large");
 			option(CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(body.size()));
@@ -796,6 +820,7 @@ namespace RTE {
 		else {
 			curl_easy_getinfo(handles.easy, CURLINFO_RESPONSE_CODE, &response.statusCode);
 			response.body = std::move(transfer.body);
+			response.retryAfter = std::move(transfer.retryAfter);
 		}
 		Finish(response);
 	}

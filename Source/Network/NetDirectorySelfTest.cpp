@@ -347,9 +347,9 @@ namespace RTE {
 			*error = "F2: recovered directory id left the signal channel or ICE binding on the previous id";
 			return false;
 		}
-		service.m_Directory.Update(4999);
+		service.m_Directory.Update(999);
 		if (sent->size() != 1) { *error = "F2: the identity refresh ignored its backoff"; return false; }
-		service.m_Directory.Update(5000);
+		service.m_Directory.Update(1000);
 		const auto body = nlohmann::json::parse(sent->back().body);
 		if (sent->size() != 2 || body["resume_session_id"] != newId || body["resume_token"] != "new-token" || body["join_mode"] != "either") {
 			*error = "F2: the changed world id was never advertised with its recovered ICE binding"; return false;
@@ -373,7 +373,7 @@ namespace RTE {
 			void Start(const NetDirectoryClient::Request& request) override { m_Sent->push_back(request); }
 			bool Finished() override { return true; }
 			NetDirectoryClient::Reply Take() override {
-				if (m_Sent->size() == 2) return {404, R"({"error":"not_found"})", ""};
+				if (m_Sent->size() == 2) return {404, R"({"error":"match_unavailable"})", ""};
 				return {200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""};
 			}
 			void Abort() override {}
@@ -396,15 +396,16 @@ namespace RTE {
 		service.RefreshDirectorySignalCredentialLocked(17417);
 		const auto before = service.m_HostSignalCredential.load();
 		service.m_Directory.Advertise(service.m_DirectoryRow, false);
-		service.m_Directory.Update(22416);
+		// Recovery uses the same one-second first retry as the other directory paths.
+		service.m_Directory.Update(18416);
 		if (sent->size() != 2) { *error = "lobby recovery ignored the directory retry deadline"; return false; }
-		service.m_Directory.Update(22417);
+		service.m_Directory.Update(18417);
 		const auto body = nlohmann::json::parse(sent->back().body);
 		if (body.value("resume_session_id", std::string()) != id || body.value("resume_token", std::string()) != "host-token") {
 			*error = "expired lobby registration discarded its listener's directory identity"; return false;
 		}
-		service.m_Directory.Update(22417);
-		service.RefreshDirectorySignalCredentialLocked(22417);
+		service.m_Directory.Update(18417);
+		service.RefreshDirectorySignalCredentialLocked(18417);
 		if (service.m_HostSignalCredential.load() == before) { *error = "renewed lobby lease left its failed signal pump unopened"; return false; }
 		std::cout << "[net-directory-selftest] PASS lobby_directory_lease_recovery" << std::endl;
 		return true;
@@ -1371,6 +1372,53 @@ namespace RTE {
 				}
 			};
 
+			bool TestHostPostWaitWithoutPolling(std::string* error) {
+				const char* url = std::getenv("CCCP_TEST_DIRECTORY_URL");
+				const char* pin = std::getenv("CCCP_TEST_DIRECTORY_PIN");
+				if (!url || !pin) { *error = "the host post row needs its local directory"; return false; }
+				NetDirectoryClient client;
+				NetDirectorySignalChannel channel;
+				struct Finish {
+					NetDirectoryClient& client; NetDirectorySignalChannel& channel;
+					~Finish() { channel.Abandon(); client.Configure("", "", ""); }
+				} finish{client, channel};
+				const std::string install = "hostpostwait01234";
+				client.Configure(url, install, pin);
+				client.Advertise(SampleRegisterRequest(), false);
+				const uint64_t opening = NetDirectoryRetry::NowMs();
+				while (client.GetState() != NetDirectoryClient::State::Registered && NetDirectoryRetry::NowMs() - opening < 5000) {
+					client.Update(NetDirectoryRetry::NowMs());
+					std::this_thread::sleep_for(std::chrono::milliseconds(5));
+				}
+				if (client.GetState() != NetDirectoryClient::State::Registered) { *error = "the local host row did not open"; return false; }
+				channel.ConfigureHost(url, install, pin, client.GetSessionId(), client.GetToken());
+				channel.SetPolling(false);
+				if (!channel.Post("client:" + std::string(32, 'c'), "returning player")) { *error = "the host post was not queued"; return false; }
+				while (channel.RetryUntilMs() == 0 && NetDirectoryRetry::NowMs() - opening < 5000) {
+					channel.Update(NetDirectoryRetry::NowMs());
+					std::this_thread::sleep_for(std::chrono::milliseconds(5));
+				}
+				const uint64_t until = channel.RetryUntilMs();
+				if (until <= NetDirectoryRetry::NowMs()) { *error = "the host post did not receive its directory wait"; return false; }
+				const auto heartbeats = [&] { return json::parse(client.BuildReportJson()).value("heartbeats", uint64_t{0}); };
+				bool heartbeatDue = false;
+				while (NetDirectoryRetry::NowMs() < until + NetDirectorySignalChannel::c_PollIntervalMs + 250) {
+					const uint64_t now = NetDirectoryRetry::NowMs();
+					if (!heartbeatDue && now >= until) { client.NoteListenAddrs({"127.0.0.1"}); heartbeatDue = true; }
+					channel.Update(now); client.Update(now);
+					if (heartbeats() != 0) {
+						if (now < until) { *error = "a host heartbeat bypassed its directory wait"; return false; }
+						std::this_thread::sleep_for(std::chrono::milliseconds(25));
+						client.Update(NetDirectoryRetry::NowMs());
+						std::cout << "[net-directory-selftest] PASS host_post_wait_without_polling heartbeat_after_wait_ms=" << now - until << std::endl;
+						return true;
+					}
+					std::this_thread::sleep_for(std::chrono::milliseconds(5));
+				}
+				*error = "a disarmed host poll kept the heartbeat waiting after the directory wait";
+				return false;
+			}
+
 			bool RequestIs(const NetDirectoryClient::Request& request, const char* method, const char* path, std::string* error) {
 				if (request.method != method || request.path != path) {
 					*error = "request was " + request.method + " " + request.path + ", expected " + method + " " + path;
@@ -1495,11 +1543,11 @@ namespace RTE {
 					const uint64_t refusedAt = heartbeat ? 5000 : 0;
 					if (heartbeat) { s.client.Update(refusedAt); s.client.Update(refusedAt); }
 					const size_t sentAtRefusal = s.sent->size();
-					for (uint64_t now = refusedAt + 1; now < refusedAt + 5000; ++now) {
+					for (uint64_t now = refusedAt + 1; now < refusedAt + 1000; ++now) {
 						s.client.Advertise(SampleRegisterRequest(), true); s.client.Update(now);
 						if (s.sent->size() != sentAtRefusal) { *error = "F1: a refusal retry ignored its backoff"; return false; }
 					}
-					s.client.Update(refusedAt + 5000); s.client.Update(refusedAt + 5000);
+					s.client.Update(refusedAt + 1000); s.client.Update(refusedAt + 1000);
 					if (s.client.GetState() != NetDirectoryClient::State::Registered || s.sent->size() <= (heartbeat ? 2U : 1U)) {
 						*error = "F1: listed " + std::string(heartbeat ? "heartbeat" : "register") + " HTTP " + std::to_string(status) + " stopped requesting a healthy directory";
 						return false;
@@ -1660,9 +1708,9 @@ namespace RTE {
 			bool TestHeartbeat404Reregisters(std::string* error) {
 				ScriptedClient s;
 				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
-				s.replies->push_back({404, R"({"error":"not_found"})", ""});
+				s.replies->push_back({404, R"({"error":"match_unavailable"})", ""});
 				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
-				s.replies->push_back({404, R"({"error":"not_found"})", ""});
+				s.replies->push_back({404, R"({"error":"match_unavailable"})", ""});
 				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"9d2e1f3a-3333-4444-8555-666677778888","token":"tok3","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 
 				s.client.Advertise(SampleRegisterRequest(), false);
@@ -1670,28 +1718,28 @@ namespace RTE {
 				s.client.Update(0);
 				s.client.Update(5000); // heartbeat -> 404
 				s.client.Update(5000);
-				s.client.Update(9999);
+				s.client.Update(5999);
 				if (s.sent->size() != 2) { *error = "the first 404 retry ignored its backoff"; return false; }
-				s.client.Update(10000);
+				s.client.Update(6000);
 				if (s.sent->size() != 3 || !RequestIs(s.sent->at(2), "POST", "/v1/sessions", error)) {
 					*error = error->empty() ? "no re-register after the 404" : *error;
 					return false;
 				}
-				s.client.Update(10000);
+				s.client.Update(6000);
 				if (s.client.GetState() != NetDirectoryClient::State::Registered || s.client.GetSessionId() != "8c9d2e1f-2222-4333-8444-555566667777") {
 					*error = "the re-registered session was not adopted";
 					return false;
 				}
-				s.client.Update(15000);
-				s.client.Update(15000);
+				s.client.Update(11000);
+				s.client.Update(11000);
 				if (s.client.GetState() != NetDirectoryClient::State::Registering || s.sent->size() != 4) {
 					*error = std::string("a second 404 before the row beat was not held to the backoff: state=") + NetDirectoryClient::StateName(s.client.GetState()) +
 					         " requests=" + std::to_string(s.sent->size());
 					return false;
 				}
-				s.client.Update(19999);
-				s.client.Update(20000);
-				s.client.Update(20000);
+				s.client.Update(11999);
+				s.client.Update(12000);
+				s.client.Update(12000);
 				if (s.sent->size() != 5 || !RequestIs(s.sent->at(4), "POST", "/v1/sessions", error) || s.client.GetState() != NetDirectoryClient::State::Registered ||
 				    s.client.GetSessionId() != "9d2e1f3a-3333-4444-8555-666677778888") {
 					*error = std::string("the row lost twice was given up: state=") + NetDirectoryClient::StateName(s.client.GetState()) + " requests=" + std::to_string(s.sent->size()) +
@@ -1708,7 +1756,7 @@ namespace RTE {
 					return NetDirectoryClient::Reply{200, R"({"connection_protocol":1,"session_id":")" + world + R"(","token":")" + token + R"(","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""};
 				};
 				const NetDirectoryClient::Reply beat{200, R"({"expires_in_s":15,"heartbeat_s":5})", ""};
-				const NetDirectoryClient::Reply gone{404, R"({"error":"not_found"})", ""};
+				const NetDirectoryClient::Reply gone{404, R"({"error":"match_unavailable"})", ""};
 				const NetDirectoryClient::Reply forbidden{403, R"({"error":"forbidden"})", ""};
 				ScriptedClient s;
 				for (const NetDirectoryClient::Reply& reply: {granted("tok-1"), beat, gone, forbidden, forbidden, granted("tok-2"), beat, gone, forbidden, forbidden, granted("tok-3")}) s.replies->push_back(reply);
@@ -1752,7 +1800,7 @@ namespace RTE {
 					return false;
 				}
 				for (size_t i = 1; i < registerTimes.size(); ++i) {
-					if (registerTimes[i] - registerTimes[i - 1] < 5000) {
+					if (registerTimes[i] - registerTimes[i - 1] < 1000) {
 						*error = "world-reclaim: registration retried without its backoff";
 						return false;
 					}
@@ -1775,7 +1823,7 @@ namespace RTE {
 			bool TestHeartbeat429HonorsRetryAfter(std::string* error) {
 				ScriptedClient s;
 				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
-				s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":30})", ""});
+				s.replies->push_back({429, R"({"error":"rate_limited_key","retry_after_s":30})", ""});
 				s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
 
 				s.client.Advertise(SampleRegisterRequest(), false);
@@ -1806,28 +1854,28 @@ namespace RTE {
 
 				s.client.Advertise(SampleRegisterRequest(), false);
 				s.client.Update(0);
-				s.client.Update(0); // first failure: retry in 5s
-				s.client.Update(4999);
+				s.client.Update(0); // first failure: retry in 1s
+				s.client.Update(999);
 				if (s.sent->size() != 1) {
 					*error = "a retry left before the first backoff elapsed";
 					return false;
 				}
-				s.client.Update(5000);
-				s.client.Update(5000); // second failure: retry in 10s
-				s.client.Update(14999);
+				s.client.Update(1000);
+				s.client.Update(1000); // second failure: retry in 2s
+				s.client.Update(2999);
 				if (s.sent->size() != 2) {
 					*error = "a retry left before the second backoff elapsed";
 					return false;
 				}
-				s.client.Update(15000);
-				s.client.Update(15000); // third failure: retry in 20s
-				s.client.Update(34999);
+				s.client.Update(3000);
+				s.client.Update(3000); // third failure: retry in 4s
+				s.client.Update(6999);
 				if (s.sent->size() != 3) {
 					*error = "a retry left before the third backoff elapsed";
 					return false;
 				}
-				s.client.Update(35000);
-				s.client.Update(35000);
+				s.client.Update(7000);
+				s.client.Update(7000);
 				if (s.client.GetState() != NetDirectoryClient::State::Registered || s.sent->size() != 4) {
 					*error = "the register did not recover after the backoff sequence";
 					return false;
@@ -1976,11 +2024,11 @@ namespace RTE {
 					if (s.client.GetState() == NetDirectoryClient::State::Failed) {
 						note("echo-absent: a missing echo was terminal instead of a bounded retry");
 					}
-					s.client.Update(4999);
+					s.client.Update(999);
 					if (s.sent->size() > 2) {
 						note("echo-absent: the unconfirmed visibility retried before the backoff elapsed");
 					}
-					s.client.Update(5000);
+					s.client.Update(1000);
 					const NetDirectoryClient::Request* retry = SentAt(s, 2);
 					bool listed = true;
 					if (!retry || !RequestListed(*retry, &listed) || listed) {
@@ -2030,7 +2078,7 @@ namespace RTE {
 					}
 				}
 
-				{   // a 404 on a hidden row fails closed: no re-register, retract still deletes the id
+				{   // a 404 on a hidden row fails closed: no re-register or later posting
 					ScriptedClient s;
 					s.replies->push_back({200, kRegisterCapable, ""});
 					s.replies->push_back({404, R"({"error":"not_found"})", ""});
@@ -2046,14 +2094,9 @@ namespace RTE {
 					if (s.client.GetState() != NetDirectoryClient::State::Failed) {
 						note("hidden-404: the client did not fail closed on the lost hidden row");
 					}
-					s.client.Retract();
-					s.client.Update(0);
-					const NetDirectoryClient::Request* deleted = SentAt(s, 2);
-					if (!deleted || deleted->method != "DELETE" || deleted->path != kSessionPath) {
-						note("hidden-404: retract did not delete the known row after the failure");
-					} else if (deleted->path.find("7b8c9d2e") == std::string::npos) {
-						note("hidden-404: retract deleted a rebound identity instead of the lost row");
-					}
+                    const size_t beforeRetract = s.sent->size();
+                    s.client.Retract(); s.client.Update(0); s.client.Update(1000);
+                    if (s.sent->size() != beforeRetract) note("hidden-404: a gone session sent another request");
 				}
 
 				if (misses.empty()) {
@@ -2161,7 +2204,7 @@ namespace RTE {
 				{   // A visible row's actual 429 also gates a later retract.
 					ScriptedClient s;
 					s.replies->push_back({200, kRegisterLegacy, ""});
-					s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":30})", ""});
+					s.replies->push_back({429, R"({"error":"rate_limited_key","retry_after_s":30})", ""});
 					s.replies->push_back({200, R"({"ok":true})", ""});
 					s.client.Advertise(SampleRegisterRequest(), false);
 					s.client.Update(0);
@@ -2187,7 +2230,7 @@ namespace RTE {
 				{   // a 429 while the visibility intent is dirty still honors retry_after
 					ScriptedClient s;
 					s.replies->push_back({200, kRegisterCapable, ""});
-					s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":30})", ""});
+					s.replies->push_back({429, R"({"error":"rate_limited_key","retry_after_s":30})", ""});
 					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":false})", ""});
 					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
 					s.client.Update(0);
@@ -2212,7 +2255,7 @@ namespace RTE {
 				{   // retract after a visibility failure still deletes the known row, past the deadline
 					ScriptedClient s;
 					s.replies->push_back({200, kRegisterCapable, ""});
-					s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":30})", ""});
+					s.replies->push_back({429, R"({"error":"rate_limited_key","retry_after_s":30})", ""});
 					s.replies->push_back({200, R"({"ok":true})", ""});
 					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
 					s.client.Update(0);
@@ -2265,14 +2308,14 @@ namespace RTE {
 				auto note = [&misses](const std::string& miss) { misses.push_back(miss); };
 
 				// Retract then re-advertise inside a heartbeat 429 (retry at t=30000) or an echo-less ack's
-				// backoff (retry at t=5000): the new intent keeps the deadline and the same row.
+				// backoff (retry at t=1000): the new intent keeps the deadline and the same row.
 				const struct {
 					const char* name;
 					NetDirectoryClient::Reply answer;
 					uint64_t deadline;
 				} readvertise[] = {
-					{"readvertise-429", {429, R"({"error":"rate_limited","retry_after_s":30})", ""}, 30000},
-					{"readvertise-backoff", {200, R"({"expires_in_s":15,"heartbeat_s":5})", ""}, 5000},
+					{"readvertise-429", {429, R"({"error":"rate_limited_key","retry_after_s":30})", ""}, 30000},
+					{"readvertise-backoff", {200, R"({"expires_in_s":15,"heartbeat_s":5})", ""}, 1000},
 				};
 				for (const auto& arm : readvertise) {
 					const std::string name = arm.name;
@@ -2285,13 +2328,13 @@ namespace RTE {
 					s.client.Update(0);
 					s.client.Update(0); // the hide heartbeat's answer sets the retry deadline
 					s.client.Retract();
-					s.client.Update(1000);
+					s.client.Update(arm.deadline / 4);
 					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
-					s.client.Update(2000);
+					s.client.Update(arm.deadline / 2);
 					const size_t afterReadvertise = s.sent->size();
 					s.client.Update(arm.deadline - 1);
 					if (afterReadvertise != 2 || s.sent->size() != 2) {
-						note(name + ": a request left at t=" + std::to_string(afterReadvertise != 2 ? uint64_t{2000} : arm.deadline - 1) + ", inside the t=" + std::to_string(arm.deadline) + " retry deadline");
+						note(name + ": a request left at t=" + std::to_string(afterReadvertise != 2 ? arm.deadline / 2 : arm.deadline - 1) + ", inside the t=" + std::to_string(arm.deadline) + " retry deadline");
 					}
 					s.client.Update(arm.deadline);
 					const NetDirectoryClient::Request* hide = SentAt(s, 2);
@@ -2317,22 +2360,22 @@ namespace RTE {
 					s.client.Update(0);
 					s.client.Update(0);
 					s.client.Update(5000);
-					s.client.Update(5000); // the interval heartbeat's 503 backs off until t=10000
+					s.client.Update(5000); // the interval heartbeat's 503 backs off until t=6000
 					s.client.Retract();
-					s.client.Update(6000);
+					s.client.Update(5500);
 					s.client.Advertise(SampleRegisterRequest(), false);
-					s.client.Update(7000);
+					s.client.Update(5750);
 					const size_t afterReadvertise = s.sent->size();
-					s.client.Update(9999);
+					s.client.Update(5999);
 					if (afterReadvertise != 2 || s.sent->size() != 2) {
-						note("readvertise-visible-backoff: a request left at t=" + std::string(afterReadvertise != 2 ? "7000" : "9999") + ", inside the t=10000 backoff deadline");
+						note("readvertise-visible-backoff: a request left at t=" + std::string(afterReadvertise != 2 ? "5750" : "5999") + ", inside the t=6000 backoff deadline");
 					}
-					s.client.Update(10000);
+					s.client.Update(6000);
 					const NetDirectoryClient::Request* heartbeat = SentAt(s, 2);
 					if (!heartbeat || heartbeat->method != "POST" || heartbeat->path != kHeartbeatPath) {
-						note("readvertise-visible-backoff: the heartbeat did not resume on the same row at t=10000");
+						note("readvertise-visible-backoff: the heartbeat did not resume on the same row at t=6000");
 					}
-					s.client.Update(10000);
+					s.client.Update(6000);
 					if (CountRequests(s, "DELETE", kSessionPath) != 0 || CountRequests(s, "POST", "/v1/sessions") != 1 || s.client.GetState() != NetDirectoryClient::State::Registered) {
 						note("readvertise-visible-backoff: the re-advertise deleted the row or registered again");
 					}
@@ -2340,7 +2383,7 @@ namespace RTE {
 
 				{   // the default visible API: retract then re-advertise inside a register 429 keeps retry_after
 					ScriptedClient s;
-					s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":30})", ""});
+					s.replies->push_back({429, R"({"error":"rate_limited_key","retry_after_s":30})", ""});
 					s.replies->push_back({200, kRegisterLegacy, ""});
 					s.client.Advertise(SampleRegisterRequest(), false);
 					s.client.Update(0);
@@ -2377,7 +2420,7 @@ namespace RTE {
 					}
 				}
 
-				// A contradicting or undecodable echo retries at 5000 ms, then 10000 ms, and is never terminal.
+				// A contradicting or undecodable echo retries at 1000 ms, then 2000 ms, and is never terminal.
 				const struct {
 					const char* name;
 					const char* body;
@@ -2395,31 +2438,31 @@ namespace RTE {
 					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
 					s.client.Update(0);
 					s.client.Update(0);
-					s.client.Update(0); // first mismatch: retry at t=5000
+					s.client.Update(0); // first mismatch: retry at t=1000
 					if (s.client.GetState() == NetDirectoryClient::State::Failed) {
 						note(name + ": the mismatched echo was terminal instead of a bounded retry");
 					}
 					if (json::parse(s.client.BuildReportJson()).value("confirmed_listed", json()) != json(true)) {
 						note(name + ": the register's visible confirmation did not survive the mismatch");
 					}
-					s.client.Update(4999);
+					s.client.Update(999);
 					const size_t beforeFirst = s.sent->size();
-					s.client.Update(5000);
+					s.client.Update(1000);
 					const NetDirectoryClient::Request* first = SentAt(s, 2);
 					bool listed = true;
 					if (beforeFirst != 2 || !first || !RequestListed(*first, &listed) || listed) {
-						note(name + ": the first retry did not resend listed=false at exactly t=5000");
+						note(name + ": the first retry did not resend listed=false at exactly t=1000");
 					}
-					s.client.Update(5000); // second mismatch: the backoff doubles, retry at t=15000
-					s.client.Update(14999);
+					s.client.Update(1000); // second mismatch: the backoff doubles, retry at t=3000
+					s.client.Update(2999);
 					const size_t beforeSecond = s.sent->size();
-					s.client.Update(15000);
+					s.client.Update(3000);
 					const NetDirectoryClient::Request* second = SentAt(s, 3);
 					listed = true;
 					if (beforeSecond != 3 || !second || !RequestListed(*second, &listed) || listed) {
-						note(name + ": the second retry did not resend listed=false at exactly t=15000");
+						note(name + ": the second retry did not resend listed=false at exactly t=3000");
 					}
-					s.client.Update(15000);
+					s.client.Update(3000);
 					if (json::parse(s.client.BuildReportJson()).value("confirmed_listed", json()) != json(false)) {
 						note(name + ": the matching ack after the retries was not confirmed hidden");
 					}
@@ -2472,6 +2515,17 @@ namespace RTE {
 					if (ReportLeaksToken(held) || ReportLeaksToken(deleted)) {
 						note("token: the report exposed the session token");
 					}
+					auto newLease = json::parse(kRegisterCapableSecret);
+					newLease["session_id"] = "7b8c9d2e-1111-4222-8333-444455556667";
+					s.replies->push_back({200, newLease.dump(), ""});
+					s.client.Advertise(SampleRegisterRequest(), false);
+					s.client.Update(60000);
+					const auto fresh = json::parse(s.sent->back().body);
+					if (s.sent->back().method != "POST" || !fresh.value("resume_session_id", std::string()).empty() || !fresh.value("resume_token", std::string()).empty()) {
+						note("deleted: a new lobby reused the closed lobby's claim");
+					}
+					s.client.Update(60000);
+					if (s.client.GetSessionId() != newLease["session_id"].get<std::string>()) note("deleted: a new lobby did not receive a fresh lease");
 				}
 
 				{   // a hidden row lost to a 404 keeps its id for Retract but claims no confirmation
@@ -2549,7 +2603,7 @@ namespace RTE {
 				{   // Shutdown inside a heartbeat 429 keeps retry_after: no DELETE within its budget, none counted
 					ScriptedClient s;
 					s.replies->push_back({200, kRegisterCapableSecret, ""});
-					s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":30})", ""});
+					s.replies->push_back({429, R"({"error":"rate_limited_key","retry_after_s":30})", ""});
 					s.replies->push_back({200, R"({"ok":true})", ""});
 					const uint64_t base = SteadyMs();
 					s.client.Advertise(SampleRegisterRequest(), false);
@@ -3252,16 +3306,20 @@ namespace RTE {
 				if (json::parse(host.client.BuildReportJson())["last_error"] != sentence) {
 					*error = "R6: directory full lost its player sentence"; return false;
 				}
-				host.client.Update(4999);
+				host.client.Update(999);
 				if (host.sent->size() != 1) { *error = "R6: directory full ignored its backoff"; return false; }
+				host.client.Update(1000);
+				if (host.sent->size() != 2) { *error = "R6: directory full missed its retry deadline"; return false; }
 				for (const int status : {400, 503}) {
 					ScriptedChannel joiner(false);
 					joiner.replies->push_back({status, status == 400 ? R"({"error":"queue_full"})" : R"({"error":"full"})", ""});
 					joiner.channel.Post("host", "offer");
 					joiner.channel.Update(0); joiner.channel.Update(0);
 					if (joiner.channel.GetLastError() != sentence) { *error = "R6: signaling capacity lost its player sentence"; return false; }
-					joiner.channel.Update(4999);
+					joiner.channel.Update(999);
 					if (joiner.sent->size() != 1) { *error = "R6: signaling capacity ignored its backoff"; return false; }
+					joiner.channel.Update(1000);
+					if (joiner.sent->size() != 2) { *error = "R6: signaling capacity missed its retry deadline"; return false; }
 				}
 				std::cout << "[net-directory-selftest] PASS R6 capacity_words_and_backoff" << std::endl;
 				return true;
@@ -3269,25 +3327,25 @@ namespace RTE {
 
 			bool TestSignal404WaitsForAuthority(std::string* error) {
 				ScriptedChannel s(false);
-				s.replies->push_back({404, R"({"error":"not_found"})", ""});
+				s.replies->push_back({404, R"({"error":"match_unavailable"})", ""});
 				s.replies->push_back(kPostOk);
 				s.channel.SetPolling(true);
 				s.channel.Update(0);
 				s.channel.Update(0);
 				const bool took = s.channel.Post("host", "after-failure");
-				s.channel.Update(4999);
+				s.channel.Update(999);
 				const json report = json::parse(s.channel.BuildReportJson());
 				if (s.channel.GetState() != NetDirectorySignalChannel::State::Open || s.channel.GetLastError().find("Cancel") == std::string::npos || report["last_status"] != 404) {
 					*error = "a missing signalling row ended recovery before the seat authority answered";
 					return false;
 				}
 				if (!took || s.sent->size() != 1) {
-					*error = "signal 404 did not retain its queued message and five-second backoff";
+					*error = "signal 404 did not retain its queued message and one-second backoff";
 					return false;
 				}
-				s.channel.Update(5000);
+				s.channel.Update(1000);
 				if (s.sent->size() != 2 || s.sent->back().method != "POST") { *error = "signal 404 did not retry its retained message"; return false; }
-				std::cout << "[net-directory-selftest] PASS missing_signal_row waits_for_authority retry_ms=5000" << std::endl;
+				std::cout << "[net-directory-selftest] PASS missing_signal_row waits_for_authority retry_ms=1000" << std::endl;
 				return true;
 			}
 
@@ -3307,7 +3365,7 @@ namespace RTE {
 					*error = "signal 403: " + (error->empty() ? std::to_string(s.sent->size()) + " requests, expected the one post" : *error);
 					return false;
 				}
-				if (s.channel.GetState() != NetDirectorySignalChannel::State::Failed || s.channel.GetLastError() != "bad credential" || report["last_error"] != "bad credential" || report["last_status"] != 403) {
+				if (s.channel.GetState() != NetDirectorySignalChannel::State::Failed || s.channel.GetLastError() != "The directory could not confirm your place in this match. Choose another game." || report["last_error"] != "The directory could not confirm your place in this match. Choose another game." || report["last_status"] != 403) {
 					*error = "signal 403: expected failed with \"bad credential\", report " + report.dump();
 					return false;
 				}
@@ -3319,8 +3377,8 @@ namespace RTE {
 				ScriptedChannel s(false);
 				s.replies->push_back({400, R"({"error":"queue_full"})", ""});
 				s.replies->push_back(kNoSignals);
-				s.replies->push_back(kNoSignals);
 				s.replies->push_back(kPostOk);
+				s.replies->push_back(kNoSignals);
 				if (!s.channel.Post("host", "offer")) {
 					*error = "signal queue_full: Post refused a signal";
 					return false;
@@ -3329,25 +3387,77 @@ namespace RTE {
 				s.channel.Update(0);
 				s.channel.Update(0); // queue_full: the post waits, the due poll goes
 				s.channel.Update(0);
-				s.channel.Update(4999);
-				s.channel.Update(4999);
-				if (s.sent->size() != 3 || s.sent->at(0).method != "POST" || s.sent->at(1).method != "GET" || s.sent->at(2).method != "GET") {
-					*error = "signal queue_full: expected POST then two polls before +5000 ms, got " + std::to_string(s.sent->size()) + " requests";
+				s.channel.Update(999);
+				s.channel.Update(999);
+				if (s.sent->size() != 2 || s.sent->at(0).method != "POST" || s.sent->at(1).method != "GET") {
+					*error = "signal queue_full: expected POST then its independent poll before +1000 ms, got " + std::to_string(s.sent->size()) + " requests";
 					return false;
 				}
-				s.channel.Update(5000);
-				s.channel.Update(5000);
-				if (s.sent->size() != 4 || s.sent->at(3).method != "POST" || s.sent->at(3).body != s.sent->at(0).body || s.channel.PendingPosts() != 0 || s.channel.GetState() != NetDirectorySignalChannel::State::Open) {
-					*error = "signal queue_full: the same signal was not re-posted at +5000 ms";
+				s.channel.Update(1000);
+				s.channel.Update(1000);
+				if (s.sent->size() != 4 || s.sent->at(2).method != "POST" || s.sent->at(3).method != "GET" || s.sent->at(2).body != s.sent->at(0).body || s.channel.PendingPosts() != 0 || s.channel.GetState() != NetDirectorySignalChannel::State::Open) {
+					*error = "signal queue_full: the same signal was not re-posted at +1000 ms";
 					return false;
 				}
-				std::cout << "[net-directory-selftest] signal queue_full: the same post body went again at t=5000; polls went on at t=0 and t=4999 meanwhile" << std::endl;
+				std::cout << "[net-directory-selftest] signal queue_full: the same post body went again at t=1000; polls went on at t=0 and t=1000" << std::endl;
+				return true;
+			}
+
+			bool TestDirectoryReplyWaits(std::string* error) {
+				if (NetDirectoryRetry::RetryAfterMs(R"({"retry_after_s":2})", "8") != 8000 ||
+				    NetDirectoryRetry::RetryAfterMs(R"({"retry_after_s":8})", "2") != 8000) {
+					*error = "a directory wait ignored the longer reply"; return false;
+				}
+				NetDirectoryRetry retry;
+				uint64_t now = 0;
+				for (const uint64_t wait : {1000ULL, 2000ULL, 4000ULL, 8000ULL, 16000ULL, 30000ULL, 30000ULL}) {
+					if (retry.Failed(now, 500, "", "", "listing") != now + wait) { *error = "directory reply ladder"; return false; }
+					now += wait;
+				}
+				retry.Succeeded();
+				if (retry.Failed(now, 0, "", "", "listing") != now + 1000) { *error = "directory reply ladder did not restart"; return false; }
+				ScriptedClient listed;
+				listed.replies->push_back({200, kRegisterCapable, ""});
+				listed.replies->push_back({404, R"({"error":"not_found"})", ""});
+				listed.client.Advertise(SampleRegisterRequest(), true); listed.client.Update(0); listed.client.Update(0);
+				listed.client.Update(5000); listed.client.Update(5000); listed.client.Update(60000);
+				if (listed.sent->size() != 2 || listed.client.GetState() != NetDirectoryClient::State::Failed || listed.client.LastError().find("Choose") == std::string::npos) {
+					*error = "a gone match continued posting"; return false;
+				}
+				ScriptedClient resumed;
+				resumed.replies->push_back({404, R"({"error":"match_ended"})", ""});
+				auto claim = SampleRegisterRequest();
+				claim.resumeSessionId = "7b8c9d2e-1111-4222-8333-444455556666"; claim.resumeToken = "old-proof";
+				resumed.client.Advertise(claim, true); resumed.client.Update(0); resumed.client.Update(0); resumed.client.Update(60000);
+				if (resumed.sent->size() != 1 || resumed.client.GetState() != NetDirectoryClient::State::Failed) {
+					*error = "an ended resume continued posting"; return false;
+				}
+				ScriptedChannel signals(false);
+				signals.replies->push_back({404, R"({"error":"not_found"})", ""});
+				signals.channel.SetPolling(true); signals.channel.Update(0); signals.channel.Update(0); signals.channel.Update(60000);
+				if (signals.sent->size() != 1 || signals.channel.GetState() != NetDirectorySignalChannel::State::Failed) {
+					*error = "a gone match continued signalling"; return false;
+				}
+				ScriptedClient closing;
+				closing.replies->push_back({200, kRegisterCapable, ""});
+				closing.replies->push_back({200, R"({"ok":false})", ""});
+				closing.replies->push_back({200, R"({"ok":true})", ""});
+				closing.client.Advertise(SampleRegisterRequest(), true); closing.client.Update(0); closing.client.Update(0);
+				closing.client.Retract(); closing.client.Update(0); closing.client.Update(0); closing.client.Update(999);
+				if (closing.sent->size() != 2 || closing.client.GetSessionId().empty()) {
+					*error = "an unconfirmed listing close skipped its reply wait"; return false;
+				}
+				closing.client.Update(1000); closing.client.Update(1000);
+				if (closing.sent->size() != 3 || !closing.client.GetSessionId().empty()) {
+					*error = "a confirmed listing close did not finish after its reply wait"; return false;
+				}
+				std::cout << "[net-directory-selftest] PASS directory_reply_waits" << std::endl;
 				return true;
 			}
 
 			bool TestSignal429RetryAfter(std::string* error) {
 				ScriptedChannel s(false);
-				s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":7})", ""});
+				s.replies->push_back({429, R"({"error":"rate_limited_key","retry_after_s":7})", ""});
 				s.replies->push_back(kPostOk);
 				s.replies->push_back(kNoSignals);
 				if (!s.channel.Post("host", "offer")) {
@@ -3407,7 +3517,7 @@ namespace RTE {
 				public:
 					void Start(const NetDirectoryClient::Request&) override {}
 					bool Finished() override { return true; }
-					NetDirectoryClient::Reply Take() override { return {404, R"({"error":"not_found"})", ""}; }
+					NetDirectoryClient::Reply Take() override { return {404, R"({"error":"match_unavailable"})", ""}; }
 					void Abort() override {}
 				};
 				const_cast<NetDirectorySignalChannel&>(dispatcher.Channel()).SetTransportFactory([] { return std::make_unique<Gone>(); });
@@ -3458,7 +3568,7 @@ namespace RTE {
 				s.channel.SetPolling(true);
 				s.channel.Update(0);
 				s.channel.Update(0);
-				const uint64_t retries[] = {5000, 15000, 35000};
+				const uint64_t retries[] = {1000, 3000, 7000};
 				for (size_t i = 0; i < 3; ++i) {
 					s.channel.Update(retries[i] - 1);
 					if (s.sent->size() != i + 1) {
@@ -3476,16 +3586,16 @@ namespace RTE {
 					*error = error->empty() ? "signal backoff: the recovered poll delivered " + Taken(s) : *error;
 					return false;
 				}
-				s.channel.Update(36000);
-				s.channel.Update(36000); // a 503 after the success starts the ladder over
-				s.channel.Update(40999);
+				s.channel.Update(8000);
+				s.channel.Update(8000); // a 503 after the success starts the ladder over
+				s.channel.Update(8999);
 				const size_t held = s.sent->size();
-				s.channel.Update(41000);
+				s.channel.Update(9000);
 				if (held != 5 || s.sent->size() != 6) {
-					*error = "signal backoff: after a success the next failure did not wait exactly 5 s";
+					*error = "signal backoff: after a success the next failure did not wait exactly 1 s";
 					return false;
 				}
-				std::cout << "[net-directory-selftest] signal backoff: transport errors at t=0,5000,15000 retried at t=5000,15000,35000 (5/10/20 s); a 503 after the success waited 5 s again" << std::endl;
+				std::cout << "[net-directory-selftest] signal backoff: transport errors at t=0,1000,3000 retried at t=1000,3000,7000 (1/2/4 s); a 503 after the success waited 1 s again" << std::endl;
 				return true;
 			}
 
@@ -3732,6 +3842,11 @@ namespace RTE {
 
 			std::string error;
 			const char* selected = std::getenv("CCCP_TEST_DIRECTORY_CASE");
+			if (selected && std::string(selected) == "host-post-wait") {
+				if (!TestHostPostWaitWithoutPolling(&error)) return fail(error);
+				std::cout << "[net-directory-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (selected && std::string(selected) == "protocol") {
 				if (!TestConnectionProtocolRefusal(&error) || !TestASupersededHostKeepsTheRowNoMore(&error)) return fail(error);
 				std::cout << "[net-directory-selftest] PASS" << std::endl;
@@ -3782,6 +3897,7 @@ namespace RTE {
 			if (!TestSignal403Fails(&error)) return fail(error);
 			if (!TestSignalQueueFullRetries(&error)) return fail(error);
 			if (!TestSignal429RetryAfter(&error)) return fail(error);
+			if (!TestDirectoryReplyWaits(&error)) return fail(error);
 			if (!TestReportDumpSurvivesNonUtf8LastError(&error)) return fail(error);
 #ifdef CCCP_WITH_GNS
 			if (!TestDispatcherReportDumpSurvivesNonUtf8(&error)) return fail(error);

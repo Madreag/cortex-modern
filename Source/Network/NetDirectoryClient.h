@@ -1,6 +1,8 @@
 #pragma once
 
 #include "NetDirectoryCodec.h"
+#include "NetDirectoryRetry.h"
+#include <array>
 #include "NetLanDiscovery.h"
 #include "NetIceServers.h"
 
@@ -42,6 +44,7 @@ namespace RTE {
 			long statusCode = 0; //!< HTTP status when one arrived; 0 on transport/cert failure.
 			std::string body;
 			std::string error;   //!< Non-empty when the request failed before/instead of a status.
+			std::string retryAfter; //!< The directory's Retry-After response header.
 		};
 
 		/// One in-flight request. The production transport wraps NetHttpClient; the selftest injects
@@ -182,8 +185,8 @@ namespace RTE {
 		static constexpr uint32_t c_MaxRelayTtlSeconds = 86400; //!< The service's longest relay credential lifetime.
 		static constexpr uint64_t c_ListIntervalMs = 5000;
 		static constexpr uint64_t c_ShutdownBudgetMs = 2000;
-		static constexpr uint64_t c_RetryBaseMs = 5000;  //!< Backoff starts here, doubles to the cap.
-		static constexpr uint64_t c_RetryMaxMs = 60000;
+		static constexpr uint64_t c_RetryBaseMs = 1000;  //!< Backoff starts here, doubles to the cap.
+		static constexpr uint64_t c_RetryMaxMs = 30000;
 		static constexpr int64_t c_MinHeartbeatS = 1;    //!< The service's floor is respected.
 		static constexpr int c_ListPageLimit = 100;
 		static constexpr int c_ListMaxPages = 5;
@@ -194,7 +197,7 @@ namespace RTE {
 		void SetState(State state);
 		void NoteError(const std::string& error);
 		void ClearCapacityError();
-		void ScheduleRetry(uint64_t nowMs); //!< Transport/TLS/5xx: backoff 5s,10s,20s..60s.
+		void ScheduleRetry(uint64_t nowMs); //!< Each path waits 1s, 2s, 4s, up to 30s.
 		void StartRequest(RequestKind kind, const Request& request);
 		void HandleReply(RequestKind kind, const Reply& reply, uint64_t nowMs);
 		void HandleRegisterReply(const Reply& reply, uint64_t nowMs);
@@ -238,6 +241,14 @@ namespace RTE {
 		uint64_t m_NextHeartbeatMs = 0;
 		uint64_t m_NextAttemptMs = 0;   //!< The retry slot a transient failure or a 429 set.
 		uint64_t m_BackoffMs = 0;
+		std::array<NetDirectoryRetry, 5> m_RequestRetries{};
+		std::array<NetDirectoryRetry, 2> m_IceRetries{};
+		Reply m_RetryReply;
+		RequestKind m_ReplyKind = RequestKind::None;
+		bool m_ReplyFailed = false, m_SessionGone = false, m_HttpTransport = true;
+		uint64_t m_NowMs = 0;
+		std::string m_IceSessionId;
+		bool CanRequest(RequestKind kind, uint64_t nowMs) const;
 		std::vector<std::pair<std::string, std::string>> m_RefusedResumes; //!< Resume claims (session, token) the directory refused.
 		static constexpr size_t c_MaxRefusedResumes = 8;
 		static constexpr size_t c_MaxWorldProofs = 2;

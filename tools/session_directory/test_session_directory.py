@@ -32,7 +32,7 @@ from urllib.parse import quote
 
 import session_directory
 from world_ticks import compare_world_ticks, read_world_ticks
-from session_directory import IP_REG_PER_MIN, IP_REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
+from session_directory import IP_REG_PER_MIN, IP_REQ_PER_MIN, REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
 from unittest import mock
 from connection_authority import ConnectionErrorReply, ConnectionAuthority, REQUEST_DOMAIN, TOKEN_DOMAIN, TOKEN_FIELDS
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -107,7 +107,7 @@ DELETE_KEYS = {"ok"}
 SIGNAL_POST_KEYS = {"ok", "seq"}
 SIGNAL_GET_KEYS = {"signals"}
 SIGNAL_ITEM_KEYS = {"seq", "from", "to", "payload_b64"}
-RATE_KEYS = {"error", "retry_after_s"}
+RATE_KEYS = {"error", "retry_after_s", "budget"}
 ERROR_KEYS = {"error"}
 FIELD_ERROR_KEYS = {"error", "field"}
 
@@ -201,6 +201,7 @@ class DirectoryTests(unittest.TestCase):
             with self.assertRaises(session_directory.TurnError) as limited:
                 store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 11)
             self.assertEqual(limited.exception.status, 429)
+            self.assertEqual(limited.exception.body["error"], "rate_limited_key")
         with mock.patch.object(session_directory.time, "time", return_value=1600):
             with self.assertRaises(session_directory.TurnError):
                 store.get_ice_servers(row["session_id"], 12)
@@ -448,6 +449,9 @@ class DirectoryTests(unittest.TestCase):
             resp = conn.getresponse()
             data = resp.read()
             parsed = json.loads(data.decode("utf-8"))
+            if resp.status == 429:
+                self.assertIn(parsed["error"], ("rate_limited_key", "rate_limited_ip", "connection_busy"))
+                self.assertEqual(resp.getheader("Retry-After"), str(parsed["retry_after_s"]))
             return resp.status, parsed
         finally:
             conn.close()
@@ -605,6 +609,19 @@ class DirectoryTests(unittest.TestCase):
     def test_U4_unfinished_headers_leave_honest_capacity(self) -> None:
         self.start(port=0)
         sockets = []
+        honest = threading.Event()
+        accepted = 0
+        accept_lock = threading.Lock()
+        get_request = self.server.httpd.get_request
+        def caller_address():
+            nonlocal accepted
+            connection, address = get_request()
+            with accept_lock:
+                accepted += 1
+            # Distinct callers use real local sockets without requiring a second loopback alias.
+            return connection, ("127.0.0.2" if honest.is_set() else address[0], address[1])
+        address_fixture = mock.patch.object(self.server.httpd, "get_request", side_effect=caller_address)
+        address_fixture.start()
         try:
             for _ in range(64):
                 connection = socket.create_connection(("127.0.0.1", self.port), timeout=1)
@@ -612,7 +629,10 @@ class DirectoryTests(unittest.TestCase):
                 try: connection.sendall(b"GET /v1/sessions HTTP/1.1\r\nX-Test: ")
                 except OSError: pass
             time.sleep(0.15)
-            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=1, source_address=("127.0.0.2", 0))
+            with accept_lock:
+                self.assertEqual(accepted, 64, "U4: not every unfinished local request reached the fixture")
+            honest.set()
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=1)
             started = time.monotonic()
             try:
                 conn.request("GET", "/v1/sessions", headers={"X-Install-Key": INSTALL_KEY})
@@ -623,7 +643,7 @@ class DirectoryTests(unittest.TestCase):
             finally:
                 conn.close()
             self.assertEqual(response.status, 200, "U4: unfinished headers blocked another caller")
-            self.assertLess(time.monotonic() - started, 1, "U4: the honest caller waited for the attacker's header deadline")
+            self.assertLess(time.monotonic() - started, 1, "U4: the honest caller waited for the unfinished header deadline")
             live = 0
             for connection in sockets:
                 connection.settimeout(0.02)
@@ -634,13 +654,28 @@ class DirectoryTests(unittest.TestCase):
             self.assertLessEqual(live, 2, "U4: one socket address kept more than two unfinished headers")
         finally:
             for connection in sockets: connection.close()
+            address_fixture.stop()
 
     def test_U3_all_200_callers_heartbeat_with_repeated_polls(self) -> None:
+        if os.name == "posix":
+            import resource
+            original = resource.getrlimit(resource.RLIMIT_NOFILE)
+            if original[0] != resource.RLIM_INFINITY and original[0] < 1024:
+                self.assertTrue(original[1] == resource.RLIM_INFINITY or original[1] >= 1024,
+                                "U3: 200 local clients and their local server need a 1024-descriptor test budget")
+                resource.setrlimit(resource.RLIMIT_NOFILE, (1024, original[1]))
+                self.addCleanup(resource.setrlimit, resource.RLIMIT_NOFILE, original)
+                print(f"[directory-load] U3 descriptor_limit={original[0]}->1024 restored_after_test=1", flush=True)
         self.start(port=0)
         self.server.store.caller_mode = "tunnel"
         rows = []
+        class LocalConnection(http.client.HTTPConnection):
+            def connect(self):
+                super().connect()
+                # Release completed load-row sockets without keeping their client ports in TIME_WAIT.
+                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("hh" if os.name == "nt" else "ii", 1, 0))
         def request(index, method, path, body=None):
-            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30 if method == "GET" else 14)
+            conn = LocalConnection("127.0.0.1", self.port, timeout=30 if method == "GET" else 14)
             headers = {"X-Install-Key": f"{index + 1000:016x}", "CF-Connecting-IP": f"198.51.{index // 250}.{index % 250 + 1}"}
             try:
                 conn.request(method, path, body=json.dumps(body) if body is not None else None, headers=headers)
@@ -665,7 +700,7 @@ class DirectoryTests(unittest.TestCase):
                     pause = int(retry or body.get("retry_after_s", 0))
                     if pause: stop.wait(pause)
                 except (OSError, http.client.HTTPException) as error:
-                    with result_lock: errors.append((index, "poll", type(error).__name__))
+                    with result_lock: errors.append((index, "poll", type(error).__name__, getattr(error, "errno", None), str(error)))
                     return
         def heartbeat(index):
             gate.wait()
@@ -681,7 +716,7 @@ class DirectoryTests(unittest.TestCase):
                     with result_lock: beats[index, wave] = (status, time.monotonic() - started)
                     if wave < 2: time.sleep(1)
                 except (OSError, http.client.HTTPException) as error:
-                    with result_lock: errors.append((index, "heartbeat", type(error).__name__))
+                    with result_lock: errors.append((index, "heartbeat", type(error).__name__, getattr(error, "errno", None), str(error)))
                     return
         pollers = [threading.Thread(target=polling, args=(index,)) for index in range(200)]
         workers = [threading.Thread(target=heartbeat, args=(index,)) for index in range(200)]
@@ -1350,20 +1385,102 @@ class DirectoryTests(unittest.TestCase):
         status, limited = self.register(key=key_a)
         self.assertEqual(status, 429)
         self.assert_keys(limited, RATE_KEYS)
-        self.assertEqual(limited["error"], "rate_limited")
+        self.assertEqual(limited["error"], "rate_limited_key")
         self.assertIsInstance(limited["retry_after_s"], int)
         self.assertGreaterEqual(limited["retry_after_s"], 1)
         key_b = "bbbbbbbbbbbbbbbb"
-        for _ in range(120):
+        for _ in range(REQ_PER_MIN):
             status, body = self.list_sessions(headers={"X-Install-Key": key_b})
             self.assertEqual(status, 200)
             self.assert_keys(body, LIST_KEYS)
         status, limited = self.list_sessions(headers={"X-Install-Key": key_b})
         self.assertEqual(status, 429)
         self.assert_keys(limited, RATE_KEYS)
-        self.assertEqual(limited["error"], "rate_limited")
+        self.assertEqual(limited["error"], "rate_limited_key")
         self.assertIsInstance(limited["retry_after_s"], int)
         self.assertGreaterEqual(limited["retry_after_s"], 1)
+
+    def test_heartbeat_and_admission_have_reserved_budgets(self) -> None:
+        limiter = DualRateLimiter()
+        for index in range(REQ_PER_MIN):
+            self.assertIsNone(limiter.check(INSTALL_KEY, "192.0.2.1", 1, False))
+        self.assertEqual(limiter.check(INSTALL_KEY, "192.0.2.1", 1, False)[1]["error"], "rate_limited_key")
+        for budget in ("heartbeat", "admission"):
+            self.assertIsNone(limiter.check(INSTALL_KEY, "192.0.2.1", 1, False, budget))
+        for index in range(IP_REQ_PER_MIN - REQ_PER_MIN):
+            self.assertIsNone(limiter.check(f"guest{index:011d}", "192.0.2.1", 1, False))
+        self.assertEqual(limiter.check("another000000000", "192.0.2.1", 1, False)[1]["error"], "rate_limited_ip")
+        for budget in ("heartbeat", "admission"):
+            self.assertIsNone(limiter.check("another000000000", "192.0.2.1", 1, False, budget))
+
+    def test_connection_busy_reply_has_retry_header(self) -> None:
+        self.start(port=0)
+        status, row = self.register()
+        self.assertEqual(status, 200)
+        sid, token = row["session_id"], row["token"]
+        self.assertEqual(self.beat(sid, token)[0], 200)
+        player = Ed25519PrivateKey.generate()
+        participant = player.public_key().public_bytes_raw().hex()
+        path = f"/v1/sessions/{sid}/connections"
+        status, lease = self.call("POST", path, dict(connection_protocol=1, operation="issue", token=token, host_generation=0,
+            epoch="10" * 16, seat=1, generation=1, credential="20" * 32, host_session=42,
+            network_protocol=NETWORK_PROTOCOL_VERSION, participant=participant, name="Returning player"))
+        self.assertEqual(status, 200)
+        def check_in():
+            data = dict(session_id=sid, seat_token=lease["seat_token"], instance="30" * 16,
+                        nonce=uuid.uuid4().hex, sent_at=int(time.time()),
+                        route=dict(ice_identity="", ice_virtual_port=0, listen_port=41012, listen_addrs=["127.0.0.1"], generation=1, state="connected"))
+            raw = json.dumps(data, separators=(",", ":")).encode()
+            return self.call("POST", path, dict(connection_protocol=1, operation="check-in", participant=participant,
+                signed_request=base64.b64encode(raw).decode(), signature=player.sign(REQUEST_DOMAIN + raw).hex()))
+        for index in range(64):
+            self.assertEqual(check_in()[0], 200)
+        status, refused = check_in()
+        self.assertEqual(status, 429)
+        self.assertEqual(refused["error"], "connection_busy")
+        self.assertGreaterEqual(refused["retry_after_s"], 119)
+
+    def test_refused_heartbeat_keeps_the_host_through_its_wait(self) -> None:
+        store = session_directory.SessionDirectory(15, 5)
+        self.addCleanup(store.stop)
+        row = store.register(sample_register(), "192.0.2.1", 0)
+        sid, token = row["session_id"], row["token"]
+        self.assertFalse(store.hear_host(sid, {"token": "wrong"}, 10, 60))
+        self.assertTrue(store.hear_host(sid, {"token": token}, 10, 60))
+        self.assertFalse(store._sessions[sid].acknowledged)
+        store.prune(84)
+        self.assertIn(sid, store._sessions)
+        store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 1}, 84)
+        self.assertIn(sid, store._sessions)
+        store.prune(99)
+        self.assertNotIn(sid, store._sessions)
+
+    def test_current_host_check_in_keeps_its_live_row(self) -> None:
+        store = session_directory.SessionDirectory(15, 5)
+        self.addCleanup(store.stop)
+        row = store.register(sample_register(), "192.0.2.1", 0, INSTALL_KEY)
+        sid, token = row["session_id"], row["token"]
+        store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 1}, 0, INSTALL_KEY)
+        player = Ed25519PrivateKey.generate()
+        participant = player.public_key().public_bytes_raw().hex()
+        lease = store.connection_request(sid, dict(connection_protocol=1, operation="issue", token=token,
+            host_generation=0, epoch="10" * 16, seat=0, generation=1, credential="20" * 32, host_session=42,
+            network_protocol=NETWORK_PROTOCOL_VERSION, participant=participant, name="Host"), 0, INSTALL_KEY)
+        def check_in(claim):
+            data = dict(session_id=sid, seat_token=lease["seat_token"], instance="30" * 16,
+                        nonce=uuid.uuid4().hex, sent_at=int(time.time()), host={"token": claim, "generation": 0},
+                        route=dict(ice_identity="", ice_virtual_port=0, listen_port=41012,
+                                   listen_addrs=["127.0.0.1"], generation=1, state="connected"))
+            raw = json.dumps(data, separators=(",", ":")).encode()
+            store.connection_request(sid, dict(connection_protocol=1, operation="check-in", participant=participant,
+                signed_request=base64.b64encode(raw).decode(), signature=player.sign(REQUEST_DOMAIN + raw).hex()), 10, INSTALL_KEY)
+        check_in("wrong")
+        self.assertEqual(store._sessions[sid].last_beat, 0)
+        check_in(token)
+        store.prune(24)
+        self.assertIn(sid, store._sessions)
+        store.prune(25)
+        self.assertNotIn(sid, store._sessions)
 
     def test_filters(self) -> None:
         self.start()
@@ -1904,7 +2021,7 @@ class DirectoryTests(unittest.TestCase):
         status, limited = self.register(key=f"{30:016d}")
         self.assertEqual(status, 429)
         self.assert_keys(limited, RATE_KEYS)
-        self.assertEqual(limited["error"], "rate_limited")
+        self.assertEqual(limited["error"], "rate_limited_ip")
         self.assertIsInstance(limited["retry_after_s"], int)
         self.assertGreaterEqual(limited["retry_after_s"], 1)
         assert self.server is not None
@@ -1918,7 +2035,7 @@ class DirectoryTests(unittest.TestCase):
         status, limited = self.list_sessions(headers={"X-Install-Key": "L" + "x" * 15})
         self.assertEqual(status, 429)
         self.assert_keys(limited, RATE_KEYS)
-        self.assertEqual(limited["error"], "rate_limited")
+        self.assertEqual(limited["error"], "rate_limited_ip")
         self.assertIsInstance(limited["retry_after_s"], int)
         self.assertGreaterEqual(limited["retry_after_s"], 1)
 
@@ -2086,11 +2203,39 @@ class DirectoryTests(unittest.TestCase):
 
     def test_tls_context_hardened(self) -> None:
         import session_directory as sd
+        from datetime import datetime, timedelta, timezone
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
 
         self.assertTrue(hasattr(sd, "make_server_ssl_context"))
         ctx = sd.make_server_ssl_context()
         self.assertEqual(ctx.minimum_version, ssl.TLSVersion.TLSv1_2)
-        self.assertTrue(ctx.options & ssl.OP_NO_COMPRESSION)
+        no_compression = getattr(ssl, "OP_NO_COMPRESSION", 0)
+        if no_compression:
+            self.assertTrue(ctx.options & no_compression)
+        self.tls_dir = tempfile.TemporaryDirectory()
+        root = Path(self.tls_dir.name)
+        key, cert = root / "key.pem", root / "cert.pem"
+        private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, "localhost")])
+        now = datetime.now(timezone.utc)
+        certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                       .public_key(private.public_key()).serial_number(x509.random_serial_number())
+                       .not_valid_before(now - timedelta(minutes=1)).not_valid_after(now + timedelta(days=1))
+                       .sign(private, hashes.SHA256()))
+        key.write_bytes(private.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
+        cert.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+        self.start(cert=cert, key=key)
+        client = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        client.check_hostname = False
+        client.verify_mode = ssl.CERT_NONE
+        client.minimum_version = client.maximum_version = ssl.TLSVersion.TLSv1_2
+        client.options &= ~no_compression
+        with socket.create_connection(("127.0.0.1", self.port), timeout=2) as connection:
+            with client.wrap_socket(connection, server_hostname="localhost") as stream:
+                self.assertEqual(stream.version(), "TLSv1.2")
+                self.assertIsNone(stream.compression(), "The directory negotiated TLS compression")
 
     def test_signal_heartbeat_logs_id_and_client_not_body(self) -> None:
         records: list[str] = []
@@ -2364,7 +2509,7 @@ class DirectoryTests(unittest.TestCase):
         self.assertIsNotNone(blocked)
         assert blocked is not None
         self.assertEqual(blocked[0], 429)
-        self.assertEqual(blocked[1]["error"], "rate_limited")
+        self.assertEqual(blocked[1]["error"], "rate_limited_key")
 
     def test_limiter_probe_does_not_create_buckets(self) -> None:
         limiter = DualRateLimiter()
@@ -3292,6 +3437,17 @@ class ConnectionAuthorityTests(unittest.TestCase):
 
     def check(self, **kwargs):
         return self.store.connection_request(self.sid, self.envelope(**kwargs), self.now, INSTALL_KEY)
+
+    def test_connection_busy_keeps_the_check_in_bound_and_names_its_wait(self):
+        for index in range(64):
+            self.check()
+        with self.assertRaises(ConnectionErrorReply) as busy:
+            self.check()
+        self.assertEqual(busy.exception.status, 429)
+        self.assertEqual(busy.exception.body["error"], "connection_busy")
+        self.assertEqual(busy.exception.body["retry_after_s"], 120)
+        self.wall += busy.exception.body["retry_after_s"]
+        self.assertIn("seat_token", self.check())
 
     def referee_fixture(self, seats=4):
         self.referee_players = {1: (self.player, self.lease["seat_token"])}
