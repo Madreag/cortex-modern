@@ -3667,11 +3667,33 @@ bool MovableMan::SwapActorForRender(Actor* original, Actor* substitute) {
 	return true;
 }
 
-void MovableMan::WaitForActorsSeeTask() {
+void MovableMan::TraceFog(const char* where) const {
+	if (!LuaMan::SharedTraceEnabled() || !g_SceneMan.GetScene()) {
+		return;
+	}
+	std::string line = std::string("fog where=") + where;
+	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+		const SceneLayer* layer = g_SceneMan.GetScene()->GetUnseenLayer(team);
+		if (!layer || !layer->GetBitmap()) continue;
+		const BITMAP* bitmap = layer->GetBitmap();
+		uint64_t hash = 14695981039346656037ULL;
+		const int rowBytes = bitmap->w * ((bitmap_color_depth(const_cast<BITMAP*>(bitmap)) + 7) / 8);
+		for (int y = 0; y < bitmap->h; ++y) {
+			for (int x = 0; x < rowBytes; ++x) hash = (hash ^ bitmap->line[y][x]) * 1099511628211ULL;
+		}
+		line += " team" + std::to_string(team) + "=" + std::to_string(hash);
+	}
+	LuaMan::TraceShared(nullptr, line);
+}
+
+void MovableMan::WaitForActorsSeeTask(const char* caller) {
 	s_SeeRaysReleased.store(true, std::memory_order_release);
 	m_ActorsSeeFuture.wait();
 	SeeRayPass& pass = s_SeeRayPass;
 	if (!pass.pending) return;
+	if (LuaMan::SharedTraceEnabled()) {
+		LuaMan::TraceShared(nullptr, std::string("see-reveal caller=") + caller + " rays=" + std::to_string(pass.rays.size()));
+	}
 	pass.pending = false;
 	// In the order the rays were aimed, so every peer reveals the same way.
 	if (g_SceneMan.GetScene()) {
@@ -7086,7 +7108,7 @@ void MovableMan::Update() {
 	}
 
 	// Finish our Seeing rays from last frame
-	WaitForActorsSeeTask();
+	WaitForActorsSeeTask("tick-start");
 
 	// Prior to controller/AI update, execute lua callbacks
 	g_LuaMan.ExecuteLuaScriptCallbacks();
@@ -7394,7 +7416,7 @@ void MovableMan::Update() {
 
 	// Run seeing rays for all actors. Each ray is aimed here, on the sim thread; the pool walks it over the frozen terrain
 	// against a copy of its team's fog, and the reveals land in aim order when the pass is joined within this tick.
-	WaitForActorsSeeTask();
+	WaitForActorsSeeTask("launch");
 	SeeRayPass& pass = s_SeeRayPass;
 	const uint64_t seeTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	for (Actor* actor: m_Actors) {
@@ -8075,7 +8097,7 @@ void MovableMan::UpdateDrawMOIDs() {
 
 void MovableMan::StartMOIDDrawTask() {
 	// The tick's see-ray pass lands here, after the tick's last script and before anything captures or draws it.
-	WaitForActorsSeeTask();
+	WaitForActorsSeeTask("moid-draw");
 	m_DrawMOIDsTask = g_ThreadMan.GetPriorityThreadPool().submit([this]() {
 		UpdateDrawMOIDs();
 	});

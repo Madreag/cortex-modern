@@ -8508,6 +8508,7 @@ void RunGameLoop() {
 					// A long update is this machine's own: the plane commits for the round meanwhile, and the update reads the coordinator only through guarded calls.
 					NetLockstepPlane::Window planeWindow("activity update");
 					if (s_testSimCostUs > 0 && !s_testSimCostOutside) spendTestSimCost();
+					g_MovableMan.TraceFog("activity");
 					g_ActivityMan.Update();
 
 					if (g_SceneMan.GetScene()) {

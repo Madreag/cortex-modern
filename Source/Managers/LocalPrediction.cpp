@@ -280,7 +280,7 @@ namespace RTE {
 			lapStart = now;
 		};
 		// The seeing pass and the MOID draw still walk the live actor trees.
-		g_MovableMan.WaitForActorsSeeTask();
+		g_MovableMan.WaitForActorsSeeTask("preview");
 		g_MovableMan.CompleteQueuedMOIDDrawings();
 		lap(1);
 		// Fence everything a preview tick can touch; all of it goes back before the canonical sim resumes.
@@ -580,7 +580,7 @@ namespace RTE {
 		s_RenderScriptsWereFrozen = LuaMan::AreScriptsFrozen();
 		LuaMan::SetScriptsFrozen(true);
 		Trace("render begin");
-		g_MovableMan.WaitForActorsSeeTask();
+		g_MovableMan.WaitForActorsSeeTask("render");
 		g_MovableMan.CompleteQueuedMOIDDrawings();
 		Activity* activity = g_ActivityMan.GetActivity();
 		for (const Preview& preview: s_Previews) {
