@@ -1387,9 +1387,9 @@ class DirectoryTests(unittest.TestCase):
         self.addCleanup(store.stop)
         row = store.register(sample_register(), "192.0.2.1", 0)
         sid, token = row["session_id"], row["token"]
-        store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 1}, 1)
         self.assertFalse(store.hear_host(sid, {"token": "wrong"}, 10, 60))
         self.assertTrue(store.hear_host(sid, {"token": token}, 10, 60))
+        self.assertFalse(store._sessions[sid].acknowledged)
         store.prune(84)
         self.assertIn(sid, store._sessions)
         store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 1}, 84)

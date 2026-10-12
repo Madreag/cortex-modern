@@ -1170,7 +1170,7 @@ class SessionDirectory:
             dead = [
                 sid
                 for sid, sess in self._sessions.items()
-                if now - (max(sess.last_beat, sess.heartbeat_retry_until) if sess.acknowledged else sess.created_at) >= self.expiry_s
+                if now - (max(sess.last_beat, sess.heartbeat_retry_until)) >= self.expiry_s
             ]
             for sid in dead:
                 sess = self._sessions[sid]
