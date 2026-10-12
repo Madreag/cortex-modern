@@ -4630,10 +4630,17 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		shop->SetModuleExpanded(g_PresetMan.GetModuleID("Coalition.rte"));
 		shop->SetEnabled(true);
 		g_UInputMan.TrapMousePos(false, 0);
+		const auto drawShop = [&] {
+			// Gameplay menus draw into the paletted layer before presentation.
+			BITMAP* layer = g_FrameMan.GetBackBuffer8();
+			clear_to_color(layer, 0); shop->Draw(layer);
+			blit(layer, g_FrameMan.GetBackBuffer32(), 0, 0, 0, 0, layer->w, layer->h);
+			present();
+		};
 		SDL_Delay(250); g_TimerMan.Update();
 		g_UInputMan.Update(false); g_UInputMan.EndSimUpdate();
 		game->Update();
-		game->RenderUpdate(); shop->Draw(g_FrameMan.GetBackBuffer32()); present();
+		game->RenderUpdate(); drawShop();
 		int tabX, tabY, tabWidth, tabHeight;
 		shop->AutomationManager()->GetControl("BodiesTab")->GetControlRect(&tabX, &tabY, &tabWidth, &tabHeight);
 		check("buy_controls_are_visible_before_the_frozen_tick", tabX >= 0 && tabY >= 0 && tabX + tabWidth <= g_WindowMan.GetResX() && tabY + tabHeight <= g_WindowMan.GetResY());
@@ -4643,7 +4650,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		const auto shopFrame = [&] {
 			g_TimerMan.Update();
 			g_UInputMan.Update(false); g_UInputMan.EndSimUpdate();
-			game->RenderUpdate(); shop->Draw(g_FrameMan.GetBackBuffer32()); present();
+			game->RenderUpdate(); drawShop();
 		};
 		const auto clickShop = [&](const char* name) {
 			auto* control = shop->AutomationManager()->GetControl(name);
