@@ -1064,7 +1064,7 @@ namespace {
 			if (!probe.panSelecting || g_TimerMan.GetSimUpdateCount() < probe.panTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4) return false;
 			if (std::abs(cursor.m_Y - probe.panY) > 2.0F) return false;
 			const std::string text = g_FrameMan.GetScreenText(game->ScreenOfPlayer(probe.panPlayer));
-			Require(text == "Select a body to switch control to...", "looking around lost its actor selection message");
+			Require(text == "Select a body to switch control to...", "looking around lost its actor selection message: the screen read \"" + text + "\"");
 			Require(g_UInputMan.KeyHeldScancode(probe.panKey), "looking around lost its held Next Actor key");
 			observed["pan_scene"] = true; observed["pan_motion_events"] = probe.panMotionEvents;
 			observed["pan_view"]["screen_text"] = text;
