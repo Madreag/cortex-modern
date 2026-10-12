@@ -584,6 +584,10 @@ namespace RTE {
 				SetState(State::Failed);
 				return;
 			}
+			if (m_SessionId != response.sessionId || m_Token != response.token) {
+				// A new acknowledged lease restarts heartbeat failures; an owed deadline stays.
+				m_RequestRetries[static_cast<size_t>(RequestKind::Heartbeat)].Succeeded();
+			}
 			m_SessionId = response.sessionId;
 			if (m_HttpTransport) NetDirectoryBudget::SessionOpened(m_BaseUrl, m_InstallKey, m_SessionId, nowMs);
 			m_Token = response.token;
