@@ -2357,7 +2357,11 @@ namespace RTE {
 		std::map<uint64_t, std::map<uint8_t, size_t>> m_PendingSourceCommandCounts;
 		std::map<uint64_t, NetLockstepReadyFrame> m_ReadyHistory;
 
-		bool AllRemoteStartsReceived() const { return m_RemoteStartsReceived.size() == m_RemotePeerIds.size(); }
+		bool AllRemoteStartsReceived() const {
+			return std::all_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
+				return m_RemoteStartsReceived.contains(peer) || (m_Config.joinsRunningRound && !IsRemoteRequiredForFrame(peer, m_Config.startFrame));
+			});
+		}
 		bool IsKnownRemotePeer(uint8_t peerId) const;
 		void RelayToOtherRemotes(const NetLockstepPacket& packet, uint8_t fromPeerId);
 		/// Relay host on the unreliable lane: sends each tick of an arrived packet on once, oldest first, with the ticks before it.
