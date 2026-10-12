@@ -128,6 +128,7 @@ namespace {
 		float panY = 600.0F;
 		uint64_t panTick = 0, panSteerTick = 0, panMotionEvents = 0;
 		float panSpeed = 2.0F;
+		float panSteerY = 0.0F;
 		SDL_Scancode panKey = SDL_SCANCODE_UNKNOWN;
 	};
 	Probe probe;
@@ -1056,6 +1057,7 @@ namespace {
 			const auto* controller = game->GetPlayerController(probe.panPlayer);
 			observed["pan_view"] = {{"cursor", {cursor.m_X, cursor.m_Y}}, {"target_y", probe.panY}, {"selecting", probe.panSelecting},
 			    {"next_key_held", g_UInputMan.KeyHeldScancode(probe.panKey)}, {"input_delay", ScenarioRunner::GetLockstepLocalInputDelay()},
+			    {"last_y_input", probe.panSteerY}, {"last_steer_tick", probe.panSteerTick},
 			    {"controller_motion", {controller->GetMouseMovement().m_X, controller->GetMouseMovement().m_Y}}};
 			if (!probe.panSelecting || g_TimerMan.GetSimUpdateCount() < probe.panTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4) return false;
 			if (std::abs(cursor.m_Y - probe.panY) > 2.0F) return false;
@@ -1668,8 +1670,13 @@ namespace {
 					// Rest while the last vertical motion reaches the committed input, then correct the height again.
 					const uint64_t tick = g_TimerMan.GetSimUpdateCount();
 					const bool steer = !probe.panSelecting || tick >= probe.panSteerTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4;
-					event.motion.yrel = steer ? std::clamp(probe.panY - cursor.m_Y, -20.0F, 20.0F) / g_UInputMan.GetMouseSensitivity() : 0;
-					if (steer) probe.panSteerTick = tick;
+					if (steer) {
+						const float error = probe.panY - cursor.m_Y;
+						// Finish with a whole mouse correction, then wait for its committed input.
+						probe.panSteerY = std::abs(error) > 2.0F ? (error < 0 ? -1.0F : 1.0F) * std::clamp(std::abs(error), 4.0F, 20.0F) : 0.0F;
+						probe.panSteerTick = tick;
+					}
+					event.motion.yrel = steer ? probe.panSteerY / g_UInputMan.GetMouseSensitivity() : 0;
 					Push(event);
 					if (!probe.panSelecting) probe.panTick = g_TimerMan.GetSimUpdateCount();
 					probe.panSelecting = true;
