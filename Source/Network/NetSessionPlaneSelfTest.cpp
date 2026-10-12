@@ -976,6 +976,11 @@ namespace RTE {
 			const bool canceled = !lobbies[1].IsStartCountdownRunning();
 			std::cout << "[net-session-scene] rematch-chat received=" << hostLines << " host_messages=" << lobbies[0].GetStats().messagesReceived
 			          << " joiner_messages=" << lobbies[1].GetStats().messagesReceived << " countdown=" << countdown << " canceled=" << canceled << std::endl;
+			for (size_t index = 0; index < 2; ++index) std::cout << "[net-session-scene] lobby-state peer=" << index + 1
+			          << " state=" << static_cast<int>(lobbies[index].GetState()) << " reason=" << lobbies[index].GetFailureReason()
+			          << " session=" << static_cast<int>(sessions[index]->GetState()) << " reader=" << (links[index]->frameReader != nullptr)
+			          << " pending_bytes=" << links[index]->pendingBytes << " incoming_bytes=" << links[index]->incomingBytes
+			          << " routes=" << links[index]->sessionRoutes.size() << " received=" << links[index]->received.size() << std::endl;
 			if (hostLines != 1 || !countdown || !canceled || hub.delayedChatSends == 0) { *error = "the rematch lost the joiner's chat or its Start and Cancel exchange"; return false; }
 			const uint32_t sentBeforeQuiet = clientWire.sends;
 			for (const uint64_t until = hub.now + 1200; hub.now < until; ++hub.now) lobbies[1].Tick(hub.now - begin);
@@ -1043,6 +1048,10 @@ namespace RTE {
 			const bool held = rounds[0]->HasHeldAISeat(2);
 			std::cout << "[net-session-scene] leave-rejoin live=" << live << " held=" << held << " directory_steps=" << directorySteps
 			          << " answered_ms=" << (answerAt ? answerAt - 6500 : 0) << " ready=" << ready.size() << " returning_seat=" << static_cast<int>(returningSession.GetLocalPeerId() + 1) << std::endl;
+			std::cout << "[net-session-scene] departure-state next=" << rounds[0]->GetStats().nextFrame << " applied=" << applied[0]
+			          << " declarations=" << rounds[0]->m_PeerRoundEnds.size() << " authority=" << rounds[0]->PeerGroupHasAuthority(1)
+			          << " bridges=" << rounds[0]->m_PeerBridges.size() << " previous_retained=" << rounds[0]->m_MigrationHistory.contains(rounds[0]->GetStats().nextFrame - 1)
+			          << " waiting=" << rounds[0]->WaitsForPlacement() << " holds=" << rounds[0]->GetStats().peers.at(2).holds << "/" << rounds[0]->GetStats().peers.at(3).holds << std::endl;
 			if (!live || !held || !answerAt || answerAt > 8500 || ready.size() != 1 || returningSession.GetLocalPeerId() != 1) {
 				*error = "the last player's leave stopped the host or its returning dial was not answered within two seconds"; return false;
 			}
