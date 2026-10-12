@@ -220,6 +220,9 @@ namespace RTE {
 			if (reply.statusCode > 0) {
 				m_LastStatus = reply.statusCode;
 			}
+			// An answer proves the admission poll reached the service before another request is released.
+			if (kind == RequestKind::Poll && m_HttpTransport && IsHostPeer(m_LocalPeer) && reply.statusCode != 429)
+				NetDirectoryBudget::PollAnswered(m_BaseUrl, m_InstallKey, nowMs);
 			m_ReplyKind = kind; m_RetryReply = reply;
 			switch (kind) {
 				case RequestKind::Post: HandlePostReply(reply, nowMs); break;
@@ -347,7 +350,6 @@ namespace RTE {
 
 	void NetDirectorySignalChannel::IssuePoll(uint64_t nowMs) {
 		m_PollStartedMs = nowMs; m_PollFirst = false;
-		if (m_HttpTransport && IsHostPeer(m_LocalPeer)) NetDirectoryBudget::PollStarted(m_BaseUrl, m_InstallKey, nowMs);
 		m_PostBurst = 0;
 		++m_Polls;
 		// Queued offers still need their answers, without waiting behind an idle long poll.

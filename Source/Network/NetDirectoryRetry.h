@@ -136,7 +136,7 @@ namespace RTE {
 			if (budget == "general" && row.pollFirst) return false;
 			return true;
 		}
-		static void PollStarted(const std::string& url, const std::string& install, uint64_t nowMs) {
+		static void PollAnswered(const std::string& url, const std::string& install, uint64_t nowMs) {
 			std::lock_guard lock(s_Mutex); Find(url, install, nowMs).pollFirst = false;
 		}
 		static uint64_t AdmissionWaitedMs(const std::string& url, const std::string& install, uint64_t nowMs) {
