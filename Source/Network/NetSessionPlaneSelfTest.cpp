@@ -978,7 +978,7 @@ namespace RTE {
 				for (const auto& line: hostSession.TakeChatEntries()) if (line.text == "ready for the next round") ++nextLines;
 			}
 			if (!startRound(1)) return false;
-			produced = {1, 1}; applied = {}; displayedAt = {}; credits = {};
+			produced.assign(count, 1); applied.assign(count, 0); displayedAt.assign(count, 0); credits.assign(count, 0);
 			for (const uint64_t until = hub.now + 2000; hub.now < until && std::min(applied[0], applied[1]) < 60;) if (!step(true)) return false;
 			for (const auto& line: hostSession.TakeChatEntries()) if (line.text == "ready for the next round") ++nextLines;
 			std::cout << "[net-session-scene] next-round chat=" << nextLines << " host_frame=" << applied[0] << " joiner_frame=" << applied[1] << std::endl;
