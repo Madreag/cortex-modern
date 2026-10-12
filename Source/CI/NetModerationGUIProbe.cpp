@@ -1103,7 +1103,7 @@ namespace {
 				Require(member.connectedRoute == "relay", "remote player is not connected through the relay: " + member.connectedRoute);
 				++routes;
 			}
-			Require(routes == 1, "the relay scene needs exactly one remote player");
+			Require(routes == 1, "the relay scene needs exactly one remote player; the lobby lists " + std::to_string(routes) + " of " + std::to_string(snapshot.members.size()) + " members");
 			observed["relay_peers"] = routes;
 		} else if (op == "pad_down" || op == "pad_up") {
 			const std::string name = step.at("button");
