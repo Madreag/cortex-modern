@@ -381,8 +381,14 @@ namespace RTE {
 		NetLockstepPlane::Check(&replay, "AdoptPeerReturnConfig (the replay)");
 		const auto kept = m_PeerReturnProofs.find(activation);
 		if (!UsesPeerFrameGroups() || kept == m_PeerReturnProofs.end()) return false;
+		return AdoptPeerReturn(config, replay, kept->second, activation);
+	}
+
+	bool NetLockstepCoordinator::AdoptPeerReturn(NetLockstepConfig& config, const NetLockstepCoordinator& replay, const NetHostMigrationMessage& proof, uint64_t activation) const {
+		NET_PLANE_CHECK();
+		NetLockstepPlane::Check(&replay, "AdoptPeerReturn (the replay)");
 		NetHostMigrationMessage agreed; uint32_t voters = 0;
-		if (!DecodePeerBridgeCertificate(kept->second, agreed, voters) || !PeerGroupHasAuthority(voters) ||
+		if (proof.type != NetHostMigrationMessageType::PeerBridgeCommit || proof.frame != activation || !DecodePeerBridgeCertificate(proof, agreed, voters) || !PeerGroupHasAuthority(voters) ||
 		    agreed.sessionId != config.sessionId || agreed.roundId != config.matchConfig.roundId || agreed.configHash != config.originalRoundConfigHash ||
 		    agreed.preparedFrame != 1 || (!replay.m_MigrationHistory.contains(agreed.boundary) && !replay.m_PeerReplayAppliedPrefixes.contains(agreed.boundary))) return false;
 		const auto prefix = replay.PeerAppliedFramePrefix(agreed.boundary);

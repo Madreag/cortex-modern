@@ -1958,6 +1958,9 @@ static std::string ResyncSaveName() {
 				config.migrationGeneration = m_WorldCatchUp.authorityGeneration;
 				config.initialSeatHolds = m_WorldCatchUp.initialHolds;
 				config.simTickMs = g_TimerMan.GetDeltaTimeMS();
+				// It reads the host's return certificate as the round signed it.
+				config.migrationKey = m_MigrationKey;
+				if (m_WorldCatchUp.roundConfigHash != NetHash32{}) config.originalRoundConfigHash = m_WorldCatchUp.roundConfigHash;
 				m_CatchUpTransport = std::make_unique<LoopbackTransport>();
 				m_CatchUpCoordinator = std::make_unique<NetLockstepCoordinator>();
 				if (!m_CatchUpCoordinator->StartReplay(*m_CatchUpTransport, config, error)) return false;
@@ -6395,6 +6398,14 @@ static std::string ResyncSaveName() {
 		NetLockstepCoordinator::AdoptOpenReturns(live, agreed, m_WorldCatchUp.activationTick);
 		if (live.peerFrameGroups && m_Coordinator)
 			(void)m_Coordinator->AdoptPeerReturnConfig(live, *m_CatchUpCoordinator, m_WorldCatchUp.activationTick);
+		// A seat that came back through its ticket kept the host's certificate from its own link.
+		if (live.peerFrameGroups && !live.initialSeatReclaims.contains(m_LocalPeerId))
+			for (const auto& event: m_CatchUpWirePackets) {
+				NetHostMigrationMessage proof;
+				if (NetHostMigrationCodec::LooksLikePacket(event.bytes) && NetHostMigrationCodec::Decode(event.bytes, m_MigrationKey, proof) &&
+				    proof.type == NetHostMigrationMessageType::PeerBridgeCommit && proof.preparedFrame == 1 && proof.frame == m_WorldCatchUp.activationTick &&
+				    m_CatchUpCoordinator->AdoptPeerReturn(live, *m_CatchUpCoordinator, proof, m_WorldCatchUp.activationTick)) break;
+			}
 		if (live.matchConfig.peerInputDelayFrames.empty()) live.matchConfig.peerInputDelayFrames.resize(live.peerCount, live.matchConfig.inputDelayFrames);
 		for (const auto& [peer, changes]: live.initialDelayChanges) {
 			const auto at = changes.upper_bound(m_WorldCatchUp.activationTick);
@@ -6510,6 +6521,13 @@ static std::string ResyncSaveName() {
 				} else if (event.type == NetTransportEventType::PacketReceived && NetLockstepCodec::LooksLikePacket(event.bytes)) {
 					// The host's acks only say it is alive, which the stamp above has taken; they name the frames of the round this seat left.
 					if (event.bytes.size() > 8 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Ack)) continue;
+					if (m_CatchUpWireBytes + event.bytes.size() > 16ULL * 1024 * 1024) {
+						m_PrivateJoinError = "private catch-up wire backlog exceeded its bound";
+						m_State = NetMatchServiceState::Failed; m_ErrorText = m_PrivateJoinError; return;
+					}
+					m_CatchUpWireBytes += event.bytes.size(); m_CatchUpWirePackets.push_back(event);
+				} else if (event.type == NetTransportEventType::PacketReceived && m_WorldCatchUp.privateMatch && NetHostMigrationCodec::LooksLikePacket(event.bytes)) {
+					// The round's frame messages wait for the live round, which starts on the return one of them certifies.
 					if (m_CatchUpWireBytes + event.bytes.size() > 16ULL * 1024 * 1024) {
 						m_PrivateJoinError = "private catch-up wire backlog exceeded its bound";
 						m_State = NetMatchServiceState::Failed; m_ErrorText = m_PrivateJoinError; return;
@@ -6668,7 +6686,7 @@ static std::string ResyncSaveName() {
 				m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, m_WorldCatchUp.appliedThrough, &error);
 			else {
 				for (auto it = m_CatchUpWirePackets.begin(); it != m_CatchUpWirePackets.end();) {
-					if (it->bytes.size() >= NetLockstepCodec::c_HeaderBytes && (it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Start) || it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Timing))) {
+					if (NetLockstepCodec::LooksLikePacket(it->bytes) && it->bytes.size() >= NetLockstepCodec::c_HeaderBytes && (it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Start) || it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Timing))) {
 						m_Coordinator->InjectEvent(*it, NetLockstepNowMs()); m_CatchUpWireBytes -= it->bytes.size(); it = m_CatchUpWirePackets.erase(it);
 					} else ++it;
 				}
@@ -6730,7 +6748,7 @@ static std::string ResyncSaveName() {
 			}
 			const auto activationLocal = std::chrono::steady_clock::now();
 			for (const auto& event: m_CatchUpWirePackets) {
-				if (event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
+				if (NetLockstepCodec::LooksLikePacket(event.bytes) && event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
 					const size_t offset = event.bytes[17] == 0 ? 20 : 28;
 					if (event.bytes.size() < offset + 8) continue;
 					uint64_t first = 0; for (size_t i = 0; i < 8; ++i) first |= uint64_t(event.bytes[offset + i]) << (8 * i);
@@ -6786,7 +6804,7 @@ static std::string ResyncSaveName() {
 				m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset();
 			}
 			for (const auto& event: m_CatchUpWirePackets) {
-				if (event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
+				if (NetLockstepCodec::LooksLikePacket(event.bytes) && event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
 					const size_t offset = event.bytes[17] == 0 ? 20 : 28;
 					if (event.bytes.size() < offset + 8) continue;
 					uint64_t frame = 0; for (size_t i = 0; i < 8; ++i) frame |= uint64_t(event.bytes[offset + i]) << (8 * i);
