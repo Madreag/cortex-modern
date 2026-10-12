@@ -17935,6 +17935,57 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestRefusedRelayMintRetriesWhenAllowed(std::string* error) {
+		struct Script {
+			std::deque<NetDirectoryClient::Reply> replies;
+			std::vector<NetDirectoryClient::Request> sent;
+		};
+		class Wire final : public NetDirectoryClient::Transport {
+		public:
+			explicit Wire(std::shared_ptr<Script> script) : m_Script(std::move(script)) {}
+			void Start(const NetDirectoryClient::Request& request) override { m_Script->sent.push_back(request); }
+			bool Finished() override { return true; }
+			NetDirectoryClient::Reply Take() override {
+				if (m_Script->replies.empty()) return {500, "", ""};
+				auto reply = m_Script->replies.front(); m_Script->replies.pop_front(); return reply;
+			}
+			void Abort() override {}
+		private:
+			std::shared_ptr<Script> m_Script;
+		};
+		NetMatchService service;
+		struct ResetDirectory { NetDirectoryClient& client; ~ResetDirectory() { client.Configure("", "", ""); } } reset{service.m_Directory};
+		auto script = std::make_shared<Script>();
+		service.m_Directory.SetTransportFactory([script] { return std::make_unique<Wire>(script); });
+		service.m_Directory.Configure("dir.example", "0123456789abcdef", "");
+		script->replies.push_back({200, R"({"connection_protocol":1,"session_id":"11111111-2222-4333-8444-555555555555","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+		service.m_Directory.Advertise(NetDirectoryRegisterRequest{}, false);
+		service.m_Directory.Update(0); service.m_Directory.Update(0);
+		service.m_IsHost = true; service.m_IceEnabled = true; service.m_HostRelayMode = 1; service.m_ConnectionMode = 2;
+		service.m_LastRoundId = 1; service.m_RelayReplies = 0; service.m_FreshRelayRequested = true;
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		// The directory refuses the room's first mint and names when to come back.
+		script->replies.push_back({429, R"({"error":"rate_limited_key","retry_after_s":7})", ""});
+		service.UpdateRelayOffer(1000);
+		const size_t first = script->sent.size();
+		service.m_Directory.Update(1001); service.UpdateRelayOffer(1001);
+		NetRelayConfig offered;
+		if (first != 2 || service.ReadRelayOffer(offered)) { *error = "relay mint retry: the room's first mint was not sent or was published unrefused"; return false; }
+		service.m_Directory.Update(8000); service.UpdateRelayOffer(8000);
+		if (script->sent.size() != first) { *error = "relay mint retry: the host minted before the directory's retry time"; return false; }
+		NetRelayConfig relay = NetRelayConfig::Fixed("relay.example:3478", "temporary-user", "temporary-password", "11111111-2222-4333-8444-555555555555:1", now + NetDirectoryClient::c_MaxRelayTtlSeconds);
+		script->replies.push_back({200, relay.ToJson(), ""});
+		service.m_Directory.Update(8001); service.UpdateRelayOffer(8001);
+		if (script->sent.size() != first + 1) {
+			*error = "relay mint retry: a refused mint left the room without a relay until " + std::to_string(service.m_NextRelayRequestMs) + " ms, past the directory's retry at 8001 ms";
+			return false;
+		}
+		service.m_Directory.Update(8002); service.UpdateRelayOffer(8002);
+		if (!service.ReadRelayOffer(offered) || offered != relay) { *error = "relay mint retry: the retried mint was not published"; return false; }
+		std::cout << "[net-match-selftest] PASS relay mint retry: a refused room mint is retried at the directory's 7 s, not the 15 s renewal spacing" << std::endl;
+		return true;
+	}
+
 	bool TestIceDefaultsAndOverrides(std::string* error) {
 		SettingsMan settings;
 		const std::string defaults = "stun.l.google.com:19302,stun.cloudflare.com:3478,stun.nextcloud.com:443";
@@ -19004,7 +19055,7 @@ namespace RTE {
 				// RunBeforeInitialization already checked settings and candidate policy,
 				// before the global SettingsMan singleton was constructed.
 				passed = TestWrittenConfigsHoldNoRelayLogin(&error) && TestTheReportListsEveryConnection(&error) &&
-				         TestConnectedRouteEvidence(&error) && TestRelayOfferRefresh(&error) &&
+				         TestConnectedRouteEvidence(&error) && TestRelayOfferRefresh(&error) && TestRefusedRelayMintRetriesWhenAllowed(&error) &&
 				         TestLobbyRelayAdoption(&error) && TestInternetTicketRecovery(&error) && TestSessionIdJoinRefusals(&error);
 			}
 			else if (name == "relay-join-fix") {
@@ -19100,6 +19151,7 @@ namespace RTE {
 		if (!TestDiscoveryOccupancy(&error)) return fail(error);
 		if (!TestReservedSeatDirectoryResolve(&error)) return fail(error);
 		if (!TestRelayOfferRefresh(&error)) return fail(error);
+		if (!TestRefusedRelayMintRetriesWhenAllowed(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);
 		if (!TestInternetMenuJoinUsesSession(&error)) return fail(error);
 		if (!TestLobbyRefusesDivergentRosterOrder(&error)) return fail(error);

@@ -96,6 +96,10 @@ namespace RTE {
 			uint64_t receiptGapAtMs = 0, receiptGapRequestDrops = 0;
 			uint64_t tailQueuePeak = 0;
 			uint32_t delayedChatSends = 0;
+			// Times each of seat 1's input ticks crossed each lane, and the bytes it took.
+			bool countInputs = false;
+			std::map<uint64_t, unsigned> reliableInputTicks, unreliableInputTicks;
+			uint64_t reliableInputBytes = 0, unreliableInputBytes = 0;
 		};
 		struct Wire final : INetTransport {
 			Hub& hub;
@@ -200,6 +204,34 @@ namespace RTE {
 				return false;
 #endif
 			}
+			void CountInputTicks(const std::vector<uint8_t>& bytes, NetTransportLane lane) {
+				NetHostMigrationMessage packet; NetHash32 key; key.fill(0x39);
+				if (!NetHostMigrationCodec::Decode(bytes, key, packet) || packet.type != NetHostMigrationMessageType::PeerInput || packet.senderPeerId != 1) return;
+				const bool reliable = lane == NetTransportLane::ControlReliable;
+				(reliable ? hub.reliableInputBytes : hub.unreliableInputBytes) += bytes.size();
+				if (packet.offset != 0 || packet.totalBytes != packet.bytes.size() || packet.bytes.empty()) return;
+				const auto take = [](const std::vector<uint8_t>& data, size_t& at, uint32_t& value) {
+					if (at + 4 > data.size()) return false;
+					value = 0; for (unsigned i = 0; i < 4; ++i) value |= uint32_t(data[at++]) << (8 * i); return true;
+				};
+				std::vector<uint8_t> body = packet.bytes;
+				if (body[0] == 0) {
+					size_t at = 1; uint32_t size = 0;
+					if (!take(body, at, size) || size > NetLockstepCodec::c_InputWindowByteCap) return;
+					std::vector<uint8_t> expanded(size);
+					if (LZ4_decompress_safe(reinterpret_cast<const char*>(body.data() + at), reinterpret_cast<char*>(expanded.data()), static_cast<int>(body.size() - at), static_cast<int>(size)) != static_cast<int>(size)) return;
+					body = std::move(expanded);
+				}
+				size_t at = 1;
+				for (unsigned i = 0; i < body[0]; ++i) {
+					uint32_t size = 0;
+					if (!take(body, at, size) || size > body.size() - at) return;
+					NetLockstepFrame input;
+					if (!NetLockstepCodec::DecodeRecoveryInput({body.begin() + at, body.begin() + at + size}, input)) return;
+					at += size;
+					++(reliable ? hub.reliableInputTicks : hub.unreliableInputTicks)[input.targetFrame];
+				}
+			}
 			bool Send(NetPeerId id, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
 				std::lock_guard lock(hub.mutex);
 				if (congested) *congested = false;
@@ -231,6 +263,7 @@ namespace RTE {
 					}
 				}
 #endif
+				if (hub.countInputs && owner == 1) CountInputTicks(bytes, lane);
 				if (lane == NetTransportLane::ControlReliable && NetHostMigrationCodec::Decode(bytes, key, decision)) {
 					[]<class Message>(Hub& hub, const Message& packet) {
 						using Type = std::decay_t<decltype(packet.type)>;
@@ -829,7 +862,7 @@ namespace RTE {
 
 	bool NetSessionPlaneSelfTest::CheckSceneLifecycle(const std::string& name, std::string* error) {
 		Hub hub;
-		const uint8_t count = name == "rematch-chat" ? 2 : 3;
+		const uint8_t count = name == "rematch-chat" || name == "kick-received-two" || name == "heavy-input" ? 2 : 3;
 		hub.row = Case{"scene_lifecycle"}; hub.row.seats = count; hub.row.rttMs = hub.row.otherRttMs = 100;
 		auto ip = std::make_unique<Wire>(hub, 1);
 		auto relay = std::make_unique<Wire>(hub, 1);
@@ -887,6 +920,22 @@ namespace RTE {
 			rounds[index]->DeferStopsToTickBoundary();
 			rounds[index]->SetSessionEventSink([&, index](const NetTransportEvent& event) { sessions[index]->InjectEvent(event, hub.now); });
 		}
+		// A host carrying many AI actors commits a few kilobytes of input every tick that do not compress.
+		const bool heavy = name == "heavy-input";
+		const auto HeavyInput = [](uint64_t frame) {
+			std::vector<ControllerFrame> frames(40);
+			uint64_t state = frame * 0x9E3779B97F4A7C15ULL;
+			const auto next = [&] { state ^= state << 13; state ^= state >> 7; state ^= state << 17; return state; };
+			for (size_t index = 0; index < frames.size(); ++index) {
+				auto& actor = frames[index];
+				actor.actorUniqueID = static_cast<int64_t>(index + 1); actor.stateMask = next();
+				actor.analogMoveX = static_cast<int16_t>(next()); actor.analogMoveY = static_cast<int16_t>(next());
+				actor.analogAimX = static_cast<int16_t>(next()); actor.analogAimY = static_cast<int16_t>(next());
+				actor.aimAngle = static_cast<float>(next() % 6283) / 1000.0F;
+				actor.viewPointX = static_cast<float>(next() % 100000) / 10.0F; actor.viewPointY = static_cast<float>(next() % 100000) / 10.0F;
+			}
+			return frames;
+		};
 		const auto step = [&](bool joinerPlaying) {
 			for (size_t index = 0; index < count; ++index) {
 				if (!joinerPlaying && index == 1) continue;
@@ -897,7 +946,7 @@ namespace RTE {
 				while (credits[index] >= 1) {
 					const uint64_t next = applied[index] + 1;
 					if (produced[index] == next) {
-						if (!round.QueueLocalInput(next, {}, {}, error)) return false;
+						if (!round.QueueLocalInput(next, heavy && index == 0 ? HeavyInput(next) : std::vector<ControllerFrame>{}, {}, error)) return false;
 						++produced[index];
 					}
 					NetLockstepReadyFrame ready;
@@ -959,6 +1008,54 @@ namespace RTE {
 			    applied[2] < otherBefore + 110 || !rounds[2]->SeatReleases().contains(2) || rounds[2]->m_PeerReceiptRepairs != otherRepairs) {
 				*error = "a kick stopped the other survivor or kept repairing the removed seat"; return false;
 			}
+			return true;
+		}
+		if (name == "heavy-input") {
+			hub.countInputs = true;
+			const uint64_t begin = hub.now, before = applied[0];
+			for (; hub.now < begin + 3000;) if (!step(true)) return false;
+			hub.countInputs = false;
+			unsigned worst = 0, repeated = 0, ticks = 0;
+			for (const auto& [frame, times]: hub.reliableInputTicks) {
+				if (frame <= before + 30 || frame + 30 > applied[0]) continue;
+				++ticks; worst = std::max(worst, times); if (times > 1) ++repeated;
+			}
+			const uint64_t played = applied[0] - before;
+			std::cout << "[net-session-scene] heavy-input played=" << played << " reliable_ticks=" << hub.reliableInputTicks.size() << " judged=" << ticks
+			          << " worst_reliable_sends=" << worst << " ticks_sent_twice=" << repeated
+			          << " reliable_bytes_per_tick=" << (played ? hub.reliableInputBytes / played : 0) << " unreliable_bytes_per_tick=" << (played ? hub.unreliableInputBytes / played : 0) << std::endl;
+			if (played < 170 || worst > 1) { *error = "the host sent a committed input tick more than once on the reliable lane with no packet lost"; return false; }
+			return true;
+		}
+		if (name == "kick-received" || name == "kick-received-two") {
+			auto& host = *rounds[0]; const uint64_t next = host.GetStats().nextFrame;
+			// The removed player's input for our next frames has arrived and been receipted before the kick.
+			if (!host.m_RemoteFrames.contains(next) || !host.m_RemoteFrames.at(next).contains(2)) { *error = "the kicked player's next input had not arrived"; return false; }
+			host.EvictRemovedPeer(2, "removed from the session", hub.now);
+			hostSession.DisconnectReadyPeer(originalRoute, NetRejectReason::ParticipantRemoved, c_NetRemovedLinkText);
+			const uint64_t boundary = host.m_PeerLeaveFrames.contains(2) ? host.m_PeerLeaveFrames.at(2) : 0;
+			const uint64_t begin = hub.now;
+			std::vector<uint64_t> before(applied), gap(count), firstTwo(count);
+			for (; hub.now < begin + 2000;) {
+				const auto previous = displayedAt;
+				if (!step(false)) return false;
+				rounds[1]->Tick(hub.now); clientSession.Tick(hub.now, false);
+				for (size_t index = 0; index < count; ++index) {
+					if (index == 1) continue;
+					if (displayedAt[index] != previous[index]) gap[index] = std::max(gap[index], displayedAt[index] - previous[index]);
+					if (!firstTwo[index] && applied[index] >= before[index] + 2) firstTwo[index] = hub.now - begin;
+				}
+			}
+			bool stopped = false;
+			for (size_t index = 0; index < count; ++index) {
+				if (index == 1) continue;
+				const uint64_t finalWait = hub.now - displayedAt[index];
+				std::cout << "[net-session-scene] " << name << " peer=" << index + 1 << " boundary=" << boundary << " before=" << before[index] << " after=" << applied[index]
+				          << " two_updates_ms=" << firstTwo[index] << " greatest_gap_ms=" << gap[index] << " final_wait_ms=" << finalWait
+				          << " next=" << rounds[index]->GetStats().nextFrame << " accepted=" << rounds[index]->PeerInputAccepted(rounds[index]->GetStats().nextFrame, 2) << std::endl;
+				stopped |= !firstTwo[index] || firstTwo[index] > 50 || gap[index] > 50 || finalWait > 50 || applied[index] < before[index] + 110 || applied[index] <= boundary;
+			}
+			if (boundary <= next || stopped) { *error = "a kick froze a remaining player on the removed seat's input before its boundary"; return false; }
 			return true;
 		}
 		if (name == "rematch-chat") {

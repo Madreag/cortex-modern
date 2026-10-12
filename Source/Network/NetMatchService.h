@@ -1390,6 +1390,7 @@ namespace RTE {
 		friend bool TestIceDefaultsAndOverrides(std::string* error);
 		friend bool TestRelayOfferAndPolicy(std::string* error);
 		friend bool TestRelayOfferRefresh(std::string* error);
+		friend bool TestRefusedRelayMintRetriesWhenAllowed(std::string* error);
 		friend bool TestIceConnectionFallback(std::string* error);
 		friend bool TestHandoverSnapshotStatus(std::string* error);
 		friend bool TestDiscoveryOccupancy(std::string* error);
