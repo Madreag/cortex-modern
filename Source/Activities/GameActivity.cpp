@@ -4631,6 +4631,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		shop->SetEnabled(true);
 		g_UInputMan.TrapMousePos(false, 0);
 		SDL_Delay(250); g_TimerMan.Update(); game->Update();
+		game->RenderUpdate(); shop->Draw(g_FrameMan.GetBackBuffer32()); present();
 		int tabX, tabY, tabWidth, tabHeight;
 		shop->AutomationManager()->GetControl("BodiesTab")->GetControlRect(&tabX, &tabY, &tabWidth, &tabHeight);
 		check("buy_controls_are_visible_before_the_frozen_tick", tabX >= 0 && tabY >= 0 && tabX + tabWidth <= g_WindowMan.GetResX() && tabY + tabHeight <= g_WindowMan.GetResY());
