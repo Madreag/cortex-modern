@@ -4696,7 +4696,7 @@ bool GameActivity::RunSetupEditorSelfTest(bool confirmOnly) {
 	game->m_LockstepSeatBrains[0] = equippedBrain;
 	const auto checkpoint = game->SaveValueCheckpoint();
 	game->m_LockstepSeatBrains[0] = {};
-	check("brain_equipment_checkpoint_roundtrip", game->LoadValueCheckpoint(checkpoint) && game->m_LockstepSeatBrains[0] == equippedBrain);
+	check("brain_equipment_checkpoint_roundtrip", game->LoadValueCheckpoint(checkpoint) && static_cast<NetGamePlaceBrain>(game->m_LockstepSeatBrains[0]) == equippedBrain);
 	game->m_LockstepSeatBrains[0] = {};
 	const auto purchase = std::get<NetGameEditorPlacement>(commands.front().payload);
 	const long base = game->m_LockstepPlacementUidBase, localCounter = MovableObject::GetUniqueIDCounter();
