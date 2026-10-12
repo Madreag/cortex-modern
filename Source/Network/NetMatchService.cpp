@@ -889,7 +889,7 @@ static std::string ResyncSaveName() {
 	bool NetMatchService::NeedsRematchAttempt() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		// A client still resolves a lost next lobby through ReturnToLobby.
-		return !m_IsHost || !m_LastMatchSummary || (m_Session && m_Session->GetReadyPeerCount() != 0);
+		return !m_IsHost || (!m_HostEndedRound && (!m_LastMatchSummary || (m_Session && m_Session->GetReadyPeerCount() != 0)));
 	}
 
 	bool NetMatchService::ReturnToLobby(std::string* error) {
@@ -930,11 +930,11 @@ static std::string ResyncSaveName() {
 			}
 			DrainPendingSessionEventsLocked(false);
 			departedHost = !m_IsHost || (m_MigrationGeneration != 0 && m_MigrationMembers.size() == 1);
-			if (m_IsHost && m_LastMatchSummary && m_Session->GetReadyPeerCount() == 0) {
+			if (m_IsHost && m_LastMatchSummary && (m_HostEndedRound || m_Session->GetReadyPeerCount() == 0)) {
 				m_CompletedLobbySinceMs = 0;
 				m_StatusText = m_LastMatchSummary->result;
 				m_ErrorText.clear();
-				if (error) *error = "No other players are here for a rematch";
+				if (error) *error = m_HostEndedRound ? m_StatusText : "No other players are here for a rematch";
 				return false;
 			}
 			if (!m_Session->IsReady()) {
@@ -2513,6 +2513,7 @@ static std::string ResyncSaveName() {
 			m_HostLeaveConfirmed.reset();
 			m_LeaveRejoinRead.reset();
 			m_HostEndReason.clear();
+			m_HostEndedRound = false;
 			m_CompletedLobbySinceMs = 0;
 			m_PendingLobbyEvents.clear();
 			m_PendingLobbyBytes = 0;
@@ -2688,6 +2689,7 @@ static std::string ResyncSaveName() {
 		DrainPendingSessionEventsLocked(false);
 		if (!m_Coordinator->CompleteAtAgreedEnd(reason)) return false;
 		m_HostEndReason = reason;
+		m_HostEndedRound = true;
 		return true;
 	}
 
@@ -2733,8 +2735,8 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_State == NetMatchServiceState::Running) {
 			m_State = NetMatchServiceState::Completed;
-			// The rematch lobby this end opens starts waiting for the other peers here.
-			m_CompletedLobbySinceMs = SteadyNowMs();
+			// Natural round endings wait for the next lobby; the host's End Match stays completed.
+			m_CompletedLobbySinceMs = m_HostEndedRound ? 0 : SteadyNowMs();
 			m_StatusText = displayResult.empty() ? "Match complete" : displayResult;
 			m_ErrorText.clear();
 		}
@@ -3546,6 +3548,7 @@ static std::string ResyncSaveName() {
 		m_HeldRejoinDriving = false;
 		m_HeldRejoinRoutes.clear();
 		m_OrdinaryTicketRejoin = false;
+		m_HostEndedRound = false;
 		m_CapturedRunnerReport.clear();
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";

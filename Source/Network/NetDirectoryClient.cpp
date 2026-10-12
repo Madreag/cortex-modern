@@ -457,7 +457,8 @@ namespace RTE {
 		if (nowMs < m_RequestRetries[static_cast<size_t>(kind)].nextMs) return false;
 		if (m_SessionGone && kind != RequestKind::List) return false;
 		if (!m_HttpTransport) return true;
-		if (!m_SessionId.empty() && NetDirectoryBudget::SessionEnded(m_BaseUrl, m_InstallKey, m_SessionId, nowMs)) return false;
+		const std::string sessionId = kind == RequestKind::List ? std::string() : kind == RequestKind::Register && m_SessionId.empty() ? ClaimedSessionId(m_Row) : m_SessionId;
+		if (!sessionId.empty() && NetDirectoryBudget::SessionEnded(m_BaseUrl, m_InstallKey, sessionId, nowMs)) return false;
 		return NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, kind == RequestKind::Heartbeat ? "heartbeat" : "general", nowMs);
 	}
 
@@ -491,9 +492,10 @@ namespace RTE {
 			NoteError("The directory is busy. Retrying in " + std::to_string((m_NextAttemptMs - nowMs + 999) / 1000) + " seconds.");
 			m_ReplyKind = RequestKind::None; return;
 		}
-		if (kind != RequestKind::List && kind != RequestKind::Delete && !m_SessionId.empty() && NetDirectoryRetry::SessionGone(reply.statusCode, reply.body)) {
+		const std::string sessionId = kind == RequestKind::Register && m_SessionId.empty() ? ClaimedSessionId(m_Row) : m_SessionId;
+		if (kind != RequestKind::List && kind != RequestKind::Delete && !sessionId.empty() && NetDirectoryRetry::SessionGone(reply.statusCode, reply.body)) {
 			ScheduleRetry(nowMs); m_SessionGone = true; m_Listed = false; m_Capable = false; m_ConfirmedListed.reset();
-			if (m_HttpTransport) NetDirectoryBudget::EndSession(m_BaseUrl, m_InstallKey, m_SessionId, nowMs);
+			if (m_HttpTransport) NetDirectoryBudget::EndSession(m_BaseUrl, m_InstallKey, sessionId, nowMs);
 			NoteError("This match is no longer in the directory. Choose another game or host a new match.");
 			SetState(State::Failed); m_ReplyKind = RequestKind::None; return;
 		}
@@ -740,7 +742,12 @@ namespace RTE {
 		} else if (reply.statusCode != 200 && reply.statusCode != 404) {
 			NoteError("delete: HTTP " + std::to_string(reply.statusCode));
 		}
-		// Whatever the answer, the row is gone on our side or expires on its own.
+		// A confirmed close retires this session for every directory path.
+		if (m_HttpTransport) NetDirectoryBudget::EndSession(m_BaseUrl, m_InstallKey, m_SessionId, nowMs);
+		if (!m_Row.persistentWorld) {
+			m_Row.resumeSessionId.clear();
+			m_Row.resumeToken.clear();
+		}
 		m_SessionId.clear();
 		m_Token.clear();
 		m_ConfirmedListed.reset();

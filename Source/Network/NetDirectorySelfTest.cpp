@@ -2467,6 +2467,17 @@ namespace RTE {
 					if (ReportLeaksToken(held) || ReportLeaksToken(deleted)) {
 						note("token: the report exposed the session token");
 					}
+					auto newLease = json::parse(kRegisterCapableSecret);
+					newLease["session_id"] = "7b8c9d2e-1111-4222-8333-444455556667";
+					s.replies->push_back({200, newLease.dump(), ""});
+					s.client.Advertise(SampleRegisterRequest(), false);
+					s.client.Update(60000);
+					const auto fresh = json::parse(s.sent->back().body);
+					if (s.sent->back().method != "POST" || !fresh.value("resume_session_id", std::string()).empty() || !fresh.value("resume_token", std::string()).empty()) {
+						note("deleted: a new lobby reused the closed lobby's claim");
+					}
+					s.client.Update(60000);
+					if (s.client.GetSessionId() != newLease["session_id"].get<std::string>()) note("deleted: a new lobby did not receive a fresh lease");
 				}
 
 				{   // a hidden row lost to a 404 keeps its id for Retract but claims no confirmation
@@ -3360,6 +3371,14 @@ namespace RTE {
 				listed.client.Update(5000); listed.client.Update(5000); listed.client.Update(60000);
 				if (listed.sent->size() != 2 || listed.client.GetState() != NetDirectoryClient::State::Failed || listed.client.LastError().find("Choose") == std::string::npos) {
 					*error = "a gone match continued posting"; return false;
+				}
+				ScriptedClient resumed;
+				resumed.replies->push_back({404, R"({"error":"match_ended"})", ""});
+				auto claim = SampleRegisterRequest();
+				claim.resumeSessionId = "7b8c9d2e-1111-4222-8333-444455556666"; claim.resumeToken = "old-proof";
+				resumed.client.Advertise(claim, true); resumed.client.Update(0); resumed.client.Update(0); resumed.client.Update(60000);
+				if (resumed.sent->size() != 1 || resumed.client.GetState() != NetDirectoryClient::State::Failed) {
+					*error = "an ended resume continued posting"; return false;
 				}
 				ScriptedChannel signals(false);
 				signals.replies->push_back({404, R"({"error":"not_found"})", ""});

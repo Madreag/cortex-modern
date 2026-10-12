@@ -664,7 +664,7 @@ class DirectoryTests(unittest.TestCase):
             def connect(self):
                 super().connect()
                 # Release completed load-row sockets without keeping their client ports in TIME_WAIT.
-                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("hh" if os.name == "nt" else "ii", 1, 0))
         def request(index, method, path, body=None):
             conn = LocalConnection("127.0.0.1", self.port, timeout=30 if method == "GET" else 14)
             headers = {"X-Install-Key": f"{index + 1000:016x}", "CF-Connecting-IP": f"198.51.{index // 250}.{index % 250 + 1}"}
@@ -2194,19 +2194,35 @@ class DirectoryTests(unittest.TestCase):
 
     def test_tls_context_hardened(self) -> None:
         import session_directory as sd
+        from datetime import datetime, timedelta, timezone
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
 
         self.assertTrue(hasattr(sd, "make_server_ssl_context"))
         ctx = sd.make_server_ssl_context()
         self.assertEqual(ctx.minimum_version, ssl.TLSVersion.TLSv1_2)
-        if ssl.OP_NO_COMPRESSION:
-            self.assertTrue(ctx.options & ssl.OP_NO_COMPRESSION)
-        cert, key = self._self_signed_cert()
+        no_compression = getattr(ssl, "OP_NO_COMPRESSION", 0)
+        if no_compression:
+            self.assertTrue(ctx.options & no_compression)
+        self.tls_dir = tempfile.TemporaryDirectory()
+        root = Path(self.tls_dir.name)
+        key, cert = root / "key.pem", root / "cert.pem"
+        private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, "localhost")])
+        now = datetime.now(timezone.utc)
+        certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                       .public_key(private.public_key()).serial_number(x509.random_serial_number())
+                       .not_valid_before(now - timedelta(minutes=1)).not_valid_after(now + timedelta(days=1))
+                       .sign(private, hashes.SHA256()))
+        key.write_bytes(private.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
+        cert.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
         self.start(cert=cert, key=key)
         client = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         client.check_hostname = False
         client.verify_mode = ssl.CERT_NONE
         client.minimum_version = client.maximum_version = ssl.TLSVersion.TLSv1_2
-        client.options &= ~ssl.OP_NO_COMPRESSION
+        client.options &= ~no_compression
         with socket.create_connection(("127.0.0.1", self.port), timeout=2) as connection:
             with client.wrap_socket(connection, server_hostname="localhost") as stream:
                 self.assertEqual(stream.version(), "TLSv1.2")
