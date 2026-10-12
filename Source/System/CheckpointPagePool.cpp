@@ -25,6 +25,7 @@
 #include <map>
 #include <mutex>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <utility>
@@ -82,6 +83,7 @@ struct CheckpointPagePool::ArmGate {
 struct CheckpointPagePool::Copy {
 	Pages pages;
 	std::vector<std::atomic<unsigned char>> saved;
+	std::vector<unsigned char> hot;
 	std::thread::id simThread;
 	std::atomic<bool> armed{false};
 	std::atomic<int64_t> workerUs{0}, simFaultNs{0}, otherFaultNs{0};
@@ -89,7 +91,7 @@ struct CheckpointPagePool::Copy {
 	bool completed = false;
 	bool abandoned = false;
 	const std::shared_ptr<ArmGate> gate;
-	Copy(size_t bytes, size_t pageBytes, std::shared_ptr<ArmGate> gate = {}) : pages(bytes), saved(bytes / pageBytes), gate(std::move(gate)) {
+	Copy(size_t bytes, size_t pageBytes, std::shared_ptr<ArmGate> gate = {}) : pages(bytes), saved(bytes / pageBytes), hot(bytes / pageBytes, 0), gate(std::move(gate)) {
 		for (auto& page: saved) page.store(0, std::memory_order_relaxed);
 	}
 	bool Arming() const noexcept { return gate && gate->state.load(std::memory_order_acquire) == ArmGate::State::Arming; }
@@ -98,17 +100,22 @@ struct CheckpointPagePool::Copy {
 };
 
 struct CheckpointPagePool::Block {
+	// Between autosaves an inventory page is open and not yet seen, open and written since, or fenced and unchanged.
+	enum class PageState : unsigned char { Open, Hot, Fenced };
 	Pages live;
 	size_t slotBytes;
 	size_t pageBytes = PageWriteFence::SystemPageBytes();
 	std::atomic_flag lock = ATOMIC_FLAG_INIT;
 	std::vector<std::shared_ptr<Copy>> copies;
-	explicit Block(size_t bytes, size_t slotBytes = 0) : live(bytes), slotBytes(slotBytes ? slotBytes : bytes) {}
+	std::vector<PageState> states;
+	explicit Block(size_t bytes, size_t slotBytes = 0) : live(bytes), slotBytes(slotBytes ? slotBytes : bytes), states(bytes / pageBytes, PageState::Open) {}
 	~Block() { PageWriteFence::UnwatchCopies(this); }
-	void Prepare(const std::shared_ptr<Copy>& copy) {
+	bool Watch() {
 		const auto keepWritable = [](void*, uintptr_t, size_t) noexcept { return true; };
-		if (!PageWriteFence::WatchCopies(this, {live.data, live.bytes}, OnWrite, this, keepWritable))
-			throw std::runtime_error("could not prepare native checkpoint page watches");
+		return PageWriteFence::WatchCopies(this, {live.data, live.bytes}, OnWrite, this, keepWritable);
+	}
+	void Prepare(const std::shared_ptr<Copy>& copy) {
+		if (!Watch()) throw std::runtime_error("could not prepare native checkpoint page watches");
 		Locked guard(lock);
 		std::erase_if(copies, [](const auto& value) { return value->completed; });
 		copies.push_back(copy);
@@ -120,64 +127,117 @@ struct CheckpointPagePool::Block {
 		copy->simThread = std::this_thread::get_id();
 		if (!PageWriteFence::ProtectCopyPages(reinterpret_cast<uintptr_t>(live.data), live.bytes))
 			throw std::runtime_error("could not fence native checkpoint pages");
+		std::fill(states.begin(), states.end(), PageState::Fenced);
 		copy->armed.store(true, std::memory_order_release);
+	}
+	// An inventory boundary copies the pages written since the last one and fences the pages it has not seen; fenced pages stay fenced.
+	void ArmInventory(Copy& copy) {
+		Locked guard(lock);
+		if (copy.abandoned) throw std::logic_error("native checkpoint preparation was rolled back");
+		for (size_t page = 0; page < states.size();) {
+			if (states[page] == PageState::Hot) {
+				if (!copy.saved[page].load(std::memory_order_relaxed)) {
+					std::memcpy(copy.pages.data + page * pageBytes, live.data + page * pageBytes, pageBytes);
+					copy.saved[page].store(1, std::memory_order_release);
+				}
+				copy.hot[page] = 1;
+				++page;
+			} else if (states[page] == PageState::Open) {
+				size_t end = page + 1;
+				while (end < states.size() && states[end] == PageState::Open) ++end;
+				if (!PageWriteFence::ProtectCopyPages(reinterpret_cast<uintptr_t>(live.data + page * pageBytes), (end - page) * pageBytes))
+					throw std::runtime_error("could not fence native checkpoint pages");
+				std::fill(states.begin() + page, states.begin() + end, PageState::Fenced);
+				page = end;
+			} else {
+				++page;
+			}
+		}
 	}
 	bool SavePages(size_t first, size_t count, bool fault) noexcept {
 		const auto started = fault ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-		for (;;) {
-			std::shared_ptr<ArmGate> arming;
-			{
-				Locked guard(lock);
-				for (const auto& copy: copies) if (copy->gate && copy->gate->state.load(std::memory_order_acquire) == ArmGate::State::Arming) {
-					arming = copy->gate; break;
-				}
-				if (!arming) {
-					bool savedAny = false;
-					for (const auto& copy: copies) {
-						if (!copy->Armed()) continue;
-						for (size_t page = first; page < first + count; ++page) {
-							if (copy->saved[page].load(std::memory_order_relaxed)) continue;
-							const size_t offset = page * pageBytes;
-							std::memcpy(copy->pages.data + offset, live.data + offset, pageBytes);
-							copy->saved[page].store(1, std::memory_order_release);
-							savedAny = true;
-						}
-					}
-					const bool opened = (!fault && !savedAny) || PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data + first * pageBytes), count * pageBytes);
-					if (fault) {
-						const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
-						for (const auto& copy: copies) if (copy->Armed() && !copy->completed) {
-							const bool simulation = std::this_thread::get_id() == copy->SimulationThread();
-							(simulation ? copy->simFaults : copy->otherFaults).fetch_add(1, std::memory_order_relaxed);
-							(simulation ? copy->simFaultNs : copy->otherFaultNs).fetch_add(elapsed, std::memory_order_relaxed);
-						}
-					}
-					return opened;
-				}
+		Locked guard(lock);
+		// Every capture whose boundary has begun keeps the page as that boundary saw it.
+		for (const auto& copy: copies) {
+			if (copy->completed || copy->abandoned || !(copy->Armed() || copy->Arming())) continue;
+			for (size_t page = first; page < first + count; ++page) {
+				if (copy->saved[page].load(std::memory_order_relaxed)) continue;
+				const size_t offset = page * pageBytes;
+				std::memcpy(copy->pages.data + offset, live.data + offset, pageBytes);
+				copy->saved[page].store(1, std::memory_order_release);
 			}
-			// An older generation cannot open a range while its next boundary arms it.
-			arming->state.wait(ArmGate::State::Arming, std::memory_order_acquire);
 		}
+		if (!fault) return true;
+		// A written page stays open, and the next boundary copies it instead of fencing it again.
+		const bool opened = PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data + first * pageBytes), count * pageBytes);
+		if (opened) std::fill(states.begin() + first, states.begin() + first + count, PageState::Hot);
+		const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
+		for (const auto& copy: copies) if (copy->Armed() && !copy->completed) {
+			const bool simulation = std::this_thread::get_id() == copy->SimulationThread();
+			(simulation ? copy->simFaults : copy->otherFaults).fetch_add(1, std::memory_order_relaxed);
+			(simulation ? copy->simFaultNs : copy->otherFaultNs).fetch_add(elapsed, std::memory_order_relaxed);
+		}
+		return opened;
 	}
 	bool SavePage(size_t page, bool fault) noexcept { return SavePages(page, 1, fault); }
 	static bool OnWrite(void* context, uintptr_t address) noexcept {
 		auto& block = *static_cast<Block*>(context);
 		return block.SavePage((address - reinterpret_cast<uintptr_t>(block.live.data)) / block.pageBytes, true);
 	}
+	bool Active() const { return std::any_of(copies.begin(), copies.end(), [](const auto& value) { return value->Arming() || (value->Armed() && !value->completed); }); }
+	void OpenAll() {
+		if (PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data), live.bytes)) std::fill(states.begin(), states.end(), PageState::Open);
+	}
 	void Complete(const std::shared_ptr<Copy>& copy) {
 		Locked guard(lock);
 		copy->completed = true;
-		if (std::all_of(copies.begin(), copies.end(), [](const auto& value) { return !value->Arming() && (!value->Armed() || value->completed); }) &&
-		    !PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data), live.bytes))
+		if (copy->gate) return;
+		if (!Active() && !PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data), live.bytes))
 			throw std::runtime_error("could not open copied native checkpoint pages");
+		if (!Active()) std::fill(states.begin(), states.end(), PageState::Open);
+	}
+	// Pages a boundary copied as written that have not changed since are fenced again, so the next boundary skips them.
+	void Demote(const Copy& copy) noexcept {
+		for (size_t page = 0; page < states.size();) {
+			const auto still = [&](size_t index) {
+				const size_t offset = index * pageBytes;
+				return copy.hot[index] && states[index] == PageState::Hot && copy.saved[index].load(std::memory_order_acquire) &&
+				    std::memcmp(copy.pages.data + offset, live.data + offset, pageBytes) == 0;
+			};
+			if (!still(page)) { ++page; continue; }
+			size_t end = page + 1;
+			while (end < states.size() && still(end)) ++end;
+			if (PageWriteFence::ProtectCopyPages(reinterpret_cast<uintptr_t>(live.data + page * pageBytes), (end - page) * pageBytes))
+				std::fill(states.begin() + page, states.begin() + end, PageState::Fenced);
+			page = end;
+		}
 	}
 	void Abandon(const std::shared_ptr<Copy>& copy) noexcept {
 		Locked guard(lock);
 		std::erase(copies, copy);
 		copy->abandoned = true;
 		copy->armed.store(false, std::memory_order_release);
-		if (std::all_of(copies.begin(), copies.end(), [](const auto& value) { return !value->Arming() && (!value->Armed() || value->completed); }))
-			PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data), live.bytes);
+		if (copy->gate) { Demote(*copy); return; }
+		if (!Active()) OpenAll();
+	}
+	// Fences up to the given pages that no boundary has seen yet, so the first boundary of a world has little to fence.
+	size_t Settle(size_t budget) {
+		Locked guard(lock);
+		size_t fenced = 0;
+		for (size_t page = 0; page < states.size() && fenced < budget;) {
+			if (states[page] != PageState::Open) { ++page; continue; }
+			size_t end = page + 1;
+			while (end < states.size() && states[end] == PageState::Open && fenced + (end - page) < budget) ++end;
+			if (!PageWriteFence::ProtectCopyPages(reinterpret_cast<uintptr_t>(live.data + page * pageBytes), (end - page) * pageBytes)) return fenced;
+			std::fill(states.begin() + page, states.begin() + end, PageState::Fenced);
+			fenced += end - page;
+			page = end;
+		}
+		return fenced;
+	}
+	size_t OpenPages() {
+		Locked guard(lock);
+		return static_cast<size_t>(std::count(states.begin(), states.end(), PageState::Open));
 	}
 	bool Contains(const void* source, size_t bytes) const {
 		const uintptr_t from = reinterpret_cast<uintptr_t>(source), base = reinterpret_cast<uintptr_t>(live.data);
@@ -224,6 +284,22 @@ void CheckpointPagePool::IncludeInInventory() {
 uint64_t CheckpointPagePool::InventoryGeneration() noexcept {
 	const auto* registry = Registry::current.load(std::memory_order_acquire);
 	return registry ? registry->generation.load(std::memory_order_acquire) : 0;
+}
+
+size_t CheckpointPagePool::SettleInventory(size_t budget) {
+	std::vector<std::shared_ptr<Block>> blocks;
+	{
+		auto& registry = Registry::Get();
+		std::lock_guard lock(registry.mutex);
+		blocks.reserve(registry.blocks.size());
+		for (const auto& [address, weak]: registry.blocks) if (auto block = weak.lock()) blocks.push_back(std::move(block));
+	}
+	size_t left = 0;
+	for (const auto& block: blocks) {
+		if (budget && block->Watch()) budget -= block->Settle(budget);
+		left += block->OpenPages();
+	}
+	return left;
 }
 
 std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::PrepareInventory(uint64_t& generation) {
@@ -421,8 +497,7 @@ void CheckpointPagePool::Snapshot::Arm() const {
 		}
 		try {
 			m_ArmGate->simThread = std::this_thread::get_id();
-			for (const auto& range: m_Ranges) if (!PageWriteFence::ProtectCopyPages(range.first, range.bytes))
-				throw std::runtime_error("could not fence native checkpoint inventory");
+			for (const auto& part: m_Parts) part.block->ArmInventory(*part.copy);
 			m_ArmGate->Publish(ArmGate::State::Armed);
 			return;
 		} catch (...) { Cancel(); throw; }
@@ -440,7 +515,14 @@ void CheckpointPagePool::Snapshot::WarmShadow() const {
 		if (part.copy->Armed() || part.copy->abandoned)
 			throw std::logic_error("native checkpoint shadow warming after its boundary");
 		auto* destination = static_cast<volatile unsigned char*>(part.copy->pages.data);
-		for (size_t offset = 0; offset < part.copy->pages.bytes; offset += part.block->pageBytes) destination[offset] = 0;
+		// An inventory boundary writes only the pages written since the last one; the saver fills the rest itself.
+		std::vector<unsigned char> written;
+		if (m_ArmGate) {
+			Locked guard(part.block->lock);
+			written.reserve(part.block->states.size());
+			for (const auto state: part.block->states) written.push_back(state == Block::PageState::Hot);
+		}
+		for (size_t page = 0; page < part.copy->saved.size(); ++page) if (!m_ArmGate || written[page]) destination[page * part.block->pageBytes] = 0;
 	}
 }
 
@@ -452,6 +534,8 @@ void CheckpointPagePool::Snapshot::Cancel() const noexcept {
 void CheckpointPagePool::Snapshot::Drain() const {
 	for (const auto& part: m_Parts) {
 		if (!part.copy->Armed()) throw std::logic_error("native checkpoint drain before its boundary");
+		// Inventory pages stay fenced until written, so the saver copies only what it reads.
+		if (m_ArmGate) continue;
 		const auto start = std::chrono::steady_clock::now();
 		const size_t batch = std::max<size_t>(1, (size_t{64} << 10) / part.block->pageBytes);
 		for (size_t page = 0; page < part.copy->saved.size(); page += batch)
@@ -650,6 +734,22 @@ CheckpointNativeStorage::WorldAllocationScope::~WorldAllocationScope() { s_Nativ
 
 bool CheckpointNativeStorage::WorldEnabled() noexcept { return s_NativeStorageWorldEnabled.load(std::memory_order_acquire); }
 bool CheckpointNativeStorage::SetWorldEnabled(bool enabled) noexcept { return s_NativeStorageWorldEnabled.exchange(enabled, std::memory_order_acq_rel); }
+
+void CheckpointNativeStorage::StartSettling() {
+	// Faults on the newly fenced pages are spread over the slices instead of landing on one tick.
+	static std::jthread settler([](std::stop_token stop) {
+		uint64_t settled = UINT64_MAX;
+		while (!stop.stop_requested()) {
+			const uint64_t generation = CheckpointPagePool::InventoryGeneration();
+			bool more = false;
+			if (WorldEnabled() && generation != settled) {
+				more = CheckpointPagePool::SettleInventory(2048) > 0;
+				if (!more) settled = generation;
+			}
+			std::this_thread::sleep_for(more ? std::chrono::milliseconds(4) : std::chrono::milliseconds(50));
+		}
+	});
+}
 
 bool CheckpointNativeStorage::RetainingAllocations() noexcept {
 	return !s_NativeStorageCapture && (s_NativeStorageAllocation || s_NativeStorageWorldAllocation.value_or(WorldEnabled()));
@@ -1424,6 +1524,44 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 		if (parent.expired()) return "a saved child reader lost its parent's stored values";
 		child = {};
 		if (!parent.expired()) return "a finished saved child reader retained its parent";
+	}
+	{
+		// Consecutive inventory boundaries: a page stays fenced between captures, a written page is copied at the next boundary,
+		// and a write after a boundary never reaches that boundary's copy.
+		const auto freed = [](uint64_t* value) { Deallocate(value); };
+		std::unique_ptr<uint64_t, decltype(freed)> cold(static_cast<uint64_t*>(Allocate(8192, 4096)), freed), hot(static_cast<uint64_t*>(Allocate(8192, 4096)), freed);
+		cold.get()[0] = 11; hot.get()[0] = 21;
+		const auto read = [](std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> pages, const uint64_t* source) {
+			uint64_t value = 0;
+			ReadScope scope(pages);
+			if (!ReadBytes(source, &value, sizeof(value))) throw std::runtime_error("an inventory value was outside its pages");
+			return value;
+		};
+		{
+			const auto first = Prepare();
+			for (const auto& page: first) page->Arm();
+			cold.get()[0] = 12; hot.get()[0] = 22;
+			if (read(first, cold.get()) != 11 || read(first, hot.get()) != 21) return "a first inventory boundary lost its fenced values";
+		}
+		{
+			const auto second = Prepare();
+			for (const auto& page: second) page->WarmShadow();
+			for (const auto& page: second) page->Arm();
+			hot.get()[0] = 23;
+			if (read(second, cold.get()) != 12 || read(second, hot.get()) != 22) return "a written page lost the value of the next boundary";
+		}
+		{
+			const auto third = Prepare();
+			for (const auto& page: third) page->Arm();
+			cold.get()[0] = 13;
+			if (read(third, cold.get()) != 12 || read(third, hot.get()) != 23) return "a page fenced again after its capture lost its value";
+		}
+		if (CheckpointPagePool::SettleInventory(SIZE_MAX) != 0) return "settling left unseen inventory pages open";
+		cold.get()[0] = 14; hot.get()[0] = 24;
+		const auto settled = Prepare();
+		for (const auto& page: settled) page->Arm();
+		cold.get()[0] = 15; hot.get()[0] = 25;
+		if (read(settled, cold.get()) != 14 || read(settled, hot.get()) != 24) return "settled pages lost the values of their boundary";
 	}
 	if (const auto mismatch = CheckpointString::SelfTestMismatch(); !mismatch.empty()) return mismatch;
 	return CheckpointFrozenContainersSelfTestMismatch();

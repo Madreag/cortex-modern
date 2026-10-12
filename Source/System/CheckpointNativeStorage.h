@@ -85,6 +85,8 @@ namespace RTE {
 		static bool RetainingAllocations() noexcept;
 		static bool WorldEnabled() noexcept;
 		static bool SetWorldEnabled(bool enabled) noexcept;
+		/// Starts fencing new owned pages in the background while a world is captured, a slice at a time.
+		static void StartSettling();
 		static bool Reading() { return s_Read != nullptr; }
 		static void RememberPrivate(void* address, size_t bytes, bool borrowed = false);
 		static void BorrowPrivate(const void* address) noexcept;

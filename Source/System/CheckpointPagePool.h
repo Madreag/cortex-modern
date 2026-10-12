@@ -78,6 +78,8 @@ namespace RTE {
 		void IncludeInInventory();
 		static std::shared_ptr<const Snapshot> PrepareInventory(uint64_t& generation);
 		static uint64_t InventoryGeneration() noexcept;
+		/// Fences up to the given inventory pages no boundary has seen; returns how many such pages remain.
+		static size_t SettleInventory(size_t pages);
 		static std::string SelfTestMismatch();
 	private:
 		std::vector<std::shared_ptr<Block>> m_Blocks;

@@ -906,6 +906,7 @@ struct ActivityMan::PreparedAutosave {
 
 void ActivityMan::PrepareAutosave() {
 	if (!CheckpointNativeStorage::WorldEnabled()) return;
+	CheckpointNativeStorage::StartSettling();
 	try {
 		ContentFile::InvalidateCheckpointSamples();
 		g_LuaMan.PrepareCheckpointValues(); g_AudioMan.PrepareCheckpointBackendValues(); NetActorOwnership::PrepareCheckpointValues(); ContentFile::PrepareCheckpointSamples(); GUIInput::PrepareCheckpointTextInput();
