@@ -183,8 +183,11 @@ def play(request_path):
                     native_source=source, native_exe=executable, build_receipt=receipt)
         if request["box"]["os"] == "darwin":
             peer.update(render_cap=None, presentation="headed")
-    video.finish_run(local_scene, run, captured, source, options)
+    video.finish_run(local_scene, run, captured, source, options, shared_gates=False)
     (Path(captured["root"]) / "review.json").rename(Path(captured["root"]) / (role + "-review.json"))
+    scan = Path(captured["root"]) / "secret-scan.json"
+    if scan.is_file():
+        scan.rename(Path(captured["root"]) / (role + "-secret-scan.json"))
     video.write_json(Path(captured["root"]) / (role + "-capture.json"), captured)
     video.write_json(out / (role + "-finished.json"), {"finished": video.stamp()})
     passed = all(video.peer_completed(peer) for peer in captured["peers"])
@@ -250,9 +253,10 @@ def move_paths(value, original, local, key=""):
 def pack(request_path):
     request = read(request_path)
     root = Path(request["out"])
-    archive = root.with_suffix(".tar")
+    archive = root.with_suffix(".tgz")
     run_name = scene_runs(scene(str(Path(request["box"]["repo"]) / request["scene_relative"])))[request["run_index"]].get("name", "run" + str(request["run_index"]))
-    with tarfile.open(archive, "w") as output:
+    # A twenty-minute fight's tick history is mostly repeated hashes; compressed, the player's files cross the relay box's link faster.
+    with tarfile.open(archive, "w:gz", compresslevel=6) as output:
         for directory, folders, files in os.walk(root, followlinks=False):
             other = "joiner" if request["role"] == "host" else "host"
             folders[:] = [name for name in folders if name not in ("runtime", other + "-stage")
@@ -275,7 +279,7 @@ def unpack(archive, out):
             if not member.isfile() or not target.is_relative_to(out) or "runtime" in Path(member.name).parts:
                 raise ValueError("collected file escapes the capture or contains a runtime")
             if target.exists():
-                raise ValueError("collected file would overwrite another player's evidence")
+                raise ValueError("collected file would overwrite another player's evidence: " + member.name)
             target.parent.mkdir(parents=True, exist_ok=True)
             with source.extractfile(member) as stream, target.open("wb") as destination:
                 import shutil
@@ -388,7 +392,7 @@ def collect_player(out, name, role, player):
     log.close()
     result = ssh(box, [box["python"], tool, "--pack", remote], check=True, capture_output=True, text=True)
     package = json.loads(result.stdout)
-    archive = out / "commands" / (name + "-" + role + ".tar")
+    archive = out / "commands" / (name + "-" + role + ".tgz")
     copy_file(box, archive, package["path"], download=True)
     if video.file_evidence(archive).get("sha256") != package["sha256"]:
         raise ValueError("collected player files differ from their box")
@@ -456,9 +460,8 @@ def capture_scene(args):
             for peer in captured["peers"]:
                 peer.update(topology="spread", proof=check["passed"])
             captured["repo"] = str(repo)
-            # Each player brought its own history; the fight is judged once over both.
-            if {**document, **run}.get("fight_hash_gate"):
-                video.fight_hash_gate({**document, **run}, captured)
+            # Each player brought its own history; the gates that compare players run once over both, as on one box.
+            video.feel_probes({**document, **run}, captured, source)
             video.review(document, captured, out / name)
             video.write_json(out / "capture.json", capture)
         except Exception as error:

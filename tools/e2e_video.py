@@ -178,9 +178,11 @@ def retained_footprint(capture_run, root, limit):
     return capture_run["retained"]
 
 
-def finish_run(scenario, run, captured, source, options):
+def finish_run(scenario, run, captured, source, options, shared_gates=True):
     """A run's verdict first, whatever its footprint; then its transients are retired and the retained set is measured."""
-    feel_probes({**scenario, **run}, captured, source)
+    # A spread half holds one player; the collector judges the gates that compare players once both are home.
+    if shared_gates:
+        feel_probes({**scenario, **run}, captured, source)
     render(captured, options.fps, options.sheet_every)
     if not scenario.get('preserve_evidence'):
         retire_transients(captured)
@@ -2791,14 +2793,9 @@ def native_behavior(root, spec):
 
 
 def fight_hash_gate(run, capture):
-    """Judge the fight over every player's history; a spread half keeps its own player's copy and the collector judges both."""
+    """Judge the fight once over every named player's history."""
     from e2e.fight_hashes import compare_fight_hashes
     spec = run['fight_hash_gate']
-    roles = sorted({peer['peer'] for peer in capture['peers']})
-    if not set(spec['peers']) <= set(roles):
-        for role in roles:
-            write_json(Path(capture['root']) / f'fight-hashes-{role}.json', compare_fight_hashes(Path(capture['root']), {**spec, 'peers': [role]}))
-        return None
     result = compare_fight_hashes(Path(capture['root']), spec)
     write_json(Path(capture['root']) / 'fight-hashes.json', result)
     for peer in capture['peers']:

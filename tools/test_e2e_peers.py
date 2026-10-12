@@ -176,14 +176,19 @@ class SpreadFightTest(unittest.TestCase):
         run = self.root / role / "run0"
         probe = run / f"{role}-stage" / "probe"
         probe.mkdir(parents=True)
+        (run / role).mkdir()
         subsystems = {name: "h-" + name for name in CORE | {"controller", "scene", "terrain", "sim_rng", "lua_state"}}
         rows = [dict(round=7, tick=tick, phase="live", paused=False, sim_gated=True,
                      subsystems={**subsystems, "actors": actors if tick == 4 else "a1"}) for tick in range(1, 6)]
         (probe / "ticks.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
-        peers.video.feel_probes(self.GATE, {"root": str(run), "peers": [{"peer": role}]}, {})
-        archive = self.root / f"{role}.tar"
+        # A half finishes its own player only; play() leaves the shared gates to the collector.
+        peers.video.finish_run({"name": "fight", **self.GATE}, {}, {"name": "run0", "root": str(run), "peers": []}, {},
+                               SimpleNamespace(fps=30, sheet_every=15, scratch_root=self.root, scratch_limit_bytes=1 << 40),
+                               shared_gates=False)
+        (run / "review.json").rename(run / (role + "-review.json"))
+        archive = self.root / f"{role}.tgz"
         import tarfile
-        with tarfile.open(archive, "w") as output:
+        with tarfile.open(archive, "w:gz") as output:
             for path in sorted(run.rglob("*")):
                 if path.is_file():
                     output.add(path, arcname="run0/" + path.relative_to(run).as_posix(), recursive=False)
@@ -194,12 +199,13 @@ class SpreadFightTest(unittest.TestCase):
         out.mkdir()
         for archive in (self.half("host"), self.half("joiner", joiner_actors)):
             peers.unpack(archive, out)
-        capture = {"root": str(out / "run0"), "peers": [{"peer": "host"}, {"peer": "joiner"}]}
-        return out, capture, peers.video.fight_hash_gate(self.GATE, capture)
+        capture = {"root": str(out / "run0"), "peers": [{"peer": role, "root": str(out / "run0" / role)} for role in ("host", "joiner")]}
+        peers.video.feel_probes(self.GATE, capture, {})
+        return out, capture, json.loads((out / "run0" / "fight-hashes.json").read_text(encoding="utf-8"))
 
     def test_both_players_histories_are_kept_and_judged_once(self):
         out, capture, result = self.collect("a1")
-        self.assertTrue((out / "run0" / "fight-hashes-host.json").is_file() and (out / "run0" / "fight-hashes-joiner.json").is_file())
+        self.assertEqual(sorted(path.name for path in (out / "run0").glob("fight-hashes*.json")), ["fight-hashes.json"])
         self.assertEqual(result["status"], "PASS", result["errors"])
         self.assertEqual(sorted(result["coverage"]), ["host", "joiner"])
         self.assertTrue(all(peer["gates"]["fight-hashes"]["status"] == "PASS" for peer in capture["peers"]))
@@ -208,6 +214,22 @@ class SpreadFightTest(unittest.TestCase):
         _, _, result = self.collect("a2")
         self.assertEqual(result["status"], "FAIL")
         self.assertEqual(result["first_difference"]["tick"], 4)
+
+    def test_one_players_history_alone_cannot_pass(self):
+        out = self.root / "collected"
+        out.mkdir()
+        peers.unpack(self.half("host"), out)
+        capture = {"root": str(out / "run0"), "peers": [{"peer": "host", "root": str(out / "run0" / "host")}]}
+        peers.video.feel_probes(self.GATE, capture, {})
+        self.assertEqual(capture["peers"][0]["gates"]["fight-hashes"]["status"], "FAIL")
+
+    def test_a_second_copy_of_a_file_is_refused_by_name(self):
+        out = self.root / "collected"
+        out.mkdir()
+        archive = self.half("host")
+        peers.unpack(archive, out)
+        with self.assertRaisesRegex(ValueError, "would overwrite another player's evidence: run0/host"):
+            peers.unpack(archive, out)
 
 
 if __name__ == "__main__":
