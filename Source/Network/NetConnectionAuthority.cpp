@@ -362,9 +362,10 @@ namespace RTE {
 		return !m_Ended && !NetDirectoryBudget::SessionEnded(m_BaseUrl, m_InstallKey, m_SessionId, nowMs) &&
 		    NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, "general", nowMs);
 	}
-	bool NetConnectionAuthority::CanSeatRequest(uint64_t nowMs, bool queryOnly) {
-		while (!m_SeatRequests.empty() && nowMs >= m_SeatRequests.front() && nowMs - m_SeatRequests.front() >= 60000) m_SeatRequests.pop_front();
-		return CanRequest(nowMs) && m_SeatRequests.size() < 12 && (queryOnly || nowMs >= m_NextSeatRequestMs);
+	bool NetConnectionAuthority::CanSeatRequest(uint64_t nowMs, bool decisionRequest) {
+		// Leave a delivery margin before spending a request from the next minute.
+		while (!m_SeatRequests.empty() && nowMs >= m_SeatRequests.front() && nowMs - m_SeatRequests.front() >= 60100) m_SeatRequests.pop_front();
+		return CanRequest(nowMs) && m_SeatRequests.size() < 12 && (decisionRequest || nowMs >= m_NextSeatRequestMs);
 	}
 	uint64_t NetConnectionAuthority::FailedReply(const NetHttpClient::Response& response, NetDirectoryRetry& retry, uint64_t nowMs, const char* path) {
 		const uint64_t until = retry.Failed(nowMs, response.statusCode, response.body, response.retryAfter, path);
@@ -573,7 +574,7 @@ namespace RTE {
 		if (m_FrameTie || m_FrameTieFinalQuerySent || m_FrameTieReply.state == NetFrameTieReply::State::Decided) return;
 		const bool finalQuery = m_FrameTieBoundStartMs && steadyMs >= *m_FrameTieBoundStartMs + c_NetFrameTieDeadlineMs;
 		if (m_FrameTieCheckedIn && !finalQuery && m_SeatRequests.size() >= 11) return;
-		if (steadyMs < m_NextFrameTie || steadyMs < m_FrameTieRetry.nextMs || !CanSeatRequest(steadyMs, m_FrameTieCheckedIn)) return;
+		if (steadyMs < m_NextFrameTie || steadyMs < m_FrameTieRetry.nextMs || !CanSeatRequest(steadyMs, true)) return;
 		auto request = *m_FrameTieRequest;
 		// Retry an unacknowledged check-in, then only query the frozen tie.
 		// Keep the original request as the identity of this asynchronous operation.
@@ -627,7 +628,7 @@ namespace RTE {
 				} catch (const json::exception&) { m_NextHostChange = FailedReply(response, m_HostChangeRetry, steadyMs, "host-change"); }
 			} else m_NextHostChange = FailedReply(response, m_HostChangeRetry, steadyMs, "host-change");
 		}
-		if (!m_HostChange && m_HostChangeReply.state != NetHostChangeReply::State::Decided && steadyMs >= m_NextHostChange && steadyMs >= m_HostChangeRetry.nextMs && CanSeatRequest(steadyMs)) {
+		if (!m_HostChange && m_HostChangeReply.state != NetHostChangeReply::State::Decided && steadyMs >= m_NextHostChange && steadyMs >= m_HostChangeRetry.nextMs && CanSeatRequest(steadyMs, true)) {
 			const std::string body = SignedSeatRequest("host-change", unixSeconds, &*m_HostChangeRequest);
 			if (!body.empty()) { m_HostChange = StartRequest("POST", body); if (m_HostChange) { m_SeatRequests.push_back(steadyMs); m_NextSeatRequestMs = steadyMs + c_SeatRequestIntervalMs; } }
 		}
@@ -652,7 +653,8 @@ namespace RTE {
 		}
 		ObserveNetwork(steadyMs, unixSeconds);
 		if (m_Suspended) { PollBootstrap(steadyMs); return; }
-		PollOperations(steadyMs); PollBootstrap(steadyMs); PollCheckIn(steadyMs, unixSeconds); PollHostChange(steadyMs, unixSeconds); PollFrameTie(steadyMs, unixSeconds);
+		// Pending frame and host decisions use the request budget before routine check-ins.
+		PollOperations(steadyMs); PollBootstrap(steadyMs); PollHostChange(steadyMs, unixSeconds); PollFrameTie(steadyMs, unixSeconds); PollCheckIn(steadyMs, unixSeconds);
 	}
 
 	void NetConnectionAuthority::ObserveNetwork(uint64_t steadyMs, uint64_t unixSeconds) {

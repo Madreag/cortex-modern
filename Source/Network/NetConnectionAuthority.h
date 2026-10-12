@@ -206,7 +206,7 @@ namespace RTE {
 		uint64_t m_NextSeatRequestMs = 0, m_LastUpdateMs = 0;
 		std::deque<uint64_t> m_SeatRequests;
 		uint64_t FailedReply(const NetHttpClient::Response& response, NetDirectoryRetry& retry, uint64_t nowMs, const char* path);
-		bool CanSeatRequest(uint64_t nowMs, bool queryOnly = false);
+		bool CanSeatRequest(uint64_t nowMs, bool decisionRequest = false);
 		bool CanRequest(uint64_t nowMs) const;
 		uint32_t m_NetworkRevision = 0;
 		uint32_t m_NativeRouteRevision = 0;
