@@ -190,6 +190,18 @@ def finish_run(scenario, run, captured, source, options, shared_gates=True):
     return review(scenario, captured, Path(captured["root"]))
 
 
+# A watched window draws like a player's own game: the game's default vsync, not the headless render cap.
+HEADED_SETTINGS = {"EnableVSync": 1}
+
+
+def headed_environment(environment):
+    if sys.platform == "win32":
+        raise ValueError("a headed scene player runs on a POSIX box; Windows players run in their session task")
+    visible = {key: value for key, value in environment.items() if key != "CCCP_HEADLESS"}
+    visible["CC_TEST_VISIBLE_WINDOW"] = "1"
+    return visible
+
+
 def source_evidence(repo):
     package = Path(repo) / "MANIFEST.json"
     if not (Path(repo) / ".git").exists() and package.is_file():
@@ -1527,6 +1539,19 @@ HORIZON_REPORT = "horizon_path_grid.json"
 HORIZON_WAIT = re.compile(r"(?m)^\[horizon-path\] wait_us=(\d+) tick=(\d+)[^\n]*")
 
 
+def presented_hz(probe_path):
+    """Frames the player drew per second over its probe's live game; look-around input moves once per drawn frame."""
+    try:
+        steps = json.loads(Path(probe_path).read_text(encoding="utf-8")).get("steps", [])
+    except (OSError, ValueError):
+        return None
+    live = [step["observed"] for step in steps if step.get("observed", {}).get("editing") is False
+            and isinstance(step["observed"].get("render"), int) and isinstance(step["observed"].get("at_ms"), (int, float))]
+    if len(live) < 2 or live[-1]["at_ms"] <= live[0]["at_ms"]:
+        return None
+    return round((live[-1]["render"] - live[0]["render"]) * 1000.0 / (live[-1]["at_ms"] - live[0]["at_ms"]), 1)
+
+
 def pathfinding_waits(peer_root):
     """The pathfinder's own horizon report and every positive grid wait line, as the player recorded them."""
     root = Path(peer_root)
@@ -2035,19 +2060,24 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
         if any(seed.get(key) for key in LOGIN_KEYS) and name not in private_menus:
             raise ValueError('a relay login must reach the Fixed menu through its private input stream')
         seed=public_settings(seed)
-        cap = render_cap_hz(getattr(options, "render_cap", 60))
-        arm = {"size": f"{seed['ResolutionX']}x{seed['ResolutionY']}", "settings": seed, "render_cap": cap}
+        headed = getattr(options, "headed", False)
+        cap = None if headed else render_cap_hz(getattr(options, "render_cap", 60))
+        arm = {"size": f"{seed['ResolutionX']}x{seed['ResolutionY']}", "settings": seed, "render_cap": cap,
+               "presentation": "headed" if headed else "headless"}
         if dry:
             runtime = peer_root / "runtime"
             if reference:
                 previous = staged.get(reference["peer"]) if reference["run"] == root.name else prior_peer(
                     getattr(options, "completed_runs", []), reference)
                 runtime = Path(previous["runtime"]) if previous else Path(out) / reference["run"] / reference["peer"] / "runtime"
-            args += ["-feel-render-settings", str(runtime / "Userdata/FeelRender.ini")]
+            if not headed:
+                args += ["-feel-render-settings", str(runtime / "Userdata/FeelRender.ini")]
             staged[name] = {"peer": name, "args": args, "runtime": str(runtime), **arm}
             continue
         stage.mkdir(parents=True, exist_ok=False)
         environment = stage_peer(scenario, peer, stage, tokens)
+        if headed:
+            environment = headed_environment(environment)
         if getattr(options, 'win_cause_log', False):
             from e2e.win_diagnostics import configure_environment
             environment = configure_environment(environment, peer_root, scenario['name'], name, root.name)
@@ -2076,17 +2106,22 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
             (Path(run_handle.out) / directory).mkdir(parents=True, exist_ok=False)
         seed_settings(run_handle, seed)
         render_path = Path(run_handle.cwd) / "Userdata/FeelRender.ini"
-        render_path.write_text(f"RenderCapHz = {cap}\n", encoding="utf-8")
-        render_args = ["-feel-render-settings", str(render_path)]
-        run_handle.argv.extend(render_args)
-        args += render_args
+        if headed:
+            seed_settings(run_handle, HEADED_SETTINGS)
+        else:
+            render_path.write_text(f"RenderCapHz = {cap}\n", encoding="utf-8")
+            render_args = ["-feel-render-settings", str(render_path)]
+            run_handle.argv.extend(render_args)
+            args += render_args
         runtime_manifest = Path(run_handle.out) / "runtime.json"
         if runtime_manifest.is_file():
             metadata = json.loads(runtime_manifest.read_text(encoding="utf-8"))
-            arm["settings"] = metadata["settings_overrides"] = {**metadata.get("settings_overrides", {}), **seed}
+            arm["settings"] = metadata["settings_overrides"] = {**metadata.get("settings_overrides", {}), **seed,
+                                                                **(HEADED_SETTINGS if headed else {})}
             metadata["settings_sha256"] = file_evidence(Path(run_handle.cwd) / "Userdata/Settings.ini")["sha256"]
-            metadata["feel_render_settings"] = file_evidence(render_path)
+            metadata["feel_render_settings"] = None if headed else file_evidence(render_path)
             metadata["render_cap"] = cap
+            metadata["presentation"] = arm["presentation"]
             write_json(runtime_manifest, metadata)
         # Fixture modules a scenario needs land in the private runtime, never in the repository.
         for entry in public_value(substitute(peer.get("runtime_files", []), tokens),private_values):
@@ -2324,7 +2359,8 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                           "launch": str(peer_root / "launch.json"),
                           "error": records.get(name, {}).get("error"),
                           "manifest": read_manifest(video_dir), "index": read_index(video_dir),
-                          "menu_script_failures": menu_script_failures(peer_root), **staged[name]})
+                          "menu_script_failures": menu_script_failures(peer_root),
+                          "presented_hz": presented_hz(Path(staged[name]["probe_dir"]) / "net-ui-result.json"), **staged[name]})
     fullstate = None
     if getattr(options, "fullstate_every", 0) and len(peers) > 1:
         first = peers[0]["name"]
@@ -2997,6 +3033,8 @@ def main():
     parser.add_argument("--setting", action="append", type=setting_pair, default=[], metavar="KEY=VALUE",
                         help="seed every peer after size and scenario settings; repeatable, last value wins")
     parser.add_argument("--render-cap", type=render_cap_hz, default=60, metavar="HZ", help="headless render cap: 0 or 60 (default)")
+    parser.add_argument("--headed", action="store_true",
+                        help="POSIX: every player draws in a visible window at the game's default vsync instead of the headless render cap")
     parser.add_argument("--dry-run", action="store_true", help="print planned settings and engine arguments without creating files or starting services")
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
     parser.add_argument("--port", type=int, help=f"the run block base; defaults to the scenario's port_base inside {PORT_LO}-{PORT_HI}")
@@ -3062,6 +3100,8 @@ def main():
         parser.error(f"this driver owns ports {PORT_LO}-{PORT_HI}")
     if os.environ.get("CCCP_HEADLESS", "1") != "1":
         parser.error("CCCP_HEADLESS must stay 1: nothing this driver launches may reach a desktop")
+    if options.headed and (sys.platform == "win32" or spread.enabled(options) or options.host_box):
+        parser.error("--headed draws local POSIX players in their own visible windows")
 
     scenario = load_scenario(options.scenario)
     if scenario.get("cross_machine") and not options.peer:
@@ -3116,7 +3156,8 @@ def main():
     exe = file_evidence(capture_binary(options.repo))
     capture = {"schema": 1, "scenario": scenario["name"], "repo": str(Path(options.repo).resolve()), "out": str(out), "platform": sys.platform,
                "fps": options.fps, "size": options.size, "runs": [], "source": source, "exe": exe,
-               "settings": dict(options.setting), "render_cap": options.render_cap,
+               "settings": dict(options.setting), "render_cap": None if options.headed else options.render_cap,
+               "presentation": "headed" if options.headed else "headless",
                "scratch_root": str(options.scratch_root), "scratch_limit_bytes": options.scratch_limit_bytes,
                "started": stamp(), "command": [sys.executable, *sys.argv], "scenario_definition": scenario}
     capture["topology"] = ("spread" if options.host_box else spread.topology(options, max(len(run.get("peers") or scenario.get("peers") or []) for run in runs)))

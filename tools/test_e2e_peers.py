@@ -242,5 +242,41 @@ class SpreadFightTest(unittest.TestCase):
             peers.unpack(archive, out)
 
 
+class JoinerBoxTest(unittest.TestCase):
+    """A joiner plays in a visible window that draws like a player's own game."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.boxes = self.root / "boxes.json"
+        self.boxes.write_text(json.dumps({"boxes": [
+            dict(name="Ally", os="win32", hostname="Erol-Ally7", ssh="ally-ts", repo="C:/tree", scratch="C:/mx", python="python"),
+            dict(name="Mac", os="darwin", hostname="Erol-Mac", ssh="bro", repo="/mac/tree", scratch="/mac/mx", python="/usr/bin/python3",
+                 binary="build-gcc/CortexCommand"),
+            dict(name="Linux", os="linux", hostname="ubuntu", ssh="3090-ts", repo="/linux/tree", scratch="/linux/mx",
+                 python="/usr/bin/python3", binary="build-gcc/CortexCommand")]}))
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_headed_player_environment(self):
+        environment = peers.video.headed_environment({"CCCP_HEADLESS": "1", "CC_TEST_READBACK_TIMING": "1"})
+        self.assertEqual(environment, {"CC_TEST_READBACK_TIMING": "1", "CC_TEST_VISIBLE_WINDOW": "1"})
+        self.assertEqual(peers.video.HEADED_SETTINGS, {"EnableVSync": 1})
+
+    def test_headed_players_keep_the_games_vsync_instead_of_the_headless_cap(self):
+        scenario = peers.video.load_scenario("fight15-s10")
+        options = SimpleNamespace(repo=Path(peers.__file__).resolve().parents[1], size=None, port=peers.video.PORT_LO, fps=30,
+                                  setting=[], render_cap=60, fullstate_every=0, dry_run=True, tokens={})
+        for headed, flag in ((False, True), (True, False)):
+            options.headed = headed
+            staged = peers.video._run_one(options, scenario, peers.scene_runs(scenario)[0], 0, self.root / str(headed))
+            for peer in staged["peers"]:
+                self.assertEqual("-feel-render-settings" in peer["args"], flag)
+                self.assertEqual(peer["presentation"], "headed" if headed else "headless")
+                self.assertEqual(peer["render_cap"], None if headed else 60)
+
+
+
 if __name__ == "__main__":
     unittest.main()

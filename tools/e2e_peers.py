@@ -6,7 +6,8 @@
 
 Box facts stay outside the game tree. Each box supplies name, ssh, os, hostname,
 repo, scratch, python and build_receipt. Windows also supplies session_dir and
-task; the Mac supplies binary. Builds come from each box's own checkout.
+task; the Mac supplies binary and plays in a visible window. Builds come from
+each box's own checkout.
 """
 from __future__ import annotations
 
@@ -103,21 +104,16 @@ class PlayerRun:
     def make_run(self, repo, args, out, timeout, env=None, **kwargs):
         environment = dict(env or {})
         if self.request["box"]["os"] == "darwin":
-            environment.pop("CCCP_HEADLESS", None)
-            environment.update(CC_TEST_VISIBLE_WINDOW="1", CCCP_POSIX_HOP="ssh")
+            # A Mac engine started from a GUI job asks for local network consent; the ssh hop starts it outside that job.
+            environment.update(CCCP_POSIX_HOP="ssh")
         run = video.make_run(repo, args, out, timeout, env=environment, **kwargs)
         run.record.update(box=self.request["box"]["name"], engine_hostname=socket.gethostname(), topology="spread", proof=False,
                           source_commit=self.request["commit"], scene_sha256=self.request["scene_sha256"])
+        if self.request["box"]["os"] == "darwin":
+            run.record.update(headed=True, headless_render_settings_applied=False)
         start = run.start
 
         def start_player():
-            if self.request["box"]["os"] == "darwin":
-                # The headed player's window uses the game's normal presentation settings.
-                flag = "-feel-render-settings"
-                if flag in run.argv:
-                    position = run.argv.index(flag)
-                    del run.argv[position:position + 2]
-                run.record.update(headed=True, headless_render_settings_applied=False)
             result = start()
             video.write_json(self.started, {"peer": self.request["role"], "box": self.request["box"]["name"],
                                            "engine_hostname": socket.gethostname(), "pid": run.record.get("pid")})
@@ -162,8 +158,9 @@ def play(request_path):
     run["peers"] = [peer for peer in run.get("peers", document.get("peers", [])) if peer["name"] == role]
     local_scene = copy.deepcopy(document)
     local_scene["checklist"] = [item for item in document.get("checklist", []) if not item.get("peer") or item["peer"] == role]
+    headed = request["box"]["os"] == "darwin"
     options = SimpleNamespace(repo=Path(request["box"]["repo"]), size=None, port=request["port"], fps=request["fps"],
-                              setting=[], render_cap=60, fullstate_every=0, sheet_every=request["sheet_every"],
+                              setting=[], render_cap=60, headed=headed, fullstate_every=0, sheet_every=request["sheet_every"],
                               tokens={"PROBE_DIR_" + other: out / name / (other + "-stage/probe")
                                       for other in ("host", "joiner")},
                               resume_tokens={}, service_tokens={}, completed_runs=[],
@@ -181,7 +178,7 @@ def play(request_path):
         peer["record"].update({key: record.get(key) for key in ("box", "engine_hostname", "source_commit", "scene_sha256")})
         peer.update(box=request["box"]["name"], box_hostname=request["box"]["hostname"],
                     native_source=source, native_exe=executable, build_receipt=receipt)
-        if request["box"]["os"] == "darwin":
+        if headed:
             peer.update(render_cap=None, presentation="headed")
     video.finish_run(local_scene, run, captured, source, options, shared_gates=False)
     (Path(captured["root"]) / "review.json").rename(Path(captured["root"]) / (role + "-review.json"))
