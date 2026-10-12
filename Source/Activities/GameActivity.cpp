@@ -4822,6 +4822,39 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 			check("single_player_emitter_keeps_its_clock", single.Create(source) == 0 && single.GetLastEmitTimerElapsedSimMS() == oldElapsed);
 		}
 		ScenarioRunner::SetLockstepCoordinator(&coordinator);
+	} else if (row == "shield-deposit") {
+		// Changing to the previous device puts the off-hand device at the front of the inventory before the shield is taken.
+		const auto* soldierPreset = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Soldier Light", "Coalition.rte"));
+		const auto* riflePreset = dynamic_cast<const HeldDevice*>(g_PresetMan.GetEntityPreset("HDFirearm", "Assault Rifle", "Coalition.rte"));
+		const auto* grenadePreset = dynamic_cast<const HeldDevice*>(g_PresetMan.GetEntityPreset("TDExplosive", "Frag Grenade", "Coalition.rte"));
+		const auto* shieldPreset = dynamic_cast<const HeldDevice*>(g_PresetMan.GetEntityPreset("HeldDevice", "Riot Shield", "Base.rte"));
+		if (!check("fixture_presets_loaded", soldierPreset && riflePreset && grenadePreset && shieldPreset)) return false;
+		auto* soldier = static_cast<AHuman*>(soldierPreset->Clone());
+		auto* rifle = static_cast<HeldDevice*>(riflePreset->Clone());
+		auto* grenade = static_cast<HeldDevice*>(grenadePreset->Clone());
+		auto* shield = static_cast<HeldDevice*>(shieldPreset->Clone());
+		soldier->SetTeam(TeamOne); soldier->SetPos(Vector(120, 120));
+		while (soldier->GetInventorySize() > 0) delete soldier->RemoveInventoryItemAtIndex(0);
+		if (!check("fixture_has_both_arms", soldier->GetFGArm() && soldier->GetBGArm())) { delete soldier; delete rifle; delete grenade; delete shield; return false; }
+		soldier->GetFGArm()->SetHeldDevice(nullptr);
+		soldier->GetBGArm()->SetHeldDevice(rifle);
+		soldier->AddToInventoryBack(grenade);
+		soldier->AddToInventoryBack(shield);
+		check("fixture_rifle_is_not_an_off_hand_device", !rifle->IsShield() && !rifle->IsDualWieldable() && (shield->IsShield() || shield->IsDualWieldable()));
+		check("off_hand_change_reports_equipped", soldier->EquipShieldInBGArm(true));
+		const std::deque<MovableObject*>& inventory = *soldier->GetInventory();
+		const bool shieldInInventory = std::find(inventory.begin(), inventory.end(), shield) != inventory.end();
+		const bool grenadeInInventory = std::find(inventory.begin(), inventory.end(), grenade) != inventory.end();
+		check("off_hand_holds_the_shield", soldier->GetBGArm()->GetHeldDevice() == shield);
+		check("held_shield_leaves_the_inventory", !shieldInInventory);
+		check("other_items_stay_in_the_inventory", grenadeInInventory);
+		check("deposited_device_is_first", inventory.size() == 2 && inventory.front() == rifle && inventory.back() == grenade);
+		// Each object has one owner left, so the fixture frees each once.
+		for (int index = soldier->GetInventorySize() - 1; index >= 0; --index) {
+			if (inventory[index] == soldier->GetBGArm()->GetHeldDevice()) soldier->RemoveInventoryItemAtIndex(index);
+		}
+		if (!grenadeInInventory) delete grenade;
+		delete soldier;
 	} else return check("known_row", false);
 	return passed;
 }
