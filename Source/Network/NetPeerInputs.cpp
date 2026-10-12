@@ -34,46 +34,75 @@ namespace RTE {
 		}
 	}
 
+	bool NetLockstepCoordinator::PeerReadsInputLive(uint8_t peer, uint64_t nowMs) const {
+		const auto progress = m_PeerOwnReceiptProgress.find(peer);
+		if (progress == m_PeerOwnReceiptProgress.end()) return false;
+		uint32_t rtt = 0;
+		const auto [wire, route] = PeerFrameRoute(peer);
+		if (wire && wire->IsPeerPingMeasured(route)) rtt = wire->GetPeerPingMs(route);
+		const uint64_t retryMs = std::clamp<uint64_t>(rtt + static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)), 50, 1000);
+		return nowMs < progress->second.advancedAtMs || nowMs - progress->second.advancedAtMs < retryMs;
+	}
+
 	void NetLockstepCoordinator::SendPeerInput(const NetLockstepFrame& frame) {
 		if (!UsesPeerFrameGroups()) return;
-		std::vector<std::vector<uint8_t>> inputs;
 		NetLockstepFrame current = frame;
 		current.priorWindow.clear();
-		std::vector<uint8_t> encoded;
-		if (!NetLockstepCodec::EncodeRecoveryInput(current, encoded)) return;
-		size_t total = 5 + encoded.size();
-		inputs.push_back(std::move(encoded));
-		for (uint32_t back = 1; back < ConfiguredWindowTicks() && frame.targetFrame >= back; ++back) {
-			NetLockstepFrame prior;
-			if (!FindLocalInput(frame.targetFrame - back, prior)) break;
-			prior.priorWindow.clear();
-			if (!NetLockstepCodec::EncodeRecoveryInput(prior, encoded) || total + 4 + encoded.size() > NetLockstepCodec::c_InputWindowByteCap) break;
-			total += 4 + encoded.size();
-			inputs.push_back(std::move(encoded));
+		std::vector<uint8_t> newest;
+		if (!NetLockstepCodec::EncodeRecoveryInput(current, newest)) return;
+		// A receiver is sent the ticks it has not receipted; a live reader never gets a tick twice on the reliable lane.
+		std::map<uint64_t, std::vector<uint8_t>> receivers;
+		const auto receipts = m_PeerInputReceipts.find(m_Config.localPeerId);
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+			if (peer == m_Config.localPeerId || m_RemovedPeers.contains(peer) || !PeerWantsLiveInput(peer)) continue;
+			uint64_t oldest = 0;
+			if (receipts != m_PeerInputReceipts.end())
+				if (const auto receipt = receipts->second.find(peer); receipt != receipts->second.end()) oldest = receipt->second;
+			if (const auto sent = m_PeerInputReliableThrough.find(peer); sent != m_PeerInputReliableThrough.end() && PeerReadsInputLive(peer, m_TimingNowMs))
+				oldest = std::max(oldest, sent->second + 1);
+			receivers[std::min(oldest, frame.targetFrame)].push_back(peer);
 		}
-		std::vector<uint8_t> body{static_cast<uint8_t>(inputs.size())};
-		for (auto input = inputs.rbegin(); input != inputs.rend(); ++input) {
-			PutSize(body, static_cast<uint32_t>(input->size()));
-			body.insert(body.end(), input->begin(), input->end());
-		}
-		// Repeated ticks compress together so jitter cover does not become a relay backlog.
-		if (body.size() > 1024) {
-			std::vector<uint8_t> compressed(LZ4_compressBound(static_cast<int>(body.size())));
-			const int size = LZ4_compress_default(reinterpret_cast<const char*>(body.data()), reinterpret_cast<char*>(compressed.data()), static_cast<int>(body.size()), static_cast<int>(compressed.size()));
-			if (size > 0 && static_cast<size_t>(size) + 5 < body.size()) {
-				std::vector<uint8_t> packed{0}; PutSize(packed, static_cast<uint32_t>(body.size()));
-				packed.insert(packed.end(), compressed.begin(), compressed.begin() + size); body = std::move(packed);
+		for (const auto& [oldest, peers]: receivers) {
+			std::vector<std::vector<uint8_t>> inputs{newest};
+			size_t total = 5 + newest.size();
+			for (uint32_t back = 1; back < ConfiguredWindowTicks() && frame.targetFrame >= back && frame.targetFrame - back >= oldest; ++back) {
+				NetLockstepFrame prior;
+				std::vector<uint8_t> encoded;
+				if (!FindLocalInput(frame.targetFrame - back, prior)) break;
+				prior.priorWindow.clear();
+				if (!NetLockstepCodec::EncodeRecoveryInput(prior, encoded) || total + 4 + encoded.size() > NetLockstepCodec::c_InputWindowByteCap) break;
+				total += 4 + encoded.size();
+				inputs.push_back(std::move(encoded));
 			}
-		}
-		for (size_t offset = 0; offset < body.size(); offset += NetHostMigrationCodec::c_ChunkBytes) {
-			auto message = PeerFrameMessage(NetHostMigrationMessageType::PeerInput);
-			message.frame = frame.targetFrame;
-			message.totalBytes = static_cast<uint32_t>(body.size());
-			message.offset = static_cast<uint32_t>(offset);
-			const size_t end = std::min(body.size(), offset + NetHostMigrationCodec::c_ChunkBytes);
-			message.bytes.assign(body.begin() + offset, body.begin() + end);
+			std::vector<uint8_t> body{static_cast<uint8_t>(inputs.size())};
+			for (auto input = inputs.rbegin(); input != inputs.rend(); ++input) {
+				PutSize(body, static_cast<uint32_t>(input->size()));
+				body.insert(body.end(), input->begin(), input->end());
+			}
+			// Repeated ticks compress together so jitter cover does not become a relay backlog.
+			if (body.size() > 1024) {
+				std::vector<uint8_t> compressed(LZ4_compressBound(static_cast<int>(body.size())));
+				const int size = LZ4_compress_default(reinterpret_cast<const char*>(body.data()), reinterpret_cast<char*>(compressed.data()), static_cast<int>(body.size()), static_cast<int>(compressed.size()));
+				if (size > 0 && static_cast<size_t>(size) + 5 < body.size()) {
+					std::vector<uint8_t> packed{0}; PutSize(packed, static_cast<uint32_t>(body.size()));
+					packed.insert(packed.end(), compressed.begin(), compressed.begin() + size); body = std::move(packed);
+				}
+			}
 			// Repeated input windows repair missing small messages without delaying later inputs.
-			SendPeerFrameMessage(std::move(message), body.size() <= 4096 ? NetTransportLane::InputUnreliable : NetTransportLane::ControlReliable);
+			const NetTransportLane lane = body.size() <= 4096 ? NetTransportLane::InputUnreliable : NetTransportLane::ControlReliable;
+			for (uint8_t peer: peers) {
+				bool delivered = true;
+				for (size_t offset = 0; offset < body.size(); offset += NetHostMigrationCodec::c_ChunkBytes) {
+					auto message = PeerFrameMessage(NetHostMigrationMessageType::PeerInput);
+					message.frame = frame.targetFrame;
+					message.totalBytes = static_cast<uint32_t>(body.size());
+					message.offset = static_cast<uint32_t>(offset);
+					const size_t end = std::min(body.size(), offset + NetHostMigrationCodec::c_ChunkBytes);
+					message.bytes.assign(body.begin() + offset, body.begin() + end);
+					delivered = SendPeerFrameMessage(std::move(message), lane, peer) && delivered;
+				}
+				if (lane == NetTransportLane::ControlReliable && delivered) m_PeerInputReliableThrough[peer] = frame.targetFrame;
+			}
 		}
 		m_PeerSourceInputs[frame.targetFrame][m_Config.localPeerId] = std::move(current);
 		m_PeerInputSentAtMs.try_emplace(frame.targetFrame, m_TimingNowMs);
@@ -155,7 +184,7 @@ namespace RTE {
 
 	void NetLockstepCoordinator::RemovePeerFrameSeat(uint8_t peer, uint64_t frame) {
 		if (!UsesPeerFrameGroups()) return;
-		m_PeerOwnReceiptProgress.erase(peer); m_PeerReceiptDelaySamples.erase(peer);
+		m_PeerOwnReceiptProgress.erase(peer); m_PeerReceiptDelaySamples.erase(peer); m_PeerInputReliableThrough.erase(peer);
 		m_PeerTailSendRanges.erase(peer); m_PeerTailOutgoing.erase(peer);
 		m_PeerTailLastSentMs.erase(peer); m_PeerTailResendFrames.erase(peer);
 		for (auto& [owner, receipts]: m_PeerInputReceipts) receipts.erase(peer);

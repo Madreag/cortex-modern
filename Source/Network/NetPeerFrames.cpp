@@ -51,10 +51,7 @@ namespace RTE {
 		const auto back = m_ReclaimTransactions.find(m_Config.localPeerId);
 		const bool details = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && message.type == NetHostMigrationMessageType::PeerInput &&
 		    back != m_ReclaimTransactions.end() && message.frame > back->second.neutralThroughFrame && message.frame <= back->second.neutralThroughFrame + 3;
-		const auto wantsInput = [&](uint8_t peer) {
-			const auto held = m_PeerBridges.find(peer);
-			return !liveInput || held == m_PeerBridges.end() || !held->second.committedHold || held->second.returnFrame.has_value();
-		};
+		const auto wantsInput = [&](uint8_t peer) { return !liveInput || PeerWantsLiveInput(peer); };
 		if (m_Config.peerSessionLinks) {
 			bool sent = false;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
@@ -83,6 +80,11 @@ namespace RTE {
 		if (m_Transport) for (const auto& [connection, peer]: PeerPrimaryBindings())
 			if ((onlyPeer == 0 || onlyPeer == peer) && wantsInput(peer) && !sent.contains(peer) && m_Transport->Send(connection, lane, bytes)) sent.insert(peer);
 		return !sent.empty();
+	}
+
+	bool NetLockstepCoordinator::PeerWantsLiveInput(uint8_t peer) const {
+		const auto held = m_PeerBridges.find(peer);
+		return held == m_PeerBridges.end() || !held->second.committedHold || held->second.returnFrame.has_value();
 	}
 
 	bool NetLockstepCoordinator::PeerGroupHasAuthority(uint32_t voters) const {
