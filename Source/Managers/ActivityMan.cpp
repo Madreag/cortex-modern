@@ -801,6 +801,8 @@ struct ActivityMan::PreparedAutosave {
 		CheckpointWriter::CacheScope cache(nullptr);
 		BitmapPixelCaptureScope pixels(true);
 		AudioMan::SoundCheckpointSaveScope carried(false, false);
+		// The sounds the saved objects write are the ones whose voices keep their owners.
+		AudioMan::SoundCheckpointSaveScope::Lend soundNotes(&carried);
 		const uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		const Scene* const sourceScene = dynamic_cast<const Scene*>(CheckpointNativeSnapshot::Source(g_SceneMan.GetScene()));
 		const auto* sourceActivity = dynamic_cast<const GAScripted*>(CheckpointNativeSnapshot::Source(g_ActivityMan.GetActivity()));
