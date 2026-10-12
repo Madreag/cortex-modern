@@ -98,7 +98,8 @@ namespace RTE {
 			uint32_t delayedChatSends = 0;
 			// Times each of seat 1's input ticks crossed each lane, and the bytes it took.
 			bool countInputs = false;
-			uint8_t dropReceiptsFrom = 0;
+			uint8_t dropReceiptsFrom = 0, dropInputsFrom = 0;
+			bool tieAnswersHeld = false;
 			std::map<uint64_t, unsigned> reliableInputTicks, unreliableInputTicks;
 			uint64_t reliableInputBytes = 0, unreliableInputBytes = 0;
 		};
@@ -266,6 +267,8 @@ namespace RTE {
 #endif
 				if (hub.countInputs && owner == 1) CountInputTicks(bytes, lane);
 				if (hub.dropReceiptsFrom == owner && NetHostMigrationCodec::Decode(bytes, key, decision) && decision.type == NetHostMigrationMessageType::PeerReceipt) return true;
+				if (hub.dropInputsFrom == owner && NetHostMigrationCodec::Decode(bytes, key, decision) &&
+				    (decision.type == NetHostMigrationMessageType::PeerInput || decision.type == NetHostMigrationMessageType::PeerForwardInput)) return true;
 				if (lane == NetTransportLane::ControlReliable && NetHostMigrationCodec::Decode(bytes, key, decision)) {
 					[]<class Message>(Hub& hub, const Message& packet) {
 						using Type = std::decay_t<decltype(packet.type)>;
@@ -864,7 +867,7 @@ namespace RTE {
 
 	bool NetSessionPlaneSelfTest::CheckSceneLifecycle(const std::string& name, std::string* error) {
 		Hub hub;
-		const uint8_t count = name == "rematch-chat" || name == "kick-received-two" || name == "heavy-input" || name == "leave-rejoin-two" || name == "drop-after-input" ? 2 : 3;
+		const uint8_t count = name == "rematch-chat" || name == "kick-received-two" || name == "heavy-input" || name == "leave-rejoin-two" || name == "drop-after-input" || name == "drop-before-host-input" ? 2 : 3;
 		hub.row = Case{"scene_lifecycle"}; hub.row.seats = count; hub.row.rttMs = hub.row.otherRttMs = 100;
 		auto ip = std::make_unique<Wire>(hub, 1);
 		auto relay = std::make_unique<Wire>(hub, 1);
@@ -915,9 +918,9 @@ namespace RTE {
 			// An internet match's referee that has not decided a tie answers Waiting.
 			if (name == "leave-rejoin-two") config.frameTieReferee = [](const NetFrameTieRequest&) { NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Waiting; return reply; };
 			// The directory gives a tie to the group that holds the host.
-			if (name == "drop-after-input") config.frameTieReferee = [](const NetFrameTieRequest& request) {
+			if (name == "drop-after-input" || name == "drop-before-host-input") config.frameTieReferee = [&hub](const NetFrameTieRequest& request) {
 				NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Waiting;
-				if (!request.queryOnly && std::find(request.members.begin(), request.members.end(), request.host) != request.members.end()) { reply.state = NetFrameTieReply::State::Decided; reply.members = request.members; }
+				if (!hub.tieAnswersHeld && !request.queryOnly && std::find(request.members.begin(), request.members.end(), request.host) != request.members.end()) { reply.state = NetFrameTieReply::State::Decided; reply.members = request.members; }
 				return reply;
 			};
 			config.migrationKey.fill(0x39); config.peerSessionLinks = links[index] = std::make_shared<NetPeerSessionLinks>();
@@ -1062,6 +1065,38 @@ namespace RTE {
 			// The two-seat internet bound includes the referee's answer, as in the drop rows above.
 			if (longestWait > 1000 || hub.now - displayedAt[0] > 50 || applied[0] < before + 110 || !held) {
 				*error = "a joiner that left after its last input kept the host waiting instead of holding its seat"; return false;
+			}
+			return true;
+		}
+		if (name == "drop-before-host-input") {
+			auto& host = *rounds[0];
+			host.m_PeerFrameTieWinners.clear();
+			// As in a match whose ties the directory refused, no tie is decided until the joiner's link is gone.
+			hub.tieAnswersHeld = true;
+			// The host's inputs stop reaching the joiner first: the joiner waits for the host's next input while its own inputs, an input
+			// delay ahead, keep arriving; then the link closes with the host holding the joiner's inputs but no receipt of its own.
+			hub.dropInputsFrom = 1;
+			const auto ownWait = [&] {
+				const uint64_t next = host.GetStats().nextFrame;
+				return !host.LocalInputAccepted(next) && host.m_RemoteFrames.contains(next) && host.m_RemoteFrames.at(next).contains(2);
+			};
+			for (const uint64_t until = hub.now + 2000; hub.now < until && !ownWait();) if (!step(true)) return false;
+			const bool ahead = ownWait(), undecided = host.m_PeerFrameTieWinners.empty();
+			const uint64_t stalled = host.GetStats().nextFrame;
+			clientWire.Stop();
+			hub.dropInputsFrom = 0; hub.tieAnswersHeld = false;
+			const uint64_t begin = hub.now, before = applied[0];
+			uint64_t longestWait = 0;
+			for (; hub.now < begin + 3000;) {
+				if (!step(false)) return false;
+				if (host.m_ConsumerWaitingFrame && hub.now >= host.m_ConsumerWaitStartMs) longestWait = std::max(longestWait, hub.now - host.m_ConsumerWaitStartMs);
+			}
+			const bool held = host.m_PeerBridges.contains(2) && host.m_PeerBridges.at(2).committedHold;
+			std::cout << "[net-session-scene] drop-before-host-input stalled=" << stalled << " joiner_input_ahead=" << ahead << " undecided=" << undecided << " before=" << before << " after=" << applied[0]
+			          << " longest_wait_ms=" << longestWait << " final_wait_ms=" << hub.now - displayedAt[0] << " held=" << held << " next=" << host.GetStats().nextFrame << std::endl;
+			if (!ahead || !undecided) { *error = "the host never waited on its own input with the joiner's input in hand and no tie decided"; return false; }
+			if (longestWait > 1000 || hub.now - displayedAt[0] > 50 || applied[0] < before + 110 || !held) {
+				*error = "a joiner whose link closed before it took the host's input kept the host waiting on its own input instead of holding its seat"; return false;
 			}
 			return true;
 		}
