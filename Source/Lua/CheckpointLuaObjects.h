@@ -6,6 +6,10 @@
 #include <luabind/detail/class_registry.hpp>
 #include <luabind/detail/object_rep.hpp>
 
+extern "C" {
+#include "lj_dispatch.h"
+}
+
 namespace RTE::CheckpointLua {
 	// Saved handles keep their Lua aliases and point only at private native values.
 	class SavedObjects {
@@ -145,20 +149,36 @@ namespace RTE::CheckpointLua {
 				else PushObject(value);
 				return;
 			}
-			if (tvisfunc(&value) && m_Heap.Read(&funcV(&value)->c.ffid) == FF_C) {
+			if (tvisfunc(&value) && m_Heap.Read(&funcV(&value)->c.ffid) != FF_LUA) {
 				const auto* source = funcV(&value);
 				const int count = m_Heap.Read(&source->c.nupvalues);
 				for (int index = 0; index < count; ++index) lua_pushnil(m_State);
 				lua_pushcclosure(m_State, m_Heap.Read(&source->c.f), count);
 				const int destination = lua_gettop(m_State);
+				auto* function = funcV(m_State->top - 1);
+				function->c.ffid = m_Heap.Read(&source->c.ffid);
+				setmref(function->c.pc, NativeEntry(m_Heap.Read(&source->c.pc)));
 				m_Values.Remember(value, destination);
 				for (int index = 0; index < count; ++index) {
 					m_Values.Push(m_Heap.Read(&source->c.upvalue[index]));
 					if (!lua_setupvalue(m_State, destination, index + 1)) throw std::runtime_error("a saved native closure lost an upvalue");
 				}
+				TValue environment; setgcVraw(&environment, gcref(m_Heap.Read(&source->c.env)), LJ_TTAB);
+				m_Values.Push(environment); lua_setfenv(m_State, destination);
 				return;
 			}
 			throw std::runtime_error("a saved native closure has no retained game binding");
+		}
+		BCIns* NativeEntry(MRef entry) const {
+			const auto* source = mref(m_Heap.Read(&m_Heap.State()->glref), global_State);
+			const auto* code = mref(entry, BCIns);
+			if (code == &source->bc_cfunc_int) return &G(m_State)->bc_cfunc_int;
+			if (code == &source->bc_cfunc_ext) return &G(m_State)->bc_cfunc_ext;
+			const auto* group = reinterpret_cast<const GG_State*>(reinterpret_cast<const std::byte*>(source) - offsetof(GG_State, g));
+			const uintptr_t address = reinterpret_cast<uintptr_t>(code), first = reinterpret_cast<uintptr_t>(group->bcff);
+			if (address >= first && address - first < sizeof(group->bcff) && (address - first) % sizeof(BCIns) == 0)
+				return L2GG(m_State)->bcff + (address - first) / sizeof(BCIns);
+			throw std::runtime_error("a saved native closure has no owned entry");
 		}
 	};
 }

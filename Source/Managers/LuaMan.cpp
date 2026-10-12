@@ -10224,6 +10224,11 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			bind(source);
 			if (luaL_dostring(source, "class 'SavedVectorClass' (Vector); function SavedVectorClass:__init(x,y) super(x,y); self.count=7 end; function SavedVectorClass:__finalize() self.X=self.X+100 end; savedVector=SavedVectorClass(17,23); savedAlias=savedVector; savedNativeGetter=function() savedVector.X=savedVector.X+1; savedVector.count=savedVector.count+1; return savedVector.X,savedAlias.X,savedVector.count end"))
 				throw std::runtime_error("could not create saved native getters");
+			if (luaL_dostring(source, "savedAbs=math.abs; math.abs=nil; savedMatcher=string.gmatch('one=13,two=17','(%w+)=(%d+)'); assert(savedMatcher()=='one'); savedNativeCalls=function() local name,value=savedMatcher(); return savedAbs(-37),name,value end"))
+				throw std::runtime_error("could not create saved library closures");
+			lua_getglobal(source, "savedMatcher"); lua_newtable(source); lua_pushinteger(source, 43); lua_setfield(source, -2, "value");
+			if (!lua_setfenv(source, -2)) throw std::runtime_error("could not set the saved library environment");
+			lua_pop(source, 1);
 			CheckpointLua::ForEachCapturedUserdata(source, [source](GCudata* value) {
 				if (value->len != sizeof(luabind::detail::class_rep)) return;
 				auto* type = static_cast<luabind::detail::class_rep*>(uddata(value));
@@ -10240,6 +10245,10 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		if (!pages->Arm() || !prepared->Arm(*owner)) throw std::runtime_error("could not freeze saved native getters");
 		const auto heap = prepared->Image();
 		CheckpointLua::ProtectedCall(source, [&] { if (luaL_dostring(source, "savedVector.X=101; savedVector.count=103")) throw std::runtime_error("could not change native getter values"); });
+		CheckpointLua::ProtectedCall(source, [&] {
+			lua_getglobal(source, "savedMatcher"); lua_getfenv(source, -1); lua_pushinteger(source, 101); lua_setfield(source, -2, "value"); lua_pop(source, 2);
+			if (luaL_dostring(source, "assert(savedMatcher()=='two'); savedAbs=nil")) throw std::runtime_error("could not change saved library closures");
+		});
 		owner.reset(); prepared->Drain();
 		auto worker = CheckpointLua::HeapOwner::Create();
 		lua_State* state = worker->State();
@@ -10265,6 +10274,13 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 				objects.Prepare(); objects.Values().Push(heap.GlobalValue("savedNativeGetter")); objects.Values().Finish();
 				if (lua_pcall(state, 0, 3, 0)) throw std::runtime_error(lua_tostring(state, -1));
 				exact = lua_tointeger(state, -3) == 18 && lua_tointeger(state, -2) == 18 && lua_tointeger(state, -1) == 8;
+				lua_settop(state, 0);
+				objects.Values().Push(heap.GlobalValue("savedMatcher")); lua_getfenv(state, -1); lua_getfield(state, -1, "value");
+				exact = exact && lua_tointeger(state, -1) == 43; lua_settop(state, 0);
+				objects.Values().Push(heap.GlobalValue("savedNativeCalls")); objects.Values().Finish();
+				if (lua_pcall(state, 0, 3, 0)) throw std::runtime_error(lua_tostring(state, -1));
+				exact = exact && lua_tointeger(state, -3) == 37 && lua_type(state, -2) == LUA_TSTRING && std::string_view(lua_tostring(state, -2)) == "two" &&
+				    lua_type(state, -1) == LUA_TSTRING && std::string_view(lua_tostring(state, -1)) == "17";
 				using Handle = luabind::detail::object_rep;
 				auto* type = luabind::detail::class_registry::get_registry(state)->find_class(LUABIND_TYPEID(Vector));
 				{
