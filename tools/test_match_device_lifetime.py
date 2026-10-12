@@ -15,16 +15,15 @@ from run_sim_test import file_sha256, make_run, seed_settings
 
 
 def run_case(repo, recording, out, exe, tick, uid, preset, birth_tick):
-    out.mkdir(parents=True, exist_ok=False)
     observer = out / "lifetime-observer.json"
-    observer.write_text(json.dumps({"schema": 1, "timeout_ms": 1800000,
-                                    "step_timeout_ms": 1800000, "activate_phase": "Running",
-                                    "steps": [{"op": "wait", "elapsed_ms": 1800000}]}) + "\n",
-                        encoding="utf-8", newline="\n")
     run = make_run(repo, ["-net-replay", str(recording), "-max-ticks", str(tick)], out,
                    timeout=900, env={"CCCP_HEADLESS": "1", "CC_RUNNER_IGNORE_FULLSCREEN": "1",
                                      "CC_TEST_MO_LIFETIME_TRACE": preset,
                                      "CC_TEST_NET_UI_SCRIPT": str(observer)})
+    observer.write_text(json.dumps({"schema": 1, "timeout_ms": 1800000,
+                                    "step_timeout_ms": 1800000, "activate_phase": "Running",
+                                    "steps": [{"op": "wait", "elapsed_ms": 1800000}]}) + "\n",
+                        encoding="utf-8", newline="\n")
     if exe:
         run.argv[0] = str(exe.resolve())
     seed_settings(run, {"ResolutionX": 960, "ResolutionY": 540, "ResolutionMultiplier": 1})
