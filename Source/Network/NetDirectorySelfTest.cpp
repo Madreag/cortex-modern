@@ -1399,10 +1399,11 @@ namespace RTE {
 				}
 				const uint64_t until = channel.RetryUntilMs();
 				if (until <= NetDirectoryRetry::NowMs()) { *error = "the host post did not receive its directory wait"; return false; }
-				client.NoteListenAddrs({"127.0.0.1"});
 				const auto heartbeats = [&] { return json::parse(client.BuildReportJson()).value("heartbeats", uint64_t{0}); };
+				bool heartbeatDue = false;
 				while (NetDirectoryRetry::NowMs() < until + NetDirectorySignalChannel::c_PollIntervalMs + 250) {
 					const uint64_t now = NetDirectoryRetry::NowMs();
+					if (!heartbeatDue && now >= until) { client.NoteListenAddrs({"127.0.0.1"}); heartbeatDue = true; }
 					channel.Update(now); client.Update(now);
 					if (heartbeats() != 0) {
 						if (now < until) { *error = "a host heartbeat bypassed its directory wait"; return false; }
