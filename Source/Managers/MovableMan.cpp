@@ -2123,7 +2123,8 @@ void MovableMan::RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) con
 		    };
 		    alarms(frozen.m_AlarmEvents, values->m_AlarmEvents);
 		    alarms(frozen.m_AddedAlarmEvents, values->m_AddedAlarmEvents);
-		    values->m_MOIDIndex = snapshot.Freeze(frozen.m_MOIDIndex);
+		    // Slots retain captured identities so an unregistered stale slot is never cloned or read.
+		    for (MovableObject* object: CheckpointValues(frozen.m_MOIDIndex)) values->m_MOIDIndex.push_back(object);
 		    return values;
 	    });
 	snapshot.RebuildValue(m_OwnedCheckpointLookup ? m_OwnedCheckpointLookup.get() : &m_OrdinaryCheckpointLookup,

@@ -346,7 +346,7 @@ Scene::Scene(const Scene& source, CheckpointNativeSnapshot& snapshot) :
 		CheckpointCloneCost cost("scene path finders");
 		for (size_t index = 0; index < m_FrozenPathFinders.size(); ++index) m_FrozenPathFinders[index] = source.m_pPathFinders[index] ? source.m_pPathFinders[index]->FreezeCheckpoint() : CheckpointText(std::string());
 	}
-	if (&source == g_SceneMan.GetScene()) { CheckpointList<SceneObject*> roots; g_MovableMan.GetAllActors(false, roots); g_MovableMan.GetAllItems(false, roots); g_MovableMan.GetAllParticles(false, roots); m_FrozenSaveRoots = snapshot.Freeze(roots, &m_FrozenSaveRoots); }
+	if (CheckpointNativeStorage::Original(&source) == CheckpointNativeStorage::Original(g_SceneMan.GetScene())) { CheckpointList<SceneObject*> roots; g_MovableMan.GetAllActors(false, roots); g_MovableMan.GetAllItems(false, roots); g_MovableMan.GetAllParticles(false, roots); m_FrozenSaveRoots = snapshot.Freeze(roots, &m_FrozenSaveRoots); }
 }
 
 Entity* Scene::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
