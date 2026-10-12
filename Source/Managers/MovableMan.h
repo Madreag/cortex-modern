@@ -286,6 +286,7 @@ namespace RTE {
 			std::string runtimeGlobals;
 			std::string frameState;
 			std::vector<MovableObject*> pendingLinks;
+			bool addedQueuesMirrorLive = false;
 			std::shared_ptr<LuaPathCallbackContext> pathCallbacks;
 			Scene::AreaState sceneAreas;
 			CheckpointDeque<Actor*> actors;
@@ -1337,6 +1338,7 @@ namespace RTE {
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		bool m_PurgingAllMOs = false;
 		std::vector<MovableObject*> m_PendingLinkResolves; //!< Restored adds whose saved links resolve once the whole world is in.
+		bool m_AddedQueuesMirrorLive = false; //!< The world structure placed every saved cohort, so the next absorb orders its queues as a live world does.
 		// Mutexes to ensure MOs aren't being removed from separate threads at the same time
 		std::mutex m_ActorsMutex;
 		std::mutex m_ItemsMutex;

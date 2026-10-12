@@ -2910,6 +2910,7 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 	}
 	out.joinQuarantine.swap(CheckpointMembershipValues().m_LockstepJoinQuarantine);
 	out.pendingLinks.swap(m_PendingLinkResolves);
+	out.addedQueuesMirrorLive = std::exchange(m_AddedQueuesMirrorLive, false);
 	{
 		std::unordered_set<const Entity*> visited;
 		std::unordered_set<const MovableObject*> heldObjects;
@@ -3047,6 +3048,7 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	}
 	CheckpointMembershipValues().m_LockstepJoinQuarantine.swap(in.joinQuarantine);
 	m_PendingLinkResolves.swap(in.pendingLinks);
+	m_AddedQueuesMirrorLive = std::exchange(in.addedQueuesMirrorLive, false);
 	in.pendingLinks.clear();
 	for (Actor* actor: CheckpointActorValues().m_Actors) {
 		CheckpointLookupValues().m_ValidActors.insert(actor);
@@ -5887,8 +5889,9 @@ static void TraceTrackedPhase(const char* tag) {
 }
 
 void MovableMan::AbsorbAddedMOs() {
-	// Sort the added queues before the drain so the transfer order is stable across runs; a restored world arrives in its saved live order.
-	if (m_PendingLinkResolves.empty()) {
+	// Sort the added queues before the drain so the transfer order is stable across runs; a world restored through the add path
+	// keeps its file's resident order until its world structure has placed every saved cohort.
+	if (m_PendingLinkResolves.empty() || m_AddedQueuesMirrorLive) {
 		std::sort(CheckpointActorValues().m_AddedActors.begin(), CheckpointActorValues().m_AddedActors.end(), MOUniqueIDLess());
 		std::sort(CheckpointLooseValues().m_AddedItems.begin(), CheckpointLooseValues().m_AddedItems.end(), MOUniqueIDLess());
 		std::sort(CheckpointLooseValues().m_AddedParticles.begin(), CheckpointLooseValues().m_AddedParticles.end(), MOUniqueIDLess());
@@ -5934,6 +5937,7 @@ void MovableMan::AbsorbAddedMOs() {
 
 	ResolvePendingSnapshotLinks();
 	m_PendingLinkResolves.clear();
+	m_AddedQueuesMirrorLive = false;
 }
 
 void MovableMan::ResolvePendingSnapshotLinks() {
@@ -8806,6 +8810,7 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 		for (MovableObject* object: cohorts[0]) CheckpointActorValues().m_Actors.push_back(static_cast<Actor*>(object));
 		for (MovableObject* object: cohorts[3]) CheckpointActorValues().m_AddedActors.push_back(static_cast<Actor*>(object));
 		CheckpointLooseValues().m_Items.swap(cohorts[1]); CheckpointLooseValues().m_Particles.swap(cohorts[2]); CheckpointLooseValues().m_AddedItems.swap(cohorts[4]); CheckpointLooseValues().m_AddedParticles.swap(cohorts[5]);
+		m_AddedQueuesMirrorLive = true;
 		CheckpointLookupValues().m_ValidActors.clear(); CheckpointLookupValues().m_ValidItems.clear(); CheckpointLookupValues().m_ValidParticles.clear();
 		for (long uid: state.validObjects[0]) CheckpointLookupValues().m_ValidActors.insert(actor(uid));
 		for (long uid: state.validObjects[1]) CheckpointLookupValues().m_ValidItems.insert(resolve(uid));
