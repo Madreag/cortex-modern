@@ -6,6 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
+import importlib.util
+import os
+import sys
 import json
 from pathlib import Path
 import re
@@ -22,6 +25,13 @@ from cryptography.x509.oid import NameOID
 from run_sim_test import engine_executable, make_run, seed_settings
 from session_directory import session_directory as directory
 from test_lobby_lifecycle import wait_for_log
+
+if os.environ.get("CC_TEST_DIRECTORY_SOURCE"):
+    directory_source = Path(os.environ["CC_TEST_DIRECTORY_SOURCE"])
+    sys.path.insert(0, str(directory_source))
+    directory_spec = importlib.util.spec_from_file_location("row_directory", directory_source / "session_directory.py")
+    directory = importlib.util.module_from_spec(directory_spec)
+    directory_spec.loader.exec_module(directory)
 
 
 def digest(path):
@@ -87,7 +97,9 @@ class Requests:
             self.rows.append({"query_only": query_only, "at_ms": int(now * 1000), "role": "host" if key == self.host_key else "guest",
                               "path": re.sub(r"/[0-9a-f-]{36}(?=/|$)", "/<session>", handler.path.split("?")[0]),
                               "kind": kind, "seat": seat, "status": status,
-                              "error": body.get("error", ""), "retry_after_s": body.get("retry_after_s", 0)})
+                              "error": body.get("error", ""), "retry_after_s": body.get("retry_after_s", 0),
+                              "retry_wait_s": body.get("retry_after_s", 0)})
+            handler.row_event = self.rows[-1]
 
 
 @contextmanager
@@ -135,7 +147,24 @@ def local_directory(root, case, port):
             def _install_gate(self, *args, **kwargs):
                 return records.refusal(self) or super()._install_gate(*args, **kwargs)
 
+            def send_header(self, name, value):
+                if name.lower() == "retry-after":
+                    if case == "admission" and self.row_status == 429:
+                        value = str(max(1, int(records.wait_until - time.monotonic() + .999)))
+                    self.row_header = True
+                    self.row_event["header_retry_after_s"] = int(value)
+                    self.row_event["retry_wait_s"] = max(self.row_event["retry_after_s"], int(value))
+                super().send_header(name, value)
+
+            def end_headers(self):
+                if case == "admission" and self.row_status == 429 and not self.row_header:
+                    self.send_header("Retry-After", "1")
+                super().end_headers()
+
             def _send(self, status, body):
+                self.row_status, self.row_header = status, False
+                if case == "admission" and status == 429:
+                    body = dict(body, retry_after_s=1)
                 records.record(self, status, body)
                 super()._send(status, body)
 
@@ -192,7 +221,7 @@ def main():
     runs, records, checks, details = {}, {}, {}, {}
     result = {"case": args.case, "source_tip": args.source_tip or subprocess.check_output(
                   ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip(),
-              "binary_sha256": digest(engine_executable(repo)), "driver_sha256": digest(__file__),
+              "binary_sha256": digest(engine_executable(repo)), "directory_sha256": digest(directory.__file__), "driver_sha256": digest(__file__),
               "topology": "single-box", "public_directory": False}
     requests = None
     try:
@@ -236,7 +265,7 @@ def main():
             if event["at_ms"] < waits.get(group, 0):
                 early.append(event)
             if event["status"] == 429:
-                waits[group] = event["at_ms"] + event["retry_after_s"] * 1000
+                waits[group] = event["at_ms"] + event["retry_wait_s"] * 1000
         checks["retry_deadlines"] = not early
         details.update(requests=len(events), inside_retry_wait=early[:20])
         if args.case == "flood":
@@ -262,7 +291,7 @@ def main():
                           no_missing_heartbeat=not any(event["kind"] == "heartbeat" and event["status"] == 404 for event in events))
             details.update(refused_heartbeats=len(beats), live_samples=samples, registers=len(registered))
         else:
-            until = max((event["at_ms"] + event["retry_after_s"] * 1000 for event in events
+            until = max((event["at_ms"] + event["retry_wait_s"] * 1000 for event in events
                          if event["role"] == "host" and event["kind"] in ("issue", "signal", "signals") and event["status"] == 429), default=0)
             resumed = [event for event in events if event["role"] == "host" and event["at_ms"] >= until]
             checks.update(waited_40s=requests.wait_from is not None and any(
