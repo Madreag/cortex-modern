@@ -34,6 +34,7 @@
 #include "PieMenu.h"
 #include "ScenarioRunner.h"
 #include "NetGameCommand.h"
+#include "NetModerationGUIProbe.h"
 
 #include "GUI.h"
 #include "AllegroBitmap.h"
@@ -1742,6 +1743,7 @@ MovableObject* Actor::SwapNextInventory(MovableObject* pSwapIn, bool muteSound) 
 		pRetDev = m_Inventory.front();
 		// Reset all the timers of the object being taken out of inventory so it doesn't emit a bunch of particles that have been backed up while dormant in inventory
 		pRetDev->ResetAllTimers();
+		NetModerationGUIProbe::TraceObjectLifetime(pRetDev, "inventory-take-front", true);
 		m_Inventory.pop_front();
 		playSound = true;
 	}
@@ -1773,6 +1775,7 @@ MovableObject* Actor::RemoveInventoryItemAtIndex(int inventoryIndex) {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Inventory.size()); });
 	if (inventoryIndex >= 0 && inventoryIndex < m_Inventory.size()) {
 		MovableObject* itemAtIndex = m_Inventory[inventoryIndex];
+		NetModerationGUIProbe::TraceObjectLifetime(itemAtIndex, "inventory-take-index", true);
 		m_Inventory.erase(m_Inventory.begin() + inventoryIndex);
 		return itemAtIndex;
 	}
@@ -1784,6 +1787,7 @@ MovableObject* Actor::SwapPrevInventory(MovableObject* pSwapIn) {
 	bool playSound = false;
 	if (!m_Inventory.empty()) {
 		pRetDev = m_Inventory.back();
+		NetModerationGUIProbe::TraceObjectLifetime(pRetDev, "inventory-take-back", true);
 		m_Inventory.pop_back();
 		playSound = true;
 	}
@@ -1819,6 +1823,7 @@ MovableObject* Actor::SetInventoryItemAtIndex(MovableObject* newInventoryItem, i
 		return nullptr;
 	}
 	MovableObject* currentInventoryItemAtIndex = m_Inventory.at(inventoryIndex);
+	NetModerationGUIProbe::TraceObjectLifetime(newInventoryItem, "inventory-set", true);
 	m_Inventory.at(inventoryIndex) = newInventoryItem;
 	return currentInventoryItemAtIndex;
 }
@@ -1956,6 +1961,7 @@ bool Actor::AddToInventoryFront(MovableObject* itemToAdd) {
 		return false;
 	}
 
+	NetModerationGUIProbe::TraceObjectLifetime(itemToAdd, "inventory-front", true);
 	m_Inventory.push_front(itemToAdd);
 	return true;
 }
@@ -1967,6 +1973,7 @@ bool Actor::AddToInventoryBack(MovableObject* itemToAdd) {
 		return false;
 	}
 
+	NetModerationGUIProbe::TraceObjectLifetime(itemToAdd, "inventory-back", true);
 	m_Inventory.push_back(itemToAdd);
 	return true;
 }
