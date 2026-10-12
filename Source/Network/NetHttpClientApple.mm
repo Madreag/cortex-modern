@@ -65,6 +65,7 @@ namespace {
 	NSURLSession* _session;
 	NSURLSessionDataTask* _task;
 	long _statusCode;
+	NSString* _retryAfter;
 	bool _responded;
 	NSMutableData* _body;
 	NSString* _error;
@@ -93,7 +94,7 @@ namespace {
 - (void)deliverStatus:(long)statusCode body:(NSData*)body error:(NSString*)error {
 	os_unfair_lock_lock(&_lock);
 	if (_done != nullptr && !_delivered) {
-		_done(_context, statusCode, body.length > 0 ? static_cast<const char*>(body.bytes) : "", body.length, error.length > 0 ? error.UTF8String : "");
+		_done(_context, statusCode, body.length > 0 ? static_cast<const char*>(body.bytes) : "", body.length, error.length > 0 ? error.UTF8String : "", _retryAfter.length > 0 ? _retryAfter.UTF8String : "");
 	}
 	_delivered = true;
 	os_unfair_lock_unlock(&_lock);
@@ -168,6 +169,7 @@ namespace {
 }
 
 - (void)URLSession:(NSURLSession*)session dataTask:(NSURLSessionDataTask*)dataTask didReceiveResponse:(NSURLResponse*)response completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
+	_retryAfter = [response isKindOfClass:[NSHTTPURLResponse class]] ? [(NSHTTPURLResponse*)response valueForHTTPHeaderField:@"Retry-After"] : nil;
 	_responded = true;
 	_statusCode = [response isKindOfClass:[NSHTTPURLResponse class]] ? ((NSHTTPURLResponse*)response).statusCode : 0;
 	completionHandler(NSURLSessionResponseAllow);

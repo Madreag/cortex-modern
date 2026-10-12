@@ -384,6 +384,7 @@ namespace RTE {
 		uint16_t h4Version = c_NetH4Version;
 		std::string seatToken;
 		NetAuthBytes32 authorityKey{};
+		uint32_t directoryWaitMs = 0; //!< An empty-ticket notice can carry the host's directory wait.
 		bool operator==(const NetH4ConnectionLease&) const = default;
 	};
 

@@ -217,7 +217,14 @@ namespace RTE {
 
 	void NetMatchService::CaptureMatchSummaryLocked(const std::string& result) {
 		// The first terminal result owns this round; Main's Complete paths quit after capturing it.
-		if (m_State != NetMatchServiceState::Running || m_LastMatchSummary || m_CurrentMatchSummary.identityLine.empty()) return;
+		if (m_State != NetMatchServiceState::Running) return;
+		// The next lobby retires this coordinator and may retract its directory row.
+		if (m_CapturedRunnerReport.empty() && m_Runner && m_Session && m_Coordinator && m_Coordinator->HasCompletedSimulationTick()) {
+			auto captured = nlohmann::json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
+			captured["directory_at_end"] = nlohmann::json::parse(m_Directory.BuildReportJson());
+			m_CapturedRunnerReport = captured.dump();
+		}
+		if (m_LastMatchSummary || m_CurrentMatchSummary.identityLine.empty()) return;
 		UpdateSummarySeatsLocked();
 		m_CurrentMatchSummary.result = result.empty() ? "Match complete" : result;
 		const auto* activity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
@@ -237,13 +244,6 @@ namespace RTE {
 			peer.holds = totals.holds; peer.substitutions = totals.substitutions; peer.rejoins = totals.rejoins; peer.longestWaitMs = totals.longestWaitMs;
 		}
 		m_LastMatchSummary = m_CurrentMatchSummary;
-		// The next lobby retires the coordinator. Preserve the completed
-		// round's counters before that transition, including clean leaves.
-		if (m_Runner && m_Session && m_Coordinator) {
-			auto captured = nlohmann::json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
-			captured["directory_at_end"] = nlohmann::json::parse(m_Directory.BuildReportJson());
-			m_CapturedRunnerReport = captured.dump();
-		}
 	}
 
 	std::string NetRejoinAddress(const std::string& address, uint16_t port) {
@@ -886,6 +886,12 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	bool NetMatchService::NeedsRematchAttempt() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		// A client still resolves a lost next lobby through ReturnToLobby.
+		return !m_IsHost || (!m_HostEndedRound && (!m_LastMatchSummary || (m_Session && m_Session->GetReadyPeerCount() != 0)));
+	}
+
 	bool NetMatchService::ReturnToLobby(std::string* error) {
 		JoinWorkerIfDone();
 		// A running worker still owns and polls the link.
@@ -924,6 +930,13 @@ static std::string ResyncSaveName() {
 			}
 			DrainPendingSessionEventsLocked(false);
 			departedHost = !m_IsHost || (m_MigrationGeneration != 0 && m_MigrationMembers.size() == 1);
+			if (m_IsHost && m_LastMatchSummary && (m_HostEndedRound || m_Session->GetReadyPeerCount() == 0)) {
+				m_CompletedLobbySinceMs = 0;
+				m_StatusText = m_LastMatchSummary->result;
+				m_ErrorText.clear();
+				if (error) *error = m_HostEndedRound ? m_StatusText : "No other players are here for a rematch";
+				return false;
+			}
 			if (!m_Session->IsReady()) {
 				// Session lost (the other player quit); settle so the UI stops offering a rematch.
 				m_State = NetMatchServiceState::Failed;
@@ -2187,6 +2200,13 @@ static std::string ResyncSaveName() {
 				m_StatusText = "Correct the host options before starting the rematch";
 				m_ErrorText = error;
 				m_AdoptedMatchConfig = m_Runner->GetMatchConfig();
+			} else if (m_IsHost && m_LastMatchSummary &&
+			           (!m_Session->IsReady() || m_Session->GetReadyPeerCount() == 0 || error == "rematch roster: not enough players for a rematch")) {
+				// An empty next lobby does not turn the host's completed round into a failure.
+				m_State = NetMatchServiceState::Completed;
+				m_CompletedLobbySinceMs = 0;
+				m_StatusText = m_LastMatchSummary->result;
+				m_ErrorText.clear();
 			} else {
 				m_State = NetMatchServiceState::Failed;
 				{
@@ -2479,7 +2499,7 @@ static std::string ResyncSaveName() {
 			m_SceneName.clear();
 			m_SceneModule.clear();
 			m_State = NetMatchServiceState::Idle;
-			m_StatusText = "Idle";
+			m_StatusText = "Idle"; m_DirectoryWaitLine.clear();
 			m_ErrorText.clear();
 			m_LobbySnapshot = {};
 			m_InputDelayText.clear();
@@ -2493,6 +2513,7 @@ static std::string ResyncSaveName() {
 			m_HostLeaveConfirmed.reset();
 			m_LeaveRejoinRead.reset();
 			m_HostEndReason.clear();
+			m_HostEndedRound = false;
 			m_CompletedLobbySinceMs = 0;
 			m_PendingLobbyEvents.clear();
 			m_PendingLobbyBytes = 0;
@@ -2537,8 +2558,10 @@ static std::string ResyncSaveName() {
 			m_MigrationRepairPending = false;
 			DrainPendingSessionEventsLocked(false);
 			AccumulateLockstepTotalsLocked();
-			if (m_Runner && m_Session && m_Coordinator) {
-				m_CapturedRunnerReport = m_Runner->BuildReportJson(*m_Session, *m_Coordinator);
+			if (m_CapturedRunnerReport.empty() && m_Runner && m_Session && m_Coordinator) {
+				auto captured = nlohmann::json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
+				captured["directory_at_end"] = nlohmann::json::parse(m_Directory.BuildReportJson());
+				m_CapturedRunnerReport = captured.dump();
 			}
 			// Only the host's departure lands a seat that committed nothing; an error on this peer's own side keeps
 			// its seat's reconnect, so a held client retries its private rejoin.
@@ -2666,6 +2689,7 @@ static std::string ResyncSaveName() {
 		DrainPendingSessionEventsLocked(false);
 		if (!m_Coordinator->CompleteAtAgreedEnd(reason)) return false;
 		m_HostEndReason = reason;
+		m_HostEndedRound = true;
 		return true;
 	}
 
@@ -2711,8 +2735,8 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_State == NetMatchServiceState::Running) {
 			m_State = NetMatchServiceState::Completed;
-			// The rematch lobby this end opens starts waiting for the other peers here.
-			m_CompletedLobbySinceMs = SteadyNowMs();
+			// Natural round endings wait for the next lobby; the host's End Match stays completed.
+			m_CompletedLobbySinceMs = m_HostEndedRound ? 0 : SteadyNowMs();
 			m_StatusText = displayResult.empty() ? "Match complete" : displayResult;
 			m_ErrorText.clear();
 		}
@@ -3524,6 +3548,8 @@ static std::string ResyncSaveName() {
 		m_HeldRejoinDriving = false;
 		m_HeldRejoinRoutes.clear();
 		m_OrdinaryTicketRejoin = false;
+		m_HostEndedRound = false;
+		m_CapturedRunnerReport.clear();
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
 		m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
@@ -8287,7 +8313,14 @@ static std::string ResyncSaveName() {
 		if (m_State == NetMatchServiceState::Running && m_Coordinator &&
 		    m_Coordinator->GetState() == NetLockstepState::WaitingForStart && m_Coordinator->GetConfig().requirePublishedStart)
 			snapshot.serviceState = StateName(NetMatchServiceState::Starting);
-		snapshot.statusText = m_StatusText;
+		const std::string directoryWaiting = m_ReconnectClient.DirectoryWaitingText();
+		snapshot.statusText = directoryWaiting.empty() ? m_StatusText : directoryWaiting;
+		if (!directoryWaiting.empty()) {
+			snapshot.waitLine = directoryWaiting;
+			m_DirectoryWaitLine = directoryWaiting;
+		} else if (m_StatusText.rfind("The directory is busy.", 0) == 0) {
+			m_DirectoryWaitLine = m_StatusText;
+		}
 		snapshot.migrating = m_Coordinator && m_Coordinator->IsMigrating();
 		snapshot.hostLost = snapshot.migrating && m_Coordinator->GetMigrationPhase() == NetHostMigrationPhase::Contacting;
 		if (snapshot.migrating) {
@@ -8924,6 +8957,9 @@ static std::string ResyncSaveName() {
 
 	std::string NetMatchService::GetStatusText() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		const std::string waiting = m_ReconnectClient.DirectoryWaitingText();
+		if (!waiting.empty()) { m_DirectoryWaitLine = waiting; return waiting; }
+		if (m_StatusText.rfind("The directory is busy.", 0) == 0) m_DirectoryWaitLine = m_StatusText;
 		return m_StatusText;
 	}
 
@@ -9114,6 +9150,7 @@ static std::string ResyncSaveName() {
 			{"ended_lockstep_packets", m_EndedLockstepPackets},
 			{"state", StateName(m_State)},
 			{"status", m_StatusText},
+			{"directory_wait_line", m_DirectoryWaitLine},
 			{"error", m_ErrorText.empty() ? m_LobbySnapshot.errorText : m_ErrorText},
 			{"activity_preset", roster.activityPreset},
 			{"is_host", m_IsHost},
@@ -9159,6 +9196,7 @@ static std::string ResyncSaveName() {
 			// The host's drop-and-reseat accounting, which survives the session end the seat list does
 			// not: after the activity ends the seats read empty, so these are all a gate has left.
 			{"host_seats_dropped", m_ReconnectHost.GetStats().seatsDropped},
+			{"host_provisional_seats_expired", m_ReconnectHost.GetStats().provisionalSeatsExpired},
 			{"host_ledger_drops_recorded", m_ReconnectHost.GetStats().ledgerDropsRecorded},
 			{"host_reseats_issued", m_ReconnectHost.GetStats().reseatsIssued},
 			{"host_reseats_without_a_ledger", m_ReconnectHost.GetStats().reseatsWithoutALedger},
@@ -9371,7 +9409,9 @@ static std::string ResyncSaveName() {
 		report["private_rejoin"] = {{"configured", m_WorldJoin.IsPrivateMatch()}, {"checkpoint_ready", m_WorldJoin.Image().IsValid()},
 		    {"checkpoint_tick", m_WorldJoin.Image().tick}, {"journal_failed", m_WorldJoin.Tail().JournalFailed()}, {"error", m_PrivateJoinError},
 		    {"catching_up", m_WorldCatchUp.active}, {"applied_through", m_WorldCatchUp.appliedThrough}, {"activation_frame", m_WorldCatchUp.activationTick}};
-		if (m_Runner && m_Session && m_Coordinator) {
+		if (m_State != NetMatchServiceState::Running && !m_CapturedRunnerReport.empty()) {
+			report["runner"] = json::parse(m_CapturedRunnerReport);
+		} else if (m_Runner && m_Session && m_Coordinator) {
 			report["runner"] = json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
 		} else if (!m_CapturedRunnerReport.empty()) {
 			report["runner"] = json::parse(m_CapturedRunnerReport);
@@ -9579,6 +9619,16 @@ static std::string ResyncSaveName() {
 		if (!s_AdmissionEnabled || m_State == NetMatchServiceState::Idle || m_LeftMatch) return;
 		const uint64_t wall = UnixNowMs(nullptr) / 1000;
 		m_ConnectionAuthority.Update(nowMs, wall);
+		std::string directoryUrl = g_SettingsMan.GetSessionDirectoryUrl();
+		while (!directoryUrl.empty() && directoryUrl.back() == '/') directoryUrl.pop_back();
+		if (!directoryUrl.empty() && directoryUrl.rfind("https://", 0) != 0) directoryUrl = "https://" + directoryUrl;
+		if (NetDirectoryBudget::TakeEndedNotice(directoryUrl, g_SettingsMan.GetSessionDirectoryInstallKey(), m_ConnectionAuthority.DirectorySessionId(), nowMs)) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			const std::string line = "This match is no longer in the directory. Choose another game from Multiplayer.";
+			if (m_State != NetMatchServiceState::Completed && m_State != NetMatchServiceState::Idle) {
+				m_PendingToasts.push_back(line); m_ErrorText = line;
+			}
+		}
 		if (m_IsHost && m_Coordinator) {
 			if (const auto host = m_ConnectionAuthority.Host(); host && host->generation > m_MigrationGeneration)
 				m_Coordinator->NoteDirectorySuperseded(host->generation);
@@ -9867,7 +9917,8 @@ static std::string ResyncSaveName() {
 		bool checkedIn = !request.rejoin;
 		bool relayReady = !request.rejoin;
 		const uint64_t deadline = SteadyNowMs() + c_IceResolveBudgetMs;
-		while (SteadyNowMs() < deadline && !m_CancelRequested.load()) {
+		const uint64_t directoryWaitStart = m_ConnectionAuthority.AdmissionWaitedMs();
+		while (SteadyNowMs() < NetDirectoryRetry::After(deadline, m_ConnectionAuthority.AdmissionWaitedMs() - directoryWaitStart) && !m_CancelRequested.load()) {
 			const uint64_t nowMs = SteadyNowMs();
 			m_ConnectionAuthority.Update(nowMs, UnixNowMs(nullptr) / 1000);
 			if (m_ConnectionAuthority.Refused()) { if (error) *error = m_ConnectionAuthority.Error(); return false; }
@@ -9875,11 +9926,13 @@ static std::string ResyncSaveName() {
 			checkedIn = !request.rejoin || (m_ConnectionAuthority.RouteCheckedIn() && m_ConnectionAuthority.LocalLease() &&
 				m_ConnectionAuthority.LocalLease()->Usable(UnixNowMs(nullptr) / 1000));
 			relayReady = !request.rejoin || !allowRelay || (connectionHost && !connectionHost->relayEnabled) || m_ConnectionAuthority.RelayRefreshed();
-			if (connectionHost && checkedIn && relayReady) break;
+			if (connectionHost && checkedIn && relayReady && nowMs >= connectionHost->directoryReadyMs) break;
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				const std::string connectionError = m_ConnectionAuthority.Error();
-				m_StatusText = !connectionError.empty() ? connectionError : request.rejoin ? "Reconnecting - renewing your seat and finding the host. Cancel stops rejoining." : "Connecting - finding the host. Cancel returns to Multiplayer.";
+				m_StatusText = connectionHost && nowMs < connectionHost->directoryReadyMs
+				    ? "The directory is busy. The host retries in " + std::to_string((connectionHost->directoryReadyMs - nowMs + 999) / 1000) + " seconds. Cancel returns to Multiplayer."
+				    : !connectionError.empty() ? connectionError : request.rejoin ? "Reconnecting - renewing your seat and finding the host. Cancel stops rejoining." : "Connecting - finding the host. Cancel returns to Multiplayer.";
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(20));
 		}
