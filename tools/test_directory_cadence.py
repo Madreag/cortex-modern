@@ -161,14 +161,14 @@ def menus(root, port, case):
         "combo_select ComboHostActivity P4 Alpha Duel\nwait_ms 300\n"
         f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\nactivate ButtonMultiplayerCreate\n"
         "wait_connected 2 80\nwait_remote_ready 80\nactivate ButtonMultiplayerStart\n"
-        "wait_lockstep 180 60\n" + ("wait_ms 65000\n" if case == "flood" else "wait_ms 27000\n" if case == "liveness" else "wait_ms 1000\n") +
+        "wait_lockstep 180 60\n" + ("wait_lockstep 4000 110\n" if case == "flood" else "wait_lockstep 2100 80\n" if case == "liveness" else "wait_lockstep 240 15\n") +
         "open_local_pause\nactivate ButtonEndMatch\nactivate ButtonLeaveConfirm\nwait_round_end 10\nwait_ms 1000\nexit\n")
     guest = common + (
         "settext TextMultiplayerName Guest\nactivate ButtonMultiplayerJoinGame\nwait_ms 300\n"
         "activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
         f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\nwait_connected 2 80\n"
         "activate ButtonMultiplayerReady\nwait_lockstep 180 60\n" +
-        ("wait_ms 65000\n" if case == "flood" else "wait_ms 27000\n" if case == "liveness" else "wait_ms 1000\n") + "exit\n")
+        ("wait_lockstep 4000 110\n" if case == "flood" else "wait_lockstep 2100 80\n" if case == "liveness" else "wait_lockstep 240 15\n") + "exit\n")
     paths = {}
     for role, content in (("host", host), ("guest", guest)):
         paths[role] = root / (role + ".menu.txt")
@@ -197,7 +197,7 @@ def main():
         with local_directory(root / "directory", args.case, args.port + 1) as (server, requests, pin):
             for role in ("host", "guest"):
                 out = root / role
-                env = {"CC_TEST_LINK_BLACKOUT": "180:60000"} if args.case == "flood" and role == "guest" else {}
+                env = {"CC_TEST_LINK_BLACKOUT": "2:180:60000"} if args.case == "flood" and role == "guest" else {}
                 run = make_run(repo, ["-menu-script", paths[role], "-num-lua-states", "4", "-net-match-ticks", "0",
                                      "-net-match-report", out / "match-report.json", "-net-live-tick-hashes", out / "live.jsonl"],
                                out, timeout=145, env=env)
