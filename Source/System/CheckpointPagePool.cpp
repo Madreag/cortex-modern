@@ -1028,6 +1028,7 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 			for (size_t byte = 0; byte < bytes; ++byte) address[byte] = static_cast<std::byte>((byte * 37 + values.size()) % 251);
 		}
 		const auto pages = Prepare();
+		for (const auto& page: pages) page->Arm();
 		std::vector<const std::byte*> addresses;
 		for (auto& value: values) {
 			addresses.push_back(value.owner.get());
