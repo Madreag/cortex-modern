@@ -786,8 +786,14 @@ struct ActivityMan::PreparedAutosave {
 			size_t ranges = 0, bytes = 0;
 			for (const auto& pages: boundary.NativeViews().pages) { ranges += pages->RangeCount(); bytes += pages->RangeBytes(); }
 			const auto [nativeUs, luaUs] = boundary.ArmSplitUs();
-			System::PrintDiagnosticLine(std::format("[checkpoint-arm-split] tick={} native_ranges={} native_bytes={} native_arm_us={} lua_heaps={} lua_arm_us={} {}",
-			    header.tick, ranges, bytes, nativeUs, boundary.StateCount(), luaUs, CheckpointNativeStorage::InventoryCensus()));
+			size_t luaBytes = 0, luaFaults = 0;
+			int64_t luaCopyUs = 0;
+			for (size_t index = 0; index < boundary.StateCount(); ++index) {
+				const auto heap = boundary.LuaHeap(index);
+				luaBytes += heap.ByteCount(); luaFaults += heap.FaultCount(); luaCopyUs += heap.CopyUs();
+			}
+			System::PrintDiagnosticLine(std::format("[checkpoint-arm-split] tick={} native_ranges={} native_bytes={} native_arm_us={} lua_heaps={} lua_arm_us={} lua_bytes={} lua_copy_us={} lua_faults={} {}",
+			    header.tick, ranges, bytes, nativeUs, boundary.StateCount(), luaUs, luaBytes, luaCopyUs, luaFaults, CheckpointNativeStorage::InventoryCensus()));
 		}
 		CheckpointNativeStorage::ReadScope pages(boundary.NativeViews());
 		RandomGenerator::CheckpointScope random;
