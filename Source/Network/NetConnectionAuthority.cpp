@@ -396,7 +396,7 @@ namespace RTE {
 			if (op.request) {
 				if (op.request->Poll() == NetHttpClient::PollResult::Pending) { ++active; ++it; continue; }
 				const auto response = op.request->GetResponse(); op.request.reset();
-				if (response.statusCode == 200) {
+				if (response.statusCode == 200 && response.error.empty()) {
 					if (op.removal) {
 						const auto body = json::parse(response.body, nullptr, false);
 						std::string error;
@@ -428,7 +428,7 @@ namespace RTE {
 		if (m_Bootstrap) {
 			if (m_Bootstrap->Poll() == NetHttpClient::PollResult::Pending) return;
 			const auto response = m_Bootstrap->GetResponse(); m_Bootstrap.reset();
-			if (response.statusCode == 200) {
+			if (response.statusCode == 200 && response.error.empty()) {
 				NetConnectionHost host; std::string error;
 				if (ReadHostReply(response.body, host, error)) { m_Host = std::move(host); m_BootstrapWanted = false; m_Error.clear(); m_BootstrapRetry.Succeeded(); }
 				else m_NextBootstrap = FailedReply(response, m_BootstrapRetry, steadyMs, "seat-bootstrap");
@@ -463,7 +463,7 @@ namespace RTE {
 			if (m_CheckIn->Poll() == NetHttpClient::PollResult::Pending) return;
 			const auto response = m_CheckIn->GetResponse(); m_CheckIn.reset();
 			m_NextCheckIn = steadyMs + 5000;
-			if (response.statusCode == 200) {
+			if (response.statusCode == 200 && response.error.empty()) {
 				NetSeatLease lease; std::string error;
 				if (!ReadLeaseReply(response.body, lease, error) || !lease.SameSeat(*m_LocalLease) || lease.participant != m_Player->PublicId()) { m_NextCheckIn = FailedReply(response, m_CheckInRetry, steadyMs, "seat-check-in"); return; }
 				m_LocalLease = std::move(lease); ++m_CheckIns; m_CheckedGeneration = m_CheckInGeneration; m_Error.clear();
@@ -545,7 +545,7 @@ namespace RTE {
 			if (m_FrameTie->Poll() == NetHttpClient::PollResult::Pending) return;
 			const auto response = m_FrameTie->GetResponse(); m_FrameTie.reset(); m_NextFrameTie = steadyMs + 50;
 			m_FrameTieReply = {};
-			if (response.statusCode == 200) try {
+			if (response.statusCode == 200 && response.error.empty()) try {
 				const auto body = json::parse(response.body);
 				std::string error;
 				const auto& expected = *m_FrameTieRequest;
@@ -595,7 +595,7 @@ namespace RTE {
 			if (m_HostChange->Poll() == NetHttpClient::PollResult::Pending) return;
 			const auto response = m_HostChange->GetResponse(); m_HostChange.reset(); m_NextHostChange = steadyMs + 1000;
 			m_HostChangeReply.state = NetHostChangeReply::State::Unavailable;
-			if (response.statusCode == 200) {
+			if (response.statusCode == 200 && response.error.empty()) {
 				try {
 					const auto body = json::parse(response.body);
 					std::string error;

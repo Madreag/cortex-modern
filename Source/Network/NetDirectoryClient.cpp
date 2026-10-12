@@ -401,7 +401,7 @@ namespace RTE {
 		m_IceRelayRefused = reply.statusCode == 502 && reply.body.find("\"relay_provider_refused\"") != std::string::npos;
 		m_IceRetryable = false;
 		m_IceRetryDelayMs = 500;
-		if (reply.statusCode == 200 && NetRelayConfig::FromJson(reply.body, offer) && offer.Usable(now)) {
+		if (reply.statusCode == 200 && reply.error.empty() && NetRelayConfig::FromJson(reply.body, offer) && offer.Usable(now)) {
 			m_IceServers = std::move(offer);
 			m_IceError.clear(); m_IceRetry.Succeeded();
 		} else {
