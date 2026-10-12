@@ -283,7 +283,7 @@ namespace RTE {
 		bool TestCrossTimedTransport(std::string* error) {
 #ifdef CCCP_WITH_GNS
 			GnsTransport transport;
-			if (!transport.StartHost(49915, error)) return false;
+			if (!transport.StartHost(43610, error)) return false;
 			if (ApplyCrossTransportFault(-1, 0, 0, 10) || ApplyCrossTransportFault(0, 101, 0, 10) || !ApplyCrossTransportFault(10, 5, 2, 1)) {
 				*error = "transport hook accepted invalid bounds or refused a valid timed setting"; return false;
 			}
@@ -343,7 +343,7 @@ namespace RTE {
 		bool TestConnectionCallbacksReachTheirListener(std::string* error) {
 			if (!GnsTransport::IsCompiledIn()) return true;
 			GnsTransport first, other, client;
-			if (!first.StartHost(49472, error) || !other.StartHost(49473, error) || !client.Connect("127.0.0.1", 49472, error)) return false;
+			if (!first.StartHost(43611, error) || !other.StartHost(43612, error) || !client.Connect("127.0.0.1", 43611, error)) return false;
 			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
 			while (std::chrono::steady_clock::now() < deadline) {
 				if (!other.PollEvents().empty()) { *error = "another listener consumed a connection's callbacks"; return false; }
@@ -359,7 +359,7 @@ namespace RTE {
 		bool TestTwoThreadsSendOnOneTransport(std::string* error) {
 			if (!GnsTransport::IsCompiledIn()) return true;
 			GnsTransport host, client;
-			if (!host.StartHost(49592, error) || !client.Connect("127.0.0.1", 49592, error)) return false;
+			if (!host.StartHost(43613, error) || !client.Connect("127.0.0.1", 43613, error)) return false;
 			NetPeerId toClient = c_InvalidNetPeerId;
 			bool clientUp = false;
 			const auto started = std::chrono::steady_clock::now();
@@ -8427,7 +8427,7 @@ namespace RTE {
 		NetMatchService service;
 		NetMatchServiceRequest request;
 		request.host = true;
-		request.port = 49475;
+		request.port = 43614;
 		request.activityPreset = "P4 Alpha Duel";
 		request.activityModule = "Base.rte";
 		request.sceneName = "Grasslands";
@@ -17449,7 +17449,7 @@ namespace RTE {
 	bool TestTransportRetirementDoesNotSleep(std::string* error) {
 		if (!GnsTransport::IsCompiledIn()) return true;
 		GnsTransport host, client;
-		if (!host.StartHost(49495, error) || !client.Connect("127.0.0.1", 49495, error)) return false;
+		if (!host.StartHost(43616, error) || !client.Connect("127.0.0.1", 43616, error)) return false;
 		NetPeerId hostPeer = 0, clientPeer = 0;
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
 		while (std::chrono::steady_clock::now() < deadline) {
@@ -17478,7 +17478,7 @@ namespace RTE {
 		GnsTransport host, client;
 		std::ostringstream captured;
 		struct Output { std::streambuf* previous; ~Output() { std::cout.rdbuf(previous); } } output{std::cout.rdbuf(captured.rdbuf())};
-		if (!host.StartHost(49469, error) || !client.Connect("127.0.0.1", 49469, error)) return false;
+		if (!host.StartHost(43617, error) || !client.Connect("127.0.0.1", 43617, error)) return false;
 		NetPeerId hostPeer = 0, clientPeer = 0;
 		const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
 		while (std::chrono::steady_clock::now() < end) {
