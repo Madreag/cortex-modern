@@ -5,6 +5,7 @@
 #include "GnsTransport.h"
 #include "MenuMan.h"
 #include "NetMuxTransport.h"
+#include "NetPeerSessionWire.h"
 #include "SettingsMan.h"
 #include "System.h"
 #ifdef CCCP_WITH_GNS
@@ -15111,6 +15112,58 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestPeerLinkRetirementWaitsForBothDirections(std::string* error) {
+		std::vector<std::string> log;
+		TransportTap primary("primary", &log);
+		NetPeerSessionLinks links;
+		uint64_t nowMs = 1;
+		links.sessionClock = [&] { return nowMs; };
+		links.primary = &primary; links.primaryBindings[7] = 2;
+		links.localPeerId = 3; links.sessionAttached = true;
+		auto& spare = links.probes[2];
+		spare.transport = std::make_unique<TransportTap>("spare", &log);
+		spare.answered = true; spare.connection = 3;
+		links.RetireSpareRoutes(2);
+		if (!log.empty()) { *error = "a peer link retired before the retained route carried frames"; return false; }
+		if (!links.SendTo(2, NetTransportLane::InputUnreliable, {1}, true) || log != std::vector<std::string>{"primary.Send(7,1)"}) {
+			*error = "an extra dial replaced the admitted host frame route"; return false;
+		}
+		links.RetireSpareRoutes(2);
+		if (log.size() != 1) { *error = "one-way frame traffic retired a peer link"; return false; }
+		links.NoteFrameRead(primary, 7);
+		links.frameBlackout = true; links.RetireSpareRoutes(2);
+		if (log.size() != 1) { *error = "a blackout retired a peer link"; return false; }
+		links.frameBlackout = false;
+		nowMs += c_NetLinkTimeoutMs / 2;
+		links.RetireSpareRoutes(2);
+		if (log.size() != 1) { *error = "old traffic retired a peer link"; return false; }
+		links.SendTo(2, NetTransportLane::InputUnreliable, {2}, true); links.NoteFrameRead(primary, 7);
+		links.sessionRoutes[9] = 2; links.admittedRoutes[9] = {spare.transport.get(), 3};
+		links.RetireSpareRoutes(2);
+		if (log.size() != 2 || links.RouteTo(2).first != spare.transport.get()) {
+			*error = "a new admission was replaced by an older peer link"; return false;
+		}
+		links.admittedRoutes.clear(); links.sessionRoutes.clear();
+		links.RetireSpareRoutes(2);
+		if (log != std::vector<std::string>{"primary.Send(7,1)", "primary.Send(7,1)", "spare.Disconnect(3," + std::string(c_NetPeerLinkRetiredText) + ")"} ||
+		    spare.connection != c_InvalidNetPeerId || spare.answered || links.RouteTo(2) != std::pair<INetTransport*, NetPeerId>{&primary, 7}) {
+			*error = "retirement closed or detached the retained frame route"; return false;
+		}
+		links.primary = nullptr; links.primaryBindings.clear();
+		links.listener = std::make_unique<TransportTap>("listener", &log); links.listenerBindings[5] = 2;
+		spare.connection = 3; spare.answered = true;
+		links.localPeerId = 1;
+		if (links.RouteTo(2) != std::pair<INetTransport*, NetPeerId>{links.listener.get(), 5}) {
+			*error = "the lower seat did not select the higher seat's incoming frame route"; return false;
+		}
+		links.localPeerId = 3;
+		if (links.RouteTo(2) != std::pair<INetTransport*, NetPeerId>{spare.transport.get(), 3}) {
+			*error = "the higher seat did not select its outgoing frame route"; return false;
+		}
+		std::cout << "[net-match-selftest] PASS peer_link_retirement_waits_for_both_directions" << std::endl;
+		return true;
+	}
+
 	bool TestMuxRoutesByTag(std::string* error) {
 		std::vector<std::string> log;
 		TransportTap* ip = nullptr;
@@ -19318,6 +19371,7 @@ namespace RTE {
 		if (!TestEndedWorldLateAdmission(&endedAdmissionError)) std::cerr << "[net-match-selftest] FAIL: " << endedAdmissionError << std::endl;
 		sessionRow([&] { return TestMuxOpensIceListenFirst(&error); }, "TestMuxOpensIceListenFirst()");
 		sessionRow([&] { return TestMuxRoutesByTag(&error); }, "TestMuxRoutesByTag()");
+		sessionRow([&] { return TestPeerLinkRetirementWaitsForBothDirections(&error); }, "TestPeerLinkRetirementWaitsForBothDirections()");
 		std::string iceRowError;
 		if (!TestIceRowJoinMode(&iceRowError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << iceRowError << std::endl;

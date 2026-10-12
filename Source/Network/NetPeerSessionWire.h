@@ -39,6 +39,8 @@ namespace RTE {
 		std::map<NetPeerId, uint8_t> sessionRoutes;
 		std::map<NetPeerId, std::pair<INetTransport*, NetPeerId>> admissions;
 		std::map<NetPeerId, std::pair<INetTransport*, NetPeerId>> admittedRoutes;
+		struct FrameFlow { uint64_t sent = 0, received = 0, sentAtMs = 0, heardAtMs = 0; };
+		std::map<const INetTransport*, std::map<NetPeerId, FrameFlow>> frameFlow;
 		NetPeerId nextAdmission = 0x80000000U;
 		struct Pending { uint64_t sequence = 0; NetTransportLane lane; std::vector<uint8_t> bytes; uint64_t sendAfterMs = 0; std::array<uint8_t, 32> sendKey{}; uint64_t previous = 0; bool acknowledged = false; uint64_t lastSentMs = 0; uint8_t repeats = 0; };
 		std::map<uint8_t, std::deque<Pending>> pending;
@@ -51,8 +53,11 @@ namespace RTE {
 		std::deque<NetTransportEvent> events;
 		struct Closing { std::string reason; uint64_t deadlineMs = 0; };
 		std::map<uint8_t, Closing> closing;
-		bool SendTo(uint8_t peer, NetTransportLane lane, const std::vector<uint8_t>& bytes);
+		bool SendTo(uint8_t peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, bool framePacket = false);
+		std::vector<std::pair<INetTransport*, NetPeerId>> RoutesTo(uint8_t peer) const;
 		std::pair<INetTransport*, NetPeerId> RouteTo(uint8_t peer) const;
+		void NoteFrameRead(const INetTransport& wire, NetPeerId native);
+		void RetireSpareRoutes(uint8_t peer);
 		NetPeerId SessionRoute(uint8_t peer) const;
 		uint8_t PeerOn(const INetTransport& wire, NetPeerId native) const;
 		bool IsNativeRoute(NetPeerId route, const INetTransport* wire, NetPeerId native) const;
