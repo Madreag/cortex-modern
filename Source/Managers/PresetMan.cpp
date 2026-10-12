@@ -33,6 +33,8 @@ const std::array<std::pair<std::string, std::string>, 3> PresetMan::c_UserdataMo
                                                                                           {c_UserScriptedSavesModuleName, "Scripted Activity Saves"}}};
 
 PresetMan::PresetMan() {
+	CheckpointNativeStorage::AllocationScope resources(true);
+	m_DataModuleIDs = decltype(m_DataModuleIDs){};
 	Clear();
 }
 

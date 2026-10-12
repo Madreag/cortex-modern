@@ -1829,6 +1829,7 @@ bool GUICheckpoint::RunSelfTest() {
 			const GUIControlManager* address = controls.get();
 			const AllegroScreen* screenAddress = screen.get();
 			const BITMAP* imageAddress = image.get();
+			const int baseModule = g_PresetMan.GetModuleID("Base.rte");
 			auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
 			snapshot->SealBoundary();
 			g_TimerMan.PrepareCheckpointValues();
@@ -1845,6 +1846,7 @@ bool GUICheckpoint::RunSelfTest() {
 			CheckpointNativeStorage::ReadScope read(pages, roots);
 			const auto* screenBitmap = CheckpointNativeStorage::Source(CheckpointNativeStorage::Source(screenAddress)->GetBitmap());
 			check("saved_screen_keeps_its_bitmap_after_source_destruction", screenBitmap && screenBitmap->GetBitmap() == imageAddress);
+			check("saved_module_lookup_keeps_name_case_extension_and_absence", baseModule >= 0 && g_PresetMan.GetModuleID("Base.rte") == baseModule && g_PresetMan.GetModuleID("BASE") == baseModule && g_PresetMan.GetModuleID("checkpoint-selftest-absent.rte") == -1);
 			BITMAP* savedImage = snapshot->ReadBitmap(imageAddress);
 			auto savedScreen = std::make_unique<AllegroScreen>(savedImage);
 			auto savedInput = std::make_unique<GUIInputWrapper>(0);
