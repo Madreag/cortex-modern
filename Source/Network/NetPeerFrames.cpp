@@ -94,6 +94,8 @@ namespace RTE {
 		if (voters == 0 || (voters & ~owners) != 0) return false;
 		// A declared Leave keeps its AI seat but stops contributing to future frame votes.
 		for (const auto& [peer, ended]: m_PeerRoundEnds) if (!ended.closedLink && m_Stats.nextFrame >= ended.frame) owners &= ~SeatBit(peer);
+		// A returning seat answers nothing until it plays, so it votes only after its agreed neutral interval.
+		for (const auto& [peer, back]: m_ReclaimTransactions) if (m_Stats.nextFrame <= back.neutralThroughFrame) owners &= ~SeatBit(peer);
 		voters &= owners;
 		if (voters == 0) return false;
 		if (m_PeerAdminFrameMembers != 0 && voters == m_PeerAdminFrameMembers) return true;
