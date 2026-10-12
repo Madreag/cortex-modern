@@ -40,8 +40,9 @@ namespace RTE {
 #pragma region Destruction
 		static void ApplyQueuedDeletions();
 
-		/// Deletes every queued luabind object while the state that is about to close is still open: a
+		/// Deletes the queued luabind objects while the state that is about to close is still open: a
 		/// queued object holds a registry reference into its own state and unrefs it when it is deleted.
+		/// On the simulation thread every queued object goes; off it only the closing state's own.
 		/// @param luaState The state about to be closed.
 		/// Stored script wrappers release their references to this state as well.
 		/// @return How many queued objects belonged to that state, i.e. how many the drain rescued.

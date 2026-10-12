@@ -9697,6 +9697,37 @@ static bool RunHookStackBalanceSelfTest() {
 	return passed;
 }
 
+// A state closed off the simulation thread, as a saver closes each of its own, releases only its own objects.
+static bool RunWorkerStateCloseLeavesLiveObjectsSelfTest() {
+	LuaStateWrapper live;
+	live.Initialize();
+	lua_State* const L = live.GetLuaState();
+	auto queued = std::make_unique<LuabindObjectWrapper>(new luabind::object(L, std::string("live")), "live-object.lua");
+	const int reference = queued->GetCheckpointReference();
+	queued.reset();
+	std::thread([] {
+		LuaStateWrapper worker;
+		worker.Initialize();
+		auto own = std::make_unique<LuabindObjectWrapper>(new luabind::object(worker.GetLuaState(), 2.0), "worker-object.lua");
+		own.reset();
+		worker.Destroy();
+	}).join();
+	lua_rawgeti(L, LUA_REGISTRYINDEX, reference);
+	const bool kept = lua_type(L, -1) == LUA_TSTRING;
+	lua_pop(L, 1);
+	const uint64_t lateBefore = LuabindObjectWrapper::QueuedDeletionsNamingAClosedState();
+	LuabindObjectWrapper::ApplyQueuedDeletions();
+	lua_rawgeti(L, LUA_REGISTRYINDEX, reference);
+	const bool released = lua_type(L, -1) != LUA_TSTRING;
+	lua_pop(L, 1);
+	const bool safe = LuabindObjectWrapper::QueuedDeletionsNamingAClosedState() == lateBefore;
+	live.Destroy();
+	const bool passed = kept && released && safe;
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_state_closed_off_the_simulation_thread_leaves_the_live_states_objects kept=" << kept
+	          << " released=" << released << " safe=" << safe << (kept ? "" : " (closing another thread's state unreffed a live state's object)") << std::endl;
+	return passed;
+}
+
 static bool RunStoredCallbackStateCloseSelfTest() {
 	std::unique_ptr<LuabindObjectWrapper> callback;
 	const uint64_t lateBefore = LuabindObjectWrapper::QueuedDeletionsNamingAClosedState();
@@ -9784,6 +9815,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	const bool selfFetch = RunScriptSelfFetchSelfTest();
 	const bool hookStack = RunHookStackBalanceSelfTest();
 	const bool storedCallback = RunStoredCallbackStateCloseSelfTest();
+	const bool workerStateClose = RunWorkerStateCloseLeavesLiveObjectsSelfTest();
 	const std::string queuedDeletionOrder4 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(4);
 	const std::string queuedDeletionOrder32 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(32);
 	const bool queuedDeletionOrder = queuedDeletionOrder4 == "1,2,3,4,5,6,7,8" && queuedDeletionOrder4 == queuedDeletionOrder32;
@@ -9886,7 +9918,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 			for (size_t i = 0; i < gained.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start gained: " << gained[i] << std::endl;
 		}
 	}
-	return roundCollision && collisionRestored && graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && poolScopeTick && getterCache && selfFetch && hookStack && storedCallback && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
+	return roundCollision && collisionRestored && graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && poolScopeTick && getterCache && selfFetch && hookStack && storedCallback && workerStateClose && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
