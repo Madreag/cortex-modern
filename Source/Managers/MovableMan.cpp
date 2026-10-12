@@ -4696,8 +4696,20 @@ void MovableMan::AddActor(Actor* actorToAdd) {
 	}
 }
 
+bool MovableMan::AlreadyOwnsMatchDevice(const MovableObject* device) const {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive() || m_Speculation.active || m_RestoringSnapshot) {
+		return false;
+	}
+	// Inventory dropping and arm detachment can hand over the same device in one update.
+	// Settling devices have left the collision-valid sets but still belong to the world.
+	return ValidMO(device) || std::find(m_Particles.begin(), m_Particles.end(), device) != m_Particles.end();
+}
+
 void MovableMan::AddItem(HeldDevice* itemToAdd) {
 	if (itemToAdd && g_ActivityMan.GetActivity()) {
+		if (AlreadyOwnsMatchDevice(itemToAdd)) {
+			return;
+		}
 		NetModerationGUIProbe::TraceObjectLifetime(itemToAdd, "add-item", true);
 		g_ActivityMan.GetActivity()->ForceSetTeamAsActive(itemToAdd->GetTeam());
 
@@ -4732,6 +4744,9 @@ void MovableMan::AddItem(HeldDevice* itemToAdd) {
 
 void MovableMan::AddParticle(MovableObject* particleToAdd) {
 	if (particleToAdd && g_ActivityMan.GetActivity()) {
+		if (ScenarioRunner::IsLockstepControllerSyncActive() && particleToAdd->IsDevice() && AlreadyOwnsMatchDevice(particleToAdd)) {
+			return;
+		}
 		SceneMan::TraceTerrainEvent("spwn", std::bit_cast<int32_t>(particleToAdd->GetPos().m_X), std::bit_cast<int32_t>(particleToAdd->GetPos().m_Y), static_cast<int>(particleToAdd->GetUniqueID()), static_cast<int>(SceneMan::GetTerrainEventContext()), std::bit_cast<int32_t>(particleToAdd->GetVel().m_X));
 		g_ActivityMan.GetActivity()->ForceSetTeamAsActive(particleToAdd->GetTeam());
 
