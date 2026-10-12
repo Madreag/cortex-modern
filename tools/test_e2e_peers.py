@@ -181,6 +181,8 @@ class SpreadFightTest(unittest.TestCase):
         rows = [dict(round=7, tick=tick, phase="live", paused=False, sim_gated=True,
                      subsystems={**subsystems, "actors": actors if tick == 4 else "a1"}) for tick in range(1, 6)]
         (probe / "ticks.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        (run / role / "stdout.log").write_text("[horizon-path] wait_us=59 tick=511 origin=106 expired=0 count=1 p99_us=59\n", encoding="utf-8")
+        (run / role / "horizon_path_grid.json").write_text('{"count":11496,"request_stalls":0,"request_wait_max_us":0}\n', encoding="utf-8")
         # A half finishes its own player only; play() leaves the shared gates to the collector.
         peers.video.finish_run({"name": "fight", **self.GATE}, {}, {"name": "run0", "root": str(run), "peers": []}, {},
                                SimpleNamespace(fps=30, sheet_every=15, scratch_root=self.root, scratch_limit_bytes=1 << 40),
@@ -214,6 +216,14 @@ class SpreadFightTest(unittest.TestCase):
         _, _, result = self.collect("a2")
         self.assertEqual(result["status"], "FAIL")
         self.assertEqual(result["first_difference"]["tick"], 4)
+
+    def test_each_players_pathfinding_waits_are_quoted(self):
+        _, _, result = self.collect("a1")
+        for role in ("host", "joiner"):
+            waits = result["pathfinding"][role]
+            self.assertEqual(waits["horizon_report"]["request_stalls"], 0)
+            self.assertEqual(waits["positive_waits"], 1)
+            self.assertEqual(waits["worst_wait"]["wait_us"], 59)
 
     def test_one_players_history_alone_cannot_pass(self):
         out = self.root / "collected"

@@ -1523,6 +1523,27 @@ def continuous_minute_evidence(probe_path, spec):
             "reason": None if passed else "The full fight, including captures and chat, did not sustain every required minute"}
 
 
+HORIZON_REPORT = "horizon_path_grid.json"
+HORIZON_WAIT = re.compile(r"(?m)^\[horizon-path\] wait_us=(\d+) tick=(\d+)[^\n]*")
+
+
+def pathfinding_waits(peer_root):
+    """The pathfinder's own horizon report and every positive grid wait line, as the player recorded them."""
+    root = Path(peer_root)
+    report = root / HORIZON_REPORT
+    log = root / "stdout.log"
+    text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+    lines = [{"wait_us": int(match[1]), "tick": int(match[2]), "line": match[0]} for match in HORIZON_WAIT.finditer(text)]
+    waits = [row for row in lines if row["wait_us"] > 0]
+    try:
+        horizon = json.loads(report.read_text(encoding="utf-8")) if report.is_file() else None
+    except ValueError:
+        horizon = {"unreadable": str(report)}
+    return {"horizon_report": horizon, "report_path": str(report) if report.is_file() else None,
+            "positive_waits": len(waits), "worst_wait": max(waits, key=lambda row: row["wait_us"], default=None),
+            "wait_lines": [row["line"] for row in lines[:20]]}
+
+
 def dropped_index_evidence(record, drop_tick):
     """A killed peer's own recording: its index reaches the tick it was killed after, and no line but the last is torn."""
     path = Path(record["video_dir"]) / "frames.jsonl" if record.get("video_dir") else None
@@ -2291,6 +2312,10 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
         console = Path(runs[name].cwd) / "LogConsole.txt"
         if console.is_file() and not (peer_root / "console.log").is_file():
             (peer_root / "console.log").write_bytes(console.read_bytes())
+        # The pathfinder's horizon report lives in the private runtime, which a spread half never carries home.
+        horizon = Path(runs[name].cwd) / "Userdata" / HORIZON_REPORT
+        if horizon.is_file() and not (peer_root / HORIZON_REPORT).is_file():
+            (peer_root / HORIZON_REPORT).write_bytes(horizon.read_bytes())
         collected.append({"peer": name, "root": str(peer_root), "video_dir": str(video_dir),
                           "expected_termination": bool(peer.get("kill_after_s") or peer.get("kill_at_tick") or peer.get("kill_when")),
         "record": {k: records.get(name, {}).get(k) for k in
@@ -2793,10 +2818,12 @@ def native_behavior(root, spec):
 
 
 def fight_hash_gate(run, capture):
-    """Judge the fight once over every named player's history."""
+    """Judge the fight once over every named player's history, quoting each player's pathfinding waits beside it."""
     from e2e.fight_hashes import compare_fight_hashes
     spec = run['fight_hash_gate']
     result = compare_fight_hashes(Path(capture['root']), spec)
+    roots = {peer['peer']: peer['root'] for peer in capture['peers'] if peer.get('root')}
+    result['pathfinding'] = {name: pathfinding_waits(roots[name]) if name in roots else None for name in spec['peers']}
     write_json(Path(capture['root']) / 'fight-hashes.json', result)
     for peer in capture['peers']:
         peer.setdefault('gates', {})['fight-hashes'] = result
