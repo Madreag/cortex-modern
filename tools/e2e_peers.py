@@ -6,8 +6,8 @@
 
 Box facts stay outside the game tree. Each box supplies name, ssh, os, hostname,
 repo, scratch, python and build_receipt. Windows also supplies session_dir and
-task; the Mac supplies binary and plays in a visible window. Builds come from
-each box's own checkout.
+task; a Mac or Linux joiner supplies binary and plays in a visible window.
+Builds come from each box's own checkout.
 """
 from __future__ import annotations
 
@@ -31,6 +31,9 @@ from types import SimpleNamespace
 import uuid
 
 import e2e_video as video
+
+JOINER_SYSTEMS = ("darwin", "linux")
+PLAYER_SCRIPTS = {"darwin": ("/bin/zsh", "tools/e2e/peer_mac.sh"), "linux": ("/bin/bash", "tools/e2e/peer_linux.sh")}
 
 
 def read(path):
@@ -109,7 +112,7 @@ class PlayerRun:
         run = video.make_run(repo, args, out, timeout, env=environment, **kwargs)
         run.record.update(box=self.request["box"]["name"], engine_hostname=socket.gethostname(), topology="spread", proof=False,
                           source_commit=self.request["commit"], scene_sha256=self.request["scene_sha256"])
-        if self.request["box"]["os"] == "darwin":
+        if self.request["box"]["os"] in JOINER_SYSTEMS:
             run.record.update(headed=True, headless_render_settings_applied=False)
         start = run.start
 
@@ -131,7 +134,7 @@ def check_build(request):
     source = video.source_evidence(repo)
     if source["tip"] != request["commit"] or source["dirty"]:
         raise ValueError("player checkout differs from the committed scene launcher")
-    if box["os"] == "darwin":
+    if box["os"] in JOINER_SYSTEMS:
         os.environ["CCCP_TEST_BINARY"] = str(repo / box["binary"])
     receipt = read(box["build_receipt"])
     executable = video.file_evidence(video.capture_binary(repo))
@@ -158,7 +161,7 @@ def play(request_path):
     run["peers"] = [peer for peer in run.get("peers", document.get("peers", [])) if peer["name"] == role]
     local_scene = copy.deepcopy(document)
     local_scene["checklist"] = [item for item in document.get("checklist", []) if not item.get("peer") or item["peer"] == role]
-    headed = request["box"]["os"] == "darwin"
+    headed = request["box"]["os"] in JOINER_SYSTEMS
     options = SimpleNamespace(repo=Path(request["box"]["repo"]), size=None, port=request["port"], fps=request["fps"],
                               setting=[], render_cap=60, headed=headed, fullstate_every=0, sheet_every=request["sheet_every"],
                               tokens={"PROBE_DIR_" + other: out / name / (other + "-stage/probe")
@@ -364,7 +367,8 @@ def launch(box, request_path, log):
     if box["os"] == "win32":
         args = ["pwsh", "-NoProfile", "-File", box["repo"] + "/tools/e2e/peer_box.ps1", "-Request", remote]
     else:
-        args = ["/bin/zsh", box["repo"] + "/tools/e2e/peer_mac.sh", remote, box["repo"]]
+        shell, script = PLAYER_SCRIPTS[box["os"]]
+        args = [shell, box["repo"] + "/" + script, remote, box["repo"]]
     process = subprocess.Popen(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", box["ssh"], shlex.join(args)],
                                stdout=log, stderr=subprocess.STDOUT)
     return process, remote, tool
@@ -376,8 +380,8 @@ def selected_boxes(value, path):
         raise ValueError("name two different boxes for host and joiner")
     entries = {box["name"].casefold(): box for box in read(path)["boxes"]}
     result = {role: entries[name.casefold()] for role, name in assignments.items()}
-    if result["host"]["os"] != "win32" or result["joiner"]["os"] != "darwin":
-        raise ValueError("this scene launcher needs a Windows host and a Mac joiner")
+    if result["host"]["os"] != "win32" or result["joiner"]["os"] not in JOINER_SYSTEMS:
+        raise ValueError("this scene launcher needs a Windows host and a Mac or Linux joiner")
     if result["host"]["hostname"].casefold() == result["joiner"]["hostname"].casefold():
         raise ValueError("both assignments name one engine host")
     return result

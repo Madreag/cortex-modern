@@ -243,7 +243,7 @@ class SpreadFightTest(unittest.TestCase):
 
 
 class JoinerBoxTest(unittest.TestCase):
-    """A joiner plays in a visible window that draws like a player's own game."""
+    """A Linux box joins exactly as the Mac does: its own checkout, its own build and a visible window."""
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -258,6 +258,29 @@ class JoinerBoxTest(unittest.TestCase):
 
     def tearDown(self):
         self.temporary.cleanup()
+
+    def test_mac_and_linux_joiners(self):
+        for joiner in ("Mac", "Linux"):
+            self.assertEqual(peers.selected_boxes("host=Ally,joiner=" + joiner, self.boxes)["joiner"]["name"], joiner)
+
+    def test_only_a_windows_host(self):
+        with self.assertRaisesRegex(ValueError, "Windows host and a Mac or Linux joiner"):
+            peers.selected_boxes("host=Linux,joiner=Mac", self.boxes)
+        with self.assertRaisesRegex(ValueError, "Windows host and a Mac or Linux joiner"):
+            peers.selected_boxes("host=Mac,joiner=Ally", self.boxes)
+
+    def test_linux_player_script(self):
+        box = peers.selected_boxes("host=Ally,joiner=Linux", self.boxes)["joiner"]
+        request = self.root / "request.json"
+        request.write_text(json.dumps(dict(out="/linux/mx/s10-run0-1")))
+        with mock.patch.object(peers, "ssh"), mock.patch.object(peers, "copy_file"), \
+                mock.patch.object(peers.subprocess, "Popen") as popen:
+            peers.launch(box, request, None)
+        command = popen.call_args.args[0][-1]
+        self.assertEqual(command, "/bin/bash /linux/tree/tools/e2e/peer_linux.sh /linux/mx/s10-run0-1/request.json /linux/tree")
+        script = (Path(peers.__file__).parent / "e2e/peer_linux.sh").read_text()
+        self.assertIn("unset CCCP_HEADLESS", script)
+        self.assertIn('export DISPLAY="${DISPLAY:-:0}"', script)
 
     def test_headed_player_environment(self):
         environment = peers.video.headed_environment({"CCCP_HEADLESS": "1", "CC_TEST_READBACK_TIMING": "1"})
