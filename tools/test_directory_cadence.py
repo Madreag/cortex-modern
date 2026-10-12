@@ -314,7 +314,9 @@ def main():
         else:
             until = max((event.get("reply_at_ms", event["at_ms"]) + event["retry_wait_s"] * 1000 for event in events
                          if event["role"] == "host" and event["kind"] in ("issue", "signal", "signals") and event["status"] == 429), default=0)
-            resumed = [event for event in events if event["role"] == "host" and event["at_ms"] >= until]
+            # Long-poll replies finish after later short requests; compare when each request began.
+            resumed = sorted((event for event in events if event["role"] == "host" and event["at_ms"] >= until),
+                             key=lambda event: event["at_ms"])
             checks.update(waited_40s=requests.wait_from is not None and any(
                               event["kind"] == "signals" and event["status"] == 429 for event in events),
                           admitted=all("[menu-script] connected:2 -> OK" in text[role] for role in runs),
