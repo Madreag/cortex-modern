@@ -212,7 +212,10 @@ namespace RTE {
 				if (hub.row.laterSessionMessageFirst && owner == 2 && NetHostMigrationCodec::Decode(bytes, key, decision) &&
 				    decision.type == NetHostMigrationMessageType::PeerSession) {
 					const auto decoded = NetProtocol::Decode(decision.bytes);
-					if (decoded.ok && std::holds_alternative<NetChat>(decoded.message.payload)) { sessionDelay = 300; ++hub.delayedChatSends; }
+					if (decoded.ok && std::holds_alternative<NetChat>(decoded.message.payload)) {
+						sessionDelay = 300; ++hub.delayedChatSends;
+						decision.appliedFrame = hub.now; NetHostMigrationCodec::Encode(decision, key, delivered);
+					}
 				}
 				if (hub.row.receiptGap && NetHostMigrationCodec::Decode(bytes, key, decision) && RemoveReceiptGap(decision, delivered)) return true;
 #if __has_include("NetPeerSessionWire.h")

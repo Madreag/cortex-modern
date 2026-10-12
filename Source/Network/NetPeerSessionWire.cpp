@@ -140,7 +140,7 @@ namespace RTE {
 			}
 			return true;
 		}
-		if (message.frame == 0 || message.appliedFrame >= message.frame || message.bytes.empty() ||
+		if (message.frame == 0 || message.completeFrom >= message.frame || message.bytes.empty() ||
 		    (!NetProtocol::Decode(message.bytes).ok && !NetLobbyProtocol::Decode(message.bytes).ok &&
 		     !NetLockstepCodec::Decode(message.bytes, ControllerFrame::c_Version).ok)) return true;
 		const auto acknowledge = [&](uint64_t sequence, const auto& replyKey) {
@@ -154,7 +154,7 @@ namespace RTE {
 		auto& waiting = incoming[message.senderPeerId];
 		if (!waiting.contains(message.frame)) {
 			if (waiting.size() >= 32 || incomingBytes + message.bytes.size() > 1024 * 1024) return true;
-			waiting.emplace(message.frame, Incoming{message.appliedFrame, message.bytes, readKey ? *readKey : key});
+			waiting.emplace(message.frame, Incoming{message.completeFrom, message.bytes, readKey ? *readKey : key});
 			incomingBytes += message.bytes.size();
 		}
 		// A changed native path may deliver the later message first; keep its predecessor before applying it.
@@ -191,7 +191,7 @@ namespace RTE {
 				message.sessionId = sessionId; message.roundId = message.generation = 1;
 				message.senderPeerId = localPeerId; message.successorPeerId = peer;
 				message.frame = item.sequence; message.bytes = item.bytes; message.totalBytes = static_cast<uint32_t>(item.bytes.size());
-				message.appliedFrame = item.previous;
+				message.completeFrom = item.previous;
 				std::vector<uint8_t> bytes;
 				if (NetHostMigrationCodec::Encode(message, item.sendKey, bytes) && SendTo(peer, NetTransportLane::ControlReliable, bytes)) {
 					item.lastSentMs = nowMs; ++item.repeats;
