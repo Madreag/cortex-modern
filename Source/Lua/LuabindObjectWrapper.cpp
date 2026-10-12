@@ -53,14 +53,21 @@ namespace {
 	std::mutex s_QueuesMutex;
 	std::vector<std::unique_ptr<SimThreadDeletionQueue>> s_Queues;
 
-	// The wrapper queue's lock, shared by the destructor that fills it and the drain that empties it.
+	// The wrapper queue's lock, shared by the destructor that fills it, the drain that empties it and the closed-state record.
 	std::mutex s_QueuedDeletionsMutex;
 	LuabindObjectWrapper* s_StoredObjects = nullptr;
 	// The states lua_close has already run on. A queued luabind object naming one of these may not be
 	// deleted: its destructor unrefs the registry of a lua_State that no longer exists.
 	std::vector<lua_State*> s_ClosedStates;
-	uint64_t s_QueuedDeletionsDrainedAtStateClose = 0;
-	uint64_t s_QueuedDeletionsNamingAClosedState = 0;
+	std::atomic<uint64_t> s_QueuedDeletionsDrainedAtStateClose{0};
+	std::atomic<uint64_t> s_QueuedDeletionsNamingAClosedState{0};
+	// The states this thread opened off the simulation thread: only this thread runs them, so their objects are deleted here and
+	// never queued for the simulation thread, which would unref a registry another thread is using.
+	thread_local std::vector<lua_State*> t_ThreadStates;
+
+	bool OnThisThreadOnly(const luabind::adl::object* object) {
+		return !s_OnSimThread && object && std::find(t_ThreadStates.begin(), t_ThreadStates.end(), object->interpreter()) != t_ThreadStates.end();
+	}
 
 	// luabind gives an object_rep the destructor of its own class_rep, except for a Lua-side class, which takes its C++ base's.
 	void (*OwnedObjectDestructor(const luabind::detail::class_rep* classRep))(void*) {
@@ -147,7 +154,11 @@ void LuabindObjectWrapper::InstallSimThreadDeletion(lua_State* luaState, int sta
 		queue = s_Queues[stateIndex].get();
 	}
 	// A new state can open at the address a closed one had; from here that address is live again.
-	std::erase(s_ClosedStates, luaState);
+	{
+		std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
+		std::erase(s_ClosedStates, luaState);
+	}
+	if (!s_OnSimThread) t_ThreadStates.push_back(luaState);
 	luabind::detail::class_registry* registry = luabind::detail::class_registry::get_registry(luaState);
 	const int instanceMetatables[] = {registry->cpp_instance(), registry->lua_instance()};
 	for (int metatable: instanceMetatables) {
@@ -344,6 +355,7 @@ void LuabindObjectWrapper::ApplyQueuedDeletions() {
 	// Deleting one object can destruct engine objects that queue wrappers of their own, so take the
 	// queue by swap and keep going until nothing new arrives.
 	std::vector<luabind::adl::object*> draining;
+	std::vector<lua_State*> closed;
 	for (;;) {
 		{
 			std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
@@ -352,9 +364,10 @@ void LuabindObjectWrapper::ApplyQueuedDeletions() {
 			}
 			draining.swap(s_QueuedDeletions);
 			s_QueuedDeletions.clear();
+			closed = s_ClosedStates;
 		}
 		for (luabind::adl::object* obj: draining) {
-			if (obj && std::find(s_ClosedStates.begin(), s_ClosedStates.end(), obj->interpreter()) != s_ClosedStates.end()) {
+			if (obj && std::find(closed.begin(), closed.end(), obj->interpreter()) != closed.end()) {
 				++s_QueuedDeletionsNamingAClosedState;
 				continue;
 			}
@@ -366,6 +379,36 @@ void LuabindObjectWrapper::ApplyQueuedDeletions() {
 
 uint64_t LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(lua_State* luaState) {
 	uint64_t held = 0;
+	if (!s_OnSimThread) {
+		// Off the simulation thread a closing state takes only its own objects: every other state's belong to the thread running it.
+		for (;;) {
+			std::vector<std::unique_ptr<luabind::adl::object>> closing;
+			{
+				std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
+				for (luabind::adl::object*& obj: s_QueuedDeletions) {
+					if (obj && obj->interpreter() == luaState) { closing.emplace_back(obj); obj = nullptr; ++held; }
+				}
+				std::erase(s_QueuedDeletions, nullptr);
+				for (LuabindObjectWrapper* wrapper = s_StoredObjects; wrapper;) {
+					LuabindObjectWrapper* next = wrapper->m_NextStored;
+					if (wrapper->m_LuabindObject->interpreter() == luaState) {
+						closing.emplace_back(wrapper->m_LuabindObject);
+						wrapper->UnlinkStoredObject();
+						wrapper->m_LuabindObject = nullptr;
+						wrapper->m_CheckpointReference = LUA_NOREF;
+						wrapper->m_OwnsObject = false;
+					}
+					wrapper = next;
+				}
+			}
+			if (closing.empty()) break;
+		}
+		s_QueuedDeletionsDrainedAtStateClose += held;
+		std::erase(t_ThreadStates, luaState);
+		std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
+		if (std::find(s_ClosedStates.begin(), s_ClosedStates.end(), luaState) == s_ClosedStates.end()) s_ClosedStates.push_back(luaState);
+		return held;
+	}
 	{
 		std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
 		for (const luabind::adl::object* obj: s_QueuedDeletions) {
@@ -395,6 +438,7 @@ uint64_t LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(lua_State* l
 	ApplyQueuedDeletions();
 	// A state's address can be handed out again by the next luaL_newstate, so the record is per address
 	// and InstallSimThreadDeletion takes it back off the list when a new state opens there.
+	std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
 	if (std::find(s_ClosedStates.begin(), s_ClosedStates.end(), luaState) == s_ClosedStates.end()) {
 		s_ClosedStates.push_back(luaState);
 	}
@@ -460,6 +504,14 @@ LuabindObjectWrapper::~LuabindObjectWrapper() {
 		s_PreviewDeletionHook(this);
 	}
 	if (m_OwnsObject) {
+		if (OnThisThreadOnly(m_LuabindObject)) {
+			{
+				std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
+				UnlinkStoredObject();
+			}
+			delete m_LuabindObject;
+			return;
+		}
 		std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
 		UnlinkStoredObject();
 		s_QueuedDeletions.push_back(m_LuabindObject);
