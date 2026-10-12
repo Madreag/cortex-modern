@@ -332,3 +332,9 @@ suite-b9daa326d: 50/50 rows pass on Windows, net-match included (no red row at a
 ## A replay that played a different history once
 
 The retained S10 recording played on exe 3a4318d0 twelve times: three plain playbacks with per-tick hashes (replay-hashes-1) and four with the lifetime trace and observer probe (replay-hashes-traced-1) are identical through tick 26000, and the trace events of four more playbacks agree; one playback (device-lifetime-b9daa326d/tip) differs between ticks 20182 and 23608: its first differing line is `[net-match] AI order target not found: UID 1719292`, after which 8630 recorded AI orders find no target (1465 in the matching run), and the traced Micro Pulsar is dropped at 24072 instead of being held at 27473. That run had no per-tick hashes, so its first differing tick and component are not known. Replays are a player feature (NetworkRecordReplays defaults on), and a playback that does not repeat itself is a determinism defect; it is not traced to a file yet. The detector is repeated playback with -net-live-tick-hashes until one run differs.
+
+Characterising it on the same executable: six more traced playbacks with per-tick hashes (replay-hashes-traced-2) and six traced playbacks without hashes (replay-events-1, 37 AI orders without a target in each, identical device events) all agree. One divergent playback in about two dozen is not reproduced; its cause stays open and is reported, not fixed.
+
+## Scratch
+
+This lane's runs are in C:/cortex-project/mx/in-match-fight15-erolpc-20261012 (under 3 GB). Small evidence files the report cites are copied to C:/Users/egerm/claude-runs/in-match-erolpc-20261012/evidence. Keep: nothing in the scratch root beyond those copies; the old root sol-in-match-fight15-20261010 (6.8 GB) is the previous engineer's and is the lead's to delete at the merge.
