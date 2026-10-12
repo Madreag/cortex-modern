@@ -5422,6 +5422,11 @@ MovableObject* MovableMan::FindObjectByUniqueID(long int id) {
 	return found;
 }
 
+const MovableObject* MovableMan::FrozenObjectByUniqueID(long int id) const {
+	const auto* known = CheckpointFind(CheckpointNativeStorage::Source(this)->CheckpointLookupValues().m_KnownObjects, id);
+	return known ? static_cast<const MovableObject*>(CheckpointNativeStorage::Original(known->second)) : nullptr;
+}
+
 bool MovableMan::IsOfActor(MOID checkMOID) {
 	if (checkMOID == g_NoMOID)
 		return false;

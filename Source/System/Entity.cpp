@@ -124,7 +124,12 @@ namespace RTE {
 		return m_MaterialReferences.FindStored(target);
 	}
 	void CheckpointNativeSnapshot::RememberUID(const MovableObject* source, MovableObject* target) {
-		if (source->GetUniqueID() > 0 && g_MovableMan.FindObjectByUniqueID(source->GetUniqueID()) == source) m_UIDs.TryEmplace(source->GetUniqueID(), target);
+		const long uid = source->GetUniqueID();
+		if (uid <= 0) return;
+		// While a saver reads, lookups answer from this snapshot, so the frozen registry names the original instead.
+		const bool registered = s_Current && CheckpointNativeStorage::Reading() ? g_MovableMan.FrozenObjectByUniqueID(uid) == CheckpointNativeStorage::Original(source)
+		                                                                      : g_MovableMan.FindObjectByUniqueID(uid) == source;
+		if (registered) m_UIDs.TryEmplace(uid, target);
 	}
 	MovableObject* CheckpointNativeSnapshot::FindUID(long uid) const {
 		return m_UIDs.Find(uid).value_or(nullptr);

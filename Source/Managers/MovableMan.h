@@ -1036,6 +1036,9 @@ namespace RTE {
 		/// @return Object found or 0 if not found any.
 		MovableObject* FindObjectByUniqueID(long int id);
 
+		/// The object a saver's frozen world registered under an id, at its original address.
+		const MovableObject* FrozenObjectByUniqueID(long int id) const;
+
 		/// Gets the unique id of the first ACraft on a team, for the network-command harness.
 		/// @param team The team to search.
 		/// @return The unique id, or 0 if no craft is on that team.
