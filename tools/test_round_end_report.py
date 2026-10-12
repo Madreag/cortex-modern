@@ -30,7 +30,8 @@ def menus(root, port):
         "activate ButtonMultiplayerCreate\nwait_connected 2 60\nwait_remote_ready 60\n"
         "activate ButtonMultiplayerStart\nwait_lockstep 180 60\nwait_connected 1 10\n"
         "open_local_pause\nactivate ButtonEndMatch\nactivate ButtonLeaveConfirm\n"
-        "wait_round_end 10\nwait_ms 2000\ndump_lobby\nexit\n")
+        "wait_round_end 10\nwait_ms 2000\nassert_substate Landing\n"
+        "assert_label LabelMultiplayerLandingStatus Match ended by host\ndump_lobby\nexit\n")
     guest = common + (
         "settext TextMultiplayerName Guest\nactivate ButtonMultiplayerJoinGame\nwait_ms 400\n"
         "activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
@@ -98,6 +99,7 @@ def main():
             directory_at_round_end=directory.get("confirmed_listed") is True and bool(directory.get("session_id")),
             truthful_host_state=report.get("state") == "Completed" and report.get("status") == "Match ended by host" and
                                 not report.get("error") and "Rematch setup failed" not in text,
+            truthful_host_label=bool(re.search(r'\[menu-script\] assert_label LabelMultiplayerLandingStatus .*text="Match ended by host" PASS', text)),
             round_delay=1 <= locked.get("input_delay_frames", 0) <= 36)
         details.update(lockstep=locked, directory_at_end=directory, last_match=ended,
                        state=report.get("state"), status=report.get("status"), departures=notes)

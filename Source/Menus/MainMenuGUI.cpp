@@ -4223,7 +4223,8 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 	} else if (!inMatchOrLobby && (m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby || m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation ||
 	            (m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions && !m_HostOptionsSetupDraft))) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
-		m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(GroupDelimiterForDisplay(FormatModuleMismatchStatus(snapshot.errorText))));
+		const std::string result = snapshot.errorText.empty() && snapshot.serviceState == "Completed" ? snapshot.statusText : snapshot.errorText;
+		m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(GroupDelimiterForDisplay(FormatModuleMismatchStatus(result))));
 	}
 
 	RefreshMultiplayerScreenControls(snapshot);
