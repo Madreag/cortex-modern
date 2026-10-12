@@ -204,7 +204,7 @@ namespace RTE {
 	void NetConnectionAuthority::SetDirectory(std::string sessionId, std::string hostToken, uint32_t hostGeneration, std::string authorityKey) {
 		std::lock_guard lock(m_Mutex);
 		if (m_SessionId != sessionId) {
-			m_FrameTie.reset(); m_FrameTieRequest.reset(); m_FrameTieReply = {}; m_NextFrameTie = 0;
+			m_FrameTie.reset(); m_FrameTieRequest.reset(); m_FrameTieReply = {}; m_NextFrameTie = 0; m_ListedMatchHash.reset();
 			m_HostChange.reset(); m_HostChangeRequest.reset(); m_HostChangeReply = {}; m_HostChangeToken.clear(); m_NextHostChange = 0;
 			m_Host.reset(); m_Bootstrap.reset(); m_CheckIn.reset(); m_Operations.clear(); m_DirectoryKey = {}; m_Removals.clear(); m_PeerRoutes.clear(); m_Relay = {};
 			if (m_LocalLease && m_LocalLease->directorySessionId != sessionId) m_LocalLease.reset();
@@ -522,9 +522,19 @@ namespace RTE {
 		std::lock_guard lock(m_Mutex);
 		return m_HostChangeReply.state == NetHostChangeReply::State::Decided && m_HostChangeReply.generation == generation ? m_HostChangeToken : std::string();
 	}
-	NetFrameTieReply NetConnectionAuthority::QueryFrameTie(const NetFrameTieRequest& request) {
+	void NetConnectionAuthority::SetListedMatchHash(const std::string& hex) {
+		std::lock_guard lock(m_Mutex);
+		NetHash32 hash{};
+		if (Unhex(hex, hash)) m_ListedMatchHash = hash;
+		else m_ListedMatchHash.reset();
+	}
+
+	NetFrameTieReply NetConnectionAuthority::QueryFrameTie(const NetFrameTieRequest& peerRequest) {
 		std::lock_guard lock(m_Mutex);
 		if (m_Suspended || m_SessionId.empty() || m_BaseUrl.empty() || !m_Player || !m_LocalLease || m_LocalLease->directorySessionId != m_SessionId) return {};
+		// The round id separates rounds; the directory knows the match by the configuration it listed.
+		auto request = peerRequest;
+		if (m_ListedMatchHash) request.configHash = *m_ListedMatchHash;
 		if (!m_FrameTieRequest || *m_FrameTieRequest != request) {
 			if (m_FrameTie) return {NetFrameTieReply::State::Waiting};
 			if (m_RetiredFrameTies.size() >= 16) return {};

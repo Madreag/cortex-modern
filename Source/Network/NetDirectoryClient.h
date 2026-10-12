@@ -117,6 +117,8 @@ namespace RTE {
 		/// The session token the register reply issued; the host's signaling channel proves it.
 		const std::string& GetToken() const { return m_Token; }
 		const std::string& AuthorityKey() const { return m_AuthorityKey; }
+		/// The match configuration hash the service holds for this row, from its last acknowledged register.
+		const std::string& RegisteredMatchConfigHash() const { return m_RegisteredMatchConfigHash; }
 		/// Requests or retrieves the held session's short-lived relay offer without blocking a frame.
 		bool RequestIceServers(const std::string& matchId, uint32_t ttl, const NetRelayConfig* fixed = nullptr);
 		bool FetchIceServers(const std::string& sessionId);

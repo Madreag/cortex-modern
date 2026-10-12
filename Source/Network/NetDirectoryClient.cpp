@@ -190,12 +190,6 @@ namespace RTE {
 		ApplyRefusedResumes(m_Row);
 		m_Running = running;
 		m_DesiredListed = listed;
-		// The referee rules on ties and host changes for the match the row names, so an agreed new match registers again.
-		if (m_State == State::Registered && !m_Row.persistentWorld && !m_SessionId.empty() && !m_RegisteredMatchConfigHash.empty() &&
-		    m_Row.matchConfigHash != m_RegisteredMatchConfigHash) {
-			SetState(State::Registering);
-			ScheduleRetry(m_HttpTransport ? NetDirectoryRetry::NowMs() : m_NowMs);
-		}
 		if (listed) {
 			m_HiddenUnsupported = false;
 		}
