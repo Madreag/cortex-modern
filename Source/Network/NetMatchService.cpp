@@ -9384,6 +9384,7 @@ static std::string ResyncSaveName() {
 				const auto peer = link == c_InvalidNetPeerId ? sessionPeers.end() : sessionPeers.find(link);
 				const bool bound = peer != sessionPeers.end();
 				connections.push_back(json{
+				    {"connection_id", info.connectionId},
 				    {"transport", connection.p2p ? "ice" : "ip"},
 				    {"side", connection.host ? "host" : "client"},
 				    {"transport_peer_id", info.peerId},

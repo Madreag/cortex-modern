@@ -60,7 +60,7 @@ namespace RTE {
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 				if (peer == m_Config.localPeerId) continue;
 				const bool wanted = !m_RemovedPeers.contains(peer) && wantsInput(peer) && (onlyPeer == 0 || onlyPeer == peer);
-				const bool delivered = wanted && m_Config.peerSessionLinks->SendTo(peer, lane, bytes);
+				const bool delivered = wanted && m_Config.peerSessionLinks->SendTo(peer, lane, bytes, true);
 				sent |= delivered;
 				if (details) DiagnosticLine() << "[net-return-input-send] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer)
 				    << " frame=" << message.frame << " wanted=" << wanted << " sent=" << delivered << " prepared=" << m_Stats.nextFrame

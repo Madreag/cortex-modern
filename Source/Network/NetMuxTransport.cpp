@@ -108,6 +108,11 @@ namespace RTE {
 		m_Tasks.clear();
 	}
 
+	void NetMuxTransport::RetirePeerLink(NetPeerId peerId) {
+		if (IsP2P(peerId)) m_P2P->RetirePeerLink(Untag(peerId));
+		else m_Ip->RetirePeerLink(peerId);
+	}
+
 	std::vector<NetTransportEvent> NetMuxTransport::PollEvents() {
 		std::vector<std::function<void()>> tasks;
 		std::function<void()> pump;
