@@ -3306,16 +3306,20 @@ namespace RTE {
 				if (json::parse(host.client.BuildReportJson())["last_error"] != sentence) {
 					*error = "R6: directory full lost its player sentence"; return false;
 				}
-				host.client.Update(4999);
+				host.client.Update(999);
 				if (host.sent->size() != 1) { *error = "R6: directory full ignored its backoff"; return false; }
+				host.client.Update(1000);
+				if (host.sent->size() != 2) { *error = "R6: directory full missed its retry deadline"; return false; }
 				for (const int status : {400, 503}) {
 					ScriptedChannel joiner(false);
 					joiner.replies->push_back({status, status == 400 ? R"({"error":"queue_full"})" : R"({"error":"full"})", ""});
 					joiner.channel.Post("host", "offer");
 					joiner.channel.Update(0); joiner.channel.Update(0);
 					if (joiner.channel.GetLastError() != sentence) { *error = "R6: signaling capacity lost its player sentence"; return false; }
-					joiner.channel.Update(4999);
+					joiner.channel.Update(999);
 					if (joiner.sent->size() != 1) { *error = "R6: signaling capacity ignored its backoff"; return false; }
+					joiner.channel.Update(1000);
+					if (joiner.sent->size() != 2) { *error = "R6: signaling capacity missed its retry deadline"; return false; }
 				}
 				std::cout << "[net-directory-selftest] PASS R6 capacity_words_and_backoff" << std::endl;
 				return true;
