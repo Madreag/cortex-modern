@@ -651,7 +651,19 @@ struct Atom::FrozenList {
 
 std::shared_ptr<const Atom::FrozenList> Atom::FreezeList(std::span<Atom* const> atoms, bool values) {
 	auto list = std::make_shared<FrozenList>();
-	list->state = s_FreezeState.load(std::memory_order_acquire)->shared_from_this();
+	if (CheckpointNativeStorage::Reading()) {
+		static const char kind{};
+		list->state = std::const_pointer_cast<FreezeState>(std::static_pointer_cast<const FreezeState>(
+		    CheckpointNativeStorage::ReadIndex(&s_FreezeState, &kind, [] {
+			    CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+			    return std::make_shared<FreezeState>();
+		    })));
+		if (!list->state->pages && !atoms.empty()) list->state->pages = CheckpointNativeStorage::PagesFor(atoms.front(), sizeof(Atom));
+	} else {
+		auto* state = s_FreezeState.load(std::memory_order_acquire);
+		if (!state) throw std::logic_error("an atom list needs a saved page reader or atom snapshot");
+		list->state = state->shared_from_this();
+	}
 	list->records.reserve(atoms.size());
 	if (!atoms.empty()) std::call_once(list->state->fieldsReady, [&] {
 		auto fields = std::make_shared<FrozenList>();
@@ -771,7 +783,7 @@ CheckpointText Atom::CaptureFrozenList(const std::shared_ptr<const FrozenList>& 
 }
 
 bool Atom::CaptureFrozenProperties(Writer& writer, std::span<Atom* const> atoms) {
-	if (!CheckpointWriter::BatchEnabled() || !s_FreezeState.load(std::memory_order_acquire)) return false;
+	if (!CheckpointWriter::BatchEnabled() || (!CheckpointNativeStorage::Reading() && !s_FreezeState.load(std::memory_order_acquire))) return false;
 	return CaptureFrozenListProperties(writer, FreezeList(atoms, false));
 }
 
@@ -798,6 +810,7 @@ std::vector<Atom::FrozenAtom> Atom::FrozenValues(const std::shared_ptr<const Fro
 }
 
 void Atom::SaveFrozenAtoms(Writer& writer, const std::shared_ptr<const FrozenList>& list) {
+	if (list->records.empty()) return;
 	const FrozenList::Tail empty;
 	const auto& layout = list->state->fields->layout;
 	for (const auto& record: list->records) {
@@ -821,7 +834,7 @@ void Atom::SaveFrozenAtoms(Writer& writer, const std::shared_ptr<const FrozenLis
 }
 
 CheckpointText Atom::CaptureCheckpointList(std::span<Atom* const> atoms) {
-	if (CheckpointWriter::BatchEnabled() && s_FreezeState.load(std::memory_order_acquire)) return CaptureFrozenList(FreezeList(atoms));
+	if (CheckpointWriter::BatchEnabled() && (CheckpointNativeStorage::Reading() || s_FreezeState.load(std::memory_order_acquire))) return CaptureFrozenList(FreezeList(atoms));
 	const auto types = [](const auto&... values) { return std::type_identity<std::tuple<std::remove_cvref_t<decltype(values)>...>>{}; };
 	using Types = decltype(VisitCheckpoint(types, std::declval<const Atom&>()));
 	const auto size = [](const auto&... values) { return std::integral_constant<size_t, (AtomPackedSize<std::remove_cvref_t<decltype(values)>>() + ... + size_t{0})>{}; };
@@ -1063,6 +1076,50 @@ std::string Atom::CheckpointListSelfTestMismatch() {
 	CheckpointWriter::BatchScope batch(true);
 	const auto empty = CaptureCheckpointList({});
 	if (empty.Text() != "0 " || empty.SharedText() != "0 ") return "empty atom list differs";
+	{
+		CheckpointNativeStorage::AllocationScope values(true);
+		AllocationScope ownedAtoms(true);
+		auto material = std::make_unique<Material>();
+		material->SetIndex(7);
+		auto atom = std::make_unique<Atom>();
+		atom->m_Material = material.get();
+		atom->m_Offset = Vector(3.5F, -0.0F);
+		atom->m_PrevError = 13;
+		atom->m_HasCheckpointLinks = true;
+		atom->m_CheckpointLinkIDs = {0, 41, 0, 51, 61};
+		atom->m_HasCheckpointMaterials = true;
+		atom->m_CheckpointMaterialReferences = {"saved material", "", "same"};
+		atom->m_IgnoreMOIDs = {1, 17, 99};
+		atom->m_TrailPoints = {{7, 8}};
+		const std::array<Atom*, 2> addresses{atom.get(), atom.get()};
+		const std::string text = atom->SaveCheckpoint();
+		const std::string expected = "2 " + std::to_string(text.size()) + " " + text + " " + std::to_string(text.size()) + " " + text + " ";
+		const auto residue = atom->PackTravelResidue();
+		auto prepared = CheckpointNativeStorage::PrepareInventory();
+		if (!prepared->Arm()) return "native atom inventory could not arm";
+		atom->m_Offset = Vector(19, 23); atom->m_IgnoreMOIDs.clear(); atom->m_TrailPoints.clear();
+		material->SetIndex(11); atom.reset(); material.reset();
+		const auto saved = std::async(std::launch::async, [&] {
+			prepared->Pages().front()->Drain();
+			CheckpointNativeStorage::ReadScope read(prepared->Pages());
+			bool refused = false;
+			{
+				CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+				try { FreezeList(addresses); } catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+			}
+			if (!refused) throw std::logic_error("saved atom metadata allocation was not refused");
+			const auto noAtoms = FreezeList({});
+			if (CaptureFrozenList(noAtoms).Text() != "0 " || !Writer::Capture([&](Writer& writer) { SaveFrozenAtoms(writer, noAtoms); }).Text().empty())
+				throw std::logic_error("empty saved atoms need another list's field layout");
+			const auto list = FreezeList(addresses);
+			const auto fields = FrozenValues(FreezeList(addresses, false));
+			if (fields.size() != 2 || fields[0].residue != residue || fields[0].offset != Vector(3.5F, -0.0F) || fields[0].material != 7 || fields[1].residue != residue)
+				throw std::logic_error("saved atom values followed source death or a later material");
+			return CaptureFrozenList(list);
+		}).get();
+		prepared.reset();
+		if (saved.Text() != expected || saved.SharedText() != expected) return "saved atom pages lost fields, trails, materials or repeated identities";
+	}
 	return {};
 }
 
