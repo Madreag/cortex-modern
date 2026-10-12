@@ -1255,6 +1255,7 @@ static MenuTraceCoverage s_menuTraceCoverage;
 static bool s_cowCheckpointAutosave = false;
 static bool s_checkpointRestoreContinue = false;
 static uint64_t s_checkpointRestoreTick = 0;
+static uint32_t s_checkpointRestoreAutosaveTicks = 0;
 static bool s_checkpointFixturePrimeScripts = false;
 static bool s_checkpointAudioEffects = false;
 static bool s_checkpointAudioEffectsPassed = false;
@@ -2134,6 +2135,16 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-checkpoint-restore-continue") {
 			s_checkpointRestoreContinue = true;
 			++i;
+			continue;
+		}
+		if (currentArg == "-checkpoint-restore-autosave-ticks") {
+			const std::string value = lastArg ? "" : argValue[i + 1];
+			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), s_checkpointRestoreAutosaveTicks);
+			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
+				System::PrintDiagnosticErrorLine("[checkpoint-restore-continue] -checkpoint-restore-autosave-ticks requires a nonnegative 32-bit integer");
+				return false;
+			}
+			i += 2;
 			continue;
 		}
 		if (currentArg == "-checkpoint-fixture-prime-scripts") {
@@ -8470,6 +8481,12 @@ void RunGameLoop() {
 					g_MetricsCollector.SetResult(s_checkpointCapturePasses == 2);
 					System::SetQuit(true);
 				}
+			}
+			// A continued restore repeats its capture at the boundary the live autosave uses.
+			if (s_cowCheckpointAutosave && s_checkpointRestoreContinue && s_checkpointRestoreAutosaveTicks > 0 && g_ActivityMan.ActivityRunning() &&
+			    simTick > s_checkpointRestoreTick && (simTick - s_checkpointRestoreTick) % s_checkpointRestoreAutosaveTicks == 0 &&
+			    !g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", simTick)) {
+				System::PrintDiagnosticLine(std::format("[checkpoint-restore-autosave] refused tick={}", simTick));
 			}
 			// The self-test's capture rides the same tick boundary the live autosave uses, after the
 			// census above: a capture taken at the top of the frame describes a different instant.
