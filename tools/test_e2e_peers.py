@@ -176,14 +176,21 @@ class SpreadFightTest(unittest.TestCase):
         run = self.root / role / "run0"
         probe = run / f"{role}-stage" / "probe"
         probe.mkdir(parents=True)
+        (run / role).mkdir()
         subsystems = {name: "h-" + name for name in CORE | {"controller", "scene", "terrain", "sim_rng", "lua_state"}}
         rows = [dict(round=7, tick=tick, phase="live", paused=False, sim_gated=True,
                      subsystems={**subsystems, "actors": actors if tick == 4 else "a1"}) for tick in range(1, 6)]
         (probe / "ticks.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
-        peers.video.feel_probes(self.GATE, {"root": str(run), "peers": [{"peer": role}]}, {})
-        archive = self.root / f"{role}.tar"
+        (run / role / "stdout.log").write_text("[horizon-path] wait_us=59 tick=511 origin=106 expired=0 count=1 p99_us=59\n", encoding="utf-8")
+        (run / role / "horizon_path_grid.json").write_text('{"count":11496,"request_stalls":0,"request_wait_max_us":0}\n', encoding="utf-8")
+        # A half finishes its own player only; play() leaves the shared gates to the collector.
+        peers.video.finish_run({"name": "fight", **self.GATE}, {}, {"name": "run0", "root": str(run), "peers": []}, {},
+                               SimpleNamespace(fps=30, sheet_every=15, scratch_root=self.root, scratch_limit_bytes=1 << 40),
+                               shared_gates=False)
+        (run / "review.json").rename(run / (role + "-review.json"))
+        archive = self.root / f"{role}.tgz"
         import tarfile
-        with tarfile.open(archive, "w") as output:
+        with tarfile.open(archive, "w:gz") as output:
             for path in sorted(run.rglob("*")):
                 if path.is_file():
                     output.add(path, arcname="run0/" + path.relative_to(run).as_posix(), recursive=False)
@@ -194,12 +201,13 @@ class SpreadFightTest(unittest.TestCase):
         out.mkdir()
         for archive in (self.half("host"), self.half("joiner", joiner_actors)):
             peers.unpack(archive, out)
-        capture = {"root": str(out / "run0"), "peers": [{"peer": "host"}, {"peer": "joiner"}]}
-        return out, capture, peers.video.fight_hash_gate(self.GATE, capture)
+        capture = {"root": str(out / "run0"), "peers": [{"peer": role, "root": str(out / "run0" / role)} for role in ("host", "joiner")]}
+        peers.video.feel_probes(self.GATE, capture, {})
+        return out, capture, json.loads((out / "run0" / "fight-hashes.json").read_text(encoding="utf-8"))
 
     def test_both_players_histories_are_kept_and_judged_once(self):
         out, capture, result = self.collect("a1")
-        self.assertTrue((out / "run0" / "fight-hashes-host.json").is_file() and (out / "run0" / "fight-hashes-joiner.json").is_file())
+        self.assertEqual(sorted(path.name for path in (out / "run0").glob("fight-hashes*.json")), ["fight-hashes.json"])
         self.assertEqual(result["status"], "PASS", result["errors"])
         self.assertEqual(sorted(result["coverage"]), ["host", "joiner"])
         self.assertTrue(all(peer["gates"]["fight-hashes"]["status"] == "PASS" for peer in capture["peers"]))
@@ -208,6 +216,115 @@ class SpreadFightTest(unittest.TestCase):
         _, _, result = self.collect("a2")
         self.assertEqual(result["status"], "FAIL")
         self.assertEqual(result["first_difference"]["tick"], 4)
+
+    def test_each_players_pathfinding_waits_are_quoted(self):
+        _, _, result = self.collect("a1")
+        for role in ("host", "joiner"):
+            waits = result["pathfinding"][role]
+            self.assertEqual(waits["horizon_report"]["request_stalls"], 0)
+            self.assertEqual(waits["positive_waits"], 1)
+            self.assertEqual(waits["worst_wait"]["wait_us"], 59)
+
+    def test_one_players_history_alone_cannot_pass(self):
+        out = self.root / "collected"
+        out.mkdir()
+        peers.unpack(self.half("host"), out)
+        capture = {"root": str(out / "run0"), "peers": [{"peer": "host", "root": str(out / "run0" / "host")}]}
+        peers.video.feel_probes(self.GATE, capture, {})
+        self.assertEqual(capture["peers"][0]["gates"]["fight-hashes"]["status"], "FAIL")
+
+    def test_a_second_copy_of_a_file_is_refused_by_name(self):
+        out = self.root / "collected"
+        out.mkdir()
+        archive = self.half("host")
+        peers.unpack(archive, out)
+        with self.assertRaisesRegex(ValueError, "would overwrite another player's evidence: run0/host"):
+            peers.unpack(archive, out)
+
+
+class JoinerBoxTest(unittest.TestCase):
+    """A Linux box joins exactly as the Mac does: its own checkout, its own build and a visible window."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.boxes = self.root / "boxes.json"
+        self.boxes.write_text(json.dumps({"boxes": [
+            dict(name="Ally", os="win32", hostname="Erol-Ally7", ssh="ally-ts", repo="C:/tree", scratch="C:/mx", python="python"),
+            dict(name="Mac", os="darwin", hostname="Erol-Mac", ssh="bro", repo="/mac/tree", scratch="/mac/mx", python="/usr/bin/python3",
+                 binary="build-gcc/CortexCommand"),
+            dict(name="Linux", os="linux", hostname="ubuntu", ssh="3090-ts", repo="/linux/tree", scratch="/linux/mx",
+                 python="/usr/bin/python3", binary="build-gcc/CortexCommand")]}))
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_mac_and_linux_joiners(self):
+        for joiner in ("Mac", "Linux"):
+            self.assertEqual(peers.selected_boxes("host=Ally,joiner=" + joiner, self.boxes)["joiner"]["name"], joiner)
+
+    def test_only_a_windows_host(self):
+        with self.assertRaisesRegex(ValueError, "Windows host and a Mac or Linux joiner"):
+            peers.selected_boxes("host=Linux,joiner=Mac", self.boxes)
+        with self.assertRaisesRegex(ValueError, "Windows host and a Mac or Linux joiner"):
+            peers.selected_boxes("host=Mac,joiner=Ally", self.boxes)
+
+    def test_linux_player_script(self):
+        box = peers.selected_boxes("host=Ally,joiner=Linux", self.boxes)["joiner"]
+        request = self.root / "request.json"
+        request.write_text(json.dumps(dict(out="/linux/mx/s10-run0-1")))
+        with mock.patch.object(peers, "ssh"), mock.patch.object(peers, "copy_file"), \
+                mock.patch.object(peers.subprocess, "Popen") as popen:
+            peers.launch(box, request, None)
+        command = popen.call_args.args[0][-1]
+        self.assertEqual(command, "/bin/bash /linux/tree/tools/e2e/peer_linux.sh /linux/mx/s10-run0-1/request.json /linux/tree")
+        script = (Path(peers.__file__).parent / "e2e/peer_linux.sh").read_text()
+        self.assertIn("unset CCCP_HEADLESS", script)
+        self.assertIn('export DISPLAY="${DISPLAY:-:0}"', script)
+
+    def test_the_collectors_own_box_plays_without_ssh(self):
+        box = dict(peers.selected_boxes("host=Ally,joiner=Linux", self.boxes)["joiner"], ssh="local")
+        self.assertEqual(peers.remote_command(box, ["/usr/bin/python3", "tool.py", "--pack", Path("/linux/mx/request.json")]),
+                         ["/usr/bin/python3", "tool.py", "--pack", "/linux/mx/request.json"])
+        self.assertEqual(peers.remote_command(dict(box, ssh="3090-ts"), ["python3", "a b"])[-2:], ["3090-ts", "python3 'a b'"])
+        source, copied, back = self.root / "source.json", self.root / "copied.json", self.root / "back.json"
+        source.write_text("{}")
+        peers.copy_file(box, source, copied)
+        peers.copy_file(box, back, copied, download=True)
+        self.assertEqual((copied.read_text(), back.read_text()), ("{}", "{}"))
+
+    def test_engine_levers_are_test_levers_only(self):
+        self.assertEqual(peers.engine_levers(["CC_TEST_LUA_RNG_TRACE=1"]), {"CC_TEST_LUA_RNG_TRACE": "1"})
+        self.assertEqual(peers.engine_levers([]), {})
+        for value in ("CCCP_HEADLESS=0", "CC_TEST_LUA_RNG_TRACE", "PATH=/tmp"):
+            with self.assertRaises(ValueError):
+                peers.engine_levers([value])
+
+    def test_headed_player_environment(self):
+        environment = peers.video.headed_environment({"CCCP_HEADLESS": "1", "CC_TEST_READBACK_TIMING": "1"})
+        self.assertEqual(environment, {"CC_TEST_READBACK_TIMING": "1", "CC_TEST_VISIBLE_WINDOW": "1"})
+        self.assertEqual(peers.video.HEADED_SETTINGS, {"EnableVSync": 1})
+
+    def test_headed_players_keep_the_games_vsync_instead_of_the_headless_cap(self):
+        scenario = peers.video.load_scenario("fight15-s10")
+        options = SimpleNamespace(repo=Path(peers.__file__).resolve().parents[1], size=None, port=peers.video.PORT_LO, fps=30,
+                                  setting=[], render_cap=60, fullstate_every=0, dry_run=True, tokens={})
+        for headed, flag in ((False, True), (True, False)):
+            options.headed = headed
+            staged = peers.video._run_one(options, scenario, peers.scene_runs(scenario)[0], 0, self.root / str(headed))
+            for peer in staged["peers"]:
+                self.assertEqual("-feel-render-settings" in peer["args"], flag)
+                self.assertEqual(peer["presentation"], "headed" if headed else "headless")
+                self.assertEqual(peer["render_cap"], None if headed else 60)
+
+    def test_collector_reads_a_players_early_pace_line(self):
+        out = self.root / "native-joiner"
+        (out / "run0" / "joiner").mkdir(parents=True)
+        request = out / "request.json"
+        request.write_text(json.dumps(dict(out=str(out), role="joiner", run_name="run0", signal_files=[])))
+        self.assertIsNone(peers.read_player_files(request)["pace"])
+        (out / "run0" / "joiner" / peers.video.PACE_REPORT).write_text(json.dumps({"line": "[fight-pace] RED"}))
+        self.assertEqual(peers.read_player_files(request)["pace"]["line"], "[fight-pace] RED")
 
 
 if __name__ == "__main__":

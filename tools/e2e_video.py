@@ -178,14 +178,28 @@ def retained_footprint(capture_run, root, limit):
     return capture_run["retained"]
 
 
-def finish_run(scenario, run, captured, source, options):
+def finish_run(scenario, run, captured, source, options, shared_gates=True):
     """A run's verdict first, whatever its footprint; then its transients are retired and the retained set is measured."""
-    feel_probes({**scenario, **run}, captured, source)
+    # A spread half holds one player; the collector judges the gates that compare players once both are home.
+    if shared_gates:
+        feel_probes({**scenario, **run}, captured, source)
     render(captured, options.fps, options.sheet_every)
     if not scenario.get('preserve_evidence'):
         retire_transients(captured)
     retained_footprint(captured, options.scratch_root, options.scratch_limit_bytes)
     return review(scenario, captured, Path(captured["root"]))
+
+
+# A watched window draws like a player's own game: the game's default vsync, not the headless render cap.
+HEADED_SETTINGS = {"EnableVSync": 1}
+
+
+def headed_environment(environment):
+    if sys.platform == "win32":
+        raise ValueError("a headed scene player runs on a POSIX box; Windows players run in their session task")
+    visible = {key: value for key, value in environment.items() if key != "CCCP_HEADLESS"}
+    visible["CC_TEST_VISIBLE_WINDOW"] = "1"
+    return visible
 
 
 def source_evidence(repo):
@@ -1499,9 +1513,8 @@ def report_toast_evidence(record, spec):
 LOG_EVIDENCE = ("gate", "log_regex", "forbidden_log_regex", "events", "readback", "probe_steps", "sim_progress", "peer_drop", "drop_tick", "ownership_reclaim", "continuous_minutes")
 
 
-def continuous_minute_evidence(probe_path, spec):
-    """Include the captures and player actions between the engine's full-minute samples."""
-    document = json.loads(probe_path.read_text(encoding="utf-8")) if probe_path.is_file() else {}
+def minute_intervals(document, spec):
+    """Each engine full-minute sample, with the pace between it and the previous one (captures and chat included)."""
     samples = [step.get("observed", {}) for step in document.get("steps", [])
                if step.get("op") == "measure_minute" and "minute" in step.get("observed", {})]
     intervals, previous = [], None
@@ -1510,15 +1523,109 @@ def continuous_minute_evidence(probe_path, spec):
         elapsed = sample["at_ms"] - previous["at_ms"] if previous else minute["elapsed_ms"]
         pace = ((sample["lockstep_frame"] - previous["lockstep_frame"]) * 1000.0 / elapsed
                 if previous and elapsed > 0 else minute["pace"])
-        passed = (minute["number"] == number and minute["elapsed_ms"] >= 60000 and elapsed >= 60000
-                  and minute["pace"] >= spec["minimum_tps"] and pace >= spec["minimum_tps"]
+        slow = minute["pace"] < spec["minimum_tps"] or pace < spec["minimum_tps"]
+        passed = (minute["number"] == number and minute["elapsed_ms"] >= 60000 and elapsed >= 60000 and not slow
                   and sample.get("service") == "Running" and sample.get("paused") is False
                   and sample.get("editing") is False and sample.get("local_actor_alive") is True)
-        intervals.append({"number": number, "elapsed_ms": elapsed, "pace": pace, "pass": passed})
+        intervals.append({"number": number, "elapsed_ms": elapsed, "pace": pace, "minute_pace": minute["pace"], "slow": slow, "pass": passed})
         previous = sample
+    return intervals
+
+
+def continuous_minute_evidence(probe_path, spec):
+    """Include the captures and player actions between the engine's full-minute samples."""
+    document = json.loads(probe_path.read_text(encoding="utf-8")) if probe_path.is_file() else {}
+    intervals = minute_intervals(document, spec)
     passed = len(intervals) == spec["count"] and all(row["pass"] for row in intervals)
     return {"pass": passed, "minimum_tps": spec["minimum_tps"], "intervals": intervals,
             "reason": None if passed else "The full fight, including captures and chat, did not sustain every required minute"}
+
+
+HORIZON_REPORT = "horizon_path_grid.json"
+HORIZON_WAIT = re.compile(r"(?m)^\[horizon-path\] wait_us=(\d+) tick=(\d+)[^\n]*")
+
+
+def presented_hz(probe_path):
+    """Frames the player drew per second over its probe's live game; look-around input moves once per drawn frame."""
+    try:
+        steps = json.loads(Path(probe_path).read_text(encoding="utf-8")).get("steps", [])
+    except (OSError, ValueError):
+        return None
+    live = [step["observed"] for step in steps if step.get("observed", {}).get("editing") is False
+            and isinstance(step["observed"].get("render"), int) and isinstance(step["observed"].get("at_ms"), (int, float))]
+    if len(live) < 2 or live[-1]["at_ms"] <= live[0]["at_ms"]:
+        return None
+    return round((live[-1]["render"] - live[0]["render"]) * 1000.0 / (live[-1]["at_ms"] - live[0]["at_ms"]), 1)
+
+
+def pathfinding_waits(peer_root):
+    """The pathfinder's own horizon report and every positive grid wait line, as the player recorded them."""
+    root = Path(peer_root)
+    report = root / HORIZON_REPORT
+    log = root / "stdout.log"
+    text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+    lines = [{"wait_us": int(match[1]), "tick": int(match[2]), "line": match[0]} for match in HORIZON_WAIT.finditer(text)]
+    waits = [row for row in lines if row["wait_us"] > 0]
+    try:
+        horizon = json.loads(report.read_text(encoding="utf-8")) if report.is_file() else None
+    except ValueError:
+        horizon = {"unreadable": str(report)}
+    return {"horizon_report": horizon, "report_path": str(report) if report.is_file() else None,
+            "positive_waits": len(waits), "worst_wait": max(waits, key=lambda row: row["wait_us"], default=None),
+            "wait_lines": [row["line"] for row in lines[:20]]}
+
+
+EARLY_PACE_MINUTES = 3
+PACE_REPORT = "fight-pace.json"
+
+
+def pace_specs(scenario, run_name, peer_name):
+    """The full-minute pace gates the scene's checklist holds for this player."""
+    specs = []
+    for item in scenario.get("checklist", []):
+        scope = item.get("run")
+        if not item.get("continuous_minutes") or item.get("peer") not in (None, peer_name):
+            continue
+        if scope and run_name not in ([scope] if isinstance(scope, str) else scope):
+            continue
+        specs.append({"item": item["id"], **item["continuous_minutes"]})
+    return specs
+
+
+def early_pace_verdict(document, spec, label):
+    """The fight's RED line once three of its measured minutes are below the gate; every slow minute already fails it."""
+    intervals = minute_intervals(document, spec)
+    slow = [row for row in intervals if row["slow"]]
+    if len(slow) < EARLY_PACE_MINUTES:
+        return None
+    paces = ", ".join(f"minute {row['number']} {min(row['pace'], row['minute_pace']):.1f}" for row in slow)
+    line = (f"[fight-pace] RED {label}: {len(slow)} of {len(intervals)} measured minutes below {spec['minimum_tps']:g} ticks a second "
+            f"({paces}); the fight plays on")
+    return {"line": line, "item": spec["item"], "minimum_tps": spec["minimum_tps"], "measured_minutes": len(intervals),
+            "slow_minutes": slow}
+
+
+def watch_pace(probe_path, specs, label, report, stop, poll_s=5.0):
+    """Write the fight's RED line the moment its pace fails, while the fight keeps playing to its own end."""
+    seen = None
+    while True:
+        stopping = stop.wait(poll_s)
+        try:
+            state = probe_path.stat().st_mtime_ns
+            if state != seen:
+                document = json.loads(probe_path.read_text(encoding="utf-8"))
+                seen = state
+                for spec in specs:
+                    verdict = early_pace_verdict(document, spec, label)
+                    if verdict:
+                        verdict.update(written=stamp(), during_play=not stopping)
+                        write_json(report, verdict)
+                        print(verdict["line"], flush=True)
+                        return verdict
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        if stopping:
+            return None
 
 
 def dropped_index_evidence(record, drop_tick):
@@ -1555,7 +1662,15 @@ def item_evidence(record, item, port=None):
         marker = "video_mark " + item["mark"]
         starts = [index for index, event in enumerate(events) if event["message"] == marker]
         if not starts:
-            return None, {"probe": "not-reached", "reason": f"No recorded marker {item['mark']}", "events": str(events_path)}
+            missing = {"probe": "not-reached", "reason": f"No recorded marker {item['mark']}", "events": str(events_path)}
+            gate = record.get("gates", {}).get(item["gate"]) if item.get("gate") else None
+            if gate:
+                # The run ended before the item's picture, but the gate was still judged; the item says what it found.
+                first = gate.get("first_difference")
+                found = [f"first differing tick {first.get('tick')} in {', '.join(first.get('components', []))}"] if first else []
+                missing.update(assertions=[gate], reason=missing["reason"] + f"; the {item['gate']} gate is {gate.get('status')}: "
+                               + "; ".join(found + list(map(str, gate.get("errors", [])[:3]))))
+            return None, missing
         index = starts[0]
         start = events[index]["wall_ms"]
         following = next((position for position in range(index + 1, len(events))
@@ -1622,6 +1737,9 @@ def item_evidence(record, item, port=None):
             evidence["probe"] = "pass" if passed else "fail"
     if item.get("continuous_minutes"):
         evidence["continuous_minutes"] = continuous_minute_evidence(probe_path, item["continuous_minutes"])
+        early = Path(record["root"]) / PACE_REPORT
+        if early.is_file():
+            evidence["continuous_minutes"]["early_red"] = json.loads(early.read_text(encoding="utf-8"))
         passed = evidence["continuous_minutes"]["pass"]
         if not passed or evidence.get("probe") in ("none", "awaiting-review"):
             evidence["probe"] = "pass" if passed else "fail"
@@ -1796,6 +1914,13 @@ def review(scenario, capture, out):
             run_findings.append({"class": (capture.get("stop_finding") or {}).get("class", "unclassified"), "run": capture["name"], "peer": peer["peer"],
                                  "reason": (capture.get("stop_finding") or {}).get("reason") or peer.get("error") or f"Unexpected runner result: exit={record.get('exit_code')} timed_out={record.get('timed_out')}",
                                  "launch": peer.get("launch")})
+    for peer in capture["peers"]:
+        early = Path(peer["root"]) / PACE_REPORT
+        if early.is_file():
+            # The fight said so while it played; the line stays at the top of the run's findings.
+            verdict = json.loads(early.read_text(encoding="utf-8"))
+            run_findings.append({"class": "unclassified", "run": capture["name"], "peer": peer["peer"], "reason": verdict["line"],
+                                 "written": verdict.get("written"), "evidence": str(early), "launch": peer.get("launch")})
     declared_run = next((run for run in scenario.get("runs", []) if run.get("name") == capture["name"]), {})
     if declared_run.get("injected_desync") and capture.get("fullstate"):
         capture["fullstate"] = {pair: exempt_injected(verdict, pair, declared_run["injected_desync"], items)
@@ -2012,19 +2137,24 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
         if any(seed.get(key) for key in LOGIN_KEYS) and name not in private_menus:
             raise ValueError('a relay login must reach the Fixed menu through its private input stream')
         seed=public_settings(seed)
-        cap = render_cap_hz(getattr(options, "render_cap", 60))
-        arm = {"size": f"{seed['ResolutionX']}x{seed['ResolutionY']}", "settings": seed, "render_cap": cap}
+        headed = getattr(options, "headed", False)
+        cap = None if headed else render_cap_hz(getattr(options, "render_cap", 60))
+        arm = {"size": f"{seed['ResolutionX']}x{seed['ResolutionY']}", "settings": seed, "render_cap": cap,
+               "presentation": "headed" if headed else "headless"}
         if dry:
             runtime = peer_root / "runtime"
             if reference:
                 previous = staged.get(reference["peer"]) if reference["run"] == root.name else prior_peer(
                     getattr(options, "completed_runs", []), reference)
                 runtime = Path(previous["runtime"]) if previous else Path(out) / reference["run"] / reference["peer"] / "runtime"
-            args += ["-feel-render-settings", str(runtime / "Userdata/FeelRender.ini")]
+            if not headed:
+                args += ["-feel-render-settings", str(runtime / "Userdata/FeelRender.ini")]
             staged[name] = {"peer": name, "args": args, "runtime": str(runtime), **arm}
             continue
         stage.mkdir(parents=True, exist_ok=False)
         environment = stage_peer(scenario, peer, stage, tokens)
+        if headed:
+            environment = headed_environment(environment)
         if getattr(options, 'win_cause_log', False):
             from e2e.win_diagnostics import configure_environment
             environment = configure_environment(environment, peer_root, scenario['name'], name, root.name)
@@ -2053,17 +2183,22 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
             (Path(run_handle.out) / directory).mkdir(parents=True, exist_ok=False)
         seed_settings(run_handle, seed)
         render_path = Path(run_handle.cwd) / "Userdata/FeelRender.ini"
-        render_path.write_text(f"RenderCapHz = {cap}\n", encoding="utf-8")
-        render_args = ["-feel-render-settings", str(render_path)]
-        run_handle.argv.extend(render_args)
-        args += render_args
+        if headed:
+            seed_settings(run_handle, HEADED_SETTINGS)
+        else:
+            render_path.write_text(f"RenderCapHz = {cap}\n", encoding="utf-8")
+            render_args = ["-feel-render-settings", str(render_path)]
+            run_handle.argv.extend(render_args)
+            args += render_args
         runtime_manifest = Path(run_handle.out) / "runtime.json"
         if runtime_manifest.is_file():
             metadata = json.loads(runtime_manifest.read_text(encoding="utf-8"))
-            arm["settings"] = metadata["settings_overrides"] = {**metadata.get("settings_overrides", {}), **seed}
+            arm["settings"] = metadata["settings_overrides"] = {**metadata.get("settings_overrides", {}), **seed,
+                                                                **(HEADED_SETTINGS if headed else {})}
             metadata["settings_sha256"] = file_evidence(Path(run_handle.cwd) / "Userdata/Settings.ini")["sha256"]
-            metadata["feel_render_settings"] = file_evidence(render_path)
+            metadata["feel_render_settings"] = None if headed else file_evidence(render_path)
             metadata["render_cap"] = cap
+            metadata["presentation"] = arm["presentation"]
             write_json(runtime_manifest, metadata)
         # Fixture modules a scenario needs land in the private runtime, never in the repository.
         for entry in public_value(substitute(peer.get("runtime_files", []), tokens),private_values):
@@ -2238,6 +2373,14 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
         measurer = threading.Thread(target=measure_footprint, daemon=True)
         measurer.start()
         killers.append(measurer)
+        for name in runs:
+            specs = pace_specs(scenario, root.name, name)
+            if specs:
+                watcher = threading.Thread(target=watch_pace, daemon=True,
+                                           args=(Path(shared[f"PROBE_DIR_{name}"]) / "net-ui-result.json", specs,
+                                                 f"{scenario['name']}/{root.name} {name}", root / name / PACE_REPORT, stop_watchers))
+                watcher.start()
+                killers.append(watcher)
         while any(thread.is_alive() for thread in threads):
             request = Path(out) / "stop-request.json"
             if request.is_file():
@@ -2289,6 +2432,10 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
         console = Path(runs[name].cwd) / "LogConsole.txt"
         if console.is_file() and not (peer_root / "console.log").is_file():
             (peer_root / "console.log").write_bytes(console.read_bytes())
+        # The pathfinder's horizon report lives in the private runtime, which a spread half never carries home.
+        horizon = Path(runs[name].cwd) / "Userdata" / HORIZON_REPORT
+        if horizon.is_file() and not (peer_root / HORIZON_REPORT).is_file():
+            (peer_root / HORIZON_REPORT).write_bytes(horizon.read_bytes())
         collected.append({"peer": name, "root": str(peer_root), "video_dir": str(video_dir),
                           "expected_termination": bool(peer.get("kill_after_s") or peer.get("kill_at_tick") or peer.get("kill_when")),
         "record": {k: records.get(name, {}).get(k) for k in
@@ -2297,7 +2444,8 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                           "launch": str(peer_root / "launch.json"),
                           "error": records.get(name, {}).get("error"),
                           "manifest": read_manifest(video_dir), "index": read_index(video_dir),
-                          "menu_script_failures": menu_script_failures(peer_root), **staged[name]})
+                          "menu_script_failures": menu_script_failures(peer_root),
+                          "presented_hz": presented_hz(Path(staged[name]["probe_dir"]) / "net-ui-result.json"), **staged[name]})
     fullstate = None
     if getattr(options, "fullstate_every", 0) and len(peers) > 1:
         first = peers[0]["name"]
@@ -2791,15 +2939,12 @@ def native_behavior(root, spec):
 
 
 def fight_hash_gate(run, capture):
-    """Judge the fight over every player's history; a spread half keeps its own player's copy and the collector judges both."""
+    """Judge the fight once over every named player's history, quoting each player's pathfinding waits beside it."""
     from e2e.fight_hashes import compare_fight_hashes
     spec = run['fight_hash_gate']
-    roles = sorted({peer['peer'] for peer in capture['peers']})
-    if not set(spec['peers']) <= set(roles):
-        for role in roles:
-            write_json(Path(capture['root']) / f'fight-hashes-{role}.json', compare_fight_hashes(Path(capture['root']), {**spec, 'peers': [role]}))
-        return None
     result = compare_fight_hashes(Path(capture['root']), spec)
+    roots = {peer['peer']: peer['root'] for peer in capture['peers'] if peer.get('root')}
+    result['pathfinding'] = {name: pathfinding_waits(roots[name]) if name in roots else None for name in spec['peers']}
     write_json(Path(capture['root']) / 'fight-hashes.json', result)
     for peer in capture['peers']:
         peer.setdefault('gates', {})['fight-hashes'] = result
@@ -2973,6 +3118,8 @@ def main():
     parser.add_argument("--setting", action="append", type=setting_pair, default=[], metavar="KEY=VALUE",
                         help="seed every peer after size and scenario settings; repeatable, last value wins")
     parser.add_argument("--render-cap", type=render_cap_hz, default=60, metavar="HZ", help="headless render cap: 0 or 60 (default)")
+    parser.add_argument("--headed", action="store_true",
+                        help="POSIX: every player draws in a visible window at the game's default vsync instead of the headless render cap")
     parser.add_argument("--dry-run", action="store_true", help="print planned settings and engine arguments without creating files or starting services")
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
     parser.add_argument("--port", type=int, help=f"the run block base; defaults to the scenario's port_base inside {PORT_LO}-{PORT_HI}")
@@ -3038,6 +3185,8 @@ def main():
         parser.error(f"this driver owns ports {PORT_LO}-{PORT_HI}")
     if os.environ.get("CCCP_HEADLESS", "1") != "1":
         parser.error("CCCP_HEADLESS must stay 1: nothing this driver launches may reach a desktop")
+    if options.headed and (sys.platform == "win32" or spread.enabled(options) or options.host_box):
+        parser.error("--headed draws local POSIX players in their own visible windows")
 
     scenario = load_scenario(options.scenario)
     if scenario.get("cross_machine") and not options.peer:
@@ -3092,7 +3241,8 @@ def main():
     exe = file_evidence(capture_binary(options.repo))
     capture = {"schema": 1, "scenario": scenario["name"], "repo": str(Path(options.repo).resolve()), "out": str(out), "platform": sys.platform,
                "fps": options.fps, "size": options.size, "runs": [], "source": source, "exe": exe,
-               "settings": dict(options.setting), "render_cap": options.render_cap,
+               "settings": dict(options.setting), "render_cap": None if options.headed else options.render_cap,
+               "presentation": "headed" if options.headed else "headless",
                "scratch_root": str(options.scratch_root), "scratch_limit_bytes": options.scratch_limit_bytes,
                "started": stamp(), "command": [sys.executable, *sys.argv], "scenario_definition": scenario}
     capture["topology"] = ("spread" if options.host_box else spread.topology(options, max(len(run.get("peers") or scenario.get("peers") or []) for run in runs)))

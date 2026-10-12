@@ -6,7 +6,8 @@
 
 Box facts stay outside the game tree. Each box supplies name, ssh, os, hostname,
 repo, scratch, python and build_receipt. Windows also supplies session_dir and
-task; the Mac supplies binary. Builds come from each box's own checkout.
+task; a Mac or Linux joiner supplies binary and plays in a visible window.
+Builds come from each box's own checkout.
 """
 from __future__ import annotations
 
@@ -30,6 +31,9 @@ from types import SimpleNamespace
 import uuid
 
 import e2e_video as video
+
+JOINER_SYSTEMS = ("darwin", "linux")
+PLAYER_SCRIPTS = {"darwin": ("/bin/zsh", "tools/e2e/peer_mac.sh"), "linux": ("/bin/bash", "tools/e2e/peer_linux.sh")}
 
 
 def read(path):
@@ -103,21 +107,16 @@ class PlayerRun:
     def make_run(self, repo, args, out, timeout, env=None, **kwargs):
         environment = dict(env or {})
         if self.request["box"]["os"] == "darwin":
-            environment.pop("CCCP_HEADLESS", None)
-            environment.update(CC_TEST_VISIBLE_WINDOW="1", CCCP_POSIX_HOP="ssh")
+            # A Mac engine started from a GUI job asks for local network consent; the ssh hop starts it outside that job.
+            environment.update(CCCP_POSIX_HOP="ssh")
         run = video.make_run(repo, args, out, timeout, env=environment, **kwargs)
         run.record.update(box=self.request["box"]["name"], engine_hostname=socket.gethostname(), topology="spread", proof=False,
                           source_commit=self.request["commit"], scene_sha256=self.request["scene_sha256"])
+        if self.request["box"]["os"] in JOINER_SYSTEMS:
+            run.record.update(headed=True, headless_render_settings_applied=False)
         start = run.start
 
         def start_player():
-            if self.request["box"]["os"] == "darwin":
-                # The headed player's window uses the game's normal presentation settings.
-                flag = "-feel-render-settings"
-                if flag in run.argv:
-                    position = run.argv.index(flag)
-                    del run.argv[position:position + 2]
-                run.record.update(headed=True, headless_render_settings_applied=False)
             result = start()
             video.write_json(self.started, {"peer": self.request["role"], "box": self.request["box"]["name"],
                                            "engine_hostname": socket.gethostname(), "pid": run.record.get("pid")})
@@ -135,7 +134,7 @@ def check_build(request):
     source = video.source_evidence(repo)
     if source["tip"] != request["commit"] or source["dirty"]:
         raise ValueError("player checkout differs from the committed scene launcher")
-    if box["os"] == "darwin":
+    if box["os"] in JOINER_SYSTEMS:
         os.environ["CCCP_TEST_BINARY"] = str(repo / box["binary"])
     receipt = read(box["build_receipt"])
     executable = video.file_evidence(video.capture_binary(repo))
@@ -160,10 +159,14 @@ def play(request_path):
     run = copy.deepcopy(scene_runs(document)[index])
     name = run.get("name", "run" + str(index))
     run["peers"] = [peer for peer in run.get("peers", document.get("peers", [])) if peer["name"] == role]
+    for peer in run["peers"]:
+        # A diagnostic lever the collector names reaches this player's engine; the scene itself is unchanged.
+        peer["env"] = {**peer.get("env", {}), **request.get("engine_env", {})}
     local_scene = copy.deepcopy(document)
     local_scene["checklist"] = [item for item in document.get("checklist", []) if not item.get("peer") or item["peer"] == role]
+    headed = request["box"]["os"] in JOINER_SYSTEMS
     options = SimpleNamespace(repo=Path(request["box"]["repo"]), size=None, port=request["port"], fps=request["fps"],
-                              setting=[], render_cap=60, fullstate_every=0, sheet_every=request["sheet_every"],
+                              setting=[], render_cap=60, headed=headed, fullstate_every=0, sheet_every=request["sheet_every"],
                               tokens={"PROBE_DIR_" + other: out / name / (other + "-stage/probe")
                                       for other in ("host", "joiner")},
                               resume_tokens={}, service_tokens={}, completed_runs=[],
@@ -181,10 +184,13 @@ def play(request_path):
         peer["record"].update({key: record.get(key) for key in ("box", "engine_hostname", "source_commit", "scene_sha256")})
         peer.update(box=request["box"]["name"], box_hostname=request["box"]["hostname"],
                     native_source=source, native_exe=executable, build_receipt=receipt)
-        if request["box"]["os"] == "darwin":
+        if headed:
             peer.update(render_cap=None, presentation="headed")
-    video.finish_run(local_scene, run, captured, source, options)
+    video.finish_run(local_scene, run, captured, source, options, shared_gates=False)
     (Path(captured["root"]) / "review.json").rename(Path(captured["root"]) / (role + "-review.json"))
+    scan = Path(captured["root"]) / "secret-scan.json"
+    if scan.is_file():
+        scan.rename(Path(captured["root"]) / (role + "-secret-scan.json"))
     video.write_json(Path(captured["root"]) / (role + "-capture.json"), captured)
     video.write_json(out / (role + "-finished.json"), {"finished": video.stamp()})
     passed = all(video.peer_completed(peer) for peer in captured["peers"])
@@ -250,9 +256,10 @@ def move_paths(value, original, local, key=""):
 def pack(request_path):
     request = read(request_path)
     root = Path(request["out"])
-    archive = root.with_suffix(".tar")
+    archive = root.with_suffix(".tgz")
     run_name = scene_runs(scene(str(Path(request["box"]["repo"]) / request["scene_relative"])))[request["run_index"]].get("name", "run" + str(request["run_index"]))
-    with tarfile.open(archive, "w") as output:
+    # A twenty-minute fight's tick history is mostly repeated hashes; compressed, the player's files cross the relay box's link faster.
+    with tarfile.open(archive, "w:gz", compresslevel=6) as output:
         for directory, folders, files in os.walk(root, followlinks=False):
             other = "joiner" if request["role"] == "host" else "host"
             folders[:] = [name for name in folders if name not in ("runtime", other + "-stage")
@@ -275,19 +282,31 @@ def unpack(archive, out):
             if not member.isfile() or not target.is_relative_to(out) or "runtime" in Path(member.name).parts:
                 raise ValueError("collected file escapes the capture or contains a runtime")
             if target.exists():
-                raise ValueError("collected file would overwrite another player's evidence")
+                raise ValueError("collected file would overwrite another player's evidence: " + member.name)
             target.parent.mkdir(parents=True, exist_ok=True)
             with source.extractfile(member) as stream, target.open("wb") as destination:
                 import shutil
                 shutil.copyfileobj(stream, destination)
 
 
+# A box whose ssh is "local" is the collector's own: one of its players plays on the box the collector runs on.
+LOCAL = "local"
+
+
+def remote_command(box, args):
+    args = list(map(str, args))
+    return args if box["ssh"] == LOCAL else ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", box["ssh"], shlex.join(args)]
+
+
 def ssh(box, args, **kwargs):
-    return subprocess.run(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", box["ssh"], shlex.join(list(map(str, args)))],
-                          **kwargs)
+    return subprocess.run(remote_command(box, args), **kwargs)
 
 
 def copy_file(box, source, destination, download=False):
+    if box["ssh"] == LOCAL:
+        import shutil
+        shutil.copyfile(*((destination, source) if download else (source, destination)))
+        return
     remote = box["ssh"] + ":" + str(destination).replace("\\", "/")
     args = [remote, str(source)] if download else [str(source), remote]
     subprocess.run(["scp", "-q", "-o", "BatchMode=yes", *args], check=True)
@@ -321,7 +340,12 @@ def read_player_files(request_path):
             data = path.read_bytes()
             if complete_signal(data, relative):
                 files[relative] = base64.b64encode(data).decode()
-    return {"started": (out / (role + "-started.json")).is_file(), "files": files}
+    pace = root / role / video.PACE_REPORT
+    try:
+        early = json.loads(pace.read_text(encoding="utf-8")) if pace.is_file() else None
+    except ValueError:
+        early = None
+    return {"started": (out / (role + "-started.json")).is_file(), "files": files, "pace": early}
 
 
 def write_player_files(request_path, files):
@@ -335,14 +359,22 @@ def write_player_files(request_path, files):
     publish_signals(out / request["run_name"], files, allowed)
 
 
-def share_player_files(players, stop, errors):
+def share_player_files(players, stop, errors, controls=None):
     sent = {role: {} for role in players}
+    told = set()
     try:
         while not stop.is_set():
             states = {}
             for role, (box, request, process, remote, tool, log) in players.items():
                 result = ssh(box, [box["python"], tool, "--read-files", remote], check=True, capture_output=True, text=True)
                 states[role] = json.loads(result.stdout)
+                early = states[role].get("pace")
+                if early and role not in told:
+                    # A player's fight fell below its pace gate; the collector says so now, not after the fight.
+                    told.add(role)
+                    print(role + ": " + early["line"], flush=True)
+                    if controls:
+                        video.write_json(controls / (request["run_name"] + "-" + role + "-" + video.PACE_REPORT), early)
             for role, (box, request, process, remote, tool, log) in players.items():
                 incoming = {path: data for other, state in states.items() if other != role for path, data in state["files"].items()}
                 if states[role]["started"] and incoming != sent[role]:
@@ -363,10 +395,21 @@ def launch(box, request_path, log):
     if box["os"] == "win32":
         args = ["pwsh", "-NoProfile", "-File", box["repo"] + "/tools/e2e/peer_box.ps1", "-Request", remote]
     else:
-        args = ["/bin/zsh", box["repo"] + "/tools/e2e/peer_mac.sh", remote, box["repo"]]
-    process = subprocess.Popen(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", box["ssh"], shlex.join(args)],
-                               stdout=log, stderr=subprocess.STDOUT)
+        shell, script = PLAYER_SCRIPTS[box["os"]]
+        args = [shell, box["repo"] + "/" + script, remote, box["repo"]]
+    process = subprocess.Popen(remote_command(box, args), stdout=log, stderr=subprocess.STDOUT)
     return process, remote, tool
+
+
+def engine_levers(values):
+    """Test levers for both players' engines; only CC_TEST_* names, which cost nothing when unset."""
+    levers = {}
+    for value in values or []:
+        name, separator, setting = value.partition("=")
+        if not separator or not re.fullmatch(r"CC_TEST_[A-Z0-9_]+", name):
+            raise ValueError("--engine-env takes CC_TEST_NAME=VALUE")
+        levers[name] = setting
+    return levers
 
 
 def selected_boxes(value, path):
@@ -375,8 +418,8 @@ def selected_boxes(value, path):
         raise ValueError("name two different boxes for host and joiner")
     entries = {box["name"].casefold(): box for box in read(path)["boxes"]}
     result = {role: entries[name.casefold()] for role, name in assignments.items()}
-    if result["host"]["os"] != "win32" or result["joiner"]["os"] != "darwin":
-        raise ValueError("this scene launcher needs a Windows host and a Mac joiner")
+    if result["host"]["os"] != "win32" or result["joiner"]["os"] not in JOINER_SYSTEMS:
+        raise ValueError("this scene launcher needs a Windows host and a Mac or Linux joiner")
     if result["host"]["hostname"].casefold() == result["joiner"]["hostname"].casefold():
         raise ValueError("both assignments name one engine host")
     return result
@@ -388,7 +431,7 @@ def collect_player(out, name, role, player):
     log.close()
     result = ssh(box, [box["python"], tool, "--pack", remote], check=True, capture_output=True, text=True)
     package = json.loads(result.stdout)
-    archive = out / "commands" / (name + "-" + role + ".tar")
+    archive = out / "commands" / (name + "-" + role + ".tgz")
     copy_file(box, archive, package["path"], download=True)
     if video.file_evidence(archive).get("sha256") != package["sha256"]:
         raise ValueError("collected player files differ from their box")
@@ -400,6 +443,7 @@ def capture_scene(args):
     document = scene(args.scenario)
     check_scene(document)
     boxes = selected_boxes(args.peer_boxes, args.boxes_file)
+    engine_env = engine_levers(getattr(args, "engine_env", None))
     out, repo = args.out.resolve(), args.repo.resolve()
     source = video.source_evidence(repo)
     if source["dirty"]:
@@ -416,7 +460,8 @@ def capture_scene(args):
                "repo": str(repo), "out": str(out), "platform": sys.platform, "fps": video.DEFAULT_FPS,
                "size": document.get("size"), "settings": {}, "render_cap": 60, "started": video.stamp(),
                "command": [sys.executable, *sys.argv], "scratch_root": str(out.parent),
-               "scratch_limit_bytes": video.SCRATCH_LIMIT, "topology": "spread", "proof": False, "runs": []}
+               "scratch_limit_bytes": video.SCRATCH_LIMIT, "topology": "spread", "proof": False, "runs": [],
+               "engine_env": engine_env}
     video.write_json(out / "capture.json", capture)
     for index, run in enumerate(scene_runs(document)):
         name = run.get("name", "run" + str(index))
@@ -427,7 +472,7 @@ def capture_scene(args):
                 box = boxes[role]
                 remote_out = box["scratch"].rstrip("/") + "/" + out.name + "-" + name + "-" + uuid.uuid4().hex[:8]
                 request = dict(box=box, role=role, run_index=index, out=remote_out, commit=source["tip"],
-                               scene_relative=relative, scene_sha256=scene_hash, fps=video.DEFAULT_FPS,
+                               engine_env=engine_env, scene_relative=relative, scene_sha256=scene_hash, fps=video.DEFAULT_FPS,
                                sheet_every=15, port=int(document.get("port_base", video.PORT_LO)),
                                run_name=name, signal_files=player_files(document, run))
                 request_path = controls / (name + "-" + role + ".json")
@@ -439,8 +484,8 @@ def capture_scene(args):
                     ready = ssh(box, [box["python"], tool, "--wait-start", remote], capture_output=True, text=True)
                     if ready.returncode:
                         raise RuntimeError("host launch refused: " + ready.stdout.strip())
-            if player_files(document, run):
-                sharing = threading.Thread(target=share_player_files, args=(players, stop, file_errors))
+            if player_files(document, run) or any(video.pace_specs(document, name, role) for role in players):
+                sharing = threading.Thread(target=share_player_files, args=(players, stop, file_errors, controls))
                 sharing.start()
             for role, player in players.items():
                 collected.add(role)
@@ -456,9 +501,8 @@ def capture_scene(args):
             for peer in captured["peers"]:
                 peer.update(topology="spread", proof=check["passed"])
             captured["repo"] = str(repo)
-            # Each player brought its own history; the fight is judged once over both.
-            if {**document, **run}.get("fight_hash_gate"):
-                video.fight_hash_gate({**document, **run}, captured)
+            # Each player brought its own history; the gates that compare players run once over both, as on one box.
+            video.feel_probes({**document, **run}, captured, source)
             video.review(document, captured, out / name)
             video.write_json(out / "capture.json", capture)
         except Exception as error:
@@ -512,6 +556,8 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--peer-boxes")
     parser.add_argument("--boxes-file", type=Path, default=os.environ.get("CORTEX_SCENE_BOXES"))
+    parser.add_argument("--engine-env", action="append", default=[], metavar="CC_TEST_NAME=VALUE",
+                        help="a test lever set in both players' engines; recorded in the capture")
     parser.add_argument("--check-spread", type=Path)
     parser.add_argument("--play", type=Path)
     parser.add_argument("--pack", type=Path)

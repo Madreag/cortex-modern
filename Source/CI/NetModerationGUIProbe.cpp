@@ -127,7 +127,7 @@ namespace {
 		bool panScene = false, panSelecting = false;
 		int panPlayer = 0, panInput = 0, panDirection = 1;
 		float panY = 600.0F;
-		uint64_t panTick = 0, panSteerTick = 0, panMotionEvents = 0;
+		uint64_t panTick = 0, panSteerTick = 0, panMotionEvents = 0, panHeldTick = 0;
 		float panSpeed = 2.0F;
 		float panSteerY = 0.0F;
 		SDL_Scancode panKey = SDL_SCANCODE_UNKNOWN;
@@ -670,7 +670,7 @@ namespace {
 		}
 		probe.panKey = SDL_SCANCODE_UNKNOWN;
 		probe.panScene = probe.panSelecting = false;
-		probe.panTick = probe.panSteerTick = 0;
+		probe.panTick = probe.panSteerTick = probe.panHeldTick = 0;
 	}
 
 	bool Step(const Json& step, Json& observed) {
@@ -1063,7 +1063,15 @@ namespace {
 			    {"controller_motion", {controller->GetMouseMovement().m_X, controller->GetMouseMovement().m_Y}}};
 			if (!probe.panSelecting || g_TimerMan.GetSimUpdateCount() < probe.panTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4) return false;
 			if (std::abs(cursor.m_Y - probe.panY) > 2.0F) return false;
-			const std::string text = g_FrameMan.GetScreenText(game->ScreenOfPlayer(probe.panPlayer));
+			const int screen = game->ScreenOfPlayer(probe.panPlayer);
+			const std::string text = g_FrameMan.GetScreenText(screen);
+			// The activity's own timed message keeps the screen until its display time ends; the next update shows the selection message.
+			if (g_FrameMan.ScreenTextHeld(screen)) {
+				observed["pan_view"]["held_screen_text"] = text;
+				probe.panHeldTick = g_TimerMan.GetSimUpdateCount();
+				return false;
+			}
+			if (probe.panHeldTick != 0 && g_TimerMan.GetSimUpdateCount() <= probe.panHeldTick + 1) return false;
 			Require(text == "Select a body to switch control to...", "looking around lost its actor selection message: the screen read \"" + text + "\"");
 			Require(g_UInputMan.KeyHeldScancode(probe.panKey), "looking around lost its held Next Actor key");
 			observed["pan_scene"] = true; observed["pan_motion_events"] = probe.panMotionEvents;
