@@ -1037,7 +1037,7 @@ namespace RTE {
 		bool StartCatchUpReplay(INetTransport& transport, const NetLockstepConfig& config, const NetLockstepCoordinator& live, std::string* error = nullptr);
 		bool AdoptPeerReturnConfig(NetLockstepConfig& config, const NetLockstepCoordinator& replay, uint64_t activation) const;
 		/// A returning seat's live round from the host's return certificate, read against the replay that reached its boundary.
-		bool AdoptPeerReturn(NetLockstepConfig& config, const NetLockstepCoordinator& replay, const NetHostMigrationMessage& proof, uint64_t activation) const;
+		bool AdoptPeerReturn(NetLockstepConfig& config, const NetLockstepCoordinator& replay, const NetHostMigrationMessage& proof, uint64_t activation, std::string* why = nullptr) const;
 		/// Installs the recording's host-authored startup boundary before playback queues its first frame.
 		bool ApplyReplayAgreedStart(const NetLockstepStart& start, std::string* error = nullptr);
 		bool IsReplayPlayback() const { NET_PLANE_CHECK(); return m_Playback; }
@@ -1675,6 +1675,7 @@ namespace RTE {
 		void RequestPeerCommittedTail(uint64_t nowMs);
 		NetHash32 PeerFramePrefix(uint64_t frame) const;
 		NetHash32 PeerAppliedFramePrefix(uint64_t frame) const;
+		NetHash32 CommittedFramePrefix(const NetLockstepReadyFrame& ready) const;
 		void SendPeerFrameWitness(uint64_t frame);
 		struct PeerBridge {
 			uint64_t fromFrame = 0;

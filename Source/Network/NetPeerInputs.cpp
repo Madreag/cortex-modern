@@ -430,8 +430,7 @@ namespace RTE {
 			if (at == body.size()) return true;
 			const uint8_t witnessCount = body[at++];
 			if (witnessCount > m_Config.peerCount) return true;
-			uint8_t digest[32]{};
-			if (!GetNetAuthCrypto().HmacSha256(m_Config.migrationKey.data(), m_Config.migrationKey.size(), record.data(), record.size(), digest)) return true;
+			const NetHash32 digest = CommittedFramePrefix(decoded);
 			uint32_t witnessed = 0;
 			for (uint8_t n = 0; n < witnessCount; ++n) {
 				if (!TakeSize(body, at, size) || at > body.size() || size > body.size() - at) return true;
@@ -442,7 +441,7 @@ namespace RTE {
 				    witness.frame != message.frame || witness.appliedFrame != message.frame || witness.voterMask != message.voterMask ||
 				    witness.senderPeerId == 0 || witness.senderPeerId > m_Config.peerCount || (witnessed & SeatBit(witness.senderPeerId)) != 0 ||
 				    (message.voterMask & SeatBit(witness.senderPeerId)) == 0 || witness.bytes.size() != 64 ||
-				    !std::equal(digest, digest + 32, witness.bytes.begin()) || !std::equal(prepared.begin(), prepared.end(), witness.bytes.begin() + 32)) return readFailed("witness-record");
+				    !std::equal(digest.begin(), digest.end(), witness.bytes.begin()) || !std::equal(prepared.begin(), prepared.end(), witness.bytes.begin() + 32)) return readFailed("witness-record");
 				witnessed |= SeatBit(witness.senderPeerId); at += size;
 			}
 			if (at != body.size()) return true;

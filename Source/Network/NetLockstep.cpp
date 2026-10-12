@@ -3270,11 +3270,8 @@ namespace RTE {
 
 	void NetLockstepCoordinator::RetainMigrationFrame(const NetLockstepReadyFrame& ready) {
 		if (m_Playback) {
-			std::vector<uint8_t> bytes; uint8_t mac[32]{};
-			if (EncodeMigrationFrame(ready, bytes) && GetNetAuthCrypto().HmacSha256(m_Config.migrationKey.data(), m_Config.migrationKey.size(), bytes.data(), bytes.size(), mac)) {
-				NetHash32 hash{}; std::copy_n(mac, hash.size(), hash.begin()); m_PeerReplayAppliedPrefixes[ready.frame] = hash;
-				while (m_PeerReplayAppliedPrefixes.size() > NetHostMigrationCodec::c_PeerHistoryFrames) m_PeerReplayAppliedPrefixes.erase(m_PeerReplayAppliedPrefixes.begin());
-			}
+			m_PeerReplayAppliedPrefixes[ready.frame] = CommittedFramePrefix(ready);
+			while (m_PeerReplayAppliedPrefixes.size() > NetHostMigrationCodec::c_PeerHistoryFrames) m_PeerReplayAppliedPrefixes.erase(m_PeerReplayAppliedPrefixes.begin());
 			return;
 		}
 		if (!UsesPreparedFrameReceipts())
