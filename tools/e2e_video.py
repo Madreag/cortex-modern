@@ -2790,13 +2790,25 @@ def native_behavior(root, spec):
     return dict(status='FAIL' if errors else 'PASS', errors=errors, evidence=details)
 
 
+def fight_hash_gate(run, capture):
+    """Judge the fight over every player's history; a spread half keeps its own player's copy and the collector judges both."""
+    from e2e.fight_hashes import compare_fight_hashes
+    spec = run['fight_hash_gate']
+    roles = sorted({peer['peer'] for peer in capture['peers']})
+    if not set(spec['peers']) <= set(roles):
+        for role in roles:
+            write_json(Path(capture['root']) / f'fight-hashes-{role}.json', compare_fight_hashes(Path(capture['root']), {**spec, 'peers': [role]}))
+        return None
+    result = compare_fight_hashes(Path(capture['root']), spec)
+    write_json(Path(capture['root']) / 'fight-hashes.json', result)
+    for peer in capture['peers']:
+        peer.setdefault('gates', {})['fight-hashes'] = result
+    return result
+
+
 def feel_probes(run, capture, source):
     if run.get('fight_hash_gate'):
-        from e2e.fight_hashes import compare_fight_hashes
-        result = compare_fight_hashes(Path(capture['root']), run['fight_hash_gate'])
-        write_json(Path(capture['root']) / 'fight-hashes.json', result)
-        for peer in capture['peers']:
-            peer.setdefault('gates', {})['fight-hashes'] = result
+        fight_hash_gate(run, capture)
     if run.get('backdrop_refit_gate'):
         from test_backdrop_refit import verdict
         config = run['backdrop_refit_gate']

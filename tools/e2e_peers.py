@@ -456,6 +456,9 @@ def capture_scene(args):
             for peer in captured["peers"]:
                 peer.update(topology="spread", proof=check["passed"])
             captured["repo"] = str(repo)
+            # Each player brought its own history; the fight is judged once over both.
+            if {**document, **run}.get("fight_hash_gate"):
+                video.fight_hash_gate({**document, **run}, captured)
             video.review(document, captured, out / name)
             video.write_json(out / "capture.json", capture)
         except Exception as error:
