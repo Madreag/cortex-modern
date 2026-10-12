@@ -657,6 +657,15 @@ class DirectoryTests(unittest.TestCase):
             address_fixture.stop()
 
     def test_U3_all_200_callers_heartbeat_with_repeated_polls(self) -> None:
+        if os.name == "posix":
+            import resource
+            original = resource.getrlimit(resource.RLIMIT_NOFILE)
+            if original[0] != resource.RLIM_INFINITY and original[0] < 1024:
+                self.assertTrue(original[1] == resource.RLIM_INFINITY or original[1] >= 1024,
+                                "U3: 200 local clients and their local server need a 1024-descriptor test budget")
+                resource.setrlimit(resource.RLIMIT_NOFILE, (1024, original[1]))
+                self.addCleanup(resource.setrlimit, resource.RLIMIT_NOFILE, original)
+                print(f"[directory-load] U3 descriptor_limit={original[0]}->1024 restored_after_test=1", flush=True)
         self.start(port=0)
         self.server.store.caller_mode = "tunnel"
         rows = []

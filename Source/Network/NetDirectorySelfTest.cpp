@@ -396,15 +396,16 @@ namespace RTE {
 		service.RefreshDirectorySignalCredentialLocked(17417);
 		const auto before = service.m_HostSignalCredential.load();
 		service.m_Directory.Advertise(service.m_DirectoryRow, false);
-		service.m_Directory.Update(22416);
+		// Recovery uses the same one-second first retry as the other directory paths.
+		service.m_Directory.Update(18416);
 		if (sent->size() != 2) { *error = "lobby recovery ignored the directory retry deadline"; return false; }
-		service.m_Directory.Update(22417);
+		service.m_Directory.Update(18417);
 		const auto body = nlohmann::json::parse(sent->back().body);
 		if (body.value("resume_session_id", std::string()) != id || body.value("resume_token", std::string()) != "host-token") {
 			*error = "expired lobby registration discarded its listener's directory identity"; return false;
 		}
-		service.m_Directory.Update(22417);
-		service.RefreshDirectorySignalCredentialLocked(22417);
+		service.m_Directory.Update(18417);
+		service.RefreshDirectorySignalCredentialLocked(18417);
 		if (service.m_HostSignalCredential.load() == before) { *error = "renewed lobby lease left its failed signal pump unopened"; return false; }
 		std::cout << "[net-directory-selftest] PASS lobby_directory_lease_recovery" << std::endl;
 		return true;
