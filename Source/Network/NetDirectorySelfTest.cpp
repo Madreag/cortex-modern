@@ -3367,6 +3367,19 @@ namespace RTE {
 				if (signals.sent->size() != 1 || signals.channel.GetState() != NetDirectorySignalChannel::State::Failed) {
 					*error = "a gone match continued signalling"; return false;
 				}
+				ScriptedClient closing;
+				closing.replies->push_back({200, kRegisterCapable, ""});
+				closing.replies->push_back({200, R"({"ok":false})", ""});
+				closing.replies->push_back({200, R"({"ok":true})", ""});
+				closing.client.Advertise(SampleRegisterRequest(), true); closing.client.Update(0); closing.client.Update(0);
+				closing.client.Retract(); closing.client.Update(0); closing.client.Update(0); closing.client.Update(999);
+				if (closing.sent->size() != 2 || closing.client.GetSessionId().empty()) {
+					*error = "an unconfirmed listing close skipped its reply wait"; return false;
+				}
+				closing.client.Update(1000); closing.client.Update(1000);
+				if (closing.sent->size() != 3 || !closing.client.GetSessionId().empty()) {
+					*error = "a confirmed listing close did not finish after its reply wait"; return false;
+				}
 				std::cout << "[net-directory-selftest] PASS directory_reply_waits" << std::endl;
 				return true;
 			}

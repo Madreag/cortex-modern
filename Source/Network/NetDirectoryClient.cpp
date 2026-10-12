@@ -723,6 +723,14 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::HandleDeleteReply(const Reply& reply, uint64_t nowMs) {
+		if (reply.statusCode == 200 && reply.error.empty()) {
+			NetDirectoryDeleteResponse response;
+			std::string reason;
+			if (!NetDirectoryCodec::DecodeDeleteResponse(reply.body, response, reason) || !response.ok) {
+				NoteError("The directory has not confirmed the listing was closed. Retrying.");
+				ScheduleRetry(nowMs); return;
+			}
+		}
 		if (!reply.error.empty() || (reply.statusCode != 200 && !NetDirectoryRetry::SessionGone(reply.statusCode, reply.body))) {
 			NoteError("The directory has not confirmed the listing was closed. Retrying.");
 			ScheduleRetry(nowMs); return;
