@@ -339,7 +339,29 @@ assert(coroutine.resume(savedOrderThread))
 			Call(2, 2);
 			if (!lua_isthread(m_State, -2)) throw std::runtime_error(lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "saved coroutine could not be rebuilt");
 			lua_settop(m_State, destination);
-			thread->serial = m_Heap.Read(&source->serial);
+			const auto saved = m_Heap.Read(source);
+			if (saved.status == LUA_YIELD) {
+				// Saved loops resume at their next key in the private table.
+				const auto* stack = tvref(saved.stack);
+				for (ptrdiff_t slot = 2 + LJ_FR2; slot < saved.top - stack; ++slot) {
+					const TValue place = m_Heap.Read(stack + slot), table = m_Heap.Read(stack + slot - 1);
+					if (!ThreadDetail::IsTraversalIndex(place) || !tvistab(&table)) continue;
+					auto* target = tvref(thread->stack);
+					if (slot >= thread->top - target || !tvistab(target + slot - 1)) throw std::runtime_error("a saved loop lost its table");
+					GCtab* const copy = tabV(target + slot - 1);
+					uint32_t index = copy->asize + copy->hmask + 1;
+					TValue key;
+					if (ThreadDetail::TraversalNextKey(m_Heap, tabV(&table), place.u32.lo, key)) {
+						Push(key);
+						const uint32_t successor = lj_tab_keyindex(copy, m_State->top - 1);
+						lua_pop(m_State, 1);
+						if (successor == 0 || successor == ~0u) throw std::runtime_error("a saved loop lost its next key");
+						index = successor - 1;
+					}
+					target[slot].u64 = (static_cast<uint64_t>(LJ_KEYINDEX) << 32) | index;
+				}
+			}
+			thread->serial = saved.serial;
 		}
 		void Libraries(const TValue& source, int destination, std::unordered_set<const GCtab*>& seen) {
 			if (!tvistab(&source) || !lua_istable(m_State, destination) || !seen.insert(tabV(&source)).second) return;
