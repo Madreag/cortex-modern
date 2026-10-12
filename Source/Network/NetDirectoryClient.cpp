@@ -275,8 +275,9 @@ namespace RTE {
 			m_RequestKind = RequestKind::None;
 			HandleReply(kind, reply, nowMs);
 		}
-		// Closing a listing uses its own retry slot and shared budget, even after a failed heartbeat.
-		if (m_Request || (m_Listed && nowMs < m_NextAttemptMs)) {
+		// A legacy missing hidden row can be closed on DELETE's own slot; all other waits stay.
+		const bool closeMissingRow = m_State == State::Failed && m_LastStatus == 404 && !m_SessionGone && !m_Listed;
+		if (m_Request || (nowMs < m_NextAttemptMs && !closeMissingRow)) {
 			return;
 		}
 		switch (m_State) {
