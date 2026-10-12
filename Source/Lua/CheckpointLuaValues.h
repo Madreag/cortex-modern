@@ -198,6 +198,7 @@ assert(coroutine.resume(savedOrderThread))
 			source.reset();
 			auto worker = HeapOwner::Create();
 			lua_State* const state = worker->State();
+			if (heap.OriginalBytes(state, sizeof(lua_State))) return "a private VM reused saved source addresses";
 			std::string mismatch;
 			ProtectedCall(state, [&] {
 				luaL_openlibs(state);

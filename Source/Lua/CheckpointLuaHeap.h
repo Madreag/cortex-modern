@@ -272,6 +272,7 @@ namespace RTE::CheckpointLua {
 			size_t previousFaults = 0;
 			int64_t previousFaultUs = 0;
 			std::shared_ptr<const void> buffer; // Keeps the copy mapped.
+			std::shared_ptr<const void> sourceMemory;
 			const Page* pages = nullptr; // One per committed page, in order.
 			std::shared_future<void> ready; // Set only when a freeze was given somewhere to run its copy.
 			mutable std::atomic<bool> copiedFlag{false};
@@ -536,6 +537,7 @@ namespace RTE::CheckpointLua {
 			data->handlers = m_LibraryHandlers;
 			data->serial = G(m_State)->objserial;
 			data->base = m_Base;
+			data->sourceMemory = m_HeapMemory;
 			data->committed = m_Committed;
 			if (m_CowCopy) {
 				data->previousFaults = m_CowCopy->faults->count.load(std::memory_order_relaxed);
@@ -760,6 +762,7 @@ namespace RTE::CheckpointLua {
 		lua_State* m_State = nullptr;
 		LibraryHandlers m_LibraryHandlers;
 		uintptr_t m_Reservation = 0;
+		std::shared_ptr<void> m_HeapMemory;
 		uintptr_t m_Base = 0;
 		size_t m_Committed = 0;
 		std::atomic<size_t> m_PublishedCommitted{0};
@@ -1096,6 +1099,7 @@ namespace RTE::CheckpointLua {
 		void Reserve(size_t shift) {
 			void* base = VirtualAlloc(nullptr, c_ReserveBytes + c_Colors * c_PageStride, MEM_RESERVE, PAGE_NOACCESS);
 			if (!base) throw std::runtime_error("could not reserve the tracked Lua heap");
+			m_HeapMemory = std::shared_ptr<void>(base, [](void* value) { Unmap(value, c_ReserveBytes + c_Colors * c_PageStride); });
 			m_Reservation = reinterpret_cast<uintptr_t>(base);
 			m_Base = m_Reservation + shift;
 		}
@@ -1103,7 +1107,9 @@ namespace RTE::CheckpointLua {
 			return VirtualAlloc(reinterpret_cast<void*>(m_Base + m_Committed), bytes, MEM_COMMIT, PAGE_READWRITE) != nullptr;
 		}
 		void Release() noexcept {
-			if (m_Reservation) VirtualFree(reinterpret_cast<void*>(m_Reservation), 0, MEM_RELEASE);
+			// Saved addresses stay distinct after closure without retaining the VM's committed pages.
+			if (m_Reservation && m_Committed) VirtualFree(reinterpret_cast<void*>(m_Base), m_Committed, MEM_DECOMMIT);
+			m_HeapMemory.reset();
 			m_Reservation = m_Base = 0;
 		}
 #else
@@ -1115,6 +1121,7 @@ namespace RTE::CheckpointLua {
 		void Reserve(size_t shift) {
 			void* base = mmap(nullptr, c_ReserveBytes + c_Colors * c_PageStride, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
 			if (base == MAP_FAILED) throw std::runtime_error("could not reserve the tracked Lua heap");
+			m_HeapMemory = std::shared_ptr<void>(base, [](void* value) { Unmap(value, c_ReserveBytes + c_Colors * c_PageStride); });
 			m_Reservation = reinterpret_cast<uintptr_t>(base);
 			m_Base = m_Reservation + shift;
 		}
@@ -1122,7 +1129,11 @@ namespace RTE::CheckpointLua {
 			return mprotect(reinterpret_cast<void*>(m_Base + m_Committed), bytes, PROT_READ | PROT_WRITE) == 0;
 		}
 		void Release() noexcept {
-			if (m_Reservation) munmap(reinterpret_cast<void*>(m_Reservation), c_ReserveBytes + c_Colors * c_PageStride);
+			if (m_Reservation && m_Committed) {
+				mprotect(reinterpret_cast<void*>(m_Base), m_Committed, PROT_NONE);
+				madvise(reinterpret_cast<void*>(m_Base), m_Committed, MADV_DONTNEED);
+			}
+			m_HeapMemory.reset();
 			m_Reservation = m_Base = 0;
 		}
 #endif
@@ -1312,6 +1323,7 @@ namespace RTE::CheckpointLua {
 		std::lock_guard preparations(m_PrepareMutex);
 		auto data = std::make_shared<Snapshot::Data>();
 		data->state = m_State; data->handlers = m_LibraryHandlers; data->base = m_Base;
+		data->sourceMemory = m_HeapMemory;
 		data->committed = m_PublishedCommitted.load(std::memory_order_acquire);
 		const size_t pageBytes = PageWriteFence::SystemPageBytes();
 		if (!data->state || !pageBytes || !data->committed || data->base % pageBytes || data->committed % pageBytes)
