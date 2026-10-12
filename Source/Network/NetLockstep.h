@@ -1634,7 +1634,8 @@ namespace RTE {
 		std::map<NetPeerId, uint8_t>& PeerListenerBindings() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->listenerBindings : m_PeerListenerBindings; }
 		std::map<NetPeerId, uint8_t>& PeerPrimaryBindings() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryBindings : m_PeerPrimaryBindings; }
 		bool& PeerPrimaryListener() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryListener : m_PeerPrimaryListener; }
-		bool HasPeerFrameRoute(uint8_t peer);
+		bool HasPeerFrameRoute(uint8_t peer) const;
+		bool PeerLinkLostBeforeOwnInput(uint8_t peer, uint64_t frame) const;
 		std::pair<INetTransport*, NetPeerId> PeerFrameRoute(uint8_t peer) const;
 		void NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink, bool completedRound = false);
 		void AdjudicatePeerRoundEnds(uint64_t nowMs);

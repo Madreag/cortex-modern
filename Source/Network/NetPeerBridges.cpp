@@ -74,7 +74,8 @@ namespace RTE {
 			const bool neutral = IsSeatReclaimGap(peer, proposal.frame);
 			const auto ended = m_PeerRoundEnds.find(peer);
 			const bool departed = ended != m_PeerRoundEnds.end() && !ended->second.closedLink && proposal.frame >= ended->second.frame;
-			if (proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0 && (present || (neutral && !departed))) return false;
+			if (proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0 && (present || (neutral && !departed)) &&
+			    !(proposal.senderPeerId == GetHostPeerId() && present && !neutral && !HasPeerFrameRoute(peer))) return false;
 			if (proposal.preparedFrame == 0 && (proposal.connectedMask & SeatBit(peer)) != 0 && proposal.frame >= EffectiveStartOf(peer) && !neutral && !present) return false;
 			if (proposal.preparedFrame == 1 && (named & SeatBit(peer)) != 0 &&
 			    (!m_PeerBridges.contains(peer) || !m_PeerBridges.at(peer).committedHold || m_PeerBridges.at(peer).returnFrame)) return false;
@@ -100,7 +101,8 @@ namespace RTE {
 				proposal.members.push_back(peer);
 				continue;
 			}
-			if (frame < EffectiveStartOf(peer) || IsSeatReclaimGap(peer, frame) || sources->second.contains(peer)) proposal.connectedMask |= SeatBit(peer);
+			if (PeerLinkLostBeforeOwnInput(peer, frame)) proposal.members.push_back(peer);
+			else if (frame < EffectiveStartOf(peer) || IsSeatReclaimGap(peer, frame) || sources->second.contains(peer)) proposal.connectedMask |= SeatBit(peer);
 			else proposal.members.push_back(peer);
 		}
 		if (returningOnly && !proposal.members.empty()) return false;
