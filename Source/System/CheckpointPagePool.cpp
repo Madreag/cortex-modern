@@ -785,10 +785,77 @@ struct CheckpointNativeStorage::PrivateValues {
 	std::map<uintptr_t, Range> ranges;
 };
 
+namespace {
+	// Overlapping roots keep the first recorded owner that covers the requested bytes.
+	class CheckpointRootIndex {
+	public:
+		using Root = CheckpointNativeStorage::RootRange;
+		void Build(std::span<const Root> roots, bool views, bool privateOnly = false) {
+			if (!roots.empty()) CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+			m_Entries.reserve(roots.size());
+			for (size_t index = 0; index < roots.size(); ++index) {
+				const Root& root = roots[index];
+				if (privateOnly && !root.privateValues) continue;
+				const auto start = reinterpret_cast<uintptr_t>(views ? root.view : root.source);
+				m_Entries.push_back({start, End(start, root.bytes), index, index});
+			}
+			std::sort(m_Entries.begin(), m_Entries.end(), [](const Entry& left, const Entry& right) {
+				return left.start < right.start || (left.start == right.start && left.root < right.root);
+			});
+			Build(0, m_Entries.size());
+		}
+		const Root* Find(std::span<const Root> roots, const void* pointer, size_t bytes) const noexcept {
+			const auto address = reinterpret_cast<uintptr_t>(pointer);
+			size_t found = c_None;
+			Find(roots, 0, m_Entries.size(), address, End(address, bytes), bytes, found);
+			return found == c_None ? nullptr : &roots[found];
+		}
+	private:
+		static constexpr size_t c_None = (std::numeric_limits<size_t>::max)();
+		struct Entry { uintptr_t start, last; size_t root, firstRoot; };
+		std::vector<Entry> m_Entries;
+		static uintptr_t End(uintptr_t start, size_t bytes) noexcept {
+			return start + (std::min<uintptr_t>)(bytes, (std::numeric_limits<uintptr_t>::max)() - start);
+		}
+		void Build(size_t first, size_t last) {
+			if (first == last) return;
+			const size_t middle = first + (last - first) / 2;
+			Build(first, middle); Build(middle + 1, last);
+			Entry& entry = m_Entries[middle];
+			const auto include = [&](size_t begin, size_t end) {
+				if (begin == end) return;
+				const Entry& child = m_Entries[begin + (end - begin) / 2];
+				entry.last = (std::max)(entry.last, child.last);
+				entry.firstRoot = (std::min)(entry.firstRoot, child.firstRoot);
+			};
+			include(first, middle); include(middle + 1, last);
+		}
+		void Find(std::span<const Root> roots, size_t first, size_t last, uintptr_t address, uintptr_t end, size_t bytes, size_t& found) const noexcept {
+			if (first == last || m_Entries[first].start > address) return;
+			const size_t middle = first + (last - first) / 2;
+			const Entry& entry = m_Entries[middle];
+			if (entry.last < end || entry.firstRoot >= found) return;
+			const Root& root = roots[entry.root];
+			if (entry.root < found && address >= entry.start && address - entry.start <= root.bytes && bytes <= root.bytes - (address - entry.start))
+				found = entry.root;
+			const size_t left = first == middle ? c_None : m_Entries[first + (middle - first) / 2].firstRoot;
+			const size_t right = middle + 1 == last ? c_None : m_Entries[middle + 1 + (last - middle - 1) / 2].firstRoot;
+			if (left <= right) {
+				Find(roots, first, middle, address, end, bytes, found);
+				Find(roots, middle + 1, last, address, end, bytes, found);
+			} else {
+				Find(roots, middle + 1, last, address, end, bytes, found);
+				Find(roots, first, middle, address, end, bytes, found);
+			}
+		}
+	};
+}
+
 struct CheckpointNativeStorage::ReadState : std::enable_shared_from_this<ReadState> {
 	std::shared_ptr<const void> sourceOwner;
 	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> pages;
 	std::vector<RootRange> roots;
+	CheckpointRootIndex sourceRoots, viewRoots, privateRoots;
 	std::map<std::pair<uintptr_t, size_t>, std::string> strings;
 	std::map<std::pair<uintptr_t, uintptr_t>, std::shared_ptr<const void>> indices;
 	std::shared_ptr<PrivateValues> privateValues;
@@ -805,6 +872,9 @@ CheckpointNativeStorage::ReadScope::ReadScope(ReadViews views) : m_Capture(views
 	m_State->sourceOwner = std::move(views.owner);
 	m_State->pages.assign(views.pages.begin(), views.pages.end());
 	m_State->roots.assign(views.roots.begin(), views.roots.end());
+	m_State->sourceRoots.Build(m_State->roots, false);
+	m_State->viewRoots.Build(m_State->roots, true);
+	m_State->privateRoots.Build(m_State->roots, true, true);
 	m_State->privateValues = views.privateValues ? std::move(views.privateValues) : (m_Previous ? m_Previous->privateValues : std::make_shared<PrivateValues>());
 	s_Read = m_State.get();
 }
@@ -868,11 +938,7 @@ bool CheckpointNativeStorage::PrivateBorrowed(const void* address) noexcept {
 			if (pointer - value->first < value->second.bytes) return value->second.borrowed;
 		}
 	}
-	for (const RootRange& root: s_Read->roots) {
-		const auto start = reinterpret_cast<uintptr_t>(root.view);
-		if (root.privateValues && pointer >= start && pointer - start < root.bytes) return true;
-	}
-	return false;
+	return s_Read->privateRoots.Find(s_Read->roots, address, 1) != nullptr;
 }
 
 bool CheckpointNativeStorage::Private(const void* address, size_t bytes) noexcept {
@@ -887,11 +953,7 @@ bool CheckpointNativeStorage::Private(const void* address, size_t bytes) noexcep
 			if (pointer - value->first < value->second.bytes && bytes <= value->second.bytes - (pointer - value->first)) return true;
 		}
 	}
-	for (const RootRange& root: s_Read->roots) {
-		const uintptr_t start = reinterpret_cast<uintptr_t>(root.view);
-		if (root.privateValues && pointer >= start && pointer - start <= root.bytes && bytes <= root.bytes - (pointer - start)) return true;
-	}
-	return false;
+	return s_Read->privateRoots.Find(s_Read->roots, address, bytes) != nullptr;
 }
 
 void* CheckpointNativeStorage::AllocatePrivate(size_t bytes, size_t alignment, bool aligned) {
@@ -920,11 +982,8 @@ const void* CheckpointNativeStorage::RootView(const void* source, size_t bytes) 
 	if (!s_Read || !source) return nullptr;
 	source = Original(source);
 	const uintptr_t address = reinterpret_cast<uintptr_t>(source);
-	for (const RootRange& root: s_Read->roots) {
-		const uintptr_t start = reinterpret_cast<uintptr_t>(root.source);
-		if (address >= start && address - start <= root.bytes && bytes <= root.bytes - (address - start))
-			return static_cast<const std::byte*>(root.view) + (address - start);
-	}
+	if (const RootRange* root = s_Read->sourceRoots.Find(s_Read->roots, source, bytes))
+		return static_cast<const std::byte*>(root->view) + (address - reinterpret_cast<uintptr_t>(root->source));
 	return nullptr;
 }
 
@@ -939,19 +998,14 @@ bool CheckpointNativeStorage::ReadBytes(const void* source, void* target, size_t
 }
 
 const void* CheckpointNativeStorage::Original(const void* view) {
-	if (s_Read && view) for (const RootRange& root: s_Read->roots) {
-		const uintptr_t address = reinterpret_cast<uintptr_t>(view), start = reinterpret_cast<uintptr_t>(root.view);
-		if (address >= start && address - start < root.bytes) return static_cast<const std::byte*>(root.source) + (address - start);
-	}
+	if (s_Read && view) if (const RootRange* root = s_Read->viewRoots.Find(s_Read->roots, view, 1))
+		return static_cast<const std::byte*>(root->source) + (reinterpret_cast<uintptr_t>(view) - reinterpret_cast<uintptr_t>(root->view));
 	if (s_Read) for (const auto& pages: s_Read->pages) if (const void* source = pages->Original(view)) return source;
 	return view;
 }
 
 bool CheckpointNativeStorage::IsView(const void* address) {
-	if (s_Read && address) for (const RootRange& root: s_Read->roots) {
-		const auto pointer = reinterpret_cast<uintptr_t>(address), start = reinterpret_cast<uintptr_t>(root.view);
-		if (root.privateValues && pointer >= start && pointer - start < root.bytes) return false;
-	}
+	if (s_Read && address && s_Read->privateRoots.Find(s_Read->roots, address, 1)) return false;
 	return Original(address) != address;
 }
 
@@ -992,6 +1046,40 @@ const std::string* CheckpointNativeStorage::ReadString(const char* source, size_
 }
 
 std::string CheckpointNativeStorage::SelfTestMismatch() {
+	{
+		std::array<std::byte, 128> source{}, first{}, second{};
+		const std::array roots{
+			RootRange{source.data() + 16, first.data() + 16, 8},
+			RootRange{source.data() + 8, first.data() + 72, 32},
+			RootRange{source.data() + 16, second.data() + 16, 8},
+			RootRange{source.data() + 48, first.data() + 18, 4, true},
+			RootRange{source.data() + 96, second.data() + 96, 0},
+			RootRange{source.data() + 64, second.data() + 64, 8, true}
+		};
+		ReadScope read({}, roots);
+		if (RootView(source.data() + 18) != first.data() + 18 || RootView(source.data() + 18, 12) != first.data() + 82 ||
+		    RootView(source.data() + 24, 0) != first.data() + 24 || RootView(source.data() + 24) != first.data() + 88 ||
+		    RootView(source.data() + 40, 0) != first.data() + 104 || RootView(source.data() + 40) ||
+		    RootView(source.data() + 96, 0) != second.data() + 96 || RootView(source.data() + 96))
+			return "frozen root lookup changed overlapping owners or byte bounds";
+		if (Original(first.data() + 18) != source.data() + 18 || Original(first.data() + 72) != source.data() + 8 ||
+		    Original(second.data() + 18) != source.data() + 18 || Original(second.data() + 96) != second.data() + 96 ||
+		    IsView(first.data() + 18) || !IsView(first.data() + 22) || !Private(first.data() + 22, 0) ||
+		    Private(first.data() + 22) || !PrivateBorrowed(first.data() + 21) || PrivateBorrowed(first.data() + 22))
+			return "frozen root lookup changed private values or original identities";
+		for (size_t after = 0; after < 3; ++after) {
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects, after);
+			bool refused = false;
+			try { ReadScope refusedRead({}, roots); }
+			catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+			if (!refused || !Reading() || RootView(source.data() + 18) != first.data() + 18 ||
+			    Original(second.data() + 18) != source.data() + 18 || !Private(first.data() + 21))
+				return "refused frozen root index changed the previous reader";
+		}
+		ReadScope retry({}, roots);
+		if (RootView(source.data() + 18, 12) != first.data() + 82 || !PrivateBorrowed(second.data() + 64))
+			return "frozen root index retry lost its owners";
+	}
 	{
 		CheckpointNativeAllocator<uint64_t> allocator;
 		uint64_t* values = nullptr;
