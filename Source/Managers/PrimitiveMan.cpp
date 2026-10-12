@@ -571,14 +571,16 @@ bool PrimitiveMan::RunCheckpointSelfTest() {
 			SchedulePrimitive(std::make_unique<TextPrimitive>(1, Vector(13, 19), std::string(80, 'q'), true, 1, 0.125F));
 			const auto before = SaveCheckpoint();
 			CheckpointNativeStorage::Root root(&m_ScheduledPrimitives);
+			const auto [bitmapSource, bitmapBytes] = ContentFile::LoadedBitmapRegistry();
+			std::vector<std::byte> bitmapHeader(bitmapBytes);
 			auto pages = CheckpointNativeStorage::Prepare();
-			root.Freeze();
+			root.Freeze(); std::memcpy(bitmapHeader.data(), bitmapSource, bitmapBytes);
 			for (const auto& page: pages) page->Arm();
 			vertex->m_X = 103;
 			ClearPrimitivesQueue();
 			SchedulePrimitive(std::make_unique<PolygonPrimitive>(3, Vector(), 5, std::vector<Vector*>{new Vector(22, 33), new Vector(44, 55)}));
 			const bool exact = std::async(std::launch::async, [&] {
-				const std::array roots{root.Range()};
+				const std::array roots{root.Range(), CheckpointNativeStorage::RootRange{bitmapSource, bitmapHeader.data(), bitmapBytes}};
 				CheckpointNativeStorage::ReadScope read(pages, roots);
 				std::vector<const GraphicalPrimitive*> values;
 				for (const auto& value: CheckpointValues(*CheckpointNativeStorage::Source(&m_ScheduledPrimitives))) values.push_back(value.get());

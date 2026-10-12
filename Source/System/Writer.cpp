@@ -1816,11 +1816,11 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 					CheckpointFailure::Check(CheckpointFailure::Point::CopyWatch);
 				}
 			} source;
+			auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
 			CheckpointNativeStorage::Root<Value> root(&source);
 			root.Freeze();
 			const std::array roots{root.Range()};
 			CheckpointNativeStorage::ReadScope read({}, roots);
-			auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
 			bool refused = false;
 			{
 				CheckpointFailure::Scope failure(CheckpointFailure::Point::CopyWatch);
