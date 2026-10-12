@@ -696,11 +696,15 @@ bool CheckpointNativeStorage::Deallocate(void* address) noexcept {
 		pools->releasedLargeBytes += bytes;
 		static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_ALLOCATIONS"); return value && std::string_view(value) == "1"; }();
 		if (report) try {
+			static bool sizesReported = false;
 			uint64_t retained = 0, free = 0;
 			for (size_t size = 0; size < pools->sizes.size(); ++size) {
 				retained += pools->sizes[size].bytes;
 				free += pools->sizes[size].free.size() * (uint64_t{1} << size);
+				if (!sizesReported && pools->sizes[size].bytes) std::cout << "[checkpoint-storage-size] slot_bytes=" << (uint64_t{1} << size)
+					<< " retained_bytes=" << pools->sizes[size].bytes << " free_bytes=" << pools->sizes[size].free.size() * (uint64_t{1} << size) << std::endl;
 			}
+			sizesReported = true;
 			std::cout << "[checkpoint-storage] released_large_bytes=" << pools->releasedLargeBytes << " live_large_bytes=" << pools->largeBytes
 			          << " peak_large_bytes=" << pools->peakLargeBytes << " retained_slots_bytes=" << retained << " free_slots_bytes=" << free << std::endl;
 		} catch (...) {}
