@@ -3835,8 +3835,8 @@ namespace RTE {
 
 	void NetLockstepCoordinator::TickMigrationRollCallLinks(uint64_t nowMs) {
 		const bool blackout = UsesPeerFrameGroups() && PeerFrameBlackout(nowMs);
-		const auto authenticated = [&](const NetTransportEvent& event, NetHostMigrationMessage& message) {
-			return event.type == NetTransportEventType::PacketReceived && (event.lane == NetTransportLane::ControlReliable || UsesPeerFrameGroups()) && NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, message) &&
+		const auto authenticated = [&](const NetTransportEvent& event, NetHostMigrationMessage& message, NetHash32* readKey = nullptr) {
+			return event.type == NetTransportEventType::PacketReceived && (event.lane == NetTransportLane::ControlReliable || UsesPeerFrameGroups()) && ReadPeerMessage(event.bytes, message, readKey) &&
 			       message.sessionId == m_Config.sessionId && ((UsesPeerFrameGroups() && message.type >= NetHostMigrationMessageType::PeerSession) ||
 			       (message.roundId == m_Config.matchConfig.roundId && message.configHash == m_RoundConfigHash));
 		};
@@ -3852,12 +3852,13 @@ namespace RTE {
 				}
 				if (blackout && event.type == NetTransportEventType::PacketReceived) continue;
 				NetHostMigrationMessage request;
+				NetHash32 readKey;
 				if (UsesPeerFrameGroups() && m_Config.peerSessionLinks && event.type == NetTransportEventType::PacketReceived && !NetHostMigrationCodec::LooksLikePacket(event.bytes) &&
 				    (NetProtocol::Decode(event.bytes).ok || NetLobbyProtocol::Decode(event.bytes).ok)) { m_Config.peerSessionLinks->ForwardAdmission(*listener, event); continue; }
-				if (!authenticated(event, request) || request.senderPeerId == 0 || request.senderPeerId > m_Config.peerCount || request.senderPeerId == m_Config.localPeerId) continue;
+				if (!authenticated(event, request, &readKey) || request.senderPeerId == 0 || request.senderPeerId > m_Config.peerCount || request.senderPeerId == m_Config.localPeerId) continue;
 				if (UsesPeerFrameGroups() && request.type >= NetHostMigrationMessageType::PeerInput) {
 					const auto binding = PeerListenerBindings().find(event.peerId);
-					if (binding != PeerListenerBindings().end() && binding->second == request.senderPeerId) HandlePeerFrameMessage(request, nowMs);
+					if (binding != PeerListenerBindings().end() && binding->second == request.senderPeerId) HandlePeerFrameMessage(request, nowMs, &readKey);
 					continue;
 				}
 				if (request.type == NetHostMigrationMessageType::Hello && request.successorPeerId == m_Config.localPeerId &&
@@ -3909,8 +3910,9 @@ namespace RTE {
 				}
 				if (blackout && event.type == NetTransportEventType::PacketReceived) continue;
 				NetHostMigrationMessage answer;
-				if (UsesPeerFrameGroups() && authenticated(event, answer) && answer.senderPeerId == peer && answer.type >= NetHostMigrationMessageType::PeerInput) {
-					HandlePeerFrameMessage(answer, nowMs);
+				NetHash32 readKey;
+				if (UsesPeerFrameGroups() && authenticated(event, answer, &readKey) && answer.senderPeerId == peer && answer.type >= NetHostMigrationMessageType::PeerInput) {
+					HandlePeerFrameMessage(answer, nowMs, &readKey);
 					continue;
 				}
 				if (authenticated(event, answer) && answer.senderPeerId == peer && answer.type == NetHostMigrationMessageType::Hello &&
@@ -5017,7 +5019,7 @@ namespace RTE {
 			auto& links = *config.peerSessionLinks;
 			if (!links.primary) links.primary = &transport;
 			if (config.peerFrameGroups) links.frameReader = this;
-			links.sessionId = config.sessionId; links.localPeerId = config.localPeerId; links.hostPeerId = GetHostPeerId(); links.key = config.migrationKey;
+			links.sessionId = config.sessionId; links.localPeerId = config.localPeerId; links.hostPeerId = GetHostPeerId(); links.SetSessionKey(config.migrationKey);
 			if (!links.sessionAttached) for (const auto& [peer, native]: remoteTransports) { links.primaryBindings[native] = peer; links.sessionRoutes[native] = peer; }
 		}
 		m_OpeningMatchConfig = config.matchConfig;
@@ -11495,7 +11497,8 @@ namespace RTE {
 		if (event.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.bytes)) {
 			if (UsesPeerFrameGroups()) {
 				NetHostMigrationMessage message;
-				if (!NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, message)) return;
+				NetHash32 readKey;
+				if (!ReadPeerMessage(event.bytes, message, &readKey)) return;
 				if (message.type == NetHostMigrationMessageType::Hello && message.successorPeerId == m_Config.localPeerId &&
 				    message.sessionId == m_Config.sessionId && message.roundId == m_Config.matchConfig.roundId && message.configHash == m_RoundConfigHash &&
 				    message.generation == 1 && message.senderPeerId != 0 && message.senderPeerId <= m_Config.peerCount &&
@@ -11510,7 +11513,7 @@ namespace RTE {
 					const auto binding = PeerPrimaryBindings().find(event.peerId);
 					const auto native = m_RemoteTransports.find(message.senderPeerId);
 					if ((binding != PeerPrimaryBindings().end() && binding->second == message.senderPeerId) ||
-					    (native != m_RemoteTransports.end() && native->second == event.peerId)) HandlePeerFrameMessage(message, nowMs);
+					    (native != m_RemoteTransports.end() && native->second == event.peerId)) HandlePeerFrameMessage(message, nowMs, &readKey);
 				}
 				return;
 			}

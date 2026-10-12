@@ -35,10 +35,11 @@ namespace RTE {
 		uint64_t sessionId = 0, nextSequence = 1;
 		uint8_t localPeerId = 0, hostPeerId = 1;
 		std::array<uint8_t, 32> key{};
+		std::deque<std::array<uint8_t, 32>> earlierKeys;
 		std::map<NetPeerId, uint8_t> sessionRoutes;
 		std::map<NetPeerId, std::pair<INetTransport*, NetPeerId>> admissions;
 		NetPeerId nextAdmission = 0x80000000U;
-		struct Pending { uint64_t sequence = 0; NetTransportLane lane; std::vector<uint8_t> bytes; uint64_t sendAfterMs = 0; };
+		struct Pending { uint64_t sequence = 0; NetTransportLane lane; std::vector<uint8_t> bytes; uint64_t sendAfterMs = 0; std::array<uint8_t, 32> sendKey{}; };
 		std::map<uint8_t, std::deque<Pending>> pending;
 		size_t pendingBytes = 0;
 		std::map<uint8_t, uint64_t> received;
@@ -51,7 +52,9 @@ namespace RTE {
 		uint8_t PeerOn(const INetTransport& wire, NetPeerId native) const;
 		void ForwardAdmission(INetTransport& wire, const NetTransportEvent& event);
 		void BindAdmission(uint8_t peer, NetPeerId sessionRoute);
-		bool HandleSessionMessage(const NetHostMigrationMessage& message);
+		void SetSessionKey(const std::array<uint8_t, 32>& next);
+		bool ReadSessionPacket(const std::vector<uint8_t>& bytes, NetHostMigrationMessage& message, std::array<uint8_t, 32>* readKey = nullptr) const;
+		bool HandleSessionMessage(const NetHostMigrationMessage& message, const std::array<uint8_t, 32>* readKey = nullptr);
 		void FlushSession(uint64_t nowMs);
 		void PollSession(uint64_t nowMs);
 		uint64_t ClockMs() const;

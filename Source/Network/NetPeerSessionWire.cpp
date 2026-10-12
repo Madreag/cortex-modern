@@ -4,6 +4,7 @@
 #include "NetLobbyProtocol.h"
 #include "NetProtocol.h"
 
+#include <algorithm>
 #include <set>
 
 namespace RTE {
@@ -82,7 +83,26 @@ namespace RTE {
 		received.erase(peer);
 	}
 
-	bool NetPeerSessionLinks::HandleSessionMessage(const NetHostMigrationMessage& message) {
+	void NetPeerSessionLinks::SetSessionKey(const std::array<uint8_t, 32>& next) {
+		if (next == key) return;
+		if (std::any_of(key.begin(), key.end(), [](uint8_t byte) { return byte != 0; })) earlierKeys.push_back(key);
+		if (earlierKeys.size() > 8) earlierKeys.pop_front();
+		key = next;
+	}
+
+	bool NetPeerSessionLinks::ReadSessionPacket(const std::vector<uint8_t>& bytes, NetHostMigrationMessage& message, std::array<uint8_t, 32>* readKey) const {
+		const auto read = [&](const auto& candidate) {
+			if (!NetHostMigrationCodec::Decode(bytes, candidate, message) ||
+			    (message.type != NetHostMigrationMessageType::PeerSession && message.type != NetHostMigrationMessageType::PeerSessionAck)) return false;
+			if (readKey) *readKey = candidate;
+			return true;
+		};
+		if (read(key)) return true;
+		for (const auto& previous: earlierKeys) if (read(previous)) return true;
+		return false;
+	}
+
+	bool NetPeerSessionLinks::HandleSessionMessage(const NetHostMigrationMessage& message, const std::array<uint8_t, 32>* readKey) {
 		if (message.type != NetHostMigrationMessageType::PeerSession && message.type != NetHostMigrationMessageType::PeerSessionAck) return false;
 		if (!sessionAttached || frameBlackout || message.sessionId != sessionId || message.roundId != 1 || message.generation != 1 ||
 		    message.configHash != NetHash32{} || message.senderPeerId == 0 || message.senderPeerId == localPeerId ||
@@ -107,7 +127,7 @@ namespace RTE {
 		ack.type = NetHostMigrationMessageType::PeerSessionAck; ack.senderPeerId = localPeerId; ack.successorPeerId = message.senderPeerId;
 		ack.bytes.clear(); ack.totalBytes = 0;
 		std::vector<uint8_t> bytes;
-		if (NetHostMigrationCodec::Encode(ack, key, bytes)) (void)SendTo(message.senderPeerId, NetTransportLane::ControlReliable, bytes);
+		if (NetHostMigrationCodec::Encode(ack, readKey ? *readKey : key, bytes)) (void)SendTo(message.senderPeerId, NetTransportLane::ControlReliable, bytes);
 		return true;
 	}
 
@@ -122,7 +142,7 @@ namespace RTE {
 			message.senderPeerId = localPeerId; message.successorPeerId = peer;
 			message.frame = item.sequence; message.bytes = item.bytes; message.totalBytes = static_cast<uint32_t>(item.bytes.size());
 			std::vector<uint8_t> bytes;
-			if (NetHostMigrationCodec::Encode(message, key, bytes)) (void)SendTo(peer, NetTransportLane::ControlReliable, bytes);
+			if (NetHostMigrationCodec::Encode(message, item.sendKey, bytes)) (void)SendTo(peer, NetTransportLane::ControlReliable, bytes);
 			item.sendAfterMs = nowMs + 50;
 		}
 		for (auto end = closing.begin(); end != closing.end();) {
@@ -147,8 +167,9 @@ namespace RTE {
 		for (INetTransport* wire: wires) for (const auto& event: wire->PollEvents()) {
 			if (event.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.bytes)) {
 				NetHostMigrationMessage message;
-				if (NetHostMigrationCodec::Decode(event.bytes, key, message) && PeerOn(*wire, event.peerId) == message.senderPeerId)
-					(void)HandleSessionMessage(message);
+				std::array<uint8_t, 32> readKey;
+				if (ReadSessionPacket(event.bytes, message, &readKey) && PeerOn(*wire, event.peerId) == message.senderPeerId)
+					(void)HandleSessionMessage(message, &readKey);
 				continue;
 			}
 			if (event.type != NetTransportEventType::PacketReceived || NetProtocol::Decode(event.bytes).ok || NetLobbyProtocol::Decode(event.bytes).ok)
@@ -184,7 +205,7 @@ namespace RTE {
 				if (error) *error = "the retained session outbox is full";
 				return false;
 			}
-			m_Links->pending[bound->second].push_back({m_Links->nextSequence++, lane, bytes});
+			m_Links->pending[bound->second].push_back({m_Links->nextSequence++, lane, bytes, 0, m_Links->key});
 			m_Links->pendingBytes += bytes.size();
 			return true;
 		}
@@ -220,6 +241,7 @@ namespace RTE {
 		m_Links->sessionAttached = false;
 		m_Links->pending.clear(); m_Links->pendingBytes = 0; m_Links->events.clear();
 		m_Links->closing.clear();
+		m_Links->earlierKeys.clear();
 	}
 
 	std::vector<NetTransportEvent> NetPeerSessionWire::PollEvents() {

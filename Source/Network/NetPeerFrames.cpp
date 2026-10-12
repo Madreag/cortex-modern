@@ -148,11 +148,19 @@ namespace RTE {
 		return active;
 	}
 
-	bool NetLockstepCoordinator::HandlePeerSessionMessage(const NetHostMigrationMessage& message, uint64_t nowMs) {
+	bool NetLockstepCoordinator::ReadPeerMessage(const std::vector<uint8_t>& bytes, NetHostMigrationMessage& message, NetHash32* readKey) const {
+		if (NetHostMigrationCodec::Decode(bytes, m_Config.migrationKey, message)) {
+			if (readKey) *readKey = m_Config.migrationKey;
+			return true;
+		}
+		return m_Config.peerSessionLinks && m_Config.peerSessionLinks->ReadSessionPacket(bytes, message, readKey);
+	}
+
+	bool NetLockstepCoordinator::HandlePeerSessionMessage(const NetHostMigrationMessage& message, uint64_t nowMs, const NetHash32* readKey) {
 		if (message.type != NetHostMigrationMessageType::PeerSession && message.type != NetHostMigrationMessageType::PeerSessionAck) return false;
 		if (!UsesPeerFrameGroups() || !m_Config.peerSessionLinks || PeerFrameBlackout(nowMs)) return true;
 		auto& links = *m_Config.peerSessionLinks;
-		(void)links.HandleSessionMessage(message);
+		(void)links.HandleSessionMessage(message, readKey);
 		if (links.sessionAttached && message.sessionId == links.sessionId && message.roundId == 1 && message.generation == 1 &&
 		    message.configHash == NetHash32{} && message.senderPeerId > 0 && message.senderPeerId <= m_Config.peerCount &&
 		    message.senderPeerId != m_Config.localPeerId && message.successorPeerId == m_Config.localPeerId &&

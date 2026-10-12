@@ -166,8 +166,8 @@ namespace RTE {
 		m_PeerAdminFrameMembers &= ~SeatBit(peer);
 	}
 
-	bool NetLockstepCoordinator::HandlePeerFrameMessage(const NetHostMigrationMessage& message, uint64_t nowMs) {
-		if (HandlePeerSessionMessage(message, nowMs)) return true;
+	bool NetLockstepCoordinator::HandlePeerFrameMessage(const NetHostMigrationMessage& message, uint64_t nowMs, const NetHash32* readKey) {
+		if (HandlePeerSessionMessage(message, nowMs, readKey)) return true;
 		if (!UsesPeerFrameGroups() || message.type < NetHostMigrationMessageType::PeerInput ||
 		    (message.type > NetHostMigrationMessageType::PeerControl && message.type != NetHostMigrationMessageType::PeerForwardInput)) return false;
 		const uint8_t detailOwner = message.type == NetHostMigrationMessageType::PeerForwardInput ? message.successorPeerId : message.senderPeerId;

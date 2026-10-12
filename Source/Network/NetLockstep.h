@@ -1638,13 +1638,14 @@ namespace RTE {
 		void AdjudicatePeerRoundEnds(uint64_t nowMs);
 		struct PeerRoundEnd { uint64_t frame = 0, atMs = 0; bool closedLink = false, completedRound = false; };
 		std::map<uint8_t, PeerRoundEnd> m_PeerRoundEnds;
-		bool HandlePeerSessionMessage(const NetHostMigrationMessage& message, uint64_t nowMs);
+		bool ReadPeerMessage(const std::vector<uint8_t>& bytes, NetHostMigrationMessage& message, NetHash32* readKey = nullptr) const;
+		bool HandlePeerSessionMessage(const NetHostMigrationMessage& message, uint64_t nowMs, const NetHash32* readKey = nullptr);
 		void TickPeerSessionWire(uint64_t nowMs);
 		std::map<NetPeerId, uint8_t> m_PeerListenerBindings;
 		std::map<NetPeerId, uint8_t> m_PeerPrimaryBindings;
 		NetHostMigrationMessage PeerFrameMessage(NetHostMigrationMessageType type) const;
 		bool SendPeerFrameMessage(NetHostMigrationMessage message, NetTransportLane lane = NetTransportLane::ControlReliable, uint8_t onlyPeer = 0);
-		bool HandlePeerFrameMessage(const NetHostMigrationMessage& message, uint64_t nowMs);
+		bool HandlePeerFrameMessage(const NetHostMigrationMessage& message, uint64_t nowMs, const NetHash32* readKey = nullptr);
 		void SendPeerInput(const NetLockstepFrame& frame);
 		void TickPeerFrameGroups(uint64_t nowMs);
 		bool PeerFrameBlackout(uint64_t nowMs);

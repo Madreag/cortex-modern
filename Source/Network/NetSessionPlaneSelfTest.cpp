@@ -844,6 +844,7 @@ namespace RTE {
 		match.peerCount = 2; match.roundId = 77; match.players = {{1, 0, false, "Captain"}, {2, 1, false, "Joiner"}};
 		match.inputDelayFrames = 12; match.peerInputDelayFrames = {12, 12};
 		std::array<std::unique_ptr<NetLockstepCoordinator>, 2> rounds;
+		std::array<NetLockstepConfig, 2> roundConfigs;
 		std::array<std::shared_ptr<NetPeerSessionLinks>, 2> links;
 		std::array<std::unique_ptr<NetPeerSessionWire>, 2> sessionWires;
 		std::array<NetSession*, 2> sessions{&hostSession, &clientSession};
@@ -862,6 +863,7 @@ namespace RTE {
 			config.remoteTransportPeerIds[index == 0 ? 2 : 1] = index == 0 ? originalRoute : clientSession.GetRemoteTransportPeerId();
 			rounds[index] = std::make_unique<NetLockstepCoordinator>();
 			if (!rounds[index]->Start(*nativeWires[index], config, error)) return false;
+			roundConfigs[index] = config;
 			rounds[index]->DeferStopsToTickBoundary();
 			rounds[index]->SetSessionEventSink([&, index](const NetTransportEvent& event) { sessions[index]->InjectEvent(event, hub.now); });
 		}
@@ -950,6 +952,31 @@ namespace RTE {
 			std::cout << "[net-session-scene] rematch-chat received=" << hostLines << " host_messages=" << lobbies[0].GetStats().messagesReceived
 			          << " joiner_messages=" << lobbies[1].GetStats().messagesReceived << " countdown=" << countdown << " canceled=" << canceled << std::endl;
 			if (hostLines != 1 || !countdown || !canceled) { *error = "the rematch lost the joiner's chat or its Start and Cancel exchange"; return false; }
+			// A queued chat keeps working while the next round starts on a new key.
+			if (!clientSession.SendChat(c_NetChatScopeAll, "ready for the next round")) { *error = "the next-round chat was refused locally"; return false; }
+			const auto startRound = [&](size_t index) {
+				auto config = roundConfigs[index]; config.matchConfig = rematch;
+				config.roundId = index == 0 ? rematch.roundId : 0; config.migrationKey.fill(0x40);
+				rounds[index] = std::make_unique<NetLockstepCoordinator>();
+				if (!rounds[index]->Start(*sessionWires[index], config, error)) return false;
+				rounds[index]->DeferStopsToTickBoundary();
+				rounds[index]->SetSessionEventSink([&, index](const NetTransportEvent& event) { sessions[index]->InjectEvent(event, hub.now); });
+				return true;
+			};
+			if (!startRound(0)) return false;
+			unsigned nextLines = 0;
+			for (const uint64_t until = hub.now + 300; hub.now < until; ++hub.now) {
+				rounds[0]->Tick(hub.now); hostSession.Tick(hub.now, false); lobbies[1].Tick(hub.now - begin);
+				for (const auto& line: hostSession.TakeChatEntries()) if (line.text == "ready for the next round") ++nextLines;
+			}
+			if (!startRound(1)) return false;
+			produced = {1, 1}; applied = {}; displayedAt = {}; credits = {};
+			for (const uint64_t until = hub.now + 2000; hub.now < until && std::min(applied[0], applied[1]) < 60;) if (!step(true)) return false;
+			for (const auto& line: hostSession.TakeChatEntries()) if (line.text == "ready for the next round") ++nextLines;
+			std::cout << "[net-session-scene] next-round chat=" << nextLines << " host_frame=" << applied[0] << " joiner_frame=" << applied[1] << std::endl;
+			if (nextLines != 1 || std::min(applied[0], applied[1]) < 60 || !rounds[0]->IsRunning() || !rounds[1]->IsRunning()) {
+				*error = "a queued session message or the next round stopped when its key changed"; return false;
+			}
 			return true;
 		}
 		if (name == "leave-rejoin") {
