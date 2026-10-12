@@ -364,13 +364,17 @@ namespace RTE {
 	bool NetDirectoryClient::StartIceRequest(const Request& request) {
 		if (m_IceRequest || m_BaseUrl.empty() || !m_Factory) return false;
 		const uint64_t nowMs = m_HttpTransport ? NetDirectoryRetry::NowMs() : m_NowMs;
-		if (nowMs < m_IceRetry.nextMs || (m_HttpTransport && (!NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, "relay", nowMs) || !NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, "general", nowMs)))) return false;
+		const bool hostRequest = request.method == "POST";
+		// Fetching an existing offer does not spend a host's mint allowance.
+		if (nowMs < m_IceRetries[hostRequest ? 1 : 0].nextMs || (m_HttpTransport &&
+		    (!NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, "general", nowMs) ||
+		     (hostRequest && !NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, "relay", nowMs))))) return false;
 		m_IceSessionId = request.path.rfind("/v1/sessions/", 0) == 0 ? request.path.substr(13, request.path.find('/', 13) - 13) : std::string();
 		if (m_HttpTransport && NetDirectoryBudget::SessionEnded(m_BaseUrl, m_InstallKey, m_IceSessionId, nowMs)) return false;
 		m_IceError.clear();
 		m_IceRelayRefused = false;
 		m_IceRetryable = false;
-		m_IceHostRequest = request.method == "POST";
+		m_IceHostRequest = hostRequest;
 		m_IceRequest = m_Factory();
 		m_IceRequest->Start(request);
 		return true;
@@ -398,19 +402,20 @@ namespace RTE {
 		++m_IceReplies;
 		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 		NetRelayConfig offer;
+		auto& retry = m_IceRetries[m_IceHostRequest ? 1 : 0];
 		m_IceRelayRefused = reply.statusCode == 502 && reply.body.find("\"relay_provider_refused\"") != std::string::npos;
 		m_IceRetryable = false;
 		m_IceRetryDelayMs = 500;
 		if (reply.statusCode == 200 && reply.error.empty() && NetRelayConfig::FromJson(reply.body, offer) && offer.Usable(now)) {
 			m_IceServers = std::move(offer);
-			m_IceError.clear(); m_IceRetry.Succeeded();
+			m_IceError.clear(); retry.Succeeded();
 		} else {
 			if (!m_IceServers.Usable(now)) m_IceServers = {};
-			m_IceRetryable = !m_IceRelayRefused;
+			m_IceRetryable = !m_IceRelayRefused && reply.statusCode != 403;
 			const uint64_t steady = m_HttpTransport ? NetDirectoryRetry::NowMs() : m_NowMs;
-			const uint64_t until = m_IceRetry.Failed(steady, reply.statusCode, reply.body, reply.retryAfter, "relay");
+			const uint64_t until = retry.Failed(steady, reply.statusCode, reply.body, reply.retryAfter, m_IceHostRequest ? "relay-mint" : "relay-fetch");
 			m_IceRetryDelayMs = static_cast<uint32_t>(std::min<uint64_t>(until - steady, UINT32_MAX));
-			if (m_HttpTransport && reply.statusCode == 429) NetDirectoryBudget::Refused(m_BaseUrl, m_InstallKey, "relay", steady, until, reply.body);
+			if (m_HttpTransport && reply.statusCode == 429) NetDirectoryBudget::Refused(m_BaseUrl, m_InstallKey, m_IceHostRequest ? "relay" : "general", steady, until, reply.body);
 			if (NetDirectoryRetry::SessionGone(reply.statusCode, reply.body)) {
 				m_IceRetryable = false;
 				if (m_HttpTransport) NetDirectoryBudget::EndSession(m_BaseUrl, m_InstallKey, m_IceSessionId, steady);

@@ -242,7 +242,7 @@ namespace RTE {
 		uint64_t m_NextAttemptMs = 0;   //!< The retry slot a transient failure or a 429 set.
 		uint64_t m_BackoffMs = 0;
 		std::array<NetDirectoryRetry, 5> m_RequestRetries{};
-		NetDirectoryRetry m_IceRetry;
+		std::array<NetDirectoryRetry, 2> m_IceRetries{};
 		Reply m_RetryReply;
 		RequestKind m_ReplyKind = RequestKind::None;
 		bool m_ReplyFailed = false, m_SessionGone = false, m_HttpTransport = true;

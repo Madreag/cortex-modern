@@ -102,6 +102,7 @@ namespace RTE {
 		};
 		struct Row {
 			uint64_t clockMs = 0;
+			uint64_t pollFirstUntilMs = 0;
 			std::map<std::string, Wait> waits;
 			Wait admissionWait;
 			bool pollFirst = false;
@@ -127,9 +128,14 @@ namespace RTE {
 			row.waits[budget].Extend(nowMs, untilMs);
 			if (budget == "general" || budget == "admission") row.admissionWait.Extend(nowMs, untilMs);
 			if (hostSignal) row.pollFirst = true;
+			if (row.pollFirst) {
+				// One short-poll interval lets an absent or closed reader release the host's other work.
+				row.pollFirstUntilMs = NetDirectoryRetry::After(row.admissionWait.untilMs, 1000);
+			}
 		}
 		static bool Ready(const std::string& url, const std::string& install, const std::string& budget, uint64_t nowMs) {
 			std::lock_guard lock(s_Mutex); auto& row = Find(url, install, nowMs);
+			if (row.pollFirst && nowMs >= row.pollFirstUntilMs) row.pollFirst = false;
 			if (nowMs < row.waits[budget].untilMs) return false;
 			if (budget == "admission" && row.pollFirst && nowMs < row.waits["general"].untilMs) return false;
 			if (budget == "heartbeat" && row.pollFirst && nowMs >= row.admissionWait.untilMs) return false;
