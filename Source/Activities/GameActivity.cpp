@@ -3089,12 +3089,12 @@ void GameActivity::RenderUpdate() {
 	if (ScenarioRunner::IsLockstepControllerSyncActive() && m_ActivityState != ActivityState::Editing) {
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 			auto* buy = m_pBuyGUI[player];
-			if (!(IsSeatActive(player) && IsLocalHumanSeat(player)) || !buy || buy->IsInert() || buy->PurchaseMade()) continue;
+			if (!(IsSeatActive(player) && IsLocalHumanSeat(player)) || !buy || buy->IsInert() || !buy->IsVisible() || buy->PurchaseMade()) continue;
 			if (g_MenuMan.IsLiveMenuOwningInput()) buy->SetEnabled(false);
 			// Buy reads frame input while the shared controller keeps its committed tick.
 			Controller committed;
 			committed.CopyCheckpointFrom(m_PlayerController[player]);
-			m_PlayerController[player].UpdateEditorInput();
+			if (buy->IsEnabled()) m_PlayerController[player].UpdateEditorInput();
 			const ScopedEditorRNG localRNG(true);
 			buy->Update();
 			m_PlayerController[player].CopyCheckpointFrom(committed);
