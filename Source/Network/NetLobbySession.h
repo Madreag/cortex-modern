@@ -332,8 +332,16 @@ namespace RTE {
 		NetLobbySessionConfig m_Config;
 		bool m_RelaySendPending = false;
 		std::map<uint8_t, NetInputDelayEstimator> m_InputDelaySamples;
+		std::map<uint8_t, std::map<uint64_t, uint64_t>> m_StartPathPending;
+		std::map<uint8_t, uint32_t> m_StartPathCounts;
+		uint64_t m_StartPathSerial = 0;
+		uint64_t m_LastStartPathSendMs = 0;
+		uint64_t m_StartPathSamplingAtMs = 0;
+		bool m_StartPathSampling = false;
+		bool m_StartDelayMeasured = false;
 		uint64_t m_TimingClockMs = 0;
 		void SampleInputDelays(uint64_t nowMs);
+		void ResetStartDelaySamples();
 		NetLobbyState m_State = NetLobbyState::Idle;
 		NetHash32 m_MatchConfigHash{};
 		uint64_t m_StartFrame = 0;

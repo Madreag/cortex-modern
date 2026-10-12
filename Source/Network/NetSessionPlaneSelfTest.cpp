@@ -7,6 +7,9 @@
 #include "NetPeerSessionWire.h"
 #endif
 #include "NetIdentity.h"
+#include "NetLobbySession.h"
+#include "NetMuxTransport.h"
+#include "NetProtocol.h"
 #include "TimerMan.h"
 #include "lz4.h"
 
@@ -48,6 +51,7 @@ namespace RTE {
 			bool delayStartup = false;
 			bool receiptGap = false;
 			uint64_t postReturnMs = 0;
+			bool laterSessionMessageFirst = false;
 		};
 		struct Wire;
 		struct Hub {
@@ -91,6 +95,7 @@ namespace RTE {
 			uint64_t receiptGapFrame = 0, receiptGapDrops = 0;
 			uint64_t receiptGapAtMs = 0, receiptGapRequestDrops = 0;
 			uint64_t tailQueuePeak = 0;
+			uint32_t delayedChatSends = 0;
 		};
 		struct Wire final : INetTransport {
 			Hub& hub;
@@ -201,8 +206,17 @@ namespace RTE {
 				const auto found = connections.find(id);
 				if (found == connections.end()) { if (error) *error = "the fixture connection is absent"; return false; }
 				auto [other, remote] = found->second;
+				uint64_t sessionDelay = 0;
 				std::vector<uint8_t> delivered = bytes;
 				NetHostMigrationMessage decision; NetHash32 key; key.fill(0x39);
+				if (hub.row.laterSessionMessageFirst && owner == 2 && NetHostMigrationCodec::Decode(bytes, key, decision) &&
+				    decision.type == NetHostMigrationMessageType::PeerSession) {
+					const auto decoded = NetProtocol::Decode(decision.bytes);
+					if (decoded.ok && std::holds_alternative<NetChat>(decoded.message.payload)) {
+						sessionDelay = 300; ++hub.delayedChatSends;
+						decision.appliedFrame = hub.now; NetHostMigrationCodec::Encode(decision, key, delivered);
+					}
+				}
 				if (hub.row.receiptGap && NetHostMigrationCodec::Decode(bytes, key, decision) && RemoveReceiptGap(decision, delivered)) return true;
 #if __has_include("NetPeerSessionWire.h")
 				// The first frame requests are unavailable for one second. Sender
@@ -244,7 +258,7 @@ namespace RTE {
 							other->events.push_back({hub.now + hub.Delay(owner, other->owner), {NetTransportEventType::PacketReceived, remote, lane, delivered, {}}, false});
 				}
 #endif
-				other->events.push_back({hub.now + hub.Delay(owner, other->owner), {NetTransportEventType::PacketReceived, remote, lane, std::move(delivered), {}}, asymmetric == 2}); return true;
+				other->events.push_back({hub.now + hub.Delay(owner, other->owner) + sessionDelay, {NetTransportEventType::PacketReceived, remote, lane, std::move(delivered), {}}, asymmetric == 2}); return true;
 			}
 			void Disconnect(NetPeerId id, const std::string& reason) override {
 				const auto found = connections.find(id); if (found == connections.end()) return;
@@ -813,8 +827,320 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetSessionPlaneSelfTest::CheckSceneLifecycle(const std::string& name, std::string* error) {
+		Hub hub;
+		const uint8_t count = name == "rematch-chat" ? 2 : 3;
+		hub.row = Case{"scene_lifecycle"}; hub.row.seats = count; hub.row.rttMs = hub.row.otherRttMs = 100;
+		auto ip = std::make_unique<Wire>(hub, 1);
+		auto relay = std::make_unique<Wire>(hub, 1);
+		NetMuxTransport hostWire(std::move(ip), std::move(relay));
+		GnsP2PConfig relayConfig; relayConfig.connectionMode = 2;
+		hostWire.SetHostP2P(3, relayConfig);
+		Wire clientWire(hub, 2), otherWire(hub, 3), returningWire(hub, 2);
+		NetSession hostSession, clientSession, otherSession, returningSession;
+		NetSessionConfig sessionConfig;
+		sessionConfig.port = 47919; sessionConfig.sessionId = 0x5343454E45ULL; sessionConfig.maxPeers = count - 1;
+		sessionConfig.displayName = "Captain"; sessionConfig.timeoutMs = 30000; sessionConfig.heartbeatIntervalMs = 100;
+		auto& identity = sessionConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test"; identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version; identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "scene-session-rows"; identity.platform = "test";
+		auto joinConfig = sessionConfig; joinConfig.displayName = "Joiner"; ++joinConfig.localNonce;
+		if (!hostSession.StartHost(hostWire, sessionConfig, error) || !clientSession.StartClient(clientWire, "fixture", joinConfig, error)) return false;
+		if (count == 3) { auto config = joinConfig; config.displayName = "Other joiner"; config.localNonce += 2;
+			if (!otherSession.StartClient(otherWire, "fixture", config, error)) return false;
+		}
+		for (; hub.now < 2000 && (hostSession.GetReadyPeerCount() != count - 1 || !clientSession.IsReady() || (count == 3 && !otherSession.IsReady())); ++hub.now) {
+			hostSession.Tick(hub.now); clientSession.Tick(hub.now);
+			if (count == 3) otherSession.Tick(hub.now);
+		}
+		if (!clientSession.IsReady() || hostSession.GetReadyPeerCount() != count - 1 || (count == 3 && !otherSession.IsReady())) { *error = "the scene row did not seat every player"; return false; }
+		const NetPeerId originalRoute = hostSession.GetReadyPeers().front().transportPeerId;
+		auto match = NetMatchConfigUtil::MakeDefault(sessionConfig.sessionId);
+		match.peerCount = count; match.roundId = 77; match.players = {{1, 0, false, "Captain"}, {2, 1, false, "Joiner"}};
+		if (count == 3) match.players.push_back({3, 1, false, "Other joiner"});
+		const uint16_t delay = count == 3 ? 24 : 12;
+		match.inputDelayFrames = delay; match.peerInputDelayFrames.assign(count, delay);
+		std::vector<std::unique_ptr<NetLockstepCoordinator>> rounds(count);
+		std::vector<NetLockstepConfig> roundConfigs(count);
+		std::vector<std::shared_ptr<NetPeerSessionLinks>> links(count);
+		std::vector<std::unique_ptr<NetPeerSessionWire>> sessionWires(count);
+		std::array<NetSession*, 3> sessions{&hostSession, &clientSession, &otherSession};
+		std::array<INetTransport*, 3> nativeWires{&hostWire, &clientWire, &otherWire};
+		std::vector<uint64_t> produced(count, 1), applied(count), displayedAt(count);
+		std::vector<double> credits(count);
+		for (size_t index = 0; index < count; ++index) {
+			NetLockstepConfig config; config.sessionId = match.sessionId; config.matchConfig = match;
+			config.localPeerId = static_cast<uint8_t>(index + 1); config.peerCount = count; config.roundId = index == 0 ? 77 : 0;
+			config.startFrame = 1; config.inputDelayFrames = delay; config.peerInputDelayFrames = {{1, delay}, {2, delay}};
+			config.peerIncarnations = {{1, 1}, {2, 1}}; config.timeoutMs = 30000;
+			if (count == 3) { config.peerInputDelayFrames[3] = delay; config.peerIncarnations[3] = 1; }
+			config.peerFrameGroups = config.substituteSlowPeers = true; config.simTickMs = c_TestTickMs;
+			config.slowPlayerBoundTicks = 3; config.frameLane = NetTransportLane::InputUnreliable; config.relayToOtherPeers = index == 0;
+			config.migrationKey.fill(0x39); config.peerSessionLinks = links[index] = std::make_shared<NetPeerSessionLinks>();
+			links[index]->sessionClock = [&] { return hub.now; };
+			if (index == 0) for (const auto& peer: hostSession.GetReadyPeers()) config.remoteTransportPeerIds[peer.assignedPeerId + 1] = peer.transportPeerId;
+			else config.remoteTransportPeerIds[1] = sessions[index]->GetRemoteTransportPeerId();
+			rounds[index] = std::make_unique<NetLockstepCoordinator>();
+			if (!rounds[index]->Start(*nativeWires[index], config, error)) return false;
+			roundConfigs[index] = config;
+			rounds[index]->DeferStopsToTickBoundary();
+			rounds[index]->SetSessionEventSink([&, index](const NetTransportEvent& event) { sessions[index]->InjectEvent(event, hub.now); });
+		}
+		const auto step = [&](bool joinerPlaying) {
+			for (size_t index = 0; index < count; ++index) {
+				if (!joinerPlaying && index == 1) continue;
+				auto& round = *rounds[index]; round.Tick(hub.now);
+				sessions[index]->Tick(hub.now, false);
+				if (!round.IsRunning()) continue;
+				credits[index] = std::min(6.0, credits[index] + 1 / c_TestTickMs);
+				while (credits[index] >= 1) {
+					const uint64_t next = applied[index] + 1;
+					if (produced[index] == next) {
+						if (!round.QueueLocalInput(next, {}, {}, error)) return false;
+						++produced[index];
+					}
+					NetLockstepReadyFrame ready;
+					if (next < round.GetStats().effectiveStartFrame) ready.frame = next;
+					else if (!round.PopReadyFrame(ready)) { round.NoteFrameWait(next, hub.now); break; }
+					if (ready.frame != next) { *error = "the scene consumer skipped a frame"; return false; }
+					applied[index] = ready.frame; displayedAt[index] = hub.now;
+					round.FinishFrameWait(hub.now); round.FinishSimulationTick(ready.frame); credits[index] -= 1;
+				}
+			}
+			++hub.now; return true;
+		};
+		for (; hub.now < 5000 && *std::min_element(applied.begin(), applied.end()) < 150;) if (!step(true)) return false;
+		if (*std::min_element(applied.begin(), applied.end()) < 150) { *error = "the scene row did not reach live play"; return false; }
+		for (const auto& round: rounds) if (!round->m_MigrationHistory.contains(round->GetStats().nextFrame - 1)) {
+			*error = "the scene row did not retain its last complete input frame"; return false;
+		}
+		if (count == 3) for (const auto& round: rounds) for (const auto& [peer, stats]: round->GetStats().peers) if (stats.holds != 0) {
+			*error = "the returning-seat row held a player before the Leave gesture"; return false;
+		}
+		for (size_t index = 0; index < count; ++index) {
+			sessionWires[index] = std::make_unique<NetPeerSessionWire>(links[index]);
+			links[index]->sessionAttached = true; sessions[index]->RebindSessionWire(*sessionWires[index]);
+		}
+		if (name == "kick-pending") {
+			auto& host = *rounds[0]; const uint64_t boundary = host.GetStats().nextFrame;
+			// The removed player has receipted our next input, while its own next input is still pending.
+			host.m_PeerInputReceipts[1][2] = boundary + 1;
+			host.m_RemoteFrames[boundary].erase(2); host.m_PeerSourceInputs[boundary].erase(2);
+			host.EvictRemovedPeer(2, "removed from the session", hub.now);
+			hostSession.DisconnectReadyPeer(originalRoute, NetRejectReason::ParticipantRemoved, c_NetRemovedLinkText);
+			const uint64_t begin = hub.now, before = applied[0], repairs = host.m_PeerReceiptRepairs;
+			const uint64_t otherBefore = applied[2], otherRepairs = rounds[2]->m_PeerReceiptRepairs;
+			uint64_t firstTwoAt = 0, greatestGap = 0;
+			uint64_t otherFirstTwoAt = 0, otherGap = 0;
+			for (; hub.now < begin + 2000;) {
+				const uint64_t previous = displayedAt[0];
+				const uint64_t otherPrevious = displayedAt[2];
+				if (!step(false)) return false;
+				rounds[1]->Tick(hub.now); clientSession.Tick(hub.now, false);
+				if (displayedAt[0] != previous) greatestGap = std::max(greatestGap, displayedAt[0] - previous);
+				if (!firstTwoAt && applied[0] >= before + 2) firstTwoAt = hub.now - begin;
+				if (displayedAt[2] != otherPrevious) otherGap = std::max(otherGap, displayedAt[2] - otherPrevious);
+				if (!otherFirstTwoAt && applied[2] >= otherBefore + 2) otherFirstTwoAt = hub.now - begin;
+			}
+			const bool named = clientSession.HasReject() && clientSession.GetRejectReason() == NetRejectReason::ParticipantRemoved;
+			const bool released = host.SeatReleases().contains(2);
+			const uint64_t finalWait = hub.now - displayedAt[0];
+			std::cout << "[net-session-scene] kick-pending before=" << before << " after=" << applied[0] << " two_updates_ms=" << firstTwoAt
+			          << " greatest_gap_ms=" << greatestGap << " final_wait_ms=" << finalWait << " removed_repairs=" << host.m_PeerReceiptRepairs - repairs << " released=" << released << " named=" << named << std::endl;
+			std::cout << "[net-session-scene] kick-survivor before=" << otherBefore << " after=" << applied[2]
+			          << " two_updates_ms=" << otherFirstTwoAt << " greatest_gap_ms=" << otherGap << " final_wait_ms=" << hub.now - displayedAt[2]
+			          << " released=" << rounds[2]->SeatReleases().contains(2) << " removed_repairs=" << rounds[2]->m_PeerReceiptRepairs - otherRepairs << std::endl;
+			if (!firstTwoAt || firstTwoAt > 50 || greatestGap > 50 || finalWait > 50 || applied[0] < before + 110 ||
+			    !released || !named || host.m_PeerReceiptRepairs != repairs) {
+				*error = "a kick kept the host waiting on the removed seat or failed to tell that player why"; return false;
+			}
+			if (!otherFirstTwoAt || otherFirstTwoAt > 50 || otherGap > 50 || hub.now - displayedAt[2] > 50 ||
+			    applied[2] < otherBefore + 110 || !rounds[2]->SeatReleases().contains(2) || rounds[2]->m_PeerReceiptRepairs != otherRepairs) {
+				*error = "a kick stopped the other survivor or kept repairing the removed seat"; return false;
+			}
+			return true;
+		}
+		if (name == "rematch-chat") {
+			hub.row.laterSessionMessageFirst = true;
+			rounds[0]->Complete("round ended");
+			for (const uint64_t until = hub.now + 300; hub.now < until; ++hub.now) for (auto& round: rounds) round->Tick(hub.now);
+			for (auto& round: rounds) round.reset();
+			std::array<NetLobbySession, 2> lobbies;
+			NetMatchConfig rematch;
+			if (!NetMatchConfigUtil::DeriveRematchConfig(match, rematch, error)) return false;
+			for (size_t index = 0; index < 2; ++index) {
+				NetLobbySessionConfig config; config.host = index == 0; config.localPeerId = static_cast<uint8_t>(index + 1);
+				config.matchConfig = rematch; config.startFrame = 1; config.autoReady = config.autoStart = false;
+				config.startCountdownMs = 30000; config.session = sessions[index]; config.sessionNowMs = [&] { return hub.now; };
+				config.remoteTransportPeerIds[index == 0 ? 2 : 1] = index == 0 ? originalRoute : clientSession.GetRemoteTransportPeerId();
+				config.displayName = index == 0 ? "Captain" : "Joiner";
+				if (!lobbies[index].Start(*sessionWires[index], config, error)) return false;
+			}
+			if (!clientSession.SendChat(c_NetChatScopeAll, "joiner watches the rematch countdown")) { *error = "the rematch chat was refused locally"; return false; }
+			const uint64_t begin = hub.now; unsigned hostLines = 0;
+			for (; hub.now < begin + 2000; ++hub.now) {
+				for (auto& lobby: lobbies) lobby.Tick(hub.now - begin);
+				for (const auto& line: hostSession.TakeChatEntries()) if (line.text == "joiner watches the rematch countdown") ++hostLines;
+			}
+			lobbies[0].SetLocalReady(true); lobbies[0].RequestStart();
+			for (const uint64_t until = hub.now + 1000; hub.now < until; ++hub.now) for (auto& lobby: lobbies) lobby.Tick(hub.now - begin);
+			const bool countdown = lobbies[1].IsStartCountdownRunning();
+			lobbies[0].CancelStart();
+			for (const uint64_t until = hub.now + 1000; hub.now < until; ++hub.now) for (auto& lobby: lobbies) lobby.Tick(hub.now - begin);
+			const bool canceled = !lobbies[1].IsStartCountdownRunning();
+			std::cout << "[net-session-scene] rematch-chat received=" << hostLines << " host_messages=" << lobbies[0].GetStats().messagesReceived
+			          << " joiner_messages=" << lobbies[1].GetStats().messagesReceived << " countdown=" << countdown << " canceled=" << canceled << std::endl;
+			for (size_t index = 0; index < 2; ++index) std::cout << "[net-session-scene] lobby-state peer=" << index + 1
+			          << " state=" << static_cast<int>(lobbies[index].GetState()) << " reason=" << lobbies[index].GetFailureReason()
+			          << " session=" << static_cast<int>(sessions[index]->GetState()) << " reader=" << (links[index]->frameReader != nullptr)
+			          << " pending_bytes=" << links[index]->pendingBytes << " incoming_bytes=" << links[index]->incomingBytes
+			          << " routes=" << links[index]->sessionRoutes.size() << " received=" << links[index]->received.size() << std::endl;
+			if (hostLines != 1 || !countdown || !canceled || hub.delayedChatSends == 0) { *error = "the rematch lost the joiner's chat or its Start and Cancel exchange"; return false; }
+			const uint32_t sentBeforeQuiet = clientWire.sends;
+			for (const uint64_t until = hub.now + 1200; hub.now < until; ++hub.now) lobbies[1].Tick(hub.now - begin);
+			const uint32_t quietSends = clientWire.sends - sentBeforeQuiet;
+			if (quietSends > 64) { *error = "a silent lobby reader exceeded its bounded session window"; return false; }
+			if (!clientSession.SendChat(c_NetChatScopeAll, "back at the lobby")) { *error = "the resumed lobby chat was refused locally"; return false; }
+			unsigned resumedLines = 0;
+			for (const uint64_t until = hub.now + 2000; hub.now < until; ++hub.now) {
+				for (auto& lobby: lobbies) lobby.Tick(hub.now - begin);
+				for (const auto& line: hostSession.TakeChatEntries()) if (line.text == "back at the lobby") ++resumedLines;
+			}
+			std::cout << "[net-session-scene] lobby-order delayed_chat_sends=" << hub.delayedChatSends << " quiet_sends=" << quietSends
+			          << " resumed_chat=" << resumedLines << std::endl;
+			if (resumedLines != 1) { *error = "the lobby did not resume its chat after its reader returned"; return false; }
+			// A queued chat keeps working while the next round starts on a new key.
+			if (!clientSession.SendChat(c_NetChatScopeAll, "ready for the next round")) { *error = "the next-round chat was refused locally"; return false; }
+			const auto startRound = [&](size_t index) {
+				auto config = roundConfigs[index]; config.matchConfig = rematch;
+				config.roundId = index == 0 ? rematch.roundId : 0; config.migrationKey.fill(0x40);
+				rounds[index] = std::make_unique<NetLockstepCoordinator>();
+				if (!rounds[index]->Start(*sessionWires[index], config, error)) return false;
+				rounds[index]->DeferStopsToTickBoundary();
+				rounds[index]->SetSessionEventSink([&, index](const NetTransportEvent& event) { sessions[index]->InjectEvent(event, hub.now); });
+				return true;
+			};
+			if (!startRound(0)) return false;
+			unsigned nextLines = 0;
+			for (const uint64_t until = hub.now + 300; hub.now < until; ++hub.now) {
+				rounds[0]->Tick(hub.now); hostSession.Tick(hub.now, false); lobbies[1].Tick(hub.now - begin);
+				for (const auto& line: hostSession.TakeChatEntries()) if (line.text == "ready for the next round") ++nextLines;
+			}
+			if (!startRound(1)) return false;
+			produced.assign(count, 1); applied.assign(count, 0); displayedAt.assign(count, 0); credits.assign(count, 0);
+			for (const uint64_t until = hub.now + 2000; hub.now < until && std::min(applied[0], applied[1]) < 60;) if (!step(true)) return false;
+			for (const auto& line: hostSession.TakeChatEntries()) if (line.text == "ready for the next round") ++nextLines;
+			std::cout << "[net-session-scene] next-round chat=" << nextLines << " host_frame=" << applied[0] << " joiner_frame=" << applied[1] << std::endl;
+			if (nextLines != 1 || std::min(applied[0], applied[1]) < 60 || !rounds[0]->IsRunning() || !rounds[1]->IsRunning()) {
+				*error = "a queued session message or the next round stopped when its key changed"; return false;
+			}
+			return true;
+		}
+		if (name == "leave-rejoin") {
+			unsigned directorySteps = 0; bool waitingDial = true, answered = false;
+			hostWire.SetPump([&] {
+				++directorySteps;
+				if (waitingDial && hub.now >= 6500) {
+					waitingDial = false; auto config = joinConfig; ++config.localNonce;
+					answered = returningSession.StartClient(returningWire, "fixture", config, error);
+				}
+			});
+			const uint64_t departure = hub.now, before = applied[0];
+			rounds[1]->Leave("Match left");
+			rounds[2]->Leave("Match left");
+			for (; hub.now < departure + 250;) if (!step(false)) return false;
+			clientWire.Stop();
+			otherWire.Stop();
+			uint64_t answerAt = 0;
+			for (; hub.now < 8500;) {
+				if (!step(false)) return false;
+				if (answered) returningSession.Tick(hub.now);
+				if (!answerAt && returningSession.IsReady()) answerAt = hub.now;
+				if (answerAt && hostSession.GetReadyPeers().size() == 1) break;
+			}
+			const auto ready = hostSession.GetReadyPeers();
+			const bool live = rounds[0]->IsRunning() && applied[0] > before + 60;
+			const bool held = rounds[0]->HasHeldAISeat(2);
+			std::cout << "[net-session-scene] leave-rejoin live=" << live << " held=" << held << " directory_steps=" << directorySteps
+			          << " answered_ms=" << (answerAt ? answerAt - 6500 : 0) << " ready=" << ready.size() << " returning_seat=" << static_cast<int>(returningSession.GetLocalPeerId() + 1) << std::endl;
+			std::cout << "[net-session-scene] departure-state next=" << rounds[0]->GetStats().nextFrame << " applied=" << applied[0]
+			          << " declarations=" << rounds[0]->m_PeerRoundEnds.size() << " authority=" << rounds[0]->PeerGroupHasAuthority(1)
+			          << " bridges=" << rounds[0]->m_PeerBridges.size() << " previous_retained=" << rounds[0]->m_MigrationHistory.contains(rounds[0]->GetStats().nextFrame - 1)
+			          << " waiting=" << rounds[0]->WaitsForPlacement() << " holds=" << rounds[0]->GetStats().peers.at(2).holds << "/" << rounds[0]->GetStats().peers.at(3).holds << std::endl;
+			if (!live || !held || !answerAt || answerAt > 8500 || ready.size() != 1 || returningSession.GetLocalPeerId() != 1) {
+				*error = "the last player's leave stopped the host or its returning dial was not answered within two seconds"; return false;
+			}
+			const uint64_t activation = rounds[0]->GetStats().nextFrame + 24;
+			if (!rounds[0]->SchedulePeerReclaim(2, ready.front().transportPeerId, 2, activation, error)) return false;
+			auto config = roundConfigs[1]; config.startFrame = activation; config.roundId = match.roundId;
+			config.joinsRunningRound = config.continuesMatch = true;
+			config.initialSeatHolds = rounds[0]->HeldTransactions(); config.initialPeerLeaves = rounds[0]->m_PeerLeaveFrames;
+			config.originalRoundConfigHash = rounds[0]->m_RoundConfigHash;
+			config.peerSessionLinks = std::make_shared<NetPeerSessionLinks>();
+			config.peerSessionLinks->sessionClock = [&] { return hub.now; };
+			config.remoteTransportPeerIds[1] = returningSession.GetRemoteTransportPeerId();
+			// The new reader starts from the host's snapshot, whose activation has already been signed.
+			const auto certificate = rounds[0]->m_PeerBridgeCertificates.find({activation, 1});
+			NetHostMigrationMessage agreed; uint32_t voters = 0;
+			if (certificate == rounds[0]->m_PeerBridgeCertificates.end() ||
+			    !rounds[0]->DecodePeerBridgeCertificate(certificate->second, agreed, voters) || !rounds[0]->PeerGroupHasAuthority(voters) ||
+			    agreed.preparedFrame != 1 || agreed.frame != activation || agreed.members != std::vector<uint8_t>{2} ||
+			    agreed.configHash != config.originalRoundConfigHash || !rounds[0]->m_ReclaimTransactions.contains(2)) {
+				*error = "the return snapshot did not carry its committed activation"; return false;
+			}
+			config.initialSeatReclaims[2] = rounds[0]->m_ReclaimTransactions.at(2);
+			config.peerIncarnations[2] = config.initialSeatReclaims.at(2).seatIncarnation;
+			if (config.initialSeatReclaims.at(2).activationFrame != activation || config.peerIncarnations.at(2) != 2) {
+				*error = "the return snapshot changed its activation or player incarnation"; return false;
+			}
+			rounds[1] = std::make_unique<NetLockstepCoordinator>();
+			if (!rounds[1]->Start(returningWire, config, error)) return false;
+			rounds[1]->DeferStopsToTickBoundary();
+			sessions[1] = &returningSession;
+			rounds[1]->SetSessionEventSink([&](const NetTransportEvent& event) { returningSession.InjectEvent(event, hub.now); });
+			applied[1] = activation - 1; produced[1] = activation; credits[1] = 0;
+			(void)rounds[0]->SendReturnerTheRoundFrom(2, activation);
+			uint64_t reclaimedAt = 0;
+			for (const uint64_t until = hub.now + 3000; hub.now < until;) {
+				if (!step(true)) return false;
+				if (!reclaimedAt && applied[0] >= activation && !rounds[0]->HasHeldAISeat(2)) reclaimedAt = hub.now;
+			}
+			const uint64_t accepted = rounds[0]->m_PeerAcceptedThrough[2];
+			std::cout << "[net-session-scene] returned-input host_frame=" << applied[0] << " joiner_frame=" << applied[1]
+			          << " accepted_through=" << accepted << " holds=" << rounds[0]->GetStats().peers.at(2).holds
+			          << " reclaimed_ms=" << (reclaimedAt ? reclaimedAt - answerAt : 0) << std::endl;
+			if (!reclaimedAt || reclaimedAt > answerAt + 2500) {
+				*error = "the returning seat missed its original two-and-a-half-second reclaim bound"; return false;
+			}
+			if (!rounds[0]->IsRunning() || !rounds[1]->IsRunning() || rounds[0]->HasHeldAISeat(2) || rounds[1]->HasHeldAISeat(2) ||
+			    std::min(applied[0], applied[1]) < activation + 100 || accepted < activation + 100 || rounds[0]->GetStats().peers.at(2).holds != 1) {
+				*error = "the answered returning seat did not resume its accepted input and live play"; return false;
+			}
+			rounds[1]->Leave("Match left");
+			for (const uint64_t until = hub.now + 250; hub.now < until;) if (!step(false)) return false;
+			if (!rounds[0]->IsRunning() || !rounds[0]->CompleteAtAgreedEnd("Match ended by host")) { *error = "the host could not choose End Match after an ordinary leave"; return false; }
+			const uint64_t endAt = hub.now;
+			for (; hub.now < endAt + 200 && rounds[0]->IsRunning();) if (!step(false)) return false;
+			std::cout << "[net-session-scene] host-end completed=" << (rounds[0]->GetState() == NetLockstepState::Stopped)
+			          << " after_ms=" << hub.now - endAt << std::endl;
+			if (rounds[0]->GetState() != NetLockstepState::Stopped || rounds[0]->GetStats().timeoutReason.rfind("Complete:", 0) != 0) {
+				*error = "the host's End Match waited on a seat that had already left"; return false;
+			}
+			return true;
+		}
+		*error = "unknown scene lifecycle row"; return false;
+	}
+
 	int NetSessionPlaneSelfTest::Run() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		if (const char* name = std::getenv("CC_TEST_SESSION_SCENE_CASE")) {
+			std::string error;
+			const bool passed = CheckSceneLifecycle(name, &error);
+			std::cout << "[net-session-plane-selftest] " << (passed ? "PASS " : "FAIL ") << name << (error.empty() ? "" : ": " + error) << std::endl;
+			if (passed) std::cout << "[net-session-plane-selftest] PASS" << std::endl;
+			return passed ? 0 : 1;
+		}
 		std::vector<Case> rows;
 		const auto gap = [&](const char* name, uint8_t subject, uint64_t ms) { Case row{name}; row.subject = subject; row.gapMs = ms; return row; };
 		rows.push_back(gap("peer_returns_2s", 2, 2000)); rows.push_back(gap("peer_returns_8s", 2, 8000)); rows.push_back(gap("peer_returns_40s", 2, 40000));
