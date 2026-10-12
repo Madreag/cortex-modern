@@ -1192,6 +1192,9 @@ namespace RTE {
 			const uint64_t departure = hub.now, before = applied[0];
 			rounds[1]->Leave("Match left");
 			if (!two) rounds[2]->Leave("Match left");
+			// A leaving player plays on to the frame it declared before it goes.
+			const auto declared = [&] { const auto ended = rounds[0]->m_PeerRoundEnds.find(2); return ended != rounds[0]->m_PeerRoundEnds.end() && rounds[0]->GetStats().nextFrame > ended->second.frame; };
+			if (two) for (const uint64_t until = hub.now + 1000; hub.now < until && !declared();) if (!hostStep(true)) return false;
 			for (; hub.now < departure + 250;) if (!hostStep(false)) return false;
 			clientWire.Stop();
 			if (!two) otherWire.Stop();

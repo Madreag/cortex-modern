@@ -889,7 +889,7 @@ static std::string ResyncSaveName() {
 	bool NetMatchService::NeedsRematchAttempt() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		// A client still resolves a lost next lobby through ReturnToLobby.
-		return !m_IsHost || !m_LastMatchSummary || (m_Session && m_Session->GetReadyPeerCount() != 0);
+		return !m_IsHost || (!m_HostEndedRound && (!m_LastMatchSummary || (m_Session && m_Session->GetReadyPeerCount() != 0)));
 	}
 
 	bool NetMatchService::ReturnToLobby(std::string* error) {
@@ -930,11 +930,11 @@ static std::string ResyncSaveName() {
 			}
 			DrainPendingSessionEventsLocked(false);
 			departedHost = !m_IsHost || (m_MigrationGeneration != 0 && m_MigrationMembers.size() == 1);
-			if (m_IsHost && m_LastMatchSummary && m_Session->GetReadyPeerCount() == 0) {
+			if (m_IsHost && m_LastMatchSummary && (m_HostEndedRound || m_Session->GetReadyPeerCount() == 0)) {
 				m_CompletedLobbySinceMs = 0;
 				m_StatusText = m_LastMatchSummary->result;
 				m_ErrorText.clear();
-				if (error) *error = "No other players are here for a rematch";
+				if (error) *error = m_HostEndedRound ? m_StatusText : "No other players are here for a rematch";
 				return false;
 			}
 			if (!m_Session->IsReady()) {
@@ -2449,7 +2449,6 @@ static std::string ResyncSaveName() {
 			m_MigrationFallbackReady = false;
 			m_MigrationRepairPending = false;
 			m_MigrationKey.fill(0);
-			m_RejoinFrameKey.reset();
 			m_MigrationAdmissionState.clear();
 			m_LastMigrationAdmissionState.clear();
 			DrainPendingSessionEventsLocked(false);
@@ -2514,6 +2513,7 @@ static std::string ResyncSaveName() {
 			m_HostLeaveConfirmed.reset();
 			m_LeaveRejoinRead.reset();
 			m_HostEndReason.clear();
+			m_HostEndedRound = false;
 			m_CompletedLobbySinceMs = 0;
 			m_PendingLobbyEvents.clear();
 			m_PendingLobbyBytes = 0;
@@ -2689,6 +2689,7 @@ static std::string ResyncSaveName() {
 		DrainPendingSessionEventsLocked(false);
 		if (!m_Coordinator->CompleteAtAgreedEnd(reason)) return false;
 		m_HostEndReason = reason;
+		m_HostEndedRound = true;
 		return true;
 	}
 
@@ -2734,8 +2735,8 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_State == NetMatchServiceState::Running) {
 			m_State = NetMatchServiceState::Completed;
-			// The rematch lobby this end opens starts waiting for the other peers here.
-			m_CompletedLobbySinceMs = SteadyNowMs();
+			// Natural round endings wait for the next lobby; the host's End Match stays completed.
+			m_CompletedLobbySinceMs = m_HostEndedRound ? 0 : SteadyNowMs();
 			m_StatusText = displayResult.empty() ? "Match complete" : displayResult;
 			m_ErrorText.clear();
 		}
@@ -3547,6 +3548,7 @@ static std::string ResyncSaveName() {
 		m_HeldRejoinDriving = false;
 		m_HeldRejoinRoutes.clear();
 		m_OrdinaryTicketRejoin = false;
+		m_HostEndedRound = false;
 		m_CapturedRunnerReport.clear();
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
@@ -7648,10 +7650,6 @@ static std::string ResyncSaveName() {
 			if (!m_ReconnectClient.MigrateHostContext(m_ReconnectClient.GetRecord().hostAddress, directorySession, capsule.configHash))
 				return false;
 			m_MigrationKey = key;
-			if (m_RejoinFrameKey) {
-				std::lock_guard<std::mutex> frameLock(m_RejoinFrameKey->mutex);
-				m_RejoinFrameKey->key = key;
-			}
 			m_MigrationAdmissionState = admission;
 			{
 				// What this capsule carries for moderation, read once: the roster whole and the host's ban list beside it.
@@ -9716,8 +9714,6 @@ static std::string ResyncSaveName() {
 				m_RelayError = m_Directory.IceError();
 				m_RelayReady = true;
 				m_RelayPublishPending = true;
-				// A room with no relay mints again when the directory allows, not at the renewal spacing.
-				if (!m_RelayOffer.Usable(wall) && m_Directory.IceRequestRetryable()) m_NextRelayRequestMs = nowMs + m_Directory.IceRetryDelayMs();
 			}
 			if (!m_RelayOffer.Empty() && !m_RelayOffer.Usable(wall)) {
 				SetRelayOfferLocked({});
@@ -9726,8 +9722,7 @@ static std::string ResyncSaveName() {
 			}
 			if (m_Directory.GetState() != NetDirectoryClient::State::Registered || m_Directory.IceRequestPending()) return;
 			// Once seated, each peer renews through its signed check-in. This request only configures the room's relay.
-			const bool roomLacksRelay = !m_RelayOffer.Usable(wall) && m_RelayReplies != 0 && m_Directory.IceRequestRetryable();
-			if (const auto lease = m_ConnectionAuthority.LocalLease(); lease && !lease->directorySessionId.empty() && !m_FreshRelayRequested.load() && !roomLacksRelay) return;
+			if (const auto lease = m_ConnectionAuthority.LocalLease(); lease && !lease->directorySessionId.empty() && !m_FreshRelayRequested.load()) return;
 			const bool fresh = m_FreshRelayRequested.load();
 			// Renew at half the offer's lifetime, so a connection opened on it still has the other half.
 			const uint64_t issued = std::min(m_RelayOfferIssuedAt, m_RelayOffer.expiresAt);
@@ -10589,20 +10584,11 @@ static std::string ResyncSaveName() {
 		}
 		if (request.rejoin) {
 			// A returning seat's fresh session talks to the host live until its handshake is done.
-			// The round's frame key arrives in this rejoin's own capsule, after the session starts.
-			auto frameKey = std::make_shared<RejoinFrameKey>();
-			frameKey->key = m_MigrationKey;
-			m_RejoinFrameKey = frameKey;
+			const auto key = m_MigrationKey;
 			const uint64_t sessionId = runnerConfig.sessionConfig.sessionId;
-			session->SetAuxiliaryPacketValidator([frameKey, sessionId](const std::vector<uint8_t>& bytes) {
-				if (!NetHostMigrationCodec::LooksLikePacket(bytes)) return false;
-				NetHash32 key;
-				{
-					std::lock_guard<std::mutex> lock(frameKey->mutex);
-					key = frameKey->key;
-				}
+			session->SetAuxiliaryPacketValidator([key, sessionId](const std::vector<uint8_t>& bytes) {
 				NetHostMigrationMessage message;
-				return NetHostMigrationCodec::Decode(bytes, key, message) && message.sessionId == sessionId;
+				return NetHostMigrationCodec::LooksLikePacket(bytes) && NetHostMigrationCodec::Decode(bytes, key, message) && message.sessionId == sessionId;
 			});
 			System::PrintDiagnosticLine("[net-match] rejoin phase Active -> Connecting");
 			session->SetRejoinPhase(NetSession::RejoinPhase::Connecting);
