@@ -454,12 +454,16 @@ namespace RTE {
 
 	bool NetDirectoryClient::CanRequest(RequestKind kind, uint64_t nowMs) const {
 		if (nowMs < m_RequestRetries[static_cast<size_t>(kind)].nextMs) return false;
+		if (m_SessionGone && kind != RequestKind::List) return false;
 		if (!m_HttpTransport) return true;
 		if (!m_SessionId.empty() && NetDirectoryBudget::SessionEnded(m_BaseUrl, m_InstallKey, m_SessionId, nowMs)) return false;
 		return NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, kind == RequestKind::Heartbeat ? "heartbeat" : "general", nowMs);
 	}
 
 	void NetDirectoryClient::ScheduleRetry(uint64_t nowMs) {
+        if (m_ReplyKind == RequestKind::None) {
+            m_NextAttemptMs = std::max(m_NextAttemptMs, NetDirectoryRetry::After(nowMs, 1000)); return;
+        }
 		m_ReplyFailed = true;
 		const auto kind = m_ReplyKind == RequestKind::None ? RequestKind::Register : m_ReplyKind;
 		auto& retry = m_RequestRetries[static_cast<size_t>(kind)];
@@ -479,6 +483,7 @@ namespace RTE {
 
 	void NetDirectoryClient::HandleReply(RequestKind kind, const Reply& reply, uint64_t nowMs) {
 		m_ReplyKind = kind; m_RetryReply = reply; m_ReplyFailed = false;
+		if (reply.statusCode > 0) m_LastStatus = reply.statusCode;
 		if (reply.statusCode == 429) {
 			ScheduleRetry(nowMs);
 			if (m_HttpTransport) NetDirectoryBudget::Refused(m_BaseUrl, m_InstallKey, kind == RequestKind::Heartbeat ? "heartbeat" : "general", nowMs, m_NextAttemptMs, reply.body);
@@ -486,7 +491,7 @@ namespace RTE {
 			m_ReplyKind = RequestKind::None; return;
 		}
 		if (kind != RequestKind::List && kind != RequestKind::Delete && !m_SessionId.empty() && NetDirectoryRetry::SessionGone(reply.statusCode, reply.body)) {
-			ScheduleRetry(nowMs); m_SessionGone = true; m_Listed = false; m_ConfirmedListed.reset();
+			ScheduleRetry(nowMs); m_SessionGone = true; m_Listed = false; m_Capable = false; m_ConfirmedListed.reset();
 			if (m_HttpTransport) NetDirectoryBudget::EndSession(m_BaseUrl, m_InstallKey, m_SessionId, nowMs);
 			NoteError("This match is no longer in the directory. Choose another game or host a new match.");
 			SetState(State::Failed); m_ReplyKind = RequestKind::None; return;
@@ -501,6 +506,7 @@ namespace RTE {
 			case RequestKind::List: HandleListReply(reply, nowMs); break;
 			default: break;
 		}
+		if (reply.statusCode != 200 && !m_ReplyFailed) ScheduleRetry(nowMs);
 		if (reply.statusCode == 200 && !m_ReplyFailed) m_RequestRetries[static_cast<size_t>(kind)].Succeeded();
 		m_ReplyKind = RequestKind::None;
 	}

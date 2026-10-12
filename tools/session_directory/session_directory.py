@@ -523,6 +523,7 @@ class Session:
         self.created_at = created_at
         self.last_beat = created_at
         self.heartbeat_retry_until = created_at
+        self.host_signal_retry_until = created_at
         self.state = "lobby"
         self.listed = True
         self.queues: dict[str, list[Signal]] = {}
@@ -697,6 +698,7 @@ class SessionDirectory:
         wall = time.time()
         snapshot = dict(fields=sess.fields, token=sess.token, observed_ip=sess.observed_ip,
             created_at=wall - max(0, now - sess.created_at), last_beat=wall - max(0, now - sess.last_beat),
+            heartbeat_retry_until=wall + max(0, sess.heartbeat_retry_until - now),
             state=sess.state, listed=sess.listed, acknowledged=sess.acknowledged, install_key=sess.install_key,
             install_key_sha256=getattr(sess, "install_key_sha256", ""), migration_gen=sess.migration_gen,
             ice_offer=sess.ice_offer, ice_generation=sess.ice_generation, ice_refused=sess.ice_refused, ice_fixed=sess.ice_fixed,
@@ -719,6 +721,7 @@ class SessionDirectory:
                 continue
             sess = Session(sid, snapshot["token"], snapshot["fields"], snapshot["observed_ip"], now - max(0, wall - snapshot["created_at"]))
             sess.last_beat = now - max(0, wall - snapshot["last_beat"])
+            sess.heartbeat_retry_until = now + max(0, snapshot.get("heartbeat_retry_until", 0) - wall)
             for field in ("state", "listed", "acknowledged", "install_key", "install_key_sha256", "migration_gen", "ice_offer", "ice_generation", "ice_refused", "ice_fixed", "register_fingerprint", "register_previous_sha256", "next_seq"):
                 if field in snapshot:
                     setattr(sess, field, snapshot[field])
@@ -731,7 +734,7 @@ class SessionDirectory:
             prior = self._sessions.get(sid)
             if prior is not None:
                 self._clear_signals(prior)
-            if now - sess.last_beat < self.expiry_s:
+            if now - max(sess.last_beat, sess.heartbeat_retry_until) < self.expiry_s:
                 self._sessions[sid] = sess
                 if sess.register_fingerprint and (sess.register_retry_until == 0 or now < sess.register_retry_until):
                     self._register_replays[sid] = sess
@@ -745,18 +748,24 @@ class SessionDirectory:
             else:
                 self._clear_signals(sess)
 
+    def missing_match(self, session_id: str) -> None:
+        if session_id in self._host_ends:
+            raise ConnectionErrorReply(410, "match_ended", "The host ended this match. Choose another game.")
+        if session_id in self._resume_tokens or self.connections.retained_until(session_id) > time.time():
+            raise ConnectionErrorReply(404, "match_unavailable", "The directory is waiting for this match. Reconnecting will retry; Cancel returns to Multiplayer.")
+        raise ConnectionErrorReply(404, "not_found", "This match is no longer in the directory. Choose another game.")
+
     def connection_bootstrap(self, session_id: str, now: float) -> dict[str, Any]:
         with self._lock:
             sess = self._signalling(session_id, now)
             if sess is None:
-                if session_id in self._host_ends:
-                    raise ConnectionErrorReply(410, "match_ended", "The host ended this match. Choose another game.")
-                raise ConnectionErrorReply(404, "match_unavailable", "The directory is waiting for this match. Reconnecting will retry; Cancel returns to Multiplayer.")
+                self.missing_match(session_id)
             return dict(connection_protocol=CONNECTION_PROTOCOL, authority_key=self.connections.public_key,
                 network_protocol=sess.fields["network_protocol_version"], host_generation=sess.migration_gen,
                 ice_identity=sess.fields.get("ice_identity", ""), ice_virtual_port=sess.fields.get("ice_virtual_port", 0),
                 listen_addrs=sess.fields["listen_addrs"], listen_port=sess.fields["listen_port"], join_mode=sess.fields["join_mode"],
-                state=sess.state, name=sess.fields["name"], session=sess.as_list_row(now), relay_enabled=sess.ice_offer is not None)
+                state=sess.state, name=sess.fields["name"], session=sess.as_list_row(now), relay_enabled=sess.ice_offer is not None,
+                host_retry_after_s=max(0, int(sess.host_signal_retry_until - now + .999)))
 
     def connection_request(self, session_id: str, data: dict[str, Any], now: float, install_key: str) -> dict[str, Any]:
         connection_version(data)
@@ -765,14 +774,12 @@ class SessionDirectory:
         if operation == "frame-tie":
             with self._lock:
                 if self._signalling(session_id, now) is None:
-                    raise ConnectionErrorReply(404, "match_unavailable", "The directory is waiting for this match. Reconnecting will retry.")
+                    self.missing_match(session_id)
             return self.connections.frame_tie(session_id, data, wall)
         with self._lock:
             sess = self._signalling(session_id, now)
             if sess is None:
-                if session_id in self._host_ends:
-                    raise ConnectionErrorReply(410, "match_ended", "The host ended this match. Choose another game.")
-                raise ConnectionErrorReply(404, "match_unavailable", "The directory is waiting for this match. Reconnecting will retry; Cancel returns to Multiplayer.")
+                self.missing_match(session_id)
             if operation in ("issue", "remove"):
                 token = data.get("token")
                 if not isinstance(token, str) or not tokens_equal(token, sess.token):
@@ -1522,8 +1529,10 @@ class SessionDirectory:
             generation = data.get("migration_gen", sess.migration_gen if sess else 0)
             if sess is None or not isinstance(token, str) or not tokens_equal(token, sess.token) or generation != sess.migration_gen:
                 return False
-            sess.last_beat = now
-            sess.heartbeat_retry_until = max(sess.heartbeat_retry_until, now + retry_s)
+            if retry_s > 0:
+                sess.last_beat = now
+                sess.heartbeat_retry_until = max(sess.heartbeat_retry_until, now + retry_s)
+                self._persist_session(sess, now)
             return True
 
     def host_signal_poll(self, session_id: str, peer: str, token: Optional[str]) -> bool:
@@ -2128,6 +2137,11 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                         budget = "admission"
                 gated = self._install_gate(is_register=False, budget=budget)
                 if gated is not None:
+                    if budget == "admission" and gated[0] == 429:
+                        with store._lock:
+                            sess = store._signalling(parts[2], time.monotonic())
+                            if sess is not None:
+                                sess.host_signal_retry_until = max(sess.host_signal_retry_until, time.monotonic() + gated[1].get("retry_after_s", 1))
                     self._send(gated[0], gated[1])
                     return
                 now = time.monotonic()

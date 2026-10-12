@@ -11,6 +11,7 @@
 #include "NetTransport.h"
 #include "NetConnectionAuthority.h"
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -1000,7 +1001,7 @@ namespace RTE {
 		uint64_t m_EndpointRetryAtMs = 0;    //!< When a proven address the store refused is written again; 0 when none waits.
 		uint64_t m_EndpointRetryDelayMs = 0; //!< The last wait before such a write, doubled each time.
 		uint64_t m_LeasePersistAtMs = 0;
-		uint64_t m_DirectoryRetryUntilMs = 0;
+		std::shared_ptr<std::atomic<uint64_t>> m_DirectoryRetryUntilMs = std::make_shared<std::atomic<uint64_t>>(0);
 		NetAuthBytes16 m_TxId{};
 		std::optional<std::pair<uint16_t, NetAuthBytes16>> m_CarriedApplication; //!< An application a lost host left unanswered, for the next host.
 		NetH4TicketRecord m_Record;

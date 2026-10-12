@@ -8949,6 +8949,7 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		const std::string waiting = m_ReconnectClient.DirectoryWaitingText();
 		if (!waiting.empty()) { m_DirectoryWaitLine = waiting; return waiting; }
+		if (m_StatusText.rfind("The directory is busy.", 0) == 0) m_DirectoryWaitLine = m_StatusText;
 		return m_StatusText;
 	}
 
@@ -9905,11 +9906,13 @@ static std::string ResyncSaveName() {
 			checkedIn = !request.rejoin || (m_ConnectionAuthority.RouteCheckedIn() && m_ConnectionAuthority.LocalLease() &&
 				m_ConnectionAuthority.LocalLease()->Usable(UnixNowMs(nullptr) / 1000));
 			relayReady = !request.rejoin || !allowRelay || (connectionHost && !connectionHost->relayEnabled) || m_ConnectionAuthority.RelayRefreshed();
-			if (connectionHost && checkedIn && relayReady) break;
+			if (connectionHost && checkedIn && relayReady && nowMs >= connectionHost->directoryReadyMs) break;
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				const std::string connectionError = m_ConnectionAuthority.Error();
-				m_StatusText = !connectionError.empty() ? connectionError : request.rejoin ? "Reconnecting - renewing your seat and finding the host. Cancel stops rejoining." : "Connecting - finding the host. Cancel returns to Multiplayer.";
+				m_StatusText = connectionHost && nowMs < connectionHost->directoryReadyMs
+				    ? "The directory is busy. The host retries in " + std::to_string((connectionHost->directoryReadyMs - nowMs + 999) / 1000) + " seconds. Cancel returns to Multiplayer."
+				    : !connectionError.empty() ? connectionError : request.rejoin ? "Reconnecting - renewing your seat and finding the host. Cancel stops rejoining." : "Connecting - finding the host. Cancel returns to Multiplayer.";
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(20));
 		}

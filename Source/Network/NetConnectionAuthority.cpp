@@ -349,6 +349,9 @@ namespace RTE {
 			if (!generation.is_number_unsigned() || generation.get<uint64_t>() > UINT32_MAX) return false;
 			host.generation = generation.get<uint32_t>();
 			host.relayEnabled = body.at("relay_enabled").get<bool>();
+			const uint64_t hostWait = body.value("host_retry_after_s", uint64_t{0});
+			host.directoryReadyMs = NetDirectoryRetry::After(NetDirectoryRetry::NowMs(), std::min<uint64_t>(hostWait, 3600) * 1000);
+			if (hostWait != 0) NetDirectoryBudget::Refused(m_BaseUrl, m_InstallKey, "admission", NetDirectoryRetry::NowMs(), host.directoryReadyMs, "");
 			m_DirectoryKey = host.authority;
 			return true;
 		} catch (const json::exception&) { return false; }
@@ -454,7 +457,7 @@ namespace RTE {
 			if (response.statusCode == 200) {
 				NetSeatLease lease; std::string error;
 				if (!ReadLeaseReply(response.body, lease, error) || !lease.SameSeat(*m_LocalLease) || lease.participant != m_Player->PublicId()) { m_NextCheckIn = FailedReply(response, m_CheckInRetry, steadyMs, "seat-check-in"); return; }
-				m_LocalLease = std::move(lease); ++m_CheckIns; m_CheckedGeneration = m_CheckInGeneration; m_Error.clear(); m_CheckInRetry.Succeeded();
+				m_LocalLease = std::move(lease); ++m_CheckIns; m_CheckedGeneration = m_CheckInGeneration; m_Error.clear();
 				try {
 					const auto body = json::parse(response.body);
 					if (body.contains("host")) { NetConnectionHost host; if (ReadHostReply(body.at("host").dump(), host, error)) m_Host = std::move(host); else { m_Error = error; m_Refused = !error.empty(); } }
@@ -484,6 +487,7 @@ namespace RTE {
 						}
 						m_PeerRoutes = std::move(routes);
 					}
+					m_CheckInRetry.Succeeded();
 				} catch (const json::exception&) { m_NextCheckIn = FailedReply(response, m_CheckInRetry, steadyMs, "seat-check-in"); }
 				if (m_CheckedGeneration != m_Route.generation) m_NextCheckIn = 0;
 			} else m_NextCheckIn = FailedReply(response, m_CheckInRetry, steadyMs, "seat-check-in");

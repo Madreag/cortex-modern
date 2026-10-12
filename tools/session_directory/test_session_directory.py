@@ -3325,7 +3325,7 @@ class ConnectionAuthorityTests(unittest.TestCase):
     def check(self, **kwargs):
         return self.store.connection_request(self.sid, self.envelope(**kwargs), self.now, INSTALL_KEY)
 
-    def test_connection_busy_keeps_the_nonce_bound_and_names_its_wait(self):
+    def test_connection_busy_keeps_the_check_in_bound_and_names_its_wait(self):
         for index in range(64):
             self.check()
         with self.assertRaises(ConnectionErrorReply) as busy:

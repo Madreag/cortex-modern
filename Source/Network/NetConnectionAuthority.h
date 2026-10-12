@@ -62,6 +62,7 @@ namespace RTE {
 		uint32_t generation = 0;
 		NetParticipantId authority{};
 		bool relayEnabled = false;
+		uint64_t directoryReadyMs = 0;
 		bool operator==(const NetConnectionHost&) const = default;
 	};
 
