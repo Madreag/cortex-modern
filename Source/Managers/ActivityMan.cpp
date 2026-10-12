@@ -783,8 +783,12 @@ struct ActivityMan::PreparedAutosave {
 
 	bool Complete(const Header& header, const CheckpointLua::Boundary& boundary) {
 		if (const char* phases = std::getenv("CCCP_CHECKPOINT_PHASES"); phases && std::string_view(phases) == "1") {
-			size_t ranges = 0, bytes = 0;
-			for (const auto& pages: boundary.NativeViews().pages) { ranges += pages->RangeCount(); bytes += pages->RangeBytes(); }
+			size_t ranges = 0, bytes = 0, copied = 0, fenced = 0;
+			for (const auto& pages: boundary.NativeViews().pages) {
+				ranges += pages->RangeCount(); bytes += pages->RangeBytes();
+				const auto [hot, unseen] = pages->ArmedPages();
+				copied += hot; fenced += unseen;
+			}
 			const auto [nativeUs, luaUs] = boundary.ArmSplitUs();
 			size_t luaBytes = 0, luaFaults = 0;
 			int64_t luaCopyUs = 0;
@@ -792,8 +796,8 @@ struct ActivityMan::PreparedAutosave {
 				const auto heap = boundary.LuaHeap(index);
 				luaBytes += heap.ByteCount(); luaFaults += heap.FaultCount(); luaCopyUs += heap.CopyUs();
 			}
-			System::PrintDiagnosticLine(std::format("[checkpoint-arm-split] tick={} native_ranges={} native_bytes={} native_arm_us={} lua_heaps={} lua_arm_us={} lua_bytes={} lua_copy_us={} lua_faults={} {}",
-			    header.tick, ranges, bytes, nativeUs, boundary.StateCount(), luaUs, luaBytes, luaCopyUs, luaFaults, CheckpointNativeStorage::InventoryCensus()));
+			System::PrintDiagnosticLine(std::format("[checkpoint-arm-split] tick={} native_ranges={} native_bytes={} native_arm_us={} native_copied_pages={} native_fenced_pages={} lua_heaps={} lua_arm_us={} lua_bytes={} lua_copy_us={} lua_faults={} {}",
+			    header.tick, ranges, bytes, nativeUs, copied, fenced, boundary.StateCount(), luaUs, luaBytes, luaCopyUs, luaFaults, CheckpointNativeStorage::InventoryCensus()));
 		}
 		CheckpointNativeStorage::ReadScope pages(boundary.NativeViews());
 		RandomGenerator::CheckpointScope random;

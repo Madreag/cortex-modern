@@ -77,6 +77,7 @@ struct CheckpointPagePool::ArmGate {
 	enum class State { Prepared, Arming, Armed, Cancelled };
 	std::atomic<State> state{State::Prepared};
 	std::thread::id simThread;
+	size_t copiedPages = 0, fencedPages = 0;
 	void Publish(State next) { state.store(next, std::memory_order_release); state.notify_all(); }
 };
 
@@ -131,7 +132,8 @@ struct CheckpointPagePool::Block {
 		copy->armed.store(true, std::memory_order_release);
 	}
 	// An inventory boundary copies the pages written since the last one and fences the pages it has not seen; fenced pages stay fenced.
-	void ArmInventory(Copy& copy) {
+	std::pair<size_t, size_t> ArmInventory(Copy& copy) {
+		size_t copied = 0, fenced = 0;
 		Locked guard(lock);
 		if (copy.abandoned) throw std::logic_error("native checkpoint preparation was rolled back");
 		for (size_t page = 0; page < states.size();) {
@@ -139,6 +141,7 @@ struct CheckpointPagePool::Block {
 				if (!copy.saved[page].load(std::memory_order_relaxed)) {
 					std::memcpy(copy.pages.data + page * pageBytes, live.data + page * pageBytes, pageBytes);
 					copy.saved[page].store(1, std::memory_order_release);
+					++copied;
 				}
 				copy.hot[page] = 1;
 				++page;
@@ -148,11 +151,13 @@ struct CheckpointPagePool::Block {
 				if (!PageWriteFence::ProtectCopyPages(reinterpret_cast<uintptr_t>(live.data + page * pageBytes), (end - page) * pageBytes))
 					throw std::runtime_error("could not fence native checkpoint pages");
 				std::fill(states.begin() + page, states.begin() + end, PageState::Fenced);
+				fenced += end - page;
 				page = end;
 			} else {
 				++page;
 			}
 		}
+		return {copied, fenced};
 	}
 	bool SavePages(size_t first, size_t count, bool fault) noexcept {
 		const auto started = fault ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
@@ -497,7 +502,10 @@ void CheckpointPagePool::Snapshot::Arm() const {
 		}
 		try {
 			m_ArmGate->simThread = std::this_thread::get_id();
-			for (const auto& part: m_Parts) part.block->ArmInventory(*part.copy);
+			for (const auto& part: m_Parts) {
+				const auto [copied, fenced] = part.block->ArmInventory(*part.copy);
+				m_ArmGate->copiedPages += copied; m_ArmGate->fencedPages += fenced;
+			}
 			m_ArmGate->Publish(ArmGate::State::Armed);
 			return;
 		} catch (...) { Cancel(); throw; }
@@ -508,6 +516,10 @@ void CheckpointPagePool::Snapshot::Arm() const {
 		Cancel();
 		throw;
 	}
+}
+
+std::pair<size_t, size_t> CheckpointPagePool::Snapshot::ArmedPages() const {
+	return m_ArmGate && m_ArmGate->state.load(std::memory_order_acquire) == ArmGate::State::Armed ? std::pair{m_ArmGate->copiedPages, m_ArmGate->fencedPages} : std::pair<size_t, size_t>{};
 }
 
 void CheckpointPagePool::Snapshot::WarmShadow() const {
