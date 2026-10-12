@@ -24,6 +24,7 @@
 
 #include <luabind/detail/stack_utils.hpp>
 #include <luabind/luabind.hpp>
+#include <cstdio>
 #include <utility>
 
 using namespace luabind::detail;
@@ -407,9 +408,25 @@ bool luabind::detail::class_rep::preview_fence_drops(lua_State* L, const object_
 	return true;
 }
 
+namespace
+{
+	// An instance metamethod reached without an instance is named before the access that faults on it.
+	void report_missing_instance(lua_State* L, const char* metamethod)
+	{
+		lua_Debug caller;
+		const bool located = lua_getstack(L, 1, &caller) && lua_getinfo(L, "Sl", &caller);
+		std::fprintf(stdout, "[luabind] %s without an instance: argument 1 is %s, %d values, key %s, at %s:%d
+", metamethod,
+		    lua_typename(L, lua_type(L, 1)), lua_gettop(L), lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : lua_typename(L, lua_type(L, 2)),
+		    located ? caller.short_src : "?", located ? caller.currentline : -1);
+		std::fflush(stdout);
+	}
+}
+
 int class_rep::gettable_dispatcher(lua_State* L)
 {
 	object_rep* obj = static_cast<object_rep*>(lua_touserdata(L, 1));
+	if (!obj) report_missing_instance(L, "__index");
 	return obj->crep()->gettable(L);
 }
 
@@ -417,6 +434,7 @@ int class_rep::gettable_dispatcher(lua_State* L)
 int luabind::detail::class_rep::settable_dispatcher(lua_State* L)
 {
 	object_rep* obj = static_cast<object_rep*>(lua_touserdata(L, 1));
+	if (!obj) report_missing_instance(L, "__newindex");
 
 	// Inside a preview window a write to the world's own object is dropped: the committed tick runs the same hook for real.
 	if (obj->crep()->preview_fence_drops(L, obj)) return 0;
