@@ -118,6 +118,27 @@ Entity* MOSRotating::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) 
 	return snapshot.Make(*this);
 }
 
+std::string MOSRotating::CheckpointHooksSelfTestMismatch() {
+	CheckpointNativeStorage::AllocationScope owned(true);
+	auto source = std::make_unique<MOSRotating>();
+	source->m_HardcodedAttachableUniqueIDsAndSetters.emplace(11, [](MOSRotating*, Attachable*) {});
+	source->m_HardcodedAttachableUniqueIDsAndRemovers.emplace(13, [](MOSRotating*, Attachable*) {});
+	const auto* setters = &source->m_HardcodedAttachableUniqueIDsAndSetters;
+	const auto* removers = &source->m_HardcodedAttachableUniqueIDsAndRemovers;
+	CheckpointNativeStorage::Root settersRoot(setters);
+	CheckpointNativeStorage::Root removersRoot(removers);
+	const auto pages = CheckpointNativeStorage::Prepare();
+	settersRoot.Freeze(); removersRoot.Freeze();
+	for (const auto& page: pages) page->Arm();
+	source.reset();
+	const std::array roots{settersRoot.Range(), removersRoot.Range()};
+	CheckpointNativeStorage::ReadScope read(pages, roots);
+	const auto savedSetters = CheckpointValues(*CheckpointNativeStorage::Source(setters));
+	const auto savedRemovers = CheckpointValues(*CheckpointNativeStorage::Source(removers));
+	return savedSetters.size() == 1 && savedSetters.begin()->first == 11 &&
+	    savedRemovers.size() == 1 && savedRemovers.begin()->first == 13 ? std::string{} : "saved attachment hooks lose their keys";
+}
+
 MOSRotating::MOSRotating() {
 	Clear();
 }
@@ -1986,7 +2007,7 @@ Attachable* MOSRotating::RemoveAttachable(Attachable* attachable, bool addToMova
 	attachable->SetParent(nullptr);
 	m_AttachableAndWoundMass -= attachable->GetMass();
 
-	std::unordered_map<unsigned long, std::function<void(MOSRotating*, Attachable*)>>::iterator hardcodedAttachableMapEntry = m_HardcodedAttachableUniqueIDsAndSetters.find(attachable->GetUniqueID());
+	auto hardcodedAttachableMapEntry = m_HardcodedAttachableUniqueIDsAndSetters.find(attachable->GetUniqueID());
 	if (hardcodedAttachableMapEntry != m_HardcodedAttachableUniqueIDsAndSetters.end()) {
 		hardcodedAttachableMapEntry->second(this, nullptr);
 		m_HardcodedAttachableUniqueIDsAndSetters.erase(hardcodedAttachableMapEntry);

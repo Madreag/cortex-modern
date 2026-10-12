@@ -1653,6 +1653,8 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 	try {
 		const std::string pageMismatch = CheckpointPagePool::SelfTestMismatch();
 		check(pageMismatch.empty(), "native_checkpoint_pages_preserve_overlapping_generations_and_outlive_the_pool", pageMismatch);
+		const auto hooksMismatch = MOSRotating::CheckpointHooksSelfTestMismatch();
+		check(hooksMismatch.empty(), "saved_attachment_hook_keys_outlive_source_objects", hooksMismatch);
 #ifdef _WIN32
 		{
 			auto& performance = s_CheckpointPerformance;

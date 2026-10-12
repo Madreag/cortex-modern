@@ -45,6 +45,8 @@ namespace RTE {
 		/// memory. Create() should be called before using the object.
 		MOSRotating();
 		CheckpointSnapshotMethods(MOSRotating);
+		/// Checks saved attachment keys after their source is destroyed.
+		static std::string CheckpointHooksSelfTestMismatch();
 		bool FrozenPresetHasAttachables() const { return m_FrozenPresetHasAttachables; }
 
 		/// Destructor method used to clean up a MOSRotating object before deletion
@@ -621,8 +623,8 @@ namespace RTE {
 		// The list of Attachables currently attached and Owned by this.
 		CheckpointList<Attachable*> m_Attachables;
 		CheckpointUnorderedSet<unsigned long> m_ReferenceHardcodedAttachableUniqueIDs; //!< An unordered set is filled with the Unique IDs of all of the reference object's hardcoded Attachables when using the copy Create.
-		std::unordered_map<unsigned long, std::function<void(MOSRotating*, Attachable*)>> m_HardcodedAttachableUniqueIDsAndSetters; //!< An unordered map of Unique IDs to setter lambda functions, used to call the appropriate hardcoded Attachable setter when a hardcoded Attachable is removed.
-		std::unordered_map<unsigned long, std::function<void(MOSRotating*, Attachable*)>> m_HardcodedAttachableUniqueIDsAndRemovers; //!< An unordered map of Unique IDs to remove lambda functions, used to call the appropriate hardcoded Attachable remover when a hardcoded Attachable is removed and calling the setter with nullptr won't work.
+		CheckpointUnorderedMap<unsigned long, std::function<void(MOSRotating*, Attachable*)>> m_HardcodedAttachableUniqueIDsAndSetters; //!< An unordered map of Unique IDs to setter lambda functions, used to call the appropriate hardcoded Attachable setter when a hardcoded Attachable is removed.
+		CheckpointUnorderedMap<unsigned long, std::function<void(MOSRotating*, Attachable*)>> m_HardcodedAttachableUniqueIDsAndRemovers; //!< An unordered map of Unique IDs to remove lambda functions, used to call the appropriate hardcoded Attachable remover when a hardcoded Attachable is removed and calling the setter with nullptr won't work.
 		const Attachable* m_RadiusAffectingAttachable; //!< A pointer to the Attachable that is currently affecting the radius. Used for some efficiency benefits.
 		float m_FarthestAttachableDistanceAndRadius; //!< The distance + radius of the radius affecting Attachable.
 		float m_AttachableAndWoundMass; //!< The mass of all Attachables and wounds on this MOSRotating. Used in combination with its actual mass and any other affecting factors to get its total mass.
