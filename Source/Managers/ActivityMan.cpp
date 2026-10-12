@@ -713,6 +713,7 @@ struct ActivityMan::PreparedAutosave {
 		add(owner); add(g_LuaMan); add(g_MovableMan); add(g_SceneMan); add(g_TimerMan);
 		add(g_SimRNG); add(g_RenderRNG); add(g_AudioMan); add(g_MusicMan); add(g_GUISound);
 		add(g_CameraMan); add(g_FrameMan); add(g_UInputMan); add(g_PostProcessMan); add(g_PrimitiveMan); add(g_PresetMan);
+		add(PostProcessMan::s_RegistrationSuppressed);
 		add(g_PerformanceMan); add(g_ConsoleMan); add(g_MetaMan); add(g_SettingsMan); add(g_MetricsCollector);
 		const auto ranges = [&](const auto& values) {
 			for (const auto& [source, bytes]: values) roots.push_back({source, bytes, alignof(std::max_align_t)});
