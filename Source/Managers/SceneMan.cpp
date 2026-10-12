@@ -626,7 +626,7 @@ MOID SceneMan::GetMOIDPixel(int pixelX, int pixelY, int ignoreTeam) {
 }
 
 Material const* SceneMan::GetMaterial(const std::string& matName) {
-	std::map<std::string, unsigned char>::iterator itr = m_MatNameMap.find(matName);
+	auto itr = m_MatNameMap.find(matName);
 	if (itr == m_MatNameMap.end()) {
 		g_ConsoleMan.PrintString("ERROR: Material of name: " + matName + " not found!");
 		return 0;
@@ -3093,6 +3093,12 @@ void SceneMan::PrepareCheckpointValues() {
 	if (!CheckpointNativeStorage::Enabled() || m_OwnedCheckpointOptions) return;
 	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 	auto prepared = std::make_unique<CheckpointOptions>(m_OrdinaryCheckpointOptions);
+	auto names = m_MatNameMap;
+	auto copies = m_MaterialCopiesVector;
+	auto indices = m_MaterialCopyIndices;
+	m_MatNameMap.swap(names);
+	m_MaterialCopiesVector.swap(copies);
+	m_MaterialCopyIndices.swap(indices);
 	m_OwnedCheckpointOptions = std::move(prepared);
 }
 
@@ -3278,13 +3284,14 @@ const Material* SceneMan::ResolveMaterialReference(std::string_view text, bool a
 std::string SceneMan::SaveMaterialCatalog() const {
     if (const auto& snapshot = CheckpointNativeSnapshot::Boundary()) {
         const int count = m_MaterialCount;
-        auto names = m_MatNameMap;
+        std::map<std::string, unsigned char> names;
+        for (const auto& [name, index]: CheckpointValues(m_MatNameMap)) names.emplace(name.Value(), index);
         std::array<const Material*, c_PaletteEntriesNumber> palette{};
         std::vector<const Material*> copies, presets;
         for (size_t index = 0; index < palette.size(); ++index) palette[index] = snapshot->Object(m_apMatPalette[index]);
-        for (const Material* material: m_MaterialCopiesVector) copies.push_back(snapshot->Object(material));
+        for (const Material* material: CheckpointValues(m_MaterialCopiesVector)) copies.push_back(snapshot->Object(material));
         for (const Material* material: CheckpointMaterialPresets()) presets.push_back(snapshot->Object(material));
-        // The catalog's values are owned at the boundary; its descriptors are made on the saver.
+        // The saver rebuilds the catalog from frozen material values.
         CheckpointWriter deferred(CheckpointWriter::FieldsOnly{});
         deferred.AppendFields(CheckpointText::DeferredValues([snapshot, count, names = std::move(names), palette, copies = std::move(copies), presets = std::move(presets)] {
                 CheckpointNativeSnapshot::ReadScope read(snapshot.get());
@@ -3339,7 +3346,7 @@ std::string SceneMan::SaveMaterialCatalog() const {
     }
     CheckpointMaterialCatalog state;
     state.count = m_MaterialCount;
-    state.names = m_MatNameMap;
+    for (const auto& [name, index]: m_MatNameMap) state.names.emplace(name.Value(), index);
     for (size_t index = 0; index < m_apMatPalette.size(); ++index) if (m_apMatPalette[index]) state.palette[index] = m_apMatPalette[index]->SaveCheckpoint();
     for (const Material* material: m_MaterialCopiesVector) state.copies.push_back(material->SaveCheckpoint());
     for (const Material* material: CheckpointMaterialPresets()) state.presets.push_back(material->SaveCheckpoint());
@@ -3372,7 +3379,9 @@ bool SceneMan::LoadMaterialCatalog(std::string_view text, bool validateOnly) {
         auto retiredCopies = m_RetiredMaterialCopies;
         auto retiredPalette = m_RetiredPaletteMaterials;
         auto copyIndices = m_MaterialCopyIndices;
-        std::vector<Material*> copies = m_MaterialCopiesVector;
+        auto copies = m_MaterialCopiesVector;
+        decltype(m_MatNameMap) names;
+        for (const auto& [name, index]: state.names) names.emplace(name, index);
         auto palette = m_apMatPalette;
         for (size_t index = state.copies.size(); index < copies.size(); ++index) retiredCopies[index].push_back(copies[index]);
         copies.resize(state.copies.size());
@@ -3406,7 +3415,7 @@ bool SceneMan::LoadMaterialCatalog(std::string_view text, bool validateOnly) {
         m_MaterialCopyIndices.swap(copyIndices);
         m_RetiredMaterialCopies.swap(retiredCopies);
         m_RetiredPaletteMaterials.swap(retiredPalette);
-        m_MatNameMap.swap(state.names);
+        m_MatNameMap.swap(names);
         m_MaterialCount = state.count;
         return true;
     } catch (const std::exception&) { return false; }
@@ -3468,6 +3477,44 @@ bool SceneMan::RunMaterialCheckpointSelfTest() {
         if (!after.LoadCheckpoint(before.SaveCheckpoint())) throw std::runtime_error("copied material Atom checkpoint was rejected");
         after.ResolveCheckpointLinks();
         if (after.GetMaterial() != first) throw std::runtime_error("Atom material resolved to a palette entry");
+		{
+			CheckpointNativeStorage::AllocationScope owned(true);
+			decltype(m_MatNameMap) heldNames;
+			decltype(m_MaterialCopiesVector) heldCopies;
+			decltype(m_MaterialCopyIndices) heldIndices;
+			heldNames.swap(m_MatNameMap); heldCopies.swap(m_MaterialCopiesVector); heldIndices.swap(m_MaterialCopyIndices);
+			const auto restore = [&](void*) {
+				heldNames.swap(m_MatNameMap); heldCopies.swap(m_MaterialCopiesVector); heldIndices.swap(m_MaterialCopyIndices);
+			};
+			std::unique_ptr<void, decltype(restore)> guard(this, restore);
+			const std::string name(80, 'm');
+			m_MatNameMap.emplace(name, 31);
+			m_MaterialCopiesVector = {first, second};
+			m_MaterialCopyIndices.emplace(first, 0); m_MaterialCopyIndices.emplace(second, 1);
+			CheckpointNativeStorage::Root namesRoot(&m_MatNameMap);
+			CheckpointNativeStorage::Root copiesRoot(&m_MaterialCopiesVector);
+			CheckpointNativeStorage::Root indicesRoot(&m_MaterialCopyIndices);
+			const auto pages = CheckpointNativeStorage::Prepare();
+			namesRoot.Freeze(); copiesRoot.Freeze(); indicesRoot.Freeze();
+			for (const auto& page: pages) page->Arm();
+			m_MatNameMap.clear(); m_MaterialCopiesVector.clear(); m_MaterialCopyIndices.clear();
+			m_MatNameMap.emplace(std::string(80, 'n'), 41); m_MaterialCopiesVector.push_back(second); m_MaterialCopyIndices.emplace(second, 9);
+			const bool exact = std::async(std::launch::async, [&] {
+				const std::array roots{namesRoot.Range(), copiesRoot.Range(), indicesRoot.Range()};
+				CheckpointNativeStorage::ReadScope read(pages, roots);
+				const auto names = CheckpointValues(*CheckpointNativeStorage::Source(&m_MatNameMap));
+				const auto copies = CheckpointValues(*CheckpointNativeStorage::Source(&m_MaterialCopiesVector));
+				const auto indices = CheckpointValues(*CheckpointNativeStorage::Source(&m_MaterialCopyIndices));
+				std::unordered_map<const Material*, size_t> savedIndices;
+				for (const auto& [material, index]: indices) savedIndices.emplace(material, index);
+				const auto entry = names.begin();
+				return names.size() == 1 && entry->first.Value() == name && entry->second == 31 &&
+				    copies.size() == 2 && *copies.begin() == first && *std::next(copies.begin()) == second &&
+				    savedIndices.size() == 2 && savedIndices.at(first) == 0 && savedIndices.at(second) == 1;
+			}).get();
+			std::cout << "[material-checkpoint] " << (exact ? "PASS" : "FAIL") << " frozen_catalog_keeps_names_copy_order_and_indices_after_reuse" << std::endl;
+			passed = exact && passed;
+		}
 		Material inlineValue;
 		const std::string inlineBytes = inlineValue.SaveCheckpoint();
 		auto snapshot = std::make_shared<CheckpointNativeSnapshot>();

@@ -13,6 +13,7 @@
 #include "Box.h"
 #include "Singleton.h"
 #include "SpatialPartitionGrid.h"
+#include "CheckpointNativeContainers.h"
 
 #include "ActivityMan.h"
 
@@ -1150,15 +1151,15 @@ namespace RTE {
 		SceneLayer* m_pDebugLayer;
 
 		// Material palette stuff
-		std::map<std::string, unsigned char> m_MatNameMap;
+		CheckpointMap<CheckpointString, unsigned char, std::less<>> m_MatNameMap;
 		// This gets filled with holes, not contigous from 0 onward, but whatever the ini specifies. The Material objects are owned here
 		std::array<Material*, c_PaletteEntriesNumber> m_apMatPalette;
 		// The total number of added materials so far
 		int m_MaterialCount;
 
 		// Non original materials added by inheritance
-		std::vector<Material*> m_MaterialCopiesVector;
-        std::unordered_map<const Material*, size_t> m_MaterialCopyIndices;
+		CheckpointVector<Material*> m_MaterialCopiesVector;
+        CheckpointUnorderedMap<const Material*, size_t> m_MaterialCopyIndices;
         // Copies have always lived until SceneMan teardown. Keep inactive generations
         // for held worlds and checkpoint clones, and revive their pointers on rollback.
         std::map<size_t, std::vector<Material*>> m_RetiredMaterialCopies;
