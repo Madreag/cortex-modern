@@ -16,8 +16,10 @@
 #include <bit>
 #include <chrono>
 #include <cstring>
+#include <cstdlib>
 #include <future>
 #include <iterator>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -201,6 +203,16 @@ void CheckpointPagePool::Register(const std::shared_ptr<Block>& block) {
 	registry.generation.fetch_add(1, std::memory_order_release);
 }
 
+void CheckpointPagePool::Unregister(const std::shared_ptr<Block>& block) noexcept {
+	auto* registry = Registry::current.load(std::memory_order_acquire);
+	if (!registry) return;
+	std::lock_guard lock(registry->mutex);
+	const auto found = registry->blocks.find(reinterpret_cast<uintptr_t>(block->live.data));
+	if (found == registry->blocks.end() || found->second.lock() != block) return;
+	registry->blocks.erase(found);
+	registry->generation.fetch_add(1, std::memory_order_release);
+}
+
 void CheckpointPagePool::IncludeInInventory() {
 	if (m_InInventory) return;
 	for (const auto& block: m_Blocks) Register(block);
@@ -274,6 +286,7 @@ void* CheckpointPagePool::Allocation::Data() const { return m_Block->live.data; 
 size_t CheckpointPagePool::Allocation::Bytes() const { return m_Block->live.bytes; }
 bool CheckpointPagePool::Allocation::Contains(const void* source, size_t bytes) const { return m_Block->Contains(source, bytes); }
 void CheckpointPagePool::Allocation::IncludeInInventory() const { Register(m_Block); }
+void CheckpointPagePool::Allocation::ExcludeFromInventory() const noexcept { Unregister(m_Block); }
 std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::Allocation::Freeze(bool arm) const {
 	auto snapshot = std::make_shared<Snapshot>();
 	snapshot->m_Parts.reserve(1);
@@ -580,14 +593,18 @@ std::string CheckpointPagePool::SelfTestMismatch() {
 }
 
 namespace {
+	constexpr size_t c_NativeStorageBlockBytes = size_t{1} << 20;
 	struct NativeStoragePool {
 		CheckpointPagePool pages;
 		std::vector<void*> free;
+		uint64_t bytes = 0;
 		NativeStoragePool() { pages.IncludeInInventory(); }
 	};
 	struct NativeStoragePools {
 		std::mutex mutex;
 		std::array<NativeStoragePool, std::numeric_limits<size_t>::digits> sizes;
+		std::map<uintptr_t, std::unique_ptr<CheckpointPagePool::Allocation>> large;
+		uint64_t largeBytes = 0, peakLargeBytes = 0, releasedLargeBytes = 0;
 	};
 	std::atomic<NativeStoragePools*> s_NativeStoragePools{nullptr};
 	thread_local bool s_NativeStorageAllocation = false;
@@ -643,9 +660,21 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 	const size_t slot = std::bit_ceil(requested);
 	auto& pools = NativePools();
 	std::lock_guard lock(pools.mutex);
+	if (requested >= c_NativeStorageBlockBytes) {
+		auto allocation = std::make_unique<CheckpointPagePool::Allocation>(requested);
+		void* address = allocation->Data();
+		const auto [entry, inserted] = pools.large.emplace(reinterpret_cast<uintptr_t>(address), std::move(allocation));
+		if (!inserted) throw std::logic_error("native allocation overlaps a live buffer");
+		try { entry->second->IncludeInInventory(); }
+		catch (...) { pools.large.erase(entry); throw; }
+		pools.largeBytes += entry->second->Bytes();
+		pools.peakLargeBytes = std::max(pools.peakLargeBytes, pools.largeBytes);
+		return address;
+	}
 	auto& pool = pools.sizes[std::countr_zero(slot)];
 	if (pool.free.empty()) {
-		pool.pages.Grow(slot, 1, pool.free, size_t{1} << 20);
+		pool.pages.Grow(slot, 1, pool.free, c_NativeStorageBlockBytes);
+		pool.bytes += pool.free.size() * slot;
 	}
 	void* address = pool.free.back();
 	pool.free.pop_back();
@@ -658,6 +687,25 @@ bool CheckpointNativeStorage::Deallocate(void* address) noexcept {
 	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
 	if (!pools) return false;
 	std::lock_guard lock(pools->mutex);
+	if (const auto found = pools->large.find(reinterpret_cast<uintptr_t>(address)); found != pools->large.end()) {
+		const size_t bytes = found->second->Bytes();
+		// Frozen readers retain these pages after their live owner releases them.
+		found->second->ExcludeFromInventory();
+		pools->large.erase(found);
+		pools->largeBytes -= bytes;
+		pools->releasedLargeBytes += bytes;
+		static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_ALLOCATIONS"); return value && std::string_view(value) == "1"; }();
+		if (report) try {
+			uint64_t retained = 0, free = 0;
+			for (size_t size = 0; size < pools->sizes.size(); ++size) {
+				retained += pools->sizes[size].bytes;
+				free += pools->sizes[size].free.size() * (uint64_t{1} << size);
+			}
+			std::cout << "[checkpoint-storage] released_large_bytes=" << pools->releasedLargeBytes << " live_large_bytes=" << pools->largeBytes
+			          << " peak_large_bytes=" << pools->peakLargeBytes << " retained_slots_bytes=" << retained << " free_slots_bytes=" << free << std::endl;
+		} catch (...) {}
+		return true;
+	}
 	for (auto& pool: pools->sizes) if (pool.pages.Contains(address)) {
 		// Free lists reserve every slot at growth, so returning storage cannot allocate or discard frozen pages.
 		pool.free.push_back(address);
@@ -671,6 +719,8 @@ bool CheckpointNativeStorage::Owns(const void* address) {
 	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
 	if (!pools) return false;
 	std::lock_guard lock(pools->mutex);
+	const auto end = pools->large.upper_bound(reinterpret_cast<uintptr_t>(address));
+	if (end != pools->large.begin() && std::prev(end)->second->Contains(address, 1)) return true;
 	return std::any_of(pools->sizes.begin(), pools->sizes.end(), [&](const auto& pool) { return pool.pages.Contains(address); });
 }
 
@@ -1029,6 +1079,42 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 		if (Source(identity) != &owned || Original(&owned) != identity || IsView(&owned.numbers)) return "private value lost its original identity";
 		const auto numbers = CheckpointValues(owned.numbers);
 		if (numbers.size() != 2 || numbers.front() != 17 || numbers.back() != 31) return "private value containers read source nodes";
+	}
+	{
+		constexpr size_t bytes = c_NativeStorageBlockBytes + 17;
+		const auto release = [](unsigned char* address) { Deallocate(address); };
+		auto storage = std::unique_ptr<unsigned char, decltype(release)>(static_cast<unsigned char*>(Allocate(bytes, alignof(std::max_align_t))), release);
+		storage.get()[0] = 37; storage.get()[bytes - 1] = 71;
+		const auto* identity = storage.get();
+		{
+			auto& pools = NativePools();
+			std::lock_guard lock(pools.mutex);
+			const auto found = pools.large.find(reinterpret_cast<uintptr_t>(identity));
+			const size_t page = PageWriteFence::SystemPageBytes();
+			if (found == pools.large.end() || found->second->Bytes() != (bytes + page - 1) / page * page)
+				return "large native buffer retained unused power-of-two storage";
+		}
+		auto prepared = PrepareInventory();
+		if (!prepared->Arm()) return "large native buffer preparation refused";
+		storage.get()[0] = 97;
+		storage.reset();
+		if (Owns(identity) || prepared->Current()) return "freed large native buffer remains in the live inventory";
+		for (const auto& pages: prepared->Pages()) pages->Drain();
+		{
+			ReadScope read(prepared->Pages());
+			if (*Source(identity) != 37 || *Source(identity + bytes - 1) != 71)
+				return "retired large native buffer changed its saved pages";
+		}
+		const auto generation = CheckpointPagePool::InventoryGeneration();
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativePages);
+			bool refused = false;
+			try { storage.reset(static_cast<unsigned char*>(Allocate(bytes, alignof(std::max_align_t)))); }
+			catch (const std::bad_alloc&) { refused = true; }
+			if (!refused || generation != CheckpointPagePool::InventoryGeneration()) return "refused large native allocation published a range";
+		}
+		storage.reset(static_cast<unsigned char*>(Allocate(bytes, alignof(std::max_align_t))));
+		if (!Owns(storage.get())) return "large native buffer retry lost its owner";
 	}
 	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> first, second;
 	const void* address = nullptr;

@@ -61,6 +61,8 @@ namespace RTE {
 			bool Contains(const void* source, size_t bytes) const;
 			std::shared_ptr<const Snapshot> Freeze(bool arm = true) const;
 			void IncludeInInventory() const;
+			/// Retires the live range while saved readers retain its pages.
+			void ExcludeFromInventory() const noexcept;
 		private:
 			std::shared_ptr<Block> m_Block;
 		};
@@ -79,5 +81,6 @@ namespace RTE {
 		size_t m_Slots = 0;
 		bool m_InInventory = false;
 		static void Register(const std::shared_ptr<Block>& block);
+		static void Unregister(const std::shared_ptr<Block>& block) noexcept;
 	};
 }
