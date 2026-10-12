@@ -303,7 +303,7 @@ def main():
             beats = [event for event in events if event["kind"] == "heartbeat" and event["status"] == 429]
             start, end = requests.wait_from * 1000, requests.wait_until * 1000
             samples = [sample for sample in requests.alive_samples if start <= sample["at_ms"] < end]
-            registered = [event for event in events if event["role"] == "host" and event["method"] == "POST" and event["kind"] == "sessions" and event["status"] == 200]
+            registered = [event for event in events if event["role"] == "host" and event["method"] == "POST" and event["kind"] == "sessions"]
             checks.update(refused_for_20s=bool(beats) and any(event["at_ms"] >= end for event in events), row_stayed_live=bool(samples) and all(sample["live_rows"] == 1 for sample in samples),
                           no_new_registration=len(registered) == 1,
                           no_missing_heartbeat=not any(event["kind"] == "heartbeat" and event["status"] == 404 for event in events))
