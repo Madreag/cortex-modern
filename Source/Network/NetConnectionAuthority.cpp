@@ -92,8 +92,8 @@ namespace RTE {
 				}
 				if (code == "match_ended") { refused = ended = true; return "The host ended this match. Choose another game."; }
 				if (response.statusCode == 404 && code == "not_found") {
-					refused = true;
-					return "Your connection protocol is " + std::to_string(NetSeatLease::c_Version) + "; this directory uses legacy protocol 0. Update the directory before joining Internet games.";
+					refused = ended = true;
+					return "This match is no longer in the directory. Choose another game.";
 				}
 				if (code == "seat_taken" || code == "player_removed" || code == "seat_reassigned" || code == "seat_expired" || code == "connection_clock") {
 					refused = true;
@@ -396,7 +396,14 @@ namespace RTE {
 				if (op.request->Poll() == NetHttpClient::PollResult::Pending) { ++active; ++it; continue; }
 				const auto response = op.request->GetResponse(); op.request.reset();
 				if (response.statusCode == 200) {
-					if (op.removal) { m_RemoveRetry.Succeeded(); it = m_Operations.erase(it); continue; }
+					if (op.removal) {
+						const auto body = json::parse(response.body, nullptr, false);
+						std::string error;
+						if (body.is_object() && Protocol(body, error) && body.contains("ok") && body["ok"] == true) {
+							m_RemoveRetry.Succeeded(); it = m_Operations.erase(it); continue;
+						}
+						op.retryAt = FailedReply(response, m_RemoveRetry, steadyMs, "seat-remove"); ++it; continue;
+					}
 					NetSeatLease lease;
 					if (ReadLeaseReply(response.body, lease, op.error) && lease.SameSeat(op.wanted)) { op.issued = std::move(lease); m_IssueRetry.Succeeded(); }
 					else { op.error.clear(); op.retryAt = FailedReply(response, m_IssueRetry, steadyMs, "seat-issue"); }
