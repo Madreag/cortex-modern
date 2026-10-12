@@ -98,6 +98,7 @@ namespace RTE {
 			uint32_t delayedChatSends = 0;
 			// Times each of seat 1's input ticks crossed each lane, and the bytes it took.
 			bool countInputs = false;
+			uint8_t dropReceiptsFrom = 0;
 			std::map<uint64_t, unsigned> reliableInputTicks, unreliableInputTicks;
 			uint64_t reliableInputBytes = 0, unreliableInputBytes = 0;
 		};
@@ -264,6 +265,7 @@ namespace RTE {
 				}
 #endif
 				if (hub.countInputs && owner == 1) CountInputTicks(bytes, lane);
+				if (hub.dropReceiptsFrom == owner && NetHostMigrationCodec::Decode(bytes, key, decision) && decision.type == NetHostMigrationMessageType::PeerReceipt) return true;
 				if (lane == NetTransportLane::ControlReliable && NetHostMigrationCodec::Decode(bytes, key, decision)) {
 					[]<class Message>(Hub& hub, const Message& packet) {
 						using Type = std::decay_t<decltype(packet.type)>;
@@ -1041,25 +1043,22 @@ namespace RTE {
 		}
 		if (name == "drop-after-input") {
 			auto& host = *rounds[0];
-			// The joiner's input for the frame we wait on has arrived; it leaves before it receipts our own input for that frame.
-			const auto arrived = [&] { const auto next = host.m_RemoteFrames.find(host.GetStats().nextFrame); return next != host.m_RemoteFrames.end() && next->second.contains(2); };
-			hostWithholds = true;
-			for (const uint64_t until = hub.now + 500; hub.now < until && !arrived();) if (!step(true)) return false;
-			if (!arrived()) { *error = "the joiner's input for the host's next frame never arrived ahead of it"; return false; }
+			// The joiner's last receipts of our input are lost while its own inputs keep arriving; then its link closes.
+			hub.dropReceiptsFrom = 2;
+			for (const uint64_t until = hub.now + 300; hub.now < until;) if (!step(true)) return false;
 			clientWire.Stop();
-			hostWithholds = false;
+			hub.dropReceiptsFrom = 0;
 			const uint64_t begin = hub.now, before = applied[0];
-			uint64_t gap = 0, firstTwo = 0;
-			for (; hub.now < begin + 2000;) {
-				const uint64_t shown = displayedAt[0];
+			uint64_t longestWait = 0;
+			for (; hub.now < begin + 3000;) {
 				if (!step(false)) return false;
-				if (displayedAt[0] != shown) gap = std::max(gap, displayedAt[0] - std::max(shown, begin));
-				if (!firstTwo && applied[0] >= before + 2) firstTwo = hub.now - begin;
+				if (host.m_ConsumerWaitingFrame && hub.now >= host.m_ConsumerWaitStartMs) longestWait = std::max(longestWait, hub.now - host.m_ConsumerWaitStartMs);
 			}
 			const bool held = host.m_PeerBridges.contains(2) && host.m_PeerBridges.at(2).committedHold;
-			std::cout << "[net-session-scene] drop-after-input before=" << before << " after=" << applied[0] << " two_updates_ms=" << firstTwo << " greatest_gap_ms=" << gap
+			std::cout << "[net-session-scene] drop-after-input before=" << before << " after=" << applied[0] << " longest_wait_ms=" << longestWait
 			          << " final_wait_ms=" << hub.now - displayedAt[0] << " held=" << held << " next=" << host.GetStats().nextFrame << std::endl;
-			if (!firstTwo || firstTwo > 50 || gap > 50 || hub.now - displayedAt[0] > 50 || applied[0] < before + 110 || !held) {
+			// The two-seat internet bound includes the referee's answer, as in the drop rows above.
+			if (longestWait > 1000 || hub.now - displayedAt[0] > 50 || applied[0] < before + 110 || !held) {
 				*error = "a joiner that left after its last input kept the host waiting instead of holding its seat"; return false;
 			}
 			return true;
