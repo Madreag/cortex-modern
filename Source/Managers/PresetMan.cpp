@@ -194,6 +194,9 @@ bool PresetMan::LoadAllDataModules() {
 		}
 	}
 
+	if (const std::string costs = CheckpointNativeStorage::StorageCosts(); !costs.empty()) {
+		std::cout << "[storage-costs] load_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - moduleLoadTimerStart).count() << " " << costs << std::endl;
+	}
 	if (g_SettingsMan.IsMeasuringModuleLoadTime()) {
 		std::chrono::milliseconds moduleLoadElapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - moduleLoadTimerStart);
 		g_ConsoleMan.PrintString("Module load duration is: " + std::to_string(moduleLoadElapsedTime.count()) + "ms");

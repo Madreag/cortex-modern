@@ -800,6 +800,26 @@ namespace {
 		uint64_t explicitGrownBytes = 0, worldGrownBytes = 0;
 	};
 	std::atomic<NativeStoragePools*> s_NativeStoragePools{nullptr};
+	struct StorageCostCounters {
+		std::atomic<uint64_t> allocations{0}, allocateNs{0}, frees{0}, freeNs{0}, grows{0}, growNs{0}, larges{0};
+	};
+	StorageCostCounters* StorageCostsArmed() {
+		static StorageCostCounters* const counters = std::getenv("CCCP_TEST_STORAGE_COSTS") ? new StorageCostCounters : nullptr;
+		return counters;
+	}
+	struct StorageCostSpan {
+		std::atomic<uint64_t>* count = nullptr;
+		std::atomic<uint64_t>* ns = nullptr;
+		std::chrono::steady_clock::time_point started;
+		StorageCostSpan(std::atomic<uint64_t> StorageCostCounters::*countField, std::atomic<uint64_t> StorageCostCounters::*nsField) {
+			if (auto* counters = StorageCostsArmed()) { count = &(counters->*countField); ns = &(counters->*nsField); started = std::chrono::steady_clock::now(); }
+		}
+		~StorageCostSpan() {
+			if (!count) return;
+			count->fetch_add(1, std::memory_order_relaxed);
+			ns->fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count(), std::memory_order_relaxed);
+		}
+	};
 	thread_local bool s_NativeStorageAllocation = false;
 	thread_local bool s_NativeStorageCapture = false;
 	thread_local std::optional<bool> s_NativeStorageWorldAllocation;
@@ -870,6 +890,7 @@ bool CheckpointNativeStorage::Enabled(bool retained) {
 }
 
 void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
+	const StorageCostSpan cost(&StorageCostCounters::allocations, &StorageCostCounters::allocateNs);
 	const size_t requested = std::max({bytes, alignment, size_t{16}});
 	if (requested > (size_t{1} << (std::numeric_limits<size_t>::digits - 1)) ||
 	    !std::has_single_bit(alignment) || alignment > PageWriteFence::SystemPageBytes()) throw std::bad_alloc();
@@ -878,6 +899,7 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 	auto& pools = NativePools();
 	std::lock_guard lock(pools.mutex);
 	if (requested >= c_NativeStorageBlockBytes) {
+		if (auto* counters = StorageCostsArmed()) counters->larges.fetch_add(1, std::memory_order_relaxed);
 		auto allocation = std::make_unique<CheckpointPagePool::Allocation>(requested);
 		void* address = allocation->Data();
 		const auto [entry, inserted] = pools.large.emplace(reinterpret_cast<uintptr_t>(address), std::move(allocation));
@@ -894,6 +916,7 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 		// Prepare the address index before growth, so returning a live slot never allocates.
 		const auto staging = pools.ranges.emplace(0, NativeStorageRange{}).first;
 		auto node = pools.ranges.extract(staging);
+		const StorageCostSpan growth(&StorageCostCounters::grows, &StorageCostCounters::growNs);
 		const auto [address, bytes] = pool.pages.Grow(slot, 1, pool.free, c_NativeStorageBlockBytes);
 		node.key() = reinterpret_cast<uintptr_t>(address);
 		node.mapped() = {bytes, &pool};
@@ -908,6 +931,7 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 
 bool CheckpointNativeStorage::Deallocate(void* address) noexcept {
 	if (!address) return false;
+	const StorageCostSpan cost(&StorageCostCounters::frees, &StorageCostCounters::freeNs);
 	if (ForgetPrivate(address)) return false;
 	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
 	if (!pools) return false;
@@ -955,6 +979,14 @@ std::string CheckpointNativeStorage::InventoryCensus() {
 	for (const auto& [slot, pool]: pools->sizes) { retained += pool.bytes; free += pool.free.size() * slot; }
 	return std::format("pool_bytes={} free_slot_bytes={} large_bytes={} explicit_grown_bytes={} world_grown_bytes={}",
 	    retained, free, pools->largeBytes, pools->explicitGrownBytes, pools->worldGrownBytes);
+}
+
+std::string CheckpointNativeStorage::StorageCosts() {
+	const auto* counters = StorageCostsArmed();
+	if (!counters) return {};
+	const auto ms = [](const std::atomic<uint64_t>& ns) { return ns.load() / 1000000; };
+	return std::format("allocations={} allocate_ms={} frees={} free_ms={} grows={} grow_ms={} larges={} {}", counters->allocations.load(), ms(counters->allocateNs),
+	    counters->frees.load(), ms(counters->freeNs), counters->grows.load(), ms(counters->growNs), counters->larges.load(), InventoryCensus());
 }
 
 bool CheckpointNativeStorage::Owns(const void* address) {

@@ -104,6 +104,8 @@ namespace RTE {
 		static bool Owns(const void* address);
 		/// Slot pool, free slot and large buffer bytes, and how much grew inside explicit owned scopes.
 		static std::string InventoryCensus();
+		/// Test lever CCCP_TEST_STORAGE_COSTS: the owned allocations, frees and block growth so far and the time inside them; empty unset.
+		static std::string StorageCosts();
 		class Prepared {
 		public:
 			bool Current() const noexcept;
