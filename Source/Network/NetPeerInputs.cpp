@@ -102,7 +102,8 @@ namespace RTE {
 			return owner != m_Config.localPeerId || m_PeerCommittedTail.contains(frame);
 		uint32_t accepted = SeatBit(owner);
 		if (const auto receipts = m_PeerInputReceipts.find(owner); receipts != m_PeerInputReceipts.end())
-			for (const auto& [peer, through]: receipts->second) if (through > frame) accepted |= SeatBit(peer);
+			for (const auto& [peer, through]: receipts->second)
+				if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer) && through > frame) accepted |= SeatBit(peer);
 		return PeerGroupHasAuthority(accepted);
 	}
 
@@ -113,10 +114,14 @@ namespace RTE {
 		uint64_t through = EffectiveStartOf(owner);
 		if (const auto reclaim = m_ReclaimTransactions.find(owner); reclaim != m_ReclaimTransactions.end())
 			through = std::max(through, reclaim->second.neutralThroughFrame + 1);
+		if ((m_FrameGroupMembers & SeatBit(owner)) != 0 && PeerGroupHasAuthority(SeatBit(owner)) && m_LastQueuedTargetFrame != UINT64_MAX)
+			through = std::max(through, m_LastQueuedTargetFrame + 1);
 		if (const auto found = m_PeerInputReceipts.find(owner); found != m_PeerInputReceipts.end()) {
 			for (const auto& [receiver, candidate]: found->second) {
+				if (m_RemovedPeers.contains(receiver) || IsSeatReleased(receiver)) continue;
 				uint32_t voters = SeatBit(owner);
-				for (const auto& [peer, accepted]: found->second) if (accepted >= candidate) voters |= SeatBit(peer);
+				for (const auto& [peer, accepted]: found->second)
+					if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer) && accepted >= candidate) voters |= SeatBit(peer);
 				if (PeerGroupHasAuthority(voters)) through = std::max(through, candidate);
 			}
 		}
@@ -126,7 +131,7 @@ namespace RTE {
 	void NetLockstepCoordinator::RepairPeerReceiptGaps(uint64_t nowMs) {
 		if ((m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) == 0 || m_LastQueuedTargetFrame == UINT64_MAX) return;
 		for (auto& [peer, progress]: m_PeerOwnReceiptProgress) {
-			if ((m_FrameGroupMembers & SeatBit(peer)) == 0 || progress.through >= m_LastQueuedTargetFrame ||
+			if (m_RemovedPeers.contains(peer) || IsSeatReleased(peer) || (m_FrameGroupMembers & SeatBit(peer)) == 0 || progress.through >= m_LastQueuedTargetFrame ||
 			    progress.through < EffectiveStartOf(m_Config.localPeerId) || IsSeatReclaimGap(m_Config.localPeerId, progress.through)) continue;
 			uint32_t rtt = 0;
 			const auto [wire, route] = PeerFrameRoute(peer);
@@ -145,6 +150,20 @@ namespace RTE {
 			DiagnosticLine() << "[net-peer-input-repair] owner=" << static_cast<int>(m_Config.localPeerId)
 			    << " receiver=" << static_cast<int>(peer) << " frame=" << progress.through << " stagnant_ms=" << nowMs - progress.advancedAtMs << std::endl;
 		}
+	}
+
+	void NetLockstepCoordinator::RemovePeerFrameSeat(uint8_t peer, uint64_t frame) {
+		if (!UsesPeerFrameGroups()) return;
+		m_PeerOwnReceiptProgress.erase(peer); m_PeerReceiptDelaySamples.erase(peer);
+		m_PeerTailSendRanges.erase(peer); m_PeerTailOutgoing.erase(peer);
+		m_PeerTailLastSentMs.erase(peer); m_PeerTailResendFrames.erase(peer);
+		for (auto& [owner, receipts]: m_PeerInputReceipts) receipts.erase(peer);
+		const auto prior = m_FrameGroupChanges.upper_bound(frame);
+		const uint32_t members = prior == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(prior)->second;
+		m_FrameGroupChanges.try_emplace(frame, members);
+		for (auto change = m_FrameGroupChanges.lower_bound(frame); change != m_FrameGroupChanges.end(); ++change) change->second &= ~SeatBit(peer);
+		if (frame <= m_Stats.nextFrame) m_FrameGroupMembers &= ~SeatBit(peer);
+		m_PeerAdminFrameMembers &= ~SeatBit(peer);
 	}
 
 	bool NetLockstepCoordinator::HandlePeerFrameMessage(const NetHostMigrationMessage& message, uint64_t nowMs) {
@@ -298,6 +317,9 @@ namespace RTE {
 		if (message.type == NetHostMigrationMessageType::PeerControl) {
 			const auto decoded = NetLockstepCodec::Decode(message.bytes, ControllerFrame::c_Version);
 			if (decoded.ok && std::visit([&](const auto& payload) {
+				if constexpr (std::is_same_v<std::decay_t<decltype(payload)>, NetLockstepStop>)
+					if (payload.reason == NetLockstepStopReason::PeerRemoved && message.senderPeerId == GetHostPeerId() &&
+					    payload.senderPeerId > 0 && payload.senderPeerId <= m_Config.peerCount && payload.senderPeerId != GetHostPeerId()) return true;
 				if constexpr (requires { payload.senderPeerId; }) return payload.senderPeerId == message.senderPeerId;
 				else return payload.localPeerId == message.senderPeerId;
 			}, decoded.packet.payload)) {

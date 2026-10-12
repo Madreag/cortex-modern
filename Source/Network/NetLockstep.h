@@ -1663,6 +1663,7 @@ namespace RTE {
 		void PreparePeerBridgeInputs(uint64_t frame, uint64_t nowMs);
 		void NotePeerInputAccepted(const NetLockstepFrame& frame);
 		void RepairPeerReceiptGaps(uint64_t nowMs);
+		void RemovePeerFrameSeat(uint8_t peer, uint64_t frame);
 		bool ApplyPeerCommittedTail(uint64_t frame, uint64_t nowMs);
 		void SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame);
 		void FlushPeerCommittedTails(uint64_t nowMs);

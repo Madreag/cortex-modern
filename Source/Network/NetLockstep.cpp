@@ -12447,6 +12447,11 @@ namespace RTE {
 			}
 			return;
 		}
+		if (UsesPeerFrameGroups() && stop.reason == NetLockstepStopReason::PeerRemoved) {
+			if (m_RelayHost || LockstepPeerOfTransport(fromTransport) != GetHostPeerId() || !IsKnownRemotePeer(stop.senderPeerId) || stop.senderPeerId == GetHostPeerId()) return;
+			ApplyPeerLeave(stop.senderPeerId, stop.frame, stop.message, nowMs, true, false, false, true);
+			return;
+		}
 		if (!SenderOwnsTransport(stop.senderPeerId, fromTransport)) {
 			DiagnosticLine() << "[lockstep] dropped a stop claiming peer " << static_cast<int>(stop.senderPeerId) << " from the wrong transport" << std::endl;
 			return;
@@ -12860,6 +12865,10 @@ namespace RTE {
 	// A leave is deterministic by construction: no survivor can advance to the leaver's first missing
 	// frame without processing this, so every peer drops the requirement at the same tick.
 	void NetLockstepCoordinator::ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport, bool agreedBoundary, bool removed, bool cleanLeave, bool linkDropped) {
+		if (removed && UsesPeerFrameGroups()) {
+			m_RemovedPeers.insert(peerId);
+			RemovePeerFrameSeat(peerId, firstFrameWithout);
+		}
 		if (!agreedBoundary && !removed) {
 			if (firstFrameWithout > m_FinalFrame) {
 				m_PeerLeaveFrames.try_emplace(peerId, firstFrameWithout);
@@ -12901,7 +12910,10 @@ namespace RTE {
 		notice.frame = firstFrameWithout;
 		notice.message = message;
 		if (!agreedBoundary) {
-			RelayToOtherRemotes({notice}, peerId);
+			if (removed && UsesPeerFrameGroups()) {
+				std::string ignored;
+				(void)SendPacket({notice}, NetTransportLane::ControlReliable, &ignored);
+			} else RelayToOtherRemotes({notice}, peerId);
 		}
 		const auto transportIt = m_RemoteTransports.find(peerId);
 		const NetPeerId transportId = transportIt != m_RemoteTransports.end() ? transportIt->second : c_InvalidNetPeerId;
