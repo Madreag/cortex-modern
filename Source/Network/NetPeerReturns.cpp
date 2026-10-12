@@ -393,6 +393,11 @@ namespace RTE {
 		if (!ValidatePeerBridge(proposal)) { if (error) *error = "the private return does not match the committed boundary"; return false; }
 		if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->BindAdmission(peer, transport);
 		m_RemoteTransports[peer] = transport;
+		if (m_Config.peerSessionLinks) {
+			const auto [wire, native] = m_Config.peerSessionLinks->RouteTo(peer);
+			DiagnosticLine() << "[net-frame-group] return proposed peer=" << static_cast<int>(peer) << " frame=" << frame << " routes=" << m_Config.peerSessionLinks->RoutesTo(peer).size()
+			    << " native=" << native << " route=" << (wire ? wire->GetConnectedRoute(native) : std::string("none")) << std::endl;
+		}
 		m_PeerAdmissions[peer] = {frame, static_cast<uint16_t>(delay)};
 		m_RemoteStartsReceived.erase(peer); m_RemoteStarts.erase(peer);
 		m_PeersPlayedThisRound.erase(peer); m_LastStartAnswerMs.erase(peer);

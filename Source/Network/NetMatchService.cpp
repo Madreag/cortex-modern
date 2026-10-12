@@ -6406,13 +6406,16 @@ static std::string ResyncSaveName() {
 				std::lock_guard<std::mutex> frameLock(m_RejoinFrameKey->mutex);
 				candidates.insert(candidates.end(), m_RejoinFrameKey->returnCertificates.begin(), m_RejoinFrameKey->returnCertificates.end());
 			}
-			std::string why = "none has arrived";
+			size_t unreadable = 0;
+			std::string refusal;
 			for (const auto& bytes: candidates) {
 				NetHostMigrationMessage proof;
-				if (!NetHostMigrationCodec::Decode(bytes, m_MigrationKey, proof) || proof.type != NetHostMigrationMessageType::PeerBridgeCommit ||
-				    proof.preparedFrame != 1 || proof.frame != m_WorldCatchUp.activationTick) continue;
-				if (m_CatchUpCoordinator->AdoptPeerReturn(live, *m_CatchUpCoordinator, proof, m_WorldCatchUp.activationTick, &why)) break;
+				if (!NetHostMigrationCodec::Decode(bytes, m_MigrationKey, proof)) { ++unreadable; continue; }
+				if (proof.type != NetHostMigrationMessageType::PeerBridgeCommit || proof.preparedFrame != 1 || proof.frame != m_WorldCatchUp.activationTick) continue;
+				if (m_CatchUpCoordinator->AdoptPeerReturn(live, *m_CatchUpCoordinator, proof, m_WorldCatchUp.activationTick, &refusal)) break;
 			}
+			const std::string why = std::to_string(candidates.size()) + " frame messages kept, " + std::to_string(unreadable) + " unreadable, " +
+			                        (refusal.empty() ? std::string("none certifies it") : "its certificate refused: " + refusal);
 			if (m_ReturnWaitLoggedFor != m_WorldCatchUp.activationTick) {
 				m_ReturnWaitLoggedFor = m_WorldCatchUp.activationTick; m_ReturnWaitLoggedWhy.clear(); m_ReturnWaitLines = 0;
 			}
