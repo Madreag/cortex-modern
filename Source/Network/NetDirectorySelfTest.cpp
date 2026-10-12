@@ -1371,6 +1371,52 @@ namespace RTE {
 				}
 			};
 
+			bool TestHostPostWaitWithoutPolling(std::string* error) {
+				const char* url = std::getenv("CCCP_TEST_DIRECTORY_URL");
+				const char* pin = std::getenv("CCCP_TEST_DIRECTORY_PIN");
+				if (!url || !pin) { *error = "the host post row needs its local directory"; return false; }
+				NetDirectoryClient client;
+				NetDirectorySignalChannel channel;
+				struct Finish {
+					NetDirectoryClient& client; NetDirectorySignalChannel& channel;
+					~Finish() { channel.Abandon(); client.Configure("", "", ""); }
+				} finish{client, channel};
+				const std::string install = "hostpostwait01234";
+				client.Configure(url, install, pin);
+				client.Advertise(SampleRegisterRequest(), false);
+				const uint64_t opening = NetDirectoryRetry::NowMs();
+				while (client.GetState() != NetDirectoryClient::State::Registered && NetDirectoryRetry::NowMs() - opening < 5000) {
+					client.Update(NetDirectoryRetry::NowMs());
+					std::this_thread::sleep_for(std::chrono::milliseconds(5));
+				}
+				if (client.GetState() != NetDirectoryClient::State::Registered) { *error = "the local host row did not open"; return false; }
+				channel.ConfigureHost(url, install, pin, client.GetSessionId(), client.GetToken());
+				channel.SetPolling(false);
+				if (!channel.Post("client:" + std::string(32, 'c'), "returning player")) { *error = "the host post was not queued"; return false; }
+				while (channel.RetryUntilMs() == 0 && NetDirectoryRetry::NowMs() - opening < 5000) {
+					channel.Update(NetDirectoryRetry::NowMs());
+					std::this_thread::sleep_for(std::chrono::milliseconds(5));
+				}
+				const uint64_t until = channel.RetryUntilMs();
+				if (until <= NetDirectoryRetry::NowMs()) { *error = "the host post did not receive its directory wait"; return false; }
+				client.NoteListenAddrs({"127.0.0.1"});
+				const auto heartbeats = [&] { return json::parse(client.BuildReportJson()).value("heartbeats", uint64_t{0}); };
+				while (NetDirectoryRetry::NowMs() < until + NetDirectorySignalChannel::c_PollIntervalMs + 250) {
+					const uint64_t now = NetDirectoryRetry::NowMs();
+					channel.Update(now); client.Update(now);
+					if (heartbeats() != 0) {
+						if (now < until) { *error = "a host heartbeat bypassed its directory wait"; return false; }
+						std::this_thread::sleep_for(std::chrono::milliseconds(25));
+						client.Update(NetDirectoryRetry::NowMs());
+						std::cout << "[net-directory-selftest] PASS host_post_wait_without_polling heartbeat_after_wait_ms=" << now - until << std::endl;
+						return true;
+					}
+					std::this_thread::sleep_for(std::chrono::milliseconds(5));
+				}
+				*error = "a disarmed host poll kept the heartbeat waiting after the directory wait";
+				return false;
+			}
+
 			bool RequestIs(const NetDirectoryClient::Request& request, const char* method, const char* path, std::string* error) {
 				if (request.method != method || request.path != path) {
 					*error = "request was " + request.method + " " + request.path + ", expected " + method + " " + path;
@@ -3790,6 +3836,11 @@ namespace RTE {
 
 			std::string error;
 			const char* selected = std::getenv("CCCP_TEST_DIRECTORY_CASE");
+			if (selected && std::string(selected) == "host-post-wait") {
+				if (!TestHostPostWaitWithoutPolling(&error)) return fail(error);
+				std::cout << "[net-directory-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (selected && std::string(selected) == "protocol") {
 				if (!TestConnectionProtocolRefusal(&error) || !TestASupersededHostKeepsTheRowNoMore(&error)) return fail(error);
 				std::cout << "[net-directory-selftest] PASS" << std::endl;

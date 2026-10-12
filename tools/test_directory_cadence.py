@@ -87,6 +87,9 @@ class Requests:
         with self.lock:
             if handler.command == "POST" and handler.path == "/v1/sessions":
                 self.host_key = key
+            if self.case == "poll-wait" and kind == "signal" and self.wait_from is None:
+                self.wait_from, self.wait_until = now, now + 2
+                return 429, {"error": "rate_limited_key", "budget": "general", "retry_after_s": 2}
             if self.case == "liveness" and kind == "heartbeat" and self.wait_from is None:
                 self.wait_from, self.wait_until = now, now + 20
             if self.case == "admission" and kind == "issue" and handler.row_body.get("seat") == 1 and self.wait_from is None:
