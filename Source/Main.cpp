@@ -71,6 +71,7 @@
 #include "FloatingPointEnvironment.h"
 #include "RotatePrimitiveSelfTest.h"
 #include "FrameRecorder.h"
+#include "FrameCaptureStream.h"
 #include "ScenarioGUI.h"
 #include "FloatTextSelfTest.h"
 #include "CheckpointImage.h"
@@ -192,6 +193,7 @@
 #include <format>
 #include <iostream>
 #include <iomanip>
+#include <iterator>
 #include <random>
 #include <condition_variable>
 #include <future>
@@ -3492,10 +3494,19 @@ static bool RunFrameRecorderSelfTest() {
 		}
 		std::ifstream argsIn(scratch / "reader" / "args.txt");
 		bool padWhole = false;
-		for (std::string argument; std::getline(argsIn, argument);) padWhole |= argument == "pad=ceil(iw/2)*2:ceil(ih/2)*2";
+		for (std::string argument; std::getline(argsIn, argument);) padWhole |= argument == "fps=5:round=near,pad=ceil(iw/2)*2:ceil(ih/2)*2";
+		FrameCaptureStream::Bytes expectedStream = FrameCaptureStream::Header(4, 4, 5);
+		for (int frame = 0; frame < 5; ++frame) {
+			const auto header = FrameCaptureStream::FrameHeader(frame, 5, 4 * 4 * 3);
+			expectedStream.insert(expectedStream.end(), header.begin(), header.end());
+			expectedStream.insert(expectedStream.end(), 4 * 4 * 3, static_cast<unsigned char>(frame * 40));
+		}
+		std::ifstream streamIn(scratch / "reader" / "frames.raw", std::ios::binary);
+		const FrameCaptureStream::Bytes receivedStream{std::istreambuf_iterator<char>(streamIn), std::istreambuf_iterator<char>()};
 		std::error_code sizeCode;
 		const auto rawBytes = std::filesystem::file_size(scratch / "reader" / "frames.raw", sizeCode);
-		if (!padWhole || sizeCode || rawBytes != 5 * 4 * 4 * 3 || encoded.value("frames_saved", -1) != 5 || encoded.value("write_failures", -1) != 0) {
+		if (!padWhole || sizeCode || rawBytes != expectedStream.size() || receivedStream != expectedStream ||
+		    encoded.value("frames_saved", -1) != 5 || encoded.value("write_failures", -1) != 0) {
 			return FrameRecorderSelfTestFail("the shell split the encoder's arguments or the frames never reached it: pad_whole=" + std::to_string(padWhole) +
 			                                 " raw_bytes=" + std::to_string(sizeCode ? -1 : static_cast<long long>(rawBytes)) + " manifest=" + encoded.dump());
 		}
