@@ -1043,6 +1043,8 @@ namespace RTE {
 		}
 		if (name == "drop-after-input") {
 			auto& host = *rounds[0];
+			// No tie stands decided, as in a match whose earlier ties the directory refused.
+			host.m_PeerFrameTieWinners.clear();
 			// The joiner's last receipts of our input are lost while its own inputs keep arriving; then its link closes.
 			hub.dropReceiptsFrom = 2;
 			for (const uint64_t until = hub.now + 300; hub.now < until;) if (!step(true)) return false;
