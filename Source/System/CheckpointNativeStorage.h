@@ -100,6 +100,8 @@ namespace RTE {
 		static void* Allocate(size_t bytes, size_t alignment);
 		static bool Deallocate(void* address) noexcept;
 		static bool Owns(const void* address);
+		/// Slot pool, free slot and large buffer bytes, and how much grew inside explicit owned scopes.
+		static std::string InventoryCensus();
 		class Prepared {
 		public:
 			bool Current() const noexcept;

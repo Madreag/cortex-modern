@@ -778,6 +778,13 @@ struct ActivityMan::PreparedAutosave {
 	}
 
 	bool Complete(const Header& header, const CheckpointLua::Boundary& boundary) {
+		if (const char* phases = std::getenv("CCCP_CHECKPOINT_PHASES"); phases && std::string_view(phases) == "1") {
+			size_t ranges = 0, bytes = 0;
+			for (const auto& pages: boundary.NativeViews().pages) { ranges += pages->RangeCount(); bytes += pages->RangeBytes(); }
+			const auto [nativeUs, luaUs] = boundary.ArmSplitUs();
+			System::PrintDiagnosticLine(std::format("[checkpoint-arm-split] tick={} native_ranges={} native_bytes={} native_arm_us={} lua_heaps={} lua_arm_us={} {}",
+			    header.tick, ranges, bytes, nativeUs, boundary.StateCount(), luaUs, CheckpointNativeStorage::InventoryCensus()));
+		}
 		CheckpointNativeStorage::ReadScope pages(boundary.NativeViews());
 		RandomGenerator::CheckpointScope random;
 		MovableObject::CheckpointCounterScope counters;

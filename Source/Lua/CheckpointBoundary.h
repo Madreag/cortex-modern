@@ -7,6 +7,7 @@
 #include <bit>
 #include <array>
 #include <chrono>
+#include <utility>
 
 namespace RTE::CheckpointLua {
 	// The saver prepares ranges and header storage while the live pages stay writable.
@@ -69,8 +70,11 @@ namespace RTE::CheckpointLua {
 			if (!m_Status.compare_exchange_strong(expected, Status::Arming, std::memory_order_acq_rel)) return false;
 			try {
 				if (!m_Native->Arm()) { Cancel(); return false; }
+				const auto nativeFenced = std::chrono::steady_clock::now();
 				for (Heap& heap: m_Heaps) if (!heap.lease.Arm(*heap.prepared)) { Cancel(); return false; }
 				const auto fenced = std::chrono::steady_clock::now();
+				m_ArmSplitUs = {std::chrono::duration_cast<std::chrono::microseconds>(nativeFenced - started).count(),
+				    std::chrono::duration_cast<std::chrono::microseconds>(fenced - nativeFenced).count()};
 				for (const auto& root: m_Roots) std::memcpy(const_cast<void*>(root.view), root.source, root.bytes);
 				if (parts) {
 					(*parts)[1] = std::chrono::duration_cast<std::chrono::microseconds>(fenced - started).count();
@@ -110,6 +114,8 @@ namespace RTE::CheckpointLua {
 			return m_Heaps.at(index).prepared->Image();
 		}
 		size_t StateCount() const { return m_Heaps.size(); }
+		/// The fence's own clock: the native ranges, then every Lua heap.
+		std::pair<int64_t, int64_t> ArmSplitUs() const { return m_ArmSplitUs; }
 		const BindingLease& Bindings() const { return m_Bindings; }
 		static std::string SelfTestMismatch() {
 			CheckpointNativeStorage::AllocationScope allocations(true);
@@ -187,5 +193,6 @@ namespace RTE::CheckpointLua {
 		std::unique_ptr<std::byte[]> m_HeaderBytes;
 		std::vector<CheckpointNativeStorage::RootRange> m_Roots;
 		std::vector<CheckpointNativeStorage::RootRange> m_ReadRoots;
+		std::pair<int64_t, int64_t> m_ArmSplitUs{};
 	};
 }

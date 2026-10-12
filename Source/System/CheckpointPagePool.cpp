@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstring>
 #include <cstdlib>
+#include <format>
 #include <future>
 #include <iterator>
 #include <iostream>
@@ -24,6 +25,7 @@
 #include <map>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -611,6 +613,7 @@ namespace {
 		std::map<uintptr_t, NativeStorageRange> ranges;
 		std::map<uintptr_t, std::unique_ptr<CheckpointPagePool::Allocation>> large;
 		uint64_t largeBytes = 0, peakLargeBytes = 0, releasedLargeBytes = 0;
+		uint64_t explicitGrownBytes = 0, worldGrownBytes = 0;
 	};
 	std::atomic<NativeStoragePools*> s_NativeStoragePools{nullptr};
 	thread_local bool s_NativeStorageAllocation = false;
@@ -676,6 +679,7 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 		catch (...) { pools.large.erase(entry); throw; }
 		pools.largeBytes += entry->second->Bytes();
 		pools.peakLargeBytes = std::max(pools.peakLargeBytes, pools.largeBytes);
+		(s_NativeStorageAllocation ? pools.explicitGrownBytes : pools.worldGrownBytes) += entry->second->Bytes();
 		return address;
 	}
 	auto& pool = pools.sizes.try_emplace(slot).first->second;
@@ -688,6 +692,7 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 		node.mapped() = {bytes, &pool};
 		pools.ranges.insert(std::move(node));
 		pool.bytes += pool.free.size() * slot;
+		(s_NativeStorageAllocation ? pools.explicitGrownBytes : pools.worldGrownBytes) += bytes;
 	}
 	void* address = pool.free.back();
 	pool.free.pop_back();
@@ -733,6 +738,16 @@ bool CheckpointNativeStorage::Deallocate(void* address) noexcept {
 		return true;
 	}
 	return false;
+}
+
+std::string CheckpointNativeStorage::InventoryCensus() {
+	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
+	if (!pools) return "pool_bytes=0 free_slot_bytes=0 large_bytes=0 explicit_grown_bytes=0 world_grown_bytes=0";
+	std::lock_guard lock(pools->mutex);
+	uint64_t retained = 0, free = 0;
+	for (const auto& [slot, pool]: pools->sizes) { retained += pool.bytes; free += pool.free.size() * slot; }
+	return std::format("pool_bytes={} free_slot_bytes={} large_bytes={} explicit_grown_bytes={} world_grown_bytes={}",
+	    retained, free, pools->largeBytes, pools->explicitGrownBytes, pools->worldGrownBytes);
 }
 
 bool CheckpointNativeStorage::Owns(const void* address) {

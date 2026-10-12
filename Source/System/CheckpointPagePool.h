@@ -43,6 +43,8 @@ namespace RTE {
 			void Arm() const;
 			void Cancel() const noexcept;
 			Costs Cost() const;
+			size_t RangeCount() const { return m_Ranges.size(); }
+			size_t RangeBytes() const { size_t bytes = 0; for (const Range& range: m_Ranges) bytes += range.bytes; return bytes; }
 		private:
 			friend class CheckpointPagePool;
 			friend class Allocation;
