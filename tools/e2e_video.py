@@ -2315,9 +2315,10 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
 
     interrupted, stop_finding, footprint = None, None, {"peak": 0}
     try:
-        for peer in peers:
+        for position, peer in enumerate(peers):
             name = peer["name"]
-            delay = float(peer.get("start_delay_s", 0) or 0)
+            # A one-box start gap launches each later player after the first, as two boxes do.
+            delay = float(peer.get("start_delay_s", 0) or 0) + (float(getattr(options, "start_gap", 0) or 0) if position else 0)
             if delay:
                 # A menu-driven join has to find the host's lobby already listening, and a late joiner
                 # has to find a world already running.
@@ -3110,6 +3111,8 @@ def main():
     parser.add_argument("--setting", action="append", type=setting_pair, default=[], metavar="KEY=VALUE",
                         help="seed every peer after size and scenario settings; repeatable, last value wins")
     parser.add_argument("--render-cap", type=render_cap_hz, default=60, metavar="HZ", help="headless render cap: 0 or 60 (default)")
+    parser.add_argument("--start-gap", type=float, default=0, metavar="SECONDS",
+                        help="launch each later player this long after the one before it (added to the scene's own start delays)")
     parser.add_argument("--headed", action="store_true",
                         help="POSIX: every player draws in a visible window at the game's default vsync instead of the headless render cap")
     parser.add_argument("--dry-run", action="store_true", help="print planned settings and engine arguments without creating files or starting services")
@@ -3168,6 +3171,8 @@ def main():
         parser.error("--sheet-every must be positive")
     if options.fullstate_every < 0:
         parser.error("--fullstate-every must be 0 or positive")
+    if options.start_gap < 0 or options.start_gap and spread.enabled(options):
+        parser.error("--start-gap is a non-negative one-box launch gap")
     if options.port_block:
         low, _, high = options.port_block.partition("-")
         if not (low.isdigit() and high.isdigit() and int(low) <= int(high)) or options.port is None:
@@ -3234,7 +3239,7 @@ def main():
     capture = {"schema": 1, "scenario": scenario["name"], "repo": str(Path(options.repo).resolve()), "out": str(out), "platform": sys.platform,
                "fps": options.fps, "size": options.size, "runs": [], "source": source, "exe": exe,
                "settings": dict(options.setting), "render_cap": None if options.headed else options.render_cap,
-               "presentation": "headed" if options.headed else "headless",
+               "presentation": "headed" if options.headed else "headless", "start_gap_s": options.start_gap,
                "scratch_root": str(options.scratch_root), "scratch_limit_bytes": options.scratch_limit_bytes,
                "started": stamp(), "command": [sys.executable, *sys.argv], "scenario_definition": scenario}
     capture["topology"] = ("spread" if options.host_box else spread.topology(options, max(len(run.get("peers") or scenario.get("peers") or []) for run in runs)))
