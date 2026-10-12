@@ -7,6 +7,10 @@
 #include "PieMenu.h"
 #include "AllegroScreen.h"
 #include <iostream>
+#include <array>
+#include <map>
+#include <memory>
+#include <vector>
 #include "Scene.h"
 #include "SceneMan.h"
 #include "TerrainObject.h"

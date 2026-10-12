@@ -9,6 +9,8 @@
 #include "SceneObject.h"
 #include "Vector.h"
 #include "SceneMan.h"
+
+#include <list>
 // #include "MovableMan.h"
 
 namespace RTE {

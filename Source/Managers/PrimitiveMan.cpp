@@ -9,6 +9,11 @@
 #include "tracy/Tracy.hpp"
 
 #include <array>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <string_view>
+#include <vector>
 #include "Draw.h"
 #include "glad/gl.h"
 #include "Shader.h"

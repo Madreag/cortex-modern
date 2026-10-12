@@ -5,6 +5,8 @@
 #include "SceneLayer.h"
 #include "Matrix.h"
 
+#include <memory>
+
 namespace RTE {
 
 	class MOPixel;

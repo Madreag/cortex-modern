@@ -1,6 +1,9 @@
 #include "MovableObject.h"
 
 #include <future>
+#include <atomic>
+#include <memory>
+#include <vector>
 #include "CheckpointNativeSnapshot.h"
 #include "CheckpointProperties.h"
 #include "CaptureSentinel.h"

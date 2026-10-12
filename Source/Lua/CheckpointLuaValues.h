@@ -14,6 +14,10 @@ extern "C" {
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <future>
+#include <limits>
+#include <string_view>
+#include <vector>
 
 namespace RTE::CheckpointLua {
 	// Getters execute with private tables, closures and native values on the saver.

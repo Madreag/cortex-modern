@@ -3,6 +3,8 @@
 #include "GUICheckpoint.h"
 #include "CheckpointNativeSnapshot.h"
 #include <iostream>
+#include <algorithm>
+#include <memory>
 #include "SceneEditorGUI.h"
 #include "OwnedMovableObjects.h"
 #include "LuaMan.h"

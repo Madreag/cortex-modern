@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 namespace RTE {
 
 	class GUILabel;

@@ -20,6 +20,12 @@
 #include <mutex>
 #include <iostream>
 #include <SDL3_image/SDL_image.h>
+#include <atomic>
+#include <map>
+#include <memory>
+#include <optional>
+#include <unordered_map>
+#include <vector>
 
 #include <array>
 #include <chrono>

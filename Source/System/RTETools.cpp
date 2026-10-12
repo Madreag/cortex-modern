@@ -8,6 +8,7 @@
 
 #include <future>
 #include <utility>
+#include <memory>
 
 #include <string_view>
 #include <algorithm>

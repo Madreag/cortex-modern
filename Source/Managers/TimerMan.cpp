@@ -12,6 +12,9 @@
 #include <algorithm>
 #include <limits>
 #include <tuple>
+#include <array>
+#include <chrono>
+#include <memory>
 
 using namespace RTE;
 

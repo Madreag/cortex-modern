@@ -41,6 +41,12 @@
 #include <iostream>
 #include <atomic>
 #include <mutex>
+#include <array>
+#include <functional>
+#include <map>
+#include <memory>
+#include <unordered_map>
+#include <vector>
 
 using namespace RTE;
 

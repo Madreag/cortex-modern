@@ -3,6 +3,8 @@
 #include "Singleton.h"
 #include "GraphicalPrimitive.h"
 
+#include <memory>
+
 #define g_PrimitiveMan PrimitiveMan::Instance()
 
 namespace RTE {

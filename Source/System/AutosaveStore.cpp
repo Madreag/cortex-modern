@@ -17,6 +17,8 @@
 #include <system_error>
 #include <tuple>
 #include <type_traits>
+#include <memory>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX

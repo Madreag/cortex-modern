@@ -17,6 +17,10 @@
 
 #include <filesystem>
 #include <list>
+#include <exception>
+#include <functional>
+#include <unordered_set>
+#include <vector>
 #include "Activity.h"
 
 #include "CameraMan.h"

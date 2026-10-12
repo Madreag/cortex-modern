@@ -5,6 +5,8 @@
 #include "PresetMan.h"
 #include "LuaMan.h"
 
+#include <memory>
+
 using namespace RTE;
 
 ConcreteClassInfo(PieSlice, Entity, 80);

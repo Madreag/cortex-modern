@@ -6,6 +6,11 @@
 #include "MovableMan.h"
 #include "CheckpointNativeSnapshot.h"
 #include <iostream>
+#include <deque>
+#include <exception>
+#include <list>
+#include <mutex>
+#include <utility>
 #include "SimDumpTape.h"
 #include "NetA7Journal.h"
 #include "PrimitiveMan.h"

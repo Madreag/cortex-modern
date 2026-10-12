@@ -6,6 +6,8 @@
 #include <luabind/detail/class_registry.hpp>
 #include <luabind/detail/object_rep.hpp>
 #include <luabind/iterator_policy.hpp>
+#include <functional>
+#include <unordered_map>
 
 #include <cstddef>
 #include <cstring>

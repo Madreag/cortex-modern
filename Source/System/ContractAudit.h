@@ -74,6 +74,7 @@
 #include <type_traits>
 #include <typeinfo>
 #include <utility>
+#include <mutex>
 
 namespace RTE {
 struct ContractAudit {

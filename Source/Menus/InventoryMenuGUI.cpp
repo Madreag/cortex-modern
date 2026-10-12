@@ -1,6 +1,7 @@
 #include "CheckpointArchive.h"
 #include "GUICheckpoint.h"
 #include <iostream>
+#include <memory>
 #include "InventoryMenuGUI.h"
 
 #include "WindowMan.h"

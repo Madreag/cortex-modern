@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdint>
 #include <unordered_map>
+#include <memory>
 #include "glad/gl.h"
 
 #define g_FrameMan FrameMan::Instance()

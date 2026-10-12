@@ -6,6 +6,9 @@
 #include <array>
 #include <atomic>
 #include <string>
+#include <memory>
+#include <span>
+#include <vector>
 #include "Material.h"
 #include "SceneMan.h"
 #include "CheckpointPagePool.h"

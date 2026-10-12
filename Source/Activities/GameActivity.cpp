@@ -8,6 +8,7 @@
 #include "MetricsCollector.h"
 
 #include <chrono>
+#include <array>
 
 #include "CameraMan.h"
 #include "PresetMan.h"

@@ -2,6 +2,8 @@
 #include "GUICheckpoint.h"
 #include "CheckpointNativeSnapshot.h"
 #include <iostream>
+#include <list>
+#include <memory>
 #include "BuyMenuGUI.h"
 
 #include "CameraMan.h"

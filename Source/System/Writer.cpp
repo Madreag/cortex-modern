@@ -48,6 +48,15 @@
 #include <iostream>
 #include <locale>
 #include <variant>
+#include <array>
+#include <bit>
+#include <deque>
+#include <exception>
+#include <functional>
+#include <limits>
+#include <list>
+#include <optional>
+#include <set>
 
 #ifdef _WIN32
 #include <windows.h>

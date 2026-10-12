@@ -4,6 +4,9 @@
 
 #include "Atom.h"
 
+#include <memory>
+#include <span>
+
 namespace RTE {
 
 	class MOSRotating;

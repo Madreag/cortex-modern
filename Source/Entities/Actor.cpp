@@ -10,6 +10,7 @@
 #include "CheckpointProperties.h"
 #include "MetricsCollector.h"
 #include <iostream>
+#include <array>
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "Base64/base64.h"

@@ -22,6 +22,7 @@
 
 #include <array>
 #include <execution>
+#include <memory>
 
 using namespace RTE;
 

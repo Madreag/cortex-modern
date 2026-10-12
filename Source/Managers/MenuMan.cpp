@@ -23,6 +23,8 @@
 #include "NetMatchService.h"
 #include "ScenarioRunner.h"
 
+#include <memory>
+
 using namespace RTE;
 
 void MenuMan::Initialize(bool firstTimeInit) {

@@ -4,6 +4,8 @@
 #include "CheckpointArchive.h"
 #include "GUICheckpoint.h"
 
+#include <vector>
+
 using namespace RTE;
 
 ConcreteClassInfo(Icon, Entity, 80);

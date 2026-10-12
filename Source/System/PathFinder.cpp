@@ -41,6 +41,10 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <cstring>
+#include <deque>
+#include <list>
+#include <vector>
 
 using namespace RTE;
 

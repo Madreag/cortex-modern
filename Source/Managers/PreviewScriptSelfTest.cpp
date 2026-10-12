@@ -40,6 +40,7 @@ extern "C" {
 #include <memory>
 #include <sstream>
 #include <unordered_set>
+#include <algorithm>
 
 namespace RTE {
 

@@ -3,6 +3,9 @@
 
 #include "nlohmann/json.hpp"
 
+#include <map>
+#include <memory>
+
 namespace RTE {
 
 	namespace {

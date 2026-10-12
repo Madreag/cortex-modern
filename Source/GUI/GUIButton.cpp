@@ -3,6 +3,8 @@
 #include "AllegroBitmap.h"
 #include "GUILabel.h"
 
+#include <memory>
+
 using namespace RTE;
 
 GUIButton::GUIButton(GUIManager* Manager, GUIControlManager* ControlManager) :

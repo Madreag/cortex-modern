@@ -8,6 +8,11 @@
 #include <future>
 #include <thread>
 #include <type_traits>
+#include <array>
+#include <chrono>
+#include <cstring>
+#include <exception>
+#include <memory>
 
 namespace RTE::CheckpointLua {
 

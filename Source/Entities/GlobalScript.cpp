@@ -11,6 +11,8 @@
 #include "ConsoleMan.h"
 #include "SettingsMan.h"
 
+#include <memory>
+
 using namespace RTE;
 
 ConcreteClassInfo(GlobalScript, Entity, 10);

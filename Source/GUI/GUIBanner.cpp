@@ -4,6 +4,7 @@
 #include "GUICheckpoint.h"
 #include "CheckpointNativeSnapshot.h"
 #include <iostream>
+#include <memory>
 
 using namespace RTE;
 

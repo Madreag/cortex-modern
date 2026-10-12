@@ -3,6 +3,9 @@
 #include "WindowMan.h"
 #include "SDL3/SDL.h"
 
+#include <array>
+#include <memory>
+
 using namespace RTE;
 
 bool GUIInput::m_OverrideInput = false;

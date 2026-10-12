@@ -26,6 +26,9 @@
 #include <optional>
 #include <set>
 #include <unordered_set>
+#include <algorithm>
+#include <memory>
+#include <vector>
 #include "TimerMan.h"
 #include "FrameMan.h"
 #include "ConsoleMan.h"

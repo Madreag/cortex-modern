@@ -28,6 +28,8 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <chrono>
+#include <format>
 
 // Include after the live ScriptGraph helpers in LuaMan.cpp.
 namespace RTE::CheckpointLua {

@@ -7,6 +7,9 @@
 #include "CheckpointImage.h"
 
 #include <set>
+#include <chrono>
+#include <memory>
+#include <vector>
 
 extern "C" {
 #include "lualib.h"

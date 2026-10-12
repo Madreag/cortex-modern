@@ -5,6 +5,9 @@
 #include "MOSRotating.h"
 #include "PieSlice.h"
 
+#include <memory>
+#include <vector>
+
 namespace RTE {
 
 	class AEmitter;

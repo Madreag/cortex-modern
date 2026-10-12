@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <memory>
 
 /// Header file for the SceneMan class.
 /// @author Daniel Tabar

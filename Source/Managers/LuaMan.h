@@ -18,6 +18,9 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <span>
+#include <string_view>
+#include <unordered_map>
 
 #define g_LuaMan LuaMan::Instance()
 

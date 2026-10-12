@@ -29,6 +29,11 @@
 #include <thread>
 #include <unordered_set>
 #include <map>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <vector>
 
 using namespace RTE;
 

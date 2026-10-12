@@ -11,6 +11,11 @@
 #include "MovableMan.h"
 
 #include <algorithm>
+#include <map>
+#include <optional>
+#include <set>
+#include <span>
+#include <vector>
 #include "MovableObject.h"
 
 #include "Actor.h"

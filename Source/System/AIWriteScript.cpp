@@ -11,6 +11,8 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
+#include <deque>
+#include <functional>
 
 namespace RTE {
 

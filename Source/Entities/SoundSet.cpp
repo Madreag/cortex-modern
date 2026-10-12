@@ -13,6 +13,9 @@
 #include <unordered_map>
 #include <future>
 #include <iostream>
+#include <memory>
+#include <span>
+#include <vector>
 
 using namespace RTE;
 

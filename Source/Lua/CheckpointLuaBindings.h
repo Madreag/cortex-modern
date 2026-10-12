@@ -7,6 +7,7 @@
 #include "CheckpointBindingLease.h"
 
 #include <luabind/detail/class_rep.hpp>
+#include <optional>
 
 #include <atomic>
 #include <cstdint>

@@ -2,6 +2,10 @@
 #include "CheckpointNativeSnapshot.h"
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <limits>
+#include <map>
+#include <memory>
 #include "SoundSimulation.h"
 #include "CheckpointArchive.h"
 #include "AudioCheckpoint.h"

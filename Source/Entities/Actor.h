@@ -11,6 +11,7 @@
 #include "PathFinder.h"
 
 #include <array>
+#include <optional>
 
 namespace RTE {
 

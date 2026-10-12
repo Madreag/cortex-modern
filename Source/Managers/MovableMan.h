@@ -5,6 +5,10 @@
 
 #include <string>
 #include <string_view>
+#include <algorithm>
+#include <functional>
+#include <list>
+#include <memory>
 
 /// Header file for the MovableMan class.
 /// @author Daniel Tabar

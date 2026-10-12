@@ -4,6 +4,14 @@
 
 #include <bit>
 #include <initializer_list>
+#include <cstring>
+#include <limits>
+#include <memory>
+#include <span>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 
 namespace RTE::CheckpointLua {
 	class ScratchImage {

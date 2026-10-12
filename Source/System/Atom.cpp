@@ -23,6 +23,15 @@
 #include <bit>
 #include <future>
 #include <tuple>
+#include <array>
+#include <cstring>
+#include <limits>
+#include <map>
+#include <memory>
+#include <span>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
 
 #include <format>
 #include <mutex>

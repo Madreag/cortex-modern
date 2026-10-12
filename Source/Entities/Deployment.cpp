@@ -13,6 +13,8 @@
 #include "Draw.h"
 #include "FrameMan.h"
 
+#include <list>
+
 using namespace RTE;
 
 ConcreteClassInfo(Deployment, SceneObject, 0);

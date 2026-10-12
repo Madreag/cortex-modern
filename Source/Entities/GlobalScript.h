@@ -4,6 +4,9 @@
 
 #include "PieSlice.h"
 
+#include <memory>
+#include <vector>
+
 namespace RTE {
 
 	class ACraft;

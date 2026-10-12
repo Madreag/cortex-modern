@@ -30,6 +30,7 @@
 #include <future>
 #include <sstream>
 #include <string>
+#include <memory>
 
 using namespace RTE;
 

@@ -16,6 +16,10 @@
 #include <cfenv>
 #include <bit>
 #include <cstdlib>
+#include <array>
+#include <format>
+#include <span>
+#include <string_view>
 #include "LuaThreadCodec.h"
 #include "CheckpointImage.h"
 #include "CheckpointCast.h"

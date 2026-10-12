@@ -26,6 +26,8 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+#include <memory>
+#include <string_view>
 
 struct BITMAP;
 

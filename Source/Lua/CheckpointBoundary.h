@@ -11,6 +11,12 @@
 #include <exception>
 #include <future>
 #include <utility>
+#include <atomic>
+#include <cstring>
+#include <limits>
+#include <memory>
+#include <span>
+#include <vector>
 
 namespace RTE::CheckpointLua {
 	// The saver prepares ranges and header storage while the live pages stay writable.

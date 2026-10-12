@@ -5,6 +5,8 @@
 
 #include <string>
 #include <string_view>
+#include <list>
+#include <vector>
 
 /// BuyMenuGUI class
 /// @author Daniel Tabar

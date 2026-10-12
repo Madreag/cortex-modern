@@ -15,6 +15,8 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <array>
+#include <memory>
 #include "SettingsMan.h"
 #include "PresetMan.h"
 #include "AtomGroup.h"

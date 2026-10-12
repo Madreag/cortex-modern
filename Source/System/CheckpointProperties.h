@@ -2,6 +2,11 @@
 
 #include "CheckpointArchive.h"
 
+#include <cstring>
+#include <limits>
+#include <string_view>
+#include <vector>
+
 namespace RTE {
 
 	template<size_t Size> struct CheckpointPropertyName {

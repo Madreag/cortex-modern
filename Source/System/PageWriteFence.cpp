@@ -11,6 +11,7 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX

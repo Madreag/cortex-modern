@@ -29,6 +29,13 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <exception>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string_view>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
