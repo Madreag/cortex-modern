@@ -128,6 +128,8 @@ try:
         details[role + '_closes'] = closes
         details[role + '_connections'] = [line for line in logs[role].splitlines()
                                          if '[net-ice] connected' in line or '[net-peer-link]' in line]
+    checks['purposeful_retirement'] = any('[net-peer-link] retired source=local' in text for text in logs.values())
+    checks['retained_route_confirmed'] = any(re.search(r'retained_sent=[1-9]\d* retained_received=[1-9]\d*.*reader_detached=1', text) for text in logs.values())
     shared = sorted(set(hashes['host']) & set(hashes['guest']))
     differences = [tick for tick in shared if hashes['host'][tick] != hashes['guest'][tick]]
     checks['common_ticks'] = len(shared) >= 12000

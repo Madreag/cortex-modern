@@ -3838,6 +3838,7 @@ namespace RTE {
 			// drains its directory channel on the simulation thread.
 			const bool firstFixtureDial = PeerLinkFixturePort() && m_Config.peerCount == 2 && !PeerProbes().contains(agreed.peerId);
 			if (UsesPeerFrameGroups() && HasPeerFrameRoute(agreed.peerId) && !firstFixtureDial) continue;
+			if (UsesPeerFrameGroups() && m_Config.localPeerId < agreed.peerId) continue;
 			auto& probe = PeerProbes()[agreed.peerId];
 			const uint64_t patience = IsMigrationIceEndpoint(probe.address) ? c_MigrationIceDialMs : NetHostMigrationTimeouts::c_RetryMs;
 			if (probe.connection != c_InvalidNetPeerId || (probe.lastDialMs != 0 && nowMs < probe.lastDialMs + patience)) continue;
@@ -3876,7 +3877,10 @@ namespace RTE {
 				if (!authenticated(event, request, &readKey) || request.senderPeerId == 0 || request.senderPeerId > m_Config.peerCount || request.senderPeerId == m_Config.localPeerId) continue;
 				if (UsesPeerFrameGroups() && request.type >= NetHostMigrationMessageType::PeerInput) {
 					const auto binding = PeerListenerBindings().find(event.peerId);
-					if (binding != PeerListenerBindings().end() && binding->second == request.senderPeerId) HandlePeerFrameMessage(request, nowMs, &readKey);
+					if (binding != PeerListenerBindings().end() && binding->second == request.senderPeerId) {
+						if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->NoteFrameRead(*listener, event.peerId);
+						HandlePeerFrameMessage(request, nowMs, &readKey);
+					}
 					continue;
 				}
 				if (request.type == NetHostMigrationMessageType::Hello && request.successorPeerId == m_Config.localPeerId &&
@@ -3930,6 +3934,7 @@ namespace RTE {
 				NetHostMigrationMessage answer;
 				NetHash32 readKey;
 				if (UsesPeerFrameGroups() && authenticated(event, answer, &readKey) && answer.senderPeerId == peer && answer.type >= NetHostMigrationMessageType::PeerInput) {
+					if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->NoteFrameRead(*dial.transport, event.peerId);
 					HandlePeerFrameMessage(answer, nowMs, &readKey);
 					continue;
 				}
@@ -3940,6 +3945,7 @@ namespace RTE {
 					if (peer == GetHostPeerId()) NoteAuthorityHeard(nowMs);
 				}
 			}
+			if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->RetireSpareRoutes(peer);
 			if (blackout || dial.connection == c_InvalidNetPeerId || (dial.lastHelloMs != 0 && nowMs < dial.lastHelloMs + 1000)) continue;
 			auto hello = MigrationMessage(NetHostMigrationMessageType::Hello);
 			hello.generation = UsesPeerFrameGroups() ? 1 : m_MigrationGeneration + (IsMigrating() ? 0 : 1); hello.successorPeerId = peer;
@@ -11530,7 +11536,10 @@ namespace RTE {
 					const auto binding = PeerPrimaryBindings().find(event.peerId);
 					const auto native = m_RemoteTransports.find(message.senderPeerId);
 					if ((binding != PeerPrimaryBindings().end() && binding->second == message.senderPeerId) ||
-					    (native != m_RemoteTransports.end() && native->second == event.peerId)) HandlePeerFrameMessage(message, nowMs, &readKey);
+					    (native != m_RemoteTransports.end() && native->second == event.peerId)) {
+						if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->NoteFrameRead(*m_Config.peerSessionLinks->primary, event.peerId);
+						HandlePeerFrameMessage(message, nowMs, &readKey);
+					}
 				}
 				return;
 			}

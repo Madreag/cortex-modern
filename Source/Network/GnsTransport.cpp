@@ -549,7 +549,7 @@ namespace RTE {
 			return text;
 		}
 
-		void Disconnect(NetPeerId peerId, const std::string& reason) {
+		void Disconnect(NetPeerId peerId, const std::string& reason, bool retirement = false) {
 			const auto connectionIt = m_ConnectionsByPeer.find(peerId);
 			if (!m_Interface || connectionIt == m_ConnectionsByPeer.end()) {
 				return;
@@ -564,7 +564,7 @@ namespace RTE {
 			// GNS reports nothing for a close we made ourselves, and forgetting the handle means its own
 			// later callback finds no peer either. A peer leaving must look the same to us however it
 			// went, or state keyed on the connection - a held seat, most of all - is never cleaned up.
-			DiagnosticLine() << "[net-transport] closed peer=" << peerId << " reason=" << reason << " connection=" << connection
+			DiagnosticLine() << (retirement ? "[net-peer-link] retired source=local peer=" : "[net-transport] closed peer=") << peerId << " reason=" << reason << " connection=" << connection
 			    << " side=" << (m_IsHost ? "host" : "client") << " remote=" << closing.remoteIdentity << std::endl;
 			m_PendingEvents.push_back({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason});
 		}
@@ -966,7 +966,8 @@ namespace RTE {
 				                 << " limit_ms=" << GnsTransport::IceConnectTimeoutMs() << std::endl;
 			}
 			ForgetConnection(connection);
-			DiagnosticLine() << "[net-transport] closed peer=" << peerId << " reason=" << reason << " connection=" << connection
+			const bool retirement = closedByPeer && reason == c_NetPeerLinkRetiredText;
+			DiagnosticLine() << (retirement ? "[net-peer-link] retired source=remote peer=" : "[net-transport] closed peer=") << peerId << " reason=" << reason << " connection=" << connection
 			    << " side=" << (m_IsHost ? "host" : "client") << " remote=" << remote << " end_reason=" << endReason << std::endl;
 			m_PendingEvents.push_back({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason, closedByPeer});
 		}
@@ -1129,6 +1130,7 @@ namespace RTE {
 
 		GnsPeerConnectionInfo ConnectionInfo(HSteamNetConnection connection, NetPeerId peerId) const {
 			GnsPeerConnectionInfo result;
+			result.connectionId = connection;
 			result.peerId = peerId;
 			SteamNetConnectionInfo_t info{};
 			if (!m_Interface || !m_Interface->GetConnectionInfo(connection, &info)) {
@@ -1435,7 +1437,7 @@ namespace RTE {
 			return false;
 		}
 
-		void Disconnect(NetPeerId, const std::string&) {}
+		void Disconnect(NetPeerId, const std::string&, bool = false) {}
 		void Stop() {}
 		std::vector<NetTransportEvent> PollEvents() { return {}; }
 		uint32_t GetPeerPingMs(NetPeerId) { return 0; }
@@ -1513,6 +1515,11 @@ namespace RTE {
 	void GnsTransport::Disconnect(NetPeerId peerId, const std::string& reason) {
 		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		m_Impl->Disconnect(peerId, reason);
+	}
+
+	void GnsTransport::RetirePeerLink(NetPeerId peerId) {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
+		m_Impl->Disconnect(peerId, c_NetPeerLinkRetiredText, true);
 	}
 
 	void GnsTransport::Stop() {
