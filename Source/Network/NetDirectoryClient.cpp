@@ -323,7 +323,7 @@ namespace RTE {
 				// The row is the successor's now: this host neither keeps it alive nor deletes it.
 				break;
 			case State::Failed:
-				if (!m_Listed) {
+				if (!m_Listed && !m_SessionGone) {
 					if (m_SessionId.empty()) {
 						SetState(State::Idle);
 					} else {
