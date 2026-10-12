@@ -152,7 +152,8 @@ class FightPaceTest(unittest.TestCase):
         _, evidence = video.item_evidence(record, {"id": "fight-hashes-host", "mark": "fight-ended-host", "gate": "fight-hashes"})
         self.assertEqual(evidence["probe"], "not-reached")
         self.assertEqual(evidence["assertions"], [verdict])
-        self.assertEqual(evidence["reason"], "No recorded marker fight-ended-host; the fight-hashes gate is FAIL: joiner: state differs at tick 3083")
+        self.assertEqual(evidence["reason"], "No recorded marker fight-ended-host; the fight-hashes gate is FAIL: "
+                                             "first differing tick 3083 in particles; joiner: state differs at tick 3083")
 
     def test_the_review_carries_the_line(self):
         peer = self.root / "host"

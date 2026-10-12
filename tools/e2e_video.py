@@ -1666,8 +1666,10 @@ def item_evidence(record, item, port=None):
             gate = record.get("gates", {}).get(item["gate"]) if item.get("gate") else None
             if gate:
                 # The run ended before the item's picture, but the gate was still judged; the item says what it found.
+                first = gate.get("first_difference")
+                found = [f"first differing tick {first.get('tick')} in {', '.join(first.get('components', []))}"] if first else []
                 missing.update(assertions=[gate], reason=missing["reason"] + f"; the {item['gate']} gate is {gate.get('status')}: "
-                               + "; ".join(map(str, gate.get("errors", [])[:3])))
+                               + "; ".join(found + list(map(str, gate.get("errors", [])[:3]))))
             return None, missing
         index = starts[0]
         start = events[index]["wall_ms"]
