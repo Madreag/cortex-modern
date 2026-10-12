@@ -1194,8 +1194,11 @@ namespace RTE {
 		uint64_t m_MigrationGeneration = 0;
 		NetHash32 m_MigrationKey{};
 		// A returning seat's session reads the round's frame key the rejoin capsule delivers, from any thread.
-		struct RejoinFrameKey { std::mutex mutex; NetHash32 key{}; };
+		struct RejoinFrameKey { std::mutex mutex; NetHash32 key{}; std::deque<std::vector<uint8_t>> returnCertificates; };
 		std::shared_ptr<RejoinFrameKey> m_RejoinFrameKey;
+		uint64_t m_ReturnWaitLoggedFor = 0; //!< The return whose missing certificate was last named, why, and how often.
+		std::string m_ReturnWaitLoggedWhy;
+		size_t m_ReturnWaitLines = 0;
 		std::vector<uint8_t> m_MigrationAdmissionState;
 		std::vector<uint8_t> m_LastMigrationAdmissionState;
 		uint8_t m_MigrationAuthority = 0;

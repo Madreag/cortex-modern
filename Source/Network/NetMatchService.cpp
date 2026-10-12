@@ -6362,7 +6362,7 @@ static std::string ResyncSaveName() {
 		live = m_CatchUpCoordinator->GetConfig();
 		if (m_Coordinator) {
 			const auto& previous = m_Coordinator->GetConfig();
-			live.peerFrameGroups = previous.peerFrameGroups; live.peerSessionLinks = previous.peerSessionLinks;
+			live.peerFrameGroups = previous.peerFrameGroups || NetMatchRunner::UsesPeerFraming(live.matchConfig); live.peerSessionLinks = previous.peerSessionLinks;
 			live.frameTieReferee = previous.frameTieReferee; live.hostChangeReferee = previous.hostChangeReferee;
 			live.migrationTransportFactory = previous.migrationTransportFactory; live.migrationIceDial = previous.migrationIceDial; live.migrationIceHost = previous.migrationIceHost;
 		}
@@ -6399,13 +6399,29 @@ static std::string ResyncSaveName() {
 		if (live.peerFrameGroups && m_Coordinator)
 			(void)m_Coordinator->AdoptPeerReturnConfig(live, *m_CatchUpCoordinator, m_WorldCatchUp.activationTick);
 		// A seat that came back through its ticket kept the host's certificate from its own link.
-		if (live.peerFrameGroups && !live.initialSeatReclaims.contains(m_LocalPeerId))
-			for (const auto& event: m_CatchUpWirePackets) {
-				NetHostMigrationMessage proof;
-				if (NetHostMigrationCodec::LooksLikePacket(event.bytes) && NetHostMigrationCodec::Decode(event.bytes, m_MigrationKey, proof) &&
-				    proof.type == NetHostMigrationMessageType::PeerBridgeCommit && proof.preparedFrame == 1 && proof.frame == m_WorldCatchUp.activationTick &&
-				    m_CatchUpCoordinator->AdoptPeerReturn(live, *m_CatchUpCoordinator, proof, m_WorldCatchUp.activationTick)) break;
+		if (live.peerFrameGroups && !live.initialSeatReclaims.contains(m_LocalPeerId)) {
+			std::vector<std::vector<uint8_t>> candidates;
+			for (const auto& event: m_CatchUpWirePackets) if (NetHostMigrationCodec::LooksLikePacket(event.bytes)) candidates.push_back(event.bytes);
+			if (m_RejoinFrameKey) {
+				std::lock_guard<std::mutex> frameLock(m_RejoinFrameKey->mutex);
+				candidates.insert(candidates.end(), m_RejoinFrameKey->returnCertificates.begin(), m_RejoinFrameKey->returnCertificates.end());
 			}
+			std::string why = "none has arrived";
+			for (const auto& bytes: candidates) {
+				NetHostMigrationMessage proof;
+				if (!NetHostMigrationCodec::Decode(bytes, m_MigrationKey, proof) || proof.type != NetHostMigrationMessageType::PeerBridgeCommit ||
+				    proof.preparedFrame != 1 || proof.frame != m_WorldCatchUp.activationTick) continue;
+				if (m_CatchUpCoordinator->AdoptPeerReturn(live, *m_CatchUpCoordinator, proof, m_WorldCatchUp.activationTick, &why)) break;
+			}
+			if (m_ReturnWaitLoggedFor != m_WorldCatchUp.activationTick) {
+				m_ReturnWaitLoggedFor = m_WorldCatchUp.activationTick; m_ReturnWaitLoggedWhy.clear(); m_ReturnWaitLines = 0;
+			}
+			if (!live.initialSeatReclaims.contains(m_LocalPeerId) && why != m_ReturnWaitLoggedWhy && m_ReturnWaitLines < 8) {
+				m_ReturnWaitLoggedWhy = why; ++m_ReturnWaitLines;
+				System::PrintDiagnosticLine("[net-match] held client: the return at " + std::to_string(m_WorldCatchUp.activationTick) + " has no certificate this seat can adopt (" + why +
+				                            ") at replayed frame " + std::to_string(m_WorldCatchUp.appliedThrough));
+			}
+		}
 		if (live.matchConfig.peerInputDelayFrames.empty()) live.matchConfig.peerInputDelayFrames.resize(live.peerCount, live.matchConfig.inputDelayFrames);
 		for (const auto& [peer, changes]: live.initialDelayChanges) {
 			const auto at = changes.upper_bound(m_WorldCatchUp.activationTick);
@@ -10621,7 +10637,14 @@ static std::string ResyncSaveName() {
 					key = frameKey->key;
 				}
 				NetHostMigrationMessage message;
-				return NetHostMigrationCodec::Decode(bytes, key, message) && message.sessionId == sessionId;
+				if (!NetHostMigrationCodec::Decode(bytes, key, message) || message.sessionId != sessionId) return false;
+				// The host's return certificate is what this seat's live round starts on.
+				if (message.type == NetHostMigrationMessageType::PeerBridgeCommit && message.preparedFrame == 1) {
+					std::lock_guard<std::mutex> lock(frameKey->mutex);
+					frameKey->returnCertificates.push_back(bytes);
+					if (frameKey->returnCertificates.size() > 8) frameKey->returnCertificates.pop_front();
+				}
+				return true;
 			});
 			System::PrintDiagnosticLine("[net-match] rejoin phase Active -> Connecting");
 			session->SetRejoinPhase(NetSession::RejoinPhase::Connecting);
