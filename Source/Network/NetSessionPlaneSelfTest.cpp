@@ -1056,7 +1056,8 @@ namespace RTE {
 			for (; hub.now < 8500;) {
 				if (!step(false)) return false;
 				if (answered) returningSession.Tick(hub.now);
-				if (returningSession.IsReady()) { answerAt = hub.now; break; }
+				if (!answerAt && returningSession.IsReady()) answerAt = hub.now;
+				if (answerAt && hostSession.GetReadyPeers().size() == 1) break;
 			}
 			const auto ready = hostSession.GetReadyPeers();
 			const bool live = rounds[0]->IsRunning() && applied[0] > before + 60;
