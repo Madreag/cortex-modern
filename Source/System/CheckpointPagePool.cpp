@@ -565,10 +565,26 @@ void CheckpointPagePool::Snapshot::Arm() const {
 		}
 		try {
 			m_ArmGate->simThread = std::this_thread::get_id();
-			for (const auto& part: m_Parts) {
-				const auto [copied, fenced] = part.block->ArmInventory(*part.copy);
-				m_ArmGate->copiedPages += copied; m_ArmGate->fencedPages += fenced;
+			// The written pages are copied by several threads while the simulation waits; each block arms under its own lock.
+			std::atomic<size_t> next = 0, copiedPages = 0, fencedPages = 0;
+			const auto arm = [&] {
+				for (size_t index; (index = next.fetch_add(1, std::memory_order_relaxed)) < m_Parts.size();) {
+					const auto [copied, fenced] = m_Parts[index].block->ArmInventory(*m_Parts[index].copy);
+					copiedPages += copied; fencedPages += fenced;
+				}
+			};
+			const unsigned helperCount = std::clamp(std::thread::hardware_concurrency() / 2, 2u, 8u) - 2;
+			std::vector<std::future<void>> helpers;
+			std::exception_ptr failure;
+			try {
+				for (unsigned helper = 0; helper < helperCount; ++helper) helpers.push_back(std::async(std::launch::async, arm));
+				arm();
+			} catch (...) { failure = std::current_exception(); next.store(m_Parts.size()); }
+			for (auto& helper: helpers) {
+				try { helper.get(); } catch (...) { if (!failure) failure = std::current_exception(); }
 			}
+			if (failure) std::rethrow_exception(failure);
+			m_ArmGate->copiedPages = copiedPages; m_ArmGate->fencedPages = fencedPages;
 			m_ArmGate->Publish(ArmGate::State::Armed);
 			return;
 		} catch (...) { Cancel(); throw; }

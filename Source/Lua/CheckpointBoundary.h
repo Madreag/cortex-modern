@@ -7,6 +7,8 @@
 #include <bit>
 #include <array>
 #include <chrono>
+#include <exception>
+#include <future>
 #include <utility>
 
 namespace RTE::CheckpointLua {
@@ -69,12 +71,22 @@ namespace RTE::CheckpointLua {
 			Status expected = Status::Prepared;
 			if (!m_Status.compare_exchange_strong(expected, Status::Arming, std::memory_order_acq_rel)) return false;
 			try {
-				if (!m_Native->Arm()) { Cancel(); return false; }
+				// The Lua heaps are fenced on another thread while this one arms the native pages.
+				auto heaps = std::async(std::launch::async, [this] {
+					const auto begun = std::chrono::steady_clock::now();
+					bool armed = true;
+					for (Heap& heap: m_Heaps) if (!heap.lease.Arm(*heap.prepared)) { armed = false; break; }
+					return std::pair{armed, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begun).count()};
+				});
+				bool nativeArmed = false;
+				std::exception_ptr failure;
+				try { nativeArmed = m_Native->Arm(); } catch (...) { failure = std::current_exception(); }
 				const auto nativeFenced = std::chrono::steady_clock::now();
-				for (Heap& heap: m_Heaps) if (!heap.lease.Arm(*heap.prepared)) { Cancel(); return false; }
+				const auto [heapsArmed, heapsUs] = heaps.get();
 				const auto fenced = std::chrono::steady_clock::now();
-				m_ArmSplitUs = {std::chrono::duration_cast<std::chrono::microseconds>(nativeFenced - started).count(),
-				    std::chrono::duration_cast<std::chrono::microseconds>(fenced - nativeFenced).count()};
+				if (failure) std::rethrow_exception(failure);
+				if (!nativeArmed || !heapsArmed) { Cancel(); return false; }
+				m_ArmSplitUs = {std::chrono::duration_cast<std::chrono::microseconds>(nativeFenced - started).count(), heapsUs};
 				for (const auto& root: m_Roots) std::memcpy(const_cast<void*>(root.view), root.source, root.bytes);
 				if (parts) {
 					(*parts)[1] = std::chrono::duration_cast<std::chrono::microseconds>(fenced - started).count();
