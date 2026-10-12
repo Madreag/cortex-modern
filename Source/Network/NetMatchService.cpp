@@ -8313,7 +8313,14 @@ static std::string ResyncSaveName() {
 		if (m_State == NetMatchServiceState::Running && m_Coordinator &&
 		    m_Coordinator->GetState() == NetLockstepState::WaitingForStart && m_Coordinator->GetConfig().requirePublishedStart)
 			snapshot.serviceState = StateName(NetMatchServiceState::Starting);
-		snapshot.statusText = m_StatusText;
+		const std::string directoryWaiting = m_ReconnectClient.DirectoryWaitingText();
+		snapshot.statusText = directoryWaiting.empty() ? m_StatusText : directoryWaiting;
+		if (!directoryWaiting.empty()) {
+			snapshot.waitLine = directoryWaiting;
+			m_DirectoryWaitLine = directoryWaiting;
+		} else if (m_StatusText.rfind("The directory is busy.", 0) == 0) {
+			m_DirectoryWaitLine = m_StatusText;
+		}
 		snapshot.migrating = m_Coordinator && m_Coordinator->IsMigrating();
 		snapshot.hostLost = snapshot.migrating && m_Coordinator->GetMigrationPhase() == NetHostMigrationPhase::Contacting;
 		if (snapshot.migrating) {
