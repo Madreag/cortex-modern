@@ -1382,6 +1382,33 @@ class DirectoryTests(unittest.TestCase):
         for budget in ("heartbeat", "admission"):
             self.assertIsNone(limiter.check("another000000000", "192.0.2.1", 1, False, budget))
 
+    def test_connection_busy_reply_has_retry_header(self) -> None:
+        self.start(port=0)
+        status, row = self.register()
+        self.assertEqual(status, 200)
+        sid, token = row["session_id"], row["token"]
+        self.assertEqual(self.beat(sid, token)[0], 200)
+        player = Ed25519PrivateKey.generate()
+        participant = player.public_key().public_bytes_raw().hex()
+        path = f"/v1/sessions/{sid}/connections"
+        status, lease = self.call("POST", path, dict(connection_protocol=1, operation="issue", token=token, host_generation=0,
+            epoch="10" * 16, seat=1, generation=1, credential="20" * 32, host_session=42,
+            network_protocol=NETWORK_PROTOCOL_VERSION, participant=participant, name="Returning player"))
+        self.assertEqual(status, 200)
+        def check_in():
+            data = dict(session_id=sid, seat_token=lease["seat_token"], instance="30" * 16,
+                        nonce=uuid.uuid4().hex, sent_at=int(time.time()),
+                        route=dict(ice_identity="", ice_virtual_port=0, listen_port=41012, listen_addrs=["127.0.0.1"], generation=1, state="connected"))
+            raw = json.dumps(data, separators=(",", ":")).encode()
+            return self.call("POST", path, dict(connection_protocol=1, operation="check-in", participant=participant,
+                signed_request=base64.b64encode(raw).decode(), signature=player.sign(REQUEST_DOMAIN + raw).hex()))
+        for index in range(64):
+            self.assertEqual(check_in()[0], 200)
+        status, refused = check_in()
+        self.assertEqual(status, 429)
+        self.assertEqual(refused["error"], "connection_busy")
+        self.assertGreaterEqual(refused["retry_after_s"], 119)
+
     def test_refused_heartbeat_keeps_the_host_through_its_wait(self) -> None:
         store = session_directory.SessionDirectory(15, 5)
         self.addCleanup(store.stop)

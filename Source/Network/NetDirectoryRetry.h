@@ -148,7 +148,16 @@ namespace RTE {
 		static void EndSession(const std::string& url, const std::string& install, const std::string& session, uint64_t nowMs) {
 			std::lock_guard lock(s_Mutex); auto& row = Find(url, install, nowMs);
 			if (row.ended.size() >= 32) row.ended.erase(row.ended.begin());
-			row.ended[session] = true;
+			row.ended.try_emplace(session, false);
+		}
+		static void SessionOpened(const std::string& url, const std::string& install, const std::string& session, uint64_t nowMs) {
+			std::lock_guard lock(s_Mutex); Find(url, install, nowMs).ended.erase(session);
+		}
+		static bool TakeEndedNotice(const std::string& url, const std::string& install, const std::string& session, uint64_t nowMs) {
+			std::lock_guard lock(s_Mutex); auto& ended = Find(url, install, nowMs).ended;
+			const auto found = ended.find(session);
+			if (found == ended.end() || found->second) return false;
+			found->second = true; return true;
 		}
 		static bool SessionEnded(const std::string& url, const std::string& install, const std::string& session, uint64_t nowMs) {
 			std::lock_guard lock(s_Mutex); return Find(url, install, nowMs).ended.contains(session);

@@ -9609,6 +9609,15 @@ static std::string ResyncSaveName() {
 		if (!s_AdmissionEnabled || m_State == NetMatchServiceState::Idle || m_LeftMatch) return;
 		const uint64_t wall = UnixNowMs(nullptr) / 1000;
 		m_ConnectionAuthority.Update(nowMs, wall);
+		std::string directoryUrl = g_SettingsMan.GetSessionDirectoryUrl();
+		while (!directoryUrl.empty() && directoryUrl.back() == '/') directoryUrl.pop_back();
+		if (!directoryUrl.empty() && directoryUrl.rfind("https://", 0) != 0) directoryUrl = "https://" + directoryUrl;
+		if (m_ConnectionAuthority.Ended() && NetDirectoryBudget::TakeEndedNotice(directoryUrl, g_SettingsMan.GetSessionDirectoryInstallKey(), m_ConnectionAuthority.DirectorySessionId(), nowMs)) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			const std::string line = "This match is no longer in the directory. Choose another game from Multiplayer.";
+			m_PendingToasts.push_back(line);
+			m_ErrorText = line;
+		}
 		if (m_IsHost && m_Coordinator) {
 			if (const auto host = m_ConnectionAuthority.Host(); host && host->generation > m_MigrationGeneration)
 				m_Coordinator->NoteDirectorySuperseded(host->generation);

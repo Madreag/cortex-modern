@@ -578,6 +578,7 @@ namespace RTE {
 				return;
 			}
 			m_SessionId = response.sessionId;
+			if (m_HttpTransport) NetDirectoryBudget::SessionOpened(m_BaseUrl, m_InstallKey, m_SessionId, nowMs);
 			m_Token = response.token;
 			m_AuthorityKey = response.authorityKey;
 			if (m_Row.persistentWorld) {
