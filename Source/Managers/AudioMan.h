@@ -25,6 +25,7 @@
 #include <unordered_set>
 #include <vector>
 #include <utility>
+#include <array>
 #include "fmod/fmod_errors.h"
 
 #define g_AudioMan AudioMan::Instance()
@@ -553,7 +554,11 @@ namespace RTE {
 			CheckpointBackend(const CheckpointBackend& source, CheckpointNativeSnapshot& snapshot);
 		};
 		std::unique_ptr<CheckpointBackend> m_CheckpointBackend;
+
+	private:
 		struct PlayingVoice;
+
+	protected:
 		AudioCheckpoint::Control* CheckpointGroup(size_t index);
 		void RecordCheckpointListener(int index, const FMOD_VECTOR& position, const FMOD_VECTOR* velocity, const FMOD_VECTOR& forward, const FMOD_VECTOR& up);
 		FMOD::ChannelControl* ReadCheckpointPlayback(int identity) const;
