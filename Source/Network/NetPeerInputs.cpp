@@ -183,6 +183,7 @@ namespace RTE {
 		if (message.sessionId != m_Config.sessionId || message.roundId != m_Config.matchConfig.roundId || message.configHash != m_RoundConfigHash ||
 		    message.senderPeerId == 0 || message.senderPeerId == m_Config.localPeerId || message.senderPeerId > m_Config.peerCount || message.generation != 1 || m_RemovedPeers.contains(message.senderPeerId)) return true;
 		const auto heard = [&] {
+			if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->progressAt[message.senderPeerId] = nowMs;
 			m_PeerLastHeardMs[message.senderPeerId] = nowMs;
 			m_PeerLinkHeardMs[message.senderPeerId] = nowMs;
 			m_Stats.peers[message.senderPeerId].lastHeardMs = nowMs;

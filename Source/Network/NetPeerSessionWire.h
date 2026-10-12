@@ -40,10 +40,14 @@ namespace RTE {
 		std::map<NetPeerId, std::pair<INetTransport*, NetPeerId>> admissions;
 		std::map<NetPeerId, std::pair<INetTransport*, NetPeerId>> admittedRoutes;
 		NetPeerId nextAdmission = 0x80000000U;
-		struct Pending { uint64_t sequence = 0; NetTransportLane lane; std::vector<uint8_t> bytes; uint64_t sendAfterMs = 0; std::array<uint8_t, 32> sendKey{}; };
+		struct Pending { uint64_t sequence = 0; NetTransportLane lane; std::vector<uint8_t> bytes; uint64_t sendAfterMs = 0; std::array<uint8_t, 32> sendKey{}; uint64_t previous = 0; bool acknowledged = false; uint64_t lastSentMs = 0; uint8_t repeats = 0; };
 		std::map<uint8_t, std::deque<Pending>> pending;
 		size_t pendingBytes = 0;
+		std::map<uint8_t, uint64_t> queuedThrough, acknowledgedThrough, progressAt;
 		std::map<uint8_t, uint64_t> received;
+		struct Incoming { uint64_t previous = 0; std::vector<uint8_t> bytes; std::array<uint8_t, 32> readKey{}; };
+		std::map<uint8_t, std::map<uint64_t, Incoming>> incoming;
+		size_t incomingBytes = 0;
 		std::deque<NetTransportEvent> events;
 		struct Closing { std::string reason; uint64_t deadlineMs = 0; };
 		std::map<uint8_t, Closing> closing;

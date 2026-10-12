@@ -55,6 +55,7 @@ namespace RTE {
 	void NetPeerSessionLinks::ForwardAdmission(INetTransport& wire, const NetTransportEvent& event) {
 		if (!sessionAttached) return;
 		const uint8_t peer = PeerOn(wire, event.peerId);
+		if (peer != 0 && event.type == NetTransportEventType::PacketReceived) progressAt[peer] = ClockMs();
 		NetPeerId route = SessionRoute(peer);
 		for (const auto& [handle, native]: admittedRoutes) if (native.first == &wire && native.second == event.peerId) route = handle;
 		for (const auto& [handle, native]: admissions) if (native.first == &wire && native.second == event.peerId) route = handle;
@@ -70,6 +71,9 @@ namespace RTE {
 				if (RouteTo(peer).first) return;
 				for (const auto& queued: pending[peer]) pendingBytes -= queued.bytes.size();
 				pending.erase(peer); received.erase(peer); closing.erase(peer);
+				queuedThrough.erase(peer); acknowledgedThrough.erase(peer); progressAt.erase(peer);
+				for (const auto& [sequence, queued]: incoming[peer]) incomingBytes -= queued.bytes.size();
+				incoming.erase(peer);
 			}
 		}
 		if (route == c_InvalidNetPeerId) {
@@ -96,6 +100,9 @@ namespace RTE {
 		for (const auto& item: pending[peer]) pendingBytes -= item.bytes.size();
 		pending.erase(peer); closing.erase(peer);
 		received.erase(peer);
+		queuedThrough.erase(peer); acknowledgedThrough.erase(peer); progressAt.erase(peer);
+		for (const auto& [sequence, queued]: incoming[peer]) incomingBytes -= queued.bytes.size();
+		incoming.erase(peer);
 	}
 
 	void NetPeerSessionLinks::SetSessionKey(const std::array<uint8_t, 32>& next) {
@@ -122,43 +129,75 @@ namespace RTE {
 		if (!sessionAttached || frameBlackout || message.sessionId != sessionId || message.roundId != 1 || message.generation != 1 ||
 		    message.configHash != NetHash32{} || message.senderPeerId == 0 || message.senderPeerId == localPeerId ||
 		    message.successorPeerId != localPeerId || SessionRoute(message.senderPeerId) == c_InvalidNetPeerId) return true;
+		progressAt[message.senderPeerId] = ClockMs();
 		if (message.type == NetHostMigrationMessageType::PeerSessionAck) {
 			if (!message.bytes.empty()) return true;
 			auto& queued = pending[message.senderPeerId];
-			if (!queued.empty() && queued.front().sequence == message.frame) {
+			for (auto& item: queued) if (item.sequence == message.frame) { item.acknowledged = true; break; }
+			while (!queued.empty() && queued.front().acknowledged) {
+				acknowledgedThrough[message.senderPeerId] = queued.front().sequence;
 				pendingBytes -= queued.front().bytes.size(); queued.pop_front();
 			}
 			return true;
 		}
-		if (message.frame == 0 || message.bytes.empty() ||
+		if (message.frame == 0 || message.appliedFrame >= message.frame || message.bytes.empty() ||
 		    (!NetProtocol::Decode(message.bytes).ok && !NetLobbyProtocol::Decode(message.bytes).ok &&
 		     !NetLockstepCodec::Decode(message.bytes, ControllerFrame::c_Version).ok)) return true;
-		if (message.frame > received[message.senderPeerId]) {
-			if (events.size() >= 512) return true;
-			received[message.senderPeerId] = message.frame;
-			events.push_back({NetTransportEventType::PacketReceived, SessionRoute(message.senderPeerId), NetTransportLane::ControlReliable, message.bytes, {}});
+		const auto acknowledge = [&](uint64_t sequence, const auto& replyKey) {
+			auto ack = message;
+			ack.type = NetHostMigrationMessageType::PeerSessionAck; ack.senderPeerId = localPeerId; ack.successorPeerId = message.senderPeerId;
+			ack.frame = sequence; ack.bytes.clear(); ack.totalBytes = 0;
+			std::vector<uint8_t> bytes;
+			if (NetHostMigrationCodec::Encode(ack, replyKey, bytes)) (void)SendTo(message.senderPeerId, NetTransportLane::ControlReliable, bytes);
+		};
+		if (message.frame <= received[message.senderPeerId]) { acknowledge(message.frame, readKey ? *readKey : key); return true; }
+		auto& waiting = incoming[message.senderPeerId];
+		if (!waiting.contains(message.frame)) {
+			if (waiting.size() >= 32 || incomingBytes + message.bytes.size() > 1024 * 1024) return true;
+			waiting.emplace(message.frame, Incoming{message.appliedFrame, message.bytes, readKey ? *readKey : key});
+			incomingBytes += message.bytes.size();
 		}
-		auto ack = message;
-		ack.type = NetHostMigrationMessageType::PeerSessionAck; ack.senderPeerId = localPeerId; ack.successorPeerId = message.senderPeerId;
-		ack.bytes.clear(); ack.totalBytes = 0;
-		std::vector<uint8_t> bytes;
-		if (NetHostMigrationCodec::Encode(ack, readKey ? *readKey : key, bytes)) (void)SendTo(message.senderPeerId, NetTransportLane::ControlReliable, bytes);
+		// A changed native path may deliver the later message first; keep its predecessor before applying it.
+		while (!waiting.empty() && events.size() < 512) {
+			const auto next = std::find_if(waiting.begin(), waiting.end(), [&](const auto& item) { return item.second.previous <= received[message.senderPeerId]; });
+			if (next == waiting.end()) break;
+			received[message.senderPeerId] = next->first;
+			incomingBytes -= next->second.bytes.size();
+			events.push_back({NetTransportEventType::PacketReceived, SessionRoute(message.senderPeerId), NetTransportLane::ControlReliable, std::move(next->second.bytes), {}});
+			acknowledge(next->first, next->second.readKey);
+			waiting.erase(next);
+			for (auto old = waiting.begin(); old != waiting.end() && old->first <= received[message.senderPeerId];) {
+				incomingBytes -= old->second.bytes.size(); old = waiting.erase(old);
+			}
+		}
 		return true;
 	}
 
 	void NetPeerSessionLinks::FlushSession(uint64_t nowMs) {
 		if (!sessionAttached || frameBlackout) return;
 		for (auto& [peer, queued]: pending) {
-			if (queued.empty() || nowMs < queued.front().sendAfterMs) continue;
-			auto& item = queued.front();
-			NetHostMigrationMessage message;
-			message.type = NetHostMigrationMessageType::PeerSession;
-			message.sessionId = sessionId; message.roundId = message.generation = 1;
-			message.senderPeerId = localPeerId; message.successorPeerId = peer;
-			message.frame = item.sequence; message.bytes = item.bytes; message.totalBytes = static_cast<uint32_t>(item.bytes.size());
-			std::vector<uint8_t> bytes;
-			if (NetHostMigrationCodec::Encode(message, item.sendKey, bytes)) (void)SendTo(peer, NetTransportLane::ControlReliable, bytes);
-			item.sendAfterMs = nowMs + 50;
+			size_t messages = 0, bytesDue = 0;
+			const auto [wire, route] = RouteTo(peer);
+			const uint64_t repeatMs = std::clamp<uint64_t>(wire ? 2ULL * wire->GetPeerPingMs(route) + 50 : 100, 100, 2000);
+			for (auto& item: queued) {
+				if (++messages > 16 || (bytesDue != 0 && bytesDue + item.bytes.size() > 128 * 1024)) break;
+				bytesDue += item.bytes.size();
+				if (item.acknowledged || nowMs < item.sendAfterMs) continue;
+				// A reader that is not polling gets a bounded reliable window until it speaks again.
+				if (item.repeats >= 3 && progressAt[peer] <= item.lastSentMs) continue;
+				if (progressAt[peer] > item.lastSentMs) item.repeats = 0;
+				NetHostMigrationMessage message;
+				message.type = NetHostMigrationMessageType::PeerSession;
+				message.sessionId = sessionId; message.roundId = message.generation = 1;
+				message.senderPeerId = localPeerId; message.successorPeerId = peer;
+				message.frame = item.sequence; message.bytes = item.bytes; message.totalBytes = static_cast<uint32_t>(item.bytes.size());
+				message.appliedFrame = item.previous;
+				std::vector<uint8_t> bytes;
+				if (NetHostMigrationCodec::Encode(message, item.sendKey, bytes) && SendTo(peer, NetTransportLane::ControlReliable, bytes)) {
+					item.lastSentMs = nowMs; ++item.repeats;
+				}
+				item.sendAfterMs = nowMs + repeatMs;
+			}
 		}
 		for (auto end = closing.begin(); end != closing.end();) {
 			const uint8_t peer = end->first;
@@ -220,7 +259,9 @@ namespace RTE {
 				if (error) *error = "the retained session outbox is full";
 				return false;
 			}
-			m_Links->pending[bound->second].push_back({m_Links->nextSequence++, lane, bytes, 0, m_Links->key});
+			const uint64_t sequence = m_Links->nextSequence++;
+			m_Links->pending[bound->second].push_back({sequence, lane, bytes, 0, m_Links->key, m_Links->queuedThrough[bound->second]});
+			m_Links->queuedThrough[bound->second] = sequence;
 			m_Links->pendingBytes += bytes.size();
 			return true;
 		}
@@ -242,6 +283,8 @@ namespace RTE {
 					if (decoded.ok && (std::holds_alternative<NetParticipantRemoval>(decoded.message.payload) || std::holds_alternative<NetDisconnect>(decoded.message.payload))) return false;
 					m_Links->pendingBytes -= item.bytes.size(); return true;
 				});
+				uint64_t previous = m_Links->acknowledgedThrough[bound->second];
+				for (auto& item: queued) { item.previous = previous; previous = item.sequence; item.sendAfterMs = 0; }
 				if (!queued.empty()) queued.front().sendAfterMs = 0;
 			}
 			m_Links->closing[bound->second] = {reason, m_Links->ClockMs() + 2000};
@@ -262,6 +305,8 @@ namespace RTE {
 		m_Links->sessionAttached = false;
 		m_Links->pending.clear(); m_Links->pendingBytes = 0; m_Links->events.clear();
 		m_Links->closing.clear();
+		m_Links->queuedThrough.clear(); m_Links->acknowledgedThrough.clear(); m_Links->progressAt.clear();
+		m_Links->incoming.clear(); m_Links->incomingBytes = 0;
 		m_Links->earlierKeys.clear();
 	}
 
