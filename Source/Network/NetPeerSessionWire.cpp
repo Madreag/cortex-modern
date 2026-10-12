@@ -125,7 +125,7 @@ namespace RTE {
 				if (RouteTo(peer).first) return;
 				for (const auto& queued: pending[peer]) pendingBytes -= queued.bytes.size();
 				pending.erase(peer); received.erase(peer); closing.erase(peer);
-				queuedThrough.erase(peer); acknowledgedThrough.erase(peer); progressAt.erase(peer);
+				queuedThrough.erase(peer); acknowledgedThrough.erase(peer); progressAt.erase(peer); rawReaders.erase(peer);
 				for (const auto& [sequence, queued]: incoming[peer]) incomingBytes -= queued.bytes.size();
 				incoming.erase(peer);
 			}
@@ -151,6 +151,7 @@ namespace RTE {
 		sessionRoutes[route] = peer;
 		admittedRoutes[route] = admitted->second;
 		admissions.erase(admitted);
+		rawReaders.insert(peer);
 		for (const auto& item: pending[peer]) pendingBytes -= item.bytes.size();
 		pending.erase(peer); closing.erase(peer);
 		received.erase(peer);
@@ -184,6 +185,7 @@ namespace RTE {
 		    message.configHash != NetHash32{} || message.senderPeerId == 0 || message.senderPeerId == localPeerId ||
 		    message.successorPeerId != localPeerId || SessionRoute(message.senderPeerId) == c_InvalidNetPeerId) return true;
 		progressAt[message.senderPeerId] = ClockMs();
+		rawReaders.erase(message.senderPeerId);
 		if (message.type == NetHostMigrationMessageType::PeerSessionAck) {
 			if (!message.bytes.empty()) return true;
 			auto& queued = pending[message.senderPeerId];
@@ -308,6 +310,9 @@ namespace RTE {
 		const NetLockstepPlaneGuard guard;
 		if (congested) *congested = false;
 		if (const auto bound = m_Links->sessionRoutes.find(peer); bound != m_Links->sessionRoutes.end()) {
+			// A returning seat replays privately on its raw link; wrapped traffic would wait for a reader that is not there yet.
+			if (m_Links->rawReaders.contains(bound->second) && m_Links->pending[bound->second].empty())
+				if (const auto [wire, native] = m_Links->RouteTo(bound->second); wire) return wire->Send(native, lane, bytes, error, congested);
 			if (bytes.empty() || bytes.size() > NetHostMigrationCodec::c_ChunkBytes || m_Links->pendingBytes + bytes.size() > 8 * 1024 * 1024 || m_Links->pending[bound->second].size() >= 256) {
 				if (congested) *congested = true;
 				if (error) *error = "the retained session outbox is full";
@@ -361,7 +366,7 @@ namespace RTE {
 		m_Links->closing.clear();
 		m_Links->queuedThrough.clear(); m_Links->acknowledgedThrough.clear(); m_Links->progressAt.clear();
 		m_Links->incoming.clear(); m_Links->incomingBytes = 0;
-		m_Links->earlierKeys.clear();
+		m_Links->earlierKeys.clear(); m_Links->rawReaders.clear();
 	}
 
 	std::vector<NetTransportEvent> NetPeerSessionWire::PollEvents() {

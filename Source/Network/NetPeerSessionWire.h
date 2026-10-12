@@ -7,6 +7,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <utility>
 
 namespace RTE {
@@ -39,6 +40,8 @@ namespace RTE {
 		std::map<NetPeerId, uint8_t> sessionRoutes;
 		std::map<NetPeerId, std::pair<INetTransport*, NetPeerId>> admissions;
 		std::map<NetPeerId, std::pair<INetTransport*, NetPeerId>> admittedRoutes;
+		// An admitted seat still reads its raw link until it speaks on this wire.
+		std::set<uint8_t> rawReaders;
 		struct FrameFlow { uint64_t sent = 0, received = 0, sentAtMs = 0, heardAtMs = 0; };
 		std::map<const INetTransport*, std::map<NetPeerId, FrameFlow>> frameFlow;
 		NetPeerId nextAdmission = 0x80000000U;
