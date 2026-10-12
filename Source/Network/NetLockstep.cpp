@@ -7015,6 +7015,8 @@ namespace RTE {
 			if (error) *error = "Your connection needs " + std::to_string(needed) + " delay frames; the match currently allows " + std::to_string(current) + ". Your seat remains under AI control.";
 			return false;
 		}
+		// A frame group's return names the seat's own delay, sized on its link; only the seat itself could change it live.
+		if (UsesPeerFrameGroups()) return true;
 		if (ProposeInputDelay(peerId, static_cast<uint16_t>(needed), FutureTimingFrame())) {
 			const auto stats = m_Stats.peers.find(peerId);
 			DiagnosticLine() << "[net-lockstep] delay proposal peer=" << static_cast<int>(peerId) << " from=" << current << " to=" << needed << " reason=rejoin"
