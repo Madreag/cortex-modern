@@ -1991,7 +1991,9 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		}
 		{
 			CheckpointText frozen;
+			CheckpointText frozenGroup, frozenProperties;
 			std::string expected;
+			std::string expectedProperties;
 			{
 				AtomGroup group;
 				for (int index = 0; index < 7; ++index) {
@@ -2000,14 +2002,24 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 					group.AddAtom(atom.release(), index % 3 + 1);
 				}
 				expected = group.SaveCheckpoint();
+				expectedProperties = Writer::Capture([&](Writer& writer) { group.CaptureSnapshotProperties(writer); }, 3).Text();
 				{
 					CheckpointWriter::BatchScope batch(true);
 					frozen = CheckpointWriter::CaptureNative([&group] { return group.SaveCheckpoint(); });
+					Atom::SnapshotScope atoms(true);
+					auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
+					auto* saved = snapshot->Object(&group);
+					snapshot->SealBoundary();
+					CheckpointNativeSnapshot::ReadScope read(snapshot.get());
+					frozenGroup = CheckpointWriter::CaptureNative([saved] { return saved->SaveCheckpoint(); });
+					frozenProperties = Writer::Capture([saved](Writer& writer) { saved->CaptureSnapshotProperties(writer); }, 3);
 				}
 				group.RemoveAtoms(2);
 			}
 			const auto actual = std::async(std::launch::async, [frozen] { return frozen.Text(); }).get();
-			check(actual == expected, "owned_atom_subgroups_resolve_indices_after_source_death");
+			check(actual == expected && frozenGroup.Text() == expected && frozenGroup.SharedText() == expected &&
+			    frozenProperties.Text() == expectedProperties && frozenProperties.SharedText() == expectedProperties,
+			    "owned_atom_subgroups_resolve_indices_after_source_death");
 		}
 		{
 			enum class SignedByte : int8_t { Low = -127 };
