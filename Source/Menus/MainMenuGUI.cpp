@@ -773,6 +773,9 @@ void MainMenuGUI::ShowMultiplayerScreen() {
 	// The saved name is what an unconnected landing starts from; a live lobby keeps the name it joined under.
 	if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
 		m_MultiplayerNameTextBox->SetText(SavedMultiplayerName());
+		if (netMatchState == NetMatchServiceState::Completed) {
+			m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(g_NetMatchService.GetStatusText()));
+		}
 	}
 	RefreshMultiplayerScreenControls(g_NetMatchService.GetLobbySnapshot());
 	m_MenuScreenChange = false;
