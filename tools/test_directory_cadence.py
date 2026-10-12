@@ -192,14 +192,14 @@ def menus(root, port, case):
         "combo_select ComboHostActivity P4 Alpha Duel\nwait_ms 300\n"
         f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\nactivate ButtonMultiplayerCreate\n"
         "wait_connected 2 80\nwait_remote_ready 80\nactivate ButtonMultiplayerStart\n"
-        "wait_lockstep 180 60\n" + ("wait_lockstep 4000 110\n" if case == "flood" else "wait_lockstep 2100 80\n" if case == "liveness" else "wait_lockstep 240 15\n") +
+        "wait_lockstep 180 60\n" + ("wait_lockstep 5200 110\n" if case == "flood" else "wait_lockstep 2100 80\n" if case == "liveness" else "wait_lockstep 240 15\n") +
         "open_local_pause\nactivate ButtonEndMatch\nactivate ButtonLeaveConfirm\nwait_round_end 10\nwait_ms 1000\nexit\n")
     guest = common + (
         "settext TextMultiplayerName Guest\nactivate ButtonMultiplayerJoinGame\nwait_ms 300\n"
         "activate ButtonJoinByAddress\nwait 4\nsettext TextJoinAddress 127.0.0.1\n"
         f"settext TextJoinPort {port}\nactivate ButtonJoinAddressGo\nwait_connected 2 80\n"
         "activate ButtonMultiplayerReady\nwait_lockstep 180 60\n" +
-        ("wait_lockstep 4000 110\n" if case == "flood" else "wait_lockstep 2100 80\n" if case == "liveness" else "wait_lockstep 240 15\n") + "exit\n")
+        ("wait_lockstep 5200 110\n" if case == "flood" else "wait_lockstep 2100 80\n" if case == "liveness" else "wait_lockstep 240 15\n") + "exit\n")
     paths = {}
     for role, content in (("host", host), ("guest", guest)):
         paths[role] = root / (role + ".menu.txt")
@@ -259,6 +259,7 @@ def main():
         reports = {role: json.loads((root / role / "match-report.json").read_text()) for role in runs
                    if (root / role / "match-report.json").is_file()}
         events = requests.rows
+        checks["engines_exit"] = all(record["exit_code"] == 0 and not record.get("timed_out") for record in records.values())
         waits, early = {}, []
         for event in events:
             group = (event["role"], event["kind"])
@@ -278,7 +279,8 @@ def main():
                 peak = max((sum(start <= at < start + 60000 for at in stamps) for start in stamps), default=0)
                 seat_counts[str(seat)] = peak
             busy = [event for event in events if event["error"] == "connection_busy"]
-            checks.update(acceptance_wait=bool(begin) and waiting, bounded_seat_posts=max(seat_counts.values()) <= 12,
+            checks.update(acceptance_wait=bool(begin) and waiting,
+                          blackout_completed=bool(re.search(r"\[net-link-blackout\] end .*elapsed_ms=60000", text["guest"])), bounded_seat_posts=max(seat_counts.values()) <= 12,
                           no_busy_seat=not busy)
             details.update(check_ins_per_60s=seat_counts, connection_busy=len(busy))
         elif args.case == "liveness":
