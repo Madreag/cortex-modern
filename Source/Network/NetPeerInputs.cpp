@@ -129,12 +129,16 @@ namespace RTE {
 		if (const auto bridge = m_PeerBridges.find(owner); bridge != m_PeerBridges.end() &&
 		    frame >= bridge->second.fromFrame && (!bridge->second.returnFrame || frame < *bridge->second.returnFrame))
 			return owner != m_Config.localPeerId || m_PeerCommittedTail.contains(frame);
+		return PeerGroupHasAuthority(PeerInputVoters(frame, owner));
+	}
+
+	uint32_t NetLockstepCoordinator::PeerInputVoters(uint64_t frame, uint8_t owner) const {
 		// A removed or released owner's input before its boundary is accepted by the seats that remain.
 		uint32_t accepted = m_RemovedPeers.contains(owner) || IsSeatReleased(owner) ? 0 : SeatBit(owner);
 		if (const auto receipts = m_PeerInputReceipts.find(owner); receipts != m_PeerInputReceipts.end())
 			for (const auto& [peer, through]: receipts->second)
 				if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer) && through > frame) accepted |= SeatBit(peer);
-		return PeerGroupHasAuthority(accepted);
+		return accepted;
 	}
 
 	std::optional<uint64_t> NetLockstepCoordinator::GetLocalInputAcceptedThrough() const {

@@ -1652,6 +1652,7 @@ namespace RTE {
 		void TickPeerFrameGroups(uint64_t nowMs);
 		bool PeerFrameBlackout(uint64_t nowMs);
 		bool PeerInputAccepted(uint64_t frame, uint8_t owner = 0) const;
+		uint32_t PeerInputVoters(uint64_t frame, uint8_t owner) const;
 		bool PeerGroupHasAuthority(uint32_t voters) const;
 		void SendForwardedPeerInput(const NetLockstepFrame& input, uint8_t onlyPeer);
 		void CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs);

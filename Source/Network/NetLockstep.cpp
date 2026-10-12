@@ -13110,6 +13110,8 @@ namespace RTE {
 			if (!LocalInputAccepted(m_Stats.nextFrame)) {
 				if (UsesPeerFrameGroups() && !WaitsForPlacement()) {
 					if (m_FirstMissingFrame != m_Stats.nextFrame) { m_FirstMissingFrame = m_Stats.nextFrame; m_FirstMissingMs = nowMs; }
+					// Half the seats that took our input is a tie only the referee can break; a seat that cannot answer never will.
+					CheckPeerFrameTie(m_Stats.nextFrame, PeerInputVoters(m_Stats.nextFrame, m_Config.localPeerId), nowMs);
 					if (ProposePeerBridge(m_Stats.nextFrame, nowMs)) continue;
 				}
 				m_AdvanceBlock = "own-input-acceptance";
