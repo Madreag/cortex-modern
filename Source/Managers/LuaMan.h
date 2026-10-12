@@ -135,6 +135,9 @@ namespace RTE {
 	/// the adapter header: it pulls in luabind, which only builds without conformance mode.
 	void DeleteEntityFromScript(Entity* entityToDelete);
 
+	/// Keeps every owned iterator container the live states release until the returned hold is gone, for a reader of a frozen copy.
+	std::shared_ptr<void> HoldOwnedLuaRanges();
+
 	/// Threaded Lua states, the same number on every machine. Lua globals are per state and an object's
 	/// state is its unique ID modulo this, so the count is a simulation input: it is a build constant,
 	/// never a setting. Changing it is a different build and the deterministic identity says so.

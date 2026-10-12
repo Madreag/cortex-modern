@@ -15,6 +15,7 @@
 #include "luabind/iterator_policy.hpp"
 #include "luabind/return_reference_to_policy.hpp"
 #include "CheckpointString.h"
+#include "CheckpointLuaIterators.h"
 
 namespace luabind::detail {
 

@@ -693,6 +693,7 @@ struct ActivityMan::PreparedAutosave {
 		AutosaveIdentity identity;
 		std::shared_ptr<CheckpointCaptureClock> clock = std::make_shared<CheckpointCaptureClock>();
 		std::shared_ptr<Written> written = std::make_shared<Written>();
+		std::shared_ptr<void> ranges;
 		Header() { clock->call = std::make_shared<CheckpointCaptureClock::Call>(); }
 		std::array<int64_t, 7>* BoundaryParts() noexcept { return &clock->call->parts; }
 	};
@@ -748,7 +749,10 @@ struct ActivityMan::PreparedAutosave {
 		if (!NetActorOwnership::CheckpointValuesReady() || !ContentFile::CheckpointSamplesReady() || (result.valid() && result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)) return false;
 		const long uid = MovableObject::GetUniqueIDCounter();
 		const uint64_t simDraws = g_SimRNG.GetDrawCount(), renderDraws = g_RenderRNG.GetDrawCount(), soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+		// The plan keeps the hold until it is replaced, so no frozen iterator outlives the container it describes.
+		auto ranges = HoldOwnedLuaRanges();
 		const bool accepted = queue.TryCapture(result, [&](Header& header) noexcept {
+			header.ranges = ranges;
 			clock = header.clock; header.clock->started = began;
 			clock->call->simulation = std::this_thread::get_id();
 #ifdef _WIN32

@@ -9961,6 +9961,36 @@ bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
 // Lua reaches a native's values only through luabind, so one seam reports every script-side write.
 // It arms apart from the table barrier because it costs nothing until a walk has armed an object;
 // it lives here because only this unit sees luabind's headers on every platform.
+namespace {
+	std::mutex s_HeldRangesMutex;
+	std::vector<std::pair<void*, void (*)(void*)>> s_HeldRanges;
+	int s_RangeHolds = 0;
+	bool HoldRangeContainer(void* container, void (*destroy)(void*)) noexcept {
+		std::lock_guard lock(s_HeldRangesMutex);
+		if (!s_RangeHolds) return false;
+		// Out of memory, a container is kept rather than freed under a reader.
+		try { s_HeldRanges.emplace_back(container, destroy); } catch (...) {}
+		return true;
+	}
+	[[maybe_unused]] const bool s_RangeHoldInstalled = (luabind::detail::iterator_retire = HoldRangeContainer, true);
+}
+
+std::shared_ptr<void> RTE::HoldOwnedLuaRanges() {
+	{
+		std::lock_guard lock(s_HeldRangesMutex);
+		++s_RangeHolds;
+	}
+	// A refused control block runs the release below, which balances the count.
+	return std::shared_ptr<void>(nullptr, [](void*) noexcept {
+		std::vector<std::pair<void*, void (*)(void*)>> released;
+		{
+			std::lock_guard lock(s_HeldRangesMutex);
+			if (--s_RangeHolds == 0) released.swap(s_HeldRanges);
+		}
+		for (const auto& [container, destroy]: released) destroy(container);
+	});
+}
+
 void RTE::ArmLuaCheckpointValueBarrier() {
 	luabind::detail::checkpoint_object_write = [](void* value) { CheckpointValueWritten(value); };
 }

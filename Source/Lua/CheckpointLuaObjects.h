@@ -5,7 +5,10 @@
 
 #include <luabind/detail/class_registry.hpp>
 #include <luabind/detail/object_rep.hpp>
+#include <luabind/iterator_policy.hpp>
 
+#include <cstddef>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
@@ -149,6 +152,40 @@ namespace RTE::CheckpointLua {
 			}
 			lua_settop(m_State, destination);
 		}
+		// A native iterator's range is read through its frozen container; the copy keeps only how to describe it.
+		struct FrozenRange {
+			lua_CFunction describe;
+			alignas(std::max_align_t) std::byte bytes[128];
+		};
+		static int DescribeFrozenRange(lua_State* state) {
+			auto* range = static_cast<FrozenRange*>(lua_touserdata(state, 1));
+			lua_pushlightuserdata(state, range->bytes);
+			lua_replace(state, 1);
+			return range->describe(state);
+		}
+		void PushFrozenRange(const TValue& value, lua_CFunction describe) {
+			if (m_Values.Remembered(value)) { m_Values.Push(value); return; }
+			const GCudata* source = udataV(&value);
+			const auto data = m_Heap.Read(source);
+			if (data.len > sizeof(FrozenRange::bytes)) throw std::runtime_error("a saved native iterator range is larger than its frozen copy");
+			auto* range = static_cast<FrozenRange*>(lua_newuserdata(m_State, sizeof(FrozenRange)));
+			range->describe = describe;
+			std::memcpy(range->bytes, m_Heap.ReadBytes(source + 1, data.len).data(), data.len);
+			static char metatableKey;
+			lua_pushlightuserdata(m_State, &metatableKey);
+			lua_rawget(m_State, LUA_REGISTRYINDEX);
+			if (lua_isnil(m_State, -1)) {
+				lua_pop(m_State, 1);
+				lua_newtable(m_State);
+				lua_pushcfunction(m_State, DescribeFrozenRange);
+				lua_setfield(m_State, -2, "__iterator_snapshot");
+				lua_pushlightuserdata(m_State, &metatableKey);
+				lua_pushvalue(m_State, -2);
+				lua_rawset(m_State, LUA_REGISTRYINDEX);
+			}
+			lua_setmetatable(m_State, -2);
+			m_Values.Remember(value, lua_gettop(m_State));
+		}
 		void PushNative(const TValue& value) {
 			if (tvisudata(&value)) {
 				if (DeclaredClass(udataV(&value))) PushClass(value);
@@ -158,15 +195,21 @@ namespace RTE::CheckpointLua {
 			if (tvisfunc(&value) && m_Heap.Read(&funcV(&value)->c.ffid) != FF_LUA) {
 				const auto* source = funcV(&value);
 				const int count = m_Heap.Read(&source->c.nupvalues);
+				const lua_CFunction native = m_Heap.Read(&source->c.f);
+				const lua_CFunction range = count > 0 ? luabind::detail::find_iterator_frozen(native) : nullptr;
 				for (int index = 0; index < count; ++index) lua_pushnil(m_State);
-				lua_pushcclosure(m_State, m_Heap.Read(&source->c.f), count);
+				lua_pushcclosure(m_State, native, count);
 				const int destination = lua_gettop(m_State);
 				auto* function = funcV(m_State->top - 1);
 				function->c.ffid = m_Heap.Read(&source->c.ffid);
 				setmref(function->c.pc, NativeEntry(m_Heap.Read(&source->c.pc)));
 				m_Values.Remember(value, destination);
 				for (int index = 0; index < count; ++index) {
-					try { m_Values.Push(m_Heap.Read(&source->c.upvalue[index])); }
+					const TValue upvalue = m_Heap.Read(&source->c.upvalue[index]);
+					try {
+						if (index == 0 && range && tvisudata(&upvalue)) PushFrozenRange(upvalue, range);
+						else m_Values.Push(upvalue);
+					}
 					catch (const std::runtime_error& error) { throw std::runtime_error(std::string(error.what()) + " in native closure upvalue " + std::to_string(index + 1)); }
 					if (!lua_setupvalue(m_State, destination, index + 1)) throw std::runtime_error("a saved native closure lost an upvalue");
 				}
