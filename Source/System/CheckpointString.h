@@ -36,10 +36,10 @@ namespace RTE {
 		template<class Iterator> CheckpointString(Iterator first, Iterator last) { Assign(std::string(first, last)); }
 		CheckpointString& operator=(const CheckpointString& other) { if (this != &other) Assign(other.Value()); return *this; }
 		CheckpointString& operator=(CheckpointString&& other) { if (this != &other) Assign(std::move(other)); return *this; }
-		CheckpointString& operator=(const std::string& value) { Assign(value); return *this; }
+		CheckpointString& operator=(const std::string& value) { Overwrite(value); return *this; }
 		CheckpointString& operator=(std::string&& value) { Assign(std::move(value)); return *this; }
-		CheckpointString& operator=(std::string_view value) { Assign(std::string(value)); return *this; }
-		CheckpointString& operator=(const char* value) { Assign(std::string(value)); return *this; }
+		CheckpointString& operator=(std::string_view value) { Overwrite(value); return *this; }
+		CheckpointString& operator=(const char* value) { Overwrite(value); return *this; }
 		CheckpointString& operator=(char value) { Assign(std::string(1, value)); return *this; }
 
 		const std::string& Value() const {
@@ -112,6 +112,19 @@ namespace RTE {
 			Bytes bytes;
 			if (mirrored) bytes.assign(value.begin(), value.end());
 			m_Value.swap(value); m_Bytes.swap(bytes); m_Mirrored = mirrored;
+		}
+		// A reader position is rewritten for every property a load reads, so both buffers keep their capacity.
+		void Overwrite(std::string_view value) {
+			const bool mirrored = CheckpointNativeStorage::Enabled();
+			if (mirrored && m_Mirrored) {
+				m_Bytes.assign(value.begin(), value.end());
+			} else {
+				Bytes bytes;
+				if (mirrored) bytes.assign(value.begin(), value.end());
+				m_Bytes.swap(bytes);
+			}
+			m_Value.assign(value.data(), value.size());
+			m_Mirrored = mirrored;
 		}
 		void Assign(CheckpointString&& other) {
 			if (CheckpointNativeStorage::Enabled() && !other.m_Mirrored) { Assign(other.Value()); other.clear(); }
