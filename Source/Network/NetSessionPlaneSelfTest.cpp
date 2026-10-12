@@ -1021,6 +1021,7 @@ namespace RTE {
 			std::string error;
 			const bool passed = CheckSceneLifecycle(name, &error);
 			std::cout << "[net-session-plane-selftest] " << (passed ? "PASS " : "FAIL ") << name << (error.empty() ? "" : ": " + error) << std::endl;
+			if (passed) std::cout << "[net-session-plane-selftest] PASS" << std::endl;
 			return passed ? 0 : 1;
 		}
 		std::vector<Case> rows;
