@@ -1078,7 +1078,6 @@ std::string Atom::CheckpointListSelfTestMismatch() {
 	if (empty.Text() != "0 " || empty.SharedText() != "0 ") return "empty atom list differs";
 	{
 		CheckpointNativeStorage::AllocationScope values(true);
-		AllocationScope ownedAtoms(true);
 		auto material = std::make_unique<Material>();
 		material->SetIndex(7);
 		auto atom = std::make_unique<Atom>();
@@ -1217,7 +1216,7 @@ int Atom::Save(Writer& writer) const {
 
 void* Atom::GetPoolMemory() {
 	std::lock_guard<std::mutex> guard(s_MemoryPoolMutex);
-	if (s_NativeAtomAllocation || ScenarioRunner::HasLockstepCoordinator()) {
+	if (s_NativeAtomAllocation || ScenarioRunner::HasLockstepCoordinator() || CheckpointNativeStorage::Enabled()) {
 		// The native pool stays alive through manager and static teardown.
 		if (!s_NativeAtomPool) s_NativeAtomPool = new NativeAtomPool;
 		if (s_NativeAtomPool->free.empty()) s_NativeAtomPool->pages.Grow(sizeof(Atom), std::max(s_PoolAllocBlockCount, 10), s_NativeAtomPool->free);
