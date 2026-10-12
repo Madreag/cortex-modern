@@ -1056,7 +1056,7 @@ namespace RTE {
 			for (; hub.now < 8500;) {
 				if (!step(false)) return false;
 				if (answered) returningSession.Tick(hub.now);
-				if (!answerAt && returningSession.IsReady()) answerAt = hub.now;
+				if (returningSession.IsReady()) { answerAt = hub.now; break; }
 			}
 			const auto ready = hostSession.GetReadyPeers();
 			const bool live = rounds[0]->IsRunning() && applied[0] > before + 60;
@@ -1100,10 +1100,18 @@ namespace RTE {
 			rounds[1]->SetSessionEventSink([&](const NetTransportEvent& event) { returningSession.InjectEvent(event, hub.now); });
 			applied[1] = activation - 1; produced[1] = activation; credits[1] = 0;
 			(void)rounds[0]->SendReturnerTheRoundFrom(2, activation);
-			for (const uint64_t until = hub.now + 3000; hub.now < until;) if (!step(true)) return false;
+			uint64_t reclaimedAt = 0;
+			for (const uint64_t until = hub.now + 3000; hub.now < until;) {
+				if (!step(true)) return false;
+				if (!reclaimedAt && applied[0] >= activation && !rounds[0]->HasHeldAISeat(2)) reclaimedAt = hub.now;
+			}
 			const uint64_t accepted = rounds[0]->m_PeerAcceptedThrough[2];
 			std::cout << "[net-session-scene] returned-input host_frame=" << applied[0] << " joiner_frame=" << applied[1]
-			          << " accepted_through=" << accepted << " holds=" << rounds[0]->GetStats().peers.at(2).holds << std::endl;
+			          << " accepted_through=" << accepted << " holds=" << rounds[0]->GetStats().peers.at(2).holds
+			          << " reclaimed_ms=" << (reclaimedAt ? reclaimedAt - answerAt : 0) << std::endl;
+			if (!reclaimedAt || reclaimedAt > answerAt + 2500) {
+				*error = "the returning seat missed its original two-and-a-half-second reclaim bound"; return false;
+			}
 			if (!rounds[0]->IsRunning() || !rounds[1]->IsRunning() || rounds[0]->HasHeldAISeat(2) || rounds[1]->HasHeldAISeat(2) ||
 			    std::min(applied[0], applied[1]) < activation + 100 || accepted < activation + 100 || rounds[0]->GetStats().peers.at(2).holds != 1) {
 				*error = "the answered returning seat did not resume its accepted input and live play"; return false;
