@@ -324,7 +324,11 @@ namespace RTE {
 
 	void NetDirectorySignalChannel::ScheduleRetry(uint64_t nowMs) {
 		auto& retry = m_ReplyKind == RequestKind::Post ? m_PostRetry : m_PollRetry;
-		retry.Failed(nowMs, m_RetryReply.statusCode, m_RetryReply.body, m_RetryReply.retryAfter, m_ReplyKind == RequestKind::Post ? "signal-post" : "signal-poll");
+		const uint64_t until = retry.Failed(nowMs, m_RetryReply.statusCode, m_RetryReply.body, m_RetryReply.retryAfter, m_ReplyKind == RequestKind::Post ? "signal-post" : "signal-poll");
+		const bool postQueueFull = m_ReplyKind == RequestKind::Post &&
+		    (m_RetryReply.statusCode == 400 || m_RetryReply.statusCode == 503) && ErrorCode(m_RetryReply.body) == "queue_full";
+		// A full post queue still needs its reader; other failed exchanges hold the whole channel.
+		if (!postQueueFull) m_NextAttemptMs = std::max(m_NextAttemptMs, until);
 	}
 
 	void NetDirectorySignalChannel::StartRequest(RequestKind kind, const Request& request) {
