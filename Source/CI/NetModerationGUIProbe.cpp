@@ -52,6 +52,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <sstream>
@@ -219,6 +220,7 @@ namespace {
 
 	// The wait for a script's activation tick or phase has its own deadline, counted from the load or the round's reset.
 	constexpr uint64_t c_DefaultActivationTimeoutMs = 600000;
+	constexpr size_t c_MaxScriptSteps = 1024;
 	bool ActivationPending(const Json& script, bool pending, uint64_t waitedMs) {
 		if (!pending) return false;
 		const uint64_t deadline = script.value("activation_timeout_ms", c_DefaultActivationTimeoutMs);
@@ -491,7 +493,7 @@ namespace {
 		Require(static_cast<bool>(input), "cannot read input script");
 		probe.script = Json::parse(input);
 		Require(probe.script.at("schema") == 1 && probe.script.at("steps").is_array(), "invalid script schema");
-		Require(!probe.script["steps"].empty() && probe.script["steps"].size() <= 1024, "invalid script length");
+		Require(!probe.script["steps"].empty() && probe.script["steps"].size() <= c_MaxScriptSteps, "invalid script length");
 		const auto timeout = probe.script.at("timeout_ms").get<uint64_t>();
 		Require(timeout > 0 && timeout <= 1800000, "invalid script deadline");
 		const auto activation = probe.script.value("activation_timeout_ms", c_DefaultActivationTimeoutMs);
@@ -1804,40 +1806,61 @@ bool RunCrossScopeSelfTest(std::string* error) {
 		const char* original = std::getenv("CC_TEST_NET_UI_SCRIPT");
 		const std::optional<std::string> originalPath = original ? std::optional<std::string>(original) : std::nullopt;
 		const auto input = root / "probe.json", output = root / "net-ui-result.json";
-		SDL_setenv_unsafe("CC_TEST_NET_UI_SCRIPT", input.string().c_str(), 1);
+		// Load reads the lever with std::getenv; SDL's Windows setter writes only the Win32 block, which getenv never sees.
+		const auto setScript = [](const char* value) {
+#ifdef _WIN32
+			_putenv_s("CC_TEST_NET_UI_SCRIPT", value ? value : "");
+#else
+			if (value) setenv("CC_TEST_NET_UI_SCRIPT", value, 1); else unsetenv("CC_TEST_NET_UI_SCRIPT");
+#endif
+		};
+		setScript(input.string().c_str());
 		bool loadErrors = true;
+		std::string loadDetails;
 		for (const std::string name: {"existing", "missing", "malformed", "over-cap"}) {
 			probe = Probe{};
 			std::filesystem::remove(input, ignored); std::filesystem::remove(output, ignored);
 			if (name == "existing") { std::ofstream file(output); file << "preserved receipt"; }
 			if (name == "malformed") { std::ofstream file(input); file << "{"; }
 			if (name == "over-cap") {
-				Json steps = Json::array(); for (int i = 0; i < 257; ++i) steps.push_back({{"op", "finish"}});
+				Json steps = Json::array(); for (size_t i = 0; i <= c_MaxScriptSteps; ++i) steps.push_back({{"op", "finish"}});
 				std::ofstream file(input); file << Json{{"schema", 1}, {"timeout_ms", 1000}, {"steps", steps}};
 			}
 			std::string failure;
 			try { Load(); } catch (const std::exception& e) { failure = e.what(); }
-			loadErrors &= !failure.empty() && !probe.done;
-			if (name == "existing") loadErrors &= failure == "probe result already exists" && !probe.resultStarted;
-			if (name == "missing") loadErrors &= failure == "cannot read input script";
-			if (name == "over-cap") loadErrors &= failure == "invalid script length";
+			bool good = !failure.empty() && !probe.done;
+			if (name == "existing") good &= failure == "probe result already exists" && !probe.resultStarted;
+			if (name == "missing") good &= failure == "cannot read input script";
+			if (name == "over-cap") good &= failure == "invalid script length";
 			probe.failed = probe.done = true;
 			probe.result["error"] = failure;
 			if (probe.resultStarted) WriteResult();
 			// A later render must neither read the invalid script nor replace the first error.
 			Process(Phase::Draw);
-			loadErrors &= probe.result.at("error") == failure;
-			std::ifstream file(output);
-			if (name == "existing") { std::string receipt; std::getline(file, receipt); loadErrors &= receipt == "preserved receipt"; }
-			else { Json receipt; file >> receipt; loadErrors &= receipt.at("error") == failure && receipt.at("pass") == false; }
+			good &= probe.result.at("error") == failure;
+			std::string text;
+			const bool present = std::filesystem::is_regular_file(output);
+			if (std::ifstream file(output, std::ios::binary); file) text.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+			std::string receiptState = !present ? "missing" : text.empty() ? "empty" : std::to_string(text.size()) + " bytes";
+			if (name == "existing") {
+				good &= text.substr(0, text.find('\n')) == "preserved receipt";
+			} else if (const Json receipt = Json::parse(text, nullptr, false); receipt.is_discarded() || !receipt.is_object()) {
+				good = false;
+				receiptState += " not a JSON object";
+			} else {
+				good &= receipt.value("error", Json()) == failure && receipt.value("pass", Json()) == false;
+			}
+			if (!good) loadDetails += (loadDetails.empty() ? "" : "; ") + name + ": load error '" + failure + "', receipt " + receiptState;
+			loadErrors &= good;
 		}
-		if (originalPath) SDL_setenv_unsafe("CC_TEST_NET_UI_SCRIPT", originalPath->c_str(), 1); else SDL_unsetenv_unsafe("CC_TEST_NET_UI_SCRIPT");
+		setScript(originalPath ? originalPath->c_str() : nullptr);
 		probe = std::move(saved);
 		MenuAutomation::SetArtifactDirectory(probe.directory.string());
 		std::filesystem::remove_all(root, ignored);
 		passed &= loadErrors;
-		if (!loadErrors) *error = "probe load rejection lost its first error or overwrote an existing receipt";
-		System::PrintDiagnosticLine("[net-match-selftest] " + std::string(loadErrors ? "PASS" : "FAIL") + " probe_preserves_load_errors_and_existing_receipts");
+		if (!loadErrors) *error = "probe load rejection lost its first error or overwrote an existing receipt (" + loadDetails + ")";
+		System::PrintDiagnosticLine("[net-match-selftest] " + std::string(loadErrors ? "PASS" : "FAIL") + " probe_preserves_load_errors_and_existing_receipts" +
+		                            (loadErrors ? "" : " (" + loadDetails + ")"));
 	}
 
 	// Lobby ticks cannot satisfy an opt-in round wait. The legacy clock remains the default.
