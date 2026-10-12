@@ -37,7 +37,7 @@ namespace RTE {
 		CheckpointString& operator=(const CheckpointString& other) { if (this != &other) Assign(other.Value()); return *this; }
 		CheckpointString& operator=(CheckpointString&& other) { if (this != &other) Assign(std::move(other)); return *this; }
 		CheckpointString& operator=(const std::string& value) { Overwrite(value); return *this; }
-		CheckpointString& operator=(std::string&& value) { Assign(std::move(value)); return *this; }
+		CheckpointString& operator=(std::string&& value) { Overwrite(std::move(value)); return *this; }
 		CheckpointString& operator=(std::string_view value) { Overwrite(value); return *this; }
 		CheckpointString& operator=(const char* value) { Overwrite(value); return *this; }
 		CheckpointString& operator=(char value) { Assign(std::string(1, value)); return *this; }
@@ -124,6 +124,13 @@ namespace RTE {
 				m_Bytes.swap(bytes);
 			}
 			m_Value.assign(value.data(), value.size());
+			m_Mirrored = mirrored;
+		}
+		void Overwrite(std::string&& value) {
+			const bool mirrored = CheckpointNativeStorage::Enabled();
+			if (mirrored && m_Mirrored) m_Bytes.assign(value.begin(), value.end());
+			else { Bytes bytes; if (mirrored) bytes.assign(value.begin(), value.end()); m_Bytes.swap(bytes); }
+			m_Value = std::move(value);
 			m_Mirrored = mirrored;
 		}
 		void Assign(CheckpointString&& other) {
