@@ -15,6 +15,7 @@
 #include "SceneLayer.h"
 #include "Scene.h"
 #include "MOPixel.h"
+#include "MOSParticle.h"
 #include "Actor.h"
 #include "GATutorial.h"
 #include "Controller.h"
@@ -1655,6 +1656,25 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		check(pageMismatch.empty(), "native_checkpoint_pages_preserve_overlapping_generations_and_outlive_the_pool", pageMismatch);
 		const auto hooksMismatch = MOSRotating::CheckpointHooksSelfTestMismatch();
 		check(hooksMismatch.empty(), "saved_attachment_hook_keys_outlive_source_objects", hooksMismatch);
+		{
+			CheckpointNativeStorage::AllocationScope resources(true);
+			struct Pictures : CheckpointNativeAllocated { MOSParticle first, second; };
+			auto source = std::make_unique<Pictures>();
+			source->first.SetPos(Vector(13, 17)); source->second.SetPos(Vector(19, 23));
+			source->first.SetPresetName(std::string(80, 'a')); source->second.SetPresetName(std::string(80, 'b'));
+			const auto* first = &source->first;
+			const auto* second = &source->second;
+			auto prepared = CheckpointNativeStorage::PrepareInventory();
+			if (!prepared->Arm()) throw std::runtime_error("picture owner inventory is stale");
+			source->first.SetPos(Vector(31, 37)); source->second.SetPresetName("changed"); source.reset();
+			CheckpointNativeStorage::ReadScope read(prepared->Pages());
+			const auto* savedFirst = CheckpointNativeStorage::Source(first);
+			const auto* savedSecond = CheckpointNativeStorage::Source(second);
+			check(savedFirst != first && savedSecond != second && CheckpointNativeStorage::Original(savedFirst) == first &&
+			      CheckpointNativeStorage::Original(savedSecond) == second && savedFirst->GetPos() == Vector(13, 17) &&
+			      savedSecond->GetPos() == Vector(19, 23) && savedFirst->GetPresetName() == std::string(80, 'a') &&
+			      savedSecond->GetPresetName() == std::string(80, 'b'), "saved_embedded_pictures_keep_values_after_owner_destruction");
+		}
 #ifdef _WIN32
 		{
 			auto& performance = s_CheckpointPerformance;
