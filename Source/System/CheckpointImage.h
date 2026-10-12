@@ -219,6 +219,15 @@ namespace RTE {
 	class CheckpointGraphIndex {
 	public:
 		static CheckpointGraphIndex& Get();
+		/// A frozen capture's private worker states run on the saver: while one is open on a thread, that thread records nothing
+		/// here and moves no write barrier, so the simulation's own writes never queue behind the saver's walk.
+		struct Detach {
+			Detach();
+			~Detach();
+			Detach(const Detach&) = delete;
+			Detach& operator=(const Detach&) = delete;
+		};
+		static bool Detached();
 
 		/// A world walk covers every state and retires the roots of states it no longer sees; a walk of one state leaves the others' entries and dirt in place.
 		void BeginWalk(bool full = true, bool world = true);

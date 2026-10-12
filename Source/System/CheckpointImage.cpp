@@ -60,9 +60,10 @@ namespace {
 	thread_local int s_BarrierPauseDepth = 0;
 	std::atomic<uint64_t> s_PausedForeignWrites{0};
 	thread_local int s_BarrierIgnored = 0;
+	thread_local int s_IndexDetached = 0;
 
 	void OnLuaTableWrite(void* table) {
-		if (s_BarrierIgnored > 0) return;
+		if (s_BarrierIgnored > 0 || s_IndexDetached > 0) return;
 		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) {
 			// A capturing thread's own scratch writes are its business; the callback stays installed so
 			// every table born in the capture still gets its trap.
@@ -82,7 +83,7 @@ namespace {
 	// does, so it is counted and attributed the same way. The write generation moves too: a capture
 	// that reuses the whole Lua half keys on it.
 	void OnLuaValueWrite(void* value) {
-		if (s_BarrierIgnored > 0) return;
+		if (s_BarrierIgnored > 0 || s_IndexDetached > 0) return;
 		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) {
 			if (s_BarrierPauseDepth > 0) {
 				return;
@@ -106,7 +107,12 @@ CheckpointGraphIndex& CheckpointGraphIndex::Get() {
 	return index;
 }
 
+CheckpointGraphIndex::Detach::Detach() { ++s_IndexDetached; }
+CheckpointGraphIndex::Detach::~Detach() { --s_IndexDetached; }
+bool CheckpointGraphIndex::Detached() { return s_IndexDetached > 0; }
+
 void CheckpointGraphIndex::BeginWalk(bool full, bool world) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	// A capture of every state opens the walk once; each state's own capture nests inside it.
 	if (m_WalkDepth++ > 0) return;
@@ -127,18 +133,21 @@ void CheckpointGraphIndex::BeginWalk(bool full, bool world) {
 }
 
 void CheckpointGraphIndex::BeginRoot(uint64_t root, const void* state, std::string part) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	m_Root = {state, root, std::move(part)};
 	if (m_Walk) m_WalkingRoots.insert(m_Root);
 }
 
 void CheckpointGraphIndex::ReuseRoot(uint64_t root, const void* state, const std::string& part) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	m_FullWalk = false;
 	m_ReusedRoots.insert({state, root, part});
 }
 
 void CheckpointGraphIndex::RestartStateWalk(const void* state) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	for (auto entry = m_Walking.begin(); entry != m_Walking.end();) {
 		std::erase_if(entry->second, [state](const Root& root) { return root.state == state; });
@@ -150,6 +159,7 @@ void CheckpointGraphIndex::RestartStateWalk(const void* state) {
 }
 
 void CheckpointGraphIndex::NoteTable(const void* table) {
+	if (s_IndexDetached > 0) return;
 	const auto start = std::chrono::steady_clock::now();
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || !table) return;
@@ -160,6 +170,7 @@ void CheckpointGraphIndex::NoteTable(const void* table) {
 }
 
 void CheckpointGraphIndex::NoteValue(const void* value) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || !value) return;
 	// A native's engine values are written into the chunk of the first root that reached it, so that
@@ -168,11 +179,13 @@ void CheckpointGraphIndex::NoteValue(const void* value) {
 }
 
 void CheckpointGraphIndex::NoteUncacheableRoots(size_t roots) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	m_UncacheableRoots += roots;
 }
 
 void CheckpointGraphIndex::EndWalk() {
+	if (s_IndexDetached > 0) return;
 	const auto start = std::chrono::steady_clock::now();
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || --m_WalkDepth > 0) return;
@@ -221,6 +234,7 @@ void CheckpointGraphIndex::EndWalk() {
 }
 
 void CheckpointGraphIndex::NoteRootReuse(size_t reused, size_t rewritten) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	// One walk covers every state, so the counts are the whole capture's, not the last state's.
 	if (m_Walk) {
@@ -235,6 +249,7 @@ void CheckpointGraphIndex::NoteRootReuse(size_t reused, size_t rewritten) {
 }
 
 void CheckpointGraphIndex::NoteWalkPart(const void* state, std::string part, uint64_t root, int64_t elapsedUs, bool reused, std::string unwatched) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	const auto found = !state && !m_WalkStates.empty() ? std::prev(m_WalkStates.end()) : std::find(m_WalkStates.begin(), m_WalkStates.end(), state);
 	const size_t index = found - m_WalkStates.begin();

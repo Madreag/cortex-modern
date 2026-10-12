@@ -4691,7 +4691,7 @@ static int ScriptGraphBeginCapture(lua_State* L) {
 	// opened by a single state's capture covers that state alone, unless a world walk encloses it.
 	CheckpointGraphIndex::Get().BeginWalk(true, false);
 	if (lua_toboolean(L, 1)) CheckpointGraphIndex::Get().RestartStateWalk(L);
-	s_GraphBarrierPauses[L].push_back(std::make_unique<LuaCheckpointBarrierPause>());
+	s_GraphBarrierPauses[L].push_back(CheckpointGraphIndex::Detached() ? nullptr : std::make_unique<LuaCheckpointBarrierPause>());
 	s_SerialBeforeCapture[L].push_back(static_cast<uint64_t>(luaL_optnumber(L, 2, static_cast<lua_Number>(luaJIT_state_serial(L)))));
 	s_GraphNativeCaptureScopes[L].push_back(s_GraphNativeCapture ? nullptr : std::make_unique<LuaScriptGraphNativeCaptureScope>());
 	// The helper wrappers this walk makes are noted in a scope of its own unless the engine's capture opened one.
@@ -7915,6 +7915,8 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 		const auto* source = CheckpointNativeStorage::Source(states[index]);
 		const auto* sourceValues = CheckpointNativeStorage::Source(static_cast<const CheckpointState*>(source->CheckpointOwnedValues()));
 		if (!sourceValues) throw std::logic_error("a saved script state has no owned values");
+		// The worker state is the saver's own copy: its walk and writes stay off the live index the simulation writes through.
+		const CheckpointGraphIndex::Detach detached;
 		LuaStateWrapper worker;
 		auto roots = snapshot->ReadValues();
 		const auto views = CheckpointNativeStorage::CurrentViews();
