@@ -862,7 +862,7 @@ namespace RTE {
 
 	bool NetSessionPlaneSelfTest::CheckSceneLifecycle(const std::string& name, std::string* error) {
 		Hub hub;
-		const uint8_t count = name == "rematch-chat" || name == "kick-received-two" || name == "heavy-input" ? 2 : 3;
+		const uint8_t count = name == "rematch-chat" || name == "kick-received-two" || name == "heavy-input" || name == "leave-rejoin-two" || name == "drop-after-input" ? 2 : 3;
 		hub.row = Case{"scene_lifecycle"}; hub.row.seats = count; hub.row.rttMs = hub.row.otherRttMs = 100;
 		auto ip = std::make_unique<Wire>(hub, 1);
 		auto relay = std::make_unique<Wire>(hub, 1);
@@ -910,6 +910,14 @@ namespace RTE {
 			if (count == 3) { config.peerInputDelayFrames[3] = delay; config.peerIncarnations[3] = 1; }
 			config.peerFrameGroups = config.substituteSlowPeers = true; config.simTickMs = c_TestTickMs;
 			config.slowPlayerBoundTicks = 3; config.frameLane = NetTransportLane::InputUnreliable; config.relayToOtherPeers = index == 0;
+			// An internet match's referee that has not decided a tie answers Waiting.
+			if (name == "leave-rejoin-two") config.frameTieReferee = [](const NetFrameTieRequest&) { NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Waiting; return reply; };
+			// The directory gives a tie to the group that holds the host.
+			if (name == "drop-after-input") config.frameTieReferee = [](const NetFrameTieRequest& request) {
+				NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Waiting;
+				if (!request.queryOnly && std::find(request.members.begin(), request.members.end(), request.host) != request.members.end()) { reply.state = NetFrameTieReply::State::Decided; reply.members = request.members; }
+				return reply;
+			};
 			config.migrationKey.fill(0x39); config.peerSessionLinks = links[index] = std::make_shared<NetPeerSessionLinks>();
 			links[index]->sessionClock = [&] { return hub.now; };
 			if (index == 0) for (const auto& peer: hostSession.GetReadyPeers()) config.remoteTransportPeerIds[peer.assignedPeerId + 1] = peer.transportPeerId;
@@ -1031,6 +1039,31 @@ namespace RTE {
 			if (played < 170 || worst > 1) { *error = "the host sent a committed input tick more than once on the reliable lane with no packet lost"; return false; }
 			return true;
 		}
+		if (name == "drop-after-input") {
+			auto& host = *rounds[0];
+			// The joiner's input for the frame we wait on has arrived; it leaves before it receipts our own input for that frame.
+			const auto arrived = [&] { const auto next = host.m_RemoteFrames.find(host.GetStats().nextFrame); return next != host.m_RemoteFrames.end() && next->second.contains(2); };
+			hostWithholds = true;
+			for (const uint64_t until = hub.now + 500; hub.now < until && !arrived();) if (!step(true)) return false;
+			if (!arrived()) { *error = "the joiner's input for the host's next frame never arrived ahead of it"; return false; }
+			clientWire.Stop();
+			hostWithholds = false;
+			const uint64_t begin = hub.now, before = applied[0];
+			uint64_t gap = 0, firstTwo = 0;
+			for (; hub.now < begin + 2000;) {
+				const uint64_t shown = displayedAt[0];
+				if (!step(false)) return false;
+				if (displayedAt[0] != shown) gap = std::max(gap, displayedAt[0] - std::max(shown, begin));
+				if (!firstTwo && applied[0] >= before + 2) firstTwo = hub.now - begin;
+			}
+			const bool held = host.m_PeerBridges.contains(2) && host.m_PeerBridges.at(2).committedHold;
+			std::cout << "[net-session-scene] drop-after-input before=" << before << " after=" << applied[0] << " two_updates_ms=" << firstTwo << " greatest_gap_ms=" << gap
+			          << " final_wait_ms=" << hub.now - displayedAt[0] << " held=" << held << " next=" << host.GetStats().nextFrame << std::endl;
+			if (!firstTwo || firstTwo > 50 || gap > 50 || hub.now - displayedAt[0] > 50 || applied[0] < before + 110 || !held) {
+				*error = "a joiner that left after its last input kept the host waiting instead of holding its seat"; return false;
+			}
+			return true;
+		}
 		if (name == "kick-received" || name == "kick-received-two") {
 			auto& host = *rounds[0];
 			// The host's own next input is late, so the removed player's input for that frame has arrived before the kick.
@@ -1051,7 +1084,8 @@ namespace RTE {
 				rounds[1]->Tick(hub.now); clientSession.Tick(hub.now, false);
 				for (size_t index = 0; index < count; ++index) {
 					if (index == 1) continue;
-					if (displayedAt[index] != previous[index]) gap[index] = std::max(gap[index], displayedAt[index] - previous[index]);
+					// The host's own late input before the kick is the row's setup, not a wait the kick caused.
+					if (displayedAt[index] != previous[index]) gap[index] = std::max(gap[index], displayedAt[index] - std::max(previous[index], begin));
 					if (!firstTwo[index] && applied[index] >= before[index] + 2) firstTwo[index] = hub.now - begin;
 				}
 			}
@@ -1143,7 +1177,10 @@ namespace RTE {
 			}
 			return true;
 		}
-		if (name == "leave-rejoin") {
+		if (name == "leave-rejoin" || name == "leave-rejoin-two") {
+			const bool two = count == 2;
+			uint64_t hostGap = 0;
+			const auto hostStep = [&](bool joinerPlaying) { const uint64_t shown = displayedAt[0]; if (!step(joinerPlaying)) return false; if (displayedAt[0] != shown) hostGap = std::max(hostGap, displayedAt[0] - shown); return true; };
 			unsigned directorySteps = 0; bool waitingDial = true, answered = false;
 			hostWire.SetPump([&] {
 				++directorySteps;
@@ -1154,13 +1191,13 @@ namespace RTE {
 			});
 			const uint64_t departure = hub.now, before = applied[0];
 			rounds[1]->Leave("Match left");
-			rounds[2]->Leave("Match left");
-			for (; hub.now < departure + 250;) if (!step(false)) return false;
+			if (!two) rounds[2]->Leave("Match left");
+			for (; hub.now < departure + 250;) if (!hostStep(false)) return false;
 			clientWire.Stop();
-			otherWire.Stop();
+			if (!two) otherWire.Stop();
 			uint64_t answerAt = 0;
 			for (; hub.now < 8500;) {
-				if (!step(false)) return false;
+				if (!hostStep(false)) return false;
 				if (answered) returningSession.Tick(hub.now);
 				if (!answerAt && returningSession.IsReady()) answerAt = hub.now;
 				if (answerAt && hostSession.GetReadyPeers().size() == 1) break;
@@ -1173,7 +1210,7 @@ namespace RTE {
 			std::cout << "[net-session-scene] departure-state next=" << rounds[0]->GetStats().nextFrame << " applied=" << applied[0]
 			          << " declarations=" << rounds[0]->m_PeerRoundEnds.size() << " authority=" << rounds[0]->PeerGroupHasAuthority(1)
 			          << " bridges=" << rounds[0]->m_PeerBridges.size() << " previous_retained=" << rounds[0]->m_MigrationHistory.contains(rounds[0]->GetStats().nextFrame - 1)
-			          << " waiting=" << rounds[0]->WaitsForPlacement() << " holds=" << rounds[0]->GetStats().peers.at(2).holds << "/" << rounds[0]->GetStats().peers.at(3).holds << std::endl;
+			          << " waiting=" << rounds[0]->WaitsForPlacement() << " holds=" << rounds[0]->GetStats().peers.at(2).holds << "/" << (two ? 0 : rounds[0]->GetStats().peers.at(3).holds) << std::endl;
 			if (!live || !held || !answerAt || answerAt > 8500 || ready.size() != 1 || returningSession.GetLocalPeerId() != 1) {
 				*error = "the last player's leave stopped the host or its returning dial was not answered within two seconds"; return false;
 			}
@@ -1196,6 +1233,8 @@ namespace RTE {
 				*error = "the return snapshot did not carry its committed activation"; return false;
 			}
 			config.initialSeatReclaims[2] = rounds[0]->m_ReclaimTransactions.at(2);
+			// A private catch-up reaches the agreed frame a moment after the return is agreed.
+			if (two) for (const uint64_t live = hub.now + 300; hub.now < live;) if (!hostStep(false)) return false;
 			config.peerIncarnations[2] = config.initialSeatReclaims.at(2).seatIncarnation;
 			if (config.initialSeatReclaims.at(2).activationFrame != activation || config.peerIncarnations.at(2) != 2) {
 				*error = "the return snapshot changed its activation or player incarnation"; return false;
@@ -1209,9 +1248,11 @@ namespace RTE {
 			(void)rounds[0]->SendReturnerTheRoundFrom(2, activation);
 			uint64_t reclaimedAt = 0;
 			for (const uint64_t until = hub.now + 3000; hub.now < until;) {
-				if (!step(true)) return false;
+				if (!hostStep(true)) return false;
 				if (!reclaimedAt && applied[0] >= activation && !rounds[0]->HasHeldAISeat(2)) reclaimedAt = hub.now;
 			}
+			std::cout << "[net-session-scene] returned-host-gap greatest_gap_ms=" << hostGap << std::endl;
+			if (two && hostGap > 50) { *error = "the host waited on a returning seat that had not started playing"; return false; }
 			const uint64_t accepted = rounds[0]->m_PeerAcceptedThrough[2];
 			std::cout << "[net-session-scene] returned-input host_frame=" << applied[0] << " joiner_frame=" << applied[1]
 			          << " accepted_through=" << accepted << " holds=" << rounds[0]->GetStats().peers.at(2).holds

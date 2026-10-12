@@ -159,5 +159,56 @@ class CommittedSceneTest(unittest.TestCase):
         check.assert_not_called()
 
 
+class SpreadFightTest(unittest.TestCase):
+    """Two boxes each bring one player's fight history; the collector keeps both and judges the fight once."""
+
+    GATE = {"fight_hash_gate": {"peers": ["host", "joiner"], "running_ticks": 3}}
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def half(self, role, actors="a1"):
+        from compare_sim_traces import CORE
+        run = self.root / role / "run0"
+        probe = run / f"{role}-stage" / "probe"
+        probe.mkdir(parents=True)
+        subsystems = {name: "h-" + name for name in CORE | {"controller", "scene", "terrain", "sim_rng", "lua_state"}}
+        rows = [dict(round=7, tick=tick, phase="live", paused=False, sim_gated=True,
+                     subsystems={**subsystems, "actors": actors if tick == 4 else "a1"}) for tick in range(1, 6)]
+        (probe / "ticks.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        peers.video.feel_probes(self.GATE, {"root": str(run), "peers": [{"peer": role}]}, {})
+        archive = self.root / f"{role}.tar"
+        import tarfile
+        with tarfile.open(archive, "w") as output:
+            for path in sorted(run.rglob("*")):
+                if path.is_file():
+                    output.add(path, arcname="run0/" + path.relative_to(run).as_posix(), recursive=False)
+        return archive
+
+    def collect(self, joiner_actors):
+        out = self.root / "collected"
+        out.mkdir()
+        for archive in (self.half("host"), self.half("joiner", joiner_actors)):
+            peers.unpack(archive, out)
+        capture = {"root": str(out / "run0"), "peers": [{"peer": "host"}, {"peer": "joiner"}]}
+        return out, capture, peers.video.fight_hash_gate(self.GATE, capture)
+
+    def test_both_players_histories_are_kept_and_judged_once(self):
+        out, capture, result = self.collect("a1")
+        self.assertTrue((out / "run0" / "fight-hashes-host.json").is_file() and (out / "run0" / "fight-hashes-joiner.json").is_file())
+        self.assertEqual(result["status"], "PASS", result["errors"])
+        self.assertEqual(sorted(result["coverage"]), ["host", "joiner"])
+        self.assertTrue(all(peer["gates"]["fight-hashes"]["status"] == "PASS" for peer in capture["peers"]))
+
+    def test_a_divergent_player_still_fails_the_fight(self):
+        _, _, result = self.collect("a2")
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["first_difference"]["tick"], 4)
+
+
 if __name__ == "__main__":
     unittest.main()
