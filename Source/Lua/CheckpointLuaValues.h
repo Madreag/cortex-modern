@@ -40,11 +40,12 @@ namespace RTE::CheckpointLua {
 		void Remember(const TValue& source, int index) {
 			if (!tvisgcv(&source)) throw std::logic_error("saved identity needs an object");
 			index = Absolute(index);
+			if (!tvisgcv(m_State->base + index - 1)) throw std::logic_error("saved identity needs a private object");
 			const auto found = m_Values.find(gcval(&source));
 			if (found != m_Values.end()) throw std::logic_error("saved identity is already remembered");
 			lua_pushvalue(m_State, index);
 			const int reference = luaL_ref(m_State, LUA_REGISTRYINDEX);
-			const void* identity = lua_topointer(m_State, index);
+			const GCobj* identity = gcval(m_State->base + index - 1);
 			bool originalInserted = false;
 			try {
 				m_Values.emplace(gcval(&source), reference);
@@ -69,7 +70,9 @@ namespace RTE::CheckpointLua {
 			TableContents(source, destination);
 		}
 		std::optional<TValue> Original(int index) const {
-			const auto found = m_Originals.find(lua_topointer(m_State, index));
+			const TValue* value = m_State->base + Absolute(index) - 1;
+			if (!tvisgcv(value)) return std::nullopt;
+			const auto found = m_Originals.find(gcval(value));
 			return found == m_Originals.end() ? std::nullopt : std::optional<TValue>{found->second};
 		}
 		void RememberLibraries(const TValue& source, int destination) {
@@ -284,7 +287,7 @@ assert(coroutine.resume(savedOrderThread))
 		PrototypeCapture m_Prototypes;
 		Native m_Native;
 		std::unordered_map<const GCobj*, int> m_Values;
-		std::unordered_map<const void*, TValue> m_Originals;
+		std::unordered_map<const GCobj*, TValue> m_Originals;
 		std::unordered_map<const GCobj*, int> m_Returned;
 		std::unordered_set<const GCtab*> m_SavedTables;
 		luaJIT_SavedKeys m_PreviousKeys{};

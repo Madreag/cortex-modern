@@ -10234,6 +10234,18 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			if (luaL_dostring(source, "savedC=require('ffi').C; savedCLibraryAlias=savedC; savedCGet=function() return savedC,savedCLibraryAlias end"))
 				throw std::runtime_error("could not create saved library aliases");
 			lua_getglobal(source, "savedC"); librarySource = lua_topointer(source, -1); lua_pop(source, 1);
+			if (luaL_dostring(source, R"lua(
+savedNativeKeys={}; savedNativeHandles={}
+for i=1,256 do local value=Vector(1000+i,2000+i); savedNativeKeys[value]=i; savedNativeHandles[i]=value end
+savedNativeKeyWalk=function() local values={} for _,value in pairs(savedNativeKeys) do values[#values+1]=value end return table.concat(values,',') end
+savedNativeKeyOrder=savedNativeKeyWalk()
+savedNativeKeyUpdate=function()
+    for i,value in ipairs(savedNativeHandles) do assert(savedNativeKeys[value]==i); savedNativeKeys[value]=1000+i end
+    local extra={}; savedNativeKeys[extra]=9991; assert(savedNativeKeys[extra]==9991)
+    for i,value in ipairs(savedNativeHandles) do assert(savedNativeKeys[value]==1000+i) end
+    return #savedNativeHandles
+end
+)lua")) throw std::runtime_error("could not create saved native table keys");
 			CheckpointLua::ForEachCapturedUserdata(source, [source](GCudata* value) {
 				if (value->len != sizeof(luabind::detail::class_rep)) return;
 				auto* type = static_cast<luabind::detail::class_rep*>(uddata(value));
@@ -10291,6 +10303,15 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 				if (lua_pcall(state, 0, 2, 0)) throw std::runtime_error(lua_tostring(state, -1));
 				lua_getglobal(state, "package"); lua_getfield(state, -1, "loaded"); lua_getfield(state, -1, "ffi"); lua_getfield(state, -1, "C");
 				exact = exact && lua_type(state, 1) == LUA_TUSERDATA && lua_rawequal(state, 1, 2) && lua_rawequal(state, 1, -1) && lua_topointer(state, 1) != librarySource;
+				lua_settop(state, 0);
+				const TValue keyOrder = heap.GlobalValue("savedNativeKeyOrder");
+				const std::string expectedOrder = heap.ReadString(strdata(strV(&keyOrder)), heap.Read(&strV(&keyOrder)->len));
+				objects.Values().Push(heap.GlobalValue("savedNativeKeyWalk")); objects.Values().Finish();
+				if (lua_pcall(state, 0, 1, 0)) throw std::runtime_error(lua_tostring(state, -1));
+				exact = exact && lua_type(state, -1) == LUA_TSTRING && expectedOrder == lua_tostring(state, -1);
+				lua_settop(state, 0); objects.Values().Push(heap.GlobalValue("savedNativeKeyUpdate")); objects.Values().Finish();
+				if (lua_pcall(state, 0, 1, 0)) throw std::runtime_error(lua_tostring(state, -1));
+				exact = exact && lua_tointeger(state, -1) == 256;
 				using Handle = luabind::detail::object_rep;
 				auto* type = luabind::detail::class_registry::get_registry(state)->find_class(LUABIND_TYPEID(Vector));
 				{
