@@ -1446,6 +1446,33 @@ class DirectoryTests(unittest.TestCase):
         store.prune(99)
         self.assertNotIn(sid, store._sessions)
 
+    def test_current_host_check_in_keeps_its_live_row(self) -> None:
+        store = session_directory.SessionDirectory(15, 5)
+        self.addCleanup(store.stop)
+        row = store.register(sample_register(), "192.0.2.1", 0, INSTALL_KEY)
+        sid, token = row["session_id"], row["token"]
+        store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 1}, 0, INSTALL_KEY)
+        player = Ed25519PrivateKey.generate()
+        participant = player.public_key().public_bytes_raw().hex()
+        lease = store.connection_request(sid, dict(connection_protocol=1, operation="issue", token=token,
+            host_generation=0, epoch="10" * 16, seat=0, generation=1, credential="20" * 32, host_session=42,
+            network_protocol=NETWORK_PROTOCOL_VERSION, participant=participant, name="Host"), 0, INSTALL_KEY)
+        def check_in(claim):
+            data = dict(session_id=sid, seat_token=lease["seat_token"], instance="30" * 16,
+                        nonce=uuid.uuid4().hex, sent_at=int(time.time()), host={"token": claim, "generation": 0},
+                        route=dict(ice_identity="", ice_virtual_port=0, listen_port=41012,
+                                   listen_addrs=["127.0.0.1"], generation=1, state="connected"))
+            raw = json.dumps(data, separators=(",", ":")).encode()
+            store.connection_request(sid, dict(connection_protocol=1, operation="check-in", participant=participant,
+                signed_request=base64.b64encode(raw).decode(), signature=player.sign(REQUEST_DOMAIN + raw).hex()), 10, INSTALL_KEY)
+        check_in("wrong")
+        self.assertEqual(store._sessions[sid].last_beat, 0)
+        check_in(token)
+        store.prune(24)
+        self.assertIn(sid, store._sessions)
+        store.prune(25)
+        self.assertNotIn(sid, store._sessions)
+
     def test_filters(self) -> None:
         self.start()
         status, one = self.register(key="cccccccccccccccc", mode="pvp-skirmish", activity="Duel")

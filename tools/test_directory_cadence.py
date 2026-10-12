@@ -107,7 +107,7 @@ class Requests:
                 self.seats[handler.row_body["participant"]] = handler.row_body["seat"]
             contents = json.loads(base64.b64decode(handler.row_body["signed_request"])) if "signed_request" in handler.row_body else {}
             query_only = contents.get("frame_tie", {}).get("query_only", False)
-            self.rows.append({"query_only": query_only, "at_ms": handler.row_arrived_ms, "reply_at_ms": int(now * 1000), "role": "host" if key == self.host_key else "guest",
+            self.rows.append({"method": handler.command, "query_only": query_only, "at_ms": handler.row_arrived_ms, "reply_at_ms": int(now * 1000), "role": "host" if key == self.host_key else "guest",
                               "path": re.sub(r"/[0-9a-f-]{36}(?=/|$)", "/<session>", handler.path.split("?")[0]),
                               "kind": kind, "seat": seat, "status": status,
                               "error": body.get("error", ""), "retry_after_s": body.get("retry_after_s", 0),
@@ -303,7 +303,7 @@ def main():
             beats = [event for event in events if event["kind"] == "heartbeat" and event["status"] == 429]
             start, end = requests.wait_from * 1000, requests.wait_until * 1000
             samples = [sample for sample in requests.alive_samples if start <= sample["at_ms"] < end]
-            registered = [event for event in events if event["kind"] == "sessions" and event["status"] == 200]
+            registered = [event for event in events if event["role"] == "host" and event["method"] == "POST" and event["kind"] == "sessions" and event["status"] == 200]
             checks.update(refused_for_20s=bool(beats) and any(event["at_ms"] >= end for event in events), row_stayed_live=bool(samples) and all(sample["live_rows"] == 1 for sample in samples),
                           no_new_registration=len(registered) == 1,
                           no_missing_heartbeat=not any(event["kind"] == "heartbeat" and event["status"] == 404 for event in events))

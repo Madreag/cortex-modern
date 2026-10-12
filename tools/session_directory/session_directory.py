@@ -811,6 +811,7 @@ class SessionDirectory:
             answer, renew, host_claim = self.connections.check_in(session_id, data, wall)
             hosting = bool(host_claim and host_claim["generation"] == sess.migration_gen and tokens_equal(host_claim["token"], sess.token))
             if hosting:
+                sess.last_beat = now
                 self.connections.note_host(session_id, answer["seat"], sess.migration_gen, wall)
                 route = host_claim["route"]
                 addresses = require_listen_addrs(route)
@@ -828,7 +829,7 @@ class SessionDirectory:
                     sess.fields.pop("ice_virtual_port", None)
                 if any(sess.fields.get(key) != value for key, value in update.items()):
                     sess.fields.update(update)
-                    self._persist_session(sess, now)
+                self._persist_session(sess, now)
             answer["host"] = self.connection_bootstrap(session_id, now)
             answer["relay_current"] = not renew
             # A fixed credential keeps the expiry the host supplied.
