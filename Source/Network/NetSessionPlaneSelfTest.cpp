@@ -829,7 +829,7 @@ namespace RTE {
 
 	bool NetSessionPlaneSelfTest::CheckSceneLifecycle(const std::string& name, std::string* error) {
 		Hub hub;
-		const uint8_t count = name == "leave-rejoin" ? 3 : 2;
+		const uint8_t count = name == "rematch-chat" ? 2 : 3;
 		hub.row = Case{"scene_lifecycle"}; hub.row.seats = count; hub.row.rttMs = hub.row.otherRttMs = 100;
 		auto ip = std::make_unique<Wire>(hub, 1);
 		auto relay = std::make_unique<Wire>(hub, 1);
@@ -888,7 +888,8 @@ namespace RTE {
 			rounds[index]->SetSessionEventSink([&, index](const NetTransportEvent& event) { sessions[index]->InjectEvent(event, hub.now); });
 		}
 		const auto step = [&](bool joinerPlaying) {
-			for (size_t index = 0; index < (joinerPlaying ? count : 1); ++index) {
+			for (size_t index = 0; index < count; ++index) {
+				if (!joinerPlaying && index == 1) continue;
 				auto& round = *rounds[index]; round.Tick(hub.now);
 				sessions[index]->Tick(hub.now, false);
 				if (!round.IsRunning()) continue;
@@ -929,22 +930,34 @@ namespace RTE {
 			host.EvictRemovedPeer(2, "removed from the session", hub.now);
 			hostSession.DisconnectReadyPeer(originalRoute, NetRejectReason::ParticipantRemoved, c_NetRemovedLinkText);
 			const uint64_t begin = hub.now, before = applied[0], repairs = host.m_PeerReceiptRepairs;
+			const uint64_t otherBefore = applied[2], otherRepairs = rounds[2]->m_PeerReceiptRepairs;
 			uint64_t firstTwoAt = 0, greatestGap = 0;
+			uint64_t otherFirstTwoAt = 0, otherGap = 0;
 			for (; hub.now < begin + 2000;) {
 				const uint64_t previous = displayedAt[0];
+				const uint64_t otherPrevious = displayedAt[2];
 				if (!step(false)) return false;
 				rounds[1]->Tick(hub.now); clientSession.Tick(hub.now, false);
 				if (displayedAt[0] != previous) greatestGap = std::max(greatestGap, displayedAt[0] - previous);
 				if (!firstTwoAt && applied[0] >= before + 2) firstTwoAt = hub.now - begin;
+				if (displayedAt[2] != otherPrevious) otherGap = std::max(otherGap, displayedAt[2] - otherPrevious);
+				if (!otherFirstTwoAt && applied[2] >= otherBefore + 2) otherFirstTwoAt = hub.now - begin;
 			}
 			const bool named = clientSession.HasReject() && clientSession.GetRejectReason() == NetRejectReason::ParticipantRemoved;
 			const bool released = host.SeatReleases().contains(2);
 			const uint64_t finalWait = hub.now - displayedAt[0];
 			std::cout << "[net-session-scene] kick-pending before=" << before << " after=" << applied[0] << " two_updates_ms=" << firstTwoAt
 			          << " greatest_gap_ms=" << greatestGap << " final_wait_ms=" << finalWait << " removed_repairs=" << host.m_PeerReceiptRepairs - repairs << " released=" << released << " named=" << named << std::endl;
+			std::cout << "[net-session-scene] kick-survivor before=" << otherBefore << " after=" << applied[2]
+			          << " two_updates_ms=" << otherFirstTwoAt << " greatest_gap_ms=" << otherGap << " final_wait_ms=" << hub.now - displayedAt[2]
+			          << " released=" << rounds[2]->SeatReleases().contains(2) << " removed_repairs=" << rounds[2]->m_PeerReceiptRepairs - otherRepairs << std::endl;
 			if (!firstTwoAt || firstTwoAt > 50 || greatestGap > 50 || finalWait > 50 || applied[0] < before + 110 ||
 			    !released || !named || host.m_PeerReceiptRepairs != repairs) {
 				*error = "a kick kept the host waiting on the removed seat or failed to tell that player why"; return false;
+			}
+			if (!otherFirstTwoAt || otherFirstTwoAt > 50 || otherGap > 50 || hub.now - displayedAt[2] > 50 ||
+			    applied[2] < otherBefore + 110 || !rounds[2]->SeatReleases().contains(2) || rounds[2]->m_PeerReceiptRepairs != otherRepairs) {
+				*error = "a kick stopped the other survivor or kept repairing the removed seat"; return false;
 			}
 			return true;
 		}
