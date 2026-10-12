@@ -7,6 +7,7 @@
 #include <bit>
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <exception>
 #include <future>
 #include <utility>
@@ -72,7 +73,8 @@ namespace RTE::CheckpointLua {
 			if (!m_Status.compare_exchange_strong(expected, Status::Arming, std::memory_order_acq_rel)) return false;
 			try {
 				// The Lua heaps are fenced on another thread while this one arms the native pages.
-				auto heaps = std::async(std::launch::async, [this] {
+				static const bool s_SerialArm = std::getenv("CCCP_TEST_CHECKPOINT_SERIAL_ARM") != nullptr;
+				auto heaps = std::async(s_SerialArm ? std::launch::deferred : std::launch::async, [this] {
 					const auto begun = std::chrono::steady_clock::now();
 					bool armed = true;
 					for (Heap& heap: m_Heaps) if (!heap.lease.Arm(*heap.prepared)) { armed = false; break; }

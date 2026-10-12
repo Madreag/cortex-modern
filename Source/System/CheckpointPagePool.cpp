@@ -573,7 +573,8 @@ void CheckpointPagePool::Snapshot::Arm() const {
 					copiedPages += copied; fencedPages += fenced;
 				}
 			};
-			const unsigned helperCount = std::clamp(std::thread::hardware_concurrency() / 2, 2u, 8u) - 2;
+			static const bool s_SerialArm = std::getenv("CCCP_TEST_CHECKPOINT_SERIAL_ARM") != nullptr;
+			const unsigned helperCount = s_SerialArm ? 0 : std::clamp(std::thread::hardware_concurrency() / 2, 2u, 8u) - 2;
 			std::vector<std::future<void>> helpers;
 			std::exception_ptr failure;
 			try {
@@ -839,7 +840,8 @@ void CheckpointNativeStorage::StartSettling() {
 				if (!more) settled = generation;
 			}
 			// A page that stopped changing for a pass is fenced again, so the next boundary copies only pages still written.
-			if (WorldEnabled() && std::chrono::steady_clock::now() - cooled >= std::chrono::seconds(1)) {
+			static const bool s_Cooling = std::getenv("CCCP_TEST_CHECKPOINT_NO_COOLING") == nullptr;
+			if (s_Cooling && WorldEnabled() && std::chrono::steady_clock::now() - cooled >= std::chrono::seconds(1)) {
 				CheckpointPagePool::CoolInventory();
 				cooled = std::chrono::steady_clock::now();
 			}
