@@ -1662,7 +1662,13 @@ def item_evidence(record, item, port=None):
         marker = "video_mark " + item["mark"]
         starts = [index for index, event in enumerate(events) if event["message"] == marker]
         if not starts:
-            return None, {"probe": "not-reached", "reason": f"No recorded marker {item['mark']}", "events": str(events_path)}
+            missing = {"probe": "not-reached", "reason": f"No recorded marker {item['mark']}", "events": str(events_path)}
+            gate = record.get("gates", {}).get(item["gate"]) if item.get("gate") else None
+            if gate:
+                # The run ended before the item's picture, but the gate was still judged; the item says what it found.
+                missing.update(assertions=[gate], reason=missing["reason"] + f"; the {item['gate']} gate is {gate.get('status')}: "
+                               + "; ".join(map(str, gate.get("errors", [])[:3])))
+            return None, missing
         index = starts[0]
         start = events[index]["wall_ms"]
         following = next((position for position in range(index + 1, len(events))

@@ -142,6 +142,18 @@ class FightPaceTest(unittest.TestCase):
         self.assertFalse(report.exists())
         self.assertEqual(printed, "")
 
+    def test_a_gate_item_without_its_picture_still_names_the_verdict(self):
+        peer = self.root / "host"
+        (peer / "video").mkdir(parents=True)
+        (peer / "video" / "events.jsonl").write_text("", encoding="utf-8")
+        verdict = {"status": "FAIL", "errors": ["joiner: state differs at tick 3083"], "first_difference": {"tick": 3083, "components": ["particles"]}}
+        record = {"root": str(peer), "probe_dir": str(self.root / "probe"), "video_dir": str(peer / "video"), "index": [],
+                  "gates": {"fight-hashes": verdict}}
+        _, evidence = video.item_evidence(record, {"id": "fight-hashes-host", "mark": "fight-ended-host", "gate": "fight-hashes"})
+        self.assertEqual(evidence["probe"], "not-reached")
+        self.assertEqual(evidence["assertions"], [verdict])
+        self.assertEqual(evidence["reason"], "No recorded marker fight-ended-host; the fight-hashes gate is FAIL: joiner: state differs at tick 3083")
+
     def test_the_review_carries_the_line(self):
         peer = self.root / "host"
         probe = self.root / "host-stage" / "probe"
