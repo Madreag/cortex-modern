@@ -136,7 +136,7 @@ namespace RTE {
 
 #pragma region GUIScreen
 	/// An interface class inherited by the different types of graphics methods.
-	class GUIScreen {
+	class GUIScreen : public CheckpointNativeAllocated {
 
 	public:
 #pragma region Creation

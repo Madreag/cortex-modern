@@ -1827,6 +1827,7 @@ bool GUICheckpoint::RunSelfTest() {
 			const ObjectPickerGUI* pickerAddress = editor->m_pPicker;
 			const SceneObject* currentAddress = editor->m_pCurrentObject;
 			const GUIControlManager* address = controls.get();
+			const AllegroScreen* screenAddress = screen.get();
 			const BITMAP* imageAddress = image.get();
 			auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
 			snapshot->SealBoundary();
@@ -1842,6 +1843,8 @@ bool GUICheckpoint::RunSelfTest() {
 			const std::array roots{bitmapRoot.Range(), timerRoot.Range(), presetRoot.Range(), CheckpointNativeStorage::RootRange{pathSource, pathHeader.data(), pathSize}};
 			controls.reset(); input.reset(); screen.reset(); image.reset(); banner.reset(); editor.reset();
 			CheckpointNativeStorage::ReadScope read(pages, roots);
+			const auto* screenBitmap = CheckpointNativeStorage::Source(CheckpointNativeStorage::Source(screenAddress)->GetBitmap());
+			check("saved_screen_keeps_its_bitmap_after_source_destruction", screenBitmap && screenBitmap->GetBitmap() == imageAddress);
 			BITMAP* savedImage = snapshot->ReadBitmap(imageAddress);
 			auto savedScreen = std::make_unique<AllegroScreen>(savedImage);
 			auto savedInput = std::make_unique<GUIInputWrapper>(0);
