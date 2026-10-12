@@ -348,3 +348,16 @@ This lane's runs are in C:/cortex-project/mx/in-match-fight15-erolpc-20261012 (u
 - S07 - WHAT IT PROVES: Leave, AI hold and a live same-seat rejoin; expected RED at the return until the session fix: python tools/e2e_peers.py --repo C:/cortex-project/in-match-erolpc --scenario fight15-s07 --out "<CAPTURE>/s07" --peer-boxes "host=<EROL-PC-BOX>,joiner=<MAC-BOX>" --boxes-file "<BOX-FACTS.json>"
 - S09 - WHAT IT PROVES: rematch readiness, the 30-second countdown and Cancel; expected RED until the End Match ruling: python tools/e2e_peers.py --repo C:/cortex-project/in-match-erolpc --scenario fight15-s09 --out "<CAPTURE>/s09" --peer-boxes "host=<EROL-PC-BOX>,joiner=<MAC-BOX>" --boxes-file "<BOX-FACTS.json>"
 - S10 (quiet; EROL-PC with no other engine) - WHAT IT PROVES: 72,000 matching running ticks at 58 ticks/s or more, both brains alive, a named end, and the pathfinding waits; expected RED on pace until the input-window fix: python tools/e2e_peers.py --repo C:/cortex-project/in-match-erolpc --scenario fight15-s10 --out "<CAPTURE>/s10" --peer-boxes "host=<EROL-PC-BOX>,joiner=<MAC-BOX>" --boxes-file "<BOX-FACTS.json>"
+
+## Finishing the scenes on one box (cm-wip/finish-the-scenes, from 2026-10-12 10:3x MST)
+
+Base: cm-wip/in-match-fight15 c01b1d9f1 merged with cm-dev 8ada522313 as 799284ff0 (exe 32f1c2bd). Scratch root C:/cortex-project/mx/finish-the-scenes; every engine through cortex-session1 (payload generator in the lane's run folder).
+
+Base runs (single box, proof false): S1 rc 0, S3 rc 0; S2 and S4 RED at admission: the host's first relay mint is refused (rate_limited_key, retry 7-9 s) and the host does not mint again inside the joiner's 15-second relay wait, so the Relay-only joiner stops with "The relay login is not ready" (s02-base joiner stdout.log:7855, host :3473; s04-base joiner :8219, host :3516).
+
+Causes and fixes:
+- D1 kick: NetPeerInputs.cpp PeerInputAccepted seeds the vote with the removed owner's bit; PeerGroupHasAuthority refuses any vote naming a removed seat, so the removed seat's input before its boundary is never accepted. The seed now leaves out a removed or released owner.
+- D2 rejoin: the returning seat's session validator (NetMatchService WorkerMain) copied the frame key before the rejoin capsule delivered it (zero after the Leave), so the host's first frame message at the return reads as malformed. The validator now reads a key cell the capsule updates.
+- D3 End Match: 407538ab6's m_HostEndedRound kept the host Completed; reverted that gate (the report, directory snapshot and empty-lobby result stay).
+- D4 resend storm: each peer-framing input message repeated delay+bound+1 ticks whatever the receivers had receipted; a window over 4096 bytes went reliable, so each heavy tick crossed the reliable lane 25-37 times. A receiver now gets only the ticks it has not receipted, and a tick crosses the reliable lane once to a receiver whose receipts are advancing.
+- Relay mint: a refused room mint now retries at the directory's retry time, and a seated host whose room has no relay mints again.
