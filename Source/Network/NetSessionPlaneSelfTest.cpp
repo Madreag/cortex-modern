@@ -859,6 +859,7 @@ namespace RTE {
 		auto match = NetMatchConfigUtil::MakeDefault(sessionConfig.sessionId);
 		match.peerCount = count; match.roundId = 77; match.players = {{1, 0, false, "Captain"}, {2, 1, false, "Joiner"}};
 		if (count == 3) match.players.push_back({3, 1, false, "Other joiner"});
+		for (uint8_t peer = 2; peer <= count; ++peer) match.successorOrder.push_back(peer);
 		match.inputDelayFrames = 12; match.peerInputDelayFrames.assign(count, 12);
 		std::vector<std::unique_ptr<NetLockstepCoordinator>> rounds(count);
 		std::vector<NetLockstepConfig> roundConfigs(count);
@@ -910,6 +911,9 @@ namespace RTE {
 		};
 		for (; hub.now < 5000 && *std::min_element(applied.begin(), applied.end()) < 150;) if (!step(true)) return false;
 		if (*std::min_element(applied.begin(), applied.end()) < 150) { *error = "the scene row did not reach live play"; return false; }
+		for (const auto& round: rounds) if (!round->m_MigrationHistory.contains(round->GetStats().nextFrame - 1)) {
+			*error = "the scene row did not retain its last complete input frame"; return false;
+		}
 		for (size_t index = 0; index < count; ++index) {
 			sessionWires[index] = std::make_unique<NetPeerSessionWire>(links[index]);
 			links[index]->sessionAttached = true; sessions[index]->RebindSessionWire(*sessionWires[index]);
