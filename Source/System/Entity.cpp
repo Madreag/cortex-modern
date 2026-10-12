@@ -106,18 +106,21 @@ namespace RTE {
 		m_Serial([] { static std::atomic<uint64_t> serials{0}; return ++serials; }()),
 		m_Clock{g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetSimUpdateCount(), g_TimerMan.GetRealTickCount()} {
 		if (SceneMan::IsConstructed()) g_SceneMan.VisitCheckpointMaterialOwners([this](const Material* material, int kind, size_t index) {
-			m_MaterialOwners.try_emplace(material, kind, index);
+			m_MaterialOwners.try_emplace(static_cast<const Material*>(CheckpointNativeStorage::Original(material)), kind, index);
 		});
 	}
 	void CheckpointNativeSnapshot::RememberMaterial(const Material* source, const Material* target) {
-		const auto owner = m_MaterialOwners.find(source);
-		if (owner == m_MaterialOwners.end()) return;
+		if (const auto* reference = MaterialReference(source)) m_MaterialReferences.TryEmplace(target, *reference);
+	}
+	const CheckpointText* CheckpointNativeSnapshot::MaterialReference(const Material* target) const {
+		if (const auto* reference = m_MaterialReferences.FindStored(target)) return reference;
+		target = static_cast<const Material*>(CheckpointNativeStorage::Original(target));
+		const auto owner = m_MaterialOwners.find(target);
+		if (owner == m_MaterialOwners.end()) return nullptr;
 		const auto [kind, index] = owner->second;
 		m_MaterialReferences.TryEmplace(target, CheckpointWriter::CaptureNative([kind, index] {
 			CheckpointWriter writer("MaterialReference1"); writer(kind, index); return writer.Text();
 		}));
-	}
-	const CheckpointText* CheckpointNativeSnapshot::MaterialReference(const Material* target) const {
 		return m_MaterialReferences.FindStored(target);
 	}
 	void CheckpointNativeSnapshot::RememberUID(const MovableObject* source, MovableObject* target) {

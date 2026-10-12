@@ -390,6 +390,11 @@ namespace RTE {
 			RememberReadValues(&source, target);
 		}
 		template<class T> T* CopyValue(const T* source) {
+			if (source && CheckpointNativeStorage::Reading()) {
+				const auto* value = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
+				if (CheckpointNativeStorage::Private(value, sizeof(T)) && CheckpointNativeStorage::Original(value) != value)
+					return const_cast<T*>(value);
+			}
 			return RebuildValue(source, [this](const T& values) { return std::make_unique<T>(Freeze(values)); });
 		}
 		template<class T, class Factory> T* RebuildValue(const T* source, const Factory& factory) {
@@ -722,7 +727,7 @@ namespace RTE {
 		CheckpointSharedMap<const BITMAP*, std::shared_ptr<Pixel>> m_Bitmaps;
 		CheckpointSharedMap<const BITMAP*, std::shared_ptr<Pixel>> m_BitmapSources;
 		CheckpointSharedMap<const Serializable*, CheckpointText> m_WriterValues;
-		CheckpointSharedMap<const Material*, CheckpointText> m_MaterialReferences;
+		mutable CheckpointSharedMap<const Material*, CheckpointText> m_MaterialReferences;
 		std::unordered_map<const Material*, std::pair<int, size_t>> m_MaterialOwners;
 		CheckpointSharedMap<long, MovableObject*> m_UIDs;
 		CheckpointFrozenClock m_Clock;

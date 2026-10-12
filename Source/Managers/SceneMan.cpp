@@ -3232,7 +3232,7 @@ namespace {
 
 void SceneMan::VisitCheckpointMaterialOwners(const std::function<void(const Material*, int, size_t)>& visit) const {
 	for (size_t index = 0; index < m_apMatPalette.size(); ++index) if (m_apMatPalette[index]) visit(m_apMatPalette[index], 1, index);
-	for (const auto& [material, index]: m_MaterialCopyIndices) visit(material, 2, index);
+	for (const auto& [material, index]: CheckpointValues(m_MaterialCopyIndices)) visit(material, 2, index);
 	if (PresetMan::IsConstructed()) {
 		const auto presets = CheckpointMaterialPresets();
 		for (size_t index = 0; index < presets.size(); ++index) visit(presets[index], 3, index);
@@ -3480,6 +3480,32 @@ bool SceneMan::RunMaterialCheckpointSelfTest() {
 		const bool exact = inlineFrozen->SaveCheckpoint() == inlineBytes && SaveMaterialReference(ownedFrozen) == firstReference && unownedRefused;
 		std::cout << "[material-checkpoint] " << (exact ? "PASS" : "FAIL") << " inline_material_values_freeze_without_inventing_reference_owners" << std::endl;
 		passed = exact && passed;
+		const bool uncloned = SaveMaterialReference(second) == secondReference;
+		std::cout << "[material-checkpoint] " << (uncloned ? "PASS" : "FAIL") << " material_references_use_captured_owners_before_cloning" << std::endl;
+		passed = uncloned && passed;
+		{
+			const auto roots = snapshot->ReadValues();
+			CheckpointNativeStorage::ReadScope read({}, roots);
+			const bool aliases = SaveMaterialReference(first) == firstReference && SaveMaterialReference(ownedFrozen) == firstReference;
+			std::cout << "[material-checkpoint] " << (aliases ? "PASS" : "FAIL") << " frozen_material_references_keep_source_and_saved_aliases" << std::endl;
+			passed = aliases && passed;
+		}
+		{
+			auto references = std::make_shared<CheckpointNativeSnapshot>();
+			CheckpointNativeStorage::Root root(first);
+			root.Freeze();
+			const std::array roots{root.Range()};
+			CheckpointNativeStorage::ReadScope read({}, roots);
+			const auto* sourceView = static_cast<const Material*>(root.Range().view);
+			references->RememberMaterial(sourceView, ownedFrozen);
+			const auto* sourceReference = references->MaterialReference(first);
+			const auto* viewReference = references->MaterialReference(sourceView);
+			const auto* savedReference = references->MaterialReference(ownedFrozen);
+			const bool aliases = sourceReference && viewReference && savedReference &&
+			    sourceReference->Text() == firstReference && viewReference->Text() == firstReference && savedReference->Text() == firstReference;
+			std::cout << "[material-checkpoint] " << (aliases ? "PASS" : "FAIL") << " material_owner_lookup_uses_frozen_source_identity" << std::endl;
+			passed = aliases && passed;
+		}
     } catch (const std::exception& error) {
         passed = false;
         std::cout << "[material-checkpoint] failure: " << error.what() << std::endl;
