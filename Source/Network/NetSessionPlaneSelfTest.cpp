@@ -859,9 +859,8 @@ namespace RTE {
 		auto match = NetMatchConfigUtil::MakeDefault(sessionConfig.sessionId);
 		match.peerCount = count; match.roundId = 77; match.players = {{1, 0, false, "Captain"}, {2, 1, false, "Joiner"}};
 		if (count == 3) match.players.push_back({3, 1, false, "Other joiner"});
-		for (uint8_t peer = 2; peer <= count; ++peer) match.successorOrder.push_back(peer);
-		for (uint8_t peer = 1; peer <= count; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(47919 + peer), {"fixture"}});
-		match.inputDelayFrames = 12; match.peerInputDelayFrames.assign(count, 12);
+		const uint16_t delay = count == 3 ? 24 : 12;
+		match.inputDelayFrames = delay; match.peerInputDelayFrames.assign(count, delay);
 		std::vector<std::unique_ptr<NetLockstepCoordinator>> rounds(count);
 		std::vector<NetLockstepConfig> roundConfigs(count);
 		std::vector<std::shared_ptr<NetPeerSessionLinks>> links(count);
@@ -873,9 +872,9 @@ namespace RTE {
 		for (size_t index = 0; index < count; ++index) {
 			NetLockstepConfig config; config.sessionId = match.sessionId; config.matchConfig = match;
 			config.localPeerId = static_cast<uint8_t>(index + 1); config.peerCount = count; config.roundId = index == 0 ? 77 : 0;
-			config.startFrame = 1; config.inputDelayFrames = 12; config.peerInputDelayFrames = {{1, 12}, {2, 12}};
+			config.startFrame = 1; config.inputDelayFrames = delay; config.peerInputDelayFrames = {{1, delay}, {2, delay}};
 			config.peerIncarnations = {{1, 1}, {2, 1}}; config.timeoutMs = 30000;
-			if (count == 3) { config.peerInputDelayFrames[3] = 12; config.peerIncarnations[3] = 1; }
+			if (count == 3) { config.peerInputDelayFrames[3] = delay; config.peerIncarnations[3] = 1; }
 			config.peerFrameGroups = config.substituteSlowPeers = true; config.simTickMs = c_TestTickMs;
 			config.slowPlayerBoundTicks = 3; config.frameLane = NetTransportLane::InputUnreliable; config.relayToOtherPeers = index == 0;
 			config.migrationKey.fill(0x39); config.peerSessionLinks = links[index] = std::make_shared<NetPeerSessionLinks>();
@@ -914,6 +913,9 @@ namespace RTE {
 		if (*std::min_element(applied.begin(), applied.end()) < 150) { *error = "the scene row did not reach live play"; return false; }
 		for (const auto& round: rounds) if (!round->m_MigrationHistory.contains(round->GetStats().nextFrame - 1)) {
 			*error = "the scene row did not retain its last complete input frame"; return false;
+		}
+		if (count == 3) for (const auto& round: rounds) for (const auto& [peer, stats]: round->GetStats().peers) if (stats.holds != 0) {
+			*error = "the returning-seat row held a player before the Leave gesture"; return false;
 		}
 		for (size_t index = 0; index < count; ++index) {
 			sessionWires[index] = std::make_unique<NetPeerSessionWire>(links[index]);

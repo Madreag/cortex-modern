@@ -72,7 +72,9 @@ namespace RTE {
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			const bool present = sources != m_PeerSourceInputs.end() && sources->second.contains(peer);
 			const bool neutral = IsSeatReclaimGap(peer, proposal.frame);
-			if (proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0 && (present || neutral)) return false;
+			const auto ended = m_PeerRoundEnds.find(peer);
+			const bool departed = ended != m_PeerRoundEnds.end() && !ended->second.closedLink && proposal.frame >= ended->second.frame;
+			if (proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0 && (present || (neutral && !departed))) return false;
 			if (proposal.preparedFrame == 0 && (proposal.connectedMask & SeatBit(peer)) != 0 && proposal.frame >= EffectiveStartOf(peer) && !neutral && !present) return false;
 			if (proposal.preparedFrame == 1 && (named & SeatBit(peer)) != 0 &&
 			    (!m_PeerBridges.contains(peer) || !m_PeerBridges.at(peer).committedHold || m_PeerBridges.at(peer).returnFrame)) return false;
@@ -93,6 +95,11 @@ namespace RTE {
 			const auto bridge = m_PeerBridges.find(peer);
 			const bool held = bridge != m_PeerBridges.end() && frame >= bridge->second.fromFrame && (!bridge->second.returnFrame || frame < *bridge->second.returnFrame);
 			if (held) continue;
+			const auto ended = m_PeerRoundEnds.find(peer);
+			if (ended != m_PeerRoundEnds.end() && !ended->second.closedLink && frame >= ended->second.frame) {
+				proposal.members.push_back(peer);
+				continue;
+			}
 			if (frame < EffectiveStartOf(peer) || IsSeatReclaimGap(peer, frame) || sources->second.contains(peer)) proposal.connectedMask |= SeatBit(peer);
 			else proposal.members.push_back(peer);
 		}
@@ -142,7 +149,12 @@ namespace RTE {
 				prepared = std::max(prepared, m_Stats.peers[peer].reportedNextFrame);
 			proposal.frame = prepared + lead;
 		}
-		if (proposal.preparedFrame == 0) {
+		const bool declaredDeparture = !proposal.members.empty() && std::all_of(proposal.members.begin(), proposal.members.end(), [&](uint8_t peer) {
+			const auto ended = m_PeerRoundEnds.find(peer);
+			return ended != m_PeerRoundEnds.end() && !ended->second.closedLink && frame >= ended->second.frame;
+		});
+		// A declared Leave has already ended its input; it needs no silence wait at that boundary.
+		if (proposal.preparedFrame == 0 && !declaredDeparture) {
 			const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
 			// The startup consumer has no established buffered runway to spend.
 			// Its first missing inputs get the full bound from the actual wait.

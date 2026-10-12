@@ -91,7 +91,7 @@ namespace RTE {
 			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= SeatBit(peer);
 		if (voters == 0 || (voters & ~owners) != 0) return false;
 		// A declared Leave keeps its AI seat but stops contributing to future frame votes.
-		for (const auto& [peer, ended]: m_PeerRoundEnds) if (!ended.closedLink) owners &= ~SeatBit(peer);
+		for (const auto& [peer, ended]: m_PeerRoundEnds) if (!ended.closedLink && m_Stats.nextFrame >= ended.frame) owners &= ~SeatBit(peer);
 		voters &= owners;
 		if (voters == 0) return false;
 		if (m_PeerAdminFrameMembers != 0 && voters == m_PeerAdminFrameMembers) return true;

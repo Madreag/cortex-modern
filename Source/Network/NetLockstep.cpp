@@ -8144,7 +8144,7 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::UsesPreparedFrameReceipts() const {
-		return !m_Playback && (static_cast<bool>(m_RosterReader) ||
+		return !m_Playback && (UsesPeerFrameGroups() || static_cast<bool>(m_RosterReader) ||
 		    (!m_Config.matchConfig.dedicated && !m_Config.matchConfig.persistentWorld && !m_Config.matchConfig.successorOrder.empty()));
 	}
 
