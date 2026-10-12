@@ -67,10 +67,14 @@ MAX_QUEUE = 256
 MAX_PAYLOAD = 64 * 1024
 MAX_BODY = 128 * 1024
 REG_PER_MIN = 10
-REQ_PER_MIN = 120
+REQ_PER_MIN = 600
 IP_REG_PER_MIN = 30
-# Four seated installs keep their individual budgets behind one NAT.
-IP_REQ_PER_MIN = 4 * REQ_PER_MIN
+# Five full install budgets fit behind one shared address.
+IP_REQ_PER_MIN = 3000
+HEARTBEAT_REQ_PER_MIN = 60
+IP_HEARTBEAT_REQ_PER_MIN = 300
+ADMISSION_REQ_PER_MIN = 120
+IP_ADMISSION_REQ_PER_MIN = 600
 RATE_WINDOW_S = 60.0
 RATE_IDLE_S = 600.0
 PRUNE_EVERY_N = 256
@@ -381,13 +385,13 @@ class RateLimiter:
         if key not in self._last and len(self._last) >= PRUNE_MAP_MAX:
             self.prune_idle(now)
             if len(self._last) >= PRUNE_MAP_MAX:
-                return 429, {"error": "rate_limited", "retry_after_s": max(1, int(RATE_IDLE_S - (now - min(self._last.values()))) + 1)}
+                return 429, {"error": "rate_limited_key", "retry_after_s": max(1, int(RATE_IDLE_S - (now - min(self._last.values()))) + 1)}
         reqs = self._trim(self._requests, key, now)
         if len(reqs) >= self.req_per_min:
             return (
                 429,
                 {
-                    "error": "rate_limited",
+                    "error": "rate_limited_key",
                     "retry_after_s": self._retry_after(reqs, now),
                 },
             )
@@ -397,7 +401,7 @@ class RateLimiter:
                 return (
                     429,
                     {
-                        "error": "rate_limited",
+                        "error": "rate_limited_key",
                         "retry_after_s": self._retry_after(regs, now),
                     },
                 )
@@ -427,6 +431,10 @@ class DualRateLimiter:
         self._lock = threading.Lock()
         self._by_key = RateLimiter(REQ_PER_MIN, REG_PER_MIN)
         self._by_ip = RateLimiter(IP_REQ_PER_MIN, IP_REG_PER_MIN)
+        self._priority = {
+            "heartbeat": (RateLimiter(HEARTBEAT_REQ_PER_MIN, REG_PER_MIN), RateLimiter(IP_HEARTBEAT_REQ_PER_MIN, IP_REG_PER_MIN)),
+            "admission": (RateLimiter(ADMISSION_REQ_PER_MIN, REG_PER_MIN), RateLimiter(IP_ADMISSION_REQ_PER_MIN, IP_REG_PER_MIN)),
+        }
         self._checks = 0
 
     def _stricter(
@@ -451,20 +459,24 @@ class DualRateLimiter:
         )
 
     def check(
-        self, install_key: str, client_ip: str, now: float, is_register: bool
+        self, install_key: str, client_ip: str, now: float, is_register: bool, budget: str = "general"
     ) -> Optional[tuple[int, dict[str, Any]]]:
         with self._lock:
             self._checks += 1
             if self._checks % PRUNE_EVERY_N == 0 or self._map_size() > PRUNE_MAP_MAX:
-                self._by_key.prune_idle(now)
-                self._by_ip.prune_idle(now)
-            key_hit = self._by_key.probe(install_key, now, is_register)
-            ip_hit = self._by_ip.probe(client_ip, now, is_register)
+                for limiter in (self._by_key, self._by_ip, *(item for pair in self._priority.values() for item in pair)):
+                    limiter.prune_idle(now)
+            by_key, by_ip = self._priority.get(budget, (self._by_key, self._by_ip))
+            key_hit = by_key.probe(install_key, now, is_register)
+            ip_hit = by_ip.probe(client_ip, now, is_register)
+            if ip_hit is not None:
+                ip_hit[1]["error"] = "rate_limited_ip"
             blocked = self._stricter(key_hit, ip_hit)
             if blocked is not None:
+                blocked[1]["budget"] = budget
                 return blocked
-            self._by_key.commit(install_key, now, is_register)
-            self._by_ip.commit(client_ip, now, is_register)
+            by_key.commit(install_key, now, is_register)
+            by_ip.commit(client_ip, now, is_register)
         return None
 
 
@@ -510,6 +522,7 @@ class Session:
         self.observed_ip = observed_ip
         self.created_at = created_at
         self.last_beat = created_at
+        self.heartbeat_retry_until = created_at
         self.state = "lobby"
         self.listed = True
         self.queues: dict[str, list[Signal]] = {}
@@ -1150,7 +1163,7 @@ class SessionDirectory:
             dead = [
                 sid
                 for sid, sess in self._sessions.items()
-                if now - (sess.last_beat if sess.acknowledged else sess.created_at) >= self.expiry_s
+                if now - (max(sess.last_beat, sess.heartbeat_retry_until) if sess.acknowledged else sess.created_at) >= self.expiry_s
             ]
             for sid in dead:
                 sess = self._sessions[sid]
@@ -1454,7 +1467,7 @@ class SessionDirectory:
                 raise PermissionError("forbidden")
             limited = self.turn_limiter.probe(install_key, now, False)
             if limited:
-                raise TurnError(429, "relay_rate_limited", limited[1]["retry_after_s"])
+                raise TurnError(429, "rate_limited_key", limited[1]["retry_after_s"])
             self.turn_limiter.commit(install_key, now, False)
             sess.ice_generation += 1
             generation = sess.ice_generation
@@ -1501,6 +1514,25 @@ class SessionDirectory:
                 raise TurnError(404, "relay_offer_unavailable")
             return sess.ice_offer
 
+    def hear_host(self, session_id: str, data: dict[str, Any], now: float, retry_s: float = 0) -> bool:
+        """A valid heartbeat is liveness evidence even when its update must wait."""
+        with self._lock:
+            sess = self._sessions.get(session_id)
+            token = data.get("token")
+            generation = data.get("migration_gen", sess.migration_gen if sess else 0)
+            if sess is None or not isinstance(token, str) or not tokens_equal(token, sess.token) or generation != sess.migration_gen:
+                return False
+            sess.last_beat = now
+            sess.heartbeat_retry_until = max(sess.heartbeat_retry_until, now + retry_s)
+            return True
+
+    def host_signal_poll(self, session_id: str, peer: str, token: Optional[str]) -> bool:
+        with self._lock:
+            sess = self._sessions.get(session_id)
+            if sess is None and session_id in self._retired:
+                sess = self._retired[session_id][0]
+            return sess is not None and host_signal_peer(peer) and isinstance(token, str) and tokens_equal(token, sess.token)
+
     def heartbeat(
         self, session_id: str, data: dict[str, Any], now: float, install_key: str = ""
     ) -> dict[str, Any]:
@@ -1531,6 +1563,8 @@ class SessionDirectory:
         with self._lock:
             sess = self._get(session_id, now)
             if sess is None:
+                if session_id in self._retired or session_id in self._resume_tokens:
+                    raise ConnectionErrorReply(404, "match_unavailable", "The match listing is being restored. Waiting for the directory; Cancel returns to Multiplayer.")
                 raise KeyError("not_found")
             # A stale generation learns the published fence before its retired
             # capability is rejected; it must relinquish gameplay authority too.
@@ -1971,6 +2005,8 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
             self._capacity_answer = status == 503 and body.get("error") == "full"
             if self._capacity_answer:
                 self.server.log_capacity(self._observed_ip())
+            if status == 429:
+                LOGGER.warning("directory refusal path=%s reason=%s budget=%s retry_after_s=%s", redact_log_url(self.path).split("?")[0], body.get("error"), body.get("budget", "general"), body.get("retry_after_s", 1))
             if not getattr(self, "_body_read", True):
                 self._drain_body()
             raw = json.dumps(body).encode("utf-8")
@@ -1981,6 +2017,8 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
             self.send_header("Connection", "close")
             if self._capacity_answer:
                 self.send_header("Retry-After", str(SIGNAL_WAIT_RETRY_S))
+            if status == 429:
+                self.send_header("Retry-After", str(max(1, int(body.get("retry_after_s", 1)))))
             self.end_headers()
             self.wfile.write(raw)
 
@@ -2022,13 +2060,13 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                 raise FieldError("invalid_caller_address", "CF-Connecting-IP") from None
 
         def _install_gate(
-            self, is_register: bool
+            self, is_register: bool, budget: str = "general"
         ) -> Optional[tuple[int, dict[str, Any]]]:
             key = self.headers.get("X-Install-Key")
             if not key or not valid_install_key(key):
                 return 400, {"error": "invalid_install_key"}
             return store.limiter.check(
-                key, self._observed_ip(), time.monotonic(), is_register
+                key, self._observed_ip(), time.monotonic(), is_register, budget
             )
 
         def _q1(self, query: dict[str, list[str]], name: str) -> Optional[str]:
@@ -2082,7 +2120,13 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             try:
                 parts, query = self._parts()
-                gated = self._install_gate(is_register=False)
+                budget = "general"
+                if len(parts) == 4 and parts[:2] == ["v1", "sessions"] and parts[3] == "signals":
+                    peer, _ = self._signal_peer(query)
+                    token = self._q1(query, "token") or self.headers.get("X-Session-Token")
+                    if store.host_signal_poll(parse_session_id(parts[2]), peer, token):
+                        budget = "admission"
+                gated = self._install_gate(is_register=False, budget=budget)
                 if gated is not None:
                     self._send(gated[0], gated[1])
                     return
@@ -2181,11 +2225,17 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                     body = self._read_json()
                     self._send(200, store.register(body, self._observed_ip(), now, self.headers.get("X-Install-Key", "")))
                     return
-                gated = self._install_gate(is_register=False)
+                heartbeat = len(parts) == 4 and parts[:2] == ["v1", "sessions"] and parts[3] == "heartbeat"
+                body = self._read_json() if heartbeat else None
+                valid_heartbeat = heartbeat and store.hear_host(parse_session_id(parts[2]), body, now)
+                gated = self._install_gate(is_register=False, budget="heartbeat" if valid_heartbeat else "general")
                 if gated is not None:
+                    if valid_heartbeat and gated[0] == 429:
+                        store.hear_host(parts[2], body, now, gated[1].get("retry_after_s", 1))
                     self._send(gated[0], gated[1])
                     return
-                body = self._read_json()
+                if body is None:
+                    body = self._read_json()
                 if len(parts) == 4 and parts[:2] == ["v1", "sessions"] and parts[3] == "connections":
                     self._send(200, store.connection_request(parse_session_id(parts[2]), body, now, self.headers.get("X-Install-Key", "")))
                     return

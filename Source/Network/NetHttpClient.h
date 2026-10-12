@@ -26,6 +26,7 @@ namespace RTE {
 			long statusCode = 0;   //!< HTTP status when a response arrived; 0 on transport/cert failure.
 			std::string body;      //!< Response body on success.
 			std::string error;     //!< Non-empty when the request failed before/instead of a status.
+			std::string retryAfter; //!< The directory's Retry-After response header.
 		};
 
 		static constexpr int c_ConnectTimeoutMs = 5000;
@@ -63,7 +64,7 @@ namespace RTE {
 		void* m_Async = nullptr;    //!< AsyncRequest, owned by the worker; defined in the .cpp.
 #endif
 #ifdef __APPLE__
-		static void AppleDone(void* context, long statusCode, const char* body, size_t bodySize, const char* error);
+		static void AppleDone(void* context, long statusCode, const char* body, size_t bodySize, const char* error, const char* retryAfter);
 		void* m_Apple = nullptr;    //!< The NSURLSession request from NetHttpClientApple.mm; released by Cancel().
 #endif
 	};

@@ -32,7 +32,7 @@ from urllib.parse import quote
 
 import session_directory
 from world_ticks import compare_world_ticks, read_world_ticks
-from session_directory import IP_REG_PER_MIN, IP_REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
+from session_directory import IP_REG_PER_MIN, IP_REQ_PER_MIN, REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
 from unittest import mock
 from connection_authority import ConnectionErrorReply, ConnectionAuthority, REQUEST_DOMAIN, TOKEN_DOMAIN, TOKEN_FIELDS
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -107,7 +107,7 @@ DELETE_KEYS = {"ok"}
 SIGNAL_POST_KEYS = {"ok", "seq"}
 SIGNAL_GET_KEYS = {"signals"}
 SIGNAL_ITEM_KEYS = {"seq", "from", "to", "payload_b64"}
-RATE_KEYS = {"error", "retry_after_s"}
+RATE_KEYS = {"error", "retry_after_s", "budget"}
 ERROR_KEYS = {"error"}
 FIELD_ERROR_KEYS = {"error", "field"}
 
@@ -201,6 +201,7 @@ class DirectoryTests(unittest.TestCase):
             with self.assertRaises(session_directory.TurnError) as limited:
                 store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 11)
             self.assertEqual(limited.exception.status, 429)
+            self.assertEqual(limited.exception.body["error"], "rate_limited_key")
         with mock.patch.object(session_directory.time, "time", return_value=1600):
             with self.assertRaises(session_directory.TurnError):
                 store.get_ice_servers(row["session_id"], 12)
@@ -448,6 +449,9 @@ class DirectoryTests(unittest.TestCase):
             resp = conn.getresponse()
             data = resp.read()
             parsed = json.loads(data.decode("utf-8"))
+            if resp.status == 429:
+                self.assertIn(parsed["error"], ("rate_limited_key", "rate_limited_ip", "connection_busy"))
+                self.assertEqual(resp.getheader("Retry-After"), str(parsed["retry_after_s"]))
             return resp.status, parsed
         finally:
             conn.close()
@@ -1350,20 +1354,48 @@ class DirectoryTests(unittest.TestCase):
         status, limited = self.register(key=key_a)
         self.assertEqual(status, 429)
         self.assert_keys(limited, RATE_KEYS)
-        self.assertEqual(limited["error"], "rate_limited")
+        self.assertEqual(limited["error"], "rate_limited_key")
         self.assertIsInstance(limited["retry_after_s"], int)
         self.assertGreaterEqual(limited["retry_after_s"], 1)
         key_b = "bbbbbbbbbbbbbbbb"
-        for _ in range(120):
+        for _ in range(REQ_PER_MIN):
             status, body = self.list_sessions(headers={"X-Install-Key": key_b})
             self.assertEqual(status, 200)
             self.assert_keys(body, LIST_KEYS)
         status, limited = self.list_sessions(headers={"X-Install-Key": key_b})
         self.assertEqual(status, 429)
         self.assert_keys(limited, RATE_KEYS)
-        self.assertEqual(limited["error"], "rate_limited")
+        self.assertEqual(limited["error"], "rate_limited_key")
         self.assertIsInstance(limited["retry_after_s"], int)
         self.assertGreaterEqual(limited["retry_after_s"], 1)
+
+    def test_heartbeat_and_admission_have_reserved_budgets(self) -> None:
+        limiter = DualRateLimiter()
+        for index in range(REQ_PER_MIN):
+            self.assertIsNone(limiter.check(INSTALL_KEY, "192.0.2.1", 1, False))
+        self.assertEqual(limiter.check(INSTALL_KEY, "192.0.2.1", 1, False)[1]["error"], "rate_limited_key")
+        for budget in ("heartbeat", "admission"):
+            self.assertIsNone(limiter.check(INSTALL_KEY, "192.0.2.1", 1, False, budget))
+        for index in range(IP_REQ_PER_MIN - REQ_PER_MIN):
+            self.assertIsNone(limiter.check(f"guest{index:011d}", "192.0.2.1", 1, False))
+        self.assertEqual(limiter.check("another000000000", "192.0.2.1", 1, False)[1]["error"], "rate_limited_ip")
+        for budget in ("heartbeat", "admission"):
+            self.assertIsNone(limiter.check("another000000000", "192.0.2.1", 1, False, budget))
+
+    def test_refused_heartbeat_keeps_the_host_through_its_wait(self) -> None:
+        store = session_directory.SessionDirectory(15, 5)
+        self.addCleanup(store.stop)
+        row = store.register(sample_register(), "192.0.2.1", 0)
+        sid, token = row["session_id"], row["token"]
+        store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 1}, 1)
+        self.assertFalse(store.hear_host(sid, {"token": "wrong"}, 10, 60))
+        self.assertTrue(store.hear_host(sid, {"token": token}, 10, 60))
+        store.prune(84)
+        self.assertIn(sid, store._sessions)
+        store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 1}, 84)
+        self.assertIn(sid, store._sessions)
+        store.prune(99)
+        self.assertNotIn(sid, store._sessions)
 
     def test_filters(self) -> None:
         self.start()
@@ -1904,7 +1936,7 @@ class DirectoryTests(unittest.TestCase):
         status, limited = self.register(key=f"{30:016d}")
         self.assertEqual(status, 429)
         self.assert_keys(limited, RATE_KEYS)
-        self.assertEqual(limited["error"], "rate_limited")
+        self.assertEqual(limited["error"], "rate_limited_ip")
         self.assertIsInstance(limited["retry_after_s"], int)
         self.assertGreaterEqual(limited["retry_after_s"], 1)
         assert self.server is not None
@@ -1918,7 +1950,7 @@ class DirectoryTests(unittest.TestCase):
         status, limited = self.list_sessions(headers={"X-Install-Key": "L" + "x" * 15})
         self.assertEqual(status, 429)
         self.assert_keys(limited, RATE_KEYS)
-        self.assertEqual(limited["error"], "rate_limited")
+        self.assertEqual(limited["error"], "rate_limited_ip")
         self.assertIsInstance(limited["retry_after_s"], int)
         self.assertGreaterEqual(limited["retry_after_s"], 1)
 
@@ -2364,7 +2396,7 @@ class DirectoryTests(unittest.TestCase):
         self.assertIsNotNone(blocked)
         assert blocked is not None
         self.assertEqual(blocked[0], 429)
-        self.assertEqual(blocked[1]["error"], "rate_limited")
+        self.assertEqual(blocked[1]["error"], "rate_limited_key")
 
     def test_limiter_probe_does_not_create_buckets(self) -> None:
         limiter = DualRateLimiter()
@@ -3292,6 +3324,17 @@ class ConnectionAuthorityTests(unittest.TestCase):
 
     def check(self, **kwargs):
         return self.store.connection_request(self.sid, self.envelope(**kwargs), self.now, INSTALL_KEY)
+
+    def test_connection_busy_keeps_the_nonce_bound_and_names_its_wait(self):
+        for index in range(64):
+            self.check()
+        with self.assertRaises(ConnectionErrorReply) as busy:
+            self.check()
+        self.assertEqual(busy.exception.status, 429)
+        self.assertEqual(busy.exception.body["error"], "connection_busy")
+        self.assertEqual(busy.exception.body["retry_after_s"], 120)
+        self.wall += busy.exception.body["retry_after_s"]
+        self.assertIn("seat_token", self.check())
 
     def referee_fixture(self, seats=4):
         self.referee_players = {1: (self.player, self.lease["seat_token"])}

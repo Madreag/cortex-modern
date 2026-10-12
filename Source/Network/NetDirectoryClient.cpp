@@ -39,7 +39,7 @@ namespace RTE {
 			bool Finished() override { return m_Client.Poll() == NetHttpClient::PollResult::Done; }
 			NetDirectoryClient::Reply Take() override {
 				const NetHttpClient::Response response = m_Client.GetResponse();
-				return {response.statusCode, response.body, response.error};
+				return {response.statusCode, response.body, response.error, response.retryAfter};
 			}
 			void Abort() override { m_Client.Cancel(); }
 
@@ -50,17 +50,6 @@ namespace RTE {
 			std::vector<std::pair<std::string, std::string>> m_Headers;
 		};
 
-		/// Reads retry_after_s from a 429 error body; 1s when the field is absent or unreadable.
-		int64_t ParseRetryAfterS(const std::string& body) {
-			try {
-				const json parsed = json::parse(body);
-				if (parsed.is_object() && parsed.contains("retry_after_s") && parsed["retry_after_s"].is_number()) {
-					return std::max<int64_t>(1, parsed["retry_after_s"].get<int64_t>());
-				}
-			} catch (...) {
-			}
-			return 1;
-		}
 
 		std::string EncodeQueryValue(const std::string& value) {
 			std::string out;
@@ -115,7 +104,7 @@ namespace RTE {
 		}
 	}
 
-	void NetDirectoryClient::SetTransportFactory(TransportFactory factory) { m_Factory = std::move(factory); }
+	void NetDirectoryClient::SetTransportFactory(TransportFactory factory) { m_Factory = std::move(factory); m_HttpTransport = false; }
 
 	void NetDirectoryClient::Configure(std::string baseUrl, std::string installKey, std::string certPinSha256) {
 		const std::string previousUrl = m_BaseUrl;
@@ -206,12 +195,11 @@ namespace RTE {
 		}
 		if (!m_Listed) {
 			// m_NextAttemptMs stays: a 429 or backoff deadline binds every request, whatever the intent.
-			m_BackoffMs = 0;
 			// Repeated metadata cannot retry a protocol refusal or an unsupported hidden intent.
-			if (m_State == State::Failed && !m_ConnectionProtocolRefused && (listed || !m_HiddenUnsupported)) {
+			if (m_State == State::Failed && !m_ConnectionProtocolRefused && !m_SessionGone && (listed || !m_HiddenUnsupported)) {
 				SetState(State::Idle);
 			}
-		} else if (m_State == State::Failed && !m_ConnectionProtocolRefused && listed) {
+		} else if (m_State == State::Failed && !m_ConnectionProtocolRefused && !m_SessionGone && listed) {
 			SetState(m_SessionId.empty() ? State::Registering : State::Registered);
 		}
 		m_Listed = true;
@@ -250,6 +238,7 @@ namespace RTE {
 		if (m_State == State::Disabled || sessionId.empty() || (!firstWorld && token.empty()) || sessionId == token)
 			return false;
 		AbandonLease();
+		m_SessionGone = false;
 		NetDirectoryRegisterRequest resumed = row;
 		resumed.resumeSessionId = sessionId;
 		resumed.resumeToken = token;
@@ -273,6 +262,7 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::Update(uint64_t nowMs) {
+		m_NowMs = nowMs;
 		PollIceRequest();
 		if (m_State == State::Disabled) {
 			return;
@@ -372,6 +362,10 @@ namespace RTE {
 
 	bool NetDirectoryClient::StartIceRequest(const Request& request) {
 		if (m_IceRequest || m_BaseUrl.empty() || !m_Factory) return false;
+		const uint64_t nowMs = m_HttpTransport ? NetDirectoryRetry::NowMs() : m_NowMs;
+		if (nowMs < m_IceRetry.nextMs || (m_HttpTransport && (!NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, "relay", nowMs) || !NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, "general", nowMs)))) return false;
+		m_IceSessionId = request.path.rfind("/v1/sessions/", 0) == 0 ? request.path.substr(13, request.path.find('/', 13) - 13) : std::string();
+		if (m_HttpTransport && NetDirectoryBudget::SessionEnded(m_BaseUrl, m_InstallKey, m_IceSessionId, nowMs)) return false;
 		m_IceError.clear();
 		m_IceRelayRefused = false;
 		m_IceRetryable = false;
@@ -408,15 +402,17 @@ namespace RTE {
 		m_IceRetryDelayMs = 500;
 		if (reply.statusCode == 200 && NetRelayConfig::FromJson(reply.body, offer) && offer.Usable(now)) {
 			m_IceServers = std::move(offer);
-			m_IceError.clear();
+			m_IceError.clear(); m_IceRetry.Succeeded();
 		} else {
 			if (!m_IceServers.Usable(now)) m_IceServers = {};
-			m_IceRetryable = !m_IceRelayRefused && (reply.statusCode == 0 || reply.statusCode == 404 || reply.statusCode == 408 ||
-			                 reply.statusCode == 429 || reply.statusCode >= 500 || (reply.statusCode == 200 && offer.Valid()));
-			const json details = json::parse(reply.body, nullptr, false);
-			if (details.is_object() && details.contains("retry_after_s") && details["retry_after_s"].is_number_unsigned()) {
-				m_IceRetryDelayMs = static_cast<uint32_t>(std::min<uint64_t>(details["retry_after_s"].get<uint64_t>(), 3600) * 1000);
-				m_IceRetryDelayMs = std::max<uint32_t>(m_IceRetryDelayMs, 500);
+			m_IceRetryable = !m_IceRelayRefused;
+			const uint64_t steady = m_HttpTransport ? NetDirectoryRetry::NowMs() : m_NowMs;
+			const uint64_t until = m_IceRetry.Failed(steady, reply.statusCode, reply.body, reply.retryAfter, "relay");
+			m_IceRetryDelayMs = static_cast<uint32_t>(std::min<uint64_t>(until - steady, UINT32_MAX));
+			if (m_HttpTransport && reply.statusCode == 429) NetDirectoryBudget::Refused(m_BaseUrl, m_InstallKey, "relay", steady, until, reply.body);
+			if (NetDirectoryRetry::SessionGone(reply.statusCode, reply.body)) {
+				m_IceRetryable = false;
+				if (m_HttpTransport) NetDirectoryBudget::EndSession(m_BaseUrl, m_InstallKey, m_IceSessionId, steady);
 			}
 			m_IceError = m_IceRelayRefused
 			                 ? (m_IceHostRequest ? "The relay service refused your request. Check Relay in the lobby and retry."
@@ -443,7 +439,7 @@ namespace RTE {
 			std::lock_guard<std::mutex> lock(m_LastErrorMutex);
 			m_LastError = error;
 		}
-		System::PrintDiagnosticLine("[net-directory] " + error);
+
 	}
 
 	std::string NetDirectoryClient::LastError() const {
@@ -456,9 +452,18 @@ namespace RTE {
 		if (m_LastError == c_CapacityNotice) m_LastError.clear();
 	}
 
+	bool NetDirectoryClient::CanRequest(RequestKind kind, uint64_t nowMs) const {
+		if (nowMs < m_RequestRetries[static_cast<size_t>(kind)].nextMs) return false;
+		if (!m_HttpTransport) return true;
+		if (!m_SessionId.empty() && NetDirectoryBudget::SessionEnded(m_BaseUrl, m_InstallKey, m_SessionId, nowMs)) return false;
+		return NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, kind == RequestKind::Heartbeat ? "heartbeat" : "general", nowMs);
+	}
+
 	void NetDirectoryClient::ScheduleRetry(uint64_t nowMs) {
-		m_BackoffMs = m_BackoffMs == 0 ? c_RetryBaseMs : std::min<uint64_t>(m_BackoffMs * 2, c_RetryMaxMs);
-		m_NextAttemptMs = std::max(m_NextAttemptMs, nowMs + m_BackoffMs);
+		m_ReplyFailed = true;
+		const auto kind = m_ReplyKind == RequestKind::None ? RequestKind::Register : m_ReplyKind;
+		auto& retry = m_RequestRetries[static_cast<size_t>(kind)];
+		m_NextAttemptMs = std::max(m_NextAttemptMs, retry.Failed(nowMs, m_RetryReply.statusCode, m_RetryReply.body, m_RetryReply.retryAfter, kind == RequestKind::Register ? "register" : kind == RequestKind::Heartbeat ? "heartbeat" : kind == RequestKind::Delete ? "delete" : "list"));
 	}
 
 	void NetDirectoryClient::StartRequest(RequestKind kind, const Request& request) {
@@ -473,6 +478,19 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::HandleReply(RequestKind kind, const Reply& reply, uint64_t nowMs) {
+		m_ReplyKind = kind; m_RetryReply = reply; m_ReplyFailed = false;
+		if (reply.statusCode == 429) {
+			ScheduleRetry(nowMs);
+			if (m_HttpTransport) NetDirectoryBudget::Refused(m_BaseUrl, m_InstallKey, kind == RequestKind::Heartbeat ? "heartbeat" : "general", nowMs, m_NextAttemptMs, reply.body);
+			NoteError("The directory is busy. Retrying in " + std::to_string((m_NextAttemptMs - nowMs + 999) / 1000) + " seconds.");
+			m_ReplyKind = RequestKind::None; return;
+		}
+		if (kind != RequestKind::List && kind != RequestKind::Delete && !m_SessionId.empty() && NetDirectoryRetry::SessionGone(reply.statusCode, reply.body)) {
+			ScheduleRetry(nowMs); m_SessionGone = true; m_Listed = false; m_ConfirmedListed.reset();
+			if (m_HttpTransport) NetDirectoryBudget::EndSession(m_BaseUrl, m_InstallKey, m_SessionId, nowMs);
+			NoteError("This match is no longer in the directory. Choose another game or host a new match.");
+			SetState(State::Failed); m_ReplyKind = RequestKind::None; return;
+		}
 		if (reply.statusCode > 0) {
 			m_LastStatus = reply.statusCode;
 		}
@@ -483,6 +501,8 @@ namespace RTE {
 			case RequestKind::List: HandleListReply(reply, nowMs); break;
 			default: break;
 		}
+		if (reply.statusCode == 200 && !m_ReplyFailed) m_RequestRetries[static_cast<size_t>(kind)].Succeeded();
+		m_ReplyKind = RequestKind::None;
 	}
 
 	bool NetDirectoryClient::TakeSuperseded(const Reply& reply) {
@@ -578,12 +598,7 @@ namespace RTE {
 			}
 			return;
 		}
-		if (reply.statusCode == 429) {
-			const int64_t retryS = ParseRetryAfterS(reply.body);
-			NoteError("register throttled (429), retrying in " + std::to_string(retryS) + "s");
-			m_NextAttemptMs = nowMs + static_cast<uint64_t>(retryS) * 1000;
-			return;
-		}
+
 		if (reply.statusCode >= 500) {
 			NoteError("register: HTTP " + std::to_string(reply.statusCode));
 			ScheduleRetry(nowMs);
@@ -680,14 +695,7 @@ namespace RTE {
 			ScheduleRetry(nowMs);
 			return;
 		}
-		if (reply.statusCode == 429) {
-			const int64_t retryS = ParseRetryAfterS(reply.body);
-			NoteError("heartbeat throttled (429), retrying in " + std::to_string(retryS) + "s");
-			m_NextHeartbeatMs = nowMs + static_cast<uint64_t>(retryS) * 1000;
-			// The deadline also gates a dirty visibility resend and a retract's delete.
-			m_NextAttemptMs = nowMs + static_cast<uint64_t>(retryS) * 1000;
-			return;
-		}
+
 		if (reply.statusCode == 403 && m_Row.persistentWorld && m_DesiredListed) {
 			m_Row.resumeSessionId = m_SessionId; m_Row.resumeToken = m_Token;
 			m_WorldProofAttempt = std::make_pair(m_SessionId, m_Token);
@@ -707,6 +715,10 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::HandleDeleteReply(const Reply& reply, uint64_t nowMs) {
+		if (!reply.error.empty() || (reply.statusCode != 200 && !NetDirectoryRetry::SessionGone(reply.statusCode, reply.body))) {
+			NoteError("The directory has not confirmed the listing was closed. Retrying.");
+			ScheduleRetry(nowMs); return;
+		}
 		if (!reply.error.empty() || reply.statusCode == 0) {
 			NoteError("delete: " + (reply.error.empty() ? "transport error" : reply.error));
 		} else if (reply.statusCode != 200 && reply.statusCode != 404) {
@@ -738,7 +750,7 @@ namespace RTE {
 				m_ListError = !reply.error.empty() ? reply.error : (reply.statusCode == 0 ? "transport error" : "HTTP " + std::to_string(reply.statusCode));
 			}
 			m_ListCursor.clear();
-			m_BrowseNextMs = nowMs + c_ListIntervalMs;
+			ScheduleRetry(nowMs); m_BrowseNextMs = m_NextAttemptMs;
 			return;
 		}
 		NetDirectoryListResponse list;
@@ -750,7 +762,7 @@ namespace RTE {
 				m_ListError = error;
 			}
 			m_ListCursor.clear();
-			m_BrowseNextMs = nowMs + c_ListIntervalMs;
+			ScheduleRetry(nowMs); m_BrowseNextMs = m_NextAttemptMs;
 			return;
 		}
 		if (m_ListPages <= 1) {
@@ -774,6 +786,7 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::IssueRegister(uint64_t nowMs) {
+		if (!CanRequest(RequestKind::Register, nowMs)) return;
 		Request request;
 		request.method = "POST";
 		request.path = "/v1/sessions";
@@ -784,6 +797,7 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::IssueHeartbeat(uint64_t nowMs) {
+		if (!CanRequest(RequestKind::Heartbeat, nowMs)) return;
 		NetDirectoryHeartbeatRequest heartbeat;
 		heartbeat.token = m_Token;
 		heartbeat.peerCount = m_Row.peerCount;
@@ -811,6 +825,7 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::IssueDelete(uint64_t nowMs) {
+		if (!CanRequest(RequestKind::Delete, nowMs)) return;
 		Request request;
 		request.method = "DELETE";
 		request.path = "/v1/sessions/" + m_SessionId;
@@ -824,6 +839,7 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::IssueList(uint64_t nowMs) {
+		if (!CanRequest(RequestKind::List, nowMs)) return;
 		if (m_ListCursor.empty()) {
 			m_ListPages = 0;
 			m_ListTotal = 0;

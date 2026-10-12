@@ -2499,7 +2499,7 @@ static std::string ResyncSaveName() {
 			m_SceneName.clear();
 			m_SceneModule.clear();
 			m_State = NetMatchServiceState::Idle;
-			m_StatusText = "Idle";
+			m_StatusText = "Idle"; m_DirectoryWaitLine.clear();
 			m_ErrorText.clear();
 			m_LobbySnapshot = {};
 			m_InputDelayText.clear();
@@ -8947,6 +8947,8 @@ static std::string ResyncSaveName() {
 
 	std::string NetMatchService::GetStatusText() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		const std::string waiting = m_ReconnectClient.DirectoryWaitingText();
+		if (!waiting.empty()) { m_DirectoryWaitLine = waiting; return waiting; }
 		return m_StatusText;
 	}
 
@@ -9137,6 +9139,7 @@ static std::string ResyncSaveName() {
 			{"ended_lockstep_packets", m_EndedLockstepPackets},
 			{"state", StateName(m_State)},
 			{"status", m_StatusText},
+			{"directory_wait_line", m_DirectoryWaitLine},
 			{"error", m_ErrorText.empty() ? m_LobbySnapshot.errorText : m_ErrorText},
 			{"activity_preset", roster.activityPreset},
 			{"is_host", m_IsHost},
@@ -9182,6 +9185,7 @@ static std::string ResyncSaveName() {
 			// The host's drop-and-reseat accounting, which survives the session end the seat list does
 			// not: after the activity ends the seats read empty, so these are all a gate has left.
 			{"host_seats_dropped", m_ReconnectHost.GetStats().seatsDropped},
+			{"host_provisional_seats_expired", m_ReconnectHost.GetStats().provisionalSeatsExpired},
 			{"host_ledger_drops_recorded", m_ReconnectHost.GetStats().ledgerDropsRecorded},
 			{"host_reseats_issued", m_ReconnectHost.GetStats().reseatsIssued},
 			{"host_reseats_without_a_ledger", m_ReconnectHost.GetStats().reseatsWithoutALedger},
@@ -9892,7 +9896,8 @@ static std::string ResyncSaveName() {
 		bool checkedIn = !request.rejoin;
 		bool relayReady = !request.rejoin;
 		const uint64_t deadline = SteadyNowMs() + c_IceResolveBudgetMs;
-		while (SteadyNowMs() < deadline && !m_CancelRequested.load()) {
+		const uint64_t directoryWaitStart = m_ConnectionAuthority.AdmissionWaitedMs();
+		while (SteadyNowMs() < NetDirectoryRetry::After(deadline, m_ConnectionAuthority.AdmissionWaitedMs() - directoryWaitStart) && !m_CancelRequested.load()) {
 			const uint64_t nowMs = SteadyNowMs();
 			m_ConnectionAuthority.Update(nowMs, UnixNowMs(nullptr) / 1000);
 			if (m_ConnectionAuthority.Refused()) { if (error) *error = m_ConnectionAuthority.Error(); return false; }

@@ -582,6 +582,7 @@ namespace RTE {
 			NetH4Identity identity;
 			std::string displayName;
 			uint64_t openedAtMs = 0;
+			uint64_t directoryWaitedMs = 0;
 			uint64_t lastSentMs = 0;
 			uint32_t retransmits = 0;
 			NetH4TxKey key;
@@ -596,6 +597,7 @@ namespace RTE {
 			NetPeerId connection = c_InvalidNetPeerId;
 			uint32_t holderGeneration = 0;
 			uint64_t openedAtMs = 0;
+			uint64_t directoryWaitedMs = 0, directoryNoticeMs = 0;
 			uint64_t lastSentMs = 0;
 			uint32_t retransmits = 0;
 			NetH4TxKey key;
@@ -902,6 +904,7 @@ namespace RTE {
 		/// Makes BeginAdmission apply for a seat rather than join or reclaim. The UI (B2) and the gate
 		/// drivers set this; nothing on the wire does.
 		void SetApplyForSeat(bool enabled, uint16_t stableSeat);
+		std::string DirectoryWaitingText() const;
 
 		/// @return Whether the payload was an H4 message this plane handled.
 		bool HandleMessage(const NetPayload& payload, uint64_t nowMs);
@@ -997,6 +1000,7 @@ namespace RTE {
 		uint64_t m_EndpointRetryAtMs = 0;    //!< When a proven address the store refused is written again; 0 when none waits.
 		uint64_t m_EndpointRetryDelayMs = 0; //!< The last wait before such a write, doubled each time.
 		uint64_t m_LeasePersistAtMs = 0;
+		uint64_t m_DirectoryRetryUntilMs = 0;
 		NetAuthBytes16 m_TxId{};
 		std::optional<std::pair<uint16_t, NetAuthBytes16>> m_CarriedApplication; //!< An application a lost host left unanswered, for the next host.
 		NetH4TicketRecord m_Record;

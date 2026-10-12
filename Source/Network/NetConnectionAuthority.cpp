@@ -212,7 +212,7 @@ namespace RTE {
 		}
 		if (!m_HostToken.empty() && hostToken.empty()) { m_Operations.clear(); m_Removals.clear(); }
 		if (m_HostToken != hostToken || m_HostGeneration != hostGeneration)
-			for (auto& [key, operation]: m_Operations) { (void)key; operation.error.clear(); operation.retryAt = 0; }
+			for (auto& [key, operation]: m_Operations) { (void)key; operation.error.clear(); }
 		m_SessionId = std::move(sessionId); m_HostToken = std::move(hostToken); m_HostGeneration = hostGeneration;
 		if (!authorityKey.empty()) (void)Unhex(authorityKey, m_DirectoryKey);
 	}
@@ -257,7 +257,7 @@ namespace RTE {
 		NetSeatLease verified;
 		if (!NetSeatLease::Decode(lease.token, lease.authority, verified) || !verified.SameSeat(lease)) return false;
 		if (m_LocalLease && m_LocalLease->SameSeat(lease) && m_LocalLease->issuedAt > lease.issuedAt) return true;
-		m_LocalLease = lease; m_NextCheckIn = 0; m_Refused = false; m_Error.clear();
+		m_LocalLease = lease; m_Refused = false; if (m_Error.find("directory is busy") == std::string::npos) m_Error.clear();
 		return true;
 	}
 	bool NetConnectionAuthority::RestoreLease(const NetSeatLease& lease) {
@@ -267,7 +267,7 @@ namespace RTE {
 		    (m_DirectoryKey != NetParticipantId{} && lease.authority != m_DirectoryKey)) return false;
 		m_DirectoryKey = lease.authority;
 		m_Suspended = false;
-		m_LocalLease = lease; m_NextCheckIn = 0; m_Refused = false; m_Error.clear();
+		m_LocalLease = lease; m_Refused = false; if (m_Error.find("directory is busy") == std::string::npos) m_Error.clear();
 		return true;
 	}
 
@@ -292,7 +292,7 @@ namespace RTE {
 			if (!op.wanted.SameSeat(wanted)) { error = "This seat already belongs to another player. Join another open seat."; return Result::Refused; }
 			if (!op.error.empty()) { error = op.error; return Result::Refused; }
 			if (op.issued && op.issued->expiresAt > wanted.issuedAt + NetSeatLease::c_LifetimeSeconds / 2) { issued = *op.issued; return Result::Ready; }
-			if (op.issued) { op.issued.reset(); op.retryAt = 0; }
+			if (op.issued) op.issued.reset();
 			return Result::Pending;
 		}
 		if (m_Operations.size() >= 2 * (NetSeatLease::c_MaxStableSeat + 1)) return Result::Pending;
@@ -354,6 +354,36 @@ namespace RTE {
 		} catch (const json::exception&) { return false; }
 	}
 
+	bool NetConnectionAuthority::CanRequest(uint64_t nowMs) const {
+		return !m_Ended && !NetDirectoryBudget::SessionEnded(m_BaseUrl, m_InstallKey, m_SessionId, nowMs) &&
+		    NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, "general", nowMs);
+	}
+	bool NetConnectionAuthority::CanSeatRequest(uint64_t nowMs, bool queryOnly) {
+		while (!m_SeatRequests.empty() && nowMs >= m_SeatRequests.front() && nowMs - m_SeatRequests.front() >= 60000) m_SeatRequests.pop_front();
+		return CanRequest(nowMs) && m_SeatRequests.size() < 12 && (queryOnly || nowMs >= m_NextSeatRequestMs);
+	}
+	uint64_t NetConnectionAuthority::FailedReply(const NetHttpClient::Response& response, NetDirectoryRetry& retry, uint64_t nowMs, const char* path) {
+		const uint64_t until = retry.Failed(nowMs, response.statusCode, response.body, response.retryAfter, path);
+		bool refused = false, ended = false;
+		m_Error = ReplyError(response, refused, ended);
+		if (response.statusCode == 429) {
+			NetDirectoryBudget::Refused(m_BaseUrl, m_InstallKey, "general", nowMs, until, response.body);
+			m_Error = "The directory is busy. The host retries in " + std::to_string((until - nowMs + 999) / 1000) + " seconds. Cancel returns to Multiplayer.";
+		} else { m_Refused = m_Refused || refused; m_Ended = m_Ended || ended; }
+		if (NetDirectoryRetry::SessionGone(response.statusCode, response.body)) {
+			m_Refused = m_Ended = true; NetDirectoryBudget::EndSession(m_BaseUrl, m_InstallKey, m_SessionId, nowMs);
+		}
+		return until;
+	}
+	uint64_t NetConnectionAuthority::AdmissionWaitedMs() const {
+		std::lock_guard lock(m_Mutex); return NetDirectoryBudget::AdmissionWaitedMs(m_BaseUrl, m_InstallKey, NetDirectoryRetry::NowMs());
+	}
+	uint64_t NetConnectionAuthority::AdmissionRetryMs() const {
+		std::lock_guard lock(m_Mutex); const uint64_t nowMs = NetDirectoryRetry::NowMs();
+		const uint64_t until = NetDirectoryBudget::AdmissionUntilMs(m_BaseUrl, m_InstallKey, nowMs);
+		return until > nowMs ? until - nowMs : 0;
+	}
+
 	void NetConnectionAuthority::PollOperations(uint64_t steadyMs) {
 		size_t active = 0;
 		for (auto it = m_Operations.begin(); it != m_Operations.end();) {
@@ -362,18 +392,19 @@ namespace RTE {
 				if (op.request->Poll() == NetHttpClient::PollResult::Pending) { ++active; ++it; continue; }
 				const auto response = op.request->GetResponse(); op.request.reset();
 				if (response.statusCode == 200) {
-					if (op.removal) { it = m_Operations.erase(it); continue; }
+					if (op.removal) { m_RemoveRetry.Succeeded(); it = m_Operations.erase(it); continue; }
 					NetSeatLease lease;
-					if (ReadLeaseReply(response.body, lease, op.error) && lease.SameSeat(op.wanted)) op.issued = std::move(lease);
-					else if (op.error.empty()) op.error = "The directory returned a different seat. Cancel and rejoin the host's game.";
+					if (ReadLeaseReply(response.body, lease, op.error) && lease.SameSeat(op.wanted)) { op.issued = std::move(lease); m_IssueRetry.Succeeded(); }
+					else { op.error.clear(); op.retryAt = FailedReply(response, m_IssueRetry, steadyMs, "seat-issue"); }
 				} else {
 					bool refused = false, ended = false;
 					const std::string error = ReplyError(response, refused, ended);
+					op.retryAt = FailedReply(response, op.removal ? m_RemoveRetry : m_IssueRetry, steadyMs, op.removal ? "seat-remove" : "seat-issue");
 					if (refused) op.error = error;
-					else { op.retryAt = steadyMs + 5000; m_Error = error; }
+					if (ended) { m_Ended = m_Refused = true; NetDirectoryBudget::EndSession(m_BaseUrl, m_InstallKey, m_SessionId, steadyMs); }
 				}
 			}
-			if (!op.request && !op.issued && op.error.empty() && steadyMs >= op.retryAt && active < 2) {
+			if (!op.request && !op.issued && op.error.empty() && steadyMs >= op.retryAt && steadyMs >= (op.removal ? m_RemoveRetry : m_IssueRetry).nextMs && active < 1 && CanRequest(steadyMs)) {
 				// Host migration may rotate the directory token while this request waits.
 				auto body = json::parse(op.body); body["token"] = m_HostToken; body["host_generation"] = m_HostGeneration;
 				op.request = StartRequest("POST", body.dump()); if (op.request) ++active;
@@ -387,12 +418,11 @@ namespace RTE {
 			const auto response = m_Bootstrap->GetResponse(); m_Bootstrap.reset();
 			if (response.statusCode == 200) {
 				NetConnectionHost host; std::string error;
-				if (ReadHostReply(response.body, host, error)) { m_Host = std::move(host); m_BootstrapWanted = false; m_Error.clear(); }
-				else { m_Refused = true; m_Error = error.empty() ? "The directory's connection reply was invalid. Update the game and directory." : error; }
-			} else m_Error = ReplyError(response, m_Refused, m_Ended);
-			m_NextBootstrap = steadyMs + 1000;
+				if (ReadHostReply(response.body, host, error)) { m_Host = std::move(host); m_BootstrapWanted = false; m_Error.clear(); m_BootstrapRetry.Succeeded(); }
+				else m_NextBootstrap = FailedReply(response, m_BootstrapRetry, steadyMs, "seat-bootstrap");
+			} else m_NextBootstrap = FailedReply(response, m_BootstrapRetry, steadyMs, "seat-bootstrap");
 		}
-		if (m_BootstrapWanted && !m_Bootstrap && !m_Refused && steadyMs >= m_NextBootstrap) m_Bootstrap = StartRequest("GET", "");
+		if (m_BootstrapWanted && !m_Bootstrap && !m_Refused && steadyMs >= m_NextBootstrap && steadyMs >= m_BootstrapRetry.nextMs && CanRequest(steadyMs)) m_Bootstrap = StartRequest("GET", "");
 	}
 	std::string NetConnectionAuthority::SignedSeatRequest(const std::string& operation, uint64_t unixSeconds, const NetHostChangeRequest* change, const NetFrameTieRequest* tie) {
 		NetAuthBytes16 nonce{};
@@ -423,8 +453,8 @@ namespace RTE {
 			m_NextCheckIn = steadyMs + 5000;
 			if (response.statusCode == 200) {
 				NetSeatLease lease; std::string error;
-				if (!ReadLeaseReply(response.body, lease, error) || !lease.SameSeat(*m_LocalLease) || lease.participant != m_Player->PublicId()) { m_Error = error.empty() ? "The directory could not renew this seat. Cancel and rejoin your match." : error; m_Refused = true; return; }
-				m_LocalLease = std::move(lease); ++m_CheckIns; m_CheckedGeneration = m_CheckInGeneration; m_Error.clear();
+				if (!ReadLeaseReply(response.body, lease, error) || !lease.SameSeat(*m_LocalLease) || lease.participant != m_Player->PublicId()) { m_NextCheckIn = FailedReply(response, m_CheckInRetry, steadyMs, "seat-check-in"); return; }
+				m_LocalLease = std::move(lease); ++m_CheckIns; m_CheckedGeneration = m_CheckInGeneration; m_Error.clear(); m_CheckInRetry.Succeeded();
 				try {
 					const auto body = json::parse(response.body);
 					if (body.contains("host")) { NetConnectionHost host; if (ReadHostReply(body.at("host").dump(), host, error)) m_Host = std::move(host); else { m_Error = error; m_Refused = !error.empty(); } }
@@ -454,21 +484,23 @@ namespace RTE {
 						}
 						m_PeerRoutes = std::move(routes);
 					}
-				} catch (const json::exception&) { m_Error = c_Waiting; }
+				} catch (const json::exception&) { m_NextCheckIn = FailedReply(response, m_CheckInRetry, steadyMs, "seat-check-in"); }
 				if (m_CheckedGeneration != m_Route.generation) m_NextCheckIn = 0;
-			} else m_Error = ReplyError(response, m_Refused, m_Ended);
+			} else m_NextCheckIn = FailedReply(response, m_CheckInRetry, steadyMs, "seat-check-in");
 		}
-		if (m_CheckIn || m_Refused || steadyMs < m_NextCheckIn) return;
+		if (m_CheckIn || m_Refused || steadyMs < m_NextCheckIn || steadyMs < m_CheckInRetry.nextMs || !CanSeatRequest(steadyMs)) return;
 		const std::string body = SignedSeatRequest("check-in", unixSeconds);
 		if (body.empty()) return;
 		m_CheckInGeneration = m_Route.generation;
 		m_CheckIn = StartRequest("POST", body);
+		if (m_CheckIn) { m_SeatRequests.push_back(steadyMs); m_NextSeatRequestMs = steadyMs + 5000; }
 	}
 	NetHostChangeReply NetConnectionAuthority::QueryHostChange(const NetHostChangeRequest& request) {
 		std::lock_guard lock(m_Mutex);
 		if (m_Suspended || m_SessionId.empty() || m_BaseUrl.empty() || !m_Player || !m_LocalLease || m_LocalLease->directorySessionId != m_SessionId) return {};
 		if (!m_HostChangeRequest || *m_HostChangeRequest != request) {
-			m_HostChange.reset(); m_HostChangeRequest = request; m_NextHostChange = 0;
+			if (m_HostChange) return {NetHostChangeReply::State::Waiting};
+			m_HostChange.reset(); m_HostChangeRequest = request; m_NextHostChange = std::max(m_NextHostChange, m_HostChangeRetry.nextMs);
 			m_HostChangeReply = {}; m_HostChangeReply.state = NetHostChangeReply::State::Waiting;
 		}
 		return m_HostChangeReply;
@@ -481,10 +513,11 @@ namespace RTE {
 		std::lock_guard lock(m_Mutex);
 		if (m_Suspended || m_SessionId.empty() || m_BaseUrl.empty() || !m_Player || !m_LocalLease || m_LocalLease->directorySessionId != m_SessionId) return {};
 		if (!m_FrameTieRequest || *m_FrameTieRequest != request) {
+			if (m_FrameTie) return {NetFrameTieReply::State::Waiting};
 			if (m_RetiredFrameTies.size() >= 16) return {};
 			// A query on the sim thread retires an old request without joining its worker.
 			if (m_FrameTie) m_RetiredFrameTies.push_back(std::move(m_FrameTie));
-			m_FrameTieRequest = request; m_NextFrameTie = 0;
+			m_FrameTieRequest = request; m_NextFrameTie = std::max(m_NextFrameTie, m_FrameTieRetry.nextMs);
 			m_FrameTieCheckedIn = false;
 			m_FrameTieBoundStartMs.reset(); m_FrameTieFinalQuerySent = false;
 			m_FrameTieReply = {}; m_FrameTieReply.state = NetFrameTieReply::State::Waiting;
@@ -505,8 +538,8 @@ namespace RTE {
 				const auto& expected = *m_FrameTieRequest;
 				NetHash32 hash{};
 				if (!Protocol(body, error) || body.at("round_id") != expected.roundId || body.at("generation") != expected.generation ||
-				    body.at("frame") != expected.frame || !Unhex(body.at("config_hash").get<std::string>(), hash) || hash != expected.configHash) return;
-				if (body.at("status") != "waiting" && body.at("status") != "decided") return;
+				    body.at("frame") != expected.frame || !Unhex(body.at("config_hash").get<std::string>(), hash) || hash != expected.configHash) throw json::other_error::create(501, "frame reply", &body);
+				if (body.at("status") != "waiting" && body.at("status") != "decided") throw json::other_error::create(501, "frame reply", &body);
 				// The directory starts its full window when the check-in arrives.
 				// Starting our final-query clock at send time can put the final
 				// request before that deadline when the outward latency shrinks.
@@ -518,14 +551,17 @@ namespace RTE {
 				if (body.at("status") == "decided") {
 					auto members = body.at("members").get<std::vector<uint16_t>>();
 					if (members.empty() || members.size() * 2 != expected.owners.size() || !std::is_sorted(members.begin(), members.end()) ||
-					    std::adjacent_find(members.begin(), members.end()) != members.end() || !std::includes(expected.owners.begin(), expected.owners.end(), members.begin(), members.end())) return;
+					    std::adjacent_find(members.begin(), members.end()) != members.end() || !std::includes(expected.owners.begin(), expected.owners.end(), members.begin(), members.end())) throw json::other_error::create(501, "frame reply", &body);
 					m_FrameTieReply.state = NetFrameTieReply::State::Decided; m_FrameTieReply.members = std::move(members);
 				}
-			} catch (const json::exception&) { m_FrameTieReply = {}; }
+				m_FrameTieRetry.Succeeded();
+			} catch (const json::exception&) { m_FrameTieReply = {}; m_NextFrameTie = FailedReply(response, m_FrameTieRetry, steadyMs, "frame-tie"); m_FrameTieFinalQuerySent = false; }
+			else { m_NextFrameTie = FailedReply(response, m_FrameTieRetry, steadyMs, "frame-tie"); m_FrameTieFinalQuerySent = false; }
 		}
 		if (m_FrameTie || m_FrameTieFinalQuerySent || m_FrameTieReply.state == NetFrameTieReply::State::Decided) return;
 		const bool finalQuery = m_FrameTieBoundStartMs && steadyMs >= *m_FrameTieBoundStartMs + c_NetFrameTieDeadlineMs;
-		if (!finalQuery && steadyMs < m_NextFrameTie) return;
+		if (m_FrameTieCheckedIn && !finalQuery && m_SeatRequests.size() >= 11) return;
+		if (steadyMs < m_NextFrameTie || steadyMs < m_FrameTieRetry.nextMs || !CanSeatRequest(steadyMs, m_FrameTieCheckedIn)) return;
 		auto request = *m_FrameTieRequest;
 		// Retry an unacknowledged check-in, then only query the frozen tie.
 		// Keep the original request as the identity of this asynchronous operation.
@@ -533,10 +569,10 @@ namespace RTE {
 		const std::string body = SignedSeatRequest("frame-tie", unixSeconds, nullptr, &request);
 		if (!body.empty()) {
 			m_FrameTie = StartRequest("POST", body, static_cast<int>(c_NetFrameTieHttpTimeoutMs));
-			if (!m_FrameTieBoundStartMs) m_FrameTieBoundStartMs = steadyMs;
 			// At the full bound send one last status query and drain its bounded
 			// exchange. A missing answer never supplies frame authority.
 			m_FrameTieFinalQuerySent = finalQuery;
+			if (m_FrameTie) { m_SeatRequests.push_back(steadyMs); if (!request.queryOnly) m_NextSeatRequestMs = steadyMs + 5000; }
 		}
 	}
 
@@ -550,14 +586,14 @@ namespace RTE {
 				try {
 					const auto body = json::parse(response.body);
 					std::string error;
-					if (!Protocol(body, error)) return;
-					if (body.at("status") == "waiting") { m_HostChangeReply.state = NetHostChangeReply::State::Waiting; return; }
+					if (!Protocol(body, error)) throw json::other_error::create(501, "host reply", &body);
+					if (body.at("status") == "waiting") { m_HostChangeReply.state = NetHostChangeReply::State::Waiting; m_HostChangeRetry.Succeeded(); return; }
 					const auto& decision = body.at("decision");
 					const auto& request = *m_HostChangeRequest;
 					NetHash32 hash{};
 					if (decision.at("session_id") != m_SessionId || decision.at("previous_generation") != request.generation ||
 					    decision.at("generation") != request.generation + 1 || decision.at("round_id") != request.roundId ||
-					    !Unhex(decision.at("config_hash").get<std::string>(), hash) || hash != request.configHash) return;
+					    !Unhex(decision.at("config_hash").get<std::string>(), hash) || hash != request.configHash) throw json::other_error::create(501, "host reply", &body);
 					NetHostChangeReply reply;
 					reply.generation = decision.at("generation").get<uint64_t>(); reply.boundary = decision.at("boundary").get<uint64_t>();
 					const auto host = decision.at("host_seat").get<uint64_t>(), donor = decision.at("donor_seat").get<uint64_t>();
@@ -565,28 +601,29 @@ namespace RTE {
 					if (host > NetSeatLease::c_MaxStableSeat || donor > NetSeatLease::c_MaxStableSeat || reply.boundary == UINT64_MAX ||
 					    members.empty() || members.size() > NetMatchConfigUtil::c_MaxPlayers || !std::is_sorted(members.begin(), members.end()) ||
 					    std::adjacent_find(members.begin(), members.end()) != members.end() || members.back() > NetSeatLease::c_MaxStableSeat ||
-					    !std::binary_search(members.begin(), members.end(), host) || !std::binary_search(members.begin(), members.end(), donor)) return;
+					    !std::binary_search(members.begin(), members.end(), host) || !std::binary_search(members.begin(), members.end(), donor)) throw json::other_error::create(501, "host reply", &body);
 					if (request.agreedHost != UINT16_MAX && (host != request.agreedHost || reply.boundary != request.agreedBoundary ||
-					    std::vector<uint64_t>(request.agreedMembers.begin(), request.agreedMembers.end()) != members)) return;
+					    std::vector<uint64_t>(request.agreedMembers.begin(), request.agreedMembers.end()) != members)) throw json::other_error::create(501, "host reply", &body);
 					reply.host = static_cast<uint16_t>(host); reply.donor = static_cast<uint16_t>(donor);
 					for (const auto seat: members) reply.members.push_back(static_cast<uint16_t>(seat));
 					if (host == m_LocalLease->seat && body.contains("host_token")) {
 						const std::string token = body.at("host_token").get<std::string>();
-						if (token.empty() || token.size() > NetSeatLease::c_MaxTokenBytes) return;
+						if (token.empty() || token.size() > NetSeatLease::c_MaxTokenBytes) throw json::other_error::create(501, "host reply", &body);
 						m_HostChangeToken = token; NetRelayLogins::Remember(token);
 					}
-					reply.state = NetHostChangeReply::State::Decided; m_HostChangeReply = std::move(reply);
-				} catch (const json::exception&) { /* Invalid replies never end an established match. */ }
-			}
+					reply.state = NetHostChangeReply::State::Decided; m_HostChangeReply = std::move(reply); m_HostChangeRetry.Succeeded();
+				} catch (const json::exception&) { m_NextHostChange = FailedReply(response, m_HostChangeRetry, steadyMs, "host-change"); }
+			} else m_NextHostChange = FailedReply(response, m_HostChangeRetry, steadyMs, "host-change");
 		}
-		if (!m_HostChange && m_HostChangeReply.state != NetHostChangeReply::State::Decided && steadyMs >= m_NextHostChange) {
+		if (!m_HostChange && m_HostChangeReply.state != NetHostChangeReply::State::Decided && steadyMs >= m_NextHostChange && steadyMs >= m_HostChangeRetry.nextMs && CanSeatRequest(steadyMs)) {
 			const std::string body = SignedSeatRequest("host-change", unixSeconds, &*m_HostChangeRequest);
-			if (!body.empty()) m_HostChange = StartRequest("POST", body);
+			if (!body.empty()) { m_HostChange = StartRequest("POST", body); if (m_HostChange) { m_SeatRequests.push_back(steadyMs); m_NextSeatRequestMs = steadyMs + 5000; } }
 		}
 	}
 
 	void NetConnectionAuthority::Update(uint64_t steadyMs, uint64_t unixSeconds) {
 		std::lock_guard lock(m_Mutex);
+		m_LastUpdateMs = steadyMs;
 		if (m_LanBrowser) {
 			m_LanBrowser->Tick(steadyMs);
 			m_DirectHosts.clear();

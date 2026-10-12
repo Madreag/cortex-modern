@@ -245,7 +245,7 @@ def main():
             waiting = "[input-acceptance-wait]" in text["guest"]
             seat_counts = {}
             for seat in (0, 1):
-                stamps = [event["at_ms"] for event in events if event["kind"] in ("check-in", "host-change", "frame-tie") and not event["query_only"] and event["seat"] == seat]
+                stamps = [event["at_ms"] for event in events if event["kind"] in ("check-in", "host-change", "frame-tie") and event["seat"] == seat]
                 peak = max((sum(start <= at < start + 60000 for at in stamps) for start in stamps), default=0)
                 seat_counts[str(seat)] = peak
             busy = [event for event in events if event["error"] == "connection_busy"]
@@ -266,7 +266,7 @@ def main():
                               event["kind"] == "signals" and event["status"] == 429 for event in events),
                           admitted=all("[menu-script] connected:2 -> OK" in text[role] for role in runs),
                           no_premature_refusal=all("did not answer this seat request" not in value for value in text.values()),
-                          truthful_wait="The directory is busy" in text["guest"],
+                          truthful_wait="The directory is busy" in reports.get("guest", {}).get("directory_wait_line", ""),
                           no_expired_seat=reports.get("host", {}).get("reconnect", {}).get("host_provisional_seats_expired") == 0)
             details.update(host_report=reports.get("host", {}))
     except Exception as error:

@@ -5,6 +5,8 @@
 #include "NetDirectoryCodec.h"
 #include "NetMatchConfig.h"
 #include "NetHttpClient.h"
+#include "NetDirectoryRetry.h"
+#include <deque>
 
 #include <map>
 #include <memory>
@@ -143,6 +145,8 @@ namespace RTE {
 		std::string HostChangeToken(uint64_t generation) const;
 		NetFrameTieReply QueryFrameTie(const NetFrameTieRequest& request);
 		void Update(uint64_t steadyMs, uint64_t unixSeconds);
+		uint64_t AdmissionWaitedMs() const;
+		uint64_t AdmissionRetryMs() const;
 
 	private:
 		struct Operation {
@@ -197,6 +201,12 @@ namespace RTE {
 		uint64_t m_NextHostChange = 0;
 		uint64_t m_NextCheckIn = 0, m_NextBootstrap = 0, m_CheckIns = 0;
 		uint64_t m_NextNetworkProbe = 0, m_LastWallSeconds = 0;
+		NetDirectoryRetry m_IssueRetry, m_RemoveRetry, m_CheckInRetry, m_BootstrapRetry, m_HostChangeRetry, m_FrameTieRetry;
+		uint64_t m_NextSeatRequestMs = 0, m_LastUpdateMs = 0;
+		std::deque<uint64_t> m_SeatRequests;
+		uint64_t FailedReply(const NetHttpClient::Response& response, NetDirectoryRetry& retry, uint64_t nowMs, const char* path);
+		bool CanSeatRequest(uint64_t nowMs, bool queryOnly = false);
+		bool CanRequest(uint64_t nowMs) const;
 		uint32_t m_NetworkRevision = 0;
 		uint32_t m_NativeRouteRevision = 0;
 		uint32_t m_CheckInGeneration = 0, m_CheckedGeneration = 0, m_RelayGeneration = 0;

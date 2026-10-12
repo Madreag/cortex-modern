@@ -1531,6 +1531,7 @@ namespace RTE {
 		bool m_RewindAnchorHeld = false;
 		NetMatchServiceState m_State = NetMatchServiceState::Idle;
 		std::string m_StatusText = "Idle";
+		mutable std::string m_DirectoryWaitLine;
 		std::string m_ErrorText;
 		std::string m_ActivityPreset;
 		std::string m_ActivityModule;
