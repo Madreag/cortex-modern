@@ -341,7 +341,7 @@ This lane's runs are in C:/cortex-project/mx/in-match-fight15-erolpc-20261012 (u
 
 ## NEEDS TESTING
 
-(two machines over the relay; host EROL-PC Windows 11 headless through cortex-session1, joiner the Mac; every scene keeps its original assertions; EROL-PC receipt C:/cortex-project/mx/in-match-fight15-erolpc-20261012/build-final.json = commit ce9c81ab73, exe 3a4318d0; the Mac builds ce9c81ab73 itself)
+(two machines over the relay; host EROL-PC Windows 11 headless through cortex-session1, joiner the Mac; every scene keeps its original assertions; EROL-PC receipt C:/cortex-project/mx/in-match-fight15-erolpc-20261012/build-final.json names the branch tip and exe 3a4318d0; the Mac builds that same tip itself)
 - S06 - WHAT IT PROVES: a real rifle kill ends the round with the same named rule, tick and winner on both machines; expected GREEN: python tools/e2e_peers.py --repo C:/cortex-project/in-match-erolpc --scenario fight15-s06 --out "<CAPTURE>/s06" --peer-boxes "host=<EROL-PC-BOX>,joiner=<MAC-BOX>" --boxes-file "<BOX-FACTS.json>"
 - S08 - WHAT IT PROVES: the kick and ban buttons work, the host plays on, and the banned player is refused; ban expected GREEN, kick expected RED at the named line: python tools/e2e_peers.py --repo C:/cortex-project/in-match-erolpc --scenario fight15-s08 --out "<CAPTURE>/s08" --peer-boxes "host=<EROL-PC-BOX>,joiner=<MAC-BOX>" --boxes-file "<BOX-FACTS.json>"
 - S05 - WHAT IT PROVES: Buy, funds, delivery and fire on two machines; the host's last step expected RED until the End Match ruling: python tools/e2e_peers.py --repo C:/cortex-project/in-match-erolpc --scenario fight15-s05 --out "<CAPTURE>/s05" --peer-boxes "host=<EROL-PC-BOX>,joiner=<MAC-BOX>" --boxes-file "<BOX-FACTS.json>"
