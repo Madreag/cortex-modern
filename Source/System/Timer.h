@@ -8,7 +8,7 @@ namespace RTE {
 	class CheckpointNativeSnapshot;
 
 	/// A precise timer for FPS sync etc.
-	class Timer {
+	class Timer : public CheckpointNativeAllocated {
 		friend struct ContractAudit;
 
 
