@@ -2172,6 +2172,10 @@ std::string MovableMan::CheckpointOptionsStorageSelfTestMismatch() {
 	alarm->m_ScenePos.SetXY(7.25F, -0.0F); alarm->m_Team = Activity::TeamTwo; alarm->m_Range = 3.25F;
 	const auto* alarmIdentity = alarm.get();
 	header.m_OwnedCheckpointMembership->m_AlarmEvents.push_back(alarm.get());
+	auto retired = std::make_unique<MOPixel>();
+	MovableObject* const retiredIdentity = retired.get();
+	header.m_OwnedCheckpointMembership->m_MOIDIndex = {nullptr, retiredIdentity, retiredIdentity};
+	retired.reset();
 	CheckpointNativeStorage::Root<MovableMan> root(&header);
 	auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
 	auto prepared = CheckpointNativeStorage::PrepareInventory();
@@ -2191,6 +2195,9 @@ std::string MovableMan::CheckpointOptionsStorageSelfTestMismatch() {
 	auto roots = snapshot->ReadValues(); roots.push_back(root.Range());
 	CheckpointNativeStorage::ReadScope privateValues(prepared->Pages(), roots);
 	if (save(manager->CheckpointOptionsValues()) != expected) return "the rebuilt world options changed their archive";
+	const auto& slots = manager->CheckpointMembershipValues().m_MOIDIndex;
+	if (slots.size() != 3 || slots[0] || slots[1] != retiredIdentity || slots[2] != retiredIdentity)
+		return "saved world slots clone retired objects or lose their captured identities";
 	const auto& alarms = manager->CheckpointMembershipValues().m_AlarmEvents;
 	if (alarms.size() != 1 || alarms[0] != snapshot->CopyValue(alarmIdentity) || alarms[0]->m_ScenePos.GetX() != 7.25F ||
 	    !std::signbit(alarms[0]->m_ScenePos.GetY()) || alarms[0]->m_Team != Activity::TeamTwo || alarms[0]->m_Range != 3.25F)
