@@ -224,7 +224,14 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::FreezeRows(const BITMAP* s
 		const auto* lines = static_cast<uint8_t* const*>(CheckpointNativeStorage::View(source->line, sizeof(uint8_t*) * source->h));
 		auto rows = std::make_unique<FrozenRows>();
 		rows->pages = CheckpointNativeStorage::PagesFor(lines[0], rowBytes);
-		if (!rows->pages) throw std::logic_error("bitmap pixels are outside the frozen inventory");
+		if (!rows->pages) {
+			for (int row = 0; row < source->h; ++row) if (!CheckpointNativeStorage::Private(lines[row], rowBytes))
+				throw std::logic_error("bitmap pixels are outside frozen or private storage");
+			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+			BITMAP pixels = *source;
+			pixels.line = const_cast<uint8_t**>(lines);
+			return CaptureRows(&pixels, previous, markedRows, markedAll, true);
+		}
 		rows->sourceRows.reserve(source->h);
 		for (int row = 0; row < source->h; ++row) {
 			if (!rows->pages->Contains(lines[row], rowBytes)) throw std::logic_error("bitmap rows span unowned frozen storage");
@@ -357,6 +364,32 @@ bool BitmapSnapshot::RunSelfTest() {
 	};
 	try {
 		check("null_capture", !Capture(nullptr));
+		for (const int depth: {8, 15, 16, 24, 32}) {
+			std::shared_ptr<const BitmapSnapshot> saved;
+			std::string expected;
+			{
+				CheckpointNativeStorage::ReadScope read(CheckpointNativeStorage::ReadViews{true});
+				const size_t before = CheckpointNativeStorage::PrivateAllocationCount();
+				BitmapPtr image(create_bitmap_ex(depth, 19, 7));
+				if (!image) throw std::bad_alloc();
+				const size_t rowBytes = 19 * ((depth + 7) / 8);
+				expected.resize(rowBytes * 7);
+				for (size_t at = 0; at < expected.size(); ++at) expected[at] = static_cast<char>((at * 17 + depth * 3) & 255);
+				for (int row = 0; row < 7; ++row) std::memcpy(image->line[row], expected.data() + row * rowBytes, rowBytes);
+				const size_t live = CheckpointNativeStorage::PrivateAllocationCount();
+				bool refused = false;
+				{
+					CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+					try { (void)Freeze(image.get()); } catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+				}
+				check("private_image_refusal_keeps_owner_" + std::to_string(depth), refused && CheckpointNativeStorage::PrivateAllocationCount() == live);
+				saved = Freeze(image.get());
+				for (int row = 0; row < 7; ++row) std::memset(image->line[row], 91, rowBytes);
+				image.reset();
+				check("private_image_releases_owner_" + std::to_string(depth), CheckpointNativeStorage::PrivateAllocationCount() == before);
+			}
+			check("private_image_retry_survives_source_and_reader_" + std::to_string(depth), saved && saved->PixelBytes() == expected);
+		}
 		{
 			BitmapPtr parent(create_bitmap_ex(8, 1031, 79));
 			if (!parent) throw std::bad_alloc();
