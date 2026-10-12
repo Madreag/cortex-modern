@@ -928,7 +928,9 @@ namespace RTE {
 			const auto next = [&] { state ^= state << 13; state ^= state >> 7; state ^= state << 17; return state; };
 			for (size_t index = 0; index < frames.size(); ++index) {
 				auto& actor = frames[index];
-				actor.actorUniqueID = static_cast<int64_t>(index + 1); actor.stateMask = next();
+				actor.actorUniqueID = static_cast<int64_t>(index + 1);
+				if constexpr (ControlState::CONTROLSTATECOUNT >= 64) actor.stateMask = next();
+				else actor.stateMask = next() & ((uint64_t{1} << ControlState::CONTROLSTATECOUNT) - 1);
 				actor.analogMoveX = static_cast<int16_t>(next()); actor.analogMoveY = static_cast<int16_t>(next());
 				actor.analogAimX = static_cast<int16_t>(next()); actor.analogAimY = static_cast<int16_t>(next());
 				actor.aimAngle = static_cast<float>(next() % 6283) / 1000.0F;
@@ -1028,9 +1030,12 @@ namespace RTE {
 			return true;
 		}
 		if (name == "kick-received" || name == "kick-received-two") {
-			auto& host = *rounds[0]; const uint64_t next = host.GetStats().nextFrame;
-			// The removed player's input for our next frames has arrived and been receipted before the kick.
-			if (!host.m_RemoteFrames.contains(next) || !host.m_RemoteFrames.at(next).contains(2)) { *error = "the kicked player's next input had not arrived"; return false; }
+			auto& host = *rounds[0];
+			// The removed player's input for the frame we wait on has arrived before the kick.
+			const auto arrived = [&] { const auto next = host.m_RemoteFrames.find(host.GetStats().nextFrame); return next != host.m_RemoteFrames.end() && next->second.contains(2); };
+			for (const uint64_t until = hub.now + 500; hub.now < until && !arrived();) if (!step(true)) return false;
+			if (!arrived()) { *error = "the kicked player's input for the host's next frame never arrived ahead of it"; return false; }
+			const uint64_t next = host.GetStats().nextFrame;
 			host.EvictRemovedPeer(2, "removed from the session", hub.now);
 			hostSession.DisconnectReadyPeer(originalRoute, NetRejectReason::ParticipantRemoved, c_NetRemovedLinkText);
 			const uint64_t boundary = host.m_PeerLeaveFrames.contains(2) ? host.m_PeerLeaveFrames.at(2) : 0;

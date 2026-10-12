@@ -17970,7 +17970,8 @@ namespace RTE {
 		const size_t first = script->sent.size();
 		service.m_Directory.Update(1001); service.UpdateRelayOffer(1001);
 		NetRelayConfig offered;
-		if (first != 2 || service.ReadRelayOffer(offered)) { *error = "relay mint retry: the room's first mint was not sent or was published unrefused"; return false; }
+		(void)service.ReadRelayOffer(offered);
+		if (first != 2 || !offered.Empty()) { *error = "relay mint retry: the room's first mint was not sent or was published unrefused"; return false; }
 		service.m_Directory.Update(8000); service.UpdateRelayOffer(8000);
 		if (script->sent.size() != first) { *error = "relay mint retry: the host minted before the directory's retry time"; return false; }
 		NetRelayConfig relay = NetRelayConfig::Fixed("relay.example:3478", "temporary-user", "temporary-password", "11111111-2222-4333-8444-555555555555:1", now + NetDirectoryClient::c_MaxRelayTtlSeconds);
