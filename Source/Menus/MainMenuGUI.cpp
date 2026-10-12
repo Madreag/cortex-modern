@@ -773,6 +773,9 @@ void MainMenuGUI::ShowMultiplayerScreen() {
 	// The saved name is what an unconnected landing starts from; a live lobby keeps the name it joined under.
 	if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
 		m_MultiplayerNameTextBox->SetText(SavedMultiplayerName());
+		if (netMatchState == NetMatchServiceState::Completed) {
+			m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(g_NetMatchService.GetStatusText()));
+		}
 	}
 	RefreshMultiplayerScreenControls(g_NetMatchService.GetLobbySnapshot());
 	m_MenuScreenChange = false;
@@ -4167,9 +4170,9 @@ bool MainMenuGUI::JoiningNeedsProgress(const NetLobbySnapshot& snapshot) {
 
 void MainMenuGUI::UpdateMultiplayerScreen() {
 	g_NetMatchService.Update();
-	// A completed match leaves the session connected; reconvene both peers in the lobby for a rematch.
-	// On a lost session this settles the service into Failed once, so it is not retried every frame.
-	if (g_NetMatchService.GetState() == NetMatchServiceState::Completed && !g_NetMatchService.NeedsHostOptionsCorrection()) {
+	// A rematch needs another player; an empty session keeps the completed result on screen.
+	if (g_NetMatchService.GetState() == NetMatchServiceState::Completed && !g_NetMatchService.NeedsHostOptionsCorrection() &&
+	    g_NetMatchService.NeedsRematchAttempt()) {
 		g_NetMatchService.ReturnToLobby();
 	}
 	const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
@@ -4223,7 +4226,8 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 	} else if (!inMatchOrLobby && (m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby || m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation ||
 	            (m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions && !m_HostOptionsSetupDraft))) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
-		m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(GroupDelimiterForDisplay(FormatModuleMismatchStatus(snapshot.errorText))));
+		const std::string result = snapshot.errorText.empty() && snapshot.serviceState == "Completed" ? snapshot.statusText : snapshot.errorText;
+		m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(GroupDelimiterForDisplay(FormatModuleMismatchStatus(result))));
 	}
 
 	RefreshMultiplayerScreenControls(snapshot);

@@ -590,6 +590,7 @@ namespace RTE {
 		/// Reconvenes a completed match's still-connected session in the lobby for a rematch.
 		/// Fails (and settles the service into Failed) when the session was lost.
 		bool ReturnToLobby(std::string* error = nullptr);
+		bool NeedsRematchAttempt() const;
 
 		/// Recovers a desynced match: the host snapshots its state and streams it through the lobby
 		/// round; every peer relaunches from the identical file. Requires the session to be alive.
@@ -1530,6 +1531,7 @@ namespace RTE {
 		bool m_RewindAnchorHeld = false;
 		NetMatchServiceState m_State = NetMatchServiceState::Idle;
 		std::string m_StatusText = "Idle";
+		mutable std::string m_DirectoryWaitLine;
 		std::string m_ErrorText;
 		std::string m_ActivityPreset;
 		std::string m_ActivityModule;
@@ -1926,6 +1928,7 @@ namespace RTE {
 		uint64_t m_HeldRejoinRetryAtMs = 0;     //!< When the armed retry of the host begins; 0 when none is armed.
 		uint64_t m_HeldRejoinPriorInput = 0;
 		std::string m_HostEndReason; //!< The host's End Match reason while its round plays to the agreed end frame.
+		bool m_HostEndedRound = false; //!< The host chose End Match; keep the completed round until another match starts.
 		bool m_HeldRejoinDriving = false; //!< The held seat's rejoin loop owns the attempts until a launch or its last failure.
 		bool m_LaunchedFreshRound = false; //!< The last launch handed up starts a lobby's fresh round.
 		bool m_RematchReturnOwed = false; //!< Client: the last rematch setup lost its link and the seat returns through the rejoin.

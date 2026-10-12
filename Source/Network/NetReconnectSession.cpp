@@ -1302,6 +1302,7 @@ namespace RTE {
 		pending.connection = connection;
 		pending.holderGeneration = holderGeneration;
 		pending.openedAtMs = nowMs;
+		pending.directoryWaitedMs = m_ConnectionAuthority ? m_ConnectionAuthority->AdmissionWaitedMs() : 0;
 		pending.lastSentMs = nowMs;
 		pending.key = MakeKey(NetMessageType::NewJoin, seat->seat.stableSeat, holderGeneration, message.identity);
 		pending.offer = NetH4TicketOffer{c_NetH4Version, message.txId, m_Registry->GetEpoch(), seat->seat.stableSeat, holderGeneration, credential, m_HostSessionId, static_cast<uint32_t>(c_ProvisionalExpiryMs)};
@@ -2507,6 +2508,7 @@ namespace RTE {
 		pending.identity = applicant->identity;
 		pending.displayName = applicant->displayName;
 		pending.openedAtMs = nowMs;
+		pending.directoryWaitedMs = m_ConnectionAuthority ? m_ConnectionAuthority->AdmissionWaitedMs() : 0;
 		pending.lastSentMs = nowMs;
 		pending.key = SubstitutionKey(stableSeat, holderGeneration);
 		pending.offer = NetH4SubstitutionOffer{c_NetH4Version, txId, m_Registry->GetEpoch(), stableSeat, holderGeneration,
@@ -2777,12 +2779,25 @@ namespace RTE {
 		// A carried application nobody asked this host again for goes as an unanswered applicant does.
 		if (!m_CarriedApplicants.empty() && nowMs >= m_CarriedApplicantsUntilMs) m_CarriedApplicants.clear();
 		for (auto pending = m_Provisionals.begin(); pending != m_Provisionals.end();) {
+			if (m_ConnectionAuthority && pending->offer.seatToken.empty()) {
+				const uint64_t waited = m_ConnectionAuthority->AdmissionWaitedMs();
+				const uint64_t delta = waited >= pending->directoryWaitedMs ? waited - pending->directoryWaitedMs : 0;
+				pending->directoryWaitedMs = waited;
+				pending->openedAtMs += std::min(delta, nowMs >= pending->openedAtMs ? nowMs - pending->openedAtMs : 0);
+				const uint64_t retry = m_ConnectionAuthority->AdmissionRetryMs();
+				if (retry != 0 && pending->connection != c_InvalidNetPeerId && nowMs >= pending->directoryNoticeMs) {
+					pending->directoryNoticeMs = nowMs + 1000;
+					NetH4ConnectionLease notice; notice.directoryWaitMs = static_cast<uint32_t>(std::min<uint64_t>(retry, UINT32_MAX));
+					Send(pending->connection, notice);
+				}
+			}
 			if (nowMs >= pending->openedAtMs && nowMs - pending->openedAtMs > c_ProvisionalExpiryMs) {
 				if (m_ConnectionAuthority && pending->offer.seatToken.empty() && pending->connection != c_InvalidNetPeerId)
 					Send(pending->connection, NetJoinRejected{NetRejectReason::HostNotAccepting, "The directory did not answer this seat request. Reconnecting will retry; Cancel returns to Multiplayer.", "connection_retry", "", ""});
 				if (m_Registry != nullptr) {
 					m_Registry->RevokeSeat(pending->stableSeat);
 				}
+				DiagnosticLine() << "[net-directory-seat] expired after its available admission time" << std::endl;
 				++m_Stats.provisionalSeatsExpired;
 				pending = m_Provisionals.erase(pending);
 				continue;
@@ -2820,6 +2835,12 @@ namespace RTE {
 		}
 		for (size_t index = 0; index < m_Substitutions.size();) {
 			Substitution& pending = m_Substitutions[index];
+            if (m_ConnectionAuthority && pending.offer.seatToken.empty()) {
+                const uint64_t waited = m_ConnectionAuthority->AdmissionWaitedMs();
+                const uint64_t delta = waited >= pending.directoryWaitedMs ? waited - pending.directoryWaitedMs : 0;
+                pending.directoryWaitedMs = waited;
+                pending.openedAtMs += std::min(delta, nowMs >= pending.openedAtMs ? nowMs - pending.openedAtMs : 0);
+            }
 			if (nowMs >= pending.openedAtMs && nowMs - pending.openedAtMs > c_ProvisionalExpiryMs) {
 				AbandonSubstitution(index, NetH4DenialReason::SeatNotSubstitutable, "the substitution was not acknowledged in time", nowMs);
 				continue;
@@ -3292,6 +3313,7 @@ namespace RTE {
 	bool NetReconnectClient::HandleMessage(const NetPayload& payload, uint64_t nowMs) {
 		if (const auto* renewed = std::get_if<NetH4ConnectionLease>(&payload)) {
 			if (renewed->seatToken.empty()) {
+				if (renewed->directoryWaitMs != 0) m_DirectoryRetryUntilMs->store(NetDirectoryRetry::After(ConnectionNowMs(), renewed->directoryWaitMs));
 				if (m_State == NetH4ClientState::Joining || m_State == NetH4ClientState::Applying || m_State == NetH4ClientState::Applied) {
 					m_State = NetH4ClientState::WaitingAuthority; m_HasPendingRequest = false;
 				}
@@ -3484,7 +3506,7 @@ namespace RTE {
 			const bool provenReturn = m_State == NetH4ClientState::Proving && m_HasRecord && committed->txId == m_TxId;
 			m_Incarnation = committed->incarnation;
 			m_AssignedPeerId = committed->assignedPeerId;
-			m_State = NetH4ClientState::Joined;
+			m_State = NetH4ClientState::Joined; m_DirectoryRetryUntilMs->store(0);
 			m_ReturnRetryDelayMs = 0;
 			++m_Stats.commitsReceived;
 			if (NetA7Journal::Enabled() && a7NewCommit) NetA7Journal::Session("commit", nowMs, {{"stable_seat", committed->stableSeat},
@@ -3561,7 +3583,15 @@ namespace RTE {
 		m_State = NetH4ClientState::Left;
 	}
 
+	std::string NetReconnectClient::DirectoryWaitingText() const {
+		const uint64_t nowMs = ConnectionNowMs();
+		const uint64_t untilMs = m_DirectoryRetryUntilMs->load();
+		if (untilMs <= nowMs) return {};
+		return "The directory is busy. The host retries in " + std::to_string((untilMs - nowMs + 999) / 1000) + " seconds. Cancel returns to Multiplayer.";
+	}
+
 	void NetReconnectClient::Tick(uint64_t nowMs) {
+		if (m_State != NetH4ClientState::WaitingAuthority) m_DirectoryRetryUntilMs->store(0);
 		if (m_ConnectionAuthority && m_HasRecord && !m_Record.seatToken.empty()) {
 			m_ConnectionAuthority->Update(ConnectionNowMs(), UnixNowMs() / 1000);
 			if (const auto lease = m_ConnectionAuthority->LocalLease(); lease && lease->token != m_Record.seatToken && nowMs >= m_LeasePersistAtMs) {

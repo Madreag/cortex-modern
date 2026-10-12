@@ -685,7 +685,13 @@ namespace RTE {
 
 		bool EncodePayload(const NetH4ConnectionLease& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
 			AppendU16LE(out, payload.h4Version);
-			AppendBytes(out, payload.authorityKey);
+			auto key = payload.authorityKey;
+			if (payload.seatToken.empty() && payload.directoryWaitMs != 0) {
+				// No authority key is used before a ticket arrives. The fixed-size notice stays readable by earlier peers.
+				key = {}; key[0] = 'W'; key[1] = 'A'; key[2] = 'I'; key[3] = 'T';
+				for (size_t n = 0; n < 4; ++n) key[4 + n] = static_cast<uint8_t>(payload.directoryWaitMs >> (8 * n));
+			}
+			AppendBytes(out, key);
 			return AppendString(out, payload.seatToken, 512, "seat_token", error);
 		}
 
@@ -1228,9 +1234,15 @@ namespace RTE {
 		}
 
 		bool DecodePayload(ByteReader& reader, NetH4ConnectionLease& payload, NetProtocolError* error) {
-			return ReadH4Version(reader, payload.h4Version, error) &&
-			       ReadOrTruncated(reader.ReadBytes(payload.authorityKey), reader, error, "authority_key") &&
-			       reader.ReadString(payload.seatToken, 512, "seat_token", error);
+			if (!ReadH4Version(reader, payload.h4Version, error) || !ReadOrTruncated(reader.ReadBytes(payload.authorityKey), reader, error, "authority_key") ||
+			    !reader.ReadString(payload.seatToken, 512, "seat_token", error)) return false;
+			const auto& key = payload.authorityKey;
+			if (payload.seatToken.empty() && key[0] == 'W' && key[1] == 'A' && key[2] == 'I' && key[3] == 'T' &&
+			    std::all_of(key.begin() + 8, key.end(), [](uint8_t byte) { return byte == 0; })) {
+				for (size_t n = 0; n < 4; ++n) payload.directoryWaitMs |= static_cast<uint32_t>(key[4 + n]) << (8 * n);
+				payload.authorityKey = {};
+			}
+			return true;
 		}
 
 		bool DecodePayload(ByteReader& reader, NetH4RosterRevision& payload, NetProtocolError* error) {

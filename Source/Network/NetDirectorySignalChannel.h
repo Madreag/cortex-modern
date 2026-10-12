@@ -3,6 +3,7 @@
 #include "NetDirectoryClient.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -71,6 +72,7 @@ namespace RTE {
 		/// queued are dropped.
 		void Abandon();
 
+		uint64_t RetryUntilMs() const { return m_BusyUntilMs.load(); }
 		State GetState() const { return m_State; }
 		const std::string& GetLocalPeer() const { return m_LocalPeer; }
 		/// The joiner's bearer nonce; empty on the host end.
@@ -93,8 +95,8 @@ namespace RTE {
 		static constexpr size_t c_MaxSignalBytes = 64 * 1024; //!< The service's MAX_PAYLOAD.
 		static constexpr size_t c_MaxPendingPosts = 256;      //!< The service's MAX_QUEUE.
 		static constexpr size_t c_JoinNonceChars = 32;
-		static constexpr uint64_t c_RetryBaseMs = 5000;       //!< Backoff starts here, doubles to the cap.
-		static constexpr uint64_t c_RetryMaxMs = 60000;
+		static constexpr uint64_t c_RetryBaseMs = 1000;       //!< Backoff starts here, doubles to the cap.
+		static constexpr uint64_t c_RetryMaxMs = 30000;
 		static constexpr uint64_t c_DrainBudgetMs = 2000;
 
 	private:
@@ -111,7 +113,7 @@ namespace RTE {
 		void NoteError(const std::string& error);
 		void Fail(const std::string& reason, const std::string& detail = "");
 		void AbortRequest();
-		void ScheduleRetry(uint64_t nowMs); //!< Transport error, bad body or 5xx: every request waits 5s,10s,20s..60s.
+		void ScheduleRetry(uint64_t nowMs); //!< Each request path waits 1s, 2s, 4s, up to 30s.
 		void StartRequest(RequestKind kind, const NetDirectoryClient::Request& request);
 		void IssuePost();
 		void IssuePoll(uint64_t nowMs);
@@ -154,6 +156,12 @@ namespace RTE {
 		uint64_t m_SignalsReceived = 0;
 		uint64_t m_Polls = 0;
 		long m_LastStatus = 0;
+		NetDirectoryRetry m_PostRetry, m_PollRetry;
+		NetDirectoryClient::Reply m_RetryReply;
+		RequestKind m_ReplyKind = RequestKind::None;
+		std::string m_InstallKey;
+		bool m_HttpTransport = true, m_PollFirst = false;
+		std::atomic<uint64_t> m_BusyUntilMs{0};
 		std::string m_LastError;
 	};
 

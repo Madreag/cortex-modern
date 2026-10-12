@@ -336,7 +336,8 @@ class ConnectionAuthority:
             if nonce in recent:
                 raise ConnectionErrorReply(409, "connection_replay", "This check-in was already used. Reconnecting will send a fresh request.")
             if len(recent) >= 64:
-                raise ConnectionErrorReply(429, "connection_busy", "Too many connection changes. Wait a moment while reconnecting retries.", retry_after_s=5)
+                wait = max(1, int(min(recent.values()) - now + .999999))
+                raise ConnectionErrorReply(429, "connection_busy", "Too many connection changes. Wait a moment while reconnecting retries.", retry_after_s=wait)
             recent[nonce] = now + REQUEST_WINDOW_SECONDS * 2
             changed = seat["route"] != route or seat["instance"] != instance
             path_changed = seat["instance"] != instance or any(seat["route"].get(key) != route.get(key) for key in ("ice_identity", "ice_virtual_port", "listen_addrs", "generation"))
