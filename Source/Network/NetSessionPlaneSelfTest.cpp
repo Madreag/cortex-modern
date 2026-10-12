@@ -1025,9 +1025,9 @@ namespace RTE {
 			for (const uint64_t until = hub.now + 3000; hub.now < until;) if (!step(true)) return false;
 			const uint64_t accepted = rounds[0]->m_PeerAcceptedThrough[2];
 			std::cout << "[net-session-scene] returned-input host_frame=" << applied[0] << " joiner_frame=" << applied[1]
-			          << " accepted_through=" << accepted << " holds=" << rounds[0]->GetStats().peers[2].holds << std::endl;
+			          << " accepted_through=" << accepted << " holds=" << rounds[0]->GetStats().peers.at(2).holds << std::endl;
 			if (!rounds[0]->IsRunning() || !rounds[1]->IsRunning() || rounds[0]->HasHeldAISeat(2) || rounds[1]->HasHeldAISeat(2) ||
-			    std::min(applied[0], applied[1]) < activation + 100 || accepted < activation + 100 || rounds[0]->GetStats().peers[2].holds != 1) {
+			    std::min(applied[0], applied[1]) < activation + 100 || accepted < activation + 100 || rounds[0]->GetStats().peers.at(2).holds != 1) {
 				*error = "the answered returning seat did not resume its accepted input and live play"; return false;
 			}
 			rounds[1]->Leave("Match left");
