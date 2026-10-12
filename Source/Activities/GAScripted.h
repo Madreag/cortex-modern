@@ -13,6 +13,10 @@
 
 #include "LuabindObjectWrapper.h"
 
+#include <functional>
+#include <memory>
+#include <string_view>
+
 namespace RTE {
 
 	class ACraft;
@@ -155,9 +159,9 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass;
 
 		// The path to the lua script file that defines this' behaviors with overrides of its virtual functions
-		std::string m_ScriptPath;
+		CheckpointString m_ScriptPath;
 		// The name of the class (table) defining the logic of this in Lua, as specified in the script file
-		std::string m_LuaClassName;
+		CheckpointString m_LuaClassName;
 		// The list of Area:s required in a Scene to play this Activity on it
 		CheckpointSet<CheckpointString> m_RequiredAreas;
 		std::vector<CheckpointText> m_FrozenPieSlices;
@@ -166,7 +170,11 @@ namespace RTE {
 		CheckpointVector<GlobalScript*> m_GlobalScriptsList;
 		bool m_HasSavedGlobalScripts = false;
 
-		std::unordered_map<std::string, std::unique_ptr<LuabindObjectWrapper>> m_ScriptFunctions; //!< A map of LuabindObjectWrappers that hold Lua functions. Used to maintain script execution order and avoid extraneous Lua calls.
+		struct ScriptFunctionHash {
+			using is_transparent = void;
+			size_t operator()(std::string_view name) const noexcept { return std::hash<std::string_view>{}(name); }
+		};
+		CheckpointUnorderedMap<CheckpointString, std::unique_ptr<LuabindObjectWrapper>, ScriptFunctionHash, std::equal_to<>> m_ScriptFunctions; //!< A map of LuabindObjectWrappers that hold Lua functions. Used to maintain script execution order and avoid extraneous Lua calls.
 
 		/// Private member variable and method declarations
 	private:
