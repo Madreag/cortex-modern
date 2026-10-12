@@ -713,6 +713,7 @@ int FrameMan::Initialize() {
 }
 
 int FrameMan::CreateBackBuffers() {
+	CheckpointNativeStorage::AllocationScope resources(true);
 	int resX = g_WindowMan.GetResX();
 	int resY = g_WindowMan.GetResY();
 
@@ -819,6 +820,7 @@ void FrameMan::Update() {
 }
 
 void FrameMan::ResetSplitScreens(bool hSplit, bool vSplit) {
+	CheckpointNativeStorage::AllocationScope resources(true);
 	// Override screen splitting according to settings if needed
 	if ((hSplit || vSplit) && !(hSplit && vSplit) && m_TwoPlayerVSplit) {
 		hSplit = false;
@@ -2195,6 +2197,19 @@ bool FrameMan::RunPaletteCheckpointSelfTest() {
 		}
 	}
 	check(LoadPaletteCheckpoint(original, false) && SavePaletteCheckpoint() == original, "original_palette_restored");
+	for (BITMAP* bitmap: {m_BackBuffer8.get(), m_BackBuffer32.get()}) {
+		const int originalPixel = getpixel(bitmap, 0, 0);
+		struct RestorePixel {
+			BITMAP* bitmap; int pixel;
+			~RestorePixel() { putpixel(bitmap, 0, 0, pixel); }
+		} restorePixel{bitmap, originalPixel};
+		const std::string expected = GUICheckpoint::SaveBitmap(bitmap);
+		auto prepared = CheckpointNativeStorage::PrepareInventory();
+		check(prepared->Arm(), "borrowed_frame_buffer_ranges_armed");
+		putpixel(bitmap, 0, 0, originalPixel ^ 1);
+		CheckpointNativeStorage::ReadScope read(prepared->Pages());
+		check(CheckpointNativeStorage::Source(bitmap) != bitmap && GUICheckpoint::SaveBitmap(bitmap) == expected, "borrowed_frame_buffer_pixels_survive_source_draw");
+	}
 	return passed;
 }
 
