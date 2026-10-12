@@ -7658,6 +7658,8 @@ void RunGameLoop() {
 
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
 			const long long paceWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
+			const bool heldTickDetails = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && ScenarioRunner::IsLockstepOwnSeatHeld();
+			long long heldBeforeWorldUs = 0, heldAfterWorldUs = 0, heldAfterHashUs = 0, heldAfterCollectionUs = 0;
 			const bool measureLockstepCost = ScenarioRunner::IsLockstepControllerSyncActive();
 			g_PerformanceMan.NewPerformanceSample();
 			if (!measureLockstepCost) g_PerformanceMan.UpdateMSPSU();
@@ -8215,6 +8217,7 @@ void RunGameLoop() {
 				g_MovableMan.CompleteQueuedMOIDDrawings();
 
 				g_ConsoleMan.Update();
+				if (heldTickDetails) heldBeforeWorldUs = g_TimerMan.GetAbsoluteTime();
 				{
 					static const uint64_t soundPhase = Hash("Tick");
 					SoundSimulationScope simulationSounds(0, soundPhase);
@@ -8230,6 +8233,7 @@ void RunGameLoop() {
 					g_LuaMan.ClearScriptTimings();
 					g_MovableMan.Update();
 				}
+				if (heldTickDetails) heldAfterWorldUs = g_TimerMan.GetAbsoluteTime();
 			}
 			if (ScenarioRunner::HasControllerReplayError()) {
 				HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);
@@ -8385,6 +8389,7 @@ void RunGameLoop() {
 				}
 			}
 
+			if (heldTickDetails) heldAfterHashUs = g_TimerMan.GetAbsoluteTime();
 			// Start async GC after all main-thread Lua work for this tick is done. Earlier (inside MovableMan::Update)
 			// it overlapped with LateUpdateGlobalScripts on main, opening a window for ABBA between main holding one
 			// state for the global script and a worker GC __gc finalizer wanting it from another state.
@@ -8396,6 +8401,7 @@ void RunGameLoop() {
 				NetLockstepPlane::Window collectionWindow("tick-end collection wait");
 				g_LuaMan.WaitForAsyncGarbageCollection();
 			}
+			if (heldTickDetails) heldAfterCollectionUs = g_TimerMan.GetAbsoluteTime();
 			if (s_crossLeaveRequested) { s_crossLeaveRequested = false; s_scriptedLeaveDue = true; }
 			if (const MinimizeLever& lever = TestMinimizeLever(); lever.to != 0 && g_WindowMan.GetWindow()) {
 				SDL_Window* window = g_WindowMan.GetWindow();
@@ -8662,6 +8668,18 @@ void RunGameLoop() {
 				++s_paceSimTicks;
 				const long long elapsedUs = g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
 				s_paceSimUs += elapsedUs;
+				if (heldTickDetails) {
+					static long long detailAtUs = 0;
+					if (paceTickStartUs >= detailAtUs + 1000000) {
+						detailAtUs = paceTickStartUs;
+						System::PrintDiagnosticLine("[net-held-tick-cost] frame=" + std::to_string(simTick) +
+						    " before_world_us=" + std::to_string(heldBeforeWorldUs - paceTickStartUs) +
+						    " world_us=" + std::to_string(heldAfterWorldUs - heldBeforeWorldUs) +
+						    " hash_us=" + std::to_string(heldAfterHashUs - heldAfterWorldUs) +
+						    " collection_us=" + std::to_string(heldAfterCollectionUs - heldAfterHashUs) +
+						    " finish_us=" + std::to_string(paceTickStartUs + elapsedUs - heldAfterCollectionUs));
+					}
+				}
 				if (!lockstepPausedTick) ScenarioRunner::NoteLockstepLocalTickCost(simTick,
 				    std::max(0LL, elapsedUs - (ScenarioRunner::GetLockstepWaitUs() - paceWaitStartUs)) / 1000.0);
 				if (g_MetricsCollector.EventsEnabled()) {

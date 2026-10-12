@@ -16,6 +16,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <random>
 #include <thread>
@@ -859,6 +860,16 @@ namespace RTE {
 		if (!m_MatchConfig.peerInputDelayFrames.empty()) {
 			for (uint8_t peerId = 1; peerId <= m_MatchConfig.peerCount; ++peerId) {
 				lockstepConfig.peerInputDelayFrames[peerId] = NetMatchConfigUtil::PeerInputDelay(m_MatchConfig, peerId);
+			}
+		}
+		if (lockstepConfig.adaptiveInputDelay) if (const char* value = std::getenv("CC_TEST_MATCH_DELAY_EXCESS")) {
+			const unsigned long excess = std::strtoul(value, nullptr, 10);
+			if (excess > 0 && excess <= 30) {
+				for (uint8_t peer = 1; peer <= m_MatchConfig.peerCount; ++peer) {
+					const uint16_t original = NetMatchConfigUtil::PeerInputDelay(m_MatchConfig, peer);
+					lockstepConfig.peerInputDelayFrames[peer] = static_cast<uint16_t>(std::min<unsigned long>(60, original + excess));
+				}
+				lockstepConfig.inputDelayFrames = lockstepConfig.peerInputDelayFrames.at(lockstepConfig.localPeerId);
 			}
 		}
 		lockstepConfig.timeoutMs = config.missingFrameGraceMs;

@@ -83,6 +83,7 @@ namespace RTE {
 		uint32_t Percentile(unsigned percent) const;
 		void ForgetSilencesBefore(uint64_t nowMs);
 		std::deque<std::pair<uint64_t, uint32_t>> m_Samples;
+		uint32_t m_LastMeasuredRttMs = 0;
 		std::deque<std::pair<uint64_t, uint32_t>> m_Silences;
 		std::optional<uint64_t> m_BelowSince;
 	};
