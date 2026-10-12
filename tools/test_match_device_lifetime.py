@@ -45,7 +45,7 @@ def run_case(repo, recording, out, exe, tick, uid, preset, birth_tick):
              if "FATAL: unhandled exception 0xC0000005" in line]
     destroyed_at_crash = any(event["stage"] == "destroy" and event["tick"] == tick
                              and event["pointer"] in pointers for event in events)
-    completed = re.search(r"\[net-replay\] playback finished .*ticks=(\d+) .*outcome=TickCap "
+    completed = re.search(r"\[net-replay\] playback finished .*ticks=(\d+) .*outcome=tick_cap "
                           r"frames=(\d+) last_tick=(\d+) .*exit=0", log)
     red = (record.get("exit_code") == 3 and not record.get("timed_out")
            and len(additions) == 2 and len(pointers) == 1 and destroyed_at_crash and bool(fatal))
