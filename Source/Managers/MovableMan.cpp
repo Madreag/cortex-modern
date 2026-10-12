@@ -115,6 +115,7 @@ namespace {
 		std::array<BITMAP*, Activity::MaxTeamCount> fog{};
 		std::array<Vector, Activity::MaxTeamCount> fogScale{};
 		bool pending = false;
+		std::vector<std::pair<long, size_t>> traced; //!< Under the shared trace, each actor's unique ID and the end of its rays.
 	};
 	SeeRayPass s_SeeRayPass;
 
@@ -3695,6 +3696,27 @@ void MovableMan::WaitForActorsSeeTask(const char* caller) {
 		LuaMan::TraceShared(nullptr, std::string("see-reveal caller=") + caller + " rays=" + std::to_string(pass.rays.size()));
 	}
 	pass.pending = false;
+	if (LuaMan::SharedTraceEnabled()) {
+		// Each actor's aimed rays and the cells they reveal, so two peers' passes compare actor by actor.
+		const auto fold = [](uint64_t& hash, uint64_t value) { hash = (hash ^ value) * 1099511628211ULL; };
+		const auto bits = [](float value) { return static_cast<uint64_t>(std::bit_cast<uint32_t>(value)); };
+		size_t begin = 0;
+		for (const auto& [uid, end]: pass.traced) {
+			uint64_t in = 14695981039346656037ULL, out = 14695981039346656037ULL;
+			for (size_t ray = begin; ray < end && ray < pass.rays.size(); ++ray) {
+				const SeeRay& seeRay = pass.rays[ray];
+				for (uint64_t value: {static_cast<uint64_t>(seeRay.team), bits(seeRay.start.m_X), bits(seeRay.start.m_Y), bits(seeRay.ray.m_X), bits(seeRay.ray.m_Y),
+				                      static_cast<uint64_t>(seeRay.strengthLimit), static_cast<uint64_t>(seeRay.skip)}) fold(in, value);
+				for (const auto& [x, y]: pass.traces[ray].reveals) { fold(out, static_cast<uint64_t>(x)); fold(out, static_cast<uint64_t>(y)); }
+			}
+			if (end > begin) {
+				LuaMan::TraceShared(nullptr, "see uid=" + std::to_string(uid) + " team=" + std::to_string(pass.rays[begin].team) + " rays=" + std::to_string(end - begin) +
+				                                 " in=" + std::to_string(in) + " out=" + std::to_string(out));
+			}
+			begin = end;
+		}
+		pass.traced.clear();
+	}
 	// In the order the rays were aimed, so every peer reveals the same way.
 	if (g_SceneMan.GetScene()) {
 		for (size_t ray = 0; ray < pass.rays.size(); ++ray) g_SceneMan.RevealSeeRay(pass.rays[ray].team, pass.traces[ray]);
@@ -7421,6 +7443,7 @@ void MovableMan::Update() {
 	const uint64_t seeTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	for (Actor* actor: m_Actors) {
 		actor->PrepareSeeRays(seeTick, pass.rays);
+		if (LuaMan::SharedTraceEnabled()) pass.traced.emplace_back(actor->GetUniqueID(), pass.rays.size());
 	}
 	if (Scene* scene = g_SceneMan.GetScene(); scene && !pass.rays.empty()) {
 		for (const SeeRay& ray: pass.rays) {
@@ -7435,6 +7458,7 @@ void MovableMan::Update() {
 		pass.pending = true;
 	} else {
 		pass.rays.clear();
+		pass.traced.clear();
 	}
 	const bool visualize = g_SceneMan.DrawsRayCastVisualizations();
 	if (SeeRayHoldLever()) s_SeeRaysReleased.store(false, std::memory_order_release);
