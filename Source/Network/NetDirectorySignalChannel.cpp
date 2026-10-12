@@ -305,7 +305,7 @@ namespace RTE {
 
 	void NetDirectorySignalChannel::Fail(const std::string& reason, const std::string& detail) {
 		m_LastError = reason;
-		DiagnosticLine() << "[net-directory-signal] " << Role() << " failed: " << reason << (detail.empty() ? "" : " (" + detail + ")") << std::endl;
+		if (m_ReplyKind == RequestKind::None) DiagnosticLine() << "[net-directory-signal] " << Role() << " failed: " << reason << (detail.empty() ? "" : " (" + detail + ")") << std::endl;
 		AbortRequest();
 		if (!IsHostPeer(m_LocalPeer)) m_Outbox.clear();
 		SetState(State::Failed);
