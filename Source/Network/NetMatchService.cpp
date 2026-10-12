@@ -217,7 +217,14 @@ namespace RTE {
 
 	void NetMatchService::CaptureMatchSummaryLocked(const std::string& result) {
 		// The first terminal result owns this round; Main's Complete paths quit after capturing it.
-		if (m_State != NetMatchServiceState::Running || m_LastMatchSummary || m_CurrentMatchSummary.identityLine.empty()) return;
+		if (m_State != NetMatchServiceState::Running) return;
+		// The next lobby retires this coordinator and may retract its directory row.
+		if (m_CapturedRunnerReport.empty() && m_Runner && m_Session && m_Coordinator && m_Coordinator->HasCompletedSimulationTick()) {
+			auto captured = nlohmann::json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
+			captured["directory_at_end"] = nlohmann::json::parse(m_Directory.BuildReportJson());
+			m_CapturedRunnerReport = captured.dump();
+		}
+		if (m_LastMatchSummary || m_CurrentMatchSummary.identityLine.empty()) return;
 		UpdateSummarySeatsLocked();
 		m_CurrentMatchSummary.result = result.empty() ? "Match complete" : result;
 		const auto* activity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
@@ -237,13 +244,6 @@ namespace RTE {
 			peer.holds = totals.holds; peer.substitutions = totals.substitutions; peer.rejoins = totals.rejoins; peer.longestWaitMs = totals.longestWaitMs;
 		}
 		m_LastMatchSummary = m_CurrentMatchSummary;
-		// The next lobby retires the coordinator. Preserve the completed
-		// round's counters before that transition, including clean leaves.
-		if (m_Runner && m_Session && m_Coordinator) {
-			auto captured = nlohmann::json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
-			captured["directory_at_end"] = nlohmann::json::parse(m_Directory.BuildReportJson());
-			m_CapturedRunnerReport = captured.dump();
-		}
 	}
 
 	std::string NetRejoinAddress(const std::string& address, uint16_t port) {
@@ -886,6 +886,11 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	bool NetMatchService::HasRematchPeer() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_Session && m_Session->IsReady() && (!m_IsHost || m_Session->GetReadyPeerCount() != 0);
+	}
+
 	bool NetMatchService::ReturnToLobby(std::string* error) {
 		JoinWorkerIfDone();
 		// A running worker still owns and polls the link.
@@ -924,6 +929,13 @@ static std::string ResyncSaveName() {
 			}
 			DrainPendingSessionEventsLocked(false);
 			departedHost = !m_IsHost || (m_MigrationGeneration != 0 && m_MigrationMembers.size() == 1);
+			if (m_IsHost && m_LastMatchSummary && m_Session->GetReadyPeerCount() == 0) {
+				m_CompletedLobbySinceMs = 0;
+				m_StatusText = m_LastMatchSummary->result;
+				m_ErrorText.clear();
+				if (error) *error = "No other players are here for a rematch";
+				return false;
+			}
 			if (!m_Session->IsReady()) {
 				// Session lost (the other player quit); settle so the UI stops offering a rematch.
 				m_State = NetMatchServiceState::Failed;
@@ -2187,6 +2199,13 @@ static std::string ResyncSaveName() {
 				m_StatusText = "Correct the host options before starting the rematch";
 				m_ErrorText = error;
 				m_AdoptedMatchConfig = m_Runner->GetMatchConfig();
+			} else if (m_IsHost && m_LastMatchSummary &&
+			           (!m_Session->IsReady() || m_Session->GetReadyPeerCount() == 0 || error == "rematch roster: not enough players for a rematch")) {
+				// An empty next lobby does not turn the host's completed round into a failure.
+				m_State = NetMatchServiceState::Completed;
+				m_CompletedLobbySinceMs = 0;
+				m_StatusText = m_LastMatchSummary->result;
+				m_ErrorText.clear();
 			} else {
 				m_State = NetMatchServiceState::Failed;
 				{
@@ -2537,8 +2556,10 @@ static std::string ResyncSaveName() {
 			m_MigrationRepairPending = false;
 			DrainPendingSessionEventsLocked(false);
 			AccumulateLockstepTotalsLocked();
-			if (m_Runner && m_Session && m_Coordinator) {
-				m_CapturedRunnerReport = m_Runner->BuildReportJson(*m_Session, *m_Coordinator);
+			if (m_CapturedRunnerReport.empty() && m_Runner && m_Session && m_Coordinator) {
+				auto captured = nlohmann::json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
+				captured["directory_at_end"] = nlohmann::json::parse(m_Directory.BuildReportJson());
+				m_CapturedRunnerReport = captured.dump();
 			}
 			// Only the host's departure lands a seat that committed nothing; an error on this peer's own side keeps
 			// its seat's reconnect, so a held client retries its private rejoin.
@@ -3524,6 +3545,7 @@ static std::string ResyncSaveName() {
 		m_HeldRejoinDriving = false;
 		m_HeldRejoinRoutes.clear();
 		m_OrdinaryTicketRejoin = false;
+		m_CapturedRunnerReport.clear();
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
 		m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
@@ -9371,7 +9393,9 @@ static std::string ResyncSaveName() {
 		report["private_rejoin"] = {{"configured", m_WorldJoin.IsPrivateMatch()}, {"checkpoint_ready", m_WorldJoin.Image().IsValid()},
 		    {"checkpoint_tick", m_WorldJoin.Image().tick}, {"journal_failed", m_WorldJoin.Tail().JournalFailed()}, {"error", m_PrivateJoinError},
 		    {"catching_up", m_WorldCatchUp.active}, {"applied_through", m_WorldCatchUp.appliedThrough}, {"activation_frame", m_WorldCatchUp.activationTick}};
-		if (m_Runner && m_Session && m_Coordinator) {
+		if (m_State != NetMatchServiceState::Running && !m_CapturedRunnerReport.empty()) {
+			report["runner"] = json::parse(m_CapturedRunnerReport);
+		} else if (m_Runner && m_Session && m_Coordinator) {
 			report["runner"] = json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
 		} else if (!m_CapturedRunnerReport.empty()) {
 			report["runner"] = json::parse(m_CapturedRunnerReport);
