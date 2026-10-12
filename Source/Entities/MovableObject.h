@@ -23,6 +23,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -1581,6 +1582,10 @@ namespace RTE {
 			bool m_ScriptIsEnabled; //!< Whether this function is in an enabled script.
 			std::unique_ptr<LuabindObjectWrapper> m_LuaFunction; //!< The lua function itself.
 		};
+		struct ScriptFunctionHash {
+			using is_transparent = void;
+			size_t operator()(std::string_view name) const noexcept { return std::hash<std::string_view>{}(name); }
+		};
 
 		CheckpointString m_ScriptObjectName; //!< The name of this object for script usage.
 		long m_ScriptRegistrationSerial; //!< The place this object took in its Lua state's registration order.
@@ -1588,7 +1593,12 @@ namespace RTE {
 		bool m_DeleteWhenHookReturns; //!< A script deleted this object from inside its own hook.
 		CheckpointVector<CheckpointString> m_AllLoadedScripts; //!< A vector of script for scripts applied to this object, in order of insertion.
 		CheckpointUnorderedMap<CheckpointString, bool> m_EnabledScripts; //!< A map of script paths to the enabled state of the given script.
-		std::unordered_map<std::string, std::vector<LuaFunction>> m_FunctionsAndScripts; //!< A map of function names to vectors of Lua functions. Used to maintain script execution order and avoid extraneous Lua calls.
+		CheckpointUnorderedMap<CheckpointString, CheckpointVector<LuaFunction>, ScriptFunctionHash, std::equal_to<>> m_FunctionsAndScripts; //!< A map of function names to vectors of Lua functions. Used to maintain script execution order and avoid extraneous Lua calls.
+		CheckpointVector<LuaFunction>& GetScriptFunctions(std::string_view name) {
+			const auto found = m_FunctionsAndScripts.find(name);
+			if (found == m_FunctionsAndScripts.end()) throw std::out_of_range("script function is not loaded");
+			return found->second;
+		}
 
 		volatile bool m_RequestedSyncedUpdate; //!< For optimisation purposes, scripts explicitly request a synced update if they want one.
 

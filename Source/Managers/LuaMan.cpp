@@ -8354,7 +8354,7 @@ void LuaStateWrapper::RebindScriptFunctionsFromCache(const std::unordered_set<co
 	// Any script a rebind has to run again is born in the same order on every peer restoring the same image.
 	std::sort(objects.begin(), objects.end(), [](const MovableObject* left, const MovableObject* right) { return left->GetUniqueID() < right->GetUniqueID(); });
 	for (MovableObject* mo: objects) {
-		std::unordered_map<std::string, std::vector<MovableObject::LuaFunction>> functions;
+		decltype(mo->m_FunctionsAndScripts) functions;
 		const std::vector<std::string> names = mo->GetSupportedScriptFunctionNames();
 		for (const std::string& name: names) functions.try_emplace(name);
 		bool loaded = true;
@@ -10381,13 +10381,30 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	}
 	{
 		CheckpointNativeStorage::AllocationScope allocations(true);
+		MovableMan::ConstructionRegistryScope world;
 		LuaStateWrapper callbacksState;
 		callbacksState.Initialize();
 		const bool planted = callbacksState.RunScriptString("local value = 71; _FrozenCacheCallback = function() return value end") == 0;
+		auto actor = std::make_unique<Actor>();
+		actor->m_ThreadedLuaState = &callbacksState;
+		const std::string name(80, 'k'), firstPath(80, 'a'), secondPath(80, 'b');
+		const std::string uid = std::to_string(actor->GetUniqueID());
+		MovableObject* sourceActor = actor.get();
 		lua_getglobal(callbacksState.m_State, "_FrozenCacheCallback");
 		callbacksState.CheckpointStateValues().scriptCache["frozen cache path"].functionNamesAndObjects.emplace("Update", new LuabindObjectWrapper(
 		    new luabind::object(luabind::from_stack(callbacksState.m_State, -1)), "frozen cache path"));
+		for (const auto& [path, enabled]: {std::pair{firstPath, true}, std::pair{secondPath, false}}) {
+			auto& function = actor->m_FunctionsAndScripts[name].emplace_back();
+			function.m_ScriptIsEnabled = enabled;
+			function.m_LuaFunction = std::make_unique<LuabindObjectWrapper>(new luabind::object(luabind::from_stack(callbacksState.m_State, -1)), path);
+		}
 		lua_pop(callbacksState.m_State, 1);
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects, 0);
+			const auto found = actor->m_FunctionsAndScripts.find(name);
+			if (found == actor->m_FunctionsAndScripts.end() || &actor->GetScriptFunctions(name) != &found->second || found->second.size() != 2)
+				throw std::runtime_error("a script function lookup needs no owned allocation");
+		}
 		const auto randomBefore = callbacksState.GetRandomGeneratorCheckpoint();
 		for (size_t after: {size_t{0}, size_t{1}, size_t{2}, size_t{3}, size_t{4}}) {
 			bool refused = false;
@@ -10405,15 +10422,22 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		if (!pages->Arm() || !prepared->Arm(*callbacksState.m_CheckpointHeap)) throw std::runtime_error("could not freeze the callback cache probe");
 		prepared->Drain();
 		const auto heap = prepared->Image();
+		actor->GetScriptFunctions(name)[0].m_ScriptIsEnabled = false;
+		actor->m_FunctionsAndScripts.clear(); actor.reset();
 		callbacksState.Destroy();
 		bool exact = planted && values && CheckpointNativeStorage::Owns(values) && callbacksState.GetRandomGeneratorCheckpoint() == randomBefore;
 		CheckpointLua::CallbackRoots saved;
+		CheckpointLua::CallbackRoots actorSaved;
 		CheckpointLua::Snapshot image;
 		{
 			CheckpointNativeStorage::ReadScope read(pages->Pages());
 			CheckpointLua::ScratchImage scratch(heap.StateSerial());
 			saved = callbacksState.RebuildFrozenScriptCallbacks(heap, scratch, values, scratch.Object({}), nullptr, {}, [&heap](const TValue& table, std::string_view key) {
 				if (!tvistab(&table)) throw std::runtime_error("a callback cache probe lookup has no table");
+				return heap.TableValue(tabV(&table), key);
+			});
+			actorSaved = callbacksState.RebuildFrozenScriptCallbacks(heap, scratch, values, scratch.Object({}), nullptr, {sourceActor}, [&heap](const TValue& table, std::string_view key) {
+				if (!tvistab(&table)) throw std::runtime_error("an actor callback probe lookup has no table");
 				return heap.TableValue(tabV(&table), key);
 			});
 			image = scratch.Finish(heap);
@@ -10427,6 +10451,10 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			view.Push(worker.get(), saved.roots); lua_setglobal(worker.get(), "roots");
 			const char* script = "assert(next(roots) == nil and next(probe.roots) == nil and next(probe.objects) == nil and next(probe.emptyRoots) == nil); assert(type(probe.cache['frozen cache path'].Update) == 'function'); local _, value = debug.getupvalue(probe.cache['frozen cache path'].Update, 1); assert(value == 71); assert(type(probe.liveSerial) == 'number' and probe.activity == nil and probe.globals == nil)";
 			if (luaL_loadstring(worker.get(), script) || lua_pcall(worker.get(), 0, 0, 0)) exact = false;
+			view.Push(worker.get(), actorSaved.callbacks); lua_setglobal(worker.get(), "actorProbe");
+			lua_pushlstring(worker.get(), uid.data(), uid.size()); lua_setglobal(worker.get(), "actorID");
+			const char* actorScript = "local entries=assert(actorProbe.objects[actorID])[string.rep('k',80)]; assert(#entries==2 and entries[1].enabled==true and entries[2].enabled==false); assert(entries[1].path==string.rep('a',80) and entries[2].path==string.rep('b',80)); assert(entries[1]['function']==entries[2]['function'] and entries[1]['function']==actorProbe.cache['frozen cache path'].Update); local _,value=debug.getupvalue(entries[1]['function'],1); assert(value==71); local count=0; for _ in pairs(actorProbe.objects) do count=count+1 end; assert(count==1)";
+			if (luaL_loadstring(worker.get(), actorScript) || lua_pcall(worker.get(), 0, 0, 0)) exact = false;
 		});
 		exact = !saved.perPeer && exact;
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " callback_cache_rebuilds_after_live_wrappers_and_state_are_destroyed" << std::endl;

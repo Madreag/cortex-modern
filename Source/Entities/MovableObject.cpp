@@ -1339,7 +1339,7 @@ int MovableObject::LoadScript(const std::string& scriptPath, bool loadAsEnabledS
 	}
 
 	for (const auto& [functionName, functionObject]: scriptFileFunctions) {
-		LuaFunction& luaFunction = m_FunctionsAndScripts.at(functionName).emplace_back();
+		LuaFunction& luaFunction = GetScriptFunctions(functionName).emplace_back();
 		luaFunction.m_ScriptIsEnabled = loadAsEnabledScript;
 		luaFunction.m_LuaFunction = std::unique_ptr<LuabindObjectWrapper>(functionObject);
 	}
@@ -1433,7 +1433,7 @@ int MovableObject::InitializeObjectScripts(bool runCreate) {
 		return 0;
 	}
 
-	if (runCreate && !m_FunctionsAndScripts.at("Create").empty() && RunScriptedFunctionInAppropriateScripts("Create", false, true) < 0) {
+	if (runCreate && !GetScriptFunctions("Create").empty() && RunScriptedFunctionInAppropriateScripts("Create", false, true) < 0) {
 		m_ScriptObjectName = "ERROR";
 		return -1;
 	}
@@ -1578,7 +1578,7 @@ int MovableObject::RunFunctionOfScript(const std::string& scriptPath, const std:
 	LuaStateWrapper& usedState = GetAndLockStateForScript(scriptPath);
 	std::lock_guard<std::recursive_mutex> lock(usedState.GetMutex(), std::adopt_lock);
 
-	for (const LuaFunction& luaFunction: m_FunctionsAndScripts.at(functionName)) {
+	for (const LuaFunction& luaFunction: GetScriptFunctions(functionName)) {
 		// The same end as the hook loop above: this list goes with the object.
 		if (hookScope.ObjectIsGone()) {
 			break;
