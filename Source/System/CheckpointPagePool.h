@@ -5,6 +5,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace RTE {
@@ -68,7 +69,7 @@ namespace RTE {
 		};
 
 		/// Appends slots in allocation order; the caller owns its usual free-list order.
-		void Grow(size_t slotBytes, size_t minimumSlots, std::vector<void*>& free, size_t blockBytes = size_t{4} << 20);
+		std::pair<void*, size_t> Grow(size_t slotBytes, size_t minimumSlots, std::vector<void*>& free, size_t blockBytes = size_t{4} << 20);
 		bool Contains(const void* address) const;
 		/// @param arm False prepares writable ranges; Snapshot::Arm records their later tick boundary.
 		std::shared_ptr<const Snapshot> Freeze(bool arm = true) const;
