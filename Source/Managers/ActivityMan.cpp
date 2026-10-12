@@ -3529,6 +3529,13 @@ bool ActivityMan::PrepareCheckpointPrimitives(std::string_view runtimeGlobals) {
 }
 
 bool ActivityMan::RestartActivity() {
+	const bool restarted = RestartActivityWorld();
+	// Discarded world and staging owners retire before the saver inventories pages.
+	if (restarted) PrepareAutosave();
+	return restarted;
+}
+
+bool ActivityMan::RestartActivityWorld() {
 	WaitForAutosaveTasks(); m_PreparedAutosave.reset();
 	if (!m_RestartRestoresSnapshot && !m_LockstepRelaunchInProgress) {
 		ScenarioRunner::ResetRetiredChecksumCounters();
@@ -3538,7 +3545,7 @@ bool ActivityMan::RestartActivity() {
 		CheckpointNativeStorage::WorldAllocationScope values(nativeWorld);
 		NativeWorldMode mode(nativeWorld);
 		const bool restarted = RestartActivityCandidate();
-		if (restarted) { mode.Commit(); PrepareAutosave(); }
+		if (restarted) mode.Commit();
 		return restarted;
 	}
 	Atom::AllocationScope nativeAtoms(m_PendingCheckpoint.nativeSnapshotStorage);
@@ -3634,7 +3641,6 @@ bool ActivityMan::RestartActivity() {
 		}
 		// Under the full-state oracle the restored world logs its state before it runs a tick, against the save it came from.
 		mode.Commit();
-		PrepareAutosave();
 		if (m_FullStateLever) CaptureFullStateHash(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), m_FullStateRound, {}, "restored");
 		return true;
 	}

@@ -520,6 +520,7 @@ namespace RTE {
 
 		/// Clears all the member variables of this ActivityMan, effectively resetting the members of this abstraction level only.
 		bool RestartActivityCandidate();
+		bool RestartActivityWorld();
 		void Clear();
 
 		// Disallow the use of some implicit methods.
