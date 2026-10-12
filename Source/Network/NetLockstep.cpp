@@ -34,6 +34,17 @@
 
 namespace RTE {
 
+	namespace {
+		uint16_t PeerLinkFixturePort() {
+			const char* headless = std::getenv("CCCP_HEADLESS");
+			const char* text = std::getenv("CC_TEST_PEER_LINK_PORT");
+			if (!headless || std::string_view(headless) != "1" || !text) return 0;
+			unsigned int port = 0;
+			const auto [end, error] = std::from_chars(text, text + std::strlen(text), port);
+			return error == std::errc{} && *end == '\0' && port >= 1024 && port <= 65530 ? static_cast<uint16_t>(port) : 0;
+		}
+	}
+
 	uint64_t NetLockstepNowMs() {
 		static const std::chrono::steady_clock::time_point base = std::chrono::steady_clock::now();
 		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - base).count());
@@ -3479,6 +3490,12 @@ namespace RTE {
 		const auto found = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(),
 			[peerId](const auto& peer) { return peer.peerId == peerId; });
 		if (found == m_Config.matchConfig.migrationPeers.end()) return {};
+		if (const uint16_t port = PeerLinkFixturePort(); port && m_Config.peerFrameGroups && m_Config.peerCount == 2) {
+			auto endpoint = *found;
+			endpoint.listenAddrs = {"127.0.0.1"};
+			endpoint.listenPort = port + (m_Config.localPeerId == 1 && peerId == 2 ? 3 : peerId);
+			return endpoint;
+		}
 		return m_Config.migrationEndpoint ? m_Config.migrationEndpoint(*found) : *found;
 	}
 
@@ -3819,7 +3836,8 @@ namespace RTE {
 			// The original host links and authenticated inbound peer links are
 			// already session routes. Replacing an unused dial every second
 			// drains its directory channel on the simulation thread.
-			if (UsesPeerFrameGroups() && HasPeerFrameRoute(agreed.peerId)) continue;
+			const bool firstFixtureDial = PeerLinkFixturePort() && m_Config.peerCount == 2 && !PeerProbes().contains(agreed.peerId);
+			if (UsesPeerFrameGroups() && HasPeerFrameRoute(agreed.peerId) && !firstFixtureDial) continue;
 			auto& probe = PeerProbes()[agreed.peerId];
 			const uint64_t patience = IsMigrationIceEndpoint(probe.address) ? c_MigrationIceDialMs : NetHostMigrationTimeouts::c_RetryMs;
 			if (probe.connection != c_InvalidNetPeerId || (probe.lastDialMs != 0 && nowMs < probe.lastDialMs + patience)) continue;
@@ -4859,6 +4877,10 @@ namespace RTE {
 	bool NetLockstepCoordinator::Start(INetTransport& transport, const NetLockstepConfig& requested, std::string* error) {
 		NetLockstepConfig config = requested;
 		NET_PLANE_CHECK();
+		if (PeerLinkFixturePort() && config.peerFrameGroups && config.peerCount == 2) {
+			config.migrationTransportFactory = [] { return std::make_unique<GnsTransport>(); };
+			config.migrationIceDial = {}; config.migrationIceHost = {};
+		}
 		if (config.peerFrameGroups && !config.peerSessionLinks) config.peerSessionLinks = std::make_shared<NetPeerSessionLinks>();
 		m_HostLeaveRecordFrom = 0;
 		m_SuccessorProbe.reset();
