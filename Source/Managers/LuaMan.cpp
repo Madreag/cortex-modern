@@ -7805,7 +7805,7 @@ CheckpointLua::CallbackRoots LuaStateWrapper::RebuildFrozenScriptCallbacks(const
 		roots.emplace(uid, fields);
 	}
 	Fields callbacks{{"roots", object(receivers)}, {"emptyRoots", object(empty)}, {"async", async}};
-	if (const uint64_t serial = ScriptGraphBirthHorizon(heap)) callbacks.emplace("liveSerial", scratch.Number(static_cast<lua_Number>(serial)));
+	if (const uint64_t serial = heap.StateSerial()) callbacks.emplace("liveSerial", scratch.Number(static_cast<lua_Number>(serial)));
 	if (activity) {
 		activity = CheckpointNativeStorage::Source(activity);
 		callbacks.emplace("activity", scratch.Object({{"class", scratch.String(key(activity->GetLuaClassName()))}, {"functions", functions(activity->m_ScriptFunctions)}}));
@@ -7971,16 +7971,26 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 			luaJIT_set_state_serial(state, heap.StateSerial());
 			const auto callbacksStarted = std::chrono::steady_clock::now();
 			const uint64_t callbacksCpu = CheckpointThreadCpuUnits();
-			CheckpointLua::ScratchImage scratch(ScriptGraphBirthHorizon(heap));
-			const auto callbacks = RebuildFrozenScriptCallbacks(heap, scratch, sourceValues, scratch.Object({}),
-			    index == 0 ? dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity()) : nullptr, known,
-			    [&values](const TValue& table, std::string_view key) { return values.Lookup(table, key); });
+			const uint64_t horizon = ScriptGraphBirthHorizon(heap);
+			CheckpointLua::ScratchImage scratch(horizon);
+			const auto callbacks = [&] {
+				auto views = boundary.NativeViews();
+				views.privateValues = CheckpointNativeStorage::CurrentViews().privateValues;
+				CheckpointNativeStorage::ReadScope nativeCallbacks(views);
+				return RebuildFrozenScriptCallbacks(heap, scratch, sourceValues, scratch.Object({}),
+				    index == 0 ? dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity()) : nullptr, known,
+				    [&values](const TValue& table, std::string_view key) { return values.Lookup(table, key); });
+			}();
 			values.UseHeap(scratch.Finish(heap));
-			values.Push(callbacks.callbacks); lua_setglobal(state, "_ScriptGraphCallbacks");
+			ScriptGraphScratchScope scratchValues(state);
+			std::unordered_set<const void*> descriptorValues;
+			values.Push(callbacks.callbacks);
+			NoteScriptGraphNewborn(state, -1, horizon, descriptorValues);
+			lua_setglobal(state, "_ScriptGraphCallbacks");
 			values.Push(callbacks.roots);
+			NoteScriptGraphNewborn(state, -1, horizon, descriptorValues);
 			snapshot->MaterializeMetadata();
 			ScriptGraphCaptureScope capture(true);
-			ScriptGraphScratchScope scratchValues(state);
 			g_LuaMan.PushPathCallbacks(state, heap.State(), snapshot.get());
 			lua_getglobal(state, "_ScriptGraphCallbacks"); lua_pushvalue(state, -2); lua_setfield(state, -2, "async"); lua_pop(state, 2);
 			part.callbacksUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - callbacksStarted).count();
@@ -10336,6 +10346,9 @@ end
 		lua_State* state = owner->State();
 		TValue function; setnilV(&function);
 		CheckpointLua::ProtectedCall(state, [&] {
+			luaL_openlibs(state);
+			if (luaL_dostring(state, "FrozenDescriptorRead=function() return rawget(_G,'probe') end"))
+				throw std::runtime_error("could not create the saved global reader");
 			if (luaL_loadstring(state, "local value = 71; return function() return value end") || lua_pcall(state, 0, 1, 0))
 				throw std::runtime_error("could not create the frozen descriptor probe");
 			function = state->top[-1];
@@ -10356,6 +10369,7 @@ end
 		const TValue opaque = scratch.Opaque();
 		const std::array values{scratch.Number(7), scratch.Boolean(false), scratch.String(std::string_view("a\0b", 3))};
 		const TValue root = scratch.Object({{"callback", function}, {"entries", scratch.Array(values)}, {"opaque", opaque}, {"empty", scratch.Object({})}});
+		const TValue privateRoot = scratch.Object({{"callback", function}, {"empty", scratch.Object({})}, {"entries", scratch.Array(values)}});
 		const auto image = scratch.Finish(heap);
 		bool sealed = false;
 		try { scratch.String(std::string_view("a\0b", 3)); } catch (const std::logic_error&) { sealed = true; }
@@ -10374,6 +10388,30 @@ end
 			const char* script = "assert(type(probe) == 'table' and type(probe.callback) == 'function'); local _, value = debug.getupvalue(probe.callback, 1); assert(value == 71); assert(#probe.entries == 3 and probe.entries[1] == 7 and probe.entries[2] == false); assert(#probe.entries[3] == 3 and string.byte(probe.entries[3], 2) == 0); assert(type(probe.opaque) == 'userdata' and next(probe.empty) == nil and probe.absent == nil)";
 			if (luaL_loadstring(worker.get(), script) || lua_pcall(worker.get(), 0, 0, 0)) exact = false;
 		});
+		{
+			auto privateWorker = CheckpointLua::HeapOwner::Create();
+			lua_State* const state = privateWorker->State();
+			CheckpointLua::ProtectedCall(state, [&] {
+				luaL_openlibs(state);
+				CheckpointLua::SavedValues values(state, image.WithPrivate(privateWorker->PrivateReader()),
+				    [](lua_State*, const TValue&) { throw std::runtime_error("unexpected saved descriptor binding"); });
+				lua_pushvalue(state, LUA_GLOBALSINDEX); values.RememberLibraries(heap.GlobalValue("_G"), -1); lua_pop(state, 1);
+				values.Push(heap.GlobalValue("_G")); lua_replace(state, LUA_GLOBALSINDEX);
+				ScriptGraphScratchScope scope(state);
+				std::unordered_set<const void*> seen;
+				values.Push(privateRoot); NoteScriptGraphNewborn(state, -1, serial, seen);
+				exact = exact && scope.values.contains(lua_topointer(state, -1));
+				lua_getfield(state, -1, "empty");
+				exact = exact && scope.values.contains(lua_topointer(state, -1)); lua_pop(state, 1);
+				lua_setglobal(state, "probe");
+				values.Push(heap.GlobalValue("FrozenDescriptorRead"));
+				if (lua_pcall(state, 0, 1, 0)) throw std::runtime_error(lua_tostring(state, -1));
+				lua_getglobal(state, "probe");
+				exact = exact && lua_istable(state, -1) && lua_rawequal(state, -1, -2);
+				if (luaL_dostring(state, "assert(probe.callback()==71 and #probe.entries==3 and probe.entries[1]==7 and probe.entries[2]==false); assert(#probe.entries[3]==3 and next(probe.empty)==nil)"))
+					throw std::runtime_error(lua_tostring(state, -1));
+			});
+		}
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " saver_descriptor_tables_keep_frozen_functions_without_live_allocations" << std::endl;
 		checkpointValues = exact && checkpointValues;
 	}
