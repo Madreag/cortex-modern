@@ -346,6 +346,7 @@ namespace RTE {
 			m_PeerReceiptSampleFloorMs[peer] = nowMs;
 			m_PeerOwnReceiptProgress.erase(peer);
 			if (agreed.preparedFrame == 1) {
+				m_PeerRoundEnds.erase(peer);
 				if (peer == m_Config.localPeerId) {
 					m_PeerReceiptDelaySamples.clear(); m_PeerOwnReceiptProgress.clear();
 					for (uint8_t receiver = 1; receiver <= m_Config.peerCount; ++receiver) m_PeerReceiptSampleFloorMs[receiver] = nowMs;

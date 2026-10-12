@@ -152,47 +152,38 @@ namespace RTE {
 		if (message.type != NetHostMigrationMessageType::PeerSession && message.type != NetHostMigrationMessageType::PeerSessionAck) return false;
 		if (!UsesPeerFrameGroups() || !m_Config.peerSessionLinks || PeerFrameBlackout(nowMs)) return true;
 		auto& links = *m_Config.peerSessionLinks;
-		if (!links.sessionAttached || message.sessionId != links.sessionId || message.roundId != 1 || message.generation != 1 || message.configHash != NetHash32{} ||
-		    message.senderPeerId == 0 || message.senderPeerId > m_Config.peerCount || message.senderPeerId == m_Config.localPeerId || message.successorPeerId != m_Config.localPeerId || m_RemovedPeers.contains(message.senderPeerId)) return true;
-		if (message.type == NetHostMigrationMessageType::PeerSessionAck) {
-			if (!message.bytes.empty()) return true;
-			auto& pending = links.pending[message.senderPeerId];
-			if (!pending.empty() && pending.front().sequence == message.frame) {
-				links.pendingBytes -= pending.front().bytes.size(); pending.pop_front(); m_PeerSessionSendAtMs = nowMs;
-				m_PeerLastHeardMs[message.senderPeerId] = nowMs; m_PeerLinkHeardMs[message.senderPeerId] = nowMs;
-				if (message.senderPeerId == GetHostPeerId()) NoteAuthorityHeard(nowMs);
-			}
-			return true;
+		(void)links.HandleSessionMessage(message);
+		if (links.sessionAttached && message.sessionId == links.sessionId && message.roundId == 1 && message.generation == 1 &&
+		    message.configHash == NetHash32{} && message.senderPeerId > 0 && message.senderPeerId <= m_Config.peerCount &&
+		    message.senderPeerId != m_Config.localPeerId && message.successorPeerId == m_Config.localPeerId &&
+		    !m_RemovedPeers.contains(message.senderPeerId) && links.SessionRoute(message.senderPeerId) != c_InvalidNetPeerId) {
+			m_PeerLastHeardMs[message.senderPeerId] = nowMs; m_PeerLinkHeardMs[message.senderPeerId] = nowMs;
+			if (message.senderPeerId == GetHostPeerId()) NoteAuthorityHeard(nowMs);
 		}
-		if (message.frame == 0 || message.bytes.empty() || (!NetProtocol::Decode(message.bytes).ok && !NetLobbyProtocol::Decode(message.bytes).ok)) return true;
-		const NetPeerId route = links.SessionRoute(message.senderPeerId);
-		if (route == c_InvalidNetPeerId) return true;
-		if (message.frame > links.received[message.senderPeerId]) {
-			if (links.events.size() >= 512) return true;
-			links.received[message.senderPeerId] = message.frame;
-			links.events.push_back({NetTransportEventType::PacketReceived, route, NetTransportLane::ControlReliable, message.bytes, {}});
-		}
-		m_PeerLastHeardMs[message.senderPeerId] = nowMs; m_PeerLinkHeardMs[message.senderPeerId] = nowMs;
-		if (message.senderPeerId == GetHostPeerId()) NoteAuthorityHeard(nowMs);
-		auto ack = message; ack.type = NetHostMigrationMessageType::PeerSessionAck; ack.senderPeerId = m_Config.localPeerId; ack.successorPeerId = message.senderPeerId;
-		ack.bytes.clear(); ack.totalBytes = 0;
-		SendPeerFrameMessage(std::move(ack), NetTransportLane::ControlReliable, message.senderPeerId);
 		return true;
 	}
 
 	void NetLockstepCoordinator::TickPeerSessionWire(uint64_t nowMs) {
 		if (!UsesPeerFrameGroups() || !m_Config.peerSessionLinks || !m_Config.peerSessionLinks->sessionAttached) return;
 		auto& links = *m_Config.peerSessionLinks;
-		if (m_SessionEventSink) while (!links.events.empty()) { const auto event = std::move(links.events.front()); links.events.pop_front(); m_SessionEventSink(event); }
-		if (nowMs < m_PeerSessionSendAtMs) return;
-		m_PeerSessionSendAtMs = nowMs + 50;
-		for (const auto& [peer, pending]: links.pending) {
-			if (pending.empty()) continue;
-			auto message = PeerFrameMessage(NetHostMigrationMessageType::PeerSession);
-			message.roundId = message.generation = 1; message.configHash = {}; message.successorPeerId = peer;
-			message.frame = pending.front().sequence; message.bytes = pending.front().bytes; message.totalBytes = static_cast<uint32_t>(message.bytes.size());
-			SendPeerFrameMessage(std::move(message), NetTransportLane::ControlReliable, peer);
+		if (m_SessionEventSink) for (auto next = links.events.begin(); next != links.events.end();) {
+			// The next round reads its own start packets through the retained wire.
+			if (next->type == NetTransportEventType::PacketReceived && NetLockstepCodec::LooksLikePacket(next->bytes)) { ++next; continue; }
+			const auto event = std::move(*next); next = links.events.erase(next);
+			if (!m_RelayHost && event.peerId == links.SessionRoute(GetHostPeerId()) && event.type == NetTransportEventType::PacketReceived) {
+				const auto decoded = NetProtocol::Decode(event.bytes);
+				if (decoded.ok) {
+					if (const auto* removal = std::get_if<NetParticipantRemoval>(&decoded.message.payload)) m_RemovalBoundary = removal->boundaryFrame;
+					if (const auto* end = std::get_if<NetDisconnect>(&decoded.message.payload); end &&
+					    (end->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantRemoved) || end->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantBanned))) {
+						m_RemovedByHost = true; m_State = NetLockstepState::Stopped;
+						m_Stats.timeoutReason = "PeerRemoved:" + end->message;
+					}
+				}
+			}
+			m_SessionEventSink(event);
 		}
+		links.FlushSession(nowMs);
 	}
 
 	void NetLockstepCoordinator::TickPeerFrameGroups(uint64_t nowMs) {

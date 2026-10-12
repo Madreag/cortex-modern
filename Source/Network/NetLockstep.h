@@ -1634,13 +1634,12 @@ namespace RTE {
 		bool& PeerPrimaryListener() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryListener : m_PeerPrimaryListener; }
 		bool HasPeerFrameRoute(uint8_t peer);
 		std::pair<INetTransport*, NetPeerId> PeerFrameRoute(uint8_t peer) const;
-		void NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink);
+		void NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink, bool completedRound = false);
 		void AdjudicatePeerRoundEnds(uint64_t nowMs);
-		struct PeerRoundEnd { uint64_t frame = 0, atMs = 0; bool closedLink = false; };
+		struct PeerRoundEnd { uint64_t frame = 0, atMs = 0; bool closedLink = false, completedRound = false; };
 		std::map<uint8_t, PeerRoundEnd> m_PeerRoundEnds;
 		bool HandlePeerSessionMessage(const NetHostMigrationMessage& message, uint64_t nowMs);
 		void TickPeerSessionWire(uint64_t nowMs);
-		uint64_t m_PeerSessionSendAtMs = 0;
 		std::map<NetPeerId, uint8_t> m_PeerListenerBindings;
 		std::map<NetPeerId, uint8_t> m_PeerPrimaryBindings;
 		NetHostMigrationMessage PeerFrameMessage(NetHostMigrationMessageType type) const;

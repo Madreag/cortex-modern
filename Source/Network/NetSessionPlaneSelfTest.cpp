@@ -858,6 +858,7 @@ namespace RTE {
 			config.peerFrameGroups = config.substituteSlowPeers = true; config.simTickMs = c_TestTickMs;
 			config.slowPlayerBoundTicks = 3; config.frameLane = NetTransportLane::InputUnreliable; config.relayToOtherPeers = index == 0;
 			config.migrationKey.fill(0x39); config.peerSessionLinks = links[index] = std::make_shared<NetPeerSessionLinks>();
+			links[index]->sessionClock = [&] { return hub.now; };
 			config.remoteTransportPeerIds[index == 0 ? 2 : 1] = index == 0 ? originalRoute : clientSession.GetRemoteTransportPeerId();
 			rounds[index] = std::make_unique<NetLockstepCoordinator>();
 			if (!rounds[index]->Start(*nativeWires[index], config, error)) return false;

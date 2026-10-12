@@ -4,11 +4,13 @@
 
 #include <array>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <utility>
 
 namespace RTE {
+	struct NetHostMigrationMessage;
 
 	struct NetPeerProbe {
 		std::unique_ptr<INetTransport> transport;
@@ -26,6 +28,8 @@ namespace RTE {
 		std::map<uint8_t, NetPeerProbe> probes;
 		std::map<NetPeerId, uint8_t> listenerBindings, primaryBindings;
 		INetTransport* primary = nullptr;
+		const void* frameReader = nullptr;
+		std::function<uint64_t()> sessionClock;
 		bool primaryListener = false, sessionAttached = false;
 		bool frameBlackout = false;
 		uint64_t sessionId = 0, nextSequence = 1;
@@ -34,16 +38,23 @@ namespace RTE {
 		std::map<NetPeerId, uint8_t> sessionRoutes;
 		std::map<NetPeerId, std::pair<INetTransport*, NetPeerId>> admissions;
 		NetPeerId nextAdmission = 0x80000000U;
-		struct Pending { uint64_t sequence = 0; NetTransportLane lane; std::vector<uint8_t> bytes; };
+		struct Pending { uint64_t sequence = 0; NetTransportLane lane; std::vector<uint8_t> bytes; uint64_t sendAfterMs = 0; };
 		std::map<uint8_t, std::deque<Pending>> pending;
 		size_t pendingBytes = 0;
 		std::map<uint8_t, uint64_t> received;
 		std::deque<NetTransportEvent> events;
+		struct Closing { std::string reason; uint64_t deadlineMs = 0; };
+		std::map<uint8_t, Closing> closing;
 		bool SendTo(uint8_t peer, NetTransportLane lane, const std::vector<uint8_t>& bytes);
 		std::pair<INetTransport*, NetPeerId> RouteTo(uint8_t peer) const;
 		NetPeerId SessionRoute(uint8_t peer) const;
+		uint8_t PeerOn(const INetTransport& wire, NetPeerId native) const;
 		void ForwardAdmission(INetTransport& wire, const NetTransportEvent& event);
 		void BindAdmission(uint8_t peer, NetPeerId sessionRoute);
+		bool HandleSessionMessage(const NetHostMigrationMessage& message);
+		void FlushSession(uint64_t nowMs);
+		void PollSession(uint64_t nowMs);
+		uint64_t ClockMs() const;
 	};
 
 	class NetPeerSessionWire final : public INetTransport {

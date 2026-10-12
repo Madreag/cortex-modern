@@ -3763,10 +3763,11 @@ namespace RTE {
 		return dial != PeerProbes().end() && dial->second.answered && dial->second.connection != c_InvalidNetPeerId;
 	}
 
-	void NetLockstepCoordinator::NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink) {
+	void NetLockstepCoordinator::NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink, bool completedRound) {
 		if (!UsesPeerFrameGroups() || peer == m_Config.localPeerId || !IsKnownRemotePeer(peer)) return;
 		if (closedLink && HasPeerFrameRoute(peer)) return;
-		if (!m_PeerRoundEnds.try_emplace(peer, PeerRoundEnd{frame, nowMs, closedLink}).second) return;
+		const auto [ended, inserted] = m_PeerRoundEnds.try_emplace(peer, PeerRoundEnd{frame, nowMs, closedLink, completedRound});
+		if (!inserted) { ended->second.completedRound |= completedRound; return; }
 		DiagnosticLine() << "[net-peer-departure] peer=" << static_cast<int>(peer) << " frame=" << frame << " now_ms=" << nowMs
 		    << " unix_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()
 		    << " source=" << (closedLink ? "remote-close" : "round-notice") << std::endl;
@@ -3780,6 +3781,12 @@ namespace RTE {
 			return ended.second.closedLink && (HasPeerFrameRoute(ended.first) || LastAuthenticatedTraffic(ended.first) > ended.second.atMs);
 		});
 		if (!std::all_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) { return m_PeerRoundEnds.contains(peer); })) return;
+		// An ordinary leave keeps its seat with the AI while the remaining player continues.
+		// Explicit round ends, the planned last frame and a held host with no donors still end promptly.
+		if (!IsOwnHostSeatHeld() && !std::all_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
+			const auto& ended = m_PeerRoundEnds.at(peer);
+			return ended.completedRound || (m_FinalFrame != UINT64_MAX && ended.frame > m_FinalFrame);
+		})) return;
 		// The administrator may finish its own round when everybody else has
 		// left it. A private reader must not invent their missing history or
 		// wait for a future end frame whose last donors have already stopped.
@@ -3839,6 +3846,7 @@ namespace RTE {
 				if (event.type == NetTransportEventType::PeerDisconnected) {
 					const auto bound = PeerListenerBindings().find(event.peerId);
 					const uint8_t peer = bound == PeerListenerBindings().end() ? 0 : bound->second;
+					if (UsesPeerFrameGroups() && m_Config.peerSessionLinks) m_Config.peerSessionLinks->ForwardAdmission(*listener, event);
 					PeerListenerBindings().erase(event.peerId);
 					if (peer != 0 && event.closedByPeer) NotePeerRoundEnd(peer, m_Stats.nextFrame, nowMs, true);
 				}
@@ -3895,6 +3903,7 @@ namespace RTE {
 			for (const auto& event: dial.transport->PollEvents()) {
 				if (event.type == NetTransportEventType::PeerConnected) { dial.connection = event.peerId; dial.lastHelloMs = 0; }
 				if (event.type == NetTransportEventType::PeerDisconnected || event.type == NetTransportEventType::ConnectionFailed) {
+					if (UsesPeerFrameGroups() && m_Config.peerSessionLinks) m_Config.peerSessionLinks->ForwardAdmission(*dial.transport, event);
 					dial.connection = c_InvalidNetPeerId; dial.answered = false;
 					if (event.closedByPeer) NotePeerRoundEnd(peer, m_Stats.nextFrame, nowMs, true);
 				}
@@ -4793,6 +4802,8 @@ namespace RTE {
 	}
 
 	NetLockstepCoordinator::~NetLockstepCoordinator() {
+		const NetLockstepPlaneGuard guard;
+		if (m_Config.peerSessionLinks && m_Config.peerSessionLinks->frameReader == this) m_Config.peerSessionLinks->frameReader = nullptr;
 		ScenarioRunner::ForgetLockstepCoordinator(this);
 		NetLockstepPlane::Forget(this);
 	}
@@ -5000,10 +5011,12 @@ namespace RTE {
 
 		m_Transport = &transport;
 		m_MigrationFutureDelays.clear();
+		if (m_Config.peerSessionLinks && m_Config.peerSessionLinks->frameReader == this) m_Config.peerSessionLinks->frameReader = nullptr;
 		m_Config = config;
 		if (config.peerSessionLinks) {
 			auto& links = *config.peerSessionLinks;
 			if (!links.primary) links.primary = &transport;
+			if (config.peerFrameGroups) links.frameReader = this;
 			links.sessionId = config.sessionId; links.localPeerId = config.localPeerId; links.hostPeerId = GetHostPeerId(); links.key = config.migrationKey;
 			if (!links.sessionAttached) for (const auto& [peer, native]: remoteTransports) { links.primaryBindings[native] = peer; links.sessionRoutes[native] = peer; }
 		}
@@ -11510,6 +11523,9 @@ namespace RTE {
 			return;
 		}
 		if (UsesPeerFrameGroups() && m_Config.peerSessionLinks && m_Config.peerSessionLinks->sessionAttached && event.type == NetTransportEventType::PeerConnected) return;
+		if (UsesPeerFrameGroups() && m_Config.peerSessionLinks &&
+		    (event.type == NetTransportEventType::PeerDisconnected || event.type == NetTransportEventType::ConnectionFailed))
+			m_Config.peerSessionLinks->ForwardAdmission(*m_Config.peerSessionLinks->primary, event);
 		if (m_State == NetLockstepState::Failed || m_State == NetLockstepState::Stopped) {
 			// An ended round still owns the wire through the host's goodbye drain: a seat knocking to come back
 			// is the session's traffic, and the round that ended must not be what swallows its handshake.
@@ -12458,7 +12474,7 @@ namespace RTE {
 		}
 		if (!IsKnownRemotePeer(stop.senderPeerId)) return;
 		if (stop.reason == NetLockstepStopReason::PeerLeft || stop.reason == NetLockstepStopReason::Complete)
-			NotePeerRoundEnd(stop.senderPeerId, stop.frame, nowMs, false);
+			NotePeerRoundEnd(stop.senderPeerId, stop.frame, nowMs, false, stop.reason == NetLockstepStopReason::Complete);
 		// A seat the round has already dropped cannot end it: a link that fails one way leaves the evicted
 		// peer able to send, and its own grace runs out on a round it is no longer in.
 		if (stop.reason == NetLockstepStopReason::PeerLeft && m_AnnouncedLeavers.insert(stop.senderPeerId).second)
