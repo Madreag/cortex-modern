@@ -39,7 +39,7 @@ namespace RTE {
 		CheckpointString& operator=(const std::string& value) { Overwrite(value); return *this; }
 		CheckpointString& operator=(std::string&& value) { Overwrite(std::move(value)); return *this; }
 		CheckpointString& operator=(std::string_view value) { Overwrite(value); return *this; }
-		CheckpointString& operator=(const char* value) { Overwrite(value); return *this; }
+		CheckpointString& operator=(const char* value) { Overwrite(std::string_view(value)); return *this; }
 		CheckpointString& operator=(char value) { Assign(std::string(1, value)); return *this; }
 
 		const std::string& Value() const {
