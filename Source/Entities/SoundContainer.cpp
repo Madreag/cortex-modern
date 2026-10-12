@@ -26,6 +26,14 @@ using namespace RTE;
 
 ConcreteClassInfo(SoundContainer, Entity, 50);
 
+LogicalSoundPlayback RTE::FreezeCheckpointValue(const LogicalSoundPlayback& source, CheckpointNativeSnapshot& snapshot) {
+	LogicalSoundPlayback playback;
+	playback.identity = source.identity;
+	playback.lastObjectUID = source.lastObjectUID;
+	playback.voices = snapshot.Freeze(source.voices);
+	return playback;
+}
+
 const std::unordered_map<std::string, SoundContainer::SoundOverlapMode> SoundContainer::c_SoundOverlapModeMap = {
     {"Overlap", SoundContainer::SoundOverlapMode::OVERLAP},
     {"Restart", SoundContainer::SoundOverlapMode::RESTART},

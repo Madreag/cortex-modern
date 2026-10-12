@@ -35,7 +35,7 @@ namespace RTE {
 		uint64_t PlaybackCheckpointIdentity() const { return PreviewPlaybackOwner()->GetCheckpointIdentity(); }
 		const SoundExecutionKey& GetSharedPlaybackIdentity() const { return m_LogicalPlayback.identity.value; }
 		const LogicalSoundPlayback& GetSharedLogicalPlayback() const { return m_LogicalPlayback; }
-		const std::vector<LogicalSoundVoice>& GetSharedLogicalVoices() const { return m_LogicalPlayback.voices; }
+		const CheckpointVector<LogicalSoundVoice>& GetSharedLogicalVoices() const { return m_LogicalPlayback.voices; }
 		/// Every sound played from simulation code is logical whatever bus carries it: a mod can route a gameplay sound to the UI bus and still query it from shared simulation.
 		bool UsesLogicalPlayback() const { return SoundSimulationScope::IsSimulation(); }
 		EntityAllocation(SoundContainer);
