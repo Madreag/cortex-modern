@@ -50,7 +50,10 @@ std::string TimerMan::CheckpointStorageSelfTestMismatch() {
 	ordinary.m_DeltaBuffer = {-0.0F, 8.25F};
 	auto owned = std::make_unique<CheckpointState>(ordinary);
 	const auto* source = owned.get();
-	TimerMan header;
+	auto& header = g_TimerMan;
+	auto previous = std::move(header.m_OwnedCheckpointValues);
+	const auto restore = [&](void*) { header.m_OwnedCheckpointValues = std::move(previous); };
+	const std::unique_ptr<void, decltype(restore)> restoreHeader(&header, restore);
 	header.m_OwnedCheckpointValues = std::move(owned);
 	CheckpointNativeStorage::Root<TimerMan> root(&header);
 	auto snapshot = std::make_unique<CheckpointNativeSnapshot>();

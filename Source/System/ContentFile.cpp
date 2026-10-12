@@ -402,13 +402,15 @@ std::string ContentFile::LoadedBitmapChangeMissedByIndex() {
 		BITMAP* previous = existing == std::as_const(registry).end() ? nullptr : existing->second;
 		registry[path] = image.get();
 		CheckpointNativeStorage::Root<decltype(s_LoadedBitmaps)> root(&s_LoadedBitmaps);
+		CheckpointNativeStorage::Root<decltype(s_PathHashes)> pathRoot(&s_PathHashes);
 		auto inventory = CheckpointNativeStorage::PrepareInventory();
 		if (!inventory->Arm()) way("frozen image inventory", false);
 		else {
 			root.Freeze();
+			pathRoot.Freeze();
 			clear_to_color(image.get(), 41);
 			registry.erase(path);
-			const std::array headers{root.Range()};
+			const std::array headers{root.Range(), pathRoot.Range()};
 			CheckpointNativeStorage::ReadScope read(inventory->Pages(), headers);
 			snapshot->SealBoundary();
 			CheckpointNativeSnapshot::ReadScope savedValues(snapshot.get());

@@ -2154,10 +2154,19 @@ std::string MovableMan::CheckpointOptionsStorageSelfTestMismatch() {
 	};
 	const auto expected = save(*source);
 	const auto* identity = source.get();
-	MovableMan header;
+	auto& header = g_MovableMan;
+	auto previous = std::tuple{std::move(header.m_OwnedCheckpointOptions), std::move(header.m_OwnedCheckpointActors),
+	    std::move(header.m_OwnedCheckpointLoose), std::move(header.m_OwnedCheckpointMembership), std::move(header.m_OwnedCheckpointLookup)};
+	const auto restore = [&](void*) {
+		std::tie(header.m_OwnedCheckpointOptions, header.m_OwnedCheckpointActors, header.m_OwnedCheckpointLoose,
+		    header.m_OwnedCheckpointMembership, header.m_OwnedCheckpointLookup) = std::move(previous);
+	};
+	const std::unique_ptr<void, decltype(restore)> restoreHeader(&header, restore);
 	header.m_OwnedCheckpointOptions = std::move(source);
-	header.PrepareCheckpointActorValues(); header.PrepareCheckpointLooseValues();
-	header.PrepareCheckpointMembershipValues(); header.PrepareCheckpointLookupValues();
+	header.m_OwnedCheckpointActors = std::make_unique<CheckpointActors>();
+	header.m_OwnedCheckpointLoose = std::make_unique<CheckpointLoose>();
+	header.m_OwnedCheckpointMembership = std::make_unique<CheckpointMembership>();
+	header.m_OwnedCheckpointLookup = std::make_unique<CheckpointLookup>();
 	auto alarm = std::make_unique<AlarmEvent>();
 	alarm->m_ScenePos.SetXY(7.25F, -0.0F); alarm->m_Team = Activity::TeamTwo; alarm->m_Range = 3.25F;
 	const auto* alarmIdentity = alarm.get();

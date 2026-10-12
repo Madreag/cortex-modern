@@ -11089,6 +11089,7 @@ int main(int argc, char** argv) {
 			return SimChecksum::RunRowBlockSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-cow-checkpoint-selftest") {
+			install_allegro(SYSTEM_NONE, &errno, std::atexit);
 			return RTE::RunCheckpointImageSelfTest() ? 0 : 1;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-float-text-selftest") {

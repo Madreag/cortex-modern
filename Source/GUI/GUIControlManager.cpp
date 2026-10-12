@@ -18,6 +18,7 @@
 #include "ObjectPickerGUI.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
+#include "TimerMan.h"
 #include "GLResourceMan.h"
 #include "SDL3/SDL.h"
 #include "Reader.h"
@@ -1827,13 +1828,15 @@ bool GUICheckpoint::RunSelfTest() {
 			const BITMAP* imageAddress = image.get();
 			auto snapshot = std::make_unique<CheckpointNativeSnapshot>();
 			snapshot->SealBoundary();
+			g_TimerMan.PrepareCheckpointValues();
+			CheckpointNativeStorage::Root<TimerMan> timerRoot(&g_TimerMan);
 			CheckpointNativeStorage::Root<decltype(ContentFile::s_LoadedBitmaps)> bitmapRoot(&ContentFile::s_LoadedBitmaps);
 			const auto [pathSource, pathSize] = ContentFile::PathHashRegistry();
 			std::vector<std::byte> pathHeader(pathSize);
 			const auto pages = CheckpointNativeStorage::Prepare();
 			for (const auto& part: pages) part->Arm();
-			bitmapRoot.Freeze(); std::memcpy(pathHeader.data(), pathSource, pathSize);
-			const std::array roots{bitmapRoot.Range(), CheckpointNativeStorage::RootRange{pathSource, pathHeader.data(), pathSize}};
+			bitmapRoot.Freeze(); timerRoot.Freeze(); std::memcpy(pathHeader.data(), pathSource, pathSize);
+			const std::array roots{bitmapRoot.Range(), timerRoot.Range(), CheckpointNativeStorage::RootRange{pathSource, pathHeader.data(), pathSize}};
 			controls.reset(); input.reset(); screen.reset(); image.reset(); banner.reset(); editor.reset();
 			CheckpointNativeStorage::ReadScope read(pages, roots);
 			BITMAP* savedImage = snapshot->ReadBitmap(imageAddress);
