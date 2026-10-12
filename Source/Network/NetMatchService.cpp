@@ -2449,6 +2449,7 @@ static std::string ResyncSaveName() {
 			m_MigrationFallbackReady = false;
 			m_MigrationRepairPending = false;
 			m_MigrationKey.fill(0);
+			m_RejoinFrameKey.reset();
 			m_MigrationAdmissionState.clear();
 			m_LastMigrationAdmissionState.clear();
 			DrainPendingSessionEventsLocked(false);
@@ -7650,6 +7651,10 @@ static std::string ResyncSaveName() {
 			if (!m_ReconnectClient.MigrateHostContext(m_ReconnectClient.GetRecord().hostAddress, directorySession, capsule.configHash))
 				return false;
 			m_MigrationKey = key;
+			if (m_RejoinFrameKey) {
+				std::lock_guard<std::mutex> frameLock(m_RejoinFrameKey->mutex);
+				m_RejoinFrameKey->key = key;
+			}
 			m_MigrationAdmissionState = admission;
 			{
 				// What this capsule carries for moderation, read once: the roster whole and the host's ban list beside it.
@@ -10584,11 +10589,20 @@ static std::string ResyncSaveName() {
 		}
 		if (request.rejoin) {
 			// A returning seat's fresh session talks to the host live until its handshake is done.
-			const auto key = m_MigrationKey;
+			// The round's frame key arrives in this rejoin's own capsule, after the session starts.
+			auto frameKey = std::make_shared<RejoinFrameKey>();
+			frameKey->key = m_MigrationKey;
+			m_RejoinFrameKey = frameKey;
 			const uint64_t sessionId = runnerConfig.sessionConfig.sessionId;
-			session->SetAuxiliaryPacketValidator([key, sessionId](const std::vector<uint8_t>& bytes) {
+			session->SetAuxiliaryPacketValidator([frameKey, sessionId](const std::vector<uint8_t>& bytes) {
+				if (!NetHostMigrationCodec::LooksLikePacket(bytes)) return false;
+				NetHash32 key;
+				{
+					std::lock_guard<std::mutex> lock(frameKey->mutex);
+					key = frameKey->key;
+				}
 				NetHostMigrationMessage message;
-				return NetHostMigrationCodec::LooksLikePacket(bytes) && NetHostMigrationCodec::Decode(bytes, key, message) && message.sessionId == sessionId;
+				return NetHostMigrationCodec::Decode(bytes, key, message) && message.sessionId == sessionId;
 			});
 			System::PrintDiagnosticLine("[net-match] rejoin phase Active -> Connecting");
 			session->SetRejoinPhase(NetSession::RejoinPhase::Connecting);

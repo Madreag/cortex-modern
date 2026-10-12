@@ -1193,6 +1193,9 @@ namespace RTE {
 		std::atomic<bool> m_MigrationFallbackReady{false};
 		uint64_t m_MigrationGeneration = 0;
 		NetHash32 m_MigrationKey{};
+		// A returning seat's session reads the round's frame key the rejoin capsule delivers, from any thread.
+		struct RejoinFrameKey { std::mutex mutex; NetHash32 key{}; };
+		std::shared_ptr<RejoinFrameKey> m_RejoinFrameKey;
 		std::vector<uint8_t> m_MigrationAdmissionState;
 		std::vector<uint8_t> m_LastMigrationAdmissionState;
 		uint8_t m_MigrationAuthority = 0;
