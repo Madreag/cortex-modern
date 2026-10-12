@@ -938,6 +938,7 @@ namespace RTE {
 			}
 			return frames;
 		};
+		bool hostWithholds = false;
 		const auto step = [&](bool joinerPlaying) {
 			for (size_t index = 0; index < count; ++index) {
 				if (!joinerPlaying && index == 1) continue;
@@ -948,6 +949,7 @@ namespace RTE {
 				while (credits[index] >= 1) {
 					const uint64_t next = applied[index] + 1;
 					if (produced[index] == next) {
+						if (hostWithholds && index == 0) break;
 						if (!round.QueueLocalInput(next, heavy && index == 0 ? HeavyInput(next) : std::vector<ControllerFrame>{}, {}, error)) return false;
 						++produced[index];
 					}
@@ -1031,9 +1033,11 @@ namespace RTE {
 		}
 		if (name == "kick-received" || name == "kick-received-two") {
 			auto& host = *rounds[0];
-			// The removed player's input for the frame we wait on has arrived before the kick.
+			// The host's own next input is late, so the removed player's input for that frame has arrived before the kick.
 			const auto arrived = [&] { const auto next = host.m_RemoteFrames.find(host.GetStats().nextFrame); return next != host.m_RemoteFrames.end() && next->second.contains(2); };
+			hostWithholds = true;
 			for (const uint64_t until = hub.now + 500; hub.now < until && !arrived();) if (!step(true)) return false;
+			hostWithholds = false;
 			if (!arrived()) { *error = "the kicked player's input for the host's next frame never arrived ahead of it"; return false; }
 			const uint64_t next = host.GetStats().nextFrame;
 			host.EvictRemovedPeer(2, "removed from the session", hub.now);

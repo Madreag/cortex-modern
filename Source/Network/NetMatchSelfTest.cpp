@@ -17964,26 +17964,26 @@ namespace RTE {
 		service.m_IsHost = true; service.m_IceEnabled = true; service.m_HostRelayMode = 1; service.m_ConnectionMode = 2;
 		service.m_LastRoundId = 1; service.m_RelayReplies = 0; service.m_FreshRelayRequested = true;
 		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		const auto mints = [&] { return std::count_if(script->sent.begin(), script->sent.end(), [](const auto& sent) { return sent.method == "POST" && sent.path.ends_with("/ice-servers"); }); };
 		// The directory refuses the room's first mint and names when to come back.
-		script->replies.push_back({429, R"({"error":"rate_limited_key","retry_after_s":7})", ""});
+		script->replies.push_back({429, R"({"error":"rate_limited_key","retry_after_s":2})", ""});
 		service.UpdateRelayOffer(1000);
-		const size_t first = script->sent.size();
 		service.m_Directory.Update(1001); service.UpdateRelayOffer(1001);
 		NetRelayConfig offered;
 		(void)service.ReadRelayOffer(offered);
-		if (first != 2 || !offered.Empty()) { *error = "relay mint retry: the room's first mint was not sent or was published unrefused"; return false; }
-		service.m_Directory.Update(8000); service.UpdateRelayOffer(8000);
-		if (script->sent.size() != first) { *error = "relay mint retry: the host minted before the directory's retry time"; return false; }
+		if (mints() != 1 || !offered.Empty()) { *error = "relay mint retry: the room's first mint was not sent or was published unrefused"; return false; }
+		service.m_Directory.Update(3000); service.UpdateRelayOffer(3000);
+		if (mints() != 1) { *error = "relay mint retry: the host minted before the directory's retry time"; return false; }
 		NetRelayConfig relay = NetRelayConfig::Fixed("relay.example:3478", "temporary-user", "temporary-password", "11111111-2222-4333-8444-555555555555:1", now + NetDirectoryClient::c_MaxRelayTtlSeconds);
 		script->replies.push_back({200, relay.ToJson(), ""});
-		service.m_Directory.Update(8001); service.UpdateRelayOffer(8001);
-		if (script->sent.size() != first + 1) {
-			*error = "relay mint retry: a refused mint left the room without a relay until " + std::to_string(service.m_NextRelayRequestMs) + " ms, past the directory's retry at 8001 ms";
+		service.m_Directory.Update(3001); service.UpdateRelayOffer(3001);
+		if (mints() != 2) {
+			*error = "relay mint retry: a refused mint left the room without a relay until " + std::to_string(service.m_NextRelayRequestMs) + " ms, past the directory's retry at 3001 ms";
 			return false;
 		}
-		service.m_Directory.Update(8002); service.UpdateRelayOffer(8002);
+		service.m_Directory.Update(3002); service.UpdateRelayOffer(3002);
 		if (!service.ReadRelayOffer(offered) || offered != relay) { *error = "relay mint retry: the retried mint was not published"; return false; }
-		std::cout << "[net-match-selftest] PASS relay mint retry: a refused room mint is retried at the directory's 7 s, not the 15 s renewal spacing" << std::endl;
+		std::cout << "[net-match-selftest] PASS relay mint retry: a refused room mint is retried at the directory's 2 s, not the 15 s renewal spacing" << std::endl;
 		return true;
 	}
 
