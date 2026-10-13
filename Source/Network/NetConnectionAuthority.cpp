@@ -22,6 +22,12 @@ namespace RTE {
 		constexpr uint64_t c_SeatRequestIntervalMs = 5100;
 		constexpr const char* c_Waiting = "The directory is unavailable. Reconnecting will retry; Cancel returns to Multiplayer.";
 
+		// Test lever: logs each frame referee exchange; read once.
+		bool ConnectionTrace() {
+			static const bool enabled = std::getenv("CC_TEST_CONNECTION_TRACE") != nullptr;
+			return enabled;
+		}
+
 		std::string Hex(const uint8_t* bytes, size_t size) {
 			constexpr char digits[] = "0123456789abcdef";
 			std::string out(size * 2, '0');
@@ -565,7 +571,7 @@ namespace RTE {
 		if (m_FrameTie) {
 			if (m_FrameTie->Poll() == NetHttpClient::PollResult::Pending) return;
 			const auto response = m_FrameTie->GetResponse(); m_FrameTie.reset(); m_NextFrameTie = steadyMs + 50;
-			if (std::getenv("CC_TEST_CONNECTION_TRACE")) {
+			if (ConnectionTrace()) {
 				const auto body = json::parse(response.body, nullptr, false);
 				std::string code;
 				if (body.is_object() && body.contains("error") && body["error"].is_string()) {
@@ -607,7 +613,7 @@ namespace RTE {
 		if (m_FrameTieCheckedIn && !finalQuery && m_SeatRequests.size() >= 11) return;
 		if (steadyMs < m_NextFrameTie || steadyMs < m_FrameTieRetry.nextMs) return;
 		if (!CanSeatRequest(steadyMs, true)) {
-			if (std::getenv("CC_TEST_CONNECTION_TRACE") && m_SeatRequests.size() >= 12)
+			if (ConnectionTrace() && m_SeatRequests.size() >= 12)
 				NetDirectoryRetry::Note(steadyMs, "frame-tie", "seat_allowance", m_SeatRequests.front() + 60100 - steadyMs);
 			return;
 		}
@@ -623,7 +629,7 @@ namespace RTE {
 			m_FrameTieFinalQuerySent = finalQuery;
 			if (m_FrameTie) {
 				m_SeatRequests.push_back(steadyMs); if (!request.queryOnly) m_NextSeatRequestMs = steadyMs + c_SeatRequestIntervalMs;
-				if (std::getenv("CC_TEST_CONNECTION_TRACE")) System::PrintDiagnosticLine("[net-frame-referee] sent frame=" + std::to_string(request.frame) +
+				if (ConnectionTrace()) System::PrintDiagnosticLine("[net-frame-referee] sent frame=" + std::to_string(request.frame) +
 				    " query_only=" + std::to_string(request.queryOnly) + " requests=" + std::to_string(m_SeatRequests.size()) + " now_ms=" + std::to_string(steadyMs));
 			}
 		}
