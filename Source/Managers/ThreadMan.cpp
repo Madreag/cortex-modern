@@ -15,9 +15,10 @@ using namespace RTE;
 void SaverThreads::Enter() {
 	if (s_Lowered) return;
 	s_Current = s_Lowered = true;
-	// Lowest leaves a waking saver below the simulation's threads even with the scheduler's wake boost.
+	// Save work has a lower base priority than gameplay's workers.
 #ifdef _WIN32
-	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+	static const bool idle = std::getenv("CCCP_TEST_SAVER_IDLE") != nullptr;
+	SetThreadPriority(GetCurrentThread(), idle ? THREAD_PRIORITY_IDLE : THREAD_PRIORITY_LOWEST);
 #elif defined(__APPLE__)
 	pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
 #else
