@@ -76,6 +76,7 @@
 #include "ScenarioGUI.h"
 #include "FloatTextSelfTest.h"
 #include "CheckpointImage.h"
+#include "CheckpointPagePool.h"
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
@@ -8230,6 +8231,10 @@ void RunGameLoop() {
 				~RestoreTickCost() {
 					if (enabled) System::PrintDiagnosticLine(std::format("[checkpoint-restore-tick] tick={} sim_us={}", tick,
 					    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()));
+					if (enabled && CheckpointPagePool::TallyingFaults()) {
+						const auto tally = CheckpointPagePool::TakeFaultTally();
+						System::PrintDiagnosticLine(std::format("[native-fault-tick] tick={} faults={} fault_us={} settled={} cooled={}", tick, tally.faults, tally.faultNs / 1000, tally.settled, tally.cooled));
+					}
 				}
 			} restoreTickCost{s_checkpointRestoreContinue, nextSimTick, s_checkpointRestoreContinue ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}};
 			const FloatingPointEnvironment::Scope floatingPointScope("simulation tick");

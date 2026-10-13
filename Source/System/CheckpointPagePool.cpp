@@ -135,6 +135,19 @@ struct CheckpointPagePool::Copy {
 	std::thread::id SimulationThread() const noexcept { return gate ? gate->simThread : simThread; }
 };
 
+namespace {
+	std::atomic<uint64_t> s_TallyFaults{0}, s_TallyFaultNs{0}, s_TallySettled{0}, s_TallyCooled{0};
+}
+
+bool CheckpointPagePool::TallyingFaults() {
+	static const bool tallying = std::getenv("CCCP_TEST_FAULT_TICKS") != nullptr;
+	return tallying;
+}
+
+CheckpointPagePool::FaultTally CheckpointPagePool::TakeFaultTally() {
+	return {s_TallyFaults.exchange(0), s_TallyFaultNs.exchange(0), s_TallySettled.exchange(0), s_TallyCooled.exchange(0)};
+}
+
 struct CheckpointPagePool::Block {
 	// Between autosaves an inventory page is open and not yet seen, open and written since, or fenced and unchanged.
 	enum class PageState : unsigned char { Open, Hot, Fenced };
@@ -229,6 +242,7 @@ struct CheckpointPagePool::Block {
 			if (opened) std::fill(states.begin() + begin, states.begin() + page, PageState::Hot);
 		}
 		const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
+		if (TallyingFaults()) { s_TallyFaults.fetch_add(1, std::memory_order_relaxed); s_TallyFaultNs.fetch_add(elapsed, std::memory_order_relaxed); }
 		for (const auto& copy: copies) if (copy->Armed() && !copy->completed) {
 			const bool simulation = std::this_thread::get_id() == copy->SimulationThread();
 			(simulation ? copy->simFaults : copy->otherFaults).fetch_add(1, std::memory_order_relaxed);
@@ -412,17 +426,20 @@ size_t CheckpointPagePool::CoolInventory() {
 		SaverThreads::YieldToGame();
 		if (block->Watch()) cooled += block->Cool();
 	}
+	if (TallyingFaults()) s_TallyCooled.fetch_add(cooled, std::memory_order_relaxed);
 	return cooled;
 }
 
 size_t CheckpointPagePool::SettleInventory(size_t budget) {
 	const auto blocks = LiveBlocks();
 	size_t left = 0;
+	const size_t asked = budget;
 	for (const auto& block: blocks) {
 		SaverThreads::YieldToGame();
 		if (budget && block->Watch()) budget -= block->Settle(budget);
 		left += block->OpenPages();
 	}
+	if (TallyingFaults()) s_TallySettled.fetch_add(asked - budget, std::memory_order_relaxed);
 	return left;
 }
 

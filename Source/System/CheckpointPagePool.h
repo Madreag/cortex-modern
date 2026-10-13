@@ -85,6 +85,10 @@ namespace RTE {
 		static size_t SettleInventory(size_t pages);
 		/// Fences again the written inventory pages that stopped changing since the last pass; returns how many.
 		static size_t CoolInventory();
+		/// Test lever CCCP_TEST_FAULT_TICKS: the native write faults taken and the pages settled and cooled since the last call.
+		struct FaultTally { uint64_t faults = 0, faultNs = 0, settled = 0, cooled = 0; };
+		static bool TallyingFaults();
+		static FaultTally TakeFaultTally();
 		static std::string SelfTestMismatch();
 	private:
 		std::vector<std::shared_ptr<Block>> m_Blocks;
