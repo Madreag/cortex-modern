@@ -14,6 +14,7 @@ sources += files(
 'Writer.cpp',
 'CheckpointImage.cpp',
 'PageWriteFence.cpp',
+'CheckpointPagePool.cpp',
 'Box.cpp',
 'Entity.cpp',
 'Vector.cpp',

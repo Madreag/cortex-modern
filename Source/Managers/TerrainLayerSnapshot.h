@@ -34,11 +34,11 @@ namespace RTE {
 		};
 		std::array<Layer, 4> unseen;
 		std::array<Layer, 3> terrainLayers;
-		std::deque<Box> updatedMaterialAreas;
+		CheckpointDeque<Box> updatedMaterialAreas;
 		int orbitDirection = 0;
 		int layerToDraw = 0;
-		std::array<std::list<Vector>, 4> seenPixels;
-		std::array<std::list<Vector>, 4> cleanedPixels;
+		std::array<CheckpointList<Vector>, 4> seenPixels;
+		std::array<CheckpointList<Vector>, 4> cleanedPixels;
 		std::array<Vector, 4> unseenPixelSize;
 		std::array<bool, 4> scanScheduled{};
 		std::vector<Scene::HorizonTerrainBox> horizonBoxes;
@@ -56,7 +56,7 @@ namespace RTE {
 		bool CanRestore() const;
 		bool Restore() const;
 		std::string SaveMetadata() const;
-		static CheckpointText CaptureMetadata();
+		static CheckpointText CaptureMetadata(const Scene* source = nullptr);
 		bool LoadMetadata(std::string_view text, bool validateOnly = false);
 	private:
 		std::vector<BITMAP*> fencedBitmaps;

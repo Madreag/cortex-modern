@@ -1,4 +1,5 @@
 #include "GenericSavedData.h"
+#include "CheckpointNativeSnapshot.h"
 
 #include "Base64/base64.h"
 
@@ -8,6 +9,12 @@ const std::string GenericSavedData::c_ClassName = "GenericSavedData";
 const std::string GenericSavedData::GenericSavedEncodedStrings::c_ClassName = "GenericSavedEncodedStrings";
 const std::string GenericSavedData::GenericSavedStrings::c_ClassName = "GenericSavedStrings";
 const std::string GenericSavedData::GenericSavedNumbers::c_ClassName = "GenericSavedNumbers";
+
+GenericSavedData::GenericSavedData(const GenericSavedData& source, CheckpointNativeSnapshot& snapshot) {
+	m_SavedEncodedStrings.m_Data = snapshot.Freeze(source.m_SavedEncodedStrings.m_Data);
+	m_SavedStrings.m_Data = snapshot.Freeze(source.m_SavedStrings.m_Data);
+	m_SavedNumbers.m_Data = snapshot.Freeze(source.m_SavedNumbers.m_Data);
+}
 
 int GenericSavedData::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Serializable::ReadProperty(propName, reader));
@@ -64,9 +71,9 @@ void GenericSavedData::SaveString(const std::string& key, const std::string& val
 }
 
 const std::string& GenericSavedData::LoadString(const std::string& key) {
-	const std::string* loadString = &m_SavedStrings.m_Data[key];
+	const std::string* loadString = &m_SavedStrings.m_Data[key].Value();
 	if (*loadString == "") {
-		loadString = &m_SavedEncodedStrings.m_Data[key];
+		loadString = &m_SavedEncodedStrings.m_Data[key].Value();
 	}
 	return *loadString;
 }
@@ -83,7 +90,7 @@ int GenericSavedData::GenericSavedEncodedStrings::Save(Writer& writer) const {
 	for (const auto& [propName, value]: m_Data) {
 		// Need to encode as URL, so it avoids = character
 		if (!value.empty()) {
-			writer.NewPropertyWithValue(propName, CheckpointText(value).Base64());
+			writer.NewPropertyWithValue(propName, CheckpointText(value.Value()).Base64());
 		}
 	}
 	return 0;

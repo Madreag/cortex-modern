@@ -29,6 +29,7 @@ namespace luabind { namespace detail
 {
 
 	checkpoint_object_write_cb checkpoint_object_write = 0;
+	thread_local saved_object_copy saved_objects = {0, 0};
 
 	thread_local unsigned preview_fence_window = 0;
 	thread_local int preview_fence_parent = -1;
@@ -72,6 +73,12 @@ namespace luabind { namespace detail
 		assert((((m_flags & owner) && dest) || !(m_flags & owner)) && "internal error, please report");
 		// A value an open window creates is that window's own to write.
 		if (m_flags & owner) m_preview_window = preview_fence_window;
+		// Saved getter aliases borrow the saved world while newly created values keep their destructor.
+		if (obj && saved_objects.copy) {
+			bool borrowed = false;
+			m_object = saved_objects.copy(saved_objects.owner, crep, obj, borrowed);
+			if (borrowed) m_destructor = [](void*) {};
+		}
 	}
 
 	object_rep::object_rep(class_rep* crep, int flags, detail::lua_reference const& table_ref)

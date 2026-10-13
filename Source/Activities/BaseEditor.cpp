@@ -174,8 +174,8 @@ int BaseEditor::Start() {
 	//    g_SceneMan.GetScene()->PlaceResidentBrains(*this);
 
 	// The get a list of all the placed objects in the Scene and set them to not kick around
-	const std::list<SceneObject*>* pSceneObjectList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::BLUEPRINT);
-	for (std::list<SceneObject*>::const_iterator itr = pSceneObjectList->begin(); itr != pSceneObjectList->end(); ++itr) {
+	const CheckpointList<SceneObject*>* pSceneObjectList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::BLUEPRINT);
+	for (CheckpointList<SceneObject*>::const_iterator itr = pSceneObjectList->begin(); itr != pSceneObjectList->end(); ++itr) {
 		Actor* pActor = dynamic_cast<Actor*>(*itr);
 		if (pActor) {
 			pActor->SetStatus(Actor::INACTIVE);

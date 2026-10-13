@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the MovableObject class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -21,8 +23,11 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <utility>
 #include <vector>
+#include <memory>
+#include <string_view>
 
 struct BITMAP;
 
@@ -70,6 +75,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a MovableObject object in system
 		/// memory. Create() should be called before using the object.
 		MovableObject();
+		MovableObject(const MovableObject& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a MovableObject object before deletion
 		/// from system memory.
@@ -158,8 +164,8 @@ namespace RTE {
 		bool LoadRuntimeImage(std::string_view text) { return LoadMovableObjectRuntime(text); }
 
 		/// The registration counter, saved and restored with an image the way the unique-ID counter is.
-		static long GetScriptRegistrationSerialCounter() { return s_ScriptRegistrationSerial; }
-		static void PinScriptRegistrationSerial(long serial) { s_ScriptRegistrationSerial = serial; }
+		static long GetScriptRegistrationSerialCounter() { return FrozenCheckpointCounters().registration.load(); }
+		static void PinScriptRegistrationSerial(long serial) { MutableCheckpointCounters().registration = serial; }
 
 		/// Moves this object's live script object to another unique ID's key, so its hooks keep finding
 		/// self when the identity changes under them. Returns false when the key could not be moved.
@@ -203,7 +209,7 @@ namespace RTE {
 		bool HasAnyScripts() const { return !m_AllLoadedScripts.empty(); }
 
 		/// Gets every script loaded onto this MO, in load order.
-		const std::vector<std::string>& GetAllLoadedScripts() const { return m_AllLoadedScripts; }
+		const CheckpointVector<CheckpointString>& GetAllLoadedScripts() const { return m_AllLoadedScripts; }
 
 		/// Checks if the script at the given path is one of the scripts on this MO.
 		/// @param scriptPath The path to the script to check.
@@ -1002,10 +1008,10 @@ namespace RTE {
 
 		/// Gets the pairs of impulse forces and their offsets that have to be applied.
 		/// @return A constant reference to the deque of impulses for this MovableObject.
-		const std::deque<std::pair<Vector, Vector>>& GetImpulses() { return m_ImpulseForces; }
+		const CheckpointDeque<std::pair<Vector, Vector>>& GetImpulses() { return m_ImpulseForces; }
 
 		/// The forces queued for the next travel, for snapshot forensics.
-		const std::deque<std::pair<Vector, Vector>>& GetForces() const { return m_Forces; }
+		const CheckpointDeque<std::pair<Vector, Vector>>& GetForces() const { return m_Forces; }
 
 		/// Returns the number of ImpulseForces vectors to apply.
 		/// @return Number of entries in ImpulseForces list.
@@ -1085,11 +1091,11 @@ namespace RTE {
 
 		/// Gets a const reference to this MOSRotating's map of string values.
 		/// @return A const reference to this MOSRotating's map of string values.
-		const std::unordered_map<std::string, std::string>& GetStringValueMap() const { return m_StringValueMap; }
+		const CheckpointUnorderedMap<CheckpointString, CheckpointString>& GetStringValueMap() const { return m_StringValueMap; }
 
 		/// Gets a const reference to this MOSRotating's map of number values.
 		/// @return A const reference to this MOSRotating's map of number values.
-		const std::unordered_map<std::string, double>& GetNumberValueMap() const { return m_NumberValueMap; }
+		const CheckpointUnorderedMap<CheckpointString, double>& GetNumberValueMap() const { return m_NumberValueMap; }
 
 		/// Gets a custom value map's entries in key order, the order saved text names them in, so the text never follows the map's insertion history.
 		/// @param map The map to order.
@@ -1201,7 +1207,7 @@ namespace RTE {
 
 		/// Updates this' and its its childrens' MOID's and foorprint. Should
 		/// be done every frame.
-		void UpdateMOID(std::vector<MovableObject*>& MOIDIndex, MOID rootMOID = g_NoMOID, bool makeNewMOID = true);
+		void UpdateMOID(CheckpointVector<MovableObject*>& MOIDIndex, MOID rootMOID = g_NoMOID, bool makeNewMOID = true);
 
 		/// Draws this' current graphical HUD overlay representation to a
 		/// BITMAP of choice.
@@ -1219,18 +1225,35 @@ namespace RTE {
 		/// @param newRestThreshold New rest threshold value
 		void SetRestThreshold(int newRestThreshold) { if (m_RestThreshold != newRestThreshold) TouchCheckpoint(); m_RestThreshold = newRestThreshold; }
 
+		/// Owns allocation counters during multiplayer setup without changing their atomic operations.
+		static void PrepareCheckpointCounters();
+		static const void* CheckpointOwnedCounters() { return s_OwnedCheckpointCounters.get(); }
+		static std::string CheckpointCounterStorageSelfTestMismatch();
+		/// Snapshot constructors consume private counters on their own thread.
+		class CheckpointCounterScope {
+		public:
+			CheckpointCounterScope();
+			~CheckpointCounterScope();
+			CheckpointCounterScope(const CheckpointCounterScope&) = delete;
+			CheckpointCounterScope& operator=(const CheckpointCounterScope&) = delete;
+		private:
+			std::atomic<long> m_UID, m_Registration;
+			std::atomic<long>* m_PreviousUID;
+			std::atomic<long>* m_PreviousRegistration;
+		};
+
 		/// Returns the next unique id for MO's and increments unique ID counter
 		/// @return Returns the next unique id.
-		static long GetNextUniqueID() { return ++m_UniqueIDCounter; }
+		static long GetNextUniqueID() { return ++MutableCheckpointCounters().uid; }
 
 		/// Pins the unique ID counter to a fixed base so a deterministic match hands out the same
 		/// IDs on every peer regardless of how many MOs each process created beforehand.
 		/// @param base The value the next created MO's ID will follow.
-		static void PinUniqueIDCounter(long base) { m_UniqueIDCounter = base; }
+		static void PinUniqueIDCounter(long base) { MutableCheckpointCounters().uid = base; }
 
 		/// Gets the current unique ID counter value, for rollback snapshots.
 		/// @return The counter's current base.
-		static long GetUniqueIDCounter() { return m_UniqueIDCounter; }
+		static long GetUniqueIDCounter() { return FrozenCheckpointCounters().uid.load(); }
 
 		/// Gets the highest saved UniqueID this thread has read since the last call, and starts the count again.
 		/// @return The highest saved UniqueID read, or 0 when none was.
@@ -1396,6 +1419,7 @@ namespace RTE {
 		/// @return Our lua state. Can potentially be nullptr if we're not setup yet.
 		LuaStateWrapper* GetLuaState() { return m_ThreadedLuaState; }
 		const LuaStateWrapper* GetLuaState() const { return m_ThreadedLuaState; }
+		int FrozenCheckpointLuaStateIndex() const { return m_CheckpointLuaStateIndex; }
 
 		/// Method to be run when the game is saved via ActivityMan::SaveCurrentGame. Not currently used in metagame or editor saving.
 		virtual void OnSave() { RunScriptedFunctionInAppropriateScripts("OnSave"); }
@@ -1432,7 +1456,7 @@ namespace RTE {
 		/// 0 means that this MO is the root, ie it is owned by MovableMan.
 		/// @param makeNewMOID Whether this MO should make a new MOID to use for itself, or to use (default: true)
 		/// the same as the last one in the index (presumably its parent),
-		virtual void UpdateChildMOIDs(std::vector<MovableObject*>& MOIDIndex, MOID rootMOID = g_NoMOID, bool makeNewMOID = true) {}
+		virtual void UpdateChildMOIDs(CheckpointVector<MovableObject*>& MOIDIndex, MOID rootMOID = g_NoMOID, bool makeNewMOID = true) {}
 
 		/// Makes this MO register itself in the MOID register and get ID:s for
 		/// itself and its children for this frame.
@@ -1442,7 +1466,7 @@ namespace RTE {
 		/// 0 means that this MO is the root, ie it is owned by MovableMan.
 		/// @param makeNewMOID Whether this MO should make a new MOID to use for itself, or to use (default: true)
 		/// the same as the last one in the index (presumably its parent),
-		void RegMOID(std::vector<MovableObject*>& MOIDIndex, MOID rootMOID = g_NoMOID, bool makeNewMOID = true);
+		void RegMOID(CheckpointVector<MovableObject*>& MOIDIndex, MOID rootMOID = g_NoMOID, bool makeNewMOID = true);
 
 		/// Copy constructor method used to instantiate a MovableObject object
 		/// identical to an already existing one.
@@ -1450,6 +1474,16 @@ namespace RTE {
 		// Member variables
 		static Entity::ClassInfo m_sClass;
 		// Global counter with unique ID's
+		struct CheckpointCounters : CheckpointNativeAllocated {
+			std::atomic<long> uid{1}, registration{0};
+		};
+		struct CounterReferences { std::atomic<long>& uid; std::atomic<long>& registration; };
+		struct FrozenCounters { const std::atomic<long>& uid; const std::atomic<long>& registration; };
+		static std::unique_ptr<CheckpointCounters> s_OwnedCheckpointCounters;
+		static thread_local std::atomic<long>* s_PrivateUID;
+		static thread_local std::atomic<long>* s_PrivateRegistration;
+		static CounterReferences MutableCheckpointCounters();
+		static FrozenCounters FrozenCheckpointCounters();
 		static std::atomic<long> m_UniqueIDCounter;
 		static std::atomic<long> s_ScriptRegistrationSerial; //!< Counts registrations, so a shared identity still has an order.
 		static std::atomic<uint64_t> s_HookLoopsEndedOnADestroyedObject; //!< Loops whose object was destroyed under them.
@@ -1475,8 +1509,8 @@ namespace RTE {
 		// The forces acting on this MovableObject, the first vector being the force in
 		// In kg * m/s^2 (Newtons), and the second one being the offset the force is being
 		// applied from the m_Pos, IN METERS (not pixels!).
-		std::deque<std::pair<Vector, Vector>> m_Forces;
-		std::deque<std::pair<Vector, Vector>> m_ImpulseForces; // First in kg * m/s, second vector in meters.
+		CheckpointDeque<std::pair<Vector, Vector>> m_Forces;
+		CheckpointDeque<std::pair<Vector, Vector>> m_ImpulseForces; // First in kg * m/s, second vector in meters.
 		Timer m_AgeTimer;
 		Timer m_RestTimer;
 
@@ -1526,7 +1560,7 @@ namespace RTE {
 		// Whether or not this object has ever been added to MovableMan. Does not take into account the object being removed from MovableMan, though in practice it usually will, cause objects are usually only removed when they're deleted.
 		bool m_HasEverBeenAddedToMovableMan;
 		// A set of ID:s of MO:s that already have collided with this MO during this frame.
-		std::set<MOID> m_AlreadyHitBy;
+		CheckpointSet<MOID> m_AlreadyHitBy;
 		int m_VelOscillations; //!< A counter for oscillations in translational velocity, in order to detect settling.
 		// Mark to have the MovableMan copy this the terrain layers at the end
 		// of update.
@@ -1541,6 +1575,7 @@ namespace RTE {
 		bool m_IsTraveling; //!< Prevents self-intersection while traveling.
 
 		LuaStateWrapper* m_ThreadedLuaState; //!< The lua state that will runs our lua scripts.
+		int m_CheckpointLuaStateIndex = -1;
 		bool m_ForceIntoMasterLuaState; //!< This is awful, and only exists for automovers because they mangle global state all over the place. TODO - change automovers to use messages.
 
 		struct LuaFunction {
@@ -1549,20 +1584,29 @@ namespace RTE {
 			bool m_ScriptIsEnabled; //!< Whether this function is in an enabled script.
 			std::unique_ptr<LuabindObjectWrapper> m_LuaFunction; //!< The lua function itself.
 		};
+		struct ScriptFunctionHash {
+			using is_transparent = void;
+			size_t operator()(std::string_view name) const noexcept { return std::hash<std::string_view>{}(name); }
+		};
 
-		std::string m_ScriptObjectName; //!< The name of this object for script usage.
+		CheckpointString m_ScriptObjectName; //!< The name of this object for script usage.
 		long m_ScriptRegistrationSerial; //!< The place this object took in its Lua state's registration order.
 		int m_HookCallDepth; //!< How many hook loops of this object are running.
 		bool m_DeleteWhenHookReturns; //!< A script deleted this object from inside its own hook.
-		std::vector<std::string> m_AllLoadedScripts; //!< A vector of script for scripts applied to this object, in order of insertion.
-		std::unordered_map<std::string, bool> m_EnabledScripts; //!< A map of script paths to the enabled state of the given script.
-		std::unordered_map<std::string, std::vector<LuaFunction>> m_FunctionsAndScripts; //!< A map of function names to vectors of Lua functions. Used to maintain script execution order and avoid extraneous Lua calls.
+		CheckpointVector<CheckpointString> m_AllLoadedScripts; //!< A vector of script for scripts applied to this object, in order of insertion.
+		CheckpointUnorderedMap<CheckpointString, bool> m_EnabledScripts; //!< A map of script paths to the enabled state of the given script.
+		CheckpointUnorderedMap<CheckpointString, CheckpointVector<LuaFunction>, ScriptFunctionHash, std::equal_to<>> m_FunctionsAndScripts; //!< A map of function names to vectors of Lua functions. Used to maintain script execution order and avoid extraneous Lua calls.
+		CheckpointVector<LuaFunction>& GetScriptFunctions(std::string_view name) {
+			const auto found = m_FunctionsAndScripts.find(name);
+			if (found == m_FunctionsAndScripts.end()) throw std::out_of_range("script function is not loaded");
+			return found->second;
+		}
 
 		volatile bool m_RequestedSyncedUpdate; //!< For optimisation purposes, scripts explicitly request a synced update if they want one.
 
-		std::unordered_map<std::string, std::string> m_StringValueMap; //<! Map to store any generic strings available from script
-		std::unordered_map<std::string, double> m_NumberValueMap; //<! Map to store any generic numbers available from script
-		std::unordered_map<std::string, Entity*> m_ObjectValueMap; //<! Map to store any generic object pointers available from script
+		CheckpointUnorderedMap<CheckpointString, CheckpointString> m_StringValueMap; //<! Map to store any generic strings available from script
+		CheckpointUnorderedMap<CheckpointString, double> m_NumberValueMap; //<! Map to store any generic numbers available from script
+		CheckpointUnorderedMap<CheckpointString, Entity*> m_ObjectValueMap; //<! Map to store any generic object pointers available from script
 		// Local-AI value writes stay here until the settled observation commits.
 		struct ValueOverlayKey {
 			ValueMapKind map = ValueMapKind::Number;
@@ -1617,9 +1661,9 @@ namespace RTE {
 		// Saved state waiting to be adopted when the object enters the world; survives the
 		// clones a restored scene goes through, unlike the live fields every copy re-derives.
 		long m_PersistedUniqueID;
-		std::string m_PersistedMovableObjectRuntime;
+		CheckpointString m_PersistedMovableObjectRuntime;
 		bool m_ScriptStateRestored; //!< The saved script graph carries this object's fields, so the scripts initialize without Create.
-		std::string m_PersistedScriptState; //!< Per-object script fields from older saves.
+		CheckpointString m_PersistedScriptState; //!< Per-object script fields from older saves.
 		int m_PersistedLuaStateIndex; //!< The Lua state index the save recorded for this object, -1 when none.
 		long m_FaithfulMOToNotHitUID = 0; //!< Snapshot link for m_pMOToNotHit, resolved after a restore.
 		inline static thread_local int s_ScriptLoadDeferralDepth = 0;

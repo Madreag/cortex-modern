@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointString.h"
+#include "CheckpointNativeContainers.h"
+
 #include <string>
 #include <string_view>
 
@@ -31,7 +34,7 @@ namespace RTE {
 	class GUIScrollbar;
 
 	/// A GUI menu for managing inventories.
-	class InventoryMenuGUI {
+	class InventoryMenuGUI : public CheckpointNativeAllocated {
 		friend class GUICheckpoint;
 
 	public:
@@ -149,7 +152,7 @@ namespace RTE {
 
 	private:
 
-		std::string m_PendingCheckpoint;
+		CheckpointString m_PendingCheckpoint;
 		bool m_CheckpointInitialized = false;
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_MenuMode, self.m_CenterPos, self.m_EnabledState, self.m_EnableDisableAnimationTimer,
@@ -160,7 +163,7 @@ namespace RTE {
 				self.m_GUIShowInformationText);
 		}
 		/// A struct containing all information required to drawn and animate a carousel item box in Carousel MenuMode.
-		struct CarouselItemBox {
+		struct CarouselItemBox : CheckpointNativeAllocated {
 			MovableObject* Item; //!< A pointer to the item being displayed in the CarouselItemBox.
 			bool IsForEquippedItems; //!< Whether or not this CarouselItemBox is for displaying equipped items.
 			Vector FullSize; //!< The full size for this CarouselItemBox when it's not animating.
@@ -178,7 +181,7 @@ namespace RTE {
 		};
 
 		/// A struct containing all information required to describe a selected item in Full/Transfer MenuMode.
-		struct GUISelectedItem {
+		struct GUISelectedItem : CheckpointNativeAllocated {
 			GUIButton* Button; //!< A pointer to the button for this GUISelectedItem.
 			MovableObject* Object; //!< A pointer to the MovableObject for this GUISelectedItem. Should always match up with what the Button is displaying.
 			int InventoryIndex; //!< The index in the InventoryItemsBox that this GUISelectedItem is for. Either this or the EquippedItemIndex must have a value.
@@ -237,7 +240,7 @@ namespace RTE {
 		Timer m_EnableDisableAnimationTimer; //!< Timer for progressing enabling/disabling animations.
 
 		bool m_InventoryActorIsHuman; //!< Whether the Actor whose inventory this GUI will display is an AHuman.
-		std::vector<std::pair<MovableObject*, MovableObject*>> m_InventoryActorEquippedItems; //!< A vector of pairs of pointers to the equipped item and equipped offhand item of the Actor whose inventory this GUI will display, if applicable. Pointers are NOT owned.
+		CheckpointVector<std::pair<MovableObject*, MovableObject*>> m_InventoryActorEquippedItems; //!< A vector of pairs of pointers to the equipped item and equipped offhand item of the Actor whose inventory this GUI will display, if applicable. Pointers are NOT owned.
 
 		bool m_CarouselDrawEmptyBoxes; //!< Whether or not the carousel should draw empty item boxes. Used in Carousel MenuMode.
 		bool m_CarouselBackgroundTransparent; //!< Whether or not the carousel's background should be drawn transparently. Used in Carousel MenuMode.
@@ -272,7 +275,7 @@ namespace RTE {
 		const Icon* m_GUIInformationToggleButtonIcon; //!< A pointer to the PresetMan pie icon for information, used here for the information toggle button. Not Owned here.
 		const Icon* m_GUIReloadButtonIcon; //!< A pointer to the PresetMan pie icon for reloading, used here for the reload button. Not Owned here.
 		const Icon* m_GUIDropButtonIcon; //!< A pointer to the PresetMan pie icon for dropping items, used here for the drop button. Not Owned here.
-		std::vector<std::pair<MovableObject*, GUIButton*>> m_GUIInventoryItemButtons; //!< A vector of pairs of MovableObject pointers and GUIButton pointers, connecting inventory GUIButtons to their corresponding MovableObjects.
+		CheckpointVector<std::pair<MovableObject*, GUIButton*>> m_GUIInventoryItemButtons; //!< A vector of pairs of MovableObject pointers and GUIButton pointers, connecting inventory GUIButtons to their corresponding MovableObjects.
 
 		/// GUI elements that make up the full mode InventoryMenuGUI.
 		std::unique_ptr<GUIControlManager> m_GUIControlManager;
@@ -323,15 +326,15 @@ namespace RTE {
 
 		/// Handles hiding and showing the scrollbar, and calculating everything related to it in Full MenuMode.
 		/// @param inventory A pointer to the inventory this InventoryMenuGUI is displaying.
-		void UpdateFullModeScrollbar(const std::deque<MovableObject*>* inventory);
+		void UpdateFullModeScrollbar(const CheckpointDeque<MovableObject*>* inventory);
 
 		/// Handles content and enabled status for inventory item buttons in Full MenuMode. Does not deal with button input.
 		/// @param inventory A pointer to the inventory this InventoryMenuGUI is displaying.
-		void UpdateFullModeInventoryItemButtons(const std::deque<MovableObject*>* inventory);
+		void UpdateFullModeInventoryItemButtons(const CheckpointDeque<MovableObject*>* inventory);
 
 		/// Handles everything for displaying information text in Full MenuMode.
 		/// @param inventory A pointer to the inventory this InventoryMenuGUI is displaying.
-		void UpdateFullModeInformationText(const std::deque<MovableObject*>* inventory);
+		void UpdateFullModeInformationText(const CheckpointDeque<MovableObject*>* inventory);
 
 		/// Handles updating icons and widths to support higlighting, for non-item buttons in Full MenuMode.
 		void UpdateFullModeNonItemButtonIconsAndHighlightWidths();

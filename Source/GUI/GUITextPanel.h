@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 namespace RTE {
 
 	/// A text panel class.
@@ -76,7 +79,7 @@ namespace RTE {
 		/// Masks presentation and clipboard text while retaining the editable value.
 		void SetPasswordMask(bool masked) { m_PasswordMask = masked; if (m_Font) UpdateText(); }
 		bool HasPasswordMask() const { return m_PasswordMask; }
-		std::string GetDisplayText() const { return m_PasswordMask ? std::string(m_Text.size(), '*') : m_Text; }
+		std::string GetDisplayText() const { return m_PasswordMask ? std::string(m_Text.size(), '*') : m_Text.Value(); }
 
 		/// Gets the extra text which appears right-justified in the textpanel.
 		const std::string& GetRightText() const { return m_RightText; }
@@ -139,9 +142,9 @@ namespace RTE {
 		GUISkin* m_TextSkin = nullptr;
 		unsigned long m_FontSelectColor;
 
-		std::string m_Text;
+		CheckpointString m_Text;
 		bool m_PasswordMask = false;
-		std::string m_RightText; // Appears right-justified in the text field
+		CheckpointString m_RightText; // Appears right-justified in the text field
 		bool m_Focus;
 		bool m_Locked;
 

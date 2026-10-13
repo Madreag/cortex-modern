@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <memory>
 
 /// Header file for the SceneMan class.
 /// @author Daniel Tabar
@@ -13,6 +14,7 @@
 #include "Box.h"
 #include "Singleton.h"
 #include "SpatialPartitionGrid.h"
+#include "CheckpointNativeContainers.h"
 
 #include "ActivityMan.h"
 
@@ -28,6 +30,7 @@
 #define g_SceneMan SceneMan::Instance()
 
 namespace RTE {
+	class CheckpointNativeSnapshot;
 
 	class Scene;
 	class SceneLayer;
@@ -76,11 +79,18 @@ namespace RTE {
 		/// Public member variable, method and friend function declarations
 	public:
 
+		/// Owns saved scene options during multiplayer setup.
+		void PrepareCheckpointValues();
+		void RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) const;
+		const void* CheckpointOwnedValues() const { return m_OwnedCheckpointOptions.get(); }
+		static std::string CheckpointOptionsStorageSelfTestMismatch();
 		std::string SaveCheckpoint() const;
         std::string SaveMaterialCatalog() const;
         bool LoadMaterialCatalog(std::string_view text, bool validateOnly = false);
         bool PrepareCheckpointMaterials(std::string_view sceneManCheckpoint, bool validateOnly = false);
         std::string SaveMaterialReference(const Material* material) const;
+		/// Visits material reference identities in the existing palette, copy and preset order.
+		void VisitCheckpointMaterialOwners(const std::function<void(const Material*, int, size_t)>& visit) const;
         static bool ValidateMaterialReference(std::string_view text);
         const Material* ResolveMaterialReference(std::string_view text, bool allowMissing = false) const;
         bool RunMaterialCheckpointSelfTest();
@@ -271,7 +281,7 @@ namespace RTE {
 		/// Gets the current drawing mode of the SceneMan.
 		/// @return The current layer draw mode, see the LayerDrawMode enumeration for the
 		/// different possible mode settings.
-		int GetLayerDrawMode() const { return m_LayerDrawMode; }
+		int GetLayerDrawMode() const { return CheckpointOptionsValues().m_LayerDrawMode; }
 
 		/// RAII guard routing this thread's GetTerrMatter reads to the frozen per-tick material copy. The threaded vision pass uses it so concurrent carves can't race its reads.
 		class ScopedTerrainCopyRead {
@@ -326,7 +336,7 @@ namespace RTE {
 		/// in the different internal SceneLayer:s.
 		/// @param mode The layer mode to draw in, see the LayerDrawMode enumeration for the
 		/// different possible settings.
-		void SetLayerDrawMode(int mode) { m_LayerDrawMode = mode; }
+		void SetLayerDrawMode(int mode) { CheckpointOptionsValues().m_LayerDrawMode = mode; }
 
 		/// Registers an area to be drawn upon, so it can be tracked and cleared later.
 		/// @param bitmap The bitmap being drawn upon.
@@ -599,7 +609,7 @@ namespace RTE {
 		void RevealSeeRay(int team, const SeeRayTrace& trace);
 
 		/// Whether casts draw their rays to the debug layer.
-		bool DrawsRayCastVisualizations() const { return m_pDebugLayer && m_DrawRayCastVisualizations; }
+		bool DrawsRayCastVisualizations() const { return m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations; }
 
 		/// Traces a box along a vector and reveals pixels on the unseen layer of a team
 		/// as long as the accumulated material strengths traced through the terrain
@@ -1087,11 +1097,11 @@ namespace RTE {
 
 		/// Gets the maximum height of a column of scrap terrain to collapse, when the bottom pixel is knocked loose.
 		/// @return The compacting height of scrap terrain.
-		int GetScrapCompactingHeight() const { return m_ScrapCompactingHeight; }
+		int GetScrapCompactingHeight() const { return CheckpointOptionsValues().m_ScrapCompactingHeight; }
 
 		/// Sets the maximum height of a column of scrap terrain to collapse, when the bottom pixel is knocked loose.
 		/// @param newHeight The new compacting height, in pixels.
-		void SetScrapCompactingHeight(int newHeight) { m_ScrapCompactingHeight = newHeight; }
+		void SetScrapCompactingHeight(int newHeight) { CheckpointOptionsValues().m_ScrapCompactingHeight = newHeight; }
 
 		/// Feeds the current terrain state (material + foreground-colour bitmaps) into the `terrain`
 		/// SimChecksum subsystem. No-ops unless a determinism run is active.
@@ -1099,6 +1109,25 @@ namespace RTE {
 
 		/// Protected member variable and method declarations
 	protected:
+		struct CheckpointOptions : CheckpointNativeAllocated {
+			int m_LayerDrawMode;
+			bool m_DrawRayCastVisualizations;
+			bool m_DrawPixelCheckVisualizations;
+			int m_LastUpdatedScreen;
+			bool m_SecondStructPass;
+			Timer m_CalcTimer;
+			Timer m_CleanTimer;
+			int m_ScrapCompactingHeight;
+		};
+		CheckpointOptions m_OrdinaryCheckpointOptions;
+		std::unique_ptr<CheckpointOptions> m_OwnedCheckpointOptions;
+		CheckpointOptions& CheckpointOptionsValues() {
+			return CheckpointNativeStorage::PrivateValue(m_OwnedCheckpointOptions ? m_OwnedCheckpointOptions.get() : &m_OrdinaryCheckpointOptions);
+		}
+		const CheckpointOptions& CheckpointOptionsValues() const {
+			return m_OwnedCheckpointOptions ? *CheckpointNativeStorage::Source(m_OwnedCheckpointOptions.get()) : m_OrdinaryCheckpointOptions;
+		}
+
 		static std::vector<std::pair<int, BITMAP*>> m_IntermediateSettlingBitmaps; //!< Intermediate bitmaps of different sizes that are used to draw settled MovableObjects into the terrain.
 
 		// Default Scene name to load if nothing else is specified
@@ -1122,19 +1151,16 @@ namespace RTE {
 		// Debug layer for seeing cast rays etc
 		SceneLayer* m_pDebugLayer;
 
-		// The mode we're drawing layers in to the screen
-		int m_LayerDrawMode;
-
 		// Material palette stuff
-		std::map<std::string, unsigned char> m_MatNameMap;
+		CheckpointMap<CheckpointString, unsigned char, std::less<>> m_MatNameMap;
 		// This gets filled with holes, not contigous from 0 onward, but whatever the ini specifies. The Material objects are owned here
 		std::array<Material*, c_PaletteEntriesNumber> m_apMatPalette;
 		// The total number of added materials so far
 		int m_MaterialCount;
 
 		// Non original materials added by inheritance
-		std::vector<Material*> m_MaterialCopiesVector;
-        std::unordered_map<const Material*, size_t> m_MaterialCopyIndices;
+		CheckpointVector<Material*> m_MaterialCopiesVector;
+        CheckpointUnorderedMap<const Material*, size_t> m_MaterialCopyIndices;
         // Copies have always lived until SceneMan teardown. Keep inactive generations
         // for held worlds and checkpoint clones, and revive their pointers on rollback.
         std::map<size_t, std::vector<Material*>> m_RetiredMaterialCopies;
@@ -1143,26 +1169,8 @@ namespace RTE {
 		// Sound of an unseen pixel on an unseen layer being revealed.
 		SoundContainer* m_pUnseenRevealSound;
 
-		bool m_DrawRayCastVisualizations; //!< Whether to visibly draw RayCasts to the Scene debug Bitmap.
-		bool m_DrawPixelCheckVisualizations; //!< Whether to visibly draw pixel checks (GetTerrMatter and GetMOIDPixel) to the Scene debug Bitmap.
-
-		// The last screen everything has been updated to
-		int m_LastUpdatedScreen;
-		// Whether we're in second pass of the structural computations.
-		// Second pass is where structurally unsound areas of the Terrain are turned into
-		// MovableObject:s.
-		bool m_SecondStructPass;
-
-		// The Timer that keeps track of how much time there is left for
-		// structural calculations each frame.
-		Timer m_CalcTimer;
-
-		// The Timer to measure time between cleanings of the color layer of the Terrain.
-		Timer m_CleanTimer;
 		// Bitmap to look for orphaned regions
 		BITMAP* m_pOrphanSearchBitmap;
-
-		int m_ScrapCompactingHeight; //!< The maximum height of a column of scrap terrain to collapse, when the bottom pixel is knocked loose.
 
 		int m_CarveBatchDepth; //!< Nonzero while a carving loop merges its pixels into one updated-material box.
 		bool m_CarveBatchHasBox;
@@ -1196,10 +1204,14 @@ namespace RTE {
 		void WalkUnseenRay(const Vector& start, const Vector& ray, int strengthLimit, int skip, Vector& endPos, const std::function<void(int, int)>& visit, const std::function<void(int, int)>& passed);
 
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
-			archive(self.m_LayerDrawMode, self.m_DrawRayCastVisualizations, self.m_DrawPixelCheckVisualizations);
-			// The screen the last draw pass set up is this machine's view.
-			archive.PerPeer(self.m_LastUpdatedScreen);
-			archive(self.m_SecondStructPass, self.m_CalcTimer, self.m_CleanTimer, self.m_ScrapCompactingHeight);
+			if constexpr (requires { self.CheckpointOptionsValues(); }) {
+				VisitCheckpoint(archive, self.CheckpointOptionsValues());
+			} else {
+				archive(self.m_LayerDrawMode, self.m_DrawRayCastVisualizations, self.m_DrawPixelCheckVisualizations);
+				// The screen the last draw pass set up is this machine's view.
+				archive.PerPeer(self.m_LastUpdatedScreen);
+				archive(self.m_SecondStructPass, self.m_CalcTimer, self.m_CleanTimer, self.m_ScrapCompactingHeight);
+			}
 		}
 		static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.
 

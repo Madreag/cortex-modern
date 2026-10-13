@@ -2,15 +2,20 @@
 
 #include "Writer.h"
 #include "SceneLayer.h"
+#include "CheckpointPagePool.h"
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -53,6 +58,29 @@ namespace RTE {
 		CheckpointText text;
 	};
 
+	/// Measures the complete simulation call and the owned capture's worker completion.
+	struct CheckpointCaptureClock {
+		std::chrono::steady_clock::time_point started;
+		std::shared_future<int64_t> simulationUs;
+		struct Call {
+			std::atomic<int64_t> durationUs{-1};
+			std::array<int64_t, 7> parts{};
+			std::thread::id simulation;
+			uint64_t thread = 0;
+			int64_t begin = 0, end = 0, frequency = 0;
+			void Finish(int64_t elapsed) noexcept {
+				durationUs.store(elapsed, std::memory_order_release); durationUs.notify_all();
+			}
+			int64_t Duration() const {
+				int64_t duration = durationUs.load(std::memory_order_acquire);
+				while (duration < 0) { durationUs.wait(duration, std::memory_order_acquire); duration = durationUs.load(std::memory_order_acquire); }
+				return duration;
+			}
+		};
+		std::shared_ptr<Call> call;
+		int64_t SimulationUs() const { return call ? call->Duration() : simulationUs.get(); }
+	};
+
 	/// Frozen checkpoint values at one sim tick. The worker formats this image.
 	struct CheckpointImage {
 		uint64_t tick = 0;
@@ -64,6 +92,10 @@ namespace RTE {
 		CheckpointText globals;
 		std::vector<CheckpointSection> globalSections; //!< The runtime globals' parts in the archive's order; filled only when asked for.
 		std::vector<CheckpointText> graphs;
+		std::shared_ptr<const CheckpointPagePool::Snapshot> nativePages;
+		std::shared_future<void> nativeReady;
+		std::shared_ptr<const CheckpointCaptureClock> captureClock;
+		int64_t nativeBoundaryUs = 0;
 		std::vector<CheckpointScope> graphScopes; //!< Each graph's scope, in the graphs' order; a graph with none is shared.
 		std::string activityName;
 		std::string originalScenePresetName;
@@ -81,6 +113,11 @@ namespace RTE {
 		int64_t freezeUs = 0;
 		int64_t activityUs = 0;
 		int64_t graphUs = 0;
+		std::vector<std::pair<std::string, int64_t>> simParts;
+		/// What the boundary freeze spent per kind of value, for the phases report.
+		std::vector<std::pair<const char*, std::array<int64_t, 3>>> cloneCosts;
+		std::vector<std::pair<uint64_t, std::array<int64_t, 3>>> cloneThreadCosts;
+		uint64_t boundaryThread = 0;
 		int64_t graphWalkUs = 0;
 		int64_t graphTextUs = 0;
 		uint64_t graphSerial = 0;
@@ -129,7 +166,7 @@ namespace RTE {
 			return m_LuaGraphs;
 		}
 
-		std::shared_ptr<const CheckpointImage> FinishImage(std::shared_ptr<CheckpointImage> image);
+		std::shared_ptr<const CheckpointImage> FinishImage(std::shared_ptr<CheckpointImage> image, bool frozenNative = false);
 		void RecordWorker(int64_t workerUs);
 		void RecordGraphText(int64_t graphTextUs);
 		void PublishLog(const CheckpointImage& image, int64_t workerUs) const;
@@ -182,6 +219,15 @@ namespace RTE {
 	class CheckpointGraphIndex {
 	public:
 		static CheckpointGraphIndex& Get();
+		/// A frozen capture's private worker states run on the saver: while one is open on a thread, that thread records nothing
+		/// here and moves no write barrier, so the simulation's own writes never queue behind the saver's walk.
+		struct Detach {
+			Detach();
+			~Detach();
+			Detach(const Detach&) = delete;
+			Detach& operator=(const Detach&) = delete;
+		};
+		static bool Detached();
 
 		/// A world walk covers every state and retires the roots of states it no longer sees; a walk of one state leaves the others' entries and dirt in place.
 		void BeginWalk(bool full = true, bool world = true);

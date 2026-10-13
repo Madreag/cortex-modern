@@ -2,12 +2,28 @@
 #include "GUIBanner.h"
 #include "ContentFile.h"
 #include "GUICheckpoint.h"
+#include "CheckpointNativeSnapshot.h"
 #include <iostream>
+#include <memory>
 
 using namespace RTE;
 
 std::map<std::string, std::unique_ptr<GUIBanner::FontChar[]>> GUIBanner::m_sFontCache;
 std::map<std::string, int> GUIBanner::m_sCharCapCache;
+
+GUIBanner::GUIBanner(const GUIBanner& source, CheckpointNativeSnapshot& snapshot) : GUIBanner() {
+	if (!CheckpointNativeStorage::Reading()) throw std::logic_error("saved banners need their frozen pages");
+	for (size_t mode = 0; mode < FONTMODECOUNT; ++mode) {
+		m_pFontImage[mode] = snapshot.ReadBitmap(source.m_pFontImage[mode]);
+		m_CheckpointFontImages[mode] = std::shared_ptr<BITMAP>(m_pFontImage[mode], [](BITMAP*) {});
+		std::copy(std::begin(source.m_aaFontChars[mode]), std::end(source.m_aaFontChars[mode]), std::begin(m_aaFontChars[mode]));
+	}
+	m_CharIndexCap = source.m_CharIndexCap; m_FontHeight = source.m_FontHeight; m_Kerning = source.m_Kerning;
+	m_BannerText = source.m_BannerText; m_BannerChars = snapshot.Freeze(source.m_BannerChars);
+	m_TargetSize = source.m_TargetSize; m_BannerPosY = source.m_BannerPosY; m_FlySpeed = source.m_FlySpeed; m_FlySpacing = source.m_FlySpacing;
+	m_AnimMode = source.m_AnimMode; m_AnimState = source.m_AnimState;
+	m_TotalAnimTimer = source.m_TotalAnimTimer; m_DisplayTimer = source.m_DisplayTimer; m_SpacingTimer = source.m_SpacingTimer; m_FrameTimer = source.m_FrameTimer;
+}
 
 GUIBanner::GUIBanner() {
 	m_pFontImage[REGULAR] = 0;
@@ -246,8 +262,8 @@ void GUIBanner::Update() {
 	int flyDirection = m_AnimMode == FLYBYLEFTWARD ? -1 : 1;
 	int whichChar = 0;
 	// Go through every character, updating their positions and states
-	std::list<FlyingChar>::iterator prevItr = m_BannerChars.end();
-	for (std::list<FlyingChar>::iterator cItr = m_BannerChars.begin(); cItr != m_BannerChars.end(); ++cItr) {
+	CheckpointList<FlyingChar>::iterator prevItr = m_BannerChars.end();
+	for (CheckpointList<FlyingChar>::iterator cItr = m_BannerChars.begin(); cItr != m_BannerChars.end(); ++cItr) {
 		whichChar++;
 		// Start off each character's motion at the appropriate order and timing
 		if ((*cItr).m_MoveState == NOTSTARTED) {
@@ -324,7 +340,7 @@ void GUIBanner::Draw(BITMAP* pTargetBitmap) {
 	// Go through every character in the banner, drawing the ones that are showing
 	unsigned char c;
 	int mode, charWidth, offX, offY;
-	for (std::list<FlyingChar>::iterator cItr = m_BannerChars.begin(); cItr != m_BannerChars.end(); ++cItr) {
+	for (CheckpointList<FlyingChar>::iterator cItr = m_BannerChars.begin(); cItr != m_BannerChars.end(); ++cItr) {
 		// Only draw anything if the character is even visible
 		if ((*cItr).m_MoveState >= SHOWING && (*cItr).m_MoveState <= HIDING) {
 			// Validate the character
@@ -392,9 +408,10 @@ int GUIBanner::CalculateWidth(const char Character, FontMode mode) const {
 }
 
 std::string GUIBanner::SaveCheckpoint() const {
+	const auto& source = *CheckpointNativeStorage::Source(this);
 	CheckpointWriter writer("GUIBanner2");
-	VisitCheckpoint(writer, *this);
-	for (const auto* image: m_pFontImage) writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(image); }));
+	VisitCheckpoint(writer, source);
+	for (const auto* image: source.m_pFontImage) writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(image); }));
 	return writer.Text();
 }
 

@@ -22,30 +22,36 @@ EXPECTED_CASES = 8
 ARGS = ["-net-replay", "tools/fixtures/pickup_fire.ccreplay", "-input-script", "tools/fixtures/pickup_fire.txt", "-tick-hashes",
         "-max-ticks", "221", "-num-lua-states", "4", "-local-prediction-depth", "7", "-local-prediction-invariance", CASES]
 VERDICT = re.compile(r"^\[lpinv\] (PASS|FAIL) tick (\d+): (\d+)/(\d+) cases", re.M)
+# The preview-hotplug row: the same replay with a gamepad plugged in at tick 60, while previews run every frame.
+HOTPLUG_TICK = 60
+HOTPLUG = re.compile(r"^\[hotplug\] tick=(\d+) pad=(\d+)$", re.M)
 
 
 def sha256_of(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def score(stdout: str, exit_code, timed_out) -> dict:
+def score(stdout: str, exit_code, timed_out, hotplug: bool = False) -> dict:
     verdicts = VERDICT.findall(stdout or "")
     passed = [row for row in verdicts if row[0] == "PASS" and int(row[2]) == int(row[3]) == EXPECTED_CASES]
     fails = [line for line in (stdout or "").splitlines() if line.startswith("[lpinv] FAIL")]
-    ok = exit_code == 0 and not timed_out and len(verdicts) == 1 and len(passed) == 1 and not fails
+    plugged = [row for row in HOTPLUG.findall(stdout or "") if int(row[0]) == HOTPLUG_TICK and int(row[1]) != 0]
+    ok = exit_code == 0 and not timed_out and len(verdicts) == 1 and len(passed) == 1 and not fails and (not hotplug or len(plugged) == 1)
     reason = "" if ok else (f"exit_code={exit_code}" if exit_code != 0 else "timed_out" if timed_out else
-                            (fails[0] if fails else f"verdicts={verdicts}"))
-    return {"pass": ok, "exit_code": exit_code, "timed_out": timed_out, "verdicts": verdicts, "fail_lines": fails[:3], "reason": reason}
+                            (fails[0] if fails else f"verdicts={verdicts}" if len(passed) != 1 else "no pad arrived at the hot-plug tick"))
+    return {"pass": ok, "exit_code": exit_code, "timed_out": timed_out, "verdicts": verdicts, "fail_lines": fails[:3], "reason": reason,
+            **({"hotplug": plugged} if hotplug else {})}
 
 
-def run_case(repo: Path, case: Path, timeout: float) -> dict:
-    run = make_run(repo, ARGS, case, timeout, fixtures=FIXTURES)
+def run_case(repo: Path, case: Path, timeout: float, hotplug: bool = False) -> dict:
+    env = {"CCCP_TEST_HOTPLUG_PAD_TICK": str(HOTPLUG_TICK)} if hotplug else None
+    run = make_run(repo, ARGS, case, timeout, env=env, fixtures=FIXTURES)
     try:
         record = run.start().finish()
     finally:
         run.close()
     stdout = (case / "stdout.log").read_text(encoding="utf-8", errors="replace") if (case / "stdout.log").exists() else ""
-    scored = score(stdout, record.get("exit_code"), record.get("timed_out"))
+    scored = score(stdout, record.get("exit_code"), record.get("timed_out"), hotplug)
     scored["exe_sha256"] = record.get("exe_sha256")
     return scored
 

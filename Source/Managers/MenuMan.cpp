@@ -23,6 +23,8 @@
 #include "NetMatchService.h"
 #include "ScenarioRunner.h"
 
+#include <memory>
+
 using namespace RTE;
 
 void MenuMan::Initialize(bool firstTimeInit) {
@@ -38,9 +40,15 @@ void MenuMan::Initialize(bool firstTimeInit) {
 		g_LoadingScreen.Create(m_GUIScreen.get(), m_GUIInput.get(), g_SettingsMan.GetLoadingScreenProgressReportDisabled());
 	}
 
-	m_TitleScreen = std::make_unique<TitleScreen>(m_GUIScreen.get());
+	{
+		CheckpointNativeStorage::AllocationScope resources(true);
+		m_TitleScreen = std::make_unique<TitleScreen>(m_GUIScreen.get());
+	}
 	m_MainMenu = std::make_unique<MainMenuGUI>(m_GUIScreen.get(), m_GUIInput.get());
-	m_ScenarioMenu = std::make_unique<ScenarioGUI>(m_GUIScreen.get(), m_GUIInput.get());
+	{
+		CheckpointNativeStorage::AllocationScope resources(true);
+		m_ScenarioMenu = std::make_unique<ScenarioGUI>(m_GUIScreen.get(), m_GUIInput.get());
+	}
 	m_PauseMenu = std::make_unique<PauseMenuGUI>(m_GUIScreen.get(), m_GUIInput.get());
 	m_NetworkPanel = std::make_unique<NetModerationGUI>(m_GUIScreen.get());
 

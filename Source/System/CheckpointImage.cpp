@@ -1,7 +1,9 @@
 #include "FloatingPointEnvironment.h"
 #include "CheckpointImage.h"
 #include "PageWriteFence.h"
+#include "CheckpointNativeStorage.h"
 #include "CheckpointArchive.h"
+#include "BitmapCheckpoint.h"
 #include "ContentFile.h"
 #include "Writer.h"
 #include "Scene.h"
@@ -43,6 +45,7 @@
 #include <iomanip>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -58,9 +61,10 @@ namespace {
 	thread_local int s_BarrierPauseDepth = 0;
 	std::atomic<uint64_t> s_PausedForeignWrites{0};
 	thread_local int s_BarrierIgnored = 0;
+	thread_local int s_IndexDetached = 0;
 
 	void OnLuaTableWrite(void* table) {
-		if (s_BarrierIgnored > 0) return;
+		if (s_BarrierIgnored > 0 || s_IndexDetached > 0) return;
 		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) {
 			// A capturing thread's own scratch writes are its business; the callback stays installed so
 			// every table born in the capture still gets its trap.
@@ -80,7 +84,7 @@ namespace {
 	// does, so it is counted and attributed the same way. The write generation moves too: a capture
 	// that reuses the whole Lua half keys on it.
 	void OnLuaValueWrite(void* value) {
-		if (s_BarrierIgnored > 0) return;
+		if (s_BarrierIgnored > 0 || s_IndexDetached > 0) return;
 		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) {
 			if (s_BarrierPauseDepth > 0) {
 				return;
@@ -104,7 +108,12 @@ CheckpointGraphIndex& CheckpointGraphIndex::Get() {
 	return index;
 }
 
+CheckpointGraphIndex::Detach::Detach() { ++s_IndexDetached; }
+CheckpointGraphIndex::Detach::~Detach() { --s_IndexDetached; }
+bool CheckpointGraphIndex::Detached() { return s_IndexDetached > 0; }
+
 void CheckpointGraphIndex::BeginWalk(bool full, bool world) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	// A capture of every state opens the walk once; each state's own capture nests inside it.
 	if (m_WalkDepth++ > 0) return;
@@ -125,18 +134,21 @@ void CheckpointGraphIndex::BeginWalk(bool full, bool world) {
 }
 
 void CheckpointGraphIndex::BeginRoot(uint64_t root, const void* state, std::string part) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	m_Root = {state, root, std::move(part)};
 	if (m_Walk) m_WalkingRoots.insert(m_Root);
 }
 
 void CheckpointGraphIndex::ReuseRoot(uint64_t root, const void* state, const std::string& part) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	m_FullWalk = false;
 	m_ReusedRoots.insert({state, root, part});
 }
 
 void CheckpointGraphIndex::RestartStateWalk(const void* state) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	for (auto entry = m_Walking.begin(); entry != m_Walking.end();) {
 		std::erase_if(entry->second, [state](const Root& root) { return root.state == state; });
@@ -148,6 +160,7 @@ void CheckpointGraphIndex::RestartStateWalk(const void* state) {
 }
 
 void CheckpointGraphIndex::NoteTable(const void* table) {
+	if (s_IndexDetached > 0) return;
 	const auto start = std::chrono::steady_clock::now();
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || !table) return;
@@ -158,6 +171,7 @@ void CheckpointGraphIndex::NoteTable(const void* table) {
 }
 
 void CheckpointGraphIndex::NoteValue(const void* value) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || !value) return;
 	// A native's engine values are written into the chunk of the first root that reached it, so that
@@ -166,11 +180,13 @@ void CheckpointGraphIndex::NoteValue(const void* value) {
 }
 
 void CheckpointGraphIndex::NoteUncacheableRoots(size_t roots) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	m_UncacheableRoots += roots;
 }
 
 void CheckpointGraphIndex::EndWalk() {
+	if (s_IndexDetached > 0) return;
 	const auto start = std::chrono::steady_clock::now();
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || --m_WalkDepth > 0) return;
@@ -219,6 +235,7 @@ void CheckpointGraphIndex::EndWalk() {
 }
 
 void CheckpointGraphIndex::NoteRootReuse(size_t reused, size_t rewritten) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	// One walk covers every state, so the counts are the whole capture's, not the last state's.
 	if (m_Walk) {
@@ -233,6 +250,7 @@ void CheckpointGraphIndex::NoteRootReuse(size_t reused, size_t rewritten) {
 }
 
 void CheckpointGraphIndex::NoteWalkPart(const void* state, std::string part, uint64_t root, int64_t elapsedUs, bool reused, std::string unwatched) {
+	if (s_IndexDetached > 0) return;
 	std::lock_guard lock(m_Mutex);
 	const auto found = !state && !m_WalkStates.empty() ? std::prev(m_WalkStates.end()) : std::find(m_WalkStates.begin(), m_WalkStates.end(), state);
 	const size_t index = found - m_WalkStates.begin();
@@ -354,12 +372,15 @@ bool CheckpointCow::HasLua(size_t stateCount) const {
 	return !m_LuaGraphs.empty() && m_LuaGraphs.size() == stateCount;
 }
 
-std::shared_ptr<const CheckpointImage> CheckpointCow::FinishImage(std::shared_ptr<CheckpointImage> image) {
+std::shared_ptr<const CheckpointImage> CheckpointCow::FinishImage(std::shared_ptr<CheckpointImage> image, bool frozenNative) {
 	if (!image) return {};
-	image->generation = m_Cache.Generation();
-	image->objectsReused = m_Cache.Reused();
-	image->objectsCaptured = m_Cache.Touched() > m_Cache.Reused() ? m_Cache.Touched() - m_Cache.Reused() : 0;
+	if (!frozenNative) {
+		image->generation = m_Cache.Generation();
+		image->objectsReused = m_Cache.Reused();
+		image->objectsCaptured = m_Cache.Touched() > m_Cache.Reused() ? m_Cache.Touched() - m_Cache.Reused() : 0;
+	}
 	std::lock_guard lock(m_Mutex);
+	if (frozenNative) image->generation = m_Last ? m_Last->generation + 1 : 1;
 	m_LastFreezeUs = image->freezeUs;
 	m_LastImageBytes = image->imageBytes;
 	m_LastDirtyRatio = image->dirtyRatio;
@@ -970,7 +991,8 @@ end
 		} owner;
 		owner.SetMass(2.0F);
 		AtomGroup* group = owner.GetAtomGroup();
-		group->SetAtomList({new Atom(Vector(3.0F, 4.0F), g_SceneMan.GetMaterialFromID(g_MaterialAir), &owner)});
+		const std::array initialAtoms{new Atom(Vector(3.0F, 4.0F), g_SceneMan.GetMaterialFromID(g_MaterialAir), &owner)};
+		group->SetAtomList(initialAtoms);
 		CheckpointCache cache;
 		const auto capture = [&owner](CheckpointCache* cache) {
 			CheckpointWriter::CacheScope scope(cache);
@@ -1319,6 +1341,11 @@ bool RTE::RunCheckpointImageSelfTest() {
 			if (missed.empty()) pass("a_registry_scope_puts_back_what_any_change_moved", "ways=5");
 			else fail("a_registry_scope_puts_back_what_any_change_moved", "missed_way=" + missed);
 		}
+		{
+			const char* row = "capture_helpers_collect_sound_notes_without_the_shared_lock";
+			if (AudioMan::SoundCheckpointSaveScope::NotesCollectWithoutSharedLock()) pass(row, "blocked_merge=1 nested_and_duplicate_notes=1154");
+			else fail(row, "a blocked merge stopped collection or changed the carried identities");
+		}
 		// This machine's pacing flag and view are archived, but a peer compares the shared state without them.
 		{
 			const auto capture = [] { return CheckpointWriter::CaptureNative([] { return g_TimerMan.SaveCheckpoint(); }); };
@@ -1353,6 +1380,43 @@ bool RTE::RunCheckpointImageSelfTest() {
 		}
 		// A capture's bitmap index is kept while the loaded bitmaps' version holds, so every way that changes them moves it.
 		{
+			auto bitmap = std::make_unique<BITMAP>();
+			auto sourceRows = std::make_unique<std::array<std::array<unsigned char, 5>, 3>>();
+			std::array<unsigned char*, 3> rowPointers;
+			GFX_VTABLE table{};
+			table.color_depth = 8;
+			bitmap->w = 5;
+			bitmap->h = 3;
+			bitmap->vtable = &table;
+			for (int row = 0; row < bitmap->h; ++row) rowPointers[row] = (*sourceRows)[row].data();
+			bitmap->line = rowPointers.data();
+			for (int row = 0; row < bitmap->h; ++row) std::memset(bitmap->line[row], 7, bitmap->w);
+			CheckpointText frozen;
+			std::shared_ptr<const void> storage;
+			bool parentRestored = false;
+			{
+				BitmapPixelCaptureScope parent;
+				const auto before = BitmapPixelCaptureScope::Capture(bitmap.get(), {});
+				for (int row = 0; row < bitmap->h; ++row) std::memset(bitmap->line[row], 9, bitmap->w);
+				{
+					BitmapPixelCaptureScope child;
+					frozen = BitmapPixelCaptureScope::Capture(bitmap.get(), {})->second;
+					storage = child.TakeStorage();
+				}
+				const auto after = BitmapPixelCaptureScope::Capture(bitmap.get(), {});
+				parentRestored = before && after && before->first == after->first;
+			}
+			bitmap.reset();
+			sourceRows.reset();
+			const std::weak_ptr<const void> held = storage;
+			const bool exact = std::async(std::launch::async, [storage = std::move(storage), frozen]() mutable {
+				storage.reset();
+				return frozen.Text() == std::string(15, char{9});
+			}).get();
+			if (parentRestored && exact && held.expired()) pass("pixel_capture_storage_moves_to_a_worker_after_nested_scopes", "parent restored, source gone, frozen pixels exact");
+			else fail("pixel_capture_storage_moves_to_a_worker_after_nested_scopes", "parent=" + std::to_string(parentRestored) + " pixels=" + std::to_string(exact) + " released=" + std::to_string(held.expired()));
+		}
+		{
 			const std::string missed = ContentFile::LoadedBitmapChangeMissedByIndex();
 			if (missed.empty()) pass("a_loaded_bitmap_change_by_any_way_reaches_the_next_index", "ways=12");
 			else fail("a_loaded_bitmap_change_by_any_way_reaches_the_next_index", "missed_way=" + missed);
@@ -1360,11 +1424,35 @@ bool RTE::RunCheckpointImageSelfTest() {
 		// A preview's page fence puts back exactly the bytes written under it, edges included, and nothing after it lifts.
 		{
 			if (!PageWriteFence::IsSupported()) {
+				pass("independent_heap_fences_keep_contexts_until_their_readers_finish", "platform=copies");
+			} else if (const std::string mismatch = PageWriteFence::CopyWatchSelfTestMismatch(); mismatch.empty()) {
+				pass("independent_heap_fences_keep_contexts_until_their_readers_finish", "blocked_arm=1 retained_observer=1");
+			} else {
+				fail("independent_heap_fences_keep_contexts_until_their_readers_finish", mismatch);
+			}
+		}
+		{
+			if (!PageWriteFence::IsSupported()) {
 				pass("a_page_fence_puts_back_exactly_what_was_written", "platform=copies");
 			} else if (const std::string mismatch = PageWriteFence::SelfTestMismatch(); mismatch.empty()) {
 				pass("a_page_fence_puts_back_exactly_what_was_written", "rounds=2");
 			} else {
 				fail("a_page_fence_puts_back_exactly_what_was_written", mismatch);
+			}
+		}
+		// The checkpoint's per-thread caches stay off a library thread's small stack: glibc keeps static thread-locals there.
+		if (const std::string mismatch = CheckpointNativeStorage::ThreadStackSelfTestMismatch(); mismatch.empty()) {
+			pass("a_library_thread_with_a_small_stack_keeps_its_room", "stack_kb=96 room_kb>=64");
+		} else {
+			fail("a_library_thread_with_a_small_stack_keeps_its_room", mismatch);
+		}
+		{
+			if (!PageWriteFence::IsSupported()) {
+				pass("a_page_fence_over_copy_watched_pages_puts_back_what_either_let_through", "platform=copies");
+			} else if (const std::string mismatch = PageWriteFence::FenceOverCopyWatchSelfTestMismatch(); mismatch.empty()) {
+				pass("a_page_fence_over_copy_watched_pages_puts_back_what_either_let_through", "rounds=2 release=1");
+			} else {
+				fail("a_page_fence_over_copy_watched_pages_puts_back_what_either_let_through", mismatch);
 			}
 		}
 	} catch (const std::exception& error) {

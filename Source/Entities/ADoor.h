@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "Actor.h"
 #include "ADSensor.h"
 
@@ -32,6 +34,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a ADoor object in system memory. Create() should be called before using the object.
 		ADoor();
+		CheckpointSnapshotMethods(ADoor);
 
 		/// Makes the ADoor object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
@@ -160,7 +163,7 @@ namespace RTE {
 
 		int m_InitialSpriteAnimDuration; //!< This stores the original SpriteAnimDuration value so we can drive the death spin-up animation using Lerp. For internal use only.
 
-		std::list<ADSensor> m_Sensors; //!< All the sensors for detecting Actors approaching the door.
+		CheckpointList<ADSensor> m_Sensors; //!< All the sensors for detecting Actors approaching the door.
 		Timer m_SensorTimer; //!< Times the exit interval.
 		long m_SensorInterval; //!< The delay between each sensing pass in ms.
 
@@ -202,7 +205,7 @@ namespace RTE {
 		std::unique_ptr<SoundContainer> m_DoorMoveEndSound; //!< Sound played when the door stops moving and is at fully open/closed position.
 
 	private:
-		std::string m_PersistedADoorRuntime;
+		CheckpointString m_PersistedADoorRuntime;
 		std::string SaveADoorRuntime() const;
 		bool LoadADoorRuntime(std::string_view text, bool validateOnly = false);
 

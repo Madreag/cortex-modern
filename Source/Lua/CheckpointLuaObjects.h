@@ -1,0 +1,240 @@
+#pragma once
+
+#include "CheckpointLuaValues.h"
+#include "CheckpointLuaBindings.h"
+
+#include <luabind/detail/class_registry.hpp>
+#include <luabind/detail/object_rep.hpp>
+#include <luabind/iterator_policy.hpp>
+#include <functional>
+#include <unordered_map>
+
+#include <cstddef>
+#include <cstring>
+#include <stdexcept>
+#include <string>
+
+extern "C" {
+#include "lj_dispatch.h"
+}
+
+namespace RTE::CheckpointLua {
+	// Saved handles keep their Lua aliases and point only at private native values.
+	class SavedObjects {
+	public:
+		using Copy = std::function<void*(const luabind::detail::class_rep*, const void*)>;
+		SavedObjects(lua_State* state, Snapshot heap, const BindingMetadata::Lease& bindings, Copy copy) :
+		    m_State(state), m_Heap(std::move(heap)), m_Bindings(m_Heap, &bindings), m_Copy(std::move(copy)),
+		    m_Values(state, m_Heap, [this](lua_State*, const TValue& value) { PushNative(value); }),
+		    m_PreviousCopies(luabind::detail::saved_objects) {
+			luabind::detail::saved_objects = {this, [](void* owner, luabind::detail::class_rep* type, void* value, bool& borrowed) -> void* {
+				if (CheckpointNativeStorage::Private(value)) { borrowed = CheckpointNativeStorage::PrivateBorrowed(value); return value; }
+				borrowed = true;
+				return static_cast<SavedObjects*>(owner)->CopyNative(type, CheckpointNativeStorage::Original(value));
+			}};
+		}
+		~SavedObjects() { luabind::detail::saved_objects = m_PreviousCopies; }
+		SavedObjects(const SavedObjects&) = delete;
+		SavedObjects& operator=(const SavedObjects&) = delete;
+		SavedValues& Values() { return m_Values; }
+		void Prepare() {
+			const auto state = m_Heap.Read(m_Heap.State());
+			const auto global = m_Heap.Read(mref(state.glref, global_State));
+			size_t walked = 0;
+			for (const GCobj* object = gcref(global.gc.root); object;) {
+				if (++walked % 64 == 0) SaverThreads::YieldToGame();
+				const auto head = m_Heap.Read(&object->gch);
+				if (head.gct == static_cast<uint8_t>(~LJ_TUDATA)) {
+					const auto* data = reinterpret_cast<const GCudata*>(object);
+					if (DeclaredClass(data)) { TValue value; setgcVraw(&value, const_cast<GCobj*>(object), LJ_TUDATA); PushClass(value); lua_pop(m_State, 1); }
+				}
+				object = gcref(head.nextgc);
+			}
+			lua_pushvalue(m_State, LUA_GLOBALSINDEX);
+			m_Values.RememberLibraries(m_Heap.GlobalValue("_G"), -1); lua_pop(m_State, 1);
+			for (const auto& [source, target]: m_Classes) {
+				SaverThreads::YieldToGame();
+				lua_rawgeti(m_State, LUA_REGISTRYINDEX, target->metatable_ref());
+				m_Values.RememberLibraries(m_Heap.RegistryValue(m_Bindings.Class(source)->metatable_ref()), -1); lua_pop(m_State, 1);
+				target->get_table(m_State);
+				m_Values.RememberLibraries(m_Bindings.Members(source), -1); lua_pop(m_State, 1);
+				target->get_default_table(m_State);
+				m_Values.RememberLibraries(DefaultMembers(source), -1); lua_pop(m_State, 1);
+			}
+			for (const auto& [source, target]: m_Classes) {
+				SaverThreads::YieldToGame();
+				target->get_table(m_State);
+				m_Values.FillTable(m_Bindings.Members(source), -1); lua_pop(m_State, 1);
+				target->get_default_table(m_State);
+				m_Values.FillTable(DefaultMembers(source), -1); lua_pop(m_State, 1);
+			}
+		}
+	private:
+		lua_State* m_State;
+		Snapshot m_Heap;
+		FrozenBindings m_Bindings;
+		Copy m_Copy;
+		SavedValues m_Values;
+		luabind::detail::saved_object_copy m_PreviousCopies;
+		std::unordered_map<const luabind::detail::class_rep*, luabind::detail::class_rep*> m_Classes;
+		std::unordered_map<const luabind::detail::class_rep*, const luabind::detail::class_rep*> m_ClassSources;
+		void* CopyNative(const luabind::detail::class_rep* type, const void* pointer) {
+			if (const auto source = m_ClassSources.find(type); source != m_ClassSources.end()) type = source->second;
+			void* value = m_Copy(type, pointer);
+			CheckpointNativeStorage::BorrowPrivate(value);
+			return value;
+		}
+		TValue DefaultMembers(const luabind::detail::class_rep* source) const { return m_Heap.RegistryValue(m_Bindings.Class(source)->checkpoint_default_table_reference()); }
+		bool DeclaredClass(const GCudata* data) const {
+			if (m_Heap.Read(&data->len) != sizeof(luabind::detail::class_rep)) return false;
+			const auto* source = static_cast<const luabind::detail::class_rep*>(uddata(const_cast<GCudata*>(data)));
+			const auto* view = m_Bindings.Class(source);
+			if (!view->checkpoint_metadata()) return false;
+			const TValue registered = m_Heap.RegistryValue(view->checkpoint_self_reference());
+			return tvisudata(&registered) && udataV(&registered) == data;
+		}
+		void PushClass(const TValue& value) {
+			if (m_Values.Remembered(value)) { m_Values.Push(value); return; }
+			const auto* source = static_cast<const luabind::detail::class_rep*>(uddata(udataV(&value)));
+			const auto* view = m_Bindings.Class(source);
+			const auto& metadata = m_Bindings.Metadata(source);
+			luabind::detail::class_rep* target;
+			if (view->get_class_type() == luabind::detail::class_rep::cpp_class) {
+				target = luabind::detail::class_registry::get_registry(m_State)->find_class(view->type());
+				if (!target) throw std::runtime_error("a saved native class has no game binding");
+				lua_rawgeti(m_State, LUA_REGISTRYINDEX, target->checkpoint_self_reference());
+			} else {
+				void* storage = lua_newuserdata(m_State, sizeof(luabind::detail::class_rep));
+				target = new(storage) luabind::detail::class_rep(m_State, metadata.name.c_str());
+			}
+			const int destination = lua_gettop(m_State);
+			m_Values.Remember(value, destination);
+			m_Classes.emplace(source, target);
+			m_ClassSources.emplace(target, source);
+			if (view->get_class_type() == luabind::detail::class_rep::lua_class) {
+				for (const auto& base: CheckpointValues(metadata.bases)) {
+					const TValue token = m_Heap.RegistryValue(m_Bindings.Class(base.base)->checkpoint_self_reference());
+					PushClass(token);
+					auto* parent = static_cast<luabind::detail::class_rep*>(lua_touserdata(m_State, -1));
+					target->add_base_class({base.pointer_offset, parent}); target->derived_from(parent); target->set_type(parent->type());
+					lua_pop(m_State, 1);
+				}
+			}
+			target->get_table(m_State);
+			if (!m_Values.Remembered(m_Bindings.Members(source))) m_Values.Remember(m_Bindings.Members(source), -1);
+			lua_pop(m_State, 1);
+			target->get_default_table(m_State);
+			if (!m_Values.Remembered(DefaultMembers(source))) m_Values.Remember(DefaultMembers(source), -1);
+			lua_settop(m_State, destination);
+		}
+		void PushObject(const TValue& value) {
+			const auto* source = m_Bindings.Object(udataV(&value));
+			if (!source || !source->crep()) {
+				const auto data = m_Heap.Read(udataV(&value));
+				throw std::runtime_error("a saved native handle has no class (userdata type " + std::to_string(static_cast<int>(data.udtype)) + ", " + std::to_string(data.len) + " bytes)");
+			}
+			const TValue type = m_Heap.RegistryValue(m_Bindings.Class(source->crep())->checkpoint_self_reference());
+			PushClass(type);
+			auto* targetClass = static_cast<luabind::detail::class_rep*>(lua_touserdata(m_State, -1));
+			lua_pop(m_State, 1);
+			void* native = source->ptr() ? CopyNative(source->crep(), source->ptr()) : nullptr;
+			void* storage = lua_newuserdata(m_State, sizeof(luabind::detail::object_rep));
+			auto* target = new(storage) luabind::detail::object_rep(native, targetClass, source->flags() & ~luabind::detail::object_rep::checkpoint_trap, [](void*) {});
+			const int destination = lua_gettop(m_State);
+			m_Values.Remember(value, destination);
+			const auto data = m_Heap.Read(udataV(&value));
+			if (const GCobj* meta = gcref(data.metatable)) {
+				TValue token; setgcVraw(&token, const_cast<GCobj*>(meta), LJ_TTAB);
+				m_Values.Push(token); lua_setmetatable(m_State, destination);
+			}
+			const TValue fields = m_Bindings.Instance(udataV(&value));
+			if (!tvisnil(&fields)) { m_Values.Push(fields); target->get_lua_table().set(m_State); }
+			const TValue dependencies = m_Heap.RegistryValue(source->get_dependencies().checkpoint_reference());
+			if (tvistab(&dependencies)) {
+				m_Values.Push(dependencies);
+				const int table = lua_gettop(m_State); lua_pushnil(m_State);
+				while (lua_next(m_State, table)) { target->add_dependency(m_State, -1); lua_pop(m_State, 1); }
+				lua_pop(m_State, 1);
+			}
+			lua_settop(m_State, destination);
+		}
+		// A native iterator's range is read through its frozen container; the copy keeps only how to describe it.
+		struct FrozenRange {
+			lua_CFunction describe;
+			alignas(std::max_align_t) std::byte bytes[128];
+		};
+		static int DescribeFrozenRange(lua_State* state) {
+			auto* range = static_cast<FrozenRange*>(lua_touserdata(state, 1));
+			lua_pushlightuserdata(state, range->bytes);
+			lua_replace(state, 1);
+			return range->describe(state);
+		}
+		void PushFrozenRange(const TValue& value, lua_CFunction describe) {
+			if (m_Values.Remembered(value)) { m_Values.Push(value); return; }
+			const GCudata* source = udataV(&value);
+			const auto data = m_Heap.Read(source);
+			if (data.len > sizeof(FrozenRange::bytes)) throw std::runtime_error("a saved native iterator range is larger than its frozen copy");
+			auto* range = static_cast<FrozenRange*>(lua_newuserdata(m_State, sizeof(FrozenRange)));
+			range->describe = describe;
+			std::memcpy(range->bytes, m_Heap.ReadBytes(source + 1, data.len).data(), data.len);
+			static char metatableKey;
+			lua_pushlightuserdata(m_State, &metatableKey);
+			lua_rawget(m_State, LUA_REGISTRYINDEX);
+			if (lua_isnil(m_State, -1)) {
+				lua_pop(m_State, 1);
+				lua_newtable(m_State);
+				lua_pushcfunction(m_State, DescribeFrozenRange);
+				lua_setfield(m_State, -2, "__iterator_snapshot");
+				lua_pushlightuserdata(m_State, &metatableKey);
+				lua_pushvalue(m_State, -2);
+				lua_rawset(m_State, LUA_REGISTRYINDEX);
+			}
+			lua_setmetatable(m_State, -2);
+			m_Values.Remember(value, lua_gettop(m_State));
+		}
+		void PushNative(const TValue& value) {
+			if (tvisudata(&value)) {
+				if (DeclaredClass(udataV(&value))) PushClass(value);
+				else PushObject(value);
+				return;
+			}
+			if (tvisfunc(&value) && m_Heap.Read(&funcV(&value)->c.ffid) != FF_LUA) {
+				const auto* source = funcV(&value);
+				const int count = m_Heap.Read(&source->c.nupvalues);
+				const lua_CFunction native = m_Heap.Read(&source->c.f);
+				const lua_CFunction range = count > 0 ? luabind::detail::find_iterator_frozen(native) : nullptr;
+				for (int index = 0; index < count; ++index) lua_pushnil(m_State);
+				lua_pushcclosure(m_State, native, count);
+				const int destination = lua_gettop(m_State);
+				auto* function = funcV(m_State->top - 1);
+				function->c.ffid = m_Heap.Read(&source->c.ffid);
+				setmref(function->c.pc, NativeEntry(m_Heap.Read(&source->c.pc)));
+				m_Values.Remember(value, destination);
+				for (int index = 0; index < count; ++index) {
+					const TValue upvalue = m_Heap.Read(&source->c.upvalue[index]);
+					try {
+						if (index == 0 && range && tvisudata(&upvalue)) PushFrozenRange(upvalue, range);
+						else m_Values.Push(upvalue);
+					}
+					catch (const std::runtime_error& error) { throw std::runtime_error(std::string(error.what()) + " in native closure upvalue " + std::to_string(index + 1)); }
+					if (!lua_setupvalue(m_State, destination, index + 1)) throw std::runtime_error("a saved native closure lost an upvalue");
+				}
+				TValue environment; setgcVraw(&environment, gcref(m_Heap.Read(&source->c.env)), LJ_TTAB);
+				m_Values.Push(environment); lua_setfenv(m_State, destination);
+				return;
+			}
+			throw std::runtime_error("a saved native closure has no retained game binding");
+		}
+		BCIns* NativeEntry(MRef entry) const {
+			const auto* source = mref(m_Heap.Read(&m_Heap.State()->glref), global_State);
+			const auto* code = mref(entry, BCIns);
+			if (code == &source->bc_cfunc_int) return &G(m_State)->bc_cfunc_int;
+			if (code == &source->bc_cfunc_ext) return &G(m_State)->bc_cfunc_ext;
+			const auto* group = reinterpret_cast<const GG_State*>(reinterpret_cast<const std::byte*>(source) - offsetof(GG_State, g));
+			const uintptr_t address = reinterpret_cast<uintptr_t>(code), first = reinterpret_cast<uintptr_t>(group->bcff);
+			if (address >= first && address - first < sizeof(group->bcff) && (address - first) % sizeof(BCIns) == 0)
+				return L2GG(m_State)->bcff + (address - first) / sizeof(BCIns);
+			throw std::runtime_error("a saved native closure has no owned entry");
+		}
+	};
+}

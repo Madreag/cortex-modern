@@ -120,8 +120,8 @@ namespace RTE {
 		std::unique_ptr<SoundContainer> m_InterruptingMusicSoundContainer; //!< Current interrupting music being played.
 
 		std::unique_ptr<DynamicSong> m_CurrentSong; //!< The current DynamicSong being played.
-		std::string m_NextSongSectionType; //!< The type of DynamicSongSection we will try to play next.
-		std::string m_CurrentSongSectionType; //!< The current type of DynamicSongSection we are actually playing.
+		CheckpointString m_NextSongSectionType; //!< The type of DynamicSongSection we will try to play next.
+		CheckpointString m_CurrentSongSectionType; //!< The current type of DynamicSongSection we are actually playing.
 		DynamicSongSection* m_NextSongSection; //!< The DynamicSongSection we will try to play next.
 
 		std::unique_ptr<SoundContainer> m_PreviousSoundContainer; //!< The previous SoundContainer that was played as music. We keep it to allow it to play out while Current ramps up.

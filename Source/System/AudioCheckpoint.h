@@ -53,7 +53,7 @@ struct Effect {
 	int index = 0, type = 0;
 	bool active = false, bypass = false;
 	std::array<float, 3> wetDry{};
-	std::vector<EffectParameter> parameters;
+	CheckpointVector<EffectParameter> parameters;
 	template <class Archive> void Fields(Archive& archive) { archive(index, type, active, bypass, wetDry, parameters); }
 	std::string SaveCheckpoint() const { CheckpointWriter archive("AudioEffect1"); const_cast<Effect*>(this)->Fields(archive); return archive.Text(); }
 	bool LoadCheckpoint(std::string_view text, bool validateOnly = false) {
@@ -64,9 +64,9 @@ struct Effect {
 	// FMOD idles a voice's DSP on the mixer thread, so getActive reads that machine's own mixing rather
 	// than shared state. The engine only ever adds a managed effect, so the archive carries that intent.
 	static constexpr bool c_IntendedActive = true;
-	static std::vector<Effect> Capture(FMOD::ChannelControl* control) {
+	static CheckpointVector<Effect> Capture(FMOD::ChannelControl* control) {
 		int count; Require(control->getNumDSPs(&count));
-		std::vector<Effect> effects;
+		CheckpointVector<Effect> effects;
 		for (int index = 0; index < count; ++index) {
 			FMOD::DSP* dsp; FMOD_DSP_TYPE type;
 			Require(control->getDSP(index, &dsp)); Require(dsp->getType(&type));
@@ -88,13 +88,13 @@ struct Effect {
 		}
 		return effects;
 	}
-	static void ApplyActivation(FMOD::ChannelControl* control, const std::vector<Effect>& effects) {
+	static void ApplyActivation(FMOD::ChannelControl* control, const CheckpointVector<Effect>& effects) {
 		for (const Effect& effect: effects) {
 			FMOD::DSP* dsp; Require(control->getDSP(effect.index, &dsp));
 			Require(dsp->setActive(effect.active)); Require(dsp->setBypass(effect.bypass));
 		}
 	}
-	static void Apply(FMOD::System* system, FMOD::ChannelControl* control, const std::vector<Effect>& effects) {
+	static void Apply(FMOD::System* system, FMOD::ChannelControl* control, const CheckpointVector<Effect>& effects) {
 		int count; Require(control->getNumDSPs(&count));
 		for (int index = count - 1; index >= 0; --index) {
 			FMOD::DSP* dsp; FMOD_DSP_TYPE type;
@@ -128,10 +128,10 @@ struct Control {
 	std::array<float, 4> reverb{};
 	unsigned int mode = 0;
 	int outputs = 0, inputs = 0;
-	std::vector<float> mix;
+	CheckpointVector<float> mix;
 	bool hasDelayStart = false, hasDelayEnd = false, delayStops = false;
 	int64_t delayStart = 0, delayEnd = 0;
-	std::vector<std::pair<int64_t, float>> fades;
+	CheckpointVector<std::pair<int64_t, float>> fades;
 	bool spatial = false;
 	Position position{}, velocity{}, coneOrientation{};
 	float minimumDistance = 0, maximumDistance = 0;
@@ -139,7 +139,7 @@ struct Control {
 	float directOcclusion = 0, reverbOcclusion = 0, spread = 0, level = 0, doppler = 0;
 	bool customDistanceFilter = false;
 	float customLevel = 0, centerFrequency = 0;
-	std::vector<Effect> effects;
+	CheckpointVector<Effect> effects;
 	template <class Archive> void Fields(Archive& archive) {
 		archive(paused, muted, ramp, volume, pitch, lowPassGain, reverb, mode, outputs, inputs, mix);
 		archive(hasDelayStart, hasDelayEnd, delayStops, delayStart, delayEnd, fades);
@@ -148,6 +148,29 @@ struct Control {
 	// A backend capture always reports a 2D or 3D mode. An archive written from the owner alone (the 2026-09-20 writer, or a
 	// voice captured before its sample loaded) has none, so the channel it starts on supplies what it never recorded.
 	bool Captured() const { return (mode & (FMOD_2D | FMOD_3D)) != 0; }
+	Control CopyCheckpointValues() const {
+		if (!CheckpointNativeStorage::Reading()) return *this;
+		const auto* source = CheckpointNativeStorage::Source(this);
+		Control value;
+		value.paused = source->paused; value.muted = source->muted; value.ramp = source->ramp;
+		value.volume = source->volume; value.pitch = source->pitch; value.lowPassGain = source->lowPassGain; value.reverb = source->reverb;
+		value.mode = source->mode; value.outputs = source->outputs; value.inputs = source->inputs;
+		value.hasDelayStart = source->hasDelayStart; value.hasDelayEnd = source->hasDelayEnd; value.delayStops = source->delayStops;
+		value.delayStart = source->delayStart; value.delayEnd = source->delayEnd;
+		value.spatial = source->spatial; value.position = source->position; value.velocity = source->velocity; value.coneOrientation = source->coneOrientation;
+		value.minimumDistance = source->minimumDistance; value.maximumDistance = source->maximumDistance; value.cone = source->cone;
+		value.directOcclusion = source->directOcclusion; value.reverbOcclusion = source->reverbOcclusion; value.spread = source->spread;
+		value.level = source->level; value.doppler = source->doppler; value.customDistanceFilter = source->customDistanceFilter;
+		value.customLevel = source->customLevel; value.centerFrequency = source->centerFrequency;
+		for (const auto item: CheckpointValues(source->mix)) value.mix.push_back(item);
+		for (const auto& item: CheckpointValues(source->fades)) value.fades.push_back(item);
+		for (const auto& item: CheckpointValues(source->effects)) {
+			Effect effect; effect.index = item.index; effect.type = item.type; effect.active = item.active; effect.bypass = item.bypass; effect.wetDry = item.wetDry;
+			for (const auto& parameter: CheckpointValues(item.parameters)) effect.parameters.push_back(parameter);
+			value.effects.push_back(std::move(effect));
+		}
+		return value;
+	}
 	std::string SaveCheckpoint() const { CheckpointWriter archive("AudioControl1"); const_cast<Control*>(this)->Fields(archive); return archive.Text(); }
 	bool LoadCheckpoint(std::string_view text, bool validateOnly = false) {
 		try {
@@ -279,13 +302,26 @@ struct Voice {
 	}
 };
 
-struct Sample {
-	std::string path;
+struct SampleValues {
 	unsigned int mode = 0, loopStart = 0, loopEnd = 0;
 	float frequency = 0, minimumDistance = 0, maximumDistance = 0;
 	int priority = 0, loops = 0;
 	std::array<float, 3> cone{};
 	bool captured = false;
+	static SampleValues Capture(FMOD::Sound* sound, bool loaded = false) {
+		SampleValues sample;
+		if (!sound) return sample;
+		FMOD_OPENSTATE open = FMOD_OPENSTATE_ERROR;
+		if (!loaded && (sound->getOpenState(&open, nullptr, nullptr, nullptr) != FMOD_OK || (open != FMOD_OPENSTATE_READY && open != FMOD_OPENSTATE_PLAYING))) return sample;
+		Require(sound->getMode(&sample.mode)); Require(sound->getLoopPoints(&sample.loopStart, FMOD_TIMEUNIT_PCM, &sample.loopEnd, FMOD_TIMEUNIT_PCM)); Require(sound->getLoopCount(&sample.loops));
+		Require(sound->getDefaults(&sample.frequency, &sample.priority)); Require(sound->get3DMinMaxDistance(&sample.minimumDistance, &sample.maximumDistance)); Require(sound->get3DConeSettings(&sample.cone[0], &sample.cone[1], &sample.cone[2]));
+		sample.captured = true;
+		return sample;
+	}
+};
+
+struct Sample : SampleValues {
+	std::string path;
 	template <class Archive> void Fields(Archive& archive) { archive(path, mode, loopStart, loopEnd, frequency, minimumDistance, maximumDistance, priority, loops, cone); }
 	static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("12 AudioSample2 ") ? "AudioSample2" : "AudioSample1"; }
 	std::string SaveCheckpoint() const { CheckpointWriter archive("AudioSample2"); const_cast<Sample*>(this)->Fields(archive); archive(captured); return archive.Text(); }
@@ -306,12 +342,7 @@ struct Sample {
 	}
 	static Sample Capture(const std::string& path, FMOD::Sound* sound) {
 		Sample sample; sample.path = path;
-		if (!sound) return sample;
-		FMOD_OPENSTATE open = FMOD_OPENSTATE_ERROR;
-		if (sound->getOpenState(&open, nullptr, nullptr, nullptr) != FMOD_OK || (open != FMOD_OPENSTATE_READY && open != FMOD_OPENSTATE_PLAYING)) return sample;
-		Require(sound->getMode(&sample.mode)); Require(sound->getLoopPoints(&sample.loopStart, FMOD_TIMEUNIT_PCM, &sample.loopEnd, FMOD_TIMEUNIT_PCM)); Require(sound->getLoopCount(&sample.loops));
-		Require(sound->getDefaults(&sample.frequency, &sample.priority)); Require(sound->get3DMinMaxDistance(&sample.minimumDistance, &sample.maximumDistance)); Require(sound->get3DConeSettings(&sample.cone[0], &sample.cone[1], &sample.cone[2]));
-		sample.captured = true;
+		static_cast<SampleValues&>(sample) = SampleValues::Capture(sound);
 		return sample;
 	}
 	void Apply(FMOD::Sound* sound) const {

@@ -1,9 +1,12 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 namespace RTE {
 
 	/// Skin class used for the controls to get skin details.
-	class GUISkin {
+	class GUISkin : public CheckpointNativeAllocated {
 		friend class GUICheckpoint;
 
 	public:
@@ -80,13 +83,13 @@ namespace RTE {
 		void DimRect(GUIBitmap* dest, int x, int y, int width, int height);
 
 	private:
-		std::string m_Directory;
+		CheckpointString m_Directory;
 		GUIScreen* m_Screen;
 		GUIBitmap* m_MousePointers[3];
 
-		std::vector<GUIProperties*> m_PropList;
-		std::vector<GUIBitmap*> m_ImageCache;
-		std::vector<GUIFont*> m_FontCache;
+		CheckpointVector<GUIProperties*> m_PropList;
+		CheckpointVector<GUIBitmap*> m_ImageCache;
+		CheckpointVector<GUIFont*> m_FontCache;
 
 		/// Loads a mouse pointer image & details
 		/// @param Section Section name.

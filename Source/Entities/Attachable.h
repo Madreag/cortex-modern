@@ -1,7 +1,12 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "MOSRotating.h"
 #include "PieSlice.h"
+
+#include <memory>
+#include <vector>
 
 namespace RTE {
 
@@ -25,6 +30,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a Attachable object in system memory. Create() should be called before using the object.
 		Attachable();
+		CheckpointSnapshotMethods(Attachable);
 
 		/// Makes the Attachable object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
@@ -515,7 +521,8 @@ namespace RTE {
 		bool m_CollidesWithTerrainWhileAttached; //!< Whether this attachable currently has terrain collisions enabled while it's attached to a parent.
 		bool m_IgnoresParticlesWhileAttached; //!< Whether this Attachable should ignore collisions with single-atom MOs while attached.
 
-		std::vector<std::unique_ptr<PieSlice>> m_PieSlices; //!< The vector of PieSlices belonging to this Attachable. Added to and removed from the RootParent as appropriate, when a parent is set.
+		CheckpointVector<std::unique_ptr<PieSlice>> m_PieSlices; //!< The vector of PieSlices belonging to this Attachable. Added to and removed from the RootParent as appropriate, when a parent is set.
+		std::vector<CheckpointText> m_FrozenPieSlices;
 
 		Vector m_PrevParentOffset; //!< The previous frame's parent offset.
 		Vector m_PrevJointOffset; //!< The previous frame's joint offset.
@@ -527,7 +534,7 @@ namespace RTE {
 		virtual void SetParent(MOSRotating* newParent);
 
 	private:
-		std::string m_PersistedAttachableRuntime;
+		CheckpointString m_PersistedAttachableRuntime;
 		std::string SaveAttachableRuntime() const;
 		bool LoadAttachableRuntime(std::string_view text, bool validateOnly = false);
 

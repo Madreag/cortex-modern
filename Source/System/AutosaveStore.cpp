@@ -1,19 +1,25 @@
 #include "AutosaveStore.h"
 
 #include "SaveGameArchive.h"
+#include "CheckpointFailure.h"
 #include "NetLobbyProtocol.h"
 #include "System.h"
+#include "ThreadMan.h"
 
 #include <algorithm>
 #include <charconv>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <string_view>
 #include <system_error>
 #include <tuple>
+#include <type_traits>
+#include <memory>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -26,6 +32,58 @@
 #endif
 
 namespace RTE {
+	std::string AutosaveIdentity::FreezeSelfTestMismatch() {
+		static_assert(std::is_nothrow_copy_constructible_v<AutosaveIdentity>);
+		static_assert(std::is_nothrow_copy_assignable_v<AutosaveIdentity>);
+		AutosaveIdentity live;
+		live.sessionId = 7; live.roundId = 11; live.worldBoot = 13; live.migrationGen = 17; live.intervalSeconds = 60;
+		const std::string text(4096, 'a');
+		live.configHash = text; live.configPayload = text; live.buildId = text;
+		live.deterministicConfigHash = text; live.moduleManifestHash = text; live.sessionIdentityHash = text;
+		live.peerNames.push_back("first"); live.peerNames.push_back("second");
+		AutosaveSideState side;
+		side.controlOwners.emplace(19, 1); side.droppedControlOwners.emplace(23, 2);
+		side.appliedCommands.emplace(1, 29); side.firstTransferUid = 31; side.playerBindings.emplace(1, text);
+		live.sideState = side;
+		auto pin = std::make_shared<AutosavePinSource>(); pin->Store(11, 37); live.pinnedCheckpointSource = pin;
+		AutosaveIdentity frozen;
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			frozen = live;
+			if (failure.Triggered() || frozen.configPayload.Value().data() != live.configPayload.Value().data() ||
+			    &frozen.sideState.Value() != &live.sideState.Value()) return "autosave identity copy allocates or walks values";
+		}
+		live.peerNames.push_back("third"); live.configHash = "changed"; live.configPayload.clear();
+		live.buildId.clear(); live.deterministicConfigHash.clear(); live.moduleManifestHash.clear(); live.sessionIdentityHash.clear();
+		side.controlOwners[19] = 3; live.sideState = side;
+		live.sessionId = 41; live.roundId = 43; live.worldBoot = 47; live.migrationGen = 53;
+		pin->Store(11, 59); live = AutosaveIdentity{};
+		if (frozen.sessionId != 7 || frozen.roundId != 11 || frozen.worldBoot != 13 || frozen.migrationGen != 17 ||
+		    frozen.configHash != text || frozen.configPayload != text || frozen.buildId != text ||
+		    frozen.deterministicConfigHash != text || frozen.moduleManifestHash != text || frozen.sessionIdentityHash != text ||
+		    frozen.peerNames.Value() != std::vector<std::string>{"first", "second"} || frozen.sideState.Value().controlOwners.at(19) != 1 ||
+		    frozen.pinnedCheckpointSource->Load().tick != 59) return "frozen autosave identity changed with its live owner";
+		const AutosaveIdentity retained = frozen;
+		bool refused = false;
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			try { frozen.peerNames.push_back("refused"); }
+			catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+		}
+		if (!refused || frozen.peerNames.Value() != std::vector<std::string>{"first", "second"})
+			return "autosave peer allocation refusal changed the retained values";
+		refused = false;
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			try { frozen.sideState = side; }
+			catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+		}
+		if (!refused || frozen.sideState.Value().controlOwners.at(19) != 1) return "autosave side allocation refusal changed the retained values";
+		frozen.sideState = side; frozen.peerNames.push_back("retry");
+		return frozen.sideState.Value() == side && frozen.peerNames.Value().back() == "retry" &&
+		       retained.sideState.Value().controlOwners.at(19) == 1 && retained.peerNames.size() == 2 ? std::string() : "autosave identity retry differs";
+	}
+
 	namespace {
 		// A process id nothing holds names a writer that is gone; one the system refuses to open still exists.
 		bool ProcessAlive(unsigned long pid) {
@@ -76,7 +134,39 @@ namespace RTE {
 			return std::make_tuple(descriptor.migrationGen, descriptor.worldBoot, descriptor.roundId, descriptor.savedTick);
 		}
 
-		/// The tick the saved world itself stands on, read out of the checkpoint's own property.
+		class WorldTickReader {
+		public:
+			void Read(std::string_view text) {
+				for (const char value: text) {
+					if (m_Done) return;
+					if (!m_Found) {
+						if (value == c_Key[m_Matched] && (m_Matched || m_White)) ++m_Matched;
+						else m_Matched = value == c_Key.front() && m_White ? 1 : 0;
+						m_White = value == '\n' || value == '\t' || value == ' ';
+						if (m_Matched == c_Key.size()) m_Found = true;
+						continue;
+					}
+					if (value == '\r' || value == '\n') { m_Done = true; continue; }
+					if (value == ' ' || value == '\t') { m_Trailing |= m_Digits; continue; }
+					if (value < '0' || value > '9' || m_Trailing) { m_Invalid = true; continue; }
+					const uint64_t digit = value - '0';
+					if (m_Value > (std::numeric_limits<uint64_t>::max() - digit) / 10) m_Invalid = true;
+					else m_Value = m_Value * 10 + digit;
+					m_Digits = true;
+				}
+			}
+			bool Finish(uint64_t& out) const {
+				if (!m_Found || !m_Digits || m_Invalid) return false;
+				out = m_Value;
+				return true;
+			}
+		private:
+			static constexpr std::string_view c_Key = "SimUpdateCount = ";
+			size_t m_Matched = 0;
+			uint64_t m_Value = 0;
+			bool m_White = true, m_Found = false, m_Digits = false, m_Trailing = false, m_Invalid = false, m_Done = false;
+		};
+
 		bool WorldTick(const std::string& saveText, uint64_t& out) {
 			static constexpr std::string_view Key = "SimUpdateCount = ";
 			for (size_t start = 0; (start = saveText.find(Key, start)) != std::string::npos; start += Key.size()) {
@@ -224,8 +314,9 @@ namespace RTE {
 		return true;
 	}
 
-	bool AutosaveStore::Validate(const std::filesystem::path& path, AutosaveDescriptor& out, std::string* error) {
+	bool AutosaveStore::Validate(const std::filesystem::path& path, AutosaveDescriptor& out, std::string* error, const std::filesystem::path* publishedPath) {
 		try {
+			CheckpointFailure::Check(CheckpointFailure::Point::ArchiveValidation);
 			std::error_code status;
 			if (!std::filesystem::is_regular_file(path, status)) {
 				if (error) *error = "not a regular file";
@@ -236,22 +327,21 @@ namespace RTE {
 			archive.ReadEntry(c_DescriptorEntry, descriptorText);
 			AutosaveDescriptor descriptor;
 			if (!ParseDescriptor(descriptorText, descriptor, error)) return false;
-			std::string entry;
-			// Reading an entry to its end is what checks its CRC, so a torn write is caught here.
-			for (const char* name: c_RequiredEntries) archive.ReadEntry(name, entry);
+			// A saver's check inflates a piece at a time between the game's ticks.
+			for (const char* name: c_RequiredEntries) archive.VisitEntry(name, [](std::string_view) { SaverThreads::YieldToGame(); });
 			uint64_t worldTick = 0;
-			std::string saveText;
-			archive.ReadEntry("Save.ini", saveText);
-			if (saveText.empty()) {
+			WorldTickReader tickReader;
+			if (!archive.VisitEntry("Save.ini", [&tickReader](std::string_view chunk) { SaverThreads::YieldToGame(); tickReader.Read(chunk); })) {
 				if (error) *error = "the checkpoint carries no world";
 				return false;
 			}
-			if (!WorldTick(saveText, worldTick)) {
+			if (!tickReader.Finish(worldTick)) {
 				if (error) *error = "the world carries no SimUpdateCount";
 				return false;
 			}
 			uint64_t nameTick = 0;
-			if (!ParseArchiveName(path.filename().string(), descriptor.matchId, nameTick)) {
+			const auto& finalPath = publishedPath ? *publishedPath : path;
+			if (!ParseArchiveName(finalPath.filename().string(), descriptor.matchId, nameTick)) {
 				if (error) *error = "file name does not name this match and tick";
 				return false;
 			}
@@ -262,7 +352,7 @@ namespace RTE {
 				}
 				return false;
 			}
-			descriptor.path = path;
+			descriptor.path = finalPath;
 			// Restorable says the world reads; resumable says a restarted host can also reopen the lobby
 			// it belongs to, which needs the checkpoint's manifest and the match's admission file.
 			AutosaveManifest manifest;
@@ -277,6 +367,9 @@ namespace RTE {
 			descriptor.resumable = matchingManifest && ReadAdmission(path.parent_path(), descriptor.matchId, admission);
 			out = std::move(descriptor);
 			return true;
+		} catch (const std::bad_alloc&) {
+			if (error) { error->clear(); if (error->capacity() >= 13) error->append("out of memory"); }
+			return false;
 		} catch (const std::exception& exception) {
 			if (error) *error = exception.what();
 			return false;
@@ -827,6 +920,23 @@ namespace RTE {
 
 	bool AutosaveStore::RunSelfTest(const std::string& matchId) {
 		constexpr const char* Tag = "[autosave-store-selftest]";
+		bool streamedTicks = true;
+		for (const std::string& text: {
+			std::string("SimUpdateCount = 180"), std::string("xSimUpdateCount = 7\n\tSimUpdateCount = 18446744073709551615 \t\r\n"),
+			std::string(" SimUpdateCount = 18446744073709551616\nSimUpdateCount = 180\n"), std::string("SimUpdateCount = +1\n"),
+			std::string("SimUpdateCount = \t000000000000000000000000000180 \t\n"), std::string("SimUpdateCount = 18 0\n"),
+			std::string("SimUpdateCount = \n"), std::string(65530, 'x') + "\nSimUpdateCount = 180\n"}) {
+			uint64_t expected = 0;
+			const bool valid = WorldTick(text, expected);
+			for (const size_t chunk: {size_t{1}, size_t{7}, size_t{15}, size_t{16}, size_t{65536}}) {
+				WorldTickReader reader;
+				for (size_t at = 0; at < text.size(); at += chunk) reader.Read(std::string_view(text).substr(at, chunk));
+				uint64_t actual = 0;
+				const bool accepted = reader.Finish(actual);
+				streamedTicks = streamedTicks && accepted == valid && (!valid || actual == expected);
+			}
+		}
+		std::cout << Tag << (streamedTicks ? " PASS" : " FAIL") << " streamed_world_tick_matches_whole_entry_across_chunk_boundaries" << std::endl;
 		const std::filesystem::path scratch = Directory() / "selftest";
 		std::error_code ignored;
 		std::filesystem::remove_all(scratch, ignored);
@@ -835,6 +945,20 @@ namespace RTE {
 			std::cout << Tag << " FAIL match=" << matchId << " restorable=" << held.size() << " (two checkpoints are needed)" << std::endl;
 			return false;
 		}
+		AutosaveDescriptor allocationRetry = held.front();
+		std::string allocationError;
+		allocationError.reserve(32);
+		bool allocationRefused = false;
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::ArchiveValidation);
+			allocationRefused = !Validate(held.front().path, allocationRetry, &allocationError);
+		}
+		const bool allocationHeld = allocationRetry.savedTick == held.front().savedTick && allocationRetry.path == held.front().path &&
+		                            allocationRetry.worldStructureHash == held.front().worldStructureHash;
+		const bool allocationRecovered = allocationRefused && allocationHeld && Validate(held.front().path, allocationRetry) &&
+		                                 allocationRetry.worldStructureHash == held.front().worldStructureHash;
+		std::cout << Tag << (allocationRecovered ? " PASS" : " FAIL") << " allocation_failure_preserves_archive_validation_and_retry" << std::endl;
+		if (!allocationRecovered) return false;
 		// The rows below name the ticks the default keeps, so the peer's own option stands aside for them.
 		const size_t option = RetainedAutosaves();
 		SetRetainedAutosaves(c_RetainedAutosaves);
@@ -883,7 +1007,7 @@ namespace RTE {
 		const bool boundsHeld = RetainedAutosaves() == c_MinRetainedAutosaves;
 		SetRetainedAutosaves(option);
 
-		const bool passed = sameSet && tornRefused && skippedTorn && removed >= 1 && tornDropped && pinnedKept &&
+		const bool passed = streamedTicks && sameSet && tornRefused && skippedTorn && removed >= 1 && tornDropped && pinnedKept &&
 		                    retentionWindow && pinOutsideWindow && unreadablePinKept && oneKeptPlusPin && boundsHeld;
 		std::cout << Tag << (passed ? " PASS" : " FAIL") << " match=" << matchId << " restorable=" << held.size()
 		          << " same_set=" << sameSet << " torn_refused=" << tornRefused << " (" << reason << ")"

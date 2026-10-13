@@ -1,12 +1,20 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "Vector.h"
 #include "ContentFile.h"
 #include "LuaMan.h"
 #include "SoundSimulation.h"
 
+#include <cstdint>
+#include <vector>
+#include <span>
+
 namespace RTE {
 	class SoundContainer;
+	bool RunOwnedSoundSetCaptureSelfTest();
+	bool RunOwnedSoundParametersCaptureSelfTest();
 
 	/// Self-contained struct defining an individual sound in a SoundSet.
 	struct SoundData {
@@ -33,6 +41,9 @@ namespace RTE {
 		void ArmCheckpointValueTrap() { m_CheckpointValueTrap = true; }
 		void SetCheckpointOwner(SoundContainer* owner);
 		std::vector<std::pair<bool, int>> CheckpointSelections() const;
+		/// Appends what decides this set's frozen copy without reading its sounds: where its sound data came from, its mode and
+		/// selections, and the same for every sub set. Two sets with equal keys freeze to equal copies.
+		void AppendFreezeKey(std::vector<uint64_t>& key) const;
 		auto CheckpointStampValue() const { return CheckpointFields(CheckpointFieldText([this] { return SaveStructure(); }), CheckpointSelections()); }
 
 		/// How the SoundSet should choose the next sound or SoundSet to play when SelectNextSound is called.
@@ -45,6 +56,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a SoundSet object in system memory. Create() should be called before using the object.
 		SoundSet();
+		SoundSet(const SoundSet& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Copies a sound set and its owned subsets.
 		SoundSet(const SoundSet& reference) { Clear(); Create(reference); }
@@ -130,7 +142,7 @@ namespace RTE {
 
 		/// Adds a copy of the given SoundData to this SoundSet.
 		/// @param soundDataToAdd The SoundData to copy to this SoundSet.
-		void AddSoundData(const SoundData& soundDataToAdd) { TouchCheckpoint(); m_SoundData.push_back(soundDataToAdd); }
+		void AddSoundData(const SoundData& soundDataToAdd) { TouchCheckpoint(); m_SoundData.push_back(soundDataToAdd); m_SoundDataSource = NameSoundData(m_SoundData); }
 
 		/// Adds a copy of the passed in SoundSet as a sub SoundSet of this SoundSet. Ownership IS transferred!
 		/// @param soundSetToAdd A reference to the SoundSet to be copied in as a sub SoundSet of this SoundSet. Ownership IS transferred!
@@ -192,7 +204,7 @@ namespace RTE {
 
 		/// Gets the vector of SubSoundSets for this SoundSet.
 		/// @return The vector of SubSoundSets for this SoundSet.
-		std::vector<SoundSet*>& GetSubSoundSets() { return m_SubSoundSets; }
+		CheckpointVector<SoundSet*>& GetSubSoundSets() { return m_SubSoundSets; }
 #pragma endregion
 
 #pragma region Miscellaneous
@@ -218,6 +230,7 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		bool m_FrozenNative = false;
 		static const std::string m_sClassName; //!< A string with the friendly-formatted type name of this object.
 		static const std::unordered_map<std::string, SoundSet::SoundSelectionCycleMode> c_SoundSelectionCycleModeMap; //!< A map of strings to SoundSelectionCycleModes to support string parsing for the SoundCycleMode enum. Populated in the implementing cpp file.
 
@@ -235,8 +248,11 @@ namespace RTE {
         std::pair<bool, int>& CurrentSelection() { return SoundSimulationScope::IsSimulation() ? m_SimulationSelection : m_CurrentSelection; }
         const std::pair<bool, int>& CurrentSelection() const { return SoundSimulationScope::IsSimulation() ? m_SimulationSelection : m_CurrentSelection; }
 
-		std::vector<SoundData> m_SoundData; //!< The SoundData available for selection in this SoundSet.
-		std::vector<SoundSet*> m_SubSoundSets; //!< The sub SoundSets available for selection in this SoundSet.
+		CheckpointVector<SoundData> m_SoundData; //!< The SoundData available for selection in this SoundSet.
+		uint64_t m_SoundDataSource = 0; //!< Names the sound data this set holds; sets with equal sound data share the name.
+		/// The name of this exact sound data, the same for every equal copy; 0 for none.
+		static uint64_t NameSoundData(std::span<const SoundData> data);
+		CheckpointVector<SoundSet*> m_SubSoundSets; //!< The sub SoundSets available for selection in this SoundSet.
 
 		bool m_CheckpointInitialized = false;
 		bool m_CheckpointValueTrap = false;

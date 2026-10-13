@@ -1,9 +1,14 @@
 #pragma once
 
+#include "CheckpointString.h"
+
+#include "CheckpointNativeContainers.h"
+
 #include "Serializable.h"
 #include "RTEError.h"
 
 #include <cstdint>
+#include <cstddef>
 #include <mutex>
 #include <list>
 #include <unordered_set>
@@ -18,6 +23,7 @@
 #endif
 
 namespace RTE {
+	class CheckpointNativeSnapshot;
 
 	typedef std::function<void*()> MemoryAllocate; //!< Convenient name definition for the memory allocation callback function.
 	typedef std::function<void(void*)> MemoryDeallocate; //!< Convenient name definition for the memory deallocation callback function.
@@ -27,15 +33,19 @@ namespace RTE {
 	Entity::ClassInfo TYPE::m_sClass(#TYPE, &PARENT::m_sClass);
 
 #define ConcreteClassInfo(TYPE, PARENT, BLOCKCOUNT) \
-	Entity::ClassInfo TYPE::m_sClass(#TYPE, &PARENT::m_sClass, TYPE::Allocate, TYPE::Deallocate, TYPE::NewInstance, BLOCKCOUNT);
+	Entity::ClassInfo TYPE::m_sClass(#TYPE, &PARENT::m_sClass, TYPE::Allocate, TYPE::Deallocate, TYPE::NewInstance, BLOCKCOUNT, sizeof(TYPE), alignof(TYPE));
 
 #define ConcreteSubClassInfo(TYPE, SUPER, PARENT, BLOCKCOUNT) \
-	Entity::ClassInfo SUPER::TYPE::m_sClass(#TYPE, &PARENT::m_sClass, SUPER::TYPE::Allocate, SUPER::TYPE::Deallocate, SUPER::TYPE::NewInstance, BLOCKCOUNT);
+	Entity::ClassInfo SUPER::TYPE::m_sClass(#TYPE, &PARENT::m_sClass, SUPER::TYPE::Allocate, SUPER::TYPE::Deallocate, SUPER::TYPE::NewInstance, BLOCKCOUNT, sizeof(SUPER::TYPE), alignof(SUPER::TYPE));
 
 /// Convenience macro to cut down on duplicate ClassInfo methods in classes that extend Entity.
 #define ClassInfoGetters \
 	const Entity::ClassInfo& GetClass() const override { return m_sClass; } \
 	const std::string& GetClassName() const override { return m_sClass.GetName(); }
+
+#define CheckpointSnapshotMethods(TYPE) \
+	TYPE(const TYPE& source, CheckpointNativeSnapshot& snapshot); \
+	Entity* FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const override;
 
 /// Static method used in conjunction with ClassInfo to allocate an Entity.
 /// This function is passed into the constructor of this Entity's static ClassInfo's constructor, so that it can instantiate MovableObjects.
@@ -79,11 +89,15 @@ namespace RTE {
 
 	/// The base class that specifies certain common creation/destruction patterns and simple reflection support for virtually all RTE classes.
 	class Entity : public Serializable {
+		friend class CheckpointNativeSnapshot;
 		friend struct ContractAudit;
 
 		friend class DataModule;
 
 	public:
+		virtual Entity* FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const;
+		bool IsFrozenCheckpointNative() const { return m_FrozenCheckpointNative; }
+		const CheckpointNativeSnapshot* FrozenCheckpointNativeOwner() const { return m_CheckpointSnapshot; }
 		static bool IsCheckpointClone();
 		struct CheckpointCloneScope {
 			explicit CheckpointCloneScope(bool enabled) : m_Enabled(enabled) { if (m_Enabled) ++s_CheckpointCloneDepth; }
@@ -122,7 +136,7 @@ namespace RTE {
 			/// @param deallocFunc Function pointer to the raw deallocation function of memory. If the represented Entity subclass isn't concrete, pass in 0.
 			/// @param newFunc Function pointer to the new instance factory. If the represented Entity subclass isn't concrete, pass in 0.
 			/// @param allocBlockCount The number of new instances to fill the pre-allocated pool with when it runs out.
-			ClassInfo(const std::string& name, ClassInfo* parentInfo = 0, MemoryAllocate allocFunc = 0, MemoryDeallocate deallocFunc = 0, Entity* (*newFunc)() = 0, int allocBlockCount = 10);
+			ClassInfo(const std::string& name, ClassInfo* parentInfo = 0, MemoryAllocate allocFunc = 0, MemoryDeallocate deallocFunc = 0, Entity* (*newFunc)() = 0, int allocBlockCount = 10, size_t instanceBytes = 0, size_t instanceAlignment = 0);
 			~ClassInfo();
 #pragma endregion
 
@@ -169,6 +183,13 @@ namespace RTE {
 			/// Grabs from the pre-allocated pool, an available chunk of memory the exact size of the Entity this ClassInfo represents. OWNERSHIP IS TRANSFERRED!
 			/// @return A pointer to the pre-allocated pool memory. OWNERSHIP IS TRANSFERRED!
 			void* GetPoolMemory();
+			/// Allocates a snapshot value without taking a gameplay pool slot.
+			void* AllocateCheckpointMemory();
+			/// The concrete type's storage lets a capture reserve it in its own arena.
+			size_t CheckpointInstanceBytes() const { return m_InstanceBytes; }
+			size_t CheckpointInstanceAlignment() const { return m_InstanceAlignment; }
+			/// Frees a snapshot value's storage that was never constructed.
+			void DeallocateCheckpointMemory(void* memory) { m_Deallocate(memory); }
 
 			/// Returns a raw chunk of memory back to the pre-allocated available pool.
 			/// @param returnedMemory The raw chunk of memory that is being returned. Needs to be the same size as the type this ClassInfo describes. OWNERSHIP IS TRANSFERRED!
@@ -209,6 +230,7 @@ namespace RTE {
 
 			MemoryAllocate m_Allocate; //!< Raw memory allocation for the size of the type this ClassInfo describes.
 			MemoryDeallocate m_Deallocate; //!< Raw memory deallocation for the size of the type this ClassInfo describes.
+			const size_t m_InstanceBytes, m_InstanceAlignment;
 			// TODO: figure out why this doesn't want to work when defined as std::function.
 			Entity* (*m_NewInstance)(); //!< Returns an actual new instance of the type that this describes.
 
@@ -354,12 +376,13 @@ namespace RTE {
 #pragma region Groups
 		/// Gets the set of groups this is member of.
 		/// @return A pointer to a list of strings which describes the groups this is added to. Ownership is NOT transferred!
-		const std::unordered_set<std::string>* GetGroups() const { return &m_Groups; }
+		const CheckpointUnorderedSet<CheckpointString>* GetGroups() const { return &m_Groups; }
 
 		/// Gets whether this is part of a specific group or not.
 		/// @param whichGroup A string which describes the group to check for.
 		/// @return Whether this Entity is in the specified group or not.
-		bool IsInGroup(const std::string& whichGroup) const { return whichGroup == "None" ? false : (whichGroup == "All" || whichGroup == "Any" || m_Groups.contains(whichGroup)); }
+		bool IsInGroup(const std::string& whichGroup) const { return whichGroup == "None" ? false : (whichGroup == "All" || whichGroup == "Any" || (CheckpointNativeStorage::Reading() ? IsInFrozenGroup(whichGroup) : m_Groups.contains(whichGroup))); }
+		bool IsInFrozenGroup(const std::string& whichGroup) const;
 
 		/// Adds this Entity to a new grouping.
 		/// @param newGroup A string which describes the group to add this to. Duplicates will be ignored.
@@ -415,21 +438,28 @@ namespace RTE {
 #pragma endregion
 
 	protected:
+		Entity(const Entity& source, CheckpointNativeSnapshot& snapshot);
 		static Entity::ClassInfo m_sClass; //!< Type description of this Entity.
 
-		std::string m_PresetName; //!< The name of the Preset data this was cloned from, if any.
-		std::string m_CopiedFromPresetName; //!< The source preset's name before a cosmetic rename.
-		std::string m_PresetDescription; //!< The description of the preset in user friendly plain text that will show up in menus etc.
-		std::string m_FormattedReaderPosition; //!< A string containing the file path and the line we were read from. Formatted to be used for logging.
+		CheckpointString m_PresetName; //!< The name of the Preset data this was cloned from, if any.
+		CheckpointString m_CopiedFromPresetName; //!< The source preset's name before a cosmetic rename.
+		CheckpointString m_PresetDescription; //!< The description of the preset in user friendly plain text that will show up in menus etc.
+		CheckpointString m_FormattedReaderPosition; //!< A string containing the file path and the line we were read from. Formatted to be used for logging.
 
 		bool m_IsOriginalPreset; //!< Whether this is to be added to the PresetMan as an original preset instance.
 		int m_DefinedInModule; //!< The DataModule ID that this was successfully added to at some point. -1 if not added to anything yet.
 
-		std::unordered_set<std::string> m_Groups; //!< List of all tags associated with this. The groups are used to categorize and organize Entities.
+		CheckpointUnorderedSet<CheckpointString> m_Groups; //!< List of all tags associated with this. The groups are used to categorize and organize Entities.
 
 		int m_RandomWeight; //!< Random weight used when picking item using PresetMan::GetRandomBuyableOfGroupFromTech. From 0 to 100. 0 means item won't be ever picked.
 		uint64_t m_CheckpointWriteGeneration = 0;
 		bool m_CheckpointValueTrap = false; //!< Set while a cached script graph chunk carries this object's text.
+		bool m_FrozenCheckpointNative = false;
+		void* m_CheckpointAllocation = nullptr;
+		Entity** m_CheckpointOwnerSlot = nullptr;
+		const CheckpointNativeSnapshot* m_CheckpointSnapshot = nullptr;
+		const Entity* m_CheckpointPreset = nullptr;
+		const void* m_CheckpointMetadata = nullptr;
 
 		// Forbidding copying
 		Entity(const Entity& reference) {}
@@ -437,6 +467,7 @@ namespace RTE {
 
 	private:
 		static thread_local unsigned int s_CheckpointCloneDepth;
+		static thread_local void* s_DeletedCheckpointMemory;
 		/// Clears all the member variables of this Entity, effectively resetting the members of this abstraction level only.
 		void Clear();
 	};

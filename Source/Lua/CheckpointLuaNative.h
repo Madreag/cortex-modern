@@ -1,23 +1,61 @@
 #pragma once
 
 #include "CheckpointLuaView.h"
+#include "CheckpointLuaAddresses.h"
 #include "CaptureSentinel.h"
+#include "CheckpointCast.h"
+#include "CheckpointNativeSnapshot.h"
+#include "MOPixel.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <iostream>
 #include <exception>
+#include <functional>
+#include <future>
+#include <limits>
 #include <map>
+#include <memory>
+#include <memory_resource>
+#include <new>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
+#include <chrono>
+#include <format>
 
 // Include after the live ScriptGraph helpers in LuaMan.cpp.
 namespace RTE::CheckpointLua {
 
 	class CaptureScope;
+
+	// Published answers retain their arena; copies allocate on the copying thread.
+	template<class T> class NativeAllocator {
+	public:
+		using value_type = T;
+		using propagate_on_container_move_assignment = std::true_type;
+		using propagate_on_container_swap = std::true_type;
+		std::shared_ptr<std::pmr::memory_resource> storage;
+		NativeAllocator() : storage(CheckpointWriter::BatchEnabled() ? CheckpointBuffer::LeaseCaptureStorage() : nullptr) {}
+		template<class U> NativeAllocator(const NativeAllocator<U>& other) noexcept : storage(other.storage) {}
+		NativeAllocator select_on_container_copy_construction() const { return {}; }
+		T* allocate(size_t count) {
+			if (count > std::numeric_limits<size_t>::max() / sizeof(T)) throw std::bad_array_new_length();
+			return storage ? static_cast<T*>(storage->allocate(count * sizeof(T), alignof(T))) : std::allocator<T>{}.allocate(count);
+		}
+		void deallocate(T* address, size_t count) noexcept {
+			if (storage) storage->deallocate(address, count * sizeof(T), alignof(T));
+			else std::allocator<T>{}.deallocate(address, count);
+		}
+		template<class U> bool operator==(const NativeAllocator<U>& other) const noexcept { return storage == other.storage; }
+	};
 
 	// The counters a native capture must leave as it found them, put back when it ends.
 	struct NativeEffects {
@@ -25,12 +63,11 @@ namespace RTE::CheckpointLua {
 		long uid = MovableObject::GetUniqueIDCounter();
 		// The sound registry is restored once per world capture, as the live walk has it.
 		uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
-		std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
+		AudioMan::CheckpointCarriedScope carried;
 		~NativeEffects() {
 			g_SimRNG = sim; g_RenderRNG = render;
 			MovableObject::PinUniqueIDCounter(uid);
 			g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
-			g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
 		}
 	};
 
@@ -48,8 +85,8 @@ namespace RTE::CheckpointLua {
 		};
 
 		struct Result {
-			std::vector<Value> values;
-			std::vector<uint64_t> carriedSounds;
+			std::vector<Value, NativeAllocator<Value>> values;
+			std::vector<uint64_t, NativeAllocator<uint64_t>> carriedSounds;
 			std::string error;
 			int Push(lua_State* destination, View& view, std::unordered_set<uint64_t>* carried) const {
 				if (!error.empty()) throw std::runtime_error(error);
@@ -79,7 +116,35 @@ namespace RTE::CheckpointLua {
 				if (!tvisfunc(&*value)) throw std::runtime_error("frozen iterator snapshot requires a function");
 				// Only iterators were described; the live helper answers any other function with nothing.
 				const auto found = m_Iterators.find(gcval(&*value));
-				return found == m_Iterators.end() ? 0 : found->second.Push(destination, view, carried);
+				if (found != m_Iterators.end()) return found->second.Push(destination, view, carried);
+				const auto* function = funcV(&*value);
+				const auto& heap = view.Heap();
+				if (heap.Read(&function->c.ffid) != FF_C || heap.Read(&function->c.f) != ScriptGraphValueIteratorNext) return 0;
+				// A restored range already owns its values in the frozen Lua heap.
+				const TValue values = heap.Read(&function->c.upvalue[0]);
+				const TValue owner = heap.Read(&function->c.upvalue[1]);
+				const TValue position = heap.Read(&function->c.upvalue[2]);
+				const TValue origin = heap.Read(&function->c.upvalue[3]);
+				view.Push(destination, values);
+				const int table = lua_gettop(destination);
+				lua_getfield(destination, table, "count");
+				const int count = lua_tointeger(destination, -1); lua_pop(destination, 1);
+				view.Push(destination, position);
+				const int index = lua_tointeger(destination, -1); lua_pop(destination, 1);
+				view.Push(destination, origin);
+				const int first = lua_tointeger(destination, -1); lua_pop(destination, 1);
+				lua_newtable(destination);
+				lua_pushboolean(destination, true); lua_setfield(destination, -2, "owned");
+				lua_pushinteger(destination, first + index); lua_setfield(destination, -2, "first");
+				lua_pushinteger(destination, count - index); lua_setfield(destination, -2, "count");
+				view.Push(destination, owner); lua_setfield(destination, -2, "owner");
+				lua_newtable(destination);
+				for (int item = index + 1; item <= count; ++item) {
+					lua_pushinteger(destination, item); lua_gettable(destination, table);
+					lua_rawseti(destination, -2, item - index);
+				}
+				lua_setfield(destination, -2, "values");
+				return 1;
 			}
 			if (!value || !tvisudata(&*value)) {
 				if (name == "_ScriptGraphMembers" || name == "_ScriptGraphInstance" || name == "_ScriptGraphNative" || name == "_ScriptGraphNativeAddress") {
@@ -100,11 +165,11 @@ namespace RTE::CheckpointLua {
 				if (lua_type(destination, 2) != LUA_TSTRING) throw std::runtime_error("frozen native property name is not a string");
 				size_t size = 0;
 				const char* bytes = lua_tolstring(destination, 2, &size);
-				const auto property = entry.properties.find(std::string(bytes, size));
+				const auto property = entry.properties.find(std::string_view(bytes, size));
 				if (property == entry.properties.end()) throw std::runtime_error("frozen native property was not captured: " + std::string(bytes, size));
 				return property->second.Push(destination, view, carried);
 			}
-			const auto result = entry.helpers.find(std::string(name));
+			const auto result = entry.helpers.find(name);
 			if (result == entry.helpers.end()) throw std::runtime_error("frozen native helper was not captured: " + std::string(name));
 			return result->second.Push(destination, view, carried);
 		}
@@ -126,7 +191,7 @@ namespace RTE::CheckpointLua {
 			return problems;
 		}
 
-		size_t EntryCount() const { return m_Entries.size() + (m_Classes ? m_Classes->entries.size() : 0); }
+		size_t EntryCount() const { return m_Entries.size() + m_Scalars.size() + (m_Classes ? m_Classes->Size() : 0); }
 		// Compare the actual frozen native answers, including deferred text, before
 		// reusing a chunk. No live writer barrier is borrowed by the saver VM.
 		std::string Fingerprint(const void* address, View& view, std::string_view helper, std::string_view argument,
@@ -152,7 +217,7 @@ namespace RTE::CheckpointLua {
 				else if (helper == "_ScriptGraphMembers") result(entry->members);
 				else {
 					const auto& answers = helper == "__index" ? entry->properties : entry->helpers;
-					const auto answer = answers.find(std::string(helper == "__index" ? argument : helper));
+					const auto answer = answers.find(helper == "__index" ? argument : helper);
 					if (answer == answers.end()) bytes += "missing"; else result(answer->second);
 				}
 			} else if (helper == "_ScriptGraphIteratorSnapshot") {
@@ -166,11 +231,34 @@ namespace RTE::CheckpointLua {
 		size_t OwnedCount() const { return m_Owned.size(); }
 
 		using NativeId = uintptr_t;
+		class Answers {
+		public:
+			using Item = std::pair<std::string_view, Result>;
+			using Items = std::vector<Item, NativeAllocator<Item>>;
+			using Iterator = Items::iterator;
+			using ConstIterator = Items::const_iterator;
+			Iterator begin() { return m_Items.begin(); }
+			Iterator end() { return m_Items.end(); }
+			ConstIterator begin() const { return m_Items.begin(); }
+			ConstIterator end() const { return m_Items.end(); }
+			size_t size() const { return m_Items.size(); }
+			ConstIterator find(std::string_view name) const { return std::find_if(begin(), end(), [name](const Item& item) { return item.first == name; }); }
+			std::pair<Iterator, bool> emplace(std::string_view name, Result value) {
+				const auto existing = std::find_if(begin(), end(), [name](const Item& item) { return item.first == name; });
+				if (existing != end()) return std::pair(existing, false);
+				if (m_Items.empty()) m_Items.reserve(4);
+				m_Items.emplace_back(name, std::move(value));
+				return std::pair(std::prev(end()), true);
+			}
+		private:
+			Items m_Items;
+		};
 		struct Entry {
 			std::array<Result, 2> native;
 			Result members;
-			std::unordered_map<std::string, Result> helpers;
-			std::unordered_map<std::string, Result> properties;
+			// Helper and property names have static storage.
+			Answers helpers;
+			Answers properties;
 			NativeId movable = 0;
 			bool carriesCopy = false;
 			// A script-owned object the live world registers must be reached by a root or refused.
@@ -180,8 +268,64 @@ namespace RTE::CheckpointLua {
 			std::string presetName;
 			uint64_t serial = 0; // The userdata's birth number: a reused address with another serial is another object.
 		};
+		// The saver expands owned scalar tokens without native callbacks.
+		struct ScalarEntry {
+			uint64_t serial = 0;
+			TValue kind{}, instance{}, address{}, singletonName{}, addressedKind{};
+			std::array<TValue, 5> nativeTail{};
+			std::array<TValue, 2> members{};
+			std::array<TValue, 4> properties{};
+			unsigned memberCount = 0;
+			unsigned nativeTailCount = 0, propertyCount = 0;
+			NativeId movable = 0;
+			bool timer = false, singleton = false, namedWhenAddressed = false;
+			mutable std::unique_ptr<Entry> expanded;
+			const Entry* Expand() const {
+				if (!expanded) {
+					auto entry = std::make_unique<Entry>();
+					entry->serial = serial;
+					const auto answer = [](const TValue& token) { Result result; result.values.push_back(Value{token}); return result; };
+					entry->native[0] = answer(kind);
+					if (singleton) entry->native[0].values.push_back(Value{singletonName});
+					for (unsigned index = 0; index < nativeTailCount; ++index) entry->native[0].values.push_back(Value{nativeTail[index]});
+					entry->native[1] = namedWhenAddressed ? answer(addressedKind) : entry->native[0];
+					entry->movable = movable;
+					for (unsigned index = 0; index < memberCount; ++index) entry->members.values.push_back(Value{members[index]});
+					entry->helpers.emplace("_ScriptGraphInstance", answer(instance));
+					entry->helpers.emplace("_ScriptGraphNativeAddress", answer(address));
+					static constexpr std::array vectorNames{"X", "Y"};
+					static constexpr std::array timerNames{"StartSimTimeTicks", "SimTimeLimitTicks", "StartRealTimeTicks", "RealTimeLimitTicks"};
+					const std::span<const char* const> names = timer ? std::span<const char* const>(timerNames) : std::span<const char* const>(vectorNames);
+					for (size_t index = 0; index < propertyCount; ++index) entry->properties.emplace(names[index], answer(properties[index]));
+					expanded = std::move(entry);
+				}
+				return expanded.get();
+			}
+		};
 		// The class descriptors and plain userdata a state holds never change; every capture shares one map of them.
-		struct ClassEntries { std::unordered_map<const void*, Entry> entries; };
+		struct ImmutableEntry {
+			uint64_t serial = 0;
+			TValue members{};
+			std::array<TValue, 3> native{};
+			unsigned memberCount = 0, nativeCount = 0;
+			Entry Expand() const {
+				Entry entry;
+				entry.serial = serial;
+				if (memberCount) entry.members.values.push_back(Value{members});
+				TValue nil; setnilV(&nil);
+				Result missing; missing.values.push_back(Value{nil});
+				entry.helpers.emplace("_ScriptGraphInstance", missing);
+				entry.helpers.emplace("_ScriptGraphNativeAddress", std::move(missing));
+				for (unsigned index = 0; index < nativeCount; ++index) entry.native[0].values.push_back(Value{native[index]});
+				entry.native[1] = entry.native[0];
+				return entry;
+			}
+		};
+		struct ClassEntries {
+			std::unordered_map<const void*, Entry> entries;
+			std::unordered_map<const void*, ImmutableEntry> compact;
+			size_t Size() const { return entries.size() + compact.size(); }
+		};
 		size_t CachedCount() const { return m_CachedClasses; }
 		/// Fresh references another reference's answer fits, and of those checked against a fresh answer, how many differed.
 		size_t SharedCount() const { return m_SharedAnswers; }
@@ -203,17 +347,64 @@ namespace RTE::CheckpointLua {
 		struct World {
 			std::vector<NativeId> objects;
 			Topology topology;
+			std::vector<std::pair<NativeId, Object>> records;
+			CaptureAddressSet addresses{std::pmr::get_default_resource(), true};
+			bool frozen = false;
+			mutable std::once_flag indexed;
+			mutable std::vector<const std::pair<NativeId, Object>*> index;
+			std::thread::id captureThread = std::this_thread::get_id();
+			bool Contains(NativeId identity) const { return frozen ? addresses.Contains(reinterpret_cast<const void*>(identity)) : topology.contains(identity); }
+			const Object* Find(NativeId identity) const {
+				if (!frozen) {
+					const auto found = topology.find(identity);
+					return found == topology.end() ? nullptr : &found->second;
+				}
+				std::call_once(indexed, [this] {
+					const auto started = std::chrono::steady_clock::now();
+					index.reserve(records.size());
+					for (const auto& record: records) index.push_back(&record);
+					std::sort(index.begin(), index.end(), [](const auto* first, const auto* second) { return first->first < second->first; });
+					static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
+					if (report) System::PrintDiagnosticLine(std::format("[checkpoint-topology-index] objects={} capture_thread={} worker_thread={} off_capture_thread={} us={}", records.size(),
+					    std::hash<std::thread::id>{}(captureThread), std::hash<std::thread::id>{}(std::this_thread::get_id()), captureThread != std::this_thread::get_id(),
+					    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()));
+				});
+				const auto found = std::lower_bound(index.begin(), index.end(), identity, [](const auto* record, NativeId key) { return record->first < key; });
+				return found == index.end() || (*found)->first != identity ? nullptr : &(*found)->second;
+			}
 		};
-		std::unordered_map<const void*, Entry> m_Entries;
+		std::unordered_map<const void*, Entry, std::hash<const void*>, std::equal_to<const void*>, NativeAllocator<std::pair<const void* const, Entry>>> m_Entries;
+		using ScalarRecord = std::pair<const void*, ScalarEntry>;
+		std::vector<ScalarRecord> m_Scalars;
+		mutable std::optional<std::vector<const ScalarRecord*>> m_ScalarIndex;
 		std::shared_ptr<const ClassEntries> m_Classes;
+		// Each image owns its expansions while later captures share the class cache.
+		mutable std::unordered_map<const void*, Entry> m_ExpandedClasses;
 		size_t m_CachedClasses = 0;
 		size_t m_SharedAnswers = 0, m_SharedMismatches = 0;
 		int64_t m_EnumUs = 0, m_WorldUs = 0, m_AnswerUs = 0;
 		std::unordered_map<const void*, Result> m_Iterators;
 		const Entry* FindEntry(const void* address) const {
 			if (const auto own = m_Entries.find(address); own != m_Entries.end()) return &own->second;
+			if (!m_Scalars.empty()) {
+				// The saver builds the index after the captured records stop growing.
+				if (!m_ScalarIndex) {
+					std::vector<const ScalarRecord*> index;
+					index.reserve(m_Scalars.size());
+					for (const auto& record: m_Scalars) index.push_back(&record);
+					std::sort(index.begin(), index.end(), [](const auto* first, const auto* second) { return std::less<const void*>{}(first->first, second->first); });
+					m_ScalarIndex = std::move(index);
+				}
+				const auto& index = *m_ScalarIndex;
+				const auto scalar = std::lower_bound(index.begin(), index.end(), address, [](const auto* record, const void* key) { return std::less<const void*>{}(record->first, key); });
+				if (scalar != index.end() && (*scalar)->first == address) return (*scalar)->second.Expand();
+			}
 			if (m_Classes) {
 				if (const auto shared = m_Classes->entries.find(address); shared != m_Classes->entries.end()) return &shared->second;
+				if (const auto shared = m_Classes->compact.find(address); shared != m_Classes->compact.end()) {
+					if (const auto expanded = m_ExpandedClasses.find(address); expanded != m_ExpandedClasses.end()) return &expanded->second;
+					return &m_ExpandedClasses.emplace(address, shared->second.Expand()).first->second;
+				}
 			}
 			return nullptr;
 		}
@@ -222,9 +413,7 @@ namespace RTE::CheckpointLua {
 		Topology m_Owned;
 		const Object* Find(NativeId identity) const {
 			if (const auto owned = m_Owned.find(identity); owned != m_Owned.end()) return &owned->second;
-			if (m_World) {
-				if (const auto world = m_World->topology.find(identity); world != m_World->topology.end()) return &world->second;
-			}
+			if (m_World) return m_World->Find(identity);
 			return nullptr;
 		}
 
@@ -357,6 +546,123 @@ namespace RTE::CheckpointLua {
 		CaptureScope(const CaptureScope&) = delete;
 		CaptureScope& operator=(const CaptureScope&) = delete;
 
+		/// Reads the stack-top userdata's live class marker, including its Lua fallback.
+		const luabind::detail::object_rep* BindingObject(const TValue& subject) { return ClassObject(subject); }
+		const char* PlainRefusal() const { return m_PlainRefusal; }
+
+		bool TryCapturePlain() {
+			CheckThread();
+			if (!CheckpointWriter::BatchEnabled()) return false;
+			if (lua_gethook(State())) { m_PlainRefusal = "debug hook"; return false; }
+			if (m_Captured) return false;
+			const auto started = std::chrono::steady_clock::now();
+			const auto key = [&](const char* name) {
+				lua_pushstring(State(), name);
+				GCstr* result = strV(&State()->top[-1]); Keep(-1); lua_pop(State(), 1);
+				return result;
+			};
+			const auto* classKey = key("__luabind_classrep");
+			if (!m_ClassMarker) m_ClassMarker = key("__luabind_class");
+			const auto* iteratorKey = key("__iterator_snapshot");
+			std::pmr::vector<TValue> values(m_TransientResource);
+			bool plain = true;
+			// A C closure can hold iterator state only in a userdata, and every userdata is judged here, so a hooked
+			// metatable refuses whether or not a closure still holds the userdata.
+			const auto hooked = [&](const GCtab* meta) {
+				const auto* hook = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(iteratorKey));
+				return tabref(meta->metatable) || (hook && tvisfunc(hook));
+			};
+			ForEachUserdata(State(), false, true, [&](GCudata* data) {
+				if (!plain) return;
+				const auto* meta = tabref(data->metatable);
+				if (!meta) { TValue value; setgcVraw(&value, obj2gco(data), LJ_TUDATA); values.push_back(value); return; }
+				const auto* marker = lj_tab_getstr(const_cast<GCtab*>(meta), const_cast<GCstr*>(classKey));
+				const bool descriptor = marker && !tvisnil(marker) && !tvisfalse(marker);
+				if (descriptor && data->len != sizeof(luabind::detail::class_rep)) { m_PlainRefusal = "descriptor layout"; plain = false; return; }
+				if (descriptor && hooked(meta)) { m_PlainRefusal = "iterator hook"; plain = false; return; }
+				TValue value; setgcVraw(&value, obj2gco(data), LJ_TUDATA);
+				if (!descriptor) {
+					const auto* objectMarker = lj_tab_getstr(const_cast<GCtab*>(meta), m_ClassMarker);
+					if (!objectMarker || tvisnil(objectMarker) || tvisfalse(objectMarker)) {
+						if (hooked(meta)) { m_PlainRefusal = "userdata hook"; plain = false; return; }
+						values.push_back(value); return;
+					}
+					if (data->len < sizeof(luabind::detail::object_rep) || tabref(meta->metatable)) { m_PlainRefusal = "binding metatable"; plain = false; return; }
+					if (hooked(meta)) { m_PlainRefusal = "iterator hook"; plain = false; return; }
+					const auto* object = static_cast<const luabind::detail::object_rep*>(uddata(data));
+					const auto* type = object->crep();
+					if (!object->ptr() || !type || type->get_class_type() != luabind::detail::class_rep::cpp_class) { m_PlainRefusal = "binding lifetime or Lua class"; plain = false; return; }
+					const bool scalar = (object->flags() & luabind::detail::object_rep::owner) &&
+					                    (type->type() == LUABIND_TYPEID(Vector) || type->type() == LUABIND_TYPEID(Timer));
+					if (scalar) {
+						Push(value); plain = PlainScalarProperties(value, object); lua_pop(State(), 1);
+						if (!plain) m_PlainRefusal = "scalar override";
+					} else {
+						plain = PlainSingleton(object) || PlainBorrowed(value, object) || PlainBoundaryReference(value, object);
+						if (!plain) m_PlainRefusal = "native value needs live descriptors";
+					}
+				}
+				if (plain) values.push_back(value);
+			});
+			// The value iterators registered themselves when made; a values table with a metatable can run mod code.
+			if (plain) {
+				const int top = lua_gettop(State());
+				lua_getfield(State(), LUA_REGISTRYINDEX, "_ScriptGraphIterators");
+				if (lua_istable(State(), -1)) {
+					lua_pushnil(State());
+					while (lua_next(State(), top + 1)) {
+						const TValue key = At(-2);
+						lua_pop(State(), 1);
+						if (!tvisfunc(&key)) continue;
+						const GCfunc* function = funcV(&key);
+						if (!iscfunc(function) || function->c.f != ScriptGraphValueIteratorNext) continue;
+						const TValue& iterated = function->c.upvalue[0];
+						if (!tvistab(&iterated) || tabref(tabV(&iterated)->metatable)) { m_PlainRefusal = "iterator values metatable"; plain = false; break; }
+					}
+				}
+				lua_settop(State(), top);
+			}
+			if (!plain) return false;
+			const auto answers = std::chrono::steady_clock::now();
+			m_Image->m_EnumUs = std::chrono::duration_cast<std::chrono::microseconds>(answers - started).count();
+			m_Image->m_Scalars.reserve(values.size());
+			CaptureAddressSet enumerated(m_TransientResource);
+			enumerated.Reserve(values.size());
+			for (const TValue& value: values) {
+				const auto* data = udataV(&value);
+				const auto address = gcval(&value);
+				enumerated.Insert(address);
+				if (const auto known = m_Cache.classes->compact.find(address); known != m_Cache.classes->compact.end() && known->second.serial == data->serial) {
+					m_SeenClasses.Insert(address); ++m_Image->m_CachedClasses; continue;
+				}
+				Push(value);
+				const auto* object = ClassObject(value);
+				if (object && PlainSingleton(object)) {
+					NativeImage::ScalarEntry entry;
+					entry.serial = data->serial; entry.singleton = true; setnilV(&entry.kind);
+					lua_pushstring(State(), object->crep()->name()); entry.singletonName = At(-1); Keep(-1); lua_pop(State(), 1);
+					object->crep()->get_table(State()); entry.members[entry.memberCount++] = At(-1); Keep(-1); lua_pop(State(), 1);
+					if (object->get_lua_table().is_valid()) {
+						object->get_lua_table().get(State()); entry.instance = At(-1); Keep(-1); lua_pop(State(), 1);
+						entry.members[entry.memberCount++] = entry.instance;
+					} else setnilV(&entry.instance);
+					lua_pushlightuserdata(State(), object->ptr()); entry.address = At(-1); lua_pop(State(), 1);
+					m_Image->m_Scalars.emplace_back(address, std::move(entry));
+					lua_pop(State(), 1);
+				} else {
+					lua_pop(State(), 1);
+					CaptureUserdata(value);
+				}
+			}
+			for (size_t index = 0; index < m_Queue.size(); ++index) {
+				const TValue value = m_Queue[index];
+				if (tvisudata(&value) && !enumerated.Contains(gcval(&value))) CaptureUserdata(value);
+			}
+			m_Image->m_AnswerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - answers).count();
+			m_Captured = true;
+			return true;
+		}
+
 		void Capture() {
 			CheckThread();
 			if (m_Captured || !m_Image) throw std::logic_error("native image capture cannot be repeated");
@@ -364,11 +670,17 @@ namespace RTE::CheckpointLua {
 			const auto enumStarted = std::chrono::steady_clock::now();
 			// The class descriptors were answered by an earlier capture; everything else is asked again.
 			const auto& classes = m_Cache.classes->entries;
+			const auto& compactClasses = m_Cache.classes->compact;
 			auto& references = m_Cache.references;
 			ForEachCapturedUserdata(State(), [&](GCudata* data) {
 				GCobj* object = obj2gco(data);
 				if (const auto known = classes.find(object); known != classes.end() && known->second.serial == data->serial) {
-					m_SeenClasses.insert(object);
+					m_SeenClasses.Insert(object);
+					++m_Image->m_CachedClasses;
+					return;
+				}
+				if (const auto known = compactClasses.find(object); known != compactClasses.end() && known->second.serial == data->serial) {
+					m_SeenClasses.Insert(object);
 					++m_Image->m_CachedClasses;
 					return;
 				}
@@ -383,7 +695,7 @@ namespace RTE::CheckpointLua {
 					if (same) {
 						const NativeImage::Entry& kept = m_Image->m_Entries.emplace(object, reference.entry).first->second;
 						if (reference.entity && SharesAnswer(rep)) m_Shared.emplace(SharedKey::Of(rep), SharedAnswer{&kept, reference.uid});
-						m_Kept.insert(object);
+						m_Kept.Insert(object);
 						++m_Image->m_CachedClasses;
 						return;
 					}
@@ -409,11 +721,16 @@ namespace RTE::CheckpointLua {
 			lua_pop(State(), 1);
 			const auto worldStarted = std::chrono::steady_clock::now();
 			m_Image->m_EnumUs = std::chrono::duration_cast<std::chrono::microseconds>(worldStarted - enumStarted).count();
+			if (CheckpointWriter::BatchEnabled()) {
+				m_Image->m_Entries.reserve(m_Image->m_Entries.size() + m_Queue.size());
+				m_Image->m_Scalars.reserve(m_Queue.size());
+			}
 			{
 				// The states of one world capture may run side by side; the first to get here walks the world.
 				std::lock_guard worldLock(s_GraphNativeCapture->frozenWorldMutex);
 				auto& shared = s_GraphNativeCapture->frozenWorld;
-				if (!shared) shared = BuildWorld(s_GraphNativeCapture->KnownObjects());
+				if (!shared) shared = CheckpointNativeSnapshot::Boundary()
+				    ? FreezeWorld(s_GraphNativeCapture->KnownObjects()) : BuildWorld(s_GraphNativeCapture->KnownObjects());
 				m_Image->m_World = std::static_pointer_cast<const NativeImage::World>(shared);
 			}
 			const auto answerStarted = std::chrono::steady_clock::now();
@@ -424,6 +741,7 @@ namespace RTE::CheckpointLua {
 				else CaptureIterator(value);
 			}
 			m_Image->m_AnswerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - answerStarted).count();
+			if (m_RetainedReport) System::PrintDiagnosticLine(std::format("[checkpoint-retained] thread={} calls={} missing={} us={}", std::hash<std::thread::id>{}(std::this_thread::get_id()), m_RetainedCalls, m_RetainedMissing, m_RetainedUs));
 			m_Captured = true;
 		}
 
@@ -431,15 +749,30 @@ namespace RTE::CheckpointLua {
 			CheckThread();
 			if (!m_Captured || !m_Image || state != State()) throw std::logic_error("native results require the same frozen Lua heap");
 			// Descriptors this walk neither reused nor made again describe userdata that are gone.
-			const bool retired = m_SeenClasses.size() != m_Cache.classes->entries.size();
-			if (!m_NewClasses.empty() || retired) {
+			const bool retired = m_SeenClasses.Size() != m_Cache.classes->Size();
+			if (!m_NewClasses.empty() || !m_NewCompactClasses.empty() || retired) {
 				auto merged = std::make_shared<NativeImage::ClassEntries>(*m_Cache.classes);
-				if (retired) std::erase_if(merged->entries, [this](const auto& entry) { return !m_SeenClasses.contains(entry.first); });
-				for (auto& [address, entry]: m_NewClasses) merged->entries[address] = std::move(entry);
+				if (retired) {
+					std::erase_if(merged->entries, [this](const auto& entry) { return !m_SeenClasses.Contains(entry.first); });
+					std::erase_if(merged->compact, [this](const auto& entry) { return !m_SeenClasses.Contains(entry.first); });
+				}
+				if (CheckpointWriter::BatchEnabled()) {
+					merged->entries.reserve(merged->entries.size() + m_NewClasses.size());
+					merged->compact.reserve(merged->compact.size() + m_NewCompactClasses.size());
+				}
+				for (auto& [address, entry]: m_NewClasses) {
+					merged->compact.erase(address);
+					merged->entries[address] = std::move(entry);
+				}
+				for (auto& [address, entry]: m_NewCompactClasses) {
+					merged->entries.erase(address);
+					merged->compact[address] = std::move(entry);
+				}
 				m_Cache.classes = std::move(merged);
 			}
 			// References this walk neither reused nor made again name objects that are gone.
-			std::erase_if(m_Cache.references, [this](const auto& entry) { return !m_Kept.contains(entry.first); });
+			std::erase_if(m_Cache.references, [this](const auto& entry) { return !m_Kept.Contains(entry.first); });
+			if (CheckpointWriter::BatchEnabled()) m_Cache.references.reserve(m_Cache.references.size() + m_NewReferences.size());
 			for (auto& [address, reference]: m_NewReferences) m_Cache.references[address] = std::move(reference);
 			m_Image->m_Classes = m_Cache.classes;
 			std::shared_ptr<const NativeImage> result = std::move(m_Image);
@@ -448,12 +781,112 @@ namespace RTE::CheckpointLua {
 		}
 
 	private:
+		bool PlainDependencies(const luabind::detail::object_rep* object) {
+			if (!object->get_dependencies().is_valid()) return true;
+			const int top = lua_gettop(State());
+			struct Restore { lua_State* state; int top; ~Restore() { lua_settop(state, top); } } restore{State(), top};
+			object->get_dependencies().get(State());
+			if (!lua_istable(State(), -1) || tabref(tabV(&State()->top[-1])->metatable)) return false;
+			lua_pushnil(State());
+			while (lua_next(State(), -2)) {
+				const TValue value = At(-1);
+				if (tvisudata(&value)) {
+					const auto* data = udataV(&value);
+					const auto* meta = tabref(data->metatable);
+					const TValue* marker = meta && m_ClassMarker ? lj_tab_getstr(const_cast<GCtab*>(meta), m_ClassMarker) : nullptr;
+					if (data->len < sizeof(luabind::detail::object_rep) || !marker || tvisnil(marker) || tvisfalse(marker) || tabref(meta->metatable)) return false;
+					const auto* owner = static_cast<const luabind::detail::object_rep*>(uddata(data));
+					if (!owner->crep() || owner->crep()->get_class_type() != luabind::detail::class_rep::cpp_class ||
+					    (ClassDerivesFrom(owner->crep(), "Activity") && owner->ptr() != g_ActivityMan.GetActivity()) || std::strcmp(owner->crep()->name(), "SceneEditorGUI") == 0) return false;
+				}
+				lua_pop(State(), 1);
+			}
+			return true;
+		}
+		bool PlainBoundaryReference(const TValue& subject, const luabind::detail::object_rep* object) {
+			if (!CheckpointNativeSnapshot::Boundary() || !object || !object->ptr() || !object->crep() ||
+			    (object->flags() & luabind::detail::object_rep::owner) || object->crep()->get_class_type() != luabind::detail::class_rep::cpp_class ||
+			    !DirectClassMarker(subject) || !PlainDependencies(object)) return false;
+			const auto* type = object->crep();
+			if (ClassDerivesFrom(type, "Entity")) return true;
+			static constexpr std::array names{"Gib", "SoundSet", "LimbPath", "Box", "Area", "Controller", "DataModule", "BuyMenuGUI", "SceneEditorGUI", "GUIBanner"};
+			return std::find(names.begin(), names.end(), std::string_view(type->name())) != names.end();
+		}
+		bool PlainBorrowed(const TValue& subject, const luabind::detail::object_rep* object) {
+			if (!CheckpointNativeSnapshot::Boundary() || !s_GraphNativeCapture || !object || !object->ptr() || !object->crep() ||
+			    (object->flags() & luabind::detail::object_rep::owner) || object->crep()->get_class_type() != luabind::detail::class_rep::cpp_class ||
+			    !DirectClassMarker(subject) || s_GraphNativeCapture->SpecialOwner(object->ptr()) || !PlainDependencies(object)) return false;
+			const auto* type = object->crep();
+			if (ClassDerivesFrom(type, "MovableObject")) return true;
+			if (type->type() == LUABIND_TYPEID(Vector)) return s_GraphNativeCapture->VectorOwner(object->ptr()) && PlainScalarProperties(subject, object) && ScriptGraphNativeAlive(State(), object);
+			if (type->type() == LUABIND_TYPEID(Controller)) return s_GraphNativeCapture->ControllerOwner(object->ptr()) != nullptr;
+			if (type->type() == LUABIND_TYPEID(DataModule)) return true;
+			if (ClassDerivesFrom(type, "Activity") && object->ptr() == g_ActivityMan.GetActivity()) return true;
+			if (type->type() == LUABIND_TYPEID(Scene) && object->ptr() == g_SceneMan.GetScene()) return true;
+			if (type->type() == LUABIND_TYPEID(GlobalScript)) {
+				if (const auto* activity = dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity()))
+					if (std::find(activity->GetGlobalScripts().begin(), activity->GetGlobalScripts().end(), object->ptr()) != activity->GetGlobalScripts().end()) return true;
+			}
+			return ClassDerivesFrom(type, "Entity") && s_GraphNativeCapture->Preset(object->ptr());
+		}
+		bool CaptureBorrowed(const TValue& subject, const luabind::detail::object_rep* object) {
+			if (!CheckpointWriter::BatchEnabled() || !PlainBorrowed(subject, object)) return false;
+			NativeImage::ScalarEntry entry;
+			entry.serial = udataV(&subject)->serial;
+			const auto token = [&](const char* text) { return ScalarToken([&] { lua_pushstring(State(), text); }); };
+			const auto number = [](lua_Number value) { TValue result; setnumV(&result, value); if (tvisnan(&result)) setnanV(&result); return result; };
+			object->crep()->get_table(State()); entry.members[entry.memberCount++] = At(-1); Keep(-1); lua_pop(State(), 1);
+			if (object->get_lua_table().is_valid()) {
+				object->get_lua_table().get(State()); entry.instance = At(-1); Keep(-1); lua_pop(State(), 1); entry.members[entry.memberCount++] = entry.instance;
+			} else setnilV(&entry.instance);
+			entry.address = ScalarToken([&] { lua_pushlightuserdata(State(), object->ptr()); });
+			const auto* type = object->crep();
+			if (ClassDerivesFrom(type, "MovableObject")) {
+				const auto* mo = static_cast<const MovableObject*>(object->ptr());
+				const bool known = s_GraphNativeCapture->Known(mo);
+				entry.kind = token(known ? "entity" : "invalid");
+				if (known) { entry.nativeTail[entry.nativeTailCount++] = number(mo->GetUniqueID()); entry.movable = reinterpret_cast<uintptr_t>(mo); }
+				entry.nativeTail[entry.nativeTailCount++] = token(type->name());
+			} else if (type->type() == LUABIND_TYPEID(Vector)) {
+				const auto* owner = s_GraphNativeCapture->VectorOwner(object->ptr());
+				entry.kind = token("vector-ref"); entry.nativeTail[entry.nativeTailCount++] = number(owner->uid); entry.nativeTail[entry.nativeTailCount++] = token(owner->property);
+				entry.propertyCount = 2; entry.properties[0] = ScalarPropertyToken(object, "X"); entry.properties[1] = ScalarPropertyToken(object, "Y");
+			} else if (type->type() == LUABIND_TYPEID(Controller)) {
+				entry.kind = token("controller-ref"); entry.nativeTail[entry.nativeTailCount++] = number(*s_GraphNativeCapture->ControllerOwner(object->ptr()));
+			} else if (type->type() == LUABIND_TYPEID(DataModule)) {
+				entry.kind = token("module-ref"); entry.nativeTail[entry.nativeTailCount++] = token(static_cast<const DataModule*>(object->ptr())->GetFileName().c_str());
+			} else if (ClassDerivesFrom(type, "Activity") && object->ptr() == g_ActivityMan.GetActivity()) entry.kind = token("activity");
+			else if (type->type() == LUABIND_TYPEID(Scene) && object->ptr() == g_SceneMan.GetScene()) entry.kind = token("scene");
+			else if (type->type() == LUABIND_TYPEID(GlobalScript) && dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity()) &&
+			         std::find(static_cast<const GAScripted*>(g_ActivityMan.GetActivity())->GetGlobalScripts().begin(), static_cast<const GAScripted*>(g_ActivityMan.GetActivity())->GetGlobalScripts().end(), object->ptr()) != static_cast<const GAScripted*>(g_ActivityMan.GetActivity())->GetGlobalScripts().end()) {
+				const auto& scripts = static_cast<const GAScripted*>(g_ActivityMan.GetActivity())->GetGlobalScripts();
+				entry.kind = token("global-script"); entry.nativeTail[entry.nativeTailCount++] = number(1 + std::distance(scripts.begin(), std::find(scripts.begin(), scripts.end(), object->ptr())));
+			} else {
+				const auto* entity = static_cast<const Entity*>(object->ptr());
+				const auto* preset = entity->GetPresetForCopy();
+				entry.kind = token("preset"); entry.nativeTail[entry.nativeTailCount++] = token(entity->GetClassName().c_str());
+				entry.nativeTail[entry.nativeTailCount++] = token(preset ? preset->GetPresetName().c_str() : ""); entry.nativeTail[entry.nativeTailCount++] = token(preset ? preset->GetModuleName().c_str() : "");
+				entry.namedWhenAddressed = ClassDerivesFrom(type, "Activity") || type->type() == LUABIND_TYPEID(GlobalScript);
+				if (entry.namedWhenAddressed) entry.addressedKind = token("named");
+			}
+			if (s_GraphNativeCapture->frozenWorld) m_Image->m_World = std::static_pointer_cast<const NativeImage::World>(s_GraphNativeCapture->frozenWorld);
+			m_Image->m_Scalars.emplace_back(gcval(&subject), std::move(entry));
+			return true;
+		}
+		static bool PlainSingleton(const luabind::detail::object_rep* object) {
+			if (!object || !object->ptr() || !object->crep() || (object->flags() & luabind::detail::object_rep::owner) ||
+			    object->crep()->get_class_type() != luabind::detail::class_rep::cpp_class) return false;
+			static constexpr std::array names{"ActivityManager", "AudioManager", "CameraManager", "ConsoleManager", "FrameManager", "LuaManager", "MetaManager", "MovableManager",
+			                                 "MusicManager", "PerformanceManager", "PostProcessManager", "PresetManager", "PrimitiveManager", "SceneManager", "SettingsManager", "MetricsCollectorManager", "TimerManager", "UInputManager"};
+			return std::find(names.begin(), names.end(), std::string_view(object->crep()->name())) != names.end();
+		}
 		struct References {
 			lua_State* state;
 			decltype(std::declval<global_State&>().gc.threshold) threshold;
 			uint64_t serial;
 			int count = 0;
 			explicit References(lua_State* source) : state(source), threshold(G(source)->gc.threshold), serial(luaJIT_state_serial(source)) {
+				CheckpointFailure::Check(CheckpointFailure::Point::NativeRoots);
 				G(state)->gc.threshold = std::numeric_limits<decltype(threshold)>::max();
 				// This capture's own address keys its table, for the reason the cache's does.
 				lua_pushlightuserdata(state, this);
@@ -482,9 +915,14 @@ namespace RTE::CheckpointLua {
 		std::optional<LuaScriptGraphNativeCaptureScope> m_NativeScope;
 		std::thread::id m_Thread;
 		NativeCache& m_Cache;
-		std::unordered_map<const void*, NativeImage::Entry> m_NewClasses;
-		std::unordered_map<const void*, NativeCache::Reference> m_NewReferences;
-		std::unordered_set<const void*> m_Kept;
+		// The capture owns prepared backing until its temporary containers die.
+		std::shared_ptr<std::pmr::memory_resource> m_TransientBacking = CheckpointWriter::BatchEnabled() ? CheckpointBuffer::LeaseCaptureStorage() : nullptr;
+		std::pmr::monotonic_buffer_resource m_Transient{m_TransientBacking ? m_TransientBacking.get() : std::pmr::get_default_resource()};
+		std::pmr::memory_resource* m_TransientResource = CheckpointWriter::BatchEnabled() ? &m_Transient : std::pmr::get_default_resource();
+		std::pmr::unordered_map<const void*, NativeImage::Entry> m_NewClasses{m_TransientResource};
+		std::pmr::unordered_map<const void*, NativeImage::ImmutableEntry> m_NewCompactClasses{m_TransientResource};
+		std::pmr::unordered_map<const void*, NativeCache::Reference> m_NewReferences{m_TransientResource};
+		CaptureAddressSet m_Kept{m_TransientResource};
 		struct SharedKey {
 			const void* crep = nullptr;
 			const void* pointer = nullptr;
@@ -497,14 +935,28 @@ namespace RTE::CheckpointLua {
 		};
 		struct SharedAnswer { const NativeImage::Entry* entry = nullptr; long uid = 0; };
 		struct SharedHit { NativeImage::Entry entry; long uid = 0; };
-		std::unordered_map<SharedKey, SharedAnswer, SharedKeyHash> m_Shared;
-		std::unordered_set<const void*> m_SeenClasses;
+		std::pmr::unordered_map<SharedKey, SharedAnswer, SharedKeyHash> m_Shared{m_TransientResource};
+		CaptureAddressSet m_SeenClasses{m_TransientResource};
 		TValue m_Subject{};
 		bool m_Persist = false;
 		std::shared_ptr<NativeImage> m_Image = std::make_shared<NativeImage>();
-		std::unordered_set<const void*> m_Queued;
-		std::vector<TValue> m_Queue;
+		CaptureAddressSet m_Queued{m_TransientResource};
+		CaptureAddressSet m_Pinned{m_TransientResource};
+		std::pmr::vector<TValue> m_Queue{m_TransientResource};
 		bool m_Captured = false;
+		const char* m_PlainRefusal = "none";
+		struct ScalarKeys {
+			GCstr* index = nullptr;
+			std::array<GCstr*, 4> properties{};
+			GCstr* kind = nullptr;
+			const luabind::detail::class_rep* type = nullptr;
+			TValue members{};
+		};
+		std::array<ScalarKeys, 2> m_ScalarKeys;
+		GCstr* m_ClassMarker = nullptr;
+		const bool m_RetainedReport = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
+		size_t m_RetainedCalls = 0, m_RetainedMissing = 0;
+		int64_t m_RetainedUs = 0;
 
 		lua_State* State() const { return m_References.state; }
 		void CheckThread() const {
@@ -516,12 +968,37 @@ namespace RTE::CheckpointLua {
 			incr_top(State());
 		}
 		TValue At(int index) const { return *(index > 0 ? State()->base + index - 1 : State()->top + index); }
+		const luabind::detail::object_rep* ClassObject(const TValue& subject) {
+			if (!CheckpointWriter::BatchEnabled()) return luabind::detail::is_class_object(State(), -1);
+			GCtab* meta = tabref(udataV(&subject)->metatable);
+			if (!meta) return nullptr;
+			if (!m_ClassMarker) {
+				lua_pushliteral(State(), "__luabind_class");
+				m_ClassMarker = strV(&State()->top[-1]); Keep(-1); lua_pop(State(), 1);
+			}
+			const TValue* marker = lj_tab_getstr(meta, m_ClassMarker);
+			if (!marker || tvisnil(marker)) {
+				// A metatable fallback can execute Lua, so retain ordinary lookup.
+				return tabref(meta->metatable) ? luabind::detail::is_class_object(State(), -1) : nullptr;
+			}
+			return tvisfalse(marker) ? nullptr : static_cast<const luabind::detail::object_rep*>(uddata(udataV(&subject)));
+		}
+		bool DirectClassMarker(const TValue& subject) const {
+			if (lua_gethook(State())) return false;
+			const GCtab* meta = tabref(udataV(&subject)->metatable);
+			const TValue* marker = meta && m_ClassMarker ? lj_tab_getstr(const_cast<GCtab*>(meta), m_ClassMarker) : nullptr;
+			return marker && !tvisnil(marker) && !tvisfalse(marker);
+		}
 		void Keep(int index) {
 			if (index < 0) index += lua_gettop(State()) + 1;
-			m_References.Push();
-			lua_pushvalue(State(), index);
-			lua_rawseti(State(), -2, ++m_References.count);
-			lua_pop(State(), 1);
+			const TValue value = At(index);
+			// One strong reference keeps every repeated token alive for this image.
+			if (!CheckpointWriter::BatchEnabled() || !tvisgcv(&value) || m_Pinned.Insert(gcval(&value))) {
+				m_References.Push();
+				lua_pushvalue(State(), index);
+				lua_rawseti(State(), -2, ++m_References.count);
+				lua_pop(State(), 1);
+			}
 			// A cached descriptor's values must outlive this capture: the subject keeps them for every later freeze.
 			if (m_Persist) {
 				const int bucket = PushRetainedBucket();
@@ -546,11 +1023,24 @@ namespace RTE::CheckpointLua {
 		}
 		// A subject answered again names new values; what the last capture kept for it goes.
 		void ReleaseRetained(const TValue& subject) {
+			const auto started = m_RetainedReport ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			m_Cache.PushRetained(State());
+			const TValue* previous = (m_RetainedReport || CheckpointWriter::BatchEnabled()) ? lj_tab_get(State(), tabV(&State()->top[-1]), &subject) : nullptr;
+			if (m_RetainedReport) {
+				++m_RetainedCalls;
+				if (!previous || tvisnil(previous)) ++m_RetainedMissing;
+			}
+			// Setting an absent key to nil still grows Lua's hash chains.
+			if (CheckpointWriter::BatchEnabled() && (!previous || tvisnil(previous))) {
+				lua_pop(State(), 1);
+				if (m_RetainedReport) m_RetainedUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+				return;
+			}
 			Push(subject);
 			lua_pushnil(State());
 			lua_rawset(State(), -3);
 			lua_pop(State(), 1);
+			if (m_RetainedReport) m_RetainedUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		}
 		// The heap values a cached answer names stay alive in the subject's bucket of the retained table.
 		void Retain(const NativeImage::Entry& entry) {
@@ -571,11 +1061,12 @@ namespace RTE::CheckpointLua {
 			for (const auto& [name, result]: entry.properties) keep(result);
 		}
 		void Enqueue(const TValue& value) {
-			if ((!tvisudata(&value) && !tvisfunc(&value)) || !m_Queued.insert(gcval(&value)).second) return;
+			if ((!tvisudata(&value) && !tvisfunc(&value)) || !m_Queued.Insert(gcval(&value))) return;
 			Push(value); Keep(-1); lua_pop(State(), 1);
 			m_Queue.push_back(value);
 		}
-		void NewResults(int index, uint64_t before, uint64_t after, std::unordered_set<const void*>& seen) {
+		using ResultTables = std::optional<CaptureAddressSet>;
+		void NewResults(int index, uint64_t before, uint64_t after, ResultTables& seen) {
 			if (index < 0) index += lua_gettop(State()) + 1;
 			const TValue value = At(index);
 			if (!tvisudata(&value) && !tvistab(&value) && !tvisfunc(&value) && !tvisthread(&value)) return;
@@ -587,7 +1078,10 @@ namespace RTE::CheckpointLua {
 			}
 			if (tvisudata(&value) && !ScriptGraphCapturedText(State(), index)) Enqueue(value);
 			if (tvisfunc(&value) && IteratorCandidate(funcV(&value))) Enqueue(value);
-			if (!fresh || !tvistab(&value) || !seen.insert(gcval(&value)).second) return;
+			if (!fresh || !tvistab(&value)) return;
+			// Only newly returned tables need a cycle set.
+			if (!seen) seen.emplace(m_TransientResource);
+			if (!seen->Insert(gcval(&value))) return;
 			lua_pushnil(State());
 			while (lua_next(State(), index)) {
 				NewResults(-2, before, after, seen);
@@ -596,6 +1090,29 @@ namespace RTE::CheckpointLua {
 			}
 		}
 
+		// Constant descriptors retain the protected helper call's values.
+		template<class PushValues> NativeImage::Result RecordPushed(PushValues push, bool keep = true) {
+			const int top = lua_gettop(State());
+			struct RestoreStack { lua_State* state; int top; ~RestoreStack() { lua_settop(state, top); } } stack{State(), top};
+			const uint64_t before = luaJIT_state_serial(State());
+			push();
+			const uint64_t after = luaJIT_state_serial(State());
+			NativeImage::Result result;
+			const int last = lua_gettop(State());
+			if (CheckpointWriter::BatchEnabled()) result.values.reserve(last - top);
+			ResultTables seen;
+			for (int index = top + 1; index <= last; ++index) {
+				NativeImage::Value value;
+				value.token = At(index);
+				if (const auto* text = ScriptGraphCapturedText(State(), index)) value.text = *text;
+				if (keep) {
+					if (!CheckpointWriter::BatchEnabled() || tvisgcv(&value.token)) Keep(index);
+					NewResults(index, before, after, seen);
+				}
+				result.values.push_back(std::move(value));
+			}
+			return result;
+		}
 		template<class Arguments> NativeImage::Result Invoke(lua_CFunction function, const char* name, Arguments arguments, bool observesNative = false) {
 			const int top = lua_gettop(State());
 			struct RestoreStack { lua_State* state; int top; ~RestoreStack() { lua_settop(state, top); } } stack{State(), top};
@@ -612,12 +1129,14 @@ namespace RTE::CheckpointLua {
 			}
 			const uint64_t after = luaJIT_state_serial(State());
 			const int last = lua_gettop(State());
-			std::unordered_set<const void*> seen;
+			if (CheckpointWriter::BatchEnabled()) result.values.reserve(last - top);
+			ResultTables seen;
 			for (int index = top + 1; index <= last; ++index) {
 				NativeImage::Value value;
 				value.token = At(index);
 				if (const auto* text = ScriptGraphCapturedText(State(), index)) value.text = *text;
-				Keep(index);
+				// Scalar answers have no GC owner to pin.
+				if (!CheckpointWriter::BatchEnabled() || tvisgcv(&value.token)) Keep(index);
 				NewResults(index, before, after, seen);
 				result.values.push_back(std::move(value));
 			}
@@ -628,10 +1147,10 @@ namespace RTE::CheckpointLua {
 		NativeImage::Result One(lua_CFunction function, const char* name, const TValue& value, bool observesNative = false) {
 			return Invoke(function, name, [&] { Push(value); return 1; }, observesNative);
 		}
-		static std::string Kind(const NativeImage::Result& result) {
+		static std::string_view Kind(const NativeImage::Result& result) {
 			if (!result.error.empty() || result.values.empty() || result.values.front().text || !tvisstr(&result.values.front().token)) return {};
 			const GCstr* text = strV(&result.values.front().token);
-			return std::string(strdata(text), text->len);
+			return std::string_view(strdata(text), text->len);
 		}
 		static int MemberSources(lua_State* state) {
 			if (const auto* object = luabind::detail::is_class_object(state, 1); object && object->crep()) {
@@ -650,6 +1169,126 @@ namespace RTE::CheckpointLua {
 			lua_gettable(state, 1);
 			return 1;
 		}
+		// Overrides keep the ordinary Lua lookup; plain scalar getters need no call closure.
+		bool PlainScalarProperties(const TValue& subject, const luabind::detail::object_rep* object) {
+			if (!CheckpointWriter::BatchEnabled() || !object || !object->ptr() || !object->crep() || !DirectClassMarker(subject)) return false;
+			const auto* type = object->crep();
+			if (type->get_class_type() != luabind::detail::class_rep::cpp_class ||
+			    (type->type() != LUABIND_TYPEID(Vector) && type->type() != LUABIND_TYPEID(Timer))) return false;
+			static constexpr std::array vectorNames{"X", "Y"};
+			static constexpr std::array timerNames{"StartSimTimeTicks", "SimTimeLimitTicks", "StartRealTimeTicks", "RealTimeLimitTicks"};
+			const std::span<const char* const> names = type->type() == LUABIND_TYPEID(Timer) ? std::span<const char* const>(timerNames) : std::span<const char* const>(vectorNames);
+			const int top = lua_gettop(State());
+			struct Restore { lua_State* state; int top; ~Restore() { lua_settop(state, top); } } restore{State(), top};
+			auto& keys = m_ScalarKeys[type->type() == LUABIND_TYPEID(Timer) ? 1 : 0];
+			if (!keys.index) {
+				const auto key = [&](const char* name) {
+					lua_pushstring(State(), name);
+					GCstr* string = strV(&State()->top[-1]);
+					Keep(-1);
+					lua_pop(State(), 1);
+					return string;
+				};
+				keys.index = key("__index");
+				for (size_t index = 0; index < names.size(); ++index) keys.properties[index] = key(names[index]);
+			}
+			const GCtab* meta = tabref(udataV(&subject)->metatable);
+			if (!meta) return false;
+			const TValue* dispatcher = lj_tab_getstr(const_cast<GCtab*>(meta), keys.index);
+			if (!dispatcher || !tvisfunc(dispatcher)) return false;
+			const GCfunc* function = funcV(dispatcher);
+			const BCOp operation = bc_op(*mref(function->c.pc, BCIns));
+			if ((operation != BC_FUNCC && operation != BC_FUNCCW) || function->c.f != luabind::detail::class_rep::gettable_dispatcher) return false;
+			const auto plain = [&](const TValue& value) {
+				if (!tvistab(&value) || tabref(tabV(&value)->metatable)) return false;
+				// Read every override again; only the interned keys are capture-local.
+				for (size_t index = 0; index < names.size(); ++index) {
+					const TValue* field = lj_tab_getstr(tabV(&value), keys.properties[index]);
+					if (field && !tvisnil(field)) return false;
+				}
+				return true;
+			};
+			if (object->get_lua_table().is_valid()) {
+				object->get_lua_table().get(State());
+				if (!plain(State()->top[-1])) return false;
+				lua_pop(State(), 1);
+			}
+			if (keys.type != type) {
+				type->get_table(State()); keys.members = At(-1); Keep(-1); lua_pop(State(), 1); keys.type = type;
+			}
+			return plain(keys.members);
+		}
+		TValue ScalarPropertyToken(const luabind::detail::object_rep* object, const char* name) {
+			lua_Number number;
+			if (object->crep()->type() == LUABIND_TYPEID(Vector)) {
+				const auto& value = *static_cast<const Vector*>(object->ptr());
+				number = std::strcmp(name, "X") == 0 ? value.GetX() : value.GetY();
+			} else {
+				const auto& value = *static_cast<const Timer*>(object->ptr());
+				if (std::strcmp(name, "StartSimTimeTicks") == 0) number = value.GetStartSimTimeTicksNumber();
+				else if (std::strcmp(name, "SimTimeLimitTicks") == 0) number = value.GetSimTimeLimitTicksNumber();
+				else if (std::strcmp(name, "StartRealTimeTicks") == 0) number = value.GetStartRealTimeTicksNumber();
+				else number = value.GetRealTimeLimitTicksNumber();
+			}
+			// Scalar tokens preserve lua_pushnumber's NaN canonicalization.
+			TValue token; setnumV(&token, number);
+			if (tvisnan(&token)) setnanV(&token);
+			return token;
+		}
+		NativeImage::Result ScalarProperty(const luabind::detail::object_rep* object, const char* name) {
+			NativeImage::Result result;
+			NativeImage::Value value;
+			value.token = ScalarPropertyToken(object, name);
+			result.values.push_back(std::move(value));
+			return result;
+		}
+		template<class PushToken> TValue ScalarToken(PushToken push) {
+			const int top = lua_gettop(State());
+			struct Restore { lua_State* state; int top; ~Restore() { lua_settop(state, top); } } restore{State(), top};
+			const uint64_t before = luaJIT_state_serial(State());
+			push();
+			const uint64_t after = luaJIT_state_serial(State());
+			const TValue token = At(-1);
+			if (tvisgcv(&token)) Keep(-1);
+			ResultTables seen;
+			NewResults(-1, before, after, seen);
+			return token;
+		}
+		bool CaptureOwnedScalar(const TValue& subject, const luabind::detail::object_rep* object) {
+			if (!CheckpointWriter::BatchEnabled() || !object || !object->ptr() || !object->crep() ||
+			    !(object->flags() & luabind::detail::object_rep::owner)) return false;
+			const auto* type = object->crep();
+			if (type->get_class_type() != luabind::detail::class_rep::cpp_class) return false;
+			const bool timer = type->type() == LUABIND_TYPEID(Timer) && std::strcmp(type->name(), "Timer") == 0;
+			const bool vector = type->type() == LUABIND_TYPEID(Vector) && std::strcmp(type->name(), "Vector") == 0;
+			if (!timer && !vector) return false;
+			static constexpr std::array vectorNames{"X", "Y"};
+			static constexpr std::array timerNames{"StartSimTimeTicks", "SimTimeLimitTicks", "StartRealTimeTicks", "RealTimeLimitTicks"};
+			const std::span<const char* const> names = timer ? std::span<const char* const>(timerNames) : std::span<const char* const>(vectorNames);
+			if (!PlainScalarProperties(subject, object)) return false;
+			CaptureTrace::Span span("answer_scalar", type->name());
+			NativeImage::ScalarEntry entry;
+			entry.serial = luaJIT_value_serial(State(), -1);
+			entry.timer = timer;
+			entry.propertyCount = static_cast<unsigned>(names.size());
+			auto& tokens = m_ScalarKeys[timer ? 1 : 0];
+			if (tokens.type != type) {
+				type->get_table(State()); tokens.members = At(-1); Keep(-1); lua_pop(State(), 1); tokens.type = type;
+			}
+			entry.members[entry.memberCount++] = tokens.members;
+			if (object->get_lua_table().is_valid()) {
+				object->get_lua_table().get(State()); entry.instance = At(-1); Keep(-1); lua_pop(State(), 1);
+				entry.members[entry.memberCount++] = entry.instance;
+			} else setnilV(&entry.instance);
+			lua_pushlightuserdata(State(), object->ptr()); entry.address = At(-1); lua_pop(State(), 1);
+			if (!tokens.kind) {
+				lua_pushstring(State(), timer ? "timer" : "vector"); tokens.kind = strV(&State()->top[-1]); Keep(-1); lua_pop(State(), 1);
+			}
+			setgcVraw(&entry.kind, obj2gco(tokens.kind), LJ_TSTR);
+			for (size_t index = 0; index < names.size(); ++index) entry.properties[index] = ScalarPropertyToken(object, names[index]);
+			m_Image->m_Scalars.emplace_back(gcval(&subject), std::move(entry));
+			return true;
+		}
 		static int IsIterator(lua_State* state) {
 			const bool iterator = lua_tocfunction(state, 1) == ScriptGraphValueIteratorNext || ScriptGraphIteratorHook(state, 1, "__iterator_snapshot");
 			lua_pushboolean(state, iterator);
@@ -663,7 +1302,9 @@ namespace RTE::CheckpointLua {
 			ReleaseRetained(value);
 			Push(value);
 			// Only a luabind instance can change its answers; a class descriptor or a plain userdata is answered once.
-			const auto* object = luabind::detail::is_class_object(State(), -1);
+			const auto* object = ClassObject(value);
+			if (CaptureOwnedScalar(value, object)) { lua_pop(State(), 1); return; }
+			if (CaptureBorrowed(value, object)) { lua_pop(State(), 1); return; }
 			const bool immutable = luabind::detail::is_class_rep(State(), -1) || !object;
 			// A fresh reference to a live object that another reference of its class already answered for answers the same.
 			std::optional<SharedHit> shared;
@@ -680,6 +1321,33 @@ namespace RTE::CheckpointLua {
 				Persist(bool& value, bool on) : flag(value) { flag = on; }
 				~Persist() { flag = false; }
 			} persist{m_Persist, immutable};
+			if (immutable && CheckpointWriter::BatchEnabled()) {
+				auto* classRep = luabind::detail::is_class_rep(State(), -1) ? static_cast<luabind::detail::class_rep*>(lua_touserdata(State(), -1)) : nullptr;
+				NativeImage::ImmutableEntry compact;
+				compact.serial = luaJIT_value_serial(State(), -1);
+				lua_pop(State(), 1);
+				CaptureTrace::Span immutableSpan("answer_class");
+				if (classRep) {
+					compact.members = ScalarToken([&] { classRep->get_table(State()); });
+					compact.memberCount = 1;
+				}
+				if (classRep && classRep->get_class_type() == luabind::detail::class_rep::lua_class) {
+					compact.native[compact.nativeCount++] = ScalarToken([&] { lua_pushliteral(State(), "lua-class"); });
+					compact.native[compact.nativeCount++] = ScalarToken([&] { lua_pushstring(State(), classRep->name()); });
+					compact.native[compact.nativeCount++] = ScalarToken([&] { lua_pushstring(State(), !classRep->bases().empty() && classRep->bases()[0].base ? classRep->bases()[0].base->name() : ""); });
+				} else {
+					setnilV(&compact.native[compact.nativeCount++]);
+					if (classRep) compact.native[compact.nativeCount++] = ScalarToken([&] { lua_pushstring(State(), classRep->name()); });
+				}
+				if (VerifySharedAnswers()) {
+					NativeImage::Entry original;
+					original.serial = compact.serial;
+					AnswerImmutable(original, classRep, false);
+					CompareShared(original, compact.Expand(), classRep ? classRep->name() : "");
+				}
+				m_NewCompactClasses.emplace(gcval(&value), std::move(compact));
+				return;
+			}
 			auto& entry = immutable ? m_NewClasses[gcval(&value)] : m_Image->m_Entries[gcval(&value)];
 			entry.serial = luaJIT_value_serial(State(), -1);
 			bool movable = false, owned = false;
@@ -721,46 +1389,73 @@ namespace RTE::CheckpointLua {
 				AnswerImmutable(quick, classRep, false);
 				shared.emplace(SharedHit{std::move(quick), 0});
 			}
-			entry.members = One(MemberSources, "Members", value);
-			entry.helpers.emplace("_ScriptGraphInstance", One(ScriptGraphInstance, "Instance", value));
-			entry.helpers.emplace("_ScriptGraphNativeAddress", One(ScriptGraphNativeAddress, "NativeAddress", value));
+			const bool directMembers = CheckpointWriter::BatchEnabled() && object && object->crep() && DirectClassMarker(value);
+			const bool ownedScalar = directMembers && owned && !detached &&
+			    object->crep()->get_class_type() == luabind::detail::class_rep::cpp_class &&
+			    ((className == "Vector" && object->crep()->type() == LUABIND_TYPEID(Vector)) ||
+			     (className == "Timer" && object->crep()->type() == LUABIND_TYPEID(Timer)));
+			// Plain binding metadata uses the captured class and instance tables.
+			if (directMembers) {
+				entry.members = RecordPushed([&] {
+					object->crep()->get_table(State());
+					if (object->get_lua_table().is_valid()) object->get_lua_table().get(State());
+				});
+				entry.helpers.emplace("_ScriptGraphInstance", RecordPushed([&] {
+					if (object->get_lua_table().is_valid()) object->get_lua_table().get(State());
+					else lua_pushnil(State());
+				}));
+				entry.helpers.emplace("_ScriptGraphNativeAddress", RecordPushed([&] { lua_pushlightuserdata(State(), object->ptr()); }));
+			} else {
+				entry.members = One(MemberSources, "Members", value);
+				entry.helpers.emplace("_ScriptGraphInstance", One(ScriptGraphInstance, "Instance", value));
+				entry.helpers.emplace("_ScriptGraphNativeAddress", One(ScriptGraphNativeAddress, "NativeAddress", value));
+			}
 			if (detached) {
 				for (auto& descriptor: entry.native) descriptor.error = "frozen native capture found detached " + className + " userdata";
 				if (shared) CompareShared(shared->entry, entry, className);
 				return;
 			}
-			std::unordered_set<std::string> kinds;
+			std::array<std::string_view, 2> kinds;
 			for (int named = 0; named < 2; ++named) {
-				entry.native[named] = Invoke(ScriptGraphNative, "Native", [&] { Push(value); lua_pushboolean(State(), named); return 2; }, true);
-				kinds.insert(Kind(entry.native[named]));
+				if (ownedScalar) {
+					if (named == 0) entry.native[0] = RecordPushed([&] { lua_pushstring(State(), className == "Vector" ? "vector" : "timer"); });
+					else entry.native[1] = entry.native[0];
+				} else entry.native[named] = Invoke(ScriptGraphNative, "Native", [&] { Push(value); lua_pushboolean(State(), named); return 2; }, true);
+				kinds[named] = Kind(entry.native[named]);
 			}
+			const auto contains = [&kinds](std::string_view kind) { return kinds[0] == kind || kinds[1] == kind; };
 			const auto helper = [&](const char* name, lua_CFunction function) { entry.helpers.emplace(name, One(function, name, value)); };
-			if (kinds.contains("copy")) entry.helpers.emplace("_ScriptGraphNativeSave", One(ScriptGraphNativeSave, "NativeSave", value, true));
-			if (kinds.contains("area-ref") || (kinds.contains("copy") && className == "Area")) helper("_ScriptGraphAreaBoxes", ScriptGraphAreaBoxes);
-			if (kinds.contains("gib-ref")) helper("_ScriptGraphGibOwner", ScriptGraphGibOwner);
-			if (kinds.contains("soundset-ref")) helper("_ScriptGraphSoundSetOwner", ScriptGraphSoundSetOwner);
-			if (kinds.contains("limb-ref")) helper("_ScriptGraphLimbOwner", ScriptGraphLimbOwner);
-			if (kinds.contains("box-ref")) helper("_ScriptGraphSceneBoxOwner", ScriptGraphSceneBoxOwner);
-			if (kinds.contains("vector-ref-unresolved") || kinds.contains("timer-ref")) {
+			if (contains("copy")) entry.helpers.emplace("_ScriptGraphNativeSave", One(ScriptGraphNativeSave, "NativeSave", value, true));
+			if (contains("area-ref") || (contains("copy") && className == "Area")) helper("_ScriptGraphAreaBoxes", ScriptGraphAreaBoxes);
+			if (contains("gib-ref")) helper("_ScriptGraphGibOwner", ScriptGraphGibOwner);
+			if (contains("soundset-ref")) helper("_ScriptGraphSoundSetOwner", ScriptGraphSoundSetOwner);
+			if (contains("limb-ref")) helper("_ScriptGraphLimbOwner", ScriptGraphLimbOwner);
+			if (contains("box-ref")) helper("_ScriptGraphSceneBoxOwner", ScriptGraphSceneBoxOwner);
+			if (contains("vector-ref-unresolved") || contains("timer-ref")) {
 				helper("_ScriptGraphPropertyOwner", ScriptGraphPropertyOwner);
 				helper("_ScriptGraphLimbVectorOwner", ScriptGraphLimbVectorOwner);
 			}
-			std::vector<const char*> properties;
-			if (className == "Vector") properties = {"X", "Y"};
-			else if (className == "Timer") properties = {"StartSimTimeTicks", "SimTimeLimitTicks", "StartRealTimeTicks", "RealTimeLimitTicks"};
-			else if (className == "AlarmEvent") properties = {"ScenePos", "Team", "Range"};
+			static constexpr std::array vectorProperties{"X", "Y"};
+			static constexpr std::array timerProperties{"StartSimTimeTicks", "SimTimeLimitTicks", "StartRealTimeTicks", "RealTimeLimitTicks"};
+			static constexpr std::array alarmProperties{"ScenePos", "Team", "Range"};
+			std::span<const char* const> properties;
+			if (className == "Vector") properties = vectorProperties;
+			else if (className == "Timer") properties = timerProperties;
+			else if (className == "AlarmEvent") properties = alarmProperties;
+			const bool scalarProperties = !properties.empty() && PlainScalarProperties(value, object);
 			for (const char* property: properties) {
-				entry.properties.emplace(property, Invoke(Property, property, [&] { Push(value); lua_pushstring(State(), property); return 2; }));
+				entry.properties.emplace(property, scalarProperties ? ScalarProperty(object, property) :
+				                         Invoke(Property, property, [&] { Push(value); lua_pushstring(State(), property); return 2; }));
 			}
 			// An entity's world role can change at the same address.
-			const std::string kind = Kind(entry.native[0]);
+			const std::string_view kind = Kind(entry.native[0]);
 			const bool entity = kind == "entity" && object && object->ptr();
 			const bool singleton = kind.empty() && object && object->ptr() && !owned &&
 			                       !ClassDerivesFrom(object->crep(), "Entity") && entry.helpers.size() == 2;
 			if (entity || singleton) {
 				NativeCache::Reference reference{entry, object->ptr(), entity ? static_cast<const MovableObject*>(object->ptr())->GetUniqueID() : 0, entity};
 				m_NewReferences[gcval(&value)] = std::move(reference);
-				m_Kept.insert(gcval(&value));
+				m_Kept.Insert(gcval(&value));
 				Retain(entry);
 			}
 			if (entity && SharesAnswer(object)) m_Shared.emplace(SharedKey::Of(object), SharedAnswer{&entry, static_cast<const MovableObject*>(object->ptr())->GetUniqueID()});
@@ -776,7 +1471,7 @@ namespace RTE::CheckpointLua {
 				push();
 				const uint64_t after = luaJIT_state_serial(State());
 				NativeImage::Result result;
-				std::unordered_set<const void*> seen;
+				ResultTables seen;
 				for (int index = top + 1; index <= lua_gettop(State()); ++index) {
 					NativeImage::Value value;
 					value.token = At(index);
@@ -835,7 +1530,7 @@ namespace RTE::CheckpointLua {
 			CaptureObject(static_cast<const MovableObject*>(object->ptr()));
 			NativeImage::Entry& entry = m_Image->m_Entries[gcval(&value)] = std::move(shared.entry);
 			m_NewReferences[gcval(&value)] = NativeCache::Reference{entry, object->ptr(), shared.uid, true};
-			m_Kept.insert(gcval(&value));
+			m_Kept.Insert(gcval(&value));
 			Retain(entry);
 		}
 		static bool SameResult(const NativeImage::Result& a, const NativeImage::Result& b) {
@@ -887,13 +1582,80 @@ namespace RTE::CheckpointLua {
 		}
 
 	public:
+		static std::shared_ptr<const void> FreezeWorld(const std::vector<MovableObject*>& known) {
+			auto world = std::make_shared<NativeImage::World>();
+			if (s_GraphNativeCapture) world->captureThread = s_GraphNativeCapture->captureThread;
+			world->frozen = true;
+			world->records.reserve(known.size()); world->objects.reserve(known.size()); world->addresses.Reserve(known.size());
+			for (const MovableObject* source: known) {
+				if (!g_MovableMan.ValidMO(source)) continue;
+				world->objects.push_back(reinterpret_cast<uintptr_t>(source));
+				DescribeFrozen(source, world->records, world->addresses);
+			}
+			return world;
+		}
+		static bool FrozenTopologySelfTest() {
+			NativeEffects effects;
+			auto world = std::make_shared<NativeImage::World>();
+			world->frozen = true;
+			NativeImage::Topology expected;
+			{
+				MOPixel first, second;
+				first.MovableObject::Create(); second.MovableObject::Create();
+				CaptureAddressSet seen{std::pmr::get_default_resource(), true};
+				for (const MovableObject* object: {static_cast<const MovableObject*>(&second), static_cast<const MovableObject*>(&first)}) {
+					Describe(object, expected, nullptr);
+					DescribeFrozen(object, world->records, seen);
+					DescribeFrozen(object, world->records, seen);
+				}
+				for (const auto& record: world->records) world->addresses.Insert(reinterpret_cast<const void*>(record.first));
+			}
+			if (!world->index.empty() || world->records.size() != expected.size()) return false;
+			std::array<std::future<bool>, 4> readers;
+			for (auto& reader: readers) reader = std::async(std::launch::async, [world, &expected] {
+				for (const auto& [identity, before]: expected) {
+					const auto* after = world->Find(identity);
+					if (!after || after->uid != before.uid || after->rotating != before.rotating || after->children != before.children || !after->gibs.empty()) return false;
+				}
+				return world->Find(0) == nullptr;
+			});
+			bool exact = true;
+			for (auto& reader: readers) exact = reader.get() && exact;
+			return exact;
+		}
 		// The world's trees, walked in chunks side by side; an object two chunks reach is described the same by both.
 		static std::shared_ptr<const void> BuildWorld(const std::vector<MovableObject*>& known) {
+			CheckpointBuffer::AllocationScope allocation(CheckpointWriter::BatchEnabled());
 			auto world = std::make_shared<NativeImage::World>();
 			const size_t chunks = CaptureTrace::Serial() ? 1 : std::clamp<size_t>(known.size() / 512, 1, 16);
+			if (CheckpointWriter::BatchEnabled()) {
+				world->frozen = true;
+				std::vector<std::vector<std::pair<NativeImage::NativeId, NativeImage::Object>>> records(chunks);
+				std::vector<std::vector<NativeImage::NativeId>> roots(chunks);
+				const auto capture = [&](size_t chunk) {
+					CaptureAddressSet seen{std::pmr::get_default_resource(), true};
+					seen.Reserve(known.size() / chunks);
+					records[chunk].reserve(known.size() / chunks);
+					for (size_t index = chunk * known.size() / chunks; index < (chunk + 1) * known.size() / chunks; ++index) {
+						const MovableObject* object = known[index];
+						if (!g_MovableMan.ValidMO(object)) continue;
+						roots[chunk].push_back(reinterpret_cast<uintptr_t>(object));
+						DescribeFrozen(object, records[chunk], seen);
+					}
+				};
+				ParallelWork(g_ThreadMan.GetCheckpointThreadPool(), chunks, capture).Finish();
+				world->addresses.Reserve(known.size());
+				world->records.reserve(known.size());
+				for (size_t chunk = 0; chunk < chunks; ++chunk) {
+					world->objects.insert(world->objects.end(), roots[chunk].begin(), roots[chunk].end());
+					for (auto& record: records[chunk]) if (world->addresses.Insert(reinterpret_cast<const void*>(record.first))) world->records.push_back(std::move(record));
+				}
+				return world;
+			}
 			std::vector<NativeImage::Topology> topologies(chunks);
 			std::vector<std::vector<NativeImage::NativeId>> objects(chunks);
 			const auto walk = [&](size_t chunk) {
+				CheckpointBuffer::AllocationScope allocation(CheckpointWriter::BatchEnabled());
 				for (size_t index = chunk * known.size() / chunks; index < (chunk + 1) * known.size() / chunks; ++index) {
 					const MovableObject* object = known[index];
 					if (!g_MovableMan.ValidMO(object)) continue;
@@ -901,7 +1663,8 @@ namespace RTE::CheckpointLua {
 					Describe(object, topologies[chunk], nullptr);
 				}
 			};
-			ParallelWork(g_ThreadMan.GetPriorityThreadPool(), chunks, walk).Finish();
+			BS::thread_pool& pool = CheckpointWriter::BatchEnabled() ? g_ThreadMan.GetCheckpointThreadPool() : g_ThreadMan.GetPriorityThreadPool();
+			ParallelWork(pool, chunks, walk).Finish();
 			for (size_t chunk = 0; chunk < chunks; ++chunk) {
 				world->objects.insert(world->objects.end(), objects[chunk].begin(), objects[chunk].end());
 				for (auto& [identity, object]: topologies[chunk]) world->topology.try_emplace(identity, std::move(object));
@@ -911,21 +1674,29 @@ namespace RTE::CheckpointLua {
 
 	private:
 		void CaptureObject(const MovableObject* source) {
-			Describe(source, m_Image->m_Owned, m_Image->m_World ? &m_Image->m_World->topology : nullptr);
+			Describe(source, m_Image->m_Owned, m_Image->m_World.get());
 		}
 
-		static void Describe(const MovableObject* source, NativeImage::Topology& into, const NativeImage::Topology* shared) {
+		static void Describe(const MovableObject* source, NativeImage::Topology& into, const NativeImage::World* shared) {
 			if (!source) return;
 			const uintptr_t identity = reinterpret_cast<uintptr_t>(source);
-			if (into.contains(identity) || (shared && shared->contains(identity))) return;
+			if (into.contains(identity) || (shared && shared->Contains(identity))) return;
 			into.emplace(identity, NativeImage::Object{});
+			into.at(identity) = DescribeFields(source, [&](const MovableObject* part) { Describe(part, into, shared); });
+		}
+		// The boundary owns topology fields; the saver builds their lookup index.
+		static void DescribeFrozen(const MovableObject* source, std::vector<std::pair<NativeImage::NativeId, NativeImage::Object>>& into, CaptureAddressSet& seen) {
+			if (!source || !seen.Insert(source)) return;
+			const size_t index = into.size();
+			into.emplace_back(reinterpret_cast<uintptr_t>(source), NativeImage::Object{});
+			auto object = DescribeFields(source, [&](const MovableObject* part) { DescribeFrozen(part, into, seen); });
+			into[index].second = std::move(object);
+		}
+		template<class Visit> static NativeImage::Object DescribeFields(const MovableObject* source, Visit visit) {
 			NativeImage::Object object;
 			object.uid = source->GetUniqueID();
-			const auto child = [&](const MovableObject* part) {
-				object.children.push_back(reinterpret_cast<uintptr_t>(part));
-				Describe(part, into, shared);
-			};
-			if (const auto* rotating = dynamic_cast<const MOSRotating*>(source)) {
+			const auto child = [&](const MovableObject* part) { object.children.push_back(reinterpret_cast<uintptr_t>(part)); visit(part); };
+			if (const auto* rotating = CheckpointCast<const MOSRotating>(source)) {
 				object.rotating = true;
 				for (const Attachable* part: rotating->GetAttachables()) child(part);
 				for (const AEmitter* wound: rotating->GetWoundList()) child(wound);
@@ -936,9 +1707,9 @@ namespace RTE::CheckpointLua {
 					++index;
 				}
 			}
-			if (const auto* actor = dynamic_cast<const Actor*>(source)) for (const MovableObject* part: *actor->GetInventory()) child(part);
-			if (const auto* craft = dynamic_cast<const ACraft*>(source)) for (const MovableObject* part: craft->GetCollectedInventory()) child(part);
-			into.at(identity) = std::move(object);
+			if (const auto* actor = CheckpointCast<const Actor>(source)) for (const MovableObject* part: *actor->GetInventory()) child(part);
+			if (const auto* craft = CheckpointCast<const ACraft>(source)) for (const MovableObject* part: craft->GetCollectedInventory()) child(part);
+			return object;
 		}
 	};
 }

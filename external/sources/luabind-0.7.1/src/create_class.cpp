@@ -127,6 +127,7 @@ namespace luabind { namespace detail
 
 		void* c = lua_newuserdata(L, sizeof(class_rep));
 		new(c) class_rep(L, name.c_str());
+		static_cast<class_rep*>(c)->prepare_checkpoint_metadata();
 
 		// make the class globally available
 		lua_pushstring(L, name.c_str());

@@ -1,6 +1,11 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "PieSlice.h"
+
+#include <memory>
+#include <vector>
 
 namespace RTE {
 
@@ -21,6 +26,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a GlobalScript object in system memory. Create() should be called before using the object.
 		GlobalScript();
+		CheckpointSnapshotMethods(GlobalScript);
 
 		/// Makes the GlobalScript object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
@@ -67,7 +73,7 @@ namespace RTE {
 
 		/// Gets the list of PieSlices this GlobalScript adds to any active Actor PieMenus.
 		/// @return The list of PieSilces this GlobalScript adds to any active Actor PieMenus
-		const std::vector<std::unique_ptr<PieSlice>>& GetPieSlicesToAdd() const;
+		const CheckpointVector<std::unique_ptr<PieSlice>>& GetPieSlicesToAdd() const;
 #pragma endregion
 
 #pragma region Concrete Methods
@@ -102,13 +108,14 @@ namespace RTE {
 	private:
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 
-		std::string m_ScriptPath; //!< The path to the Lua script file that defines this' behaviors in update.
-		std::string m_LuaClassName; //!< The name of the class (table) defining the logic of this in Lua, as specified in the script file.
+		CheckpointString m_ScriptPath; //!< The path to the Lua script file that defines this' behaviors in update.
+		CheckpointString m_LuaClassName; //!< The name of the class (table) defining the logic of this in Lua, as specified in the script file.
 		bool m_IsActive; //!< Whether this GlobalScript is currently allowed to run.
 		bool m_HasStarted; //!< Whether this script has already been started.
 		bool m_LateUpdate; //!< Whether or not this GlobalScript should be updated late, i.e. after the standard MovableMan update.
+		std::vector<CheckpointText> m_FrozenPieSlices;
 
-		std::vector<std::unique_ptr<PieSlice>> m_PieSlicesToAdd; //!< A vector of PieSlices that should be added to any PieMenus opened while this GlobalScript is active.
+		CheckpointVector<std::unique_ptr<PieSlice>> m_PieSlicesToAdd; //!< A vector of PieSlices that should be added to any PieMenus opened while this GlobalScript is active.
 
 		bool m_CheckpointInitialized = false;
 

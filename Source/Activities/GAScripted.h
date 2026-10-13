@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the ActivityMan class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -10,6 +12,11 @@
 #include "Box.h"
 
 #include "LuabindObjectWrapper.h"
+
+#include <functional>
+#include <memory>
+#include <string_view>
+#include <vector>
 
 namespace RTE {
 
@@ -36,6 +43,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a GAScripted object in system
 		/// memory. Create() should be called before using the object.
 		GAScripted();
+		CheckpointSnapshotMethods(GAScripted);
 
 		/// Destructor method used to clean up a GAScripted object before deletion
 		/// from system memory.
@@ -91,10 +99,10 @@ namespace RTE {
 		const std::string& GetLuaClassName() const { return m_LuaClassName; }
 
 		/// Areas a scene must define before this activity will accept it.
-		const std::set<std::string>& GetRequiredAreas() const { return m_RequiredAreas; }
+		const CheckpointSet<CheckpointString>& GetRequiredAreas() const { return m_RequiredAreas; }
 
 		/// The native global scripts owned by this activity, in checkpoint order.
-		const std::vector<GlobalScript*>& GetGlobalScripts() const { return m_GlobalScriptsList; }
+		const CheckpointVector<GlobalScript*>& GetGlobalScripts() const { return m_GlobalScriptsList; }
 
 		/// Tells if a particular Scene supports this specific Activity on it.
 		/// Usually that means certain Area:s need to be defined in the Scene.
@@ -152,17 +160,22 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass;
 
 		// The path to the lua script file that defines this' behaviors with overrides of its virtual functions
-		std::string m_ScriptPath;
+		CheckpointString m_ScriptPath;
 		// The name of the class (table) defining the logic of this in Lua, as specified in the script file
-		std::string m_LuaClassName;
+		CheckpointString m_LuaClassName;
 		// The list of Area:s required in a Scene to play this Activity on it
-		std::set<std::string> m_RequiredAreas;
-		std::vector<std::unique_ptr<PieSlice>> m_PieSlicesToAdd; //!< A vector of PieSlices that should be added to any PieMenus opened while this GAScripted is running.
+		CheckpointSet<CheckpointString> m_RequiredAreas;
+		std::vector<CheckpointText> m_FrozenPieSlices;
+		CheckpointVector<std::unique_ptr<PieSlice>> m_PieSlicesToAdd; //!< A vector of PieSlices that should be added to any PieMenus opened while this GAScripted is running.
 		// The list of global scripts allowed to run during this activity
-		std::vector<GlobalScript*> m_GlobalScriptsList;
+		CheckpointVector<GlobalScript*> m_GlobalScriptsList;
 		bool m_HasSavedGlobalScripts = false;
 
-		std::unordered_map<std::string, std::unique_ptr<LuabindObjectWrapper>> m_ScriptFunctions; //!< A map of LuabindObjectWrappers that hold Lua functions. Used to maintain script execution order and avoid extraneous Lua calls.
+		struct ScriptFunctionHash {
+			using is_transparent = void;
+			size_t operator()(std::string_view name) const noexcept { return std::hash<std::string_view>{}(name); }
+		};
+		CheckpointUnorderedMap<CheckpointString, std::unique_ptr<LuabindObjectWrapper>, ScriptFunctionHash, std::equal_to<>> m_ScriptFunctions; //!< A map of LuabindObjectWrappers that hold Lua functions. Used to maintain script execution order and avoid extraneous Lua calls.
 
 		/// Private member variable and method declarations
 	private:

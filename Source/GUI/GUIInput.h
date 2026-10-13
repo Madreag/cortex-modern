@@ -1,16 +1,24 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 #include <string>
 #include <string_view>
+#include <array>
+#include <utility>
 
 namespace RTE {
 
 	/// An interface class inherited by the different types of input methods.
-	class GUIInput {
+	class GUIInput : public CheckpointNativeAllocated {
 
 	public:
 
 		static std::string SaveSharedCheckpoint();
+		static std::array<std::pair<const void*, size_t>, 6> CheckpointRootSources();
+		static void PrepareCheckpointTextInput();
+		static void UpdateCheckpointTextInput();
 		static bool LoadSharedCheckpoint(std::string_view text, bool validateOnly = false);
 		virtual std::string SaveCheckpoint() const;
 		virtual bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
@@ -154,7 +162,7 @@ namespace RTE {
 		// Keyboard buffer holding the key states
 		unsigned char m_KeyboardBuffer[KEYBOARD_BUFFER_SIZE];
 		unsigned char m_ScanCodeState[KEYBOARD_BUFFER_SIZE];
-		std::string m_TextInput;
+		CheckpointString m_TextInput;
 		bool m_HasTextInput;
 		int m_TextInputActive{0};
 

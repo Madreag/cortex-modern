@@ -21,6 +21,9 @@ namespace RTE {
 	class GUISkin;
 	class GUIFont;
 	class GUIManager;
+	class GUIScreen;
+	class GUIInput;
+	class CheckpointNativeSnapshot;
 
 	/// Portable GUI state and references at a completed activity checkpoint.
 	class GUICheckpoint {
@@ -66,6 +69,7 @@ namespace RTE {
 		static const Entity* LoadEntityReference(std::string_view text, bool validateOnly = false, const Scene* scene = nullptr);
 		static std::string Save(const GUIControlManager& manager);
 		static bool Load(GUIControlManager& manager, std::string_view text, bool validateOnly = false);
+		static std::unique_ptr<GUIControlManager> Rebuild(const GUIControlManager& manager, GUIScreen* screen, GUIInput* input, CheckpointNativeSnapshot& snapshot);
 		static bool Validate(std::string_view text);
 		/// First required control name the saved set does not carry, or empty when every name is present.
 		static std::string FirstMissingControl(std::string_view text, const std::vector<std::string>& required);

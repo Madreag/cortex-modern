@@ -1,4 +1,6 @@
 #include "Magazine.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Round.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "PresetMan.h"
@@ -8,11 +10,33 @@ using namespace RTE;
 
 ConcreteClassInfo(Magazine, Attachable, 50);
 
+Magazine::Magazine(const Magazine& source, CheckpointNativeSnapshot& snapshot) :
+	Attachable(source, snapshot),
+	m_RoundCount(snapshot.Freeze(source.m_RoundCount)),
+	m_FullCapacity(snapshot.Freeze(source.m_FullCapacity)),
+	m_RTTRatio(snapshot.Freeze(source.m_RTTRatio)),
+	m_pRegularRound(snapshot.Freeze(source.m_pRegularRound)),
+	m_pTracerRound(snapshot.Freeze(source.m_pTracerRound)),
+	m_Discardable(snapshot.Freeze(source.m_Discardable)),
+	m_AIAimVel(snapshot.Freeze(source.m_AIAimVel)),
+	m_AIAimMaxDistance(snapshot.Freeze(source.m_AIAimMaxDistance)),
+	m_AIAimPenetration(snapshot.Freeze(source.m_AIAimPenetration)),
+	m_AIBlastRadius(snapshot.Freeze(source.m_AIBlastRadius)),
+	m_PersistedMagazineRuntime(snapshot.Freeze(source.m_PersistedMagazineRuntime, &m_PersistedMagazineRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* Magazine::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 Magazine::Magazine() {
 	Clear();
 }
 
 Magazine::~Magazine() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -114,7 +138,7 @@ void Magazine::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("AIBlastRadius", m_AIBlastRadius);
 	writer.NewPropertyWithValue("SpecialBehaviour_AIAimVel", m_AIAimVel);
 	writer.NewPropertyWithValue("SpecialBehaviour_AIAimPenetration", m_AIAimPenetration);
-	writer.NewPropertyWithValue("SpecialBehaviour_MagazineRuntime", CheckpointWriter::Native([&] { return m_PersistedMagazineRuntime.empty() ? SaveMagazineRuntime() : m_PersistedMagazineRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_MagazineRuntime", CheckpointWriter::Native([&] { return m_PersistedMagazineRuntime.empty() ? SaveMagazineRuntime() : m_PersistedMagazineRuntime.Value(); }).Base64(true));
 }
 
 int Magazine::Save(Writer& writer) const {

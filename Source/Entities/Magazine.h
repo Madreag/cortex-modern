@@ -29,6 +29,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a Magazine object in system
 		/// memory. Create() should be called before using the object.
 		Magazine();
+		CheckpointSnapshotMethods(Magazine);
 
 		/// Destructor method used to clean up a Magazine object before deletion
 		/// from system memory.
@@ -159,7 +160,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		std::string m_PersistedMagazineRuntime;
+		CheckpointString m_PersistedMagazineRuntime;
 		std::string SaveMagazineRuntime() const;
 		bool LoadMagazineRuntime(std::string_view text, bool validateOnly = false);
 

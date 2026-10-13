@@ -19,6 +19,8 @@ namespace RTE {
 		TerrainFrosting() {
 			Clear();
 		}
+		TerrainFrosting(const TerrainFrosting& source, CheckpointNativeSnapshot& snapshot);
+		static void PrepareCheckpointNative(const TerrainFrosting& source, TerrainFrosting* target, CheckpointNativeSnapshot& snapshot);
 #pragma endregion
 
 #pragma region Concrete Methods

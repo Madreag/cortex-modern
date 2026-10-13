@@ -2,6 +2,8 @@
 
 #include "MOSprite.h"
 #include "MovableObjectReference.h"
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
 
 #include <array>
 #include <string>
@@ -13,7 +15,7 @@ namespace RTE {
 #pragma region Graphical Primitive
 	/// Class used to schedule drawing of graphical primitives created from Lua.
 	/// All coordinates passed to GraphicalPrimitive objects are Scene coordinates.
-	class GraphicalPrimitive {
+	class GraphicalPrimitive : public CheckpointNativeAllocated {
 
 	public:
 /// Convenience macro to cut down on duplicate methods in classes that extend GraphicalPrimitive.
@@ -491,7 +493,7 @@ namespace RTE {
 	public:
 		GraphicalPrimitiveOverrideMethods;
 
-		std::vector<Vector*> m_Vertices = {}; //!< Positions of the vertices of the polygon, relative to the center position.
+		CheckpointVector<Vector*> m_Vertices = {}; //!< Positions of the vertices of the polygon, relative to the center position.
 
 		/// Constructor method for PolygonPrimitive object.
 		/// @param player Player screen to draw this primitive on.
@@ -499,7 +501,7 @@ namespace RTE {
 		/// @param vertices A vector containing the positions of the vertices of the polygon, relative to the center position.
 		/// @param color Color to draw this primitive with.
 		PolygonPrimitive(int player, const Vector& startPos, unsigned char color, const std::vector<Vector*>& vertices, float depth = c_PrimitiveDepth) :
-		    m_Vertices(vertices) {
+		    m_Vertices(vertices.begin(), vertices.end()) {
 			m_VertexOwners = OwnVertices(vertices);
 
 			m_StartPos = startPos;
@@ -520,7 +522,7 @@ namespace RTE {
 	public:
 		GraphicalPrimitiveOverrideMethods;
 
-		std::vector<Vector*> m_Vertices = {}; //!< Positions of the vertices of the polygon, relative to the center position.
+		CheckpointVector<Vector*> m_Vertices = {}; //!< Positions of the vertices of the polygon, relative to the center position.
 
 		/// Constructor method for PolygonFillPrimitive object.
 		/// @param player Player screen to draw this primitive on.
@@ -528,7 +530,7 @@ namespace RTE {
 		/// @param vertices A vector containing the positions of the vertices of the polygon, relative to the center position.
 		/// @param color Color to draw this primitive with.
 		PolygonFillPrimitive(int player, const Vector& startPos, unsigned char color, const std::vector<Vector*>& vertices, float depth = c_PrimitiveDepth) :
-		    m_Vertices(vertices) {
+		    m_Vertices(vertices.begin(), vertices.end()) {
 			m_VertexOwners = OwnVertices(vertices);
 
 			m_StartPos = startPos;
@@ -549,7 +551,7 @@ namespace RTE {
 	public:
 		GraphicalPrimitiveOverrideMethods;
 
-		std::string m_Text = ""; //!< String containing text to draw.
+		CheckpointString m_Text = ""; //!< String containing text to draw.
 		bool m_IsSmall = false; //!< Use small or large font. True for small font.
 		int m_Alignment = 0; //!< Alignment of text.
 		float m_RotAngle = 0; //!< Angle to rotate text in radians.
@@ -596,7 +598,7 @@ namespace RTE {
 		MovableObjectReference m_SpriteOwner;
 		unsigned int m_SpriteFrame = 0;
 		bool m_IconBitmap = false;
-		std::string m_PendingSpriteReference;
+		CheckpointString m_PendingSpriteReference;
 
 		/// Constructor method for BitmapPrimitive object.
 		/// @param player Player screen to draw this primitive on.

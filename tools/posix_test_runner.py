@@ -571,7 +571,7 @@ class IsolatedRun:
         self.env = dict(os.environ)
         self.env.update(extra)
         env_set = dict(extra)
-        visible = self.env.get("CC_TEST_VISIBLE_WINDOW") == "1"
+        visible = any(self.env.get(key) == "1" for key in ("CC_RUNNER_HEADED", "CC_TEST_VISIBLE_WINDOW"))
         if visible:
             self.argv = [arg for arg in self.argv if arg != "-headless"]
             self.env.pop("CCCP_HEADLESS", None)
@@ -614,7 +614,7 @@ class IsolatedRun:
             "private_desktop": "n/a",
             "input_desktop_before": "n/a",
             "created_utc": utc_now(),
-            "headless_env": "0" if visible else "1",
+            "headless_env": self.env.get("CCCP_HEADLESS"),
             "visible_window": visible,
             "env_set": env_set,
             "desktop_switch_restricted": True,
