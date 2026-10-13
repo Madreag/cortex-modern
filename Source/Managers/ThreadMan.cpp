@@ -51,34 +51,45 @@ namespace {
 	std::atomic<int64_t> s_ReportedStuckAtUs{0};
 	// A tick that keeps the gate closed this long without opening a slice may be waiting on the saver's own work.
 	constexpr int64_t c_StuckTickUs = 250000;
-	thread_local int64_t t_LastCheckUs = 0;
+	thread_local uint64_t t_LastCheckCycles = 0;
 	thread_local const void* t_LastCheckSite = nullptr;
 
-	// Test lever CCCP_TEST_SAVER_STRETCHES: names every stretch of saver work over 2 ms between two yields, which is how far
-	// past its slice the saver can run into a tick.
-	void ReportStretch(const void* from, const void* to, int64_t us) {
+	// Test lever CCCP_TEST_SAVER_STRETCHES: names every stretch of saver work between two yields that ran over 8 million CPU
+	// cycles (2 ms at 4 GHz) of its own thread, which is how far past its slice the saver can run into a tick.
+	bool ReportingStretches() {
 		static const bool report = std::getenv("CCCP_TEST_SAVER_STRETCHES") != nullptr;
-		if (!report) return;
+		return report;
+	}
+
+	uint64_t ThreadCycles() {
 #ifdef _WIN32
-		const auto base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
-		std::fprintf(stdout, "[saver-stretch] us=%lld from=%llx to=%llx\n", static_cast<long long>(us), static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(from) - base),
-		    static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(to) - base));
+		ULONG64 cycles = 0;
+		QueryThreadCycleTime(GetCurrentThread(), &cycles);
+		return cycles;
 #else
-		std::fprintf(stdout, "[saver-stretch] us=%lld\n", static_cast<long long>(us));
+		return 0;
 #endif
-		std::fflush(stdout);
+	}
+
+	void NoteStretch(const void* site) {
+		const uint64_t cycles = ThreadCycles();
+		if (t_LastCheckCycles && cycles - t_LastCheckCycles > 8000000) {
+#ifdef _WIN32
+			const auto base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+			std::fprintf(stdout, "[saver-stretch] cycles=%llu from=%llx to=%llx\n", static_cast<unsigned long long>(cycles - t_LastCheckCycles),
+			    static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(t_LastCheckSite) - base), static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(site) - base));
+			std::fflush(stdout);
+#endif
+		}
+		t_LastCheckSite = site;
+		t_LastCheckCycles = cycles;
 	}
 }
 
 void SaverThreads::CheckSlice() {
-	const void* site = SAVER_CALLER;
-	const int64_t now = NowUs();
-	if (t_LastCheckUs && now - t_LastCheckUs > 2000) ReportStretch(t_LastCheckSite, site, now - t_LastCheckUs);
-	t_LastCheckSite = site;
-	t_LastCheckUs = now;
-	if (now < s_SliceEndUs.load(std::memory_order_acquire)) return;
+	if (ReportingStretches()) NoteStretch(SAVER_CALLER);
+	if (NowUs() < s_SliceEndUs.load(std::memory_order_acquire)) return;
 	WaitForSlice();
-	t_LastCheckUs = NowUs();
 }
 
 int64_t SaverThreads::NowUs() noexcept {
