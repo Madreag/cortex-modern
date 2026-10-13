@@ -3207,6 +3207,7 @@ bool Actor::RebindCheckpointBorrowedReferences(const std::vector<long>& identiti
 }
 
 bool Actor::RunCheckpointPathRequestSelfTest() {
+	const char* stage = "saving and restoring completed and deferred requests";
 	try {
 		CheckpointNativeStorage::AllocationScope allocation(true);
 		auto source = std::make_unique<Actor>();
@@ -3342,7 +3343,7 @@ bool Actor::RunCheckpointPathRequestSelfTest() {
 		for (unsigned entered = gate->entered.load(std::memory_order_acquire); entered < workerCount; entered = gate->entered.load(std::memory_order_acquire)) gate->entered.wait(entered, std::memory_order_relaxed);
 		auto unsolved = std::make_unique<Actor>();
 		unsolved->m_PathRequest = finder.CalculatePathAsync(Vector(10, 50), Vector(150, 50), std::numeric_limits<float>::max(), 1.0F, nullptr, true, 1444);
-		const Actor* unsolvedAddress = unsolved.get();
+		PathRequest* const unsolvedRequest = const_cast<PathRequest*>(unsolved->m_PathRequest.get());
 		const auto pages = CheckpointNativeStorage::Prepare();
 		for (const auto& part: pages) part->Arm();
 		// The fixture's materials live on this stack, outside owned storage, so the boundary keeps their bytes as roots.
@@ -3356,16 +3357,19 @@ bool Actor::RunCheckpointPathRequestSelfTest() {
 		unsolved.reset();
 		finder.TestInstallGrid(1, 1, 31, &rock);
 		CheckpointNativeSnapshot unsolvedSnapshot;
-		const Actor* frozenUnsolved;
+		std::shared_ptr<volatile PathRequest> frozenUnsolved;
 		{
+			// The actor's own freeze of its request, read from the boundary's pages after the request was freed.
+			stage = "freezing the boundary's unfinished request";
 			CheckpointNativeStorage::ReadScope read(pages, materialRoots);
-			frozenUnsolved = unsolvedSnapshot.Object(unsolvedAddress);
+			frozenUnsolved = FreezeActorPathRequest(std::shared_ptr<volatile PathRequest>(std::shared_ptr<void>(), unsolvedRequest), unsolvedSnapshot);
 			unsolvedSnapshot.SealBoundary();
 		}
+		stage = "restoring the unfinished request";
 		Actor restarted;
 		{
 			CheckpointNativeSnapshot::ReadScope read(&unsolvedSnapshot);
-			const std::string encoded = const_cast<const PathRequest&>(*frozenUnsolved->m_PathRequest).SaveCheckpoint();
+			const std::string encoded = const_cast<const PathRequest&>(*frozenUnsolved).SaveCheckpoint();
 			restarted.m_PathRequest = PathRequest::ReadCheckpoint(encoded);
 			if (const_cast<const PathRequest&>(*restarted.m_PathRequest).SaveCheckpoint() != encoded) return false;
 			try { PathRequest::ReadCheckpoint(encoded + "extra"); return false; } catch (const std::exception&) {}
@@ -3380,7 +3384,7 @@ bool Actor::RunCheckpointPathRequestSelfTest() {
 		}
 		return true;
 	} catch (const std::exception& error) {
-		std::cout << "[actor-path-checkpoint-selftest] " << error.what() << std::endl;
+		std::cout << "[actor-path-checkpoint-selftest] " << error.what() << " while " << stage << std::endl;
 		return false;
 	}
 }
