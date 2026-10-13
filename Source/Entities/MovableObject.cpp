@@ -14,6 +14,7 @@
 
 #include <bit>
 #include <cstdlib>
+#include <cstdio>
 #include <stdexcept>
 #include <iostream>
 #include <mutex>
@@ -1500,6 +1501,13 @@ void MovableObject::EnableOrDisableAllScripts(bool enableScripts) {
 int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& functionName, bool runOnDisabledScripts, bool stopOnError, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
 	// CC_TRACE_SOUND_SCOPE_OBJECT=<uid> also reports every script call for that object, so the peer that initializes its scripts early can be identified.
 	static const uint64_t tracedObject = [] { const char* value = std::getenv("CC_TRACE_SOUND_SCOPE_OBJECT"); return value ? std::strtoull(value, nullptr, 10) : 0ULL; }();
+	// CCCP_TEST_CHECKPOINT_AI=uid:first:last reads the selected AI's fields without calling script getters.
+	static const auto checkpointAI = [] {
+		std::array<unsigned long long, 3> range{};
+		const char* value = std::getenv("CCCP_TEST_CHECKPOINT_AI");
+		if (!value || std::sscanf(value, "%llu:%llu:%llu", &range[0], &range[1], &range[2]) != 3) range = {};
+		return range;
+	}();
 	if (tracedObject && m_UniqueID == tracedObject) {
 		std::cout << "[script-call] uid=" << m_UniqueID << " function=" << functionName << " initialized=" << (m_ScriptObjectName.empty() ? 0 : 1) << " domain=" << static_cast<int>(SoundSimulationScope::Domain()) << " tick=" << g_TimerMan.GetSimUpdateCount() << " thread=" << std::this_thread::get_id() << std::endl;
 	}
@@ -1543,6 +1551,8 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 		// The AI passes are per-machine: their sound calls are decisions this machine makes, deferred
 		// to the committed tick. The pie menu is local UI and plays on this machine only.
 		const bool localAI = functionName == "UpdateAI" || functionName == "ThreadedUpdateAI";
+		const bool traceCheckpointAI = localAI && checkpointAI[0] && m_UniqueID == checkpointAI[0] &&
+		    g_TimerMan.GetSimUpdateCount() >= checkpointAI[1] && g_TimerMan.GetSimUpdateCount() <= checkpointAI[2];
 		const bool presentation = functionName == "WhilePieMenuOpen";
 		SoundSimulationScope soundScope(m_UniqueID, Hash(functionName), presentation ? SoundExecutionDomain::Presentation : (localAI ? SoundExecutionDomain::LocalSimulation : SoundExecutionDomain::SharedSimulation));
 		LuaMan::PreviewHookScope previewHookScope(LuaMan::IsPreviewClone(this));
@@ -1557,7 +1567,9 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 			if (runOnDisabledScripts || luaFunction.m_ScriptIsEnabled) {
 				LuaStateWrapper& usedState = GetAndLockStateForScript(luabindObjectWrapper->GetFilePath(), &luaFunction);
 				std::lock_guard<std::recursive_mutex> lock(usedState.GetMutex(), std::adopt_lock);
+				if (traceCheckpointAI) usedState.TraceCheckpointAI(m_UniqueID, functionName, "before");
 				status = usedState.RunScriptFunctionObject(luabindObjectWrapper, "_ScriptedObjects", selfKey, functionEntityArguments, functionLiteralArguments, functionObjectArguments);
+				if (traceCheckpointAI) usedState.TraceCheckpointAI(m_UniqueID, functionName, "after");
 				if (status < 0 && stopOnError) {
 					return status;
 				}

@@ -8433,6 +8433,68 @@ double LuaStateWrapper::GetScriptObjectNumberField(long uniqueID, const std::str
 	return value;
 }
 
+void LuaStateWrapper::TraceCheckpointAI(long uniqueID, std::string_view hook, std::string_view phase) {
+	const int top = lua_gettop(m_State);
+	struct Restore { lua_State* state; int top; ~Restore() { lua_settop(state, top); } } restore{m_State, top};
+	const std::string prefix = std::format("[checkpoint-ai] tick={} uid={} hook={} phase={}", g_TimerMan.GetSimUpdateCount(), uniqueID, hook, phase);
+	std::unordered_set<const void*> seen;
+	size_t count = 0;
+	std::function<void(lua_State*, int, const std::string&, unsigned)> visit;
+	visit = [&](lua_State* state, int value, const std::string& path, unsigned depth) {
+		if (++count > 512 || depth > 4) return;
+		value = AbsoluteLuaIndex(state, value);
+		const int type = lua_type(state, value);
+		std::string detail = lua_typename(state, type);
+		if (type == LUA_TBOOLEAN) detail = lua_toboolean(state, value) ? "true" : "false";
+		else if (type == LUA_TNUMBER) detail = std::format("{:.17g}", lua_tonumber(state, value));
+		else if (type == LUA_TSTRING) detail = std::format("\"{}\"", lua_tostring(state, value));
+		else if (type == LUA_TUSERDATA) {
+			if (const auto* object = luabind::detail::is_class_object(state, value); object && object->crep()) {
+				detail = object->crep()->name();
+				if (object->ptr() && detail == "Timer") {
+					const auto& timer = *static_cast<const Timer*>(object->ptr());
+					detail += std::format(" start={} limit={}", timer.GetStartSimTimeMS(), timer.GetSimTimeLimitTicks());
+				} else if (object->ptr() && detail == "Vector") {
+					const auto& vector = *static_cast<const Vector*>(object->ptr());
+					detail += std::format(" x={:08x} y={:08x}", std::bit_cast<uint32_t>(vector.m_X), std::bit_cast<uint32_t>(vector.m_Y));
+				}
+			}
+		}
+		System::PrintDiagnosticLine(std::format("{} field={} value={}", prefix, path, detail));
+		if ((type != LUA_TTABLE && type != LUA_TTHREAD) || !seen.insert(lua_topointer(state, value)).second) return;
+		if (type == LUA_TTABLE) {
+			lua_pushnil(state);
+			while (lua_next(state, value)) {
+				std::string key;
+				if (lua_type(state, -2) == LUA_TSTRING) key = lua_tostring(state, -2);
+				else if (lua_type(state, -2) == LUA_TNUMBER) key = std::format("[{}]", lua_tonumber(state, -2));
+				if (!key.empty()) visit(state, -1, path + "." + key, depth + 1);
+				lua_pop(state, 1);
+				if (count >= 512) { lua_pop(state, 1); break; }
+			}
+		} else {
+			lua_State* thread = lua_tothread(state, value);
+			if (!lua_checkstack(thread, 2)) return;
+			lua_Debug frame{};
+			for (int level = 0; level < 8 && lua_getstack(thread, level, &frame); ++level) {
+				lua_getinfo(thread, "Sl", &frame);
+				System::PrintDiagnosticLine(std::format("{} field={} frame={} source={} line={}", prefix, path, level, frame.short_src, frame.currentline));
+				for (int local = 1; local <= 96; ++local) {
+					const char* name = lua_getlocal(thread, &frame, local);
+					if (!name) break;
+					visit(thread, -1, std::format("{}.frame{}.{}", path, level, name), depth + 1);
+					lua_pop(thread, 1);
+				}
+			}
+		}
+	};
+	PushScriptObjectInstanceTable(m_State, uniqueID);
+	if (lua_istable(m_State, -1)) {
+		lua_pushliteral(m_State, "AI"); lua_rawget(m_State, -2);
+		visit(m_State, -1, "AI", 0);
+	}
+}
+
 LuaStateWrapper::LuaStateWrapper() {
 	Clear();
 }

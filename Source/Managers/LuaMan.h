@@ -393,6 +393,9 @@ namespace RTE {
 		/// Reads a number field off the object's self.
 		/// @return The field, or the fallback when the object or the field is absent.
 		double GetScriptObjectNumberField(long uniqueID, const std::string& field, double fallback);
+
+		/// Reads an object's AI fields and suspended locals for a checkpoint diagnostic on this state's thread.
+		void TraceCheckpointAI(long uniqueID, std::string_view hook, std::string_view phase);
 #pragma endregion
 
 #pragma region Script Execution Handling
