@@ -829,9 +829,11 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 	const int delayMs = m_PathRequestDelayMs;
 	const bool lostSolve = deferred && FaultInjected("path_request_lost");
 	++m_CurrentPathingRequests;
+	SaverThreads::GameWorkBegins();
 	try {
 		g_ThreadMan.GetBackgroundThreadPool().push_task(
 		    [this, start, end, jumpHeight, digStrength, callback, committedHorizon, pinned, held, deferred, delayMs, lostSolve](std::shared_ptr<volatile PathRequest> volRequest) {
+			    const SaverThreads::GameWorkScope gameWork;
 			    PathingRequestScope scope{m_CurrentPathingRequests};
 			    HorizonReadScope horizon(this, committedHorizon, pinned, held);
 
@@ -878,6 +880,7 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 			EndCommittedHorizonRead(pinned);
 		}
 		--m_CurrentPathingRequests;
+		SaverThreads::GameWorkEnds();
 		throw;
 	}
 
@@ -917,8 +920,10 @@ std::shared_ptr<volatile PathRequest> PathFinder::ResumeCheckpointPathRequest(co
 		return saved;
 	}
 	++m_CurrentPathingRequests;
+	SaverThreads::GameWorkBegins();
 	try {
 		g_ThreadMan.GetBackgroundThreadPool().push_task([this, deferred] {
+			const SaverThreads::GameWorkScope gameWork;
 			PathingRequestScope scope{m_CurrentPathingRequests};
 			// Its saved grid already contains the original committed view; it needs no live horizon pin.
 			HorizonReadScope horizon(this, false);
@@ -929,6 +934,7 @@ std::shared_ptr<volatile PathRequest> PathFinder::ResumeCheckpointPathRequest(co
 		});
 	} catch (...) {
 		--m_CurrentPathingRequests;
+		SaverThreads::GameWorkEnds();
 		std::lock_guard lock(m_DeferredPathMutex);
 		m_DeferredPathRequests.erase(std::remove(m_DeferredPathRequests.begin(), m_DeferredPathRequests.end(), deferred), m_DeferredPathRequests.end());
 		request.resumeAfterRestore = true;
@@ -1659,10 +1665,15 @@ void PathFinder::LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job) {
 		return;
 	}
 	if (ThreadMan::IsConstructed()) {
+		SaverThreads::GameWorkBegins();
 		try {
-			g_ThreadMan.GetBackgroundThreadPool().push_task(finish);
+			g_ThreadMan.GetBackgroundThreadPool().push_task([finish] {
+				const SaverThreads::GameWorkScope gameWork;
+				finish();
+			});
 			return;
 		} catch (const std::exception&) {
+			SaverThreads::GameWorkEnds();
 		}
 	}
 	// Nothing would own a detached worker, so a launch that cannot be owned finishes here instead of parking a later commit.

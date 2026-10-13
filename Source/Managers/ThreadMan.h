@@ -63,6 +63,21 @@ namespace RTE {
 		/// The steady clock in microseconds, as the slices are measured.
 		static int64_t NowUs() noexcept;
 
+		/// Game work that runs across ticks (a path solve, a horizon job) counts from its submission to its end, and savers
+		/// stay parked while any is in flight: the time between ticks is not idle while it runs, and a saver beside it on the
+		/// same core makes the next tick wait for it.
+		static void GameWorkBegins() noexcept { s_GameWork.fetch_add(1, std::memory_order_acq_rel); }
+		static void GameWorkEnds() noexcept;
+
+		/// Ends one piece of game work when the task that does it ends, however it ends.
+		class GameWorkScope {
+		public:
+			GameWorkScope() = default;
+			~GameWorkScope() { GameWorkEnds(); }
+			GameWorkScope(const GameWorkScope&) = delete;
+			GameWorkScope& operator=(const GameWorkScope&) = delete;
+		};
+
 		/// Opens the gate while the game itself waits on the saver's work.
 		class Lend {
 		public:
@@ -91,6 +106,7 @@ namespace RTE {
 		static inline std::atomic<int> s_Lent{0};
 		static inline std::atomic<int64_t> s_SliceEndUs{0};
 		static inline std::atomic<int64_t> s_ClosedAtUs{0};
+		static inline std::atomic<int> s_GameWork{0};
 	};
 
 	/// Runs work(index) for every index below a count on a pool, the items taken in index order by whichever thread comes

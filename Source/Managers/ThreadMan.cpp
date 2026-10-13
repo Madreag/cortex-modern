@@ -96,8 +96,14 @@ namespace {
 
 void SaverThreads::CheckSlice() {
 	if (ReportingStretches()) NoteStretch(SAVER_CALLER);
-	if (NowUs() < s_SliceEndUs.load(std::memory_order_acquire)) return;
+	if (NowUs() < s_SliceEndUs.load(std::memory_order_acquire) && s_GameWork.load(std::memory_order_acquire) == 0) return;
 	WaitForSlice();
+}
+
+void SaverThreads::GameWorkEnds() noexcept {
+	if (s_GameWork.fetch_sub(1, std::memory_order_acq_rel) != 1) return;
+	try { std::lock_guard lock(s_SliceMutex); } catch (...) {}
+	s_SliceOpened.notify_all();
 }
 
 int64_t SaverThreads::NowUs() noexcept {
@@ -119,10 +125,21 @@ void SaverThreads::CloseSlice() noexcept {
 
 void SaverThreads::WaitForSlice() {
 	std::unique_lock lock(s_SliceMutex);
+	const int64_t began = NowUs();
 	for (;;) {
 		if (s_Gating.load(std::memory_order_acquire) == 0 || s_Lent.load(std::memory_order_acquire) > 0) return;
 		const int64_t now = NowUs(), sliceEnd = s_SliceEndUs.load(std::memory_order_acquire);
-		if (now < sliceEnd) return;
+		if (now < sliceEnd) {
+			if (s_GameWork.load(std::memory_order_acquire) == 0) return;
+			// Game work that never ends may itself wait on something the saver holds.
+			if (now - began > c_StuckTickUs) {
+				if (s_ReportedStuckAtUs.exchange(began) != began) {
+					std::fprintf(stdout, "[saver-gate] game work kept the saver out %lld ms; the saver goes on beside it\n", static_cast<long long>((now - began) / 1000));
+					std::fflush(stdout);
+				}
+				return;
+			}
+		}
 		const int64_t closedAt = s_ClosedAtUs.load(std::memory_order_acquire);
 		if (sliceEnd == 0 && now - closedAt > c_StuckTickUs) {
 			if (s_ReportedStuckAtUs.exchange(closedAt) != closedAt) {
