@@ -1235,11 +1235,11 @@ namespace RTE {
 		/// The Lua handles naming an object or one of its fields, and whether the object is gone. A gone object's memory stays
 		/// out of its class pool until its last handle is collected, so a script that kept a handle reads the same bytes on every machine.
 		struct LuaHandles {
-			static constexpr uint32_t c_Gone = 0x80000000U;
-			std::atomic<uint32_t> state{0}; //!< The handle count, with c_Gone once the object is deleted.
+			uint32_t count = 0; //!< The handles naming the object or one of its fields.
+			bool gone = false; //!< Whether the object is deleted and its memory waits for its last handle.
+			MovableObject* object = nullptr; //!< The object the record belongs to.
 			Entity::ClassInfo* pool = nullptr; //!< The class pool the memory returns to.
 			void* memory = nullptr; //!< The deleted object's memory.
-			MovableObject* object = nullptr; //!< The deleted object.
 		};
 
 		/// Notes one more Lua handle naming this object or one of its fields.
