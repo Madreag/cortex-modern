@@ -10,7 +10,7 @@ namespace RTE {
 
 	// Field limits mirrored from tools/session_directory/session_directory.py (the API of record).
 	namespace NetDirectoryLimits {
-		inline constexpr uint16_t c_ConnectionProtocol = 1;
+		inline constexpr uint16_t c_ConnectionProtocol = 2;
 		inline constexpr size_t c_MaxStringChars = 64;        // MAX_STR
 		inline constexpr size_t c_MaxPeerChars = 64;          // peer string cap (not 7+MAX_STR)
 		inline constexpr size_t c_MaxListRows = 4096;         // MAX_ROWS

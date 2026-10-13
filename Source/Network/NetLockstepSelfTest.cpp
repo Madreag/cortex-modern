@@ -273,6 +273,30 @@ namespace RTE {
 			return true;
 		}
 
+		// The connection authority holds one referee request per seat and drops its answer when another replaces it. A seat cut off
+		// from its half checks in, hears the other half play on and asks what was decided; its still unconfirmed input must not
+		// check it in again, or each answer is lost to the next request until the request allowance runs out.
+		static bool SplitAnswerIsNotDisplaced(std::string* error) {
+			Wire wire; NetLockstepCoordinator host; Configure(host, wire);
+			host.m_Config.peerFrameGroups = true; host.m_Config.localPeerId = 1; host.m_Config.peerCount = 2;
+			host.m_RemotePeerIds = {2};
+			std::vector<NetFrameTieRequest> asked;
+			host.m_Config.frameTieReferee = [&asked](const NetFrameTieRequest& request) {
+				if (asked.empty() || asked.back() != request) asked.push_back(request);
+				NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Waiting;
+				return reply;
+			};
+			const uint64_t frame = host.m_Stats.nextFrame;
+			host.CheckPeerFrameTie(frame, 1U, 0);
+			host.CheckPeerFrameTie(frame, 2U, 10);
+			host.CheckPeerFrameTie(frame + 1, 1U, 20);
+			if (asked.size() < 2 || asked[0].queryOnly || !asked[1].queryOnly || asked[0].frame != asked[1].frame) {
+				*error = "the seat did not check in for its own half and then ask what the other half's referee decided"; return false;
+			}
+			if (asked.size() != 2) { *error = "the seat checked in again after asking what the other half's referee decided, displacing the answer"; return false; }
+			return true;
+		}
+
 		static bool LinkQuality(std::string* error) {
 			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
 			peer.m_Config.peerFrameGroups = true; peer.m_MigrationPhase = NetHostMigrationPhase::None;
@@ -29262,6 +29286,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LinkQuality, "measured_local_and_remote_link_quality_and_override");
 		row(&SessionPlaneRecoveryTest::AppliedInputPrefix, "applied_inputs_preserve_the_agreed_prefix_and_tail_witness");
 		row(&SessionPlaneRecoveryTest::ReplayedRecordPrefix, "ticket_return_replay_reads_the_host_boundary_prefix");
+		row(&SessionPlaneRecoveryTest::SplitAnswerIsNotDisplaced, "split_answer_survives_an_unconfirmed_input");
 		row([](std::string* why) { return TestOwnerSilenceThreshold(1, why); }, "client_6s_silence_silent_bridge_then_visible_held");
 		row([](std::string* why) { return TestOwnerSilenceThreshold(2, why); }, "client_loop_10s_keepalive_bridge_automatic_return");
 		row([](std::string* why) { return TestOwnerSilenceThreshold(3, why); }, "host_sim_3s_plane_bridge_survivor_tick_bound_automatic_return");

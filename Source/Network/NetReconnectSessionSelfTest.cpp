@@ -6834,7 +6834,7 @@ namespace RTE {
 
 			auto replies = std::make_shared<std::deque<NetDirectoryClient::Reply>>();
 			auto sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
-			replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""});
+			replies->push_back({200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""});
 			replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":true})", ""});
 			replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":true})", ""});
 			NetDirectoryClient client;

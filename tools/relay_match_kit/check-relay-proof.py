@@ -31,7 +31,7 @@ for peer,(role,p) in enumerate(roots.items(),1):
  if role!='ally':
   lines += ['[menu-script] open_local_pause the match menu PASS', '[menu-script] activate ButtonLeaveMatch PASS', '[menu-script] activate ButtonLeaveConfirm PASS', f'[net-match-leave] peer={peer} frame=12100 now_ms=201666 reason=Match left']
  if role=='ally':
-  lines+=['[net-link-blackout] begin peer=1 frame=600 duration_ms=8000 now_ms=10000 unix_ms='+str(epoch+10000),
+  lines+=['[net-link-blackout] begin peer=1 frame=600 duration_ms=8000 now_ms=10000 unix_ms='+str(epoch+10000)+' directory=dark',
           '[net-link-blackout] end peer=1 elapsed_ms=8000 now_ms=18000 unix_ms='+str(epoch+18000)]
   lines += [f'[net-peer-departure] peer={remote} frame=12128 now_ms=202000 unix_ms={epoch+202000} source=round-notice' for remote in (2,3)]
   lines += ['[menu-script] open_local_pause the match menu PASS','[menu-script] activate ButtonEndMatch PASS',
@@ -130,8 +130,23 @@ mutate('reliable_overflow','linux','engine/stdout.log',lambda b:b+b'\n1048336 re
 mutate('host_held_again','mac','engine/live.jsonl',lambda b:rows_change(b,lambda rows:rows[1999].update(ai_held_peer_ids=[1])),'became held again')
 mutate('late_return','ally','engine/live.jsonl',lambda b:rows_change(b,lambda rows:[r.update(ai_held_peer_ids=[1]) for r in rows if 724<=r['tick']<=1800]),'return not observed within ten seconds')
 mutate('changed_common_hash','linux','engine/live.jsonl',lambda b:rows_change(b,lambda rows:rows[999].update(total='wrong')),'total hash mismatch')
-for name,tick,gap,needle in [('blackout_hitch',700,75,'unaffected peer pauses over 50')]:
+for name,tick,gap,needle in [('blackout_hitch',700,75,'unaffected peer blocked over 50 ms')]:
  mutate(name,'linux','engine/live.jsonl',lambda b,t=tick,g=gap:rows_change(b,lambda rows:[r.update(wall_ms=r['wall_ms']+g) for r in rows if r['tick']>=t]),needle)
+# A block is the interval beyond one regular tick: at most 50 ms, once per spike, never on two consecutive ticks.
+def blocked(rows,ticks,interval):
+ for tick in ticks:[r.update(wall_ms=r['wall_ms']+interval-1000/60) for r in rows if r['tick']>=tick]
+live=roots['linux']/'engine/live.jsonl';old=live.read_bytes()
+try:
+ live.write_bytes(rows_change(old,lambda rows:blocked(rows,[700],66)))
+ result=check('blackout_block_of_66ms_interval_is_inside_the_bound',True)
+ assert [round(b['block_ms'],2) for b in result['details']['linux']['blackout_blocks']]==[49.33],result['details']['linux']['blackout_blocks']
+finally:live.write_bytes(old)
+mutate('blackout_block_of_70ms_interval','linux','engine/live.jsonl',lambda b:rows_change(b,lambda rows:blocked(rows,[700],70)),'unaffected peer blocked over 50 ms')
+mutate('blackout_blocks_of_60ms_on_two_consecutive_ticks','linux','engine/live.jsonl',lambda b:rows_change(b,lambda rows:blocked(rows,[700,701],60)),'blocked on two consecutive ticks')
+mutate('blackout_blocks_of_60ms_twice_in_one_spike','linux','engine/live.jsonl',lambda b:rows_change(b,lambda rows:blocked(rows,[700,900],60)),'blocked more than once')
+# The host blackout takes the directory with the link; a link-only lever or a line from before the lever named it proves a joiner outage.
+mutate('link_only_blackout_is_not_a_host_blackout','ally','engine/stdout.log',lambda b:b.replace(b'directory=dark',b'directory=up'),'blackout left the host reaching the directory')
+mutate('blackout_line_without_its_directory','ally','engine/stdout.log',lambda b:b.replace(b' directory=dark',b''),'blackout left the host reaching the directory')
 outside=roots['linux']/'engine/live.jsonl';old=outside.read_bytes()
 try:
  outside.write_bytes(rows_change(old,lambda rows:[r.update(wall_ms=r['wall_ms']+max(0,125-(r['tick']-2000)*15)) for r in rows if 2000<=r['tick']<=2009]))
@@ -270,9 +285,9 @@ try:
  assert len(result['details']['mac']['box_load']['windows'])==3 and not result['details']['mac']['box_load']['busy_windows']
  log.write_bytes(oldlog+harness_windows((702,11000),(604,10660),(817,5457)))
  check('busy_box_is_not_a_proof',False,'mac: box was not alone during the match')
- live.write_bytes(rows_change(oldlive,lambda rows:[r.update(wall_ms=r['wall_ms']+42) for r in rows if r['tick']>=742]))
+ live.write_bytes(rows_change(oldlive,lambda rows:[r.update(wall_ms=r['wall_ms']+60) for r in rows if r['tick']>=742]))
  result=check('busy_box_pause_in_blackout_keeps_both_failures',False,'mac: box was not alone during the match')
- assert any('mac: unaffected peer pauses over 50 ms during blackout' in error for error in result['errors']),result['errors']
+ assert any('mac: unaffected peer blocked over 50 ms during blackout' in error for error in result['errors']),result['errors']
 finally:log.write_bytes(oldlog);live.write_bytes(oldlive)
 (root/'contracts.json').write_text(json.dumps({'synthetic':True,'relay_proof':False,'checks':checks},indent=2)+'\n')
 print(json.dumps({'synthetic_contract_checks':len(checks),'passed':len(checks),'relay_proof':False}))
