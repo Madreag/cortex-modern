@@ -10,6 +10,9 @@
 #include <chrono>
 #include <cstdio>
 #include <iostream>
+#include <map>
+#include <mutex>
+#include <sstream>
 #include <thread>
 #include <utility>
 
@@ -1000,6 +1003,17 @@ namespace RTE {
 				row.reason = "address";
 			} else {
 				row.joinable = true;
+			}
+			// A listed game that changes between joinable and not says so once per change, with the fields that decided it.
+			static std::mutex s_ShownMutex;
+			static std::map<std::string, std::string> s_ShownReasons;
+			std::lock_guard<std::mutex> shownLock(s_ShownMutex);
+			if (auto& shown = s_ShownReasons[session.sessionId]; shown != row.reason + "|") {
+				shown = row.reason + "|";
+				std::ostringstream line;
+				line << "[net-directory] listed game " << session.sessionId << (row.joinable ? " joinable" : " not joinable: " + row.reason) << " join_mode=" << session.joinMode
+				     << " addresses=" << session.listenAddrs.size() << " port=" << session.listenPort << " ice_identity=" << !session.iceIdentity.empty();
+				System::PrintDiagnosticLine(line.str());
 			}
 			rows.push_back(std::move(row));
 		}

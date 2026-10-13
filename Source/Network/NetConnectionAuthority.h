@@ -127,6 +127,8 @@ namespace RTE {
 		bool RestoreLease(const NetSeatLease& lease);
 		std::optional<NetSeatLease> LocalLease() const;
 		void SetRoute(NetConnectionRoute route);
+		/// The route the next check-in carries.
+		NetConnectionRoute Route() const;
 		void CheckInNow();
 		void RefreshRoute();
 		void RequestBootstrap();
@@ -152,6 +154,8 @@ namespace RTE {
 		uint64_t AdmissionRetryMs() const;
 
 	private:
+		friend bool TestRecoveryUsesListedMatch(std::string* error);
+		NetHash32 DirectoryMatchHash(const NetHash32& peerHash) const;
 		struct Operation {
 			std::string body;
 			NetSeatLease wanted;

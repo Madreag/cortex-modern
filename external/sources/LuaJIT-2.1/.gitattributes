@@ -1,2 +1,2 @@
 /.relver export-subst
-*.bat text eol=lf
+*.bat text eol=crlf

@@ -1,5 +1,2 @@
-# Keep committed text on LF on every box.
-* text=auto eol=lf
-
 # Two players' game data is compared byte for byte before a match, so every checkout keeps the committed line endings.
 Data/** text=auto eol=lf

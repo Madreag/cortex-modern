@@ -2329,6 +2329,7 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot, bool fr
 void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	(void)snapshot;
 	m_ChatBand = {};
+	if (!m_ChatEntryOpen) m_ChatEntryBottom = 0;
 	if (!m_OverlayControls) {
 		m_ChatRect = {};
 		return;
@@ -2382,6 +2383,11 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	for (const auto& band: area.textBands) {
 		if (band.y + band.h > backbuffer->h / 2) lower(band.y - 4);
 		area.occupiers.push_back(band);
+	}
+	// An open entry stays where the player found it: a notice that arrives may raise it, one that ends never drops it under the cursor.
+	if (m_ChatEntryOpen) {
+		if (m_ChatEntryBottom > 0) lower(m_ChatEntryBottom);
+		m_ChatEntryBottom = bottom;
 	}
 	const int topLimit = ChatTopLimit(area, backbuffer->h);
 

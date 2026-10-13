@@ -1634,7 +1634,8 @@ namespace RTE {
 		std::map<NetPeerId, uint8_t>& PeerListenerBindings() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->listenerBindings : m_PeerListenerBindings; }
 		std::map<NetPeerId, uint8_t>& PeerPrimaryBindings() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryBindings : m_PeerPrimaryBindings; }
 		bool& PeerPrimaryListener() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryListener : m_PeerPrimaryListener; }
-		bool HasPeerFrameRoute(uint8_t peer);
+		bool HasPeerFrameRoute(uint8_t peer) const;
+		bool PeerLinkLostBeforeOwnInput(uint8_t peer, uint64_t frame) const;
 		std::pair<INetTransport*, NetPeerId> PeerFrameRoute(uint8_t peer) const;
 		void NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink, bool completedRound = false);
 		void AdjudicatePeerRoundEnds(uint64_t nowMs);
@@ -1656,6 +1657,10 @@ namespace RTE {
 		bool PeerInputAccepted(uint64_t frame, uint8_t owner = 0) const;
 		uint32_t PeerInputVoters(uint64_t frame, uint8_t owner) const;
 		bool PeerGroupHasAuthority(uint32_t voters) const;
+		/// The seats that vote now, with voters narrowed to them; zero when no voter is a retained seat.
+		uint32_t PeerVotingOwners(uint32_t& voters) const;
+		/// Whether voters are exactly half of the voting seats in a round whose ties the referee decides.
+		bool PeerGroupIsRefereedHalf(uint32_t voters) const;
 		void SendForwardedPeerInput(const NetLockstepFrame& input, uint8_t onlyPeer);
 		void CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs);
 		bool ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly = false);

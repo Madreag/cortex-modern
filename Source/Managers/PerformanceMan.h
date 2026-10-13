@@ -98,6 +98,9 @@ namespace RTE {
 		/// @param counter Counter to stop and updated measurement for.
 		void StopPerformanceMeasurement(PerformanceCounters counter);
 
+		/// Reads the current tick's accumulated microseconds after its measured work has joined.
+		uint64_t GetPerformanceCounterSample(PerformanceCounters counter) const { return m_PerfData[counter][m_Sample].load(std::memory_order_relaxed); }
+
 		/// Sets the current ping value to display.
 		/// @param ping Ping value to display.
 		void SetCurrentPing(int ping) { m_CurrentPing = ping; }

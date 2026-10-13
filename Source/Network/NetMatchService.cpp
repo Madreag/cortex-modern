@@ -6406,13 +6406,16 @@ static std::string ResyncSaveName() {
 				std::lock_guard<std::mutex> frameLock(m_RejoinFrameKey->mutex);
 				candidates.insert(candidates.end(), m_RejoinFrameKey->returnCertificates.begin(), m_RejoinFrameKey->returnCertificates.end());
 			}
-			std::string why = "none has arrived";
+			size_t unreadable = 0;
+			std::string refusal;
 			for (const auto& bytes: candidates) {
 				NetHostMigrationMessage proof;
-				if (!NetHostMigrationCodec::Decode(bytes, m_MigrationKey, proof) || proof.type != NetHostMigrationMessageType::PeerBridgeCommit ||
-				    proof.preparedFrame != 1 || proof.frame != m_WorldCatchUp.activationTick) continue;
-				if (m_CatchUpCoordinator->AdoptPeerReturn(live, *m_CatchUpCoordinator, proof, m_WorldCatchUp.activationTick, &why)) break;
+				if (!NetHostMigrationCodec::Decode(bytes, m_MigrationKey, proof)) { ++unreadable; continue; }
+				if (proof.type != NetHostMigrationMessageType::PeerBridgeCommit || proof.preparedFrame != 1 || proof.frame != m_WorldCatchUp.activationTick) continue;
+				if (m_CatchUpCoordinator->AdoptPeerReturn(live, *m_CatchUpCoordinator, proof, m_WorldCatchUp.activationTick, &refusal)) break;
 			}
+			const std::string why = std::to_string(candidates.size()) + " frame messages kept, " + std::to_string(unreadable) + " unreadable, " +
+			                        (refusal.empty() ? std::string("none certifies it") : "its certificate refused: " + refusal);
 			if (m_ReturnWaitLoggedFor != m_WorldCatchUp.activationTick) {
 				m_ReturnWaitLoggedFor = m_WorldCatchUp.activationTick; m_ReturnWaitLoggedWhy.clear(); m_ReturnWaitLines = 0;
 			}
@@ -9658,6 +9661,25 @@ static std::string ResyncSaveName() {
 	void NetMatchService::UpdateConnectionAuthority(uint64_t nowMs) {
 		if (!s_AdmissionEnabled || m_State == NetMatchServiceState::Idle || m_LeftMatch) return;
 		const uint64_t wall = UnixNowMs(nullptr) / 1000;
+		// Called under m_Mutex.
+		const auto routeState = [this] { return m_LeftMatch ? "left" : m_HeldRejoinDriving ? "reconnecting" : m_State == NetMatchServiceState::Running ? "connected" : "connecting"; };
+		const auto hostRoute = [this](NetConnectionRoute& route) {
+			route.iceIdentity = m_IceIdentity;
+			route.iceVirtualPort = static_cast<uint16_t>(m_DirectoryRow.iceVirtualPort);
+			route.listenAddrs = m_DirectoryRow.listenAddrs;
+			route.listenPort = m_BeaconGamePort;
+		};
+		{
+			// The directory lists a host's row from the route its check-in carries, so the route is the one the host has now:
+			// one taken before its ICE listener opened would list the row as having no way in.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_IsHost) {
+				NetConnectionRoute route;
+				route.state = routeState();
+				hostRoute(route);
+				m_ConnectionAuthority.SetRoute(std::move(route));
+			}
+		}
 		m_ConnectionAuthority.Update(nowMs, wall);
 		std::string directoryUrl = g_SettingsMan.GetSessionDirectoryUrl();
 		while (!directoryUrl.empty() && directoryUrl.back() == '/') directoryUrl.pop_back();
@@ -9666,7 +9688,9 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			const std::string line = "This match is no longer in the directory. Choose another game from Multiplayer.";
 			if (m_State != NetMatchServiceState::Completed && m_State != NetMatchServiceState::Idle) {
-				m_PendingToasts.push_back(line); m_ErrorText = line;
+				// The lobby's own error line says it there; a toast beside it would say it twice.
+				if (m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch) m_PendingToasts.push_back(line);
+				m_ErrorText = line;
 			}
 		}
 		if (m_IsHost && m_Coordinator) {
@@ -9688,16 +9712,13 @@ static std::string ResyncSaveName() {
 			auto localAddresses = m_ConnectionAuthority.LocalAddresses();
 			if (localAddresses.size() > NetMatchConfigUtil::c_MaxMigrationAddresses) localAddresses.resize(NetMatchConfigUtil::c_MaxMigrationAddresses);
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			route.state = m_LeftMatch ? "left" : m_HeldRejoinDriving ? "reconnecting" : m_State == NetMatchServiceState::Running ? "connected" : "connecting";
+			route.state = routeState();
 			if (m_IsHost) {
 				if (changed) {
 					m_DirectoryRow.listenAddrs = m_ConnectionMode == 2 ? std::vector<std::string>{} : localAddresses;
 					m_Directory.NoteListenAddrs(m_DirectoryRow.listenAddrs);
 				}
-				route.iceIdentity = m_IceIdentity;
-				route.iceVirtualPort = static_cast<uint16_t>(m_DirectoryRow.iceVirtualPort);
-				route.listenAddrs = m_DirectoryRow.listenAddrs;
-				route.listenPort = m_BeaconGamePort;
+				hostRoute(route);
 			} else {
 				const auto& peers = m_AdoptedMatchConfig.migrationPeers;
 				const auto own = std::find_if(peers.begin(), peers.end(), [&](const auto& peer) { return peer.peerId == m_LocalPeerId; });

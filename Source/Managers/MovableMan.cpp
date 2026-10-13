@@ -7922,8 +7922,9 @@ void MovableMan::UpdateControllers() {
 		// The shared hooks' sound writes land here, after the last shared script of the tick and before
 		// the first AI one, so everything the drain finds afterwards was written by an AI pass.
 		g_AudioMan.SettleSharedSoundWrites();
+		// Check the script state first: only its own pass needs to ask the network plane who produces this actor.
 		for (Actor* actor: m_Actors) {
-			if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
+			if (actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->ObjectScriptsInitialized() && isLocalControllerActor(actor) && actor->GetController()->ShouldUpdateAIThisFrame()) {
 				// Mark the running AI actor so its Equip* mutators defer the mutation to the post-pass drain.
 				g_CurrentAIActor = actor;
 				actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
@@ -7939,7 +7940,7 @@ void MovableMan::UpdateControllers() {
 			                                                     LuaStateWrapper& luaState = luaStates[start];
 			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState, true);
 			                                                     for (Actor* actor: m_Actors) {
-				                                                     if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetLuaState() == &luaState && actor->GetController()->ShouldUpdateAIThisFrame()) {
+				                                                     if (actor->GetLuaState() == &luaState && actor->ObjectScriptsInitialized() && isLocalControllerActor(actor) && actor->GetController()->ShouldUpdateAIThisFrame()) {
 					                                                     g_CurrentAIActor = actor;
 					                                                     actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
 					                                                     g_CurrentAIActor = nullptr;
