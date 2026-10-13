@@ -4,6 +4,7 @@
 #include "CheckpointBindingLease.h"
 #include "CheckpointNativeStorage.h"
 
+#include <algorithm>
 #include <bit>
 #include <array>
 #include <chrono>
@@ -15,6 +16,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <span>
 #include <vector>
 
@@ -108,7 +110,7 @@ namespace RTE::CheckpointLua {
 			if (m_Status.load(std::memory_order_acquire) != Status::Armed) throw std::logic_error("checkpoint boundary is not armed");
 			try {
 				for (const auto& pages: m_Native->Pages()) pages->Drain();
-				for (Heap& heap: m_Heaps) heap.prepared->Drain();
+				DrainHeaps();
 				CheckpointFailure::Check(CheckpointFailure::Point::NativeRoots);
 				m_ReadRoots = m_Roots;
 				m_ReadRoots.reserve(m_Roots.size() + m_Heaps.size());
@@ -206,6 +208,20 @@ namespace RTE::CheckpointLua {
 		Boundary() = default;
 		enum class Status { Prepared, Arming, Armed, Frozen, Cancelled };
 		struct Heap { HeapOwner::PreparationLease lease; std::shared_ptr<HeapOwner::Prepared> prepared; };
+		// A saver copies the heaps side by side in the game's idle time, the largest first, so the live writes that fault
+		// on a page not yet copied stop soonest.
+		void DrainHeaps() {
+			if (!SaverThreads::Current() || m_Heaps.size() < 2) {
+				for (Heap& heap: m_Heaps) heap.prepared->Drain();
+				return;
+			}
+			std::vector<size_t> order(m_Heaps.size()), bytes(m_Heaps.size());
+			std::iota(order.begin(), order.end(), size_t{0});
+			for (size_t index = 0; index < m_Heaps.size(); ++index) bytes[index] = m_Heaps[index].prepared->Image().ByteCount();
+			std::stable_sort(order.begin(), order.end(), [&bytes](size_t left, size_t right) { return bytes[left] > bytes[right]; });
+			ParallelWork drains(SaverThreads::Pool(), order.size(), [this, &order](size_t index) { m_Heaps[order[index]].prepared->Drain(); });
+			drains.Finish();
+		}
 		std::atomic<Status> m_Status{Status::Prepared};
 		std::unique_ptr<CheckpointNativeStorage::Prepared> m_Native;
 		BindingLease m_Bindings;
