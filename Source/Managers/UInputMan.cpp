@@ -100,6 +100,7 @@ void UInputMan::Clear() {
 	m_MouseStates[0] = {};
 	m_KeyboardStates.clear();
 	m_KeyboardStates[0] = {};
+	m_NetworkGUIKeyPresses.fill(false);
 
 	for (Gamepad& gamepad: s_PrevJoystickStates) {
 		if (gamepad.m_JoystickID != -1) {
@@ -714,6 +715,14 @@ bool UInputMan::ScriptSeatDeviceClass(int whichPlayer, uint8_t& deviceClass) con
 }
 
 Vector UInputMan::GetMouseMovement(int whichPlayer) const {
+	return MouseMovementOf(whichPlayer, false);
+}
+
+Vector UInputMan::GetMouseMovementSinceSim(int whichPlayer) const {
+	return MouseMovementOf(whichPlayer, true);
+}
+
+Vector UInputMan::MouseMovementOf(int whichPlayer, bool sinceSim) const {
 	// A script in the round reads the seat's committed movement, the same on every peer; a seat with no frame at the
 	// last applied tick has not moved.
 	if (ScriptReadsCommittedSeat(whichPlayer)) {
@@ -729,10 +738,11 @@ Vector UInputMan::GetMouseMovement(int whichPlayer) const {
 		return Vector(0, 0);
 	}
 	if (whichPlayer == Players::NoPlayer || (m_ControlScheme.at(whichPlayer).GetDevice() == InputDevice::DEVICE_MOUSE_KEYB && !m_EnableMultiMouseKeyboard)) {
-		return m_MouseStates.at(0).relativeMotion;
+		const Mouse& mouse = m_MouseStates.at(0);
+		return sinceSim ? mouse.motionSinceSim : mouse.relativeMotion;
 	} else if (m_ControlScheme.at(whichPlayer).GetDevice() == InputDevice::DEVICE_MOUSE_KEYB) {
 		if (auto mouse = m_MouseStates.find(m_ControlScheme.at(whichPlayer).GetDeviceID().mouseKeyboard.mouse); mouse != m_MouseStates.end()) {
-			return mouse->second.relativeMotion;
+			return sinceSim ? mouse->second.motionSinceSim : mouse->second.relativeMotion;
 		}
 	}
 	return Vector(0, 0);
@@ -1324,6 +1334,22 @@ bool UInputMan::GetJoystickDirectionState(int whichJoy, int whichAxis, int which
 	return false;
 }
 
+bool UInputMan::IsNetworkGUIInputActive() const {
+	return ScenarioRunner::HasLockstepCoordinator() || (NetMatchService::IsConstructed() && g_NetMatchService.GetState() != NetMatchServiceState::Idle);
+}
+
+void UInputMan::NoteMouseMotion(SDL_MouseID which, const Vector& position, const Vector& motion) {
+	Mouse& mouse = m_MouseStates[which];
+	mouse.id = which;
+	mouse.position = position;
+	mouse.relativeMotion += motion;
+	mouse.motionSinceSim += motion;
+
+	m_MouseStates[0].position = position;
+	m_MouseStates[0].relativeMotion += motion;
+	m_MouseStates[0].motionSinceSim += motion;
+}
+
 void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 	switch (inputEvent.type) {
 		case SDL_EVENT_KEY_UP:
@@ -1334,6 +1360,7 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 			keyboard.changedKeyStates[inputEvent.key.scancode] = transitioned;
 			if (transitioned) {
 				(inputEvent.key.down ? keyboard.pressedSinceSim : keyboard.releasedSinceSim)[inputEvent.key.scancode] = true;
+				if (inputEvent.key.down && IsNetworkGUIInputActive()) m_NetworkGUIKeyPresses[inputEvent.key.scancode] = true;
 			}
 			keyboard.keyStates[inputEvent.key.scancode] = inputEvent.key.down;
 
@@ -1393,13 +1420,8 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 				break;
 			}
 
+			NoteMouseMotion(inputEvent.motion.which, {inputEvent.motion.x, inputEvent.motion.y}, {inputEvent.motion.xrel, inputEvent.motion.yrel});
 			Mouse& mouse = m_MouseStates[inputEvent.motion.which];
-			mouse.id = inputEvent.motion.which;
-			mouse.position = {inputEvent.motion.x, inputEvent.motion.y};
-			mouse.relativeMotion += {inputEvent.motion.xrel, inputEvent.motion.yrel};
-
-			m_MouseStates[0].position = {inputEvent.motion.x, inputEvent.motion.y};
-			m_MouseStates[0].relativeMotion += {inputEvent.motion.xrel, inputEvent.motion.yrel};
 
 			if (g_WindowMan.FullyCoversAllDisplays()) {
 				int windowPosX = 0;
@@ -1419,7 +1441,7 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 			Mouse& mouse = m_MouseStates[inputEvent.motion.which];
 			mouse.id = inputEvent.button.which;
 			bool transitioned = inputEvent.button.down != mouse.state[inputEvent.button.button];
-			mouse.change[inputEvent.button.button] = transitioned;
+			mouse.change[inputEvent.button.button] = IsNetworkGUIInputActive() ? mouse.change[inputEvent.button.button] || transitioned : transitioned;
 			if (transitioned) {
 				(inputEvent.button.down ? mouse.pressedSinceSim : mouse.releasedSinceSim)[inputEvent.button.button] = true;
 			}
@@ -1427,7 +1449,7 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 			if (inputEvent.button.which != 0) {
 				Mouse& combined = m_MouseStates[0];
 				bool transitionedCombined = inputEvent.button.down != combined.state[inputEvent.button.button];
-				combined.change[inputEvent.button.button] = transitionedCombined;
+				combined.change[inputEvent.button.button] = IsNetworkGUIInputActive() ? combined.change[inputEvent.button.button] || transitionedCombined : transitionedCombined;
 				if (transitionedCombined) {
 					(inputEvent.button.down ? combined.pressedSinceSim : combined.releasedSinceSim)[inputEvent.button.button] = true;
 				}
@@ -1559,6 +1581,7 @@ int UInputMan::Update(bool handleSpecialInput) {
 void UInputMan::EndFrame() {
 	// The frame a device edge was readable in ends here, and so does a scripted element's.
 	++m_RenderFrameCount;
+	m_NetworkGUIKeyPresses.fill(false);
 	m_LastDeviceWhichControlledGUICursor = InputDevice::DEVICE_KEYB_ONLY;
 
 	for (auto& [keyboardID, keyboard] : m_KeyboardStates) {
@@ -1601,6 +1624,7 @@ void UInputMan::EndSimUpdate() {
 	for (auto& [mouseID, mouse]: m_MouseStates) {
 		mouse.pressedSinceSim.fill(false);
 		mouse.releasedSinceSim.fill(false);
+		mouse.motionSinceSim.Reset();
 	}
 	for (Gamepad& gamepad: s_PrevJoystickStates) {
 		std::fill(gamepad.m_ButtonsPressedSinceSim.begin(), gamepad.m_ButtonsPressedSinceSim.end(), false);
@@ -2230,6 +2254,25 @@ bool UInputMan::RunScriptedInputEdgeSelfTest() {
 	check("focus_loss_alone_does_not_consume_the_seat", keyAfterFocusLoss && buttonAfterFocusLoss,
 	    "a plain keyboard disable read W as L_UP " + std::to_string(keyAfterFocusLoss) + " and the left button as fire " + std::to_string(buttonAfterFocusLoss));
 	DisableKeys(false);
+	// A match's tick falls between loop passes that each end their frame, so it reads every pass's movement since the last tick.
+	{
+		const bool hadDevice = m_MouseStates.contains(1);
+		mouse.relativeMotion.Reset();
+		mouse.motionSinceSim.Reset();
+		NoteMouseMotion(1, Vector(480, 270), Vector(5, -2));
+		// The pass ends its frame without a tick, as EndFrame does in a running match.
+		for (auto& [mouseID, state]: m_MouseStates) state.relativeMotion.Reset();
+		NoteMouseMotion(1, Vector(480, 270), Vector(7, 1));
+		const Vector frameMovement = GetMouseMovement(Players::PlayerOne);
+		const Vector tickMovement = GetMouseMovementSinceSim(Players::PlayerOne);
+		EndSimUpdate();
+		const Vector leftAfterTick = GetMouseMovementSinceSim(Players::PlayerOne);
+		check("tick_reads_every_pass_movement", frameMovement == Vector(7, 1) && tickMovement == Vector(12, -1) && leftAfterTick.IsZero(),
+		    "after two passes moved 5,-2 and 7,1 the tick read " + std::to_string(tickMovement.GetX()) + "," + std::to_string(tickMovement.GetY()) + ", the frame read " +
+		        std::to_string(frameMovement.GetX()) + "," + std::to_string(frameMovement.GetY()) + " and " + std::to_string(leftAfterTick.GetX()) + "," +
+		        std::to_string(leftAfterTick.GetY()) + " remained after the tick");
+		if (!hadDevice) m_MouseStates.erase(1);
+	}
 	keyboard = savedKeyboard;
 	mouse = savedMouse;
 	scheme.SetDevice(savedDevice);

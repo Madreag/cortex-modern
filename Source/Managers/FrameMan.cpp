@@ -1063,6 +1063,20 @@ bool FrameMan::RunTextWrapSelfTest() {
 	check(us < 8000, "timing_4kb_narrow", "us=" + std::to_string(us) + " budget=8000 (1/10 of 80000 us tip stand-in)");
 	check(width_ok(gotT, narrow), "timing_4kb_width", "wrapped");
 
+	// A timed message holds its screen until its display time ends; an untimed one never holds it.
+	ClearScreenText(0);
+	SetScreenText("held", 0, 0, 60000);
+	const bool timedHeld = ScreenTextHeld(0);
+	SetScreenText("refused", 0);
+	const bool timedKept = GetScreenText(0) == "held";
+	ClearScreenText(0);
+	const bool clearedFree = !ScreenTextHeld(0);
+	SetScreenText("untimed", 0);
+	const bool untimedFree = !ScreenTextHeld(0) && GetScreenText(0) == "untimed";
+	ClearScreenText(0);
+	check(timedHeld && timedKept && clearedFree && untimedFree, "screen_text_hold",
+	      "timed=" + std::to_string(timedHeld) + " kept=" + std::to_string(timedKept) + " cleared=" + std::to_string(clearedFree) + " untimed=" + std::to_string(untimedFree));
+
 	std::cout << Tag << (failures == 0 ? " PASS" : " FAIL") << std::endl;
 	return failures == 0;
 }
@@ -1372,6 +1386,9 @@ void FrameMan::RecordVideoFrame(const std::string& screen, const std::string& se
 	meta.simTick = static_cast<unsigned long long>(g_TimerMan.GetSimUpdateCount());
 	meta.screen = screen;
 	meta.serviceState = serviceState;
+	if (screen == "game" && g_ActivityMan.GetActivity()) {
+		meta.activityEditing = g_ActivityMan.GetActivity()->GetActivityState() == Activity::Editing;
+	}
 	meta.width = width;
 	meta.height = height;
 	recorder.EndFrame(meta);

@@ -1,6 +1,15 @@
 #include "NetModerationGUIProbe.h"
 
 #include "Actor.h"
+#include "BuyMenuGUI.h"
+#include "PieMenu.h"
+#include "SceneEditorGUI.h"
+#include "PresetMan.h"
+#include "MovableMan.h"
+#include "AHuman.h"
+#include "HDFirearm.h"
+#include "PieSlice.h"
+#include "RTETools.h"
 #include "ActivityMan.h"
 #include "CameraMan.h"
 #include "Controller.h"
@@ -31,9 +40,6 @@
 #include "TimerMan.h"
 #include "UInputMan.h"
 #include "WindowMan.h"
-#include "BuyMenuGUI.h"
-#include "PieMenu.h"
-#include "PieSlice.h"
 #include "MetricsCollector.h"
 
 #include <SDL3/SDL.h>
@@ -46,10 +52,41 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <sstream>
 
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
+std::string BuildLoopPaceJson();
+
 namespace RTE::NetModerationGUIProbe {
+namespace {
+	const char* lifetimeTracePreset = std::getenv("CC_TEST_MO_LIFETIME_TRACE");
+	std::atomic<bool> lifetimeTraceActive = false;
+}
+
+void TraceObjectLifetime(const MovableObject* object, const char* stage, bool objectAlive) {
+	if (!lifetimeTraceActive.load(std::memory_order_relaxed)) return;
+	if (objectAlive && object->GetPresetName() != lifetimeTracePreset) return;
+	std::ostringstream line;
+	line << "[mo-lifetime] " << stage << " tick=" << g_TimerMan.GetSimUpdateCount() << " pointer=" << object;
+	if (objectAlive) line << " uid=" << object->GetUniqueID() << " preset=" << object->GetPresetName();
+#ifdef _WIN32
+	void* callers[16]{};
+	const USHORT count = CaptureStackBackTrace(1, 16, callers, nullptr);
+	const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+	line << " exe_base=0x" << std::hex << base << std::dec;
+	for (USHORT i = 0; i < count; ++i) {
+		line << " caller[" << i << "]=0x" << std::hex << reinterpret_cast<uintptr_t>(callers[i]) << std::dec;
+	}
+#endif
+	std::cout << line.str() << std::endl;
+}
+
 namespace {
 	using Json = nlohmann::json;
 	using Clock = std::chrono::steady_clock;
@@ -61,7 +98,7 @@ namespace {
 	struct Probe {
 		bool loaded = false, enabled = false, done = false, failed = false, resultStarted = false;
 		size_t index = 0, gestureIndex = SIZE_MAX, handIndex = SIZE_MAX; //!< handIndex: the step whose hand gesture is still running.
-		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0, resultWrittenMs = 0;
+		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0, stepSim = 0, resultWrittenMs = 0, pendingWrittenMs = 0;
 		Clock::time_point started;
 		Clock::time_point loadedAt; //!< The label dump's one clock: the script's load, which the activation and a round's reset never move.
 		uint64_t labelDumpMs = 0, labelWrittenMs = 0;
@@ -76,11 +113,35 @@ namespace {
 		bool roundEndArmed = false;
 		std::vector<std::string> roundEndSignals;
 		bool pageDown = false; //!< show_row holds the More players press it made.
+		bool shopHeader = false; //!< The pending shop click expands a module before choosing its item.
+		size_t minuteIndex = SIZE_MAX;
+		size_t minuteObservedIndex = SIZE_MAX;
+		uint64_t minuteObservedFrame = UINT64_MAX;
+		uint64_t minuteMs = 0, minuteTick = 0, minuteProbeNs = 0, fightSamples = 0, aiFiredFrames = 0;
+		double minimumFightPace = std::numeric_limits<double>::infinity();
+		size_t landingMoveIndex = SIZE_MAX, actorCycleIndex = SIZE_MAX, aimIndex = SIZE_MAX;
+		uint64_t landingMoveTick = 0, actorCycleTick = 0, actorCycleRender = 0, aimTick = 0;
+		int actorCycleStage = 0, actorCyclePresses = 0;
 		uint64_t pageRender = 0; //!< The render show_row acts again at.
 		int pageTurns = 0; //!< Pages show_row has turned for the row it looks for.
+		bool panScene = false, panSelecting = false;
+		int panPlayer = 0, panInput = 0, panDirection = 1;
+		float panY = 600.0F;
+		uint64_t panTick = 0, panSteerTick = 0, panMotionEvents = 0, panHeldTick = 0;
+		float panSpeed = 2.0F;
+		float panSteerY = 0.0F;
+		SDL_Scancode panKey = SDL_SCANCODE_UNKNOWN;
 	};
 	Probe probe;
+	void ReleasePanKey();
 	std::atomic<uint64_t> rendezvousCount{0};
+	std::atomic<uint64_t> probeWallNs{0};
+	struct ProbeCost {
+		Clock::time_point start = Clock::now();
+		~ProbeCost() {
+			if (probe.enabled) probeWallNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count(), std::memory_order_relaxed);
+		}
+	};
 
 	// The moment this peer's script stops waiting on another peer: named on its own line, and
 	// counted so an engine watchdog can measure the wait that follows it, not the one before.
@@ -93,6 +154,7 @@ namespace {
 	GUIControlManager* MenuControls() {
 		if (auto* panel = g_MenuMan.GetNetworkPanel(); panel && panel->IsChatEntryOpen()) return panel->OverlayManager();
 		if (auto* pause = g_MenuMan.GetActivePauseMenu()) return pause->AutomationManager();
+		if (auto* panel = g_MenuMan.GetNetworkPanel(); panel && g_MenuMan.IsNetworkPanelOpen()) return panel->AutomationManager();
 		return g_MenuMan.IsMainMenuInteractive() ? g_MenuMan.GetMainMenu()->AutomationManager() : nullptr;
 	}
 	std::string MenuScreen() {
@@ -158,6 +220,7 @@ namespace {
 
 	// The wait for a script's activation tick or phase has its own deadline, counted from the load or the round's reset.
 	constexpr uint64_t c_DefaultActivationTimeoutMs = 600000;
+	constexpr size_t c_MaxScriptSteps = 1024;
 	bool ActivationPending(const Json& script, bool pending, uint64_t waitedMs) {
 		if (!pending) return false;
 		const uint64_t deadline = script.value("activation_timeout_ms", c_DefaultActivationTimeoutMs);
@@ -210,6 +273,17 @@ namespace {
 		return Rect(rect.x, rect.y, rect.width, rect.height, rect.visible);
 	}
 
+	bool LocalActorAlive() {
+		if (Activity* activity = g_ActivityMan.GetActivity()) {
+			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+				if (!activity->IsLocalHumanSeat(player)) continue;
+				const Actor* actor = activity->GetControlledActor(player);
+				return actor && !actor->IsDead();
+			}
+		}
+		return false;
+	}
+
 	Json Observe() {
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 		// sim_frame counts every sim update since launch, lobby ticks included; lockstep_frame is the round's own.
@@ -219,9 +293,12 @@ namespace {
 		    {"lockstep_frame", lockstepFrame},
 		    {"screen", MenuScreen()},
 		    {"service", snapshot.serviceState}, {"host", snapshot.isHost}, {"activity_preset", snapshot.activityPreset},
+		    {"error_text", snapshot.errorText},
 		    {"panel_open", g_MenuMan.IsNetworkPanelOpen()},
 		    {"paused", g_ActivityMan.ActivityPaused()}, {"seats", Json::array()}};
 		observed["chat_history"] = Json::array();
+		observed["pan_scene"] = probe.panScene;
+		observed["pan_motion_events"] = probe.panMotionEvents;
 		observed["ai_held_peer_ids"] = Json::array();
 		for (uint8_t peer = 1; peer <= 4; ++peer)
 			if (ScenarioRunner::IsLockstepSeatUnderAI(peer, lockstepFrame)) observed["ai_held_peer_ids"].push_back(peer);
@@ -233,20 +310,21 @@ namespace {
 			    {"holder_generation", seat.holderGeneration}, {"seat_generation", seat.seatGeneration}});
 		}
 		// This peer's own player plays on only while its controlled actor is there and alive.
-		bool localActorAlive = false;
-		if (Activity* activity = g_ActivityMan.GetActivity()) {
-			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-				if (!activity->IsLocalHumanSeat(player)) continue;
-				const Actor* actor = activity->GetControlledActor(player);
-				localActorAlive = actor && !actor->IsDead();
-				break;
-			}
-		}
-		observed["local_actor_alive"] = localActorAlive;
+		observed["local_actor_alive"] = LocalActorAlive();
 		observed["local_peer"] = snapshot.localPeerId;
 		// The setup editor a lockstep match holds in, so a script can drive and read this peer's own seats.
 		auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 		observed["editing"] = game && game->GetActivityState() == Activity::Editing;
+		observed["setup_ready"] = 0;
+		observed["setup_humans"] = 0;
+		observed["brains"] = Json::array();
+		for (int player = 0; game && player < Players::MaxPlayerCount; ++player) {
+			if (!game->IsSeatActive(player) || !game->IsHumanSeat(player)) continue;
+			observed["setup_humans"] = observed["setup_humans"].get<int>() + 1;
+			if (game->IsReadyToStart(player)) observed["setup_ready"] = observed["setup_ready"].get<int>() + 1;
+			if (const auto* brain = game->GetPlayerBrain(player); brain && g_MovableMan.ValidMO(brain)) observed["brains"].push_back({{"player", player}, {"team", brain->GetTeam()},
+			    {"uid", brain->GetUniqueID()}, {"health", brain->GetHealth()}, {"x", brain->GetPos().m_X}, {"y", brain->GetPos().m_Y}});
+		}
 		observed["editor_seats"] = Json::array();
 		observed["placement_seats"] = Json::array();
 		const Scene* scene = game ? g_SceneMan.GetScene() : nullptr;
@@ -368,6 +446,7 @@ namespace {
 	/// Completes a script whose round ended while finish_on_round_end was armed: the steps it had left are recorded as
 	/// skipped and the signals it named are written, so a peer waiting on them goes on.
 	void FinishOnRoundEnd(const Json& observed) {
+		ReleasePanKey();
 		GUIInputWrapper::SetAutomationDriving(false);
 		ReleaseProbePad();
 		for (const std::string& name: probe.roundEndSignals) {
@@ -414,9 +493,9 @@ namespace {
 		Require(static_cast<bool>(input), "cannot read input script");
 		probe.script = Json::parse(input);
 		Require(probe.script.at("schema") == 1 && probe.script.at("steps").is_array(), "invalid script schema");
-		Require(!probe.script["steps"].empty() && probe.script["steps"].size() <= 256, "invalid script length");
+		Require(!probe.script["steps"].empty() && probe.script["steps"].size() <= c_MaxScriptSteps, "invalid script length");
 		const auto timeout = probe.script.at("timeout_ms").get<uint64_t>();
-		Require(timeout > 0 && timeout <= 180000, "invalid script deadline");
+		Require(timeout > 0 && timeout <= 1800000, "invalid script deadline");
 		const auto activation = probe.script.value("activation_timeout_ms", c_DefaultActivationTimeoutMs);
 		Require(activation > 0 && activation <= c_DefaultActivationTimeoutMs, "invalid activation deadline");
 		for (const auto& step: probe.script["steps"]) {
@@ -434,7 +513,27 @@ namespace {
 		WriteResult();
 	}
 
+	int LocalPlayer(const Json& step) {
+		auto* activity = g_ActivityMan.GetActivity();
+		if (!step.contains("input_player")) return step.value("player", 0);
+		for (int player = 0; activity && player < Players::MaxPlayerCount; ++player)
+			if (activity->LocalInputOfPlayer(player) == step["input_player"].get<int>()) return player;
+		throw std::runtime_error("the requested local input has no seat");
+	}
+	struct EditorInputRNG {
+		RandomGenerator* previous = t_simRNGOverride;
+		explicit EditorInputRNG(bool match) { if (match) t_simRNGOverride = &g_RenderRNG; }
+		~EditorInputRNG() { t_simRNGOverride = previous; }
+	};
+
 	GUIControl* Control(const Json& step) {
+		if (step.value("scope", "") == "buy") {
+			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			auto* buy = game ? game->GetBuyGUI(LocalPlayer(step)) : nullptr;
+			auto* control = buy && buy->IsVisible() ? buy->AutomationManager()->GetControl(step.at("control").get<std::string>()) : nullptr;
+			Require(control != nullptr, "unknown visible shop control");
+			return control;
+		}
 		if (step.value("scope", "") == "menu") {
 			auto* manager = MenuControls();
 			auto* control = manager ? manager->GetControl(step.at("control").get<std::string>()) : nullptr;
@@ -548,7 +647,7 @@ namespace {
 			return command.starts_with("assert_") || command.starts_with("dump_") ? Phase::Draw : Phase::Poll;
 		}
 		if (op == "assert" || op == "assert_control" || op == "assert_editor" || op == "assert_net_ui_clear" ||
-		    op == "assert_buy" || op == "assert_pie" || op == "assert_window" ||
+		    op == "assert_buy" || op == "assert_pie" || op == "assert_scene" || op == "assert_window" || op == "assert_relay" ||
 		    op == "screenshot" || op == "screenshot_pair" || op == "finish" || op == "watch_route") return Phase::Draw;
 		if ((op == "key_down" || op == "key_up") && SimRateKey(step.value("key", ""))) return Phase::Sim;
 		return Phase::Poll;
@@ -558,7 +657,20 @@ namespace {
 	/// in-match draw, so their steps wait for it; `finish` ends a script that never leaves the menus.
 	bool MenuScopeStep(const Json& step) {
 		const std::string op = step.value("op", "");
-		return op == "menu" || op == "finish" || step.value("scope", "") == "menu";
+		return op == "menu" || op == "finish" || op == "wait" || op == "key_up" || op == "measure_minute" ||
+		    (op == "game_mouse" && step.contains("down") && step["down"] == false) || step.value("scope", "") == "menu";
+	}
+
+	void ReleasePanKey() {
+		if (probe.panKey != SDL_SCANCODE_UNKNOWN) {
+			SDL_Event event{}; event.type = SDL_EVENT_KEY_UP;
+			event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.key.scancode = probe.panKey;
+			event.key.key = SDL_GetKeyFromScancode(probe.panKey, SDL_KMOD_NONE, false); event.key.down = false;
+			Push(event);
+		}
+		probe.panKey = SDL_SCANCODE_UNKNOWN;
+		probe.panScene = probe.panSelecting = false;
+		probe.panTick = probe.panSteerTick = probe.panHeldTick = 0;
 	}
 
 	bool Step(const Json& step, Json& observed) {
@@ -584,7 +696,8 @@ namespace {
 				scope = {{"player", player}, {"visible", buy->IsVisible()}, {"enabled", buy->IsEnabled()},
 				    {"buy_allowed", activity->GetBuyMenuEnabled()}, {"cart", std::move(cart)},
 				    {"craft", craft ? craft->GetModuleAndPresetName() : ""}, {"cost", buy->GetTotalOrderCost()},
-				    {"mass", buy->GetTotalOrderMass()}, {"passengers", buy->GetTotalOrderPassengers()}};
+			    {"mass", buy->GetTotalOrderMass()}, {"passengers", buy->GetTotalOrderPassengers()},
+			    {"team", activity->GetTeamOfPlayer(player)}, {"funds", activity->GetTeamFunds(activity->GetTeamOfPlayer(player))}};
 			} else if (op == "assert_pie") {
 				auto* activity = g_ActivityMan.GetActivity();
 				auto* actor = activity && player >= 0 && player < Players::MaxPlayerCount ? activity->GetControlledActor(player) : nullptr;
@@ -593,7 +706,8 @@ namespace {
 				Json commands = Json::array();
 				for (const auto* slice: pie->GetPieSlices()) commands.push_back(static_cast<int>(slice->GetType()));
 				scope = {{"player", player}, {"actor", actor->GetUniqueID()}, {"visible", pie->IsVisible()},
-				    {"enabled", pie->IsEnabled()}, {"command", static_cast<int>(pie->GetPieCommand())}, {"commands", std::move(commands)}};
+			    {"enabled", pie->IsEnabled()}, {"description", pie->GetHoveredSliceDescription()},
+			    {"command", static_cast<int>(pie->GetPieCommand())}, {"commands", std::move(commands)}};
 			} else {
 				const auto flags = SDL_GetWindowFlags(g_WindowMan.GetWindow());
 				scope = {{"width", g_WindowMan.GetResX()}, {"height", g_WindowMan.GetResY()}, {"fullscreen", g_WindowMan.IsFullscreen()},
@@ -616,11 +730,19 @@ namespace {
 			g_MetricsCollector.WriteObservation({{"type", "participant_removal"}, {"observed", observed["removal"]}});
 		} else if (op == "wait") {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("lockstep_frame_at_least") || step.contains("renders") ||
-			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
-			    step.contains("editing") || step.contains("seat_ready") || step.contains("brains_ready") || step.contains("seat_text_contains") ||
-			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer") || step.contains("ai_held_peer_ids"),
+			    step.contains("elapsed_ms") || step.contains("sim_advanced") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
+			    step.contains("editing") || step.contains("setup_ready") || step.contains("seat_ready") || step.contains("brains_ready") || step.contains("seat_text_contains") ||
+			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("chat_text_once") || step.contains("error_contains") ||
+			    step.contains("local_peer_at_most") || step.contains("paused") || step.contains("held_peer") || step.contains("returned_peer") || step.contains("ai_held_peer_ids"),
 			    "wait has no predicate");
+			if (step.contains("error_contains") && observed["error_text"].get<std::string>().find(step.at("error_contains").get<std::string>()) == std::string::npos) return false;
 			if (step.contains("held_peer") && !HeldPeer(step.at("held_peer"))) return false;
+			if (step.contains("returned_peer")) {
+				if (HeldPeer(step.at("returned_peer"))) return false;
+				const auto name = step.at("returned_peer").get<std::string>();
+				const auto found = std::find_if(observed["seats"].begin(), observed["seats"].end(), [&](const auto& seat) { return seat.at("name") == name; });
+				if (found == observed["seats"].end() || found->at("dropped") == true || found->at("reclaiming") == true) return false;
+			}
 			if (step.contains("ai_held_peer_ids") && observed["ai_held_peer_ids"] != step["ai_held_peer_ids"]) return false;
 			// The title screen's own scene reads as Gameplay too, paused; a started game runs.
 			if (step.contains("paused") && observed["paused"] != step["paused"]) return false;
@@ -641,6 +763,7 @@ namespace {
 				    seat->at("screen_text").get<std::string>().find(step["seat_text_contains"].get<std::string>()) == std::string::npos) return false;
 			}
 			if (step.contains("editing") && observed["editing"] != step["editing"]) return false;
+			if (step.contains("setup_ready") && observed["setup_ready"] != step["setup_ready"]) return false;
 			if (step.contains("brains_ready")) {
 				const auto& seats = observed.at("placement_seats");
 				if (seats.size() != step.at("brains_ready").get<size_t>() ||
@@ -661,8 +784,16 @@ namespace {
 			if (step.contains("local_peer_at_most") && (observed["local_peer"].get<int>() == 0 || observed["local_peer"].get<int>() > step["local_peer_at_most"].get<int>())) return false;
 			if (step.contains("lockstep_frame_at_least") && observed["lockstep_frame"].get<uint64_t>() < step["lockstep_frame_at_least"].get<uint64_t>()) return false;
 			if (step.contains("renders") && probe.renders - probe.stepRender < step["renders"].get<uint64_t>()) return false;
+			if (step.contains("sim_advanced") && g_TimerMan.GetSimUpdateCount() - probe.stepSim < step["sim_advanced"].get<uint64_t>()) return false;
 			if (step.contains("elapsed_ms") && NowMs() - probe.stepMs < step["elapsed_ms"].get<uint64_t>()) return false;
 			if (step.contains("panel_open") && observed["panel_open"] != step["panel_open"]) return false;
+			if (step.contains("chat_text_once")) {
+				const std::string text = step.at("chat_text_once").get<std::string>();
+				const auto& history = observed.at("chat_history");
+				const size_t count = std::count_if(history.begin(), history.end(), [&](const Json& line) { return line.at("text") == text; });
+				Require(count <= 1, "the player's held Enter sent the same chat line twice");
+				if (count == 0) return false;
+			}
 			if (step.contains("control")) {
 				observed["control"] = ReadControl(Control(step));
 				if (step.contains("equals")) {
@@ -678,7 +809,8 @@ namespace {
 			const std::string key = step.at("key");
 			// The movement letters drive a seat's actor the way a player's keyboard does.
 			const bool movement = key == "A" || key == "D" || key == "W" || key == "S";
-			Require(movement || key == "F6" || key == "Escape" || key == "P" || key == "CHAT" || key == "F5" || key == "F9" || key == "RCtrl+F9" || key == "RAlt+F9", "unsupported probe key");
+			const SDL_Scancode namedScancode = SDL_GetScancodeFromName(key.c_str());
+			Require(namedScancode != SDL_SCANCODE_UNKNOWN || key == "CHAT" || key == "RCtrl+F9" || key == "RAlt+F9", "unsupported probe key");
 			if (SimRateKey(key)) {
 				if (step.contains("sim_at_least")) {
 					if (probe.simTick < step["sim_at_least"].get<uint64_t>()) return false;
@@ -702,8 +834,8 @@ namespace {
 				event.key.scancode = key == "A" ? SDL_SCANCODE_A : key == "D" ? SDL_SCANCODE_D : key == "W" ? SDL_SCANCODE_W : SDL_SCANCODE_S;
 				event.key.key = SDL_GetKeyFromScancode(event.key.scancode, SDL_KMOD_NONE, false);
 			} else {
-				event.key.scancode = key == "F6" ? SDL_SCANCODE_F6 : key == "P" ? SDL_SCANCODE_P : key == "CHAT" ? chatScancode : key == "F5" ? SDL_SCANCODE_F5 : f9 ? SDL_SCANCODE_F9 : SDL_SCANCODE_ESCAPE;
-				event.key.key = key == "F6" ? SDLK_F6 : key == "P" ? SDLK_P : key == "CHAT" ? SDL_GetKeyFromScancode(chatScancode, SDL_KMOD_NONE, false) : key == "F5" ? SDLK_F5 : f9 ? SDLK_F9 : SDLK_ESCAPE;
+				event.key.scancode = key == "CHAT" ? chatScancode : f9 ? SDL_SCANCODE_F9 : namedScancode;
+				event.key.key = SDL_GetKeyFromScancode(event.key.scancode, SDL_KMOD_NONE, false);
 			}
 			event.key.down = op == "key_down";
 			// The engine's hotkeys read modifiers from SDL's state, so a combo holds its modifier from its down step to its up step.
@@ -712,6 +844,275 @@ namespace {
 				SDL_SetModState(static_cast<SDL_Keymod>(event.key.down ? SDL_GetModState() | modifier : SDL_GetModState() & ~modifier));
 			}
 			Push(event);
+		} else if (op == "wait_public_row") {
+			auto* main = g_MenuMan.IsMainMenuInteractive() ? g_MenuMan.GetMainMenu() : nullptr;
+			std::string list; int row = -1;
+			if (!main || !main->AutomationRowOf(step.at("name").get<std::string>(), list, row)) return false;
+			const auto& games = main->AutomationGameRows();
+			Require(row >= 0 && static_cast<size_t>(row) < games.size(), "the public row is outside the displayed list");
+			const auto& game = games[static_cast<size_t>(row)];
+			observed["public_row"] = {{"list", list}, {"row", row}, {"state", game.state}, {"joinable", game.joinable},
+			    {"seats_free", game.seatsFree}, {"seats_held", game.seatsHeld}, {"reason", game.reason}};
+			if (step.contains("state") && game.state != step.at("state").get<std::string>()) return false;
+			if (step.contains("held_at_least") && game.seatsHeld < step.at("held_at_least").get<int64_t>()) return false;
+			if (step.contains("joinable") && game.joinable != step.at("joinable").get<bool>()) return false;
+		} else if (op == "editor_pick") {
+			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			auto* editor = game ? game->GetEditorGUI(LocalPlayer(step)) : nullptr;
+			Require(editor && observed["editing"] == true, "there is no local setup editor");
+			const EditorInputRNG editorRNG(game->IsLockstepPlacement());
+			const Entity* preset = g_PresetMan.GetEntityPreset(step.value("class", std::string("Actor")), step.value("preset", std::string("Brain Case")), step.value("module", std::string("Base.rte")));
+			Require(preset && editor->SetCurrentObject(dynamic_cast<SceneObject*>(preset->Clone())), "the editor cannot pick the requested preset");
+			editor->SetEditorGUIMode(step.value("brain", true) ? SceneEditorGUI::INSTALLINGBRAIN : SceneEditorGUI::ADDINGOBJECT);
+		} else if (op == "game_mouse" || op == "editor_move" || op == "pie_point" || op == "aim_brain") {
+			// Motion enters through the same event queue as a device. No cursor position or controller state is assigned.
+			Vector motion(step.value("dx", 0.0F), step.value("dy", 0.0F));
+			if (op == "aim_brain") {
+				const bool untilEnd = step.value("until_end", false);
+				if (untilEnd && RoundEnded()) return observed["screen"] == "MultiplayerScreen";
+				auto* game = g_ActivityMan.GetActivity();
+				auto* actor = game ? dynamic_cast<AHuman*>(game->GetControlledActor(LocalPlayer(step))) : nullptr;
+				auto* brain = game ? game->GetPlayerBrain(step.value("target_player", 1)) : nullptr;
+				if (untilEnd && (!brain || !g_MovableMan.ValidMO(brain))) return false;
+				Require(actor && brain && g_MovableMan.ValidMO(brain), "aiming needs a living soldier and target brain");
+				const auto* gun = dynamic_cast<const HDFirearm*>(actor->GetEquippedItem());
+				Require(gun, "aiming needs the soldier's equipped firearm");
+				const uint64_t tick = g_TimerMan.GetSimUpdateCount();
+				if (probe.aimIndex != probe.index) { probe.aimIndex = probe.index; probe.aimTick = tick; }
+				const Vector distance = g_SceneMan.ShortestDistance(gun->GetMuzzlePos(), brain->GetPos(), false);
+				const Vector target = distance.GetNormalized();
+				const Vector input = g_UInputMan.AnalogAimValues(step.value("input_player", 0));
+				const Vector ray = Vector(gun->GetFlipFactor(), 0).RadRotate(gun->GetRotAngle());
+				const float miss = std::abs(ray.m_X * distance.m_Y - ray.m_Y * distance.m_X);
+				observed["aim"] = {{"device", {input.m_X, input.m_Y}}, {"target", {target.m_X, target.m_Y}},
+				    {"muzzle", {gun->GetMuzzlePos().m_X, gun->GetMuzzlePos().m_Y}}, {"ray", {ray.m_X, ray.m_Y}}, {"miss_pixels", miss},
+				    {"brain_health", brain->GetHealth()}, {"rounds", gun->GetRoundInMagCount()}};
+				if (!untilEnd && tick >= probe.aimTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4 &&
+				    (target - input).GetMagnitude() < 0.01F && miss <= 2.0F && ray.m_X * distance.m_X + ray.m_Y * distance.m_Y > 0) return true;
+				// UpdateMouseInput adds three times the device motion to its analog aim.
+				motion = (target - input) * g_UInputMan.GetMouseTrapRadius() / (3.0F * g_UInputMan.GetMouseSensitivity());
+			}
+			if (op == "pie_point") {
+				auto* game = g_ActivityMan.GetActivity();
+				auto* actor = game ? game->GetControlledActor(LocalPlayer(step)) : nullptr;
+				auto* pie = actor ? actor->GetPieMenu() : nullptr;
+				auto* slice = pie ? pie->GetFirstPieSliceByType(static_cast<PieSliceType>(step.value("command", 6))) : nullptr;
+				Require(slice && pie->IsVisible(), "the pie has no requested visible slice");
+				const Vector target = Vector(0.9F, 0).RadRotate(slice->GetMidAngle() + pie->GetRotAngle());
+				motion = (target - g_UInputMan.AnalogAimValues(step.value("input_player", 0))) * g_UInputMan.GetMouseTrapRadius() / (3.0F * g_UInputMan.GetMouseSensitivity());
+			}
+			if (op == "editor_move") {
+				auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+				auto* editor = game ? game->GetEditorGUI(LocalPlayer(step)) : nullptr;
+				Require(editor && observed["editing"] == true, "relative editor motion has no local editor");
+				float x = step.contains("x") ? step["x"].get<float>() : g_SceneMan.GetSceneWidth() * step.value("x_fraction", 0.5F);
+				float y = step.contains("y") ? step["y"].get<float>() : g_SceneMan.FindAltitude(Vector(x, 0), g_SceneMan.GetSceneHeight(), 10, true) - 20.0F;
+				if (step.contains("relative_to")) {
+					const auto& origin = probe.result.at("bookmarks").at(step.at("relative_to").get<std::string>()).at("editor_target");
+					x = origin[0].get<float>() + step.value("offset_x", 0.0F); y = origin[1].get<float>() + step.value("offset_y", 0.0F);
+				}
+				const Vector difference = Vector(x, y) - editor->GetCursorPos();
+				observed["editor_cursor"] = {editor->GetCursorPos().m_X, editor->GetCursorPos().m_Y};
+				observed["editor_target"] = {x, y};
+				if (difference.GetMagnitude() <= 1.0F) return true;
+				motion = Vector(std::clamp(difference.m_X, -80.0F, 80.0F), std::clamp(difference.m_Y, -80.0F, 80.0F)) / g_UInputMan.GetMouseSensitivity();
+			}
+			SDL_Event event{}; event.type = SDL_EVENT_MOUSE_MOTION;
+			event.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+			event.motion.which = 1;
+			event.motion.x = g_WindowMan.GetResX() / 2; event.motion.y = g_WindowMan.GetResY() / 2;
+			event.motion.xrel = motion.m_X; event.motion.yrel = motion.m_Y;
+			Push(event);
+			if (step.contains("down")) {
+				event.type = step["down"].get<bool>() ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+				event.button.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+				event.button.which = 1;
+				event.button.button = step.value("button", std::string("left")) == "right" ? SDL_BUTTON_RIGHT : SDL_BUTTON_LEFT;
+				event.button.down = step["down"].get<bool>();
+				event.button.x = g_WindowMan.GetResX() / 2; event.button.y = g_WindowMan.GetResY() / 2;
+				Push(event);
+			}
+			if (op == "editor_move" || op == "aim_brain") return false;
+		} else if (op == "landing_zone_move") {
+			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			const int player = LocalPlayer(step);
+			Require(game && observed["service"] == "Running", "landing-zone input has no running activity");
+			observed["landing_zone"] = {{"view_state", static_cast<int>(game->GetViewState(player))}, {"x", game->GetLandingZone(player).m_X}};
+			if (game->GetViewState(player) != Activity::ViewState::LandingZoneSelect) return false;
+			const Actor* brain = game->GetPlayerBrain(player);
+			Require(brain && g_MovableMan.ValidMO(brain), "landing-zone input has no living brain");
+			const uint64_t tick = g_TimerMan.GetSimUpdateCount();
+			if (probe.landingMoveIndex != probe.index) { probe.landingMoveIndex = probe.index; probe.landingMoveTick = 0; }
+			const float target = brain->GetPos().m_X + step.value("offset_x", -80.0F);
+			const float difference = target - game->GetLandingZone(player).m_X;
+			observed["landing_zone"]["target_x"] = target;
+			observed["landing_zone"]["controller_dx"] = game->GetPlayerController(player)->GetMouseMovement().m_X;
+			observed["landing_zone"]["device_dx"] = g_UInputMan.GetMouseMovement(step.value("input_player", 0)).m_X;
+			if (probe.landingMoveTick && tick < probe.landingMoveTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4) return false;
+			if (std::abs(difference) <= 3.0F) {
+				if (probe.landingMoveTick) return true;
+				probe.landingMoveTick = tick;
+				return false;
+			}
+			probe.landingMoveTick = 0;
+			// A hand moves through consecutive frames, then rests while the cursor settles.
+			SDL_Event event{}; event.type = SDL_EVENT_MOUSE_MOTION;
+			event.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.motion.which = 1;
+			event.motion.x = g_WindowMan.GetResX() / 2; event.motion.y = g_WindowMan.GetResY() / 2;
+			event.motion.xrel = std::clamp(difference, -2.0F, 2.0F) / g_UInputMan.GetMouseSensitivity();
+			Push(event);
+			return false;
+		} else if (op == "actor_next_until") {
+			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			const int player = LocalPlayer(step), input = step.value("input_player", 0);
+			Require(game && observed["service"] == "Running", "actor selection has no running activity");
+			if (probe.actorCycleIndex != probe.index) {
+				probe.actorCycleIndex = probe.index; probe.actorCycleStage = probe.actorCyclePresses = 0;
+			}
+			const uint64_t tick = g_TimerMan.GetSimUpdateCount();
+			const SDL_Scancode key = static_cast<SDL_Scancode>(g_UInputMan.GetControlScheme(input)->GetKeyMapping(InputElements::INPUT_NEXT));
+			Require(key > SDL_SCANCODE_UNKNOWN && key < SDL_SCANCODE_COUNT, "Next Actor has no keyboard binding");
+			const Actor* actor = game->GetControlledActor(player);
+			const Controller* controller = game->GetPlayerController(player);
+			observed["actor_selection"] = {{"presses", probe.actorCyclePresses}, {"stage", probe.actorCycleStage},
+			    {"preset", actor ? actor->GetModuleAndPresetName() : ""}, {"player", player}, {"key", static_cast<int>(key)},
+			    {"device", static_cast<int>(g_UInputMan.GetControlScheme(input)->GetDevice())}, {"local_seat", game->IsLocalHumanSeat(player)},
+			    {"view_state", static_cast<int>(game->GetViewState(player))}, {"buy_visible", game->IsBuyGUIVisible(player)},
+			    {"typing", g_UInputMan.SeatInputTypedInto(input)}, {"raw_key_held", g_UInputMan.KeyHeldScancode(key)},
+			    {"next_held", g_UInputMan.ElementHeld(input, InputElements::INPUT_NEXT)},
+			    {"next_released", g_UInputMan.ElementReleasedSim(input, InputElements::INPUT_NEXT)},
+			    {"controller_disabled", controller->IsDisabled()}, {"controller_mode", static_cast<int>(controller->GetInputMode())},
+			    {"controller_next", controller->IsState(ACTOR_NEXT)}, {"controller_prep", controller->IsState(ACTOR_NEXT_PREP)}};
+			const auto pushKey = [&](bool down) {
+				SDL_Event event{}; event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+				event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.key.scancode = key;
+				event.key.key = SDL_GetKeyFromScancode(key, SDL_KMOD_NONE, false); event.key.down = down; Push(event);
+				probe.result["actor_selection_events"].push_back({{"tick", tick}, {"down", down}, {"before", observed["actor_selection"]}});
+				probe.actorCycleTick = tick; probe.actorCycleRender = probe.renders;
+			};
+			if (probe.actorCycleStage == 1) {
+				if (tick < probe.actorCycleTick + 2 || probe.renders < probe.actorCycleRender + 3) return false;
+				pushKey(false); probe.actorCycleStage = 2; return false;
+			}
+			if (probe.actorCycleStage == 2) {
+				if (tick < probe.actorCycleTick + ScenarioRunner::GetLockstepLocalInputDelay() + 5) return false;
+				probe.actorCycleStage = 0;
+			}
+			if (actor && actor->GetModuleAndPresetName() == step.at("preset").get<std::string>()) return true;
+			Require(probe.actorCyclePresses < 32, "thirty-two held Next Actor presses did not select the purchased unit");
+			pushKey(true); ++probe.actorCyclePresses; probe.actorCycleStage = 1; return false;
+		} else if (op == "assert_scene" || op == "wait_scene") {
+			auto* game = g_ActivityMan.GetActivity();
+			Require(game != nullptr, "the scene has no activity");
+			const int player = LocalPlayer(step), team = game->GetTeamOfPlayer(player);
+			auto* actor = game->GetControlledActor(player);
+			const auto* pie = actor ? actor->GetPieMenu() : nullptr;
+			Json state = {{"team", team}, {"funds", game->GetTeamFunds(team)}, {"alive", actor && !actor->IsDead()}, {"brain_count", observed["brains"].size()},
+			    {"preset", actor ? actor->GetModuleAndPresetName() : ""}, {"team_actors", Json::array()}, {"weapon", ""}, {"fired", false},
+			    {"landing_zone_selection", game->GetViewState(player) == Activity::ViewState::LandingZoneSelect},
+			    {"screen_text", g_FrameMan.GetScreenText(game->ScreenOfPlayer(player))},
+			    {"pie_visible", pie && pie->IsVisible()}, {"pie_description", pie ? pie->GetHoveredSliceDescription() : ""}};
+			for (const auto* member: *g_MovableMan.GetTeamRoster(team)) state["team_actors"].push_back(member->GetModuleAndPresetName());
+			if (const auto* human = dynamic_cast<const AHuman*>(actor)) {
+				if (const auto* gun = dynamic_cast<const HDFirearm*>(human->GetEquippedItem())) {
+					state["weapon"] = gun->GetModuleAndPresetName(); state["rounds"] = gun->GetRoundInMagCount(); state["fired"] = gun->FiredOnce();
+				}
+			}
+			observed["scene"] = state;
+			bool good = true;
+			const Json expectedValues = step.value("equals", Json::object());
+			for (const auto& [key, expected]: expectedValues.items()) good &= state.at(key) == expected;
+			if (step.contains("delivered")) good &= std::find(state["team_actors"].begin(), state["team_actors"].end(), step.at("delivered")) != state["team_actors"].end();
+			if (step.contains("funds_delta_from")) {
+				const auto& order = probe.result.at("bookmarks").at(step.at("funds_delta_from").get<std::string>()).at("scope");
+				good &= order.at("team") == team && state.at("funds").get<float>() == order.at("funds").get<float>() - order.at("cost").get<float>();
+			}
+			if (step.contains("rounds_less_than")) {
+				const auto& before = probe.result.at("bookmarks").at(step.at("rounds_less_than").get<std::string>()).at("scene");
+				good &= before.at("preset") == state.at("preset") && before.at("weapon") == state.at("weapon") && state.at("rounds").get<int>() < before.at("rounds").get<int>();
+			}
+			if (op == "wait_scene" && !good) return false;
+			Require(good, "the player's live scene differs: " + state.dump());
+		} else if (op == "pan_scene") {
+			if (!step.value("enabled", true)) {
+				ReleasePanKey();
+				observed["pan_scene"] = false;
+				return true;
+			}
+			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			Require(game && observed["service"] == "Running" && ScenarioRunner::HasLockstepCoordinator(), "looking around needs a running match");
+			if (!probe.panScene) {
+				probe.panPlayer = LocalPlayer(step); probe.panInput = step.value("input_player", 0);
+				probe.panY = step.value("y", 600.0F); probe.panDirection = 1;
+				probe.panSpeed = step.value("speed", 2.0F);
+				probe.panMotionEvents = 0;
+				probe.panKey = static_cast<SDL_Scancode>(g_UInputMan.GetControlScheme(probe.panInput)->GetKeyMapping(InputElements::INPUT_NEXT));
+				Require(probe.panKey > SDL_SCANCODE_UNKNOWN && probe.panKey < SDL_SCANCODE_COUNT, "Next Actor has no keyboard binding");
+				Require(g_UInputMan.GetMouseSensitivity() > 0, "looking around needs mouse sensitivity");
+				SDL_Event event{}; event.type = SDL_EVENT_KEY_DOWN;
+				event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.key.scancode = probe.panKey;
+				event.key.key = SDL_GetKeyFromScancode(probe.panKey, SDL_KMOD_NONE, false); event.key.down = true;
+				Push(event);
+				probe.panScene = true;
+			}
+			const Vector cursor = g_CameraMan.GetScrollTarget(game->ScreenOfPlayer(probe.panPlayer));
+			const auto* controller = game->GetPlayerController(probe.panPlayer);
+			observed["pan_view"] = {{"cursor", {cursor.m_X, cursor.m_Y}}, {"target_y", probe.panY}, {"selecting", probe.panSelecting},
+			    {"next_key_held", g_UInputMan.KeyHeldScancode(probe.panKey)}, {"input_delay", ScenarioRunner::GetLockstepLocalInputDelay()},
+			    {"last_y_input", probe.panSteerY}, {"last_steer_tick", probe.panSteerTick},
+			    {"controller_motion", {controller->GetMouseMovement().m_X, controller->GetMouseMovement().m_Y}}};
+			if (!probe.panSelecting || g_TimerMan.GetSimUpdateCount() < probe.panTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4) return false;
+			if (std::abs(cursor.m_Y - probe.panY) > 2.0F) return false;
+			const int screen = game->ScreenOfPlayer(probe.panPlayer);
+			const std::string text = g_FrameMan.GetScreenText(screen);
+			// The activity's own timed message keeps the screen until its display time ends; the next update shows the selection message.
+			if (g_FrameMan.ScreenTextHeld(screen)) {
+				observed["pan_view"]["held_screen_text"] = text;
+				probe.panHeldTick = g_TimerMan.GetSimUpdateCount();
+				return false;
+			}
+			if (probe.panHeldTick != 0 && g_TimerMan.GetSimUpdateCount() <= probe.panHeldTick + 1) return false;
+			Require(text == "Select a body to switch control to...", "looking around lost its actor selection message: the screen read \"" + text + "\"");
+			Require(g_UInputMan.KeyHeldScancode(probe.panKey), "looking around lost its held Next Actor key");
+			observed["pan_scene"] = true; observed["pan_motion_events"] = probe.panMotionEvents;
+			observed["pan_view"]["screen_text"] = text;
+		} else if (op == "measure_minute") {
+			Require(observed["service"] == "Running" && observed["paused"] == false && observed["editing"] == false && observed["local_actor_alive"] == true,
+			        "the AI fight stopped or its local player lost their actor");
+			if (probe.minuteIndex != probe.index) {
+				probe.minuteIndex = probe.index; probe.minuteMs = NowMs(); probe.minuteTick = observed["lockstep_frame"].get<uint64_t>();
+				probe.minuteProbeNs = probeWallNs.load(std::memory_order_relaxed);
+			}
+			auto* activity = g_ActivityMan.GetActivity();
+			for (int team = 0; team < Activity::MaxTeamCount; ++team) {
+				bool human = false;
+				for (int player = 0; player < Players::MaxPlayerCount; ++player) human |= activity->IsSeatActive(player) && activity->IsHumanSeat(player) && activity->GetTeamOfPlayer(player) == team;
+				if (human) continue;
+				for (const auto* actor: *g_MovableMan.GetTeamRoster(team)) if (const auto* soldier = dynamic_cast<const AHuman*>(actor))
+					if (const auto* gun = dynamic_cast<const HDFirearm*>(soldier->GetEquippedItem()); gun && gun->FiredFrame()) ++probe.aiFiredFrames;
+			}
+			const uint64_t elapsed = NowMs() - probe.minuteMs;
+			if (elapsed < 60000) return false;
+			const double pace = (observed["lockstep_frame"].get<uint64_t>() - probe.minuteTick) * 1000.0 / elapsed;
+			observed["minute"] = {{"number", ++probe.fightSamples}, {"elapsed_ms", elapsed}, {"pace", pace}, {"ai_fired_frames", probe.aiFiredFrames}};
+			// Keep the cost of observing this fight beside its pace, including when the pace fails.
+			observed["minute"]["probe_wall_ms"] = (probeWallNs.load(std::memory_order_relaxed) - probe.minuteProbeNs) / 1000000.0;
+			observed["minute"]["loop_pace"] = Json::parse(::BuildLoopPaceJson());
+			observed["minute"]["actors"] = g_MovableMan.GetActorCount();
+			System::PrintDiagnosticLine("[fight15-scene] minute=" + std::to_string(probe.fightSamples) + " pace=" + std::to_string(pace) + " ai_fired_frames=" + std::to_string(probe.aiFiredFrames));
+			// A slow minute still fails the run; retain the rest of the fight before reporting it.
+			probe.minimumFightPace = std::min(probe.minimumFightPace, pace);
+			if (probe.fightSamples == 20) Require(probe.aiFiredFrames > 0, "twenty minutes passed without the AI firing a weapon");
+		} else if (op == "assert_relay") {
+			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+			int routes = 0;
+			for (const auto& member: snapshot.members) {
+				if (member.cpu || member.peerId == snapshot.localPeerId) continue;
+				Require(member.connectedRoute == "relay", "remote player is not connected through the relay: " + member.connectedRoute);
+				++routes;
+			}
+			Require(routes == 1, "the relay scene needs exactly one remote player; the lobby lists " + std::to_string(routes) + " of " + std::to_string(snapshot.members.size()) + " members");
+			observed["relay_peers"] = routes;
 		} else if (op == "pad_down" || op == "pad_up") {
 			const std::string name = step.at("button");
 			if (!probe.holdsPad) {
@@ -728,6 +1129,9 @@ namespace {
 		} else if (op == "input_scope") {
 			GUIInputWrapper::SetAutomationDriving(step.at("enabled").get<bool>());
 		} else if (op == "menu") {
+			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			auto* buy = step.value("scope", "") == "buy" && game ? game->GetBuyGUI(LocalPlayer(step)) : nullptr;
+			auto* manager = buy && buy->IsVisible() ? buy->AutomationManager() : MenuControls();
 			std::istringstream args(step.at("command").get<std::string>());
 			std::string command, name, detail;
 			args >> command;
@@ -740,14 +1144,15 @@ namespace {
 				return false;
 			} else if (command == "activate" || command == "post_command") {
 				args >> name;
+				if (name.starts_with("NetworkSeat") && name.find('@') != std::string::npos) name = Control({{"control", name}})->GetName();
 				auto* main = g_MenuMan.IsMainMenuInteractive() ? g_MenuMan.GetMainMenu() : nullptr;
-				accepted = MenuControls() && MenuAutomation::HandClick(MenuControls(), name, !g_MenuMan.GetActivePauseMenu() && main ? main->AutomationModalDialog() : nullptr, detail);
+			accepted = manager && MenuAutomation::HandClick(manager, name, !buy && !g_MenuMan.GetActivePauseMenu() && main ? main->AutomationModalDialog() : nullptr, detail);
 			} else if (command == "assert_enabled") {
 				int expected = -1; args >> name >> expected;
-				accepted = MenuControls() && (expected == 0 || expected == 1) && MenuControls()->GetControl(name) && MenuAutomation::Enabled(MenuControls()->GetControl(name)) == (expected == 1);
+			accepted = manager && (expected == 0 || expected == 1) && manager->GetControl(name) && MenuAutomation::Enabled(manager->GetControl(name)) == (expected == 1);
 			} else {
 				Require(MenuAutomation::Handles(command), "unknown menu operation: " + command);
-				accepted = MenuAutomation::Execute(MenuControls(), MenuScreen(), command, args, detail);
+			accepted = MenuAutomation::Execute(manager, MenuScreen(), command, args, detail);
 			}
 			if (accepted && MenuAutomation::HandBusy() && probe.handIndex != probe.index) {
 				probe.handIndex = probe.index;
@@ -756,6 +1161,52 @@ namespace {
 			observed["accepted"] = accepted;
 			observed["menu_observation"] = detail;
 			Require(accepted == step.value("accepted", true), "menu operation refused: " + step.at("command").get<std::string>() + " " + detail);
+		} else if (op == "shop_pick") {
+			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			auto* buy = game ? game->GetBuyGUI(LocalPlayer(step)) : nullptr;
+			Require(buy && buy->IsVisible(), "the shop is not visible");
+			bool passed = false; std::string detail;
+			if (probe.handIndex == probe.index) {
+				if (!MenuAutomation::HandFinished(passed, detail)) return false;
+				Require(passed, "the shop row refused its held click: " + detail);
+				probe.handIndex = SIZE_MAX;
+				if (!probe.shopHeader) return true;
+			} else if (MenuAutomation::HandBusy()) return false;
+			auto* list = dynamic_cast<GUIListBox*>(buy->AutomationManager()->GetControl("CatalogLB"));
+			Require(list != nullptr, "the shop has no catalog");
+			const std::string preset = step.at("preset");
+			int index = -1;
+			const auto* items = list->GetItemList();
+			for (size_t row = 0; row < items->size(); ++row) {
+				const auto* item = (*items)[row];
+				if (item->m_pEntity && item->m_pEntity->GetModuleAndPresetName() == preset) { index = static_cast<int>(row); break; }
+			}
+			probe.shopHeader = index < 0;
+			if (index < 0) {
+				const std::string module = preset.substr(0, preset.find('/'));
+				const int moduleId = g_PresetMan.GetModuleID(module);
+				for (size_t row = 0; row < items->size(); ++row) if ((*items)[row]->m_ExtraIndex == moduleId && !(*items)[row]->m_pEntity) { index = static_cast<int>(row); break; }
+			}
+			Require(index >= 0, "the selected catalog does not contain " + preset);
+			const bool header = probe.shopHeader;
+			const auto cartCount = [buy, preset] {
+				int count = 0;
+				auto* cart = dynamic_cast<GUIListBox*>(buy->AutomationManager()->GetControl("OrderLB"));
+				if (cart) for (const auto* item: *cart->GetItemList()) if (item->m_pEntity && item->m_pEntity->GetModuleAndPresetName() == preset) ++count;
+				return count;
+			};
+			const int before = cartCount();
+			const auto taken = [buy, list, preset, header, cartCount, before] {
+				if (header) {
+					for (const auto* item: *list->GetItemList()) if (item->m_pEntity && item->m_pEntity->GetModuleAndPresetName() == preset) return true;
+					return false;
+				}
+				const auto* craft = buy->GetDeliveryCraftPreset();
+				return (craft && craft->GetModuleAndPresetName() == preset) || cartCount() == before + 1;
+			};
+			Require(MenuAutomation::HandRow(buy->AutomationManager(), "CatalogLB", index, 1, nullptr, detail, taken), "the shop row cannot be reached: " + detail);
+			probe.handIndex = probe.index;
+			return false;
 		} else if (op == "show_row") {
 			// A player's row on the open host panel, reached as a hand reaches it: More players, its press and its release on
 			// separate frames, until the row shows or every page has been seen.
@@ -891,7 +1342,7 @@ namespace {
 				if (step.value("unwrapped", false)) Require(value.at("text_width").get<int>() <= rect[2].get<int>(), "label text exceeds its width");
 			}
 			if (step.contains("inside")) {
-				Json parentStep = {{"control", step.at("inside")}};
+				Json parentStep = step; parentStep["control"] = step.at("inside");
 				const Json parent = ReadControl(Control(parentStep)).at("rect");
 				const Json& rect = value.at("rect");
 				Require(rect[0] >= parent[0] && rect[1] >= parent[1] &&
@@ -923,7 +1374,7 @@ namespace {
 				}
 			}
 			for (const auto& name: step.value("clear_of", std::vector<std::string>{})) {
-				Json otherStep = {{"control", name}};
+				Json otherStep = step; otherStep["control"] = name;
 				const auto other = ReadControl(Control(otherStep));
 				if (!other.at("visible").get<bool>()) continue;
 				const auto& a = value.at("rect");
@@ -939,7 +1390,7 @@ namespace {
 			    "the match cannot take a placement command");
 		} else if (op == "editor_place_brain" || op == "editor_done" || op == "editor_place" || op == "actor_select") {
 			// The seat's own editor does the work: the gesture is queued once and the step waits it out.
-			const int player = ProbePlayer(step.value("player", Json(0)), observed);
+			const int player = step.contains("input_player") ? LocalPlayer(step) : ProbePlayer(step.value("player", Json(0)), observed);
 			Require(std::any_of(observed["editor_seats"].begin(), observed["editor_seats"].end(),
 			    [player](const Json& row) { return row.at("player") == player; }), "editor gesture targets a nonlocal seat");
 			if (probe.gestureIndex != probe.index) {
@@ -961,7 +1412,7 @@ namespace {
 			Require(status != 2, "the seat could not carry out its editor gesture");
 			if (status == 1) return false;
 		} else if (op == "assert_editor") {
-			const int player = ProbePlayer(step.value("player", Json(0)), observed);
+			const int player = step.contains("input_player") ? LocalPlayer(step) : ProbePlayer(step.value("player", Json(0)), observed);
 			const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
 			    [player](const Json& row) { return row.at("player") == player; });
 			Require(seat != observed["editor_seats"].end(), "seat " + std::to_string(player) + " is not a local editor seat");
@@ -1158,6 +1609,12 @@ namespace {
 			if (!std::filesystem::is_regular_file(path)) return false;
 			NoteRendezvous(std::filesystem::path(path).stem().generic_string());
 		} else if (op == "finish") {
+			ReleasePanKey();
+			if (probe.fightSamples != 0) {
+				observed["fight_summary"] = {{"minutes", probe.fightSamples}, {"minimum_pace", probe.minimumFightPace}, {"ai_fired_frames", probe.aiFiredFrames}};
+				Require(probe.fightSamples == 20, "the AI fight did not measure twenty full minutes");
+				Require(probe.minimumFightPace >= 58.0, "a peer's full minute fell below 58 ticks per second");
+			}
 			GUIInputWrapper::SetAutomationDriving(false);
 			ReleaseProbePad();
 			Require(ScriptedPadCount() == 0, "a scripted pad remained after finish");
@@ -1185,13 +1642,15 @@ namespace {
 				Load();
 			}
 			if (!probe.enabled) return;
+			const ProbeCost cost;
 			if (phase == Phase::Draw && !probe.done) LabelDump();
 			const uint64_t round = ScenarioRunner::GetLockstepRoundId();
 			if (probe.script.value("repeat_rounds", false) && round > 0 && round != probe.round) {
+				ReleasePanKey();
 				probe.round = round; probe.index = 0; probe.done = false; probe.phaseArmed = false;
 				probe.result["steps"] = Json::array(); probe.result["complete"] = false; probe.result["pass"] = false;
 				probe.result["round"] = round; probe.started = Clock::now();
-				probe.stepMs = probe.resultWrittenMs = 0; probe.gestureIndex = SIZE_MAX; probe.handIndex = SIZE_MAX;
+				probe.stepMs = probe.resultWrittenMs = probe.pendingWrittenMs = 0; probe.gestureIndex = SIZE_MAX; probe.handIndex = SIZE_MAX;
 				probe.roundEndArmed = false; probe.roundEndSignals.clear();
 			}
 			if (probe.done) return;
@@ -1206,24 +1665,73 @@ namespace {
 				return;
 			}
 			if (phase == Phase::Draw) ++probe.renders;
+			if (phase == Phase::Draw && probe.panScene) {
+				auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+				const bool selecting = game && game->GetViewState(probe.panPlayer) == Activity::ViewState::ActorSelect;
+				if (!selecting) probe.panSelecting = false;
+				if (selecting && !g_ActivityMan.ActivityPaused() && !g_UInputMan.SeatInputTypedInto(probe.panInput)) {
+					const Vector cursor = g_CameraMan.GetScrollTarget(game->ScreenOfPlayer(probe.panPlayer));
+					if (cursor.m_X < 400) probe.panDirection = 1;
+					else if (cursor.m_X > g_SceneMan.GetSceneWidth() - 400) probe.panDirection = -1;
+					SDL_Event event{}; event.type = SDL_EVENT_MOUSE_MOTION;
+					event.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.motion.which = 1;
+					event.motion.x = g_WindowMan.GetResX() / 2; event.motion.y = g_WindowMan.GetResY() / 2;
+					event.motion.xrel = probe.panDirection * probe.panSpeed / g_UInputMan.GetMouseSensitivity();
+					const uint64_t tick = g_TimerMan.GetSimUpdateCount();
+					const float error = probe.panY - cursor.m_Y;
+					// Sustain small mouse movements until the actual cursor reaches the target band.
+					probe.panSteerY = std::abs(error) > 2.0F ? std::clamp(error, -2.0F, 2.0F) : 0.0F;
+					probe.panSteerTick = tick;
+					event.motion.yrel = probe.panSteerY / g_UInputMan.GetMouseSensitivity();
+					Push(event);
+					if (!probe.panSelecting) probe.panTick = g_TimerMan.GetSimUpdateCount();
+					probe.panSelecting = true;
+					++probe.panMotionEvents;
+				}
+			}
 			Require(NowMs() <= probe.script.at("timeout_ms").get<uint64_t>(), "script deadline at step " + std::to_string(probe.index));
 			Require(probe.index < probe.script["steps"].size(), "script did not finish explicitly");
 			const auto& step = probe.script["steps"][probe.index];
-			if (step.contains("within_ms")) Require(NowMs() - probe.stepMs <= step.at("within_ms").get<uint64_t>(),
-			    "step deadline at step " + std::to_string(probe.index));
+			const uint64_t stepLimit = step.value("within_ms", probe.script.value("step_timeout_ms", uint64_t{0}));
+			Require((!step.contains("within_ms") && stepLimit == 0) || NowMs() - probe.stepMs <= stepLimit,
+			    "step deadline at " + std::to_string(probe.index) + " (" + step.at("op").get<std::string>() + ")");
 			if (StepPhase(step) != phase) return;
 			if (menuScopeOnly && !MenuScopeStep(step)) return;
+			if (step.at("op") == "measure_minute" && ScenarioRunner::HasLockstepCoordinator()) {
+				const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
+				const bool sameFrame = probe.minuteObservedIndex == probe.index && probe.minuteObservedFrame == frame;
+				probe.minuteObservedIndex = probe.index;
+				probe.minuteObservedFrame = frame;
+				// Polls between commits have the same game state. Keep the deadlines and live-state guards on every poll.
+				if (sameFrame && probe.minuteIndex == probe.index && NowMs() - probe.minuteMs < 60000 &&
+				    g_NetMatchService.GetState() == NetMatchServiceState::Running && !g_ActivityMan.ActivityPaused() && LocalActorAlive() &&
+				    g_ActivityMan.GetActivity()->GetActivityState() != Activity::Editing) return;
+			}
 			Json observed = Observe();
 			try {
-				if (!Step(step, observed)) return;
+				if (!Step(step, observed)) {
+					if (NowMs() >= probe.pendingWrittenMs + 1000) {
+						probe.result["pending"] = {{"index", probe.index}, {"op", step.at("op")}, {"observed", observed}};
+						// A stalled action needs its latest observation, not another copy of every completed action.
+						const std::string name = probe.script.value("repeat_rounds", false) ? "net-ui-pending.round" + std::to_string(probe.round) + ".json" : "net-ui-pending.json";
+						std::ofstream output(probe.directory / name);
+						output << probe.result["pending"].dump(2) << '\n';
+						Require(static_cast<bool>(output), "cannot write pending probe observation");
+						probe.pendingWrittenMs = NowMs();
+					}
+					return;
+				}
 			} catch (...) {
 				probe.result["failed_observation"] = observed;
 				throw;
 			}
 			probe.result["steps"].push_back({{"index", probe.index}, {"op", step.at("op")}, {"observed", observed}});
+			probe.result.erase("pending");
+			if (step.contains("remember")) probe.result["bookmarks"][step.at("remember").get<std::string>()] = observed;
 			++probe.index;
 			probe.stepRender = probe.renders;
 			probe.stepMs = NowMs();
+			probe.stepSim = g_TimerMan.GetSimUpdateCount();
 			// The result grows by a full observation per step; rewriting all of it every frame made a long script its own
 			// peer's slowest work, so it is written at most once a second and always at the end.
 			if (probe.done || probe.stepMs >= probe.resultWrittenMs + 1000) {
@@ -1232,6 +1740,7 @@ namespace {
 			}
 			if (probe.done) System::PrintDiagnosticLine("[net-ui-probe] PASS: completed " + std::to_string(probe.index) + " steps");
 		} catch (const std::exception& error) {
+			try { ReleasePanKey(); } catch (...) {}
 			GUIInputWrapper::SetAutomationDriving(false);
 			ReleaseProbePad();
 			probe.done = true;
@@ -1305,40 +1814,61 @@ bool RunCrossScopeSelfTest(std::string* error) {
 		const char* original = std::getenv("CC_TEST_NET_UI_SCRIPT");
 		const std::optional<std::string> originalPath = original ? std::optional<std::string>(original) : std::nullopt;
 		const auto input = root / "probe.json", output = root / "net-ui-result.json";
-		SDL_setenv_unsafe("CC_TEST_NET_UI_SCRIPT", input.string().c_str(), 1);
+		// Load reads the lever with std::getenv; SDL's Windows setter writes only the Win32 block, which getenv never sees.
+		const auto setScript = [](const char* value) {
+#ifdef _WIN32
+			_putenv_s("CC_TEST_NET_UI_SCRIPT", value ? value : "");
+#else
+			if (value) setenv("CC_TEST_NET_UI_SCRIPT", value, 1); else unsetenv("CC_TEST_NET_UI_SCRIPT");
+#endif
+		};
+		setScript(input.string().c_str());
 		bool loadErrors = true;
+		std::string loadDetails;
 		for (const std::string name: {"existing", "missing", "malformed", "over-cap"}) {
 			probe = Probe{};
 			std::filesystem::remove(input, ignored); std::filesystem::remove(output, ignored);
 			if (name == "existing") { std::ofstream file(output); file << "preserved receipt"; }
 			if (name == "malformed") { std::ofstream file(input); file << "{"; }
 			if (name == "over-cap") {
-				Json steps = Json::array(); for (int i = 0; i < 257; ++i) steps.push_back({{"op", "finish"}});
+				Json steps = Json::array(); for (size_t i = 0; i <= c_MaxScriptSteps; ++i) steps.push_back({{"op", "finish"}});
 				std::ofstream file(input); file << Json{{"schema", 1}, {"timeout_ms", 1000}, {"steps", steps}};
 			}
 			std::string failure;
 			try { Load(); } catch (const std::exception& e) { failure = e.what(); }
-			loadErrors &= !failure.empty() && !probe.done;
-			if (name == "existing") loadErrors &= failure == "probe result already exists" && !probe.resultStarted;
-			if (name == "missing") loadErrors &= failure == "cannot read input script";
-			if (name == "over-cap") loadErrors &= failure == "invalid script length";
+			bool good = !failure.empty() && !probe.done;
+			if (name == "existing") good &= failure == "probe result already exists" && !probe.resultStarted;
+			if (name == "missing") good &= failure == "cannot read input script";
+			if (name == "over-cap") good &= failure == "invalid script length";
 			probe.failed = probe.done = true;
 			probe.result["error"] = failure;
 			if (probe.resultStarted) WriteResult();
 			// A later render must neither read the invalid script nor replace the first error.
 			Process(Phase::Draw);
-			loadErrors &= probe.result.at("error") == failure;
-			std::ifstream file(output);
-			if (name == "existing") { std::string receipt; std::getline(file, receipt); loadErrors &= receipt == "preserved receipt"; }
-			else { Json receipt; file >> receipt; loadErrors &= receipt.at("error") == failure && receipt.at("pass") == false; }
+			good &= probe.result.at("error") == failure;
+			std::string text;
+			const bool present = std::filesystem::is_regular_file(output);
+			if (std::ifstream file(output, std::ios::binary); file) text.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+			std::string receiptState = !present ? "missing" : text.empty() ? "empty" : std::to_string(text.size()) + " bytes";
+			if (name == "existing") {
+				good &= text.substr(0, text.find('\n')) == "preserved receipt";
+			} else if (const Json receipt = Json::parse(text, nullptr, false); receipt.is_discarded() || !receipt.is_object()) {
+				good = false;
+				receiptState += " not a JSON object";
+			} else {
+				good &= receipt.value("error", Json()) == failure && receipt.value("pass", Json()) == false;
+			}
+			if (!good) loadDetails += (loadDetails.empty() ? "" : "; ") + name + ": load error '" + failure + "', receipt " + receiptState;
+			loadErrors &= good;
 		}
-		if (originalPath) SDL_setenv_unsafe("CC_TEST_NET_UI_SCRIPT", originalPath->c_str(), 1); else SDL_unsetenv_unsafe("CC_TEST_NET_UI_SCRIPT");
+		setScript(originalPath ? originalPath->c_str() : nullptr);
 		probe = std::move(saved);
 		MenuAutomation::SetArtifactDirectory(probe.directory.string());
 		std::filesystem::remove_all(root, ignored);
 		passed &= loadErrors;
-		if (!loadErrors) *error = "probe load rejection lost its first error or overwrote an existing receipt";
-		System::PrintDiagnosticLine("[net-match-selftest] " + std::string(loadErrors ? "PASS" : "FAIL") + " probe_preserves_load_errors_and_existing_receipts");
+		if (!loadErrors) *error = "probe load rejection lost its first error or overwrote an existing receipt (" + loadDetails + ")";
+		System::PrintDiagnosticLine("[net-match-selftest] " + std::string(loadErrors ? "PASS" : "FAIL") + " probe_preserves_load_errors_and_existing_receipts" +
+		                            (loadErrors ? "" : " (" + loadDetails + ")"));
 	}
 
 	// Lobby ticks cannot satisfy an opt-in round wait. The legacy clock remains the default.
@@ -1440,6 +1970,10 @@ void AfterMenuDraw() {
 }
 
 void OnSimTick(uint64_t simUpdateCount) {
+	// Destructors may run on a capture thread holding a Lua state; only the sim thread enters the plane.
+	if (lifetimeTracePreset && *lifetimeTracePreset) {
+		lifetimeTraceActive.store(probe.enabled && !probe.done && ScenarioRunner::IsLockstepControllerSyncActive(), std::memory_order_relaxed);
+	}
 	if (!probe.enabled || probe.done) return;
 	probe.simTick = simUpdateCount;
 	Process(Phase::Sim);

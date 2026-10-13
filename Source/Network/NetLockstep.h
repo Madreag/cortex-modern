@@ -1036,6 +1036,8 @@ namespace RTE {
 		/// Starts the replay of an existing world while retaining the seat history its simulation still reads.
 		bool StartCatchUpReplay(INetTransport& transport, const NetLockstepConfig& config, const NetLockstepCoordinator& live, std::string* error = nullptr);
 		bool AdoptPeerReturnConfig(NetLockstepConfig& config, const NetLockstepCoordinator& replay, uint64_t activation) const;
+		/// A returning seat's live round from the host's return certificate, read against the replay that reached its boundary.
+		bool AdoptPeerReturn(NetLockstepConfig& config, const NetLockstepCoordinator& replay, const NetHostMigrationMessage& proof, uint64_t activation, std::string* why = nullptr) const;
 		/// Installs the recording's host-authored startup boundary before playback queues its first frame.
 		bool ApplyReplayAgreedStart(const NetLockstepStart& start, std::string* error = nullptr);
 		bool IsReplayPlayback() const { NET_PLANE_CHECK(); return m_Playback; }
@@ -1632,7 +1634,8 @@ namespace RTE {
 		std::map<NetPeerId, uint8_t>& PeerListenerBindings() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->listenerBindings : m_PeerListenerBindings; }
 		std::map<NetPeerId, uint8_t>& PeerPrimaryBindings() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryBindings : m_PeerPrimaryBindings; }
 		bool& PeerPrimaryListener() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryListener : m_PeerPrimaryListener; }
-		bool HasPeerFrameRoute(uint8_t peer);
+		bool HasPeerFrameRoute(uint8_t peer) const;
+		bool PeerLinkLostBeforeOwnInput(uint8_t peer, uint64_t frame) const;
 		std::pair<INetTransport*, NetPeerId> PeerFrameRoute(uint8_t peer) const;
 		void NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink, bool completedRound = false);
 		void AdjudicatePeerRoundEnds(uint64_t nowMs);
@@ -1647,9 +1650,12 @@ namespace RTE {
 		bool SendPeerFrameMessage(NetHostMigrationMessage message, NetTransportLane lane = NetTransportLane::ControlReliable, uint8_t onlyPeer = 0);
 		bool HandlePeerFrameMessage(const NetHostMigrationMessage& message, uint64_t nowMs, const NetHash32* readKey = nullptr);
 		void SendPeerInput(const NetLockstepFrame& frame);
+		bool PeerWantsLiveInput(uint8_t peer) const;
+		bool PeerReadsInputLive(uint8_t peer, uint64_t nowMs) const;
 		void TickPeerFrameGroups(uint64_t nowMs);
 		bool PeerFrameBlackout(uint64_t nowMs);
 		bool PeerInputAccepted(uint64_t frame, uint8_t owner = 0) const;
+		uint32_t PeerInputVoters(uint64_t frame, uint8_t owner) const;
 		bool PeerGroupHasAuthority(uint32_t voters) const;
 		void SendForwardedPeerInput(const NetLockstepFrame& input, uint8_t onlyPeer);
 		void CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs);
@@ -1670,6 +1676,7 @@ namespace RTE {
 		void RequestPeerCommittedTail(uint64_t nowMs);
 		NetHash32 PeerFramePrefix(uint64_t frame) const;
 		NetHash32 PeerAppliedFramePrefix(uint64_t frame) const;
+		NetHash32 CommittedFramePrefix(const NetLockstepReadyFrame& ready) const;
 		void SendPeerFrameWitness(uint64_t frame);
 		struct PeerBridge {
 			uint64_t fromFrame = 0;
@@ -1743,6 +1750,7 @@ namespace RTE {
 		std::optional<uint64_t> m_TestBlackoutAtMs;
 		bool m_TestBlackoutEnded = false;
 		std::map<uint64_t, uint64_t> m_PeerInputSentAtMs;
+		std::map<uint8_t, uint64_t> m_PeerInputReliableThrough;
 		std::map<uint8_t, NetInputDelayEstimator> m_PeerReceiptDelaySamples;
 		void TickPeerInputDelay(uint64_t nowMs);
 		bool ProposePeerInputDelay(uint8_t peer, uint16_t delay, uint64_t frame);

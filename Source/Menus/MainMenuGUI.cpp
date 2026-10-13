@@ -97,7 +97,8 @@ static std::string PlayerFacingStatus(const std::string& text) {
 			const std::string name = refusedName(" is banned from this session");
 			return name.empty() ? "A banned player was refused." : name + " was refused: banned from this session.";
 		}
-		return wireReason ? "You are banned from this session" : text;
+		if (wireReason) return "You are banned from this session";
+		return text.find("banned from this session") != std::string::npos ? "The host banned you from this session" : text;
 	}
 	if (text.find("transport stopped") != std::string::npos || text == "Connection dropped") return "The host's connection was lost.";
 	return text;
@@ -946,14 +947,13 @@ void MainMenuGUI::OfferStoredRejoinOnEntry() {
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 }
 
-void MainMenuGUI::OfferHostLeftLandingOnEntry() {
-	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen || g_NetMatchService.GetState() != NetMatchServiceState::Failed ||
-	    g_NetMatchService.GetLobbySnapshot().errorText != "The host left the match") {
+void MainMenuGUI::OfferFailedMatchLandingOnEntry() {
+	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen || g_NetMatchService.GetState() != NetMatchServiceState::Failed) {
 		return;
 	}
 	SetActiveMenuScreen(MenuScreen::MultiplayerScreen, false);
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
-	m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus("The host left the match"));
+	m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(g_NetMatchService.GetLobbySnapshot().errorText));
 }
 
 void MainMenuGUI::OfferRematchLobbyOnEntry() {
@@ -1204,7 +1204,7 @@ bool MainMenuGUI::HandleInputEvents() {
 	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen && m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby &&
 	    !m_ActiveDialogBox && m_MultiplayerLobbyChatInput && m_MultiplayerLobbyChatInput->GetVisible() &&
 	    m_MultiplayerLobbyChatInput->GetEnabled() && m_MultiplayerLobbyChatInput->HasFocus() &&
-	    (g_UInputMan.KeyPressed(SDLK_RETURN) || g_UInputMan.KeyPressed(SDLK_KP_ENTER))) {
+	    (g_UInputMan.NetworkGUIKeyPressed(SDL_SCANCODE_RETURN) || g_UInputMan.NetworkGUIKeyPressed(SDL_SCANCODE_KP_ENTER))) {
 		SendLobbyChat();
 	}
 	return false;
@@ -3397,11 +3397,13 @@ void MainMenuGUI::ChangeHostSeatType(int row, int typeIndex) {
 		}
 		return 0;
 	};
-	// A CPU seat wants a team no human seat holds and no other CPU seat claims.
-	auto freeCpuTeam = [this]() -> int {
+	// The seat being replaced gives up its team; every other seat keeps its claim.
+	auto freeCpuTeam = [this](int replacedRow) -> int {
 		for (int team = 0; team < 4; ++team) {
 			bool humanTeam = false, cpuTeam = false;
-			for (const NetMatchPlayerSlot& s : m_HostOptionsDraft.players) {
+			for (size_t index = 0; index < m_HostOptionsDraft.players.size(); ++index) {
+				if (static_cast<int>(index) == replacedRow) continue;
+				const NetMatchPlayerSlot& s = m_HostOptionsDraft.players[index];
 				if (s.team != team) continue;
 				(s.cpu ? cpuTeam : humanTeam) = true;
 			}
@@ -3429,7 +3431,7 @@ void MainMenuGUI::ChangeHostSeatType(int row, int typeIndex) {
 			seat.displayName = NetMatchConfigUtil::UnseatedSlotName(peerId, candidate.persistentWorld);
 			candidate.players.push_back(seat);
 		} else {
-			const int team = freeCpuTeam();
+			const int team = freeCpuTeam(-1);
 			if (team < 0) {
 				return refuse("No free team for a CPU seat");
 			}
@@ -3463,7 +3465,7 @@ void MainMenuGUI::ChangeHostSeatType(int row, int typeIndex) {
 		if (typeIndex == 1) {
 			candidate.players.erase(candidate.players.begin() + row);
 		} else if (typeIndex == 2) {
-			const int team = freeCpuTeam();
+			const int team = freeCpuTeam(row);
 			if (team < 0) {
 				return refuse("No free team for a CPU seat - every team is taken");
 			}
@@ -4007,8 +4009,11 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		request.peerCount = m_HostSetupOptions->peerCount;
 		request.inputDelayFrames = m_HostSetupOptions->inputDelayFrames;
 		request.autoInputDelay = m_HostSetupOptions->delayPolicy == NetMatchDelayPolicy::Auto;
-		uint32_t cpuSeats = 0;
-		for (const NetMatchPlayerSlot& slot : m_HostSetupOptions->players) cpuSeats += slot.cpu ? 1 : 0;
+		uint32_t humanSeats = 0, cpuSeats = 0;
+		for (const NetMatchPlayerSlot& slot : m_HostSetupOptions->players) {
+			(slot.cpu ? cpuSeats : humanSeats)++;
+		}
+		request.humans = humanSeats;
 		request.cpuSlots = cpuSeats;
 		request.frameRedundancyTicks = m_HostSetupOptions->frameRedundancyTicks;
 		// What Advanced accepted is what the lobby gets: the seats, their teams and delays, the rule for a lost brain, all of it.
@@ -4410,7 +4415,13 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetText(savingDiagnostics ? "Saving report..." : "Save Support Report");
 	const bool lobby = m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby;
 	const auto summary = g_NetMatchService.GetLastMatchSummary();
-	m_LastMatchSummaryLabel->SetText(summary ? summary->LineText() : "");
+	std::string summaryText = summary ? summary->LineText() : "";
+	if (summary && summary->winnerTeam >= 0) {
+		// The compact result names the winner; keep the reason for that result visible too.
+		const size_t reason = summary->result.find(" - ");
+		if (reason != std::string::npos) summaryText += "\n" + summary->result.substr(reason + 3);
+	}
+	m_LastMatchSummaryLabel->SetText(summaryText);
 	m_LastMatchSummaryLabel->SetVisible(lobby && summary.has_value());
 	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetVisible(lobby && summary.has_value());
 	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetEnabled(summary.has_value());
@@ -4631,7 +4642,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	};
 	const auto compose = [&]() {
 		std::string sentence;
-		if (!snapshot.transferLine.empty() || !snapshot.waitLine.empty()) {
+		const bool countingDown = snapshot.inLobby && snapshot.startCountdownRunning;
+		// The countdown stays visible while its world is prepared.
+		if (!countingDown && (!snapshot.transferLine.empty() || !snapshot.waitLine.empty())) {
 			// A join in progress names what it waits on: the world's image, or one of its held slots and the seconds left.
 			sentence = !snapshot.transferLine.empty() ? snapshot.transferLine : snapshot.waitLine;
 		} else if (snapshot.awaitingHostConfig) {
@@ -4650,9 +4663,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			} else if (snapshot.remoteReady || notReady.empty()) {
 				sentence = "Everyone is ready - press Start Match";
 			} else {
-				sentence = "Waiting for " + names(notReady) + " to press Ready - Start Match starts in 30 s";
+				sentence = "Waiting for " + names(notReady) + " to press Ready";
 			}
-		} else if (snapshot.joiningWorld) {
+		} else if (snapshot.joiningWorld && !countingDown) {
 			sentence = PlayerFacingStatus(snapshot.statusText);
 		} else {
 			const bool ready = g_NetMatchService.IsReadyRequested();
@@ -4728,9 +4741,12 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		m_MultiplayerLobbyPortMapLabel->SetHorizontalOverflowScroll(wide);
 		m_MultiplayerLobbyPortMapLabel->ActivateDeactivateOverflowScroll(wide);
 	}
-	const int summaryHeight = summary ? 20 : 0;
 	m_LastMatchSummaryLabel->SetPositionRel(12, 178 + statusExtra);
+	m_LastMatchSummaryLabel->SetHorizontalOverflowScroll(false);
+	m_LastMatchSummaryLabel->ActivateDeactivateOverflowScroll(false);
 	m_LastMatchSummaryLabel->Resize(contentWidth - 90, 18);
+	const int summaryHeight = summary ? std::max(20, m_LastMatchSummaryLabel->GetTextHeight() + 6) : 0;
+	m_LastMatchSummaryLabel->Resize(contentWidth - 90, std::max(18, summaryHeight - 2));
 	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetPositionRel(contentWidth - 74, 178 + statusExtra);
 	m_MultiplayerLobbyPortMapLabel->SetPositionRel(12, 178 + statusExtra + summaryHeight);
 	const int portMapHeight = listing.empty() ? 0 : 14;
@@ -5238,11 +5254,14 @@ static bool IsControlClickable(GUIControl* control) {
 
 bool MainMenuGUI::AutomationRowOf(const std::string& name, std::string& listName, int& row) const {
 	// The list shows every engine beaconing on the network, so a scripted join names its own session's row by port.
-	if (name.starts_with("GameRowPort")) {
-		const std::string number = name.substr(11);
+	const bool publicRow = name.starts_with("PublicGameRowPort");
+	if (publicRow || name.starts_with("GameRowPort")) {
+		const std::string number = name.substr(publicRow ? 17 : 11);
 		if (number.empty() || number.size() > 5 || number.find_first_not_of("0123456789") != std::string::npos) return false;
 		const unsigned long port = std::stoul(number);
-		const auto found = std::find_if(m_GameRows.begin(), m_GameRows.end(), [port](const NetDirectoryClient::GameRow& candidate) { return candidate.port == port; });
+		const auto found = std::find_if(m_GameRows.begin(), m_GameRows.end(), [port, publicRow](const NetDirectoryClient::GameRow& candidate) {
+			return candidate.port == port && (!publicRow || candidate.source == "NET");
+		});
 		if (found == m_GameRows.end()) return false;
 		listName = m_MultiplayerLanGamesList->GetName();
 		row = static_cast<int>(found - m_GameRows.begin());

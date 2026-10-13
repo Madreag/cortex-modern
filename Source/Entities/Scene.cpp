@@ -12,12 +12,15 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <exception>
+#include <locale>
 #include <iterator>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <unordered_set>
 #include "TimerMan.h"
 #include "FrameMan.h"
@@ -45,6 +48,7 @@
 #include "SLBackground.h"
 #include "EditorActivity.h"
 #include "ScenarioRunner.h"
+#include "System.h"
 #include "NetMatchConfig.h"
 #include "Controller.h"
 
@@ -3473,6 +3477,22 @@ std::shared_ptr<volatile PathRequest> Scene::CalculatePathAsync(const Vector& st
 	}
 	// A shared request is published at T+H on every peer, the same tick the terrain it read becomes committed.
 	const uint64_t completeTick = committedHorizon ? ScenarioRunner::GetLockstepAppliedFrame() + SharedPathHorizonTicks() : 0;
+	static const bool recordResults = std::getenv("CC_TEST_PATH_RESULTS") != nullptr;
+	if (recordResults && ScenarioRunner::IsLockstepControllerSyncActive() && !g_CurrentAIActor) {
+		const uint64_t sourceTick = ScenarioRunner::GetLockstepAppliedFrame();
+		callback = [original = std::move(callback), sourceTick, completeTick, team](std::shared_ptr<volatile PathRequest> result) {
+			const PathRequest& path = const_cast<const PathRequest&>(*result);
+			std::ostringstream line;
+			line.imbue(std::locale::classic());
+			line << "[shared-path-result] source=" << sourceTick << " commit=" << completeTick << " team=" << static_cast<int>(team)
+			     << " generation=" << path.horizonGeneration << " status=" << path.status << " length=" << path.pathLength
+			     << std::hexfloat << " cost=" << path.totalCost << " from=" << path.startPos.m_X << ',' << path.startPos.m_Y
+			     << " to=" << path.targetPos.m_X << ',' << path.targetPos.m_Y << " path=";
+			for (const Vector& point: path.path) line << point.m_X << ',' << point.m_Y << ';';
+			System::PrintDiagnosticLine(line.str());
+			if (original) original(result);
+		};
+	}
 	return GetPathFinder(team).CalculatePathAsync(start, end, jumpHeight, digStrength, callback, committedHorizon, completeTick);
 }
 

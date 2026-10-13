@@ -4,6 +4,7 @@
 #include "Constants.h"
 #include "OwnedMovableObjects.h"
 #include "MovableMan.h"
+#include "NetModerationGUIProbe.h"
 #include <iostream>
 #include "SimDumpTape.h"
 #include "NetA7Journal.h"
@@ -4695,8 +4696,21 @@ void MovableMan::AddActor(Actor* actorToAdd) {
 	}
 }
 
+bool MovableMan::AlreadyOwnsMatchDevice(const MovableObject* device) const {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive() || m_Speculation.active || m_RestoringSnapshot) {
+		return false;
+	}
+	// Inventory dropping and arm detachment can hand over the same device in one update.
+	// Settling devices have left the collision-valid sets but still belong to the world.
+	return ValidMO(device) || std::find(m_Particles.begin(), m_Particles.end(), device) != m_Particles.end();
+}
+
 void MovableMan::AddItem(HeldDevice* itemToAdd) {
 	if (itemToAdd && g_ActivityMan.GetActivity()) {
+		if (AlreadyOwnsMatchDevice(itemToAdd)) {
+			return;
+		}
+		NetModerationGUIProbe::TraceObjectLifetime(itemToAdd, "add-item", true);
 		g_ActivityMan.GetActivity()->ForceSetTeamAsActive(itemToAdd->GetTeam());
 
 		itemToAdd->SetAsAddedToMovableMan();
@@ -4730,6 +4744,9 @@ void MovableMan::AddItem(HeldDevice* itemToAdd) {
 
 void MovableMan::AddParticle(MovableObject* particleToAdd) {
 	if (particleToAdd && g_ActivityMan.GetActivity()) {
+		if (ScenarioRunner::IsLockstepControllerSyncActive() && particleToAdd->IsDevice() && AlreadyOwnsMatchDevice(particleToAdd)) {
+			return;
+		}
 		SceneMan::TraceTerrainEvent("spwn", std::bit_cast<int32_t>(particleToAdd->GetPos().m_X), std::bit_cast<int32_t>(particleToAdd->GetPos().m_Y), static_cast<int>(particleToAdd->GetUniqueID()), static_cast<int>(SceneMan::GetTerrainEventContext()), std::bit_cast<int32_t>(particleToAdd->GetVel().m_X));
 		g_ActivityMan.GetActivity()->ForceSetTeamAsActive(particleToAdd->GetTeam());
 
@@ -4757,6 +4774,7 @@ void MovableMan::AddParticle(MovableObject* particleToAdd) {
 			TakePreviewSpawn(particleToAdd);
 		}
 		if (particleToAdd->IsDevice()) {
+			NetModerationGUIProbe::TraceObjectLifetime(particleToAdd, "add-device-particle", true);
 			std::lock_guard<std::mutex> lock(m_AddedItemsMutex);
 			m_AddedItems.push_back(particleToAdd);
 			m_ValidItems.insert(particleToAdd);
@@ -7282,6 +7300,9 @@ void MovableMan::Update() {
 				// Set brain to 0 to avoid crashes due to brain deletion
 				Activity* pActivity = g_ActivityMan.GetActivity();
 				if (pActivity) {
+					if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+						if (auto* game = dynamic_cast<GameActivity*>(pActivity)) game->NoteMatchBrainLoss(**aIt, "was destroyed");
+					}
 					if (pActivity->IsAssignedBrain(*aIt))
 						pActivity->SetPlayerBrain(0, pActivity->IsBrainOfWhichPlayer(*aIt));
 					pActivity->ForgetDestroyedActor(*aIt);
@@ -7310,6 +7331,7 @@ void MovableMan::Update() {
 			imidIt = iIt;
 
 			while (iIt != m_Items.end()) {
+				NetModerationGUIProbe::TraceObjectLifetime(*iIt, "retire-item", false);
 				ForgetActivitySlots(*iIt);
 				(*iIt)->DestroyScriptState();
 				delete (*iIt);
@@ -7760,8 +7782,9 @@ void MovableMan::UpdateControllers() {
 		// The shared hooks' sound writes land here, after the last shared script of the tick and before
 		// the first AI one, so everything the drain finds afterwards was written by an AI pass.
 		g_AudioMan.SettleSharedSoundWrites();
+		// Check the script state first: only its own pass needs to ask the network plane who produces this actor.
 		for (Actor* actor: m_Actors) {
-			if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
+			if (actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->ObjectScriptsInitialized() && isLocalControllerActor(actor) && actor->GetController()->ShouldUpdateAIThisFrame()) {
 				// Mark the running AI actor so its Equip* mutators defer the mutation to the post-pass drain.
 				g_CurrentAIActor = actor;
 				actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
@@ -7777,7 +7800,7 @@ void MovableMan::UpdateControllers() {
 			                                                     LuaStateWrapper& luaState = luaStates[start];
 			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState, true);
 			                                                     for (Actor* actor: m_Actors) {
-				                                                     if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetLuaState() == &luaState && actor->GetController()->ShouldUpdateAIThisFrame()) {
+				                                                     if (actor->GetLuaState() == &luaState && actor->ObjectScriptsInitialized() && isLocalControllerActor(actor) && actor->GetController()->ShouldUpdateAIThisFrame()) {
 					                                                     g_CurrentAIActor = actor;
 					                                                     actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
 					                                                     g_CurrentAIActor = nullptr;

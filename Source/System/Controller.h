@@ -579,7 +579,7 @@ namespace RTE {
 		void UpdatePlayerPieMenuInput(std::array<bool, ControlState::CONTROLSTATECOUNT> lastControlStates, bool frameEdges = false);
 
 		/// Updates the player's analog inputs portion of this Controller. For breaking down Update into more comprehensible chunks.
-		void UpdatePlayerAnalogInput();
+		void UpdatePlayerAnalogInput(bool frameEdges);
 
 		/// Clears the command state, meaning no input is given and our actor will be idle.
 		void ResetCommandState();

@@ -89,6 +89,8 @@ void SceneEditorGUI::Clear() {
 	m_CursorPos.Reset();
 	m_CursorOffset.Reset();
 	m_CursorInAir = true;
+	m_MatchBrainInstallPending = false;
+	m_MatchBrainInstallPos.Reset();
 	m_FacingLeft = false;
 	m_PlaceTeam = Activity::TeamOne;
 	m_pCurrentObject = 0;
@@ -219,6 +221,7 @@ bool SceneEditorGUI::SetCurrentObject(SceneObject* pNewObject) {
 		return true;
 
 	// Replace the current object with the new one
+	m_MatchBrainInstallPending = false;
 	delete m_pCurrentObject;
 	m_pCurrentObject = pNewObject;
 	m_NetPrivateCurrentObject = GUICheckpoint::IsRestoringNetLocalUI();
@@ -646,7 +649,16 @@ void SceneEditorGUI::Update() {
 		m_CursorInAir = g_SceneMan.GetTerrMatter(snappedPos.GetFloorIntX(), snappedPos.GetFloorIntY()) == g_MaterialAir;
 
 		// Check brain position validity with pathfinding and show a path to the sky
-		UpdateBrainSkyPathAndCost(m_CursorPos);
+		UpdateBrainSkyPathAndCost(GameActivity::IsLockstepPlacement() ? snappedPos : m_CursorPos);
+		if (GameActivity::IsLockstepPlacement()) {
+			const auto* activity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+			const Vector spot = g_SceneMan.SnapPosition(m_CursorPos, m_GridSnapping);
+			const std::string reason = activity->MatchBrainPlacementReason(m_pController->GetPlayer(), spot, m_pCurrentObject);
+			const bool checkingPath = m_RequireClearPathToOrbit && m_PathRequest && !m_PathRequest->complete;
+			m_CursorInAir = reason.empty() && !checkingPath && (!m_RequireClearPathToOrbit || m_BrainSkyPathCost <= MAXBRAINPATHCOST);
+			g_FrameMan.SetScreenText(!reason.empty() ? reason : checkingPath ? "Checking your brain's path to orbit..." : m_CursorInAir ? "Valid spot - click to INSTALL your brain" : "No clear path to orbit - move your brain into the open",
+			                        activity->ScreenOfPlayer(m_pController->GetPlayer()));
+		}
 		/*
 		        // Process the new path we now have, if any
 		        if (!m_BrainSkyPath.empty())
@@ -723,7 +735,7 @@ void SceneEditorGUI::Update() {
 		m_DrawCurrentObject = true;
 
 		// Freeze when first pressing down and grid snapping is still engaged
-		if (!(m_pController->IsState(PRIMARY_ACTION) && m_GridSnapping)) {
+		if (!m_MatchBrainInstallPending && !(m_pController->IsState(PRIMARY_ACTION) && m_GridSnapping)) {
 			if (!analogInput.IsZero()) {
 				m_CursorPos += analogInput;
 				m_FacingLeft = analogInput.m_X < 0 || (m_FacingLeft && analogInput.m_X == 0);
@@ -767,6 +779,7 @@ void SceneEditorGUI::Update() {
 
 		// Cancel placing if secondary button is pressed
 		if (m_pController->IsState(PRESS_SECONDARY) || m_pController->IsState(PIE_MENU_ACTIVE)) {
+			m_MatchBrainInstallPending = false;
 			m_EditorGUIMode = m_PreviousMode;
 			m_ModeChanged = true;
 		}
@@ -776,13 +789,32 @@ void SceneEditorGUI::Update() {
 			m_ModeChanged = true;
 		}
 		// Only place if the picker and pie menus are completely out of view, to avoid immediate placing after picking
-		else if (m_pCurrentObject && m_pController->IsState(RELEASE_PRIMARY) && !m_pPicker->IsVisible()) {
+		else if (m_pCurrentObject && (m_pController->IsState(RELEASE_PRIMARY) || m_MatchBrainInstallPending) && !m_pPicker->IsVisible()) {
+			const bool matchBrain = GameActivity::IsLockstepPlacement() && m_PreviousMode == INSTALLINGBRAIN;
+			if (matchBrain) {
+				if (!m_MatchBrainInstallPending) m_MatchBrainInstallPos = g_SceneMan.SnapPosition(m_CursorPos - m_CursorOffset, m_GridSnapping);
+				m_CursorPos = m_MatchBrainInstallPos;
+				m_pCurrentObject->SetPos(m_MatchBrainInstallPos);
+				UpdateBrainSkyPathAndCost(m_MatchBrainInstallPos);
+				if (m_RequireClearPathToOrbit && m_PathRequest && !m_PathRequest->complete) {
+					m_MatchBrainInstallPending = true;
+					g_FrameMan.SetScreenText("Checking your brain's path to orbit...", g_ActivityMan.GetActivity()->ScreenOfPlayer(m_pController->GetPlayer()));
+					return;
+				}
+				m_MatchBrainInstallPending = false;
+				const auto* activity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+				if (const std::string reason = activity->MatchBrainPlacementReason(m_pController->GetPlayer(), m_MatchBrainInstallPos, m_pCurrentObject); !reason.empty()) {
+					g_FrameMan.SetScreenText(reason, activity->ScreenOfPlayer(m_pController->GetPlayer()), 333, 3500);
+					m_EditorGUIMode = INSTALLINGBRAIN;
+					return;
+				}
+			}
 			m_pCurrentObject->FullUpdate();
 
 			// Placing governor brain, which actually just puts it back into the resident brain roster
 			if (m_PreviousMode == INSTALLINGBRAIN) {
 				// Force our path request to complete so we know whether we can place or not
-				while (m_PathRequest && !m_PathRequest->complete) {};
+				if (!matchBrain) { while (m_PathRequest && !m_PathRequest->complete) {}; }
 
 				// Only place if the brain has a clear path to the sky!
 				if (m_BrainSkyPathCost <= MAXBRAINPATHCOST || !m_RequireClearPathToOrbit) {
@@ -1062,6 +1094,8 @@ void SceneEditorGUI::Update() {
 				// TEMP REMOVE ABOVE
 				// Go back to previous mode
 				m_EditorGUIMode = m_PreviousMode;
+			// A match installs and submits the same brain with this one release.
+			if (matchBrain && !m_pCurrentObject && g_SceneMan.GetScene()->GetResidentBrain(m_pController->GetPlayer())) m_EditorGUIMode = DONEEDITING;
 			m_ModeChanged = true;
 		}
 

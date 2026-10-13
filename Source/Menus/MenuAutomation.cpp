@@ -1071,7 +1071,7 @@ namespace RTE::MenuAutomation {
 		return true;
 	}
 
-	bool HandRow(GUIControlManager* manager, const std::string& listName, int index, int presses, GUIControl* modal, std::string& observation) {
+	bool HandRow(GUIControlManager* manager, const std::string& listName, int index, int presses, GUIControl* modal, std::string& observation, std::function<bool()> taken) {
 		GUIControl* control = manager ? manager->GetControl(listName) : nullptr;
 		auto* list = dynamic_cast<GUIListPanel*>(control);
 		std::string why;
@@ -1092,11 +1092,16 @@ namespace RTE::MenuAutomation {
 		});
 		for (int press = 0; press < presses; ++press) {
 			phases.push_back([](std::string&) { return Hand::Button(true) ? Hand::Beat::Next : Hand::Beat::Fail; });
+			if (taken) phases.push_back([list, index](std::string& note) {
+				if (list->GetSelectedIndex() == index) return Hand::Beat::Next;
+				note = "the press selected row " + std::to_string(list->GetSelectedIndex());
+				return Hand::Beat::Fail;
+			});
 			phases.push_back([](std::string&) { return Hand::Button(false) ? Hand::Beat::Next : Hand::Beat::Fail; });
 		}
-		phases.push_back([list, index](std::string& note) {
-			if (list->GetSelectedIndex() == index) return Hand::Beat::Next;
-			note = "the list selected row " + std::to_string(list->GetSelectedIndex());
+		for (int frame = 0; frame < (taken ? 3 : 1); ++frame) phases.push_back([list, index, taken](std::string& note) {
+			if (taken ? taken() : list->GetSelectedIndex() == index) return Hand::Beat::Next;
+			note = taken ? "the release did not produce the requested result" : "the list selected row " + std::to_string(list->GetSelectedIndex());
 			return Hand::Beat::Fail;
 		});
 		Hand::Start((presses > 1 ? "double-click row " : "click row ") + std::to_string(index) + " of " + listName, std::move(phases));
@@ -1273,14 +1278,17 @@ namespace RTE::MenuAutomation {
 		return age >= 0 && age <= s_FrameSpanMs;
 	}
 
-	std::vector<std::pair<std::string, GUIControlManager*>> WatchedManagers(GUIControlManager* menu) {
+	std::vector<std::pair<std::string, GUIControlManager*>> WatchedManagersFor(GUIControlManager* menu, GUIControlManager* network, GUIControlManager* overlay) {
 		std::vector<std::pair<std::string, GUIControlManager*>> managers;
 		if (menu) managers.emplace_back("menu", menu);
-		if (auto* panel = g_MenuMan.GetNetworkPanel()) {
-			if (panel->AutomationManager() && panel->AutomationManager() != menu) managers.emplace_back("network", panel->AutomationManager());
-			if (panel->OverlayManager()) managers.emplace_back("overlay", panel->OverlayManager());
-		}
+		if (network && network != menu) managers.emplace_back("network", network);
+		if (overlay && overlay != menu && overlay != network) managers.emplace_back("overlay", overlay);
 		return managers;
+	}
+
+	std::vector<std::pair<std::string, GUIControlManager*>> WatchedManagers(GUIControlManager* menu) {
+		const auto* panel = g_MenuMan.GetNetworkPanel();
+		return WatchedManagersFor(menu, panel ? panel->AutomationManager() : nullptr, panel ? panel->OverlayManager() : nullptr);
 	}
 
 	GUIControl* WatchedControl(GUIControlManager* menu, const std::string& name) {
@@ -1613,12 +1621,13 @@ namespace RTE::MenuAutomation {
 				detail = "no shown line carries the text";
 			} else if (watch.rule == "forbid" && carries(watch.text)) {
 				detail = "a shown line carries the text";
-			} else if (watch.rule == "equals" || watch.rule == "shown") {
+			} else if (watch.rule == "equals" || watch.rule == "contains" || watch.rule == "shown") {
 				GUIControl* control = WatchedControl(menu, watch.control);
 				std::string text;
 				const bool shown = control && Shown(control) && Text(control, text);
 				if (!shown) detail = watch.control + " is not shown";
 				else if (watch.rule == "equals" && text != watch.text) detail = watch.control + " reads " + Json(text).dump();
+				else if (watch.rule == "contains" && text.find(watch.text) == std::string::npos) detail = watch.control + " reads " + Json(text).dump();
 			} else if (watch.rule == "duplicates") {
 				detail = DuplicateLine(lines);
 			} else if (watch.rule == "rtt") {
@@ -1990,11 +1999,17 @@ namespace RTE::MenuAutomation {
 			if (mode == "start") {
 				TextWatch watch;
 				args >> watch.rule >> watch.state;
-				if (watch.rule == "equals" || watch.rule == "shown") args >> watch.control;
+				if (watch.rule == "equals" || watch.rule == "contains" || watch.rule == "shown") args >> watch.control;
 				std::getline(args >> std::ws, watch.text);
-				const bool textRule = watch.rule == "require" || watch.rule == "forbid" || watch.rule == "equals";
+				// JSON preserves an exact multiline label in a one-line input script.
+				if (watch.text.starts_with("json:")) {
+					const Json text = Json::parse(watch.text.substr(5), nullptr, false);
+					if (!text.is_string()) { observation = "invalid watch text JSON"; return false; }
+					watch.text = text.get<std::string>();
+				}
+				const bool textRule = watch.rule == "require" || watch.rule == "forbid" || watch.rule == "equals" || watch.rule == "contains";
 				const bool known = textRule || watch.rule == "shown" || watch.rule == "duplicates" || watch.rule == "rtt" || watch.rule == "layout" || watch.rule == "overlap" || watch.rule == "seat_rows";
-				if (!known || watch.state.empty() || (textRule && watch.text.empty()) || ((watch.rule == "equals" || watch.rule == "shown") && watch.control.empty())) {
+				if (!known || watch.state.empty() || (textRule && watch.text.empty()) || ((watch.rule == "equals" || watch.rule == "contains" || watch.rule == "shown") && watch.control.empty())) {
 					observation = "unknown or incomplete watch";
 					return false;
 				}
@@ -2665,6 +2680,14 @@ namespace RTE::MenuAutomation {
 			passed = passed && value;
 			std::cout << "[menu-automation-selftest] " << (value ? "PASS" : "FAIL") << " " << label << " " << detail << std::endl;
 		};
+		{
+			// Chat uses the overlay's manager as its active menu; it is still one surface.
+			GUIControlManager menu, network, overlay;
+			const auto chat = WatchedManagersFor(&overlay, &network, &overlay);
+			check("chat_overlay_is_watched_once", chat.size() == 2 && chat[0].second == &overlay && chat[1].second == &network, "surfaces=" + std::to_string(chat.size()));
+			const auto distinct = WatchedManagersFor(&menu, &network, &overlay);
+			check("distinct_surfaces_are_all_watched", distinct.size() == 3, "surfaces=" + std::to_string(distinct.size()));
+		}
 		{
 			std::istringstream missing("");
 			const int rows = ParseToastBandExpectedRows(missing);

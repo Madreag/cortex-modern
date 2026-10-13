@@ -65,6 +65,8 @@ namespace RTE {
 
 		/// Updates the local pause menu of a network match, once per rendered frame.
 		void UpdateLocalPauseMenu();
+		/// Takes the local menu's confirmed Leave request before the game waits for another tick.
+		bool TakeLocalMatchLeaveRequest();
 		/// Routes local controls while a network recovery has stopped the ordinary activity input pump.
 		/// Returns whether an explicit menu action left the activity.
 		bool UpdateNetworkWaitInput();
@@ -110,6 +112,7 @@ namespace RTE {
 		bool m_IsInMenuScreen; //!< Whether we're currently in a menu screen.
 		bool m_LocalPauseMenuOpen; //!< Whether the pause menu is the local menu of a running network match.
 		bool m_LocalPauseMenuOpening; //!< The frame the local pause menu opened on, whose press is not the menu's to read.
+		bool m_LocalMatchLeaveRequested = false; //!< A confirmed local Leave waiting for the game loop.
 		ActiveMenu m_ActiveMenu; //!< The currently active menu screen that is being updated and drawn. See ActiveMenu enumeration.
 
 		std::unique_ptr<GUIInputWrapper> m_GUIInput; //!< The GUIInput interface of this MenuMan.

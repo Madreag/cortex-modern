@@ -283,7 +283,7 @@ namespace RTE {
 		bool TestCrossTimedTransport(std::string* error) {
 #ifdef CCCP_WITH_GNS
 			GnsTransport transport;
-			if (!transport.StartHost(49915, error)) return false;
+			if (!transport.StartHost(43610, error)) return false;
 			if (ApplyCrossTransportFault(-1, 0, 0, 10) || ApplyCrossTransportFault(0, 101, 0, 10) || !ApplyCrossTransportFault(10, 5, 2, 1)) {
 				*error = "transport hook accepted invalid bounds or refused a valid timed setting"; return false;
 			}
@@ -343,7 +343,7 @@ namespace RTE {
 		bool TestConnectionCallbacksReachTheirListener(std::string* error) {
 			if (!GnsTransport::IsCompiledIn()) return true;
 			GnsTransport first, other, client;
-			if (!first.StartHost(49472, error) || !other.StartHost(49473, error) || !client.Connect("127.0.0.1", 49472, error)) return false;
+			if (!first.StartHost(43611, error) || !other.StartHost(43612, error) || !client.Connect("127.0.0.1", 43611, error)) return false;
 			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
 			while (std::chrono::steady_clock::now() < deadline) {
 				if (!other.PollEvents().empty()) { *error = "another listener consumed a connection's callbacks"; return false; }
@@ -359,7 +359,7 @@ namespace RTE {
 		bool TestTwoThreadsSendOnOneTransport(std::string* error) {
 			if (!GnsTransport::IsCompiledIn()) return true;
 			GnsTransport host, client;
-			if (!host.StartHost(49592, error) || !client.Connect("127.0.0.1", 49592, error)) return false;
+			if (!host.StartHost(43613, error) || !client.Connect("127.0.0.1", 43613, error)) return false;
 			NetPeerId toClient = c_InvalidNetPeerId;
 			bool clientUp = false;
 			const auto started = std::chrono::steady_clock::now();
@@ -8303,7 +8303,8 @@ namespace RTE {
 		GnsTransport secondLink;
 		NetSession second;
 		NetSessionConfig config;
-		config.port = 49538;
+		// Below Windows' dynamic range, where the system reserves port blocks at boot.
+		config.port = 43538;
 		config.maxPeers = 2;
 		config.timeoutMs = 5000;
 		config.heartbeatIntervalMs = 25;
@@ -8322,7 +8323,7 @@ namespace RTE {
 		secondConfig.displayName = "Joiner B";
 		secondConfig.localNonce += 2;
 		bool listening = false;
-		for (uint16_t port = 49538; port < 49546 && !listening; ++port) {
+		for (uint16_t port = 43538; port < 43546 && !listening; ++port) {
 			config.port = port;
 			listening = host.m_Session->StartHost(*host.m_Transport, config, error);
 		}
@@ -8426,7 +8427,7 @@ namespace RTE {
 		NetMatchService service;
 		NetMatchServiceRequest request;
 		request.host = true;
-		request.port = 49475;
+		request.port = 43614;
 		request.activityPreset = "P4 Alpha Duel";
 		request.activityModule = "Base.rte";
 		request.sceneName = "Grasslands";
@@ -16390,6 +16391,42 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestAHostCheckInCarriesItsListener(std::string* error) {
+		struct RestoreAdmission {
+			bool enabled = NetMatchService::IsAdmissionEnabled();
+			~RestoreAdmission() { NetMatchService::SetAdmissionEnabled(enabled); }
+		} restore;
+		NetMatchService::SetAdmissionEnabled(true);
+		// A relay-only host lists no address, so its row is joinable only through the ICE listener its check-in names.
+		NetMatchService host;
+		{
+			std::lock_guard<std::mutex> lock(host.m_Mutex);
+			host.m_IsHost = true;
+			host.m_IceEnabled = true;
+			host.m_ConnectionMode = 2;
+			host.m_State = NetMatchServiceState::Starting;
+		}
+		host.m_BeaconGamePort = 48052;
+		const uint64_t start = NetLockstepNowMs();
+		host.UpdateConnectionAuthority(start);
+		const std::string identity = NetIceHostIdentity("check-in-route-selftest");
+		{
+			std::lock_guard<std::mutex> lock(host.m_Mutex);
+			host.m_IceIdentity = identity;
+			host.m_DirectoryRow.iceIdentity = identity;
+			host.m_DirectoryRow.iceVirtualPort = NetMatchService::c_IceVirtualPort;
+		}
+		host.UpdateConnectionAuthority(start + 16);
+		const NetConnectionRoute route = host.m_ConnectionAuthority.Route();
+		if (route.iceIdentity != identity || route.iceVirtualPort != NetMatchService::c_IceVirtualPort || !route.listenAddrs.empty() || route.listenPort != 48052) {
+			*error = "the host's next check-in still carries the route taken before its ICE listener opened (ice_identity '" + route.iceIdentity +
+			         "', virtual port " + std::to_string(route.iceVirtualPort) + ", " + std::to_string(route.listenAddrs.size()) +
+			         " addresses): the directory lists that relay-only row with no address and no ICE join mode, which a joiner reads as 'No usable address'";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestDirectoryRowTakesTheLateRouterAnswer(std::string* error) {
 		struct Wire {
 			std::vector<NetDirectoryClient::Request> sent;
@@ -17448,7 +17485,7 @@ namespace RTE {
 	bool TestTransportRetirementDoesNotSleep(std::string* error) {
 		if (!GnsTransport::IsCompiledIn()) return true;
 		GnsTransport host, client;
-		if (!host.StartHost(49495, error) || !client.Connect("127.0.0.1", 49495, error)) return false;
+		if (!host.StartHost(43616, error) || !client.Connect("127.0.0.1", 43616, error)) return false;
 		NetPeerId hostPeer = 0, clientPeer = 0;
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
 		while (std::chrono::steady_clock::now() < deadline) {
@@ -17477,7 +17514,7 @@ namespace RTE {
 		GnsTransport host, client;
 		std::ostringstream captured;
 		struct Output { std::streambuf* previous; ~Output() { std::cout.rdbuf(previous); } } output{std::cout.rdbuf(captured.rdbuf())};
-		if (!host.StartHost(49469, error) || !client.Connect("127.0.0.1", 49469, error)) return false;
+		if (!host.StartHost(43617, error) || !client.Connect("127.0.0.1", 43617, error)) return false;
 		NetPeerId hostPeer = 0, clientPeer = 0;
 		const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
 		while (std::chrono::steady_clock::now() < end) {
@@ -17931,6 +17968,58 @@ namespace RTE {
 			return false;
 		}
 		std::cout << "[net-match-selftest] PASS relay renewal: minted for " << lifetime << " s, renewed at half its lifetime and republished" << std::endl;
+		return true;
+	}
+
+	bool TestRefusedRelayMintRetriesWhenAllowed(std::string* error) {
+		struct Script {
+			std::deque<NetDirectoryClient::Reply> replies;
+			std::vector<NetDirectoryClient::Request> sent;
+		};
+		class Wire final : public NetDirectoryClient::Transport {
+		public:
+			explicit Wire(std::shared_ptr<Script> script) : m_Script(std::move(script)) {}
+			void Start(const NetDirectoryClient::Request& request) override { m_Script->sent.push_back(request); }
+			bool Finished() override { return true; }
+			NetDirectoryClient::Reply Take() override {
+				if (m_Script->replies.empty()) return {500, "", ""};
+				auto reply = m_Script->replies.front(); m_Script->replies.pop_front(); return reply;
+			}
+			void Abort() override {}
+		private:
+			std::shared_ptr<Script> m_Script;
+		};
+		NetMatchService service;
+		struct ResetDirectory { NetDirectoryClient& client; ~ResetDirectory() { client.Configure("", "", ""); } } reset{service.m_Directory};
+		auto script = std::make_shared<Script>();
+		service.m_Directory.SetTransportFactory([script] { return std::make_unique<Wire>(script); });
+		service.m_Directory.Configure("dir.example", "0123456789abcdef", "");
+		script->replies.push_back({200, R"({"connection_protocol":1,"session_id":"11111111-2222-4333-8444-555555555555","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+		service.m_Directory.Advertise(NetDirectoryRegisterRequest{}, false);
+		service.m_Directory.Update(0); service.m_Directory.Update(0);
+		service.m_IsHost = true; service.m_IceEnabled = true; service.m_HostRelayMode = 1; service.m_ConnectionMode = 2;
+		service.m_LastRoundId = 1; service.m_RelayReplies = 0; service.m_FreshRelayRequested = true;
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		const auto mints = [&] { return std::count_if(script->sent.begin(), script->sent.end(), [](const auto& sent) { return sent.method == "POST" && sent.path.ends_with("/ice-servers"); }); };
+		// The directory refuses the room's first mint and names when to come back.
+		script->replies.push_back({429, R"({"error":"rate_limited_key","retry_after_s":2})", ""});
+		service.UpdateRelayOffer(1000);
+		service.m_Directory.Update(1001); service.UpdateRelayOffer(1001);
+		NetRelayConfig offered;
+		(void)service.ReadRelayOffer(offered);
+		if (mints() != 1 || !offered.Empty()) { *error = "relay mint retry: the room's first mint was not sent or was published unrefused"; return false; }
+		service.m_Directory.Update(3000); service.UpdateRelayOffer(3000);
+		if (mints() != 1) { *error = "relay mint retry: the host minted before the directory's retry time"; return false; }
+		NetRelayConfig relay = NetRelayConfig::Fixed("relay.example:3478", "temporary-user", "temporary-password", "11111111-2222-4333-8444-555555555555:1", now + NetDirectoryClient::c_MaxRelayTtlSeconds);
+		script->replies.push_back({200, relay.ToJson(), ""});
+		service.m_Directory.Update(3001); service.UpdateRelayOffer(3001);
+		if (mints() != 2) {
+			*error = "relay mint retry: a refused mint left the room without a relay until " + std::to_string(service.m_NextRelayRequestMs) + " ms, past the directory's retry at 3001 ms";
+			return false;
+		}
+		service.m_Directory.Update(3002); service.UpdateRelayOffer(3002);
+		if (!service.ReadRelayOffer(offered) || offered != relay) { *error = "relay mint retry: the retried mint was not published"; return false; }
+		std::cout << "[net-match-selftest] PASS relay mint retry: a refused room mint is retried at the directory's 2 s, not the 15 s renewal spacing" << std::endl;
 		return true;
 	}
 
@@ -19003,7 +19092,7 @@ namespace RTE {
 				// RunBeforeInitialization already checked settings and candidate policy,
 				// before the global SettingsMan singleton was constructed.
 				passed = TestWrittenConfigsHoldNoRelayLogin(&error) && TestTheReportListsEveryConnection(&error) &&
-				         TestConnectedRouteEvidence(&error) && TestRelayOfferRefresh(&error) &&
+				         TestConnectedRouteEvidence(&error) && TestRelayOfferRefresh(&error) && TestRefusedRelayMintRetriesWhenAllowed(&error) &&
 				         TestLobbyRelayAdoption(&error) && TestInternetTicketRecovery(&error) && TestSessionIdJoinRefusals(&error);
 			}
 			else if (name == "relay-join-fix") {
@@ -19056,6 +19145,7 @@ namespace RTE {
 		row(&TestIceConnectingLine, "direct_fallback_attempt_clock");
 		row(&TestReplayStorageDoesNotBlockTicks, "replay_storage_does_not_block_ticks");
 		row(&TestDirectoryRowTakesTheLateRouterAnswer, "directory_row_takes_the_late_router_answer");
+		row(&TestAHostCheckInCarriesItsListener, "a_host_check_in_carries_its_listener_from_the_first_update");
 		row(&TestAHostMappingOutlastsItsPendingIdentity, "a_host_mapping_outlasts_its_pending_identity");
 		row(&TestAHostWithNoRouterReadsNoRouterMapping, "a_host_with_no_router_reads_no_router_mapping");
 		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");
@@ -19099,6 +19189,7 @@ namespace RTE {
 		if (!TestDiscoveryOccupancy(&error)) return fail(error);
 		if (!TestReservedSeatDirectoryResolve(&error)) return fail(error);
 		if (!TestRelayOfferRefresh(&error)) return fail(error);
+		if (!TestRefusedRelayMintRetriesWhenAllowed(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);
 		if (!TestInternetMenuJoinUsesSession(&error)) return fail(error);
 		if (!TestLobbyRefusesDivergentRosterOrder(&error)) return fail(error);

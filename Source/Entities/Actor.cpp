@@ -34,6 +34,7 @@
 #include "PieMenu.h"
 #include "ScenarioRunner.h"
 #include "NetGameCommand.h"
+#include "NetModerationGUIProbe.h"
 
 #include "GUI.h"
 #include "AllegroBitmap.h"
@@ -1060,12 +1061,10 @@ bool Actor::HandlePieCommand(PieSliceType pieSliceType) {
 }
 
 int Actor::WhilePieMenuOpenListener(const PieMenu* pieMenu) {
-	// Only the seat's own machine runs the activity's per-player menu code, so under lockstep the buy
-	// menu setting has to take its slice out here, where every peer refreshes this pie menu. It runs
-	// before the scripts, as the activity's own removal does on the seat.
+	// Every peer keeps a disabled Buy slice so its player can read why buying is unavailable.
 	if (m_PieMenu && m_PieMenu->IsEnabling() && m_Controller.IsPlayerControlled() && ScenarioRunner::IsLockstepControllerSyncActive()) {
 		if (const GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity()); gameActivity && !gameActivity->GetBuyMenuEnabled()) {
-			m_PieMenu->RemovePieSlicesByType(PieSliceType::BuyMenu);
+			if (PieSlice* buy = m_PieMenu->GetFirstPieSliceByType(PieSliceType::BuyMenu)) buy->SetEnabled(false);
 		}
 	}
 	return MovableObject::WhilePieMenuOpenListener(pieMenu);
@@ -1744,6 +1743,7 @@ MovableObject* Actor::SwapNextInventory(MovableObject* pSwapIn, bool muteSound) 
 		pRetDev = m_Inventory.front();
 		// Reset all the timers of the object being taken out of inventory so it doesn't emit a bunch of particles that have been backed up while dormant in inventory
 		pRetDev->ResetAllTimers();
+		NetModerationGUIProbe::TraceObjectLifetime(pRetDev, "inventory-take-front", true);
 		m_Inventory.pop_front();
 		playSound = true;
 	}
@@ -1775,6 +1775,7 @@ MovableObject* Actor::RemoveInventoryItemAtIndex(int inventoryIndex) {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Inventory.size()); });
 	if (inventoryIndex >= 0 && inventoryIndex < m_Inventory.size()) {
 		MovableObject* itemAtIndex = m_Inventory[inventoryIndex];
+		NetModerationGUIProbe::TraceObjectLifetime(itemAtIndex, "inventory-take-index", true);
 		m_Inventory.erase(m_Inventory.begin() + inventoryIndex);
 		return itemAtIndex;
 	}
@@ -1786,6 +1787,7 @@ MovableObject* Actor::SwapPrevInventory(MovableObject* pSwapIn) {
 	bool playSound = false;
 	if (!m_Inventory.empty()) {
 		pRetDev = m_Inventory.back();
+		NetModerationGUIProbe::TraceObjectLifetime(pRetDev, "inventory-take-back", true);
 		m_Inventory.pop_back();
 		playSound = true;
 	}
@@ -1821,6 +1823,7 @@ MovableObject* Actor::SetInventoryItemAtIndex(MovableObject* newInventoryItem, i
 		return nullptr;
 	}
 	MovableObject* currentInventoryItemAtIndex = m_Inventory.at(inventoryIndex);
+	NetModerationGUIProbe::TraceObjectLifetime(newInventoryItem, "inventory-set", true);
 	m_Inventory.at(inventoryIndex) = newInventoryItem;
 	return currentInventoryItemAtIndex;
 }
@@ -1958,6 +1961,7 @@ bool Actor::AddToInventoryFront(MovableObject* itemToAdd) {
 		return false;
 	}
 
+	NetModerationGUIProbe::TraceObjectLifetime(itemToAdd, "inventory-front", true);
 	m_Inventory.push_front(itemToAdd);
 	return true;
 }
@@ -1969,11 +1973,15 @@ bool Actor::AddToInventoryBack(MovableObject* itemToAdd) {
 		return false;
 	}
 
+	NetModerationGUIProbe::TraceObjectLifetime(itemToAdd, "inventory-back", true);
 	m_Inventory.push_back(itemToAdd);
 	return true;
 }
 
 void Actor::GibThis(const Vector& impactImpulse, MovableObject* movableObjectToIgnore) {
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) activity->NoteMatchBrainLoss(*this, "was gibbed");
+	}
 	// Play death sound
 	// TODO: Don't attenuate since death is pretty important.. maybe only make this happen for teh brains
 	if (m_DeathSound) {

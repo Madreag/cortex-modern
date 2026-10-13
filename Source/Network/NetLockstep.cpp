@@ -3270,11 +3270,8 @@ namespace RTE {
 
 	void NetLockstepCoordinator::RetainMigrationFrame(const NetLockstepReadyFrame& ready) {
 		if (m_Playback) {
-			std::vector<uint8_t> bytes; uint8_t mac[32]{};
-			if (EncodeMigrationFrame(ready, bytes) && GetNetAuthCrypto().HmacSha256(m_Config.migrationKey.data(), m_Config.migrationKey.size(), bytes.data(), bytes.size(), mac)) {
-				NetHash32 hash{}; std::copy_n(mac, hash.size(), hash.begin()); m_PeerReplayAppliedPrefixes[ready.frame] = hash;
-				while (m_PeerReplayAppliedPrefixes.size() > NetHostMigrationCodec::c_PeerHistoryFrames) m_PeerReplayAppliedPrefixes.erase(m_PeerReplayAppliedPrefixes.begin());
-			}
+			m_PeerReplayAppliedPrefixes[ready.frame] = CommittedFramePrefix(ready);
+			while (m_PeerReplayAppliedPrefixes.size() > NetHostMigrationCodec::c_PeerHistoryFrames) m_PeerReplayAppliedPrefixes.erase(m_PeerReplayAppliedPrefixes.begin());
 			return;
 		}
 		if (!UsesPreparedFrameReceipts())
@@ -3771,13 +3768,22 @@ namespace RTE {
 		return false; // An uncommitted successor is not a new host whose loss authorizes another election.
 	}
 
-	bool NetLockstepCoordinator::HasPeerFrameRoute(uint8_t peer) {
+	bool NetLockstepCoordinator::HasPeerFrameRoute(uint8_t peer) const {
 		const auto bound = [peer](const auto& routes) {
 			return std::any_of(routes.begin(), routes.end(), [peer](const auto& route) { return route.second == peer; });
 		};
-		if (bound(PeerPrimaryBindings()) || bound(PeerListenerBindings()) || m_RemoteTransports.contains(peer)) return true;
-		const auto dial = PeerProbes().find(peer);
-		return dial != PeerProbes().end() && dial->second.answered && dial->second.connection != c_InvalidNetPeerId;
+		const auto& links = m_Config.peerSessionLinks;
+		if (bound(links ? links->primaryBindings : m_PeerPrimaryBindings) || bound(links ? links->listenerBindings : m_PeerListenerBindings) || m_RemoteTransports.contains(peer)) return true;
+		const auto& probes = m_Config.peerFrameGroups && links ? links->probes : m_MigrationProbes;
+		const auto dial = probes.find(peer);
+		return dial != probes.end() && dial->second.answered && dial->second.connection != c_InvalidNetPeerId;
+	}
+
+	bool NetLockstepCoordinator::PeerLinkLostBeforeOwnInput(uint8_t peer, uint64_t frame) const {
+		// Its inputs sent an input delay ahead do not answer for the host's input it never took: the host holds the seat from here.
+		const auto sources = m_PeerSourceInputs.find(frame);
+		return m_Config.localPeerId == GetHostPeerId() && peer != m_Config.localPeerId && sources != m_PeerSourceInputs.end() && sources->second.contains(peer) &&
+		    frame >= EffectiveStartOf(peer) && !IsSeatReclaimGap(peer, frame) && (PeerInputVoters(frame, m_Config.localPeerId) & (1U << (peer - 1))) == 0 && !HasPeerFrameRoute(peer);
 	}
 
 	void NetLockstepCoordinator::NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink, bool completedRound) {
@@ -7009,6 +7015,8 @@ namespace RTE {
 			if (error) *error = "Your connection needs " + std::to_string(needed) + " delay frames; the match currently allows " + std::to_string(current) + ". Your seat remains under AI control.";
 			return false;
 		}
+		// A frame group's return names the seat's own delay, sized on its link; only the seat itself could change it live.
+		if (UsesPeerFrameGroups()) return true;
 		if (ProposeInputDelay(peerId, static_cast<uint16_t>(needed), FutureTimingFrame())) {
 			const auto stats = m_Stats.peers.find(peerId);
 			DiagnosticLine() << "[net-lockstep] delay proposal peer=" << static_cast<int>(peerId) << " from=" << current << " to=" << needed << " reason=rejoin"

@@ -308,6 +308,8 @@ namespace RTE {
 		/// @return Whether the key is pressed or not.
 		bool KeyPressed(SDL_Scancode scancodeToTest, int whichPlayer = -1) const { return GetKeyboardButtonState(scancodeToTest, InputState::Pressed, whichPlayer); }
 		bool KeyPressedScancode(SDL_Scancode scancodeToTest) const { return KeyPressed(scancodeToTest); } //!< Lua disambiguation helper.
+		bool IsNetworkGUIInputActive() const;
+		bool NetworkGUIKeyPressed(SDL_Scancode key) const { return key > SDL_SCANCODE_UNKNOWN && key < SDL_SCANCODE_COUNT && m_NetworkGUIKeyPresses[key]; }
 
 		/// Gets whether a key was pressed between the last update and the one previous to it, by keycode.
 		/// @param keycodeToTest A keycode to test. See SDL_KeyCode enumeration.
@@ -389,6 +391,12 @@ namespace RTE {
 		/// @return The relative mouse movements, in both axes.
 		Vector GetMouseMovement(int whichPlayer = -1) const;
 
+		/// Gets the relative movement of the mouse since the last simulation update. A match's tick falls between many loop passes,
+		/// each of which ends its frame, so the tick reads every pass's movement here.
+		/// @param whichPlayer Which player to get movement for. If the player doesn't use the mouse this always returns a zero vector.
+		/// @return The relative mouse movements since the last EndSimUpdate, in both axes.
+		Vector GetMouseMovementSinceSim(int whichPlayer = -1) const;
+
 		/// Records a seat's mouse as its committed lockstep frame applied it. A script asking about that seat inside the
 		/// round reads this on every peer, never the mouse of the machine it runs on.
 		/// @param whichPlayer The seat's player.
@@ -431,6 +439,7 @@ namespace RTE {
 		/// Gets mouse sensitivity while in Activity.
 		/// @return The current mouse sensitivity.
 		float GetMouseSensitivity() const { return m_MouseSensitivity; }
+		float GetMouseTrapRadius() const { return m_MouseTrapRadius; }
 
 		/// Sets mouse sensitivity while in Activity.
 		/// @param sensitivity New sensitivity value.
@@ -599,6 +608,12 @@ namespace RTE {
 		/// Whether this query comes from a script inside a lockstep round, where it must read the seat's committed input.
 		bool ScriptReadsCommittedSeat(int whichPlayer) const;
 
+		/// Records one mouse motion event's position and movement on its device and on the combined mouse.
+		void NoteMouseMotion(SDL_MouseID which, const Vector& position, const Vector& motion);
+
+		/// A player's mouse movement for this frame, or since the last simulation update.
+		Vector MouseMovementOf(int whichPlayer, bool sinceSim) const;
+
 		/// Enumeration for the different states an input element or button can be in.
 		enum InputState {
 			Held,
@@ -627,6 +642,7 @@ namespace RTE {
 			std::array<bool, SDL_SCANCODE_COUNT> releasedSinceSim{}; //!< Release events accumulated since last EndSimUpdate.
 		};
 		std::unordered_map<SDL_KeyboardID, Keyboard> m_KeyboardStates; //!< Keyboard state when multi keyboard support is enabled.
+		std::array<bool, SDL_SCANCODE_COUNT> m_NetworkGUIKeyPresses{}; //!< Local render edges, never part of the simulation.
 
 		struct Mouse {
 		std::string SaveCheckpoint() const;
@@ -639,6 +655,7 @@ namespace RTE {
 			std::array<bool, MouseButtons::MAX_MOUSE_BUTTONS> releasedSinceSim{}; //!< Release events accumulated since last EndSimUpdate.
 			Vector position{};
 			Vector relativeMotion{};
+			Vector motionSinceSim{}; //!< Relative motion accumulated since last EndSimUpdate.
 			Vector analogAim{};
 			float wheelChange{0.0f};
 			bool relativeMode{};

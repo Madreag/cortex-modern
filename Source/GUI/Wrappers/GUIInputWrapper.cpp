@@ -323,6 +323,11 @@ void GUIInputWrapper::UpdateKeyboardInput(float keyElapsedTime, const bool* keys
 	ConvertKeyEvent(keys[SDL_SCANCODE_END], GUIInput::Key_End, keyElapsedTime);
 	ConvertKeyEvent(keys[SDL_SCANCODE_PAGEUP], GUIInput::Key_PageUp, keyElapsedTime);
 	ConvertKeyEvent(keys[SDL_SCANCODE_PAGEDOWN], GUIInput::Key_PageDown, keyElapsedTime);
+	// SDL may deliver both edges before its held-key snapshot reaches a network menu.
+	if (g_UInputMan.IsNetworkGUIInputActive() &&
+	    (g_UInputMan.NetworkGUIKeyPressed(SDL_SCANCODE_RETURN) || g_UInputMan.NetworkGUIKeyPressed(SDL_SCANCODE_KP_ENTER))) {
+		m_KeyboardBuffer[GUIInput::Key_Enter] = GUIInput::Pushed;
+	}
 
 	m_Modifier = GUIInput::ModNone;
 	SDL_Keymod keyShifts = SDL_GetModState();
@@ -350,6 +355,13 @@ void GUIInputWrapper::UpdateMouseInput() {
 	m_MouseY = mousePos.GetFloorIntY();
 
 	for (int button = 0; button < 3; button++) {
+		if (g_UInputMan.IsNetworkGUIInputActive()) {
+			const bool down = buttonStates[button + 1] || (button == 0 && m_KeyJoyMouseCursor && g_UInputMan.MenuButtonHeld(UInputMan::MenuCursorButtons::MENU_EITHER));
+			const bool changed = down != (m_MouseButtonsStates[button] == Down);
+			m_MouseButtonsStates[button] = down ? Down : Up;
+			m_MouseButtonsEvents[button] = down ? changed ? Pushed : Repeat : changed ? Released : None;
+			continue;
+		}
 		// GUI runs from sim-tick context in-activity (BuyMenuGUI::Update etc.); the render-rate
 		// change[] gets cleared by EndFrame between iters, eating clicks that arrive on render-only
 		// iters. OR-in the sim-rate accumulators (which survive across render frames until the next
@@ -386,6 +398,10 @@ void GUIInputWrapper::UpdateKeyJoyMouseInput(float keyElapsedTime) {
 	newMousePos.m_Y = std::clamp(newMousePos.m_Y, 0.0F, static_cast<float>(g_WindowMan.GetResY() * mouseDenominator) - 3.0F);
 
 	g_UInputMan.SetAbsoluteMousePosition(newMousePos, m_Player);
+	if (g_UInputMan.IsNetworkGUIInputActive()) {
+		m_MouseWheelChange = g_UInputMan.MouseWheelMovedByPlayer(m_Player);
+		return;
+	}
 
 	// Update mouse button states and presses. In the menu, either left or mouse button works.
 	if (g_UInputMan.MenuButtonHeld(UInputMan::MenuCursorButtons::MENU_EITHER)) {

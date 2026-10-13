@@ -74,7 +74,8 @@ namespace RTE {
 			const bool neutral = IsSeatReclaimGap(peer, proposal.frame);
 			const auto ended = m_PeerRoundEnds.find(peer);
 			const bool departed = ended != m_PeerRoundEnds.end() && !ended->second.closedLink && proposal.frame >= ended->second.frame;
-			if (proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0 && (present || (neutral && !departed))) return false;
+			if (proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0 && (present || (neutral && !departed)) &&
+			    !(proposal.senderPeerId == GetHostPeerId() && present && !neutral && !HasPeerFrameRoute(peer))) return false;
 			if (proposal.preparedFrame == 0 && (proposal.connectedMask & SeatBit(peer)) != 0 && proposal.frame >= EffectiveStartOf(peer) && !neutral && !present) return false;
 			if (proposal.preparedFrame == 1 && (named & SeatBit(peer)) != 0 &&
 			    (!m_PeerBridges.contains(peer) || !m_PeerBridges.at(peer).committedHold || m_PeerBridges.at(peer).returnFrame)) return false;
@@ -100,11 +101,35 @@ namespace RTE {
 				proposal.members.push_back(peer);
 				continue;
 			}
-			if (frame < EffectiveStartOf(peer) || IsSeatReclaimGap(peer, frame) || sources->second.contains(peer)) proposal.connectedMask |= SeatBit(peer);
+			if (PeerLinkLostBeforeOwnInput(peer, frame)) proposal.members.push_back(peer);
+			else if (frame < EffectiveStartOf(peer) || IsSeatReclaimGap(peer, frame) || sources->second.contains(peer)) proposal.connectedMask |= SeatBit(peer);
 			else proposal.members.push_back(peer);
 		}
 		if (returningOnly && !proposal.members.empty()) return false;
-		if (!proposal.members.empty()) CheckPeerFrameTie(frame, proposal.connectedMask, nowMs);
+		if (!proposal.members.empty()) {
+			// Inputs are prepared ahead of play. An ordinary packet still in
+			// transit must not spend a directory request for every future tick:
+			// that leaves the real disconnected player waiting for the minute's
+			// allowance to renew. Allow the sender's normal transit and the
+			// scheduling bound first, then use the remaining buffered time for
+			// the referee so its decision does not postpone the AI stages.
+			std::optional<double> dueMs;
+			if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame)
+				dueMs = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
+			if (m_PeerConsumerAtMs && m_LastCompletedSimulationTick && frame > *m_LastCompletedSimulationTick)
+				dueMs = *m_PeerConsumerAtMs + (frame - *m_LastCompletedSimulationTick) * m_Config.simTickMs;
+			const double boundMs = m_Config.slowPlayerBoundTicks * m_Config.simTickMs;
+			double leadMs = std::numeric_limits<double>::max();
+			for (uint8_t peer: proposal.members) {
+				const auto stats = m_Stats.peers.find(peer);
+				uint32_t transitMs = stats != m_Stats.peers.end() ? stats->second.pingMs : 0;
+				const auto [wire, route] = PeerFrameRoute(peer);
+				if (wire && wire->IsPeerPingMeasured(route)) transitMs = std::max(transitMs, wire->GetPeerPingMs(route));
+				leadMs = std::min(leadMs, std::max(0.0, InputDelayAt(peer, frame) * m_Config.simTickMs - transitMs - boundMs));
+			}
+			if (m_ConsumerWaitingFrame == frame || (dueMs && nowMs + leadMs >= *dueMs))
+				CheckPeerFrameTie(frame, proposal.connectedMask, nowMs);
+		}
 		if (proposal.members.empty()) {
 			if (m_FrameGroupMembers == 0 || std::countr_zero(m_FrameGroupMembers) + 1 != m_Config.localPeerId) return false;
 			for (const auto& [peer, bridge]: m_PeerBridges) {

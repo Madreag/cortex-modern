@@ -246,6 +246,33 @@ namespace RTE {
 			return true;
 		}
 
+		// A seat back through its ticket replays only the round's committed record: no peer's own split of the inputs, no mark
+		// of its own held silence. The host's return certificate names its boundary by the prefix the host derived there.
+		static bool ReplayedRecordPrefix(std::string* error) {
+			Wire wire; NetLockstepCoordinator host; Configure(host, wire);
+			host.m_Config.peerFrameGroups = true; host.m_Config.localPeerId = 1;
+			ControllerFrame hostInput;
+			hostInput.actorUniqueID = 77; hostInput.analogMoveX = 5; hostInput.inputMode = static_cast<uint8_t>(Controller::CIM_PLAYER); hostInput.playerRaw = Players::PlayerOne;
+			NetLockstepReadyFrame ready; ready.frame = 4422; ready.localPeerId = 1; ready.authorityPeerId = ready.updateAuthorityPeerId = 1;
+			ready.hasLocalInput = true; ready.localFrames.push_back(hostInput);
+			ready.remoteFrameCounts[3] = 0;
+			host.m_LastDeliveredFrame = ready.frame; host.RememberAppliedFrameInputs(ready);
+			LoopbackTransport transport; NetLockstepCoordinator replay;
+			NetLockstepConfig config = host.m_Config;
+			config.localPeerId = 2; config.authorityPeerId = 1; config.startFrame = ready.frame; config.peerFrameGroups = false;
+			if (!replay.StartReplay(transport, config, error)) return false;
+			const NetLockstepFrame record = PackWorldJoinReadyFrame(ready);
+			if (!replay.QueueReplayFrame(ready.frame, record.frames, record.commands, error, record.observations, record.valueObservations, record.senderPeerId, record.replayUpdateAuthorityPeerId))
+				return false;
+			replay.Tick(0);
+			NetLockstepReadyFrame replayed;
+			if (!replay.PopReadyFrame(replayed) || replayed.frame != ready.frame) { *error = "the replay did not deliver the recorded frame"; return false; }
+			if (replay.PeerAppliedFramePrefix(ready.frame) != host.PeerAppliedFramePrefix(ready.frame)) {
+				*error = "a seat that replayed the round's committed record derives another prefix at the host's return boundary, so it can never adopt the host's certificate"; return false;
+			}
+			return true;
+		}
+
 		static bool LinkQuality(std::string* error) {
 			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
 			peer.m_Config.peerFrameGroups = true; peer.m_MigrationPhase = NetHostMigrationPhase::None;
@@ -29234,6 +29261,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::AuthenticatedSilence, "undecodable_packet_does_not_refresh_authenticated_silence");
 		row(&SessionPlaneRecoveryTest::LinkQuality, "measured_local_and_remote_link_quality_and_override");
 		row(&SessionPlaneRecoveryTest::AppliedInputPrefix, "applied_inputs_preserve_the_agreed_prefix_and_tail_witness");
+		row(&SessionPlaneRecoveryTest::ReplayedRecordPrefix, "ticket_return_replay_reads_the_host_boundary_prefix");
 		row([](std::string* why) { return TestOwnerSilenceThreshold(1, why); }, "client_6s_silence_silent_bridge_then_visible_held");
 		row([](std::string* why) { return TestOwnerSilenceThreshold(2, why); }, "client_loop_10s_keepalive_bridge_automatic_return");
 		row([](std::string* why) { return TestOwnerSilenceThreshold(3, why); }, "host_sim_3s_plane_bridge_survivor_tick_bound_automatic_return");

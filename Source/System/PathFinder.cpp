@@ -19,6 +19,7 @@
 #include "NetLockstep.h"
 #include "NetMatchConfig.h"
 #include "ScenarioRunner.h"
+#include "LuaMan.h"
 #include "TerrainLayerSnapshot.h"
 #include "AsyncLineWriter.h"
 #include "SceneEditorGUI.h"
@@ -727,6 +728,11 @@ void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
 		request.status = deferred.status;
 	}
 	request.pathLength = request.path.size();
+	if (LuaMan::SharedTraceEnabled()) {
+		LuaMan::TraceShared(nullptr, "path-publish applied=" + std::to_string(ScenarioRunner::GetLockstepAppliedFrame()) + " complete=" +
+		                                 std::to_string(deferred.completeTick) + " seq=" + std::to_string(deferred.sequence) + " length=" + std::to_string(request.pathLength) +
+		                                 " ai=" + std::to_string(g_CurrentAIActor != nullptr));
+	}
 	if (deferred.callback) {
 		const FloatingPointEnvironment::Scope scope("deferred path callback");
 		deferred.callback(deferred.request);
@@ -1410,11 +1416,7 @@ void PathFinder::ApplyHorizonJob(const HorizonJob& job, const std::vector<std::a
 		if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size() || index >= materials.size()) {
 			continue;
 		}
-		// A node the live grid already carries needs no cell; every live write of one is preceded by a Note that pins it again.
-		if (m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials == materials[index]) {
-			m_HorizonNodes.erase(nodeId);
-			continue;
-		}
+		// A later terrain change can already be queued, so the live grid may move again before that change commits.
 		HorizonNode& overlay = m_HorizonNodes[nodeId];
 		overlay.committedMaterials = materials[index];
 		overlay.generation = generation;
@@ -1446,7 +1448,12 @@ HorizonNodeSnapshot PathFinder::SnapshotNode(int nodeId) const {
 	snap.nodeId = nodeId;
 	snap.pos = node.Pos;
 	snap.navigable = node.m_Navigable;
-	snap.materials = node.AdjacentNodeBlockingMaterials;
+	{
+		std::lock_guard lock(m_HorizonMutex);
+		const auto committed = m_HorizonNodes.find(nodeId);
+		// Local path workers can delay live updates. A terrain note must start from the same committed costs on every peer.
+		snap.materials = committed != m_HorizonNodes.end() ? committed->second.committedMaterials : node.AdjacentNodeBlockingMaterials;
+	}
 	for (int dir = 0; dir < PathNode::c_MaxAdjacentNodeCount; ++dir) {
 		if (!node.AdjacentNodes[dir]) {
 			continue;
@@ -2160,6 +2167,62 @@ int PathFinder::RunHorizonGridSelfTest() {
 		return 1;
 	}
 	std::cout << Tag << " PASS two-peer-determinism" << std::endl;
+
+	// A peer whose local solver held up the live update still has the same committed terrain.
+	{
+		PathFinder snapshotA;
+		PathFinder snapshotB;
+		snapshotA.TestInstallGrid(8, 4, 20, &air);
+		snapshotB.TestInstallGrid(8, 4, 20, &air);
+		snapshotA.QueueHorizonDelta(10, 4, wall, blocked);
+		snapshotB.QueueHorizonDelta(10, 4, wall, blocked);
+		snapshotA.TestApplyLiveUpdate(wall, blocked);
+		snapshotB.TestHoldPathingRequest();
+		snapshotB.TestApplyLiveUpdate(wall, blocked);
+		snapshotB.TestReleasePathingRequest();
+		snapshotA.CommitHorizonThrough(14);
+		snapshotB.CommitHorizonThrough(14);
+		const auto committedA = snapshotA.TestViewMaterials(wall, snapshotA.TestHorizonGeneration());
+		const auto committedB = snapshotB.TestViewMaterials(wall, snapshotB.TestHorizonGeneration());
+		if (committedA != blocked || committedB != blocked) return fail("shared snapshot fixture did not commit the same terrain");
+		const Box nextBox(Vector(50.0F, 30.0F), 40.0F, 40.0F);
+		snapshotA.PinHorizonFromLive(nextBox);
+		snapshotB.PinHorizonFromLive(nextBox);
+		std::vector<HorizonNodeSnapshot> nodesA;
+		std::vector<HorizonNodeSnapshot> nodesB;
+		snapshotA.CaptureHorizonNodeSnapshots(nextBox, nodesA);
+		snapshotB.CaptureHorizonNodeSnapshots(nextBox, nodesB);
+		bool sameSnapshots = nodesA.size() == nodesB.size();
+		for (size_t index = 0; sameSnapshots && index < nodesA.size(); ++index) {
+			sameSnapshots = nodesA[index].nodeId == nodesB[index].nodeId && nodesA[index].materials == nodesB[index].materials;
+		}
+		std::cout << Tag << (sameSnapshots ? " PASS" : " FAIL") << " shared-snapshot-costs" << std::endl;
+
+		// A later terrain change can be queued before the earlier one commits. Its live update must not show early.
+		PathFinder overlapA;
+		PathFinder overlapB;
+		overlapA.TestInstallGrid(8, 4, 20, &air);
+		overlapB.TestInstallGrid(8, 4, 20, &air);
+		std::array<const Material*, 8> cleared{};
+		cleared.fill(&air);
+		overlapA.QueueHorizonDelta(10, 4, wall, blocked);
+		overlapB.QueueHorizonDelta(10, 4, wall, blocked);
+		overlapA.QueueHorizonDelta(12, 4, wall, cleared);
+		overlapB.QueueHorizonDelta(12, 4, wall, cleared);
+		overlapA.TestApplyLiveUpdate(wall, blocked);
+		overlapA.CommitHorizonThrough(14);
+		overlapB.CommitHorizonThrough(14);
+		overlapA.TestApplyLiveUpdate(wall, cleared);
+		const auto beforeNextA = overlapA.TestViewMaterials(wall, overlapA.TestHorizonGeneration());
+		const auto beforeNextB = overlapB.TestViewMaterials(wall, overlapB.TestHorizonGeneration());
+		overlapA.CommitHorizonThrough(16);
+		overlapB.CommitHorizonThrough(16);
+		const auto afterNextA = overlapA.TestViewMaterials(wall, overlapA.TestHorizonGeneration());
+		const auto afterNextB = overlapB.TestViewMaterials(wall, overlapB.TestHorizonGeneration());
+		const bool sameCommits = beforeNextA == blocked && beforeNextB == blocked && afterNextA == cleared && afterNextB == cleared;
+		std::cout << Tag << (sameCommits ? " PASS" : " FAIL") << " overlapping-terrain-updates" << std::endl;
+		if (!sameSnapshots || !sameCommits) return 1;
+	}
 
 	// (ii) a change at T is visible at T+H and not at T+H-1 on both peers, and the live grid never carries it.
 	ResetHorizonWaitStats();

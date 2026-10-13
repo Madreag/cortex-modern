@@ -689,7 +689,7 @@ void Controller::UpdatePlayerInput(std::array<bool, ControlState::CONTROLSTATECO
 	m_ControlStates[ControlState::RELEASE_PRIMARY] = released(InputElements::INPUT_FIRE);
 	m_ControlStates[ControlState::RELEASE_SECONDARY] = released(InputElements::INPUT_PIEMENU_DIGITAL);
 
-	UpdatePlayerAnalogInput();
+	UpdatePlayerAnalogInput(frameEdges);
 }
 
 void Controller::UpdatePlayerPieMenuInput(std::array<bool, ControlState::CONTROLSTATECOUNT> lastControlStates, bool frameEdges) {
@@ -817,7 +817,7 @@ void Controller::UpdatePlayerPieMenuInput(std::array<bool, ControlState::CONTROL
 	}
 }
 
-void Controller::UpdatePlayerAnalogInput() {
+void Controller::UpdatePlayerAnalogInput(bool frameEdges) {
 	// ANALOG joystick values
 	Vector move = g_UInputMan.AnalogMoveValues(GetInputPlayer());
 	Vector aim = g_UInputMan.AnalogAimValues(GetInputPlayer());
@@ -863,7 +863,9 @@ void Controller::UpdatePlayerAnalogInput() {
 
 	// Special handing of the mouse input, if applicable
 	if (LocalIsMouseControlled()) {
-		m_MouseMovement = g_UInputMan.GetMouseMovement(GetInputPlayer());
+		// A match's tick falls between many loop passes that each end their frame, so it takes all the movement since the last tick.
+		const bool simMotion = !frameEdges && ScenarioRunner::HasLockstepCoordinator();
+		m_MouseMovement = simMotion ? g_UInputMan.GetMouseMovementSinceSim(GetInputPlayer()) : g_UInputMan.GetMouseMovement(GetInputPlayer());
 
 		if (g_UInputMan.MouseWheelMovedByPlayer(GetInputPlayer()) < 0) {
 			m_ControlStates[ControlState::WEAPON_CHANGE_NEXT] = m_ControlStates[ControlState::SCROLL_DOWN] = true;
@@ -874,9 +876,11 @@ void Controller::UpdatePlayerAnalogInput() {
 
 		m_ControlStates[ControlState::PRIMARY_ACTION] = g_UInputMan.MouseButtonHeld(MouseButtons::MOUSE_LEFT, GetInputPlayer());
 		m_ControlStates[ControlState::SECONDARY_ACTION] = g_UInputMan.MouseButtonHeld(activeSecondary, GetInputPlayer());
-		m_ControlStates[ControlState::PRESS_PRIMARY] = g_UInputMan.MouseButtonPressedSim(MouseButtons::MOUSE_LEFT, GetInputPlayer());
-		m_ControlStates[ControlState::PRESS_SECONDARY] = g_UInputMan.MouseButtonPressedSim(activeSecondary, GetInputPlayer());
-		m_ControlStates[ControlState::RELEASE_PRIMARY] = g_UInputMan.MouseButtonReleasedSim(MouseButtons::MOUSE_LEFT, GetInputPlayer());
-		m_ControlStates[ControlState::RELEASE_SECONDARY] = g_UInputMan.MouseButtonReleasedSim(activeSecondary, GetInputPlayer());
+		// The match's local editor runs after the simulation has consumed its own edges.
+		const bool frameMouse = frameEdges && ScenarioRunner::HasLockstepCoordinator();
+		m_ControlStates[ControlState::PRESS_PRIMARY] = frameMouse ? g_UInputMan.MouseButtonPressed(MouseButtons::MOUSE_LEFT, GetInputPlayer()) : g_UInputMan.MouseButtonPressedSim(MouseButtons::MOUSE_LEFT, GetInputPlayer());
+		m_ControlStates[ControlState::PRESS_SECONDARY] = frameMouse ? g_UInputMan.MouseButtonPressed(activeSecondary, GetInputPlayer()) : g_UInputMan.MouseButtonPressedSim(activeSecondary, GetInputPlayer());
+		m_ControlStates[ControlState::RELEASE_PRIMARY] = frameMouse ? g_UInputMan.MouseButtonReleased(MouseButtons::MOUSE_LEFT, GetInputPlayer()) : g_UInputMan.MouseButtonReleasedSim(MouseButtons::MOUSE_LEFT, GetInputPlayer());
+		m_ControlStates[ControlState::RELEASE_SECONDARY] = frameMouse ? g_UInputMan.MouseButtonReleased(activeSecondary, GetInputPlayer()) : g_UInputMan.MouseButtonReleasedSim(activeSecondary, GetInputPlayer());
 	}
 }

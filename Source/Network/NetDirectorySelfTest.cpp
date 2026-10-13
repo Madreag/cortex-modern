@@ -316,6 +316,49 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestRecoveryUsesListedMatch(std::string* error) {
+		const std::string sessionId = "7b8c9d2e-1111-4222-8333-444455556666";
+		NetParticipantIdentityStore player;
+		NetConnectionAuthority authority;
+		authority.m_Player = &player;
+		authority.m_BaseUrl = "https://dir.test";
+		authority.SetDirectory(sessionId);
+		authority.m_LocalLease.emplace();
+		authority.m_LocalLease->directorySessionId = sessionId;
+		// This is the authenticated host row retained by bootstrap and check-in.
+		authority.m_Host.emplace();
+		authority.m_Host->row.sessionId = sessionId;
+		authority.m_Host->row.matchConfigHash = std::string(64, '2');
+		NetFrameTieRequest tie;
+		tie.generation = 3; tie.roundId = 47; tie.frame = 109;
+		tie.host = 0; tie.owners = {0, 1}; tie.members = {1}; tie.configHash.fill(0x11);
+		NetHostChangeRequest change;
+		change.generation = 3; change.roundId = 47; change.appliedFrame = 108; change.preparedFrame = 109; change.configHash = tie.configHash;
+		auto queuedAs = [&](uint8_t byte) {
+			authority.QueryFrameTie(tie);
+			authority.QueryHostChange(change);
+			auto expectedTie = tie;
+			auto expectedChange = change;
+			expectedTie.configHash.fill(byte); expectedChange.configHash.fill(byte);
+			return authority.m_FrameTieRequest == expectedTie && authority.m_HostChangeRequest == expectedChange;
+		};
+		if (!queuedAs(0x22)) { *error = "a joiner's recovery named its round configuration instead of the listed match"; return false; }
+		authority.m_Host->row.matchConfigHash = std::string(64, '3');
+		if (!queuedAs(0x33)) { *error = "a refreshed host row left recovery on the previous listed match"; return false; }
+		authority.SetListedMatchHash(std::string(64, '4'));
+		if (!queuedAs(0x44)) { *error = "a host's confirmed registration lost precedence over an older host reply"; return false; }
+		authority.SetListedMatchHash("");
+		authority.m_Host->row.matchConfigHash = "invalid";
+		if (!queuedAs(0x11)) { *error = "an invalid listed hash replaced the peer's match identity"; return false; }
+		authority.SetListedMatchHash(std::string(64, '4'));
+		authority.SetDirectory("8c9d2e1f-2222-4333-8444-555566667777");
+		authority.m_LocalLease.emplace();
+		authority.m_LocalLease->directorySessionId = authority.DirectorySessionId();
+		if (!queuedAs(0x11)) { *error = "a new directory session inherited the old match identity"; return false; }
+		std::cout << "[net-directory-selftest] PASS recovery_uses_listed_match" << std::endl;
+		return true;
+	}
+
 	bool TestRecoveredDirectoryBinding(std::string* error) {
 		const std::string oldId = "7b8c9d2e-1111-4222-8333-444455556666";
 		const std::string newId = "8c9d2e1f-2222-4333-8444-555566667777";
@@ -3842,6 +3885,10 @@ namespace RTE {
 
 			std::string error;
 			const char* selected = std::getenv("CCCP_TEST_DIRECTORY_CASE");
+			if (!selected || std::string(selected) == "recovery-match") {
+				if (!TestRecoveryUsesListedMatch(&error)) return fail(error);
+				if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
+			}
 			if (selected && std::string(selected) == "host-post-wait") {
 				if (!TestHostPostWaitWithoutPolling(&error)) return fail(error);
 				std::cout << "[net-directory-selftest] PASS" << std::endl;

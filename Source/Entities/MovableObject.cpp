@@ -1,4 +1,5 @@
 #include "MovableObject.h"
+#include "NetModerationGUIProbe.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "OwnedMovableObjects.h"
@@ -179,6 +180,7 @@ MovableObject::HookCallScope::~HookCallScope() {
 }
 
 MovableObject::~MovableObject() {
+	NetModerationGUIProbe::TraceObjectLifetime(this, "destroy", true);
 	// Whatever freed this object, a hook loop of it running on this thread must not read it again.
 	for (HookCallScope* scope: g_LiveHookScopes) {
 		if (scope->m_Object == this) {

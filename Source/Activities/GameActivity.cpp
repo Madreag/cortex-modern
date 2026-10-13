@@ -33,6 +33,7 @@
 #include "ACrab.h"
 #include "ACRocket.h"
 #include "ACDropShip.h"
+#include "AEmitter.h"
 #include "HeldDevice.h"
 #include "Loadout.h"
 #include "Deployment.h"
@@ -57,13 +58,26 @@
 #include "GUIBanner.h"
 #include "GUICheckpoint.h"
 #include "GUIInput.h"
+#include "GUIControlManager.h"
+#include "GUITextBox.h"
+#include "GUIEvent.h"
+#include "PieSlice.h"
 #include "LuaMan.h"
+#include "lua.hpp"
 #include "ActivityMan.h"
 #include "TimerMan.h"
 #include "OwnedMovableObjects.h"
 #include "System.h"
 #include "MenuAutomation.h"
 #include "NetModerationGUI.h"
+#include "MainMenuGUI.h"
+#include "GUILabel.h"
+#include "GUIButton.h"
+#include "GUIListBox.h"
+#include "SettingsMan.h"
+#include "RenderTarget.h"
+#include <SDL3/SDL_timer.h>
+#include <chrono>
 
 #include <algorithm>
 #include <cstdio>
@@ -82,6 +96,8 @@
 #define BRAINLZWIDTHDEFAULT 640
 
 using namespace RTE;
+
+void RunMenuLoop();
 
 std::string GameActivity::s_LastFundsReadout[Players::MaxPlayerCount];
 
@@ -150,6 +166,9 @@ void GameActivity::Clear() {
 		m_NetworkPlayerNames[player] = "";
 	}
 	m_LockstepPlacementSeeded = false;
+	m_MatchLostBrainIDs.clear();
+	m_MatchBrainLosses.clear();
+	m_MatchEndReason.clear();
 	m_LockstepPlacementUidBase = 0;
 
 	m_StartingGold = 0;
@@ -1102,7 +1121,53 @@ void GameActivity::SetPaused(bool pause) {
 	Activity::SetPaused(pause);
 }
 
+void GameActivity::NoteMatchBrainLoss(const Actor& brain, const char* cause) {
+	// A preview can gib a shadow; only the shared world's loss belongs in the result.
+	if (!ScenarioRunner::IsLockstepControllerSyncActive() || g_MovableMan.IsSpeculative()) return;
+	std::string owner;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (m_Brain[player] == &brain) owner += (owner.empty() ? "" : " and ") + LockstepSeatName(player);
+	}
+	if (owner.empty()) {
+		if (!brain.IsInGroup("Brains") || !g_MovableMan.IsActor(&brain)) return;
+		owner = "Team " + std::to_string(brain.GetTeam() + 1);
+	}
+	std::ostringstream line;
+	line << owner << "'s " << brain.GetPresetName() << " (team " << brain.GetTeam() + 1
+	     << ", uid " << brain.GetUniqueID() << ") " << cause << " at tick " << g_TimerMan.GetSimUpdateCount()
+	     << ", health " << brain.GetHealth() << ", wounds " << brain.GetWoundCount() << "/" << brain.GetGibWoundLimit();
+	{
+		std::lock_guard lock(m_MatchBrainLossMutex);
+		if (!m_MatchLostBrainIDs.insert(brain.GetUniqueID()).second) return;
+		m_MatchBrainLosses.push_back(line.str());
+	}
+	System::PrintDiagnosticLine("[net-match] brain lost: " + line.str());
+	g_ConsoleMan.PrintString("NETWORK: " + line.str());
+}
+
 void GameActivity::End() {
+	if (ScenarioRunner::IsLockstepControllerSyncActive() && !g_MovableMan.IsSpeculative() && !IsOver()) {
+		// The script chooses the result; keep its call site beside the brains that led to it.
+		std::string rule = "activity end";
+		if (LuaStateWrapper* wrapper = g_LuaMan.GetThreadCurrentLuaState()) {
+			lua_State* state = wrapper->GetLuaState();
+			lua_Debug frame;
+			for (int depth = 0; lua_getstack(state, depth, &frame); ++depth) {
+				if (lua_getinfo(state, "Sl", &frame) && frame.currentline > 0 && frame.source && frame.source[0] == '@') {
+					rule = std::string(frame.source + 1) + ":" + std::to_string(frame.currentline);
+					break;
+				}
+			}
+		}
+		m_MatchEndReason = GetPresetName() + " ended at tick " + std::to_string(g_TimerMan.GetSimUpdateCount()) + " by " + rule;
+		if (m_WinnerTeam != Teams::NoTeam) m_MatchEndReason += "; team " + std::to_string(m_WinnerTeam + 1) + " wins";
+		std::vector<std::string> losses;
+		{ std::lock_guard lock(m_MatchBrainLossMutex); losses = m_MatchBrainLosses; }
+		std::sort(losses.begin(), losses.end());
+		for (const std::string& loss: losses) m_MatchEndReason += "; " + loss;
+		System::PrintDiagnosticLine("[net-match] activity end: " + m_MatchEndReason);
+		g_ConsoleMan.PrintString("NETWORK: " + m_MatchEndReason);
+	}
 	Activity::End();
 
 	bool playerWon = false;
@@ -1298,6 +1363,10 @@ bool GameActivity::SubmitLockstepBrainPlacement(int player) {
 	if (!scene || !scene->GetResidentBrain(player)) {
 		return false;
 	}
+	if (const std::string reason = MatchBrainPlacementReason(player, scene->GetResidentBrain(player)->GetPos(), scene->GetResidentBrain(player)); !reason.empty()) {
+		RefuseBrainPlacement(player, reason, true);
+		return false;
+	}
 	// This machine vets its own player's spot - the choice is off the wire, like every other menu decision.
 	if (m_pEditorGUI[player] && !m_pEditorGUI[player]->TestBrainResidence()) {
 		return false;
@@ -1481,7 +1550,8 @@ void GameActivity::DriveScriptedSetupEditor(int player) {
 		}
 	} else {
 		const SceneObject* resident = scene ? scene->GetResidentBrain(player) : nullptr;
-		if (resident && resident->GetPresetName() == gesture.preset) {
+		if ((resident && resident->GetPresetName() == gesture.preset) ||
+		    (m_ReadyToStart[player] && m_LockstepSeatBrains[player].preset == gesture.preset)) {
 			s_ScriptedEditorGestures[player].pop_front();
 		} else if (++gesture.attempts >= c_ScriptedEditorAttempts) {
 			give_up();
@@ -1723,6 +1793,8 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 	if (!std::isfinite(placement.posX) || !std::isfinite(placement.posY)) {
 		return false;
 	}
+	const uint8_t seatPeer = LockstepSeatPeerId(player);
+	const uint8_t ownerPeer = seatPeer != 0 ? seatPeer : ScenarioRunner::GetLockstepHostPeerId();
 	// A refusal is silent on the wire, so the player who tried reads the reason on their own screen.
 	const auto refuse = [&](const std::string& reason) {
 		{
@@ -1732,16 +1804,30 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 			System::PrintDiagnosticLine(line.str());
 		}
 		RefuseBrainPlacement(player, reason, senderPeerId == ScenarioRunner::GetLockstepLocalPeerId());
+		if (senderPeerId == ownerPeer && IsLocalHumanSeat(player) && !m_ReadyToStart[player]) {
+			// Two previews can choose a free spot together; the second seat gets its brain back to move.
+			m_LockstepPlacementSubmitted[player] = false;
+			if (m_pEditorGUI[player]) {
+				const ScopedEditorRNG editorRNG(true);
+				if (SceneObject* resident = scene->GetResidentBrain(player)) {
+					m_pEditorGUI[player]->SetCurrentObject(static_cast<SceneObject*>(resident->Clone()));
+					m_pEditorGUI[player]->SetCursorPos(resident->GetPos());
+					scene->SetResidentBrain(player, nullptr);
+				}
+				m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::INSTALLINGBRAIN);
+			}
+		}
 		return false;
 	};
 	// Only the peer holding the seat may place its brain; every peer resolves that the same way.
-	const uint8_t seatPeer = LockstepSeatPeerId(player);
-	if (senderPeerId != (seatPeer != 0 ? seatPeer : ScenarioRunner::GetLockstepHostPeerId())) {
+	if (senderPeerId != ownerPeer) {
 		return refuse("Rejected a brain placement for seat " + std::to_string(player) + " from a peer that does not hold it");
 	}
 	if (!g_PresetMan.GetEntityPreset(placement.className, placement.preset, placement.module)) {
 		return refuse("Brain placement rejected - unknown preset \"" + placement.preset + "\"");
 	}
+	const auto* brain = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset(placement.className, placement.preset, placement.module));
+	if (const std::string reason = MatchBrainPlacementReason(player, Vector(placement.posX, placement.posY), brain); !reason.empty()) return refuse(reason);
 	// Recorded, not built: the brains are all made at the start, off a counter every peer shares, so a
 	// local editor's own preview objects cannot shift the unique ids the sim ends up with.
 	const auto previous = m_LockstepSeatBrains[player];
@@ -1763,6 +1849,26 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 	ScenarioRunner::PushNetUiToast("brain_placed", IsLocalHumanSeat(player) ? std::string("You placed your brain")
 	                                                                            : LockstepSeatName(player) + " placed their brain");
 	return true;
+}
+
+std::string GameActivity::MatchBrainPlacementReason(int player, const Vector& spot, const SceneObject* brain) const {
+	if (!brain || !brain->IsInGroup("Brains")) return "Choose a brain to install";
+	if (!std::isfinite(spot.m_X) || !std::isfinite(spot.m_Y) || spot.m_X < 0 || spot.m_X >= g_SceneMan.GetSceneWidth() ||
+	    spot.m_Y < 0 || spot.m_Y >= g_SceneMan.GetSceneHeight()) return "Outside the scene - move your brain into the scene";
+	if (g_SceneMan.GetTerrMatter(spot.GetFloorIntX(), spot.GetFloorIntY()) != g_MaterialAir) return "Inside terrain - move your brain into open space";
+	const auto radius = [](const SceneObject* object) {
+		const auto* movable = dynamic_cast<const MovableObject*>(object);
+		return movable ? std::max(8.0F, movable->GetRadius()) : 8.0F;
+	};
+	for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
+		const auto& placed = m_LockstepSeatBrains[seat];
+		if (seat == player || !m_ReadyToStart[seat] || placed.player != seat) continue;
+		const auto* other = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset(placed.className, placed.preset, placed.module));
+		if (g_SceneMan.ShortestDistance(spot, Vector(placed.posX, placed.posY), true).MagnitudeIsLessThan(radius(brain) + radius(other) + 4.0F)) {
+			return "Occupied by " + LockstepSeatName(seat) + "'s brain - choose another spot";
+		}
+	}
+	return {};
 }
 
 std::string GameActivity::LockstepSeatName(int player) {
@@ -1879,6 +1985,9 @@ void GameActivity::SeedPlacement() {
 		// Read before any local editor runs, so every peer starts its reserve from the same id.
 		m_LockstepPlacementUidBase = MovableObject::GetUniqueIDCounter();
 		SeedLockstepResidentBrains();
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			if (IsLocalHumanSeat(player) && m_pEditorGUI[player]) m_pEditorGUI[player]->SetCursorPos(DeterministicBrainSpot(player));
+		}
 		// A seat no peer drives gets its brain from the host, at the spot every peer derives.
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 			if (IsSeatActive(player) && IsHumanSeat(player) && LockstepSeatPeerId(player) == 0 && MayCommitBrainPlacement(player)) {
@@ -1916,8 +2025,8 @@ void GameActivity::UpdateEditingInput(bool frameInput) {
 		    m_pEditorGUI[player]->GetEditorGUIMode() != SceneEditorGUI::PICKINGOBJECT &&
 		    m_pEditorGUI[player]->GetEditorGUIMode() != SceneEditorGUI::INACTIVE &&
 		    !(SDL_GetModState() & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) &&
-		    ((g_UInputMan.KeyPressed(SDLK_RETURN) && IsPlacementConfirmKeyAvailable(player, SDL_SCANCODE_RETURN)) ||
-		     (g_UInputMan.KeyPressed(SDLK_KP_ENTER) && IsPlacementConfirmKeyAvailable(player, SDL_SCANCODE_KP_ENTER)))) {
+		    ((g_UInputMan.NetworkGUIKeyPressed(SDL_SCANCODE_RETURN) && IsPlacementConfirmKeyAvailable(player, SDL_SCANCODE_RETURN)) ||
+		     (g_UInputMan.NetworkGUIKeyPressed(SDL_SCANCODE_KP_ENTER) && IsPlacementConfirmKeyAvailable(player, SDL_SCANCODE_KP_ENTER)))) {
 			m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::DONEEDITING);
 		}
 
@@ -1929,7 +2038,9 @@ void GameActivity::UpdateEditingInput(bool frameInput) {
 
 		if (lockstep && askedDone && !m_ReadyToStart[player] && !m_LockstepPlacementSubmitted[player] &&
 		    m_pEditorGUI[player]->GetEditorGUIMode() != SceneEditorGUI::DONEEDITING) {
-			RefuseBrainPlacement(player, "Place your brain in a valid spot first", true);
+			const auto* editor = m_pEditorGUI[player];
+			const std::string reason = MatchBrainPlacementReason(player, editor->GetCursorPos(), editor->GetCurrentObject());
+			RefuseBrainPlacement(player, reason.empty() ? "Click to install your brain before continuing" : reason, true);
 		}
 
 		// Set the team associations with each screen displayed
@@ -1955,13 +2066,15 @@ void GameActivity::UpdateEditingInput(bool frameInput) {
 					continue;
 				}
 				if (!m_ReadyToStart[player] && !m_LockstepPlacementSubmitted[player] && !SubmitLockstepBrainPlacement(player)) {
-					const Entity* pBrain = g_PresetMan.GetEntityPreset("Actor", "Brain Case");
-					if (pBrain)
-						m_pEditorGUI[player]->SetCurrentObject(dynamic_cast<SceneObject*>(pBrain->Clone()));
+					SceneObject* resident = g_SceneMan.GetScene()->GetResidentBrain(player);
+					const SceneObject* brain = resident ? resident : m_pEditorGUI[player]->GetCurrentObject();
+					const std::string reason = MatchBrainPlacementReason(player, brain ? brain->GetPos() : m_pEditorGUI[player]->GetCursorPos(), brain);
+					if (resident) {
+						m_pEditorGUI[player]->SetCurrentObject(static_cast<SceneObject*>(resident->Clone()));
+						g_SceneMan.GetScene()->SetResidentBrain(player, nullptr);
+					}
 					m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::INSTALLINGBRAIN);
-					g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
-					g_FrameMan.SetScreenText("PLACE YOUR BRAIN IN A VALID SPOT FIRST!", ScreenOfPlayer(player), 250, 3500);
-					m_MessageTimer[player].Reset();
+					RefuseBrainPlacement(player, reason.empty() ? "No clear path to orbit - choose another spot" : reason, true);
 				} else if (m_LockstepPlacementSubmitted[player]) {
 					g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
 					g_FrameMan.SetScreenText(m_ReadyToStart[player] ? "READY to start - wait for others to finish..." : "Placement sent - waiting for confirmation...", ScreenOfPlayer(player), 333);
@@ -2780,14 +2893,14 @@ void GameActivity::Update() {
 		if (!skipBuyUpdate) {
 			if (g_MenuMan.IsLiveMenuOwningInput()) m_pBuyGUI[player]->SetEnabled(false);
 			//            m_pBuyGUI[player]->SetEnabled(m_ControlledActor[player] == m_Brain[player] && m_ViewState[player] != ViewState::LandingZoneSelect && m_ActivityState != ActivityState::Over);
-			m_pBuyGUI[player]->Update();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) m_pBuyGUI[player]->Update();
 		}
 
 		// Trap the mouse if we're in gameplay and not in menus
 		g_UInputMan.TrapMousePos(!g_MenuMan.IsLiveMenuOwningInput() && !m_pBuyGUI[player]->IsEnabled() && !m_InventoryMenuGUI[player]->IsEnabledAndNotCarousel() && !m_LuaLockActor[player], LocalInputOfPlayer(player));
 
 		// Start LZ picking mode if a purchase was made
-		if (m_pBuyGUI[player]->PurchaseMade()) {
+		if (ScenarioRunner::IsLockstepControllerSyncActive() ? m_pBuyGUI[player]->ConsumePurchase() : m_pBuyGUI[player]->PurchaseMade()) {
 			// Store the delivery's own width; the window clamp belongs to the draw, since this is checkpointed state.
 			m_LZCursorWidth[player] = m_pBuyGUI[player]->GetDeliveryWidth();
 			m_pBuyGUI[player]->SetEnabled(false);
@@ -2973,6 +3086,20 @@ void GameActivity::RenderUpdate() {
 		SeedPlacement();
 		UpdateEditingInput(true);
 	}
+	if (ScenarioRunner::IsLockstepControllerSyncActive() && m_ActivityState != ActivityState::Editing) {
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			auto* buy = m_pBuyGUI[player];
+			if (!(IsSeatActive(player) && IsLocalHumanSeat(player)) || !buy || buy->IsInert() || !buy->IsVisible() || buy->PurchaseMade()) continue;
+			if (g_MenuMan.IsLiveMenuOwningInput()) buy->SetEnabled(false);
+			// Buy reads frame input while the shared controller keeps its committed tick.
+			Controller committed;
+			committed.CopyCheckpointFrom(m_PlayerController[player]);
+			if (buy->IsEnabled()) m_PlayerController[player].UpdateEditorInput();
+			const ScopedEditorRNG localRNG(true);
+			buy->Update();
+			m_PlayerController[player].CopyCheckpointFrom(committed);
+		}
+	}
 }
 
 void GameActivity::PrepareDrawGUI(int whichScreen) {
@@ -2990,6 +3117,13 @@ void GameActivity::PrepareDrawGUI(int whichScreen) {
 void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int which) {
 	if (which < 0 || which >= c_MaxScreenCount)
 		return;
+	if (std::getenv("CC_TEST_FIGHT15_PRESENTATION")) {
+		const Vector offset = g_CameraMan.GetOffset(which), render = g_CameraMan.GetRenderOffset(which);
+		System::PrintDiagnosticLine("[fight15-presentation] wall_ms=" + std::to_string(SDL_GetTicks()) +
+		    " sim=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " game_ms=" + std::to_string(m_GameTimer.GetElapsedRealTimeMS()) +
+		    " camera=" + std::to_string(offset.m_X) + "," + std::to_string(offset.m_Y) +
+		    " render=" + std::to_string(render.m_X) + "," + std::to_string(render.m_Y) + " humans=" + std::to_string(GetLocalHumanCount()));
+	}
 
 	char str[512];
 	int yTextPos = 0;
@@ -4316,6 +4450,415 @@ bool GameActivity::RunNetInventoryRelaunchProbe(std::string_view phase) {
 	return check("local_inventory_and_marks_survive", matched && state.held > 0 && (phase == "first" ? relaunch && state.first == 1 : !relaunch && state.first == 1 && state.after == 1)) && state.passed;
 }
 
+namespace {
+	template<class ActivityType> std::string ObservedMatchEndReason(const ActivityType& activity) {
+		if constexpr (requires { activity.GetMatchEndReason(); }) return activity.GetMatchEndReason();
+		else return {};
+	}
+	template<class MenuType> std::string ObservedPieDescription(const MenuType& menu) {
+		if constexpr (requires { menu.GetHoveredSliceDescription(); }) return menu.GetHoveredSliceDescription();
+		else {
+			const PieSlice* slice = menu.GetFirstPieSliceByType(PieSliceType::BuyMenu);
+			return slice ? slice->GetDescription() : std::string();
+		}
+	}
+}
+
+bool GameActivity::RunFight15SelfTest(const std::string& row) {
+	bool passed = true;
+	const auto check = [&](const std::string& name, bool value) {
+		System::PrintDiagnosticLine("[fight15-selftest] " + std::string(value ? "PASS " : "FAIL ") + row + " " + name);
+		passed = passed && value; return value;
+	};
+	if (row == "R7") {
+		// Close the live menu world so the measured interval ends with the ordinary shutdown.
+		NetMatchServiceRequest request; request.host = true; request.port = 47915; request.playerName = "Close fixture";
+		std::string error;
+		check("pending_local_session_starts", g_NetMatchService.Start(request, &error));
+		const uint64_t began = SDL_GetTicks();
+		SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+		const auto closeUnixMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+		System::PrintDiagnosticLine("[fight15-selftest] R7 close_started_unix_ms=" + std::to_string(closeUnixMs));
+		SDL_Event event{}; event.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED; event.window.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); SDL_PushEvent(&event);
+		::RunMenuLoop();
+		check("close_returns_without_a_peer", SDL_GetTicks() - began < 2000);
+		return passed;
+	}
+	struct Restore {
+		std::unique_ptr<Activity> activity;
+		MovableMan::WorldSetAside world;
+		SceneMan::SceneSetAside scene;
+		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
+		bool menu = g_MenuMan.GetIsInMenuScreen();
+		Restore() {
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			if (!g_MovableMan.SetAsideWorld(world, false)) throw std::runtime_error("fight15 fixture world failed");
+			g_SceneMan.SetAsideScene(scene);
+		}
+		~Restore() {
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			g_ActivityMan.SwapCheckpointActivity(activity); activity.reset();
+			g_MovableMan.PurgeAllMOs(); g_SceneMan.ReinstateScene(scene); g_MovableMan.ReinstateWorld(world);
+			g_SimRNG = sim; g_RenderRNG = render; g_MenuMan.SetIsInMenuScreen(menu);
+		}
+	} restore;
+	std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+	g_ActivityMan.SwapCheckpointActivity(next);
+	auto* game = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+	if (g_SceneMan.LoadScene("Null Scene", false, false) < 0) return false;
+	if (game->Create() < 0) return false;
+	LoopbackTransport wire;
+	NetLockstepCoordinator coordinator;
+	NetLockstepConfig config;
+	config.sessionId = config.roundId = 0x46494715; config.localPeerId = config.peerCount = 1;
+	config.scenario = "Fight15SelfTest"; config.ownershipPolicy = "unique-id-split";
+	config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+	config.matchConfig.peerCount = 1; config.matchConfig.players.resize(1);
+	if (row == "R3") config.matchConfig.players[0].team = TeamFour;
+	std::string error;
+	if (!coordinator.StartReplay(wire, config, &error)) return false;
+	ScenarioRunner::SetLockstepCoordinator(&coordinator);
+	game->m_ActivityState = ActivityState::Editing;
+	game->m_IsActive[0] = game->m_IsHuman[0] = true; game->m_Team[0] = TeamOne; game->m_PlayerScreen[0] = 0;
+	game->m_PlayerCount = game->m_TeamCount = 1; game->m_TeamFunds[0] = 2000;
+	game->m_PlayerController[0].Create(Controller::CIM_PLAYER, 0); game->m_PlayerController[0].SetTeam(TeamOne);
+	const auto* brainPreset = dynamic_cast<const Actor*>(g_PresetMan.GetEntityPreset("Actor", "Brain Case", "Base.rte"));
+	if (!brainPreset) return false;
+	struct ScreenRefresh {
+		bool drawing;
+		explicit ScreenRefresh(bool enabled) : drawing(enabled) { if (drawing) g_WindowMan.GetScreenBuffer()->Begin(); }
+		~ScreenRefresh() { if (drawing) g_WindowMan.GetScreenBuffer()->End(); }
+	} refresh(true);
+	const auto present = [&](const char* capture = nullptr) {
+		g_WindowMan.GetScreenBuffer()->End(); g_WindowMan.UploadFrame();
+		if (capture) g_FrameMan.SaveScreenToPNG(capture);
+		MenuAutomation::AfterDrawnFrame(); g_UInputMan.EndFrame(); g_UInputMan.EndSimUpdate();
+		g_FrameMan.ClearBackBuffer32(); g_WindowMan.GetScreenBuffer()->Begin();
+	};
+	const auto mouse = [&](bool down, int x, int y, bool duplicate) {
+		SDL_Event motion{}; motion.type = SDL_EVENT_MOUSE_MOTION; motion.motion.x = static_cast<float>(x); motion.motion.y = static_cast<float>(y);
+		motion.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+		g_UInputMan.HandleInputEvent(motion);
+		SDL_Event event{}; event.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+		event.button.windowID = motion.motion.windowID; event.button.button = SDL_BUTTON_LEFT; event.button.down = down;
+		event.button.x = static_cast<float>(x); event.button.y = static_cast<float>(y);
+		g_UInputMan.HandleInputEvent(event);
+		if (duplicate) g_UInputMan.HandleInputEvent(event);
+	};
+	if (row == "R1") {
+		game->SetPresetName("Skirmish Defense reason fixture"); game->m_ActivityState = ActivityState::Running;
+		auto* brain = static_cast<Actor*>(brainPreset->Clone()); brain->SetTeam(TeamOne); brain->SetPos(Vector(120, 120));
+		g_MovableMan.AddActor(brain); game->SetPlayerBrain(brain, 0);
+		const long uid = brain->GetUniqueID();
+		check("brain_registered_and_healthy_before_gib", game->GetPlayerBrain(0) == brain && brain->GetHealth() == 100);
+		g_MovableMan.BeginSpeculation();
+		auto* preview = static_cast<Actor*>(g_MovableMan.ViewIfSpeculating(brain));
+		check("preview_uses_a_shadow_of_the_same_brain", preview && preview != brain && preview->GetUniqueID() == uid);
+		if (preview && preview != brain) { preview->SetHealth(12); preview->GibThis(); }
+		g_MovableMan.EndSpeculation();
+		check("preview_leaves_the_registered_brain_healthy", game->GetPlayerBrain(0) == brain && brain->GetHealth() == 100 && !brain->IsSetToDelete());
+		brain->GibThis(); game->SetWinnerTeam(TeamTwo); game->End();
+		const std::string reason = ObservedMatchEndReason(*game);
+		check("end_names_brain_rule_tick_and_winner", reason.find("Brain Case") != std::string::npos && reason.find("uid " + std::to_string(uid)) != std::string::npos &&
+		      reason.find("was gibbed") != std::string::npos && reason.find("ended at tick") != std::string::npos && reason.find("by activity end") != std::string::npos && reason.find("team 2 wins") != std::string::npos);
+		check("end_uses_the_shared_loss_instead_of_the_preview", reason.find("health 100,") != std::string::npos && reason.find("health 12,") == std::string::npos);
+		System::PrintDiagnosticLine("[fight15-selftest] observed end: " + reason);
+	} else if (row == "R2") {
+		game->m_pEditorGUI[0] = new SceneEditorGUI;
+		auto* editor = game->m_pEditorGUI[0]; if (editor->Create(&game->m_PlayerController[0]) < 0) return false;
+		editor->SetCurrentObject(static_cast<SceneObject*>(brainPreset->Clone())); editor->SetEditorGUIMode(SceneEditorGUI::INSTALLINGBRAIN); editor->SetCursorPos(Vector(120, 120));
+		const auto frame = [&] {
+			g_UInputMan.Update(false); g_UInputMan.EndSimUpdate();
+			game->RenderUpdate(); editor->Draw(g_FrameMan.GetBackBuffer32(), Vector()); present();
+		};
+		frame(); editor->SetCursorPos(Vector(120, 120));
+		mouse(true, 480, 270, false); frame();
+		check("frame_press_reaches_local_editor", editor->GetEditorGUIMode() == SceneEditorGUI::PLACINGOBJECT);
+		check("press_does_not_install", !game->m_LockstepPlacementSubmitted[0]);
+		mouse(false, 480, 270, false); frame();
+		const auto commands = ScenarioRunner::DrainLocalGameCommands();
+		const bool one = commands.size() == 1 && std::holds_alternative<NetGamePlaceBrain>(commands.front().payload);
+		check("release_installs_and_submits_once", game->m_LockstepPlacementSubmitted[0] && one && !game->m_ReadyToStart[0]);
+		frame(); check("later_refresh_does_not_resubmit", ScenarioRunner::DrainLocalGameCommands().empty());
+		NetGamePlaceBrain placement; placement.player = 0; placement.team = TeamOne; placement.posX = placement.posY = 120;
+		placement.className = brainPreset->GetClassName(); placement.preset = brainPreset->GetPresetName(); placement.module = brainPreset->GetModuleName();
+		if (one) placement = std::get<NetGamePlaceBrain>(commands.front().payload);
+		game->m_IsActive[1] = game->m_IsHuman[1] = true; game->m_Team[1] = TeamTwo; game->m_PlayerCount = game->m_TeamCount = 2;
+		game->m_pEditorGUI[1] = new SceneEditorGUI;
+		auto first = placement; first.player = 1; first.team = TeamTwo;
+		check("first_shared_commit_is_accepted", game->ApplyNetBrainPlacement(first, 1) && game->m_ReadyToStart[1]);
+		check("occupied_spot_refused_on_shared_commit", !game->ApplyNetBrainPlacement(placement, 1) && !game->m_ReadyToStart[0]);
+		check("refused_seat_can_move_its_preview", !game->m_LockstepPlacementSubmitted[0] && editor->GetCurrentObject() && editor->GetEditorGUIMode() == SceneEditorGUI::INSTALLINGBRAIN);
+		std::string names; int placed = 0, total = 0;
+		check("counter_counts_only_accepted_brains", game->DescribeLockstepPlacementWait(names, placed, total) && placed == 1 && total == 2);
+		editor->SetCursorPos(Vector(240, 120)); mouse(true, 480, 270, false); frame(); mouse(false, 480, 270, false); frame();
+		const auto retry = ScenarioRunner::DrainLocalGameCommands();
+		check("refused_seat_can_install_elsewhere", retry.size() == 1 && std::holds_alternative<NetGamePlaceBrain>(retry.front().payload) &&
+		      game->ApplyNetBrainPlacement(std::get<NetGamePlaceBrain>(retry.front().payload), 1) && game->m_ReadyToStart[0]);
+	} else if (row == "R3") {
+		g_MenuMan.SetIsInMenuScreen(false);
+		game->m_ActivityState = ActivityState::Running; game->m_Team[0] = TeamFour; game->m_TeamFunds[TeamFour] = 2345;
+		game->m_PlayerController[0].SetTeam(TeamFour);
+		auto* brain = static_cast<Actor*>(brainPreset->Clone()); brain->SetTeam(TeamFour); brain->SetPos(Vector(120, 120));
+		brain->SetControllerMode(Controller::CIM_PLAYER, 0);
+		g_MovableMan.AddActor(brain); g_MovableMan.Update(); game->SetPlayerBrain(brain, 0); game->m_ControlledActor[0] = brain;
+		game->m_pBuyGUI[0] = new BuyMenuGUI; if (game->m_pBuyGUI[0]->Create(&game->m_PlayerController[0]) < 0) return false;
+		game->m_InventoryMenuGUI[0] = new InventoryMenuGUI; game->m_InventoryMenuGUI[0]->Create(&game->m_PlayerController[0]);
+		PieMenu* pie = brain->GetPieMenu(); Controller* controller = brain->GetController();
+		// AddActor holds the controller for its spawn tick. This case starts after that handoff.
+		controller->SetDisabled(false);
+		check("controlled_brain_is_ready_for_input", !controller->IsDisabled());
+		pie->CloseForCanonicalStart();
+		const auto observePie = [&](const char* when) {
+			System::PrintDiagnosticLine("[fight15-selftest] R3 " + std::string(when) + " slices=" + std::to_string(pie->GetPieSlices().size()) +
+			    " disabled=" + std::to_string(controller->IsDisabled()) + " owner_controller=" + std::to_string(pie->GetController() == controller) +
+			    " sync=" + std::to_string(ScenarioRunner::IsLockstepControllerSyncActive()) + " enabled=" + std::to_string(pie->IsEnabled()) +
+			    " command=" + std::to_string(static_cast<int>(pie->GetPieCommand())) + " description=" + ObservedPieDescription(*pie));
+		};
+		observePie("before_press");
+		controller->SetState(PIE_MENU_ACTIVE, true); controller->SetState(PRESS_SECONDARY, true); pie->Update();
+		observePie("press"); pie->Draw(g_FrameMan.GetBackBuffer32(), Vector()); present();
+		controller->SetState(PRESS_SECONDARY, false); pie->Update(); pie->Draw(g_FrameMan.GetBackBuffer32(), Vector()); present();
+		observePie("held");
+		controller->SetState(PRESS_SECONDARY, false); controller->SetState(PIE_MENU_ACTIVE, false); controller->SetState(RELEASE_SECONDARY, true); pie->Update();
+		observePie("release");
+		check("plain_pie_press_release_selects_buy", pie->GetPieCommand() == PieSliceType::BuyMenu);
+		game->Update(); check("actor_buy_opens_for_own_team", game->m_pBuyGUI[0]->IsEnabled() && game->m_PlayerController[0].GetTeam() == TeamFour && game->GetTeamFunds(TeamFour) == 2345);
+		controller->SetState(RELEASE_SECONDARY, false);
+		auto* shop = game->m_pBuyGUI[0];
+		shop->LoadAllLoadoutsFromFile();
+		shop->SetModuleExpanded(g_PresetMan.GetModuleID("Coalition.rte"));
+		shop->SetEnabled(true);
+		g_UInputMan.TrapMousePos(false, 0);
+		const auto drawShop = [&] {
+			// Gameplay menus draw into the paletted layer before presentation.
+			BITMAP* layer = g_FrameMan.GetBackBuffer8();
+			clear_to_color(layer, 0); shop->Draw(layer);
+			blit(layer, g_FrameMan.GetBackBuffer32(), 0, 0, 0, 0, layer->w, layer->h);
+			present();
+		};
+		SDL_Delay(250); g_TimerMan.Update();
+		g_UInputMan.Update(false); g_UInputMan.EndSimUpdate();
+		game->Update();
+		game->RenderUpdate(); drawShop();
+		int tabX, tabY, tabWidth, tabHeight;
+		shop->AutomationManager()->GetControl("BodiesTab")->GetControlRect(&tabX, &tabY, &tabWidth, &tabHeight);
+		check("buy_controls_are_visible_before_the_frozen_tick", tabX >= 0 && tabY >= 0 && tabX + tabWidth <= g_WindowMan.GetResX() && tabY + tabHeight <= g_WindowMan.GetResY());
+		const uint64_t shopTick = g_TimerMan.GetSimUpdateCount();
+		const std::string committedController = game->m_PlayerController[0].SaveCheckpoint();
+		const std::string sharedRNG = g_SimRNG.SerializeStateForHashing();
+		const auto shopFrame = [&] {
+			g_TimerMan.Update();
+			g_UInputMan.Update(false); g_UInputMan.EndSimUpdate();
+			game->RenderUpdate(); drawShop();
+		};
+		const auto clickShop = [&](const char* name) {
+			auto* control = shop->AutomationManager()->GetControl(name);
+			if (!control) return false;
+			int x, y, width, height; control->GetControlRect(&x, &y, &width, &height);
+			mouse(true, x + width / 2, y + height / 2, false); shopFrame();
+			mouse(false, x + width / 2, y + height / 2, false); shopFrame();
+			return true;
+		};
+		const auto catalogContains = [&](const char* preset) {
+			auto* catalog = dynamic_cast<GUIListBox*>(shop->AutomationManager()->GetControl("CatalogLB"));
+			if (catalog) for (const auto* item: *catalog->GetItemList()) {
+				if (item->m_pEntity && item->m_pEntity->GetModuleAndPresetName() == preset) return true;
+			}
+			return false;
+		};
+		check("craft_click_between_ticks_changes_catalog", clickShop("CraftTab") && catalogContains("Base.rte/Rocket MK2"));
+		check("bodies_click_between_ticks_contains_soldier", clickShop("BodiesTab") && catalogContains("Coalition.rte/Soldier Light"));
+		check("buy_click_between_ticks_confirms", clickShop("BuyButton") && shop->PurchaseMade());
+		shopFrame(); shopFrame();
+		check("purchase_waits_for_a_simulation_tick", shop->PurchaseMade() && game->GetViewState(0) != ViewState::LandingZoneSelect && g_TimerMan.GetSimUpdateCount() == shopTick);
+		check("shop_frames_keep_the_committed_controller", game->m_PlayerController[0].SaveCheckpoint() == committedController);
+		check("shop_frames_keep_the_shared_random_stream", g_SimRNG.SerializeStateForHashing() == sharedRNG);
+		game->Update();
+		check("simulation_consumes_the_purchase_once", !shop->PurchaseMade() && game->GetViewState(0) == ViewState::LandingZoneSelect);
+		game->m_ViewState[0] = ViewState::Normal;
+		game->m_pBuyGUI[0]->SetEnabled(false); controller->SetState(RELEASE_SECONDARY, false);
+		// Returning from a landing order plays this closing animation while its click is still crossing.
+		pie->CloseForCanonicalStart(); pie->DoDisableAnimation();
+		controller->SetState(PRESS_PRIMARY, true); pie->Update();
+		check("landing_click_does_not_select_a_closing_pie", pie->GetPieCommand() == PieSliceType::NoType);
+		pie->Draw(g_FrameMan.GetBackBuffer32(), Vector()); present(); game->Update();
+		controller->SetState(PRESS_PRIMARY, false); controller->SetState(RELEASE_PRIMARY, true); pie->Update();
+		pie->Draw(g_FrameMan.GetBackBuffer32(), Vector()); present(); game->Update();
+		check("landing_release_keeps_buy_closed", !game->m_pBuyGUI[0]->IsEnabled());
+		controller->SetState(RELEASE_PRIMARY, false);
+		game->m_BuyMenuEnabled = false; controller->SetState(RELEASE_SECONDARY, false); controller->SetState(PIE_MENU_ACTIVE, true); pie->Update(); pie->Update();
+		const PieSlice* buy = pie->GetFirstPieSliceByType(PieSliceType::BuyMenu);
+		check("locked_buy_has_a_visible_reason", buy && !buy->IsEnabled() && ObservedPieDescription(*pie) == "Buying disabled by this activity");
+	} else if (row == "R4") {
+		game->m_ActivityState = ActivityState::Running;
+		struct RestoreSettings {
+			SettingsMan::NetworkMatchStatusMode mode = g_SettingsMan.GetNetworkMatchStatusMode();
+			bool diagnostics = g_SettingsMan.GetNetworkShowDiagnostics();
+			~RestoreSettings() { g_SettingsMan.SetNetworkMatchStatusMode(mode); g_SettingsMan.SetNetworkShowDiagnostics(diagnostics); }
+		} settings;
+		g_SettingsMan.SetNetworkShowDiagnostics(false);
+		AllegroScreen screen(g_FrameMan.GetBackBuffer32()); NetModerationGUI panel(&screen); panel.CreateOverlay();
+		NetLobbySnapshot snapshot; snapshot.isHost = true; snapshot.localPeerId = snapshot.hostPeerId = 1;
+		for (int peer = 1; peer <= 4; ++peer) {
+			NetLobbyMember member; member.peerId = peer; member.isLocal = peer == 1; member.displayName = "Seat" + std::to_string(peer);
+			member.connected = true; member.connectedRoute = "direct"; member.pingMeasured = true; member.pingMs = 20 + peer;
+			member.inputDelayFrames = 11; member.waits = peer; member.longestWaitMs = 40 + peer; snapshot.members.push_back(member);
+		}
+		g_SettingsMan.SetNetworkMatchStatusMode(SettingsMan::NetworkMatchStatusMode::Off); panel.m_Open = true;
+		check("off_stays_off_on_demand", !panel.MatchStatusWanted());
+		g_SettingsMan.SetNetworkMatchStatusMode(SettingsMan::NetworkMatchStatusMode::Auto);
+		check("players_panel_requests_numbers", panel.MatchStatusWanted());
+		panel.DrawMatchStatus(snapshot); panel.m_NetStatus->SetVisible(true);
+		const std::string text = panel.m_NetStatus->GetText();
+		check("numbers_draw_without_diagnostics", text.find("delay") != std::string::npos && text.find("RTT") != std::string::npos && text.find("PACE") != std::string::npos);
+		for (int peer = 1; peer <= 4; ++peer) check("seat_" + std::to_string(peer) + "_delay_and_waits", text.find("Seat" + std::to_string(peer) + " / delay 11 / waits " + std::to_string(peer) + " / max " + std::to_string(40 + peer) + " ms") != std::string::npos);
+		panel.CreateConnectionControls(); panel.DrawOwnConnection(snapshot);
+		const auto status = panel.GetStatusRect(), badge = panel.GetConnectionRect();
+		const auto overlap = [](auto a, auto b) { return a.visible && b.visible && a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height; };
+		check("metrics_clear_connection_and_hud", status.visible && status.x >= 152 && status.x + status.width <= g_WindowMan.GetResX() - 40 && !overlap(status, badge));
+		panel.m_ChatEntryOpen = true; ScenarioRunner::PushNetUiToast("brain_placed", "A player placed their brain");
+		panel.LayoutPanel(); panel.DrawMatchToasts(); panel.DrawMatchStatus(snapshot); panel.DrawOwnConnection(snapshot);
+		panel.LayoutPanel(); panel.m_Controls->Draw(); panel.DrawMatchChat(snapshot); panel.DrawMatchToasts(); present();
+		panel.DrawMatchStatus(snapshot); panel.DrawOwnConnection(snapshot); panel.LayoutPanel(); panel.m_Controls->Draw(); panel.DrawMatchChat(snapshot); panel.DrawMatchToasts();
+		check("metrics_clear_chat_toasts_and_players", panel.GetChatRect().visible && panel.GetToastRect().visible && panel.GetSeatsPanelRect().visible &&
+		      !overlap(panel.GetStatusRect(), panel.GetChatRect()) && !overlap(panel.GetStatusRect(), panel.GetToastRect()) && !overlap(panel.GetStatusRect(), panel.GetSeatsPanelRect()));
+		g_SettingsMan.SetNetworkMatchStatusMode(SettingsMan::NetworkMatchStatusMode::Always); panel.m_Open = false;
+		check("always_shows_numbers", panel.MatchStatusWanted()); present("fight15_R4");
+		System::PrintDiagnosticLine("[fight15-selftest] observed status: " + text);
+	} else if (row == "R5") {
+		g_MenuMan.SetIsInMenuScreen(true); g_UInputMan.TrapMousePos(false);
+		AllegroScreen screen(g_FrameMan.GetBackBuffer32()); GUIInputWrapper input(-1); MainMenuGUI menu(&screen, &input);
+		menu.SetActiveMenuScreen(MainMenuGUI::MenuScreen::MultiplayerScreen, false); menu.ShowMultiplayerScreen();
+		menu.m_MultiplayerSubScreen = MainMenuGUI::MultiplayerSubScreen::Lobby;
+		NetLobbySnapshot snapshot; snapshot.isHost = snapshot.inLobby = snapshot.occupancyComplete = true; snapshot.localPeerId = snapshot.hostPeerId = 1;
+		snapshot.activityPreset = "Skirmish Defense"; snapshot.sceneName = "Grasslands";
+		NetLobbyMember host; host.peerId = 1; host.displayName = "Captain"; host.isLocal = host.connected = host.ready = true;
+		NetLobbyMember player; player.peerId = 2; player.displayName = "Edith"; player.connected = true; snapshot.members = {host, player};
+		const auto draw = [&] { menu.RefreshMultiplayerScreenControls(snapshot); menu.m_SubMenuScreenGUIControlManager->Draw(); present("fight15_R5"); };
+		const auto click = [&] {
+			GUIControl* start = menu.m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart"); if (!start) return false;
+			int x, y, width, height; start->GetControlRect(&x, &y, &width, &height); x += width / 2; y += height / 2;
+			mouse(true, x, y, false); menu.m_SubMenuScreenGUIControlManager->Update();
+			int px = 0, py = 0, buttons[3]{}, states[3]{};
+			menu.m_SubMenuScreenGUIControlManager->GetInput()->GetMousePosition(&px, &py);
+			menu.m_SubMenuScreenGUIControlManager->GetInput()->GetMouseButtons(buttons, states);
+			System::PrintDiagnosticLine("[fight15-selftest] R5 press target=" + std::to_string(x) + "," + std::to_string(y) +
+			    " pointer=" + std::to_string(px) + "," + std::to_string(py) + " edge=" + std::to_string(buttons[0]) +
+			    " held=" + std::to_string(states[0]) + " captured=" + std::to_string(start->GetPanel()->IsCaptured()) +
+			    " enabled=" + std::to_string(start->GetEnabled()));
+			menu.m_SubMenuScreenGUIControlManager->Draw(); present();
+			mouse(false, x, y, false); menu.m_SubMenuScreenGUIControlManager->Update(); menu.m_SubMenuScreenGUIControlManager->Draw(); present();
+			int commands = 0; GUIEvent event; while (menu.m_SubMenuScreenGUIControlManager->GetEvent(&event)) if (event.GetControl() == start && event.GetType() == GUIEvent::Command) ++commands;
+			return commands == 1;
+		};
+		draw(); check("before_start_only_names_unready_players", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Edith to press Ready");
+		check("host_start_takes_hand_press_release", click()); snapshot.startCountdownRunning = true; snapshot.startCountdownMs = 30000; draw();
+		check("started_countdown_is_visible", menu.m_MultiplayerStatusLabel->GetText().starts_with("Starting in 30 s"));
+		snapshot.startCountdownMs = 27000; draw(); check("countdown_counts_down", menu.m_MultiplayerStatusLabel->GetText().starts_with("Starting in 27 s"));
+		check("host_can_press_cancel", menu.m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart") && click());
+		snapshot.startCountdownRunning = false; draw(); check("canceled_countdown_returns_to_waiting", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Edith to press Ready");
+		snapshot.isHost = false; snapshot.localPeerId = 2; snapshot.members[0].isLocal = false; snapshot.members[1].isLocal = true;
+		snapshot.joiningWorld = snapshot.startCountdownRunning = true; snapshot.startCountdownMs = 30000;
+		snapshot.transferLine = "Receiving the world: 0.0 of 1.7 MB"; draw();
+		check("joiner_countdown_survives_world_transfer", menu.m_MultiplayerStatusLabel->GetText().starts_with("The host is starting the match in 30 s") && menu.m_MultiplayerStatusLabel->GetText().ends_with("press Ready"));
+		snapshot.startCountdownMs = 27000; draw(); check("joiner_countdown_counts_during_transfer", menu.m_MultiplayerStatusLabel->GetText().starts_with("The host is starting the match in 27 s"));
+		snapshot.startCountdownRunning = false; draw(); check("joiner_transfer_progress_returns_after_cancel", menu.m_MultiplayerStatusLabel->GetText() == snapshot.transferLine);
+	} else if (row == "R6") {
+		game->m_ActivityState = ActivityState::Running; g_MenuMan.SetIsInMenuScreen(true); g_UInputMan.TrapMousePos(false);
+		AllegroScreen screen(g_FrameMan.GetBackBuffer32()); GUIInputWrapper input(-1); PauseMenuGUI pause(&screen, &input); pause.SetNetworkMatchMode(true);
+		pause.Update(); pause.Draw(false); present();
+		GUIControl* resume = pause.AutomationManager()->GetControl("ButtonResume"); if (!resume) return false;
+		int x, y, width, height; resume->GetControlRect(&x, &y, &width, &height); x += width / 2; y += height / 2;
+		mouse(true, x, y, true); g_UInputMan.EndSimUpdate();
+		check("press_keeps_pause_menu_open", pause.Update() == PauseMenuGUI::PauseMenuUpdateResult::NoEvent); pause.Draw(false); present();
+		pause.Update(); pause.Draw(false); present();
+		mouse(false, x, y, true); g_UInputMan.EndSimUpdate();
+		check("later_release_activates_back_to_game", pause.Update() == PauseMenuGUI::PauseMenuUpdateResult::ActivityResumed); pause.Draw(false); present();
+	} else if (row == "R8") {
+		AllegroScreen screen(g_FrameMan.GetBackBuffer32()); GUIInputWrapper input(-1); GUIControlManager controls;
+		if (!controls.Create(&screen, &input, "Base.rte/GUIs/Skins/Menus", "MainMenuSubMenuSkin.ini")) return false;
+		auto* field = dynamic_cast<GUITextBox*>(controls.AddControl("TextLobbyChat", "TEXTBOX", nullptr, 40, 80, 320, 22));
+		field->SetFocus();
+		for (const SDL_Scancode key: {SDL_SCANCODE_RETURN, SDL_SCANCODE_KP_ENTER}) {
+			field->SetText("hand chat"); SDL_Event event{}; event.type = SDL_EVENT_KEY_DOWN; event.key.scancode = key; event.key.key = SDL_GetKeyFromScancode(key, SDL_KMOD_NONE, false); event.key.down = true;
+			g_UInputMan.HandleInputEvent(event); event.key.repeat = true; g_UInputMan.HandleInputEvent(event); g_UInputMan.EndSimUpdate();
+			controls.Update(); controls.Draw(); int enters = 0; GUIEvent notification;
+			while (controls.GetEvent(&notification)) if (notification.GetControl() == field && notification.GetType() == GUIEvent::Notification && notification.GetMsg() == GUITextBox::Enter) ++enters;
+			check(key == SDL_SCANCODE_RETURN ? "return_sends_one_enter_notification" : "keypad_enter_sends_one_enter_notification", enters == 1); present();
+			event.type = SDL_EVENT_KEY_UP; event.key.down = false; event.key.repeat = false; g_UInputMan.HandleInputEvent(event); controls.Update(); controls.Draw();
+			int releases = 0; while (controls.GetEvent(&notification)) if (notification.GetMsg() == GUITextBox::Enter && notification.GetControl() == field) ++releases;
+			check("release_does_not_send_again", releases == 0); present();
+		}
+	} else if (row == "emitter-clock") {
+		const auto* preset = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset("AEmitter", "Dent Metal", "Base.rte"));
+		if (!check("emitter_preset_loaded", preset != nullptr)) return false;
+		struct OldEmitter : AEmitter {
+			void AgeEmissionClock() { m_LastEmitTmr.SetElapsedSimTimeMS(60000); }
+		} source;
+		if (!check("emitter_source_created", source.Create(*preset) == 0)) return false;
+		source.SetPresetName("Old emission clock");
+		source.AgeEmissionClock();
+		const double oldElapsed = source.GetLastEmitTimerElapsedSimMS();
+		check("match_clock_active", ScenarioRunner::IsLockstepControllerSyncActive());
+		{
+			AEmitter fresh;
+			check("fresh_match_emitter_starts_its_own_clock", fresh.Create(source) == 0 && fresh.GetLastEmitTimerElapsedSimMS() == 0);
+		}
+		{
+			const MovableObject::FaithfulCloneScope clone(false);
+			AEmitter saved;
+			check("saved_emitter_keeps_its_clock", saved.Create(source) == 0 && saved.GetLastEmitTimerElapsedSimMS() == oldElapsed);
+		}
+		source.ResetOriginalPresetFlag();
+		{
+			AEmitter live;
+			check("live_emitter_copy_keeps_its_clock", live.Create(source) == 0 && live.GetLastEmitTimerElapsedSimMS() == oldElapsed);
+		}
+		source.SetPresetName("Old emission clock");
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		{
+			AEmitter single;
+			check("single_player_emitter_keeps_its_clock", single.Create(source) == 0 && single.GetLastEmitTimerElapsedSimMS() == oldElapsed);
+		}
+		ScenarioRunner::SetLockstepCoordinator(&coordinator);
+	} else if (row == "shield-deposit") {
+		// Changing to the previous device puts the off-hand device at the front of the inventory before the shield is taken.
+		const auto* soldierPreset = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Soldier Light", "Coalition.rte"));
+		const auto* riflePreset = dynamic_cast<const HeldDevice*>(g_PresetMan.GetEntityPreset("HDFirearm", "Assault Rifle", "Coalition.rte"));
+		const auto* grenadePreset = dynamic_cast<const HeldDevice*>(g_PresetMan.GetEntityPreset("TDExplosive", "Frag Grenade", "Coalition.rte"));
+		const auto* shieldPreset = dynamic_cast<const HeldDevice*>(g_PresetMan.GetEntityPreset("HeldDevice", "Riot Shield", "Base.rte"));
+		if (!check("fixture_presets_loaded", soldierPreset && riflePreset && grenadePreset && shieldPreset)) return false;
+		auto* soldier = static_cast<AHuman*>(soldierPreset->Clone());
+		auto* rifle = static_cast<HeldDevice*>(riflePreset->Clone());
+		auto* grenade = static_cast<HeldDevice*>(grenadePreset->Clone());
+		auto* shield = static_cast<HeldDevice*>(shieldPreset->Clone());
+		soldier->SetTeam(TeamOne); soldier->SetPos(Vector(120, 120));
+		while (soldier->GetInventorySize() > 0) delete soldier->RemoveInventoryItemAtIndex(0);
+		if (!check("fixture_has_both_arms", soldier->GetFGArm() && soldier->GetBGArm())) { delete soldier; delete rifle; delete grenade; delete shield; return false; }
+		soldier->GetFGArm()->SetHeldDevice(nullptr);
+		soldier->GetBGArm()->SetHeldDevice(rifle);
+		soldier->AddToInventoryBack(grenade);
+		soldier->AddToInventoryBack(shield);
+		check("fixture_rifle_is_not_an_off_hand_device", !rifle->IsShield() && !rifle->IsDualWieldable() && (shield->IsShield() || shield->IsDualWieldable()));
+		check("off_hand_change_reports_equipped", soldier->EquipShieldInBGArm(true));
+		const std::deque<MovableObject*>& inventory = *soldier->GetInventory();
+		const bool shieldInInventory = std::find(inventory.begin(), inventory.end(), shield) != inventory.end();
+		const bool grenadeInInventory = std::find(inventory.begin(), inventory.end(), grenade) != inventory.end();
+		check("off_hand_holds_the_shield", soldier->GetBGArm()->GetHeldDevice() == shield);
+		check("held_shield_leaves_the_inventory", !shieldInInventory);
+		check("other_items_stay_in_the_inventory", grenadeInInventory);
+		check("deposited_device_is_first", inventory.size() == 2 && inventory.front() == rifle && inventory.back() == grenade);
+		// Each object has one owner left, so the fixture frees each once.
+		for (int index = soldier->GetInventorySize() - 1; index >= 0; --index) {
+			if (inventory[index] == soldier->GetBGArm()->GetHeldDevice()) soldier->RemoveInventoryItemAtIndex(index);
+		}
+		if (!grenadeInInventory) delete grenade;
+		delete soldier;
+	} else return check("known_row", false);
+	return passed;
+}
+
 bool GameActivity::RunSetupEditorSelfTest(bool confirmOnly) {
 	struct Restore {
 		std::unique_ptr<Activity> activity;
@@ -4391,7 +4934,7 @@ bool GameActivity::RunSetupEditorSelfTest(bool confirmOnly) {
 			if (!ScenarioRunner::HasLockstepCoordinator() && g_UInputMan.KeyPressed(SDLK_RETURN)) singlePlayerReceivedReturn = true;
 			game->RenderUpdate();
 			if (!delayedSharedTick) game->UpdateEditing();
-			if (g_UInputMan.KeyPressed(SDLK_RETURN) && g_FrameMan.GetScreenText(0).find("Place your brain in a valid spot first") != std::string::npos) refusedUnplacedBrain = true;
+			if (g_UInputMan.KeyPressed(SDLK_RETURN) && g_FrameMan.GetScreenText(0).find("Click to install your brain before continuing") != std::string::npos) refusedUnplacedBrain = true;
 			editor->Draw(g_FrameMan.GetBackBuffer32(), Vector());
 			MenuAutomation::AfterDrawnFrame();
 			g_UInputMan.EndFrame();

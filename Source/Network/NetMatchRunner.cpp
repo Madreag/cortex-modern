@@ -768,6 +768,7 @@ namespace RTE {
 				m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
 				m_ReceivedStateBytes = m_Lobby.TakeReceivedState();
 				m_WorldJoinImage = true;
+				if (m_Config.publishLobby) m_Config.publishLobby(BuildLobbySnapshot(transport, session));
 				return true;
 			}
 			if (m_Lobby.IsStarted()) {

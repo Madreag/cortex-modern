@@ -295,11 +295,14 @@ namespace RTE {
 
 		// Diagnostics: routes GNS's own rendezvous spew into the run's log.
 		void ApplyRendezvousLog() {
-			if (s_RendezvousLogLevel <= 0) {
+			int level = s_RendezvousLogLevel;
+			if (const char* trace = std::getenv("CC_TEST_GNS_RENDEZVOUS_LOG_LEVEL"); trace && level <= 0)
+				level = static_cast<int>(std::clamp(std::strtol(trace, nullptr, 10), 0L, 8L));
+			if (level <= 0) {
 				return;
 			}
-			SteamNetworkingUtils()->SetDebugOutputFunction(static_cast<ESteamNetworkingSocketsDebugOutputType>(s_RendezvousLogLevel), GnsDebugOutput);
-			SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_LogLevel_P2PRendezvous, s_RendezvousLogLevel);
+			SteamNetworkingUtils()->SetDebugOutputFunction(static_cast<ESteamNetworkingSocketsDebugOutputType>(level), GnsDebugOutput);
+			SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_LogLevel_P2PRendezvous, level);
 		}
 
 		// Test harness: splits the requested RTT across the send/recv legs of every connection, and adds its jitter.

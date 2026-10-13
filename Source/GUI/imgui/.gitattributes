@@ -14,10 +14,10 @@
 *.mkb text
 *.icf text
 
-*.sln text eol=crlf
-*.vcxproj text eol=crlf
-*.vcxproj.filters text eol=crlf
-*.natvis text eol=crlf
+*.sln text eol=lf
+*.vcxproj text eol=lf
+*.vcxproj.filters text eol=lf
+*.natvis text eol=lf
 
 Makefile text eol=lf
 *.sh text eol=lf
