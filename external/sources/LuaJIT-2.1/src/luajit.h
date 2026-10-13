@@ -123,6 +123,15 @@ LUA_API void luaJIT_set_upvalue_serial(lua_State *L, int idx, int n, uint64_t se
 LUA_API uint64_t luaJIT_state_serial(lua_State *L);
 LUA_API void luaJIT_set_state_serial(lua_State *L, uint64_t serial);
 
+/* Saved tables keep their key positions when their objects acquire private addresses. */
+typedef struct luaJIT_SavedKeys {
+  lua_State *state;
+  void *owner;
+  uint32_t (*hash)(void *owner, const void *table, uint64_t key, uint32_t ordinary);
+} luaJIT_SavedKeys;
+LUA_API luaJIT_SavedKeys luaJIT_set_saved_keys(const luaJIT_SavedKeys *keys);
+LUA_API int luaJIT_saved_keys_active(lua_State *L);
+
 /* Low-overhead profiling API. */
 typedef void (*luaJIT_profile_callback)(void *data, lua_State *L,
 					int samples, int vmstate);

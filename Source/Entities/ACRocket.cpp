@@ -1,4 +1,6 @@
 #include "ACRocket.h"
+#include "CheckpointNativeSnapshot.h"
+#include "LimbPath.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "RTETools.h"
@@ -20,11 +22,47 @@ using namespace RTE;
 
 ConcreteClassInfo(ACRocket, ACraft, 10);
 
+ACRocket::ACRocket(const ACRocket& source, CheckpointNativeSnapshot& snapshot) :
+	ACraft(source, snapshot),
+	m_pRLeg(snapshot.Freeze(source.m_pRLeg)),
+	m_pLLeg(snapshot.Freeze(source.m_pLLeg)),
+	m_pBodyAG(snapshot.Freeze(source.m_pBodyAG)),
+	m_pRFootGroup(snapshot.Freeze(source.m_pRFootGroup)),
+	m_pLFootGroup(snapshot.Freeze(source.m_pLFootGroup)),
+	m_pMThruster(snapshot.Freeze(source.m_pMThruster)),
+	m_pRThruster(snapshot.Freeze(source.m_pRThruster)),
+	m_pLThruster(snapshot.Freeze(source.m_pLThruster)),
+	m_pURThruster(snapshot.Freeze(source.m_pURThruster)),
+	m_pULThruster(snapshot.Freeze(source.m_pULThruster)),
+	m_GearState(snapshot.Freeze(source.m_GearState)),
+	m_PersistedRFootResidue(snapshot.Freeze(source.m_PersistedRFootResidue)),
+	m_PersistedLFootResidue(snapshot.Freeze(source.m_PersistedLFootResidue)),
+	m_PersistedLimbPathStates(snapshot.Freeze(source.m_PersistedLimbPathStates)),
+	m_PersistedLimbGroupPositions(snapshot.Freeze(source.m_PersistedLimbGroupPositions, &m_PersistedLimbGroupPositions)),
+	m_PersistedLimbGroupInertia(snapshot.Freeze(source.m_PersistedLimbGroupInertia, &m_PersistedLimbGroupInertia)),
+	m_Paths{},
+	m_MaxGimbalAngle(snapshot.Freeze(source.m_MaxGimbalAngle)),
+	m_PersistedACRocketRuntime(snapshot.Freeze(source.m_PersistedACRocketRuntime, &m_PersistedACRocketRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	snapshot.FreezeArray(m_Paths, source.m_Paths);
+}
+
+Entity* ACRocket::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
+void ACRocket::PrepareCheckpointNative(const ACRocket& source, ACRocket* target, CheckpointNativeSnapshot& snapshot) {
+	snapshot.Prepare(static_cast<const ACraft&>(source), static_cast<ACraft*>(target));
+	snapshot.Prepare(source.m_Paths, &target->m_Paths);
+}
+
 ACRocket::ACRocket() {
 	Clear();
 }
 
 ACRocket::~ACRocket() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -160,7 +198,8 @@ int ACRocket::Create(const ACRocket& reference) {
 	// The LimbPath copy terminates traversal, so a save clone of a WORLD craft carries the live
 	// state in the stash; preset copies just pass any stash along.
 	if ((reference.HasEverBeenAddedToMovableMan() || IsFaithfulClone()) && reference.m_PersistedLimbPathStates.empty()) {
-		m_PersistedLimbPathStates = reference.GetLimbPathStates();
+		const auto states = reference.GetLimbPathStates();
+		m_PersistedLimbPathStates.assign(states.begin(), states.end());
 		m_PersistedLimbGroupPositions = reference.GetLimbGroupPositions();
 		m_PersistedLimbGroupInertia = reference.GetLimbGroupInertia();
 	} else {
@@ -220,7 +259,7 @@ std::string ACRocket::GetLimbGroupInertia() const {
 
 std::vector<std::string> ACRocket::GetLimbPathStates(bool forHashing) const {
 	if (!m_PersistedLimbPathStates.empty()) {
-		return m_PersistedLimbPathStates;
+		return {m_PersistedLimbPathStates.begin(), m_PersistedLimbPathStates.end()};
 	}
 	std::vector<std::string> states;
 	states.reserve(2 * GearStateCount);
@@ -303,7 +342,7 @@ static void ApplyPackedLimbState(const std::string& packed, std::initializer_lis
 
 void ACRocket::AdoptPersistedUniqueID() {
 	ACraft::AdoptPersistedUniqueID();
-	auto applyResidue = [](AtomGroup* group, std::vector<long long>& residue) {
+	auto applyResidue = [](AtomGroup* group, auto& residue) {
 		if (!residue.empty()) {
 			if (group) {
 				group->SetTravelResidue(residue);
@@ -408,7 +447,7 @@ int ACRocket::ReadProperty(const std::string_view& propName, Reader& reader) {
 void ACRocket::SaveSnapshotConfiguration(Writer& writer) const {
 	ACraft::SaveSnapshotConfiguration(writer);
 	writer.NewPropertyWithValue("SpecialBehaviour_MaxGimbalAngleRaw", m_MaxGimbalAngle);
-	writer.NewPropertyWithValue("SpecialBehaviour_ACRocketRuntime", CheckpointWriter::Native([&] { return m_PersistedACRocketRuntime.empty() ? SaveACRocketRuntime() : m_PersistedACRocketRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ACRocketRuntime", CheckpointWriter::Native([&] { return m_PersistedACRocketRuntime.empty() ? SaveACRocketRuntime() : m_PersistedACRocketRuntime.Value(); }).Base64(true));
 }
 
 int ACRocket::Save(Writer& writer) const {

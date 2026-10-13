@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Loadout class
 /// @author Daniel Tabar
 /// dtabar@datarealms.com
@@ -29,6 +31,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a Loadout object in system
 		/// memory. Create() should be called before using the object.
 		Loadout() { Clear(); }
+		CheckpointSnapshotMethods(Loadout);
 
 		/// Copy constructor method used to instantiate a Loadout object
 		/// identical to an already existing one.
@@ -102,7 +105,7 @@ namespace RTE {
 
 		/// Gets the list of cargo Entity items this Loadout represents.
 		/// @return A pointer to the list of cargo Entity items. OWNERSHIP IS NOT TRANSFERRED!
-		std::list<const SceneObject*>* GetCargoList() { return &m_CargoItems; }
+		CheckpointList<const SceneObject*>* GetCargoList() { return &m_CargoItems; }
 
 		/// Adds a new Preset to the list of cargo items to be included in this.
 		/// @param pNewItem A const pointer to the ScneObject preset we want to add to this loadout.
@@ -121,7 +124,7 @@ namespace RTE {
 		// Preset instance of the delivery craft, not owned by this.
 		const ACraft* m_pDeliveryCraft;
 		// The cargo of this loadout, all preset instances not owned by this
-		std::list<const SceneObject*> m_CargoItems;
+		CheckpointList<const SceneObject*> m_CargoItems;
 
 		/// Private member variable and method declarations
 	private:

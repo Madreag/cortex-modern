@@ -1,5 +1,10 @@
 #include "DeterministicMath.h"
 #include "Arm.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "HeldDevice.h"
+#include "ContentFile.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "FloatText.h"
@@ -21,11 +26,46 @@ using namespace RTE;
 
 ConcreteClassInfo(Arm, Attachable, 50);
 
+Arm::Arm(const Arm& source, CheckpointNativeSnapshot& snapshot) :
+	Attachable(source, snapshot),
+	m_PersistedArmRuntime(snapshot.Freeze(source.m_PersistedArmRuntime, &m_PersistedArmRuntime)),
+	m_MaxLength(snapshot.Freeze(source.m_MaxLength)),
+	m_MoveSpeed(snapshot.Freeze(source.m_MoveSpeed)),
+	m_HandIdleOffset(snapshot.Freeze(source.m_HandIdleOffset)),
+	m_HandIdleRotation(snapshot.Freeze(source.m_HandIdleRotation)),
+	m_HandCurrentOffset(snapshot.Freeze(source.m_HandCurrentOffset)),
+	m_HandPrevPos(snapshot.Freeze(source.m_HandPrevPos)),
+	m_HandPos(snapshot.Freeze(source.m_HandPos)),
+	m_HandTargets(snapshot.Freeze(source.m_HandTargets)),
+	m_HandMovementDelayTimer(snapshot.Freeze(source.m_HandMovementDelayTimer)),
+	m_HandHasReachedCurrentTarget(snapshot.Freeze(source.m_HandHasReachedCurrentTarget)),
+	m_PersistedHandMovementDelayTimerAnchor(snapshot.Freeze(source.m_PersistedHandMovementDelayTimerAnchor)),
+	m_PersistedHandCurrentOffset(snapshot.Freeze(source.m_PersistedHandCurrentOffset)),
+	m_HasPersistedHandCurrentOffset(snapshot.Freeze(source.m_HasPersistedHandCurrentOffset)),
+	m_PersistedHandPos(snapshot.Freeze(source.m_PersistedHandPos)),
+	m_PersistedHandPrevPos(snapshot.Freeze(source.m_PersistedHandPrevPos)),
+	m_HasPersistedHandPos(snapshot.Freeze(source.m_HasPersistedHandPos)),
+	m_HandSpriteFile(snapshot.Freeze(source.m_HandSpriteFile)),
+	m_HandSpriteBitmap(snapshot.Freeze(source.m_HandSpriteBitmap)),
+	m_GripStrength(snapshot.Freeze(source.m_GripStrength)),
+	m_ThrowStrength(snapshot.Freeze(source.m_ThrowStrength)),
+	m_HeldDevice(snapshot.Freeze(source.m_HeldDevice)),
+	m_HeldDeviceThisArmIsTryingToSupport(snapshot.Freeze(source.m_HeldDeviceThisArmIsTryingToSupport)),
+	m_FaithfulSupportedDeviceUID(snapshot.Freeze(source.m_FaithfulSupportedDeviceUID)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* Arm::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 Arm::Arm() {
 	Clear();
 }
 
 Arm::~Arm() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -190,7 +230,7 @@ void Arm::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("HandSprite", m_HandSpriteFile);
 	writer.NewPropertyWithValue("GripStrength", m_GripStrength);
 	writer.NewPropertyWithValue("ThrowStrength", m_ThrowStrength);
-	writer.NewPropertyWithValue("SpecialBehaviour_ArmRuntime", CheckpointWriter::Native([&] { return m_PersistedArmRuntime.empty() ? SaveArmRuntime() : m_PersistedArmRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ArmRuntime", CheckpointWriter::Native([&] { return m_PersistedArmRuntime.empty() ? SaveArmRuntime() : m_PersistedArmRuntime.Value(); }).Base64(true));
 }
 
 int Arm::Save(Writer& writer) const {
@@ -484,7 +524,7 @@ void Arm::DrawHand(BITMAP* targetBitmap, const Vector& targetPos, DrawMode mode)
 
 std::vector<std::string> Arm::GetHandTargetsForSave() const {
 	std::vector<std::string> packed;
-	for (std::queue<HandTarget> targets = m_HandTargets; !targets.empty(); targets.pop()) {
+	for (CheckpointQueue<HandTarget> targets = m_HandTargets; !targets.empty(); targets.pop()) {
 		const HandTarget& target = targets.front();
 		// A stream's hexfloat takes its decimal point from the global locale; this saved state must not.
 		packed.push_back(HexFloatString(target.TargetOffset.m_X) + "|" + HexFloatString(target.TargetOffset.m_Y) + "|" + HexFloatString(target.DelayAtTarget) + "|" + (target.HFlippedWhenTargetWasCreated ? "1" : "0") + "|" + target.Description);
@@ -495,7 +535,7 @@ std::vector<std::string> Arm::GetHandTargetsForSave() const {
 std::vector<CheckpointText> Arm::CaptureHandTargetsForSave() const {
 	std::vector<CheckpointText> packed;
 	packed.reserve(m_HandTargets.size());
-	for (std::queue<HandTarget> targets = m_HandTargets; !targets.empty(); targets.pop()) {
+	for (CheckpointQueue<HandTarget> targets = m_HandTargets; !targets.empty(); targets.pop()) {
 		HandTarget target = std::move(targets.front());
 		const std::array<uint32_t, 4> values = {
 			std::bit_cast<uint32_t>(target.TargetOffset.m_X), std::bit_cast<uint32_t>(target.TargetOffset.m_Y),
@@ -607,7 +647,7 @@ bool Arm::LoadArmRuntime(std::string_view text, bool validateOnly) {
 		archive(m_HandMovementDelayTimer, m_HandHasReachedCurrentTarget, m_GripStrength, m_ThrowStrength);
 		std::vector<std::string> savedTargets;
 		archive.Value(savedTargets);
-		std::queue<HandTarget> targets;
+		CheckpointQueue<HandTarget> targets;
 		for (const std::string& text: savedTargets) {
 			std::string description;
 			Vector offset;

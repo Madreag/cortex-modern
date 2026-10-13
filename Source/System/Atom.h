@@ -1,16 +1,23 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "Matrix.h"
 #include <array>
 #include <atomic>
 #include <string>
+#include <memory>
+#include <span>
+#include <vector>
 #include "Material.h"
 #include "SceneMan.h"
+#include "CheckpointPagePool.h"
 
 namespace RTE {
 
 	class SLTerrain;
 	class MovableObject;
+	class CheckpointText;
 
 	enum {
 		HITOR = 0,
@@ -64,18 +71,56 @@ namespace RTE {
 	/// A point (pixel) that tests for collisions with a BITMAP's drawn pixels, ie not the mask color. Owned and operated by other objects.
 	class Atom : public Serializable {
 		friend struct ContractAudit;
+		struct FreezeState;
 
 
 	public:
+		struct FrozenList;
+		static std::shared_ptr<const FrozenList> FreezeList(std::span<Atom* const> atoms, bool values = true);
+		static CheckpointText CaptureFrozenList(const std::shared_ptr<const FrozenList>& list);
+		static bool CaptureFrozenListProperties(Writer& writer, const std::shared_ptr<const FrozenList>& list);
+		/// The per-atom values an AtomGroup reports, read from frozen atom pages.
+		struct FrozenAtom { long long residue; Vector offset; long long subgroup; int material; };
+		static std::vector<FrozenAtom> FrozenValues(const std::shared_ptr<const FrozenList>& list);
+		/// Writes each frozen atom as an AddAtom property, exactly as the live atom saves itself.
+		static void SaveFrozenAtoms(Writer& writer, const std::shared_ptr<const FrozenList>& list);
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
 		std::string SaveCheckpoint() const;
+		/// Owns atom fields before the saver thread formats the existing list.
+		static CheckpointText CaptureCheckpointList(std::span<Atom* const> atoms);
+		/// Keeps restored multiplayer atoms in pages that can outlive the live capture.
+		class AllocationScope {
+		public:
+			explicit AllocationScope(bool enabled);
+			~AllocationScope();
+			AllocationScope(const AllocationScope&) = delete;
+			AllocationScope& operator=(const AllocationScope&) = delete;
+		private:
+			bool m_Previous;
+		};
+		/// Freezes native pages while the live capture records its small owned inputs.
+		class SnapshotScope {
+		public:
+			/// @param armLater Leaves the pages' fences to Pages()->Arm(), which must finish before the simulation runs again.
+			explicit SnapshotScope(bool enabled, bool armLater = false);
+			~SnapshotScope();
+			std::shared_ptr<const CheckpointPagePool::Snapshot> Pages() const;
+			SnapshotScope(const SnapshotScope&) = delete;
+			SnapshotScope& operator=(const SnapshotScope&) = delete;
+		private:
+			std::shared_ptr<FreezeState> m_State;
+			FreezeState* m_Previous = nullptr;
+		};
+		static bool CaptureFrozenProperties(Writer& writer, std::span<Atom* const> atoms);
+		static std::string CheckpointListSelfTestMismatch();
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		void ResolveCheckpointLinks();
 
 #pragma region Creation
 		/// Constructor method used to instantiate an Atom object in system memory. Create() should be called before using the object.
 		Atom();
+		Atom(const Atom& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Copy constructor method used to instantiate an Atom object identical to an already existing one.
 		/// @param reference An Atom object which is passed in by reference.
@@ -265,7 +310,7 @@ namespace RTE {
 
 		/// AtomGroup may set this shared list of ignored MOIDs to avoid setting and removing ignored MOIDs for every atom one by one. The list is maintained only by AtomGroup, Atom never owns it.
 		/// @param ignoreMOIDsByGroup New MOIDs list to ignore.
-		void SetIgnoreMOIDsByGroup(std::vector<MOID> const* ignoreMOIDsByGroup) { if (m_IgnoreMOIDsByGroup != ignoreMOIDsByGroup) TouchCheckpoint(); m_IgnoreMOIDsByGroup = ignoreMOIDsByGroup; };
+		void SetIgnoreMOIDsByGroup(CheckpointVector<MOID> const* ignoreMOIDsByGroup) { if (m_IgnoreMOIDsByGroup != ignoreMOIDsByGroup) TouchCheckpoint(); m_IgnoreMOIDsByGroup = ignoreMOIDsByGroup; };
 
 		/// Clear the list of MOIDs that this Atom is set to ignore collisions with during its next travel sequence.
 		/// This should be done each frame so that fresh MOIDs can be re-added. (MOIDs are only valid during a frame).
@@ -438,11 +483,11 @@ namespace RTE {
 		/// Counts a construction and keeps its stack when it is a sampled one.
 		static void NoteConstruction();
 		MOID m_IgnoreMOID; //!< Special ignored MOID.
-		std::vector<MOID> m_IgnoreMOIDs; //!< ignore hits with MOs of these IDs.
-		std::vector<MOID> const* m_IgnoreMOIDsByGroup; //!< Also ignore hits with MOs of these IDs. This one may be set externally by atom group.
+		CheckpointVector<MOID> m_IgnoreMOIDs; //!< ignore hits with MOs of these IDs.
+		CheckpointVector<MOID> const* m_IgnoreMOIDsByGroup; //!< Also ignore hits with MOs of these IDs. This one may be set externally by atom group.
 
-		std::vector<std::pair<int, int>> m_LastTrailPoints; //!< Every point in our trail during the last sim update.
-		std::vector<std::pair<int, int>> m_TrailPoints; //!< Every point in our trail during the current sim update.
+		CheckpointVector<std::pair<int, int>> m_LastTrailPoints; //!< Every point in our trail during the last sim update.
+		CheckpointVector<std::pair<int, int>> m_TrailPoints; //!< Every point in our trail during the current sim update.
 
 		HitData m_LastHit; //!< Data containing information on the last collision experienced by this Atom.
 		MOID m_MOIDHit; //!< The MO, if any, this Atom hit on the last step.
@@ -476,27 +521,37 @@ namespace RTE {
 		bool m_SubStepped;
 
 	private:
+		bool m_FrozenNative = false;
+		static inline std::atomic<FreezeState*> s_FreezeState{nullptr};
 		// Owner, collision bodies and their roots are resolved after the complete
 		// native world has adopted its saved identities.
-		std::array<std::string, 3> m_CheckpointMaterialReferences;
+		std::array<CheckpointString, 3> m_CheckpointMaterialReferences;
         bool m_HasCheckpointMaterials = false;
         std::array<std::string, 3> CaptureCheckpointMaterialReferences() const;
 		std::array<long, 5> m_CheckpointLinkIDs{};
 		bool m_HasCheckpointLinks = false;
 		std::array<long, 5> CaptureCheckpointLinkIDs() const;
+		/// The live IDs an atom list's links name, each object looked up once for the whole list.
+		struct LinkIDs {
+			std::array<std::pair<const MovableObject*, long>, 8> known{};
+			size_t next = 0;
+			long Of(const MovableObject* object);
+		};
+		std::array<long, 5> CaptureCheckpointLinkIDs(LinkIDs& ids) const;
 
-		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
-			archive(self.m_Offset, self.m_OriginalOffset, self.m_Normal, self.m_SubgroupID,
+		template <class Archive, class Self> static decltype(auto) VisitCheckpoint(Archive& archive, Self& self) {
+			return archive(self.m_Offset, self.m_OriginalOffset, self.m_Normal, self.m_SubgroupID,
 			    self.m_StepWasTaken, self.m_StepRatio, self.m_SegTraj, self.m_SegProgress,
 			    self.m_ChangedDir, self.m_PrevError, self.m_ResultWrapped,
 			    self.m_MOHitsDisabled, self.m_TerrainHitsDisabled, self.m_IgnoreMOID,
 			    self.m_IgnoreMOIDs, self.m_LastTrailPoints, self.m_TrailPoints,
 			    self.m_MOIDHit, self.m_TerrainMatHit, self.m_NumPenetrations,
-			    self.m_TrailColor, self.m_TrailLength, self.m_TrailLengthVariation,
+			    self.m_TrailColor,
+			    self.m_TrailLength, self.m_TrailLengthVariation,
 			    self.m_IntPos, self.m_PrevIntPos, self.m_TrailPos, self.m_HitPos,
 			    self.m_Delta, self.m_Delta2, self.m_Increment, self.m_Error, self.m_Dom,
-			    self.m_Sub, self.m_DomSteps, self.m_SubSteps, self.m_SubStepped);
-			archive(self.m_LastHit.BitmapNormal, self.m_LastHit.TotalMass,
+			    self.m_Sub, self.m_DomSteps, self.m_SubSteps, self.m_SubStepped,
+			    self.m_LastHit.BitmapNormal, self.m_LastHit.TotalMass,
 			    self.m_LastHit.MomInertia, self.m_LastHit.SquaredMIHandle,
 			    self.m_LastHit.HitPoint, self.m_LastHit.HitRadius, self.m_LastHit.HitVel,
 			    self.m_LastHit.VelDiff, self.m_LastHit.PreImpulse, self.m_LastHit.ResImpulse,

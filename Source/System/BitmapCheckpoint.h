@@ -1,5 +1,7 @@
 #pragma once
 #include "CheckpointArchive.h"
+#include "CheckpointPagePool.h"
+#include "SceneLayer.h"
 #include "allegro.h"
 #include <cstring>
 #include <iostream>
@@ -11,13 +13,19 @@ namespace RTE {
 	// by many actors. Only the frozen readers use this scope, before they join.
 	class BitmapPixelCaptureScope {
 	public:
-		BitmapPixelCaptureScope();
+		explicit BitmapPixelCaptureScope(bool deferRows = false);
 		~BitmapPixelCaptureScope();
 		BitmapPixelCaptureScope(const BitmapPixelCaptureScope&) = delete;
 		BitmapPixelCaptureScope& operator=(const BitmapPixelCaptureScope&) = delete;
+		/// Hands the joined capture's buffers to the saver for release there.
+		std::shared_ptr<const void> TakeStorage();
 		static std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> Capture(
 		    const BITMAP* bitmap, const std::shared_ptr<const BitmapSnapshot>& previous);
+		static std::shared_ptr<const CheckpointPagePool::Snapshot> FreezePages(const std::shared_ptr<CheckpointPagePool::Allocation>& allocation);
+		/// Shares existing local preset searches during a joined world capture.
+		static const Entity* FindPreset(const std::string& type, const std::string& name, int module);
 	private:
+		friend bool RunOwnedCheckpointSelfTest();
 		struct State;
 		std::unique_ptr<State> m_State;
 		State* m_Previous;
@@ -29,18 +37,23 @@ namespace RTE {
 		std::string pixels;
 		std::optional<CheckpointText> capturedPixels;
 		void Capture(BITMAP* bitmap) {
+            bitmap = CheckpointNativeStorage::Source(bitmap);
             if (!bitmap) { *this = BitmapCheckpoint{}; return; }
             width = bitmap->w; height = bitmap->h; depth = bitmap_color_depth(bitmap);
             clip = bitmap->clip; clipLeft = bitmap->cl; clipTop = bitmap->ct;
             clipRight = bitmap->cr; clipBottom = bitmap->cb;
 			if (CheckpointWriter::IsCapturing()) {
-				CheckpointCache temporary;
 				auto* cache = CheckpointWriter::CurrentCache();
-				capturedPixels = (cache ? cache : &temporary)->CapturePixels(bitmap);
+				if (CheckpointWriter::BatchEnabled() && cache) capturedPixels = cache->CapturePixels(bitmap);
+				else {
+					CheckpointCache temporary;
+					capturedPixels = (cache ? cache : &temporary)->CapturePixels(bitmap);
+				}
 				pixels.clear();
 				return;
 			}
 			capturedPixels.reset();
+			if (CheckpointNativeStorage::Reading()) { pixels = BitmapSnapshot::Freeze(bitmap)->PixelBytes(); return; }
 			const size_t stride = static_cast<size_t>(width) * ((depth + 7) / 8);
 			pixels.resize(stride * height);
 			for (int y = 0; y < height; ++y) std::memcpy(pixels.data() + y * stride, bitmap->line[y], stride);

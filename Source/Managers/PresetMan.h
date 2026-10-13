@@ -128,11 +128,11 @@ namespace RTE {
 
 		/// Gets the total number of modules loaded so far, official or not.
 		/// @return The number of modules loaded so far, both official and non.
-		int GetTotalModuleCount() { return m_pDataModules.size(); }
+		int GetTotalModuleCount() { return CheckpointNativeStorage::Source(this)->m_pDataModules.size(); }
 
 		/// Gets the total number of OFFICIAL modules loaded so far.
 		/// @return The number of official modules loaded so far.
-		int GetOfficialModuleCount() { return m_OfficialModuleCount; }
+		int GetOfficialModuleCount() { return CheckpointNativeStorage::Source(this)->m_OfficialModuleCount; }
 
 		/// Adds an Entity instance's pointer and name associations to the
 		/// internal list of already read in Entity:s. Ownership is NOT transferred!
@@ -365,11 +365,11 @@ namespace RTE {
 		/// Protected member variable and method declarations
 	protected:
 		// Owned and loaded DataModule:s
-		std::vector<DataModule*> m_pDataModules;
+		CheckpointVector<DataModule*> m_pDataModules;
 
 		// Names of all DataModule:s mapped to indices into the m_pDataModules vector.
 		// The names are all lowercase name so we can more easily find them in case-agnostic fashion
-		std::map<std::string, size_t> m_DataModuleIDs;
+		CheckpointMap<CheckpointString, size_t> m_DataModuleIDs;
 
 		// How many modules are 'official' and shipped with the game, and guaranteed to not have name conflicts among them
 		// All official modules are in the beginning of the m_TypeMap, so this count shows how many into that vector they represent

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointString.h"
+
 #include <functional>
 #include <string>
 #include <memory>
@@ -226,6 +228,7 @@ namespace RTE {
 			ReadFloating(var);
 			return *this;
 		}
+		Reader& operator>>(CheckpointString& var) { var.assign(ReadLine()); return *this; }
 		Reader& operator>>(std::string& var) {
 			var.assign(ReadLine());
 			return *this;

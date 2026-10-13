@@ -609,9 +609,9 @@ void AssemblyEditorGUI::Update() {
 				}
 
 				// Place objects inlcuded in bunker assembly
-				const std::list<SceneObject*>* objects = pBA->GetPlacedObjects();
+				const CheckpointList<SceneObject*>* objects = pBA->GetPlacedObjects();
 
-				for (std::list<SceneObject*>::const_iterator oItr = objects->begin(); oItr != objects->end(); ++oItr) {
+				for (CheckpointList<SceneObject*>::const_iterator oItr = objects->begin(); oItr != objects->end(); ++oItr) {
 					SceneObject* pSO = dynamic_cast<SceneObject*>((*oItr)->Clone());
 
 					// Convert relative coordinates to scene coordintaes
@@ -790,7 +790,7 @@ void AssemblyEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) con
 		return;
 
 	// The get a list of the currently edited set of placed objects in the Scene
-	const std::list<SceneObject*>* pSceneObjectList = 0;
+	const CheckpointList<SceneObject*>* pSceneObjectList = 0;
 	if (m_FeatureSet == ONLOADEDIT)
 		pSceneObjectList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::PLACEONLOAD);
 
@@ -800,7 +800,7 @@ void AssemblyEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) con
 		int i = 0;
 		Actor* pActor = 0;
 		//        HeldDevice *pDevice = 0;
-		for (std::list<SceneObject*>::const_iterator itr = pSceneObjectList->begin(); itr != pSceneObjectList->end(); ++itr, ++i) {
+		for (CheckpointList<SceneObject*>::const_iterator itr = pSceneObjectList->begin(); itr != pSceneObjectList->end(); ++itr, ++i) {
 			// Draw the currently held object into the order of the list if it is to be placed inside
 			if (m_pCurrentObject && m_DrawCurrentObject && i == m_ObjectListOrder) {
 				g_FrameMan.SetTransTableFromPreset(m_BlinkTimer.AlternateReal(333) || m_EditorGUIMode == PLACINGOBJECT ? TransparencyPreset::LessTrans : TransparencyPreset::HalfTrans);

@@ -13,6 +13,16 @@ namespace RTE {
 	class Serializable {
 
 	public:
+		static void* operator new(size_t bytes);
+		static void operator delete(void* address) noexcept;
+		static void* operator new(size_t bytes, std::align_val_t alignment);
+		static void operator delete(void* address, std::align_val_t alignment) noexcept;
+		static void* operator new[](size_t bytes) { return operator new(bytes); }
+		static void operator delete[](void* address) noexcept { operator delete(address); }
+		static void* operator new[](size_t bytes, std::align_val_t alignment) { return operator new(bytes, alignment); }
+		static void operator delete[](void* address, std::align_val_t alignment) noexcept { operator delete(address, alignment); }
+		static void* operator new(size_t, void* address) noexcept { return address; }
+		static void operator delete(void*, void*) noexcept {}
 #pragma region Global Macro Definitions
 /// Convenience macro to cut down on duplicate ReadProperty and Save methods in classes that extend Serializable.
 #define SerializableOverrideMethods \

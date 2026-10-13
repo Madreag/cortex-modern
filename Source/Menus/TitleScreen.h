@@ -5,6 +5,7 @@
 #include "MOSRotating.h"
 #include "MOSParticle.h"
 #include "SceneLayer.h"
+#include "CheckpointNativeStorage.h"
 
 #include <array>
 #include <memory>
@@ -17,7 +18,7 @@ namespace RTE {
 	class GUIFont;
 
 	/// Handling for the title screen scene composition, intro sequence and transitions between menu screens.
-	class TitleScreen {
+	class TitleScreen : public CheckpointNativeAllocated {
 
 	public:
 		/// Enumeration for the different transition (scrolling) states of the title screen.

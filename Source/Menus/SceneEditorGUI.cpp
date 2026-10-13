@@ -1,7 +1,10 @@
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "GUICheckpoint.h"
+#include "CheckpointNativeSnapshot.h"
 #include <iostream>
+#include <algorithm>
+#include <memory>
 #include "SceneEditorGUI.h"
 #include "OwnedMovableObjects.h"
 #include "LuaMan.h"
@@ -59,11 +62,58 @@ SceneEditorGUI::SceneEditorGUI() {
 	Clear();
 }
 
+SceneEditorGUI::SceneEditorGUI(const SceneEditorGUI& source, CheckpointNativeSnapshot& snapshot) : SceneEditorGUI() {
+	if (!CheckpointNativeStorage::Reading()) throw std::logic_error("saved editors need their frozen pages");
+	m_PendingCheckpoint = source.m_PendingCheckpoint; m_CheckpointInitialized = source.m_CheckpointInitialized;
+	m_pController = snapshot.ValueObject(source.m_pController);
+	m_FeatureSet = source.m_FeatureSet; m_EditMade = source.m_EditMade; m_EditorGUIMode = source.m_EditorGUIMode;
+	m_PreviousMode = source.m_PreviousMode; m_ModeChanged = source.m_ModeChanged;
+	m_BlinkTimer = source.m_BlinkTimer; m_BlinkMode = source.m_BlinkMode;
+	m_RepeatStartTimer = source.m_RepeatStartTimer; m_RepeatTimer = source.m_RepeatTimer;
+	m_RevealTimer = source.m_RevealTimer; m_RevealIndex = source.m_RevealIndex;
+	m_RequireClearPathToOrbit = source.m_RequireClearPathToOrbit;
+	m_NativeTechModule = source.m_NativeTechModule; m_ForeignCostMult = source.m_ForeignCostMult;
+	m_GridSnapping = source.m_GridSnapping; m_CursorPos = source.m_CursorPos; m_CursorOffset = source.m_CursorOffset;
+	m_CursorInAir = source.m_CursorInAir; m_FacingLeft = source.m_FacingLeft; m_PlaceTeam = source.m_PlaceTeam;
+	m_ObjectListOrder = source.m_ObjectListOrder; m_DrawCurrentObject = source.m_DrawCurrentObject;
+	m_pObjectToBlink = snapshot.Object(source.m_pObjectToBlink);
+	m_BrainSkyPath = snapshot.Freeze(source.m_BrainSkyPath); m_BrainSkyPathCost = source.m_BrainSkyPathCost;
+	m_NetRetainedPrivateOwners = snapshot.Freeze(source.m_NetRetainedPrivateOwners);
+	m_NetPrivateCurrentObject = source.m_NetPrivateCurrentObject;
+	const auto owners = CheckpointValues(source.m_NetRetainedOwners);
+	m_SavedEntityOwners.reserve(owners.size() + 2);
+	m_NetRetainedOwners.reserve(owners.size());
+	for (const auto& owner: owners) {
+		Entity* value = snapshot.Object(owner.get());
+		m_SavedEntityOwners.push_back(value);
+		m_NetRetainedOwners.emplace_back(value);
+	}
+	PieMenu* pie = snapshot.Object(source.m_PieMenu.get());
+	m_SavedEntityOwners.push_back(pie); m_PieMenu.reset(pie);
+	m_pCurrentObject = snapshot.Object(source.m_pCurrentObject);
+	m_SavedEntityOwners.push_back(m_pCurrentObject);
+	m_pPicker = snapshot.ValueObject(source.m_pPicker); m_SavedPicker = m_pPicker;
+	if (source.m_PathRequest) {
+		const auto* address = const_cast<const PathRequest*>(source.m_PathRequest.get());
+		auto* request = snapshot.RebuildValue(address, [&snapshot](const PathRequest& values) {
+			auto result = std::make_unique<PathRequest>();
+			result->complete = values.complete; result->status = values.status; result->path = snapshot.Freeze(values.path);
+			result->pathLength = values.pathLength; result->totalCost = values.totalCost;
+			result->startPos = values.startPos; result->targetPos = values.targetPos; result->horizonGeneration = values.horizonGeneration;
+			return result;
+		});
+		m_PathRequest = std::shared_ptr<volatile PathRequest>(request, [](volatile PathRequest*) {});
+	}
+	m_DrawBitmap.reset(GUICheckpoint::LoadBitmap(GUICheckpoint::SaveBitmap(source.m_DrawBitmap.get())));
+}
+
 SceneEditorGUI::~SceneEditorGUI() {
 	Destroy();
 }
 
 void SceneEditorGUI::Clear() {
+	m_SavedPicker = nullptr;
+	m_SavedEntityOwners.clear();
 	m_NetRetainedOwners.clear();
 	m_NetRetainedPrivateOwners.clear();
 	m_NetPrivateCurrentObject = false;
@@ -165,6 +215,13 @@ int SceneEditorGUI::Create(Controller* pController, FeatureSets featureSet, int 
 }
 
 void SceneEditorGUI::Destroy() {
+	if (!m_SavedEntityOwners.empty() || m_SavedPicker) {
+		const auto saved = [this](const Entity* value) { return std::find(m_SavedEntityOwners.begin(), m_SavedEntityOwners.end(), value) != m_SavedEntityOwners.end(); };
+		if (m_pPicker == m_SavedPicker) m_pPicker = nullptr;
+		if (saved(m_pCurrentObject)) m_pCurrentObject = nullptr;
+		if (saved(m_PieMenu.get())) m_PieMenu.release();
+		for (auto& owner: m_NetRetainedOwners) if (saved(owner.get())) owner.release();
+	}
 	delete m_pPicker;
 
 	delete m_pCurrentObject;
@@ -664,12 +721,12 @@ void SceneEditorGUI::Update() {
 		        if (!m_BrainSkyPath.empty())
 		        {
 		            // Smash all airborne waypoints down to just above the ground, except for when it makes the path intersect terrain or it is the final destination
-		            std::list<Vector>::iterator finalItr = m_BrainSkyPath.end();
+		            CheckpointList<Vector>::iterator finalItr = m_BrainSkyPath.end();
 		            finalItr--;
 		            Vector smashedPoint;
 		            Vector previousPoint = *(m_BrainSkyPath.begin());
-		            std::list<Vector>::iterator nextItr = m_BrainSkyPath.begin();
-		            for (std::list<Vector>::iterator lItr = m_BrainSkyPath.begin(); lItr != finalItr; ++lItr)
+		            CheckpointList<Vector>::iterator nextItr = m_BrainSkyPath.begin();
+		            for (CheckpointList<Vector>::iterator lItr = m_BrainSkyPath.begin(); lItr != finalItr; ++lItr)
 		            {
 		                nextItr++;
 		                smashedPoint = g_SceneMan.MovePointToGround((*lItr), 20, 10);
@@ -1283,14 +1340,14 @@ void SceneEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 	}
 	clear_to_color(m_DrawBitmap.get(), 0);
 	// The get a std::list of the currently edited set of placed objects in the Scene
-	const std::list<SceneObject*>* pSceneObjectList = 0;
+	const CheckpointList<SceneObject*>* pSceneObjectList = 0;
 	if (m_FeatureSet == ONLOADEDIT)
 		pSceneObjectList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::PLACEONLOAD);
 	else if (m_FeatureSet == BLUEPRINTEDIT) {
 		pSceneObjectList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::BLUEPRINT);
 		// Draw the 'original' set of placed scene objects as solid before the blueprints
-		const std::list<SceneObject*>* pOriginalsList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::PLACEONLOAD);
-		for (std::list<SceneObject*>::const_iterator itr = pOriginalsList->begin(); itr != pOriginalsList->end(); ++itr) {
+		const CheckpointList<SceneObject*>* pOriginalsList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::PLACEONLOAD);
+		for (CheckpointList<SceneObject*>::const_iterator itr = pOriginalsList->begin(); itr != pOriginalsList->end(); ++itr) {
 			(*itr)->Draw(m_DrawBitmap.get(), targetPos);
 			// Draw basic HUD if an actor
 			Actor* pActor = dynamic_cast<Actor*>(*itr);
@@ -1300,8 +1357,8 @@ void SceneEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 	} else if (m_FeatureSet == AIPLANEDIT) {
 		pSceneObjectList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::AIPLAN);
 		// Draw the 'original' set of placed scene objects as solid before the planned base
-		const std::list<SceneObject*>* pOriginalsList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::PLACEONLOAD);
-		for (std::list<SceneObject*>::const_iterator itr = pOriginalsList->begin(); itr != pOriginalsList->end(); ++itr) {
+		const CheckpointList<SceneObject*>* pOriginalsList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::PLACEONLOAD);
+		for (CheckpointList<SceneObject*>::const_iterator itr = pOriginalsList->begin(); itr != pOriginalsList->end(); ++itr) {
 			(*itr)->Draw(m_DrawBitmap.get(), targetPos);
 			// Draw basic HUD if an actor
 			Actor* pActor = dynamic_cast<Actor*>(*itr);
@@ -1316,7 +1373,7 @@ void SceneEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 		int i = 0;
 		Actor* pActor = 0;
 		//        HeldDevice *pDevice = 0;
-		for (std::list<SceneObject*>::const_iterator itr = pSceneObjectList->begin(); itr != pSceneObjectList->end(); ++itr, ++i) {
+		for (CheckpointList<SceneObject*>::const_iterator itr = pSceneObjectList->begin(); itr != pSceneObjectList->end(); ++itr, ++i) {
 			// Draw the currently held object into the order of the std::list if it is to be placed inside
 			if (m_pCurrentObject && m_DrawCurrentObject && i == m_ObjectListOrder) {
 				g_FrameMan.SetTransTableFromPreset(m_BlinkTimer.AlternateReal(333) || m_EditorGUIMode == PLACINGOBJECT ? TransparencyPreset::LessTrans : TransparencyPreset::HalfTrans);
@@ -1380,8 +1437,8 @@ void SceneEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 	// Always draw the path so the player can see what he would be blocking off when building
 	if (m_RequireClearPathToOrbit && !m_BrainSkyPath.empty()) {
 		int skipPhase = 0;
-		std::list<Vector>::const_reverse_iterator lLast = m_BrainSkyPath.rbegin();
-		std::list<Vector>::const_reverse_iterator lItr = m_BrainSkyPath.rbegin();
+		CheckpointList<Vector>::const_reverse_iterator lLast = m_BrainSkyPath.rbegin();
+		CheckpointList<Vector>::const_reverse_iterator lItr = m_BrainSkyPath.rbegin();
 		for (; lItr != m_BrainSkyPath.rend(); ++lItr) {
 			// Draw these backwards so the skip phase works
 			skipPhase = g_FrameMan.DrawDotLine(pTargetBitmap, (*lLast) - targetPos, (*lItr) - targetPos, m_BrainSkyPathCost <= MAXBRAINPATHCOST ? s_pValidPathDot : s_pInvalidPathDot, 16, skipPhase, true);
@@ -1545,7 +1602,8 @@ void SceneEditorGUI::RequestBrainSkyPath(Scene& scene, const Vector& start, cons
 	m_PathRequest = scene.CalculatePathAsyncForEditor(
 	    start, end, FLT_MAX, c_PathFindingDefaultDigStrength, static_cast<Activity::Teams>(team),
 	    [this](std::shared_ptr<volatile PathRequest> pathRequest) {
-		    m_BrainSkyPath = const_cast<std::list<Vector>&>(pathRequest->path);
+		    const auto& path = const_cast<const CheckpointList<Vector>&>(pathRequest->path);
+		    m_BrainSkyPath.assign(path.begin(), path.end());
 		    m_BrainSkyPathCost = pathRequest->totalCost;
 	    });
 }
@@ -1640,9 +1698,10 @@ bool SceneEditorGUI::RunRetainedOwnerCaptureSelfTest() {
 }
 
 std::string SceneEditorGUI::SaveCheckpoint() const {
+	if (CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::IsView(this) && !CheckpointNativeStorage::Private(this)) return CheckpointNativeStorage::Source(this)->SaveCheckpoint();
 	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
 	// A capture reclaims before its workers start; while they run they read these owners, so nothing drops one.
-	if (!g_MovableMan.IsRestoringSnapshot() && !CaptureSentinel::InParallelPhase()) ReclaimNetRetainedOwners();
+	if (!CheckpointNativeStorage::Reading() && !g_MovableMan.IsRestoringSnapshot() && !CaptureSentinel::InParallelPhase()) ReclaimNetRetainedOwners();
 	const bool retainedOwners = !GUICheckpoint::IsCapturingNetLocalUI() && !m_NetRetainedOwners.empty();
 	const bool netOwners = retainedOwners || m_NetPrivateCurrentObject;
 	CheckpointWriter writer(netOwners ? "SceneEditorGUI3" : "SceneEditorGUI2");
@@ -1655,15 +1714,19 @@ std::string SceneEditorGUI::SaveCheckpoint() const {
 	writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(m_pObjectToBlink == m_pCurrentObject ? nullptr : m_pObjectToBlink); }));
 	writer(m_PathRequest != nullptr);
 	if (m_PathRequest) {
-		const auto& request = const_cast<const PathRequest&>(*m_PathRequest);
+		const auto& request = *CheckpointNativeStorage::Source(const_cast<const PathRequest*>(m_PathRequest.get()));
 		if (!request.complete) throw std::runtime_error("an editor path request is still running at checkpoint capture");
 		writer(request.complete, request.status, request.path, request.pathLength, request.totalCost, request.startPos, request.targetPos);
 	}
 	writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(m_DrawBitmap.get()); }));
 	if (netOwners) {
 		writer(m_NetPrivateCurrentObject, retainedOwners ? m_NetRetainedOwners.size() : size_t{0});
-		if (retainedOwners) for (size_t index = 0; index < m_NetRetainedOwners.size(); ++index) writer(static_cast<bool>(m_NetRetainedPrivateOwners[index]),
-			CheckpointWriter::Native([&] { return GUICheckpoint::SaveOwnedEntity(m_NetRetainedOwners[index].get()); }));
+		if (retainedOwners) {
+			const auto owners = CheckpointValues(m_NetRetainedOwners);
+			const auto privateOwners = CheckpointValues(m_NetRetainedPrivateOwners);
+			for (size_t index = 0; index < owners.size(); ++index) writer(static_cast<bool>(privateOwners[index]),
+				CheckpointWriter::Native([&] { return GUICheckpoint::SaveOwnedEntity(owners[index].get()); }));
+		}
 	}
 	return writer.Text();
 }
@@ -1691,13 +1754,13 @@ bool SceneEditorGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		GUICheckpoint::LoadEntityReference(blink, true);
 		std::shared_ptr<PathRequest> request;
 		if (hasRequest) {
-			request = std::make_shared<PathRequest>();
+			request = MakeCheckpointNativeShared<PathRequest>();
 			reader.Value(request->complete); reader.Value(request->status); reader.Value(request->path); reader.Value(request->pathLength); reader.Value(request->totalCost); reader.Value(request->startPos); reader.Value(request->targetPos);
 			if (!request->complete) return false;
 		}
 		reader.Value(bitmap); GUICheckpoint::LoadBitmap(bitmap, true);
 		std::vector<std::string> retained;
-		std::vector<bool> retainedPrivate;
+		CheckpointVector<bool> retainedPrivate;
 		bool privateCurrent = false;
 		if (retainedOwners) {
 			size_t count = 0;
@@ -1720,7 +1783,7 @@ bool SceneEditorGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		if ((object && !dynamic_cast<SceneObject*>(object.get())) || (menu && !dynamic_cast<PieMenu*>(menu.get()))) return false;
 		const auto* objectToBlink = blinkCurrent ? (keepObject ? m_pCurrentObject : static_cast<const SceneObject*>(object.get())) : dynamic_cast<const SceneObject*>(GUICheckpoint::LoadEntityReference(blink));
 		std::unique_ptr<BITMAP, BitmapDeleter> image(GUICheckpoint::LoadBitmap(bitmap));
-		std::vector<std::unique_ptr<Entity>> restoredRetained;
+		CheckpointVector<std::unique_ptr<Entity>> restoredRetained;
 		std::vector<bool> keepRetained;
 		if (!GUICheckpoint::IsRestoringNetLocalUI()) {
 			restoredRetained.resize(retained.size());

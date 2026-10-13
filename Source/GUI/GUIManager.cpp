@@ -292,7 +292,7 @@ void GUIManager::Update(bool ignoreKeyboardEvents) {
 void GUIManager::Draw(GUIScreen* Screen) {
 	const void* previousPass = BeginPanelDrawPass(this);
 	// Go through drawing panels that are invalid
-	std::vector<GUIPanel*>::iterator it;
+	CheckpointVector<GUIPanel*>::iterator it;
 
 	for (it = m_PanelList.begin(); it != m_PanelList.end(); it++) {
 		GUIPanel* p = *it;
@@ -326,7 +326,7 @@ void GUIManager::ReleaseMouse() {
 }
 
 GUIPanel* GUIManager::FindBottomPanel(int X, int Y) {
-	std::vector<GUIPanel*>::iterator it;
+	CheckpointVector<GUIPanel*>::iterator it;
 
 	for (it = m_PanelList.begin(); it != m_PanelList.end(); it++) {
 		GUIPanel* P = *it;
@@ -342,7 +342,7 @@ GUIPanel* GUIManager::FindBottomPanel(int X, int Y) {
 }
 
 GUIPanel* GUIManager::FindTopPanel(int X, int Y) {
-	std::vector<GUIPanel*>::reverse_iterator it;
+	CheckpointVector<GUIPanel*>::reverse_iterator it;
 
 	for (it = m_PanelList.rbegin(); it != m_PanelList.rend(); it++) {
 		GUIPanel* P = *it;

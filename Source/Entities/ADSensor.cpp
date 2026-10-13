@@ -1,4 +1,6 @@
 #include "ADSensor.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
 #include "ADoor.h"
 #include "CheckpointImage.h"
 #include "Actor.h"
@@ -7,6 +9,14 @@
 using namespace RTE;
 
 const std::string ADSensor::c_ClassName = "Sensor";
+
+ADSensor::ADSensor(const ADSensor& source, CheckpointNativeSnapshot& snapshot) :
+	m_StartOffset(snapshot.Freeze(source.m_StartOffset)),
+	m_SensorRay(snapshot.Freeze(source.m_SensorRay)),
+	m_Skip(snapshot.Freeze(source.m_Skip)),
+	m_CheckpointOwner(nullptr),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
 
 ADSensor::ADSensor() {
 	Clear();

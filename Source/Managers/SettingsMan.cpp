@@ -346,7 +346,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("ShowForeignItems", { reader >> m_ShowForeignItems; });
 	MatchProperty("FlashOnBrainDamage", { reader >> m_FlashOnBrainDamage; });
 	MatchProperty("BlipOnRevealUnseen", { reader >> m_BlipOnRevealUnseen; });
-	MatchProperty("MaxUnheldItems", { reader >> g_MovableMan.m_MaxDroppedItems; });
+	MatchProperty("MaxUnheldItems", { reader >> g_MovableMan.CheckpointOptionsValues().m_MaxDroppedItems; });
 	MatchProperty("UnheldItemsHUDDisplayRange", { SetUnheldItemsHUDDisplayRange(ReadSettingFloat(reader.ReadPropValue())); });
 	MatchProperty("AlwaysDisplayUnheldItemsInStrategicMode", { reader >> m_AlwaysDisplayUnheldItemsInStrategicMode; });
 	MatchProperty("SubPieMenuHoverOpenDelay", { reader >> m_SubPieMenuHoverOpenDelay; });
@@ -355,7 +355,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("CrabBombThreshold", { reader >> m_CrabBombThreshold; });
 	MatchProperty("ShowEnemyHUD", { reader >> m_ShowEnemyHUD; });
 	MatchProperty("SmartBuyMenuNavigation", { reader >> m_EnableSmartBuyMenuNavigation; });
-	MatchProperty("ScrapCompactingHeight", { reader >> g_SceneMan.m_ScrapCompactingHeight; });
+	MatchProperty("ScrapCompactingHeight", { reader >> g_SceneMan.CheckpointOptionsValues().m_ScrapCompactingHeight; });
 	MatchProperty("AutomaticGoldDeposit", { reader >> m_AutomaticGoldDeposit; });
 	MatchProperty("BrainlessHumansSpectate", { reader >> m_BrainlessHumansSpectate; });
 	MatchProperty("ScreenShakeStrength", { reader >> g_CameraMan.m_ScreenShakeStrength; });
@@ -455,8 +455,8 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	// Retired, and read only so an old settings file still parses: the count is a build constant.
 	MatchProperty("NumberOfLuaStatesOverride", { reader >> m_NumberOfLuaStatesOverride; });
 	MatchProperty("ForceImmediatePathingRequestCompletion", { reader >> m_ForceImmediatePathingRequestCompletion; });
-	MatchProperty("EnableParticleSettling", { reader >> g_MovableMan.m_SettlingEnabled; });
-	MatchProperty("EnableMOSubtraction", { reader >> g_MovableMan.m_MOSubtractionEnabled; });
+	MatchProperty("EnableParticleSettling", { reader >> g_MovableMan.CheckpointOptionsValues().m_SettlingEnabled; });
+	MatchProperty("EnableMOSubtraction", { reader >> g_MovableMan.CheckpointOptionsValues().m_MOSubtractionEnabled; });
 	MatchProperty("DeltaTime", { g_TimerMan.SetDeltaTimeSecs(ReadSettingFloat(reader.ReadPropValue())); });
 	MatchProperty("AllowSavingToBase", { reader >> m_AllowSavingToBase; });
 	MatchProperty("ShowMetaScenes", { reader >> m_ShowMetaScenes; });
@@ -472,8 +472,8 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("DrawAtomGroupVisualizations", { reader >> m_DrawAtomGroupVisualizations; });
 	MatchProperty("DrawHandAndFootGroupVisualizations", { reader >> m_DrawHandAndFootGroupVisualizations; });
 	MatchProperty("DrawLimbPathVisualizations", { reader >> m_DrawLimbPathVisualizations; });
-	MatchProperty("DrawRaycastVisualizations", { reader >> g_SceneMan.m_DrawRayCastVisualizations; });
-	MatchProperty("DrawPixelCheckVisualizations", { reader >> g_SceneMan.m_DrawPixelCheckVisualizations; });
+	MatchProperty("DrawRaycastVisualizations", { reader >> g_SceneMan.CheckpointOptionsValues().m_DrawRayCastVisualizations; });
+	MatchProperty("DrawPixelCheckVisualizations", { reader >> g_SceneMan.CheckpointOptionsValues().m_DrawPixelCheckVisualizations; });
 	MatchProperty("PrintDebugInfo", { reader >> m_PrintDebugInfo; });
 	MatchProperty("MeasureModuleLoadTime", { reader >> m_MeasureModuleLoadTime; });
 	MatchProperty("VisibleAssemblyGroup", { m_VisibleAssemblyGroupsList.push_back(reader.ReadPropValue()); });
@@ -536,7 +536,7 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("ShowForeignItems", m_ShowForeignItems);
 	writer.NewPropertyWithValue("FlashOnBrainDamage", m_FlashOnBrainDamage);
 	writer.NewPropertyWithValue("BlipOnRevealUnseen", m_BlipOnRevealUnseen);
-	writer.NewPropertyWithValue("MaxUnheldItems", g_MovableMan.m_MaxDroppedItems);
+	writer.NewPropertyWithValue("MaxUnheldItems", g_MovableMan.CheckpointOptionsValues().m_MaxDroppedItems);
 	writer.NewPropertyWithValue("UnheldItemsHUDDisplayRange", m_UnheldItemsHUDDisplayRange);
 	writer.NewPropertyWithValue("AlwaysDisplayUnheldItemsInStrategicMode", m_AlwaysDisplayUnheldItemsInStrategicMode);
 	writer.NewPropertyWithValue("SubPieMenuHoverOpenDelay", m_SubPieMenuHoverOpenDelay);
@@ -545,7 +545,7 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("CrabBombThreshold", m_CrabBombThreshold);
 	writer.NewPropertyWithValue("ShowEnemyHUD", m_ShowEnemyHUD);
 	writer.NewPropertyWithValue("SmartBuyMenuNavigation", m_EnableSmartBuyMenuNavigation);
-	writer.NewPropertyWithValue("ScrapCompactingHeight", g_SceneMan.m_ScrapCompactingHeight);
+	writer.NewPropertyWithValue("ScrapCompactingHeight", g_SceneMan.CheckpointOptionsValues().m_ScrapCompactingHeight);
 	writer.NewPropertyWithValue("AutomaticGoldDeposit", m_AutomaticGoldDeposit);
 	writer.NewPropertyWithValue("BrainlessHumansSpectate", m_BrainlessHumansSpectate);
 
@@ -601,8 +601,8 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("LocalPredictionMaxTicks", m_LocalPredictionMaxTicks);
 	WriteNetworkPreferences(writer);
 	writer.NewPropertyWithValue("ForceImmediatePathingRequestCompletion", m_ForceImmediatePathingRequestCompletion);
-	writer.NewPropertyWithValue("EnableParticleSettling", g_MovableMan.m_SettlingEnabled);
-	writer.NewPropertyWithValue("EnableMOSubtraction", g_MovableMan.m_MOSubtractionEnabled);
+	writer.NewPropertyWithValue("EnableParticleSettling", g_MovableMan.CheckpointOptionsValues().m_SettlingEnabled);
+	writer.NewPropertyWithValue("EnableMOSubtraction", g_MovableMan.CheckpointOptionsValues().m_MOSubtractionEnabled);
 	writer.NewPropertyWithValue("DeltaTime", g_TimerMan.GetDeltaTimeSecs());
 
 	// No experimental settings right now :)
@@ -640,8 +640,8 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("DrawAtomGroupVisualizations", m_DrawAtomGroupVisualizations);
 	writer.NewPropertyWithValue("DrawHandAndFootGroupVisualizations", m_DrawHandAndFootGroupVisualizations);
 	writer.NewPropertyWithValue("DrawLimbPathVisualizations", m_DrawLimbPathVisualizations);
-	writer.NewPropertyWithValue("DrawRaycastVisualizations", g_SceneMan.m_DrawRayCastVisualizations);
-	writer.NewPropertyWithValue("DrawPixelCheckVisualizations", g_SceneMan.m_DrawPixelCheckVisualizations);
+	writer.NewPropertyWithValue("DrawRaycastVisualizations", g_SceneMan.CheckpointOptionsValues().m_DrawRayCastVisualizations);
+	writer.NewPropertyWithValue("DrawPixelCheckVisualizations", g_SceneMan.CheckpointOptionsValues().m_DrawPixelCheckVisualizations);
 	writer.NewPropertyWithValue("PrintDebugInfo", m_PrintDebugInfo);
 	writer.NewPropertyWithValue("MeasureModuleLoadTime", m_MeasureModuleLoadTime);
 

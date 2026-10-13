@@ -74,6 +74,7 @@
 #include <type_traits>
 #include <typeinfo>
 #include <utility>
+#include <mutex>
 
 namespace RTE {
 struct ContractAudit {
@@ -856,6 +857,17 @@ Field(path + ".NetGamePlaceBrain.module", object.module);
 Field(path + ".NetGamePlaceBrain.hFlipped", object.hFlipped);
 Field(path + ".NetGamePlaceBrain.addedInventory", object.addedInventory);
 }
+void Visit(const GameActivity::SeatBrain& object, const std::string& path) {
+Field(path + ".NetGamePlaceBrain.team", object.team);
+Field(path + ".NetGamePlaceBrain.player", object.player);
+Field(path + ".NetGamePlaceBrain.posX", object.posX);
+Field(path + ".NetGamePlaceBrain.posY", object.posY);
+Field(path + ".NetGamePlaceBrain.className", object.className);
+Field(path + ".NetGamePlaceBrain.preset", object.preset);
+Field(path + ".NetGamePlaceBrain.module", object.module);
+Field(path + ".NetGamePlaceBrain.hFlipped", object.hFlipped);
+Field(path + ".NetGamePlaceBrain.addedInventory", object.addedInventory);
+}
 void Visit(const GameActivity::Delivery& object, const std::string& path) {
 Field(path + ".GameActivity::Delivery.pCraft", object.pCraft);
 Field(path + ".GameActivity::Delivery.orderedByPlayer", object.orderedByPlayer);
@@ -1384,11 +1396,11 @@ Field(path + ".PieSlice.m_MidAngle", object.m_MidAngle);
 Field(path + ".PieSlice.m_DrawFlippedToMatchAbsoluteAngle", object.m_DrawFlippedToMatchAbsoluteAngle);
 }
 void Visit(const RandomGenerator& object, const std::string& path) {
-Field(path + ".RandomGenerator.m_RNG", object.m_RNG);
-Field(path + ".RandomGenerator.m_Seed", object.m_Seed);
-Field(path + ".RandomGenerator.m_DrawCount", object.m_DrawCount);
-Field(path + ".RandomGenerator.m_TraceDraws", object.m_TraceDraws);
-Field(path + ".RandomGenerator.m_SeedPending", object.m_SeedPending);
+Field(path + ".RandomGenerator.m_RNG", object.CheckpointValues().m_RNG);
+Field(path + ".RandomGenerator.m_Seed", object.CheckpointValues().m_Seed);
+Field(path + ".RandomGenerator.m_DrawCount", object.CheckpointValues().m_DrawCount);
+Field(path + ".RandomGenerator.m_TraceDraws", object.CheckpointValues().m_TraceDraws);
+Field(path + ".RandomGenerator.m_SeedPending", object.CheckpointValues().m_SeedPending);
 }
 void Visit(const Round& object, const std::string& path) {
 Visit(static_cast<const Entity&>(object), path);
@@ -1760,7 +1772,7 @@ void Visit(const GraphicalPrimitive& object, const std::string& path) {
 static State Observe(const std::string& gapPath) {
     ContractAudit audit;
     std::map<long int, MovableObject*> objects;
-    { std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex); objects = g_MovableMan.m_KnownObjects; }
+    { std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex); objects.insert(g_MovableMan.CheckpointLookupValues().m_KnownObjects.begin(), g_MovableMan.CheckpointLookupValues().m_KnownObjects.end()); }
     size_t invalid = 0;
     for (const auto& [uid, object]: objects) {
         if (!object || uid <= 0 || object->GetUniqueID() != uid) {
@@ -1808,19 +1820,19 @@ static State Observe(const std::string& gapPath) {
     audit.Field("allocator.uid", MovableObject::GetUniqueIDCounter());
     audit.Field("checkpoint.restoring", g_MovableMan.IsRestoringSnapshot());
     audit.Field("checkpoint.pending_graph", g_ActivityMan.HasFullScriptGraphToRestore());
-    audit.Field("world.actors", g_MovableMan.m_Actors);
-    audit.Field("world.items", g_MovableMan.m_Items);
-    audit.Field("world.particles", g_MovableMan.m_Particles);
-    audit.Field("world.added_actors", g_MovableMan.m_AddedActors);
-    audit.Field("world.added_items", g_MovableMan.m_AddedItems);
-    audit.Field("world.added_particles", g_MovableMan.m_AddedParticles);
-    audit.Field("world.alarms", g_MovableMan.m_AlarmEvents);
-    audit.Field("world.added_alarms", g_MovableMan.m_AddedAlarmEvents);
-    audit.Field("world.rosters", g_MovableMan.m_ActorRoster);
-    audit.Field("world.sort_rosters", g_MovableMan.m_SortTeamRoster);
-    audit.Field("world.quarantine", g_MovableMan.m_LockstepJoinQuarantine);
-    audit.Field("world.moid_index", g_MovableMan.m_MOIDIndex);
-    audit.Field("world.update_number", g_MovableMan.m_SimUpdateFrameNumber);
+    audit.Field("world.actors", g_MovableMan.CheckpointActorValues().m_Actors);
+    audit.Field("world.items", g_MovableMan.CheckpointLooseValues().m_Items);
+    audit.Field("world.particles", g_MovableMan.CheckpointLooseValues().m_Particles);
+    audit.Field("world.added_actors", g_MovableMan.CheckpointActorValues().m_AddedActors);
+    audit.Field("world.added_items", g_MovableMan.CheckpointLooseValues().m_AddedItems);
+    audit.Field("world.added_particles", g_MovableMan.CheckpointLooseValues().m_AddedParticles);
+    audit.Field("world.alarms", g_MovableMan.CheckpointMembershipValues().m_AlarmEvents);
+    audit.Field("world.added_alarms", g_MovableMan.CheckpointMembershipValues().m_AddedAlarmEvents);
+    audit.Field("world.rosters", g_MovableMan.CheckpointMembershipValues().m_ActorRoster);
+    audit.Field("world.sort_rosters", g_MovableMan.CheckpointMembershipValues().m_SortTeamRoster);
+    audit.Field("world.quarantine", g_MovableMan.CheckpointMembershipValues().m_LockstepJoinQuarantine);
+    audit.Field("world.moid_index", g_MovableMan.CheckpointMembershipValues().m_MOIDIndex);
+    audit.Field("world.update_number", g_MovableMan.CheckpointOptionsValues().m_SimUpdateFrameNumber);
     audit.Field("world.roster", g_MovableMan.DescribeTeamRosters());
     audit.Field("scene.global_acc", g_SceneMan.GetScene()->GetGlobalAcc());
     TerrainLayerSnapshot terrain;
@@ -1957,7 +1969,7 @@ static State Identity() {
     state["lua"] = g_MovableMan.DescribeLuaIdentity();
     std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex);
     std::map<const MovableObject*, long> addresses;
-    for (const auto& [uid, object]: g_MovableMan.m_KnownObjects) {
+    for (const auto& [uid, object]: g_MovableMan.CheckpointLookupValues().m_KnownObjects) {
         state["uid:" + std::to_string(uid)] = std::to_string(reinterpret_cast<uintptr_t>(object));
         if (object) addresses.emplace(object, uid);
     }
@@ -1967,7 +1979,7 @@ static State Identity() {
             " registered_uid:" + std::to_string(found != addresses.end() ? found->second : 0) +
             " captured_uid:" + std::to_string(capturedUID);
     };
-    for (const auto& [uid, object]: g_MovableMan.m_KnownObjects) {
+    for (const auto& [uid, object]: g_MovableMan.CheckpointLookupValues().m_KnownObjects) {
         if (!object) continue;
         const std::string prefix = "borrowed[" + std::to_string(uid) + "]";
         borrowed(prefix + ".ignore", object->m_pMOToNotHit, object->m_MOToNotHitUID);

@@ -1,18 +1,38 @@
 #include "PieSlice.h"
+#include "CheckpointNativeSnapshot.h"
 
 #include "PieMenu.h"
 #include "PresetMan.h"
 #include "LuaMan.h"
 
+#include <memory>
+
 using namespace RTE;
 
 ConcreteClassInfo(PieSlice, Entity, 80);
+
+PieSlice::PieSlice(const PieSlice& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot), m_Type(source.m_Type), m_Direction(source.m_Direction),
+	m_CanBeMiddleSlice(source.m_CanBeMiddleSlice), m_OriginalSource(snapshot.Object(source.m_OriginalSource)),
+	m_Enabled(source.m_Enabled), m_Icon(snapshot.Freeze(source.m_Icon)),
+	m_LuabindFunctionObject(source.m_LuabindFunctionObject ? std::make_unique<LuabindObjectWrapper>(nullptr, static_cast<const LuabindObjectWrapper*>(CheckpointNativeStorage::View(source.m_LuabindFunctionObject.get(), sizeof(LuabindObjectWrapper)))->GetFilePath()) : nullptr),
+	m_FunctionName(snapshot.Freeze(source.m_FunctionName, &m_FunctionName)),
+	m_SubPieMenu(snapshot.Object(source.m_SubPieMenu.get()), [] { PieMenuCustomDeleter deleter; deleter.owned = true; return deleter; }()),
+	m_StartAngle(source.m_StartAngle), m_SlotCount(source.m_SlotCount), m_MidAngle(source.m_MidAngle),
+	m_DrawFlippedToMatchAbsoluteAngle(source.m_DrawFlippedToMatchAbsoluteAngle), m_CheckpointInitialized(source.m_CheckpointInitialized) {
+}
+
+Entity* PieSlice::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
 
 PieSlice::PieSlice() {
 	Clear();
 }
 
 PieSlice::~PieSlice() {
+	if (IsFrozenCheckpointNative()) { m_Icon.release(); m_SubPieMenu.release(); return; }
 	Destroy(true);
 }
 

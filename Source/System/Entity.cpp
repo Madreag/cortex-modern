@@ -1,4 +1,6 @@
 #include "Entity.h"
+#include "CheckpointNativeSnapshot.h"
+#include "CheckpointNativeStorage.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "CheckpointImage.h"
@@ -7,12 +9,493 @@
 #include "DataModule.h"
 #include "Base64/base64.h"
 #include "MovableObject.h"
+#include "SceneMan.h"
+#include "BitmapCheckpoint.h"
+#include "System.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <cstdlib>
+#include <format>
+#include <mutex>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
+#include <memory>
+#include <optional>
+#include <thread>
+#include <utility>
 
 namespace RTE {
+	namespace {
+		// Each thread adds to its own totals; a report merges them.
+		struct CloneCostTotals {
+			std::mutex mutex;
+			std::unordered_map<const char*, std::array<int64_t, 3>> kinds;
+			uint64_t thread = std::hash<std::thread::id>{}(std::this_thread::get_id());
+			int64_t roots = 0, rootNs = 0;
+		};
+		struct CloneCostThreads {
+			std::mutex mutex;
+			std::vector<std::shared_ptr<CloneCostTotals>> threads;
+		};
+		CloneCostThreads& CloneCostRegistry() {
+			static CloneCostThreads* registry = new CloneCostThreads;
+			return *registry;
+		}
+		CloneCostTotals& CloneCosts() {
+			thread_local const std::shared_ptr<CloneCostTotals> totals = [] {
+				auto created = std::make_shared<CloneCostTotals>();
+				std::lock_guard lock(CloneCostRegistry().mutex);
+				CloneCostRegistry().threads.push_back(created);
+				return created;
+			}();
+			return *totals;
+		}
+		thread_local CheckpointCloneCost* s_OpenCloneCost = nullptr;
+		int64_t CloneCostNow() { return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+	} // namespace
+
+	bool CheckpointCloneCost::Enabled() {
+		static const bool enabled = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
+		return enabled;
+	}
+
+	void CheckpointCloneCost::Begin() {
+		m_Parent = s_OpenCloneCost;
+		s_OpenCloneCost = this;
+		m_Start = CloneCostNow();
+	}
+
+	void CheckpointCloneCost::End() {
+		const int64_t inclusive = CloneCostNow() - m_Start;
+		s_OpenCloneCost = m_Parent;
+		if (m_Parent) m_Parent->m_Children += inclusive;
+		auto& totals = CloneCosts();
+		std::lock_guard lock(totals.mutex);
+		auto& kind = totals.kinds[m_Kind];
+		++kind[0]; kind[1] += inclusive; kind[2] += inclusive - m_Children;
+		if (!m_Parent) { ++totals.roots; totals.rootNs += inclusive; }
+	}
+
+	CheckpointCloneCost::Totals CheckpointCloneCost::Take(ThreadTotals* threads) {
+		if (!Enabled()) return {};
+		std::unordered_map<const char*, std::array<int64_t, 3>> merged;
+		std::lock_guard registryLock(CloneCostRegistry().mutex);
+		for (const auto& thread: CloneCostRegistry().threads) {
+			std::lock_guard lock(thread->mutex);
+			int64_t exclusiveNs = 0;
+			for (const auto& [kind, cost]: thread->kinds) exclusiveNs += cost[2];
+			if (threads && thread->roots) threads->emplace_back(thread->thread, std::array{thread->roots, thread->rootNs, exclusiveNs});
+			for (const auto& [kind, cost]: thread->kinds) for (size_t index = 0; index < cost.size(); ++index) merged[kind][index] += cost[index];
+			thread->kinds.clear();
+			thread->roots = 0; thread->rootNs = 0;
+		}
+		return Totals(merged.begin(), merged.end());
+	}
+
+	void CheckpointCloneCost::Report(uint64_t tick, Totals totals) {
+		std::sort(totals.begin(), totals.end(), [](const auto& left, const auto& right) { return left.second[2] > right.second[2]; });
+		for (const auto& [kind, cost]: totals) {
+			System::PrintDiagnosticLine(std::format("[checkpoint-clone-cost] tick={} kind={} count={} inclusive_us={} exclusive_us={}", tick, kind, cost[0], cost[1] / 1000, cost[2] / 1000));
+		}
+	}
+
+	CheckpointNativeSnapshot::CheckpointNativeSnapshot() :
+		m_Serial([] { static std::atomic<uint64_t> serials{0}; return ++serials; }()),
+		m_Clock{g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetSimUpdateCount(), g_TimerMan.GetRealTickCount()} {
+		if (SceneMan::IsConstructed()) g_SceneMan.VisitCheckpointMaterialOwners([this](const Material* material, int kind, size_t index) {
+			m_MaterialOwners.try_emplace(static_cast<const Material*>(CheckpointNativeStorage::Original(material)), kind, index);
+		});
+	}
+	void CheckpointNativeSnapshot::RememberMaterial(const Material* source, const Material* target) {
+		if (const auto* reference = MaterialReference(source)) m_MaterialReferences.TryEmplace(target, *reference);
+	}
+	const CheckpointText* CheckpointNativeSnapshot::MaterialReference(const Material* target) const {
+		if (const auto* reference = m_MaterialReferences.FindStored(target)) return reference;
+		target = static_cast<const Material*>(CheckpointNativeStorage::Original(target));
+		const auto owner = m_MaterialOwners.find(target);
+		if (owner == m_MaterialOwners.end()) return nullptr;
+		const auto [kind, index] = owner->second;
+		m_MaterialReferences.TryEmplace(target, CheckpointWriter::CaptureNative([kind, index] {
+			CheckpointWriter writer("MaterialReference1"); writer(kind, index); return writer.Text();
+		}));
+		return m_MaterialReferences.FindStored(target);
+	}
+	void CheckpointNativeSnapshot::RememberUID(const MovableObject* source, MovableObject* target) {
+		const long uid = source->GetUniqueID();
+		if (uid <= 0) return;
+		// While a saver reads, lookups answer from this snapshot, so the frozen registry names the original instead.
+		const bool registered = s_Current && CheckpointNativeStorage::Reading() ? g_MovableMan.FrozenObjectByUniqueID(uid) == CheckpointNativeStorage::Original(source)
+		                                                                      : g_MovableMan.FindObjectByUniqueID(uid) == source;
+		if (registered) m_UIDs.TryEmplace(uid, target);
+	}
+	MovableObject* CheckpointNativeSnapshot::FindUID(long uid) const {
+		return m_UIDs.Find(uid).value_or(nullptr);
+	}
+	struct CheckpointNativeSnapshot::Pixel : CheckpointNativeAllocated {
+		mutable BITMAP bitmap{};
+		GFX_VTABLE table{};
+		mutable CheckpointVector<uint8_t*> lines;
+		std::shared_ptr<const BitmapSnapshot> snapshot;
+		const BITMAP* loaded = nullptr;
+		size_t rowBytes = 0;
+		mutable CheckpointText text;
+		mutable std::once_flag textReady;
+		std::array<std::optional<std::string>, 2> paths;
+		mutable std::once_flag ready;
+		mutable std::string bytes;
+		mutable bool privateRows = false;
+		mutable std::atomic<bool> materialized{false};
+		~Pixel() { if (privateRows) CheckpointNativeStorage::ForgetPrivate(bytes.data()); }
+		static std::string Rows(const BITMAP* source, size_t rowBytes) {
+			std::string rows;
+			rows.reserve(rowBytes * static_cast<size_t>(source->h));
+			for (int row = 0; row < source->h; ++row) rows.append(reinterpret_cast<const char*>(source->line[row]), rowBytes);
+			return rows;
+		}
+		/// The pixels' text, described by whoever reads it first rather than at the boundary.
+		const CheckpointText& Text() const {
+			std::call_once(textReady, [this] {
+				if (loaded) text = CheckpointText::Deferred([source = loaded, rowBytes = rowBytes] { return Rows(source, rowBytes); }, rowBytes * static_cast<size_t>(loaded->h));
+				else text = CheckpointText::Deferred([frozen = snapshot] { return frozen->PixelBytes(); }, snapshot->LogicalBytes());
+			});
+			return text;
+		}
+		void Materialize() const {
+			std::call_once(ready, [this] {
+				bytes = loaded ? Rows(loaded, rowBytes) : snapshot->PixelBytes();
+				const size_t stride = loaded ? rowBytes : snapshot->rowBytes;
+				lines.resize(bitmap.h);
+				if (CheckpointNativeStorage::Reading() && !bytes.empty()) {
+					CheckpointNativeStorage::RememberPrivate(bytes.data(), bytes.size());
+					privateRows = true;
+				}
+				for (size_t row = 0; row < lines.size(); ++row) lines[row] = reinterpret_cast<uint8_t*>(bytes.data()) + row * stride;
+				bitmap.line = lines.data();
+				materialized.store(true, std::memory_order_release);
+			});
+		}
+	};
+	BITMAP* CheckpointNativeSnapshot::Freeze(BITMAP* source) {
+		if (!source) return nullptr;
+		if (const auto known = m_Bitmaps.Find(source)) return &(*known)->bitmap;
+		const BITMAP* address = static_cast<const BITMAP*>(CheckpointNativeStorage::Original(source));
+		auto& recent = Recent<1>(source);
+		if (recent.first == source) return static_cast<BITMAP*>(recent.second);
+		if (const auto* known = m_BitmapSources.FindStored(source)) {
+			recent = {source, &(*known)->bitmap};
+			return &(*known)->bitmap;
+		}
+		CheckpointCloneCost cost("BITMAP");
+		source = const_cast<BITMAP*>(static_cast<const BITMAP*>(CheckpointNativeStorage::View(source, sizeof(BITMAP))));
+		auto pixel = std::shared_ptr<Pixel>(new Pixel());
+		pixel->bitmap = *source; pixel->table = *source->vtable;
+		pixel->bitmap.vtable = &pixel->table;
+		pixel->bitmap.line = nullptr;
+		pixel->bitmap.dat = nullptr; pixel->bitmap.extra = nullptr;
+		{
+			CheckpointCloneCost paths("bitmap paths");
+			for (int depth = 0; depth < 2; ++depth) {
+				int requested = depth;
+				if (const auto* path = ContentFile::LoadedBitmapPath(address, requested)) pixel->paths[depth] = *path;
+			}
+		}
+		const int depth = bitmap_color_depth(source);
+		if (!CheckpointNativeStorage::Reading() && (pixel->paths[0] || pixel->paths[1]) && source->w > 0 && source->h > 0 && (depth == 8 || depth == 15 || depth == 16 || depth == 24 || depth == 32)) {
+			// A loaded image keeps its pixels while it is loaded (a save names its file and a load refuses other pixels), so the saver reads it.
+			pixel->loaded = source;
+			pixel->rowBytes = static_cast<size_t>(source->w) * ((depth + 7) / 8);
+		} else {
+			CheckpointCloneCost pixels("bitmap pixels");
+			pixel->snapshot = BitmapSnapshot::Freeze(source);
+		}
+		// Another thread freezing an owner of the same image may have frozen it first; its copy is the one kept.
+		const auto [kept, claimed] = m_BitmapSources.TryEmplace(source, pixel);
+		if (claimed) m_Bitmaps.InsertOrAssign(&pixel->bitmap, pixel);
+		recent = {source, &kept->bitmap};
+		return &kept->bitmap;
+	}
+	BITMAP* CheckpointNativeSnapshot::ReadBitmap(const BITMAP* source) {
+		BITMAP* bitmap = Freeze(const_cast<BITMAP*>(source));
+		if (!bitmap) return nullptr;
+		auto pixel = m_BitmapSources.Find(source);
+		if (!pixel) pixel = m_Bitmaps.Find(bitmap);
+		if (!pixel) throw std::logic_error("a saved bitmap has no pixel owner");
+		(*pixel)->Materialize();
+		return bitmap;
+	}
+	void CheckpointNativeSnapshot::AppendBitmapReadValues(std::vector<CheckpointNativeStorage::RootRange>& roots) const {
+		m_BitmapSources.ForEach([&](const BITMAP* source, const std::shared_ptr<Pixel>& pixel) {
+			roots.push_back({source, &pixel->bitmap, sizeof(BITMAP), true});
+			roots.push_back({&pixel->table, &pixel->table, sizeof(pixel->table), true});
+			if (pixel->materialized.load(std::memory_order_acquire)) {
+				roots.push_back({pixel->lines.data(), pixel->lines.data(), pixel->lines.size() * sizeof(uint8_t*), true});
+				roots.push_back({pixel->bytes.data(), pixel->bytes.data(), pixel->bytes.size(), true});
+			}
+		});
+	}
+	std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> CheckpointNativeSnapshot::Pixels(const BITMAP* bitmap) const {
+		auto found = m_BitmapSources.Find(bitmap);
+		if (!found) found = m_Bitmaps.Find(bitmap);
+		if (!found) return {};
+		return std::pair{(*found)->snapshot, (*found)->Text()};
+	}
+	std::optional<const std::string*> CheckpointNativeSnapshot::BitmapPath(const BITMAP* bitmap, int& depth) const {
+		auto found = m_BitmapSources.Find(bitmap);
+		if (!found) found = m_Bitmaps.Find(bitmap);
+		if (!found) return {};
+		const auto& paths = (*found)->paths;
+		if (depth < 0) for (size_t index = 0; index < paths.size(); ++index) if (paths[index]) { depth = static_cast<int>(index); return &*paths[index]; }
+		if (depth >= 0 && static_cast<size_t>(depth) < paths.size() && paths[depth]) return &*paths[depth];
+		return static_cast<const std::string*>(nullptr);
+	}
+	void CheckpointNativeSnapshot::MaterializePixels() const {
+		m_Bitmaps.ForEach([](const BITMAP*, const std::shared_ptr<Pixel>& pixel) { pixel->Materialize(); });
+	}
+	void* CheckpointNativeSnapshot::AllocateFrozen(size_t bytes, size_t alignment) {
+		static constexpr size_t c_StorageBytes = size_t{256} << 10;
+		const auto own = [&](size_t size, size_t align) {
+			std::shared_ptr<void> storage = CheckpointBuffer::AllocateCaptureBytes(size, align);
+			if (CheckpointNativeStorage::Reading()) {
+				const auto values = CheckpointNativeStorage::CurrentViews().privateValues;
+				void* data = storage.get();
+				CheckpointNativeStorage::RememberPrivate(data, size, true);
+				try {
+					storage = std::shared_ptr<void>(data, [keep = storage, values](void* address) noexcept {
+						CheckpointNativeStorage::ForgetPrivate(values, address);
+					});
+				} catch (...) { CheckpointNativeStorage::ForgetPrivate(values, data); throw; }
+			}
+			const uintptr_t base = reinterpret_cast<uintptr_t>(storage.get());
+			{
+				OwnerShard& shard = Owners();
+				std::lock_guard lock(shard.mutex);
+				shard.storage.push_back(std::move(storage));
+			}
+			return base;
+		};
+		if (bytes > c_StorageBytes / 8 || alignment > alignof(std::max_align_t)) return reinterpret_cast<void*>(own(bytes, alignment));
+		struct Cursor { uint64_t snapshot = 0; uintptr_t at = 0, end = 0; };
+		thread_local Cursor cursor;
+		if (cursor.snapshot != m_Serial) cursor = {m_Serial, 0, 0};
+		uintptr_t at = (cursor.at + alignment - 1) & ~(alignment - 1);
+		if (!cursor.at || at + bytes > cursor.end) {
+			const uintptr_t base = own(c_StorageBytes, alignof(std::max_align_t));
+			cursor.end = base + c_StorageBytes;
+			at = (base + alignment - 1) & ~(alignment - 1);
+		}
+		cursor.at = at + bytes;
+		return reinterpret_cast<void*>(at);
+	}
+	CheckpointText CheckpointNativeSnapshot::FreezeWriter(const Serializable* source) {
+		if (const auto known = m_WriterValues.Find(source)) return *known;
+		CheckpointCloneCost cost("Writer text");
+		const Entity* ownedSource = nullptr;
+		if (const auto* entity = dynamic_cast<const Entity*>(source)) {
+			try { ownedSource = Object(entity); }
+			catch (const UnsupportedCheckpointNative&) {}
+		}
+		if (ownedSource) {
+			auto values = CheckpointText::DeferredWriter([this, ownedSource] {
+				ReadScope frozen(this);
+				CheckpointWriter::BatchOverride owned(false);
+				CheckpointWriter::CacheScope uncached(nullptr);
+				return Writer::Capture([ownedSource](Writer& writer) { writer << ownedSource; }, 1);
+			});
+			return m_WriterValues.TryEmplace(source, std::move(values)).first;
+		}
+		CheckpointWriter::BatchOverride owned(false);
+		CheckpointWriter::CacheScope uncached(nullptr);
+		auto values = Writer::Capture([source](Writer& writer) { writer << source; }, 1);
+		return m_WriterValues.TryEmplace(source, std::move(values)).first;
+	}
+	CheckpointNativeSnapshot::~CheckpointNativeSnapshot() {
+		// A freeze that stopped early leaves claimed storage that was never constructed.
+		m_Reserved.ForEach([](const Entity*, const Reservation& reserved) { if (!reserved.frozenStorage) reserved.type->DeallocateCheckpointMemory(reserved.memory); });
+		for (auto& shard: m_OwnerShards) for (auto& object: shard->owners) if (Entity* value = std::exchange(object, nullptr)) delete value;
+		for (auto& shard: m_OwnerShards) for (auto& [value, destroy]: shard->values) if (value) destroy(value);
+	}
+
+	Entity::Entity(const Entity& source, CheckpointNativeSnapshot& snapshot) :
+		m_IsOriginalPreset(source.m_IsOriginalPreset), m_DefinedInModule(source.m_DefinedInModule),
+		m_RandomWeight(source.m_RandomWeight),
+		m_CheckpointWriteGeneration(source.m_CheckpointWriteGeneration), m_FrozenCheckpointNative(true), m_CheckpointSnapshot(&snapshot) {
+		m_CheckpointOwnerSlot = snapshot.Bind(source, this);
+		snapshot.FreezeMetadata(*this, source);
+		const Entity* preset = nullptr;
+		{
+			CheckpointCloneCost cost("preset lookup");
+			preset = snapshot.PresetFor(source);
+		}
+		m_CheckpointPreset = snapshot.PresetIdentity(preset);
+	}
+	size_t CheckpointNativeSnapshot::PresetHash::operator()(const PresetName& key) const noexcept {
+		return std::hash<std::string_view>{}(key.name) ^ (std::hash<const void*>{}(key.type) * 31) ^ (static_cast<size_t>(key.module) * 0x9E3779B97F4A7C15ULL);
+	}
+	const Entity* CheckpointNativeSnapshot::PresetFor(const Entity& source) {
+		// The answer GetPresetForCopy gives, which a capture's thousands of copies of a few presets would each look up again.
+		const std::string& name = source.m_IsOriginalPreset || source.m_CopiedFromPresetName.empty() ? source.m_PresetName : source.m_CopiedFromPresetName;
+		if (name.empty() || name == "None") return nullptr;
+		const PresetName key{&source.GetClassName(), source.m_DefinedInModule, name};
+		auto& shard = m_Presets[PresetHash{}(key) % m_Presets.size()];
+		{
+			std::lock_guard lock(shard.mutex);
+			if (const auto found = shard.presets.find(key); found != shard.presets.end()) return found->second;
+		}
+		const Entity* preset = source.GetPresetForCopy();
+		std::lock_guard lock(shard.mutex);
+		shard.presets.try_emplace(PresetKey{key.type, key.module, name}, preset);
+		return preset;
+	}
+	const Entity* CheckpointNativeSnapshot::PresetIdentity(const Entity* source) {
+		if (!source) return nullptr;
+		auto& recent = Recent<2>(source);
+		if (recent.first == source) return static_cast<const Entity*>(recent.second);
+		auto reference = m_PresetReferences.Find(source);
+		if (!reference) {
+			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+			auto values = std::make_shared<PresetReference>();
+			values->identity.m_FrozenCheckpointNative = true;
+			values->identity.m_PresetName = source->m_PresetName;
+			values->identity.m_DefinedInModule = source->m_DefinedInModule;
+			if (const auto* movable = dynamic_cast<const MovableObject*>(source)) values->scripts.assign(movable->GetAllLoadedScripts().begin(), movable->GetAllLoadedScripts().end());
+			reference = m_PresetReferences.TryEmplace(source, std::move(values)).first;
+			m_PresetScripts.TryEmplace(&(*reference)->identity, *reference);
+		}
+		recent = {source, &(*reference)->identity};
+		return &(*reference)->identity;
+	}
+	bool CheckpointNativeSnapshot::PresetHasScript(const Entity* identity, const std::string& path) const {
+		const auto reference = m_PresetScripts.Find(identity);
+		if (!reference) throw std::logic_error("unknown frozen preset reference");
+		const auto& scripts = (*reference)->scripts;
+		return std::find(scripts.begin(), scripts.end(), path) != scripts.end();
+	}
+	Entity* Entity::FreezeCheckpointNative(CheckpointNativeSnapshot&) const {
+		throw UnsupportedCheckpointNative("native checkpoint snapshot is not implemented for " + GetClassName());
+	}
+	void CheckpointNativeSnapshot::AssignEntity(Entity& target, const Entity& source) {
+		target.m_FrozenCheckpointNative = true;
+		target.m_CheckpointSnapshot = this;
+		target.m_CheckpointOwnerSlot = Bind(source, &target);
+		target.m_IsOriginalPreset = source.m_IsOriginalPreset;
+		target.m_DefinedInModule = source.m_DefinedInModule;
+		FreezeMetadata(target, source);
+		target.m_RandomWeight = source.m_RandomWeight;
+		target.m_CheckpointWriteGeneration = source.m_CheckpointWriteGeneration;
+		target.m_CheckpointPreset = PresetIdentity(PresetFor(source));
+	}
+	void CheckpointNativeSnapshot::FreezeMetadata(Entity& target, const Entity& source) {
+		CheckpointCloneCost cost("entity metadata");
+		const auto remember = [&](const Metadata* value) {
+			target.m_CheckpointMetadata = value;
+			m_MetadataGeneration.fetch_add(1, std::memory_order_release);
+		};
+		static const Metadata empty;
+		if (source.m_PresetName.empty() && source.m_CopiedFromPresetName.empty() && source.m_PresetDescription.empty() && source.m_FormattedReaderPosition.empty() && source.m_Groups.empty()) { remember(&empty); return; }
+		const auto sourceGroups = CheckpointValues(source.m_Groups);
+		const auto equal = [&source, &sourceGroups](const Metadata& value) {
+			return value.name == source.m_PresetName && value.copied == source.m_CopiedFromPresetName && value.description == source.m_PresetDescription && value.reader == source.m_FormattedReaderPosition && value.groups.size() == sourceGroups.size() &&
+			    std::all_of(sourceGroups.begin(), sourceGroups.end(), [&value](const auto& group) { return value.groups.contains(group); });
+		};
+		struct Cache { uint64_t snapshot = 0; std::array<const Metadata*, 1024> values{}; };
+		// On the heap: glibc places static thread-locals at the top of every thread's stack, a library's small ones too.
+		thread_local std::unique_ptr<Cache> cache;
+		if (!cache) cache = std::make_unique<Cache>();
+		if (cache->snapshot != m_Serial) { cache->values.fill(nullptr); cache->snapshot = m_Serial; }
+		const size_t local = (std::hash<std::string>{}(source.m_PresetName) ^ std::hash<std::string>{}(source.m_CopiedFromPresetName) ^
+		    std::hash<std::string>{}(source.m_FormattedReaderPosition) ^ (reinterpret_cast<uintptr_t>(&source.GetClass()) >> 4)) % cache->values.size();
+		if (const Metadata* recent = cache->values[local]; recent && equal(*recent)) { remember(recent); return; }
+		size_t groups = 0;
+		for (const std::string& group: sourceGroups) groups += std::hash<std::string>{}(group);
+		const size_t hash = std::hash<std::string>{}(source.m_PresetDescription) ^ (std::hash<std::string>{}(source.m_FormattedReaderPosition) * 31) ^ groups ^ std::hash<std::string>{}(source.m_PresetName) ^ (std::hash<std::string>{}(source.m_CopiedFromPresetName) * 17);
+		auto& shard = m_Metadata[hash % m_Metadata.size()];
+		std::lock_guard lock(shard.mutex);
+		const auto [first, last] = shard.values.equal_range(hash);
+		for (auto at = first; at != last; ++at) if (equal(*at->second)) { cache->values[local] = at->second.get(); remember(cache->values[local]); return; }
+		auto value = std::make_unique<Metadata>(Metadata{source.m_PresetName, source.m_CopiedFromPresetName, source.m_PresetDescription, source.m_FormattedReaderPosition, Freeze(source.m_Groups)});
+		const Metadata* kept = value.get();
+		shard.values.emplace(hash, std::move(value));
+		cache->values[local] = kept; remember(kept);
+	}
+	void CheckpointNativeSnapshot::MaterializeMetadata() const {
+		if (!m_BoundarySealed.load(std::memory_order_acquire)) throw std::logic_error("native checkpoint values read before the boundary was sealed");
+		// A read scope expands only the values added since the last successful expansion.
+		const uint64_t observed = m_MetadataGeneration.load(std::memory_order_acquire);
+		if (m_MaterializedGeneration.load(std::memory_order_acquire) == observed) return;
+		std::lock_guard ready(m_MetadataReady);
+		const uint64_t generation = m_MetadataGeneration.load(std::memory_order_acquire);
+		if (m_MaterializedGeneration.load(std::memory_order_relaxed) == generation) return;
+		std::vector<OwnerShard*> shards;
+		{
+			std::lock_guard lock(m_OwnerRegistryMutex);
+			for (const auto& shard: m_OwnerShards) shards.push_back(shard.get());
+		}
+		for (OwnerShard* shard: shards) {
+			for (;;) {
+				DeferredValue work;
+				{
+					std::lock_guard lock(shard->mutex);
+					if (shard->deferredReady == shard->deferred.size()) break;
+					work = shard->deferred[shard->deferredReady];
+				}
+				CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+				if (work.run) work.run(work.value);
+				++shard->deferredReady;
+			}
+		}
+		m_Objects.ForEach([](const Entity*, Entity* target) {
+			if (const auto* value = static_cast<const Metadata*>(target->m_CheckpointMetadata)) {
+				target->m_PresetName = value->name;
+				target->m_CopiedFromPresetName = value->copied;
+				target->m_PresetDescription = value->description;
+				target->m_FormattedReaderPosition = value->reader;
+				target->m_Groups = value->groups;
+				// Later saved values must not replace fields a private getter has changed.
+				target->m_CheckpointMetadata = nullptr;
+			}
+		});
+		m_MaterializedGeneration.store(generation, std::memory_order_release);
+	}
+	void CheckpointNativeSnapshot::ForgetFailedValues(const void* target, size_t bytes) {
+		const auto contains = [start = reinterpret_cast<uintptr_t>(target), bytes](const void* value) {
+			const auto address = reinterpret_cast<uintptr_t>(value);
+			return address >= start && address - start < bytes;
+		};
+		std::lock_guard ready(m_MetadataReady);
+		m_Values.EraseIf(contains);
+		m_Objects.EraseIf(contains);
+		m_UIDs.EraseIf(contains);
+		{
+			std::lock_guard lock(m_ReadValuesMutex);
+			std::erase_if(m_ReadValues, [&](const auto& root) { return contains(root.view); });
+		}
+		std::lock_guard owners(m_OwnerRegistryMutex);
+		for (const auto& shard: m_OwnerShards) {
+			std::lock_guard lock(shard->mutex);
+			for (auto& work: shard->deferred) if (contains(work.target)) work.run = nullptr;
+		}
+	}
+	std::string_view CheckpointNativeSnapshot::OwnBytes(std::string_view source) {
+		void* memory = AllocateFrozen(source.size(), alignof(char));
+		if (!memory) {
+			auto storage = CheckpointBuffer::AllocateCaptureBytes(source.size());
+			memory = storage.get();
+			OwnerShard& shard = Owners();
+			std::lock_guard lock(shard.mutex);
+			shard.storage.push_back(std::move(storage));
+		}
+		std::memcpy(memory, source.data(), source.size());
+		return {static_cast<const char*>(memory), source.size()};
+	}
 	thread_local unsigned int Entity::s_CheckpointCloneDepth = 0;
+	thread_local void* Entity::s_DeletedCheckpointMemory = nullptr;
 	bool Entity::IsCheckpointClone() { return s_CheckpointCloneDepth != 0 || MovableObject::IsFaithfulClone(); }
 
 	void Entity::ReportCheckpointValueWrite() {
@@ -43,12 +526,19 @@ namespace RTE {
 	Entity::ClassInfo* Entity::ClassInfo::s_ClassHead = 0;
 
 	Entity::Entity() {
+		if (CheckpointNativeStorage::Reading()) m_CheckpointAllocation = const_cast<void*>(CheckpointNativeStorage::PrivateAllocation(this));
 		Clear();
 		CaptureSentinel::NoteCreation("Entity", this);
 	}
 
 	Entity::~Entity() {
+		if (m_FrozenCheckpointNative) {
+			if (m_CheckpointOwnerSlot) *m_CheckpointOwnerSlot = nullptr;
+			if (m_CheckpointAllocation) s_DeletedCheckpointMemory = m_CheckpointAllocation;
+			return;
+		}
 		Destroy(true);
+		if (m_CheckpointAllocation) s_DeletedCheckpointMemory = m_CheckpointAllocation;
 	}
 
 	void Entity::Clear() {
@@ -160,7 +650,7 @@ namespace RTE {
 
 		// Is an original preset definition
 		if (identity ? identity->original : m_IsOriginalPreset) {
-			writer.NewPropertyWithValue("PresetName", identity ? identity->name : m_PresetName);
+			writer.NewPropertyWithValue("PresetName", identity ? identity->name : m_PresetName.Value());
 
 			if (!m_PresetDescription.empty()) {
 				writer.NewPropertyWithValue("Description", m_PresetDescription);
@@ -198,13 +688,40 @@ namespace RTE {
 	}
 
 	const Entity* Entity::GetPresetForCopy() const {
+		if (m_FrozenCheckpointNative) return m_CheckpointPreset;
 		const std::string& name = m_IsOriginalPreset || m_CopiedFromPresetName.empty() ? m_PresetName : m_CopiedFromPresetName;
+		if (CheckpointWriter::BatchEnabled() && !name.empty() && name != "None") {
+			if (auto* cache = CheckpointWriter::CurrentCache()) return cache->FindPreset(GetClassName(), name, m_DefinedInModule);
+		}
 		return name.empty() || name == "None" ? nullptr : g_PresetMan.GetEntityPreset(GetClassName(), name, m_DefinedInModule);
 	}
 
 	void Entity::SaveSnapshotIdentity(Writer& writer) const {
 		const auto* identity = writer.IdentityOverride(this);
-		const auto& name = identity ? identity->name : m_PresetName;
+		const auto& name = identity ? identity->name : m_PresetName.Value();
+		if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+			struct Fields {
+				std::string name, description;
+				int module;
+				std::vector<std::string> groups;
+			};
+			Fields fields{name, m_PresetDescription, identity ? identity->module : m_DefinedInModule,
+			    {m_Groups.begin(), m_Groups.end()}};
+			size_t bytes = sizeof(fields) + fields.name.size() + fields.description.size() + fields.groups.size() * sizeof(std::string);
+			for (const std::string& group: fields.groups) bytes += group.size();
+			const int indent = writer.GetIndent();
+			writer.Append(CheckpointText::Deferred([fields = std::move(fields), indent]() mutable {
+				std::sort(fields.groups.begin(), fields.groups.end());
+				return Writer::Capture([&](Writer& output) {
+					output.NewPropertyWithValue("SpecialBehaviour_PresetName", fields.name.empty() ? CheckpointText("~") : CheckpointText(fields.name).Base64());
+					output.NewPropertyWithValue("SpecialBehaviour_Description", fields.description.empty() ? CheckpointText("~") : CheckpointText(fields.description).Base64());
+					output.NewPropertyWithValue("SpecialBehaviour_ModuleID", fields.module);
+					output.NewPropertyWithValue("SpecialBehaviour_ClearGroups", true);
+					for (const std::string& group: fields.groups) output.NewPropertyWithValue("AddToGroup", group);
+				}, indent).Text();
+			}, bytes));
+			return;
+		}
 		writer.NewPropertyWithValue("SpecialBehaviour_PresetName", name.empty() ? CheckpointText("~") : CheckpointText(name).Base64());
 		writer.NewPropertyWithValue("SpecialBehaviour_Description", m_PresetDescription.empty() ? CheckpointText("~") : CheckpointText(m_PresetDescription).Base64());
 		writer.NewPropertyWithValue("SpecialBehaviour_ModuleID", identity ? identity->module : m_DefinedInModule);
@@ -269,11 +786,12 @@ namespace RTE {
 		return reader;
 	}
 
-	Entity::ClassInfo::ClassInfo(const std::string& name, ClassInfo* parentInfo, MemoryAllocate allocFunc, MemoryDeallocate deallocFunc, Entity* (*newFunc)(), int allocBlockCount) :
+	Entity::ClassInfo::ClassInfo(const std::string& name, ClassInfo* parentInfo, MemoryAllocate allocFunc, MemoryDeallocate deallocFunc, Entity* (*newFunc)(), int allocBlockCount, size_t instanceBytes, size_t instanceAlignment) :
 	    m_Name(name),
 	    m_ParentInfo(parentInfo),
 	    m_Allocate(allocFunc),
 	    m_Deallocate(deallocFunc),
+	    m_InstanceBytes(instanceBytes), m_InstanceAlignment(instanceAlignment),
 	    m_NewInstance(newFunc),
 	    m_NextClass(s_ClassHead) {
 		s_ClassHead = this;
@@ -344,14 +862,26 @@ namespace RTE {
 	}
 
 	void* Entity::ClassInfo::GetPoolMemory() {
+		if (CheckpointNativeStorage::Reading()) {
+			void* memory = AllocateCheckpointMemory();
+			try { CheckpointNativeStorage::RememberPrivate(memory, m_InstanceBytes); }
+			catch (...) { m_Deallocate(memory); throw; }
+			return memory;
+		}
+#ifndef __SANITIZE_ADDRESS__
+		std::lock_guard<std::mutex> guard(m_Mutex);
+#endif
+		if (CheckpointNativeStorage::Enabled() && m_InstanceBytes) {
+			void* memory = CheckpointNativeStorage::Allocate(m_InstanceBytes, m_InstanceAlignment);
+			++m_InstancesInUse;
+			return memory;
+		}
 #ifdef __SANITIZE_ADDRESS__
 		// If compiled with ASan, sidestep pooling and just use the allocator normally.
 
 		void* foundMemory = m_Allocate();
 		RTEAssert(foundMemory, "m_Allocate failed! to make memory!");
 #else
-
-		std::lock_guard<std::mutex> guard(m_Mutex);
 
 		RTEAssert(IsConcrete(), "Trying to get pool memory of an abstract Entity class!");
 
@@ -377,19 +907,42 @@ namespace RTE {
 		if (!returnedMemory) {
 			return 0;
 		}
+		if (s_DeletedCheckpointMemory == returnedMemory) {
+			s_DeletedCheckpointMemory = nullptr;
+			CheckpointNativeStorage::ForgetPrivate(returnedMemory);
+			m_Deallocate(returnedMemory);
+			return 0;
+		}
+		// A frozen object built in its snapshot's storage gives nothing back; the snapshot frees the storage.
+		if (s_DeletedCheckpointMemory == CheckpointNativeSnapshot::FrozenStorageMark(returnedMemory)) {
+			s_DeletedCheckpointMemory = nullptr;
+			return 0;
+		}
+		if (CheckpointNativeStorage::ForgetPrivate(returnedMemory)) { m_Deallocate(returnedMemory); return 0; }
+#ifndef __SANITIZE_ADDRESS__
+		std::lock_guard<std::mutex> guard(m_Mutex);
+#endif
+		if (CheckpointNativeStorage::Deallocate(returnedMemory)) return --m_InstancesInUse;
 
 #ifdef __SANITIZE_ADDRESS__
 		// If compiled with ASan, sidestep pooling and just use the allocator normally.
 		m_Deallocate(returnedMemory);
 #else
-		std::lock_guard<std::mutex> guard(m_Mutex);
-		m_AllocatedPool.push_back(returnedMemory);
+		try { m_AllocatedPool.push_back(returnedMemory); }
+		catch (const std::bad_alloc&) { m_Deallocate(returnedMemory); }
 #endif
 
 		// Keep track of the number of instances passed in
 		m_InstancesInUse--;
 
 		return m_InstancesInUse;
+	}
+
+	void* Entity::ClassInfo::AllocateCheckpointMemory() {
+		if (!IsConcrete()) throw std::runtime_error("cannot allocate an abstract native checkpoint value");
+		void* memory = m_Allocate();
+		if (!memory) throw std::bad_alloc();
+		return memory;
 	}
 
 	std::string Entity::ClassInfo::GetPoolMemoryCounts() {
@@ -423,3 +976,7 @@ namespace RTE {
 		}
 	}
 } // namespace RTE
+
+bool RTE::Entity::IsInFrozenGroup(const std::string& whichGroup) const {
+	return CheckpointContains(CheckpointNativeStorage::Source(this)->m_Groups, whichGroup);
+}

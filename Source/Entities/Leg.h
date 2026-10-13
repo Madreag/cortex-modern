@@ -22,6 +22,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a Leg object in system memory. Create() should be called before using the object.
 		Leg();
+		CheckpointSnapshotMethods(Leg);
 
 		/// Makes the Leg object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
@@ -126,7 +127,7 @@ namespace RTE {
 		float m_MoveSpeed; //!< How fast the Leg moves to a reach target, 0 means it doesn't and 1 means it moves instantly.
 
 	private:
-		std::string m_PersistedLegRuntime;
+		CheckpointString m_PersistedLegRuntime;
 		std::string SaveLegRuntime() const;
 		bool LoadLegRuntime(std::string_view text, bool validateOnly = false);
 

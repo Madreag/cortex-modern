@@ -1,4 +1,5 @@
 #include "GUI.h"
+#include "CheckpointFrozenContainers.h"
 
 #include <cassert>
 
@@ -22,7 +23,7 @@ GUIProperties::~GUIProperties() {
 
 void GUIProperties::Clear() {
 	// Free the list
-	std::vector<PropVariable*>::iterator it;
+	CheckpointVector<PropVariable*>::iterator it;
 
 	for (it = m_VariableList.begin(); it != m_VariableList.end(); it++) {
 		PropVariable* p = *it;
@@ -69,7 +70,7 @@ void GUIProperties::AddVariable(const std::string& Variable, bool Value) {
 
 bool GUIProperties::SetValue(const std::string& Variable, const std::string& Value) {
 	// Find the property
-	std::vector<PropVariable*>::iterator it;
+	CheckpointVector<PropVariable*>::iterator it;
 
 	for (it = m_VariableList.begin(); it != m_VariableList.end(); it++) {
 		PropVariable* p = *it;
@@ -95,7 +96,7 @@ bool GUIProperties::SetValue(const std::string& Variable, int Value) {
 void GUIProperties::Update(GUIProperties* Props, bool Add) {
 	assert(Props);
 
-	std::vector<PropVariable*>::iterator it1;
+	CheckpointVector<PropVariable*>::iterator it1;
 
 	for (it1 = Props->m_VariableList.begin(); it1 != Props->m_VariableList.end(); it1++) {
 		const PropVariable* Src = *it1;
@@ -108,8 +109,15 @@ void GUIProperties::Update(GUIProperties* Props, bool Add) {
 }
 
 bool GUIProperties::GetValue(const std::string& Variable, std::string* Value) {
+	if (CheckpointNativeStorage::IsView(this)) {
+		for (const auto* address: CheckpointValues(m_VariableList)) {
+			const auto* property = CheckpointNativeStorage::Source(address);
+			if (stricmp(property->m_Name.c_str(), Variable.c_str()) == 0) { *Value = property->m_Value.Value(); return true; }
+		}
+		return false;
+	}
 	// Find the property
-	std::vector<PropVariable*>::iterator it;
+	CheckpointVector<PropVariable*>::iterator it;
 
 	for (it = m_VariableList.begin(); it != m_VariableList.end(); it++) {
 		const PropVariable* p = *it;
@@ -244,7 +252,7 @@ std::string GUIProperties::ToString() {
 	std::string OutString = "";
 
 	// Go through each value
-	std::vector<PropVariable*>::iterator it;
+	CheckpointVector<PropVariable*>::iterator it;
 	for (it = m_VariableList.begin(); it != m_VariableList.end(); it++) {
 		const PropVariable* V = *it;
 
@@ -266,7 +274,7 @@ bool GUIProperties::GetVariable(int Index, std::string* Name, std::string* Value
 		return false;
 	}
 
-	const PropVariable* P = (PropVariable*)m_VariableList.at(Index);
+	const PropVariable* P = CheckpointNativeStorage::Source(CheckpointNativeStorage::IsView(this) ? CheckpointValues(m_VariableList)[Index] : m_VariableList.at(Index));
 	if (Name) {
 		*Name = P->m_Name;
 	}

@@ -22,6 +22,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate an ADSensor object in system memory. Create() should be called before using the object.
 		ADSensor();
+		ADSensor(const ADSensor& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Makes the ADSensor object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.

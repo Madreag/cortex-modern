@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "Entity.h"
 #include "Material.h"
 
@@ -20,6 +22,8 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a TerrainDebris object in system memory. Create() should be called before using the object.
 		TerrainDebris();
+		CheckpointSnapshotMethods(TerrainDebris);
+		static void PrepareCheckpointNative(const TerrainDebris& source, TerrainDebris* target, CheckpointNativeSnapshot& snapshot);
 
 		/// Makes the TerrainDebris object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
@@ -66,7 +70,7 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 
 		ContentFile m_DebrisFile; //!< ContentFile containing the path to the debris sprites.
-		std::vector<BITMAP*> m_Bitmaps; //!< All the different bitmaps of this debris. Not owned.
+		CheckpointVector<BITMAP*> m_Bitmaps; //!< All the different bitmaps of this debris. Not owned.
 		int m_BitmapCount; //!< How many individual pieces this debris has.
 
 		Material m_Material; //!< The Material of the debris.

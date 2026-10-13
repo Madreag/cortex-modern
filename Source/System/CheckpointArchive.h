@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointString.h"
+#include "CheckpointFrozenContainers.h"
+
 #include "Timer.h"
 #include "Vector.h"
 #include "Box.h"
@@ -7,6 +10,7 @@
 #include "Writer.h"
 
 #include <array>
+#include <atomic>
 #include <bit>
 #include <charconv>
 #include <cstring>
@@ -35,14 +39,43 @@ namespace RTE {
 	// Native pointers are deliberately excluded: their owners encode stable graph links.
 	class CheckpointWriter {
 	public:
-		explicit CheckpointWriter(std::string_view version) : m_Recording(IsCapturing()) { Value(std::string(version)); }
+		struct FieldsOnly {};
+		explicit CheckpointWriter(FieldsOnly) : m_Recording(IsCapturing()), m_Capture(!(s_Capture && s_Capture->inlineOutput)),
+		    m_Output(s_Capture ? s_Capture->inlineOutput : nullptr) {}
+		explicit CheckpointWriter(std::string_view version) : CheckpointWriter(FieldsOnly{}) {
+			if (m_Recording && BatchEnabled()) Buffer().String(version); else Value(std::string(version));
+		}
 		const std::string& Text() const {
 			if (!m_Recording) return m_Text;
+			if (m_Output) {
+				if (s_Capture->inlineWritten) throw std::logic_error("nested checkpoint capture requires Native");
+				s_Capture->inlineWritten = true;
+				return m_Text;
+			}
 			if (s_Capture->output) throw std::logic_error("nested checkpoint capture requires Native");
-			s_Capture->output = m_Capture.Finish();
+			s_Capture->output = Buffer().Finish();
 			return m_Text;
 		}
 		static bool IsCapturing() { return s_Capture != nullptr; }
+		/// Enables owned value batches for joined multiplayer checkpoint workers.
+		class BatchScope {
+		public:
+			explicit BatchScope(bool enabled, bool releasePreparedOnWorker = false) : m_Enabled(enabled), m_Arenas(enabled, releasePreparedOnWorker) { if (m_Enabled) s_Batches.fetch_add(1, std::memory_order_relaxed); }
+			~BatchScope() { if (m_Enabled) s_Batches.fetch_sub(1, std::memory_order_relaxed); }
+			BatchScope(const BatchScope&) = delete;
+			BatchScope& operator=(const BatchScope&) = delete;
+		private:
+			bool m_Enabled;
+			CheckpointBuffer::ArenaPoolScope m_Arenas;
+		};
+		class BatchOverride {
+		public:
+			explicit BatchOverride(bool enabled) : m_Previous(s_BatchOverride) { s_BatchOverride = enabled; }
+			~BatchOverride() { s_BatchOverride = m_Previous; }
+		private:
+			std::optional<bool> m_Previous;
+		};
+		static bool BatchEnabled() { return s_BatchOverride.value_or(s_Batches.load(std::memory_order_relaxed) != 0); }
 		class CacheScope {
 		public:
 			explicit CacheScope(CheckpointCache* cache) : m_Previous(s_Cache) { s_Cache = cache; }
@@ -53,6 +86,7 @@ namespace RTE {
 		static CheckpointCache* CurrentCache() { return s_Cache; }
 		/// Captures an existing checkpoint visitor into owned values.
 		static CheckpointText CaptureNative(const std::function<std::string()>& visit) {
+			CheckpointBuffer::AllocationScope allocation(BatchEnabled());
 			CaptureScope scope;
 			std::string existing = visit();
 			if (scope.output && !existing.empty()) throw std::logic_error("checkpoint capture result has uncaptured text");
@@ -62,28 +96,44 @@ namespace RTE {
 			return IsCapturing() ? CaptureNative(visit) : CheckpointText(visit());
 		}
 		static CheckpointText CaptureValues(const std::function<CheckpointText()>& visit) {
+			CheckpointBuffer::AllocationScope allocation(BatchEnabled());
 			CaptureScope scope;
 			CheckpointText result = visit();
 			if (scope.output) throw std::logic_error("checkpoint capture result was not consumed");
 			return result;
 		}
-		template <class... Values> void operator()(const Values&... values) { (Value(values), ...); }
+		template <class... Values> void operator()(const Values&... values) {
+			if (m_Recording && BatchEnabled()) {
+				CaptureFields<0>(std::forward_as_tuple(values...));
+			} else {
+				(Value(values), ...);
+			}
+		}
 		/// Writes values only this machine holds (its clocks, pacing, seat or view): the archive carries them as before,
 		/// and the shared state a peer is compared on leaves them out.
 		template <class... Values> void PerPeer(const Values&... values) {
 			BeginPerPeer();
-			(Value(values), ...);
+			(*this)(values...);
 			EndPerPeer();
 		}
 		/// Opens and closes such a run around values a visitor writes itself.
-		void BeginPerPeer() { if (m_Recording) m_Capture.PeerBegin(); }
-		void EndPerPeer() { if (m_Recording) m_Capture.PeerEnd(); }
+		void BeginPerPeer() { if (m_Recording) Buffer().PeerBegin(); }
+		void EndPerPeer() { if (m_Recording) Buffer().PeerEnd(); }
+		/// Appends an owned sequence that already carries its counts and element lengths.
+		void AppendFields(const CheckpointText& value) {
+			if (m_Recording) { RefuseDivertedValue(); Buffer().Child(value); }
+			else m_Text += value.Text();
+		}
+		template<class Visit> void NativeValue(Visit visit) {
+			if (m_Recording && BatchEnabled()) InlineNative(visit);
+			else Value(Native(visit));
+		}
 
 		template <class T> requires std::is_integral_v<T>
 		void Value(T value) {
 			if (m_Recording) {
-				if constexpr (std::is_signed_v<T>) m_Capture.Integer(static_cast<int64_t>(value), true);
-				else m_Capture.Unsigned(static_cast<uint64_t>(value), true);
+				if constexpr (std::is_signed_v<T>) Buffer().Integer(static_cast<int64_t>(value), true);
+				else Buffer().Unsigned(static_cast<uint64_t>(value), true);
 				return;
 			}
 			char buffer[32];
@@ -106,12 +156,13 @@ namespace RTE {
 		void Value(T value) { Value(static_cast<std::underlying_type_t<T>>(value)); }
 		void Value(float value) { Value(std::bit_cast<uint32_t>(value)); }
 		void Value(double value) { Value(std::bit_cast<uint64_t>(value)); }
+		void Value(const CheckpointString& value) { Value(value.Value()); }
 		void Value(const std::string& value) {
-			if (m_Recording) { RefuseDivertedValue(); m_Capture.String(value); return; }
+			if (m_Recording) { RefuseDivertedValue(); Buffer().String(value); return; }
 			Value(value.size()); m_Text += value; m_Text.push_back(' ');
 		}
 		void Value(const CheckpointText& value) {
-			if (m_Recording) { RefuseDivertedValue(); m_Capture.Child(value, true); } else Value(value.Text());
+			if (m_Recording) { RefuseDivertedValue(); Buffer().Child(value, true); } else Value(value.Text());
 		}
 		void Value(const Vector& value) { (*this)(value.m_X, value.m_Y); }
 		void Value(const Box& value) { (*this)(value.m_Corner, value.m_Width, value.m_Height); }
@@ -120,37 +171,348 @@ namespace RTE {
 		template <class T, size_t N> void Value(const std::array<T, N>& values) { for (const auto& value: values) Value(value); }
 		template <class T, size_t N> void Value(const T (&values)[N]) { for (const auto& value: values) Value(value); }
 		template <class T, class U> void Value(const std::pair<T, U>& value) { (*this)(value.first, value.second); }
-		template <class T> void Value(const std::vector<T>& values) { Value(values.size()); for (const auto& value: values) Value(value); }
+		template <class T, class Allocator> void Value(const std::vector<T, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); CheckpointForEachValue(values, [&](const auto& value) { Value(value); }); }
 		// vector<bool> packs bits, so its elements have no storage byte of their own to copy.
-		void Value(const std::vector<bool>& values) { Value(values.size()); for (bool value: values) Value(value ? 1u : 0u); }
-		template <class T> void Value(const std::list<T>& values) { Value(values.size()); for (const auto& value: values) Value(value); }
-		template <class T> void Value(const std::deque<T>& values) { Value(values.size()); for (const auto& value: values) Value(value); }
-		template <class T> void Value(const std::set<T>& values) { Value(values.size()); for (const auto& value: values) Value(value); }
-		template <class K, class V> void Value(const std::map<K, V>& values) { Value(values.size()); for (const auto& [key, value]: values) (*this)(key, value); }
-		template <class K, class V> void Value(const std::unordered_map<K, V>& values) { Value(std::map<K, V>(values.begin(), values.end())); }
+		template <class Allocator> void Value(const std::vector<bool, Allocator>& values) { Value(values.size()); CheckpointForEachValue(values, [&](bool value) { Value(value ? 1u : 0u); }); }
+		template <class T, class Allocator> void Value(const std::list<T, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); CheckpointForEachValue(values, [&](const auto& value) { Value(value); }); }
+		template <class T, class Allocator> void Value(const std::deque<T, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); CheckpointForEachValue(values, [&](const auto& value) { Value(value); }); }
+		template <class T, class Compare, class Allocator> void Value(const std::set<T, Compare, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); CheckpointForEachValue(values, [&](const auto& value) { Value(value); }); }
+		template <class K, class V, class Compare, class Allocator> void Value(const std::map<K, V, Compare, Allocator>& values) { if (CaptureSequence(values)) return; Value(values.size()); CheckpointForEachValue(values, [&](const auto& entry) { (*this)(entry.first, entry.second); }); }
+		template <class K, class V, class Hash, class Equal, class Allocator> void Value(const std::unordered_map<K, V, Hash, Equal, Allocator>& values) {
+			constexpr bool plainKey = (std::is_integral_v<K> && !std::is_same_v<K, bool>) || std::is_enum_v<K> || (std::is_same_v<K, std::string> || std::is_same_v<K, CheckpointString>);
+			constexpr bool plainValue = (std::is_integral_v<V> && !std::is_same_v<V, bool>) || std::is_enum_v<V> || std::is_same_v<V, float> || std::is_same_v<V, double> || (std::is_same_v<V, std::string> || std::is_same_v<V, CheckpointString>);
+			if constexpr (plainKey && plainValue) {
+				if (m_Recording && BatchEnabled()) {
+					if (values.empty()) { Value(size_t{0}); return; }
+					std::vector<std::pair<K, V>> owned;
+					owned.reserve(values.size());
+					CheckpointForEachValue(values, [&](const auto& entry) { owned.emplace_back(entry.first, entry.second); });
+					size_t bytes = owned.size() * sizeof(std::pair<K, V>);
+					if constexpr ((std::is_same_v<K, std::string> || std::is_same_v<K, CheckpointString>)) for (const auto& entry: owned) bytes += entry.first.size();
+					if constexpr ((std::is_same_v<V, std::string> || std::is_same_v<V, CheckpointString>)) for (const auto& entry: owned) bytes += entry.second.size();
+					AppendFields(CheckpointText::Deferred([owned = std::move(owned)] {
+						// Owned keys and values preserve the ordered-map constructor's input order.
+						const std::map<K, V> ordered(owned.begin(), owned.end());
+						return CaptureNative([&ordered] {
+							CheckpointWriter writer(FieldsOnly{});
+							writer(ordered);
+							return writer.Text();
+						}).Text();
+					}, bytes));
+					return;
+				}
+			}
+			std::map<K, V> ordered;
+			CheckpointForEachValue(values, [&](const auto& entry) { ordered.emplace(entry.first, entry.second); });
+			Value(ordered);
+		}
 		template <class T> requires requires(const T& value) { value.SaveCheckpoint(); }
 		void Value(const T& value) {
+			if (m_Recording && BatchEnabled() && s_Cache && s_Cache->IsTransient()) {
+				InlineNative([&value] { return value.SaveCheckpoint(); });
+				return;
+			}
 			CheckpointText captured = Native([&value] { return value.SaveCheckpoint(); });
 			if (m_Recording && s_Cache) captured = s_Cache->Remember(&value, 0, std::move(captured));
 			Value(captured);
 		}
 
 	private:
+		CheckpointBuffer& Buffer() const { return m_Output ? *m_Output : m_Capture; }
+		template<class T> static constexpr bool PlainOwnedValue() {
+			if constexpr (std::is_arithmetic_v<T> || std::is_enum_v<T> || (std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>) || std::is_same_v<T, Vector> || std::is_same_v<T, Box>) return true;
+			else if constexpr (CheckpointArray<T>) return PlainOwnedValue<typename T::value_type>();
+			else if constexpr (requires { typename T::first_type; typename T::second_type; }) return PlainOwnedValue<std::remove_const_t<typename T::first_type>>() && PlainOwnedValue<typename T::second_type>();
+			else if constexpr (requires { typename T::value_type; }) return PlainOwnedValue<typename T::value_type>();
+			else return false;
+		}
+		template<class T> static auto OwnValue(const T& value) {
+			if constexpr (std::is_same_v<T, CheckpointString>) return std::string(value.Value());
+			else if constexpr (std::is_same_v<T, bool>) {
+				unsigned char byte;
+				std::memcpy(&byte, &value, sizeof(byte));
+				return static_cast<unsigned int>(byte);
+			} else if constexpr (std::is_same_v<T, Vector>) return std::array{value.m_X, value.m_Y};
+			else if constexpr (std::is_same_v<T, Box>) return std::array{value.m_Corner.m_X, value.m_Corner.m_Y, value.m_Width, value.m_Height};
+			else if constexpr (CheckpointArray<T>) {
+				std::array<decltype(OwnValue(value[0])), std::tuple_size_v<T>> owned;
+				for (size_t index = 0; index < owned.size(); ++index) owned[index] = OwnValue(value[index]);
+				return owned;
+			} else if constexpr (requires { typename T::first_type; typename T::second_type; }) return std::pair{OwnValue(value.first), OwnValue(value.second)};
+			else if constexpr (!(std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>) && requires { typename T::value_type; }) {
+				std::vector<decltype(OwnValue(std::declval<const typename T::value_type&>()))> owned;
+				owned.reserve(value.size());
+				CheckpointForEachValue(value, [&](const auto& field) { owned.push_back(OwnValue(field)); });
+				return owned;
+			} else return value;
+		}
+		template<class T> static size_t OwnedValueBytes(const T& value) {
+			if constexpr (std::is_trivially_copyable_v<T>) return sizeof(T);
+			else if constexpr ((std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) return sizeof(T) + value.size();
+			else if constexpr (requires { typename T::first_type; typename T::second_type; }) return OwnedValueBytes(value.first) + OwnedValueBytes(value.second);
+			else if constexpr (requires { typename T::value_type; }) {
+				size_t bytes = sizeof(T);
+				for (const auto& field: value) bytes += OwnedValueBytes(field);
+				return bytes;
+			} else return sizeof(T);
+		}
+		template<class T> static void ExpandOwnedValue(std::string& text, const T& value, bool tape) {
+			if constexpr (CheckpointArray<T>) {
+				for (const auto& field: value) ExpandOwnedValue(text, field, tape);
+			} else if constexpr (requires { typename T::first_type; typename T::second_type; }) {
+				ExpandOwnedValue(text, value.first, tape); ExpandOwnedValue(text, value.second, tape);
+			} else if constexpr (!(std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>) && requires { typename T::value_type; }) {
+				ExpandOwnedValue(text, static_cast<uint64_t>(value.size()), tape);
+				for (const auto& field: value) ExpandOwnedValue(text, field, tape);
+			} else if constexpr ((std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) {
+				std::string packed(sizeof(uint64_t) + value.size(), '\0');
+				size_t at = 0;
+				WritePrimitive(packed.data(), at, value);
+				std::string_view bytes(packed);
+				DecodePrimitive<T>(text, bytes, tape);
+			} else {
+				std::array<char, sizeof(T)> packed;
+				std::memcpy(packed.data(), &value, sizeof(T));
+				std::string_view bytes(packed.data(), packed.size());
+				DecodePrimitive<T>(text, bytes, tape);
+			}
+		}
+		// The boundary owns values in wire order; collection packing belongs to the saver.
+		template<class Sequence> bool CaptureSequence(const Sequence& values) {
+			if constexpr (PlainOwnedValue<typename Sequence::value_type>()) {
+				if (m_Recording && BatchEnabled() && !values.empty()) {
+					using Value = decltype(OwnValue(std::declval<const typename Sequence::value_type&>()));
+					struct Owned {
+						std::shared_ptr<std::pmr::memory_resource> storage = CheckpointBuffer::LeaseCaptureStorage();
+						std::pmr::vector<Value> values{storage ? storage.get() : std::pmr::get_default_resource()};
+					};
+					auto owned = std::make_shared<Owned>();
+					owned->values.reserve(values.size());
+					size_t bytes = sizeof(Owned);
+					CheckpointForEachValue(values, [&](const auto& field) {
+						owned->values.push_back(OwnValue(field));
+						bytes += OwnedValueBytes(owned->values.back());
+					});
+					Buffer().OwnedPrimitiveBlock(owned, [](std::string& text, std::string_view data, bool tape) {
+						if (data.size() != sizeof(const void*)) throw std::logic_error("invalid owned collection block");
+						const void* address;
+						std::memcpy(&address, data.data(), sizeof(address));
+						ExpandOwnedValue(text, static_cast<const Owned*>(address)->values, tape);
+					}, bytes);
+					return true;
+				}
+			}
+			return false;
+		}
+		template<class Visit> void InlineNative(Visit visit) {
+			RefuseDivertedValue();
+			Buffer().SizedRunBegin();
+			{
+				CaptureScope scope(&Buffer());
+				std::string existing = visit();
+				if (scope.inlineWritten && !existing.empty()) throw std::logic_error("checkpoint capture result has uncaptured text");
+				if (scope.output) Buffer().Child(*scope.output);
+				else if (!existing.empty()) Buffer().Raw(existing);
+			}
+			Buffer().SizedRunEnd();
+		}
+		template<class T> static constexpr size_t PrimitiveWords() {
+			if constexpr (std::is_integral_v<T> || std::is_enum_v<T> || std::is_same_v<T, float> || std::is_same_v<T, double> || (std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) return 1;
+			else if constexpr (std::is_same_v<T, Vector>) return 2;
+			else if constexpr (std::is_same_v<T, Box>) return 4;
+			else if constexpr (std::is_array_v<T>) return std::extent_v<T> * PrimitiveWords<std::remove_extent_t<T>>();
+			else if constexpr (CheckpointArray<T>) return std::tuple_size_v<T> * PrimitiveWords<typename T::value_type>();
+			else return 0;
+		}
+		template<class Fields, size_t Index> using FieldType = std::remove_cvref_t<std::tuple_element_t<Index, Fields>>;
+		template<size_t Index, class Fields, size_t Words = 0> static constexpr size_t PrimitiveEnd() {
+			if constexpr (Index == std::tuple_size_v<Fields>) {
+				return Index;
+			} else {
+				constexpr size_t words = PrimitiveWords<FieldType<Fields, Index>>();
+				if constexpr (words == 0 || words + Words > 512) return Index;
+				else return PrimitiveEnd<Index + 1, Fields, Words + words>();
+			}
+		}
+		template<size_t Begin, class Fields, size_t... Index> void CapturePrimitives(const Fields& fields, std::index_sequence<Index...>) {
+			constexpr size_t fixedBytes = (PrimitiveBytes<FieldType<Fields, Begin + Index>>() + ... + 0);
+			if constexpr ((PrimitiveHasString<FieldType<Fields, Begin + Index>>() || ...)) {
+				size_t size = fixedBytes;
+				const auto add = [&](const auto& field) {
+					const size_t bytes = PrimitiveStringBytes(field);
+					if (bytes > std::numeric_limits<size_t>::max() - size) throw std::length_error("checkpoint string block is too large");
+					size += bytes;
+				};
+				(add(std::get<Begin + Index>(fields)), ...);
+				Buffer().CapturePrimitiveBlock(size, &DecodePrimitives<FieldType<Fields, Begin + Index>...>, [&](char* into) {
+					size_t at = 0;
+					(WritePrimitive(into, at, std::get<Begin + Index>(fields)), ...);
+				});
+			} else {
+				constexpr auto offsets = [] {
+					std::array<size_t, sizeof...(Index)> result;
+					size_t at = 0, index = 0;
+					((result[index++] = at, at += PrimitiveBytes<FieldType<Fields, Begin + Index>>()), ...);
+					return result;
+				}();
+				Buffer().CapturePrimitiveBlock(fixedBytes, &DecodePrimitives<FieldType<Fields, Begin + Index>...>, [&](char* into) {
+					(WriteFixedPrimitive<offsets[Index]>(into, std::get<Begin + Index>(fields)), ...);
+				});
+			}
+		}
+		template<size_t Offset, class T> static void WriteFixedPrimitive(char* into, const T& value) {
+			if constexpr (std::is_same_v<T, Vector>) {
+				WriteFixedPrimitive<Offset>(into, value.m_X); WriteFixedPrimitive<Offset + sizeof(float)>(into, value.m_Y);
+			} else if constexpr (std::is_same_v<T, Box>) {
+				WriteFixedPrimitive<Offset>(into, value.m_Corner); WriteFixedPrimitive<Offset + 2 * sizeof(float)>(into, value.m_Width); WriteFixedPrimitive<Offset + 3 * sizeof(float)>(into, value.m_Height);
+			} else if constexpr (std::is_array_v<T> || CheckpointArray<T>) {
+				using Element = std::remove_cvref_t<decltype(value[0])>;
+				if constexpr (std::is_trivially_copyable_v<T> && PrimitiveBytes<T>() == sizeof(T)) {
+					std::memcpy(into + Offset, &value, sizeof(T));
+				} else {
+					constexpr size_t count = [] { if constexpr (std::is_array_v<T>) return std::extent_v<T>; else return std::tuple_size_v<T>; }();
+					[&]<size_t... Index>(std::index_sequence<Index...>) {
+						(WriteFixedPrimitive<Offset + Index * PrimitiveBytes<Element>()>(into, value[Index]), ...);
+					}(std::make_index_sequence<count>{});
+				}
+			} else {
+				static_assert(std::is_trivially_copyable_v<T>);
+				std::memcpy(into + Offset, &value, sizeof(T));
+			}
+		}
+		template<size_t Begin, class Fields> void CaptureFields(const Fields& fields) {
+			if constexpr (Begin < std::tuple_size_v<Fields>) {
+				constexpr size_t end = PrimitiveEnd<Begin, Fields>();
+				if constexpr (end == Begin) {
+					Value(std::get<Begin>(fields));
+					CaptureFields<Begin + 1>(fields);
+				} else {
+					CapturePrimitives<Begin>(fields, std::make_index_sequence<end - Begin>());
+					CaptureFields<end>(fields);
+				}
+			}
+		}
+		template<class T> static void WritePrimitive(char* bytes, size_t& at, const T& value) {
+			if constexpr ((std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) {
+				const uint64_t size = value.size();
+				WritePrimitive(bytes, at, size);
+				std::memcpy(bytes + at, value.data(), value.size());
+				at += value.size();
+			} else if constexpr (std::is_same_v<T, Vector>) {
+				WritePrimitive(bytes, at, value.m_X); WritePrimitive(bytes, at, value.m_Y);
+			} else if constexpr (std::is_same_v<T, Box>) {
+				WritePrimitive(bytes, at, value.m_Corner); WritePrimitive(bytes, at, value.m_Width); WritePrimitive(bytes, at, value.m_Height);
+			} else if constexpr (std::is_array_v<T> || CheckpointArray<T>) {
+				for (const auto& item: value) WritePrimitive(bytes, at, item);
+			} else {
+				std::memcpy(bytes + at, &value, sizeof(value));
+				at += sizeof(value);
+			}
+		}
+		template<class T> static constexpr size_t PrimitiveBytes() {
+			if constexpr ((std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) return sizeof(uint64_t);
+			else if constexpr (std::is_same_v<T, Vector>) return 2 * sizeof(float);
+			else if constexpr (std::is_same_v<T, Box>) return 4 * sizeof(float);
+			else if constexpr (std::is_array_v<T>) return std::extent_v<T> * PrimitiveBytes<std::remove_extent_t<T>>();
+			else if constexpr (CheckpointArray<T>) return std::tuple_size_v<T> * PrimitiveBytes<typename T::value_type>();
+			else return sizeof(T);
+		}
+		template<class T> static constexpr bool PrimitiveHasString() {
+			if constexpr ((std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) return true;
+			else if constexpr (std::is_array_v<T>) return PrimitiveHasString<std::remove_extent_t<T>>();
+			else if constexpr (CheckpointArray<T>) return PrimitiveHasString<typename T::value_type>();
+			else return false;
+		}
+		template<class T> static size_t PrimitiveStringBytes(const T& value) {
+			if constexpr ((std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) return value.size();
+			else if constexpr (std::is_array_v<T> || CheckpointArray<T>) {
+				size_t size = 0;
+				for (const auto& field: value) {
+					const size_t bytes = PrimitiveStringBytes(field);
+					if (bytes > std::numeric_limits<size_t>::max() - size) throw std::length_error("checkpoint string array is too large");
+					size += bytes;
+				}
+				return size;
+			} else return 0;
+		}
+		template<class T> static T ReadPrimitive(std::string_view& values) {
+			if (values.size() < sizeof(T)) throw std::logic_error("truncated owned primitive block");
+			T value;
+			std::memcpy(&value, values.data(), sizeof(value));
+			values.remove_prefix(sizeof(value));
+			return value;
+		}
+		template<class T> static void DecodePrimitive(std::string& text, std::string_view& values, bool tape) {
+			if constexpr ((std::is_same_v<T, std::string> || std::is_same_v<T, CheckpointString>)) {
+				const uint64_t size = ReadPrimitive<uint64_t>(values);
+				if (size > values.size()) throw std::logic_error("truncated owned string block");
+				if (tape) {
+					text.push_back(static_cast<char>(CheckpointBuffer::ValueKind::String));
+					text.append(reinterpret_cast<const char*>(&size), sizeof(size));
+				} else {
+					char buffer[32];
+					const auto result = std::to_chars(buffer, buffer + sizeof(buffer), size);
+					if (result.ec != std::errc{}) throw std::logic_error("could not format owned string length");
+					text.append(buffer, result.ptr); text.push_back(' ');
+				}
+				text.append(values.data(), static_cast<size_t>(size));
+				if (!tape) text.push_back(' ');
+				values.remove_prefix(static_cast<size_t>(size));
+			} else if constexpr (std::is_same_v<T, Vector>) {
+				DecodePrimitive<float>(text, values, tape); DecodePrimitive<float>(text, values, tape);
+			} else if constexpr (std::is_same_v<T, Box>) {
+				for (size_t index = 0; index < 4; ++index) DecodePrimitive<float>(text, values, tape);
+			} else if constexpr (std::is_array_v<T>) {
+				for (size_t index = 0; index < std::extent_v<T>; ++index) DecodePrimitive<std::remove_extent_t<T>>(text, values, tape);
+			} else if constexpr (CheckpointArray<T>) {
+				for (size_t index = 0; index < std::tuple_size_v<T>; ++index) DecodePrimitive<typename T::value_type>(text, values, tape);
+			} else if constexpr (std::is_enum_v<T>) {
+				DecodePrimitive<std::underlying_type_t<T>>(text, values, tape);
+			} else if constexpr (std::is_same_v<T, float>) {
+				DecodePrimitive<uint32_t>(text, values, tape);
+			} else if constexpr (std::is_same_v<T, double>) {
+				DecodePrimitive<uint64_t>(text, values, tape);
+			} else if constexpr (std::is_same_v<T, bool>) {
+				DecodePrimitive<unsigned char>(text, values, tape);
+			} else {
+				const T value = ReadPrimitive<T>(values);
+				using Wide = std::conditional_t<std::is_signed_v<T>, int64_t, uint64_t>;
+				const Wide word = static_cast<Wide>(value);
+				if (tape) {
+					text.push_back(static_cast<char>(std::is_signed_v<T> ? CheckpointBuffer::ValueKind::SpacedInteger : CheckpointBuffer::ValueKind::SpacedUnsigned));
+					text.append(reinterpret_cast<const char*>(&word), sizeof(word));
+				} else {
+					char buffer[32];
+					const auto result = std::to_chars(buffer, buffer + sizeof(buffer), word);
+					if (result.ec != std::errc{}) throw std::logic_error("could not format owned primitive");
+					text.append(buffer, result.ptr); text.push_back(' ');
+				}
+			}
+		}
+		template<class... T> static void DecodePrimitives(std::string& text, std::string_view values, bool tape) {
+			(DecodePrimitive<T>(text, values, tape), ...);
+			if (!values.empty()) throw std::logic_error("trailing owned primitive block");
+		}
 		// A nested writer that already published into this scope was composed by hand, so its text
 		// never reached this writer: name the mistake here instead of losing the value.
 		void RefuseDivertedValue() const {
-			if (s_Capture && s_Capture->output) throw std::logic_error("a nested checkpoint value must be produced with CheckpointWriter::Native");
+			if (s_Capture && (s_Capture->output || s_Capture->inlineWritten)) throw std::logic_error("a nested checkpoint value must be produced with CheckpointWriter::Native");
 		}
 		struct CaptureScope {
 			CaptureScope* previous = s_Capture;
 			std::optional<CheckpointText> output;
-			CaptureScope() { s_Capture = this; }
+			CheckpointBuffer* inlineOutput;
+			bool inlineWritten = false;
+			explicit CaptureScope(CheckpointBuffer* into = nullptr) : inlineOutput(into) { s_Capture = this; }
 			~CaptureScope() { s_Capture = previous; }
 		};
 		inline static thread_local CaptureScope* s_Capture = nullptr;
 		inline static thread_local CheckpointCache* s_Cache = nullptr;
+		inline static std::atomic<unsigned> s_Batches{0};
+		inline static thread_local std::optional<bool> s_BatchOverride;
 		bool m_Recording = false;
 		mutable CheckpointBuffer m_Capture;
+		CheckpointBuffer* m_Output;
 		std::string m_Text;
 	};
 
@@ -236,6 +598,7 @@ namespace RTE {
 		void Value(T& value) { std::underlying_type_t<T> raw; Value(raw); value = static_cast<T>(raw); }
 		void Value(float& value) { uint32_t bits; Value(bits); value = std::bit_cast<float>(bits); }
 		void Value(double& value) { uint64_t bits; Value(bits); value = std::bit_cast<double>(bits); }
+		void Value(CheckpointString& value) { std::string read; Value(read); value = std::move(read); }
 		void Value(std::string& value) {
 			size_t size = 0;
 			Value(size);
@@ -254,27 +617,27 @@ namespace RTE {
 		template <class T, size_t N> void Value(std::array<T, N>& values) { for (auto& value: values) Value(value); }
 		template <class T, size_t N> void Value(T (&values)[N]) { for (auto& value: values) Value(value); }
 		template <class T, class U> void Value(std::pair<T, U>& value) { Value(value.first); Value(value.second); }
-		template <class T> void Value(std::vector<T>& values) {
+		template <class T, class Allocator> void Value(std::vector<T, Allocator>& values) {
 			size_t size = 0;
 			Value(size);
 			if (size > m_Text.size()) throw std::runtime_error("invalid runtime checkpoint count");
-			std::vector<T> candidate(size);
+			std::vector<T, Allocator> candidate(size, values.get_allocator());
 			for (auto& value: candidate) Value(value);
 			values = std::move(candidate);
 		}
-		void Value(std::vector<bool>& values) {
+		template <class Allocator> void Value(std::vector<bool, Allocator>& values) {
 			const size_t size = Count();
 			values.assign(size, false);
 			for (size_t index = 0; index < size; ++index) { bool value; Value(value); values[index] = value; }
 		}
-		template <class T> void Value(std::list<T>& values) { Sequence(values); }
-		template <class T> void Value(std::deque<T>& values) { Sequence(values); }
-		template <class T> void Value(std::set<T>& values) {
+		template <class T, class Allocator> void Value(std::list<T, Allocator>& values) { Sequence(values); }
+		template <class T, class Allocator> void Value(std::deque<T, Allocator>& values) { Sequence(values); }
+		template <class T, class Compare, class Allocator> void Value(std::set<T, Compare, Allocator>& values) {
 			const size_t size = Count();
 			for (size_t index = 0; index < size; ++index) { T value{}; Value(value); if (!values.insert(std::move(value)).second) throw std::runtime_error("duplicate runtime checkpoint set value"); }
 		}
-		template <class K, class V> void Value(std::map<K, V>& values) { Mapping(values); }
-		template <class K, class V> void Value(std::unordered_map<K, V>& values) { Mapping(values); }
+		template <class K, class V, class Compare, class Allocator> void Value(std::map<K, V, Compare, Allocator>& values) { Mapping(values); }
+		template <class K, class V, class Hash, class Equal, class Allocator> void Value(std::unordered_map<K, V, Hash, Equal, Allocator>& values) { Mapping(values); }
 		template <class T> requires requires(T& value) { value.LoadCheckpoint(std::string_view{}, false); }
 		void Value(T& value) {
 			std::string text;

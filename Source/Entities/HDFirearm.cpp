@@ -1,4 +1,10 @@
 #include "HDFirearm.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "SoundContainer.h"
+#include "Attachable.h"
+#include "CheckpointProperties.h"
 #include "MetricsCollector.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -18,11 +24,75 @@ using namespace RTE;
 
 ConcreteClassInfo(HDFirearm, HeldDevice, 50);
 
+HDFirearm::HDFirearm(const HDFirearm& source, CheckpointNativeSnapshot& snapshot) :
+	HeldDevice(source, snapshot),
+	m_pMagazineReference(snapshot.Freeze(source.m_pMagazineReference)),
+	m_pMagazine(snapshot.Freeze(source.m_pMagazine)),
+	m_pFlash(snapshot.Freeze(source.m_pFlash)),
+	m_PreFireSound(snapshot.Freeze(source.m_PreFireSound)),
+	m_FireSound(snapshot.Freeze(source.m_FireSound)),
+	m_FireEchoSound(snapshot.Freeze(source.m_FireEchoSound)),
+	m_ActiveSound(snapshot.Freeze(source.m_ActiveSound)),
+	m_DeactivationSound(snapshot.Freeze(source.m_DeactivationSound)),
+	m_EmptySound(snapshot.Freeze(source.m_EmptySound)),
+	m_ReloadStartSound(snapshot.Freeze(source.m_ReloadStartSound)),
+	m_ReloadEndSound(snapshot.Freeze(source.m_ReloadEndSound)),
+	m_ReloadEndOffset(snapshot.Freeze(source.m_ReloadEndOffset)),
+	m_HasPlayedEndReloadSound(snapshot.Freeze(source.m_HasPlayedEndReloadSound)),
+	m_RateOfFire(snapshot.Freeze(source.m_RateOfFire)),
+	m_ActivationDelay(snapshot.Freeze(source.m_ActivationDelay)),
+	m_DeactivationDelay(snapshot.Freeze(source.m_DeactivationDelay)),
+	m_Reloading(snapshot.Freeze(source.m_Reloading)),
+	m_DoneReloading(snapshot.Freeze(source.m_DoneReloading)),
+	m_BaseReloadTime(snapshot.Freeze(source.m_BaseReloadTime)),
+	m_FullAuto(snapshot.Freeze(source.m_FullAuto)),
+	m_FireIgnoresThis(snapshot.Freeze(source.m_FireIgnoresThis)),
+	m_Reloadable(snapshot.Freeze(source.m_Reloadable)),
+	m_OneHandedReloadTimeMultiplier(snapshot.Freeze(source.m_OneHandedReloadTimeMultiplier)),
+	m_DualReloadable(snapshot.Freeze(source.m_DualReloadable)),
+	m_ReloadAngle(snapshot.Freeze(source.m_ReloadAngle)),
+	m_OneHandedReloadAngle(snapshot.Freeze(source.m_OneHandedReloadAngle)),
+	m_LastFireTmr(snapshot.Freeze(source.m_LastFireTmr)),
+	m_ReloadTmr(snapshot.Freeze(source.m_ReloadTmr)),
+	m_PersistedLastFireTimerAnchor(snapshot.Freeze(source.m_PersistedLastFireTimerAnchor)),
+	m_PersistedReloadTimerAnchor(snapshot.Freeze(source.m_PersistedReloadTimerAnchor)),
+	m_MuzzleOff(snapshot.Freeze(source.m_MuzzleOff)),
+	m_EjectOff(snapshot.Freeze(source.m_EjectOff)),
+	m_MagOff(snapshot.Freeze(source.m_MagOff)),
+	m_ShakeRange(snapshot.Freeze(source.m_ShakeRange)),
+	m_SharpShakeRange(snapshot.Freeze(source.m_SharpShakeRange)),
+	m_NoSupportFactor(snapshot.Freeze(source.m_NoSupportFactor)),
+	m_ParticleSpreadRange(snapshot.Freeze(source.m_ParticleSpreadRange)),
+	m_ShellEjectAngle(snapshot.Freeze(source.m_ShellEjectAngle)),
+	m_ShellSpreadRange(snapshot.Freeze(source.m_ShellSpreadRange)),
+	m_ShellAngVelRange(snapshot.Freeze(source.m_ShellAngVelRange)),
+	m_ShellVelVariation(snapshot.Freeze(source.m_ShellVelVariation)),
+	m_RecoilScreenShakeAmount(snapshot.Freeze(source.m_RecoilScreenShakeAmount)),
+	m_AIFireVel(snapshot.Freeze(source.m_AIFireVel)),
+	m_AIBulletLifeTime(snapshot.Freeze(source.m_AIBulletLifeTime)),
+	m_AIBulletAccScalar(snapshot.Freeze(source.m_AIBulletAccScalar)),
+	m_FiredOnce(snapshot.Freeze(source.m_FiredOnce)),
+	m_FireFrame(snapshot.Freeze(source.m_FireFrame)),
+	m_FiredLastFrame(snapshot.Freeze(source.m_FiredLastFrame)),
+	m_AlreadyClicked(snapshot.Freeze(source.m_AlreadyClicked)),
+	m_RoundsFired(snapshot.Freeze(source.m_RoundsFired)),
+	m_IsAnimatedManually(snapshot.Freeze(source.m_IsAnimatedManually)),
+	m_LegacyCompatibilityRoundsAlwaysFireUnflipped(snapshot.Freeze(source.m_LegacyCompatibilityRoundsAlwaysFireUnflipped)),
+	m_PersistedHDFirearmRuntime(snapshot.Freeze(source.m_PersistedHDFirearmRuntime, &m_PersistedHDFirearmRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* HDFirearm::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 HDFirearm::HDFirearm() {
 	Clear();
 }
 
 HDFirearm::~HDFirearm() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -361,31 +431,32 @@ void HDFirearm::DiscardPersistedSnapshotState() {
 
 void HDFirearm::SaveSnapshotConfiguration(Writer& writer) const {
 	HeldDevice::SaveSnapshotConfiguration(writer);
-	writer.NewPropertyWithValue("ReloadEndOffset", m_ReloadEndOffset);
-	writer.NewPropertyWithValue("RateOfFire", m_RateOfFire);
-	writer.NewPropertyWithValue("ActivationDelay", m_ActivationDelay);
-	writer.NewPropertyWithValue("DeactivationDelay", m_DeactivationDelay);
-	writer.NewPropertyWithValue("BaseReloadTime", m_BaseReloadTime);
-	writer.NewPropertyWithValue("FullAuto", m_FullAuto);
-	writer.NewPropertyWithValue("FireIgnoresThis", m_FireIgnoresThis);
-	writer.NewPropertyWithValue("Reloadable", m_Reloadable);
-	writer.NewPropertyWithValue("DualReloadable", m_DualReloadable);
-	writer.NewPropertyWithValue("OneHandedReloadTimeMultiplier", m_OneHandedReloadTimeMultiplier);
-	writer.NewPropertyWithValue("ReloadAngle", m_ReloadAngle);
-	writer.NewPropertyWithValue("OneHandedReloadAngle", m_OneHandedReloadAngle);
-	writer.NewPropertyWithValue("IsAnimatedManually", m_IsAnimatedManually);
-	writer.NewPropertyWithValue("SpecialBehaviour_ShakeRangeRaw", m_ShakeRange);
-	writer.NewPropertyWithValue("SpecialBehaviour_SharpShakeRangeRaw", m_SharpShakeRange);
-	writer.NewPropertyWithValue("NoSupportFactor", m_NoSupportFactor);
-	writer.NewPropertyWithValue("SpecialBehaviour_ParticleSpreadRangeRaw", m_ParticleSpreadRange);
-	writer.NewPropertyWithValue("ShellEjectAngle", m_ShellEjectAngle);
-	writer.NewPropertyWithValue("SpecialBehaviour_ShellSpreadRangeRaw", m_ShellSpreadRange);
-	writer.NewPropertyWithValue("SpecialBehaviour_ShellAngVelRangeRaw", m_ShellAngVelRange);
-	writer.NewPropertyWithValue("ShellVelVariation", m_ShellVelVariation);
-	writer.NewPropertyWithValue("RecoilScreenShakeAmount", m_RecoilScreenShakeAmount);
-	writer.NewPropertyWithValue("MuzzleOffset", m_MuzzleOff);
-	writer.NewPropertyWithValue("EjectionOffset", m_EjectOff);
-	writer.NewPropertyWithValue("LegacyCompatibilityRoundsAlwaysFireUnflipped", m_LegacyCompatibilityRoundsAlwaysFireUnflipped);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"ReloadEndOffset">(m_ReloadEndOffset),
+		CheckpointProperty<"RateOfFire">(m_RateOfFire),
+		CheckpointProperty<"ActivationDelay">(m_ActivationDelay),
+		CheckpointProperty<"DeactivationDelay">(m_DeactivationDelay),
+		CheckpointProperty<"BaseReloadTime">(m_BaseReloadTime),
+		CheckpointProperty<"FullAuto">(m_FullAuto),
+		CheckpointProperty<"FireIgnoresThis">(m_FireIgnoresThis),
+		CheckpointProperty<"Reloadable">(m_Reloadable),
+		CheckpointProperty<"DualReloadable">(m_DualReloadable),
+		CheckpointProperty<"OneHandedReloadTimeMultiplier">(m_OneHandedReloadTimeMultiplier),
+		CheckpointProperty<"ReloadAngle">(m_ReloadAngle),
+		CheckpointProperty<"OneHandedReloadAngle">(m_OneHandedReloadAngle),
+		CheckpointProperty<"IsAnimatedManually">(m_IsAnimatedManually),
+		CheckpointProperty<"SpecialBehaviour_ShakeRangeRaw">(m_ShakeRange),
+		CheckpointProperty<"SpecialBehaviour_SharpShakeRangeRaw">(m_SharpShakeRange),
+		CheckpointProperty<"NoSupportFactor">(m_NoSupportFactor),
+		CheckpointProperty<"SpecialBehaviour_ParticleSpreadRangeRaw">(m_ParticleSpreadRange),
+		CheckpointProperty<"ShellEjectAngle">(m_ShellEjectAngle),
+		CheckpointProperty<"SpecialBehaviour_ShellSpreadRangeRaw">(m_ShellSpreadRange),
+		CheckpointProperty<"SpecialBehaviour_ShellAngVelRangeRaw">(m_ShellAngVelRange),
+		CheckpointProperty<"ShellVelVariation">(m_ShellVelVariation),
+		CheckpointProperty<"RecoilScreenShakeAmount">(m_RecoilScreenShakeAmount),
+		CheckpointProperty<"MuzzleOffset">(m_MuzzleOff),
+		CheckpointProperty<"EjectionOffset">(m_EjectOff),
+		CheckpointProperty<"LegacyCompatibilityRoundsAlwaysFireUnflipped">(m_LegacyCompatibilityRoundsAlwaysFireUnflipped));
 	writer.NewPropertyWithValue("SpecialBehaviour_PreFireSound", m_PreFireSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_FireSound", m_FireSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_FireEchoSound", m_FireEchoSound);
@@ -394,7 +465,7 @@ void HDFirearm::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SpecialBehaviour_EmptySound", m_EmptySound);
 	writer.NewPropertyWithValue("SpecialBehaviour_ReloadStartSound", m_ReloadStartSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_ReloadEndSound", m_ReloadEndSound);
-	writer.NewPropertyWithValue("SpecialBehaviour_HDFirearmRuntime", CheckpointWriter::Native([&] { return m_PersistedHDFirearmRuntime.empty() ? SaveHDFirearmRuntime() : m_PersistedHDFirearmRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_HDFirearmRuntime", CheckpointWriter::Native([&] { return m_PersistedHDFirearmRuntime.empty() ? SaveHDFirearmRuntime() : m_PersistedHDFirearmRuntime.Value(); }).Base64(true));
 }
 
 int HDFirearm::Save(Writer& writer) const {

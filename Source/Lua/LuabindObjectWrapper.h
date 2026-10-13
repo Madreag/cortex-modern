@@ -1,4 +1,5 @@
 #pragma once
+#include "CheckpointString.h"
 
 #include <cstdint>
 #include <string>
@@ -25,7 +26,7 @@ namespace RTE {
 #pragma endregion
 
 	/// A wrapper for luabind objects, to avoid include problems with luabind.
-	class LuabindObjectWrapper {
+	class LuabindObjectWrapper : public CheckpointNativeAllocated {
 
 	public:
 #pragma region Creation
@@ -39,8 +40,9 @@ namespace RTE {
 #pragma region Destruction
 		static void ApplyQueuedDeletions();
 
-		/// Deletes every queued luabind object while the state that is about to close is still open: a
+		/// Deletes the queued luabind objects while the state that is about to close is still open: a
 		/// queued object holds a registry reference into its own state and unrefs it when it is deleted.
+		/// On the simulation thread every queued object goes; off it only the closing state's own.
 		/// @param luaState The state about to be closed.
 		/// Stored script wrappers release their references to this state as well.
 		/// @return How many queued objects belonged to that state, i.e. how many the drain rescued.
@@ -105,6 +107,8 @@ namespace RTE {
 		/// Gets the LuabindObjectWrapper's luabind object. Ownership is NOT transferred!
 		/// @return The LuabindObjectWrapper's luabind object.
 		luabind::adl::object* GetLuabindObject() const { return m_LuabindObject; }
+		/// The saver resolves the stored reference in its frozen registry without entering the live VM.
+		int GetCheckpointReference() const { return m_CheckpointReference; }
 
 		/// Gets the LuabindObjectWrapper's file path.
 		/// @return The LuabindObjectWrapper's file path.
@@ -114,7 +118,8 @@ namespace RTE {
 	private:
 		bool m_OwnsObject = false; //!< Whether or not we own the luabind object this is wrapping.
 		luabind::adl::object* m_LuabindObject = nullptr; //!< The luabind object this is wrapping.
-		std::string m_FilePath; //!< The filepath the wrapped luabind object represents, if it's a function.
+		int m_CheckpointReference = -2;
+		CheckpointString m_FilePath; //!< The filepath the wrapped luabind object represents, if it's a function.
 		LuabindObjectWrapper* m_PreviousStored = nullptr;
 		LuabindObjectWrapper* m_NextStored = nullptr;
 		bool m_Stored = false;

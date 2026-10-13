@@ -1,4 +1,7 @@
 #include "Color.h"
+
+RTE::Color::Color(const Color& source, CheckpointNativeSnapshot&) :
+	m_R(source.m_R), m_G(source.m_G), m_B(source.m_B), m_Index(source.m_Index) {}
 #include "CheckpointArchive.h"
 #include "allegro/color.h"
 

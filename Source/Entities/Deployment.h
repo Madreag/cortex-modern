@@ -9,6 +9,8 @@
 #include "SceneObject.h"
 #include "Vector.h"
 #include "SceneMan.h"
+
+#include <list>
 // #include "MovableMan.h"
 
 namespace RTE {
@@ -29,6 +31,8 @@ namespace RTE {
 		/// Constructor method used to instantiate a Deployment object in system
 		/// memory. Create() should be called before using the object.
 		Deployment();
+		CheckpointSnapshotMethods(Deployment);
+		static void PrepareCheckpointNative(const Deployment& source, Deployment* target, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a Deployment object before deletion
 		/// from system memory.
@@ -136,7 +140,7 @@ namespace RTE {
 		/// this.
 		/// @return Whether the deployment spawning is blocked by one of the Objects in
 		/// the list.
-		bool DeploymentBlocked(int player, const std::list<SceneObject*>& existingObjects);
+		template<class Allocator> bool DeploymentBlocked(int player, const std::list<SceneObject*, Allocator>& existingObjects);
 
 		/// Gets the cost to purchase this item, in oz's of gold.
 		/// @param nativeModule If this is supposed to be adjusted for a specific Tech's subjective (default: 0)
@@ -197,7 +201,7 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass;
 
 		// Name of the Loadout that shuold be placed at this' location in the Scene.
-		std::string m_LoadoutName;
+		CheckpointString m_LoadoutName;
 		// The Icon that graphically represents this
 		Icon m_Icon;
 		// The radius around this deployment that gets checked if another actor/item of the same type and name already exists and will block re-spawning a new one by this

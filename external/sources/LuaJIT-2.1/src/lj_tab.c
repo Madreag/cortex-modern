@@ -17,6 +17,43 @@
 
 luaJIT_tab_write_cb checkpoint_tab_write;
 
+#if defined(_MSC_VER)
+static __declspec(thread) luaJIT_SavedKeys saved_keys;
+#else
+static __thread luaJIT_SavedKeys saved_keys;
+#endif
+
+LUA_API luaJIT_SavedKeys luaJIT_set_saved_keys(const luaJIT_SavedKeys *keys)
+{
+  luaJIT_SavedKeys previous = saved_keys;
+  if (keys) saved_keys = *keys;
+  else memset(&saved_keys, 0, sizeof(saved_keys));
+  return previous;
+}
+
+LUA_API int luaJIT_saved_keys_active(lua_State *L)
+{
+  return saved_keys.state && saved_keys.hash && G(saved_keys.state) == G(L);
+}
+
+static Node *saved_hash(const GCtab *t, GCRef key)
+{
+#if LJ_GC64
+  uint32_t ordinary = hashrot((uint32_t)gcrefu(key), (uint32_t)(gcrefu(key) >> 32));
+#else
+  uint32_t ordinary = hashrot(gcrefu(key), gcrefu(key) + HASH_BIAS);
+#endif
+  ordinary = saved_keys.hash(saved_keys.owner, t, gcrefu(key), ordinary);
+  return hashmask(t, ordinary);
+}
+
+cTValue *lj_tab_saved_get(lua_State *L, GCtab *t, GCobj *key, uint32_t tag)
+{
+  TValue value;
+  setgcVraw(&value, key, tag);
+  return lj_tab_get(L, t, &value);
+}
+
 LUA_API void luaJIT_set_tab_write_callback(luaJIT_tab_write_cb cb)
 {
   checkpoint_tab_write = cb;
@@ -124,6 +161,8 @@ static Node *hashkey(const GCtab *t, cTValue *key)
     return hashnum(t, key);
   else if (tvisbool(key))
     return hashmask(t, boolV(key));
+  else if (saved_keys.hash)
+    return saved_hash(t, key->gcr);
   else
     return hashgcref(t, key->gcr);
   /* Only hash 32 bits of lightuserdata on a 64 bit CPU. Good enough? */

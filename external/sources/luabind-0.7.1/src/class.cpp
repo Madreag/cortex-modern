@@ -136,6 +136,7 @@ namespace luabind { namespace detail {
 			, m_adopt_fun
             , m_holder_size
             , m_holder_alignment);
+		crep->prepare_checkpoint_metadata();
 
         // register this new type in the class registry
         r->add_class(m_type, crep);

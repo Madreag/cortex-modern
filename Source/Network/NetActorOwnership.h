@@ -46,6 +46,11 @@ namespace RTE {
 		static const std::map<int64_t, NetSeededActorOwner>& GetSeededOwners();
 		static void RestoreSeededOwners(std::map<int64_t, NetSeededActorOwner> owners);
 		static void ClearSeededOwners();
+		static void PrepareCheckpointValues();
+		static bool CheckpointValuesReady() noexcept;
+		/// Retries a refused owner mirror during ordinary multiplayer updates.
+		static void RetryCheckpointValues() noexcept;
+		static std::string CheckpointSelfTestMismatch();
 
 		/// Resolves which peer is allowed to issue economy commands (funds, deploy, delivery) for a team:
 		/// the human assigned to it, or the host for a CPU/unassigned team. 0 if the config defines no teams.

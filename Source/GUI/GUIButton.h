@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 namespace RTE {
 
 	class GUILabel;
@@ -146,7 +148,11 @@ namespace RTE {
 		bool m_Over;
 		std::unique_ptr<GUILabel> m_Text;
 		std::unique_ptr<GUIBitmap> m_Icon;
-		std::unique_ptr<GUIRect> m_BorderSizes;
+		struct SavedBorder : GUIRect, CheckpointNativeAllocated {
+			SavedBorder() = default;
+			explicit SavedBorder(const GUIRect& value) : GUIRect(value) {}
+		};
+		std::unique_ptr<SavedBorder> m_BorderSizes;
 
 		/// Create the button bitmap to draw.
 		void BuildBitmap();

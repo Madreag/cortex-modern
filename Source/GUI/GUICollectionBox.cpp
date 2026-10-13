@@ -152,7 +152,7 @@ void GUICollectionBox::Move(int X, int Y) {
 	m_Y = Y;
 
 	// Go through all my children moving them
-	std::vector<GUIControl*>::iterator it;
+	CheckpointVector<GUIControl*>::iterator it;
 	for (it = m_ControlChildren.begin(); it != m_ControlChildren.end(); it++) {
 		GUIControl* C = *it;
 		int CX;
@@ -173,7 +173,7 @@ void GUICollectionBox::Resize(int Width, int Height) {
 	m_Height = Height;
 
 	// Go through all my children moving them
-	std::vector<GUIControl*>::iterator it;
+	CheckpointVector<GUIControl*>::iterator it;
 	for (it = m_ControlChildren.begin(); it != m_ControlChildren.end(); it++) {
 		GUIControl* C = *it;
 		int CX, CY, CW, CH;

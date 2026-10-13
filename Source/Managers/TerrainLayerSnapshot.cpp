@@ -252,9 +252,9 @@ namespace RTE {
 		return writer.Text();
 	}
 
-	CheckpointText TerrainLayerSnapshot::CaptureMetadata() {
-		return CheckpointWriter::CaptureNative([] {
-			Scene* scene = g_SceneMan.GetScene();
+	CheckpointText TerrainLayerSnapshot::CaptureMetadata(const Scene* source) {
+		return CheckpointWriter::CaptureNative([source] {
+			const Scene* scene = source ? source : g_SceneMan.GetScene();
 			const SLTerrain* terrain = scene ? scene->GetTerrain() : nullptr;
 			if (!terrain) throw std::runtime_error("no terrain for checkpoint capture");
 			const auto layer = [](const SceneLayer* source) {

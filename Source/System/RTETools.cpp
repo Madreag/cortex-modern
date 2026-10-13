@@ -4,6 +4,11 @@
 #include "Vector.h"
 #include "Matrix.h"
 #include "System.h"
+#include "CheckpointFailure.h"
+
+#include <future>
+#include <utility>
+#include <memory>
 
 #include <string_view>
 #include <algorithm>
@@ -17,6 +22,66 @@ namespace RTE {
 	RandomGenerator  g_SimRNG;
 	RandomGenerator  g_RenderRNG;
 	RandomGenerator& g_RandomGenerator = g_SimRNG;
+
+	thread_local RandomGenerator::State* RandomGenerator::s_CaptureSim = nullptr;
+	thread_local RandomGenerator::State* RandomGenerator::s_CaptureRender = nullptr;
+
+	RandomGenerator::State* RandomGenerator::PrivateValues() const {
+		if (!s_CaptureSim && !s_CaptureRender) return nullptr;
+		if (this == &g_SimRNG) return s_CaptureSim;
+		if (this == &g_RenderRNG) return s_CaptureRender;
+		return nullptr;
+	}
+
+	void RandomGenerator::PrepareCheckpointValues() {
+		if (!CheckpointNativeStorage::Enabled() || m_OwnedValues) return;
+		CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+		auto prepared = std::make_unique<State>(m_OrdinaryValues);
+		m_OwnedValues = std::move(prepared);
+	}
+
+	RandomGenerator::CheckpointScope::CheckpointScope() :
+	    m_Sim(std::as_const(g_SimRNG).CheckpointValues()), m_Render(std::as_const(g_RenderRNG).CheckpointValues()),
+	    m_PreviousSim(s_CaptureSim), m_PreviousRender(s_CaptureRender) {
+		m_Sim.m_TraceDraws = false; m_Render.m_TraceDraws = false;
+		s_CaptureSim = &m_Sim; s_CaptureRender = &m_Render;
+	}
+	RandomGenerator::CheckpointScope::~CheckpointScope() { s_CaptureSim = m_PreviousSim; s_CaptureRender = m_PreviousRender; }
+
+	std::string RandomGenerator::CheckpointStorageSelfTestMismatch() {
+		CheckpointNativeStorage::AllocationScope allocations(true);
+		RandomGenerator source;
+		source.SeedOnFirstDraw(91); source.SetDrawCount(7); source.SetDrawTraceEnabled(true);
+		source.PrepareCheckpointValues();
+		const auto* identity = source.m_OwnedValues.get();
+		const RandomGenerator expected = source;
+		auto prepared = CheckpointNativeStorage::PrepareInventory();
+		if (!prepared->Arm()) return "random stream inventory is stale";
+		source.Seed(93); source.RandomNum<int>(); source.m_OwnedValues.reset();
+		{
+			CheckpointNativeStorage::ReadScope reads(prepared->Pages());
+			RandomGenerator restored;
+			restored.m_OrdinaryValues = *CheckpointNativeStorage::Source(identity);
+			RandomGenerator next = expected;
+			if (restored.SerializeCheckpoint() != next.SerializeCheckpoint()) return "frozen random stream lost pending seed or draw count";
+			restored.SetDrawTraceEnabled(false); next.SetDrawTraceEnabled(false);
+			for (size_t draw = 0; draw < 1024; ++draw) if (restored.RandomNum<uint64_t>(0, UINT64_MAX) != next.RandomNum<uint64_t>(0, UINT64_MAX))
+				return "frozen random stream changed primitive draw mapping";
+		}
+		const auto sim = g_SimRNG.SerializeCheckpoint(), render = g_RenderRNG.SerializeCheckpoint();
+		const auto unchanged = std::async(std::launch::async, [] {
+			CheckpointScope local;
+			const auto sim = g_SimRNG.SerializeCheckpoint(), render = g_RenderRNG.SerializeCheckpoint();
+			g_SimRNG.RandomNum<int>(); g_RenderRNG.RandomNum<int>();
+			{
+				CheckpointScope nested;
+				g_SimRNG.Seed(111); g_RenderRNG.Seed(113);
+			}
+			return g_SimRNG.SerializeCheckpoint() != sim && g_RenderRNG.SerializeCheckpoint() != render;
+		}).get();
+		return unchanged && sim == g_SimRNG.SerializeCheckpoint() && render == g_RenderRNG.SerializeCheckpoint() ?
+		    std::string{} : "a worker draw changed the live random streams";
+	}
 
 	// Null normally; a scope can redirect this thread's sim free functions (see GetSimRNG).
 	thread_local RandomGenerator* t_simRNGOverride = nullptr;
@@ -39,7 +104,7 @@ namespace RTE {
 		auto engine = EngineCopy();
 		std::ostringstream out;
 		out.imbue(std::locale::classic());
-		out << "MT1 " << m_Seed << ' ' << m_DrawCount;
+		out << "MT1 " << CheckpointValues().m_Seed << ' ' << CheckpointValues().m_DrawCount;
 		for (size_t i = 0; i < std::mt19937::state_size; ++i) {
 			out << ' ' << static_cast<uint32_t>(engine());
 		}
@@ -97,10 +162,10 @@ namespace RTE {
 			}
 		}
 		candidate.seed(state);
-		m_RNG = candidate;
-		m_Seed = seed;
-		m_DrawCount = drawCount;
-		m_SeedPending = false;
+		CheckpointValues().m_RNG = candidate;
+		CheckpointValues().m_Seed = seed;
+		CheckpointValues().m_DrawCount = drawCount;
+		CheckpointValues().m_SeedPending = false;
 		return true;
 	}
 

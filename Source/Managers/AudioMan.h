@@ -9,10 +9,12 @@
 #include "SoundSimulation.h"
 #include "LogicalSound.h"
 #include "AudioCheckpoint.h"
+#include "CheckpointFrozenContainers.h"
 
 #include "fmod/fmod.hpp"
 #include <atomic>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <map>
 #include <memory>
@@ -23,6 +25,7 @@
 #include <unordered_set>
 #include <vector>
 #include <utility>
+#include <array>
 #include "fmod/fmod_errors.h"
 
 #define g_AudioMan AudioMan::Instance()
@@ -36,6 +39,9 @@ namespace RTE {
 
 	/// The singleton manager of sound effect and music playback.
 	class AudioMan : public Singleton<AudioMan> {
+		template<template<class> class Allocator> struct CheckpointRegistryState;
+		using OwnedCheckpointSoundRegistry = CheckpointMap<uint64_t, CheckpointVector<SoundContainer*>>;
+		using OwnedCheckpointSoundIdentities = CheckpointUnorderedSet<uint64_t>;
 		friend class SettingsMan;
 		friend class SoundContainer;
 
@@ -46,6 +52,7 @@ namespace RTE {
 		std::shared_ptr<AudioCheckpointCapture> CaptureCheckpointState(bool samples = true) const;
 		/// The loaded samples a checkpoint archives, read and written on any thread; they need no mixer lock.
 		std::shared_ptr<AudioCheckpointCapture> CaptureCheckpointSamples() const;
+		void FreezeCheckpointCapture(AudioCheckpointCapture& capture, uint64_t cursor) const;
 		/// Writes a captured state as SaveCheckpoint would have at its instant, once the sound owners the rest of the
 		/// capture carries are known; the capture's disowned voices are cleared in place. Samples read apart are given.
 		std::string SaveCaptured(AudioCheckpointCapture& captured, const std::function<bool(uint64_t, const SoundContainer*)>& contained, const AudioCheckpointCapture* samples = nullptr) const;
@@ -101,31 +108,52 @@ namespace RTE {
 		void ClearCommittedAudibility();
 		/// A lockstep round starts with no committed readings on every peer: its objects and ticks restart, so an earlier round's could share a key.
 		void BeginLockstepRound();
-		uint64_t GetCheckpointSoundContainerCursor() const { std::lock_guard lock(m_CheckpointRegistryMutex); return m_NextSoundContainerIdentity; }
-		void SetCheckpointSoundContainerCursor(uint64_t value) { std::lock_guard lock(m_CheckpointRegistryMutex); m_NextSoundContainerIdentity = value; }
-		CheckpointSoundRegistry CaptureCheckpointSoundRegistry() const { std::lock_guard lock(m_CheckpointRegistryMutex); return m_CheckpointSoundContainers; }
-		/// The registry and the live container pairing behind it, taken together so neither can move between the two reads.
-		void CaptureCheckpointSoundRegistry(CheckpointSoundRegistry& registry, std::unordered_map<const SoundContainer*, uint64_t>& live) const {
-			std::lock_guard lock(m_CheckpointRegistryMutex);
-			registry = m_CheckpointSoundContainers;
-			live = m_LiveCheckpointSoundContainers;
-		}
-		/// Exchanges both halves of the registry in one step; a restore that swaps one without the other leaves identities resolving to freed containers.
-		void SwapCheckpointSoundRegistry(CheckpointSoundRegistry& registry, std::unordered_map<const SoundContainer*, uint64_t>& live) {
-			std::lock_guard lock(m_CheckpointRegistryMutex);
-			SaveRegistryForScopes();
-			m_CheckpointSoundContainers.swap(registry);
-			m_LiveCheckpointSoundContainers.swap(live);
-		}
+		uint64_t GetCheckpointSoundContainerCursor() const;
+		void SetCheckpointSoundContainerCursor(uint64_t value);
+		CheckpointSoundRegistry CaptureCheckpointSoundRegistry() const;
+		/// Copies both halves under the same registry lock.
+		void CaptureCheckpointSoundRegistry(CheckpointSoundRegistry& registry, std::unordered_map<const SoundContainer*, uint64_t>& live) const;
+		/// Exchanges both halves without publishing a partial conversion.
+		void SwapCheckpointSoundRegistry(CheckpointSoundRegistry& registry, std::unordered_map<const SoundContainer*, uint64_t>& live);
+		/// Promotes saved registry storage before the multiplayer inventory is prepared.
+		void PrepareCheckpointRegistryValues();
+		void PrepareCheckpointBackendValues();
+		void RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) const;
+		static std::string CheckpointBackendSelfTestMismatch();
+		static std::string CheckpointRegistryStorageSelfTestMismatch();
+		class CheckpointRegistryReadScope {
+			friend class AudioMan;
+		public:
+			explicit CheckpointRegistryReadScope(const AudioMan& source);
+			~CheckpointRegistryReadScope();
+			CheckpointRegistryReadScope(const CheckpointRegistryReadScope&) = delete;
+			CheckpointRegistryReadScope& operator=(const CheckpointRegistryReadScope&) = delete;
+		private:
+			CheckpointRegistryReadScope(const AudioMan& source, const CheckpointRegistryState<CheckpointNativeAllocator>& values);
+			std::unique_ptr<CheckpointRegistryState<CheckpointNativeAllocator>> m_Values;
+			const AudioMan* m_PreviousOwner;
+			CheckpointRegistryState<CheckpointNativeAllocator>* m_PreviousValues;
+		};
 		CheckpointSoundRegistry AddedCheckpointSoundRegistrations(const CheckpointSoundRegistry& original) const;
 		void RestoreCheckpointSoundRegistry(CheckpointSoundRegistry original);
 		void ActivateCheckpointSoundRegistrations(const CheckpointSoundRegistry& candidates);
 		void NoteCarriedSoundIdentity(uint64_t identity);
 		void CollectManagerSoundIdentities(std::unordered_set<uint64_t>& out) const;
 		void RememberCarriedSoundIdentities(std::unordered_set<uint64_t> carried);
-		std::unordered_set<uint64_t> LastCarriedSoundIdentities() const { std::lock_guard lock(m_CheckpointRegistryMutex); return m_LastCarriedSoundIdentities; }
+		std::unordered_set<uint64_t> LastCarriedSoundIdentities() const;
+		/// Keeps the carried set's original nodes for allocation-free rollback.
+		class CheckpointCarriedScope {
+		public:
+			CheckpointCarriedScope();
+			~CheckpointCarriedScope();
+			CheckpointCarriedScope(const CheckpointCarriedScope&) = delete;
+			CheckpointCarriedScope& operator=(const CheckpointCarriedScope&) = delete;
+		private:
+			std::optional<std::unordered_set<uint64_t>> m_Ordinary;
+			std::unique_ptr<OwnedCheckpointSoundIdentities> m_Owned;
+		};
 		void StopRecordingRestoredSoundRegistry();
-		bool RestoredSoundRegistryActive() const { std::lock_guard lock(m_CheckpointRegistryMutex); return m_RestoredSoundRegistryActive; }
+		bool RestoredSoundRegistryActive() const;
 		/// While one lives, the sound registry is saved before the first change made to it, and put back when the scope
 		/// ends less the containers gone by then; a registry nothing changed is left as it is.
 		class CheckpointRegistryScope {
@@ -138,6 +166,7 @@ namespace RTE {
 			CheckpointRegistryScope& operator=(const CheckpointRegistryScope&) = delete;
 		private:
 			std::optional<CheckpointSoundRegistry> m_Original;
+			std::unique_ptr<OwnedCheckpointSoundRegistry> m_OwnedOriginal;
 			uint64_t m_Cursor;
 			bool m_SkipCarriedNotes = true;
 		};
@@ -147,30 +176,37 @@ namespace RTE {
 		class SoundCheckpointSaveScope {
 		public:
 			/// A scope that does not remember its notes when it ends only collects them for its owner.
-			explicit SoundCheckpointSaveScope(bool remember = true);
+			explicit SoundCheckpointSaveScope(bool remember = true, bool activate = true);
 			~SoundCheckpointSaveScope();
 			SoundCheckpointSaveScope(const SoundCheckpointSaveScope&) = delete;
 			SoundCheckpointSaveScope& operator=(const SoundCheckpointSaveScope&) = delete;
 			void Note(uint64_t identity);
-			bool Contains(uint64_t identity) const { return m_Carried.contains(identity); }
-			const std::unordered_set<uint64_t>& Carried() const { return m_Carried; }
+			bool Contains(uint64_t identity) const { if (m_Failure) std::rethrow_exception(m_Failure); return m_Carried.contains(identity); }
+			const std::unordered_set<uint64_t>& Carried() const { if (m_Failure) std::rethrow_exception(m_Failure); return m_Carried; }
+			static bool NotesCollectWithoutSharedLock();
 			static SoundCheckpointSaveScope* Current() { return s_Current; }
 			/// Collects this thread's notes into a capture another thread opened, for as long as it lives.
 			class Lend {
 			public:
-				explicit Lend(SoundCheckpointSaveScope* scope) : m_Previous(s_Current) { s_Current = scope; }
-				~Lend() { s_Current = m_Previous; }
+				explicit Lend(SoundCheckpointSaveScope* scope, bool collectLocally = false);
+				~Lend();
 				Lend(const Lend&) = delete;
 				Lend& operator=(const Lend&) = delete;
 			private:
 				SoundCheckpointSaveScope* m_Previous;
+				SoundCheckpointSaveScope* m_Target;
+				std::unique_ptr<SoundCheckpointSaveScope> m_Local;
 			};
 		private:
 			static thread_local SoundCheckpointSaveScope* s_Current;
 			std::mutex m_NoteMutex;
 			std::unordered_set<uint64_t> m_Carried;
+			std::unique_ptr<OwnedCheckpointSoundIdentities> m_OwnedCarried;
+			std::exception_ptr m_Failure;
+			int m_ExceptionCount = 0;
 			SoundCheckpointSaveScope* m_Previous = nullptr;
 			bool m_Remember = true;
+			bool m_Active = true;
 		};
 		class RestoredSoundRegistryScope {
 		public:
@@ -311,7 +347,8 @@ namespace RTE {
 		void SetMasterMuted(bool muteOrUnmute = true) {
 			m_MuteMaster = muteOrUnmute;
 			if (m_AudioEnabled) {
-				m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced);
+				if (CheckpointNativeStorage::Reading() || m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced) == FMOD_OK)
+					if (auto* values = CheckpointGroup(0)) values->muted = m_MuteMaster || m_OutputSilenced;
 			}
 		}
 
@@ -320,7 +357,8 @@ namespace RTE {
 		void SetOutputSilenced(bool silenced) {
 			m_OutputSilenced = silenced && !m_InaudibleTestOutputVerified;
 			if (m_AudioEnabled) {
-				m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced);
+				if (CheckpointNativeStorage::Reading() || m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced) == FMOD_OK)
+					if (auto* values = CheckpointGroup(0)) values->muted = m_MuteMaster || m_OutputSilenced;
 			}
 		}
 
@@ -333,7 +371,8 @@ namespace RTE {
 		void SetMasterVolume(float volume = 1.0F) {
 			m_MasterVolume = std::clamp(volume, 0.0F, 1.0F);
 			if (m_AudioEnabled) {
-				m_MasterChannelGroup->setVolume(m_MasterVolume);
+				if (CheckpointNativeStorage::Reading() || m_MasterChannelGroup->setVolume(m_MasterVolume) == FMOD_OK)
+					if (auto* values = CheckpointGroup(0)) values->volume = m_MasterVolume;
 			}
 		}
 
@@ -363,10 +402,7 @@ namespace RTE {
 #pragma region Music Getters and Setters
 		/// Reports whether any music stream is currently playing.
 		/// @return Whether any music stream is currently playing.
-		bool IsMusicPlaying() const {
-			bool isPlayingMusic;
-			return m_AudioEnabled && m_MusicChannelGroup->isPlaying(&isPlayingMusic) == FMOD_OK ? isPlayingMusic : false;
-		}
+		bool IsMusicPlaying() const;
 
 		/// Gets whether the music channel is muted or not.
 		/// @return Whether the music channel is muted or not.
@@ -377,7 +413,8 @@ namespace RTE {
 		void SetMusicMuted(bool muteOrUnmute = true) {
 			m_MuteMusic = muteOrUnmute;
 			if (m_AudioEnabled) {
-				m_MusicChannelGroup->setMute(m_MuteMusic);
+				if (CheckpointNativeStorage::Reading() || m_MusicChannelGroup->setMute(m_MuteMusic) == FMOD_OK)
+					if (auto* values = CheckpointGroup(3)) values->muted = m_MuteMusic;
 			}
 		}
 
@@ -390,7 +427,8 @@ namespace RTE {
 		void SetMusicVolume(float volume = 1.0F) {
 			m_MusicVolume = std::clamp(volume, 0.0F, 1.0F);
 			if (m_AudioEnabled) {
-				m_MusicChannelGroup->setVolume(m_MusicVolume);
+				if (CheckpointNativeStorage::Reading() || m_MusicChannelGroup->setVolume(m_MusicVolume) == FMOD_OK)
+					if (auto* values = CheckpointGroup(3)) values->volume = m_MusicVolume;
 			}
 		}
 
@@ -411,8 +449,10 @@ namespace RTE {
 			m_MuteSounds = muteOrUnmute;
 			if (m_AudioEnabled) {
 				// TODO: We may or may not wanna separate this out and add a UI sound slider
-				m_SFXChannelGroup->setMute(m_MuteSounds);
-				m_UIChannelGroup->setMute(m_MuteSounds);
+				if (CheckpointNativeStorage::Reading() || m_SFXChannelGroup->setMute(m_MuteSounds) == FMOD_OK)
+					if (auto* values = CheckpointGroup(1)) values->muted = m_MuteSounds;
+				if (CheckpointNativeStorage::Reading() || m_UIChannelGroup->setMute(m_MuteSounds) == FMOD_OK)
+					if (auto* values = CheckpointGroup(2)) values->muted = m_MuteSounds;
 			}
 		}
 
@@ -425,8 +465,10 @@ namespace RTE {
 		void SetSoundsVolume(float volume = 1.0F) {
 			m_SoundsVolume = volume;
 			if (m_AudioEnabled) {
-				m_SFXChannelGroup->setVolume(m_SoundsVolume);
-				m_UIChannelGroup->setVolume(m_SoundsVolume);
+				if (CheckpointNativeStorage::Reading() || m_SFXChannelGroup->setVolume(m_SoundsVolume) == FMOD_OK)
+					if (auto* values = CheckpointGroup(1)) values->volume = m_SoundsVolume;
+				if (CheckpointNativeStorage::Reading() || m_UIChannelGroup->setVolume(m_SoundsVolume) == FMOD_OK)
+					if (auto* values = CheckpointGroup(2)) values->volume = m_SoundsVolume;
 			}
 		}
 #pragma endregion
@@ -504,13 +546,31 @@ namespace RTE {
 		FMOD::ChannelGroup* m_SFXChannelGroup; //!< The FMOD ChannelGroup for diegetic gameplay sounds.
 		FMOD::ChannelGroup* m_UIChannelGroup; //!< The FMOD ChannelGroup for UI sounds.
 		FMOD::ChannelGroup* m_MusicChannelGroup; //!< The FMOD ChannelGroup for music.
+		struct CheckpointBackend : CheckpointNativeAllocated {
+			std::array<AudioCheckpoint::Control, 4> groups;
+			std::array<std::array<AudioCheckpoint::Position, 4>, 8> listeners{};
+			int listenerCount = 0;
+			CheckpointBackend() = default;
+			CheckpointBackend(const CheckpointBackend& source, CheckpointNativeSnapshot& snapshot);
+		};
+		std::unique_ptr<CheckpointBackend> m_CheckpointBackend;
+
+	private:
+		struct PlayingVoice;
+
+	protected:
+		AudioCheckpoint::Control* CheckpointGroup(size_t index);
+		void RecordCheckpointListener(int index, const FMOD_VECTOR& position, const FMOD_VECTOR* velocity, const FMOD_VECTOR& forward, const FMOD_VECTOR& up);
+		FMOD::ChannelControl* ReadCheckpointPlayback(int identity) const;
+		static AudioCheckpoint::Voice CaptureStoredVoice(int identity, const PlayingVoice& voice, uint64_t owner, int bus);
+		std::shared_ptr<AudioCheckpointCapture> CaptureFrozenCheckpointState(bool samples) const;
 		std::vector<std::pair<FMOD::ChannelGroup*, FMOD::DSP*>> m_GroupEffects; //!< Effects owned by the mixer groups.
 
 		bool m_AudioEnabled; //!< Bool to tell whether audio is enabled or not.
 		bool m_InaudibleTestOutputVerified = false;
 		bool m_OutputSilenced = false; //!< Whether this process's output is silenced (a headless run); not a saved setting.
-		std::vector<std::unique_ptr<const Vector>> m_CurrentActivityHumanPlayerPositions; //!< The stored positions of each human player in the current activity. Only filled when there's an activity running.
-		std::unordered_map<int, float> m_SoundChannelMinimumAudibleDistances; //!<  An unordered map of sound channel indices to floats representing each Sound Channel's minimum audible distances. This is necessary to keep safe data in case the SoundContainer is destroyed while the sound is still playing, as happens often with TDExplosives.
+		CheckpointVector<std::unique_ptr<const Vector>> m_CurrentActivityHumanPlayerPositions; //!< The stored positions of each human player in the current activity. Only filled when there's an activity running.
+		CheckpointUnorderedMap<int, float> m_SoundChannelMinimumAudibleDistances; //!<  An unordered map of sound channel indices to floats representing each Sound Channel's minimum audible distances. This is necessary to keep safe data in case the SoundContainer is destroyed while the sound is still playing, as happens often with TDExplosives.
 
 		bool m_MuteMaster; //!< Whether all the audio is muted.
 		bool m_MuteMusic; //!< Whether the music channel is muted.
@@ -532,7 +592,7 @@ namespace RTE {
 		bool m_MusicMuffled; //!< Whether the music bus is muffled.
 
 		bool m_IsInMultiplayerMode; //!< If true then the server is in multiplayer mode and will register sound and music events into internal lists.
-		std::list<NetworkSoundData> m_SoundEvents[c_MaxClients]; //!< Lists of per player sound events.
+		CheckpointList<NetworkSoundData> m_SoundEvents[c_MaxClients]; //!< Lists of per player sound events.
 
 		std::mutex g_SoundEventsListMutex[c_MaxClients]; //!< A list for locking sound events for multiplayer to avoid race conditions and other such problems.
 		std::mutex m_SoundChannelMinimumAudibleDistancesMutex; //!, As above but for m_SoundChannelMinimumAudibleDistances
@@ -550,7 +610,7 @@ namespace RTE {
 			};
 			std::shared_ptr<ChannelUserData> handle;
 			SoundContainer* owner = nullptr;
-			std::string soundPath;
+			CheckpointString soundPath;
 			float minimumAudibleDistance = 0;
 			SoundExecutionDomain domain = SoundExecutionDomain::Presentation;
 			bool predicted = false; //!< Started by a preview and not yet adopted, so it belongs to no checkpoint.
@@ -563,7 +623,7 @@ namespace RTE {
 			bool hasArchive = false;
 
 			void EnsureHandle() {
-				if (!handle) handle = std::make_shared<ChannelUserData>();
+				if (!handle) handle = MakeCheckpointNativeShared<ChannelUserData>();
 			}
 			void BindUserData(int identity) {
 				EnsureHandle();
@@ -578,7 +638,7 @@ namespace RTE {
 				handle->channel.store(ch, std::memory_order_relaxed);
 			}
 			PlayingVoice(const PlayingVoice& other) { *this = other; }
-			PlayingVoice(PlayingVoice&& other) noexcept { *this = other; }
+			PlayingVoice(PlayingVoice&& other) { *this = std::move(other); }
 			PlayingVoice& operator=(const PlayingVoice& other) {
 				if (this == &other) return *this;
 				EnsureHandle();
@@ -599,10 +659,9 @@ namespace RTE {
 				hasArchive = other.hasArchive;
 				return *this;
 			}
-			PlayingVoice& operator=(PlayingVoice&& other) noexcept {
+			PlayingVoice& operator=(PlayingVoice&& other) {
 				if (this == &other) return *this;
 				handle = std::move(other.handle);
-				EnsureHandle();
 				owner = other.owner;
 				soundPath = std::move(other.soundPath);
 				minimumAudibleDistance = other.minimumAudibleDistance;
@@ -620,7 +679,7 @@ namespace RTE {
 			FMOD::Channel* Channel() const { return handle ? handle->channel.load(std::memory_order_acquire) : nullptr; }
 			void SetChannel(FMOD::Channel* value) { EnsureHandle(); handle->channel.store(value, std::memory_order_release); }
 		};
-		std::map<int, PlayingVoice> m_PlayingVoices;
+		CheckpointMap<int, PlayingVoice> m_PlayingVoices;
 		std::unordered_map<int, int> m_BackendVoiceIdentities;
 		/// Where a channel came from, so one the positional pass finds dead can name who played it and when; a dead handle answers nothing.
 		struct ChannelOrigin {
@@ -647,19 +706,47 @@ namespace RTE {
 		void ReleaseStoppedVoiceEffects();
 		std::vector<std::shared_ptr<PlayingVoice::ChannelUserData>> m_RetiredHandles;
 		int m_NextVoiceIdentity = 0;
-		// A Lua GC finalizer frees sound containers on whichever pool thread collects its state, and several states collect at once, so the registry group down to m_NextSoundContainerIdentity is locked.
+		// Lua finalizers can retire owners on several workers at once.
 		mutable std::recursive_mutex m_CheckpointRegistryMutex;
-		std::vector<CheckpointRegistryScope*> m_RegistryScopes; //!< The live registry scopes, each saved into before the first change.
-		/// Saves the registry into every live scope that has not saved it yet; called under the registry lock before a change.
 		void SaveRegistryForScopes();
-		CheckpointSoundRegistry m_CheckpointSoundContainers;
-		std::unordered_map<const SoundContainer*, uint64_t> m_LiveCheckpointSoundContainers;
-		CheckpointSoundRegistry m_RestoredSoundContainers;
-		std::unordered_set<uint64_t> m_RestoredManagerIdentities;
-		std::unordered_set<uint64_t> m_LastCarriedSoundIdentities;
-		bool m_RestoredSoundRegistryActive = false;
-		bool m_RestoredSoundRegistryRecording = false;
-		uint64_t m_NextSoundContainerIdentity = 0;
+		template<template<class> class Allocator> struct CheckpointRegistryState : CheckpointNativeAllocated {
+			template<class T> using Vector = std::vector<T, Allocator<T>>;
+			template<class Key, class T> using Map = std::map<Key, T, std::less<Key>, Allocator<std::pair<const Key, T>>>;
+			template<class Key, class T> using Hash = std::unordered_map<Key, T, std::hash<Key>, std::equal_to<Key>, Allocator<std::pair<const Key, T>>>;
+			template<class Key> using Set = std::unordered_set<Key, std::hash<Key>, std::equal_to<Key>, Allocator<Key>>;
+			Vector<CheckpointRegistryScope*> m_RegistryScopes;
+			Map<uint64_t, Vector<SoundContainer*>> m_CheckpointSoundContainers;
+			Hash<const SoundContainer*, uint64_t> m_LiveCheckpointSoundContainers;
+			Map<uint64_t, Vector<SoundContainer*>> m_RestoredSoundContainers;
+			Set<uint64_t> m_RestoredManagerIdentities, m_LastCarriedSoundIdentities;
+			bool m_RestoredSoundRegistryActive = false, m_RestoredSoundRegistryRecording = false;
+			uint64_t m_NextSoundContainerIdentity = 0;
+			CheckpointRegistryState() = default;
+			CheckpointRegistryState(const CheckpointRegistryState& source);
+			template<template<class> class Other> explicit CheckpointRegistryState(const CheckpointRegistryState<Other>& source);
+			template<template<class> class Other> void Assign(const CheckpointRegistryState<Other>& source);
+		};
+		CheckpointRegistryState<std::allocator> m_OrdinaryCheckpointRegistry;
+		std::unique_ptr<CheckpointRegistryState<CheckpointNativeAllocator>> m_OwnedCheckpointRegistry;
+		inline static thread_local const AudioMan* s_PrivateRegistryOwner = nullptr;
+		inline static thread_local CheckpointRegistryState<CheckpointNativeAllocator>* s_PrivateRegistryValues = nullptr;
+		bool PrivateRegistry() const { return s_PrivateRegistryOwner && s_PrivateRegistryOwner == CheckpointNativeStorage::Original(this); }
+		std::unique_lock<std::recursive_mutex> RegistryLock() const {
+			std::unique_lock lock(m_CheckpointRegistryMutex, std::defer_lock);
+			if (!CheckpointNativeStorage::Reading() && !PrivateRegistry()) lock.lock();
+			return lock;
+		}
+		template<class Work> decltype(auto) WithCheckpointRegistry(Work&& work) {
+			if (PrivateRegistry()) return work(*s_PrivateRegistryValues);
+			if (CheckpointNativeStorage::Reading()) throw std::logic_error("frozen sound registry has no private writer");
+			if (m_OwnedCheckpointRegistry) return work(*m_OwnedCheckpointRegistry);
+			return work(m_OrdinaryCheckpointRegistry);
+		}
+		template<class Work> decltype(auto) WithCheckpointRegistry(Work&& work) const {
+			if (PrivateRegistry()) return work(std::as_const(*s_PrivateRegistryValues));
+			if (m_OwnedCheckpointRegistry) return work(std::as_const(*CheckpointNativeStorage::Source(m_OwnedCheckpointRegistry.get())));
+			return work(std::as_const(m_OrdinaryCheckpointRegistry));
+		}
 		mutable std::mutex m_LogicalSoundsMutex;
 		std::unordered_set<SoundContainer*> m_ActiveLogicalSounds;
 		mutable std::mutex m_PendingSoundOpsMutex;
@@ -670,7 +757,7 @@ namespace RTE {
 			uint64_t frame = 0;
 			float value = 0.0F;
 		};
-		std::map<SoundObservationKey, std::map<uint8_t, CommittedAudibility>> m_CommittedAudibility;
+		CheckpointMap<SoundObservationKey, CheckpointMap<uint8_t, CommittedAudibility>> m_CommittedAudibility;
 		std::map<SoundObservationKey, float> m_LastSentAudibility;
 		mutable std::mutex m_AudibilityMissMutex;
 		mutable std::set<SoundObservationKey> m_ReportedAudibilityMisses; //!< Keys already reported by the CC_TRACE_AUDIBILITY diagnostic; empty unless it is on.

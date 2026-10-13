@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 #include "GUIScrollPanel.h"
 #include "GUIInterface.h"
 
@@ -27,11 +30,11 @@ namespace RTE {
 		} Signal;
 
 		// Item structure
-		struct Item {
+		struct Item : CheckpointNativeAllocated {
 			int m_ID = 0;
-			std::string m_Name;
+			CheckpointString m_Name;
 			// Extra text field displayed right-justified in the item
-			std::string m_RightText;
+			CheckpointString m_RightText;
 			// Extra index for special indexing or reference that the item is associated with. Menu-specific
 			int m_ExtraIndex = 0;
 			bool m_Selected = false;
@@ -172,7 +175,7 @@ namespace RTE {
 		Item* GetSelected();
 
 		/// Gets the item list.
-		std::vector<Item*>* GetItemList();
+		CheckpointVector<Item*>* GetItemList();
 
 		/// Gets an item at the index.
 		/// @param Index Index.
@@ -226,7 +229,7 @@ namespace RTE {
 		void SetAlternateDrawMode(bool enableAltDrawMode = true) { m_AlternateDrawMode = enableAltDrawMode; }
 
 		/// Gets the selection list.
-		std::vector<Item*>* GetSelectionList();
+		CheckpointVector<Item*>* GetSelectionList();
 
 		/// Deletes an item at the index.
 		/// @param Index Index.
@@ -324,8 +327,8 @@ namespace RTE {
 
 		bool m_AlternateDrawMode; // This draws items differently, not with boxes etc.
 
-		std::vector<Item*> m_Items;
-		std::vector<Item*> m_SelectedList;
+		CheckpointVector<Item*> m_Items;
+		CheckpointVector<Item*> m_SelectedList;
 		unsigned long m_SelectedColorIndex;
 		unsigned long m_UnselectedColorIndex;
 

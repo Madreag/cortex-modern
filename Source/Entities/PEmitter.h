@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the PEmitter class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -29,6 +31,8 @@ namespace RTE {
 		/// Constructor method used to instantiate a PEmitter object in system
 		/// memory. Create() should be called before using the object.
 		PEmitter();
+		CheckpointSnapshotMethods(PEmitter);
+		static void PrepareCheckpointNative(const PEmitter& source, PEmitter* target, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a PEmitter object before deletion
 		/// from system memory.
@@ -299,7 +303,7 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass;
 
 		// The list of MO instances that get emitted
-		std::list<Emission*> m_EmissionList;
+		CheckpointList<Emission*> m_EmissionList;
 		// Sounds
 		SoundContainer m_EmissionSound;
 		SoundContainer m_BurstSound;
@@ -310,8 +314,8 @@ namespace RTE {
 		bool m_WasEmitting;
 		PersistedTimerAnchor m_PersistedBurstTimerAnchor;
 		PersistedTimerAnchor m_PersistedLastEmitTimerAnchor;
-		std::vector<double> m_PersistedEmissionAccumulators;
-		std::vector<std::string> m_PersistedEmissionTimers; //!< Saved per-emission start/stop timers, applied on snapshot adopt.
+		CheckpointVector<double> m_PersistedEmissionAccumulators;
+		CheckpointVector<CheckpointString> m_PersistedEmissionTimers; //!< Saved per-emission start/stop timers, applied on snapshot adopt.
 		// The number of emissions emitted since emission was last enabled
 		long m_EmitCount;
 		// The max number of emissions to emit per emit being enabled
@@ -359,7 +363,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		std::string m_PersistedPEmitterRuntime;
+		CheckpointString m_PersistedPEmitterRuntime;
 		std::string SavePEmitterRuntime() const;
 		bool LoadPEmitterRuntime(std::string_view text, bool validateOnly = false);
 

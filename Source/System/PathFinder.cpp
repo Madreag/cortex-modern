@@ -7,6 +7,7 @@
 #include "SLTerrain.h"
 #include "ThreadMan.h"
 #include "CheckpointArchive.h"
+#include "CheckpointNativeSnapshot.h"
 #include "CheckpointImage.h"
 #include "FaultInjection.h"
 #include "System.h"
@@ -34,14 +35,99 @@
 #include <cstdio>
 #include <execution>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <sstream>
 #include <memory>
 #include <string>
+#include <stdexcept>
 #include <thread>
 #include <unordered_set>
+#include <cstring>
+#include <deque>
+#include <list>
+#include <vector>
 
 using namespace RTE;
+
+PathRequest::PathRequest(const PathRequest& source, CheckpointNativeSnapshot& snapshot) :
+	complete(source.complete), startPos(source.startPos), targetPos(source.targetPos),
+	horizonGeneration(source.horizonGeneration), jumpHeight(source.jumpHeight), digStrength(source.digStrength),
+	committedHorizon(source.committedHorizon), completeTick(source.completeTick), resumeAfterRestore(source.resumeAfterRestore) {
+	if (complete || !source.checkpointFinder) {
+		status = source.status; path = snapshot.Freeze(source.path);
+		pathLength = source.pathLength; totalCost = source.totalCost;
+	}
+	if (!complete) {
+		// Never inspect a worker's partial output. A pending solve owns the boundary's
+		// node view, including the committed overlay, so restoration can restart it exactly.
+		const auto* answer = CheckpointNativeStorage::Source(source.deferredAnswer.get());
+		if (answer && answer->solved.load(std::memory_order_acquire)) {
+			deferredAnswer = MakeCheckpointNativeShared<PathRequestAnswer>();
+			deferredAnswer->path = snapshot.Freeze(answer->path);
+			deferredAnswer->status = answer->status; deferredAnswer->totalCost = answer->totalCost;
+			deferredAnswer->solved.store(true, std::memory_order_release);
+		} else if (const auto* finder = CheckpointNativeStorage::Source(source.checkpointFinder)) {
+			checkpointGrid = finder->FreezeCheckpoint(committedHorizon ? horizonGeneration : 0).Text();
+			checkpointSelfTestGrid = finder->CheckpointSelfTestGrid();
+		} else {
+			checkpointGrid = snapshot.Freeze(source.checkpointGrid);
+			checkpointSelfTestGrid = source.checkpointSelfTestGrid;
+		}
+	}
+}
+
+std::string PathRequest::SaveCheckpoint() const {
+	const auto* answer = complete ? nullptr : CheckpointNativeStorage::Source(deferredAnswer.get());
+	const bool ready = answer && answer->solved.load(std::memory_order_acquire);
+	CheckpointString grid;
+	bool selfTestGrid = checkpointSelfTestGrid;
+	if (!complete && !ready) {
+		if (const auto* finder = CheckpointNativeStorage::Source(checkpointFinder)) {
+			grid = finder->FreezeCheckpoint(committedHorizon ? horizonGeneration : 0).Text();
+			selfTestGrid = finder->CheckpointSelfTestGrid();
+		} else grid = checkpointGrid;
+	}
+	// Keep the existing completed-request representation and accept older pending archives.
+	const bool pendingState = !complete && (ready || !grid.empty());
+	CheckpointWriter writer(pendingState ? "PathRequest2" : "PathRequest1");
+	writer(complete, startPos, targetPos, jumpHeight, digStrength, committedHorizon, completeTick);
+	if (complete) writer(status, path, pathLength, totalCost, horizonGeneration);
+	else if (pendingState) {
+		writer(horizonGeneration, ready);
+		if (ready) writer(answer->status, answer->path, answer->totalCost);
+		else writer(grid, selfTestGrid);
+	}
+	return writer.Text();
+}
+
+std::shared_ptr<PathRequest> PathRequest::ReadCheckpoint(std::string_view text) {
+	auto request = MakeCheckpointNativeShared<PathRequest>();
+	const bool version2 = CheckpointTypeName(text) == "PathRequest2";
+	CheckpointReader reader(text, version2 ? "PathRequest2" : "PathRequest1");
+	reader.Value(request->complete);
+	reader(request->startPos, request->targetPos, request->jumpHeight, request->digStrength, request->committedHorizon, request->completeTick);
+	if (version2 && request->complete) throw std::runtime_error("invalid completed PathRequest2 checkpoint");
+	if (request->complete) reader(request->status, request->path, request->pathLength, request->totalCost, request->horizonGeneration);
+	else if (version2) {
+		reader(request->horizonGeneration);
+		bool ready;
+		reader.Value(ready);
+		if (ready) {
+			request->deferredAnswer = MakeCheckpointNativeShared<PathRequestAnswer>();
+			reader(request->deferredAnswer->status, request->deferredAnswer->path, request->deferredAnswer->totalCost);
+			request->deferredAnswer->solved.store(true, std::memory_order_release);
+		} else {
+			reader.Value(request->checkpointGrid);
+			reader(request->checkpointSelfTestGrid);
+			PathFinder validation;
+			if (!validation.LoadCheckpoint(request->checkpointGrid, true)) throw std::runtime_error("invalid pending path grid checkpoint");
+		}
+	}
+	reader.Finish();
+	request->resumeAfterRestore = !request->complete;
+	return request;
+}
 
 namespace {
 	struct PathingRequestScope {
@@ -282,12 +368,126 @@ std::string PathFinder::SaveCheckpoint() const {
 	WaitForPathingRequests();
 	CheckpointWriter writer("PathFinder1");
 	writer(m_NodeDimension, m_Offset, m_GridWidth, m_GridHeight, m_WrapsX, m_WrapsY, m_NodeGrid.size());
+	if (CheckpointWriter::IsCapturing() && CheckpointWriter::BatchEnabled()) {
+		struct NodeState {
+			float x, y;
+			unsigned char navigable;
+			std::array<int64_t, PathNode::c_MaxAdjacentNodeCount> adjacent;
+			std::array<int, PathNode::c_MaxAdjacentNodeCount> material;
+		};
+		std::vector<NodeState> nodes;
+		nodes.reserve(m_NodeGrid.size());
+		for (const PathNode& node: m_NodeGrid) {
+			NodeState saved;
+			saved.x = node.Pos.m_X; saved.y = node.Pos.m_Y;
+			std::memcpy(&saved.navigable, &node.m_Navigable, sizeof(saved.navigable));
+			for (size_t direction = 0; direction < saved.adjacent.size(); ++direction) {
+				const PathNode* adjacent = node.AdjacentNodes[direction];
+				saved.adjacent[direction] = adjacent ? static_cast<int64_t>(adjacent - m_NodeGrid.data()) : int64_t{-1};
+				const Material* material = node.AdjacentNodeBlockingMaterials[direction];
+				saved.material[direction] = material ? static_cast<int>(material->GetIndex()) : -1;
+			}
+			nodes.push_back(saved);
+		}
+		const size_t bytes = sizeof(nodes) + nodes.size() * sizeof(NodeState);
+		writer.AppendFields(CheckpointText::Deferred([nodes = std::move(nodes)] {
+			CheckpointWriter output(CheckpointWriter::FieldsOnly{});
+			for (const NodeState& node: nodes) {
+				output(node.x, node.y, static_cast<unsigned int>(node.navigable));
+				output(node.adjacent, node.material);
+			}
+			return output.Text();
+		}, bytes));
+		return writer.Text();
+	}
 	for (const PathNode& node: m_NodeGrid) {
 		writer(node.Pos, node.m_Navigable);
 		for (const PathNode* adjacent: node.AdjacentNodes) writer(adjacent ? static_cast<int64_t>(adjacent - m_NodeGrid.data()) : int64_t{-1});
 		for (const Material* material: node.AdjacentNodeBlockingMaterials) writer(material ? static_cast<int>(material->GetIndex()) : -1);
 	}
 	return writer.Text();
+}
+
+CheckpointText PathFinder::FreezeCheckpoint(uint64_t committedGeneration) const {
+	if (CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::IsView(this)) return CheckpointNativeStorage::Source(this)->FreezeCheckpoint(committedGeneration);
+	struct Node {
+		float x, y;
+		unsigned char navigable;
+		std::array<int64_t, PathNode::c_MaxAdjacentNodeCount> adjacent;
+		std::array<int, PathNode::c_MaxAdjacentNodeCount> material;
+	};
+	std::vector<Node> nodes;
+	nodes.reserve(m_NodeGrid.size());
+	std::unordered_map<int, std::array<const Material*, 8>> committed;
+	if (committedGeneration) {
+		for (const auto& [nodeId, node]: CheckpointValues(m_HorizonNodes))
+			if (node.generation <= committedGeneration) committed.emplace(nodeId, node.committedMaterials);
+	}
+	for (const PathNode& source: CheckpointValues(m_NodeGrid)) {
+		Node node;
+		const auto overlay = committed.find(static_cast<int>(nodes.size()));
+		node.x = source.Pos.m_X; node.y = source.Pos.m_Y;
+		std::memcpy(&node.navigable, &source.m_Navigable, sizeof(node.navigable));
+		for (size_t direction = 0; direction < node.adjacent.size(); ++direction) {
+			const PathNode* adjacent = source.AdjacentNodes[direction];
+			node.adjacent[direction] = adjacent ? static_cast<int64_t>(adjacent - m_NodeGrid.data()) : int64_t{-1};
+			const Material* material = overlay == committed.end() ? source.AdjacentNodeBlockingMaterials[direction] : overlay->second[direction];
+			node.material[direction] = material ? static_cast<int>(CheckpointNativeStorage::Source(material)->GetIndex()) : -1;
+		}
+		nodes.push_back(node);
+	}
+	const size_t bytes = sizeof(nodes) + nodes.size() * sizeof(Node);
+	return CheckpointText::Deferred([nodes = std::move(nodes), dimension = m_NodeDimension, offset = m_Offset,
+		width = m_GridWidth, height = m_GridHeight, wrapsX = m_WrapsX, wrapsY = m_WrapsY] {
+		CheckpointWriter writer("PathFinder1");
+		writer(dimension, offset, width, height, wrapsX, wrapsY, nodes.size());
+		for (const Node& node: nodes) {
+			writer(node.x, node.y, static_cast<unsigned int>(node.navigable), node.adjacent, node.material);
+		}
+		return writer.Text();
+	}, bytes);
+}
+
+bool PathFinder::RunCheckpointFreezeSelfTest() {
+	CheckpointNativeStorage::AllocationScope allocation(true);
+	auto source = std::make_unique<PathFinder>();
+	source->TestInstallGrid(3, 2, 17, nullptr);
+	source->m_NodeGrid[1].Pos.m_X = -0.0F;
+	source->m_NodeGrid[2].m_Navigable = false;
+	const std::string expected = source->SaveCheckpoint();
+	source->m_CurrentPathingRequests.store(1);
+	struct Release { PathFinder* source; ~Release() { if (source) source->m_CurrentPathingRequests.store(0); } } release{source.get()};
+	auto freeze = FloatingPointEnvironment::Async(std::launch::async, [&source] { return source->FreezeCheckpoint(); });
+	const bool noWait = freeze.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+	source->m_CurrentPathingRequests.store(0);
+	CheckpointText frozen = freeze.get();
+	auto request = MakeCheckpointNativeShared<PathRequest>();
+	request->complete = true; request->status = 7; request->pathLength = 2; request->totalCost = 17.25F;
+	request->startPos = Vector(-0.0F, 2); request->targetPos = Vector(19, -31);
+	request->path = {request->startPos, request->targetPos};
+	const auto requestBytes = [](const PathRequest& value) {
+		CheckpointWriter writer("PathRequestFreezeTest");
+		writer(value.complete, value.status, value.path, value.pathLength, value.totalCost, value.startPos, value.targetPos, value.horizonGeneration);
+		return writer.Text();
+	};
+	const std::string expectedRequest = requestBytes(*request);
+	const PathRequest* requestAddress = request.get();
+	const PathFinder* sourceAddress = source.get();
+	const auto pages = CheckpointNativeStorage::Prepare();
+	for (const auto& part: pages) part->Arm();
+	request.reset();
+	auto replacement = MakeCheckpointNativeShared<PathRequest>();
+	replacement->path.assign(9, Vector(91, 42));
+	source->TestInstallGrid(1, 1, 31, nullptr);
+	release.source = nullptr;
+	source.reset();
+	const std::string actual = FloatingPointEnvironment::Async(std::launch::async, [frozen] { return frozen.Text(); }).get();
+	const bool owned = FloatingPointEnvironment::Async(std::launch::async, [&] {
+		CheckpointNativeStorage::ReadScope read(pages);
+		return CheckpointNativeStorage::Source(sourceAddress)->FreezeCheckpoint().Text() == expected &&
+		    requestBytes(*CheckpointNativeStorage::Source(requestAddress)) == expectedRequest;
+	}).get();
+	return noWait && actual == expected && owned && Actor::RunCheckpointPathRequestSelfTest();
 }
 
 bool PathFinder::LoadCheckpoint(std::string_view text, bool validateOnly) {
@@ -313,7 +513,7 @@ bool PathFinder::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		ClearHorizonState();
 		// PathNode contains references to its own array elements: construct in place,
 		// then swap storage, so neither vector growth nor a value copy can dangle them.
-		std::vector<PathNode> replacement;
+		CheckpointVector<PathNode> replacement;
 		replacement.reserve(count);
 		for (const NodeState& node: nodes) replacement.emplace_back(node.pos);
 		for (size_t index = 0; index < count; ++index) {
@@ -510,7 +710,8 @@ int PathFinder::CalculatePath(Vector start, Vector end, std::list<Vector>& pathR
 	return CalculatePathImpl(start, end, pathResult, totalCostResult, jumpHeight, digStrength);
 }
 
-int PathFinder::CalculatePathImpl(Vector start, Vector end, std::list<Vector>& pathResult, float& totalCostResult, float jumpHeight, float digStrength) {
+template<class Allocator>
+int PathFinder::CalculatePathImpl(Vector start, Vector end, std::list<Vector, Allocator>& pathResult, float& totalCostResult, float jumpHeight, float digStrength) {
 	ZoneScoped;
 
 	// Make sure start and end are within scene bounds.
@@ -588,10 +789,15 @@ int PathFinder::CalculatePathImpl(Vector start, Vector end, std::list<Vector>& p
 }
 
 std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector start, Vector end, float jumpHeight, float digStrength, PathCompleteCallback callback, bool committedHorizon, uint64_t completeTick) {
-	std::shared_ptr<volatile PathRequest> pathRequest = std::make_shared<PathRequest>();
+	std::shared_ptr<volatile PathRequest> pathRequest = MakeCheckpointNativeShared<PathRequest>();
 
 	const_cast<Vector&>(pathRequest->startPos) = start;
 	const_cast<Vector&>(pathRequest->targetPos) = end;
+	pathRequest->jumpHeight = jumpHeight;
+	pathRequest->digStrength = digStrength;
+	pathRequest->committedHorizon = committedHorizon;
+	pathRequest->completeTick = completeTick;
+	pathRequest->checkpointFinder = this;
 
 	uint64_t pinned = 0;
 	bool held = false;
@@ -606,6 +812,8 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 		// A shared request is published on its commit tick, so every peer sees it complete on the same applied frame.
 		deferred = std::make_shared<DeferredPathRequest>();
 		deferred->request = pathRequest;
+		deferred->answer = MakeCheckpointNativeShared<PathRequestAnswer>();
+		const_cast<PathRequest&>(*pathRequest).deferredAnswer = deferred->answer;
 		deferred->callback = callback;
 		deferred->completeTick = completeTick;
 		deferred->start = start;
@@ -622,9 +830,11 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 	const int delayMs = m_PathRequestDelayMs;
 	const bool lostSolve = deferred && FaultInjected("path_request_lost");
 	++m_CurrentPathingRequests;
+	SaverThreads::GameWorkBegins();
 	try {
 		g_ThreadMan.GetBackgroundThreadPool().push_task(
 		    [this, start, end, jumpHeight, digStrength, callback, committedHorizon, pinned, held, deferred, delayMs, lostSolve](std::shared_ptr<volatile PathRequest> volRequest) {
+			    const SaverThreads::GameWorkScope gameWork;
 			    PathingRequestScope scope{m_CurrentPathingRequests};
 			    HorizonReadScope horizon(this, committedHorizon, pinned, held);
 
@@ -633,11 +843,11 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 					    // Armed fault: the solver returns without answering, as a dying thread would.
 					    return;
 				    }
-				    deferred->status = CalculatePathImpl(start, end, deferred->path, deferred->totalCost, jumpHeight, digStrength);
+				    deferred->answer->status = CalculatePathImpl(start, end, deferred->answer->path, deferred->answer->totalCost, jumpHeight, digStrength);
 				    if (delayMs > 0) {
 					    std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
 				    }
-				    deferred->solved.store(true, std::memory_order_release);
+				    deferred->answer->solved.store(true, std::memory_order_release);
 				    return;
 			    }
 
@@ -657,6 +867,7 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 			    // Have to set to complete after the callback, so anything that blocks on it knows that the callback will have been called by now
 			    // This has the awkward side-effect that the complete flag is actually false during the callback - but that's fine, if it's called we know it's complete anyways
 			    request.complete = true;
+			    request.checkpointFinder = nullptr;
 			    // A script holding this request has its fields in a cached graph chunk; nothing else reports this write.
 			    CheckpointValueWritten(&request);
 		    },
@@ -670,19 +881,77 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 			EndCommittedHorizonRead(pinned);
 		}
 		--m_CurrentPathingRequests;
+		SaverThreads::GameWorkEnds();
 		throw;
 	}
 
 	return pathRequest;
 }
 
+std::shared_ptr<volatile PathRequest> PathFinder::ResumeCheckpointPathRequest(const std::shared_ptr<volatile PathRequest>& saved) {
+	PathRequest& request = const_cast<PathRequest&>(*saved);
+	if (!request.resumeAfterRestore || request.complete) return saved;
+	if (!request.deferredAnswer && request.checkpointGrid.empty()) {
+		// Older archives retained only the query inputs.
+		return CalculatePathAsync(request.startPos, request.targetPos, request.jumpHeight, request.digStrength, nullptr, request.committedHorizon, request.completeTick);
+	}
+	auto deferred = std::make_shared<DeferredPathRequest>();
+	deferred->request = saved;
+	deferred->completeTick = request.completeTick;
+	deferred->start = request.startPos; deferred->end = request.targetPos;
+	deferred->jumpHeight = request.jumpHeight; deferred->digStrength = request.digStrength;
+	deferred->committedHorizon = request.committedHorizon;
+	deferred->pinnedGeneration = request.horizonGeneration;
+	deferred->answer = request.deferredAnswer;
+	if (!deferred->answer) {
+		deferred->restoredGrid = MakeCheckpointNativeShared<PathFinder>();
+		if (!deferred->restoredGrid->LoadCheckpoint(request.checkpointGrid)) throw std::runtime_error("could not restore pending path grid");
+		deferred->restoredGrid->m_SelfTestGrid = request.checkpointSelfTestGrid;
+		deferred->answer = MakeCheckpointNativeShared<PathRequestAnswer>();
+		request.deferredAnswer = deferred->answer;
+	}
+	if (request.completeTick) {
+		std::lock_guard lock(m_DeferredPathMutex);
+		deferred->sequence = ++m_DeferredPathSequence;
+		m_DeferredPathRequests.push_back(deferred);
+	}
+	request.resumeAfterRestore = false;
+	if (deferred->answer->solved.load(std::memory_order_acquire)) {
+		if (!request.completeTick) PublishDeferredPathRequest(*deferred);
+		return saved;
+	}
+	++m_CurrentPathingRequests;
+	SaverThreads::GameWorkBegins();
+	try {
+		g_ThreadMan.GetBackgroundThreadPool().push_task([this, deferred] {
+			const SaverThreads::GameWorkScope gameWork;
+			PathingRequestScope scope{m_CurrentPathingRequests};
+			// Its saved grid already contains the original committed view; it needs no live horizon pin.
+			HorizonReadScope horizon(this, false);
+			auto& answer = *deferred->answer;
+			answer.status = deferred->restoredGrid->CalculatePathImpl(deferred->start, deferred->end, answer.path, answer.totalCost, deferred->jumpHeight, deferred->digStrength);
+			answer.solved.store(true, std::memory_order_release);
+			if (!deferred->completeTick) PublishDeferredPathRequest(*deferred);
+		});
+	} catch (...) {
+		--m_CurrentPathingRequests;
+		SaverThreads::GameWorkEnds();
+		std::lock_guard lock(m_DeferredPathMutex);
+		m_DeferredPathRequests.erase(std::remove(m_DeferredPathRequests.begin(), m_DeferredPathRequests.end(), deferred), m_DeferredPathRequests.end());
+		request.resumeAfterRestore = true;
+		request.deferredAnswer.reset();
+		throw;
+	}
+	return saved;
+}
+
 void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
 	int64_t waitUs = 0;
 	bool expired = false;
-	if (!deferred.solved.load(std::memory_order_acquire)) {
+	if (!deferred.answer->solved.load(std::memory_order_acquire)) {
 		// A solve that is not finished at its commit tick stalls this tick, the same as a horizon job that is not ready.
 		const auto started = std::chrono::steady_clock::now();
-		while (!deferred.solved.load(std::memory_order_acquire)) {
+		while (!deferred.answer->solved.load(std::memory_order_acquire)) {
 			waitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 			if (waitUs >= c_HorizonWaitCapUs) {
 				expired = true;
@@ -708,24 +977,25 @@ void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
 	if (expired) {
 		// The solver is not coming. Every peer publishes an answer on this frame, so this one is solved here from the
 		// pinned grid the request was launched against; the solver's own buffers are left to it.
-		std::list<Vector> path;
+		CheckpointList<Vector> path;
 		float totalCost = 0.0F;
 		++m_CurrentPathingRequests;
 		PathingRequestScope scope{m_CurrentPathingRequests};
 		// This thread is the one that applies overlays, so it reads the request's pin without registering as a reader.
 		const bool previousRead = s_ReadCommittedHorizon;
 		const uint64_t previousGeneration = s_PinnedHorizonGeneration;
-		s_ReadCommittedHorizon = deferred.committedHorizon;
+		s_ReadCommittedHorizon = deferred.committedHorizon && !deferred.restoredGrid;
 		s_PinnedHorizonGeneration = deferred.pinnedGeneration;
-		request.status = CalculatePathImpl(deferred.start, deferred.end, path, totalCost, deferred.jumpHeight, deferred.digStrength);
+		PathFinder* finder = deferred.restoredGrid ? deferred.restoredGrid.get() : this;
+		request.status = finder->CalculatePathImpl(deferred.start, deferred.end, path, totalCost, deferred.jumpHeight, deferred.digStrength);
 		s_ReadCommittedHorizon = previousRead;
 		s_PinnedHorizonGeneration = previousGeneration;
 		request.path = std::move(path);
 		request.totalCost = totalCost;
 	} else {
-		request.path = std::move(deferred.path);
-		request.totalCost = deferred.totalCost;
-		request.status = deferred.status;
+		request.path = std::move(deferred.answer->path);
+		request.totalCost = deferred.answer->totalCost;
+		request.status = deferred.answer->status;
 	}
 	request.pathLength = request.path.size();
 	if (LuaMan::SharedTraceEnabled()) {
@@ -739,6 +1009,9 @@ void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
 	}
 	// Same order as the immediate path: the callback runs first, so anything blocking on complete knows it has run.
 	request.complete = true;
+	request.checkpointFinder = nullptr;
+	request.checkpointGrid.clear();
+	request.deferredAnswer.reset();
 	CheckpointValueWritten(&request);
 }
 
@@ -813,7 +1086,8 @@ void PathFinder::RecalculateAllCosts() {
 	UpdateNodeList(pathNodesIdsVec);
 }
 
-std::vector<int> PathFinder::RecalculateAreaCosts(std::deque<Box>& boxList, size_t nodeUpdateLimit) {
+template<class Allocator>
+std::vector<int> PathFinder::RecalculateAreaCosts(std::deque<Box, Allocator>& boxList, size_t nodeUpdateLimit) {
 	ZoneScoped;
 
 	std::unordered_set<int> nodeIDsToUpdate;
@@ -1397,10 +1671,15 @@ void PathFinder::LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job) {
 		return;
 	}
 	if (ThreadMan::IsConstructed()) {
+		SaverThreads::GameWorkBegins();
 		try {
-			g_ThreadMan.GetBackgroundThreadPool().push_task(finish);
+			g_ThreadMan.GetBackgroundThreadPool().push_task([finish] {
+				const SaverThreads::GameWorkScope gameWork;
+				finish();
+			});
 			return;
 		} catch (const std::exception&) {
+			SaverThreads::GameWorkEnds();
 		}
 	}
 	// Nothing would own a detached worker, so a launch that cannot be owned finishes here instead of parking a later commit.
@@ -2035,7 +2314,7 @@ int PathFinder::RunHorizonGridSelfTest() {
 		struct BrainPathEditor : SceneEditorGUI {
 			using SceneEditorGUI::RequestBrainSkyPath;
 			bool Complete() const { return m_PathRequest && m_PathRequest->complete; }
-			bool Matches(const std::list<Vector>& path, float cost) const { return m_BrainSkyPath == path && m_BrainSkyPathCost == cost; }
+			bool Matches(const std::list<Vector>& path, float cost) const { return std::equal(m_BrainSkyPath.begin(), m_BrainSkyPath.end(), path.begin(), path.end()) && m_BrainSkyPathCost == cost; }
 			uint64_t Generation() const { return m_PathRequest->horizonGeneration; }
 		};
 		LoopbackTransport idle;
@@ -2111,7 +2390,7 @@ int PathFinder::RunHorizonGridSelfTest() {
 		const bool early = shared->complete || sharedCallback;
 		finder.CommitPathRequestsThrough(108);
 		if (early || !shared->complete || !sharedCallback || shared->totalCost != expectedCost ||
-		    const_cast<const std::list<Vector>&>(shared->path) != expected) {
+		    !std::equal(const_cast<const CheckpointList<Vector>&>(shared->path).begin(), const_cast<const CheckpointList<Vector>&>(shared->path).end(), expected.begin(), expected.end())) {
 			return fail("editor completion changed shared path publication or its answer");
 		}
 		std::cout << Tag << " PASS brain-placement-shared-publication" << std::endl;
@@ -2953,3 +3232,7 @@ void PathFinder::DebugRender(BITMAP* targetBitmap, const Vector& targetPos) cons
 		line(targetBitmap, startPos.GetX(), startPos.GetY(), endPos.GetX(), endPos.GetY(), g_BlackColor);
 	}
 }
+
+template std::vector<int> PathFinder::RecalculateAreaCosts(std::deque<Box>&, size_t);
+
+template std::vector<int> PathFinder::RecalculateAreaCosts(CheckpointDeque<Box>&, size_t);

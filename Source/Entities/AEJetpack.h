@@ -27,6 +27,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a AEJetpack object in system memory. Create() should be called before using the object.
 		AEJetpack();
+		CheckpointSnapshotMethods(AEJetpack);
 
 		/// Makes the AEJetpack object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
@@ -147,7 +148,7 @@ namespace RTE {
 		bool m_AdjustsThrottleForWeight; //!< Whether or not the jetpack throttle auto-adjusts for weight, at the cost of fuel usage.
 
 	private:
-		std::string m_PersistedAEJetpackRuntime;
+		CheckpointString m_PersistedAEJetpackRuntime;
 		std::string SaveAEJetpackRuntime() const;
 		bool LoadAEJetpackRuntime(std::string_view text, bool validateOnly = false);
 

@@ -1,10 +1,21 @@
 #include "DeterministicMath.h"
 #include "AtomGroup.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Material.h"
+#include "Atom.h"
 #include "Base64/base64.h"
 #include "CheckpointArchive.h"
+#include "CheckpointProperties.h"
+#include "CaptureSentinel.h"
 #include "MovableMan.h"
 
 #include <algorithm>
+#include <map>
+#include <optional>
+#include <set>
+#include <span>
+#include <vector>
 #include "MovableObject.h"
 
 #include "Actor.h"
@@ -23,6 +34,41 @@ using namespace RTE;
 
 ConcreteClassInfo(AtomGroup, Entity, 500);
 
+AtomGroup::AtomGroup(const AtomGroup& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	// Atoms stay identities; their frozen values are read from m_FrozenAtoms.
+	m_Atoms(snapshot.Retain(source.m_Atoms, &m_Atoms)),
+	m_SubGroups(snapshot.Retain(source.m_SubGroups, &m_SubGroups)),
+	m_OwnerMOSR(snapshot.Freeze(source.m_OwnerMOSR)),
+	m_StoredOwnerMass(snapshot.Freeze(source.m_StoredOwnerMass)),
+	m_Material(snapshot.Freeze(source.m_Material)),
+	m_AutoGenerate(snapshot.Freeze(source.m_AutoGenerate)),
+	m_Resolution(snapshot.Freeze(source.m_Resolution)),
+	m_Depth(snapshot.Freeze(source.m_Depth)),
+	m_JointOffset(snapshot.Freeze(source.m_JointOffset)),
+	m_LimbPos(snapshot.Freeze(source.m_LimbPos)),
+	m_MomentOfInertia(snapshot.Freeze(source.m_MomentOfInertia)),
+	m_IgnoreMOIDs(snapshot.Freeze(source.m_IgnoreMOIDs, &m_IgnoreMOIDs)),
+	m_AreaDistributionType(snapshot.Freeze(source.m_AreaDistributionType)),
+	m_AreaDistributionSurfaceAreaMultiplier(snapshot.Freeze(source.m_AreaDistributionSurfaceAreaMultiplier)),
+	m_FrozenAtoms([&source] {
+		CheckpointCloneCost cost("atom lists");
+		const auto values = CheckpointValues(source.m_Atoms);
+		const std::vector<Atom*> atoms(values.begin(), values.end());
+		return Atom::FreezeList(atoms);
+	}()),
+	// The frozen material names itself on the saver through the snapshot.
+	m_CheckpointMaterialReference(source.m_CheckpointMaterialReference),
+	m_CheckpointOwnerID(snapshot.Freeze(source.m_CheckpointOwnerID)),
+	m_HasCheckpointOwner(snapshot.Freeze(source.m_HasCheckpointOwner)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* AtomGroup::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 AtomGroup::AtomGroup() {
 	Clear();
 }
@@ -33,6 +79,7 @@ AtomGroup::AtomGroup(const AtomGroup& reference) {
 }
 
 AtomGroup::~AtomGroup() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -114,7 +161,7 @@ int AtomGroup::Create(const AtomGroup& reference, bool onlyCopyOwnerAtoms) {
 			long subgroupID = atomCopy->GetSubID();
 			if (subgroupID != 0) {
 				if (m_SubGroups.find(subgroupID) == m_SubGroups.end()) {
-					m_SubGroups.insert({subgroupID, std::vector<Atom*>()});
+					m_SubGroups.insert({subgroupID, CheckpointVector<Atom*>()});
 				}
 
 				m_SubGroups.find(subgroupID)->second.push_back(atomCopy);
@@ -134,7 +181,7 @@ int AtomGroup::Create(const AtomGroup& reference, bool onlyCopyOwnerAtoms) {
 
 	if (MovableObject::IsFaithfulClone()) {
 		m_Material = reference.m_Material;
-		m_CheckpointMaterialReference = reference.m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(reference.m_Material) : reference.m_CheckpointMaterialReference;
+		m_CheckpointMaterialReference = reference.m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(reference.m_Material) : reference.m_CheckpointMaterialReference.Value();
 		m_CheckpointOwnerID = reference.m_HasCheckpointOwner ? reference.m_CheckpointOwnerID : (reference.m_OwnerMOSR ? reference.m_OwnerMOSR->GetUniqueID() : 0);
 		m_HasCheckpointOwner = true;
 		m_SubGroups.clear();
@@ -167,21 +214,54 @@ int AtomGroup::Create(MOSRotating* ownerMOSRotating, Material const* material, i
 std::string AtomGroup::SaveCheckpoint() const {
 	CheckpointWriter writer("AtomGroup2");
 	VisitCheckpoint(writer, *this);
-	writer(std::set<std::string>(m_Groups.begin(), m_Groups.end()), CheckpointWriter::Native([&] { return m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference; }),
+	writer(std::set<std::string>(m_Groups.begin(), m_Groups.end()), CheckpointWriter::Native([&] { return m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference.Value(); }),
 	    m_HasCheckpointOwner ? m_CheckpointOwnerID : (m_OwnerMOSR ? m_OwnerMOSR->GetUniqueID() : 0));
 	std::vector<CheckpointText> atoms;
 	std::unordered_map<const Atom*, size_t> indices;
-	atoms.reserve(m_Atoms.size());
-	for (const Atom* atom: m_Atoms) {
-		indices.emplace(atom, atoms.size());
-		atoms.push_back(CheckpointWriter::Native([atom] { return atom->SaveCheckpoint(); }));
+	const bool inlineAtoms = m_FrozenAtoms || (CheckpointWriter::IsCapturing() && CheckpointWriter::BatchEnabled());
+	if (inlineAtoms) {
+		writer.AppendFields(m_FrozenAtoms ? Atom::CaptureFrozenList(m_FrozenAtoms) : Atom::CaptureCheckpointList(m_Atoms));
+		if (m_SubGroups.empty()) writer(size_t{0});
+		else {
+			std::vector<std::pair<long, CheckpointVector<Atom*>>> groups(m_SubGroups.begin(), m_SubGroups.end());
+			size_t bytes = m_Atoms.size() * sizeof(Atom*) + groups.size() * sizeof(groups.front());
+			for (const auto& group: groups) bytes += group.second.size() * sizeof(Atom*);
+			writer.AppendFields(CheckpointText::Deferred([order = m_Atoms, groups = std::move(groups)] {
+				std::unordered_map<const Atom*, size_t> indices;
+				indices.reserve(order.size());
+				for (size_t index = 0; index < order.size(); ++index) indices.emplace(order[index], index);
+				std::map<long, std::vector<size_t>> subgroups;
+				for (const auto& [id, group]: groups) {
+					auto& saved = subgroups[id];
+					for (const Atom* atom: group) saved.push_back(indices.at(atom));
+				}
+				return CheckpointWriter::CaptureNative([&subgroups] {
+					CheckpointWriter writer(CheckpointWriter::FieldsOnly{});
+					writer(subgroups);
+					return writer.Text();
+				}).Text();
+			}, bytes));
+		}
+		return writer.Text();
 	}
+	if (!inlineAtoms) atoms.reserve(m_Atoms.size());
+	const bool needIndices = !CheckpointWriter::BatchEnabled() || !m_SubGroups.empty();
+	if (CheckpointWriter::BatchEnabled() && needIndices) indices.reserve(m_Atoms.size());
+	size_t index = 0;
+	std::optional<CaptureTrace::Span> atomsSpan(std::in_place, "atom_values", CaptureTrace::Active() ? std::to_string(m_Atoms.size()) : std::string());
+	if (inlineAtoms) writer.AppendFields(Atom::CaptureCheckpointList(m_Atoms));
+	for (const Atom* atom: m_Atoms) {
+		if (needIndices) indices.emplace(atom, index++);
+		if (!inlineAtoms) atoms.push_back(CheckpointWriter::Native([atom] { return atom->SaveCheckpoint(); }));
+	}
+	atomsSpan.reset();
 	std::map<long, std::vector<size_t>> subgroups;
 	for (const auto& [id, group]: m_SubGroups) {
 		auto& saved = subgroups[id];
 		for (const Atom* atom: group) saved.push_back(indices.at(atom));
 	}
-	writer(atoms, subgroups);
+	if (!inlineAtoms) writer(atoms);
+	writer(subgroups);
 	return writer.Text();
 }
 
@@ -211,8 +291,8 @@ bool AtomGroup::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		for (const std::string& atom: savedAtoms) if (!validator.LoadCheckpoint(atom, true)) return false;
 		for (const auto& [id, indices]: savedSubgroups) for (size_t index: indices) if (index >= savedAtoms.size()) return false;
 		std::vector<std::unique_ptr<Atom>> candidates;
-		std::vector<Atom*> atoms;
-		std::unordered_map<long, std::vector<Atom*>> subgroups;
+		CheckpointVector<Atom*> atoms;
+		CheckpointUnorderedMap<long, CheckpointVector<Atom*>> subgroups;
 		if (!validateOnly) {
 			candidates.reserve(savedAtoms.size()); atoms.reserve(savedAtoms.size());
 			for (const std::string& saved: savedAtoms) {
@@ -302,7 +382,7 @@ int AtomGroup::ReadProperty(const std::string_view& propName, Reader& reader) {
 int AtomGroup::Save(Writer& writer) const {
 	Entity::Save(writer);
 
-    if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialReference", CheckpointWriter::Native([&] { return m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference; }).Base64(true));
+    if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialReference", CheckpointWriter::Native([&] { return m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference.Value(); }).Base64(true));
     else { writer.NewProperty("Material"); writer << m_Material; }
 	writer.NewProperty("AutoGenerate");
 	writer << m_AutoGenerate;
@@ -313,7 +393,8 @@ int AtomGroup::Save(Writer& writer) const {
 
 	// Only write out Atoms if they were manually specified
 	if (!m_AutoGenerate) {
-		for (const Atom* atom: m_Atoms) {
+		if (m_FrozenAtoms) Atom::SaveFrozenAtoms(writer, m_FrozenAtoms);
+		else for (const Atom* atom: m_Atoms) {
 			writer.NewProperty("AddAtom");
 			writer << *atom;
 		}
@@ -349,17 +430,21 @@ void AtomGroup::BindCheckpointOwner(Atom* atom) {
 	atom->SetCheckpointOwner(m_OwnerMOSR);
 }
 
-void AtomGroup::SetAtomList(const std::vector<Atom*>& newAtoms) {
-	if (m_Atoms != newAtoms) TouchCheckpoint();
+void AtomGroup::SetAtomList(std::span<Atom* const> newAtoms) {
+	if (!std::equal(m_Atoms.begin(), m_Atoms.end(), newAtoms.begin(), newAtoms.end())) TouchCheckpoint();
 	for (const Atom* atom: m_Atoms) {
 		delete atom;
 	}
-	m_Atoms = newAtoms;
+	m_Atoms.assign(newAtoms.begin(), newAtoms.end());
 	for (Atom* atom: m_Atoms) atom->SetCheckpointOwner(m_OwnerMOSR);
 }
 
 std::vector<long long> AtomGroup::GetTravelResidue() const {
 	std::vector<long long> residue;
+	if (m_FrozenAtoms) {
+		for (const auto& atom: Atom::FrozenValues(m_FrozenAtoms)) residue.push_back(atom.residue);
+		return residue;
+	}
 	residue.reserve(m_Atoms.size());
 	for (const Atom* atom: m_Atoms) {
 		residue.push_back(atom->PackTravelResidue());
@@ -367,11 +452,39 @@ std::vector<long long> AtomGroup::GetTravelResidue() const {
 	return residue;
 }
 
+void AtomGroup::CaptureSnapshotProperties(Writer& writer) const {
+	if (m_FrozenAtoms) { Atom::CaptureFrozenListProperties(writer, m_FrozenAtoms); return; }
+	if (Atom::CaptureFrozenProperties(writer, m_Atoms)) return;
+	struct Record {
+		long long residue;
+		CheckpointProperties::VectorValue offset;
+		long long subgroup;
+		int material;
+	};
+	auto storage = CheckpointBuffer::LeaseCaptureStorage();
+	std::pmr::vector<Record> records(storage ? storage.get() : std::pmr::get_default_resource());
+	records.reserve(m_Atoms.size());
+	for (const Atom* atom: m_Atoms) {
+		const Vector& offset = atom->GetOffset();
+		records.push_back({atom->PackTravelResidue(), {offset.m_X, offset.m_Y}, atom->GetSubID(), atom->GetMaterial()->GetIndex()});
+	}
+	const size_t bytes = records.size() * sizeof(Record);
+	const int indent = writer.GetIndent();
+	writer.Append(CheckpointText::Deferred([storage = std::move(storage), records = std::move(records), indent] {
+		return Writer::Capture([&](Writer& output) {
+			for (const auto& record: records) output.NewPropertyWithValue("AtomGroupResidue", record.residue);
+			for (const auto& record: records) CheckpointProperties::Owned<"AtomGroupOffset", CheckpointProperties::VectorValue>::WriteValue(output, record.offset);
+			for (const auto& record: records) output.NewPropertyWithValue("AtomGroupSubID", record.subgroup);
+			for (const auto& record: records) output.NewPropertyWithValue("AtomGroupMaterial", record.material);
+		}, indent).Text();
+	}, bytes));
+}
+
 // Pairs each saved entry with a live atom: by subgroup identity (in-bucket order) when the
 // saved subIDs ride, by plain vector index otherwise. Live subgroup order records attach
 // history, so a reconstructed group cannot rely on matching indices.
 template <typename ValueType, typename ApplyFunc>
-static void ApplyPerAtomState(std::vector<Atom*>& atoms, const std::vector<ValueType>& values, const std::vector<long long>& subIDs, ApplyFunc&& apply) {
+static void ApplyPerAtomState(std::span<Atom* const> atoms, std::span<const ValueType> values, std::span<const long long> subIDs, ApplyFunc&& apply) {
 	if (subIDs.size() != values.size()) {
 		size_t index = 0;
 		for (Atom* atom: atoms) {
@@ -400,12 +513,16 @@ static void ApplyPerAtomState(std::vector<Atom*>& atoms, const std::vector<Value
 	}
 }
 
-void AtomGroup::SetTravelResidue(const std::vector<long long>& residue, const std::vector<long long>& subIDs) {
+void AtomGroup::SetTravelResidue(std::span<const long long> residue, std::span<const long long> subIDs) {
 	ApplyPerAtomState(m_Atoms, residue, subIDs, [](Atom* atom, long long value) { atom->ApplyTravelResidue(value); });
 }
 
 std::vector<Vector> AtomGroup::GetAtomOffsets() const {
 	std::vector<Vector> offsets;
+	if (m_FrozenAtoms) {
+		for (const auto& atom: Atom::FrozenValues(m_FrozenAtoms)) offsets.push_back(atom.offset);
+		return offsets;
+	}
 	offsets.reserve(m_Atoms.size());
 	for (const Atom* atom: m_Atoms) {
 		offsets.push_back(atom->GetOffset());
@@ -413,7 +530,7 @@ std::vector<Vector> AtomGroup::GetAtomOffsets() const {
 	return offsets;
 }
 
-void AtomGroup::SetAtomOffsets(const std::vector<Vector>& offsets, const std::vector<long long>& subIDs) {
+void AtomGroup::SetAtomOffsets(std::span<const Vector> offsets, std::span<const long long> subIDs) {
 	ApplyPerAtomState(m_Atoms, offsets, subIDs, [](Atom* atom, const Vector& offset) { atom->SetOffset(offset); });
 	// The saved sequence is the live attach history; the reload attached in declaration order, and collision walks the list.
 	if (subIDs.size() == m_Atoms.size()) {
@@ -422,7 +539,7 @@ void AtomGroup::SetAtomOffsets(const std::vector<Vector>& offsets, const std::ve
 			buckets[atom->GetSubID()].push_back(atom);
 		}
 		std::unordered_map<long, size_t> cursors;
-		std::vector<Atom*> ordered;
+		CheckpointVector<Atom*> ordered;
 		ordered.reserve(m_Atoms.size());
 		for (const long long subID: subIDs) {
 			auto bucket = buckets.find(static_cast<long>(subID));
@@ -444,7 +561,7 @@ void AtomGroup::SetAtomOffsets(const std::vector<Vector>& offsets, const std::ve
 	}
 }
 
-void AtomGroup::RebuildFromPersisted(const std::vector<Vector>& offsets, const std::vector<long long>& subIDs, const std::vector<int>& materials) {
+void AtomGroup::RebuildFromPersisted(std::span<const Vector> offsets, std::span<const long long> subIDs, std::span<const int> materials) {
 	if (m_Atoms.empty() || offsets.empty() || subIDs.size() != offsets.size()) {
 		SetAtomOffsets(offsets, subIDs);
 		return;
@@ -454,7 +571,7 @@ void AtomGroup::RebuildFromPersisted(const std::vector<Vector>& offsets, const s
 		buckets[atom->GetSubID()].push_back(atom);
 	}
 	std::unordered_map<long, size_t> cursors;
-	std::vector<Atom*> rebuilt;
+	CheckpointVector<Atom*> rebuilt;
 	rebuilt.reserve(offsets.size());
 	for (size_t index = 0; index < offsets.size(); ++index) {
 		const long subID = static_cast<long>(subIDs[index]);
@@ -492,6 +609,10 @@ void AtomGroup::RebuildFromPersisted(const std::vector<Vector>& offsets, const s
 
 std::vector<int> AtomGroup::GetAtomMaterialIndices() const {
 	std::vector<int> materials;
+	if (m_FrozenAtoms) {
+		for (const auto& atom: Atom::FrozenValues(m_FrozenAtoms)) materials.push_back(atom.material);
+		return materials;
+	}
 	materials.reserve(m_Atoms.size());
 	for (const Atom* atom: m_Atoms) {
 		materials.push_back(atom->GetMaterial()->GetIndex());
@@ -501,6 +622,10 @@ std::vector<int> AtomGroup::GetAtomMaterialIndices() const {
 
 std::vector<long long> AtomGroup::GetAtomSubIDs() const {
 	std::vector<long long> subIDs;
+	if (m_FrozenAtoms) {
+		for (const auto& atom: Atom::FrozenValues(m_FrozenAtoms)) subIDs.push_back(atom.subgroup);
+		return subIDs;
+	}
 	subIDs.reserve(m_Atoms.size());
 	for (const Atom* atom: m_Atoms) {
 		subIDs.push_back(atom->GetSubID());
@@ -556,10 +681,10 @@ float AtomGroup::GetMomentOfInertia() {
 	return m_MomentOfInertia;
 }
 
-void AtomGroup::AddAtoms(const std::vector<Atom*>& atomList, long subgroupID, const Vector& offset, const Matrix& offsetRotation) {
+void AtomGroup::AddAtoms(std::span<Atom* const> atomList, long subgroupID, const Vector& offset, const Matrix& offsetRotation) {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Atoms.size(), m_SubGroups.size(), m_MomentOfInertia, m_StoredOwnerMass); });
 	if (m_SubGroups.count(subgroupID) == 0) {
-		m_SubGroups.insert({subgroupID, std::vector<Atom*>()});
+		m_SubGroups.insert({subgroupID, CheckpointVector<Atom*>()});
 	}
 
 	Atom* atomToAdd;
@@ -617,7 +742,7 @@ bool AtomGroup::RenameSubgroup(long oldID, long newID) {
 		std::cout << "[restore] subgroup rename collision " << oldID << " -> " << newID << std::endl;
 		return false;
 	}
-	std::vector<Atom*> atoms = std::move(subGroup->second);
+	auto atoms = std::move(subGroup->second);
 	for (Atom* atom: atoms) {
 		atom->SetSubID(newID);
 	}

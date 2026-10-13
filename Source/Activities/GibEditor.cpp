@@ -400,7 +400,7 @@ void GibEditor::Update() {
 					m_pEditedObject->Update();
 
 					// Make proxy copies of the loaded objects' gib reference instances and place them in the list to be edited
-					std::list<Gib*>* pLoadedGibList = m_pEditedObject->GetGibList();
+					CheckpointList<Gib*>* pLoadedGibList = m_pEditedObject->GetGibList();
 					std::list<MovableObject*>* pEditedGibList = m_pEditorGUI->GetPlacedGibs();
 					MovableObject* pGibCopy = 0;
 
@@ -626,7 +626,7 @@ void GibEditor::StuffEditedGibs(MOSRotating* pEditedObject) {
 		return;
 
 	// Replace the gibs of the object with the proxies that have been edited in the gui
-	std::list<Gib*>* pObjectGibList = pEditedObject->GetGibList();
+	CheckpointList<Gib*>* pObjectGibList = pEditedObject->GetGibList();
 	pObjectGibList->clear();
 
 	// Take each proxy object and stuff it into a Gib instance which then gets stuffed into the object to be saved

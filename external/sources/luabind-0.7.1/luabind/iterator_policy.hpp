@@ -10,6 +10,8 @@
 # include <luabind/detail/convert_to_lua.hpp>
 # include <luabind/detail/object_rep.hpp>
 # include <iterator>
+# include <mutex>
+# include <unordered_map>
 # include <utility>
 
 extern "C"
@@ -18,6 +20,22 @@ extern "C"
 }
 
 namespace luabind { namespace detail {
+
+// The embedding program describes a range from its frozen container, once for each container it binds.
+template <class Container, bool Owned> int iterator_frozen_snapshot(lua_State* L);
+
+// Which frozen description belongs to an iterator closure, found by the closure's own function.
+inline std::mutex& iterator_frozen_mutex() { static std::mutex mutex; return mutex; }
+inline std::unordered_map<lua_CFunction, lua_CFunction>& iterator_frozen_functions() { static std::unordered_map<lua_CFunction, lua_CFunction> functions; return functions; }
+inline lua_CFunction find_iterator_frozen(lua_CFunction next)
+{
+    std::lock_guard<std::mutex> lock(iterator_frozen_mutex());
+    const auto found = iterator_frozen_functions().find(next);
+    return found == iterator_frozen_functions().end() ? 0 : found->second;
+}
+
+// Set by the embedding program: keeps an owned range's container for a reader that started before its range was collected.
+inline bool (*iterator_retire)(void* container, void (*destroy)(void*)) = 0;
 
 template <class Container, bool Owned>
 struct iterator
@@ -39,9 +57,13 @@ struct iterator
         return 1;
     }
 
+    static void delete_container(void* container) { delete static_cast<Container*>(container); }
+
     static int destroy(lua_State* L)
     {
-        static_cast<iterator*>(lua_touserdata(L, 1))->~iterator();
+        iterator* self = static_cast<iterator*>(lua_touserdata(L, 1));
+        if (Owned && self->container && iterator_retire && iterator_retire(const_cast<void*>(static_cast<const void*>(self->container)), &delete_container)) self->container = 0;
+        self->~iterator();
         return 0;
     }
 
@@ -104,6 +126,13 @@ template <bool Owned, class Container>
 int make_range(lua_State* L, Container& container)
 {
     typedef iterator<Container, Owned> range_type;
+    static const bool described = []
+    {
+        std::lock_guard<std::mutex> lock(iterator_frozen_mutex());
+        iterator_frozen_functions().emplace(&range_type::next, &iterator_frozen_snapshot<Container, Owned>);
+        return true;
+    }();
+    (void)described;
     const int argument_count = lua_gettop(L);
     void* storage = lua_newuserdata(L, sizeof(range_type));
     new (storage) range_type(container);

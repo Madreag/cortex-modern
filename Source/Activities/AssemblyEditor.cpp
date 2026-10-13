@@ -391,9 +391,9 @@ BunkerAssembly* AssemblyEditor::BuildAssembly(const std::string& saveAsName) {
 	pBA->SetPresetName(saveAsName);
 	m_pEditorGUI->SetCurrentAssemblyName(saveAsName);
 
-	const std::list<SceneObject*>* pSceneObjectList = 0;
+	const CheckpointList<SceneObject*>* pSceneObjectList = 0;
 	pSceneObjectList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::PLACEONLOAD);
-	for (std::list<SceneObject*>::const_iterator itr = pSceneObjectList->begin(); itr != pSceneObjectList->end(); ++itr) {
+	for (CheckpointList<SceneObject*>::const_iterator itr = pSceneObjectList->begin(); itr != pSceneObjectList->end(); ++itr) {
 		// Check if object fits the assembly box
 		bool skip = true;
 

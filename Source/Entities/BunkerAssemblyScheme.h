@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the BunkerAssemblyScheme class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -48,6 +50,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a BunkerAssemblyScheme object in system
 		/// memory. Create() should be called before using the object.
 		BunkerAssemblyScheme();
+		CheckpointSnapshotMethods(BunkerAssemblyScheme);
 
 		/// Destructor method used to clean up a BunkerAssemblyScheme object before deletion
 		/// from system memory.
@@ -156,7 +159,7 @@ namespace RTE {
 		BITMAP* m_pIconBitmap;
 
 		// The objects that are placed along with this in the scene
-		std::list<SOPlacer> m_ChildObjects;
+		CheckpointList<SOPlacer> m_ChildObjects;
 
 		// If this is true then sceneman must select a single assembly for this scheme and use it everywhere on the scene
 		bool m_IsOneTypePerScene;
@@ -167,9 +170,9 @@ namespace RTE {
 		// How many deployments should be selected during placement
 		int m_MaxDeployments;
 		// Scheme symmetric to this one
-		std::string m_SymmetricScheme;
+		CheckpointString m_SymmetricScheme;
 		// To which group we should add assemblies linked to this scheme
-		std::string m_AssemblyGroup;
+		CheckpointString m_AssemblyGroup;
 
 		/// Private member variable and method declarations
 	private:
