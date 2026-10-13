@@ -107,7 +107,8 @@ static void RecordPendingWorkerMessage(WorkerMessageKind kind, const std::string
 }
 
 #if (defined(__linux__) || (defined(__APPLE__) && defined(__MACH__)))
-backward::SignalHandling sh;
+// Never destroyed: its alternate signal stack stays registered to the end, and a signal delivered onto a freed one ends the process silently.
+static backward::SignalHandling* const s_SignalHandling = new backward::SignalHandling;
 #endif
 #if defined(_WIN32) && !defined(TARGET_MACHINE_X86)
 /// Names an MSVC C++ exception from its throw information: the thrown type and, for a std::exception, its message.
