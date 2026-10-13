@@ -23,22 +23,48 @@
 
 namespace RTE {
 
+	/// The threads that write saves run below the simulation's threads, and the work they hand out goes to a pool of their
+	/// own that runs below them too, so a save never queues ahead of a tick's tasks or takes a core a tick could use.
+	class SaverThreads {
+	public:
+		/// Lowers the calling thread below the simulation's threads for the rest of its life and marks it the saver's.
+		static void Enter();
+
+		/// Marks the calling thread the saver's without lowering it, for a thread the simulation may wait on.
+		static void Mark() noexcept { s_Current = true; }
+
+		/// Whether the calling thread is one of the saver's.
+		static bool Current() noexcept { return s_Current; }
+
+		/// The pool whose threads take the saver's parallel work.
+		static BS::thread_pool& Pool();
+
+		/// The saver's pool when a saver thread asks, else the pool asked for.
+		static BS::thread_pool& PoolFor(BS::thread_pool& pool) { return s_Current ? Pool() : pool; }
+
+	private:
+		static inline thread_local bool s_Current = false;
+		static inline thread_local bool s_Lowered = false;
+	};
+
 	/// Runs work(index) for every index below a count on a pool, the items taken in index order by whichever thread comes
 	/// free first. The owner takes items too when it finishes, so it never waits behind other work queued on the pool for
 	/// an item nobody has started; it waits only for the items already running.
 	class ParallelWork {
 	public:
-		/// @param pool The pool whose threads help. @param count How many items. @param work The item's work; it outlives
-		/// no Finish, so it may hold references to the owner's locals. @param helpers At most this many pool threads help.
+		/// @param pool The pool whose threads help; the saver's own pool when a saver thread asks. @param count How many
+		/// items. @param work The item's work; it outlives no Finish, so it may hold references to the owner's locals.
+		/// @param helpers At most this many pool threads help.
 		ParallelWork(BS::thread_pool& pool, size_t count, std::function<void(size_t)> work, size_t helpers = DefaultHelpers()) :
 		    m_Shared(std::make_shared<Shared>()) {
 			m_Shared->count = count;
 			m_Shared->work = std::move(work);
-			const size_t threads = std::min<size_t>({count > 0 ? count - 1 : 0, helpers, static_cast<size_t>(pool.get_thread_count())});
+			BS::thread_pool& helping = SaverThreads::PoolFor(pool);
+			const size_t threads = std::min<size_t>({count > 0 ? count - 1 : 0, helpers, static_cast<size_t>(helping.get_thread_count())});
 			try {
 				for (size_t helper = 0; helper < threads; ++helper) {
 					CheckpointFailure::Check(CheckpointFailure::Point::ParallelSubmission);
-					pool.push_task([shared = m_Shared] { Run(*shared); });
+					helping.push_task([shared = m_Shared] { Run(*shared); });
 				}
 			} catch (...) {
 				// Finish submitted readers before the constructor releases the caller's values.
@@ -144,6 +170,17 @@ namespace RTE {
 			return *m_CheckpointThreadPool;
 		}
 
+		/// The saver's own pool: its threads run below the simulation's.
+		BS::thread_pool& GetSaverThreadPool() {
+			std::call_once(m_SaverPoolOnce, [this] {
+				m_SaverThreadPool = std::make_unique<BS::thread_pool>(std::max(1u, std::thread::hardware_concurrency()), [] {
+					FloatingPointEnvironment::Initialize();
+					SaverThreads::Enter();
+				}, [] { FloatingPointEnvironment::Assert("saver task"); });
+			});
+			return *m_SaverThreadPool;
+		}
+
 		/// Protected member variable and method declarations
 	protected:
 		/// Private member variable and method declarations
@@ -163,6 +200,8 @@ namespace RTE {
 		BS::thread_pool m_BackgroundThreadPool;
 		std::unique_ptr<BS::thread_pool> m_CheckpointThreadPool;
 		std::once_flag m_CheckpointPoolOnce;
+		std::unique_ptr<BS::thread_pool> m_SaverThreadPool;
+		std::once_flag m_SaverPoolOnce;
 	};
 
 } // namespace RTE

@@ -2,6 +2,7 @@
 
 #include "CheckpointBoundary.h"
 #include "FloatingPointEnvironment.h"
+#include "ThreadMan.h"
 
 #include <atomic>
 #include <functional>
@@ -106,6 +107,8 @@ namespace RTE::CheckpointLua {
 		}
 		void Work(std::stop_token stop) noexcept {
 			FloatingPointEnvironment::Initialize();
+			// The simulation waits on its preparations, so it keeps its priority; its parallel work goes to the saver's pool.
+			SaverThreads::Mark();
 			const FloatingPointEnvironment::Scope environment("checkpoint saver");
 			while (!stop.stop_requested()) {
 				const uint64_t wake = m_Wake.load(std::memory_order_acquire);

@@ -294,15 +294,10 @@ namespace {
 		bool previous, pending = true;
 	};
 
-	/// Lowers the calling thread below normal priority, so the archive work never competes with the simulation.
+	/// Lowers the calling thread below the simulation's and sends its parallel work to the saver's pool, so the archive
+	/// work never competes with the simulation.
 	void YieldToSimulation() {
-#ifdef _WIN32
-		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-#elif defined(__APPLE__)
-		pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
-#else
-		setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 10);
-#endif
+		SaverThreads::Enter();
 	}
 
 	/// A headless test lever: the archive writers pause this long before each task, so a soak on a fast disk stands in for a slow one.

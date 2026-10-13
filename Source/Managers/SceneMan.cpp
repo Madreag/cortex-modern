@@ -3332,7 +3332,7 @@ std::string SceneMan::SaveMaterialCatalog() const {
             }
         };
         std::vector<std::future<void>> tasks;
-        for (size_t chunk = 1; chunk < chunks; ++chunk) tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&write, chunk, task = CaptureSentinel::CurrentTask()] {
+        for (size_t chunk = 1; chunk < chunks; ++chunk) tasks.push_back(SaverThreads::PoolFor(g_ThreadMan.GetPriorityThreadPool()).submit([&write, chunk, task = CaptureSentinel::CurrentTask()] {
             CaptureSentinel::WorkerScope worker(task);
             write(chunk);
         }));
