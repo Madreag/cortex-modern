@@ -820,15 +820,17 @@ class SessionDirectory:
                 virtual_port = require_int(route, "ice_virtual_port", 0, 65535)
                 if bool(identity) != bool(virtual_port):
                     raise ConnectionErrorReply(400, "connection_request", "The host's route was incomplete. Reconnecting will retry; Cancel returns to Multiplayer.")
-                update = dict(listen_addrs=addresses, listen_port=port,
-                    join_mode="either" if identity and addresses else "ice" if identity else "ip")
-                if identity:
-                    update.update(ice_identity=identity, ice_virtual_port=virtual_port)
-                else:
-                    sess.fields.pop("ice_identity", None)
-                    sess.fields.pop("ice_virtual_port", None)
-                if any(sess.fields.get(key) != value for key, value in update.items()):
-                    sess.fields.update(update)
+                # A route with neither an ICE identity nor an address names no way in; the row keeps the one it lists.
+                if identity or addresses:
+                    update = dict(listen_addrs=addresses, listen_port=port,
+                        join_mode="either" if identity and addresses else "ice" if identity else "ip")
+                    if identity:
+                        update.update(ice_identity=identity, ice_virtual_port=virtual_port)
+                    else:
+                        sess.fields.pop("ice_identity", None)
+                        sess.fields.pop("ice_virtual_port", None)
+                    if any(sess.fields.get(key) != value for key, value in update.items()):
+                        sess.fields.update(update)
                 self._persist_session(sess, now)
             answer["host"] = self.connection_bootstrap(session_id, now)
             answer["relay_current"] = not renew

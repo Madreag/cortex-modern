@@ -3760,6 +3760,20 @@ class ConnectionAuthorityTests(unittest.TestCase):
             self.check()
         self.assertEqual(ended.exception.body["error"], "match_ended")
 
+    def test_a_host_route_naming_no_way_in_keeps_the_relay_only_row_joinable(self) -> None:
+        # A relay-only host lists no address; its row is reached through the ICE identity it registered.
+        self.store._sessions[self.sid].fields.update(listen_addrs=[], join_mode="ice")
+        host = {"token": self.row["token"], "generation": 0}
+        bare = dict(ice_identity="", ice_virtual_port=0, listen_port=41012, listen_addrs=[], generation=1, state="connecting")
+        listed = lambda: (lambda fields: (fields["join_mode"], fields.get("ice_identity"), fields["listen_addrs"]))(self.store._sessions[self.sid].fields)
+        self.check(host=host, route=bare)
+        self.assertEqual(listed(), ("ice", "str:original-host", []),
+                         "a host check-in naming no way in relisted the relay-only row with no address and no ICE join mode")
+        self.check(host=host, route=dict(bare, ice_identity="str:host-listener", ice_virtual_port=41011, generation=2))
+        self.assertEqual(listed(), ("ice", "str:host-listener", []))
+        self.check(host=host, route=dict(bare, listen_addrs=["198.51.100.9"], generation=3))
+        self.assertEqual(listed(), ("ip", None, ["198.51.100.9"]))
+
     def test_connection_version_refuses_before_any_seat_mutation(self) -> None:
         for version in (0, 2):
             with self.subTest(version=version), self.assertRaises(ConnectionErrorReply) as mismatch:
