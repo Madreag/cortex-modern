@@ -57,6 +57,8 @@ namespace RTE {
 		std::vector<std::pair<int, int>> reveals;
 		std::vector<std::pair<int, int>> visualized;
 		uint64_t reads = 14695981039346656037ULL; //!< Under the shared trace, a hash of every cell the walk read.
+		uint64_t positions = 14695981039346656037ULL, materials = 14695981039346656037ULL, fogs = 14695981039346656037ULL; //!< The same reads, split.
+		int visits = 0, lastX = 0, lastY = 0;
 	};
 
 	// Different modes to draw the SceneLayers in

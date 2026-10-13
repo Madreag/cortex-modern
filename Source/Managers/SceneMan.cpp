@@ -1587,7 +1587,12 @@ void SceneMan::TraceSeeRay(const SeeRay& seeRay, BITMAP* fog, const Vector& fogS
 	const bool hashReads = LuaMan::SharedTraceEnabled();
 	const auto visit = [&](int x, int y) {
 		if (hashReads) {
-			for (uint64_t value: {static_cast<uint64_t>(x), static_cast<uint64_t>(y), static_cast<uint64_t>(GetTerrMatter(x, y)), static_cast<uint64_t>(unseen(x, y))}) trace.reads = (trace.reads ^ value) * 1099511628211ULL;
+			const uint64_t material = GetTerrMatter(x, y), fogged = unseen(x, y);
+			for (uint64_t value: {static_cast<uint64_t>(x), static_cast<uint64_t>(y), material, fogged}) trace.reads = (trace.reads ^ value) * 1099511628211ULL;
+			trace.positions = (((trace.positions ^ static_cast<uint64_t>(x)) * 1099511628211ULL) ^ static_cast<uint64_t>(y)) * 1099511628211ULL;
+			trace.materials = (trace.materials ^ material) * 1099511628211ULL;
+			trace.fogs = (trace.fogs ^ fogged) * 1099511628211ULL;
+			++trace.visits; trace.lastX = x; trace.lastY = y;
 		}
 		if (unseen(x, y) || unseen(x - size, y - size) || unseen(x + size, y - size) || unseen(x + size, y + size) || unseen(x - size, y + size) ||
 		    unseen(x - size, y) || unseen(x + size, y) || unseen(x, y - size) || unseen(x, y + size)) {

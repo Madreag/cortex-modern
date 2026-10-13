@@ -3729,7 +3729,17 @@ void MovableMan::WaitForActorsSeeTask(const char* caller) {
 			}
 			if (end > begin) {
 				std::string reads;
-				for (size_t ray = begin; ray < end && ray < pass.traces.size(); ++ray) reads += (ray == begin ? "" : ",") + std::to_string(pass.traces[ray].reads);
+				for (size_t ray = begin; ray < end && ray < pass.traces.size(); ++ray) {
+					reads += (ray == begin ? "" : ",") + std::to_string(pass.traces[ray].reads);
+					const SeeRay& seeRay = pass.rays[ray];
+					const SeeRayTrace& trace = pass.traces[ray];
+					std::ostringstream detail;
+					detail << "see-ray uid=" << uid << " i=" << ray - begin << std::hex << " start=" << bits(seeRay.start.m_X) << ',' << bits(seeRay.start.m_Y)
+					       << " ray=" << bits(seeRay.ray.m_X) << ',' << bits(seeRay.ray.m_Y) << std::dec << " limit=" << seeRay.strengthLimit << " skip=" << seeRay.skip
+					       << " size=" << trace.size << " visits=" << trace.visits << " last=" << trace.lastX << ',' << trace.lastY << " pos=" << trace.positions
+					       << " mat=" << trace.materials << " fog=" << trace.fogs << " reveals=" << trace.reveals.size();
+					LuaMan::TraceShared(nullptr, detail.str());
+				}
 				LuaMan::TraceShared(nullptr, "see uid=" + std::to_string(uid) + " team=" + std::to_string(pass.rays[begin].team) + " rays=" + std::to_string(end - begin) +
 				                                 " in=" + std::to_string(in) + " out=" + std::to_string(out) + " reads=" + reads);
 			}
