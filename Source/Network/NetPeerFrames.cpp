@@ -140,6 +140,13 @@ namespace RTE {
 			if ((members & SeatBit(peer)) != 0) request.members.push_back(peer);
 		}
 		if (request.members.size() * 2 != request.owners.size()) return;
+		// A seat that heard the other half play on keeps asking what was decided: the referee holds one request per seat, and
+		// checking in again would replace the question and lose its answer.
+		if (m_PeerFrameTie && m_PeerFrameTie->queryOnly && !request.queryOnly) {
+			auto asked = *m_PeerFrameTie;
+			asked.members = request.members; asked.queryOnly = false;
+			if (asked == request) request = *m_PeerFrameTie;
+		}
 		if (!m_PeerFrameTie || *m_PeerFrameTie != request) { m_PeerFrameTie = request; m_PeerFrameTieSinceMs = nowMs; }
 		const auto reply = m_Config.frameTieReferee(request);
 		if (reply.state == NetFrameTieReply::State::Decided) {
