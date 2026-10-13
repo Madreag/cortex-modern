@@ -229,5 +229,35 @@ try:
  check('listing_end_must_name_completed_round',False,'no confirmed public listing at round end')
 finally:report.write_bytes(oldreport);log.write_bytes(oldlog)
 mutate('explicit_unlisted_round_snapshot','ally','engine/match-report.json',lambda b:b.replace(b'"confirmed_listed": true',b'"confirmed_listed": false'),'no confirmed public listing at round end')
+# The leaver's last input lands up to the delay bound past the leave; the round notes the first frame without it.
+live=roots['linux']/'engine/live.jsonl';log=roots['ally']/'engine/stdout.log'
+oldlive,oldlog=live.read_bytes(),log.read_bytes()
+try:
+ live.write_bytes(rows_change(oldlive,lambda rows:[r.update(input_delay_ticks=36) for r in rows if r['tick']>=12000]))
+ log.write_bytes(oldlog.replace(b'peer=2 frame=12128',b'peer=2 frame=12137'))
+ result=check('leave_noted_at_first_frame_after_its_last_input',True)
+ assert result['leave_test']['leaves']['linux']['input_delay_ticks']==36
+ log.write_bytes(oldlog.replace(b'peer=2 frame=12128',b'peer=2 frame=12138'))
+ check('leave_noted_past_its_last_input',False,'linux leave not noted within ten seconds')
+finally:live.write_bytes(oldlive);log.write_bytes(oldlog)
+# A seat the round bridged has its own input replaced until its return; acceptance outside a bridge still advances with play.
+live=roots['ally']/'engine/live.jsonl';log=roots['ally']/'engine/stdout.log'
+oldlive,oldlog=live.read_bytes(),log.read_bytes()
+bridge=b'[net-frame-group] bridge frame=5000 members=6 voters=6\n';back=b'[net-frame-group] return frame=5089 members=7 voters=6\n'
+try:
+ live.write_bytes(rows_change(oldlive,lambda rows:[r.update(input_accepted_through=4999) for r in rows if 5000<=r['tick']<5044]))
+ log.write_bytes(oldlog+bridge+back)
+ result=check('host_seat_bridged_after_return_resumes_acceptance',True)
+ assert result['details']['ally']['own_seat_bridges_after_return']==[[5000,5089]]
+ log.write_bytes(oldlog)
+ check('acceptance_lag_without_a_bridge',False,'acceptance stopped advancing')
+ log.write_bytes(oldlog+bridge)
+ check('host_seat_bridge_without_return',False,'bridged after return without a recorded return')
+ log.write_bytes(oldlog+b'[net-frame-group] bridge frame=5000 members=5 voters=5\n'+back)
+ check('another_seats_bridge_does_not_excuse_the_lag',False,'acceptance stopped advancing')
+ live.write_bytes(rows_change(oldlive,lambda rows:[r.update(input_accepted_through=4999) for r in rows if 5000<=r['tick']<5100]))
+ log.write_bytes(oldlog+bridge+back)
+ check('acceptance_lag_past_the_return',False,'acceptance stopped advancing')
+finally:live.write_bytes(oldlive);log.write_bytes(oldlog)
 (root/'contracts.json').write_text(json.dumps({'synthetic':True,'relay_proof':False,'checks':checks},indent=2)+'\n')
 print(json.dumps({'synthetic_contract_checks':len(checks),'passed':len(checks),'relay_proof':False}))

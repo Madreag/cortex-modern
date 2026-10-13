@@ -47,6 +47,22 @@ def round_listing(report, text):
     return {}, 'missing listing end marker'
 
 
+def own_seat_bridges(text, peer):
+    """The round's agreed bridges of one seat from its log, as [first frame, return frame) intervals; None marks one still open."""
+    bit = 1 << (peer - 1)
+    intervals = []
+    for line in text.splitlines():
+        match = re.match(r'\[net-frame-group\] (bridge|return) frame=(\d+) members=(\d+)', line)
+        if not match:
+            continue
+        kind, frame, members = match[1], int(match[2]), int(match[3])
+        if kind == 'bridge' and not members & bit and (not intervals or intervals[-1][1] is not None):
+            intervals.append([frame, None])
+        elif kind == 'return' and members & bit and intervals and intervals[-1][1] is None:
+            intervals[-1][1] = frame
+    return intervals
+
+
 def score(roots):
     errors, details, commits, applies, indexes, exits, logs, reports = [], {}, {}, {}, {}, {}, {}, {}
 
@@ -173,7 +189,12 @@ def score(roots):
                 held_after = [r['tick'] for r in rows[returned:] if 1 in r.get('ai_held_peer_ids', [])]
                 detail['held_after_return'] = held_after
                 require(not held_after, role + ': host became held again after return')
-                human_rows = [r for r in rows[returned:] if r['tick'] < 12000 and not r.get('paused')]
+                # A seat the round bridged has its own input replaced until its return, so acceptance resumes there.
+                bridges = [b for b in own_seat_bridges(text, rows[0]['peer']) if b[1] is None or b[1] > rows[returned]['tick']]
+                detail['own_seat_bridges_after_return'] = bridges
+                require(all(b[1] is not None for b in bridges), role + ': own seat bridged after return without a recorded return')
+                bridged = lambda tick: any(b[0] <= tick and (b[1] is None or tick < b[1]) for b in bridges)
+                human_rows = [r for r in rows[returned:] if r['tick'] < 12000 and not r.get('paused') and not bridged(r['tick'])]
                 require(all(isinstance(r.get('input_accepted_through'), int) and r['input_accepted_through'] >= r['tick'] for r in human_rows),
                         role + ': quorum input acceptance stopped advancing after return')
                 detail['input_progress_after_return'] = {'rows': len(human_rows),
@@ -246,10 +267,12 @@ def score(roots):
         anchor = host_anchor(leave['frame'])
         delta = observed['now_ms'] - anchor['now_ms'] if observed and anchor and anchor['now_ms'] is not None else None
         earliest = host_anchor(max(1, leave['frame'] - 36))
+        # The leaver's last input lands up to the delay bound past the leave; the round notes the first frame without it.
+        delay = indexes.get(role, {}).get(leave['frame'], {}).get('input_delay_ticks')
         notice = (observed and observed['source'] == 'round-notice' and
-                  leave['frame'] <= observed['frame'] <= leave['frame'] + 36 and
+                  leave['frame'] <= observed['frame'] <= leave['frame'] + 36 + 1 and
                   earliest and earliest['now_ms'] is not None and observed['now_ms'] >= earliest['now_ms'])
-        leave.update(host_anchor=anchor, notice_ms=delta, host_note=observed)
+        leave.update(host_anchor=anchor, notice_ms=delta, host_note=observed, input_delay_ticks=delay)
         # A future input stop may arrive before the host displays the matching
         # leave tick. Keep that signed interval and test the causal frame range.
         require(notice and delta is not None and delta <= limit, 'ally: ' + role + ' leave not noted within ten seconds')
