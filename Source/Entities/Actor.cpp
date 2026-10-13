@@ -36,7 +36,9 @@
 #include "Material.h"
 #include "MOPixel.h"
 #include "Scene.h"
+#include "SLTerrain.h"
 #include "PathFinder.h"
+#include "ThreadMan.h"
 #include "SettingsMan.h"
 #include "FrameMan.h"
 #include "PerformanceMan.h"
@@ -52,6 +54,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <limits>
 
 using namespace RTE;
 
@@ -3243,6 +3246,68 @@ bool Actor::RunCheckpointPathRequestSelfTest() {
 		auto retry = PathRequest::ReadCheckpoint(pending);
 		if (retry->complete || !retry->resumeAfterRestore || !retry->path.empty() || retry->SaveCheckpoint() != pending) return false;
 		try { PathRequest::ReadCheckpoint(pending + "extra"); return false; } catch (const std::exception&) {}
+
+		// A shared query can finish before its publication tick. Changing the live grid before
+		// saving must not replace that already computed answer when its actor is restored.
+		struct TestMaterial : Material {
+			void Arm(unsigned char index, float integrity) { m_Index = index; m_Integrity = integrity; }
+		};
+		TestMaterial air, rock;
+		air.Arm(MaterialColorKeys::g_MaterialAir, 0.0F);
+		rock.Arm(5, 200.0F);
+		Scene scene;
+		SLTerrain terrain;
+		struct FixtureBinding {
+			Scene& scene;
+			Scene* previousScene = g_SceneMan.GetScene();
+			uint64_t previousFrame = ScenarioRunner::GetLockstepAppliedFrame();
+			bool previousImmediate = g_SettingsMan.GetForceImmediatePathingRequestCompletion();
+			~FixtureBinding() {
+				scene.BlockUntilAllPathingRequestsComplete();
+				scene.TestSetTerrain(nullptr);
+				g_SceneMan.TestBindCurrentScene(previousScene);
+				ScenarioRunner::SetLockstepAppliedFrame(previousFrame);
+				g_SettingsMan.SetForceImmediatePathingRequestCompletion(previousImmediate);
+			}
+		} binding{scene};
+		if (terrain.TestInstallMaterialBitmap(160, 80) < 0) return false;
+		scene.TestSetTerrain(&terrain);
+		g_SceneMan.TestBindCurrentScene(&scene);
+		scene.TestInstallHorizonPathFinders(8, 4, 20, &air);
+		if (!ThreadMan::IsConstructed()) ThreadMan::Construct();
+		auto& finder = scene.GetPathFinder(Activity::Teams::NoTeam);
+		auto original = std::make_unique<Actor>();
+		original->m_PathRequest = finder.CalculatePathAsync(Vector(10, 50), Vector(150, 50), std::numeric_limits<float>::max(), 1.0F, nullptr, true, 1337);
+		finder.WaitForPathingRequests();
+		if (original->m_PathRequest->complete) return false;
+		std::array<const Material*, 8> blocked;
+		blocked.fill(&rock);
+		for (int node = 0; node < 32; ++node) finder.TestApplyLiveUpdate(node, blocked);
+		CheckpointNativeSnapshot deferredSnapshot;
+		const Actor* frozenActor = deferredSnapshot.Object(original.get());
+		deferredSnapshot.SealBoundary();
+		finder.CommitPathRequestsThrough(1337);
+		if (!original->m_PathRequest->complete) return false;
+		const std::string expectedDeferred = const_cast<const PathRequest&>(*original->m_PathRequest).SaveCheckpoint();
+		original.reset();
+		Actor reloaded;
+		{
+			CheckpointNativeSnapshot::ReadScope read(&deferredSnapshot);
+			reloaded.m_PathRequest = PathRequest::ReadCheckpoint(const_cast<const PathRequest&>(*frozenActor->m_PathRequest).SaveCheckpoint());
+		}
+		ScenarioRunner::SetLockstepAppliedFrame(1336);
+		g_SettingsMan.SetForceImmediatePathingRequestCompletion(true);
+		reloaded.PreControllerUpdate();
+		if (!reloaded.m_PathRequest || reloaded.m_PathRequest->complete) {
+			std::cout << "[actor-path-checkpoint-selftest] deferred answer published before its saved tick" << std::endl;
+			return false;
+		}
+		ScenarioRunner::SetLockstepAppliedFrame(1337);
+		finder.CommitPathRequestsThrough(1337);
+		if (!reloaded.m_PathRequest->complete || const_cast<const PathRequest&>(*reloaded.m_PathRequest).SaveCheckpoint() != expectedDeferred) {
+			std::cout << "[actor-path-checkpoint-selftest] deferred answer changed after the live grid changed" << std::endl;
+			return false;
+		}
 		return true;
 	} catch (const std::exception& error) {
 		std::cout << "[actor-path-checkpoint-selftest] " << error.what() << std::endl;
