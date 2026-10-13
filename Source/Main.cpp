@@ -4407,7 +4407,7 @@ namespace {
 				if (!simulation && std::none_of(busy.begin(), busy.end(), [&sample](const auto& entry) { return entry.second == sample.id; })) continue;
 				std::string line = simulation ? std::format("[sim-sample-at] tick={} {}", tick, Place(sample.rip)) : std::format("[sim-sample-thread] tick={} tid={} {}", tick, sample.id, Place(sample.rip));
 				int callers = 0;
-				for (size_t word = 0; word < sample.words && callers < 8; ++word) {
+				for (size_t word = 0; word < sample.words && callers < 16; ++word) {
 					if (sample.stack[word] < m_ImageBase || sample.stack[word] >= m_ImageEnd) continue;
 					line += std::format(" {:x}", sample.stack[word] - m_ImageBase);
 					++callers;
@@ -4422,7 +4422,7 @@ namespace {
 			const long parsed = value ? std::strtol(value, nullptr, 10) : 0;
 			return parsed > 0 ? static_cast<int64_t>(parsed) : int64_t{80000};
 		}();
-		static constexpr size_t c_Slots = 16384, c_Words = 64, c_Busiest = 12;
+		static constexpr size_t c_Slots = 16384, c_Words = 192, c_Busiest = 12;
 		struct Sample {
 			DWORD id;
 			size_t words;

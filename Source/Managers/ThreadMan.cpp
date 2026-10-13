@@ -17,8 +17,13 @@ void SaverThreads::Enter() {
 	s_Current = s_Lowered = true;
 	// Save work has a lower base priority than gameplay's workers.
 #ifdef _WIN32
-	static const bool idle = std::getenv("CCCP_TEST_SAVER_IDLE") != nullptr;
-	SetThreadPriority(GetCurrentThread(), idle ? THREAD_PRIORITY_IDLE : THREAD_PRIORITY_LOWEST);
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+	// Test lever CCCP_TEST_SAVER_AFFINITY=<hex mask>: confines the saver's threads to those logical processors.
+	static const DWORD_PTR affinity = [] {
+		const char* value = std::getenv("CCCP_TEST_SAVER_AFFINITY");
+		return value ? static_cast<DWORD_PTR>(std::strtoull(value, nullptr, 16)) : DWORD_PTR{0};
+	}();
+	if (affinity) SetThreadAffinityMask(GetCurrentThread(), affinity);
 #elif defined(__APPLE__)
 	pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
 #else
