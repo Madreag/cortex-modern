@@ -435,6 +435,7 @@ namespace RTE {
 			OwnerShard& shard = Owners();
 			std::lock_guard lock(shard.mutex);
 			shard.deferred.push_back({memory, [](void* value) { (*static_cast<Work*>(value))(); }, target});
+			m_MetadataGeneration.fetch_add(1, std::memory_order_release);
 		}
 		CheckpointString Freeze(const CheckpointString& source, CheckpointString* target) {
 			if (source.empty()) return {};
@@ -762,6 +763,8 @@ namespace RTE {
 		struct MetadataShard { std::mutex mutex; std::unordered_multimap<size_t, std::unique_ptr<Metadata>> values; };
 		std::array<MetadataShard, 16> m_Metadata;
 		mutable std::mutex m_MetadataReady;
+		std::atomic<uint64_t> m_MetadataGeneration{1};
+		mutable std::atomic<uint64_t> m_MaterializedGeneration{0};
 		std::atomic<bool> m_BoundarySealed{false};
 		mutable std::mutex m_OwnerRegistryMutex;
 		std::vector<std::unique_ptr<OwnerShard>> m_OwnerShards;

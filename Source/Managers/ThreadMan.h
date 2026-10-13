@@ -24,7 +24,7 @@
 namespace RTE {
 
 	/// The threads that write saves run below the simulation's threads, and the work they hand out goes to a pool of their
-	/// own that runs below them too, so a save never queues ahead of a tick's tasks or takes a core a tick could use.
+	/// own that runs below them too, so a save never queues ahead of a tick's tasks.
 	class SaverThreads {
 	public:
 		/// Lowers the calling thread below the simulation's threads for the rest of its life and marks it the saver's.

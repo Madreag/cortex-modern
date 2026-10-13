@@ -1833,8 +1833,14 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 				snapshot->MaterializeMetadata();
 			} catch (const std::bad_alloc&) { refused = true; }
 			snapshot->MaterializeMetadata();
+			std::string threaded;
+			std::async(std::launch::async, [&] { snapshot->Freeze(std::string("added by another worker"), &threaded); }).get();
+			const bool threadedReady = std::async(std::launch::async, [&] {
+				snapshot->MaterializeMetadata();
+				return threaded == "added by another worker";
+			}).get();
 			check(refused && pending == "later saved text" && later->GetPresetName() == "later saved value" &&
-			      earlier->GetPresetName() == "changed by a private getter", "later_saved_values_expand_without_resetting_private_getter_changes_after_refusal");
+			      earlier->GetPresetName() == "changed by a private getter" && threadedReady, "later_saved_values_expand_without_resetting_private_getter_changes_after_refusal");
 		}
 		{
 			struct Value {
