@@ -20,6 +20,7 @@
 #include "AHuman.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
+#include "NetModerationGUIProbe.h"
 
 using namespace RTE;
 
@@ -278,6 +279,7 @@ void Arm::SetHeldDevice(HeldDevice* newHeldDevice) {
 	m_HeldDevice = newHeldDevice;
 
 	if (newHeldDevice != nullptr) {
+		NetModerationGUIProbe::TraceObjectLifetime(newHeldDevice, "arm-hold", true);
 		AddAttachable(newHeldDevice);
 
 		m_HardcodedAttachableUniqueIDsAndSetters.try_emplace(

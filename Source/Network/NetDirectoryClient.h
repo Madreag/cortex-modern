@@ -117,6 +117,8 @@ namespace RTE {
 		/// The session token the register reply issued; the host's signaling channel proves it.
 		const std::string& GetToken() const { return m_Token; }
 		const std::string& AuthorityKey() const { return m_AuthorityKey; }
+		/// The match configuration hash the service holds for this row, from its last acknowledged register.
+		const std::string& RegisteredMatchConfigHash() const { return m_RegisteredMatchConfigHash; }
 		/// Requests or retrieves the held session's short-lived relay offer without blocking a frame.
 		bool RequestIceServers(const std::string& matchId, uint32_t ttl, const NetRelayConfig* fixed = nullptr);
 		bool FetchIceServers(const std::string& sessionId);
@@ -231,6 +233,7 @@ namespace RTE {
 		bool m_Running = false;
 		std::string m_SessionId;
 		std::string m_Token;
+		std::string m_SentMatchConfigHash, m_RegisteredMatchConfigHash; //!< The match the last register named, and the one the service holds.
 		std::string m_AuthorityKey;
 		std::string m_ObservedIp;
 		int64_t m_HeartbeatS = 0;

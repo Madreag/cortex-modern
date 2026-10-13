@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <future>
 #include <iomanip>
 #include <sstream>
 #include <utility>
@@ -220,11 +221,11 @@ namespace RTE {
 		Finish();
 	}
 
-	bool FrameRecorder::Start(const std::string& directory, int fps, std::string* error) {
-		return Start(directory, fps, c_DefaultQueueBound, error);
+	bool FrameRecorder::Start(const std::string& directory, int fps, std::string* error, bool scriptedInput) {
+		return Start(directory, fps, c_DefaultQueueBound, error, scriptedInput);
 	}
 
-	bool FrameRecorder::Start(const std::string& directory, int fps, std::size_t queueBound, std::string* error) {
+	bool FrameRecorder::Start(const std::string& directory, int fps, std::size_t queueBound, std::string* error, bool scriptedInput) {
 		const auto refuse = [error](const std::string& reason) {
 			if (error) *error = reason;
 			return false;
@@ -254,11 +255,52 @@ namespace RTE {
 		const char* codec = std::getenv("CCCP_TEST_RECORD_CODEC");
 		m_EncoderPath = encoder ? encoder : "";
 		m_EncoderCodec = codec && *codec ? codec : "libx264";
+		const char* probeScript = std::getenv("CC_TEST_NET_UI_SCRIPT");
+		m_ScriptedReadback = (probeScript && *probeScript) || (scriptedInput && !m_EncoderPath.empty());
+		// Scripted captures prepare their shared context before the first rendered frame.
+#if defined(_WIN32)
+		if (m_ScriptedReadback) {
+			const int64_t cpuBefore = ThreadCpuNanoseconds();
+			std::string readbackError;
+			m_ReadbackContext = FrameReadbackContext::Create(readbackError);
+			HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - cpuBefore);
+			if (!m_ReadbackContext) { Finish(); return refuse(readbackError); }
+		}
+#endif
 		// A killed engine never writes its last manifest; this one already names the capture rate its index is judged at.
 		WriteManifest();
 		// An encoder takes the frames in order on one pipe, so it has one writer; PNGs encode on a pool.
 		const std::size_t writers = m_EncoderPath.empty() ? WriterCount() : 1;
-		for (std::size_t writer = 0; writer < writers; ++writer) m_Writers.push_back(FloatingPointEnvironment::StartThread(&FrameRecorder::WriterLoop, this));
+#if defined(_WIN32)
+		if (m_ReadbackContext && !m_EncoderPath.empty()) {
+			// The scripted encoder owns one writer. Bind its context during setup and keep it there; rebinding it
+			// after the render context starts drawing can stall the driver on the first captured frame.
+			auto ready = std::make_shared<std::promise<std::string>>();
+			auto result = ready->get_future();
+			m_Writers.push_back(FloatingPointEnvironment::StartThread([this, ready] {
+				const int64_t setupCPU = ThreadCpuNanoseconds();
+				std::string error;
+				const bool bound = m_ReadbackContext->BeginWriter(error);
+				HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - setupCPU);
+				ready->set_value(error);
+				if (!bound) return;
+				WriterLoop();
+				const int64_t finishCPU = ThreadCpuNanoseconds();
+				const bool released = m_ReadbackContext->EndWriter(error);
+				HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - finishCPU);
+				if (!released) {
+					std::lock_guard<std::mutex> lock(m_Mutex);
+					if (m_ReadbackError.empty()) m_ReadbackError = error;
+					++m_WriteFailures;
+				}
+			}));
+			const std::string setupError = result.get();
+			if (!setupError.empty()) { Finish(); return refuse(setupError); }
+		} else
+#endif
+		{
+			for (std::size_t writer = 0; writer < writers; ++writer) m_Writers.push_back(FloatingPointEnvironment::StartThread(&FrameRecorder::WriterLoop, this));
+		}
 		return true;
 	}
 
@@ -399,6 +441,12 @@ namespace RTE {
 
 	void FrameRecorder::WriterLoop() {
 		const bool profileReadback = std::getenv("CCCP_TEST_READBACK_TIMING") != nullptr;
+		const bool scriptedReadback = m_ScriptedReadback;
+#if defined(_WIN32)
+		const bool writerCurrent = scriptedReadback && m_ReadbackContext && !m_EncoderPath.empty();
+#else
+		const bool writerCurrent = false;
+#endif
 		for (;;) {
 			QueuedFrame frame;
 			{
@@ -418,7 +466,8 @@ namespace RTE {
 			const auto wallBefore = profileReadback ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			const int64_t cpuBefore = ThreadCpuNanoseconds();
 			std::string readbackError = frame.readbackError;
-			const bool pixelsReady = readbackError.empty() && (!frame.textureReadback || (frame.readback && m_ReadbackContext->Complete(*frame.readback, frame.pixels, readbackError)));
+			std::array<int64_t, 6> readbackPhases{};
+			const bool pixelsReady = readbackError.empty() && (!frame.textureReadback || (frame.readback && m_ReadbackContext->Complete(*frame.readback, frame.pixels, readbackError, scriptedReadback, profileReadback ? &readbackPhases : nullptr, profileReadback ? &ThreadCpuNanoseconds : nullptr, writerCurrent)));
 			if (frame.textureReadback && !frame.readback) readbackError = "admitted texture frame has no queued pixel transfer";
 			const int64_t cpuAfterReadback = profileReadback ? ThreadCpuNanoseconds() : 0;
 			std::string row;
@@ -439,7 +488,10 @@ namespace RTE {
 				System::PrintDiagnosticLine("[capture-writer-phase] tick=" + std::to_string(frame.meta.simTick) + " frame=" + std::to_string(frame.index) +
 				    " cpu_us=" + std::to_string(cpuNS / 1000) + " wall_us=" + std::to_string(wallUS) +
 				    " readback_cpu_us=" + std::to_string((cpuAfterReadback - cpuBefore) / 1000) +
-				    " encode_cpu_us=" + std::to_string((cpuNS - (cpuAfterReadback - cpuBefore)) / 1000));
+				    " encode_cpu_us=" + std::to_string((cpuNS - (cpuAfterReadback - cpuBefore)) / 1000) +
+				    " context_cpu_us=" + std::to_string(readbackPhases[0] / 1000) + " fence_cpu_us=" + std::to_string(readbackPhases[1] / 1000) +
+				    " copy_cpu_us=" + std::to_string(readbackPhases[2] / 1000) + " convert_cpu_us=" + std::to_string(readbackPhases[3] / 1000) +
+				    " cleanup_cpu_us=" + std::to_string(readbackPhases[4] / 1000) + " release_cpu_us=" + std::to_string(readbackPhases[5] / 1000));
 			}
 			frame.pixels.clear();
 			{
@@ -464,6 +516,7 @@ namespace RTE {
 		nlohmann::json line = {{"frame", frame.index}, {"wall_ms", frame.meta.wallMS}, {"sim_tick", frame.meta.simTick},
 		    {"screen", frame.meta.screen}, {"resolution", {frame.meta.width, frame.meta.height}}, {"saved", saved}};
 		if (!frame.meta.serviceState.empty()) line["service_state"] = frame.meta.serviceState;
+		if (frame.meta.activityEditing.has_value()) line["activity_editing"] = *frame.meta.activityEditing;
 
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (saved) {
@@ -512,6 +565,7 @@ namespace RTE {
 		nlohmann::json line = {{"frame", frame.index}, {"video_frame", frame.slot - m_FirstSlot}, {"wall_ms", frame.meta.wallMS}, {"sim_tick", frame.meta.simTick},
 		    {"screen", frame.meta.screen}, {"resolution", {frame.meta.width, frame.meta.height}}, {"saved", written}};
 		if (!frame.meta.serviceState.empty()) line["service_state"] = frame.meta.serviceState;
+		if (frame.meta.activityEditing.has_value()) line["activity_editing"] = *frame.meta.activityEditing;
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (written) {
 			++m_Saved;

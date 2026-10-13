@@ -2,7 +2,7 @@
   "schema": 1,
   "name": "ui-surfaces",
   "port_base": 49440,
-  "title": "Every multiplayer UI surface at 640x360, 960x540 and 1280x720: lobby, host options, kick/ban, chat, F6, visibility, Repair, pause Match Details",
+  "title": "Every multiplayer UI surface at 640x360, 960x540, 1280x720 and 1920x1080: lobby, host options, kick/ban, chat, F6, visibility, Repair, pause Match Details",
   "timeout_s": 160,
   "runs": [
     {
@@ -16,6 +16,10 @@
     {
       "name": "1280x720",
       "size": "1280x720"
+    },
+    {
+      "name": "1920x1080",
+      "size": "1920x1080"
     },
     {
       "name": "player-settings",
@@ -92,7 +96,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -108,7 +113,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -125,7 +131,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -144,7 +151,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -161,7 +169,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -178,7 +187,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -194,7 +204,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -210,7 +221,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -226,7 +238,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -234,16 +247,18 @@
       "peer": "host",
       "mark": "ui-seat-dialog-other",
       "screen": "MultiplayerScreen",
-      "what": "The other seat offers Kick and Ban, and Close dismisses the dialog.",
+      "what": "Before the first round, the empty seat names its absent holder, disables Kick and Ban, and Close dismisses the dialog.",
       "assert": "menu assertions in the marked interval",
       "events": [
-        "assert_enabled ButtonHostSeatDlgKick expected=1 actual=1 PASS",
-        "assert_enabled ButtonHostSeatDlgBan expected=1 actual=1 PASS"
+        "assert_label LabelHostSeatDlgActionHint .*No player holds this seat[.].*PASS",
+        "assert_enabled ButtonHostSeatDlgKick expected=0 actual=0 PASS",
+        "assert_enabled ButtonHostSeatDlgBan expected=0 actual=0 PASS"
       ],
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -259,7 +274,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -275,7 +291,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -291,7 +308,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -307,7 +325,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -323,7 +342,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -336,7 +356,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -349,7 +370,22 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
+      ]
+    },
+    {
+      "id": "ui-f6-connection-host",
+      "peer": "host",
+      "mark": "ui-f6-connection",
+      "screen": "game",
+      "what": "A held second click opens Connection details and exposes the unchanged frame redundancy and scrolling assertions.",
+      "assert": "probe assertions in the marked interval",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -357,12 +393,13 @@
       "peer": "host",
       "mark": "ui-pause-match-options",
       "screen": "PauseMatchOptions",
-      "what": "Pause Match Details draws the rules, repair hint and Close button.",
+      "what": "Pause Rules draws the rules and Close button; the repair hint stays hidden until Connection Details.",
       "assert": "probe assertions in the marked interval",
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -375,7 +412,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -388,7 +426,22 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
+      ]
+    },
+    {
+      "id": "ui-f6-connection-client",
+      "peer": "client",
+      "mark": "ui-f6-connection",
+      "screen": "game",
+      "what": "A held second click opens Connection details and exposes the unchanged frame redundancy and scrolling assertions.",
+      "assert": "probe assertions in the marked interval",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -396,12 +449,13 @@
       "peer": "client",
       "mark": "ui-pause-match-options",
       "screen": "PauseMatchOptions",
-      "what": "Pause Match Details draws the rules, repair hint and Close button.",
+      "what": "Pause Rules draws the rules and Close button; the repair hint stays hidden until Connection Details.",
       "assert": "probe assertions in the marked interval",
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ]
     },
     {
@@ -482,7 +536,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ],
       "mark": "ui-leave-confirm",
       "screen": "PauseLeaveConfirm",
@@ -495,7 +550,8 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ],
       "mark": "ui-hosted-recovery",
       "screen": "MultiplayerScreen",
@@ -512,12 +568,41 @@
       "run": [
         "640x360",
         "960x540",
-        "1280x720"
+        "1280x720",
+        "1920x1080"
       ],
       "mark": "ui-leave-confirm-client",
       "screen": "PauseLeaveConfirm",
       "what": "The client reads the leave consequence and confirms; both capture processes then finish.",
       "assert": "probe asserts ButtonLeaveConfirm and activates it; both launch records end without a timeout"
+    },
+    {
+      "id": "ui-pause-connection-host",
+      "peer": "host",
+      "mark": "ui-pause-connection",
+      "screen": "PauseMatchOptions",
+      "what": "Connection Details shows its exact heading and connection fields; the visible repair hint fits and stays inside its panel.",
+      "assert": "probe assertions in the marked interval",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720",
+        "1920x1080"
+      ]
+    },
+    {
+      "id": "ui-pause-connection-client",
+      "peer": "client",
+      "mark": "ui-pause-connection",
+      "screen": "PauseMatchOptions",
+      "what": "Connection Details shows its exact heading and connection fields; the visible repair hint fits and stays inside its panel.",
+      "assert": "probe assertions in the marked interval",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720",
+        "1920x1080"
+      ]
     }
   ],
   "directory_port": 49479,

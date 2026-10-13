@@ -20,6 +20,8 @@
 #include <array>
 #include <memory>
 #include <functional>
+#include <mutex>
+#include <set>
 namespace RTE {
 
 #define OBJARROWFRAMECOUNT 4
@@ -164,6 +166,11 @@ namespace RTE {
 		/// placed. Read by the match status strip; never read by the simulation.
 		/// @return Whether the match is holding in the synchronized setup editor.
 		bool DescribeLockstepPlacementWait(std::string& names, int& placed, int& total) const;
+		std::string MatchBrainPlacementReason(int player, const Vector& spot, const SceneObject* brain) const;
+
+		/// Records an assigned brain's destruction before its actor is released.
+		void NoteMatchBrainLoss(const Actor& brain, const char* cause);
+		const std::string& GetMatchEndReason() const { return m_MatchEndReason; }
 
 		/// Test-only seam: puts a placement command on the wire exactly as issued, so a command every peer
 		/// has to refuse - an unknown preset, a seat this peer does not hold - can be exercised end to end.
@@ -294,6 +301,7 @@ namespace RTE {
 		void PrepareCheckpointCapture() const;
 		static bool RunNetLocalUIRestoreSelfTest();
 		static bool RunSetupEditorSelfTest(bool confirmOnly = false);
+		static bool RunFight15SelfTest(const std::string& row);
 		static bool RunNetInventoryRelaunchProbe(std::string_view phase);
 
 		/// Locks a player controlled actor to a specific controller mode.
@@ -873,6 +881,10 @@ namespace RTE {
 		std::array<SeatBrain, Players::MaxPlayerCount> m_LockstepSeatBrains{}; //!< Per-seat committed placement; player < 0 means none yet.
 		long m_LockstepPlacementUidBase = 0; //!< The unique-id counter as the editing phase opened, identical on every peer.
 		bool m_LockstepPlacementSeeded = false; //!< The one-time seed pass has run for this editing phase.
+		std::mutex m_MatchBrainLossMutex;
+		std::set<long> m_MatchLostBrainIDs;
+		std::vector<std::string> m_MatchBrainLosses;
+		std::string m_MatchEndReason;
 
 		bool LoadNetLocalGameState(std::string_view text);
 		bool CreateNetLocalUI();

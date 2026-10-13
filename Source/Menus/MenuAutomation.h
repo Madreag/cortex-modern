@@ -63,8 +63,8 @@ namespace RTE {
 		/// Opens a drop-down, presses its row, lifts a frame later and checks the pick holds through the next frames,
 		/// or, refused, that the screen turned it down and kept its previous row.
 		bool HandPick(GUIControlManager* manager, const std::string& name, const std::string& item, std::string& observation, bool refused = false);
-		/// Clicks (or double-clicks) a list's row, wheeling it into view first.
-		bool HandRow(GUIControlManager* manager, const std::string& listName, int index, int presses, GUIControl* modal, std::string& observation);
+		/// Clicks (or double-clicks) a list's row, wheeling it into view first; a rebuilding list supplies the release's result.
+		bool HandRow(GUIControlManager* manager, const std::string& listName, int index, int presses, GUIControl* modal, std::string& observation, std::function<bool()> taken = {});
 		/// Presses a slider's track where the value lies and wheels the rest of the way.
 		bool HandDrag(GUIControlManager* manager, const std::string& name, int value, std::string& observation);
 	}

@@ -710,6 +710,14 @@ namespace RTE {
 		/// @return The master script state.
 		LuaStateWrapper& GetMasterScriptState();
 
+		/// Whether CC_TEST_SHARED_LUA_TRACE asks for the shared Lua trace.
+		static bool SharedTraceEnabled();
+
+		/// Prints one shared-trace line with its tick and, given a state, the running Lua caller.
+		/// @param state The Lua state whose running coroutine called in, or nullptr.
+		/// @param event What happened.
+		static void TraceShared(lua_State* state, const std::string& event);
+
 		/// Returns our threaded script states which movable objects use.
 		/// @return A list of threaded script states.
 		LuaStatesArray& GetThreadedScriptStates();

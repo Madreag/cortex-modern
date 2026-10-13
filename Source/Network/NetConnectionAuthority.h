@@ -127,6 +127,8 @@ namespace RTE {
 		bool RestoreLease(const NetSeatLease& lease);
 		std::optional<NetSeatLease> LocalLease() const;
 		void SetRoute(NetConnectionRoute route);
+		/// The route the next check-in carries.
+		NetConnectionRoute Route() const;
 		void CheckInNow();
 		void RefreshRoute();
 		void RequestBootstrap();
@@ -145,11 +147,15 @@ namespace RTE {
 		NetHostChangeReply QueryHostChange(const NetHostChangeRequest& request);
 		std::string HostChangeToken(uint64_t generation) const;
 		NetFrameTieReply QueryFrameTie(const NetFrameTieRequest& request);
+		/// The match the directory listed for this session; a tie is filed under it, which the directory checks the round against.
+		void SetListedMatchHash(const std::string& hex);
 		void Update(uint64_t steadyMs, uint64_t unixSeconds);
 		uint64_t AdmissionWaitedMs() const;
 		uint64_t AdmissionRetryMs() const;
 
 	private:
+		friend bool TestRecoveryUsesListedMatch(std::string* error);
+		NetHash32 DirectoryMatchHash(const NetHash32& peerHash) const;
 		struct Operation {
 			std::string body;
 			NetSeatLease wanted;
@@ -194,6 +200,7 @@ namespace RTE {
 		std::unique_ptr<NetHttpClient> m_FrameTie;
 		std::vector<std::unique_ptr<NetHttpClient>> m_RetiredFrameTies;
 		std::optional<NetFrameTieRequest> m_FrameTieRequest;
+		std::optional<NetHash32> m_ListedMatchHash;
 		NetFrameTieReply m_FrameTieReply;
 		bool m_FrameTieCheckedIn = false;
 		std::optional<uint64_t> m_FrameTieBoundStartMs;

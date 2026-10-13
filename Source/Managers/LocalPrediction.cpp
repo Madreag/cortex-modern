@@ -514,6 +514,9 @@ namespace RTE {
 
 		for (const Preview& preview: targets) {
 			if (preview.screen >= 0) {
+				const int player = activity->PlayerOfScreen(preview.screen);
+				// Actor selection and orders keep the cursor's view; the preview follows only normal play.
+				if (player < Players::PlayerOne || player >= Players::MaxPlayerCount || activity->GetViewState(player) != Activity::Normal) continue;
 				Vector scrollPos = g_CameraMan.GetActorScrollTarget(*preview.original, preview.clone->GetPos(), preview.screen);
 				g_SceneMan.ForceBounds(scrollPos);
 				g_CameraMan.SetScrollTarget(scrollPos, 0.1F, preview.screen);

@@ -223,7 +223,8 @@ namespace RTE {
 		bool UsesLobbyProtocol() const { return m_UseLobbyProtocol; }
 		/// Whether the lobby's configuration is host-authored or has been accepted from the host.
 		bool HasLobbyConfig() const {
-			return m_Config.host || m_State == NetMatchRuntimeState::Running ||
+			// A world's image carries the round it joins, whether or not its lobby reached the ready wait first.
+			return m_Config.host || m_State == NetMatchRuntimeState::Running || m_WorldJoinImage ||
 			       m_Lobby.GetState() == NetLobbyState::WaitingForReady || m_Lobby.GetState() == NetLobbyState::Started;
 		}
 		/// Whether this round loads a checkpoint, however the checkpoint reached this peer: streamed by

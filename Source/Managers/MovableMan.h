@@ -1387,6 +1387,9 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		/// Whether a match already owns a dropped device, including one awaiting settling.
+		bool AlreadyOwnsMatchDevice(const MovableObject* device) const;
+
 		/// The sim dump's lines for one tick, into a stream or a tape.
 		template <class Out> void DumpSimLines(uint64_t tick, Out& out) const;
 

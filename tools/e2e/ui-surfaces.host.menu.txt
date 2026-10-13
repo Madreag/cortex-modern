@@ -168,9 +168,11 @@ observe assert_visible HostSeatDialog 1
 assert_text_fits LabelHostSeatDlgActionHint
 assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgCancel
 assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgBan
-observe assert_label LabelHostSeatDlgActionHint Seat actions apply to this player.
-assert_enabled ButtonHostSeatDlgKick 1
-observe assert_enabled ButtonHostSeatDlgBan 1
+# Before the first round, admission has not committed a holder for this seat.
+observe assert_label LabelHostSeatDlgReclaim Not held
+observe assert_label LabelHostSeatDlgActionHint No player holds this seat.
+assert_enabled ButtonHostSeatDlgKick 0
+observe assert_enabled ButtonHostSeatDlgBan 0
 dump_host_options
 observe activate ButtonHostSeatDlgClose
 wait_ms 495

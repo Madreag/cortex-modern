@@ -4,6 +4,7 @@
 #include "NetAuthCrypto.h"
 #include "NetLobbyProtocol.h"
 #include "NetProtocol.h"
+#include "NetWorldJoin.h"
 
 #include "lz4.h"
 
@@ -23,11 +24,36 @@ namespace RTE {
 
 	NetHash32 NetLockstepCoordinator::PeerAppliedFramePrefix(uint64_t frame) const {
 		if (m_Playback) if (const auto applied = m_PeerReplayAppliedPrefixes.find(frame); applied != m_PeerReplayAppliedPrefixes.end()) return applied->second;
-		NetHash32 hash{};
 		const auto kept = m_MigrationHistory.find(frame);
-		if (kept == m_MigrationHistory.end()) return hash;
+		if (kept == m_MigrationHistory.end()) return {};
+		NetLockstepReadyFrame ready;
+		if (DecodeMigrationFrame(kept->second, frame, ready)) return CommittedFramePrefix(ready);
+		NetHash32 hash{};
 		uint8_t mac[32]{};
 		if (GetNetAuthCrypto().HmacSha256(m_Config.migrationKey.data(), m_Config.migrationKey.size(), kept->second.data(), kept->second.size(), mac))
+			std::copy_n(mac, hash.size(), hash.begin());
+		return hash;
+	}
+
+	NetHash32 NetLockstepCoordinator::CommittedFramePrefix(const NetLockstepReadyFrame& ready) const {
+		// The frame as the round's committed record carries it, the same bytes on every peer: a seat that only replayed that
+		// record, with no peer's own split of the inputs, derives the same prefix as the seats that played it.
+		std::vector<uint8_t> bytes{ready.authorityPeerId, ready.updateAuthorityPeerId, static_cast<uint8_t>(ready.departedPeerIds.size())};
+		bytes.insert(bytes.end(), ready.departedPeerIds.begin(), ready.departedPeerIds.end());
+		for (const auto* facts: {&ready.committedPeerLeaves, &ready.committedFrameWaivers}) {
+			bytes.push_back(static_cast<uint8_t>(facts->size()));
+			for (const auto& [peer, boundary]: *facts) {
+				bytes.push_back(peer);
+				for (int shift = 0; shift < 64; shift += 8) bytes.push_back(static_cast<uint8_t>(boundary >> shift));
+			}
+		}
+		std::vector<uint8_t> committed;
+		NetHash32 hash{};
+		uint8_t mac[32]{};
+		// A frame the record cannot carry keeps its own encoding, which no other frame's prefix can match.
+		if (!EncodeCommittedJoinFrame(PackWorldJoinReadyFrame(ready), committed) && !EncodeMigrationFrame(ready, committed)) return hash;
+		bytes.insert(bytes.end(), committed.begin(), committed.end());
+		if (GetNetAuthCrypto().HmacSha256(m_Config.migrationKey.data(), m_Config.migrationKey.size(), bytes.data(), bytes.size(), mac))
 			std::copy_n(mac, hash.size(), hash.begin());
 		return hash;
 	}
@@ -367,6 +393,11 @@ namespace RTE {
 		if (!ValidatePeerBridge(proposal)) { if (error) *error = "the private return does not match the committed boundary"; return false; }
 		if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->BindAdmission(peer, transport);
 		m_RemoteTransports[peer] = transport;
+		if (m_Config.peerSessionLinks) {
+			const auto [wire, native] = m_Config.peerSessionLinks->RouteTo(peer);
+			DiagnosticLine() << "[net-frame-group] return proposed peer=" << static_cast<int>(peer) << " frame=" << frame << " routes=" << m_Config.peerSessionLinks->RoutesTo(peer).size()
+			    << " native=" << native << " route=" << (wire ? wire->GetConnectedRoute(native) : std::string("none")) << std::endl;
+		}
 		m_PeerAdmissions[peer] = {frame, static_cast<uint16_t>(delay)};
 		m_RemoteStartsReceived.erase(peer); m_RemoteStarts.erase(peer);
 		m_PeersPlayedThisRound.erase(peer); m_LastStartAnswerMs.erase(peer);
@@ -381,12 +412,24 @@ namespace RTE {
 		NetLockstepPlane::Check(&replay, "AdoptPeerReturnConfig (the replay)");
 		const auto kept = m_PeerReturnProofs.find(activation);
 		if (!UsesPeerFrameGroups() || kept == m_PeerReturnProofs.end()) return false;
+		return AdoptPeerReturn(config, replay, kept->second, activation);
+	}
+
+	bool NetLockstepCoordinator::AdoptPeerReturn(NetLockstepConfig& config, const NetLockstepCoordinator& replay, const NetHostMigrationMessage& proof, uint64_t activation, std::string* why) const {
+		NET_PLANE_CHECK();
+		NetLockstepPlane::Check(&replay, "AdoptPeerReturn (the replay)");
 		NetHostMigrationMessage agreed; uint32_t voters = 0;
-		if (!DecodePeerBridgeCertificate(kept->second, agreed, voters) || !PeerGroupHasAuthority(voters) ||
-		    agreed.sessionId != config.sessionId || agreed.roundId != config.matchConfig.roundId || agreed.configHash != config.originalRoundConfigHash ||
-		    agreed.preparedFrame != 1 || (!replay.m_MigrationHistory.contains(agreed.boundary) && !replay.m_PeerReplayAppliedPrefixes.contains(agreed.boundary))) return false;
+		const auto refuse = [&](const char* reason) { if (why) *why = reason; return false; };
+		if (proof.type != NetHostMigrationMessageType::PeerBridgeCommit || proof.frame != activation) return refuse("not this return's certificate");
+		if (!DecodePeerBridgeCertificate(proof, agreed, voters)) return refuse("certificate unreadable");
+		if (!PeerGroupHasAuthority(voters)) return refuse("voters lack authority");
+		if (agreed.sessionId != config.sessionId) return refuse("other session");
+		if (agreed.roundId != config.matchConfig.roundId) return refuse("other round");
+		if (agreed.configHash != config.originalRoundConfigHash) return refuse("other round configuration");
+		if (agreed.preparedFrame != 1) return refuse("not committed");
+		if (!replay.m_MigrationHistory.contains(agreed.boundary) && !replay.m_PeerReplayAppliedPrefixes.contains(agreed.boundary)) return refuse("boundary not replayed");
 		const auto prefix = replay.PeerAppliedFramePrefix(agreed.boundary);
-		if (!std::equal(prefix.begin(), prefix.end(), agreed.bytes.begin())) return false;
+		if (!std::equal(prefix.begin(), prefix.end(), agreed.bytes.begin())) return refuse("applied prefix differs");
 		size_t offset = prefix.size();
 		for (uint8_t peer: agreed.members) {
 			uint32_t delay = 0, neutral = 0, incarnation = 0;

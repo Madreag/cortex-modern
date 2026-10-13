@@ -119,6 +119,7 @@ namespace RTE {
 		void SetCursorPos(const Vector& newCursorPos) {
 			if (!IsInert()) m_CursorPos = newCursorPos;
 		}
+		Vector GetCursorPos() const { return IsInert() ? Vector() : m_CursorPos; }
 
 		/// Sets the new Object to be held at the cursor of this Editor. Ownership
 		/// IS transferred!
@@ -243,6 +244,8 @@ namespace RTE {
 		int m_RevealIndex;
 		// Whether we need a clear path to orbit to place brain
 		bool m_RequireClearPathToOrbit;
+		bool m_MatchBrainInstallPending = false;
+		Vector m_MatchBrainInstallPos;
 
 		std::unique_ptr<PieMenu> m_PieMenu; //!< The PieMenu for this SceneEditorGUI.
 		// The object picker

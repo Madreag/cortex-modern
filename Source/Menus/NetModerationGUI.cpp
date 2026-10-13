@@ -1889,6 +1889,58 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		m_StatusWrap = m_StatusLayoutWrap;
 		RecordStatusObservation(snapshot, hostLost, currentWaitMs);
 	};
+	if (!menuLobby && backbuffer->w >= 960) {
+		EditorArea area = editor;
+		for (const auto& band: area.textBands) area.occupiers.push_back(band);
+		area.occupiers.push_back(c_FundsHudZone);
+		area.occupiers.push_back({backbuffer->w + c_ControllerHudZone.x, c_ControllerHudZone.y, c_ControllerHudZone.w, c_ControllerHudZone.h});
+		if (m_ToastRect.visible) area.occupiers.push_back({m_ToastRect.x, m_ToastRect.y, m_ToastRect.width, m_ToastRect.height});
+		const auto composeMetrics = [&](int width) {
+			std::string text = FitLine(font, headline(0), width - 12);
+			if (placing) text += "\n" + countOnly + " brains placed";
+			text += "\nInput " + std::string(metrics);
+			char pace[64];
+			std::snprintf(pace, sizeof(pace), " / PACE %.1f tps", s_paceTps);
+			text += "\nRTT " + (!hostLost && ping ? PingWords(*ping) : "--") + " ms" + pace;
+			for (const auto& member: snapshot.members) {
+				if (member.cpu || NetPlayerPresentation::Departed(member.peerId)) continue;
+				const std::string numbers = " / delay " + std::to_string(member.inputDelayFrames) + " / waits " + std::to_string(member.waits) + " / max " + std::to_string(member.longestWaitMs) + " ms";
+				text += "\n" + FitName(font, ShownName(member), std::max(24, width - 12 - font->CalculateWidth(numbers))) + numbers;
+			}
+			if (waiting && !placing) text += "\nWaiting " + SecondsInWords(currentWaitMs);
+			if (!m_StatusProbeLine.empty()) text += "\n" + m_StatusProbeLine;
+			return WrapText(font, FitTokens(font, text, width - 12), width - 12);
+		};
+		int width = 408, left = 0, right = 0, y = 24;
+		std::string text = composeMetrics(width);
+		m_NetStatus->SetFont(font);
+		m_NetStatus->Resize(width - 12, backbuffer->h);
+		m_NetStatus->SetText(text);
+		int height = m_NetStatus->GetTextHeight() + 12;
+		for (; y + height <= backbuffer->h - 8; y += 4) {
+			area.FreeSpan(y, y + height, backbuffer->w, left, right);
+			if (right - left < 292) continue;
+			width = std::min(408, right - left - 12);
+			text = composeMetrics(width);
+			m_NetStatus->Resize(width - 12, backbuffer->h);
+			m_NetStatus->SetText(text);
+			height = m_NetStatus->GetTextHeight() + 12;
+			area.FreeSpan(y, y + height, backbuffer->w, left, right);
+			if (right - left >= width + 12) break;
+		}
+		if (y + height <= backbuffer->h - 8) {
+			const int x = right - width - 6;
+			m_NetStatusBox->Move(x, y);
+			m_NetStatusBox->Resize(width, height);
+			m_NetStatus->Move(x + 6, y + 6);
+			m_NetStatus->Resize(width - 12, height - 12);
+			m_StatusLayoutRect = {x, y, width, height, true};
+			m_StatusLayoutWrap = {text, text, width - 12, LongestWordWidth(font, text), width - 12, true};
+			m_StatusLayoutKey = layoutKey('m', {x, y, width, height});
+			drawKept();
+			return;
+		}
+	}
 	if (backbuffer->h < c_CompactMaxHeight && (m_Open || !g_SettingsMan.GetNetworkShowDiagnostics())) {
 		// The short-screen layout is one line in the gap between the funds block and the controller icon;
 		// while the editor holds the world it takes the widest column-free gap, or the top band when none fits.
@@ -2277,6 +2329,7 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot, bool fr
 void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	(void)snapshot;
 	m_ChatBand = {};
+	if (!m_ChatEntryOpen) m_ChatEntryBottom = 0;
 	if (!m_OverlayControls) {
 		m_ChatRect = {};
 		return;
@@ -2331,7 +2384,12 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 		if (band.y + band.h > backbuffer->h / 2) lower(band.y - 4);
 		area.occupiers.push_back(band);
 	}
-	const int topLimit = std::max(ChatTopLimit(area, backbuffer->h), m_ConnectionRect.visible ? m_ConnectionRect.y + m_ConnectionRect.height + 4 : 0);
+	// An open entry stays where the player found it: a notice that arrives may raise it, one that ends never drops it under the cursor.
+	if (m_ChatEntryOpen) {
+		if (m_ChatEntryBottom > 0) lower(m_ChatEntryBottom);
+		m_ChatEntryBottom = bottom;
+	}
+	const int topLimit = ChatTopLimit(area, backbuffer->h);
 
 	const int available = std::max(0, bottom - topLimit);
 	bool reducedTextSize = false;

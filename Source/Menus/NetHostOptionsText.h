@@ -213,7 +213,7 @@ namespace RTE {
 			if (players.empty()) continue;
 			const auto& rules = config.teamRules[team];
 			line("Team " + std::to_string(team + 1) + ": " + players);
-			line("  Technology: " + (rules.technologyModule.empty() ? (rules.technologyIntent == "-All-" ? std::string("All factions") : rules.technologyIntent) : rules.technologyModule) + "   AI skill: " + std::to_string(rules.aiSkill));
+			line("  Team " + std::to_string(team + 1) + " technology: " + (rules.technologyModule.empty() ? (rules.technologyIntent == "-All-" ? std::string("All factions") : rules.technologyIntent) : rules.technologyModule) + "   AI skill: " + std::to_string(rules.aiSkill));
 		}
 		// Short rows share a line, so the summary fits the smallest panel that shows it.
 		line("Difficulty: " + std::to_string(config.difficulty) + "   Starting gold: " +

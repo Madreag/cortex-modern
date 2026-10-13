@@ -12,8 +12,17 @@
       "elapsed_ms": 1000
     },
     {
+      "op": "menu",
+      "command": "video_mark ui-f6-overlay"
+    },
+    {
       "op": "key_down",
       "key": "F6"
+    },
+    {
+      "op": "wait",
+      "renders": 3,
+      "elapsed_ms": 50
     },
     {
       "op": "key_up",
@@ -22,10 +31,6 @@
     {
       "op": "wait",
       "panel_open": true
-    },
-    {
-      "op": "menu",
-      "command": "video_mark ui-f6-overlay"
     },
     {
       "op": "wait",
@@ -60,6 +65,57 @@
     {
       "op": "assert_control",
       "control": "NetworkSeatsOptionsText",
+      "text_contains": "Activity: P4 Alpha Duel  (Base.rte)"
+    },
+    {
+      "op": "assert_control",
+      "control": "NetworkSeatsOptionsText",
+      "text_contains": "Team 1 technology: All factions   AI skill: 50"
+    },
+    {
+      "op": "assert_control",
+      "control": "NetworkSeatsOptionsText",
+      "text_contains": "Team 2 technology: All factions   AI skill: 50"
+    },
+    {
+      "op": "assert_control",
+      "control": "NetworkSeatsOptionsText",
+      "text_contains": "When every human brain is lost: Keep playing, humans spectate"
+    },
+    {
+      "op": "assert_control",
+      "control": "NetworkSeatsOptions",
+      "equals": {
+        "text": "Connection details",
+        "visible": true,
+        "enabled": true
+      },
+      "fits": true
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 1200
+    },
+    {
+      "op": "menu",
+      "command": "activate NetworkSeatsOptions"
+    },
+    {
+      "op": "wait",
+      "control": "NetworkSeatsOptionsText",
+      "text_contains": "Frame redundancy:"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark ui-f6-connection"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 1200
+    },
+    {
+      "op": "assert_control",
+      "control": "NetworkSeatsOptionsText",
       "text_contains": "Frame redundancy:"
     },
     {
@@ -75,6 +131,11 @@
       "key": "F6"
     },
     {
+      "op": "wait",
+      "renders": 3,
+      "elapsed_ms": 50
+    },
+    {
       "op": "key_up",
       "key": "F6"
     },
@@ -85,6 +146,11 @@
     {
       "op": "key_down",
       "key": "Escape"
+    },
+    {
+      "op": "wait",
+      "renders": 3,
+      "elapsed_ms": 50
     },
     {
       "op": "key_up",
@@ -147,6 +213,75 @@
     {
       "op": "menu",
       "command": "assert_rect_inside LabelMatchOptions MatchOptionsBox"
+    },
+    {
+      "op": "menu",
+      "command": "assert_label LabelMatchOptionsTitle RULES FOR THIS ROUND"
+    },
+    {
+      "op": "menu",
+      "command": "assert_label LabelMatchOptions Activity: P4 Alpha Duel"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible LabelMatchRepairHint 0"
+    },
+    {
+      "op": "menu",
+      "command": "assert_rect_inside ButtonConnectionDetails MatchOptionsBox"
+    },
+    {
+      "op": "menu",
+      "command": "assert_text_fits ButtonConnectionDetails"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 1200
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonConnectionDetails"
+    },
+    {
+      "op": "wait",
+      "screen": "PauseMatchOptions",
+      "elapsed_ms": 450
+    },
+    {
+      "op": "menu",
+      "command": "video_mark ui-pause-connection"
+    },
+    {
+      "op": "menu",
+      "command": "assert_label LabelMatchOptionsTitle CONNECTION DETAILS"
+    },
+    {
+      "op": "menu",
+      "command": "assert_label LabelMatchOptions Frame redundancy:"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible LabelMatchRepairHint 1"
+    },
+    {
+      "op": "menu",
+      "command": "assert_rect_inside MatchOptionsBox viewport"
+    },
+    {
+      "op": "menu",
+      "command": "assert_rect_inside LabelMatchOptions MatchOptionsBox"
+    },
+    {
+      "op": "menu",
+      "command": "assert_rect_inside ButtonConnectionDetails MatchOptionsBox"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible ButtonMatchRepairNow 0"
+    },
+    {
+      "op": "menu",
+      "command": "assert_text_fits LabelMatchRepairHint"
     },
     {
       "op": "menu",
@@ -244,6 +379,11 @@
       "key": "Escape"
     },
     {
+      "op": "wait",
+      "renders": 3,
+      "elapsed_ms": 50
+    },
+    {
       "op": "key_up",
       "key": "Escape"
     },
@@ -280,7 +420,9 @@
     {
       "op": "wait",
       "elapsed_ms": 450,
-      "scope": "menu"
+      "scope": "menu",
+      "service": "Completed",
+      "within_ms": 1500
     },
     {
       "op": "signal",

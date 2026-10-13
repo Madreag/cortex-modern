@@ -1,4 +1,5 @@
 #include "MovableObject.h"
+#include "NetModerationGUIProbe.h"
 
 #include <future>
 #include <atomic>
@@ -367,6 +368,7 @@ MovableObject::HookCallScope::~HookCallScope() {
 
 MovableObject::~MovableObject() {
 	if (IsFrozenCheckpointNative()) { MovableObjectReference::Expire(this); return; }
+	NetModerationGUIProbe::TraceObjectLifetime(this, "destroy", true);
 	// Whatever freed this object, a hook loop of it running on this thread must not read it again.
 	for (HookCallScope* scope: g_LiveHookScopes) {
 		if (scope->m_Object == this) {

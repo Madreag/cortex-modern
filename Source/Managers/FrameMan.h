@@ -222,6 +222,11 @@ namespace RTE {
 		/// @return Current message shown to player.
 		std::string GetScreenText(int whichScreen = 0) const { return (whichScreen >= 0 && whichScreen < c_MaxScreenCount) ? m_ScreenText[whichScreen].Value() : ""; }
 
+		/// Gets whether a player screen's message is still inside the display duration it was set with, so no other message replaces it yet.
+		/// @param whichScreen Which player screen to check.
+		/// @return Whether the current message is held.
+		bool ScreenTextHeld(int whichScreen = 0) const { return whichScreen >= 0 && whichScreen < c_MaxScreenCount && m_TextDurationTimer[whichScreen].GetElapsedRealTimeMS() <= m_TextDuration[whichScreen]; }
+
 		/// The wrapped message and the box it occupies on a player's screen.
 		struct ScreenTextLayout {
 			int x = 0, y = 0, width = 0, height = 0;

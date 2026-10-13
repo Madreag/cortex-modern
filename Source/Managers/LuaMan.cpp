@@ -9139,25 +9139,69 @@ void LuaStateWrapper::Destroy() {
 	CheckpointStateValues().state = nullptr;
 }
 
+bool LuaMan::SharedTraceEnabled() {
+	static const bool trace = std::getenv("CC_TEST_SHARED_LUA_TRACE") != nullptr;
+	return trace;
+}
+
+void LuaMan::TraceShared(lua_State* state, const std::string& event) {
+	if (!SharedTraceEnabled()) {
+		return;
+	}
+	std::ostringstream line;
+	line.imbue(std::locale::classic());
+	line << "[shared-trace] tick=" << g_TimerMan.GetSimUpdateCount() << ' ' << event;
+	if (state) {
+		// The running coroutine, not the state's main thread, holds the caller's frames.
+		lua_State* running = gco2th(gcref(G(state)->cur_L));
+		line << " at=";
+		lua_Debug frame;
+		for (int level = 1; level <= 4 && lua_getstack(running, level, &frame); ++level) {
+			if (!lua_getinfo(running, "Sln", &frame)) break;
+			line << frame.short_src << ':' << frame.currentline << '(' << (frame.name ? frame.name : "?") << ")<";
+		}
+	}
+	System::PrintDiagnosticLine(line.str());
+}
+
+namespace {
+	// CC_TEST_SHARED_LUA_TRACE names every draw from the master state's own generator with its Lua caller, so two peers' draws compare line by line.
+	void TraceMasterDraw(LuaStateWrapper& wrapper, lua_State* main, const RandomGenerator& rng, const char* kind) {
+		if (!LuaMan::SharedTraceEnabled() || s_luaRNGOverride || &wrapper != &g_LuaMan.GetMasterScriptState() || !main) {
+			return;
+		}
+		LuaMan::TraceShared(main, std::string("master-draw draw=") + std::to_string(rng.GetDrawCount()) + " kind=" + kind +
+		                              " script=" + std::string(wrapper.GetCurrentlyRunningScriptFilePath()));
+	}
+}
+
 // During a threaded per-MO hook these draw from the per-MO generator; else this state's RNG.
 int LuaStateWrapper::SelectRand(int minInclusive, int maxInclusive) {
 	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : CheckpointStateValues().randomGenerator;
-	return rng.RandomNum<int>(minInclusive, maxInclusive);
+	const int value = rng.RandomNum<int>(minInclusive, maxInclusive);
+	TraceMasterDraw(*this, m_State, rng, "SelectRand");
+	return value;
 }
 
 double LuaStateWrapper::RangeRand(double minInclusive, double maxInclusive) {
 	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : CheckpointStateValues().randomGenerator;
-	return rng.RandomNum<double>(minInclusive, maxInclusive);
+	const double value = rng.RandomNum<double>(minInclusive, maxInclusive);
+	TraceMasterDraw(*this, m_State, rng, "RangeRand");
+	return value;
 }
 
 double LuaStateWrapper::NormalRand() {
 	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : CheckpointStateValues().randomGenerator;
-	return rng.RandomNormalNum<double>();
+	const double value = rng.RandomNormalNum<double>();
+	TraceMasterDraw(*this, m_State, rng, "NormalRand");
+	return value;
 }
 
 double LuaStateWrapper::PosRand() {
 	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : CheckpointStateValues().randomGenerator;
-	return rng.RandomNum<double>();
+	const double value = rng.RandomNum<double>();
+	TraceMasterDraw(*this, m_State, rng, "PosRand");
+	return value;
 }
 
 void LuaStateWrapper::SeedRandomGenerator(uint64_t seed) {
@@ -15256,6 +15300,10 @@ void LuaMan::ExecuteLuaScriptCallbacks() {
 	}
 
 	for (const auto& callback: callbacks) {
+		if (SharedTraceEnabled()) {
+			TraceShared(nullptr, "path-callback master=" + std::to_string(callback.state == m_MasterScriptState.GetLuaState()) + " id=" +
+			                         std::to_string(callback.id) + " order=" + std::to_string(callback.order) + " length=" + std::to_string(callback.result->pathLength));
+		}
 		luabind::call_function<void>(callback.state, "_TriggerAsyncPathCallback", callback.id, *callback.result);
 	}
 }

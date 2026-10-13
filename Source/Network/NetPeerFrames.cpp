@@ -51,10 +51,7 @@ namespace RTE {
 		const auto back = m_ReclaimTransactions.find(m_Config.localPeerId);
 		const bool details = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && message.type == NetHostMigrationMessageType::PeerInput &&
 		    back != m_ReclaimTransactions.end() && message.frame > back->second.neutralThroughFrame && message.frame <= back->second.neutralThroughFrame + 3;
-		const auto wantsInput = [&](uint8_t peer) {
-			const auto held = m_PeerBridges.find(peer);
-			return !liveInput || held == m_PeerBridges.end() || !held->second.committedHold || held->second.returnFrame.has_value();
-		};
+		const auto wantsInput = [&](uint8_t peer) { return !liveInput || PeerWantsLiveInput(peer); };
 		if (m_Config.peerSessionLinks) {
 			bool sent = false;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
@@ -85,13 +82,20 @@ namespace RTE {
 		return !sent.empty();
 	}
 
+	bool NetLockstepCoordinator::PeerWantsLiveInput(uint8_t peer) const {
+		const auto held = m_PeerBridges.find(peer);
+		return held == m_PeerBridges.end() || !held->second.committedHold || held->second.returnFrame.has_value();
+	}
+
 	bool NetLockstepCoordinator::PeerGroupHasAuthority(uint32_t voters) const {
 		uint32_t owners = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= SeatBit(peer);
 		if (voters == 0 || (voters & ~owners) != 0) return false;
-		// A declared Leave keeps its AI seat but stops contributing to future frame votes.
-		for (const auto& [peer, ended]: m_PeerRoundEnds) if (!ended.closedLink && m_Stats.nextFrame >= ended.frame) owners &= ~SeatBit(peer);
+		// A declared Leave keeps its AI seat but answers nothing more from the moment it is declared, its last inputs ahead included.
+		for (const auto& [peer, ended]: m_PeerRoundEnds) if (!ended.closedLink) owners &= ~SeatBit(peer);
+		// A returning seat answers nothing until it plays, so it votes only after its agreed neutral interval.
+		for (const auto& [peer, back]: m_ReclaimTransactions) if (m_Stats.nextFrame <= back.neutralThroughFrame) owners &= ~SeatBit(peer);
 		voters &= owners;
 		if (voters == 0) return false;
 		if (m_PeerAdminFrameMembers != 0 && voters == m_PeerAdminFrameMembers) return true;

@@ -889,7 +889,7 @@ static std::string ResyncSaveName() {
 	bool NetMatchService::NeedsRematchAttempt() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		// A client still resolves a lost next lobby through ReturnToLobby.
-		return !m_IsHost || (!m_HostEndedRound && (!m_LastMatchSummary || (m_Session && m_Session->GetReadyPeerCount() != 0)));
+		return !m_IsHost || !m_LastMatchSummary || (m_Session && m_Session->GetReadyPeerCount() != 0);
 	}
 
 	bool NetMatchService::ReturnToLobby(std::string* error) {
@@ -930,11 +930,11 @@ static std::string ResyncSaveName() {
 			}
 			DrainPendingSessionEventsLocked(false);
 			departedHost = !m_IsHost || (m_MigrationGeneration != 0 && m_MigrationMembers.size() == 1);
-			if (m_IsHost && m_LastMatchSummary && (m_HostEndedRound || m_Session->GetReadyPeerCount() == 0)) {
+			if (m_IsHost && m_LastMatchSummary && m_Session->GetReadyPeerCount() == 0) {
 				m_CompletedLobbySinceMs = 0;
 				m_StatusText = m_LastMatchSummary->result;
 				m_ErrorText.clear();
-				if (error) *error = m_HostEndedRound ? m_StatusText : "No other players are here for a rematch";
+				if (error) *error = "No other players are here for a rematch";
 				return false;
 			}
 			if (!m_Session->IsReady()) {
@@ -1958,6 +1958,9 @@ static std::string ResyncSaveName() {
 				config.migrationGeneration = m_WorldCatchUp.authorityGeneration;
 				config.initialSeatHolds = m_WorldCatchUp.initialHolds;
 				config.simTickMs = g_TimerMan.GetDeltaTimeMS();
+				// It reads the host's return certificate as the round signed it.
+				config.migrationKey = m_MigrationKey;
+				if (m_WorldCatchUp.roundConfigHash != NetHash32{}) config.originalRoundConfigHash = m_WorldCatchUp.roundConfigHash;
 				m_CatchUpTransport = std::make_unique<LoopbackTransport>();
 				m_CatchUpCoordinator = std::make_unique<NetLockstepCoordinator>();
 				if (!m_CatchUpCoordinator->StartReplay(*m_CatchUpTransport, config, error)) return false;
@@ -2449,6 +2452,7 @@ static std::string ResyncSaveName() {
 			m_MigrationFallbackReady = false;
 			m_MigrationRepairPending = false;
 			m_MigrationKey.fill(0);
+			m_RejoinFrameKey.reset();
 			m_MigrationAdmissionState.clear();
 			m_LastMigrationAdmissionState.clear();
 			DrainPendingSessionEventsLocked(false);
@@ -2513,7 +2517,6 @@ static std::string ResyncSaveName() {
 			m_HostLeaveConfirmed.reset();
 			m_LeaveRejoinRead.reset();
 			m_HostEndReason.clear();
-			m_HostEndedRound = false;
 			m_CompletedLobbySinceMs = 0;
 			m_PendingLobbyEvents.clear();
 			m_PendingLobbyBytes = 0;
@@ -2689,7 +2692,6 @@ static std::string ResyncSaveName() {
 		DrainPendingSessionEventsLocked(false);
 		if (!m_Coordinator->CompleteAtAgreedEnd(reason)) return false;
 		m_HostEndReason = reason;
-		m_HostEndedRound = true;
 		return true;
 	}
 
@@ -2735,8 +2737,8 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_State == NetMatchServiceState::Running) {
 			m_State = NetMatchServiceState::Completed;
-			// Natural round endings wait for the next lobby; the host's End Match stays completed.
-			m_CompletedLobbySinceMs = m_HostEndedRound ? 0 : SteadyNowMs();
+			// The rematch lobby this end opens starts waiting for the other peers here.
+			m_CompletedLobbySinceMs = SteadyNowMs();
 			m_StatusText = displayResult.empty() ? "Match complete" : displayResult;
 			m_ErrorText.clear();
 		}
@@ -3074,6 +3076,7 @@ static std::string ResyncSaveName() {
 			m_DirectoryRow.resumeSessionId = m_DirectorySessionId;
 			m_DirectoryRow.resumeToken = m_DirectoryToken;
 			m_ConnectionAuthority.SetDirectory(m_DirectorySessionId, m_DirectoryToken, m_MigrationGeneration, m_Directory.AuthorityKey());
+			m_ConnectionAuthority.SetListedMatchHash(m_Directory.RegisteredMatchConfigHash());
 		}
 		if (m_IsHost && m_DirectoryRegistered && !m_DirectoryToken.empty() && m_IceEnabled && !m_IceIdentity.empty()) {
 			const bool initial = m_IceBoundSessionId.empty();
@@ -3548,7 +3551,6 @@ static std::string ResyncSaveName() {
 		m_HeldRejoinDriving = false;
 		m_HeldRejoinRoutes.clear();
 		m_OrdinaryTicketRejoin = false;
-		m_HostEndedRound = false;
 		m_CapturedRunnerReport.clear();
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
@@ -6360,7 +6362,7 @@ static std::string ResyncSaveName() {
 		live = m_CatchUpCoordinator->GetConfig();
 		if (m_Coordinator) {
 			const auto& previous = m_Coordinator->GetConfig();
-			live.peerFrameGroups = previous.peerFrameGroups; live.peerSessionLinks = previous.peerSessionLinks;
+			live.peerFrameGroups = previous.peerFrameGroups || NetMatchRunner::UsesPeerFraming(live.matchConfig); live.peerSessionLinks = previous.peerSessionLinks;
 			live.frameTieReferee = previous.frameTieReferee; live.hostChangeReferee = previous.hostChangeReferee;
 			live.migrationTransportFactory = previous.migrationTransportFactory; live.migrationIceDial = previous.migrationIceDial; live.migrationIceHost = previous.migrationIceHost;
 		}
@@ -6396,6 +6398,33 @@ static std::string ResyncSaveName() {
 		NetLockstepCoordinator::AdoptOpenReturns(live, agreed, m_WorldCatchUp.activationTick);
 		if (live.peerFrameGroups && m_Coordinator)
 			(void)m_Coordinator->AdoptPeerReturnConfig(live, *m_CatchUpCoordinator, m_WorldCatchUp.activationTick);
+		// A seat that came back through its ticket kept the host's certificate from its own link.
+		if (live.peerFrameGroups && !live.initialSeatReclaims.contains(m_LocalPeerId)) {
+			std::vector<std::vector<uint8_t>> candidates;
+			for (const auto& event: m_CatchUpWirePackets) if (NetHostMigrationCodec::LooksLikePacket(event.bytes)) candidates.push_back(event.bytes);
+			if (m_RejoinFrameKey) {
+				std::lock_guard<std::mutex> frameLock(m_RejoinFrameKey->mutex);
+				candidates.insert(candidates.end(), m_RejoinFrameKey->returnCertificates.begin(), m_RejoinFrameKey->returnCertificates.end());
+			}
+			size_t unreadable = 0;
+			std::string refusal;
+			for (const auto& bytes: candidates) {
+				NetHostMigrationMessage proof;
+				if (!NetHostMigrationCodec::Decode(bytes, m_MigrationKey, proof)) { ++unreadable; continue; }
+				if (proof.type != NetHostMigrationMessageType::PeerBridgeCommit || proof.preparedFrame != 1 || proof.frame != m_WorldCatchUp.activationTick) continue;
+				if (m_CatchUpCoordinator->AdoptPeerReturn(live, *m_CatchUpCoordinator, proof, m_WorldCatchUp.activationTick, &refusal)) break;
+			}
+			const std::string why = std::to_string(candidates.size()) + " frame messages kept, " + std::to_string(unreadable) + " unreadable, " +
+			                        (refusal.empty() ? std::string("none certifies it") : "its certificate refused: " + refusal);
+			if (m_ReturnWaitLoggedFor != m_WorldCatchUp.activationTick) {
+				m_ReturnWaitLoggedFor = m_WorldCatchUp.activationTick; m_ReturnWaitLoggedWhy.clear(); m_ReturnWaitLines = 0;
+			}
+			if (!live.initialSeatReclaims.contains(m_LocalPeerId) && why != m_ReturnWaitLoggedWhy && m_ReturnWaitLines < 8) {
+				m_ReturnWaitLoggedWhy = why; ++m_ReturnWaitLines;
+				System::PrintDiagnosticLine("[net-match] held client: the return at " + std::to_string(m_WorldCatchUp.activationTick) + " has no certificate this seat can adopt (" + why +
+				                            ") at replayed frame " + std::to_string(m_WorldCatchUp.appliedThrough));
+			}
+		}
 		if (live.matchConfig.peerInputDelayFrames.empty()) live.matchConfig.peerInputDelayFrames.resize(live.peerCount, live.matchConfig.inputDelayFrames);
 		for (const auto& [peer, changes]: live.initialDelayChanges) {
 			const auto at = changes.upper_bound(m_WorldCatchUp.activationTick);
@@ -6511,6 +6540,13 @@ static std::string ResyncSaveName() {
 				} else if (event.type == NetTransportEventType::PacketReceived && NetLockstepCodec::LooksLikePacket(event.bytes)) {
 					// The host's acks only say it is alive, which the stamp above has taken; they name the frames of the round this seat left.
 					if (event.bytes.size() > 8 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Ack)) continue;
+					if (m_CatchUpWireBytes + event.bytes.size() > 16ULL * 1024 * 1024) {
+						m_PrivateJoinError = "private catch-up wire backlog exceeded its bound";
+						m_State = NetMatchServiceState::Failed; m_ErrorText = m_PrivateJoinError; return;
+					}
+					m_CatchUpWireBytes += event.bytes.size(); m_CatchUpWirePackets.push_back(event);
+				} else if (event.type == NetTransportEventType::PacketReceived && m_WorldCatchUp.privateMatch && NetHostMigrationCodec::LooksLikePacket(event.bytes)) {
+					// The round's frame messages wait for the live round, which starts on the return one of them certifies.
 					if (m_CatchUpWireBytes + event.bytes.size() > 16ULL * 1024 * 1024) {
 						m_PrivateJoinError = "private catch-up wire backlog exceeded its bound";
 						m_State = NetMatchServiceState::Failed; m_ErrorText = m_PrivateJoinError; return;
@@ -6665,11 +6701,13 @@ static std::string ResyncSaveName() {
 				System::PrintDiagnosticLine(line.str());
 				m_Runner->ConfigureWorldJoinSeats(std::move(holds), std::move(leaves));
 			}
-			if (!m_Runner->IsWorldJoinLockstepStarting())
+			if (!m_Runner->IsWorldJoinLockstepStarting()) {
 				m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, m_WorldCatchUp.appliedThrough, &error);
-			else {
+				// The round's start reads the wire the catch-up reads: the tail it takes goes on to the catch-up, not to a lobby that has ended.
+				AttachCoordinatorSessionSink();
+			} else {
 				for (auto it = m_CatchUpWirePackets.begin(); it != m_CatchUpWirePackets.end();) {
-					if (it->bytes.size() >= NetLockstepCodec::c_HeaderBytes && (it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Start) || it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Timing))) {
+					if (NetLockstepCodec::LooksLikePacket(it->bytes) && it->bytes.size() >= NetLockstepCodec::c_HeaderBytes && (it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Start) || it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Timing))) {
 						m_Coordinator->InjectEvent(*it, NetLockstepNowMs()); m_CatchUpWireBytes -= it->bytes.size(); it = m_CatchUpWirePackets.erase(it);
 					} else ++it;
 				}
@@ -6731,7 +6769,7 @@ static std::string ResyncSaveName() {
 			}
 			const auto activationLocal = std::chrono::steady_clock::now();
 			for (const auto& event: m_CatchUpWirePackets) {
-				if (event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
+				if (NetLockstepCodec::LooksLikePacket(event.bytes) && event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
 					const size_t offset = event.bytes[17] == 0 ? 20 : 28;
 					if (event.bytes.size() < offset + 8) continue;
 					uint64_t first = 0; for (size_t i = 0; i < 8; ++i) first |= uint64_t(event.bytes[offset + i]) << (8 * i);
@@ -6787,7 +6825,7 @@ static std::string ResyncSaveName() {
 				m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset();
 			}
 			for (const auto& event: m_CatchUpWirePackets) {
-				if (event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
+				if (NetLockstepCodec::LooksLikePacket(event.bytes) && event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
 					const size_t offset = event.bytes[17] == 0 ? 20 : 28;
 					if (event.bytes.size() < offset + 8) continue;
 					uint64_t frame = 0; for (size_t i = 0; i < 8; ++i) frame |= uint64_t(event.bytes[offset + i]) << (8 * i);
@@ -7650,6 +7688,10 @@ static std::string ResyncSaveName() {
 			if (!m_ReconnectClient.MigrateHostContext(m_ReconnectClient.GetRecord().hostAddress, directorySession, capsule.configHash))
 				return false;
 			m_MigrationKey = key;
+			if (m_RejoinFrameKey) {
+				std::lock_guard<std::mutex> frameLock(m_RejoinFrameKey->mutex);
+				m_RejoinFrameKey->key = key;
+			}
 			m_MigrationAdmissionState = admission;
 			{
 				// What this capsule carries for moderation, read once: the roster whole and the host's ban list beside it.
@@ -9619,6 +9661,25 @@ static std::string ResyncSaveName() {
 	void NetMatchService::UpdateConnectionAuthority(uint64_t nowMs) {
 		if (!s_AdmissionEnabled || m_State == NetMatchServiceState::Idle || m_LeftMatch) return;
 		const uint64_t wall = UnixNowMs(nullptr) / 1000;
+		// Called under m_Mutex.
+		const auto routeState = [this] { return m_LeftMatch ? "left" : m_HeldRejoinDriving ? "reconnecting" : m_State == NetMatchServiceState::Running ? "connected" : "connecting"; };
+		const auto hostRoute = [this](NetConnectionRoute& route) {
+			route.iceIdentity = m_IceIdentity;
+			route.iceVirtualPort = static_cast<uint16_t>(m_DirectoryRow.iceVirtualPort);
+			route.listenAddrs = m_DirectoryRow.listenAddrs;
+			route.listenPort = m_BeaconGamePort;
+		};
+		{
+			// The directory lists a host's row from the route its check-in carries, so the route is the one the host has now:
+			// one taken before its ICE listener opened would list the row as having no way in.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_IsHost) {
+				NetConnectionRoute route;
+				route.state = routeState();
+				hostRoute(route);
+				m_ConnectionAuthority.SetRoute(std::move(route));
+			}
+		}
 		m_ConnectionAuthority.Update(nowMs, wall);
 		std::string directoryUrl = g_SettingsMan.GetSessionDirectoryUrl();
 		while (!directoryUrl.empty() && directoryUrl.back() == '/') directoryUrl.pop_back();
@@ -9627,7 +9688,9 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			const std::string line = "This match is no longer in the directory. Choose another game from Multiplayer.";
 			if (m_State != NetMatchServiceState::Completed && m_State != NetMatchServiceState::Idle) {
-				m_PendingToasts.push_back(line); m_ErrorText = line;
+				// The lobby's own error line says it there; a toast beside it would say it twice.
+				if (m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch) m_PendingToasts.push_back(line);
+				m_ErrorText = line;
 			}
 		}
 		if (m_IsHost && m_Coordinator) {
@@ -9649,16 +9712,13 @@ static std::string ResyncSaveName() {
 			auto localAddresses = m_ConnectionAuthority.LocalAddresses();
 			if (localAddresses.size() > NetMatchConfigUtil::c_MaxMigrationAddresses) localAddresses.resize(NetMatchConfigUtil::c_MaxMigrationAddresses);
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			route.state = m_LeftMatch ? "left" : m_HeldRejoinDriving ? "reconnecting" : m_State == NetMatchServiceState::Running ? "connected" : "connecting";
+			route.state = routeState();
 			if (m_IsHost) {
 				if (changed) {
 					m_DirectoryRow.listenAddrs = m_ConnectionMode == 2 ? std::vector<std::string>{} : localAddresses;
 					m_Directory.NoteListenAddrs(m_DirectoryRow.listenAddrs);
 				}
-				route.iceIdentity = m_IceIdentity;
-				route.iceVirtualPort = static_cast<uint16_t>(m_DirectoryRow.iceVirtualPort);
-				route.listenAddrs = m_DirectoryRow.listenAddrs;
-				route.listenPort = m_BeaconGamePort;
+				hostRoute(route);
 			} else {
 				const auto& peers = m_AdoptedMatchConfig.migrationPeers;
 				const auto own = std::find_if(peers.begin(), peers.end(), [&](const auto& peer) { return peer.peerId == m_LocalPeerId; });
@@ -9714,6 +9774,8 @@ static std::string ResyncSaveName() {
 				m_RelayError = m_Directory.IceError();
 				m_RelayReady = true;
 				m_RelayPublishPending = true;
+				// A room with no relay mints again when the directory allows, not at the renewal spacing.
+				if (!m_RelayOffer.Usable(wall) && m_Directory.IceRequestRetryable()) m_NextRelayRequestMs = nowMs + m_Directory.IceRetryDelayMs();
 			}
 			if (!m_RelayOffer.Empty() && !m_RelayOffer.Usable(wall)) {
 				SetRelayOfferLocked({});
@@ -9722,7 +9784,8 @@ static std::string ResyncSaveName() {
 			}
 			if (m_Directory.GetState() != NetDirectoryClient::State::Registered || m_Directory.IceRequestPending()) return;
 			// Once seated, each peer renews through its signed check-in. This request only configures the room's relay.
-			if (const auto lease = m_ConnectionAuthority.LocalLease(); lease && !lease->directorySessionId.empty() && !m_FreshRelayRequested.load()) return;
+			const bool roomLacksRelay = !m_RelayOffer.Usable(wall) && m_RelayReplies != 0 && m_Directory.IceRequestRetryable();
+			if (const auto lease = m_ConnectionAuthority.LocalLease(); lease && !lease->directorySessionId.empty() && !m_FreshRelayRequested.load() && !roomLacksRelay) return;
 			const bool fresh = m_FreshRelayRequested.load();
 			// Renew at half the offer's lifetime, so a connection opened on it still has the other half.
 			const uint64_t issued = std::min(m_RelayOfferIssuedAt, m_RelayOffer.expiresAt);
@@ -10584,11 +10647,27 @@ static std::string ResyncSaveName() {
 		}
 		if (request.rejoin) {
 			// A returning seat's fresh session talks to the host live until its handshake is done.
-			const auto key = m_MigrationKey;
+			// The round's frame key arrives in this rejoin's own capsule, after the session starts.
+			auto frameKey = std::make_shared<RejoinFrameKey>();
+			frameKey->key = m_MigrationKey;
+			m_RejoinFrameKey = frameKey;
 			const uint64_t sessionId = runnerConfig.sessionConfig.sessionId;
-			session->SetAuxiliaryPacketValidator([key, sessionId](const std::vector<uint8_t>& bytes) {
+			session->SetAuxiliaryPacketValidator([frameKey, sessionId](const std::vector<uint8_t>& bytes) {
+				if (!NetHostMigrationCodec::LooksLikePacket(bytes)) return false;
+				NetHash32 key;
+				{
+					std::lock_guard<std::mutex> lock(frameKey->mutex);
+					key = frameKey->key;
+				}
 				NetHostMigrationMessage message;
-				return NetHostMigrationCodec::LooksLikePacket(bytes) && NetHostMigrationCodec::Decode(bytes, key, message) && message.sessionId == sessionId;
+				if (!NetHostMigrationCodec::Decode(bytes, key, message) || message.sessionId != sessionId) return false;
+				// The host's return certificate is what this seat's live round starts on.
+				if (message.type == NetHostMigrationMessageType::PeerBridgeCommit && message.preparedFrame == 1) {
+					std::lock_guard<std::mutex> lock(frameKey->mutex);
+					frameKey->returnCertificates.push_back(bytes);
+					if (frameKey->returnCertificates.size() > 8) frameKey->returnCertificates.pop_front();
+				}
+				return true;
 			});
 			System::PrintDiagnosticLine("[net-match] rejoin phase Active -> Connecting");
 			session->SetRejoinPhase(NetSession::RejoinPhase::Connecting);

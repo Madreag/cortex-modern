@@ -200,6 +200,9 @@ namespace RTE {
 			/// @param fileWriter The writer to write info to.
 			static void DumpPoolMemoryInfo(const Writer& fileWriter);
 
+			static std::string GetPoolMemoryCounts();
+			static void ReleaseUnusedPoolMemory();
+
 			/// Adds a certain number of newly allocated instances to this' pool.
 			/// @param fillAmount The number of instances to fill the pool with. If 0 is specified, the set refill amount will be used.
 			void FillPool(int fillAmount = 0);

@@ -48,6 +48,8 @@ namespace RTE {
 		/// Whether this menu has no controls, which is what a seat this machine does not present is answered with:
 		/// every call on it is a no-op and every getter answers neutral.
 		bool IsInert() const { return !m_pGUIController; }
+		/// The input probe uses the live shop controls; purchases still pass through their mouse handlers.
+		GUIControlManager* AutomationManager() const { return m_pGUIController; }
 
 		bool HasPendingCheckpoint() const { return !m_PendingCheckpoint.empty(); }
 		bool IsCheckpointInitialized() const { return m_CheckpointInitialized; }
@@ -151,6 +153,12 @@ namespace RTE {
 		/// Reports whether a purchase was made during the last Update.
 		/// @return Wheter the BUY button was pressed or not during the last update.
 		bool PurchaseMade() const { return m_PurchaseMade; }
+
+		bool ConsumePurchase() {
+			const bool purchased = m_PurchaseMade;
+			m_PurchaseMade = false;
+			return purchased;
+		}
 
 		/// Gets the width of the current delivery craft.
 		/// @return The width of the delivery craft, in pixels.

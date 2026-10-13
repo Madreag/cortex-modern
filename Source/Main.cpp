@@ -64,6 +64,7 @@
 #include "AHuman.h"
 #include "Attachable.h"
 #include "GameActivity.h"
+#include "GAScripted.h"
 #include "NetActivitySetup.h"
 #include "MovableObject.h"
 #include "MOPixel.h"
@@ -78,6 +79,9 @@
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
+extern "C" {
+#include "lua.h"
+}
 #include "MusicMan.h"
 #include "Atom.h"
 #include "AudioMan.h"
@@ -166,6 +170,7 @@
 #ifdef _WIN32
 #include "windows.h"
 #include <crtdbg.h>
+#include <new.h>
 #include <processsnapshot.h>
 #include <psapi.h>
 #include <tlhelp32.h>
@@ -303,6 +308,50 @@ static uint64_t s_memoryCensusTicks = 0; //!< Every this many ticks one line nam
 static bool s_memoryCensusHistogram = false; //!< The census also sums the process heaps, walks the default one and names the block sizes holding the most.
 static size_t s_memoryCensusProbeSize = 0; //!< Blocks of this size have their first bytes printed, so a leaked object can be named.
 
+#ifdef _WIN32
+static int __cdecl RecordFailedAllocation(size_t requested) noexcept {
+	static std::atomic_flag writing = ATOMIC_FLAG_INIT;
+	if (writing.test_and_set()) return 0;
+	PROCESS_MEMORY_COUNTERS_EX process{};
+	K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&process), sizeof(process));
+	PERFORMANCE_INFORMATION system{};
+	system.cb = sizeof(system);
+	K32GetPerformanceInfo(&system, sizeof(system));
+	JOBOBJECT_EXTENDED_LIMIT_INFORMATION job{};
+	QueryInformationJobObject(nullptr, JobObjectExtendedLimitInformation, &job, sizeof(job), nullptr);
+	char line[1024];
+	const auto write = [&line](int length) {
+		if (length <= 0) return;
+		DWORD written = 0;
+		WriteFile(GetStdHandle(STD_ERROR_HANDLE), line, static_cast<DWORD>(std::min<int>(length, sizeof(line) - 1)), &written, nullptr);
+	};
+	write(std::snprintf(line, sizeof(line), "[allocation-failed] requested_bytes=%zu private_bytes=%zu system_commit_bytes=%zu system_limit_bytes=%zu process_limit_bytes=%zu process_peak_bytes=%zu job_limit_bytes=%zu job_peak_bytes=%zu thread=%lu\n",
+	    requested, process.PrivateUsage, system.CommitTotal * system.PageSize, system.CommitLimit * system.PageSize,
+	    job.ProcessMemoryLimit, job.PeakProcessMemoryUsed, job.JobMemoryLimit, job.PeakJobMemoryUsed, GetCurrentThreadId()));
+	void* frames[40];
+	const USHORT count = CaptureStackBackTrace(0, 40, frames, nullptr);
+	const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+	const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
+	const uintptr_t end = base + headers->OptionalHeader.SizeOfImage;
+	for (USHORT index = 0; index < count; ++index) {
+		const uintptr_t address = reinterpret_cast<uintptr_t>(frames[index]);
+		write(address >= base && address < end
+		    ? std::snprintf(line, sizeof(line), "[allocation-stack] frame=%u exe+0x%zX\n", index, address - base)
+		    : std::snprintf(line, sizeof(line), "[allocation-stack] frame=%u address=0x%zX\n", index, address));
+	}
+	writing.clear();
+	return 0;
+}
+
+static void InstallAllocationFailureRecord() {
+	if (!std::getenv("CC_TEST_ALLOCATION_FAILURE")) return;
+	void* frame;
+	CaptureStackBackTrace(0, 1, &frame, nullptr);
+	_set_new_handler(RecordFailedAllocation);
+	_set_new_mode(1);
+}
+#endif
+
 // Private bytes, and what the process heaps hold allocated and committed, for the memory census; costs gets each part's microseconds.
 static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 #ifdef _WIN32
@@ -314,6 +363,14 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 	};
 	PROCESS_MEMORY_COUNTERS_EX counters{};
 	K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters));
+	PERFORMANCE_INFORMATION memory{};
+	memory.cb = sizeof(memory);
+	std::string commitFigures;
+	if (K32GetPerformanceInfo(&memory, sizeof(memory))) {
+		commitFigures = std::format(" system_commit_mb={} system_commit_limit_mb={} system_commit_free_mb={}",
+		    (memory.CommitTotal * memory.PageSize) >> 20, (memory.CommitLimit * memory.PageSize) >> 20,
+		    ((memory.CommitLimit - memory.CommitTotal) * memory.PageSize) >> 20);
+	}
 	lap("heap_counters");
 	// Summing a heap holds its lock for as long as the heap is large, and every thread that allocates waits on it, the simulation's
 	// included: the heaps are summed only with the census's heap walk.
@@ -396,8 +453,10 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 		for (size_t index = 0; index < std::min<size_t>(grew.size(), 10); ++index) histogram += (index ? "," : "") + grew[index].second;
 		histogram += " heap_top=";
 		for (size_t index = 0; index < std::min<size_t>(top.size(), 12); ++index) histogram += (index ? "," : "") + top[index].second;
+		histogram += " entity_pools_used_free=" + Entity::ClassInfo::GetPoolMemoryCounts() + " atom_pool_used_free=" + Atom::GetPoolMemoryCounts() +
+		    " mopixel_bytes=" + std::to_string(sizeof(MOPixel)) + " atom_bytes=" + std::to_string(sizeof(Atom));
 	}
-	return std::format(" private_mb={}{} threads={} handles={}{}", counters.PrivateUsage >> 20, heapFigures, threads, handles, histogram);
+	return std::format(" private_mb={}{}{} threads={} handles={}{}", counters.PrivateUsage >> 20, commitFigures, heapFigures, threads, handles, histogram);
 #elif defined(__APPLE__)
 	mach_task_basic_info_data_t info{};
 	mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
@@ -1485,6 +1544,39 @@ static long long s_paceLastPresentUs = 0; //!< When the paced round last drew a 
 static long long s_paceFrameDrawUs = 0; //!< Time spent drawing and presenting those frames.
 static long long s_paceMaxDrawUs = 0; //!< The longest single iteration's draw since the previous census line.
 
+// Opt-in accounting only: aggregate complete running ticks, without changing their work or pacing.
+static void NoteTickCostDetails(uint64_t round, uint64_t tick, const std::array<long long, 7>& phases) {
+	struct Window {
+		uint64_t round = 0, firstTick = 0, ticks = 0;
+		std::array<long long, 7> phases{};
+		std::array<uint64_t, PerformanceMan::PerfCounterCount> counters{};
+	};
+	static Window window;
+	if (window.round != round) window = {};
+	window.round = round;
+	if (window.ticks == 0) window.firstTick = tick;
+	++window.ticks;
+	for (size_t i = 0; i < phases.size(); ++i) window.phases[i] += phases[i];
+	for (int i = 0; i < PerformanceMan::PerfCounterCount; ++i)
+		window.counters[i] += g_PerformanceMan.GetPerformanceCounterSample(static_cast<PerformanceMan::PerformanceCounters>(i));
+	if (window.ticks < 600) return;
+	static constexpr std::array<const char*, 7> phaseNames{"before_world", "world", "audio", "late", "hash", "collection", "finish"};
+	static constexpr std::array<const char*, PerformanceMan::PerfCounterCount> counterNames{
+	    "sim_counter", "actors_ai", "actors_travel", "actors_update", "particles_travel", "particles_update", "activity", "scripts"};
+	std::ostringstream line;
+	line << "[net-tick-cost] round=" << round << " first_tick=" << window.firstTick << " last_tick=" << tick << " ticks=" << window.ticks;
+	long long total = 0;
+	for (size_t i = 0; i < window.phases.size(); ++i) {
+		line << ' ' << phaseNames[i] << "_us=" << window.phases[i];
+		total += window.phases[i];
+	}
+	line << " total_us=" << total;
+	// These existing counters describe work within the phases; nested counters are not additive.
+	for (size_t i = 0; i < window.counters.size(); ++i) line << ' ' << counterNames[i] << "_us=" << window.counters[i];
+	System::PrintDiagnosticLine(line.str());
+	window = {};
+}
+
 // The loop pace since the previous memory census line, with the draw split where it spends its time.
 static std::string PaceCensusSinceLast() {
 	struct Mark { uint64_t iterations = 0, ticks = 0; long long simUs = 0, updateUs = 0, drawUs = 0, previewUs = 0, interfaceUs = 0, waitUs = 0, trimmedTicks = 0; uint64_t previews = 0, framesDrawn = 0; long long frameDrawUs = 0; uint64_t framesShed = 0; };
@@ -1908,28 +2000,44 @@ void InitializeManagers() {
 /// <summary>
 /// Destroys all the managers and frees all loaded data before termination.
 /// </summary>
+static bool s_MatchDestroyedForQuit = false;
+static bool s_Fight15CloseSelfTest = false;
+static void ObserveFight15Close(const char* phase) {
+	if (!s_Fight15CloseSelfTest) return;
+	const auto unixMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+	System::PrintDiagnosticLine("[fight15-selftest] R7 shutdown " + std::string(phase) + " ticks_ms=" + std::to_string(SDL_GetTicks()) + " unix_ms=" + std::to_string(unixMs));
+}
+
 void DestroyManagers() {
 	g_SimChecksum.Destroy();
-	g_NetMatchService.Destroy();
+	if (!s_MatchDestroyedForQuit) g_NetMatchService.Destroy();
 	g_MetricsCollector.Destroy();
 	g_MetaMan.Destroy();
 	g_PerformanceMan.Destroy();
 	g_MovableMan.Destroy();
+	ObserveFight15Close("movables_destroyed");
 	g_SceneMan.Destroy();
+	ObserveFight15Close("scene_destroyed");
 	g_ActivityMan.Destroy();
+	ObserveFight15Close("activity_destroyed");
 	g_GUISound.Destroy();
 	g_AudioMan.Destroy();
+	ObserveFight15Close("audio_destroyed");
 	g_MusicMan.Destroy();
 	g_PresetMan.Destroy();
+	ObserveFight15Close("presets_destroyed");
 	g_UInputMan.Destroy();
+	ObserveFight15Close("devices_destroyed");
 	g_PostProcessMan.Destroy();
 	g_FrameMan.Destroy();
 	g_TimerMan.Destroy();
 	g_LuaMan.Destroy();
 	ContentFile::FreeAllLoaded();
+	ObserveFight15Close("content_freed");
 	g_ConsoleMan.Destroy();
 	g_GLResourceMan.Destroy();
 	g_WindowMan.Destroy();
+	ObserveFight15Close("window_manager_destroyed");
 
 #ifdef DEBUG_BUILD
 	Entity::ClassInfo::DumpPoolMemoryInfo(Writer("MemCleanupInfo.txt"));
@@ -1937,9 +2045,11 @@ void DestroyManagers() {
 }
 
 int ShutDown(int exitCode) {
+	ObserveFight15Close("begin");
 	// A quit during the identity walk must not sit through the rest of the disk pass; what it finished
 	// is kept. This runs before the statics are torn down, where the future would wait unasked.
 	NetIdentity::StopManifestPriming();
+	ObserveFight15Close("manifest_stopped");
 	// The writer holds frames the run has already presented, so it drains while SDL is still up.
 	FrameRecorder::Instance().Finish();
 	MenuAutomation::ReportWatches();
@@ -1973,9 +2083,22 @@ int ShutDown(int exitCode) {
 		}
 		if (!saved || !s_saveMenuSelfTestPassed) exitCode = EXIT_FAILURE;
 	}
+	// Cancel the session's work before draining jobs that may depend on it stopping.
+	if (g_NetMatchService.GetState() != NetMatchServiceState::Idle) {
+		ScenarioRunner::CloseLockstepReplayRecord();
+		g_NetMatchService.Destroy();
+		s_MatchDestroyedForQuit = true;
+	}
+	if (s_Fight15CloseSelfTest) {
+		const bool idle = g_NetMatchService.GetState() == NetMatchServiceState::Idle;
+		System::PrintDiagnosticLine("[fight15-selftest] " + std::string(idle ? "PASS" : "FAIL") + " R7 session_is_idle_before_waiting_background_work");
+		if (!idle) exitCode = EXIT_FAILURE;
+	}
+	ObserveFight15Close("session_stopped");
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
 	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
 	g_ActivityMan.WaitForAutosaveTasks();
+	ObserveFight15Close("jobs_drained");
 	LocalPrediction::Clear();
 	PreviewEventLedger::Clear();
 	if (s_rbProbeOriginals.held) {
@@ -1997,10 +2120,13 @@ int ShutDown(int exitCode) {
 	if (!TelemetryBundle::Flush()) exitCode = EXIT_FAILURE;
 	g_ConsoleMan.SaveAllText("LogConsole.txt");
 	UInputMan::StopJoystickUpdater();
+	ObserveFight15Close("input_stopped");
 	DestroyManagers();
+	ObserveFight15Close("managers_destroyed");
 	TelemetryBundle::Finish();
 	allegro_exit();
 	SDL_Quit();
+	ObserveFight15Close("sdl_stopped");
 	std::cout.flush();
 	std::cerr.flush();
 	return exitCode;
@@ -3340,6 +3466,7 @@ static bool RunFrameRecorderSelfTest() {
 			meta.wallMS = index * 100;
 			meta.simTick = static_cast<unsigned long long>(index);
 			meta.screen = "game";
+			meta.activityEditing = index < 4;
 			meta.width = width;
 			meta.height = height;
 			if (unsigned char* pixels = recorder.BeginFrame(meta.wallMS, bytes)) {
@@ -3390,6 +3517,9 @@ static bool RunFrameRecorderSelfTest() {
 			return FrameRecorderSelfTestFail("frame index line " + std::to_string(lines) + " is incomplete: " + line);
 		}
 		if (parsed.value("frame", std::size_t(99)) != lines) return FrameRecorderSelfTestFail("frame numbers are not contiguous at " + line);
+		if (!parsed.contains("activity_editing") || parsed["activity_editing"] != (parsed.value("sim_tick", 99) < 4)) {
+			return FrameRecorderSelfTestFail("frame index loses the setup editor state: " + line);
+		}
 		++lines;
 	}
 	if (lines != 5) return FrameRecorderSelfTestFail("frame index has " + std::to_string(lines) + " lines, expected 5");
@@ -3563,6 +3693,7 @@ void PollSDLEvents() {
 				System::SetQuit(true);
 				return;
 			case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+				if (g_UInputMan.IsNetworkGUIInputActive()) System::PrintDiagnosticLine("[net-match] window close requested at tick " + std::to_string(g_TimerMan.GetSimUpdateCount()));
 				System::SetQuit(true);
 				return;
 			case SDL_EVENT_KEY_UP :
@@ -4285,6 +4416,7 @@ void RunMenuLoop() {
 		HarnessCost::BeginFrame();
 		g_WindowMan.ClearBackbuffer();
 		PollSDLEvents();
+		if (System::IsSetToQuit() && g_UInputMan.IsNetworkGUIInputActive()) break;
 
 		g_WindowMan.Update();
 		RTEError::DispatchPendingWorkerMessages();
@@ -4320,6 +4452,8 @@ void RunMenuLoop() {
 		g_UInputMan.EndFrame();
 		g_WindowMan.GetScreenBuffer()->Begin();
 		g_MenuMan.Draw();
+		// A held seat loading its way back reads its own line over the menus as well, from its hold to its return.
+		if (ScenarioRunner::WorldCatchUpActive()) ScenarioRunner::DrawNetUiToasts();
 		g_ConsoleMan.Draw(g_FrameMan.GetBackBuffer32());
 		g_WindowMan.GetScreenBuffer()->End();
 		g_WindowMan.UploadFrame();
@@ -4340,21 +4474,204 @@ void RunMenuLoop() {
 static std::string BuildNetMatchResultText() {
 	const GameActivity* gameActivity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
 	const int winnerTeam = gameActivity ? gameActivity->GetWinnerTeam() : Activity::NoTeam;
+	const std::string reason = gameActivity && !gameActivity->GetMatchEndReason().empty() ? " - " + gameActivity->GetMatchEndReason() : std::string();
 	if (winnerTeam == Activity::NoTeam) {
-		return "Match over: draw";
+		return "Match over: draw" + reason;
 	}
 	if (g_NetMatchService.GetLocalTeam() == Activity::NoTeam) {
-		return "Match over";
+		return "Match over" + reason;
 	}
-	return winnerTeam == g_NetMatchService.GetLocalTeam() ? "Victory!" : "Defeat";
+	return (winnerTeam == g_NetMatchService.GetLocalTeam() ? std::string("Victory!") : std::string("Defeat")) + reason;
 }
 
 static std::string NetMatchEndReason(const Activity* activity) {
+	// A peer that played the ending knows its own result, including the activity's rule.
+	if (activity && activity->IsOver()) return BuildNetMatchResultText();
 	const std::string stopReason = ScenarioRunner::GetLockstepStopReason();
 	if (stopReason.starts_with("Complete:") && stopReason.size() > 9) {
 		return stopReason.substr(9);
 	}
-	return (activity && activity->IsOver()) ? BuildNetMatchResultText() : "The other player left the match";
+	return "The other player left the match";
+}
+
+static const std::string& ActorHistoryPath() {
+	static const std::string path = [] { const char* value = std::getenv("CC_TEST_ACTOR_HISTORY"); return value ? value : ""; }();
+	return path;
+}
+
+struct ActorHistory {
+	std::deque<std::pair<uint64_t, std::string>> frames;
+	size_t bytes = 0;
+	bool saved = false;
+};
+
+static ActorHistory& GetActorHistory() {
+	static ActorHistory history;
+	return history;
+}
+
+static void SaveActorHistory(bool final);
+
+static void RecordLandingZones(uint64_t tick, std::ostream& out) {
+	static const bool enabled = std::getenv("CC_TEST_LANDING_ZONE_HISTORY") != nullptr;
+	if (!enabled) return;
+	const auto* activity = dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity());
+	if (!activity) return;
+	auto& master = g_LuaMan.GetMasterScriptState();
+	std::lock_guard lock(master.GetMutex());
+	lua_State* state = master.GetLuaState();
+	const int top = lua_gettop(state);
+	lua_getglobal(state, activity->GetLuaClassName().c_str());
+	if (!lua_isuserdata(state, -1) && !lua_istable(state, -1)) {
+		lua_settop(state, top);
+		return;
+	}
+	lua_getfield(state, -1, "LZmap");
+	std::vector<std::string> fields;
+	const auto readValue = [&](auto&& self, lua_State* source, int index, const std::string& path, int depth) -> void {
+		if (index < 0) index += lua_gettop(source) + 1;
+		if (lua_istable(source, index) && depth < 4) {
+			lua_pushnil(source);
+			while (lua_next(source, index) != 0) {
+				std::ostringstream key;
+				if (lua_type(source, -2) == LUA_TNUMBER) key << lua_tonumber(source, -2);
+				else if (lua_type(source, -2) == LUA_TSTRING) key << lua_tostring(source, -2);
+				else key << lua_typename(source, lua_type(source, -2));
+				self(self, source, -1, path + "/" + key.str(), depth + 1);
+				lua_pop(source, 1);
+			}
+			return;
+		}
+		if (lua_isthread(source, index) && depth == 1) {
+			lua_State* coroutine = lua_tothread(source, index);
+			const int coroutineTop = lua_gettop(coroutine);
+			fields.push_back(path + "/status=" + std::to_string(lua_status(coroutine)));
+			lua_Debug frame{};
+			for (int level = 0; level < 8 && lua_getstack(coroutine, level, &frame); ++level) {
+				lua_getinfo(coroutine, "Sl", &frame);
+				const std::string framePath = path + "/frame" + std::to_string(level);
+				fields.push_back(framePath + "/source=" + (frame.source ? frame.source : ""));
+				fields.push_back(framePath + "/line=" + std::to_string(frame.currentline));
+				for (int local = 1; local <= 64; ++local) {
+					const char* name = lua_getlocal(coroutine, &frame, local);
+					if (!name) break;
+					if (name[0] != '(' && std::strcmp(name, "self") != 0) {
+						self(self, coroutine, -1, framePath + "/" + name + std::to_string(local), depth + 1);
+					}
+					lua_pop(coroutine, 1);
+				}
+			}
+			lua_settop(coroutine, coroutineTop);
+			return;
+		}
+		std::ostringstream value;
+		value << std::hexfloat;
+		if (lua_type(source, index) == LUA_TNUMBER) value << lua_tonumber(source, index);
+		else if (lua_type(source, index) == LUA_TBOOLEAN) value << (lua_toboolean(source, index) ? "true" : "false");
+		else if (lua_type(source, index) == LUA_TSTRING) value << std::quoted(lua_tostring(source, index));
+		else value << lua_typename(source, lua_type(source, index));
+		fields.push_back(path + "=" + value.str());
+	};
+	if (lua_istable(state, -1)) {
+		readValue(readValue, state, lua_gettop(state), "LZmap", 0);
+		lua_getfield(state, -1, "LZs");
+		if (lua_istable(state, -1)) {
+			const int zones = lua_gettop(state);
+			lua_pushnil(state);
+			while (lua_next(state, zones) != 0) {
+				if (lua_istable(state, -1)) {
+					lua_getfield(state, -1, "X"); const int x = static_cast<int>(lua_tonumber(state, -1)); lua_pop(state, 1);
+					lua_getfield(state, -1, "Y"); const int y = static_cast<int>(lua_tonumber(state, -1)); lua_pop(state, 1);
+					for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+						fields.push_back("fog/" + std::to_string(team) + "/" + std::to_string(x) + "/" + std::to_string(y) + "=" +
+						    (g_SceneMan.IsUnseen(x, y, team) ? "unseen" : "seen"));
+					}
+				}
+				lua_pop(state, 1);
+			}
+		}
+	}
+	lua_settop(state, top);
+	std::sort(fields.begin(), fields.end());
+	static std::ofstream changes(ActorHistoryPath() + ".landing-zone-changes.txt", std::ios::binary | std::ios::trunc);
+	static std::vector<std::string> previous;
+	static uint64_t lastTick = 0;
+	if (tick <= lastTick) {
+		changes << tick << " reset\n";
+		previous.clear();
+	}
+	changes << tick << " state\n";
+	size_t before = 0, after = 0;
+	while (before < previous.size() || after < fields.size()) {
+		if (after == fields.size() || (before < previous.size() && previous[before] < fields[after])) {
+			changes << tick << " remove " << previous[before++] << "\n";
+		} else if (before == previous.size() || fields[after] < previous[before]) {
+			changes << tick << " add " << fields[after++] << "\n";
+		} else {
+			++before;
+			++after;
+		}
+	}
+	changes.flush();
+	previous = fields;
+	lastTick = tick;
+	for (const std::string& field: fields) out << tick << " landing_zone " << field << "\n";
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		const Actor* brain = activity->GetPlayerBrain(player);
+		const bool alive = brain && g_MovableMan.IsActor(brain);
+		out << tick << " brain_slot player=" << player << " active=" << activity->PlayerActive(player) << " team=" << activity->GetTeamOfPlayer(player)
+		    << " brain=" << (alive ? brain->GetUniqueID() : 0) << " actor=" << alive << "\n";
+	}
+}
+
+// The diagnostic keeps the actor trees before a desync, including its first differing tick rather than only the later detection.
+static void RecordActorHistory(uint64_t tick) {
+	if (ActorHistoryPath().empty() || !ScenarioRunner::IsLockstepControllerSyncActive()) return;
+	auto& history = GetActorHistory();
+	if (history.saved) return;
+	const HarnessCost::SimulationSpan span;
+	if (!history.frames.empty() && tick <= history.frames.back().first) {
+		history.frames.clear();
+		history.bytes = 0;
+	}
+	g_MovableMan.CompleteQueuedMOIDDrawings();
+	std::list<SceneObject*> actors;
+	g_MovableMan.GetAllActors(false, actors);
+	std::ostringstream text;
+	text.imbue(std::locale::classic());
+	for (SceneObject* object: actors) {
+		if (auto* actor = dynamic_cast<Actor*>(object)) g_MovableMan.DumpMOSimState(tick, "actor", actor, text);
+	}
+	RecordLandingZones(tick, text);
+	history.frames.emplace_back(tick, std::move(text).str());
+	history.bytes += history.frames.back().second.size();
+	while (history.frames.size() > 96 || history.bytes > 16 * 1024 * 1024) {
+		history.bytes -= history.frames.front().second.size();
+		history.frames.pop_front();
+	}
+	static const uint64_t saveEvery = [] {
+		const char* value = std::getenv("CC_TEST_ACTOR_HISTORY_EVERY");
+		return value ? std::strtoull(value, nullptr, 10) : uint64_t{0};
+	}();
+	if (saveEvery != 0 && tick % saveEvery == 0) SaveActorHistory(false);
+	HarnessCost::Charge(HarnessCost::SimDump, span.Stop());
+}
+
+static void SaveActorHistory(bool final = true) {
+	if (ActorHistoryPath().empty()) return;
+	auto& history = GetActorHistory();
+	if (history.saved || history.frames.empty()) return;
+	std::ofstream out(ActorHistoryPath(), std::ios::binary | std::ios::trunc);
+	for (const auto& [tick, text]: history.frames) out << text;
+	out.close();
+	if (!out) {
+		System::PrintDiagnosticErrorLine("[actor-history] save failed: " + ActorHistoryPath());
+		return;
+	}
+	history.saved = final;
+	System::PrintDiagnosticLine("[actor-history] saved frames=" + std::to_string(history.frames.size()) +
+	    " first_tick=" + std::to_string(history.frames.front().first) + " last_tick=" + std::to_string(history.frames.back().first) +
+	    " bytes=" + std::to_string(history.bytes) + " path=" + ActorHistoryPath());
 }
 
 /// <summary>
@@ -7089,6 +7406,7 @@ static bool IsCompleteControllerStop(const std::string& error) {
 static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 	const std::string error = ScenarioRunner::GetControllerReplayError();
 	if (error.find("Desync") != std::string::npos) {
+		SaveActorHistory();
 		if (TerrainDumpArmed()) {
 			DumpTerrainNow("desync");
 			DumpSimStateNow("desync");
@@ -7713,6 +8031,7 @@ void RunGameLoop() {
 		std::optional<NetLockstepPlane::Window> frameHeadWindow;
 		frameHeadWindow.emplace("frame head");
 		PollSDLEvents();
+		if (System::IsSetToQuit() && g_UInputMan.IsNetworkGUIInputActive()) break;
 		g_WindowMan.Update();
 		g_WindowMan.ClearBackbuffer();
 
@@ -7760,6 +8079,14 @@ void RunGameLoop() {
 			}
 		}
 		frameHeadWindow.reset();
+		// Leaving is local: a missing peer's next input must not hold the confirmed menu action.
+		const bool localMatchLeft = ScenarioRunner::HasLockstepCoordinator() && g_MenuMan.TakeLocalMatchLeaveRequest() &&
+		                            g_NetMatchService.GetState() == NetMatchServiceState::Running;
+		if (localMatchLeft) {
+			g_ConsoleMan.PrintString("NETWORK: Match left");
+			g_NetMatchService.LeaveMatch("Match left");
+			returnToMenuAfterNetworkEnd = true;
+		}
 
 		g_TimerMan.Update();
 		const int64_t clockReadUs = SaverThreads::NowUs();
@@ -7824,7 +8151,7 @@ void RunGameLoop() {
 		g_TimerMan.BeginSimFrame(!pacedRound ? 0 : !shedsFrames ? g_TimerMan.GetDeltaTimeTicks() :
 		                         std::max(g_TimerMan.GetDeltaTimeTicks(), static_cast<long long>((c_FloorFrameMs - g_PerformanceMan.GetMSPDAverage()) * 1000.0)));
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
-		while (true) {
+		while (!localMatchLeft) {
 			if (g_TimerMan.SimFrameBudgetSpent()) {
 				break;
 			}
@@ -7914,7 +8241,10 @@ void RunGameLoop() {
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
 			const long long paceWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
 			const bool heldTickDetails = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && ScenarioRunner::IsLockstepOwnSeatHeld();
+			static const bool tickCostDetails = std::getenv("CC_TEST_TICK_COST_DETAILS") != nullptr;
+			const bool tickPhaseDetails = heldTickDetails || tickCostDetails;
 			long long heldBeforeWorldUs = 0, heldAfterWorldUs = 0, heldAfterHashUs = 0, heldAfterCollectionUs = 0;
+			long long detailAfterAudioUs = 0, detailBeforeHashUs = 0;
 			const bool measureLockstepCost = ScenarioRunner::IsLockstepControllerSyncActive();
 			g_PerformanceMan.NewPerformanceSample();
 			if (!measureLockstepCost) g_PerformanceMan.UpdateMSPSU();
@@ -8472,7 +8802,7 @@ void RunGameLoop() {
 				g_MovableMan.CompleteQueuedMOIDDrawings();
 
 				g_ConsoleMan.Update();
-				if (heldTickDetails) heldBeforeWorldUs = g_TimerMan.GetAbsoluteTime();
+				if (tickPhaseDetails) heldBeforeWorldUs = g_TimerMan.GetAbsoluteTime();
 				{
 					static const uint64_t soundPhase = Hash("Tick");
 					SoundSimulationScope simulationSounds(0, soundPhase);
@@ -8488,7 +8818,7 @@ void RunGameLoop() {
 					g_LuaMan.ClearScriptTimings();
 					g_MovableMan.Update();
 				}
-				if (heldTickDetails) heldAfterWorldUs = g_TimerMan.GetAbsoluteTime();
+				if (tickPhaseDetails) heldAfterWorldUs = g_TimerMan.GetAbsoluteTime();
 			}
 			if (ScenarioRunner::HasControllerReplayError()) {
 				HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);
@@ -8499,6 +8829,7 @@ void RunGameLoop() {
 
 			g_AudioMan.Update();
 			g_MusicMan.Update();
+			if (tickCostDetails) detailAfterAudioUs = g_TimerMan.GetAbsoluteTime();
 
 			if (!lockstepPausedTick) {
 				// A long late script is this machine's own like the update's: the plane commits for the round meanwhile.
@@ -8518,6 +8849,12 @@ void RunGameLoop() {
 				g_MovableMan.StartMOIDDrawTask();
 			}
 
+			if (ScenarioRunner::IsLockstepControllerSyncActive() && simTick % 300 == 0) {
+				// A particle wave can leave hundreds of thousands of returned blocks. Keep two refills, not the wave's peak.
+				Entity::ClassInfo::ReleaseUnusedPoolMemory();
+				Atom::ReleaseUnusedPoolMemory();
+			}
+			RecordActorHistory(simTick);
 			DumpSimStateIfArmed(simTick);
 			LocalPrediction::CompareFidelityAtTick(simTick);
 			NoteE2eSwitchOwnerLog(simTick);
@@ -8565,6 +8902,7 @@ void RunGameLoop() {
 			CrossEliminationAtCommittedTick(simTick);
 			CrossEndTargetObservation(simTick);
 			CrossRecoveryAtCommittedTick(simTick, lockstepPausedTick);
+			if (tickCostDetails) detailBeforeHashUs = g_TimerMan.GetAbsoluteTime();
 			if (hashThisTick) {
 				const HarnessCost::SimulationSpan harnessSpan;
 				// The object census goes in here, not inside MovableMan::Update: the checkpoint
@@ -8651,7 +8989,7 @@ void RunGameLoop() {
 				}
 			}
 
-			if (heldTickDetails) heldAfterHashUs = g_TimerMan.GetAbsoluteTime();
+			if (tickPhaseDetails) heldAfterHashUs = g_TimerMan.GetAbsoluteTime();
 			// Start async GC after all main-thread Lua work for this tick is done. Earlier (inside MovableMan::Update)
 			// it overlapped with LateUpdateGlobalScripts on main, opening a window for ABBA between main holding one
 			// state for the global script and a worker GC __gc finalizer wanting it from another state.
@@ -8663,7 +9001,7 @@ void RunGameLoop() {
 				NetLockstepPlane::Window collectionWindow("tick-end collection wait");
 				g_LuaMan.WaitForAsyncGarbageCollection();
 			}
-			if (heldTickDetails) heldAfterCollectionUs = g_TimerMan.GetAbsoluteTime();
+			if (tickPhaseDetails) heldAfterCollectionUs = g_TimerMan.GetAbsoluteTime();
 			if (s_crossLeaveRequested) { s_crossLeaveRequested = false; s_scriptedLeaveDue = true; }
 			if (const MinimizeLever& lever = TestMinimizeLever(); lever.to != 0 && g_WindowMan.GetWindow()) {
 				SDL_Window* window = g_WindowMan.GetWindow();
@@ -8936,6 +9274,13 @@ void RunGameLoop() {
 				++s_paceSimTicks;
 				const long long elapsedUs = g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
 				s_paceSimUs += elapsedUs;
+				if (tickCostDetails && !lockstepPausedTick) {
+					NoteTickCostDetails(ScenarioRunner::GetLockstepRoundId(), simTick, {
+					    heldBeforeWorldUs - paceTickStartUs, heldAfterWorldUs - heldBeforeWorldUs,
+					    detailAfterAudioUs - heldAfterWorldUs, detailBeforeHashUs - detailAfterAudioUs,
+					    heldAfterHashUs - detailBeforeHashUs, heldAfterCollectionUs - heldAfterHashUs,
+					    paceTickStartUs + elapsedUs - heldAfterCollectionUs});
+				}
 				if (heldTickDetails) {
 					static long long detailAtUs = 0;
 					if (paceTickStartUs >= detailAtUs + 1000000) {
@@ -9630,7 +9975,8 @@ void RunGameLoop() {
 				}
 			}
 			if (!g_ActivityMan.ActivitySetToRestart()) {
-				g_MenuMan.HandleTransitionIntoMenuLoop();
+				// A failed match belongs on Multiplayer, where its removal or connection reason is shown.
+				g_MenuMan.HandleTransitionIntoMenuLoop(localMatchLeft || (!s_netReplayReturnPending && g_NetMatchService.GetState() == NetMatchServiceState::Failed));
 				RunMenuLoop();
 			}
 			if (!System::IsSetToQuit()) {
@@ -11345,13 +11691,18 @@ int RunNetPortMapProbe() {
 /// </summary>
 int main(int argc, char** argv) {
 	FloatingPointEnvironment::Initialize();
+#ifdef _WIN32
+	InstallAllocationFailureRecord();
+#endif
 	bool netMatchSelfTest = false;
+	std::string fight15SelfTest;
 	bool netSeatSuccessionSelfTest = false;
 	bool netSeatAdmissionSelfTest = false;
 	bool netRejoinGridSelfTest = false;
 	bool netMatchLobbyLifecycleSelfTest = false;
 	bool netMatchLeaveCatchUpSelfTest = false;
 	for (int i = 1; i < argc; ++i) {
+		if (argv[i] && std::string(argv[i]) == "-fight15-selftest" && i + 1 < argc) fight15SelfTest = argv[++i];
 		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
 			return RotatePrimitiveSelfTest::Run();
 		}
@@ -11697,7 +12048,7 @@ int main(int argc, char** argv) {
 	// The managers are up, so the recorder takes the run's own resolution from the first frame on.
 	if (!s_recordVideoDirectory.empty()) {
 		std::string recorderError;
-		if (!FrameRecorder::Instance().Start(s_recordVideoDirectory, s_recordVideoFps, &recorderError)) {
+		if (!FrameRecorder::Instance().Start(s_recordVideoDirectory, s_recordVideoFps, &recorderError, !s_menuScriptPath.empty())) {
 			{
 				std::ostringstream line;
 				line << "[record-video] refused: " << recorderError;
@@ -11778,6 +12129,10 @@ int main(int argc, char** argv) {
 	}
 	if (netSeatSuccessionSelfTest) return ShutDown(NetLockstepSelfTest::RunSeatSuccession());
 	if (netSeatAdmissionSelfTest) return ShutDown(NetLockstepSelfTest::RunSeatAdmission());
+	if (!fight15SelfTest.empty()) {
+		s_Fight15CloseSelfTest = fight15SelfTest == "R7";
+		return ShutDown(GameActivity::RunFight15SelfTest(fight15SelfTest) ? EXIT_SUCCESS : EXIT_FAILURE);
+	}
 	if (netMatchSelfTest) {
 		NetMatchService::Destruct();
 		const int result = netMatchLeaveCatchUpSelfTest ? NetMatchSelfTest::RunLeaveCatchUp() :

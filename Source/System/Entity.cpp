@@ -943,6 +943,29 @@ namespace RTE {
 		return memory;
 	}
 
+	std::string Entity::ClassInfo::GetPoolMemoryCounts() {
+		std::string counts;
+		for (ClassInfo* info = s_ClassHead; info; info = info->m_NextClass) {
+			if (!info->IsConcrete()) continue;
+			std::lock_guard lock(info->m_Mutex);
+			if (!counts.empty()) counts += ',';
+			counts += info->m_Name + ':' + std::to_string(info->m_InstancesInUse) + '/' + std::to_string(info->m_AllocatedPool.size());
+		}
+		return counts;
+	}
+
+	void Entity::ClassInfo::ReleaseUnusedPoolMemory() {
+		for (ClassInfo* info = s_ClassHead; info; info = info->m_NextClass) {
+			if (!info->IsConcrete()) continue;
+			std::lock_guard lock(info->m_Mutex);
+			const size_t reserve = static_cast<size_t>(info->m_PoolAllocBlockCount > 0 ? info->m_PoolAllocBlockCount : 10) * 2;
+			while (info->m_AllocatedPool.size() > reserve) {
+				info->m_Deallocate(info->m_AllocatedPool.back());
+				info->m_AllocatedPool.pop_back();
+			}
+		}
+	}
+
 	void Entity::ClassInfo::DumpPoolMemoryInfo(const Writer& fileWriter) {
 		for (const ClassInfo* itr = s_ClassHead; itr != nullptr; itr = itr->m_NextClass) {
 			if (itr->IsConcrete()) {

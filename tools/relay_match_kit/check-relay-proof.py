@@ -20,20 +20,25 @@ for peer,(role,p) in enumerate(roots.items(),1):
  write('participant-result.json',dict(pass_=True,exit_code=0,timed_out=False,synthetic=True))
  write('inputs/net-ui-result.json',{'pass':True,'complete':True,'script':{'steps':[{'op':'wait','seat_ready':'local','brains_ready':3,'within_ms':5000},{'op':'assert','equals':{'ai_held_peer_ids':[]}}]}})
  write('relay-launch.json',{'leave_test':{'tick_cap':0,'path':'pause-menu-leave'},'synthetic':True})
- lock={'local_peer_id':peer,'host_peer_id':1,'election_generation':0,'ai_held_peer_ids':[1],'peers':{'1':{'rejoins':2}},'timeouts':0,'peer_silence_leave_ms':10000}
- write('engine/match-report.json',{'runner':{'lockstep':lock,'directory_at_end':{'confirmed_listed':True}},'connections':[]})
+ lock={'local_peer_id':peer,'host_peer_id':1,'election_generation':0,'ai_held_peer_ids':[1],'peers':{'1':{'rejoins':2}},'timeouts':0,'peer_silence_leave_ms':10000,'completed_simulation_tick':12100,'next_frame':12101}
+ seats=[{'lockstep_peer_id':remote,'committed':True,'dropped':True,'held_for_reclaim':True,'closed':False,'cpu':False,'holder_generation':1} for remote in (2,3)]
+ write('engine/match-report.json',{'runner':{'lockstep':lock,'directory_at_end':{'confirmed_listed':True}},'connections':[],
+                                 'reconnect':{'moderation':seats},'last_match':{'result':'Match ended by host','running_ticks':12100}})
  lines=['[net-ice] connected connection=1 after_ms=100 route=relay','[net-ice] connected connection=2 after_ms=100 route=relay',f'[net-match] brain placement committed: seat={peer-1} frame=5 unix_ms={epoch+83}']
  lines += [f'[net-match] brain placement applied: seat={seat} frame=38 unix_ms={epoch+633}' for seat in range(3)]
  at=235000 if role=='ally' else 201800 if role=='linux' else 201900
  lines += [f'[menu-script] exit unix_ms={epoch+at} lockstep_frame=12100 peer={peer}']
  if role!='ally':
   lines += ['[menu-script] open_local_pause the match menu PASS', '[menu-script] activate ButtonLeaveMatch PASS', '[menu-script] activate ButtonLeaveConfirm PASS', f'[net-match-leave] peer={peer} frame=12100 now_ms=201666 reason=Match left']
- else: lines += ['[menu-script] round-ended -> OK (members=3 state=Starting)']
  if role=='ally':
   lines+=['[net-link-blackout] begin peer=1 frame=600 duration_ms=8000 now_ms=10000 unix_ms='+str(epoch+10000),
           '[net-link-blackout] end peer=1 elapsed_ms=8000 now_ms=18000 unix_ms='+str(epoch+18000)]
-  lines += [f'[net-peer-departure] peer={remote} frame=12100 now_ms=202000 unix_ms={epoch+202000} source=remote-close' for remote in (2,3)]
+  lines += [f'[net-peer-departure] peer={remote} frame=12128 now_ms=202000 unix_ms={epoch+202000} source=round-notice' for remote in (2,3)]
+  lines += ['[menu-script] open_local_pause the match menu PASS','[menu-script] activate ButtonEndMatch PASS',
+            '[net-match] the host ends the round at frame 12128, playing to it from 12101',
+            '[menu-script] activate ButtonLeaveConfirm PASS']
   lines += [f'[net-peer-departure] all-remote-ended applied=12100 now_ms=202000 unix_ms={epoch+202000}']
+  lines += ['[menu-script] round-ended -> OK (members=3 state=Completed)']
  (p/'engine/stdout.log').write_text('\n'.join(lines)+'\n')
  with (p/'engine/live.jsonl').open('w') as f:
   for tick in range(1,12101):
@@ -59,7 +64,7 @@ mutate('missing_host_report','ally','engine/match-report.json',lambda b:None,'ma
 mutate('malformed_report','linux','engine/match-report.json',lambda b:b'{broken','match-report.json: JSONDecodeError')
 mutate('missing_participant','mac','participant-result.json',lambda b:None,'participant-result.json: FileNotFoundError')
 mutate('nonzero_host_exit','ally','participant-result.json',lambda b:b.replace(b'"exit_code": 0',b'"exit_code": 1'),'participant/probe/exit failed')
-mutate('late_leave','ally','engine/stdout.log',lambda b:b.replace(b'now_ms=202000',b'now_ms=212100'),'leave not adjudicated within ten seconds')
+mutate('late_leave','ally','engine/stdout.log',lambda b:b.replace(b'now_ms=202000',b'now_ms=212100'),'leave not noted within ten seconds')
 mutate('no_host_terminal_event','ally','engine/stdout.log',lambda b:b'\n'.join(l for l in b.splitlines() if b'all-remote-ended' not in l),'host did not complete within ten seconds')
 def rows_change(b,change):
  rows=[json.loads(x) for x in b.decode().splitlines()]
@@ -164,5 +169,95 @@ try:
  assert not any('full-match rate' in e for e in result['errors'])
  checks.append({'name':'truncation_is_not_scored_as_slow_pacing','pass':True,'expected_verdict':False})
 finally:p.write_bytes(old)
+
+# Leave notices and the host's own end have separate deadlines.
+p=roots['ally']/'engine/stdout.log';old=p.read_bytes()
+try:
+ p.write_bytes(old.replace(b'peer=2 frame=12128 now_ms=202000',b'peer=2 frame=12128 now_ms=201630'))
+ result=check('leave_notice_before_matching_host_display',True)
+ assert result['leave_test']['leaves']['linux']['notice_ms']==-36
+finally:p.write_bytes(old)
+mutate('leave_notice_before_its_input_range','ally','engine/stdout.log',lambda b:b.replace(b'peer=2 frame=12128 now_ms=202000',b'peer=2 frame=12128 now_ms=200000'),'leave not noted within ten seconds')
+mutate('remote_close_is_not_a_leave_notice','ally','engine/stdout.log',lambda b:b.replace(b'source=round-notice',b'source=remote-close'),'leave not noted within ten seconds')
+mutate('seat_not_retained_after_leave','ally','engine/match-report.json',lambda b:b.replace(b'"held_for_reclaim": true',b'"held_for_reclaim": false'),'leave did not retain its AI seat')
+mutate('seat_closed_after_leave','ally','engine/match-report.json',lambda b:b.replace(b'"closed": false',b'"closed": true'),'leave did not retain its AI seat')
+mutate('missing_host_end_request','ally','engine/stdout.log',lambda b:b'\n'.join(line for line in b.splitlines() if b'the host ends the round' not in line),'missing unique host End Match request')
+mutate('missing_host_end_gesture','ally','engine/stdout.log',lambda b:b'\n'.join(line for line in b.splitlines() if b'activate ButtonEndMatch' not in line),'missing unique host End Match gesture')
+mutate('silent_peer_timing_disabled','ally','engine/match-report.json',lambda b:b.replace(b'"peer_silence_leave_ms": 10000',b'"peer_silence_leave_ms": 0'),'silent-peer timing')
+mutate('silent_peer_timing_unbounded','ally','engine/match-report.json',lambda b:b.replace(b'"peer_silence_leave_ms": 10000',b'"peer_silence_leave_ms": 10001'),'silent-peer timing')
+
+report=roots['ally']/'engine/match-report.json';log=roots['ally']/'engine/stdout.log';live=roots['ally']/'engine/live.jsonl'
+oldreport,oldlog,oldlive=report.read_bytes(),log.read_bytes(),live.read_bytes()
+try:
+ rows=[json.loads(line) for line in oldlive.decode().splitlines()]
+ for tick in range(12101,13201):
+  row=dict(rows[-1],tick=tick,wall_ms=tick*1000/60,net_clock_ms=int(tick*1000/60),unix_ms=epoch+int(tick*1000/60),
+           input_accepted_through=tick+28,total=str(tick),ai_held_peer_ids=[2,3] if tick>=12128 else [])
+  rows.append(row)
+ live.write_text('\n'.join(json.dumps(row) for row in rows)+'\n')
+ value=json.loads(oldreport);value['runner']['lockstep'].update(completed_simulation_tick=13200,next_frame=13201)
+ value['last_match']['running_ticks']=13200;report.write_text(json.dumps(value))
+ log.write_bytes(oldlog.replace(b'ends the round at frame 12128, playing to it from 12101',b'ends the round at frame 13228, playing to it from 13201')
+                .replace(b'all-remote-ended applied=12100 now_ms=202000',b'all-remote-ended applied=13200 now_ms=220000'))
+ result=check('host_keeps_playing_with_ai_until_it_chooses_end',True)
+ assert result['leave_test']['leaves']['linux']['ai_hold_frame']==12128
+ assert result['leave_test']['end_anchor']['now_ms']==220000
+ kept=live.read_bytes()
+ live.write_bytes(rows_change(kept,lambda rows:[row.update(ai_held_peer_ids=[]) for row in rows if row['tick']>=12128]))
+ check('departed_seats_not_played_by_ai',False,'departed seat not held within three ticks')
+ live.write_bytes(kept)
+ log.write_bytes(log.read_bytes().replace(b'applied=13200 now_ms=220000',b'applied=13200 now_ms=230001'))
+ check('host_end_completion_later_than_ten_seconds',False,'host did not complete within ten seconds of End Match')
+finally:
+ report.write_bytes(oldreport);log.write_bytes(oldlog);live.write_bytes(oldlive)
+
+try:
+ value=json.loads(oldreport);value['runner'].pop('directory_at_end')
+ value['runner']['lockstep'].update(completed_simulation_tick=None,next_frame=0,peer_silence_leave_ms=250)
+ report.write_text(json.dumps(value))
+ registered=b'[net-directory] registered session_id=synthetic-round heartbeat_s=5\n'
+ log.write_bytes(registered+oldlog+b'[net-directory] state: registered -> deleting\n')
+ result=check('completed_round_listing_from_ordered_registration',True)
+ assert result['details']['ally']['listing_source']=='ordered registration log before round end'
+ assert result['details']['ally']['completed_report_retained'] is False
+ log.write_bytes(oldlog)
+ check('no_listing_acknowledgment',False,'no confirmed public listing at round end')
+ log.write_bytes(registered+b'[net-directory] state: registered -> deleting\n'+oldlog)
+ check('listing_retracted_before_round_end',False,'no confirmed public listing at round end')
+ log.write_bytes(registered+oldlog)
+ value['last_match']['running_ticks']=12099;report.write_text(json.dumps(value))
+ check('listing_end_must_name_completed_round',False,'no confirmed public listing at round end')
+finally:report.write_bytes(oldreport);log.write_bytes(oldlog)
+mutate('explicit_unlisted_round_snapshot','ally','engine/match-report.json',lambda b:b.replace(b'"confirmed_listed": true',b'"confirmed_listed": false'),'no confirmed public listing at round end')
+# The leaver's last input lands up to the delay bound past the leave; the round notes the first frame without it.
+live=roots['linux']/'engine/live.jsonl';log=roots['ally']/'engine/stdout.log'
+oldlive,oldlog=live.read_bytes(),log.read_bytes()
+try:
+ live.write_bytes(rows_change(oldlive,lambda rows:[r.update(input_delay_ticks=36) for r in rows if r['tick']>=12000]))
+ log.write_bytes(oldlog.replace(b'peer=2 frame=12128',b'peer=2 frame=12137'))
+ result=check('leave_noted_at_first_frame_after_its_last_input',True)
+ assert result['leave_test']['leaves']['linux']['input_delay_ticks']==36
+ log.write_bytes(oldlog.replace(b'peer=2 frame=12128',b'peer=2 frame=12138'))
+ check('leave_noted_past_its_last_input',False,'linux leave not noted within ten seconds')
+finally:live.write_bytes(oldlive);log.write_bytes(oldlog)
+# A seat the round bridged has its own input replaced until its return; acceptance outside a bridge still advances with play.
+live=roots['ally']/'engine/live.jsonl';log=roots['ally']/'engine/stdout.log'
+oldlive,oldlog=live.read_bytes(),log.read_bytes()
+bridge=b'[net-frame-group] bridge frame=5000 members=6 voters=6\n';back=b'[net-frame-group] return frame=5089 members=7 voters=6\n'
+try:
+ live.write_bytes(rows_change(oldlive,lambda rows:[r.update(input_accepted_through=4999) for r in rows if 5000<=r['tick']<5044]))
+ log.write_bytes(oldlog+bridge+back)
+ result=check('host_seat_bridged_after_return_resumes_acceptance',True)
+ assert result['details']['ally']['own_seat_bridges_after_return']==[[5000,5089]]
+ log.write_bytes(oldlog)
+ check('acceptance_lag_without_a_bridge',False,'acceptance stopped advancing')
+ log.write_bytes(oldlog+bridge)
+ check('host_seat_bridge_without_return',False,'bridged after return without a recorded return')
+ log.write_bytes(oldlog+b'[net-frame-group] bridge frame=5000 members=5 voters=5\n'+back)
+ check('another_seats_bridge_does_not_excuse_the_lag',False,'acceptance stopped advancing')
+ live.write_bytes(rows_change(oldlive,lambda rows:[r.update(input_accepted_through=4999) for r in rows if 5000<=r['tick']<5100]))
+ log.write_bytes(oldlog+bridge+back)
+ check('acceptance_lag_past_the_return',False,'acceptance stopped advancing')
+finally:live.write_bytes(oldlive);log.write_bytes(oldlog)
 (root/'contracts.json').write_text(json.dumps({'synthetic':True,'relay_proof':False,'checks':checks},indent=2)+'\n')
 print(json.dumps({'synthetic_contract_checks':len(checks),'passed':len(checks),'relay_proof':False}))
