@@ -119,6 +119,8 @@ namespace RTE {
 			const auto witnesses = m_PeerFrameWitnesses.find(kept->first);
 			uint32_t witnessed = 0;
 			if (witnesses != m_PeerFrameWitnesses.end()) for (const auto& [sender, witness]: witnesses->second) witnessed |= SeatBit(sender);
+			// A reader that played in this frame confirms its own input in the record when it arrives.
+			if ((members & SeatBit(peer)) != 0) witnessed |= SeatBit(peer);
 			// One donor waits for the majority's witnesses before sending the needed history.
 			if ((witnessed & ~members) != 0 || 2 * std::popcount(witnessed) <= std::popcount(members)) {
 				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && m_TimingNowMs >= m_PeerTailLogAtMs) {
