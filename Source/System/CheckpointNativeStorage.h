@@ -147,6 +147,9 @@ namespace RTE {
 		static const std::string* ReadString(const char* source, size_t bytes);
 		static std::shared_ptr<const void> ReadIndex(const void* source, const void* kind, const std::function<std::shared_ptr<const void>()>& build);
 		static std::string SelfTestMismatch();
+		/// Empty when a thread made with a library's small stack (FMOD takes 96 KB for its output and stream threads) keeps most of
+		/// it: glibc places every module's static thread-locals at the top of each thread's stack.
+		static std::string ThreadStackSelfTestMismatch();
 	private:
 		static thread_local ReadState* s_Read;
 	};

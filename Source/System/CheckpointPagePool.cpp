@@ -44,6 +44,7 @@
 #endif
 #include <windows.h>
 #else
+#include <pthread.h>
 #include <sys/mman.h>
 #endif
 
@@ -1057,6 +1058,52 @@ bool CheckpointNativeStorage::Deallocate(void* address) noexcept {
 		return true;
 	}
 	return false;
+}
+
+std::string CheckpointNativeStorage::ThreadStackSelfTestMismatch() {
+	constexpr size_t stackBytes = 96 * 1024, roomBytes = 64 * 1024;
+	size_t room = 0;
+#ifdef _WIN32
+	const auto measure = +[](void* context) -> DWORD {
+		volatile char marker = 0;
+		ULONG_PTR low = 0, high = 0;
+		GetCurrentThreadStackLimits(&low, &high);
+		*static_cast<size_t*>(context) = reinterpret_cast<uintptr_t>(&marker) - low;
+		return 0;
+	};
+	HANDLE thread = CreateThread(nullptr, stackBytes, measure, &room, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+	if (!thread) return "could not start a thread with a 96 KB stack";
+	WaitForSingleObject(thread, INFINITE);
+	CloseHandle(thread);
+#else
+	const auto measure = +[](void* context) -> void* {
+		volatile char marker = 0;
+		uintptr_t low = 0;
+#ifdef __APPLE__
+		low = reinterpret_cast<uintptr_t>(pthread_get_stackaddr_np(pthread_self())) - pthread_get_stacksize_np(pthread_self());
+#else
+		pthread_attr_t own;
+		if (pthread_getattr_np(pthread_self(), &own) == 0) {
+			void* address = nullptr;
+			size_t size = 0;
+			if (pthread_attr_getstack(&own, &address, &size) == 0) low = reinterpret_cast<uintptr_t>(address);
+			pthread_attr_destroy(&own);
+		}
+#endif
+		*static_cast<size_t*>(context) = low ? reinterpret_cast<uintptr_t>(&marker) - low : 0;
+		return nullptr;
+	};
+	pthread_attr_t attributes;
+	pthread_attr_init(&attributes);
+	pthread_attr_setstacksize(&attributes, stackBytes);
+	pthread_t thread;
+	const int created = pthread_create(&thread, &attributes, measure, &room);
+	pthread_attr_destroy(&attributes);
+	if (created != 0) return std::format("could not start a thread with a 96 KB stack: error {}", created);
+	pthread_join(thread, nullptr);
+#endif
+	if (room < roomBytes) return std::format("a thread with a 96 KB stack keeps {} bytes below its first frame", room);
+	return {};
 }
 
 std::string CheckpointNativeStorage::InventoryCensus() {

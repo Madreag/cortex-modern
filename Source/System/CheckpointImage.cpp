@@ -1,6 +1,7 @@
 #include "FloatingPointEnvironment.h"
 #include "CheckpointImage.h"
 #include "PageWriteFence.h"
+#include "CheckpointNativeStorage.h"
 #include "CheckpointArchive.h"
 #include "BitmapCheckpoint.h"
 #include "ContentFile.h"
@@ -1438,6 +1439,12 @@ bool RTE::RunCheckpointImageSelfTest() {
 			} else {
 				fail("a_page_fence_puts_back_exactly_what_was_written", mismatch);
 			}
+		}
+		// The checkpoint's per-thread caches stay off a library thread's small stack: glibc keeps static thread-locals there.
+		if (const std::string mismatch = CheckpointNativeStorage::ThreadStackSelfTestMismatch(); mismatch.empty()) {
+			pass("a_library_thread_with_a_small_stack_keeps_its_room", "stack_kb=96 room_kb>=64");
+		} else {
+			fail("a_library_thread_with_a_small_stack_keeps_its_room", mismatch);
 		}
 		{
 			if (!PageWriteFence::IsSupported()) {
