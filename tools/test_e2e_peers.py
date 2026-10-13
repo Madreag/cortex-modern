@@ -33,6 +33,15 @@ class SceneBoxesTest(unittest.TestCase):
     def test_separate_boxes(self):
         self.assertTrue(peers.spread_check(self.capture)["passed"])
 
+    def test_assigned_port_keeps_the_committed_scene(self):
+        document = {"port_base": 49430}
+        self.assertEqual(peers.scene_port(document), 49430)
+        self.assertEqual(peers.scene_port(document, 49471), 49471)
+        self.assertEqual(document, {"port_base": 49430})
+        for invalid in (peers.video.PORT_LO - 1, peers.video.PORT_HI + 1):
+            with self.assertRaises(SystemExit):
+                peers.scene_port(document, invalid)
+
     def test_two_labels_on_one_host(self):
         joiner = self.capture["runs"][0]["peers"][1]
         joiner["box_hostname"] = joiner["record"]["engine_hostname"] = "host-computer"

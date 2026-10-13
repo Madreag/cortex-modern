@@ -443,10 +443,15 @@ def collect_player(out, name, role, player):
     archive.unlink()
 
 
+def scene_port(document, assigned=None):
+    return video.port_for(0, assigned if assigned is not None else int(document.get("port_base", video.PORT_LO)))
+
+
 def capture_scene(args):
     document = scene(args.scenario)
     check_scene(document)
     boxes = selected_boxes(args.peer_boxes, args.boxes_file)
+    port = scene_port(document, getattr(args, "port", None))
     engine_env = engine_levers(getattr(args, "engine_env", None))
     out, repo = args.out.resolve(), args.repo.resolve()
     source = video.source_evidence(repo)
@@ -465,7 +470,7 @@ def capture_scene(args):
                "size": document.get("size"), "settings": {}, "render_cap": 60, "started": video.stamp(),
                "command": [sys.executable, *sys.argv], "scratch_root": str(out.parent),
                "scratch_limit_bytes": video.SCRATCH_LIMIT, "topology": "spread", "proof": False, "runs": [],
-               "engine_env": engine_env}
+               "engine_env": engine_env, "port": port}
     video.write_json(out / "capture.json", capture)
     for index, run in enumerate(scene_runs(document)):
         name = run.get("name", "run" + str(index))
@@ -477,7 +482,7 @@ def capture_scene(args):
                 remote_out = box["scratch"].rstrip("/") + "/" + out.name + "-" + name + "-" + uuid.uuid4().hex[:8]
                 request = dict(box=box, role=role, run_index=index, out=remote_out, commit=source["tip"],
                                engine_env=engine_env, scene_relative=relative, scene_sha256=scene_hash, fps=video.DEFAULT_FPS,
-                               sheet_every=15, port=int(document.get("port_base", video.PORT_LO)),
+                               sheet_every=15, port=port,
                                run_name=name, signal_files=player_files(document, run))
                 request_path = controls / (name + "-" + role + ".json")
                 video.write_json(request_path, request)
@@ -560,6 +565,7 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--peer-boxes")
     parser.add_argument("--boxes-file", type=Path, default=os.environ.get("CORTEX_SCENE_BOXES"))
+    parser.add_argument("--port", type=int, help=f"this lane's lobby port inside {video.PORT_LO}-{video.PORT_HI}; defaults to the scene's port_base")
     parser.add_argument("--engine-env", action="append", default=[], metavar="CC_TEST_NAME=VALUE",
                         help="a test lever set in both players' engines; recorded in the capture")
     parser.add_argument("--check-spread", type=Path)
