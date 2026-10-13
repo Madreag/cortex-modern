@@ -4361,6 +4361,8 @@ static bool IsMovableObjectClass(const luabind::detail::class_rep* rep) {
 
 // A handle naming a MovableObject keeps that object's memory while the handle lives.
 static void NoteBorrowedHandle(luabind::detail::object_rep* handle) {
+	// A saver's handles name its own frozen copies, which never return to a pool.
+	if (luabind::detail::saved_objects.copy) return;
 	if (!handle->has_life_owner() && handle->ptr() && IsMovableObjectClass(handle->crep())) {
 		auto* object = static_cast<MovableObject*>(static_cast<Entity*>(handle->ptr()));
 		handle->set_life_owner(object->NoteLuaHandle(), &MovableObject::ReleaseLuaHandle);
@@ -4369,6 +4371,7 @@ static void NoteBorrowedHandle(luabind::detail::object_rep* handle) {
 
 // A field handle a bound call on a MovableObject hands back keeps that object's memory while the handle lives.
 static void NoteReturnedHandle(luabind::detail::object_rep* result, luabind::detail::object_rep* self) {
+	if (luabind::detail::saved_objects.copy) return;
 	if (result->has_life_owner() || !result->ptr() || (result->flags() & luabind::detail::object_rep::owner) || IsMovableObjectClass(result->crep())) {
 		return;
 	}
