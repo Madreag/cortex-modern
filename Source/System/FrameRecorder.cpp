@@ -328,7 +328,7 @@ namespace RTE {
 
 	unsigned char* FrameRecorder::BeginFrame(long long wallMS, std::size_t bytes) {
 		if (!m_Enabled || m_StagingHeld || bytes == 0) return nullptr;
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__linux__)
 		if (!m_PendingTextureFrames.empty()) {
 			HarnessCost::SimulationSpan readbackCost;
 			DrainTextureReadbacks(false);
@@ -342,7 +342,7 @@ namespace RTE {
 			return nullptr;
 		}
 		if (m_Queue.size()
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__linux__)
 		    + m_PendingTextureFrames.size()
 #endif
 		    >= m_QueueBound) {
@@ -366,19 +366,11 @@ namespace RTE {
 
 	bool FrameRecorder::StageTextureReadback(unsigned int texture, int width, int height, std::string& error) {
 		if (!m_StagingHeld) { error = "no admitted frame"; return false; }
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__linux__)
+		// A fenced copy collected on this context later; a direct read here would wait for the GPU every captured frame.
 		m_StagedTextureReadback = true;
 		m_StagedReadback = FrameReadbackContext::Submit(texture, width, height, error, GL_BGRA);
 		return m_StagedReadback != nullptr;
-#elif defined(__linux__)
-		if (!ReadTextureRGB(texture, width, height, m_Staging, error)) return false;
-		const std::size_t rowBytes = static_cast<std::size_t>(width) * 3;
-		for (int y = 0; y < height / 2; ++y) {
-			auto* first = m_Staging.data() + static_cast<std::size_t>(y) * rowBytes;
-			auto* last = m_Staging.data() + static_cast<std::size_t>(height - y - 1) * rowBytes;
-			std::swap_ranges(first, first + rowBytes, last);
-		}
-		return true;
 #else
 		m_StagedTextureReadback = true;
 		if (!m_ReadbackContext) m_ReadbackContext = FrameReadbackContext::Create(error);
@@ -410,7 +402,7 @@ namespace RTE {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			frame.index = m_NextIndex++;
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__linux__)
 			if (frame.textureReadback) m_PendingTextureFrames.push_back(std::move(frame));
 			else
 #endif
@@ -419,7 +411,7 @@ namespace RTE {
 		m_Wake.notify_one();
 	}
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__linux__)
 	void FrameRecorder::DrainTextureReadbacks(bool wait) {
 		while (!m_PendingTextureFrames.empty()) {
 			auto& pending = m_PendingTextureFrames.front();
@@ -619,7 +611,7 @@ namespace RTE {
 			m_StagedTextureReadback = false;
 			m_Staging.clear();
 		}
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__linux__)
 		const int64_t finalReadbackCPU = ThreadCpuNanoseconds();
 		DrainTextureReadbacks(true);
 		HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - finalReadbackCPU);

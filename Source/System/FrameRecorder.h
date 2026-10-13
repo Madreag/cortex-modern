@@ -109,7 +109,7 @@ namespace RTE {
 		/// Whether the capture rate admits a frame at this wall time, advancing the pacer when it does.
 		bool DueAt(long long wallMS);
 		void WriterLoop();
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__linux__)
 		void DrainTextureReadbacks(bool wait);
 		std::deque<QueuedFrame> m_PendingTextureFrames; //!< Render-context transfers awaiting their fence; original metadata stays with each copy.
 #endif
