@@ -121,7 +121,8 @@ namespace RTE {
 			const double boundMs = m_Config.slowPlayerBoundTicks * m_Config.simTickMs;
 			double leadMs = std::numeric_limits<double>::max();
 			for (uint8_t peer: proposal.members) {
-				uint32_t transitMs = m_Stats.peers[peer].pingMs;
+				const auto stats = m_Stats.peers.find(peer);
+				uint32_t transitMs = stats != m_Stats.peers.end() ? stats->second.pingMs : 0;
 				const auto [wire, route] = PeerFrameRoute(peer);
 				if (wire && wire->IsPeerPingMeasured(route)) transitMs = std::max(transitMs, wire->GetPeerPingMs(route));
 				leadMs = std::min(leadMs, std::max(0.0, InputDelayAt(peer, frame) * m_Config.simTickMs - transitMs - boundMs));
