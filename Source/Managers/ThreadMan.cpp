@@ -2,8 +2,9 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#else
+#elif defined(__APPLE__)
 #include <pthread.h>
+#else
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>

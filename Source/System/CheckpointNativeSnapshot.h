@@ -721,8 +721,8 @@ namespace RTE {
 		}
 		inline static thread_local const CheckpointNativeSnapshot* s_Current = nullptr;
 		inline static thread_local const Entity* t_Constructing = nullptr;
-		struct Binding { const Entity* source = nullptr; Entity* target = nullptr; Entity** slot = nullptr; };
-		inline static thread_local Binding t_Binding;
+		struct Binding { const Entity* source; Entity* target; Entity** slot; };
+		inline static thread_local Binding t_Binding{};
 		inline static thread_local std::shared_ptr<CheckpointNativeSnapshot> s_Boundary;
 		CheckpointSharedMap<const BITMAP*, std::shared_ptr<Pixel>> m_Bitmaps;
 		CheckpointSharedMap<const BITMAP*, std::shared_ptr<Pixel>> m_BitmapSources;
