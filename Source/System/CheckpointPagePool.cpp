@@ -1045,6 +1045,8 @@ namespace {
 	public:
 		using Root = CheckpointNativeStorage::RootRange;
 		void Build(std::span<const Root> roots, bool views, bool privateOnly = false) {
+			static std::atomic<uint64_t> nextGeneration{1};
+			m_Generation = nextGeneration.fetch_add(1, std::memory_order_relaxed);
 			if (!roots.empty()) CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 			m_Entries.reserve(roots.size());
 			for (size_t index = 0; index < roots.size(); ++index) {
@@ -1059,15 +1061,26 @@ namespace {
 			Build(0, m_Entries.size());
 		}
 		const Root* Find(std::span<const Root> roots, const void* pointer, size_t bytes) const noexcept {
+			if (m_Entries.empty()) return nullptr;
 			const auto address = reinterpret_cast<uintptr_t>(pointer);
+			// A lookup is immutable. Cache exact queries, including misses, without sharing writable state
+			// between readers. The generation keeps recycled index addresses from reusing an older answer.
+			struct Cached { uint64_t generation; uintptr_t address; size_t bytes, root; };
+			static thread_local std::array<Cached, 128> cache{};
+			const size_t slot = ((address >> 4) ^ (address >> 17) ^ (bytes * 37) ^ m_Generation) & (cache.size() - 1);
+			Cached& cached = cache[slot];
+			if (cached.generation == m_Generation && cached.address == address && cached.bytes == bytes)
+				return cached.root == c_None ? nullptr : &roots[cached.root];
 			size_t found = c_None;
 			Find(roots, 0, m_Entries.size(), address, End(address, bytes), bytes, found);
+			cached = {m_Generation, address, bytes, found};
 			return found == c_None ? nullptr : &roots[found];
 		}
 	private:
 		static constexpr size_t c_None = (std::numeric_limits<size_t>::max)();
 		struct Entry { uintptr_t start, last; size_t root, firstRoot; };
 		std::vector<Entry> m_Entries;
+		uint64_t m_Generation = 0;
 		static uintptr_t End(uintptr_t start, size_t bytes) noexcept {
 			return start + (std::min<uintptr_t>)(bytes, (std::numeric_limits<uintptr_t>::max)() - start);
 		}
@@ -1342,6 +1355,27 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 		    IsView(first.data() + 18) || !IsView(first.data() + 22) || !Private(first.data() + 22, 0) ||
 		    Private(first.data() + 22) || !PrivateBorrowed(first.data() + 21) || PrivateBorrowed(first.data() + 22))
 			return "frozen root lookup changed private values or original identities";
+		for (size_t version = 0; version < 130; ++version) {
+			auto changed = roots;
+			const bool narrow = version % 2 != 0;
+			changed[0].bytes = narrow ? 1 : 8;
+			changed[3].privateValues = !narrow;
+			changed[4].bytes = narrow ? 1 : 0;
+			{
+				ReadScope replacement({}, changed);
+				for (int repeat = 0; repeat < 2; ++repeat) {
+					if (RootView(source.data() + 18) != first.data() + (narrow ? 82 : 18) ||
+					    RootView(source.data() + 18, 12) != first.data() + 82 ||
+					    RootView(source.data() + 96) != (narrow ? second.data() + 96 : nullptr) ||
+					    RootView(source.data() + 96, 0) != second.data() + 96 ||
+					    PrivateBorrowed(first.data() + 21) == narrow || Private(first.data() + 22))
+						return "replacement frozen root index reused another snapshot's answer";
+				}
+			}
+			if (RootView(source.data() + 18) != first.data() + 18 || RootView(source.data() + 96) ||
+			    !PrivateBorrowed(first.data() + 21))
+				return "closed frozen root index changed the previous reader's answer";
+		}
 		for (size_t after = 0; after < 3; ++after) {
 			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects, after);
 			bool refused = false;
