@@ -9669,7 +9669,9 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			const std::string line = "This match is no longer in the directory. Choose another game from Multiplayer.";
 			if (m_State != NetMatchServiceState::Completed && m_State != NetMatchServiceState::Idle) {
-				m_PendingToasts.push_back(line); m_ErrorText = line;
+				// The lobby's own error line says it there; a toast beside it would say it twice.
+				if (m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch) m_PendingToasts.push_back(line);
+				m_ErrorText = line;
 			}
 		}
 		if (m_IsHost && m_Coordinator) {
