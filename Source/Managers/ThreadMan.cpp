@@ -153,8 +153,10 @@ void SaverThreads::WaitForSlice() {
 				return;
 			}
 		}
-		const int64_t closedAt = s_ClosedAtUs.load(std::memory_order_acquire);
-		if (sliceEnd == 0 && now - closedAt > c_StuckTickUs) {
+		// A lent slice that has run out leaves the gate closed from its end, as a tick's start closes it.
+		const bool lent = s_SliceLent.load(std::memory_order_acquire);
+		const int64_t closedAt = lent ? sliceEnd : s_ClosedAtUs.load(std::memory_order_acquire);
+		if ((sliceEnd == 0 || lent) && now - closedAt > c_StuckTickUs) {
 			if (s_ReportedStuckAtUs.exchange(closedAt) != closedAt) {
 				std::fprintf(stdout, "[saver-gate] a tick kept the gate closed %lld ms; the saver goes on beside it\n", static_cast<long long>((now - closedAt) / 1000));
 				std::fflush(stdout);
