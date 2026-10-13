@@ -182,7 +182,7 @@ void SaverThreads::WaitForSlice() {
 				std::fprintf(stdout, "[saver-gate] a tick kept the gate closed %lld ms; the saver goes on beside it\n", static_cast<long long>((now - closedAt) / 1000));
 				std::fflush(stdout);
 			}
-			ReportParked(closedAt, now - began);
+			if (closedAt) ReportParked(closedAt, now - began);
 			return;
 		}
 		// Whatever lets the saver on notifies; waking only for the stuck-tick report keeps parked savers off the game's cores.
