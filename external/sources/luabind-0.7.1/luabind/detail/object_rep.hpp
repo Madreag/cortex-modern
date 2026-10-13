@@ -134,19 +134,8 @@ namespace luabind { namespace detail
 	// Called when a handle starts naming an object Lua does not own, so the engine can keep that object's memory while it does.
 	extern LUABIND_API void (*object_rep_borrowed)(object_rep* obj);
 
-	// The object a bound method or property read runs on, on this thread: a handle it hands back may name a field of it.
-	extern LUABIND_API thread_local object_rep* member_call_self;
-	extern LUABIND_API thread_local lua_State* member_call_state;
-	LUABIND_API object_rep* current_member_self();
-
-	struct member_call_scope
-	{
-		object_rep* previous_self;
-		lua_State* previous_state;
-		explicit member_call_scope(object_rep* self) : previous_self(member_call_self), previous_state(member_call_state) { member_call_self = self; member_call_state = 0; }
-		explicit member_call_scope(lua_State* L) : previous_self(member_call_self), previous_state(member_call_state) { member_call_self = 0; member_call_state = L; }
-		~member_call_scope() { member_call_self = previous_self; member_call_state = previous_state; }
-	};
+	// Called with each handle a bound method or property read hands back and the object it ran on: the handle may name a field of it.
+	extern LUABIND_API void (*object_rep_returned)(object_rep* result, object_rep* self);
 
 	typedef void (*checkpoint_object_write_cb)(void*);
 	extern LUABIND_API checkpoint_object_write_cb checkpoint_object_write;

@@ -408,9 +408,11 @@ static bool RunDeadHandleMemorySelfTest(LuaStateWrapper& script) {
 	};
 	const auto round = [&](bool linked) {
 		Round result;
-		void (*hook)(luabind::detail::object_rep*) = luabind::detail::object_rep_borrowed;
+		void (*borrowed)(luabind::detail::object_rep*) = luabind::detail::object_rep_borrowed;
+		void (*returned)(luabind::detail::object_rep*, luabind::detail::object_rep*) = luabind::detail::object_rep_returned;
 		if (!linked) {
 			luabind::detail::object_rep_borrowed = nullptr;
+			luabind::detail::object_rep_returned = nullptr;
 		}
 		const int retainedBefore = MovableObject::GetRetainedPoolMemoryCount();
 		result.ran = script.RunScriptString("_DeadHandleFirst = CreateMOPixel('Spark Yellow 1', 'Base.rte');"
@@ -431,7 +433,8 @@ static bool RunDeadHandleMemorySelfTest(LuaStateWrapper& script) {
 		LuabindObjectWrapper::ApplyQueuedEntityDeletions();
 		LuabindObjectWrapper::ApplyQueuedDeletions();
 		result.retainedAfterCollect = MovableObject::GetRetainedPoolMemoryCount() - retainedBefore;
-		luabind::detail::object_rep_borrowed = hook;
+		luabind::detail::object_rep_borrowed = borrowed;
+		luabind::detail::object_rep_returned = returned;
 		return result;
 	};
 	const Round unlinked = round(false);
@@ -4295,28 +4298,36 @@ static bool ClassDerivesFrom(const luabind::detail::class_rep* rep, const char* 
 	return false;
 }
 
-// A handle naming an engine object, or a field of the object a bound call runs on, keeps that object's memory while it lives.
+// Whether a luabind class is a MovableObject, noted on the class the first time it is asked.
+static bool IsMovableObjectClass(const luabind::detail::class_rep* rep) {
+	if (!rep) {
+		return false;
+	}
+	int kind = rep->engine_kind();
+	if (kind < 0) {
+		kind = ClassDerivesFrom(rep, "MovableObject") ? 1 : 0;
+		rep->set_engine_kind(kind);
+	}
+	return kind == 1;
+}
+
+// A handle naming a MovableObject keeps that object's memory while the handle lives.
 static void NoteBorrowedHandle(luabind::detail::object_rep* handle) {
-	const auto movable = [](const luabind::detail::class_rep* rep) {
-		if (!rep) {
-			return false;
-		}
-		int kind = rep->engine_kind();
-		if (kind < 0) {
-			kind = ClassDerivesFrom(rep, "MovableObject") ? 1 : 0;
-			rep->set_engine_kind(kind);
-		}
-		return kind == 1;
-	};
-	if (handle->has_life_owner()) {
+	if (!handle->has_life_owner() && handle->ptr() && IsMovableObjectClass(handle->crep())) {
+		auto* object = static_cast<MovableObject*>(static_cast<Entity*>(handle->ptr()));
+		handle->set_life_owner(object->NoteLuaHandle(), &MovableObject::ReleaseLuaHandle);
+	}
+}
+
+// A field handle a bound call on a MovableObject hands back keeps that object's memory while the handle lives.
+static void NoteReturnedHandle(luabind::detail::object_rep* result, luabind::detail::object_rep* self) {
+	if (result->has_life_owner() || !result->ptr() || (result->flags() & luabind::detail::object_rep::owner) || IsMovableObjectClass(result->crep())) {
 		return;
 	}
-	luabind::detail::object_rep* named = movable(handle->crep()) ? handle : luabind::detail::current_member_self();
-	if (!named || !named->ptr() || !movable(named->crep())) {
-		return;
+	if (self->ptr() && IsMovableObjectClass(self->crep())) {
+		auto* object = static_cast<MovableObject*>(static_cast<Entity*>(self->ptr()));
+		result->set_life_owner(object->NoteLuaHandle(), &MovableObject::ReleaseLuaHandle);
 	}
-	auto* object = static_cast<MovableObject*>(static_cast<Entity*>(named->ptr()));
-	handle->set_life_owner(object->NoteLuaHandle(), &MovableObject::ReleaseLuaHandle);
 }
 
 // The engine Vectors a script can alias through a property, by address, for the capture in progress.
@@ -8531,6 +8542,7 @@ void LuaMan::Initialize() {
 	LuabindObjectWrapper::SetSimThread();
 	LuabindObjectWrapper::SetPreviewDeletionHook(&LuaMan::ForgetPreviewBornWrapper);
 	luabind::detail::object_rep_borrowed = &NoteBorrowedHandle;
+	luabind::detail::object_rep_returned = &NoteReturnedHandle;
 	m_MasterScriptState.Initialize();
 
 	// Every machine runs the same number of states, whatever its core count: the assignment is a pure

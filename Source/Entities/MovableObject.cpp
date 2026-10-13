@@ -197,6 +197,8 @@ void MovableObject::ReleaseLuaHandle(void* record) {
 	auto* handles = static_cast<LuaHandles*>(record);
 	const uint32_t before = handles->state.fetch_sub(1, std::memory_order_acq_rel);
 	if ((before & LuaHandles::c_Gone) && (before & ~LuaHandles::c_Gone) == 1) {
+		// A pointer that outlived the object finds no record, so it never touches this one once it is freed.
+		handles->object->m_LuaHandles.store(nullptr, std::memory_order_release);
 		handles->pool->ReturnPoolMemory(handles->memory);
 		delete handles;
 		s_RetainedPoolMemory.fetch_sub(1, std::memory_order_relaxed);
@@ -211,11 +213,13 @@ bool MovableObject::RetainPooledMemory(MovableObject* object, void* memory, Enti
 	}
 	handles->pool = &pool;
 	handles->memory = memory;
+	handles->object = object;
 	const uint32_t before = handles->state.fetch_or(LuaHandles::c_Gone, std::memory_order_acq_rel);
 	if ((before & ~LuaHandles::c_Gone) != 0) {
 		s_RetainedPoolMemory.fetch_add(1, std::memory_order_relaxed);
 		return true;
 	}
+	object->m_LuaHandles.store(nullptr, std::memory_order_release);
 	delete handles;
 	return false;
 }

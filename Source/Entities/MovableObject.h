@@ -1239,6 +1239,7 @@ namespace RTE {
 			std::atomic<uint32_t> state{0}; //!< The handle count, with c_Gone once the object is deleted.
 			Entity::ClassInfo* pool = nullptr; //!< The class pool the memory returns to.
 			void* memory = nullptr; //!< The deleted object's memory.
+			MovableObject* object = nullptr; //!< The deleted object.
 		};
 
 		/// Notes one more Lua handle naming this object or one of its fields.

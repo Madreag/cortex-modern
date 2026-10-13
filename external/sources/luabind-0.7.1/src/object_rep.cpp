@@ -30,14 +30,7 @@ namespace luabind { namespace detail
 
 	checkpoint_object_write_cb checkpoint_object_write = 0;
 	void (*object_rep_borrowed)(object_rep*) = 0;
-	thread_local object_rep* member_call_self = 0;
-	thread_local lua_State* member_call_state = 0;
-
-	object_rep* current_member_self()
-	{
-		if (member_call_self) return member_call_self;
-		return member_call_state ? is_class_object(member_call_state, 1) : 0;
-	}
+	void (*object_rep_returned)(object_rep*, object_rep*) = 0;
 
 	thread_local unsigned preview_fence_window = 0;
 	thread_local int preview_fence_parent = -1;
