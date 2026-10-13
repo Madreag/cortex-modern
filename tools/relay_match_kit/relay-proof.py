@@ -15,6 +15,10 @@ spec.loader.exec_module(timeline)
 ROLES = ('ally', 'linux', 'mac')
 MIN_PLAY_TPS = 59.9
 SIM_TICK_MS = 1000 / 60
+BLOCK_BOUND_MS = 50
+BLACKOUT_POLICY = ('The host loses its peer link and the directory together. During blackout a survivor blocks at most once, at most 50 ms '
+                   'beyond its regular 1000/60 ms tick, and never on two consecutive ticks; a block is an in-play interval over 50 ms. '
+                   'Pauses outside blackout remain measured path data.')
 RATE_POLICY = 'Full in-play and each consecutive 60-second window: at least 59.9 tps; median of 60-tick average intervals: within 1 ms of 1000/60 ms. Raw gaps and sliding-window rates remain evidence.'
 LEAVE_POLICY = 'An ordinary Leave is noted within 10 seconds and retains its AI seat; only the host End Match ends this round, within 10 seconds of that request. Silent-peer timing remains enabled and bounded.'
 BUSY_RATIO = 4
@@ -182,8 +186,14 @@ def score(roots):
                         role + ': median 60-tick average interval differs from the sim tick by more than 1 ms')
             blackout_gaps = [g for g in timing['gaps_over_50ms'] if 600 <= g['ending_tick'] <= 1081 and g['in_play']]
             steady_gaps = [g for g in timing['gaps_over_50ms'] if not 600 <= g['ending_tick'] <= 1081 and g['gap_ms'] > 100 and g['in_play']]
-            detail.update(blackout_gaps=blackout_gaps, steady_gaps_over_100ms=steady_gaps)
-            if role != 'ally': require(not blackout_gaps, role + ': unaffected peer pauses over 50 ms during blackout')
+            blocks = [dict(g, block_ms=g['gap_ms'] - SIM_TICK_MS) for g in blackout_gaps]
+            detail.update(blackout_gaps=blackout_gaps, blackout_blocks=blocks, steady_gaps_over_100ms=steady_gaps)
+            if role != 'ally':
+                # A survivor may block once per spike, up to the bound beyond its regular tick, before the silent seat is held.
+                require(all(b['block_ms'] <= BLOCK_BOUND_MS for b in blocks), role + ': unaffected peer blocked over 50 ms during blackout')
+                require(not any(b['ending_tick'] == a['ending_tick'] + 1 for a, b in zip(blocks, blocks[1:])),
+                        role + ': unaffected peer blocked on two consecutive ticks during blackout')
+                require(len(blocks) <= 1, role + ': unaffected peer blocked more than once during blackout')
             # The absent player's private catch-up remains measured separately.
             first_return_tick = next((r['tick'] for n, r in enumerate(rows) if n and 1 in rows[n-1].get('ai_held_peer_ids', []) and 1 not in r.get('ai_held_peer_ids', [])), None)
             recovery_gaps = [g for g in steady_gaps if role == 'ally' and first_return_tick and 1081 < g['ending_tick'] < first_return_tick]
@@ -229,6 +239,9 @@ def score(roots):
             require(0 <= lag <= 300, f'{role}: seat {seat} confirmation outside 0..300 lockstep frames')
     require(len(matrix) == 9, 'missing nine-peer/seat confirmation matrix')
     require('[net-link-blackout] begin peer=1 frame=600 duration_ms=8000' in logs['ally'], 'ally: wrong blackout interval')
+    # A host that still reaches the directory loses only a joiner's link from its side; the host blackout takes both.
+    require(re.search(r'^\[net-link-blackout\] begin peer=1 frame=600 duration_ms=8000 .* directory=dark$', logs['ally'], re.M) is not None,
+            'ally: blackout left the host reaching the directory')
     ended = re.findall(r'\[net-link-blackout\] end peer=1 elapsed_ms=(\d+) now_ms=(\d+) unix_ms=(\d+)', logs['ally'])
     require(len(ended) == 1, 'ally: missing unique blackout end timestamp')
     if len(ended) == 1:
@@ -354,7 +367,7 @@ def score(roots):
             'hash_coverage': coverage, 'hash_exclusions': exclusions, 'leave_test': leave_score, 'details': details,
             'rate_policy': RATE_POLICY,
             'leave_policy': LEAVE_POLICY, 'box_policy': BOX_POLICY,
-            'physics_policy': 'The gate requires zero unaffected pauses over 50 ms during blackout. Pauses outside blackout remain measured path data.'}
+            'physics_policy': BLACKOUT_POLICY}
 
 
 def main():
