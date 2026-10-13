@@ -59,14 +59,6 @@ def setting_pair(value):
     return key, setting
 
 
-def peer_env_pair(value):
-    """A test lever every peer is launched with; only CC_TEST_* names, so no scenario's own environment can be overridden."""
-    key, separator, setting = value.partition("=")
-    if not separator or not re.fullmatch(r"CC_TEST_[A-Z0-9_]+", key) or any(c in setting for c in "\r\n"):
-        raise argparse.ArgumentTypeError("peer levers require CC_TEST_NAME=VALUE on one line")
-    return key, setting
-
-
 def render_cap_hz(value):
     if str(value) not in ("0", "60"):
         raise argparse.ArgumentTypeError("[feel] invalid render settings: expected RenderCapHz = 0 or 60")
@@ -2161,7 +2153,6 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
             continue
         stage.mkdir(parents=True, exist_ok=False)
         environment = stage_peer(scenario, peer, stage, tokens)
-        environment.update(dict(getattr(options, "peer_env", [])))
         if headed:
             environment = headed_environment(environment)
         if getattr(options, 'win_cause_log', False):
@@ -3126,8 +3117,6 @@ def main():
     parser.add_argument("--size")
     parser.add_argument("--setting", action="append", type=setting_pair, default=[], metavar="KEY=VALUE",
                         help="seed every peer after size and scenario settings; repeatable, last value wins")
-    parser.add_argument("--peer-env", action="append", type=peer_env_pair, default=[], metavar="CC_TEST_NAME=VALUE",
-                        help="launch every peer with this test lever as well; repeatable")
     parser.add_argument("--render-cap", type=render_cap_hz, default=60, metavar="HZ", help="headless render cap: 0 or 60 (default)")
     parser.add_argument("--headed", action="store_true",
                         help="POSIX: every player draws in a visible window at the game's default vsync instead of the headless render cap")
