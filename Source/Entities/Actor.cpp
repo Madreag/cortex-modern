@@ -53,6 +53,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <iterator>
 #include <limits>
 
@@ -96,12 +97,7 @@ namespace {
 	std::shared_ptr<volatile PathRequest> FreezeActorPathRequest(const std::shared_ptr<volatile PathRequest>& request, CheckpointNativeSnapshot& snapshot) {
 		if (!request) return {};
 		auto* saved = snapshot.RebuildValue(const_cast<const PathRequest*>(request.get()), [&](const PathRequest& value) {
-			if (value.complete) return std::make_unique<PathRequest>(value, snapshot);
-			auto pending = std::make_unique<PathRequest>();
-			pending->startPos = value.startPos; pending->targetPos = value.targetPos;
-			pending->jumpHeight = value.jumpHeight; pending->digStrength = value.digStrength;
-			pending->committedHorizon = value.committedHorizon; pending->completeTick = value.completeTick;
-			return pending;
+			return std::make_unique<PathRequest>(value, snapshot);
 		});
 		return std::shared_ptr<volatile PathRequest>(saved, [](volatile PathRequest*) {});
 	}
@@ -2435,9 +2431,8 @@ void Actor::OnNewMovePath() {
 
 void Actor::PreControllerUpdate() {
 	if (m_PathRequest && m_PathRequest->resumeAfterRestore) {
-		const PathRequest& saved = const_cast<const PathRequest&>(*m_PathRequest);
 		auto& finder = g_SceneMan.GetScene()->GetPathFinder(static_cast<Activity::Teams>(m_Team));
-		m_PathRequest = finder.CalculatePathAsync(saved.startPos, saved.targetPos, saved.jumpHeight, saved.digStrength, nullptr, saved.committedHorizon, saved.completeTick);
+		m_PathRequest = finder.ResumeCheckpointPathRequest(m_PathRequest);
 		// The normal deterministic drain preceded this first update; include the restored request in it.
 		if (g_SettingsMan.GetForceImmediatePathingRequestCompletion()) finder.WaitForPathingRequests();
 		finder.CommitPathRequestsThrough(ScenarioRunner::GetLockstepAppliedFrame());
@@ -3255,6 +3250,16 @@ bool Actor::RunCheckpointPathRequestSelfTest() {
 		TestMaterial air, rock;
 		air.Arm(MaterialColorKeys::g_MaterialAir, 0.0F);
 		rock.Arm(5, 200.0F);
+		struct PaletteSeat {
+			Material* air = g_SceneMan.TestInstallMaterial(MaterialColorKeys::g_MaterialAir, nullptr);
+			Material* rock = g_SceneMan.TestInstallMaterial(5, nullptr);
+			~PaletteSeat() {
+				g_SceneMan.TestInstallMaterial(MaterialColorKeys::g_MaterialAir, air);
+				g_SceneMan.TestInstallMaterial(5, rock);
+			}
+		} palette;
+		g_SceneMan.TestInstallMaterial(MaterialColorKeys::g_MaterialAir, &air);
+		g_SceneMan.TestInstallMaterial(5, &rock);
 		Scene scene;
 		SLTerrain terrain;
 		struct FixtureBinding {
@@ -3293,7 +3298,10 @@ bool Actor::RunCheckpointPathRequestSelfTest() {
 		Actor reloaded;
 		{
 			CheckpointNativeSnapshot::ReadScope read(&deferredSnapshot);
-			reloaded.m_PathRequest = PathRequest::ReadCheckpoint(const_cast<const PathRequest&>(*frozenActor->m_PathRequest).SaveCheckpoint());
+			const std::string encoded = const_cast<const PathRequest&>(*frozenActor->m_PathRequest).SaveCheckpoint();
+			reloaded.m_PathRequest = PathRequest::ReadCheckpoint(encoded);
+			if (const_cast<const PathRequest&>(*reloaded.m_PathRequest).SaveCheckpoint() != encoded) return false;
+			try { PathRequest::ReadCheckpoint(encoded + "extra"); return false; } catch (const std::exception&) {}
 		}
 		ScenarioRunner::SetLockstepAppliedFrame(1336);
 		g_SettingsMan.SetForceImmediatePathingRequestCompletion(true);
@@ -3306,6 +3314,64 @@ bool Actor::RunCheckpointPathRequestSelfTest() {
 		finder.CommitPathRequestsThrough(1337);
 		if (!reloaded.m_PathRequest->complete || const_cast<const PathRequest&>(*reloaded.m_PathRequest).SaveCheckpoint() != expectedDeferred) {
 			std::cout << "[actor-path-checkpoint-selftest] deferred answer changed after the live grid changed" << std::endl;
+			return false;
+		}
+
+		// Hold the worker before it starts, then retain only the boundary's pages. The
+		// committed view is air even though the live grid is already blocked.
+		finder.TestInstallGrid(8, 4, 20, &air);
+		finder.PinHorizonFromLive(Box(Vector(0, 0), 160, 80));
+		for (int node = 0; node < 32; ++node) finder.TestApplyLiveUpdate(node, blocked);
+		struct WorkerGate {
+			std::atomic<bool> closed{true};
+			std::atomic<unsigned> entered{0};
+			void Release() { closed.store(false, std::memory_order_release); closed.notify_all(); }
+		};
+		auto gate = std::make_shared<WorkerGate>();
+		struct ReleaseWorkers {
+			std::shared_ptr<WorkerGate> gate;
+			~ReleaseWorkers() { gate->Release(); }
+		} releaseWorkers{gate};
+		auto& workers = g_ThreadMan.GetBackgroundThreadPool();
+		const unsigned workerCount = workers.get_thread_count();
+		for (unsigned worker = 0; worker < workerCount; ++worker) workers.push_task([gate] {
+			gate->entered.fetch_add(1, std::memory_order_release);
+			gate->entered.notify_all();
+			while (gate->closed.load(std::memory_order_acquire)) gate->closed.wait(true, std::memory_order_relaxed);
+		});
+		for (unsigned entered = gate->entered.load(std::memory_order_acquire); entered < workerCount; entered = gate->entered.load(std::memory_order_acquire)) gate->entered.wait(entered, std::memory_order_relaxed);
+		auto unsolved = std::make_unique<Actor>();
+		unsolved->m_PathRequest = finder.CalculatePathAsync(Vector(10, 50), Vector(150, 50), std::numeric_limits<float>::max(), 1.0F, nullptr, true, 1444);
+		const Actor* unsolvedAddress = unsolved.get();
+		const auto pages = CheckpointNativeStorage::Prepare();
+		for (const auto& part: pages) part->Arm();
+		gate->Release();
+		finder.WaitForPathingRequests();
+		finder.CommitPathRequestsThrough(1444);
+		const std::string expectedUnsolved = const_cast<const PathRequest&>(*unsolved->m_PathRequest).SaveCheckpoint();
+		unsolved.reset();
+		finder.TestInstallGrid(1, 1, 31, &rock);
+		CheckpointNativeSnapshot unsolvedSnapshot;
+		const Actor* frozenUnsolved;
+		{
+			CheckpointNativeStorage::ReadScope read(pages);
+			frozenUnsolved = unsolvedSnapshot.Object(unsolvedAddress);
+			unsolvedSnapshot.SealBoundary();
+		}
+		Actor restarted;
+		{
+			CheckpointNativeSnapshot::ReadScope read(&unsolvedSnapshot);
+			const std::string encoded = const_cast<const PathRequest&>(*frozenUnsolved->m_PathRequest).SaveCheckpoint();
+			restarted.m_PathRequest = PathRequest::ReadCheckpoint(encoded);
+			if (const_cast<const PathRequest&>(*restarted.m_PathRequest).SaveCheckpoint() != encoded) return false;
+			try { PathRequest::ReadCheckpoint(encoded + "extra"); return false; } catch (const std::exception&) {}
+		}
+		ScenarioRunner::SetLockstepAppliedFrame(1443);
+		restarted.PreControllerUpdate();
+		if (!restarted.m_PathRequest || restarted.m_PathRequest->complete) return false;
+		finder.CommitPathRequestsThrough(1444);
+		if (!restarted.m_PathRequest->complete || const_cast<const PathRequest&>(*restarted.m_PathRequest).SaveCheckpoint() != expectedUnsolved) {
+			std::cout << "[actor-path-checkpoint-selftest] unfinished solve lost its frozen committed grid" << std::endl;
 			return false;
 		}
 		return true;

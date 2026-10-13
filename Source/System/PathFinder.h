@@ -25,6 +25,15 @@ namespace RTE {
 	class Scene;
 	class Material;
 	class CheckpointNativeSnapshot;
+	class PathFinder;
+
+	/// A worker's answer, kept separate from the public request until its delivery tick.
+	struct PathRequestAnswer {
+		std::atomic<bool> solved{false};
+		CheckpointList<Vector> path;
+		float totalCost = 0.0F;
+		int status = MicroPather::NO_SOLUTION;
+	};
 
 	/// Information required to make an async pathing request.
 	struct PathRequest : CheckpointNativeAllocated {
@@ -43,6 +52,10 @@ namespace RTE {
 		bool committedHorizon = false;
 		uint64_t completeTick = 0;
 		bool resumeAfterRestore = false; //!< A restored unfinished solve has no worker until its owner resumes it.
+		std::shared_ptr<PathRequestAnswer> deferredAnswer;
+		const PathFinder* checkpointFinder = nullptr; //!< Borrowed until completion; a frozen request owns its grid instead.
+		CheckpointString checkpointGrid;
+		bool checkpointSelfTestGrid = false;
 		std::string SaveCheckpoint() const;
 		static std::shared_ptr<PathRequest> ReadCheckpoint(std::string_view text);
 	};
@@ -177,6 +190,8 @@ namespace RTE {
 		/// @return A shared pointer to the volatile PathRequest to be used to track whether the asynchronous path calculation has been completed, and check its results.
 		/// @param completeTick The lockstep tick the request is published on; 0 completes as soon as the solve does, as it always has.
 		std::shared_ptr<volatile PathRequest> CalculatePathAsync(Vector start, Vector end, float jumpHeight, float digStrength, PathCompleteCallback callback = nullptr, bool committedHorizon = false, uint64_t completeTick = 0);
+		/// Resumes an archived answer or solve without replacing its original grid or delivery tick.
+		std::shared_ptr<volatile PathRequest> ResumeCheckpointPathRequest(const std::shared_ptr<volatile PathRequest>& request);
 
 		/// Publishes every deferred shared request whose commit tick is due. One not solved yet stalls the tick until it is.
 		void CommitPathRequestsThrough(uint64_t nowTick);
@@ -256,7 +271,8 @@ namespace RTE {
 
 		/// Preserve the partially updated node graph at a completed checkpoint boundary.
 		std::string SaveCheckpoint() const;
-		CheckpointText FreezeCheckpoint() const;
+		CheckpointText FreezeCheckpoint(uint64_t committedGeneration = 0) const;
+		bool CheckpointSelfTestGrid() const { return m_SelfTestGrid; }
 		/// Detects exact committed-grid capture without waiting for a pending solver.
 		static bool RunCheckpointFreezeSelfTest();
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
@@ -349,7 +365,7 @@ namespace RTE {
 			std::atomic<bool> hold{false};
 			std::atomic<bool> ready{false};
 		};
-		mutable std::unordered_map<int, HorizonNode> m_HorizonNodes;
+		mutable CheckpointUnorderedMap<int, HorizonNode> m_HorizonNodes;
 		std::deque<std::shared_ptr<HorizonJob>> m_HorizonJobs;
 		mutable std::mutex m_HorizonMutex;
 		std::condition_variable m_HorizonApplyCv;
@@ -367,10 +383,8 @@ namespace RTE {
 			PathCompleteCallback callback;
 			uint64_t completeTick = 0;
 			uint64_t sequence = 0;
-			std::atomic<bool> solved{false};
-			CheckpointList<Vector> path;
-			float totalCost = 0.0F;
-			int status = MicroPather::NO_SOLUTION;
+			std::shared_ptr<PathRequestAnswer> answer;
+			std::shared_ptr<PathFinder> restoredGrid;
 			// The query, so a commit whose solver never answers can solve it here instead of parking the tick.
 			Vector start;
 			Vector end;

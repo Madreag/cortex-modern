@@ -39,6 +39,7 @@
 #include <sstream>
 #include <memory>
 #include <string>
+#include <stdexcept>
 #include <thread>
 #include <unordered_set>
 #include <cstring>
@@ -49,25 +50,79 @@
 using namespace RTE;
 
 PathRequest::PathRequest(const PathRequest& source, CheckpointNativeSnapshot& snapshot) :
-	complete(source.complete), status(source.status), path(snapshot.Freeze(source.path)),
-	pathLength(source.pathLength), totalCost(source.totalCost), startPos(source.startPos), targetPos(source.targetPos),
+	complete(source.complete), startPos(source.startPos), targetPos(source.targetPos),
 	horizonGeneration(source.horizonGeneration), jumpHeight(source.jumpHeight), digStrength(source.digStrength),
-	committedHorizon(source.committedHorizon), completeTick(source.completeTick), resumeAfterRestore(source.resumeAfterRestore) {}
+	committedHorizon(source.committedHorizon), completeTick(source.completeTick), resumeAfterRestore(source.resumeAfterRestore) {
+	if (complete || !source.checkpointFinder) {
+		status = source.status; path = snapshot.Freeze(source.path);
+		pathLength = source.pathLength; totalCost = source.totalCost;
+	}
+	if (!complete) {
+		// Never inspect a worker's partial output. A pending solve owns the boundary's
+		// node view, including the committed overlay, so restoration can restart it exactly.
+		const auto* answer = CheckpointNativeStorage::Source(source.deferredAnswer.get());
+		if (answer && answer->solved.load(std::memory_order_acquire)) {
+			deferredAnswer = MakeCheckpointNativeShared<PathRequestAnswer>();
+			deferredAnswer->path = snapshot.Freeze(answer->path);
+			deferredAnswer->status = answer->status; deferredAnswer->totalCost = answer->totalCost;
+			deferredAnswer->solved.store(true, std::memory_order_release);
+		} else if (const auto* finder = CheckpointNativeStorage::Source(source.checkpointFinder)) {
+			checkpointGrid = finder->FreezeCheckpoint(committedHorizon ? horizonGeneration : 0).Text();
+			checkpointSelfTestGrid = finder->CheckpointSelfTestGrid();
+		} else {
+			checkpointGrid = snapshot.Freeze(source.checkpointGrid);
+			checkpointSelfTestGrid = source.checkpointSelfTestGrid;
+		}
+	}
+}
 
 std::string PathRequest::SaveCheckpoint() const {
-	CheckpointWriter writer("PathRequest1");
+	const auto* answer = complete ? nullptr : CheckpointNativeStorage::Source(deferredAnswer.get());
+	const bool ready = answer && answer->solved.load(std::memory_order_acquire);
+	CheckpointString grid;
+	bool selfTestGrid = checkpointSelfTestGrid;
+	if (!complete && !ready) {
+		if (const auto* finder = CheckpointNativeStorage::Source(checkpointFinder)) {
+			grid = finder->FreezeCheckpoint(committedHorizon ? horizonGeneration : 0).Text();
+			selfTestGrid = finder->CheckpointSelfTestGrid();
+		} else grid = checkpointGrid;
+	}
+	// Keep the existing completed-request representation and accept older pending archives.
+	const bool pendingState = !complete && (ready || !grid.empty());
+	CheckpointWriter writer(pendingState ? "PathRequest2" : "PathRequest1");
 	writer(complete, startPos, targetPos, jumpHeight, digStrength, committedHorizon, completeTick);
-	// A worker may be constructing an unfinished answer. Its immutable inputs are sufficient to restart it.
 	if (complete) writer(status, path, pathLength, totalCost, horizonGeneration);
+	else if (pendingState) {
+		writer(horizonGeneration, ready);
+		if (ready) writer(answer->status, answer->path, answer->totalCost);
+		else writer(grid, selfTestGrid);
+	}
 	return writer.Text();
 }
 
 std::shared_ptr<PathRequest> PathRequest::ReadCheckpoint(std::string_view text) {
 	auto request = MakeCheckpointNativeShared<PathRequest>();
-	CheckpointReader reader(text, "PathRequest1");
+	const bool version2 = CheckpointTypeName(text) == "PathRequest2";
+	CheckpointReader reader(text, version2 ? "PathRequest2" : "PathRequest1");
 	reader.Value(request->complete);
 	reader(request->startPos, request->targetPos, request->jumpHeight, request->digStrength, request->committedHorizon, request->completeTick);
+	if (version2 && request->complete) throw std::runtime_error("invalid completed PathRequest2 checkpoint");
 	if (request->complete) reader(request->status, request->path, request->pathLength, request->totalCost, request->horizonGeneration);
+	else if (version2) {
+		reader(request->horizonGeneration);
+		bool ready;
+		reader.Value(ready);
+		if (ready) {
+			request->deferredAnswer = MakeCheckpointNativeShared<PathRequestAnswer>();
+			reader(request->deferredAnswer->status, request->deferredAnswer->path, request->deferredAnswer->totalCost);
+			request->deferredAnswer->solved.store(true, std::memory_order_release);
+		} else {
+			reader.Value(request->checkpointGrid);
+			reader(request->checkpointSelfTestGrid);
+			PathFinder validation;
+			if (!validation.LoadCheckpoint(request->checkpointGrid, true)) throw std::runtime_error("invalid pending path grid checkpoint");
+		}
+	}
 	reader.Finish();
 	request->resumeAfterRestore = !request->complete;
 	return request;
@@ -352,8 +407,8 @@ std::string PathFinder::SaveCheckpoint() const {
 	return writer.Text();
 }
 
-CheckpointText PathFinder::FreezeCheckpoint() const {
-	if (CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::IsView(this)) return CheckpointNativeStorage::Source(this)->FreezeCheckpoint();
+CheckpointText PathFinder::FreezeCheckpoint(uint64_t committedGeneration) const {
+	if (CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::IsView(this)) return CheckpointNativeStorage::Source(this)->FreezeCheckpoint(committedGeneration);
 	struct Node {
 		float x, y;
 		unsigned char navigable;
@@ -362,14 +417,20 @@ CheckpointText PathFinder::FreezeCheckpoint() const {
 	};
 	std::vector<Node> nodes;
 	nodes.reserve(m_NodeGrid.size());
+	std::unordered_map<int, std::array<const Material*, 8>> committed;
+	if (committedGeneration) {
+		for (const auto& [nodeId, node]: CheckpointValues(m_HorizonNodes))
+			if (node.generation <= committedGeneration) committed.emplace(nodeId, node.committedMaterials);
+	}
 	for (const PathNode& source: CheckpointValues(m_NodeGrid)) {
 		Node node;
+		const auto overlay = committed.find(static_cast<int>(nodes.size()));
 		node.x = source.Pos.m_X; node.y = source.Pos.m_Y;
 		std::memcpy(&node.navigable, &source.m_Navigable, sizeof(node.navigable));
 		for (size_t direction = 0; direction < node.adjacent.size(); ++direction) {
 			const PathNode* adjacent = source.AdjacentNodes[direction];
 			node.adjacent[direction] = adjacent ? static_cast<int64_t>(adjacent - m_NodeGrid.data()) : int64_t{-1};
-			const Material* material = source.AdjacentNodeBlockingMaterials[direction];
+			const Material* material = overlay == committed.end() ? source.AdjacentNodeBlockingMaterials[direction] : overlay->second[direction];
 			node.material[direction] = material ? static_cast<int>(CheckpointNativeStorage::Source(material)->GetIndex()) : -1;
 		}
 		nodes.push_back(node);
@@ -735,6 +796,7 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 	pathRequest->digStrength = digStrength;
 	pathRequest->committedHorizon = committedHorizon;
 	pathRequest->completeTick = completeTick;
+	pathRequest->checkpointFinder = this;
 
 	uint64_t pinned = 0;
 	bool held = false;
@@ -749,6 +811,8 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 		// A shared request is published on its commit tick, so every peer sees it complete on the same applied frame.
 		deferred = std::make_shared<DeferredPathRequest>();
 		deferred->request = pathRequest;
+		deferred->answer = MakeCheckpointNativeShared<PathRequestAnswer>();
+		const_cast<PathRequest&>(*pathRequest).deferredAnswer = deferred->answer;
 		deferred->callback = callback;
 		deferred->completeTick = completeTick;
 		deferred->start = start;
@@ -776,11 +840,11 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 					    // Armed fault: the solver returns without answering, as a dying thread would.
 					    return;
 				    }
-				    deferred->status = CalculatePathImpl(start, end, deferred->path, deferred->totalCost, jumpHeight, digStrength);
+				    deferred->answer->status = CalculatePathImpl(start, end, deferred->answer->path, deferred->answer->totalCost, jumpHeight, digStrength);
 				    if (delayMs > 0) {
 					    std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
 				    }
-				    deferred->solved.store(true, std::memory_order_release);
+				    deferred->answer->solved.store(true, std::memory_order_release);
 				    return;
 			    }
 
@@ -800,6 +864,7 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 			    // Have to set to complete after the callback, so anything that blocks on it knows that the callback will have been called by now
 			    // This has the awkward side-effect that the complete flag is actually false during the callback - but that's fine, if it's called we know it's complete anyways
 			    request.complete = true;
+			    request.checkpointFinder = nullptr;
 			    // A script holding this request has its fields in a cached graph chunk; nothing else reports this write.
 			    CheckpointValueWritten(&request);
 		    },
@@ -819,13 +884,67 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 	return pathRequest;
 }
 
+std::shared_ptr<volatile PathRequest> PathFinder::ResumeCheckpointPathRequest(const std::shared_ptr<volatile PathRequest>& saved) {
+	PathRequest& request = const_cast<PathRequest&>(*saved);
+	if (!request.resumeAfterRestore || request.complete) return saved;
+	if (!request.deferredAnswer && request.checkpointGrid.empty()) {
+		// Older archives retained only the query inputs.
+		return CalculatePathAsync(request.startPos, request.targetPos, request.jumpHeight, request.digStrength, nullptr, request.committedHorizon, request.completeTick);
+	}
+	auto deferred = std::make_shared<DeferredPathRequest>();
+	deferred->request = saved;
+	deferred->completeTick = request.completeTick;
+	deferred->start = request.startPos; deferred->end = request.targetPos;
+	deferred->jumpHeight = request.jumpHeight; deferred->digStrength = request.digStrength;
+	deferred->committedHorizon = request.committedHorizon;
+	deferred->pinnedGeneration = request.horizonGeneration;
+	deferred->answer = request.deferredAnswer;
+	if (!deferred->answer) {
+		deferred->restoredGrid = MakeCheckpointNativeShared<PathFinder>();
+		if (!deferred->restoredGrid->LoadCheckpoint(request.checkpointGrid)) throw std::runtime_error("could not restore pending path grid");
+		deferred->restoredGrid->m_SelfTestGrid = request.checkpointSelfTestGrid;
+		deferred->answer = MakeCheckpointNativeShared<PathRequestAnswer>();
+		request.deferredAnswer = deferred->answer;
+	}
+	if (request.completeTick) {
+		std::lock_guard lock(m_DeferredPathMutex);
+		deferred->sequence = ++m_DeferredPathSequence;
+		m_DeferredPathRequests.push_back(deferred);
+	}
+	request.resumeAfterRestore = false;
+	if (deferred->answer->solved.load(std::memory_order_acquire)) {
+		if (!request.completeTick) PublishDeferredPathRequest(*deferred);
+		return saved;
+	}
+	++m_CurrentPathingRequests;
+	try {
+		g_ThreadMan.GetBackgroundThreadPool().push_task([this, deferred] {
+			PathingRequestScope scope{m_CurrentPathingRequests};
+			// Its saved grid already contains the original committed view; it needs no live horizon pin.
+			HorizonReadScope horizon(this, false);
+			auto& answer = *deferred->answer;
+			answer.status = deferred->restoredGrid->CalculatePathImpl(deferred->start, deferred->end, answer.path, answer.totalCost, deferred->jumpHeight, deferred->digStrength);
+			answer.solved.store(true, std::memory_order_release);
+			if (!deferred->completeTick) PublishDeferredPathRequest(*deferred);
+		});
+	} catch (...) {
+		--m_CurrentPathingRequests;
+		std::lock_guard lock(m_DeferredPathMutex);
+		m_DeferredPathRequests.erase(std::remove(m_DeferredPathRequests.begin(), m_DeferredPathRequests.end(), deferred), m_DeferredPathRequests.end());
+		request.resumeAfterRestore = true;
+		request.deferredAnswer.reset();
+		throw;
+	}
+	return saved;
+}
+
 void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
 	int64_t waitUs = 0;
 	bool expired = false;
-	if (!deferred.solved.load(std::memory_order_acquire)) {
+	if (!deferred.answer->solved.load(std::memory_order_acquire)) {
 		// A solve that is not finished at its commit tick stalls this tick, the same as a horizon job that is not ready.
 		const auto started = std::chrono::steady_clock::now();
-		while (!deferred.solved.load(std::memory_order_acquire)) {
+		while (!deferred.answer->solved.load(std::memory_order_acquire)) {
 			waitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 			if (waitUs >= c_HorizonWaitCapUs) {
 				expired = true;
@@ -858,17 +977,18 @@ void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
 		// This thread is the one that applies overlays, so it reads the request's pin without registering as a reader.
 		const bool previousRead = s_ReadCommittedHorizon;
 		const uint64_t previousGeneration = s_PinnedHorizonGeneration;
-		s_ReadCommittedHorizon = deferred.committedHorizon;
+		s_ReadCommittedHorizon = deferred.committedHorizon && !deferred.restoredGrid;
 		s_PinnedHorizonGeneration = deferred.pinnedGeneration;
-		request.status = CalculatePathImpl(deferred.start, deferred.end, path, totalCost, deferred.jumpHeight, deferred.digStrength);
+		PathFinder* finder = deferred.restoredGrid ? deferred.restoredGrid.get() : this;
+		request.status = finder->CalculatePathImpl(deferred.start, deferred.end, path, totalCost, deferred.jumpHeight, deferred.digStrength);
 		s_ReadCommittedHorizon = previousRead;
 		s_PinnedHorizonGeneration = previousGeneration;
 		request.path = std::move(path);
 		request.totalCost = totalCost;
 	} else {
-		request.path = std::move(deferred.path);
-		request.totalCost = deferred.totalCost;
-		request.status = deferred.status;
+		request.path = std::move(deferred.answer->path);
+		request.totalCost = deferred.answer->totalCost;
+		request.status = deferred.answer->status;
 	}
 	request.pathLength = request.path.size();
 	if (deferred.callback) {
@@ -877,6 +997,9 @@ void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
 	}
 	// Same order as the immediate path: the callback runs first, so anything blocking on complete knows it has run.
 	request.complete = true;
+	request.checkpointFinder = nullptr;
+	request.checkpointGrid.clear();
+	request.deferredAnswer.reset();
 	CheckpointValueWritten(&request);
 }
 
