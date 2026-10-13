@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 
 namespace RTE {
@@ -555,6 +556,16 @@ namespace RTE {
 		if (m_FrameTie) {
 			if (m_FrameTie->Poll() == NetHttpClient::PollResult::Pending) return;
 			const auto response = m_FrameTie->GetResponse(); m_FrameTie.reset(); m_NextFrameTie = steadyMs + 50;
+			if (std::getenv("CC_TEST_CONNECTION_TRACE")) {
+				const auto body = json::parse(response.body, nullptr, false);
+				std::string code;
+				if (body.is_object() && body.contains("error") && body["error"].is_string()) {
+					code = body["error"].get<std::string>();
+					if (code.size() > 64 || code.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos) code.clear();
+				}
+				System::PrintDiagnosticLine("[net-frame-referee] reply frame=" + std::to_string(m_FrameTieRequest->frame) +
+				    " status=" + std::to_string(response.statusCode) + " code=" + code + " now_ms=" + std::to_string(steadyMs));
+			}
 			m_FrameTieReply = {};
 			if (response.statusCode == 200 && response.error.empty()) try {
 				const auto body = json::parse(response.body);
@@ -585,7 +596,12 @@ namespace RTE {
 		if (m_FrameTie || m_FrameTieFinalQuerySent || m_FrameTieReply.state == NetFrameTieReply::State::Decided) return;
 		const bool finalQuery = m_FrameTieBoundStartMs && steadyMs >= *m_FrameTieBoundStartMs + c_NetFrameTieDeadlineMs;
 		if (m_FrameTieCheckedIn && !finalQuery && m_SeatRequests.size() >= 11) return;
-		if (steadyMs < m_NextFrameTie || steadyMs < m_FrameTieRetry.nextMs || !CanSeatRequest(steadyMs, true)) return;
+		if (steadyMs < m_NextFrameTie || steadyMs < m_FrameTieRetry.nextMs) return;
+		if (!CanSeatRequest(steadyMs, true)) {
+			if (std::getenv("CC_TEST_CONNECTION_TRACE") && m_SeatRequests.size() >= 12)
+				NetDirectoryRetry::Note(steadyMs, "frame-tie", "seat_allowance", m_SeatRequests.front() + 60100 - steadyMs);
+			return;
+		}
 		auto request = *m_FrameTieRequest;
 		// Retry an unacknowledged check-in, then only query the frozen tie.
 		// Keep the original request as the identity of this asynchronous operation.
@@ -596,7 +612,11 @@ namespace RTE {
 			// At the full bound send one last status query and drain its bounded
 			// exchange. A missing answer never supplies frame authority.
 			m_FrameTieFinalQuerySent = finalQuery;
-			if (m_FrameTie) { m_SeatRequests.push_back(steadyMs); if (!request.queryOnly) m_NextSeatRequestMs = steadyMs + c_SeatRequestIntervalMs; }
+			if (m_FrameTie) {
+				m_SeatRequests.push_back(steadyMs); if (!request.queryOnly) m_NextSeatRequestMs = steadyMs + c_SeatRequestIntervalMs;
+				if (std::getenv("CC_TEST_CONNECTION_TRACE")) System::PrintDiagnosticLine("[net-frame-referee] sent frame=" + std::to_string(request.frame) +
+				    " query_only=" + std::to_string(request.queryOnly) + " requests=" + std::to_string(m_SeatRequests.size()) + " now_ms=" + std::to_string(steadyMs));
+			}
 		}
 	}
 
