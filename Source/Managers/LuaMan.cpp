@@ -18,6 +18,7 @@
 #include "CheckpointImage.h"
 #include "ScenarioRunner.h"
 #include "SoundSimulation.h"
+#include "HDFirearm.h"
 #include "AtomGroup.h"
 #include "PieMenu.h"
 #include "PieSlice.h"
@@ -523,6 +524,55 @@ namespace {
 		} else {
 			lua_pushnil(L);
 		}
+	}
+
+	nlohmann::json TraceScriptFields(lua_State* L, long uniqueID) {
+		static const std::vector<std::string> fields = [] {
+			const char* names = std::getenv("CC_TEST_LUA_FIELDS");
+			std::istringstream input(names ? names : "");
+			std::vector<std::string> result;
+			for (std::string name; std::getline(input, name, ',');) if (!name.empty()) result.push_back(name);
+			return result;
+		}();
+		nlohmann::json result = nlohmann::json::object();
+		if (fields.empty()) return result;
+		const int top = lua_gettop(L);
+		PushScriptObjectInstanceTable(L, uniqueID);
+		if (lua_istable(L, -1)) {
+			for (const std::string& name: fields) {
+				lua_pushlstring(L, name.data(), name.size());
+				lua_rawget(L, -2);
+				if (lua_type(L, -1) == LUA_TNUMBER) {
+					const double value = lua_tonumber(L, -1);
+					result[name] = {{"bits", std::bit_cast<uint64_t>(value)}, {"number", value}};
+				} else if (lua_isboolean(L, -1)) {
+					result[name] = lua_toboolean(L, -1) != 0;
+				} else if (lua_isuserdata(L, -1)) {
+					try {
+						if (const auto* timer = luabind::object_cast<Timer*>(luabind::object(luabind::from_stack(L, -1)))) {
+							result[name] = {{"elapsed_bits", std::bit_cast<uint64_t>(timer->GetElapsedSimTimeMS())},
+							    {"start_ticks", timer->GetStartSimTimeMS()}};
+						}
+					} catch (const luabind::cast_failed&) {
+						result[name] = "userdata";
+					}
+				} else {
+					result[name] = nullptr;
+				}
+				lua_pop(L, 1);
+			}
+		}
+		lua_settop(L, top);
+		return result;
+	}
+
+	nlohmann::json TraceWeaponState(const MovableObject* object) {
+		if (const auto* gun = dynamic_cast<const HDFirearm*>(object)) {
+			return {{"activated", gun->IsActivated()}, {"reloading", gun->IsReloading()}, {"done_reloading", gun->DoneReloading()},
+			    {"rounds", gun->GetRoundInMagCount()}, {"rate_of_fire", gun->GetRateOfFire()},
+			    {"fired_frame", gun->FiredFrame()}, {"fired_once", gun->FiredOnce()}};
+		}
+		return nullptr;
 	}
 
 	struct ScriptGraphPrototypeValue {
@@ -12904,6 +12954,9 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 			lua_getinfo(m_State, ">S", &info);
 			targetTrace = {{"tick", g_TimerMan.GetSimUpdateCount()}, {"uid", uid}, {"preset", self->GetPresetName()},
 			    {"script", path}, {"line", info.linedefined},
+			    {"domain", static_cast<int>(SoundSimulationScope::Domain())}, {"preview", LuaMan::IsRunningPreviewHook()},
+			    {"before_fields", TraceScriptFields(m_State, uid)},
+			    {"before_weapon", TraceWeaponState(self)},
 			    {"before_vel", {std::bit_cast<uint32_t>(self->GetVel().m_X), std::bit_cast<uint32_t>(self->GetVel().m_Y)}}};
 		}
 	}
@@ -12945,9 +12998,11 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	lua_settop(m_State, stackStart);
 	if (!targetTrace.is_null()) {
 		const long uid = targetTrace["uid"].get<long>();
+		targetTrace["after_fields"] = TraceScriptFields(m_State, uid);
 		if (const MovableObject* self = g_MovableMan.FindObjectByUniqueID(uid)) {
 			targetTrace["pos"] = {std::bit_cast<uint32_t>(self->GetPos().m_X), std::bit_cast<uint32_t>(self->GetPos().m_Y)};
 			targetTrace["after_vel"] = {std::bit_cast<uint32_t>(self->GetVel().m_X), std::bit_cast<uint32_t>(self->GetVel().m_Y)};
+			targetTrace["after_weapon"] = TraceWeaponState(self);
 		}
 		PushScriptObjectInstanceTable(m_State, uid);
 		if (lua_istable(m_State, -1)) {

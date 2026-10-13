@@ -4895,6 +4895,21 @@ void MovableMan::AddParticle(MovableObject* particleToAdd) {
 			m_AddedParticles.push_back(particleToAdd);
 			m_ValidParticles.insert(particleToAdd);
 		}
+		static const std::string traceFilter = [] { const char* value = std::getenv("CC_TEST_TARGET_TRACE"); return value ? value : ""; }();
+		if (!traceFilter.empty()) {
+			LuaStateWrapper* state = g_LuaMan.GetThreadCurrentLuaState();
+			if (state && state->GetCurrentlyRunningScriptFilePath().find(traceFilter) != std::string_view::npos) {
+				lua_Debug caller{};
+				if (lua_getstack(state->GetLuaState(), 1, &caller)) lua_getinfo(state->GetLuaState(), "Sl", &caller);
+				System::PrintDiagnosticLine("[particle-add] " + nlohmann::json({{"tick", g_TimerMan.GetSimUpdateCount()},
+				    {"owner", SoundSimulationScope::CurrentKey().objectUID}, {"uid", particleToAdd->GetUniqueID()},
+				    {"script", state->GetCurrentlyRunningScriptFilePath()}, {"line", caller.currentline},
+				    {"preview", LuaMan::IsRunningPreviewHook()}, {"speculation", m_Speculation.active},
+				    {"preset", particleToAdd->GetPresetName()}, {"lifetime", particleToAdd->GetLifetime()},
+				    {"pos", {std::bit_cast<uint32_t>(particleToAdd->GetPos().m_X), std::bit_cast<uint32_t>(particleToAdd->GetPos().m_Y)}},
+				    {"vel", {std::bit_cast<uint32_t>(particleToAdd->GetVel().m_X), std::bit_cast<uint32_t>(particleToAdd->GetVel().m_Y)}}}).dump());
+			}
+		}
 	}
 }
 
