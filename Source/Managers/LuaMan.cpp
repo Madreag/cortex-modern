@@ -13063,9 +13063,15 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 			if (lua_isuserdata(m_State, -1)) {
 				try {
 					if (const auto* target = luabind::object_cast<MovableObject*>(luabind::object(luabind::from_stack(m_State, -1)))) {
-						targetTrace["target"] = {{"uid", target->GetUniqueID()}, {"moid", target->GetID()}, {"preset", target->GetPresetName()},
-						    {"pos", {std::bit_cast<uint32_t>(target->GetPos().m_X), std::bit_cast<uint32_t>(target->GetPos().m_Y)}},
-						    {"radius", std::bit_cast<uint32_t>(target->GetRadius())}};
+						// Lua may retain a target after its native object is removed. A
+						// diagnostic must check membership before calling its getters.
+						if (g_MovableMan.ValidMO(target)) {
+							targetTrace["target"] = {{"uid", target->GetUniqueID()}, {"moid", target->GetID()}, {"preset", target->GetPresetName()},
+							    {"pos", {std::bit_cast<uint32_t>(target->GetPos().m_X), std::bit_cast<uint32_t>(target->GetPos().m_Y)}},
+							    {"radius", std::bit_cast<uint32_t>(target->GetRadius())}};
+						} else {
+							targetTrace["target_not_resident"] = true;
+						}
 					}
 				} catch (const luabind::cast_failed&) {
 					targetTrace["target_not_movable"] = true;
