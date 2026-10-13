@@ -1260,27 +1260,38 @@ namespace RTE::CheckpointLua {
 		}
 		Snapshot Image() const { return Snapshot(m_Data); }
 		void Drain() {
-			std::lock_guard lock(m_Mutex);
+			std::unique_lock lock(m_Mutex);
 			if (m_Finished) { m_Data->WaitCopied(); return; }
 			if (m_Copy->armed.load(std::memory_order_acquire) != 1) throw std::logic_error("Lua heap copy requested before its prepared boundary");
+			bool cancelled = false;
 			try {
 				const auto started = std::chrono::steady_clock::now();
 				constexpr size_t batchPages = 64;
 				for (size_t page = 0; page < m_Copy->saved.size(); page += batchPages) {
 					if (!m_Coordinator->CopyPages(page, std::min(batchPages, m_Copy->saved.size() - page)))
 						throw std::runtime_error("could not open prepared Lua heap pages");
+					// The copy stops for the game's ticks between batches; a cancel meanwhile ends it as a cancel before it would.
+					{
+						lock.unlock();
+						struct Relock { std::unique_lock<std::mutex>& lock; ~Relock() { lock.lock(); } } relock{lock};
+						SaverThreads::YieldToGame();
+					}
+					if (m_Finished) { cancelled = true; break; }
 				}
-				if (!m_Coordinator->Complete(m_Copy, true)) throw std::runtime_error("could not open a prepared Lua heap");
-				m_Data->copied.store(m_Data->committed / Snapshot::c_PageBytes, std::memory_order_relaxed);
-				m_Data->copyUs.store(MicrosecondsSince(started), std::memory_order_relaxed);
-				m_Ready.set_value();
-				m_Finished = true;
+				if (!cancelled) {
+					if (!m_Coordinator->Complete(m_Copy, true)) throw std::runtime_error("could not open a prepared Lua heap");
+					m_Data->copied.store(m_Data->committed / Snapshot::c_PageBytes, std::memory_order_relaxed);
+					m_Data->copyUs.store(MicrosecondsSince(started), std::memory_order_relaxed);
+					m_Ready.set_value();
+					m_Finished = true;
+				}
 			} catch (...) {
 				m_Coordinator->Cancel(m_Copy);
 				m_Ready.set_exception(std::current_exception());
 				m_Finished = true;
 				throw;
 			}
+			if (cancelled) m_Data->WaitCopied();
 		}
 		void Cancel() noexcept {
 			std::lock_guard lock(m_Mutex);

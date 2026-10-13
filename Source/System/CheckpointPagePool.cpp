@@ -644,8 +644,10 @@ void CheckpointPagePool::Snapshot::Drain() const {
 		if (m_ArmGate) continue;
 		const auto start = std::chrono::steady_clock::now();
 		const size_t batch = std::max<size_t>(1, (size_t{64} << 10) / part.block->pageBytes);
-		for (size_t page = 0; page < part.copy->saved.size(); page += batch)
+		for (size_t page = 0; page < part.copy->saved.size(); page += batch) {
 			if (!part.block->SavePages(page, std::min(batch, part.copy->saved.size() - page), false)) throw std::runtime_error("could not drain native checkpoint pages");
+			SaverThreads::YieldToGame();
+		}
 		part.block->Complete(part.copy);
 		part.copy->workerUs.fetch_add(Since(start), std::memory_order_relaxed);
 	}
