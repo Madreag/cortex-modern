@@ -199,6 +199,8 @@ namespace RTE {
 			}
 			// Spend the voters' scheduling reserve inside the consumer's three-tick bound.
 			if (anotherVoter) agreementMs = std::max<uint64_t>(1, agreementMs) + boundMs;
+			// A lone voter commits at once; half a tick covers the commit and the consumer's next poll, so its wait ends inside the bound.
+			else agreementMs = static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2));
 			// Votes spend the buffered runway, so a healthy relay round trip fits inside the consumer's bound.
 			if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame) {
 				double dueMs = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
