@@ -8442,7 +8442,7 @@ void LuaStateWrapper::TraceCheckpointAI(long uniqueID, std::string_view hook, st
 	std::function<void(lua_State*, int, const std::string&, unsigned)> visit;
 	visit = [&](lua_State* state, int value, const std::string& path, unsigned depth) {
 		if (++count > 512 || depth > 4) return;
-		value = AbsoluteLuaIndex(state, value);
+		if (value < 0 && value > LUA_REGISTRYINDEX) value += lua_gettop(state) + 1;
 		const int type = lua_type(state, value);
 		std::string detail = lua_typename(state, type);
 		if (type == LUA_TBOOLEAN) detail = lua_toboolean(state, value) ? "true" : "false";
