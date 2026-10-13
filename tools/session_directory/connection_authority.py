@@ -28,14 +28,13 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
-CONNECTION_PROTOCOL = 1
+CONNECTION_PROTOCOL = 2
 SEAT_TOKEN_SECONDS = 300
 MATCH_RETENTION_SECONDS = 24 * 60 * 60
 CHECK_IN_SECONDS = 5
 INSTANCE_GRACE_SECONDS = 20
 REQUEST_WINDOW_SECONDS = 60
 HOST_DISCONNECT_SECONDS = 15  # Keep aligned with the engine host-silence policy.
-FRAME_TIE_COLLECT_SECONDS = 1.0
 MAX_FRAME_TIES = 64
 MAX_SEATS = 7 + 16 + 1  # Match slots, world watchers, and the world's unused seat zero.
 MAX_MATCHES = 4096
@@ -119,8 +118,11 @@ class ConnectionAuthority:
                             raise ValueError()
                         raw = self._seal.decrypt(sealed[:12], sealed[12:], sid.encode("ascii"))
                         record = json.loads(raw)
-                        if not isinstance(record, dict) or record.get("version") != CONNECTION_PROTOCOL:
+                        if not isinstance(record, dict) or type(record.get("version")) is not int or record["version"] > CONNECTION_PROTOCOL:
                             raise ValueError()
+                        # No current game presents an older protocol's tokens: its matches are dropped, never served.
+                        if record["version"] < CONNECTION_PROTOCOL:
+                            continue
                         if record.get("retain_until", 0) > now:
                             self._records[sid] = record
                     except (ValueError, InvalidTag, TypeError):
@@ -397,20 +399,18 @@ class ConnectionAuthority:
                 return dict(connection_protocol=CONNECTION_PROTOCOL, generation=generation, round_id=round_id,
                             frame=frame, config_hash=config_hash, status="waiting")
             if key not in ties:
-                ties[key] = {"owners": owners, "host": host, "until": now + FRAME_TIE_COLLECT_SECONDS, "groups": []}
+                ties[key] = {"owners": owners, "host": host, "until": now, "groups": []}
             tie = ties[key]
             if tie["owners"] != owners or tie["host"] != host:
                 raise ConnectionErrorReply(409, "frame_tie_mismatch", "The groups disagree about the retained seats. Reconnecting will retry.")
-            # Finalize an expired window before accepting another check-in: a
-            # host arriving after the full second cannot replace its winner.
+            # A record kept from the collecting rule ends its window as that rule did.
             if "winner" not in tie and now >= tie["until"] and tie["groups"]:
                 tie["winner"] = tie["groups"][0]
+            # Both halves name a split by the last frame the whole group played, so the first half to check in keeps it
+            # at once: a half that still reaches the referee plays on inside the slow-player bound and the other returns.
             if "winner" not in tie and not query_only:
-                groups = tie["groups"]
-                if members not in groups and (not groups or set(members).isdisjoint(groups[0])):
-                    groups.append(members)
-                if members in groups and host in members:
-                    tie["winner"] = members
+                tie["groups"].append(members)
+                tie["winner"] = members
             # Return waiting immediately; no HTTP worker sleeps on a tie.
             # Keep every decision for the match's lifetime, including after
             # later ties, so an old observer can never reopen a decided tie.

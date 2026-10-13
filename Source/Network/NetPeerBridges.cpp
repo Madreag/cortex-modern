@@ -130,6 +130,24 @@ namespace RTE {
 			if (m_ConsumerWaitingFrame == frame || (dueMs && nowMs + leadMs >= *dueMs))
 				CheckPeerFrameTie(frame, proposal.connectedMask, nowMs);
 		}
+		if (proposal.members.empty() && !returningOnly && !PeerInputAccepted(frame)) {
+			// A seat whose own input the other half stopped confirming is in the same split as the half missing input:
+			// once the confirmation is overdue and that half has been silent past the bound, it checks in too.
+			const uint32_t confirming = PeerInputVoters(frame, m_Config.localPeerId);
+			const auto sent = m_PeerInputSentAtMs.find(frame);
+			const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
+			bool overdue = sent != m_PeerInputSentAtMs.end() && PeerGroupIsRefereedHalf(confirming);
+			for (uint8_t peer = 1; overdue && peer <= m_Config.peerCount; ++peer) {
+				if ((confirming & SeatBit(peer)) != 0 || m_RemovedPeers.contains(peer) || IsSeatReleased(peer)) continue;
+				const auto stats = m_Stats.peers.find(peer);
+				uint64_t transitMs = stats != m_Stats.peers.end() ? stats->second.pingMs : 0;
+				const auto [wire, route] = PeerFrameRoute(peer);
+				if (wire && wire->IsPeerPingMeasured(route)) transitMs = std::max<uint64_t>(transitMs, wire->GetPeerPingMs(route));
+				const uint64_t heard = LastAuthenticatedTraffic(peer);
+				overdue = nowMs >= sent->second + transitMs + boundMs && nowMs >= heard && nowMs - heard >= boundMs;
+			}
+			if (overdue) CheckPeerFrameTie(frame, confirming, nowMs);
+		}
 		if (proposal.members.empty()) {
 			if (m_FrameGroupMembers == 0 || std::countr_zero(m_FrameGroupMembers) + 1 != m_Config.localPeerId) return false;
 			for (const auto& [peer, bridge]: m_PeerBridges) {
@@ -199,6 +217,8 @@ namespace RTE {
 			}
 			// Spend the voters' scheduling reserve inside the consumer's three-tick bound.
 			if (anotherVoter) agreementMs = std::max<uint64_t>(1, agreementMs) + boundMs;
+			// A lone voter commits at once; half a tick covers the commit and the consumer's next poll, so its wait ends inside the bound.
+			else agreementMs = static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2));
 			// Votes spend the buffered runway, so a healthy relay round trip fits inside the consumer's bound.
 			if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame) {
 				double dueMs = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;

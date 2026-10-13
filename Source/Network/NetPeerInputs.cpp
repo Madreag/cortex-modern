@@ -326,6 +326,9 @@ namespace RTE {
 		}
 		if (message.type == NetHostMigrationMessageType::PeerTailMissing) {
 			const bool longHitch = m_ConsumerWaitingFrame && nowMs >= m_ConsumerWaitStartMs && nowMs - m_ConsumerWaitStartMs >= c_NetSeatDisconnectSilenceMs;
+			// History older than the donor keeps cannot carry the split's certificate, so the split's name asks the referee instead.
+			if (message.frame == m_Stats.nextFrame && (message.connectedMask & SeatBit(m_Config.localPeerId)) == 0 && PeerGroupIsRefereedHalf(message.connectedMask) &&
+			    !PeerGroupHasAuthority(message.connectedMask)) CheckPeerFrameTie(message.frame, message.connectedMask, nowMs);
 			if (message.frame == m_Stats.nextFrame && PeerGroupHasAuthority(message.connectedMask) && longHitch) {
 				m_LocalSeatHeld = true; m_LocalHoldFrame = m_Stats.nextFrame;
 				m_State = NetLockstepState::Stopped; m_Stats.timeoutReason = "PeerHeld:the committed tail is unavailable; returning through a private image";
@@ -345,8 +348,9 @@ namespace RTE {
 			if (message.preparedFrame != UINT64_MAX && (message.preparedFrame <= m_Stats.nextFrame ||
 			    message.preparedFrame - m_Stats.nextFrame <= NetLockstepCodec::c_MaxFutureFrameSkew))
 				m_Stats.peers[message.senderPeerId].reportedNextFrame = std::max(m_Stats.peers[message.senderPeerId].reportedNextFrame, message.preparedFrame + 1);
-			// The other half of a refereed tie holds history only on the referee's word; its tail carries the tie's certificate, and the tail asks the referee.
+			// The other half of a refereed split holds history only on the referee's word: ask it what it decided for this split.
 			const bool otherHalf = (message.connectedMask & SeatBit(m_Config.localPeerId)) == 0 && PeerGroupIsRefereedHalf(message.connectedMask);
+			if (otherHalf && !PeerGroupHasAuthority(message.connectedMask)) CheckPeerFrameTie(m_Stats.nextFrame, message.connectedMask, nowMs);
 			if ((otherHalf || PeerGroupHasAuthority(message.connectedMask)) && message.appliedFrame >= m_Stats.nextFrame)
 				RequestPeerCommittedTail(nowMs);
 			return true;

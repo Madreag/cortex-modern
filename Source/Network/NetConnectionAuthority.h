@@ -22,7 +22,7 @@ namespace RTE {
 	/// The same signed, address-free lease for both authorities. The existing H4
 	/// transaction still commits the roster; this is its expiring seat credential.
 	struct NetSeatLease {
-		static constexpr uint16_t c_Version = 1;
+		static constexpr uint16_t c_Version = 2;
 		static constexpr uint64_t c_LifetimeSeconds = 300;
 		static constexpr size_t c_MaxTokenBytes = 512;
 		static constexpr size_t c_MaxStableSeat = NetMatchConfigUtil::c_MaxPlayers + NetMatchConfigUtil::c_MaxWorldSpectators;

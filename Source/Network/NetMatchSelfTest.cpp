@@ -16438,7 +16438,7 @@ namespace RTE {
 			bool Finished() override { return true; }
 			NetDirectoryClient::Reply Take() override {
 				if (m_Wire->sent.size() == 1)
-					return {200, R"({"connection_protocol":1,"session_id":"2b3c4d5e-ffff-4aaa-8bbb-ccccddddeeee","token":"tok-router","expires_in_s":90,"heartbeat_s":30,"observed_ip":"198.51.100.4"})", ""};
+					return {200, R"({"connection_protocol":2,"session_id":"2b3c4d5e-ffff-4aaa-8bbb-ccccddddeeee","token":"tok-router","expires_in_s":90,"heartbeat_s":30,"observed_ip":"198.51.100.4"})", ""};
 				return {200, R"({"expires_in_s":90,"heartbeat_s":30})", ""};
 			}
 			void Abort() override {}
@@ -16707,7 +16707,7 @@ namespace RTE {
 			remote.connected = remoteBack;
 			service.m_LobbySnapshot.members = {local, remote};
 		};
-		const auto registerReply = NetDirectoryClient::Reply{200, R"({"connection_protocol":1,"session_id":")" + id + R"(","token":"tok-expiry","expires_in_s":15,"heartbeat_s":1,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""};
+		const auto registerReply = NetDirectoryClient::Reply{200, R"({"connection_protocol":2,"session_id":")" + id + R"(","token":"tok-expiry","expires_in_s":15,"heartbeat_s":1,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""};
 		SettingsGuard settings;
 
 		{   // both peers back in time: the wait ends, the lobby stands
@@ -16867,7 +16867,7 @@ namespace RTE {
 		WithheldRouter router;
 		ScopeExit mappingGone{[] { NetMatchService::ReleaseHostPortMap(); }};
 		const auto registerReply = [](const std::string& id, const char* token, int heartbeatS, bool capable) {
-			return NetDirectoryClient::Reply{200, R"({"connection_protocol":1,"session_id":")" + id + R"(","token":")" + token + R"(","expires_in_s":15,"heartbeat_s":)" + std::to_string(heartbeatS) + R"(,"observed_ip":"127.0.0.1")" + (capable ? R"(,"supports_unlisted":true})" : "}"), ""};
+			return NetDirectoryClient::Reply{200, R"({"connection_protocol":2,"session_id":")" + id + R"(","token":")" + token + R"(","expires_in_s":15,"heartbeat_s":)" + std::to_string(heartbeatS) + R"(,"observed_ip":"127.0.0.1")" + (capable ? R"(,"supports_unlisted":true})" : "}"), ""};
 		};
 		const NetDirectoryClient::Reply hidden{200, R"({"expires_in_s":15,"heartbeat_s":1,"listed":false})", ""};
 		const NetDirectoryClient::Reply listed{200, R"({"expires_in_s":15,"heartbeat_s":1,"listed":true})", ""};
@@ -17875,7 +17875,7 @@ namespace RTE {
 		auto script = std::make_shared<Script>();
 		service.m_Directory.SetTransportFactory([script] { return std::make_unique<Wire>(script); });
 		service.m_Directory.Configure("dir.example", "0123456789abcdef", "");
-		script->replies.push_back({200, R"({"connection_protocol":1,"session_id":"11111111-2222-4333-8444-555555555555","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+		script->replies.push_back({200, R"({"connection_protocol":2,"session_id":"11111111-2222-4333-8444-555555555555","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 		service.m_Directory.Advertise(NetDirectoryRegisterRequest{}, false);
 		service.m_Directory.Update(0); service.m_Directory.Update(0);
 		service.m_IsHost = true;
@@ -17994,7 +17994,7 @@ namespace RTE {
 		auto script = std::make_shared<Script>();
 		service.m_Directory.SetTransportFactory([script] { return std::make_unique<Wire>(script); });
 		service.m_Directory.Configure("dir.example", "0123456789abcdef", "");
-		script->replies.push_back({200, R"({"connection_protocol":1,"session_id":"11111111-2222-4333-8444-555555555555","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+		script->replies.push_back({200, R"({"connection_protocol":2,"session_id":"11111111-2222-4333-8444-555555555555","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 		service.m_Directory.Advertise(NetDirectoryRegisterRequest{}, false);
 		service.m_Directory.Update(0); service.m_Directory.Update(0);
 		service.m_IsHost = true; service.m_IceEnabled = true; service.m_HostRelayMode = 1; service.m_ConnectionMode = 2;

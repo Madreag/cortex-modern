@@ -13,7 +13,7 @@ Use `--cert` and `--key` for HTTPS. Select the caller mode for the deployment; `
 
 ## Connection authority
 
-Registration and connection requests carry `connection_protocol: 1`. A mismatch refuses with both versions and an update instruction. `GET /v1/sessions/{id}/connections`, with `X-Connection-Protocol: 1`, resolves the current host even while its public listing is hidden or temporarily expired. Its reply contains the public issuer key and current host generation, without seat or relay credentials.
+Registration and connection requests carry `connection_protocol: 2`. A mismatch refuses with both versions and an update instruction. `GET /v1/sessions/{id}/connections`, with `X-Connection-Protocol: 1`, resolves the current host even while its public listing is hidden or temporarily expired. Its reply contains the public issuer key and current host generation, without seat or relay credentials.
 
 `POST` on the same endpoint accepts three operations. `issue` and `remove` require the current host token and generation. The host selects the seat through its existing admission transaction; the directory signs that match, seat, holder generation and participant public key. `check-in` carries the seat token and a request signed by that participant's private key. The signed request includes a nonce, time, process instance and current route. A copied token cannot prove the participant key or displace its active instance.
 

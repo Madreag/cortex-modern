@@ -30,7 +30,7 @@ from relay_secrets import SecretBook, read_turn_config  # noqa: E402
 
 MST = dt.timezone(dt.timedelta(hours=-7))
 INSTALL_KEY = 'relay-cloudflare-mint-proof'
-REGISTER = dict(connection_protocol=1, name='relay mint proof', activity='relay proof', scene='none', mode='pvp', peer_count=2, seats_free=1,
+REGISTER = dict(name='relay mint proof', activity='relay proof', scene='none', mode='pvp', peer_count=2, seats_free=1,
                 game_version='7.0.0', build_id='relay-proof', network_protocol_version=1, lockstep_codec_version=1,
                 controller_frame_version=1, match_config_hash='a' * 64, session_identity_hash='b' * 64,
                 module_manifest_hash='c' * 64, listen_port=41010, listen_addrs=['127.0.0.1'], join_mode='ice')
@@ -128,7 +128,7 @@ def main(argv=None) -> int:
                'backend': config.get('backend'), 'module': str(source), 'module_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
                'directory_user_agent': getattr(module, 'USER_AGENT', None), 'ttl_requested_s': options.ttl}
     try:
-        status, row = http(server.port, 'POST', '/v1/sessions', REGISTER)
+        status, row = http(server.port, 'POST', '/v1/sessions', dict(REGISTER, connection_protocol=module.CONNECTION_PROTOCOL))
         receipt['register'] = status
         if status == 200:
             session, token = row['session_id'], row['token']

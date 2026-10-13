@@ -1422,7 +1422,7 @@ class DirectoryTests(unittest.TestCase):
         player = Ed25519PrivateKey.generate()
         participant = player.public_key().public_bytes_raw().hex()
         path = f"/v1/sessions/{sid}/connections"
-        status, lease = self.call("POST", path, dict(connection_protocol=1, operation="issue", token=token, host_generation=0,
+        status, lease = self.call("POST", path, dict(connection_protocol=session_directory.CONNECTION_PROTOCOL, operation="issue", token=token, host_generation=0,
             epoch="10" * 16, seat=1, generation=1, credential="20" * 32, host_session=42,
             network_protocol=NETWORK_PROTOCOL_VERSION, participant=participant, name="Returning player"))
         self.assertEqual(status, 200)
@@ -1431,7 +1431,7 @@ class DirectoryTests(unittest.TestCase):
                         nonce=uuid.uuid4().hex, sent_at=int(time.time()),
                         route=dict(ice_identity="", ice_virtual_port=0, listen_port=41012, listen_addrs=["127.0.0.1"], generation=1, state="connected"))
             raw = json.dumps(data, separators=(",", ":")).encode()
-            return self.call("POST", path, dict(connection_protocol=1, operation="check-in", participant=participant,
+            return self.call("POST", path, dict(connection_protocol=session_directory.CONNECTION_PROTOCOL, operation="check-in", participant=participant,
                 signed_request=base64.b64encode(raw).decode(), signature=player.sign(REQUEST_DOMAIN + raw).hex()))
         for index in range(64):
             self.assertEqual(check_in()[0], 200)
@@ -1463,7 +1463,7 @@ class DirectoryTests(unittest.TestCase):
         store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 1}, 0, INSTALL_KEY)
         player = Ed25519PrivateKey.generate()
         participant = player.public_key().public_bytes_raw().hex()
-        lease = store.connection_request(sid, dict(connection_protocol=1, operation="issue", token=token,
+        lease = store.connection_request(sid, dict(connection_protocol=session_directory.CONNECTION_PROTOCOL, operation="issue", token=token,
             host_generation=0, epoch="10" * 16, seat=0, generation=1, credential="20" * 32, host_session=42,
             network_protocol=NETWORK_PROTOCOL_VERSION, participant=participant, name="Host"), 0, INSTALL_KEY)
         def check_in(claim):
@@ -1472,7 +1472,7 @@ class DirectoryTests(unittest.TestCase):
                         route=dict(ice_identity="", ice_virtual_port=0, listen_port=41012,
                                    listen_addrs=["127.0.0.1"], generation=1, state="connected"))
             raw = json.dumps(data, separators=(",", ":")).encode()
-            store.connection_request(sid, dict(connection_protocol=1, operation="check-in", participant=participant,
+            store.connection_request(sid, dict(connection_protocol=session_directory.CONNECTION_PROTOCOL, operation="check-in", participant=participant,
                 signed_request=base64.b64encode(raw).decode(), signature=player.sign(REQUEST_DOMAIN + raw).hex()), 10, INSTALL_KEY)
         check_in("wrong")
         self.assertEqual(store._sessions[sid].last_beat, 0)
@@ -1787,7 +1787,7 @@ class DirectoryTests(unittest.TestCase):
         status, missing = self.call(
             "POST",
             "/v1/sessions",
-            {"connection_protocol": 1, "name": "Captain"},
+            {"connection_protocol": session_directory.CONNECTION_PROTOCOL, "name": "Captain"},
             headers={"X-Install-Key": INSTALL_KEY},
         )
         self.assertEqual(status, 400)
@@ -3418,7 +3418,7 @@ class ConnectionAuthorityTests(unittest.TestCase):
         self.store.heartbeat(self.sid, {"token": self.row["token"], "peer_count": 2, "seats_free": 0, "state": "running", "listed": False}, self.now, INSTALL_KEY)
         self.store.mint_ice_servers(self.sid, {"token": self.row["token"], "match_id": "lease-fixture", "ttl": 600}, INSTALL_KEY, self.now)
         self.player = Ed25519PrivateKey.generate()
-        self.issue = dict(connection_protocol=1, operation="issue", token=self.row["token"], host_generation=0,
+        self.issue = dict(connection_protocol=session_directory.CONNECTION_PROTOCOL, operation="issue", token=self.row["token"], host_generation=0,
             epoch="10" * 16, seat=1, generation=1, credential="20" * 32, host_session=42,
             network_protocol=NETWORK_PROTOCOL_VERSION, participant=self.player.public_key().public_bytes_raw().hex(), name="Original player")
         self.lease = self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
@@ -3432,7 +3432,7 @@ class ConnectionAuthorityTests(unittest.TestCase):
         if host is not None:
             data["host"] = host
         raw = json.dumps(data, separators=(",", ":")).encode()
-        return dict(connection_protocol=1, operation="check-in", participant=key.public_key().public_bytes_raw().hex(),
+        return dict(connection_protocol=session_directory.CONNECTION_PROTOCOL, operation="check-in", participant=key.public_key().public_bytes_raw().hex(),
             signature=key.sign(REQUEST_DOMAIN + raw).hex(), signed_request=base64.b64encode(raw).decode())
 
     def check(self, **kwargs):
@@ -3502,28 +3502,24 @@ class ConnectionAuthorityTests(unittest.TestCase):
         envelope.update(operation="frame-tie", signed_request=base64.b64encode(raw).decode(), signature=self.referee_players[seat][0].sign(REQUEST_DOMAIN + raw).hex())
         return self.store.connection_request(self.sid, envelope, self.now, INSTALL_KEY)
 
-    def test_frame_tie_nonhost_waits_the_full_second_without_blocking_http(self):
+    def test_frame_tie_first_check_in_keeps_the_split_at_once(self):
         self.referee_fixture()
         started = time.monotonic()
         answer = self.frame_check_in(2, [2, 3])
-        self.assertEqual(answer["status"], "waiting")
-        self.assertLess(time.monotonic() - started, 0.25)
-        self.now += 0.999; self.wall += 0.999
-        self.assertEqual(self.frame_check_in(2, [2, 3], query_only=True)["status"], "waiting")
-        self.now += 0.001; self.wall += 0.001
-        answer = self.frame_check_in(2, [2, 3], query_only=True)
         self.assertEqual((answer["status"], answer["members"]), ("decided", [2, 3]))
+        self.assertLess(time.monotonic() - started, 0.25)
+        self.assertEqual(self.frame_check_in(2, [2, 3], query_only=True)["members"], [2, 3])
         self.assertEqual(self.frame_check_in(0, [2, 3], query_only=True)["members"], [2, 3])
         self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [2, 3])
 
-    def test_frame_tie_both_confirmed_sides_choose_host_and_keep_admin_generation(self):
+    def test_frame_tie_later_half_learns_the_first_and_keeps_admin_generation(self):
         self.referee_fixture()
         self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [0, 1])
         self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [0, 1])
-        self.assertEqual(self.frame_check_in(2, [2, 3], frame=89)["status"], "waiting")
+        self.assertEqual(self.frame_check_in(2, [2, 3], frame=89)["members"], [2, 3])
         self.now += 0.3; self.wall += 0.3
-        self.assertEqual(self.frame_check_in(0, [0, 1], frame=89)["members"], [0, 1])
-        self.assertEqual(self.frame_check_in(2, [2, 3], frame=89, query_only=True)["members"], [0, 1])
+        self.assertEqual(self.frame_check_in(0, [0, 1], frame=89)["members"], [2, 3])
+        self.assertEqual(self.frame_check_in(2, [2, 3], frame=89, query_only=True)["members"], [2, 3])
         self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["host_generation"], 0)
 
     def test_frame_tie_query_never_confirms_a_missing_side(self):
@@ -3535,33 +3531,25 @@ class ConnectionAuthorityTests(unittest.TestCase):
         self.assertEqual(self.frame_check_in(2, [0, 1], query_only=True)["status"], "waiting")
         self.assertFalse(dict(self.store.connections.records())[self.sid].get("frame_ties"))
 
-    def test_frame_tie_cannot_omit_retained_seats_or_confirm_overlapping_groups(self):
+    def test_frame_tie_cannot_omit_retained_seats_and_keeps_its_first_group(self):
         self.referee_fixture()
         with self.assertRaises(ConnectionErrorReply): self.frame_check_in(0, [0], owners=[0, 1])
-        self.assertEqual(self.frame_check_in(1, [1, 2], frame=89)["status"], "waiting")
-        self.assertEqual(self.frame_check_in(0, [0, 1], frame=89)["status"], "waiting")
-        self.now += 1; self.wall += 1
+        self.assertEqual(self.frame_check_in(1, [1, 2], frame=89)["members"], [1, 2])
+        self.assertEqual(self.frame_check_in(0, [0, 1], frame=89)["members"], [1, 2])
         for seat in (0, 1):
             self.assertEqual(self.frame_check_in(seat, [1, 2], frame=89, query_only=True)["members"], [1, 2])
 
-    def test_frame_tie_two_seats_uses_the_same_full_window(self):
+    def test_frame_tie_two_seats_first_check_in_decides(self):
         self.referee_fixture(seats=2)
         self.assertEqual(self.frame_check_in(0, [0])["members"], [0])
         self.assertEqual(self.frame_check_in(1, [1])["members"], [0])
-        self.assertEqual(self.frame_check_in(1, [1], frame=89)["status"], "waiting")
-        self.now += 0.3; self.wall += 0.3
-        self.assertEqual(self.frame_check_in(0, [0], frame=89)["members"], [0])
-        self.assertEqual(self.frame_check_in(1, [1], frame=89, query_only=True)["members"], [0])
-        self.assertEqual(self.frame_check_in(1, [1], frame=90)["status"], "waiting")
-        self.now += 0.999; self.wall += 0.999
-        self.assertEqual(self.frame_check_in(1, [1], frame=90, query_only=True)["status"], "waiting")
-        self.now += 0.001; self.wall += 0.001
-        self.assertEqual(self.frame_check_in(1, [1], frame=90, query_only=True)["members"], [1])
-        self.assertEqual(self.frame_check_in(0, [0], frame=90)["members"], [1])
+        self.assertEqual(self.frame_check_in(1, [1], frame=89)["members"], [1])
+        self.assertEqual(self.frame_check_in(0, [0], frame=89)["members"], [1])
+        self.assertEqual(self.frame_check_in(0, [1], frame=89, query_only=True)["members"], [1])
         for seat in (0, 1):
             self.assertEqual(self.frame_check_in(seat, [1 - seat], frame=91, query_only=True)["status"], "waiting")
         ties = dict(self.store.connections.records())[self.sid]["frame_ties"]
-        self.assertEqual(len(ties), 3)
+        self.assertEqual(len(ties), 2)
 
     def test_frame_tie_decision_survives_later_ties_and_reload(self):
         self.referee_fixture()
@@ -3570,7 +3558,7 @@ class ConnectionAuthorityTests(unittest.TestCase):
             # Cross the old 64-tie retention limit without also exhausting
             # the independent 64-request replay/rate window for one seat.
             self.now += 3; self.wall += 3
-            self.assertEqual(self.frame_check_in(2, [2, 3], frame=frame)["status"], "waiting")
+            self.assertEqual(self.frame_check_in(2, [2, 3], frame=frame)["members"], [2, 3])
         self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [0, 1])
         record = dict(self.store.connections.records())[self.sid]
         self.assertEqual(len(record["frame_ties"]), 66)
@@ -3687,7 +3675,7 @@ class ConnectionAuthorityTests(unittest.TestCase):
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(self.lease["authority_key"])).verify(raw[-64:], TOKEN_DOMAIN + raw[:-64])
         fields = TOKEN_FIELDS.unpack(raw[:-64])
         self.assertEqual((fields[0], fields[1], fields[2], fields[4], fields[5], fields[6]),
-                         (1, NETWORK_PROTOCOL_VERSION, uuid.UUID(self.sid).bytes, 42, 1, 1))
+                         (session_directory.CONNECTION_PROTOCOL, NETWORK_PROTOCOL_VERSION, uuid.UUID(self.sid).bytes, 42, 1, 1))
         first = self.check()
         self.assertTrue(first["relay_current"])
         with self.assertRaises(ConnectionErrorReply) as copied:
@@ -3732,7 +3720,7 @@ class ConnectionAuthorityTests(unittest.TestCase):
         self.now = time.monotonic()
         returned = self.check()
         self.assertEqual((returned["seat"], returned["generation"], returned["peers"][0]["route"]), (1, 1, self.route))
-        removal = dict(connection_protocol=1, operation="remove", token=self.row["token"], host_generation=0,
+        removal = dict(connection_protocol=session_directory.CONNECTION_PROTOCOL, operation="remove", token=self.row["token"], host_generation=0,
                        participant=self.issue["participant"], name="Original player", action="banned")
         self.store.connection_request(self.sid, removal, self.now, INSTALL_KEY)
         self.store.stop()
@@ -3775,12 +3763,12 @@ class ConnectionAuthorityTests(unittest.TestCase):
         self.assertEqual(listed(), ("ip", None, ["198.51.100.9"]))
 
     def test_connection_version_refuses_before_any_seat_mutation(self) -> None:
-        for version in (0, 2):
+        for version in (session_directory.CONNECTION_PROTOCOL - 1, session_directory.CONNECTION_PROTOCOL + 1):
             with self.subTest(version=version), self.assertRaises(ConnectionErrorReply) as mismatch:
                 self.store.connection_request(self.sid, dict(self.issue, connection_protocol=version), self.now, INSTALL_KEY)
             self.assertEqual(mismatch.exception.body["error"], "connection_version")
             self.assertIn(f"protocol is {version}", mismatch.exception.body["message"])
-            self.assertIn("directory uses 1", mismatch.exception.body["message"])
+            self.assertIn(f"directory uses {session_directory.CONNECTION_PROTOCOL}", mismatch.exception.body["message"])
         self.assertEqual(self.check()["generation"], 1)
 
     def test_ended_world_reopens_only_with_its_owner_and_a_later_boot(self) -> None:
@@ -3831,6 +3819,26 @@ class ConnectionAuthorityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "could not be verified"):
             ConnectionAuthority(b"isolated-test-service-key", path)
         path.unlink()  # Windows refuses this if failed startup leaked the handle.
+
+    def test_older_protocol_storage_is_dropped_and_newer_fails_closed(self) -> None:
+        def stored(version: int) -> Path:
+            path = Path(self.temporary.name) / f"protocol-{version}.sqlite3"
+            authority = ConnectionAuthority(b"isolated-test-service-key", path)
+            sid, nonce = str(uuid.uuid4()), os.urandom(12)
+            record = json.dumps({"version": version, "seats": {}, "removed": {}, "route_revision": 0, "retain_until": time.time() + 3600}).encode()
+            with authority._db:
+                authority._db.execute("INSERT INTO connections VALUES (?, ?)", (sid, nonce + authority._seal.encrypt(nonce, record, sid.encode("ascii"))))
+            authority.close()
+            return path
+        older = stored(session_directory.CONNECTION_PROTOCOL - 1)
+        reopened = ConnectionAuthority(b"isolated-test-service-key", older)
+        self.assertEqual(reopened.records(), [])
+        self.assertEqual(reopened._db.execute("SELECT COUNT(*) FROM connections").fetchone()[0], 0)
+        reopened.close()
+        newer = stored(session_directory.CONNECTION_PROTOCOL + 1)
+        with self.assertRaisesRegex(ValueError, "could not be verified"):
+            ConnectionAuthority(b"isolated-test-service-key", newer)
+        older.unlink(); newer.unlink()
 
     def test_shutdown_never_acknowledges_a_memory_only_mutation(self) -> None:
         self.store.stop()

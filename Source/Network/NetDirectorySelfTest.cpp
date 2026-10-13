@@ -367,7 +367,7 @@ namespace RTE {
 			explicit Answer(std::shared_ptr<std::vector<NetDirectoryClient::Request>> sent): m_Sent(std::move(sent)) {}
 			void Start(const NetDirectoryClient::Request& request) override { m_Sent->push_back(request); }
 			bool Finished() override { return true; }
-			NetDirectoryClient::Reply Take() override { return {200, R"({"connection_protocol":1,"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"new-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""}; }
+			NetDirectoryClient::Reply Take() override { return {200, R"({"connection_protocol":2,"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"new-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""}; }
 			void Abort() override {}
 			std::shared_ptr<std::vector<NetDirectoryClient::Request>> m_Sent;
 		};
@@ -417,7 +417,7 @@ namespace RTE {
 			bool Finished() override { return true; }
 			NetDirectoryClient::Reply Take() override {
 				if (m_Sent->size() == 2) return {404, R"({"error":"match_unavailable"})", ""};
-				return {200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""};
+				return {200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""};
 			}
 			void Abort() override {}
 			std::shared_ptr<std::vector<NetDirectoryClient::Request>> m_Sent;
@@ -459,7 +459,7 @@ namespace RTE {
 		public:
 			void Start(const NetDirectoryClient::Request&) override {}
 			bool Finished() override { return true; }
-			NetDirectoryClient::Reply Take() override { return {200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""}; }
+			NetDirectoryClient::Reply Take() override { return {200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","heartbeat_s":5,"expires_in_s":15,"observed_ip":"127.0.0.1"})", ""}; }
 			void Abort() override {}
 		};
 		NetMatchService service;
@@ -940,7 +940,7 @@ namespace RTE {
 				std::string reason;
 				NetDirectoryRegisterResponse created;
 				if (!NetDirectoryCodec::DecodeRegisterResponse(
-						R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"abcTOK123","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})",
+						R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"abcTOK123","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})",
 						created, reason)) {
 					*error = "canned register response refused: " + reason;
 					return false;
@@ -1037,7 +1037,7 @@ namespace RTE {
 			bool TestUnlistedVisibility(std::string* error) {
 				std::vector<std::string> misses;
 				CheckOptionalVisibilityField<NetDirectoryRegisterResponse>("register response", "supports_unlisted",
-					R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"abcTOK123","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})",
+					R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"abcTOK123","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})",
 					&NetDirectoryCodec::DecodeRegisterResponse, &NetDirectoryCodec::EncodeRegisterResponse, false, misses);
 				CheckOptionalVisibilityField<NetDirectoryHeartbeatRequest>("heartbeat request", "listed",
 					R"({"token":"abcTOK123","peer_count":2,"seats_free":1})",
@@ -1471,7 +1471,7 @@ namespace RTE {
 			}
 
 			bool TestConnectionProtocolRefusal(std::string* error) {
-				for (const int status : {409, 200}) for (const bool refresh : {false, true}) for (const int64_t version: {int64_t{0}, int64_t{2}}) {
+				for (const int status : {409, 200}) for (const bool refresh : {false, true}) for (const int64_t version: {int64_t{NetDirectoryLimits::c_ConnectionProtocol - 1}, int64_t{NetDirectoryLimits::c_ConnectionProtocol + 1}}) {
 					ScriptedClient s;
 					NetDirectoryRegisterResponse response{"7b8c9d2e-1111-4222-8333-444455556666", "fixture-proof", 15, 5, "192.0.2.1"};
 					const auto row = SampleRegisterRequest();
@@ -1488,7 +1488,7 @@ namespace RTE {
 					const size_t expectedRequests = refresh ? 2 : 1;
 					if (s.client.GetState() != NetDirectoryClient::State::Failed || s.sent->size() != expectedRequests ||
 					    s.client.GetSupersededGeneration() != 0 ||
-					    s.client.LastError().find("protocol is 1") == std::string::npos ||
+					    s.client.LastError().find("protocol is " + std::to_string(NetDirectoryLimits::c_ConnectionProtocol)) == std::string::npos ||
 					    s.client.LastError().find("directory uses " + std::to_string(version)) == std::string::npos) {
 						*error = "a directory protocol mismatch did not stop with both versions"; return false;
 					}
@@ -1517,7 +1517,7 @@ namespace RTE {
 			bool TestRelayCredentialRequest(std::string* error) {
 				ScriptedClient s;
 				if (s.client.RequestIceServers("match:1", 3600)) { *error = "relay request lacked the host lease"; return false; }
-				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				s.client.Advertise(SampleRegisterRequest(), false);
 				s.client.Update(0);
 				s.client.Update(0);
@@ -1552,13 +1552,13 @@ namespace RTE {
 					*error = "S5: one refusal discarded the world's last stored proof"; return false;
 				}
 				ScriptedClient recovered;
-				recovered.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"replacement-proof","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				recovered.replies->push_back({200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"replacement-proof","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				recovered.client.Advertise(row, true); recovered.client.Update(0); recovered.client.Update(0);
 				recovered.client.RefreshRegistration(row, true, 1);
 				recovered.replies->push_back({403, R"({"error":"forbidden"})", ""});
 				recovered.replies->push_back({403, R"({"error":"forbidden"})", ""});
 				for (uint64_t now: {5001ULL, 15001ULL}) { recovered.client.Update(now); recovered.client.Update(now); }
-				recovered.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"latest-proof","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				recovered.replies->push_back({200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"latest-proof","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				recovered.client.Update(35001);
 				if (json::parse(recovered.sent->back().body).value("resume_token", std::string()) != "previous-proof") { *error = "S5: recovery lost its second retained proof"; return false; }
 				recovered.client.Update(35001);
@@ -1577,7 +1577,7 @@ namespace RTE {
 			bool TestListedRefusalsKeepRetrying(std::string* error) {
 				for (const bool heartbeat : {false, true}) for (const int status : {400, 401, 403, 404, 405, 408, 410, 422}) {
 					ScriptedClient s;
-					const NetDirectoryClient::Reply success{200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""};
+					const NetDirectoryClient::Reply success{200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""};
 					if (heartbeat) s.replies->push_back(success);
 					s.replies->push_back({status, R"({"error":"refused"})", ""});
 					s.replies->push_back(heartbeat && status != 404 ? NetDirectoryClient::Reply{200, R"({"expires_in_s":15,"heartbeat_s":5})", ""} : success);
@@ -1597,7 +1597,7 @@ namespace RTE {
 					}
 				}
 				ScriptedClient throttled;
-				throttled.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				throttled.replies->push_back({200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				throttled.replies->push_back({429, R"({"retry_after_s":30})", ""});
 				throttled.client.Advertise(SampleRegisterRequest(), true);
 				throttled.client.Update(0); throttled.client.Update(0);
@@ -1611,7 +1611,7 @@ namespace RTE {
 
 			bool TestClientLifecycle(std::string* error) {
 				ScriptedClient s;
-				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
 				s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
 				s.replies->push_back({200, R"({"ok":true})", ""});
@@ -1718,7 +1718,7 @@ namespace RTE {
 					return false;
 				}
 				ScriptedClient s;
-				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				s.replies->push_back({409, R"({"error":"superseded","migration_gen":1})", ""});
 				s.client.Advertise(SampleRegisterRequest(), true);
 				s.client.Update(0);
@@ -1750,11 +1750,11 @@ namespace RTE {
 
 			bool TestHeartbeat404Reregisters(std::string* error) {
 				ScriptedClient s;
-				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				s.replies->push_back({404, R"({"error":"match_unavailable"})", ""});
-				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":2,"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				s.replies->push_back({404, R"({"error":"match_unavailable"})", ""});
-				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"9d2e1f3a-3333-4444-8555-666677778888","token":"tok3","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":2,"session_id":"9d2e1f3a-3333-4444-8555-666677778888","token":"tok3","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 
 				s.client.Advertise(SampleRegisterRequest(), false);
 				s.client.Update(0);
@@ -1796,7 +1796,7 @@ namespace RTE {
 			bool TestAWorldTakesItsRowBackFromAForgetfulDirectory(std::string* error) {
 				const std::string world = "5e6f7a8b-1111-4222-8333-444455556666";
 				const auto granted = [&](const char* token) {
-					return NetDirectoryClient::Reply{200, R"({"connection_protocol":1,"session_id":")" + world + R"(","token":")" + token + R"(","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""};
+					return NetDirectoryClient::Reply{200, R"({"connection_protocol":2,"session_id":")" + world + R"(","token":")" + token + R"(","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""};
 				};
 				const NetDirectoryClient::Reply beat{200, R"({"expires_in_s":15,"heartbeat_s":5})", ""};
 				const NetDirectoryClient::Reply gone{404, R"({"error":"match_unavailable"})", ""};
@@ -1865,7 +1865,7 @@ namespace RTE {
 
 			bool TestHeartbeat429HonorsRetryAfter(std::string* error) {
 				ScriptedClient s;
-				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				s.replies->push_back({429, R"({"error":"rate_limited_key","retry_after_s":30})", ""});
 				s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
 
@@ -1893,7 +1893,7 @@ namespace RTE {
 				s.replies->push_back({0, "", "send: certificate verification failed"});
 				s.replies->push_back({0, "", "connect timed out"});
 				s.replies->push_back({0, "", "connect timed out"});
-				s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 
 				s.client.Advertise(SampleRegisterRequest(), false);
 				s.client.Update(0);
@@ -1940,8 +1940,8 @@ namespace RTE {
 				CallAdvertiseIntent(client, row, running, listed, 0);
 			}
 
-			const char* kRegisterCapable = R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})";
-			const char* kRegisterLegacy = R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})";
+			const char* kRegisterCapable = R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})";
+			const char* kRegisterLegacy = R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})";
 			const std::string kSessionPath = "/v1/sessions/7b8c9d2e-1111-4222-8333-444455556666";
 			const std::string kHeartbeatPath = kSessionPath + "/heartbeat";
 
@@ -2125,7 +2125,7 @@ namespace RTE {
 					ScriptedClient s;
 					s.replies->push_back({200, kRegisterCapable, ""});
 					s.replies->push_back({404, R"({"error":"not_found"})", ""});
-					s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""});
+					s.replies->push_back({200, R"({"connection_protocol":2,"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""});
 					s.replies->push_back({200, R"({"ok":true})", ""});
 					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
 					s.client.Update(0);
@@ -2199,7 +2199,7 @@ namespace RTE {
 					if (report.value("supports_unlisted", json(true)) != json(false)) {
 						note("legacy-hidden: the report did not expose capability=false");
 					}
-					s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+					s.replies->push_back({200, R"({"connection_protocol":2,"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
 					CallAdvertise(s.client, SampleRegisterRequest(), false, true);
 					s.client.Update(120000);
@@ -2223,7 +2223,7 @@ namespace RTE {
 
 				{   // an explicit supports_unlisted:false reply is the same legacy path as absent
 					ScriptedClient s;
-					s.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":false})", ""});
+					s.replies->push_back({200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":false})", ""});
 					s.replies->push_back({200, R"({"ok":true})", ""});
 					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
 					s.client.Update(0);
@@ -2332,7 +2332,7 @@ namespace RTE {
 			}
 
 			const char* kSecretToken = "tok-report-secret-5e1d";
-			const char* kRegisterCapableSecret = R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok-report-secret-5e1d","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})";
+			const char* kRegisterCapableSecret = R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok-report-secret-5e1d","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})";
 
 			std::string VisibilityFields(const json& report) {
 				return "desired=" + report.value("desired_listed", json("absent")).dump() + " confirmed=" + report.value("confirmed_listed", json("absent")).dump() + " capable=" + report.value("supports_unlisted", json("absent")).dump();
@@ -3319,7 +3319,7 @@ namespace RTE {
 			bool TestDirectoryErrorSnapshot(std::string* error) {
 				ScriptedClient host;
 				host.replies->push_back({503, R"({"error":"full"})", ""});
-				host.replies->push_back({200, R"({"connection_protocol":1,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				host.replies->push_back({200, R"({"connection_protocol":2,"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
 				host.client.Advertise(SampleRegisterRequest(), false);
 				host.client.Update(0); host.client.Update(0);
 				std::promise<void> read, changed;
