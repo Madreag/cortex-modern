@@ -60,6 +60,13 @@ namespace RTE {
 		/// The game loop's side: a tick starts, and the saver stops at its next yield.
 		static void CloseSlice() noexcept;
 
+		/// The game loop's side when it has left the saver no idle time for a while: the tick starting now lends the saver its
+		/// first microseconds, game work in flight or not, so a save in a world slower than its clock still completes.
+		static void LendTickStart(int64_t microseconds);
+
+		/// Whether a saver thread is parked waiting for a slice: a save is in progress and wants time.
+		static bool Waiting() noexcept { return s_Parked.load(std::memory_order_relaxed) > 0; }
+
 		/// The steady clock in microseconds, as the slices are measured.
 		static int64_t NowUs() noexcept;
 
@@ -107,6 +114,8 @@ namespace RTE {
 		static inline std::atomic<int64_t> s_SliceEndUs{0};
 		static inline std::atomic<int64_t> s_ClosedAtUs{0};
 		static inline std::atomic<int> s_GameWork{0};
+		static inline std::atomic<bool> s_SliceLent{false};
+		static inline std::atomic<int> s_Parked{0};
 	};
 
 	/// Runs work(index) for every index below a count on a pool, the items taken in index order by whichever thread comes

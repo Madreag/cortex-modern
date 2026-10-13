@@ -798,6 +798,18 @@ namespace RTE::CheckpointLua {
 		std::mutex m_PrepareMutex;
 		std::vector<std::weak_ptr<Prepared>> m_Prepared;
 		void FinishPrepared() noexcept;
+	public:
+		/// Test lever CCCP_TEST_FAULT_TICKS: the Lua heap write faults taken, and their time.
+		static bool TallyingFaults() {
+			static const bool tallying = std::getenv("CCCP_TEST_FAULT_TICKS") != nullptr;
+			return tallying;
+		}
+		static std::pair<uint64_t, uint64_t> TakeFaultTally() { return {FaultTally()[0].exchange(0), FaultTally()[1].exchange(0)}; }
+		static std::array<std::atomic<uint64_t>, 2>& FaultTally() {
+			static std::array<std::atomic<uint64_t>, 2> tally{};
+			return tally;
+		}
+	private:
 		struct CowCopy {
 			uintptr_t base = 0;
 			size_t pageBytes = 0;
@@ -884,6 +896,10 @@ namespace RTE::CheckpointLua {
 						copy->faults->count.fetch_add(1, std::memory_order_relaxed);
 						copy->faults->us.fetch_add(MicrosecondsSince(started), std::memory_order_relaxed);
 					}
+				}
+				if (fault && TallyingFaults()) {
+					FaultTally()[0].fetch_add(1, std::memory_order_relaxed);
+					FaultTally()[1].fetch_add(MicrosecondsSince(started), std::memory_order_relaxed);
 				}
 				return OpenRuns(first, opened.data(), last - first);
 			}

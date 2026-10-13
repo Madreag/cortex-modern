@@ -211,11 +211,11 @@ struct CheckpointPagePool::Block {
 	bool SavePages(size_t first, size_t count, bool fault) noexcept {
 		const auto started = fault ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		Locked guard(lock);
-		// While a capture is open a write fault saves and opens the aligned run around it: taking a fault costs several
-		// times what copying a page does, and the game's writes come in runs.
+		// A write fault saves and opens the aligned run around it, between saves too: taking a fault costs several times
+		// what copying a page does, and the game's writes come in runs.
 		constexpr size_t faultRun = 16;
 		const size_t faulted = fault && count == 1 ? first : (std::numeric_limits<size_t>::max)();
-		if (fault && count == 1 && std::any_of(copies.begin(), copies.end(), [](const auto& copy) { return !copy->completed && !copy->abandoned && (copy->Armed() || copy->Arming()); })) {
+		if (fault && count == 1) {
 			first -= first % faultRun;
 			count = std::min(faultRun, states.size() - first);
 		}

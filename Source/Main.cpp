@@ -77,6 +77,7 @@
 #include "FloatTextSelfTest.h"
 #include "CheckpointImage.h"
 #include "CheckpointPagePool.h"
+#include "CheckpointLuaHeap.h"
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
@@ -7978,6 +7979,20 @@ void RunGameLoop() {
 	// While the game runs, the saver works only in the time left between a frame's due ticks and the next one.
 	const SaverThreads::Gating saverGating;
 	constexpr int64_t c_SaverSliceMarginUs = 1000;
+	// A world slower than its clock leaves the saver no idle time at all; after this many frames without any, while a save
+	// waits, each tick lends the saver its first microseconds so the save still completes.
+	// Test lever CCCP_TEST_SAVER_FALLBACK=<frames>:<microseconds> measures other choices.
+	static const std::pair<int64_t, int64_t> c_SaverFallback = [] {
+		std::pair<int64_t, int64_t> values{30, 4000};
+		if (const char* text = std::getenv("CCCP_TEST_SAVER_FALLBACK")) {
+			long long frames = 0, microseconds = 0;
+			if (std::sscanf(text, "%lld:%lld", &frames, &microseconds) == 2 && frames > 0 && microseconds > 0) values = {frames, microseconds};
+		}
+		return values;
+	}();
+	int64_t saverFramesWithoutIdle = 0, saverFramesWithoutWaiter = 0;
+	bool saverFallback = false;
+	uint64_t saverFallbackTicks = 0;
 
 	long long updateStartTime = 0;
 	long long updateTotalTime = 0;
@@ -8191,7 +8206,12 @@ void RunGameLoop() {
 				break;
 			}
 			ZoneScopedN("Simulation Update");
-			SaverThreads::CloseSlice();
+			if (saverFallback) {
+				SaverThreads::LendTickStart(c_SaverFallback.second);
+				++saverFallbackTicks;
+			} else {
+				SaverThreads::CloseSlice();
+			}
 			// Test lever CCCP_TEST_SAVER_STAND_IN=<tick>:<seconds>:<megabytes>: from that tick, one thread at the saver's priority
 			// streams through a buffer of that size for that long, a saver's memory traffic with no save behind it, in the
 			// game's idle time as a saver works.
@@ -8233,7 +8253,8 @@ void RunGameLoop() {
 					    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()));
 					if (enabled && CheckpointPagePool::TallyingFaults()) {
 						const auto tally = CheckpointPagePool::TakeFaultTally();
-						System::PrintDiagnosticLine(std::format("[native-fault-tick] tick={} faults={} fault_us={} settled={} cooled={}", tick, tally.faults, tally.faultNs / 1000, tally.settled, tally.cooled));
+						const auto [luaFaults, luaFaultUs] = CheckpointLua::HeapOwner::TakeFaultTally();
+						System::PrintDiagnosticLine(std::format("[native-fault-tick] tick={} faults={} fault_us={} settled={} cooled={} lua_faults={} lua_fault_us={}", tick, tally.faults, tally.faultNs / 1000, tally.settled, tally.cooled, luaFaults, luaFaultUs));
 					}
 				}
 			} restoreTickCost{s_checkpointRestoreContinue, nextSimTick, s_checkpointRestoreContinue ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}};
@@ -9960,7 +9981,19 @@ void RunGameLoop() {
 		const bool ticksOwed = pacedRound && g_TimerMan.SimFrameBudgetSpent();
 		g_TimerMan.BeginSimFrame(0);
 		// The due ticks are done; until the next one is due, the saver may use the time this frame is drawn in.
-		SaverThreads::OpenSlice(clockReadUs + (g_TimerMan.GetDeltaTimeTicks() - g_TimerMan.GetSimAccumulator()) * 1000000 / g_TimerMan.GetTicksPerSecond() - c_SaverSliceMarginUs);
+		const int64_t saverSliceEndUs = clockReadUs + (g_TimerMan.GetDeltaTimeTicks() - g_TimerMan.GetSimAccumulator()) * 1000000 / g_TimerMan.GetTicksPerSecond() - c_SaverSliceMarginUs;
+		const bool saverIdle = saverSliceEndUs > SaverThreads::NowUs();
+		if (saverIdle) SaverThreads::OpenSlice(saverSliceEndUs);
+		saverFramesWithoutIdle = saverIdle ? 0 : saverFramesWithoutIdle + 1;
+		saverFramesWithoutWaiter = SaverThreads::Waiting() ? 0 : saverFramesWithoutWaiter + 1;
+		// It ends when idle time returns or when no saver has asked for time for as long.
+		const bool saverFallbackDue = saverFallback ? !saverIdle && saverFramesWithoutWaiter < c_SaverFallback.first
+		                                            : SaverThreads::Waiting() && saverFramesWithoutIdle >= c_SaverFallback.first;
+		if (saverFallbackDue != saverFallback) {
+			saverFallback = saverFallbackDue;
+			System::PrintDiagnosticLine(std::format("[saver-fallback] {} tick={} frames_without_idle={} slice_us={} lent_ticks={}", saverFallback ? "on" : "off",
+			    g_TimerMan.GetSimUpdateCount(), saverFramesWithoutIdle, c_SaverFallback.second, saverFallbackTicks));
+		}
 
 		if (returnToMenuAfterNetworkEnd && !System::IsSetToQuit()) {
 			g_TimerMan.PauseSim(true);
