@@ -5,6 +5,7 @@
 #include "Atom.h"
 #include "ConsoleMan.h"
 #include "PostProcessMan.h"
+#include "ParticleLifetime.h"
 #include "System.h"
 
 #include <bit>
@@ -330,14 +331,14 @@ void MOPixel::Update() {
 				if (m_LethalRange > 0) {
 					float randomNum = RandomNum(0.0F, 0.5F);
 					m_Atom->SetTrailLength(static_cast<int>(static_cast<float>(m_Atom->GetTrailLength()) * (1.0F - randomNum)));
-					const unsigned long lifetimeBefore = m_Lifetime;
+					const uint32_t lifetimeBefore = static_cast<uint32_t>(m_Lifetime);
 					const int age = static_cast<int>(m_AgeTimer.GetElapsedSimTimeMS());
-					const unsigned long remaining = m_Lifetime - age;
-					const float scaled = static_cast<float>(remaining) * randomNum;
-					const unsigned long reduction = static_cast<unsigned long>(scaled);
-					m_Lifetime -= reduction;
+					m_Lifetime = DecayParticleLifetime(lifetimeBefore, static_cast<uint32_t>(age), randomNum);
 					static const bool traceLifetime = std::getenv("CC_TEST_PHYSICS_HISTORY") != nullptr;
-					if (traceLifetime && age >= 0 && static_cast<unsigned long>(age) > lifetimeBefore) {
+					if (traceLifetime && age >= 0 && static_cast<uint32_t>(age) > lifetimeBefore) {
+						const uint32_t remaining = lifetimeBefore - static_cast<uint32_t>(age);
+						const float scaled = static_cast<float>(remaining) * randomNum;
+						const uint32_t reduction = static_cast<uint32_t>(scaled);
 						std::ostringstream line;
 						line << "[particle-decay] tick=" << g_TimerMan.GetSimUpdateCount() << " uid=" << GetUniqueID()
 						     << " preset=" << std::quoted(GetPresetName()) << " lifetime=" << lifetimeBefore << " age=" << age
