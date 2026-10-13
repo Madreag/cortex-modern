@@ -7656,6 +7656,9 @@ void RunGameLoop() {
 	}
 
 	g_NetMatchService.PreparePrivateRejoinCheckpoint();
+	// While the game runs, the saver works only in the time left between a frame's due ticks and the next one.
+	const SaverThreads::Gating saverGating;
+	constexpr int64_t c_SaverSliceMarginUs = 1000;
 
 	long long updateStartTime = 0;
 	long long updateTotalTime = 0;
@@ -7759,6 +7762,7 @@ void RunGameLoop() {
 		frameHeadWindow.reset();
 
 		g_TimerMan.Update();
+		const int64_t clockReadUs = SaverThreads::NowUs();
 		MemoryCensusByUptime();
 
 		if (!g_ActivityMan.ActivityRunning()) {
@@ -7859,6 +7863,7 @@ void RunGameLoop() {
 				break;
 			}
 			ZoneScopedN("Simulation Update");
+			SaverThreads::CloseSlice();
 			// Test lever CCCP_TEST_SAVER_STAND_IN=<tick>:<seconds>:<megabytes>: from that tick, one thread at the saver's priority
 			// streams through a buffer of that size for that long, a saver's memory traffic with no save behind it.
 			static const std::array<unsigned long long, 3> standIn = [] {
@@ -9600,6 +9605,8 @@ void RunGameLoop() {
 		// The frame's budget ran out with ticks still due: the round is behind its schedule, not waiting on a peer.
 		const bool ticksOwed = pacedRound && g_TimerMan.SimFrameBudgetSpent();
 		g_TimerMan.BeginSimFrame(0);
+		// The due ticks are done; until the next one is due, the saver may use the time this frame is drawn in.
+		SaverThreads::OpenSlice(clockReadUs + (g_TimerMan.GetDeltaTimeTicks() - g_TimerMan.GetSimAccumulator()) * 1000000 / g_TimerMan.GetTicksPerSecond() - c_SaverSliceMarginUs);
 
 		if (returnToMenuAfterNetworkEnd && !System::IsSetToQuit()) {
 			g_TimerMan.PauseSim(true);

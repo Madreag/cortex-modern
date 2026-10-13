@@ -7909,6 +7909,7 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 	graphs.resize(states.size()); scopes.resize(states.size());
 	const auto origin = std::chrono::steady_clock::now();
 	for (size_t index = 0; index < states.size(); ++index) {
+		SaverThreads::Yield();
 		const auto started = std::chrono::steady_clock::now();
 		FrozenCaptureStats part;
 		const uint64_t cpu = CheckpointThreadCpuUnits(), accounted = CheckpointThreadAccountedCpu();

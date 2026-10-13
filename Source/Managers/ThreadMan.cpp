@@ -1,5 +1,15 @@
 #include "ThreadMan.h"
 
+#include <chrono>
+#include <cstdio>
+
+#ifdef _MSC_VER
+#include <intrin.h>
+#define SAVER_CALLER _ReturnAddress()
+#else
+#define SAVER_CALLER __builtin_return_address(0)
+#endif
+
 #ifdef _WIN32
 #include <windows.h>
 #elif defined(__APPLE__)
@@ -33,6 +43,97 @@ void SaverThreads::Enter() {
 
 BS::thread_pool& SaverThreads::Pool() {
 	return g_ThreadMan.GetSaverThreadPool();
+}
+
+namespace {
+	std::mutex s_SliceMutex;
+	std::condition_variable s_SliceOpened;
+	std::atomic<int64_t> s_ReportedStuckAtUs{0};
+	// A tick that keeps the gate closed this long without opening a slice may be waiting on the saver's own work.
+	constexpr int64_t c_StuckTickUs = 250000;
+	thread_local int64_t t_LastCheckUs = 0;
+	thread_local const void* t_LastCheckSite = nullptr;
+
+	// Test lever CCCP_TEST_SAVER_STRETCHES: names every stretch of saver work over 2 ms between two yields, which is how far
+	// past its slice the saver can run into a tick.
+	void ReportStretch(const void* from, const void* to, int64_t us) {
+		static const bool report = std::getenv("CCCP_TEST_SAVER_STRETCHES") != nullptr;
+		if (!report) return;
+#ifdef _WIN32
+		const auto base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+		std::fprintf(stdout, "[saver-stretch] us=%lld from=%llx to=%llx\n", static_cast<long long>(us), static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(from) - base),
+		    static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(to) - base));
+#else
+		std::fprintf(stdout, "[saver-stretch] us=%lld\n", static_cast<long long>(us));
+#endif
+		std::fflush(stdout);
+	}
+}
+
+void SaverThreads::CheckSlice() {
+	const void* site = SAVER_CALLER;
+	const int64_t now = NowUs();
+	if (t_LastCheckUs && now - t_LastCheckUs > 2000) ReportStretch(t_LastCheckSite, site, now - t_LastCheckUs);
+	t_LastCheckSite = site;
+	t_LastCheckUs = now;
+	if (now < s_SliceEndUs.load(std::memory_order_acquire)) return;
+	WaitForSlice();
+	t_LastCheckUs = NowUs();
+}
+
+int64_t SaverThreads::NowUs() noexcept {
+	return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void SaverThreads::OpenSlice(int64_t untilUs) {
+	{
+		std::lock_guard lock(s_SliceMutex);
+		s_SliceEndUs.store(untilUs, std::memory_order_release);
+	}
+	s_SliceOpened.notify_all();
+}
+
+void SaverThreads::CloseSlice() noexcept {
+	s_SliceEndUs.store(0, std::memory_order_release);
+	s_ClosedAtUs.store(NowUs(), std::memory_order_release);
+}
+
+void SaverThreads::WaitForSlice() {
+	std::unique_lock lock(s_SliceMutex);
+	for (;;) {
+		if (s_Gating.load(std::memory_order_acquire) == 0 || s_Lent.load(std::memory_order_acquire) > 0) return;
+		const int64_t now = NowUs(), sliceEnd = s_SliceEndUs.load(std::memory_order_acquire);
+		if (now < sliceEnd) return;
+		const int64_t closedAt = s_ClosedAtUs.load(std::memory_order_acquire);
+		if (sliceEnd == 0 && now - closedAt > c_StuckTickUs) {
+			if (s_ReportedStuckAtUs.exchange(closedAt) != closedAt) {
+				std::fprintf(stdout, "[saver-gate] a tick kept the gate closed %lld ms; the saver goes on beside it\n", static_cast<long long>((now - closedAt) / 1000));
+				std::fflush(stdout);
+			}
+			return;
+		}
+		s_SliceOpened.wait_for(lock, std::chrono::milliseconds(1));
+	}
+}
+
+SaverThreads::Lend::Lend() {
+	{
+		std::lock_guard lock(s_SliceMutex);
+		s_Lent.fetch_add(1, std::memory_order_acq_rel);
+	}
+	s_SliceOpened.notify_all();
+}
+
+SaverThreads::Lend::~Lend() { s_Lent.fetch_sub(1, std::memory_order_acq_rel); }
+
+SaverThreads::Gating::Gating() { s_Gating.fetch_add(1, std::memory_order_acq_rel); }
+
+SaverThreads::Gating::~Gating() {
+	{
+		std::lock_guard lock(s_SliceMutex);
+		s_Gating.fetch_sub(1, std::memory_order_acq_rel);
+	}
+	s_SliceOpened.notify_all();
 }
 
 ThreadMan::ThreadMan() :

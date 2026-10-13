@@ -33,6 +33,7 @@ namespace RTE::CheckpointLua {
 
 		// Only world setup waits for the initial inventory.
 		bool WaitUntilPrepared() const {
+			const SaverThreads::Lend lend;
 			for (;;) {
 				const State state = m_State.load(std::memory_order_acquire);
 				if (state == State::Ready) return true;

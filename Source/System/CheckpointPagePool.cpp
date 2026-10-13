@@ -9,6 +9,7 @@
 #include "Singleton.h"
 #include "ScenarioRunner.h"
 #include "Vector.h"
+#include "ThreadMan.h"
 
 #include <algorithm>
 #include <atomic>
@@ -257,6 +258,7 @@ struct CheckpointPagePool::Block {
 		std::vector<unsigned char> still(chunk);
 		size_t cooled = 0;
 		for (size_t first = 0; first < states.size(); first += chunk) {
+			SaverThreads::Yield();
 			const size_t count = std::min(chunk, states.size() - first);
 			{
 				Locked guard(lock);
@@ -363,7 +365,10 @@ size_t CheckpointPagePool::CoolInventory() {
 	static std::mutex passes;
 	std::lock_guard pass(passes);
 	size_t cooled = 0;
-	for (const auto& block: LiveBlocks()) if (block->Watch()) cooled += block->Cool();
+	for (const auto& block: LiveBlocks()) {
+		SaverThreads::Yield();
+		if (block->Watch()) cooled += block->Cool();
+	}
 	return cooled;
 }
 
@@ -371,6 +376,7 @@ size_t CheckpointPagePool::SettleInventory(size_t budget) {
 	const auto blocks = LiveBlocks();
 	size_t left = 0;
 	for (const auto& block: blocks) {
+		SaverThreads::Yield();
 		if (budget && block->Watch()) budget -= block->Settle(budget);
 		left += block->OpenPages();
 	}
@@ -862,6 +868,7 @@ CheckpointNativeStorage::CoolingPause::~CoolingPause() { s_CoolingPauses.fetch_s
 void CheckpointNativeStorage::StartSettling() {
 	// Faults on the newly fenced pages are spread over the slices instead of landing on one tick.
 	static std::jthread settler([](std::stop_token stop) {
+		SaverThreads::Mark();
 		uint64_t settled = UINT64_MAX;
 		auto cooled = std::chrono::steady_clock::now();
 		while (!stop.stop_requested()) {
@@ -1282,6 +1289,7 @@ const void* CheckpointNativeStorage::RootView(const void* source, size_t bytes) 
 CheckpointNativeStorage::ReadScope::~ReadScope() { s_Read = m_Previous; }
 
 bool CheckpointNativeStorage::ReadBytes(const void* source, void* target, size_t bytes) {
+	SaverThreads::Yield();
 	if (Private(source, bytes)) { std::memcpy(target, source, bytes); return true; }
 	source = Original(source);
 	if (const void* root = RootView(source, bytes)) { std::memcpy(target, root, bytes); return true; }
@@ -1302,6 +1310,7 @@ bool CheckpointNativeStorage::IsView(const void* address) {
 }
 
 const void* CheckpointNativeStorage::View(const void* source, size_t bytes) {
+	SaverThreads::Yield();
 	if (!s_Read || !source) return source;
 	if (Private(source, bytes)) return source;
 	if (const void* root = RootView(source, bytes)) return root;
@@ -1317,6 +1326,7 @@ std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointNativeStorage::Pag
 }
 
 const void* CheckpointNativeStorage::ViewObject(const void* source) {
+	SaverThreads::Yield();
 	if (!s_Read || !source) return source;
 	if (Private(source)) return source;
 	source = Original(source);

@@ -95,6 +95,7 @@ namespace RTE::CheckpointLua {
 				lua_pushlstring(m_State, reinterpret_cast<const char*>(bytes.data()), bytes.size()); return;
 			}
 			if (tvislightud(&value)) { m_Native(m_State, value); return; }
+			SaverThreads::Yield();
 			if (const auto found = m_Values.find(gcval(&value)); found != m_Values.end()) {
 				lua_rawgeti(m_State, LUA_REGISTRYINDEX, found->second); return;
 			}

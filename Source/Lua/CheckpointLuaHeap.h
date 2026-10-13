@@ -3,6 +3,7 @@
 #include "CheckpointNativeStorage.h"
 
 #include "FloatingPointEnvironment.h"
+#include "ThreadMan.h"
 extern "C" {
 #include "lua.h"
 #include "lauxlib.h"
@@ -353,6 +354,7 @@ namespace RTE::CheckpointLua {
 				for (unsigned index = 0; index < threads; ++index) {
 					CheckpointFailure::Check(CheckpointFailure::Point::CopyStartup);
 					m_Threads[index] = FloatingPointEnvironment::StartThread([this, exited] {
+						SaverThreads::Mark();
 						struct Exit { std::atomic<size_t>* count; ~Exit() { if (count) count->fetch_add(1); } } exit{exited};
 						while (true) {
 							std::packaged_task<void()> task;
@@ -623,6 +625,7 @@ namespace RTE::CheckpointLua {
 						                             : coordinator->CopyPage(page, false);
 						if (!opened)
 							throw std::runtime_error("could not open copied Lua heap pages");
+						SaverThreads::Yield();
 					}
 					if (!coordinator->Complete(cow, batchCopy)) throw std::runtime_error("could not open a copied Lua heap");
 					data->copied.store(data->committed / Snapshot::c_PageBytes, std::memory_order_relaxed);

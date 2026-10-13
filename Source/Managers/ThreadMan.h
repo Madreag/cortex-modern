@@ -14,6 +14,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <functional>
@@ -42,9 +43,56 @@ namespace RTE {
 		/// The saver's pool when a saver thread asks, else the pool asked for.
 		static BS::thread_pool& PoolFor(BS::thread_pool& pool) { return s_Current ? Pool() : pool; }
 
+		/// While the game runs, the saver's threads work only in its idle time: the game loop opens a slice when a tick's work
+		/// is done and closes it when the next tick starts, and a saver thread calls this where it holds nothing the game needs
+		/// and waits here while no slice is open. A game that is never idle gets a save that takes longer, never a slower tick.
+		static void Yield() {
+			if (!s_Current || !s_Gating.load(std::memory_order_relaxed) || s_Lent.load(std::memory_order_relaxed) > 0) return;
+			if (--t_Countdown > 0) return;
+			t_Countdown = c_YieldStride;
+			CheckSlice();
+		}
+
+		/// The game loop's side: the saver may work until the given steady-clock microsecond.
+		static void OpenSlice(int64_t untilUs);
+
+		/// The game loop's side: a tick starts, and the saver stops at its next yield.
+		static void CloseSlice() noexcept;
+
+		/// The steady clock in microseconds, as the slices are measured.
+		static int64_t NowUs() noexcept;
+
+		/// Opens the gate while the game itself waits on the saver's work.
+		class Lend {
+		public:
+			Lend();
+			~Lend();
+			Lend(const Lend&) = delete;
+			Lend& operator=(const Lend&) = delete;
+		};
+
+		/// The game loop drives the slices while this is held; outside it (menus, loading) the saver runs freely.
+		class Gating {
+		public:
+			Gating();
+			~Gating();
+			Gating(const Gating&) = delete;
+			Gating& operator=(const Gating&) = delete;
+		};
+
 	private:
+		static constexpr int c_YieldStride = 8; //!< Yields between two clock reads.
+
+		static void CheckSlice();
+		static void WaitForSlice();
+
 		static inline thread_local bool s_Current = false;
 		static inline thread_local bool s_Lowered = false;
+		static inline thread_local int t_Countdown = 0;
+		static inline std::atomic<int> s_Gating{0};
+		static inline std::atomic<int> s_Lent{0};
+		static inline std::atomic<int64_t> s_SliceEndUs{0};
+		static inline std::atomic<int64_t> s_ClosedAtUs{0};
 	};
 
 	/// Runs work(index) for every index below a count on a pool, the items taken in index order by whichever thread comes
@@ -112,6 +160,7 @@ namespace RTE {
 
 		static void Run(Shared& shared) {
 			for (size_t index = shared.next.fetch_add(1, std::memory_order_relaxed); index < shared.count; index = shared.next.fetch_add(1, std::memory_order_relaxed)) {
+				SaverThreads::Yield();
 				const FloatingPointEnvironment::Scope scope("parallel callback");
 				std::exception_ptr failure;
 				try {

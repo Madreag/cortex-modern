@@ -995,6 +995,7 @@ bool ActivityMan::WaitForSaveGameTask() {
 }
 
 bool ActivityMan::WaitForAutosaveVerdict() {
+	const SaverThreads::Lend lend;
 	bool completed = true;
 	if (m_PreparedAutosave && m_PreparedAutosave->result.valid()) {
 		completed = m_PreparedAutosave->result.get();
