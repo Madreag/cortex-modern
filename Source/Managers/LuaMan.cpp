@@ -16473,6 +16473,13 @@ void LuaMan::HashAllLuaStatesIntoSimChecksum() {
 	}
 	const std::vector<uint64_t> objects = HashScriptObjectGraphs(m_MasterScriptState, m_ScriptStates);
 	g_SimChecksum.Update("lua_state", objects.data(), objects.size() * sizeof(uint64_t));
+	// Test lever CCCP_TEST_HASH_GRAPHS: names each scripted object's graph digest, so a lua_state divergence names its object.
+	static const bool hashGraphs = std::getenv("CCCP_TEST_HASH_GRAPHS") != nullptr;
+	if (hashGraphs) {
+		std::string line = std::format("[script-graph-digests] tick={}", g_TimerMan.GetSimUpdateCount());
+		for (size_t index = 2; index + 1 < objects.size(); index += 2) line += std::format(" {}:{:x}", static_cast<long>(objects[index]), objects[index + 1]);
+		System::PrintDiagnosticLine(line);
+	}
 }
 
 void LuaMan::ClearScriptTimings() {
