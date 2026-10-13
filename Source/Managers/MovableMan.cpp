@@ -7456,6 +7456,27 @@ void MovableMan::Update() {
 		}
 		pass.traces.assign(pass.rays.size(), {});
 		pass.pending = true;
+		if (LuaMan::SharedTraceEnabled()) {
+			// What the pass will read: the frozen material copy and each team's fog copy.
+			const auto hashBitmap = [](const BITMAP* bitmap) {
+				uint64_t hash = 14695981039346656037ULL;
+				if (!bitmap) return hash;
+				const int rowBytes = bitmap->w * ((bitmap_color_depth(const_cast<BITMAP*>(bitmap)) + 7) / 8);
+				for (int y = 0; y < bitmap->h; ++y) {
+					const unsigned char* row = bitmap->line[y];
+					int x = 0;
+					for (; x + 8 <= rowBytes; x += 8) { uint64_t word; std::memcpy(&word, row + x, 8); hash = (hash ^ word) * 1099511628211ULL; }
+					for (; x < rowBytes; ++x) hash = (hash ^ row[x]) * 1099511628211ULL;
+				}
+				return hash;
+			};
+			std::string line = "see-launch material=" + std::to_string(hashBitmap(g_SceneMan.GetTerrain() ? g_SceneMan.GetTerrain()->GetMaterialCopyBitmap() : nullptr)) +
+			                   " live=" + std::to_string(hashBitmap(g_SceneMan.GetTerrain() ? g_SceneMan.GetTerrain()->GetMaterialBitmap() : nullptr));
+			for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+				if (pass.fog[team]) line += " fog" + std::to_string(team) + "=" + std::to_string(hashBitmap(pass.fog[team]));
+			}
+			LuaMan::TraceShared(nullptr, line);
+		}
 	} else {
 		pass.rays.clear();
 		pass.traced.clear();
