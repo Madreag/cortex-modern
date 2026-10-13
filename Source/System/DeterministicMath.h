@@ -16,11 +16,12 @@
 #endif
 
 namespace RTE {
-	// Match the x86 truncating conversion, including its integer-indefinite result.
-	// C++ leaves out-of-range float-to-int conversions undefined; arm64 saturates
-	// positive overflow instead, changing rays through unbounded-strength material.
+	// Truncate toward zero and saturate at the int range, so unbounded-strength material stops a ray on every platform.
+	// C++ leaves out-of-range float-to-int conversions undefined; x86 returns the smallest int for them.
 	inline int32_t DeterministicFloatToInt(float value) {
-		if (!(value >= -2147483648.0F && value < 2147483648.0F)) { return std::numeric_limits<int32_t>::min(); }
+		if (std::isnan(value)) { return 0; }
+		if (value >= 2147483648.0F) { return std::numeric_limits<int32_t>::max(); }
+		if (value < -2147483648.0F) { return std::numeric_limits<int32_t>::min(); }
 		return static_cast<int32_t>(value);
 	}
 

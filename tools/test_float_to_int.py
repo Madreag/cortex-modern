@@ -1,4 +1,4 @@
-"""Ray strength keeps the same integer result on x86 and arm64, including overflow."""
+"""Ray strength keeps the same integer result on x86 and arm64, and unbounded-strength material stops the ray."""
 
 from pathlib import Path
 import os
@@ -20,10 +20,10 @@ int main() {
         {0x00000000, 0}, {0x80000000, 0}, {0x00000001, 0},
         {0x3f400000, 0}, {0x3fe00000, 1}, {0xbfe00000, -1},
         {0x41c80000, 25}, {0x4effffff, 2147483520},
-        {0x4f000000, INT32_MIN}, {0xcf000000, INT32_MIN},
-        {0xcf000001, INT32_MIN}, {0x7f7fffff, INT32_MIN},
-        {0xff7fffff, INT32_MIN}, {0x7f800000, INT32_MIN},
-        {0xff800000, INT32_MIN}, {0x7fc00000, INT32_MIN}
+        {0x4f000000, INT32_MAX}, {0xcf000000, INT32_MIN},
+        {0xcf000001, INT32_MIN}, {0x7f7fffff, INT32_MAX},
+        {0xff7fffff, INT32_MIN}, {0x7f800000, INT32_MAX},
+        {0xff800000, INT32_MIN}, {0x7fc00000, 0}
     };
     for (const auto& row : cases) {
         volatile float input = std::bit_cast<float>(row.bits);
@@ -33,12 +33,12 @@ int main() {
             return 1;
         }
     }
-    // S10 tick 3398: material 1 must retain the existing x86 ray decision.
+    // S10 tick 3398: material 1 (integrity -1, read as float max) stops the ray on every platform.
     volatile float unbounded = std::bit_cast<float>(uint32_t{0x7f7fffff});
     int strength = RTE::DeterministicFloatToInt(0.0F + unbounded);
-    if (strength != INT32_MIN || strength >= 25) return 2;
-    strength = RTE::DeterministicFloatToInt(static_cast<float>(strength) + 70.0F);
-    if (strength != -2147483520 || strength >= 25) return 3;
+    if (strength != INT32_MAX || strength < 25) return 2;
+    strength = RTE::DeterministicFloatToInt(static_cast<float>(24) + unbounded);
+    if (strength != INT32_MAX || strength < 25) return 3;
     // Keep truncation at each visit, rather than accumulating fractional strength.
     strength = 0;
     for (float integrity : {0.75F, 0.75F, 1.75F}) {
