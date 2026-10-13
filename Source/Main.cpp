@@ -4361,6 +4361,7 @@ static std::string NetMatchEndReason(const Activity* activity) {
 #ifdef _WIN32
 // Test lever CCCP_TEST_SIM_SAMPLER: about every millisecond of a tick, the simulation thread's instruction pointer and the top
 // of its stack, and every other millisecond the same for each thread that ran since the last look; a tick slower than 80 ms
+// (or CCCP_TEST_SIM_SAMPLER_MIN_US when set)
 // prints each thread's CPU cycles in it and the samples of the busiest, as module offsets resolved offline against the
 // build's symbols. Nothing is allocated or locked while a thread is held.
 namespace {
@@ -4384,12 +4385,12 @@ namespace {
 				std::lock_guard sampling(m_Sampling);
 				m_Active.store(false, std::memory_order_release);
 				count = m_Count;
-				if (wallUs >= c_SlowUs) {
+				if (wallUs >= m_SlowUs) {
 					for (const Watched& thread: m_Threads) busy.emplace_back(Cycles(thread.handle) - thread.tickStart, thread.id);
 				}
 			}
 			const uint64_t cycles = Cycles(GetCurrentThread()) - m_Cycles;
-			if (wallUs < c_SlowUs) return;
+			if (wallUs < m_SlowUs) return;
 			busy.emplace_back(cycles, m_SimId);
 			std::sort(busy.rbegin(), busy.rend());
 			busy.resize(std::min(busy.size(), c_Busiest));
@@ -4416,7 +4417,11 @@ namespace {
 		}
 
 	private:
-		static constexpr int64_t c_SlowUs = 80000;
+		const int64_t m_SlowUs = [] {
+			const char* value = std::getenv("CCCP_TEST_SIM_SAMPLER_MIN_US");
+			const long parsed = value ? std::strtol(value, nullptr, 10) : 0;
+			return parsed > 0 ? static_cast<int64_t>(parsed) : int64_t{80000};
+		}();
 		static constexpr size_t c_Slots = 16384, c_Words = 64, c_Busiest = 12;
 		struct Sample {
 			DWORD id;
