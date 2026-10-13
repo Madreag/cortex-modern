@@ -826,6 +826,10 @@ namespace RTE::CheckpointLua {
 			size_t pageBytes = 0;
 			std::vector<std::shared_ptr<CowCopy>> copies;
 			std::atomic_flag lock = ATOMIC_FLAG_INIT;
+			// The fault runs of a generation's first writes, which the tick after the next boundary writes again.
+			static constexpr size_t c_HotRuns = 64;
+			std::array<uint32_t, c_HotRuns> hotRuns{};
+			size_t hotRunCount = 0;
 			struct Locked {
 				std::atomic_flag& flag;
 				explicit Locked(std::atomic_flag& flag) : flag(flag) { while (flag.test_and_set(std::memory_order_acquire)) {} }
@@ -841,13 +845,30 @@ namespace RTE::CheckpointLua {
 				auto& prepared = *static_cast<Prepared*>(context);
 				auto& coordinator = *prepared.coordinator;
 				Locked guard(coordinator.lock);
-				if (prepared.copy->completed || prepared.copy->armed.load(std::memory_order_relaxed) != 0) return false;
-				if (PageWriteFence::ProtectCopyPages(address, bytes)) {
-					prepared.copy->armed.store(1, std::memory_order_release);
-					prepared.copy->armed.notify_all();
-					return true;
+				auto& copy = *prepared.copy;
+				if (copy.completed || copy.armed.load(std::memory_order_relaxed) != 0) return false;
+				// The runs the last generation faulted on first are copied here instead of fenced: the tick after a boundary
+				// writes them again, and its faults cost it several times what copying them costs the boundary.
+				const size_t pages = std::min(copy.saved.size(), bytes / coordinator.pageBytes);
+				for (size_t index = 0; index < coordinator.hotRunCount; ++index) {
+					const size_t first = size_t{coordinator.hotRuns[index]} * c_FaultRunPages, last = std::min(first + c_FaultRunPages, pages);
+					for (size_t page = first; page < last; ++page) {
+						if (copy.saved[page]) continue;
+						CopyCheckpointPages(reinterpret_cast<std::byte*>(copy.destination) + page * coordinator.pageBytes, reinterpret_cast<const void*>(address + page * coordinator.pageBytes), coordinator.pageBytes);
+						copy.saved[page] = 1;
+					}
 				}
-				return false;
+				coordinator.hotRunCount = 0;
+				for (size_t page = 0; page < pages;) {
+					if (copy.saved[page]) { ++page; continue; }
+					const size_t begin = page;
+					while (page < pages && !copy.saved[page]) ++page;
+					if (!PageWriteFence::ProtectCopyPages(address + begin * coordinator.pageBytes, (page - begin) * coordinator.pageBytes)) return false;
+				}
+				if (pages * coordinator.pageBytes < bytes && !PageWriteFence::ProtectCopyPages(address + pages * coordinator.pageBytes, bytes - pages * coordinator.pageBytes)) return false;
+				copy.armed.store(1, std::memory_order_release);
+				copy.armed.notify_all();
+				return true;
 			}
 			// At a tick boundary no script writes the heap, so a heap about to be written all over is copied whole at once:
 			// no page is fenced, so none faults, opens again or takes the reopened page's first-write fault.
@@ -882,9 +903,14 @@ namespace RTE::CheckpointLua {
 				// The faulting page always opens; a neighbour opens only when this call saved it, since it is still fenced.
 				std::array<bool, c_FaultRunPages> opened{};
 				opened[page - first] = fault;
+				bool recorded = !fault || hotRunCount == hotRuns.size();
 				for (const auto& copy: copies) {
 					if (copy->armed.load(std::memory_order_relaxed) != 1 || copy->completed) continue;
 					const bool faulted = page < copy->saved.size() && !copy->saved[page];
+					if (faulted && !recorded) {
+						hotRuns[hotRunCount++] = static_cast<uint32_t>(first / c_FaultRunPages);
+						recorded = true;
+					}
 					// An unsaved generation's page has never been opened for a
 					// write. Materialize every such generation before opening it.
 					for (size_t at = first; at < std::min(last, copy->saved.size()); ++at) {
