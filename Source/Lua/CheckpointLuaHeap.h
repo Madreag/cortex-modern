@@ -416,7 +416,7 @@ namespace RTE::CheckpointLua {
 			PreparationLease() = default;
 			std::shared_ptr<Prepared> Prepare() const;
 			bool Current(const Prepared& prepared) const noexcept;
-			bool Arm(Prepared& prepared) const noexcept;
+			bool Arm(Prepared& prepared, bool byCopy = false) const noexcept;
 			explicit operator bool() const noexcept { return m_Life != nullptr; }
 		private:
 			friend class HeapOwner;
@@ -835,6 +835,20 @@ namespace RTE::CheckpointLua {
 					return true;
 				}
 				return false;
+			}
+			// At a tick boundary no script writes the heap, so a heap about to be written all over is copied whole at once:
+			// no page is fenced, so none faults, opens again or takes the reopened page's first-write fault.
+			static bool ArmByCopy(void* context, uintptr_t address, size_t bytes) noexcept {
+				auto& prepared = *static_cast<Prepared*>(context);
+				auto& coordinator = *prepared.coordinator;
+				Locked guard(coordinator.lock);
+				auto& copy = *prepared.copy;
+				if (copy.completed || copy.armed.load(std::memory_order_relaxed) != 0 || bytes != copy.saved.size() * copy.pageBytes) return false;
+				std::memcpy(copy.destination, reinterpret_cast<const void*>(address), bytes);
+				std::fill(copy.saved.begin(), copy.saved.end(), 1);
+				copy.armed.store(1, std::memory_order_release);
+				copy.armed.notify_all();
+				return true;
 			}
 
 			// A write fault saves and opens the aligned run of pages around it: a collector's pass writes the neighbours
@@ -1309,7 +1323,7 @@ namespace RTE::CheckpointLua {
 		bool Current(const HeapOwner& owner) const noexcept {
 			return m_Data->state == owner.m_State && m_Data->committed == owner.m_PublishedCommitted.load(std::memory_order_acquire);
 		}
-		bool Arm(HeapOwner& owner) noexcept {
+		bool Arm(HeapOwner& owner, bool byCopy = false) noexcept {
 			std::unique_lock preparations(owner.m_PrepareMutex, std::try_to_lock);
 			if (!preparations || !Current(owner) || owner.m_CowCoordinator != m_Coordinator) return false;
 			if (owner.m_CopyPending.load(std::memory_order_acquire) && !owner.m_CowGateFree.load(std::memory_order_acquire)) return false;
@@ -1318,7 +1332,7 @@ namespace RTE::CheckpointLua {
 			const auto started = std::chrono::steady_clock::now();
 			m_Data->serial = G(owner.m_State)->objserial;
 			CowCoordinator::Prepared prepared{m_Coordinator.get(), m_Copy};
-			if (!CowCoordinator::Arm(&prepared, m_Data->base, m_Data->committed)) return false;
+			if (!(byCopy ? CowCoordinator::ArmByCopy : CowCoordinator::Arm)(&prepared, m_Data->base, m_Data->committed)) return false;
 			owner.m_CowGateFree.store(true, std::memory_order_release);
 			m_Data->freezeUs = MicrosecondsSince(started);
 			return true;
@@ -1395,10 +1409,10 @@ namespace RTE::CheckpointLua {
 		return alive && m_Life->owner && prepared.Current(*m_Life->owner);
 	}
 
-	inline bool HeapOwner::PreparationLease::Arm(Prepared& prepared) const noexcept {
+	inline bool HeapOwner::PreparationLease::Arm(Prepared& prepared, bool byCopy) const noexcept {
 		if (!m_Life) return false;
 		std::unique_lock alive(m_Life->mutex, std::try_to_lock);
-		return alive && m_Life->owner && prepared.Arm(*m_Life->owner);
+		return alive && m_Life->owner && prepared.Arm(*m_Life->owner, byCopy);
 	}
 
 	inline std::shared_ptr<HeapOwner::Prepared> HeapOwner::PrepareFreeze() {

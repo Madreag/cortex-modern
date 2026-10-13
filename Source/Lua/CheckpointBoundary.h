@@ -87,23 +87,22 @@ namespace RTE::CheckpointLua {
 				std::vector<uint64_t> until(m_Heaps.size(), 0);
 				if (m_TicksUntilCollection) for (size_t index = 0; index < m_Heaps.size(); ++index) until[index] = m_TicksUntilCollection(index);
 				OrderDrains(until);
+				const std::vector<bool> byCopy = CopiedWhole(until);
 				// The Lua heaps are fenced on another thread while this one arms the native pages.
 				static const bool s_SerialArm = std::getenv("CCCP_TEST_CHECKPOINT_SERIAL_ARM") != nullptr;
-				auto heaps = std::async(s_SerialArm ? std::launch::deferred : std::launch::async, [this, &until] {
+				auto heaps = std::async(s_SerialArm ? std::launch::deferred : std::launch::async, [this, &byCopy] {
 					const auto begun = std::chrono::steady_clock::now();
-					// The heaps are fenced side by side: their protection calls scale across threads.
+					// The heaps are fenced or copied side by side: protection calls and copies both scale across threads.
 					const size_t parts = s_SerialArm ? 1 : std::min<size_t>(4, std::max<size_t>(1, m_Heaps.size()));
-					const auto armSome = [this, parts](size_t part) {
+					const auto armSome = [this, parts, &byCopy](size_t part) {
 						bool armed = true;
-						for (size_t index = part; armed && index < m_Heaps.size(); index += parts) armed = m_Heaps[index].lease.Arm(*m_Heaps[index].prepared);
+						for (size_t index = part; armed && index < m_Heaps.size(); index += parts) armed = m_Heaps[index].lease.Arm(*m_Heaps[index].prepared, byCopy[index]);
 						return armed;
 					};
 					std::vector<std::future<bool>> helpers;
 					for (size_t part = 1; part < parts; ++part) helpers.push_back(std::async(std::launch::async, armSome, part));
 					bool armed = armSome(0);
 					for (auto& helper: helpers) armed = helper.get() && armed;
-					// A heap its state collects in the next tick would fault on every page before a saver had a slice to copy it.
-					if (armed) for (size_t index = 0; index < m_Heaps.size(); ++index) if (until[index] == 1) m_Heaps[index].prepared->Drain();
 					return std::pair{armed, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begun).count()};
 				});
 				bool nativeArmed = false;
@@ -226,6 +225,22 @@ namespace RTE::CheckpointLua {
 		Boundary() = default;
 		enum class Status { Prepared, Arming, Armed, Frozen, Cancelled };
 		struct Heap { HeapOwner::PreparationLease lease; std::shared_ptr<HeapOwner::Prepared> prepared; };
+		// A collection writes every page of its state's heap, so the heap collected in the next tick, which comes before any
+		// idle time, and those collected soon after while they fit a few milliseconds of copying, are copied whole at the
+		// boundary instead of fenced.
+		std::vector<bool> CopiedWhole(const std::vector<uint64_t>& until) const {
+			constexpr size_t c_WholeCopyBytes = size_t{40} << 20;
+			std::vector<bool> whole(m_Heaps.size(), false);
+			size_t bytes = 0;
+			for (const size_t index: m_DrainOrder) {
+				if (!until[index]) break;
+				const size_t heapBytes = m_Heaps[index].prepared->Image().ByteCount();
+				if (until[index] > 1 && bytes + heapBytes > c_WholeCopyBytes) break;
+				whole[index] = true;
+				bytes += heapBytes;
+			}
+			return whole;
+		}
 		// Heaps whose state collects sooner copy first, then the larger ones, so the live writes that fault on a page not yet
 		// copied stop soonest.
 		void OrderDrains(const std::vector<uint64_t>& until) {
