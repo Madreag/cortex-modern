@@ -17,6 +17,9 @@ MIN_PLAY_TPS = 59.9
 SIM_TICK_MS = 1000 / 60
 RATE_POLICY = 'Full in-play and each consecutive 60-second window: at least 59.9 tps; median of 60-tick average intervals: within 1 ms of 1000/60 ms. Raw gaps and sliding-window rates remain evidence.'
 LEAVE_POLICY = 'An ordinary Leave is noted within 10 seconds and retains its AI seat; only the host End Match ends this round, within 10 seconds of that request. Silent-peer timing remains enabled and bounded.'
+BUSY_RATIO = 4
+BOX_POLICY = (f'Each box plays alone: in every 600-tick window after the first, the engine\'s fixed per-tick harness work keeps its 95th percentile '
+              f'within {BUSY_RATIO} times its median. A box that took the CPU from the engine fails the run as not a proof; its pauses stay failures.')
 
 
 def round_listing(report, text):
@@ -61,6 +64,15 @@ def own_seat_bridges(text, peer):
         elif kind == 'return' and members & bit and intervals and intervals[-1][1] is None:
             intervals[-1][1] = frame
     return intervals
+
+
+def box_load(text):
+    """The engine's fixed per-tick harness work by 600-tick window; the first window holds the round's start and stays evidence only."""
+    windows = [dict(zip(('tick', 'p50_us', 'p95_us', 'max_us'), map(int, w))) for w in
+               re.findall(r'\[harness-cost\] tick=(\d+) window=600 tick_end_us p50=(\d+) p95=(\d+) max=(\d+)', text)]
+    for window in windows:
+        window['ratio'] = round(window['p95_us'] / max(window['p50_us'], 1), 2)
+    return {'windows': windows, 'busy_windows': [w for w in windows[1:] if w['ratio'] > BUSY_RATIO]}
 
 
 def score(roots):
@@ -141,6 +153,10 @@ def score(roots):
         detail = {'participant': result, 'report_present': bool(report), 'placements': applies[role], 'routes': routes,
                   'path_samples': path_samples, 'path_summary': physical, 'lockstep': lock}
         details[role] = detail
+        # Work beside a participant (a build, another engine) takes its CPU, and its pauses then measure the box, not the round.
+        load = detail['box_load'] = box_load(text)
+        require(not load['busy_windows'], f"{role}: box was not alone during the match (harness tick-end p95 over {BUSY_RATIO}x its median "
+                                          f"in {len(load['busy_windows'])} of {max(len(load['windows']) - 1, 0)} windows)")
         if role == 'ally':
             detail.update(directory_at_end=directory, listing_source=listing_source,
                           completed_report_retained='directory_at_end' in report.get('runner', {}))
@@ -337,7 +353,7 @@ def score(roots):
             'common_ticks': len(common), 'compared_ticks': len(compared), 'hash_mismatches': mismatch,
             'hash_coverage': coverage, 'hash_exclusions': exclusions, 'leave_test': leave_score, 'details': details,
             'rate_policy': RATE_POLICY,
-            'leave_policy': LEAVE_POLICY,
+            'leave_policy': LEAVE_POLICY, 'box_policy': BOX_POLICY,
             'physics_policy': 'The gate requires zero unaffected pauses over 50 ms during blackout. Pauses outside blackout remain measured path data.'}
 
 

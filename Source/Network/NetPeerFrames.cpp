@@ -87,17 +87,27 @@ namespace RTE {
 		return held == m_PeerBridges.end() || !held->second.committedHold || held->second.returnFrame.has_value();
 	}
 
-	bool NetLockstepCoordinator::PeerGroupHasAuthority(uint32_t voters) const {
+	uint32_t NetLockstepCoordinator::PeerVotingOwners(uint32_t& voters) const {
 		uint32_t owners = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= SeatBit(peer);
-		if (voters == 0 || (voters & ~owners) != 0) return false;
+		if (voters == 0 || (voters & ~owners) != 0) return 0;
 		// A declared Leave keeps its AI seat but answers nothing more from the moment it is declared, its last inputs ahead included.
 		for (const auto& [peer, ended]: m_PeerRoundEnds) if (!ended.closedLink) owners &= ~SeatBit(peer);
 		// A returning seat answers nothing until it plays, so it votes only after its agreed neutral interval.
 		for (const auto& [peer, back]: m_ReclaimTransactions) if (m_Stats.nextFrame <= back.neutralThroughFrame) owners &= ~SeatBit(peer);
 		voters &= owners;
-		if (voters == 0) return false;
+		return voters == 0 ? 0 : owners;
+	}
+
+	bool NetLockstepCoordinator::PeerGroupIsRefereedHalf(uint32_t voters) const {
+		const uint32_t owners = m_Config.frameTieReferee ? PeerVotingOwners(voters) : 0;
+		return owners != 0 && 2 * std::popcount(voters) == std::popcount(owners);
+	}
+
+	bool NetLockstepCoordinator::PeerGroupHasAuthority(uint32_t voters) const {
+		const uint32_t owners = PeerVotingOwners(voters);
+		if (owners == 0) return false;
 		if (m_PeerAdminFrameMembers != 0 && voters == m_PeerAdminFrameMembers) return true;
 		const int votes = std::popcount(voters), seats = std::popcount(owners);
 		if (2 * votes != seats) return 2 * votes > seats;
