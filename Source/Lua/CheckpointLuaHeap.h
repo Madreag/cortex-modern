@@ -625,7 +625,7 @@ namespace RTE::CheckpointLua {
 						                             : coordinator->CopyPage(page, false);
 						if (!opened)
 							throw std::runtime_error("could not open copied Lua heap pages");
-						SaverThreads::Yield();
+						SaverThreads::YieldToGame();
 					}
 					if (!coordinator->Complete(cow, batchCopy)) throw std::runtime_error("could not open a copied Lua heap");
 					data->copied.store(data->committed / Snapshot::c_PageBytes, std::memory_order_relaxed);

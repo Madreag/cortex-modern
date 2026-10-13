@@ -46,7 +46,7 @@ namespace RTE {
 		/// While the game runs, the saver's threads work only in its idle time: the game loop opens a slice when a tick's work
 		/// is done and closes it when the next tick starts, and a saver thread calls this where it holds nothing the game needs
 		/// and waits here while no slice is open. A game that is never idle gets a save that takes longer, never a slower tick.
-		static void Yield() {
+		static void YieldToGame() {
 			if (!s_Current || !s_Gating.load(std::memory_order_relaxed) || s_Lent.load(std::memory_order_relaxed) > 0) return;
 			if (--t_Countdown > 0) return;
 			t_Countdown = c_YieldStride;
@@ -160,7 +160,7 @@ namespace RTE {
 
 		static void Run(Shared& shared) {
 			for (size_t index = shared.next.fetch_add(1, std::memory_order_relaxed); index < shared.count; index = shared.next.fetch_add(1, std::memory_order_relaxed)) {
-				SaverThreads::Yield();
+				SaverThreads::YieldToGame();
 				const FloatingPointEnvironment::Scope scope("parallel callback");
 				std::exception_ptr failure;
 				try {

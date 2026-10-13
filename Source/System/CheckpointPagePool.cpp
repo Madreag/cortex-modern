@@ -258,7 +258,7 @@ struct CheckpointPagePool::Block {
 		std::vector<unsigned char> still(chunk);
 		size_t cooled = 0;
 		for (size_t first = 0; first < states.size(); first += chunk) {
-			SaverThreads::Yield();
+			SaverThreads::YieldToGame();
 			const size_t count = std::min(chunk, states.size() - first);
 			{
 				Locked guard(lock);
@@ -366,7 +366,7 @@ size_t CheckpointPagePool::CoolInventory() {
 	std::lock_guard pass(passes);
 	size_t cooled = 0;
 	for (const auto& block: LiveBlocks()) {
-		SaverThreads::Yield();
+		SaverThreads::YieldToGame();
 		if (block->Watch()) cooled += block->Cool();
 	}
 	return cooled;
@@ -376,7 +376,7 @@ size_t CheckpointPagePool::SettleInventory(size_t budget) {
 	const auto blocks = LiveBlocks();
 	size_t left = 0;
 	for (const auto& block: blocks) {
-		SaverThreads::Yield();
+		SaverThreads::YieldToGame();
 		if (budget && block->Watch()) budget -= block->Settle(budget);
 		left += block->OpenPages();
 	}
@@ -1289,7 +1289,7 @@ const void* CheckpointNativeStorage::RootView(const void* source, size_t bytes) 
 CheckpointNativeStorage::ReadScope::~ReadScope() { s_Read = m_Previous; }
 
 bool CheckpointNativeStorage::ReadBytes(const void* source, void* target, size_t bytes) {
-	SaverThreads::Yield();
+	SaverThreads::YieldToGame();
 	if (Private(source, bytes)) { std::memcpy(target, source, bytes); return true; }
 	source = Original(source);
 	if (const void* root = RootView(source, bytes)) { std::memcpy(target, root, bytes); return true; }
@@ -1310,7 +1310,7 @@ bool CheckpointNativeStorage::IsView(const void* address) {
 }
 
 const void* CheckpointNativeStorage::View(const void* source, size_t bytes) {
-	SaverThreads::Yield();
+	SaverThreads::YieldToGame();
 	if (!s_Read || !source) return source;
 	if (Private(source, bytes)) return source;
 	if (const void* root = RootView(source, bytes)) return root;
@@ -1326,7 +1326,7 @@ std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointNativeStorage::Pag
 }
 
 const void* CheckpointNativeStorage::ViewObject(const void* source) {
-	SaverThreads::Yield();
+	SaverThreads::YieldToGame();
 	if (!s_Read || !source) return source;
 	if (Private(source)) return source;
 	source = Original(source);
