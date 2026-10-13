@@ -37,6 +37,9 @@ namespace RTE {
 		/// Whether the calling thread is one of the saver's.
 		static bool Current() noexcept { return s_Current; }
 
+		/// Whether a game loop is handing the savers its idle time.
+		static bool Gated() noexcept { return s_Gating.load(std::memory_order_relaxed) > 0; }
+
 		/// The pool whose threads take the saver's parallel work.
 		static BS::thread_pool& Pool();
 

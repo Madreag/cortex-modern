@@ -56,7 +56,8 @@ namespace {
 	struct Pages {
 		unsigned char* data = nullptr;
 		size_t bytes;
-		explicit Pages(size_t bytes) : bytes(bytes) {
+		bool betweenTicks = false; //!< A capture's copy goes back between the game's ticks.
+		explicit Pages(size_t bytes, bool betweenTicks = false) : bytes(bytes), betweenTicks(betweenTicks) {
 			CheckpointFailure::Check(CheckpointFailure::Point::NativePages);
 #ifdef _WIN32
 			data = static_cast<unsigned char*>(VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
@@ -67,11 +68,37 @@ namespace {
 			if (!data) throw std::bad_alloc();
 		}
 		~Pages() {
+			if (betweenTicks) ReleaseBetweenTicks(data, bytes);
+			else Release(data, bytes);
+		}
+		static void Release(unsigned char* data, size_t bytes) noexcept {
 #ifdef _WIN32
 			VirtualFree(data, 0, MEM_RELEASE);
 #else
 			munmap(data, bytes);
 #endif
+		}
+		// One large release holds the process's address space while the game faults on its own pages, so a saver gives
+		// the copy back a piece at a time, and a game thread leaves it to the savers.
+		static void ReleaseBetweenTicks(unsigned char* data, size_t bytes) noexcept {
+			if (!SaverThreads::Current()) {
+				if (SaverThreads::Gated()) try {
+					SaverThreads::Pool().push_task([data, bytes] { ReleaseBetweenTicks(data, bytes); });
+					return;
+				} catch (...) {}
+				Release(data, bytes);
+				return;
+			}
+			constexpr size_t piece = size_t{1} << 20;
+			for (size_t offset = 0; offset + piece < bytes; offset += piece) {
+				try { SaverThreads::YieldToGame(); } catch (...) {}
+#ifdef _WIN32
+				VirtualFree(data + offset, piece, MEM_DECOMMIT);
+#else
+				madvise(data + offset, piece, MADV_DONTNEED);
+#endif
+			}
+			Release(data, bytes);
 		}
 	};
 	struct Locked {
@@ -100,7 +127,7 @@ struct CheckpointPagePool::Copy {
 	bool completed = false;
 	bool abandoned = false;
 	const std::shared_ptr<ArmGate> gate;
-	Copy(size_t bytes, size_t pageBytes, std::shared_ptr<ArmGate> gate = {}) : pages(bytes), saved(bytes / pageBytes), hot(bytes / pageBytes, 0), gate(std::move(gate)) {
+	Copy(size_t bytes, size_t pageBytes, std::shared_ptr<ArmGate> gate = {}) : pages(bytes, true), saved(bytes / pageBytes), hot(bytes / pageBytes, 0), gate(std::move(gate)) {
 		for (auto& page: saved) page.store(0, std::memory_order_relaxed);
 	}
 	bool Arming() const noexcept { return gate && gate->state.load(std::memory_order_acquire) == ArmGate::State::Arming; }
@@ -171,6 +198,13 @@ struct CheckpointPagePool::Block {
 	bool SavePages(size_t first, size_t count, bool fault) noexcept {
 		const auto started = fault ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		Locked guard(lock);
+		// While a capture is open a write fault saves and opens the aligned run around it: taking a fault costs several
+		// times what copying a page does, and the game's writes come in runs.
+		constexpr size_t faultRun = 16;
+		if (fault && count == 1 && std::any_of(copies.begin(), copies.end(), [](const auto& copy) { return !copy->completed && !copy->abandoned && (copy->Armed() || copy->Arming()); })) {
+			first -= first % faultRun;
+			count = std::min(faultRun, states.size() - first);
+		}
 		// Every capture whose boundary has begun keeps the page as that boundary saw it.
 		for (const auto& copy: copies) {
 			if (copy->completed || copy->abandoned || !(copy->Armed() || copy->Arming())) continue;
