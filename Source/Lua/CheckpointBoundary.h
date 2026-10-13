@@ -238,7 +238,8 @@ namespace RTE::CheckpointLua {
 				return soon(left) != soon(right) ? soon(left) < soon(right) : bytes[left] > bytes[right];
 			});
 		}
-		// A saver copies the heaps side by side in the game's idle time.
+		// A saver copies the heaps side by side in the game's idle time, a few at once so the memory bandwidth goes to the
+		// heaps that collect first.
 		void DrainHeaps() {
 			if (m_DrainOrder.size() != m_Heaps.size()) {
 				m_DrainOrder.resize(m_Heaps.size());
@@ -248,7 +249,7 @@ namespace RTE::CheckpointLua {
 				for (const size_t index: m_DrainOrder) m_Heaps[index].prepared->Drain();
 				return;
 			}
-			ParallelWork drains(SaverThreads::Pool(), m_DrainOrder.size(), [this](size_t index) { m_Heaps[m_DrainOrder[index]].prepared->Drain(); });
+			ParallelWork drains(SaverThreads::Pool(), m_DrainOrder.size(), [this](size_t index) { m_Heaps[m_DrainOrder[index]].prepared->Drain(); }, 2);
 			drains.Finish();
 		}
 		std::function<uint64_t(size_t)> m_TicksUntilCollection;
