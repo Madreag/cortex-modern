@@ -728,7 +728,10 @@ struct ActivityMan::PreparedAutosave {
 		std::vector<const lua_State*> heaps;
 		heaps.reserve(states.size());
 		for (const auto* state: states) { add(*state); heaps.push_back(const_cast<LuaStateWrapper*>(state)->GetLuaState()); }
-		return CheckpointLua::Boundary::Prepare(heaps, roots);
+		auto boundary = CheckpointLua::Boundary::Prepare(heaps, roots);
+		// The heaps are the states in slot order: the master, then each threaded state.
+		boundary->CollectionOrder([](size_t heap) { return LuaMan::TicksUntilFullCollection(heap); });
+		return boundary;
 	}
 
 	bool Capture(const std::string& match, uint64_t tick, const AutosaveIdentity& identity, std::chrono::steady_clock::time_point began) {

@@ -9234,6 +9234,18 @@ bool LuaMan::IsDeterministicCollection() {
 	return s_DeterministicCollection;
 }
 
+namespace {
+	// The tick whose end ran the last collection pass; a saver orders its heap copies by the slots that collect next.
+	std::atomic<uint64_t> s_LastCollectionTick{(std::numeric_limits<uint64_t>::max)()};
+}
+
+uint64_t LuaMan::TicksUntilFullCollection(size_t slot) {
+	const uint64_t last = s_LastCollectionTick.load(std::memory_order_acquire);
+	if (!IsDeterministicCollection() || last == (std::numeric_limits<uint64_t>::max)()) return 0;
+	const uint64_t next = (last + 1) % c_CollectionPeriodTicks;
+	return (slot % c_CollectionPeriodTicks + c_CollectionPeriodTicks - next) % c_CollectionPeriodTicks + 1;
+}
+
 void LuaMan::Initialize() {
 	// Every Lua-owned engine object's destructor belongs to this thread; the pool threads only collect.
 	LuabindObjectWrapper::SetSimThread();
@@ -16406,6 +16418,7 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 	ZoneScoped;
 
 	const bool fullCollection = IsDeterministicCollection();
+	s_LastCollectionTick.store(tick, std::memory_order_release);
 	// A full collection costs the whole live heap, so each state takes one in its own slot of the period, not every tick. A
 	// state whose collector runs (a fresh state, a script's collectgarbage) takes one now, so nothing collects mid-tick.
 	const auto due = [fullCollection, everyState, tick](LuaStateWrapper& luaState, uint64_t slot) {

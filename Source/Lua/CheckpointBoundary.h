@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <exception>
+#include <functional>
 #include <future>
 #include <utility>
 #include <atomic>
@@ -74,18 +75,26 @@ namespace RTE::CheckpointLua {
 			for (const Heap& heap: m_Heaps) if (!heap.lease.Current(*heap.prepared)) return false;
 			return true;
 		}
+		/// Names each heap's distance in ticks to its state's next full collection (one: the next tick), so the boundary copies
+		/// a heap about to be collected whole and a saver copies the rest in the order they collect.
+		void CollectionOrder(std::function<uint64_t(size_t heap)> ticksUntil) { m_TicksUntilCollection = std::move(ticksUntil); }
 		bool Arm(std::array<int64_t, 7>* parts = nullptr) {
 			const auto started = std::chrono::steady_clock::now();
 			if (!Current()) return false;
 			Status expected = Status::Prepared;
 			if (!m_Status.compare_exchange_strong(expected, Status::Arming, std::memory_order_acq_rel)) return false;
 			try {
+				std::vector<uint64_t> until(m_Heaps.size(), 0);
+				if (m_TicksUntilCollection) for (size_t index = 0; index < m_Heaps.size(); ++index) until[index] = m_TicksUntilCollection(index);
+				OrderDrains(until);
 				// The Lua heaps are fenced on another thread while this one arms the native pages.
 				static const bool s_SerialArm = std::getenv("CCCP_TEST_CHECKPOINT_SERIAL_ARM") != nullptr;
-				auto heaps = std::async(s_SerialArm ? std::launch::deferred : std::launch::async, [this] {
+				auto heaps = std::async(s_SerialArm ? std::launch::deferred : std::launch::async, [this, &until] {
 					const auto begun = std::chrono::steady_clock::now();
 					bool armed = true;
 					for (Heap& heap: m_Heaps) if (!heap.lease.Arm(*heap.prepared)) { armed = false; break; }
+					// A heap its state collects in the next tick would fault on every page before a saver had a slice to copy it.
+					if (armed) for (size_t index = 0; index < m_Heaps.size(); ++index) if (until[index] == 1) m_Heaps[index].prepared->Drain();
 					return std::pair{armed, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begun).count()};
 				});
 				bool nativeArmed = false;
@@ -208,20 +217,33 @@ namespace RTE::CheckpointLua {
 		Boundary() = default;
 		enum class Status { Prepared, Arming, Armed, Frozen, Cancelled };
 		struct Heap { HeapOwner::PreparationLease lease; std::shared_ptr<HeapOwner::Prepared> prepared; };
-		// A saver copies the heaps side by side in the game's idle time, the largest first, so the live writes that fault
-		// on a page not yet copied stop soonest.
+		// Heaps whose state collects sooner copy first, then the larger ones, so the live writes that fault on a page not yet
+		// copied stop soonest.
+		void OrderDrains(const std::vector<uint64_t>& until) {
+			std::vector<size_t> bytes(m_Heaps.size());
+			for (size_t index = 0; index < m_Heaps.size(); ++index) bytes[index] = m_Heaps[index].prepared->Image().ByteCount();
+			m_DrainOrder.resize(m_Heaps.size());
+			std::iota(m_DrainOrder.begin(), m_DrainOrder.end(), size_t{0});
+			const auto soon = [&until](size_t index) { return until[index] ? until[index] : (std::numeric_limits<uint64_t>::max)(); };
+			std::stable_sort(m_DrainOrder.begin(), m_DrainOrder.end(), [&](size_t left, size_t right) {
+				return soon(left) != soon(right) ? soon(left) < soon(right) : bytes[left] > bytes[right];
+			});
+		}
+		// A saver copies the heaps side by side in the game's idle time.
 		void DrainHeaps() {
+			if (m_DrainOrder.size() != m_Heaps.size()) {
+				m_DrainOrder.resize(m_Heaps.size());
+				std::iota(m_DrainOrder.begin(), m_DrainOrder.end(), size_t{0});
+			}
 			if (!SaverThreads::Current() || m_Heaps.size() < 2) {
-				for (Heap& heap: m_Heaps) heap.prepared->Drain();
+				for (const size_t index: m_DrainOrder) m_Heaps[index].prepared->Drain();
 				return;
 			}
-			std::vector<size_t> order(m_Heaps.size()), bytes(m_Heaps.size());
-			std::iota(order.begin(), order.end(), size_t{0});
-			for (size_t index = 0; index < m_Heaps.size(); ++index) bytes[index] = m_Heaps[index].prepared->Image().ByteCount();
-			std::stable_sort(order.begin(), order.end(), [&bytes](size_t left, size_t right) { return bytes[left] > bytes[right]; });
-			ParallelWork drains(SaverThreads::Pool(), order.size(), [this, &order](size_t index) { m_Heaps[order[index]].prepared->Drain(); });
+			ParallelWork drains(SaverThreads::Pool(), m_DrainOrder.size(), [this](size_t index) { m_Heaps[m_DrainOrder[index]].prepared->Drain(); });
 			drains.Finish();
 		}
+		std::function<uint64_t(size_t)> m_TicksUntilCollection;
+		std::vector<size_t> m_DrainOrder;
 		std::atomic<Status> m_Status{Status::Prepared};
 		std::unique_ptr<CheckpointNativeStorage::Prepared> m_Native;
 		BindingLease m_Bindings;

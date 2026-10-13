@@ -948,6 +948,11 @@ namespace RTE {
 		/// @return Whether tick ends run full collections on the due states.
 		static bool IsDeterministicCollection();
 
+		/// Ticks until a state's next tick-end full collection by its slot, the next tick counting one.
+		/// @param slot The state's slot: the master is 0, threaded state n is n + 1.
+		/// @return The ticks, or 0 when collections follow no slot or none has run yet.
+		static uint64_t TicksUntilFullCollection(size_t slot);
+
 		/// Reseeds every Lua state's RNG, deriving an independent per-state seed from baseSeed.
 		void SeedAllLuaRNGs(uint64_t baseSeed);
 
