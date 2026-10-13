@@ -345,7 +345,9 @@ namespace RTE {
 			if (message.preparedFrame != UINT64_MAX && (message.preparedFrame <= m_Stats.nextFrame ||
 			    message.preparedFrame - m_Stats.nextFrame <= NetLockstepCodec::c_MaxFutureFrameSkew))
 				m_Stats.peers[message.senderPeerId].reportedNextFrame = std::max(m_Stats.peers[message.senderPeerId].reportedNextFrame, message.preparedFrame + 1);
-			if (PeerGroupHasAuthority(message.connectedMask) && message.appliedFrame >= m_Stats.nextFrame)
+			// The other half of a refereed tie holds history only on the referee's word; its tail carries the tie's certificate, and the tail asks the referee.
+			const bool otherHalf = (message.connectedMask & SeatBit(m_Config.localPeerId)) == 0 && PeerGroupIsRefereedHalf(message.connectedMask);
+			if ((otherHalf || PeerGroupHasAuthority(message.connectedMask)) && message.appliedFrame >= m_Stats.nextFrame)
 				RequestPeerCommittedTail(nowMs);
 			return true;
 		}
