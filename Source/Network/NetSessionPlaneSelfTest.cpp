@@ -35,7 +35,6 @@ namespace RTE {
 		constexpr double c_TestTickMs = 1000.0 / 60;
 		constexpr uint64_t c_TestContinuityMs = 2000, c_TestReleaseMs = 250, c_TestReturnAllowanceMs = 2000;
 		constexpr uint32_t c_TestBoundTicks = 3, c_TestCatchUpRate = 3;
-		constexpr uint64_t c_TestTieBoundMs = 1000;
 		struct Case {
 			const char* name;
 			uint8_t subject = 2, seats = 4;
@@ -54,6 +53,10 @@ namespace RTE {
 			bool laterSessionMessageFirst = false;
 			// The joiner's inputs stop reaching the host this long before the host goes dark, as inputs in flight do over a relay.
 			uint64_t joinerInputsLostFirstMs = 0;
+			// The referee names the held seat: whichever half it decides for holds the other, and that half returns.
+			bool refereeDecides = false;
+			// The absent seat is gone past the donor's history and hands itself to a private image.
+			bool imageReturn = false;
 		};
 		struct Wire;
 		struct Hub {
@@ -81,7 +84,11 @@ namespace RTE {
 				return row.directoryBoth || peer != row.subject;
 			}
 			// A two-seat internet round whose host still reaches the referee keeps the host's history, so the joiner is the seat that returns.
-			uint8_t ReturningSeat() const { return row.seats == 2 && row.internet && row.directoryBoth ? 2 : row.subject; }
+			uint8_t ReturningSeat() const {
+				if (row.refereeDecides) return heldSeat;
+				return row.seats == 2 && row.internet && row.directoryBoth ? 2 : row.subject;
+			}
+			uint8_t heldSeat = 0;
 			struct Tie { uint64_t at = 0; std::vector<std::vector<uint16_t>> confirmed; std::vector<uint16_t> winner; };
 			std::map<uint64_t, Tie> ties;
 			std::map<uint8_t, NetHostChangeRequest> adminReports;
@@ -371,11 +378,8 @@ namespace RTE {
 					auto [found, inserted] = hub.ties.try_emplace(request.frame);
 					auto& tie = found->second;
 					if (inserted) tie.at = hub.now;
-					if (tie.winner.empty() && hub.now >= tie.at + c_TestTieBoundMs && !tie.confirmed.empty()) tie.winner = tie.confirmed.front();
-					if (!request.queryOnly && tie.winner.empty()) {
-						if (std::find(tie.confirmed.begin(), tie.confirmed.end(), request.members) == tie.confirmed.end()) tie.confirmed.push_back(request.members);
-						if (std::find(request.members.begin(), request.members.end(), request.host) != request.members.end()) tie.winner = request.members;
-					}
+					// The directory's rule: the first half to check in keeps the split at once.
+					if (!request.queryOnly && tie.winner.empty()) { tie.confirmed.push_back(request.members); tie.winner = request.members; }
 					if (!tie.winner.empty()) { reply.state = Reply::State::Decided; reply.members = tie.winner; } return reply;
 				};
 			}
@@ -386,7 +390,10 @@ namespace RTE {
 			if constexpr (requires { peer.GetStats().peers.at(sender).delayResizes; }) return peer.GetStats().peers.at(sender).delayResizes;
 			else return peer.GetStats().delayChangesCommitted;
 		}
-		template<class Peer> void Blackout(Peer& peer, uint64_t frame, uint64_t ms) { if constexpr (requires { peer.SetPeerFrameBlackoutForTest(frame, ms); }) peer.SetPeerFrameBlackoutForTest(frame, ms); }
+		template<class Peer> void Blackout(Peer& peer, uint64_t frame, uint64_t ms, bool directoryDark) {
+			if constexpr (requires { peer.SetPeerFrameBlackoutForTest(frame, ms, directoryDark); }) peer.SetPeerFrameBlackoutForTest(frame, ms, directoryDark);
+			else if constexpr (requires { peer.SetPeerFrameBlackoutForTest(frame, ms); }) peer.SetPeerFrameBlackoutForTest(frame, ms);
+		}
 		template<class Peer> constexpr bool HasBlackout() { return requires(Peer& peer) { peer.SetPeerFrameBlackoutForTest(1, 1); }; }
 		template<class Result> uint64_t AdminActivation(const Result& result) {
 			if constexpr (requires { result.activationFrame; }) return result.activationFrame;
@@ -417,7 +424,7 @@ namespace RTE {
 			uint64_t freezeWallMs = 0;
 			std::vector<double> credits;
 			std::vector<uint64_t> queued, waitAt, maxWait, caughtAt;
-			std::vector<uint64_t> displayedAt, blackoutGap, returnedAt, postReturnWait;
+			std::vector<uint64_t> displayedAt, blackoutGap, returnedAt, postReturnWait, imageAt;
 			std::vector<uint64_t> firstDisplayedAt;
 			std::vector<uint64_t> startupResumeAt;
 			std::vector<int64_t> preFaultPaceLeadMs;
@@ -434,6 +441,7 @@ namespace RTE {
 				worlds.resize(row.seats); committed.resize(row.seats); credits.resize(row.seats); queued.resize(row.seats); waitAt.resize(row.seats);
 				maxWait.resize(row.seats); caughtAt.resize(row.seats); settledDelay.resize(row.seats); settledChanges.resize(row.seats);
 				displayedAt.resize(row.seats); blackoutGap.resize(row.seats); returnedAt.resize(row.seats); postReturnWait.resize(row.seats); seenAI.resize(row.seats);
+				imageAt.resize(row.seats);
 				firstDisplayedAt.resize(row.seats); startupResumeAt.resize(row.seats); preFaultPaceLeadMs.resize(row.seats);
 				settledHostWaits.resize(row.seats); paceBegin.resize(row.seats); paceEnd.resize(row.seats);
 				firstAdminChangeMs.assign(row.seats, UINT64_MAX);
@@ -472,13 +480,15 @@ namespace RTE {
 				return true;
 			}
 			bool IsAffected(uint8_t peer) const {
+				if (hub.row.refereeDecides) return hub.heldSeat != 0 && peer == hub.heldSeat;
 				if (hub.row.internet && hub.row.directoryDown) return true;
 				if (hub.row.seats == 2 && (!hub.row.internet || hub.row.directoryBoth)) return peer != 1;
 				return hub.row.tie ? peer >= 3 : peer == hub.row.subject;
 			}
 			bool CheckCommittedInputs(const NetLockstepReadyFrame& ready, uint8_t observer, std::string& error) {
 				if (IsAffected(observer) || !hub.row.gapMs) return true;
-				const uint8_t subject = hub.row.seats == 2 && (!hub.row.internet || hub.row.directoryBoth) ? 2 : hub.row.subject;
+				const uint8_t subject = hub.row.refereeDecides ? hub.heldSeat : hub.row.seats == 2 && (!hub.row.internet || hub.row.directoryBoth) ? 2 : hub.row.subject;
+				if (subject == 0) return true;
 				const auto bridge = Bridges(*peers[observer - 1]);
 				if (!bridge.contains(subject)) return true;
 				uint64_t continuityStart = 0;
@@ -536,7 +546,7 @@ namespace RTE {
 				if (hub.row.joinerInputsLostFirstMs && hub.now == hub.faultAt - hub.row.joinerInputsLostFirstMs) hub.dropInputsFrom = 2;
 				if (hub.row.joinerInputsLostFirstMs && hub.now == hub.faultAt) hub.dropInputsFrom = 0;
 				if (hub.row.blackout && hub.now == hub.faultAt) {
-					Blackout(*peers[hub.row.subject - 1], worlds[hub.row.subject - 1].applied, hub.row.gapMs);
+					Blackout(*peers[hub.row.subject - 1], worlds[hub.row.subject - 1].applied, hub.row.gapMs, hub.row.internet && !hub.row.directoryBoth);
 					if (!HasBlackout<NetLockstepCoordinator>()) hub.row.blackout = false;
 				}
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) {
@@ -547,7 +557,11 @@ namespace RTE {
 						firstAdminChangeMs[id - 1] = hub.now;
 						if (hub.now + hub.Delay(1, id) < hub.faultAt + 15000) { error = "admin host changed before fifteen seconds of authenticated silence"; return false; }
 					}
-					if (peer.IsStopped()) { error = "lag ended participation or required a manual rejoin"; return false; }
+					if (peer.IsStopped()) {
+						// An absent seat gone past the donor's history hands itself to a private image, a path past this fixture.
+						if (hub.row.imageReturn && peer.GetStats().timeoutReason.starts_with("PeerHeld:")) { if (!imageAt[id - 1]) imageAt[id - 1] = hub.now; continue; }
+						error = "lag ended participation or required a manual rejoin"; return false;
+					}
 					if (!peer.IsRunning()) continue;
 					// A joiner reaches its first displayed tick later, then the
 					// normal 3x consumer catches it up to the host. This reproduces
@@ -603,6 +617,9 @@ namespace RTE {
 					}
 					if (hub.now == hub.faultEnd - 1) paceEnd[id - 1] = world.applied;
 				}
+				if (hub.row.refereeDecides && !hub.heldSeat)
+					for (uint8_t id = 1; id <= hub.row.seats && !hub.heldSeat; ++id)
+						for (const auto& [seat, at]: Bridges(*peers[id - 1])) if (seat != id) { hub.heldSeat = seat; break; }
 				const uint64_t common = std::min_element(worlds.begin(), worlds.end(), [](const World& a, const World& b) { return a.applied < b.applied; })->applied;
 				if (common) {
 					for (const auto& world: worlds) if (world.hashes.at(common) != worlds[0].hashes.at(common)) { error = "return hashes differ at displayed frame " + std::to_string(common); return false; }
@@ -627,17 +644,25 @@ namespace RTE {
 				// Check every unaffected consumer before a missing return can hide its wait.
 				for (uint8_t id = 1; id <= row.seats; ++id) {
 					const bool doubleFailure = row.internet && row.directoryDown;
-					if (!IsAffected(id) && !doubleFailure && maxWait[id - 1] > (row.internet && row.seats == 2 ? 1000 : static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs)))) {
+					if (!IsAffected(id) && !doubleFailure && maxWait[id - 1] > (row.internet && row.seats == 2 && !row.refereeDecides ? 1000 : static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs)))) {
 						error = "non-lagging peer " + std::to_string(id) + " stalled " + std::to_string(maxWait[id - 1]) + "ms past its bound"; return false;
 					}
 				}
+				if (row.refereeDecides && !hub.heldSeat) { error = "the outage held no seat: both halves stalled through it"; return false; }
+				if (row.imageReturn && !imageAt[hub.heldSeat - 1]) { error = "the absent seat never handed itself to a private image after the donor's history ran out"; return false; }
 				for (uint8_t id = 1; id <= row.seats; ++id) {
+					if (row.imageReturn && imageAt[id - 1]) continue;
+					// The survivor keeps the absent seat under the AI until the private image brings it back.
+					if (row.imageReturn) {
+						if (!peers[id - 1]->HasHeldAISeat(hub.heldSeat) && !Bridges(*peers[id - 1]).contains(hub.heldSeat)) { error = "the survivor released the absent seat before its private image returned"; return false; }
+						continue;
+					}
 					if (!caughtAt[id - 1]) {
 						error = "a retained seat did not return automatically: peer=" + std::to_string(id) + " applied=" + std::to_string(worlds[id - 1].applied) +
 						    " prepared=" + std::to_string(peers[id - 1]->GetStats().nextFrame) + " bridge_count=" + std::to_string(Bridges(*peers[id - 1]).size());
 						return false;
 					}
-					const uint8_t held = row.seats == 2 && (!row.internet || row.directoryBoth) ? 2 : row.subject;
+					const uint8_t held = row.refereeDecides ? hub.heldSeat : row.seats == 2 && (!row.internet || row.directoryBoth) ? 2 : row.subject;
 					if (peers[id - 1]->HasHeldAISeat(held) || Bridges(*peers[id - 1]).contains(held)) { error = "the returning human seat stayed bridged after catch-up"; return false; }
 					if (row.gapMs <= 3000 && caughtAt[id - 1] > hub.faultEnd + c_TestReturnAllowanceMs) { error = "return exceeded the spike plus its catch-up allowance"; return false; }
 				}
@@ -662,7 +687,7 @@ namespace RTE {
 				}
 				const uint64_t greatestWait = *std::max_element(maxWait.begin(), maxWait.end());
 				std::cout << "[session-plane-measure] name=" << row.name << " gap_ms=" << row.gapMs << " own_max_hitch_ms=" << maxWait[row.subject - 1]
-				          << " max_wait_ms=" << greatestWait << " catch_up_ms=" << caughtAt[row.subject - 1] - hub.faultEnd
+				          << " max_wait_ms=" << greatestWait << " catch_up_ms=" << (caughtAt[row.subject - 1] ? caughtAt[row.subject - 1] - hub.faultEnd : 0)
 				          << " held_inputs=" << continuityFrames << " ai_inputs=" << aiFrames << " first_discarded_press_ms="
 				          << (firstLostPressMs == UINT64_MAX ? -1 : static_cast<int64_t>(firstLostPressMs)) << " hashes=equal undone=0" << std::endl;
 				return true;
@@ -1394,9 +1419,21 @@ namespace RTE {
 		auto hostBlackout = gap("two_internet_host_blackout_directory_reachable_by_both", 1, 8000);
 		hostBlackout.seats = 2; hostBlackout.internet = hostBlackout.directoryBoth = hostBlackout.blackout = true;
 		hostBlackout.rttMs = hostBlackout.otherRttMs = 24; hostBlackout.joinerInputsLostFirstMs = 50; rows.push_back(hostBlackout);
+		// With no input in flight both halves stall on their own input; the first to reach the referee plays on and the other returns.
+		auto bothStall = gap("two_internet_host_blackout_both_halves_stall", 1, 8000);
+		bothStall.seats = 2; bothStall.internet = bothStall.directoryBoth = bothStall.blackout = bothStall.refereeDecides = true;
+		bothStall.rttMs = bothStall.otherRttMs = 24; rows.push_back(bothStall);
+		// The host's whole connection goes dark, the directory with it: the joiner keeps the split inside the bound and the host returns.
+		auto hostDark = gap("two_internet_host_blackout_directory_dark", 1, 8000);
+		hostDark.seats = 2; hostDark.internet = hostDark.blackout = hostDark.refereeDecides = true;
+		hostDark.rttMs = hostDark.otherRttMs = 24; rows.push_back(hostDark);
+		// A joiner's whole connection gone longer than the host keeps history returns through a private image.
+		auto pastHistory = gap("two_internet_joiner_dark_past_history", 2, 75000);
+		pastHistory.seats = 2; pastHistory.internet = pastHistory.blackout = pastHistory.refereeDecides = pastHistory.imageReturn = true;
+		pastHistory.rttMs = pastHistory.otherRttMs = 24; rows.push_back(pastHistory);
 		int passed = 0, failed = 0;
 		const char* selected = std::getenv("CC_TEST_SESSION_PLANE_CASE");
-		std::cout << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : 30) << std::endl;
+		std::cout << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : 33) << std::endl;
 		for (const auto& row: rows) {
 			if (selected && std::string_view(selected) != row.name) continue;
 			std::string error; Fixture fixture; bool ok = fixture.Run(row, error);

@@ -36,6 +36,10 @@ namespace RTE {
 			Finish(Response{0, "", "client already used"});
 			return;
 		}
+		if (s_OfflineForTest.load(std::memory_order_relaxed)) {
+			Finish(Response{0, "", "the network is unreachable"});
+			return;
+		}
 		m_TimeoutMs = std::clamp(timeoutMs, 1, c_TotalTimeoutMs);
 #if defined(_WIN32) || defined(__linux__)
 		m_Done = false;

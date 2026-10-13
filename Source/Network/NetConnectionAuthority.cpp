@@ -557,6 +557,8 @@ namespace RTE {
 			if (m_RetiredFrameTies.size() >= 16) return {};
 			// A query on the sim thread retires an old request without joining its worker.
 			if (m_FrameTie) m_RetiredFrameTies.push_back(std::move(m_FrameTie));
+			// A seat that hears the other half again only asks what was decided; its own check-ins failing while it was cut off are no reason to wait.
+			if (request.queryOnly && m_FrameTieRequest && !m_FrameTieRequest->queryOnly) { m_FrameTieRetry = {}; m_NextFrameTie = 0; }
 			m_FrameTieRequest = request; m_NextFrameTie = std::max(m_NextFrameTie, m_FrameTieRetry.nextMs);
 			m_FrameTieCheckedIn = false;
 			m_FrameTieBoundStartMs.reset(); m_FrameTieFinalQuerySent = false;

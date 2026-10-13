@@ -2,6 +2,7 @@
 
 #include "DiagnosticLine.h"
 #include "NetAuthCrypto.h"
+#include "NetHttpClient.h"
 #include "NetLobbyProtocol.h"
 #include "NetProtocol.h"
 
@@ -112,15 +113,26 @@ namespace RTE {
 		const int votes = std::popcount(voters), seats = std::popcount(owners);
 		if (2 * votes != seats) return 2 * votes > seats;
 		if (!m_Config.frameTieReferee) return (voters & SeatBit(GetHostPeerId())) != 0;
-		const auto decision = m_PeerFrameTieWinners.upper_bound(m_Stats.nextFrame);
-		return decision != m_PeerFrameTieWinners.begin() && std::prev(decision)->second == voters;
+		const auto decision = m_PeerFrameTieWinners.find(PeerSplitEpoch(m_Stats.nextFrame));
+		return decision != m_PeerFrameTieWinners.end() && decision->second == voters;
+	}
+
+	uint64_t NetLockstepCoordinator::PeerSplitEpoch(uint64_t frame) const {
+		uint32_t whole = 0;
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) whole |= SeatBit(peer);
+		for (auto change = m_FrameGroupChanges.upper_bound(frame); change != m_FrameGroupChanges.begin();)
+			if (((--change)->second & whole) == whole) return change->first;
+		return m_Config.startFrame;
 	}
 
 	void NetLockstepCoordinator::CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs) {
-		if (!m_Config.frameTieReferee || m_PeerFrameTieWinners.contains(frame)) return;
+		// Both halves name a split by the last frame the whole group played, so every check-in of one split meets one decision.
+		const uint64_t split = PeerSplitEpoch(frame);
+		if (!m_Config.frameTieReferee || m_PeerFrameTieWinners.contains(split)) return;
 		NetFrameTieRequest request;
 		request.generation = m_Config.migrationGeneration; request.roundId = m_Config.matchConfig.roundId;
-		request.frame = frame; request.configHash = m_RoundConfigHash; request.host = GetHostPeerId();
+		request.frame = split; request.configHash = m_RoundConfigHash; request.host = GetHostPeerId();
 		request.queryOnly = (members & SeatBit(m_Config.localPeerId)) == 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			if (m_RemovedPeers.contains(peer) || IsSeatReleased(peer)) continue;
@@ -128,6 +140,13 @@ namespace RTE {
 			if ((members & SeatBit(peer)) != 0) request.members.push_back(peer);
 		}
 		if (request.members.size() * 2 != request.owners.size()) return;
+		// A seat that heard the other half play on keeps asking what was decided: the referee holds one request per seat, and
+		// checking in again would replace the question and lose its answer.
+		if (m_PeerFrameTie && m_PeerFrameTie->queryOnly && !request.queryOnly) {
+			auto asked = *m_PeerFrameTie;
+			asked.members = request.members; asked.queryOnly = false;
+			if (asked == request) request = *m_PeerFrameTie;
+		}
 		if (!m_PeerFrameTie || *m_PeerFrameTie != request) { m_PeerFrameTie = request; m_PeerFrameTieSinceMs = nowMs; }
 		const auto reply = m_Config.frameTieReferee(request);
 		if (reply.state == NetFrameTieReply::State::Decided) {
@@ -136,7 +155,7 @@ namespace RTE {
 				if (peer == 0 || peer > m_Config.peerCount || std::find(request.owners.begin(), request.owners.end(), peer) == request.owners.end()) return;
 				winner |= SeatBit(static_cast<uint8_t>(peer));
 			}
-			if (std::popcount(winner) * 2 == static_cast<int>(request.owners.size())) m_PeerFrameTieWinners.emplace(frame, winner);
+			if (std::popcount(winner) * 2 == static_cast<int>(request.owners.size())) m_PeerFrameTieWinners.emplace(split, winner);
 		}
 		// Silence from an internet referee grants neither side permission to display new history.
 	}
@@ -151,11 +170,16 @@ namespace RTE {
 			m_PeerReceiptDelaySamples.clear(); m_PeerOwnReceiptProgress.clear();
 			for (uint8_t receiver = 1; receiver <= m_Config.peerCount; ++receiver) m_PeerReceiptSampleFloorMs[receiver] = nowMs;
 			DiagnosticLine() << "[net-link-blackout] begin peer=" << static_cast<int>(m_Config.localPeerId) << " frame=" << *m_LastCompletedSimulationTick << " duration_ms=" << m_TestBlackoutDurationMs
-			    << " now_ms=" << nowMs << " unix_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
+			    << " now_ms=" << nowMs << " unix_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()
+			    << " directory=" << (m_TestBlackoutDirectoryDark ? "dark" : "up") << std::endl;
 		}
 		if (!m_TestBlackoutAtMs) return false;
 		const bool active = nowMs >= *m_TestBlackoutAtMs && nowMs - *m_TestBlackoutAtMs < m_TestBlackoutDurationMs;
 		if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->frameBlackout = active;
+		if (const bool offline = active && m_TestBlackoutDirectoryDark; offline != m_TestBlackoutOffline) {
+			m_TestBlackoutOffline = offline;
+			NetHttpClient::SetOfflineForTest(offline);
+		}
 		if (!active && !m_TestBlackoutEnded) {
 			m_TestBlackoutEnded = true;
 			m_PeerReceiptDelaySamples.clear(); m_PeerOwnReceiptProgress.clear();
@@ -291,8 +315,10 @@ namespace RTE {
 		m_PeerInputSentAtMs.erase(m_PeerInputSentAtMs.begin(), m_PeerInputSentAtMs.lower_bound(kept));
 		m_PeerPreparedPrefixes.erase(m_PeerPreparedPrefixes.begin(), m_PeerPreparedPrefixes.lower_bound(kept));
 		m_PeerFrameWitnesses.erase(m_PeerFrameWitnesses.begin(), m_PeerFrameWitnesses.lower_bound(kept));
+		// The split in force keeps its name and its decision however long it lasts.
+		const uint64_t historyFloor = std::min(kept, PeerSplitEpoch(kept));
 		for (auto* history: {&m_PeerFrameTieWinners, &m_FrameGroupChanges}) {
-			const auto floor = history->lower_bound(kept);
+			const auto floor = history->lower_bound(historyFloor);
 			if (floor != history->begin()) history->erase(history->begin(), std::prev(floor));
 		}
 		std::erase_if(m_PeerFrameIncoming, [&](const auto& entry) { return nowMs >= entry.second.lastReceivedMs && nowMs - entry.second.lastReceivedMs > c_NetHostLossSilenceMs; });

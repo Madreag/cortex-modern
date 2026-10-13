@@ -3,6 +3,7 @@
 
 #include "NetActorOwnership.h"
 #include "NetAuthCrypto.h"
+#include "NetHttpClient.h"
 #include "NetLobbyProtocol.h"
 #include "NetProtocol.h"
 #include "NetReconnectSession.h"
@@ -4836,6 +4837,7 @@ namespace RTE {
 	NetLockstepCoordinator::~NetLockstepCoordinator() {
 		const NetLockstepPlaneGuard guard;
 		if (m_Config.peerSessionLinks && m_Config.peerSessionLinks->frameReader == this) m_Config.peerSessionLinks->frameReader = nullptr;
+		if (m_TestBlackoutOffline) NetHttpClient::SetOfflineForTest(false);
 		ScenarioRunner::ForgetLockstepCoordinator(this);
 		NetLockstepPlane::Forget(this);
 	}
@@ -5108,13 +5110,18 @@ namespace RTE {
 				value = end == std::string_view::npos ? std::string_view{} : value.substr(end + 1);
 				const size_t first = entry.find(':'), second = first == std::string_view::npos ? first : entry.find(':', first + 1);
 				if (first == std::string_view::npos || second == std::string_view::npos) continue;
+				// seat:frame:duration darkens the peer link; seat:frame:duration:directory darkens the directory too, a whole connection lost.
+				const size_t third = entry.find(':', second + 1);
+				const size_t durationEnd = third == std::string_view::npos ? entry.size() : third;
+				const bool directoryDark = third != std::string_view::npos && entry.substr(third + 1) == "directory";
+				if (third != std::string_view::npos && !directoryDark) continue;
 				uint32_t seat = 0; uint64_t frame = 0, duration = 0;
 				const auto a = std::from_chars(entry.data(), entry.data() + first, seat);
 				const auto b = std::from_chars(entry.data() + first + 1, entry.data() + second, frame);
-				const auto c = std::from_chars(entry.data() + second + 1, entry.data() + entry.size(), duration);
+				const auto c = std::from_chars(entry.data() + second + 1, entry.data() + durationEnd, duration);
 				if (a.ec == std::errc{} && a.ptr == entry.data() + first && b.ec == std::errc{} && b.ptr == entry.data() + second &&
-				    c.ec == std::errc{} && c.ptr == entry.data() + entry.size() && seat == config.localPeerId && duration > 0 && duration <= 600000)
-					SetPeerFrameBlackoutForTest(frame, duration);
+				    c.ec == std::errc{} && c.ptr == entry.data() + durationEnd && seat == config.localPeerId && duration > 0 && duration <= 600000)
+					SetPeerFrameBlackoutForTest(frame, duration, directoryDark);
 			}
 		}
 		m_DelayEstimators = config.initialDelaySamples;
