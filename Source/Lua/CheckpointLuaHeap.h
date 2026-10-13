@@ -15,6 +15,7 @@ extern "C" {
 #include "CaptureSentinel.h"
 #include "PageWriteFence.h"
 #include "CheckpointFailure.h"
+#include "CheckpointPageCopy.h"
 
 #include <algorithm>
 #include <array>
@@ -856,7 +857,7 @@ namespace RTE::CheckpointLua {
 				Locked guard(coordinator.lock);
 				auto& copy = *prepared.copy;
 				if (copy.completed || copy.armed.load(std::memory_order_relaxed) != 0 || bytes != copy.saved.size() * copy.pageBytes) return false;
-				std::memcpy(copy.destination, reinterpret_cast<const void*>(address), bytes);
+				CopyCheckpointPages(copy.destination, reinterpret_cast<const void*>(address), bytes);
 				std::fill(copy.saved.begin(), copy.saved.end(), 1);
 				copy.armed.store(1, std::memory_order_release);
 				copy.armed.notify_all();
@@ -888,7 +889,7 @@ namespace RTE::CheckpointLua {
 					// write. Materialize every such generation before opening it.
 					for (size_t at = first; at < std::min(last, copy->saved.size()); ++at) {
 						if (copy->saved[at]) continue;
-						std::memcpy(reinterpret_cast<std::byte*>(copy->destination) + at * pageBytes, reinterpret_cast<const void*>(base + at * pageBytes), pageBytes);
+						CopyCheckpointPages(reinterpret_cast<std::byte*>(copy->destination) + at * pageBytes, reinterpret_cast<const void*>(base + at * pageBytes), pageBytes);
 						copy->saved[at] = 1;
 						opened[at - first] = true;
 					}
@@ -937,8 +938,8 @@ namespace RTE::CheckpointLua {
 						if (copy->saved[page]) { ++page; continue; }
 						const size_t begin = page;
 						while (page < last && !copy->saved[page]) ++page;
-						std::memcpy(reinterpret_cast<std::byte*>(copy->destination) + begin * pageBytes,
-						            reinterpret_cast<const void*>(base + begin * pageBytes), (page - begin) * pageBytes);
+						CopyCheckpointPages(reinterpret_cast<std::byte*>(copy->destination) + begin * pageBytes,
+						                    reinterpret_cast<const void*>(base + begin * pageBytes), (page - begin) * pageBytes);
 						std::fill(copy->saved.begin() + begin, copy->saved.begin() + page, 1);
 						if (runs) std::fill(opened.begin() + (begin - first), opened.begin() + (page - first), true);
 					}
@@ -1125,7 +1126,7 @@ namespace RTE::CheckpointLua {
 			const size_t pageCount = data.committed / Snapshot::c_PageBytes;
 			if (pageCount != 0) {
 				std::shared_ptr<Slab> slab = TakeSlab(pageCount);
-				std::memcpy(slab->pages, reinterpret_cast<const void*>(m_Base), pageCount * Snapshot::c_PageBytes);
+				CopyCheckpointPages(slab->pages, reinterpret_cast<const void*>(m_Base), pageCount * Snapshot::c_PageBytes);
 				data.pages = slab->pages;
 				data.buffer = std::move(slab);
 			}

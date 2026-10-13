@@ -1,6 +1,7 @@
 #include "CheckpointPagePool.h"
 
 #include "PageWriteFence.h"
+#include "CheckpointPageCopy.h"
 #include "CheckpointFailure.h"
 #include "CheckpointNativeStorage.h"
 #include "CheckpointString.h"
@@ -190,7 +191,7 @@ struct CheckpointPagePool::Block {
 		for (size_t page = 0; page < states.size();) {
 			if (states[page] == PageState::Hot) {
 				if (!copy.saved[page].load(std::memory_order_relaxed)) {
-					std::memcpy(copy.pages.data + page * pageBytes, live.data + page * pageBytes, pageBytes);
+					CopyCheckpointPages(copy.pages.data + page * pageBytes, live.data + page * pageBytes, pageBytes);
 					copy.saved[page].store(1, std::memory_order_release);
 					++copied;
 				}
@@ -227,7 +228,7 @@ struct CheckpointPagePool::Block {
 			for (size_t page = first; page < first + count; ++page) {
 				if (copy->saved[page].load(std::memory_order_relaxed)) continue;
 				const size_t offset = page * pageBytes;
-				std::memcpy(copy->pages.data + offset, live.data + offset, pageBytes);
+				CopyCheckpointPages(copy->pages.data + offset, live.data + offset, pageBytes);
 				copy->saved[page].store(1, std::memory_order_release);
 			}
 		}
