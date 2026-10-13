@@ -16901,7 +16901,11 @@ namespace {
 			m_Digest.Bytes(className, std::strlen(className));
 			const void* pointer = rep.ptr();
 			if (!pointer) {
-				Word(TokenNil);
+				// A saved reference to a deleted object keeps no address and comes back null; the live world's dangling
+				// pointer to it is just as dead, so both hash as the walk below hashes a reference it cannot vouch for.
+				if (ClassDerivesFrom(crep, "MovableObject")) Word(TokenStale);
+				else if (std::strcmp(className, "Area") == 0) Word(0);
+				else Word(TokenNil);
 				return;
 			}
 			if (std::strcmp(className, "Vector") == 0) {
