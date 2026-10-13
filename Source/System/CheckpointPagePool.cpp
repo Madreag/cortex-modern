@@ -162,7 +162,7 @@ struct CheckpointPagePool::Block {
 	~Block() { PageWriteFence::UnwatchCopies(this); }
 	bool Watch() {
 		const auto keepWritable = [](void*, uintptr_t, size_t) noexcept { return true; };
-		return PageWriteFence::WatchCopies(this, {live.data, live.bytes}, OnWrite, this, keepWritable);
+		return PageWriteFence::WatchCopies(this, {live.data, live.bytes}, OnWrite, this, keepWritable, nullptr, nullptr, OnFenceLifted);
 	}
 	void Prepare(const std::shared_ptr<Copy>& copy) {
 		if (!Watch()) throw std::runtime_error("could not prepare native checkpoint page watches");
@@ -254,6 +254,21 @@ struct CheckpointPagePool::Block {
 	static bool OnWrite(void* context, uintptr_t address) noexcept {
 		auto& block = *static_cast<Block*>(context);
 		return block.SavePage((address - reinterpret_cast<uintptr_t>(block.live.data)) / block.pageBytes, true);
+	}
+	// A preview's page fence hands its pages back: those this block keeps fenced stay read-only, the rest open.
+	static bool OnFenceLifted(void* context, uintptr_t address, size_t bytes) noexcept {
+		auto& block = *static_cast<Block*>(context);
+		Locked guard(block.lock);
+		const size_t first = (address - reinterpret_cast<uintptr_t>(block.live.data)) / block.pageBytes, end = first + bytes / block.pageBytes;
+		bool opened = true;
+		for (size_t page = first; page < end;) {
+			if (block.states[page] == PageState::Fenced) { ++page; continue; }
+			size_t run = page + 1;
+			while (run < end && block.states[run] != PageState::Fenced) ++run;
+			opened = PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(block.live.data + page * block.pageBytes), (run - page) * block.pageBytes) && opened;
+			page = run;
+		}
+		return opened;
 	}
 	bool Active() const { return std::any_of(copies.begin(), copies.end(), [](const auto& value) { return value->Arming() || (value->Armed() && !value->completed); }); }
 	void OpenAll() {

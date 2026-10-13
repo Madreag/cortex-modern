@@ -42,7 +42,7 @@ namespace RTE {
 		static bool WatchCopies(void* owner, Buffer buffer, CopyObserver observer, void* context, CopyArm arm = nullptr, void* armContext = nullptr, CopyWatchCosts* costs = nullptr, CopyReopen reopen = nullptr);
 		static void UnwatchCopies(void* owner);
 		static size_t SystemPageBytes();
-		/// Opens a page only after the observer or its copy worker has saved it.
+		/// Opens a page only after the observer or its copy worker has saved it; a page under a preview's fence is saved for the fence first.
 		static bool OpenCopiedPage(uintptr_t address, size_t bytes) noexcept;
 		static bool ProtectCopyPages(uintptr_t address, size_t bytes) noexcept;
 

@@ -166,55 +166,98 @@ namespace RTE {
 		}
 #endif
 
-		// Runs on the faulting thread, before its write lands: the page is copied aside and opened for writing.
-		bool Take(uintptr_t address) {
+		// The copy watch whose range holds the address, held for the caller until it drops a reader, or null; the bound
+		// shrinks to where that range, or the next one, ends the address's piece.
+		CopyWatch* RetainWatch(uintptr_t address, uintptr_t& bound) noexcept {
 			CopyWatches& copies = Watches();
-			if (copies.count.load(std::memory_order_acquire)) {
-				CopyWatch* found = nullptr;
-				{
-					SpinLock guard(copies.lock);
-					auto range = copies.ranges.upper_bound(address);
-					if (range != copies.ranges.begin()) {
-						CopyWatch& watch = *std::prev(range)->second;
-						if (!watch.retiring.load(std::memory_order_relaxed) && address < watch.end) {
-							watch.readers.fetch_add(1, std::memory_order_acquire);
-							found = &watch;
-						}
-					}
-				}
-				if (found) {
-					const bool taken = found->observer(found->context, address);
-					found->readers.fetch_sub(1, std::memory_order_release);
-					return taken;
-				}
+			if (!copies.count.load(std::memory_order_acquire)) return nullptr;
+			SpinLock guard(copies.lock);
+			const auto range = copies.ranges.upper_bound(address);
+			if (range != copies.ranges.begin() && std::prev(range)->second->end > address) {
+				CopyWatch& watch = *std::prev(range)->second;
+				bound = std::min(bound, watch.end);
+				if (watch.retiring.load(std::memory_order_relaxed)) return nullptr;
+				watch.readers.fetch_add(1, std::memory_order_acquire);
+				return &watch;
 			}
-			State& fence = Fence();
-			if (!fence.armed.load(std::memory_order_acquire)) {
-				return false;
-			}
-			SpinLock guard(fence.lock);
-			for (size_t index = 0; index < fence.regions.size(); ++index) {
-				Region& region = fence.regions[index];
-				if (address < region.pagesBegin || address >= region.pagesEnd) {
-					continue;
-				}
-				const size_t page = (address - region.pagesBegin) / fence.pageBytes;
-				const uintptr_t pageAddress = region.pagesBegin + page * fence.pageBytes;
-				// Two threads can fault on one page; the second finds it saved and only needs it open.
-				if (!region.saved[page]) {
-					std::memcpy(region.shadow.data() + page * fence.pageBytes, reinterpret_cast<const void*>(pageAddress), fence.pageBytes);
-					region.saved[page] = 1;
-					fence.written.emplace_back(index, page);
-					fence.faults.fetch_add(1, std::memory_order_relaxed);
-				}
-				return Protect(pageAddress, fence.pageBytes, false);
-			}
-			return false;
+			if (range != copies.ranges.end()) bound = std::min(bound, range->first);
+			return nullptr;
 		}
 
-		void OpenAll(State& fence) {
+		// Copies a fenced page aside before anything can write it; true when this call saved it.
+		bool SavePage(State& fence, size_t index, size_t page) noexcept {
+			Region& region = fence.regions[index];
+			if (region.saved[page]) return false;
+			std::memcpy(region.shadow.data() + page * fence.pageBytes, reinterpret_cast<const void*>(region.pagesBegin + page * fence.pageBytes), fence.pageBytes);
+			region.saved[page] = 1;
+			fence.written.emplace_back(index, page);
+			return true;
+		}
+
+		// A copy watch that opens pages under the fence lets through writes the fence never sees, so they are saved first.
+		void SaveFencedPages(uintptr_t address, size_t bytes) noexcept {
+			State& fence = Fence();
+			if (!fence.armed.load(std::memory_order_acquire)) return;
+			SpinLock guard(fence.lock);
+			if (!fence.armed.load(std::memory_order_relaxed)) return;
+			for (size_t index = 0; index < fence.regions.size(); ++index) {
+				const Region& region = fence.regions[index];
+				const uintptr_t first = std::max(address, region.pagesBegin), last = std::min(address + bytes, region.pagesEnd);
+				if (first >= last) continue;
+				for (size_t page = (first - region.pagesBegin) / fence.pageBytes; region.pagesBegin + page * fence.pageBytes < last; ++page) SavePage(fence, index, page);
+			}
+		}
+
+		// Runs on the faulting thread, before its write lands: the page is copied aside and opened for writing.
+		bool Take(uintptr_t address) {
+			uintptr_t bound = UINTPTR_MAX;
+			CopyWatch* const watch = RetainWatch(address, bound);
+			State& fence = Fence();
+			if (fence.armed.load(std::memory_order_acquire)) {
+				SpinLock guard(fence.lock);
+				for (size_t index = 0; fence.armed.load(std::memory_order_relaxed) && index < fence.regions.size(); ++index) {
+					const Region& region = fence.regions[index];
+					if (address < region.pagesBegin || address >= region.pagesEnd) {
+						continue;
+					}
+					const size_t page = (address - region.pagesBegin) / fence.pageBytes;
+					// Two threads can fault on one page; the second finds it saved and only needs it open.
+					if (SavePage(fence, index, page)) fence.faults.fetch_add(1, std::memory_order_relaxed);
+					// A copy watch over the page opens it once its own copies hold it.
+					if (!watch) return Protect(region.pagesBegin + page * fence.pageBytes, fence.pageBytes, false);
+					break;
+				}
+			}
+			if (!watch) return false;
+			const bool taken = watch->observer(watch->context, address);
+			watch->readers.fetch_sub(1, std::memory_order_release);
+			return taken;
+		}
+
+		// The fence lifts in two steps: the pages no copy watch covers open while the fence still answers their faults...
+		void OpenUnwatched(const State& fence) noexcept {
 			for (const Region& region: fence.regions) {
-				Protect(region.pagesBegin, region.pagesEnd - region.pagesBegin, false);
+				for (uintptr_t at = region.pagesBegin; at < region.pagesEnd;) {
+					uintptr_t next = region.pagesEnd;
+					if (CopyWatch* watch = RetainWatch(at, next)) watch->readers.fetch_sub(1, std::memory_order_release);
+					else Protect(at, next - at, false);
+					at = next;
+				}
+			}
+		}
+
+		// ...and once it is down, each copy watch takes its pages back and opens those it does not keep fenced itself.
+		void ReopenWatched(const State& fence) noexcept {
+			for (const Region& region: fence.regions) {
+				for (uintptr_t at = region.pagesBegin; at < region.pagesEnd;) {
+					uintptr_t next = region.pagesEnd;
+					if (CopyWatch* watch = RetainWatch(at, next)) {
+						if (watch->reopen) watch->reopen(watch->context, at, next - at);
+						else Protect(at, next - at, false);
+						watch->readers.fetch_sub(1, std::memory_order_release);
+					}
+					at = next;
+				}
 			}
 		}
 	} // namespace
@@ -304,6 +347,7 @@ namespace RTE {
 		}
 		// The observer's context survives every arm and fault that already retained it.
 		while (retired->readers.load(std::memory_order_acquire)) std::this_thread::yield();
+		SaveFencedPages(retired->begin, retired->end - retired->begin);
 		Protect(retired->begin, retired->end - retired->begin, false);
 		decltype(copies.ranges)::node_type rangeNode;
 		decltype(copies.owners)::node_type ownerNode;
@@ -321,7 +365,10 @@ namespace RTE {
 		static const size_t bytes = PageBytes();
 		return bytes;
 	}
-	bool PageWriteFence::OpenCopiedPage(uintptr_t address, size_t bytes) noexcept { return Protect(address, bytes, false); }
+	bool PageWriteFence::OpenCopiedPage(uintptr_t address, size_t bytes) noexcept {
+		SaveFencedPages(address, bytes);
+		return Protect(address, bytes, false);
+	}
 	bool PageWriteFence::ProtectCopyPages(uintptr_t address, size_t bytes) noexcept { return Protect(address, bytes, true); }
 
 	bool PageWriteFence::Arm(const std::vector<Buffer>& buffers) {
@@ -360,8 +407,7 @@ namespace RTE {
 		fence.armed.store(true, std::memory_order_release);
 		for (const Region& region: fence.regions) {
 			if (!Protect(region.pagesBegin, region.pagesEnd - region.pagesBegin, true)) {
-				OpenAll(fence);
-				fence.armed.store(false, std::memory_order_release);
+				Release();
 				return false;
 			}
 		}
@@ -387,24 +433,33 @@ namespace RTE {
 		if (!fence.armed.load(std::memory_order_acquire)) {
 			return 0;
 		}
-		// Open first, so putting the pages back cannot fault.
-		OpenAll(fence);
+		// Open first, so putting the pages back cannot fault on the fence; a page a copy watch fenced again faults into the
+		// watch, so nothing below holds the fence's lock.
+		OpenUnwatched(fence);
 		size_t restored = 0;
 		{
 			SpinLock guard(fence.lock);
-			for (const auto& [index, page]: fence.written) {
-				Region& region = fence.regions[index];
-				std::memcpy(reinterpret_cast<void*>(region.pagesBegin + page * fence.pageBytes), region.shadow.data() + page * fence.pageBytes, fence.pageBytes);
-				region.saved[page] = 0;
-			}
 			restored = fence.written.size();
-			fence.written.clear();
-			for (const Region& region: fence.regions) {
-				std::copy(region.head.begin(), region.head.end(), reinterpret_cast<uint8_t*>(region.begin));
-				std::copy(region.tail.begin(), region.tail.end(), reinterpret_cast<uint8_t*>(region.pagesEnd));
+		}
+		// A page saved after these was opened unchanged; the entries before it never move.
+		for (size_t entry = 0; entry < restored; ++entry) {
+			const auto [index, page] = fence.written[entry];
+			const Region& region = fence.regions[index];
+			std::memcpy(reinterpret_cast<void*>(region.pagesBegin + page * fence.pageBytes), region.shadow.data() + page * fence.pageBytes, fence.pageBytes);
+		}
+		for (const Region& region: fence.regions) {
+			std::copy(region.head.begin(), region.head.end(), reinterpret_cast<uint8_t*>(region.begin));
+			std::copy(region.tail.begin(), region.tail.end(), reinterpret_cast<uint8_t*>(region.pagesEnd));
+		}
+		{
+			SpinLock guard(fence.lock);
+			for (const auto& [index, page]: fence.written) {
+				fence.regions[index].saved[page] = 0;
 			}
+			fence.written.clear();
 			fence.armed.store(false, std::memory_order_release);
 		}
+		ReopenWatched(fence);
 		return restored;
 	}
 
@@ -413,13 +468,16 @@ namespace RTE {
 		if (!fence.armed.load(std::memory_order_acquire)) {
 			return;
 		}
-		OpenAll(fence);
-		SpinLock guard(fence.lock);
-		for (const auto& [index, page]: fence.written) {
-			fence.regions[index].saved[page] = 0;
+		OpenUnwatched(fence);
+		{
+			SpinLock guard(fence.lock);
+			for (const auto& [index, page]: fence.written) {
+				fence.regions[index].saved[page] = 0;
+			}
+			fence.written.clear();
+			fence.armed.store(false, std::memory_order_release);
 		}
-		fence.written.clear();
-		fence.armed.store(false, std::memory_order_release);
+		ReopenWatched(fence);
 	}
 
 	bool PageWriteFence::IsSupported() {
