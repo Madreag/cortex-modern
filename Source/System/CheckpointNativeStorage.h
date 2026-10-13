@@ -61,12 +61,15 @@ namespace RTE {
 			alignas(T) std::array<std::byte, sizeof(T)> m_Bytes;
 		};
 		struct PrivateValues;
+		struct ReadLookup;
 		struct ReadViews {
 			bool active = false;
 			std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> pages;
 			std::span<const RootRange> roots;
 			std::shared_ptr<PrivateValues> privateValues;
 			std::shared_ptr<const void> owner;
+			/// The open scope's built lookups, shared by a scope opened on these same views.
+			std::shared_ptr<const ReadLookup> lookup;
 		};
 		struct ReadState;
 		class ReadScope {

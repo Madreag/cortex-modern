@@ -1105,11 +1105,24 @@ namespace {
 	};
 }
 
-struct CheckpointNativeStorage::ReadState : std::enable_shared_from_this<ReadState> {
-	std::shared_ptr<const void> sourceOwner;
+// The pages, roots and root indices a read scope looks through; they never change once built, so the scopes a saver's
+// helpers open on its views share them instead of copying and sorting every root again.
+struct CheckpointNativeStorage::ReadLookup {
 	std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> pages;
 	std::vector<RootRange> roots;
 	CheckpointRootIndex sourceRoots, viewRoots, privateRoots;
+};
+
+struct CheckpointNativeStorage::ReadState : std::enable_shared_from_this<ReadState> {
+	explicit ReadState(std::shared_ptr<const ReadLookup> built) :
+	    lookup(std::move(built)), pages(lookup->pages), roots(lookup->roots), sourceRoots(lookup->sourceRoots), viewRoots(lookup->viewRoots), privateRoots(lookup->privateRoots) {}
+	std::shared_ptr<const void> sourceOwner;
+	std::shared_ptr<const ReadLookup> lookup;
+	const std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>>& pages;
+	const std::vector<RootRange>& roots;
+	const CheckpointRootIndex& sourceRoots;
+	const CheckpointRootIndex& viewRoots;
+	const CheckpointRootIndex& privateRoots;
 	std::map<std::pair<uintptr_t, size_t>, std::string> strings;
 	std::map<std::pair<uintptr_t, uintptr_t>, std::shared_ptr<const void>> indices;
 	std::shared_ptr<PrivateValues> privateValues;
@@ -1122,13 +1135,21 @@ CheckpointNativeStorage::ReadScope::ReadScope(std::span<const std::shared_ptr<co
 
 CheckpointNativeStorage::ReadScope::ReadScope(ReadViews views) : m_Capture(views.active), m_Previous(s_Read) {
 	if (!views.active) return;
-	m_State = std::make_shared<ReadState>();
+	std::shared_ptr<const ReadLookup> lookup = std::move(views.lookup);
+	if (lookup && lookup->pages.data() == views.pages.data() && lookup->pages.size() == views.pages.size() && lookup->roots.data() == views.roots.data() && lookup->roots.size() == views.roots.size()) {
+		// The three indices count as built here, so an injected failure meets the same points either way.
+		if (!views.roots.empty()) for (int index = 0; index < 3; ++index) CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	} else {
+		auto built = std::make_shared<ReadLookup>();
+		built->pages.assign(views.pages.begin(), views.pages.end());
+		built->roots.assign(views.roots.begin(), views.roots.end());
+		built->sourceRoots.Build(built->roots, false);
+		built->viewRoots.Build(built->roots, true);
+		built->privateRoots.Build(built->roots, true, true);
+		lookup = std::move(built);
+	}
+	m_State = std::make_shared<ReadState>(std::move(lookup));
 	m_State->sourceOwner = std::move(views.owner);
-	m_State->pages.assign(views.pages.begin(), views.pages.end());
-	m_State->roots.assign(views.roots.begin(), views.roots.end());
-	m_State->sourceRoots.Build(m_State->roots, false);
-	m_State->viewRoots.Build(m_State->roots, true);
-	m_State->privateRoots.Build(m_State->roots, true, true);
 	m_State->privateValues = views.privateValues ? std::move(views.privateValues) : (m_Previous ? m_Previous->privateValues : std::make_shared<PrivateValues>());
 	s_Read = m_State.get();
 }
@@ -1222,7 +1243,7 @@ void* CheckpointNativeStorage::AllocatePrivate(size_t bytes, size_t alignment, b
 }
 
 CheckpointNativeStorage::ReadViews CheckpointNativeStorage::CurrentViews() {
-	return s_Read ? ReadViews{true, s_Read->pages, s_Read->roots, s_Read->privateValues, s_Read->shared_from_this()} : ReadViews{};
+	return s_Read ? ReadViews{true, s_Read->pages, s_Read->roots, s_Read->privateValues, s_Read->shared_from_this(), s_Read->lookup} : ReadViews{};
 }
 
 std::shared_ptr<const void> CheckpointNativeStorage::ReadIndex(const void* source, const void* kind, const std::function<std::shared_ptr<const void>()>& build) {
