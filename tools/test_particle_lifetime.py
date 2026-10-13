@@ -28,7 +28,8 @@ int main() {
         {398, 399, 1031031424, 4038809998U},
         {547, 549, 1037864068, 3832443299U},
         {324, 333, 1044455076, 3484964932U},
-        {289, 299, 1053014185, 2653138081U}
+        {289, 299, 1053014185, 2653138081U},
+        {497, 499, 1054690691, 2438545521U}
     };
     for (const auto& row : cases) {
         volatile float random = std::bit_cast<float>(row.randomBits);
@@ -39,10 +40,11 @@ int main() {
             return 1;
         }
     }
-    // RepeaterShot scales its smoke lifetime by the dying projectile's lifetime.
-    const auto lifetime = RTE::DecayParticleLifetime(500, 516, 0.25F);
-    if (lifetime != 3221225972U) return 2;
-    const int smoke = static_cast<int>(400.0 / (1.0 + 516.646 / lifetime));
+    // Tick 26913: RepeaterShot scales its smoke lifetime by the dying projectile's lifetime.
+    const auto lifetime = RTE::DecayParticleLifetime(497, 499, std::bit_cast<float>(uint32_t{1054690691}));
+    if (lifetime != 2438545521U) return 2;
+    const double age = std::bit_cast<double>(uint64_t{4647503357370097992});
+    const int smoke = static_cast<int>(400.0 / (1.0 + age / lifetime));
     if (smoke != 399 || !(399.984 > smoke) || 383.318 > smoke) return 3;
     std::puts("PASS lifetime boundaries, captured decay outputs and smoke expiry");
 }
