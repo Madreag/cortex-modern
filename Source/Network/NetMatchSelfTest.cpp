@@ -19001,6 +19001,59 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestOpenChatEntryHoldsItsPlace(std::string* error) {
+		NetMatchService::Construct();
+		struct Restore {
+			~Restore() { g_UInputMan.DisableKeys(false); g_UInputMan.TypeIntoSeatInput(false); g_UInputMan.EndFrame(); g_UInputMan.EndSimUpdate(); NetMatchService::Destruct(); }
+		} restore;
+		AllegroScreen screen(g_FrameMan.GetBackBuffer32());
+		NetModerationGUI panel(&screen);
+		panel.m_ChatInMatch = true;
+		NetLobbySnapshot snapshot;
+		SDL_Event key{};
+		key.type = SDL_EVENT_KEY_DOWN; key.key.scancode = SDL_SCANCODE_T; key.key.key = SDLK_T; key.key.down = true;
+		g_UInputMan.HandleInputEvent(key);
+		g_UInputMan.Update(false);
+		panel.UpdateMatchChat(snapshot, false);
+		g_UInputMan.EndFrame();
+		key.type = SDL_EVENT_KEY_UP; key.key.down = false;
+		g_UInputMan.HandleInputEvent(key);
+		panel.UpdateMatchChat(snapshot, false);
+		g_UInputMan.EndFrame();
+		if (!panel.IsChatEntryOpen() || !panel.m_MatchChatInput) {
+			*error = "the chat key did not open the match chat entry"; return false;
+		}
+		const BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
+		const int width = backbuffer->w, height = backbuffer->h;
+		const auto inputRect = [&panel] {
+			std::array<int, 4> rect{};
+			panel.m_MatchChatInput->GetControlRect(&rect[0], &rect[1], &rect[2], &rect[3]);
+			return rect;
+		};
+		// The entry opens over a notice at the bottom of the screen, as "Joiner rejoined" lies after a return.
+		panel.m_ToastRect = {width / 2 - 260, height - 30, 520, 20, true};
+		panel.DrawMatchChat(snapshot);
+		const auto opened = inputRect();
+		panel.m_ToastRect = {};
+		panel.DrawMatchChat(snapshot);
+		const auto afterNotice = inputRect();
+		if (afterNotice != opened) {
+			*error = "the open chat entry moved from y=" + std::to_string(opened[1]) + " to y=" + std::to_string(afterNotice[1]) +
+			         " when the notice under it ended, out from under a click aimed at it";
+			return false;
+		}
+		// A taller notice that arrives while the entry is open still raises the entry clear of it.
+		panel.m_ToastRect = {width / 2 - 260, height - 80, 520, 20, true};
+		panel.DrawMatchChat(snapshot);
+		const auto raised = inputRect();
+		if (raised[1] + raised[3] > height - 80) {
+			*error = "the open chat entry stayed over a notice that arrived under it (entry ends at y=" + std::to_string(raised[1] + raised[3]) + ")";
+			return false;
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS open_chat_entry_holds_its_place_when_a_notice_ends");
+		return true;
+	}
+
 	bool TestLobbyChatReturn(std::string* error) {
 		LoopbackTransport wire;
 		NetMatchService::Construct();
@@ -19079,6 +19132,7 @@ namespace RTE {
 			else if (name == "placement-confirm") passed = GameActivity::RunSetupEditorSelfTest(true);
 			else if (name == "data-root") passed = TestDataRootDiscovery(&error);
 			else if (name == "chat-opening") passed = TestMatchChatOpeningText(&error);
+			else if (name == "chat-entry-place") passed = TestOpenChatEntryHoldsItsPlace(&error);
 			else if (name == "lobby-return") passed = TestLobbyChatReturn(&error);
 			else if (name == "setup-editor") passed = GameActivity::RunSetupEditorSelfTest();
 			else if (name == "chat-receipts") passed = TestChatReceipts<NetSession>(&error);
@@ -19150,6 +19204,7 @@ namespace RTE {
 		row(&TestAHostWithNoRouterReadsNoRouterMapping, "a_host_with_no_router_reads_no_router_mapping");
 		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");
 		row(&TestInMatchPresentation, "in_match_presentation_results_teams_causes_and_chat");
+		row(&TestOpenChatEntryHoldsItsPlace, "open_chat_entry_holds_its_place_when_a_notice_ends");
 		row(&TestPauseNavigationDuringRecovery, "pause_menu_script_keeps_drawn_gestures");
 		row(&TestChatReceipts<NetSession>, "chat_send_receipts");
 		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");

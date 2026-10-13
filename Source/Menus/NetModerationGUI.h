@@ -316,6 +316,7 @@ namespace RTE {
 		GUIFont* m_ChatWrapFont = nullptr;
 		int m_ChatWrapWidth = 0;
 		bool m_ChatEntryOpen = false;
+		int m_ChatEntryBottom = 0; //!< Where the open entry's chat ends; zero while the entry is closed.
 		bool m_ChatKeysHeld = false;
 		bool m_ChatDisabledKeys = false;
 		std::string m_StripText;
