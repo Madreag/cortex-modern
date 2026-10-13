@@ -678,12 +678,14 @@ namespace RTE {
 				uint64_t snapshot = 0;
 				std::array<std::pair<const void*, void*>, 1024> slots{};
 			};
-			thread_local Cache cache;
-			if (cache.snapshot != m_Serial) {
-				cache.slots.fill({});
-				cache.snapshot = m_Serial;
+			// On the heap: glibc places static thread-locals at the top of every thread's stack, a library's small ones too.
+			thread_local std::unique_ptr<Cache> cache;
+			if (!cache) cache = std::make_unique<Cache>();
+			if (cache->snapshot != m_Serial) {
+				cache->slots.fill({});
+				cache->snapshot = m_Serial;
 			}
-			return cache.slots[(reinterpret_cast<uintptr_t>(key) >> 4) % cache.slots.size()];
+			return cache->slots[(reinterpret_cast<uintptr_t>(key) >> 4) % cache->slots.size()];
 		}
 		const uint64_t m_Serial;
 		struct DeferredValue { void* value; void (*run)(void*); const void* target; };

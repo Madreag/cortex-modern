@@ -405,22 +405,24 @@ namespace RTE {
 			    std::all_of(sourceGroups.begin(), sourceGroups.end(), [&value](const auto& group) { return value.groups.contains(group); });
 		};
 		struct Cache { uint64_t snapshot = 0; std::array<const Metadata*, 1024> values{}; };
-		thread_local Cache cache;
-		if (cache.snapshot != m_Serial) { cache.values.fill(nullptr); cache.snapshot = m_Serial; }
+		// On the heap: glibc places static thread-locals at the top of every thread's stack, a library's small ones too.
+		thread_local std::unique_ptr<Cache> cache;
+		if (!cache) cache = std::make_unique<Cache>();
+		if (cache->snapshot != m_Serial) { cache->values.fill(nullptr); cache->snapshot = m_Serial; }
 		const size_t local = (std::hash<std::string>{}(source.m_PresetName) ^ std::hash<std::string>{}(source.m_CopiedFromPresetName) ^
-		    std::hash<std::string>{}(source.m_FormattedReaderPosition) ^ (reinterpret_cast<uintptr_t>(&source.GetClass()) >> 4)) % cache.values.size();
-		if (const Metadata* recent = cache.values[local]; recent && equal(*recent)) { remember(recent); return; }
+		    std::hash<std::string>{}(source.m_FormattedReaderPosition) ^ (reinterpret_cast<uintptr_t>(&source.GetClass()) >> 4)) % cache->values.size();
+		if (const Metadata* recent = cache->values[local]; recent && equal(*recent)) { remember(recent); return; }
 		size_t groups = 0;
 		for (const std::string& group: sourceGroups) groups += std::hash<std::string>{}(group);
 		const size_t hash = std::hash<std::string>{}(source.m_PresetDescription) ^ (std::hash<std::string>{}(source.m_FormattedReaderPosition) * 31) ^ groups ^ std::hash<std::string>{}(source.m_PresetName) ^ (std::hash<std::string>{}(source.m_CopiedFromPresetName) * 17);
 		auto& shard = m_Metadata[hash % m_Metadata.size()];
 		std::lock_guard lock(shard.mutex);
 		const auto [first, last] = shard.values.equal_range(hash);
-		for (auto at = first; at != last; ++at) if (equal(*at->second)) { cache.values[local] = at->second.get(); remember(cache.values[local]); return; }
+		for (auto at = first; at != last; ++at) if (equal(*at->second)) { cache->values[local] = at->second.get(); remember(cache->values[local]); return; }
 		auto value = std::make_unique<Metadata>(Metadata{source.m_PresetName, source.m_CopiedFromPresetName, source.m_PresetDescription, source.m_FormattedReaderPosition, Freeze(source.m_Groups)});
 		const Metadata* kept = value.get();
 		shard.values.emplace(hash, std::move(value));
-		cache.values[local] = kept; remember(kept);
+		cache->values[local] = kept; remember(kept);
 	}
 	void CheckpointNativeSnapshot::MaterializeMetadata() const {
 		if (!m_BoundarySealed.load(std::memory_order_acquire)) throw std::logic_error("native checkpoint values read before the boundary was sealed");

@@ -33,6 +33,7 @@
 #include <exception>
 #include <functional>
 #include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -1203,12 +1204,18 @@ namespace {
 			// A lookup is immutable. Cache exact queries, including misses, without sharing writable state
 			// between readers. The generation keeps recycled index addresses from reusing an older answer.
 			struct Cached { uint64_t generation; uintptr_t address; size_t bytes, root; };
-			static thread_local std::array<Cached, 128> cache{};
-			const size_t slot = ((address >> 4) ^ (address >> 17) ^ (bytes * 37) ^ m_Generation) & (cache.size() - 1);
-			Cached& cached = cache[slot];
+			// On the heap: glibc places static thread-locals at the top of every thread's stack, a library's small ones too.
+			static thread_local std::unique_ptr<std::array<Cached, 128>> cache;
+			if (!cache) cache.reset(new (std::nothrow) std::array<Cached, 128>{});
+			size_t found = c_None;
+			if (!cache) {
+				Find(roots, 0, m_Entries.size(), address, End(address, bytes), bytes, found);
+				return found == c_None ? nullptr : &roots[found];
+			}
+			const size_t slot = ((address >> 4) ^ (address >> 17) ^ (bytes * 37) ^ m_Generation) & (cache->size() - 1);
+			Cached& cached = (*cache)[slot];
 			if (cached.generation == m_Generation && cached.address == address && cached.bytes == bytes)
 				return cached.root == c_None ? nullptr : &roots[cached.root];
-			size_t found = c_None;
 			Find(roots, 0, m_Entries.size(), address, End(address, bytes), bytes, found);
 			cached = {m_Generation, address, bytes, found};
 			return found == c_None ? nullptr : &roots[found];
