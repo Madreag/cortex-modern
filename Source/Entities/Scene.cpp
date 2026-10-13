@@ -537,7 +537,7 @@ bool Scene::Area::AddBox(const Box& newBox) {
 bool Scene::Area::RemoveBox(const Box& boxToRemove) {
 	std::unique_lock<std::shared_mutex> guard(g_sceneAreaMutex);
 
-	std::vector<Box*>::iterator boxToRemoveIterator = std::find(m_BoxList.begin(), m_BoxList.end(), &boxToRemove);
+	auto boxToRemoveIterator = std::find(m_BoxList.begin(), m_BoxList.end(), &boxToRemove);
 	if (boxToRemoveIterator != m_BoxList.end()) {
 		m_BoxList.erase(boxToRemoveIterator);
 		TouchCheckpoint();
@@ -695,7 +695,7 @@ Box Scene::Area::RemoveBoxInside(const Vector& point) {
 	Box returnBox;
 
 	std::list<Box> wrappedBoxes;
-	for (std::vector<Box*>::iterator aItr = m_BoxList.begin(); aItr != m_BoxList.end(); ++aItr) {
+	for (auto aItr = m_BoxList.begin(); aItr != m_BoxList.end(); ++aItr) {
 		// Handle wrapped boxes properly
 		wrappedBoxes.clear();
 		g_SceneMan.WrapBox(**aItr, wrappedBoxes);
