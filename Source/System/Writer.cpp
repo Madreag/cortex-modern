@@ -833,6 +833,7 @@ const std::string& CheckpointText::Text() const {
 	struct Frame { const Data* node; size_t next = 0; };
 	std::vector<Frame> pending{{root.get()}};
 	while (!pending.empty()) {
+		SaverThreads::YieldToGame();
 		Frame& frame = pending.back();
 		const Data* node = frame.node;
 		if (node->Output().formatted.load(std::memory_order_acquire)) { pending.pop_back(); continue; }

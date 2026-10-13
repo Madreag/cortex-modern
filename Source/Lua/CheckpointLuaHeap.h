@@ -759,6 +759,7 @@ namespace RTE::CheckpointLua {
 		};
 		mutable std::shared_ptr<PrivateReadLife> m_PrivateRead;
 		const bool m_PrivateNative = CheckpointNativeStorage::Reading();
+		const bool m_YieldsToGame = SaverThreads::Current(); //!< A saver's own worker state stops for the game's ticks.
 		std::vector<std::pair<uintptr_t, size_t>> m_PrivateChunks;
 		std::shared_ptr<PreparationLife> m_PreparationLife = std::make_shared<PreparationLife>();
 		std::unique_ptr<lua_State, decltype(&lua_close)> m_Bootstrap{nullptr, lua_close};
@@ -1204,6 +1205,7 @@ namespace RTE::CheckpointLua {
 		static void* Allocate(void* opaque, void* address, size_t previousSize, size_t size) noexcept {
 			auto& owner = *static_cast<HeapOwner*>(opaque);
 			if (size && CheckpointFailure::Fails(CheckpointFailure::Point::LuaAllocation)) return nullptr;
+			if (owner.m_YieldsToGame) SaverThreads::YieldToGame();
 			// A VM that reached its heap past the state's lock still meets the gate before it writes a block.
 			owner.WaitCopy();
 			if (size == 0) {

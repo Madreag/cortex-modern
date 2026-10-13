@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 
 #ifdef _MSC_VER
 #include <intrin.h>
@@ -54,12 +55,19 @@ namespace {
 	thread_local uint64_t t_LastCheckCycles = 0;
 	thread_local const void* t_LastCheckSite = nullptr;
 
-	// Test lever CCCP_TEST_SAVER_STRETCHES: names every stretch of saver work between two yields that ran over 8 million CPU
-	// cycles (2 ms at 4 GHz) of its own thread, which is how far past its slice the saver can run into a tick.
-	bool ReportingStretches() {
-		static const bool report = std::getenv("CCCP_TEST_SAVER_STRETCHES") != nullptr;
-		return report;
+	// Test lever CCCP_TEST_SAVER_STRETCHES=<cycles>: names every stretch of saver work between two yields that ran over that
+	// many CPU cycles of its own thread (a small value means 8 million, 2 ms at 4 GHz): how far past its slice the saver can run.
+	uint64_t StretchCycles() {
+		static const uint64_t cycles = [] {
+			const char* value = std::getenv("CCCP_TEST_SAVER_STRETCHES");
+			if (!value) return uint64_t{0};
+			const uint64_t parsed = std::strtoull(value, nullptr, 10);
+			return parsed < 100000 ? uint64_t{8000000} : parsed;
+		}();
+		return cycles;
 	}
+
+	bool ReportingStretches() { return StretchCycles() != 0; }
 
 	uint64_t ThreadCycles() {
 #ifdef _WIN32
@@ -73,7 +81,7 @@ namespace {
 
 	void NoteStretch(const void* site) {
 		const uint64_t cycles = ThreadCycles();
-		if (t_LastCheckCycles && cycles - t_LastCheckCycles > 8000000) {
+		if (t_LastCheckCycles && cycles - t_LastCheckCycles > StretchCycles()) {
 #ifdef _WIN32
 			const auto base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
 			std::fprintf(stdout, "[saver-stretch] cycles=%llu from=%llx to=%llx\n", static_cast<unsigned long long>(cycles - t_LastCheckCycles),

@@ -1066,7 +1066,9 @@ namespace {
 				const auto start = reinterpret_cast<uintptr_t>(views ? root.view : root.source);
 				m_Entries.push_back({start, End(start, root.bytes), index, index});
 			}
-			std::sort(m_Entries.begin(), m_Entries.end(), [](const Entry& left, const Entry& right) {
+			size_t compared = 0;
+			std::sort(m_Entries.begin(), m_Entries.end(), [&compared](const Entry& left, const Entry& right) {
+				if (++compared % 4096 == 0) SaverThreads::YieldToGame();
 				return left.start < right.start || (left.start == right.start && left.root < right.root);
 			});
 			Build(0, m_Entries.size());

@@ -4,6 +4,7 @@
 #include "CheckpointFailure.h"
 #include "NetLobbyProtocol.h"
 #include "System.h"
+#include "ThreadMan.h"
 
 #include <algorithm>
 #include <charconv>
@@ -326,10 +327,11 @@ namespace RTE {
 			archive.ReadEntry(c_DescriptorEntry, descriptorText);
 			AutosaveDescriptor descriptor;
 			if (!ParseDescriptor(descriptorText, descriptor, error)) return false;
-			for (const char* name: c_RequiredEntries) archive.VisitEntry(name, [](std::string_view) {});
+			// A saver's check inflates a piece at a time between the game's ticks.
+			for (const char* name: c_RequiredEntries) archive.VisitEntry(name, [](std::string_view) { SaverThreads::YieldToGame(); });
 			uint64_t worldTick = 0;
 			WorldTickReader tickReader;
-			if (!archive.VisitEntry("Save.ini", [&tickReader](std::string_view chunk) { tickReader.Read(chunk); })) {
+			if (!archive.VisitEntry("Save.ini", [&tickReader](std::string_view chunk) { SaverThreads::YieldToGame(); tickReader.Read(chunk); })) {
 				if (error) *error = "the checkpoint carries no world";
 				return false;
 			}
