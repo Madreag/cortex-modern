@@ -168,6 +168,7 @@
 #include <crtdbg.h>
 #include <processsnapshot.h>
 #include <psapi.h>
+#include <tlhelp32.h>
 #endif
 
 #include <algorithm>
@@ -4358,9 +4359,10 @@ static std::string NetMatchEndReason(const Activity* activity) {
 
 /// <summary>
 #ifdef _WIN32
-// Test lever CCCP_TEST_SIM_SAMPLER: the simulation thread's instruction pointer and the top of its stack about every
-// millisecond; a tick slower than 80 ms prints its samples as module offsets, resolved offline against the build's symbols.
-// Nothing is allocated or locked while the thread is held.
+// Test lever CCCP_TEST_SIM_SAMPLER: about every millisecond of a tick, the simulation thread's instruction pointer and the top
+// of its stack, and every other millisecond the same for each thread that ran since the last look; a tick slower than 80 ms
+// prints each thread's CPU cycles in it and the samples of the busiest, as module offsets resolved offline against the
+// build's symbols. Nothing is allocated or locked while a thread is held.
 namespace {
 	class SimSampler {
 	public:
@@ -4371,24 +4373,40 @@ namespace {
 		void BeginTick() {
 			std::lock_guard sampling(m_Sampling);
 			m_Count = 0;
-			m_Cycles = Cycles();
+			for (Watched& thread: m_Threads) thread.tickStart = Cycles(thread.handle);
+			m_Cycles = Cycles(GetCurrentThread());
 			m_Active.store(true, std::memory_order_release);
 		}
 		void EndTick(uint64_t tick, int64_t wallUs) {
 			size_t count = 0;
+			std::vector<std::pair<uint64_t, DWORD>> busy;
 			{
 				std::lock_guard sampling(m_Sampling);
 				m_Active.store(false, std::memory_order_release);
 				count = m_Count;
+				if (wallUs >= c_SlowUs) {
+					for (const Watched& thread: m_Threads) busy.emplace_back(Cycles(thread.handle) - thread.tickStart, thread.id);
+				}
 			}
-			const uint64_t cycles = Cycles() - m_Cycles;
-			if (wallUs < 80000) return;
-			System::PrintDiagnosticLine(std::format("[sim-sample] tick={} wall_us={} cycles={} samples={}", tick, wallUs, cycles, count));
+			const uint64_t cycles = Cycles(GetCurrentThread()) - m_Cycles;
+			if (wallUs < c_SlowUs) return;
+			busy.emplace_back(cycles, m_SimId);
+			std::sort(busy.rbegin(), busy.rend());
+			busy.resize(std::min(busy.size(), c_Busiest));
+			uint64_t total = 0;
+			std::string threads;
+			for (const auto& [used, id]: busy) {
+				total += used;
+				threads += std::format(" {}:{}", id, used);
+			}
+			System::PrintDiagnosticLine(std::format("[sim-sample] tick={} wall_us={} cycles={} samples={} sim_thread={} busiest_cycles={} busiest{}", tick, wallUs, cycles, count, m_SimId, total, threads));
 			for (size_t index = 0; index < count; ++index) {
 				const Sample& sample = m_Samples[index];
-				std::string line = std::format("[sim-sample-at] tick={} {}", tick, Place(sample.rip));
+				const bool simulation = sample.id == m_SimId;
+				if (!simulation && std::none_of(busy.begin(), busy.end(), [&sample](const auto& entry) { return entry.second == sample.id; })) continue;
+				std::string line = simulation ? std::format("[sim-sample-at] tick={} {}", tick, Place(sample.rip)) : std::format("[sim-sample-thread] tick={} tid={} {}", tick, sample.id, Place(sample.rip));
 				int callers = 0;
-				for (size_t word = 0; word < c_Words && callers < 8; ++word) {
+				for (size_t word = 0; word < sample.words && callers < 8; ++word) {
 					if (sample.stack[word] < m_ImageBase || sample.stack[word] >= m_ImageEnd) continue;
 					line += std::format(" {:x}", sample.stack[word] - m_ImageBase);
 					++callers;
@@ -4398,35 +4416,107 @@ namespace {
 		}
 
 	private:
-		static constexpr size_t c_Slots = 4096, c_Words = 96;
+		static constexpr int64_t c_SlowUs = 80000;
+		static constexpr size_t c_Slots = 16384, c_Words = 64, c_Busiest = 12;
 		struct Sample {
+			DWORD id;
+			size_t words;
 			DWORD64 rip;
 			DWORD64 stack[c_Words];
 		};
+		struct Watched {
+			DWORD id;
+			HANDLE handle;
+			DWORD64 stackBase;
+			uint64_t tickStart;
+			uint64_t seen;
+		};
+		struct BasicInformation {
+			LONG exitStatus;
+			PVOID teb;
+			HANDLE process;
+			HANDLE thread;
+			ULONG_PTR affinity;
+			LONG priority;
+			LONG basePriority;
+		};
+		using QueryThread = LONG(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+
 		SimSampler() {
 			DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &m_Thread, THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, 0);
+			m_SimId = GetCurrentThreadId();
+			ULONG_PTR low = 0, high = 0;
+			GetCurrentThreadStackLimits(&low, &high);
+			m_SimStackBase = high;
 			MODULEINFO module{};
 			GetModuleInformation(GetCurrentProcess(), GetModuleHandle(nullptr), &module, sizeof(module));
 			m_ImageBase = reinterpret_cast<DWORD64>(module.lpBaseOfDll);
 			m_ImageEnd = m_ImageBase + module.SizeOfImage;
+			m_QueryThread = reinterpret_cast<QueryThread>(GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQueryInformationThread"));
 			m_Samples.resize(c_Slots);
 			std::thread([this] { Run(); }).detach();
 		}
 		void Run() {
-			for (;;) {
+			m_SamplerId = GetCurrentThreadId();
+			auto refreshed = std::chrono::steady_clock::time_point{};
+			for (bool others = false;; others = !others) {
 				Sleep(1);
+				if (std::chrono::steady_clock::now() - refreshed > std::chrono::seconds(1)) {
+					std::lock_guard sampling(m_Sampling);
+					Refresh();
+					refreshed = std::chrono::steady_clock::now();
+				}
 				if (!m_Active.load(std::memory_order_acquire)) continue;
 				std::lock_guard sampling(m_Sampling);
-				if (!m_Active.load(std::memory_order_relaxed) || m_Count >= c_Slots || SuspendThread(m_Thread) == static_cast<DWORD>(-1)) continue;
-				CONTEXT context{};
-				context.ContextFlags = CONTEXT_CONTROL;
-				if (GetThreadContext(m_Thread, &context)) {
-					Sample& sample = m_Samples[m_Count++];
-					sample.rip = context.Rip;
-					std::memcpy(sample.stack, reinterpret_cast<const void*>(context.Rsp), sizeof(sample.stack));
+				if (!m_Active.load(std::memory_order_relaxed)) continue;
+				Take(m_Thread, m_SimId, m_SimStackBase);
+				if (!others) continue;
+				for (Watched& thread: m_Threads) {
+					const uint64_t cycles = Cycles(thread.handle);
+					if (cycles == thread.seen) continue;
+					thread.seen = cycles;
+					Take(thread.handle, thread.id, thread.stackBase);
 				}
-				ResumeThread(m_Thread);
 			}
+		}
+		// Threads come and go; the list is brought up to date between samples, never while a thread is held.
+		void Refresh() {
+			std::erase_if(m_Threads, [](const Watched& thread) {
+				if (WaitForSingleObject(thread.handle, 0) != WAIT_OBJECT_0) return false;
+				CloseHandle(thread.handle);
+				return true;
+			});
+			const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+			if (snapshot == INVALID_HANDLE_VALUE) return;
+			THREADENTRY32 entry{};
+			entry.dwSize = sizeof(entry);
+			for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry)) {
+				if (entry.th32OwnerProcessID != GetCurrentProcessId() || entry.th32ThreadID == m_SamplerId || entry.th32ThreadID == m_SimId) continue;
+				if (std::any_of(m_Threads.begin(), m_Threads.end(), [&entry](const Watched& thread) { return thread.id == entry.th32ThreadID; })) continue;
+				const HANDLE handle = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION | SYNCHRONIZE, FALSE, entry.th32ThreadID);
+				if (!handle) continue;
+				BasicInformation information{};
+				DWORD64 stackBase = 0;
+				if (m_QueryThread && m_QueryThread(handle, 0, &information, sizeof(information), nullptr) >= 0 && information.teb) {
+					stackBase = reinterpret_cast<DWORD64>(static_cast<const NT_TIB*>(information.teb)->StackBase);
+				}
+				const uint64_t cycles = Cycles(handle);
+				m_Threads.push_back({entry.th32ThreadID, handle, stackBase, cycles, cycles});
+			}
+			CloseHandle(snapshot);
+		}
+		void Take(HANDLE handle, DWORD id, DWORD64 stackBase) {
+			if (m_Count >= c_Slots || SuspendThread(handle) == static_cast<DWORD>(-1)) return;
+			CONTEXT context{};
+			context.ContextFlags = CONTEXT_CONTROL;
+			if (GetThreadContext(handle, &context)) {
+				Sample& sample = m_Samples[m_Count++];
+				sample.id = id;
+				sample.rip = context.Rip;
+				sample.words = context.Rsp < stackBase ? std::min<size_t>(c_Words, (stackBase - context.Rsp) / sizeof(DWORD64)) : 0;
+				std::memcpy(sample.stack, reinterpret_cast<const void*>(context.Rsp), sample.words * sizeof(DWORD64));
+			}
+			ResumeThread(handle);
 		}
 		std::string Place(DWORD64 address) const {
 			if (address >= m_ImageBase && address < m_ImageEnd) return std::format("exe+{:x}", address - m_ImageBase);
@@ -4438,13 +4528,16 @@ namespace {
 			}
 			return std::format("{:x}", address);
 		}
-		static uint64_t Cycles() {
+		static uint64_t Cycles(HANDLE thread) {
 			ULONG64 cycles = 0;
-			QueryThreadCycleTime(GetCurrentThread(), &cycles);
+			QueryThreadCycleTime(thread, &cycles);
 			return cycles;
 		}
 		HANDLE m_Thread = nullptr;
-		DWORD64 m_ImageBase = 0, m_ImageEnd = 0;
+		DWORD m_SimId = 0, m_SamplerId = 0;
+		DWORD64 m_SimStackBase = 0, m_ImageBase = 0, m_ImageEnd = 0;
+		QueryThread m_QueryThread = nullptr;
+		std::vector<Watched> m_Threads;
 		std::vector<Sample> m_Samples;
 		std::mutex m_Sampling;
 		size_t m_Count = 0;
