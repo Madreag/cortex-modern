@@ -177,6 +177,7 @@
 #include <immintrin.h>
 #endif
 #include <chrono>
+#include <atomic>
 #include <charconv>
 #include <cstdio>
 #include <cstdlib>
@@ -4356,6 +4357,103 @@ static std::string NetMatchEndReason(const Activity* activity) {
 }
 
 /// <summary>
+#ifdef _WIN32
+// Test lever CCCP_TEST_SIM_SAMPLER: the simulation thread's instruction pointer and the top of its stack about every
+// millisecond; a tick slower than 80 ms prints its samples as module offsets, resolved offline against the build's symbols.
+// Nothing is allocated or locked while the thread is held.
+namespace {
+	class SimSampler {
+	public:
+		static SimSampler* Armed() {
+			static SimSampler* const sampler = std::getenv("CCCP_TEST_SIM_SAMPLER") ? new SimSampler() : nullptr;
+			return sampler;
+		}
+		void BeginTick() {
+			std::lock_guard sampling(m_Sampling);
+			m_Count = 0;
+			m_Cycles = Cycles();
+			m_Active.store(true, std::memory_order_release);
+		}
+		void EndTick(uint64_t tick, int64_t wallUs) {
+			size_t count = 0;
+			{
+				std::lock_guard sampling(m_Sampling);
+				m_Active.store(false, std::memory_order_release);
+				count = m_Count;
+			}
+			const uint64_t cycles = Cycles() - m_Cycles;
+			if (wallUs < 80000) return;
+			System::PrintDiagnosticLine(std::format("[sim-sample] tick={} wall_us={} cycles={} samples={}", tick, wallUs, cycles, count));
+			for (size_t index = 0; index < count; ++index) {
+				const Sample& sample = m_Samples[index];
+				std::string line = std::format("[sim-sample-at] tick={} {}", tick, Place(sample.rip));
+				int callers = 0;
+				for (size_t word = 0; word < c_Words && callers < 8; ++word) {
+					if (sample.stack[word] < m_ImageBase || sample.stack[word] >= m_ImageEnd) continue;
+					line += std::format(" {:x}", sample.stack[word] - m_ImageBase);
+					++callers;
+				}
+				System::PrintDiagnosticLine(line);
+			}
+		}
+
+	private:
+		static constexpr size_t c_Slots = 4096, c_Words = 96;
+		struct Sample {
+			DWORD64 rip;
+			DWORD64 stack[c_Words];
+		};
+		SimSampler() {
+			DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &m_Thread, THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, 0);
+			MODULEINFO module{};
+			GetModuleInformation(GetCurrentProcess(), GetModuleHandle(nullptr), &module, sizeof(module));
+			m_ImageBase = reinterpret_cast<DWORD64>(module.lpBaseOfDll);
+			m_ImageEnd = m_ImageBase + module.SizeOfImage;
+			m_Samples.resize(c_Slots);
+			std::thread([this] { Run(); }).detach();
+		}
+		void Run() {
+			for (;;) {
+				Sleep(1);
+				if (!m_Active.load(std::memory_order_acquire)) continue;
+				std::lock_guard sampling(m_Sampling);
+				if (!m_Active.load(std::memory_order_relaxed) || m_Count >= c_Slots || SuspendThread(m_Thread) == static_cast<DWORD>(-1)) continue;
+				CONTEXT context{};
+				context.ContextFlags = CONTEXT_CONTROL;
+				if (GetThreadContext(m_Thread, &context)) {
+					Sample& sample = m_Samples[m_Count++];
+					sample.rip = context.Rip;
+					std::memcpy(sample.stack, reinterpret_cast<const void*>(context.Rsp), sizeof(sample.stack));
+				}
+				ResumeThread(m_Thread);
+			}
+		}
+		std::string Place(DWORD64 address) const {
+			if (address >= m_ImageBase && address < m_ImageEnd) return std::format("exe+{:x}", address - m_ImageBase);
+			HMODULE module = nullptr;
+			char path[MAX_PATH] = {};
+			if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCSTR>(address), &module) && GetModuleFileNameA(module, path, MAX_PATH)) {
+				const std::string_view name(path);
+				return std::format("{}+{:x}", name.substr(name.find_last_of("\\/") + 1), address - reinterpret_cast<DWORD64>(module));
+			}
+			return std::format("{:x}", address);
+		}
+		static uint64_t Cycles() {
+			ULONG64 cycles = 0;
+			QueryThreadCycleTime(GetCurrentThread(), &cycles);
+			return cycles;
+		}
+		HANDLE m_Thread = nullptr;
+		DWORD64 m_ImageBase = 0, m_ImageEnd = 0;
+		std::vector<Sample> m_Samples;
+		std::mutex m_Sampling;
+		size_t m_Count = 0;
+		uint64_t m_Cycles = 0;
+		std::atomic<bool> m_Active{false};
+	};
+} // namespace
+#endif
+
 /// Game simulation loop.
 // CC_SIM_DUMP=<from>:<to> writes every MO's exact-bit state per tick beside the -out trace
 // (".simdump.txt"), for host-vs-client divergence forensics.
@@ -7663,6 +7761,17 @@ void RunGameLoop() {
 				break;
 			}
 			ZoneScopedN("Simulation Update");
+#ifdef _WIN32
+			// Ends after the tick's own cost line, so printing the samples never lands inside a measured tick.
+			struct SampledTick {
+				uint64_t tick;
+				std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+				explicit SampledTick(uint64_t tick) : tick(tick) { if (auto* sampler = SimSampler::Armed()) sampler->BeginTick(); }
+				~SampledTick() {
+					if (auto* sampler = SimSampler::Armed()) sampler->EndTick(tick, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+				}
+			} sampledTick{static_cast<uint64_t>(nextSimTick)};
+#endif
 			struct RestoreTickCost {
 				bool enabled;
 				uint64_t tick;
