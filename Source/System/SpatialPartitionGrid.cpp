@@ -137,7 +137,8 @@ std::vector<MovableObject*> SpatialPartitionGrid::GetMOsInRadius(const Vector& c
 	RTEAssert(ignoreTeam >= Activity::NoTeam && ignoreTeam < Activity::MaxTeamCount, "Invalid ignoreTeam given to SpatialPartitioningGrid::GetMOsInRadius()!");
 
 	std::unordered_set<MOID> potentialMOIDs;
-	const bool sharedScriptQuery = ScenarioRunner::IsLockstepControllerSyncActive() && SoundSimulationScope::Domain() == SoundExecutionDomain::SharedSimulation;
+	const bool sharedScriptQuery = SoundSimulationScope::Domain() == SoundExecutionDomain::SharedSimulation &&
+	    (ScenarioRunner::HasLockstepCoordinator() || ScenarioRunner::IsLockstepReplayPlayback() || ScenarioRunner::WorldCatchUpActive());
 	std::vector<MOID> candidateOrder;
 
 	int topLeftCellX = static_cast<int>(std::floor((center.m_X - radius) / static_cast<float>(m_CellSize)));
