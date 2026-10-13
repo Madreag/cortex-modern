@@ -1589,6 +1589,17 @@ void SceneMan::TraceSeeRay(const SeeRay& seeRay, BITMAP* fog, const Vector& fogS
 	const auto visit = [&](int x, int y) {
 		if (hashReads) {
 			const uint64_t material = GetTerrMatter(x, y), fogged = unseen(x, y);
+			int wrappedX = x, wrappedY = y;
+			WrapPosition(wrappedX, wrappedY);
+			const BITMAP* copy = m_pCurrentScene->GetTerrain()->GetMaterialCopyBitmap();
+			const BITMAP* live = m_pCurrentScene->GetTerrain()->GetMaterialBitmap();
+			const auto at = [wrappedX, wrappedY](const BITMAP* bitmap) {
+				return bitmap && wrappedX >= 0 && wrappedY >= 0 && wrappedX < bitmap->w && wrappedY < bitmap->h ? static_cast<int>(bitmap->line[wrappedY][wrappedX]) : -1;
+			};
+			if (copy && static_cast<int>(material) != at(copy) && !(at(copy) == -1 && material == g_MaterialAir)) {
+				LuaMan::TraceShared(nullptr, "see-read-mismatch x=" + std::to_string(wrappedX) + " y=" + std::to_string(wrappedY) + " got=" + std::to_string(material) +
+				                                 " copy=" + std::to_string(at(copy)) + " live=" + std::to_string(at(live)) + " flag=" + std::to_string(s_ReadTerrainFromCopy));
+			}
 			for (uint64_t value: {static_cast<uint64_t>(x), static_cast<uint64_t>(y), material, fogged}) trace.reads = (trace.reads ^ value) * 1099511628211ULL;
 			trace.positions = (((trace.positions ^ static_cast<uint64_t>(x)) * 1099511628211ULL) ^ static_cast<uint64_t>(y)) * 1099511628211ULL;
 			trace.materials = (trace.materials ^ material) * 1099511628211ULL;
