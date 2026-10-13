@@ -7905,6 +7905,59 @@ bool LuaStateWrapper::RunNumericPolicySelfTest() {
 		if (!ok) { std::fprintf(stderr, "%s\n", lua_tostring(state, -1)); lua_pop(state, 1); }
 		passed = passed && ok;
 	}
+	// S10's smoke loop has limit 7.5 / 20 at the first different tick. Once its
+	// loop is compiled, an empty floating-point range must still skip the body.
+	// Warm the loop from C only once so a compiled function entry cannot hide a
+	// faulty JFORI interpreter path.
+	for (const int mode : {LUAJIT_MODE_OFF, LUAJIT_MODE_ON}) {
+		for (const bool descending : {false, true}) {
+			luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_FLUSH);
+			luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | mode);
+			const char* loop = descending
+			    ? "return function(limit) local n=0; for i=1,limit,-1 do n=n+1 end; return n end"
+			    : "return function(limit) local n=0; for i=1,limit do n=n+1 end; return n end";
+			if (luaL_dostring(state, loop) != 0) {
+				std::fprintf(stderr, "%s\n", lua_tostring(state, -1));
+				lua_pop(state, 1);
+				passed = false;
+				continue;
+			}
+			const int function = lua_gettop(state);
+			const auto count = [&](double limit) {
+				lua_pushvalue(state, function);
+				lua_pushnumber(state, limit);
+				if (lua_pcall(state, 1, 1, 0) != 0) {
+					std::fprintf(stderr, "%s\n", lua_tostring(state, -1));
+					lua_pop(state, 1);
+					return -1;
+				}
+				const int result = static_cast<int>(lua_tointeger(state, -1));
+				lua_pop(state, 1);
+				return result;
+			};
+			bool ok = count(descending ? -9999.5 : 10000.5) == (descending ? 10001 : 10000);
+			if (mode == LUAJIT_MODE_ON) {
+				const GCproto* prototype = funcproto(funcV(state->top - 1));
+				bool compiledLoop = false;
+				for (BCPos pc = 0; pc < prototype->sizebc; ++pc) compiledLoop |= bc_op(proto_bc(prototype)[pc]) == BC_JFORI;
+				ok = ok && compiledLoop;
+			}
+			const double ascendingLimits[] = {0.375, -0.375, 1.0, 1.375, 3.375};
+			const double descendingLimits[] = {1.625, 2.5, 1.0, 0.625, -1.625};
+			const int expectedCounts[] = {0, 0, 1, 1, 3};
+			for (size_t i = 0; i < std::size(expectedCounts); ++i) {
+				const double limit = descending ? descendingLimits[i] : ascendingLimits[i];
+				const int actual = count(limit);
+				const bool equal = actual == expectedCounts[i];
+				std::printf("[lua-numeric-policy-selftest] %s %s_%s_for limit=%.3f count=%d expected=%d\n",
+				    equal ? "PASS" : "FAIL", mode == LUAJIT_MODE_ON ? "jit" : "interpreter",
+				    descending ? "descending" : "ascending", limit, actual, expectedCounts[i]);
+				ok = ok && equal;
+			}
+			passed = passed && ok;
+			lua_pop(state, 1);
+		}
+	}
 	lua_close(state);
 	std::printf("[lua-numeric-policy-selftest] %s\n", passed ? "PASS" : "FAIL");
 	return passed;
