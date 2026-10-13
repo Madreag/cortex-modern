@@ -7859,6 +7859,23 @@ void RunGameLoop() {
 				break;
 			}
 			ZoneScopedN("Simulation Update");
+			// Test lever CCCP_TEST_SAVER_STAND_IN=<tick>:<seconds>:<megabytes>: from that tick, one thread at the saver's priority
+			// streams through a buffer of that size for that long, a saver's memory traffic with no save behind it.
+			static const std::array<unsigned long long, 3> standIn = [] {
+				std::array<unsigned long long, 3> values{};
+				const char* text = std::getenv("CCCP_TEST_SAVER_STAND_IN");
+				if (!text || std::sscanf(text, "%llu:%llu:%llu", &values[0], &values[1], &values[2]) != 3 || !values[2]) values = {};
+				return values;
+			}();
+			if (standIn[2] && static_cast<unsigned long long>(nextSimTick) == standIn[0]) {
+				std::thread([seconds = standIn[1], bytes = standIn[2] << 20] {
+					SaverThreads::Enter();
+					std::vector<unsigned char> buffer(bytes, 1);
+					const size_t half = bytes / 2, chunk = size_t{1} << 20;
+					const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+					for (size_t offset = 0; std::chrono::steady_clock::now() < until; offset = (offset + chunk) % half) std::memcpy(buffer.data() + half + offset, buffer.data() + offset, chunk);
+				}).detach();
+			}
 #ifdef _WIN32
 			// Ends after the tick's own cost line, so printing the samples never lands inside a measured tick.
 			struct SampledTick {
