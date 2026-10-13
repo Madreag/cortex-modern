@@ -867,7 +867,7 @@ namespace RTE {
 
 	bool NetSessionPlaneSelfTest::CheckSceneLifecycle(const std::string& name, std::string* error) {
 		Hub hub;
-		const uint8_t count = name == "rematch-chat" || name == "kick-received-two" || name == "heavy-input" || name == "leave-rejoin-two" || name == "drop-after-input" || name == "drop-before-host-input" ? 2 : 3;
+		const uint8_t count = name == "rematch-chat" || name == "kick-received-two" || name == "heavy-input" || name == "leave-rejoin-two" || name == "drop-after-input" || name == "drop-before-host-input" || name == "referee-input-runway" ? 2 : 3;
 		hub.row = Case{"scene_lifecycle"}; hub.row.seats = count; hub.row.rttMs = hub.row.otherRttMs = 100;
 		auto ip = std::make_unique<Wire>(hub, 1);
 		auto relay = std::make_unique<Wire>(hub, 1);
@@ -907,6 +907,7 @@ namespace RTE {
 		std::array<INetTransport*, 3> nativeWires{&hostWire, &clientWire, &otherWire};
 		std::vector<uint64_t> produced(count, 1), applied(count), displayedAt(count);
 		std::vector<double> credits(count);
+		std::vector<std::map<uint64_t, uint64_t>> refereeRequests(count);
 		for (size_t index = 0; index < count; ++index) {
 			NetLockstepConfig config; config.sessionId = match.sessionId; config.matchConfig = match;
 			config.localPeerId = static_cast<uint8_t>(index + 1); config.peerCount = count; config.roundId = index == 0 ? 77 : 0;
@@ -921,6 +922,17 @@ namespace RTE {
 			if (name == "drop-after-input" || name == "drop-before-host-input") config.frameTieReferee = [&hub](const NetFrameTieRequest& request) {
 				NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Waiting;
 				if (!hub.tieAnswersHeld && !request.queryOnly && std::find(request.members.begin(), request.members.end(), request.host) != request.members.end()) { reply.state = NetFrameTieReply::State::Decided; reply.members = request.members; }
+				return reply;
+			};
+			if (name == "referee-input-runway") config.frameTieReferee = [&, index](const NetFrameTieRequest& request) {
+				const uint64_t sentAt = refereeRequests[index].try_emplace(request.frame, hub.now).first->second;
+				NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Waiting;
+				// The real directory is asynchronous, including its immediate
+				// host verdict. Keep that exchange inside the existing bound.
+				if (hub.now >= sentAt + 200 && !request.queryOnly &&
+				    std::find(request.members.begin(), request.members.end(), request.host) != request.members.end()) {
+					reply.state = NetFrameTieReply::State::Decided; reply.members = request.members;
+				}
 				return reply;
 			};
 			config.migrationKey.fill(0x39); config.peerSessionLinks = links[index] = std::make_shared<NetPeerSessionLinks>();
@@ -987,6 +999,29 @@ namespace RTE {
 		for (size_t index = 0; index < count; ++index) {
 			sessionWires[index] = std::make_unique<NetPeerSessionWire>(links[index]);
 			links[index]->sessionAttached = true; sessions[index]->RebindSessionWire(*sessionWires[index]);
+		}
+		if (name == "referee-input-runway") {
+			for (const uint64_t until = hub.now + 10000; hub.now < until;) if (!step(true)) return false;
+			const size_t healthyQueries = refereeRequests[0].size() + refereeRequests[1].size();
+			std::cout << "[net-session-scene] referee-input-runway healthy_queries=" << healthyQueries
+			          << " host_frame=" << applied[0] << " joiner_frame=" << applied[1] << std::endl;
+			if (healthyQueries != 0) { *error = "healthy buffered input spent the directory's recovery request allowance"; return false; }
+			clientWire.Stop();
+			auto& host = *rounds[0];
+			const uint64_t begin = hub.now, before = applied[0];
+			uint64_t longestWait = 0;
+			for (; hub.now < begin + 3000;) {
+				if (!step(false)) return false;
+				if (host.m_ConsumerWaitingFrame && hub.now >= host.m_ConsumerWaitStartMs)
+					longestWait = std::max(longestWait, hub.now - host.m_ConsumerWaitStartMs);
+			}
+			const bool held = host.m_PeerBridges.contains(2) && host.m_PeerBridges.at(2).committedHold;
+			std::cout << "[net-session-scene] referee-input-runway drop_queries=" << refereeRequests[0].size()
+			          << " before=" << before << " after=" << applied[0] << " longest_wait_ms=" << longestWait << " held=" << held << std::endl;
+			if (refereeRequests[0].empty() || longestWait > 1000 || hub.now - displayedAt[0] > 50 || applied[0] < before + 110 || !held) {
+				*error = "a real dropped link did not receive its bounded directory decision and AI hold"; return false;
+			}
+			return true;
 		}
 		if (name == "kick-pending") {
 			auto& host = *rounds[0]; const uint64_t boundary = host.GetStats().nextFrame;

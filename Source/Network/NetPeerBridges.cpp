@@ -106,7 +106,21 @@ namespace RTE {
 			else proposal.members.push_back(peer);
 		}
 		if (returningOnly && !proposal.members.empty()) return false;
-		if (!proposal.members.empty()) CheckPeerFrameTie(frame, proposal.connectedMask, nowMs);
+		if (!proposal.members.empty()) {
+			// Inputs are prepared ahead of play. An ordinary packet still in
+			// transit must not spend a directory request for every future tick:
+			// that leaves the real disconnected player waiting for the minute's
+			// allowance to renew. Start the referee near the consumer's slot,
+			// while its scheduling reserve can still cover the exchange.
+			std::optional<double> dueMs;
+			if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame)
+				dueMs = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
+			if (m_PeerConsumerAtMs && m_LastCompletedSimulationTick && frame > *m_LastCompletedSimulationTick)
+				dueMs = *m_PeerConsumerAtMs + (frame - *m_LastCompletedSimulationTick) * m_Config.simTickMs;
+			const double reserveMs = m_Config.slowPlayerBoundTicks * m_Config.simTickMs;
+			if (m_ConsumerWaitingFrame == frame || (dueMs && nowMs + reserveMs >= *dueMs))
+				CheckPeerFrameTie(frame, proposal.connectedMask, nowMs);
+		}
 		if (proposal.members.empty()) {
 			if (m_FrameGroupMembers == 0 || std::countr_zero(m_FrameGroupMembers) + 1 != m_Config.localPeerId) return false;
 			for (const auto& [peer, bridge]: m_PeerBridges) {
