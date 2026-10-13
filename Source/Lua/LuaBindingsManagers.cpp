@@ -158,14 +158,14 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, MovableMan) {
 
 	    .property("MaxDroppedItems", &MovableMan::GetMaxDroppedItems, &MovableMan::SetMaxDroppedItems)
 
-	    .def_readonly("Actors", &MovableMan::m_Actors, luabind::return_stl_iterator)
-	    .def_readonly("Items", &MovableMan::m_Items, luabind::return_stl_iterator)
-	    .def_readonly("Particles", &MovableMan::m_Particles, luabind::return_stl_iterator)
-	    .def_readonly("AddedActors", &MovableMan::m_AddedActors, luabind::return_stl_iterator)
-	    .def_readonly("AddedItems", &MovableMan::m_AddedItems, luabind::return_stl_iterator)
-	    .def_readonly("AddedParticles", &MovableMan::m_AddedParticles, luabind::return_stl_iterator)
-	    .def_readonly("AlarmEvents", &MovableMan::m_AlarmEvents, luabind::return_stl_iterator)
-	    .def_readonly("AddedAlarmEvents", &MovableMan::m_AddedAlarmEvents, luabind::return_stl_iterator)
+	    .property("Actors", &MovableMan::GetActors, luabind::return_stl_iterator)
+	    .property("Items", &MovableMan::GetItems, luabind::return_stl_iterator)
+	    .property("Particles", &MovableMan::GetParticles, luabind::return_stl_iterator)
+	    .property("AddedActors", &MovableMan::GetAddedActors, luabind::return_stl_iterator)
+	    .property("AddedItems", &MovableMan::GetAddedItems, luabind::return_stl_iterator)
+	    .property("AddedParticles", &MovableMan::GetAddedParticles, luabind::return_stl_iterator)
+	    .property("AlarmEvents", &MovableMan::GetAlarmEvents, luabind::return_stl_iterator)
+	    .property("AddedAlarmEvents", &MovableMan::GetAddedAlarmEvents, luabind::return_stl_iterator)
 
 	    .def("GetMOFromID", &MovableMan::GetMOFromID)
 	    .def("FindObjectByUniqueID", &MovableMan::FindObjectByUniqueID)

@@ -1,4 +1,6 @@
 #include "ACDropShip.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Attachable.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "NativeCheckpoint.h"
@@ -14,11 +16,38 @@ using namespace RTE;
 
 ConcreteClassInfo(ACDropShip, ACraft, 10);
 
+ACDropShip::ACDropShip(const ACDropShip& source, CheckpointNativeSnapshot& snapshot) :
+	ACraft(source, snapshot),
+	m_PersistedBodyGroupCheckpoint(snapshot.Freeze(source.m_PersistedBodyGroupCheckpoint, &m_PersistedBodyGroupCheckpoint)),
+	m_pBodyAG(snapshot.Freeze(source.m_pBodyAG)),
+	m_pRThruster(snapshot.Freeze(source.m_pRThruster)),
+	m_pLThruster(snapshot.Freeze(source.m_pLThruster)),
+	m_pURThruster(snapshot.Freeze(source.m_pURThruster)),
+	m_pULThruster(snapshot.Freeze(source.m_pULThruster)),
+	m_pRHatch(snapshot.Freeze(source.m_pRHatch)),
+	m_pLHatch(snapshot.Freeze(source.m_pLHatch)),
+	m_HatchSwingRange(snapshot.Freeze(source.m_HatchSwingRange)),
+	m_HatchOpeness(snapshot.Freeze(source.m_HatchOpeness)),
+	m_LateralControl(snapshot.Freeze(source.m_LateralControl)),
+	m_LateralControlSpeed(snapshot.Freeze(source.m_LateralControlSpeed)),
+	m_AutoStabilize(snapshot.Freeze(source.m_AutoStabilize)),
+	m_MaxEngineAngle(snapshot.Freeze(source.m_MaxEngineAngle)),
+	m_HoverHeightModifier(snapshot.Freeze(source.m_HoverHeightModifier)),
+	m_PersistedACDropShipRuntime(snapshot.Freeze(source.m_PersistedACDropShipRuntime, &m_PersistedACDropShipRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* ACDropShip::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 ACDropShip::ACDropShip() {
 	Clear();
 }
 
 ACDropShip::~ACDropShip() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -146,13 +175,13 @@ int ACDropShip::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 void ACDropShip::SaveSnapshotConfiguration(Writer& writer) const {
 	ACraft::SaveSnapshotConfiguration(writer);
-	writer.NewPropertyWithValue("SpecialBehaviour_BodyGroupCheckpoint", CheckpointWriter::Native([&] { return m_PersistedBodyGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pBodyAG) : m_PersistedBodyGroupCheckpoint; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_BodyGroupCheckpoint", CheckpointWriter::Native([&] { return m_PersistedBodyGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pBodyAG) : m_PersistedBodyGroupCheckpoint.Value(); }).Base64(true));
 	writer.NewPropertyWithValue("HatchDoorSwingRange", m_HatchSwingRange);
 	writer.NewPropertyWithValue("AutoStabilize", m_AutoStabilize);
 	writer.NewPropertyWithValue("MaxEngineAngle", m_MaxEngineAngle);
 	writer.NewPropertyWithValue("LateralControlSpeed", m_LateralControlSpeed);
 	writer.NewPropertyWithValue("HoverHeightModifier", m_HoverHeightModifier);
-	writer.NewPropertyWithValue("SpecialBehaviour_ACDropShipRuntime", CheckpointWriter::Native([&] { return m_PersistedACDropShipRuntime.empty() ? SaveACDropShipRuntime() : m_PersistedACDropShipRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ACDropShipRuntime", CheckpointWriter::Native([&] { return m_PersistedACDropShipRuntime.empty() ? SaveACDropShipRuntime() : m_PersistedACDropShipRuntime.Value(); }).Base64(true));
 }
 
 void ACDropShip::AdoptPersistedUniqueID() {

@@ -28,6 +28,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a Emission object in system
 		/// memory. Create() should be called before using the object.
 		Emission() { Clear(); }
+		CheckpointSnapshotMethods(Emission);
 
 		/// Creates a Emission to be identical to another, by deep copy.
 		/// @param reference A reference to the Emission to deep copy.

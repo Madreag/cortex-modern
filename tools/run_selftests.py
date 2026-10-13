@@ -78,6 +78,7 @@ SELFTESTS = [
     "headless-render-cap",
     "single-player-reference",
     "preview-invariance",
+    "preview-hotplug",
     "preview-binding-exhaustive",
     "joystick-updater",
 ]
@@ -468,10 +469,10 @@ def run_row(options, make_run, name, case, sanitizer):
         scored = run_single_player_reference(options.repo, make_run, case, options.timeout)
     elif name == "net-lockstep-cli":
         scored = run_lockstep_cli(options.repo, make_run, case, options.timeout)
-    elif name == "preview-invariance":
+    elif name in ("preview-invariance", "preview-hotplug"):
         from test_preview_invariance import run_case as invariance_case  # noqa: PLC0415
 
-        scored = invariance_case(options.repo, case, options.timeout)
+        scored = invariance_case(options.repo, case, options.timeout, hotplug=name == "preview-hotplug")
         scored["binary"] = scored.get("exe_sha256")
     else:
         walk = name == "preview-binding-exhaustive"

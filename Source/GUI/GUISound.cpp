@@ -267,6 +267,7 @@ struct GUISoundCheckpoint {
             data.SoundObject = nullptr; data.Offset = sample.offset; data.MinimumAudibleDistance = sample.minimum; data.AttenuationStartDistance = sample.attenuation;
             if (!sample.backend.empty()) state.bindings.emplace_back(&data, sample.backend);
         }
+        value.m_SoundDataSource = SoundSet::NameSoundData(value.m_SoundData);
         value.m_SubSoundSets.reserve(record.subsets.size());
         for (const auto& recordChild: record.subsets) { auto child = std::make_unique<SoundSet>(); BuildSet(recordChild, *child, state); value.m_SubSoundSets.push_back(child.release()); }
     }
@@ -339,7 +340,7 @@ struct GUISoundCheckpoint {
             auto& set = owner->GetTopLevelSoundSet();
             set.SetSoundSelectionCycleMode(SoundSet::FORWARDS);
             set.m_CurrentSelection = {false, 2};
-            set.m_SoundData[0].Offset = Vector(12.25F, -34.5F);
+            set.m_SoundData[0].Offset = Vector(12.25F, -34.5F); set.m_SoundDataSource = SoundSet::NameSoundData(set.m_SoundData);
             set.AddSoundSet(manager.BrainSwitchSound()->GetTopLevelSoundSet());
             owner->SetPaused(true); owner->SetImmobile(true); owner->SetLoopSetting(-1); owner->SetVolume(0.125F); owner->SetPitch(1.25F);
             if (!owner->Play()) throw std::runtime_error("GUI checkpoint fixture did not play");
@@ -360,7 +361,7 @@ struct GUISoundCheckpoint {
                 return result;
             };
             const auto expected = sequence();
-            owner->SetVolume(0.8F); owner->SetPitch(0.75F); owner->GetTopLevelSoundSet().m_SoundData[0].Offset = Vector(-9, 8);
+            owner->SetVolume(0.8F); owner->SetPitch(0.75F); owner->GetTopLevelSoundSet().m_SoundData[0].Offset = Vector(-9, 8); owner->GetTopLevelSoundSet().m_SoundDataSource = SoundSet::NameSoundData(owner->GetTopLevelSoundSet().m_SoundData);
             for (auto* child: owner->GetTopLevelSoundSet().m_SubSoundSets) delete child;
             owner->GetTopLevelSoundSet().m_SubSoundSets.clear();
             if (!manager.LoadCheckpointWithAudio(target, music, audio) || manager.SaveCheckpoint() != target || manager.FundsChangedSound() != owner || g_AudioMan.GetSoundContainerPlaybackCheckpoint(owner) != playback) throw std::runtime_error("GUI native state, selection topology, owner identity or playback was not restored");

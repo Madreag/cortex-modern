@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 #include "PieQuadrant.h"
 #include "Controller.h"
 #include "Matrix.h"
@@ -30,6 +32,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a PieMenu object in system memory. Create() should be called before using the object.
 		PieMenu();
+		CheckpointSnapshotMethods(PieMenu);
 
 		/// Makes the PieMenu object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
@@ -235,10 +238,11 @@ namespace RTE {
 
 		/// Gets a const reference to the vector containing pointers to all the PieSlices in this PieMenu.
 		/// @return A const reference to the vector containing pointers to all the PieSlices in this PieMenu.
-		const std::vector<PieSlice*>& GetPieSlices() const { return m_CurrentPieSlices; }
+		const CheckpointVector<PieSlice*>& GetPieSlices() const { return m_CurrentPieSlices; }
 
 		/// Packs the enabled state, mode, timers, cursor and slice pointers (by slice index) as one save line, the active sub-menu nested.
 		std::string PackInteractionState() const;
+		std::string PackCheckpointInteractionState() const;
 
 		/// Restores the state packed by PackInteractionState onto this menu's current slices.
 		void UnpackInteractionState(const std::string& packed);
@@ -398,7 +402,7 @@ namespace RTE {
 		const PieSlice* m_HoveredPieSlice; //!< The PieSlice currently being hovered over.
 		const PieSlice* m_ActivatedPieSlice; //!< The currently activated PieSlice, if there is one, or 0 if there's not.
 		const PieSlice* m_AlreadyActivatedPieSlice; //!< The PieSlice that was most recently activated by pressing primary. Used to avoid duplicate activation when disabling.
-		std::vector<PieSlice*> m_CurrentPieSlices; //!< All the PieSlices in this PieMenu in INI order. Not owned here, just pointing to the ones above.
+		CheckpointVector<PieSlice*> m_CurrentPieSlices; //!< All the PieSlices in this PieMenu in INI order. Not owned here, just pointing to the ones above.
 
 		PieMenu* m_ActiveSubPieMenu; //!< The currently active sub-PieMenu, if any.
 
@@ -421,7 +425,7 @@ namespace RTE {
 		bool m_HighlightWobble = false; //!< Draw-only far-cursor pulse.
 		int m_HighlightDrawRadius = 0; //!< Drawn freeze radius when the highlight is held.
 		Timer m_HighlightViewTimer; //!< Real-time pulse for the draw-only wobble.
-		std::string m_PersistedRuntime;
+		CheckpointString m_PersistedRuntime;
 		std::string SaveRuntimeCheckpoint() const;
 		bool LoadRuntimeCheckpoint(std::string_view text, bool validateOnly = false);
 		/// What LoadRuntimeCheckpoint(reference.SaveRuntimeCheckpoint()) leaves, copied field by field for a preview's clone.

@@ -2,6 +2,7 @@
 #pragma warning(disable : 4129)
 
 #include "PresetMan.h"
+#include "CheckpointFrozenContainers.h"
 #include "DataModule.h"
 #include "SceneObject.h"
 #include "Loadout.h"
@@ -22,6 +23,7 @@
 #include "RTETools.h"
 
 #include <array>
+#include <cstdlib>
 #include <iostream>
 
 using namespace RTE;
@@ -32,6 +34,8 @@ const std::array<std::pair<std::string, std::string>, 3> PresetMan::c_UserdataMo
                                                                                           {c_UserScriptedSavesModuleName, "Scripted Activity Saves"}}};
 
 PresetMan::PresetMan() {
+	CheckpointNativeStorage::AllocationScope resources(true);
+	m_DataModuleIDs = decltype(m_DataModuleIDs){};
 	Clear();
 }
 
@@ -66,7 +70,7 @@ int PresetMan::Save(Writer &writer) const
 
 void PresetMan::Destroy() {
 	// Emptied before the modules go: a preset's destructor that looks presets up finds none, never a module already deleted.
-	std::vector<DataModule*> dataModules = std::move(m_pDataModules);
+	auto dataModules = std::move(m_pDataModules);
 	Clear();
 	for (DataModule* dataModule: dataModules) {
 		delete dataModule;
@@ -74,6 +78,9 @@ void PresetMan::Destroy() {
 }
 
 bool PresetMan::LoadDataModule(const std::string& moduleName, bool official, bool userdata, const ProgressCallback& progressCallback) {
+	// Test lever: measures what loading the modules into owned storage costs at startup.
+	static const bool s_PlainResources = std::getenv("CCCP_TEST_NO_OWNED_RESOURCES") != nullptr;
+	CheckpointNativeStorage::AllocationScope resources(!s_PlainResources);
 	if (moduleName.empty()) {
 		return false;
 	}
@@ -97,7 +104,7 @@ bool PresetMan::LoadDataModule(const std::string& moduleName, bool official, boo
 		// RTEAssert(m_pDataModules.size() == m_OfficialModuleCount, "Trying to load an official module after a non-official one has been loaded!");
 
 		// Find where the official modules end in the vector.
-		std::vector<DataModule*>::iterator moduleItr = m_pDataModules.begin();
+		auto moduleItr = m_pDataModules.begin();
 		size_t newModuleID = 0;
 		for (; newModuleID < m_OfficialModuleCount; ++newModuleID) {
 			moduleItr++;
@@ -187,6 +194,9 @@ bool PresetMan::LoadAllDataModules() {
 		}
 	}
 
+	if (const std::string costs = CheckpointNativeStorage::StorageCosts(); !costs.empty()) {
+		std::cout << "[storage-costs] load_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - moduleLoadTimerStart).count() << " " << costs << std::endl;
+	}
 	if (g_SettingsMan.IsMeasuringModuleLoadTime()) {
 		std::chrono::milliseconds moduleLoadElapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - moduleLoadTimerStart);
 		g_ConsoleMan.PrintString("Module load duration is: " + std::to_string(moduleLoadElapsedTime.count()) + "ms");
@@ -217,11 +227,17 @@ void PresetMan::WarnNonCompliantModules() {
 }
 
 const DataModule* PresetMan::GetDataModule(int whichModule) {
+	if (CheckpointNativeStorage::Reading()) {
+		const auto modules = CheckpointValues(CheckpointNativeStorage::Source(this)->m_pDataModules);
+		if (whichModule < 0 || static_cast<size_t>(whichModule) >= modules.size()) throw std::out_of_range("saved module is out of range");
+		return modules[whichModule];
+	}
 	RTEAssert(whichModule >= 0 && whichModule < (int)m_pDataModules.size(), "Tried to access an out of bounds data module number!");
 	return m_pDataModules[whichModule];
 }
 
 const std::string PresetMan::GetDataModuleName(int whichModule) {
+	if (CheckpointNativeStorage::Reading()) return CheckpointNativeStorage::Source(GetDataModule(whichModule))->GetFileName();
 	RTEAssert(whichModule >= 0 && whichModule < (int)m_pDataModules.size(), "Tried to access an out of bounds data module number!");
 	return m_pDataModules[whichModule]->GetFileName();
 }
@@ -229,9 +245,18 @@ const std::string PresetMan::GetDataModuleName(int whichModule) {
 int PresetMan::GetModuleID(std::string moduleName) {
 	// Lower-case search name so we can match up against the already-lowercase names in m_DataModuleIDs
 	std::transform(moduleName.begin(), moduleName.end(), moduleName.begin(), ::tolower);
+	if (CheckpointNativeStorage::Reading()) {
+		const auto& modules = CheckpointNativeStorage::Source(this)->m_DataModuleIDs;
+		if (const auto* found = CheckpointFind(modules, moduleName)) return static_cast<int>(found->second);
+		const size_t dot = moduleName.find_last_of('.');
+		if (dot == std::string::npos) moduleName += System::GetModulePackageExtension();
+		else moduleName.resize(dot);
+		const auto* found = CheckpointFind(modules, moduleName);
+		return found ? static_cast<int>(found->second) : -1;
+	}
 
 	// First pass
-	std::map<std::string, size_t>::iterator itr = m_DataModuleIDs.find(moduleName);
+	auto itr = m_DataModuleIDs.find(moduleName);
 	if (itr != m_DataModuleIDs.end())
 		return (*itr).second;
 
@@ -367,6 +392,21 @@ bool PresetMan::AddEntityPreset(Entity* pEntToAdd, int whichModule, bool overwri
 }
 
 const Entity* PresetMan::GetEntityPreset(const std::string& type, std::string preset, int whichModule) {
+	if (CheckpointNativeStorage::Reading()) {
+		const auto* source = CheckpointNativeStorage::Source(this);
+		const auto modules = CheckpointValues(source->m_pDataModules);
+		const size_t slash = preset.find_first_of('/');
+		if (slash != std::string::npos) { whichModule = GetModuleID(preset.substr(0, slash)); preset.erase(0, slash + 1); }
+		const auto find = [&](size_t index) { return const_cast<DataModule*>(modules[index])->GetEntityPreset(type, preset); };
+		if (whichModule >= static_cast<int>(modules.size())) throw std::out_of_range("saved preset module is out of range");
+		const Entity* found = nullptr;
+		if (whichModule < 0) { for (size_t index = 0; index < modules.size() && !found; ++index) found = find(index); }
+		else {
+			found = find(whichModule);
+			for (int index = 0; index < source->m_OfficialModuleCount && !found; ++index) found = find(index);
+		}
+		return found;
+	}
 	RTEAssert(whichModule < (int)m_pDataModules.size(), "Tried to access an out of bounds data module number!");
 
 	const Entity* pRetEntity = 0;
@@ -488,6 +528,14 @@ Entity* PresetMan::ReadReflectedPreset(Reader& reader) {
 bool PresetMan::GetAllOfType(std::list<Entity*>& entityList, const std::string& type, int whichModule) {
 	if (type.empty())
 		return false;
+	if (CheckpointNativeStorage::Reading()) {
+		const auto modules = CheckpointValues(CheckpointNativeStorage::Source(this)->m_pDataModules);
+		if (whichModule >= static_cast<int>(modules.size())) throw std::out_of_range("saved preset module is out of range");
+		if (whichModule >= 0) return modules[whichModule]->GetAllOfType(entityList, type);
+		bool found = false;
+		for (DataModule* module: modules) found = module->GetAllOfType(entityList, type) || found;
+		return found;
+	}
 
 	bool foundAny = false;
 
@@ -887,8 +935,8 @@ bool PresetMan::GetGroups(std::list<std::string>& groupList, int whichModule, co
 	else if (!m_pDataModules[whichModule]->GetGroupRegister()->empty()) {
 		// Get ALL groups of that module
 		if (withType == "All" || withType.empty()) {
-			const std::list<std::string>* pGroupList = m_pDataModules[whichModule]->GetGroupRegister();
-			for (std::list<std::string>::const_iterator gItr = pGroupList->begin(); gItr != pGroupList->end(); ++gItr)
+			const auto* pGroupList = m_pDataModules[whichModule]->GetGroupRegister();
+			for (auto gItr = pGroupList->begin(); gItr != pGroupList->end(); ++gItr)
 				groupList.push_back(*gItr);
 
 			foundAny = !pGroupList->empty();

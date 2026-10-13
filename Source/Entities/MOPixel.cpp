@@ -1,4 +1,6 @@
 #include "MOPixel.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Color.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 
@@ -17,11 +19,36 @@ using namespace RTE;
 
 ConcreteClassInfo(MOPixel, MovableObject, 2000);
 
+MOPixel::MOPixel(const MOPixel& source, CheckpointNativeSnapshot& snapshot) :
+	MovableObject(source, snapshot),
+	m_Atom(snapshot.Freeze(source.m_Atom)),
+	m_Color(snapshot.Freeze(source.m_Color)),
+	m_LethalRange(snapshot.Freeze(source.m_LethalRange)),
+	m_PersistedAtomCheckpoint(snapshot.Freeze(source.m_PersistedAtomCheckpoint, &m_PersistedAtomCheckpoint)),
+	m_PersistedAtomResidue(snapshot.Freeze(source.m_PersistedAtomResidue)),
+	m_HasPersistedAtomResidue(snapshot.Freeze(source.m_HasPersistedAtomResidue)),
+	m_PersistedLethalRange(snapshot.Freeze(source.m_PersistedLethalRange)),
+	m_HasPersistedLethalRange(snapshot.Freeze(source.m_HasPersistedLethalRange)),
+	m_PersistedLethalSharpness(snapshot.Freeze(source.m_PersistedLethalSharpness)),
+	m_HasPersistedLethalSharpness(snapshot.Freeze(source.m_HasPersistedLethalSharpness)),
+	m_MinLethalRange(snapshot.Freeze(source.m_MinLethalRange)),
+	m_MaxLethalRange(snapshot.Freeze(source.m_MaxLethalRange)),
+	m_LethalSharpness(snapshot.Freeze(source.m_LethalSharpness)),
+	m_Staininess(snapshot.Freeze(source.m_Staininess)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* MOPixel::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 MOPixel::MOPixel() {
 	Clear();
 }
 
 MOPixel::~MOPixel() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -189,7 +216,7 @@ void MOPixel::DiscardPersistedSnapshotState() {
 
 void MOPixel::SaveSnapshotConfiguration(Writer& writer) const {
 	MovableObject::SaveSnapshotConfiguration(writer);
-	writer.NewPropertyWithValue("SpecialBehaviour_AtomCheckpoint", CheckpointWriter::Native([&] { return m_PersistedAtomCheckpoint.empty() ? CaptureOwnedCheckpoint(m_Atom) : m_PersistedAtomCheckpoint; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_AtomCheckpoint", CheckpointWriter::Native([&] { return m_PersistedAtomCheckpoint.empty() ? CaptureOwnedCheckpoint(m_Atom) : m_PersistedAtomCheckpoint.Value(); }).Base64(true));
 	writer.NewPropertyWithValue("Color", m_Color);
 	writer.NewPropertyWithValue("MinLethalRange", m_MinLethalRange);
 	writer.NewPropertyWithValue("MaxLethalRange", m_MaxLethalRange);

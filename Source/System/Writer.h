@@ -5,6 +5,11 @@
 
 #include <string>
 #include <memory>
+#include <map>
+#include <future>
+#include <memory_resource>
+#include <new>
+#include <cstring>
 #include <ostream>
 #include <functional>
 #include <cstdint>
@@ -21,6 +26,7 @@
 struct BITMAP;
 
 namespace RTE {
+	class Entity;
 	std::string CheckpointFieldText(const std::function<std::string()>& observe);
 
 	template <typename Value> inline constexpr bool CheckpointArray = false;
@@ -83,6 +89,7 @@ namespace RTE {
 	};
 
 	struct BitmapSnapshot;
+	struct CheckpointArena;
 	class Timer;
 	bool RunOwnedCheckpointSelfTest();
 
@@ -92,6 +99,9 @@ namespace RTE {
 		CheckpointText();
 		explicit CheckpointText(std::string text);
 		const std::string& Text() const;
+		/// Keeps completed full and shared bytes without retaining the capture's fields and native owners.
+		CheckpointText Compact() const;
+		CheckpointText ReindentWriter(int delta) const;
 		size_t OwnedBytes() const;
 		bool HasPeerRuns() const;
 		bool SameValues(const CheckpointText& other) const;
@@ -103,19 +113,119 @@ namespace RTE {
 		/// SharedText() with its timers bound at a capture's sim time, as BindSimTime(ticks).Text() binds the whole text.
 		std::string SharedText(int64_t simTimeTicks) const;
 		static CheckpointText Deferred(std::function<std::string()> produce, size_t ownedBytes = 0, std::string identity = {});
+		static CheckpointText DeferredValues(std::function<CheckpointText()> produce, size_t ownedBytes = 0);
+		/// Runs the writer once off the boundary and relocates only its owned property tape.
+		static CheckpointText DeferredWriter(std::function<CheckpointText()> produce);
+		/// Captured callables use native storage instead of function-wrapper allocations.
+		template<class Function> requires (!std::is_same_v<std::remove_cvref_t<Function>, std::function<std::string()>> && std::is_invocable_r_v<std::string, std::decay_t<Function>&>)
+		static CheckpointText Deferred(Function&& produce, size_t ownedBytes = 0, std::string identity = {}) {
+			if constexpr (NeedsProducerStorage<Function>) if (auto* storage = ProducerStorage()) return DeferredOwned(CaptureProducer(storage, std::forward<Function>(produce)), ownedBytes, std::move(identity), {});
+			return Deferred(std::function<std::string()>(std::forward<Function>(produce)), ownedBytes, std::move(identity));
+		}
 		/// A deferred text whose producer brackets each run only this machine holds with `mark`: Text() drops the marks, SharedText() the runs as well.
 		static CheckpointText DeferredWithPeerRuns(std::function<std::string()> produce, std::string mark, size_t ownedBytes = 0);
+		template<class Function> requires (!std::is_same_v<std::remove_cvref_t<Function>, std::function<std::string()>> && std::is_invocable_r_v<std::string, std::decay_t<Function>&>)
+		static CheckpointText DeferredWithPeerRuns(Function&& produce, std::string mark, size_t ownedBytes = 0) {
+			if (mark.empty()) throw std::logic_error("a per-peer run mark cannot be empty");
+			if constexpr (NeedsProducerStorage<Function>) if (auto* storage = ProducerStorage()) return DeferredOwned(CaptureProducer(storage, std::forward<Function>(produce)), ownedBytes, {}, std::move(mark));
+			return DeferredWithPeerRuns(std::function<std::string()>(std::forward<Function>(produce)), std::move(mark), ownedBytes);
+		}
 	private:
+		// Small trivial callables already fit the function wrapper.
+		template<class Function> static constexpr bool NeedsProducerStorage = !std::is_trivially_copyable_v<std::decay_t<Function>> || sizeof(std::decay_t<Function>) > 2 * sizeof(void*) || alignof(std::decay_t<Function>) > alignof(void*);
+		struct CapturedProducer {
+			void* function;
+			std::string (*invoke)(void*);
+			void (*destroy)(void*, std::pmr::memory_resource*) noexcept;
+			std::pmr::memory_resource* storage;
+			CapturedProducer(void* value, std::string (*call)(void*), void (*release)(void*, std::pmr::memory_resource*) noexcept, std::pmr::memory_resource* resource) : function(value), invoke(call), destroy(release), storage(resource) {}
+			CapturedProducer(CapturedProducer&& other) noexcept : function(std::exchange(other.function, nullptr)), invoke(other.invoke), destroy(other.destroy), storage(other.storage) {}
+			CapturedProducer& operator=(CapturedProducer&& other) noexcept {
+				if (this != &other) { Reset(); function = std::exchange(other.function, nullptr); invoke = other.invoke; destroy = other.destroy; storage = other.storage; }
+				return *this;
+			}
+			~CapturedProducer() { Reset(); }
+			std::string operator()() const { return invoke(function); }
+			void Reset() noexcept { if (function) destroy(std::exchange(function, nullptr), storage); }
+		};
+		template<class Function> static CapturedProducer CaptureProducer(std::pmr::memory_resource* storage, Function&& function) {
+			using Value = std::decay_t<Function>;
+			void* address = storage->allocate(sizeof(Value), alignof(Value));
+			try { std::construct_at(static_cast<Value*>(address), std::forward<Function>(function)); }
+			catch (...) { storage->deallocate(address, sizeof(Value), alignof(Value)); throw; }
+			// The checkpoint node's control block retains this storage through callable destruction.
+			return {address,
+			    [](void* value) -> std::string {
+				    auto& function = *static_cast<Value*>(value);
+				    if constexpr (std::is_pointer_v<Value>) if (!function) throw std::bad_function_call();
+				    return function();
+			    }, [](void* value, std::pmr::memory_resource* resource) noexcept {
+				    std::destroy_at(static_cast<Value*>(value));
+				    resource->deallocate(value, sizeof(Value), alignof(Value));
+			    }, storage};
+		}
+		static std::pmr::memory_resource* ProducerStorage();
+		static CheckpointText DeferredOwned(CapturedProducer produce, size_t ownedBytes, std::string identity, std::string peerMark);
 		struct Data;
 		std::shared_ptr<Data> m_Data;
 		explicit CheckpointText(std::shared_ptr<Data> data) : m_Data(std::move(data)) {}
 		CheckpointText AtSimTime(int64_t ticks) const;
 		friend class CheckpointBuffer;
+		friend bool RunOwnedCheckpointSelfTest();
 	};
 
 	/// Copies scalar values and owned children without formatting them.
 	class CheckpointBuffer {
+		friend class CheckpointText;
 	public:
+		enum class ValueKind : uint8_t { Raw, Integer, Unsigned, SpacedInteger, SpacedUnsigned, Float, Double, String, Child, SizedChild, Base64, UrlBase64, GraphString, NewLine, Property, ElapsedSimTime, PeerBegin, PeerEnd, SizedRunBegin, SizedRunEnd, PrimitiveBlock };
+		using PrimitiveDecoder = void (*)(std::string&, std::string_view, bool);
+		/// Published nodes retain the capture allocator until the last reader releases them.
+		class AllocationScope {
+		public:
+			explicit AllocationScope(bool enabled);
+			~AllocationScope();
+			AllocationScope(const AllocationScope&) = delete;
+			AllocationScope& operator=(const AllocationScope&) = delete;
+		private:
+			bool m_Entered = false;
+		};
+		/// Groups multiplayer backing allocations by thread and retains them for published readers.
+		class ArenaPoolScope {
+		public:
+			explicit ArenaPoolScope(bool enabled, bool releasePreparedOnWorker = false);
+			~ArenaPoolScope();
+			ArenaPoolScope(const ArenaPoolScope&) = delete;
+			ArenaPoolScope& operator=(const ArenaPoolScope&) = delete;
+		private:
+			bool m_Entered = false;
+		};
+		/// Prepares bounded native storage on a worker while a multiplayer archive loads.
+		static std::shared_future<void> PrepareCaptureStorage(size_t bytes);
+		/// Releases unused preparation on a worker after a restore is refused.
+		static void CancelCaptureStorage();
+		/// Waits for queued storage releases; the simulation capture never calls this.
+		static void WaitForPreparedStorageRelease();
+		/// Owned native arrays keep their capture storage until saver traversal ends.
+		static std::shared_ptr<std::pmr::memory_resource> LeaseCaptureStorage();
+		/// Keeps only the backing block of a prepared byte allocation until its last reader ends.
+		static std::shared_ptr<void> AllocateCaptureBytes(size_t bytes);
+		static std::shared_ptr<void> AllocateCaptureBytes(size_t bytes, size_t alignment);
+		explicit CheckpointBuffer(bool reserve = true);
+		CheckpointBuffer(const CheckpointBuffer&) = delete;
+		CheckpointBuffer& operator=(const CheckpointBuffer&) = delete;
+		bool IsBatched() const { return m_Arena != nullptr; }
+		/// Appends the same typed scalar tape as the individual value calls.
+		void AppendValues(std::string_view values);
+		void PrimitiveBlock(std::string_view values, PrimitiveDecoder decoder);
+		/// Keeps owned collection storage until a worker expands its primitive block.
+		void OwnedPrimitiveBlock(std::shared_ptr<const void> storage, PrimitiveDecoder decoder, size_t ownedBytes);
+		/// Copies variable-size fields directly into their owned tape allocation.
+		template<class Capture> void CapturePrimitiveBlock(size_t size, PrimitiveDecoder decoder, const Capture& capture) {
+			Copy(ValueKind::PrimitiveBlock, decoder, static_cast<uint64_t>(size));
+			capture(ReserveValues(size));
+			m_HasPrimitiveBlocks = true;
+		}
 		void Raw(std::string_view text);
 		void Integer(int64_t value, bool space = false);
 		void Unsigned(uint64_t value, bool space = false);
@@ -131,25 +241,59 @@ namespace RTE {
 		/// Opens and closes a run of values only this machine holds; the text is unchanged, SharedText() leaves the run out.
 		void PeerBegin();
 		void PeerEnd();
+		void SizedRunBegin();
+		void SizedRunEnd();
 		CheckpointText Finish();
 	private:
-		std::string m_Values;
-		std::vector<CheckpointText> m_Children;
+		inline static thread_local std::shared_ptr<CheckpointArena> s_Arena;
+		std::shared_ptr<CheckpointArena> m_Arena;
+		std::pmr::string m_Values;
+		struct ValueChunk;
+		ValueChunk* m_FirstValues = nullptr;
+		ValueChunk* m_LastValues = nullptr;
+		size_t m_ValueSize = 0, m_ValueCapacity = 0;
+		std::pmr::vector<CheckpointText> m_Children;
+		std::pmr::vector<std::shared_ptr<const void>> m_OwnedBlocks;
+		size_t m_OwnedBlockBytes = 0;
 		bool m_HasPeer = false;
+		bool m_HasPrimitiveBlocks = false;
 		bool m_UsesSimTime = false;
 		int64_t m_SimTimeTicks = 0;
-		template<class T> void Copy(const T& value) {
-			m_Values.append(reinterpret_cast<const char*>(&value), sizeof(value));
+		char* ReserveValues(size_t size);
+		template<class... T> void Copy(const T&... values) {
+			if (!m_Arena) {
+				(m_Values.append(reinterpret_cast<const char*>(&values), sizeof(values)), ...);
+				return;
+			}
+			char* into = ReserveValues((sizeof(T) + ...));
+			size_t at = 0;
+			const auto put = [&](const auto& value) {
+				std::memcpy(into + at, &value, sizeof(value));
+				at += sizeof(value);
+			};
+			(put(values), ...);
 		}
 	};
 
 	/// Retains unchanged owned values and retires replaced buffers on the worker.
 	class CheckpointCache {
 	public:
-		void Begin() { ++m_Generation; m_Touched = 0; m_Reused = 0; }
+		CheckpointCache() = default;
+		explicit CheckpointCache(bool transient) : m_Transient(transient) {}
+		/// Copies cache bookkeeping independently while retaining immutable texts.
+		CheckpointCache(const CheckpointCache& other);
+		CheckpointCache& operator=(const CheckpointCache& other);
+		CheckpointCache(CheckpointCache&&) = default;
+		CheckpointCache& operator=(CheckpointCache&&) = default;
+		bool IsTransient() const { return m_Transient; }
+		void Begin() { ++m_Generation; m_Touched = 0; m_Reused = 0; m_Presets.clear(); }
+		/// Reuses existing local presets while leaving misses and module fallbacks fresh.
+		const Entity* FindPreset(const std::string& type, const std::string& name, int module);
 		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value);
 		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value, uint64_t stamp, uint64_t identity = 0, const MovableObject* object = nullptr);
 		const CheckpointText* Peek(const void* owner, unsigned channel) const;
+		/// Only a value observed in this frozen capture, never an older frame.
+		const CheckpointText* PeekCurrent(const void* owner, unsigned channel) const;
 		uint64_t Stamp(const void* owner, unsigned channel) const;
 		/// The remembered identity, or zero after its object expires.
 		uint64_t Identity(const void* owner, unsigned channel) const;
@@ -164,8 +308,23 @@ namespace RTE {
 		/// The bytes its pixel snapshots hold.
 		size_t PixelBytes() const;
 	private:
+		bool m_Transient = false;
 		struct Entry { CheckpointText text; uint64_t generation = 0; uint64_t stamp = 0; uint64_t identity = 0; MovableObjectReference object; };
+		friend bool RunOwnedCheckpointSelfTest();
+		struct CapturedEntries {
+			using Key = std::pair<const void*, unsigned>;
+			struct Hash {
+				size_t operator()(const Key& key) const { return std::hash<const void*>{}(key.first) ^ (std::hash<unsigned>{}(key.second) + 0x9e3779b9); }
+			};
+			explicit CapturedEntries(std::shared_ptr<std::pmr::memory_resource> resource = CheckpointBuffer::LeaseCaptureStorage()) : storage(std::move(resource)), values(storage ? storage.get() : std::pmr::get_default_resource()) {}
+			std::shared_ptr<std::pmr::memory_resource> storage;
+			std::pmr::unordered_map<Key, Entry, Hash> values;
+		};
+		std::unique_ptr<CapturedEntries> m_CapturedEntries;
+		Entry& CaptureEntry(const void* owner, unsigned channel);
+		const Entry* FindEntry(const void* owner, unsigned channel) const;
 		std::unordered_map<const void*, std::unordered_map<unsigned, Entry>> m_Entries;
+		std::map<std::tuple<int, std::string, std::string>, const Entity*, std::less<>> m_Presets;
 		std::vector<CheckpointText> m_Retired;
 		uint64_t m_Generation = 0;
 		size_t m_Touched = 0;
@@ -235,6 +394,15 @@ namespace RTE {
 		/// Records a property writer into an independently owned checkpoint buffer.
 		static CheckpointText Capture(const std::function<void(Writer&)>& visit, int indent = 0);
 		bool IsCapturing() const { return m_Capture != nullptr; }
+		void AppendPropertyBlock(std::string_view values, CheckpointBuffer::PrimitiveDecoder decoder) {
+			if (!m_Capture) throw std::logic_error("property blocks require an owned writer");
+			m_Capture->PrimitiveBlock(values, decoder);
+		}
+		/// Copies property fields directly into their owned allocation.
+		template<class Capture> void CapturePropertyBlock(size_t size, CheckpointBuffer::PrimitiveDecoder decoder, const Capture& capture) {
+			if (!m_Capture) throw std::logic_error("property blocks require an owned writer");
+			m_Capture->CapturePrimitiveBlock(size, decoder, capture);
+		}
 		void Append(const CheckpointText& text);
 		void ElapsedSimTime(const Timer& timer);
 		struct SaveOverrides {
@@ -312,11 +480,19 @@ namespace RTE {
 			NewLine();
 			*m_Stream << propName + " = ";
 		}
+		template<size_t N> void NewProperty(const char (&propName)[N]) const {
+			if (m_Capture && m_Capture->IsBatched()) { m_Capture->Property(propName, m_IndentCount); return; }
+			NewProperty(std::string(propName));
+		}
 
 		/// Creates a new line and writes the name of the specified property, followed by its set value.
 		/// @param propName The name of the property to be written.
 		/// @param propValue The value of the property.
 		template <typename Type> void NewPropertyWithValue(const std::string& propName, const Type& propValue) {
+			NewProperty(propName);
+			*this << propValue;
+		}
+		template <size_t N, typename Type> void NewPropertyWithValue(const char (&propName)[N], const Type& propValue) {
 			NewProperty(propName);
 			*this << propValue;
 		}

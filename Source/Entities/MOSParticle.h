@@ -20,6 +20,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a MOSParticle object in system memory. Create() should be called before using the object.
 		MOSParticle();
+		CheckpointSnapshotMethods(MOSParticle);
 
 		/// Makes the MOSParticle object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
@@ -125,7 +126,7 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 
 		Atom* m_Atom; //!< The Atom that will be the physical representation of this MOSParticle.
-		std::string m_PersistedAtomCheckpoint;
+		CheckpointString m_PersistedAtomCheckpoint;
 		long long m_PersistedAtomResidue = 0; //!< Saved travel residue, applied on snapshot adopt.
 		bool m_HasPersistedAtomResidue = false;
 

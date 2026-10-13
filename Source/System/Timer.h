@@ -5,9 +5,10 @@
 #include <cmath>
 
 namespace RTE {
+	class CheckpointNativeSnapshot;
 
 	/// A precise timer for FPS sync etc.
-	class Timer {
+	class Timer : public CheckpointNativeAllocated {
 		friend struct ContractAudit;
 
 
@@ -18,6 +19,8 @@ namespace RTE {
 			Clear();
 			Create();
 		}
+		Timer(const Timer& source, CheckpointNativeSnapshot&);
+		void AssignCheckpointNative(const Timer& source, CheckpointNativeSnapshot&);
 
 		/// Constructor method used to instantiate a Timer object with a set sim time elapsed.
 		/// @param simTimeLimit A unsigned long defining this Timer's sim time limit in ms.

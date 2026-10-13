@@ -1,6 +1,9 @@
 #include "SoundContainer.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
+#include "CheckpointProperties.h"
 #include "TimerMan.h"
 #include "Base64/base64.h"
 #include "MovableObject.h"
@@ -23,6 +26,14 @@ using namespace RTE;
 
 ConcreteClassInfo(SoundContainer, Entity, 50);
 
+LogicalSoundPlayback RTE::FreezeCheckpointValue(const LogicalSoundPlayback& source, CheckpointNativeSnapshot& snapshot) {
+	LogicalSoundPlayback playback;
+	playback.identity = source.identity;
+	playback.lastObjectUID = source.lastObjectUID;
+	playback.voices = snapshot.Freeze(source.voices);
+	return playback;
+}
+
 const std::unordered_map<std::string, SoundContainer::SoundOverlapMode> SoundContainer::c_SoundOverlapModeMap = {
     {"Overlap", SoundContainer::SoundOverlapMode::OVERLAP},
     {"Restart", SoundContainer::SoundOverlapMode::RESTART},
@@ -32,6 +43,54 @@ const std::unordered_map<std::string, SoundContainer::BusRouting> SoundContainer
     {"SFX", SoundContainer::BusRouting::SFX},
     {"UI", SoundContainer::BusRouting::UI},
     {"Music", SoundContainer::BusRouting::MUSIC}};
+
+SoundContainer::SoundContainer(const SoundContainer& source, CheckpointNativeSnapshot& snapshot) :
+	Entity(source, snapshot),
+	m_Pending{},
+	m_PendingOps{},
+	m_PendingMutex{},
+	m_PendingPlays(0),
+	m_PendingStopped(false),
+	m_PendingPositionWritten(false),
+	m_PendingHasSounds(-1),
+	m_SharedAliasHeld(false),
+	m_PendingActorUID(0),
+	m_PendingTeam(-1),
+	m_PendingAliasBaseline{},
+	m_SharedAliasBaseline{},
+	m_LogicalPlayback(snapshot.Freeze(source.m_LogicalPlayback)),
+	m_CheckpointIdentity(snapshot.Freeze(source.m_CheckpointIdentity)),
+	m_PreviewOrigin(nullptr),
+	m_CheckpointRegistered(false),
+	m_IsDestroying(false),
+	m_TopLevelSoundSet(snapshot.FreezeSoundSet(source.m_TopLevelSoundSet)),
+	m_PlayingChannels(snapshot.Freeze(source.m_PlayingChannels)),
+	m_SoundOverlapMode(snapshot.Freeze(source.m_SoundOverlapMode)),
+	m_BusRouting(snapshot.Freeze(source.m_BusRouting)),
+	m_Immobile(snapshot.Freeze(source.m_Immobile)),
+	m_AttenuationStartDistance(snapshot.Freeze(source.m_AttenuationStartDistance)),
+	m_CustomPanValue(snapshot.Freeze(source.m_CustomPanValue)),
+	m_PanningStrengthMultiplier(snapshot.Freeze(source.m_PanningStrengthMultiplier)),
+	m_Loops(snapshot.Freeze(source.m_Loops)),
+	m_SoundPropertiesUpToDate(snapshot.Freeze(source.m_SoundPropertiesUpToDate)),
+	m_Priority(snapshot.Freeze(source.m_Priority)),
+	m_AffectedByGlobalPitch(snapshot.Freeze(source.m_AffectedByGlobalPitch)),
+	m_Pos(snapshot.Freeze(source.m_Pos)),
+	m_Pitch(snapshot.Freeze(source.m_Pitch)),
+	m_PitchVariation(snapshot.Freeze(source.m_PitchVariation)),
+	m_Volume(snapshot.Freeze(source.m_Volume)),
+	m_WasFadedOut(snapshot.Freeze(source.m_WasFadedOut)),
+	m_Paused(snapshot.Freeze(source.m_Paused)),
+	m_MusicPreEntryTime(snapshot.Freeze(source.m_MusicPreEntryTime)),
+	m_MusicExitTime(snapshot.Freeze(source.m_MusicExitTime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	std::erase_if(m_PlayingChannels, [](int identity) { return g_AudioMan.IsPredictedVoice(identity); });
+}
+
+Entity* SoundContainer::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
 
 SoundContainer::SoundContainer() {
 	Clear();
@@ -50,6 +109,7 @@ SoundContainer& SoundContainer::operator=(const SoundContainer& reference) {
 }
 
 SoundContainer::~SoundContainer() {
+	if (IsFrozenCheckpointNative()) return;
 	m_IsDestroying = true;
 	g_AudioMan.DisownSoundContainerPlayingChannels(this);
 	Destroy(true);
@@ -88,7 +148,7 @@ void SoundContainer::Clear() {
 	if (!m_IsDestroying && (!MovableObject::IsFaithfulClone() || MovableObject::FaithfulCloneRegisters())) {
 		ReidentifyCheckpoint(g_AudioMan.AllocateCheckpointSoundContainerID());
 	}
-	m_TopLevelSoundSet = std::make_shared<SoundSet>();
+	m_TopLevelSoundSet = MakeCheckpointNativeShared<SoundSet>();
 	m_TopLevelSoundSet->Destroy();
 	m_TopLevelSoundSet->SetOwnerContainer(this);
 
@@ -261,48 +321,72 @@ int SoundContainer::Save(Writer& writer) const {
 	// Due to writer limitations, the top level SoundSet has to be explicitly written out, even though SoundContainer standard behaviour is to hide it in INI and just have properties be part of the SoundContainer.
 	writer.NewPropertyWithValue("SpecialBehaviour_TopLevelSoundSet", *m_TopLevelSoundSet);
 
-	writer.NewProperty("SoundOverlapMode");
-	auto overlapModeMapEntry = std::find_if(c_SoundOverlapModeMap.begin(), c_SoundOverlapModeMap.end(), [&soundOverlapMode = m_SoundOverlapMode](auto element) { return element.second == soundOverlapMode; });
-	if (overlapModeMapEntry != c_SoundOverlapModeMap.end()) {
-		writer << overlapModeMapEntry->first;
+	if (writer.IsCapturing() && CheckpointWriter::BatchEnabled()) {
+		const auto overlap = std::find_if(c_SoundOverlapModeMap.begin(), c_SoundOverlapModeMap.end(),
+		    [this](const auto& entry) { return entry.second == m_SoundOverlapMode; });
+		if (overlap == c_SoundOverlapModeMap.end()) RTEAbort("Tried to write invalid SoundOverlapMode when saving SoundContainer.");
+		WriteCapturedProperties(writer,
+			CheckpointProperty<"SoundOverlapMode">(overlap->first),
+			CheckpointProperty<"BusRouting">(m_BusRouting),
+			CheckpointProperty<"Immobile">(m_Immobile),
+			CheckpointProperty<"AttenuationStartDistance">(m_AttenuationStartDistance),
+			CheckpointProperty<"CustomPanValue">(m_CustomPanValue),
+			CheckpointProperty<"PanningStrengthMultiplier">(m_PanningStrengthMultiplier),
+			CheckpointProperty<"LoopSetting">(m_Loops),
+			CheckpointProperty<"Priority">(m_Priority),
+			CheckpointProperty<"AffectedByGlobalPitch">(m_AffectedByGlobalPitch),
+			CheckpointProperty<"Position">(m_Pos),
+			CheckpointProperty<"Volume">(m_Volume),
+			CheckpointProperty<"Pitch">(m_Pitch),
+			CheckpointProperty<"PitchVariation">(m_PitchVariation),
+			CheckpointProperty<"WasFadedOut">(m_WasFadedOut),
+			CheckpointProperty<"Paused">(m_Paused),
+			CheckpointProperty<"MusicPreEntryTime">(m_MusicPreEntryTime),
+			CheckpointProperty<"MusicExitTime">(m_MusicExitTime));
 	} else {
-		RTEAbort("Tried to write invalid SoundOverlapMode when saving SoundContainer.");
+		writer.NewProperty("SoundOverlapMode");
+		auto overlapModeMapEntry = std::find_if(c_SoundOverlapModeMap.begin(), c_SoundOverlapModeMap.end(), [&soundOverlapMode = m_SoundOverlapMode](auto element) { return element.second == soundOverlapMode; });
+		if (overlapModeMapEntry != c_SoundOverlapModeMap.end()) {
+			writer << overlapModeMapEntry->first;
+		} else {
+			RTEAbort("Tried to write invalid SoundOverlapMode when saving SoundContainer.");
+		}
+		writer.NewProperty("BusRouting");
+		writer << m_BusRouting;
+		writer.NewProperty("Immobile");
+		writer << m_Immobile;
+		writer.NewProperty("AttenuationStartDistance");
+		writer << m_AttenuationStartDistance;
+		writer.NewProperty("CustomPanValue");
+		writer << m_CustomPanValue;
+		writer.NewProperty("PanningStrengthMultiplier");
+		writer << m_PanningStrengthMultiplier;
+		writer.NewProperty("LoopSetting");
+		writer << m_Loops;
+
+		writer.NewProperty("Priority");
+		writer << m_Priority;
+		writer.NewProperty("AffectedByGlobalPitch");
+		writer << m_AffectedByGlobalPitch;
+
+		writer.NewProperty("Position");
+		writer << m_Pos;
+		writer.NewProperty("Volume");
+		writer << m_Volume;
+		writer.NewProperty("Pitch");
+		writer << m_Pitch;
+		writer.NewProperty("PitchVariation");
+		writer << m_PitchVariation;
+
+		writer.NewProperty("WasFadedOut");
+		writer << m_WasFadedOut;
+		writer.NewProperty("Paused");
+		writer << m_Paused;
+		writer.NewProperty("MusicPreEntryTime");
+		writer << m_MusicPreEntryTime;
+		writer.NewProperty("MusicExitTime");
+		writer << m_MusicExitTime;
 	}
-	writer.NewProperty("BusRouting");
-	writer << m_BusRouting;
-	writer.NewProperty("Immobile");
-	writer << m_Immobile;
-	writer.NewProperty("AttenuationStartDistance");
-	writer << m_AttenuationStartDistance;
-	writer.NewProperty("CustomPanValue");
-	writer << m_CustomPanValue;
-	writer.NewProperty("PanningStrengthMultiplier");
-	writer << m_PanningStrengthMultiplier;
-	writer.NewProperty("LoopSetting");
-	writer << m_Loops;
-
-	writer.NewProperty("Priority");
-	writer << m_Priority;
-	writer.NewProperty("AffectedByGlobalPitch");
-	writer << m_AffectedByGlobalPitch;
-
-	writer.NewProperty("Position");
-	writer << m_Pos;
-	writer.NewProperty("Volume");
-	writer << m_Volume;
-	writer.NewProperty("Pitch");
-	writer << m_Pitch;
-	writer.NewProperty("PitchVariation");
-	writer << m_PitchVariation;
-
-	writer.NewProperty("WasFadedOut");
-	writer << m_WasFadedOut;
-	writer.NewProperty("Paused");
-	writer << m_Paused;
-	writer.NewProperty("MusicPreEntryTime");
-	writer << m_MusicPreEntryTime;
-	writer.NewProperty("MusicExitTime");
-	writer << m_MusicExitTime;
 	if (writer.IsSnapshot()) {
 		writer.NewPropertyWithValue("SpecialBehaviour_SoundCheckpoint", CheckpointWriter::Native([&] { return SaveCheckpoint(); }).Base64(true));
 		g_AudioMan.NoteCarriedSoundIdentity(m_CheckpointIdentity);
@@ -341,7 +425,11 @@ float SoundContainer::GetLength(LengthOfSoundType type) const {
 	float lengthMilliseconds = 0.0f;
 	for (const SoundData* selectedSoundData: flattenedSoundData) {
 		unsigned int length;
-		selectedSoundData->SoundObject->getLength(&length, FMOD_TIMEUNIT_MS);
+		if (CheckpointNativeStorage::Reading()) {
+			ContentFile file = selectedSoundData->SoundFile;
+			auto* sound = file.GetAsSound();
+			AudioCheckpoint::Require(sound ? sound->getLength(&length, FMOD_TIMEUNIT_MS) : FMOD_ERR_INVALID_HANDLE);
+		} else selectedSoundData->SoundObject->getLength(&length, FMOD_TIMEUNIT_MS);
 		lengthMilliseconds = std::max(lengthMilliseconds, static_cast<float>(length));
 	}
 
@@ -775,7 +863,7 @@ bool SoundContainer::QueuePendingSelectSounds(std::vector<uint16_t> soundSetPath
 
 static bool FindSoundSetPathIn(const SoundSet& parent, const SoundSet& target, std::vector<uint16_t>& path) {
 	if (&parent == &target) return true;
-	const std::vector<SoundSet*>& subSoundSets = const_cast<SoundSet&>(parent).GetSubSoundSets();
+	const auto& subSoundSets = const_cast<SoundSet&>(parent).GetSubSoundSets();
 	for (size_t index = 0; index < subSoundSets.size(); ++index) {
 		path.push_back(static_cast<uint16_t>(index));
 		if (FindSoundSetPathIn(*subSoundSets[index], target, path)) return true;
@@ -948,6 +1036,10 @@ FMOD_RESULT SoundContainer::UpdateSoundProperties() {
 	std::vector<SoundData*> flattenedSoundData;
 	m_TopLevelSoundSet->GetFlattenedSoundData(flattenedSoundData, false);
 	for (SoundData* soundData: flattenedSoundData) {
+		if (CheckpointNativeStorage::Reading()) {
+			soundData->SoundObject = soundData->SoundFile.GetAsSound();
+			if (!soundData->SoundObject) return FMOD_ERR_INVALID_HANDLE;
+		}
 		FMOD_MODE soundMode = (std::as_const(*this).CurrentLoops() == 0) ? FMOD_LOOP_OFF : FMOD_LOOP_NORMAL;
 		if (std::as_const(*this).CurrentImmobile()) {
 			soundMode |= FMOD_2D;
@@ -968,6 +1060,7 @@ FMOD_RESULT SoundContainer::UpdateSoundProperties() {
 			g_ConsoleMan.PrintString("ERROR: Sound property update failed for " + soundData->SoundFile.GetDataPath() + " (open state=" + std::to_string(static_cast<int>(openState)) + ", result=" + std::to_string(static_cast<int>(openResult)) + ")");
 			break;
 		}
+		ContentFile::RefreshCheckpointSample(soundData->SoundFile.GetDataPath(), soundData->SoundObject);
 	}
 	CurrentSoundPropertiesUpToDate() = result == FMOD_OK;
 
@@ -995,7 +1088,7 @@ std::string SoundContainer::SaveCheckpoint() const {
 	// A predicted voice exists on the predicting peer only, so no checkpoint may name it.
 	std::set<int> playing;
 	for (int identity: m_PlayingChannels) {
-		if (!g_AudioMan.IsPredictedVoice(identity)) playing.insert(identity);
+		if (IsFrozenCheckpointNative() || !g_AudioMan.IsPredictedVoice(identity)) playing.insert(identity);
 	}
 	archive(static_cast<const Entity&>(*this), m_CheckpointIdentity);
 	// The voices are this machine's playback; the logical playback below is what every peer shares.

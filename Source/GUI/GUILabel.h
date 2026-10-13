@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 #ifdef GUI_STANDALONE
 #include "Timer.h"
 #endif
@@ -157,7 +160,7 @@ namespace RTE {
 	private:
 		GUIFont* m_SkinFont;
 		GUIFont* m_GlyphFallbackFont; // Supplies glyphs for bytes the skin font's atlas has no ink for
-		std::string m_Text;
+		CheckpointString m_Text;
 		int m_HAlignment;
 		int m_VAlignment;
 		bool m_HorizontalOverflowScroll; //!< Note that horizontal overflow scrolling means text will always be on one line.

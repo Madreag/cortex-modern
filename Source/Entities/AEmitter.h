@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the AEmitter class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -30,6 +32,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a AEmitter object in system
 		/// memory. Create() should be called before using the object.
 		AEmitter();
+		CheckpointSnapshotMethods(AEmitter);
 
 		/// Destructor method used to clean up a AEmitter object before deletion
 		/// from system memory.
@@ -397,7 +400,7 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass;
 
 		// The list of MO instances that get emitted
-		std::list<Emission*> m_EmissionList;
+		CheckpointList<Emission*> m_EmissionList;
 		// Sounds
 		SoundContainer* m_EmissionSound;
 		SoundContainer* m_BurstSound;
@@ -429,8 +432,8 @@ namespace RTE {
 		// Measures the shortest possible time between bursts
 		Timer m_BurstTimer;
 		PersistedTimerAnchor m_PersistedBurstTimerAnchor;
-		std::vector<double> m_PersistedEmissionAccumulators;
-		std::vector<std::string> m_PersistedEmissionTimers; //!< Saved per-emission start/stop timers, applied on snapshot adopt.
+		CheckpointVector<double> m_PersistedEmissionAccumulators;
+		CheckpointVector<CheckpointString> m_PersistedEmissionTimers; //!< Saved per-emission start/stop timers, applied on snapshot adopt.
 		// Whether to play the BurstSound when a burst is triggered or not.
 		bool m_PlayBurstSound;
 		// The angle of the direction the emitted particles will head in.
@@ -462,7 +465,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		std::string m_PersistedAEmitterRuntime;
+		CheckpointString m_PersistedAEmitterRuntime;
 		std::string SaveAEmitterRuntime() const;
 		bool LoadAEmitterRuntime(std::string_view text, bool validateOnly = false);
 

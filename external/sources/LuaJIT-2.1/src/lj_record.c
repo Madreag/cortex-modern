@@ -1506,6 +1506,9 @@ static TRef rec_idx_key(jit_State *J, RecordIndex *ix, IRRef *rbref,
     }
   }
   /* Fall back to a regular hash lookup. */
+  if (luaJIT_saved_keys_active(J->L) && tref_isgcv(key) && !tref_isstr(key))
+    return lj_ir_call(J, IRCALL_lj_tab_saved_get, ix->tab, key,
+		      lj_ir_kint(J, (int32_t)itype(&ix->keyv)));
   return emitir(IRT(IR_HREF, IRT_PGC), ix->tab, key);
 }
 
@@ -1644,7 +1647,7 @@ TRef lj_record_idx(jit_State *J, RecordIndex *ix)
       }
       if (hasmm)
 	emitir(IRTG(loadop, IRT_NIL), xref, 0);  /* Guard for nil value. */
-      else if (xrefop == IR_HREF)
+      else if (xrefop == IR_HREF || (xrefop == IR_CALLS && IR(tref_ref(xref))->op2 == IRCALL_lj_tab_saved_get))
 	emitir(IRTG(oldv == niltvg(J2G(J)) ? IR_EQ : IR_NE, IRT_PGC),
 	       xref, lj_ir_kkptr(J, niltvg(J2G(J))));
       if (ix->idxchain && lj_record_mm_lookup(J, ix, MM_newindex)) {
@@ -1673,7 +1676,7 @@ TRef lj_record_idx(jit_State *J, RecordIndex *ix)
       }
     } else if (!lj_opt_fwd_wasnonnil(J, loadop, tref_ref(xref))) {
       /* Cannot derive that the previous value was non-nil, must do checks. */
-      if (xrefop == IR_HREF)  /* Guard against store to niltv. */
+      if (xrefop == IR_HREF || (xrefop == IR_CALLS && IR(tref_ref(xref))->op2 == IRCALL_lj_tab_saved_get))  /* Guard against store to niltv. */
 	emitir(IRTG(IR_NE, IRT_PGC), xref, lj_ir_kkptr(J, niltvg(J2G(J))));
       if (ix->idxchain) {  /* Metamethod lookup required? */
 	/* A check for NULL metatable is cheaper (hoistable) than a load. */

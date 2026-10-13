@@ -3,6 +3,9 @@
 #include "WindowMan.h"
 #include "SDL3/SDL.h"
 
+#include <array>
+#include <memory>
+
 using namespace RTE;
 
 bool GUIInput::m_OverrideInput = false;
@@ -180,10 +183,43 @@ bool GUIInput::LoadCheckpoint(std::string_view text, bool validateOnly) {
 	}
 }
 
+namespace {
+	struct SavedTextInput : CheckpointNativeAllocated { bool active = false; SDL_Rect area{}; int cursor = 0; };
+	std::unique_ptr<SavedTextInput> s_SavedTextInput;
+}
+
+std::array<std::pair<const void*, size_t>, 6> GUIInput::CheckpointRootSources() {
+	return {{{&m_OverrideInput, sizeof(m_OverrideInput)}, {m_NetworkMouseButtonsEvents, sizeof(m_NetworkMouseButtonsEvents)},
+	    {m_NetworkMouseButtonsStates, sizeof(m_NetworkMouseButtonsStates)}, {m_PrevNetworkMouseButtonsStates, sizeof(m_PrevNetworkMouseButtonsStates)},
+	    {m_NetworkMouseX, sizeof(m_NetworkMouseX)}, {m_NetworkMouseY, sizeof(m_NetworkMouseY)}}};
+}
+
+void GUIInput::PrepareCheckpointTextInput() {
+	if (!CheckpointNativeStorage::Enabled() || s_SavedTextInput) return;
+	s_SavedTextInput = std::make_unique<SavedTextInput>();
+	UpdateCheckpointTextInput();
+}
+
+void GUIInput::UpdateCheckpointTextInput() {
+	if (!s_SavedTextInput || CheckpointNativeStorage::Reading()) return;
+	SavedTextInput values;
+	if (auto* window = g_WindowMan.GetWindow()) {
+		if (!SDL_GetTextInputArea(window, &values.area, &values.cursor)) throw std::runtime_error("could not read GUI text input area");
+		values.active = SDL_TextInputActive(window);
+	}
+	*s_SavedTextInput = values;
+}
+
 std::string GUIInput::SaveSharedCheckpoint() {
 	CheckpointWriter writer("GUISharedInput2");
-	writer(m_OverrideInput, m_NetworkMouseButtonsEvents, m_NetworkMouseButtonsStates,
-		m_PrevNetworkMouseButtonsStates, m_NetworkMouseX, m_NetworkMouseY);
+	writer(*CheckpointNativeStorage::Source(&m_OverrideInput), *CheckpointNativeStorage::Source(&m_NetworkMouseButtonsEvents), *CheckpointNativeStorage::Source(&m_NetworkMouseButtonsStates),
+		*CheckpointNativeStorage::Source(&m_PrevNetworkMouseButtonsStates), *CheckpointNativeStorage::Source(&m_NetworkMouseX), *CheckpointNativeStorage::Source(&m_NetworkMouseY));
+	if (CheckpointNativeStorage::Reading()) {
+		if (!s_SavedTextInput) throw std::logic_error("the saved GUI has no text input values");
+		const auto* values = CheckpointNativeStorage::Source(s_SavedTextInput.get());
+		writer(values->active, values->area.x, values->area.y, values->area.w, values->area.h, values->cursor);
+		return writer.Text();
+	}
 	SDL_Rect area{};
 	int cursor = 0;
 	auto* window = g_WindowMan.GetWindow();

@@ -30,6 +30,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a HDFirearm object in system
 		/// memory. Create() should be called before using the object.
 		HDFirearm();
+		CheckpointSnapshotMethods(HDFirearm);
 
 		/// Destructor method used to clean up a HDFirearm object before deletion
 		/// from system memory.
@@ -633,14 +634,14 @@ namespace RTE {
 
 		/* TODO
 		    // Path the the script file that contains the ballistic solution function of this
-		    std::string m_BallisticScriptPath;
+		    CheckpointString m_BallisticScriptPath;
 		    // The name of the function that
-		    std::string m_BallisticScriptFunction;
+		    CheckpointString m_BallisticScriptFunction;
 		*/
 
 		/// Private member variable and method declarations
 	private:
-		std::string m_PersistedHDFirearmRuntime;
+		CheckpointString m_PersistedHDFirearmRuntime;
 		std::string SaveHDFirearmRuntime() const;
 		bool LoadHDFirearmRuntime(std::string_view text, bool validateOnly = false);
 

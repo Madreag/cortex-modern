@@ -293,8 +293,7 @@ void GUIPropertyPage::ReceiveSignal(GUIPanel* Source, int Code, int Data) {
 	bool TextSignal = false;
 
 	// Is this a text panel?
-	std::vector<GUITextPanel*>::iterator it;
-	for (it = m_TextPanelList.begin(); it != m_TextPanelList.end(); it++) {
+	for (auto it = m_TextPanelList.begin(); it != m_TextPanelList.end(); it++) {
 		const GUITextPanel* T = *it;
 
 		if (Source->GetPanelID() == T->GetPanelID()) {
@@ -343,16 +342,14 @@ void GUIPropertyPage::ClearValues() {
 	m_PageValues.Clear();
 
 	// Hide the text panels
-	std::vector<GUITextPanel*>::iterator it;
-	for (it = m_TextPanelList.begin(); it != m_TextPanelList.end(); it++) {
+	for (auto it = m_TextPanelList.begin(); it != m_TextPanelList.end(); it++) {
 		GUITextPanel* T = *it;
 		T->_SetVisible(false);
 	}
 }
 
 bool GUIPropertyPage::HasTextFocus() {
-	std::vector<GUITextPanel*>::iterator it;
-	for (it = m_TextPanelList.begin(); it != m_TextPanelList.end(); it++) {
+	for (auto it = m_TextPanelList.begin(); it != m_TextPanelList.end(); it++) {
 		const GUITextPanel* T = *it;
 
 		// Visible & has focus??

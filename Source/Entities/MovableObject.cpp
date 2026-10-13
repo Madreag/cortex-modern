@@ -1,5 +1,12 @@
 #include "MovableObject.h"
 #include "NetModerationGUIProbe.h"
+
+#include <future>
+#include <atomic>
+#include <memory>
+#include <vector>
+#include "CheckpointNativeSnapshot.h"
+#include "CheckpointProperties.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "OwnedMovableObjects.h"
@@ -8,6 +15,7 @@
 
 #include <bit>
 #include <cstdlib>
+#include <cstdio>
 #include <stdexcept>
 #include <iostream>
 #include <mutex>
@@ -45,6 +53,69 @@ using namespace RTE;
 
 AbstractClassInfo(MovableObject, SceneObject);
 
+std::unique_ptr<MovableObject::CheckpointCounters> MovableObject::s_OwnedCheckpointCounters;
+thread_local std::atomic<long>* MovableObject::s_PrivateUID = nullptr;
+thread_local std::atomic<long>* MovableObject::s_PrivateRegistration = nullptr;
+
+MovableObject::CounterReferences MovableObject::MutableCheckpointCounters() {
+	if (s_PrivateUID) return {*s_PrivateUID, *s_PrivateRegistration};
+	if (CheckpointNativeStorage::Reading()) throw std::logic_error("snapshot allocation needs its private object counters");
+	if (s_OwnedCheckpointCounters) return {s_OwnedCheckpointCounters->uid, s_OwnedCheckpointCounters->registration};
+	return {m_UniqueIDCounter, s_ScriptRegistrationSerial};
+}
+
+MovableObject::FrozenCounters MovableObject::FrozenCheckpointCounters() {
+	if (s_PrivateUID) return {*s_PrivateUID, *s_PrivateRegistration};
+	if (s_OwnedCheckpointCounters) {
+		const auto* values = CheckpointNativeStorage::Source(s_OwnedCheckpointCounters.get());
+		return {values->uid, values->registration};
+	}
+	return {m_UniqueIDCounter, s_ScriptRegistrationSerial};
+}
+
+void MovableObject::PrepareCheckpointCounters() {
+	if (!CheckpointNativeStorage::Enabled() || s_OwnedCheckpointCounters) return;
+	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	auto prepared = std::make_unique<CheckpointCounters>();
+	prepared->uid = m_UniqueIDCounter.load(); prepared->registration = s_ScriptRegistrationSerial.load();
+	s_OwnedCheckpointCounters = std::move(prepared);
+}
+
+MovableObject::CheckpointCounterScope::CheckpointCounterScope() :
+    m_UID(GetUniqueIDCounter()), m_Registration(GetScriptRegistrationSerialCounter()),
+    m_PreviousUID(s_PrivateUID), m_PreviousRegistration(s_PrivateRegistration) {
+	s_PrivateUID = &m_UID; s_PrivateRegistration = &m_Registration;
+}
+MovableObject::CheckpointCounterScope::~CheckpointCounterScope() { s_PrivateUID = m_PreviousUID; s_PrivateRegistration = m_PreviousRegistration; }
+
+std::string MovableObject::CheckpointCounterStorageSelfTestMismatch() {
+	CheckpointNativeStorage::AllocationScope allocations(true);
+	auto values = std::make_unique<CheckpointCounters>();
+	values->uid = 81; values->registration = 29;
+	const auto* identity = values.get();
+	auto prepared = CheckpointNativeStorage::PrepareInventory();
+	if (!prepared->Arm()) return "object counter inventory is stale";
+	++values->uid; values->registration.fetch_add(1, std::memory_order_relaxed); values.reset();
+	{
+		CheckpointNativeStorage::ReadScope read(prepared->Pages());
+		const auto* frozen = CheckpointNativeStorage::Source(identity);
+		if (frozen->uid != 81 || frozen->registration != 29) return "saved allocation counters follow the next tick";
+	}
+	const auto uid = GetUniqueIDCounter(), registration = GetScriptRegistrationSerialCounter();
+	const auto exact = std::async(std::launch::async, [uid, registration] {
+		CheckpointCounterScope local;
+		if (GetNextUniqueID() != uid + 1) return false;
+		PinScriptRegistrationSerial(registration + 1);
+		{
+			CheckpointCounterScope nested;
+			if (GetNextUniqueID() != uid + 2) return false;
+			PinUniqueIDCounter(91); PinScriptRegistrationSerial(31);
+		}
+		return GetUniqueIDCounter() == uid + 1 && GetScriptRegistrationSerialCounter() == registration + 1;
+	}).get();
+	return exact && GetUniqueIDCounter() == uid && GetScriptRegistrationSerialCounter() == registration ? std::string{} : "snapshot allocation changes live object counters";
+}
+
 std::atomic<long> MovableObject::m_UniqueIDCounter = 1;
 // Registrations are ordered by the sim, so the serial says which of two objects sharing an identity came first.
 std::atomic<long> MovableObject::s_ScriptRegistrationSerial = 0;
@@ -67,6 +138,8 @@ std::vector<MovableObject*> g_PendingValueObjects;
 
 MovableObjectReference::MovableObjectReference(const MovableObject* object) { *this = object; }
 MovableObjectReference::MovableObjectReference(const MovableObjectReference& reference) { Copy(reference); }
+MovableObjectReference::MovableObjectReference(const MovableObjectReference& reference, CheckpointNativeSnapshot& snapshot) :
+    m_Object(snapshot.Object(reference.get())), m_FrozenCheckpoint(true) {}
 MovableObjectReference::MovableObjectReference(MovableObjectReference&& reference) noexcept { Copy(reference); reference.Detach(); }
 MovableObjectReference::~MovableObjectReference() { Detach(); }
 
@@ -80,6 +153,7 @@ void MovableObjectReference::AttachLocked(const MovableObject* object) {
 }
 
 void MovableObjectReference::Detach() {
+    if (m_FrozenCheckpoint) { m_Object.store(nullptr, std::memory_order_release); return; }
     const MovableObject* object = get();
     if (!object) return;
     std::lock_guard lock(ReferenceLock(object));
@@ -95,6 +169,7 @@ void MovableObjectReference::Detach() {
 }
 
 MovableObjectReference& MovableObjectReference::operator=(const MovableObject* object) {
+    if (m_FrozenCheckpoint) { m_Object.store(object, std::memory_order_release); return *this; }
     if (get() == object) return *this;
     Detach();
     if (object) {
@@ -106,6 +181,8 @@ MovableObjectReference& MovableObjectReference::operator=(const MovableObject* o
 
 void MovableObjectReference::Copy(const MovableObjectReference& reference) {
     Detach();
+    m_FrozenCheckpoint = reference.m_FrozenCheckpoint;
+    if (m_FrozenCheckpoint) { m_Object.store(reference.get(), std::memory_order_release); return; }
     const MovableObject* object = reference.get();
     if (!object) return;
     std::lock_guard lock(ReferenceLock(object));
@@ -149,6 +226,116 @@ bool MovableObject::RebindCheckpointBorrowedReferences(const std::vector<long>& 
 		m_FaithfulMOToNotHitUID = 0;
 	}
 	return true;
+}
+
+MovableObject::MovableObject(const MovableObject& source, CheckpointNativeSnapshot& snapshot) :
+	SceneObject(source, snapshot),
+	m_MOType(snapshot.Freeze(source.m_MOType)),
+	m_Mass(snapshot.Freeze(source.m_Mass)),
+	m_Vel(snapshot.Freeze(source.m_Vel)),
+	m_PrevPos(snapshot.Freeze(source.m_PrevPos)),
+	m_PrevVel(snapshot.Freeze(source.m_PrevVel)),
+	m_DistanceTravelled(snapshot.Freeze(source.m_DistanceTravelled)),
+	m_Scale(snapshot.Freeze(source.m_Scale)),
+	m_GlobalAccScalar(snapshot.Freeze(source.m_GlobalAccScalar)),
+	m_AirResistance(snapshot.Freeze(source.m_AirResistance)),
+	m_AirThreshold(snapshot.Freeze(source.m_AirThreshold)),
+	m_PinStrength(snapshot.Freeze(source.m_PinStrength)),
+	m_RestThreshold(snapshot.Freeze(source.m_RestThreshold)),
+	m_Forces(snapshot.Freeze(source.m_Forces)),
+	m_ImpulseForces(snapshot.Freeze(source.m_ImpulseForces)),
+	m_AgeTimer(snapshot.Freeze(source.m_AgeTimer)),
+	m_RestTimer(snapshot.Freeze(source.m_RestTimer)),
+	m_Lifetime(snapshot.Freeze(source.m_Lifetime)),
+	m_Sharpness(snapshot.Freeze(source.m_Sharpness)),
+	m_CheckTerrIntersection(snapshot.Freeze(source.m_CheckTerrIntersection)),
+	m_HitsMOs(snapshot.Freeze(source.m_HitsMOs)),
+	m_pMOToNotHit(snapshot.Freeze(source.m_pMOToNotHit)),
+	m_MOToNotHitUID(snapshot.Freeze(source.m_MOToNotHitUID)),
+	m_MOIgnoreTimer(snapshot.Freeze(source.m_MOIgnoreTimer)),
+	m_GetsHitByMOs(snapshot.Freeze(source.m_GetsHitByMOs)),
+	m_IgnoresTeamHits(snapshot.Freeze(source.m_IgnoresTeamHits)),
+	m_IgnoresAtomGroupHits(snapshot.Freeze(source.m_IgnoresAtomGroupHits)),
+	m_IgnoresAGHitsWhenSlowerThan(snapshot.Freeze(source.m_IgnoresAGHitsWhenSlowerThan)),
+	m_IgnoresActorHits(snapshot.Freeze(source.m_IgnoresActorHits)),
+	m_MissionCritical(snapshot.Freeze(source.m_MissionCritical)),
+	m_CanBeSquished(snapshot.Freeze(source.m_CanBeSquished)),
+	m_IsUpdated(snapshot.Freeze(source.m_IsUpdated)),
+	m_WrapDoubleDraw(snapshot.Freeze(source.m_WrapDoubleDraw)),
+	m_DidWrap(snapshot.Freeze(source.m_DidWrap)),
+	m_MOID(snapshot.Freeze(source.m_MOID)),
+	m_RootMOID(snapshot.Freeze(source.m_RootMOID)),
+	m_MOIDFootprint(snapshot.Freeze(source.m_MOIDFootprint)),
+	m_HasEverBeenAddedToMovableMan(snapshot.Freeze(source.m_HasEverBeenAddedToMovableMan)),
+	m_AlreadyHitBy(snapshot.Freeze(source.m_AlreadyHitBy)),
+	m_VelOscillations(snapshot.Freeze(source.m_VelOscillations)),
+	m_ToSettle(snapshot.Freeze(source.m_ToSettle)),
+	m_ToDelete(snapshot.Freeze(source.m_ToDelete)),
+	m_HUDVisible(snapshot.Freeze(source.m_HUDVisible)),
+	m_PreviewAdoption(snapshot.Freeze(source.m_PreviewAdoption)),
+	m_IsTraveling(snapshot.Freeze(source.m_IsTraveling)),
+	m_ThreadedLuaState(nullptr),
+	m_CheckpointLuaStateIndex(g_LuaMan.GetStateIndex(source.m_ThreadedLuaState)),
+	m_ForceIntoMasterLuaState(snapshot.Freeze(source.m_ForceIntoMasterLuaState)),
+	m_ScriptObjectName(snapshot.Freeze(source.m_ScriptObjectName, &m_ScriptObjectName)),
+	m_ScriptRegistrationSerial(snapshot.Freeze(source.m_ScriptRegistrationSerial)),
+	m_HookCallDepth(0),
+	m_DeleteWhenHookReturns(false),
+	m_AllLoadedScripts(snapshot.Freeze(source.m_AllLoadedScripts)),
+	m_EnabledScripts(snapshot.Freeze(source.m_EnabledScripts)),
+	m_FunctionsAndScripts{},
+	m_RequestedSyncedUpdate(snapshot.Freeze(source.m_RequestedSyncedUpdate)),
+	m_StringValueMap(snapshot.Freeze(source.m_StringValueMap)),
+	m_NumberValueMap(snapshot.Freeze(source.m_NumberValueMap)),
+	m_ObjectValueMap(snapshot.Freeze(source.m_ObjectValueMap)),
+	m_ValueOverlay{},
+	m_PendingValueOps{},
+	m_ValueWriteOrdinal(0),
+	m_ValueWritesNoted(false),
+	m_ScreenEffectFile(snapshot.Freeze(source.m_ScreenEffectFile)),
+	m_pScreenEffect(snapshot.Freeze(source.m_pScreenEffect)),
+	m_ScreenEffectHash(snapshot.Freeze(source.m_ScreenEffectHash)),
+	m_EffectStartTime(snapshot.Freeze(source.m_EffectStartTime)),
+	m_EffectStopTime(snapshot.Freeze(source.m_EffectStopTime)),
+	m_EffectStartStrength(snapshot.Freeze(source.m_EffectStartStrength)),
+	m_EffectStopStrength(snapshot.Freeze(source.m_EffectStopStrength)),
+	m_EffectAlwaysShows(snapshot.Freeze(source.m_EffectAlwaysShows)),
+	m_EffectRotAngle(snapshot.Freeze(source.m_EffectRotAngle)),
+	m_InheritEffectRotAngle(snapshot.Freeze(source.m_InheritEffectRotAngle)),
+	m_RandomizeEffectRotAngle(snapshot.Freeze(source.m_RandomizeEffectRotAngle)),
+	m_RandomizeEffectRotAngleEveryFrame(snapshot.Freeze(source.m_RandomizeEffectRotAngleEveryFrame)),
+	m_PostEffectEnabled(snapshot.Freeze(source.m_PostEffectEnabled)),
+	m_IncomingWeakReferences(nullptr),
+	m_UniqueID(snapshot.Freeze(source.m_UniqueID)),
+	m_PersistedUniqueID(snapshot.Freeze(source.m_PersistedUniqueID)),
+	m_PersistedMovableObjectRuntime(snapshot.Freeze(source.m_PersistedMovableObjectRuntime, &m_PersistedMovableObjectRuntime)),
+	m_ScriptStateRestored(snapshot.Freeze(source.m_ScriptStateRestored)),
+	m_PersistedScriptState(snapshot.Freeze(source.m_PersistedScriptState, &m_PersistedScriptState)),
+	m_PersistedLuaStateIndex(snapshot.Freeze(source.m_PersistedLuaStateIndex)),
+	m_FaithfulMOToNotHitUID(snapshot.Freeze(source.m_FaithfulMOToNotHitUID)),
+	m_PersistedRestTimerStart(snapshot.Freeze(source.m_PersistedRestTimerStart)),
+	m_HasPersistedRestTimerStart(snapshot.Freeze(source.m_HasPersistedRestTimerStart)),
+	m_PersistedVelOscillations(snapshot.Freeze(source.m_PersistedVelOscillations)),
+	m_HasPersistedVelOscillations(snapshot.Freeze(source.m_HasPersistedVelOscillations)),
+	m_PersistedAgeTimerAnchor(snapshot.Freeze(source.m_PersistedAgeTimerAnchor)),
+	m_PersistedMOIgnoreTimerAnchor(snapshot.Freeze(source.m_PersistedMOIgnoreTimerAnchor)),
+	m_RemoveOrphanTerrainRadius(snapshot.Freeze(source.m_RemoveOrphanTerrainRadius)),
+	m_RemoveOrphanTerrainMaxArea(snapshot.Freeze(source.m_RemoveOrphanTerrainMaxArea)),
+	m_RemoveOrphanTerrainRate(snapshot.Freeze(source.m_RemoveOrphanTerrainRate)),
+	m_DamageOnCollision(snapshot.Freeze(source.m_DamageOnCollision)),
+	m_DamageOnPenetration(snapshot.Freeze(source.m_DamageOnPenetration)),
+	m_WoundDamageMultiplier(snapshot.Freeze(source.m_WoundDamageMultiplier)),
+	m_ApplyWoundDamageOnCollision(snapshot.Freeze(source.m_ApplyWoundDamageOnCollision)),
+	m_ApplyWoundBurstDamageOnCollision(snapshot.Freeze(source.m_ApplyWoundBurstDamageOnCollision)),
+	m_IgnoreTerrain(snapshot.Freeze(source.m_IgnoreTerrain)),
+	m_MOIDHit(snapshot.Freeze(source.m_MOIDHit)),
+	m_TerrainMatHit(snapshot.Freeze(source.m_TerrainMatHit)),
+	m_ParticleUniqueIDHit(snapshot.Freeze(source.m_ParticleUniqueIDHit)),
+	m_LastCollisionSimFrameNumber(snapshot.Freeze(source.m_LastCollisionSimFrameNumber)),
+	m_SimUpdatesBetweenScriptedUpdates(snapshot.Freeze(source.m_SimUpdatesBetweenScriptedUpdates)),
+	m_SimUpdatesSinceLastScriptedUpdate(snapshot.Freeze(source.m_SimUpdatesSinceLastScriptedUpdate)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	snapshot.RememberUID(&source, this);
 }
 
 MovableObject::MovableObject() {
@@ -233,6 +420,7 @@ bool MovableObject::RetainPooledMemory(MovableObject* object, void* memory, Enti
 }
 
 MovableObject::~MovableObject() {
+	if (IsFrozenCheckpointNative()) { MovableObjectReference::Expire(this); return; }
 	NetModerationGUIProbe::TraceObjectLifetime(this, "destroy", true);
 	// Whatever freed this object, a hook loop of it running on this thread must not read it again.
 	for (HookCallScope* scope: g_LiveHookScopes) {
@@ -685,7 +873,7 @@ bool MovableObject::PublishNetPrivateObjectGraph() {
 	std::vector<std::unique_lock<std::recursive_mutex>> scriptLocks;
 	scriptLocks.emplace_back(g_LuaMan.GetMasterScriptState().GetMutex());
 	for (auto& state: g_LuaMan.GetThreadedScriptStates()) scriptLocks.emplace_back(state.GetMutex());
-	std::vector<std::string> scriptNames(objects.size());
+	std::vector<CheckpointString> scriptNames(objects.size());
 	std::map<LuaStateWrapper*, std::vector<std::pair<const MovableObject*, long>>> scriptIdentities;
 	long counter;
 	for (;;) {
@@ -705,7 +893,7 @@ bool MovableObject::PublishNetPrivateObjectGraph() {
 		}
 		for (const auto& [state, identities]: scriptIdentities) if (!state->RekeyScriptObjects(identities, true)) return false;
 		long expected = counter;
-		if (m_UniqueIDCounter.compare_exchange_strong(expected, counter + static_cast<long>(objects.size()))) break;
+		if (MutableCheckpointCounters().uid.compare_exchange_strong(expected, counter + static_cast<long>(objects.size()))) break;
 	}
 	for (const auto& [state, identities]: scriptIdentities) if (!state->RekeyScriptObjects(identities)) return false;
 	for (size_t index = 0; index < objects.size(); ++index) {
@@ -996,39 +1184,42 @@ bool MovableObject::LoadMovableObjectRuntime(std::string_view text, bool validat
 }
 
 void MovableObject::SaveSnapshotConfiguration(Writer& writer) const {
-	writer.NewPropertyWithValue("SpecialBehaviour_MovableObjectRuntime", CheckpointWriter::Native([&] { return m_PersistedMovableObjectRuntime.empty() ? SaveMovableObjectRuntime() : m_PersistedMovableObjectRuntime; }).Base64(true));
-	writer.NewPropertyWithValue("Mass", m_Mass);
-	writer.NewPropertyWithValue("Scale", m_Scale);
-	writer.NewPropertyWithValue("RestThreshold", m_RestThreshold);
-	writer.NewPropertyWithValue("Sharpness", m_Sharpness);
-	writer.NewPropertyWithValue("HitsMOs", m_HitsMOs);
-	writer.NewPropertyWithValue("GetsHitByMOs", m_GetsHitByMOs);
-	writer.NewPropertyWithValue("IgnoresAtomGroupHits", m_IgnoresAtomGroupHits);
-	writer.NewPropertyWithValue("IgnoresAGHitsWhenSlowerThan", m_IgnoresAGHitsWhenSlowerThan);
-	writer.NewPropertyWithValue("MissionCritical", m_MissionCritical);
-	writer.NewPropertyWithValue("CanBeSquished", m_CanBeSquished);
-	writer.NewPropertyWithValue("RemoveOrphanTerrainRadius", m_RemoveOrphanTerrainRadius);
-	writer.NewPropertyWithValue("RemoveOrphanTerrainMaxArea", m_RemoveOrphanTerrainMaxArea);
-	writer.NewPropertyWithValue("RemoveOrphanTerrainRate", m_RemoveOrphanTerrainRate);
-	writer.NewPropertyWithValue("DamageOnCollision", m_DamageOnCollision);
-	writer.NewPropertyWithValue("DamageOnPenetration", m_DamageOnPenetration);
-	writer.NewPropertyWithValue("WoundDamageMultiplier", m_WoundDamageMultiplier);
-	writer.NewPropertyWithValue("SpecialBehaviour_ToSettle", m_ToSettle);
-	writer.NewPropertyWithValue("SpecialBehaviour_ToDelete", m_ToDelete);
-	writer.NewPropertyWithValue("SimUpdatesBetweenScriptedUpdates", m_SimUpdatesBetweenScriptedUpdates);
-	writer.NewPropertyWithValue("SpecialBehaviour_SimUpdatesSinceLastScriptedUpdate", m_SimUpdatesSinceLastScriptedUpdate);
-	writer.NewPropertyWithValue("ForceIntoMasterLuaState", m_ForceIntoMasterLuaState);
+	writer.NewPropertyWithValue("SpecialBehaviour_MovableObjectRuntime", CheckpointWriter::Native([&] { return m_PersistedMovableObjectRuntime.empty() ? SaveMovableObjectRuntime() : m_PersistedMovableObjectRuntime.Value(); }).Base64(true));
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"Mass">(m_Mass),
+		CheckpointProperty<"Scale">(m_Scale),
+		CheckpointProperty<"RestThreshold">(m_RestThreshold),
+		CheckpointProperty<"Sharpness">(m_Sharpness),
+		CheckpointProperty<"HitsMOs">(m_HitsMOs),
+		CheckpointProperty<"GetsHitByMOs">(m_GetsHitByMOs),
+		CheckpointProperty<"IgnoresAtomGroupHits">(m_IgnoresAtomGroupHits),
+		CheckpointProperty<"IgnoresAGHitsWhenSlowerThan">(m_IgnoresAGHitsWhenSlowerThan),
+		CheckpointProperty<"MissionCritical">(m_MissionCritical),
+		CheckpointProperty<"CanBeSquished">(m_CanBeSquished),
+		CheckpointProperty<"RemoveOrphanTerrainRadius">(m_RemoveOrphanTerrainRadius),
+		CheckpointProperty<"RemoveOrphanTerrainMaxArea">(m_RemoveOrphanTerrainMaxArea),
+		CheckpointProperty<"RemoveOrphanTerrainRate">(m_RemoveOrphanTerrainRate),
+		CheckpointProperty<"DamageOnCollision">(m_DamageOnCollision),
+		CheckpointProperty<"DamageOnPenetration">(m_DamageOnPenetration),
+		CheckpointProperty<"WoundDamageMultiplier">(m_WoundDamageMultiplier),
+		CheckpointProperty<"SpecialBehaviour_ToSettle">(m_ToSettle),
+		CheckpointProperty<"SpecialBehaviour_ToDelete">(m_ToDelete),
+		CheckpointProperty<"SimUpdatesBetweenScriptedUpdates">(m_SimUpdatesBetweenScriptedUpdates),
+		CheckpointProperty<"SpecialBehaviour_SimUpdatesSinceLastScriptedUpdate">(m_SimUpdatesSinceLastScriptedUpdate),
+		CheckpointProperty<"ForceIntoMasterLuaState">(m_ForceIntoMasterLuaState));
 	writer.NewPropertyWithValue("SpecialBehaviour_ScreenEffect", m_ScreenEffectFile);
-	writer.NewPropertyWithValue("PostEffectEnabled", m_PostEffectEnabled);
-	writer.NewPropertyWithValue("EffectStartTime", m_EffectStartTime);
-	writer.NewPropertyWithValue("SpecialBehaviour_EffectStopTimeRaw", m_EffectStopTime);
-	writer.NewPropertyWithValue("SpecialBehaviour_EffectStartStrengthRaw", m_EffectStartStrength);
-	writer.NewPropertyWithValue("SpecialBehaviour_EffectStopStrengthRaw", m_EffectStopStrength);
-	writer.NewPropertyWithValue("EffectAlwaysShows", m_EffectAlwaysShows);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"PostEffectEnabled">(m_PostEffectEnabled),
+		CheckpointProperty<"EffectStartTime">(m_EffectStartTime),
+		CheckpointProperty<"SpecialBehaviour_EffectStopTimeRaw">(m_EffectStopTime),
+		CheckpointProperty<"SpecialBehaviour_EffectStartStrengthRaw">(m_EffectStartStrength),
+		CheckpointProperty<"SpecialBehaviour_EffectStopStrengthRaw">(m_EffectStopStrength),
+		CheckpointProperty<"EffectAlwaysShows">(m_EffectAlwaysShows));
 	writer.NewPropertyWithValue("EffectRotAngle", CheckpointEffectRotAngle());
-	writer.NewPropertyWithValue("InheritEffectRotAngle", m_InheritEffectRotAngle);
-	writer.NewPropertyWithValue("RandomizeEffectRotAngle", m_RandomizeEffectRotAngle);
-	writer.NewPropertyWithValue("RandomizeEffectRotAngleEveryFrame", m_RandomizeEffectRotAngleEveryFrame);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"InheritEffectRotAngle">(m_InheritEffectRotAngle),
+		CheckpointProperty<"RandomizeEffectRotAngle">(m_RandomizeEffectRotAngle),
+		CheckpointProperty<"RandomizeEffectRotAngleEveryFrame">(m_RandomizeEffectRotAngleEveryFrame));
 }
 
 int MovableObject::Save(Writer& writer) const {
@@ -1207,7 +1398,7 @@ int MovableObject::LoadScript(const std::string& scriptPath, bool loadAsEnabledS
 	}
 
 	for (const auto& [functionName, functionObject]: scriptFileFunctions) {
-		LuaFunction& luaFunction = m_FunctionsAndScripts.at(functionName).emplace_back();
+		LuaFunction& luaFunction = GetScriptFunctions(functionName).emplace_back();
 		luaFunction.m_ScriptIsEnabled = loadAsEnabledScript;
 		luaFunction.m_LuaFunction = std::unique_ptr<LuabindObjectWrapper>(functionObject);
 	}
@@ -1234,8 +1425,8 @@ int MovableObject::ReloadScripts() {
 		movableObjectPreset->ReloadScripts();
 	}
 
-	std::unordered_map<std::string, bool> enabledScriptsCopy = m_EnabledScripts;
-	std::vector<std::string> loadedScriptsCopy = m_AllLoadedScripts;
+	auto enabledScriptsCopy = m_EnabledScripts;
+	auto loadedScriptsCopy = m_AllLoadedScripts;
 	m_EnabledScripts.clear();
 	m_AllLoadedScripts.clear();
 	m_FunctionsAndScripts.clear();
@@ -1274,10 +1465,10 @@ int MovableObject::InitializeObjectScripts(bool runCreate) {
 	// The place this object takes in the registration order: the image's when it carried one, so a
 	// restored peer keeps the writer's order, otherwise the next one this machine draws.
 	if (m_ScriptRegistrationSerial > 0) {
-		long counter = s_ScriptRegistrationSerial.load(std::memory_order_relaxed);
-		while (counter < m_ScriptRegistrationSerial && !s_ScriptRegistrationSerial.compare_exchange_weak(counter, m_ScriptRegistrationSerial)) {}
+		long counter = MutableCheckpointCounters().registration.load(std::memory_order_relaxed);
+		while (counter < m_ScriptRegistrationSerial && !MutableCheckpointCounters().registration.compare_exchange_weak(counter, m_ScriptRegistrationSerial)) {}
 	} else {
-		m_ScriptRegistrationSerial = s_ScriptRegistrationSerial.fetch_add(1, std::memory_order_relaxed) + 1;
+		m_ScriptRegistrationSerial = MutableCheckpointCounters().registration.fetch_add(1, std::memory_order_relaxed) + 1;
 	}
 	m_ThreadedLuaState->RegisterMO(this);
 	m_ThreadedLuaState->SetTempEntity(this);
@@ -1301,7 +1492,7 @@ int MovableObject::InitializeObjectScripts(bool runCreate) {
 		return 0;
 	}
 
-	if (runCreate && !m_FunctionsAndScripts.at("Create").empty() && RunScriptedFunctionInAppropriateScripts("Create", false, true) < 0) {
+	if (runCreate && !GetScriptFunctions("Create").empty() && RunScriptedFunctionInAppropriateScripts("Create", false, true) < 0) {
 		m_ScriptObjectName = "ERROR";
 		return -1;
 	}
@@ -1314,8 +1505,8 @@ void MovableObject::MoveScriptsToState(LuaStateWrapper& state) {
 		return;
 	}
 	RTEAssert(!ObjectScriptsInitialized(), "Cannot move an object's scripts to another state once they run.");
-	const std::vector<std::string> scripts = m_AllLoadedScripts;
-	const std::unordered_map<std::string, bool> enabled = m_EnabledScripts;
+	const auto scripts = m_AllLoadedScripts;
+	const auto enabled = m_EnabledScripts;
 	if (m_ThreadedLuaState) {
 		std::lock_guard<std::recursive_mutex> lock(m_ThreadedLuaState->GetMutex());
 		m_FunctionsAndScripts.clear();
@@ -1365,6 +1556,13 @@ void MovableObject::EnableOrDisableAllScripts(bool enableScripts) {
 int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& functionName, bool runOnDisabledScripts, bool stopOnError, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
 	// CC_TRACE_SOUND_SCOPE_OBJECT=<uid> also reports every script call for that object, so the peer that initializes its scripts early can be identified.
 	static const uint64_t tracedObject = [] { const char* value = std::getenv("CC_TRACE_SOUND_SCOPE_OBJECT"); return value ? std::strtoull(value, nullptr, 10) : 0ULL; }();
+	// CCCP_TEST_CHECKPOINT_AI=uid:first:last reads the selected AI's fields without calling script getters.
+	static const auto checkpointAI = [] {
+		std::array<unsigned long long, 3> range{};
+		const char* value = std::getenv("CCCP_TEST_CHECKPOINT_AI");
+		if (!value || std::sscanf(value, "%llu:%llu:%llu", &range[0], &range[1], &range[2]) != 3) range = {};
+		return range;
+	}();
 	if (tracedObject && m_UniqueID == tracedObject) {
 		std::cout << "[script-call] uid=" << m_UniqueID << " function=" << functionName << " initialized=" << (m_ScriptObjectName.empty() ? 0 : 1) << " domain=" << static_cast<int>(SoundSimulationScope::Domain()) << " tick=" << g_TimerMan.GetSimUpdateCount() << " thread=" << std::this_thread::get_id() << std::endl;
 	}
@@ -1408,6 +1606,8 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 		// The AI passes are per-machine: their sound calls are decisions this machine makes, deferred
 		// to the committed tick. The pie menu is local UI and plays on this machine only.
 		const bool localAI = functionName == "UpdateAI" || functionName == "ThreadedUpdateAI";
+		const bool traceCheckpointAI = localAI && checkpointAI[0] && m_UniqueID == checkpointAI[0] &&
+		    g_TimerMan.GetSimUpdateCount() >= checkpointAI[1] && g_TimerMan.GetSimUpdateCount() <= checkpointAI[2];
 		const bool presentation = functionName == "WhilePieMenuOpen";
 		SoundSimulationScope soundScope(m_UniqueID, Hash(functionName), presentation ? SoundExecutionDomain::Presentation : (localAI ? SoundExecutionDomain::LocalSimulation : SoundExecutionDomain::SharedSimulation));
 		LuaMan::PreviewHookScope previewHookScope(LuaMan::IsPreviewClone(this));
@@ -1422,7 +1622,9 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 			if (runOnDisabledScripts || luaFunction.m_ScriptIsEnabled) {
 				LuaStateWrapper& usedState = GetAndLockStateForScript(luabindObjectWrapper->GetFilePath(), &luaFunction);
 				std::lock_guard<std::recursive_mutex> lock(usedState.GetMutex(), std::adopt_lock);
+				if (traceCheckpointAI) usedState.TraceCheckpointAI(m_UniqueID, functionName, "before");
 				status = usedState.RunScriptFunctionObject(luabindObjectWrapper, "_ScriptedObjects", selfKey, functionEntityArguments, functionLiteralArguments, functionObjectArguments);
+				if (traceCheckpointAI) usedState.TraceCheckpointAI(m_UniqueID, functionName, "after");
 				if (status < 0 && stopOnError) {
 					return status;
 				}
@@ -1446,7 +1648,7 @@ int MovableObject::RunFunctionOfScript(const std::string& scriptPath, const std:
 	LuaStateWrapper& usedState = GetAndLockStateForScript(scriptPath);
 	std::lock_guard<std::recursive_mutex> lock(usedState.GetMutex(), std::adopt_lock);
 
-	for (const LuaFunction& luaFunction: m_FunctionsAndScripts.at(functionName)) {
+	for (const LuaFunction& luaFunction: GetScriptFunctions(functionName)) {
 		// The same end as the hook loop above: this list goes with the object.
 		if (hookScope.ObjectIsGone()) {
 			break;
@@ -2021,7 +2223,7 @@ int MovableObject::WhilePieMenuOpenListener(const PieMenu* pieMenu) {
 	return RunScriptedFunctionInAppropriateScripts("WhilePieMenuOpen", false, false, {pieMenu});
 }
 
-void MovableObject::UpdateMOID(std::vector<MovableObject*>& MOIDIndex, MOID rootMOID, bool makeNewMOID) {
+void MovableObject::UpdateMOID(CheckpointVector<MovableObject*>& MOIDIndex, MOID rootMOID, bool makeNewMOID) {
 	// Register the own MOID
 	RegMOID(MOIDIndex, rootMOID, makeNewMOID);
 
@@ -2058,7 +2260,7 @@ void MovableObject::SetHitWhatParticleUniqueID(long int id) {
 	m_LastCollisionSimFrameNumber = g_MovableMan.GetSimUpdateFrameNumber();
 }
 
-void MovableObject::RegMOID(std::vector<MovableObject*>& MOIDIndex, MOID rootMOID, bool makeNewMOID) {
+void MovableObject::RegMOID(CheckpointVector<MovableObject*>& MOIDIndex, MOID rootMOID, bool makeNewMOID) {
 	if (!makeNewMOID && GetParent()) {
 		m_MOID = GetParent()->GetID();
 	} else {

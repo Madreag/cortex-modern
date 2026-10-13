@@ -2,6 +2,8 @@
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "SceneMan.h"
+#include "CheckpointFailure.h"
+#include "CheckpointNativeSnapshot.h"
 #include "MetricsCollector.h"
 #include "PostProcessMan.h"
 #include "PresetMan.h"
@@ -40,6 +42,12 @@
 #include <iostream>
 #include <atomic>
 #include <mutex>
+#include <array>
+#include <functional>
+#include <map>
+#include <memory>
+#include <unordered_map>
+#include <vector>
 
 using namespace RTE;
 
@@ -213,7 +221,7 @@ void SceneMan::Clear() {
 	m_pMOColorLayer = nullptr;
 	m_pDebugLayer = nullptr;
 
-	m_LayerDrawMode = g_LayerNormal;
+	CheckpointOptionsValues().m_LayerDrawMode = g_LayerNormal;
 
 	m_MatNameMap.clear();
 	m_apMatPalette.fill(nullptr);
@@ -225,18 +233,18 @@ void SceneMan::Clear() {
 	for (auto& retired: m_RetiredPaletteMaterials) retired.clear();
 
 	m_pUnseenRevealSound = nullptr;
-	m_DrawRayCastVisualizations = false;
-	m_DrawPixelCheckVisualizations = false;
-	m_LastUpdatedScreen = 0;
-	m_SecondStructPass = false;
-	//    m_CalcTimer.Reset();
-	m_CleanTimer.Reset();
+	CheckpointOptionsValues().m_DrawRayCastVisualizations = false;
+	CheckpointOptionsValues().m_DrawPixelCheckVisualizations = false;
+	CheckpointOptionsValues().m_LastUpdatedScreen = 0;
+	CheckpointOptionsValues().m_SecondStructPass = false;
+	//    CheckpointOptionsValues().m_CalcTimer.Reset();
+	CheckpointOptionsValues().m_CleanTimer.Reset();
 
 	if (m_pOrphanSearchBitmap)
 		destroy_bitmap(m_pOrphanSearchBitmap);
 	m_pOrphanSearchBitmap = create_bitmap_ex(8, MAXORPHANRADIUS, MAXORPHANRADIUS);
 
-	m_ScrapCompactingHeight = 25;
+	CheckpointOptionsValues().m_ScrapCompactingHeight = 25;
 
 	m_CarveBatchDepth = 0;
 	m_CarveBatchHasBox = false;
@@ -368,7 +376,7 @@ int SceneMan::LoadScene(Scene* pNewScene, bool placeObjects, bool placeUnits) {
 	m_MOIDsGrid = SpatialPartitionGrid(GetSceneWidth(), GetSceneHeight(), cellSize);
 
 	// Create the Debug SceneLayer
-	if (m_DrawRayCastVisualizations || m_DrawPixelCheckVisualizations) {
+	if (CheckpointOptionsValues().m_DrawRayCastVisualizations || CheckpointOptionsValues().m_DrawPixelCheckVisualizations) {
 		delete m_pDebugLayer;
 		pBitmap = create_bitmap_ex(8, GetSceneWidth(), GetSceneHeight());
 		clear_to_color(pBitmap, g_MaskColor);
@@ -585,7 +593,7 @@ unsigned char SceneMan::GetTerrMatter(int pixelX, int pixelY) {
 
 	WrapPosition(pixelX, pixelY);
 
-	if (m_pDebugLayer && m_DrawPixelCheckVisualizations) {
+	if (m_pDebugLayer && CheckpointOptionsValues().m_DrawPixelCheckVisualizations) {
 		m_pDebugLayer->SetPixel(pixelX, pixelY, 5);
 	}
 
@@ -614,7 +622,7 @@ unsigned char SceneMan::GetTerrMatter(int pixelX, int pixelY) {
 MOID SceneMan::GetMOIDPixel(int pixelX, int pixelY, int ignoreTeam) {
 	WrapPosition(pixelX, pixelY);
 
-	if (m_pDebugLayer && m_DrawPixelCheckVisualizations) {
+	if (m_pDebugLayer && CheckpointOptionsValues().m_DrawPixelCheckVisualizations) {
 		m_pDebugLayer->SetPixel(pixelX, pixelY, 5);
 	}
 
@@ -625,7 +633,7 @@ MOID SceneMan::GetMOIDPixel(int pixelX, int pixelY, int ignoreTeam) {
 }
 
 Material const* SceneMan::GetMaterial(const std::string& matName) {
-	std::map<std::string, unsigned char>::iterator itr = m_MatNameMap.find(matName);
+	auto itr = m_MatNameMap.find(matName);
 	if (itr == m_MatNameMap.end()) {
 		g_ConsoleMan.PrintString("ERROR: Material of name: " + matName + " not found!");
 		return 0;
@@ -944,7 +952,7 @@ bool SceneMan::TryPenetrate(int posX,
 		}
 
 		// If this is a scrap pixel, or there is no background pixel 'supporting' the knocked-loose pixel, make the column above also turn into particles.
-		if (m_ScrapCompactingHeight > 0 && (sceneMat->IsScrap() || _getpixel(m_pCurrentScene->GetTerrain()->GetBGColorBitmap(), posX, posY) == g_MaskColor)) {
+		if (CheckpointOptionsValues().m_ScrapCompactingHeight > 0 && (sceneMat->IsScrap() || _getpixel(m_pCurrentScene->GetTerrain()->GetBGColorBitmap(), posX, posY) == g_MaskColor)) {
 			// Get quicker direct access to bitmaps
 			BITMAP* pFGColor = m_pCurrentScene->GetTerrain()->GetFGColorBitmap();
 			BITMAP* pBGColor = m_pCurrentScene->GetTerrain()->GetBGColorBitmap();
@@ -956,7 +964,7 @@ bool SceneMan::TryPenetrate(int posX,
 			float sprayMag = DeterministicSqrt(velocity.GetMagnitude() * sprayScale);
 			Vector sprayVel;
 
-			for (int testY = posY - 1; testY > posY - m_ScrapCompactingHeight && testY >= 0; --testY) {
+			for (int testY = posY - 1; testY > posY - CheckpointOptionsValues().m_ScrapCompactingHeight && testY >= 0; --testY) {
 				if ((testMaterialID = _getpixel(pMaterial, posX, testY)) != g_MaterialAir) {
 					sceneMat = GetMaterialFromID(testMaterialID);
 
@@ -970,7 +978,7 @@ bool SceneMan::TryPenetrate(int posX,
 							}
 							if (spawnColor.GetIndex() != g_MaskColor) {
 								// Send terrain pixels flying at a diminishing rate the higher the column goes.
-								sprayVel.SetXY(0, -sprayMag * (1.0F - (static_cast<float>(posY - testY) / static_cast<float>(m_ScrapCompactingHeight))));
+								sprayVel.SetXY(0, -sprayMag * (1.0F - (static_cast<float>(posY - testY) / static_cast<float>(CheckpointOptionsValues().m_ScrapCompactingHeight))));
 								sprayVel.RadRotate(RandomNum(-c_HalfPI, c_HalfPI));
 
 								pixelMO = new MOPixel(spawnColor, spawnMat->GetPixelDensity(), Vector(posX, testY), sprayVel, new Atom(Vector(), spawnMat->GetIndex(), 0, spawnColor, 2), 0);
@@ -1455,7 +1463,7 @@ bool SceneMan::CastTerrainPenetrationRay(const Vector& start, const Vector& ray,
 			}
 			// Reset skip counter
 			skipped = 0;
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -1578,7 +1586,7 @@ bool SceneMan::CastUnseenRay(int team, const Vector& start, const Vector& ray, V
 		}
 	};
 	const auto passed = [this](int x, int y) {
-		if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+		if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 			m_pDebugLayer->SetPixel(x, y, 13);
 		}
 	};
@@ -1639,7 +1647,7 @@ void SceneMan::RevealSeeRay(int team, const SeeRayTrace& trace) {
 	for (const auto& [x, y]: trace.reveals) {
 		RevealUnseenBox(x - trace.size / 2, y - trace.size / 2, trace.size, trace.size, team);
 	}
-	if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+	if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 		for (const auto& [x, y]: trace.visualized) m_pDebugLayer->SetPixel(x, y, 13);
 	}
 }
@@ -1725,7 +1733,7 @@ bool SceneMan::CastMaterialRay(const Vector& start, const Vector& ray, unsigned 
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -1818,7 +1826,7 @@ bool SceneMan::CastNotMaterialRay(const Vector& start, const Vector& ray, unsign
 			}
 
 			skipped = 0;
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -1910,7 +1918,7 @@ float SceneMan::CastStrengthSumRay(const Vector& start, const Vector& end, int s
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -1996,7 +2004,7 @@ const Material* SceneMan::CastMaxStrengthRayMaterial(const Vector& start, const 
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -2085,7 +2093,7 @@ bool SceneMan::CastStrengthRay(const Vector& start, const Vector& ray, float str
 			}
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -2175,7 +2183,7 @@ bool SceneMan::CastWeaknessRay(const Vector& start, const Vector& ray, float str
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -2279,7 +2287,7 @@ MOID SceneMan::CastMORay(const Vector& start, const Vector& ray, const std::vect
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -2371,7 +2379,7 @@ bool SceneMan::CastFindMORay(const Vector& start, const Vector& ray, MOID target
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -2473,7 +2481,7 @@ const std::vector<MovableObject*>*  SceneMan::CastAllMOsRay(const Vector& start,
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		}
@@ -2573,7 +2581,7 @@ float SceneMan::CastObstacleRay(const Vector& start, const Vector& ray, Vector& 
 
 			skipped = 0;
 
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			if (m_pDebugLayer && CheckpointOptionsValues().m_DrawRayCastVisualizations) {
 				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
 			}
 		} else {
@@ -2952,7 +2960,7 @@ void SceneMan::Update(int screenId) {
 		return;
 	}
 
-	m_LastUpdatedScreen = screenId;
+	CheckpointOptionsValues().m_LastUpdatedScreen = screenId;
 
 	const Vector offset = g_CameraMan.GetRenderOffset(screenId);
 	m_pMOColorLayer->SetOffset(offset);
@@ -2980,12 +2988,12 @@ void SceneMan::Update(int screenId) {
 
 void SceneMan::UpdateCleanAir() {
 	SLTerrain* terrain = m_pCurrentScene ? m_pCurrentScene->GetTerrain() : nullptr;
-	if (!terrain || m_CleanTimer.GetElapsedSimTimeMS() <= CLEANAIRINTERVAL) {
+	if (!terrain || CheckpointOptionsValues().m_CleanTimer.GetElapsedSimTimeMS() <= CLEANAIRINTERVAL) {
 		return;
 	}
 	TraceTerrainEvent("clean", 0, 0);
 	terrain->CleanAir();
-	m_CleanTimer.Reset();
+	CheckpointOptionsValues().m_CleanTimer.Reset();
 }
 
 void SceneMan::Draw(BITMAP* targetBitmap, BITMAP* targetGUIBitmap, const Vector& targetPos, bool skipBackgroundLayers, bool skipTerrain) {
@@ -3010,7 +3018,7 @@ void SceneMan::Draw(BITMAP* targetBitmap, BITMAP* targetGUIBitmap, const Vector&
 		targetBox.SetHeight(static_cast<float>(GetSceneHeight()));
 	}
 
-	switch (m_LayerDrawMode) {
+	switch (CheckpointOptionsValues().m_LayerDrawMode) {
 		case LayerDrawMode::g_LayerTerrainMatter:
 			terrain->SetLayerToDraw(SLTerrain::LayerType::MaterialLayer);
 			terrain->Draw(targetDimensions, targetBox);
@@ -3028,7 +3036,7 @@ void SceneMan::Draw(BITMAP* targetBitmap, BITMAP* targetGUIBitmap, const Vector&
 
 			// TODO- it would really be much nicer to draw direct-to-screen, with no intermediate MO layer
 			// but this is awkward with draw order due to how the GPU interacts
-			if (m_LastUpdatedScreen == 0) {
+			if (CheckpointOptionsValues().m_LastUpdatedScreen == 0) {
 				g_SceneMan.ClearMOColorLayer();
 				g_MovableMan.Draw(g_SceneMan.GetMOColorBitmap());
 			}
@@ -3040,25 +3048,25 @@ void SceneMan::Draw(BITMAP* targetBitmap, BITMAP* targetGUIBitmap, const Vector&
 				terrain->Draw(targetDimensions, targetBox);
 			}
 			
-			int teamId = g_CameraMan.GetScreenTeam(m_LastUpdatedScreen);
+			int teamId = g_CameraMan.GetScreenTeam(CheckpointOptionsValues().m_LastUpdatedScreen);
 			if (SceneLayer* unseenLayer = (teamId != Activity::NoTeam) ? m_pCurrentScene->GetUnseenLayer(teamId) : nullptr) {
 				unseenLayer->Draw(targetDimensions, targetBox);
 			}
 
-			bool shouldDrawHUD = !g_FrameMan.IsHudDisabled(m_LastUpdatedScreen);
+			bool shouldDrawHUD = !g_FrameMan.IsHudDisabled(CheckpointOptionsValues().m_LastUpdatedScreen);
 			if (shouldDrawHUD) {
-				g_ActivityMan.GetActivity()->PrepareDrawGUI(m_LastUpdatedScreen);
-				g_MovableMan.DrawHUD(targetGUIBitmap, targetPos, m_LastUpdatedScreen);
+				g_ActivityMan.GetActivity()->PrepareDrawGUI(CheckpointOptionsValues().m_LastUpdatedScreen);
+				g_MovableMan.DrawHUD(targetGUIBitmap, targetPos, CheckpointOptionsValues().m_LastUpdatedScreen);
 			}
 
 			if (shouldDrawHUD) {
-				g_ActivityMan.GetActivity()->DrawGUI(targetGUIBitmap, targetPos, m_LastUpdatedScreen);
+				g_ActivityMan.GetActivity()->DrawGUI(targetGUIBitmap, targetPos, CheckpointOptionsValues().m_LastUpdatedScreen);
 			}
 
 			static bool s_drawNoGravBoxes = false;
 			if (s_drawNoGravBoxes) {
 				if (Scene::Area* noGravArea = m_pCurrentScene->GetArea("NoGravityArea")) {
-					const std::vector<Box*>& boxList = noGravArea->GetBoxes();
+					const auto& boxList = noGravArea->GetBoxes();
 					g_FrameMan.SetTransTableFromPreset(TransparencyPreset::MoreTrans);
 					drawing_mode(DRAW_MODE_TRANS, 0, 0, 0);
 
@@ -3125,6 +3133,46 @@ namespace {
 		return "SceneMan3";
 	}
 } // namespace
+
+void SceneMan::PrepareCheckpointValues() {
+	if (!CheckpointNativeStorage::Enabled() || m_OwnedCheckpointOptions) return;
+	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	auto prepared = std::make_unique<CheckpointOptions>(m_OrdinaryCheckpointOptions);
+	auto names = m_MatNameMap;
+	auto copies = m_MaterialCopiesVector;
+	auto indices = m_MaterialCopyIndices;
+	m_MatNameMap.swap(names);
+	m_MaterialCopiesVector.swap(copies);
+	m_MaterialCopyIndices.swap(indices);
+	m_OwnedCheckpointOptions = std::move(prepared);
+}
+
+void SceneMan::RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) const {
+	snapshot.CopyValue(m_OwnedCheckpointOptions ? m_OwnedCheckpointOptions.get() : &m_OrdinaryCheckpointOptions);
+}
+
+std::string SceneMan::CheckpointOptionsStorageSelfTestMismatch() {
+	CheckpointNativeStorage::AllocationScope allocations(true);
+	auto values = std::make_unique<CheckpointOptions>();
+	values->m_LayerDrawMode = g_LayerTerrainMatter;
+	values->m_DrawRayCastVisualizations = true; values->m_DrawPixelCheckVisualizations = false;
+	values->m_LastUpdatedScreen = 3; values->m_SecondStructPass = true; values->m_ScrapCompactingHeight = 17;
+	values->m_CalcTimer.SetStartSimTimeTicks(-31); values->m_CleanTimer.SetStartSimTimeTicks(71);
+	const auto capture = [](const auto& options) {
+		return CheckpointWriter::CaptureNative([&] { CheckpointWriter writer("FrozenSceneOptions"); VisitCheckpoint(writer, options); return writer.Text(); }).Text();
+	};
+	const auto expected = capture(*values);
+	const auto* identity = values.get();
+	auto prepared = CheckpointNativeStorage::PrepareInventory();
+	if (!prepared->Arm()) return "scene option inventory is stale";
+	values->m_LayerDrawMode = g_LayerNormal;
+	values->m_DrawRayCastVisualizations = false; values->m_DrawPixelCheckVisualizations = true;
+	values->m_LastUpdatedScreen = 1; values->m_SecondStructPass = false; values->m_ScrapCompactingHeight = 25;
+	values->m_CalcTimer.SetStartSimTimeTicks(32); values->m_CleanTimer.SetStartSimTimeTicks(72);
+	values.reset();
+	CheckpointNativeStorage::ReadScope read(prepared->Pages());
+	return capture(*CheckpointNativeStorage::Source(identity)) == expected ? std::string{} : "saved scene options follow live state";
+}
 
 std::string SceneMan::SaveCheckpoint() const {
     CheckpointWriter writer("SceneMan3");
@@ -3233,7 +3281,20 @@ namespace {
     };
 }
 
+void SceneMan::VisitCheckpointMaterialOwners(const std::function<void(const Material*, int, size_t)>& visit) const {
+	for (size_t index = 0; index < m_apMatPalette.size(); ++index) if (m_apMatPalette[index]) visit(m_apMatPalette[index], 1, index);
+	for (const auto& [material, index]: CheckpointValues(m_MaterialCopyIndices)) visit(material, 2, index);
+	if (PresetMan::IsConstructed()) {
+		const auto presets = CheckpointMaterialPresets();
+		for (size_t index = 0; index < presets.size(); ++index) visit(presets[index], 3, index);
+	}
+}
+
 std::string SceneMan::SaveMaterialReference(const Material* material) const {
+	if (const auto* snapshot = CheckpointNativeSnapshot::Current()) {
+		if (const auto* reference = snapshot->MaterialReference(material)) return reference->Text();
+		if (material) throw std::logic_error("material is missing from the frozen native snapshot");
+	}
     if (!material) return CheckpointMaterialReference{}.Save();
     for (size_t index = 0; index < m_apMatPalette.size(); ++index) if (m_apMatPalette[index] == material) return CheckpointMaterialReference{1, index}.Save();
     if (const auto copy = m_MaterialCopyIndices.find(material); copy != m_MaterialCopyIndices.end()) return CheckpointMaterialReference{2, copy->second}.Save();
@@ -3266,6 +3327,33 @@ const Material* SceneMan::ResolveMaterialReference(std::string_view text, bool a
 }
 
 std::string SceneMan::SaveMaterialCatalog() const {
+    if (const auto& snapshot = CheckpointNativeSnapshot::Boundary()) {
+        const int count = m_MaterialCount;
+        std::map<std::string, unsigned char> names;
+        for (const auto& [name, index]: CheckpointValues(m_MatNameMap)) names.emplace(name.Value(), index);
+        std::array<const Material*, c_PaletteEntriesNumber> palette{};
+        std::vector<const Material*> copies, presets;
+        for (size_t index = 0; index < palette.size(); ++index) palette[index] = snapshot->Object(m_apMatPalette[index]);
+        for (const Material* material: CheckpointValues(m_MaterialCopiesVector)) copies.push_back(snapshot->Object(material));
+        for (const Material* material: CheckpointMaterialPresets()) presets.push_back(snapshot->Object(material));
+        // The saver rebuilds the catalog from frozen material values.
+        CheckpointWriter deferred(CheckpointWriter::FieldsOnly{});
+        deferred.AppendFields(CheckpointText::DeferredValues([snapshot, count, names = std::move(names), palette, copies = std::move(copies), presets = std::move(presets)] {
+                CheckpointNativeSnapshot::ReadScope read(snapshot.get());
+                CheckpointWriter::BatchOverride batch(true);
+                return CheckpointWriter::CaptureNative([&] {
+                    std::array<CheckpointText, c_PaletteEntriesNumber> savedPalette;
+                    std::vector<CheckpointText> savedCopies, savedPresets;
+                    for (size_t index = 0; index < palette.size(); ++index) if (palette[index]) savedPalette[index] = CheckpointWriter::CaptureNative([&] { return palette[index]->SaveCheckpoint(); });
+                    for (const Material* material: copies) savedCopies.push_back(CheckpointWriter::CaptureNative([material] { return material->SaveCheckpoint(); }));
+                    for (const Material* material: presets) savedPresets.push_back(CheckpointWriter::CaptureNative([material] { return material->SaveCheckpoint(); }));
+                    CheckpointWriter writer("MaterialCatalog1");
+                    writer(count, names, savedPalette, savedCopies, savedPresets);
+                    return writer.Text();
+                });
+        }));
+        return deferred.Text();
+    }
     if (CheckpointWriter::IsCapturing()) {
         std::array<CheckpointText, c_PaletteEntriesNumber> palette;
         const auto presetMaterials = CheckpointMaterialPresets();
@@ -3283,7 +3371,7 @@ std::string SceneMan::SaveMaterialCatalog() const {
             }
         };
         std::vector<std::future<void>> tasks;
-        for (size_t chunk = 1; chunk < chunks; ++chunk) tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&write, chunk, task = CaptureSentinel::CurrentTask()] {
+        for (size_t chunk = 1; chunk < chunks; ++chunk) tasks.push_back(SaverThreads::PoolFor(g_ThreadMan.GetPriorityThreadPool()).submit([&write, chunk, task = CaptureSentinel::CurrentTask()] {
             CaptureSentinel::WorkerScope worker(task);
             write(chunk);
         }));
@@ -3303,7 +3391,7 @@ std::string SceneMan::SaveMaterialCatalog() const {
     }
     CheckpointMaterialCatalog state;
     state.count = m_MaterialCount;
-    state.names = m_MatNameMap;
+    for (const auto& [name, index]: m_MatNameMap) state.names.emplace(name.Value(), index);
     for (size_t index = 0; index < m_apMatPalette.size(); ++index) if (m_apMatPalette[index]) state.palette[index] = m_apMatPalette[index]->SaveCheckpoint();
     for (const Material* material: m_MaterialCopiesVector) state.copies.push_back(material->SaveCheckpoint());
     for (const Material* material: CheckpointMaterialPresets()) state.presets.push_back(material->SaveCheckpoint());
@@ -3336,7 +3424,9 @@ bool SceneMan::LoadMaterialCatalog(std::string_view text, bool validateOnly) {
         auto retiredCopies = m_RetiredMaterialCopies;
         auto retiredPalette = m_RetiredPaletteMaterials;
         auto copyIndices = m_MaterialCopyIndices;
-        std::vector<Material*> copies = m_MaterialCopiesVector;
+        auto copies = m_MaterialCopiesVector;
+        decltype(m_MatNameMap) names;
+        for (const auto& [name, index]: state.names) names.emplace(name, index);
         auto palette = m_apMatPalette;
         for (size_t index = state.copies.size(); index < copies.size(); ++index) retiredCopies[index].push_back(copies[index]);
         copies.resize(state.copies.size());
@@ -3370,7 +3460,7 @@ bool SceneMan::LoadMaterialCatalog(std::string_view text, bool validateOnly) {
         m_MaterialCopyIndices.swap(copyIndices);
         m_RetiredMaterialCopies.swap(retiredCopies);
         m_RetiredPaletteMaterials.swap(retiredPalette);
-        m_MatNameMap.swap(state.names);
+        m_MatNameMap.swap(names);
         m_MaterialCount = state.count;
         return true;
     } catch (const std::exception&) { return false; }
@@ -3432,6 +3522,82 @@ bool SceneMan::RunMaterialCheckpointSelfTest() {
         if (!after.LoadCheckpoint(before.SaveCheckpoint())) throw std::runtime_error("copied material Atom checkpoint was rejected");
         after.ResolveCheckpointLinks();
         if (after.GetMaterial() != first) throw std::runtime_error("Atom material resolved to a palette entry");
+		{
+			CheckpointNativeStorage::AllocationScope owned(true);
+			decltype(m_MatNameMap) heldNames;
+			decltype(m_MaterialCopiesVector) heldCopies;
+			decltype(m_MaterialCopyIndices) heldIndices;
+			heldNames.swap(m_MatNameMap); heldCopies.swap(m_MaterialCopiesVector); heldIndices.swap(m_MaterialCopyIndices);
+			const auto restore = [&](void*) {
+				heldNames.swap(m_MatNameMap); heldCopies.swap(m_MaterialCopiesVector); heldIndices.swap(m_MaterialCopyIndices);
+			};
+			std::unique_ptr<void, decltype(restore)> guard(this, restore);
+			const std::string name(80, 'm');
+			m_MatNameMap.emplace(name, 31);
+			m_MaterialCopiesVector = {first, second};
+			m_MaterialCopyIndices.emplace(first, 0); m_MaterialCopyIndices.emplace(second, 1);
+			CheckpointNativeStorage::Root namesRoot(&m_MatNameMap);
+			CheckpointNativeStorage::Root copiesRoot(&m_MaterialCopiesVector);
+			CheckpointNativeStorage::Root indicesRoot(&m_MaterialCopyIndices);
+			const auto pages = CheckpointNativeStorage::Prepare();
+			namesRoot.Freeze(); copiesRoot.Freeze(); indicesRoot.Freeze();
+			for (const auto& page: pages) page->Arm();
+			m_MatNameMap.clear(); m_MaterialCopiesVector.clear(); m_MaterialCopyIndices.clear();
+			m_MatNameMap.emplace(std::string(80, 'n'), 41); m_MaterialCopiesVector.push_back(second); m_MaterialCopyIndices.emplace(second, 9);
+			const bool exact = std::async(std::launch::async, [&] {
+				const std::array roots{namesRoot.Range(), copiesRoot.Range(), indicesRoot.Range()};
+				CheckpointNativeStorage::ReadScope read(pages, roots);
+				const auto names = CheckpointValues(*CheckpointNativeStorage::Source(&m_MatNameMap));
+				const auto copies = CheckpointValues(*CheckpointNativeStorage::Source(&m_MaterialCopiesVector));
+				const auto indices = CheckpointValues(*CheckpointNativeStorage::Source(&m_MaterialCopyIndices));
+				std::unordered_map<const Material*, size_t> savedIndices;
+				for (const auto& [material, index]: indices) savedIndices.emplace(material, index);
+				const auto entry = names.begin();
+				return names.size() == 1 && entry->first.Value() == name && entry->second == 31 &&
+				    copies.size() == 2 && *copies.begin() == first && *std::next(copies.begin()) == second &&
+				    savedIndices.size() == 2 && savedIndices.at(first) == 0 && savedIndices.at(second) == 1;
+			}).get();
+			std::cout << "[material-checkpoint] " << (exact ? "PASS" : "FAIL") << " frozen_catalog_keeps_names_copy_order_and_indices_after_reuse" << std::endl;
+			passed = exact && passed;
+		}
+		Material inlineValue;
+		const std::string inlineBytes = inlineValue.SaveCheckpoint();
+		auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
+		const Material* inlineFrozen = snapshot->Object(&inlineValue);
+		const Material* ownedFrozen = snapshot->Object(first);
+		snapshot->SealBoundary();
+		CheckpointNativeSnapshot::ReadScope frozen(snapshot.get());
+		bool unownedRefused = false;
+		try { SaveMaterialReference(inlineFrozen); } catch (const std::logic_error&) { unownedRefused = true; }
+		const bool exact = inlineFrozen->SaveCheckpoint() == inlineBytes && SaveMaterialReference(ownedFrozen) == firstReference && unownedRefused;
+		std::cout << "[material-checkpoint] " << (exact ? "PASS" : "FAIL") << " inline_material_values_freeze_without_inventing_reference_owners" << std::endl;
+		passed = exact && passed;
+		const bool uncloned = SaveMaterialReference(second) == secondReference;
+		std::cout << "[material-checkpoint] " << (uncloned ? "PASS" : "FAIL") << " material_references_use_captured_owners_before_cloning" << std::endl;
+		passed = uncloned && passed;
+		{
+			const auto roots = snapshot->ReadValues();
+			CheckpointNativeStorage::ReadScope read({}, roots);
+			const bool aliases = SaveMaterialReference(first) == firstReference && SaveMaterialReference(ownedFrozen) == firstReference;
+			std::cout << "[material-checkpoint] " << (aliases ? "PASS" : "FAIL") << " frozen_material_references_keep_source_and_saved_aliases" << std::endl;
+			passed = aliases && passed;
+		}
+		{
+			auto references = std::make_shared<CheckpointNativeSnapshot>();
+			CheckpointNativeStorage::Root root(first);
+			root.Freeze();
+			const std::array roots{root.Range()};
+			CheckpointNativeStorage::ReadScope read({}, roots);
+			const auto* sourceView = static_cast<const Material*>(root.Range().view);
+			references->RememberMaterial(sourceView, ownedFrozen);
+			const auto* sourceReference = references->MaterialReference(first);
+			const auto* viewReference = references->MaterialReference(sourceView);
+			const auto* savedReference = references->MaterialReference(ownedFrozen);
+			const bool aliases = sourceReference && viewReference && savedReference &&
+			    sourceReference->Text() == firstReference && viewReference->Text() == firstReference && savedReference->Text() == firstReference;
+			std::cout << "[material-checkpoint] " << (aliases ? "PASS" : "FAIL") << " material_owner_lookup_uses_frozen_source_identity" << std::endl;
+			passed = aliases && passed;
+		}
     } catch (const std::exception& error) {
         passed = false;
         std::cout << "[material-checkpoint] failure: " << error.what() << std::endl;

@@ -20,6 +20,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a MOPixel object in system memory. Create() should be called before using the object.
 		MOPixel();
+		CheckpointSnapshotMethods(MOPixel);
 
 		/// Convenience constructor to both instantiate a MOPixel in memory and Create it at the same time.
 		/// @param color A Color object specifying the color of this MOPixel.
@@ -190,7 +191,7 @@ namespace RTE {
 		Color m_Color; //!< Color representation of this MOPixel.
 
 		float m_LethalRange; //!< After this distance in meters, the MO has a chance to no longer hit MOs, and its Lifetime decreases. Defaults to the length of a player's screen.
-		std::string m_PersistedAtomCheckpoint;
+		CheckpointString m_PersistedAtomCheckpoint;
 		long long m_PersistedAtomResidue = 0; //!< Saved travel residue, applied on snapshot adopt.
 		bool m_HasPersistedAtomResidue = false;
 		float m_PersistedLethalRange = 0.0F; //!< Saved live lethal range, applied on snapshot adopt.

@@ -480,9 +480,8 @@ GUIBitmap* GUIFont::InkColorBitmap(unsigned long Color) {
 }
 
 GUIFont::FontColor* GUIFont::GetFontColor(unsigned long Color) {
-	std::vector<FontColor>::iterator it;
 	FontColor* F = nullptr;
-	for (it = m_ColorCache.begin(); it != m_ColorCache.end(); it++) {
+	for (auto it = m_ColorCache.begin(); it != m_ColorCache.end(); it++) {
 		F = &(*it);
 
 		// Colors match?
@@ -514,9 +513,8 @@ void GUIFont::Destroy() {
 	}
 
 	// Go through the color cache and destroy the bitmaps
-	std::vector<FontColor>::iterator it;
 	FontColor* FC = 0;
-	for (it = m_ColorCache.begin(); it != m_ColorCache.end(); it++) {
+	for (auto it = m_ColorCache.begin(); it != m_ColorCache.end(); it++) {
 		FC = &(*it);
 		if (FC && FC->m_Bitmap) {
 			FC->m_Bitmap->Destroy();

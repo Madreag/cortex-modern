@@ -30,6 +30,11 @@
 namespace luabind { namespace detail
 {
 	class class_rep;
+	struct saved_object_copy {
+		void* owner;
+		void* (*copy)(void*, class_rep*, void*, bool&);
+	};
+	extern LUABIND_API thread_local saved_object_copy saved_objects;
 
 	void finalize(lua_State* L, class_rep* crep);
 

@@ -5,6 +5,7 @@
 
 #include "ScenarioActivityConfigGUI.h"
 #include "MOSParticle.h"
+#include "CheckpointNativeStorage.h"
 
 namespace RTE {
 
@@ -20,7 +21,7 @@ namespace RTE {
 	class GUILabel;
 
 	/// Handling for the scenario menu screen composition and sub-menu interaction.
-	class ScenarioGUI {
+	class ScenarioGUI : public CheckpointNativeAllocated {
 
 	public:
 		/// Enumeration for the results of the ScenarioGUI input and event update.

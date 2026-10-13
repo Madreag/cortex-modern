@@ -18,11 +18,11 @@ namespace RTE {
 		T candidate;
 		return candidate.LoadCheckpoint(text, true);
 	}
-	template <class T> void ReadOwnedCheckpoint(Reader& reader, std::string& pending) {
+	template <class T, class String> void ReadOwnedCheckpoint(Reader& reader, String& pending) {
 		pending = base64_decode(reader.ReadPropValue());
 		if (!ValidateOwnedCheckpoint<T>(pending)) reader.ReportError("invalid owned native checkpoint");
 	}
-	template <class T> void RestoreOwnedCheckpoint(T*& value, std::string& pending) {
+	template <class T, class String> void RestoreOwnedCheckpoint(T*& value, String& pending) {
 		if (pending.empty()) return;
 		if (pending == "none") {
 			delete value;

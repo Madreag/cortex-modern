@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AutosaveValue.h"
+
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -117,19 +119,20 @@ namespace RTE {
 		uint32_t intervalSeconds = 0;
 		/// The agreed configuration, as the peers hashed it, so a restart can reopen this very lobby.
 		/// Empty on a match whose configuration was never published (a local activity).
-		std::string configHash;
-		std::string configPayload;
-		std::vector<std::string> peerNames;
+		AutosaveValue<std::string> configHash;
+		AutosaveValue<std::string> configPayload;
+		AutosaveValue<std::vector<std::string>> peerNames;
 		/// The agreed lockstep state of the tick being captured, read on the sim thread at the boundary.
-		AutosaveSideState sideState;
+		AutosaveValue<AutosaveSideState> sideState;
 		bool savedByHost = false; //!< The capture being taken is one the host asked for by hand.
 		/// The agreed rewind point, read where retention runs rather than where the capture starts, so an
 		/// anchor named while a capture is in flight still protects its archive.
 		std::shared_ptr<const AutosavePinSource> pinnedCheckpointSource;
-		std::string buildId;
-		std::string deterministicConfigHash;
-		std::string moduleManifestHash;
-		std::string sessionIdentityHash;
+		AutosaveValue<std::string> buildId;
+		AutosaveValue<std::string> deterministicConfigHash;
+		AutosaveValue<std::string> moduleManifestHash;
+		AutosaveValue<std::string> sessionIdentityHash;
+		static std::string FreezeSelfTestMismatch();
 	};
 
 	/// One checkpoint as the retention policy sees it: which tick it stands on and whether it still reads.
@@ -191,7 +194,8 @@ namespace RTE {
 
 		/// Whether the archive is restorable: every entry a restore reads is complete, a descriptor of a schema
 		/// we know rides along, and the tick in the name, in the descriptor and in the world all agree.
-		static bool Validate(const std::filesystem::path& path, AutosaveDescriptor& out, std::string* error = nullptr);
+		/// A pending archive validates against its final name before publication.
+		static bool Validate(const std::filesystem::path& path, AutosaveDescriptor& out, std::string* error = nullptr, const std::filesystem::path* publishedPath = nullptr);
 		/// Whether this directory already holds the match's checkpoint at that tick under a higher host generation: a writer of a
 		/// lower one never replaces it.
 		static bool HigherGenerationHolds(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick, uint64_t generation);

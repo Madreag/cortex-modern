@@ -1,9 +1,14 @@
 #include "CheckpointArchive.h"
 #include "CaptureSentinel.h"
 #include "GameActivity.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "SceneObject.h"
 #include "MetricsCollector.h"
 
 #include <chrono>
+#include <array>
 
 #include "CameraMan.h"
 #include "PresetMan.h"
@@ -123,11 +128,121 @@ static void IssueAIOrder(const Actor* actor, NetGameAIOrder::Op op, const Vector
 
 AbstractClassInfo(GameActivity, Activity);
 
+GameActivity::GameActivity(const GameActivity& source, CheckpointNativeSnapshot& snapshot) :
+	Activity(source, snapshot),
+	m_CPUTeam(snapshot.Freeze(source.m_CPUTeam)),
+	m_TeamIsCPU{},
+	m_ObservationTarget{},
+	m_ObserveFreezeHeld{},
+	m_DeathViewTarget{},
+	m_SpectatorTarget{},
+	m_ActorSelectTimer{},
+	m_ActorCursor{},
+	m_pLastMarkedActor{},
+	m_LandingZone{},
+	m_AIReturnCraft{},
+	m_NextMultiOrderYOffset{},
+	m_StrategicModePieMenu{},
+	m_InventoryMenuGUI{},
+	m_pBuyGUI{},
+	m_pEditorGUI{},
+	m_LuaLockActor{},
+	m_LuaLockActorMode{},
+	m_pBannerRed{},
+	m_pBannerYellow{},
+	m_SeatStubBuyGUI{},
+	m_SeatStubEditorGUI{},
+	m_SeatStubBanner{},
+	m_BannerRepeats{},
+	m_ReadyToStart{},
+	m_PurchaseOverride{},
+	m_Deliveries{},
+	m_LandingZoneArea{},
+	m_BrainLZWidth{},
+	m_Objectives(snapshot.Freeze(source.m_Objectives)),
+	m_TeamTech{},
+	m_TeamTechSwitchEnabled{},
+	m_StartingGold(snapshot.Freeze(source.m_StartingGold)),
+	m_FogOfWarEnabled(snapshot.Freeze(source.m_FogOfWarEnabled)),
+	m_RequireClearPathToOrbit(snapshot.Freeze(source.m_RequireClearPathToOrbit)),
+	m_DefaultFogOfWar(snapshot.Freeze(source.m_DefaultFogOfWar)),
+	m_DefaultRequireClearPathToOrbit(snapshot.Freeze(source.m_DefaultRequireClearPathToOrbit)),
+	m_DefaultDeployUnits(snapshot.Freeze(source.m_DefaultDeployUnits)),
+	m_DefaultGoldCakeDifficulty(snapshot.Freeze(source.m_DefaultGoldCakeDifficulty)),
+	m_DefaultGoldEasyDifficulty(snapshot.Freeze(source.m_DefaultGoldEasyDifficulty)),
+	m_DefaultGoldMediumDifficulty(snapshot.Freeze(source.m_DefaultGoldMediumDifficulty)),
+	m_DefaultGoldHardDifficulty(snapshot.Freeze(source.m_DefaultGoldHardDifficulty)),
+	m_DefaultGoldNutsDifficulty(snapshot.Freeze(source.m_DefaultGoldNutsDifficulty)),
+	m_DefaultGoldMaxDifficulty(snapshot.Freeze(source.m_DefaultGoldMaxDifficulty)),
+	m_FogOfWarSwitchEnabled(snapshot.Freeze(source.m_FogOfWarSwitchEnabled)),
+	m_DeployUnitsSwitchEnabled(snapshot.Freeze(source.m_DeployUnitsSwitchEnabled)),
+	m_GoldSwitchEnabled(snapshot.Freeze(source.m_GoldSwitchEnabled)),
+	m_RequireClearPathToOrbitSwitchEnabled(snapshot.Freeze(source.m_RequireClearPathToOrbitSwitchEnabled)),
+	m_BuyMenuEnabled(snapshot.Freeze(source.m_BuyMenuEnabled)),
+	m_aLZCursor{},
+	m_LZCursorWidth(snapshot.Freeze(source.m_LZCursorWidth)),
+	m_aObjCursor{},
+	m_DeliveryDelay(snapshot.Freeze(source.m_DeliveryDelay)),
+	m_CursorTimer(snapshot.Freeze(source.m_CursorTimer)),
+	m_GameTimer(snapshot.Freeze(source.m_GameTimer)),
+	m_GameOverTimer(snapshot.Freeze(source.m_GameOverTimer)),
+	m_GameOverPeriod(snapshot.Freeze(source.m_GameOverPeriod)),
+	m_WinnerTeam(snapshot.Freeze(source.m_WinnerTeam)),
+	m_NetworkPlayerNames{},
+	m_pLastHighlightDrawActor{},
+	m_LockstepPlacementSubmitted(snapshot.Freeze(source.m_LockstepPlacementSubmitted)),
+	m_LockstepSeatBrains(snapshot.Freeze(source.m_LockstepSeatBrains)),
+	m_LockstepPlacementUidBase(snapshot.Freeze(source.m_LockstepPlacementUidBase)),
+	m_LockstepPlacementSeeded(snapshot.Freeze(source.m_LockstepPlacementSeeded)),
+	m_CheckpointMarkedActorIDs(snapshot.Freeze(source.m_CheckpointMarkedActorIDs)),
+	m_FrozenUI(snapshot.Freeze(source.m_FrozenUI)),
+	m_FrozenStrategicMenus(snapshot.Freeze(source.m_FrozenStrategicMenus)),
+	m_HasCheckpointMarkedActorIDs(snapshot.Freeze(source.m_HasCheckpointMarkedActorIDs)) {
+	snapshot.FreezeArray(m_TeamIsCPU, source.m_TeamIsCPU);
+	snapshot.FreezeArray(m_ObservationTarget, source.m_ObservationTarget);
+	snapshot.FreezeArray(m_ObserveFreezeHeld, source.m_ObserveFreezeHeld);
+	snapshot.FreezeArray(m_DeathViewTarget, source.m_DeathViewTarget);
+	snapshot.FreezeArray(m_SpectatorTarget, source.m_SpectatorTarget);
+	snapshot.FreezeArray(m_ActorSelectTimer, source.m_ActorSelectTimer);
+	snapshot.FreezeArray(m_ActorCursor, source.m_ActorCursor);
+	snapshot.FreezeArray(m_pLastMarkedActor, source.m_pLastMarkedActor);
+	snapshot.FreezeArray(m_LandingZone, source.m_LandingZone);
+	snapshot.FreezeArray(m_AIReturnCraft, source.m_AIReturnCraft);
+	snapshot.FreezeArray(m_NextMultiOrderYOffset, source.m_NextMultiOrderYOffset);
+	snapshot.FreezeArray(m_LuaLockActor, source.m_LuaLockActor);
+	snapshot.FreezeArray(m_LuaLockActorMode, source.m_LuaLockActorMode);
+	snapshot.FreezeArray(m_BannerRepeats, source.m_BannerRepeats);
+	snapshot.FreezeArray(m_ReadyToStart, source.m_ReadyToStart);
+	snapshot.FreezeArray(m_PurchaseOverride, source.m_PurchaseOverride);
+	snapshot.FreezeArray(m_Deliveries, source.m_Deliveries);
+	snapshot.FreezeArray(m_LandingZoneArea, source.m_LandingZoneArea);
+	snapshot.FreezeArray(m_BrainLZWidth, source.m_BrainLZWidth);
+	snapshot.FreezeArray(m_TeamTech, source.m_TeamTech);
+	snapshot.FreezeArray(m_TeamTechSwitchEnabled, source.m_TeamTechSwitchEnabled);
+	snapshot.FreezeArray(m_aLZCursor, source.m_aLZCursor);
+	snapshot.FreezeArray(m_aObjCursor, source.m_aObjCursor);
+	snapshot.FreezeArray(m_NetworkPlayerNames, source.m_NetworkPlayerNames);
+	if (CheckpointNativeStorage::Reading()) {
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			m_pBuyGUI[player] = snapshot.ValueObject(source.m_pBuyGUI[player]);
+			m_pEditorGUI[player] = snapshot.ValueObject(source.m_pEditorGUI[player]);
+			m_pBannerRed[player] = snapshot.ValueObject(source.m_pBannerRed[player]);
+			m_pBannerYellow[player] = snapshot.ValueObject(source.m_pBannerYellow[player]);
+			m_SavedStubBuy[player] = snapshot.ValueObject(source.m_SeatStubBuyGUI[player].get());
+			m_SavedStubEditor[player] = snapshot.ValueObject(source.m_SeatStubEditorGUI[player].get());
+			for (size_t color = 0; color < m_SavedStubBanner.size(); ++color)
+				m_SavedStubBanner[color][player] = snapshot.ValueObject(source.m_SeatStubBanner[color][player].get());
+		}
+	}
+	FreezeCheckpointUI(source);
+}
+
 GameActivity::GameActivity() {
 	Clear();
 }
 
 GameActivity::~GameActivity() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -497,12 +612,14 @@ void GameActivity::PrepareCheckpointCapture() const {
 BuyMenuGUI* GameActivity::GetBuyGUI(unsigned int which) const {
 	if (which >= Players::MaxPlayerCount) return nullptr;
 	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
+	if (IsFrozenCheckpointNative() && !(presented && m_pBuyGUI[which]) && m_SavedStubBuy[which]) return m_SavedStubBuy[which];
 	return presented && m_pBuyGUI[which] ? m_pBuyGUI[which] : SeatStub(m_SeatStubBuyGUI[which]);
 }
 
 SceneEditorGUI* GameActivity::GetEditorGUI(unsigned int which) const {
 	if (which >= Players::MaxPlayerCount) return nullptr;
 	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
+	if (IsFrozenCheckpointNative() && !(presented && m_pEditorGUI[which]) && m_SavedStubEditor[which]) return m_SavedStubEditor[which];
 	return presented && m_pEditorGUI[which] ? m_pEditorGUI[which] : SeatStub(m_SeatStubEditorGUI[which]);
 }
 
@@ -510,6 +627,8 @@ GUIBanner* GameActivity::GetBanner(int whichColor, int player) const {
 	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return nullptr;
 	GUIBanner* const live = whichColor == YELLOW ? m_pBannerYellow[player] : m_pBannerRed[player];
 	const bool presented = LocalInputOfPlayer(player) != Players::NoPlayer;
+	if (IsFrozenCheckpointNative() && !(presented && live) && m_SavedStubBanner[whichColor == YELLOW ? YELLOW : RED][player])
+		return m_SavedStubBanner[whichColor == YELLOW ? YELLOW : RED][player];
 	return presented && live ? live : SeatStub(m_SeatStubBanner[whichColor == YELLOW ? YELLOW : RED][player]);
 }
 
@@ -605,7 +724,7 @@ int GameActivity::AddOverridePurchase(const SceneObject* pPurchase, int player) 
 
 		// Calculate the total list cost for this player
 		int totalListCost = 0;
-		for (std::list<const SceneObject*>::iterator itr = m_PurchaseOverride[player].begin(); itr != m_PurchaseOverride[player].end(); ++itr)
+		for (CheckpointList<const SceneObject*>::iterator itr = m_PurchaseOverride[player].begin(); itr != m_PurchaseOverride[player].end(); ++itr)
 			totalListCost += (*itr)->GetGoldValue(nativeModule, foreignCostMult, nativeCostMult);
 
 		return totalListCost;
@@ -648,8 +767,8 @@ int GameActivity::SetOverridePurchaseList(const Loadout* pLoadout, int player) {
 	finalListCost = AddOverridePurchase(pCraftPreset, player);
 
 	// Add the rest of the cargo list
-	std::list<const SceneObject*>* pCargoList = const_cast<Loadout*>(pLoadout)->GetCargoList();
-	for (std::list<const SceneObject*>::iterator itr = pCargoList->begin(); itr != pCargoList->end(); ++itr)
+	CheckpointList<const SceneObject*>* pCargoList = const_cast<Loadout*>(pLoadout)->GetCargoList();
+	for (CheckpointList<const SceneObject*>::iterator itr = pCargoList->begin(); itr != pCargoList->end(); ++itr)
 		finalListCost = AddOverridePurchase(*itr, player);
 
 	return finalListCost;
@@ -686,12 +805,12 @@ bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor*
 
 	// Prepare the Craft, stuff everything into it and add it to the queue
 	// Retrieve the ordered craft and its inventory
-	std::list<const SceneObject*> purchaseList;
+	CheckpointList<const SceneObject*> purchaseList;
 
 	const ACraft* pCraftPreset = nullptr;
 	// If we have a list to purchase that overrides the buy GUI, then use it and clear it
 	if (!m_PurchaseOverride[player].empty()) {
-		for (std::list<const SceneObject*>::iterator itr = m_PurchaseOverride[player].begin(); itr != m_PurchaseOverride[player].end(); ++itr) {
+		for (CheckpointList<const SceneObject*>::iterator itr = m_PurchaseOverride[player].begin(); itr != m_PurchaseOverride[player].end(); ++itr) {
 			// Find the first craft to use as the delivery craft
 			const ACraft* pCraft = dynamic_cast<const ACraft*>(*itr);
 			if (!pCraftPreset && pCraft)
@@ -739,7 +858,7 @@ bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor*
 
 	// Tally the ordered items and keep the ones actually purchasable
 	std::list<const SceneObject*> boughtList;
-	for (std::list<const SceneObject*>::iterator itr = purchaseList.begin(); itr != purchaseList.end(); ++itr) {
+	for (CheckpointList<const SceneObject*>::iterator itr = purchaseList.begin(); itr != purchaseList.end(); ++itr) {
 		bool purchaseItem = true;
 
 		// Add to the total cost tally
@@ -830,7 +949,7 @@ bool GameActivity::QueuePurchaseDelivery(ACraft* pDeliveryCraft, const PurchaseO
 	Actor* pPassenger = nullptr;
 	Actor* pLastPassenger = nullptr;
 
-	for (std::list<const SceneObject*>::const_iterator itr = order.purchases.begin(); itr != order.purchases.end(); ++itr) {
+	for (auto itr = order.purchases.begin(); itr != order.purchases.end(); ++itr) {
 		// Make copy of the preset instance in the list
 		pInventoryObject = dynamic_cast<MovableObject*>((*itr)->Clone());
 
@@ -1621,7 +1740,7 @@ void GameActivity::DriveScriptedActorSelect(int player) {
 	}
 	ACraft* craft = nullptr;
 	Actor* passenger = nullptr;
-	std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(m_Team[player]);
+	auto* roster = g_MovableMan.GetTeamRoster(m_Team[player]);
 	if (roster) {
 		for (Actor* actor: *roster) {
 			auto* candidate = dynamic_cast<ACraft*>(actor);
@@ -2216,7 +2335,7 @@ static Actor* NextSpectatorActor(const Actor* current, bool forward) {
 	bool seenCurrent = false;
 
 	for (int team = Activity::Teams::TeamOne; team < Activity::Teams::MaxTeamCount; ++team) {
-		const std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(team);
+		const auto* roster = g_MovableMan.GetTeamRoster(team);
 		if (!roster) {
 			continue;
 		}
@@ -3809,7 +3928,9 @@ std::string GameActivity::SaveValueCheckpoint() const {
 	// them in the same order.
 	std::vector<CheckpointText> menus;
 	std::optional<ParallelWork> menuWork;
-	if (CheckpointWriter::IsCapturing() && !CaptureTrace::Serial()) {
+	if (IsFrozenCheckpointNative()) {
+		for (const auto& player: m_FrozenUI) menus.insert(menus.end(), player.begin(), player.end());
+	} else if (CheckpointWriter::IsCapturing() && !CaptureTrace::Serial()) {
 		menus.resize(Players::MaxPlayerCount * c_MenuParts);
 		AudioMan::SoundCheckpointSaveScope* const sounds = AudioMan::SoundCheckpointSaveScope::Current();
 		menuWork.emplace(g_ThreadMan.GetPriorityThreadPool(), menus.size(), [&menus, &menu, sounds, task = CaptureSentinel::CurrentTask()](size_t index) {
@@ -3943,7 +4064,7 @@ std::string GameActivity::SaveCheckpoint() const {
         writer(m_pLastMarkedActor[player] ? m_pLastMarkedActor[player]->GetUniqueID() : 0);
         writer(m_PurchaseOverride[player].size());
         for (const SceneObject* preset: m_PurchaseOverride[player]) writer(preset->GetClassName(), preset->GetPresetName(), preset->GetModuleName());
-        writer(SaveActivityOwnedEntity(m_StrategicModePieMenu[player].get()));
+        writer(IsFrozenCheckpointNative() ? m_FrozenStrategicMenus[player] : SaveActivityOwnedEntity(m_StrategicModePieMenu[player].get()));
     }
     span.emplace("activity_deliveries");
     for (int team = 0; team < Teams::MaxTeamCount; ++team) {
@@ -3956,6 +4077,72 @@ std::string GameActivity::SaveCheckpoint() const {
     return writer.Text();
 }
 
+GameActivity::SeatBrain::SeatBrain(const NetGamePlaceBrain& placement) :
+    team(placement.team), player(placement.player), posX(placement.posX), posY(placement.posY), className(placement.className), preset(placement.preset),
+    module(placement.module), hFlipped(placement.hFlipped) {
+	addedInventory.reserve(placement.addedInventory.size());
+	for (const auto& [itemClass, itemPreset, itemModule]: placement.addedInventory) addedInventory.push_back({itemClass, itemPreset, itemModule});
+}
+
+GameActivity::SeatBrain::operator NetGamePlaceBrain() const {
+	NetGamePlaceBrain placement;
+	placement.team = team; placement.player = player; placement.posX = posX; placement.posY = posY;
+	placement.className = className.Value(); placement.preset = preset.Value(); placement.module = module.Value(); placement.hFlipped = hFlipped;
+	placement.addedInventory.reserve(addedInventory.size());
+	for (const auto& item: addedInventory) placement.addedInventory.push_back({item[0].Value(), item[1].Value(), item[2].Value()});
+	return placement;
+}
+
+GameActivity::SeatBrain GameActivity::SeatBrain::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	SeatBrain brain;
+	brain.team = team; brain.player = player; brain.posX = posX; brain.posY = posY;
+	brain.className = className; brain.preset = preset; brain.module = module; brain.hFlipped = hFlipped;
+	brain.addedInventory = snapshot.Freeze(addedInventory);
+	return brain;
+}
+
+GameActivity::Delivery GameActivity::Delivery::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	return {snapshot.Object(pCraft), orderedByPlayer, landingZone, multiOrderYOffset,
+		delay, Timer(timer, snapshot)};
+}
+
+void GameActivity::Delivery::AssignCheckpointNative(const Delivery& source, CheckpointNativeSnapshot& snapshot) {
+	pCraft = snapshot.Object(source.pCraft);
+	orderedByPlayer = source.orderedByPlayer; landingZone = source.landingZone;
+	multiOrderYOffset = source.multiOrderYOffset; delay = source.delay;
+	timer.AssignCheckpointNative(source.timer, snapshot);
+}
+
+void GameActivity::FreezeCheckpointUI(const GameActivity& source) {
+	if (source.IsFrozenCheckpointNative()) return;
+	const auto freeze = [this, &source](size_t item) {
+		const int player = static_cast<int>(item / 6);
+		switch (item % 6) {
+			case 0: m_FrozenUI[player][0] = CheckpointWriter::CaptureNative([&] { return source.m_pBuyGUI[player] ? source.m_pBuyGUI[player]->SaveCheckpoint() : std::string(); }); break;
+			case 1: m_FrozenUI[player][1] = CheckpointWriter::CaptureNative([&] { return source.m_pEditorGUI[player] ? source.m_pEditorGUI[player]->SaveCheckpoint() : std::string(); }); break;
+			case 2: m_FrozenUI[player][2] = CheckpointWriter::CaptureNative([&] { return source.m_InventoryMenuGUI[player] ? source.m_InventoryMenuGUI[player]->SaveCheckpoint() : std::string(); }); break;
+			case 3: m_FrozenUI[player][3] = CheckpointWriter::CaptureNative([&] { return source.m_pBannerRed[player] ? source.m_pBannerRed[player]->SaveCheckpoint() : std::string(); }); break;
+			case 4: m_FrozenUI[player][4] = CheckpointWriter::CaptureNative([&] { return source.m_pBannerYellow[player] ? source.m_pBannerYellow[player]->SaveCheckpoint() : std::string(); }); break;
+			default: m_FrozenStrategicMenus[player] = SaveActivityOwnedEntity(source.m_StrategicModePieMenu[player].get());
+		}
+	};
+	constexpr size_t items = static_cast<size_t>(Players::MaxPlayerCount) * 6;
+	// Each player's menus are frozen apart from the others, side by side unless an armed injected failure counts here.
+	if (CaptureTrace::Serial() || CheckpointFailure::Current() != CheckpointFailure::Point::None) {
+		for (size_t item = 0; item < items; ++item) freeze(item);
+		return;
+	}
+	const std::shared_ptr<CheckpointNativeSnapshot> boundary = CheckpointNativeSnapshot::Boundary();
+	const auto views = CheckpointNativeStorage::CurrentViews();
+	const char* task = CaptureSentinel::CurrentTask();
+	ParallelWork(g_ThreadMan.GetPriorityThreadPool(), items, [&freeze, &boundary, views, task](size_t item) {
+		CheckpointNativeStorage::ReadScope read(views);
+		CaptureSentinel::WorkerScope worker(task ? task : "activity-ui-freeze");
+		CheckpointNativeSnapshot::BoundaryScope boundaryScope(boundary);
+		freeze(item);
+	}).Finish();
+}
+
 bool GameActivity::LoadCheckpoint(std::string_view text, bool validateOnly) {
     if (text.starts_with("13 GameActivity4 ")) return LoadValueCheckpoint(text, validateOnly);
     try {
@@ -3964,7 +4151,7 @@ bool GameActivity::LoadCheckpoint(std::string_view text, bool validateOnly) {
         reader.Value(values);
         if (!LoadValueCheckpoint(values, true)) return false;
         std::array<long, Players::MaxPlayerCount> marked{};
-        std::array<std::list<const SceneObject*>, Players::MaxPlayerCount> purchases;
+        std::array<CheckpointList<const SceneObject*>, Players::MaxPlayerCount> purchases;
         std::array<std::string, Players::MaxPlayerCount> menus;
         struct SavedDelivery { Delivery metadata{}; std::string native; std::unique_ptr<ACraft> craft; };
         std::array<std::vector<SavedDelivery>, Teams::MaxTeamCount> deliveries;
@@ -4088,17 +4275,18 @@ bool GameActivity::ResolveCheckpointReferences() {
 }
 
 void GameActivity::VisitCheckpointOwnedObjects(const std::function<void(const Entity*)>& visit) const {
-    for (const auto& queue: m_Deliveries) for (const Delivery& delivery: queue) visit(delivery.pCraft);
+    for (const auto& queue: m_Deliveries) for (const Delivery& delivery: CheckpointValues(queue)) visit(delivery.pCraft);
     for (const SceneEditorGUI* editor: m_pEditorGUI) if (editor) {
+        editor = CheckpointNativeStorage::Source(editor);
         visit(editor->GetCurrentObject());
-        for (const auto& owner: editor->GetCheckpointRetainedOwners()) visit(owner.get());
+        for (const auto& owner: CheckpointValues(editor->GetCheckpointRetainedOwners())) visit(owner.get());
     }
 }
 
 // A delivery queue is sim state, so every peer's activity owns the same crafts and cargo; a seat's
 // setup editor holds objects only its own peer ever had, and those stay out.
 void GameActivity::VisitCheckpointSharedObjects(const std::function<void(const Entity*)>& visit) const {
-    for (const auto& queue: m_Deliveries) for (const Delivery& delivery: queue) visit(delivery.pCraft);
+    for (const auto& queue: m_Deliveries) for (const Delivery& delivery: CheckpointValues(queue)) visit(delivery.pCraft);
 }
 
 bool GameActivity::RunDeliveryReferenceSelfTest() {
@@ -4223,7 +4411,7 @@ bool GameActivity::LoadNetLocalGameState(std::string_view text) {
 		struct Slot {
 			int64_t marked = 0;
 			std::string buy, editor, inventory, red, yellow, strategic;
-			std::list<const SceneObject*> purchases;
+			CheckpointList<const SceneObject*> purchases;
 		};
 		std::array<Slot, Players::MaxPlayerCount> slots;
 		for (auto& slot: slots) {
@@ -4386,7 +4574,7 @@ bool GameActivity::RunNetInventoryRelaunchProbe(std::string_view phase) {
 			auto* collected = static_cast<Actor*>(brainPreset->Clone());
 			ordinary->SetTeam(index); collected->SetTeam(index);
 			craft->AddInventoryItem(ordinary);
-			const_cast<std::deque<MovableObject*>&>(craft->GetCollectedInventory()).push_back(collected);
+			const_cast<CheckpointDeque<MovableObject*>&>(craft->GetCollectedInventory()).push_back(collected);
 			state.carriers[index] = uid(craft);
 			state.ordinary[index] = uid(ordinary);
 			state.collected[index] = uid(collected);
@@ -4842,7 +5030,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		soldier->AddToInventoryBack(shield);
 		check("fixture_rifle_is_not_an_off_hand_device", !rifle->IsShield() && !rifle->IsDualWieldable() && (shield->IsShield() || shield->IsDualWieldable()));
 		check("off_hand_change_reports_equipped", soldier->EquipShieldInBGArm(true));
-		const std::deque<MovableObject*>& inventory = *soldier->GetInventory();
+		const auto& inventory = *soldier->GetInventory();
 		const bool shieldInInventory = std::find(inventory.begin(), inventory.end(), shield) != inventory.end();
 		const bool grenadeInInventory = std::find(inventory.begin(), inventory.end(), grenade) != inventory.end();
 		check("off_hand_holds_the_shield", soldier->GetBGArm()->GetHeldDevice() == shield);
@@ -5052,7 +5240,7 @@ bool GameActivity::RunSetupEditorSelfTest(bool confirmOnly) {
 	game->m_LockstepSeatBrains[0] = equippedBrain;
 	const auto checkpoint = game->SaveValueCheckpoint();
 	game->m_LockstepSeatBrains[0] = {};
-	check("brain_equipment_checkpoint_roundtrip", game->LoadValueCheckpoint(checkpoint) && game->m_LockstepSeatBrains[0] == equippedBrain);
+	check("brain_equipment_checkpoint_roundtrip", game->LoadValueCheckpoint(checkpoint) && static_cast<NetGamePlaceBrain>(game->m_LockstepSeatBrains[0]) == equippedBrain);
 	game->m_LockstepSeatBrains[0] = {};
 	const auto purchase = std::get<NetGameEditorPlacement>(commands.front().payload);
 	const long base = game->m_LockstepPlacementUidBase, localCounter = MovableObject::GetUniqueIDCounter();

@@ -1,6 +1,11 @@
 #include "AudioMan.h"
+#include "CheckpointNativeSnapshot.h"
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <limits>
+#include <map>
+#include <memory>
 #include "SoundSimulation.h"
 #include "CheckpointArchive.h"
 #include "AudioCheckpoint.h"
@@ -37,6 +42,7 @@
 
 #include <iostream>
 #include <format>
+#include <future>
 #include <string_view>
 
 #include <algorithm>
@@ -57,6 +63,15 @@ using namespace RTE;
 
 namespace {
 	void ClearPendingAudioArchives();
+	struct SavedSoundOperations {
+		std::unordered_map<uint64_t, SoundContainer*> pending;
+		std::unordered_set<SoundContainer*> logical;
+	};
+	SavedSoundOperations& SavedSoundOps(const AudioMan* owner) {
+		static const char kind{};
+		const auto operations = CheckpointNativeStorage::ReadIndex(CheckpointNativeStorage::Original(owner), &kind, [] { return std::make_shared<SavedSoundOperations>(); });
+		return *const_cast<SavedSoundOperations*>(static_cast<const SavedSoundOperations*>(operations.get()));
+	}
 
 	// A headless run plays to nobody, so its FMOD threads need not outrank the desktop.
 	bool HeadlessAudioThreadsAtNormalPriority(const char* headless) {
@@ -164,6 +179,7 @@ void AudioMan::Clear() {
 	m_CommittedAudibility.clear();
 	m_LastSentAudibility.clear();
 	m_AudioEnabled = false;
+	m_CheckpointBackend.reset();
 	m_PlayingVoices.clear();
 	ClearPendingAudioArchives();
 	m_BackendVoiceIdentities.clear();
@@ -360,9 +376,10 @@ void AudioMan::Update() {
 		FMOD_RESULT status = FMOD_OK;
 
 		if (m_MuteAudioOnFocusLoss && !g_WindowMan.AnyWindowHasFocus()) {
-			m_MasterChannelGroup->setMute(true);
+			if (m_MasterChannelGroup->setMute(true) == FMOD_OK) if (auto* values = CheckpointGroup(0)) values->muted = true;
 		} else {
-			m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced);
+			if (m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced) == FMOD_OK)
+				if (auto* values = CheckpointGroup(0)) values->muted = m_MuteMaster || m_OutputSilenced;
 		}
 
 		float globalPitch = 1.0F;
@@ -380,6 +397,7 @@ void AudioMan::Update() {
 
 			if (m_CurrentActivityHumanPlayerPositions.size() != currentActivityHumanCount) {
 				status = status == FMOD_OK ? m_AudioSystem->set3DNumListeners(currentActivityHumanCount) : status;
+				if (status == FMOD_OK && m_CheckpointBackend && CheckpointNativeStorage::WorldEnabled()) m_CheckpointBackend->listenerCount = currentActivityHumanCount;
 			}
 
 			m_CurrentActivityHumanPlayerPositions.clear();
@@ -399,6 +417,7 @@ void AudioMan::Update() {
 				if (status == FMOD_OK) {
 					FMOD_VECTOR playerPosition = GetAsFMODVector(*(humanPlayerPosition.get()), m_ListenerZOffset);
 					status = m_AudioSystem->set3DListenerAttributes(listenerNumber, &playerPosition, nullptr, &c_FMODForward, &c_FMODUp);
+					if (status == FMOD_OK) RecordCheckpointListener(listenerNumber, playerPosition, nullptr, c_FMODForward, c_FMODUp);
 				}
 				listenerNumber++;
 			}
@@ -408,10 +427,12 @@ void AudioMan::Update() {
 			if (!m_CurrentActivityHumanPlayerPositions.empty()) {
 				m_CurrentActivityHumanPlayerPositions.clear();
 				status = status == FMOD_OK ? m_AudioSystem->set3DNumListeners(1) : status;
+				if (status == FMOD_OK && m_CheckpointBackend && CheckpointNativeStorage::WorldEnabled()) m_CheckpointBackend->listenerCount = 1;
 			}
 			if (status == FMOD_OK) {
 				FMOD_VECTOR scrollTarget = GetAsFMODVector(g_CameraMan.GetScrollTarget(), m_ListenerZOffset);
 				status = m_AudioSystem->set3DListenerAttributes(0, &scrollTarget, nullptr, &c_FMODForward, &c_FMODUp);
+				if (status == FMOD_OK) RecordCheckpointListener(0, scrollTarget, nullptr, c_FMODForward, c_FMODUp);
 			}
 		}
 
@@ -420,6 +441,17 @@ void AudioMan::Update() {
 			g_ConsoleMan.PrintString("ERROR: Could not update AudioMan due to FMOD error: " + std::string(FMOD_ErrorString(status)));
 		}
 	}
+}
+
+bool AudioMan::IsMusicPlaying() const {
+	if (CheckpointNativeStorage::Reading()) {
+		const auto* source = CheckpointNativeStorage::Source(this);
+		if (!source->m_AudioEnabled) return false;
+		bool playing = false;
+		return source->ReadCheckpointPlayback(0)->isPlaying(&playing) == FMOD_OK && playing;
+	}
+	bool isPlayingMusic;
+	return m_AudioEnabled && m_MusicChannelGroup->isPlaying(&isPlayingMusic) == FMOD_OK ? isPlayingMusic : false;
 }
 
 void AudioMan::SetGlobalPitch(float pitch, bool includeImmobileSounds, bool includeMusic) {
@@ -432,14 +464,17 @@ void AudioMan::SetGlobalPitch(float pitch, bool includeImmobileSounds, bool incl
 
 	m_GlobalPitch = std::clamp(pitch, 0.125F, 8.0F);
 
-	m_SFXChannelGroup->setPitch(m_GlobalPitch);
+	if (CheckpointNativeStorage::Reading() || m_SFXChannelGroup->setPitch(m_GlobalPitch) == FMOD_OK)
+		if (auto* values = CheckpointGroup(1)) values->pitch = m_GlobalPitch;
 
 	if (includeImmobileSounds) {
-		m_UIChannelGroup->setPitch(m_GlobalPitch);
+		if (CheckpointNativeStorage::Reading() || m_UIChannelGroup->setPitch(m_GlobalPitch) == FMOD_OK)
+			if (auto* values = CheckpointGroup(2)) values->pitch = m_GlobalPitch;
 	}
 
 	if (includeMusic) {
-		m_MusicChannelGroup->setPitch(m_GlobalPitch);
+		if (CheckpointNativeStorage::Reading() || m_MusicChannelGroup->setPitch(m_GlobalPitch) == FMOD_OK)
+			if (auto* values = CheckpointGroup(3)) values->pitch = m_GlobalPitch;
 	}
 }
 
@@ -449,7 +484,8 @@ bool AudioMan::SetMusicPitch(float pitch) {
 	}
 
 	pitch = Limit(pitch, 8, 0.125); // Limit pitch change to 8 octaves up or down
-	FMOD_RESULT result = m_MusicChannelGroup->setPitch(pitch);
+	FMOD_RESULT result = CheckpointNativeStorage::Reading() ? FMOD_OK : m_MusicChannelGroup->setPitch(pitch);
+	if (result == FMOD_OK) if (auto* values = CheckpointGroup(3)) values->pitch = pitch;
 
 	if (result != FMOD_OK) {
 		g_ConsoleMan.PrintString("ERROR: Could not set music pitch: " + std::string(FMOD_ErrorString(result)));
@@ -840,7 +876,7 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsPosition(const SoundContainer*
 	FMOD::Channel* soundChannel;
 	FMOD::Sound* sound;
 
-	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
+	const CheckpointUnorderedSet<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
 		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		result = GetVoiceChannel(channelIndex, &soundChannel);
@@ -858,6 +894,19 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsPosition(const SoundContainer*
 }
 
 float AudioMan::GetSoundContainerAudibleVolume(const SoundContainer* soundContainer) {
+	if (CheckpointNativeStorage::Reading()) {
+		const auto* source = CheckpointNativeStorage::Source(this);
+		if (!source->m_AudioEnabled || !soundContainer) return 0;
+		for (int identity: CheckpointValues(*soundContainer->GetPlayingChannels())) {
+			for (const auto& [savedIdentity, voice]: CheckpointValues(source->m_PlayingVoices)) {
+				if (savedIdentity != identity || CheckpointNativeStorage::Original(voice.owner) != CheckpointNativeStorage::Original(soundContainer) ||
+				    (SoundSimulationScope::Domain() == SoundExecutionDomain::SharedSimulation && voice.domain != SoundExecutionDomain::SharedSimulation)) continue;
+				float volume;
+				if (auto* channel = source->ReadCheckpointPlayback(identity); channel && channel->getAudibility(&volume) == FMOD_OK) return volume;
+			}
+		}
+		return 0;
+	}
 	if (!m_AudioEnabled || !soundContainer || !soundContainer->IsBeingPlayed()) {
 		return 0.0F;
 	}
@@ -866,7 +915,7 @@ float AudioMan::GetSoundContainerAudibleVolume(const SoundContainer* soundContai
 	FMOD::Channel* soundChannel;
 	float audibleVolume;
 
-	const std::unordered_set<int> channels = *soundContainer->GetPlayingChannels();
+	const CheckpointUnorderedSet<int> channels = *soundContainer->GetPlayingChannels();
 	for (int channel: channels) {
 		if (!VoiceMatchesContext(channel, soundContainer)) continue;
 		result = GetVoiceChannel(channel, &soundChannel);
@@ -896,7 +945,7 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsVolume(const SoundContainer* s
 	float soundContainerOldVolume = soundContainer->GetVolume() == 0 ? 1.0F : soundContainer->GetVolume();
 	float soundChannelCurrentVolume;
 
-	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
+	const CheckpointUnorderedSet<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
 		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		result = GetVoiceChannel(channelIndex, &soundChannel);
@@ -928,7 +977,7 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsPitch(const SoundContainer* so
 	FMOD_RESULT result = FMOD_OK;
 	FMOD::Channel* soundChannel;
 
-	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
+	const CheckpointUnorderedSet<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
 		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		if (const auto found = m_PlayingVoices.find(channelIndex); found != m_PlayingVoices.end() && found->second.hasLifetime) {
@@ -956,7 +1005,7 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsCustomPanValue(const SoundCont
 	FMOD_RESULT result = FMOD_OK;
 	FMOD::Channel* soundChannel;
 
-	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
+	const CheckpointUnorderedSet<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
 		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		result = GetVoiceChannel(channelIndex, &soundChannel);
@@ -985,8 +1034,8 @@ bool AudioMan::StopSoundContainerPlayingChannels(SoundContainer* soundContainer,
 	FMOD_RESULT result = FMOD_OK;
 	FMOD::Channel* soundChannel;
 
-	const std::unordered_set<int>* channels = soundContainer->GetPlayingChannels();
-	for (std::unordered_set<int>::const_iterator channelIterator = channels->begin(); channelIterator != channels->end();) {
+	const CheckpointUnorderedSet<int>* channels = soundContainer->GetPlayingChannels();
+	for (CheckpointUnorderedSet<int>::const_iterator channelIterator = channels->begin(); channelIterator != channels->end();) {
 		const int identity = *channelIterator;
 		++channelIterator; // NOTE - stopping the sound will remove the channel, screwing things up if we don't move to the next iterator preemptively
 		if (!VoiceMatchesContext(identity, soundContainer)) continue;
@@ -1038,7 +1087,7 @@ void AudioMan::FadeOutSoundContainerPlayingChannels(SoundContainer* soundContain
 	unsigned long long parentClock;
 	float currentVolume;
 
-	const std::unordered_set<int> channels = *soundContainer->GetPlayingChannels();
+	const CheckpointUnorderedSet<int> channels = *soundContainer->GetPlayingChannels();
 	for (int channel: channels) {
 		if (!VoiceMatchesContext(channel, soundContainer)) continue;
 		result = GetVoiceChannel(channel, &soundChannel);
@@ -1058,7 +1107,7 @@ void AudioMan::SetPausedSoundContainerPlayingChannels(SoundContainer* soundConta
 	FMOD_RESULT result = FMOD_OK;
 	FMOD::Channel* soundChannel;
 
-	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
+	const CheckpointUnorderedSet<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
 		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		if (const auto found = m_PlayingVoices.find(channelIndex); found != m_PlayingVoices.end() && found->second.hasLifetime) {
@@ -1236,15 +1285,21 @@ FMOD_RESULT F_CALLBACK AudioMan::SoundChannelEndedCallback(FMOD_CHANNELCONTROL* 
 FMOD_RESULT AudioMan::SetMusicMuffledState(bool musicMuffledState) {
 	FMOD_RESULT status = FMOD_OK;
 	if (musicMuffledState != m_MusicMuffled) {
-		FMOD::DSP* dsp_multibandeq;
-		status = (status == FMOD_OK) ? m_MusicChannelGroup->getDSP(0, &dsp_multibandeq) : status;
 		float frequency = 22000.0F;
 
 		if (musicMuffledState) {
 			frequency = 1000.0F;
 		}
 
-		status = (status == FMOD_OK) ? dsp_multibandeq->setParameterFloat(1, frequency) : status;
+		if (!CheckpointNativeStorage::Reading()) {
+			FMOD::DSP* dsp_multibandeq;
+			status = m_MusicChannelGroup->getDSP(0, &dsp_multibandeq);
+			status = status == FMOD_OK ? dsp_multibandeq->setParameterFloat(1, frequency) : status;
+		}
+		if (status == FMOD_OK) if (auto* values = CheckpointGroup(3)) {
+			for (auto& effect: values->effects) if (effect.index == 0 && effect.type == FMOD_DSP_TYPE_MULTIBAND_EQ)
+				for (auto& parameter: effect.parameters) if (parameter.index == 1) parameter.number = frequency;
+		}
 		m_MusicMuffled = musicMuffledState;
 	}
 	return status;
@@ -1260,93 +1315,444 @@ Vector AudioMan::GetAsVector(FMOD_VECTOR fmodVector) const {
 	return sceneDimensions.IsZero() ? Vector() : Vector(fmodVector.x, sceneDimensions.m_Y - fmodVector.y);
 }
 
+namespace {
+	template<class Target, class Source> Target CopySoundRegistry(const Source& source) {
+		if constexpr (std::is_same_v<Target, Source>) if (!CheckpointNativeStorage::IsView(&source)) return source;
+		Target result;
+		for (const auto& [identity, owners]: CheckpointValues(source)) {
+			const auto values = CheckpointValues(owners);
+			result[identity].assign(values.begin(), values.end());
+		}
+		return result;
+	}
+	template<class Target, class Source> Target CopySoundHash(const Source& source) {
+		if constexpr (std::is_same_v<Target, Source>) if (!CheckpointNativeStorage::IsView(&source)) return source;
+		Target result(source.bucket_count(), source.hash_function(), source.key_eq());
+		result.max_load_factor(source.max_load_factor());
+		if constexpr (requires { typename Target::mapped_type; }) {
+			std::vector<std::pair<typename Target::key_type, typename Target::mapped_type>> values;
+			values.reserve(source.size());
+			for (const auto& value: CheckpointValues(source)) values.emplace_back(value.first, value.second);
+			for (auto item = values.rbegin(); item != values.rend(); ++item) result.emplace(item->first, item->second);
+		} else {
+			std::vector<typename Target::key_type> values;
+			values.reserve(source.size());
+			for (const auto& value: CheckpointValues(source)) values.push_back(value);
+			for (auto item = values.rbegin(); item != values.rend(); ++item) result.insert(*item);
+		}
+		return result;
+	}
+	template<class Target> void ReplaceRegistry(Target& target, CheckpointSoundRegistry& source) {
+		if constexpr (std::is_same_v<Target, CheckpointSoundRegistry>) target.swap(source);
+		else { auto prepared = CopySoundRegistry<Target>(source); target.swap(prepared); }
+	}
+	template<class Target> void ReplaceRegistrySet(Target& target, std::unordered_set<uint64_t> source) {
+		if constexpr (std::is_same_v<Target, decltype(source)>) target = std::move(source);
+		else { auto prepared = CopySoundHash<Target>(source); target.swap(prepared); }
+	}
+}
+
+template<template<class> class Allocator>
+template<template<class> class Other>
+void AudioMan::CheckpointRegistryState<Allocator>::Assign(const CheckpointRegistryState<Other>& source) {
+	m_CheckpointSoundContainers = CopySoundRegistry<decltype(m_CheckpointSoundContainers)>(source.m_CheckpointSoundContainers);
+	m_LiveCheckpointSoundContainers = CopySoundHash<decltype(m_LiveCheckpointSoundContainers)>(source.m_LiveCheckpointSoundContainers);
+	m_RestoredSoundContainers = CopySoundRegistry<decltype(m_RestoredSoundContainers)>(source.m_RestoredSoundContainers);
+	m_RestoredManagerIdentities = CopySoundHash<decltype(m_RestoredManagerIdentities)>(source.m_RestoredManagerIdentities);
+	m_LastCarriedSoundIdentities = CopySoundHash<decltype(m_LastCarriedSoundIdentities)>(source.m_LastCarriedSoundIdentities);
+	m_RestoredSoundRegistryActive = source.m_RestoredSoundRegistryActive;
+	m_RestoredSoundRegistryRecording = source.m_RestoredSoundRegistryRecording;
+	m_NextSoundContainerIdentity = source.m_NextSoundContainerIdentity;
+	if (!CheckpointNativeStorage::IsView(&source)) m_RegistryScopes.assign(source.m_RegistryScopes.begin(), source.m_RegistryScopes.end());
+}
+
+template<template<class> class Allocator>
+AudioMan::CheckpointRegistryState<Allocator>::CheckpointRegistryState(const CheckpointRegistryState& source) { Assign(source); }
+
+template<template<class> class Allocator>
+template<template<class> class Other>
+AudioMan::CheckpointRegistryState<Allocator>::CheckpointRegistryState(const CheckpointRegistryState<Other>& source) { Assign(source); }
+
+void AudioMan::PrepareCheckpointRegistryValues() {
+	if (!CheckpointNativeStorage::Enabled()) return;
+	auto lock = RegistryLock();
+	if (m_OwnedCheckpointRegistry) return;
+	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	auto prepared = std::make_unique<CheckpointRegistryState<CheckpointNativeAllocator>>(m_OrdinaryCheckpointRegistry);
+	std::vector<std::unique_ptr<OwnedCheckpointSoundRegistry>> backups;
+	backups.reserve(m_OrdinaryCheckpointRegistry.m_RegistryScopes.size());
+	for (const auto* scope: m_OrdinaryCheckpointRegistry.m_RegistryScopes) {
+		backups.push_back(std::make_unique<OwnedCheckpointSoundRegistry>(CopySoundRegistry<OwnedCheckpointSoundRegistry>(
+			scope->m_Original ? *scope->m_Original : m_OrdinaryCheckpointRegistry.m_CheckpointSoundContainers)));
+	}
+	m_OwnedCheckpointRegistry = std::move(prepared);
+	for (size_t index = 0; index < backups.size(); ++index) m_OrdinaryCheckpointRegistry.m_RegistryScopes[index]->m_OwnedOriginal = std::move(backups[index]);
+	m_OrdinaryCheckpointRegistry.m_RegistryScopes.clear();
+	m_OrdinaryCheckpointRegistry.m_CheckpointSoundContainers.clear();
+	m_OrdinaryCheckpointRegistry.m_LiveCheckpointSoundContainers.clear();
+	m_OrdinaryCheckpointRegistry.m_RestoredSoundContainers.clear();
+	m_OrdinaryCheckpointRegistry.m_RestoredManagerIdentities.clear();
+	m_OrdinaryCheckpointRegistry.m_LastCarriedSoundIdentities.clear();
+}
+
+AudioMan::CheckpointBackend::CheckpointBackend(const CheckpointBackend& source, CheckpointNativeSnapshot&) {
+	const auto* values = CheckpointNativeStorage::Source(&source);
+	listeners = values->listeners; listenerCount = values->listenerCount;
+	for (size_t index = 0; index < groups.size(); ++index) groups[index] = values->groups[index].CopyCheckpointValues();
+}
+
+void AudioMan::PrepareCheckpointBackendValues() {
+	if (!CheckpointNativeStorage::Enabled() || CheckpointNativeStorage::Reading()) return;
+	auto values = std::make_unique<CheckpointBackend>();
+	if (m_AudioEnabled) {
+		AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+		AudioCheckpoint::Require(m_AudioSystem->get3DNumListeners(&values->listenerCount));
+		if (values->listenerCount < 0 || values->listenerCount > static_cast<int>(values->listeners.size())) throw std::runtime_error("invalid saved audio listener count");
+		for (int index = 0; index < values->listenerCount; ++index) {
+			FMOD_VECTOR position, velocity, forward, up;
+			AudioCheckpoint::Require(m_AudioSystem->get3DListenerAttributes(index, &position, &velocity, &forward, &up));
+			values->listeners[index] = {AudioCheckpoint::Pack(position), AudioCheckpoint::Pack(velocity), AudioCheckpoint::Pack(forward), AudioCheckpoint::Pack(up)};
+		}
+		const std::array groups{m_MasterChannelGroup, m_SFXChannelGroup, m_UIChannelGroup, m_MusicChannelGroup};
+		for (size_t index = 0; index < groups.size(); ++index) values->groups[index] = AudioCheckpoint::Control::Capture(groups[index], false);
+	}
+	m_CheckpointBackend = std::move(values);
+}
+
+void AudioMan::RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) const {
+	if (!CheckpointNativeStorage::Reading() || !m_CheckpointBackend) return;
+	snapshot.ValueObject(m_CheckpointBackend.get());
+}
+
+AudioCheckpoint::Control* AudioMan::CheckpointGroup(size_t index) {
+	if (!m_CheckpointBackend || (!CheckpointNativeStorage::Reading() && !CheckpointNativeStorage::WorldEnabled())) return nullptr;
+	return &CheckpointNativeStorage::PrivateValue(m_CheckpointBackend.get()).groups.at(index);
+}
+
+void AudioMan::RecordCheckpointListener(int index, const FMOD_VECTOR& position, const FMOD_VECTOR* velocity, const FMOD_VECTOR& forward, const FMOD_VECTOR& up) {
+	if (!m_CheckpointBackend || !CheckpointNativeStorage::WorldEnabled()) return;
+	auto& values = m_CheckpointBackend->listeners.at(index);
+	values[0] = AudioCheckpoint::Pack(position); if (velocity) values[1] = AudioCheckpoint::Pack(*velocity);
+	values[2] = AudioCheckpoint::Pack(forward); values[3] = AudioCheckpoint::Pack(up);
+}
+
+AudioMan::CheckpointRegistryReadScope::CheckpointRegistryReadScope(const AudioMan& source)
+	: m_PreviousOwner(s_PrivateRegistryOwner), m_PreviousValues(s_PrivateRegistryValues) {
+	CheckpointNativeStorage::CaptureScope privateAllocations;
+	auto lock = source.RegistryLock();
+	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	m_Values = source.WithCheckpointRegistry([](const auto& values) { return std::make_unique<CheckpointRegistryState<CheckpointNativeAllocator>>(values); });
+	m_Values->m_RegistryScopes.clear();
+	s_PrivateRegistryOwner = static_cast<const AudioMan*>(CheckpointNativeStorage::Original(&source));
+	s_PrivateRegistryValues = m_Values.get();
+}
+
+AudioMan::CheckpointRegistryReadScope::CheckpointRegistryReadScope(const AudioMan& source, const CheckpointRegistryState<CheckpointNativeAllocator>& values)
+	: m_PreviousOwner(s_PrivateRegistryOwner), m_PreviousValues(s_PrivateRegistryValues) {
+	CheckpointNativeStorage::CaptureScope privateAllocations;
+	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+	m_Values = std::make_unique<CheckpointRegistryState<CheckpointNativeAllocator>>(values);
+	m_Values->m_RegistryScopes.clear();
+	s_PrivateRegistryOwner = static_cast<const AudioMan*>(CheckpointNativeStorage::Original(&source));
+	s_PrivateRegistryValues = m_Values.get();
+}
+
+AudioMan::CheckpointRegistryReadScope::~CheckpointRegistryReadScope() {
+	s_PrivateRegistryOwner = m_PreviousOwner;
+	s_PrivateRegistryValues = m_PreviousValues;
+}
+
+uint64_t AudioMan::GetCheckpointSoundContainerCursor() const {
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([](const auto& values) { return values.m_NextSoundContainerIdentity; });
+}
+
+void AudioMan::SetCheckpointSoundContainerCursor(uint64_t value) {
+	auto lock = RegistryLock();
+	WithCheckpointRegistry([&](auto& values) { values.m_NextSoundContainerIdentity = value; });
+}
+
+CheckpointSoundRegistry AudioMan::CaptureCheckpointSoundRegistry() const {
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([](const auto& values) { return CopySoundRegistry<CheckpointSoundRegistry>(values.m_CheckpointSoundContainers); });
+}
+
+void AudioMan::CaptureCheckpointSoundRegistry(CheckpointSoundRegistry& registry, std::unordered_map<const SoundContainer*, uint64_t>& live) const {
+	auto lock = RegistryLock();
+	WithCheckpointRegistry([&](const auto& values) {
+		if constexpr (std::is_same_v<std::remove_cvref_t<decltype(values.m_CheckpointSoundContainers)>, CheckpointSoundRegistry>) {
+			registry = values.m_CheckpointSoundContainers; live = values.m_LiveCheckpointSoundContainers;
+		} else {
+			auto preparedRegistry = CopySoundRegistry<CheckpointSoundRegistry>(values.m_CheckpointSoundContainers);
+			auto preparedLive = CopySoundHash<std::remove_reference_t<decltype(live)>>(values.m_LiveCheckpointSoundContainers);
+			registry.swap(preparedRegistry); live.swap(preparedLive);
+		}
+	});
+}
+
+void AudioMan::SwapCheckpointSoundRegistry(CheckpointSoundRegistry& registry, std::unordered_map<const SoundContainer*, uint64_t>& live) {
+	auto lock = RegistryLock();
+	WithCheckpointRegistry([&](auto& values) {
+		if constexpr (std::is_same_v<std::remove_reference_t<decltype(values.m_CheckpointSoundContainers)>, CheckpointSoundRegistry>) {
+			SaveRegistryForScopes();
+			values.m_CheckpointSoundContainers.swap(registry); values.m_LiveCheckpointSoundContainers.swap(live);
+		} else {
+			auto preparedRegistry = CopySoundRegistry<std::remove_reference_t<decltype(values.m_CheckpointSoundContainers)>>(registry);
+			auto preparedLive = CopySoundHash<std::remove_reference_t<decltype(values.m_LiveCheckpointSoundContainers)>>(live);
+			auto oldRegistry = CopySoundRegistry<CheckpointSoundRegistry>(values.m_CheckpointSoundContainers);
+			auto oldLive = CopySoundHash<std::remove_reference_t<decltype(live)>>(values.m_LiveCheckpointSoundContainers);
+			SaveRegistryForScopes();
+			values.m_CheckpointSoundContainers.swap(preparedRegistry); values.m_LiveCheckpointSoundContainers.swap(preparedLive);
+			registry.swap(oldRegistry); live.swap(oldLive);
+		}
+	});
+}
+
+std::unordered_set<uint64_t> AudioMan::LastCarriedSoundIdentities() const {
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([](const auto& values) { return CopySoundHash<std::unordered_set<uint64_t>>(values.m_LastCarriedSoundIdentities); });
+}
+
+AudioMan::CheckpointCarriedScope::CheckpointCarriedScope() {
+	auto lock = g_AudioMan.RegistryLock();
+	g_AudioMan.WithCheckpointRegistry([&](const auto& values) {
+		if constexpr (std::is_same_v<std::remove_cvref_t<decltype(values.m_LastCarriedSoundIdentities)>, std::unordered_set<uint64_t>>) {
+			m_Ordinary.emplace(values.m_LastCarriedSoundIdentities);
+		} else {
+			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+			m_Owned = std::make_unique<OwnedCheckpointSoundIdentities>(values.m_LastCarriedSoundIdentities);
+		}
+	});
+}
+
+AudioMan::CheckpointCarriedScope::~CheckpointCarriedScope() {
+	auto lock = g_AudioMan.RegistryLock();
+	g_AudioMan.WithCheckpointRegistry([&](auto& values) {
+		if constexpr (std::is_same_v<std::remove_reference_t<decltype(values.m_LastCarriedSoundIdentities)>, std::unordered_set<uint64_t>>) {
+			if (m_Ordinary) values.m_LastCarriedSoundIdentities.swap(*m_Ordinary);
+		} else if (m_Owned) values.m_LastCarriedSoundIdentities.swap(*m_Owned);
+	});
+}
+
+bool AudioMan::RestoredSoundRegistryActive() const {
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([](const auto& values) { return values.m_RestoredSoundRegistryActive; });
+}
+
+std::string AudioMan::CheckpointRegistryStorageSelfTestMismatch() {
+	CheckpointNativeStorage::AllocationScope allocations(true);
+	using State = CheckpointRegistryState<CheckpointNativeAllocator>;
+	auto source = std::make_unique<State>();
+	static const std::array<char, 3> owners{};
+	const auto owner = [](size_t index) { return reinterpret_cast<SoundContainer*>(const_cast<char*>(&owners[index])); };
+	source->m_NextSoundContainerIdentity = 41;
+	source->m_CheckpointSoundContainers[21] = {owner(0), owner(1)};
+	source->m_LiveCheckpointSoundContainers[owner(0)] = 21;
+	source->m_LiveCheckpointSoundContainers[owner(1)] = 21;
+	source->m_RestoredSoundContainers[21] = {owner(0)};
+	source->m_RestoredManagerIdentities = {31};
+	source->m_LastCarriedSoundIdentities = {37, 41};
+	source->m_RestoredSoundRegistryActive = true;
+	const State* identity = source.get();
+	auto prepared = CheckpointNativeStorage::PrepareInventory();
+	if (!prepared->Arm()) return "saved sound registry inventory is stale";
+	source->m_NextSoundContainerIdentity = 61;
+	source->m_CheckpointSoundContainers.clear(); source->m_LiveCheckpointSoundContainers.clear();
+	source->m_RestoredSoundContainers.clear(); source->m_LastCarriedSoundIdentities.clear();
+	source.reset();
+	const uint64_t liveCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+	const auto liveCarried = g_AudioMan.LastCarriedSoundIdentities();
+	const auto liveRegistry = g_AudioMan.CaptureCheckpointSoundRegistry();
+	const auto result = std::async(std::launch::async, [&]() -> std::string {
+		CheckpointNativeStorage::ReadScope read(prepared->Pages());
+		const State* frozen = CheckpointNativeStorage::Source(identity);
+		bool refused = false;
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			try { CheckpointRegistryReadScope failed(g_AudioMan, *frozen); }
+			catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+		}
+		if (!refused) return "private sound registry allocation was not refused";
+		CheckpointRegistryReadScope scope(g_AudioMan, *frozen);
+		if (g_AudioMan.GetCheckpointSoundContainerCursor() != 41 || g_AudioMan.FindCheckpointSoundContainer(21) != owner(1) ||
+			g_AudioMan.FindRestoredCheckpointSoundContainer(21) != owner(0) || !g_AudioMan.RestoredSoundRegistryActive() ||
+			g_AudioMan.LastCarriedSoundIdentities() != std::unordered_set<uint64_t>{37, 41}) return "saved sound registry follows live values";
+		refused = false;
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			try { CheckpointRegistryScope failed; }
+			catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+		}
+		if (!refused || g_AudioMan.GetCheckpointSoundContainerCursor() != 41 || g_AudioMan.FindCheckpointSoundContainer(21) != owner(1))
+			return "sound registry backup refusal changes the frozen values";
+		auto restore = std::make_unique<CheckpointRegistryScope>();
+		g_AudioMan.RegisterCheckpointSoundContainer(owner(2), 43);
+		if (g_AudioMan.FindCheckpointSoundContainer(43) != owner(2)) return "private sound owner registration failed";
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			restore.reset();
+			if (failure.Triggered()) return "sound registry rollback requests another allocation";
+		}
+		if (g_AudioMan.GetCheckpointSoundContainerCursor() != 41 || g_AudioMan.FindCheckpointSoundContainer(43)) return "private sound registry rollback differs";
+		{
+			CheckpointRegistryReadScope nested(g_AudioMan);
+			g_AudioMan.SetCheckpointSoundContainerCursor(71);
+			g_AudioMan.RememberCarriedSoundIdentities({73});
+		}
+		if (g_AudioMan.GetCheckpointSoundContainerCursor() != 41 || g_AudioMan.LastCarriedSoundIdentities() != std::unordered_set<uint64_t>{37, 41})
+			return "nested private sound registry overwrites its owner";
+		refused = false;
+		{
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			try { CheckpointCarriedScope failed; }
+			catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+		}
+		if (!refused) return "carried sound backup allocation was not refused";
+		{
+			CheckpointCarriedScope restoreCarried;
+			{
+				SoundCheckpointSaveScope notes;
+				notes.Note(53);
+			}
+			if (g_AudioMan.LastCarriedSoundIdentities() != std::unordered_set<uint64_t>{53}) return "completed sound notes were not published";
+		}
+		if (g_AudioMan.LastCarriedSoundIdentities() != std::unordered_set<uint64_t>{37, 41}) return "carried sound rollback differs";
+		{
+			SoundCheckpointSaveScope notes;
+			notes.Note(59);
+			refused = false;
+			CheckpointFailure::Scope failure(CheckpointFailure::Point::NativeObjects);
+			try { notes.Note(61); }
+			catch (const std::bad_alloc&) { refused = failure.Triggered(); }
+			if (!refused) return "sound note allocation was not refused";
+		}
+		if (g_AudioMan.LastCarriedSoundIdentities() != std::unordered_set<uint64_t>{37, 41}) return "refused sound notes publish a partial set";
+		try {
+			SoundCheckpointSaveScope notes;
+			notes.Note(67);
+			throw std::bad_alloc();
+		} catch (const std::bad_alloc&) {}
+		if (g_AudioMan.LastCarriedSoundIdentities() != std::unordered_set<uint64_t>{37, 41}) return "failed capture overwrites earlier sound notes";
+		return {};
+	}).get();
+	if (!result.empty()) return result;
+	if (g_AudioMan.GetCheckpointSoundContainerCursor() != liveCursor || g_AudioMan.LastCarriedSoundIdentities() != liveCarried ||
+		g_AudioMan.CaptureCheckpointSoundRegistry() != liveRegistry) return "private sound registry changes the live game";
+	return {};
+}
+
 uint64_t AudioMan::AllocateCheckpointSoundContainerID() {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
-	if (m_NextSoundContainerIdentity == std::numeric_limits<uint64_t>::max()) throw std::runtime_error("sound identity space exhausted");
-	return ++m_NextSoundContainerIdentity;
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([&](auto& values) {
+		if (values.m_NextSoundContainerIdentity == std::numeric_limits<uint64_t>::max()) throw std::runtime_error("sound identity space exhausted");
+		return ++values.m_NextSoundContainerIdentity;
+	});
 }
 
 void AudioMan::SaveRegistryForScopes() {
-	for (CheckpointRegistryScope* scope: m_RegistryScopes) {
-		if (!scope->m_Original) scope->m_Original = m_CheckpointSoundContainers;
-	}
+	return WithCheckpointRegistry([&](auto& values) {
+		for (CheckpointRegistryScope* scope: values.m_RegistryScopes) {
+			if constexpr (std::is_same_v<std::remove_reference_t<decltype(values.m_CheckpointSoundContainers)>, CheckpointSoundRegistry>) {
+				if (!scope->m_Original) scope->m_Original = values.m_CheckpointSoundContainers;
+			}
+		}
+	});
 }
 
 void AudioMan::RegisterCheckpointSoundContainer(SoundContainer* container, uint64_t identity) {
 	if (!identity) return;
-	std::lock_guard lock(m_CheckpointRegistryMutex);
-	SaveRegistryForScopes();
-	m_LiveCheckpointSoundContainers[container] = identity;
-	m_NextSoundContainerIdentity = std::max(m_NextSoundContainerIdentity, identity);
-	auto& owners = m_CheckpointSoundContainers[identity];
-	if (std::find(owners.begin(), owners.end(), container) == owners.end()) owners.push_back(container);
-	if (m_RestoredSoundRegistryRecording) {
-		auto& restored = m_RestoredSoundContainers[identity];
-		if (std::find(restored.begin(), restored.end(), container) == restored.end()) restored.push_back(container);
-	}
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([&](auto& values) {
+		SaveRegistryForScopes();
+		values.m_LiveCheckpointSoundContainers[container] = identity;
+		values.m_NextSoundContainerIdentity = std::max(values.m_NextSoundContainerIdentity, identity);
+		auto& owners = values.m_CheckpointSoundContainers[identity];
+		if (std::find(owners.begin(), owners.end(), container) == owners.end()) owners.push_back(container);
+		if (values.m_RestoredSoundRegistryRecording) {
+			auto& restored = values.m_RestoredSoundContainers[identity];
+			if (std::find(restored.begin(), restored.end(), container) == restored.end()) restored.push_back(container);
+		}
+	});
 }
 
 void AudioMan::UnregisterCheckpointSoundContainer(SoundContainer* container, uint64_t identity) {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
-	SaveRegistryForScopes();
-	m_LiveCheckpointSoundContainers.erase(container);
-	auto found = m_CheckpointSoundContainers.find(identity);
-	if (found != m_CheckpointSoundContainers.end()) {
-		std::erase(found->second, container);
-		if (found->second.empty()) m_CheckpointSoundContainers.erase(found);
-	}
-	if (!m_RestoredSoundRegistryActive) return;
-	auto restored = m_RestoredSoundContainers.find(identity);
-	if (restored == m_RestoredSoundContainers.end()) return;
-	std::erase(restored->second, container);
-	if (restored->second.empty()) m_RestoredSoundContainers.erase(restored);
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([&](auto& values) {
+		SaveRegistryForScopes();
+		values.m_LiveCheckpointSoundContainers.erase(container);
+		auto found = values.m_CheckpointSoundContainers.find(identity);
+		if (found != values.m_CheckpointSoundContainers.end()) {
+			std::erase(found->second, container);
+			if (found->second.empty()) values.m_CheckpointSoundContainers.erase(found);
+		}
+		if (!values.m_RestoredSoundRegistryActive) return;
+		auto restored = values.m_RestoredSoundContainers.find(identity);
+		if (restored == values.m_RestoredSoundContainers.end()) return;
+		std::erase(restored->second, container);
+		if (restored->second.empty()) values.m_RestoredSoundContainers.erase(restored);
+	});
 }
 
 SoundContainer* AudioMan::FindCheckpointSoundContainer(uint64_t identity) const {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
-	const auto found = m_CheckpointSoundContainers.find(identity);
-	return found == m_CheckpointSoundContainers.end() || found->second.empty() ? nullptr : found->second.back();
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([&](auto& values) {
+		const auto* found = CheckpointFind(values.m_CheckpointSoundContainers, identity);
+		return !found || found->second.empty() ? nullptr : CheckpointValues(found->second).back();
+	});
 }
 
 CheckpointSoundRegistry AudioMan::AddedCheckpointSoundRegistrations(const CheckpointSoundRegistry& original) const {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
-	CheckpointSoundRegistry added;
-	for (const auto& [identity, owners]: m_CheckpointSoundContainers) {
-		const auto previous = original.find(identity);
-		for (SoundContainer* owner: owners) {
-			if (previous == original.end() || std::find(previous->second.begin(), previous->second.end(), owner) == previous->second.end()) added[identity].push_back(owner);
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([&](auto& values) {
+		CheckpointSoundRegistry added;
+		for (const auto& [identity, owners]: CheckpointValues(values.m_CheckpointSoundContainers)) {
+			const auto previous = original.find(identity);
+			for (SoundContainer* owner: CheckpointValues(owners)) {
+				if (previous == original.end() || std::find(previous->second.begin(), previous->second.end(), owner) == previous->second.end()) added[identity].push_back(owner);
+			}
 		}
-	}
-	return added;
+		return added;
+	});
 }
 
 void AudioMan::RestoreCheckpointSoundRegistry(CheckpointSoundRegistry original) {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
-	SaveRegistryForScopes();
-	for (auto entry = original.begin(); entry != original.end();) {
-		std::erase_if(entry->second, [this, identity = entry->first](const SoundContainer* owner) {
-			const auto live = m_LiveCheckpointSoundContainers.find(owner);
-			return live == m_LiveCheckpointSoundContainers.end() || live->second != identity;
-		});
-		if (entry->second.empty()) entry = original.erase(entry); else ++entry;
-	}
-	m_CheckpointSoundContainers.swap(original);
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([&](auto& values) {
+		SaveRegistryForScopes();
+		for (auto entry = original.begin(); entry != original.end();) {
+			std::erase_if(entry->second, [this, &values, identity = entry->first](const SoundContainer* owner) {
+				const auto live = values.m_LiveCheckpointSoundContainers.find(owner);
+				return live == values.m_LiveCheckpointSoundContainers.end() || live->second != identity;
+			});
+			if (entry->second.empty()) entry = original.erase(entry); else ++entry;
+		}
+		ReplaceRegistry(values.m_CheckpointSoundContainers, original);
+	});
 }
 
 void AudioMan::ActivateCheckpointSoundRegistrations(const CheckpointSoundRegistry& candidates) {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
-	for (const auto& [identity, owners]: candidates) for (SoundContainer* owner: owners) {
-		const auto live = m_LiveCheckpointSoundContainers.find(owner);
-		if (live != m_LiveCheckpointSoundContainers.end() && live->second == identity) RegisterCheckpointSoundContainer(owner, identity);
-	}
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([&](auto& values) {
+		for (const auto& [identity, owners]: candidates) for (SoundContainer* owner: owners) {
+			const auto live = values.m_LiveCheckpointSoundContainers.find(owner);
+			if (live != values.m_LiveCheckpointSoundContainers.end() && live->second == identity) RegisterCheckpointSoundContainer(owner, identity);
+		}
+	});
 }
 
 thread_local int s_SkipCarriedSoundNotes = 0;
 
 AudioMan::CheckpointRegistryScope::CheckpointRegistryScope(bool skipCarriedNotes) : m_Cursor(g_AudioMan.GetCheckpointSoundContainerCursor()), m_SkipCarriedNotes(skipCarriedNotes) {
 	{
-		std::lock_guard lock(g_AudioMan.m_CheckpointRegistryMutex);
-		g_AudioMan.m_RegistryScopes.push_back(this);
+		auto lock = g_AudioMan.RegistryLock();
+		g_AudioMan.WithCheckpointRegistry([&](auto& values) {
+			if constexpr (!std::is_same_v<std::remove_reference_t<decltype(values.m_CheckpointSoundContainers)>, CheckpointSoundRegistry>) {
+				// Rollback keeps its own nodes before any capture can fail.
+				CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+				m_OwnedOriginal = std::make_unique<OwnedCheckpointSoundRegistry>(values.m_CheckpointSoundContainers);
+			}
+			values.m_RegistryScopes.push_back(this);
+		});
 	}
 	if (m_SkipCarriedNotes) ++s_SkipCarriedSoundNotes;
 }
@@ -1355,12 +1761,24 @@ AudioMan::CheckpointRegistryScope::~CheckpointRegistryScope() {
 	if (m_SkipCarriedNotes) --s_SkipCarriedSoundNotes;
 	std::optional<CheckpointSoundRegistry> original;
 	{
-		std::lock_guard lock(g_AudioMan.m_CheckpointRegistryMutex);
-		std::erase(g_AudioMan.m_RegistryScopes, this);
-		original = std::move(m_Original);
+		auto lock = g_AudioMan.RegistryLock();
+		g_AudioMan.WithCheckpointRegistry([&](auto& values) {
+			std::erase(values.m_RegistryScopes, this);
+			if constexpr (std::is_same_v<std::remove_reference_t<decltype(values.m_CheckpointSoundContainers)>, CheckpointSoundRegistry>) {
+				original = std::move(m_Original);
+			} else if (m_OwnedOriginal) {
+				for (auto entry = m_OwnedOriginal->begin(); entry != m_OwnedOriginal->end();) {
+					std::erase_if(entry->second, [&](const SoundContainer* owner) {
+						const auto live = values.m_LiveCheckpointSoundContainers.find(owner);
+						return live == values.m_LiveCheckpointSoundContainers.end() || live->second != entry->first;
+					});
+					if (entry->second.empty()) entry = m_OwnedOriginal->erase(entry); else ++entry;
+				}
+				values.m_CheckpointSoundContainers.swap(*m_OwnedOriginal);
+			}
+		});
 	}
-	// Every change keeps each registered container live under its identity, so a registry no change reached is already
-	// what restoring its copy would make it.
+	// Retired containers stay retired when the earlier registry is restored.
 	if (original) g_AudioMan.RestoreCheckpointSoundRegistry(std::move(*original));
 	g_AudioMan.SetCheckpointSoundContainerCursor(m_Cursor);
 }
@@ -1402,19 +1820,106 @@ std::string AudioMan::RegistryScopeMissedChange() {
 
 thread_local AudioMan::SoundCheckpointSaveScope* AudioMan::SoundCheckpointSaveScope::s_Current = nullptr;
 
-AudioMan::SoundCheckpointSaveScope::SoundCheckpointSaveScope(bool remember) : m_Previous(s_Current), m_Remember(remember) {
-	s_Current = this;
+AudioMan::SoundCheckpointSaveScope::SoundCheckpointSaveScope(bool remember, bool activate) : m_ExceptionCount(std::uncaught_exceptions()), m_Previous(s_Current), m_Remember(remember), m_Active(activate) {
+	if (m_Remember) {
+		auto lock = g_AudioMan.RegistryLock();
+		g_AudioMan.WithCheckpointRegistry([&](const auto& values) {
+			if constexpr (!std::is_same_v<std::remove_cvref_t<decltype(values.m_LastCarriedSoundIdentities)>, std::unordered_set<uint64_t>>) {
+				CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+				m_OwnedCarried = std::make_unique<OwnedCheckpointSoundIdentities>();
+			}
+		});
+	}
+	if (m_Active) s_Current = this;
 }
 
 AudioMan::SoundCheckpointSaveScope::~SoundCheckpointSaveScope() {
-	if (m_Remember) g_AudioMan.RememberCarriedSoundIdentities(m_Carried);
-	s_Current = m_Previous;
+	if (m_Active) s_Current = m_Previous;
+	if (!m_Remember || m_Failure || std::uncaught_exceptions() != m_ExceptionCount) return;
+	auto lock = g_AudioMan.RegistryLock();
+	g_AudioMan.WithCheckpointRegistry([&](auto& values) {
+		if constexpr (std::is_same_v<std::remove_reference_t<decltype(values.m_LastCarriedSoundIdentities)>, std::unordered_set<uint64_t>>) {
+			values.m_LastCarriedSoundIdentities.swap(m_Carried);
+		} else if (m_OwnedCarried) values.m_LastCarriedSoundIdentities.swap(*m_OwnedCarried);
+	});
 }
 
 void AudioMan::SoundCheckpointSaveScope::Note(uint64_t identity) {
 	if (!identity) return;
 	std::lock_guard lock(m_NoteMutex);
-	m_Carried.insert(identity);
+	try {
+		if (m_OwnedCarried) {
+			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+			m_OwnedCarried->insert(identity);
+		}
+		m_Carried.insert(identity);
+	} catch (...) { m_Failure = std::current_exception(); throw; }
+}
+
+AudioMan::SoundCheckpointSaveScope::Lend::Lend(SoundCheckpointSaveScope* scope, bool collectLocally) : m_Previous(s_Current), m_Target(scope) {
+	if (collectLocally && scope) m_Local = std::make_unique<SoundCheckpointSaveScope>(false);
+	else s_Current = scope;
+}
+
+AudioMan::SoundCheckpointSaveScope::Lend::~Lend() {
+	if (m_Local) {
+		// Each helper takes the shared lock once, after its sound writes finish.
+		std::lock_guard lock(m_Target->m_NoteMutex);
+		try {
+			if (m_Local->m_Failure) m_Target->m_Failure = m_Local->m_Failure;
+			if (m_Target->m_OwnedCarried) {
+				CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+				m_Target->m_OwnedCarried->insert(m_Local->m_Carried.begin(), m_Local->m_Carried.end());
+			}
+			m_Target->m_Carried.merge(m_Local->m_Carried);
+		} catch (...) {
+			m_Target->m_Failure = std::current_exception();
+		}
+		m_Local.reset();
+	}
+	s_Current = m_Previous;
+}
+
+bool AudioMan::SoundCheckpointSaveScope::NotesCollectWithoutSharedLock() {
+	SoundCheckpointSaveScope shared(false);
+	std::unique_lock blocked(shared.m_NoteMutex);
+	std::promise<void> collected;
+	auto ready = collected.get_future();
+	std::thread writer([&] {
+		Lend lent(&shared, true);
+		for (uint64_t identity = 1; identity <= 128; ++identity) {
+			g_AudioMan.NoteCarriedSoundIdentity(identity);
+			g_AudioMan.NoteCarriedSoundIdentity(identity);
+		}
+		collected.set_value();
+	});
+	const bool independent = ready.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+	blocked.unlock();
+	writer.join();
+	std::vector<std::thread> writers;
+	for (uint64_t part = 0; part < 4; ++part) writers.emplace_back([&, part] {
+		Lend lent(&shared, true);
+		for (uint64_t index = 1; index <= 256; ++index) {
+			const uint64_t identity = 10000 + part * 256 + index;
+			g_AudioMan.NoteCarriedSoundIdentity(identity);
+			g_AudioMan.NoteCarriedSoundIdentity(identity);
+		}
+		{
+			SoundCheckpointSaveScope scratch(false);
+			g_AudioMan.NoteCarriedSoundIdentity(99999);
+		}
+		g_AudioMan.NoteCarriedSoundIdentity(20000);
+		{
+			Lend nested(SoundCheckpointSaveScope::Current(), true);
+			g_AudioMan.NoteCarriedSoundIdentity(10000);
+			g_AudioMan.NoteCarriedSoundIdentity(0);
+		}
+	});
+	for (auto& thread: writers) thread.join();
+	bool exact = shared.Carried().size() == 1154 && shared.Contains(10000) && shared.Contains(20000) && !shared.Contains(99999) && !shared.Contains(0);
+	for (uint64_t identity = 1; identity <= 128; ++identity) exact = exact && shared.Contains(identity);
+	for (uint64_t identity = 10001; identity <= 11024; ++identity) exact = exact && shared.Contains(identity);
+	return independent && exact;
 }
 
 void AudioMan::NoteCarriedSoundIdentity(uint64_t identity) {
@@ -1423,8 +1928,10 @@ void AudioMan::NoteCarriedSoundIdentity(uint64_t identity) {
 }
 
 void AudioMan::RememberCarriedSoundIdentities(std::unordered_set<uint64_t> carried) {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
-	m_LastCarriedSoundIdentities = std::move(carried);
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([&](auto& values) {
+		ReplaceRegistrySet(values.m_LastCarriedSoundIdentities, std::move(carried));
+	});
 }
 
 void AudioMan::CollectManagerSoundIdentities(std::unordered_set<uint64_t>& out) const {
@@ -1437,25 +1944,29 @@ void AudioMan::CollectManagerSoundIdentities(std::unordered_set<uint64_t>& out) 
 }
 
 AudioMan::RestoredSoundRegistryScope::RestoredSoundRegistryScope() {
-	std::lock_guard lock(g_AudioMan.m_CheckpointRegistryMutex);
-	g_AudioMan.m_RestoredSoundContainers.clear();
-	g_AudioMan.m_RestoredManagerIdentities.clear();
-	g_AudioMan.m_RestoredSoundRegistryActive = true;
-	g_AudioMan.m_RestoredSoundRegistryRecording = true;
+	auto lock = g_AudioMan.RegistryLock();
+	g_AudioMan.WithCheckpointRegistry([&](auto& values) {
+		values.m_RestoredSoundContainers.clear();
+		values.m_RestoredManagerIdentities.clear();
+		values.m_RestoredSoundRegistryActive = true;
+		values.m_RestoredSoundRegistryRecording = true;
+	});
 }
 
 AudioMan::RestoredSoundRegistryScope::~RestoredSoundRegistryScope() {
-	std::lock_guard lock(g_AudioMan.m_CheckpointRegistryMutex);
-	g_AudioMan.m_RestoredSoundRegistryRecording = false;
-	g_AudioMan.m_RestoredSoundRegistryActive = false;
-	g_AudioMan.m_RestoredSoundContainers.clear();
-	g_AudioMan.m_RestoredManagerIdentities.clear();
+	auto lock = g_AudioMan.RegistryLock();
+	g_AudioMan.WithCheckpointRegistry([&](auto& values) {
+		values.m_RestoredSoundRegistryRecording = false;
+		values.m_RestoredSoundRegistryActive = false;
+		values.m_RestoredSoundContainers.clear();
+		values.m_RestoredManagerIdentities.clear();
+	});
 }
 
 namespace {
-	std::string NearbyRegisteredIdentities(const CheckpointSoundRegistry& registry, uint64_t owner) {
+	template<class Registry> std::string NearbyRegisteredIdentities(const Registry& registry, uint64_t owner) {
 		std::vector<uint64_t> nearby;
-		for (const auto& [identity, owners]: registry) {
+		for (const auto& [identity, owners]: CheckpointValues(registry)) {
 			if (!owners.empty() && identity + 20 >= owner && owner + 20 >= identity) nearby.push_back(identity);
 		}
 		std::sort(nearby.begin(), nearby.end());
@@ -1490,31 +2001,39 @@ void AudioMan::RestorePlayPhaseScope::ResetRestorePlayCount() {
 }
 
 void AudioMan::StopRecordingRestoredSoundRegistry() {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
-	m_RestoredSoundRegistryRecording = false;
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([&](auto& values) {
+		values.m_RestoredSoundRegistryRecording = false;
+	});
 }
 
 SoundContainer* AudioMan::FindRestoredCheckpointSoundContainer(uint64_t identity) const {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
-	const auto found = m_RestoredSoundContainers.find(identity);
-	return found == m_RestoredSoundContainers.end() || found->second.empty() ? nullptr : found->second.back();
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([&](auto& values) {
+		const auto* found = CheckpointFind(values.m_RestoredSoundContainers, identity);
+		return !found || found->second.empty() ? nullptr : CheckpointValues(found->second).back();
+	});
 }
 
 void AudioMan::RefreshRestoredManagerIdentities() {
-	// Collected before the lock: the managers' visitors take the logical-sound lock, which is held the other way round by RetireFinishedSimulationSounds.
+	// Manager visitors take the logical-sound lock before the registry lock.
 	std::unordered_set<uint64_t> identities;
 	CollectManagerSoundIdentities(identities);
-	std::lock_guard lock(m_CheckpointRegistryMutex);
-	m_RestoredManagerIdentities = std::move(identities);
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([&](auto& values) {
+		ReplaceRegistrySet(values.m_RestoredManagerIdentities, std::move(identities));
+	});
 }
 
 SoundContainer* AudioMan::ResolveCheckpointVoiceOwner(uint64_t identity) const {
 	if (!identity) return nullptr;
-	std::lock_guard lock(m_CheckpointRegistryMutex);
-	if (!m_RestoredSoundRegistryActive) return FindCheckpointSoundContainer(identity);
-	if (SoundContainer* owner = FindRestoredCheckpointSoundContainer(identity)) return owner;
-	if (m_RestoredManagerIdentities.contains(identity)) return FindCheckpointSoundContainer(identity);
-	return nullptr;
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([&](auto& values) -> SoundContainer* {
+		if (!values.m_RestoredSoundRegistryActive) return FindCheckpointSoundContainer(identity);
+		if (SoundContainer* owner = FindRestoredCheckpointSoundContainer(identity)) return owner;
+		if (CheckpointContains(values.m_RestoredManagerIdentities, identity)) return FindCheckpointSoundContainer(identity);
+		return nullptr;
+	});
 }
 
 int AudioMan::RegisterPlayingVoice(FMOD::Channel* channel, SoundContainer* owner, const std::string& path, float minimumAudibleDistance, bool predicted) {
@@ -1609,6 +2128,10 @@ int AudioMan::FindVoiceIdentity(const FMOD::Channel* channel) const {
 }
 
 FMOD_RESULT AudioMan::GetVoiceChannel(int voiceIdentity, FMOD::Channel** channel) const {
+	if (CheckpointNativeStorage::Reading()) {
+		*channel = voiceIdentity > 0 ? static_cast<FMOD::Channel*>(ReadCheckpointPlayback(voiceIdentity)) : nullptr;
+		return *channel ? FMOD_OK : FMOD_ERR_INVALID_HANDLE;
+	}
 	const auto found = m_PlayingVoices.find(voiceIdentity);
 	FMOD::Channel* live = found == m_PlayingVoices.end() ? nullptr : found->second.Channel();
 	// A mixer-ended voice stays mapped with a null channel.
@@ -1658,11 +2181,23 @@ FMOD_RESULT AudioMan::StopDetached(FMOD::Channel* channel) {
 }
 
 bool AudioMan::OwnsVoice(int voiceIdentity, const SoundContainer* owner) const {
+	if (CheckpointNativeStorage::Reading()) {
+		for (const auto& [identity, voice]: CheckpointValues(CheckpointNativeStorage::Source(this)->m_PlayingVoices))
+			if (identity == voiceIdentity) return CheckpointNativeStorage::Original(voice.owner) == CheckpointNativeStorage::Original(owner);
+		return false;
+	}
 	const auto found = m_PlayingVoices.find(voiceIdentity);
 	return found != m_PlayingVoices.end() && found->second.owner == owner;
 }
 
 bool AudioMan::VoiceMatchesContext(int identity, const SoundContainer* owner) const {
+	if (CheckpointNativeStorage::Reading()) {
+		for (const auto& [savedIdentity, voice]: CheckpointValues(CheckpointNativeStorage::Source(this)->m_PlayingVoices)) {
+			if (savedIdentity == identity && CheckpointNativeStorage::Original(voice.owner) == CheckpointNativeStorage::Original(owner))
+				return SoundSimulationScope::Domain() != SoundExecutionDomain::SharedSimulation || voice.domain == SoundExecutionDomain::SharedSimulation;
+		}
+		return false;
+	}
 	const auto found = m_PlayingVoices.find(identity);
 	if (found == m_PlayingVoices.end() || found->second.owner != owner) return false;
 	// Only a shared simulation call is confined to the shared cohort's voices. An AI hook mutates
@@ -1672,16 +2207,26 @@ bool AudioMan::VoiceMatchesContext(int identity, const SoundContainer* owner) co
 
 void AudioMan::NotePendingSoundOps(SoundContainer* container) {
 	if (!container->GetCheckpointIdentity()) return;
+	if (CheckpointNativeStorage::Reading()) { SavedSoundOps(this).pending[container->GetCheckpointIdentity()] = container; return; }
 	std::lock_guard lock(m_PendingSoundOpsMutex);
 	m_PendingSoundOpContainers[container->GetCheckpointIdentity()] = container;
 }
 
 void AudioMan::ClearPendingSoundOps(SoundContainer* container) {
+	if (CheckpointNativeStorage::Reading()) { std::erase_if(SavedSoundOps(this).pending, [container](const auto& entry) { return entry.second == container; }); return; }
 	std::lock_guard lock(m_PendingSoundOpsMutex);
 	std::erase_if(m_PendingSoundOpContainers, [container](const auto& entry) { return entry.second == container; });
 }
 
 std::vector<SoundContainer*> AudioMan::TakePendingSoundOpContainers() {
+	if (CheckpointNativeStorage::Reading()) {
+		auto& pending = SavedSoundOps(this).pending;
+		std::vector<SoundContainer*> containers;
+		containers.reserve(pending.size());
+		for (const auto& [identity, container]: pending) containers.push_back(container);
+		pending.clear();
+		return containers;
+	}
 	std::lock_guard lock(m_PendingSoundOpsMutex);
 	std::vector<SoundContainer*> containers;
 	containers.reserve(m_PendingSoundOpContainers.size());
@@ -1691,6 +2236,12 @@ std::vector<SoundContainer*> AudioMan::TakePendingSoundOpContainers() {
 }
 
 void AudioMan::SettleSharedSoundWrites() {
+	if (CheckpointNativeStorage::Reading()) {
+		std::vector<SoundContainer*> containers;
+		for (const auto& [identity, container]: SavedSoundOps(this).pending) containers.push_back(container);
+		for (SoundContainer* container: containers) container->SettleSharedWritesBeforeAIPass();
+		return;
+	}
 	std::vector<SoundContainer*> containers;
 	{
 		std::lock_guard lock(m_PendingSoundOpsMutex);
@@ -1710,12 +2261,19 @@ uint64_t AudioMan::NextDeferredSoundOpOrdinal() {
 }
 
 void AudioMan::RefreshLogicalSound(SoundContainer* container) {
+	if (CheckpointNativeStorage::Reading()) {
+		auto& logical = SavedSoundOps(this).logical;
+		if (container->m_CheckpointRegistered && !container->m_LogicalPlayback.voices.empty()) logical.insert(container);
+		else logical.erase(container);
+		return;
+	}
 	std::lock_guard lock(m_LogicalSoundsMutex);
 	if (container->m_CheckpointRegistered && !container->m_LogicalPlayback.voices.empty()) m_ActiveLogicalSounds.insert(container);
 	else m_ActiveLogicalSounds.erase(container);
 }
 
 void AudioMan::UnregisterLogicalSound(SoundContainer* container) {
+	if (CheckpointNativeStorage::Reading()) { SavedSoundOps(this).logical.erase(container); return; }
 	std::lock_guard lock(m_LogicalSoundsMutex);
 	m_ActiveLogicalSounds.erase(container);
 }
@@ -1796,13 +2354,14 @@ std::string AudioMan::Census() const {
 	size_t audibility = 0;
 	for (const auto& [key, peers]: m_CommittedAudibility) audibility += peers.size();
 	return "voices=" + std::to_string(m_PlayingVoices.size()) + " backend_voices=" + std::to_string(m_BackendVoiceIdentities.size()) +
-	       " logical_sounds=" + std::to_string(m_ActiveLogicalSounds.size()) + " live_containers=" + std::to_string(m_LiveCheckpointSoundContainers.size()) +
+	       " logical_sounds=" + std::to_string(m_ActiveLogicalSounds.size()) + " live_containers=" + std::to_string(WithCheckpointRegistry([](const auto& values) { return values.m_LiveCheckpointSoundContainers.size(); })) +
 	       " pending_ops=" + std::to_string(m_PendingSoundOpContainers.size()) + " committed_audibility=" + std::to_string(m_CommittedAudibility.size()) + "/" + std::to_string(audibility) +
-	       " sent_audibility=" + std::to_string(m_LastSentAudibility.size()) + " restored_identities=" + std::to_string(m_RestoredManagerIdentities.size());
+	       " sent_audibility=" + std::to_string(m_LastSentAudibility.size()) + " restored_identities=" + std::to_string(WithCheckpointRegistry([](const auto& values) { return values.m_RestoredManagerIdentities.size(); }));
 }
 
 void AudioMan::PauseIngameSounds(bool pause) {
-	if (m_AudioEnabled && !s_PlaybackSuppressed) m_SFXChannelGroup->setPaused(pause);
+	if (m_AudioEnabled && !s_PlaybackSuppressed && (CheckpointNativeStorage::Reading() || m_SFXChannelGroup->setPaused(pause) == FMOD_OK))
+		if (auto* values = CheckpointGroup(1)) values->paused = pause;
 }
 
 namespace {
@@ -2093,6 +2652,7 @@ void AudioMan::StartAwaitingSampleVoices() {
 		}
 		if (!SampleReadyForPlayback(sound)) continue;
 		sample.Apply(sound);
+		ContentFile::NoteLoadedSample(path, sound, true);
 		appliedSamples.push_back(path);
 	}
 	for (const auto& path: appliedSamples) s_PendingSamples.erase(path);
@@ -2357,6 +2917,12 @@ namespace {
 		});
 	}
 
+	CheckpointText CaptureOwnedAudioSample(AudioCheckpoint::Sample sample) {
+		const size_t bytes = sizeof(sample) + sample.path.size();
+		// The saver formats owned metadata after the mixer reads finish.
+		return CheckpointText::Deferred([sample = std::move(sample)] { return sample.SaveCheckpoint(); }, bytes);
+	}
+
 	void WriteSnapshotObject(const SceneObject* object) {
 		auto stream = std::make_unique<std::stringstream>();
 		Writer writer(std::move(stream));
@@ -2374,9 +2940,19 @@ struct RTE::AudioCheckpointCapture {
 	AudioRuntime state;
 	std::vector<const SoundContainer*> owners; //!< Each voice's owner, which the filter judges.
 	std::optional<std::vector<CheckpointText>> samples; //!< The samples' texts, when written ahead of the rest.
+	std::vector<std::string> ownerPresets;
+	bool frozen = false;
 };
 
+void AudioMan::FreezeCheckpointCapture(AudioCheckpointCapture& capture, uint64_t cursor) const {
+	capture.ownerPresets.reserve(capture.owners.size());
+	for (const auto* owner: capture.owners) capture.ownerPresets.push_back(owner ? owner->GetPresetName() : "");
+	capture.state.nextSoundContainer = cursor;
+	capture.frozen = true;
+}
+
 void AudioMan::ReadCheckpointSamples(AudioCheckpointCapture& captured) const {
+	if (CheckpointNativeStorage::Reading()) { captured.state.samples = ContentFile::ReadCheckpointSamples(); return; }
 	std::map<std::string, FMOD::Sound*> samples(ContentFile::s_LoadedSamples.begin(), ContentFile::s_LoadedSamples.end());
 	for (const auto& [path, sound]: samples) {
 		if (!sound) continue;
@@ -2389,7 +2965,10 @@ std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureCheckpointSamples() con
 	if (m_AudioEnabled) ReadCheckpointSamples(*result);
 	std::vector<CheckpointText> texts;
 	texts.reserve(result->state.samples.size());
-	for (const AudioCheckpoint::Sample& sample: result->state.samples) texts.push_back(CheckpointWriter::CaptureNative([&sample] { return sample.SaveCheckpoint(); }));
+	for (const AudioCheckpoint::Sample& sample: result->state.samples) {
+		texts.push_back(CheckpointWriter::BatchEnabled() ? CaptureOwnedAudioSample(sample)
+		    : CheckpointWriter::CaptureNative([&sample] { return sample.SaveCheckpoint(); }));
+	}
 	result->samples = std::move(texts);
 	return result;
 }
@@ -2405,22 +2984,24 @@ std::string AudioMan::SaveCaptured(AudioCheckpointCapture& captured, const std::
 		const SoundContainer* owner = captured.owners[index];
 		uint64_t& ownerIdentity = state.voices[index].owner;
 		if (contained && ownerIdentity && !contained(ownerIdentity, owner)) {
-			if (disownedPresets.insert(owner->GetPresetName()).second) {
+			const std::string& preset = captured.frozen ? captured.ownerPresets[index] : owner->GetPresetName();
+			if (disownedPresets.insert(preset).second) {
 				std::ostringstream line;
-				line << "[audio-checkpoint] disowned voice owner " << owner->GetPresetName();
+				line << "[audio-checkpoint] disowned voice owner " << preset;
 				System::PrintDiagnosticLine(line.str());
 			}
 			ownerIdentity = 0;
 		}
 	}
 	// One snapshot of both: the cursor is read after the voices and never below an owner this archive names.
-	state.nextSoundContainer = GetCheckpointSoundContainerCursor();
+	if (!captured.frozen) state.nextSoundContainer = GetCheckpointSoundContainerCursor();
 	for (const AudioCheckpoint::Voice& voice: state.voices) state.nextSoundContainer = std::max(state.nextSoundContainer, voice.owner);
 	const AudioCheckpointCapture& written = samples ? *samples : captured;
 	return state.Save(written.samples ? &*written.samples : nullptr);
 }
 
 std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureCheckpointState(bool samples) const {
+	if (CheckpointNativeStorage::Reading()) return CaptureFrozenCheckpointState(samples);
 	auto result = std::make_shared<AudioCheckpointCapture>();
 	AudioRuntime& state = result->state;
 	state.enabled = m_AudioEnabled; state.nextVoice = m_NextVoiceIdentity;
@@ -2486,6 +3067,163 @@ std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureCheckpointState(bool sa
 	return result;
 }
 
+AudioCheckpoint::Voice AudioMan::CaptureStoredVoice(int identity, const PlayingVoice& voice, uint64_t owner, int bus) {
+	AudioCheckpoint::Voice value; value.identity = identity; value.owner = owner; value.path = voice.soundPath;
+	value.minimumAudibleDistance = voice.minimumAudibleDistance; value.bus = bus; value.playing = true;
+	if (voice.hasArchive) { value.priority = voice.priority; value.control = voice.control.CopyCheckpointValues(); }
+	else if (!voice.awaitingSample) throw std::logic_error("a saved playing voice has no owned controls");
+	if (voice.hasLifetime) {
+		const auto progress = voice.lifetime.At(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
+		value.position = static_cast<unsigned>(std::max(0.0, progress.position)); value.loops = progress.loops;
+		value.frequency = voice.lifetime.sampleRate; value.loopStart = voice.lifetime.loopStart; value.loopEnd = voice.lifetime.loopEnd;
+	}
+	return value;
+}
+
+std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureFrozenCheckpointState(bool samples) const {
+	auto result = std::make_shared<AudioCheckpointCapture>();
+	AudioRuntime& state = result->state;
+	state.enabled = m_AudioEnabled; state.nextVoice = m_NextVoiceIdentity;
+	state.deferredSoundOpTick = m_DeferredSoundOpTick; state.deferredSoundOpOrdinal = m_DeferredSoundOpOrdinal;
+	state.muteMaster = m_MuteMaster; state.muteMusic = m_MuteMusic; state.muteSounds = m_MuteSounds; state.muteOnFocusLoss = m_MuteAudioOnFocusLoss;
+	state.masterVolume = m_MasterVolume; state.musicVolume = m_MusicVolume; state.soundsVolume = m_SoundsVolume; state.globalPitch = m_GlobalPitch;
+	state.panning = m_SoundPanningEffectStrength; state.listenerZ = m_ListenerZOffset; state.minimumPanning = m_MinimumDistanceForPanning;
+	state.musicMuffled = m_MusicMuffled; state.multiplayer = m_IsInMultiplayerMode;
+	for (const auto& [key, readings]: CheckpointValues(m_CommittedAudibility))
+		for (const auto& [peer, reading]: CheckpointValues(readings)) state.audibility.push_back({key, peer, reading.frame, reading.value});
+	for (const auto& position: CheckpointValues(m_CurrentActivityHumanPlayerPositions)) if (position) state.playerPositions.push_back(*CheckpointNativeStorage::Source(position.get()));
+	for (int player = 0; player < c_MaxClients; ++player)
+		for (const NetworkSoundData& event: CheckpointValues(m_SoundEvents[player])) state.events[player].push_back({event});
+	if (m_AudioEnabled) {
+		if (!m_CheckpointBackend) throw std::logic_error("the saved audio has no owned backend values");
+		const auto* values = CheckpointNativeStorage::Source(m_CheckpointBackend.get());
+		for (int index = 0; index < values->listenerCount; ++index) state.listeners.push_back(values->listeners[index]);
+		for (size_t index = 0; index < state.groups.size(); ++index) state.groups[index] = values->groups[index].CopyCheckpointValues();
+		if (samples) ReadCheckpointSamples(*result);
+		for (const auto& [identity, voice]: CheckpointValues(m_PlayingVoices)) {
+			if (voice.predicted || !VoiceSimLive(voice)) continue;
+			const auto* owner = static_cast<const SoundContainer*>(CheckpointNativeSnapshot::Source(voice.owner));
+			const int bus = voice.hasLifetime ? voice.lifetime.bus : owner ? owner->GetBusRouting() : 0;
+			result->owners.push_back(owner);
+			state.voices.push_back(CaptureStoredVoice(identity, voice, owner ? owner->GetCheckpointIdentity() : 0, bus));
+		}
+		for (const auto& [identity, distance]: CheckpointValues(m_SoundChannelMinimumAudibleDistances))
+			if (std::any_of(state.voices.begin(), state.voices.end(), [&](const auto& voice) { return voice.identity == identity; })) state.minimumDistances.emplace(identity, distance);
+	}
+	return result;
+}
+
+FMOD::ChannelControl* AudioMan::ReadCheckpointPlayback(int identity) const {
+	struct Playback {
+		FMOD::System* system = nullptr;
+		std::array<FMOD::ChannelGroup*, 4> groups{};
+		std::map<int, FMOD::Channel*> channels;
+		~Playback() { if (system) system->release(); }
+	};
+	static const char kind{};
+	const auto playback = std::static_pointer_cast<const Playback>(CheckpointNativeStorage::ReadIndex(CheckpointNativeStorage::Original(this), &kind, [this] {
+		auto values = std::make_shared<Playback>();
+		const auto captured = CheckpointNativeStorage::Source(this)->CaptureFrozenCheckpointState(true);
+		const auto& state = captured->state;
+		const auto require = [](FMOD_RESULT result) { if (result == FMOD_ERR_MEMORY) throw std::bad_alloc(); AudioCheckpoint::Require(result); };
+		CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+		require(FMOD::System_Create(&values->system));
+		require(values->system->setOutput(FMOD_OUTPUTTYPE_NOSOUND_NRT));
+		require(values->system->set3DSettings(1, c_PPM, 1));
+		require(values->system->setSoftwareChannels(c_MaxSoftwareChannels));
+		require(values->system->init(c_MaxVirtualChannels * 2, FMOD_INIT_VOL0_BECOMES_VIRTUAL, nullptr));
+		require(values->system->getMasterChannelGroup(&values->groups[0]));
+		for (size_t bus = 1; bus < values->groups.size(); ++bus) {
+			require(values->system->createChannelGroup(nullptr, &values->groups[bus]));
+			require(values->groups[0]->addGroup(values->groups[bus]));
+		}
+		require(values->system->set3DNumListeners(static_cast<int>(state.listeners.size())));
+		for (size_t index = 0; index < state.listeners.size(); ++index) {
+			const auto& listener = state.listeners[index];
+			const auto position = AudioCheckpoint::Unpack(listener[0]), velocity = AudioCheckpoint::Unpack(listener[1]);
+			const auto forward = AudioCheckpoint::Unpack(listener[2]), up = AudioCheckpoint::Unpack(listener[3]);
+			require(values->system->set3DListenerAttributes(static_cast<int>(index), &position, &velocity, &forward, &up));
+		}
+		for (size_t index = 0; index < values->groups.size(); ++index) state.groups[index].Apply(values->system, values->groups[index], true);
+		std::map<std::string, FMOD::Sound*> sounds;
+		for (const auto& voice: state.voices) {
+			if (!voice.playing) continue;
+			FMOD::Sound* sound = nullptr;
+			if (const auto found = sounds.find(voice.path); found != sounds.end()) sound = found->second;
+			else {
+				CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+				require(values->system->createSound(voice.path.c_str(), FMOD_CREATESAMPLE | FMOD_3D, nullptr, &sound));
+				for (const auto& sample: state.samples) if (sample.path == voice.path) { sample.Apply(sound); break; }
+				sounds.emplace(voice.path, sound);
+			}
+			FMOD::Channel* channel = nullptr;
+			require(values->system->playSound(sound, values->groups.at(voice.bus + 1), true, &channel));
+			voice.Apply(values->system, channel);
+			require(channel->setPaused(voice.control.paused));
+			values->channels.emplace(voice.identity, channel);
+		}
+		require(values->system->update());
+		return values;
+	}));
+	if (!identity) return playback->groups[3];
+	const auto found = playback->channels.find(identity);
+	return found == playback->channels.end() ? nullptr : found->second;
+}
+
+std::string AudioMan::CheckpointBackendSelfTestMismatch() {
+	CheckpointNativeStorage::AllocationScope allocations(true);
+	auto backend = std::make_unique<CheckpointBackend>();
+	backend->listenerCount = 1; backend->listeners[0][0] = {3, 5, 7};
+	auto& group = backend->groups[0]; group.volume = 0.375F; group.mix = {0.25F, 0.5F}; group.fades = {{0, 0.75F}, {17, 0.5F}};
+	AudioCheckpoint::Effect effect; effect.index = 2; effect.type = FMOD_DSP_TYPE_LIMITER;
+	effect.parameters.push_back({3, FMOD_DSP_PARAMETER_TYPE_FLOAT, 0, 0.625F, false}); group.effects.push_back(std::move(effect));
+	struct VoiceValues : CheckpointNativeAllocated { PlayingVoice voice; };
+	auto values = std::make_unique<VoiceValues>();
+	values->voice.soundPath = "saved voice"; values->voice.awaitingSample = true; values->voice.hasArchive = true;
+	values->voice.priority = 37; values->voice.control = group;
+	const auto groupText = group.SaveCheckpoint(), voiceText = CaptureStoredVoice(11, values->voice, 0, 2).SaveCheckpoint();
+	const auto pages = CheckpointNativeStorage::Prepare();
+	for (const auto& part: pages) part->Arm();
+	group.volume = 0.875F; group.mix.clear(); group.fades.clear(); group.effects.clear(); backend->listeners[0][0] = {11, 13, 17};
+	values->voice.soundPath = "later voice"; values->voice.control.mix.clear(); values->voice.control.effects[0].parameters[0].number = 0.125F;
+	auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
+	{
+		CheckpointNativeStorage::ReadScope read(pages);
+		CheckpointNativeSnapshot::BoundaryScope boundary(snapshot);
+		const auto* captured = CheckpointNativeStorage::Source(backend.get());
+		if (captured->listeners[0][0] != AudioCheckpoint::Position{3, 5, 7} || captured->groups[0].CopyCheckpointValues().SaveCheckpoint() != groupText ||
+		    CaptureStoredVoice(11, CheckpointNativeStorage::Source(values.get())->voice, 0, 2).SaveCheckpoint() != voiceText)
+			return "saved audio follows later mixer values or container links";
+		snapshot->ValueObject(backend.get());
+		const auto roots = snapshot->ReadValues();
+		CheckpointNativeStorage::ReadScope privateValues(pages, roots);
+		CheckpointNativeStorage::PrivateValue(backend.get()).groups[0].volume = 0.5F;
+		if (CheckpointNativeStorage::Source(backend.get())->groups[0].volume != 0.5F) return "saved audio control changes lost their private values";
+	}
+	if (group.volume != 0.875F || backend->listeners[0][0] != AudioCheckpoint::Position{11, 13, 17}) return "saved audio changes the playing mixer values";
+	if (AudioMan::IsConstructed()) {
+		auto sound = std::make_unique<SoundContainer>();
+		auto& live = g_AudioMan;
+		live.NotePendingSoundOps(sound.get());
+		const auto pending = live.m_PendingSoundOpContainers;
+		const auto soundPages = CheckpointNativeStorage::Prepare();
+		for (const auto& part: soundPages) part->Arm();
+		auto sounds = std::make_shared<CheckpointNativeSnapshot>();
+		{
+			CheckpointNativeStorage::ReadScope read(soundPages);
+			CheckpointNativeSnapshot::BoundaryScope boundary(sounds);
+			auto* saved = sounds->Object(sound.get());
+			saved->GetScriptPosition();
+			const auto queued = live.TakePendingSoundOpContainers();
+			if (queued.size() != 1 || queued.front() != saved) return "saved position getter lost its private sound queue";
+			live.NotePendingSoundOps(saved); live.ClearPendingSoundOps(saved);
+			if (!live.TakePendingSoundOpContainers().empty()) return "saved sound queue did not clear its private owner";
+		}
+		if (live.m_PendingSoundOpContainers != pending) return "saved position getter changes the live sound queue";
+	}
+	return {};
+}
+
 bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings, std::string* refusal) {
 	AudioRuntime state;
 	if (!state.Load(text, refusal)) return false;
@@ -2520,8 +3258,8 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		}
 		std::map<int, AudioCheckpoint::Voice> awaitingVoices;
 		std::map<std::string, AudioCheckpoint::Sample> pendingSamples;
-		std::map<int, PlayingVoice> candidates;
-		std::map<SoundContainer*, std::unordered_set<int>> ownerChannels;
+		CheckpointMap<int, PlayingVoice> candidates;
+		std::map<SoundContainer*, CheckpointUnorderedSet<int>> ownerChannels;
 		for (const auto& [identity, voice]: m_PlayingVoices) if (voice.owner) ownerChannels.try_emplace(voice.owner);
 		std::map<int, const AudioCheckpoint::Voice*> descriptions;
 		std::map<int, FMOD::Channel*> backendCandidates;
@@ -2535,9 +3273,9 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 				std::string nearby;
 				{
 					std::lock_guard lock(m_CheckpointRegistryMutex);
-					nearby = NearbyRegisteredIdentities(m_RestoredSoundRegistryActive ? m_RestoredSoundContainers : m_CheckpointSoundContainers, voice.owner);
-					if (m_RestoredSoundRegistryActive) {
-						const std::string liveNearby = NearbyRegisteredIdentities(m_CheckpointSoundContainers, voice.owner);
+					nearby = WithCheckpointRegistry([&](const auto& values) { return NearbyRegisteredIdentities(values.m_RestoredSoundRegistryActive ? values.m_RestoredSoundContainers : values.m_CheckpointSoundContainers, voice.owner); });
+					if (RestoredSoundRegistryActive()) {
+						const std::string liveNearby = WithCheckpointRegistry([&](const auto& values) { return NearbyRegisteredIdentities(values.m_CheckpointSoundContainers, voice.owner); });
 						if (!liveNearby.empty()) nearby = nearby.empty() ? "live:" + liveNearby : nearby + " live:" + liveNearby;
 					}
 				}
@@ -2576,12 +3314,12 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			BindVoiceLifetime(candidate, frames, rate, voice.loopStart, voice.loopEnd, voice.control.pitch > 0 ? voice.control.pitch : 1.0F, voice.loops, voice.position, voice.control.paused);
 			descriptions.emplace(voice.identity, &voice);
 		}
-		std::vector<std::unique_ptr<const Vector>> playerPositions;
+		CheckpointVector<std::unique_ptr<const Vector>> playerPositions;
 		for (const Vector& position: state.playerPositions) playerPositions.emplace_back(std::make_unique<const Vector>(position));
-		std::array<std::list<NetworkSoundData>, c_MaxClients> events;
+		std::array<CheckpointList<NetworkSoundData>, c_MaxClients> events;
 		for (int player = 0; player < c_MaxClients; ++player) for (const auto& event: state.events[player]) events[player].push_back(event.data);
 		std::unordered_map<int, int> backendIdentities;
-		std::unordered_map<int, float> minimumDistances;
+		CheckpointUnorderedMap<int, float> minimumDistances;
 		backendIdentities.reserve(candidates.size()); minimumDistances.reserve(candidates.size());
 		// Allocate every replacement voice paused in reserved virtual slots. Originals retain
 		// their callbacks and owning pointers until all candidate channels are ready.
@@ -2624,6 +3362,17 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		std::vector<std::array<FMOD_VECTOR, 4>> oldListeners;
 		const std::array<FMOD::ChannelGroup*, 4> groups = {m_MasterChannelGroup, m_SFXChannelGroup, m_UIChannelGroup, m_MusicChannelGroup};
 		PreservedGroupEffects originalEffects(groups);
+		std::unique_ptr<CheckpointBackend> preparedBackend;
+		if (m_CheckpointBackend && CheckpointNativeStorage::Enabled()) {
+			preparedBackend = std::make_unique<CheckpointBackend>();
+			preparedBackend->groups = m_CheckpointBackend->groups;
+			preparedBackend->listeners = m_CheckpointBackend->listeners; preparedBackend->listenerCount = m_CheckpointBackend->listenerCount;
+			if (m_AudioEnabled && state.enabled) {
+				preparedBackend->groups = state.groups; preparedBackend->groups[0].muted = state.muteMaster || m_OutputSilenced;
+				preparedBackend->listenerCount = static_cast<int>(state.listeners.size());
+				std::copy(state.listeners.begin(), state.listeners.end(), preparedBackend->listeners.begin());
+			}
+		}
 		if (m_AudioEnabled) {
 			for (const auto& sample: state.samples) oldSamples.emplace_back(sounds.at(sample.path), AudioCheckpoint::Sample::Capture(sample.path, sounds.at(sample.path)));
 			for (size_t index = 0; index < groups.size(); ++index) oldGroups[index] = AudioCheckpoint::Control::Capture(groups[index], false);
@@ -2671,6 +3420,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			}
 		}
 		// Nothing that can reject the checkpoint remains after this ownership transfer.
+		if (preparedBackend) m_CheckpointBackend = std::move(preparedBackend);
 		for (const auto& [data, sound]: stagedSamples) data->SoundObject = sound;
 		for (auto& [identity, voice]: m_PlayingVoices) {
 			if (FMOD::Channel* live = voice.Channel()) StopDetached(live);
@@ -2689,6 +3439,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			if (old != ContentFile::s_LoadedSamples.end() && !old->second) ContentFile::s_LoadedSamples.erase(old);
 		}
 		ContentFile::s_LoadedSamples.merge(newSamples);
+		ContentFile::InvalidateCheckpointSamples();
 		m_SoundChannelMinimumAudibleDistances.swap(minimumDistances);
 		m_NextVoiceIdentity = state.nextVoice;
 		SetCheckpointSoundContainerCursor(state.nextSoundContainer);
@@ -2866,6 +3617,14 @@ bool AudioMan::RunCheckpointPlaybackContinuationSelfTest() const {
 
 std::string AudioMan::GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const {
 	std::vector<std::string> voices;
+	if (CheckpointNativeStorage::Reading()) {
+		const auto* owner = static_cast<const SoundContainer*>(CheckpointNativeSnapshot::Source(container));
+		for (const auto& [identity, voice]: CheckpointValues(m_PlayingVoices)) {
+			if (CheckpointNativeStorage::Original(voice.owner) != CheckpointNativeStorage::Original(container) || !VoiceSimLive(voice)) continue;
+			voices.push_back(CaptureStoredVoice(identity, voice, owner ? owner->GetCheckpointIdentity() : 0, owner ? owner->GetBusRouting() : 0).SaveCheckpoint());
+		}
+		CheckpointWriter writer("SoundPlayback1"); writer(voices); return writer.Text();
+	}
 	AudioCheckpoint::MixerLock mixer(m_AudioEnabled ? m_AudioSystem : nullptr);
 	for (const auto& [identity, voice]: m_PlayingVoices) {
 		if (voice.owner != container || !VoiceSimLive(voice)) continue;
@@ -3136,6 +3895,25 @@ bool AudioMan::RunCheckpointSelfTest() {
 			AudioCheckpoint::Require(originalChannel->setPaused(true));
 		}
 		const auto reportArm = [&ok](const char* name, bool passed) { { std::ostringstream line; line << "[audio-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << name; System::PrintDiagnosticLine(line.str()); } ok = ok && passed; };
+		{
+			bool owned = true;
+			for (const bool captured: {false, true}) {
+				AudioCheckpoint::Sample sample;
+				sample.path = std::string("sample\0owned", 12);
+				sample.mode = 0xffffffffu; sample.loopStart = 7; sample.loopEnd = 19;
+				sample.frequency = -0.0F; sample.minimumDistance = 0.125F; sample.maximumDistance = 123.5F;
+				sample.priority = 256; sample.loops = -1; sample.cone = {15.5F, 179.25F, 0.0625F}; sample.captured = captured;
+				const std::string reference = sample.SaveCheckpoint();
+				const CheckpointText frozen = CaptureOwnedAudioSample(sample);
+				sample = AudioCheckpoint::Sample{};
+				std::array<std::future<bool>, 4> readers;
+				for (auto& reader: readers) reader = std::async(std::launch::async, [frozen, reference] {
+					return frozen.Text() == reference && frozen.SharedText() == reference;
+				});
+				for (auto& reader: readers) owned = reader.get() && owned;
+			}
+			reportArm("owned_sample_metadata_formats_after_source_death_with_concurrent_readers", owned);
+		}
 		std::unique_ptr<SoundContainer> held;
 		try {
 			held.reset(static_cast<SoundContainer*>(preset->Clone()));
@@ -3693,7 +4471,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 			const int woundVoice = *burst->GetPlayingChannels()->begin();
 			Attachable* kept = actor->RemoveAttachable(wound, false, false);
 			if (!kept) throw std::runtime_error("RemoveAttachable did not keep the wound");
-			auto& wounds = const_cast<std::vector<AEmitter*>&>(actor->GetWoundList());
+			auto& wounds = const_cast<CheckpointVector<AEmitter*>&>(actor->GetWoundList());
 			std::erase(wounds, wound);
 			{
 				SoundCheckpointSaveScope scope;
@@ -4438,7 +5216,7 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 			    restored.GetMusicPreEntryTime() == 0.0F && restored.GetMusicExitTime() == 0.0F &&
 			    restored.GetCheckpointIdentity() == 9144 &&
 			    restored.GetPlayingChannels()->size() == 1 && restored.GetPlayingChannels()->contains(13);
-			const std::vector<LogicalSoundVoice>& voices = restored.GetSharedLogicalVoices();
+			const auto& voices = restored.GetSharedLogicalVoices();
 			const bool playback = voices.size() == 1 && voices.front().sampleOrdinal == 0 && voices.front().sampleFrames == 38976 &&
 			    voices.front().loopStart == 0 && voices.front().loopEnd == 38975 && voices.front().sampleRate == 44100.0F &&
 			    voices.front().bus == 1 && voices.front().anchorTicks == 33332 && voices.front().anchorPosition == 0.0 &&

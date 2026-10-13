@@ -3,9 +3,12 @@
 #include "Entity.h"
 #include "ContentFile.h"
 #include "Box.h"
+#include "CheckpointPagePool.h"
 
 #include <future>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -35,24 +38,30 @@ namespace RTE {
 		int depth = 0;
 		size_t rowBytes = 0;
 		size_t copiedBytes = 0;
-		size_t scannedBytes = 0;
-		size_t markedBytes = 0;
-		size_t dirtyBytes = 0;
-		size_t unmarkedDirtyBytes = 0;
-		size_t dirtyRegionCount = 0;
-		size_t reusedRows = 0;
+		mutable size_t workerCopyBytes = 0;
+		mutable size_t scannedBytes = 0;
+		mutable size_t markedBytes = 0;
+		mutable size_t dirtyBytes = 0;
+		mutable size_t unmarkedDirtyBytes = 0;
+		mutable size_t dirtyRegionCount = 0;
+		mutable size_t reusedRows = 0;
 		unsigned int fullCopyPercent = 50;
-		bool fullCopy = false;
+		mutable bool fullCopy = false;
 
 		/// Copies a live bitmap at the sim boundary, reusing unchanged owned rows.
 		static std::shared_ptr<const BitmapSnapshot> Capture(const BITMAP* source, std::shared_ptr<const BitmapSnapshot> previous = {});
+		/// Owns raw rows at the tick boundary and compares them on the reading worker.
+		static std::shared_ptr<const BitmapSnapshot> Freeze(const BITMAP* source, std::shared_ptr<const BitmapSnapshot> previous = {});
+		static void PreparePixelInventory();
+		/// Completes exact row comparison from owned bytes before reading its statistics.
+		void Finalize() const;
 		/// Compares owned pixels exactly, using shared rows as the fast path.
 		bool SamePixels(const BitmapSnapshot& other) const;
 		/// Reconstructs a bitmap from owned pixels on the save worker.
 		BitmapPtr CopyBitmap() const;
 		/// Flattens owned rows for the checkpoint codec on the save worker.
 		std::string PixelBytes() const;
-		/// Counts retained pixel allocations, including partially shared blocks, on the save worker.
+		/// Counts owned pixel bytes, including unchanged pixels in shared image blocks.
 		size_t OwnedBytes() const;
 		size_t LogicalBytes() const { return rowBytes * static_cast<size_t>(height); }
 		/// Exercises shared pixel rows and worker serialization after source destruction.
@@ -60,17 +69,45 @@ namespace RTE {
 
 	private:
 		template <bool, bool> friend class SceneLayerImpl;
-		static std::shared_ptr<const BitmapSnapshot> CaptureRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll);
+		static std::shared_ptr<const BitmapSnapshot> CaptureRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll, std::optional<bool> packed = {});
+		/// Shares one row for a bitmap of a single colour, or returns none.
+		static std::shared_ptr<const BitmapSnapshot> UniformRows(const BITMAP* source, int depth, size_t rowBytes);
+		static std::shared_ptr<const BitmapSnapshot> FreezeRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll);
 		struct Pixels {
-			explicit Pixels(size_t size): bytes(new uint8_t[size]), size(size) {}
+			Pixels(size_t size, size_t rowBytes);
 			std::unique_ptr<uint8_t[]> bytes;
+			std::shared_ptr<void> firstChunk;
+			std::vector<std::shared_ptr<void>> chunks;
+			size_t chunkBytes = 0;
 			size_t size;
+			uint8_t* At(size_t offset) const {
+				if (bytes) return bytes.get() + offset;
+				if (chunks.empty()) return static_cast<uint8_t*>(firstChunk.get()) + offset;
+				const size_t chunk = offset / chunkBytes;
+				return static_cast<uint8_t*>(chunk ? chunks[chunk - 1].get() : firstChunk.get()) + offset % chunkBytes;
+			}
 		};
 		struct Row {
 			std::shared_ptr<const Pixels> pixels;
 			size_t offset = 0;
 		};
-		std::vector<Row> rows;
+		struct FrozenRows {
+			std::shared_ptr<const Pixels> pixels;
+			std::shared_ptr<const CheckpointPagePool::Snapshot> pages;
+			std::vector<const uint8_t*> sourceRows;
+			std::shared_ptr<const BitmapSnapshot> previous;
+			std::vector<uint8_t> marked;
+			bool hasMarks = false, markedAll = false;
+		};
+		bool frozen = false;
+		mutable std::once_flag ready;
+		mutable std::unique_ptr<FrozenRows> frozenRows;
+		mutable std::vector<Row> rows;
+		mutable std::shared_ptr<const Pixels> fullPixels;
+		const uint8_t* RowBytes(int y) const {
+			Finalize();
+			return fullPixels ? fullPixels->At(static_cast<size_t>(y) * rowBytes) : rows[y].pixels->At(rows[y].offset);
+		}
 	};
 
 	/// A scrolling layer of the Scene.
@@ -86,6 +123,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a SceneLayerImpl object in system memory. Create() should be called before using the object.
 		SceneLayerImpl();
+		SceneLayerImpl(const SceneLayerImpl& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Makes the SceneLayer object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
@@ -161,7 +199,7 @@ namespace RTE {
 		std::unique_ptr<BITMAP> CopyBitmap() const;
 
 		/// Captures changed pixel rows at a completed sim tick without image encoding.
-		std::shared_ptr<const BitmapSnapshot> CaptureBitmapSnapshot(std::vector<std::shared_ptr<const BitmapSnapshot>>* retired = nullptr) const;
+		std::shared_ptr<const BitmapSnapshot> CaptureBitmapSnapshot(std::vector<std::shared_ptr<const BitmapSnapshot>>* retired = nullptr, bool deferRows = false) const;
 #pragma endregion
 
 #pragma region Getters and Setters
@@ -368,6 +406,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a SceneLayerTracked object in system memory. Create() should be called before using the object.
 		SceneLayerTracked() :
 		    SceneLayerImpl<true>() {}
+		CheckpointSnapshotMethods(SceneLayerTracked);
 
 		// TODO: We shouldn't let external users access a non-const version of our bitmap. We should do all drawing to it internally, and track registering our MOID drawings internally too.
 		// However, in the interest of time (and my own sanity), given that the old code already does this, we're not doing that yet.
@@ -388,6 +427,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a SceneLayer object in system memory. Create() should be called before using the object.
 		SceneLayer() :
 		    SceneLayerImpl<false>() {}
+		CheckpointSnapshotMethods(SceneLayer);
 
 		/// Gets the BITMAP that this SceneLayer uses.
 		/// @return A pointer to the BITMAP of this SceneLayer. Ownership is NOT transferred!
@@ -407,6 +447,7 @@ namespace RTE {
 
 		/// Constructor method used to instantiate a SceneLayer object in system memory. Create() should be called before using the object.
 		StaticSceneLayer(): SceneLayerImpl<false, true>() {}
+		CheckpointSnapshotMethods(StaticSceneLayer);
 
 		/// Gets the BITMAP that this StaticSceneLayer uses.
 		/// The bitmap will only be uploaded to GPU once on the first draw. So any modifcations after that will not be drawn.

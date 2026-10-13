@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Box.h"
+#include "CheckpointNativeContainers.h"
 #include "System/MicroPather/micropather.h"
 
 #include <array>
@@ -12,6 +13,8 @@
 #include <memory>
 #include <functional>
 #include <mutex>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -21,17 +24,40 @@ namespace RTE {
 
 	class Scene;
 	class Material;
+	class CheckpointNativeSnapshot;
+	class PathFinder;
+
+	/// A worker's answer, kept separate from the public request until its delivery tick.
+	struct PathRequestAnswer {
+		std::atomic<bool> solved{false};
+		CheckpointList<Vector> path;
+		float totalCost = 0.0F;
+		int status = MicroPather::NO_SOLUTION;
+	};
 
 	/// Information required to make an async pathing request.
-	struct PathRequest {
+	struct PathRequest : CheckpointNativeAllocated {
+		PathRequest() = default;
+		PathRequest(const PathRequest& source, CheckpointNativeSnapshot& snapshot);
 		bool complete = false;
 		int status = MicroPather::NO_SOLUTION;
-		std::list<Vector> path;
+		CheckpointList<Vector> path;
 		float pathLength = 0.0f;
 		float totalCost = 0.0f;
 		Vector startPos;
 		Vector targetPos;
 		uint64_t horizonGeneration = 0; //!< Overlay generation pinned when the request is launched.
+		float jumpHeight = 0.0F;
+		float digStrength = 0.0F;
+		bool committedHorizon = false;
+		uint64_t completeTick = 0;
+		bool resumeAfterRestore = false; //!< A restored unfinished solve has no worker until its owner resumes it.
+		std::shared_ptr<PathRequestAnswer> deferredAnswer;
+		const PathFinder* checkpointFinder = nullptr; //!< Borrowed until completion; a frozen request owns its grid instead.
+		CheckpointString checkpointGrid;
+		bool checkpointSelfTestGrid = false;
+		std::string SaveCheckpoint() const;
+		static std::shared_ptr<PathRequest> ReadCheckpoint(std::string_view text);
 	};
 
 	using PathCompleteCallback = std::function<void(std::shared_ptr<volatile PathRequest>)>;
@@ -114,7 +140,7 @@ namespace RTE {
 	};
 
 	/// A class encapsulating and implementing the MicroPather A* pathfinding library.
-	class PathFinder : public Graph {
+	class PathFinder : public Graph, public CheckpointNativeAllocated {
 		friend struct ContractAudit;
 
 	public:
@@ -164,6 +190,8 @@ namespace RTE {
 		/// @return A shared pointer to the volatile PathRequest to be used to track whether the asynchronous path calculation has been completed, and check its results.
 		/// @param completeTick The lockstep tick the request is published on; 0 completes as soon as the solve does, as it always has.
 		std::shared_ptr<volatile PathRequest> CalculatePathAsync(Vector start, Vector end, float jumpHeight, float digStrength, PathCompleteCallback callback = nullptr, bool committedHorizon = false, uint64_t completeTick = 0);
+		/// Resumes an archived answer or solve without replacing its original grid or delivery tick.
+		std::shared_ptr<volatile PathRequest> ResumeCheckpointPathRequest(const std::shared_ptr<volatile PathRequest>& request);
 
 		/// Publishes every deferred shared request whose commit tick is due. One not solved yet stalls the tick until it is.
 		void CommitPathRequestsThrough(uint64_t nowTick);
@@ -243,6 +271,10 @@ namespace RTE {
 
 		/// Preserve the partially updated node graph at a completed checkpoint boundary.
 		std::string SaveCheckpoint() const;
+		CheckpointText FreezeCheckpoint(uint64_t committedGeneration = 0) const;
+		bool CheckpointSelfTestGrid() const { return m_SelfTestGrid; }
+		/// Detects exact committed-grid capture without waiting for a pending solver.
+		static bool RunCheckpointFreezeSelfTest();
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 
 		/// Recalculates all the costs between all the PathNodes by tracing lines in the material layer and summing all the material strengths for each encountered pixel. Also resets the pather itself.
@@ -252,7 +284,7 @@ namespace RTE {
 		/// @param boxList The deque of Boxes representing the updated areas.
 		/// @param nodeUpdateLimit The maximum number of PathNodes we'll try to update this frame. True PathNode update count can be higher if we received a big box, as we always do at least 1 box.
 		/// @return The set of PathNode ids that were updated.
-		std::vector<int> RecalculateAreaCosts(std::deque<Box>& boxList, size_t nodeUpdateLimit);
+		template<class Allocator> std::vector<int> RecalculateAreaCosts(std::deque<Box, Allocator>& boxList, size_t nodeUpdateLimit);
 
 		/// Updates a set of PathNodes, adjusting their transitions.
 		/// This does NOT update the pather, which is required if PathNode costs changed.
@@ -306,7 +338,7 @@ namespace RTE {
 		static constexpr float c_NodeCostChangeEpsilon = 5.0F; //!< The minimum change in a PathNodes's cost for the pathfinder to recognize a change and reset itself. This is so minor changes (e.g. blood particles) don't force constant pathfinder resets.
 
 		MicroPather* m_Pather; //!< The actual pathing object that does the pathfinding work. Owned.
-		std::vector<PathNode> m_NodeGrid; //!< The array of PathNodes representing the grid on the scene.
+		CheckpointVector<PathNode> m_NodeGrid; //!< The array of PathNodes representing the grid on the scene.
 		unsigned int m_NodeDimension; //!< The width and height of each PathNode, in pixels on the scene.
 		Vector m_Offset;
 		int m_GridWidth; //!< The width of the pathing grid, in PathNodes.
@@ -333,7 +365,7 @@ namespace RTE {
 			std::atomic<bool> hold{false};
 			std::atomic<bool> ready{false};
 		};
-		mutable std::unordered_map<int, HorizonNode> m_HorizonNodes;
+		mutable CheckpointUnorderedMap<int, HorizonNode> m_HorizonNodes;
 		std::deque<std::shared_ptr<HorizonJob>> m_HorizonJobs;
 		mutable std::mutex m_HorizonMutex;
 		std::condition_variable m_HorizonApplyCv;
@@ -351,10 +383,8 @@ namespace RTE {
 			PathCompleteCallback callback;
 			uint64_t completeTick = 0;
 			uint64_t sequence = 0;
-			std::atomic<bool> solved{false};
-			std::list<Vector> path;
-			float totalCost = 0.0F;
-			int status = MicroPather::NO_SOLUTION;
+			std::shared_ptr<PathRequestAnswer> answer;
+			std::shared_ptr<PathFinder> restoredGrid;
 			// The query, so a commit whose solver never answers can solve it here instead of parking the tick.
 			Vector start;
 			Vector end;
@@ -390,7 +420,7 @@ namespace RTE {
 		MicroPather* GetPather();
 
 		/// Calculates a path within an already registered request.
-		int CalculatePathImpl(Vector start, Vector end, std::list<Vector>& pathResult, float& totalCostResult, float jumpHeight, float digStrength);
+		template<class Allocator> int CalculatePathImpl(Vector start, Vector end, std::list<Vector, Allocator>& pathResult, float& totalCostResult, float jumpHeight, float digStrength);
 
 #pragma region Path Cost Updates
 		/// Helper function for getting the strongest material we need to path though between PathNodes.

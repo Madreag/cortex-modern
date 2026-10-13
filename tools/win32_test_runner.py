@@ -535,7 +535,7 @@ class IsolatedRun:
         self.env = dict(os.environ)
         self.env.update(extra)
         env_set = dict(extra)
-        self.visible = self.env.get("CC_TEST_VISIBLE_WINDOW") == "1"
+        self.visible = any(self.env.get(key) == "1" for key in ("CC_RUNNER_HEADED", "CC_TEST_VISIBLE_WINDOW"))
         if self.visible:
             self.argv = [arg for arg in self.argv if arg != "-headless"]
             self.env.pop("CCCP_HEADLESS", None)
@@ -556,7 +556,7 @@ class IsolatedRun:
             "private_desktop": None if self.visible else self.name,
             "input_desktop_before": self.before,
             "created_utc": utc_now(),
-            "headless_env": "0" if self.visible else "1",
+            "headless_env": self.env.get("CCCP_HEADLESS"),
             "visible_window": self.visible,
             "env_set": env_set,
             "desktop_switch_restricted": True,
@@ -574,6 +574,11 @@ class IsolatedRun:
             self._save()
             raise StartupCheckError(reason) from error
         self.record['input_desktop_before'] = self.before
+        if self.visible:
+            if self.before != "Default":
+                raise StartupCheckError("Visible engines require the signed-in player's Default desktop session.")
+            self.name = self.before
+            self.record["launch_desktop"] = self.name
         self._save()
 
     def _check(self, name, ok, detail):

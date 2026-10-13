@@ -70,6 +70,7 @@ namespace detail
 		~lua_reference() { reset(); }
 
 		lua_State* state() const { return L; }
+		int checkpoint_reference() const { return m_ref; }
 
 		void operator=(lua_reference const& r)
 		{

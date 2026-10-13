@@ -1,5 +1,10 @@
 #include "DeterministicMath.h"
 #include "MOSRotating.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "Gib.h"
+#include "CheckpointProperties.h"
 #include "MetricsCollector.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -10,6 +15,8 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <array>
+#include <memory>
 #include "SettingsMan.h"
 #include "PresetMan.h"
 #include "AtomGroup.h"
@@ -49,11 +56,100 @@ BITMAP* MOSRotating::m_spTempBitmapS128 = 0;
 BITMAP* MOSRotating::m_spTempBitmapS256 = 0;
 BITMAP* MOSRotating::m_spTempBitmapS512 = 0;
 
+MOSRotating::MOSRotating(const MOSRotating& source, CheckpointNativeSnapshot& snapshot) :
+	MOSprite(source, snapshot),
+	m_pAtomGroup(snapshot.Freeze(source.m_pAtomGroup)),
+	m_PersistedAtomGroupCheckpoint(snapshot.Freeze(source.m_PersistedAtomGroupCheckpoint, &m_PersistedAtomGroupCheckpoint)),
+	m_PersistedDeepGroupCheckpoint(snapshot.Freeze(source.m_PersistedDeepGroupCheckpoint, &m_PersistedDeepGroupCheckpoint)),
+	m_PersistedAtomGroupResidue(snapshot.Freeze(source.m_PersistedAtomGroupResidue)),
+	m_PersistedAtomGroupOffsets(snapshot.Freeze(source.m_PersistedAtomGroupOffsets, &m_PersistedAtomGroupOffsets)),
+	m_PersistedAtomGroupSubIDs(snapshot.Freeze(source.m_PersistedAtomGroupSubIDs)),
+	m_PersistedAtomGroupMaterials(snapshot.Freeze(source.m_PersistedAtomGroupMaterials, &m_PersistedAtomGroupMaterials)),
+	m_PersistedGroupMomentOfInertia(snapshot.Freeze(source.m_PersistedGroupMomentOfInertia)),
+	m_PersistedGroupStoredMass(snapshot.Freeze(source.m_PersistedGroupStoredMass)),
+	m_HasPersistedGroupInertia(snapshot.Freeze(source.m_HasPersistedGroupInertia)),
+	m_FaithfulAttachableOrder(snapshot.Freeze(source.m_FaithfulAttachableOrder, &m_FaithfulAttachableOrder)),
+	m_FaithfulRadiusAffectingAttachableUID(snapshot.Freeze(source.m_FaithfulRadiusAffectingAttachableUID)),
+	m_FaithfulAttachableAndWoundMass(snapshot.Freeze(source.m_FaithfulAttachableAndWoundMass)),
+	m_FaithfulFarthestAttachableDistanceAndRadius(snapshot.Freeze(source.m_FaithfulFarthestAttachableDistanceAndRadius)),
+	m_PersistedAttachableAndWoundMass(snapshot.Freeze(source.m_PersistedAttachableAndWoundMass)),
+	m_HasPersistedAttachableAndWoundMass(snapshot.Freeze(source.m_HasPersistedAttachableAndWoundMass)),
+	m_pDeepGroup(snapshot.Freeze(source.m_pDeepGroup)),
+	m_DeepCheck(snapshot.Freeze(source.m_DeepCheck)),
+	m_ForceDeepCheck(snapshot.Freeze(source.m_ForceDeepCheck)),
+	m_DeepHardness(snapshot.Freeze(source.m_DeepHardness)),
+	m_TravelImpulse(snapshot.Freeze(source.m_TravelImpulse)),
+	m_SpriteCenter(snapshot.Freeze(source.m_SpriteCenter)),
+	m_OrientToVel(snapshot.Freeze(source.m_OrientToVel)),
+	m_Recoiled(snapshot.Freeze(source.m_Recoiled)),
+	m_RecoilForce(snapshot.Freeze(source.m_RecoilForce)),
+	m_RecoilOffset(snapshot.Freeze(source.m_RecoilOffset)),
+	m_Wounds(snapshot.Freeze(source.m_Wounds, &m_Wounds)),
+	m_EntryWoundBurstSoundPlayedThisFrame(snapshot.Freeze(source.m_EntryWoundBurstSoundPlayedThisFrame)),
+	m_ExitWoundBurstSoundPlayedThisFrame(snapshot.Freeze(source.m_ExitWoundBurstSoundPlayedThisFrame)),
+	m_Attachables(snapshot.Freeze(source.m_Attachables, &m_Attachables)),
+	m_ReferenceHardcodedAttachableUniqueIDs(snapshot.Freeze(source.m_ReferenceHardcodedAttachableUniqueIDs)),
+	m_RadiusAffectingAttachable(snapshot.Freeze(source.m_RadiusAffectingAttachable)),
+	m_FarthestAttachableDistanceAndRadius(snapshot.Freeze(source.m_FarthestAttachableDistanceAndRadius)),
+	m_AttachableAndWoundMass(snapshot.Freeze(source.m_AttachableAndWoundMass)),
+	m_Gibs(snapshot.Freeze(source.m_Gibs, &m_Gibs)),
+	m_GibImpulseLimit(snapshot.Freeze(source.m_GibImpulseLimit)),
+	m_GibWoundLimit(snapshot.Freeze(source.m_GibWoundLimit)),
+	m_GibBlastStrength(snapshot.Freeze(source.m_GibBlastStrength)),
+	m_GibScreenShakeAmount(snapshot.Freeze(source.m_GibScreenShakeAmount)),
+	m_WoundCountAffectsImpulseLimitRatio(snapshot.Freeze(source.m_WoundCountAffectsImpulseLimitRatio)),
+	m_DetachAttachablesBeforeGibbingFromWounds(snapshot.Freeze(source.m_DetachAttachablesBeforeGibbingFromWounds)),
+	m_GibAtEndOfLifetime(snapshot.Freeze(source.m_GibAtEndOfLifetime)),
+	m_GibSound(snapshot.Freeze(source.m_GibSound)),
+	m_EffectOnGib(snapshot.Freeze(source.m_EffectOnGib)),
+	m_LoudnessOnGib(snapshot.Freeze(source.m_LoudnessOnGib)),
+	m_DamageMultiplier(snapshot.Freeze(source.m_DamageMultiplier)),
+	m_NoSetDamageMultiplier(snapshot.Freeze(source.m_NoSetDamageMultiplier)),
+	m_FlashWhiteTimer(snapshot.Freeze(source.m_FlashWhiteTimer)),
+	m_pFlipBitmap(snapshot.Freeze(source.m_pFlipBitmap)),
+	m_pFlipBitmapS(snapshot.Freeze(source.m_pFlipBitmapS)),
+	m_pTempBitmap(nullptr),
+	m_pTempBitmapS(nullptr),
+	m_PersistedMOSRotatingRuntime(snapshot.Freeze(source.m_PersistedMOSRotatingRuntime, &m_PersistedMOSRotatingRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	if (source.IsFrozenCheckpointNative()) m_FrozenPresetHasAttachables = source.m_FrozenPresetHasAttachables;
+	else if (const auto* preset = dynamic_cast<const MOSRotating*>(g_PresetMan.GetEntityPreset(source.GetClassName(), source.GetPresetName(), source.GetModuleID()))) m_FrozenPresetHasAttachables = !preset->GetAttachableList().empty();
+	for (const auto& [uid, function]: CheckpointValues(source.m_HardcodedAttachableUniqueIDsAndSetters)) m_HardcodedAttachableUniqueIDsAndSetters.emplace(uid, nullptr);
+	for (const auto& [uid, function]: CheckpointValues(source.m_HardcodedAttachableUniqueIDsAndRemovers)) m_HardcodedAttachableUniqueIDsAndRemovers.emplace(uid, nullptr);
+}
+
+Entity* MOSRotating::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
+std::string MOSRotating::CheckpointHooksSelfTestMismatch() {
+	CheckpointNativeStorage::AllocationScope owned(true);
+	auto source = std::make_unique<MOSRotating>();
+	source->m_HardcodedAttachableUniqueIDsAndSetters.emplace(11, [](MOSRotating*, Attachable*) {});
+	source->m_HardcodedAttachableUniqueIDsAndRemovers.emplace(13, [](MOSRotating*, Attachable*) {});
+	const auto* setters = &source->m_HardcodedAttachableUniqueIDsAndSetters;
+	const auto* removers = &source->m_HardcodedAttachableUniqueIDsAndRemovers;
+	CheckpointNativeStorage::Root settersRoot(setters);
+	CheckpointNativeStorage::Root removersRoot(removers);
+	const auto pages = CheckpointNativeStorage::Prepare();
+	settersRoot.Freeze(); removersRoot.Freeze();
+	for (const auto& page: pages) page->Arm();
+	source.reset();
+	const std::array roots{settersRoot.Range(), removersRoot.Range()};
+	CheckpointNativeStorage::ReadScope read(pages, roots);
+	const auto savedSetters = CheckpointValues(*CheckpointNativeStorage::Source(setters));
+	const auto savedRemovers = CheckpointValues(*CheckpointNativeStorage::Source(removers));
+	return savedSetters.size() == 1 && savedSetters.begin()->first == 11 &&
+	    savedRemovers.size() == 1 && savedRemovers.begin()->first == 13 ? std::string{} : "saved attachment hooks lose their keys";
+}
+
 MOSRotating::MOSRotating() {
 	Clear();
 }
 
 MOSRotating::~MOSRotating() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -490,22 +586,23 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 
 void MOSRotating::SaveSnapshotConfiguration(Writer& writer) const {
 	MOSprite::SaveSnapshotConfiguration(writer);
-	writer.NewPropertyWithValue("SpecialBehaviour_AtomGroupCheckpoint", CheckpointWriter::Native([&] { return m_PersistedAtomGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pAtomGroup) : m_PersistedAtomGroupCheckpoint; }).Base64(true));
-	writer.NewPropertyWithValue("SpecialBehaviour_DeepGroupCheckpoint", CheckpointWriter::Native([&] { return m_PersistedDeepGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pDeepGroup) : m_PersistedDeepGroupCheckpoint; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_AtomGroupCheckpoint", CheckpointWriter::Native([&] { return m_PersistedAtomGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pAtomGroup) : m_PersistedAtomGroupCheckpoint.Value(); }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_DeepGroupCheckpoint", CheckpointWriter::Native([&] { return m_PersistedDeepGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pDeepGroup) : m_PersistedDeepGroupCheckpoint.Value(); }).Base64(true));
 	writer.NewPropertyWithValue("SpecialBehaviour_ClearGibs", true);
 	for (const Gib* gib: m_Gibs) writer.NewPropertyWithValue("AddGib", *gib);
-	writer.NewPropertyWithValue("OrientToVel", m_OrientToVel);
-	writer.NewPropertyWithValue("GibImpulseLimit", m_GibImpulseLimit);
-	writer.NewPropertyWithValue("GibWoundLimit", m_GibWoundLimit);
-	writer.NewPropertyWithValue("GibBlastStrength", m_GibBlastStrength);
-	writer.NewPropertyWithValue("GibScreenShakeAmount", m_GibScreenShakeAmount);
-	writer.NewPropertyWithValue("WoundCountAffectsImpulseLimitRatio", m_WoundCountAffectsImpulseLimitRatio);
-	writer.NewPropertyWithValue("DetachAttachablesBeforeGibbingFromWounds", m_DetachAttachablesBeforeGibbingFromWounds);
-	writer.NewPropertyWithValue("GibAtEndOfLifetime", m_GibAtEndOfLifetime);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"OrientToVel">(m_OrientToVel),
+		CheckpointProperty<"GibImpulseLimit">(m_GibImpulseLimit),
+		CheckpointProperty<"GibWoundLimit">(m_GibWoundLimit),
+		CheckpointProperty<"GibBlastStrength">(m_GibBlastStrength),
+		CheckpointProperty<"GibScreenShakeAmount">(m_GibScreenShakeAmount),
+		CheckpointProperty<"WoundCountAffectsImpulseLimitRatio">(m_WoundCountAffectsImpulseLimitRatio),
+		CheckpointProperty<"DetachAttachablesBeforeGibbingFromWounds">(m_DetachAttachablesBeforeGibbingFromWounds),
+		CheckpointProperty<"GibAtEndOfLifetime">(m_GibAtEndOfLifetime));
 	writer.NewPropertyWithValue("SpecialBehaviour_GibSound", m_GibSound);
 	writer.NewPropertyWithValue("EffectOnGib", m_EffectOnGib);
 	writer.NewPropertyWithValue("LoudnessOnGib", m_LoudnessOnGib);
-	writer.NewPropertyWithValue("SpecialBehaviour_MOSRotatingRuntime", CheckpointWriter::Native([&] { return m_PersistedMOSRotatingRuntime.empty() ? SaveMOSRotatingRuntime() : m_PersistedMOSRotatingRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_MOSRotatingRuntime", CheckpointWriter::Native([&] { return m_PersistedMOSRotatingRuntime.empty() ? SaveMOSRotatingRuntime() : m_PersistedMOSRotatingRuntime.Value(); }).Base64(true));
 }
 
 int MOSRotating::Save(Writer& writer) const {
@@ -1863,7 +1960,7 @@ void MOSRotating::PostUpdate() {
 }
 
 // TODO This should just be defined in MOSR instead of having an empty definition in MO. MOSR would need to override UpdateMOID accordingly, but this would clean things up a little.
-void MOSRotating::UpdateChildMOIDs(std::vector<MovableObject*>& MOIDIndex, MOID rootMOID, bool makeNewMOID) {
+void MOSRotating::UpdateChildMOIDs(CheckpointVector<MovableObject*>& MOIDIndex, MOID rootMOID, bool makeNewMOID) {
 	MOSprite::UpdateChildMOIDs(MOIDIndex, m_RootMOID, makeNewMOID);
 
 	for (Attachable* attachable: m_Attachables) {
@@ -1930,7 +2027,7 @@ Attachable* MOSRotating::RemoveAttachable(Attachable* attachable, bool addToMova
 	attachable->SetParent(nullptr);
 	m_AttachableAndWoundMass -= attachable->GetMass();
 
-	std::unordered_map<unsigned long, std::function<void(MOSRotating*, Attachable*)>>::iterator hardcodedAttachableMapEntry = m_HardcodedAttachableUniqueIDsAndSetters.find(attachable->GetUniqueID());
+	auto hardcodedAttachableMapEntry = m_HardcodedAttachableUniqueIDsAndSetters.find(attachable->GetUniqueID());
 	if (hardcodedAttachableMapEntry != m_HardcodedAttachableUniqueIDsAndSetters.end()) {
 		hardcodedAttachableMapEntry->second(this, nullptr);
 		m_HardcodedAttachableUniqueIDsAndSetters.erase(hardcodedAttachableMapEntry);

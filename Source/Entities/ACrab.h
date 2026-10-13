@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the ACrab class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -48,6 +50,8 @@ namespace RTE {
 		/// Constructor method used to instantiate a ACrab object in system
 		/// memory. Create() should be called before using the object.
 		ACrab();
+		CheckpointSnapshotMethods(ACrab);
+		static void PrepareCheckpointNative(const ACrab& source, ACrab* target, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a ACrab object before deletion
 		/// from system memory.
@@ -335,14 +339,14 @@ namespace RTE {
 		AtomGroup* m_BackupRFGFootGroup;
 		AtomGroup* m_pRBGFootGroup;
 		AtomGroup* m_BackupRBGFootGroup;
-		std::vector<long long> m_PersistedLFGFootResidue; //!< Saved limb-group travel residue, applied on snapshot adopt.
-		std::vector<long long> m_PersistedLBGFootResidue;
-		std::vector<long long> m_PersistedRFGFootResidue;
-		std::vector<long long> m_PersistedRBGFootResidue;
-		std::vector<std::string> m_PersistedLimbPathStates; //!< Saved limb-path traversal state, applied on snapshot adopt.
+		CheckpointVector<long long> m_PersistedLFGFootResidue; //!< Saved limb-group travel residue, applied on snapshot adopt.
+		CheckpointVector<long long> m_PersistedLBGFootResidue;
+		CheckpointVector<long long> m_PersistedRFGFootResidue;
+		CheckpointVector<long long> m_PersistedRBGFootResidue;
+		CheckpointVector<CheckpointString> m_PersistedLimbPathStates; //!< Saved limb-path traversal state, applied on snapshot adopt.
 		bool m_PersistedLimbPathStatesFromFile = false; //!< Whether the stash holds file values rather than a copy capture.
-		std::string m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
-		std::string m_PersistedLimbGroupInertia; //!< Saved limb-group inertia pairs, applied on snapshot adopt.
+		CheckpointString m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
+		CheckpointString m_PersistedLimbGroupInertia; //!< Saved limb-group inertia pairs, applied on snapshot adopt.
 		// The sound of the actor taking a step (think robot servo)
 		SoundContainer* m_StrideSound;
 		// Jetpack booster.
@@ -413,7 +417,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		std::string m_PersistedACrabRuntime;
+		CheckpointString m_PersistedACrabRuntime;
 		std::string SaveACrabRuntime() const;
 		bool LoadACrabRuntime(std::string_view text, bool validateOnly = false);
 

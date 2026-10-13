@@ -1,5 +1,7 @@
 #include "DeterministicMath.h"
 #include "MOSprite.h"
+#include "CheckpointNativeSnapshot.h"
+#include "CheckpointProperties.h"
 #include "HDFirearm.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -27,11 +29,50 @@ Matrix MOSprite::GetRenderRotMatrix() const {
 
 AbstractClassInfo(MOSprite, MovableObject);
 
+MOSprite::MOSprite(const MOSprite& source, CheckpointNativeSnapshot& snapshot) :
+	MovableObject(source, snapshot),
+	m_Rotation(snapshot.Freeze(source.m_Rotation)),
+	m_PrevRotation(snapshot.Freeze(source.m_PrevRotation)),
+	m_AngularVel(snapshot.Freeze(source.m_AngularVel)),
+	m_PrevAngVel(snapshot.Freeze(source.m_PrevAngVel)),
+	m_SpriteFile(snapshot.Freeze(source.m_SpriteFile)),
+	m_aSprite(snapshot.Freeze(source.m_aSprite, &m_aSprite)),
+	m_SpriteBitmapOwners{},
+	m_IconFile(snapshot.Freeze(source.m_IconFile)),
+	m_GraphicalIcon(snapshot.Freeze(source.m_GraphicalIcon)),
+	m_FrameCount(snapshot.Freeze(source.m_FrameCount)),
+	m_SpriteOffset(snapshot.Freeze(source.m_SpriteOffset)),
+	m_Frame(snapshot.Freeze(source.m_Frame)),
+	m_SpriteAnimMode(snapshot.Freeze(source.m_SpriteAnimMode)),
+	m_SpriteAnimDuration(snapshot.Freeze(source.m_SpriteAnimDuration)),
+	m_SpriteAnimTimer(snapshot.Freeze(source.m_SpriteAnimTimer)),
+	m_SpriteAnimIsReversingFrames(snapshot.Freeze(source.m_SpriteAnimIsReversingFrames)),
+	m_HFlipped(snapshot.Freeze(source.m_HFlipped)),
+	m_ForcedHFlip(snapshot.Freeze(source.m_ForcedHFlip)),
+	m_SpriteRadius(snapshot.Freeze(source.m_SpriteRadius)),
+	m_SpriteDiameter(snapshot.Freeze(source.m_SpriteDiameter)),
+	m_AngOscillations(snapshot.Freeze(source.m_AngOscillations)),
+	m_PersistedAngOscillations(snapshot.Freeze(source.m_PersistedAngOscillations)),
+	m_PersistedSpriteAnimTimerAnchor(snapshot.Freeze(source.m_PersistedSpriteAnimTimerAnchor)),
+	m_PersistedPrevAngVel(snapshot.Freeze(source.m_PersistedPrevAngVel)),
+	m_PersistedSpriteAnimIsReversingFrames(snapshot.Freeze(source.m_PersistedSpriteAnimIsReversingFrames)),
+	m_HasPersistedSpriteAnimState(snapshot.Freeze(source.m_HasPersistedSpriteAnimState)),
+	m_HasPersistedAngOscillations(snapshot.Freeze(source.m_HasPersistedAngOscillations)),
+	m_SettleMaterialDisabled(snapshot.Freeze(source.m_SettleMaterialDisabled)),
+	m_pEntryWound(snapshot.Freeze(source.m_pEntryWound)),
+	m_pExitWound(snapshot.Freeze(source.m_pExitWound)),
+	m_SpriteModified(snapshot.Freeze(source.m_SpriteModified)),
+	m_PersistedMOSpriteRuntime(snapshot.Freeze(source.m_PersistedMOSpriteRuntime, &m_PersistedMOSpriteRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+
+}
+
 MOSprite::MOSprite() {
 	Clear();
 }
 
 MOSprite::~MOSprite() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -327,12 +368,13 @@ void MOSprite::SaveSnapshotConfiguration(Writer& writer) const {
 	MovableObject::SaveSnapshotConfiguration(writer);
 	writer.NewPropertyWithValue("SpriteOffset", m_SpriteOffset);
 	writer.NewPropertyWithValue("SpriteAnimMode", static_cast<int>(m_SpriteAnimMode));
-	writer.NewPropertyWithValue("SpriteAnimDuration", m_SpriteAnimDuration);
-	writer.NewPropertyWithValue("ForcedHFlip", m_ForcedHFlip);
-	writer.NewPropertyWithValue("SettleMaterialDisabled", m_SettleMaterialDisabled);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"SpriteAnimDuration">(m_SpriteAnimDuration),
+		CheckpointProperty<"ForcedHFlip">(m_ForcedHFlip),
+		CheckpointProperty<"SettleMaterialDisabled">(m_SettleMaterialDisabled));
 	writer.NewPropertyWithValue("SpecialBehaviour_EntryWoundPreset", m_pEntryWound ? m_pEntryWound->GetModuleAndPresetName() : "None");
 	writer.NewPropertyWithValue("SpecialBehaviour_ExitWoundPreset", m_pExitWound ? m_pExitWound->GetModuleAndPresetName() : "None");
-	writer.NewPropertyWithValue("SpecialBehaviour_MOSpriteRuntime", CheckpointWriter::Native([&] { return m_PersistedMOSpriteRuntime.empty() ? SaveMOSpriteRuntime() : m_PersistedMOSpriteRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_MOSpriteRuntime", CheckpointWriter::Native([&] { return m_PersistedMOSpriteRuntime.empty() ? SaveMOSpriteRuntime() : m_PersistedMOSpriteRuntime.Value(); }).Base64(true));
 }
 
 int MOSprite::Save(Writer& writer) const {
@@ -547,7 +589,7 @@ bool MOSprite::SetSpritePixelIndex(int x, int y, int whichFrame, int colorIndex,
 	if (m_aSprite.empty()) return false;
 	if (!m_SpriteModified) {
 		TouchCheckpoint();
-		std::vector<BITMAP*> spriteList;
+		CheckpointVector<BITMAP*> spriteList;
 		std::vector<std::shared_ptr<BITMAP>> owners;
 
 		for (BITMAP* sprite : m_aSprite) {
@@ -776,7 +818,7 @@ bool MOSprite::LoadMOSpriteRuntime(std::string_view text, bool validateOnly) {
 				owners.push_back(std::move(bitmap));
 			}
 			archive.OnCommit([this, spriteFile = std::move(spriteFile), iconFile = std::move(iconFile), owners = std::move(owners), frames = std::move(frames), icon]() mutable {
-				std::vector<BITMAP*> sprites;
+				CheckpointVector<BITMAP*> sprites;
 				for (size_t frame: frames) sprites.push_back(frame ? owners[frame - 1].get() : nullptr);
 				m_SpriteFile.LoadCheckpoint(spriteFile); m_IconFile.LoadCheckpoint(iconFile);
 				m_aSprite = std::move(sprites);

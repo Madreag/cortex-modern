@@ -76,6 +76,7 @@
 #include "ScenarioGUI.h"
 #include "FloatTextSelfTest.h"
 #include "CheckpointImage.h"
+#include "CheckpointPagePool.h"
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
@@ -173,6 +174,7 @@ extern "C" {
 #include <new.h>
 #include <processsnapshot.h>
 #include <psapi.h>
+#include <tlhelp32.h>
 #endif
 
 #include <algorithm>
@@ -182,6 +184,7 @@ extern "C" {
 #include <immintrin.h>
 #endif
 #include <chrono>
+#include <atomic>
 #include <charconv>
 #include <cstdio>
 #include <cstdlib>
@@ -1312,6 +1315,9 @@ struct MenuTraceCoverage {
 };
 static MenuTraceCoverage s_menuTraceCoverage;
 static bool s_cowCheckpointAutosave = false;
+static bool s_checkpointRestoreContinue = false;
+static uint64_t s_checkpointRestoreTick = 0;
+static uint32_t s_checkpointRestoreAutosaveTicks = 0;
 static bool s_checkpointFixturePrimeScripts = false;
 static bool s_checkpointAudioEffects = false;
 static bool s_checkpointAudioEffectsPassed = false;
@@ -1742,7 +1748,7 @@ static uint64_t s_netReplayDumpTo = 0;
 bool HarnessMatchRunActive() {
 	// This explicit checkpoint fixture flag also restores archives without an
 	// active scenario runner. Their saved baseline still includes Tests.rte.
-	if (s_cowCheckpointAutosave) return true;
+	if (s_cowCheckpointAutosave || s_checkpointRestoreContinue) return true;
 	std::string type = "GAScripted", preset = s_netMatchServiceE2EPreset, module = s_netMatchServiceE2EModule;
 	const auto selected = [&](const NetMatchConfig& config) {
 		type = config.activityType; preset = config.activityPreset; module = config.activityModule;
@@ -2253,6 +2259,21 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-cow-checkpoint-autosave") {
 			s_cowCheckpointAutosave = true;
 			++i;
+			continue;
+		}
+		if (currentArg == "-checkpoint-restore-continue") {
+			s_checkpointRestoreContinue = true;
+			++i;
+			continue;
+		}
+		if (currentArg == "-checkpoint-restore-autosave-ticks") {
+			const std::string value = lastArg ? "" : argValue[i + 1];
+			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), s_checkpointRestoreAutosaveTicks);
+			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
+				System::PrintDiagnosticErrorLine("[checkpoint-restore-continue] -checkpoint-restore-autosave-ticks requires a nonnegative 32-bit integer");
+				return false;
+			}
+			i += 2;
 			continue;
 		}
 		if (currentArg == "-checkpoint-fixture-prime-scripts") {
@@ -4655,6 +4676,200 @@ static void SaveActorHistory(bool final = true) {
 }
 
 /// <summary>
+#ifdef _WIN32
+// Test lever CCCP_TEST_SIM_SAMPLER: about every millisecond of a tick, the simulation thread's instruction pointer and the top
+// of its stack, and every other millisecond the same for each thread that ran since the last look; a tick slower than 80 ms
+// (or CCCP_TEST_SIM_SAMPLER_MIN_US when set)
+// prints each thread's CPU cycles in it and the samples of the busiest, as module offsets resolved offline against the
+// build's symbols. Nothing is allocated or locked while a thread is held.
+namespace {
+	class SimSampler {
+	public:
+		static SimSampler* Armed() {
+			static SimSampler* const sampler = std::getenv("CCCP_TEST_SIM_SAMPLER") ? new SimSampler() : nullptr;
+			return sampler;
+		}
+		void BeginTick() {
+			std::lock_guard sampling(m_Sampling);
+			m_Count = 0;
+			for (Watched& thread: m_Threads) thread.tickStart = Cycles(thread.handle);
+			m_Cycles = Cycles(GetCurrentThread());
+			m_Active.store(true, std::memory_order_release);
+		}
+		void EndTick(uint64_t tick, int64_t wallUs) {
+			size_t count = 0;
+			std::vector<std::pair<uint64_t, DWORD>> busy;
+			{
+				std::lock_guard sampling(m_Sampling);
+				m_Active.store(false, std::memory_order_release);
+				count = m_Count;
+				if (wallUs >= m_SlowUs) {
+					for (const Watched& thread: m_Threads) busy.emplace_back(Cycles(thread.handle) - thread.tickStart, thread.id);
+				}
+			}
+			const uint64_t cycles = Cycles(GetCurrentThread()) - m_Cycles;
+			if (wallUs < m_SlowUs) return;
+			busy.emplace_back(cycles, m_SimId);
+			std::sort(busy.rbegin(), busy.rend());
+			busy.resize(std::min(busy.size(), c_Busiest));
+			uint64_t total = 0;
+			std::string threads;
+			for (const auto& [used, id]: busy) {
+				total += used;
+				threads += std::format(" {}:{}", id, used);
+			}
+			System::PrintDiagnosticLine(std::format("[sim-sample] tick={} wall_us={} cycles={} samples={} sim_thread={} busiest_cycles={} busiest{}", tick, wallUs, cycles, count, m_SimId, total, threads));
+			for (size_t index = 0; index < count; ++index) {
+				const Sample& sample = m_Samples[index];
+				const bool simulation = sample.id == m_SimId;
+				if (!simulation && std::none_of(busy.begin(), busy.end(), [&sample](const auto& entry) { return entry.second == sample.id; })) continue;
+				std::string line = simulation ? std::format("[sim-sample-at] tick={} {}", tick, Place(sample.rip)) : std::format("[sim-sample-thread] tick={} tid={} {}", tick, sample.id, Place(sample.rip));
+				int callers = 0;
+				for (size_t word = 0; word < sample.words && callers < 16; ++word) {
+					if (sample.stack[word] < m_ImageBase || sample.stack[word] >= m_ImageEnd) continue;
+					line += std::format(" {:x}", sample.stack[word] - m_ImageBase);
+					++callers;
+				}
+				System::PrintDiagnosticLine(line);
+			}
+		}
+
+	private:
+		const int64_t m_SlowUs = [] {
+			const char* value = std::getenv("CCCP_TEST_SIM_SAMPLER_MIN_US");
+			const long parsed = value ? std::strtol(value, nullptr, 10) : 0;
+			return parsed > 0 ? static_cast<int64_t>(parsed) : int64_t{80000};
+		}();
+		static constexpr size_t c_Slots = 16384, c_Words = 192, c_Busiest = 12;
+		struct Sample {
+			DWORD id;
+			size_t words;
+			DWORD64 rip;
+			DWORD64 stack[c_Words];
+		};
+		struct Watched {
+			DWORD id;
+			HANDLE handle;
+			DWORD64 stackBase;
+			uint64_t tickStart;
+			uint64_t seen;
+		};
+		struct BasicInformation {
+			LONG exitStatus;
+			PVOID teb;
+			HANDLE process;
+			HANDLE thread;
+			ULONG_PTR affinity;
+			LONG priority;
+			LONG basePriority;
+		};
+		using QueryThread = LONG(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+
+		SimSampler() {
+			DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &m_Thread, THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, 0);
+			m_SimId = GetCurrentThreadId();
+			ULONG_PTR low = 0, high = 0;
+			GetCurrentThreadStackLimits(&low, &high);
+			m_SimStackBase = high;
+			MODULEINFO module{};
+			GetModuleInformation(GetCurrentProcess(), GetModuleHandle(nullptr), &module, sizeof(module));
+			m_ImageBase = reinterpret_cast<DWORD64>(module.lpBaseOfDll);
+			m_ImageEnd = m_ImageBase + module.SizeOfImage;
+			m_QueryThread = reinterpret_cast<QueryThread>(GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQueryInformationThread"));
+			m_Samples.resize(c_Slots);
+			std::thread([this] { Run(); }).detach();
+		}
+		void Run() {
+			m_SamplerId = GetCurrentThreadId();
+			auto refreshed = std::chrono::steady_clock::time_point{};
+			for (bool others = false;; others = !others) {
+				Sleep(1);
+				if (std::chrono::steady_clock::now() - refreshed > std::chrono::seconds(1)) {
+					std::lock_guard sampling(m_Sampling);
+					Refresh();
+					refreshed = std::chrono::steady_clock::now();
+				}
+				if (!m_Active.load(std::memory_order_acquire)) continue;
+				std::lock_guard sampling(m_Sampling);
+				if (!m_Active.load(std::memory_order_relaxed)) continue;
+				Take(m_Thread, m_SimId, m_SimStackBase);
+				if (!others) continue;
+				for (Watched& thread: m_Threads) {
+					const uint64_t cycles = Cycles(thread.handle);
+					if (cycles == thread.seen) continue;
+					thread.seen = cycles;
+					Take(thread.handle, thread.id, thread.stackBase);
+				}
+			}
+		}
+		// Threads come and go; the list is brought up to date between samples, never while a thread is held.
+		void Refresh() {
+			std::erase_if(m_Threads, [](const Watched& thread) {
+				if (WaitForSingleObject(thread.handle, 0) != WAIT_OBJECT_0) return false;
+				CloseHandle(thread.handle);
+				return true;
+			});
+			const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+			if (snapshot == INVALID_HANDLE_VALUE) return;
+			THREADENTRY32 entry{};
+			entry.dwSize = sizeof(entry);
+			for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry)) {
+				if (entry.th32OwnerProcessID != GetCurrentProcessId() || entry.th32ThreadID == m_SamplerId || entry.th32ThreadID == m_SimId) continue;
+				if (std::any_of(m_Threads.begin(), m_Threads.end(), [&entry](const Watched& thread) { return thread.id == entry.th32ThreadID; })) continue;
+				const HANDLE handle = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION | SYNCHRONIZE, FALSE, entry.th32ThreadID);
+				if (!handle) continue;
+				BasicInformation information{};
+				DWORD64 stackBase = 0;
+				if (m_QueryThread && m_QueryThread(handle, 0, &information, sizeof(information), nullptr) >= 0 && information.teb) {
+					stackBase = reinterpret_cast<DWORD64>(static_cast<const NT_TIB*>(information.teb)->StackBase);
+				}
+				const uint64_t cycles = Cycles(handle);
+				m_Threads.push_back({entry.th32ThreadID, handle, stackBase, cycles, cycles});
+			}
+			CloseHandle(snapshot);
+		}
+		void Take(HANDLE handle, DWORD id, DWORD64 stackBase) {
+			if (m_Count >= c_Slots || SuspendThread(handle) == static_cast<DWORD>(-1)) return;
+			CONTEXT context{};
+			context.ContextFlags = CONTEXT_CONTROL;
+			if (GetThreadContext(handle, &context)) {
+				Sample& sample = m_Samples[m_Count++];
+				sample.id = id;
+				sample.rip = context.Rip;
+				sample.words = context.Rsp < stackBase ? std::min<size_t>(c_Words, (stackBase - context.Rsp) / sizeof(DWORD64)) : 0;
+				std::memcpy(sample.stack, reinterpret_cast<const void*>(context.Rsp), sample.words * sizeof(DWORD64));
+			}
+			ResumeThread(handle);
+		}
+		std::string Place(DWORD64 address) const {
+			if (address >= m_ImageBase && address < m_ImageEnd) return std::format("exe+{:x}", address - m_ImageBase);
+			HMODULE module = nullptr;
+			char path[MAX_PATH] = {};
+			if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCSTR>(address), &module) && GetModuleFileNameA(module, path, MAX_PATH)) {
+				const std::string_view name(path);
+				return std::format("{}+{:x}", name.substr(name.find_last_of("\\/") + 1), address - reinterpret_cast<DWORD64>(module));
+			}
+			return std::format("{:x}", address);
+		}
+		static uint64_t Cycles(HANDLE thread) {
+			ULONG64 cycles = 0;
+			QueryThreadCycleTime(thread, &cycles);
+			return cycles;
+		}
+		HANDLE m_Thread = nullptr;
+		DWORD m_SimId = 0, m_SamplerId = 0;
+		DWORD64 m_SimStackBase = 0, m_ImageBase = 0, m_ImageEnd = 0;
+		QueryThread m_QueryThread = nullptr;
+		std::vector<Watched> m_Threads;
+		std::vector<Sample> m_Samples;
+		std::mutex m_Sampling;
+		size_t m_Count = 0;
+		uint64_t m_Cycles = 0;
+		std::atomic<bool> m_Active{false};
+	};
+} // namespace
+#endif
+
 /// Game simulation loop.
 // CC_SIM_DUMP=<from>:<to> writes every MO's exact-bit state per tick beside the -out trace
 // (".simdump.txt"), for host-vs-client divergence forensics.
@@ -6500,6 +6715,27 @@ static void CheckRequiredProbesCompleted() {
 	}
 }
 
+// Test lever CCCP_TEST_HOTPLUG_PAD_TICK=<tick>: a virtual gamepad arrives at that tick, as a pad plugged in mid-match does.
+static void HotPlugPadIfArmed(uint64_t simTick) {
+	static const long long s_tick = [] {
+		const char* value = std::getenv("CCCP_TEST_HOTPLUG_PAD_TICK");
+		return value ? std::atoll(value) : -1LL;
+	}();
+	if (s_tick < 0 || simTick != static_cast<uint64_t>(s_tick)) {
+		return;
+	}
+	SDL_VirtualJoystickDesc desc;
+	SDL_INIT_INTERFACE(&desc);
+	desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+	desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+	desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+	desc.button_mask = (1U << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+	desc.axis_mask = (1U << SDL_GAMEPAD_AXIS_COUNT) - 1;
+	desc.name = "Hot-plugged test pad";
+	const SDL_JoystickID pad = SDL_AttachVirtualJoystick(&desc);
+	System::PrintDiagnosticLine(std::format("[hotplug] tick={} pad={}", simTick, static_cast<unsigned>(pad)));
+}
+
 static void DumpTerrainIfArmed(uint64_t simTick) {
 	static uint64_t s_tick = 0;
 	static bool s_checked = false;
@@ -7679,7 +7915,7 @@ static Actor* FindE2eSwitchControlTarget(Activity* activity, int player) {
 		brain = g_MovableMan.GetFirstBrainActor(team);
 	}
 	Actor* best = nullptr;
-	if (std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(team)) {
+	if (auto* roster = g_MovableMan.GetTeamRoster(team)) {
 		for (Actor* actor: *roster) {
 			if (!actor || actor == brain || actor->IsInGroup("Brains") || actor->IsPlayerControlled()) {
 				continue;
@@ -7701,7 +7937,7 @@ static void NoteE2eSwitchOwnerLog(uint64_t tick) {
 	}
 	if (s_netMatchE2eSwitchUid == 0) {
 		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
-			std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(team);
+			auto* roster = g_MovableMan.GetTeamRoster(team);
 			if (!roster) {
 				continue;
 			}
@@ -7761,6 +7997,23 @@ void RunGameLoop() {
 	}
 
 	g_NetMatchService.PreparePrivateRejoinCheckpoint();
+	// While the game runs, the saver works only in the time left between a frame's due ticks and the next one.
+	const SaverThreads::Gating saverGating;
+	constexpr int64_t c_SaverSliceMarginUs = 1000;
+	// A world slower than its clock leaves the saver no idle time at all; after this many ticks without any, while a save
+	// waits, each tick lends the saver its first microseconds so the save still completes.
+	// Test lever CCCP_TEST_SAVER_FALLBACK=<ticks>:<microseconds> measures other choices.
+	static const std::pair<int64_t, int64_t> c_SaverFallback = [] {
+		std::pair<int64_t, int64_t> values{30, 4000};
+		if (const char* text = std::getenv("CCCP_TEST_SAVER_FALLBACK")) {
+			long long ticks = 0, microseconds = 0;
+			if (std::sscanf(text, "%lld:%lld", &ticks, &microseconds) == 2 && ticks > 0 && microseconds > 0) values = {ticks, microseconds};
+		}
+		return values;
+	}();
+	int64_t saverTicksWithoutIdle = 0, saverTicksWithoutWaiter = 0;
+	bool saverFallback = false;
+	uint64_t saverFallbackTicks = 0;
 
 	long long updateStartTime = 0;
 	long long updateTotalTime = 0;
@@ -7873,6 +8126,8 @@ void RunGameLoop() {
 		}
 
 		g_TimerMan.Update();
+		const int64_t clockReadUs = SaverThreads::NowUs();
+		const int64_t saverTicksAtFrameStart = g_TimerMan.GetSimUpdateCount();
 		MemoryCensusByUptime();
 
 		if (!g_ActivityMan.ActivityRunning()) {
@@ -7938,6 +8193,10 @@ void RunGameLoop() {
 			if (g_TimerMan.SimFrameBudgetSpent()) {
 				break;
 			}
+			// A restored run ends on the tick its cap names, not after the rest of that tick's frame.
+			if (s_checkpointRestoreContinue && System::IsSetToQuit()) {
+				break;
+			}
 			// A joiner launched from the menu restores its base before asking for the tick after it, as a launch at the loop's start does:
 			// the counter still reads the round this process left, whose next tick the catch-up never grants.
 			if (ScenarioRunner::WorldCatchUpActive() && !g_ActivityMan.IsInActivity() && g_ActivityMan.ActivitySetToRestart()) {
@@ -7969,6 +8228,58 @@ void RunGameLoop() {
 				break;
 			}
 			ZoneScopedN("Simulation Update");
+			if (saverFallback) {
+				SaverThreads::LendTickStart(c_SaverFallback.second);
+				++saverFallbackTicks;
+			} else {
+				SaverThreads::CloseSlice();
+			}
+			// Test lever CCCP_TEST_SAVER_STAND_IN=<tick>:<seconds>:<megabytes>: from that tick, one thread at the saver's priority
+			// streams through a buffer of that size for that long, a saver's memory traffic with no save behind it, in the
+			// game's idle time as a saver works.
+			static const std::array<unsigned long long, 3> standIn = [] {
+				std::array<unsigned long long, 3> values{};
+				const char* text = std::getenv("CCCP_TEST_SAVER_STAND_IN");
+				if (!text || std::sscanf(text, "%llu:%llu:%llu", &values[0], &values[1], &values[2]) != 3 || !values[2]) values = {};
+				return values;
+			}();
+			if (standIn[2] && static_cast<unsigned long long>(nextSimTick) == standIn[0]) {
+				std::thread([seconds = standIn[1], bytes = standIn[2] << 20] {
+					SaverThreads::Enter();
+					std::vector<unsigned char> buffer(bytes, 1);
+					const size_t half = bytes / 2, chunk = size_t{1} << 20;
+					const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+					for (size_t offset = 0; std::chrono::steady_clock::now() < until; offset = (offset + chunk) % half) {
+					SaverThreads::YieldToGame();
+					std::memcpy(buffer.data() + half + offset, buffer.data() + offset, chunk);
+				}
+				}).detach();
+			}
+#ifdef _WIN32
+			// Ends after the tick's own cost line, so printing the samples never lands inside a measured tick.
+			struct SampledTick {
+				uint64_t tick;
+				std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+				explicit SampledTick(uint64_t tick) : tick(tick) { if (auto* sampler = SimSampler::Armed()) sampler->BeginTick(); }
+				~SampledTick() {
+					if (auto* sampler = SimSampler::Armed()) sampler->EndTick(tick, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+				}
+			} sampledTick{static_cast<uint64_t>(nextSimTick)};
+#endif
+			struct RestoreTickCost {
+				bool enabled;
+				uint64_t tick;
+				std::chrono::steady_clock::time_point start;
+				~RestoreTickCost() {
+					if (enabled) System::PrintDiagnosticLine(std::format("[checkpoint-restore-tick] tick={} sim_us={}", tick,
+					    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()));
+					if (enabled && CheckpointPagePool::TallyingFaults()) {
+						const auto tally = CheckpointPagePool::TakeFaultTally();
+						const auto [luaFaults, luaFaultUs] = LuaMan::TakeHeapFaultTally();
+						System::PrintDiagnosticLine(std::format("[native-fault-tick] tick={} faults={} fault_us={} settled={} cooled={} lua_faults={} lua_fault_us={}", tick, tally.faults, tally.faultNs / 1000, tally.settled, tally.cooled, luaFaults, luaFaultUs));
+					}
+				}
+			} restoreTickCost{s_checkpointRestoreContinue, nextSimTick, s_checkpointRestoreContinue ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}};
 			const FloatingPointEnvironment::Scope floatingPointScope("simulation tick");
 			HarnessCost::BeginFrame();
 
@@ -8065,7 +8376,8 @@ void RunGameLoop() {
 				for (SceneObject* object: actors) if (auto* actor = dynamic_cast<Actor*>(object)) actor->InitializeObjectScriptsIfNeeded();
 			}
 			if (!s_loadGameName.empty() && ScenarioRunner::GetArgs().maxTicks > 0 &&
-			    simTick >= static_cast<uint64_t>(ScenarioRunner::GetArgs().maxTicks)) {
+			    (s_checkpointRestoreContinue ? simTick >= s_checkpointRestoreTick && simTick - s_checkpointRestoreTick >= static_cast<uint64_t>(ScenarioRunner::GetArgs().maxTicks) :
+			     simTick >= static_cast<uint64_t>(ScenarioRunner::GetArgs().maxTicks))) {
 				System::SetQuit(true);
 			}
 			if (s_cowCheckpointAutosave && g_ActivityMan.ActivityRunning() && simTick == 1) {
@@ -8603,6 +8915,7 @@ void RunGameLoop() {
 			PreviewEventLedgerFrameOnTick();
 			TrackUidsIfArmed(simTick);
 			DumpTerrainIfArmed(simTick);
+			HotPlugPadIfArmed(simTick);
 			{
 				static const std::string s_wendPath = (!ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim")) + ".wend.terrainevents.txt";
 				SceneMan::FlushTerrainEventsAtWindowEnd(simTick, s_wendPath);
@@ -8647,6 +8960,15 @@ void RunGameLoop() {
 				g_MovableMan.FeedTickEndChecksum();
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
+				if (s_checkpointRestoreContinue) System::PrintDiagnosticLine(std::format("[checkpoint-restore-hash] tick={} total={} sim_gated={}",
+				    simTick, SimChecksum::HashHex(tickResult.total), SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult))));
+				// Test lever CCCP_TEST_HASH_SUBSYSTEMS: a continued restore also names each subsystem's hash, so a divergence names its part.
+				static const bool hashSubsystems = std::getenv("CCCP_TEST_HASH_SUBSYSTEMS") != nullptr;
+				if (s_checkpointRestoreContinue && hashSubsystems) {
+					std::string line = std::format("[checkpoint-restore-subsystems] tick={}", simTick);
+					for (const auto& [name, hash]: SimChecksum::CompleteSubsystems(tickResult)) line += std::format(" {}={}", name, SimChecksum::HashHex(hash).substr(0, 12));
+					System::PrintDiagnosticLine(line);
+				}
 				RetractAbandonedTickHashes();
 				if (liveHashTick) {
 					nlohmann::json subsystems = nlohmann::json::object();
@@ -8769,6 +9091,7 @@ void RunGameLoop() {
 
 			// Sim consumed this tick's accumulated input edges; clear before next tick reads
 			g_UInputMan.EndSimUpdate();
+			g_ActivityMan.NotifyCheckpointTick();
 			if (probeTickResult) RollbackProbeOnHashedTick(simTick, *probeTickResult);
 			if (s_checkpointAudioEffects && simTick == 1) {
 				s_checkpointAudioEffectsPassed = g_AudioMan.RunCheckpointEffectsSelfTest();
@@ -8787,9 +9110,15 @@ void RunGameLoop() {
 					System::SetQuit(true);
 				}
 			}
+			// A continued restore repeats its capture at the boundary the live autosave uses.
+			if (s_cowCheckpointAutosave && s_checkpointRestoreContinue && s_checkpointRestoreAutosaveTicks > 0 && g_ActivityMan.ActivityRunning() &&
+			    simTick > s_checkpointRestoreTick && (simTick - s_checkpointRestoreTick) % s_checkpointRestoreAutosaveTicks == 0 &&
+			    !g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", simTick)) {
+				System::PrintDiagnosticLine(std::format("[checkpoint-restore-autosave] refused tick={}", simTick));
+			}
 			// The self-test's capture rides the same tick boundary the live autosave uses, after the
 			// census above: a capture taken at the top of the frame describes a different instant.
-			if (s_cowCheckpointAutosave && g_ActivityMan.ActivityRunning() && simTick > 0 && (simTick == 1 || simTick % 60 == 0)) {
+			if (s_cowCheckpointAutosave && !s_checkpointRestoreContinue && g_ActivityMan.ActivityRunning() && simTick > 0 && (simTick == 1 || simTick % 60 == 0)) {
 				// The capture freezes the sim thread, so its budget is one sim tick.
 				constexpr int64_t captureBudgetUs = 16700;
 				const bool saved = g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", simTick);
@@ -9675,6 +10004,22 @@ void RunGameLoop() {
 		// The frame's budget ran out with ticks still due: the round is behind its schedule, not waiting on a peer.
 		const bool ticksOwed = pacedRound && g_TimerMan.SimFrameBudgetSpent();
 		g_TimerMan.BeginSimFrame(0);
+		// The due ticks are done; until the next one is due, the saver may use the time this frame is drawn in.
+		const int64_t saverSliceEndUs = clockReadUs + (g_TimerMan.GetDeltaTimeTicks() - g_TimerMan.GetSimAccumulator()) * 1000000 / g_TimerMan.GetTicksPerSecond() - c_SaverSliceMarginUs;
+		const bool saverIdle = saverSliceEndUs > SaverThreads::NowUs();
+		if (saverIdle) SaverThreads::OpenSlice(saverSliceEndUs);
+		// A slow world runs several ticks per drawn frame, so the time without idle is counted in ticks.
+		const int64_t saverTicksThisFrame = g_TimerMan.GetSimUpdateCount() - saverTicksAtFrameStart;
+		saverTicksWithoutIdle = saverIdle ? 0 : saverTicksWithoutIdle + saverTicksThisFrame;
+		saverTicksWithoutWaiter = SaverThreads::Waiting() ? 0 : saverTicksWithoutWaiter + saverTicksThisFrame;
+		// It ends when idle time returns or when no saver has asked for time for as long.
+		const bool saverFallbackDue = saverFallback ? !saverIdle && saverTicksWithoutWaiter < c_SaverFallback.first
+		                                            : SaverThreads::Waiting() && saverTicksWithoutIdle >= c_SaverFallback.first;
+		if (saverFallbackDue != saverFallback) {
+			saverFallback = saverFallbackDue;
+			System::PrintDiagnosticLine(std::format("[saver-fallback] {} tick={} ticks_without_idle={} slice_us={} lent_ticks={}", saverFallback ? "on" : "off",
+			    g_TimerMan.GetSimUpdateCount(), saverTicksWithoutIdle, c_SaverFallback.second, saverFallbackTicks));
+		}
 
 		if (returnToMenuAfterNetworkEnd && !System::IsSetToQuit()) {
 			g_TimerMan.PauseSim(true);
@@ -11447,6 +11792,7 @@ int main(int argc, char** argv) {
 			return SimChecksum::RunRowBlockSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-cow-checkpoint-selftest") {
+			install_allegro(SYSTEM_NONE, &errno, std::atexit);
 			return RTE::RunCheckpointImageSelfTest() ? 0 : 1;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-float-text-selftest") {
@@ -12113,6 +12459,7 @@ int main(int argc, char** argv) {
 			ScenarioRunner::SetLockstepStallOverlayEnabled(true);
 			bool loadedSavedGame = false;
 			if (!s_loadGameName.empty()) {
+				if (s_cowCheckpointAutosave) CheckpointBuffer::PrepareCaptureStorage(256 << 20);
 				loadedSavedGame = g_ActivityMan.LoadAndLaunchGame(s_loadGameName);
 				{
 					std::ostringstream line;
@@ -12120,6 +12467,7 @@ int main(int argc, char** argv) {
 					System::PrintDiagnosticLine(line.str());
 				}
 				if (!loadedSavedGame) {
+					if (s_cowCheckpointAutosave) CheckpointBuffer::CancelCaptureStorage();
 					s_loadGameFailed = true;
 					System::SetQuit(true);
 				}
@@ -12127,8 +12475,12 @@ int main(int argc, char** argv) {
 					// Recapture the restored instant before simulation advances. The
 					// fixture's absolute two-tick cap can precede the saved tick.
 					const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-					if (!g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", tick) || !g_ActivityMan.WaitForAutosaveVerdict()) s_loadGameFailed = true;
-					System::SetQuit(true);
+					if (!g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", tick) || (!s_checkpointRestoreContinue && !g_ActivityMan.WaitForAutosaveVerdict())) s_loadGameFailed = true;
+					if (!s_checkpointRestoreContinue || s_loadGameFailed) System::SetQuit(true);
+				}
+				if (loadedSavedGame && s_checkpointRestoreContinue) {
+					s_checkpointRestoreTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+					if (ScenarioRunner::GetArgs().maxTicks <= 0) { s_loadGameFailed = true; System::SetQuit(true); }
 				}
 			}
 			if (!loadedSavedGame && !g_ActivityMan.Initialize()) {
@@ -12144,6 +12496,12 @@ int main(int argc, char** argv) {
 			}
 
 			RunGameLoop();
+			if (loadedSavedGame && s_checkpointRestoreContinue) {
+				const bool saved = !s_cowCheckpointAutosave || g_ActivityMan.WaitForAutosaveVerdict();
+				s_loadGameFailed = s_loadGameFailed || !saved;
+				System::PrintDiagnosticLine(std::format("[checkpoint-restore-continue] start={} end={} captured={} verdict={}",
+				    s_checkpointRestoreTick, g_TimerMan.GetSimUpdateCount(), s_cowCheckpointAutosave, !s_loadGameFailed));
+			}
 
 			// The menu-driven match writes the same lockstep counters the headless gates do, so a
 			// lobby lane can say which side of the relay a stall was on.

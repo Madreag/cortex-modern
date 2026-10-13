@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointArchive.h"
+#include "CheckpointNativeContainers.h"
 #include "SoundSimulation.h"
 
 #include <algorithm>
@@ -8,6 +9,8 @@
 #include <vector>
 
 namespace RTE {
+
+	class CheckpointNativeSnapshot;
 
 	constexpr size_t c_MaxLogicalVoicesPerContainer = 128;
 
@@ -111,7 +114,7 @@ namespace RTE {
 	struct LogicalSoundPlayback {
 		LogicalSoundKey identity;
 		uint64_t lastObjectUID = 0; //!< The object whose phase last played this container; its controller answers for the sound.
-		std::vector<LogicalSoundVoice> voices;
+		CheckpointVector<LogicalSoundVoice> voices;
 		template<class Archive> void Fields(Archive& archive) { archive(identity, lastObjectUID, voices); }
 		std::string SaveCheckpoint() const { CheckpointWriter writer("LogicalSoundPlayback2"); const_cast<LogicalSoundPlayback*>(this)->Fields(writer); return writer.Text(); }
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) {
@@ -126,5 +129,8 @@ namespace RTE {
 			} catch (const std::exception&) { return false; }
 		}
 	};
+
+	/// A saved playback reads its voices from the frozen pages, never through the live vector.
+	LogicalSoundPlayback FreezeCheckpointValue(const LogicalSoundPlayback& source, CheckpointNativeSnapshot& snapshot);
 
 } // namespace RTE

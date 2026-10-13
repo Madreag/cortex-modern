@@ -8,33 +8,139 @@
 
 #include "BS_thread_pool.hpp"
 #include "FloatingPointEnvironment.h"
+#include "CheckpointFailure.h"
 
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 namespace RTE {
+
+	/// The threads that write saves run below the simulation's threads, and the work they hand out goes to a pool of their
+	/// own that runs below them too, so a save never queues ahead of a tick's tasks.
+	class SaverThreads {
+	public:
+		/// Lowers the calling thread below the simulation's threads for the rest of its life and marks it the saver's.
+		static void Enter();
+
+		/// Marks the calling thread the saver's without lowering it, for a thread the simulation may wait on.
+		static void Mark() noexcept { s_Current = true; }
+
+		/// Whether the calling thread is one of the saver's.
+		static bool Current() noexcept { return s_Current; }
+
+		/// Whether a game loop is handing the savers its idle time.
+		static bool Gated() noexcept { return s_Gating.load(std::memory_order_relaxed) > 0; }
+
+		/// The pool whose threads take the saver's parallel work.
+		static BS::thread_pool& Pool();
+
+		/// The saver's pool when a saver thread asks, else the pool asked for.
+		static BS::thread_pool& PoolFor(BS::thread_pool& pool) { return s_Current ? Pool() : pool; }
+
+		/// While the game runs, the saver's threads work only in its idle time: the game loop opens a slice when a tick's work
+		/// is done and closes it when the next tick starts, and a saver thread calls this where it holds nothing the game needs
+		/// and waits here while no slice is open. A game that is never idle gets a save that takes longer, never a slower tick.
+		static void YieldToGame() {
+			if (!s_Current || !s_Gating.load(std::memory_order_relaxed) || s_Lent.load(std::memory_order_relaxed) > 0) return;
+			CheckSlice();
+		}
+
+		/// The game loop's side: the saver may work until the given steady-clock microsecond.
+		static void OpenSlice(int64_t untilUs);
+
+		/// The game loop's side: a tick starts, and the saver stops at its next yield.
+		static void CloseSlice() noexcept;
+
+		/// The game loop's side when it has left the saver no idle time for a while: the tick starting now lends the saver its
+		/// first microseconds, game work in flight or not, so a save in a world slower than its clock still completes.
+		static void LendTickStart(int64_t microseconds);
+
+		/// Whether a saver thread is parked waiting for a slice: a save is in progress and wants time.
+		static bool Waiting() noexcept { return s_Parked.load(std::memory_order_relaxed) > 0; }
+
+		/// The steady clock in microseconds, as the slices are measured.
+		static int64_t NowUs() noexcept;
+
+		/// Game work that runs across ticks (a path solve, a horizon job) counts from its submission to its end, and savers
+		/// stay parked while any is in flight: the time between ticks is not idle while it runs, and a saver beside it on the
+		/// same core makes the next tick wait for it.
+		static void GameWorkBegins() noexcept { s_GameWork.fetch_add(1, std::memory_order_acq_rel); }
+		static void GameWorkEnds() noexcept;
+
+		/// Ends one piece of game work when the task that does it ends, however it ends.
+		class GameWorkScope {
+		public:
+			GameWorkScope() = default;
+			~GameWorkScope() { GameWorkEnds(); }
+			GameWorkScope(const GameWorkScope&) = delete;
+			GameWorkScope& operator=(const GameWorkScope&) = delete;
+		};
+
+		/// Opens the gate while the game itself waits on the saver's work.
+		class Lend {
+		public:
+			Lend();
+			~Lend();
+			Lend(const Lend&) = delete;
+			Lend& operator=(const Lend&) = delete;
+		};
+
+		/// The game loop drives the slices while this is held; outside it (menus, loading) the saver runs freely.
+		class Gating {
+		public:
+			Gating();
+			~Gating();
+			Gating(const Gating&) = delete;
+			Gating& operator=(const Gating&) = delete;
+		};
+
+	private:
+		static void CheckSlice();
+		static void WaitForSlice();
+
+		static inline thread_local bool s_Current = false;
+		static inline thread_local bool s_Lowered = false;
+		static inline std::atomic<int> s_Gating{0};
+		static inline std::atomic<int> s_Lent{0};
+		static inline std::atomic<int64_t> s_SliceEndUs{0};
+		static inline std::atomic<int64_t> s_ClosedAtUs{0};
+		static inline std::atomic<int> s_GameWork{0};
+		static inline std::atomic<bool> s_SliceLent{false};
+		static inline std::atomic<int> s_Parked{0};
+	};
 
 	/// Runs work(index) for every index below a count on a pool, the items taken in index order by whichever thread comes
 	/// free first. The owner takes items too when it finishes, so it never waits behind other work queued on the pool for
 	/// an item nobody has started; it waits only for the items already running.
 	class ParallelWork {
 	public:
-		/// @param pool The pool whose threads help. @param count How many items. @param work The item's work; it outlives
-		/// no Finish, so it may hold references to the owner's locals. @param helpers At most this many pool threads help.
+		/// @param pool The pool whose threads help; the saver's own pool when a saver thread asks. @param count How many
+		/// items. @param work The item's work; it outlives no Finish, so it may hold references to the owner's locals.
+		/// @param helpers At most this many pool threads help.
 		ParallelWork(BS::thread_pool& pool, size_t count, std::function<void(size_t)> work, size_t helpers = DefaultHelpers()) :
 		    m_Shared(std::make_shared<Shared>()) {
 			m_Shared->count = count;
 			m_Shared->work = std::move(work);
-			const size_t threads = std::min<size_t>({count > 0 ? count - 1 : 0, helpers, static_cast<size_t>(pool.get_thread_count())});
-			for (size_t helper = 0; helper < threads; ++helper) {
-				pool.push_task([shared = m_Shared] { Run(*shared); });
+			BS::thread_pool& helping = SaverThreads::PoolFor(pool);
+			const size_t threads = std::min<size_t>({count > 0 ? count - 1 : 0, helpers, static_cast<size_t>(helping.get_thread_count())});
+			try {
+				for (size_t helper = 0; helper < threads; ++helper) {
+					CheckpointFailure::Check(CheckpointFailure::Point::ParallelSubmission);
+					helping.push_task([shared = m_Shared] { Run(*shared); });
+				}
+			} catch (...) {
+				// Finish submitted readers before the constructor releases the caller's values.
+				Finish(false);
+				throw;
 			}
 		}
 		~ParallelWork() {
@@ -77,6 +183,7 @@ namespace RTE {
 
 		static void Run(Shared& shared) {
 			for (size_t index = shared.next.fetch_add(1, std::memory_order_relaxed); index < shared.count; index = shared.next.fetch_add(1, std::memory_order_relaxed)) {
+				SaverThreads::YieldToGame();
 				const FloatingPointEnvironment::Scope scope("parallel callback");
 				std::exception_ptr failure;
 				try {
@@ -127,6 +234,25 @@ namespace RTE {
 
 		BS::thread_pool& GetBackgroundThreadPool() { return m_BackgroundThreadPool; }
 
+		/// Keeps nested native checkpoint helpers separate from the Lua capture pool.
+		BS::thread_pool& GetCheckpointThreadPool() {
+			std::call_once(m_CheckpointPoolOnce, [this] {
+				m_CheckpointThreadPool = std::make_unique<BS::thread_pool>(std::max(1u, std::thread::hardware_concurrency()));
+			});
+			return *m_CheckpointThreadPool;
+		}
+
+		/// The saver's own pool: its threads run below the simulation's.
+		BS::thread_pool& GetSaverThreadPool() {
+			std::call_once(m_SaverPoolOnce, [this] {
+				m_SaverThreadPool = std::make_unique<BS::thread_pool>(std::max(1u, std::thread::hardware_concurrency()), [] {
+					FloatingPointEnvironment::Initialize();
+					SaverThreads::Enter();
+				}, [] { FloatingPointEnvironment::Assert("saver task"); });
+			});
+			return *m_SaverThreadPool;
+		}
+
 		/// Protected member variable and method declarations
 	protected:
 		/// Private member variable and method declarations
@@ -144,6 +270,10 @@ namespace RTE {
 
 		// For background tasks that we can just let happen whenever over multiple frames
 		BS::thread_pool m_BackgroundThreadPool;
+		std::unique_ptr<BS::thread_pool> m_CheckpointThreadPool;
+		std::once_flag m_CheckpointPoolOnce;
+		std::unique_ptr<BS::thread_pool> m_SaverThreadPool;
+		std::once_flag m_SaverPoolOnce;
 	};
 
 } // namespace RTE

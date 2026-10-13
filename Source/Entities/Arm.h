@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 #include "Attachable.h"
 
 #include <queue>
@@ -22,6 +25,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate an Arm object in system memory. Create() should be called before using the object.
 		Arm();
+		CheckpointSnapshotMethods(Arm);
 
 		/// Makes the Arm object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
@@ -162,7 +166,7 @@ namespace RTE {
 
 		/// Gets the name of this Arm's next HandTarget.
 		/// @return The name of this Arm's next HandTarget.
-		std::string GetNextHandTargetDescription() const { return m_HandTargets.empty() ? "" : m_HandTargets.front().Description; }
+		std::string GetNextHandTargetDescription() const { return m_HandTargets.empty() ? std::string() : m_HandTargets.front().Description.Value(); }
 
 		/// Gets the position, in absolute scene coordinates, of this Arm's next HandTarget.
 		/// @return The position of this Arm's next HandTarget.
@@ -245,7 +249,7 @@ namespace RTE {
 #pragma endregion
 
 	private:
-		std::string m_PersistedArmRuntime;
+		CheckpointString m_PersistedArmRuntime;
 		std::string SaveArmRuntime() const;
 		bool LoadArmRuntime(std::string_view text, bool validateOnly = false);
 
@@ -257,7 +261,7 @@ namespace RTE {
 			HandTarget(const std::string_view& description, const Vector& targetOffset, float delayAtTarget, bool hFlippedWhenTargetWasCreated) :
 			    Description(description), TargetOffset(targetOffset), DelayAtTarget(delayAtTarget), HFlippedWhenTargetWasCreated(hFlippedWhenTargetWasCreated) {}
 
-			std::string Description = "";
+			CheckpointString Description;
 			Vector TargetOffset;
 			float DelayAtTarget = 0;
 			bool HFlippedWhenTargetWasCreated = false;
@@ -275,7 +279,7 @@ namespace RTE {
 		Vector m_HandPrevPos; //!< The position of this Arm's hand in the previous update
 		Vector m_HandPos; //!< The current position of this Arm's hand in absolute Scene coordinates.
 
-		std::queue<HandTarget> m_HandTargets; // A queue of target positions this Arm's hand is reaching towards. If it's empty, the Arm isn't reaching towards anything.
+		CheckpointQueue<HandTarget> m_HandTargets; // A queue of target positions this Arm's hand is reaching towards. If it's empty, the Arm isn't reaching towards anything.
 		Timer m_HandMovementDelayTimer; //!< A Timer for making the hand wait at its current HandTarget.
 		bool m_HandHasReachedCurrentTarget; //!< A flag for whether or not the hand has reached its current target. The target is either the front of the HandTarget queue, or the appropriate target to move to if the queue is empty.
 		PersistedTimerAnchor m_PersistedHandMovementDelayTimerAnchor;

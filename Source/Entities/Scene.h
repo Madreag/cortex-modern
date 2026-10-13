@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+
 /// Header file for the Scene class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -49,7 +51,7 @@ namespace RTE {
 		/// How long this thread's last side-by-side object capture took, in microseconds.
 		static int64_t LastObjectCaptureUs();
 		/// Captures the placeable objects side by side, each as the scene's object loop would write it, in their order.
-		static std::vector<CheckpointText> CaptureSceneObjects(const Writer& writer, const std::list<SceneObject*>& objects, const std::function<bool(const SceneObject*)>& placeable, bool saveFullData);
+		static std::vector<CheckpointText> CaptureSceneObjects(const Writer& writer, const CheckpointList<SceneObject*>& objects, const std::function<bool(const SceneObject*)>& placeable, bool saveFullData);
 
 		// Available placed objects sets
 		enum PlacedObjectSets {
@@ -61,9 +63,9 @@ namespace RTE {
 
 		struct RuntimeOwners {
 			std::array<SceneObject*, Players::MaxPlayerCount> brains{};
-			std::array<std::list<SceneObject*>, PLACEDSETSCOUNT> placed;
-			std::list<SLBackground*> backgrounds;
-			std::list<Deployment*> deployments;
+			std::array<CheckpointList<SceneObject*>, PLACEDSETSCOUNT> placed;
+			CheckpointList<SLBackground*> backgrounds;
+			CheckpointList<Deployment*> deployments;
 			~RuntimeOwners();
 		};
 		void SwapRuntimeOwners(RuntimeOwners& state);
@@ -89,6 +91,8 @@ namespace RTE {
 			SerializableClassNameGetter;
 			SerializableOverrideMethods;
 			std::string SaveCheckpoint() const;
+			Area(const Area& source, CheckpointNativeSnapshot& snapshot);
+			void AssignCheckpointNative(const Area& source, CheckpointNativeSnapshot& snapshot);
 			void TouchCheckpoint();
 			bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 
@@ -111,14 +115,17 @@ namespace RTE {
 				Track(this, true);
 			}
 			~Area() override {
+				if (m_FrozenNative) return;
 				Destroy(true);
-				Track(this, false);
+				if (!m_PrivateRegistry || CheckpointNativeStorage::Reading()) Track(this, false);
 			}
 
 			/// Whether an Area lives at an address; only the address is read, so a script's reference that outlived its scene can be asked.
 			/// @param area The address to look up.
 			/// @return Whether an Area is constructed there and not yet destroyed.
 			static bool IsLive(const Area* area);
+			static void RebuildCheckpointRegistry(CheckpointNativeSnapshot& snapshot);
+			static std::string CheckpointRegistrySelfTestMismatch();
 			Area& operator=(const Area& reference) {
 				if (this != &reference) {
 					Reset();
@@ -165,7 +172,7 @@ namespace RTE {
 
 			/// Gets the boxes for this area.
 			/// @return The boxes in this Area.
-			const std::vector<Box*>& GetBoxes() const { return m_BoxList; }
+			const CheckpointVector<Box*>& GetBoxes() const { return m_BoxList; }
 
 			/// Shows whether this really has no Area at all, ie it doesn't have any
 			/// Box:es with both width and height.
@@ -224,13 +231,15 @@ namespace RTE {
 			/// Protected member variable and method declarations
 		protected:
 			// The list of Box:es defining the Area in the owner Scene
-			std::vector<Box*> m_BoxList;
+			CheckpointVector<Box*> m_BoxList;
 			// The name tag of this Area
-			std::string m_Name;
+			CheckpointString m_Name;
 
 			/// Private member variable and method declarations
 		private:
 			static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.
+			bool m_FrozenNative = false;
+			bool m_PrivateRegistry = CheckpointNativeStorage::Reading();
 
 			/// Enters or leaves the set of live Areas IsLive reads.
 			static void Track(const Area* area, bool live);
@@ -264,6 +273,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a Scene object in system
 		/// memory. Create() should be called before using the object.
 		Scene();
+		CheckpointSnapshotMethods(Scene);
 
 		/// Destructor method used to clean up a Scene object before deletion
 		/// from system memory.
@@ -399,11 +409,12 @@ namespace RTE {
 		/// Gets the SLTerrain.
 		/// @return A pointer to the SLTerrain. Ownership is NOT transferred!
 		SLTerrain* GetTerrain() { return m_pTerrain; }
+		const SLTerrain* GetTerrain() const { return m_pTerrain; }
 
 		/// Gets access to the background layer list.
 		/// @return A reference to the std::list containing all the background layers.
 		/// Ownership is NOT transferred!
-		std::list<SLBackground*>& GetBackLayers() { return m_BackLayerList; }
+		CheckpointList<SLBackground*>& GetBackLayers() { return m_BackLayerList; }
 
 		/// Adds area to the list if this scene's areas.
 		/// @param m_AreaList.push_back(newArea Area to add.
@@ -431,7 +442,7 @@ namespace RTE {
 		/// Gets the list of pixels that have been seen on a team's unseen layer.
 		/// @param team Which team to get the unseen layer for. (default: Activity::TeamOne)
 		/// @return The list of pixel coordinates in the unseen layer's scale.
-		std::list<Vector>& GetSeenPixels(int team = Activity::TeamOne) { return m_SeenPixels[team]; }
+		CheckpointList<Vector>& GetSeenPixels(int team = Activity::TeamOne) { return m_SeenPixels[team]; }
 
 		/// Clears the pixels that have been seen on a team's unseen layer.
 		/// @param team Which team to get the unseen layer for. (default: Activity::TeamOne)
@@ -496,7 +507,7 @@ namespace RTE {
 		/// Gets the list of SceneObject:s which are placed in this scene on loading.
 		/// @param whichSet Which set of placed objects to get. See the PlacedObjectSets enum.
 		/// @return The list of of placed objects. Ownership is NOT transferred!
-		const std::list<SceneObject*>* GetPlacedObjects(int whichSet) const { return &m_PlacedObjects[whichSet]; }
+		const CheckpointList<SceneObject*>* GetPlacedObjects(int whichSet) const { return &m_PlacedObjects[whichSet]; }
 
 		/// Adds a SceneObject to be placed in this scene. Ownership IS transferred!
 		/// @param whichSet Which set of placed objects to add to. See the PlacedObjectSets enum.
@@ -565,12 +576,12 @@ namespace RTE {
 
 		struct AreaState {
 			std::vector<std::unique_ptr<Area>> areas;
-			std::vector<std::string> navigableAreas;
+			CheckpointVector<CheckpointString> navigableAreas;
 			bool navigableAreasUpToDate = false;
 		};
 
 		/// Gets the ordered areas owned by this scene.
-		const std::list<Area*>& GetAreas() const { return m_AreaList; }
+		const CheckpointList<Area*>& GetAreas() const { return m_AreaList; }
 
 		/// Copies the area state for a checkpoint.
 		void CaptureAreas(AreaState& state) const;
@@ -844,6 +855,11 @@ namespace RTE {
 		// Pathfinding graph and logic. Owned by this
 		// The array of PathFinders for each team. Because we also have a shared pathfinder using index 0, we need to use MaxTeamCount + 1 to handle all the Teams' PathFinders.
 		std::array<std::unique_ptr<PathFinder>, Activity::Teams::MaxTeamCount + 1> m_pPathFinders;
+		std::array<CheckpointText, Activity::Teams::MaxTeamCount + 1> m_FrozenPathFinders;
+		CheckpointList<SceneObject*> m_FrozenSaveRoots;
+		bool m_FrozenFullGameSave = true;
+		int m_FrozenSaveModuleID = -1;
+		CheckpointString m_FrozenSaveModulePath;
 		// Is set to true on any frame the pathfinding data has been updated
 		bool m_PathfindingUpdated;
 		// Timer for when to do an update of the pathfinding data
@@ -851,33 +867,33 @@ namespace RTE {
 		std::vector<HorizonTerrainBox> m_HorizonTerrainBoxes;
 
 		// SceneObject:s to be placed in the scene, divided up by different sets - OWNED HERE
-		std::list<SceneObject*> m_PlacedObjects[PLACEDSETSCOUNT];
+		CheckpointList<SceneObject*> m_PlacedObjects[PLACEDSETSCOUNT];
 		// List of background layers, first is the closest to the terrain, last is closest to the back
-		std::list<SLBackground*> m_BackLayerList;
+		CheckpointList<SLBackground*> m_BackLayerList;
 		// Dimensions of the pixels of the unseen layers, when they are dynamically generated. If 0, the layer was not generated
 		Vector m_UnseenPixelSize[Activity::MaxTeamCount];
 		// Layers representing the unknown areas for each team
 		SceneLayer* m_apUnseenLayer[Activity::MaxTeamCount];
 		// Which pixels of the unseen map have just been revealed this frame, in the coordinates of the unseen map
-		std::list<Vector> m_SeenPixels[Activity::MaxTeamCount];
+		CheckpointList<Vector> m_SeenPixels[Activity::MaxTeamCount];
 		// Pixels on the unseen map deemed to be orphans and cleaned up, will be moved to seen pixels next update
-		std::list<Vector> m_CleanedPixels[Activity::MaxTeamCount];
+		CheckpointList<Vector> m_CleanedPixels[Activity::MaxTeamCount];
 		// Whether this Scene is scheduled to be orbitally scanned by any team
 		bool m_ScanScheduled[Activity::MaxTeamCount];
 
 		// List of all the specified Area's of the scene
-		std::list<Area*> m_AreaList;
+		CheckpointList<Area*> m_AreaList;
 
 		// List of navigable areas in the scene. If this list is empty, the entire scene is assumed to be navigable
-		std::vector<std::string> m_NavigableAreas;
+		CheckpointVector<CheckpointString> m_NavigableAreas;
 		bool m_NavigableAreasUpToDate;
 
 		// The global acceleration vector in m/s^2. (think gravity/wind)
 		Vector m_GlobalAcc;
 		// Names of all Schemes and selected assemblies for them
-		std::map<std::string, const BunkerAssembly*> m_SelectedAssemblies;
+		CheckpointMap<CheckpointString, const BunkerAssembly*> m_SelectedAssemblies;
 		// Amounts of limited assemblies
-		std::map<std::string, int> m_AssembliesCounts;
+		CheckpointMap<CheckpointString, int> m_AssembliesCounts;
 		// Scene preview bitmap
 		BITMAP* m_pPreviewBitmap;
 		// Scene preview source file
@@ -885,13 +901,13 @@ namespace RTE {
 		// Name of a scene which can be replaced by this scene in MetaGame
 		// Scenes with m_MetaSceneParent field set will be invisible for editors and activities unless
 		// ShowMetaScenes flag in settings.ini is set
-		std::string m_MetasceneParent;
+		CheckpointString m_MetasceneParent;
 
 		// Whether this scene must be shown anywhere in UIs
 		bool m_IsMetagameInternal;
 		bool m_IsSavedGameInternal;
 
-		std::list<Deployment*> m_Deployments;
+		CheckpointList<Deployment*> m_Deployments;
 
 		/// Private member variable and method declarations
 	private:

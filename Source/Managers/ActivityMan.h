@@ -11,12 +11,14 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include <future>
 
 #define g_ActivityMan ActivityMan::Instance()
 
@@ -26,6 +28,10 @@ namespace RTE {
 	class GAScripted;
 	struct AudioCheckpointCapture;
 	struct CheckpointSection;
+	struct CheckpointCaptureClock;
+	struct CheckpointImage;
+	struct BitmapSnapshot;
+	class CheckpointCache;
 	enum class CheckpointScope : uint8_t;
 
 	/// The singleton manager of the Activities and rules of Cortex Command.
@@ -35,6 +41,9 @@ namespace RTE {
 		friend class SettingsMan;
 
 	public:
+		/// Prepares saved strings before the multiplayer page inventory is built.
+		void PrepareCheckpointValues();
+		void NotifyCheckpointTick();
 #pragma region Creation
 		/// Constructor method used to instantiate an ActivityMan object in system memory. Create() should be called before using the object.
 		ActivityMan();
@@ -401,12 +410,21 @@ namespace RTE {
 		/// With fullStateOnly the capture is hashed by the oracle instead of written.
 		bool QueueIncrementalAutosave(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
 		                              std::shared_future<bool>& task, size_t& bytes, SaveCompression compression = SaveCompression::Fast,
-		                              const AutosaveIdentity* identity = nullptr, bool fullStateOnly = false);
+		                              const AutosaveIdentity* identity = nullptr, bool fullStateOnly = false,
+		                              std::shared_ptr<const CheckpointCaptureClock> captureClock = {});
+		bool QueueFrozenAutosave(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
+		    std::shared_future<bool>& task, size_t& bytes, SaveCompression compression, const AutosaveIdentity* identity,
+		    std::shared_ptr<const CheckpointCaptureClock> captureClock);
+		bool SubmitCheckpointArchiveImage(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
+		    std::shared_future<bool>& task, SaveCompression compression, const AutosaveIdentity* identity, std::shared_ptr<CheckpointImage> image,
+		    std::function<void()> complete = {}, std::shared_ptr<CheckpointCache> sceneCache = {}, std::shared_ptr<const CheckpointImage> previousImage = {},
+		    std::vector<CheckpointText> retired = {}, std::vector<std::shared_ptr<const BitmapSnapshot>> retiredLayers = {}, std::shared_ptr<const void> pixelStorage = {},
+		    std::shared_ptr<std::list<AutosaveVerdict>> verdict = {});
 		/// Sections, when given with the manager parts, receives every part the globals carry under its name and scope.
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage,
 		    std::vector<std::pair<std::string, int64_t>>* timings = nullptr, const std::vector<CheckpointText>* managerParts = nullptr,
 		    AudioCheckpointCapture* audio = nullptr, const AudioCheckpointCapture* audioSamples = nullptr,
-		    std::vector<CheckpointSection>* sections = nullptr) const;
+		    std::vector<CheckpointSection>* sections = nullptr, const CheckpointText* frozenAudio = nullptr) const;
 		/// One manager's part of the runtime globals: its name, its saver and whether every peer of a match holds it alike.
 		struct RuntimeManagerSaver {
 			const char* name;
@@ -423,8 +441,8 @@ namespace RTE {
 		/// Match toast in lockstep, screen text otherwise.
 		void ShowSaveRefusalToPlayer(const SaveRefusalRecord& record, bool lockstep);
 
-		std::string m_DefaultActivityType; //!< The type name of the default Activity to be loaded if nothing else is available.
-		std::string m_DefaultActivityName; //!< The preset name of the default Activity to be loaded if nothing else is available.
+		CheckpointString m_DefaultActivityType; //!< The type name of the default Activity to be loaded if nothing else is available.
+		CheckpointString m_DefaultActivityName; //!< The preset name of the default Activity to be loaded if nothing else is available.
 
 		std::unique_ptr<Activity> m_Activity; //!< The currently active Activity.
 		std::unique_ptr<Activity> m_StartActivity; //!< The starting condition of the next Activity to be (re)started.
@@ -439,6 +457,7 @@ namespace RTE {
 			std::unique_ptr<Scene> scene;
 			std::unique_ptr<Activity> activity, startActivity;
 			bool hasStartActivity = false;
+			bool nativeSnapshotStorage = false;
 			std::string restartPreset;
 			bool restartObjects = true, restartUnits = true;
 			long long simUpdateCount = -1, simTimeTicks = 0;
@@ -457,6 +476,10 @@ namespace RTE {
 		int m_StaleActivitySlots = 0;
 
 		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.
+		struct PreparedAutosave;
+		std::unique_ptr<PreparedAutosave> m_PreparedAutosave;
+		void PrepareAutosave();
+		void CollectPreparedAutosave();
 		std::vector<std::shared_future<bool>> m_AutosaveTasks; //!< Captured checkpoints awaiting disk IO.
 		std::vector<std::shared_future<bool>> m_FullStateTasks; //!< The oracle's captures awaiting their hash.
 		std::string m_FullStateDumpDirectory; //!< Where the oracle's capture writes its sections; empty writes none.
@@ -479,9 +502,9 @@ namespace RTE {
 		std::mutex m_DeferredRefusalMutex; //!< The checkpoint worker hands its refusals through it.
 		std::vector<std::pair<SaveKind, std::vector<std::string>>> m_DeferredRefusals; //!< Found off the simulation thread, reported on it.
 		std::vector<std::string> m_DeferredSaveErrors; //!< The writer reports file errors on the simulation thread.
-		std::deque<AutosaveVerdict> m_AutosaveVerdicts; //!< One per finished automatic capture, in the order the writer finished them.
+		std::list<AutosaveVerdict> m_AutosaveVerdicts; //!< One per finished automatic capture, in the order the writer finished them.
 		void QueueDeferredSaveRefusal(SaveKind kind, std::vector<std::string> problems);
-		void NoteAutosaveVerdict(uint64_t tick, bool archived);
+		void NoteAutosaveVerdict(uint64_t tick, bool archived, const std::shared_ptr<std::list<AutosaveVerdict>>& prepared = {});
 		static constexpr size_t c_SaveRefusalRecordLimit = 16;
 		long long m_LastSaveMainMs = 0;
 		long long m_LastSaveZipMs = 0;
@@ -498,6 +521,7 @@ namespace RTE {
 
 		/// Clears all the member variables of this ActivityMan, effectively resetting the members of this abstraction level only.
 		bool RestartActivityCandidate();
+		bool RestartActivityWorld();
 		void Clear();
 
 		// Disallow the use of some implicit methods.

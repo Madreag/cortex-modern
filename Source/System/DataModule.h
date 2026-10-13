@@ -2,6 +2,8 @@
 
 #include "ContentFile.h"
 #include "Constants.h"
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
 
 #include <array>
 #include <list>
@@ -103,19 +105,19 @@ namespace RTE {
 
 		/// Gets the file name of this DataModule, e.g. "MyMod.rte".
 		/// @return A string with the data module file name.
-		const std::string& GetFileName() const { return m_FileName; }
+		const std::string& GetFileName() const { return m_FileName.Value(); }
 
 		/// Gets the friendly name of this DataModule, e.g. "My Great Mod".
 		/// @return A string with the data module's friendly name.
-		const std::string& GetFriendlyName() const { return m_FriendlyName; }
+		const std::string& GetFriendlyName() const { return m_FriendlyName.Value(); }
 
 		/// Gets the author name of this DataModule, e.g. "Data Realms, LLC".
 		/// @return A string with the author's name.
-		const std::string& GetAuthor() const { return m_Author; }
+		const std::string& GetAuthor() const { return m_Author.Value(); }
 
 		/// Gets the description of this DataModule's contents.
 		/// @return A string with the description.
-		const std::string& GetDescription() const { return m_Description; }
+		const std::string& GetDescription() const { return m_Description.Value(); }
 
 		/// Gets whether this DataModule is considered a faction.
 		/// @return Whether this DataModule is considered a faction or not.
@@ -171,7 +173,7 @@ namespace RTE {
 
 		/// Gets the list of all registered Entity groups of this.
 		/// @return The list of all groups. Ownership is not transferred.
-		const std::list<std::string>* GetGroupRegister() const { return &m_GroupRegister; }
+		const CheckpointList<CheckpointString>* GetGroupRegister() const { return &m_GroupRegister; }
 
 		/// Registers the existence of an Entity group in this module.
 		/// @param newGroup The group to register.
@@ -244,18 +246,18 @@ namespace RTE {
 			    m_EntityPreset(preset), m_FileReadFrom(file) {}
 
 			Entity* m_EntityPreset; //!< Owned by this.
-			std::string m_FileReadFrom; //!< Where the instance was read from.
+			CheckpointString m_FileReadFrom; //!< Where the instance was read from.
 		};
 
 		bool m_IsUserdata; //!< Whether this DataModule contains userdata written by the game (e.g saved games or editor scenes), meaning it is not an official nor a 3rd party module and is ignored anywhere where that is relevant.
 		bool m_ScanFolderContents; //!< Indicates whether module loader should scan for any .ini's inside module folder instead of loading files defined in IncludeFile only.
 		bool m_IgnoreMissingItems; //!< Indicates whether module loader should ignore missing items in this module.
 
-		std::string m_FileName; //!< File/folder name of the data module, eg "MyMod.rte".
-		std::string m_FriendlyName; //!< Friendly name of the data module, eg "My Weapons Mod".
-		std::string m_Author; //!< Name of the author of this module.
-		std::string m_Description; //!< Brief description of what this module is and contains.
-		std::string m_ScriptPath; //!< Path to script to execute when this module is loaded.
+		CheckpointString m_FileName; //!< File/folder name of the data module, eg "MyMod.rte".
+		CheckpointString m_FriendlyName; //!< Friendly name of the data module, eg "My Weapons Mod".
+		CheckpointString m_Author; //!< Name of the author of this module.
+		CheckpointString m_Description; //!< Brief description of what this module is and contains.
+		CheckpointString m_ScriptPath; //!< Path to script to execute when this module is loaded.
 		bool m_IsFaction; //!< Whether this data module is considered a faction.
 		bool m_IsMerchant; //!< Whether this data module is considered a merchant.
 		version::Semver200_version* m_SupportedGameVersion; //!< Game version this DataModule supports. Needs to satisfy Caret Version Range for this DataModule to be allowed. Base DataModules don't need this.
@@ -269,20 +271,20 @@ namespace RTE {
 
 		float m_CrabToHumanSpawnRatio; //!< Crab-to-human Spawn ratio to replace value from Constants.lua.
 
-		std::list<const Entity*> m_EntityList; //!< A list of loaded entities solely for the purpose of enumeration presets from Lua.
-		std::list<std::string> m_GroupRegister; //!< List of all Entity groups ever registered in this, all uniques.
+		CheckpointList<const Entity*> m_EntityList; //!< A list of loaded entities solely for the purpose of enumeration presets from Lua.
+		CheckpointList<CheckpointString> m_GroupRegister; //!< List of all Entity groups ever registered in this, all uniques.
 		std::array<unsigned char, c_PaletteEntriesNumber> m_MaterialMappings; //!< Material mappings local to this DataModule.
 
 		/// Ordered list of all owned Entity instances, ordered by the sequence of their reading - really now with overwriting?.
 		/// This is used to be able to write back all of them in proper order into their respective files in the DataModule when writing this.
 		/// The Entity instances ARE owned by this list.
-		std::list<PresetEntry> m_PresetList;
+		CheckpointList<PresetEntry> m_PresetList;
 
 		/// Map of class names and map of instance template names and actual Entity instances that were read for this DataModule.
 		/// An Entity instance of a derived type will be placed in EACH of EVERY of its parent class' maps here.
 		/// There can be multiple entries of the same instance name in any of the type sub-maps, but only ONE whose exact class is that of the type-list!
 		/// The Entity instances are NOT owned by this map.
-		std::unordered_map<std::string, std::list<std::pair<std::string, Entity*>>> m_TypeMap;
+		CheckpointUnorderedMap<CheckpointString, CheckpointList<std::pair<CheckpointString, Entity*>>> m_TypeMap;
 
 	private:
 		static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.

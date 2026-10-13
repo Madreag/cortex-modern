@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Serializable.h"
+#include "CheckpointNativeContainers.h"
 
 namespace RTE {
 
@@ -21,7 +22,7 @@ namespace RTE {
 			/// @param reference A reference to the GenericSavedEncodedStrings to deep copy.
 			GenericSavedEncodedStrings(const GenericSavedEncodedStrings& reference) = default;
 
-			std::unordered_map<std::string, std::string> m_Data; //!< Stored string data.
+			CheckpointUnorderedMap<CheckpointString, CheckpointString> m_Data; //!< Stored string data.
 
 		private:
 			static const std::string c_ClassName; //!< A string with the friendly formatted type name of this object.
@@ -41,7 +42,7 @@ namespace RTE {
 			/// @param reference A reference to the GenericSavedStrings to deep copy.
 			GenericSavedStrings(const GenericSavedStrings& reference) = default;
 
-			std::unordered_map<std::string, std::string> m_Data; //!< Stored string data.
+			CheckpointUnorderedMap<CheckpointString, CheckpointString> m_Data; //!< Stored string data.
 
 		private:
 			static const std::string c_ClassName; //!< A string with the friendly formatted type name of this object.
@@ -61,7 +62,7 @@ namespace RTE {
 			/// @param reference A reference to the GenericSavedNumbers to deep copy.
 			GenericSavedNumbers(const GenericSavedNumbers& reference) = default;
 
-			std::unordered_map<std::string, float> m_Data; //!< Stored number data.
+			CheckpointUnorderedMap<CheckpointString, float> m_Data; //!< Stored number data.
 
 		private:
 			static const std::string c_ClassName; //!< A string with the friendly formatted type name of this object.
@@ -77,6 +78,7 @@ namespace RTE {
 		///	Constructor method used to instantiate a GenericSavedData object to be identical to another, by deep copy, and make it ready for use.
 		/// @param reference A reference to the GenericSavedData to deep copy.
 		GenericSavedData(const GenericSavedData& reference) = default;
+		GenericSavedData(const GenericSavedData& source, class CheckpointNativeSnapshot& snapshot);
 
 		void SaveString(const std::string& key, const std::string& value);
 		const std::string& LoadString(const std::string& key);

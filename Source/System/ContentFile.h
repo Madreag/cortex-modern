@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointString.h"
+#include "CheckpointNativeContainers.h"
+
 #include "Serializable.h"
 
 #include <array>
@@ -18,9 +21,11 @@ struct SDL_Palette;
 struct SDL_Surface;
 
 namespace RTE {
+	namespace AudioCheckpoint { struct Sample; }
 
 	/// A representation of a content file that is stored directly on disk.
 	class ContentFile : public Serializable {
+		friend class ActivityMan;
 		friend struct MusicCheckpoint;
 		friend struct GUISoundCheckpoint;
 		friend class AudioMan;
@@ -99,7 +104,7 @@ namespace RTE {
 		/// Converts hash values into file paths to ContentFiles.
 		/// @param hash Hash value to get file path from.
 		/// @return Path to ContentFile.
-		static std::string GetPathFromHash(size_t hash) { return (s_PathHashes.find(hash) == s_PathHashes.end()) ? "" : s_PathHashes[hash]; }
+		static std::string GetPathFromHash(size_t hash);
 
 		/// Sets this ContentFile to be a memory file, meaning we won't try loading from disk and instead will let external code set us up.
 		/// @param isMemoryFile Whether we'll be considered a memory file.
@@ -178,7 +183,7 @@ namespace RTE {
 		/// @param vectorToFill The existing vector of Allegro BITMAPs to fill.
 		/// @param frameCount The number of frames to attempt to load, more than 1 frame will mean 00# is appended to DataPath to handle naming conventions.
 		/// @param conversionMode The Allegro color conversion mode to use when loading this bitmap.
-		void GetAsAnimation(std::vector<BITMAP*>& vectorToFill, int frameCount = 1, int conversionMode = 0);
+		template<class Allocator> void GetAsAnimation(std::vector<BITMAP*, Allocator>& vectorToFill, int frameCount = 1, int conversionMode = 0);
 
 		/// Gets the data represented by this ContentFile object as a vector of Allegro BITMAPs, each representing a frame in the animation.
 		/// It loads the BITMAPs into the static maps if they're not already loaded. Ownership of the BITMAPs is NOT transferred!
@@ -210,15 +215,28 @@ namespace RTE {
 		/// opens. The loaded bitmaps may not change while one lives; a capture opens one at its fence.
 		class LoadedBitmapIndexScope {
 		public:
+			/// Brings the index up to date while no scope is open, so a capture's next scope opens without rebuilding it.
+			static void Refresh();
 			LoadedBitmapIndexScope();
 			~LoadedBitmapIndexScope();
 			LoadedBitmapIndexScope(const LoadedBitmapIndexScope&) = delete;
 			LoadedBitmapIndexScope& operator=(const LoadedBitmapIndexScope&) = delete;
+		private:
+			bool m_Saved = false;
 		};
 
 		/// The least path the loaded-bitmap cache of one depth holds a bitmap under, or with depth -1 that of the lowest
 		/// depth holding it, which is written back. Null when none does.
 		static const std::string* LoadedBitmapPath(const BITMAP* bitmap, int& depth);
+		static std::pair<const void*, size_t> LoadedBitmapRegistry();
+		static std::pair<const void*, size_t> PathHashRegistry();
+		static std::pair<const void*, size_t> LoadedSampleRegistry();
+		static void PrepareCheckpointSamples();
+		static bool CheckpointSamplesReady() noexcept;
+		static void RefreshCheckpointSample(const std::string& path, FMOD::Sound* sound) noexcept;
+		static std::vector<AudioCheckpoint::Sample> ReadCheckpointSamples();
+		static std::string SavedSampleValuesMismatch();
+		static BITMAP* ReadLoadedBitmap(const std::string& path, int depth);
 
 		/// Changes the loaded bitmaps by each way in, on a scratch entry, and checks the next index sees each change.
 		/// @return The first way whose change the index missed, or empty. The loaded bitmaps are left as they were.
@@ -247,15 +265,18 @@ namespace RTE {
 
 		static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.
 
-		static std::unordered_map<size_t, std::string> s_PathHashes; //!< Static map containing the hash values of paths of all loaded data files.
+		static CheckpointUnorderedMap<size_t, CheckpointString> s_PathHashes; //!< Static map containing the hash values of paths of all loaded data files.
+		void RegisterPath() const;
+		/// Rebuilds the loaded-bitmap index when it is stale; the caller holds the rebuild lock and no scope reads it.
+		static void RebuildLoadedBitmapIndex();
 		/// One depth's loaded bitmaps. Every change made through them moves a version all depths share, so an index
 		/// built from them knows when it went stale; reading through a const reference moves nothing.
-		class LoadedBitmaps : public std::unordered_map<std::string, BITMAP*> {
+		class LoadedBitmaps : public CheckpointUnorderedMap<CheckpointString, BITMAP*> {
 		public:
-			using Base = std::unordered_map<std::string, BITMAP*>;
-			using Base::Base;
+			using Base = CheckpointUnorderedMap<CheckpointString, BITMAP*>;
+			LoadedBitmaps() : Base(Empty()) {}
 			static uint64_t Version() { return s_Version.load(std::memory_order_acquire); }
-			mapped_type& operator[](const key_type& key) { Changed(); return Base::operator[](key); }
+			mapped_type& operator[](const key_type& key) { CheckpointNativeStorage::AllocationScope storage(true); Changed(); return Base::operator[](key); }
 			mapped_type& at(const key_type& key) { Changed(); return Base::at(key); }
 			const mapped_type& at(const key_type& key) const { return Base::at(key); }
 			iterator find(const key_type& key) { Changed(); return Base::find(key); }
@@ -267,28 +288,31 @@ namespace RTE {
 			size_type erase(const key_type& key) { Changed(); return Base::erase(key); }
 			iterator erase(const_iterator position) { Changed(); return Base::erase(position); }
 			void clear() noexcept { Changed(); Base::clear(); }
-			template <class... Args> std::pair<iterator, bool> try_emplace(const key_type& key, Args&&... args) { Changed(); return Base::try_emplace(key, std::forward<Args>(args)...); }
-			template <class... Args> std::pair<iterator, bool> emplace(Args&&... args) { Changed(); return Base::emplace(std::forward<Args>(args)...); }
-			template <class Value> std::pair<iterator, bool> insert(Value&& value) { Changed(); return Base::insert(std::forward<Value>(value)); }
+			template <class... Args> std::pair<iterator, bool> try_emplace(const key_type& key, Args&&... args) { CheckpointNativeStorage::AllocationScope storage(true); Changed(); return Base::try_emplace(key, std::forward<Args>(args)...); }
+			template <class... Args> std::pair<iterator, bool> emplace(Args&&... args) { CheckpointNativeStorage::AllocationScope storage(true); Changed(); return Base::emplace(std::forward<Args>(args)...); }
+			template <class Value> std::pair<iterator, bool> insert(Value&& value) { CheckpointNativeStorage::AllocationScope storage(true); Changed(); return Base::insert(std::forward<Value>(value)); }
 			template <class Source> void merge(Source& source) { Changed(); Base::merge(source); }
 			void swap(Base& other) noexcept { Changed(); Base::swap(other); }
 		private:
+			static Base Empty() { CheckpointNativeStorage::AllocationScope storage(true); return {}; }
 			static inline std::atomic<uint64_t> s_Version{0};
 			static void Changed() noexcept { s_Version.fetch_add(1, std::memory_order_acq_rel); }
 		};
 		static std::array<LoadedBitmaps, BitDepths::BitDepthCount> s_LoadedBitmaps; //!< Static map containing all the already loaded BITMAPs and their paths for each bit depth.
 		static std::unordered_map<std::string, SDL_Surface*> s_MemoryPNGs; //!< Static map containing in-memory PNG files for save/load
 		static std::unordered_map<std::string, FMOD::Sound*> s_LoadedSamples; //!< Static map containing all the already loaded FSOUND_SAMPLEs and their paths.
+		static void NoteLoadedSample(const std::string& path, FMOD::Sound* sound, bool changed = false) noexcept;
+		static void InvalidateCheckpointSamples() noexcept;
 
-		std::string m_DataPath; //!< The path to this ContentFile's data file. In the case of an animation, this filename/name will be appended with 000, 001, 002 etc.
-		std::string m_DataPathExtension; //!< The extension of the data file of this ContentFile's path.
-		std::string m_DataPathWithoutExtension; //!< The path to this ContentFile's data file without the file's extension.
+		CheckpointString m_DataPath; //!< The path to this ContentFile's data file. In the case of an animation, this filename/name will be appended with 000, 001, 002 etc.
+		CheckpointString m_DataPathExtension; //!< The extension of the data file of this ContentFile's path.
+		CheckpointString m_DataPathWithoutExtension; //!< The path to this ContentFile's data file without the file's extension.
 
 		bool m_DataPathIsImageFile; //!< Whether the data file at this ContentFile's path is a supported image format.
 		std::array<int, ImageFileInfoType::ImageInfoTypeCount> m_ImageFileInfo; //!< Array that holds image file information read directly from the data file on disk.
 
-		std::string m_FormattedReaderPosition; //!< A string containing the currently read file path and the line being read. Formatted to be used for logging.
-		std::string m_DataPathAndReaderPosition; //!< The path to this ContentFile's data file combined with the ini file and line it is being read from. This is used for logging.
+		CheckpointString m_FormattedReaderPosition; //!< A string containing the currently read file path and the line being read. Formatted to be used for logging.
+		CheckpointString m_DataPathAndReaderPosition; //!< The path to this ContentFile's data file combined with the ini file and line it is being read from. This is used for logging.
 
 		int m_DataModuleID; //!< Data Module ID of where this was loaded from.
 		bool m_IsMemoryPNG; //!< If true, we will not attempt to read this file on disk, and instead will let external code set us up.
@@ -325,12 +349,14 @@ namespace RTE {
 		/// @param dataPathToSpecificFrame Path to a specific frame when loading an animation to avoid overwriting the original preset DataPath when loading each frame.
 		/// @return Pointer to the BITMAP loaded from disk.
 		BITMAP* LoadAndReleaseBitmap(int conversionMode = 0, const std::string& dataPathToSpecificFrame = "");
+		BITMAP* LoadSavedBitmap(int conversionMode, const std::string& path);
 
 		/// Loads and transfers the data represented by this ContentFile object as an FMOD FSOUND_SAMPLE. Ownership of the FSOUND_SAMPLE is NOT transferred!
 		/// @param abortGameForInvalidSound Whether to abort the game if the sound couldn't be added, or just show a console error. Default true.
 		/// @param asyncLoading Whether to enable FMOD asynchronous loading or not. Should be disabled for loading audio files with Lua AddSound.
 		/// @return Pointer to the FSOUND_SAMPLE loaded from disk.
 		FMOD::Sound* LoadAndReleaseSound(bool abortGameForInvalidSound = true, bool asyncLoading = true);
+		FMOD::Sound* LoadSavedSound(bool abortGameForInvalidSound);
 
 		/// Reloads a specific BITMAP in the cache from disk, allowing any changes to be reflected at runtime.
 		/// @param filePath The filepath to the bitmap we want to reload.

@@ -1,5 +1,13 @@
 #include "DeterministicMath.h"
 #include "AHuman.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "SoundContainer.h"
+#include "Matrix.h"
+#include "LimbPath.h"
+#include "Attachable.h"
+#include "CheckpointProperties.h"
 #include "MetricsCollector.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -36,11 +44,101 @@ using namespace RTE;
 
 ConcreteClassInfo(AHuman, Actor, 20);
 
+namespace {
+	LimbPath FreezeHumanLimb(const LimbPath& source, CheckpointNativeSnapshot& snapshot) {
+		CheckpointCloneCost cost("limb paths");
+		return LimbPath(source, snapshot);
+	}
+}
+
+AHuman::AHuman(const AHuman& source, CheckpointNativeSnapshot& snapshot) :
+	Actor(source, snapshot),
+	m_pHead(snapshot.Freeze(source.m_pHead)),
+	m_LookToAimRatio(snapshot.Freeze(source.m_LookToAimRatio)),
+	m_pFGArm(snapshot.Freeze(source.m_pFGArm)),
+	m_pBGArm(snapshot.Freeze(source.m_pBGArm)),
+	m_PendingDeferredEquips{},
+	m_pFGLeg(snapshot.Freeze(source.m_pFGLeg)),
+	m_pBGLeg(snapshot.Freeze(source.m_pBGLeg)),
+	m_pFGHandGroup(snapshot.Freeze(source.m_pFGHandGroup)),
+	m_pBGHandGroup(snapshot.Freeze(source.m_pBGHandGroup)),
+	m_pFGFootGroup(snapshot.Freeze(source.m_pFGFootGroup)),
+	m_BackupFGFootGroup(snapshot.Freeze(source.m_BackupFGFootGroup)),
+	m_pBGFootGroup(snapshot.Freeze(source.m_pBGFootGroup)),
+	m_BackupBGFootGroup(snapshot.Freeze(source.m_BackupBGFootGroup)),
+	m_PersistedFGHandResidue(snapshot.Freeze(source.m_PersistedFGHandResidue, &m_PersistedFGHandResidue)),
+	m_PersistedBGHandResidue(snapshot.Freeze(source.m_PersistedBGHandResidue, &m_PersistedBGHandResidue)),
+	m_PersistedFGFootResidue(snapshot.Freeze(source.m_PersistedFGFootResidue, &m_PersistedFGFootResidue)),
+	m_PersistedBGFootResidue(snapshot.Freeze(source.m_PersistedBGFootResidue, &m_PersistedBGFootResidue)),
+	m_PersistedLimbPathStates(snapshot.Freeze(source.m_PersistedLimbPathStates, &m_PersistedLimbPathStates)),
+	m_PersistedLimbPathStatesFromFile(snapshot.Freeze(source.m_PersistedLimbPathStatesFromFile)),
+	m_PersistedLimbGroupPositions(snapshot.Freeze(source.m_PersistedLimbGroupPositions, &m_PersistedLimbGroupPositions)),
+	m_PersistedLimbGroupInertia(snapshot.Freeze(source.m_PersistedLimbGroupInertia, &m_PersistedLimbGroupInertia)),
+	m_PersistedWalkState(snapshot.Freeze(source.m_PersistedWalkState, &m_PersistedWalkState)),
+	m_StrideSound(snapshot.Freeze(source.m_StrideSound)),
+	m_pJetpack(snapshot.Freeze(source.m_pJetpack)),
+	m_CanActivateBGItem(snapshot.Freeze(source.m_CanActivateBGItem)),
+	m_TriggerPulled(snapshot.Freeze(source.m_TriggerPulled)),
+	m_WaitingToReloadOffhand(snapshot.Freeze(source.m_WaitingToReloadOffhand)),
+	m_IconBlinkTimer(snapshot.Freeze(source.m_IconBlinkTimer)),
+	m_ArmsState(snapshot.Freeze(source.m_ArmsState)),
+	m_ProneState(snapshot.Freeze(source.m_ProneState)),
+	m_ProneTimer(snapshot.Freeze(source.m_ProneTimer)),
+	m_MaxWalkPathCrouchShift(snapshot.Freeze(source.m_MaxWalkPathCrouchShift)),
+	m_CrouchAmount(snapshot.Freeze(source.m_CrouchAmount)),
+	m_CrouchAmountOverride(snapshot.Freeze(source.m_CrouchAmountOverride)),
+	m_Paths{
+		{FreezeHumanLimb(source.m_Paths[FGROUND][NOMOVE], snapshot), FreezeHumanLimb(source.m_Paths[FGROUND][CROUCH], snapshot),
+		 FreezeHumanLimb(source.m_Paths[FGROUND][STAND], snapshot), FreezeHumanLimb(source.m_Paths[FGROUND][WALK], snapshot),
+		 FreezeHumanLimb(source.m_Paths[FGROUND][RUN], snapshot), FreezeHumanLimb(source.m_Paths[FGROUND][JUMP], snapshot),
+		 FreezeHumanLimb(source.m_Paths[FGROUND][DISLODGE], snapshot), FreezeHumanLimb(source.m_Paths[FGROUND][PRONE], snapshot),
+		 FreezeHumanLimb(source.m_Paths[FGROUND][CRAWL], snapshot), FreezeHumanLimb(source.m_Paths[FGROUND][ARMCRAWL], snapshot),
+		 FreezeHumanLimb(source.m_Paths[FGROUND][CLIMB], snapshot)},
+		{FreezeHumanLimb(source.m_Paths[BGROUND][NOMOVE], snapshot), FreezeHumanLimb(source.m_Paths[BGROUND][CROUCH], snapshot),
+		 FreezeHumanLimb(source.m_Paths[BGROUND][STAND], snapshot), FreezeHumanLimb(source.m_Paths[BGROUND][WALK], snapshot),
+		 FreezeHumanLimb(source.m_Paths[BGROUND][RUN], snapshot), FreezeHumanLimb(source.m_Paths[BGROUND][JUMP], snapshot),
+		 FreezeHumanLimb(source.m_Paths[BGROUND][DISLODGE], snapshot), FreezeHumanLimb(source.m_Paths[BGROUND][PRONE], snapshot),
+		 FreezeHumanLimb(source.m_Paths[BGROUND][CRAWL], snapshot), FreezeHumanLimb(source.m_Paths[BGROUND][ARMCRAWL], snapshot),
+		 FreezeHumanLimb(source.m_Paths[BGROUND][CLIMB], snapshot)}},
+	m_RotAngleTargets(snapshot.Freeze(source.m_RotAngleTargets)),
+	m_Aiming(snapshot.Freeze(source.m_Aiming)),
+	m_ArmClimbing{},
+	m_StrideFrame(snapshot.Freeze(source.m_StrideFrame)),
+	m_StrideStart(snapshot.Freeze(source.m_StrideStart)),
+	m_StrideTimer(snapshot.Freeze(source.m_StrideTimer)),
+	m_ThrowTmr(snapshot.Freeze(source.m_ThrowTmr)),
+	m_ThrowPrepTime(snapshot.Freeze(source.m_ThrowPrepTime)),
+	m_SharpAimRevertTimer(snapshot.Freeze(source.m_SharpAimRevertTimer)),
+	m_PersistedSharpAimRevertTimerAnchor(snapshot.Freeze(source.m_PersistedSharpAimRevertTimerAnchor)),
+	m_FGArmFlailScalar(snapshot.Freeze(source.m_FGArmFlailScalar)),
+	m_BGArmFlailScalar(snapshot.Freeze(source.m_BGArmFlailScalar)),
+	m_EquipHUDTimer(snapshot.Freeze(source.m_EquipHUDTimer)),
+	m_WalkAngle(snapshot.Freeze(source.m_WalkAngle)),
+	m_WalkPathOffset(snapshot.Freeze(source.m_WalkPathOffset)),
+	m_ArmSwingRate(snapshot.Freeze(source.m_ArmSwingRate)),
+	m_DeviceArmSwayRate(snapshot.Freeze(source.m_DeviceArmSwayRate)),
+	m_PersistedAHumanRuntime(snapshot.Freeze(source.m_PersistedAHumanRuntime, &m_PersistedAHumanRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+	static_assert(MOVEMENTSTATECOUNT == 11);
+	snapshot.FreezeArray(m_ArmClimbing, source.m_ArmClimbing);
+}
+
+Entity* AHuman::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
+void AHuman::PrepareCheckpointNative(const AHuman& source, AHuman* target, CheckpointNativeSnapshot& snapshot) {
+	snapshot.Prepare(static_cast<const Actor&>(source), static_cast<Actor*>(target));
+	snapshot.Prepare(source.m_Paths, &target->m_Paths);
+}
+
 AHuman::AHuman() {
 	Clear();
 }
 
 AHuman::~AHuman() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -241,7 +339,8 @@ int AHuman::Create(const AHuman& reference) {
 	m_CanActivateBGItem = reference.m_CanActivateBGItem;
 	m_TriggerPulled = reference.m_TriggerPulled;
 	if ((reference.HasEverBeenAddedToMovableMan() || IsFaithfulClone()) && reference.m_PersistedLimbPathStates.empty()) {
-		m_PersistedLimbPathStates = reference.GetLimbPathStates();
+		const auto states = reference.GetLimbPathStates();
+		m_PersistedLimbPathStates.assign(states.begin(), states.end());
 		m_PersistedLimbGroupPositions = reference.GetLimbGroupPositions();
 		m_PersistedLimbGroupInertia = reference.GetLimbGroupInertia();
 		m_PersistedWalkState = reference.GetWalkState();
@@ -323,7 +422,7 @@ int AHuman::GetLimbPathIndex(const LimbPath* path) const {
 
 std::vector<std::string> AHuman::GetLimbPathStates(bool forHashing) const {
 	if (!m_PersistedLimbPathStates.empty()) {
-		return m_PersistedLimbPathStates;
+		return {m_PersistedLimbPathStates.begin(), m_PersistedLimbPathStates.end()};
 	}
 	std::vector<std::string> states;
 	states.reserve(2 * MOVEMENTSTATECOUNT);
@@ -505,7 +604,7 @@ void AHuman::AdoptPersistedUniqueID() {
 }
 
 void AHuman::AdoptCarriedWalkState() {
-	auto applyResidue = [](AtomGroup* group, std::vector<long long>& residue) {
+	auto applyResidue = [](AtomGroup* group, auto& residue) {
 		if (!residue.empty()) {
 			if (group) {
 				group->SetTravelResidue(residue);
@@ -716,20 +815,21 @@ int AHuman::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 void AHuman::SaveSnapshotConfiguration(Writer& writer) const {
 	Actor::SaveSnapshotConfiguration(writer);
-	writer.NewPropertyWithValue("ThrowPrepTime", m_ThrowPrepTime);
-	writer.NewPropertyWithValue("LookToAimRatio", m_LookToAimRatio);
-	writer.NewPropertyWithValue("FGArmFlailScalar", m_FGArmFlailScalar);
-	writer.NewPropertyWithValue("BGArmFlailScalar", m_BGArmFlailScalar);
-	writer.NewPropertyWithValue("ArmSwingRate", m_ArmSwingRate);
-	writer.NewPropertyWithValue("DeviceArmSwayRate", m_DeviceArmSwayRate);
-	writer.NewPropertyWithValue("MaxWalkPathCrouchShift", m_MaxWalkPathCrouchShift);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"ThrowPrepTime">(m_ThrowPrepTime),
+		CheckpointProperty<"LookToAimRatio">(m_LookToAimRatio),
+		CheckpointProperty<"FGArmFlailScalar">(m_FGArmFlailScalar),
+		CheckpointProperty<"BGArmFlailScalar">(m_BGArmFlailScalar),
+		CheckpointProperty<"ArmSwingRate">(m_ArmSwingRate),
+		CheckpointProperty<"DeviceArmSwayRate">(m_DeviceArmSwayRate),
+		CheckpointProperty<"MaxWalkPathCrouchShift">(m_MaxWalkPathCrouchShift));
 	writer.NewPropertyWithValue("StandRotAngleTarget", m_RotAngleTargets[STAND]);
 	writer.NewPropertyWithValue("WalkRotAngleTarget", m_RotAngleTargets[WALK]);
 	writer.NewPropertyWithValue("RunRotAngleTarget", m_RotAngleTargets[RUN]);
 	writer.NewPropertyWithValue("CrouchRotAngleTarget", m_RotAngleTargets[CROUCH]);
 	writer.NewPropertyWithValue("JumpRotAngleTarget", m_RotAngleTargets[JUMP]);
 	writer.NewPropertyWithValue("SpecialBehaviour_StrideSound", m_StrideSound);
-	writer.NewPropertyWithValue("SpecialBehaviour_AHumanRuntime", CheckpointWriter::Native([&] { return m_PersistedAHumanRuntime.empty() ? SaveAHumanRuntime() : m_PersistedAHumanRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_AHumanRuntime", CheckpointWriter::Native([&] { return m_PersistedAHumanRuntime.empty() ? SaveAHumanRuntime() : m_PersistedAHumanRuntime.Value(); }).Base64(true));
 }
 
 int AHuman::Save(Writer& writer) const {
@@ -839,6 +939,14 @@ bool AHuman::HasObject(std::string objectName) const {
 
 bool AHuman::HasObjectInGroup(std::string groupName) const {
 	bool found = Actor::HasObjectInGroup(groupName);
+
+	if (CheckpointNativeStorage::Reading()) {
+		for (const Arm* original: {m_pFGArm, m_pBGArm}) {
+			const auto* arm = CheckpointNativeStorage::Source(original);
+			if (arm && arm->IsAttached() && arm->GetHeldDevice()) found = found || CheckpointNativeStorage::Source(arm->GetHeldDevice())->HasObjectInGroup(groupName);
+		}
+		return found;
+	}
 
 	// If holding something, then check that too
 	if (m_pFGArm && m_pFGArm->IsAttached() && m_pFGArm->GetHeldDevice())

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 #include <string>
 #include <string_view>
 
@@ -56,6 +59,30 @@ namespace RTE {
 			long delay;
 			// Times how long we've been in transit
 			Timer timer;
+			Delivery FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const;
+			void AssignCheckpointNative(const Delivery& source, CheckpointNativeSnapshot& snapshot);
+			friend Delivery FreezeCheckpointValue(const Delivery& source, CheckpointNativeSnapshot& snapshot) { return source.FreezeCheckpointNative(snapshot); }
+			friend void AssignCheckpointValue(Delivery& value, const Delivery& source, CheckpointNativeSnapshot& snapshot) { value.AssignCheckpointNative(source, snapshot); }
+		};
+
+		/// A seat's committed brain placement, kept on owned pages so a saver reads it frozen.
+		struct SeatBrain {
+			int32_t team = 0;
+			int32_t player = -1; //!< The seat the brain belongs to; a team can hold several.
+			float posX = 0.0F;
+			float posY = 0.0F;
+			CheckpointString className;
+			CheckpointString preset;
+			CheckpointString module;
+			bool hFlipped = false;
+			CheckpointVector<std::array<CheckpointString, 3>> addedInventory;
+
+			SeatBrain() = default;
+			SeatBrain(const NetGamePlaceBrain& placement);
+			operator NetGamePlaceBrain() const;
+			bool operator==(const SeatBrain&) const = default;
+			SeatBrain FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const;
+			friend SeatBrain FreezeCheckpointValue(const SeatBrain& source, CheckpointNativeSnapshot& snapshot) { return source.FreezeCheckpointNative(snapshot); }
 		};
 
 		/// Public member variable, method and friend function declarations
@@ -170,6 +197,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a GameActivity object in system
 		/// memory. Create() should be called before using the object.
 		GameActivity();
+		GameActivity(const GameActivity& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a GameActivity object before deletion
 		/// from system memory.
@@ -647,7 +675,7 @@ namespace RTE {
 			void Draw(BITMAP* pTargetBitmap, BITMAP* pArrowBitmap, const Vector& arrowPoint, ObjectiveArrowDir arrowDir = ARROWDOWN);
 
 			// The description of this objective point
-			std::string m_Description;
+			CheckpointString m_Description;
 			// Absolute position in the scene where this is pointed
 			Vector m_ScenePos;
 			// The team this objective is relevant to
@@ -738,16 +766,20 @@ namespace RTE {
 		mutable std::unique_ptr<BuyMenuGUI> m_SeatStubBuyGUI[Players::MaxPlayerCount];
 		mutable std::unique_ptr<SceneEditorGUI> m_SeatStubEditorGUI[Players::MaxPlayerCount];
 		mutable std::unique_ptr<GUIBanner> m_SeatStubBanner[2][Players::MaxPlayerCount];
+		// Saved getters share menu identities with graph handles while the snapshot keeps their owners.
+		std::array<BuyMenuGUI*, Players::MaxPlayerCount> m_SavedStubBuy{};
+		std::array<SceneEditorGUI*, Players::MaxPlayerCount> m_SavedStubEditor{};
+		std::array<std::array<GUIBanner*, Players::MaxPlayerCount>, 2> m_SavedStubBanner{};
 		// How many times a banner has been repeated.. so we dont' annoy by repeating forever
 		int m_BannerRepeats[Players::MaxPlayerCount];
 		// Whether each player has marked himself as ready to start. Can still edit while this is set, but when all are set, the game starts
 		bool m_ReadyToStart[Players::MaxPlayerCount];
 		// An override purchase list that can be set by a script and will be used instead of what's in the buy menu. Object held in here are NOT OWNED
 		// Once a delivery is made with anything in here, this list is automatically cleared out, and the next delivery will be what's set in the buy menu.
-		std::list<const SceneObject*> m_PurchaseOverride[Players::MaxPlayerCount];
+		CheckpointList<const SceneObject*> m_PurchaseOverride[Players::MaxPlayerCount];
 
 		// The delivery queue which contains all the info about all the made orders currently in transit to delivery
-		std::deque<Delivery> m_Deliveries[Teams::MaxTeamCount];
+		CheckpointDeque<Delivery> m_Deliveries[Teams::MaxTeamCount];
 		// The box within where landing zones can be put
 		Scene::Area m_LandingZoneArea[Teams::MaxTeamCount];
 		// What a team outside the roster lands within: nowhere
@@ -755,10 +787,10 @@ namespace RTE {
 		// How wide around the brain the automatic LZ is following
 		int m_BrainLZWidth[Players::MaxPlayerCount];
 		// The objective points for each team
-		std::list<ObjectivePoint> m_Objectives;
+		CheckpointList<ObjectivePoint> m_Objectives;
 
 		// Tech of player
-		std::string m_TeamTech[Teams::MaxTeamCount];
+		CheckpointString m_TeamTech[Teams::MaxTeamCount];
 		bool m_TeamTechSwitchEnabled[Teams::MaxTeamCount];
 
 		// Initial gold amount selected by player in scenario setup dialog
@@ -789,10 +821,10 @@ namespace RTE {
 		bool m_BuyMenuEnabled;
 
 		// The cursor animations for the LZ indicators
-		std::vector<BITMAP*> m_aLZCursor[4];
+		CheckpointVector<BITMAP*> m_aLZCursor[4];
 		std::array<int, Players::MaxPlayerCount> m_LZCursorWidth; //!< The width of each players' LZ cursor.
 		// The cursor animations for the objective indications
-		std::vector<BITMAP*> m_aObjCursor[4];
+		CheckpointVector<BITMAP*> m_aObjCursor[4];
 
 		// Time it takes for a delivery to be made, in ms
 		long m_DeliveryDelay;
@@ -807,7 +839,7 @@ namespace RTE {
 		// The winning team number, when the game is over
 		int m_WinnerTeam;
 
-		std::string m_NetworkPlayerNames[Players::MaxPlayerCount];
+		CheckpointString m_NetworkPlayerNames[Players::MaxPlayerCount];
 
 		/// Private member variable and method declarations
 	private:
@@ -846,7 +878,7 @@ namespace RTE {
 		bool BuildLockstepSeatBrains();
 		static constexpr long c_SetupEditorUidReserve = 65536; //!< Ids a peer's own setup editor may spend before the shared ones resume.
 		std::array<bool, Players::MaxPlayerCount> m_LockstepPlacementSubmitted{}; //!< Per-seat, local only: this peer has committed that seat's placement.
-		std::array<NetGamePlaceBrain, Players::MaxPlayerCount> m_LockstepSeatBrains{}; //!< Per-seat committed placement; player < 0 means none yet.
+		std::array<SeatBrain, Players::MaxPlayerCount> m_LockstepSeatBrains{}; //!< Per-seat committed placement; player < 0 means none yet.
 		long m_LockstepPlacementUidBase = 0; //!< The unique-id counter as the editing phase opened, identical on every peer.
 		bool m_LockstepPlacementSeeded = false; //!< The one-time seed pass has run for this editing phase.
 		std::mutex m_MatchBrainLossMutex;
@@ -861,6 +893,9 @@ namespace RTE {
 		std::string SaveValueCheckpoint() const;
 		bool LoadValueCheckpoint(std::string_view text, bool validateOnly = false);
 		std::array<long, Players::MaxPlayerCount> m_CheckpointMarkedActorIDs{};
+		std::array<std::array<CheckpointText, 5>, Players::MaxPlayerCount> m_FrozenUI;
+		std::array<CheckpointText, Players::MaxPlayerCount> m_FrozenStrategicMenus;
+		void FreezeCheckpointUI(const GameActivity& source);
 		bool m_HasCheckpointMarkedActorIDs = false;
 
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {

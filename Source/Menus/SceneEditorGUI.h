@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CheckpointString.h"
+#include "CheckpointNativeContainers.h"
+
 #include <string>
 #include <string_view>
 
@@ -31,7 +34,8 @@ namespace RTE {
 	struct BigTexture;
 
 	/// A full menu system that represents the scene editing GUI for Cortex Command
-	class SceneEditorGUI {
+	class SceneEditorGUI : public CheckpointNativeAllocated {
+		friend class GUICheckpoint;
 
 		/// Public member variable, method and friend function declarations
 	public:
@@ -65,6 +69,7 @@ namespace RTE {
 		/// Constructor method used to instantiate a SceneEditorGUI object in system
 		/// memory. Create() should be called before using the object.
 		SceneEditorGUI();
+		SceneEditorGUI(const SceneEditorGUI& source, CheckpointNativeSnapshot& snapshot);
 
 		/// Destructor method used to clean up a SceneEditorGUI object before deletion
 		/// from system memory.
@@ -132,7 +137,7 @@ namespace RTE {
 		const SceneObject* GetCurrentObject() const { return m_pCurrentObject; }
 		PieMenu* GetCheckpointPieMenu() const { return m_PieMenu.get(); }
 		ObjectPickerGUI* GetCheckpointPicker() const { return m_pPicker; }
-		const std::vector<std::unique_ptr<Entity>>& GetCheckpointRetainedOwners() const { return m_NetRetainedOwners; }
+		const CheckpointVector<std::unique_ptr<Entity>>& GetCheckpointRetainedOwners() const { return m_NetRetainedOwners; }
 		Entity* GetCheckpointRetainedOwner(size_t index) const { return index < m_NetRetainedOwners.size() ? m_NetRetainedOwners[index].get() : nullptr; }
 		void ReclaimNetRetainedOwners() const;
 		/// A capture's workers save an editor holding a retained owner nothing references while another reads it.
@@ -189,8 +194,10 @@ namespace RTE {
 
 		/// Protected member variable and method declarations
 	protected:
-		mutable std::vector<std::unique_ptr<Entity>> m_NetRetainedOwners;
-		std::vector<bool> m_NetRetainedPrivateOwners;
+		ObjectPickerGUI* m_SavedPicker = nullptr;
+		std::vector<const Entity*> m_SavedEntityOwners;
+		mutable CheckpointVector<std::unique_ptr<Entity>> m_NetRetainedOwners;
+		CheckpointVector<bool> m_NetRetainedPrivateOwners;
 		bool m_NetPrivateCurrentObject = false;
 		void RetainNetReferencedOwner(std::unique_ptr<Entity> owner, bool privateOwner);
 		/// Updates the path to the current brain in the cursor or resident in the scene, if any. If there's none, the path is cleared.
@@ -269,7 +276,7 @@ namespace RTE {
 		// Currently placed scene object to make blink when drawing it. NOT OWNED.
 		const SceneObject* m_pObjectToBlink;
 		// Path found between brain pos and the sky to make sure fair brain placement
-		std::list<Vector> m_BrainSkyPath;
+		CheckpointList<Vector> m_BrainSkyPath;
 		// The cost of the path from the current position of the brain to the sky
 		float m_BrainSkyPathCost;
 		// Valid brain path line dots
@@ -290,7 +297,7 @@ namespace RTE {
 		/// Private member variable and method declarations
 	private:
 
-		std::string m_PendingCheckpoint;
+		CheckpointString m_PendingCheckpoint;
 		bool m_CheckpointInitialized = false;
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_FeatureSet, self.m_EditMade, self.m_EditorGUIMode, self.m_PreviousMode,

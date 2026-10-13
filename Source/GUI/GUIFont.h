@@ -1,11 +1,14 @@
 #pragma once
 
+#include "CheckpointNativeContainers.h"
+#include "CheckpointString.h"
+
 #include <map>
 
 namespace RTE {
 
 	/// A class to handle the drawing of text.
-	class GUIFont {
+	class GUIFont : public CheckpointNativeAllocated {
 		friend class GUICheckpoint;
 		friend class FrameMan;
 
@@ -111,7 +114,7 @@ namespace RTE {
 	private:
 		GUIBitmap* m_Font;
 		GUIScreen* m_Screen;
-		std::vector<FontColor> m_ColorCache;
+		CheckpointVector<FontColor> m_ColorCache;
 		std::vector<FontColor> m_InkColorCache;
 		std::map<GUIBitmap*, unsigned long> m_InkOfBitmap;
 
@@ -119,7 +122,7 @@ namespace RTE {
 		unsigned long m_MainColor;
 		unsigned long m_CurrentColor;
 		GUIBitmap* m_CurrentBitmap;
-		std::string m_Name;
+		CheckpointString m_Name;
 		Character m_Characters[256];
 		bool m_GlyphCovered[256]; // Whether the character's atlas cell holds any drawable pixels, scanned at Load
 

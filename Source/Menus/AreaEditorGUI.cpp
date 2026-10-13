@@ -479,11 +479,11 @@ void AreaEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) const {
 	std::list<Box> wrappedBoxes;
 
 	// First draw all the objects placed in the scene by the Scene Editor
-	const std::list<SceneObject*>* pSceneObjectList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::PLACEONLOAD);
+	const CheckpointList<SceneObject*>* pSceneObjectList = g_SceneMan.GetScene()->GetPlacedObjects(Scene::PLACEONLOAD);
 	if (m_FullFeatured) {
 		// Draw all already placed Objects, and the currently held one in the order it is about to be placed in the scene
 		int i = 0;
-		for (std::list<SceneObject*>::const_iterator itr = pSceneObjectList->begin(); itr != pSceneObjectList->end(); ++itr, ++i) {
+		for (CheckpointList<SceneObject*>::const_iterator itr = pSceneObjectList->begin(); itr != pSceneObjectList->end(); ++itr, ++i) {
 			(*itr)->Draw(pTargetBitmap, targetPos);
 			// Draw basic HUD if an actor
 			Actor* pActor = dynamic_cast<Actor*>(*itr);
@@ -495,7 +495,7 @@ void AreaEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) const {
 	// Draw the Box:es defined for the currently selected Area
 	Vector adjCorner;
 	if (m_FullFeatured && m_pCurrentArea) {
-		const std::vector<Box*>* pBoxList = &(m_pCurrentArea->m_BoxList);
+		const auto* pBoxList = &(m_pCurrentArea->m_BoxList);
 		// Set the drawin mode to be transparent and use the
 		//        g_FrameMan.SetTransTableFromPreset(m_BlinkTimer.AlternateReal(333) || m_EditorGUIMode == PLACINGOBJECT ? TransparencyPreset::LessTrans : TransparencyPreset::HalfTrans);
 		g_FrameMan.SetTransTableFromPreset(TransparencyPreset::MoreTrans);

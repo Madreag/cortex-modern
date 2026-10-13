@@ -1,4 +1,8 @@
 #include "HeldDevice.h"
+#include "CheckpointNativeSnapshot.h"
+#include "Vector.h"
+#include "Timer.h"
+#include "CheckpointProperties.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "RTETools.h"
@@ -21,11 +25,49 @@ using namespace RTE;
 
 ConcreteClassInfo(HeldDevice, Attachable, 50);
 
+HeldDevice::HeldDevice(const HeldDevice& source, CheckpointNativeSnapshot& snapshot) :
+	Attachable(source, snapshot),
+	m_HeldDeviceType(snapshot.Freeze(source.m_HeldDeviceType)),
+	m_Activated(snapshot.Freeze(source.m_Activated)),
+	m_HotkeyActivated(snapshot.Freeze(source.m_HotkeyActivated)),
+	m_ActivationTimer(snapshot.Freeze(source.m_ActivationTimer)),
+	m_PersistedActivationTimerAnchor(snapshot.Freeze(source.m_PersistedActivationTimerAnchor)),
+	m_HotkeyActivationTimer(snapshot.Freeze(source.m_HotkeyActivationTimer)),
+	m_OneHanded(snapshot.Freeze(source.m_OneHanded)),
+	m_DualWieldable(snapshot.Freeze(source.m_DualWieldable)),
+	m_StanceOffset(snapshot.Freeze(source.m_StanceOffset)),
+	m_SharpStanceOffset(snapshot.Freeze(source.m_SharpStanceOffset)),
+	m_SupportOffset(snapshot.Freeze(source.m_SupportOffset)),
+	m_UseSupportOffsetWhileReloading(snapshot.Freeze(source.m_UseSupportOffsetWhileReloading)),
+	m_SharpAim(snapshot.Freeze(source.m_SharpAim)),
+	m_MaxSharpLength(snapshot.Freeze(source.m_MaxSharpLength)),
+	m_Supportable(snapshot.Freeze(source.m_Supportable)),
+	m_Supported(snapshot.Freeze(source.m_Supported)),
+	m_SupportAvailable(snapshot.Freeze(source.m_SupportAvailable)),
+	m_IsUnPickupable(snapshot.Freeze(source.m_IsUnPickupable)),
+	m_SeenByPlayer(snapshot.Freeze(source.m_SeenByPlayer)),
+	m_PickupableByPresetNames(snapshot.Freeze(source.m_PickupableByPresetNames)),
+	m_GripStrengthMultiplier(snapshot.Freeze(source.m_GripStrengthMultiplier)),
+	m_BlinkTimer(snapshot.Freeze(source.m_BlinkTimer)),
+	m_Loudness(snapshot.Freeze(source.m_Loudness)),
+	m_IsExplosiveWeapon(snapshot.Freeze(source.m_IsExplosiveWeapon)),
+	m_GetsHitByMOsWhenHeld(snapshot.Freeze(source.m_GetsHitByMOsWhenHeld)),
+	m_VisualRecoilMultiplier(snapshot.Freeze(source.m_VisualRecoilMultiplier)),
+	m_PersistedHeldDeviceRuntime(snapshot.Freeze(source.m_PersistedHeldDeviceRuntime, &m_PersistedHeldDeviceRuntime)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* HeldDevice::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 HeldDevice::HeldDevice() {
 	Clear();
 }
 
 HeldDevice::~HeldDevice() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -248,30 +290,31 @@ void HeldDevice::DiscardPersistedSnapshotState() {
 
 void HeldDevice::SaveSnapshotConfiguration(Writer& writer) const {
 	Attachable::SaveSnapshotConfiguration(writer);
-	writer.NewPropertyWithValue("HeldDeviceType", m_HeldDeviceType);
-	writer.NewPropertyWithValue("OneHanded", m_OneHanded);
-	writer.NewPropertyWithValue("DualWieldable", m_DualWieldable);
-	writer.NewPropertyWithValue("StanceOffset", m_StanceOffset);
-	writer.NewPropertyWithValue("SharpStanceOffset", m_SharpStanceOffset);
-	writer.NewPropertyWithValue("Supportable", m_Supportable);
-	writer.NewPropertyWithValue("SupportOffset", m_SupportOffset);
-	writer.NewPropertyWithValue("UseSupportOffsetWhileReloading", m_UseSupportOffsetWhileReloading);
-	writer.NewPropertyWithValue("GripStrengthMultiplier", m_GripStrengthMultiplier);
-	writer.NewPropertyWithValue("SharpLength", m_MaxSharpLength);
-	writer.NewPropertyWithValue("Loudness", m_Loudness);
-	writer.NewPropertyWithValue("GetsHitByMOsWhenHeld", m_GetsHitByMOsWhenHeld);
-	writer.NewPropertyWithValue("VisualRecoilMultiplier", m_VisualRecoilMultiplier);
-	writer.NewPropertyWithValue("SpecialBehaviour_Supported", m_Supported);
-	writer.NewPropertyWithValue("SpecialBehaviour_SupportAvailable", m_SupportAvailable);
-	writer.NewPropertyWithValue("SpecialBehaviour_SharpAim", m_SharpAim);
-	writer.NewPropertyWithValue("SpecialBehaviour_UnPickupable", m_IsUnPickupable);
+	WriteCapturedProperties(writer,
+		CheckpointProperty<"HeldDeviceType">(m_HeldDeviceType),
+		CheckpointProperty<"OneHanded">(m_OneHanded),
+		CheckpointProperty<"DualWieldable">(m_DualWieldable),
+		CheckpointProperty<"StanceOffset">(m_StanceOffset),
+		CheckpointProperty<"SharpStanceOffset">(m_SharpStanceOffset),
+		CheckpointProperty<"Supportable">(m_Supportable),
+		CheckpointProperty<"SupportOffset">(m_SupportOffset),
+		CheckpointProperty<"UseSupportOffsetWhileReloading">(m_UseSupportOffsetWhileReloading),
+		CheckpointProperty<"GripStrengthMultiplier">(m_GripStrengthMultiplier),
+		CheckpointProperty<"SharpLength">(m_MaxSharpLength),
+		CheckpointProperty<"Loudness">(m_Loudness),
+		CheckpointProperty<"GetsHitByMOsWhenHeld">(m_GetsHitByMOsWhenHeld),
+		CheckpointProperty<"VisualRecoilMultiplier">(m_VisualRecoilMultiplier),
+		CheckpointProperty<"SpecialBehaviour_Supported">(m_Supported),
+		CheckpointProperty<"SpecialBehaviour_SupportAvailable">(m_SupportAvailable),
+		CheckpointProperty<"SpecialBehaviour_SharpAim">(m_SharpAim),
+		CheckpointProperty<"SpecialBehaviour_UnPickupable">(m_IsUnPickupable));
 	writer.NewPropertyWithValue("SpecialBehaviour_ClearPickupableBy", true);
 	std::vector<std::string> pickupableBy(m_PickupableByPresetNames.begin(), m_PickupableByPresetNames.end());
 	std::sort(pickupableBy.begin(), pickupableBy.end());
 	for (const std::string& preset: pickupableBy) {
 		writer.NewPropertyWithValue("SpecialBehaviour_PickupableByPreset", preset);
 	}
-	writer.NewPropertyWithValue("SpecialBehaviour_HeldDeviceRuntime", CheckpointWriter::Native([&] { return m_PersistedHeldDeviceRuntime.empty() ? SaveHeldDeviceRuntime() : m_PersistedHeldDeviceRuntime; }).Base64(true));
+	writer.NewPropertyWithValue("SpecialBehaviour_HeldDeviceRuntime", CheckpointWriter::Native([&] { return m_PersistedHeldDeviceRuntime.empty() ? SaveHeldDeviceRuntime() : m_PersistedHeldDeviceRuntime.Value(); }).Base64(true));
 }
 
 int HeldDevice::Save(Writer& writer) const {
@@ -341,7 +384,7 @@ bool HeldDevice::IsBeingHeld() const {
 
 void HeldDevice::RemovePickupableByPresetName(const std::string& actorPresetName) {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_PickupableByPresetNames.size()); });
-	std::unordered_set<std::string>::iterator pickupableByPresetNameEntry = m_PickupableByPresetNames.find(actorPresetName);
+	auto pickupableByPresetNameEntry = m_PickupableByPresetNames.find(actorPresetName);
 	if (pickupableByPresetNameEntry != m_PickupableByPresetNames.end()) {
 		m_PickupableByPresetNames.erase(pickupableByPresetNameEntry);
 	}

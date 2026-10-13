@@ -349,9 +349,14 @@ static void *mem_alloc(void *ud, void *ptr, size_t osize, size_t nsize)
   }
 }
 
+LUALIB_API lua_State *luaL_newstate_raw(void)
+{
+  return lua_newstate(mem_alloc, NULL);
+}
+
 LUALIB_API lua_State *luaL_newstate(void)
 {
-  lua_State *L = lua_newstate(mem_alloc, NULL);
+  lua_State *L = luaL_newstate_raw();
   if (L) {
     G(L)->panic = panic;
 #ifndef LUAJIT_DISABLE_VMEVENT
@@ -367,14 +372,18 @@ LUALIB_API lua_State *luaL_newstate(void)
 
 #else
 
+LUALIB_API lua_State *luaL_newstate_raw(void)
+{
+#if LJ_64 && !LJ_GC64
+  return lj_state_newstate(LJ_ALLOCF_INTERNAL, NULL);
+#else
+  return lua_newstate(LJ_ALLOCF_INTERNAL, NULL);
+#endif
+}
+
 LUALIB_API lua_State *luaL_newstate(void)
 {
-  lua_State *L;
-#if LJ_64 && !LJ_GC64
-  L = lj_state_newstate(LJ_ALLOCF_INTERNAL, NULL);
-#else
-  L = lua_newstate(LJ_ALLOCF_INTERNAL, NULL);
-#endif
+  lua_State *L = luaL_newstate_raw();
   if (L) {
     G(L)->panic = panic;
 #ifndef LUAJIT_DISABLE_VMEVENT

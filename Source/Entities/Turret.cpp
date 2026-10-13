@@ -1,4 +1,5 @@
 #include "Turret.h"
+#include "CheckpointNativeSnapshot.h"
 
 #include "HeldDevice.h"
 #include "PresetMan.h"
@@ -7,11 +8,24 @@ using namespace RTE;
 
 ConcreteClassInfo(Turret, Attachable, 20);
 
+Turret::Turret(const Turret& source, CheckpointNativeSnapshot& snapshot) :
+	Attachable(source, snapshot),
+	m_MountedDevices(snapshot.Freeze(source.m_MountedDevices, &m_MountedDevices)),
+	m_MountedDeviceRotationOffset(snapshot.Freeze(source.m_MountedDeviceRotationOffset)),
+	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
+}
+
+Entity* Turret::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
+	if (&GetClass() != &m_sClass) return Entity::FreezeCheckpointNative(snapshot);
+	return snapshot.Make(*this);
+}
+
 Turret::Turret() {
 	Clear();
 }
 
 Turret::~Turret() {
+	if (IsFrozenCheckpointNative()) return;
 	Destroy(true);
 }
 
@@ -154,7 +168,7 @@ void Turret::SetParent(MOSRotating* newParent) {
 
 void Turret::RemoveMountedDevice(const HeldDevice* mountedDeviceToRemove) {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_MountedDevices.size()); });
-	std::vector<HeldDevice*>::iterator mountedDeviceIterator = std::find_if(m_MountedDevices.begin(), m_MountedDevices.end(), [&mountedDeviceToRemove](const HeldDevice* mountedDevice) {
+	auto mountedDeviceIterator = std::find_if(m_MountedDevices.begin(), m_MountedDevices.end(), [&mountedDeviceToRemove](const HeldDevice* mountedDevice) {
 		return mountedDevice == mountedDeviceToRemove;
 	});
 	m_MountedDevices.erase(mountedDeviceIterator);

@@ -178,7 +178,7 @@ namespace RTE {
 		if (rootMOID == g_NoMOID || rootMOID <= 0) {
 			return;
 		}
-		std::vector<MovableObject*> scratch(static_cast<size_t>(rootMOID), nullptr);
+		CheckpointVector<MovableObject*> scratch(static_cast<size_t>(rootMOID), nullptr);
 		clone->UpdateMOID(scratch);
 	}
 
