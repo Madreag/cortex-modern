@@ -1664,6 +1664,8 @@ namespace RTE {
 		uint32_t PeerVotingOwners(uint32_t& voters) const;
 		/// Whether voters are exactly half of the voting seats in a round whose ties the referee decides.
 		bool PeerGroupIsRefereedHalf(uint32_t voters) const;
+		/// The frame from which the whole group last played together at or before frame: the name every half gives the split after it.
+		uint64_t PeerSplitEpoch(uint64_t frame) const;
 		void SendForwardedPeerInput(const NetLockstepFrame& input, uint8_t onlyPeer);
 		void CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs);
 		bool ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly = false);
