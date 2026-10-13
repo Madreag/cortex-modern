@@ -551,10 +551,9 @@ namespace RTE {
 		if (!IsSupported()) return "unsupported";
 		// A copy watch over 64 pages that opens the aligned run of 16 around a fault, as the native page pool does.
 		struct Watched {
-			static constexpr size_t c_Pages = 64;
 			uint8_t* data = nullptr;
-			size_t page = 0;
-			std::array<uint8_t, c_Pages> fenced{};
+			size_t page = 0, bytes = 0;
+			std::array<uint8_t, 64> fenced{};
 			int faults = 0;
 			~Watched() {
 				if (!data) return;
@@ -562,12 +561,13 @@ namespace RTE {
 #ifdef _WIN32
 				VirtualFree(data, 0, MEM_RELEASE);
 #else
-				munmap(data, page * c_Pages);
+				munmap(data, bytes);
 #endif
 			}
 		} watched;
 		watched.page = PageBytes();
-		const size_t page = watched.page, bytes = page * Watched::c_Pages;
+		watched.bytes = watched.page * watched.fenced.size();
+		const size_t page = watched.page, bytes = watched.bytes;
 #ifdef _WIN32
 		watched.data = static_cast<uint8_t*>(VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
 #else
