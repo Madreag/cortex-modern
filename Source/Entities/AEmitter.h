@@ -95,6 +95,10 @@ namespace RTE {
 
 		const Matrix& GetEmitAngleMatrix() const { return m_EmitAngle; }
 
+		/// Traces the next emitting updates of a wound that a CC_TEST_TARGET_TRACE script added.
+		/// @param uniqueID The wound's unique ID.
+		static void NoteTracedWound(long uniqueID);
+
 		/// Gets the offset of the emission point from this' sprite center, which gets rotated with this.
 		/// @return The emission offset.
 		Vector GetEmitOffset() const { return m_EmissionOffset; }

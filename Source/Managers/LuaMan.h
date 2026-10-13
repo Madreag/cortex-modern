@@ -736,6 +736,10 @@ namespace RTE {
 		/// @return The current lua state that is running.
 		LuaStateWrapper* GetThreadCurrentLuaState() const;
 
+		/// Whether this thread's lua state is running a script that the CC_TEST_TARGET_TRACE lever names.
+		/// @return Whether such a script is running.
+		bool IsRunningTracedScript() const;
+
 		/// Returns the threaded script state an object's scripts belong on, locked to our thread and safe
 		/// to use - ensure that it'll be unlocked after use! The state is the object's unique ID modulo the
 		/// state count, so every peer, every restore and every machine puts that object on the same state.

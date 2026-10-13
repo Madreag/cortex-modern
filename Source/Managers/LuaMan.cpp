@@ -552,7 +552,7 @@ namespace {
 					if (boost::optional<Timer*> timer = luabind::object_cast_nothrow<Timer*>(value); timer && *timer) {
 						result[name] = {{"elapsed_bits", std::bit_cast<uint64_t>((*timer)->GetElapsedSimTimeMS())},
 						    {"start_ticks", (*timer)->GetStartSimTimeMS()}};
-					} else if (boost::optional<Vector*> vector = luabind::object_cast_nothrow<Vector*>(value); vector && *vector) {
+					} else if (boost::optional<const Vector*> vector = luabind::object_cast_nothrow<const Vector*>(value); vector && *vector) {
 						result[name] = {{"x_bits", std::bit_cast<uint32_t>((*vector)->m_X)}, {"y_bits", std::bit_cast<uint32_t>((*vector)->m_Y)}};
 					} else {
 						result[name] = "userdata";
@@ -12433,6 +12433,11 @@ thread_local LuaStateWrapper* s_currentLuaState = nullptr;
 thread_local std::string s_PreviewHookSelfKey;
 LuaStateWrapper* LuaMan::GetThreadCurrentLuaState() const {
 	return s_currentLuaState;
+}
+
+bool LuaMan::IsRunningTracedScript() const {
+	static const std::string filter = [] { const char* value = std::getenv("CC_TEST_TARGET_TRACE"); return value ? value : ""; }();
+	return !filter.empty() && s_currentLuaState && s_currentLuaState->GetCurrentlyRunningScriptFilePath().find(filter) != std::string_view::npos;
 }
 
 size_t LuaMan::ScriptStateIndexForObject(long uniqueID) const {
