@@ -8565,6 +8565,13 @@ void RunGameLoop() {
 				const auto tickResult = g_SimChecksum.EndTick();
 				if (s_checkpointRestoreContinue) System::PrintDiagnosticLine(std::format("[checkpoint-restore-hash] tick={} total={} sim_gated={}",
 				    simTick, SimChecksum::HashHex(tickResult.total), SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult))));
+				// Test lever CCCP_TEST_HASH_SUBSYSTEMS: a continued restore also names each subsystem's hash, so a divergence names its part.
+				static const bool hashSubsystems = std::getenv("CCCP_TEST_HASH_SUBSYSTEMS") != nullptr;
+				if (s_checkpointRestoreContinue && hashSubsystems) {
+					std::string line = std::format("[checkpoint-restore-subsystems] tick={}", simTick);
+					for (const auto& [name, hash]: SimChecksum::CompleteSubsystems(tickResult)) line += std::format(" {}={}", name, SimChecksum::HashHex(hash).substr(0, 12));
+					System::PrintDiagnosticLine(line);
+				}
 				RetractAbandonedTickHashes();
 				if (liveHashTick) {
 					nlohmann::json subsystems = nlohmann::json::object();
