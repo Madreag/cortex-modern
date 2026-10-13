@@ -8451,16 +8451,41 @@ void LuaStateWrapper::TraceCheckpointAI(long uniqueID, std::string_view hook, st
 		else if (type == LUA_TUSERDATA) {
 			if (const auto* object = luabind::detail::is_class_object(state, value); object && object->crep()) {
 				detail = object->crep()->name();
-				if (object->ptr() && detail == "Timer") {
+				detail += (object->flags() & luabind::detail::object_rep::owner) ? " owned" : " borrowed";
+				if (object->ptr() && std::string_view(object->crep()->name()) == "Timer") {
 					const auto& timer = *static_cast<const Timer*>(object->ptr());
 					detail += std::format(" start={} limit={}", timer.GetStartSimTimeMS(), timer.GetSimTimeLimitTicks());
-				} else if (object->ptr() && detail == "Vector") {
+				} else if (object->ptr() && std::string_view(object->crep()->name()) == "Vector") {
 					const auto& vector = *static_cast<const Vector*>(object->ptr());
 					detail += std::format(" x={:08x} y={:08x}", std::bit_cast<uint32_t>(vector.m_X), std::bit_cast<uint32_t>(vector.m_Y));
 				}
 			}
 		}
+		else if (type == LUA_TFUNCTION) {
+			lua_Debug info{};
+			lua_pushvalue(state, value);
+			lua_getinfo(state, ">S", &info);
+			detail = std::format("function {}:{}", info.short_src, info.linedefined);
+		}
 		System::PrintDiagnosticLine(std::format("{} field={} value={}", prefix, path, detail));
+		if (type == LUA_TFUNCTION) {
+			if (!seen.insert(lua_topointer(state, value)).second || !lua_checkstack(state, 2)) return;
+			for (int upvalue = 1; upvalue <= 64; ++upvalue) {
+				const char* name = lua_getupvalue(state, value, upvalue);
+				if (!name) break;
+				visit(state, -1, path + ".^" + name, depth + 1);
+				lua_pop(state, 1);
+			}
+			return;
+		}
+		if (type == LUA_TUSERDATA) {
+			const auto* object = luabind::detail::is_class_object(state, value);
+			if (!object || !object->crep() || !seen.insert(lua_topointer(state, value)).second || !object->get_lua_table().is_valid() || !lua_checkstack(state, 2)) return;
+			object->get_lua_table().get(state);
+			visit(state, -1, path + ".~fields", depth + 1);
+			lua_pop(state, 1);
+			return;
+		}
 		if ((type != LUA_TTABLE && type != LUA_TTHREAD) || !seen.insert(lua_topointer(state, value)).second) return;
 		if (type == LUA_TTABLE) {
 			lua_pushnil(state);
