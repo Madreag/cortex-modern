@@ -68,6 +68,7 @@ namespace RTE {
 			void* owner = nullptr;
 			uintptr_t begin = 0, end = 0;
 			PageWriteFence::CopyObserver observer = nullptr;
+			PageWriteFence::CopyReopen reopen = nullptr;
 			void* context = nullptr;
 			std::atomic<size_t> readers{0};
 			std::atomic<bool> retiring{false};
@@ -218,7 +219,7 @@ namespace RTE {
 		}
 	} // namespace
 
-	bool PageWriteFence::WatchCopies(void* owner, Buffer buffer, CopyObserver observer, void* context, CopyArm arm, void* armContext, CopyWatchCosts* costs) {
+	bool PageWriteFence::WatchCopies(void* owner, Buffer buffer, CopyObserver observer, void* context, CopyArm arm, void* armContext, CopyWatchCosts* costs, CopyReopen reopen) {
 		const auto started = costs ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		const size_t page = PageBytes();
 		const uintptr_t begin = reinterpret_cast<uintptr_t>(buffer.data);
@@ -241,7 +242,7 @@ namespace RTE {
 				CheckpointFailure::Check(CheckpointFailure::Point::CopyWatch);
 				watch = std::make_shared<CopyWatch>();
 				watch->owner = owner; watch->begin = begin; watch->end = begin + buffer.bytes;
-				watch->observer = observer; watch->context = context;
+				watch->observer = observer; watch->reopen = reopen; watch->context = context;
 				decltype(copies.owners) owners;
 				owners.emplace(owner, watch); ownerNode = owners.extract(owner);
 				CheckpointFailure::Check(CheckpointFailure::Point::CopyWatch);
@@ -543,6 +544,99 @@ namespace RTE {
 		*static_cast<volatile uint8_t*>(retry.data) = 101;
 		UnwatchCopies(&retry);
 		if (retry.saved.front() != 97 || retry.data[0] != 101) return "watch allocation failure changed the retry's saved page";
+		return {};
+	}
+
+	std::string PageWriteFence::FenceOverCopyWatchSelfTestMismatch() {
+		if (!IsSupported()) return "unsupported";
+		// A copy watch over 64 pages that opens the aligned run of 16 around a fault, as the native page pool does.
+		struct Watched {
+			static constexpr size_t c_Pages = 64;
+			uint8_t* data = nullptr;
+			size_t page = 0;
+			std::array<uint8_t, c_Pages> fenced{};
+			int faults = 0;
+			~Watched() {
+				if (!data) return;
+				UnwatchCopies(this);
+#ifdef _WIN32
+				VirtualFree(data, 0, MEM_RELEASE);
+#else
+				munmap(data, page * c_Pages);
+#endif
+			}
+		} watched;
+		watched.page = PageBytes();
+		const size_t page = watched.page, bytes = page * Watched::c_Pages;
+#ifdef _WIN32
+		watched.data = static_cast<uint8_t*>(VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+#else
+		void* mapped = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (mapped != MAP_FAILED) watched.data = static_cast<uint8_t*>(mapped);
+#endif
+		if (!watched.data) return "could not map test pages";
+		struct Lift {
+			~Lift() { if (IsArmed()) Release(); }
+		} lift;
+		for (size_t byte = 0; byte < bytes; ++byte) watched.data[byte] = static_cast<uint8_t>((byte * 131) & 0xFF);
+		const std::vector<uint8_t> original(watched.data, watched.data + bytes);
+		const auto observe = +[](void* context, uintptr_t address) noexcept {
+			auto& watch = *static_cast<Watched*>(context);
+			++watch.faults;
+			const size_t faulted = (address - reinterpret_cast<uintptr_t>(watch.data)) / watch.page, first = faulted - faulted % 16;
+			for (size_t at = first; at < first + 16; ++at) {
+				if (!watch.fenced[at] && at != faulted) continue;
+				if (!OpenCopiedPage(reinterpret_cast<uintptr_t>(watch.data + at * watch.page), watch.page)) return false;
+				watch.fenced[at] = 0;
+			}
+			return true;
+		};
+		const auto reopen = +[](void* context, uintptr_t address, size_t length) noexcept {
+			auto& watch = *static_cast<Watched*>(context);
+			bool opened = true;
+			for (uintptr_t at = address; at < address + length; at += watch.page)
+				if (!watch.fenced[(at - reinterpret_cast<uintptr_t>(watch.data)) / watch.page]) opened = OpenCopiedPage(at, watch.page) && opened;
+			return opened;
+		};
+		const auto keepWritable = +[](void*, uintptr_t, size_t) noexcept { return true; };
+		if (!WatchCopies(&watched, {watched.data, bytes}, observe, &watched, keepWritable, nullptr, nullptr, reopen)) return "watch refused";
+		const auto fenceRun = [&](size_t first, size_t last) {
+			for (size_t at = first; at < last; ++at) watched.fenced[at] = 1;
+			return ProtectCopyPages(reinterpret_cast<uintptr_t>(watched.data + first * page), (last - first) * page);
+		};
+		auto* const volatileData = static_cast<volatile uint8_t*>(watched.data);
+		const auto rewrite = [&](size_t at) { volatileData[at] = volatileData[at]; };
+		// The preview's fence covers pages 5-59 (its edges mid-page) while the watch keeps pages 16-31 and 48-55 fenced.
+		const std::vector<Buffer> buffers{{watched.data + page * 4 + 37, page * 56 - 26}};
+		for (int round = 0; round < 2; ++round) {
+			if (!fenceRun(16, 32) || !fenceRun(48, 56)) return "watch fence refused";
+			if (!Arm(buffers)) return "arm refused";
+			watched.data[page * 4 + 40] ^= 0xFF;
+			watched.data[page * 8 + 3] ^= 0xFF;
+			// The watch opens 16-31 at this fault, and 21 and 29-30 are written without one.
+			watched.data[page * 20 + 5] ^= 0xFF;
+			watched.data[page * 21 + 7] ^= 0xFF;
+			std::memset(watched.data + page * 30 - 3, 0x5A, 6);
+			// The watch fences a written page again while the preview runs, as cooling does.
+			if (!fenceRun(8, 9)) return "watch refence refused";
+			Restore();
+			for (size_t at = 0; at < bytes; ++at) {
+				if (watched.data[at] != original[at]) return "page " + std::to_string(at / page) + " was not put back round=" + std::to_string(round);
+			}
+			int faults = watched.faults;
+			rewrite(page * 10);
+			if (watched.faults != faults) return "a page the watch left open stayed read-only after the fence lifted";
+			rewrite(page * 50);
+			if (watched.faults != faults + 1) return "the fence's restore opened a page the copy watch keeps fenced";
+		}
+		if (!fenceRun(48, 56)) return "watch fence refused";
+		if (!Arm(buffers)) return "arm refused";
+		watched.data[page * 12] ^= 0xFF;
+		Release();
+		const int faults = watched.faults;
+		rewrite(page * 50);
+		if (watched.data[page * 12] == original[page * 12]) return "release did not keep the write";
+		if (watched.faults != faults + 1) return "the fence's release opened a page the copy watch keeps fenced";
 		return {};
 	}
 

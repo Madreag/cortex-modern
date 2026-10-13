@@ -1439,6 +1439,15 @@ bool RTE::RunCheckpointImageSelfTest() {
 				fail("a_page_fence_puts_back_exactly_what_was_written", mismatch);
 			}
 		}
+		{
+			if (!PageWriteFence::IsSupported()) {
+				pass("a_page_fence_over_copy_watched_pages_puts_back_what_either_let_through", "platform=copies");
+			} else if (const std::string mismatch = PageWriteFence::FenceOverCopyWatchSelfTestMismatch(); mismatch.empty()) {
+				pass("a_page_fence_over_copy_watched_pages_puts_back_what_either_let_through", "rounds=2 release=1");
+			} else {
+				fail("a_page_fence_over_copy_watched_pages_puts_back_what_either_let_through", mismatch);
+			}
+		}
 	} catch (const std::exception& error) {
 		fail("no_unexpected_exception", error.what());
 	}
