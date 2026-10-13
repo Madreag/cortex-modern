@@ -836,25 +836,39 @@ namespace RTE::CheckpointLua {
 				return false;
 			}
 
+			// A write fault saves and opens the aligned run of pages around it: a collector's pass writes the neighbours
+			// next, and taking a fault costs several times what copying a page does.
+			static constexpr size_t c_FaultRunPages = 16;
 			bool CopyPage(size_t page, bool fault) noexcept {
 				const auto started = fault ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 				Locked guard(lock);
-				const uintptr_t address = base + page * pageBytes;
+				size_t first = page, last = page + 1;
+				if (fault) {
+					// Every page below an armed generation's end is committed, and an unsaved one is still fenced.
+					size_t end = 0;
+					for (const auto& copy: copies)
+						if (copy->armed.load(std::memory_order_relaxed) == 1 && !copy->completed) end = std::max(end, copy->saved.size());
+					first = page - page % c_FaultRunPages;
+					last = std::max(page + 1, std::min(first + c_FaultRunPages, end));
+				}
 				bool savedAny = false;
 				for (const auto& copy: copies) {
 					if (copy->armed.load(std::memory_order_relaxed) != 1 || copy->completed) continue;
-					if (page >= copy->saved.size() || copy->saved[page]) continue;
+					const bool faulted = page < copy->saved.size() && !copy->saved[page];
 					// An unsaved generation's page has never been opened for a
 					// write. Materialize every such generation before opening it.
-					std::memcpy(reinterpret_cast<std::byte*>(copy->destination) + page * pageBytes, reinterpret_cast<const void*>(address), pageBytes);
-					copy->saved[page] = 1;
-					savedAny = true;
-					if (fault) {
+					for (size_t at = first; at < std::min(last, copy->saved.size()); ++at) {
+						if (copy->saved[at]) continue;
+						std::memcpy(reinterpret_cast<std::byte*>(copy->destination) + at * pageBytes, reinterpret_cast<const void*>(base + at * pageBytes), pageBytes);
+						copy->saved[at] = 1;
+						savedAny = true;
+					}
+					if (fault && faulted) {
 						copy->faults->count.fetch_add(1, std::memory_order_relaxed);
 						copy->faults->us.fetch_add(MicrosecondsSince(started), std::memory_order_relaxed);
 					}
 				}
-				return (!fault && !savedAny) || PageWriteFence::OpenCopiedPage(address, pageBytes);
+				return (!fault && !savedAny) || PageWriteFence::OpenCopiedPage(base + first * pageBytes, (last - first) * pageBytes);
 			}
 			bool CopyPages(size_t first, size_t count) noexcept {
 				Locked guard(lock);
