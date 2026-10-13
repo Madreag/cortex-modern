@@ -1440,7 +1440,7 @@ bool SceneMan::CastTerrainPenetrationRay(const Vector& start, const Vector& ray,
 			foundMaterial = GetMaterialFromID(materialID);
 			// Add the encountered material's strength to the tally
 			const int strengthBefore = totalStrength;
-			totalStrength += foundMaterial->GetIntegrity();
+			totalStrength = DeterministicFloatToInt(static_cast<float>(totalStrength) + foundMaterial->GetIntegrity());
 			if (LuaMan::SharedTraceEnabled() && foundMaterial->GetIntegrity() >= 2147483648.0F) {
 				LuaMan::TraceShared(nullptr, "ray-strength kind=penetration x=" + std::to_string(intPos[X]) + " y=" + std::to_string(intPos[Y]) +
 				                                 " material=" + std::to_string(materialID) + " integrity_bits=" + std::to_string(std::bit_cast<uint32_t>(foundMaterial->GetIntegrity())) +
@@ -1536,7 +1536,7 @@ void SceneMan::WalkUnseenRay(const Vector& start, const Vector& ray, int strengt
 			foundMaterial = GetMaterialFromID(materialID);
 			// Add the encountered material's strength to the tally
 			const int strengthBefore = totalStrength;
-			totalStrength += foundMaterial->GetIntegrity();
+			totalStrength = DeterministicFloatToInt(static_cast<float>(totalStrength) + foundMaterial->GetIntegrity());
 			if (LuaMan::SharedTraceEnabled() && foundMaterial->GetIntegrity() >= 2147483648.0F) {
 				LuaMan::TraceShared(nullptr, "ray-strength kind=unseen x=" + std::to_string(intPos[X]) + " y=" + std::to_string(intPos[Y]) +
 				                                 " material=" + std::to_string(materialID) + " integrity_bits=" + std::to_string(std::bit_cast<uint32_t>(foundMaterial->GetIntegrity())) +

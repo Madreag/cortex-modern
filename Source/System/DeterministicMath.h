@@ -16,6 +16,14 @@
 #endif
 
 namespace RTE {
+	// Match the x86 truncating conversion, including its integer-indefinite result.
+	// C++ leaves out-of-range float-to-int conversions undefined; arm64 saturates
+	// positive overflow instead, changing rays through unbounded-strength material.
+	inline int32_t DeterministicFloatToInt(float value) {
+		if (!(value >= -2147483648.0F && value < 2147483648.0F)) { return std::numeric_limits<int32_t>::min(); }
+		return static_cast<int32_t>(value);
+	}
+
 	inline double DeterministicSqrt(double value) {
 		if (value < 0.0 || std::isnan(value)) { return std::numeric_limits<double>::quiet_NaN(); }
 #if defined(__aarch64__)
