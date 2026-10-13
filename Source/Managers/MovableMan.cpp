@@ -119,6 +119,13 @@ namespace {
 	};
 	SeeRayPass s_SeeRayPass;
 
+	size_t CountTraceValue(const BITMAP* bitmap, int value) {
+		size_t count = 0;
+		if (!bitmap) return count;
+		for (int y = 0; y < bitmap->h; ++y) for (int x = 0; x < bitmap->w; ++x) count += bitmap->line[y][x] == value;
+		return count;
+	}
+
 	uint64_t HashTraceBitmap(const BITMAP* bitmap) {
 		uint64_t hash = 14695981039346656037ULL;
 		if (!bitmap) return hash;
@@ -3706,8 +3713,16 @@ void MovableMan::WaitForActorsSeeTask(const char* caller) {
 	SeeRayPass& pass = s_SeeRayPass;
 	if (!pass.pending) return;
 	if (LuaMan::SharedTraceEnabled()) {
+		const BITMAP* copy = g_SceneMan.GetTerrain() ? g_SceneMan.GetTerrain()->GetMaterialCopyBitmap() : nullptr;
 		std::string line = std::string("see-reveal caller=") + caller + " rays=" + std::to_string(pass.rays.size()) +
-		                   " material=" + std::to_string(HashTraceBitmap(g_SceneMan.GetTerrain() ? g_SceneMan.GetTerrain()->GetMaterialCopyBitmap() : nullptr));
+		                   " material=" + std::to_string(HashTraceBitmap(copy)) + " cavities=" + std::to_string(CountTraceValue(copy, MaterialColorKeys::g_MaterialCavity)) +
+		                   " copy=" + std::to_string(reinterpret_cast<uintptr_t>(copy)) + "/" + std::to_string(copy ? copy->w : 0) + "x" + std::to_string(copy ? copy->h : 0);
+		for (size_t ray = 0; ray < pass.traces.size(); ++ray) {
+			const SeeRayTrace& trace = pass.traces[ray];
+			if (trace.lastMaterial == MaterialColorKeys::g_MaterialCavity && copy && trace.lastX >= 0 && trace.lastY >= 0 && trace.lastX < copy->w && trace.lastY < copy->h) {
+				line += " cavity@" + std::to_string(trace.lastX) + "," + std::to_string(trace.lastY) + "=" + std::to_string(copy->line[trace.lastY][trace.lastX]);
+			}
+		}
 		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
 			if (pass.fog[team]) line += " fog" + std::to_string(team) + "=" + std::to_string(HashTraceBitmap(pass.fog[team]));
 		}
@@ -7491,7 +7506,8 @@ void MovableMan::Update() {
 		if (LuaMan::SharedTraceEnabled()) {
 			// What the pass will read: the frozen material copy and each team's fog copy.
 			const auto hashBitmap = HashTraceBitmap;
-			std::string line = "see-launch material=" + std::to_string(hashBitmap(g_SceneMan.GetTerrain() ? g_SceneMan.GetTerrain()->GetMaterialCopyBitmap() : nullptr)) +
+			const BITMAP* launchCopy = g_SceneMan.GetTerrain() ? g_SceneMan.GetTerrain()->GetMaterialCopyBitmap() : nullptr;
+			std::string line = "see-launch cavities=" + std::to_string(CountTraceValue(launchCopy, MaterialColorKeys::g_MaterialCavity)) + " material=" + std::to_string(hashBitmap(launchCopy)) +
 			                   " live=" + std::to_string(hashBitmap(g_SceneMan.GetTerrain() ? g_SceneMan.GetTerrain()->GetMaterialBitmap() : nullptr));
 			for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
 				if (pass.fog[team]) line += " fog" + std::to_string(team) + "=" + std::to_string(hashBitmap(pass.fog[team]));
