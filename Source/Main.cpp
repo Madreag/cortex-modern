@@ -1539,6 +1539,39 @@ static long long s_paceLastPresentUs = 0; //!< When the paced round last drew a 
 static long long s_paceFrameDrawUs = 0; //!< Time spent drawing and presenting those frames.
 static long long s_paceMaxDrawUs = 0; //!< The longest single iteration's draw since the previous census line.
 
+// Opt-in accounting only: aggregate complete running ticks, without changing their work or pacing.
+static void NoteTickCostDetails(uint64_t round, uint64_t tick, const std::array<long long, 7>& phases) {
+	struct Window {
+		uint64_t round = 0, firstTick = 0, ticks = 0;
+		std::array<long long, 7> phases{};
+		std::array<uint64_t, PerformanceMan::PerfCounterCount> counters{};
+	};
+	static Window window;
+	if (window.round != round) window = {};
+	window.round = round;
+	if (window.ticks == 0) window.firstTick = tick;
+	++window.ticks;
+	for (size_t i = 0; i < phases.size(); ++i) window.phases[i] += phases[i];
+	for (int i = 0; i < PerformanceMan::PerfCounterCount; ++i)
+		window.counters[i] += g_PerformanceMan.GetPerformanceCounterSample(static_cast<PerformanceMan::PerformanceCounters>(i));
+	if (window.ticks < 600) return;
+	static constexpr std::array<const char*, 7> phaseNames{"before_world", "world", "audio", "late", "hash", "collection", "finish"};
+	static constexpr std::array<const char*, PerformanceMan::PerfCounterCount> counterNames{
+	    "sim_counter", "actors_ai", "actors_travel", "actors_update", "particles_travel", "particles_update", "activity", "scripts"};
+	std::ostringstream line;
+	line << "[net-tick-cost] round=" << round << " first_tick=" << window.firstTick << " last_tick=" << tick << " ticks=" << window.ticks;
+	long long total = 0;
+	for (size_t i = 0; i < window.phases.size(); ++i) {
+		line << ' ' << phaseNames[i] << "_us=" << window.phases[i];
+		total += window.phases[i];
+	}
+	line << " total_us=" << total;
+	// These existing counters describe work within the phases; nested counters are not additive.
+	for (size_t i = 0; i < window.counters.size(); ++i) line << ' ' << counterNames[i] << "_us=" << window.counters[i];
+	System::PrintDiagnosticLine(line.str());
+	window = {};
+}
+
 // The loop pace since the previous memory census line, with the draw split where it spends its time.
 static std::string PaceCensusSinceLast() {
 	struct Mark { uint64_t iterations = 0, ticks = 0; long long simUs = 0, updateUs = 0, drawUs = 0, previewUs = 0, interfaceUs = 0, waitUs = 0, trimmedTicks = 0; uint64_t previews = 0, framesDrawn = 0; long long frameDrawUs = 0; uint64_t framesShed = 0; };
@@ -7944,7 +7977,10 @@ void RunGameLoop() {
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
 			const long long paceWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
 			const bool heldTickDetails = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && ScenarioRunner::IsLockstepOwnSeatHeld();
+			static const bool tickCostDetails = std::getenv("CC_TEST_TICK_COST_DETAILS") != nullptr;
+			const bool tickPhaseDetails = heldTickDetails || tickCostDetails;
 			long long heldBeforeWorldUs = 0, heldAfterWorldUs = 0, heldAfterHashUs = 0, heldAfterCollectionUs = 0;
+			long long detailAfterAudioUs = 0, detailBeforeHashUs = 0;
 			const bool measureLockstepCost = ScenarioRunner::IsLockstepControllerSyncActive();
 			g_PerformanceMan.NewPerformanceSample();
 			if (!measureLockstepCost) g_PerformanceMan.UpdateMSPSU();
@@ -8501,7 +8537,7 @@ void RunGameLoop() {
 				g_MovableMan.CompleteQueuedMOIDDrawings();
 
 				g_ConsoleMan.Update();
-				if (heldTickDetails) heldBeforeWorldUs = g_TimerMan.GetAbsoluteTime();
+				if (tickPhaseDetails) heldBeforeWorldUs = g_TimerMan.GetAbsoluteTime();
 				{
 					static const uint64_t soundPhase = Hash("Tick");
 					SoundSimulationScope simulationSounds(0, soundPhase);
@@ -8517,7 +8553,7 @@ void RunGameLoop() {
 					g_LuaMan.ClearScriptTimings();
 					g_MovableMan.Update();
 				}
-				if (heldTickDetails) heldAfterWorldUs = g_TimerMan.GetAbsoluteTime();
+				if (tickPhaseDetails) heldAfterWorldUs = g_TimerMan.GetAbsoluteTime();
 			}
 			if (ScenarioRunner::HasControllerReplayError()) {
 				HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);
@@ -8528,6 +8564,7 @@ void RunGameLoop() {
 
 			g_AudioMan.Update();
 			g_MusicMan.Update();
+			if (tickCostDetails) detailAfterAudioUs = g_TimerMan.GetAbsoluteTime();
 
 			if (!lockstepPausedTick) {
 				// A long late script is this machine's own like the update's: the plane commits for the round meanwhile.
@@ -8600,6 +8637,7 @@ void RunGameLoop() {
 			CrossEliminationAtCommittedTick(simTick);
 			CrossEndTargetObservation(simTick);
 			CrossRecoveryAtCommittedTick(simTick, lockstepPausedTick);
+			if (tickCostDetails) detailBeforeHashUs = g_TimerMan.GetAbsoluteTime();
 			if (hashThisTick) {
 				const HarnessCost::SimulationSpan harnessSpan;
 				// The object census goes in here, not inside MovableMan::Update: the checkpoint
@@ -8677,7 +8715,7 @@ void RunGameLoop() {
 				}
 			}
 
-			if (heldTickDetails) heldAfterHashUs = g_TimerMan.GetAbsoluteTime();
+			if (tickPhaseDetails) heldAfterHashUs = g_TimerMan.GetAbsoluteTime();
 			// Start async GC after all main-thread Lua work for this tick is done. Earlier (inside MovableMan::Update)
 			// it overlapped with LateUpdateGlobalScripts on main, opening a window for ABBA between main holding one
 			// state for the global script and a worker GC __gc finalizer wanting it from another state.
@@ -8689,7 +8727,7 @@ void RunGameLoop() {
 				NetLockstepPlane::Window collectionWindow("tick-end collection wait");
 				g_LuaMan.WaitForAsyncGarbageCollection();
 			}
-			if (heldTickDetails) heldAfterCollectionUs = g_TimerMan.GetAbsoluteTime();
+			if (tickPhaseDetails) heldAfterCollectionUs = g_TimerMan.GetAbsoluteTime();
 			if (s_crossLeaveRequested) { s_crossLeaveRequested = false; s_scriptedLeaveDue = true; }
 			if (const MinimizeLever& lever = TestMinimizeLever(); lever.to != 0 && g_WindowMan.GetWindow()) {
 				SDL_Window* window = g_WindowMan.GetWindow();
@@ -8955,6 +8993,13 @@ void RunGameLoop() {
 				++s_paceSimTicks;
 				const long long elapsedUs = g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
 				s_paceSimUs += elapsedUs;
+				if (tickCostDetails && !lockstepPausedTick) {
+					NoteTickCostDetails(ScenarioRunner::GetLockstepRoundId(), simTick, {
+					    heldBeforeWorldUs - paceTickStartUs, heldAfterWorldUs - heldBeforeWorldUs,
+					    detailAfterAudioUs - heldAfterWorldUs, detailBeforeHashUs - detailAfterAudioUs,
+					    heldAfterHashUs - detailBeforeHashUs, heldAfterCollectionUs - heldAfterHashUs,
+					    paceTickStartUs + elapsedUs - heldAfterCollectionUs});
+				}
 				if (heldTickDetails) {
 					static long long detailAtUs = 0;
 					if (paceTickStartUs >= detailAtUs + 1000000) {
