@@ -595,7 +595,9 @@ namespace {
 			}
 			const char* bytes = static_cast<const char*>(data);
 			while (size > 0) {
-				const auto count = static_cast<unsigned int>(std::min<size_t>(size, std::numeric_limits<unsigned int>::max()));
+				// A piece at a time, so the compression stops for the game's ticks between pieces.
+				SaverThreads::YieldToGame();
+				const auto count = static_cast<unsigned int>(std::min<size_t>(size, size_t{256} << 10));
 				if (zipWriteInFileInZip(archive.file, bytes, count) != ZIP_OK) throw std::runtime_error("could not write " + name);
 				bytes += count;
 				size -= count;
