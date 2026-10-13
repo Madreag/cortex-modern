@@ -77,7 +77,6 @@
 #include "FloatTextSelfTest.h"
 #include "CheckpointImage.h"
 #include "CheckpointPagePool.h"
-#include "CheckpointLuaHeap.h"
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
@@ -8253,7 +8252,7 @@ void RunGameLoop() {
 					    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()));
 					if (enabled && CheckpointPagePool::TallyingFaults()) {
 						const auto tally = CheckpointPagePool::TakeFaultTally();
-						const auto [luaFaults, luaFaultUs] = CheckpointLua::HeapOwner::TakeFaultTally();
+						const auto [luaFaults, luaFaultUs] = LuaMan::TakeHeapFaultTally();
 						System::PrintDiagnosticLine(std::format("[native-fault-tick] tick={} faults={} fault_us={} settled={} cooled={} lua_faults={} lua_fault_us={}", tick, tally.faults, tally.faultNs / 1000, tally.settled, tally.cooled, luaFaults, luaFaultUs));
 					}
 				}

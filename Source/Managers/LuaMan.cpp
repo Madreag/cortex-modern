@@ -9283,6 +9283,10 @@ namespace {
 	std::atomic<uint64_t> s_LastCollectionTick{(std::numeric_limits<uint64_t>::max)()};
 }
 
+std::pair<uint64_t, uint64_t> LuaMan::TakeHeapFaultTally() {
+	return CheckpointLua::HeapOwner::TakeFaultTally();
+}
+
 uint64_t LuaMan::TicksUntilFullCollection(size_t slot) {
 	const uint64_t last = s_LastCollectionTick.load(std::memory_order_acquire);
 	if (!IsDeterministicCollection() || last == (std::numeric_limits<uint64_t>::max)()) return 0;
