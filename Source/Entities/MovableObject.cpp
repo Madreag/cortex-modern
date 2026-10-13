@@ -179,6 +179,47 @@ MovableObject::HookCallScope::~HookCallScope() {
 	}
 }
 
+MovableObject::LuaHandles* MovableObject::NoteLuaHandle() {
+	LuaHandles* handles = m_LuaHandles.load(std::memory_order_acquire);
+	if (!handles) {
+		auto* created = new LuaHandles();
+		if (m_LuaHandles.compare_exchange_strong(handles, created, std::memory_order_acq_rel)) {
+			handles = created;
+		} else {
+			delete created;
+		}
+	}
+	handles->state.fetch_add(1, std::memory_order_acq_rel);
+	return handles;
+}
+
+void MovableObject::ReleaseLuaHandle(void* record) {
+	auto* handles = static_cast<LuaHandles*>(record);
+	const uint32_t before = handles->state.fetch_sub(1, std::memory_order_acq_rel);
+	if ((before & LuaHandles::c_Gone) && (before & ~LuaHandles::c_Gone) == 1) {
+		handles->pool->ReturnPoolMemory(handles->memory);
+		delete handles;
+		s_RetainedPoolMemory.fetch_sub(1, std::memory_order_relaxed);
+	}
+}
+
+bool MovableObject::RetainPooledMemory(MovableObject* object, void* memory, Entity::ClassInfo& pool) {
+	// The destructors leave the record pointer as it was, so it is still read here.
+	LuaHandles* handles = object->m_LuaHandles.load(std::memory_order_acquire);
+	if (!handles) {
+		return false;
+	}
+	handles->pool = &pool;
+	handles->memory = memory;
+	const uint32_t before = handles->state.fetch_or(LuaHandles::c_Gone, std::memory_order_acq_rel);
+	if ((before & ~LuaHandles::c_Gone) != 0) {
+		s_RetainedPoolMemory.fetch_add(1, std::memory_order_relaxed);
+		return true;
+	}
+	delete handles;
+	return false;
+}
+
 MovableObject::~MovableObject() {
 	NetModerationGUIProbe::TraceObjectLifetime(this, "destroy", true);
 	// Whatever freed this object, a hook loop of it running on this thread must not read it again.

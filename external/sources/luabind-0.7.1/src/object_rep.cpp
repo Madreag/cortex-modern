@@ -29,6 +29,15 @@ namespace luabind { namespace detail
 {
 
 	checkpoint_object_write_cb checkpoint_object_write = 0;
+	void (*object_rep_borrowed)(object_rep*) = 0;
+	thread_local object_rep* member_call_self = 0;
+	thread_local lua_State* member_call_state = 0;
+
+	object_rep* current_member_self()
+	{
+		if (member_call_self) return member_call_self;
+		return member_call_state ? is_class_object(member_call_state, 1) : 0;
+	}
 
 	thread_local unsigned preview_fence_window = 0;
 	thread_local int preview_fence_parent = -1;
@@ -72,6 +81,7 @@ namespace luabind { namespace detail
 		assert((((m_flags & owner) && dest) || !(m_flags & owner)) && "internal error, please report");
 		// A value an open window creates is that window's own to write.
 		if (m_flags & owner) m_preview_window = preview_fence_window;
+		else if (m_object && object_rep_borrowed) object_rep_borrowed(this);
 	}
 
 	object_rep::object_rep(class_rep* crep, int flags, detail::lua_reference const& table_ref)
@@ -86,7 +96,24 @@ namespace luabind { namespace detail
 
 	object_rep::~object_rep() 
 	{
+		release_life_owner();
 		if (m_flags & owner && m_destructor) m_destructor(m_object);
+	}
+
+	void object_rep::release_life_owner()
+	{
+		if (!m_life_release) return;
+		void (*release)(void*) = m_life_release;
+		m_life_release = 0;
+		release(m_life_owner);
+		m_life_owner = 0;
+	}
+
+	void object_rep::set_object(void* p)
+	{
+		release_life_owner();
+		m_object = p;
+		if (m_object && !(m_flags & owner) && object_rep_borrowed) object_rep_borrowed(this);
 	}
 
 	void object_rep::remove_ownership()
@@ -99,6 +126,7 @@ namespace luabind { namespace detail
         // without a hierarchy?
 
 		m_flags &= ~owner;
+		if (m_object && object_rep_borrowed) object_rep_borrowed(this);
 		// if this is a type with a wrapper we also have to
 		// transform the wrappers weak_ref into a strong
 		// reference, to make sure the lua part

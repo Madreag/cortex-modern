@@ -388,6 +388,7 @@ bool luabind::detail::class_rep::preview_fence_drops(lua_State* L, const object_
 int class_rep::gettable_dispatcher(lua_State* L)
 {
 	object_rep* obj = static_cast<object_rep*>(lua_touserdata(L, 1));
+	member_call_scope self(obj);
 	return obj->crep()->gettable(L);
 }
 
@@ -742,6 +743,7 @@ int luabind::detail::class_rep::function_dispatcher(lua_State* L)
 		{
 			// What the method hands back takes the standing of the object it runs on.
 			preview_fence_call call(L, 1);
+			member_call_scope self(L);
 	        return o.call(L, force_static_call != 0);
 		}
 

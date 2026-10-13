@@ -385,6 +385,76 @@ DeterministicMORNGScope::~DeterministicMORNGScope() {
 
 // A generator seeded at its first draw must be the generator Seed makes, to every reader: its draws, its checkpoint text,
 // its hash text, its engine state, a copy of it and a restore of its checkpoint, before and after it draws.
+// A world object a script keeps a handle and a field alias of stays out of its class pool once deleted, so the next object of
+// its class takes other memory and the kept handles read the same bytes on every machine; the last handle collected lets it go.
+static bool RunDeadHandleMemorySelfTest(LuaStateWrapper& script) {
+	lua_State* state = script.GetLuaState();
+	std::unique_ptr<Activity> activity = std::make_unique<Activity>();
+	g_ActivityMan.SwapCheckpointActivity(activity);
+	const auto pointerOf = [state](const char* global) -> void* {
+		lua_getglobal(state, global);
+		const auto* rep = luabind::detail::is_class_object(state, -1);
+		void* pointer = rep ? rep->ptr() : nullptr;
+		lua_pop(state, 1);
+		return pointer;
+	};
+	struct Round {
+		bool ran = false;
+		void* first = nullptr;
+		void* second = nullptr;
+		double aliasX = 0;
+		int retainedAfterDelete = 0;
+		int retainedAfterCollect = 0;
+	};
+	const auto round = [&](bool linked) {
+		Round result;
+		void (*hook)(luabind::detail::object_rep*) = luabind::detail::object_rep_borrowed;
+		if (!linked) {
+			luabind::detail::object_rep_borrowed = nullptr;
+		}
+		const int retainedBefore = MovableObject::GetRetainedPoolMemoryCount();
+		result.ran = script.RunScriptString("_DeadHandleFirst = CreateMOPixel('Spark Yellow 1', 'Base.rte');"
+		                                    "_DeadHandleFirst.Pos = Vector(11, 22);"
+		                                    "MovableMan:AddParticle(_DeadHandleFirst);"
+		                                    "_DeadHandleAlias = _DeadHandleFirst.Pos;") == 0;
+		result.first = pointerOf("_DeadHandleFirst");
+		g_MovableMan.PurgeAllMOs();
+		result.retainedAfterDelete = MovableObject::GetRetainedPoolMemoryCount() - retainedBefore;
+		result.ran = script.RunScriptString("_DeadHandleSecond = CreateMOPixel('Spark Yellow 1', 'Base.rte');"
+		                                    "_DeadHandleSecond.Pos = Vector(33, 44);"
+		                                    "_DeadHandleRead = _DeadHandleAlias.X;") == 0 && result.ran;
+		result.second = pointerOf("_DeadHandleSecond");
+		lua_getglobal(state, "_DeadHandleRead");
+		result.aliasX = lua_tonumber(state, -1);
+		lua_pop(state, 1);
+		script.RunScriptString("_DeadHandleFirst, _DeadHandleAlias, _DeadHandleSecond, _DeadHandleRead = nil, nil, nil, nil; collectgarbage('collect')");
+		LuabindObjectWrapper::ApplyQueuedEntityDeletions();
+		LuabindObjectWrapper::ApplyQueuedDeletions();
+		result.retainedAfterCollect = MovableObject::GetRetainedPoolMemoryCount() - retainedBefore;
+		luabind::detail::object_rep_borrowed = hook;
+		return result;
+	};
+	const Round unlinked = round(false);
+	const Round linked = round(true);
+	g_ActivityMan.SwapCheckpointActivity(activity);
+	activity.reset();
+#if defined(__SANITIZE_ADDRESS__) || defined(__ADDRESS_SANITIZER__)
+	// The sanitizer build allocates every object apart, so only the kept handles and the count say what the pool would do.
+	const bool unlinkedReused = unlinked.ran;
+#else
+	const bool unlinkedReused = unlinked.ran && unlinked.first && unlinked.first == unlinked.second && unlinked.aliasX == 33.0;
+#endif
+	const bool kept = linked.ran && linked.first && linked.second && linked.first != linked.second && linked.aliasX != 33.0 && linked.retainedAfterDelete == 1;
+	const bool released = linked.ran && linked.retainedAfterCollect == 0;
+	std::cout << "[script-graph-selftest] " << (unlinkedReused ? "PASS" : "FAIL") << " without_its_handle_link_the_next_object_takes_a_kept_objects_memory reused="
+	          << (unlinked.first && unlinked.first == unlinked.second) << " alias_x=" << unlinked.aliasX << std::endl;
+	std::cout << "[script-graph-selftest] " << (kept ? "PASS" : "FAIL") << " a_deleted_objects_memory_waits_for_its_last_lua_handle reused="
+	          << (linked.first && linked.first == linked.second) << " alias_x=" << linked.aliasX << " retained=" << linked.retainedAfterDelete << std::endl;
+	std::cout << "[script-graph-selftest] " << (released ? "PASS" : "FAIL") << " the_memory_returns_once_the_last_handle_is_collected retained="
+	          << linked.retainedAfterCollect << std::endl;
+	return unlinkedReused && kept && released;
+}
+
 static bool RunLazySeedSelfTest() {
 	const auto draws = [](RandomGenerator& rng, int count) {
 		std::vector<uint64_t> values;
@@ -4223,6 +4293,30 @@ static bool ClassDerivesFrom(const luabind::detail::class_rep* rep, const char* 
 		}
 	}
 	return false;
+}
+
+// A handle naming an engine object, or a field of the object a bound call runs on, keeps that object's memory while it lives.
+static void NoteBorrowedHandle(luabind::detail::object_rep* handle) {
+	const auto movable = [](const luabind::detail::class_rep* rep) {
+		if (!rep) {
+			return false;
+		}
+		int kind = rep->engine_kind();
+		if (kind < 0) {
+			kind = ClassDerivesFrom(rep, "MovableObject") ? 1 : 0;
+			rep->set_engine_kind(kind);
+		}
+		return kind == 1;
+	};
+	if (handle->has_life_owner()) {
+		return;
+	}
+	luabind::detail::object_rep* named = movable(handle->crep()) ? handle : luabind::detail::current_member_self();
+	if (!named || !named->ptr() || !movable(named->crep())) {
+		return;
+	}
+	auto* object = static_cast<MovableObject*>(static_cast<Entity*>(named->ptr()));
+	handle->set_life_owner(object->NoteLuaHandle(), &MovableObject::ReleaseLuaHandle);
 }
 
 // The engine Vectors a script can alias through a property, by address, for the capture in progress.
@@ -8436,6 +8530,7 @@ void LuaMan::Initialize() {
 	// Every Lua-owned engine object's destructor belongs to this thread; the pool threads only collect.
 	LuabindObjectWrapper::SetSimThread();
 	LuabindObjectWrapper::SetPreviewDeletionHook(&LuaMan::ForgetPreviewBornWrapper);
+	luabind::detail::object_rep_borrowed = &NoteBorrowedHandle;
 	m_MasterScriptState.Initialize();
 
 	// Every machine runs the same number of states, whatever its core count: the assignment is a pure
@@ -9058,6 +9153,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	const bool luaStateIdentity = g_MovableMan.RunLuaStateIdentitySelfTest();
 	const bool threadedSyncedOrder = g_MovableMan.RunThreadedSyncedUpdateOrderSelfTest();
 	const bool lazySeed = RunLazySeedSelfTest();
+	const bool deadHandleMemory = RunDeadHandleMemorySelfTest(m_MasterScriptState);
 	const bool poolScopeTick = RunPoolScopeTickSelfTest();
 	const bool getterCache = RunGetterCacheSelfTest();
 	const bool selfFetch = RunScriptSelfFetchSelfTest();
@@ -9165,7 +9261,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 			for (size_t i = 0; i < gained.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start gained: " << gained[i] << std::endl;
 		}
 	}
-	return roundCollision && collisionRestored && graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && poolScopeTick && getterCache && selfFetch && hookStack && storedCallback && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
+	return roundCollision && collisionRestored && graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && deadHandleMemory && poolScopeTick && getterCache && selfFetch && hookStack && storedCallback && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {

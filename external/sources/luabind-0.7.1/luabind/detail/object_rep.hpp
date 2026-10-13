@@ -66,7 +66,12 @@ namespace luabind { namespace detail
 		void remove_ownership();
 		void set_destructor(void(*ptr)(void*));
 
-		void set_object(void* p) { m_object = p; }
+		void set_object(void* p);
+
+		// The engine object whose memory this handle keeps from reuse while it lives, and how the handle lets it go.
+		void set_life_owner(void* owner, void (*release)(void*)) { m_life_owner = owner; m_life_release = release; }
+		bool has_life_owner() const { return m_life_release != 0; }
+		void release_life_owner();
 
 		void add_dependency(lua_State* L, int index);
 		detail::lua_reference const& get_dependencies() const { return m_dependency_ref; }
@@ -94,6 +99,8 @@ namespace luabind { namespace detail
 		void* m_checkpoint_owner = 0;
 		void (*m_checkpoint_owner_write)(void*) = 0;
 		unsigned m_preview_window = 0;
+		void* m_life_owner = 0;
+		void (*m_life_release)(void*) = 0;
 
 		// ======== the new way, separate object_rep from the holder
 //		instance_holder* m_instance;
@@ -123,6 +130,23 @@ namespace luabind { namespace detail
 		}
 	};
 
+
+	// Called when a handle starts naming an object Lua does not own, so the engine can keep that object's memory while it does.
+	extern LUABIND_API void (*object_rep_borrowed)(object_rep* obj);
+
+	// The object a bound method or property read runs on, on this thread: a handle it hands back may name a field of it.
+	extern LUABIND_API thread_local object_rep* member_call_self;
+	extern LUABIND_API thread_local lua_State* member_call_state;
+	LUABIND_API object_rep* current_member_self();
+
+	struct member_call_scope
+	{
+		object_rep* previous_self;
+		lua_State* previous_state;
+		explicit member_call_scope(object_rep* self) : previous_self(member_call_self), previous_state(member_call_state) { member_call_self = self; member_call_state = 0; }
+		explicit member_call_scope(lua_State* L) : previous_self(member_call_self), previous_state(member_call_state) { member_call_self = 0; member_call_state = L; }
+		~member_call_scope() { member_call_self = previous_self; member_call_state = previous_state; }
+	};
 
 	typedef void (*checkpoint_object_write_cb)(void*);
 	extern LUABIND_API checkpoint_object_write_cb checkpoint_object_write;

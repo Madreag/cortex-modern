@@ -27,6 +27,7 @@
 #include <boost/limits.hpp>
 #include <boost/preprocessor/repetition/enum_params_with_a_default.hpp>
 
+#include <atomic>
 #include <utility>
 #include <list>
 #include <string>
@@ -178,6 +179,10 @@ namespace luabind { namespace detail
 
 		const char* name() const throw() { return m_name_storage.c_str(); }
 
+		// The engine's own note about this class, so a hot path reads it without a lookup: -1 until noted.
+		int engine_kind() const { return m_engine_kind.load(std::memory_order_relaxed); }
+		void set_engine_kind(int kind) const { m_engine_kind.store(kind, std::memory_order_relaxed); }
+
 		// the lua reference to this class_rep
 		// TODO: remove
 //		int self_ref() const throw() { return m_self_ref; }
@@ -292,6 +297,7 @@ namespace luabind { namespace detail
 		};
 		
 	private:
+		mutable std::atomic<int> m_engine_kind{-1};
 
 		void cache_operators(lua_State*);
 
