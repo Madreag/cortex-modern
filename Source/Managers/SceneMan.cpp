@@ -30,6 +30,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <exception>
 #include <future>
 #include <cstdio>
@@ -1593,6 +1594,12 @@ void SceneMan::TraceSeeRay(const SeeRay& seeRay, BITMAP* fog, const Vector& fogS
 			trace.materials = (trace.materials ^ material) * 1099511628211ULL;
 			trace.fogs = (trace.fogs ^ fogged) * 1099511628211ULL;
 			++trace.visits; trace.lastX = x; trace.lastY = y;
+			const Material* found = GetMaterialFromID(static_cast<unsigned char>(material));
+			trace.lastMaterial = static_cast<int>(material); trace.lastIntegrity = found->GetIntegrity(); trace.lastMaterialName = found->GetPresetName();
+			trace.integrities = (trace.integrities ^ static_cast<uint64_t>(std::bit_cast<uint32_t>(found->GetIntegrity()))) * 1099511628211ULL;
+			for (const auto& [dx, dy]: {std::pair{0, 0}, {-size, -size}, {size, -size}, {size, size}, {-size, size}, {-size, 0}, {size, 0}, {0, -size}, {0, size}}) {
+				trace.fogNine = (trace.fogNine ^ static_cast<uint64_t>(unseen(x + dx, y + dy))) * 1099511628211ULL;
+			}
 		}
 		if (unseen(x, y) || unseen(x - size, y - size) || unseen(x + size, y - size) || unseen(x + size, y + size) || unseen(x - size, y + size) ||
 		    unseen(x - size, y) || unseen(x + size, y) || unseen(x, y - size) || unseen(x, y + size)) {

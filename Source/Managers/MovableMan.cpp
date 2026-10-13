@@ -3737,7 +3737,9 @@ void MovableMan::WaitForActorsSeeTask(const char* caller) {
 					detail << "see-ray uid=" << uid << " i=" << ray - begin << std::hex << " start=" << bits(seeRay.start.m_X) << ',' << bits(seeRay.start.m_Y)
 					       << " ray=" << bits(seeRay.ray.m_X) << ',' << bits(seeRay.ray.m_Y) << std::dec << " limit=" << seeRay.strengthLimit << " skip=" << seeRay.skip
 					       << " size=" << trace.size << " visits=" << trace.visits << " last=" << trace.lastX << ',' << trace.lastY << " pos=" << trace.positions
-					       << " mat=" << trace.materials << " fog=" << trace.fogs << " reveals=" << trace.reveals.size();
+					       << " mat=" << trace.materials << " fog=" << trace.fogs << " integ=" << trace.integrities << " fog9=" << trace.fogNine
+					       << " lastmat=" << trace.lastMaterial << ':' << trace.lastMaterialName << ':' << std::hexfloat << trace.lastIntegrity << std::defaultfloat
+					       << " reveals=" << trace.reveals.size();
 					LuaMan::TraceShared(nullptr, detail.str());
 				}
 				LuaMan::TraceShared(nullptr, "see uid=" + std::to_string(uid) + " team=" + std::to_string(pass.rays[begin].team) + " rays=" + std::to_string(end - begin) +
