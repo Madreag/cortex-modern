@@ -1439,7 +1439,13 @@ bool SceneMan::CastTerrainPenetrationRay(const Vector& start, const Vector& ray,
 			// Get the material object
 			foundMaterial = GetMaterialFromID(materialID);
 			// Add the encountered material's strength to the tally
+			const int strengthBefore = totalStrength;
 			totalStrength += foundMaterial->GetIntegrity();
+			if (LuaMan::SharedTraceEnabled() && foundMaterial->GetIntegrity() >= 2147483648.0F) {
+				LuaMan::TraceShared(nullptr, "ray-strength kind=penetration x=" + std::to_string(intPos[X]) + " y=" + std::to_string(intPos[Y]) +
+				                                 " material=" + std::to_string(materialID) + " integrity_bits=" + std::to_string(std::bit_cast<uint32_t>(foundMaterial->GetIntegrity())) +
+				                                 " before=" + std::to_string(strengthBefore) + " after=" + std::to_string(totalStrength) + " limit=" + std::to_string(strengthLimit));
+			}
 			// See if we have hit the limits of our ray's strength
 			if (totalStrength >= strengthLimit) {
 				// Save the position of the end of the ray where blocked
@@ -1529,7 +1535,13 @@ void SceneMan::WalkUnseenRay(const Vector& start, const Vector& ray, int strengt
 			// Get the material object
 			foundMaterial = GetMaterialFromID(materialID);
 			// Add the encountered material's strength to the tally
+			const int strengthBefore = totalStrength;
 			totalStrength += foundMaterial->GetIntegrity();
+			if (LuaMan::SharedTraceEnabled() && foundMaterial->GetIntegrity() >= 2147483648.0F) {
+				LuaMan::TraceShared(nullptr, "ray-strength kind=unseen x=" + std::to_string(intPos[X]) + " y=" + std::to_string(intPos[Y]) +
+				                                 " material=" + std::to_string(materialID) + " integrity_bits=" + std::to_string(std::bit_cast<uint32_t>(foundMaterial->GetIntegrity())) +
+				                                 " before=" + std::to_string(strengthBefore) + " after=" + std::to_string(totalStrength) + " limit=" + std::to_string(strengthLimit));
+			}
 			// See if we have hit the limits of our ray's strength
 			if (totalStrength >= strengthLimit) {
 				// Save the position of the end of the ray where blocked
