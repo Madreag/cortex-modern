@@ -403,9 +403,10 @@ namespace RTE::MenuAutomation {
 				return Beat::Fail;
 			});
 			for (int press = 0; press < presses; ++press) {
-				struct Retry { int misses = 0; bool letGo = false; };
+				// pressedAt is the cursor the screen read when the press went down.
+				struct Retry { int misses = 0; bool letGo = false; std::pair<int, int> pressedAt{-1, -1}; };
 				auto retry = std::make_shared<Retry>();
-				phases.push_back([manager, name, modal, point](std::string& note) {
+				phases.push_back([manager, name, modal, point, retry](std::string& note) {
 					// The press goes where the pointer is; a control that moved under it is followed.
 					GUIControl* control = manager->GetControl(name);
 					if (!control || !Within(manager->GetManager()->PanelUnderMouse(point->first, point->second), control->GetPanel())) {
@@ -424,6 +425,7 @@ namespace RTE::MenuAutomation {
 						Move(point->first, point->second);
 						return Beat::Again;
 					}
+					retry->pressedAt = {x, y};
 					if (Button(true)) return Beat::Next;
 					note = "the press was not sent";
 					return Beat::Fail;
@@ -439,6 +441,7 @@ namespace RTE::MenuAutomation {
 							if (!on) { Move(point->first, point->second); return Beat::Again; }
 							if (!Button(true)) { note = "the press was not sent"; return Beat::Fail; }
 							retry->letGo = false;
+							retry->pressedAt = {x, y};
 							return Beat::Again;
 						}
 						const std::string reached = Reached(manager->GetManager()->PanelUnderMouse(x, y));
@@ -448,9 +451,10 @@ namespace RTE::MenuAutomation {
 						retry->letGo = true;
 						return Beat::Again;
 					}
-					// A release off the control lets the press go without its action, as a hand that slid off does.
-					if (!on) {
-						System::PrintDiagnosticLine("[menu-hand] " + name + ": the screen's cursor was at " + std::to_string(x) + "," + std::to_string(y) + " before the release; pointing again");
+					// A release away from the press lets it go without its action, as a hand that slid off does. What the press
+					// opened (a drop-down's list) may now lie under the cursor, so the test is the cursor, not the panel.
+					if (std::make_pair(x, y) != retry->pressedAt) {
+						System::PrintDiagnosticLine("[menu-hand] " + name + ": the screen's cursor was at " + std::to_string(x) + "," + std::to_string(y) + ", not where it pressed, before the release; pointing again");
 						Move(point->first, point->second);
 						return Beat::Again;
 					}

@@ -1361,6 +1361,7 @@ namespace RTE {
 		friend bool TestDismissedRejoinStaysDismissed(std::string* error);
 		friend bool TestPauseNavigationDuringRecovery(std::string* error);
 		friend bool TestPauseLeaveClickSurvivesAMovedPointer(std::string* error);
+		friend bool TestPauseSettingsComboPickByHand(std::string* error);
 		friend bool TestInternetTicketRecovery(std::string* error);
 		friend bool TestLobbyChatReturn(std::string* error);
 		friend bool TestLobbyTimeoutDoesNotClaimHostDeparture(std::string* error);
