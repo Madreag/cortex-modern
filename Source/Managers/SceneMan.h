@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <cstdint>
 
 /// Header file for the SceneMan class.
 /// @author Daniel Tabar
@@ -55,6 +56,7 @@ namespace RTE {
 		int size = 0;
 		std::vector<std::pair<int, int>> reveals;
 		std::vector<std::pair<int, int>> visualized;
+		uint64_t reads = 14695981039346656037ULL; //!< Under the shared trace, a hash of every cell the walk read.
 	};
 
 	// Different modes to draw the SceneLayers in

@@ -119,6 +119,19 @@ namespace {
 	};
 	SeeRayPass s_SeeRayPass;
 
+	uint64_t HashTraceBitmap(const BITMAP* bitmap) {
+		uint64_t hash = 14695981039346656037ULL;
+		if (!bitmap) return hash;
+		const int rowBytes = bitmap->w * ((bitmap_color_depth(const_cast<BITMAP*>(bitmap)) + 7) / 8);
+		for (int y = 0; y < bitmap->h; ++y) {
+			const unsigned char* row = bitmap->line[y];
+			int x = 0;
+			for (; x + 8 <= rowBytes; x += 8) { uint64_t word; std::memcpy(&word, row + x, 8); hash = (hash ^ word) * 1099511628211ULL; }
+			for (; x < rowBytes; ++x) hash = (hash ^ row[x]) * 1099511628211ULL;
+		}
+		return hash;
+	}
+
 	void HoldSeeRayWorker() {
 		if (!SeeRayHoldLever()) return;
 		for (int waited = 0; !s_SeeRaysReleased.load(std::memory_order_acquire) && waited < 20000; ++waited) std::this_thread::sleep_for(std::chrono::microseconds(100));
@@ -3693,7 +3706,12 @@ void MovableMan::WaitForActorsSeeTask(const char* caller) {
 	SeeRayPass& pass = s_SeeRayPass;
 	if (!pass.pending) return;
 	if (LuaMan::SharedTraceEnabled()) {
-		LuaMan::TraceShared(nullptr, std::string("see-reveal caller=") + caller + " rays=" + std::to_string(pass.rays.size()));
+		std::string line = std::string("see-reveal caller=") + caller + " rays=" + std::to_string(pass.rays.size()) +
+		                   " material=" + std::to_string(HashTraceBitmap(g_SceneMan.GetTerrain() ? g_SceneMan.GetTerrain()->GetMaterialCopyBitmap() : nullptr));
+		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+			if (pass.fog[team]) line += " fog" + std::to_string(team) + "=" + std::to_string(HashTraceBitmap(pass.fog[team]));
+		}
+		LuaMan::TraceShared(nullptr, line);
 	}
 	pass.pending = false;
 	if (LuaMan::SharedTraceEnabled()) {
@@ -3710,8 +3728,10 @@ void MovableMan::WaitForActorsSeeTask(const char* caller) {
 				for (const auto& [x, y]: pass.traces[ray].reveals) { fold(out, static_cast<uint64_t>(x)); fold(out, static_cast<uint64_t>(y)); }
 			}
 			if (end > begin) {
+				std::string reads;
+				for (size_t ray = begin; ray < end && ray < pass.traces.size(); ++ray) reads += (ray == begin ? "" : ",") + std::to_string(pass.traces[ray].reads);
 				LuaMan::TraceShared(nullptr, "see uid=" + std::to_string(uid) + " team=" + std::to_string(pass.rays[begin].team) + " rays=" + std::to_string(end - begin) +
-				                                 " in=" + std::to_string(in) + " out=" + std::to_string(out));
+				                                 " in=" + std::to_string(in) + " out=" + std::to_string(out) + " reads=" + reads);
 			}
 			begin = end;
 		}
@@ -7458,18 +7478,7 @@ void MovableMan::Update() {
 		pass.pending = true;
 		if (LuaMan::SharedTraceEnabled()) {
 			// What the pass will read: the frozen material copy and each team's fog copy.
-			const auto hashBitmap = [](const BITMAP* bitmap) {
-				uint64_t hash = 14695981039346656037ULL;
-				if (!bitmap) return hash;
-				const int rowBytes = bitmap->w * ((bitmap_color_depth(const_cast<BITMAP*>(bitmap)) + 7) / 8);
-				for (int y = 0; y < bitmap->h; ++y) {
-					const unsigned char* row = bitmap->line[y];
-					int x = 0;
-					for (; x + 8 <= rowBytes; x += 8) { uint64_t word; std::memcpy(&word, row + x, 8); hash = (hash ^ word) * 1099511628211ULL; }
-					for (; x < rowBytes; ++x) hash = (hash ^ row[x]) * 1099511628211ULL;
-				}
-				return hash;
-			};
+			const auto hashBitmap = HashTraceBitmap;
 			std::string line = "see-launch material=" + std::to_string(hashBitmap(g_SceneMan.GetTerrain() ? g_SceneMan.GetTerrain()->GetMaterialCopyBitmap() : nullptr)) +
 			                   " live=" + std::to_string(hashBitmap(g_SceneMan.GetTerrain() ? g_SceneMan.GetTerrain()->GetMaterialBitmap() : nullptr));
 			for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {

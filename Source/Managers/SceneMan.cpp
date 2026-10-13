@@ -1584,7 +1584,11 @@ void SceneMan::TraceSeeRay(const SeeRay& seeRay, BITMAP* fog, const Vector& fogS
 		return getpixel(fog, scaledX, scaledY) != g_MaskColor;
 	};
 	Vector ignored;
+	const bool hashReads = LuaMan::SharedTraceEnabled();
 	const auto visit = [&](int x, int y) {
+		if (hashReads) {
+			for (uint64_t value: {static_cast<uint64_t>(x), static_cast<uint64_t>(y), static_cast<uint64_t>(GetTerrMatter(x, y)), static_cast<uint64_t>(unseen(x, y))}) trace.reads = (trace.reads ^ value) * 1099511628211ULL;
+		}
 		if (unseen(x, y) || unseen(x - size, y - size) || unseen(x + size, y - size) || unseen(x + size, y + size) || unseen(x - size, y + size) ||
 		    unseen(x - size, y) || unseen(x + size, y) || unseen(x, y - size) || unseen(x, y + size)) {
 			trace.reveals.emplace_back(x, y);
