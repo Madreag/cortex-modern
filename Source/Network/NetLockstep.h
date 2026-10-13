@@ -1657,6 +1657,10 @@ namespace RTE {
 		bool PeerInputAccepted(uint64_t frame, uint8_t owner = 0) const;
 		uint32_t PeerInputVoters(uint64_t frame, uint8_t owner) const;
 		bool PeerGroupHasAuthority(uint32_t voters) const;
+		/// The seats that vote now, with voters narrowed to them; zero when no voter is a retained seat.
+		uint32_t PeerVotingOwners(uint32_t& voters) const;
+		/// Whether voters are exactly half of the voting seats in a round whose ties the referee decides.
+		bool PeerGroupIsRefereedHalf(uint32_t voters) const;
 		void SendForwardedPeerInput(const NetLockstepFrame& input, uint8_t onlyPeer);
 		void CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs);
 		bool ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly = false);
