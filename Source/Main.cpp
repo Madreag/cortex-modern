@@ -7978,18 +7978,18 @@ void RunGameLoop() {
 	// While the game runs, the saver works only in the time left between a frame's due ticks and the next one.
 	const SaverThreads::Gating saverGating;
 	constexpr int64_t c_SaverSliceMarginUs = 1000;
-	// A world slower than its clock leaves the saver no idle time at all; after this many frames without any, while a save
+	// A world slower than its clock leaves the saver no idle time at all; after this many ticks without any, while a save
 	// waits, each tick lends the saver its first microseconds so the save still completes.
-	// Test lever CCCP_TEST_SAVER_FALLBACK=<frames>:<microseconds> measures other choices.
+	// Test lever CCCP_TEST_SAVER_FALLBACK=<ticks>:<microseconds> measures other choices.
 	static const std::pair<int64_t, int64_t> c_SaverFallback = [] {
 		std::pair<int64_t, int64_t> values{30, 4000};
 		if (const char* text = std::getenv("CCCP_TEST_SAVER_FALLBACK")) {
-			long long frames = 0, microseconds = 0;
-			if (std::sscanf(text, "%lld:%lld", &frames, &microseconds) == 2 && frames > 0 && microseconds > 0) values = {frames, microseconds};
+			long long ticks = 0, microseconds = 0;
+			if (std::sscanf(text, "%lld:%lld", &ticks, &microseconds) == 2 && ticks > 0 && microseconds > 0) values = {ticks, microseconds};
 		}
 		return values;
 	}();
-	int64_t saverFramesWithoutIdle = 0, saverFramesWithoutWaiter = 0;
+	int64_t saverTicksWithoutIdle = 0, saverTicksWithoutWaiter = 0;
 	bool saverFallback = false;
 	uint64_t saverFallbackTicks = 0;
 
@@ -8105,6 +8105,7 @@ void RunGameLoop() {
 
 		g_TimerMan.Update();
 		const int64_t clockReadUs = SaverThreads::NowUs();
+		const int64_t saverTicksAtFrameStart = g_TimerMan.GetSimUpdateCount();
 		MemoryCensusByUptime();
 
 		if (!g_ActivityMan.ActivityRunning()) {
@@ -9983,15 +9984,17 @@ void RunGameLoop() {
 		const int64_t saverSliceEndUs = clockReadUs + (g_TimerMan.GetDeltaTimeTicks() - g_TimerMan.GetSimAccumulator()) * 1000000 / g_TimerMan.GetTicksPerSecond() - c_SaverSliceMarginUs;
 		const bool saverIdle = saverSliceEndUs > SaverThreads::NowUs();
 		if (saverIdle) SaverThreads::OpenSlice(saverSliceEndUs);
-		saverFramesWithoutIdle = saverIdle ? 0 : saverFramesWithoutIdle + 1;
-		saverFramesWithoutWaiter = SaverThreads::Waiting() ? 0 : saverFramesWithoutWaiter + 1;
+		// A slow world runs several ticks per drawn frame, so the time without idle is counted in ticks.
+		const int64_t saverTicksThisFrame = g_TimerMan.GetSimUpdateCount() - saverTicksAtFrameStart;
+		saverTicksWithoutIdle = saverIdle ? 0 : saverTicksWithoutIdle + saverTicksThisFrame;
+		saverTicksWithoutWaiter = SaverThreads::Waiting() ? 0 : saverTicksWithoutWaiter + saverTicksThisFrame;
 		// It ends when idle time returns or when no saver has asked for time for as long.
-		const bool saverFallbackDue = saverFallback ? !saverIdle && saverFramesWithoutWaiter < c_SaverFallback.first
-		                                            : SaverThreads::Waiting() && saverFramesWithoutIdle >= c_SaverFallback.first;
+		const bool saverFallbackDue = saverFallback ? !saverIdle && saverTicksWithoutWaiter < c_SaverFallback.first
+		                                            : SaverThreads::Waiting() && saverTicksWithoutIdle >= c_SaverFallback.first;
 		if (saverFallbackDue != saverFallback) {
 			saverFallback = saverFallbackDue;
-			System::PrintDiagnosticLine(std::format("[saver-fallback] {} tick={} frames_without_idle={} slice_us={} lent_ticks={}", saverFallback ? "on" : "off",
-			    g_TimerMan.GetSimUpdateCount(), saverFramesWithoutIdle, c_SaverFallback.second, saverFallbackTicks));
+			System::PrintDiagnosticLine(std::format("[saver-fallback] {} tick={} ticks_without_idle={} slice_us={} lent_ticks={}", saverFallback ? "on" : "off",
+			    g_TimerMan.GetSimUpdateCount(), saverTicksWithoutIdle, c_SaverFallback.second, saverFallbackTicks));
 		}
 
 		if (returnToMenuAfterNetworkEnd && !System::IsSetToQuit()) {
