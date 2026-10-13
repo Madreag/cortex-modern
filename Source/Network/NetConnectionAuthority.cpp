@@ -510,9 +510,17 @@ namespace RTE {
 		m_CheckIn = StartRequest("POST", body);
 		if (m_CheckIn) { m_SeatRequests.push_back(steadyMs); m_NextSeatRequestMs = steadyMs + c_SeatRequestIntervalMs; }
 	}
-	NetHostChangeReply NetConnectionAuthority::QueryHostChange(const NetHostChangeRequest& request) {
+	NetHash32 NetConnectionAuthority::DirectoryMatchHash(const NetHash32& peerHash) const {
+		if (m_ListedMatchHash) return *m_ListedMatchHash;
+		NetHash32 listed{};
+		if (m_Host && m_Host->row.sessionId == m_SessionId && Unhex(m_Host->row.matchConfigHash, listed)) return listed;
+		return peerHash;
+	}
+	NetHostChangeReply NetConnectionAuthority::QueryHostChange(const NetHostChangeRequest& peerRequest) {
 		std::lock_guard lock(m_Mutex);
 		if (m_Suspended || m_SessionId.empty() || m_BaseUrl.empty() || !m_Player || !m_LocalLease || m_LocalLease->directorySessionId != m_SessionId) return {};
+		auto request = peerRequest;
+		request.configHash = DirectoryMatchHash(peerRequest.configHash);
 		if (!m_HostChangeRequest || *m_HostChangeRequest != request) {
 			if (m_HostChange) return {NetHostChangeReply::State::Waiting};
 			m_HostChange.reset(); m_HostChangeRequest = request; m_NextHostChange = std::max(m_NextHostChange, m_HostChangeRetry.nextMs);
@@ -535,8 +543,9 @@ namespace RTE {
 		std::lock_guard lock(m_Mutex);
 		if (m_Suspended || m_SessionId.empty() || m_BaseUrl.empty() || !m_Player || !m_LocalLease || m_LocalLease->directorySessionId != m_SessionId) return {};
 		// The round id separates rounds; the directory knows the match by the configuration it listed.
+		// A joiner obtains that same identity from its authenticated host reply.
 		auto request = peerRequest;
-		if (m_ListedMatchHash) request.configHash = *m_ListedMatchHash;
+		request.configHash = DirectoryMatchHash(peerRequest.configHash);
 		if (!m_FrameTieRequest || *m_FrameTieRequest != request) {
 			if (m_FrameTie) return {NetFrameTieReply::State::Waiting};
 			if (m_RetiredFrameTies.size() >= 16) return {};
