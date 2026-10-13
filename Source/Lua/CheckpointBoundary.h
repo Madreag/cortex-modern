@@ -91,8 +91,17 @@ namespace RTE::CheckpointLua {
 				static const bool s_SerialArm = std::getenv("CCCP_TEST_CHECKPOINT_SERIAL_ARM") != nullptr;
 				auto heaps = std::async(s_SerialArm ? std::launch::deferred : std::launch::async, [this, &until] {
 					const auto begun = std::chrono::steady_clock::now();
-					bool armed = true;
-					for (Heap& heap: m_Heaps) if (!heap.lease.Arm(*heap.prepared)) { armed = false; break; }
+					// The heaps are fenced side by side: their protection calls scale across threads.
+					const size_t parts = s_SerialArm ? 1 : std::min<size_t>(4, std::max<size_t>(1, m_Heaps.size()));
+					const auto armSome = [this, parts](size_t part) {
+						bool armed = true;
+						for (size_t index = part; armed && index < m_Heaps.size(); index += parts) armed = m_Heaps[index].lease.Arm(*m_Heaps[index].prepared);
+						return armed;
+					};
+					std::vector<std::future<bool>> helpers;
+					for (size_t part = 1; part < parts; ++part) helpers.push_back(std::async(std::launch::async, armSome, part));
+					bool armed = armSome(0);
+					for (auto& helper: helpers) armed = helper.get() && armed;
 					// A heap its state collects in the next tick would fault on every page before a saver had a slice to copy it.
 					if (armed) for (size_t index = 0; index < m_Heaps.size(); ++index) if (until[index] == 1) m_Heaps[index].prepared->Drain();
 					return std::pair{armed, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begun).count()};

@@ -625,6 +625,7 @@ namespace RTE::CheckpointLua {
 						                             : coordinator->CopyPage(page, false);
 						if (!opened)
 							throw std::runtime_error("could not open copied Lua heap pages");
+						if (SaverThreads::Current()) coordinator->TouchPages(page, std::min(batchPages, cow->saved.size() - page));
 						SaverThreads::YieldToGame();
 					}
 					if (!coordinator->Complete(cow, batchCopy)) throw std::runtime_error("could not open a copied Lua heap");
@@ -851,7 +852,9 @@ namespace RTE::CheckpointLua {
 					first = page - page % c_FaultRunPages;
 					last = std::max(page + 1, std::min(first + c_FaultRunPages, end));
 				}
-				bool savedAny = false;
+				// The faulting page always opens; a neighbour opens only when this call saved it, since it is still fenced.
+				std::array<bool, c_FaultRunPages> opened{};
+				opened[page - first] = fault;
 				for (const auto& copy: copies) {
 					if (copy->armed.load(std::memory_order_relaxed) != 1 || copy->completed) continue;
 					const bool faulted = page < copy->saved.size() && !copy->saved[page];
@@ -861,17 +864,42 @@ namespace RTE::CheckpointLua {
 						if (copy->saved[at]) continue;
 						std::memcpy(reinterpret_cast<std::byte*>(copy->destination) + at * pageBytes, reinterpret_cast<const void*>(base + at * pageBytes), pageBytes);
 						copy->saved[at] = 1;
-						savedAny = true;
+						opened[at - first] = true;
 					}
 					if (fault && faulted) {
 						copy->faults->count.fetch_add(1, std::memory_order_relaxed);
 						copy->faults->us.fetch_add(MicrosecondsSince(started), std::memory_order_relaxed);
 					}
 				}
-				return (!fault && !savedAny) || PageWriteFence::OpenCopiedPage(base + first * pageBytes, (last - first) * pageBytes);
+				return OpenRuns(first, opened.data(), last - first);
 			}
+			// Opening a page that is open already makes the game's next write to it take a fault, so only runs of pages that
+			// were still fenced open.
+			bool OpenRuns(size_t first, const bool* opened, size_t count) noexcept {
+				for (size_t at = 0; at < count;) {
+					if (!opened[at]) { ++at; continue; }
+					const size_t begin = at;
+					while (at < count && opened[at]) ++at;
+					if (!PageWriteFence::OpenCopiedPage(base + (first + begin) * pageBytes, (at - begin) * pageBytes)) return false;
+				}
+				return true;
+			}
+			// A page opened again after a fence still makes its first write fault while the system marks it written; a saver
+			// takes that fault in the game's idle time with a write that changes nothing.
+			void TouchPages(size_t first, size_t count) const noexcept {
+				for (size_t page = first; page < first + count; ++page) {
+#ifdef _WIN32
+					InterlockedExchangeAdd(reinterpret_cast<volatile LONG*>(base + page * pageBytes), 0);
+#else
+					__atomic_fetch_add(reinterpret_cast<uint32_t*>(base + page * pageBytes), 0u, __ATOMIC_RELAXED);
+#endif
+				}
+			}
+			static constexpr size_t c_CopyRunPages = 64;
 			bool CopyPages(size_t first, size_t count) noexcept {
 				Locked guard(lock);
+				std::array<bool, c_CopyRunPages> opened{};
+				const bool runs = count <= opened.size();
 				for (const auto& copy: copies) {
 					if (copy->armed.load(std::memory_order_relaxed) != 1 || copy->completed) continue;
 					const size_t last = std::min(first + count, copy->saved.size());
@@ -882,10 +910,11 @@ namespace RTE::CheckpointLua {
 						std::memcpy(reinterpret_cast<std::byte*>(copy->destination) + begin * pageBytes,
 						            reinterpret_cast<const void*>(base + begin * pageBytes), (page - begin) * pageBytes);
 						std::fill(copy->saved.begin() + begin, copy->saved.begin() + page, 1);
+						if (runs) std::fill(opened.begin() + (begin - first), opened.begin() + (page - first), true);
 					}
 				}
 				// Every active generation owns this batch before live writes resume on it.
-				return PageWriteFence::OpenCopiedPage(base + first * pageBytes, count * pageBytes);
+				return runs ? OpenRuns(first, opened.data(), count) : PageWriteFence::OpenCopiedPage(base + first * pageBytes, count * pageBytes);
 			}
 			bool Complete(const std::shared_ptr<CowCopy>& copy, bool openHeap) {
 				Locked guard(lock);
@@ -898,7 +927,19 @@ namespace RTE::CheckpointLua {
 					if (!generation->completed) return true;
 					pages = std::max(pages, generation->saved.size());
 				}
-				return PageWriteFence::OpenCopiedPage(base, pages * pageBytes);
+				// Only the pages a generation never saved are still fenced.
+				const auto fenced = [this](size_t page) {
+					return std::any_of(copies.begin(), copies.end(), [page](const auto& generation) {
+						return generation->armed.load(std::memory_order_relaxed) == 1 && page < generation->saved.size() && !generation->saved[page];
+					});
+				};
+				for (size_t page = 0; page < pages;) {
+					if (!fenced(page)) { ++page; continue; }
+					const size_t begin = page;
+					while (page < pages && fenced(page)) ++page;
+					if (!PageWriteFence::OpenCopiedPage(base + begin * pageBytes, (page - begin) * pageBytes)) return false;
+				}
+				return true;
 			}
 			void Cancel(const std::shared_ptr<CowCopy>& copy) {
 				Locked guard(lock);
@@ -1294,6 +1335,7 @@ namespace RTE::CheckpointLua {
 				for (size_t page = 0; page < m_Copy->saved.size(); page += batchPages) {
 					if (!m_Coordinator->CopyPages(page, std::min(batchPages, m_Copy->saved.size() - page)))
 						throw std::runtime_error("could not open prepared Lua heap pages");
+					m_Coordinator->TouchPages(page, std::min(batchPages, m_Copy->saved.size() - page));
 					// The copy stops for the game's ticks between batches; a cancel meanwhile ends it as a cancel before it would.
 					{
 						lock.unlock();

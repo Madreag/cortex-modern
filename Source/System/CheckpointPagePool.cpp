@@ -201,6 +201,7 @@ struct CheckpointPagePool::Block {
 		// While a capture is open a write fault saves and opens the aligned run around it: taking a fault costs several
 		// times what copying a page does, and the game's writes come in runs.
 		constexpr size_t faultRun = 16;
+		const size_t faulted = fault && count == 1 ? first : (std::numeric_limits<size_t>::max)();
 		if (fault && count == 1 && std::any_of(copies.begin(), copies.end(), [](const auto& copy) { return !copy->completed && !copy->abandoned && (copy->Armed() || copy->Arming()); })) {
 			first -= first % faultRun;
 			count = std::min(faultRun, states.size() - first);
@@ -216,9 +217,17 @@ struct CheckpointPagePool::Block {
 			}
 		}
 		if (!fault) return true;
-		// A written page stays open, and the next boundary copies it instead of fencing it again.
-		const bool opened = PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data + first * pageBytes), count * pageBytes);
-		if (opened) std::fill(states.begin() + first, states.begin() + first + count, PageState::Hot);
+		// A written page stays open, and the next boundary copies it instead of fencing it again. Opening a page that is
+		// open already makes the game's next write to it take a fault, so the faulting page and the fenced ones open.
+		bool opened = true;
+		for (size_t page = first; opened && page < first + count;) {
+			const auto fenced = [&](size_t at) { return states[at] == PageState::Fenced || at == faulted; };
+			if (!fenced(page)) { ++page; continue; }
+			const size_t begin = page;
+			while (page < first + count && fenced(page)) ++page;
+			opened = PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data + begin * pageBytes), (page - begin) * pageBytes);
+			if (opened) std::fill(states.begin() + begin, states.begin() + page, PageState::Hot);
+		}
 		const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
 		for (const auto& copy: copies) if (copy->Armed() && !copy->completed) {
 			const bool simulation = std::this_thread::get_id() == copy->SimulationThread();
