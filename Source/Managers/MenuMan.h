@@ -101,6 +101,7 @@ namespace RTE {
 	private:
 		friend bool TestPauseNavigationDuringRecovery(std::string* error);
 		friend bool TestPauseLeaveClickSurvivesAMovedPointer(std::string* error);
+		friend bool TestPauseSettingsComboPickByHand(std::string* error);
 		/// Enumeration for the different menu screens that are active based on transition states.
 		enum ActiveMenu {
 			MenusDisabled,
