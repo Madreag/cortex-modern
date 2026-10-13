@@ -343,6 +343,12 @@ namespace RTE::MenuAutomation {
 			return control ? control->GetName() : panel ? "an unnamed panel" : "nothing";
 		}
 
+		/// Whether the cursor the control's own screen read this frame is on the control; the cursor's GUI pixel either way.
+		bool CursorOn(GUIControlManager* manager, GUIControl* control, int& x, int& y) {
+			manager->GetManager()->GetInputController()->GetMousePosition(&x, &y);
+			return control && Within(manager->GetManager()->PanelUnderMouse(x, y), control->GetPanel());
+		}
+
 		/// A point on the control that a press reaches: its centre first, then a grid over the rest of it. Empty, with the reason, when no point does.
 		std::optional<std::pair<int, int>> Target(GUIControlManager* manager, GUIControl* control, GUIControl* modal, std::string& why) {
 			if (!control || !control->GetPanel()) { why = "missing"; return std::nullopt; }
@@ -397,6 +403,8 @@ namespace RTE::MenuAutomation {
 				return Beat::Fail;
 			});
 			for (int press = 0; press < presses; ++press) {
+				struct Retry { int misses = 0; bool letGo = false; };
+				auto retry = std::make_shared<Retry>();
 				phases.push_back([manager, name, modal, point](std::string& note) {
 					// The press goes where the pointer is; a control that moved under it is followed.
 					GUIControl* control = manager->GetControl(name);
@@ -408,11 +416,44 @@ namespace RTE::MenuAutomation {
 						Move(point->first, point->second);
 						return Beat::Again;
 					}
+					// The screen presses where its own cursor is: a pointer something else moved since the hand set it is set again first.
+					int x = 0, y = 0;
+					if (!CursorOn(manager, control, x, y)) {
+						System::PrintDiagnosticLine("[menu-hand] " + name + ": the screen's cursor was at " + std::to_string(x) + "," + std::to_string(y) +
+						                            " on " + Reached(manager->GetManager()->PanelUnderMouse(x, y)) + " before the press; pointing again");
+						Move(point->first, point->second);
+						return Beat::Again;
+					}
 					if (Button(true)) return Beat::Next;
 					note = "the press was not sent";
 					return Beat::Fail;
 				});
-				phases.push_back([](std::string& note) {
+				phases.push_back([manager, name, point, retry](std::string& note) {
+					GUIControl* control = manager->GetControl(name);
+					int x = 0, y = 0;
+					const bool on = CursorOn(manager, control, x, y);
+					// A button acts on its release only when its own press reached it: a press that went elsewhere is let go on the
+					// button, where it starts nothing, and made again.
+					if (auto* button = dynamic_cast<GUIButton*>(control); button && !button->IsPushed()) {
+						if (retry->letGo) {
+							if (!on) { Move(point->first, point->second); return Beat::Again; }
+							if (!Button(true)) { note = "the press was not sent"; return Beat::Fail; }
+							retry->letGo = false;
+							return Beat::Again;
+						}
+						const std::string reached = Reached(manager->GetManager()->PanelUnderMouse(x, y));
+						if (++retry->misses > 2) { note = "the press reached " + reached + " at " + std::to_string(x) + "," + std::to_string(y) + ", not " + name; return Beat::Fail; }
+						System::PrintDiagnosticLine("[menu-hand] " + name + ": the press reached " + reached + " at " + std::to_string(x) + "," + std::to_string(y) + "; pressing again");
+						if (!Move(point->first, point->second) || !Button(false)) { note = "the release was not sent"; return Beat::Fail; }
+						retry->letGo = true;
+						return Beat::Again;
+					}
+					// A release off the control lets the press go without its action, as a hand that slid off does.
+					if (!on) {
+						System::PrintDiagnosticLine("[menu-hand] " + name + ": the screen's cursor was at " + std::to_string(x) + "," + std::to_string(y) + " before the release; pointing again");
+						Move(point->first, point->second);
+						return Beat::Again;
+					}
 					if (Button(false)) return Beat::Next;
 					note = "the release was not sent";
 					return Beat::Fail;
