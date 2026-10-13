@@ -375,7 +375,7 @@ def game_scenes():
 
     # The plateau gives the shot a clear path; the dropship keeps its engines beside the passenger.
     # Let the passenger finish landing before taking control.
-    host = place("host", x=0.4) + buy("host", fire=False, landing_offset=120, craft="Base.rte/Dropship MK1")
+    host = place("host", x=0.4) + buy("host", fire=False, landing_offset=-180, craft="Base.rte/Dropship MK1")
     joiner = place("joiner", x=0.48)
     host += [dict(op="aim_brain", input_player=0, target_player=1)]
     host += capture("aimed-at-brain-host") + [dict(op="assert_scene", input_player=0,
