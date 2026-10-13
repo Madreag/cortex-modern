@@ -548,12 +548,13 @@ namespace {
 				} else if (lua_isboolean(L, -1)) {
 					result[name] = lua_toboolean(L, -1) != 0;
 				} else if (lua_isuserdata(L, -1)) {
-					try {
-						if (const auto* timer = luabind::object_cast<Timer*>(luabind::object(luabind::from_stack(L, -1)))) {
-							result[name] = {{"elapsed_bits", std::bit_cast<uint64_t>(timer->GetElapsedSimTimeMS())},
-							    {"start_ticks", timer->GetStartSimTimeMS()}};
-						}
-					} catch (const luabind::cast_failed&) {
+					const luabind::object value(luabind::from_stack(L, -1));
+					if (boost::optional<Timer*> timer = luabind::object_cast_nothrow<Timer*>(value); timer && *timer) {
+						result[name] = {{"elapsed_bits", std::bit_cast<uint64_t>((*timer)->GetElapsedSimTimeMS())},
+						    {"start_ticks", (*timer)->GetStartSimTimeMS()}};
+					} else if (boost::optional<Vector*> vector = luabind::object_cast_nothrow<Vector*>(value); vector && *vector) {
+						result[name] = {{"x_bits", std::bit_cast<uint32_t>((*vector)->m_X)}, {"y_bits", std::bit_cast<uint32_t>((*vector)->m_Y)}};
+					} else {
 						result[name] = "userdata";
 					}
 				} else {
@@ -13068,7 +13069,12 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 						if (g_MovableMan.ValidMO(target)) {
 							targetTrace["target"] = {{"uid", target->GetUniqueID()}, {"moid", target->GetID()}, {"preset", target->GetPresetName()},
 							    {"pos", {std::bit_cast<uint32_t>(target->GetPos().m_X), std::bit_cast<uint32_t>(target->GetPos().m_Y)}},
-							    {"radius", std::bit_cast<uint32_t>(target->GetRadius())}};
+							    {"radius", std::bit_cast<uint32_t>(target->GetRadius())}, {"rot", std::bit_cast<uint32_t>(target->GetRotAngle())},
+							    {"hflipped", target->IsHFlipped()}, {"to_delete", target->IsSetToDelete()}};
+							if (const auto* attachable = dynamic_cast<const Attachable*>(target)) {
+								targetTrace["target"]["parent_offset"] = {std::bit_cast<uint32_t>(attachable->GetParentOffset().m_X), std::bit_cast<uint32_t>(attachable->GetParentOffset().m_Y)};
+								targetTrace["target"]["parent_uid"] = attachable->GetParent() ? attachable->GetParent()->GetUniqueID() : 0;
+							}
 						} else {
 							targetTrace["target_not_resident"] = true;
 						}
