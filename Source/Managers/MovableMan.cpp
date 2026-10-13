@@ -1913,6 +1913,25 @@ void MovableMan::CapturePhysicsHistory(uint64_t tick, uint64_t phase) const {
 	static uint64_t incident = 0, postRemaining = 0;
 	static int64_t maximumUs = 0, totalUs = 0;
 	static uint64_t captures = 0;
+	const auto flush = [&](const std::string& suffix) {
+		std::ofstream out(prefix + "." + std::to_string(incident) + suffix + ".bin", std::ios::binary);
+		out.write("PHYSTRC1", 8);
+		const auto number = [&](uint64_t value) { out.write(reinterpret_cast<const char*>(&value), sizeof(value)); };
+		number(1); number(std::tuple_size_v<Row>); number(count);
+		for (size_t index = 0; index < count; ++index) {
+			const Frame& kept = history[(first + index) % history.size()];
+			number(kept.tick); number(kept.phase); number(kept.rows);
+			const size_t contiguous = std::min(kept.rows, maxRows - kept.offset);
+			out.write(reinterpret_cast<const char*>(storage.data() + kept.offset), static_cast<std::streamsize>(contiguous * sizeof(Row)));
+			out.write(reinterpret_cast<const char*>(storage.data()), static_cast<std::streamsize>((kept.rows - contiguous) * sizeof(Row)));
+		}
+		std::cout << "[physics-history] incident=" << incident << " tick=" << tick << " frames=" << count << " suffix=" << suffix << std::endl;
+	};
+	// Phase zero saves the already recorded frames before a failed round discards its world.
+	if (phase == 0) {
+		if (count > 0) flush(".desync");
+		return;
+	}
 	const auto entered = std::chrono::steady_clock::now();
 	const auto countObject = [&](auto&& self, const MovableObject* mo) -> size_t {
 		size_t result = 1;
@@ -1997,20 +2016,7 @@ void MovableMan::CapturePhysicsHistory(uint64_t tick, uint64_t phase) const {
 	if (tick % 600 == 0) {
 		std::cout << "[physics-history] tick=" << tick << " rows=" << frame.rows << " buffer_bytes=" << storage.size() * sizeof(Row) << " history_rows=" << usedRows << " frames=" << count << " first_tick=" << history[first].tick << " mean_us=" << totalUs / captures << " max_us=" << maximumUs << std::endl;
 	}
-	const auto flush = [&](const std::string& suffix) {
-		std::ofstream out(prefix + "." + std::to_string(incident) + suffix + ".bin", std::ios::binary);
-		out.write("PHYSTRC1", 8);
-		const auto number = [&](uint64_t value) { out.write(reinterpret_cast<const char*>(&value), sizeof(value)); };
-		number(1); number(std::tuple_size_v<Row>); number(count);
-		for (size_t index = 0; index < count; ++index) {
-			const Frame& kept = history[(first + index) % history.size()];
-			number(kept.tick); number(kept.phase); number(kept.rows);
-			const size_t contiguous = std::min(kept.rows, maxRows - kept.offset);
-			out.write(reinterpret_cast<const char*>(storage.data() + kept.offset), static_cast<std::streamsize>(contiguous * sizeof(Row)));
-			out.write(reinterpret_cast<const char*>(storage.data()), static_cast<std::streamsize>((kept.rows - contiguous) * sizeof(Row)));
-		}
-		std::cout << "[physics-history] incident=" << incident << " tick=" << tick << " frames=" << count << " suffix=" << suffix << std::endl;
-	};
+
 	if (postRemaining > 0 && --postRemaining == 0) flush(".post");
 	if (incident < 3 && !trigger.empty()) {
 		uint64_t requested = 0;

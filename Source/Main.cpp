@@ -7159,6 +7159,7 @@ static bool IsCompleteControllerStop(const std::string& error) {
 static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 	const std::string error = ScenarioRunner::GetControllerReplayError();
 	if (error.find("Desync") != std::string::npos) {
+		g_MovableMan.CapturePhysicsHistory(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), 0);
 		SaveActorHistory();
 		if (TerrainDumpArmed()) {
 			DumpTerrainNow("desync");
