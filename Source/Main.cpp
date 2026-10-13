@@ -6715,6 +6715,27 @@ static void CheckRequiredProbesCompleted() {
 	}
 }
 
+// Test lever CCCP_TEST_HOTPLUG_PAD_TICK=<tick>: a virtual gamepad arrives at that tick, as a pad plugged in mid-match does.
+static void HotPlugPadIfArmed(uint64_t simTick) {
+	static const long long s_tick = [] {
+		const char* value = std::getenv("CCCP_TEST_HOTPLUG_PAD_TICK");
+		return value ? std::atoll(value) : -1LL;
+	}();
+	if (s_tick < 0 || simTick != static_cast<uint64_t>(s_tick)) {
+		return;
+	}
+	SDL_VirtualJoystickDesc desc;
+	SDL_INIT_INTERFACE(&desc);
+	desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+	desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+	desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+	desc.button_mask = (1U << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+	desc.axis_mask = (1U << SDL_GAMEPAD_AXIS_COUNT) - 1;
+	desc.name = "Hot-plugged test pad";
+	const SDL_JoystickID pad = SDL_AttachVirtualJoystick(&desc);
+	System::PrintDiagnosticLine(std::format("[hotplug] tick={} pad={}", simTick, static_cast<unsigned>(pad)));
+}
+
 static void DumpTerrainIfArmed(uint64_t simTick) {
 	static uint64_t s_tick = 0;
 	static bool s_checked = false;
@@ -8892,6 +8913,7 @@ void RunGameLoop() {
 			PreviewEventLedgerFrameOnTick();
 			TrackUidsIfArmed(simTick);
 			DumpTerrainIfArmed(simTick);
+			HotPlugPadIfArmed(simTick);
 			{
 				static const std::string s_wendPath = (!ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim")) + ".wend.terrainevents.txt";
 				SceneMan::FlushTerrainEventsAtWindowEnd(simTick, s_wendPath);
