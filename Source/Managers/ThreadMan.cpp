@@ -131,7 +131,8 @@ void SaverThreads::WaitForSlice() {
 			}
 			return;
 		}
-		s_SliceOpened.wait_for(lock, std::chrono::milliseconds(1));
+		// Whatever lets the saver on notifies; waking only for the stuck-tick report keeps parked savers off the game's cores.
+		s_SliceOpened.wait_for(lock, std::chrono::milliseconds(50));
 	}
 }
 
