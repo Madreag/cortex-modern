@@ -303,6 +303,13 @@ class JoinerBoxTest(unittest.TestCase):
     def test_headed_player_environment(self):
         environment = peers.video.headed_environment({"CCCP_HEADLESS": "1", "CC_TEST_READBACK_TIMING": "1"})
         self.assertEqual(environment, {"CC_TEST_READBACK_TIMING": "1", "CC_TEST_VISIBLE_WINDOW": "1"})
+
+    def test_windows_host_visibility_follows_its_assignment(self):
+        self.assertFalse(peers.headed_box({"os": "win32"}))
+        self.assertTrue(peers.headed_box({"os": "win32", "headed": True}))
+        with mock.patch.object(peers.video.sys, "platform", "win32"):
+            environment = peers.video.headed_environment({"CCCP_HEADLESS": "1"})
+        self.assertEqual(environment, {"CC_TEST_VISIBLE_WINDOW": "1"})
         self.assertEqual(peers.video.HEADED_SETTINGS, {"EnableVSync": 1})
 
     def test_headed_players_keep_the_games_vsync_instead_of_the_headless_cap(self):

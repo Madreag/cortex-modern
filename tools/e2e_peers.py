@@ -36,6 +36,10 @@ JOINER_SYSTEMS = ("darwin", "linux")
 PLAYER_SCRIPTS = {"darwin": ("/bin/zsh", "tools/e2e/peer_mac.sh"), "linux": ("/bin/bash", "tools/e2e/peer_linux.sh")}
 
 
+def headed_box(box):
+    return box["os"] in JOINER_SYSTEMS or box.get("headed", False)
+
+
 def read(path):
     return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
@@ -112,7 +116,7 @@ class PlayerRun:
         run = video.make_run(repo, args, out, timeout, env=environment, **kwargs)
         run.record.update(box=self.request["box"]["name"], engine_hostname=socket.gethostname(), topology="spread", proof=False,
                           source_commit=self.request["commit"], scene_sha256=self.request["scene_sha256"])
-        if self.request["box"]["os"] in JOINER_SYSTEMS:
+        if headed_box(self.request["box"]):
             run.record.update(headed=True, headless_render_settings_applied=False)
         start = run.start
 
@@ -164,7 +168,7 @@ def play(request_path):
         peer["env"] = {**peer.get("env", {}), **request.get("engine_env", {})}
     local_scene = copy.deepcopy(document)
     local_scene["checklist"] = [item for item in document.get("checklist", []) if not item.get("peer") or item["peer"] == role]
-    headed = request["box"]["os"] in JOINER_SYSTEMS
+    headed = headed_box(request["box"])
     options = SimpleNamespace(repo=Path(request["box"]["repo"]), size=None, port=request["port"], fps=request["fps"],
                               setting=[], render_cap=60, headed=headed, fullstate_every=0, sheet_every=request["sheet_every"],
                               tokens={"PROBE_DIR_" + other: out / name / (other + "-stage/probe")
