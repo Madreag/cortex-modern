@@ -16,10 +16,55 @@ ROLES = ('ally', 'linux', 'mac')
 MIN_PLAY_TPS = 59.9
 SIM_TICK_MS = 1000 / 60
 RATE_POLICY = 'Full in-play and each consecutive 60-second window: at least 59.9 tps; median of 60-tick average intervals: within 1 ms of 1000/60 ms. Raw gaps and sliding-window rates remain evidence.'
+LEAVE_POLICY = 'An ordinary Leave is noted within 10 seconds and retains its AI seat; only the host End Match ends this round, within 10 seconds of that request. Silent-peer timing remains enabled and bounded.'
+
+
+def round_listing(report, text):
+    runner = report.get('runner', {})
+    if 'directory_at_end' in runner:
+        return runner['directory_at_end'], 'round snapshot'
+    directory = report.get('directory', {})
+    if directory.get('confirmed_listed') is True:
+        return directory, 'retained directory'
+    # A replaced coordinator cannot report its predecessor's listing. Replay
+    # the client's acknowledged listing transitions up to the recorded end.
+    summary = report.get('last_match') or {}
+    lock = runner.get('lockstep', {})
+    if summary.get('running_ticks', 0) <= 0 or lock.get('next_frame') != 0 or lock.get('completed_simulation_tick') is not None:
+        return {}, 'missing round snapshot'
+    listed, session_id = False, ''
+    for line in text.splitlines():
+        if line.startswith('[net-peer-departure] all-remote-ended'):
+            end = re.search(r'applied=(\d+)', line)
+            if not end or int(end[1]) != summary['running_ticks']:
+                return {}, 'listing end differs from completed summary'
+            return {'confirmed_listed': listed, 'session_id': session_id}, 'ordered registration log before round end'
+        match = re.fullmatch(r'\[net-directory\] registered session_id=(\S+) heartbeat_s=(\d+)', line)
+        if match:
+            listed, session_id = True, match[1]
+        elif line.startswith('[net-directory] state:') and any(state in line for state in ('-> deleting', '-> failed', '-> disabled', '-> superseded')):
+            listed = False
+    return {}, 'missing listing end marker'
+
+
+def own_seat_bridges(text, peer):
+    """The round's agreed bridges of one seat from its log, as [first frame, return frame) intervals; None marks one still open."""
+    bit = 1 << (peer - 1)
+    intervals = []
+    for line in text.splitlines():
+        match = re.match(r'\[net-frame-group\] (bridge|return) frame=(\d+) members=(\d+)', line)
+        if not match:
+            continue
+        kind, frame, members = match[1], int(match[2]), int(match[3])
+        if kind == 'bridge' and not members & bit and (not intervals or intervals[-1][1] is not None):
+            intervals.append([frame, None])
+        elif kind == 'return' and members & bit and intervals and intervals[-1][1] is None:
+            intervals[-1][1] = frame
+    return intervals
 
 
 def score(roots):
-    errors, details, commits, applies, indexes, exits, logs = [], {}, {}, {}, {}, {}, {}
+    errors, details, commits, applies, indexes, exits, logs, reports = [], {}, {}, {}, {}, {}, {}, {}
 
     def require(ok, why):
         if not ok: errors.append(why)
@@ -52,6 +97,7 @@ def score(roots):
                 role + ': missing five-second all-brain confirmation oracle')
         require(any(s.get('op') == 'assert' and s.get('equals', {}).get('ai_held_peer_ids') == [] for s in steps), role + ': probe never checks human return')
         report = read_json(root / 'engine/match-report.json', role)
+        reports[role] = report
         lock = report.get('runner', {}).get('lockstep', {})
         require(bool(lock), role + ': missing retained round lockstep report')
         if lock:
@@ -71,8 +117,8 @@ def score(roots):
         require(bool(routes) and all(route == 'relay' for _, _, route in routes), role + ': established non-relay or missing route')
         require(all(c.get('route') in ('', 'relay') for c in report.get('connections', [])), role + ': a connection selected a non-relay route')
         if role == 'ally':
-            directory = report.get('runner', {}).get('directory_at_end', report.get('directory', {}))
-            require(directory.get('confirmed_listed') is True, role + ': no confirmed public listing in retained report')
+            directory, listing_source = round_listing(report, text)
+            require(directory.get('confirmed_listed') is True, role + ': no confirmed public listing at round end')
         applies[role] = {}
         for kind, seat, frame, unix in placement.findall(text):
             seat = int(seat)
@@ -95,6 +141,9 @@ def score(roots):
         detail = {'participant': result, 'report_present': bool(report), 'placements': applies[role], 'routes': routes,
                   'path_samples': path_samples, 'path_summary': physical, 'lockstep': lock}
         details[role] = detail
+        if role == 'ally':
+            detail.update(directory_at_end=directory, listing_source=listing_source,
+                          completed_report_retained='directory_at_end' in report.get('runner', {}))
         try:
             rows, timing = timeline.summarize(root / 'engine/live.jsonl')
             index = {r['tick']: r for r in rows}; indexes[role] = index
@@ -140,7 +189,12 @@ def score(roots):
                 held_after = [r['tick'] for r in rows[returned:] if 1 in r.get('ai_held_peer_ids', [])]
                 detail['held_after_return'] = held_after
                 require(not held_after, role + ': host became held again after return')
-                human_rows = [r for r in rows[returned:] if r['tick'] < 12000 and not r.get('paused')]
+                # A seat the round bridged has its own input replaced until its return, so acceptance resumes there.
+                bridges = [b for b in own_seat_bridges(text, rows[0]['peer']) if b[1] is None or b[1] > rows[returned]['tick']]
+                detail['own_seat_bridges_after_return'] = bridges
+                require(all(b[1] is not None for b in bridges), role + ': own seat bridged after return without a recorded return')
+                bridged = lambda tick: any(b[0] <= tick and (b[1] is None or tick < b[1]) for b in bridges)
+                human_rows = [r for r in rows[returned:] if r['tick'] < 12000 and not r.get('paused') and not bridged(r['tick'])]
                 require(all(isinstance(r.get('input_accepted_through'), int) and r['input_accepted_through'] >= r['tick'] for r in human_rows),
                         role + ': quorum input acceptance stopped advancing after return')
                 detail['input_progress_after_return'] = {'rows': len(human_rows),
@@ -181,8 +235,13 @@ def score(roots):
                   re.findall(r'\[net-peer-departure\] all-remote-ended applied=(\d+) now_ms=(\d+) unix_ms=(\d+)', logs['ally'])]
     leaves = {}
     leave_score = {'exits': exits, 'leaves': leaves, 'departures': departures, 'round_ends': round_ends}
-    limit = details['ally'].get('lockstep', {}).get('peer_silence_leave_ms')
-    require(limit == 10000, 'ally: missing or changed 10000-ms leave bound')
+    limit = 10000
+    round_silence = {role: details[role].get('lockstep', {}).get('peer_silence_leave_ms') for role in ROLES
+                     if isinstance(details[role].get('lockstep', {}).get('completed_simulation_tick'), int) and
+                     details[role]['lockstep']['completed_simulation_tick'] >= 12000}
+    leave_score['silent_peer_timing_ms'] = round_silence
+    require(len(round_silence) >= 2 and all(isinstance(value, int) and 0 < value <= limit for value in round_silence.values()),
+            'missing or unbounded silent-peer timing in completed round reports')
     host_rows = indexes.get('ally', {})
 
     def host_anchor(frame):
@@ -207,14 +266,50 @@ def score(roots):
         observed = next((d for d in departures if d['peer'] == leave['peer']), None)
         anchor = host_anchor(leave['frame'])
         delta = observed['now_ms'] - anchor['now_ms'] if observed and anchor and anchor['now_ms'] is not None else None
-        leave.update(host_anchor=anchor, adjudication_ms=delta)
-        require(delta is not None and 0 <= delta <= 10000, 'ally: ' + role + ' leave not adjudicated within ten seconds')
+        earliest = host_anchor(max(1, leave['frame'] - 36))
+        # The leaver's last input lands up to the delay bound past the leave; the round notes the first frame without it.
+        delay = indexes.get(role, {}).get(leave['frame'], {}).get('input_delay_ticks')
+        notice = (observed and observed['source'] == 'round-notice' and
+                  leave['frame'] <= observed['frame'] <= leave['frame'] + 36 + 1 and
+                  earliest and earliest['now_ms'] is not None and observed['now_ms'] >= earliest['now_ms'])
+        leave.update(host_anchor=anchor, notice_ms=delta, host_note=observed, input_delay_ticks=delay)
+        # A future input stop may arrive before the host displays the matching
+        # leave tick. Keep that signed interval and test the causal frame range.
+        require(notice and delta is not None and delta <= limit, 'ally: ' + role + ' leave not noted within ten seconds')
+        seats = reports['ally'].get('reconnect', {}).get('moderation', [])
+        seat = next((seat for seat in seats if seat.get('lockstep_peer_id') == leave['peer']), {})
+        retained = (seat.get('committed') is True and seat.get('dropped') is True and seat.get('held_for_reclaim') is True and
+                    seat.get('closed') is False and seat.get('cpu') is False and seat.get('holder_generation', 0) > 0)
+        leave['retained_seat'] = seat
+        require(retained, 'ally: ' + role + ' leave did not retain its AI seat')
+        if observed:
+            following = [row for tick, row in host_rows.items() if tick >= observed['frame']]
+            held = next((row['tick'] for row in following if leave['peer'] in row.get('ai_held_peer_ids', [])), None)
+            leave.update(ai_hold_frame=held, end_before_hold_boundary=not following)
+            require(not following or (held is not None and held <= observed['frame'] + 3 and
+                    all(leave['peer'] in row.get('ai_held_peer_ids', []) for row in following if row['tick'] >= held)),
+                    'ally: ' + role + ' departed seat not held within three ticks of its boundary')
     if len(leaves) == 2:
-        anchors = [v.get('host_anchor') for v in leaves.values()]
-        last = max(a['now_ms'] for a in anchors) if all(a and a['now_ms'] is not None for a in anchors) else None
-        ended_cleanly = last is not None and any(0 <= end['now_ms'] - last <= 10000 for end in round_ends)
-        leave_score.update(ended_cleanly=ended_cleanly)
-        require(ended_cleanly, 'ally: host did not complete within ten seconds after both leaves')
+        requests = [{'frame': int(frame), 'from_frame': int(before)} for frame, before in
+                    re.findall(r'\[net-match\] the host ends the round at frame (\d+), playing to it from (\d+)', logs['ally'])]
+        for gesture in ('open_local_pause', 'activate ButtonEndMatch', 'activate ButtonLeaveConfirm'):
+            require(sum(line.startswith('[menu-script] ' + gesture) and line.endswith('PASS')
+                        for line in logs['ally'].splitlines()) == 1, 'ally: missing unique host End Match gesture: ' + gesture)
+        require(len(requests) == 1, 'ally: missing unique host End Match request')
+        request = requests[0] if len(requests) == 1 else {}
+        host_lines = logs['ally'].splitlines()
+        end_position = next((index for index, line in enumerate(host_lines) if line.startswith('[net-match] the host ends the round')), -1)
+        last_notice = max((index for index, line in enumerate(host_lines) if line.startswith('[net-peer-departure] peer=')), default=-1)
+        terminal_position = next((index for index, line in enumerate(host_lines) if line.startswith('[net-peer-departure] all-remote-ended')), -1)
+        require(last_notice >= 0 and last_notice < end_position < terminal_position,
+                'ally: End Match and completion did not follow both leave notices')
+        anchor = host_anchor(request.get('from_frame', 0) - 1)
+        ended_cleanly = (anchor is not None and anchor['now_ms'] is not None and
+                         any(0 <= end['now_ms'] - anchor['now_ms'] <= limit for end in round_ends))
+        leave_score.update(end_match=request, end_anchor=anchor, ended_cleanly=bool(ended_cleanly))
+        require(ended_cleanly, 'ally: host did not complete within ten seconds of End Match')
+        require((reports['ally'].get('last_match') or {}).get('result') == 'Match ended by host',
+                'ally: completed summary does not name the host End Match')
         require('ally' in exits and any('[menu-script] round-ended -> OK' in line or '[menu-script] connected:1 -> OK' in line for line in logs['ally'].splitlines()), 'ally: host exit did not follow both joiner departures')
     eligible = {role: {tick: row for tick, row in index.items()
                       if role not in leaves or tick < leaves[role]['frame']}
@@ -242,6 +337,7 @@ def score(roots):
             'common_ticks': len(common), 'compared_ticks': len(compared), 'hash_mismatches': mismatch,
             'hash_coverage': coverage, 'hash_exclusions': exclusions, 'leave_test': leave_score, 'details': details,
             'rate_policy': RATE_POLICY,
+            'leave_policy': LEAVE_POLICY,
             'physics_policy': 'The gate requires zero unaffected pauses over 50 ms during blackout. Pauses outside blackout remain measured path data.'}
 
 
