@@ -2,6 +2,7 @@
 
 #include "DiagnosticLine.h"
 #include "NetAuthCrypto.h"
+#include "NetHttpClient.h"
 #include "NetLobbyProtocol.h"
 #include "NetProtocol.h"
 
@@ -151,11 +152,16 @@ namespace RTE {
 			m_PeerReceiptDelaySamples.clear(); m_PeerOwnReceiptProgress.clear();
 			for (uint8_t receiver = 1; receiver <= m_Config.peerCount; ++receiver) m_PeerReceiptSampleFloorMs[receiver] = nowMs;
 			DiagnosticLine() << "[net-link-blackout] begin peer=" << static_cast<int>(m_Config.localPeerId) << " frame=" << *m_LastCompletedSimulationTick << " duration_ms=" << m_TestBlackoutDurationMs
-			    << " now_ms=" << nowMs << " unix_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
+			    << " now_ms=" << nowMs << " unix_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()
+			    << " directory=" << (m_TestBlackoutDirectoryDark ? "dark" : "up") << std::endl;
 		}
 		if (!m_TestBlackoutAtMs) return false;
 		const bool active = nowMs >= *m_TestBlackoutAtMs && nowMs - *m_TestBlackoutAtMs < m_TestBlackoutDurationMs;
 		if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->frameBlackout = active;
+		if (const bool offline = active && m_TestBlackoutDirectoryDark; offline != m_TestBlackoutOffline) {
+			m_TestBlackoutOffline = offline;
+			NetHttpClient::SetOfflineForTest(offline);
+		}
 		if (!active && !m_TestBlackoutEnded) {
 			m_TestBlackoutEnded = true;
 			m_PeerReceiptDelaySamples.clear(); m_PeerOwnReceiptProgress.clear();

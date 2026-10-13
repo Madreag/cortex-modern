@@ -1168,7 +1168,10 @@ namespace RTE {
 		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
 		NetLinkQuality LinkQualityForSeat(uint8_t peerId, uint64_t nowMs = UINT64_MAX) const;
 		bool UsesPeerFrameGroups() const { NET_PLANE_CHECK(); return m_Config.peerFrameGroups && !m_Playback; }
-		void SetPeerFrameBlackoutForTest(uint64_t frame, uint64_t durationMs) { NET_PLANE_CHECK(); m_TestBlackoutFrame = frame; m_TestBlackoutDurationMs = durationMs; m_TestBlackoutAtMs.reset(); }
+		/// @param directoryDark The directory goes dark with the peer link, as when the whole connection drops; otherwise only the link does.
+		void SetPeerFrameBlackoutForTest(uint64_t frame, uint64_t durationMs, bool directoryDark = false) {
+			NET_PLANE_CHECK(); m_TestBlackoutFrame = frame; m_TestBlackoutDurationMs = durationMs; m_TestBlackoutDirectoryDark = directoryDark; m_TestBlackoutAtMs.reset();
+		}
 		bool PeerFrameCatchUpActive() const;
 		/// The latest local input accepted by the current peer authority, inclusive.
 		std::optional<uint64_t> GetLocalInputAcceptedThrough() const;
@@ -1753,6 +1756,7 @@ namespace RTE {
 		uint64_t m_TestBlackoutFrame = UINT64_MAX, m_TestBlackoutDurationMs = 0;
 		std::optional<uint64_t> m_TestBlackoutAtMs;
 		bool m_TestBlackoutEnded = false;
+		bool m_TestBlackoutDirectoryDark = false, m_TestBlackoutOffline = false;
 		std::map<uint64_t, uint64_t> m_PeerInputSentAtMs;
 		std::map<uint8_t, uint64_t> m_PeerInputReliableThrough;
 		std::map<uint8_t, NetInputDelayEstimator> m_PeerReceiptDelaySamples;

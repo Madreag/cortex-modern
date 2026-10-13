@@ -47,7 +47,11 @@ namespace RTE {
 		Response GetResponse() const;
 		void Cancel();
 
+		/// Test lever: while set, every request this process starts fails at once as an unreachable network does.
+		static void SetOfflineForTest(bool offline) { s_OfflineForTest.store(offline, std::memory_order_relaxed); }
+
 	private:
+		static inline std::atomic<bool> s_OfflineForTest{false};
 		void WorkerMain(std::string method, std::string url, std::vector<std::pair<std::string, std::string>> headers, std::string body, std::string certPinSha256);
 		void WorkerMainImpl(std::string method, std::string url, std::vector<std::pair<std::string, std::string>> headers, std::string body, std::string certPinSha256);
 		void Finish(const Response& response);
