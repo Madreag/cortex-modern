@@ -391,6 +391,12 @@ namespace RTE {
 		/// @return The relative mouse movements, in both axes.
 		Vector GetMouseMovement(int whichPlayer = -1) const;
 
+		/// Gets the relative movement of the mouse since the last simulation update. A match's tick falls between many loop passes,
+		/// each of which ends its frame, so the tick reads every pass's movement here.
+		/// @param whichPlayer Which player to get movement for. If the player doesn't use the mouse this always returns a zero vector.
+		/// @return The relative mouse movements since the last EndSimUpdate, in both axes.
+		Vector GetMouseMovementSinceSim(int whichPlayer = -1) const;
+
 		/// Records a seat's mouse as its committed lockstep frame applied it. A script asking about that seat inside the
 		/// round reads this on every peer, never the mouse of the machine it runs on.
 		/// @param whichPlayer The seat's player.
@@ -602,6 +608,12 @@ namespace RTE {
 		/// Whether this query comes from a script inside a lockstep round, where it must read the seat's committed input.
 		bool ScriptReadsCommittedSeat(int whichPlayer) const;
 
+		/// Records one mouse motion event's position and movement on its device and on the combined mouse.
+		void NoteMouseMotion(SDL_MouseID which, const Vector& position, const Vector& motion);
+
+		/// A player's mouse movement for this frame, or since the last simulation update.
+		Vector MouseMovementOf(int whichPlayer, bool sinceSim) const;
+
 		/// Enumeration for the different states an input element or button can be in.
 		enum InputState {
 			Held,
@@ -643,6 +655,7 @@ namespace RTE {
 			std::array<bool, MouseButtons::MAX_MOUSE_BUTTONS> releasedSinceSim{}; //!< Release events accumulated since last EndSimUpdate.
 			Vector position{};
 			Vector relativeMotion{};
+			Vector motionSinceSim{}; //!< Relative motion accumulated since last EndSimUpdate.
 			Vector analogAim{};
 			float wheelChange{0.0f};
 			bool relativeMode{};

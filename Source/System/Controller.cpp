@@ -863,7 +863,9 @@ void Controller::UpdatePlayerAnalogInput(bool frameEdges) {
 
 	// Special handing of the mouse input, if applicable
 	if (LocalIsMouseControlled()) {
-		m_MouseMovement = g_UInputMan.GetMouseMovement(GetInputPlayer());
+		// A match's tick falls between many loop passes that each end their frame, so it takes all the movement since the last tick.
+		const bool simMotion = !frameEdges && ScenarioRunner::HasLockstepCoordinator();
+		m_MouseMovement = simMotion ? g_UInputMan.GetMouseMovementSinceSim(GetInputPlayer()) : g_UInputMan.GetMouseMovement(GetInputPlayer());
 
 		if (g_UInputMan.MouseWheelMovedByPlayer(GetInputPlayer()) < 0) {
 			m_ControlStates[ControlState::WEAPON_CHANGE_NEXT] = m_ControlStates[ControlState::SCROLL_DOWN] = true;
