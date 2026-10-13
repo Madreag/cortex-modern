@@ -3345,6 +3345,10 @@ bool Actor::RunCheckpointPathRequestSelfTest() {
 		const Actor* unsolvedAddress = unsolved.get();
 		const auto pages = CheckpointNativeStorage::Prepare();
 		for (const auto& part: pages) part->Arm();
+		// The fixture's materials live on this stack, outside owned storage, so the boundary keeps their bytes as roots.
+		CheckpointNativeStorage::Root<Material> airRoot(&air), rockRoot(&rock);
+		airRoot.Freeze(); rockRoot.Freeze();
+		const std::array materialRoots{airRoot.Range(), rockRoot.Range()};
 		gate->Release();
 		finder.WaitForPathingRequests();
 		finder.CommitPathRequestsThrough(1444);
@@ -3354,7 +3358,7 @@ bool Actor::RunCheckpointPathRequestSelfTest() {
 		CheckpointNativeSnapshot unsolvedSnapshot;
 		const Actor* frozenUnsolved;
 		{
-			CheckpointNativeStorage::ReadScope read(pages);
+			CheckpointNativeStorage::ReadScope read(pages, materialRoots);
 			frozenUnsolved = unsolvedSnapshot.Object(unsolvedAddress);
 			unsolvedSnapshot.SealBoundary();
 		}
