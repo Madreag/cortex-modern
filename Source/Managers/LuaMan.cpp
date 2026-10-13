@@ -8441,7 +8441,7 @@ void LuaStateWrapper::TraceCheckpointAI(long uniqueID, std::string_view hook, st
 	size_t count = 0;
 	std::function<void(lua_State*, int, const std::string&, unsigned)> visit;
 	visit = [&](lua_State* state, int value, const std::string& path, unsigned depth) {
-		if (++count > 512 || depth > 4) return;
+		if (++count > 8192 || depth > 7) return;
 		if (value < 0 && value > LUA_REGISTRYINDEX) value += lua_gettop(state) + 1;
 		const int type = lua_type(state, value);
 		std::string detail = lua_typename(state, type);
@@ -8470,7 +8470,7 @@ void LuaStateWrapper::TraceCheckpointAI(long uniqueID, std::string_view hook, st
 				else if (lua_type(state, -2) == LUA_TNUMBER) key = std::format("[{}]", lua_tonumber(state, -2));
 				if (!key.empty()) visit(state, -1, path + "." + key, depth + 1);
 				lua_pop(state, 1);
-				if (count >= 512) { lua_pop(state, 1); break; }
+				if (count >= 8192) { lua_pop(state, 1); break; }
 			}
 		} else {
 			lua_State* thread = lua_tothread(state, value);
@@ -8489,10 +8489,8 @@ void LuaStateWrapper::TraceCheckpointAI(long uniqueID, std::string_view hook, st
 		}
 	};
 	PushScriptObjectInstanceTable(m_State, uniqueID);
-	if (lua_istable(m_State, -1)) {
-		lua_pushliteral(m_State, "AI"); lua_rawget(m_State, -2);
-		visit(m_State, -1, "AI", 0);
-	}
+	// The whole script table, the AI one inside it.
+	if (lua_istable(m_State, -1)) visit(m_State, -1, "self", 0);
 }
 
 LuaStateWrapper::LuaStateWrapper() {
