@@ -867,8 +867,10 @@ const std::string& CheckpointText::Text() const {
 			std::vector<size_t> sizedRuns;
 			const std::string_view values = node->Values();
 			text.reserve(values.size());
-			size_t cursor = 0;
+			size_t cursor = 0, formatted = 0;
 			while (cursor < values.size()) {
+				// Only savers format a capture's own nodes, so a saver stopping here holds back no game thread.
+				if (++formatted % 1024 == 0) SaverThreads::YieldToGame();
 				const auto kind = ReadCaptureValue<CaptureValue>(values, cursor);
 				switch (kind) {
 					case CaptureValue::Raw: text += ReadCaptureString(values, cursor); break;

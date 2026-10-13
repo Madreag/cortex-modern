@@ -7865,7 +7865,8 @@ void RunGameLoop() {
 			ZoneScopedN("Simulation Update");
 			SaverThreads::CloseSlice();
 			// Test lever CCCP_TEST_SAVER_STAND_IN=<tick>:<seconds>:<megabytes>: from that tick, one thread at the saver's priority
-			// streams through a buffer of that size for that long, a saver's memory traffic with no save behind it.
+			// streams through a buffer of that size for that long, a saver's memory traffic with no save behind it, in the
+			// game's idle time as a saver works.
 			static const std::array<unsigned long long, 3> standIn = [] {
 				std::array<unsigned long long, 3> values{};
 				const char* text = std::getenv("CCCP_TEST_SAVER_STAND_IN");
@@ -7878,7 +7879,10 @@ void RunGameLoop() {
 					std::vector<unsigned char> buffer(bytes, 1);
 					const size_t half = bytes / 2, chunk = size_t{1} << 20;
 					const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
-					for (size_t offset = 0; std::chrono::steady_clock::now() < until; offset = (offset + chunk) % half) std::memcpy(buffer.data() + half + offset, buffer.data() + offset, chunk);
+					for (size_t offset = 0; std::chrono::steady_clock::now() < until; offset = (offset + chunk) % half) {
+					SaverThreads::YieldToGame();
+					std::memcpy(buffer.data() + half + offset, buffer.data() + offset, chunk);
+				}
 				}).detach();
 			}
 #ifdef _WIN32
