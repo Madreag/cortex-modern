@@ -107,7 +107,7 @@ namespace RTE::CheckpointLua {
 		}
 		void Work(std::stop_token stop) noexcept {
 			FloatingPointEnvironment::Initialize();
-			// The simulation waits on its preparations, so it keeps its priority; its parallel work goes to the saver's pool.
+			// Initial world setup waits for preparation; later capture work can yield to gameplay.
 			SaverThreads::Mark();
 			const FloatingPointEnvironment::Scope environment("checkpoint saver");
 			while (!stop.stop_requested()) {
@@ -117,6 +117,7 @@ namespace RTE::CheckpointLua {
 					Publish(State::Preparing); PreparePlan(); continue;
 				}
 				if (state == State::Armed) {
+					SaverThreads::Enter();
 					Publish(State::Working);
 					bool completed = false;
 					try {
