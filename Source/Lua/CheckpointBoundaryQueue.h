@@ -123,6 +123,7 @@ namespace RTE::CheckpointLua {
 					try {
 						CheckpointFailure::ForwardScope failure(m_Plan->failure);
 						CheckpointNativeStorage::CaptureScope allocations;
+						const CheckpointNativeStorage::CoolingPause cooling;
 						m_Plan->boundary->Drain();
 						completed = m_Complete(m_Plan->header, *m_Plan->boundary);
 					} catch (...) {

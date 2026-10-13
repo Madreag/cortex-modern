@@ -252,12 +252,6 @@ struct CheckpointPagePool::Block {
 	// still being written; a page fenced too early costs one more write fault.
 	size_t Cool() {
 		constexpr size_t chunk = 1024;
-		{
-			// A page written while a capture is open already has its saved bytes; fencing it again would only cost its
-			// writer another fault, and the digests would stream the block through the cache beside the game's own work.
-			Locked guard(lock);
-			if (Active()) return 0;
-		}
 		if (digests.size() != states.size()) digests.assign(states.size(), 0);
 		std::array<PageState, chunk> seen;
 		std::vector<unsigned char> still(chunk);
@@ -830,6 +824,7 @@ namespace {
 	thread_local bool s_NativeStorageCapture = false;
 	thread_local std::optional<bool> s_NativeStorageWorldAllocation;
 	std::atomic<bool> s_NativeStorageWorldEnabled{false};
+	std::atomic<int> s_CoolingPauses{0};
 	NativeStoragePools& NativePools() {
 		static NativeStoragePools* const pools = [] {
 			auto* value = new NativeStoragePools;
@@ -861,6 +856,9 @@ CheckpointNativeStorage::WorldAllocationScope::~WorldAllocationScope() { s_Nativ
 bool CheckpointNativeStorage::WorldEnabled() noexcept { return s_NativeStorageWorldEnabled.load(std::memory_order_acquire); }
 bool CheckpointNativeStorage::SetWorldEnabled(bool enabled) noexcept { return s_NativeStorageWorldEnabled.exchange(enabled, std::memory_order_acq_rel); }
 
+CheckpointNativeStorage::CoolingPause::CoolingPause() { s_CoolingPauses.fetch_add(1, std::memory_order_acq_rel); }
+CheckpointNativeStorage::CoolingPause::~CoolingPause() { s_CoolingPauses.fetch_sub(1, std::memory_order_acq_rel); }
+
 void CheckpointNativeStorage::StartSettling() {
 	// Faults on the newly fenced pages are spread over the slices instead of landing on one tick.
 	static std::jthread settler([](std::stop_token stop) {
@@ -875,7 +873,7 @@ void CheckpointNativeStorage::StartSettling() {
 			}
 			// A page that stopped changing for a pass is fenced again, so the next boundary copies only pages still written.
 			static const bool s_Cooling = std::getenv("CCCP_TEST_CHECKPOINT_NO_COOLING") == nullptr;
-			if (s_Cooling && WorldEnabled() && std::chrono::steady_clock::now() - cooled >= std::chrono::seconds(1)) {
+			if (s_Cooling && WorldEnabled() && s_CoolingPauses.load(std::memory_order_acquire) == 0 && std::chrono::steady_clock::now() - cooled >= std::chrono::seconds(1)) {
 				CheckpointPagePool::CoolInventory();
 				cooled = std::chrono::steady_clock::now();
 			}

@@ -90,6 +90,15 @@ namespace RTE {
 		static bool SetWorldEnabled(bool enabled) noexcept;
 		/// Starts fencing new owned pages in the background while a world is captured, a slice at a time.
 		static void StartSettling();
+		/// Holds the settler's cooling passes while a save reads its capture: a page written meanwhile already has its saved
+		/// bytes, so fencing it again would only cost the simulation another write fault.
+		class CoolingPause {
+		public:
+			CoolingPause();
+			~CoolingPause();
+			CoolingPause(const CoolingPause&) = delete;
+			CoolingPause& operator=(const CoolingPause&) = delete;
+		};
 		static bool Reading() { return s_Read != nullptr; }
 		static void RememberPrivate(void* address, size_t bytes, bool borrowed = false);
 		static void BorrowPrivate(const void* address) noexcept;
