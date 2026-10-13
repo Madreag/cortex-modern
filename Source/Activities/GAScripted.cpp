@@ -179,7 +179,7 @@ int GAScripted::Save(Writer& writer) const {
 
 void GAScripted::Destroy(bool notInherited) {
 	// Delete global scripts
-	for (std::vector<GlobalScript*>::iterator sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
+	for (auto sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
 		delete (*sItr);
 	}
 
@@ -310,7 +310,7 @@ int GAScripted::Start() {
 	}
 
 	// Clear active global scripts
-	for (std::vector<GlobalScript*>::iterator sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
+	for (auto sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
 		delete (*sItr);
 	}
 
@@ -325,7 +325,7 @@ int GAScripted::Start() {
 	}
 
 	// Start all global scripts
-	for (std::vector<GlobalScript*>::iterator sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
+	for (auto sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
 		(*sItr)->Start();
 	}
 
@@ -338,7 +338,7 @@ void GAScripted::SetPaused(bool pause) {
 	RunLuaFunction("PauseActivity", {}, {pause ? "true" : "false"}, {});
 
 	// Pause all global scripts
-	for (std::vector<GlobalScript*>::iterator sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
+	for (auto sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
 		(*sItr)->Pause(pause);
 	}
 }
@@ -349,12 +349,12 @@ void GAScripted::End() {
 	RunLuaFunction("EndActivity");
 
 	// End all global scripts
-	for (std::vector<GlobalScript*>::iterator sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
+	for (auto sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
 		(*sItr)->End();
 	}
 
 	// Delete all global scripts, in case destructor is not called when activity restarts
-	for (std::vector<GlobalScript*>::iterator sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
+	for (auto sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
 		delete (*sItr);
 	}
 
@@ -404,7 +404,7 @@ void GAScripted::UpdateGlobalScripts(bool lateUpdate) {
 	ZoneScoped;
 
 	// Update all global scripts
-	for (std::vector<GlobalScript*>::iterator sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
+	for (auto sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
 		if ((*sItr)->ShouldLateUpdate() == lateUpdate) {
 			if (ScenarioRunner::IsLockstepControllerSyncActive() && (*sItr)->GetPresetName() == "Debug Functions") {
 				continue;

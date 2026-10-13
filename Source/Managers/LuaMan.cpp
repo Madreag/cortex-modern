@@ -7764,7 +7764,7 @@ void LuaStateWrapper::PrepareCheckpointValues() {
 		LuaScriptFunctionObjects functions;
 		CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 		functions.functionNamesAndObjects = CheckpointRebuildHash(entry.second.functionNamesAndObjects, identity);
-		return decltype(prepared->scriptCache)::value_type(entry.first, std::move(functions));
+		return typename decltype(prepared->scriptCache)::value_type(entry.first, std::move(functions));
 	});
 	prepared->randomGenerator = m_OrdinaryCheckpointValues.randomGenerator;
 	// Publish all headers together so a refused allocation leaves every live callback and RNG where it was.
