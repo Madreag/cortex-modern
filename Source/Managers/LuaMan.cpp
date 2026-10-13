@@ -422,9 +422,15 @@ static bool RunDeadHandleMemorySelfTest(LuaStateWrapper& script) {
 		result.first = pointerOf("_DeadHandleFirst");
 		g_MovableMan.PurgeAllMOs();
 		result.retainedAfterDelete = MovableObject::GetRetainedPoolMemoryCount() - retainedBefore;
-		result.ran = script.RunScriptString("_DeadHandleSecond = CreateMOPixel('Spark Yellow 1', 'Base.rte');"
-		                                    "_DeadHandleSecond.Pos = Vector(33, 44);"
-		                                    "_DeadHandleRead = _DeadHandleAlias.X;") == 0 && result.ran;
+#if defined(__SANITIZE_ADDRESS__) || defined(__ADDRESS_SANITIZER__)
+		// The sanitizer build frees every object's memory at once, so without the link the alias would read freed memory.
+		const bool readAlias = linked;
+#else
+		const bool readAlias = true;
+#endif
+		result.ran = script.RunScriptString(std::string("_DeadHandleSecond = CreateMOPixel('Spark Yellow 1', 'Base.rte');"
+		                                                "_DeadHandleSecond.Pos = Vector(33, 44);") +
+		                                    (readAlias ? "_DeadHandleRead = _DeadHandleAlias.X;" : "_DeadHandleRead = 0;")) == 0 && result.ran;
 		result.second = pointerOf("_DeadHandleSecond");
 		lua_getglobal(state, "_DeadHandleRead");
 		result.aliasX = lua_tonumber(state, -1);
