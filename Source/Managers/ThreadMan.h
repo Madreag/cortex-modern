@@ -48,8 +48,6 @@ namespace RTE {
 		/// and waits here while no slice is open. A game that is never idle gets a save that takes longer, never a slower tick.
 		static void YieldToGame() {
 			if (!s_Current || !s_Gating.load(std::memory_order_relaxed) || s_Lent.load(std::memory_order_relaxed) > 0) return;
-			if (--t_Countdown > 0) return;
-			t_Countdown = c_YieldStride;
 			CheckSlice();
 		}
 
@@ -81,14 +79,11 @@ namespace RTE {
 		};
 
 	private:
-		static constexpr int c_YieldStride = 8; //!< Yields between two clock reads.
-
 		static void CheckSlice();
 		static void WaitForSlice();
 
 		static inline thread_local bool s_Current = false;
 		static inline thread_local bool s_Lowered = false;
-		static inline thread_local int t_Countdown = 0;
 		static inline std::atomic<int> s_Gating{0};
 		static inline std::atomic<int> s_Lent{0};
 		static inline std::atomic<int64_t> s_SliceEndUs{0};

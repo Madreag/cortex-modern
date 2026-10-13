@@ -4,6 +4,7 @@
 #include "CheckpointFailure.h"
 #include "CheckpointFrozenClock.h"
 #include "CheckpointFrozenContainers.h"
+#include "ThreadMan.h"
 
 #include <array>
 #include <atomic>
@@ -520,7 +521,9 @@ namespace RTE {
 				std::lock_guard lock(m_ReadValuesMutex);
 				roots = m_ReadValues;
 			}
+			size_t visited = 0;
 			m_Objects.ForEach([&](const Entity* source, const Entity* target) {
+				if (++visited % 64 == 0) SaverThreads::YieldToGame();
 				if (!target) return;
 				const auto* base = Source(source);
 				const auto* complete = dynamic_cast<const void*>(base);

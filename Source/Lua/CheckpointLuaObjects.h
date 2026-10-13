@@ -40,7 +40,9 @@ namespace RTE::CheckpointLua {
 		void Prepare() {
 			const auto state = m_Heap.Read(m_Heap.State());
 			const auto global = m_Heap.Read(mref(state.glref, global_State));
+			size_t walked = 0;
 			for (const GCobj* object = gcref(global.gc.root); object;) {
+				if (++walked % 64 == 0) SaverThreads::YieldToGame();
 				const auto head = m_Heap.Read(&object->gch);
 				if (head.gct == static_cast<uint8_t>(~LJ_TUDATA)) {
 					const auto* data = reinterpret_cast<const GCudata*>(object);
@@ -51,6 +53,7 @@ namespace RTE::CheckpointLua {
 			lua_pushvalue(m_State, LUA_GLOBALSINDEX);
 			m_Values.RememberLibraries(m_Heap.GlobalValue("_G"), -1); lua_pop(m_State, 1);
 			for (const auto& [source, target]: m_Classes) {
+				SaverThreads::YieldToGame();
 				lua_rawgeti(m_State, LUA_REGISTRYINDEX, target->metatable_ref());
 				m_Values.RememberLibraries(m_Heap.RegistryValue(m_Bindings.Class(source)->metatable_ref()), -1); lua_pop(m_State, 1);
 				target->get_table(m_State);
@@ -59,6 +62,7 @@ namespace RTE::CheckpointLua {
 				m_Values.RememberLibraries(DefaultMembers(source), -1); lua_pop(m_State, 1);
 			}
 			for (const auto& [source, target]: m_Classes) {
+				SaverThreads::YieldToGame();
 				target->get_table(m_State);
 				m_Values.FillTable(m_Bindings.Members(source), -1); lua_pop(m_State, 1);
 				target->get_default_table(m_State);
