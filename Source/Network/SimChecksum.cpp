@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
-#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -202,10 +201,7 @@ namespace RTE {
 		auto found = std::find_if(m_Impl->rowCaches.begin(), m_Impl->rowCaches.end(), [&](const std::unique_ptr<RowBlockCache>& cache) {
 			return cache->key == key && cache->subsystem == name;
 		});
-		// Test lever CCCP_TEST_CHECKSUM_CACHES: reports every row cache made and, per call, the blocks that changed or wait for a table.
-		static const bool reportCaches = std::getenv("CCCP_TEST_CHECKSUM_CACHES") != nullptr;
 		if (found == m_Impl->rowCaches.end() || (*found)->width != width || (*found)->height != height) {
-			if (reportCaches) std::cout << "[sim-checksum-cache] key=" << key << " width=" << width << " height=" << height << " caches=" << m_Impl->rowCaches.size() << std::endl;
 			if (found == m_Impl->rowCaches.end()) {
 				// A handful of keys live at once (one per terrain bitmap); the one used longest ago makes room.
 				if (m_Impl->rowCaches.size() >= 8) {
@@ -296,7 +292,6 @@ namespace RTE {
 
 		uint64_t state = hasher->second.state;
 		std::vector<size_t> worthATable;
-		size_t changedBlocks = 0, rawBlocks = 0;
 		for (int y = 0; y < height; ++y) {
 			const uint8_t* row = rows[y];
 			for (int column = 0; column < cache.blocksPerRow; ++column) {
@@ -306,7 +301,6 @@ namespace RTE {
 				const size_t block = static_cast<size_t>(y) * static_cast<size_t>(cache.blocksPerRow) + static_cast<size_t>(column);
 				const bool same = cache.same[block] != 0;
 				if (!same) {
-					++changedBlocks;
 					cache.version[block] = ++cache.nextVersion;
 					cache.stillCalls[block] = 0;
 				} else if (cache.stillCalls[block] < c_RowBlockStillCalls) {
@@ -323,7 +317,6 @@ namespace RTE {
 					++cache.tableFolds;
 					continue;
 				}
-				++rawBlocks;
 				for (size_t index = 0; index < length; ++index) {
 					state = (state ^ live[index]) * c_FnvPrime;
 				}
@@ -334,7 +327,6 @@ namespace RTE {
 			}
 		}
 		hasher->second.state = state;
-		if (reportCaches) std::cout << "[sim-checksum-rows] key=" << key << " changed=" << changedBlocks << " raw=" << rawBlocks << " queued=" << worthATable.size() << " in_flight=" << cache.inFlight << std::endl;
 
 		for (const size_t block: worthATable) {
 			const size_t y = block / static_cast<size_t>(cache.blocksPerRow);
