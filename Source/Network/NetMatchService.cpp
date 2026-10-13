@@ -9661,6 +9661,25 @@ static std::string ResyncSaveName() {
 	void NetMatchService::UpdateConnectionAuthority(uint64_t nowMs) {
 		if (!s_AdmissionEnabled || m_State == NetMatchServiceState::Idle || m_LeftMatch) return;
 		const uint64_t wall = UnixNowMs(nullptr) / 1000;
+		// Called under m_Mutex.
+		const auto routeState = [this] { return m_LeftMatch ? "left" : m_HeldRejoinDriving ? "reconnecting" : m_State == NetMatchServiceState::Running ? "connected" : "connecting"; };
+		const auto hostRoute = [this](NetConnectionRoute& route) {
+			route.iceIdentity = m_IceIdentity;
+			route.iceVirtualPort = static_cast<uint16_t>(m_DirectoryRow.iceVirtualPort);
+			route.listenAddrs = m_DirectoryRow.listenAddrs;
+			route.listenPort = m_BeaconGamePort;
+		};
+		{
+			// The directory lists a host's row from the route its check-in carries, so the route is the one the host has now:
+			// one taken before its ICE listener opened would list the row as having no way in.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_IsHost) {
+				NetConnectionRoute route;
+				route.state = routeState();
+				hostRoute(route);
+				m_ConnectionAuthority.SetRoute(std::move(route));
+			}
+		}
 		m_ConnectionAuthority.Update(nowMs, wall);
 		std::string directoryUrl = g_SettingsMan.GetSessionDirectoryUrl();
 		while (!directoryUrl.empty() && directoryUrl.back() == '/') directoryUrl.pop_back();
@@ -9693,16 +9712,13 @@ static std::string ResyncSaveName() {
 			auto localAddresses = m_ConnectionAuthority.LocalAddresses();
 			if (localAddresses.size() > NetMatchConfigUtil::c_MaxMigrationAddresses) localAddresses.resize(NetMatchConfigUtil::c_MaxMigrationAddresses);
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			route.state = m_LeftMatch ? "left" : m_HeldRejoinDriving ? "reconnecting" : m_State == NetMatchServiceState::Running ? "connected" : "connecting";
+			route.state = routeState();
 			if (m_IsHost) {
 				if (changed) {
 					m_DirectoryRow.listenAddrs = m_ConnectionMode == 2 ? std::vector<std::string>{} : localAddresses;
 					m_Directory.NoteListenAddrs(m_DirectoryRow.listenAddrs);
 				}
-				route.iceIdentity = m_IceIdentity;
-				route.iceVirtualPort = static_cast<uint16_t>(m_DirectoryRow.iceVirtualPort);
-				route.listenAddrs = m_DirectoryRow.listenAddrs;
-				route.listenPort = m_BeaconGamePort;
+				hostRoute(route);
 			} else {
 				const auto& peers = m_AdoptedMatchConfig.migrationPeers;
 				const auto own = std::find_if(peers.begin(), peers.end(), [&](const auto& peer) { return peer.peerId == m_LocalPeerId; });

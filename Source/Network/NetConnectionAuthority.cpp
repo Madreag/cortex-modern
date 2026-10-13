@@ -226,6 +226,7 @@ namespace RTE {
 	bool NetConnectionAuthority::Refused() const { std::lock_guard lock(m_Mutex); return m_Refused; }
 	bool NetConnectionAuthority::Ended() const { std::lock_guard lock(m_Mutex); return m_Ended; }
 	uint64_t NetConnectionAuthority::CheckIns() const { std::lock_guard lock(m_Mutex); return m_CheckIns; }
+	NetConnectionRoute NetConnectionAuthority::Route() const { std::lock_guard lock(m_Mutex); return m_Route; }
 	bool NetConnectionAuthority::RouteCheckedIn() const { std::lock_guard lock(m_Mutex); return m_CheckIns != 0 && m_CheckedGeneration == m_Route.generation; }
 	bool NetConnectionAuthority::RelayRefreshed() const { std::lock_guard lock(m_Mutex); return m_CheckIns != 0 && m_RelayGeneration == m_Route.generation; }
 	uint32_t NetConnectionAuthority::NetworkRevision() const { std::lock_guard lock(m_Mutex); return m_NetworkRevision; }

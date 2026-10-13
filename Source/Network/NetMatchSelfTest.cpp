@@ -16391,6 +16391,42 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestAHostCheckInCarriesItsListener(std::string* error) {
+		struct RestoreAdmission {
+			bool enabled = NetMatchService::IsAdmissionEnabled();
+			~RestoreAdmission() { NetMatchService::SetAdmissionEnabled(enabled); }
+		} restore;
+		NetMatchService::SetAdmissionEnabled(true);
+		// A relay-only host lists no address, so its row is joinable only through the ICE listener its check-in names.
+		NetMatchService host;
+		{
+			std::lock_guard<std::mutex> lock(host.m_Mutex);
+			host.m_IsHost = true;
+			host.m_IceEnabled = true;
+			host.m_ConnectionMode = 2;
+			host.m_State = NetMatchServiceState::Starting;
+		}
+		host.m_BeaconGamePort = 48052;
+		const uint64_t start = NetLockstepNowMs();
+		host.UpdateConnectionAuthority(start);
+		const std::string identity = NetIceHostIdentity("check-in-route-selftest");
+		{
+			std::lock_guard<std::mutex> lock(host.m_Mutex);
+			host.m_IceIdentity = identity;
+			host.m_DirectoryRow.iceIdentity = identity;
+			host.m_DirectoryRow.iceVirtualPort = NetMatchService::c_IceVirtualPort;
+		}
+		host.UpdateConnectionAuthority(start + 16);
+		const NetConnectionRoute route = host.m_ConnectionAuthority.Route();
+		if (route.iceIdentity != identity || route.iceVirtualPort != NetMatchService::c_IceVirtualPort || !route.listenAddrs.empty() || route.listenPort != 48052) {
+			*error = "the host's next check-in still carries the route taken before its ICE listener opened (ice_identity '" + route.iceIdentity +
+			         "', virtual port " + std::to_string(route.iceVirtualPort) + ", " + std::to_string(route.listenAddrs.size()) +
+			         " addresses): the directory lists that relay-only row with no address and no ICE join mode, which a joiner reads as 'No usable address'";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestDirectoryRowTakesTheLateRouterAnswer(std::string* error) {
 		struct Wire {
 			std::vector<NetDirectoryClient::Request> sent;
@@ -19109,6 +19145,7 @@ namespace RTE {
 		row(&TestIceConnectingLine, "direct_fallback_attempt_clock");
 		row(&TestReplayStorageDoesNotBlockTicks, "replay_storage_does_not_block_ticks");
 		row(&TestDirectoryRowTakesTheLateRouterAnswer, "directory_row_takes_the_late_router_answer");
+		row(&TestAHostCheckInCarriesItsListener, "a_host_check_in_carries_its_listener_from_the_first_update");
 		row(&TestAHostMappingOutlastsItsPendingIdentity, "a_host_mapping_outlasts_its_pending_identity");
 		row(&TestAHostWithNoRouterReadsNoRouterMapping, "a_host_with_no_router_reads_no_router_mapping");
 		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");

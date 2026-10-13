@@ -127,6 +127,8 @@ namespace RTE {
 		bool RestoreLease(const NetSeatLease& lease);
 		std::optional<NetSeatLease> LocalLease() const;
 		void SetRoute(NetConnectionRoute route);
+		/// The route the next check-in carries.
+		NetConnectionRoute Route() const;
 		void CheckInNow();
 		void RefreshRoute();
 		void RequestBootstrap();
