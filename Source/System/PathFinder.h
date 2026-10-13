@@ -13,6 +13,8 @@
 #include <memory>
 #include <functional>
 #include <mutex>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -36,6 +38,13 @@ namespace RTE {
 		Vector startPos;
 		Vector targetPos;
 		uint64_t horizonGeneration = 0; //!< Overlay generation pinned when the request is launched.
+		float jumpHeight = 0.0F;
+		float digStrength = 0.0F;
+		bool committedHorizon = false;
+		uint64_t completeTick = 0;
+		bool resumeAfterRestore = false; //!< A restored unfinished solve has no worker until its owner resumes it.
+		std::string SaveCheckpoint() const;
+		static std::shared_ptr<PathRequest> ReadCheckpoint(std::string_view text);
 	};
 
 	using PathCompleteCallback = std::function<void(std::shared_ptr<volatile PathRequest>)>;

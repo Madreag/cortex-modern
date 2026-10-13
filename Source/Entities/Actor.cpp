@@ -36,6 +36,7 @@
 #include "Material.h"
 #include "MOPixel.h"
 #include "Scene.h"
+#include "PathFinder.h"
 #include "SettingsMan.h"
 #include "FrameMan.h"
 #include "PerformanceMan.h"
@@ -88,6 +89,18 @@ namespace {
 		const Icon* icon = reference.kind == 1 ? (g_ActivityMan.GetActivity() ? g_ActivityMan.GetActivity()->GetTeamIcon(reference.team) : nullptr) : dynamic_cast<const Icon*>(g_PresetMan.GetEntityPreset("Icon", reference.preset, reference.module));
 		if (!icon) throw std::runtime_error("actor icon owner could not be restored");
 		return icon;
+	}
+	std::shared_ptr<volatile PathRequest> FreezeActorPathRequest(const std::shared_ptr<volatile PathRequest>& request, CheckpointNativeSnapshot& snapshot) {
+		if (!request) return {};
+		auto* saved = snapshot.RebuildValue(const_cast<const PathRequest*>(request.get()), [&](const PathRequest& value) {
+			if (value.complete) return std::make_unique<PathRequest>(value, snapshot);
+			auto pending = std::make_unique<PathRequest>();
+			pending->startPos = value.startPos; pending->targetPos = value.targetPos;
+			pending->jumpHeight = value.jumpHeight; pending->digStrength = value.digStrength;
+			pending->committedHorizon = value.committedHorizon; pending->completeTick = value.completeTick;
+			return pending;
+		});
+		return std::shared_ptr<volatile PathRequest>(saved, [](volatile PathRequest*) {});
 	}
 }
 
@@ -197,7 +210,7 @@ Actor::Actor(const Actor& source, CheckpointNativeSnapshot& snapshot) :
 	m_PrevPathTarget(snapshot.Freeze(source.m_PrevPathTarget)),
 	m_MoveVector(snapshot.Freeze(source.m_MoveVector)),
 	m_MovePath(snapshot.Freeze(source.m_MovePath, &m_MovePath)),
-	m_PathRequest{},
+	m_PathRequest(FreezeActorPathRequest(source.m_PathRequest, snapshot)),
 	m_UpdateMovePath(snapshot.Freeze(source.m_UpdateMovePath)),
 	m_MoveProximityLimit(snapshot.Freeze(source.m_MoveProximityLimit)),
 	m_MovementState(snapshot.Freeze(source.m_MovementState)),
@@ -520,6 +533,7 @@ int Actor::Create(const Actor& reference) {
 	if (IsFaithfulClone() || m_HasPersistedMovePath) {
 		m_MovePath = reference.m_MovePath;
 		m_WaypointCursor = reference.m_WaypointCursor;
+		if (reference.m_PathRequest) m_PathRequest = PathRequest::ReadCheckpoint(const_cast<const PathRequest&>(*reference.m_PathRequest).SaveCheckpoint());
 	}
 	m_MoveProximityLimit = reference.m_MoveProximityLimit;
 	m_AIBaseDigStrength = reference.m_AIBaseDigStrength;
@@ -780,6 +794,10 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("SpecialBehaviour_PrevPathTarget", { reader >> m_PrevPathTarget; });
 	MatchProperty("SpecialBehaviour_MoveVector", { reader >> m_MoveVector; });
 	MatchProperty("SpecialBehaviour_UpdateMovePath", { reader >> m_UpdateMovePath; });
+	MatchProperty("SpecialBehaviour_PathRequest", {
+		try { m_PathRequest = PathRequest::ReadCheckpoint(base64_decode(reader.ReadPropValue())); }
+		catch (const std::exception&) { reader.ReportError("invalid Actor path request checkpoint"); }
+	});
 	MatchProperty("PieMenu", {
 		m_PieMenu = std::unique_ptr<PieMenu>(dynamic_cast<PieMenu*>(g_PresetMan.ReadReflectedPreset(reader)));
 		if (!m_PieMenu) {
@@ -842,6 +860,11 @@ void Actor::SaveSnapshotConfiguration(Writer& writer) const {
 		CheckpointProperty<"SpecialBehaviour_PrevPathTarget">(m_PrevPathTarget),
 		CheckpointProperty<"SpecialBehaviour_MoveVector">(m_MoveVector),
 		CheckpointProperty<"SpecialBehaviour_UpdateMovePath">(m_UpdateMovePath));
+	if (m_PathRequest) {
+		writer.NewPropertyWithValue("SpecialBehaviour_PathRequest", CheckpointWriter::Native([&] {
+			return CheckpointNativeStorage::Source(const_cast<const PathRequest*>(m_PathRequest.get()))->SaveCheckpoint();
+		}).Base64(true));
+	}
 	writer.PerPeerEnd();
 	WriteCapturedProperties(writer,
 		CheckpointProperty<"PassengerSlots">(m_PassengerSlots),
@@ -2408,6 +2431,14 @@ void Actor::OnNewMovePath() {
 }
 
 void Actor::PreControllerUpdate() {
+	if (m_PathRequest && m_PathRequest->resumeAfterRestore) {
+		const PathRequest& saved = const_cast<const PathRequest&>(*m_PathRequest);
+		auto& finder = g_SceneMan.GetScene()->GetPathFinder(static_cast<Activity::Teams>(m_Team));
+		m_PathRequest = finder.CalculatePathAsync(saved.startPos, saved.targetPos, saved.jumpHeight, saved.digStrength, nullptr, saved.committedHorizon, saved.completeTick);
+		// The normal deterministic drain preceded this first update; include the restored request in it.
+		if (g_SettingsMan.GetForceImmediatePathingRequestCompletion()) finder.WaitForPathingRequests();
+		finder.CommitPathRequestsThrough(ScenarioRunner::GetLockstepAppliedFrame());
+	}
 	if (m_PathRequest && m_PathRequest->complete) {
 		const auto& path = const_cast<const CheckpointList<Vector>&>(m_PathRequest->path);
 		m_MovePath.assign(path.begin(), path.end());
@@ -3175,6 +3206,48 @@ bool Actor::RebindCheckpointBorrowedReferences(const std::vector<long>& identiti
 		m_FaithfulWaypointUIDs.clear();
 	}
 	return true;
+}
+
+bool Actor::RunCheckpointPathRequestSelfTest() {
+	try {
+		CheckpointNativeStorage::AllocationScope allocation(true);
+		auto source = std::make_unique<Actor>();
+		auto request = MakeCheckpointNativeShared<PathRequest>();
+		request->complete = true; request->status = MicroPather::SOLVED;
+		request->startPos = Vector(-0.0F, 2); request->targetPos = Vector(19, -31);
+		request->jumpHeight = 17.25F; request->digStrength = 9.5F;
+		request->path = {request->startPos, Vector(7, 8), request->targetPos};
+		request->pathLength = 3; request->totalCost = 43.25F; request->horizonGeneration = 27;
+		source->m_PathRequest = request;
+		const std::string expected = request->SaveCheckpoint();
+		CheckpointNativeSnapshot snapshot;
+		const Actor* saved = snapshot.Object(source.get());
+		snapshot.SealBoundary();
+		request->path.clear(); request->targetPos.Reset(); source.reset(); request.reset();
+		std::shared_ptr<PathRequest> restored;
+		{
+			CheckpointNativeSnapshot::ReadScope read(&snapshot);
+			if (!saved->m_PathRequest) return false;
+			const std::string actual = const_cast<const PathRequest&>(*saved->m_PathRequest).SaveCheckpoint();
+			if (actual != expected) return false;
+			restored = PathRequest::ReadCheckpoint(actual);
+		}
+		Actor resumed;
+		resumed.m_PathRequest = restored;
+		resumed.PreControllerUpdate();
+		if (resumed.m_PathRequest || resumed.m_MovePath.size() != 1 || resumed.m_MovePath.front() != Vector(19, -31) || resumed.m_PrevPathTarget != Vector(7, 8)) return false;
+		restored->complete = false; restored->committedHorizon = true; restored->completeTick = 1337;
+		const std::string pending = restored->SaveCheckpoint();
+		restored->path.assign(8, Vector(99, 91));
+		if (restored->SaveCheckpoint() != pending) return false;
+		auto retry = PathRequest::ReadCheckpoint(pending);
+		if (retry->complete || !retry->resumeAfterRestore || !retry->path.empty() || retry->SaveCheckpoint() != pending) return false;
+		try { PathRequest::ReadCheckpoint(pending + "extra"); return false; } catch (const std::exception&) {}
+		return true;
+	} catch (const std::exception& error) {
+		std::cout << "[actor-path-checkpoint-selftest] " << error.what() << std::endl;
+		return false;
+	}
 }
 
 bool Actor::RunBorrowedReferenceSelfTest() {

@@ -51,7 +51,27 @@ using namespace RTE;
 PathRequest::PathRequest(const PathRequest& source, CheckpointNativeSnapshot& snapshot) :
 	complete(source.complete), status(source.status), path(snapshot.Freeze(source.path)),
 	pathLength(source.pathLength), totalCost(source.totalCost), startPos(source.startPos), targetPos(source.targetPos),
-	horizonGeneration(source.horizonGeneration) {}
+	horizonGeneration(source.horizonGeneration), jumpHeight(source.jumpHeight), digStrength(source.digStrength),
+	committedHorizon(source.committedHorizon), completeTick(source.completeTick), resumeAfterRestore(source.resumeAfterRestore) {}
+
+std::string PathRequest::SaveCheckpoint() const {
+	CheckpointWriter writer("PathRequest1");
+	writer(complete, startPos, targetPos, jumpHeight, digStrength, committedHorizon, completeTick);
+	// A worker may be constructing an unfinished answer. Its immutable inputs are sufficient to restart it.
+	if (complete) writer(status, path, pathLength, totalCost, horizonGeneration);
+	return writer.Text();
+}
+
+std::shared_ptr<PathRequest> PathRequest::ReadCheckpoint(std::string_view text) {
+	auto request = MakeCheckpointNativeShared<PathRequest>();
+	CheckpointReader reader(text, "PathRequest1");
+	reader.Value(request->complete);
+	reader(request->startPos, request->targetPos, request->jumpHeight, request->digStrength, request->committedHorizon, request->completeTick);
+	if (request->complete) reader(request->status, request->path, request->pathLength, request->totalCost, request->horizonGeneration);
+	reader.Finish();
+	request->resumeAfterRestore = !request->complete;
+	return request;
+}
 
 namespace {
 	struct PathingRequestScope {
@@ -405,7 +425,7 @@ bool PathFinder::RunCheckpointFreezeSelfTest() {
 		return CheckpointNativeStorage::Source(sourceAddress)->FreezeCheckpoint().Text() == expected &&
 		    requestBytes(*CheckpointNativeStorage::Source(requestAddress)) == expectedRequest;
 	}).get();
-	return noWait && actual == expected && owned;
+	return noWait && actual == expected && owned && Actor::RunCheckpointPathRequestSelfTest();
 }
 
 bool PathFinder::LoadCheckpoint(std::string_view text, bool validateOnly) {
@@ -711,6 +731,10 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 
 	const_cast<Vector&>(pathRequest->startPos) = start;
 	const_cast<Vector&>(pathRequest->targetPos) = end;
+	pathRequest->jumpHeight = jumpHeight;
+	pathRequest->digStrength = digStrength;
+	pathRequest->committedHorizon = committedHorizon;
+	pathRequest->completeTick = completeTick;
 
 	uint64_t pinned = 0;
 	bool held = false;
