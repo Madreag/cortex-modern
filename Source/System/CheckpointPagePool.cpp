@@ -252,6 +252,12 @@ struct CheckpointPagePool::Block {
 	// still being written; a page fenced too early costs one more write fault.
 	size_t Cool() {
 		constexpr size_t chunk = 1024;
+		{
+			// A page written while a capture is open already has its saved bytes; fencing it again would only cost its
+			// writer another fault, and the digests would stream the block through the cache beside the game's own work.
+			Locked guard(lock);
+			if (Active()) return 0;
+		}
 		if (digests.size() != states.size()) digests.assign(states.size(), 0);
 		std::array<PageState, chunk> seen;
 		std::vector<unsigned char> still(chunk);
