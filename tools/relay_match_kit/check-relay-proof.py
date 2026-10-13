@@ -259,5 +259,20 @@ try:
  log.write_bytes(oldlog+bridge+back)
  check('acceptance_lag_past_the_return',False,'acceptance stopped advancing')
 finally:live.write_bytes(oldlive);log.write_bytes(oldlog)
+# A box shared with other work takes the CPU from the engine, window after window; the first window holds the round's start.
+def harness_windows(*pairs):
+ return b''.join(b'[harness-cost] tick=%d window=600 tick_end_us p50=%d p95=%d max=%d\n'%(600*(n+1),p50,p95,2*p95) for n,(p50,p95) in enumerate(pairs))
+log=roots['mac']/'engine/stdout.log';live=roots['mac']/'engine/live.jsonl'
+oldlog,oldlive=log.read_bytes(),live.read_bytes()
+try:
+ log.write_bytes(oldlog+harness_windows((302,1784),(295,353),(297,446)))
+ result=check('quiet_box_with_its_start_window',True)
+ assert len(result['details']['mac']['box_load']['windows'])==3 and not result['details']['mac']['box_load']['busy_windows']
+ log.write_bytes(oldlog+harness_windows((702,11000),(604,10660),(817,5457)))
+ check('busy_box_is_not_a_proof',False,'mac: box was not alone during the match')
+ live.write_bytes(rows_change(oldlive,lambda rows:[r.update(wall_ms=r['wall_ms']+42) for r in rows if r['tick']>=742]))
+ result=check('busy_box_pause_in_blackout_keeps_both_failures',False,'mac: box was not alone during the match')
+ assert any('mac: unaffected peer pauses over 50 ms during blackout' in error for error in result['errors']),result['errors']
+finally:log.write_bytes(oldlog);live.write_bytes(oldlive)
 (root/'contracts.json').write_text(json.dumps({'synthetic':True,'relay_proof':False,'checks':checks},indent=2)+'\n')
 print(json.dumps({'synthetic_contract_checks':len(checks),'passed':len(checks),'relay_proof':False}))
