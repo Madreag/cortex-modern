@@ -16564,8 +16564,11 @@ namespace {
 	// Integer-only rounds, so every platform reaches the same digest.
 	struct GraphDigest {
 		uint64_t state = 0x27D4EB2F165667C5ULL;
+		/// Where a traced walk records every word it hashes (the CCCP_TEST_GRAPH_WORDS lever).
+		static inline thread_local std::vector<uint64_t>* t_Words = nullptr;
 
 		void Word(uint64_t word) {
+			if (t_Words) t_Words->push_back(word);
 			state += word * 0xC2B2AE3D27D4EB4FULL;
 			state = (state << 31) | (state >> 33);
 			state *= 0x9E3779B185EBCA87ULL;
@@ -17048,9 +17051,26 @@ static std::vector<uint64_t> HashScriptObjectGraphs(LuaStateWrapper& master, Lua
 				}
 			}
 		}
+		// Test lever CCCP_TEST_GRAPH_WORDS=<uid>:<first>:<last>: prints every word that object's digest hashes on those ticks.
+		static const std::array<unsigned long long, 3> traced = [] {
+			std::array<unsigned long long, 3> values{};
+			const char* text = std::getenv("CCCP_TEST_GRAPH_WORDS");
+			if (!text || std::sscanf(text, "%llu:%llu:%llu", &values[0], &values[1], &values[2]) != 3) values = {};
+			return values;
+		}();
 		for (const MovableObject* object: objects) {
 			const auto self = selves.find(object->GetUniqueID());
+			const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			std::vector<uint64_t> words;
+			const bool trace = traced[0] && static_cast<unsigned long long>(object->GetUniqueID()) == traced[0] && tick >= traced[1] && tick <= traced[2] && self != selves.end();
+			if (trace) GraphDigest::t_Words = &words;
 			digests.push_back({object->GetUniqueID(), self == selves.end() ? static_cast<uint64_t>(TokenNoScriptObject) : ObjectGraphWalk(state, known, object).Digest(self->second)});
+			GraphDigest::t_Words = nullptr;
+			if (trace) {
+				std::string line = std::format("[script-graph-words] tick={} uid={} count={}", tick, object->GetUniqueID(), words.size());
+				for (const uint64_t word: words) line += std::format(" {:x}", word);
+				System::PrintDiagnosticLine(line);
+			}
 		}
 	};
 	hashState(master);
