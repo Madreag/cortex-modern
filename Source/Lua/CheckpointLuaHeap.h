@@ -1097,6 +1097,16 @@ namespace RTE::CheckpointLua {
 #endif
 		}
 
+		// A saver's worker gives its pages back a piece at a time between the game's ticks: one large release holds the
+		// process's address space while the game's own page faults wait on it.
+		template<class Give> void ReleaseCommitted(Give give) noexcept {
+			const size_t piece = m_YieldsToGame ? size_t{1} << 20 : m_Committed;
+			for (size_t offset = 0; offset < m_Committed; offset += piece) {
+				if (offset) try { SaverThreads::YieldToGame(); } catch (...) {}
+				give(m_Base + offset, std::min(piece, m_Committed - offset));
+			}
+		}
+
 #ifdef _WIN32
 		static void* MapPages(size_t bytes) noexcept { return VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE); }
 		static void Unmap(void* pages, size_t) noexcept { VirtualFree(pages, 0, MEM_RELEASE); }
@@ -1112,7 +1122,7 @@ namespace RTE::CheckpointLua {
 		}
 		void Release() noexcept {
 			// Saved addresses stay distinct after closure without retaining the VM's committed pages.
-			if (m_Reservation && m_Committed) VirtualFree(reinterpret_cast<void*>(m_Base), m_Committed, MEM_DECOMMIT);
+			if (m_Reservation && m_Committed) ReleaseCommitted([](uintptr_t at, size_t bytes) { VirtualFree(reinterpret_cast<void*>(at), bytes, MEM_DECOMMIT); });
 			m_HeapMemory.reset();
 			m_Reservation = m_Base = 0;
 		}
@@ -1133,10 +1143,10 @@ namespace RTE::CheckpointLua {
 			return mprotect(reinterpret_cast<void*>(m_Base + m_Committed), bytes, PROT_READ | PROT_WRITE) == 0;
 		}
 		void Release() noexcept {
-			if (m_Reservation && m_Committed) {
-				mprotect(reinterpret_cast<void*>(m_Base), m_Committed, PROT_NONE);
-				madvise(reinterpret_cast<void*>(m_Base), m_Committed, MADV_DONTNEED);
-			}
+			if (m_Reservation && m_Committed) ReleaseCommitted([](uintptr_t at, size_t bytes) {
+				mprotect(reinterpret_cast<void*>(at), bytes, PROT_NONE);
+				madvise(reinterpret_cast<void*>(at), bytes, MADV_DONTNEED);
+			});
 			m_HeapMemory.reset();
 			m_Reservation = m_Base = 0;
 		}
