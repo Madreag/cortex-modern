@@ -2313,6 +2313,21 @@ const std::vector<MovableObject*>* MovableMan::GetMOsInBox(const Box& box, int i
 const std::vector<MovableObject*>* MovableMan::GetMOsInRadius(const Vector& centre, float radius, int ignoreTeam, bool getsHitByMOsOnly) const {
 	std::vector<MovableObject*>* vectorForLua = new std::vector<MovableObject*>();
 	*vectorForLua = std::move(g_SceneMan.GetMOIDGrid().GetMOsInRadius(centre, radius, ignoreTeam, getsHitByMOsOnly));
+	static const std::string targetTraceFilter = [] { const char* value = std::getenv("CC_TEST_TARGET_TRACE"); return value ? value : ""; }();
+	if (!targetTraceFilter.empty()) {
+		const LuaStateWrapper* state = g_LuaMan.GetThreadCurrentLuaState();
+		if (state && state->GetCurrentlyRunningScriptFilePath().find(targetTraceFilter) != std::string_view::npos) {
+			nlohmann::json candidates = nlohmann::json::array();
+			for (const MovableObject* mo: *vectorForLua) {
+				candidates.push_back({mo->GetUniqueID(), mo->GetID(), std::bit_cast<uint32_t>(mo->GetPos().m_X),
+				    std::bit_cast<uint32_t>(mo->GetPos().m_Y), std::bit_cast<uint32_t>(mo->GetRadius())});
+			}
+			System::PrintDiagnosticLine("[target-radius] " + nlohmann::json({{"tick", g_TimerMan.GetSimUpdateCount()},
+			    {"centre", {std::bit_cast<uint32_t>(centre.m_X), std::bit_cast<uint32_t>(centre.m_Y)}},
+			    {"radius", std::bit_cast<uint32_t>(radius)}, {"ignore_team", ignoreTeam},
+			    {"physical_only", getsHitByMOsOnly}, {"candidates", candidates}}).dump());
+		}
+	}
 	if (m_Speculation.active) {
 		for (MovableObject*& mo: *vectorForLua) {
 			mo = ViewIfSpeculating(mo);

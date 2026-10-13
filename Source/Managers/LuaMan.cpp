@@ -12894,6 +12894,19 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	}
 	// Kept by value for the same reason: a preview hook's failure names its script after the call.
 	const std::string previewScript = LuaMan::IsRunningPreviewHook() ? path : std::string();
+	static const std::string targetTraceFilter = [] { const char* value = std::getenv("CC_TEST_TARGET_TRACE"); return value ? value : ""; }();
+	nlohmann::json targetTrace;
+	if (!targetTraceFilter.empty() && path.find(targetTraceFilter) != std::string::npos && selfGlobalTableName == "_ScriptedObjects") {
+		const long uid = std::strtol(selfGlobalTableKey.c_str(), nullptr, 10);
+		if (const MovableObject* self = g_MovableMan.FindObjectByUniqueID(uid)) {
+			lua_Debug info{};
+			lua_pushvalue(m_State, stackStart + 2);
+			lua_getinfo(m_State, ">S", &info);
+			targetTrace = {{"tick", g_TimerMan.GetSimUpdateCount()}, {"uid", uid}, {"preset", self->GetPresetName()},
+			    {"script", path}, {"line", info.linedefined},
+			    {"before_vel", {std::bit_cast<uint32_t>(self->GetVel().m_X), std::bit_cast<uint32_t>(self->GetVel().m_Y)}}};
+		}
+	}
 	struct HookSelf {
 		std::string previous;
 		explicit HookSelf(const std::string& key) : previous(std::exchange(s_PreviewHookSelfKey, key)) {}
@@ -12930,6 +12943,30 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 
 	// A hook's return values go with the error handler.
 	lua_settop(m_State, stackStart);
+	if (!targetTrace.is_null()) {
+		const long uid = targetTrace["uid"].get<long>();
+		if (const MovableObject* self = g_MovableMan.FindObjectByUniqueID(uid)) {
+			targetTrace["pos"] = {std::bit_cast<uint32_t>(self->GetPos().m_X), std::bit_cast<uint32_t>(self->GetPos().m_Y)};
+			targetTrace["after_vel"] = {std::bit_cast<uint32_t>(self->GetVel().m_X), std::bit_cast<uint32_t>(self->GetVel().m_Y)};
+		}
+		PushScriptObjectInstanceTable(m_State, uid);
+		if (lua_istable(m_State, -1)) {
+			lua_getfield(m_State, -1, "target");
+			if (lua_isuserdata(m_State, -1)) {
+				try {
+					if (const auto* target = luabind::object_cast<MovableObject*>(luabind::object(luabind::from_stack(m_State, -1)))) {
+						targetTrace["target"] = {{"uid", target->GetUniqueID()}, {"moid", target->GetID()}, {"preset", target->GetPresetName()},
+						    {"pos", {std::bit_cast<uint32_t>(target->GetPos().m_X), std::bit_cast<uint32_t>(target->GetPos().m_Y)}},
+						    {"radius", std::bit_cast<uint32_t>(target->GetRadius())}};
+					}
+				} catch (const luabind::cast_failed&) {
+					targetTrace["target_not_movable"] = true;
+				}
+			}
+		}
+		lua_settop(m_State, stackStart);
+		System::PrintDiagnosticLine("[target-trace] " + targetTrace.dump());
+	}
 
 	m_CurrentlyRunningScriptPath = "";
 	return status;
