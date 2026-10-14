@@ -808,6 +808,7 @@ namespace RTE::CheckpointLua {
 		std::atomic<bool> m_CowGateFree{false};
 		std::mutex m_PrepareMutex;
 		std::vector<std::weak_ptr<Prepared>> m_Prepared;
+		static inline thread_local bool t_Collecting = false;
 		void FinishPrepared() noexcept;
 	public:
 		/// Test lever CCCP_TEST_FAULT_TICKS: the Lua heap write faults taken, and their time.
@@ -820,6 +821,14 @@ namespace RTE::CheckpointLua {
 			static std::array<std::atomic<uint64_t>, 2> tally{};
 			return tally;
 		}
+		/// Marks the calling thread's full collection of a state: its writes cover the whole heap once and say nothing about
+		/// what the ticks after the next boundary write, so they never join a heap's hot runs.
+		struct CollectionScope {
+			CollectionScope() noexcept { t_Collecting = true; }
+			~CollectionScope() { t_Collecting = false; }
+			CollectionScope(const CollectionScope&) = delete;
+			CollectionScope& operator=(const CollectionScope&) = delete;
+		};
 	private:
 		struct CowCopy {
 			uintptr_t base = 0;
@@ -840,7 +849,7 @@ namespace RTE::CheckpointLua {
 			// boundary copies them instead of fencing them. A copied run cannot fault to show it is still written, so a run
 			// stays until newer ones push it out.
 			static constexpr size_t c_HotRunCapacity = 512;
-			static constexpr size_t c_HotRunBytes = size_t{24} << 20;
+			static constexpr size_t c_HotRunBytes = size_t{32} << 20;
 			static constexpr uint64_t c_HotTicks = 2;
 			std::array<uint32_t, c_HotRunCapacity> hotRuns{};
 			size_t hotFirst = 0, hotCount = 0;
@@ -962,7 +971,7 @@ namespace RTE::CheckpointLua {
 				// The faulting page always opens; a neighbour opens only when this call saved it, since it is still fenced.
 				std::array<bool, c_FaultRunPages> opened{};
 				opened[page - first] = fault;
-				bool recorded = !fault || SaverThreads::TickStarts() - armedTick > c_HotTicks;
+				bool recorded = !fault || t_Collecting || SaverThreads::TickStarts() - armedTick > c_HotTicks;
 				for (const auto& copy: copies) {
 					if (copy->armed.load(std::memory_order_relaxed) != 1 || copy->completed) continue;
 					const bool faulted = page < copy->saved.size() && !copy->saved[page];

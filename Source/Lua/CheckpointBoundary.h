@@ -230,10 +230,10 @@ namespace RTE::CheckpointLua {
 		enum class Status { Prepared, Arming, Armed, Frozen, Cancelled };
 		struct Heap { HeapOwner::PreparationLease lease; std::shared_ptr<HeapOwner::Prepared> prepared; };
 		// A collection writes every page of its state's heap, so the heap collected in the next tick, which comes before any
-		// idle time, and those collected soon after while they fit a few milliseconds of copying, are copied whole at the
-		// boundary instead of fenced.
+		// idle time, and those collected soon after while they fit a couple of milliseconds of copying, are copied whole at
+		// the boundary instead of fenced; a saver copies the rest in the order they collect.
 		std::vector<bool> CopiedWhole(const std::vector<uint64_t>& until) const {
-			constexpr size_t c_WholeCopyBytes = size_t{40} << 20;
+			constexpr size_t c_WholeCopyBytes = size_t{16} << 20;
 			std::vector<bool> whole(m_Heaps.size(), false);
 			size_t bytes = 0;
 			for (const size_t index: m_DrainOrder) {

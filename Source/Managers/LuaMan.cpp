@@ -16515,6 +16515,7 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 		    g_ThreadMan.GetPriorityThreadPool().submit([luaState, fullCollection]() {
 			    ZoneScopedN("Lua Garbage Collection");
 			    std::lock_guard<std::recursive_mutex> lock(luaState->GetMutex());
+			    const CheckpointLua::HeapOwner::CollectionScope collecting;
 			    lua_State* state = luaState->GetLuaState();
 			    if (fullCollection) {
 				    // A whole cycle, so the tick a dropped object dies on does not follow its state's heap size.
