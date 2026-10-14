@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointNativeStorage.h"
+#include "NoInline.h"
 
 #include "DeterministicMath.h"
 
@@ -41,7 +42,7 @@ namespace RTE {
 		static thread_local State* s_CaptureSim;
 		static thread_local State* s_CaptureRender;
 		static inline std::atomic<int> s_CaptureScopes{0}; //!< Snapshot construction scopes open on all threads.
-		State* PrivateValues() const;
+		RTE_NOINLINE State* PrivateValues() const;
 		State& CheckpointValues() {
 			if (s_CaptureScopes.load(std::memory_order_relaxed) != 0) if (auto* local = PrivateValues()) return *local;
 			if (CheckpointNativeStorage::Reading() && (m_OwnedValues || CheckpointNativeStorage::IsView(this)))

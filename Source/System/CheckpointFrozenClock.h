@@ -1,5 +1,7 @@
 #pragma once
 
+#include "NoInline.h"
+
 #include <atomic>
 
 namespace RTE {
@@ -23,7 +25,7 @@ namespace RTE {
 			bool m_Counted;
 		};
 	private:
-		static const CheckpointFrozenClock* CurrentHere() noexcept;
+		RTE_NOINLINE static const CheckpointFrozenClock* CurrentHere() noexcept;
 		inline static thread_local const CheckpointFrozenClock* current = nullptr;
 		inline static std::atomic<int> s_Scopes{0}; //!< Scopes holding a clock, on all threads.
 	};

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointPagePool.h"
+#include "NoInline.h"
 #include "SaverThreadMark.h"
 
 #include <array>
@@ -86,8 +87,8 @@ namespace RTE {
 			std::shared_ptr<ReadState> m_State;
 			ReadState* m_Previous;
 		};
-		static bool Enabled(bool retained = false);
-		static bool RetainingAllocations() noexcept;
+		RTE_NOINLINE static bool Enabled(bool retained = false);
+		RTE_NOINLINE static bool RetainingAllocations() noexcept;
 		static bool WorldEnabled() noexcept;
 		static bool SetWorldEnabled(bool enabled) noexcept;
 		/// Starts fencing new owned pages in the background while a world is captured, a slice at a time.
@@ -103,7 +104,7 @@ namespace RTE {
 		};
 		static bool Reading() { return s_Readers.load(std::memory_order_relaxed) != 0 && ReadingHere(); }
 		/// Whether the calling thread has a read scope open; out of line, so the inlined checks read no thread-local.
-		static bool ReadingHere() noexcept;
+		RTE_NOINLINE static bool ReadingHere() noexcept;
 		static void RememberPrivate(void* address, size_t bytes, bool borrowed = false);
 		static void BorrowPrivate(const void* address) noexcept;
 		static bool PrivateBorrowed(const void* address) noexcept;
@@ -116,7 +117,7 @@ namespace RTE {
 		static ReadViews CurrentViews();
 		static const void* RootView(const void* source, size_t bytes = 1);
 		static void* Allocate(size_t bytes, size_t alignment);
-		static bool Deallocate(void* address) noexcept;
+		RTE_NOINLINE static bool Deallocate(void* address) noexcept;
 		static bool Owns(const void* address);
 		/// Slot pool, free slot and large buffer bytes, and how much grew inside explicit owned scopes.
 		static std::string InventoryCensus();
