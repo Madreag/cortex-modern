@@ -309,6 +309,19 @@ class JoinerBoxTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 peers.engine_levers([value])
 
+    def test_a_boxes_file_entry_places_only_its_own_engines(self):
+        host = dict(name="Host box", os="win32", hostname="host-computer", runner_env={"CC_RUNNER_AFFINITY_MASK": "0x0000ffff"})
+        joiner = dict(name="Joiner box", os="linux", hostname="joiner-computer")
+        path = Path(self.temporary.name) / "boxes.json"
+        path.write_text(json.dumps({"boxes": [host, joiner]}))
+        boxes = peers.selected_boxes("host=Host box,joiner=Joiner box", path)
+        self.assertEqual(peers.box_runner_env(boxes["host"]), {"CC_RUNNER_AFFINITY_MASK": "0x0000ffff"})
+        self.assertEqual(peers.box_runner_env(boxes["joiner"]), {})
+        for settings in ({"CC_TEST_TICK_COST_DETAILS": "1"}, {"CC_RUNNER_AFFINITY_MASK": 65535}, ["CC_RUNNER_AFFINITY_MASK"]):
+            path.write_text(json.dumps({"boxes": [dict(host, runner_env=settings), joiner]}))
+            with self.assertRaises(ValueError):
+                peers.selected_boxes("host=Host box,joiner=Joiner box", path)
+
     def test_headed_player_environment(self):
         environment = peers.video.headed_environment({"CCCP_HEADLESS": "1", "CC_TEST_READBACK_TIMING": "1"})
         self.assertEqual(environment, {"CC_TEST_READBACK_TIMING": "1", "CC_TEST_VISIBLE_WINDOW": "1"})

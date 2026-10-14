@@ -416,12 +416,23 @@ def engine_levers(values):
     return levers
 
 
+def box_runner_env(box):
+    """The runner settings a boxes-file entry gives every engine its box plays: the test rig's placement, never a scene's."""
+    settings = box.get("runner_env", {})
+    if not isinstance(settings, dict) or not all(re.fullmatch(r"CC_RUNNER_[A-Z0-9_]+", name) and isinstance(value, str)
+                                                 for name, value in settings.items()):
+        raise ValueError(box["name"] + ": runner_env takes CC_RUNNER_NAME settings with text values")
+    return dict(settings)
+
+
 def selected_boxes(value, path):
     assignments = dict(part.split("=", 1) for part in value.split(","))
     if set(assignments) != {"host", "joiner"} or len(set(name.casefold() for name in assignments.values())) != 2:
         raise ValueError("name two different boxes for host and joiner")
     entries = {box["name"].casefold(): box for box in read(path)["boxes"]}
     result = {role: entries[name.casefold()] for role, name in assignments.items()}
+    for box in result.values():
+        box_runner_env(box)
     if result["host"]["os"] != "win32" or result["joiner"]["os"] not in JOINER_SYSTEMS:
         raise ValueError("this scene launcher needs a Windows host and a Mac or Linux joiner")
     if result["host"]["hostname"].casefold() == result["joiner"]["hostname"].casefold():
@@ -453,7 +464,7 @@ def capture_scene(args):
     boxes = selected_boxes(args.peer_boxes, args.boxes_file)
     port = scene_port(document, getattr(args, "port", None))
     engine_env = engine_levers(getattr(args, "engine_env", None))
-    host_cpu_mask = getattr(args, "host_cpu_mask", None)
+    runner_env = {role: box_runner_env(box) for role, box in boxes.items()}
     out, repo = args.out.resolve(), args.repo.resolve()
     source = video.source_evidence(repo)
     if source["dirty"]:
@@ -471,7 +482,7 @@ def capture_scene(args):
                "size": document.get("size"), "settings": {}, "render_cap": 60, "started": video.stamp(),
                "command": [sys.executable, *sys.argv], "scratch_root": str(out.parent),
                "scratch_limit_bytes": video.SCRATCH_LIMIT, "topology": "spread", "proof": False, "runs": [],
-               "engine_env": engine_env, "host_cpu_mask": host_cpu_mask, "port": port}
+               "engine_env": engine_env, "runner_env": runner_env, "port": port}
     video.write_json(out / "capture.json", capture)
     for index, run in enumerate(scene_runs(document)):
         name = run.get("name", "run" + str(index))
@@ -485,9 +496,8 @@ def capture_scene(args):
                                engine_env=engine_env, scene_relative=relative, scene_sha256=scene_hash, fps=video.DEFAULT_FPS,
                                sheet_every=15, port=port,
                                run_name=name, signal_files=player_files(document, run))
-                # Where the Windows runner places a host engine; the POSIX runner has no such limit.
-                if role == "host" and host_cpu_mask and box["os"] == "win32":
-                    request["runner_env"] = {"CC_RUNNER_AFFINITY_MASK": host_cpu_mask}
+                if runner_env[role]:
+                    request["runner_env"] = runner_env[role]
                 request_path = controls / (name + "-" + role + ".json")
                 video.write_json(request_path, request)
                 log = (controls / (name + "-" + role + ".log")).open("w", encoding="utf-8")
@@ -572,8 +582,6 @@ def main():
     parser.add_argument("--port", type=int, help=f"this lane's lobby port inside {video.PORT_LO}-{video.PORT_HI}; defaults to the scene's port_base")
     parser.add_argument("--engine-env", action="append", default=[], metavar="CC_TEST_NAME=VALUE",
                         help="a test lever set in both players' engines; recorded in the capture")
-    parser.add_argument("--host-cpu-mask", type=lambda text: hex(int(text, 0)), metavar="0xMASK",
-                        help="the processors a Windows host's engine may run on, through its runner; recorded in the capture")
     parser.add_argument("--check-spread", type=Path)
     parser.add_argument("--play", type=Path)
     parser.add_argument("--pack", type=Path)
