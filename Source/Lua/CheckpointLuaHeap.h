@@ -522,6 +522,10 @@ namespace RTE::CheckpointLua {
 
 		/// Every copy buffer any heap has mapped, idle ones included, and the idle part of it.
 		static size_t MappedCopyBytes() { return CopyBytes(false).load(std::memory_order_relaxed); }
+		/// The copy buffers' committed bytes: those a capture is using or about to use.
+		static size_t CommittedCopyBytes() { return SlabCommitted().load(std::memory_order_relaxed); }
+		/// Whether a capture is near, so a copy buffer given back keeps its memory for the next one.
+		static void KeepCopiesWarm(bool warm) noexcept { KeepWarm().store(warm, std::memory_order_release); }
 		/// Every live heap's committed pages.
 		static size_t CommittedHeapBytes() { return HeapCommitted().load(std::memory_order_relaxed); }
 		static size_t IdleCopyBytes() { return CopyBytes(true).load(std::memory_order_relaxed); }
@@ -805,6 +809,11 @@ namespace RTE::CheckpointLua {
 			size_t capacity = 0;
 			HeapOwner* owner = nullptr;
 			uint64_t ownerIdentity = 0;
+			std::atomic<bool> committed{true};
+			/// Idempotent and safe beside another commit of the same buffer.
+			bool Commit() noexcept;
+			/// Only while nothing can write the buffer.
+			void Decommit() noexcept;
 			~Slab();
 		};
 		static constexpr size_t c_IdleSlabs = 1; // With one capture in flight, the next freeze reuses the buffer the last one gave back.
@@ -1249,6 +1258,14 @@ namespace RTE::CheckpointLua {
 			static std::atomic<size_t> bytes{0};
 			return bytes;
 		}
+		static std::atomic<size_t>& SlabCommitted() {
+			static std::atomic<size_t> bytes{0};
+			return bytes;
+		}
+		static std::atomic<bool>& KeepWarm() {
+			static std::atomic<bool> warm{false};
+			return warm;
+		}
 		static std::atomic<size_t>& CopyBytes(bool idle) {
 			static std::atomic<size_t> mapped{0}, idleBytes{0};
 			return idle ? idleBytes : mapped;
@@ -1271,7 +1288,7 @@ namespace RTE::CheckpointLua {
 			static std::atomic<size_t> calls{0};
 			return calls;
 		}
-		std::shared_ptr<Slab> TakeSlab(size_t pages, bool bounded = false) {
+		std::shared_ptr<Slab> TakeSlab(size_t pages, bool bounded = false, bool commit = true) {
 			CheckpointFailure::Check(CheckpointFailure::Point::LuaPages);
 			if (pages > std::numeric_limits<size_t>::max() / Snapshot::c_PageBytes) throw std::bad_alloc();
 			const size_t held = m_LiveSlabs.fetch_add(1, std::memory_order_relaxed);
@@ -1300,16 +1317,28 @@ namespace RTE::CheckpointLua {
 				slab->owner = this;
 				slab->ownerIdentity = m_Identity;
 				slab->capacity = pages;
-				slab->pages = static_cast<Snapshot::Page*>(MapPages(slab->capacity * Snapshot::c_PageBytes));
+				slab->committed.store(commit, std::memory_order_relaxed);
+				slab->pages = static_cast<Snapshot::Page*>(MapPages(slab->capacity * Snapshot::c_PageBytes, commit));
 				if (!slab->pages) throw std::bad_alloc();
 				m_FreshBytes += slab->capacity * Snapshot::c_PageBytes;
 				CopyBytes(false).fetch_add(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
+				if (commit) SlabCommitted().fetch_add(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
+			} else if (commit && !slab->Commit()) {
+				throw std::bad_alloc();
 			}
 			reservation.transferred = true;
 			return std::shared_ptr<Slab>(slab.release(), [](Slab* returned) { ReturnSlab(returned->owner, returned); });
 		}
-		// A buffer goes back to its heap only while that heap exists; one released after it is unmapped instead.
+		// A buffer goes back to its heap only while that heap exists; one released after it is unmapped instead. With no
+		// capture near it keeps no memory, and a game thread leaves giving it back to the savers.
 		static void ReturnSlab(HeapOwner* owner, Slab* slab) {
+			if (!KeepWarm().load(std::memory_order_acquire) && slab->committed.load(std::memory_order_acquire)) {
+				if (!SaverThreads::Current() && SaverThreads::Gated()) try {
+					SaverThreads::Pool().push_task([owner, slab] { ReturnSlab(owner, slab); });
+					return;
+				} catch (...) {}
+				slab->Decommit();
+			}
 			{
 				std::lock_guard lock(RegistryMutex());
 				const auto found = LiveHeaps().find(owner);
@@ -1350,6 +1379,7 @@ namespace RTE::CheckpointLua {
 		static void DropSlab(Slab* slab) {
 			Unmap(slab->pages, slab->capacity * Snapshot::c_PageBytes);
 			CopyBytes(false).fetch_sub(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
+			if (slab->committed.load(std::memory_order_acquire)) SlabCommitted().fetch_sub(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 			slab->pages = nullptr;
 			delete slab;
 		}
@@ -1434,7 +1464,11 @@ namespace RTE::CheckpointLua {
 		}
 
 #ifdef _WIN32
-		static void* MapPages(size_t bytes) noexcept { return VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE); }
+		static void* MapPages(size_t bytes, bool commit = true) noexcept {
+			return VirtualAlloc(nullptr, bytes, commit ? MEM_RESERVE | MEM_COMMIT : MEM_RESERVE, commit ? PAGE_READWRITE : PAGE_NOACCESS);
+		}
+		static bool CommitPages(void* pages, size_t bytes) noexcept { return VirtualAlloc(pages, bytes, MEM_COMMIT, PAGE_READWRITE) != nullptr; }
+		static void DecommitPages(void* pages, size_t bytes) noexcept { VirtualFree(pages, bytes, MEM_DECOMMIT); }
 		static void Unmap(void* pages, size_t) noexcept { VirtualFree(pages, 0, MEM_RELEASE); }
 		void Reserve(size_t shift) {
 			void* base = VirtualAlloc(nullptr, c_ReserveBytes + c_Colors * c_PageStride, MEM_RESERVE, PAGE_NOACCESS);
@@ -1453,10 +1487,13 @@ namespace RTE::CheckpointLua {
 			m_Reservation = m_Base = 0;
 		}
 #else
-		static void* MapPages(size_t bytes) noexcept {
+		// An anonymous mapping takes memory only as it is touched, so a reserved buffer is mapped the same way.
+		static void* MapPages(size_t bytes, bool = true) noexcept {
 			void* pages = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 			return pages == MAP_FAILED ? nullptr : pages;
 		}
+		static bool CommitPages(void*, size_t) noexcept { return true; }
+		static void DecommitPages(void* pages, size_t bytes) noexcept { madvise(pages, bytes, MADV_DONTNEED); }
 		static void Unmap(void* pages, size_t bytes) noexcept { munmap(pages, bytes); }
 		void Reserve(size_t shift) {
 			void* base = mmap(nullptr, c_ReserveBytes + c_Colors * c_PageStride, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
@@ -1611,6 +1648,7 @@ namespace RTE::CheckpointLua {
 			std::unique_lock lock(m_Mutex, std::try_to_lock);
 			if (!lock || m_Finished || m_Copy->armed.load(std::memory_order_relaxed) != 0) return false;
 			const auto started = std::chrono::steady_clock::now();
+			if (!BeginWrites()) return false;
 			m_Data->serial = G(owner.m_State)->objserial;
 			CowCoordinator::Prepared prepared{m_Coordinator.get(), m_Copy};
 			if (!(byCopy ? CowCoordinator::ArmByCopy : CowCoordinator::Arm)(&prepared, m_Data->base, m_Data->committed)) return false;
@@ -1619,6 +1657,27 @@ namespace RTE::CheckpointLua {
 			return true;
 		}
 		Snapshot Image() const { return Snapshot(m_Data); }
+		/// Commits the copy buffer and makes it resident, so a boundary's copies and the faults after it write resident pages;
+		/// a run of pages at a time, and none once a boundary has begun.
+		void Warm() noexcept {
+			constexpr size_t runPages = 64;
+			const size_t pageBytes = m_Copy->pageBytes, pages = m_Data->committed / pageBytes;
+			auto* destination = reinterpret_cast<volatile std::byte*>(m_Copy->destination);
+			for (size_t first = 0; first < pages; first += runPages) {
+				m_Touching.store(true, std::memory_order_seq_cst);
+				const bool stop = m_WritesBegun.load(std::memory_order_seq_cst) || !m_Buffer->Commit();
+				if (!stop) for (size_t page = first; page < std::min(first + runPages, pages); ++page) destination[page * pageBytes] = std::byte{};
+				m_Touching.store(false, std::memory_order_seq_cst);
+				if (stop) return;
+				try { SaverThreads::YieldToGame(); } catch (...) {}
+			}
+		}
+		/// Gives the copy buffer's memory back while no boundary has begun; the boundary commits it again.
+		void Cool() noexcept {
+			m_Touching.store(true, std::memory_order_seq_cst);
+			if (!m_WritesBegun.load(std::memory_order_seq_cst)) m_Buffer->Decommit();
+			m_Touching.store(false, std::memory_order_seq_cst);
+		}
 		/// The bytes still fenced: what the boundary neither copied nor any fault has saved since.
 		size_t FencedBytes() const noexcept {
 			return m_Data->committed - std::min(m_Data->committed, m_Coordinator->SavedPages(*m_Copy) * m_Copy->pageBytes);
@@ -1698,14 +1757,22 @@ namespace RTE::CheckpointLua {
 		}
 	private:
 		friend class HeapOwner;
-		Prepared(std::shared_ptr<Snapshot::Data> data, std::shared_ptr<CowCopy> copy, std::shared_ptr<CowCoordinator> coordinator) :
-		    m_Data(std::move(data)), m_Copy(std::move(copy)), m_Coordinator(std::move(coordinator)),
+		Prepared(std::shared_ptr<Snapshot::Data> data, std::shared_ptr<CowCopy> copy, std::shared_ptr<CowCoordinator> coordinator, std::shared_ptr<Slab> buffer) :
+		    m_Data(std::move(data)), m_Copy(std::move(copy)), m_Coordinator(std::move(coordinator)), m_Buffer(std::move(buffer)),
 		    m_Cancelled(std::make_exception_ptr(std::runtime_error("prepared Lua heap capture was cancelled"))) {
 			m_Data->ready = m_Ready.get_future().share();
+		}
+		// A boundary's writes into the buffer begin here: warming and cooling stop, the run in progress ends, the buffer commits.
+		bool BeginWrites() noexcept {
+			m_WritesBegun.store(true, std::memory_order_seq_cst);
+			while (m_Touching.load(std::memory_order_seq_cst)) std::this_thread::yield();
+			return m_Buffer->Commit();
 		}
 		std::shared_ptr<Snapshot::Data> m_Data;
 		std::shared_ptr<CowCopy> m_Copy;
 		std::shared_ptr<CowCoordinator> m_Coordinator;
+		std::shared_ptr<Slab> m_Buffer;
+		std::atomic<bool> m_WritesBegun{false}, m_Touching{false};
 		std::promise<void> m_Ready;
 		std::exception_ptr m_Cancelled;
 		std::mutex m_Mutex;
@@ -1761,7 +1828,7 @@ namespace RTE::CheckpointLua {
 		session.m_Started = std::chrono::steady_clock::now();
 		m_Data->serial = G(owner.m_State)->objserial;
 		session.m_Spans.reserve(CowCoordinator::c_HotRunCapacity + 1);
-		if (!m_Coordinator->PlanArm(*m_Copy, m_Data->committed, whole, session.m_Spans)) return false;
+		if (!m_Coordinator->PlanArm(*m_Copy, m_Data->committed, whole, session.m_Spans) || !BeginWrites()) return false;
 		session.m_Prepared = this;
 		session.m_Owner = &owner;
 		session.m_Whole = whole;
@@ -1786,10 +1853,9 @@ namespace RTE::CheckpointLua {
 		const size_t pageBytes = PageWriteFence::SystemPageBytes();
 		if (!data->state || !pageBytes || !data->committed || data->base % pageBytes || data->committed % pageBytes)
 			throw std::runtime_error("the prepared Lua heap has no aligned committed range");
-		auto slab = TakeSlab(data->committed / Snapshot::c_PageBytes, true);
-		// A later live write copies into resident storage without first touching its shadow pages.
-		auto* destination = reinterpret_cast<volatile std::byte*>(slab->pages);
-		for (size_t offset = 0; offset < data->committed; offset += pageBytes) destination[offset] = std::byte{};
+		// Reserved only: a capture coming near commits and touches it (Prepared::Warm), the boundary commits it at the latest.
+		auto slab = TakeSlab(data->committed / Snapshot::c_PageBytes, true, false);
+		auto buffer = slab;
 		data->pages = slab->pages; data->buffer = std::move(slab);
 		data->faults = std::make_shared<CopyFaultStats>();
 		auto copy = std::make_shared<CowCopy>();
@@ -1801,7 +1867,7 @@ namespace RTE::CheckpointLua {
 			m_CowCoordinator = std::make_shared<CowCoordinator>();
 			m_CowCoordinator->base = m_Base; m_CowCoordinator->pageBytes = pageBytes;
 		}
-		auto prepared = std::shared_ptr<Prepared>(new Prepared(std::move(data), std::move(copy), m_CowCoordinator));
+		auto prepared = std::shared_ptr<Prepared>(new Prepared(std::move(data), std::move(copy), m_CowCoordinator, std::move(buffer)));
 		const auto keepWritable = [](void*, uintptr_t, size_t) noexcept { return true; };
 		if (!PageWriteFence::WatchCopies(this, {reinterpret_cast<uint8_t*>(m_Base), prepared->m_Data->committed}, CowCoordinator::OnWrite, m_CowCoordinator.get(), keepWritable))
 			throw std::runtime_error("could not prepare Lua heap page watches");
@@ -1826,6 +1892,21 @@ namespace RTE::CheckpointLua {
 		if (!pages) return;
 		HeapOwner::Unmap(pages, capacity * Snapshot::c_PageBytes);
 		HeapOwner::CopyBytes(false).fetch_sub(capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
+		if (committed.load(std::memory_order_acquire)) HeapOwner::SlabCommitted().fetch_sub(capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
+	}
+
+	inline bool HeapOwner::Slab::Commit() noexcept {
+		if (committed.load(std::memory_order_acquire)) return true;
+		if (!HeapOwner::CommitPages(pages, capacity * Snapshot::c_PageBytes)) return false;
+		if (!committed.exchange(true, std::memory_order_acq_rel)) HeapOwner::SlabCommitted().fetch_add(capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
+		return true;
+	}
+
+	inline void HeapOwner::Slab::Decommit() noexcept {
+		if (!committed.load(std::memory_order_acquire)) return;
+		HeapOwner::DecommitPages(pages, capacity * Snapshot::c_PageBytes);
+		committed.store(false, std::memory_order_release);
+		HeapOwner::SlabCommitted().fetch_sub(capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 	}
 
 	inline bool HeapOwner::RunPrivateNativeSelfTest() {
