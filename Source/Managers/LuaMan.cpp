@@ -5976,12 +5976,14 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 		if (!activity) return 0;
 		for (int index = 0; index < Players::MaxPlayerCount; ++index) {
 			if (handle == activity->GetPlayerController(index)) return found(activity, "player-controller", index);
+			// A seat stand-in no script could hold is never made here: a saver runs this off the simulation thread.
 			if (auto* game = dynamic_cast<GameActivity*>(activity)) {
-				if (handle == game->GetBuyGUI(index)) return found(game, "buy-menu", index);
-				if (handle == game->GetEditorGUI(index)) return found(game, "editor-menu", index);
-				if (const int count = editorMember(game->GetEditorGUI(index))) return count;
-				if (handle == game->GetBanner(GameActivity::YELLOW, index)) return found(game, "yellow-banner", index);
-				if (handle == game->GetBanner(GameActivity::RED, index)) return found(game, "red-banner", index);
+				if (const BuyMenuGUI* menu = game->GetExistingBuyGUI(index); menu && handle == menu) return found(game, "buy-menu", index);
+				SceneEditorGUI* const editor = game->GetExistingEditorGUI(index);
+				if (editor && handle == editor) return found(game, "editor-menu", index);
+				if (const int count = editorMember(editor)) return count;
+				if (const GUIBanner* banner = game->GetExistingBanner(GameActivity::YELLOW, index); banner && handle == banner) return found(game, "yellow-banner", index);
+				if (const GUIBanner* banner = game->GetExistingBanner(GameActivity::RED, index); banner && handle == banner) return found(game, "red-banner", index);
 			}
 		}
 		return 0;
@@ -16147,6 +16149,8 @@ bool LuaMan::RestoreRoundStartScripts(const std::vector<uint8_t>& blob, std::str
 		return fail("the host runs " + std::to_string(graphs.size()) + " script states, this peer " + std::to_string(states));
 	}
 	g_MovableMan.PurgeAllMOs();
+	// The round's captures read every native its scripts hold from checkpoint storage, though its coordinator starts after this.
+	CheckpointNativeStorage::WorldAllocationScope roundValues(true);
 	// The graph carries each state's compiled scripts too, so a script the host already compiled never runs again here.
 	s_RoundStartScripts = true;
 	struct Scope { ~Scope() { s_RoundStartScripts = false; } } scope;
@@ -16824,6 +16828,7 @@ void LuaMan::PrepareCheckpointValues() {
 	if (CheckpointNativeStorage::Enabled()) { g_SimRNG.PrepareCheckpointValues(); g_RenderRNG.PrepareCheckpointValues(); }
 	if (CheckpointNativeStorage::Enabled()) MovableObject::PrepareCheckpointCounters();
 	if (CheckpointNativeStorage::Enabled()) g_SceneMan.PrepareCheckpointValues();
+	if (CheckpointNativeStorage::Enabled()) { g_UInputMan.PrepareCheckpointValues(); g_FrameMan.PrepareCheckpointValues(); g_PostProcessMan.PrepareCheckpointValues(); }
 	if (CheckpointNativeStorage::Enabled()) g_ActivityMan.PrepareCheckpointValues();
 	if (CheckpointNativeStorage::Enabled()) g_AudioMan.PrepareCheckpointRegistryValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointActorValues();

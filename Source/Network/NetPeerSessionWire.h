@@ -44,7 +44,8 @@ namespace RTE {
 		std::set<uint8_t> rawReaders;
 		struct FrameFlow { uint64_t sent = 0, received = 0, sentAtMs = 0, heardAtMs = 0; };
 		std::map<const INetTransport*, std::map<NetPeerId, FrameFlow>> frameFlow;
-		NetPeerId nextAdmission = 0x80000000U;
+		// Admitted routes stay clear of every id a transport hands the session: direct ids count from 1, ICE ids carry the top bit.
+		NetPeerId nextAdmission = 0xC0000000U;
 		struct Pending { uint64_t sequence = 0; NetTransportLane lane; std::vector<uint8_t> bytes; uint64_t sendAfterMs = 0; std::array<uint8_t, 32> sendKey{}; uint64_t previous = 0; bool acknowledged = false; uint64_t lastSentMs = 0; uint8_t repeats = 0; };
 		std::map<uint8_t, std::deque<Pending>> pending;
 		size_t pendingBytes = 0;

@@ -1,5 +1,6 @@
 #include "Loadout.h"
 #include "CheckpointNativeSnapshot.h"
+#include "CheckpointFrozenContainers.h"
 #include "SceneObject.h"
 #include "PresetMan.h"
 #include "MovableObject.h"
@@ -114,11 +115,12 @@ int Loadout::Save(Writer& writer) const {
 		writer << m_pDeliveryCraft->GetModuleAndPresetName();
 		writer.ObjectEnd();
 	}
-	for (std::list<const SceneObject*>::const_iterator itr = m_CargoItems.begin(); itr != m_CargoItems.end(); ++itr) {
+	// A capture's frozen copy holds the list's nodes as they were at its boundary: the walk goes through the frozen view, not the live list.
+	for (const SceneObject* item: CheckpointValues(m_CargoItems)) {
 		writer.NewProperty("AddCargoItem");
-		writer.ObjectStart((*itr)->GetClassName());
+		writer.ObjectStart(item->GetClassName());
 		writer.NewProperty("PresetName");
-		writer << (*itr)->GetModuleAndPresetName();
+		writer << item->GetModuleAndPresetName();
 		writer.ObjectEnd();
 	}
 

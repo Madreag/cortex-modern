@@ -66,6 +66,12 @@ namespace RTE {
 		return enabled;
 	}
 
+	std::string CheckpointCloneCost::DescribeOpen() {
+		std::string chain;
+		for (const CheckpointCloneCost* open = s_OpenCloneCost; open; open = open->m_Parent) chain.insert(0, std::string(open->m_Kind) + (chain.empty() ? "" : " > "));
+		return chain;
+	}
+
 	void CheckpointCloneCost::Begin() {
 		m_Parent = s_OpenCloneCost;
 		s_OpenCloneCost = this;

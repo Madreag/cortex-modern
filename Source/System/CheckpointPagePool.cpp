@@ -4,6 +4,7 @@
 #include "CheckpointPageCopy.h"
 #include "CheckpointFailure.h"
 #include "CheckpointNativeStorage.h"
+#include "CheckpointNativeSnapshot.h"
 #include "CheckpointString.h"
 #include "CheckpointFrozenContainers.h"
 #include "CheckpointArchive.h"
@@ -1444,6 +1445,15 @@ bool CheckpointNativeStorage::IsView(const void* address) {
 	return Original(address) != address;
 }
 
+namespace {
+	// The address, the size and what this thread was freezing, so a refused capture names the value it could not read.
+	std::string OutsideInventory(const char* what, const void* source, size_t bytes) {
+		std::string message = std::format("native {} is outside the frozen inventory (address {:#x}, {} bytes", what, reinterpret_cast<uintptr_t>(source), bytes);
+		if (const std::string chain = CheckpointCloneCost::DescribeOpen(); !chain.empty()) message += ", freezing " + chain;
+		return message + ")";
+	}
+}
+
 const void* CheckpointNativeStorage::View(const void* source, size_t bytes) {
 	SaverThreads::YieldToGame();
 	if (!s_Read || !source) return source;
@@ -1451,7 +1461,7 @@ const void* CheckpointNativeStorage::View(const void* source, size_t bytes) {
 	if (const void* root = RootView(source, bytes)) return root;
 	for (const auto& pages: s_Read->pages) if (pages->Original(source, bytes)) return source;
 	for (const auto& pages: s_Read->pages) if (pages->Contains(source, bytes)) return pages->ReadBytes(source, bytes).data();
-	throw std::logic_error("native value is outside the frozen inventory");
+	throw std::logic_error(OutsideInventory("value", source, bytes));
 }
 
 std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointNativeStorage::PagesFor(const void* source, size_t bytes) {
@@ -1467,7 +1477,7 @@ const void* CheckpointNativeStorage::ViewObject(const void* source) {
 	source = Original(source);
 	if (const void* root = RootView(source)) return root;
 	for (const auto& pages: s_Read->pages) if (const void* view = pages->ReadAllocation(source)) return view;
-	throw std::logic_error("native object is outside the frozen inventory");
+	throw std::logic_error(OutsideInventory("object", source, 0));
 }
 
 const std::string* CheckpointNativeStorage::ReadString(const char* source, size_t bytes) {

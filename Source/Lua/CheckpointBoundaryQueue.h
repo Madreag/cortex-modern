@@ -7,7 +7,10 @@
 #include <atomic>
 #include <functional>
 #include <future>
+#include <mutex>
+#include <string>
 #include <thread>
+#include <utility>
 #include <type_traits>
 #include <array>
 #include <chrono>
@@ -47,6 +50,21 @@ namespace RTE::CheckpointLua {
 			m_Refresh.store(true, std::memory_order_release); Wake();
 		}
 		bool Ready() const noexcept { return m_State.load(std::memory_order_acquire) == State::Ready; }
+		/// Why a capture asked for now would not be taken (empty when it would), and whether the queue failed rather than being busy.
+		std::pair<std::string, bool> NotReadyState() const {
+			switch (m_State.load(std::memory_order_acquire)) {
+				case State::Ready: return {};
+				case State::Preparing: return {"the checkpoint inventory is being prepared", false};
+				case State::Rebuild: return {"the checkpoint inventory is being rebuilt", false};
+				case State::Claimed: case State::Armed: case State::Working: return {"the previous capture is still being written", false};
+				case State::Stopped: return {"the checkpoint saver has stopped", true};
+				case State::Failed: {
+					std::lock_guard lock(m_FailureMutex);
+					return {"the checkpoint inventory could not be prepared" + (m_PrepareFailure.empty() ? std::string() : ": " + m_PrepareFailure), true};
+				}
+			}
+			return {"the checkpoint saver is in an unknown state", true};
+		}
 		bool TryCapture(const Header& header, std::shared_future<bool>& result) {
 			return TryCapture(result, [&header](Header& target) noexcept {
 				if constexpr (std::is_trivially_copyable_v<Header>) std::memcpy(&target, &header, sizeof(Header));
@@ -93,6 +111,16 @@ namespace RTE::CheckpointLua {
 		std::atomic<State> m_State{State::Preparing};
 		std::atomic<bool> m_Refresh{false};
 		std::atomic<uint64_t> m_Wake{0};
+		mutable std::mutex m_FailureMutex;
+		std::string m_PrepareFailure; //!< Why the last preparation was refused.
+		void NotePrepareFailure(std::exception_ptr error) noexcept {
+			try {
+				std::string what = "an unknown error";
+				try { std::rethrow_exception(error); } catch (const std::exception& failure) { what = failure.what(); } catch (...) {}
+				std::lock_guard lock(m_FailureMutex);
+				m_PrepareFailure = std::move(what);
+			} catch (...) {}
+		}
 		std::jthread m_Worker;
 		void Wake() noexcept { m_Wake.fetch_add(1, std::memory_order_release); m_Wake.notify_one(); }
 		void Publish(State state) noexcept { m_State.store(state, std::memory_order_release); m_State.notify_all(); }
@@ -104,7 +132,7 @@ namespace RTE::CheckpointLua {
 				if (!boundary) throw std::runtime_error("checkpoint inventory preparation returned no boundary");
 				m_Plan = std::make_unique<Plan>(std::move(boundary));
 				Publish(State::Ready);
-			} catch (...) { Publish(State::Failed); }
+			} catch (...) { NotePrepareFailure(std::current_exception()); Publish(State::Failed); }
 		}
 		void Work(std::stop_token stop) noexcept {
 			FloatingPointEnvironment::Initialize();

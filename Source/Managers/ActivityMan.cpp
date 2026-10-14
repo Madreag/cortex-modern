@@ -750,7 +750,10 @@ struct ActivityMan::PreparedAutosave {
 				clock->call->Finish(elapsed);
 			}
 		} finish{owner, clock, began};
-		if (!NetActorOwnership::CheckpointValuesReady() || !ContentFile::CheckpointSamplesReady() || (result.valid() && result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)) return false;
+		if (!NetActorOwnership::CheckpointValuesReady()) { owner.NoteAutosaveRefusal(false, "the saved actor owners are not ready"); return false; }
+		if (!ContentFile::CheckpointSamplesReady()) { owner.NoteAutosaveRefusal(false, "the loaded samples are not ready"); return false; }
+		if (result.valid() && result.wait_for(std::chrono::seconds(0)) != std::future_status::ready) { owner.NoteAutosaveRefusal(false, "the previous capture is still being written"); return false; }
+		const auto [notReady, failed] = queue.NotReadyState();
 		const long uid = MovableObject::GetUniqueIDCounter();
 		const uint64_t simDraws = g_SimRNG.GetDrawCount(), renderDraws = g_RenderRNG.GetDrawCount(), soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		// The plan keeps the hold until it is replaced, so no frozen iterator outlives the container it describes.
@@ -767,7 +770,9 @@ struct ActivityMan::PreparedAutosave {
 			header.tick = tick; header.identity = identity; written = header.written;
 			clock->call->parts[0] = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count();
 		});
+		if (!accepted) owner.NoteAutosaveRefusal(notReady.empty() || failed, !notReady.empty() ? std::string_view(notReady) : std::string_view("the capture's pages could not be armed"));
 		if (accepted) {
+			owner.NoteAutosaveRefusal(false, {});
 			owner.m_LastAutosaveTick = tick; owner.m_LastAutosaveBytes = 0;
 			owner.m_LastCaptureEffects = {MovableObject::GetUniqueIDCounter() - uid, g_SimRNG.GetDrawCount() - simDraws,
 			    g_RenderRNG.GetDrawCount() - renderDraws, g_AudioMan.GetCheckpointSoundContainerCursor() != soundCursor};
@@ -779,13 +784,18 @@ struct ActivityMan::PreparedAutosave {
 		try {
 			owner.NoteAutosaveVerdict(header.tick, false, header.written->verdict);
 			try { std::rethrow_exception(error); }
-			catch (const ScriptGraphRefusal& refusal) { owner.QueueDeferredSaveRefusal(SaveKind::Autosave, refusal.problems); }
-			catch (const std::bad_alloc&) { std::fputs("[autosave] failed reason=out of memory\n", stdout); }
-			catch (const std::exception& failure) { System::PrintDiagnosticLine(std::format("[autosave] failed tick={} reason={}", header.tick, failure.what())); }
+			catch (const ScriptGraphRefusal& refusal) { owner.QueueDeferredSaveRefusal(SaveKind::Autosave, refusal.problems); owner.NoteAutosaveRefusal(true, "the script graph was refused"); }
+			catch (const std::bad_alloc&) { std::fputs("[autosave] failed reason=out of memory\n", stdout); owner.NoteAutosaveRefusal(true, "the writer ran out of memory"); }
+			catch (const std::exception& failure) {
+				System::PrintDiagnosticLine(std::format("[autosave] failed tick={} reason={}", header.tick, failure.what()));
+				owner.NoteAutosaveRefusal(true, "the writer refused it: ", failure.what());
+			}
 		} catch (...) { std::fputs("[autosave] failed reason=out of memory\n", stdout); }
 	}
 
 	bool Complete(const Header& header, const CheckpointLua::Boundary& boundary) {
+		if (uint64_t refused = header.tick; header.tick != 0 && owner.m_RefusedWriterTick.compare_exchange_strong(refused, 0, std::memory_order_relaxed))
+			throw std::runtime_error("an injected refusal");
 		if (const char* phases = std::getenv("CCCP_CHECKPOINT_PHASES"); phases && std::string_view(phases) == "1") {
 			size_t ranges = 0, bytes = 0, copied = 0, fenced = 0;
 			for (const auto& pages: boundary.NativeViews().pages) {
@@ -943,7 +953,7 @@ void ActivityMan::CollectPreparedAutosave() {
 }
 
 void ActivityMan::Clear() {
-	WaitForAutosaveTasks(); m_PreparedAutosave.reset();
+	DropPreparedAutosave();
 	m_DefaultActivityType = "GATutorial";
 	m_DefaultActivityName = "Tutorial Mission";
 	m_Activity = nullptr;
@@ -1034,6 +1044,20 @@ void ActivityMan::NoteAutosaveVerdict(uint64_t tick, bool archived, const std::s
 	} else m_AutosaveVerdicts.push_back(AutosaveVerdict{tick, archived});
 }
 
+void ActivityMan::NoteAutosaveRefusal(bool lasting, std::string_view reason, std::string_view detail) noexcept {
+	try {
+		std::lock_guard lock(m_DeferredRefusalMutex);
+		m_LastAutosaveRefusal.reason.assign(reason);
+		m_LastAutosaveRefusal.reason.append(detail);
+		m_LastAutosaveRefusal.lasting = lasting;
+	} catch (...) {}
+}
+
+ActivityMan::AutosaveRefusal ActivityMan::LastAutosaveRefusal() const {
+	std::lock_guard lock(m_DeferredRefusalMutex);
+	return m_LastAutosaveRefusal;
+}
+
 std::optional<ActivityMan::AutosaveVerdict> ActivityMan::TakeAutosaveVerdict() {
 	std::lock_guard lock(m_DeferredRefusalMutex);
 	if (m_AutosaveVerdicts.empty()) return std::nullopt;
@@ -1115,9 +1139,10 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 	const auto captureStart = std::chrono::steady_clock::now();
 	if (!AutosaveStore::ValidMatchId(matchId) || tick == 0) return false;
 	if (CheckpointNativeStorage::WorldEnabled()) {
-		try { return m_PreparedAutosave && m_PreparedAutosave->Capture(matchId, tick, identity, captureStart); }
-		catch (const std::bad_alloc&) { std::fputs("[autosave] failed reason=out of memory\n", stdout); }
-		catch (const std::exception&) { std::fputs("[autosave] failed reason=boundary refused\n", stdout); }
+		if (!m_PreparedAutosave) { NoteAutosaveRefusal(true, "no checkpoint inventory was prepared"); return false; }
+		try { return m_PreparedAutosave->Capture(matchId, tick, identity, captureStart); }
+		catch (const std::bad_alloc&) { std::fputs("[autosave] failed reason=out of memory\n", stdout); NoteAutosaveRefusal(true, "out of memory"); }
+		catch (const std::exception& error) { std::fputs("[autosave] failed reason=boundary refused\n", stdout); NoteAutosaveRefusal(true, "the capture's boundary refused it: ", error.what()); }
 		return false;
 	}
 	bool accepted = false;
@@ -1977,9 +2002,18 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 }
 
 void ActivityMan::WaitForAutosaveTasks() const {
+	// The game waits on the saver here, so the saver may not wait for the game's idle time.
+	const SaverThreads::Lend lend;
 	if (m_PreparedAutosave && m_PreparedAutosave->result.valid()) m_PreparedAutosave->result.wait();
 	for (const auto& task: m_AutosaveTasks) task.wait();
 	for (const auto& task: m_FullStateTasks) task.wait();
+}
+
+void ActivityMan::DropPreparedAutosave() {
+	// Dropping the queue joins its writer, which may be releasing a capture's pages in time only the game lends.
+	const SaverThreads::Lend lend;
+	WaitForAutosaveTasks();
+	m_PreparedAutosave.reset();
 }
 
 bool ActivityMan::CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory, const std::string& label) {
@@ -2986,7 +3020,7 @@ bool ActivityMan::SetStartEditorActivitySetToLaunchInto() {
 }
 
 int ActivityMan::StartActivity(Activity* activity) {
-	WaitForAutosaveTasks(); m_PreparedAutosave.reset();
+	DropPreparedAutosave();
 	AudioMan::RestorePlayPhaseScope playPhase("Start");
 	RTEAssert(activity, "Trying to start a null activity!");
 
@@ -3271,7 +3305,7 @@ void ActivityMan::LateUpdateGlobalScripts() const {
 void ActivityMan::ClearEndedReplayActivity() {
 	if (m_ActivityNeedsRestart) return;
 	if (m_Activity && !m_Activity->IsOver()) return;
-	WaitForAutosaveTasks(); m_PreparedAutosave.reset();
+	DropPreparedAutosave();
 	m_StartActivity.reset();
 	m_Activity.reset();
 	m_InActivity = false;
@@ -3570,7 +3604,7 @@ bool ActivityMan::RestartActivity() {
 }
 
 bool ActivityMan::RestartActivityWorld() {
-	WaitForAutosaveTasks(); m_PreparedAutosave.reset();
+	DropPreparedAutosave();
 	if (!m_RestartRestoresSnapshot && !m_LockstepRelaunchInProgress) {
 		ScenarioRunner::ResetRetiredChecksumCounters();
 	}

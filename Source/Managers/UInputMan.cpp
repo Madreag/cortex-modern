@@ -2003,6 +2003,14 @@ std::array<std::pair<const void*, size_t>, 2> UInputMan::CheckpointRootSources()
     return {{{&s_PrevJoystickStates, sizeof(s_PrevJoystickStates)}, {&s_ChangedJoystickStates, sizeof(s_ChangedJoystickStates)}}};
 }
 
+void UInputMan::PrepareCheckpointValues() {
+	auto keyboards = m_KeyboardStates;
+	auto mice = m_MouseStates;
+	auto previous = s_PrevJoystickStates, changed = s_ChangedJoystickStates;
+	m_KeyboardStates.swap(keyboards); m_MouseStates.swap(mice);
+	s_PrevJoystickStates.swap(previous); s_ChangedJoystickStates.swap(changed);
+}
+
 std::string UInputMan::SaveCheckpoint() const {
     CheckpointWriter archive("UInputMan1");
     archive(m_KeyboardStates, m_MouseStates, *CheckpointNativeStorage::Source(&s_PrevJoystickStates), *CheckpointNativeStorage::Source(&s_ChangedJoystickStates),

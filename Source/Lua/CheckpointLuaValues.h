@@ -10,8 +10,12 @@ extern "C" {
 }
 
 #include <bit>
+#include <format>
 #include <functional>
 #include <optional>
+#include <stdexcept>
+#include <string>
+#include <typeinfo>
 #include <unordered_map>
 #include <unordered_set>
 #include <future>
@@ -437,12 +441,12 @@ assert(coroutine.resume(savedOrderThread))
 			const TValue* array = tvref(table.array);
 			for (MSize index = 0; index < table.asize; ++index) {
 				const TValue item = m_Heap.Read(array + index);
-				if (!tvisnil(&item)) { Push(item); lua_rawseti(m_State, destination, static_cast<int>(index)); }
+				if (!tvisnil(&item)) { PushUnder(item, [index] { return std::to_string(index); }); lua_rawseti(m_State, destination, static_cast<int>(index)); }
 			}
 			const Node* nodes = noderef(table.node);
 			for (MSize index = 0; index <= table.hmask; ++index) {
 				const Node node = m_Heap.Read(nodes + index);
-				if (!tvisnil(&node.val)) { Push(node.key); Push(node.val); lua_rawset(m_State, destination); }
+				if (!tvisnil(&node.val)) { Push(node.key); PushUnder(node.val, [&] { return KeyName(node.key); }); lua_rawset(m_State, destination); }
 			}
 			if (const GCobj* meta = gcref(table.metatable)) {
 				TValue token; setgcVraw(&token, const_cast<GCobj*>(meta), LJ_TTAB); Push(token); lua_setmetatable(m_State, destination);
@@ -456,7 +460,7 @@ assert(coroutine.resume(savedOrderThread))
 			lj_tab_resize(m_State, target, source.asize, source.hmask ? std::bit_width(source.hmask) : 0);
 			m_SavedTables.insert(target);
 			for (MSize index = 0; index < source.asize; ++index) {
-				Push(m_Heap.Read(tvref(source.array) + index));
+				PushUnder(m_Heap.Read(tvref(source.array) + index), [index] { return std::to_string(index); });
 				arrayslot(target, index)[0] = *(m_State->top - 1); lj_gc_anybarriert(m_State, target); lua_pop(m_State, 1);
 			}
 			if (source.hmask) {
@@ -465,7 +469,7 @@ assert(coroutine.resume(savedOrderThread))
 				for (MSize index = 0; index <= source.hmask; ++index) {
 					const Node node = m_Heap.Read(original + index);
 					if (!tvisnil(&node.val)) {
-						Push(node.key); Push(node.val);
+						Push(node.key); PushUnder(node.val, [&] { return KeyName(node.key); });
 						nodes[index].key = *(m_State->top - 2); nodes[index].val = *(m_State->top - 1);
 						lj_gc_anybarriert(m_State, target); lua_pop(m_State, 2);
 					} else {
@@ -486,6 +490,31 @@ assert(coroutine.resume(savedOrderThread))
 				TValue token; setgcVraw(&token, const_cast<GCobj*>(meta), LJ_TTAB); Push(token); lua_setmetatable(m_State, destination);
 			}
 			target->serial = source.serial; target->nomm = source.nomm;
+		}
+		// A value that cannot be saved names the table keys it was read under, outermost first.
+		template<class Key> void PushUnder(const TValue& value, Key&& key) {
+			try { Push(value); }
+			catch (const std::exception& failure) {
+				const bool logic = typeid(failure) == typeid(std::logic_error);
+				if (!logic && typeid(failure) != typeid(std::runtime_error)) throw;
+				constexpr std::string_view marker = " in script value ";
+				const std::string_view message = failure.what();
+				const size_t at = message.rfind(marker);
+				const std::string named = at == std::string_view::npos ? std::string(message) + std::string(marker) + key() :
+				    std::string(message.substr(0, at + marker.size())) + key() + "." + std::string(message.substr(at + marker.size()));
+				if (logic) throw std::logic_error(named);
+				throw std::runtime_error(named);
+			}
+		}
+		std::string KeyName(const TValue& key) {
+			if (tvisstr(&key)) {
+				const auto* string = strV(&key);
+				const auto bytes = m_Heap.ReadBytes(string + 1, m_Heap.Read(&string->len));
+				return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+			}
+			if (tvisint(&key)) return std::to_string(intV(&key));
+			if (tvisnum(&key)) return std::format("{}", numV(&key));
+			return "?";
 		}
 		void Function(const TValue& value) {
 			const GCfunc* source = funcV(&value);

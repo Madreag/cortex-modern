@@ -1985,6 +1985,7 @@ namespace RTE {
 		/// The base a returner arriving now would be served; none when it would take a new one.
 		std::optional<uint64_t> ServedReturnBaseLocked(uint64_t nowMs) const;
 		static constexpr uint64_t c_PrivateImageWaitMs = 20000; //!< How long a returning seat waits on one capture's writer.
+		static constexpr uint64_t c_PrivateBaseStageWindowMs = 4000; //!< How long a returning seat waits for a base its captures keep missing.
 		bool m_PrivateImageRecapture = false; //!< Host: the next pass takes a fresh base; the stuck writer was abandoned.
 		bool m_PrivateImageRecaptured = false; //!< Host: this wait already took its one fresh base.
 		bool m_PrivateImageSeatHeld = false;
@@ -1992,6 +1993,12 @@ namespace RTE {
 		static constexpr uint64_t c_ReturnerLinkSettleMs = 1000; //!< How long a returner's round trip still carries our image's queue after it lands.
 		std::map<NetPeerId, uint64_t> m_ReturnerLinkSettlesMs; //!< Host: until when each returner's link still carries the image we sent it.
 		const char* m_PrivateBaseHeldReason = nullptr; //!< Host: why the last pass could not take a base, reported once per reason.
+		std::string m_PrivateBaseRefusal; //!< Host: why the base this attempt asked for was refused or not taken; empty while it can still come.
+		bool m_PrivateBaseRefusalLasting = false; //!< Host: that refusal will not pass by asking again.
+		bool m_InjectedJoinRefusal = false; //!< Test lever CC_FAULT_INJECT=join_capture_refused has refused its one base.
+		void NotePrivateBaseRefusalLocked(const ActivityMan::AutosaveRefusal& refusal);
+		/// Drops a returning seat's base request once no returner waits for it, so a refused or departed return stops the captures it asked.
+		void DropUnwantedPrivateBaseLocked();
 		std::string m_PrivateJoinError;
 		std::shared_ptr<const std::vector<uint8_t>> m_WorldJoinImageArchive; //!< The writer's own buffer, shared.
 		std::string m_WorldJoinImageDigest;         //!< Its digest, so a stale cache is refused without a re-hash.
