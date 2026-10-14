@@ -144,6 +144,20 @@ namespace RTE {
 		static std::shared_ptr<const CheckpointPagePool::Snapshot> PagesFor(const void* source, size_t bytes);
 		static const void* Original(const void* view);
 		static bool IsView(const void* address);
+		/// Whether a frozen address lies in an object the boundary copied whole, such as a manager made before checkpoint storage.
+		static bool InBoundaryRoot(const void* view);
+		/// A frozen read of a node container in a boundary root whose allocator is not retained: on some standard libraries its
+		/// end node was allocated with it, outside every frozen page. Each such container is named once in the log; test lever
+		/// CC_TEST_CHECKPOINT_STARTUP_LINKS=1 refuses the read on every platform.
+		static void NoteStartupLinks(const void* view, const char* type);
+		/// Refuses what NoteStartupLinks would only name while it lives, as the test lever does for the whole run.
+		class StartupLinksRefusal {
+		public:
+			StartupLinksRefusal();
+			~StartupLinksRefusal();
+			StartupLinksRefusal(const StartupLinksRefusal&) = delete;
+			StartupLinksRefusal& operator=(const StartupLinksRefusal&) = delete;
+		};
 		static const std::string* ReadString(const char* source, size_t bytes);
 		static std::shared_ptr<const void> ReadIndex(const void* source, const void* kind, const std::function<std::shared_ptr<const void>()>& build);
 		static std::string SelfTestMismatch();
@@ -182,6 +196,8 @@ namespace RTE {
 		CheckpointNativeAllocator() noexcept : m_Owned(CheckpointNativeStorage::RetainingAllocations()) {}
 		template<class U> CheckpointNativeAllocator(const CheckpointNativeAllocator<U>& source) noexcept : m_Owned(source.m_Owned) {}
 		CheckpointNativeAllocator select_on_container_copy_construction() const noexcept { return {}; }
+		/// Whether everything this allocator makes goes to checkpoint storage, whenever it is made.
+		bool Retained() const noexcept { return m_Owned; }
 		[[nodiscard]] T* allocate(size_t count) {
 			if (count > (std::numeric_limits<size_t>::max)() / sizeof(T)) throw std::bad_array_new_length();
 			if (CheckpointNativeStorage::Reading()) {

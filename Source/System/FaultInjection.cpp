@@ -1,6 +1,7 @@
 #include "FaultInjection.h"
 
 #include <cstdlib>
+#include <initializer_list>
 #include <string>
 
 namespace RTE {
@@ -33,9 +34,12 @@ namespace RTE {
 	}
 
 	bool FaultInjected(const char* name) {
+		// CC_TEST_FAULT_INJECT carries the same list for runners that pass only test levers.
 		static const std::string armed = [] {
-			const char* env = std::getenv("CC_FAULT_INJECT");
-			return std::string(env ? env : "");
+			std::string names;
+			for (const char* variable: {"CC_FAULT_INJECT", "CC_TEST_FAULT_INJECT"})
+				if (const char* env = std::getenv(variable)) names += (names.empty() ? "" : ",") + std::string(env);
+			return names;
 		}();
 		return FaultListHas(g_TestArmedFaults, name) || FaultListHas(armed, name);
 	}

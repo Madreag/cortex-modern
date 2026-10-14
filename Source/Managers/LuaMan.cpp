@@ -10577,6 +10577,12 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = mismatch.empty() && checkpointValues;
 	}
 	{
+		const std::string mismatch = AudioMan::CheckpointStartupLinksSelfTestMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " frozen_audio_startup_containers_keep_their_links_in_storage" << std::endl;
+		if (!mismatch.empty()) std::cout << "[script-graph-selftest] detail=" << mismatch << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
+	}
+	{
 		const std::string mismatch = AudioMan::CheckpointBackendSelfTestMismatch();
 		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " frozen_audio_keeps_earlier_controls_and_private_changes" << std::endl;
 		if (!mismatch.empty()) std::cout << "[script-graph-selftest] detail=" << mismatch << std::endl;
@@ -16830,7 +16836,7 @@ void LuaMan::PrepareCheckpointValues() {
 	if (CheckpointNativeStorage::Enabled()) g_SceneMan.PrepareCheckpointValues();
 	if (CheckpointNativeStorage::Enabled()) { g_UInputMan.PrepareCheckpointValues(); g_FrameMan.PrepareCheckpointValues(); g_PostProcessMan.PrepareCheckpointValues(); }
 	if (CheckpointNativeStorage::Enabled()) g_ActivityMan.PrepareCheckpointValues();
-	if (CheckpointNativeStorage::Enabled()) g_AudioMan.PrepareCheckpointRegistryValues();
+	if (CheckpointNativeStorage::Enabled()) { g_AudioMan.PrepareCheckpointRegistryValues(); g_AudioMan.PrepareCheckpointValues(); }
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointActorValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLooseValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLookupValues();

@@ -159,7 +159,11 @@ void PostProcessMan::PrepareCheckpointValues() {
 		clear_to_color(bitmap.get(), bitmap_mask_color(bitmap.get()));
 		owned.emplace(size, std::move(bitmap));
 	}
-	m_TempEffectBitmaps.swap(owned);
+	m_TempEffectBitmaps = std::move(owned);
+	// The effect queues were made with the manager, before checkpoint storage: their links move into it.
+	RetainCheckpointLinks(m_PostScreenEffects); RetainCheckpointLinks(m_PostSceneEffects);
+	RetainCheckpointLinks(m_PostScreenGlowBoxes); RetainCheckpointLinks(m_GlowAreas);
+	for (auto& effects: m_ScreenRelativeEffects) RetainCheckpointLinks(effects);
 }
 
 std::string PostProcessMan::SaveCheckpoint() const {

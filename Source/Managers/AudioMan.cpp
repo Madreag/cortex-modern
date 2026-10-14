@@ -1401,6 +1401,71 @@ AudioMan::CheckpointBackend::CheckpointBackend(const CheckpointBackend& source, 
 	for (size_t index = 0; index < groups.size(); ++index) groups[index] = values->groups[index].CopyCheckpointValues();
 }
 
+void AudioMan::PrepareCheckpointValues() {
+	if (!CheckpointNativeStorage::Enabled()) return;
+	RetainCheckpointLinks(m_PlayingVoices);
+	RetainCheckpointLinks(m_CommittedAudibility);
+	for (int player = 0; player < c_MaxClients; ++player) {
+		std::scoped_lock lock(g_SoundEventsListMutex[player]);
+		RetainCheckpointLinks(m_SoundEvents[player]);
+	}
+	std::scoped_lock lock(m_SoundChannelMinimumAudibleDistancesMutex);
+	RetainCheckpointLinks(m_SoundChannelMinimumAudibleDistances);
+}
+
+std::string AudioMan::CheckpointStartupLinksSelfTestMismatch() {
+	AudioMan& audio = g_AudioMan;
+	static constexpr int identity = std::numeric_limits<int>::max() - 7;
+	auto* const owner = reinterpret_cast<SoundContainer*>(&audio);
+	const SoundObservationKey key{91, 92, 93, 94, 95};
+	NetworkSoundData event{};
+	event.SoundFileHash = 0x5eed;
+	struct Cleanup {
+		std::function<void()> run;
+		~Cleanup() { run(); }
+	} cleanup{[&] {
+		audio.m_PlayingVoices.erase(identity);
+		audio.m_CommittedAudibility.erase(key);
+		std::erase_if(audio.m_SoundEvents[0], [](const NetworkSoundData& value) { return value.SoundFileHash == 0x5eed; });
+		audio.m_SoundChannelMinimumAudibleDistances.erase(identity);
+	}};
+	{
+		CheckpointNativeStorage::AllocationScope owned(true);
+		audio.m_PlayingVoices.emplace(identity, PlayingVoice(nullptr, owner, "Base.rte/Sounds/startup-links.flac", 0));
+		audio.m_CommittedAudibility[key][2] = {77, 0.5F};
+		audio.m_SoundEvents[0].push_back(event);
+		audio.m_SoundChannelMinimumAudibleDistances[identity] = 3.5F;
+		// The round's start, as LuaMan::PrepareCheckpointValues runs it.
+		audio.PrepareCheckpointValues();
+	}
+	CheckpointNativeStorage::Root root(&audio);
+	auto pages = CheckpointNativeStorage::Prepare();
+	root.Freeze();
+	for (const auto& page: pages) page->Arm();
+	audio.m_PlayingVoices.erase(identity);
+	audio.m_CommittedAudibility[key][2] = {78, 0.25F};
+	return std::async(std::launch::async, [&]() -> std::string {
+		const std::array roots{root.Range()};
+		CheckpointNativeStorage::ReadScope read(pages, roots);
+		const CheckpointNativeStorage::StartupLinksRefusal strict;
+		try {
+			const AudioMan* frozen = CheckpointNativeStorage::Source(&audio);
+			if (!frozen->OwnsVoice(identity, owner)) return "the frozen voices lost the voice the boundary saw";
+			bool reading = false;
+			for (const auto& [saved, readings]: CheckpointValues(frozen->m_CommittedAudibility))
+				for (const auto& [peer, value]: CheckpointValues(readings)) reading = reading || (saved == key && peer == 2 && value.frame == 77);
+			if (!reading) return "the frozen readings lost the reading the boundary saw";
+			const auto events = CheckpointValues(frozen->m_SoundEvents[0]);
+			if (std::none_of(events.begin(), events.end(), [](const NetworkSoundData& value) { return value.SoundFileHash == 0x5eed; }))
+				return "the frozen sound events lost the event the boundary saw";
+			bool distance = false;
+			for (const auto& [saved, value]: CheckpointValues(frozen->m_SoundChannelMinimumAudibleDistances)) distance = distance || (saved == identity && value == 3.5F);
+			if (!distance) return "the frozen audible distances lost the distance the boundary saw";
+		} catch (const std::exception& failure) { return failure.what(); }
+		return {};
+	}).get();
+}
+
 void AudioMan::PrepareCheckpointBackendValues() {
 	if (!CheckpointNativeStorage::Enabled() || CheckpointNativeStorage::Reading()) return;
 	auto values = std::make_unique<CheckpointBackend>();

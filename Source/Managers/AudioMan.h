@@ -118,9 +118,13 @@ namespace RTE {
 		/// Promotes saved registry storage before the multiplayer inventory is prepared.
 		void PrepareCheckpointRegistryValues();
 		void PrepareCheckpointBackendValues();
+		/// Gives the voices, committed readings, sound events and audible distances, made with the manager before checkpoint storage, links in storage.
+		void PrepareCheckpointValues();
 		void RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) const;
 		static std::string CheckpointBackendSelfTestMismatch();
 		static std::string CheckpointRegistryStorageSelfTestMismatch();
+		/// Empty when a frozen read of the manager's startup containers stays inside the frozen pages after the round's preparation.
+		static std::string CheckpointStartupLinksSelfTestMismatch();
 		class CheckpointRegistryReadScope {
 			friend class AudioMan;
 		public:
