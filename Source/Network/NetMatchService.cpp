@@ -4328,7 +4328,8 @@ static std::string ResyncSaveName() {
 			if (taken) {
 				if (input.unwritten > 0) System::PrintDiagnosticLine(std::format("[autosave] named tick={} taken with unwritten={}", tick, input.unwritten));
 				// The capture a returning seat's base was asked of: its metadata is read at this tick's end, its archive from the writer.
-				if (m_IsHost && joinCapture && m_WorldJoin.IsPrivateMatch() && m_PrivateBaseRequested) {
+				// Every join capture is a returner's base: one named before its returner was refused serves the next attempt.
+				if (m_IsHost && joinCapture && m_WorldJoin.IsPrivateMatch()) {
 					m_PrivateBaseRequested = false;
 					m_PrivateBaseTick = tick;
 					m_PrivateBaseRefusal.clear();
@@ -5471,12 +5472,13 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::DropUnwantedPrivateBaseLocked() {
-		if (!m_WorldJoin.IsPrivateMatch() || (!m_PrivateBaseRequested && !m_PrivateBasePending && m_PrivateBaseTick == 0 && !m_WorldCapturePending)) return;
+		if (!m_WorldJoin.IsPrivateMatch() || (!m_PrivateBaseRequested && !m_WorldCapturePending)) return;
 		const bool waiting = std::any_of(m_WorldJoin.Sessions().begin(), m_WorldJoin.Sessions().end(), [](const NetWorldJoinSession& session) {
 			return !session.spectator && session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted;
 		});
 		if (waiting) return;
-		m_PrivateBaseRequested = false; m_PrivateBaseTick = 0; m_PrivateBasePending.reset(); m_WorldCapturePending = false;
+		// A base already taken finishes by its own verdict and is kept for the next return; only the asking stops.
+		m_PrivateBaseRequested = false; m_WorldCapturePending = false;
 		m_PrivateBaseRefusal.clear();
 	}
 
