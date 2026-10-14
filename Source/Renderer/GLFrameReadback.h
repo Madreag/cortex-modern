@@ -95,6 +95,46 @@ namespace RTE {
 		return true;
 	}
 
+	/// Pixel-pack buffers of one capture size, kept for the next captures instead of a new buffer every frame; any context of the share group takes or returns one.
+	class TextureReadbackBuffers {
+	public:
+		/// A kept buffer of exactly this many bytes, or 0 when the caller allocates one.
+		GLuint Take(std::size_t bytes) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (bytes != m_Bytes) {
+				DeleteKept();
+				m_Bytes = bytes;
+			}
+			if (m_Kept.empty()) return 0;
+			const GLuint buffer = m_Kept.back();
+			m_Kept.pop_back();
+			return buffer;
+		}
+
+		/// Keeps a collected buffer of the current size; any other is deleted on the calling context.
+		void Return(GLuint buffer, std::size_t bytes) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (bytes == m_Bytes && m_Kept.size() < c_MaxKept) m_Kept.push_back(buffer);
+			else glad_glDeleteBuffers(1, &buffer);
+		}
+
+		/// Deletes the kept buffers; a context of the share group must be current.
+		void Clear() {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			DeleteKept();
+		}
+
+	private:
+		static constexpr std::size_t c_MaxKept = 32;
+		void DeleteKept() {
+			if (!m_Kept.empty()) glad_glDeleteBuffers(static_cast<GLsizei>(m_Kept.size()), m_Kept.data());
+			m_Kept.clear();
+		}
+		std::mutex m_Mutex;
+		std::size_t m_Bytes = 0;
+		std::vector<GLuint> m_Kept;
+	};
+
 	/// The GPU owns this immutable copy until the writer has read it; the texture may be rendered again meanwhile.
 	class QueuedTextureReadback {
 	public:
@@ -102,11 +142,14 @@ namespace RTE {
 		GLsync ready = nullptr;
 		int width = 0, height = 0;
 		GLenum format = GL_RGBA;
+		TextureReadbackBuffers* buffers = nullptr; //!< Where the buffer goes back once read; deleted when null.
+		std::size_t bytes = 0;
 	};
 
 	inline void DiscardTextureReadback(QueuedTextureReadback& frame) {
 		if (frame.ready) glad_glDeleteSync(frame.ready);
-		if (frame.buffer) glad_glDeleteBuffers(1, &frame.buffer);
+		if (frame.buffer && frame.buffers) frame.buffers->Return(frame.buffer, frame.bytes);
+		else if (frame.buffer) glad_glDeleteBuffers(1, &frame.buffer);
 		frame.ready = nullptr;
 		frame.buffer = 0;
 	}
@@ -229,7 +272,7 @@ namespace RTE {
 			DiscardTextureReadback(frame);
 		}
 
-		static std::unique_ptr<QueuedTextureReadback> Submit(GLuint texture, int width, int height, std::string& error, GLenum format = GL_RGBA) {
+		static std::unique_ptr<QueuedTextureReadback> Submit(GLuint texture, int width, int height, std::string& error, GLenum format = GL_RGBA, TextureReadbackBuffers* buffers = nullptr) {
 			const std::size_t max = std::min<std::size_t>(std::numeric_limits<std::size_t>::max(), std::numeric_limits<GLsizeiptr>::max());
 			if (!SDL_GL_GetCurrentContext() || !glad_glGetError || !glad_glGetIntegerv || !glad_glBindBuffer ||
 			    !glad_glGenBuffers || !glad_glDeleteBuffers || !glad_glBufferData || !glad_glPixelStorei || !glad_glBindTexture ||
@@ -258,12 +301,17 @@ namespace RTE {
 			glad_glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &actualWidth);
 			glad_glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &actualHeight);
 			if (actualWidth == width && actualHeight == height) {
-				glad_glGenBuffers(1, &result->buffer);
+				const std::size_t bytes = static_cast<std::size_t>(width) * height * 4;
+				result->buffer = buffers ? buffers->Take(bytes) : 0;
+				const bool kept = result->buffer != 0;
+				if (!kept) glad_glGenBuffers(1, &result->buffer);
 				if (result->buffer) {
 					glad_glBindBuffer(GL_PIXEL_PACK_BUFFER, result->buffer);
-					glad_glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(static_cast<std::size_t>(width) * height * 4), nullptr, GL_STREAM_READ);
+					if (!kept) glad_glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(bytes), nullptr, GL_STREAM_READ);
 					allocationError = glad_glGetError();
 					if (allocationError == GL_NO_ERROR) {
+						result->buffers = buffers;
+						result->bytes = bytes;
 						for (GLenum parameter : parameters) glad_glPixelStorei(parameter, parameter == GL_PACK_ALIGNMENT ? 1 : 0);
 						// Native color words avoid synchronous three-channel conversion; alpha is discarded when collected.
 						glad_glGetTexImage(GL_TEXTURE_2D, 0, format, GL_UNSIGNED_BYTE, nullptr);
