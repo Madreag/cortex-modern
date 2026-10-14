@@ -98,6 +98,7 @@ extern "C" {
 #include <cstdlib>
 #include <string>
 #include <sstream>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -1408,14 +1409,49 @@ namespace {
 	//
 	// The added deques go in beside the live ones: the checkpoint archive writes both (Scene writes
 	// GetAllParticles, which concatenates them), so an object only one peer holds has to move the hash.
+	// The census reaches each subsystem's hasher once: FNV-1a over a subsystem's bytes in order is the same in one piece as in
+	// many, and one call per subsystem spares the hasher's lock and lookup on every field of every object.
+	class ChecksumBatch {
+	public:
+		void Update(std::string_view subsystem, const void* data, size_t bytes) {
+			if (!m_Last || (m_Last->name.data() != subsystem.data() && m_Last->name != subsystem)) {
+				m_Last = nullptr;
+				for (Slot& slot: m_Slots) {
+					if (slot.name.data() == subsystem.data() || slot.name == subsystem) {
+						m_Last = &slot;
+						break;
+					}
+				}
+				if (!m_Last) m_Last = &m_Slots.emplace_back(Slot{subsystem, {}});
+			}
+			const auto* first = static_cast<const uint8_t*>(data);
+			m_Last->bytes.insert(m_Last->bytes.end(), first, first + bytes);
+		}
+
+		void Flush() {
+			for (Slot& slot: m_Slots) {
+				if (!slot.bytes.empty()) g_SimChecksum.Update(slot.name, slot.bytes.data(), slot.bytes.size());
+				slot.bytes.clear();
+			}
+		}
+
+	private:
+		struct Slot {
+			std::string_view name;
+			std::vector<uint8_t> bytes;
+		};
+		std::deque<Slot> m_Slots;
+		Slot* m_Last = nullptr;
+	};
+
 	// Every attachable in the tree, depth first in attachment order: its identity and where the sim put it.
-	void FeedAttachableTransforms(const MOSRotating* parent) {
+	void FeedAttachableTransforms(ChecksumBatch& batch, const MOSRotating* parent) {
 		for (const Attachable* attachable: parent->GetAttachableList()) {
 			const int64_t uniqueID = static_cast<int64_t>(attachable->GetUniqueID());
 			const float transform[3] = {attachable->GetPos().m_X, attachable->GetPos().m_Y, attachable->GetRotAngle()};
-			g_SimChecksum.Update("attachables", &uniqueID, sizeof(uniqueID));
-			g_SimChecksum.Update("attachables", transform, sizeof(transform));
-			FeedAttachableTransforms(attachable);
+			batch.Update("attachables", &uniqueID, sizeof(uniqueID));
+			batch.Update("attachables", transform, sizeof(transform));
+			FeedAttachableTransforms(batch, attachable);
 		}
 	}
 
@@ -1424,6 +1460,8 @@ namespace {
 	                     const CheckpointDeque<MovableObject*>& particles, const CheckpointDeque<MovableObject*>& addedParticles,
 	                     const CheckpointList<Actor*>* rosters) {
 
+		// Buffers that keep their capacity from tick to tick.
+		static thread_local ChecksumBatch batch;
 		auto eachActor = [&](auto&& body) {
 			for (Actor* a: actors) body(a);
 			for (Actor* a: addedActors) body(a);
@@ -1439,107 +1477,108 @@ namespace {
 
 		eachActor([](Actor* a) {
 			const int64_t uniqueID = static_cast<int64_t>(a->GetUniqueID());
-			g_SimChecksum.Update("actors", &uniqueID, sizeof(uniqueID));
+			batch.Update("actors", &uniqueID, sizeof(uniqueID));
 			const float posX = a->GetPos().m_X;
-			g_SimChecksum.Update("actors", &posX, sizeof(posX));
+			batch.Update("actors", &posX, sizeof(posX));
 			const float posY = a->GetPos().m_Y;
-			g_SimChecksum.Update("actors", &posY, sizeof(posY));
+			batch.Update("actors", &posY, sizeof(posY));
 			const float velX = a->GetVel().m_X;
-			g_SimChecksum.Update("actors", &velX, sizeof(velX));
+			batch.Update("actors", &velX, sizeof(velX));
 			const float velY = a->GetVel().m_Y;
-			g_SimChecksum.Update("actors", &velY, sizeof(velY));
+			batch.Update("actors", &velY, sizeof(velY));
 			const float health = a->GetHealth();
-			g_SimChecksum.Update("actors", &health, sizeof(health));
+			batch.Update("actors", &health, sizeof(health));
 			// Rotational state is on-wire but absent from the linear actors fingerprint — angle and angular velocity split into separate subsystems so a divergence localizes to the update vs the integration.
 			const float actorRotAngle = a->GetRotAngle();
-			g_SimChecksum.Update("rot_angle", &actorRotAngle, sizeof(actorRotAngle));
+			batch.Update("rot_angle", &actorRotAngle, sizeof(actorRotAngle));
 			const float actorAngVel = a->GetAngularVel();
-			g_SimChecksum.Update("rot_angvel", &actorAngVel, sizeof(actorAngVel));
+			batch.Update("rot_angvel", &actorAngVel, sizeof(actorAngVel));
 			// The actor's sim-time timers and its limbs' transforms; the alarm timer is the owner's AI perception, so it stays out.
 			const double timers[5] = {a->GetLastSecondTimerElapsedSimMS(), a->GetStableRecoverTimerElapsedSimMS(), a->GetHeartBeatTimerElapsedSimMS(),
 			                          a->GetNewControlTimerElapsedSimMS(), a->GetDeathTimerElapsedSimMS()};
-			g_SimChecksum.Update("actor_timers", &uniqueID, sizeof(uniqueID));
-			g_SimChecksum.Update("actor_timers", timers, sizeof(timers));
-			FeedAttachableTransforms(a);
+			batch.Update("actor_timers", &uniqueID, sizeof(uniqueID));
+			batch.Update("actor_timers", timers, sizeof(timers));
+			FeedAttachableTransforms(batch, a);
 		});
 
 		// Controller input state per actor — catches control drift the actors fingerprint misses.
 		eachActor([](Actor* a) {
 			const Controller* controller = a->GetController();
 			const int64_t controllerID = static_cast<int64_t>(a->GetUniqueID());
-			g_SimChecksum.Update("controller", &controllerID, sizeof(controllerID));
+			batch.Update("controller", &controllerID, sizeof(controllerID));
 			for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
 				const uint8_t pressed = controller->IsState(static_cast<ControlState>(state)) ? 1 : 0;
-				g_SimChecksum.Update("controller", &pressed, sizeof(pressed));
+				batch.Update("controller", &pressed, sizeof(pressed));
 			}
 			const Vector move = controller->GetAnalogMove();
 			const Vector aim = controller->GetAnalogAim();
 			const Vector cursor = controller->GetAnalogCursor();
 			const float analog[6] = {move.m_X, move.m_Y, aim.m_X, aim.m_Y, cursor.m_X, cursor.m_Y};
-			g_SimChecksum.Update("controller", analog, sizeof(analog));
+			batch.Update("controller", analog, sizeof(analog));
 			// The seat's input mode and player are routing, not input: the seat that owns an actor is CIM_PLAYER
 			// with its player number on its OWN machine and CIM_NETWORK/NoPlayer on every other one, so they are
 			// per-peer by construction and belong beside the applied input, never inside it.
 			const int32_t inputMode = static_cast<int32_t>(controller->GetInputMode());
-			g_SimChecksum.Update("controller_route", &controllerID, sizeof(controllerID));
-			g_SimChecksum.Update("controller_route", &inputMode, sizeof(inputMode));
+			batch.Update("controller_route", &controllerID, sizeof(controllerID));
+			batch.Update("controller_route", &inputMode, sizeof(inputMode));
 			const int32_t controllerPlayer = controller->GetPlayer();
-			g_SimChecksum.Update("controller_route", &controllerPlayer, sizeof(controllerPlayer));
+			batch.Update("controller_route", &controllerPlayer, sizeof(controllerPlayer));
 			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
-			g_SimChecksum.Update("controller", &aiMode, sizeof(aiMode));
+			batch.Update("controller", &aiMode, sizeof(aiMode));
 		});
 
 		// Compact per-particle fingerprint — uniqueID + pos + vel.
 		eachParticle([](MovableObject* p) {
 			const int64_t particleID = static_cast<int64_t>(p->GetUniqueID());
-			g_SimChecksum.Update("particles", &particleID, sizeof(particleID));
+			batch.Update("particles", &particleID, sizeof(particleID));
 			const float ppX = p->GetPos().m_X;
-			g_SimChecksum.Update("particles", &ppX, sizeof(ppX));
+			batch.Update("particles", &ppX, sizeof(ppX));
 			const float ppY = p->GetPos().m_Y;
-			g_SimChecksum.Update("particles", &ppY, sizeof(ppY));
+			batch.Update("particles", &ppY, sizeof(ppY));
 			const float pvX = p->GetVel().m_X;
-			g_SimChecksum.Update("particles", &pvX, sizeof(pvX));
+			batch.Update("particles", &pvX, sizeof(pvX));
 			const float pvY = p->GetVel().m_Y;
-			g_SimChecksum.Update("particles", &pvY, sizeof(pvY));
+			batch.Update("particles", &pvY, sizeof(pvY));
 			const float partAngVel = p->GetAngularVel();
-			g_SimChecksum.Update("rot_angvel", &partAngVel, sizeof(partAngVel));
+			batch.Update("rot_angvel", &partAngVel, sizeof(partAngVel));
 		});
 
 		// Same fingerprint for free items — a dropped device's state was only visible as a count before.
 		eachItem([](MovableObject* i) {
 			const int64_t itemID = static_cast<int64_t>(i->GetUniqueID());
-			g_SimChecksum.Update("items", &itemID, sizeof(itemID));
+			batch.Update("items", &itemID, sizeof(itemID));
 			const float ipX = i->GetPos().m_X;
-			g_SimChecksum.Update("items", &ipX, sizeof(ipX));
+			batch.Update("items", &ipX, sizeof(ipX));
 			const float ipY = i->GetPos().m_Y;
-			g_SimChecksum.Update("items", &ipY, sizeof(ipY));
+			batch.Update("items", &ipY, sizeof(ipY));
 			const float ivX = i->GetVel().m_X;
-			g_SimChecksum.Update("items", &ivX, sizeof(ivX));
+			batch.Update("items", &ivX, sizeof(ivX));
 			const float ivY = i->GetVel().m_Y;
-			g_SimChecksum.Update("items", &ivY, sizeof(ivY));
+			batch.Update("items", &ivY, sizeof(ivY));
 			const float itemAngVel = i->GetAngularVel();
-			g_SimChecksum.Update("rot_angvel", &itemAngVel, sizeof(itemAngVel));
+			batch.Update("rot_angvel", &itemAngVel, sizeof(itemAngVel));
 		});
 
 		// Lightweight population metadata — catches spawn/delete count drift. The counts are of the
 		// whole census, added deques included, for the same reason the bodies above are.
 		const int32_t actorCount = static_cast<int32_t>(actors.size() + addedActors.size());
-		g_SimChecksum.Update("scene", &actorCount, sizeof(actorCount));
+		batch.Update("scene", &actorCount, sizeof(actorCount));
 		const int32_t itemCount = static_cast<int32_t>(items.size() + addedItems.size());
-		g_SimChecksum.Update("scene", &itemCount, sizeof(itemCount));
+		batch.Update("scene", &itemCount, sizeof(itemCount));
 		const int32_t particleCount = static_cast<int32_t>(particles.size() + addedParticles.size());
-		g_SimChecksum.Update("scene", &particleCount, sizeof(particleCount));
+		batch.Update("scene", &particleCount, sizeof(particleCount));
 		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
 			const int32_t rosterSize = static_cast<int32_t>(rosters[team].size());
-			g_SimChecksum.Update("scene", &rosterSize, sizeof(rosterSize));
+			batch.Update("scene", &rosterSize, sizeof(rosterSize));
 		}
 		if (const Activity* activity = g_ActivityMan.GetActivity()) {
 			for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
 				const float teamFunds = activity->GetTeamFunds(team);
-				g_SimChecksum.Update("funds", &teamFunds, sizeof(teamFunds));
+				batch.Update("funds", &teamFunds, sizeof(teamFunds));
 			}
 		}
 
+		batch.Flush();
 	}
 
 	// Snapshot the sim + Lua RNG states here — before the see-ray and MOID-draw futures launch
