@@ -101,7 +101,8 @@ namespace RTE {
 		std::unordered_map<int, Cell> overlay;
 		std::deque<std::shared_ptr<void>> jobs;
 		uint64_t generation = 1;
-		bool saved = true; //!< False while a fence holds nothing because nothing has changed the state since it went up.
+		uint64_t stamp = 0; //!< The version of the horizon state the copy holds; 0 holds none.
+		bool deferred = false; //!< Captured without a copy: the live state is the captured one until its next write.
 	};
 
 	/// Contains everything related to a PathNode on the path grid used by PathFinder.
@@ -212,11 +213,8 @@ namespace RTE {
 		/// Applies every horizon job whose commit tick is due. A job not ready at T+H stalls the sim tick until it is.
 		void CommitHorizonThrough(uint64_t nowTick);
 
-		void CaptureHorizonFence(HorizonFenceState& out) const;
-		/// Fences the horizon state without copying it: the first change while the fence is up saves the state into out first.
-		void FenceHorizon(HorizonFenceState& out) const;
-		/// Lifts a fence and keeps the state as it is.
-		void ReleaseHorizonFence(const HorizonFenceState& in) const;
+		/// @param deferred The fence outlives its Restore: the copy is taken only if the horizon is written before it.
+		void CaptureHorizonFence(HorizonFenceState& out, bool deferred = false) const;
 		void RestoreHorizonFence(const HorizonFenceState& in);
 
 		static constexpr int64_t c_HorizonWaitCapUs = 250000;
@@ -235,8 +233,6 @@ namespace RTE {
 		int64_t LastHorizonReaderWaitUs() const { return m_LastHorizonReaderWaitUs; }
 		uint64_t TestHorizonGeneration() const { return m_HorizonGeneration.load(); }
 		size_t TestHorizonOverlayCount() const;
-		/// Every overlay cell, queued job and the generation, in node order, for comparing two states.
-		std::string TestHorizonStateDigest() const;
 		int TestHorizonPatchMaterialId(const Vector& start, const Vector& end, const HorizonTerrainPatch& patch) const;
 		static HorizonPatchRef TestSharePatch(const HorizonTerrainPatch& patch) { return std::make_shared<const HorizonTerrainPatch>(patch); }
 		int TestLiveRayMaterialId(const Vector& start, const Vector& end) const;
@@ -375,12 +371,19 @@ namespace RTE {
 		mutable CheckpointUnorderedMap<int, HorizonNode> m_HorizonNodes;
 		std::deque<std::shared_ptr<HorizonJob>> m_HorizonJobs;
 		mutable std::mutex m_HorizonMutex;
-		mutable HorizonFenceState* m_HorizonFence = nullptr; //!< Where the state goes before its first change while a preview's fence is up.
 		std::condition_variable m_HorizonApplyCv;
 		bool m_HorizonApplyPending = false;
 		std::atomic<int> m_CommittedHorizonReaders{0};
 		std::unordered_map<uint64_t, int> m_HorizonReaderCounts;
 		std::atomic<uint64_t> m_HorizonGeneration{1};
+		/// Every write of the overlay, the jobs or the generation takes a new process-wide version, so a fence that already holds
+		/// the live version neither copies it nor puts it back.
+		uint64_t m_HorizonStamp = NextHorizonStamp();
+		static uint64_t NextHorizonStamp();
+		mutable HorizonFenceState* m_DeferredHorizonFence = nullptr; //!< A fence whose copy waits for the horizon's next write.
+		void CopyHorizonInto(HorizonFenceState& out) const;
+		/// Every write calls this first, under the horizon lock: a deferred fence takes its copy before the state moves.
+		void HoldDeferredHorizonFence() const;
 		bool m_SelfTestGrid = false;
 		int m_HorizonWorkerDelayMs = 0;
 		bool m_HorizonWorkerLate = false;
@@ -418,10 +421,6 @@ namespace RTE {
 		static const Material* StrongestMaterialAlongPatch(const Vector& start, const Vector& end, const std::vector<HorizonPatchRef>& patches);
 		static void ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonPatchRef>& patches, std::vector<std::array<const Material*, 8>>& materials);
 		HorizonNodeSnapshot SnapshotNode(int nodeId) const;
-		/// Copies the horizon state; the caller holds m_HorizonMutex.
-		void CopyHorizonState(HorizonFenceState& out) const;
-		/// Saves the state into the fence that is up, if it holds nothing yet; called with m_HorizonMutex held before any change.
-		void SaveHorizonForFence() const;
 		void LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job);
 		void ApplyHorizonJob(const HorizonJob& job, const std::vector<std::array<const Material*, 8>>& materials, uint64_t generation);
 		void ClearHorizonState();

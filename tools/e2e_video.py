@@ -1230,6 +1230,16 @@ def capture_evidence_items(scenario, capture, peer):
     elif health['starved']: error = f'saved share={health["saved_share"]}, recorder gap={health["recorder_gap_ms"]} ms, gap bound={health["recorder_gap_bar_ms"]} ms'
     output.append(item(f'recording-rate-{name}', 'Recorder evidence is complete, reaches its declared minimum and meets the existing saved-share/gap bars',
                        error, incomplete=health is None or not health.get('complete', False), recording=health))
+    # The match draws as single player does: the presentation's rate in every 60-tick window, the intervals as even.
+    import frame_pace
+    log = Path(peer['root']) / 'stdout.log'
+    text = log.read_text(encoding='utf-8', errors='replace') if log.is_file() else ''
+    drawn = frame_pace.check(text, 'lockstep')
+    if drawn['status'] == 'NONE':
+        drawn = frame_pace.check(text, 'single')
+    output.append(item(f'drawn-frames-{name}', f'Every 60-tick window of a running activity draws at least {frame_pace.FPS_SHARE:.0%} of the presentation rate '
+                       f'with interval p95 within {frame_pace.P95_PERIODS} frame periods; a run with no running activity reports none',
+                       '' if drawn['passed'] else drawn['reason'], drawn_frames=drawn))
     allowed, stills, error = [], None, ''
     ffmpeg = find_ffmpeg()
     try:
@@ -1900,7 +1910,7 @@ def review(scenario, capture, out):
     # Enumerate the mandatory evidence before reading its results. Missing output remains a required row.
     expected_evidence = []
     for peer in capture['peers']:
-        expected_evidence += [f'recording-rate-{peer["peer"]}', f'recording-stills-{peer["peer"]}',
+        expected_evidence += [f'recording-rate-{peer["peer"]}', f'drawn-frames-{peer["peer"]}', f'recording-stills-{peer["peer"]}',
                               *[f'screen-{name}-{peer["peer"]}' for name in sorted(expected_screen_watches(peer))]]
         items.extend(capture_evidence_items(scenario, capture, peer))
     items.extend(matching_peer_log_evidence(scenario, capture))
@@ -1978,7 +1988,8 @@ def stage_peer(scenario, peer, root, tokens):
     from relay_private import LOGIN_KEYS,placeholder,public_value
     private_values=[str(value) for key,value in tokens.items() if key in LOGIN_KEYS and value]
     tokens={key:placeholder(key) if key in LOGIN_KEYS else value for key,value in tokens.items()}
-    environment = {"CCCP_HEADLESS": "1"}
+    # Every peer reports its drawn frames per 60 ticks, single player as a lockstep round does (frame_pace.py).
+    environment = {"CCCP_HEADLESS": "1", "CC_TEST_FRAME_PACE": "1"}
     if peer.get("probe"):
         directory = Path(root) / "probe"
         directory.mkdir(parents=True, exist_ok=True)

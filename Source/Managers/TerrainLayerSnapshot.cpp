@@ -5,66 +5,13 @@
 #include "SLTerrain.h"
 #include "CheckpointArchive.h"
 #include "PageWriteFence.h"
-#include "System.h"
 
 #include "allegro.h"
 
-#include <algorithm>
-#include <array>
-#include <chrono>
-#include <cstdlib>
 #include <cstring>
-#include <format>
-#include <string>
 #include <unordered_set>
 
 namespace RTE {
-
-	namespace {
-		// Test lever CC_TEST_PREVIEW_TERRAIN_DETAILS: every 600 restores, where the snapshots' captures and restores spent their time.
-		struct SnapshotCosts {
-			std::array<int64_t, 5> captureUs{};
-			std::array<int64_t, 6> restoreUs{};
-			uint64_t captures = 0, restores = 0, pagesRestored = 0, faults = 0, faultsAtCapture = 0, overlayCells = 0, jobs = 0, boxes = 0, materialAreas = 0;
-		};
-		SnapshotCosts s_SnapshotCosts;
-
-		bool SnapshotDetailsEnabled() {
-			static const bool enabled = std::getenv("CC_TEST_PREVIEW_TERRAIN_DETAILS") != nullptr;
-			return enabled;
-		}
-
-		int64_t SnapshotNowUs() {
-			return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
-		}
-
-		// Times the stages of one capture or restore into the given sums; free while the lever is unset.
-		template <size_t N> struct SnapshotLaps {
-			std::array<int64_t, N>& sums;
-			const bool enabled = SnapshotDetailsEnabled();
-			int64_t lapUs = enabled ? SnapshotNowUs() : 0;
-			void operator()(size_t stage) {
-				if (!enabled) return;
-				const int64_t now = SnapshotNowUs();
-				sums[stage] += now - lapUs;
-				lapUs = now;
-			}
-		};
-
-		void PrintSnapshotCosts() {
-			SnapshotCosts& costs = s_SnapshotCosts;
-			const double restores = static_cast<double>(costs.restores);
-			const auto per = [restores](uint64_t value) { return static_cast<double>(value) / restores; };
-			std::string capture, restore;
-			static constexpr std::array<const char*, 5> captureNames{"pixels", "layers", "unseen", "boxes", "finders"};
-			static constexpr std::array<const char*, 6> restoreNames{"check", "replace", "pixels", "layers", "unseen", "horizon"};
-			for (size_t stage = 0; stage < captureNames.size(); ++stage) capture += std::format("{}{}:{:.1f}", stage ? "," : "", captureNames[stage], static_cast<double>(costs.captureUs[stage]) / static_cast<double>(std::max<uint64_t>(costs.captures, 1)));
-			for (size_t stage = 0; stage < restoreNames.size(); ++stage) restore += std::format("{}{}:{:.1f}", stage ? "," : "", restoreNames[stage], static_cast<double>(costs.restoreUs[stage]) / restores);
-			System::PrintDiagnosticLine(std::format("[preview-terrain] captures={} restores={} capture_us={} restore_us={} pages_restored={:.1f} faults={:.1f} overlay_cells={:.1f} jobs={:.1f} boxes={:.1f} material_areas={:.1f}",
-			    costs.captures, costs.restores, capture, restore, per(costs.pagesRestored), per(costs.faults), per(costs.overlayCells), per(costs.jobs), per(costs.boxes), per(costs.materialAreas)));
-			costs = {};
-		}
-	} // namespace
 
 	void TerrainLayerSnapshot::CopyFrom(BITMAP* bitmap, std::vector<uint8_t>& out) {
 		if (!bitmap) { out.clear(); return; }
@@ -124,7 +71,6 @@ namespace RTE {
 		if (!terrain) {
 			return false;
 		}
-		SnapshotLaps<5> lap{s_SnapshotCosts.captureUs};
 		width = terrain->GetMaterialBitmap()->w;
 		height = terrain->GetMaterialBitmap()->h;
 		fencedBitmaps.clear();
@@ -147,14 +93,12 @@ namespace RTE {
 			CopyFrom(terrain->GetBGColorBitmap(), bg);
 			CopyFrom(terrain->m_MaterialCopy, materialCopy);
 		}
-		lap(0);
 		CaptureLayer(terrain, terrainLayers[0], false);
 		CaptureLayer(terrain->GetFGSceneLayer(), terrainLayers[1], false);
 		CaptureLayer(terrain->GetBGSceneLayer(), terrainLayers[2], false);
 		updatedMaterialAreas = terrain->m_UpdatedMaterialAreas;
 		orbitDirection = static_cast<int>(terrain->m_OrbitDirection);
 		layerToDraw = static_cast<int>(terrain->m_LayerToDraw);
-		lap(1);
 		for (int team = 0; team < Activity::MaxTeamCount; ++team) {
 			CaptureLayer(scene->m_apUnseenLayer[team], unseen[team], true);
 			seenPixels[team] = scene->m_SeenPixels[team];
@@ -162,7 +106,6 @@ namespace RTE {
 			unseenPixelSize[team] = scene->m_UnseenPixelSize[team];
 			scanScheduled[team] = scene->m_ScanScheduled[team];
 		}
-		lap(2);
 		horizonBoxes = scene->m_HorizonTerrainBoxes;
 		uint64_t copiedBytes = 0;
 		uint64_t sharedPatchBytes = 0;
@@ -173,27 +116,18 @@ namespace RTE {
 				sharedPatchBytes += box.patch->pixels.size();
 			}
 		}
-		lap(3);
 		for (size_t index = 0; index < scene->m_pPathFinders.size(); ++index) {
-			horizonFinders[index] = {};
+			// A fence that still holds the pathfinder's live version keeps its copy.
 			if (scene->m_pPathFinders[index]) {
-				if (fenceHorizon) scene->m_pPathFinders[index]->FenceHorizon(horizonFinders[index]);
-				else scene->m_pPathFinders[index]->CaptureHorizonFence(horizonFinders[index]);
+				scene->m_pPathFinders[index]->CaptureHorizonFence(horizonFinders[index], deferHorizon);
+			} else {
+				horizonFinders[index] = {};
 			}
-			copiedBytes += horizonFinders[index].overlay.size() * (sizeof(int) + sizeof(HorizonFenceState::Cell)) + horizonFinders[index].jobs.size() * sizeof(std::shared_ptr<void>);
+			if (!horizonFinders[index].deferred) copiedBytes += horizonFinders[index].overlay.size() * (sizeof(int) + sizeof(HorizonFenceState::Cell)) + horizonFinders[index].jobs.size() * sizeof(std::shared_ptr<void>);
 		}
 		// The patches are referenced, not copied; the completion pass reads both numbers out of the horizon report.
 		PathFinder::RecordHorizonFenceBytes(copiedBytes, sharedPatchBytes);
 		horizonHeld = true;
-		lap(4);
-		if (lap.enabled) {
-			SnapshotCosts& costs = s_SnapshotCosts;
-			++costs.captures;
-			costs.faultsAtCapture = PageWriteFence::GetFaultCount();
-			for (const HorizonFenceState& finder: horizonFinders) { costs.overlayCells += finder.overlay.size(); costs.jobs += finder.jobs.size(); }
-			costs.boxes += horizonBoxes.size();
-			costs.materialAreas += updatedMaterialAreas.size();
-		}
 		return true;
 	}
 
@@ -213,15 +147,11 @@ namespace RTE {
 	}
 
 	bool TerrainLayerSnapshot::Restore() const {
-		SnapshotLaps<6> lap{s_SnapshotCosts.restoreUs};
-		if (lap.enabled) s_SnapshotCosts.faults += PageWriteFence::GetFaultCount() - s_SnapshotCosts.faultsAtCapture;
 		if (!CanRestore()) {
 			// Pixels that cannot go back are not held read-only either.
 			if (pixelsFenced) PageWriteFence::Release();
-			ReleaseHorizon();
 			return false;
 		}
-		lap(0);
 		Scene* scene = g_SceneMan.GetScene();
 		SLTerrain* terrain = scene->GetTerrain();
 		// Construct changed fog layers before changing any live pixels.
@@ -234,15 +164,12 @@ namespace RTE {
 				BITMAP* pixels = create_bitmap_ex(8, saved.width, saved.height);
 				if (!pixels || (replacements[team] = std::make_unique<SceneLayer>())->Create(pixels, saved.masked, saved.offset, saved.wrapX, saved.wrapY, saved.scrollInfo) < 0) {
 					if (pixelsFenced) PageWriteFence::Release();
-					ReleaseHorizon();
 					return false;
 				}
 			}
 		}
-		lap(1);
 		if (pixelsFenced) {
-			const size_t pages = PageWriteFence::Restore();
-			if (lap.enabled) s_SnapshotCosts.pagesRestored += pages;
+			PageWriteFence::Restore();
 			if (!fencedBitmaps.back() && terrain->m_MaterialCopy) { destroy_bitmap(terrain->m_MaterialCopy); terrain->m_MaterialCopy = nullptr; }
 		} else {
 			CopyTo(terrain->GetMaterialBitmap(), mat);
@@ -251,14 +178,12 @@ namespace RTE {
 			if (!materialCopy.empty()) { terrain->UpdateMaterialCopy(); CopyTo(terrain->m_MaterialCopy, materialCopy); }
 			else if (terrain->m_MaterialCopy) { destroy_bitmap(terrain->m_MaterialCopy); terrain->m_MaterialCopy = nullptr; }
 		}
-		lap(2);
 		RestoreLayer(terrain, terrainLayers[0]);
 		RestoreLayer(terrain->GetFGSceneLayer(), terrainLayers[1]);
 		RestoreLayer(terrain->GetBGSceneLayer(), terrainLayers[2]);
 		terrain->m_UpdatedMaterialAreas = updatedMaterialAreas;
 		terrain->m_OrbitDirection = static_cast<Directions>(orbitDirection);
 		terrain->m_LayerToDraw = static_cast<SLTerrain::LayerType>(layerToDraw);
-		lap(3);
 		for (int team = 0; team < Activity::MaxTeamCount; ++team) {
 			if (!unseen[team].width || replacements[team]) {
 				delete scene->m_apUnseenLayer[team];
@@ -270,7 +195,6 @@ namespace RTE {
 			scene->m_UnseenPixelSize[team] = unseenPixelSize[team];
 			scene->m_ScanScheduled[team] = scanScheduled[team];
 		}
-		lap(4);
 		if (horizonHeld) {
 			scene->m_HorizonTerrainBoxes = horizonBoxes;
 			for (size_t index = 0; index < scene->m_pPathFinders.size(); ++index) {
@@ -279,17 +203,7 @@ namespace RTE {
 				}
 			}
 		}
-		lap(5);
-		if (lap.enabled && ++s_SnapshotCosts.restores == 600) PrintSnapshotCosts();
 		return true;
-	}
-
-	void TerrainLayerSnapshot::ReleaseHorizon() const {
-		Scene* scene = g_SceneMan.GetScene();
-		if (!horizonHeld || !scene) return;
-		for (size_t index = 0; index < scene->m_pPathFinders.size(); ++index) {
-			if (scene->m_pPathFinders[index]) scene->m_pPathFinders[index]->ReleaseHorizonFence(horizonFinders[index]);
-		}
 	}
 
 	void TerrainLayerSnapshot::CaptureLayer(SceneLayer* source, Layer& target, bool pixels) {

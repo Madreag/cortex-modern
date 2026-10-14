@@ -1307,8 +1307,9 @@ namespace RTE {
 		/// A faithful clone copies live sim state and keeps identity; rollback snapshots use it, gameplay spawns never do.
 		static bool IsFaithfulClone() { return s_FaithfulCloneDepth > 0; }
 		static bool FaithfulCloneRegisters() { return s_FaithfulCloneRegisters; }
-		/// A faithful clone that may be adopted or saved keeps each class's runtime text; a preview's throwaway clone is never either.
-		static bool FaithfulCloneKeepsRuntime() { return s_FaithfulCloneDepth > 0 && !s_FaithfulClonePreview; }
+		/// A faithful clone that may be adopted or saved keeps each class's runtime text; a preview's throwaway clone and a speculation's
+		/// shadow are never either.
+		static bool FaithfulCloneKeepsRuntime() { return s_FaithfulCloneDepth > 0 && !s_FaithfulClonePreview && s_FaithfulCloneRuntime; }
 		/// A preview's clone lives while its pointers do, so it holds them as they are rather than by checkpoint name.
 		static bool FaithfulCloneForPreview() { return s_FaithfulCloneDepth > 0 && s_FaithfulClonePreview; }
 		struct ScriptLoadDeferralScope {
@@ -1317,15 +1318,18 @@ namespace RTE {
 		};
 
 		struct FaithfulCloneScope {
-			explicit FaithfulCloneScope(bool registerWithMovableMan, bool preview = false) : previousRegisters(s_FaithfulCloneRegisters), previousPreview(s_FaithfulClonePreview) {
+			explicit FaithfulCloneScope(bool registerWithMovableMan, bool preview = false, bool keepsRuntime = true) :
+			    previousRegisters(s_FaithfulCloneRegisters), previousPreview(s_FaithfulClonePreview), previousRuntime(s_FaithfulCloneRuntime) {
 				++s_FaithfulCloneDepth;
 				s_FaithfulCloneRegisters = registerWithMovableMan;
 				s_FaithfulClonePreview = preview;
+				s_FaithfulCloneRuntime = keepsRuntime;
 			}
-			~FaithfulCloneScope() { --s_FaithfulCloneDepth; s_FaithfulCloneRegisters = previousRegisters; s_FaithfulClonePreview = previousPreview; }
+			~FaithfulCloneScope() { --s_FaithfulCloneDepth; s_FaithfulCloneRegisters = previousRegisters; s_FaithfulClonePreview = previousPreview; s_FaithfulCloneRuntime = previousRuntime; }
 		private:
 			bool previousRegisters;
 			bool previousPreview;
+			bool previousRuntime;
 		};
 
 		/// Drops every pending snapshot stash on a normal (spawn-normalized) world add, so
@@ -1697,6 +1701,7 @@ namespace RTE {
 		static int s_FaithfulCloneDepth;
 		static bool s_FaithfulCloneRegisters;
 		static bool s_FaithfulClonePreview;
+		inline static bool s_FaithfulCloneRuntime = true;
 		int64_t m_PersistedRestTimerStart;
 		bool m_HasPersistedRestTimerStart;
 		int m_PersistedVelOscillations;

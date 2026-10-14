@@ -456,6 +456,8 @@ void FrameMan::FeelBeforePreview() {
 	    {"wraps_x", g_SceneMan.SceneWrapsX()}, {"wraps_y", g_SceneMan.SceneWrapsY()}});
 }
 
+double FrameMan::FeelCapHz() { return s_Feel.capHz; }
+
 bool FrameMan::FeelBeginDraw() {
 	if (s_Feel.capHz > 0) {
 		const double now = FeelNowMS();

@@ -67,6 +67,9 @@ namespace RTE {
 		static double GetPreviewMs() { return s_PreviewMs; }
 		/// Each preview stage's mean wall time over the previews since the previous call, for the memory census.
 		static std::string DescribePhasesSinceLastCall();
+		/// Each preview stage's wall time summed over every preview, beside the stages' names.
+		static const auto& GetPhaseMs() { return s_PhaseMs; }
+		static const auto& GetPhaseNames() { return s_PhaseNames; }
 		static uint64_t GetShadows();
 		static uint64_t GetTaken();
 		static uint64_t GetViolations();

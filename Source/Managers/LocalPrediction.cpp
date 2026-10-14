@@ -280,7 +280,7 @@ namespace RTE {
 			lapStart = now;
 		};
 		// The seeing pass and the MOID draw still walk the live actor trees.
-		g_MovableMan.WaitForActorsSeeTask("preview");
+		g_MovableMan.WaitForActorsSeeTask();
 		g_MovableMan.CompleteQueuedMOIDDrawings();
 		lap(1);
 		// Fence everything a preview tick can touch; all of it goes back before the canonical sim resumes.
@@ -296,8 +296,7 @@ namespace RTE {
 		static TerrainLayerSnapshot terrain;
 		// Only the pages a preview writes are copied; the platforms without a page fence copy the whole terrain.
 		terrain.fencePixels = true;
-		// The horizon overlay grows with every terrain change of a match; a preview that changes none copies none.
-		terrain.fenceHorizon = true;
+		terrain.deferHorizon = true;
 		if (!terrain.Capture()) {
 			return;
 		}
@@ -582,7 +581,7 @@ namespace RTE {
 		s_RenderScriptsWereFrozen = LuaMan::AreScriptsFrozen();
 		LuaMan::SetScriptsFrozen(true);
 		Trace("render begin");
-		g_MovableMan.WaitForActorsSeeTask("render");
+		g_MovableMan.WaitForActorsSeeTask();
 		g_MovableMan.CompleteQueuedMOIDDrawings();
 		Activity* activity = g_ActivityMan.GetActivity();
 		for (const Preview& preview: s_Previews) {

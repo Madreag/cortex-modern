@@ -367,7 +367,7 @@ namespace RTE {
 	bool FrameRecorder::StageTextureReadback(unsigned int texture, int width, int height, std::string& error) {
 		if (!m_StagingHeld) { error = "no admitted frame"; return false; }
 #if defined(__APPLE__) || defined(__linux__)
-		// A fenced copy collected on this context later; a direct read here would wait for the GPU every captured frame.
+		// A fenced copy collected on this context by a later frame: the frame never waits for the GPU to finish drawing it.
 		m_StagedTextureReadback = true;
 		m_StagedReadback = FrameReadbackContext::Submit(texture, width, height, error, GL_BGRA);
 		return m_StagedReadback != nullptr;
