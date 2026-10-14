@@ -1307,6 +1307,7 @@ namespace RTE {
 		void (*m_ShadowMadeHook)(MovableObject* resident, MovableObject* shadow) = nullptr;
 
 		MovableObject* LookupMOID(MOID whichID) const;
+		MovableObject* LookupFrozenMOID(MOID whichID) const;
 		int ResidentKind(const MovableObject* mo) const;
 		MovableObject* ShadowOf(MovableObject* resident);
 		MovableObject* SpeculativeView(MovableObject* found);
