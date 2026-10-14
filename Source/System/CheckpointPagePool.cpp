@@ -978,7 +978,7 @@ bool CheckpointNativeStorage::Enabled(bool retained) {
 	if (s_NativeStorageCapture) return false;
 	if (retained || s_NativeStorageAllocation) return true;
 	if (s_NativeStorageWorldAllocation) return *s_NativeStorageWorldAllocation;
-	return WorldEnabled() || ScenarioRunner::HasLockstepCoordinator();
+	return WorldEnabled() || ScenarioRunner::LockstepCoordinatorAttached();
 }
 
 void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {

@@ -1225,7 +1225,7 @@ int Atom::Save(Writer& writer) const {
 
 void* Atom::GetPoolMemory() {
 	std::lock_guard<std::mutex> guard(s_MemoryPoolMutex);
-	if (s_NativeAtomAllocation || ScenarioRunner::HasLockstepCoordinator() || CheckpointNativeStorage::Enabled()) {
+	if (s_NativeAtomAllocation || ScenarioRunner::LockstepCoordinatorAttached() || CheckpointNativeStorage::Enabled()) {
 		// The native pool stays alive through manager and static teardown.
 		if (!s_NativeAtomPool) s_NativeAtomPool = new NativeAtomPool;
 		if (s_NativeAtomPool->free.empty()) s_NativeAtomPool->pages.Grow(sizeof(Atom), std::max(s_PoolAllocBlockCount, 10), s_NativeAtomPool->free);

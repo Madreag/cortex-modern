@@ -34,6 +34,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <cstdlib>
@@ -62,6 +63,7 @@ namespace RTE {
 		std::unique_ptr<ControllerLog> s_ControllerReplayLog;
 		std::string s_ControllerReplayError;
 		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
+		std::atomic<bool> s_LockstepCoordinatorAttached{false};
 		bool s_LocalStartParkPublished = false;
 		ScenarioRunner::LockstepChecksumCounters s_RetiredChecksumCounters;
 		uint64_t s_LockstepAppliedFrame = 0;
@@ -1137,6 +1139,7 @@ namespace RTE {
 			s_RetiredChecksumCounters.mismatches += retiring.checksumMismatches;
 		}
 		s_LockstepCoordinator = coordinator;
+		s_LockstepCoordinatorAttached.store(coordinator != nullptr, std::memory_order_release);
 		NetLockstepPlane::Target(coordinator);
 		s_PreSimWait.reset();
 		s_PaceSlide.Reset();
@@ -1211,6 +1214,10 @@ namespace RTE {
 	bool ScenarioRunner::HasLockstepCoordinator() {
 		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator != nullptr;
+	}
+
+	bool ScenarioRunner::LockstepCoordinatorAttached() noexcept {
+		return s_LockstepCoordinatorAttached.load(std::memory_order_acquire);
 	}
 
 	std::string ScenarioRunner::GetLockstepStopReason() {
