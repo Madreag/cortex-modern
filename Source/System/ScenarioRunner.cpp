@@ -1854,7 +1854,10 @@ namespace RTE {
 	bool ScenarioRunner::IsLockstepHoldNoticeVisible(uint8_t peerId) {
 		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) return true;
-		if (peerId == 0) peerId = s_LockstepCoordinator->GetConfig().localPeerId;
+		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
+		if (peerId == 0) peerId = local;
+		// This machine's own seat reads held while it is held, whether it went quiet or fell behind: a slow seat still hears its host.
+		if (peerId == local && IsLockstepOwnSeatHeld()) return true;
 		return !s_LockstepCoordinator->SeatBridgeTimes().contains(peerId) || s_LockstepCoordinator->IsSeatHoldVisible(peerId);
 	}
 
