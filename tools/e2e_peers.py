@@ -2,11 +2,14 @@
 
     python tools/e2e_peers.py --scenario fight15-s02 --out <capture> \
         --peer-boxes host=<BOX>,joiner=<BOX> --boxes-file <box facts>
+    python tools/e2e_peers.py --scenario fight15-s11 --out <capture> \
+        --peer-boxes host=<BOX>,joiner1=<BOX>,joiner2=<BOX>,joiner3=<BOX> --boxes-file <box facts>
     python tools/e2e_peers.py --check-spread <capture>
 
 Box facts stay outside the game tree. Each box supplies name, ssh, os, hostname,
 repo, scratch, python and build_receipt. Windows also supplies session_dir and
-task; a Mac or Linux joiner supplies binary and plays in a visible window.
+task; a Mac or Linux player supplies binary and plays in a visible window.
+The host is a Windows box; every other player may be Windows, a Mac or Linux.
 Builds come from each box's own checkout.
 """
 from __future__ import annotations
@@ -32,12 +35,16 @@ import uuid
 
 import e2e_video as video
 
-JOINER_SYSTEMS = ("darwin", "linux")
+POSIX_SYSTEMS = ("darwin", "linux")
+PLAYER_SYSTEMS = ("win32", *POSIX_SYSTEMS)
 PLAYER_SCRIPTS = {"darwin": ("/bin/zsh", "tools/e2e/peer_mac.sh"), "linux": ("/bin/bash", "tools/e2e/peer_linux.sh")}
+# A player's name is a scene token's suffix ({PROBE_DIR_joiner2}) and a folder name on every box.
+PLAYER_NAME = r"[a-z][a-z0-9]*"
+SIGNAL_FILE = r"\{PROBE_DIR_(" + PLAYER_NAME + r")\}/([A-Za-z0-9_-]+\.(?:json|txt|mark))"
 
 
 def headed_box(box):
-    return box["os"] in JOINER_SYSTEMS or box.get("headed", False)
+    return box["os"] in POSIX_SYSTEMS or box.get("headed", False)
 
 
 def read(path):
@@ -69,24 +76,38 @@ def scene_runs(document):
     return document.get("runs") or [{"name": "run0", "peers": document["peers"]}]
 
 
+def scene_roles(document, run):
+    """The run's players, the host first: the host listens before anyone joins."""
+    names = [peer["name"] for peer in run.get("peers", document.get("peers", []))]
+    return ["host"] + [name for name in names if name != "host"]
+
+
 def player_files(document, run):
     files = set()
+    roles = scene_roles(document, run)
     for peer in run.get("peers", document.get("peers", [])):
         for key in ("menu_script", "probe", "input_script"):
             if peer.get(key):
                 text = video.scenario_text(document, peer[key])
-                for role, name in re.findall(r'\{PROBE_DIR_(host|joiner)\}/([A-Za-z0-9_-]+\.(?:json|txt|mark))', text):
-                    files.add(role + "-stage/probe/" + name)
+                for role, name in re.findall(SIGNAL_FILE, text):
+                    if role in roles:
+                        files.add(role + "-stage/probe/" + name)
     return sorted(files)
 
 
 def check_scene(document):
     if not document.get("public_directory"):
         raise ValueError("scene must use its public directory")
+    roles = None
     for run in scene_runs(document):
         peers = run.get("peers", document.get("peers", []))
-        if {peer["name"] for peer in peers} != {"host", "joiner"} or len(peers) != 2:
-            raise ValueError("scene needs exactly one host and one joiner per run")
+        names = [peer["name"] for peer in peers]
+        if names.count("host") != 1 or len(peers) < 2 or len(set(names)) != len(names) or \
+                not all(re.fullmatch(PLAYER_NAME, name) for name in names):
+            raise ValueError("scene needs one host and at least one joiner per run, each with its own lowercase name")
+        if roles is not None and set(names) != roles:
+            raise ValueError("every run of the scene needs the same players")
+        roles = set(names)
         for peer in peers:
             settings = peer.get("settings", {})
             if settings.get("NetworkConnectionMode") != "RelayOnly" or settings.get("NetworkPortMapEnable") != 0:
@@ -96,11 +117,11 @@ def check_scene(document):
             if any(peer.get(key) for key in ("start_when", "retain_runtime_from", "kill_when", "kill_after_s", "kill_at_tick")):
                 raise ValueError("scene needs another peer's process control; this launcher cannot run it")
             scripts = [video.scenario_text(document, peer[key]) for key in ("menu_script", "probe", "input_script") if peer.get(key)]
-            if any(re.search(r"\{(?:STAGE|VIDEO)_(?:host|joiner)\}", text) for text in scripts):
+            if any(re.search(r"\{(?:STAGE|VIDEO)_" + PLAYER_NAME + r"\}", text) for text in scripts):
                 raise ValueError("scene needs another player's runtime files; this launcher cannot run it")
             for text in scripts:
-                remaining = re.sub(r'\{PROBE_DIR_(host|joiner)\}/[A-Za-z0-9_-]+\.(?:json|txt|mark)', '', text)
-                if re.search(r"\{PROBE_DIR_(?:host|joiner)\}", remaining):
+                remaining = re.sub(SIGNAL_FILE, '', text)
+                if re.search(r"\{PROBE_DIR_" + PLAYER_NAME + r"\}", remaining):
                     raise ValueError("another player's probe file must name one declared marker")
 
 
@@ -138,7 +159,7 @@ def check_build(request):
     source = video.source_evidence(repo)
     if source["tip"] != request["commit"] or source["dirty"]:
         raise ValueError("player checkout differs from the committed scene launcher")
-    if box["os"] in JOINER_SYSTEMS:
+    if box["os"] in POSIX_SYSTEMS:
         os.environ["CCCP_TEST_BINARY"] = str(repo / box["binary"])
     receipt = read(box["build_receipt"])
     executable = video.file_evidence(video.capture_binary(repo))
@@ -172,7 +193,7 @@ def play(request_path):
     options = SimpleNamespace(repo=Path(request["box"]["repo"]), size=None, port=request["port"], fps=request["fps"],
                               setting=[], render_cap=60, headed=headed, fullstate_every=0, sheet_every=request["sheet_every"],
                               tokens={"PROBE_DIR_" + other: out / name / (other + "-stage/probe")
-                                      for other in ("host", "joiner")},
+                                      for other in scene_roles(document, run)},
                               resume_tokens={}, service_tokens={}, completed_runs=[],
                               scratch_root=Path(request["box"]["scratch"]), scratch_limit_bytes=video.SCRATCH_LIMIT,
                               remote_capture=PlayerRun(request, out / (role + "-started.json")))
@@ -212,8 +233,9 @@ def spread_check(capture):
     for run in runs:
         boxes, hosts = [], []
         peers = run.get("peers", [])
-        if len(peers) != 2 or {peer.get("peer") for peer in peers} != {"host", "joiner"}:
-            reasons.append(run["name"] + ": host or joiner record is absent")
+        roles = set(run.get("peer_boxes", {}))
+        if "host" not in roles or len(roles) < 2 or len(peers) != len(roles) or {peer.get("peer") for peer in peers} != roles:
+            reasons.append(run["name"] + ": a player's record is absent")
         for peer in peers:
             label = run["name"] + "/" + peer["peer"]
             box = peer.get("box")
@@ -261,13 +283,15 @@ def pack(request_path):
     request = read(request_path)
     root = Path(request["out"])
     archive = root.with_suffix(".tgz")
-    run_name = scene_runs(scene(str(Path(request["box"]["repo"]) / request["scene_relative"])))[request["run_index"]].get("name", "run" + str(request["run_index"]))
+    document = scene(str(Path(request["box"]["repo"]) / request["scene_relative"]))
+    run = scene_runs(document)[request["run_index"]]
+    run_name = run.get("name", "run" + str(request["run_index"]))
+    # Every other player brings its own stage; this player packs only what it wrote.
+    skipped = {"runtime"} | {other + "-stage" for other in scene_roles(document, run) if other != request["role"]}
     # A twenty-minute fight's tick history is mostly repeated hashes; compressed, the player's files cross the relay box's link faster.
     with tarfile.open(archive, "w:gz", compresslevel=6) as output:
         for directory, folders, files in os.walk(root, followlinks=False):
-            other = "joiner" if request["role"] == "host" else "host"
-            folders[:] = [name for name in folders if name not in ("runtime", other + "-stage")
-                          and not video.is_link(Path(directory) / name)]
+            folders[:] = [name for name in folders if name not in skipped and not video.is_link(Path(directory) / name)]
             for name in files:
                 path = Path(directory) / name
                 if not video.is_link(path) and stat.S_ISREG(path.stat().st_mode):
@@ -427,16 +451,17 @@ def box_runner_env(box):
 
 def selected_boxes(value, path):
     assignments = dict(part.split("=", 1) for part in value.split(","))
-    if set(assignments) != {"host", "joiner"} or len(set(name.casefold() for name in assignments.values())) != 2:
-        raise ValueError("name two different boxes for host and joiner")
+    roles = ["host"] + [role for role in assignments if role != "host"]
+    if "host" not in assignments or len(assignments) < 2 or len(set(name.casefold() for name in assignments.values())) != len(assignments):
+        raise ValueError("name a host and a different box for each player")
     entries = {box["name"].casefold(): box for box in read(path)["boxes"]}
-    result = {role: entries[name.casefold()] for role, name in assignments.items()}
+    result = {role: entries[assignments[role].casefold()] for role in roles}
     for box in result.values():
         box_runner_env(box)
-    if result["host"]["os"] != "win32" or result["joiner"]["os"] not in JOINER_SYSTEMS:
-        raise ValueError("this scene launcher needs a Windows host and a Mac or Linux joiner")
-    if result["host"]["hostname"].casefold() == result["joiner"]["hostname"].casefold():
-        raise ValueError("both assignments name one engine host")
+    if result["host"]["os"] != "win32" or any(box["os"] not in PLAYER_SYSTEMS for box in result.values()):
+        raise ValueError("this scene launcher needs a Windows host and Windows, Mac or Linux joiners")
+    if len({box["hostname"].casefold() for box in result.values()}) != len(result):
+        raise ValueError("two assignments name one engine host")
     return result
 
 
@@ -488,8 +513,11 @@ def capture_scene(args):
         name = run.get("name", "run" + str(index))
         players, collected = {}, set()
         stop, file_errors, sharing = threading.Event(), [], None
+        roles = scene_roles(document, run)
         try:
-            for role in ("host", "joiner"):
+            if set(roles) != set(boxes):
+                raise ValueError("the assigned boxes name other players than the scene: " + ", ".join(roles))
+            for role in roles:
                 box = boxes[role]
                 remote_out = box["scratch"].rstrip("/") + "/" + out.name + "-" + name + "-" + uuid.uuid4().hex[:8]
                 request = dict(box=box, role=role, run_index=index, out=remote_out, commit=source["tip"],
@@ -514,7 +542,7 @@ def capture_scene(args):
                 collected.add(role)
                 collect_player(out, name, role, player)
             halves = [move_paths(read(out / name / (role + "-capture.json")), players[role][1]["out"], out)
-                      for role in ("host", "joiner")]
+                      for role in roles]
             captured = {**halves[0], "peers": [peer for half in halves for peer in half["peers"]],
                         "peer_boxes": {role: boxes[role]["name"] for role in boxes}, "topology": "spread",
                         "interrupted": next((half["interrupted"] for half in halves if half.get("interrupted")), None)}
@@ -524,7 +552,7 @@ def capture_scene(args):
             for peer in captured["peers"]:
                 peer.update(topology="spread", proof=check["passed"])
             captured["repo"] = str(repo)
-            # Each player brought its own history; the gates that compare players run once over both, as on one box.
+            # Each player brought its own history; the gates that compare players run once over all of them, as on one box.
             video.feel_probes({**document, **run}, captured, source)
             video.review(document, captured, out / name)
             video.write_json(out / "capture.json", capture)

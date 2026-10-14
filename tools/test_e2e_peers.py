@@ -273,9 +273,9 @@ class JoinerBoxTest(unittest.TestCase):
             self.assertEqual(peers.selected_boxes("host=Ally,joiner=" + joiner, self.boxes)["joiner"]["name"], joiner)
 
     def test_only_a_windows_host(self):
-        with self.assertRaisesRegex(ValueError, "Windows host and a Mac or Linux joiner"):
+        with self.assertRaisesRegex(ValueError, "needs a Windows host"):
             peers.selected_boxes("host=Linux,joiner=Mac", self.boxes)
-        with self.assertRaisesRegex(ValueError, "Windows host and a Mac or Linux joiner"):
+        with self.assertRaisesRegex(ValueError, "needs a Windows host"):
             peers.selected_boxes("host=Mac,joiner=Ally", self.boxes)
 
     def test_linux_player_script(self):
@@ -354,6 +354,123 @@ class JoinerBoxTest(unittest.TestCase):
         self.assertIsNone(peers.read_player_files(request)["pace"])
         (out / "run0" / "joiner" / peers.video.PACE_REPORT).write_text(json.dumps({"line": "[fight-pace] RED"}))
         self.assertEqual(peers.read_player_files(request)["pace"]["line"], "[fight-pace] RED")
+
+
+class WindowsJoinersTest(unittest.TestCase):
+    """Four players on four Windows boxes: every joiner plays through its own box's game task, each on its own engine host."""
+
+    BOXES = [("EROL-PC", "EROL-PC", "erol-pc"), ("Ally", "Erol-Ally7", "ally-ts"), ("EDITH", "EDITH", "edith-ts"), ("Z13", "Erol-Tablet", "z13-ts")]
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.boxes = self.root / "boxes.json"
+        self.write_boxes(self.BOXES)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def write_boxes(self, boxes):
+        self.boxes.write_text(json.dumps({"boxes": [
+            dict(name=name, os="win32", hostname=host, ssh=alias, repo=f"C:/{alias}/tree", scratch=f"C:/{alias}/mx", python="python",
+                 session_dir="C:/session1", task="cortex-session1") for name, host, alias in boxes]}))
+
+    def test_windows_joiners_play_through_their_own_box(self):
+        boxes = peers.selected_boxes("host=EROL-PC,joiner1=Ally,joiner2=EDITH,joiner3=Z13", self.boxes)
+        self.assertEqual(list(boxes), ["host", "joiner1", "joiner2", "joiner3"])
+        self.assertEqual([box["name"] for box in boxes.values()], ["EROL-PC", "Ally", "EDITH", "Z13"])
+        request = self.root / "request.json"
+        request.write_text(json.dumps(dict(out="C:/ally-ts/mx/s11-run0-1")))
+        with mock.patch.object(peers, "ssh"), mock.patch.object(peers, "copy_file"), \
+                mock.patch.object(peers.subprocess, "Popen") as popen:
+            peers.launch(boxes["joiner1"], request, None)
+        command = popen.call_args.args[0]
+        self.assertEqual(command[-2:], ["ally-ts", "pwsh -NoProfile -File C:/ally-ts/tree/tools/e2e/peer_box.ps1 -Request C:/ally-ts/mx/s11-run0-1/request.json"])
+        self.assertFalse(peers.headed_box(boxes["joiner2"]))
+
+    def test_each_player_needs_its_own_engine_host(self):
+        with self.assertRaisesRegex(ValueError, "a different box for each player"):
+            peers.selected_boxes("host=EROL-PC,joiner1=Ally,joiner2=Ally", self.boxes)
+        with self.assertRaisesRegex(ValueError, "a different box for each player"):
+            peers.selected_boxes("joiner1=Ally,joiner2=EDITH", self.boxes)
+        self.write_boxes([*self.BOXES[:3], ("Z13", "EDITH", "z13-ts")])
+        with self.assertRaisesRegex(ValueError, "two assignments name one engine host"):
+            peers.selected_boxes("host=EROL-PC,joiner1=Ally,joiner2=EDITH,joiner3=Z13", self.boxes)
+
+    def capture(self, hosts=None):
+        hosts = hosts or {role: role + "-computer" for role in ("host", "joiner1", "joiner2", "joiner3")}
+        run = dict(name="run0", peer_boxes={role: role + " box" for role in hosts}, peers=[])
+        for role, host in hosts.items():
+            root = self.root / role
+            root.mkdir(exist_ok=True)
+            record = dict(pid=42, exe_sha256=role + "-binary", box=role + " box", engine_hostname=host,
+                          source_commit="scene-commit", scene_sha256="scene-hash")
+            (root / "launch.json").write_text(json.dumps(record))
+            run["peers"].append(dict(peer=role, box=role + " box", box_hostname=host, root=str(root), record=record))
+        return dict(topology="spread", source={"tip": "scene-commit"}, scene_sha256="scene-hash", runs=[run])
+
+    def test_four_players_on_four_hosts(self):
+        self.assertTrue(peers.spread_check(self.capture())["passed"])
+        capture = self.capture()
+        capture["runs"][0]["peers"].pop()
+        self.assertIn("run0: a player's record is absent", peers.spread_check(capture)["reasons"])
+        hosts = {role: role + "-computer" for role in ("host", "joiner1", "joiner2")}
+        hosts["joiner3"] = "joiner1-computer"
+        self.assertIn("run0: peers ran on one engine host", peers.spread_check(self.capture(hosts))["reasons"])
+
+    def test_every_players_marker_reaches_every_other_player(self):
+        document = peers.scene("fight15-s11")
+        peers.check_scene(document)
+        run = peers.scene_runs(document)[0]
+        roles = peers.scene_roles(document, run)
+        self.assertEqual(roles, ["host", "joiner1", "joiner2", "joiner3"])
+        files = peers.player_files(document, run)
+        for marker in ("host-stage/probe/countdown.mark", "joiner1-stage/probe/joined.mark", "joiner2-stage/probe/joined.mark",
+                       *(role + "-stage/probe/fight-ticks-complete.json" for role in roles)):
+            self.assertIn(marker, files)
+        requests = {}
+        for role in roles:
+            out = self.root / ("native-" + role)
+            (out / "run0" / (role + "-stage/probe")).mkdir(parents=True)
+            (out / (role + "-started.json")).write_text("{}")
+            (out / "run0" / (role + "-stage/probe/fight-ticks-complete.json")).write_text('{"name":"fight-ticks-complete"}')
+            request = out / "request.json"
+            request.write_text(json.dumps(dict(out=str(out), role=role, run_name="run0", signal_files=files)))
+            requests[role] = request
+        (self.root / "native-joiner1/run0/joiner1-stage/probe/joined.mark").write_text("")
+        states = {role: peers.read_player_files(requests[role])["files"] for role in roles}
+        for role in roles:
+            incoming = {path: data for other, state in states.items() if other != role for path, data in state.items()}
+            peers.write_player_files(requests[role], incoming)
+            received = self.root / ("native-" + role) / "run0"
+            for other in roles:
+                self.assertTrue((received / (other + "-stage/probe/fight-ticks-complete.json")).is_file(), (role, other))
+            self.assertEqual((received / "joiner1-stage/probe/joined.mark").is_file(), True)
+
+    def test_a_player_packs_only_its_own_files(self):
+        out = self.root / "native-joiner2"
+        for role in ("host", "joiner1", "joiner2", "joiner3"):
+            (out / "run0" / (role + "-stage/probe")).mkdir(parents=True)
+            (out / "run0" / (role + "-stage/probe/fight-ticks-complete.json")).write_text("{}")
+        (out / "run0" / "joiner2").mkdir()
+        (out / "run0" / "joiner2" / "stdout.log").write_text("joiner2\n")
+        request = out / "request.json"
+        request.write_text(json.dumps(dict(out=str(out), role="joiner2", run_index=0, scene_relative="tools/e2e/fight15-s11.json",
+                                           box=dict(repo=str(Path(peers.__file__).resolve().parents[1])))))
+        with mock.patch("builtins.print"):
+            peers.pack(request)
+        import tarfile
+        with tarfile.open(out.with_suffix(".tgz")) as archive:
+            names = sorted(archive.getnames())
+        self.assertEqual(names, ["run0/joiner2-stage/probe/fight-ticks-complete.json", "run0/joiner2/stdout.log"])
+
+    def test_a_scene_names_one_host_and_lowercase_players(self):
+        document = peers.scene("fight15-s11")
+        for names in (("host", "host", "joiner1"), ("host",), ("host", "Joiner1"), ("host", "joiner1", "joiner1")):
+            changed = copy.deepcopy(document)
+            changed["peers"] = [dict(document["peers"][1], name=name) for name in names]
+            with self.assertRaisesRegex(ValueError, "one host and at least one joiner"):
+                peers.check_scene(changed)
 
 
 if __name__ == "__main__":
