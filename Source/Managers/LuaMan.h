@@ -996,6 +996,8 @@ namespace RTE {
 		void CollectGarbageForCheckpoint();
 		/// The heap every Lua state holds, live and uncollected, in bytes.
 		long long GetTotalHeapBytes();
+		/// The tracked Lua heaps' committed pages and their copy buffers, mapped and idle, for the memory census.
+		static std::string CheckpointHeapCensus();
 
 		/// Visits all script-owned MovableObjects in the original caller order after joined VM scans.
 		void VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit, bool parallel = false);

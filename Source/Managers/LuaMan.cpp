@@ -16766,6 +16766,11 @@ long long LuaMan::GetTotalHeapBytes() {
 	return total;
 }
 
+std::string LuaMan::CheckpointHeapCensus() {
+	return std::format("lua_committed_mb={} lua_copy_mb={} lua_idle_copy_mb={}", CheckpointLua::HeapOwner::CommittedHeapBytes() >> 20,
+	    CheckpointLua::HeapOwner::MappedCopyBytes() >> 20, CheckpointLua::HeapOwner::IdleCopyBytes() >> 20);
+}
+
 void LuaMan::CollectGarbageForCheckpoint() {
 	WaitForAsyncGarbageCollection();
 	// A finalizer keeps its own object, and anything only it reaches, alive for the cycle that runs

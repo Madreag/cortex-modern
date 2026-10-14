@@ -78,7 +78,6 @@
 #include "CheckpointImage.h"
 #include "CheckpointPagePool.h"
 #include "CheckpointNativeStorage.h"
-#include "CheckpointLuaHeap.h"
 #include "SceneLayer.h"
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
@@ -1729,9 +1728,7 @@ static void PostMemoryCensus(uint64_t simTick, const std::string& when = std::st
 	const std::string storage = timed("storage", [] { return CheckpointNativeStorage::InventoryCensus(); });
 	const std::string textures = timed("gl", [] { return g_GLResourceMan.Census(); });
 	const std::string checkpoint = timed("checkpoint", [] {
-		return CheckpointPagePool::CommitCensus() + ' ' + CheckpointNativeStorage::PoolCensus() + ' ' + PixelAllocationCensus() +
-		    std::format(" lua_committed_mb={} lua_copy_mb={} lua_idle_copy_mb={}", CheckpointLua::HeapOwner::CommittedHeapBytes() >> 20,
-		        CheckpointLua::HeapOwner::MappedCopyBytes() >> 20, CheckpointLua::HeapOwner::IdleCopyBytes() >> 20);
+		return CheckpointPagePool::CommitCensus() + ' ' + CheckpointNativeStorage::PoolCensus() + ' ' + PixelAllocationCensus() + ' ' + LuaMan::CheckpointHeapCensus();
 	});
 	std::ostringstream rest;
 	// Rounds restart their ticks, so the census names its own instant for a slope across a rematching run.
