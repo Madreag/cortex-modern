@@ -2074,6 +2074,18 @@ namespace {
 	}
 }
 
+void FrameMan::PrepareCheckpointValues() {
+	// Tables made before checkpoint storage are copied into it, and the drawing table follows its copy.
+	std::optional<std::pair<size_t, std::array<int, 4>>> selected;
+	for (size_t mode = 0; mode < m_ColorTables.size(); ++mode)
+		for (const auto& [key, entry]: m_ColorTables[mode]) if (color_map == &entry.first) selected.emplace(mode, key);
+	for (auto& tables: m_ColorTables) {
+		auto owned = tables;
+		tables.swap(owned);
+	}
+	if (selected) color_map = &m_ColorTables[selected->first].at(selected->second).first;
+}
+
 std::string FrameMan::SavePaletteCheckpoint() const {
 	static_assert(sizeof(RGB) == 4);
 	CheckpointWriter writer("FramePalette1");
