@@ -5,6 +5,7 @@
 #include "glad/gl.h"
 #include <unordered_map>
 #include <vector>
+#include <cstdint>
 #include <string>
 #include <memory>
 #include <optional>
@@ -49,9 +50,13 @@ namespace RTE {
 
 		GLBitmapInfo* MakeBitmapInfo();
 
+		/// The bitmaps that have been given a texture so far and their pixel bytes, for the memory census.
+		std::string Census() const;
+
 
 	private:
 		std::vector<std::unique_ptr<GLBitmapInfo>> m_StaticTextures;
+		uint64_t m_StaticTextureBytes = 0; //!< Pixel bytes of every texture made from a bitmap, released or not.
 		std::vector<GLuint> m_DynamicBitmapUploadBuffers;
 		std::unordered_map<std::string, std::pair<ShaderType, GLuint>> m_ShaderCache;
 		std::vector<GLuint> m_Shaders;

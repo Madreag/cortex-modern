@@ -74,6 +74,7 @@ Texture2D GLResourceMan::GetStaticTextureFromBitmap(BITMAP* bitmap) {
 		bitmap->extra = reinterpret_cast<void*>(m_StaticTextures.back().get());
 		GL_CHECK(glPixelStorei(GL_UNPACK_ALIGNMENT, bitmap_color_depth(bitmap) == 8 ? 1 : 4));
 		m_StaticTextures.back()->m_Texture = rlLoadTexture(bitmap->line[0], bitmap->w, bitmap->h, bitmap_color_depth(bitmap) == 8 ? PIXELFORMAT_UNCOMPRESSED_GRAYSCALE : PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1);
+		m_StaticTextureBytes += static_cast<uint64_t>(bitmap->w) * bitmap->h * (bitmap_color_depth(bitmap) == 8 ? 1 : 4);
 
 		return {
 		    .id = m_StaticTextures.back()->m_Texture,
@@ -150,6 +151,10 @@ GLuint GLResourceMan::UpdateDynamicBitmap(BITMAP* bitmap, bool updated, const st
 		}
 	}
 	return texture;
+}
+
+std::string GLResourceMan::Census() const {
+	return "gl_bitmap_textures=" + std::to_string(m_StaticTextures.size()) + " gl_bitmap_texture_mb=" + std::to_string(m_StaticTextureBytes >> 20);
 }
 
 void GLResourceMan::DestroyBitmapInfo(BITMAP* bitmap) {

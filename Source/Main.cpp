@@ -1653,6 +1653,7 @@ static void PostMemoryCensus(uint64_t simTick, const std::string& when = std::st
 	const std::string pace = timed("pace", [] { return PaceCensusSinceLast(); });
 	const std::string world = timed("world", [] { return g_NetMatchService.MemoryCensus(); });
 	const std::string storage = timed("storage", [] { return CheckpointNativeStorage::InventoryCensus(); });
+	const std::string textures = timed("gl", [] { return g_GLResourceMan.Census(); });
 	std::ostringstream rest;
 	// Rounds restart their ticks, so the census names its own instant for a slope across a rematching run.
 	rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_CensusProcessStart).count();
@@ -1660,7 +1661,7 @@ static void PostMemoryCensus(uint64_t simTick, const std::string& when = std::st
 	rest << " in_flight=autosave:" << g_ActivityMan.UnwrittenAutosaves() << ",fullstate:" << g_ActivityMan.UnfinishedFullStateCaptures() << when;
 	rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
 	     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
-	     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << " storage: " << storage << pace;
+	     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << " storage: " << storage << ' ' << textures << pace;
 	CensusWorker::Get().Post([simTick, rest = std::move(rest).str(), costs = std::move(costs)]() mutable {
 		// The worker's whole job is the census's cost too, charged to the frame it ends in.
 		const auto began = std::chrono::steady_clock::now();
