@@ -36,7 +36,7 @@ namespace {
 		return every;
 	}
 
-	void PrintTextureCreator(size_t made, const BITMAP* bitmap) {
+	void PrintTextureCreator(size_t made, BITMAP* bitmap) {
 		// The stack is read where the platform's own header does not collide with the renderer's names.
 		void* frames[12] = {};
 		int depth = 0;
