@@ -195,8 +195,8 @@ HEADED_SETTINGS = {"EnableVSync": 1}
 
 
 def headed_environment(environment):
-    if sys.platform == "win32":
-        raise ValueError("a headed scene player runs on a POSIX box; Windows players run in their session task")
+    # A Windows player runs headed only when its boxes entry says so (the owner watching a run); it still launches through its
+    # session task, with the runner's visible-window switch instead of the private desktop.
     visible = {key: value for key, value in environment.items() if key != "CCCP_HEADLESS"}
     visible["CC_TEST_VISIBLE_WINDOW"] = "1"
     return visible
