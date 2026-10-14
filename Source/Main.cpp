@@ -2142,6 +2142,8 @@ bool HandleMainArgs(int argCount, char** argValue) {
 	// Discard the first argument because it's always the executable path/name
 	argCount--;
 	argValue++;
+	// A scene hands its peers diagnostic levers through the environment, not their launch arguments.
+	if (std::getenv("CC_TEST_MEMORY_CENSUS_HISTOGRAM")) s_memoryCensusHistogram = true;
 	if (argCount == 0) {
 		return true;
 	}
