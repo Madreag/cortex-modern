@@ -434,7 +434,7 @@ namespace RTE::CheckpointLua {
 			bool Current(const Prepared& prepared) const noexcept;
 			bool Arm(Prepared& prepared, bool byCopy = false) const noexcept;
 			/// The boundary's arm on several threads: Arm's locks and checks into the session, and the pages to copy.
-			bool BeginArm(Prepared& prepared, bool whole, ArmSession& session) const;
+			bool BeginArm(Prepared& prepared, bool whole, bool learn, ArmSession& session) const;
 			explicit operator bool() const noexcept { return m_Life != nullptr; }
 		private:
 			friend class HeapOwner;
@@ -529,6 +529,7 @@ namespace RTE::CheckpointLua {
 		/// Buffers handed back to a heap that no longer exists; any is a use after free.
 		static size_t CallsIntoDestroyedHeaps() { return DeadHeapCalls().load(std::memory_order_relaxed); }
 		static bool RunBatchOpenSelfTest();
+		static bool RunLearningArmSelfTest();
 		static bool RunPreparedSelfTest();
 		static bool RunPrivateNativeSelfTest();
 		static bool RunPreparationLifetimeSelfTest();
@@ -894,6 +895,25 @@ namespace RTE::CheckpointLua {
 				hotMarks[run] = 1;
 				++hotCount;
 			}
+			// A busy heap with few hot runs yet is copied whole at its boundary and fenced only to learn them: the game's first
+			// write to a run faults once, records the run and opens it whole, with nothing left to copy.
+			std::vector<uint8_t> learnMarks;
+			size_t learnPages = 0;
+			bool learning = false;
+			void OpenLearnedRuns() noexcept {
+				for (size_t run = 0; learning && run < learnMarks.size();) {
+					if (!learnMarks[run]) { ++run; continue; }
+					const size_t begin = run;
+					while (run < learnMarks.size() && learnMarks[run]) learnMarks[run++] = 0;
+					const size_t first = begin * c_FaultRunPages, last = std::min(run * c_FaultRunPages, learnPages);
+					if (first < last) PageWriteFence::OpenCopiedPage(base + first * pageBytes, (last - first) * pageBytes);
+				}
+				learning = false;
+			}
+			size_t HotBytes() noexcept {
+				Locked guard(lock);
+				return hotCount * c_FaultRunPages * pageBytes;
+			}
 			std::atomic<uint32_t> tickFaults{0}, tickCollectFaults{0};
 			uint32_t armedHotRuns = 0;
 			bool armedWhole = false;
@@ -909,6 +929,7 @@ namespace RTE::CheckpointLua {
 				std::erase_if(copies, [](const auto& value) { return value->completed; });
 				copies.push_back(copy);
 				if (hotMarks.size() < runs) hotMarks.resize(runs, 0);
+				if (learnMarks.size() < runs) learnMarks.resize(runs, 0);
 			}
 			// A boundary arming on several threads plans under the lock, copies outside it while the copy is unarmed (no fault
 			// or drain touches an unarmed copy), then fences what it did not copy and arms under the lock.
@@ -934,10 +955,16 @@ namespace RTE::CheckpointLua {
 				}
 				return true;
 			}
-			bool FinishArm(CowCopy& copy, uintptr_t address, size_t bytes, bool whole, size_t copiedPages, int64_t copyUs) noexcept {
+			bool FinishArm(CowCopy& copy, uintptr_t address, size_t bytes, bool whole, bool learn, size_t copiedPages, int64_t copyUs) noexcept {
 				Locked guard(lock);
 				if (copy.completed || copy.armed.load(std::memory_order_relaxed) != 0) return false;
 				const size_t pages = std::min(copy.saved.size(), bytes / pageBytes);
+				if (whole && learn && !learning && pages) {
+					if (!PageWriteFence::ProtectCopyPages(address, pages * pageBytes)) return false;
+					std::fill(learnMarks.begin(), learnMarks.begin() + static_cast<std::ptrdiff_t>(std::min(learnMarks.size(), (pages + c_FaultRunPages - 1) / c_FaultRunPages)), uint8_t{1});
+					learnPages = pages;
+					learning = true;
+				}
 				for (size_t page = 0; page < pages;) {
 					if (copy.saved[page]) { ++page; continue; }
 					const size_t begin = page;
@@ -1044,7 +1071,7 @@ namespace RTE::CheckpointLua {
 				// The faulting page always opens; a neighbour opens only when this call saved it, since it is still fenced.
 				std::array<bool, c_FaultRunPages> opened{};
 				opened[page - first] = fault;
-				bool recorded = !fault || t_Collecting || SaverThreads::TickStarts() - armedTick > hotTicks;
+				bool recorded = !fault || t_Collecting || SaverThreads::Current() || SaverThreads::TickStarts() - armedTick > hotTicks;
 				for (const auto& copy: copies) {
 					if (copy->armed.load(std::memory_order_relaxed) != 1 || copy->completed) continue;
 					const bool faulted = page < copy->saved.size() && !copy->saved[page];
@@ -1064,6 +1091,11 @@ namespace RTE::CheckpointLua {
 						copy->faults->count.fetch_add(1, std::memory_order_relaxed);
 						copy->faults->us.fetch_add(MicrosecondsSince(started), std::memory_order_relaxed);
 					}
+				}
+				if (fault && learning && first / c_FaultRunPages < learnMarks.size() && learnMarks[first / c_FaultRunPages]) {
+					learnMarks[first / c_FaultRunPages] = 0;
+					for (size_t at = first; at < std::min(last, learnPages); ++at) opened[at - first] = true;
+					if (!recorded) RememberHotRun(first / c_FaultRunPages);
 				}
 				if (fault && TallyingFaults()) {
 					(t_Collecting ? tickCollectFaults : tickFaults).fetch_add(1, std::memory_order_relaxed);
@@ -1085,7 +1117,12 @@ namespace RTE::CheckpointLua {
 			}
 			// A page opened again after a fence still makes its first write fault while the system marks it written; a saver
 			// takes that fault in the game's idle time with a write that changes nothing.
-			void TouchPages(size_t first, size_t count) const noexcept {
+			void TouchPages(size_t first, size_t count) noexcept {
+				{
+					// A learning heap stays fenced until the game's first write to each run; a touch would end its learning.
+					Locked guard(lock);
+					if (learning) return;
+				}
 				for (size_t page = first; page < first + count; ++page) {
 #ifdef _WIN32
 					InterlockedExchangeAdd(reinterpret_cast<volatile LONG*>(base + page * pageBytes), 0);
@@ -1138,6 +1175,7 @@ namespace RTE::CheckpointLua {
 					while (page < pages && fenced(page)) ++page;
 					if (!PageWriteFence::OpenCopiedPage(base + begin * pageBytes, (page - begin) * pageBytes)) return false;
 				}
+				OpenLearnedRuns();
 				return true;
 			}
 			void Cancel(const std::shared_ptr<CowCopy>& copy) {
@@ -1148,8 +1186,11 @@ namespace RTE::CheckpointLua {
 					copy->armed.notify_all();
 					copy->completed = true; copy->buffer.reset();
 				}
-				if (std::all_of(copies.begin(), copies.end(), [](const auto& generation) { return generation->armed.load(std::memory_order_relaxed) != 1 || generation->completed; }) && copy)
+				if (std::all_of(copies.begin(), copies.end(), [](const auto& generation) { return generation->armed.load(std::memory_order_relaxed) != 1 || generation->completed; }) && copy) {
 					PageWriteFence::OpenCopiedPage(base, copy->saved.size() * pageBytes);
+					std::fill(learnMarks.begin(), learnMarks.end(), uint8_t{0});
+					learning = false;
+				}
 			}
 			static bool OnWrite(void* context, uintptr_t address) noexcept {
 				auto& coordinator = *static_cast<CowCoordinator*>(context);
@@ -1518,7 +1559,7 @@ namespace RTE::CheckpointLua {
 		std::unique_lock<std::mutex> m_Alive, m_Preparations, m_Lock;
 		Prepared* m_Prepared = nullptr;
 		HeapOwner* m_Owner = nullptr;
-		bool m_Whole = false;
+		bool m_Whole = false, m_Learn = false;
 		std::chrono::steady_clock::time_point m_Started{};
 		std::vector<std::pair<uint32_t, uint32_t>> m_Spans;
 	};
@@ -1547,7 +1588,9 @@ namespace RTE::CheckpointLua {
 		}
 		Snapshot Image() const { return Snapshot(m_Data); }
 		/// Arm's locks and checks for a boundary arming on several threads, held in the session until it is fenced.
-		bool BeginArm(HeapOwner& owner, bool whole, ArmSession& session);
+		bool BeginArm(HeapOwner& owner, bool whole, bool learn, ArmSession& session);
+		/// The bytes of the heap's hot runs.
+		size_t HotBytes() const noexcept { return m_Coordinator->HotBytes(); }
 		/// Copies pages of the session's plan into the snapshot; disjoint pages may be copied on different threads at once.
 		void CopyArmPages(size_t first, size_t count) const noexcept {
 			const size_t pageBytes = m_Copy->pageBytes;
@@ -1555,8 +1598,8 @@ namespace RTE::CheckpointLua {
 			                    count * pageBytes);
 			std::fill(m_Copy->saved.begin() + static_cast<std::ptrdiff_t>(first), m_Copy->saved.begin() + static_cast<std::ptrdiff_t>(first + count), uint8_t{1});
 		}
-		bool FinishArm(HeapOwner& owner, bool whole, size_t copiedPages, int64_t copyUs, std::chrono::steady_clock::time_point started) noexcept {
-			if (!m_Coordinator->FinishArm(*m_Copy, m_Data->base, m_Data->committed, whole, copiedPages, copyUs)) return false;
+		bool FinishArm(HeapOwner& owner, bool whole, bool learn, size_t copiedPages, int64_t copyUs, std::chrono::steady_clock::time_point started) noexcept {
+			if (!m_Coordinator->FinishArm(*m_Copy, m_Data->base, m_Data->committed, whole, learn, copiedPages, copyUs)) return false;
 			owner.m_CowGateFree.store(true, std::memory_order_release);
 			m_Data->freezeUs = MicrosecondsSince(started);
 			return true;
@@ -1647,13 +1690,13 @@ namespace RTE::CheckpointLua {
 		        coordinator.armedHotRuns, static_cast<uint32_t>(coordinator.hotCount), coordinator.armedWhole ? 1u : 0u};
 	}
 
-	inline bool HeapOwner::PreparationLease::BeginArm(Prepared& prepared, bool whole, ArmSession& session) const {
+	inline bool HeapOwner::PreparationLease::BeginArm(Prepared& prepared, bool whole, bool learn, ArmSession& session) const {
 		if (!m_Life) return false;
 		session.m_Alive = std::unique_lock(m_Life->mutex, std::try_to_lock);
-		return session.m_Alive && m_Life->owner && prepared.BeginArm(*m_Life->owner, whole, session);
+		return session.m_Alive && m_Life->owner && prepared.BeginArm(*m_Life->owner, whole, learn, session);
 	}
 
-	inline bool HeapOwner::Prepared::BeginArm(HeapOwner& owner, bool whole, ArmSession& session) {
+	inline bool HeapOwner::Prepared::BeginArm(HeapOwner& owner, bool whole, bool learn, ArmSession& session) {
 		session.m_Preparations = std::unique_lock(owner.m_PrepareMutex, std::try_to_lock);
 		if (!session.m_Preparations || !Current(owner) || owner.m_CowCoordinator != m_Coordinator) return false;
 		if (owner.m_CopyPending.load(std::memory_order_acquire) && !owner.m_CowGateFree.load(std::memory_order_acquire)) return false;
@@ -1666,13 +1709,14 @@ namespace RTE::CheckpointLua {
 		session.m_Prepared = this;
 		session.m_Owner = &owner;
 		session.m_Whole = whole;
+		session.m_Learn = whole && learn;
 		return true;
 	}
 
 	inline void HeapOwner::ArmSession::CopyPages(size_t first, size_t count) const noexcept { m_Prepared->CopyArmPages(first, count); }
 
 	inline bool HeapOwner::ArmSession::Finish(size_t copiedPages, int64_t copyUs) noexcept {
-		return m_Prepared && m_Prepared->FinishArm(*m_Owner, m_Whole, copiedPages, copyUs, m_Started);
+		return m_Prepared && m_Prepared->FinishArm(*m_Owner, m_Whole, m_Learn, copiedPages, copyUs, m_Started);
 	}
 
 	inline std::shared_ptr<HeapOwner::Prepared> HeapOwner::PrepareFreeze() {
@@ -1795,6 +1839,51 @@ namespace RTE::CheckpointLua {
 		const auto* next = static_cast<const unsigned char*>(secondBytes.get());
 		return old[0] == 3 && old[page] == 3 && old[run * page] == 3 && next[0] == 5 && next[page] == 7 && next[run * page] == 3 &&
 		       source[0] == 9 && source[page] == 13 && source[run * page] == 17;
+	}
+
+	inline bool HeapOwner::RunLearningArmSelfTest() {
+		const size_t page = PageWriteFence::SystemPageBytes(), run = CowCoordinator::c_FaultRunPages, pages = run * 3, bytes = page * pages;
+		if (!page) return false;
+		const auto release = [bytes](void* memory) { if (memory) Unmap(memory, bytes); };
+		std::unique_ptr<void, decltype(release)> live(MapPages(bytes), release), image(MapPages(bytes), release);
+		if (!live || !image) throw std::bad_alloc();
+		auto* source = static_cast<unsigned char*>(live.get());
+		std::memset(source, 3, bytes);
+		CowCoordinator coordinator;
+		coordinator.base = reinterpret_cast<uintptr_t>(source); coordinator.pageBytes = page;
+		struct Observer { CowCoordinator& coordinator; size_t faults = 0; } observer{coordinator};
+		const auto observe = [](void* context, uintptr_t address) noexcept {
+			auto& value = *static_cast<Observer*>(context);
+			++value.faults;
+			return value.coordinator.CopyPage((address - value.coordinator.base) / value.coordinator.pageBytes, true);
+		};
+		struct Unwatch { void* owner; ~Unwatch() { PageWriteFence::UnwatchCopies(owner); } } unwatch{&observer};
+		auto copy = std::make_shared<CowCopy>();
+		copy->base = coordinator.base; copy->pageBytes = page; copy->destination = static_cast<Snapshot::Page*>(image.get());
+		copy->saved.assign(pages, 0); copy->faults = std::make_shared<CopyFaultStats>();
+		coordinator.Prepare(copy);
+		const auto keepWritable = [](void*, uintptr_t, size_t) noexcept { return true; };
+		if (!PageWriteFence::WatchCopies(&observer, {source, bytes}, observe, &observer, keepWritable)) return false;
+		std::vector<std::pair<uint32_t, uint32_t>> spans;
+		spans.reserve(CowCoordinator::c_HotRunCapacity + 1);
+		if (!coordinator.PlanArm(*copy, bytes, true, spans) || spans.size() != 1 || spans[0].second != pages) return false;
+		CopyCheckpointPages(image.get(), source, bytes);
+		std::fill(copy->saved.begin(), copy->saved.end(), uint8_t{1});
+		if (!coordinator.FinishArm(*copy, coordinator.base, bytes, true, true, pages, 0)) return false;
+		// The saver's touch leaves the learning heap fenced; the game's first write to each run faults once and opens it whole.
+		coordinator.TouchPages(0, pages);
+		if (observer.faults) return false;
+		source[page] = 7;
+		source[2 * page] = 8;
+		if (observer.faults != 1) return false;
+		source[run * page] = 9;
+		if (observer.faults != 2 || coordinator.hotCount != 2) return false;
+		// Completing the generation opens the run nobody wrote.
+		if (!coordinator.Complete(copy, true)) return false;
+		source[2 * run * page] = 10;
+		const auto* saved = static_cast<const unsigned char*>(image.get());
+		return observer.faults == 2 && saved[page] == 3 && saved[2 * page] == 3 && saved[run * page] == 3 && saved[2 * run * page] == 3 &&
+		       source[page] == 7 && source[2 * page] == 8 && source[run * page] == 9 && source[2 * run * page] == 10;
 	}
 
 	inline bool HeapOwner::RunPreparationLifetimeSelfTest() {

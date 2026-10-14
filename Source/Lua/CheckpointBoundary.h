@@ -87,11 +87,12 @@ namespace RTE::CheckpointLua {
 				std::vector<uint64_t> until(m_Heaps.size(), 0);
 				if (m_TicksUntilCollection) for (size_t index = 0; index < m_Heaps.size(); ++index) until[index] = m_TicksUntilCollection(index);
 				OrderDrains(until);
-				const std::vector<bool> byCopy = CopiedWhole(until);
+				std::vector<bool> learn;
+				const std::vector<bool> byCopy = CopiedWhole(until, learn);
 				// The Lua heaps are fenced on another thread while this one arms the native pages.
 				static const bool s_SerialArm = std::getenv("CCCP_TEST_CHECKPOINT_SERIAL_ARM") != nullptr;
 				const size_t threads = s_SerialArm ? 1 : std::min<size_t>(4, std::max<size_t>(1, m_Heaps.size()));
-				auto heaps = std::async(s_SerialArm ? std::launch::deferred : std::launch::async, [this, &byCopy, threads] {
+				auto heaps = std::async(s_SerialArm ? std::launch::deferred : std::launch::async, [this, &byCopy, &learn, threads] {
 					const auto begun = std::chrono::steady_clock::now();
 					// This thread plans every heap and holds the plans' locks until all are fenced. The copies are cut into chunks
 					// of a megabyte that every arming thread takes in turn, so one large heap does not set the boundary's length;
@@ -99,7 +100,7 @@ namespace RTE::CheckpointLua {
 					std::vector<HeapOwner::ArmSession> sessions(m_Heaps.size());
 					bool armed = true;
 					for (size_t index = 0; armed && index < m_Heaps.size(); ++index)
-						armed = m_Heaps[index].lease.BeginArm(*m_Heaps[index].prepared, byCopy[index], sessions[index]);
+						armed = m_Heaps[index].lease.BeginArm(*m_Heaps[index].prepared, byCopy[index], learn[index], sessions[index]);
 					struct Chunk { uint32_t heap, first, count; };
 					std::vector<Chunk> chunks;
 					std::vector<size_t> copied(m_Heaps.size(), 0);
@@ -269,10 +270,12 @@ namespace RTE::CheckpointLua {
 		// A collection writes every page of its state's heap, so the heap collected in the next tick, which comes before any
 		// idle time, and those collected soon after while they fit a couple of milliseconds of copying, are copied whole at
 		// the boundary instead of fenced; a saver copies the rest in the order they collect. A busy heap (see
-		// HeapOwner::NoteFullCollection) is copied whole too, while all the whole copies fit c_BusyCopyBytes.
-		std::vector<bool> CopiedWhole(const std::vector<uint64_t>& until) const {
+		// HeapOwner::NoteFullCollection) whose hot runs cover less than an eighth of it has not learned what the ticks after a
+		// boundary write: it is copied whole and fenced to learn them, while all the whole copies fit c_BusyCopyBytes.
+		std::vector<bool> CopiedWhole(const std::vector<uint64_t>& until, std::vector<bool>& learn) const {
 			constexpr size_t c_WholeCopyBytes = size_t{16} << 20, c_BusyCopyBytes = size_t{96} << 20;
 			std::vector<bool> whole(m_Heaps.size(), false);
+			learn.assign(m_Heaps.size(), false);
 			size_t bytes = 0;
 			for (const size_t index: m_DrainOrder) {
 				if (!until[index]) break;
@@ -283,8 +286,9 @@ namespace RTE::CheckpointLua {
 			}
 			for (const size_t index: m_DrainOrder) {
 				const auto image = m_Heaps[index].prepared->Image();
-				if (whole[index] || !image.Busy() || bytes + image.ByteCount() > c_BusyCopyBytes) continue;
+				if (whole[index] || !image.Busy() || m_Heaps[index].prepared->HotBytes() * 8 >= image.ByteCount() || bytes + image.ByteCount() > c_BusyCopyBytes) continue;
 				whole[index] = true;
+				learn[index] = true;
 				bytes += image.ByteCount();
 			}
 			return whole;
