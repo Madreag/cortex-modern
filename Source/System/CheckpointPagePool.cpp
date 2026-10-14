@@ -887,6 +887,39 @@ namespace {
 		uint64_t explicitGrownBytes = 0, worldGrownBytes = 0;
 	};
 	std::atomic<NativeStoragePools*> s_NativeStoragePools{nullptr};
+	// The 64 KiB regions the pools' pages ever covered, so a free of heap memory skips their lock; a released region stays marked.
+	class OwnedRegions {
+	public:
+		/// Records pages under the pools' lock before they are handed out; it never throws, so a grown block is always recorded.
+		void Mark(const void* address, size_t bytes) noexcept {
+			const uintptr_t first = reinterpret_cast<uintptr_t>(address) >> c_RegionBits, last = (reinterpret_cast<uintptr_t>(address) + bytes - 1) >> c_RegionBits;
+			for (uintptr_t region = first; region <= last; ++region) {
+				const uintptr_t top = region >> c_LeafBits;
+				if (top >= m_Leaves.size()) continue;
+				Leaf* leaf = m_Leaves[top].load(std::memory_order_acquire);
+				if (!leaf) {
+					leaf = new (std::nothrow) Leaf{};
+					if (!leaf) { m_Unsure.store(true, std::memory_order_release); continue; }
+					m_Leaves[top].store(leaf, std::memory_order_release);
+				}
+				leaf->words[(region & c_LeafMask) >> 6].fetch_or(uint64_t{1} << (region & 63), std::memory_order_release);
+			}
+		}
+		/// Whether the address can be the pools': false only for memory they never held.
+		bool Maybe(const void* address) const noexcept {
+			const uintptr_t region = reinterpret_cast<uintptr_t>(address) >> c_RegionBits, top = region >> c_LeafBits;
+			if (top >= m_Leaves.size() || m_Unsure.load(std::memory_order_acquire)) return true;
+			const Leaf* leaf = m_Leaves[top].load(std::memory_order_acquire);
+			return leaf && (leaf->words[(region & c_LeafMask) >> 6].load(std::memory_order_acquire) >> (region & 63) & 1);
+		}
+	private:
+		static constexpr unsigned c_RegionBits = 16, c_LeafBits = 16;
+		static constexpr uintptr_t c_LeafMask = (uintptr_t{1} << c_LeafBits) - 1;
+		struct Leaf { std::array<std::atomic<uint64_t>, (size_t{1} << c_LeafBits) / 64> words{}; };
+		std::array<std::atomic<Leaf*>, size_t{1} << 16> m_Leaves{};
+		std::atomic<bool> m_Unsure{false};
+	};
+	OwnedRegions s_OwnedRegions;
 	struct StorageCostCounters {
 		std::atomic<uint64_t> allocations{0}, allocateNs{0}, frees{0}, freeNs{0}, grows{0}, growNs{0}, larges{0};
 	};
@@ -994,6 +1027,7 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 		if (auto* counters = StorageCostsArmed()) counters->larges.fetch_add(1, std::memory_order_relaxed);
 		auto allocation = std::make_unique<CheckpointPagePool::Allocation>(requested);
 		void* address = allocation->Data();
+		s_OwnedRegions.Mark(address, allocation->Bytes());
 		const auto [entry, inserted] = pools.large.emplace(reinterpret_cast<uintptr_t>(address), std::move(allocation));
 		if (!inserted) throw std::logic_error("native allocation overlaps a live buffer");
 		try { entry->second->IncludeInInventory(); }
@@ -1010,6 +1044,7 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 		auto node = pools.ranges.extract(staging);
 		const StorageCostSpan growth(&StorageCostCounters::grows, &StorageCostCounters::growNs);
 		const auto [address, bytes] = pool.pages.Grow(slot, 1, pool.free, c_NativeStorageBlockBytes);
+		s_OwnedRegions.Mark(address, bytes);
 		node.key() = reinterpret_cast<uintptr_t>(address);
 		node.mapped() = {bytes, &pool};
 		pools.ranges.insert(std::move(node));
@@ -1026,7 +1061,7 @@ bool CheckpointNativeStorage::Deallocate(void* address) noexcept {
 	const StorageCostSpan cost(&StorageCostCounters::frees, &StorageCostCounters::freeNs);
 	if (ForgetPrivate(address)) return false;
 	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
-	if (!pools) return false;
+	if (!pools || !s_OwnedRegions.Maybe(address)) return false;
 	std::lock_guard lock(pools->mutex);
 	if (const auto found = pools->large.find(reinterpret_cast<uintptr_t>(address)); found != pools->large.end()) {
 		const size_t bytes = found->second->Bytes();
@@ -1130,7 +1165,7 @@ std::string CheckpointNativeStorage::StorageCosts() {
 bool CheckpointNativeStorage::Owns(const void* address) {
 	if (Private(address)) return false;
 	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
-	if (!pools) return false;
+	if (!pools || !s_OwnedRegions.Maybe(address)) return false;
 	std::lock_guard lock(pools->mutex);
 	const auto end = pools->large.upper_bound(reinterpret_cast<uintptr_t>(address));
 	if (end != pools->large.begin() && std::prev(end)->second->Contains(address, 1)) return true;
