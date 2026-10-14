@@ -55,6 +55,7 @@ namespace RTE::CheckpointLua {
 			switch (m_State.load(std::memory_order_acquire)) {
 				case State::Ready: return {};
 				case State::Preparing: {
+					if (m_Releasing.load(std::memory_order_acquire)) return {"the last capture's inventory is still being released", false};
 					// A preparation refused before keeps its reason while the next one runs.
 					std::lock_guard lock(m_FailureMutex);
 					return {m_PrepareFailure.empty() ? std::string("the checkpoint inventory is being prepared") :
@@ -115,6 +116,7 @@ namespace RTE::CheckpointLua {
 		std::unique_ptr<Plan> m_Plan;
 		std::atomic<State> m_State{State::Preparing};
 		std::atomic<bool> m_Refresh{false};
+		std::atomic<bool> m_Releasing{false}; //!< The last capture's plan is being torn down before the next preparation.
 		std::atomic<uint64_t> m_Wake{0};
 		mutable std::mutex m_FailureMutex;
 		std::string m_PrepareFailure; //!< Why the last preparation was refused.
@@ -130,7 +132,9 @@ namespace RTE::CheckpointLua {
 		void Wake() noexcept { m_Wake.fetch_add(1, std::memory_order_release); m_Wake.notify_one(); }
 		void Publish(State state) noexcept { m_State.store(state, std::memory_order_release); m_State.notify_all(); }
 		void PreparePlan() noexcept {
+			m_Releasing.store(true, std::memory_order_release);
 			m_Plan.reset();
+			m_Releasing.store(false, std::memory_order_release);
 			try {
 				CheckpointNativeStorage::CaptureScope allocations;
 				auto boundary = m_Prepare();
