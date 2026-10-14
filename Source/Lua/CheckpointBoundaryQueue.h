@@ -54,7 +54,12 @@ namespace RTE::CheckpointLua {
 		std::pair<std::string, bool> NotReadyState() const {
 			switch (m_State.load(std::memory_order_acquire)) {
 				case State::Ready: return {};
-				case State::Preparing: return {"the checkpoint inventory is being prepared", false};
+				case State::Preparing: {
+					// A preparation refused before keeps its reason while the next one runs.
+					std::lock_guard lock(m_FailureMutex);
+					return {m_PrepareFailure.empty() ? std::string("the checkpoint inventory is being prepared") :
+					    "the checkpoint inventory is being prepared again after its preparation was refused: " + m_PrepareFailure, false};
+				}
 				case State::Rebuild: return {"the checkpoint inventory is being rebuilt", false};
 				case State::Claimed: case State::Armed: case State::Working: return {"the previous capture is still being written", false};
 				case State::Stopped: return {"the checkpoint saver has stopped", true};
@@ -131,6 +136,7 @@ namespace RTE::CheckpointLua {
 				auto boundary = m_Prepare();
 				if (!boundary) throw std::runtime_error("checkpoint inventory preparation returned no boundary");
 				m_Plan = std::make_unique<Plan>(std::move(boundary));
+				try { std::lock_guard lock(m_FailureMutex); m_PrepareFailure.clear(); } catch (...) {}
 				Publish(State::Ready);
 			} catch (...) { NotePrepareFailure(std::current_exception()); Publish(State::Failed); }
 		}

@@ -708,7 +708,29 @@ struct ActivityMan::PreparedAutosave {
 	    [this](const Header& header, const CheckpointLua::Boundary& boundary) { return Complete(header, boundary); },
 	    [this](const Header& header, std::exception_ptr error) { Refused(header, error); }) {}
 
+	size_t refusedPreparations = 0; //!< Preparations refused since the last one that succeeded; only the saver touches these.
+	std::string lastPreparationRefusal;
+
+	// A refused preparation is retried every tick, so each new reason is named once and the success that ends them is counted.
 	std::unique_ptr<CheckpointLua::Boundary> Prepare() {
+		const auto began = std::chrono::steady_clock::now();
+		try {
+			auto boundary = PrepareBoundary();
+			const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
+			if (refusedPreparations || ms >= 2000) System::PrintDiagnosticLine(std::format("[autosave] inventory prepared in {} ms after {} refused preparations", ms, refusedPreparations));
+			refusedPreparations = 0; lastPreparationRefusal.clear();
+			return boundary;
+		} catch (const std::exception& failure) {
+			++refusedPreparations;
+			if (lastPreparationRefusal != failure.what()) {
+				lastPreparationRefusal = failure.what();
+				System::PrintDiagnosticLine(std::format("[autosave] inventory preparation refused reason={}", lastPreparationRefusal));
+			}
+			throw;
+		}
+	}
+
+	std::unique_ptr<CheckpointLua::Boundary> PrepareBoundary() {
 		using Root = CheckpointLua::Boundary::Root;
 		std::vector<Root> roots;
 		const auto add = [&]<class T>(const T& value) { roots.push_back(Root::Of(value)); };
