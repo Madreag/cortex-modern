@@ -964,6 +964,10 @@ namespace RTE {
 		/// Test lever CCCP_TEST_FAULT_TICKS: the Lua heap write faults taken since the last call, and their microseconds.
 		static std::pair<uint64_t, uint64_t> TakeHeapFaultTally();
 
+		/// Test lever CCCP_TEST_FAULT_TICKS: each faulting heap since the last call, as " slot:faults/runs copied at its boundary/
+		/// first-fault runs recorded since", with "w" when its boundary copied it whole.
+		static std::string TakeHeapFaultsByState();
+
 		/// Reseeds every Lua state's RNG, deriving an independent per-state seed from baseSeed.
 		void SeedAllLuaRNGs(uint64_t baseSeed);
 

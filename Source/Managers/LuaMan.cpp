@@ -9293,6 +9293,18 @@ std::pair<uint64_t, uint64_t> LuaMan::TakeHeapFaultTally() {
 	return CheckpointLua::HeapOwner::TakeFaultTally();
 }
 
+std::string LuaMan::TakeHeapFaultsByState() {
+	std::string text;
+	const auto add = [&text](size_t slot, LuaStateWrapper& state) {
+		const auto [faults, copied, recorded, whole] = CheckpointLua::HeapOwner::LeasePreparation(state.GetLuaState()).TakeTickFaults();
+		if (faults) text += std::format(" {}:{}/{}/{}{}", slot, faults, copied, recorded, whole ? "w" : "");
+	};
+	add(0, g_LuaMan.GetMasterScriptState());
+	size_t slot = 1;
+	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) add(slot++, state);
+	return text;
+}
+
 uint64_t LuaMan::TicksUntilFullCollection(size_t slot) {
 	const uint64_t last = s_LastCollectionTick.load(std::memory_order_acquire);
 	if (!IsDeterministicCollection() || last == (std::numeric_limits<uint64_t>::max)()) return 0;

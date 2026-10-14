@@ -8276,6 +8276,7 @@ void RunGameLoop() {
 						const auto tally = CheckpointPagePool::TakeFaultTally();
 						const auto [luaFaults, luaFaultUs] = LuaMan::TakeHeapFaultTally();
 						System::PrintDiagnosticLine(std::format("[native-fault-tick] tick={} faults={} fault_us={} settled={} cooled={} lua_faults={} lua_fault_us={}", tick, tally.faults, tally.faultNs / 1000, tally.settled, tally.cooled, luaFaults, luaFaultUs));
+						if (const std::string heaps = LuaMan::TakeHeapFaultsByState(); !heaps.empty()) System::PrintDiagnosticLine(std::format("[lua-fault-heaps] tick={}{}", tick, heaps));
 					}
 				}
 			} restoreTickCost{s_checkpointRestoreContinue, nextSimTick, s_checkpointRestoreContinue ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}};

@@ -418,6 +418,9 @@ namespace RTE::CheckpointLua {
 			std::shared_ptr<Prepared> Prepare() const;
 			bool Current(const Prepared& prepared) const noexcept;
 			bool Arm(Prepared& prepared, bool byCopy = false) const noexcept;
+			/// Test lever CCCP_TEST_FAULT_TICKS: this heap's write faults since the last call, the runs its last boundary copied,
+			/// the first-fault runs recorded since, and 1 when that boundary copied the heap whole.
+			std::array<uint32_t, 4> TakeTickFaults() const noexcept;
 			explicit operator bool() const noexcept { return m_Life != nullptr; }
 		private:
 			friend class HeapOwner;
@@ -830,6 +833,9 @@ namespace RTE::CheckpointLua {
 			static constexpr size_t c_HotRuns = 64;
 			std::array<uint32_t, c_HotRuns> hotRuns{};
 			size_t hotRunCount = 0;
+			std::atomic<uint32_t> tickFaults{0};
+			uint32_t armedHotRuns = 0;
+			bool armedWhole = false;
 			struct Locked {
 				std::atomic_flag& flag;
 				explicit Locked(std::atomic_flag& flag) : flag(flag) { while (flag.test_and_set(std::memory_order_acquire)) {} }
@@ -858,6 +864,8 @@ namespace RTE::CheckpointLua {
 						copy.saved[page] = 1;
 					}
 				}
+				coordinator.armedHotRuns = static_cast<uint32_t>(coordinator.hotRunCount);
+				coordinator.armedWhole = false;
 				coordinator.hotRunCount = 0;
 				for (size_t page = 0; page < pages;) {
 					if (copy.saved[page]) { ++page; continue; }
@@ -880,6 +888,8 @@ namespace RTE::CheckpointLua {
 				if (copy.completed || copy.armed.load(std::memory_order_relaxed) != 0 || bytes != copy.saved.size() * copy.pageBytes) return false;
 				CopyCheckpointPages(copy.destination, reinterpret_cast<const void*>(address), bytes);
 				std::fill(copy.saved.begin(), copy.saved.end(), 1);
+				coordinator.armedHotRuns = 0;
+				coordinator.armedWhole = true;
 				copy.armed.store(1, std::memory_order_release);
 				copy.armed.notify_all();
 				return true;
@@ -925,6 +935,7 @@ namespace RTE::CheckpointLua {
 					}
 				}
 				if (fault && TallyingFaults()) {
+					tickFaults.fetch_add(1, std::memory_order_relaxed);
 					FaultTally()[0].fetch_add(1, std::memory_order_relaxed);
 					FaultTally()[1].fetch_add(MicrosecondsSince(started), std::memory_order_relaxed);
 				}
@@ -1456,6 +1467,19 @@ namespace RTE::CheckpointLua {
 		if (!m_Life) return false;
 		std::unique_lock alive(m_Life->mutex, std::try_to_lock);
 		return alive && m_Life->owner && prepared.Arm(*m_Life->owner, byCopy);
+	}
+
+	inline std::array<uint32_t, 4> HeapOwner::PreparationLease::TakeTickFaults() const noexcept {
+		if (!m_Life) return {};
+		std::unique_lock alive(m_Life->mutex, std::try_to_lock);
+		if (!alive || !m_Life->owner) return {};
+		HeapOwner& owner = *m_Life->owner;
+		std::unique_lock preparations(owner.m_PrepareMutex, std::try_to_lock);
+		if (!preparations || !owner.m_CowCoordinator) return {};
+		auto& coordinator = *owner.m_CowCoordinator;
+		CowCoordinator::Locked guard(coordinator.lock);
+		return {coordinator.tickFaults.exchange(0, std::memory_order_relaxed), coordinator.armedHotRuns, static_cast<uint32_t>(coordinator.hotRunCount),
+		        coordinator.armedWhole ? 1u : 0u};
 	}
 
 	inline std::shared_ptr<HeapOwner::Prepared> HeapOwner::PrepareFreeze() {
