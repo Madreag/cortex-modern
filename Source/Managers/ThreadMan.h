@@ -50,9 +50,21 @@ namespace RTE {
 		/// is done and closes it when the next tick starts, and a saver thread calls this where it holds nothing the game needs
 		/// and waits here while no slice is open. A game that is never idle gets a save that takes longer, never a slower tick.
 		static void YieldToGame() {
-			if (!s_Current || !s_Gating.load(std::memory_order_relaxed) || s_Lent.load(std::memory_order_relaxed) > 0) return;
+			if (!s_Current || t_Ungated || !s_Gating.load(std::memory_order_relaxed) || s_Lent.load(std::memory_order_relaxed) > 0) return;
 			CheckSlice();
 		}
+
+		/// Saver work on the calling thread that goes on beside the game instead of waiting for its idle time: copying a heap
+		/// the ticks after a boundary write all over costs the game less than its own write faults on it would.
+		class UngatedScope {
+		public:
+			UngatedScope() noexcept : m_Was(t_Ungated) { t_Ungated = true; }
+			~UngatedScope() { t_Ungated = m_Was; }
+			UngatedScope(const UngatedScope&) = delete;
+			UngatedScope& operator=(const UngatedScope&) = delete;
+		private:
+			bool m_Was;
+		};
 
 		/// The game loop's side: the saver may work until the given steady-clock microsecond.
 		static void OpenSlice(int64_t untilUs);
@@ -112,6 +124,7 @@ namespace RTE {
 
 		static inline thread_local bool s_Current = false;
 		static inline thread_local bool s_Lowered = false;
+		static inline thread_local bool t_Ungated = false;
 		static inline std::atomic<int> s_Gating{0};
 		static inline std::atomic<int> s_Lent{0};
 		static inline std::atomic<int64_t> s_SliceEndUs{0};

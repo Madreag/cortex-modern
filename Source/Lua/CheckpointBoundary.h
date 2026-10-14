@@ -164,8 +164,14 @@ namespace RTE::CheckpointLua {
 		void Drain() {
 			if (m_Status.load(std::memory_order_acquire) != Status::Armed) throw std::logic_error("checkpoint boundary is not armed");
 			try {
-				for (const auto& pages: m_Native->Pages()) pages->Drain();
+				// A busy heap the boundary left mostly fenced is copied at once, beside the game: the ticks after the boundary write
+				// it all over, and as their own faults and as its collections that cost the game several times more. The heaps
+				// drain before the native pages, which the game writes far less.
+				constexpr size_t c_EagerFencedBytes = size_t{32} << 20;
+				for (const Heap& heap: m_Heaps)
+					if (heap.prepared->Image().Busy() && heap.prepared->FencedBytes() >= c_EagerFencedBytes) heap.prepared->CopyFencedNow();
 				DrainHeaps();
+				for (const auto& pages: m_Native->Pages()) pages->Drain();
 				CheckpointFailure::Check(CheckpointFailure::Point::NativeRoots);
 				m_ReadRoots = m_Roots;
 				m_ReadRoots.reserve(m_Roots.size() + m_Heaps.size());

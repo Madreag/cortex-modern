@@ -914,6 +914,10 @@ namespace RTE::CheckpointLua {
 				Locked guard(lock);
 				return hotCount * c_FaultRunPages * pageBytes;
 			}
+			size_t SavedPages(const CowCopy& copy) noexcept {
+				Locked guard(lock);
+				return static_cast<size_t>(std::count(copy.saved.begin(), copy.saved.end(), uint8_t{1}));
+			}
 			std::atomic<uint32_t> tickFaults{0}, tickCollectFaults{0};
 			uint32_t armedHotRuns = 0;
 			bool armedWhole = false;
@@ -1587,6 +1591,24 @@ namespace RTE::CheckpointLua {
 			return true;
 		}
 		Snapshot Image() const { return Snapshot(m_Data); }
+		/// The bytes still fenced: what the boundary neither copied nor any fault has saved since.
+		size_t FencedBytes() const noexcept {
+			return m_Data->committed - std::min(m_Data->committed, m_Coordinator->SavedPages(*m_Copy) * m_Copy->pageBytes);
+		}
+		/// Copies every page still fenced now, on several saver threads beside the game, then the drain finds it saved.
+		void CopyFencedNow() {
+			std::lock_guard lock(m_Mutex);
+			if (m_Finished || m_Copy->armed.load(std::memory_order_acquire) != 1) return;
+			constexpr size_t batchPages = 64;
+			const size_t pages = m_Copy->saved.size(), batches = (pages + batchPages - 1) / batchPages;
+			const SaverThreads::UngatedScope ungated;
+			ParallelWork copies(SaverThreads::Pool(), batches, [this, pages](size_t batch) {
+				const SaverThreads::UngatedScope helperUngated;
+				const size_t first = batch * batchPages, count = std::min(batchPages, pages - first);
+				if (m_Coordinator->CopyPages(first, count)) m_Coordinator->TouchPages(first, count);
+			}, 3);
+			copies.Finish();
+		}
 		/// Arm's locks and checks for a boundary arming on several threads, held in the session until it is fenced.
 		bool BeginArm(HeapOwner& owner, bool whole, bool learn, ArmSession& session);
 		/// The bytes of the heap's hot runs.
