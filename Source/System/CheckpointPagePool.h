@@ -85,6 +85,8 @@ namespace RTE {
 		static size_t SettleInventory(size_t pages);
 		/// Fences again the written inventory pages that stopped changing since the last pass; returns how many.
 		static size_t CoolInventory();
+		/// The census's view: mapped live and copy ranges, the inventory's blocks and the copies they still hold.
+		static std::string CommitCensus();
 		/// Test lever CCCP_TEST_FAULT_TICKS: the native write faults taken and the pages settled and cooled since the last call.
 		struct FaultTally { uint64_t faults = 0, faultNs = 0, settled = 0, cooled = 0; };
 		static bool TallyingFaults();

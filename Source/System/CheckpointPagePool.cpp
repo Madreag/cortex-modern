@@ -57,6 +57,8 @@ namespace {
 	int64_t Since(std::chrono::steady_clock::time_point start) {
 		return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
 	}
+	// Mapped bytes and ranges: [0] live blocks, [1] capture copies.
+	std::atomic<uint64_t> s_MappedBytes[2]{}, s_MappedRanges[2]{};
 	struct Pages {
 		unsigned char* data = nullptr;
 		size_t bytes;
@@ -70,8 +72,12 @@ namespace {
 			if (memory != MAP_FAILED) data = static_cast<unsigned char*>(memory);
 #endif
 			if (!data) throw std::bad_alloc();
+			s_MappedBytes[betweenTicks].fetch_add(bytes, std::memory_order_relaxed);
+			s_MappedRanges[betweenTicks].fetch_add(1, std::memory_order_relaxed);
 		}
 		~Pages() {
+			s_MappedBytes[betweenTicks].fetch_sub(bytes, std::memory_order_relaxed);
+			s_MappedRanges[betweenTicks].fetch_sub(1, std::memory_order_relaxed);
 			if (betweenTicks) ReleaseBetweenTicks(data, bytes);
 			else Release(data, bytes);
 		}
@@ -434,6 +440,23 @@ std::vector<std::shared_ptr<CheckpointPagePool::Block>> CheckpointPagePool::Live
 	blocks.reserve(registry.blocks.size());
 	for (const auto& [address, weak]: registry.blocks) if (auto block = weak.lock()) blocks.push_back(std::move(block));
 	return blocks;
+}
+
+std::string CheckpointPagePool::CommitCensus() {
+	uint64_t blocks = 0, blockBytes = 0, held = 0, heldBytes = 0, finished = 0, finishedBytes = 0;
+	for (const auto& block: LiveBlocks()) {
+		++blocks;
+		blockBytes += block->live.bytes;
+		Locked guard(block->lock);
+		for (const auto& copy: block->copies) {
+			++held;
+			heldBytes += copy->pages.bytes;
+			if (copy->completed) { ++finished; finishedBytes += copy->pages.bytes; }
+		}
+	}
+	return std::format("page_live_mb={} page_live_ranges={} page_copy_mb={} page_copy_ranges={} inventory_blocks={} inventory_mb={} held_copies={} held_copy_mb={} finished_copies={} finished_copy_mb={}",
+	    s_MappedBytes[0].load(std::memory_order_relaxed) >> 20, s_MappedRanges[0].load(std::memory_order_relaxed), s_MappedBytes[1].load(std::memory_order_relaxed) >> 20,
+	    s_MappedRanges[1].load(std::memory_order_relaxed), blocks, blockBytes >> 20, held, heldBytes >> 20, finished, finishedBytes >> 20);
 }
 
 size_t CheckpointPagePool::CoolInventory() {
@@ -1133,6 +1156,17 @@ std::string CheckpointNativeStorage::InventoryCensus() {
 	for (const auto& [slot, pool]: pools->sizes) { retained += pool.bytes; free += pool.free.size() * slot; }
 	return std::format("pool_bytes={} free_slot_bytes={} large_bytes={} explicit_grown_bytes={} world_grown_bytes={}",
 	    retained, free, pools->largeBytes, pools->explicitGrownBytes, pools->worldGrownBytes);
+}
+
+std::string CheckpointNativeStorage::PoolCensus() {
+	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
+	if (!pools) return "pool_classes=0 free_list_mb=0 " + InventoryCensus();
+	uint64_t classes = 0, freeList = 0;
+	{
+		std::lock_guard lock(pools->mutex);
+		for (const auto& [slot, pool]: pools->sizes) { ++classes; freeList += pool.free.capacity() * sizeof(void*); }
+	}
+	return std::format("pool_classes={} free_list_mb={} ", classes, freeList >> 20) + InventoryCensus();
 }
 
 std::string CheckpointNativeStorage::StorageCosts() {

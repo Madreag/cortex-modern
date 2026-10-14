@@ -487,6 +487,7 @@ namespace RTE::CheckpointLua {
 			if (m_PrivateRead) m_PrivateRead->base.store(0, std::memory_order_release);
 			for (const auto& [begin, bytes]: m_PrivateChunks) CheckpointNativeStorage::ForgetPrivate(reinterpret_cast<void*>(begin));
 			m_Bootstrap.reset();
+			if (m_Reservation) HeapCommitted().fetch_sub(m_Committed, std::memory_order_relaxed);
 			Release();
 		}
 		HeapOwner(const HeapOwner&) = delete;
@@ -521,6 +522,8 @@ namespace RTE::CheckpointLua {
 
 		/// Every copy buffer any heap has mapped, idle ones included, and the idle part of it.
 		static size_t MappedCopyBytes() { return CopyBytes(false).load(std::memory_order_relaxed); }
+		/// Every live heap's committed pages.
+		static size_t CommittedHeapBytes() { return HeapCommitted().load(std::memory_order_relaxed); }
 		static size_t IdleCopyBytes() { return CopyBytes(true).load(std::memory_order_relaxed); }
 		/// The copy buffers of this heap that a snapshot still holds.
 		size_t LiveSlabs() const { return m_LiveSlabs.load(std::memory_order_relaxed); }
@@ -1242,6 +1245,10 @@ namespace RTE::CheckpointLua {
 			thread_local int64_t waited = 0;
 			return waited;
 		}
+		static std::atomic<size_t>& HeapCommitted() {
+			static std::atomic<size_t> bytes{0};
+			return bytes;
+		}
 		static std::atomic<size_t>& CopyBytes(bool idle) {
 			static std::atomic<size_t> mapped{0}, idleBytes{0};
 			return idle ? idleBytes : mapped;
@@ -1489,6 +1496,7 @@ namespace RTE::CheckpointLua {
 					}
 				}
 				m_Committed += step;
+				HeapCommitted().fetch_add(step, std::memory_order_relaxed);
 				m_PublishedCommitted.store(m_Committed, std::memory_order_release);
 				if (m_PrivateRead) m_PrivateRead->committed.store(m_Committed, std::memory_order_release);
 			}

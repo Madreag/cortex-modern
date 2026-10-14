@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <limits>
 #include <iostream>
 #include <stdexcept>
@@ -153,6 +154,15 @@ namespace {
 		}();
 		return threshold;
 	}
+}
+
+std::string RTE::PixelAllocationCensus() {
+	auto* owner = PixelAllocations::storage.load();
+	if (!owner) return "pixel_allocations=0 pixel_mb=0";
+	uint64_t count = 0, bytes = 0;
+	std::lock_guard lock(owner->mutex);
+	for (const auto& [address, allocation]: owner->values) { ++count; bytes += allocation->Bytes(); }
+	return std::format("pixel_allocations={} pixel_mb={}", count, bytes >> 20);
 }
 
 int RTE::SceneLayerBackBufferCount() {
