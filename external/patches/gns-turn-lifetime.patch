@@ -17,7 +17,7 @@ index 62ec17e..f400548 100644
  /// before calling any other API function.  *Most* allocations will pass through these,
  /// especially all allocations that are per-connection.  A few allocations
 diff --git a/include/steam/steamnetworkingtypes.h b/include/steam/steamnetworkingtypes.h
-index be18560..1d44727 100644
+index be18560..1c01c79 100644
 --- a/include/steam/steamnetworkingtypes.h
 +++ b/include/steam/steamnetworkingtypes.h
 @@ -22,6 +22,15 @@
@@ -26,7 +26,7 @@ index be18560..1d44727 100644
  //#define STEAMNETWORKINGSOCKETS_STEAMAPI // Comment this in to support linking with steam_api.h as well
 +// TURN permissions and allocations are refreshed for the life of a connection, and a
 +// P2P_TURN_* value set on a live connection reaches its ICE session.
-+#define STEAMNETWORKINGSOCKETS_TURN_LIFETIME 4
++#define STEAMNETWORKINGSOCKETS_TURN_LIFETIME 5
 +// Local candidate policy also governs pair checks, nominations and received peer data.
 +#define STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY 2
 +// Native TURN supports UDP, TCP, and verified TLS with IPv4 and IPv6 allocations.
@@ -125,7 +125,7 @@ index 5ce6b59..70f48e3 100644
  	/// We *mostly* work on top of the sockets system, but in a few places we
  	/// need to break the abstraction and do things other clients of the API
 diff --git a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
-index de4b490..c7ce0d2 100644
+index de4b490..65e2cb5 100644
 --- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
 +++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
 @@ -5,12 +5,22 @@
@@ -151,7 +151,7 @@ index de4b490..c7ce0d2 100644
  
  // Put everything in a namespace, so we don't violate the one definition rule
  namespace SteamNetworkingSocketsLib {
-@@ -343,6 +353,40 @@ static const STUNAttribute* FindAttributeOfType( const STUNAttribute *pAttrs, ui
+@@ -343,6 +353,44 @@ static const STUNAttribute* FindAttributeOfType( const STUNAttribute *pAttrs, ui
      return nullptr;
  }
  
@@ -163,6 +163,10 @@ index de4b490..c7ce0d2 100644
 +
 +// Pause before sending a TURN request the server refused again.
 +const SteamNetworkingMicroseconds k_usecTURNRetryBackoff = 10 * k_nMillion;
++
++// A retiring allocation stays until the peer has sent nothing through it for this
++// long: three of the 5 s checks the peer makes of the route it has selected.
++const SteamNetworkingMicroseconds k_usecTURNRetireQuiet = 15 * k_nMillion;
 +
 +// An error response has both class bits of the message type set (RFC 5389 section 6).
 +static bool IsSTUNErrorResponse( const STUNHeader *pHeader )
@@ -192,7 +196,7 @@ index de4b490..c7ce0d2 100644
  
  static uint32* ReserveFingerprintAttribute( uint32 *pBuffer )
  {
-@@ -1016,15 +1060,17 @@ void CSteamNetworkingSocketsSTUNRequest::ReplyPacketReceived( const RecvPktInfo_
+@@ -1016,15 +1064,17 @@ void CSteamNetworkingSocketsSTUNRequest::ReplyPacketReceived( const RecvPktInfo_
  //
  /////////////////////////////////////////////////////////////////////////////
  
@@ -213,7 +217,7 @@ index de4b490..c7ce0d2 100644
  {
      Assert( !m_pPendingSTUNRequest );
      m_pPendingSTUNRequest = new CSteamNetworkingSocketsSTUNRequest( this );
-@@ -1035,15 +1081,19 @@ bool ICESessionInterface::QueueTURNRequest( uint32 nMsgType, int nEncoding, cons
+@@ -1035,15 +1085,19 @@ bool ICESessionInterface::QueueTURNRequest( uint32 nMsgType, int nEncoding, cons
          return true;
      }
  
@@ -240,7 +244,7 @@ index de4b490..c7ce0d2 100644
  
      // Build combined attr list: caller's request-specific attrs first, then auth attrs.
      if ( nExtraAttrs > 4 )
-@@ -1073,7 +1123,7 @@ bool ICESessionInterface::QueueTURNRequest( uint32 nMsgType, int nEncoding, cons
+@@ -1073,7 +1127,7 @@ bool ICESessionInterface::QueueTURNRequest( uint32 nMsgType, int nEncoding, cons
      allAttrs[ nAllAttrs ].m_pData   = reinterpret_cast<const uint32*>( m_strTURNNonce.c_str() );
      ++nAllAttrs;
  
@@ -249,13 +253,13 @@ index de4b490..c7ce0d2 100644
      // RFC 5766 mandates HMAC-SHA1 (not SHA256) for long-term credentials
      m_pPendingSTUNRequest->Queue( nMsgType,
          nEncoding | kSTUNPacketEncodingFlags_NoMappedAddress | kSTUNPacketEncodingFlags_MessageIntegrity,
-@@ -1081,23 +1131,140 @@ bool ICESessionInterface::QueueTURNRequest( uint32 nMsgType, int nEncoding, cons
+@@ -1081,23 +1135,140 @@ bool ICESessionInterface::QueueTURNRequest( uint32 nMsgType, int nEncoding, cons
      return true;
  }
  
 -void ICESessionInterface::QueueAllocateRequest( const netadr_t &addrTURNServer, RecvSTUNPacketCallback_t cb, int nEncoding )
 +bool ICESessionInterface::AdoptTURNChallenge( const RecvSTUNPktInfo_t &info )
- {
++{
 +    const STUNAttribute *pNonceAttr = FindAttributeOfType( info.m_pAttributes, info.m_nAttributes, k_nSTUN_Attr_Nonce );
 +    if ( pNonceAttr == nullptr || m_strTURNUsername.empty() )
 +        return false;
@@ -309,7 +313,7 @@ index de4b490..c7ce0d2 100644
 +}
 +
 +void ICESessionInterface::PollTURNStream( SteamNetworkingMicroseconds usecNow )
-+{
+ {
 +    if ( !m_pTURNStream ) return;
 +    CTURNStream *const stream = m_pTURNStream.get();
 +    const netadr_t server = stream->Remote();
@@ -398,7 +402,7 @@ index de4b490..c7ce0d2 100644
  }
  
  // Send a gathered packet to the pair, routing via TURN Send Indication if the
-@@ -1106,7 +1273,9 @@ void ICESessionInterface::QueueRefreshRequest( RecvSTUNPacketCallback_t cb, int
+@@ -1106,7 +1277,9 @@ void ICESessionInterface::QueueRefreshRequest( RecvSTUNPacketCallback_t cb, int
  bool ICESessionInterface::SendPacketGather( int nChunks, const iovec *pChunks, int cbPayload, const netadr_t &addrPeer, const netadr_t &addrRelay )
  {
      if ( !addrRelay.IsValid() )
@@ -409,7 +413,7 @@ index de4b490..c7ce0d2 100644
  
      // Relay: wrap in a TURN Send Indication.
      if ( nChunks > 3 )
-@@ -1166,7 +1335,7 @@ bool ICESessionInterface::SendPacketGather( int nChunks, const iovec *pChunks, i
+@@ -1166,7 +1339,7 @@ bool ICESessionInterface::SendPacketGather( int nChunks, const iovec *pChunks, i
      }
  
      ++TEST_ICE_ctr_send_ind_send;
@@ -418,7 +422,7 @@ index de4b490..c7ce0d2 100644
  }
  
  /////////////////////////////////////////////////////////////////////////////
-@@ -1216,33 +1385,88 @@ CSteamNetworkingICESession::CSteamNetworkingICESession( const ICESessionConfig&
+@@ -1216,33 +1389,88 @@ CSteamNetworkingICESession::CSteamNetworkingICESession( const ICESessionConfig&
  		}
  	}
  
@@ -518,7 +522,7 @@ index de4b490..c7ce0d2 100644
  	for ( const netadr_t &srv : m_vecTURNServers )
  	{
  		if ( ClassifyIP( srv ) & k_nIPClassify_LAN )
-@@ -1251,12 +1475,210 @@ CSteamNetworkingICESession::CSteamNetworkingICESession( const ICESessionConfig&
+@@ -1251,12 +1479,252 @@ CSteamNetworkingICESession::CSteamNetworkingICESession( const ICESessionConfig&
  			break;
  		}
  	}
@@ -540,8 +544,8 @@ index de4b490..c7ce0d2 100644
 +    for ( int i = 0; i < len( m_vecTURNServers ); ++i )
 +        if ( matches( i ) ) return i;
 +    return -1;
- }
- 
++}
++
 +int CSteamNetworkingICESession::NextSTUNServer( const ICESessionInterface &intf, int after ) const
 +{
 +    for ( int i = after + 1; i < len( m_vecSTUNServers ); ++i )
@@ -592,8 +596,8 @@ index de4b490..c7ce0d2 100644
 +            m_vecInterfaces.emplace_back( std::move( stream ) );
 +        }
 +    }
-+}
-+
+ }
+ 
 +void CSteamNetworkingICESession::UpdateTURNServers( const ICESessionConfig::TurnServer *pServers, int nServers )
 +{
 +	SteamNetworkingGlobalLock::AssertHeldByCurrentThread( "CSteamNetworkingICESession::UpdateTURNServers" );
@@ -654,7 +658,10 @@ index de4b490..c7ce0d2 100644
 +        const TURNCredentials &login = m_vecTURNCredentials[server];
 +        if ( m_vecTURNServers[server] == old->m_addrTURNServer && login.m_strUsername == old->m_strTURNUsername && login.m_strPassword == old->m_strTURNPassword )
 +        {
++            // The login came back: the peer may rank this allocation as before.
++            if ( old->m_bTURNRetiring ) old->NotifyLocalCandidateDiscovered( ICECandidateKind::Relayed, old->m_addrRelayed );
 +            old->m_bTURNRetiring = false;
++            old->m_bTURNRetireHeld = false;
 +            old->m_usecTURNRetireAfter = 0;
 +            continue;
 +        }
@@ -690,7 +697,13 @@ index de4b490..c7ce0d2 100644
 +            m_vecInterfaces.emplace_back( std::move( fresh ) );
 +            SpewMsg( "ICE: TURN replacement allocation started revision=%d; the current route carries data\n", m_nTURNLoginRevision );
 +        }
-+        old->m_bTURNRetiring = true;
++        if ( !old->m_bTURNRetiring )
++        {
++            // The peer ranks its routes itself: rank this one below every live allocation.
++            old->m_bTURNRetiring = true;
++            SpewMsg( "ICE: TURN previous allocation revision=%d offered at the lowest priority\n", old->m_nTURNLoginRevision );
++            old->NotifyLocalCandidateDiscovered( ICECandidateKind::Relayed, old->m_addrRelayed, true );
++        }
 +    }
 +    for ( int i = len( m_vecInterfaces ) - 1; i >= 0; --i )
 +    {
@@ -704,6 +717,15 @@ index de4b490..c7ce0d2 100644
 +        }
 +        if ( !old->m_usecTURNRetireAfter ) old->m_usecTURNRetireAfter = usecNow + 15000000;
 +        if ( usecNow < old->m_usecTURNRetireAfter ) continue;
++        // Our route left it, but the peer picks its own and may still send here.
++        if ( old->m_usecTURNPeerTraffic && usecNow < old->m_usecTURNPeerTraffic + k_usecTURNRetireQuiet )
++        {
++            if ( !old->m_bTURNRetireHeld )
++                SpewMsg( "ICE: TURN previous allocation revision=%d kept: the peer sent through it %d ms ago\n",
++                    old->m_nTURNLoginRevision, (int)( ( usecNow - old->m_usecTURNPeerTraffic ) / 1000 ) );
++            old->m_bTURNRetireHeld = true;
++            continue;
++        }
 +        if ( old->m_pPendingSTUNRequest ) { delete old->m_pPendingSTUNRequest; old->m_pPendingSTUNRequest = nullptr; }
 +        SpewMsg( "ICE: TURN previous allocation retired revision=%d\n", old->m_nTURNLoginRevision );
 +        DropRelayAllocation( old );
@@ -729,10 +751,34 @@ index de4b490..c7ce0d2 100644
 +    // Equal priorities must still let a newly signalled remote allocation take over.
 +    return next > current;
 +}
++
++void CSteamNetworkingICESession::NominateBetterRoute()
++{
++    if ( m_role != k_EICERole_Controlling || m_pSelectedCandidatePair == nullptr )
++        return;
++    ICECandidatePair *pBest = nullptr;
++    for ( ICECandidatePair *pPair : m_vecCandidatePairs )
++    {
++        if ( pPair == m_pSelectedCandidatePair )
++            continue;
++        // One nomination at a time: its check selects it, or fails and tries the next.
++        if ( pPair->m_bNominated && ( pPair->m_nState != kICECandidatePairState_Succeeded || has_element( m_vecTriggeredCheckQueue, pPair ) ) )
++            return;
++        if ( pPair->m_nState == kICECandidatePairState_Succeeded && pPair->m_nPriority > m_pSelectedCandidatePair->m_nPriority
++            && BPairSupersedesSelection( pPair ) && ( pBest == nullptr || pPair->m_nPriority > pBest->m_nPriority ) )
++            pBest = pPair;
++    }
++    if ( pBest == nullptr )
++        return;
++    SpewMsg( "ICE: the selected route now ranks below a checked one; nominating it\n" );
++    pBest->m_bNominated = true;
++    m_vecTriggeredCheckQueue.push_back( pBest );
++    SetNextThinkTimeASAP();
++}
  
  CSteamNetworkingICESession::~CSteamNetworkingICESession()
  {
-@@ -1264,6 +1686,9 @@ CSteamNetworkingICESession::~CSteamNetworkingICESession()
+@@ -1264,6 +1732,9 @@ CSteamNetworkingICESession::~CSteamNetworkingICESession()
  
      // Make sure we don't fire any more callbacks while doing any of this processing
      m_pCallbacks = nullptr;
@@ -742,7 +788,7 @@ index de4b490..c7ce0d2 100644
  
      for ( const auto &pIntf : m_vecInterfaces )
      {
-@@ -1277,6 +1702,12 @@ CSteamNetworkingICESession::~CSteamNetworkingICESession()
+@@ -1277,6 +1748,12 @@ CSteamNetworkingICESession::~CSteamNetworkingICESession()
      for ( ICECandidatePair *pPair: m_vecCandidatePairs )
          InternalDeleteCandidatePair( pPair );
      m_vecCandidatePairs.clear();
@@ -755,7 +801,7 @@ index de4b490..c7ce0d2 100644
  
      m_vecInterfaces.clear();
  }
-@@ -1328,7 +1759,8 @@ EICECandidateType CSteamNetworkingICESession::AddPeerCandidate( const RFC5245Can
+@@ -1328,7 +1805,8 @@ EICECandidateType CSteamNetworkingICESession::AddPeerCandidate( const RFC5245Can
          if ( c.m_addr == candidate.m_addr )
          {
  			// If the foundation is the same, don't do anything - this is redundant.
@@ -765,7 +811,7 @@ index de4b490..c7ce0d2 100644
  				return eCandidateType;
  
              (ICECandidateBase&)c = candidate;
-@@ -1337,12 +1769,19 @@ EICECandidateType CSteamNetworkingICESession::AddPeerCandidate( const RFC5245Can
+@@ -1337,16 +1815,26 @@ EICECandidateType CSteamNetworkingICESession::AddPeerCandidate( const RFC5245Can
  
  			// Propagate the updated candidate type to any existing pairs that have a stale copy.
  			// Pairs are created from incoming binding requests before signaling arrives, giving
@@ -787,7 +833,14 @@ index de4b490..c7ce0d2 100644
  			}
              break; // fall through to update state and trigger a think
          }
-@@ -1364,7 +1803,6 @@ EICECandidateType CSteamNetworkingICESession::AddPeerCandidate( const RFC5245Can
+     }
++    // The peer lowers an allocation it is retiring; a checked route may now rank first.
++    if ( !bNeedsNewEntry )
++        m_bReviewSelectedRoute = true;
+ 	if ( bNeedsNewEntry )
+ 	{
+ 		m_vecPeerCandidates.push_back( ICEPeerCandidate( candidate, pszFoundation ) );
+@@ -1364,7 +1852,6 @@ EICECandidateType CSteamNetworkingICESession::AddPeerCandidate( const RFC5245Can
  		{
  			bool bIsIPv4 = permIP.GetType() == k_EIPTypeV4;
  			std_vector<CIPAddress> &vecPermitted = bIsIPv4 ? m_vecTURNPermittedIPv4 : m_vecTURNPermittedIPv6;
@@ -795,7 +848,7 @@ index de4b490..c7ce0d2 100644
  			bool bAlreadyPermitted = false;
  			for ( const CIPAddress &existing : vecPermitted )
  			{
-@@ -1377,7 +1815,6 @@ EICECandidateType CSteamNetworkingICESession::AddPeerCandidate( const RFC5245Can
+@@ -1377,7 +1864,6 @@ EICECandidateType CSteamNetworkingICESession::AddPeerCandidate( const RFC5245Can
  			if ( !bAlreadyPermitted )
  			{
  				vecPermitted.push_back( permIP );
@@ -803,7 +856,7 @@ index de4b490..c7ce0d2 100644
  			}
  		}
  	}
-@@ -1397,6 +1834,8 @@ void CSteamNetworkingICESession::SetSelectedCandidatePair( ICECandidatePair *pPa
+@@ -1397,6 +1883,8 @@ void CSteamNetworkingICESession::SetSelectedCandidatePair( ICECandidatePair *pPa
      const int nLogLevel = GlobalConfig::LogLevel_P2PRendezvous.Get();
      if ( pPair->m_localCandidate.IsRelay() )
      {
@@ -812,7 +865,7 @@ index de4b490..c7ce0d2 100644
          SpewVerboseGroup( nLogLevel, "ICE selected candidate %s -> %s -> %s.",
              CUtlNetAdrRender( pPair->m_localCandidate.m_pInterface->m_boundAddr ).String(),
              CUtlNetAdrRender( pPair->m_localCandidate.m_addrTURNServer ).String(),
-@@ -1408,16 +1847,34 @@ void CSteamNetworkingICESession::SetSelectedCandidatePair( ICECandidatePair *pPa
+@@ -1408,16 +1896,34 @@ void CSteamNetworkingICESession::SetSelectedCandidatePair( ICECandidatePair *pPa
              CUtlNetAdrRender( pPair->m_localCandidate.m_pInterface->m_boundAddr ).String(),
              CUtlNetAdrRender( pPair->m_remoteCandidate.m_addr ).String() );
      }
@@ -848,7 +901,7 @@ index de4b490..c7ce0d2 100644
      }
  
      if ( pPair->m_pPeerRequest != nullptr )
-@@ -1427,7 +1884,8 @@ void CSteamNetworkingICESession::InternalDeleteCandidatePair( ICECandidatePair *
+@@ -1427,7 +1933,8 @@ void CSteamNetworkingICESession::InternalDeleteCandidatePair( ICECandidatePair *
          pPair->m_pPeerRequest = nullptr;
      }
  
@@ -858,7 +911,7 @@ index de4b490..c7ce0d2 100644
  
      delete pPair;
  }
-@@ -1458,8 +1916,8 @@ void CSteamNetworkingICESession::GatherInterfaces()
+@@ -1458,8 +1965,8 @@ void CSteamNetworkingICESession::GatherInterfaces()
      m_bInterfaceListStale = false;
  
      // First pass: scan existing interfaces against the new address list.
@@ -869,7 +922,7 @@ index de4b490..c7ce0d2 100644
      // Also track the lowest priority among survivors so new interfaces are
      // assigned priorities below all existing ones.
      uint32 uNextPriority = 65535;
-@@ -1474,7 +1932,6 @@ void CSteamNetworkingICESession::GatherInterfaces()
+@@ -1474,7 +1981,6 @@ void CSteamNetworkingICESession::GatherInterfaces()
              SteamNetworkingIPAddrToNetAdr( addrJ, vecAddrs[j].m_addr );
              if ( addrJ.GetIP() == intf->m_boundAddr.GetIP() )
              {
@@ -877,7 +930,7 @@ index de4b490..c7ce0d2 100644
                  bFound = true;
                  break;
              }
-@@ -1506,8 +1963,8 @@ void CSteamNetworkingICESession::GatherInterfaces()
+@@ -1506,8 +2012,8 @@ void CSteamNetworkingICESession::GatherInterfaces()
              continue;
          }
  
@@ -888,7 +941,7 @@ index de4b490..c7ce0d2 100644
      }
  
      // Second pass: add genuinely new interfaces.  Assign priorities counting
-@@ -1515,6 +1972,12 @@ void CSteamNetworkingICESession::GatherInterfaces()
+@@ -1515,6 +2021,12 @@ void CSteamNetworkingICESession::GatherInterfaces()
      // the list was empty).
      for ( const LocalAddress_t &addr: vecAddrs )
      {
@@ -901,7 +954,7 @@ index de4b490..c7ce0d2 100644
          // Skip addresses that can't produce a valid host candidate.
          // Mirrors the early-out in CalcICECandidateType: reject localhost and,
          // in mock-network mode, any address that isn't a recognised mock address.
-@@ -1541,11 +2004,27 @@ void CSteamNetworkingICESession::GatherInterfaces()
+@@ -1541,11 +2053,27 @@ void CSteamNetworkingICESession::GatherInterfaces()
          pNewIntf->NotifyLocalCandidateDiscovered( ICECandidateKind::Host, pNewIntf->m_boundAddr );
          m_bCandidatePairsNeedUpdate = true;
      }
@@ -929,7 +982,7 @@ index de4b490..c7ce0d2 100644
  
      //
      // Quick check if packet might be a STUN packet, and unpacket the header
-@@ -1563,7 +2042,7 @@ void CSteamNetworkingICESession::OnPacketReceived( const RecvPktInfo_t &info, IC
+@@ -1563,7 +2091,7 @@ void CSteamNetworkingICESession::OnPacketReceived( const RecvPktInfo_t &info, IC
      if ( info.m_cbPkt < 20 )
      {
  not_stun:
@@ -938,8 +991,11 @@ index de4b490..c7ce0d2 100644
              m_pCallbacks->OnPacketReceived( info );
          return;
      }
-@@ -1620,7 +2099,7 @@ not_stun:
+@@ -1618,9 +2146,10 @@ not_stun:
+         netadr_t peerAddr;
+         if ( !ReadXORAddressAttribute( pPeerAttr, &header, &peerAddr ) )
              return;
++        pInterface->m_usecTURNPeerTraffic = info.m_usecNow;
  
          // Re-enter with the inner payload, as if it arrived directly from the peer.
 -        RecvPktInfo_t innerInfo;
@@ -947,7 +1003,7 @@ index de4b490..c7ce0d2 100644
          innerInfo.m_pPkt    = reinterpret_cast<const uint8 *>( pDataAttr->m_pData );
          innerInfo.m_cbPkt   = (int)pDataAttr->m_nLength;
          innerInfo.m_usecNow = info.m_usecNow;
-@@ -1672,6 +2151,11 @@ not_stun:
+@@ -1672,6 +2201,11 @@ not_stun:
      // Incoming binding request
      //
  
@@ -959,7 +1015,7 @@ index de4b490..c7ce0d2 100644
      // Parse attributes and verify message integrity.
      CUtlVector< STUNAttribute > vecAttrs;
      if ( !ParseSTUNAttributes( info, (const uint8*)m_strLocalPassword.c_str(), (uint32)m_strLocalPassword.size(), &vecAttrs ) )
-@@ -1741,8 +2225,6 @@ not_stun:
+@@ -1741,8 +2275,6 @@ not_stun:
  
      SpewVerboseGroup( nLogLevel, "ICE: Incoming binding request from %s to %s.\n\n", CUtlNetAdrRender( info.m_adrFrom ).String(), CUtlNetAdrRender( pInterface->m_boundAddr ).String() );
  
@@ -968,7 +1024,7 @@ index de4b490..c7ce0d2 100644
      ICECandidatePair *pThisPair = nullptr;
      for ( ICECandidatePair *pPair : m_vecCandidatePairs )
      {
-@@ -1814,15 +2296,12 @@ not_stun:
+@@ -1814,15 +2346,12 @@ not_stun:
      {
          if (
              pThisPair->m_nState == kICECandidatePairState_Succeeded
@@ -986,7 +1042,7 @@ index de4b490..c7ce0d2 100644
          ) {
              bool bAlreadyHaveANomination = false;
              for ( ICECandidatePair *pOtherPair : m_vecCandidatePairs )
-@@ -1851,7 +2330,8 @@ not_stun:
+@@ -1851,7 +2380,8 @@ not_stun:
                  {
                      Assert( pThisPair->m_nState != kICECandidatePairState_InProgress );
                      pThisPair->m_nState = kICECandidatePairState_Waiting;
@@ -996,7 +1052,7 @@ index de4b490..c7ce0d2 100644
                  }
              }
          }
-@@ -1893,23 +2373,45 @@ void CSteamNetworkingICESession::Think( SteamNetworkingMicroseconds usecNow )
+@@ -1893,23 +2423,45 @@ void CSteamNetworkingICESession::Think( SteamNetworkingMicroseconds usecNow )
  
      SetNextThinkTime( usecNow + SteamNetworkingMicroseconds( 50000 ) ); // 50ms think rate
  
@@ -1044,7 +1100,7 @@ index de4b490..c7ce0d2 100644
  }
  
  void CSteamNetworkingICESession::Think_DiscoverServerReflexiveCandidates()
-@@ -1922,18 +2424,14 @@ void CSteamNetworkingICESession::Think_DiscoverServerReflexiveCandidates()
+@@ -1922,18 +2474,14 @@ void CSteamNetworkingICESession::Think_DiscoverServerReflexiveCandidates()
      for ( const std::unique_ptr<ICESessionInterface> &pIntf : m_vecInterfaces )
      {
          // Skip if discovery is done or a request is already in flight.
@@ -1068,7 +1124,7 @@ index de4b490..c7ce0d2 100644
          }
      }
  }
-@@ -1949,19 +2447,15 @@ void CSteamNetworkingICESession::Think_DiscoverRelayCandidate()
+@@ -1949,19 +2497,15 @@ void CSteamNetworkingICESession::Think_DiscoverRelayCandidate()
  
      for ( const std::unique_ptr<ICESessionInterface> &pIntf : m_vecInterfaces )
      {
@@ -1095,7 +1151,7 @@ index de4b490..c7ce0d2 100644
      }
  }
  
-@@ -1986,82 +2480,92 @@ void CSteamNetworkingICESession::STUNRequestCallback_AllocateRelay( const RecvST
+@@ -1986,82 +2530,92 @@ void CSteamNetworkingICESession::STUNRequestCallback_AllocateRelay( const RecvST
                  pIntf->m_addrTURNServer = info.m_pRequest->m_remoteAddr;
                  pIntf->m_addrRelayed = addrRelayed;
                  pIntf->m_bRelayFailed = false;
@@ -1241,7 +1297,7 @@ index de4b490..c7ce0d2 100644
  }
  
  void CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation( const RecvSTUNPktInfo_t &info )
-@@ -2069,24 +2573,87 @@ void CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation( const Re
+@@ -2069,24 +2623,87 @@ void CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation( const Re
      ICESessionInterface * const pIntf = info.m_pRequest->m_pInterface;
      pIntf->m_pPendingSTUNRequest = nullptr;
  
@@ -1251,15 +1307,10 @@ index de4b490..c7ce0d2 100644
 +        && pIntf->m_strTURNRenewedUsername == info.m_pRequest->m_strTURNUsername
 +        && pIntf->m_strTURNRenewedPassword == info.m_pRequest->m_strTURNPassword;
 +    if ( info.m_pHeader != nullptr && !IsSTUNErrorResponse( info.m_pHeader ) )
-     {
--        // Refresh succeeded -- parse the returned LIFETIME and schedule the next one.
--        const STUNAttribute *pLifetimeAttr = FindAttributeOfType( info.m_pAttributes, info.m_nAttributes, k_nTURN_Attr_Lifetime );
--        if ( pLifetimeAttr != nullptr && pLifetimeAttr->m_nLength == 4 )
++    {
 +        // The server took the renewed login for this allocation; it signs everything from now on.
 +        if ( bRenewedLogin )
-         {
--            SteamNetworkingMicroseconds usecLifetime = (SteamNetworkingMicroseconds)ntohl( pLifetimeAttr->m_pData[0] ) * k_nMillion;
--            pIntf->m_usecRefreshAfter = info.m_usecNow + usecLifetime / 2;
++        {
 +            // A later renewal may arrive while this request is in flight.
 +            pIntf->m_strTURNUsername = info.m_pRequest->m_strTURNUsername;
 +            pIntf->m_strTURNPassword = info.m_pRequest->m_strTURNPassword;
@@ -1272,7 +1323,7 @@ index de4b490..c7ce0d2 100644
 +            pIntf->ComputeTURNKey();
 +            SpewMsg( "ICE: TURN relay %s refreshed with the renewed login\n",
 +                CUtlNetAdrRender( pIntf->m_addrRelayed ).String() );
-         }
++        }
 +
 +        // Refresh succeeded -- the next one at half the granted lifetime, or at once for a login renewed meanwhile.
 +        const SteamNetworkingMicroseconds usecLifetime = TURNLifetime( info );
@@ -1281,14 +1332,9 @@ index de4b490..c7ce0d2 100644
 +        pIntf->m_bTURNNonceResent = false;
 +        SpewVerboseGroup( GlobalConfig::LogLevel_P2PRendezvous.Get(), "ICE: TURN relay %s refreshed for %d s.\n",
 +            CUtlNetAdrRender( pIntf->m_addrRelayed ).String(), (int)( usecLifetime / k_nMillion ) );
-         return;
-     }
- 
--    // Refresh timed out -- the allocation is gone.  Tear down relay state so
--    // Think_DiscoverRelayCandidate will re-allocate, and remove all candidate
--    // pairs that depended on this relay.
--    SpewMsg( "ICE: TURN Refresh timed out for %s -- tearing down relay allocation\n",
--        CUtlNetAdrRender( pIntf->m_addrTURNServer ).String() );
++        return;
++    }
++
 +    // A stale nonce: send once more with the nonce the server just gave us.
 +    const int nErrorCode = info.m_pHeader != nullptr ? STUNErrorCode( info ) : 0;
 +    if ( ( nErrorCode == 438 || nErrorCode == 401 ) && !pIntf->m_bTURNNonceResent && pIntf->AdoptTURNChallenge( info ) )
@@ -1298,18 +1344,23 @@ index de4b490..c7ce0d2 100644
 +        return;
 +    }
 +    pIntf->m_bTURNNonceResent = false;
- 
++
 +    // The server holds the allocation to the login that created it (441 by RFC 5766 section 4):
 +    // refresh with that one at once, and keep the renewed login for the next Allocate.
 +    if ( bRenewedLogin && nErrorCode != 437 && info.m_pHeader != nullptr )
-+    {
+     {
+-        // Refresh succeeded -- parse the returned LIFETIME and schedule the next one.
+-        const STUNAttribute *pLifetimeAttr = FindAttributeOfType( info.m_pAttributes, info.m_nAttributes, k_nTURN_Attr_Lifetime );
+-        if ( pLifetimeAttr != nullptr && pLifetimeAttr->m_nLength == 4 )
 +        SpewMsg( "ICE: TURN server %s refused the renewed login for relay %s with error %d; the relay keeps its allocation login and the next allocation uses the renewed login\n",
 +            CUtlNetAdrRender( pIntf->m_addrTURNServer ).String(), CUtlNetAdrRender( pIntf->m_addrRelayed ).String(), nErrorCode );
 +        if ( bLatestLogin )
-+        {
+         {
+-            SteamNetworkingMicroseconds usecLifetime = (SteamNetworkingMicroseconds)ntohl( pLifetimeAttr->m_pData[0] ) * k_nMillion;
+-            pIntf->m_usecRefreshAfter = info.m_usecNow + usecLifetime / 2;
 +            pIntf->m_strTURNRenewedUsername.clear();
 +            pIntf->m_strTURNRenewedPassword.clear();
-+        }
+         }
 +        pIntf->m_usecRefreshAfter = info.m_usecNow;
 +        return;
 +    }
@@ -1325,22 +1376,27 @@ index de4b490..c7ce0d2 100644
 +            SpewMsg( "ICE: TURN Refresh timed out for %s -- tearing down relay allocation\n",
 +                CUtlNetAdrRender( pIntf->m_addrTURNServer ).String() );
 +        DropRelayAllocation( pIntf );
-+        return;
-+    }
-+
+         return;
+     }
+ 
+-    // Refresh timed out -- the allocation is gone.  Tear down relay state so
+-    // Think_DiscoverRelayCandidate will re-allocate, and remove all candidate
+-    // pairs that depended on this relay.
+-    SpewMsg( "ICE: TURN Refresh timed out for %s -- tearing down relay allocation\n",
+-        CUtlNetAdrRender( pIntf->m_addrTURNServer ).String() );
 +    SpewWarning( "ICE: TURN Refresh of relay %s %s; retrying before it lapses in %d s\n",
 +        CUtlNetAdrRender( pIntf->m_addrRelayed ).String(), info.m_pHeader != nullptr ? "refused" : "timed out",
 +        (int)( ( pIntf->m_usecAllocationExpires - info.m_usecNow ) / k_nMillion ) );
 +    pIntf->m_usecRefreshAfter = info.m_usecNow + k_usecTURNRetryBackoff;
 +}
-+
+ 
 +void CSteamNetworkingICESession::DropRelayAllocation( ICESessionInterface *pIntf )
 +{
 +    // Remove all candidate pairs that depended on this relay.
      for ( int j = len( m_vecCandidatePairs ) - 1; j >= 0; --j )
      {
          ICECandidatePair *pPair = m_vecCandidatePairs[j];
-@@ -2097,11 +2664,17 @@ void CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation( const Re
+@@ -2097,11 +2714,17 @@ void CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation( const Re
          }
      }
  
@@ -1360,7 +1416,7 @@ index de4b490..c7ce0d2 100644
  }
  
  void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseconds usecNow )
-@@ -2122,17 +2695,25 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
+@@ -2122,17 +2745,25 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
              continue;
          }
  
@@ -1392,7 +1448,7 @@ index de4b490..c7ce0d2 100644
          STUNAttribute peerAttrs[ k_nMaxPeers ];
          uint32 peerAttrData[ k_nMaxPeers ][ 5 ];
  
-@@ -2140,10 +2721,9 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
+@@ -2140,10 +2771,9 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
          auto *pRequest = new CSteamNetworkingSocketsSTUNRequest( pIntf.get() );
  
          int nPeerAttrs = 0;
@@ -1405,7 +1461,7 @@ index de4b490..c7ce0d2 100644
              if ( addr.GetType() == k_EIPTypeV4 )
              {
                  // Port is zero; XOR-port = 0 ^ (magic >> 16) = magic >> 16.
-@@ -2169,23 +2749,15 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
+@@ -2169,23 +2799,15 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
              ++nPeerAttrs;
          }
  
@@ -1433,7 +1489,7 @@ index de4b490..c7ce0d2 100644
              STUNAttribute authAttrs[3];
              authAttrs[0].m_nType   = k_nSTUN_Attr_UserName;
              authAttrs[0].m_nLength = (uint32)strUsername.size();
-@@ -2198,7 +2770,7 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
+@@ -2198,7 +2820,7 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
              authAttrs[2].m_pData   = reinterpret_cast<const uint32*>( pIntf->m_strTURNNonce.c_str() );
  
              // Build a combined attrs array: peer addrs first, then auth.
@@ -1442,7 +1498,7 @@ index de4b490..c7ce0d2 100644
              STUNAttribute allAttrs[ k_nMaxAuthAttrs ];
              for ( int i = 0; i < nPeerAttrs; ++i ) allAttrs[i] = peerAttrs[i];
              for ( int i = 0; i < 3; ++i ) allAttrs[nPeerAttrs + i] = authAttrs[i];
-@@ -2223,17 +2795,54 @@ void CSteamNetworkingICESession::STUNRequestCallback_CreatePermission( const Rec
+@@ -2223,17 +2845,54 @@ void CSteamNetworkingICESession::STUNRequestCallback_CreatePermission( const Rec
      ICESessionInterface * const pIntf = info.m_pRequest->m_pInterface;
      pIntf->m_pPendingSTUNRequest = nullptr;
  
@@ -1503,7 +1559,7 @@ index de4b490..c7ce0d2 100644
  }
  
  void CSteamNetworkingICESession::STUNRequestCallback_ServerReflexiveCandidate( const RecvSTUNPktInfo_t &info )
-@@ -2262,10 +2871,9 @@ void CSteamNetworkingICESession::STUNRequestCallback_ServerReflexiveCandidate( c
+@@ -2262,10 +2921,9 @@ void CSteamNetworkingICESession::STUNRequestCallback_ServerReflexiveCandidate( c
          return;
      }
  
@@ -1517,7 +1573,7 @@ index de4b490..c7ce0d2 100644
      {
          // Exhausted all STUN servers.  Mark failed so Think_DiscoverServerReflexiveCandidates
          // does not retry this interface indefinitely.
-@@ -2275,7 +2883,7 @@ void CSteamNetworkingICESession::STUNRequestCallback_ServerReflexiveCandidate( c
+@@ -2275,7 +2933,7 @@ void CSteamNetworkingICESession::STUNRequestCallback_ServerReflexiveCandidate( c
      }
  
      // Try the next server
@@ -1526,7 +1582,7 @@ index de4b490..c7ce0d2 100644
  }
  
  void CSteamNetworkingICESession::STUNRequestCallback_ServerReflexiveKeepAlive( const RecvSTUNPktInfo_t &info )
-@@ -2288,19 +2896,25 @@ void CSteamNetworkingICESession::STUNRequestCallback_ServerReflexiveKeepAlive( c
+@@ -2288,19 +2946,25 @@ void CSteamNetworkingICESession::STUNRequestCallback_ServerReflexiveKeepAlive( c
      {
          if ( !( pIntf->m_addrSTUNServer == info.m_pRequest->m_remoteAddr ) )
              pIntf->m_addrSTUNServer = info.m_pRequest->m_remoteAddr;
@@ -1561,7 +1617,7 @@ index de4b490..c7ce0d2 100644
  }
  
  void CSteamNetworkingICESession::UpdateKeepalive( ICESessionInterface *pIntf )
-@@ -2310,7 +2924,10 @@ void CSteamNetworkingICESession::UpdateKeepalive( ICESessionInterface *pIntf )
+@@ -2310,7 +2974,10 @@ void CSteamNetworkingICESession::UpdateKeepalive( ICESessionInterface *pIntf )
      if ( pIntf->m_pPendingSTUNRequest != nullptr )
          return;
  
@@ -1573,7 +1629,7 @@ index de4b490..c7ce0d2 100644
  }
  
  void CSteamNetworkingICESession::Think_KeepAliveOnCandidates( SteamNetworkingMicroseconds usecNow )
-@@ -2331,6 +2948,161 @@ void CSteamNetworkingICESession::Think_KeepAliveOnCandidates( SteamNetworkingMic
+@@ -2331,6 +2998,303 @@ void CSteamNetworkingICESession::Think_KeepAliveOnCandidates( SteamNetworkingMic
      }
  }
  
@@ -1730,12 +1786,154 @@ index de4b490..c7ce0d2 100644
 +    }
 +    return true;
 +}
++
++// A renewed login retires the old allocations. Each end picks its own route, so the
++// peer may still send to an old allocation that this end's own route has left.
++bool TEST_ICE_TURNRotationKeepsThePeerRoute()
++{
++    SteamNetworkingGlobalLock lock( "TURN rotation selftest" );
++    struct Recorder final : CSteamNetworkingICESessionCallbacks
++    {
++        std_vector<std::string> candidates;
++        int delivered = 0;
++        void OnLocalCandidateDiscovered( EICECandidateType, const char *candidate ) override { candidates.push_back( candidate ); }
++        void OnPacketReceived( const RecvPktInfo_t & ) override { ++delivered; }
++    } recorder;
++    // Each property reports on its own, so one run shows every one that fails.
++    bool passed = true;
++    const auto fail = [&]( const char *what ) { SpewError( "TURN rotation FAIL: %s\n", what ); passed = false; };
++
++    // The joiner is the controlled end, renewing its login. Its own route leaves
++    // through allocation A; the host sends to its allocation B.
++    CSteamNetworkingICESession joiner( k_EICERole_Controlled, &recorder, 0 );
++    joiner.m_nPermittedCandidateTypes = k_EICECandidate_IPv4_Relay;
++    const auto allocation = [&]( const char *base, const char *relayed, uint32 priority, const char *user ) -> ICESessionInterface * {
++        joiner.m_vecInterfaces.emplace_back( new ICESessionInterface( joiner, priority, 24 ) );
++        ICESessionInterface *intf = joiner.m_vecInterfaces.back().get();
++        if ( !intf->m_boundAddr.SetFromString( base ) || !intf->m_addrTURNServer.SetFromString( "192.0.2.2:3478" )
++            || !intf->m_addrRelayed.SetFromString( relayed ) ) return nullptr;
++        intf->m_strTURNRealm = "test";
++        intf->m_strTURNNonce = "nonce";
++        intf->m_strTURNUsername = user;
++        intf->m_strTURNPassword = std::string( user ) + "-key";
++        intf->ComputeTURNKey();
++        return intf;
++    };
++    ICESessionInterface *own = allocation( "192.0.2.1:4000", "203.0.113.1:5000", 100, "first" );
++    ICESessionInterface *target = allocation( "192.0.2.11:4001", "203.0.113.11:5001", 200, "first" );
++    ICESessionInterface *ownNext = allocation( "192.0.2.1:4002", "203.0.113.2:5002", 100, "second" );
++    ICESessionInterface *targetNext = allocation( "192.0.2.11:4003", "203.0.113.12:5003", 200, "second" );
++    netadr_t hostRelay;
++    if ( !own || !target || !ownNext || !targetNext || !hostRelay.SetFromString( "198.51.100.7:7000" ) ) { fail( "fixture addresses" ); return false; }
++    ownNext->m_bTURNReplacement = targetNext->m_bTURNReplacement = true;
++    CSteamNetworkingICESession::ICEPeerCandidate host( CSteamNetworkingICESession::ICECandidateBase( ICECandidateKind::Relayed, hostRelay ), "host" );
++    CSteamNetworkingICESession::ICECandidatePair ownRoute( { own, own->m_addrTURNServer }, host, joiner.m_role );
++    CSteamNetworkingICESession::ICECandidatePair nextRoute( { ownNext, ownNext->m_addrTURNServer }, host, joiner.m_role );
++    joiner.m_pSelectedCandidatePair = &ownRoute;
++
++    // What the host was told of B and of A's replacement when they were allocated.
++    target->NotifyLocalCandidateDiscovered( ICECandidateKind::Relayed, target->m_addrRelayed );
++    ownNext->NotifyLocalCandidateDiscovered( ICECandidateKind::Relayed, ownNext->m_addrRelayed );
++    RFC5245CandidateAttr targetOffer, ownNextOffer;
++    if ( recorder.candidates.size() != 2 || !ParseRFC5245CandidateAttribute( recorder.candidates[0].c_str(), &targetOffer )
++        || !ParseRFC5245CandidateAttribute( recorder.candidates[1].c_str(), &ownNextOffer ) ) { fail( "the fixture's candidates were not announced" ); return false; }
++
++    // A TURN Data Indication from the server: one packet the host sent to the allocation's relayed address.
++    const auto hostSends = [&]( ICESessionInterface *intf, SteamNetworkingMicroseconds now ) {
++        uint8 packet[40] = {};
++        const auto put16 = [&]( int at, uint32 value ) { packet[at] = uint8( value >> 8 ); packet[at + 1] = uint8( value ); };
++        const auto put32 = [&]( int at, uint32 value ) { put16( at, value >> 16 ); put16( at + 2, value & 0xFFFF ); };
++        put16( 0, k_nTURN_DataIndication ); put16( 2, 20 ); put32( 4, k_nSTUN_CookieValue );
++        put16( 20, k_nTURN_Attr_XORPeerAddress ); put16( 22, 8 ); packet[25] = 1;
++        put16( 26, hostRelay.GetPort() ^ ( k_nSTUN_CookieValue >> 16 ) ); put32( 28, hostRelay.GetIPv4() ^ k_nSTUN_CookieValue );
++        put16( 32, k_nTURN_Attr_Data ); put16( 34, 4 ); put32( 36, 0x01020304 );
++        RecvPktInfo_t info{};
++        info.m_pPkt = packet; info.m_cbPkt = sizeof( packet ); info.m_usecNow = now; info.m_adrFrom = intf->m_addrTURNServer; info.m_tos = 0xff;
++        joiner.OnPacketReceived( info, intf );
++    };
++
++    const ICESessionConfig::TurnServer renewed{ "192.0.2.2:3478", "second", "second-key" };
++    joiner.UpdateTURNServers( &renewed, 1 );
++    const SteamNetworkingMicroseconds start = 1000 * k_nMillion;
++    joiner.Think_RotateTURN( start );
++    if ( !own->m_bTURNRetiring || !target->m_bTURNRetiring || ownNext->m_bTURNRetiring || targetNext->m_bTURNRetiring )
++    { fail( "the renewed login did not retire exactly the old allocations" ); return false; }
++
++    // 1. The host keeps sending to B for 20 s: B stays while it is used, and goes
++    // once it has been quiet for 15 s. The joiner's own route keeps A until it leaves it.
++    bool retired = false;
++    for ( int second = 1; second <= 20 && !retired; ++second )
++    {
++        hostSends( target, start + second * k_nMillion );
++        joiner.Think_RotateTURN( start + second * k_nMillion );
++        if ( !target->m_addrRelayed.IsValid() )
++        {
++            SpewError( "TURN rotation FAIL: retired old allocation B %d s after the renewal while the host still sent to it every second\n", second );
++            passed = false;
++            retired = true;
++        }
++    }
++    if ( !retired )
++    {
++        if ( recorder.delivered != 20 ) fail( "the host's packets through the old allocation did not reach the connection" );
++        joiner.Think_RotateTURN( start + 34 * k_nMillion );
++        if ( !target->m_addrRelayed.IsValid() ) fail( "retired old allocation B 14 s after the host's last packet" );
++        joiner.Think_RotateTURN( start + 35 * k_nMillion );
++        if ( target->m_addrRelayed.IsValid() ) fail( "kept old allocation B 15 s after the host's last packet" );
++        if ( !own->m_addrRelayed.IsValid() ) fail( "retired old allocation A while the joiner's own route used it" );
++        joiner.m_pSelectedCandidatePair = &nextRoute;
++        joiner.Think_RotateTURN( start + 36 * k_nMillion );
++        joiner.Think_RotateTURN( start + 50 * k_nMillion );
++        if ( !own->m_addrRelayed.IsValid() ) fail( "retired old allocation A 14 s after the joiner's route left it" );
++        joiner.Think_RotateTURN( start + 51 * k_nMillion );
++        if ( own->m_addrRelayed.IsValid() || !ownNext->m_addrRelayed.IsValid() || !targetNext->m_addrRelayed.IsValid() )
++            fail( "the joiner's allocations after its route moved are not just the renewed ones" );
++    }
++    joiner.m_pSelectedCandidatePair = nullptr;
++
++    // 2. The renewal offered B again: same foundation and address, lowest priority.
++    bool lowered = false;
++    for ( size_t i = 2; i < recorder.candidates.size(); ++i )
++    {
++        RFC5245CandidateAttr offer;
++        if ( ParseRFC5245CandidateAttribute( recorder.candidates[i].c_str(), &offer ) && offer.address == targetOffer.address
++            && offer.sFoundation == targetOffer.sFoundation && offer.nPriority == 255 && targetOffer.nPriority > 255 ) lowered = true;
++    }
++    if ( !lowered ) fail( "the renewal did not offer old allocation B again at the lowest priority" );
++
++    // 3. The host, the controlling end, sends to B. Its route to A's replacement passed
++    // its check but ranked lower. Once B is offered at the lowest priority, its next
++    // check pass nominates that route; the old one carries data until it is answered.
++    CSteamNetworkingICESession hostSession( k_EICERole_Controlling, nullptr, 0 );
++    hostSession.m_nPermittedCandidateTypes = k_EICECandidate_IPv4_Relay;
++    hostSession.m_vecInterfaces.emplace_back( new ICESessionInterface( hostSession, 300, 24 ) );
++    ICESessionInterface &hostIntf = *hostSession.m_vecInterfaces.back();
++    if ( !hostIntf.m_boundAddr.SetFromString( "198.51.100.1:4000" ) || !hostIntf.m_addrTURNServer.SetFromString( "192.0.2.2:3478" ) ) { fail( "fixture addresses" ); return false; }
++    hostIntf.m_addrRelayed = hostRelay;
++    if ( hostSession.AddPeerCandidate( targetOffer ) != k_EICECandidate_IPv4_Relay || hostSession.AddPeerCandidate( ownNextOffer ) != k_EICECandidate_IPv4_Relay )
++    { fail( "the host did not take the joiner's candidates" ); return false; }
++    auto *toTarget = new CSteamNetworkingICESession::ICECandidatePair( { &hostIntf, hostIntf.m_addrTURNServer }, hostSession.m_vecPeerCandidates[0], hostSession.m_role );
++    auto *toOwnNext = new CSteamNetworkingICESession::ICECandidatePair( { &hostIntf, hostIntf.m_addrTURNServer }, hostSession.m_vecPeerCandidates[1], hostSession.m_role );
++    hostSession.m_vecCandidatePairs.push_back( toTarget );
++    hostSession.m_vecCandidatePairs.push_back( toOwnNext );
++    toTarget->m_nState = toOwnNext->m_nState = CSteamNetworkingICESession::kICECandidatePairState_Succeeded;
++    toTarget->m_bNominated = true;
++    hostSession.m_pSelectedCandidatePair = toTarget;
++    if ( hostSession.BPairSupersedesSelection( toOwnNext ) ) { fail( "the fixture's routes do not rank B first" ); return false; }
++    RFC5245CandidateAttr loweredOffer = targetOffer;
++    loweredOffer.nPriority = 255;
++    if ( hostSession.AddPeerCandidate( loweredOffer ) != k_EICECandidate_IPv4_Relay ) { fail( "the host did not take the lowered candidate" ); return false; }
++    hostSession.Think_TestPeerConnectivity();
++    if ( !toOwnNext->m_bNominated || toOwnNext->m_pPeerRequest == nullptr || hostSession.m_pSelectedCandidatePair != toTarget )
++        fail( "the host kept its route to old allocation B, lowered, without nominating its checked route to a live one" );
++    return passed;
++}
 +#endif
 +
  void CSteamNetworkingICESession::Think_TestPeerConnectivity()
  {
  	SteamNetworkingGlobalLock::AssertHeldByCurrentThread( "CSteamNetworkingICESession::Think_TestPeerConnectivity" );
-@@ -2343,22 +3115,28 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
+@@ -2343,22 +3307,28 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
          // make sure the pair is present.
          for ( const std::unique_ptr<ICESessionInterface> &pIntf : m_vecInterfaces )
          {
@@ -1769,7 +1967,20 @@ index de4b490..c7ce0d2 100644
                          continue;
                      bool bFound = false;
                      for ( ICECandidatePair *pPair : m_vecCandidatePairs )
-@@ -2396,6 +3174,8 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
+@@ -2383,6 +3353,12 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
+         std::sort( m_vecCandidatePairs.begin(), m_vecCandidatePairs.end(), []( const ICECandidatePair *pA, const ICECandidatePair *pB ) { return pA->m_nPriority > pB->m_nPriority; } );
+     }
+ 
++    if ( m_bReviewSelectedRoute )
++    {
++        m_bReviewSelectedRoute = false;
++        NominateBetterRoute();
++    }
++
+     ICECandidatePair *pPairToCheck = nullptr;
+ 
+     if ( !m_vecTriggeredCheckQueue.empty() )
+@@ -2396,6 +3372,8 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
      {
          for ( ICECandidatePair *pCandidatePair : m_vecCandidatePairs )
          {
@@ -1778,7 +1989,7 @@ index de4b490..c7ce0d2 100644
              if ( pCandidatePair->m_nState == kICECandidatePairState_Waiting )
              {
                  pPairToCheck = pCandidatePair;
-@@ -2406,31 +3186,39 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
+@@ -2406,31 +3384,39 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
  
      if ( pPairToCheck == nullptr )
      {
@@ -1833,7 +2044,7 @@ index de4b490..c7ce0d2 100644
              pCandidatePair->m_nState = kICECandidatePairState_Waiting;
              if ( pPairToCheck == nullptr )
                  pPairToCheck = pCandidatePair;
-@@ -2439,6 +3227,15 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
+@@ -2439,6 +3425,15 @@ void CSteamNetworkingICESession::Think_TestPeerConnectivity()
  
      if ( pPairToCheck != nullptr )
      {
@@ -1849,19 +2060,25 @@ index de4b490..c7ce0d2 100644
          // Trigger the connectivity check here...
          ICESessionInterface * const pIntf = pPairToCheck->m_localCandidate.m_pInterface;
          pPairToCheck->m_nState = kICECandidatePairState_InProgress;
-@@ -2529,17 +3326,22 @@ void CSteamNetworkingICESession::STUNRequestCallback_PeerConnectivityCheck( cons
+@@ -2529,17 +3524,28 @@ void CSteamNetworkingICESession::STUNRequestCallback_PeerConnectivityCheck( cons
  
      // Always update the pair state so it is never left stuck in InProgress with no
      // active request (which would break the invariant checked in OnPacketReceived).
 -    if ( info.m_pHeader == nullptr )
 +    if ( info.m_pHeader == nullptr || info.m_pHeader->m_nMessageType != k_nSTUN_BindingResponse )
      {
++        const bool bWasNominated = pPair->m_bNominated;
          pPair->m_nState = kICECandidatePairState_Failed;
 +        pPair->m_bNominated = false;
 +        if ( m_pSelectedCandidatePair == pPair )
 +        {
 +            SpewWarning( "ICE: selected path failed its connectivity check; checking alternatives\n" );
 +            ForgetSelectedCandidatePair();
++        }
++        else if ( bWasNominated )
++        {
++            // That route failed its check; the next checked one may still outrank ours.
++            m_bReviewSelectedRoute = true;
 +        }
          return;
      }
@@ -1875,7 +2092,7 @@ index de4b490..c7ce0d2 100644
      {
          return;
      }
-@@ -2550,12 +3352,12 @@ void CSteamNetworkingICESession::STUNRequestCallback_PeerConnectivityCheck( cons
+@@ -2550,12 +3556,12 @@ void CSteamNetworkingICESession::STUNRequestCallback_PeerConnectivityCheck( cons
      }
  	else if ( m_role == k_EICERole_Controlling )
      {
@@ -1891,7 +2108,7 @@ index de4b490..c7ce0d2 100644
  		}
  		else
  		{
-@@ -2570,7 +3372,8 @@ void CSteamNetworkingICESession::STUNRequestCallback_PeerConnectivityCheck( cons
+@@ -2570,7 +3576,8 @@ void CSteamNetworkingICESession::STUNRequestCallback_PeerConnectivityCheck( cons
  			if ( !bAlreadyHaveANomination )
  			{
  				pPair->m_bNominated = true;
@@ -1901,7 +2118,26 @@ index de4b490..c7ce0d2 100644
  			}
  		}
      }
-@@ -2634,6 +3437,8 @@ void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind,
+@@ -2600,7 +3607,7 @@ CSteamNetworkingICESession::ICECandidateBase::ICECandidateBase( ICECandidateKind
+ // Compute the RFC 5245 candidate-attribute string, determine the family-specific
+ // EICECandidateType, and dispatch OnLocalCandidateDiscovered to the session callbacks.
+ // Ex: candidate:2442523459 0 udp 2122262784 2602:801:f001:1034:5078:221c:76b:a3d6 63368 typ host generation 0 ufrag WLM82 network-id 2
+-void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind, const netadr_t& addr )
++void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind, const netadr_t& addr, bool bRetiring )
+ {
+     CSteamNetworkingICESessionCallbacks *pCallbacks = m_session.m_pCallbacks;
+     if ( pCallbacks == nullptr )
+@@ -2616,7 +3623,8 @@ void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind,
+         case ICECandidateKind::PeerReflexive:   nTypePreference = 110; break;
+         default:                                nTypePreference =   0; break;
+     }
+-    const uint32 nPriority = ( nTypePreference << 24 ) + ( ( m_nPriority & 0xFFFF ) << 8 ) + 255u;
++    const uint32 nLocalPreference = bRetiring ? 0 : ( m_nPriority & 0xFFFF );
++    const uint32 nPriority = ( nTypePreference << 24 ) + ( nLocalPreference << 8 ) + 255u;
+ 
+     /* <foundation>:  is composed of 1 to 32 <ice-char>s.  It is an
+       identifier that is equivalent for two candidates that are of the
+@@ -2634,6 +3642,8 @@ void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind,
              uCounter += stunIPv6[i];
          }
          nFoundation = ( m_boundAddr.GetPort() + m_addrSTUNServer.GetPort() ) + ( uCounter << 15 ) + (int)kind;
@@ -1910,7 +2146,7 @@ index de4b490..c7ce0d2 100644
      }
  
      char connectionAddr[ k_ncchMaxNetAdrString ];
-@@ -2674,6 +3479,7 @@ void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind,
+@@ -2674,6 +3684,7 @@ void ICESessionInterface::NotifyLocalCandidateDiscovered( ICECandidateKind kind,
      }
      if ( !( eType & m_session.m_nPermittedCandidateTypes ) )
          return;
@@ -1918,7 +2154,7 @@ index de4b490..c7ce0d2 100644
      pCallbacks->OnLocalCandidateDiscovered( eType, szCandidate );
  }
  
-@@ -2802,6 +3608,19 @@ void CConnectionTransportP2PICE_Valve::RecvRendezvous( const CMsgICERendezvous &
+@@ -2802,6 +3813,19 @@ void CConnectionTransportP2PICE_Valve::RecvRendezvous( const CMsgICERendezvous &
      }
  }
  
@@ -1939,7 +2175,7 @@ index de4b490..c7ce0d2 100644
  {
  	iovec temp;
 diff --git a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h
-index 26e9572..ccc89db 100644
+index 26e9572..3d5de5a 100644
 --- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h
 +++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h
 @@ -15,6 +15,7 @@ namespace SteamNetworkingSocketsLib {
@@ -1950,7 +2186,7 @@ index 26e9572..ccc89db 100644
  
      struct STUNHeader
      {
-@@ -83,6 +84,17 @@ namespace SteamNetworkingSocketsLib {
+@@ -83,6 +84,21 @@ namespace SteamNetworkingSocketsLib {
          // to keep all internal address handling in one type.
          netadr_t m_boundAddr;
  
@@ -1964,11 +2200,15 @@ index 26e9572..ccc89db 100644
 +        bool m_bTURNReplacement = false;
 +        bool m_bTURNRetiring = false;
 +        SteamNetworkingMicroseconds m_usecTURNRetireAfter = 0;
++        // When the peer's last packet came through this allocation. Each end picks its
++        // own route, so the peer can still send to an allocation our route has left.
++        SteamNetworkingMicroseconds m_usecTURNPeerTraffic = 0;
++        bool m_bTURNRetireHeld = false;
 +
          // In-flight STUN bind request for server-reflexive discovery or
          // keepalive, or null if none is active.  At most one per interface.
          CSteamNetworkingSocketsSTUNRequest *m_pPendingSTUNRequest = nullptr;
-@@ -93,6 +105,8 @@ namespace SteamNetworkingSocketsLib {
+@@ -93,6 +109,8 @@ namespace SteamNetworkingSocketsLib {
          netadr_t m_addrServerReflexive;  // invalid = not found / no-NAT
          netadr_t m_addrSTUNServer;       // server that gave us the result
          bool m_bServerReflexiveFailed = false;             // true if all STUN servers timed out
@@ -1977,7 +2217,7 @@ index 26e9572..ccc89db 100644
  
          // Relay (TURN) discovery results.  m_addrTURNServer is also used
          // as a "discovery complete" signal: it is all-zeros until a terminal
-@@ -108,14 +122,45 @@ namespace SteamNetworkingSocketsLib {
+@@ -108,14 +126,45 @@ namespace SteamNetworkingSocketsLib {
          std::string m_strTURNNonce;
          uint8 m_arrTURNKey[16] = {};
  
@@ -2027,8 +2267,13 @@ index 26e9572..ccc89db 100644
  
          /// Send a packet through this interface to the destination remote address.
          /// If relay address is non-zero, send via Send Indication to the TURN server
-@@ -127,23 +172,25 @@ namespace SteamNetworkingSocketsLib {
-         void NotifyLocalCandidateDiscovered( ICECandidateKind kind, const netadr_t& addr );
+@@ -124,26 +173,29 @@ namespace SteamNetworkingSocketsLib {
+         // Build and dispatch a local candidate discovery notification.
+         // Computes the RFC 5245 candidate-attribute string and the family-specific
+         // EICECandidateType, then calls m_session's OnLocalCandidateDiscovered callback.
+-        void NotifyLocalCandidateDiscovered( ICECandidateKind kind, const netadr_t& addr );
++        // A retiring relay is offered again at the lowest priority, so the peer leaves it.
++        void NotifyLocalCandidateDiscovered( ICECandidateKind kind, const netadr_t& addr, bool bRetiring = false );
  
          // Send a STUN binding/keepalive request
 -        void QueueBindRequest( const netadr_t &addrSTUNServer, RecvSTUNPacketCallback_t cb, int nEncoding );
@@ -2061,7 +2306,7 @@ index 26e9572..ccc89db 100644
  
          ICESessionInterface( const ICESessionInterface& ) = delete;
          ICESessionInterface& operator=( const ICESessionInterface& ) = delete;
-@@ -209,6 +256,7 @@ namespace SteamNetworkingSocketsLib {
+@@ -209,6 +261,7 @@ namespace SteamNetworkingSocketsLib {
      const uint32 k_nTURN_Attr_Data               = 0x0013;
      const uint32 k_nTURN_Attr_XORRelayedAddress  = 0x0016;
      const uint32 k_nTURN_Attr_RequestedTransport = 0x0019;
@@ -2069,7 +2314,7 @@ index 26e9572..ccc89db 100644
  
  
      enum STUNPacketEncodingFlags
-@@ -242,9 +290,14 @@ namespace SteamNetworkingSocketsLib {
+@@ -242,9 +295,14 @@ namespace SteamNetworkingSocketsLib {
          std::string m_strPassword;
  		SteamNetworkingMicroseconds m_usecLastSentTime;
  
@@ -2086,7 +2331,7 @@ index 26e9572..ccc89db 100644
  
          // Serialize the packet and start the retry loop.
          void Queue( uint32 nMessageType, int nEncoding, netadr_t remoteAddr, RecvSTUNPacketCallback_t cb, STUNAttribute *pExtraAttrs = nullptr, int nExtraAttrs = 0 );
-@@ -296,6 +349,10 @@ namespace SteamNetworkingSocketsLib {
+@@ -296,6 +354,10 @@ namespace SteamNetworkingSocketsLib {
          void SetRemoteUsername( const char *pszUsername );
  		void SetRemotePassword( const char *pszPassword );
  
@@ -2097,7 +2342,7 @@ index 26e9572..ccc89db 100644
          const char* GetLocalPassword() { return m_strLocalPassword.c_str(); }
          bool BCanSendEndToEnd() const { return m_pSelectedCandidatePair != nullptr; }
  		int GetPing() const;
-@@ -306,6 +363,11 @@ namespace SteamNetworkingSocketsLib {
+@@ -306,6 +368,12 @@ namespace SteamNetworkingSocketsLib {
          void Think( SteamNetworkingMicroseconds usecNow ) override;
  
          friend struct ICESessionInterface;
@@ -2105,11 +2350,12 @@ index 26e9572..ccc89db 100644
 +        friend bool TEST_ICE_STUNFailuresAreBounded();
 +        friend bool TEST_ICE_TURNRefreshKeepsRequestLogin();
 +        friend bool TEST_ICE_TriggeredCheckLifetime();
++        friend bool TEST_ICE_TURNRotationKeepsThePeerRoute();
 +#endif
  
      private:
          struct ICEPeerCandidate : public ICECandidateBase
-@@ -354,6 +416,7 @@ namespace SteamNetworkingSocketsLib {
+@@ -354,6 +422,7 @@ namespace SteamNetworkingSocketsLib {
          // at startup, or on a network-change notification).  The next Think() pass
          // will re-enumerate interfaces and rebuild candidates, then clear this flag.
          bool m_bInterfaceListStale;
@@ -2117,7 +2363,7 @@ index 26e9572..ccc89db 100644
  
          // Bitmask of kSTUNPacketEncodingFlags_* controlling STUN wire format quirks:
          // whether to include a fingerprint, whether to use legacy MappedAddress vs
-@@ -385,7 +448,7 @@ namespace SteamNetworkingSocketsLib {
+@@ -385,7 +454,7 @@ namespace SteamNetworkingSocketsLib {
          // Dirty flag set whenever a local or remote candidate is added or removed.
          // The next Think() pass rebuilds m_vecCandidatePairs from the current
          // cross-product, then clears this flag.
@@ -2126,7 +2372,7 @@ index 26e9572..ccc89db 100644
  
          // Bitmask of k_EICECandidate_* types the caller has authorized us to gather
          // and use.  Host-only vs reflexive vs relay, IPv4 vs IPv6, are all controlled
-@@ -393,10 +456,15 @@ namespace SteamNetworkingSocketsLib {
+@@ -393,10 +462,15 @@ namespace SteamNetworkingSocketsLib {
          // gathering rather than advertised to the peer.
          int m_nPermittedCandidateTypes;
  
@@ -2142,7 +2388,7 @@ index 26e9572..ccc89db 100644
  
          // The candidate pair currently in use for sending and receiving application
          // data.  Null until ICE nominates a winner.  Once set, changes only if the
-@@ -421,24 +489,35 @@ namespace SteamNetworkingSocketsLib {
+@@ -421,24 +495,35 @@ namespace SteamNetworkingSocketsLib {
  
          // Per-server TURN long-term credentials, parallel to m_vecTURNServers.
          // Empty strings = no auth required for that server.
@@ -2184,12 +2430,16 @@ index 26e9572..ccc89db 100644
  
          // Candidates received from the remote peer via signaling.  Paired with
          // m_vecInterfaces to form m_vecCandidatePairs.
-@@ -470,6 +549,12 @@ namespace SteamNetworkingSocketsLib {
+@@ -470,6 +555,16 @@ namespace SteamNetworkingSocketsLib {
          void Think_TestPeerConnectivity();
  
          void SetSelectedCandidatePair( ICECandidatePair *pPair );
 +        void ForgetSelectedCandidatePair();
 +        bool BPairSupersedesSelection( const ICECandidatePair *pPair ) const;
++        // Controlling end: nominate the best checked pair that now outranks the selected one.
++        // Reviewed on the next check pass, once a whole rendezvous of candidates is in.
++        void NominateBetterRoute();
++        bool m_bReviewSelectedRoute = false;
 +
 +        // Tear down the relay allocation of pIntf and the pairs that use it;
 +        // Think_DiscoverRelayCandidate allocates again with the current login.
@@ -2197,7 +2447,7 @@ index 26e9572..ccc89db 100644
  
          // Delete a candidate pair and perform all associated cleanup:
          // clears the selected-pair state if this was the active path, cancels
-@@ -512,6 +597,7 @@ namespace SteamNetworkingSocketsLib {
+@@ -512,6 +607,7 @@ namespace SteamNetworkingSocketsLib {
  
      	virtual bool BCanSendEndToEndData() const override;
  		virtual void RecvRendezvous( const CMsgICERendezvous &msg, SteamNetworkingMicroseconds usecNow ) override;
@@ -2779,51 +3029,54 @@ index 0000000..ddb13cc
 +
 +} // namespace SteamNetworkingSocketsLib
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 9746282..0758daf 100644
+index 9746282..05ce4c6 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -56,4 +56,7 @@ if(ENABLE_ICE)
+@@ -56,4 +56,8 @@ if(ENABLE_ICE)
  		DEPENDS ${STUN_SERVER_SCRIPT_SRC} )
  	add_custom_target( publish_test_script ALL DEPENDS ${P2P_TEST_SCRIPT} ${STUN_SERVER_SCRIPT} )
  	add_test(NAME p2p COMMAND ${P2P_TEST_SCRIPT} WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 +	add_test(NAME ice_stun_retry COMMAND test_p2p --stun-retry-selftest WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 +	add_test(NAME ice_turn_refresh COMMAND test_p2p --turn-refresh-selftest WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
++	add_test(NAME ice_turn_rotation COMMAND test_p2p --turn-rotation-selftest WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 +	add_test(NAME ice_request_lifetime COMMAND test_p2p --ice-request-lifetime-selftest WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
  endif()
 diff --git a/tests/test_p2p.cpp b/tests/test_p2p.cpp
-index 98f0a92..23b51bd 100644
+index 98f0a92..2dce5c9 100644
 --- a/tests/test_p2p.cpp
 +++ b/tests/test_p2p.cpp
 @@ -16,6 +16,8 @@
  #include "../examples/trivial_signaling_client.h"
  #include "../src/steamnetworkingsockets/clientlib/steamnetworkingsockets_mock.h"
  
-+namespace SteamNetworkingSocketsLib { bool TEST_ICE_STUNFailuresAreBounded(); bool TEST_ICE_TURNRefreshKeepsRequestLogin(); bool TEST_ICE_TriggeredCheckLifetime(); }
++namespace SteamNetworkingSocketsLib { bool TEST_ICE_STUNFailuresAreBounded(); bool TEST_ICE_TURNRefreshKeepsRequestLogin(); bool TEST_ICE_TriggeredCheckLifetime(); bool TEST_ICE_TURNRotationKeepsThePeerRoute(); }
 +
  #define DEFAULT_STUN_SERVER "stun.l.google.com:19302"
  
  HSteamListenSocket g_hListenSock;
-@@ -68,6 +70,9 @@ void PrintUsage()
+@@ -68,6 +70,10 @@ void PrintUsage()
  		"  --spewlevel <level>                 Console spew level: msg, verbose, debug\n"
  		"  --loglevel-p2prendezvous <level>    P2P rendezvous log level: msg, verbose, debug\n"
  		"  --stun-server <host:port>           STUN server address (default: " DEFAULT_STUN_SERVER ")\n"
 +		"  --stun-retry-selftest              Check bounded STUN failure traversal, without a network\n"
 +		"  --turn-refresh-selftest            Check overlapping TURN login renewals, without a network\n"
++		"  --turn-rotation-selftest           Check a renewed TURN login keeps the peer's route, without a network\n"
 +		"  --ice-request-lifetime-selftest    Check duplicate triggered checks and pending close, without a network\n"
  		"  --turn-server <host:port>           TURN relay server address\n"
  		"  --turn-username <user>              TURN long-term credential username\n"
  		"  --turn-password <pass>              TURN long-term credential password\n"
-@@ -378,6 +383,9 @@ int main( int argc, const char **argv )
+@@ -378,6 +384,10 @@ int main( int argc, const char **argv )
  	int g_nICEEnable = k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_All;
  	int nSignalingLossPct = 0;
  	int nSignalingDupPct = 0;
 +	bool stunRetrySelfTest = false;
 +	bool turnRefreshSelfTest = false;
 +	bool iceLifetimeSelfTest = false;
++	bool turnRotationSelfTest = false;
  #ifdef STEAMNETWORKINGSOCKETS_ENABLE_MOCK
  	TEST_mocknetwork_config_t mockConfig;
  	int nCurrentMockLoss = 0; // applied to subsequently added adapters
-@@ -407,6 +415,12 @@ int main( int argc, const char **argv )
+@@ -407,6 +417,14 @@ int main( int argc, const char **argv )
  			pszTrivialSignalingService = GetArg();
  		else if ( !strcmp( pszSwitch, "--stun-server" ) )
  			pszSTUNServer = GetArg();
@@ -2833,10 +3086,12 @@ index 98f0a92..23b51bd 100644
 +		{ iceLifetimeSelfTest = true; }
 +		else if ( !strcmp( pszSwitch, "--turn-refresh-selftest" ) )
 +			turnRefreshSelfTest = true;
++		else if ( !strcmp( pszSwitch, "--turn-rotation-selftest" ) )
++			turnRotationSelfTest = true;
  		else if ( !strcmp( pszSwitch, "--turn-server" ) )
  			pszTURNServer = GetArg();
  		else if ( !strcmp( pszSwitch, "--turn-username" ) )
-@@ -535,6 +549,30 @@ int main( int argc, const char **argv )
+@@ -535,6 +553,38 @@ int main( int argc, const char **argv )
  			TEST_Fatal( "Unexpected command line argument '%s'", pszSwitch );
  	}
  
@@ -2854,6 +3109,14 @@ index 98f0a92..23b51bd 100644
 +		const bool passed = SteamNetworkingSocketsLib::TEST_ICE_TURNRefreshKeepsRequestLogin();
 +		TEST_Kill();
 +		TEST_Printf( "%s TURN refresh: request login, overlapping renewals, refusal and pending reversion\n", passed ? "PASS" : "FAIL" );
++		return passed ? 0 : 1;
++	}
++	if ( turnRotationSelfTest )
++	{
++		TEST_Init( nullptr );
++		const bool passed = SteamNetworkingSocketsLib::TEST_ICE_TURNRotationKeepsThePeerRoute();
++		TEST_Kill();
++		TEST_Printf( "%s TURN rotation: an old allocation stays while the peer sends to it, is offered at the lowest priority, and the controlling end moves off it\n", passed ? "PASS" : "FAIL" );
 +		return passed ? 0 : 1;
 +	}
 +	if ( iceLifetimeSelfTest )
