@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 #include <future>
@@ -209,6 +210,11 @@ namespace RTE {
 		uint64_t LastAutosaveTick() const { return m_LastAutosaveTick; }
 		size_t LastAutosaveBytes() const { return m_LastAutosaveBytes; }
 		double LastAutosaveCaptureMs() const { return m_LastAutosaveCaptureMs; }
+		/// Why the last capture asked of this machine was not taken, or why its writer refused it; empty once one is taken.
+		/// Lasting: waiting a tick does not let the next capture be taken (a refused inventory or write), as opposed to a
+		/// capture still being written or an inventory still being prepared.
+		struct AutosaveRefusal { std::string reason; bool lasting = false; };
+		AutosaveRefusal LastAutosaveRefusal() const;
 		/// What the last capture did to the sim's counters while it ran; every field is zero when the serializers are pure.
 		struct CaptureEffects { long uidsAllocated = 0; uint64_t simDraws = 0; uint64_t renderDraws = 0; int soundCursorMoves = 0; };
 		CaptureEffects LastCaptureEffects() const { return m_LastCaptureEffects; }
@@ -499,7 +505,9 @@ namespace RTE {
 		std::function<std::string(const std::vector<uint8_t>&)> m_AutosaveDigest;
 		std::deque<SaveRefusalRecord> m_SaveRefusalRecords;
 		std::unordered_set<std::string> m_ReportedAutosaveKeys;
-		std::mutex m_DeferredRefusalMutex; //!< The checkpoint worker hands its refusals through it.
+		mutable std::mutex m_DeferredRefusalMutex; //!< The checkpoint worker hands its refusals through it.
+		AutosaveRefusal m_LastAutosaveRefusal; //!< Under m_DeferredRefusalMutex: the writer thread sets it too.
+		void NoteAutosaveRefusal(bool lasting, std::string_view reason, std::string_view detail = {}) noexcept;
 		std::vector<std::pair<SaveKind, std::vector<std::string>>> m_DeferredRefusals; //!< Found off the simulation thread, reported on it.
 		std::vector<std::string> m_DeferredSaveErrors; //!< The writer reports file errors on the simulation thread.
 		std::list<AutosaveVerdict> m_AutosaveVerdicts; //!< One per finished automatic capture, in the order the writer finished them.
