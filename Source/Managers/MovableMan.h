@@ -539,7 +539,11 @@ namespace RTE {
 		/// One line per team listing its roster in order plus the pending sort flag; the invariance tests compare it.
 		std::string DescribeTeamRosters() const;
 		/// Blocks until the async seeing pass has finished and reveals what it traced; a pass that already landed is a no-op.
-		void WaitForActorsSeeTask();
+		void WaitForActorsSeeTask(const char* caller = "other");
+
+		/// Prints, under CC_TEST_SHARED_LUA_TRACE, a hash of each team's unseen layer as the given point of the tick reads it.
+		/// @param where The point of the tick.
+		void TraceFog(const char* where) const;
 		/// One line per Lua state listing its registered MOs (UID and whether their scripts are live); the invariance tests compare it.
 		std::string DescribeScriptBindings() const;
 

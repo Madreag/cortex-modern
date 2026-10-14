@@ -36,6 +36,18 @@
 
 using namespace RTE;
 
+namespace {
+	// The menu's images are drawn as textures, so each goes back to the renderer before Allegro frees it.
+	void DestroyPieMenuBitmap(BITMAP*& bitmap) {
+		if (!bitmap) {
+			return;
+		}
+		g_GLResourceMan.DestroyBitmapInfo(bitmap);
+		destroy_bitmap(bitmap);
+		bitmap = nullptr;
+	}
+}
+
 ConcreteClassInfo(PieMenu, Entity, 20);
 
 const std::unordered_map<std::string, PieMenu::IconSeparatorMode> PieMenu::c_IconSeparatorModeMap = {
@@ -408,10 +420,10 @@ void PieMenu::Destroy(bool notInherited) {
 	if (!notInherited) {
 		Entity::Destroy();
 	}
-	destroy_bitmap(m_BGBitmap);
-	destroy_bitmap(m_BGRotationBitmap);
-	destroy_bitmap(m_BGPieSlicesWithSubPieMenuBitmap);
-	destroy_bitmap(m_FrozenBitmap);
+	DestroyPieMenuBitmap(m_BGBitmap);
+	DestroyPieMenuBitmap(m_BGRotationBitmap);
+	DestroyPieMenuBitmap(m_BGPieSlicesWithSubPieMenuBitmap);
+	DestroyPieMenuBitmap(m_FrozenBitmap);
 	Clear();
 }
 
@@ -556,13 +568,12 @@ void PieMenu::CopyRuntimeForPreview(const PieMenu& reference) {
 	// A bitmap of the same shape takes the pixels in place; any other is replaced, as the checkpoint's staging does.
 	const auto copyBitmap = [](BITMAP*& target, const BITMAP* source) {
 		if (!source) {
-			if (target) destroy_bitmap(target);
-			target = nullptr;
+			DestroyPieMenuBitmap(target);
 			return;
 		}
 		const int depth = bitmap_color_depth(const_cast<BITMAP*>(source));
 		if (!target || target->w != source->w || target->h != source->h || bitmap_color_depth(target) != depth) {
-			if (target) destroy_bitmap(target);
+			DestroyPieMenuBitmap(target);
 			target = create_bitmap_ex(depth, source->w, source->h);
 			if (!target) throw std::runtime_error("could not allocate a preview's pie menu bitmap");
 		}
@@ -1853,22 +1864,10 @@ void PieMenu::ExpandPieSliceIntoEmptySpaceIfPossible() {
 }
 
 void PieMenu::RecreateBackgroundBitmaps() {
-	if (m_BGBitmap) {
-		destroy_bitmap(m_BGBitmap);
-		m_BGBitmap = nullptr;
-	}
-	if (m_BGRotationBitmap) {
-		destroy_bitmap(m_BGRotationBitmap);
-		m_BGRotationBitmap = nullptr;
-	}
-	if (m_BGPieSlicesWithSubPieMenuBitmap) {
-		destroy_bitmap(m_BGPieSlicesWithSubPieMenuBitmap);
-		m_BGPieSlicesWithSubPieMenuBitmap = nullptr;
-	}
-	if (m_FrozenBitmap) {
-		destroy_bitmap(m_FrozenBitmap);
-		m_FrozenBitmap = nullptr;
-	}
+	DestroyPieMenuBitmap(m_BGBitmap);
+	DestroyPieMenuBitmap(m_BGRotationBitmap);
+	DestroyPieMenuBitmap(m_BGPieSlicesWithSubPieMenuBitmap);
+	DestroyPieMenuBitmap(m_FrozenBitmap);
 
 	int diameter = (m_FullInnerRadius + std::max(m_BackgroundThickness, m_BackgroundSeparatorSize) + (c_PieSliceWithSubPieMenuExtraThickness * 2)) * 2;
 

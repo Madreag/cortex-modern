@@ -32,6 +32,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <exception>
 #include <future>
 #include <cstdio>
@@ -1446,7 +1447,13 @@ bool SceneMan::CastTerrainPenetrationRay(const Vector& start, const Vector& ray,
 			// Get the material object
 			foundMaterial = GetMaterialFromID(materialID);
 			// Add the encountered material's strength to the tally
-			totalStrength += foundMaterial->GetIntegrity();
+			const int strengthBefore = totalStrength;
+			totalStrength = DeterministicFloatToInt(static_cast<float>(totalStrength) + foundMaterial->GetIntegrity());
+			if (LuaMan::SharedTraceEnabled() && foundMaterial->GetIntegrity() >= 2147483648.0F) {
+				LuaMan::TraceShared(nullptr, "ray-strength kind=penetration x=" + std::to_string(intPos[X]) + " y=" + std::to_string(intPos[Y]) +
+				                                 " material=" + std::to_string(materialID) + " integrity_bits=" + std::to_string(std::bit_cast<uint32_t>(foundMaterial->GetIntegrity())) +
+				                                 " before=" + std::to_string(strengthBefore) + " after=" + std::to_string(totalStrength) + " limit=" + std::to_string(strengthLimit));
+			}
 			// See if we have hit the limits of our ray's strength
 			if (totalStrength >= strengthLimit) {
 				// Save the position of the end of the ray where blocked
@@ -1536,7 +1543,13 @@ void SceneMan::WalkUnseenRay(const Vector& start, const Vector& ray, int strengt
 			// Get the material object
 			foundMaterial = GetMaterialFromID(materialID);
 			// Add the encountered material's strength to the tally
-			totalStrength += foundMaterial->GetIntegrity();
+			const int strengthBefore = totalStrength;
+			totalStrength = DeterministicFloatToInt(static_cast<float>(totalStrength) + foundMaterial->GetIntegrity());
+			if (LuaMan::SharedTraceEnabled() && foundMaterial->GetIntegrity() >= 2147483648.0F) {
+				LuaMan::TraceShared(nullptr, "ray-strength kind=unseen x=" + std::to_string(intPos[X]) + " y=" + std::to_string(intPos[Y]) +
+				                                 " material=" + std::to_string(materialID) + " integrity_bits=" + std::to_string(std::bit_cast<uint32_t>(foundMaterial->GetIntegrity())) +
+				                                 " before=" + std::to_string(strengthBefore) + " after=" + std::to_string(totalStrength) + " limit=" + std::to_string(strengthLimit));
+			}
 			// See if we have hit the limits of our ray's strength
 			if (totalStrength >= strengthLimit) {
 				// Save the position of the end of the ray where blocked
@@ -1592,7 +1605,33 @@ void SceneMan::TraceSeeRay(const SeeRay& seeRay, BITMAP* fog, const Vector& fogS
 		return getpixel(fog, scaledX, scaledY) != g_MaskColor;
 	};
 	Vector ignored;
+	const bool hashReads = LuaMan::SharedTraceEnabled();
 	const auto visit = [&](int x, int y) {
+		if (hashReads) {
+			const uint64_t material = GetTerrMatter(x, y), fogged = unseen(x, y);
+			int wrappedX = x, wrappedY = y;
+			WrapPosition(wrappedX, wrappedY);
+			const BITMAP* copy = m_pCurrentScene->GetTerrain()->GetMaterialCopyBitmap();
+			const BITMAP* live = m_pCurrentScene->GetTerrain()->GetMaterialBitmap();
+			const auto at = [wrappedX, wrappedY](const BITMAP* bitmap) {
+				return bitmap && wrappedX >= 0 && wrappedY >= 0 && wrappedX < bitmap->w && wrappedY < bitmap->h ? static_cast<int>(bitmap->line[wrappedY][wrappedX]) : -1;
+			};
+			if (copy && static_cast<int>(material) != at(copy) && !(at(copy) == -1 && material == g_MaterialAir)) {
+				LuaMan::TraceShared(nullptr, "see-read-mismatch x=" + std::to_string(wrappedX) + " y=" + std::to_string(wrappedY) + " got=" + std::to_string(material) +
+				                                 " copy=" + std::to_string(at(copy)) + " live=" + std::to_string(at(live)) + " flag=" + std::to_string(s_ReadTerrainFromCopy));
+			}
+			for (uint64_t value: {static_cast<uint64_t>(x), static_cast<uint64_t>(y), material, fogged}) trace.reads = (trace.reads ^ value) * 1099511628211ULL;
+			trace.positions = (((trace.positions ^ static_cast<uint64_t>(x)) * 1099511628211ULL) ^ static_cast<uint64_t>(y)) * 1099511628211ULL;
+			trace.materials = (trace.materials ^ material) * 1099511628211ULL;
+			trace.fogs = (trace.fogs ^ fogged) * 1099511628211ULL;
+			++trace.visits; trace.lastX = x; trace.lastY = y;
+			const Material* found = GetMaterialFromID(static_cast<unsigned char>(material));
+			trace.lastMaterial = static_cast<int>(material); trace.lastIntegrity = found->GetIntegrity(); trace.lastMaterialName = found->GetPresetName();
+			trace.integrities = (trace.integrities ^ static_cast<uint64_t>(std::bit_cast<uint32_t>(found->GetIntegrity()))) * 1099511628211ULL;
+			for (const auto& [dx, dy]: {std::pair{0, 0}, {-size, -size}, {size, -size}, {size, size}, {-size, size}, {-size, 0}, {size, 0}, {0, -size}, {0, size}}) {
+				trace.fogNine = (trace.fogNine ^ static_cast<uint64_t>(unseen(x + dx, y + dy))) * 1099511628211ULL;
+			}
+		}
 		if (unseen(x, y) || unseen(x - size, y - size) || unseen(x + size, y - size) || unseen(x + size, y + size) || unseen(x - size, y + size) ||
 		    unseen(x - size, y) || unseen(x + size, y) || unseen(x, y - size) || unseen(x, y + size)) {
 			trace.reveals.emplace_back(x, y);
