@@ -15862,6 +15862,8 @@ bool LuaMan::RestoreRoundStartScripts(const std::vector<uint8_t>& blob, std::str
 		return fail("the host runs " + std::to_string(graphs.size()) + " script states, this peer " + std::to_string(states));
 	}
 	g_MovableMan.PurgeAllMOs();
+	// The round's captures read every native its scripts hold from checkpoint storage, though its coordinator starts after this.
+	CheckpointNativeStorage::WorldAllocationScope roundValues(true);
 	// The graph carries each state's compiled scripts too, so a script the host already compiled never runs again here.
 	s_RoundStartScripts = true;
 	struct Scope { ~Scope() { s_RoundStartScripts = false; } } scope;
