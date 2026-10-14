@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <cstdint>
 #include <memory>
 
 /// Header file for the SceneMan class.
@@ -58,6 +59,13 @@ namespace RTE {
 		int size = 0;
 		std::vector<std::pair<int, int>> reveals;
 		std::vector<std::pair<int, int>> visualized;
+		uint64_t reads = 14695981039346656037ULL; //!< Under the shared trace, a hash of every cell the walk read.
+		uint64_t positions = 14695981039346656037ULL, materials = 14695981039346656037ULL, fogs = 14695981039346656037ULL; //!< The same reads, split.
+		int visits = 0, lastX = 0, lastY = 0;
+		uint64_t integrities = 14695981039346656037ULL, fogNine = 14695981039346656037ULL; //!< The integrity each read meant, and the fog at all nine points.
+		int lastMaterial = 0;
+		float lastIntegrity = 0.0F;
+		std::string lastMaterialName;
 	};
 
 	// Different modes to draw the SceneLayers in

@@ -3,6 +3,8 @@
 #include "Box.h"
 #include "MovableObject.h"
 #include "SceneMan.h"
+#include "ScenarioRunner.h"
+#include "SoundSimulation.h"
 
 using namespace RTE;
 
@@ -135,6 +137,9 @@ std::vector<MovableObject*> SpatialPartitionGrid::GetMOsInRadius(const Vector& c
 	RTEAssert(ignoreTeam >= Activity::NoTeam && ignoreTeam < Activity::MaxTeamCount, "Invalid ignoreTeam given to SpatialPartitioningGrid::GetMOsInRadius()!");
 
 	std::unordered_set<MOID> potentialMOIDs;
+	const bool sharedScriptQuery = SoundSimulationScope::Domain() == SoundExecutionDomain::SharedSimulation &&
+	    (ScenarioRunner::HasLockstepCoordinator() || ScenarioRunner::IsLockstepReplayPlayback() || ScenarioRunner::WorldCatchUpActive());
+	std::vector<MOID> candidateOrder;
 
 	int topLeftCellX = static_cast<int>(std::floor((center.m_X - radius) / static_cast<float>(m_CellSize)));
 	int topLeftCellY = static_cast<int>(std::floor((center.m_Y - radius) / static_cast<float>(m_CellSize)));
@@ -147,13 +152,15 @@ std::vector<MovableObject*> SpatialPartitionGrid::GetMOsInRadius(const Vector& c
 		for (int y = topLeftCellY; y <= bottomRightCellY; y++) {
 			const std::vector<MOID>& moidsInCell = cells[ignoreTeam + 1][GetCellIdForCellCoords(x, y)];
 			for (MOID moid: moidsInCell) {
-				potentialMOIDs.insert(moid);
+				if (potentialMOIDs.insert(moid).second && sharedScriptQuery) candidateOrder.push_back(moid);
 			}
 		}
 	}
 
+	// Shared hooks visit each hit in cell order; a hash table only records which hits were seen.
+	if (!sharedScriptQuery) candidateOrder.assign(potentialMOIDs.begin(), potentialMOIDs.end());
 	std::vector<MovableObject*> MOList;
-	for (MOID moid: potentialMOIDs) {
+	for (MOID moid: candidateOrder) {
 		MovableObject* mo = g_MovableMan.GetMOFromID(moid);
 		if (mo && !g_SceneMan.ShortestDistance(center, mo->GetPos()).MagnitudeIsGreaterThan(radius)) {
 			MOList.push_back(mo);

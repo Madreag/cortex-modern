@@ -71,7 +71,12 @@ namespace luabind { namespace detail
 		void remove_ownership();
 		void set_destructor(void(*ptr)(void*));
 
-		void set_object(void* p) { m_object = p; }
+		void set_object(void* p);
+
+		// The engine object whose memory this handle keeps from reuse while it lives, and how the handle lets it go.
+		void set_life_owner(void* owner, void (*release)(void*)) { m_life_owner = owner; m_life_release = release; }
+		bool has_life_owner() const { return m_life_release != 0; }
+		void release_life_owner();
 
 		void add_dependency(lua_State* L, int index);
 		detail::lua_reference const& get_dependencies() const { return m_dependency_ref; }
@@ -99,6 +104,8 @@ namespace luabind { namespace detail
 		void* m_checkpoint_owner = 0;
 		void (*m_checkpoint_owner_write)(void*) = 0;
 		unsigned m_preview_window = 0;
+		void* m_life_owner = 0;
+		void (*m_life_release)(void*) = 0;
 
 		// ======== the new way, separate object_rep from the holder
 //		instance_holder* m_instance;
@@ -128,6 +135,12 @@ namespace luabind { namespace detail
 		}
 	};
 
+
+	// Called when a handle starts naming an object Lua does not own, so the engine can keep that object's memory while it does.
+	extern LUABIND_API void (*object_rep_borrowed)(object_rep* obj);
+
+	// Called with each handle a bound method or property read hands back and the object it ran on: the handle may name a field of it.
+	extern LUABIND_API void (*object_rep_returned)(object_rep* result, object_rep* self);
 
 	typedef void (*checkpoint_object_write_cb)(void*);
 	extern LUABIND_API checkpoint_object_write_cb checkpoint_object_write;

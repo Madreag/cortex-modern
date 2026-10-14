@@ -33,7 +33,10 @@
 
 #include "RTEError.h"
 #include "SceneMan.h"
+#include "LuaMan.h"
+#include "System.h"
 #include <bit>
+#include <sstream>
 
 using namespace RTE;
 
@@ -717,11 +720,25 @@ void MOSRotating::DetachAttachablesFromImpulse(Vector& impulseVector) {
 void MOSRotating::AddWoundExt(AEmitter* woundToAdd, const Vector& parentOffsetToSet, bool checkGibWoundLimit, bool isEntryWound, bool isExitWound) {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_AttachableAndWoundMass, m_EntryWoundBurstSoundPlayedThisFrame, m_ExitWoundBurstSoundPlayedThisFrame, m_Wounds.size()); });
 	if (woundToAdd && !m_ToDelete) {
+		const bool traced = g_LuaMan.IsRunningTracedScript();
+		const auto trace = [&](const char* step, long otherUID) {
+			const auto bits = [](float value) { return std::bit_cast<uint32_t>(value); };
+			std::ostringstream line;
+			line << "[wound-trace] tick=" << g_TimerMan.GetSimUpdateCount() << " step=" << step << " parent=" << GetUniqueID() << " parent_preset=\"" << GetPresetName()
+			     << "\" wound=" << woundToAdd->GetUniqueID() << " wound_preset=\"" << woundToAdd->GetPresetName() << "\" other=" << otherUID
+			     << " offset=" << bits(parentOffsetToSet.m_X) << "," << bits(parentOffsetToSet.m_Y) << " inherited=" << bits(woundToAdd->GetInheritedRotAngleOffset())
+			     << " emit_angle=" << bits(woundToAdd->GetEmitAngle()) << " wound_rot=" << bits(woundToAdd->GetRotAngle()) << " parent_rot=" << bits(GetRotAngle())
+			     << " hflip=" << m_HFlipped << " wounds=" << m_Wounds.size() << " limit=" << m_GibWoundLimit << " check=" << checkGibWoundLimit;
+			System::PrintDiagnosticLine(line.str());
+		};
+		if (traced) trace("add", 0);
 		if (checkGibWoundLimit && m_GibWoundLimit > 0 && m_Wounds.size() + 1 >= m_GibWoundLimit) {
 			// Find and detach an attachable near the new wound before gibbing the object itself. TODO: Perhaps move this to Actor, since it's more relevant there?
 			if (Attachable* attachableToDetach = GetNearestDetachableAttachableToOffset(parentOffsetToSet); attachableToDetach && m_DetachAttachablesBeforeGibbingFromWounds) {
+				if (traced) trace("detach", attachableToDetach->GetUniqueID());
 				RemoveAttachable(attachableToDetach, true, true);
 			} else {
+				if (traced) trace("gib", 0);
 				// TODO: Don't hardcode the blast strength!
 				GibThis(Vector(-5.0F, 0).RadRotate(woundToAdd->GetEmitAngle()));
 				woundToAdd->DestroyScriptState();
@@ -736,6 +753,7 @@ void MOSRotating::AddWoundExt(AEmitter* woundToAdd, const Vector& parentOffsetTo
 		woundToAdd->SetParentOffset(parentOffsetToSet);
 		woundToAdd->SetParent(this);
 		woundToAdd->SetIsWound(true);
+		if (traced) AEmitter::NoteTracedWound(woundToAdd->GetUniqueID());
 		if (woundToAdd->GetBurstSound()) {
 			if (isEntryWound) {
 				if (m_EntryWoundBurstSoundPlayedThisFrame) {

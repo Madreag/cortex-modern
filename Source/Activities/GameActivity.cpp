@@ -579,6 +579,12 @@ void GameActivity::ApplyNetworkSeatAI(uint8_t peerId, bool held, uint64_t frame)
 	}
 	TouchCheckpoint();
 	ConfigureLockstepCPUTeams(cpuTeams);
+	if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+		int mask = 0;
+		for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) mask |= cpuTeams[team] ? 1 << team : 0;
+		System::PrintDiagnosticLine("[net-seat-ai] peer=" + std::to_string(peerId) + " held=" + std::to_string(held) + " frame=" + std::to_string(frame) +
+		                            " tick=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " cpu_teams=" + std::to_string(mask));
+	}
 }
 
 // A seat this machine does not present has no menu, editor or banner of its own, and a script that asks for one

@@ -426,7 +426,13 @@ int class_rep::gettable_dispatcher(lua_State* L)
 {
 	object_rep* obj = static_cast<object_rep*>(lua_touserdata(L, 1));
 	if (!obj) report_missing_instance(L, "__index");
-	return obj->crep()->gettable(L);
+	const int results = obj->crep()->gettable(L);
+	if (results == 1 && object_rep_returned)
+	{
+		object_rep* result = is_class_object(L, -1);
+		if (result && result != obj) object_rep_returned(result, obj);
+	}
+	return results;
 }
 
 // this is called as __newindex metamethod on every instance of this class
@@ -781,7 +787,19 @@ int luabind::detail::class_rep::function_dispatcher(lua_State* L)
 		{
 			// What the method hands back takes the standing of the object it runs on.
 			preview_fence_call call(L, 1);
-	        return o.call(L, force_static_call != 0);
+	        const int results = o.call(L, force_static_call != 0);
+			if (results > 0 && object_rep_returned)
+			{
+				if (object_rep* self = is_class_object(L, 1))
+				{
+					for (int index = 0; index < results; ++index)
+					{
+						object_rep* result = is_class_object(L, -1 - index);
+						if (result && result != self) object_rep_returned(result, self);
+					}
+				}
+			}
+			return results;
 		}
 
 #ifndef LUABIND_NO_EXCEPTIONS
