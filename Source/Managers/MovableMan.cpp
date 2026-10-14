@@ -4198,7 +4198,8 @@ MovableObject* MovableMan::ShadowOf(MovableObject* resident) {
 	const int kind = ResidentKind(resident);
 	MovableObject* shadow = nullptr;
 	{
-		MovableObject::FaithfulCloneScope scope(false);
+		// A shadow is dropped or taken by a preview, never saved: it carries no runtime text.
+		MovableObject::FaithfulCloneScope scope(false, false, false);
 		const long counter = MovableObject::GetUniqueIDCounter();
 		shadow = dynamic_cast<MovableObject*>(resident->Clone());
 		MovableObject::PinUniqueIDCounter(counter);
