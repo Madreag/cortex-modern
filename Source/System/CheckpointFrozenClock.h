@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CheckpointActivity.h"
 #include "NoInline.h"
 
 #include <atomic>
@@ -13,12 +14,15 @@ namespace RTE {
 		public:
 			explicit Scope(const CheckpointFrozenClock* clock) : m_Previous(current), m_Counted(clock != nullptr) {
 				if (!clock) return;
+				CheckpointActivity::Begin();
 				s_Scopes.fetch_add(1, std::memory_order_relaxed);
 				current = clock;
 			}
 			~Scope() {
 				current = m_Previous;
-				if (m_Counted) s_Scopes.fetch_sub(1, std::memory_order_relaxed);
+				if (!m_Counted) return;
+				s_Scopes.fetch_sub(1, std::memory_order_relaxed);
+				CheckpointActivity::End();
 			}
 		private:
 			const CheckpointFrozenClock* m_Previous;

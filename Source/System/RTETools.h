@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointNativeStorage.h"
+#include "CheckpointActivity.h"
 #include "NoInline.h"
 
 #include "DeterministicMath.h"
