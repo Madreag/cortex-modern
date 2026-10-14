@@ -9297,6 +9297,10 @@ std::array<uint32_t, 5> LuaStateWrapper::TakeHeapTickFaults() {
 	return m_CheckpointHeap ? m_CheckpointHeap->TakeTickFaults() : std::array<uint32_t, 5>{};
 }
 
+std::array<uint32_t, 2> LuaStateWrapper::TakeHeapFirstTickWrites() {
+	return m_CheckpointHeap ? m_CheckpointHeap->TakeFirstTickWrites() : std::array<uint32_t, 2>{};
+}
+
 void LuaStateWrapper::NoteFullCollection(size_t before, size_t after) {
 	if (m_CheckpointHeap) m_CheckpointHeap->NoteFullCollection(before, after);
 }
@@ -9306,6 +9310,8 @@ std::string LuaMan::TakeHeapFaultsByState() {
 	const auto add = [&text](size_t slot, LuaStateWrapper& state) {
 		const auto [faults, collectorFaults, copied, recorded, whole] = state.TakeHeapTickFaults();
 		if (faults || collectorFaults) text += std::format(" {}:{}+{}/{}/{}{}", slot, faults, collectorFaults, copied, recorded, whole ? "w" : "");
+		const auto [saved, written] = state.TakeHeapFirstTickWrites();
+		if (saved) text += std::format(" {}:first-tick-saved={}:written={}", slot, saved, written);
 	};
 	add(0, g_LuaMan.GetMasterScriptState());
 	size_t slot = 1;

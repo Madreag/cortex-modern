@@ -830,6 +830,9 @@ namespace RTE::CheckpointLua {
 		/// Test lever CCCP_TEST_FAULT_TICKS: this heap's write faults since the last call, by its scripts and by its collector,
 		/// the runs its last boundary copied, the hot runs recorded since, and 1 when that boundary copied the heap whole.
 		std::array<uint32_t, 5> TakeTickFaults() noexcept;
+		/// Test lever CCCP_TEST_FAULT_TICKS: once, at the end of the first tick after the heap's last boundary, the pages its
+		/// copy holds and how many of them the game has written since (live bytes that differ from the copy); else {0, 0}.
+		std::array<uint32_t, 2> TakeFirstTickWrites() noexcept;
 		/// The state's full collection: what it allocated since the one before is how widely its scripts write its heap, since
 		/// a state that allocates much reuses freed memory all over it. A heap turns busy at a sixteenth of its committed bytes
 		/// allocated in a period and stays busy until a period allocates less than a sixty-fourth, so a busy state whose rate
@@ -914,6 +917,22 @@ namespace RTE::CheckpointLua {
 				Locked guard(lock);
 				return hotCount * c_FaultRunPages * pageBytes;
 			}
+			bool firstTickMeasured = true;
+			std::array<uint32_t, 2> FirstTickWrites() noexcept {
+				Locked guard(lock);
+				if (firstTickMeasured || SaverThreads::TickStarts() - armedTick < 1) return {};
+				firstTickMeasured = true;
+				std::array<uint32_t, 2> counts{};
+				for (const auto& copy: copies) {
+					if (copy->armed.load(std::memory_order_relaxed) != 1 || copy->completed) continue;
+					for (size_t page = 0; page < copy->saved.size(); ++page) {
+						if (!copy->saved[page]) continue;
+						++counts[0];
+						counts[1] += std::memcmp(reinterpret_cast<const std::byte*>(copy->destination) + page * pageBytes, reinterpret_cast<const void*>(base + page * pageBytes), pageBytes) != 0;
+					}
+				}
+				return counts;
+			}
 			size_t SavedPages(const CowCopy& copy) noexcept {
 				Locked guard(lock);
 				return static_cast<size_t>(std::count(copy.saved.begin(), copy.saved.end(), uint8_t{1}));
@@ -985,6 +1004,7 @@ namespace RTE::CheckpointLua {
 				armedWhole = whole;
 				armedTick = SaverThreads::TickStarts();
 				hotTicks = hotCount ? c_HotTicks : c_FirstHotTicks;
+				firstTickMeasured = !TallyingFaults();
 				copy.armed.store(1, std::memory_order_release);
 				copy.armed.notify_all();
 				return true;
@@ -1710,6 +1730,12 @@ namespace RTE::CheckpointLua {
 		CowCoordinator::Locked guard(coordinator.lock);
 		return {coordinator.tickFaults.exchange(0, std::memory_order_relaxed), coordinator.tickCollectFaults.exchange(0, std::memory_order_relaxed),
 		        coordinator.armedHotRuns, static_cast<uint32_t>(coordinator.hotCount), coordinator.armedWhole ? 1u : 0u};
+	}
+
+	inline std::array<uint32_t, 2> HeapOwner::TakeFirstTickWrites() noexcept {
+		std::unique_lock preparations(m_PrepareMutex, std::try_to_lock);
+		if (!preparations || !m_CowCoordinator) return {};
+		return m_CowCoordinator->FirstTickWrites();
 	}
 
 	inline bool HeapOwner::PreparationLease::BeginArm(Prepared& prepared, bool whole, bool learn, ArmSession& session) const {

@@ -476,6 +476,9 @@ namespace RTE {
 		/// Test lever CCCP_TEST_FAULT_TICKS: the checkpoint heap's write faults since the last call (see HeapOwner::TakeTickFaults).
 		std::array<uint32_t, 5> TakeHeapTickFaults();
 
+		/// Test lever CCCP_TEST_FAULT_TICKS: see HeapOwner::TakeFirstTickWrites.
+		std::array<uint32_t, 2> TakeHeapFirstTickWrites();
+
 		/// Tells the checkpoint heap the bytes in use before and after a full collection.
 		void NoteFullCollection(size_t before, size_t after);
 #pragma endregion
