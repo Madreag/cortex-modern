@@ -794,6 +794,8 @@ struct ActivityMan::PreparedAutosave {
 	}
 
 	bool Complete(const Header& header, const CheckpointLua::Boundary& boundary) {
+		if (uint64_t refused = header.tick; header.tick != 0 && owner.m_RefusedWriterTick.compare_exchange_strong(refused, 0, std::memory_order_relaxed))
+			throw std::runtime_error("an injected refusal");
 		if (const char* phases = std::getenv("CCCP_CHECKPOINT_PHASES"); phases && std::string_view(phases) == "1") {
 			size_t ranges = 0, bytes = 0, copied = 0, fenced = 0;
 			for (const auto& pages: boundary.NativeViews().pages) {

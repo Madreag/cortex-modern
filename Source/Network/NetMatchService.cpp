@@ -3880,14 +3880,7 @@ static std::string ResyncSaveName() {
 		if (awaited == m_AwaitedAutosaves.end()) return;
 		const bool joinCapture = awaited->joinCapture;
 		m_AwaitedAutosaves.erase(awaited);
-		// Test lever CC_FAULT_INJECT=join_capture_refused: the host's first base for a returner is refused as its writer would refuse it.
-		const bool injected = archived && joinCapture && m_IsHost && m_WorldJoin.IsPrivateMatch() && !m_InjectedJoinRefusal && FaultInjected("join_capture_refused");
-		if (injected) {
-			m_InjectedJoinRefusal = true;
-			System::PrintDiagnosticLine("[fault] join_capture_refused: the base at tick " + std::to_string(tick) + " is refused");
-		}
-		ApplyAutosaveVerdict(tick, joinCapture, archived && !injected);
-		if (injected) NotePrivateBaseRefusalLocked({"the writer refused it: an injected refusal", true});
+		ApplyAutosaveVerdict(tick, joinCapture, archived);
 	}
 
 	std::vector<uint64_t> NetMatchService::TakeAutosaveVerdicts(std::vector<uint64_t>* refused) {
@@ -4059,6 +4052,12 @@ static std::string ResyncSaveName() {
 		m_OpenCaptureTick = input.tick + input.lead;
 		m_OpenCaptureApplied = false;
 		m_OpenCaptureForJoin = joinCapture;
+		// Test lever CC_FAULT_INJECT=join_capture_refused: the writer refuses the host's first base as it starts, where a frozen-inventory refusal comes.
+		if (joinCapture && m_IsHost && m_WorldJoin.IsPrivateMatch() && !m_InjectedJoinRefusal && FaultInjected("join_capture_refused")) {
+			m_InjectedJoinRefusal = true;
+			g_ActivityMan.RefuseCaptureWriterAt(m_OpenCaptureTick);
+			System::PrintDiagnosticLine("[fault] join_capture_refused: the writer refuses the base at tick " + std::to_string(m_OpenCaptureTick));
+		}
 		m_CaptureWriters = input.writers;
 		m_OpenCaptureManual = ask;
 		if (ask) {

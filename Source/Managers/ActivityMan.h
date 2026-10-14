@@ -8,6 +8,7 @@
 
 #include "BS_thread_pool.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -217,6 +218,8 @@ namespace RTE {
 		/// capture still being written or an inventory still being prepared.
 		struct AutosaveRefusal { std::string reason; bool lasting = false; };
 		AutosaveRefusal LastAutosaveRefusal() const;
+		/// Test lever CC_FAULT_INJECT=join_capture_refused: the writer refuses the capture of this tick as it starts.
+		void RefuseCaptureWriterAt(uint64_t tick) noexcept { m_RefusedWriterTick.store(tick, std::memory_order_relaxed); }
 		/// What the last capture did to the sim's counters while it ran; every field is zero when the serializers are pure.
 		struct CaptureEffects { long uidsAllocated = 0; uint64_t simDraws = 0; uint64_t renderDraws = 0; int soundCursorMoves = 0; };
 		CaptureEffects LastCaptureEffects() const { return m_LastCaptureEffects; }
@@ -509,6 +512,7 @@ namespace RTE {
 		std::unordered_set<std::string> m_ReportedAutosaveKeys;
 		mutable std::mutex m_DeferredRefusalMutex; //!< The checkpoint worker hands its refusals through it.
 		AutosaveRefusal m_LastAutosaveRefusal; //!< Under m_DeferredRefusalMutex: the writer thread sets it too.
+		std::atomic<uint64_t> m_RefusedWriterTick{0}; //!< The capture tick the test lever has the writer refuse; 0 for none.
 		void NoteAutosaveRefusal(bool lasting, std::string_view reason, std::string_view detail = {}) noexcept;
 		std::vector<std::pair<SaveKind, std::vector<std::string>>> m_DeferredRefusals; //!< Found off the simulation thread, reported on it.
 		std::vector<std::string> m_DeferredSaveErrors; //!< The writer reports file errors on the simulation thread.
