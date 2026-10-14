@@ -165,7 +165,7 @@ def play(request_path):
     run["peers"] = [peer for peer in run.get("peers", document.get("peers", [])) if peer["name"] == role]
     for peer in run["peers"]:
         # A diagnostic lever the collector names reaches this player's engine; the scene itself is unchanged.
-        peer["env"] = {**peer.get("env", {}), **request.get("engine_env", {})}
+        peer["env"] = {**peer.get("env", {}), **request.get("engine_env", {}), **request.get("runner_env", {})}
     local_scene = copy.deepcopy(document)
     local_scene["checklist"] = [item for item in document.get("checklist", []) if not item.get("peer") or item["peer"] == role]
     headed = headed_box(request["box"])
@@ -453,6 +453,7 @@ def capture_scene(args):
     boxes = selected_boxes(args.peer_boxes, args.boxes_file)
     port = scene_port(document, getattr(args, "port", None))
     engine_env = engine_levers(getattr(args, "engine_env", None))
+    host_cpu_mask = getattr(args, "host_cpu_mask", None)
     out, repo = args.out.resolve(), args.repo.resolve()
     source = video.source_evidence(repo)
     if source["dirty"]:
@@ -470,7 +471,7 @@ def capture_scene(args):
                "size": document.get("size"), "settings": {}, "render_cap": 60, "started": video.stamp(),
                "command": [sys.executable, *sys.argv], "scratch_root": str(out.parent),
                "scratch_limit_bytes": video.SCRATCH_LIMIT, "topology": "spread", "proof": False, "runs": [],
-               "engine_env": engine_env, "port": port}
+               "engine_env": engine_env, "host_cpu_mask": host_cpu_mask, "port": port}
     video.write_json(out / "capture.json", capture)
     for index, run in enumerate(scene_runs(document)):
         name = run.get("name", "run" + str(index))
@@ -484,6 +485,9 @@ def capture_scene(args):
                                engine_env=engine_env, scene_relative=relative, scene_sha256=scene_hash, fps=video.DEFAULT_FPS,
                                sheet_every=15, port=port,
                                run_name=name, signal_files=player_files(document, run))
+                # Where the Windows runner places a host engine; the POSIX runner has no such limit.
+                if role == "host" and host_cpu_mask and box["os"] == "win32":
+                    request["runner_env"] = {"CC_RUNNER_AFFINITY_MASK": host_cpu_mask}
                 request_path = controls / (name + "-" + role + ".json")
                 video.write_json(request_path, request)
                 log = (controls / (name + "-" + role + ".log")).open("w", encoding="utf-8")
@@ -568,6 +572,8 @@ def main():
     parser.add_argument("--port", type=int, help=f"this lane's lobby port inside {video.PORT_LO}-{video.PORT_HI}; defaults to the scene's port_base")
     parser.add_argument("--engine-env", action="append", default=[], metavar="CC_TEST_NAME=VALUE",
                         help="a test lever set in both players' engines; recorded in the capture")
+    parser.add_argument("--host-cpu-mask", type=lambda text: hex(int(text, 0)), metavar="0xMASK",
+                        help="the processors a Windows host's engine may run on, through its runner; recorded in the capture")
     parser.add_argument("--check-spread", type=Path)
     parser.add_argument("--play", type=Path)
     parser.add_argument("--pack", type=Path)
