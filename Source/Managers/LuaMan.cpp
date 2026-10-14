@@ -5811,12 +5811,14 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 		if (!activity) return 0;
 		for (int index = 0; index < Players::MaxPlayerCount; ++index) {
 			if (handle == activity->GetPlayerController(index)) return found(activity, "player-controller", index);
+			// A seat stand-in no script could hold is never made here: a saver runs this off the simulation thread.
 			if (auto* game = dynamic_cast<GameActivity*>(activity)) {
-				if (handle == game->GetBuyGUI(index)) return found(game, "buy-menu", index);
-				if (handle == game->GetEditorGUI(index)) return found(game, "editor-menu", index);
-				if (const int count = editorMember(game->GetEditorGUI(index))) return count;
-				if (handle == game->GetBanner(GameActivity::YELLOW, index)) return found(game, "yellow-banner", index);
-				if (handle == game->GetBanner(GameActivity::RED, index)) return found(game, "red-banner", index);
+				if (const BuyMenuGUI* menu = game->GetExistingBuyGUI(index); menu && handle == menu) return found(game, "buy-menu", index);
+				SceneEditorGUI* const editor = game->GetExistingEditorGUI(index);
+				if (editor && handle == editor) return found(game, "editor-menu", index);
+				if (const int count = editorMember(editor)) return count;
+				if (const GUIBanner* banner = game->GetExistingBanner(GameActivity::YELLOW, index); banner && handle == banner) return found(game, "yellow-banner", index);
+				if (const GUIBanner* banner = game->GetExistingBanner(GameActivity::RED, index); banner && handle == banner) return found(game, "red-banner", index);
 			}
 		}
 		return 0;
