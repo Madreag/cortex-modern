@@ -130,30 +130,20 @@ mutate('reliable_overflow','linux','engine/stdout.log',lambda b:b+b'\n1048336 re
 mutate('host_held_again','mac','engine/live.jsonl',lambda b:rows_change(b,lambda rows:rows[1999].update(ai_held_peer_ids=[1])),'became held again')
 mutate('late_return','ally','engine/live.jsonl',lambda b:rows_change(b,lambda rows:[r.update(ai_held_peer_ids=[1]) for r in rows if 724<=r['tick']<=1800]),'return not observed within ten seconds')
 mutate('changed_common_hash','linux','engine/live.jsonl',lambda b:rows_change(b,lambda rows:rows[999].update(total='wrong')),'total hash mismatch')
-# A block is the engine's own wait for another seat's input: at most 50 ms, once per spike, never on two consecutive ticks.
-# A wait lengthens its frame and writes its line; a frame of the box's own (presentation, the OS) lengthens only the frame.
-def with_frames(name,role,frames,expected,needle=None,waits=True):
- live=roots[role]/'engine/live.jsonl';log=roots[role]/'engine/stdout.log';oldlive,oldlog=live.read_bytes(),log.read_bytes()
- try:
-  live.write_bytes(rows_change(oldlive,lambda rows:[r.update(wall_ms=r['wall_ms']+ms) for tick,ms in frames for r in rows if r['tick']>=tick]))
-  if waits:log.write_bytes(oldlog+b''.join(b'[net-frame-wait] frame=%d wait_ms=%d on=PlayerOne\n'%(tick,ms) for tick,ms in frames))
-  return check(name,expected,needle)
- finally:live.write_bytes(oldlive);log.write_bytes(oldlog)
-with_frames('blackout_hitch','linux',[(700,75)],False,'unaffected peer blocked over 50 ms')
-result=with_frames('blackout_wait_of_49ms_in_a_66ms_interval_is_inside_the_bound','linux',[(700,49)],True)
-assert result['details']['linux']['blackout_blocks']==[{'frame':700,'block_ms':49}],result['details']['linux']['blackout_blocks']
-with_frames('blackout_wait_of_53ms_in_a_70ms_interval','linux',[(700,53)],False,'unaffected peer blocked over 50 ms')
-with_frames('blackout_waits_in_two_60ms_intervals_in_a_row','linux',[(700,43),(701,43)],False,'blocked on two consecutive ticks')
-with_frames('blackout_waits_of_43ms_twice_in_one_spike','linux',[(700,43),(900,43)],False,'blocked more than once')
-# The Linux joiner of 2026-10-13: one 3 ms wait at the bridge, then two of its own 55 ms frames with no wait behind them.
-result=with_frames('frames_of_the_boxs_own_are_not_blocks','linux',[(684,38),(744,39)],True,waits=False)
-assert result['details']['linux']['blackout_blocks']==[] and [g['ending_tick'] for g in result['details']['linux']['blackout_frame_stalls']]==[684,744]
-log=roots['linux']/'engine/stdout.log';oldlog=log.read_bytes()
+for name,tick,gap,needle in [('blackout_hitch',700,75,'unaffected peer blocked over 50 ms')]:
+ mutate(name,'linux','engine/live.jsonl',lambda b,t=tick,g=gap:rows_change(b,lambda rows:[r.update(wall_ms=r['wall_ms']+g) for r in rows if r['tick']>=t]),needle)
+# A block is the interval beyond one regular tick: at most 50 ms, once per spike, never on two consecutive ticks.
+def blocked(rows,ticks,interval):
+ for tick in ticks:[r.update(wall_ms=r['wall_ms']+interval-1000/60) for r in rows if r['tick']>=tick]
+live=roots['linux']/'engine/live.jsonl';old=live.read_bytes()
 try:
- log.write_bytes(oldlog+b'[net-frame-wait] frame=628 wait_ms=3 on=PlayerOne\n')
- result=with_frames('one_bridge_wait_and_the_boxs_own_frames','linux',[(684,38),(744,39)],True,waits=False)
- assert result['details']['linux']['blackout_blocks']==[{'frame':628,'block_ms':3}]
-finally:log.write_bytes(oldlog)
+ live.write_bytes(rows_change(old,lambda rows:blocked(rows,[700],66)))
+ result=check('blackout_block_of_66ms_interval_is_inside_the_bound',True)
+ assert [round(b['block_ms'],2) for b in result['details']['linux']['blackout_blocks']]==[49.33],result['details']['linux']['blackout_blocks']
+finally:live.write_bytes(old)
+mutate('blackout_block_of_70ms_interval','linux','engine/live.jsonl',lambda b:rows_change(b,lambda rows:blocked(rows,[700],70)),'unaffected peer blocked over 50 ms')
+mutate('blackout_blocks_of_60ms_on_two_consecutive_ticks','linux','engine/live.jsonl',lambda b:rows_change(b,lambda rows:blocked(rows,[700,701],60)),'blocked on two consecutive ticks')
+mutate('blackout_blocks_of_60ms_twice_in_one_spike','linux','engine/live.jsonl',lambda b:rows_change(b,lambda rows:blocked(rows,[700,900],60)),'blocked more than once')
 # The host blackout takes the directory with the link; a link-only lever or a line from before the lever named it proves a joiner outage.
 mutate('link_only_blackout_is_not_a_host_blackout','ally','engine/stdout.log',lambda b:b.replace(b'directory=dark',b'directory=up'),'blackout left the host reaching the directory')
 mutate('blackout_line_without_its_directory','ally','engine/stdout.log',lambda b:b.replace(b' directory=dark',b''),'blackout left the host reaching the directory')
@@ -296,7 +286,6 @@ try:
  log.write_bytes(oldlog+harness_windows((702,11000),(604,10660),(817,5457)))
  check('busy_box_is_not_a_proof',False,'mac: box was not alone during the match')
  live.write_bytes(rows_change(oldlive,lambda rows:[r.update(wall_ms=r['wall_ms']+60) for r in rows if r['tick']>=742]))
- log.write_bytes(oldlog+harness_windows((702,11000),(604,10660),(817,5457))+b'[net-frame-wait] frame=742 wait_ms=60 on=PlayerOne\n')
  result=check('busy_box_pause_in_blackout_keeps_both_failures',False,'mac: box was not alone during the match')
  assert any('mac: unaffected peer blocked over 50 ms during blackout' in error for error in result['errors']),result['errors']
 finally:log.write_bytes(oldlog);live.write_bytes(oldlive)

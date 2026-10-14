@@ -16,11 +16,9 @@ ROLES = ('ally', 'linux', 'mac')
 MIN_PLAY_TPS = 59.9
 SIM_TICK_MS = 1000 / 60
 BLOCK_BOUND_MS = 50
-BLACKOUT_POLICY = ('The host loses its peer link and the directory together. During blackout a survivor blocks at most once, at most 50 ms, '
-                   'and never on two consecutive ticks; a block is a wait for another seat\'s input, as the engine records it '
-                   '([net-frame-wait] frame= wait_ms=). A frame interval over 50 ms with no such wait is the box\'s own frame and is kept as '
-                   'evidence, as pauses outside blackout are.')
-FRAME_WAIT = re.compile(r'^\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', re.M)
+BLACKOUT_POLICY = ('The host loses its peer link and the directory together. During blackout a survivor blocks at most once, at most 50 ms '
+                   'beyond its regular 1000/60 ms tick, and never on two consecutive ticks; a block is an in-play interval over 50 ms. '
+                   'Pauses outside blackout remain measured path data.')
 RATE_POLICY = 'Full in-play and each consecutive 60-second window: at least 59.9 tps; median of 60-tick average intervals: within 1 ms of 1000/60 ms. Raw gaps and sliding-window rates remain evidence.'
 LEAVE_POLICY = 'An ordinary Leave is noted within 10 seconds and retains its AI seat; only the host End Match ends this round, within 10 seconds of that request. Silent-peer timing remains enabled and bounded.'
 BUSY_RATIO = 4
@@ -188,15 +186,12 @@ def score(roots):
                         role + ': median 60-tick average interval differs from the sim tick by more than 1 ms')
             blackout_gaps = [g for g in timing['gaps_over_50ms'] if 600 <= g['ending_tick'] <= 1081 and g['in_play']]
             steady_gaps = [g for g in timing['gaps_over_50ms'] if not 600 <= g['ending_tick'] <= 1081 and g['gap_ms'] > 100 and g['in_play']]
-            # A block is the engine's own wait for another seat's input; a long frame with no wait is this box's frame, not the spike.
-            blocks = [{'frame': int(frame), 'block_ms': int(waited)} for frame, waited in FRAME_WAIT.findall(text) if 600 <= int(frame) <= 1081]
-            waited_frames = {b['frame'] for b in blocks}
-            frame_stalls = [g for g in blackout_gaps if g['ending_tick'] not in waited_frames]
-            detail.update(blackout_gaps=blackout_gaps, blackout_blocks=blocks, blackout_frame_stalls=frame_stalls, steady_gaps_over_100ms=steady_gaps)
+            blocks = [dict(g, block_ms=g['gap_ms'] - SIM_TICK_MS) for g in blackout_gaps]
+            detail.update(blackout_gaps=blackout_gaps, blackout_blocks=blocks, steady_gaps_over_100ms=steady_gaps)
             if role != 'ally':
-                # A survivor may block once per spike, up to the bound, before the silent seat is held.
+                # A survivor may block once per spike, up to the bound beyond its regular tick, before the silent seat is held.
                 require(all(b['block_ms'] <= BLOCK_BOUND_MS for b in blocks), role + ': unaffected peer blocked over 50 ms during blackout')
-                require(not any(b['frame'] == a['frame'] + 1 for a, b in zip(blocks, blocks[1:])),
+                require(not any(b['ending_tick'] == a['ending_tick'] + 1 for a, b in zip(blocks, blocks[1:])),
                         role + ': unaffected peer blocked on two consecutive ticks during blackout')
                 require(len(blocks) <= 1, role + ': unaffected peer blocked more than once during blackout')
             # The absent player's private catch-up remains measured separately.

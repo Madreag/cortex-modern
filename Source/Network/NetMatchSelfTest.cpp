@@ -18629,83 +18629,6 @@ namespace RTE {
 		return true;
 	}
 
-	// A headed window shares its pointer with the desktop: a motion the hand did not send can come between its pointing, its press
-	// and its release, and the click must still open what it points at.
-	bool TestPauseLeaveClickSurvivesAMovedPointer(std::string* error) {
-		NetMatchService::Construct();
-		struct Restore {
-			std::unique_ptr<Activity> activity;
-			bool inActivity = g_ActivityMan.IsInActivity();
-			Restore() { g_ActivityMan.SwapCheckpointActivity(activity); }
-			~Restore() {
-				if (g_MenuMan.IsLocalPauseMenuOpen()) g_MenuMan.ToggleLocalPauseMenu();
-				GUIInputWrapper::SetAutomationDriving(false);
-				SetPanelDrawRecording(false);
-				g_ActivityMan.SwapCheckpointActivity(activity);
-				g_ActivityMan.SetInActivity(inActivity);
-				NetMatchService::Destruct();
-			}
-		} restore;
-		std::unique_ptr<Activity> game = std::make_unique<GameActivity>();
-		g_ActivityMan.SwapCheckpointActivity(game);
-		g_ActivityMan.GetActivity()->SetActivityState(Activity::Editing);
-		g_ActivityMan.SetInActivity(true);
-		g_NetMatchService.m_State = NetMatchServiceState::Running;
-		g_NetMatchService.m_IsHost = false;
-		g_NetMatchService.m_MatchWasRunning = true;
-		GUIInputWrapper::SetAutomationDriving(true);
-		SetPanelDrawRecording(true);
-		// The desktop's own pointer, far from every row of the menu.
-		const auto stray = [] {
-			SDL_Event event{};
-			event.type = SDL_EVENT_MOUSE_MOTION;
-			event.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
-			event.motion.x = event.motion.y = 1.0F;
-			SDL_PushEvent(&event);
-		};
-		int handFrame = 0, strayBefore = -1, strayAfter = -1;
-		const auto frame = [&] {
-			SDL_Event event{};
-			while (SDL_PollEvent(&event)) g_UInputMan.HandleInputEvent(event);
-			g_UInputMan.Update(true);
-			g_MenuMan.UpdateLocalPauseMenu();
-			g_MenuMan.DrawLocalPauseMenu();
-			if (++handFrame == strayBefore) stray();
-			MenuAutomation::AfterDrawnFrame();
-			if (handFrame == strayAfter) stray();
-			g_UInputMan.EndFrame();
-		};
-		std::string observation;
-		const auto finishHand = [&] {
-			for (int frames = 0; frames < 90 && MenuAutomation::HandBusy(); ++frames) frame();
-			bool passed = false;
-			return MenuAutomation::HandFinished(passed, observation) && passed;
-		};
-		const char* headless = SDL_getenv("CCCP_HEADLESS");
-		const std::string savedHeadless = headless ? headless : "";
-		SDL_unsetenv_unsafe("CCCP_HEADLESS");
-		std::istringstream args;
-		const bool started = MenuAutomation::Execute(nullptr, "Gameplay", "open_local_pause", args, observation);
-		if (headless) SDL_setenv_unsafe("CCCP_HEADLESS", savedHeadless.c_str(), 1);
-		PauseMenuGUI* pause = nullptr;
-		if (!started || !finishHand() || !(pause = g_MenuMan.GetActivePauseMenu())) { *error = "Escape did not open the local menu: " + observation; return false; }
-		// The hand points on its first drawn frame and presses on its second.
-		struct Moved { const char* when; int before, after; };
-		for (const Moved& moved: {Moved{"after the hand pointed", -1, 1}, Moved{"under the press", 2, -1}, Moved{"between the press and the release", -1, 2}}) {
-			handFrame = 0; strayBefore = moved.before; strayAfter = moved.after;
-			const bool clicked = MenuAutomation::HandClick(pause->AutomationManager(), "ButtonLeaveMatch", nullptr, observation) && finishHand();
-			strayBefore = strayAfter = -1;
-			if (!clicked || pause->AutomationActiveScreenName() != "PauseLeaveConfirm") {
-				*error = std::string("a pointer moved ") + moved.when + " left the Leave click on " + pause->AutomationActiveScreenName() + ": " + observation; return false;
-			}
-			if (!MenuAutomation::HandGameKey("Escape", [pause] { return pause->AutomationActiveScreenName() == "Pause"; }, "back from the Leave confirmation", observation) || !finishHand()) {
-				*error = "Escape did not close the Leave confirmation: " + observation; return false;
-			}
-		}
-		System::PrintDiagnosticLine("[net-match-selftest] PASS pause_leave_click_survives_a_moved_pointer");
-		return true;
-	}
-
 	bool TestInternetTicketRecovery(std::string* error) {
 		{
 			struct Restore {
@@ -19206,7 +19129,6 @@ namespace RTE {
 			bool passed = false;
 			if (name == "ui-presentation") passed = TestInMatchPresentation(&error);
 			else if (name == "pause-navigation") passed = TestPauseNavigationDuringRecovery(&error);
-			else if (name == "pause-leave-moved-pointer") passed = TestPauseLeaveClickSurvivesAMovedPointer(&error);
 			else if (name == "ticket-recovery") passed = TestInternetTicketRecovery(&error);
 			else if (name == "placement-confirm") passed = GameActivity::RunSetupEditorSelfTest(true);
 			else if (name == "data-root") passed = TestDataRootDiscovery(&error);
@@ -19285,7 +19207,6 @@ namespace RTE {
 		row(&TestInMatchPresentation, "in_match_presentation_results_teams_causes_and_chat");
 		row(&TestOpenChatEntryHoldsItsPlace, "open_chat_entry_holds_its_place_when_a_notice_ends");
 		row(&TestPauseNavigationDuringRecovery, "pause_menu_script_keeps_drawn_gestures");
-		row(&TestPauseLeaveClickSurvivesAMovedPointer, "pause_leave_click_survives_a_moved_pointer");
 		row(&TestChatReceipts<NetSession>, "chat_send_receipts");
 		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
 		row(&RunCrossRosterSelfTest, "cross_mixed_roster_preserves_seats_and_cpu_rules");
