@@ -4040,6 +4040,7 @@ static std::string ResyncSaveName() {
 			if (interval > 0 && takenAt >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((takenAt - m_NextAutosaveSimTime) / interval + 1) * interval;
 		}
 		m_OpenCaptureTick = input.tick + input.lead;
+		LuaMan::ScheduleCheckpointBoundary(m_OpenCaptureTick);
 		m_OpenCaptureApplied = false;
 		m_OpenCaptureForJoin = joinCapture;
 		m_CaptureWriters = input.writers;

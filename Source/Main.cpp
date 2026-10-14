@@ -9091,6 +9091,7 @@ void RunGameLoop() {
 			// Sim consumed this tick's accumulated input edges; clear before next tick reads
 			g_UInputMan.EndSimUpdate();
 			g_ActivityMan.NotifyCheckpointTick();
+			LuaMan::NoteSimTickEnd(simTick);
 			if (probeTickResult) RollbackProbeOnHashedTick(simTick, *probeTickResult);
 			if (s_checkpointAudioEffects && simTick == 1) {
 				s_checkpointAudioEffectsPassed = g_AudioMan.RunCheckpointEffectsSelfTest();
@@ -9110,6 +9111,9 @@ void RunGameLoop() {
 				}
 			}
 			// A continued restore repeats its capture at the boundary the live autosave uses.
+			if (s_cowCheckpointAutosave && s_checkpointRestoreContinue && s_checkpointRestoreAutosaveTicks > 0 && simTick >= s_checkpointRestoreTick &&
+			    (simTick - s_checkpointRestoreTick) % s_checkpointRestoreAutosaveTicks == 0)
+				LuaMan::ScheduleCheckpointBoundary(simTick + s_checkpointRestoreAutosaveTicks);
 			if (s_cowCheckpointAutosave && s_checkpointRestoreContinue && s_checkpointRestoreAutosaveTicks > 0 && g_ActivityMan.ActivityRunning() &&
 			    simTick > s_checkpointRestoreTick && (simTick - s_checkpointRestoreTick) % s_checkpointRestoreAutosaveTicks == 0 &&
 			    !g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", simTick)) {

@@ -9305,6 +9305,14 @@ void LuaStateWrapper::NoteFullCollection(size_t before, size_t after) {
 	if (m_CheckpointHeap) m_CheckpointHeap->NoteFullCollection(before, after);
 }
 
+void LuaMan::ScheduleCheckpointBoundary(uint64_t tick) {
+	CheckpointLua::HeapOwner::ScheduleBoundaryWatch(tick);
+}
+
+void LuaMan::NoteSimTickEnd(uint64_t tick) {
+	CheckpointLua::HeapOwner::OnSimTickEnd(tick);
+}
+
 std::string LuaMan::TakeHeapFaultsByState() {
 	std::string text;
 	const auto add = [&text](size_t slot, LuaStateWrapper& state) {

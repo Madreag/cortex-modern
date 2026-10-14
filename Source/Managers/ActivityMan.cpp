@@ -809,7 +809,7 @@ struct ActivityMan::PreparedAutosave {
 			std::string heapArms;
 			for (size_t index = 0; index < boundary.StateCount(); ++index) {
 				const auto heap = boundary.LuaHeap(index);
-				heapArms += std::format(" {}:{}:{}:{}:{}:{}:{}{}", index, heap.ByteCount() >> 20, heap.ArmWhole() ? "w" : "f", heap.ArmCopiedPages(), heap.FreezeUs(),
+				heapArms += std::format(" {}:{}:{}:{}:{}:{}:{}{}", index, heap.ByteCount() >> 20, heap.ArmWhole() ? "w" : heap.ArmWatched() ? "v" : "f", heap.ArmCopiedPages(), heap.FreezeUs(),
 				                        boundary.ArmPart(index), heap.PeriodAllocated() >> 10, heap.Busy() ? "b" : "");
 			}
 			const auto [planUs, copyUs, fenceUs] = boundary.ArmPhaseUs();
