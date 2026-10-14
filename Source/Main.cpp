@@ -77,6 +77,7 @@
 #include "FloatTextSelfTest.h"
 #include "CheckpointImage.h"
 #include "CheckpointPagePool.h"
+#include "CheckpointNativeStorage.h"
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
@@ -372,6 +373,27 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 		    (memory.CommitTotal * memory.PageSize) >> 20, (memory.CommitLimit * memory.PageSize) >> 20,
 		    ((memory.CommitLimit - memory.CommitTotal) * memory.PageSize) >> 20);
 	}
+	// Committed private memory by allocation size: the heaps, the engine's 1 MiB storage blocks and the drivers each allocate in their own sizes.
+	std::array<uint64_t, 4> regionBytes{}, regionCounts{};
+	const auto classify = [&](uint64_t bytes) {
+		const size_t index = bytes < (uint64_t{1} << 20) ? 0 : bytes < (uint64_t{2} << 20) ? 1 : bytes < (uint64_t{16} << 20) ? 2 : 3;
+		regionBytes[index] += bytes;
+		++regionCounts[index];
+	};
+	const void* allocation = nullptr;
+	uint64_t allocationBytes = 0;
+	MEMORY_BASIC_INFORMATION region{};
+	for (const uint8_t* address = nullptr; VirtualQuery(address, &region, sizeof(region)) == sizeof(region); address = static_cast<const uint8_t*>(region.BaseAddress) + region.RegionSize) {
+		if (region.AllocationBase != allocation) {
+			if (allocationBytes) classify(allocationBytes);
+			allocation = region.AllocationBase;
+			allocationBytes = 0;
+		}
+		if (region.State == MEM_COMMIT && region.Type == MEM_PRIVATE) allocationBytes += region.RegionSize;
+	}
+	if (allocationBytes) classify(allocationBytes);
+	commitFigures += std::format(" private_regions_mb=under1m:{}/{},1m:{}/{},2to16m:{}/{},over16m:{}/{}", regionBytes[0] >> 20, regionCounts[0],
+	    regionBytes[1] >> 20, regionCounts[1], regionBytes[2] >> 20, regionCounts[2], regionBytes[3] >> 20, regionCounts[3]);
 	lap("heap_counters");
 	// Summing a heap holds its lock for as long as the heap is large, and every thread that allocates waits on it, the simulation's
 	// included: the heaps are summed only with the census's heap walk.
@@ -1630,6 +1652,7 @@ static void PostMemoryCensus(uint64_t simTick, const std::string& when = std::st
 	const std::string console = timed("console", [] { return g_ConsoleMan.LogCensus(); });
 	const std::string pace = timed("pace", [] { return PaceCensusSinceLast(); });
 	const std::string world = timed("world", [] { return g_NetMatchService.MemoryCensus(); });
+	const std::string storage = timed("storage", [] { return CheckpointNativeStorage::InventoryCensus(); });
 	std::ostringstream rest;
 	// Rounds restart their ticks, so the census names its own instant for a slope across a rematching run.
 	rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_CensusProcessStart).count();
@@ -1637,7 +1660,7 @@ static void PostMemoryCensus(uint64_t simTick, const std::string& when = std::st
 	rest << " in_flight=autosave:" << g_ActivityMan.UnwrittenAutosaves() << ",fullstate:" << g_ActivityMan.UnfinishedFullStateCaptures() << when;
 	rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
 	     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
-	     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << pace;
+	     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << " storage: " << storage << pace;
 	CensusWorker::Get().Post([simTick, rest = std::move(rest).str(), costs = std::move(costs)]() mutable {
 		// The worker's whole job is the census's cost too, charged to the frame it ends in.
 		const auto began = std::chrono::steady_clock::now();
