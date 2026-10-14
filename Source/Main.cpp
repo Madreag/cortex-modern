@@ -374,26 +374,29 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 		    ((memory.CommitLimit - memory.CommitTotal) * memory.PageSize) >> 20);
 	}
 	// Committed private memory by allocation size: the heaps, the engine's 1 MiB storage blocks and the drivers each allocate in their own sizes.
-	std::array<uint64_t, 4> regionBytes{}, regionCounts{};
-	const auto classify = [&](uint64_t bytes) {
-		const size_t index = bytes < (uint64_t{1} << 20) ? 0 : bytes < (uint64_t{2} << 20) ? 1 : bytes < (uint64_t{16} << 20) ? 2 : 3;
-		regionBytes[index] += bytes;
-		++regionCounts[index];
-	};
-	const void* allocation = nullptr;
-	uint64_t allocationBytes = 0;
-	MEMORY_BASIC_INFORMATION region{};
-	for (const uint8_t* address = nullptr; VirtualQuery(address, &region, sizeof(region)) == sizeof(region); address = static_cast<const uint8_t*>(region.BaseAddress) + region.RegionSize) {
-		if (region.AllocationBase != allocation) {
-			if (allocationBytes) classify(allocationBytes);
-			allocation = region.AllocationBase;
-			allocationBytes = 0;
+	// The walk takes tens of milliseconds once the address space is busy, so it rides with the histogram lever.
+	if (s_memoryCensusHistogram) {
+		std::array<uint64_t, 4> regionBytes{}, regionCounts{};
+		const auto classify = [&](uint64_t bytes) {
+			const size_t index = bytes < (uint64_t{1} << 20) ? 0 : bytes < (uint64_t{2} << 20) ? 1 : bytes < (uint64_t{16} << 20) ? 2 : 3;
+			regionBytes[index] += bytes;
+			++regionCounts[index];
+		};
+		const void* allocation = nullptr;
+		uint64_t allocationBytes = 0;
+		MEMORY_BASIC_INFORMATION region{};
+		for (const uint8_t* address = nullptr; VirtualQuery(address, &region, sizeof(region)) == sizeof(region); address = static_cast<const uint8_t*>(region.BaseAddress) + region.RegionSize) {
+			if (region.AllocationBase != allocation) {
+				if (allocationBytes) classify(allocationBytes);
+				allocation = region.AllocationBase;
+				allocationBytes = 0;
+			}
+			if (region.State == MEM_COMMIT && region.Type == MEM_PRIVATE) allocationBytes += region.RegionSize;
 		}
-		if (region.State == MEM_COMMIT && region.Type == MEM_PRIVATE) allocationBytes += region.RegionSize;
+		if (allocationBytes) classify(allocationBytes);
+		commitFigures += std::format(" private_regions_mb=under1m:{}/{},1m:{}/{},2to16m:{}/{},over16m:{}/{}", regionBytes[0] >> 20, regionCounts[0],
+		    regionBytes[1] >> 20, regionCounts[1], regionBytes[2] >> 20, regionCounts[2], regionBytes[3] >> 20, regionCounts[3]);
 	}
-	if (allocationBytes) classify(allocationBytes);
-	commitFigures += std::format(" private_regions_mb=under1m:{}/{},1m:{}/{},2to16m:{}/{},over16m:{}/{}", regionBytes[0] >> 20, regionCounts[0],
-	    regionBytes[1] >> 20, regionCounts[1], regionBytes[2] >> 20, regionCounts[2], regionBytes[3] >> 20, regionCounts[3]);
 	lap("heap_counters");
 	// Summing a heap holds its lock for as long as the heap is large, and every thread that allocates waits on it, the simulation's
 	// included: the heaps are summed only with the census's heap walk.
