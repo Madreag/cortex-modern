@@ -158,7 +158,7 @@ namespace RTE {
 		static const void* View(const void* source, size_t bytes);
 		static const void* ViewObject(const void* source);
 		template<class T> static T* Source(T* source) {
-			// With no frozen reader and no saver anywhere, every thread sees the live object; otherwise the view decides.
+			// With nothing frozen anywhere, every thread sees the live object; otherwise the view decides.
 			if (CheckpointActivity::Quiet()) return source;
 			if (s_Readers.load(std::memory_order_relaxed) == 0 && SaverThreadMark::marked.load(std::memory_order_relaxed) == 0) return source;
 			return static_cast<T*>(const_cast<void*>(ViewObject(source)));

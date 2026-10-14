@@ -1,7 +1,5 @@
 #pragma once
 
-#include "CheckpointActivity.h"
-
 #include <atomic>
 
 namespace RTE {
@@ -15,7 +13,6 @@ namespace RTE {
 		/// Marks the calling thread for the rest of its life.
 		static void Set() noexcept {
 			if (current) return;
-			CheckpointActivity::Begin();
 			current = true;
 			marked.fetch_add(1, std::memory_order_relaxed);
 		}
