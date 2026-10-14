@@ -12144,6 +12144,13 @@ int main(int argc, char** argv) {
 	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');
 
 	const bool mainArgsValid = HandleMainArgs(argc, argv);
+	// Test lever CC_TEST_AUTOSAVE_SECONDS=<seconds>: -net-autosave-seconds for runners that pass only test levers.
+	if (const char* seconds = std::getenv("CC_TEST_AUTOSAVE_SECONDS"); seconds && *seconds) {
+		uint32_t value = 0;
+		const std::string_view text(seconds);
+		if (const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value); parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size())
+			NetMatchService::SetAutosaveSeconds(value);
+	}
 	// Only a menu script, the UI probe or a harness's screen watches read what the renderer drew.
 	const char* screenWatches = std::getenv("CCCP_TEST_SCREEN_WATCHES");
 	SetPanelDrawRecording(!s_menuScriptPath.empty() || (netUiProbeScript != nullptr && *netUiProbeScript != '\0') || (screenWatches != nullptr && *screenWatches != '\0'));
