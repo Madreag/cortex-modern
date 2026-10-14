@@ -1984,7 +1984,7 @@ namespace RTE::CheckpointLua {
 		if (!coordinator.PlanArm(*copy, bytes, true, spans) || spans.size() != 1 || spans[0].second != pages) return false;
 		CopyCheckpointPages(image.get(), source, bytes);
 		std::fill(copy->saved.begin(), copy->saved.end(), uint8_t{1});
-		if (!coordinator.FinishArm(*copy, coordinator.base, bytes, true, true, pages, 0)) return false;
+		if (!coordinator.FinishArm(*copy, coordinator.base, bytes, true, true, false, pages, 0)) return false;
 		// The saver's touch leaves the learning heap fenced; the game's first write to each run faults once and opens it whole.
 		coordinator.TouchPages(0, pages);
 		if (observer.faults) return false;
