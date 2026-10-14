@@ -3102,9 +3102,9 @@ void SceneMan::PrepareCheckpointValues() {
 	auto names = m_MatNameMap;
 	auto copies = m_MaterialCopiesVector;
 	auto indices = m_MaterialCopyIndices;
-	m_MatNameMap.swap(names);
-	m_MaterialCopiesVector.swap(copies);
-	m_MaterialCopyIndices.swap(indices);
+	m_MatNameMap = std::move(names);
+	m_MaterialCopiesVector = std::move(copies);
+	m_MaterialCopyIndices = std::move(indices);
 	m_OwnedCheckpointOptions = std::move(prepared);
 }
 

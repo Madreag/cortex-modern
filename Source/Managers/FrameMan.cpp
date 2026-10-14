@@ -2081,7 +2081,7 @@ void FrameMan::PrepareCheckpointValues() {
 		for (const auto& [key, entry]: m_ColorTables[mode]) if (color_map == &entry.first) selected.emplace(mode, key);
 	for (auto& tables: m_ColorTables) {
 		auto owned = tables;
-		tables.swap(owned);
+		tables = std::move(owned);
 	}
 	if (selected) color_map = &m_ColorTables[selected->first].at(selected->second).first;
 }
