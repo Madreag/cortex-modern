@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <mutex>
+#include <thread>
 #include <utility>
 #include <vector>
 #ifndef _WIN32
@@ -110,7 +112,9 @@ GLBitmapInfo* GLResourceMan::MakeBitmapInfo() {
 }
 
 Texture2D GLResourceMan::GetStaticTextureFromBitmap(BITMAP* bitmap) {
+	if (m_ReleasesPending.load(std::memory_order_acquire)) ReleasePendingBitmapInfos();
 	if (!bitmap->extra) {
+		if (m_RenderThread == std::thread::id()) m_RenderThread = std::this_thread::get_id();
 		m_StaticTextures.emplace_back(new GLBitmapInfo);
 		m_StaticTextures.back()->m_ID = m_StaticTextures.size();
 		bitmap->extra = reinterpret_cast<void*>(m_StaticTextures.back().get());
@@ -209,9 +213,45 @@ std::string GLResourceMan::Census() {
 }
 
 void GLResourceMan::DestroyBitmapInfo(BITMAP* bitmap) {
-	GLBitmapInfo* info = GetBitmapInfo(bitmap);
-	if (info) {
-		rlUnloadTexture(info->m_Texture);
-		++m_TextureReleases;
+	GLBitmapInfo* info = bitmap ? GetBitmapInfo(bitmap) : nullptr;
+	if (!info) {
+		return;
+	}
+	bitmap->extra = nullptr;
+	// GL names belong to the render thread's context; a bitmap freed on another thread leaves its names to the next draw.
+	if (std::this_thread::get_id() != m_RenderThread) {
+		std::lock_guard<std::mutex> lock(m_ReleaseMutex);
+		m_PendingReleases.push_back(info);
+		m_ReleasesPending.store(true, std::memory_order_release);
+		return;
+	}
+	ReleaseBitmapInfo(info);
+}
+
+void GLResourceMan::ReleaseBitmapInfo(GLBitmapInfo* info) {
+	rlUnloadTexture(info->m_Texture);
+	if (info->m_UpdateBuffer) {
+		glDeleteBuffers(1, &info->m_UpdateBuffer);
+	}
+	++m_TextureReleases;
+	const size_t index = info->m_ID - 1;
+	if (index < m_StaticTextures.size() && m_StaticTextures[index].get() == info) {
+		if (index + 1 != m_StaticTextures.size()) {
+			std::swap(m_StaticTextures[index], m_StaticTextures.back());
+			m_StaticTextures[index]->m_ID = index + 1;
+		}
+		m_StaticTextures.pop_back();
+	}
+}
+
+void GLResourceMan::ReleasePendingBitmapInfos() {
+	std::vector<GLBitmapInfo*> pending;
+	{
+		std::lock_guard<std::mutex> lock(m_ReleaseMutex);
+		pending.swap(m_PendingReleases);
+		m_ReleasesPending.store(false, std::memory_order_release);
+	}
+	for (GLBitmapInfo* info: pending) {
+		ReleaseBitmapInfo(info);
 	}
 }
