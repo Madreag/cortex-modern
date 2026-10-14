@@ -296,6 +296,7 @@ namespace RTE {
 		static TerrainLayerSnapshot terrain;
 		// Only the pages a preview writes are copied; the platforms without a page fence copy the whole terrain.
 		terrain.fencePixels = true;
+		terrain.deferHorizon = true;
 		if (!terrain.Capture()) {
 			return;
 		}
