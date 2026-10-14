@@ -1225,11 +1225,20 @@ std::string CheckpointNativeStorage::PoolCensus() {
 	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
 	if (!pools) return "pool_classes=0 free_list_mb=0";
 	uint64_t classes = 0, freeList = 0;
+	std::vector<std::array<uint64_t, 3>> slack;
 	{
 		std::lock_guard lock(pools->mutex);
-		for (const auto& [slot, pool]: pools->sizes) { ++classes; freeList += pool.free.capacity() * sizeof(void*); }
+		for (const auto& [slot, pool]: pools->sizes) {
+			++classes;
+			freeList += pool.free.capacity() * sizeof(void*);
+			slack.push_back({pool.free.size() * slot, slot, pool.bytes});
+		}
 	}
-	return std::format("pool_classes={} free_list_mb={}", classes, freeList >> 20);
+	std::sort(slack.begin(), slack.end(), std::greater<>());
+	std::string top;
+	for (size_t index = 0; index < std::min<size_t>(slack.size(), 8); ++index)
+		top += std::format("{}{}:{}/{}", index ? "," : "", slack[index][1], slack[index][0] >> 10, slack[index][2] >> 10);
+	return std::format("pool_classes={} free_list_mb={} pool_free_top_kb={}", classes, freeList >> 20, top.empty() ? "none" : top);
 }
 
 std::string CheckpointNativeStorage::StorageCosts() {
