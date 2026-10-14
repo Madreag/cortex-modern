@@ -351,27 +351,33 @@ namespace RTE {
 
 	void NetLockstepCoordinator::InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs) {
 		if (m_PeerBridgeCertificates.contains({certificate.frame, DecisionKind(certificate)})) return;
+		// CC_TEST_RETURN_INPUT_DETAILS names each decision this peer sets aside and why.
+		const auto refused = [&](const char* reason) {
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-decision-refused] local=" << static_cast<int>(m_Config.localPeerId)
+				<< " frame=" << certificate.frame << " kind=" << static_cast<int>(DecisionKind(certificate)) << " reason=" << reason << " next=" << m_Stats.nextFrame
+				<< " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " now_ms=" << nowMs << std::endl;
+		};
 		NetHostMigrationMessage agreed; uint32_t voters = 0;
-		if (!DecodePeerBridgeCertificate(certificate, agreed, voters) || (agreed.preparedFrame == 3 ? !PeerAdminCertificateValid(agreed, voters) : !PeerGroupHasAuthority(voters))) return;
-		if (agreed.preparedFrame == 0 && certificate.frame > m_Stats.nextFrame) { RequestPeerCommittedTail(nowMs); return; }
+		if (!DecodePeerBridgeCertificate(certificate, agreed, voters) || (agreed.preparedFrame == 3 ? !PeerAdminCertificateValid(agreed, voters) : !PeerGroupHasAuthority(voters))) { refused("certificate"); return; }
+		if (agreed.preparedFrame == 0 && certificate.frame > m_Stats.nextFrame) { refused("ahead"); RequestPeerCommittedTail(nowMs); return; }
 		if (agreed.preparedFrame != 0 && certificate.frame < m_Stats.nextFrame) {
 			// Install a private return before its displayed tick, even if preparation has passed it.
 			const auto own = m_PeerBridges.find(m_Config.localPeerId);
 			const bool privateReader = own != m_PeerBridges.end() && own->second.committedHold && !own->second.returnFrame;
 			if (agreed.preparedFrame != 1 || !privateReader ||
-			    certificate.frame <= m_LastCompletedSimulationTick.value_or(0)) return;
+			    certificate.frame <= m_LastCompletedSimulationTick.value_or(0)) { refused(privateReader ? "displayed" : "behind"); return; }
 		}
 		const uint64_t prefixFrame = agreed.preparedFrame != 0 ? agreed.boundary : certificate.frame - 1;
 		const NetHash32 prefix = certificate.frame == m_Config.startFrame ? NetHash32{} : agreed.preparedFrame != 0 ? PeerAppliedFramePrefix(prefixFrame) : PeerFramePrefix(prefixFrame);
-		if (agreed.bytes.size() != prefix.size() + (agreed.preparedFrame == 1 ? 12 * agreed.members.size() : 0) || !std::equal(prefix.begin(), prefix.end(), agreed.bytes.begin())) return;
+		if (agreed.bytes.size() != prefix.size() + (agreed.preparedFrame == 1 ? 12 * agreed.members.size() : 0) || !std::equal(prefix.begin(), prefix.end(), agreed.bytes.begin())) { refused("prefix"); return; }
 		size_t returnOffset = prefix.size();
 		std::map<uint8_t, std::tuple<uint16_t, uint64_t, uint32_t>> returnDelays;
 		if (agreed.preparedFrame == 1) for (uint8_t peer: agreed.members) {
 			const auto held = m_PeerBridges.find(peer);
-			if (held == m_PeerBridges.end() || !held->second.committedHold || held->second.returnFrame) return;
+			if (held == m_PeerBridges.end() || !held->second.committedHold || held->second.returnFrame) { refused("not held"); return; }
 			uint32_t delay = 0, neutral = 0, incarnation = 0;
 			if (!TakeSize(agreed.bytes, returnOffset, delay) || !TakeSize(agreed.bytes, returnOffset, neutral) || !TakeSize(agreed.bytes, returnOffset, incarnation) || incarnation == 0 ||
-			    delay > NetLockstepCodec::c_MaxPeerInputDelayFrames || neutral < delay || neutral > NetLockstepCodec::c_MaxFutureFrameSkew || agreed.frame > UINT64_MAX - neutral) return;
+			    delay > NetLockstepCodec::c_MaxPeerInputDelayFrames || neutral < delay || neutral > NetLockstepCodec::c_MaxFutureFrameSkew || agreed.frame > UINT64_MAX - neutral) { refused("runway"); return; }
 			returnDelays[peer] = {static_cast<uint16_t>(delay), agreed.frame + neutral, incarnation};
 		}
 		m_PeerBridgeCertificates.emplace(PeerDecisionKey{certificate.frame, DecisionKind(certificate)}, certificate);
