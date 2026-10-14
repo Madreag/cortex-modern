@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "WindowMan.h"
 #include "RTEError.h"
 #include "SDL3/SDL.h"
@@ -34,6 +35,14 @@
 #endif
 
 using namespace RTE;
+
+namespace {
+	// A harness lever: the window swaps without waiting for its display, for a box whose display path paces every swap.
+	bool SwapWaitLifted() {
+		static const bool lifted = std::getenv("CC_TEST_VSYNC_OFF") != nullptr;
+		return lifted;
+	}
+}
 
 void SDLWindowDeleter::operator()(SDL_Window* window) const { SDL_DestroyWindow(window); }
 void SDLRendererDeleter::operator()(SDL_Renderer* renderer) const { SDL_DestroyRenderer(renderer); }
@@ -241,7 +250,7 @@ void WindowMan::InitializeOpenGL() {
 	const auto glText = [](GLenum name) { const auto* text = reinterpret_cast<const char*>(glGetString(name)); return std::string(text ? text : "unknown"); };
 	System::PrintDiagnosticLine("[gpu] renderer=" + glText(GL_RENDERER) + " vendor=" + glText(GL_VENDOR) + " version=" + glText(GL_VERSION));
 
-	SDL_GL_SetSwapInterval(m_EnableVSync ? 1 : 0);
+	SDL_GL_SetSwapInterval(m_EnableVSync && !SwapWaitLifted() ? 1 : 0);
 
 	rlLoadExtensions((void*)SDL_GL_GetProcAddress);
 	rlglInit(m_ResX, m_ResY);
@@ -280,7 +289,7 @@ int WindowMan::GetWindowResY() {
 void WindowMan::SetVSyncEnabled(bool enable) {
 	m_EnableVSync = enable;
 
-	int sdlEnableVSync = m_EnableVSync ? 1 : 0;
+	int sdlEnableVSync = m_EnableVSync && !SwapWaitLifted() ? 1 : 0;
 	SDL_GL_SetSwapInterval(sdlEnableVSync);
 }
 
