@@ -21,7 +21,6 @@ namespace RTE {
 
 	class EncoderPipe;
 	class QueuedTextureReadback;
-	class TextureReadbackBuffers;
 	class FrameReadbackContext;
 
 	/// Writes admitted RGB images and their metadata; GPU completion, encoding and file writes belong to the writers.
@@ -149,7 +148,6 @@ namespace RTE {
 		std::unique_ptr<QueuedTextureReadback> m_StagedReadback;
 		bool m_StagedTextureReadback = false;
 		std::unique_ptr<FrameReadbackContext> m_ReadbackContext;
-		std::unique_ptr<TextureReadbackBuffers> m_ReadbackBuffers; //!< Pixel-pack buffers the captures reuse, released at Finish on the render context.
 		std::string m_ReadbackError;
 		bool m_StagingHeld = false;
 		std::size_t m_StagingSlot = 0;

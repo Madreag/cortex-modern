@@ -369,15 +369,13 @@ namespace RTE {
 #if defined(__APPLE__) || defined(__linux__)
 		// A fenced copy collected on this context later; a direct read here would wait for the GPU every captured frame.
 		m_StagedTextureReadback = true;
-		if (!m_ReadbackBuffers) m_ReadbackBuffers = std::make_unique<TextureReadbackBuffers>();
-		m_StagedReadback = FrameReadbackContext::Submit(texture, width, height, error, GL_BGRA, m_ReadbackBuffers.get());
+		m_StagedReadback = FrameReadbackContext::Submit(texture, width, height, error, GL_BGRA);
 		return m_StagedReadback != nullptr;
 #else
 		m_StagedTextureReadback = true;
 		if (!m_ReadbackContext) m_ReadbackContext = FrameReadbackContext::Create(error);
 		if (!m_ReadbackContext) return false;
-		if (!m_ReadbackBuffers) m_ReadbackBuffers = std::make_unique<TextureReadbackBuffers>();
-		m_StagedReadback = m_ReadbackContext->Submit(texture, width, height, error, GL_RGBA, m_ReadbackBuffers.get());
+		m_StagedReadback = m_ReadbackContext->Submit(texture, width, height, error);
 		return m_StagedReadback != nullptr;
 #endif
 	}
@@ -627,8 +625,6 @@ namespace RTE {
 			if (writer.joinable()) writer.join();
 		}
 		m_Writers.clear();
-		if (m_ReadbackBuffers && SDL_GL_GetCurrentContext()) m_ReadbackBuffers->Clear();
-		m_ReadbackBuffers.reset();
 		m_ReadbackContext.reset();
 		if (m_Encoder) {
 			m_EncoderExit = m_Encoder->Close(120000);
