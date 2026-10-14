@@ -139,7 +139,7 @@ namespace RTE {
 		static bool Owns(const void* address);
 		/// Slot pool, free slot and large buffer bytes, and how much grew inside explicit owned scopes.
 		static std::string InventoryCensus();
-		/// The census's view of the slot pools: their classes and free lists, then InventoryCensus.
+		/// The slot pools' classes and the bytes their free lists reserve.
 		static std::string PoolCensus();
 		/// Test lever CCCP_TEST_STORAGE_COSTS: the owned allocations, frees and block growth so far and the time inside them; empty unset.
 		static std::string StorageCosts();

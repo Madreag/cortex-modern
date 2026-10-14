@@ -1161,13 +1161,13 @@ std::string CheckpointNativeStorage::InventoryCensus() {
 
 std::string CheckpointNativeStorage::PoolCensus() {
 	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
-	if (!pools) return "pool_classes=0 free_list_mb=0 " + InventoryCensus();
+	if (!pools) return "pool_classes=0 free_list_mb=0";
 	uint64_t classes = 0, freeList = 0;
 	{
 		std::lock_guard lock(pools->mutex);
 		for (const auto& [slot, pool]: pools->sizes) { ++classes; freeList += pool.free.capacity() * sizeof(void*); }
 	}
-	return std::format("pool_classes={} free_list_mb={} ", classes, freeList >> 20) + InventoryCensus();
+	return std::format("pool_classes={} free_list_mb={}", classes, freeList >> 20);
 }
 
 std::string CheckpointNativeStorage::StorageCosts() {
