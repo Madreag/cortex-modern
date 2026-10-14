@@ -579,6 +579,12 @@ void GameActivity::ApplyNetworkSeatAI(uint8_t peerId, bool held, uint64_t frame)
 	}
 	TouchCheckpoint();
 	ConfigureLockstepCPUTeams(cpuTeams);
+	if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+		int mask = 0;
+		for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) mask |= cpuTeams[team] ? 1 << team : 0;
+		System::PrintDiagnosticLine("[net-seat-ai] peer=" + std::to_string(peerId) + " held=" + std::to_string(held) + " frame=" + std::to_string(frame) +
+		                            " tick=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " cpu_teams=" + std::to_string(mask));
+	}
 }
 
 // A seat this machine does not present has no menu, editor or banner of its own, and a script that asks for one
@@ -593,6 +599,10 @@ template <class T> T* SeatStub(std::unique_ptr<T>& stub) {
 		CaptureSentinel::NoteCreation("seat stand-in", &stub);
 		stub = std::make_unique<T>();
 	}
+	return stub.get();
+}
+template <class T> T* ExistingSeatStub(const std::unique_ptr<T>& stub) {
+	std::lock_guard lock(g_SeatStubLocks[(reinterpret_cast<uintptr_t>(&stub) >> 3) % g_SeatStubLocks.size()]);
 	return stub.get();
 }
 } // namespace
@@ -621,6 +631,29 @@ SceneEditorGUI* GameActivity::GetEditorGUI(unsigned int which) const {
 	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
 	if (IsFrozenCheckpointNative() && !(presented && m_pEditorGUI[which]) && m_SavedStubEditor[which]) return m_SavedStubEditor[which];
 	return presented && m_pEditorGUI[which] ? m_pEditorGUI[which] : SeatStub(m_SeatStubEditorGUI[which]);
+}
+
+BuyMenuGUI* GameActivity::GetExistingBuyGUI(unsigned int which) const {
+	if (which >= Players::MaxPlayerCount) return nullptr;
+	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
+	if (IsFrozenCheckpointNative() && !(presented && m_pBuyGUI[which]) && m_SavedStubBuy[which]) return m_SavedStubBuy[which];
+	return presented && m_pBuyGUI[which] ? m_pBuyGUI[which] : ExistingSeatStub(m_SeatStubBuyGUI[which]);
+}
+
+SceneEditorGUI* GameActivity::GetExistingEditorGUI(unsigned int which) const {
+	if (which >= Players::MaxPlayerCount) return nullptr;
+	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
+	if (IsFrozenCheckpointNative() && !(presented && m_pEditorGUI[which]) && m_SavedStubEditor[which]) return m_SavedStubEditor[which];
+	return presented && m_pEditorGUI[which] ? m_pEditorGUI[which] : ExistingSeatStub(m_SeatStubEditorGUI[which]);
+}
+
+GUIBanner* GameActivity::GetExistingBanner(int whichColor, int player) const {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return nullptr;
+	GUIBanner* const live = whichColor == YELLOW ? m_pBannerYellow[player] : m_pBannerRed[player];
+	const bool presented = LocalInputOfPlayer(player) != Players::NoPlayer;
+	if (IsFrozenCheckpointNative() && !(presented && live) && m_SavedStubBanner[whichColor == YELLOW ? YELLOW : RED][player])
+		return m_SavedStubBanner[whichColor == YELLOW ? YELLOW : RED][player];
+	return presented && live ? live : ExistingSeatStub(m_SeatStubBanner[whichColor == YELLOW ? YELLOW : RED][player]);
 }
 
 GUIBanner* GameActivity::GetBanner(int whichColor, int player) const {

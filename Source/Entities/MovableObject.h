@@ -1255,6 +1255,32 @@ namespace RTE {
 		/// @return The counter's current base.
 		static long GetUniqueIDCounter() { return FrozenCheckpointCounters().uid.load(); }
 
+		/// The Lua handles naming an object or one of its fields, and whether the object is gone. A gone object's memory stays
+		/// out of its class pool until its last handle is collected, so a script that kept a handle reads the same bytes on every machine.
+		struct LuaHandles {
+			uint32_t count = 0; //!< The handles naming the object or one of its fields.
+			bool gone = false; //!< Whether the object is deleted and its memory waits for its last handle.
+			MovableObject* object = nullptr; //!< The object the record belongs to.
+			Entity::ClassInfo* pool = nullptr; //!< The class pool the memory returns to.
+			void* memory = nullptr; //!< The deleted object's memory.
+		};
+
+		/// Notes one more Lua handle naming this object or one of its fields.
+		/// @return The record the handle lets go of when it is collected.
+		LuaHandles* NoteLuaHandle();
+
+		/// Lets one Lua handle go; the last handle of a deleted object returns its memory to the pool.
+		/// @param record What NoteLuaHandle returned.
+		static void ReleaseLuaHandle(void* record);
+
+		/// Keeps a deleted object's memory out of its class pool while a Lua handle names it.
+		/// @return Whether the memory stays out of the pool.
+		static bool RetainPooledMemory(MovableObject* object, void* memory, Entity::ClassInfo& pool);
+
+		/// Gets how many deleted objects' memory Lua handles keep out of their pools now.
+		/// @return The count of retained memory blocks.
+		static int GetRetainedPoolMemoryCount() { return s_RetainedPoolMemory.load(std::memory_order_relaxed); }
+
 		/// Gets the highest saved UniqueID this thread has read since the last call, and starts the count again.
 		/// @return The highest saved UniqueID read, or 0 when none was.
 		static long TakeHighestPersistedUniqueIDRead() { return std::exchange(s_HighestPersistedUniqueIDRead, 0); }
@@ -1281,8 +1307,9 @@ namespace RTE {
 		/// A faithful clone copies live sim state and keeps identity; rollback snapshots use it, gameplay spawns never do.
 		static bool IsFaithfulClone() { return s_FaithfulCloneDepth > 0; }
 		static bool FaithfulCloneRegisters() { return s_FaithfulCloneRegisters; }
-		/// A faithful clone that may be adopted or saved keeps each class's runtime text; a preview's throwaway clone is never either.
-		static bool FaithfulCloneKeepsRuntime() { return s_FaithfulCloneDepth > 0 && !s_FaithfulClonePreview; }
+		/// A faithful clone that may be adopted or saved keeps each class's runtime text; a preview's throwaway clone and a speculation's
+		/// shadow are never either.
+		static bool FaithfulCloneKeepsRuntime() { return s_FaithfulCloneDepth > 0 && !s_FaithfulClonePreview && s_FaithfulCloneRuntime; }
 		/// A preview's clone lives while its pointers do, so it holds them as they are rather than by checkpoint name.
 		static bool FaithfulCloneForPreview() { return s_FaithfulCloneDepth > 0 && s_FaithfulClonePreview; }
 		struct ScriptLoadDeferralScope {
@@ -1291,15 +1318,18 @@ namespace RTE {
 		};
 
 		struct FaithfulCloneScope {
-			explicit FaithfulCloneScope(bool registerWithMovableMan, bool preview = false) : previousRegisters(s_FaithfulCloneRegisters), previousPreview(s_FaithfulClonePreview) {
+			explicit FaithfulCloneScope(bool registerWithMovableMan, bool preview = false, bool keepsRuntime = true) :
+			    previousRegisters(s_FaithfulCloneRegisters), previousPreview(s_FaithfulClonePreview), previousRuntime(s_FaithfulCloneRuntime) {
 				++s_FaithfulCloneDepth;
 				s_FaithfulCloneRegisters = registerWithMovableMan;
 				s_FaithfulClonePreview = preview;
+				s_FaithfulCloneRuntime = keepsRuntime;
 			}
-			~FaithfulCloneScope() { --s_FaithfulCloneDepth; s_FaithfulCloneRegisters = previousRegisters; s_FaithfulClonePreview = previousPreview; }
+			~FaithfulCloneScope() { --s_FaithfulCloneDepth; s_FaithfulCloneRegisters = previousRegisters; s_FaithfulClonePreview = previousPreview; s_FaithfulCloneRuntime = previousRuntime; }
 		private:
 			bool previousRegisters;
 			bool previousPreview;
+			bool previousRuntime;
 		};
 
 		/// Drops every pending snapshot stash on a normal (spawn-normalized) world add, so
@@ -1671,6 +1701,7 @@ namespace RTE {
 		static int s_FaithfulCloneDepth;
 		static bool s_FaithfulCloneRegisters;
 		static bool s_FaithfulClonePreview;
+		inline static bool s_FaithfulCloneRuntime = true;
 		int64_t m_PersistedRestTimerStart;
 		bool m_HasPersistedRestTimerStart;
 		int m_PersistedVelOscillations;
@@ -1707,6 +1738,8 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		inline static std::atomic<int> s_RetainedPoolMemory{0}; //!< Deleted objects' memory blocks that Lua handles keep out of their pools.
+		std::atomic<LuaHandles*> m_LuaHandles{nullptr}; //!< Created when a Lua handle first names this object; never cleared by Clear().
 		std::string SaveMovableObjectRuntime() const;
 		bool LoadMovableObjectRuntime(std::string_view text, bool validateOnly = false);
 

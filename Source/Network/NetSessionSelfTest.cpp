@@ -10,6 +10,7 @@
 #include "NetLobbySession.h"
 #include "NetLockstep.h"
 #include "NetMatchRunner.h"
+#include "NetMuxTransport.h"
 #include "NetParticipantCrypto.h"
 #include "NetPeerSessionWire.h"
 #include "NetSession.h"
@@ -1183,6 +1184,29 @@ namespace RTE {
 			}
 			if (received != std::vector<std::vector<uint8_t>>{first} || !nativeHost.IsPeerConnected(1) || links[0]->pendingBytes != 0) { *error = "the ended round stopped the rematch session wire"; return false; }
 			std::cout << "[net-session-selftest] PASS retained_links_order_ack_restart_and_completed_round" << std::endl;
+			return true;
+		}
+
+		// A seat that returns over the retained wire is admitted on a route of its own: the session already holds records under
+		// every id its transport handed it, the ICE half's tagged ones included, and a returner landing on one of those closed
+		// records would have its hello dropped.
+		bool TestAdmissionRoutesNameNoConnection(std::string* error) {
+			LoopbackTransport wire;
+			auto links = std::make_shared<NetPeerSessionLinks>();
+			NetPeerSessionWire session(links);
+			if (!session.StartHost(0, error)) return false;
+			for (NetPeerId native = 1; native <= 3; ++native) links->ForwardAdmission(wire, {NetTransportEventType::PacketReceived, native, NetTransportLane::ControlReliable, {1}, {}});
+			std::vector<NetPeerId> routes;
+			for (const auto& event: session.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) routes.push_back(event.peerId);
+			if (routes.size() != 3) { *error = "the retained wire admitted " + std::to_string(routes.size()) + " of 3 new connections"; return false; }
+			for (const NetPeerId route: routes) {
+				const NetPeerId inner = NetMuxTransport::IsP2P(route) ? NetMuxTransport::Untag(route) : route;
+				if (inner < 0x40000000U) {
+					*error = "admission route " + std::to_string(route) + " is the id of the transport's " + (NetMuxTransport::IsP2P(route) ? "ICE" : "direct") + " connection " + std::to_string(inner) + ": a returning seat lands on that connection's closed record";
+					return false;
+				}
+			}
+			std::cout << "[net-session-selftest] PASS admission_routes_name_no_transport_connection" << std::endl;
 			return true;
 		}
 
@@ -2459,6 +2483,7 @@ namespace RTE {
 		if (!TestMalformedHandshake(&error)) return fail(error);
 		if (!TestAuthenticatedHandoverDoesNotRejectAdmission(&error)) return fail(error);
 		if (!TestRetainedSessionWire(&error)) return fail(error);
+		if (!TestAdmissionRoutesNameNoConnection(&error)) return fail(error);
 		if (!TestTimeout(&error)) return fail(error);
 		if (!TestARejoinPhaseSuspendsOnlyItsOwnSilence(&error)) return fail(error);
 		if (!TestARejoinPhaseEndsAtItsCeiling(&error)) return fail(error);

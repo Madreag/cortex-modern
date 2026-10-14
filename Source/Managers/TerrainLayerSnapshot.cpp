@@ -117,11 +117,13 @@ namespace RTE {
 			}
 		}
 		for (size_t index = 0; index < scene->m_pPathFinders.size(); ++index) {
-			horizonFinders[index] = {};
+			// A fence that still holds the pathfinder's live version keeps its copy.
 			if (scene->m_pPathFinders[index]) {
-				scene->m_pPathFinders[index]->CaptureHorizonFence(horizonFinders[index]);
+				scene->m_pPathFinders[index]->CaptureHorizonFence(horizonFinders[index], deferHorizon);
+			} else {
+				horizonFinders[index] = {};
 			}
-			copiedBytes += horizonFinders[index].overlay.size() * (sizeof(int) + sizeof(HorizonFenceState::Cell)) + horizonFinders[index].jobs.size() * sizeof(std::shared_ptr<void>);
+			if (!horizonFinders[index].deferred) copiedBytes += horizonFinders[index].overlay.size() * (sizeof(int) + sizeof(HorizonFenceState::Cell)) + horizonFinders[index].jobs.size() * sizeof(std::shared_ptr<void>);
 		}
 		// The patches are referenced, not copied; the completion pass reads both numbers out of the horizon report.
 		PathFinder::RecordHorizonFenceBytes(copiedBytes, sharedPatchBytes);

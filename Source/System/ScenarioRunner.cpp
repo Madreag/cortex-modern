@@ -1865,7 +1865,10 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame) {
-		if (!IsLockstepSeatUnderAI(peerId, frame)) return;
+		if (!IsLockstepSeatUnderAI(peerId, frame)) {
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) std::cout << "[net-seat-ai] skipped peer=" << static_cast<int>(peerId) << " frame=" << frame << std::endl;
+			return;
+		}
 		if (auto binding = s_PeerPlayerBindings.find(peerId); binding != s_PeerPlayerBindings.end()) {
 			binding->second.frame = frame;
 			for (auto& player: binding->second.bindings.players) player.controlledUID = 0;

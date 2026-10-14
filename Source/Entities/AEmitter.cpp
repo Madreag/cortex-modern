@@ -20,6 +20,9 @@
 #include <cstdlib>
 #include <locale>
 #include <sstream>
+#include <atomic>
+#include <mutex>
+#include <unordered_map>
 
 using namespace RTE;
 
@@ -608,6 +611,18 @@ void AEmitter::SetFlash(Attachable* newFlash) {
 	}
 }
 
+namespace {
+	std::mutex s_TracedWoundsMutex;
+	std::unordered_map<long, int> s_TracedWounds; // A traced wound's unique ID and the emitting updates left to trace.
+	std::atomic<size_t> s_TracedWoundCount{0};
+}
+
+void AEmitter::NoteTracedWound(long uniqueID) {
+	std::lock_guard<std::mutex> lock(s_TracedWoundsMutex);
+	s_TracedWounds[uniqueID] = 3;
+	s_TracedWoundCount = s_TracedWounds.size();
+}
+
 void AEmitter::Update() {
 	Attachable::PreUpdate();
 
@@ -675,6 +690,11 @@ void AEmitter::Update() {
 		}
 
 		int emissionCountTotal = 0;
+		bool traceEmissions = false;
+		if (s_TracedWoundCount.load(std::memory_order_relaxed) > 0) {
+			std::lock_guard<std::mutex> lock(s_TracedWoundsMutex);
+			traceEmissions = s_TracedWounds.contains(GetUniqueID());
+		}
 		float velMin, velRange, spread;
 		double currentPPM, SPE;
 		MovableObject* pParticle = 0;
@@ -759,6 +779,15 @@ void AEmitter::Update() {
 					emitVel = RotateOffset(emitVel);
 					pParticle->SetVel(parentVel + rotationalVel + emitVel);
 					pParticle->SetRotAngle(emitVel.GetAbsRadAngle() + (m_HFlipped ? -c_PI : 0));
+					if (traceEmissions) {
+						const auto bits = [](float value) { return std::bit_cast<uint32_t>(value); };
+						std::ostringstream line;
+						line << "[wound-emission] tick=" << g_TimerMan.GetSimUpdateCount() << " uid=" << GetUniqueID() << " parent=" << (m_Parent ? m_Parent->GetUniqueID() : 0)
+						     << " index=" << i << " rot=" << bits(m_Rotation.GetRadAngle()) << " emit_angle=" << bits(m_EmitAngle.GetRadAngle()) << " inherited=" << bits(m_InheritedRotAngleOffset)
+						     << " parent_rot=" << bits(m_Parent ? m_Parent->GetRotAngle() : 0.0F) << " hflip=" << m_HFlipped << " burst=" << m_BurstTriggered << " spread=" << bits(spread)
+						     << " emit_vel=" << bits(emitVel.m_X) << "," << bits(emitVel.m_Y) << " vel=" << bits(pParticle->GetVel().m_X) << "," << bits(pParticle->GetVel().m_Y);
+						System::PrintDiagnosticLine(line.str());
+					}
 					pParticle->SetAngularVel(pRootParent->GetAngularVel() * emission->InheritsAngularVelocity());
 					pParticle->SetHFlipped(m_HFlipped);
 
@@ -812,6 +841,11 @@ void AEmitter::Update() {
 
 		// Count the total emissions since enabling, and stop emitting if beyond limit (and limit is also enabled)
 		m_EmitCount += emissionCountTotal;
+		if (traceEmissions && emissionCountTotal > 0) {
+			std::lock_guard<std::mutex> lock(s_TracedWoundsMutex);
+			if (auto traced = s_TracedWounds.find(GetUniqueID()); traced != s_TracedWounds.end() && --traced->second <= 0) s_TracedWounds.erase(traced);
+			s_TracedWoundCount = s_TracedWounds.size();
+		}
 		if (m_EmitCountLimit > 0 && m_EmitCount > m_EmitCountLimit) {
 			EnableEmission(false);
 		}

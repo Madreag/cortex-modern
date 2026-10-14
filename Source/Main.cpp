@@ -375,6 +375,30 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 		    (memory.CommitTotal * memory.PageSize) >> 20, (memory.CommitLimit * memory.PageSize) >> 20,
 		    ((memory.CommitLimit - memory.CommitTotal) * memory.PageSize) >> 20);
 	}
+	// Committed private memory by allocation size: the heaps, the engine's 1 MiB storage blocks and the drivers each allocate in their own sizes.
+	// The walk takes tens of milliseconds once the address space is busy, so it rides with the histogram lever.
+	if (s_memoryCensusHistogram) {
+		std::array<uint64_t, 4> regionBytes{}, regionCounts{};
+		const auto classify = [&](uint64_t bytes) {
+			const size_t index = bytes < (uint64_t{1} << 20) ? 0 : bytes < (uint64_t{2} << 20) ? 1 : bytes < (uint64_t{16} << 20) ? 2 : 3;
+			regionBytes[index] += bytes;
+			++regionCounts[index];
+		};
+		const void* allocation = nullptr;
+		uint64_t allocationBytes = 0;
+		MEMORY_BASIC_INFORMATION region{};
+		for (const uint8_t* address = nullptr; VirtualQuery(address, &region, sizeof(region)) == sizeof(region); address = static_cast<const uint8_t*>(region.BaseAddress) + region.RegionSize) {
+			if (region.AllocationBase != allocation) {
+				if (allocationBytes) classify(allocationBytes);
+				allocation = region.AllocationBase;
+				allocationBytes = 0;
+			}
+			if (region.State == MEM_COMMIT && region.Type == MEM_PRIVATE) allocationBytes += region.RegionSize;
+		}
+		if (allocationBytes) classify(allocationBytes);
+		commitFigures += std::format(" private_regions_mb=under1m:{}/{},1m:{}/{},2to16m:{}/{},over16m:{}/{}", regionBytes[0] >> 20, regionCounts[0],
+		    regionBytes[1] >> 20, regionCounts[1], regionBytes[2] >> 20, regionCounts[2], regionBytes[3] >> 20, regionCounts[3]);
+	}
 	lap("heap_counters");
 	// Summing a heap holds its lock for as long as the heap is large, and every thread that allocates waits on it, the simulation's
 	// included: the heaps are summed only with the census's heap walk.
@@ -1547,6 +1571,75 @@ static uint64_t s_paceFramesShed = 0; //!< Frames a paced round skipped because 
 static long long s_paceLastPresentUs = 0; //!< When the paced round last drew a frame.
 static long long s_paceFrameDrawUs = 0; //!< Time spent drawing and presenting those frames.
 static long long s_paceMaxDrawUs = 0; //!< The longest single iteration's draw since the previous census line.
+static uint64_t s_paceSheddingIterations = 0; //!< Iterations a paced round began with its frame-shedding budget.
+
+// Per 60 simulation ticks, the frames this machine presented in a running activity - their rate on the steady clock and the
+// spread of the intervals between presents. A lockstep round always reports them; single player only under the test lever
+// CC_TEST_FRAME_PACE=1, which a run sets to compare the two.
+static void NoteFramePresented() {
+	static const bool s_singleToo = std::getenv("CC_TEST_FRAME_PACE") != nullptr;
+	if (!s_singleToo && !ScenarioRunner::IsLockstepControllerSyncActive()) return;
+	struct Pace {
+		uint64_t iterations = 0, ticks = 0, shed = 0, shedding = 0, previews = 0;
+		long long updateUs = 0, drawUs = 0, previewUs = 0, simUs = 0, waitUs = 0;
+		std::remove_cvref_t<decltype(LocalPrediction::GetPhaseMs())> phaseMs{};
+	};
+	const auto pace = [] {
+		return Pace{s_paceIterations, s_paceSimTicks, s_paceFramesShed, s_paceSheddingIterations, LocalPrediction::GetPreviewCount(),
+		            s_paceUpdateUs, s_paceDrawUs, s_pacePreviewUs, s_paceSimUs, ScenarioRunner::GetLockstepWaitUs(), LocalPrediction::GetPhaseMs()};
+	};
+	struct Window {
+		bool open = false;
+		bool lockstep = false;
+		uint64_t firstTick = 0;
+		double firstMs = 0, lastMs = 0;
+		std::vector<double> intervals;
+		Pace pace;
+	};
+	static Window s_window;
+	const double now = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+	const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
+	// A window belongs to one running activity in one mode; the present that opens it is its first frame.
+	if (!g_ActivityMan.ActivityRunning() || (s_window.open && (s_window.lockstep != lockstep || tick < s_window.firstTick))) s_window = {};
+	if (!g_ActivityMan.ActivityRunning()) return;
+	if (!s_window.open) {
+		s_window = {true, lockstep, tick, now, now, {}, pace()};
+		return;
+	}
+	s_window.intervals.push_back(now - s_window.lastMs);
+	s_window.lastMs = now;
+	if (tick - s_window.firstTick < 60) return;
+	std::vector<double> sorted = s_window.intervals;
+	std::sort(sorted.begin(), sorted.end());
+	const auto at = [&sorted](double share) { return sorted[std::min(sorted.size() - 1, static_cast<size_t>(share * static_cast<double>(sorted.size())))]; };
+	const double wallMs = now - s_window.firstMs;
+	// The rate the presentation aims at: the harness cap, else the display's refresh under vsync, else none (0).
+	double targetHz = FrameMan::FeelCapHz();
+	if (targetHz <= 0 && g_WindowMan.GetVSyncEnabled()) {
+		if (const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(g_WindowMan.GetWindow()))) targetHz = mode->refresh_rate;
+	}
+	const FrameRecorder& recorder = FrameRecorder::Instance();
+	std::string line = std::format("[frame-pace] mode={} recorder={} recorder_hz={} target_hz={:.2f} first_tick={} tick={} frames={} wall_ms={:.1f} fps={:.2f} interval_p50_ms={:.2f} interval_p95_ms={:.2f} interval_max_ms={:.2f}",
+	    lockstep ? "lockstep" : "single", recorder.Enabled() ? 1 : 0, recorder.Enabled() ? recorder.Fps() : 0, targetHz, s_window.firstTick, tick, sorted.size(), wallMs,
+	    wallMs > 0 ? 1000.0 * static_cast<double>(sorted.size()) / wallMs : 0.0, at(0.5), at(0.95), sorted.back());
+	if (lockstep) {
+		// The round's loop in the window: its iterations, the ticks they ran, the frames shed, the iterations in the shedding budget,
+		// where the time went, and each preview stage's mean per preview.
+		const Pace current = pace();
+		const Pace& first = s_window.pace;
+		line += std::format(" iterations={} ticks={} shed={} shedding_iterations={} update_ms={:.1f} sim_ms={:.1f} draw_ms={:.1f} preview_ms={:.1f} net_wait_ms={:.1f} previews={} preview_phase_ms=",
+		    current.iterations - first.iterations, current.ticks - first.ticks, current.shed - first.shed, current.shedding - first.shedding,
+		    (current.updateUs - first.updateUs) / 1000.0, (current.simUs - first.simUs) / 1000.0, (current.drawUs - first.drawUs) / 1000.0,
+		    (current.previewUs - first.previewUs) / 1000.0, (current.waitUs - first.waitUs) / 1000.0, current.previews - first.previews);
+		const double previews = static_cast<double>(std::max<uint64_t>(1, current.previews - first.previews));
+		for (size_t phase = 0; phase < current.phaseMs.size(); ++phase) {
+			line += std::format("{}{}:{:.2f}", phase ? "," : "", LocalPrediction::GetPhaseNames()[phase], (current.phaseMs[phase] - first.phaseMs[phase]) / previews);
+		}
+	}
+	System::PrintDiagnosticLine(line);
+	s_window = {true, lockstep, tick, now, now, {}, pace()};
+}
 
 // Opt-in accounting only: aggregate complete running ticks, without changing their work or pacing.
 static void NoteTickCostDetails(uint64_t round, uint64_t tick, const std::array<long long, 7>& phases) {
@@ -1633,6 +1726,8 @@ static void PostMemoryCensus(uint64_t simTick, const std::string& when = std::st
 	const std::string console = timed("console", [] { return g_ConsoleMan.LogCensus(); });
 	const std::string pace = timed("pace", [] { return PaceCensusSinceLast(); });
 	const std::string world = timed("world", [] { return g_NetMatchService.MemoryCensus(); });
+	const std::string storage = timed("storage", [] { return CheckpointNativeStorage::InventoryCensus(); });
+	const std::string textures = timed("gl", [] { return g_GLResourceMan.Census(); });
 	const std::string checkpoint = timed("checkpoint", [] {
 		return CheckpointPagePool::CommitCensus() + ' ' + CheckpointNativeStorage::PoolCensus() + ' ' + PixelAllocationCensus() +
 		    std::format(" lua_committed_mb={} lua_copy_mb={} lua_idle_copy_mb={}", CheckpointLua::HeapOwner::CommittedHeapBytes() >> 20,
@@ -1645,7 +1740,7 @@ static void PostMemoryCensus(uint64_t simTick, const std::string& when = std::st
 	rest << " in_flight=autosave:" << g_ActivityMan.UnwrittenAutosaves() << ",fullstate:" << g_ActivityMan.UnfinishedFullStateCaptures() << when;
 	rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
 	     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
-	     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << pace
+	     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << " storage: " << storage << ' ' << textures << pace
 	     << " checkpoint: " << checkpoint;
 	CensusWorker::Get().Post([simTick, rest = std::move(rest).str(), costs = std::move(costs)]() mutable {
 		// The worker's whole job is the census's cost too, charged to the frame it ends in.
@@ -2151,6 +2246,8 @@ bool HandleMainArgs(int argCount, char** argValue) {
 	// Discard the first argument because it's always the executable path/name
 	argCount--;
 	argValue++;
+	// A scene hands its peers diagnostic levers through the environment, not their launch arguments.
+	if (std::getenv("CC_TEST_MEMORY_CENSUS_HISTOGRAM")) s_memoryCensusHistogram = true;
 	if (argCount == 0) {
 		return true;
 	}
@@ -5539,6 +5636,7 @@ static void DrawFrameWithPreviews() {
 	}
 	g_FrameMan.FeelAfterPresent();
 	++s_paceFramesDrawn;
+	NoteFramePresented();
 	s_paceFrameDrawUs += g_TimerMan.GetAbsoluteTime() - drawBeganUs;
 	if (FrameRecorder::Instance().Enabled()) {
 		std::string screen;
@@ -7437,6 +7535,7 @@ static bool IsCompleteControllerStop(const std::string& error) {
 static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 	const std::string error = ScenarioRunner::GetControllerReplayError();
 	if (error.find("Desync") != std::string::npos) {
+		g_MovableMan.CapturePhysicsHistory(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), 0);
 		SaveActorHistory();
 		if (TerrainDumpArmed()) {
 			DumpTerrainNow("desync");
@@ -8160,6 +8259,7 @@ void RunGameLoop() {
 			s_paceFramesDrawn = 0;
 			s_paceFramesShed = 0;
 			s_paceFrameDrawUs = 0;
+			s_paceSheddingIterations = 0;
 			ScenarioRunner::ResetLockstepWaitUs();
 			g_TimerMan.ResetPaceCounters();
 		}
@@ -8183,6 +8283,7 @@ void RunGameLoop() {
 		// at least 15 times a second. One whose frames fit spreads a catch-up burst over frames a tick apart.
 		const bool pacedRound = ScenarioRunner::HasLockstepCoordinator() && !freeRunLockstep && !ScenarioRunner::WorldCatchUpActive();
 		const bool shedsFrames = pacedRound && g_PerformanceMan.GetMSPFAverage() > g_TimerMan.GetDeltaTimeMS();
+		if (shedsFrames && paceActiveAtIterStart) ++s_paceSheddingIterations;
 		constexpr double c_FloorFrameMs = 1000.0 / 15.0;
 		constexpr double c_OwedKeptMs = 1000.0;
 		g_TimerMan.SetOwedTicksKept(pacedRound ? static_cast<int>(c_OwedKeptMs / g_TimerMan.GetDeltaTimeMS()) : 0);
@@ -8866,6 +8967,7 @@ void RunGameLoop() {
 					// A long update is this machine's own: the plane commits for the round meanwhile, and the update reads the coordinator only through guarded calls.
 					NetLockstepPlane::Window planeWindow("activity update");
 					if (s_testSimCostUs > 0 && !s_testSimCostOutside) spendTestSimCost();
+					g_MovableMan.TraceFog("activity");
 					g_ActivityMan.Update();
 
 					if (g_SceneMan.GetScene()) {

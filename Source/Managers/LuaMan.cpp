@@ -25,6 +25,7 @@
 #include "CheckpointCast.h"
 #include "ScenarioRunner.h"
 #include "SoundSimulation.h"
+#include "HDFirearm.h"
 #include "AtomGroup.h"
 #include "Atom.h"
 #include "PieMenu.h"
@@ -424,6 +425,85 @@ DeterministicMORNGScope::~DeterministicMORNGScope() {
 
 // A generator seeded at its first draw must be the generator Seed makes, to every reader: its draws, its checkpoint text,
 // its hash text, its engine state, a copy of it and a restore of its checkpoint, before and after it draws.
+// A world object a script keeps a handle and a field alias of stays out of its class pool once deleted, so the next object of
+// its class takes other memory and the kept handles read the same bytes on every machine; the last handle collected lets it go.
+static bool RunDeadHandleMemorySelfTest(LuaStateWrapper& script) {
+	lua_State* state = script.GetLuaState();
+	std::unique_ptr<Activity> activity = std::make_unique<Activity>();
+	g_ActivityMan.SwapCheckpointActivity(activity);
+	const auto pointerOf = [state](const char* global) -> void* {
+		lua_getglobal(state, global);
+		const auto* rep = luabind::detail::is_class_object(state, -1);
+		void* pointer = rep ? rep->ptr() : nullptr;
+		lua_pop(state, 1);
+		return pointer;
+	};
+	struct Round {
+		bool ran = false;
+		void* first = nullptr;
+		void* second = nullptr;
+		double aliasX = 0;
+		int retainedAfterDelete = 0;
+		int retainedAfterCollect = 0;
+	};
+	const auto round = [&](bool linked) {
+		Round result;
+		void (*borrowed)(luabind::detail::object_rep*) = luabind::detail::object_rep_borrowed;
+		void (*returned)(luabind::detail::object_rep*, luabind::detail::object_rep*) = luabind::detail::object_rep_returned;
+		if (!linked) {
+			luabind::detail::object_rep_borrowed = nullptr;
+			luabind::detail::object_rep_returned = nullptr;
+		}
+		const int retainedBefore = MovableObject::GetRetainedPoolMemoryCount();
+		result.ran = script.RunScriptString("_DeadHandleFirst = CreateMOPixel('Spark Yellow 1', 'Base.rte');"
+		                                    "_DeadHandleFirst.Pos = Vector(11, 22);"
+		                                    "MovableMan:AddParticle(_DeadHandleFirst);"
+		                                    "_DeadHandleAlias = _DeadHandleFirst.Pos;") == 0;
+		result.first = pointerOf("_DeadHandleFirst");
+		g_MovableMan.PurgeAllMOs();
+		result.retainedAfterDelete = MovableObject::GetRetainedPoolMemoryCount() - retainedBefore;
+#if defined(__SANITIZE_ADDRESS__) || defined(__ADDRESS_SANITIZER__)
+		// The sanitizer build frees every object's memory at once, so without the link the alias would read freed memory.
+		const bool readAlias = linked;
+#else
+		const bool readAlias = true;
+#endif
+		result.ran = script.RunScriptString(std::string("_DeadHandleSecond = CreateMOPixel('Spark Yellow 1', 'Base.rte');"
+		                                                "_DeadHandleSecond.Pos = Vector(33, 44);") +
+		                                    (readAlias ? "_DeadHandleRead = _DeadHandleAlias.X;" : "_DeadHandleRead = 0;")) == 0 && result.ran;
+		result.second = pointerOf("_DeadHandleSecond");
+		lua_getglobal(state, "_DeadHandleRead");
+		result.aliasX = lua_tonumber(state, -1);
+		lua_pop(state, 1);
+		script.RunScriptString("_DeadHandleFirst, _DeadHandleAlias, _DeadHandleSecond, _DeadHandleRead = nil, nil, nil, nil; collectgarbage('collect')");
+		LuabindObjectWrapper::ApplyQueuedEntityDeletions();
+		LuabindObjectWrapper::ApplyQueuedDeletions();
+		result.retainedAfterCollect = MovableObject::GetRetainedPoolMemoryCount() - retainedBefore;
+		luabind::detail::object_rep_borrowed = borrowed;
+		luabind::detail::object_rep_returned = returned;
+		return result;
+	};
+	const Round unlinked = round(false);
+	const Round linked = round(true);
+	g_ActivityMan.SwapCheckpointActivity(activity);
+	activity.reset();
+#if defined(__SANITIZE_ADDRESS__) || defined(__ADDRESS_SANITIZER__)
+	// The sanitizer build allocates every object apart, so only the kept handles and the count say what the pool would do.
+	const bool unlinkedReused = unlinked.ran;
+#else
+	const bool unlinkedReused = unlinked.ran && unlinked.first && unlinked.first == unlinked.second && unlinked.aliasX == 33.0;
+#endif
+	const bool kept = linked.ran && linked.first && linked.second && linked.first != linked.second && linked.aliasX != 33.0 && linked.retainedAfterDelete == 1;
+	const bool released = linked.ran && linked.retainedAfterCollect == 0;
+	std::cout << "[script-graph-selftest] " << (unlinkedReused ? "PASS" : "FAIL") << " without_its_handle_link_the_next_object_takes_a_kept_objects_memory reused="
+	          << (unlinked.first && unlinked.first == unlinked.second) << " alias_x=" << unlinked.aliasX << std::endl;
+	std::cout << "[script-graph-selftest] " << (kept ? "PASS" : "FAIL") << " a_deleted_objects_memory_waits_for_its_last_lua_handle reused="
+	          << (linked.first && linked.first == linked.second) << " alias_x=" << linked.aliasX << " retained=" << linked.retainedAfterDelete << std::endl;
+	std::cout << "[script-graph-selftest] " << (released ? "PASS" : "FAIL") << " the_memory_returns_once_the_last_handle_is_collected retained="
+	          << linked.retainedAfterCollect << std::endl;
+	return unlinkedReused && kept && released;
+}
+
 static bool RunLazySeedSelfTest() {
 	const auto draws = [](RandomGenerator& rng, int count) {
 		std::vector<uint64_t> values;
@@ -563,6 +643,56 @@ namespace {
 		} else {
 			lua_pushnil(L);
 		}
+	}
+
+	nlohmann::json TraceScriptFields(lua_State* L, long uniqueID) {
+		static const std::vector<std::string> fields = [] {
+			const char* names = std::getenv("CC_TEST_LUA_FIELDS");
+			std::istringstream input(names ? names : "");
+			std::vector<std::string> result;
+			for (std::string name; std::getline(input, name, ',');) if (!name.empty()) result.push_back(name);
+			return result;
+		}();
+		nlohmann::json result = nlohmann::json::object();
+		if (fields.empty()) return result;
+		const int top = lua_gettop(L);
+		PushScriptObjectInstanceTable(L, uniqueID);
+		if (lua_istable(L, -1)) {
+			for (const std::string& name: fields) {
+				lua_pushlstring(L, name.data(), name.size());
+				lua_rawget(L, -2);
+				if (lua_type(L, -1) == LUA_TNUMBER) {
+					const double value = lua_tonumber(L, -1);
+					result[name] = {{"bits", std::bit_cast<uint64_t>(value)}, {"number", value}};
+				} else if (lua_isboolean(L, -1)) {
+					result[name] = lua_toboolean(L, -1) != 0;
+				} else if (lua_isuserdata(L, -1)) {
+					const luabind::object value(luabind::from_stack(L, -1));
+					if (boost::optional<Timer*> timer = luabind::object_cast_nothrow<Timer*>(value); timer && *timer) {
+						result[name] = {{"elapsed_bits", std::bit_cast<uint64_t>((*timer)->GetElapsedSimTimeMS())},
+						    {"start_ticks", (*timer)->GetStartSimTimeMS()}};
+					} else if (boost::optional<const Vector*> vector = luabind::object_cast_nothrow<const Vector*>(value); vector && *vector) {
+						result[name] = {{"x_bits", std::bit_cast<uint32_t>((*vector)->m_X)}, {"y_bits", std::bit_cast<uint32_t>((*vector)->m_Y)}};
+					} else {
+						result[name] = "userdata";
+					}
+				} else {
+					result[name] = nullptr;
+				}
+				lua_pop(L, 1);
+			}
+		}
+		lua_settop(L, top);
+		return result;
+	}
+
+	nlohmann::json TraceWeaponState(const MovableObject* object) {
+		if (const auto* gun = dynamic_cast<const HDFirearm*>(object)) {
+			return {{"activated", gun->IsActivated()}, {"reloading", gun->IsReloading()}, {"done_reloading", gun->DoneReloading()},
+			    {"rounds", gun->GetRoundInMagCount()}, {"rate_of_fire", gun->GetRateOfFire()},
+			    {"fired_frame", gun->FiredFrame()}, {"fired_once", gun->FiredOnce()}};
+		}
+		return nullptr;
 	}
 
 	struct ScriptGraphPrototypeValue {
@@ -4216,6 +4346,41 @@ static bool ClassDerivesFrom(const luabind::detail::class_rep* rep, const char* 
 	return false;
 }
 
+// Whether a luabind class is a MovableObject, noted on the class the first time it is asked.
+static bool IsMovableObjectClass(const luabind::detail::class_rep* rep) {
+	if (!rep) {
+		return false;
+	}
+	int kind = rep->engine_kind();
+	if (kind < 0) {
+		kind = ClassDerivesFrom(rep, "MovableObject") ? 1 : 0;
+		rep->set_engine_kind(kind);
+	}
+	return kind == 1;
+}
+
+// A handle naming a MovableObject keeps that object's memory while the handle lives.
+static void NoteBorrowedHandle(luabind::detail::object_rep* handle) {
+	// A saver's handles name its own frozen copies, which never return to a pool.
+	if (luabind::detail::saved_objects.copy) return;
+	if (!handle->has_life_owner() && handle->ptr() && IsMovableObjectClass(handle->crep())) {
+		auto* object = static_cast<MovableObject*>(static_cast<Entity*>(handle->ptr()));
+		handle->set_life_owner(object->NoteLuaHandle(), &MovableObject::ReleaseLuaHandle);
+	}
+}
+
+// A field handle a bound call on a MovableObject hands back keeps that object's memory while the handle lives.
+static void NoteReturnedHandle(luabind::detail::object_rep* result, luabind::detail::object_rep* self) {
+	if (luabind::detail::saved_objects.copy) return;
+	if (result->has_life_owner() || !result->ptr() || (result->flags() & luabind::detail::object_rep::owner) || IsMovableObjectClass(result->crep())) {
+		return;
+	}
+	if (self->ptr() && IsMovableObjectClass(self->crep())) {
+		auto* object = static_cast<MovableObject*>(static_cast<Entity*>(self->ptr()));
+		result->set_life_owner(object->NoteLuaHandle(), &MovableObject::ReleaseLuaHandle);
+	}
+}
+
 // The engine Vectors a script can alias through a property, by address, for the capture in progress.
 struct VectorField {
 	long uid;
@@ -5811,12 +5976,14 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 		if (!activity) return 0;
 		for (int index = 0; index < Players::MaxPlayerCount; ++index) {
 			if (handle == activity->GetPlayerController(index)) return found(activity, "player-controller", index);
+			// A seat stand-in no script could hold is never made here: a saver runs this off the simulation thread.
 			if (auto* game = dynamic_cast<GameActivity*>(activity)) {
-				if (handle == game->GetBuyGUI(index)) return found(game, "buy-menu", index);
-				if (handle == game->GetEditorGUI(index)) return found(game, "editor-menu", index);
-				if (const int count = editorMember(game->GetEditorGUI(index))) return count;
-				if (handle == game->GetBanner(GameActivity::YELLOW, index)) return found(game, "yellow-banner", index);
-				if (handle == game->GetBanner(GameActivity::RED, index)) return found(game, "red-banner", index);
+				if (const BuyMenuGUI* menu = game->GetExistingBuyGUI(index); menu && handle == menu) return found(game, "buy-menu", index);
+				SceneEditorGUI* const editor = game->GetExistingEditorGUI(index);
+				if (editor && handle == editor) return found(game, "editor-menu", index);
+				if (const int count = editorMember(editor)) return count;
+				if (const GUIBanner* banner = game->GetExistingBanner(GameActivity::YELLOW, index); banner && handle == banner) return found(game, "yellow-banner", index);
+				if (const GUIBanner* banner = game->GetExistingBanner(GameActivity::RED, index); banner && handle == banner) return found(game, "red-banner", index);
 			}
 		}
 		return 0;
@@ -8808,6 +8975,59 @@ bool LuaStateWrapper::RunNumericPolicySelfTest() {
 		if (!ok) { std::fprintf(stderr, "%s\n", lua_tostring(state, -1)); lua_pop(state, 1); }
 		passed = passed && ok;
 	}
+	// S10's smoke loop has limit 7.5 / 20 at the first different tick. Once its
+	// loop is compiled, an empty floating-point range must still skip the body.
+	// Warm the loop from C only once so a compiled function entry cannot hide a
+	// faulty JFORI interpreter path.
+	for (const int mode : {LUAJIT_MODE_OFF, LUAJIT_MODE_ON}) {
+		for (const bool descending : {false, true}) {
+			luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_FLUSH);
+			luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | mode);
+			const char* loop = descending
+			    ? "return function(limit) local n=0; for i=1,limit,-1 do n=n+1 end; return n end"
+			    : "return function(limit) local n=0; for i=1,limit do n=n+1 end; return n end";
+			if (luaL_dostring(state, loop) != 0) {
+				std::fprintf(stderr, "%s\n", lua_tostring(state, -1));
+				lua_pop(state, 1);
+				passed = false;
+				continue;
+			}
+			const int function = lua_gettop(state);
+			const auto count = [&](double limit) {
+				lua_pushvalue(state, function);
+				lua_pushnumber(state, limit);
+				if (lua_pcall(state, 1, 1, 0) != 0) {
+					std::fprintf(stderr, "%s\n", lua_tostring(state, -1));
+					lua_pop(state, 1);
+					return -1;
+				}
+				const int result = static_cast<int>(lua_tointeger(state, -1));
+				lua_pop(state, 1);
+				return result;
+			};
+			bool ok = count(descending ? -9999.5 : 10000.5) == (descending ? 10001 : 10000);
+			if (mode == LUAJIT_MODE_ON) {
+				const GCproto* prototype = funcproto(funcV(state->top - 1));
+				bool compiledLoop = false;
+				for (BCPos pc = 0; pc < prototype->sizebc; ++pc) compiledLoop |= bc_op(proto_bc(prototype)[pc]) == BC_JFORI;
+				ok = ok && compiledLoop;
+			}
+			const double ascendingLimits[] = {0.375, -0.375, 1.0, 1.375, 3.375};
+			const double descendingLimits[] = {1.625, 2.5, 1.0, 0.625, -1.625};
+			const int expectedCounts[] = {0, 0, 1, 1, 3};
+			for (size_t i = 0; i < std::size(expectedCounts); ++i) {
+				const double limit = descending ? descendingLimits[i] : ascendingLimits[i];
+				const int actual = count(limit);
+				const bool equal = actual == expectedCounts[i];
+				std::printf("[lua-numeric-policy-selftest] %s %s_%s_for limit=%.3f count=%d expected=%d\n",
+				    equal ? "PASS" : "FAIL", mode == LUAJIT_MODE_ON ? "jit" : "interpreter",
+				    descending ? "descending" : "ascending", limit, actual, expectedCounts[i]);
+				ok = ok && equal;
+			}
+			passed = passed && ok;
+			lua_pop(state, 1);
+		}
+	}
 	lua_close(state);
 	std::printf("[lua-numeric-policy-selftest] %s\n", passed ? "PASS" : "FAIL");
 	return passed;
@@ -9150,8 +9370,13 @@ bool LuaMan::SharedTraceEnabled() {
 	return trace;
 }
 
+bool LuaMan::MasterDrawTraceEnabled() {
+	static const bool trace = std::getenv("CC_TEST_MASTER_DRAW_TRACE") != nullptr;
+	return trace;
+}
+
 void LuaMan::TraceShared(lua_State* state, const std::string& event) {
-	if (!SharedTraceEnabled()) {
+	if (!SharedTraceEnabled() && !MasterDrawTraceEnabled()) {
 		return;
 	}
 	std::ostringstream line;
@@ -9171,9 +9396,10 @@ void LuaMan::TraceShared(lua_State* state, const std::string& event) {
 }
 
 namespace {
-	// CC_TEST_SHARED_LUA_TRACE names every draw from the master state's own generator with its Lua caller, so two peers' draws compare line by line.
+	// CC_TEST_SHARED_LUA_TRACE (or CC_TEST_MASTER_DRAW_TRACE alone) names every draw from the master state's own generator with its Lua caller,
+	// so two peers' draws compare line by line.
 	void TraceMasterDraw(LuaStateWrapper& wrapper, lua_State* main, const RandomGenerator& rng, const char* kind) {
-		if (!LuaMan::SharedTraceEnabled() || s_luaRNGOverride || &wrapper != &g_LuaMan.GetMasterScriptState() || !main) {
+		if ((!LuaMan::SharedTraceEnabled() && !LuaMan::MasterDrawTraceEnabled()) || s_luaRNGOverride || &wrapper != &g_LuaMan.GetMasterScriptState() || !main) {
 			return;
 		}
 		LuaMan::TraceShared(main, std::string("master-draw draw=") + std::to_string(rng.GetDrawCount()) + " kind=" + kind +
@@ -9330,6 +9556,8 @@ void LuaMan::Initialize() {
 	// Every Lua-owned engine object's destructor belongs to this thread; the pool threads only collect.
 	LuabindObjectWrapper::SetSimThread();
 	LuabindObjectWrapper::SetPreviewDeletionHook(&LuaMan::ForgetPreviewBornWrapper);
+	luabind::detail::object_rep_borrowed = &NoteBorrowedHandle;
+	luabind::detail::object_rep_returned = &NoteReturnedHandle;
 	m_MasterScriptState.Initialize();
 
 	// Every machine runs the same number of states, whatever its core count: the assignment is a pure
@@ -9994,6 +10222,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	const bool luaStateIdentity = g_MovableMan.RunLuaStateIdentitySelfTest();
 	const bool threadedSyncedOrder = g_MovableMan.RunThreadedSyncedUpdateOrderSelfTest();
 	const bool lazySeed = RunLazySeedSelfTest();
+	const bool deadHandleMemory = RunDeadHandleMemorySelfTest(m_MasterScriptState);
 	const bool poolScopeTick = RunPoolScopeTickSelfTest();
 	const bool getterCache = RunGetterCacheSelfTest();
 	const bool selfFetch = RunScriptSelfFetchSelfTest();
@@ -10102,7 +10331,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 			for (size_t i = 0; i < gained.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start gained: " << gained[i] << std::endl;
 		}
 	}
-	return roundCollision && collisionRestored && graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && poolScopeTick && getterCache && selfFetch && hookStack && storedCallback && workerStateClose && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
+	return roundCollision && collisionRestored && graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && deadHandleMemory && poolScopeTick && getterCache && selfFetch && hookStack && storedCallback && workerStateClose && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
@@ -15026,6 +15255,11 @@ LuaStateWrapper* LuaMan::GetThreadCurrentLuaState() const {
 	return s_currentLuaState;
 }
 
+bool LuaMan::IsRunningTracedScript() const {
+	static const std::string filter = [] { const char* value = std::getenv("CC_TEST_TARGET_TRACE"); return value ? value : ""; }();
+	return !filter.empty() && s_currentLuaState && s_currentLuaState->GetCurrentlyRunningScriptFilePath().find(filter) != std::string_view::npos;
+}
+
 size_t LuaMan::ScriptStateIndexForObject(long uniqueID) const {
 	// Lua debugging runs with no threaded states at all; every object script is the master's then.
 	if (m_ScriptStates.empty()) {
@@ -15608,6 +15842,22 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	}
 	// Kept by value for the same reason: a preview hook's failure names its script after the call.
 	const std::string previewScript = LuaMan::IsRunningPreviewHook() ? path : std::string();
+	static const std::string targetTraceFilter = [] { const char* value = std::getenv("CC_TEST_TARGET_TRACE"); return value ? value : ""; }();
+	nlohmann::json targetTrace;
+	if (!targetTraceFilter.empty() && path.find(targetTraceFilter) != std::string::npos && selfGlobalTableName == "_ScriptedObjects") {
+		const long uid = std::strtol(selfGlobalTableKey.c_str(), nullptr, 10);
+		if (const MovableObject* self = g_MovableMan.FindObjectByUniqueID(uid)) {
+			lua_Debug info{};
+			lua_pushvalue(m_State, stackStart + 2);
+			lua_getinfo(m_State, ">S", &info);
+			targetTrace = {{"tick", g_TimerMan.GetSimUpdateCount()}, {"uid", uid}, {"preset", self->GetPresetName()},
+			    {"script", path}, {"line", info.linedefined},
+			    {"domain", static_cast<int>(SoundSimulationScope::Domain())}, {"preview", LuaMan::IsRunningPreviewHook()},
+			    {"before_fields", TraceScriptFields(m_State, uid)},
+			    {"before_weapon", TraceWeaponState(self)},
+			    {"before_vel", {std::bit_cast<uint32_t>(self->GetVel().m_X), std::bit_cast<uint32_t>(self->GetVel().m_Y)}}};
+		}
+	}
 	struct HookSelf {
 		std::string previous;
 		explicit HookSelf(const std::string& key) : previous(std::exchange(s_PreviewHookSelfKey, key)) {}
@@ -15644,6 +15894,43 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 
 	// A hook's return values go with the error handler.
 	lua_settop(m_State, stackStart);
+	if (!targetTrace.is_null()) {
+		const long uid = targetTrace["uid"].get<long>();
+		targetTrace["after_fields"] = TraceScriptFields(m_State, uid);
+		if (const MovableObject* self = g_MovableMan.FindObjectByUniqueID(uid)) {
+			targetTrace["pos"] = {std::bit_cast<uint32_t>(self->GetPos().m_X), std::bit_cast<uint32_t>(self->GetPos().m_Y)};
+			targetTrace["after_vel"] = {std::bit_cast<uint32_t>(self->GetVel().m_X), std::bit_cast<uint32_t>(self->GetVel().m_Y)};
+			targetTrace["after_weapon"] = TraceWeaponState(self);
+		}
+		PushScriptObjectInstanceTable(m_State, uid);
+		if (lua_istable(m_State, -1)) {
+			lua_getfield(m_State, -1, "target");
+			if (lua_isuserdata(m_State, -1)) {
+				try {
+					if (const auto* target = luabind::object_cast<MovableObject*>(luabind::object(luabind::from_stack(m_State, -1)))) {
+						// Lua may retain a target after its native object is removed. A
+						// diagnostic must check membership before calling its getters.
+						if (g_MovableMan.ValidMO(target)) {
+							targetTrace["target"] = {{"uid", target->GetUniqueID()}, {"moid", target->GetID()}, {"preset", target->GetPresetName()},
+							    {"pos", {std::bit_cast<uint32_t>(target->GetPos().m_X), std::bit_cast<uint32_t>(target->GetPos().m_Y)}},
+							    {"radius", std::bit_cast<uint32_t>(target->GetRadius())}, {"rot", std::bit_cast<uint32_t>(target->GetRotAngle())},
+							    {"hflipped", target->IsHFlipped()}, {"to_delete", target->IsSetToDelete()}};
+							if (const auto* attachable = dynamic_cast<const Attachable*>(target)) {
+								targetTrace["target"]["parent_offset"] = {std::bit_cast<uint32_t>(attachable->GetParentOffset().m_X), std::bit_cast<uint32_t>(attachable->GetParentOffset().m_Y)};
+								targetTrace["target"]["parent_uid"] = attachable->GetParent() ? attachable->GetParent()->GetUniqueID() : 0;
+							}
+						} else {
+							targetTrace["target_not_resident"] = true;
+						}
+					}
+				} catch (const luabind::cast_failed&) {
+					targetTrace["target_not_movable"] = true;
+				}
+			}
+		}
+		lua_settop(m_State, stackStart);
+		System::PrintDiagnosticLine("[target-trace] " + targetTrace.dump());
+	}
 
 	m_CurrentlyRunningScriptPath = "";
 	return status;
@@ -15893,6 +16180,8 @@ bool LuaMan::RestoreRoundStartScripts(const std::vector<uint8_t>& blob, std::str
 		return fail("the host runs " + std::to_string(graphs.size()) + " script states, this peer " + std::to_string(states));
 	}
 	g_MovableMan.PurgeAllMOs();
+	// The round's captures read every native its scripts hold from checkpoint storage, though its coordinator starts after this.
+	CheckpointNativeStorage::WorldAllocationScope roundValues(true);
 	// The graph carries each state's compiled scripts too, so a script the host already compiled never runs again here.
 	s_RoundStartScripts = true;
 	struct Scope { ~Scope() { s_RoundStartScripts = false; } } scope;
@@ -16573,6 +16862,7 @@ void LuaMan::PrepareCheckpointValues() {
 	if (CheckpointNativeStorage::Enabled()) { g_SimRNG.PrepareCheckpointValues(); g_RenderRNG.PrepareCheckpointValues(); }
 	if (CheckpointNativeStorage::Enabled()) MovableObject::PrepareCheckpointCounters();
 	if (CheckpointNativeStorage::Enabled()) g_SceneMan.PrepareCheckpointValues();
+	if (CheckpointNativeStorage::Enabled()) { g_UInputMan.PrepareCheckpointValues(); g_FrameMan.PrepareCheckpointValues(); g_PostProcessMan.PrepareCheckpointValues(); }
 	if (CheckpointNativeStorage::Enabled()) g_ActivityMan.PrepareCheckpointValues();
 	if (CheckpointNativeStorage::Enabled()) g_AudioMan.PrepareCheckpointRegistryValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointActorValues();

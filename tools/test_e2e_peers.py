@@ -33,6 +33,15 @@ class SceneBoxesTest(unittest.TestCase):
     def test_separate_boxes(self):
         self.assertTrue(peers.spread_check(self.capture)["passed"])
 
+    def test_assigned_port_keeps_the_committed_scene(self):
+        document = {"port_base": 49430}
+        self.assertEqual(peers.scene_port(document), 49430)
+        self.assertEqual(peers.scene_port(document, 49471), 49471)
+        self.assertEqual(document, {"port_base": 49430})
+        for invalid in (peers.video.PORT_LO - 1, peers.video.PORT_HI + 1):
+            with self.assertRaises(SystemExit):
+                peers.scene_port(document, invalid)
+
     def test_two_labels_on_one_host(self):
         joiner = self.capture["runs"][0]["peers"][1]
         joiner["box_hostname"] = joiner["record"]["engine_hostname"] = "host-computer"
@@ -300,9 +309,29 @@ class JoinerBoxTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 peers.engine_levers([value])
 
+    def test_a_boxes_file_entry_places_only_its_own_engines(self):
+        host = dict(name="Host box", os="win32", hostname="host-computer", runner_env={"CC_RUNNER_AFFINITY_MASK": "0x0000ffff"})
+        joiner = dict(name="Joiner box", os="linux", hostname="joiner-computer")
+        path = Path(self.temporary.name) / "boxes.json"
+        path.write_text(json.dumps({"boxes": [host, joiner]}))
+        boxes = peers.selected_boxes("host=Host box,joiner=Joiner box", path)
+        self.assertEqual(peers.box_runner_env(boxes["host"]), {"CC_RUNNER_AFFINITY_MASK": "0x0000ffff"})
+        self.assertEqual(peers.box_runner_env(boxes["joiner"]), {})
+        for settings in ({"CC_TEST_TICK_COST_DETAILS": "1"}, {"CC_RUNNER_AFFINITY_MASK": 65535}, ["CC_RUNNER_AFFINITY_MASK"]):
+            path.write_text(json.dumps({"boxes": [dict(host, runner_env=settings), joiner]}))
+            with self.assertRaises(ValueError):
+                peers.selected_boxes("host=Host box,joiner=Joiner box", path)
+
     def test_headed_player_environment(self):
         environment = peers.video.headed_environment({"CCCP_HEADLESS": "1", "CC_TEST_READBACK_TIMING": "1"})
         self.assertEqual(environment, {"CC_TEST_READBACK_TIMING": "1", "CC_TEST_VISIBLE_WINDOW": "1"})
+
+    def test_windows_host_visibility_follows_its_assignment(self):
+        self.assertFalse(peers.headed_box({"os": "win32"}))
+        self.assertTrue(peers.headed_box({"os": "win32", "headed": True}))
+        with mock.patch.object(peers.video.sys, "platform", "win32"):
+            environment = peers.video.headed_environment({"CCCP_HEADLESS": "1"})
+        self.assertEqual(environment, {"CC_TEST_VISIBLE_WINDOW": "1"})
         self.assertEqual(peers.video.HEADED_SETTINGS, {"EnableVSync": 1})
 
     def test_headed_players_keep_the_games_vsync_instead_of_the_headless_cap(self):

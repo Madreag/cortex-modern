@@ -538,6 +538,7 @@ void PathFinder::ClearHorizonState() {
 	FlushDeferredPathRequests();
 	{
 		std::lock_guard lock(m_HorizonMutex);
+		HoldDeferredHorizonFence();
 		for (const auto& job: m_HorizonJobs) {
 			const auto started = std::chrono::steady_clock::now();
 			while (!job->ready.load()) {
@@ -559,6 +560,10 @@ void PathFinder::ClearHorizonState() {
 	}
 	m_CommittedHorizonReaders.store(0);
 	m_HorizonGeneration.fetch_add(1);
+	{
+		std::lock_guard lock(m_HorizonMutex);
+		m_HorizonStamp = NextHorizonStamp();
+	}
 	m_LastHorizonWaitUs = 0;
 	m_LastHorizonReaderWaitUs = 0;
 	m_LastHorizonExpired = 0;
@@ -569,8 +574,35 @@ void PathFinder::ClearHorizonState() {
 	m_LastPathRequestWaitUs = 0;
 }
 
-void PathFinder::CaptureHorizonFence(HorizonFenceState& out) const {
+uint64_t PathFinder::NextHorizonStamp() {
+	static std::atomic<uint64_t> s_Stamp{0};
+	return s_Stamp.fetch_add(1) + 1;
+}
+
+void PathFinder::HoldDeferredHorizonFence() const {
+	if (!m_DeferredHorizonFence) return;
+	CopyHorizonInto(*m_DeferredHorizonFence);
+	m_DeferredHorizonFence = nullptr;
+}
+
+void PathFinder::CaptureHorizonFence(HorizonFenceState& out, bool deferred) const {
 	std::lock_guard lock(m_HorizonMutex);
+	// A fence still waiting for its copy takes it before another opens.
+	if (m_DeferredHorizonFence != &out) HoldDeferredHorizonFence();
+	m_DeferredHorizonFence = nullptr;
+	if (out.stamp == m_HorizonStamp) {
+		out.deferred = false;
+		return;
+	}
+	if (deferred) {
+		out.deferred = true;
+		m_DeferredHorizonFence = &out;
+		return;
+	}
+	CopyHorizonInto(out);
+}
+
+void PathFinder::CopyHorizonInto(HorizonFenceState& out) const {
 	out.overlay.clear();
 	out.jobs.clear();
 	for (const auto& [nodeId, node]: m_HorizonNodes) {
@@ -583,10 +615,19 @@ void PathFinder::CaptureHorizonFence(HorizonFenceState& out) const {
 		out.jobs.emplace_back(job);
 	}
 	out.generation = m_HorizonGeneration.load();
+	out.stamp = m_HorizonStamp;
+	out.deferred = false;
 }
 
 void PathFinder::RestoreHorizonFence(const HorizonFenceState& in) {
 	std::lock_guard lock(m_HorizonMutex);
+	// A deferred fence that never took its copy saw no write: the live state is still the one it captured.
+	if (m_DeferredHorizonFence == &in) {
+		m_DeferredHorizonFence = nullptr;
+		return;
+	}
+	if (in.stamp == m_HorizonStamp) return;
+	HoldDeferredHorizonFence();
 	m_HorizonNodes.clear();
 	m_HorizonJobs.clear();
 	for (const auto& [nodeId, cell]: in.overlay) {
@@ -601,6 +642,7 @@ void PathFinder::RestoreHorizonFence(const HorizonFenceState& in) {
 		}
 	}
 	m_HorizonGeneration.store(in.generation);
+	m_HorizonStamp = in.stamp ? in.stamp : NextHorizonStamp();
 }
 
 void PathFinder::TestComputeHorizon(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonPatchRef>& patches, std::vector<std::array<const Material*, 8>>& materials) const {
@@ -1711,9 +1753,11 @@ void PathFinder::PinHorizonFromLive(const Box& box) {
 		if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size() || m_HorizonNodes.count(nodeId) != 0) {
 			continue;
 		}
+		HoldDeferredHorizonFence();
 		HorizonNode& overlay = m_HorizonNodes[nodeId];
 		overlay.committedMaterials = m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials;
 		overlay.generation = m_HorizonGeneration.load();
+		m_HorizonStamp = NextHorizonStamp();
 	}
 }
 
@@ -1815,7 +1859,9 @@ void PathFinder::QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, 
 	job->ready.store(false);
 	{
 		std::lock_guard lock(m_HorizonMutex);
+		HoldDeferredHorizonFence();
 		m_HorizonJobs.push_back(job);
+		m_HorizonStamp = NextHorizonStamp();
 	}
 	LaunchHorizonWorker(job);
 }
@@ -1833,12 +1879,14 @@ void PathFinder::QueueHorizonDelta(uint64_t originTick, uint16_t horizonTicks, i
 	job->ready.store(false);
 	{
 		std::lock_guard lock(m_HorizonMutex);
+		HoldDeferredHorizonFence();
 		if (m_HorizonNodes.count(nodeId) == 0) {
 			HorizonNode& overlay = m_HorizonNodes[nodeId];
 			overlay.committedMaterials = m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials;
 			overlay.generation = m_HorizonGeneration.load();
 		}
 		m_HorizonJobs.push_back(job);
+		m_HorizonStamp = NextHorizonStamp();
 	}
 	LaunchHorizonWorker(job);
 }
@@ -1855,12 +1903,14 @@ void PathFinder::TestQueueHorizonCompute(uint64_t originTick, uint16_t horizonTi
 	job->ready.store(false);
 	{
 		std::lock_guard lock(m_HorizonMutex);
+		HoldDeferredHorizonFence();
 		if (m_HorizonNodes.count(nodeId) == 0) {
 			HorizonNode& overlay = m_HorizonNodes[nodeId];
 			overlay.committedMaterials = m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials;
 			overlay.generation = m_HorizonGeneration.load();
 		}
 		m_HorizonJobs.push_back(job);
+		m_HorizonStamp = NextHorizonStamp();
 	}
 	LaunchHorizonWorker(job);
 }
@@ -1959,6 +2009,7 @@ void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
 		const auto started = std::chrono::steady_clock::now();
 		m_HorizonApplyCv.wait(lock, [this, applyGeneration] { return !HasOlderHorizonReaders(applyGeneration); });
 		m_LastHorizonReaderWaitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+		HoldDeferredHorizonFence();
 		for (size_t index = 0; index < due.size(); ++index) {
 			const std::shared_ptr<HorizonJob>& job = due[index];
 			ApplyHorizonJob(*job, selfComputed[index].empty() ? job->materials : selfComputed[index], applyGeneration);
@@ -1966,6 +2017,7 @@ void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
 		}
 		// The cells and the generation that makes them visible are published together.
 		m_HorizonGeneration.store(applyGeneration);
+		m_HorizonStamp = NextHorizonStamp();
 		m_HorizonApplyPending = false;
 	}
 	m_HorizonApplyCv.notify_all();
@@ -2089,8 +2141,10 @@ void PathFinder::TestInstallGrid(int width, int height, int nodeDimension, const
 	WaitForPathingRequests();
 	{
 		std::lock_guard lock(m_HorizonMutex);
+		HoldDeferredHorizonFence();
 		m_HorizonJobs.clear();
 		m_HorizonNodes.clear();
+		m_HorizonStamp = NextHorizonStamp();
 	}
 	m_SelfTestGrid = true;
 	m_NodeDimension = static_cast<unsigned int>(nodeDimension);
@@ -2948,6 +3002,62 @@ int PathFinder::RunHorizonGridSelfTest() {
 			return 1;
 		}
 		std::cout << Tag << " PASS speculation-fence" << std::endl;
+	}
+
+	// deferred-fence: a fence that outlives its restores copies the horizon only when it is written, and puts back what it held.
+	{
+		LoopbackTransport idleDefer;
+		NetLockstepConfig lockstepDefer;
+		lockstepDefer.localPeerId = 1;
+		lockstepDefer.remotePeerId = 2;
+		lockstepDefer.peerCount = 2;
+		lockstepDefer.matchConfig = NetMatchConfigUtil::MakeDefault(0x5048413453455353ULL);
+		lockstepDefer.matchConfig.pathHorizonTicks = 4;
+		NetLockstepCoordinator seatedDefer;
+		std::string deferError;
+		if (!seatedDefer.StartReplay(idleDefer, lockstepDefer, &deferError)) {
+			return fail("deferred-fence lockstep replay did not start");
+		}
+		LockstepBinding lockstepBinding;
+		ScenarioRunner::SetLockstepCoordinator(&seatedDefer);
+		ScenarioRunner::SetLockstepAppliedFrame(40);
+		Scene deferScene;
+		SLTerrain deferTerrain;
+		FixtureBinding binding;
+		if (deferTerrain.TestInstallMaterialBitmap(160, 80) < 0) {
+			return fail("deferred-fence fixture material bitmap was not installed");
+		}
+		binding.Bind(&deferScene, &deferTerrain);
+		deferScene.TestInstallHorizonPathFinders(8, 4, 20, &air);
+		PathFinder& deferFinder = deferScene.GetPathFinder(Activity::Teams::NoTeam);
+		deferFinder.QueueHorizonDelta(40, 4, deferFinder.TestNodeIdAt(3, 2), blocked);
+		deferFinder.CommitHorizonThrough(44);
+		TerrainLayerSnapshot deferSnap;
+		deferSnap.deferHorizon = true;
+		// No write inside the fence: the restore leaves the live horizon as it is.
+		const size_t overlayAtFirst = deferFinder.TestHorizonOverlayCount();
+		if (!deferSnap.Capture() || !deferSnap.Restore() || deferFinder.TestHorizonOverlayCount() != overlayAtFirst) {
+			std::cout << Tag << " FAIL deferred fence without a write overlay=" << deferFinder.TestHorizonOverlayCount() << " captured_overlay=" << overlayAtFirst << std::endl;
+			return 1;
+		}
+		// A write between two fences: the next fence holds the newer horizon, not the one the snapshot copied before.
+		deferFinder.QueueHorizonDelta(44, 1, deferFinder.TestNodeIdAt(1, 1), blocked);
+		deferFinder.CommitHorizonThrough(45);
+		const size_t overlayAtSecond = deferFinder.TestHorizonOverlayCount();
+		if (overlayAtSecond == overlayAtFirst || !deferSnap.Capture()) {
+			std::cout << Tag << " FAIL deferred fence fixture overlay=" << overlayAtSecond << " first_overlay=" << overlayAtFirst << std::endl;
+			return 1;
+		}
+		// A write inside the fence: the copy is taken before it, and the restore puts that copy back.
+		deferFinder.QueueHorizonDelta(45, 1, deferFinder.TestNodeIdAt(0, 0), blocked);
+		deferFinder.CommitHorizonThrough(46);
+		const size_t overlayWritten = deferFinder.TestHorizonOverlayCount();
+		if (overlayWritten == overlayAtSecond || !deferSnap.Restore() || deferFinder.TestHorizonOverlayCount() != overlayAtSecond) {
+			std::cout << Tag << " FAIL deferred fence restore overlay=" << deferFinder.TestHorizonOverlayCount() << " written_overlay=" << overlayWritten
+			          << " captured_overlay=" << overlayAtSecond << std::endl;
+			return 1;
+		}
+		std::cout << Tag << " PASS deferred-fence" << std::endl;
 	}
 
 	// note-patch-sharing: one capture covers every pathfinder unless a team's door material sits in the noted box.

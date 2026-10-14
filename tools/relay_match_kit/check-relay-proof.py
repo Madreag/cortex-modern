@@ -39,6 +39,9 @@ for peer,(role,p) in enumerate(roots.items(),1):
             '[menu-script] activate ButtonLeaveConfirm PASS']
   lines += [f'[net-peer-departure] all-remote-ended applied=12100 now_ms=202000 unix_ms={epoch+202000}']
   lines += ['[menu-script] round-ended -> OK (members=3 state=Completed)']
+ # Every 60 ticks of the round, the frames this peer drew: the presentation's 60 a second, evenly.
+ lines += [f'[frame-pace] mode=lockstep recorder=0 target_hz=60.00 first_tick={tick} tick={tick+60} frames=60 wall_ms=1000.0 fps=60.00 '
+           'interval_p50_ms=16.67 interval_p95_ms=17.20 interval_max_ms=18.90' for tick in range(41,12041,60)]
  (p/'engine/stdout.log').write_text('\n'.join(lines)+'\n')
  with (p/'engine/live.jsonl').open('w') as f:
   for tick in range(1,12101):
@@ -300,5 +303,16 @@ try:
  result=check('busy_box_pause_in_blackout_keeps_both_failures',False,'mac: box was not alone during the match')
  assert any('mac: unaffected peer blocked over 50 ms during blackout' in error for error in result['errors']),result['errors']
 finally:log.write_bytes(oldlog);live.write_bytes(oldlive)
+# A match that draws under the presentation's rate, or unevenly, is not single player's feel; the blackout's frames are its policy's.
+def frame_window(first,fps=b'60.00',frames=b'60',p95=b'17.20'):
+ return b'first_tick=%d tick=%d frames=%s wall_ms=1000.0 fps=%s interval_p50_ms=16.67 interval_p95_ms=%s'%(first,first+60,frames,fps,p95)
+mutate('slow_frames_in_play','mac','engine/stdout.log',lambda b:b.replace(frame_window(3041),frame_window(3041,b'30.00',b'30')),'mac: 1 of')
+mutate('uneven_frames_in_play','linux','engine/stdout.log',lambda b:b.replace(frame_window(5021),frame_window(5021,p95=b'35.00')),'interval p95 over 20.8 ms')
+mutate('missing_frame_windows','linux','engine/stdout.log',lambda b:b'\n'.join(l for l in b.splitlines() if not l.startswith(b'[frame-pace]')),'linux: no drawn-frame windows in the match')
+log=roots['ally']/'engine/stdout.log';oldlog=log.read_bytes()
+try:
+ log.write_bytes(oldlog.replace(frame_window(641),frame_window(641,b'30.00',b'30')))
+ check('slow_frames_inside_the_host_blackout_are_its_policy',True)
+finally:log.write_bytes(oldlog)
 (root/'contracts.json').write_text(json.dumps({'synthetic':True,'relay_proof':False,'checks':checks},indent=2)+'\n')
 print(json.dumps({'synthetic_contract_checks':len(checks),'passed':len(checks),'relay_proof':False}))

@@ -87,6 +87,8 @@ namespace RTE {
 		static void FeelBeginIteration();
 		static void FeelBeforePreview();
 		static bool FeelBeginDraw();
+		/// The headless presentation cap in hertz, 0 when none applies.
+		static double FeelCapHz();
 		static void FeelBeforePresent();
 		void FeelAfterPresent();
 		static void FeelEndIteration(uint64_t ticks, long long simUS, long long updateUS, long long drawUS);
@@ -385,6 +387,8 @@ namespace RTE {
 		bool RunBitmapSaveSelfTest();
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		/// Moves the blend tables made before checkpoint storage into it, so a match's captures can read them.
+		void PrepareCheckpointValues();
 		bool RunPaletteCheckpointSelfTest();
 		std::string SaveNetLocalState() const;
 		bool LoadNetLocalState(std::string_view text, bool validateOnly = false);

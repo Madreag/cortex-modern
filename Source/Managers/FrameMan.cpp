@@ -364,7 +364,14 @@ bool FrameMan::SetFeelRenderSettings(const std::string& path) {
 
 void FrameMan::ApplyHeadlessPresentationDefault() {
 	const char* headless = std::getenv("CCCP_HEADLESS");
-	if (!headless || std::string(headless) != "1") return;
+	if (!headless || std::string(headless) != "1") {
+		// A window whose swaps do not wait for its display keeps the same cap, so a frame is still a sixtieth of a second.
+		if (std::getenv("CC_TEST_VSYNC_OFF") && !s_Feel.settingsApplied) {
+			s_Feel.capHz = 60;
+			System::PrintDiagnosticLine("[render] window presentation cap=60hz without the swap wait");
+		}
+		return;
+	}
 	if (!s_Feel.settingsApplied) s_Feel.capHz = 60;
 	System::PrintDiagnosticLine(std::string("[render] headless presentation cap=") + (s_Feel.capHz > 0 ? "60hz" : "off"));
 }
@@ -448,6 +455,8 @@ void FrameMan::FeelBeforePreview() {
 	    {"scene_width", g_SceneMan.GetSceneWidth()}, {"scene_height", g_SceneMan.GetSceneHeight()},
 	    {"wraps_x", g_SceneMan.SceneWrapsX()}, {"wraps_y", g_SceneMan.SceneWrapsY()}});
 }
+
+double FrameMan::FeelCapHz() { return s_Feel.capHz; }
 
 bool FrameMan::FeelBeginDraw() {
 	if (s_Feel.capHz > 0) {
@@ -2070,6 +2079,18 @@ namespace {
 		for (const auto& [candidate, value]: CheckpointBlenders()) if (name == candidate) return value;
 		throw std::runtime_error("invalid color blender checkpoint");
 	}
+}
+
+void FrameMan::PrepareCheckpointValues() {
+	// Tables made before checkpoint storage are copied into it, and the drawing table follows its copy.
+	std::optional<std::pair<size_t, std::array<int, 4>>> selected;
+	for (size_t mode = 0; mode < m_ColorTables.size(); ++mode)
+		for (const auto& [key, entry]: m_ColorTables[mode]) if (color_map == &entry.first) selected.emplace(mode, key);
+	for (auto& tables: m_ColorTables) {
+		auto owned = tables;
+		tables.swap(owned);
+	}
+	if (selected) color_map = &m_ColorTables[selected->first].at(selected->second).first;
 }
 
 std::string FrameMan::SavePaletteCheckpoint() const {

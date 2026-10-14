@@ -1669,7 +1669,8 @@ namespace {
 				auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 				const bool selecting = game && game->GetViewState(probe.panPlayer) == Activity::ViewState::ActorSelect;
 				if (!selecting) probe.panSelecting = false;
-				if (selecting && !g_ActivityMan.ActivityPaused() && !g_UInputMan.SeatInputTypedInto(probe.panInput)) {
+				// Its motion carries the window's centre as the pointer, so it holds still while a hand points at a control.
+				if (selecting && !g_ActivityMan.ActivityPaused() && !g_UInputMan.SeatInputTypedInto(probe.panInput) && !MenuAutomation::HandBusy()) {
 					const Vector cursor = g_CameraMan.GetScrollTarget(game->ScreenOfPlayer(probe.panPlayer));
 					if (cursor.m_X < 400) probe.panDirection = 1;
 					else if (cursor.m_X > g_SceneMan.GetSceneWidth() - 400) probe.panDirection = -1;

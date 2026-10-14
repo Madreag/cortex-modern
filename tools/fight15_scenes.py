@@ -252,7 +252,8 @@ def place(peer, occupied=False, x=None, relative_to=None):
     if relative_to:
         # The cursor is the prefab's center (96, 96); its brain chamber is at (48, 48).
         steps[3].update(relative_to=relative_to, offset_x=-48, offset_y=-48)
-    if peer == "joiner": steps += [wait(setup_ready=1)]
+    # The host reads its own placement after a capture, so the joiner leaves it that window before placing.
+    if peer == "joiner": steps += [wait(setup_ready=1), wait(elapsed_ms=2500)]
     if peer == "joiner" and occupied:
         steps += [wait(setup_ready=1), dict(op="editor_move", input_player=0, x_fraction=0.35)]
         steps += capture("occupied-preview")

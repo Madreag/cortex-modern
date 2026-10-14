@@ -150,6 +150,18 @@ void PostProcessMan::Destroy() {
 	Clear();
 }
 
+void PostProcessMan::PrepareCheckpointValues() {
+	// The rotation images are cleared before each use, so fresh ones made in checkpoint storage replace the ones made at start.
+	decltype(m_TempEffectBitmaps) owned;
+	for (const auto& [size, previous]: m_TempEffectBitmaps) {
+		auto bitmap = std::shared_ptr<BITMAP>(create_bitmap(size, size), destroy_bitmap);
+		if (!bitmap) throw std::bad_alloc();
+		clear_to_color(bitmap.get(), bitmap_mask_color(bitmap.get()));
+		owned.emplace(size, std::move(bitmap));
+	}
+	m_TempEffectBitmaps.swap(owned);
+}
+
 std::string PostProcessMan::SaveCheckpoint() const {
 	std::vector<const BITMAP*> bitmaps;
 	std::unordered_map<const BITMAP*, size_t> bitmapIDs;

@@ -98,6 +98,7 @@ extern "C" {
 #include <cstdlib>
 #include <string>
 #include <sstream>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -122,8 +123,29 @@ namespace {
 		std::array<BITMAP*, Activity::MaxTeamCount> fog{};
 		std::array<Vector, Activity::MaxTeamCount> fogScale{};
 		bool pending = false;
+		std::vector<std::pair<long, size_t>> traced; //!< Under the shared trace, each actor's unique ID and the end of its rays.
 	};
 	SeeRayPass s_SeeRayPass;
+
+	size_t CountTraceValue(const BITMAP* bitmap, int value) {
+		size_t count = 0;
+		if (!bitmap) return count;
+		for (int y = 0; y < bitmap->h; ++y) for (int x = 0; x < bitmap->w; ++x) count += bitmap->line[y][x] == value;
+		return count;
+	}
+
+	uint64_t HashTraceBitmap(const BITMAP* bitmap) {
+		uint64_t hash = 14695981039346656037ULL;
+		if (!bitmap) return hash;
+		const int rowBytes = bitmap->w * ((bitmap_color_depth(const_cast<BITMAP*>(bitmap)) + 7) / 8);
+		for (int y = 0; y < bitmap->h; ++y) {
+			const unsigned char* row = bitmap->line[y];
+			int x = 0;
+			for (; x + 8 <= rowBytes; x += 8) { uint64_t word; std::memcpy(&word, row + x, 8); hash = (hash ^ word) * 1099511628211ULL; }
+			for (; x < rowBytes; ++x) hash = (hash ^ row[x]) * 1099511628211ULL;
+		}
+		return hash;
+	}
 
 	void HoldSeeRayWorker() {
 		if (!SeeRayHoldLever()) return;
@@ -1387,14 +1409,49 @@ namespace {
 	//
 	// The added deques go in beside the live ones: the checkpoint archive writes both (Scene writes
 	// GetAllParticles, which concatenates them), so an object only one peer holds has to move the hash.
+	// The census reaches each subsystem's hasher once: FNV-1a over a subsystem's bytes in order is the same in one piece as in
+	// many, and one call per subsystem spares the hasher's lock and lookup on every field of every object.
+	class ChecksumBatch {
+	public:
+		void Update(std::string_view subsystem, const void* data, size_t bytes) {
+			if (!m_Last || (m_Last->name.data() != subsystem.data() && m_Last->name != subsystem)) {
+				m_Last = nullptr;
+				for (Slot& slot: m_Slots) {
+					if (slot.name.data() == subsystem.data() || slot.name == subsystem) {
+						m_Last = &slot;
+						break;
+					}
+				}
+				if (!m_Last) m_Last = &m_Slots.emplace_back(Slot{subsystem, {}});
+			}
+			const auto* first = static_cast<const uint8_t*>(data);
+			m_Last->bytes.insert(m_Last->bytes.end(), first, first + bytes);
+		}
+
+		void Flush() {
+			for (Slot& slot: m_Slots) {
+				if (!slot.bytes.empty()) g_SimChecksum.Update(slot.name, slot.bytes.data(), slot.bytes.size());
+				slot.bytes.clear();
+			}
+		}
+
+	private:
+		struct Slot {
+			std::string_view name;
+			std::vector<uint8_t> bytes;
+		};
+		std::deque<Slot> m_Slots;
+		Slot* m_Last = nullptr;
+	};
+
 	// Every attachable in the tree, depth first in attachment order: its identity and where the sim put it.
-	void FeedAttachableTransforms(const MOSRotating* parent) {
+	void FeedAttachableTransforms(ChecksumBatch& batch, const MOSRotating* parent) {
 		for (const Attachable* attachable: parent->GetAttachableList()) {
 			const int64_t uniqueID = static_cast<int64_t>(attachable->GetUniqueID());
 			const float transform[3] = {attachable->GetPos().m_X, attachable->GetPos().m_Y, attachable->GetRotAngle()};
-			g_SimChecksum.Update("attachables", &uniqueID, sizeof(uniqueID));
-			g_SimChecksum.Update("attachables", transform, sizeof(transform));
-			FeedAttachableTransforms(attachable);
+			batch.Update("attachables", &uniqueID, sizeof(uniqueID));
+			batch.Update("attachables", transform, sizeof(transform));
+			FeedAttachableTransforms(batch, attachable);
 		}
 	}
 
@@ -1403,6 +1460,8 @@ namespace {
 	                     const CheckpointDeque<MovableObject*>& particles, const CheckpointDeque<MovableObject*>& addedParticles,
 	                     const CheckpointList<Actor*>* rosters) {
 
+		// Buffers that keep their capacity from tick to tick.
+		static thread_local ChecksumBatch batch;
 		auto eachActor = [&](auto&& body) {
 			for (Actor* a: actors) body(a);
 			for (Actor* a: addedActors) body(a);
@@ -1418,107 +1477,108 @@ namespace {
 
 		eachActor([](Actor* a) {
 			const int64_t uniqueID = static_cast<int64_t>(a->GetUniqueID());
-			g_SimChecksum.Update("actors", &uniqueID, sizeof(uniqueID));
+			batch.Update("actors", &uniqueID, sizeof(uniqueID));
 			const float posX = a->GetPos().m_X;
-			g_SimChecksum.Update("actors", &posX, sizeof(posX));
+			batch.Update("actors", &posX, sizeof(posX));
 			const float posY = a->GetPos().m_Y;
-			g_SimChecksum.Update("actors", &posY, sizeof(posY));
+			batch.Update("actors", &posY, sizeof(posY));
 			const float velX = a->GetVel().m_X;
-			g_SimChecksum.Update("actors", &velX, sizeof(velX));
+			batch.Update("actors", &velX, sizeof(velX));
 			const float velY = a->GetVel().m_Y;
-			g_SimChecksum.Update("actors", &velY, sizeof(velY));
+			batch.Update("actors", &velY, sizeof(velY));
 			const float health = a->GetHealth();
-			g_SimChecksum.Update("actors", &health, sizeof(health));
+			batch.Update("actors", &health, sizeof(health));
 			// Rotational state is on-wire but absent from the linear actors fingerprint — angle and angular velocity split into separate subsystems so a divergence localizes to the update vs the integration.
 			const float actorRotAngle = a->GetRotAngle();
-			g_SimChecksum.Update("rot_angle", &actorRotAngle, sizeof(actorRotAngle));
+			batch.Update("rot_angle", &actorRotAngle, sizeof(actorRotAngle));
 			const float actorAngVel = a->GetAngularVel();
-			g_SimChecksum.Update("rot_angvel", &actorAngVel, sizeof(actorAngVel));
+			batch.Update("rot_angvel", &actorAngVel, sizeof(actorAngVel));
 			// The actor's sim-time timers and its limbs' transforms; the alarm timer is the owner's AI perception, so it stays out.
 			const double timers[5] = {a->GetLastSecondTimerElapsedSimMS(), a->GetStableRecoverTimerElapsedSimMS(), a->GetHeartBeatTimerElapsedSimMS(),
 			                          a->GetNewControlTimerElapsedSimMS(), a->GetDeathTimerElapsedSimMS()};
-			g_SimChecksum.Update("actor_timers", &uniqueID, sizeof(uniqueID));
-			g_SimChecksum.Update("actor_timers", timers, sizeof(timers));
-			FeedAttachableTransforms(a);
+			batch.Update("actor_timers", &uniqueID, sizeof(uniqueID));
+			batch.Update("actor_timers", timers, sizeof(timers));
+			FeedAttachableTransforms(batch, a);
 		});
 
 		// Controller input state per actor — catches control drift the actors fingerprint misses.
 		eachActor([](Actor* a) {
 			const Controller* controller = a->GetController();
 			const int64_t controllerID = static_cast<int64_t>(a->GetUniqueID());
-			g_SimChecksum.Update("controller", &controllerID, sizeof(controllerID));
+			batch.Update("controller", &controllerID, sizeof(controllerID));
 			for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
 				const uint8_t pressed = controller->IsState(static_cast<ControlState>(state)) ? 1 : 0;
-				g_SimChecksum.Update("controller", &pressed, sizeof(pressed));
+				batch.Update("controller", &pressed, sizeof(pressed));
 			}
 			const Vector move = controller->GetAnalogMove();
 			const Vector aim = controller->GetAnalogAim();
 			const Vector cursor = controller->GetAnalogCursor();
 			const float analog[6] = {move.m_X, move.m_Y, aim.m_X, aim.m_Y, cursor.m_X, cursor.m_Y};
-			g_SimChecksum.Update("controller", analog, sizeof(analog));
+			batch.Update("controller", analog, sizeof(analog));
 			// The seat's input mode and player are routing, not input: the seat that owns an actor is CIM_PLAYER
 			// with its player number on its OWN machine and CIM_NETWORK/NoPlayer on every other one, so they are
 			// per-peer by construction and belong beside the applied input, never inside it.
 			const int32_t inputMode = static_cast<int32_t>(controller->GetInputMode());
-			g_SimChecksum.Update("controller_route", &controllerID, sizeof(controllerID));
-			g_SimChecksum.Update("controller_route", &inputMode, sizeof(inputMode));
+			batch.Update("controller_route", &controllerID, sizeof(controllerID));
+			batch.Update("controller_route", &inputMode, sizeof(inputMode));
 			const int32_t controllerPlayer = controller->GetPlayer();
-			g_SimChecksum.Update("controller_route", &controllerPlayer, sizeof(controllerPlayer));
+			batch.Update("controller_route", &controllerPlayer, sizeof(controllerPlayer));
 			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
-			g_SimChecksum.Update("controller", &aiMode, sizeof(aiMode));
+			batch.Update("controller", &aiMode, sizeof(aiMode));
 		});
 
 		// Compact per-particle fingerprint — uniqueID + pos + vel.
 		eachParticle([](MovableObject* p) {
 			const int64_t particleID = static_cast<int64_t>(p->GetUniqueID());
-			g_SimChecksum.Update("particles", &particleID, sizeof(particleID));
+			batch.Update("particles", &particleID, sizeof(particleID));
 			const float ppX = p->GetPos().m_X;
-			g_SimChecksum.Update("particles", &ppX, sizeof(ppX));
+			batch.Update("particles", &ppX, sizeof(ppX));
 			const float ppY = p->GetPos().m_Y;
-			g_SimChecksum.Update("particles", &ppY, sizeof(ppY));
+			batch.Update("particles", &ppY, sizeof(ppY));
 			const float pvX = p->GetVel().m_X;
-			g_SimChecksum.Update("particles", &pvX, sizeof(pvX));
+			batch.Update("particles", &pvX, sizeof(pvX));
 			const float pvY = p->GetVel().m_Y;
-			g_SimChecksum.Update("particles", &pvY, sizeof(pvY));
+			batch.Update("particles", &pvY, sizeof(pvY));
 			const float partAngVel = p->GetAngularVel();
-			g_SimChecksum.Update("rot_angvel", &partAngVel, sizeof(partAngVel));
+			batch.Update("rot_angvel", &partAngVel, sizeof(partAngVel));
 		});
 
 		// Same fingerprint for free items — a dropped device's state was only visible as a count before.
 		eachItem([](MovableObject* i) {
 			const int64_t itemID = static_cast<int64_t>(i->GetUniqueID());
-			g_SimChecksum.Update("items", &itemID, sizeof(itemID));
+			batch.Update("items", &itemID, sizeof(itemID));
 			const float ipX = i->GetPos().m_X;
-			g_SimChecksum.Update("items", &ipX, sizeof(ipX));
+			batch.Update("items", &ipX, sizeof(ipX));
 			const float ipY = i->GetPos().m_Y;
-			g_SimChecksum.Update("items", &ipY, sizeof(ipY));
+			batch.Update("items", &ipY, sizeof(ipY));
 			const float ivX = i->GetVel().m_X;
-			g_SimChecksum.Update("items", &ivX, sizeof(ivX));
+			batch.Update("items", &ivX, sizeof(ivX));
 			const float ivY = i->GetVel().m_Y;
-			g_SimChecksum.Update("items", &ivY, sizeof(ivY));
+			batch.Update("items", &ivY, sizeof(ivY));
 			const float itemAngVel = i->GetAngularVel();
-			g_SimChecksum.Update("rot_angvel", &itemAngVel, sizeof(itemAngVel));
+			batch.Update("rot_angvel", &itemAngVel, sizeof(itemAngVel));
 		});
 
 		// Lightweight population metadata — catches spawn/delete count drift. The counts are of the
 		// whole census, added deques included, for the same reason the bodies above are.
 		const int32_t actorCount = static_cast<int32_t>(actors.size() + addedActors.size());
-		g_SimChecksum.Update("scene", &actorCount, sizeof(actorCount));
+		batch.Update("scene", &actorCount, sizeof(actorCount));
 		const int32_t itemCount = static_cast<int32_t>(items.size() + addedItems.size());
-		g_SimChecksum.Update("scene", &itemCount, sizeof(itemCount));
+		batch.Update("scene", &itemCount, sizeof(itemCount));
 		const int32_t particleCount = static_cast<int32_t>(particles.size() + addedParticles.size());
-		g_SimChecksum.Update("scene", &particleCount, sizeof(particleCount));
+		batch.Update("scene", &particleCount, sizeof(particleCount));
 		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
 			const int32_t rosterSize = static_cast<int32_t>(rosters[team].size());
-			g_SimChecksum.Update("scene", &rosterSize, sizeof(rosterSize));
+			batch.Update("scene", &rosterSize, sizeof(rosterSize));
 		}
 		if (const Activity* activity = g_ActivityMan.GetActivity()) {
 			for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
 				const float teamFunds = activity->GetTeamFunds(team);
-				g_SimChecksum.Update("funds", &teamFunds, sizeof(teamFunds));
+				batch.Update("funds", &teamFunds, sizeof(teamFunds));
 			}
 		}
 
+		batch.Flush();
 	}
 
 	// Snapshot the sim + Lua RNG states here — before the see-ray and MOID-draw futures launch
@@ -1910,6 +1970,25 @@ void MovableMan::CapturePhysicsHistory(uint64_t tick, uint64_t phase) const {
 	static uint64_t incident = 0, postRemaining = 0;
 	static int64_t maximumUs = 0, totalUs = 0;
 	static uint64_t captures = 0;
+	const auto flush = [&](const std::string& suffix) {
+		std::ofstream out(prefix + "." + std::to_string(incident) + suffix + ".bin", std::ios::binary);
+		out.write("PHYSTRC1", 8);
+		const auto number = [&](uint64_t value) { out.write(reinterpret_cast<const char*>(&value), sizeof(value)); };
+		number(1); number(std::tuple_size_v<Row>); number(count);
+		for (size_t index = 0; index < count; ++index) {
+			const Frame& kept = history[(first + index) % history.size()];
+			number(kept.tick); number(kept.phase); number(kept.rows);
+			const size_t contiguous = std::min(kept.rows, maxRows - kept.offset);
+			out.write(reinterpret_cast<const char*>(storage.data() + kept.offset), static_cast<std::streamsize>(contiguous * sizeof(Row)));
+			out.write(reinterpret_cast<const char*>(storage.data()), static_cast<std::streamsize>((kept.rows - contiguous) * sizeof(Row)));
+		}
+		std::cout << "[physics-history] incident=" << incident << " tick=" << tick << " frames=" << count << " suffix=" << suffix << std::endl;
+	};
+	// Phase zero saves the already recorded frames before a failed round discards its world.
+	if (phase == 0) {
+		if (count > 0) flush(".desync");
+		return;
+	}
 	const auto entered = std::chrono::steady_clock::now();
 	const auto countObject = [&](auto&& self, const MovableObject* mo) -> size_t {
 		size_t result = 1;
@@ -1994,20 +2073,7 @@ void MovableMan::CapturePhysicsHistory(uint64_t tick, uint64_t phase) const {
 	if (tick % 600 == 0) {
 		std::cout << "[physics-history] tick=" << tick << " rows=" << frame.rows << " buffer_bytes=" << storage.size() * sizeof(Row) << " history_rows=" << usedRows << " frames=" << count << " first_tick=" << history[first].tick << " mean_us=" << totalUs / captures << " max_us=" << maximumUs << std::endl;
 	}
-	const auto flush = [&](const std::string& suffix) {
-		std::ofstream out(prefix + "." + std::to_string(incident) + suffix + ".bin", std::ios::binary);
-		out.write("PHYSTRC1", 8);
-		const auto number = [&](uint64_t value) { out.write(reinterpret_cast<const char*>(&value), sizeof(value)); };
-		number(1); number(std::tuple_size_v<Row>); number(count);
-		for (size_t index = 0; index < count; ++index) {
-			const Frame& kept = history[(first + index) % history.size()];
-			number(kept.tick); number(kept.phase); number(kept.rows);
-			const size_t contiguous = std::min(kept.rows, maxRows - kept.offset);
-			out.write(reinterpret_cast<const char*>(storage.data() + kept.offset), static_cast<std::streamsize>(contiguous * sizeof(Row)));
-			out.write(reinterpret_cast<const char*>(storage.data()), static_cast<std::streamsize>((kept.rows - contiguous) * sizeof(Row)));
-		}
-		std::cout << "[physics-history] incident=" << incident << " tick=" << tick << " frames=" << count << " suffix=" << suffix << std::endl;
-	};
+
 	if (postRemaining > 0 && --postRemaining == 0) flush(".post");
 	if (incident < 3 && !trigger.empty()) {
 		uint64_t requested = 0;
@@ -2568,6 +2634,21 @@ const std::vector<MovableObject*>* MovableMan::GetMOsInBox(const Box& box, int i
 const std::vector<MovableObject*>* MovableMan::GetMOsInRadius(const Vector& centre, float radius, int ignoreTeam, bool getsHitByMOsOnly) const {
 	std::vector<MovableObject*>* vectorForLua = new std::vector<MovableObject*>();
 	*vectorForLua = std::move(g_SceneMan.GetMOIDGrid().GetMOsInRadius(centre, radius, ignoreTeam, getsHitByMOsOnly));
+	static const std::string targetTraceFilter = [] { const char* value = std::getenv("CC_TEST_TARGET_TRACE"); return value ? value : ""; }();
+	if (!targetTraceFilter.empty()) {
+		const LuaStateWrapper* state = g_LuaMan.GetThreadCurrentLuaState();
+		if (state && state->GetCurrentlyRunningScriptFilePath().find(targetTraceFilter) != std::string_view::npos) {
+			nlohmann::json candidates = nlohmann::json::array();
+			for (const MovableObject* mo: *vectorForLua) {
+				candidates.push_back({mo->GetUniqueID(), mo->GetID(), std::bit_cast<uint32_t>(mo->GetPos().m_X),
+				    std::bit_cast<uint32_t>(mo->GetPos().m_Y), std::bit_cast<uint32_t>(mo->GetRadius())});
+			}
+			System::PrintDiagnosticLine("[target-radius] " + nlohmann::json({{"tick", g_TimerMan.GetSimUpdateCount()},
+			    {"centre", {std::bit_cast<uint32_t>(centre.m_X), std::bit_cast<uint32_t>(centre.m_Y)}},
+			    {"radius", std::bit_cast<uint32_t>(radius)}, {"ignore_team", ignoreTeam},
+			    {"physical_only", getsHitByMOsOnly}, {"candidates", candidates}}).dump());
+		}
+	}
 	if (m_Speculation.active) {
 		for (MovableObject*& mo: *vectorForLua) {
 			mo = ViewIfSpeculating(mo);
@@ -4001,12 +4082,82 @@ bool MovableMan::SwapActorForRender(Actor* original, Actor* substitute) {
 	return true;
 }
 
-void MovableMan::WaitForActorsSeeTask() {
+void MovableMan::TraceFog(const char* where) const {
+	if (!LuaMan::SharedTraceEnabled() || !g_SceneMan.GetScene()) {
+		return;
+	}
+	std::string line = std::string("fog where=") + where;
+	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+		const SceneLayer* layer = g_SceneMan.GetScene()->GetUnseenLayer(team);
+		if (!layer || !layer->GetBitmap()) continue;
+		const BITMAP* bitmap = layer->GetBitmap();
+		uint64_t hash = 14695981039346656037ULL;
+		const int rowBytes = bitmap->w * ((bitmap_color_depth(const_cast<BITMAP*>(bitmap)) + 7) / 8);
+		for (int y = 0; y < bitmap->h; ++y) {
+			for (int x = 0; x < rowBytes; ++x) hash = (hash ^ bitmap->line[y][x]) * 1099511628211ULL;
+		}
+		line += " team" + std::to_string(team) + "=" + std::to_string(hash);
+	}
+	LuaMan::TraceShared(nullptr, line);
+}
+
+void MovableMan::WaitForActorsSeeTask(const char* caller) {
 	s_SeeRaysReleased.store(true, std::memory_order_release);
 	m_ActorsSeeFuture.wait();
 	SeeRayPass& pass = s_SeeRayPass;
 	if (!pass.pending) return;
+	if (LuaMan::SharedTraceEnabled()) {
+		const BITMAP* copy = g_SceneMan.GetTerrain() ? g_SceneMan.GetTerrain()->GetMaterialCopyBitmap() : nullptr;
+		std::string line = std::string("see-reveal caller=") + caller + " rays=" + std::to_string(pass.rays.size()) +
+		                   " material=" + std::to_string(HashTraceBitmap(copy)) + " cavities=" + std::to_string(CountTraceValue(copy, MaterialColorKeys::g_MaterialCavity)) +
+		                   " copy=" + std::to_string(reinterpret_cast<uintptr_t>(copy)) + "/" + std::to_string(copy ? copy->w : 0) + "x" + std::to_string(copy ? copy->h : 0);
+		for (size_t ray = 0; ray < pass.traces.size(); ++ray) {
+			const SeeRayTrace& trace = pass.traces[ray];
+			if (trace.lastMaterial == MaterialColorKeys::g_MaterialCavity && copy && trace.lastX >= 0 && trace.lastY >= 0 && trace.lastX < copy->w && trace.lastY < copy->h) {
+				line += " cavity@" + std::to_string(trace.lastX) + "," + std::to_string(trace.lastY) + "=" + std::to_string(copy->line[trace.lastY][trace.lastX]);
+			}
+		}
+		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+			if (pass.fog[team]) line += " fog" + std::to_string(team) + "=" + std::to_string(HashTraceBitmap(pass.fog[team]));
+		}
+		LuaMan::TraceShared(nullptr, line);
+	}
 	pass.pending = false;
+	if (LuaMan::SharedTraceEnabled()) {
+		// Each actor's aimed rays and the cells they reveal, so two peers' passes compare actor by actor.
+		const auto fold = [](uint64_t& hash, uint64_t value) { hash = (hash ^ value) * 1099511628211ULL; };
+		const auto bits = [](float value) { return static_cast<uint64_t>(std::bit_cast<uint32_t>(value)); };
+		size_t begin = 0;
+		for (const auto& [uid, end]: pass.traced) {
+			uint64_t in = 14695981039346656037ULL, out = 14695981039346656037ULL;
+			for (size_t ray = begin; ray < end && ray < pass.rays.size(); ++ray) {
+				const SeeRay& seeRay = pass.rays[ray];
+				for (uint64_t value: {static_cast<uint64_t>(seeRay.team), bits(seeRay.start.m_X), bits(seeRay.start.m_Y), bits(seeRay.ray.m_X), bits(seeRay.ray.m_Y),
+				                      static_cast<uint64_t>(seeRay.strengthLimit), static_cast<uint64_t>(seeRay.skip)}) fold(in, value);
+				for (const auto& [x, y]: pass.traces[ray].reveals) { fold(out, static_cast<uint64_t>(x)); fold(out, static_cast<uint64_t>(y)); }
+			}
+			if (end > begin) {
+				std::string reads;
+				for (size_t ray = begin; ray < end && ray < pass.traces.size(); ++ray) {
+					reads += (ray == begin ? "" : ",") + std::to_string(pass.traces[ray].reads);
+					const SeeRay& seeRay = pass.rays[ray];
+					const SeeRayTrace& trace = pass.traces[ray];
+					std::ostringstream detail;
+					detail << "see-ray uid=" << uid << " i=" << ray - begin << std::hex << " start=" << bits(seeRay.start.m_X) << ',' << bits(seeRay.start.m_Y)
+					       << " ray=" << bits(seeRay.ray.m_X) << ',' << bits(seeRay.ray.m_Y) << std::dec << " limit=" << seeRay.strengthLimit << " skip=" << seeRay.skip
+					       << " size=" << trace.size << " visits=" << trace.visits << " last=" << trace.lastX << ',' << trace.lastY << " pos=" << trace.positions
+					       << " mat=" << trace.materials << " fog=" << trace.fogs << " integ=" << trace.integrities << " fog9=" << trace.fogNine
+					       << " lastmat=" << trace.lastMaterial << ':' << trace.lastMaterialName << ':' << std::hexfloat << trace.lastIntegrity << std::defaultfloat
+					       << " reveals=" << trace.reveals.size();
+					LuaMan::TraceShared(nullptr, detail.str());
+				}
+				LuaMan::TraceShared(nullptr, "see uid=" + std::to_string(uid) + " team=" + std::to_string(pass.rays[begin].team) + " rays=" + std::to_string(end - begin) +
+				                                 " in=" + std::to_string(in) + " out=" + std::to_string(out) + " reads=" + reads);
+			}
+			begin = end;
+		}
+		pass.traced.clear();
+	}
 	// In the order the rays were aimed, so every peer reveals the same way.
 	if (g_SceneMan.GetScene()) {
 		for (size_t ray = 0; ray < pass.rays.size(); ++ray) g_SceneMan.RevealSeeRay(pass.rays[ray].team, pass.traces[ray]);
@@ -4072,6 +4223,7 @@ void MovableMan::EndSpeculation(std::vector<MovableObject*>* takenResidents) {
 	m_Speculation.travelers.clear();
 	m_Speculation.travelerSteps = 0;
 	m_Speculation.travelersMoved = false;
+	m_Speculation.residentIgnoreLinks.clear();
 	m_Speculation.shadows.clear();
 	m_Speculation.residents.clear();
 	m_Speculation.taken.clear();
@@ -4200,7 +4352,8 @@ MovableObject* MovableMan::ShadowOf(MovableObject* resident) {
 	const int kind = ResidentKind(resident);
 	MovableObject* shadow = nullptr;
 	{
-		MovableObject::FaithfulCloneScope scope(false);
+		// A shadow is dropped or taken by a preview, never saved: it carries no runtime text.
+		MovableObject::FaithfulCloneScope scope(false, false, false);
 		const long counter = MovableObject::GetUniqueIDCounter();
 		shadow = dynamic_cast<MovableObject*>(resident->Clone());
 		MovableObject::PinUniqueIDCounter(counter);
@@ -4219,6 +4372,16 @@ MovableObject* MovableMan::ShadowOf(MovableObject* resident) {
 	entry.inWorld = true;
 	m_Speculation.residents[shadow] = resident;
 	++m_SpeculationStats.shadows;
+	// Do-not-hit links that named the resident follow it into its shadow.
+	std::erase_if(m_Speculation.residentIgnoreLinks, [resident, shadow](MovableObject* holder) {
+		const MovableObject* target = holder->m_pMOToNotHit.get();
+		if (target && const_cast<MovableObject*>(target)->GetRootParent() == resident) {
+			MovableObject* part = shadow->FindPartByUniqueID(target->GetUniqueID());
+			holder->m_pMOToNotHit = part ? part : shadow;
+			return true;
+		}
+		return !target;
+	});
 	MovableObject* previousRoot = m_LinkRoot;
 	m_LinkRoot = shadow;
 	shadow->ResolveFaithfulLinks();
@@ -4227,6 +4390,20 @@ MovableObject* MovableMan::ShadowOf(MovableObject* resident) {
 		m_ShadowMadeHook(resident, shadow);
 	}
 	return shadow;
+}
+
+MovableObject* MovableMan::ResolveIgnoreLink(MovableObject* holder, long uniqueID) {
+	if (!m_Speculation.active || CheckpointNativeStorage::Reading() || CheckpointNativeSnapshot::Current()) return FindObjectByUniqueID(uniqueID);
+	if (m_LinkRoot) {
+		if (MovableObject* part = m_LinkRoot->FindPartByUniqueID(uniqueID)) return part;
+	}
+	const auto* known = CheckpointFind(std::as_const(*this).CheckpointLookupValues().m_KnownObjects, uniqueID);
+	MovableObject* found = known ? known->second : nullptr;
+	if (!found) return nullptr;
+	MovableObject* root = found->GetRootParent();
+	if (!IsResident(root) || ExistingShadowOf(root)) return SpeculativeView(found);
+	m_Speculation.residentIgnoreLinks.push_back(holder);
+	return found;
 }
 
 MovableObject* MovableMan::ExistingShadowOf(const MovableObject* resident) const {
@@ -5116,6 +5293,21 @@ void MovableMan::AddParticle(MovableObject* particleToAdd) {
 			std::lock_guard<std::mutex> lock(m_AddedParticlesMutex);
 			CheckpointLooseValues().m_AddedParticles.push_back(particleToAdd);
 			CheckpointLookupValues().m_ValidParticles.insert(particleToAdd);
+		}
+		static const std::string traceFilter = [] { const char* value = std::getenv("CC_TEST_TARGET_TRACE"); return value ? value : ""; }();
+		if (!traceFilter.empty()) {
+			LuaStateWrapper* state = g_LuaMan.GetThreadCurrentLuaState();
+			if (state && state->GetCurrentlyRunningScriptFilePath().find(traceFilter) != std::string_view::npos) {
+				lua_Debug caller{};
+				if (lua_getstack(state->GetLuaState(), 1, &caller)) lua_getinfo(state->GetLuaState(), "Sl", &caller);
+				System::PrintDiagnosticLine("[particle-add] " + nlohmann::json({{"tick", g_TimerMan.GetSimUpdateCount()},
+				    {"owner", SoundSimulationScope::CurrentKey().objectUID}, {"uid", particleToAdd->GetUniqueID()},
+				    {"script", state->GetCurrentlyRunningScriptFilePath()}, {"line", caller.currentline},
+				    {"preview", LuaMan::IsRunningPreviewHook()}, {"speculation", m_Speculation.active},
+				    {"preset", particleToAdd->GetPresetName()}, {"lifetime", particleToAdd->GetLifetime()},
+				    {"pos", {std::bit_cast<uint32_t>(particleToAdd->GetPos().m_X), std::bit_cast<uint32_t>(particleToAdd->GetPos().m_Y)}},
+				    {"vel", {std::bit_cast<uint32_t>(particleToAdd->GetVel().m_X), std::bit_cast<uint32_t>(particleToAdd->GetVel().m_Y)}}}).dump());
+			}
 		}
 	}
 }
@@ -7525,7 +7717,7 @@ void MovableMan::Update() {
 	}
 
 	// Finish our Seeing rays from last frame
-	WaitForActorsSeeTask();
+	WaitForActorsSeeTask("tick-start");
 
 	// Prior to controller/AI update, execute lua callbacks
 	g_LuaMan.ExecuteLuaScriptCallbacks();
@@ -7833,11 +8025,12 @@ void MovableMan::Update() {
 
 	// Run seeing rays for all actors. Each ray is aimed here, on the sim thread; the pool walks it over the frozen terrain
 	// against a copy of its team's fog, and the reveals land in aim order when the pass is joined within this tick.
-	WaitForActorsSeeTask();
+	WaitForActorsSeeTask("launch");
 	SeeRayPass& pass = s_SeeRayPass;
 	const uint64_t seeTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	for (Actor* actor: CheckpointActorValues().m_Actors) {
 		actor->PrepareSeeRays(seeTick, pass.rays);
+		if (LuaMan::SharedTraceEnabled()) pass.traced.emplace_back(actor->GetUniqueID(), pass.rays.size());
 	}
 	if (Scene* scene = g_SceneMan.GetScene(); scene && !pass.rays.empty()) {
 		for (const SeeRay& ray: pass.rays) {
@@ -7850,8 +8043,20 @@ void MovableMan::Update() {
 		}
 		pass.traces.assign(pass.rays.size(), {});
 		pass.pending = true;
+		if (LuaMan::SharedTraceEnabled()) {
+			// What the pass will read: the frozen material copy and each team's fog copy.
+			const auto hashBitmap = HashTraceBitmap;
+			const BITMAP* launchCopy = g_SceneMan.GetTerrain() ? g_SceneMan.GetTerrain()->GetMaterialCopyBitmap() : nullptr;
+			std::string line = "see-launch cavities=" + std::to_string(CountTraceValue(launchCopy, MaterialColorKeys::g_MaterialCavity)) + " material=" + std::to_string(hashBitmap(launchCopy)) +
+			                   " live=" + std::to_string(hashBitmap(g_SceneMan.GetTerrain() ? g_SceneMan.GetTerrain()->GetMaterialBitmap() : nullptr));
+			for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+				if (pass.fog[team]) line += " fog" + std::to_string(team) + "=" + std::to_string(hashBitmap(pass.fog[team]));
+			}
+			LuaMan::TraceShared(nullptr, line);
+		}
 	} else {
 		pass.rays.clear();
+		pass.traced.clear();
 	}
 	const bool visualize = g_SceneMan.DrawsRayCastVisualizations();
 	if (SeeRayHoldLever()) s_SeeRaysReleased.store(false, std::memory_order_release);
@@ -8515,7 +8720,7 @@ void MovableMan::UpdateDrawMOIDs() {
 
 void MovableMan::StartMOIDDrawTask() {
 	// The tick's see-ray pass lands here, after the tick's last script and before anything captures or draws it.
-	WaitForActorsSeeTask();
+	WaitForActorsSeeTask("moid-draw");
 	m_DrawMOIDsTask = g_ThreadMan.GetPriorityThreadPool().submit([this]() {
 		UpdateDrawMOIDs();
 	});

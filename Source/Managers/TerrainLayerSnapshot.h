@@ -47,6 +47,9 @@ namespace RTE {
 		/// Set before Capture: the terrain's pixels are fenced page by page instead of copied, and Restore puts back only
 		/// the pages written. Capture falls back to the copy where the platform has no fence.
 		bool fencePixels = false;
+		/// Set before Capture by a snapshot that lives past every Restore it makes: the pathfinders copy their horizon only if it
+		/// is written before Restore.
+		bool deferHorizon = false;
 		bool pixelsFenced = false;
 
 		static void CopyFrom(BITMAP* bitmap, std::vector<uint8_t>& out);

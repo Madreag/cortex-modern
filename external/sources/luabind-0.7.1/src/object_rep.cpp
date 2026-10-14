@@ -30,6 +30,8 @@ namespace luabind { namespace detail
 
 	checkpoint_object_write_cb checkpoint_object_write = 0;
 	thread_local saved_object_copy saved_objects = {0, 0};
+	void (*object_rep_borrowed)(object_rep*) = 0;
+	void (*object_rep_returned)(object_rep*, object_rep*) = 0;
 
 	thread_local unsigned preview_fence_window = 0;
 	thread_local int preview_fence_parent = -1;
@@ -79,6 +81,7 @@ namespace luabind { namespace detail
 			m_object = saved_objects.copy(saved_objects.owner, crep, obj, borrowed);
 			if (borrowed) m_destructor = [](void*) {};
 		}
+		if (!(m_flags & owner) && m_object && object_rep_borrowed) object_rep_borrowed(this);
 	}
 
 	object_rep::object_rep(class_rep* crep, int flags, detail::lua_reference const& table_ref)
@@ -93,7 +96,24 @@ namespace luabind { namespace detail
 
 	object_rep::~object_rep() 
 	{
+		release_life_owner();
 		if (m_flags & owner && m_destructor) m_destructor(m_object);
+	}
+
+	void object_rep::release_life_owner()
+	{
+		if (!m_life_release) return;
+		void (*release)(void*) = m_life_release;
+		m_life_release = 0;
+		release(m_life_owner);
+		m_life_owner = 0;
+	}
+
+	void object_rep::set_object(void* p)
+	{
+		release_life_owner();
+		m_object = p;
+		if (m_object && !(m_flags & owner) && object_rep_borrowed) object_rep_borrowed(this);
 	}
 
 	void object_rep::remove_ownership()
@@ -106,6 +126,7 @@ namespace luabind { namespace detail
         // without a hierarchy?
 
 		m_flags &= ~owner;
+		if (m_object && object_rep_borrowed) object_rep_borrowed(this);
 		// if this is a type with a wrapper we also have to
 		// transform the wrappers weak_ref into a strong
 		// reference, to make sure the lua part

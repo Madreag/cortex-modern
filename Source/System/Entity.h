@@ -52,7 +52,7 @@ namespace RTE {
 /// @return A pointer to the newly dynamically allocated Entity. Ownership is transferred as well.
 #define EntityAllocation(TYPE) \
 	static void* operator new(size_t size) { return TYPE::m_sClass.GetPoolMemory(); } \
-	static void operator delete(void* instance) { TYPE::m_sClass.ReturnPoolMemory(instance); } \
+	static void operator delete(void* instance) { if (!RetainPooledMemory(static_cast<TYPE*>(instance), instance, TYPE::m_sClass)) TYPE::m_sClass.ReturnPoolMemory(instance); } \
 	static void* operator new(size_t size, void* p) throw() { return p; } \
 	static void operator delete(void*, void*) throw() {} \
 	static void* Allocate() { return malloc(sizeof(TYPE)); } \
@@ -249,6 +249,10 @@ namespace RTE {
 			ClassInfo& operator=(const ClassInfo& rhs) = delete;
 		};
 #pragma endregion
+
+		/// Whether a deleted object's memory stays out of its class pool for now. Only a MovableObject that a Lua handle still names keeps it.
+		/// @return Whether the memory stays out of the pool.
+		static bool RetainPooledMemory(Entity*, void*, ClassInfo&) { return false; }
 
 #pragma region Creation
 		/// Constructor method used to instantiate a Entity in system memory. Create() should be called before using the Entity.
