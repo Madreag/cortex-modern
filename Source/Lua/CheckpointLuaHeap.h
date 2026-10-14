@@ -1533,7 +1533,7 @@ namespace RTE::CheckpointLua {
 	}
 
 	inline bool HeapOwner::RunBatchOpenSelfTest() {
-		const size_t page = PageWriteFence::SystemPageBytes(), bytes = page * 2;
+		const size_t page = PageWriteFence::SystemPageBytes(), run = CowCoordinator::c_FaultRunPages, pages = run * 2, bytes = page * pages;
 		if (!page) return false;
 		const auto release = [bytes](void* memory) { if (memory) Unmap(memory, bytes); };
 		std::unique_ptr<void, decltype(release)> live(MapPages(bytes), release), firstBytes(MapPages(bytes), release), secondBytes(MapPages(bytes), release);
@@ -1552,7 +1552,7 @@ namespace RTE::CheckpointLua {
 		const auto prepare = [&](void* destination) {
 			auto copy = std::make_shared<CowCopy>();
 			copy->base = coordinator.base; copy->pageBytes = page; copy->destination = static_cast<Snapshot::Page*>(destination);
-			copy->saved.assign(2, 0); copy->faults = std::make_shared<CopyFaultStats>();
+			copy->saved.assign(pages, 0); copy->faults = std::make_shared<CopyFaultStats>();
 			coordinator.Prepare(copy);
 			CowCoordinator::Prepared prepared{&coordinator, copy};
 			if (!PageWriteFence::WatchCopies(&observer, {source, bytes}, observe, &observer, CowCoordinator::Arm, &prepared)) return std::shared_ptr<CowCopy>();
@@ -1564,15 +1564,18 @@ namespace RTE::CheckpointLua {
 		if (observer.faults) return false;
 		source[page] = 7;
 		if (observer.faults != 1) return false;
+		// The second generation copies the run the first one faulted on at its boundary; the other run stays fenced.
 		const auto second = prepare(secondBytes.get());
 		if (!second || !coordinator.CopyPages(0, 1)) return false;
 		source[0] = 9;
-		if (observer.faults != 1) return false;
 		source[page] = 13;
+		if (observer.faults != 1) return false;
+		source[run * page] = 17;
 		if (observer.faults != 2 || !coordinator.Complete(first, true) || !coordinator.Complete(second, true)) return false;
 		const auto* old = static_cast<const unsigned char*>(firstBytes.get());
 		const auto* next = static_cast<const unsigned char*>(secondBytes.get());
-		return old[0] == 3 && old[page] == 3 && next[0] == 5 && next[page] == 7 && source[0] == 9 && source[page] == 13;
+		return old[0] == 3 && old[page] == 3 && old[run * page] == 3 && next[0] == 5 && next[page] == 7 && next[run * page] == 3 &&
+		       source[0] == 9 && source[page] == 13 && source[run * page] == 17;
 	}
 
 	inline bool HeapOwner::RunPreparationLifetimeSelfTest() {
