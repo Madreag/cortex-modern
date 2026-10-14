@@ -117,7 +117,7 @@ namespace RTE {
 
 		/// Gets the sim time in timer ticks, for rollback snapshots.
 		/// @return The accumulated sim time in ticks.
-		long long GetSimTimeTicks() const { return CheckpointFrozenClock::current ? CheckpointFrozenClock::current->simTicks : CheckpointStateValues().m_SimTimeTicks; }
+		long long GetSimTimeTicks() const { const auto* frozen = CheckpointFrozenClock::Current(); return frozen ? frozen->simTicks : CheckpointStateValues().m_SimTimeTicks; }
 		long long GetSimAccumulator() const { return CheckpointStateValues().m_SimAccumulator; }
 
 		/// Tells whether there is enough sim time accumulated to do at least one physics update.
@@ -219,7 +219,7 @@ namespace RTE {
 
 		/// Gets a current global real time measured in ticks from the start of the simulation up to the last Update of this TimerMan. Use TickFrequency to determine how many ticks go in a second.
 		/// @return The number of ticks passed since the simulation started.
-		long long GetRealTickCount() const { return CheckpointFrozenClock::current ? CheckpointFrozenClock::current->realTicks : CheckpointStateValues().m_RealTimeTicks; }
+		long long GetRealTickCount() const { const auto* frozen = CheckpointFrozenClock::Current(); return frozen ? frozen->realTicks : CheckpointStateValues().m_RealTimeTicks; }
 
 		/// Gets a current global simulation time measured in ticks from the start of the simulation up to the last Update of this TimerMan. Use TickFrequency to determine how many ticks go in a second.
 		/// @return The number of ticks passed since the simulation started.
@@ -227,7 +227,7 @@ namespace RTE {
 
 		/// Gets a current global simulation time, measured in sim updates, from the start of the simulation up to the last Update of this TimerMan.
 		/// @return The number of simulation updates that have occurred since the simulation started.
-		long long GetSimUpdateCount() const { return CheckpointFrozenClock::current ? CheckpointFrozenClock::current->simUpdates : CheckpointStateValues().m_SimUpdateCount; }
+		long long GetSimUpdateCount() const { const auto* frozen = CheckpointFrozenClock::Current(); return frozen ? frozen->simUpdates : CheckpointStateValues().m_SimUpdateCount; }
 
 		/// Gets a current global simulation time measured in ms ticks from the start of the simulation up to the last UpdateSim of this TimerMan.
 		/// @return The number of ms passed since the simulation started.

@@ -1324,6 +1324,8 @@ struct CheckpointNativeStorage::ReadState : std::enable_shared_from_this<ReadSta
 
 thread_local CheckpointNativeStorage::ReadState* CheckpointNativeStorage::s_Read = nullptr;
 
+bool CheckpointNativeStorage::ReadingHere() noexcept { return s_Read != nullptr; }
+
 CheckpointNativeStorage::ReadScope::ReadScope(std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> pages, std::span<const RootRange> roots)
 	: ReadScope(ReadViews{true, pages, roots}) {}
 

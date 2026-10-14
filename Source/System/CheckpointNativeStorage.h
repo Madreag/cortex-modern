@@ -101,7 +101,9 @@ namespace RTE {
 			CoolingPause(const CoolingPause&) = delete;
 			CoolingPause& operator=(const CoolingPause&) = delete;
 		};
-		static bool Reading() { return s_Readers.load(std::memory_order_relaxed) != 0 && s_Read != nullptr; }
+		static bool Reading() { return s_Readers.load(std::memory_order_relaxed) != 0 && ReadingHere(); }
+		/// Whether the calling thread has a read scope open; out of line, so the inlined checks read no thread-local.
+		static bool ReadingHere() noexcept;
 		static void RememberPrivate(void* address, size_t bytes, bool borrowed = false);
 		static void BorrowPrivate(const void* address) noexcept;
 		static bool PrivateBorrowed(const void* address) noexcept;
@@ -137,9 +139,8 @@ namespace RTE {
 		static const void* View(const void* source, size_t bytes);
 		static const void* ViewObject(const void* source);
 		template<class T> static T* Source(T* source) {
-			// A thread that neither reads frozen views nor writes saves sees the live object; with neither anywhere, no thread needs its own look.
+			// With no frozen reader and no saver anywhere, every thread sees the live object; otherwise the view decides.
 			if (s_Readers.load(std::memory_order_relaxed) == 0 && SaverThreadMark::marked.load(std::memory_order_relaxed) == 0) return source;
-			if (!Reading() && !SaverThreadMark::current) return source;
 			return static_cast<T*>(const_cast<void*>(ViewObject(source)));
 		}
 		template<class T> static T& PrivateValue(T* source) {

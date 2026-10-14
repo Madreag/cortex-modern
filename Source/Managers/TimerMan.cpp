@@ -18,6 +18,8 @@
 
 using namespace RTE;
 
+const CheckpointFrozenClock* CheckpointFrozenClock::CurrentHere() noexcept { return current; }
+
 void TimerMan::PrepareCheckpointValues() {
 	if (!CheckpointNativeStorage::Enabled() || m_OwnedCheckpointValues) return;
 	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
