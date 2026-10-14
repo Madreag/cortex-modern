@@ -55,6 +55,12 @@ namespace RTE {
 			// Dereferencing a node iterator locates its value; only Read accesses the value's bytes.
 			return Read(std::addressof(*At(iterator, node)));
 		}
+		template<class Container> concept MappedContainer = requires { typename Container::mapped_type; };
+		// A keyed container finds a value by its first member when it maps, else by the whole value.
+		template<class Container> const auto& LookupKey(const typename Container::value_type& value) {
+			if constexpr (MappedContainer<Container>) return value.first;
+			else return value;
+		}
 		struct TreeLinks { const void* left; const void* right; const void* parent; };
 		inline TreeLinks Tree(const void* node) {
 #ifdef _MSVC_STL_VERSION
@@ -289,10 +295,7 @@ namespace RTE {
 			static char kind;
 			const auto frozen = std::static_pointer_cast<const Index>(CheckpointNativeStorage::ReadIndex(&source, &kind, [&] {
 				auto result = make();
-				for (const V& value: CheckpointValues(source)) {
-					if constexpr (requires { typename Container::mapped_type; }) result->emplace(value.first, &value);
-					else result->emplace(value, &value);
-				}
+				for (const V& value: CheckpointValues(source)) result->emplace(CheckpointContainerDetail::LookupKey<Container>(value), &value);
 				return result;
 			}));
 			const auto found = frozen->find(key);
@@ -309,15 +312,11 @@ namespace RTE {
 		result.max_load_factor(source.max_load_factor());
 		const auto values = CheckpointValues(source);
 #ifdef _MSVC_STL_VERSION
-		const auto key = [](const auto& value) -> const auto& {
-			if constexpr (requires { typename Container::mapped_type; }) return value.first;
-			else return value;
-		};
 		// MSVC appends new buckets, but prepends each new value inside its bucket.
 		for (size_t first = 0; first < values.size();) {
 			size_t last = first + 1;
-			const size_t bucket = result.bucket(key(values[first]));
-			while (last < values.size() && result.bucket(key(values[last])) == bucket) ++last;
+			const size_t bucket = result.bucket(CheckpointContainerDetail::LookupKey<Container>(values[first]));
+			while (last < values.size() && result.bucket(CheckpointContainerDetail::LookupKey<Container>(values[last])) == bucket) ++last;
 			for (size_t index = last; index != first;) result.insert(convert(values[--index]));
 			first = last;
 		}

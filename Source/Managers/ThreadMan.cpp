@@ -79,6 +79,26 @@ namespace {
 #endif
 	}
 
+	// The stuck-tick guard names where each saver it lets go was parked: whatever the tick waited on is found from there.
+	void ReportParked(int64_t episode, int64_t waitedUs) {
+		thread_local int64_t t_ReportedEpisode = -1;
+		if (t_ReportedEpisode == episode) return;
+		t_ReportedEpisode = episode;
+#ifdef _WIN32
+		void* frames[40];
+		const USHORT count = CaptureStackBackTrace(1, 40, frames, nullptr);
+		const auto base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+		char line[1024];
+		int used = std::snprintf(line, sizeof(line), "[saver-parked] thread=%lu waited_ms=%lld at", GetCurrentThreadId(), static_cast<long long>(waitedUs / 1000));
+		for (USHORT index = 0; index < count && used > 0 && used < static_cast<int>(sizeof(line)) - 20; ++index)
+			used += std::snprintf(line + used, sizeof(line) - used, " %llx", static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(frames[index]) - base));
+		std::fprintf(stdout, "%s\n", line);
+		std::fflush(stdout);
+#else
+		(void)waitedUs;
+#endif
+	}
+
 	void NoteStretch(const void* site) {
 		const uint64_t cycles = ThreadCycles();
 		if (t_LastCheckCycles && cycles - t_LastCheckCycles > StretchCycles()) {
@@ -150,6 +170,7 @@ void SaverThreads::WaitForSlice() {
 					std::fprintf(stdout, "[saver-gate] game work kept the saver out %lld ms; the saver goes on beside it\n", static_cast<long long>((now - began) / 1000));
 					std::fflush(stdout);
 				}
+				ReportParked(began, now - began);
 				return;
 			}
 		}
@@ -161,6 +182,7 @@ void SaverThreads::WaitForSlice() {
 				std::fprintf(stdout, "[saver-gate] a tick kept the gate closed %lld ms; the saver goes on beside it\n", static_cast<long long>((now - closedAt) / 1000));
 				std::fflush(stdout);
 			}
+			if (closedAt) ReportParked(closedAt, now - began);
 			return;
 		}
 		// Whatever lets the saver on notifies; waking only for the stuck-tick report keeps parked savers off the game's cores.
