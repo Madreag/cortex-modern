@@ -90,17 +90,19 @@ namespace RTE::CheckpointLua {
 				const std::vector<bool> byCopy = CopiedWhole(until);
 				// The Lua heaps are fenced on another thread while this one arms the native pages.
 				static const bool s_SerialArm = std::getenv("CCCP_TEST_CHECKPOINT_SERIAL_ARM") != nullptr;
-				auto heaps = std::async(s_SerialArm ? std::launch::deferred : std::launch::async, [this, &byCopy] {
+				const size_t threads = s_SerialArm ? 1 : std::min<size_t>(4, std::max<size_t>(1, m_Heaps.size()));
+				AssignArmParts(byCopy, threads);
+				auto heaps = std::async(s_SerialArm ? std::launch::deferred : std::launch::async, [this, &byCopy, threads] {
 					const auto begun = std::chrono::steady_clock::now();
 					// The heaps are fenced or copied side by side: protection calls and copies both scale across threads.
-					const size_t parts = s_SerialArm ? 1 : std::min<size_t>(4, std::max<size_t>(1, m_Heaps.size()));
-					const auto armSome = [this, parts, &byCopy](size_t part) {
+					const auto armSome = [this, &byCopy](size_t part) {
 						bool armed = true;
-						for (size_t index = part; armed && index < m_Heaps.size(); index += parts) armed = m_Heaps[index].lease.Arm(*m_Heaps[index].prepared, byCopy[index]);
+						for (size_t index = 0; armed && index < m_Heaps.size(); ++index)
+							if (m_ArmParts[index] == part) armed = m_Heaps[index].lease.Arm(*m_Heaps[index].prepared, byCopy[index]);
 						return armed;
 					};
 					std::vector<std::future<bool>> helpers;
-					for (size_t part = 1; part < parts; ++part) helpers.push_back(std::async(std::launch::async, armSome, part));
+					for (size_t part = 1; part < threads; ++part) helpers.push_back(std::async(std::launch::async, armSome, part));
 					bool armed = armSome(0);
 					for (auto& helper: helpers) armed = helper.get() && armed;
 					return std::pair{armed, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begun).count()};
@@ -155,6 +157,8 @@ namespace RTE::CheckpointLua {
 		size_t StateCount() const { return m_Heaps.size(); }
 		/// The fence's own clock: the native ranges, then every Lua heap.
 		std::pair<int64_t, int64_t> ArmSplitUs() const { return m_ArmSplitUs; }
+		/// The arming thread that took a heap.
+		size_t ArmPart(size_t heap) const { return heap < m_ArmParts.size() ? m_ArmParts[heap] : 0; }
 		const BindingLease& Bindings() const { return m_Bindings; }
 		static std::string SelfTestMismatch() {
 			CheckpointNativeStorage::AllocationScope allocations(true);
@@ -241,6 +245,24 @@ namespace RTE::CheckpointLua {
 			}
 			return whole;
 		}
+		// Each heap goes to the arming thread with the least work so far, the costliest first: a large heap's copy sets the
+		// boundary's length unless the rest are spread around it. Fencing a byte costs about a sixteenth of copying it.
+		void AssignArmParts(const std::vector<bool>& byCopy, size_t parts) {
+			std::vector<size_t> cost(m_Heaps.size()), order(m_Heaps.size());
+			for (size_t index = 0; index < m_Heaps.size(); ++index) {
+				const size_t bytes = m_Heaps[index].prepared->Image().ByteCount();
+				cost[index] = byCopy[index] ? bytes : m_Heaps[index].prepared->ArmCopyBytes(false) + bytes / 16;
+			}
+			std::iota(order.begin(), order.end(), size_t{0});
+			std::stable_sort(order.begin(), order.end(), [&cost](size_t left, size_t right) { return cost[left] > cost[right]; });
+			std::vector<size_t> load(parts, 0);
+			m_ArmParts.assign(m_Heaps.size(), 0);
+			for (const size_t index: order) {
+				const size_t part = static_cast<size_t>(std::min_element(load.begin(), load.end()) - load.begin());
+				m_ArmParts[index] = static_cast<uint8_t>(part);
+				load[part] += cost[index];
+			}
+		}
 		// Heaps whose state collects sooner copy first, then the larger ones, so the live writes that fault on a page not yet
 		// copied stop soonest.
 		void OrderDrains(const std::vector<uint64_t>& until) {
@@ -269,6 +291,7 @@ namespace RTE::CheckpointLua {
 		}
 		std::function<uint64_t(size_t)> m_TicksUntilCollection;
 		std::vector<size_t> m_DrainOrder;
+		std::vector<uint8_t> m_ArmParts;
 		std::atomic<Status> m_Status{Status::Prepared};
 		std::unique_ptr<CheckpointNativeStorage::Prepared> m_Native;
 		BindingLease m_Bindings;

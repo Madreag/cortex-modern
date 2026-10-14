@@ -140,12 +140,14 @@ void SaverThreads::OpenSlice(int64_t untilUs) {
 }
 
 void SaverThreads::CloseSlice() noexcept {
+	s_TickStarts.fetch_add(1, std::memory_order_relaxed);
 	s_SliceLent.store(false, std::memory_order_release);
 	s_SliceEndUs.store(0, std::memory_order_release);
 	s_ClosedAtUs.store(NowUs(), std::memory_order_release);
 }
 
 void SaverThreads::LendTickStart(int64_t microseconds) {
+	s_TickStarts.fetch_add(1, std::memory_order_relaxed);
 	{
 		std::lock_guard lock(s_SliceMutex);
 		s_SliceLent.store(true, std::memory_order_release);

@@ -92,6 +92,10 @@ namespace RTE::CheckpointLua {
 	struct CopyFaultStats {
 		std::atomic<size_t> count{0};
 		std::atomic<int64_t> us{0};
+		// What the boundary itself copied of the heap, and its time.
+		int64_t armCopyUs = 0;
+		size_t armCopiedPages = 0;
+		bool armWhole = false;
 	};
 
 	struct LibraryHandlers {
@@ -147,6 +151,9 @@ namespace RTE::CheckpointLua {
 		int64_t FreezeUs() const { return m_Data ? m_Data->freezeUs : 0; }
 		int64_t CopyUs() const { return m_Data ? m_Data->copyUs.load(std::memory_order_relaxed) : 0; }
 		size_t FaultCount() const { return m_Data && m_Data->faults ? m_Data->faults->count.load(std::memory_order_relaxed) : 0; }
+		int64_t ArmCopyUs() const { return m_Data && m_Data->faults ? m_Data->faults->armCopyUs : 0; }
+		size_t ArmCopiedPages() const { return m_Data && m_Data->faults ? m_Data->faults->armCopiedPages : 0; }
+		bool ArmWhole() const { return m_Data && m_Data->faults && m_Data->faults->armWhole; }
 		size_t PreviousFaults() const { return m_Data ? m_Data->previousFaults : 0; }
 		int64_t PreviousFaultUs() const { return m_Data ? m_Data->previousFaultUs : 0; }
 
@@ -829,10 +836,32 @@ namespace RTE::CheckpointLua {
 			size_t pageBytes = 0;
 			std::vector<std::shared_ptr<CowCopy>> copies;
 			std::atomic_flag lock = ATOMIC_FLAG_INIT;
-			// The fault runs of a generation's first writes, which the tick after the next boundary writes again.
-			static constexpr size_t c_HotRuns = 64;
-			std::array<uint32_t, c_HotRuns> hotRuns{};
-			size_t hotRunCount = 0;
+			// The runs written in the two ticks after a boundary, which the ticks after the next boundary write again: that
+			// boundary copies them instead of fencing them. A copied run cannot fault to show it is still written, so a run
+			// stays until newer ones push it out.
+			static constexpr size_t c_HotRunCapacity = 512;
+			static constexpr size_t c_HotRunBytes = size_t{24} << 20;
+			static constexpr uint64_t c_HotTicks = 2;
+			std::array<uint32_t, c_HotRunCapacity> hotRuns{};
+			size_t hotFirst = 0, hotCount = 0;
+			std::vector<uint8_t> hotMarks;
+			uint64_t armedTick = 0;
+			size_t HotCapacity() const noexcept { return std::min(c_HotRunCapacity, std::max<size_t>(1, c_HotRunBytes / (c_FaultRunPages * pageBytes))); }
+			void RememberHotRun(size_t run) noexcept {
+				if (run >= hotMarks.size() || hotMarks[run]) return;
+				if (hotCount == HotCapacity()) {
+					hotMarks[hotRuns[hotFirst]] = 0;
+					hotFirst = (hotFirst + 1) % c_HotRunCapacity;
+					--hotCount;
+				}
+				hotRuns[(hotFirst + hotCount) % c_HotRunCapacity] = static_cast<uint32_t>(run);
+				hotMarks[run] = 1;
+				++hotCount;
+			}
+			size_t HotBytes() noexcept {
+				Locked guard(lock);
+				return hotCount * c_FaultRunPages * pageBytes;
+			}
 			std::atomic<uint32_t> tickFaults{0};
 			uint32_t armedHotRuns = 0;
 			bool armedWhole = false;
@@ -843,9 +872,11 @@ namespace RTE::CheckpointLua {
 			};
 			struct Prepared { CowCoordinator* coordinator; std::shared_ptr<CowCopy> copy; };
 			void Prepare(const std::shared_ptr<CowCopy>& copy) {
+				const size_t runs = (copy->saved.size() + c_FaultRunPages - 1) / c_FaultRunPages;
 				Locked guard(lock);
 				std::erase_if(copies, [](const auto& value) { return value->completed; });
 				copies.push_back(copy);
+				if (hotMarks.size() < runs) hotMarks.resize(runs, 0);
 			}
 			static bool Arm(void* context, uintptr_t address, size_t bytes) noexcept {
 				auto& prepared = *static_cast<Prepared*>(context);
@@ -853,20 +884,31 @@ namespace RTE::CheckpointLua {
 				Locked guard(coordinator.lock);
 				auto& copy = *prepared.copy;
 				if (copy.completed || copy.armed.load(std::memory_order_relaxed) != 0) return false;
-				// The runs the last generation faulted on first are copied here instead of fenced: the tick after a boundary
-				// writes them again, and its faults cost it several times what copying them costs the boundary.
+				// The hot runs are copied here instead of fenced: the ticks after a boundary write them again, and their faults
+				// cost those ticks several times what copying them costs the boundary.
+				const auto copyStarted = std::chrono::steady_clock::now();
 				const size_t pages = std::min(copy.saved.size(), bytes / coordinator.pageBytes);
-				for (size_t index = 0; index < coordinator.hotRunCount; ++index) {
-					const size_t first = size_t{coordinator.hotRuns[index]} * c_FaultRunPages, last = std::min(first + c_FaultRunPages, pages);
-					for (size_t page = first; page < last; ++page) {
-						if (copy.saved[page]) continue;
-						CopyCheckpointPages(reinterpret_cast<std::byte*>(copy.destination) + page * coordinator.pageBytes, reinterpret_cast<const void*>(address + page * coordinator.pageBytes), coordinator.pageBytes);
-						copy.saved[page] = 1;
+				size_t copiedPages = 0;
+				for (size_t index = 0; index < coordinator.hotCount; ++index) {
+					const size_t first = size_t{coordinator.hotRuns[(coordinator.hotFirst + index) % c_HotRunCapacity]} * c_FaultRunPages;
+					const size_t last = std::min(first + c_FaultRunPages, pages);
+					for (size_t page = first; page < last;) {
+						if (copy.saved[page]) { ++page; continue; }
+						const size_t begin = page;
+						while (page < last && !copy.saved[page]) copy.saved[page++] = 1;
+						CopyCheckpointPages(reinterpret_cast<std::byte*>(copy.destination) + begin * coordinator.pageBytes,
+						                    reinterpret_cast<const void*>(address + begin * coordinator.pageBytes), (page - begin) * coordinator.pageBytes);
+						copiedPages += page - begin;
 					}
 				}
-				coordinator.armedHotRuns = static_cast<uint32_t>(coordinator.hotRunCount);
+				if (copy.faults) {
+					copy.faults->armCopyUs = MicrosecondsSince(copyStarted);
+					copy.faults->armCopiedPages = copiedPages;
+					copy.faults->armWhole = false;
+				}
+				coordinator.armedHotRuns = static_cast<uint32_t>(coordinator.hotCount);
 				coordinator.armedWhole = false;
-				coordinator.hotRunCount = 0;
+				coordinator.armedTick = SaverThreads::TickStarts();
 				for (size_t page = 0; page < pages;) {
 					if (copy.saved[page]) { ++page; continue; }
 					const size_t begin = page;
@@ -886,10 +928,17 @@ namespace RTE::CheckpointLua {
 				Locked guard(coordinator.lock);
 				auto& copy = *prepared.copy;
 				if (copy.completed || copy.armed.load(std::memory_order_relaxed) != 0 || bytes != copy.saved.size() * copy.pageBytes) return false;
+				const auto copyStarted = std::chrono::steady_clock::now();
 				CopyCheckpointPages(copy.destination, reinterpret_cast<const void*>(address), bytes);
 				std::fill(copy.saved.begin(), copy.saved.end(), 1);
+				if (copy.faults) {
+					copy.faults->armCopyUs = MicrosecondsSince(copyStarted);
+					copy.faults->armCopiedPages = copy.saved.size();
+					copy.faults->armWhole = true;
+				}
 				coordinator.armedHotRuns = 0;
 				coordinator.armedWhole = true;
+				coordinator.armedTick = SaverThreads::TickStarts();
 				copy.armed.store(1, std::memory_order_release);
 				copy.armed.notify_all();
 				return true;
@@ -913,12 +962,12 @@ namespace RTE::CheckpointLua {
 				// The faulting page always opens; a neighbour opens only when this call saved it, since it is still fenced.
 				std::array<bool, c_FaultRunPages> opened{};
 				opened[page - first] = fault;
-				bool recorded = !fault || hotRunCount == hotRuns.size();
+				bool recorded = !fault || SaverThreads::TickStarts() - armedTick > c_HotTicks;
 				for (const auto& copy: copies) {
 					if (copy->armed.load(std::memory_order_relaxed) != 1 || copy->completed) continue;
 					const bool faulted = page < copy->saved.size() && !copy->saved[page];
 					if (faulted && !recorded) {
-						hotRuns[hotRunCount++] = static_cast<uint32_t>(first / c_FaultRunPages);
+						RememberHotRun(first / c_FaultRunPages);
 						recorded = true;
 					}
 					// An unsaved generation's page has never been opened for a
@@ -1392,6 +1441,8 @@ namespace RTE::CheckpointLua {
 			return true;
 		}
 		Snapshot Image() const { return Snapshot(m_Data); }
+		/// The bytes arming copies: the whole heap, or its hot runs.
+		size_t ArmCopyBytes(bool byCopy) const noexcept { return byCopy ? m_Data->committed : m_Coordinator->HotBytes(); }
 		void Drain() {
 			std::unique_lock lock(m_Mutex);
 			if (m_Finished) { m_Data->WaitCopied(); return; }
@@ -1478,7 +1529,7 @@ namespace RTE::CheckpointLua {
 		if (!preparations || !owner.m_CowCoordinator) return {};
 		auto& coordinator = *owner.m_CowCoordinator;
 		CowCoordinator::Locked guard(coordinator.lock);
-		return {coordinator.tickFaults.exchange(0, std::memory_order_relaxed), coordinator.armedHotRuns, static_cast<uint32_t>(coordinator.hotRunCount),
+		return {coordinator.tickFaults.exchange(0, std::memory_order_relaxed), coordinator.armedHotRuns, static_cast<uint32_t>(coordinator.hotCount),
 		        coordinator.armedWhole ? 1u : 0u};
 	}
 

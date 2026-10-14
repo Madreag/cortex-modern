@@ -70,6 +70,9 @@ namespace RTE {
 		/// The steady clock in microseconds, as the slices are measured.
 		static int64_t NowUs() noexcept;
 
+		/// The ticks the game loop has started, for saver work keyed on the ticks right after a boundary.
+		static uint64_t TickStarts() noexcept { return s_TickStarts.load(std::memory_order_relaxed); }
+
 		/// Game work that runs across ticks (a path solve, a horizon job) counts from its submission to its end, and savers
 		/// stay parked while any is in flight: the time between ticks is not idle while it runs, and a saver beside it on the
 		/// same core makes the next tick wait for it.
@@ -113,6 +116,7 @@ namespace RTE {
 		static inline std::atomic<int> s_Lent{0};
 		static inline std::atomic<int64_t> s_SliceEndUs{0};
 		static inline std::atomic<int64_t> s_ClosedAtUs{0};
+		static inline std::atomic<uint64_t> s_TickStarts{0};
 		static inline std::atomic<int> s_GameWork{0};
 		static inline std::atomic<bool> s_SliceLent{false};
 		static inline std::atomic<int> s_Parked{0};

@@ -804,6 +804,13 @@ struct ActivityMan::PreparedAutosave {
 			// The previous capture's copy-on-write faults on the Lua heaps, which its whole save window paid for.
 			System::PrintDiagnosticLine(std::format("[checkpoint-arm-split] tick={} native_ranges={} native_bytes={} native_arm_us={} native_copied_pages={} native_fenced_pages={} lua_heaps={} lua_arm_us={} lua_bytes={} lua_copy_us={} lua_faults={} lua_previous_faults={} lua_previous_fault_us={} {}",
 			    header.tick, ranges, bytes, nativeUs, copied, fenced, boundary.StateCount(), luaUs, luaBytes, luaCopyUs, luaFaults, previousFaults, previousFaultUs, CheckpointNativeStorage::InventoryCensus()));
+			// Per heap: slot, MB, copied whole (w) or fenced (f), the pages the boundary copied and their us, the arm's us, its thread.
+			std::string heapArms;
+			for (size_t index = 0; index < boundary.StateCount(); ++index) {
+				const auto heap = boundary.LuaHeap(index);
+				heapArms += std::format(" {}:{}:{}:{}:{}:{}:{}", index, heap.ByteCount() >> 20, heap.ArmWhole() ? "w" : "f", heap.ArmCopiedPages(), heap.ArmCopyUs(), heap.FreezeUs(), boundary.ArmPart(index));
+			}
+			System::PrintDiagnosticLine(std::format("[checkpoint-heap-arm] tick={}{}", header.tick, heapArms));
 		}
 		CheckpointNativeStorage::ReadScope pages(boundary.NativeViews());
 		RandomGenerator::CheckpointScope random;
