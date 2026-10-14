@@ -712,6 +712,8 @@ namespace RTE {
 
 		/// Whether CC_TEST_SHARED_LUA_TRACE asks for the shared Lua trace.
 		static bool SharedTraceEnabled();
+		/// Whether CC_TEST_MASTER_DRAW_TRACE asks for the master state's draws alone.
+		static bool MasterDrawTraceEnabled();
 
 		/// Prints one shared-trace line with its tick and, given a state, the running Lua caller.
 		/// @param state The Lua state whose running coroutine called in, or nullptr.

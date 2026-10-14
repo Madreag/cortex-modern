@@ -9368,8 +9368,13 @@ bool LuaMan::SharedTraceEnabled() {
 	return trace;
 }
 
+bool LuaMan::MasterDrawTraceEnabled() {
+	static const bool trace = std::getenv("CC_TEST_MASTER_DRAW_TRACE") != nullptr;
+	return trace;
+}
+
 void LuaMan::TraceShared(lua_State* state, const std::string& event) {
-	if (!SharedTraceEnabled()) {
+	if (!SharedTraceEnabled() && !MasterDrawTraceEnabled()) {
 		return;
 	}
 	std::ostringstream line;
@@ -9389,9 +9394,10 @@ void LuaMan::TraceShared(lua_State* state, const std::string& event) {
 }
 
 namespace {
-	// CC_TEST_SHARED_LUA_TRACE names every draw from the master state's own generator with its Lua caller, so two peers' draws compare line by line.
+	// CC_TEST_SHARED_LUA_TRACE (or CC_TEST_MASTER_DRAW_TRACE alone) names every draw from the master state's own generator with its Lua caller,
+	// so two peers' draws compare line by line.
 	void TraceMasterDraw(LuaStateWrapper& wrapper, lua_State* main, const RandomGenerator& rng, const char* kind) {
-		if (!LuaMan::SharedTraceEnabled() || s_luaRNGOverride || &wrapper != &g_LuaMan.GetMasterScriptState() || !main) {
+		if ((!LuaMan::SharedTraceEnabled() && !LuaMan::MasterDrawTraceEnabled()) || s_luaRNGOverride || &wrapper != &g_LuaMan.GetMasterScriptState() || !main) {
 			return;
 		}
 		LuaMan::TraceShared(main, std::string("master-draw draw=") + std::to_string(rng.GetDrawCount()) + " kind=" + kind +
