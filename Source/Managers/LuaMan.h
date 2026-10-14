@@ -472,6 +472,12 @@ namespace RTE {
 #pragma region MultiThreading
 		/// Gets the mutex to lock this lua state. A frozen capture's page copy lands before anyone may take it.
 		std::recursive_mutex& GetMutex() { WaitFrozenCopy(); return m_Mutex; };
+
+		/// Test lever CCCP_TEST_FAULT_TICKS: the checkpoint heap's write faults since the last call (see HeapOwner::TakeTickFaults).
+		std::array<uint32_t, 5> TakeHeapTickFaults();
+
+		/// Tells the checkpoint heap the bytes in use before and after a full collection.
+		void NoteFullCollection(size_t before, size_t after);
 #pragma endregion
 
 #pragma region
@@ -964,8 +970,8 @@ namespace RTE {
 		/// Test lever CCCP_TEST_FAULT_TICKS: the Lua heap write faults taken since the last call, and their microseconds.
 		static std::pair<uint64_t, uint64_t> TakeHeapFaultTally();
 
-		/// Test lever CCCP_TEST_FAULT_TICKS: each faulting heap since the last call, as " slot:faults/runs copied at its boundary/
-		/// first-fault runs recorded since", with "w" when its boundary copied it whole.
+		/// Test lever CCCP_TEST_FAULT_TICKS: each faulting heap since the last call, as " slot:script faults+collector faults/runs
+		/// copied at its boundary/hot runs recorded since", with "w" when its boundary copied it whole.
 		static std::string TakeHeapFaultsByState();
 
 		/// Reseeds every Lua state's RNG, deriving an independent per-state seed from baseSeed.

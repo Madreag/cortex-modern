@@ -9293,11 +9293,19 @@ std::pair<uint64_t, uint64_t> LuaMan::TakeHeapFaultTally() {
 	return CheckpointLua::HeapOwner::TakeFaultTally();
 }
 
+std::array<uint32_t, 5> LuaStateWrapper::TakeHeapTickFaults() {
+	return m_CheckpointHeap ? m_CheckpointHeap->TakeTickFaults() : std::array<uint32_t, 5>{};
+}
+
+void LuaStateWrapper::NoteFullCollection(size_t before, size_t after) {
+	if (m_CheckpointHeap) m_CheckpointHeap->NoteFullCollection(before, after);
+}
+
 std::string LuaMan::TakeHeapFaultsByState() {
 	std::string text;
 	const auto add = [&text](size_t slot, LuaStateWrapper& state) {
-		const auto [faults, copied, recorded, whole] = CheckpointLua::HeapOwner::LeasePreparation(state.GetLuaState()).TakeTickFaults();
-		if (faults) text += std::format(" {}:{}/{}/{}{}", slot, faults, copied, recorded, whole ? "w" : "");
+		const auto [faults, collectorFaults, copied, recorded, whole] = state.TakeHeapTickFaults();
+		if (faults || collectorFaults) text += std::format(" {}:{}+{}/{}/{}{}", slot, faults, collectorFaults, copied, recorded, whole ? "w" : "");
 	};
 	add(0, g_LuaMan.GetMasterScriptState());
 	size_t slot = 1;
@@ -16515,9 +16523,10 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 		    g_ThreadMan.GetPriorityThreadPool().submit([luaState, fullCollection]() {
 			    ZoneScopedN("Lua Garbage Collection");
 			    std::lock_guard<std::recursive_mutex> lock(luaState->GetMutex());
-			    const CheckpointLua::HeapOwner::CollectionScope collecting;
 			    lua_State* state = luaState->GetLuaState();
 			    if (fullCollection) {
+				    const CheckpointLua::HeapOwner::CollectionScope collecting;
+				    const size_t inUse = static_cast<size_t>(G(state)->gc.total);
 				    // A whole cycle, so the tick a dropped object dies on does not follow its state's heap size.
 				    if (G(state)->gc.state == GCSpause) {
 					    // From the pause one unlimited step is that cycle; LUA_GCCOLLECT would first sweep every object once for nothing.
@@ -16528,6 +16537,7 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 					    // A state a script or a restore left mid-cycle finishes nothing it started: LUA_GCCOLLECT starts over.
 					    lua_gc(state, LUA_GCCOLLECT, 0);
 				    }
+				    if (CheckpointNativeStorage::Enabled()) luaState->NoteFullCollection(inUse, static_cast<size_t>(G(state)->gc.total));
 			    } else {
 				    lua_gc(state, LUA_GCSTEP, 100);
 			    }
