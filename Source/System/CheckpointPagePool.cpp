@@ -61,11 +61,15 @@ namespace {
 	// Mapped bytes and ranges: [0] live blocks, [1] capture copies; and the copies' committed bytes.
 	std::atomic<uint64_t> s_MappedBytes[2]{}, s_MappedRanges[2]{}, s_CommittedCopyBytes{0};
 	struct Pages {
+		static constexpr size_t c_RunBytes = size_t{64} << 10; //!< A reserved range commits a run at a time.
 		unsigned char* data = nullptr;
 		size_t bytes;
 		bool betweenTicks = false; //!< A capture's copy goes back between the game's ticks.
-		bool committed = true; //!< A reserved range holds no memory until it is committed; its owner's lock guards this.
-		explicit Pages(size_t bytes, bool betweenTicks = false, bool reserveOnly = false) : bytes(bytes), betweenTicks(betweenTicks), committed(!reserveOnly) {
+		bool committed = true; //!< Committed whole; otherwise only the runs marked below. The owner's lock guards both.
+		std::vector<unsigned char> runs;
+		size_t committedBytes = 0;
+		explicit Pages(size_t bytes, bool betweenTicks = false, bool reserveOnly = false) :
+		    bytes(bytes), betweenTicks(betweenTicks), committed(!reserveOnly), runs(reserveOnly ? (bytes + c_RunBytes - 1) / c_RunBytes : 0), committedBytes(reserveOnly ? 0 : bytes) {
 			CheckpointFailure::Check(CheckpointFailure::Point::NativePages);
 #ifdef _WIN32
 			data = static_cast<unsigned char*>(VirtualAlloc(nullptr, bytes, reserveOnly ? MEM_RESERVE : MEM_RESERVE | MEM_COMMIT, reserveOnly ? PAGE_NOACCESS : PAGE_READWRITE));
@@ -76,12 +80,12 @@ namespace {
 			if (!data) throw std::bad_alloc();
 			s_MappedBytes[betweenTicks].fetch_add(bytes, std::memory_order_relaxed);
 			s_MappedRanges[betweenTicks].fetch_add(1, std::memory_order_relaxed);
-			if (committed && betweenTicks) s_CommittedCopyBytes.fetch_add(bytes, std::memory_order_relaxed);
+			if (betweenTicks) s_CommittedCopyBytes.fetch_add(committedBytes, std::memory_order_relaxed);
 		}
 		~Pages() {
 			s_MappedBytes[betweenTicks].fetch_sub(bytes, std::memory_order_relaxed);
 			s_MappedRanges[betweenTicks].fetch_sub(1, std::memory_order_relaxed);
-			if (committed && betweenTicks) s_CommittedCopyBytes.fetch_sub(bytes, std::memory_order_relaxed);
+			if (betweenTicks) s_CommittedCopyBytes.fetch_sub(committedBytes, std::memory_order_relaxed);
 			if (betweenTicks) ReleaseBetweenTicks(data, bytes);
 			else Release(data, bytes);
 		}
@@ -92,24 +96,32 @@ namespace {
 			munmap(data, bytes);
 #endif
 		}
-		bool Commit() noexcept {
-			if (committed) return true;
+		/// Commits the runs that hold these bytes, each once.
+		bool Commit(size_t offset, size_t length) noexcept {
+			if (committed || !length) return true;
+			for (size_t run = offset / c_RunBytes; run <= (offset + length - 1) / c_RunBytes; ++run) {
+				if (runs[run]) continue;
+				const size_t first = run * c_RunBytes, runBytes = std::min(c_RunBytes, bytes - first);
 #ifdef _WIN32
-			if (!VirtualAlloc(data, bytes, MEM_COMMIT, PAGE_READWRITE)) return false;
+				if (!VirtualAlloc(data + first, runBytes, MEM_COMMIT, PAGE_READWRITE)) return false;
 #endif
-			committed = true;
-			if (betweenTicks) s_CommittedCopyBytes.fetch_add(bytes, std::memory_order_relaxed);
+				runs[run] = 1;
+				committedBytes += runBytes;
+				if (betweenTicks) s_CommittedCopyBytes.fetch_add(runBytes, std::memory_order_relaxed);
+			}
 			return true;
 		}
+		/// Gives a reserved range's committed runs back; a range committed whole keeps its memory.
 		void Decommit() noexcept {
-			if (!committed) return;
+			if (committed || !committedBytes) return;
 #ifdef _WIN32
 			VirtualFree(data, bytes, MEM_DECOMMIT);
 #else
 			madvise(data, bytes, MADV_DONTNEED);
 #endif
-			committed = false;
-			if (betweenTicks) s_CommittedCopyBytes.fetch_sub(bytes, std::memory_order_relaxed);
+			std::fill(runs.begin(), runs.end(), 0);
+			if (betweenTicks) s_CommittedCopyBytes.fetch_sub(committedBytes, std::memory_order_relaxed);
+			committedBytes = 0;
 		}
 		// One large release holds the process's address space while the game faults on its own pages, so a saver gives
 		// the copy back a piece at a time, and a game thread leaves it to the savers.
@@ -227,7 +239,7 @@ struct CheckpointPagePool::Block {
 		for (size_t page = 0; page < states.size();) {
 			if (states[page] == PageState::Hot) {
 				if (!copy.saved[page].load(std::memory_order_relaxed)) {
-					if (!copy.pages.Commit()) throw std::bad_alloc();
+					if (!copy.pages.Commit(page * pageBytes, pageBytes)) throw std::bad_alloc();
 					CopyCheckpointPages(copy.pages.data + page * pageBytes, live.data + page * pageBytes, pageBytes);
 					copy.saved[page].store(1, std::memory_order_release);
 					++copied;
@@ -264,8 +276,8 @@ struct CheckpointPagePool::Block {
 			if (copy->completed || copy->abandoned || copy->lost.load(std::memory_order_relaxed) || !(copy->Armed() || copy->Arming())) continue;
 			for (size_t page = first; page < first + count; ++page) {
 				if (copy->saved[page].load(std::memory_order_relaxed)) continue;
-				if (!copy->pages.Commit()) { copy->lost.store(true, std::memory_order_release); break; }
 				const size_t offset = page * pageBytes;
+				if (!copy->pages.Commit(offset, pageBytes)) { copy->lost.store(true, std::memory_order_release); break; }
 				CopyCheckpointPages(copy->pages.data + offset, live.data + offset, pageBytes);
 				copy->saved[page].store(1, std::memory_order_release);
 			}
@@ -759,10 +771,13 @@ void CheckpointPagePool::Snapshot::WarmShadow() const {
 		for (size_t first = 0; first < part.copy->saved.size(); first += runPages) {
 			Locked guard(part.block->lock);
 			if (!part.copy->Waiting()) throw std::logic_error("native checkpoint shadow warming after its boundary");
-			if (!part.copy->pages.Commit()) throw std::bad_alloc();
 			// An inventory boundary writes only the pages written since the last one; the saver fills the rest itself.
-			const size_t end = std::min(first + runPages, part.copy->saved.size());
-			for (size_t page = first; page < end; ++page) if (!m_ArmGate || part.block->states[page] == Block::PageState::Hot) destination[page * part.block->pageBytes] = 0;
+			const size_t end = std::min(first + runPages, part.copy->saved.size()), pageBytes = part.block->pageBytes;
+			for (size_t page = first; page < end; ++page) {
+				if (m_ArmGate && part.block->states[page] != Block::PageState::Hot) continue;
+				if (!part.copy->pages.Commit(page * pageBytes, pageBytes)) throw std::bad_alloc();
+				destination[page * pageBytes] = 0;
+			}
 		}
 	}
 }
