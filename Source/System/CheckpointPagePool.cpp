@@ -29,6 +29,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <exception>
 #include <functional>
@@ -1911,6 +1912,65 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 	return CheckpointFrozenContainersSelfTestMismatch();
 }
 
+namespace {
+	template <class T> std::string FrozenContainerValueText(const T& value) {
+		if constexpr (requires(const T& pair) { pair.first; pair.second; }) return std::to_string(value.first) + ":" + value.second.Value();
+		else return value.Value();
+	}
+
+	template <class Container, class Value> const auto& FrozenContainerKey(const Value& value) {
+		if constexpr (requires { typename Container::mapped_type; }) return value.first;
+		else return value;
+	}
+
+	template <class Key> Key MissingFrozenContainerKey() {
+		if constexpr (std::is_integral_v<Key>) return Key{-1};
+		else return Key("missing checkpoint lookup key");
+	}
+
+	// A named template rather than a generic lambda: MSVC 14.51 stops with an internal error on the lambda form.
+	template <class Container> std::string FrozenContainerMismatch(const char* name) {
+		CheckpointNativeStorage::AllocationScope allocation(true);
+		auto live = MakeCheckpointNativeShared<Container>();
+		for (int index = 0; index < 133; ++index) {
+			CheckpointString value(std::to_string((index * 73) % 133) + std::string(19, 'a' + index % 26));
+			if constexpr (requires { typename Container::mapped_type; }) live->emplace(index, std::move(value));
+			else if constexpr (requires(Container& container, CheckpointString&& item) { container.push_back(std::move(item)); }) live->push_back(std::move(value));
+			else if constexpr (requires(Container& container, CheckpointString&& item) { container.push(std::move(item)); }) live->push(std::move(value));
+			else live->insert(std::move(value));
+		}
+		std::vector<std::string> expected;
+		for (const auto& value: CheckpointValues(*live)) expected.push_back(FrozenContainerValueText(value));
+		const Container* address = live.get();
+		const auto pages = CheckpointNativeStorage::Prepare();
+		for (const auto& part: pages) part->Arm();
+		live.reset();
+		auto reused = MakeCheckpointNativeShared<Container>();
+		CheckpointNativeStorage::ReadScope read(pages);
+		const auto& frozen = *static_cast<const Container*>(CheckpointNativeStorage::View(address, sizeof(Container)));
+		if (CheckpointNativeStorage::Original(&frozen) != address) return std::string(name) + " lost its original address";
+		std::vector<std::string> found;
+		for (const auto& value: CheckpointValues(frozen)) {
+			found.push_back(FrozenContainerValueText(value));
+			if constexpr (requires { typename Container::key_type; }) {
+				const auto& key = FrozenContainerKey<Container>(value);
+				for (int repeat = 0; repeat < 2; ++repeat) if (CheckpointFind(frozen, key) != &value) return std::string(name) + " lookup escaped its frozen generation";
+			}
+		}
+		if constexpr (requires { typename Container::key_type; }) {
+			const auto missing = MissingFrozenContainerKey<typename Container::key_type>();
+			if (CheckpointContains(frozen, missing)) return std::string(name) + " frozen index invented a value";
+		}
+		if constexpr (requires(const Container& container) { container.hash_function(); }) {
+			const auto rebuilt = CheckpointRebuildHash(frozen, [](const auto& value) { return value; });
+			std::vector<std::string> copied;
+			for (const auto& value: rebuilt) copied.push_back(FrozenContainerValueText(value));
+			if (copied != expected || rebuilt.bucket_count() != frozen.bucket_count()) return std::string(name) + " changed order or buckets when rebuilt";
+		}
+		return found == expected ? std::string() : std::string(name) + " changed values or order after destruction";
+	}
+}
+
 std::string RTE::CheckpointFrozenContainersSelfTestMismatch() {
 	{
 		CheckpointNativeStorage::AllocationScope allocation(true);
@@ -1946,64 +2006,19 @@ std::string RTE::CheckpointFrozenContainersSelfTestMismatch() {
 			if (CheckpointWriter::CaptureNative([&] { return save(*frozen); }).Text() != expected) return "frozen container capture changed its archive bytes";
 		}
 	}
-	const auto render = []<class T>(const T& value) -> std::string {
-		if constexpr (requires { value.first; value.second; }) return std::to_string(value.first) + ":" + value.second.Value();
-		else return value.Value();
-	};
-	const auto check = [&]<class Container>(Container*, const char* name) -> std::string {
-		CheckpointNativeStorage::AllocationScope allocation(true);
-		auto live = MakeCheckpointNativeShared<Container>();
-		for (int index = 0; index < 133; ++index) {
-			CheckpointString value(std::to_string((index * 73) % 133) + std::string(19, 'a' + index % 26));
-			if constexpr (requires { typename Container::mapped_type; }) live->emplace(index, std::move(value));
-			else if constexpr (requires { live->push_back(std::move(value)); }) live->push_back(std::move(value));
-			else if constexpr (requires { live->push(std::move(value)); }) live->push(std::move(value));
-			else live->insert(std::move(value));
-		}
-		std::vector<std::string> expected;
-		for (const auto& value: CheckpointValues(*live)) expected.push_back(render(value));
-		const Container* address = live.get();
-		const auto pages = CheckpointNativeStorage::Prepare();
-		for (const auto& part: pages) part->Arm();
-		live.reset();
-		auto reused = MakeCheckpointNativeShared<Container>();
-		CheckpointNativeStorage::ReadScope read(pages);
-		const auto& frozen = *static_cast<const Container*>(CheckpointNativeStorage::View(address, sizeof(Container)));
-		if (CheckpointNativeStorage::Original(&frozen) != address) return std::string(name) + " lost its original address";
-		std::vector<std::string> found;
-		for (const auto& value: CheckpointValues(frozen)) {
-			found.push_back(render(value));
-			if constexpr (requires { typename Container::key_type; }) {
-				const auto& key = [&]() -> const auto& { if constexpr (requires { typename Container::mapped_type; }) return value.first; else return value; }();
-				for (int repeat = 0; repeat < 2; ++repeat) if (CheckpointFind(frozen, key) != &value) return std::string(name) + " lookup escaped its frozen generation";
-			}
-		}
-		if constexpr (requires { typename Container::key_type; }) {
-			using Key = typename Container::key_type;
-			const Key missing = [] { if constexpr (std::is_integral_v<Key>) return Key{-1}; else return Key("missing checkpoint lookup key"); }();
-			if (CheckpointContains(frozen, missing)) return std::string(name) + " frozen index invented a value";
-		}
-		if constexpr (requires { frozen.hash_function(); }) {
-			const auto rebuilt = CheckpointRebuildHash(frozen, [](const auto& value) { return value; });
-			std::vector<std::string> copied;
-			for (const auto& value: rebuilt) copied.push_back(render(value));
-			if (copied != expected || rebuilt.bucket_count() != frozen.bucket_count()) return std::string(name) + " changed order or buckets when rebuilt";
-		}
-		return found == expected ? std::string() : std::string(name) + " changed values or order after destruction";
-	};
 	struct Collisions {
 		size_t operator()(int key) const { return static_cast<size_t>(key % 7); }
 		size_t operator()(const CheckpointString& key) const { return std::hash<CheckpointString>{}(key) % 7; }
 	};
 	std::string mismatch;
-	if (!(mismatch = check(static_cast<CheckpointVector<CheckpointString>*>(nullptr), "vector")).empty()) return mismatch;
-	if (!(mismatch = check(static_cast<CheckpointDeque<CheckpointString>*>(nullptr), "deque")).empty()) return mismatch;
-	if (!(mismatch = check(static_cast<CheckpointList<CheckpointString>*>(nullptr), "list")).empty()) return mismatch;
-	if (!(mismatch = check(static_cast<CheckpointQueue<CheckpointString>*>(nullptr), "queue")).empty()) return mismatch;
-	if (!(mismatch = check(static_cast<CheckpointSet<CheckpointString, std::greater<CheckpointString>>*>(nullptr), "set")).empty()) return mismatch;
-	if (!(mismatch = check(static_cast<CheckpointMap<int, CheckpointString>*>(nullptr), "map")).empty()) return mismatch;
-	if (!(mismatch = check(static_cast<CheckpointUnorderedMap<int, CheckpointString, Collisions>*>(nullptr), "hash map")).empty()) return mismatch;
-	return check(static_cast<CheckpointUnorderedSet<CheckpointString, Collisions>*>(nullptr), "hash set");
+	if (!(mismatch = FrozenContainerMismatch<CheckpointVector<CheckpointString>>("vector")).empty()) return mismatch;
+	if (!(mismatch = FrozenContainerMismatch<CheckpointDeque<CheckpointString>>("deque")).empty()) return mismatch;
+	if (!(mismatch = FrozenContainerMismatch<CheckpointList<CheckpointString>>("list")).empty()) return mismatch;
+	if (!(mismatch = FrozenContainerMismatch<CheckpointQueue<CheckpointString>>("queue")).empty()) return mismatch;
+	if (!(mismatch = FrozenContainerMismatch<CheckpointSet<CheckpointString, std::greater<CheckpointString>>>("set")).empty()) return mismatch;
+	if (!(mismatch = FrozenContainerMismatch<CheckpointMap<int, CheckpointString>>("map")).empty()) return mismatch;
+	if (!(mismatch = FrozenContainerMismatch<CheckpointUnorderedMap<int, CheckpointString, Collisions>>("hash map")).empty()) return mismatch;
+	return FrozenContainerMismatch<CheckpointUnorderedSet<CheckpointString, Collisions>>("hash set");
 }
 
 std::string CheckpointString::SelfTestMismatch() {
