@@ -148,6 +148,10 @@ namespace RTE {
 			bool Current() const noexcept;
 			bool Arm() const;
 			void Cancel() const noexcept;
+			/// Commits the prepared copies and makes the boundary's pages resident; throws std::logic_error once a boundary began.
+			void Warm() const;
+			/// Gives the prepared copies' commit back while no boundary has begun.
+			void Cool() const noexcept;
 			std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> Pages() const { return m_Pages; }
 		private:
 			friend class CheckpointNativeStorage;
