@@ -137,7 +137,8 @@ namespace RTE {
 		static const void* View(const void* source, size_t bytes);
 		static const void* ViewObject(const void* source);
 		template<class T> static T* Source(T* source) {
-			// A thread that neither reads frozen views nor writes saves sees the live object.
+			// A thread that neither reads frozen views nor writes saves sees the live object; with neither anywhere, no thread needs its own look.
+			if (s_Readers.load(std::memory_order_relaxed) == 0 && SaverThreadMark::marked.load(std::memory_order_relaxed) == 0) return source;
 			if (!Reading() && !SaverThreadMark::current) return source;
 			return static_cast<T*>(const_cast<void*>(ViewObject(source)));
 		}

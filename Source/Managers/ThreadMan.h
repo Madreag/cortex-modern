@@ -33,7 +33,7 @@ namespace RTE {
 		static void Enter();
 
 		/// Marks the calling thread the saver's without lowering it, for a thread the simulation may wait on.
-		static void Mark() noexcept { SaverThreadMark::current = true; }
+		static void Mark() noexcept { SaverThreadMark::Set(); }
 
 		/// Whether the calling thread is one of the saver's.
 		static bool Current() noexcept { return SaverThreadMark::current; }
