@@ -845,16 +845,16 @@ namespace RTE::CheckpointLua {
 			size_t pageBytes = 0;
 			std::vector<std::shared_ptr<CowCopy>> copies;
 			std::atomic_flag lock = ATOMIC_FLAG_INIT;
-			// The runs written in the two ticks after a boundary, which the ticks after the next boundary write again: that
+			// The runs written in the ticks after a boundary, which the ticks after the next boundary write again: that
 			// boundary copies them instead of fencing them. A copied run cannot fault to show it is still written, so a run
-			// stays until newer ones push it out.
+			// stays until newer ones push it out. A heap's first generation has no runs yet and records them for a second.
 			static constexpr size_t c_HotRunCapacity = 512;
 			static constexpr size_t c_HotRunBytes = size_t{32} << 20;
-			static constexpr uint64_t c_HotTicks = 2;
+			static constexpr uint64_t c_HotTicks = 4, c_FirstHotTicks = 60;
 			std::array<uint32_t, c_HotRunCapacity> hotRuns{};
 			size_t hotFirst = 0, hotCount = 0;
 			std::vector<uint8_t> hotMarks;
-			uint64_t armedTick = 0;
+			uint64_t armedTick = 0, hotTicks = c_FirstHotTicks;
 			size_t HotCapacity() const noexcept { return std::min(c_HotRunCapacity, std::max<size_t>(1, c_HotRunBytes / (c_FaultRunPages * pageBytes))); }
 			void RememberHotRun(size_t run) noexcept {
 				if (run >= hotMarks.size() || hotMarks[run]) return;
@@ -918,6 +918,7 @@ namespace RTE::CheckpointLua {
 				coordinator.armedHotRuns = static_cast<uint32_t>(coordinator.hotCount);
 				coordinator.armedWhole = false;
 				coordinator.armedTick = SaverThreads::TickStarts();
+				coordinator.hotTicks = coordinator.hotCount ? c_HotTicks : c_FirstHotTicks;
 				for (size_t page = 0; page < pages;) {
 					if (copy.saved[page]) { ++page; continue; }
 					const size_t begin = page;
@@ -948,6 +949,7 @@ namespace RTE::CheckpointLua {
 				coordinator.armedHotRuns = 0;
 				coordinator.armedWhole = true;
 				coordinator.armedTick = SaverThreads::TickStarts();
+				coordinator.hotTicks = coordinator.hotCount ? c_HotTicks : c_FirstHotTicks;
 				copy.armed.store(1, std::memory_order_release);
 				copy.armed.notify_all();
 				return true;
@@ -971,7 +973,7 @@ namespace RTE::CheckpointLua {
 				// The faulting page always opens; a neighbour opens only when this call saved it, since it is still fenced.
 				std::array<bool, c_FaultRunPages> opened{};
 				opened[page - first] = fault;
-				bool recorded = !fault || t_Collecting || SaverThreads::TickStarts() - armedTick > c_HotTicks;
+				bool recorded = !fault || t_Collecting || SaverThreads::TickStarts() - armedTick > hotTicks;
 				for (const auto& copy: copies) {
 					if (copy->armed.load(std::memory_order_relaxed) != 1 || copy->completed) continue;
 					const bool faulted = page < copy->saved.size() && !copy->saved[page];
