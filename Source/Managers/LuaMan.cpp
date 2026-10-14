@@ -8061,6 +8061,16 @@ std::vector<MovableObject*> LuaStateWrapper::PreparedScriptHeldObjects(const Che
 	return held;
 }
 
+namespace {
+	template<class T> concept SnapshotConstructedValue = requires(const T& source, CheckpointNativeSnapshot& snapshot) { T(source, snapshot); };
+	// A value with a snapshot constructor is copied through it; any other is copied as it is.
+	template<class T> void* CopyFrozenValue(CheckpointNativeSnapshot& snapshot, const void* pointer) {
+		const auto* source = static_cast<const T*>(pointer);
+		if constexpr (SnapshotConstructedValue<T>) return snapshot.ValueObject(source);
+		else return snapshot.CopyValue(source);
+	}
+}
+
 bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary& boundary, std::span<const LuaStateWrapper* const> states,
     const std::shared_ptr<CheckpointNativeSnapshot>& snapshot, std::vector<CheckpointText>& graphs,
     std::vector<CheckpointScope>& scopes, std::vector<std::string>& problems, std::thread::id captureThread) {
@@ -8119,11 +8129,7 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 					if (bindings.DerivesFrom(type, "MovableObject") && !LuaScriptGraphNativeCaptureScope::Current()->Known(static_cast<const MovableObject*>(entity))) return nullptr;
 					return reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
 				}
-				const auto value = [&]<class T>(T*) -> void* {
-					const auto* source = static_cast<const T*>(pointer);
-					if constexpr (requires { T(*source, *snapshot); }) return snapshot->ValueObject(source);
-					else return snapshot->CopyValue(source);
-				};
+				const auto value = [&]<class T>(T*) -> void* { return CopyFrozenValue<T>(*snapshot, pointer); };
 				const auto id = bindings.Class(type)->type();
 				if (id == LUABIND_TYPEID(Vector)) return value(static_cast<Vector*>(nullptr));
 				if (id == LUABIND_TYPEID(Timer)) return value(static_cast<Timer*>(nullptr));

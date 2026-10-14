@@ -1,6 +1,7 @@
 #include "CheckpointPagePool.h"
 
 #include "PageWriteFence.h"
+#include "CheckpointPageCopy.h"
 #include "CheckpointFailure.h"
 #include "CheckpointNativeStorage.h"
 #include "CheckpointString.h"
@@ -191,7 +192,7 @@ struct CheckpointPagePool::Block {
 		for (size_t page = 0; page < states.size();) {
 			if (states[page] == PageState::Hot) {
 				if (!copy.saved[page].load(std::memory_order_relaxed)) {
-					std::memcpy(copy.pages.data + page * pageBytes, live.data + page * pageBytes, pageBytes);
+					CopyCheckpointPages(copy.pages.data + page * pageBytes, live.data + page * pageBytes, pageBytes);
 					copy.saved[page].store(1, std::memory_order_release);
 					++copied;
 				}
@@ -228,7 +229,7 @@ struct CheckpointPagePool::Block {
 			for (size_t page = first; page < first + count; ++page) {
 				if (copy->saved[page].load(std::memory_order_relaxed)) continue;
 				const size_t offset = page * pageBytes;
-				std::memcpy(copy->pages.data + offset, live.data + offset, pageBytes);
+				CopyCheckpointPages(copy->pages.data + offset, live.data + offset, pageBytes);
 				copy->saved[page].store(1, std::memory_order_release);
 			}
 		}
@@ -1913,34 +1914,35 @@ std::string CheckpointNativeStorage::SelfTestMismatch() {
 }
 
 namespace {
-	template <class T> std::string FrozenContainerValueText(const T& value) {
-		if constexpr (requires(const T& pair) { pair.first; pair.second; }) return std::to_string(value.first) + ":" + value.second.Value();
+	template<class T> concept FrozenPairValue = requires(const T& value) { value.first; value.second; };
+	template<class Container> concept KeyedContainer = requires { typename Container::key_type; };
+	template<class Container> concept HashedContainer = requires(const Container& container) { container.hash_function(); };
+	template<class Container> concept PushBackContainer = requires(Container& container, CheckpointString value) { container.push_back(std::move(value)); };
+	template<class Container> concept PushContainer = requires(Container& container, CheckpointString value) { container.push(std::move(value)); };
+
+	template<class T> std::string RenderFrozenValue(const T& value) {
+		if constexpr (FrozenPairValue<T>) return std::to_string(value.first) + ":" + value.second.Value();
 		else return value.Value();
 	}
 
-	template <class Container, class Value> const auto& FrozenContainerKey(const Value& value) {
-		if constexpr (requires { typename Container::mapped_type; }) return value.first;
-		else return value;
-	}
-
-	template <class Key> Key MissingFrozenContainerKey() {
+	template<class Key> Key MissingFrozenKey() {
 		if constexpr (std::is_integral_v<Key>) return Key{-1};
 		else return Key("missing checkpoint lookup key");
 	}
 
-	// A named template rather than a generic lambda: MSVC 14.51 stops with an internal error on the lambda form.
-	template <class Container> std::string FrozenContainerMismatch(const char* name) {
+	// Every container kind is filled, frozen, destroyed and read back the same way.
+	template<class Container> std::string FrozenContainerMismatch(const char* name) {
 		CheckpointNativeStorage::AllocationScope allocation(true);
 		auto live = MakeCheckpointNativeShared<Container>();
 		for (int index = 0; index < 133; ++index) {
 			CheckpointString value(std::to_string((index * 73) % 133) + std::string(19, 'a' + index % 26));
-			if constexpr (requires { typename Container::mapped_type; }) live->emplace(index, std::move(value));
-			else if constexpr (requires(Container& container, CheckpointString&& item) { container.push_back(std::move(item)); }) live->push_back(std::move(value));
-			else if constexpr (requires(Container& container, CheckpointString&& item) { container.push(std::move(item)); }) live->push(std::move(value));
+			if constexpr (CheckpointContainerDetail::MappedContainer<Container>) live->emplace(index, std::move(value));
+			else if constexpr (PushBackContainer<Container>) live->push_back(std::move(value));
+			else if constexpr (PushContainer<Container>) live->push(std::move(value));
 			else live->insert(std::move(value));
 		}
 		std::vector<std::string> expected;
-		for (const auto& value: CheckpointValues(*live)) expected.push_back(FrozenContainerValueText(value));
+		for (const auto& value: CheckpointValues(*live)) expected.push_back(RenderFrozenValue(value));
 		const Container* address = live.get();
 		const auto pages = CheckpointNativeStorage::Prepare();
 		for (const auto& part: pages) part->Arm();
@@ -1951,20 +1953,21 @@ namespace {
 		if (CheckpointNativeStorage::Original(&frozen) != address) return std::string(name) + " lost its original address";
 		std::vector<std::string> found;
 		for (const auto& value: CheckpointValues(frozen)) {
-			found.push_back(FrozenContainerValueText(value));
-			if constexpr (requires { typename Container::key_type; }) {
-				const auto& key = FrozenContainerKey<Container>(value);
+			found.push_back(RenderFrozenValue(value));
+			if constexpr (KeyedContainer<Container>) {
+				const auto& key = CheckpointContainerDetail::LookupKey<Container>(value);
 				for (int repeat = 0; repeat < 2; ++repeat) if (CheckpointFind(frozen, key) != &value) return std::string(name) + " lookup escaped its frozen generation";
 			}
 		}
-		if constexpr (requires { typename Container::key_type; }) {
-			const auto missing = MissingFrozenContainerKey<typename Container::key_type>();
+		if constexpr (KeyedContainer<Container>) {
+			using Key = typename Container::key_type;
+			const Key missing = MissingFrozenKey<Key>();
 			if (CheckpointContains(frozen, missing)) return std::string(name) + " frozen index invented a value";
 		}
-		if constexpr (requires(const Container& container) { container.hash_function(); }) {
+		if constexpr (HashedContainer<Container>) {
 			const auto rebuilt = CheckpointRebuildHash(frozen, [](const auto& value) { return value; });
 			std::vector<std::string> copied;
-			for (const auto& value: rebuilt) copied.push_back(FrozenContainerValueText(value));
+			for (const auto& value: rebuilt) copied.push_back(RenderFrozenValue(value));
 			if (copied != expected || rebuilt.bucket_count() != frozen.bucket_count()) return std::string(name) + " changed order or buckets when rebuilt";
 		}
 		return found == expected ? std::string() : std::string(name) + " changed values or order after destruction";
