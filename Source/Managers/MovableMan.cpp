@@ -4070,6 +4070,7 @@ void MovableMan::EndSpeculation(std::vector<MovableObject*>* takenResidents) {
 	m_Speculation.travelers.clear();
 	m_Speculation.travelerSteps = 0;
 	m_Speculation.travelersMoved = false;
+	m_Speculation.residentIgnoreLinks.clear();
 	m_Speculation.shadows.clear();
 	m_Speculation.residents.clear();
 	m_Speculation.taken.clear();
@@ -4198,7 +4199,8 @@ MovableObject* MovableMan::ShadowOf(MovableObject* resident) {
 	const int kind = ResidentKind(resident);
 	MovableObject* shadow = nullptr;
 	{
-		MovableObject::FaithfulCloneScope scope(false);
+		// A shadow is dropped or taken by a preview, never saved: it carries no runtime text.
+		MovableObject::FaithfulCloneScope scope(false, false, false);
 		const long counter = MovableObject::GetUniqueIDCounter();
 		shadow = dynamic_cast<MovableObject*>(resident->Clone());
 		MovableObject::PinUniqueIDCounter(counter);
@@ -4217,6 +4219,16 @@ MovableObject* MovableMan::ShadowOf(MovableObject* resident) {
 	entry.inWorld = true;
 	m_Speculation.residents[shadow] = resident;
 	++m_SpeculationStats.shadows;
+	// Do-not-hit links that named the resident follow it into its shadow.
+	std::erase_if(m_Speculation.residentIgnoreLinks, [resident, shadow](MovableObject* holder) {
+		const MovableObject* target = holder->m_pMOToNotHit.get();
+		if (target && const_cast<MovableObject*>(target)->GetRootParent() == resident) {
+			MovableObject* part = shadow->FindPartByUniqueID(target->GetUniqueID());
+			holder->m_pMOToNotHit = part ? part : shadow;
+			return true;
+		}
+		return !target;
+	});
 	MovableObject* previousRoot = m_LinkRoot;
 	m_LinkRoot = shadow;
 	shadow->ResolveFaithfulLinks();
@@ -4225,6 +4237,20 @@ MovableObject* MovableMan::ShadowOf(MovableObject* resident) {
 		m_ShadowMadeHook(resident, shadow);
 	}
 	return shadow;
+}
+
+MovableObject* MovableMan::ResolveIgnoreLink(MovableObject* holder, long uniqueID) {
+	if (!m_Speculation.active || CheckpointNativeStorage::Reading() || CheckpointNativeSnapshot::Current()) return FindObjectByUniqueID(uniqueID);
+	if (m_LinkRoot) {
+		if (MovableObject* part = m_LinkRoot->FindPartByUniqueID(uniqueID)) return part;
+	}
+	const auto* known = CheckpointFind(std::as_const(*this).CheckpointLookupValues().m_KnownObjects, uniqueID);
+	MovableObject* found = known ? known->second : nullptr;
+	if (!found) return nullptr;
+	MovableObject* root = found->GetRootParent();
+	if (!IsResident(root) || ExistingShadowOf(root)) return SpeculativeView(found);
+	m_Speculation.residentIgnoreLinks.push_back(holder);
+	return found;
 }
 
 MovableObject* MovableMan::ExistingShadowOf(const MovableObject* resident) const {

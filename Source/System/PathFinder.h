@@ -101,6 +101,8 @@ namespace RTE {
 		std::unordered_map<int, Cell> overlay;
 		std::deque<std::shared_ptr<void>> jobs;
 		uint64_t generation = 1;
+		uint64_t stamp = 0; //!< The version of the horizon state the copy holds; 0 holds none.
+		bool deferred = false; //!< Captured without a copy: the live state is the captured one until its next write.
 	};
 
 	/// Contains everything related to a PathNode on the path grid used by PathFinder.
@@ -211,7 +213,8 @@ namespace RTE {
 		/// Applies every horizon job whose commit tick is due. A job not ready at T+H stalls the sim tick until it is.
 		void CommitHorizonThrough(uint64_t nowTick);
 
-		void CaptureHorizonFence(HorizonFenceState& out) const;
+		/// @param deferred The fence outlives its Restore: the copy is taken only if the horizon is written before it.
+		void CaptureHorizonFence(HorizonFenceState& out, bool deferred = false) const;
 		void RestoreHorizonFence(const HorizonFenceState& in);
 
 		static constexpr int64_t c_HorizonWaitCapUs = 250000;
@@ -373,6 +376,14 @@ namespace RTE {
 		std::atomic<int> m_CommittedHorizonReaders{0};
 		std::unordered_map<uint64_t, int> m_HorizonReaderCounts;
 		std::atomic<uint64_t> m_HorizonGeneration{1};
+		/// Every write of the overlay, the jobs or the generation takes a new process-wide version, so a fence that already holds
+		/// the live version neither copies it nor puts it back.
+		uint64_t m_HorizonStamp = NextHorizonStamp();
+		static uint64_t NextHorizonStamp();
+		mutable HorizonFenceState* m_DeferredHorizonFence = nullptr; //!< A fence whose copy waits for the horizon's next write.
+		void CopyHorizonInto(HorizonFenceState& out) const;
+		/// Every write calls this first, under the horizon lock: a deferred fence takes its copy before the state moves.
+		void HoldDeferredHorizonFence() const;
 		bool m_SelfTestGrid = false;
 		int m_HorizonWorkerDelayMs = 0;
 		bool m_HorizonWorkerLate = false;

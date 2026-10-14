@@ -799,7 +799,7 @@ void MovableObject::AdoptPersistedUniqueID() {
 
 void MovableObject::ResolveFaithfulLinks() {
 	if (m_FaithfulMOToNotHitUID > 0) {
-		m_pMOToNotHit = g_MovableMan.FindObjectByUniqueID(m_FaithfulMOToNotHitUID);
+		m_pMOToNotHit = g_MovableMan.ResolveIgnoreLink(this, m_FaithfulMOToNotHitUID);
 		m_FaithfulMOToNotHitUID = 0;
 	}
 }
