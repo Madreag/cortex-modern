@@ -165,10 +165,10 @@ namespace RTE {
 		}
 		template<class T> static T& PrivateValue(T* source) {
 			if (!Reading()) return *source;
-			T* value = Source(source);
-			if (!Private(value, sizeof(T))) throw std::logic_error("a saved getter needs private native values before changing them");
-			return *value;
+			return *static_cast<T*>(PrivateView(source, sizeof(T)));
 		}
+		/// A frozen reader's private copy of a value it is about to change; out of line so the live path stays small.
+		RTE_NOINLINE static void* PrivateView(void* source, size_t bytes);
 		static std::shared_ptr<const CheckpointPagePool::Snapshot> PagesFor(const void* source, size_t bytes);
 		static const void* Original(const void* view);
 		static bool IsView(const void* address);

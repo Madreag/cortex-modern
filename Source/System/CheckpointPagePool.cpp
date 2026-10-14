@@ -1307,6 +1307,12 @@ thread_local CheckpointNativeStorage::ReadState* CheckpointNativeStorage::s_Read
 
 bool CheckpointNativeStorage::ReadingHere() noexcept { return s_Read != nullptr; }
 
+void* CheckpointNativeStorage::PrivateView(void* source, size_t bytes) {
+	void* value = const_cast<void*>(ViewObject(source));
+	if (!Private(value, bytes)) throw std::logic_error("a saved getter needs private native values before changing them");
+	return value;
+}
+
 CheckpointNativeStorage::ReadScope::ReadScope(std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> pages, std::span<const RootRange> roots)
 	: ReadScope(ReadViews{true, pages, roots}) {}
 

@@ -20,6 +20,21 @@ using namespace RTE;
 
 const CheckpointFrozenClock* CheckpointFrozenClock::CurrentHere() noexcept { return current; }
 
+long long TimerMan::ViewedSimTimeTicks() const {
+	const auto* frozen = CheckpointFrozenClock::Current();
+	return frozen ? frozen->simTicks : CheckpointStateValues().m_SimTimeTicks;
+}
+
+long long TimerMan::ViewedRealTickCount() const {
+	const auto* frozen = CheckpointFrozenClock::Current();
+	return frozen ? frozen->realTicks : CheckpointStateValues().m_RealTimeTicks;
+}
+
+long long TimerMan::ViewedSimUpdateCount() const {
+	const auto* frozen = CheckpointFrozenClock::Current();
+	return frozen ? frozen->simUpdates : CheckpointStateValues().m_SimUpdateCount;
+}
+
 void TimerMan::PrepareCheckpointValues() {
 	if (!CheckpointNativeStorage::Enabled() || m_OwnedCheckpointValues) return;
 	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
