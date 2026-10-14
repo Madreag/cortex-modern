@@ -40,6 +40,7 @@
 #include "GUIDrawRecord.h"
 #include "GUI.h"
 #include "AllegroScreen.h"
+#include "GUIComboBox.h"
 #include "GUITextBox.h"
 #include "FrameMan.h"
 #include "SettingsGUI.h"
@@ -18706,6 +18707,88 @@ namespace RTE {
 		return true;
 	}
 
+	// A drop-down opens its list on the press, under the pointer: the click's release still lets go where it pressed, and the pick
+	// still lands when the desktop's pointer moves after the hand pointed.
+	bool TestPauseSettingsComboPickByHand(std::string* error) {
+		NetMatchService::Construct();
+		const bool spectate = g_SettingsMan.GetBrainlessHumansSpectate();
+		struct Restore {
+			std::unique_ptr<Activity> activity;
+			bool inActivity = g_ActivityMan.IsInActivity();
+			bool spectate;
+			explicit Restore(bool kept) : spectate(kept) { g_ActivityMan.SwapCheckpointActivity(activity); }
+			~Restore() {
+				if (g_MenuMan.IsLocalPauseMenuOpen()) g_MenuMan.ToggleLocalPauseMenu();
+				GUIInputWrapper::SetAutomationDriving(false);
+				SetPanelDrawRecording(false);
+				g_SettingsMan.SetBrainlessHumansSpectate(spectate);
+				g_ActivityMan.SwapCheckpointActivity(activity);
+				g_ActivityMan.SetInActivity(inActivity);
+				NetMatchService::Destruct();
+			}
+		} restore(spectate);
+		std::unique_ptr<Activity> game = std::make_unique<GameActivity>();
+		g_ActivityMan.SwapCheckpointActivity(game);
+		g_ActivityMan.GetActivity()->SetActivityState(Activity::Editing);
+		g_ActivityMan.SetInActivity(true);
+		g_NetMatchService.m_State = NetMatchServiceState::Running;
+		g_NetMatchService.m_IsHost = false;
+		g_NetMatchService.m_MatchWasRunning = true;
+		GUIInputWrapper::SetAutomationDriving(true);
+		SetPanelDrawRecording(true);
+		int handFrame = 0, strayAfter = -1;
+		const auto frame = [&] {
+			SDL_Event event{};
+			while (SDL_PollEvent(&event)) g_UInputMan.HandleInputEvent(event);
+			g_UInputMan.Update(true);
+			g_MenuMan.UpdateLocalPauseMenu();
+			g_MenuMan.DrawLocalPauseMenu();
+			MenuAutomation::AfterDrawnFrame();
+			if (++handFrame == strayAfter) {
+				// The desktop's own pointer, far from the menu.
+				event = SDL_Event{};
+				event.type = SDL_EVENT_MOUSE_MOTION;
+				event.motion.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+				event.motion.x = event.motion.y = 1.0F;
+				SDL_PushEvent(&event);
+			}
+			g_UInputMan.EndFrame();
+		};
+		std::string observation;
+		const auto finishHand = [&] {
+			for (int frames = 0; frames < 300 && MenuAutomation::HandBusy(); ++frames) frame();
+			bool passed = false;
+			return MenuAutomation::HandFinished(passed, observation) && passed;
+		};
+		const char* headless = SDL_getenv("CCCP_HEADLESS");
+		const std::string savedHeadless = headless ? headless : "";
+		SDL_unsetenv_unsafe("CCCP_HEADLESS");
+		std::istringstream openArgs;
+		const bool started = MenuAutomation::Execute(nullptr, "Gameplay", "open_local_pause", openArgs, observation);
+		if (headless) SDL_setenv_unsafe("CCCP_HEADLESS", savedHeadless.c_str(), 1);
+		PauseMenuGUI* pause = nullptr;
+		if (!started || !finishHand() || !(pause = g_MenuMan.GetActivePauseMenu())) { *error = "Escape did not open the local menu: " + observation; return false; }
+		if (!MenuAutomation::HandClick(pause->AutomationManager(), "ButtonSettings", nullptr, observation) || !finishHand() || pause->AutomationActiveScreenName() != "PauseSettings") {
+			*error = "the mouse could not open pause Settings: " + observation; return false;
+		}
+		auto* combo = dynamic_cast<GUIComboBox*>(pause->AutomationManager()->GetControl("ComboBrainlessHumansSpectate"));
+		const GUIListPanel::Item* shown = combo ? combo->GetSelectedItem() : nullptr;
+		if (!shown) { *error = "pause Settings shows no gameplay drop-down"; return false; }
+		const std::string item = shown->m_Name;
+		// The hand points on its first drawn frame, presses on its second and lets go on its third.
+		for (const auto& [when, after]: {std::pair<const char*, int>{"with the pointer left alone", -1}, {"after the hand pointed", 1}}) {
+			handFrame = 0; strayAfter = after;
+			std::istringstream args("ComboBrainlessHumansSpectate " + item);
+			const bool picked = MenuAutomation::Execute(pause->AutomationManager(), "PauseSettings", "combo_select", args, observation) && finishHand();
+			strayAfter = -1;
+			if (!picked || combo->IsDropped() || !combo->GetSelectedItem() || combo->GetSelectedItem()->m_Name != item || g_SettingsMan.GetBrainlessHumansSpectate() != spectate) {
+				*error = std::string("a drop-down pick ") + when + " did not land: " + observation; return false;
+			}
+		}
+		System::PrintDiagnosticLine("[net-match-selftest] PASS pause_settings_combo_pick_by_hand");
+		return true;
+	}
+
 	bool TestInternetTicketRecovery(std::string* error) {
 		{
 			struct Restore {
@@ -19207,6 +19290,7 @@ namespace RTE {
 			if (name == "ui-presentation") passed = TestInMatchPresentation(&error);
 			else if (name == "pause-navigation") passed = TestPauseNavigationDuringRecovery(&error);
 			else if (name == "pause-leave-moved-pointer") passed = TestPauseLeaveClickSurvivesAMovedPointer(&error);
+			else if (name == "pause-settings-combo") passed = TestPauseSettingsComboPickByHand(&error);
 			else if (name == "ticket-recovery") passed = TestInternetTicketRecovery(&error);
 			else if (name == "placement-confirm") passed = GameActivity::RunSetupEditorSelfTest(true);
 			else if (name == "data-root") passed = TestDataRootDiscovery(&error);
@@ -19286,6 +19370,7 @@ namespace RTE {
 		row(&TestOpenChatEntryHoldsItsPlace, "open_chat_entry_holds_its_place_when_a_notice_ends");
 		row(&TestPauseNavigationDuringRecovery, "pause_menu_script_keeps_drawn_gestures");
 		row(&TestPauseLeaveClickSurvivesAMovedPointer, "pause_leave_click_survives_a_moved_pointer");
+		row(&TestPauseSettingsComboPickByHand, "pause_settings_combo_pick_by_hand");
 		row(&TestChatReceipts<NetSession>, "chat_send_receipts");
 		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
 		row(&RunCrossRosterSelfTest, "cross_mixed_roster_preserves_seats_and_cpu_rules");
