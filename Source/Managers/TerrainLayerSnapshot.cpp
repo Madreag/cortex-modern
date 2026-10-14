@@ -177,7 +177,8 @@ namespace RTE {
 		for (size_t index = 0; index < scene->m_pPathFinders.size(); ++index) {
 			horizonFinders[index] = {};
 			if (scene->m_pPathFinders[index]) {
-				scene->m_pPathFinders[index]->CaptureHorizonFence(horizonFinders[index]);
+				if (fenceHorizon) scene->m_pPathFinders[index]->FenceHorizon(horizonFinders[index]);
+				else scene->m_pPathFinders[index]->CaptureHorizonFence(horizonFinders[index]);
 			}
 			copiedBytes += horizonFinders[index].overlay.size() * (sizeof(int) + sizeof(HorizonFenceState::Cell)) + horizonFinders[index].jobs.size() * sizeof(std::shared_ptr<void>);
 		}
@@ -217,6 +218,7 @@ namespace RTE {
 		if (!CanRestore()) {
 			// Pixels that cannot go back are not held read-only either.
 			if (pixelsFenced) PageWriteFence::Release();
+			ReleaseHorizon();
 			return false;
 		}
 		lap(0);
@@ -232,6 +234,7 @@ namespace RTE {
 				BITMAP* pixels = create_bitmap_ex(8, saved.width, saved.height);
 				if (!pixels || (replacements[team] = std::make_unique<SceneLayer>())->Create(pixels, saved.masked, saved.offset, saved.wrapX, saved.wrapY, saved.scrollInfo) < 0) {
 					if (pixelsFenced) PageWriteFence::Release();
+					ReleaseHorizon();
 					return false;
 				}
 			}
@@ -279,6 +282,14 @@ namespace RTE {
 		lap(5);
 		if (lap.enabled && ++s_SnapshotCosts.restores == 600) PrintSnapshotCosts();
 		return true;
+	}
+
+	void TerrainLayerSnapshot::ReleaseHorizon() const {
+		Scene* scene = g_SceneMan.GetScene();
+		if (!horizonHeld || !scene) return;
+		for (size_t index = 0; index < scene->m_pPathFinders.size(); ++index) {
+			if (scene->m_pPathFinders[index]) scene->m_pPathFinders[index]->ReleaseHorizonFence(horizonFinders[index]);
+		}
 	}
 
 	void TerrainLayerSnapshot::CaptureLayer(SceneLayer* source, Layer& target, bool pixels) {

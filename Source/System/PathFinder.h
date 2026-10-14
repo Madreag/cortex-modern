@@ -101,6 +101,7 @@ namespace RTE {
 		std::unordered_map<int, Cell> overlay;
 		std::deque<std::shared_ptr<void>> jobs;
 		uint64_t generation = 1;
+		bool saved = true; //!< False while a fence holds nothing because nothing has changed the state since it went up.
 	};
 
 	/// Contains everything related to a PathNode on the path grid used by PathFinder.
@@ -212,6 +213,10 @@ namespace RTE {
 		void CommitHorizonThrough(uint64_t nowTick);
 
 		void CaptureHorizonFence(HorizonFenceState& out) const;
+		/// Fences the horizon state without copying it: the first change while the fence is up saves the state into out first.
+		void FenceHorizon(HorizonFenceState& out) const;
+		/// Lifts a fence and keeps the state as it is.
+		void ReleaseHorizonFence(const HorizonFenceState& in) const;
 		void RestoreHorizonFence(const HorizonFenceState& in);
 
 		static constexpr int64_t c_HorizonWaitCapUs = 250000;
@@ -230,6 +235,8 @@ namespace RTE {
 		int64_t LastHorizonReaderWaitUs() const { return m_LastHorizonReaderWaitUs; }
 		uint64_t TestHorizonGeneration() const { return m_HorizonGeneration.load(); }
 		size_t TestHorizonOverlayCount() const;
+		/// Every overlay cell, queued job and the generation, in node order, for comparing two states.
+		std::string TestHorizonStateDigest() const;
 		int TestHorizonPatchMaterialId(const Vector& start, const Vector& end, const HorizonTerrainPatch& patch) const;
 		static HorizonPatchRef TestSharePatch(const HorizonTerrainPatch& patch) { return std::make_shared<const HorizonTerrainPatch>(patch); }
 		int TestLiveRayMaterialId(const Vector& start, const Vector& end) const;
@@ -368,6 +375,7 @@ namespace RTE {
 		mutable CheckpointUnorderedMap<int, HorizonNode> m_HorizonNodes;
 		std::deque<std::shared_ptr<HorizonJob>> m_HorizonJobs;
 		mutable std::mutex m_HorizonMutex;
+		mutable HorizonFenceState* m_HorizonFence = nullptr; //!< Where the state goes before its first change while a preview's fence is up.
 		std::condition_variable m_HorizonApplyCv;
 		bool m_HorizonApplyPending = false;
 		std::atomic<int> m_CommittedHorizonReaders{0};
@@ -410,6 +418,10 @@ namespace RTE {
 		static const Material* StrongestMaterialAlongPatch(const Vector& start, const Vector& end, const std::vector<HorizonPatchRef>& patches);
 		static void ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonPatchRef>& patches, std::vector<std::array<const Material*, 8>>& materials);
 		HorizonNodeSnapshot SnapshotNode(int nodeId) const;
+		/// Copies the horizon state; the caller holds m_HorizonMutex.
+		void CopyHorizonState(HorizonFenceState& out) const;
+		/// Saves the state into the fence that is up, if it holds nothing yet; called with m_HorizonMutex held before any change.
+		void SaveHorizonForFence() const;
 		void LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job);
 		void ApplyHorizonJob(const HorizonJob& job, const std::vector<std::array<const Material*, 8>>& materials, uint64_t generation);
 		void ClearHorizonState();

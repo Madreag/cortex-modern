@@ -296,6 +296,8 @@ namespace RTE {
 		static TerrainLayerSnapshot terrain;
 		// Only the pages a preview writes are copied; the platforms without a page fence copy the whole terrain.
 		terrain.fencePixels = true;
+		// The horizon overlay grows with every terrain change of a match; a preview that changes none copies none.
+		terrain.fenceHorizon = true;
 		if (!terrain.Capture()) {
 			return;
 		}

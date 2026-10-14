@@ -46,6 +46,7 @@
 #include <cstring>
 #include <deque>
 #include <list>
+#include <map>
 #include <vector>
 
 using namespace RTE;
@@ -553,6 +554,7 @@ void PathFinder::ClearHorizonState() {
 				std::this_thread::yield();
 			}
 		}
+		SaveHorizonForFence();
 		m_HorizonJobs.clear();
 		m_HorizonNodes.clear();
 		m_HorizonReaderCounts.clear();
@@ -569,8 +571,7 @@ void PathFinder::ClearHorizonState() {
 	m_LastPathRequestWaitUs = 0;
 }
 
-void PathFinder::CaptureHorizonFence(HorizonFenceState& out) const {
-	std::lock_guard lock(m_HorizonMutex);
+void PathFinder::CopyHorizonState(HorizonFenceState& out) const {
 	out.overlay.clear();
 	out.jobs.clear();
 	for (const auto& [nodeId, node]: m_HorizonNodes) {
@@ -583,10 +584,51 @@ void PathFinder::CaptureHorizonFence(HorizonFenceState& out) const {
 		out.jobs.emplace_back(job);
 	}
 	out.generation = m_HorizonGeneration.load();
+	out.saved = true;
+}
+
+void PathFinder::SaveHorizonForFence() const {
+	if (m_HorizonFence && !m_HorizonFence->saved) {
+		CopyHorizonState(*m_HorizonFence);
+	}
+}
+
+void PathFinder::CaptureHorizonFence(HorizonFenceState& out) const {
+	std::lock_guard lock(m_HorizonMutex);
+	CopyHorizonState(out);
+}
+
+void PathFinder::FenceHorizon(HorizonFenceState& out) const {
+	std::lock_guard lock(m_HorizonMutex);
+	// A fence inside another one copies at once; the outer fence keeps answering the changes.
+	if (m_HorizonFence && m_HorizonFence != &out) {
+		CopyHorizonState(out);
+		return;
+	}
+	out.overlay.clear();
+	out.jobs.clear();
+	out.generation = m_HorizonGeneration.load();
+	out.saved = false;
+	m_HorizonFence = &out;
+}
+
+void PathFinder::ReleaseHorizonFence(const HorizonFenceState& in) const {
+	std::lock_guard lock(m_HorizonMutex);
+	if (m_HorizonFence == &in) {
+		m_HorizonFence = nullptr;
+	}
 }
 
 void PathFinder::RestoreHorizonFence(const HorizonFenceState& in) {
 	std::lock_guard lock(m_HorizonMutex);
+	if (m_HorizonFence == &in) {
+		m_HorizonFence = nullptr;
+	}
+	// Nothing changed the state while this fence was up.
+	if (!in.saved) {
+		return;
+	}
+	SaveHorizonForFence();
 	m_HorizonNodes.clear();
 	m_HorizonJobs.clear();
 	for (const auto& [nodeId, cell]: in.overlay) {
@@ -1711,6 +1753,7 @@ void PathFinder::PinHorizonFromLive(const Box& box) {
 		if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size() || m_HorizonNodes.count(nodeId) != 0) {
 			continue;
 		}
+		SaveHorizonForFence();
 		HorizonNode& overlay = m_HorizonNodes[nodeId];
 		overlay.committedMaterials = m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials;
 		overlay.generation = m_HorizonGeneration.load();
@@ -1815,6 +1858,7 @@ void PathFinder::QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, 
 	job->ready.store(false);
 	{
 		std::lock_guard lock(m_HorizonMutex);
+		SaveHorizonForFence();
 		m_HorizonJobs.push_back(job);
 	}
 	LaunchHorizonWorker(job);
@@ -1833,6 +1877,7 @@ void PathFinder::QueueHorizonDelta(uint64_t originTick, uint16_t horizonTicks, i
 	job->ready.store(false);
 	{
 		std::lock_guard lock(m_HorizonMutex);
+		SaveHorizonForFence();
 		if (m_HorizonNodes.count(nodeId) == 0) {
 			HorizonNode& overlay = m_HorizonNodes[nodeId];
 			overlay.committedMaterials = m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials;
@@ -1855,6 +1900,7 @@ void PathFinder::TestQueueHorizonCompute(uint64_t originTick, uint16_t horizonTi
 	job->ready.store(false);
 	{
 		std::lock_guard lock(m_HorizonMutex);
+		SaveHorizonForFence();
 		if (m_HorizonNodes.count(nodeId) == 0) {
 			HorizonNode& overlay = m_HorizonNodes[nodeId];
 			overlay.committedMaterials = m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials;
@@ -1959,6 +2005,7 @@ void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
 		const auto started = std::chrono::steady_clock::now();
 		m_HorizonApplyCv.wait(lock, [this, applyGeneration] { return !HasOlderHorizonReaders(applyGeneration); });
 		m_LastHorizonReaderWaitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+		SaveHorizonForFence();
 		for (size_t index = 0; index < due.size(); ++index) {
 			const std::shared_ptr<HorizonJob>& job = due[index];
 			ApplyHorizonJob(*job, selfComputed[index].empty() ? job->materials : selfComputed[index], applyGeneration);
@@ -2089,6 +2136,7 @@ void PathFinder::TestInstallGrid(int width, int height, int nodeDimension, const
 	WaitForPathingRequests();
 	{
 		std::lock_guard lock(m_HorizonMutex);
+		SaveHorizonForFence();
 		m_HorizonJobs.clear();
 		m_HorizonNodes.clear();
 	}
@@ -2167,6 +2215,20 @@ void PathFinder::TestReleaseHorizonWorker() {
 size_t PathFinder::TestHorizonOverlayCount() const {
 	std::lock_guard lock(m_HorizonMutex);
 	return m_HorizonNodes.size();
+}
+
+std::string PathFinder::TestHorizonStateDigest() const {
+	std::lock_guard lock(m_HorizonMutex);
+	std::map<int, const HorizonNode*> cells;
+	for (const auto& [nodeId, node]: m_HorizonNodes) cells.emplace(nodeId, &node);
+	std::ostringstream out;
+	out << "generation=" << m_HorizonGeneration.load() << " jobs=";
+	for (const std::shared_ptr<HorizonJob>& job: m_HorizonJobs) out << job.get() << ',';
+	for (const auto& [nodeId, node]: cells) {
+		out << ' ' << nodeId << '@' << node->generation << ':';
+		for (const Material* material: node->committedMaterials) out << (material ? static_cast<int>(material->GetIndex()) : -1) << ',';
+	}
+	return out.str();
 }
 
 int PathFinder::TestHorizonPatchMaterialId(const Vector& start, const Vector& end, const HorizonTerrainPatch& patch) const {
@@ -2912,6 +2974,7 @@ int PathFinder::RunHorizonGridSelfTest() {
 		specFinder.CommitHorizonThrough(44);
 		const size_t boxesAtCapture = specScene.TestHorizonBoxCount();
 		const size_t overlayAtCapture = specFinder.TestHorizonOverlayCount();
+		const std::string stateAtCapture = specFinder.TestHorizonStateDigest();
 		TerrainLayerSnapshot specSnap;
 		if (!specSnap.Capture()) {
 			std::cout << Tag << " FAIL speculation Capture boxes=" << boxesAtCapture << " overlay=" << overlayAtCapture << std::endl;
@@ -2942,10 +3005,36 @@ int PathFinder::RunHorizonGridSelfTest() {
 			std::cout << Tag << " FAIL canonical terrain write boxes=" << notedWhenCanonical << std::endl;
 			return 1;
 		}
-		if (boxesAfterRestore != boxesAtCapture || overlayAfterRestore != overlayAtCapture) {
+		if (boxesAfterRestore != boxesAtCapture || overlayAfterRestore != overlayAtCapture || specFinder.TestHorizonStateDigest() != stateAtCapture) {
 			std::cout << Tag << " FAIL snapshot restore boxes=" << boxesAfterRestore << " overlay=" << overlayAfterRestore
-			          << " captured_boxes=" << boxesAtCapture << " captured_overlay=" << overlayAtCapture << std::endl;
+			          << " captured_boxes=" << boxesAtCapture << " captured_overlay=" << overlayAtCapture
+			          << " state_restored=" << (specFinder.TestHorizonStateDigest() == stateAtCapture) << std::endl;
 			return 1;
+		}
+		// The preview's fence copies the horizon state only when something changes it, and puts back the same state either way.
+		for (const bool change: {false, true}) {
+			const std::string before = specFinder.TestHorizonStateDigest();
+			TerrainLayerSnapshot lazySnap;
+			lazySnap.fenceHorizon = true;
+			if (!lazySnap.Capture()) {
+				std::cout << Tag << " FAIL lazy fence Capture change=" << change << std::endl;
+				return 1;
+			}
+			if (change) {
+				specFinder.QueueHorizonDelta(45, 1, specFinder.TestNodeIdAt(1, 1), blocked);
+				specFinder.CommitHorizonThrough(46);
+			}
+			const bool saved = lazySnap.horizonFinders[0].saved;
+			const bool moved = specFinder.TestHorizonStateDigest() != before;
+			if (!lazySnap.Restore()) {
+				std::cout << Tag << " FAIL lazy fence Restore change=" << change << std::endl;
+				return 1;
+			}
+			const bool restored = specFinder.TestHorizonStateDigest() == before;
+			if (saved != change || moved != change || !restored) {
+				std::cout << Tag << " FAIL lazy fence change=" << change << " saved=" << saved << " moved=" << moved << " restored=" << restored << std::endl;
+				return 1;
+			}
 		}
 		std::cout << Tag << " PASS speculation-fence" << std::endl;
 	}
