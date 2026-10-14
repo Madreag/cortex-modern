@@ -23,6 +23,8 @@ namespace RTE {
 			auto* out = static_cast<__m128i*>(destination);
 			const auto* in = static_cast<const __m128i*>(source);
 			for (size_t index = 0; index < bytes / sizeof(__m128i); index += 4) {
+				// The source is read ahead non-temporally too, so its lines take one way of the shared cache, not the game's.
+				_mm_prefetch(reinterpret_cast<const char*>(in + index) + 512, _MM_HINT_NTA);
 				const __m128i first = _mm_load_si128(in + index), second = _mm_load_si128(in + index + 1);
 				const __m128i third = _mm_load_si128(in + index + 2), fourth = _mm_load_si128(in + index + 3);
 				_mm_stream_si128(out + index, first);
