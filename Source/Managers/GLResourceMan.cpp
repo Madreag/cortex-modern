@@ -4,8 +4,19 @@
 #include "RTEError.h"
 
 #include "GLCheck.h"
+#include "System.h"
 #include "allegro.h"
 #include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <utility>
+#include <vector>
+#ifndef _WIN32
+#include <dlfcn.h>
+#include <execinfo.h>
+#endif
 
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyOpenGL.hpp"
@@ -14,6 +25,37 @@
 #include "raylib/rlgl.h"
 
 using namespace RTE;
+
+namespace {
+	/// Every this many new bitmap textures, the call stack that made one is printed (CC_TEST_TEXTURE_CREATORS); 0 = never.
+	size_t TextureCreatorEvery() {
+		static const size_t every = [] {
+			const char* value = std::getenv("CC_TEST_TEXTURE_CREATORS");
+			return value ? std::max<size_t>(1, std::strtoull(value, nullptr, 10)) : size_t{0};
+		}();
+		return every;
+	}
+
+	void PrintTextureCreator(size_t made, const BITMAP* bitmap) {
+		// The stack is read where the platform's own header does not collide with the renderer's names.
+		void* frames[12] = {};
+		int depth = 0;
+		uintptr_t base = 0;
+#ifndef _WIN32
+		depth = backtrace(frames, 12);
+		Dl_info module{};
+		if (dladdr(reinterpret_cast<void*>(&PrintTextureCreator), &module)) base = reinterpret_cast<uintptr_t>(module.dli_fbase);
+#endif
+		std::string line = "[gl-texture-creator] made=" + std::to_string(made) + " size=" + std::to_string(bitmap->w) + "x" + std::to_string(bitmap->h) + "x" +
+		    std::to_string(bitmap_color_depth(bitmap)) + " offsets=";
+		char text[24];
+		for (int index = 0; index < depth; ++index) {
+			std::snprintf(text, sizeof(text), "%s0x%llx", index ? "," : "", static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(frames[index]) - base));
+			line += text;
+		}
+		System::PrintDiagnosticLine(line);
+	}
+}
 
 GLResourceMan::GLResourceMan() = default;
 
@@ -75,6 +117,8 @@ Texture2D GLResourceMan::GetStaticTextureFromBitmap(BITMAP* bitmap) {
 		GL_CHECK(glPixelStorei(GL_UNPACK_ALIGNMENT, bitmap_color_depth(bitmap) == 8 ? 1 : 4));
 		m_StaticTextures.back()->m_Texture = rlLoadTexture(bitmap->line[0], bitmap->w, bitmap->h, bitmap_color_depth(bitmap) == 8 ? PIXELFORMAT_UNCOMPRESSED_GRAYSCALE : PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1);
 		m_StaticTextureBytes += static_cast<uint64_t>(bitmap->w) * bitmap->h * (bitmap_color_depth(bitmap) == 8 ? 1 : 4);
+		++m_CreatedSinceCensus[std::to_string(bitmap->w) + "x" + std::to_string(bitmap->h) + "x" + std::to_string(bitmap_color_depth(bitmap))];
+		if (const size_t every = TextureCreatorEvery(); every && m_StaticTextures.size() % every == 0) PrintTextureCreator(m_StaticTextures.size(), bitmap);
 
 		return {
 		    .id = m_StaticTextures.back()->m_Texture,
@@ -153,13 +197,21 @@ GLuint GLResourceMan::UpdateDynamicBitmap(BITMAP* bitmap, bool updated, const st
 	return texture;
 }
 
-std::string GLResourceMan::Census() const {
-	return "gl_bitmap_textures=" + std::to_string(m_StaticTextures.size()) + " gl_bitmap_texture_mb=" + std::to_string(m_StaticTextureBytes >> 20);
+std::string GLResourceMan::Census() {
+	std::vector<std::pair<size_t, std::string>> sizes;
+	for (const auto& [size, count]: m_CreatedSinceCensus) sizes.emplace_back(count, size);
+	std::sort(sizes.begin(), sizes.end(), [](const auto& a, const auto& b) { return a.first > b.first || (a.first == b.first && a.second < b.second); });
+	std::string created;
+	for (size_t index = 0; index < std::min<size_t>(sizes.size(), 4); ++index) created += (index ? "," : "") + sizes[index].second + ":" + std::to_string(sizes[index].first);
+	m_CreatedSinceCensus.clear();
+	return "gl_bitmap_textures=" + std::to_string(m_StaticTextures.size()) + " gl_bitmap_texture_mb=" + std::to_string(m_StaticTextureBytes >> 20) +
+	    " gl_bitmap_releases=" + std::to_string(m_TextureReleases) + " gl_bitmap_new_sizes=" + (created.empty() ? std::string("none") : created);
 }
 
 void GLResourceMan::DestroyBitmapInfo(BITMAP* bitmap) {
 	GLBitmapInfo* info = GetBitmapInfo(bitmap);
 	if (info) {
 		rlUnloadTexture(info->m_Texture);
+		++m_TextureReleases;
 	}
 }

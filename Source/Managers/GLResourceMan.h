@@ -4,6 +4,7 @@
 
 #include "glad/gl.h"
 #include <unordered_map>
+#include <map>
 #include <vector>
 #include <cstdint>
 #include <string>
@@ -51,12 +52,14 @@ namespace RTE {
 		GLBitmapInfo* MakeBitmapInfo();
 
 		/// The bitmaps that have been given a texture so far and their pixel bytes, for the memory census.
-		std::string Census() const;
+		std::string Census();
 
 
 	private:
 		std::vector<std::unique_ptr<GLBitmapInfo>> m_StaticTextures;
 		uint64_t m_StaticTextureBytes = 0; //!< Pixel bytes of every texture made from a bitmap, released or not.
+		uint64_t m_TextureReleases = 0; //!< Textures released through DestroyBitmapInfo.
+		std::map<std::string, size_t> m_CreatedSinceCensus; //!< New bitmap textures by size and depth since the last census line.
 		std::vector<GLuint> m_DynamicBitmapUploadBuffers;
 		std::unordered_map<std::string, std::pair<ShaderType, GLuint>> m_ShaderCache;
 		std::vector<GLuint> m_Shaders;
