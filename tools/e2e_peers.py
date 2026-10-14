@@ -134,7 +134,7 @@ def check_build(request):
     source = video.source_evidence(repo)
     if source["tip"] != request["commit"] or source["dirty"]:
         raise ValueError("player checkout differs from the committed scene launcher")
-    if box["os"] in JOINER_SYSTEMS or box.get("headed"):
+    if box["os"] in JOINER_SYSTEMS:
         os.environ["CCCP_TEST_BINARY"] = str(repo / box["binary"])
     receipt = read(box["build_receipt"])
     executable = video.file_evidence(video.capture_binary(repo))
