@@ -480,6 +480,9 @@ namespace RTE {
 		MovableObject* ViewIfSpeculating(MovableObject* found) const;
 		/// The shadow a resident already has in the overlay, or null; never makes one.
 		MovableObject* ExistingShadowOf(const MovableObject* resident) const;
+		/// Resolves a do-not-hit link. It is only compared, never written through, and a shadow keeps its resident's MOIDs: during a
+		/// speculation it names the resident while the resident has no shadow, and follows it into one made later.
+		MovableObject* ResolveIgnoreLink(MovableObject* holder, long uniqueID);
 		/// Called with each shadow the overlay makes, once it is made.
 		void SetShadowMadeHook(void (*hook)(MovableObject* resident, MovableObject* shadow)) { m_ShadowMadeHook = hook; }
 		/// Ends the overlay: its unowned shadows and spawns are deleted, the rosters and flags go back.
@@ -1293,6 +1296,7 @@ namespace RTE {
 			std::vector<MovableObject*> travelers; //!< Shadows of the world's particles in flight, travelling with the speculation.
 			int travelerSteps = 0; //!< The steps the travelers still move; past them they stand as the rest of the world does.
 			bool travelersMoved = false; //!< They moved this step, so only now can one have come to rest.
+			std::vector<MovableObject*> residentIgnoreLinks; //!< Speculative objects whose do-not-hit link names a resident with no shadow yet.
 			std::vector<MovableObject*> taken;
 			AddQueueMark mark;
 			CheckpointList<Actor*> rosters[Activity::MaxTeamCount];
