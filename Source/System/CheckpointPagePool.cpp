@@ -12,6 +12,7 @@
 #include "ScenarioRunner.h"
 #include "Vector.h"
 #include "ThreadMan.h"
+#include "System.h"
 
 #include <algorithm>
 #include <atomic>
@@ -38,9 +39,14 @@
 #include <memory>
 #include <new>
 #include <optional>
+#include <set>
 #include <span>
 #include <string_view>
 #include <vector>
+
+#ifndef _MSC_VER
+#include <cxxabi.h>
+#endif
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -1443,6 +1449,41 @@ const void* CheckpointNativeStorage::Original(const void* view) {
 bool CheckpointNativeStorage::IsView(const void* address) {
 	if (s_Read && address && s_Read->privateRoots.Find(s_Read->roots, address, 1)) return false;
 	return Original(address) != address;
+}
+
+bool CheckpointNativeStorage::InBoundaryRoot(const void* view) {
+	if (!s_Read || !view) return false;
+	const RootRange* root = s_Read->viewRoots.Find(s_Read->roots, view, 1);
+	return root && !root->privateValues;
+}
+
+namespace {
+	std::atomic<int> s_StartupLinksRefusals{0};
+}
+
+CheckpointNativeStorage::StartupLinksRefusal::StartupLinksRefusal() { s_StartupLinksRefusals.fetch_add(1, std::memory_order_acq_rel); }
+
+CheckpointNativeStorage::StartupLinksRefusal::~StartupLinksRefusal() { s_StartupLinksRefusals.fetch_sub(1, std::memory_order_acq_rel); }
+
+void CheckpointNativeStorage::NoteStartupLinks(const void* view, const char* type) {
+	const RootRange* root = s_Read ? s_Read->viewRoots.Find(s_Read->roots, view, 1) : nullptr;
+	std::string name = type;
+#ifndef _MSC_VER
+	int status = 0;
+	if (char* demangled = abi::__cxa_demangle(type, nullptr, nullptr, &status)) { if (status == 0) name = demangled; std::free(demangled); }
+#endif
+	const size_t offset = root ? reinterpret_cast<uintptr_t>(view) - reinterpret_cast<uintptr_t>(root->view) : 0;
+	const std::string message = std::format("a startup object's container keeps its links outside checkpoint storage ({} at offset {} of a {}-byte root)",
+	    name, offset, root ? root->bytes : 0);
+	static const bool refuse = [] { const char* value = std::getenv("CC_TEST_CHECKPOINT_STARTUP_LINKS"); return value && std::string_view(value) == "1"; }();
+	if (refuse || s_StartupLinksRefusals.load(std::memory_order_acquire) > 0) throw std::logic_error(message);
+	static std::mutex mutex;
+	static std::set<std::pair<size_t, std::string>> named;
+	{
+		std::lock_guard lock(mutex);
+		if (!named.emplace(offset, name).second) return;
+	}
+	System::PrintDiagnosticLine("[checkpoint] " + message);
 }
 
 namespace {
