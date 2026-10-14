@@ -268,9 +268,8 @@ namespace RTE::CheckpointLua {
 		struct Heap { HeapOwner::PreparationLease lease; std::shared_ptr<HeapOwner::Prepared> prepared; };
 		// A collection writes every page of its state's heap, so the heap collected in the next tick, which comes before any
 		// idle time, and those collected soon after while they fit a couple of milliseconds of copying, are copied whole at
-		// the boundary instead of fenced; a saver copies the rest in the order they collect. A state that allocated a sixteenth
-		// of its heap between its last collections reuses freed memory all over it, so the ticks after the boundary write a
-		// large share of its pages: it is copied whole too, while all the whole copies fit c_BusyCopyBytes.
+		// the boundary instead of fenced; a saver copies the rest in the order they collect. A busy heap (see
+		// HeapOwner::NoteFullCollection) is copied whole too, while all the whole copies fit c_BusyCopyBytes.
 		std::vector<bool> CopiedWhole(const std::vector<uint64_t>& until) const {
 			constexpr size_t c_WholeCopyBytes = size_t{16} << 20, c_BusyCopyBytes = size_t{96} << 20;
 			std::vector<bool> whole(m_Heaps.size(), false);
@@ -284,7 +283,7 @@ namespace RTE::CheckpointLua {
 			}
 			for (const size_t index: m_DrainOrder) {
 				const auto image = m_Heaps[index].prepared->Image();
-				if (whole[index] || image.PeriodAllocated() * 16 < image.ByteCount() || bytes + image.ByteCount() > c_BusyCopyBytes) continue;
+				if (whole[index] || !image.Busy() || bytes + image.ByteCount() > c_BusyCopyBytes) continue;
 				whole[index] = true;
 				bytes += image.ByteCount();
 			}

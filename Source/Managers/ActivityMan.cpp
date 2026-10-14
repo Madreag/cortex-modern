@@ -809,8 +809,8 @@ struct ActivityMan::PreparedAutosave {
 			std::string heapArms;
 			for (size_t index = 0; index < boundary.StateCount(); ++index) {
 				const auto heap = boundary.LuaHeap(index);
-				heapArms += std::format(" {}:{}:{}:{}:{}:{}:{}", index, heap.ByteCount() >> 20, heap.ArmWhole() ? "w" : "f", heap.ArmCopiedPages(), heap.FreezeUs(),
-				                        boundary.ArmPart(index), heap.PeriodAllocated() >> 10);
+				heapArms += std::format(" {}:{}:{}:{}:{}:{}:{}{}", index, heap.ByteCount() >> 20, heap.ArmWhole() ? "w" : "f", heap.ArmCopiedPages(), heap.FreezeUs(),
+				                        boundary.ArmPart(index), heap.PeriodAllocated() >> 10, heap.Busy() ? "b" : "");
 			}
 			const auto [planUs, copyUs, fenceUs] = boundary.ArmPhaseUs();
 			System::PrintDiagnosticLine(std::format("[checkpoint-heap-arm] tick={} plan_us={} copy_us={} fence_us={}{}", header.tick, planUs, copyUs, fenceUs, heapArms));

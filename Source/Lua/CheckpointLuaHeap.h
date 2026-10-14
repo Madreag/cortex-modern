@@ -156,6 +156,9 @@ namespace RTE::CheckpointLua {
 		bool ArmWhole() const { return m_Data && m_Data->faults && m_Data->faults->armWhole; }
 		/// The bytes the state allocated between its two full collections before the heap was prepared.
 		size_t PeriodAllocated() const { return m_Data ? m_Data->periodAllocated : 0; }
+		/// Whether the state allocated enough of its heap between collections that the ticks after a boundary write a large
+		/// share of its pages: a busy heap is copied whole at the boundary.
+		bool Busy() const { return m_Data && m_Data->busy; }
 		size_t PreviousFaults() const { return m_Data ? m_Data->previousFaults : 0; }
 		int64_t PreviousFaultUs() const { return m_Data ? m_Data->previousFaultUs : 0; }
 
@@ -279,6 +282,7 @@ namespace RTE::CheckpointLua {
 			std::atomic<size_t> copied{0};
 			int64_t freezeUs = 0;
 			size_t periodAllocated = 0;
+			bool busy = false;
 			std::atomic<int64_t> copyUs{0};
 			std::shared_ptr<CopyFaultStats> faults;
 			size_t previousFaults = 0;
@@ -812,6 +816,7 @@ namespace RTE::CheckpointLua {
 		std::mutex m_PrepareMutex;
 		std::vector<std::weak_ptr<Prepared>> m_Prepared;
 		std::atomic<size_t> m_PeriodAllocated{0};
+		std::atomic<bool> m_Busy{false};
 		size_t m_LastCollectedBytes = 0;
 		static inline thread_local bool t_Collecting = false;
 		void FinishPrepared() noexcept;
@@ -825,9 +830,17 @@ namespace RTE::CheckpointLua {
 		/// the runs its last boundary copied, the hot runs recorded since, and 1 when that boundary copied the heap whole.
 		std::array<uint32_t, 5> TakeTickFaults() noexcept;
 		/// The state's full collection: what it allocated since the one before is how widely its scripts write its heap, since
-		/// a state that allocates much reuses freed memory all over it.
+		/// a state that allocates much reuses freed memory all over it. A heap turns busy at a sixteenth of its committed bytes
+		/// allocated in a period and stays busy until a period allocates less than a sixty-fourth, so a busy state whose rate
+		/// settles keeps being copied whole instead of being fenced with runs it never had the chance to record.
 		void NoteFullCollection(size_t before, size_t after) noexcept {
-			m_PeriodAllocated.store(before > m_LastCollectedBytes ? before - m_LastCollectedBytes : 0, std::memory_order_relaxed);
+			const size_t allocated = before > m_LastCollectedBytes ? before - m_LastCollectedBytes : 0;
+			const size_t committed = m_PublishedCommitted.load(std::memory_order_acquire);
+			if (m_LastCollectedBytes && committed) {
+				m_PeriodAllocated.store(allocated, std::memory_order_relaxed);
+				if (allocated * 16 >= committed) m_Busy.store(true, std::memory_order_relaxed);
+				else if (allocated * 64 < committed) m_Busy.store(false, std::memory_order_relaxed);
+			}
 			m_LastCollectedBytes = after;
 		}
 		static std::pair<uint64_t, uint64_t> TakeFaultTally() { return {FaultTally()[0].exchange(0), FaultTally()[1].exchange(0)}; }
@@ -1669,6 +1682,7 @@ namespace RTE::CheckpointLua {
 		data->sourceMemory = m_HeapMemory;
 		data->committed = m_PublishedCommitted.load(std::memory_order_acquire);
 		data->periodAllocated = m_PeriodAllocated.load(std::memory_order_relaxed);
+		data->busy = m_Busy.load(std::memory_order_relaxed);
 		const size_t pageBytes = PageWriteFence::SystemPageBytes();
 		if (!data->state || !pageBytes || !data->committed || data->base % pageBytes || data->committed % pageBytes)
 			throw std::runtime_error("the prepared Lua heap has no aligned committed range");
