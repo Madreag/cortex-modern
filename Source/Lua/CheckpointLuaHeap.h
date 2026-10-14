@@ -95,7 +95,7 @@ namespace RTE::CheckpointLua {
 		// What the boundary itself copied of the heap, and its time.
 		int64_t armCopyUs = 0;
 		size_t armCopiedPages = 0;
-		bool armWhole = false, armWatched = false;
+		bool armWhole = false;
 	};
 
 	struct LibraryHandlers {
@@ -154,9 +154,6 @@ namespace RTE::CheckpointLua {
 		int64_t ArmCopyUs() const { return m_Data && m_Data->faults ? m_Data->faults->armCopyUs : 0; }
 		size_t ArmCopiedPages() const { return m_Data && m_Data->faults ? m_Data->faults->armCopiedPages : 0; }
 		bool ArmWhole() const { return m_Data && m_Data->faults && m_Data->faults->armWhole; }
-		bool ArmWatched() const { return m_Data && m_Data->faults && m_Data->faults->armWatched; }
-		/// Whether the system is recording the heap's written pages for its next boundary.
-		bool Watched() const { return m_Data && m_Data->watching && m_Data->watching->load(std::memory_order_acquire); }
 		/// The bytes the state allocated between its two full collections before the heap was prepared.
 		size_t PeriodAllocated() const { return m_Data ? m_Data->periodAllocated : 0; }
 		/// Whether the state allocated enough of its heap between collections that the ticks after a boundary write a large
@@ -286,7 +283,6 @@ namespace RTE::CheckpointLua {
 			int64_t freezeUs = 0;
 			size_t periodAllocated = 0;
 			bool busy = false;
-			std::shared_ptr<std::atomic<bool>> watching;
 			std::atomic<int64_t> copyUs{0};
 			std::shared_ptr<CopyFaultStats> faults;
 			size_t previousFaults = 0;
@@ -822,19 +818,6 @@ namespace RTE::CheckpointLua {
 		std::vector<std::weak_ptr<Prepared>> m_Prepared;
 		std::atomic<size_t> m_PeriodAllocated{0};
 		std::atomic<bool> m_Busy{false};
-		// Where the system records written pages (Windows): a busy heap's watch opens a few ticks before a boundary, which then
-		// copies exactly the pages those ticks wrote, page by page, from the first boundary on and with no fault to learn them.
-		std::shared_ptr<std::atomic<bool>> m_Watching = std::make_shared<std::atomic<bool>>(false);
-		static constexpr uint64_t c_WatchTicks = 4;
-		static std::atomic<uint64_t>& WatchTick() {
-			static std::atomic<uint64_t> tick{0};
-			return tick;
-		}
-		void ResetWriteWatch() noexcept {
-#ifdef _WIN32
-			if (const size_t committed = m_PublishedCommitted.load(std::memory_order_acquire)) ::ResetWriteWatch(reinterpret_cast<void*>(m_Base), committed);
-#endif
-		}
 		size_t m_LastCollectedBytes = 0;
 		static inline thread_local bool t_Collecting = false;
 		void FinishPrepared() noexcept;
@@ -843,25 +826,6 @@ namespace RTE::CheckpointLua {
 		static bool TallyingFaults() {
 			static const bool tallying = std::getenv("CCCP_TEST_FAULT_TICKS") != nullptr;
 			return tallying;
-		}
-		/// A checkpoint boundary is due at the end of the given simulation tick: busy heaps watch their writes from a few ticks
-		/// before it. A later call replaces an earlier one.
-		static void ScheduleBoundaryWatch(uint64_t boundaryTick) noexcept { WatchTick().store(boundaryTick > c_WatchTicks ? boundaryTick - c_WatchTicks : 1, std::memory_order_release); }
-		/// The end of a simulation tick: the watch scheduled for it opens on every busy heap.
-		static void OnSimTickEnd(uint64_t tick) noexcept {
-#ifdef _WIN32
-			uint64_t due = WatchTick().load(std::memory_order_acquire);
-			if (!due || tick < due || !WatchTick().compare_exchange_strong(due, 0, std::memory_order_acq_rel)) return;
-			std::lock_guard lock(RegistryMutex());
-			for (const auto& [owner, identity]: LiveHeaps()) {
-				auto& heap = *const_cast<HeapOwner*>(owner);
-				if (!heap.m_Busy.load(std::memory_order_relaxed)) continue;
-				heap.ResetWriteWatch();
-				heap.m_Watching->store(true, std::memory_order_release);
-			}
-#else
-			(void)tick;
-#endif
 		}
 		/// Test lever CCCP_TEST_FAULT_TICKS: this heap's write faults since the last call, by its scripts and by its collector,
 		/// the runs its last boundary copied, the hot runs recorded since, and 1 when that boundary copied the heap whole.
@@ -874,8 +838,6 @@ namespace RTE::CheckpointLua {
 		/// allocated in a period and stays busy until a period allocates less than a sixty-fourth, so a busy state whose rate
 		/// settles keeps being copied whole instead of being fenced with runs it never had the chance to record.
 		void NoteFullCollection(size_t before, size_t after) noexcept {
-			// A collection writes every page, so a watch open for the next boundary starts again after it.
-			if (m_Watching->load(std::memory_order_acquire)) ResetWriteWatch();
 			const size_t allocated = before > m_LastCollectedBytes ? before - m_LastCollectedBytes : 0;
 			const size_t committed = m_PublishedCommitted.load(std::memory_order_acquire);
 			if (m_LastCollectedBytes && committed) {
@@ -994,7 +956,7 @@ namespace RTE::CheckpointLua {
 			}
 			// A boundary arming on several threads plans under the lock, copies outside it while the copy is unarmed (no fault
 			// or drain touches an unarmed copy), then fences what it did not copy and arms under the lock.
-			bool PlanArm(const CowCopy& copy, size_t bytes, bool whole, std::vector<std::pair<uint32_t, uint32_t>>& spans, const std::vector<uint32_t>* watched = nullptr) noexcept {
+			bool PlanArm(const CowCopy& copy, size_t bytes, bool whole, std::vector<std::pair<uint32_t, uint32_t>>& spans) noexcept {
 				Locked guard(lock);
 				if (copy.completed || copy.armed.load(std::memory_order_relaxed) != 0) return false;
 				if (whole && bytes != copy.saved.size() * copy.pageBytes) return false;
@@ -1002,14 +964,6 @@ namespace RTE::CheckpointLua {
 				spans.clear();
 				if (whole) {
 					if (pages) spans.emplace_back(0u, static_cast<uint32_t>(pages));
-					return true;
-				}
-				if (watched) {
-					for (const uint32_t page: *watched) {
-						if (page >= pages || copy.saved[page] || spans.size() == spans.capacity()) continue;
-						if (!spans.empty() && spans.back().first + spans.back().second == page) ++spans.back().second;
-						else spans.emplace_back(page, 1u);
-					}
 					return true;
 				}
 				for (size_t index = 0; index < hotCount && spans.size() < spans.capacity(); ++index) {
@@ -1024,7 +978,7 @@ namespace RTE::CheckpointLua {
 				}
 				return true;
 			}
-			bool FinishArm(CowCopy& copy, uintptr_t address, size_t bytes, bool whole, bool learn, bool watched, size_t copiedPages, int64_t copyUs) noexcept {
+			bool FinishArm(CowCopy& copy, uintptr_t address, size_t bytes, bool whole, bool learn, size_t copiedPages, int64_t copyUs) noexcept {
 				Locked guard(lock);
 				if (copy.completed || copy.armed.load(std::memory_order_relaxed) != 0) return false;
 				const size_t pages = std::min(copy.saved.size(), bytes / pageBytes);
@@ -1045,7 +999,6 @@ namespace RTE::CheckpointLua {
 					copy.faults->armCopyUs = copyUs;
 					copy.faults->armCopiedPages = copiedPages;
 					copy.faults->armWhole = whole;
-					copy.faults->armWatched = watched;
 				}
 				armedHotRuns = whole ? 0 : static_cast<uint32_t>(hotCount);
 				armedWhole = whole;
@@ -1477,8 +1430,7 @@ namespace RTE::CheckpointLua {
 		static void* MapPages(size_t bytes) noexcept { return VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE); }
 		static void Unmap(void* pages, size_t) noexcept { VirtualFree(pages, 0, MEM_RELEASE); }
 		void Reserve(size_t shift) {
-			// Recording written pages costs nothing until a boundary's watch resets it.
-			void* base = VirtualAlloc(nullptr, c_ReserveBytes + c_Colors * c_PageStride, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_NOACCESS);
+			void* base = VirtualAlloc(nullptr, c_ReserveBytes + c_Colors * c_PageStride, MEM_RESERVE, PAGE_NOACCESS);
 			if (!base) throw std::runtime_error("could not reserve the tracked Lua heap");
 			m_HeapMemory = std::shared_ptr<void>(base, [](void* value) { Unmap(value, c_ReserveBytes + c_Colors * c_PageStride); });
 			m_Reservation = reinterpret_cast<uintptr_t>(base);
@@ -1631,7 +1583,7 @@ namespace RTE::CheckpointLua {
 		std::unique_lock<std::mutex> m_Alive, m_Preparations, m_Lock;
 		Prepared* m_Prepared = nullptr;
 		HeapOwner* m_Owner = nullptr;
-		bool m_Whole = false, m_Learn = false, m_Watched = false;
+		bool m_Whole = false, m_Learn = false;
 		std::chrono::steady_clock::time_point m_Started{};
 		std::vector<std::pair<uint32_t, uint32_t>> m_Spans;
 	};
@@ -1663,9 +1615,8 @@ namespace RTE::CheckpointLua {
 		size_t FencedBytes() const noexcept {
 			return m_Data->committed - std::min(m_Data->committed, m_Coordinator->SavedPages(*m_Copy) * m_Copy->pageBytes);
 		}
-		/// Copies every page still fenced now, beside the game, on the calling saver thread and up to the given helpers; then
-		/// the drain finds it saved.
-		void CopyFencedNow(size_t helpers) {
+		/// Copies every page still fenced now, on several saver threads beside the game, then the drain finds it saved.
+		void CopyFencedNow() {
 			std::lock_guard lock(m_Mutex);
 			if (m_Finished || m_Copy->armed.load(std::memory_order_acquire) != 1) return;
 			constexpr size_t batchPages = 64;
@@ -1675,7 +1626,7 @@ namespace RTE::CheckpointLua {
 				const SaverThreads::UngatedScope helperUngated;
 				const size_t first = batch * batchPages, count = std::min(batchPages, pages - first);
 				if (m_Coordinator->CopyPages(first, count)) m_Coordinator->TouchPages(first, count);
-			}, helpers);
+			}, 3);
 			copies.Finish();
 		}
 		/// Arm's locks and checks for a boundary arming on several threads, held in the session until it is fenced.
@@ -1689,8 +1640,8 @@ namespace RTE::CheckpointLua {
 			                    count * pageBytes);
 			std::fill(m_Copy->saved.begin() + static_cast<std::ptrdiff_t>(first), m_Copy->saved.begin() + static_cast<std::ptrdiff_t>(first + count), uint8_t{1});
 		}
-		bool FinishArm(HeapOwner& owner, bool whole, bool learn, bool watched, size_t copiedPages, int64_t copyUs, std::chrono::steady_clock::time_point started) noexcept {
-			if (!m_Coordinator->FinishArm(*m_Copy, m_Data->base, m_Data->committed, whole, learn, watched, copiedPages, copyUs)) return false;
+		bool FinishArm(HeapOwner& owner, bool whole, bool learn, size_t copiedPages, int64_t copyUs, std::chrono::steady_clock::time_point started) noexcept {
+			if (!m_Coordinator->FinishArm(*m_Copy, m_Data->base, m_Data->committed, whole, learn, copiedPages, copyUs)) return false;
 			owner.m_CowGateFree.store(true, std::memory_order_release);
 			m_Data->freezeUs = MicrosecondsSince(started);
 			return true;
@@ -1801,25 +1752,8 @@ namespace RTE::CheckpointLua {
 		if (!session.m_Lock || m_Finished || m_Copy->armed.load(std::memory_order_relaxed) != 0) return false;
 		session.m_Started = std::chrono::steady_clock::now();
 		m_Data->serial = G(owner.m_State)->objserial;
-		// A heap watched for this boundary copies the pages the last few ticks wrote instead of its hot runs.
-		std::vector<uint32_t> watched;
-		bool watching = owner.m_Watching->exchange(false, std::memory_order_acq_rel) && !whole;
-#ifdef _WIN32
-		if (watching) {
-			std::vector<void*> written(m_Data->committed / m_Copy->pageBytes);
-			ULONG_PTR count = written.size();
-			ULONG granularity = 0;
-			watching = GetWriteWatch(0, reinterpret_cast<void*>(m_Data->base), m_Data->committed, written.data(), &count, &granularity) == 0 && granularity == m_Copy->pageBytes;
-			watched.reserve(count);
-			for (size_t index = 0; watching && index < count; ++index)
-				watched.push_back(static_cast<uint32_t>((reinterpret_cast<uintptr_t>(written[index]) - m_Data->base) / m_Copy->pageBytes));
-		}
-#else
-		watching = false;
-#endif
-		session.m_Spans.reserve(std::max<size_t>(CowCoordinator::c_HotRunCapacity, watched.size()) + 1);
-		if (!m_Coordinator->PlanArm(*m_Copy, m_Data->committed, whole, session.m_Spans, watching ? &watched : nullptr)) return false;
-		session.m_Watched = watching;
+		session.m_Spans.reserve(CowCoordinator::c_HotRunCapacity + 1);
+		if (!m_Coordinator->PlanArm(*m_Copy, m_Data->committed, whole, session.m_Spans)) return false;
 		session.m_Prepared = this;
 		session.m_Owner = &owner;
 		session.m_Whole = whole;
@@ -1830,7 +1764,7 @@ namespace RTE::CheckpointLua {
 	inline void HeapOwner::ArmSession::CopyPages(size_t first, size_t count) const noexcept { m_Prepared->CopyArmPages(first, count); }
 
 	inline bool HeapOwner::ArmSession::Finish(size_t copiedPages, int64_t copyUs) noexcept {
-		return m_Prepared && m_Prepared->FinishArm(*m_Owner, m_Whole, m_Learn, m_Watched, copiedPages, copyUs, m_Started);
+		return m_Prepared && m_Prepared->FinishArm(*m_Owner, m_Whole, m_Learn, copiedPages, copyUs, m_Started);
 	}
 
 	inline std::shared_ptr<HeapOwner::Prepared> HeapOwner::PrepareFreeze() {
@@ -1841,7 +1775,6 @@ namespace RTE::CheckpointLua {
 		data->committed = m_PublishedCommitted.load(std::memory_order_acquire);
 		data->periodAllocated = m_PeriodAllocated.load(std::memory_order_relaxed);
 		data->busy = m_Busy.load(std::memory_order_relaxed);
-		data->watching = m_Watching;
 		const size_t pageBytes = PageWriteFence::SystemPageBytes();
 		if (!data->state || !pageBytes || !data->committed || data->base % pageBytes || data->committed % pageBytes)
 			throw std::runtime_error("the prepared Lua heap has no aligned committed range");

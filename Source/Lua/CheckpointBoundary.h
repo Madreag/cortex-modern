@@ -164,17 +164,12 @@ namespace RTE::CheckpointLua {
 		void Drain() {
 			if (m_Status.load(std::memory_order_acquire) != Status::Armed) throw std::logic_error("checkpoint boundary is not armed");
 			try {
-				// A busy heap the boundary left mostly fenced is copied at once by this thread, beside the game: its next collection
-				// writes it all over, and as faults that would cost the game several times more. The heaps drain before the native
-				// pages, which the game writes far less.
-				// One that collects in the next two ticks takes helper threads to finish before its collection.
+				// A busy heap the boundary left mostly fenced is copied at once, beside the game: the ticks after the boundary write
+				// it all over, and as their own faults and as its collections that cost the game several times more. The heaps
+				// drain before the native pages, which the game writes far less.
 				constexpr size_t c_EagerFencedBytes = size_t{32} << 20;
-				for (size_t index = 0; index < m_Heaps.size(); ++index) {
-					const auto& prepared = m_Heaps[index].prepared;
-					if (!prepared->Image().Busy() || prepared->FencedBytes() < c_EagerFencedBytes) continue;
-					const uint64_t until = m_TicksUntilCollection ? m_TicksUntilCollection(index) : 0;
-					prepared->CopyFencedNow(until && until <= 2 ? 3 : 0);
-				}
+				for (const Heap& heap: m_Heaps)
+					if (heap.prepared->Image().Busy() && heap.prepared->FencedBytes() >= c_EagerFencedBytes) heap.prepared->CopyFencedNow();
 				DrainHeaps();
 				for (const auto& pages: m_Native->Pages()) pages->Drain();
 				CheckpointFailure::Check(CheckpointFailure::Point::NativeRoots);
@@ -292,14 +287,12 @@ namespace RTE::CheckpointLua {
 				if (!until[index]) break;
 				const size_t heapBytes = m_Heaps[index].prepared->Image().ByteCount();
 				if (until[index] > 1 && bytes + heapBytes > c_WholeCopyBytes) break;
-				// A large watched heap is fenced with the pages its last ticks wrote, and drained at once before it collects.
-				if (heapBytes > c_WholeCopyBytes && m_Heaps[index].prepared->Image().Watched()) continue;
 				whole[index] = true;
 				bytes += heapBytes;
 			}
 			for (const size_t index: m_DrainOrder) {
 				const auto image = m_Heaps[index].prepared->Image();
-				if (whole[index] || !image.Busy() || image.Watched() || m_Heaps[index].prepared->HotBytes() * 8 >= image.ByteCount() || bytes + image.ByteCount() > c_BusyCopyBytes) continue;
+				if (whole[index] || !image.Busy() || m_Heaps[index].prepared->HotBytes() * 8 >= image.ByteCount() || bytes + image.ByteCount() > c_BusyCopyBytes) continue;
 				whole[index] = true;
 				learn[index] = true;
 				bytes += image.ByteCount();

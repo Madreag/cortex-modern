@@ -973,12 +973,6 @@ namespace RTE {
 		/// Test lever CCCP_TEST_FAULT_TICKS: the Lua heap write faults taken since the last call, and their microseconds.
 		static std::pair<uint64_t, uint64_t> TakeHeapFaultTally();
 
-		/// A checkpoint boundary is due at the end of the given simulation tick (see HeapOwner::ScheduleBoundaryWatch).
-		static void ScheduleCheckpointBoundary(uint64_t tick);
-
-		/// The end of a simulation tick, for the checkpoint heaps' boundary watch.
-		static void NoteSimTickEnd(uint64_t tick);
-
 		/// Test lever CCCP_TEST_FAULT_TICKS: each faulting heap since the last call, as " slot:script faults+collector faults/runs
 		/// copied at its boundary/hot runs recorded since", with "w" when its boundary copied it whole.
 		static std::string TakeHeapFaultsByState();
