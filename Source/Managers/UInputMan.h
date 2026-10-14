@@ -75,6 +75,8 @@ namespace RTE {
 		int Update(bool handleSpecialInput = true);
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		/// Moves the device states made before checkpoint storage into it, so a match's captures can read them.
+		void PrepareCheckpointValues();
 		bool RunCheckpointSelfTest();
 
 

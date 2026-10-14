@@ -601,6 +601,10 @@ template <class T> T* SeatStub(std::unique_ptr<T>& stub) {
 	}
 	return stub.get();
 }
+template <class T> T* ExistingSeatStub(const std::unique_ptr<T>& stub) {
+	std::lock_guard lock(g_SeatStubLocks[(reinterpret_cast<uintptr_t>(&stub) >> 3) % g_SeatStubLocks.size()]);
+	return stub.get();
+}
 } // namespace
 
 void GameActivity::PrepareCheckpointCapture() const {
@@ -627,6 +631,29 @@ SceneEditorGUI* GameActivity::GetEditorGUI(unsigned int which) const {
 	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
 	if (IsFrozenCheckpointNative() && !(presented && m_pEditorGUI[which]) && m_SavedStubEditor[which]) return m_SavedStubEditor[which];
 	return presented && m_pEditorGUI[which] ? m_pEditorGUI[which] : SeatStub(m_SeatStubEditorGUI[which]);
+}
+
+BuyMenuGUI* GameActivity::GetExistingBuyGUI(unsigned int which) const {
+	if (which >= Players::MaxPlayerCount) return nullptr;
+	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
+	if (IsFrozenCheckpointNative() && !(presented && m_pBuyGUI[which]) && m_SavedStubBuy[which]) return m_SavedStubBuy[which];
+	return presented && m_pBuyGUI[which] ? m_pBuyGUI[which] : ExistingSeatStub(m_SeatStubBuyGUI[which]);
+}
+
+SceneEditorGUI* GameActivity::GetExistingEditorGUI(unsigned int which) const {
+	if (which >= Players::MaxPlayerCount) return nullptr;
+	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
+	if (IsFrozenCheckpointNative() && !(presented && m_pEditorGUI[which]) && m_SavedStubEditor[which]) return m_SavedStubEditor[which];
+	return presented && m_pEditorGUI[which] ? m_pEditorGUI[which] : ExistingSeatStub(m_SeatStubEditorGUI[which]);
+}
+
+GUIBanner* GameActivity::GetExistingBanner(int whichColor, int player) const {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return nullptr;
+	GUIBanner* const live = whichColor == YELLOW ? m_pBannerYellow[player] : m_pBannerRed[player];
+	const bool presented = LocalInputOfPlayer(player) != Players::NoPlayer;
+	if (IsFrozenCheckpointNative() && !(presented && live) && m_SavedStubBanner[whichColor == YELLOW ? YELLOW : RED][player])
+		return m_SavedStubBanner[whichColor == YELLOW ? YELLOW : RED][player];
+	return presented && live ? live : ExistingSeatStub(m_SeatStubBanner[whichColor == YELLOW ? YELLOW : RED][player]);
 }
 
 GUIBanner* GameActivity::GetBanner(int whichColor, int player) const {

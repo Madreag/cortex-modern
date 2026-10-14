@@ -3838,6 +3838,12 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	void NetMatchService::NotePrivateBaseRefusalLocked(const ActivityMan::AutosaveRefusal& refusal) {
+		if (refusal.reason.empty()) return;
+		m_PrivateBaseRefusal = refusal.reason;
+		m_PrivateBaseRefusalLasting = refusal.lasting;
+	}
+
 	// The capture's verdict comes from the writer thread a tick or more after the simulation queued it.
 	// A world capture's bookkeeping follows that verdict, so nothing stands on an archive that never lands.
 	void NetMatchService::ApplyAutosaveVerdict(uint64_t tick, bool joinCapture, bool archived) {
@@ -3847,6 +3853,10 @@ static std::string ResyncSaveName() {
 			if (joinCapture) m_WorldCapturePending = true;
 			// A refused base is asked again; the metadata read at its tick stands for nothing.
 			if (joinCapture && m_PrivateBasePending && m_PrivateBasePending->tick == tick) { m_PrivateBasePending.reset(); m_PrivateBaseRequested = true; }
+			if (joinCapture && m_IsHost && m_WorldJoin.IsPrivateMatch()) {
+				NotePrivateBaseRefusalLocked(g_ActivityMan.LastAutosaveRefusal());
+				DropUnwantedPrivateBaseLocked();
+			}
 			ScenarioRunner::DropPendingLockstepWorldSegment("the checkpoint at tick " + std::to_string(tick) + " was refused");
 			return;
 		}
@@ -4042,6 +4052,12 @@ static std::string ResyncSaveName() {
 		m_OpenCaptureTick = input.tick + input.lead;
 		m_OpenCaptureApplied = false;
 		m_OpenCaptureForJoin = joinCapture;
+		// Test lever CC_FAULT_INJECT=join_capture_refused: the writer refuses the host's first base as it starts, where a frozen-inventory refusal comes.
+		if (joinCapture && m_IsHost && m_WorldJoin.IsPrivateMatch() && !m_InjectedJoinRefusal && FaultInjected("join_capture_refused")) {
+			m_InjectedJoinRefusal = true;
+			g_ActivityMan.RefuseCaptureWriterAt(m_OpenCaptureTick);
+			System::PrintDiagnosticLine("[fault] join_capture_refused: the writer refuses the base at tick " + std::to_string(m_OpenCaptureTick));
+		}
 		m_CaptureWriters = input.writers;
 		m_OpenCaptureManual = ask;
 		if (ask) {
@@ -4312,9 +4328,11 @@ static std::string ResyncSaveName() {
 			if (taken) {
 				if (input.unwritten > 0) System::PrintDiagnosticLine(std::format("[autosave] named tick={} taken with unwritten={}", tick, input.unwritten));
 				// The capture a returning seat's base was asked of: its metadata is read at this tick's end, its archive from the writer.
-				if (m_IsHost && joinCapture && m_WorldJoin.IsPrivateMatch() && m_PrivateBaseRequested) {
+				// Every join capture is a returner's base: one named before its returner was refused serves the next attempt.
+				if (m_IsHost && joinCapture && m_WorldJoin.IsPrivateMatch()) {
 					m_PrivateBaseRequested = false;
 					m_PrivateBaseTick = tick;
+					m_PrivateBaseRefusal.clear();
 				}
 				// The queue is not the verdict: the worker walks the graph off this thread and may still refuse.
 				m_AwaitedAutosaves.push_back(AwaitedAutosave{tick, joinCapture});
@@ -4343,7 +4361,9 @@ static std::string ResyncSaveName() {
 				}
 			} else {
 				// A capture this peer did not take holds nothing, and says so at once.
-				System::PrintDiagnosticLine(std::format("[autosave] named tick={} not taken: catch_up={} running={}", tick, ScenarioRunner::WorldCatchUpActive(), g_ActivityMan.ActivityRunning()));
+				const ActivityMan::AutosaveRefusal refusal = g_ActivityMan.LastAutosaveRefusal();
+				System::PrintDiagnosticLine(std::format("[autosave] named tick={} not taken: catch_up={} running={} reason={}", tick, ScenarioRunner::WorldCatchUpActive(), g_ActivityMan.ActivityRunning(), refusal.reason));
+				if (m_IsHost && joinCapture && m_WorldJoin.IsPrivateMatch()) NotePrivateBaseRefusalLocked(refusal);
 				output.send.push_back({0, NetGameCheckpoint::Missed, tick});
 			}
 		}
@@ -5247,6 +5267,7 @@ static std::string ResyncSaveName() {
 				line << "[net-match] private rejoin peer=" << static_cast<int>(member) << " incarnation=" << incarnation;
 				System::PrintDiagnosticLine(line.str());
 			}
+			m_PrivateBaseRefusal.clear();
 		}
 		m_WorldJoin.ReleaseLostConnections(live);
 		std::erase_if(m_PrivateActivations, [&](NetPeerId connection) { return m_WorldJoin.FindSession(connection) == nullptr; });
@@ -5421,6 +5442,21 @@ static std::string ResyncSaveName() {
 				AnswerEndedReturnersLocked(resume > 0 ? resume - 1 : 0);
 			}
 		}
+		// A returner whose base cannot be staged is told so at once with the reason, or once its captures keep missing past the
+		// window; a base taken and still being written is waited for. Its next attempt asks a fresh base.
+		if (!m_PrivateBaseRefusal.empty() && !m_PrivateImageTask.valid() && !m_PrivateBasePending) {
+			std::vector<std::pair<NetPeerId, uint64_t>> refused;
+			for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
+				if (session.spectator || session.phase != NetWorldJoinPhase::SnapshotTransfer || session.transferStarted || session.openedAtMs == 0) continue;
+				const uint64_t waitedMs = nowMs > session.openedAtMs ? nowMs - session.openedAtMs : 0;
+				if (m_PrivateBaseRefusalLasting || waitedMs > c_PrivateBaseStageWindowMs) refused.emplace_back(session.connection, waitedMs);
+			}
+			for (const auto& [connection, waitedMs]: refused) {
+				System::PrintDiagnosticLine("[net-match] rejoin refused connection=" + std::to_string(connection) + " after " + std::to_string(waitedMs) + "ms: its base could not be staged: " + m_PrivateBaseRefusal);
+				RefuseReturnerLocked(connection, "no image could be staged for the returner: " + m_PrivateBaseRefusal, "The host could not stage your rejoin; rejoining again");
+			}
+			if (!refused.empty()) m_PrivateBaseRefusal.clear();
+		}
 		// A returner whose base never comes (the round cannot capture one) is told so, never left waiting on it.
 		std::vector<NetPeerId> unserved;
 		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
@@ -5432,6 +5468,18 @@ static std::string ResyncSaveName() {
 			                            (m_PrivateBaseHeldReason ? std::string(" (") + m_PrivateBaseHeldReason + ")" : std::string()));
 			RefuseReturnerLocked(connection, "no image could be staged for the returner", "The host could not stage your rejoin; rejoining again");
 		}
+		DropUnwantedPrivateBaseLocked();
+	}
+
+	void NetMatchService::DropUnwantedPrivateBaseLocked() {
+		if (!m_WorldJoin.IsPrivateMatch() || (!m_PrivateBaseRequested && !m_WorldCapturePending)) return;
+		const bool waiting = std::any_of(m_WorldJoin.Sessions().begin(), m_WorldJoin.Sessions().end(), [](const NetWorldJoinSession& session) {
+			return !session.spectator && session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted;
+		});
+		if (waiting) return;
+		// A base already taken finishes by its own verdict and is kept for the next return; only the asking stops.
+		m_PrivateBaseRequested = false; m_WorldCapturePending = false;
+		m_PrivateBaseRefusal.clear();
 	}
 
 	void NetMatchService::RefuseReturnerLocked(NetPeerId connection, const std::string& reason, const std::string& text) {

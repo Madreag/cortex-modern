@@ -72,6 +72,8 @@ namespace RTE {
 		static Totals Take(ThreadTotals* threads = nullptr);
 		/// Prints taken costs, the largest exclusive cost first.
 		static void Report(uint64_t tick, Totals totals);
+		/// What this thread is freezing, outermost first ("AHuman > Arm > BITMAP"); empty unless the costs are measured.
+		static std::string DescribeOpen();
 	private:
 		void Begin();
 		void End();

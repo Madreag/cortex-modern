@@ -160,6 +160,8 @@ namespace RTE {
 
 		GLuint GetPaletteTexture() { return m_Palette8Texture; }
 		std::string SaveCheckpoint() const;
+		/// Remakes the rotation images in checkpoint storage, so a match's captures can read them.
+		void PrepareCheckpointValues();
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		bool RunCheckpointSelfTest();
 

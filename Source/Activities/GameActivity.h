@@ -349,6 +349,12 @@ namespace RTE {
 		/// @return A pointer to the GUIBanner object that we can
 		GUIBanner* GetBanner(int whichColor = YELLOW, int player = Players::PlayerOne) const;
 
+		/// The menus GetBuyGUI, GetEditorGUI and GetBanner would answer with, or nullptr where that is a seat stand-in not made yet; nothing is made.
+		/// A saver off the simulation thread reads these, so it never changes the live activity.
+		BuyMenuGUI* GetExistingBuyGUI(unsigned int which) const;
+		SceneEditorGUI* GetExistingEditorGUI(unsigned int which) const;
+		GUIBanner* GetExistingBanner(int whichColor, int player) const;
+
 		/// Sets the Area within which a team can land things.
 		/// @param team The number of the team we're setting for.
 		/// @param newArea The Area we're setting to limit their landings within.
