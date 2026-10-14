@@ -887,39 +887,6 @@ namespace {
 		uint64_t explicitGrownBytes = 0, worldGrownBytes = 0;
 	};
 	std::atomic<NativeStoragePools*> s_NativeStoragePools{nullptr};
-	// The 64 KiB regions the pools' pages ever covered, so a free of heap memory skips their lock; a released region stays marked.
-	class OwnedRegions {
-	public:
-		/// Records pages under the pools' lock before they are handed out; it never throws, so a grown block is always recorded.
-		void Mark(const void* address, size_t bytes) noexcept {
-			const uintptr_t first = reinterpret_cast<uintptr_t>(address) >> c_RegionBits, last = (reinterpret_cast<uintptr_t>(address) + bytes - 1) >> c_RegionBits;
-			for (uintptr_t region = first; region <= last; ++region) {
-				const uintptr_t top = region >> c_LeafBits;
-				if (top >= m_Leaves.size()) continue;
-				Leaf* leaf = m_Leaves[top].load(std::memory_order_acquire);
-				if (!leaf) {
-					leaf = new (std::nothrow) Leaf{};
-					if (!leaf) { m_Unsure.store(true, std::memory_order_release); continue; }
-					m_Leaves[top].store(leaf, std::memory_order_release);
-				}
-				leaf->words[(region & c_LeafMask) >> 6].fetch_or(uint64_t{1} << (region & 63), std::memory_order_release);
-			}
-		}
-		/// Whether the address can be the pools': false only for memory they never held.
-		bool Maybe(const void* address) const noexcept {
-			const uintptr_t region = reinterpret_cast<uintptr_t>(address) >> c_RegionBits, top = region >> c_LeafBits;
-			if (top >= m_Leaves.size() || m_Unsure.load(std::memory_order_acquire)) return true;
-			const Leaf* leaf = m_Leaves[top].load(std::memory_order_acquire);
-			return leaf && (leaf->words[(region & c_LeafMask) >> 6].load(std::memory_order_acquire) >> (region & 63) & 1);
-		}
-	private:
-		static constexpr unsigned c_RegionBits = 16, c_LeafBits = 16;
-		static constexpr uintptr_t c_LeafMask = (uintptr_t{1} << c_LeafBits) - 1;
-		struct Leaf { std::array<std::atomic<uint64_t>, (size_t{1} << c_LeafBits) / 64> words{}; };
-		std::array<std::atomic<Leaf*>, size_t{1} << 16> m_Leaves{};
-		std::atomic<bool> m_Unsure{false};
-	};
-	OwnedRegions s_OwnedRegions;
 	struct StorageCostCounters {
 		std::atomic<uint64_t> allocations{0}, allocateNs{0}, frees{0}, freeNs{0}, grows{0}, growNs{0}, larges{0};
 	};
@@ -943,7 +910,6 @@ namespace {
 	thread_local bool s_NativeStorageAllocation = false;
 	thread_local bool s_NativeStorageCapture = false;
 	thread_local std::optional<bool> s_NativeStorageWorldAllocation;
-	std::atomic<bool> s_NativeStorageWorldEnabled{false};
 	std::atomic<int> s_CoolingPauses{0};
 	NativeStoragePools& NativePools() {
 		static NativeStoragePools* const pools = [] {
@@ -955,26 +921,39 @@ namespace {
 	}
 }
 
+// Every scope counts itself while alive, so the inlined checks read their thread's scopes only while some scope exists.
 CheckpointNativeStorage::AllocationScope::AllocationScope(bool enabled) : m_Previous(s_NativeStorageAllocation) {
+	s_Scopes.fetch_add(1, std::memory_order_relaxed);
 	s_NativeStorageAllocation = s_NativeStorageAllocation || enabled;
 }
 
-CheckpointNativeStorage::AllocationScope::~AllocationScope() { s_NativeStorageAllocation = m_Previous; }
+CheckpointNativeStorage::AllocationScope::~AllocationScope() {
+	s_NativeStorageAllocation = m_Previous;
+	s_Scopes.fetch_sub(1, std::memory_order_relaxed);
+}
 
 CheckpointNativeStorage::CaptureScope::CaptureScope(bool enabled) : m_Previous(s_NativeStorageCapture) {
+	s_Scopes.fetch_add(1, std::memory_order_relaxed);
 	s_NativeStorageCapture = s_NativeStorageCapture || enabled;
 }
 
-CheckpointNativeStorage::CaptureScope::~CaptureScope() { s_NativeStorageCapture = m_Previous; }
+CheckpointNativeStorage::CaptureScope::~CaptureScope() {
+	s_NativeStorageCapture = m_Previous;
+	s_Scopes.fetch_sub(1, std::memory_order_relaxed);
+}
 
 CheckpointNativeStorage::WorldAllocationScope::WorldAllocationScope(bool enabled) : m_Previous(s_NativeStorageWorldAllocation) {
+	s_Scopes.fetch_add(1, std::memory_order_relaxed);
 	s_NativeStorageWorldAllocation = enabled;
 }
 
-CheckpointNativeStorage::WorldAllocationScope::~WorldAllocationScope() { s_NativeStorageWorldAllocation = m_Previous; }
+CheckpointNativeStorage::WorldAllocationScope::~WorldAllocationScope() {
+	s_NativeStorageWorldAllocation = m_Previous;
+	s_Scopes.fetch_sub(1, std::memory_order_relaxed);
+}
 
-bool CheckpointNativeStorage::WorldEnabled() noexcept { return s_NativeStorageWorldEnabled.load(std::memory_order_acquire); }
-bool CheckpointNativeStorage::SetWorldEnabled(bool enabled) noexcept { return s_NativeStorageWorldEnabled.exchange(enabled, std::memory_order_acq_rel); }
+bool CheckpointNativeStorage::WorldEnabled() noexcept { return s_WorldEnabled.load(std::memory_order_acquire); }
+bool CheckpointNativeStorage::SetWorldEnabled(bool enabled) noexcept { return s_WorldEnabled.exchange(enabled, std::memory_order_acq_rel); }
 
 CheckpointNativeStorage::CoolingPause::CoolingPause() { s_CoolingPauses.fetch_add(1, std::memory_order_acq_rel); }
 CheckpointNativeStorage::CoolingPause::~CoolingPause() { s_CoolingPauses.fetch_sub(1, std::memory_order_acq_rel); }
@@ -1003,15 +982,15 @@ void CheckpointNativeStorage::StartSettling() {
 	});
 }
 
-bool CheckpointNativeStorage::RetainingAllocations() noexcept {
+bool CheckpointNativeStorage::ScopedRetaining() noexcept {
 	return !s_NativeStorageCapture && (s_NativeStorageAllocation || s_NativeStorageWorldAllocation.value_or(WorldEnabled()));
 }
 
-bool CheckpointNativeStorage::Enabled(bool retained) {
+bool CheckpointNativeStorage::ScopedEnabled(bool retained) {
 	if (s_NativeStorageCapture) return false;
 	if (retained || s_NativeStorageAllocation) return true;
 	if (s_NativeStorageWorldAllocation) return *s_NativeStorageWorldAllocation;
-	return WorldEnabled() || ScenarioRunner::LockstepCoordinatorAttached();
+	return WorldEnabled() || LockstepAttached();
 }
 
 void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
@@ -1056,7 +1035,9 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 	return address;
 }
 
-bool CheckpointNativeStorage::Deallocate(void* address) noexcept {
+bool CheckpointNativeStorage::ReleaseOwned(void* address) noexcept {
+	// Once the cost lever is known to be off, Deallocate answers heap memory without coming here.
+	if (s_CostLever.load(std::memory_order_relaxed) == 0) s_CostLever.store(StorageCostsArmed() ? c_CostLeverOn : c_CostLeverOff, std::memory_order_relaxed);
 	if (!address) return false;
 	const StorageCostSpan cost(&StorageCostCounters::frees, &StorageCostCounters::freeNs);
 	if (ForgetPrivate(address)) return false;

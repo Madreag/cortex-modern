@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -87,8 +88,18 @@ namespace RTE {
 			std::shared_ptr<ReadState> m_State;
 			ReadState* m_Previous;
 		};
-		RTE_NOINLINE static bool Enabled(bool retained = false);
-		RTE_NOINLINE static bool RetainingAllocations() noexcept;
+		static bool Enabled(bool retained = false) {
+			// With no storage scope alive on any thread, only the world and the round decide.
+			if (s_Scopes.load(std::memory_order_relaxed) == 0) return retained || s_WorldEnabled.load(std::memory_order_acquire) || s_LockstepAttached.load(std::memory_order_acquire);
+			return ScopedEnabled(retained);
+		}
+		static bool RetainingAllocations() noexcept {
+			if (s_Scopes.load(std::memory_order_relaxed) == 0) return s_WorldEnabled.load(std::memory_order_acquire);
+			return ScopedRetaining();
+		}
+		/// Whether a lockstep coordinator is attached; ScenarioRunner keeps it beside the coordinator for the checks above.
+		static bool LockstepAttached() noexcept { return s_LockstepAttached.load(std::memory_order_acquire); }
+		static void SetLockstepAttached(bool attached) noexcept { s_LockstepAttached.store(attached, std::memory_order_release); }
 		static bool WorldEnabled() noexcept;
 		static bool SetWorldEnabled(bool enabled) noexcept;
 		/// Starts fencing new owned pages in the background while a world is captured, a slice at a time.
@@ -117,7 +128,13 @@ namespace RTE {
 		static ReadViews CurrentViews();
 		static const void* RootView(const void* source, size_t bytes = 1);
 		static void* Allocate(size_t bytes, size_t alignment);
-		RTE_NOINLINE static bool Deallocate(void* address) noexcept;
+		static bool Deallocate(void* address) noexcept {
+			// Heap memory freed outside every save, with the cost lever known to be off, was never the pools'.
+			if (s_CostLever.load(std::memory_order_relaxed) == c_CostLeverOff && s_Readers.load(std::memory_order_relaxed) == 0 && !s_OwnedRegions.Maybe(address)) return false;
+			return ReleaseOwned(address);
+		}
+		/// Deallocate's full path: private values, the cost lever and the pools under their lock.
+		RTE_NOINLINE static bool ReleaseOwned(void* address) noexcept;
 		static bool Owns(const void* address);
 		/// Slot pool, free slot and large buffer bytes, and how much grew inside explicit owned scopes.
 		static std::string InventoryCensus();
@@ -160,8 +177,48 @@ namespace RTE {
 		/// it: glibc places every module's static thread-locals at the top of each thread's stack.
 		static std::string ThreadStackSelfTestMismatch();
 	private:
+		// The 64 KiB regions the pools' pages ever covered, so a free of heap memory skips their lock; a released region stays marked.
+		class OwnedRegions {
+		public:
+			/// Records pages under the pools' lock before they are handed out; it never throws, so a grown block is always recorded.
+			void Mark(const void* address, size_t bytes) noexcept {
+				const uintptr_t first = reinterpret_cast<uintptr_t>(address) >> c_RegionBits, last = (reinterpret_cast<uintptr_t>(address) + bytes - 1) >> c_RegionBits;
+				for (uintptr_t region = first; region <= last; ++region) {
+					const uintptr_t top = region >> c_LeafBits;
+					if (top >= m_Leaves.size()) continue;
+					Leaf* leaf = m_Leaves[top].load(std::memory_order_acquire);
+					if (!leaf) {
+						leaf = new (std::nothrow) Leaf{};
+						if (!leaf) { m_Unsure.store(true, std::memory_order_release); continue; }
+						m_Leaves[top].store(leaf, std::memory_order_release);
+					}
+					leaf->words[(region & c_LeafMask) >> 6].fetch_or(uint64_t{1} << (region & 63), std::memory_order_release);
+				}
+			}
+			/// Whether the address can be the pools': false only for memory they never held.
+			bool Maybe(const void* address) const noexcept {
+				const uintptr_t region = reinterpret_cast<uintptr_t>(address) >> c_RegionBits, top = region >> c_LeafBits;
+				if (top >= m_Leaves.size() || m_Unsure.load(std::memory_order_acquire)) return true;
+				const Leaf* leaf = m_Leaves[top].load(std::memory_order_acquire);
+				return leaf && (leaf->words[(region & c_LeafMask) >> 6].load(std::memory_order_acquire) >> (region & 63) & 1);
+			}
+		private:
+			static constexpr unsigned c_RegionBits = 16, c_LeafBits = 16;
+			static constexpr uintptr_t c_LeafMask = (uintptr_t{1} << c_LeafBits) - 1;
+			struct Leaf { std::array<std::atomic<uint64_t>, (size_t{1} << c_LeafBits) / 64> words{}; };
+			std::array<std::atomic<Leaf*>, size_t{1} << 16> m_Leaves{};
+			std::atomic<bool> m_Unsure{false};
+		};
+		RTE_NOINLINE static bool ScopedEnabled(bool retained);
+		RTE_NOINLINE static bool ScopedRetaining() noexcept;
+		static constexpr int c_CostLeverOff = 1, c_CostLeverOn = 2;
 		static thread_local ReadState* s_Read;
 		static inline std::atomic<int> s_Readers{0}; //!< Read scopes open on all threads.
+		static inline std::atomic<int> s_Scopes{0}; //!< Allocation, capture and world allocation scopes alive on all threads.
+		static inline std::atomic<bool> s_WorldEnabled{false};
+		static inline std::atomic<bool> s_LockstepAttached{false};
+		static inline std::atomic<int> s_CostLever{0}; //!< The storage cost lever's state once read: unknown, off or on.
+		static inline OwnedRegions s_OwnedRegions;
 	};
 
 	class CheckpointNativeAllocated {
