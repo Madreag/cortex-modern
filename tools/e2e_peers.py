@@ -112,7 +112,7 @@ class PlayerRun:
         run = video.make_run(repo, args, out, timeout, env=environment, **kwargs)
         run.record.update(box=self.request["box"]["name"], engine_hostname=socket.gethostname(), topology="spread", proof=False,
                           source_commit=self.request["commit"], scene_sha256=self.request["scene_sha256"])
-        if self.request["box"]["os"] in JOINER_SYSTEMS:
+        if self.request["box"]["os"] in JOINER_SYSTEMS or self.request["box"].get("headed"):
             run.record.update(headed=True, headless_render_settings_applied=False)
         start = run.start
 
@@ -134,7 +134,7 @@ def check_build(request):
     source = video.source_evidence(repo)
     if source["tip"] != request["commit"] or source["dirty"]:
         raise ValueError("player checkout differs from the committed scene launcher")
-    if box["os"] in JOINER_SYSTEMS:
+    if box["os"] in JOINER_SYSTEMS or box.get("headed"):
         os.environ["CCCP_TEST_BINARY"] = str(repo / box["binary"])
     receipt = read(box["build_receipt"])
     executable = video.file_evidence(video.capture_binary(repo))
@@ -164,7 +164,7 @@ def play(request_path):
         peer["env"] = {**peer.get("env", {}), **request.get("engine_env", {})}
     local_scene = copy.deepcopy(document)
     local_scene["checklist"] = [item for item in document.get("checklist", []) if not item.get("peer") or item["peer"] == role]
-    headed = request["box"]["os"] in JOINER_SYSTEMS
+    headed = request["box"]["os"] in JOINER_SYSTEMS or bool(request["box"].get("headed"))
     options = SimpleNamespace(repo=Path(request["box"]["repo"]), size=None, port=request["port"], fps=request["fps"],
                               setting=[], render_cap=60, headed=headed, fullstate_every=0, sheet_every=request["sheet_every"],
                               tokens={"PROBE_DIR_" + other: out / name / (other + "-stage/probe")
