@@ -779,6 +779,7 @@ static std::string ResyncSaveName() {
 			m_AutosaveMatchId.clear();
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
+			m_CaptureAnchorSimTime = -1;
 			ResetCheckpointSchedule();
 			m_FinalCheckpointWritten = false;
 			m_ResumeSegmentTick = 0;
@@ -3515,6 +3516,7 @@ static std::string ResyncSaveName() {
 			}
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
+			m_CaptureAnchorSimTime = -1;
 			ResetCheckpointSchedule();
 		} else {
 			ForgetOpenCaptureOnHeal();
@@ -4282,6 +4284,19 @@ static std::string ResyncSaveName() {
 			input.hostProvisional = m_Coordinator->IsHostProvisional();
 		}
 		AutosaveTickOutput output = StepAutosaveSchedule(input);
+		// The prepared capture warms ahead of the next one: a named capture is near at once, an interval one counts from the
+		// host's schedule or, on a peer, from the last capture it took.
+		bool named = std::any_of(output.send.begin(), output.send.end(), [](const auto& note) { return note.kind == NetGameCheckpoint::Capture || note.kind == NetGameCheckpoint::ManualCapture; });
+		for (const CheckpointNote& note: input.applied) named = named || note.kind == NetGameCheckpoint::Capture || note.kind == NetGameCheckpoint::ManualCapture;
+		if (m_CaptureAnchorSimTime < 0) m_CaptureAnchorSimTime = input.now;
+		if (named || m_OpenCaptureTick != 0) {
+			g_ActivityMan.ExpectAutosave(0);
+		} else if (m_MatchAutosaveSeconds > 0) {
+			const int64_t next = m_IsHost && m_NextAutosaveSimTime >= 0 ? m_NextAutosaveSimTime : m_CaptureAnchorSimTime + static_cast<int64_t>(m_MatchAutosaveSeconds) * g_TimerMan.GetTicksPerSecond();
+			g_ActivityMan.ExpectAutosave(static_cast<double>(std::max<int64_t>(0, next - input.now)) / static_cast<double>(g_TimerMan.GetTicksPerSecond()));
+		} else {
+			g_ActivityMan.ExpectAutosave(std::numeric_limits<double>::infinity());
+		}
 		if (output.manualRefused) {
 			ScenarioRunner::PushNetUiToast("match_save", "Match not saved: the connection to the other players is lost");
 			m_ManualSaveWaitShown = false;
@@ -4314,6 +4329,7 @@ static std::string ResyncSaveName() {
 				CrossCaptureBarrierFromEnvironment("capture_announced", tick, m_AutosaveIdentity.roundId);
 				m_AutosaveIdentity.savedByHost = output.manual;
 				taken = SaveStampedAutosave(tick);
+				m_CaptureAnchorSimTime = input.now;
 				m_AutosaveIdentity.savedByHost = false;
 				const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureBegan).count();
 				if (m_Coordinator) m_Coordinator->CompleteSynchronizedCapture(tick, taken ? std::max(g_ActivityMan.LastAutosaveCaptureMs(), captureMs) : captureMs);

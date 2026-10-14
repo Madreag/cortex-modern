@@ -946,6 +946,12 @@ void ActivityMan::PrepareAutosave() {
 	} catch (const std::bad_alloc&) { std::fputs("[autosave] inventory preparation refused reason=out of memory\n", stdout); }
 }
 
+void ActivityMan::ExpectAutosave(double seconds) {
+	// Warming takes the saver tens of milliseconds, so five seconds keeps it ahead of a busy game's idle time.
+	constexpr double c_WarmSeconds = 5.0;
+	if (m_PreparedAutosave) m_PreparedAutosave->queue.SetWarm(seconds <= c_WarmSeconds);
+}
+
 void ActivityMan::NotifyCheckpointTick() {
 	if (!m_PreparedAutosave) return;
 	NetActorOwnership::RetryCheckpointValues();

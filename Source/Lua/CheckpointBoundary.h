@@ -63,8 +63,18 @@ namespace RTE::CheckpointLua {
 				result->m_Heaps.push_back({lease, lease.Prepare()});
 			}
 			result->m_Native = CheckpointNativeStorage::PrepareInventory();
-			for (const auto& pages: result->m_Native->Pages()) pages->WarmShadow();
 			return result;
+		}
+		/// Commits every copy and makes the pages a boundary writes resident, ahead of a capture; a boundary begun meanwhile
+		/// ends it and commits the rest itself.
+		void Warm() {
+			for (const Heap& heap: m_Heaps) heap.prepared->Warm();
+			try { m_Native->Warm(); } catch (const std::logic_error&) {}
+		}
+		/// Gives every copy's memory back while no boundary has begun.
+		void Cool() noexcept {
+			for (const Heap& heap: m_Heaps) heap.prepared->Cool();
+			m_Native->Cool();
 		}
 		~Boundary() { Cancel(); }
 		Boundary(const Boundary&) = delete;
@@ -222,7 +232,7 @@ namespace RTE::CheckpointLua {
 				inlineValue = static_cast<uint64_t*>(lua_newuserdata(lua, sizeof(uint64_t)));
 				*inlineValue = 29; lua_setglobal(lua, "boundaryNativeValue");
 			});
-			auto prepared = std::async(std::launch::async, [&] { return Prepare(states, roots); }).get();
+			auto prepared = std::async(std::launch::async, [&] { auto boundary = Prepare(states, roots); boundary->Warm(); return boundary; }).get();
 			header.tick = 2; value->number = 13;
 			ProtectedCall(lua, [&] { lua_pushinteger(lua, 17); lua_setglobal(lua, "boundaryValue"); });
 			if (!prepared->Arm()) return "prepared native and Lua boundary refused";

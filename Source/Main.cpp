@@ -9217,6 +9217,12 @@ void RunGameLoop() {
 					System::SetQuit(true);
 				}
 			}
+			// The harness's captures come on its own cadence, so it says how near the next one is.
+			if (s_cowCheckpointAutosave && s_checkpointRestoreContinue && s_checkpointRestoreAutosaveTicks > 0 && simTick >= s_checkpointRestoreTick) {
+				const uint64_t into = (simTick - s_checkpointRestoreTick) % s_checkpointRestoreAutosaveTicks;
+				g_ActivityMan.ExpectAutosave(static_cast<double>((s_checkpointRestoreAutosaveTicks - into) % s_checkpointRestoreAutosaveTicks) * g_TimerMan.GetDeltaTimeSecs());
+			}
+			if (s_cowCheckpointAutosave && !s_checkpointRestoreContinue) g_ActivityMan.ExpectAutosave(0);
 			// A continued restore repeats its capture at the boundary the live autosave uses.
 			if (s_cowCheckpointAutosave && s_checkpointRestoreContinue && s_checkpointRestoreAutosaveTicks > 0 && g_ActivityMan.ActivityRunning() &&
 			    simTick > s_checkpointRestoreTick && (simTick - s_checkpointRestoreTick) % s_checkpointRestoreAutosaveTicks == 0 &&
