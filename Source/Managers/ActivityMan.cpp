@@ -953,6 +953,13 @@ void ActivityMan::ExpectAutosave(double seconds) {
 	if (m_PreparedAutosave) m_PreparedAutosave->queue.SetWarm(seconds <= c_WarmSeconds);
 }
 
+bool ActivityMan::WarmAutosaveNow() {
+	CheckpointNativeStorage::ExpectCaptures(true);
+	if (!m_PreparedAutosave) return false;
+	m_PreparedAutosave->queue.SetWarm(true);
+	return m_PreparedAutosave->queue.WaitUntilWarm(std::chrono::seconds(5));
+}
+
 void ActivityMan::NotifyCheckpointTick() {
 	if (!m_PreparedAutosave) return;
 	NetActorOwnership::RetryCheckpointValues();

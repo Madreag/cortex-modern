@@ -12588,6 +12588,7 @@ int main(int argc, char** argv) {
 					// Recapture the restored instant before simulation advances. The
 					// fixture's absolute two-tick cap can precede the saved tick.
 					const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+					g_ActivityMan.WarmAutosaveNow();
 					if (!g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", tick) || (!s_checkpointRestoreContinue && !g_ActivityMan.WaitForAutosaveVerdict())) s_loadGameFailed = true;
 					if (!s_checkpointRestoreContinue || s_loadGameFailed) System::SetQuit(true);
 				}

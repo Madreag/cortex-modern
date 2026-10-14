@@ -55,6 +55,17 @@ namespace RTE::CheckpointLua {
 			HeapOwner::KeepCopiesWarm(warm);
 			if (m_WantWarm.exchange(warm, std::memory_order_acq_rel) != warm) Wake();
 		}
+		/// Waits up to the given time for a prepared plan the saver has warmed; false if none is warm by then.
+		bool WaitUntilWarm(std::chrono::milliseconds limit) const {
+			const SaverThreads::Lend lend;
+			const auto until = std::chrono::steady_clock::now() + limit;
+			while (!(m_State.load(std::memory_order_acquire) == State::Ready && m_Warmed.load(std::memory_order_acquire))) {
+				const State state = m_State.load(std::memory_order_acquire);
+				if (state == State::Failed || state == State::Stopped || std::chrono::steady_clock::now() >= until) return false;
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return true;
+		}
 		/// Why a capture asked for now would not be taken (empty when it would), and whether the queue failed rather than being busy.
 		std::pair<std::string, bool> NotReadyState() const {
 			switch (m_State.load(std::memory_order_acquire)) {
@@ -117,6 +128,7 @@ namespace RTE::CheckpointLua {
 		std::atomic<bool> m_Refresh{false};
 		std::atomic<bool> m_WantWarm{false};
 		int m_PlanWarm = -1; //!< The worker's: the prepared plan last warmed (1), cooled (0), or neither yet (-1).
+		std::atomic<bool> m_Warmed{false}; //!< The prepared plan is warm, for a thread that waits on it.
 		std::atomic<uint64_t> m_Wake{0};
 		mutable std::mutex m_FailureMutex;
 		std::string m_PrepareFailure; //!< Why the last preparation was refused.
@@ -139,6 +151,7 @@ namespace RTE::CheckpointLua {
 				if (!boundary) throw std::runtime_error("checkpoint inventory preparation returned no boundary");
 				m_Plan = std::make_unique<Plan>(std::move(boundary));
 				m_PlanWarm = -1;
+				m_Warmed.store(false, std::memory_order_release);
 				Publish(State::Ready);
 			} catch (...) { NotePrepareFailure(std::current_exception()); Publish(State::Failed); }
 		}
@@ -176,6 +189,7 @@ namespace RTE::CheckpointLua {
 					if (warm) { try { m_Plan->boundary->Warm(); } catch (...) {} }
 					else m_Plan->boundary->Cool();
 					m_PlanWarm = warm;
+					m_Warmed.store(warm, std::memory_order_release);
 					continue;
 				}
 				if (m_Refresh.exchange(false, std::memory_order_acq_rel)) {
