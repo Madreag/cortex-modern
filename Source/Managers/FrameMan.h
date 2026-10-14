@@ -87,6 +87,8 @@ namespace RTE {
 		static void FeelBeginIteration();
 		static void FeelBeforePreview();
 		static bool FeelBeginDraw();
+		/// The headless presentation cap in hertz, 0 when none applies.
+		static double FeelCapHz();
 		static void FeelBeforePresent();
 		void FeelAfterPresent();
 		static void FeelEndIteration(uint64_t ticks, long long simUS, long long updateUS, long long drawUS);
