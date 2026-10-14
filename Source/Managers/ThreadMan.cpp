@@ -25,7 +25,7 @@ using namespace RTE;
 
 void SaverThreads::Enter() {
 	if (s_Lowered) return;
-	s_Current = s_Lowered = true;
+	SaverThreadMark::current = s_Lowered = true;
 	// Save work has a lower base priority than gameplay's workers.
 #ifdef _WIN32
 	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);

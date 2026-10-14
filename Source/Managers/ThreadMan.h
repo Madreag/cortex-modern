@@ -9,6 +9,7 @@
 #include "BS_thread_pool.hpp"
 #include "FloatingPointEnvironment.h"
 #include "CheckpointFailure.h"
+#include "SaverThreadMark.h"
 
 #include <algorithm>
 #include <atomic>
@@ -32,10 +33,10 @@ namespace RTE {
 		static void Enter();
 
 		/// Marks the calling thread the saver's without lowering it, for a thread the simulation may wait on.
-		static void Mark() noexcept { s_Current = true; }
+		static void Mark() noexcept { SaverThreadMark::current = true; }
 
 		/// Whether the calling thread is one of the saver's.
-		static bool Current() noexcept { return s_Current; }
+		static bool Current() noexcept { return SaverThreadMark::current; }
 
 		/// Whether a game loop is handing the savers its idle time.
 		static bool Gated() noexcept { return s_Gating.load(std::memory_order_relaxed) > 0; }
@@ -44,13 +45,13 @@ namespace RTE {
 		static BS::thread_pool& Pool();
 
 		/// The saver's pool when a saver thread asks, else the pool asked for.
-		static BS::thread_pool& PoolFor(BS::thread_pool& pool) { return s_Current ? Pool() : pool; }
+		static BS::thread_pool& PoolFor(BS::thread_pool& pool) { return SaverThreadMark::current ? Pool() : pool; }
 
 		/// While the game runs, the saver's threads work only in its idle time: the game loop opens a slice when a tick's work
 		/// is done and closes it when the next tick starts, and a saver thread calls this where it holds nothing the game needs
 		/// and waits here while no slice is open. A game that is never idle gets a save that takes longer, never a slower tick.
 		static void YieldToGame() {
-			if (!s_Current || t_Ungated || !s_Gating.load(std::memory_order_relaxed) || s_Lent.load(std::memory_order_relaxed) > 0) return;
+			if (!SaverThreadMark::current || t_Ungated || !s_Gating.load(std::memory_order_relaxed) || s_Lent.load(std::memory_order_relaxed) > 0) return;
 			CheckSlice();
 		}
 
@@ -122,7 +123,6 @@ namespace RTE {
 		static void CheckSlice();
 		static void WaitForSlice();
 
-		static inline thread_local bool s_Current = false;
 		static inline thread_local bool s_Lowered = false;
 		static inline thread_local bool t_Ungated = false;
 		static inline std::atomic<int> s_Gating{0};

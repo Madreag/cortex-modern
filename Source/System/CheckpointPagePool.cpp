@@ -1345,6 +1345,7 @@ CheckpointNativeStorage::ReadScope::ReadScope(ReadViews views) : m_Capture(views
 	m_State = std::make_shared<ReadState>(std::move(lookup));
 	m_State->sourceOwner = std::move(views.owner);
 	m_State->privateValues = views.privateValues ? std::move(views.privateValues) : (m_Previous ? m_Previous->privateValues : std::make_shared<PrivateValues>());
+	s_Readers.fetch_add(1, std::memory_order_relaxed);
 	s_Read = m_State.get();
 }
 
@@ -1456,7 +1457,10 @@ const void* CheckpointNativeStorage::RootView(const void* source, size_t bytes) 
 	return nullptr;
 }
 
-CheckpointNativeStorage::ReadScope::~ReadScope() { s_Read = m_Previous; }
+CheckpointNativeStorage::ReadScope::~ReadScope() {
+	s_Read = m_Previous;
+	if (m_State) s_Readers.fetch_sub(1, std::memory_order_relaxed);
+}
 
 bool CheckpointNativeStorage::ReadBytes(const void* source, void* target, size_t bytes) {
 	SaverThreads::YieldToGame();

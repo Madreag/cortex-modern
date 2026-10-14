@@ -1,8 +1,10 @@
 #pragma once
 
 #include "CheckpointPagePool.h"
+#include "SaverThreadMark.h"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstring>
 #include <functional>
@@ -99,7 +101,7 @@ namespace RTE {
 			CoolingPause(const CoolingPause&) = delete;
 			CoolingPause& operator=(const CoolingPause&) = delete;
 		};
-		static bool Reading() { return s_Read != nullptr; }
+		static bool Reading() { return s_Readers.load(std::memory_order_relaxed) != 0 && s_Read != nullptr; }
 		static void RememberPrivate(void* address, size_t bytes, bool borrowed = false);
 		static void BorrowPrivate(const void* address) noexcept;
 		static bool PrivateBorrowed(const void* address) noexcept;
@@ -134,7 +136,11 @@ namespace RTE {
 		static bool ReadBytes(const void* source, void* target, size_t bytes);
 		static const void* View(const void* source, size_t bytes);
 		static const void* ViewObject(const void* source);
-		template<class T> static T* Source(T* source) { return static_cast<T*>(const_cast<void*>(ViewObject(source))); }
+		template<class T> static T* Source(T* source) {
+			// A thread that neither reads frozen views nor writes saves sees the live object.
+			if (!Reading() && !SaverThreadMark::current) return source;
+			return static_cast<T*>(const_cast<void*>(ViewObject(source)));
+		}
 		template<class T> static T& PrivateValue(T* source) {
 			if (!Reading()) return *source;
 			T* value = Source(source);
@@ -152,6 +158,7 @@ namespace RTE {
 		static std::string ThreadStackSelfTestMismatch();
 	private:
 		static thread_local ReadState* s_Read;
+		static inline std::atomic<int> s_Readers{0}; //!< Read scopes open on all threads.
 	};
 
 	class CheckpointNativeAllocated {
