@@ -201,6 +201,8 @@ namespace RTE {
 		void ReportDeferredSaveRefusals();
 		/// Drains checkpoint writes at shutdown, after simulation has ended.
 		void WaitForAutosaveTasks() const;
+		/// Waits for every capture and drops the prepared one; the game lends the saver its time meanwhile, as the saver waits for it.
+		void DropPreparedAutosave();
 		/// Automatic captures the writer has not finished; each holds its whole frozen image until it has.
 		size_t UnwrittenAutosaves();
 		/// The full-state oracle's captures still holding their images; a lever-only count, 0 without the lever.

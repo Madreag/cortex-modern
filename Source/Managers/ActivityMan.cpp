@@ -951,7 +951,7 @@ void ActivityMan::CollectPreparedAutosave() {
 }
 
 void ActivityMan::Clear() {
-	WaitForAutosaveTasks(); m_PreparedAutosave.reset();
+	DropPreparedAutosave();
 	m_DefaultActivityType = "GATutorial";
 	m_DefaultActivityName = "Tutorial Mission";
 	m_Activity = nullptr;
@@ -2000,9 +2000,18 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 }
 
 void ActivityMan::WaitForAutosaveTasks() const {
+	// The game waits on the saver here, so the saver may not wait for the game's idle time.
+	const SaverThreads::Lend lend;
 	if (m_PreparedAutosave && m_PreparedAutosave->result.valid()) m_PreparedAutosave->result.wait();
 	for (const auto& task: m_AutosaveTasks) task.wait();
 	for (const auto& task: m_FullStateTasks) task.wait();
+}
+
+void ActivityMan::DropPreparedAutosave() {
+	// Dropping the queue joins its writer, which may be releasing a capture's pages in time only the game lends.
+	const SaverThreads::Lend lend;
+	WaitForAutosaveTasks();
+	m_PreparedAutosave.reset();
 }
 
 bool ActivityMan::CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory, const std::string& label) {
@@ -3009,7 +3018,7 @@ bool ActivityMan::SetStartEditorActivitySetToLaunchInto() {
 }
 
 int ActivityMan::StartActivity(Activity* activity) {
-	WaitForAutosaveTasks(); m_PreparedAutosave.reset();
+	DropPreparedAutosave();
 	AudioMan::RestorePlayPhaseScope playPhase("Start");
 	RTEAssert(activity, "Trying to start a null activity!");
 
@@ -3294,7 +3303,7 @@ void ActivityMan::LateUpdateGlobalScripts() const {
 void ActivityMan::ClearEndedReplayActivity() {
 	if (m_ActivityNeedsRestart) return;
 	if (m_Activity && !m_Activity->IsOver()) return;
-	WaitForAutosaveTasks(); m_PreparedAutosave.reset();
+	DropPreparedAutosave();
 	m_StartActivity.reset();
 	m_Activity.reset();
 	m_InActivity = false;
@@ -3593,7 +3602,7 @@ bool ActivityMan::RestartActivity() {
 }
 
 bool ActivityMan::RestartActivityWorld() {
-	WaitForAutosaveTasks(); m_PreparedAutosave.reset();
+	DropPreparedAutosave();
 	if (!m_RestartRestoresSnapshot && !m_LockstepRelaunchInProgress) {
 		ScenarioRunner::ResetRetiredChecksumCounters();
 	}
