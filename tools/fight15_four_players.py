@@ -12,6 +12,9 @@ from fight15_scenes import ROOT, SETTINGS, buy, capture, click, game_probe, key,
 
 NAMES = {"host": "Captain", "joiner1": "Joiner1", "joiner2": "Joiner2", "joiner3": "Joiner3"}
 BUNKER_X = {"host": 0.3, "joiner1": 0.7, "joiner2": 0.1, "joiner3": 0.5}
+# Every player buys its own kind of soldier, so a Next Actor press can stop only at the player's own.
+SOLDIER = {"host": "Coalition.rte/Soldier Light", "joiner1": "Coalition.rte/Soldier Heavy", "joiner2": "Ronin.rte/Raider",
+           "joiner3": "Browncoats.rte/Browncoat"}
 TICKS = 72000
 PLAYERS = SEAT = None
 
@@ -107,8 +110,19 @@ def setup(peer):
 
 
 def fight(peer):
-    # The soldier comes down by rocket, the player takes it and fires; a shot passes the shooter's own side.
-    steps = buy(peer) + [dict(op="pan_scene", input_player=0, y=600, speed=8)] + capture(f"look-{peer}")
+    order = SEAT[peer]
+    steps = []
+    if order:
+        # One player at a time takes its soldier: the Next Actor presses pass a teammate's soldier only after its player is back on its brain.
+        steps += [dict(op="wait_file", path=f"{{PROBE_DIR_{PLAYERS[order - 1]}}}/soldier-done.json", within_ms=300000)]
+    # The soldier comes down by rocket, the player takes it and fires (a shot passes the shooter's own side), then goes back to
+    # its brain in the bunker, where the AI's attack does not reach it.
+    steps += buy(peer, soldier=SOLDIER[peer])
+    steps += [dict(op="actor_next_until", input_player=0, preset="Base.rte/Brain Case"),
+              dict(op="wait_scene", input_player=0, equals=dict(preset="Base.rte/Brain Case")),
+              dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset="Base.rte/Brain Case", brain_count=len(PLAYERS))),
+              dict(op="signal", name="soldier-done")]
+    steps += [dict(op="pan_scene", input_player=0, y=600, speed=8)] + capture(f"look-{peer}")
     steps += [dict(op="pan_scene", input_player=0, y=600, speed=8),
               dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=len(PLAYERS), screen_text="Select a body to switch control to..."))]
     steps += capture(f"ai-view-{peer}")
