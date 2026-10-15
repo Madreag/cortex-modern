@@ -2236,6 +2236,61 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestLobbyIgnoresTheLastRoundsFrameGroupPackets(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetPeerId hostRemotePeer = c_InvalidNetPeerId;
+			NetPeerId clientRemotePeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(43153, hostTransport, clientTransport, hostRemotePeer, clientRemotePeer, error)) return false;
+			NetLobbySession hostLobby;
+			NetLobbySession clientLobby;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remotePeerId = 2;
+			hostConfig.remoteTransportPeerId = hostRemotePeer;
+			hostConfig.matchConfig = MakeConfig();
+			hostConfig.startFrame = 77;
+			NetLobbySessionConfig clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			if (!hostLobby.Start(hostTransport, hostConfig, error) || !clientLobby.Start(clientTransport, clientConfig, error)) return false;
+			// The round that just ended was played in peer frame groups: a decision and an input still in flight reach each side's rematch lobby.
+			NetHostMigrationMessage decision;
+			decision.type = NetHostMigrationMessageType::PeerBridgeCommit;
+			decision.sessionId = 1;
+			decision.roundId = 77;
+			decision.generation = 1;
+			decision.senderPeerId = 1;
+			decision.successorPeerId = 1;
+			NetHostMigrationMessage input = decision;
+			input.type = NetHostMigrationMessageType::PeerInput;
+			input.senderPeerId = 2;
+			NetHash32 key{};
+			key.fill(23);
+			std::vector<uint8_t> decisionBytes, inputBytes;
+			if (!NetHostMigrationCodec::Encode(decision, key, decisionBytes) || !NetHostMigrationCodec::Encode(input, key, inputBytes) ||
+			    !hostTransport.Send(hostRemotePeer, NetTransportLane::ControlReliable, decisionBytes) || !clientTransport.Send(clientRemotePeer, NetTransportLane::ControlReliable, inputBytes)) {
+				*error = "lobby ignores the last round's frame group: the fixture's packets could not be sent";
+				return false;
+			}
+			std::string driven;
+			if (!DriveLobbyPair(hostTransport, clientTransport, hostLobby, clientLobby, &driven)) {
+				*error = "lobby ignores the last round's frame group: the rematch lobby ended on the last round's frame-group packets (" + driven + "; host error '" +
+				         hostLobby.GetFailureReason() + "', client error '" + clientLobby.GetFailureReason() + "'; malformed host " + std::to_string(hostLobby.GetStats().malformedMessages) +
+				         ", client " + std::to_string(clientLobby.GetStats().malformedMessages) + ")";
+				return false;
+			}
+			if (hostLobby.GetStats().ignoredSessionPackets == 0 || clientLobby.GetStats().ignoredSessionPackets == 0) {
+				*error = "lobby ignores the last round's frame group: a frame-group packet was taken for the lobby's own (host ignored " + std::to_string(hostLobby.GetStats().ignoredSessionPackets) +
+				         ", client ignored " + std::to_string(clientLobby.GetStats().ignoredSessionPackets) + ")";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestLobbyRelayAdoption(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
 			NetPeerId hostPeer = c_InvalidNetPeerId, clientPeer = c_InvalidNetPeerId;
@@ -19436,6 +19491,7 @@ namespace RTE {
 		if (!TestLobbyCodecDedicatedFlag(&error)) return fail(error);
 		if (!TestLobbyStateMachineHappyPath(&error)) return fail(error);
 		if (!TestLobbyKeepsTheRoundsPacketsBehindItsStart(&error)) return fail(error);
+		if (!TestLobbyIgnoresTheLastRoundsFrameGroupPackets(&error)) return fail(error);
 		if (!TestLobbyRelayAdoption(&error)) return fail(error);
 		if (!TestLiveReportDumpsSurviveBadBytes(&error)) return fail(error);
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);
