@@ -48,6 +48,11 @@ namespace RTE {
 		if (!UsesPeerFrameGroups() || PeerFrameBlackout(m_TimingNowMs)) return false;
 		std::vector<uint8_t> bytes;
 		if (!NetHostMigrationCodec::Encode(message, m_Config.migrationKey, bytes)) return false;
+		// Votes and certificates are independently authenticated and resent. An unreliable copy reaches a live plane even
+		// while its reliable lane is recovering a lost packet; the reliable copy still guarantees eventual delivery.
+		const bool expedited = lane == NetTransportLane::ControlReliable &&
+		    (message.type == NetHostMigrationMessageType::PeerBridge || message.type == NetHostMigrationMessageType::PeerBridgeCommit) &&
+		    SendPeerFrameMessage(message, NetTransportLane::InputUnreliable, onlyPeer);
 		const bool liveInput = message.type == NetHostMigrationMessageType::PeerInput || message.type == NetHostMigrationMessageType::PeerForwardInput;
 		const auto back = m_ReclaimTransactions.find(m_Config.localPeerId);
 		const bool details = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && message.type == NetHostMigrationMessageType::PeerInput &&
@@ -65,7 +70,7 @@ namespace RTE {
 				    << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " reference=" << static_cast<int>(m_PeerPaceReference)
 				    << " catching_up=" << PeerFrameCatchUpActive() << " now_ms=" << m_TimingNowMs << std::endl;
 			}
-			return sent;
+			return sent || expedited;
 		}
 		std::set<uint8_t> sent;
 		for (auto& [peer, dial]: PeerProbes()) {
@@ -80,7 +85,7 @@ namespace RTE {
 			if ((onlyPeer == 0 || onlyPeer == peer) && wantsInput(peer) && !sent.contains(peer) && m_Transport->Send(connection, lane, bytes)) sent.insert(peer);
 		if (m_Transport) for (const auto& [connection, peer]: PeerPrimaryBindings())
 			if ((onlyPeer == 0 || onlyPeer == peer) && wantsInput(peer) && !sent.contains(peer) && m_Transport->Send(connection, lane, bytes)) sent.insert(peer);
-		return !sent.empty();
+		return !sent.empty() || expedited;
 	}
 
 	bool NetLockstepCoordinator::PeerWantsLiveInput(uint8_t peer) const {
@@ -197,9 +202,9 @@ namespace RTE {
 		if (request.members.size() * 2 != request.owners.size()) return;
 		// A seat that heard the other half play on keeps asking what was decided: the referee holds one request per seat, and
 		// checking in again would replace the question and lose its answer.
-		if (m_PeerFrameTie && m_PeerFrameTie->queryOnly && !request.queryOnly) {
+		if (m_PeerFrameTie && m_PeerFrameTie->queryOnly) {
 			auto asked = *m_PeerFrameTie;
-			asked.members = request.members; asked.queryOnly = false;
+			asked.members = request.members; asked.queryOnly = request.queryOnly;
 			if (asked == request) request = *m_PeerFrameTie;
 		}
 		if (!m_PeerFrameTie || *m_PeerFrameTie != request) { m_PeerFrameTie = request; m_PeerFrameTieSinceMs = nowMs; }
