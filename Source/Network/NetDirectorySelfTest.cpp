@@ -2812,6 +2812,21 @@ namespace RTE {
 					if (NetDirectoryClient::JoinRefusalText(netMerged[1]) != "Cannot join this game: identity") {
 						note("identity-mismatch refusal read \"" + NetDirectoryClient::JoinRefusalText(netMerged[1]) + "\"");
 					}
+					// A computer that cannot read its own game files proves no game compatible: every row names the cause the player can fix.
+					std::vector<NetDirectoryClient::GameRow> unread = netMerged;
+					const std::string cause = "the game is installed too deep in folders for Windows: Deep.rte/Scenes reaches 270 characters where Windows allows 257";
+					NetDirectoryClient::RefuseForLocalIdentity(unread, cause);
+					for (const NetDirectoryClient::GameRow& row: unread) {
+						if (row.joinable || row.reason != "local files") {
+							note("a row read joinable=" + std::to_string(row.joinable) + " reason=\"" + row.reason + "\" though this computer could not read its game files");
+						}
+					}
+					if (NetDirectoryClient::JoinRefusalText(unread[0]) != "Cannot join this game: your game files could not be read - " + cause + ".") {
+						note("unreadable-files refusal read \"" + NetDirectoryClient::JoinRefusalText(unread[0]) + "\"");
+					}
+					if (NetDirectoryClient::JoinRefusalText(unread[1], true) != "Cannot join: your game files could not be read") {
+						note("unreadable-files brief refusal read \"" + NetDirectoryClient::JoinRefusalText(unread[1], true) + "\"");
+					}
 				}
 
 				// A v1 beacon carries no compatibility fields: the row must list but never be joinable.

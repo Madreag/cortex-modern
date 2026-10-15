@@ -710,6 +710,24 @@ static void ClearRejectedPurchaseView(Activity& activity, const NetGameDeliverCa
 	activity.ClearPreviewedPurchase(player, delivery.team, delivery.cost);
 }
 
+// A seat's own units - its brain and what its player bought - belong to that player's machine under the human-team policies, so
+// the player takes them without a handoff and a teammate's machine never produces them; the test policy that deals actors out by
+// id keeps its own rule.
+static bool SeatsOwnTheirUnits() {
+	const auto config = ScenarioRunner::GetLockstepMatchConfig();
+	return config && config->ownershipPolicy != NetActorOwnershipPolicy::UniqueIdModPeerCount;
+}
+
+// Every peer applies the purchase at the same committed frame, so every peer records the buyer as its craft's and passengers' owner.
+static void SeedPurchaseOwner(const ACraft& craft, uint8_t buyerPeerId, int team) {
+	if (buyerPeerId == 0 || !ScenarioRunner::IsLockstepControllerSyncActive() || !SeatsOwnTheirUnits()) return;
+	const uint8_t seededTeam = team < 0 ? uint8_t{0} : static_cast<uint8_t>(team);
+	NetActorOwnership::SeedOwner(static_cast<int64_t>(craft.GetUniqueID()), buyerPeerId, seededTeam);
+	for (const MovableObject* item: *craft.GetInventory()) {
+		if (const auto* passenger = dynamic_cast<const Actor*>(item)) NetActorOwnership::SeedOwner(static_cast<int64_t>(passenger->GetUniqueID()), buyerPeerId, seededTeam);
+	}
+}
+
 static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 	if (readyFrame.localCommands.empty() && readyFrame.remoteCommands.empty()) {
 		return;
@@ -861,6 +879,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				craft->SetControllerMode(Controller::CIM_AI);
 				craft->SetAIMode(Actor::AIMODE_DELIVER);
 				craft->SetNetworkDelivery(true);
+				SeedPurchaseOwner(*craft, command.senderPeerId, delivery->team);
 				g_MovableMan.AddActor(craft);
 				// One line per applied delivery on every peer, so the peers' logs compare directly.
 				std::cout << "[net-match] deliver command host applied tick=" << readyFrame.frame << " team=" << delivery->team << " order=" << command.sequence << " items=" << loaded << " peer=" << static_cast<int>(command.senderPeerId) << std::endl;
@@ -3983,6 +4002,7 @@ bool MovableMan::ApplyQueuedPurchaseDelivery(GameActivity& activity, const NetGa
 		std::cout << "[net-match] buy order did not queue: team " << delivery.team << std::endl;
 		return false;
 	}
+	SeedPurchaseOwner(*craft, senderPeerId, delivery.team);
 	std::cout << "[net-match] buy order queued: team " << delivery.team << " cost " << delivery.cost << " funds " << fundsBefore << " -> " << activity.GetTeamFunds(delivery.team) << " items " << delivery.cargo.size() << std::endl;
 	return true;
 }
@@ -8271,12 +8291,18 @@ void MovableMan::UpdateControllers() {
 	// over: the policy would otherwise re-derive it from the control mode a switch is about to change.
 	// A live claim is not the owner to return to, so the entry takes the policy's peer, not the claimant.
 	if (lockstepActive) {
-		for (const Actor* actor: CheckpointActorValues().m_Actors) {
+		std::optional<bool> seatsOwnUnits;
+		for (Actor* actor: CheckpointActorValues().m_Actors) {
 			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
 			// The ownership query normalizes a negative team to 0; the seed records the team it was resolved at.
 			const uint8_t team = actor->GetTeam() < 0 ? uint8_t{0} : static_cast<uint8_t>(actor->GetTeam());
 			if (!NetActorOwnership::HasSeededOwnerForTeam(uid, team)) {
-				NetActorOwnership::SeedOwner(uid, ScenarioRunner::GetLockstepPolicyActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()), team);
+				if (!seatsOwnUnits) seatsOwnUnits = SeatsOwnTheirUnits();
+				// A seat's brain is its own player's from its first tick, whichever teammate the team's policy names.
+				Activity* activity = *seatsOwnUnits ? g_ActivityMan.GetActivity() : nullptr;
+				const int seat = activity ? activity->IsBrainOfWhichPlayer(actor) : Players::NoPlayer;
+				const uint8_t seatPeer = seat >= Players::PlayerOne && activity->IsHumanSeat(seat) ? GameActivity::LockstepSeatPeerId(seat) : uint8_t{0};
+				NetActorOwnership::SeedOwner(uid, seatPeer ? seatPeer : ScenarioRunner::GetLockstepPolicyActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()), team);
 			}
 		}
 	}

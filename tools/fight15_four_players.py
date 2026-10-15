@@ -109,12 +109,19 @@ def setup(peer):
     return steps + capture(f"playing-{peer}")
 
 
+def watch(other):
+    """This peer's own committed state shows the other player's seat on that player's soldier, then that player back on its brain."""
+    return [dict(op="wait_scene", player=SEAT[other], equals=dict(preset=SOLDIER[other]), within_ms=300000),
+            dict(op="wait_file", path=f"{{PROBE_DIR_{other}}}/soldier-done.json", within_ms=300000)]
+
+
 def turn(peer):
     order = SEAT[peer]
     steps = []
-    if order:
-        # One player at a time takes its soldier: the Next Actor presses pass a teammate's soldier only after its player is back on its brain.
-        steps += [dict(op="wait_file", path=f"{{PROBE_DIR_{PLAYERS[order - 1]}}}/soldier-done.json", within_ms=300000)]
+    # One player at a time takes its soldier: the Next Actor presses pass a teammate's soldier only after its player is back on its
+    # brain. Every peer watches each other player's switch, so a seat's selection is the same on every peer.
+    for other in PLAYERS[:order]:
+        steps += watch(other)
     # The soldier comes down by rocket, the player takes it and fires (a shot passes the shooter's own side), then goes back to
     # its brain in the bunker, where the AI's attack does not reach it.
     steps += buy(peer, soldier=SOLDIER[peer])
@@ -122,6 +129,8 @@ def turn(peer):
               dict(op="wait_scene", input_player=0, equals=dict(preset="Base.rte/Brain Case")),
               dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset="Base.rte/Brain Case", brain_count=len(PLAYERS))),
               dict(op="signal", name="soldier-done")]
+    for other in PLAYERS[order + 1:]:
+        steps += watch(other)
     return steps
 
 

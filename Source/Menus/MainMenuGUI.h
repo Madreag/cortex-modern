@@ -328,6 +328,7 @@ namespace RTE {
 		std::optional<NetIdentityManifest> m_DirectoryManifest; //!< Its manifest: the game data a refusal for modules prints.
 		std::optional<NetDirectoryLocalIdentity> m_DirectoryWorldIdentity; //!< World 5/23 identity for persistent_world rows.
 		bool m_DirectoryIdentityTried = false;
+		std::string m_DirectoryIdentityError; //!< Why the local identity could not be built, shown with every row it leaves unjoinable.
 		bool m_JoinTargetPersistentWorld = false;
 		std::string m_JoinTargetActivity;
 		std::string m_LastWorldJoinAddress;

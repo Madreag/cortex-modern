@@ -33,6 +33,16 @@
 #include <thread>
 #include <tuple>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace RTE {
 
 	namespace {
@@ -236,8 +246,27 @@ namespace RTE {
 			return true;
 		}
 
+		/// Why the platform cannot open a module path, in the player's words; empty when it can.
+		std::string PathPastPlatformLimit([[maybe_unused]] const fs::path& path, [[maybe_unused]] const fs::path& root, [[maybe_unused]] bool directory) {
+#ifdef _WIN32
+			// Windows refuses 260 characters with the terminator unless long paths are on, and a folder is read as "folder\*".
+			const size_t limit = directory ? 258 : 260;
+			const size_t length = path.native().size();
+			if (length < limit || NetIdentity::LongPathsAvailable()) return {};
+			return "the game is installed too deep in folders for Windows: " + path.lexically_relative(root.parent_path()).generic_string() + " reaches " +
+			       std::to_string(length) + " characters where Windows allows " + std::to_string(limit - 1) +
+			       ". Move the game's folder closer to the drive (for example C:/Games), or turn on long paths in Windows";
+#else
+			return {};
+#endif
+		}
+
 		bool CollectModuleFiles(const fs::path& root, std::vector<ModuleFileRecord>& outFiles, std::string* error, const std::atomic<bool>* stop) {
 			std::error_code ec;
+			if (const std::string deep = PathPastPlatformLimit(root, root, true); !deep.empty()) {
+				if (error) *error = deep;
+				return false;
+			}
 			if (!fs::exists(root, ec) || !fs::is_directory(root, ec)) {
 				if (error) *error = "module root is not a directory: " + root.generic_string();
 				return false;
@@ -262,6 +291,13 @@ namespace RTE {
 				}
 
 				const fs::directory_entry& entry = *it;
+				// Judged before any stat: past the limit Windows answers none of them, and the walk must not descend there.
+				std::error_code typeError;
+				const bool directory = entry.is_directory(typeError);
+				if (const std::string deep = PathPastPlatformLimit(entry.path(), root, directory && !typeError); !deep.empty()) {
+					if (error) *error = deep;
+					return false;
+				}
 				const fs::file_status symlinkStatus = entry.symlink_status(ec);
 				if (ec) {
 					if (error) *error = "failed to stat module path: " + entry.path().generic_string() + ": " + ec.message();
@@ -982,6 +1018,21 @@ namespace RTE {
 
 	std::string NetIdentity::ShortHashHex(const NetHash32& hash) {
 		return HashHex(hash).substr(0, 16);
+	}
+
+	bool NetIdentity::LongPathsAvailable() {
+#ifdef _WIN32
+		// Windows answers for the manifest and its own setting together; a release without the call has no long paths.
+		using Query = BOOLEAN(WINAPI*)();
+		static const bool available = [] {
+			const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+			const Query query = ntdll ? reinterpret_cast<Query>(GetProcAddress(ntdll, "RtlAreLongPathsEnabled")) : nullptr;
+			return query && query() != FALSE;
+		}();
+		return available;
+#else
+		return true;
+#endif
 	}
 
 	std::string NetIdentity::NormalizeRelativePathForHash(const std::string& path, std::string* error) {

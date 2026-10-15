@@ -175,6 +175,9 @@ namespace RTE {
 		static std::string HashHex(const NetHash32& hash);
 		static std::string ShortHashHex(const NetHash32& hash);
 		static std::string NormalizeRelativePathForHash(const std::string& path, std::string* error = nullptr);
+		/// Whether this process opens paths of 260 characters or more: on Windows only when its manifest asks for long paths and
+		/// Windows has them turned on; elsewhere always.
+		static bool LongPathsAvailable();
 	};
 
 } // namespace RTE

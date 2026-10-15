@@ -991,14 +991,19 @@ namespace {
 				probe.actorCycleTick = tick; probe.actorCycleRender = probe.renders;
 			};
 			if (probe.actorCycleStage == 1) {
-				if (tick < probe.actorCycleTick + 2 || probe.renders < probe.actorCycleRender + 3) return false;
+				// A tap lets go on the next drawn frame: held past 250 ms of sim time, a slow screen's press opens manual actor select.
+				if (tick < probe.actorCycleTick + 2 || probe.renders < probe.actorCycleRender + 1) return false;
 				pushKey(false); probe.actorCycleStage = 2; return false;
 			}
 			if (probe.actorCycleStage == 2) {
 				if (tick < probe.actorCycleTick + ScenarioRunner::GetLockstepLocalInputDelay() + 5) return false;
 				probe.actorCycleStage = 0;
 			}
-			if (actor && actor->GetModuleAndPresetName() == step.at("preset").get<std::string>()) return true;
+			const std::string wanted = step.at("preset").get<std::string>();
+			if (actor && actor->GetModuleAndPresetName() == wanted) return true;
+			const auto* roster = g_MovableMan.GetTeamRoster(game->GetTeamOfPlayer(player));
+			Require(std::any_of(roster->begin(), roster->end(), [&wanted](const Actor* member) { return member->GetModuleAndPresetName() == wanted; }),
+			        "the unit " + wanted + " left the team before its player took it");
 			Require(probe.actorCyclePresses < 32, "thirty-two held Next Actor presses did not select the purchased unit");
 			pushKey(true); ++probe.actorCyclePresses; probe.actorCycleStage = 1; return false;
 		} else if (op == "assert_scene" || op == "wait_scene") {
