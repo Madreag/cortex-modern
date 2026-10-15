@@ -1691,6 +1691,8 @@ namespace RTE {
 		bool PeerBridgeHasInputConflict(const NetHostMigrationMessage& proposal) const;
 		void ResolvePeerBridgeInputConflicts(uint64_t nowMs);
 		bool DecodePeerBridgeCertificate(const NetHostMigrationMessage& certificate, NetHostMigrationMessage& agreed, uint32_t& voters) const;
+		/// The seats whose votes a decision needs: those it names as connected, less the seats it returns and those held at its frame.
+		uint32_t PeerDecisionRequiredVoters(const NetHostMigrationMessage& agreed) const;
 		void TryCommitPeerBridge(uint64_t frame, uint64_t nowMs, uint8_t kind = 0);
 		void InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs);
 		/// Takes the decisions kept for their frame, in frame order.

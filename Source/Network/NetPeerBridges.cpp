@@ -408,8 +408,7 @@ namespace RTE {
 		const auto own = found->second.find(m_Config.localPeerId);
 		if (own == found->second.end()) return;
 		const auto& proposal = own->second;
-		uint32_t required = proposal.connectedMask;
-		if (proposal.preparedFrame == 1) for (uint8_t peer: proposal.members) required &= ~SeatBit(peer);
+		const uint32_t required = PeerDecisionRequiredVoters(proposal);
 		uint32_t voters = 0;
 		std::vector<std::vector<uint8_t>> signedVotes;
 		for (const auto& [peer, vote]: found->second) {
@@ -432,6 +431,16 @@ namespace RTE {
 		SendPeerFrameMessage(std::move(certificate));
 	}
 
+	uint32_t NetLockstepCoordinator::PeerDecisionRequiredVoters(const NetHostMigrationMessage& agreed) const {
+		uint32_t required = agreed.connectedMask;
+		if (agreed.preparedFrame == 1) for (uint8_t peer: agreed.members) required &= ~SeatBit(peer);
+		// A seat the round holds at the decision's frame plays none of it: whether it voted decides nothing, so a voter that knows of the
+		// hold certifies without it, and a seat held after voting cannot leave a decision certified on one peer and passed on another.
+		if (agreed.preparedFrame != 3) for (const auto& [peer, bridge]: m_PeerBridges)
+			if (bridge.committedHold && agreed.frame >= bridge.fromFrame && (!bridge.returnFrame || agreed.frame < *bridge.returnFrame)) required &= ~SeatBit(peer);
+		return required;
+	}
+
 	bool NetLockstepCoordinator::DecodePeerBridgeCertificate(const NetHostMigrationMessage& certificate, NetHostMigrationMessage& agreed, uint32_t& voters) const {
 		if (certificate.bytes.empty() || certificate.frame < m_Config.startFrame) return false;
 		const uint8_t count = certificate.bytes.front();
@@ -451,8 +460,7 @@ namespace RTE {
 			else if (!SameBridge(agreed, vote)) return false;
 			voters |= SeatBit(vote.senderPeerId); offset += size;
 		}
-		uint32_t required = agreed.connectedMask;
-		if (agreed.preparedFrame == 1) for (uint8_t peer: agreed.members) required &= ~SeatBit(peer);
+		const uint32_t required = PeerDecisionRequiredVoters(agreed);
 		return offset == certificate.bytes.size() && voters == certificate.voterMask && (voters & required) == required &&
 		    agreed.connectedMask == certificate.connectedMask && agreed.members == certificate.members && agreed.preparedFrame == certificate.preparedFrame &&
 		    agreed.boundary == certificate.boundary && agreed.completeFrom == certificate.completeFrom && agreed.successorPeerId == certificate.successorPeerId;
@@ -619,8 +627,11 @@ namespace RTE {
 			// It is certified only with every seat that plays now: a seat held or silent at this frame, or one that backed another return
 			// of these seats, never completes it, so the frame does not wait on it and a silent seat is held within the bound instead.
 			const auto& basis = votes->second.contains(m_Config.localPeerId) ? votes->second.at(m_Config.localPeerId) : votes->second.begin()->second;
-			uint32_t required = basis.connectedMask, returning = 0;
-			if (basis.preparedFrame == 1) for (uint8_t peer: basis.members) { required &= ~SeatBit(peer); returning |= SeatBit(peer); }
+			const uint32_t required = PeerDecisionRequiredVoters(basis);
+			uint32_t returning = 0;
+			if (basis.preparedFrame == 1) for (uint8_t peer: basis.members) returning |= SeatBit(peer);
+			// One that needs this peer's vote, which it no longer gives at the frame it has reached, is never certified.
+			if (basis.preparedFrame != 3 && (required & SeatBit(m_Config.localPeerId)) != 0 && !votes->second.contains(m_Config.localPeerId)) continue;
 			const auto remote = m_RemoteFrames.find(m_Stats.nextFrame);
 			bool completes = true;
 			for (uint8_t peer = 1; completes && peer <= m_Config.peerCount; ++peer) {
