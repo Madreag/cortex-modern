@@ -99,6 +99,9 @@ namespace RTE {
 			uint64_t refaultAt = UINT64_MAX, refaultEnd = 0;
 			bool InRefault() const { return now >= refaultAt && now < refaultEnd; }
 			uint64_t silentAt = UINT64_MAX;
+			std::map<uint8_t, uint64_t> inputSentThrough;
+			std::set<std::pair<uint8_t, uint64_t>> returnsProposed;
+			std::string returnInsideInputs;
 			bool Split(uint8_t a, uint8_t b) const {
 				if (row.silentVoter && a != b && (a == row.silentVoter || b == row.silentVoter) && now >= silentAt && now < silentAt + row.silentVoterMs) return true;
 				if (!DuringFault() || row.frozen || row.blackout || row.slowPercent || row.inputsLost || !row.gapMs) return false;
@@ -314,6 +317,15 @@ namespace RTE {
 				}
 #endif
 				if (hub.countInputs && owner == 1) CountInputTicks(bytes, lane);
+				// A return is placed past every input its proposer has sent: no voter can have prepared that far.
+				if (NetHostMigrationCodec::Decode(bytes, key, decision) && decision.senderPeerId == owner) {
+					if (decision.type == NetHostMigrationMessageType::PeerInput) hub.inputSentThrough[owner] = std::max(hub.inputSentThrough[owner], decision.frame);
+					// Judged when it is first sent: the proposer's vote is sent again later, after more of its inputs.
+					if (decision.type == NetHostMigrationMessageType::PeerBridge && decision.preparedFrame == 1 && decision.successorPeerId == owner &&
+					    hub.returnsProposed.insert({owner, decision.frame}).second && decision.frame <= hub.inputSentThrough[owner] && hub.returnInsideInputs.empty())
+						hub.returnInsideInputs = "peer " + std::to_string(owner) + " proposed a return at " + std::to_string(decision.frame) + " with its own inputs sent through " +
+						                         std::to_string(hub.inputSentThrough[owner]);
+				}
 				if (hub.dropReceiptsFrom == owner && NetHostMigrationCodec::Decode(bytes, key, decision) && decision.type == NetHostMigrationMessageType::PeerReceipt) return true;
 				if (hub.dropInputsFrom == owner && NetHostMigrationCodec::Decode(bytes, key, decision) &&
 				    (decision.type == NetHostMigrationMessageType::PeerInput || decision.type == NetHostMigrationMessageType::PeerForwardInput)) return true;
@@ -733,6 +745,7 @@ namespace RTE {
 				while (hub.refaultEnd && hub.now <= hub.refaultEnd + c_TestReturnAllowanceMs + 4000) if (!Step(error)) return false;
 				if (row.asymmetricBridge && row.asymmetricBridge < 3 && !hub.asymmetricReleased) { error = "the asymmetric input lever did not force both pending bridge votes"; return false; }
 				if (row.returnByTailOnly && !hub.droppedReturns) { error = "the tail-only lever withheld no proposal or certificate of the subject's return"; return false; }
+				if (!hub.returnInsideInputs.empty()) { error = hub.returnInsideInputs; return false; }
 				if (row.silentVoter && hub.silentAt == UINT64_MAX) { error = "the leader never voted the subject's return, so no voter fell silent at it"; return false; }
 				if (row.heldOnce) {
 					const auto boundaries = hub.bridgeBoundaries.find(row.subject);
