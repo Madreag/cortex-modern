@@ -203,10 +203,15 @@ namespace RTE {
 				if (own > 0) {
 					const auto rate = PeerAppliedRate(peer, nowMs);
 					if (!rate) continue;
-					if (*rate < own - (own >= 59.5 ? 0.5 : own / 10.0)) {
+					// It must also close its trail by its first live frame: one still behind there is late at once and held again.
+					const uint64_t trail = displayed > applied->second ? displayed - applied->second : 0;
+					const uint64_t horizon = m_LastQueuedTargetFrame != UINT64_MAX && m_LastQueuedTargetFrame >= displayed ? m_LastQueuedTargetFrame + 1 - displayed : 0;
+					const double toLive = static_cast<double>(horizon + delay + trail + m_Config.slowPlayerBoundTicks);
+					const bool closes = trail <= m_Config.slowPlayerBoundTicks || (*rate - own) * toLive >= static_cast<double>(trail - m_Config.slowPlayerBoundTicks) * own;
+					if (*rate < own - (own >= 59.5 ? 0.5 : own / 10.0) || !closes) {
 						if (m_SlowMachineHolds.insert(peer).second)
 							DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " stays held: it applied " << *rate
-							                 << " ticks/s against this machine's " << own << std::endl;
+							                 << " ticks/s against this machine's " << own << " with " << trail << " ticks to close" << std::endl;
 						continue;
 					}
 				}
