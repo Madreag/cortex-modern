@@ -709,6 +709,7 @@ struct ActivityMan::PreparedAutosave {
 	    [this](const Header& header, std::exception_ptr error) { Refused(header, error); }) {}
 
 	size_t refusedPreparations = 0; //!< Preparations refused since the last one that succeeded; only the saver touches these.
+	bool exhaustedPreparation = false; //!< Test lever: the next preparation runs out of memory.
 	std::string lastPreparationRefusal;
 	bool afterRefusedCapture = false;
 
@@ -718,6 +719,7 @@ struct ActivityMan::PreparedAutosave {
 		const bool named = std::exchange(afterRefusedCapture, false);
 		if (named) System::PrintDiagnosticLine("[autosave] inventory preparation began after the refused capture");
 		try {
+			if (std::exchange(exhaustedPreparation, false)) throw std::bad_alloc();
 			auto boundary = PrepareBoundary();
 			const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
 			if (named || refusedPreparations || ms >= 2000) System::PrintDiagnosticLine(std::format("[autosave] inventory prepared in {} ms after {} refused preparations", ms, refusedPreparations));
@@ -822,6 +824,10 @@ struct ActivityMan::PreparedAutosave {
 	bool Complete(const Header& header, const CheckpointLua::Boundary& boundary) {
 		if (uint64_t refused = header.tick; header.tick != 0 && owner.m_RefusedWriterTick.compare_exchange_strong(refused, 0, std::memory_order_relaxed))
 			throw std::runtime_error("an injected refusal");
+		if (uint64_t exhausted = header.tick; header.tick != 0 && owner.m_ExhaustedWriterTick.compare_exchange_strong(exhausted, 0, std::memory_order_relaxed)) {
+			exhaustedPreparation = true;
+			throw std::bad_alloc();
+		}
 		if (const char* phases = std::getenv("CCCP_CHECKPOINT_PHASES"); phases && std::string_view(phases) == "1") {
 			size_t ranges = 0, bytes = 0, copied = 0, fenced = 0;
 			for (const auto& pages: boundary.NativeViews().pages) {

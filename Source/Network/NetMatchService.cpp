@@ -4058,6 +4058,12 @@ static std::string ResyncSaveName() {
 			g_ActivityMan.RefuseCaptureWriterAt(m_OpenCaptureTick);
 			System::PrintDiagnosticLine("[fault] join_capture_refused: the writer refuses the base at tick " + std::to_string(m_OpenCaptureTick));
 		}
+		// Test lever CC_FAULT_INJECT=join_capture_out_of_memory: the host's first base and the inventory preparation after it run out of memory.
+		if (joinCapture && m_IsHost && m_WorldJoin.IsPrivateMatch() && !m_InjectedJoinRefusal && FaultInjected("join_capture_out_of_memory")) {
+			m_InjectedJoinRefusal = true;
+			g_ActivityMan.ExhaustCaptureMemoryAt(m_OpenCaptureTick);
+			System::PrintDiagnosticLine("[fault] join_capture_out_of_memory: the writer of the base at tick " + std::to_string(m_OpenCaptureTick) + " and the inventory preparation after it run out of memory");
+		}
 		m_CaptureWriters = input.writers;
 		m_OpenCaptureManual = ask;
 		if (ask) {
