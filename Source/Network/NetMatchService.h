@@ -609,6 +609,8 @@ namespace RTE {
 		int GetDirectoryVisibility() const;
 		/// Where this host's game stands in the online game list; the reason names why it is not listed when it failed.
 		NetListingStatus GetListingStatus(std::string* reason = nullptr) const;
+		/// The directory's session id of this host's listing; empty until the directory has registered it.
+		std::string GetListedSessionId() const;
 		/// Moves the lobby's directory visibility through the held lease: 0 retracts the row (LAN
 		/// only - re-listing needs a new hosted session), 1 keeps the lease hidden, 2 lists it.
 		/// False when there is no lease to move. The bound ICE identity never changes.
@@ -1079,6 +1081,12 @@ namespace RTE {
 
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest, NetIdentityBuildOptions identityOptions);
 		void DriveWorldJoins(uint64_t nowMs);
+		/// The private rejoin driver looks at a ready connection the round no longer carries, and at one it still carries for a seat the
+		/// AI holds: a peer frame group keeps a slow seat's link in the round, and its player catches up in place on it.
+		static bool DrivesRejoinLink(bool inRound, bool heldAISeat) { return !inRound || heldAISeat; }
+		/// A looked-at connection that is not its held seat's in-place route may take the private image when no join is open on it and
+		/// the round does not carry it.
+		static bool OffersImageOnLink(bool inRound, bool joinOpen) { return !joinOpen && !inRound; }
 		void DrivePrivateMatchRejoins(uint64_t nowMs);
 		/// Host: the seat roster's return phases from the round - a returner's world in, its seat playing at a committed frame, its
 		/// transfer abandoned.
@@ -1996,7 +2004,7 @@ namespace RTE {
 		const char* m_PrivateBaseHeldReason = nullptr; //!< Host: why the last pass could not take a base, reported once per reason.
 		std::string m_PrivateBaseRefusal; //!< Host: why the base this attempt asked for was refused or not taken; empty while it can still come.
 		bool m_PrivateBaseRefusalLasting = false; //!< Host: that refusal will not pass by asking again.
-		bool m_InjectedJoinRefusal = false; //!< Test lever CC_FAULT_INJECT=join_capture_refused has refused its one base.
+		bool m_InjectedJoinRefusal = false; //!< Test lever CC_FAULT_INJECT=join_capture_refused or join_capture_out_of_memory has refused its one base.
 		void NotePrivateBaseRefusalLocked(const ActivityMan::AutosaveRefusal& refusal);
 		/// Drops a returning seat's base request once no returner waits for it, so a refused or departed return stops the captures it asked.
 		void DropUnwantedPrivateBaseLocked();

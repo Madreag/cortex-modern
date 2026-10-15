@@ -1,4 +1,5 @@
 #include "NetMatchRunner.h"
+#include "SteadyClock.h"
 #include "DiagnosticLine.h"
 
 #include "GnsTransport.h"
@@ -222,14 +223,14 @@ namespace RTE {
 		NetReconnectClient* reconnect = session.GetReconnectClient();
 		if (!reconnect) return true;
 		std::string why;
-		const auto asked = std::chrono::steady_clock::now();
+		const auto asked = RTE::SteadyClock::now();
 		bool waited = false;
 		if (!reconnect->GetRosterReplica().AgreesAt(m_MatchConfig.seatRosterRevision, m_MatchConfig.seatRosterHash, &why)) {
 			// A revision this peer never heard - a full send queue lost it - is asked for by number; the host answers from what it published.
 			waited = true;
 			reconnect->RequestRosterRevision(m_MatchConfig.seatRosterRevision);
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(c_RosterRevisionWaitMs);
-			while (!reconnect->GetRosterReplica().AgreesAt(m_MatchConfig.seatRosterRevision, m_MatchConfig.seatRosterHash, &why) && std::chrono::steady_clock::now() < deadline) {
+			const auto deadline = RTE::SteadyClock::now() + std::chrono::milliseconds(c_RosterRevisionWaitMs);
+			while (!reconnect->GetRosterReplica().AgreesAt(m_MatchConfig.seatRosterRevision, m_MatchConfig.seatRosterHash, &why) && RTE::SteadyClock::now() < deadline) {
 				const uint64_t nowMs = m_Config.nowMs ? m_Config.nowMs() : 0;
 				// The host's round start can arrive while this peer asks: it is the round's, and the session would drop it.
 				for (NetTransportEvent& event: transport.PollEvents()) {
@@ -247,7 +248,7 @@ namespace RTE {
 		}
 		m_RosterAgreedRevision = m_MatchConfig.seatRosterRevision;
 		DiagnosticLine() << "[net-match] seat roster revision " << m_MatchConfig.seatRosterRevision << " agreed"
-		                 << (waited ? " after asking for it, " + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - asked).count()) + " ms" : std::string())
+		                 << (waited ? " after asking for it, " + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - asked).count()) + " ms" : std::string())
 		                 << std::endl;
 		return true;
 	}
@@ -517,7 +518,7 @@ namespace RTE {
 	}
 
 	bool NetMatchRunner::WaitForSessionReady(INetTransport& transport, NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error) {
-		const auto startTime = std::chrono::steady_clock::now();
+		const auto startTime = RTE::SteadyClock::now();
 		uint64_t nextRetryMs = 0;
 		while (true) {
 			if (m_Config.cancelRequested && m_Config.cancelRequested->load()) {
@@ -526,7 +527,7 @@ namespace RTE {
 				return false;
 			}
 			const uint64_t waitMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-				std::chrono::steady_clock::now() - startTime).count());
+				RTE::SteadyClock::now() - startTime).count());
 			const uint64_t nowMs = m_Config.nowMs ? m_Config.nowMs() : waitMs;
 			session.Tick(nowMs);
 			if (m_Config.pumpHost) {
@@ -656,7 +657,7 @@ namespace RTE {
 			m_StateToStream.clear();
 		}
 
-		const auto startTime = std::chrono::steady_clock::now();
+		const auto startTime = RTE::SteadyClock::now();
 		const uint64_t roundStartSessionMs = m_Config.nowMs ? m_Config.nowMs() : 0;
 		uint64_t transferProgress = m_Lobby.GetStateTransferProgressSerial(), lastProgressMs = 0;
 		uint64_t activity = m_Lobby.GetActivitySerial();
@@ -726,7 +727,7 @@ namespace RTE {
 					DiagnosticLine() << "[net-match] host options refused: " << republishError << std::endl;
 				}
 			}
-			const auto now = std::chrono::steady_clock::now();
+			const auto now = RTE::SteadyClock::now();
 			// The round's elapsed time is the session clock's when the service supplies one, so the
 			// waits here and the admission deadlines measure the same time.
 			const uint64_t sessionMs = m_Config.nowMs ? m_Config.nowMs() : 0;
@@ -928,7 +929,7 @@ namespace RTE {
 				const uint64_t high = entropy();
 				const uint64_t low = entropy();
 				lockstepConfig.roundId = (high << 32) ^ low ^
-				                         static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+				                         static_cast<uint64_t>(RTE::SteadyClock::now().time_since_epoch().count());
 			} while (lockstepConfig.roundId == 0);
 		}
 		if (m_WorldJoinStarting && m_PrivateJoinConfig) {
@@ -1037,7 +1038,7 @@ namespace RTE {
 		snapshot.hostPeerId = m_ActiveHostPeerId != 0 ? m_ActiveHostPeerId : rosterConfig.hostPeerId;
 		// A joiner that receives the world's image says how much has come, how fast and how long is left.
 		if (const auto [received, total] = m_Lobby.GetStateTransferProgress(); !m_Config.host && total > 0 && !m_Lobby.HasCompleteStateTransfer()) {
-			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 			if (m_TransferMarkMs == 0 || received < m_TransferMarkBytes) {
 				m_TransferMarkMs = nowMs;
 				m_TransferMarkBytes = received;

@@ -28,6 +28,12 @@ namespace RTE {
 	/// Drops the record; the caller destroyed the panels it refers to.
 	void ClearPanelDrawRecord();
 
+	/// Drops a manager's passes and the panels drawn in them: they go with the manager, and their addresses can be reused.
+	void ForgetPanelDraws(const void* manager);
+
+	/// Drops one panel that is going away, such as a control drawn outside its manager's pass.
+	void ForgetPanelDraw(const void* panel);
+
 	/// Turns the record on or off. Only a scripted run reads it, so a player's frames record nothing.
 	void SetPanelDrawRecording(bool recording);
 } // namespace RTE

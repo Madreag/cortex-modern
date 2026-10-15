@@ -7,9 +7,12 @@
 
 #include "lz4.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <optional>
+#include <utility>
 
 namespace RTE {
 
@@ -226,6 +229,9 @@ namespace RTE {
 			if (!m_PeerAppliedAtMs.contains(message.senderPeerId) || message.appliedFrame > applied) {
 				applied = std::max(applied, message.appliedFrame);
 				m_PeerAppliedAtMs[message.senderPeerId] = nowMs;
+				auto& progress = m_PeerAppliedProgress[message.senderPeerId];
+				progress.emplace_back(nowMs, applied);
+				while (progress.size() > 2 && progress.front().first + 3000 < nowMs) progress.pop_front();
 			}
 			if (message.senderPeerId == GetHostPeerId()) NoteAuthorityHeard(nowMs);
 		};
@@ -284,13 +290,14 @@ namespace RTE {
 			const auto own = votes.find(m_Config.localPeerId);
 			if (own != votes.end() && !SameBridge(own->second, message)) return true;
 			votes.try_emplace(message.senderPeerId, message);
-			if (own == votes.end()) {
+			if (own == votes.end() && !VotedOtherPeerReturn(message)) {
 				auto reply = message;
 				reply.senderPeerId = m_Config.localPeerId;
 				reply.appliedFrame = m_LastCompletedSimulationTick.value_or(0);
 				reply.voterMask = SeatBit(m_Config.localPeerId);
 				if (reply.preparedFrame == 3) m_PeerAdminOwnVote = reply;
 				votes.emplace(m_Config.localPeerId, reply);
+				m_PeerVotedAtMs.try_emplace({reply.frame, DecisionKind(reply)}, nowMs);
 				if (reply.preparedFrame == 0) for (uint8_t peer: reply.members) m_PeerRejectedInputs[reply.frame] |= SeatBit(peer);
 				SendPeerFrameMessage(std::move(reply));
 			}
@@ -421,6 +428,8 @@ namespace RTE {
 			if (!DecodeMigrationFrame(record, message.frame, decoded) || at == body.size()) return readFailed("frame-record");
 			const uint8_t count = body[at++]; if (count > 32) return true;
 			std::vector<NetHostMigrationMessage> proofs;
+			// A certified return of this seat carried here: its activation and the end of its neutral gap.
+			std::optional<std::pair<uint64_t, uint64_t>> ownReturnGap;
 			for (uint8_t n = 0; n < count; ++n) {
 				if (!TakeSize(body, at, size) || at > body.size() || size > body.size() - at) return true;
 				NetHostMigrationMessage proof, agreed; uint32_t voters = 0;
@@ -431,6 +440,14 @@ namespace RTE {
 					NoteSuperseded(agreed.completeFrom);
 					if (PeerAdminCertificateValid(agreed, voters) && 2 * std::popcount(voters) >= static_cast<int>(m_Config.peerCount)) m_PeerAdminFrameMembers = voters;
 				} else if (agreed.connectedMask == message.voterMask && !PeerGroupHasAuthority(voters)) CheckPeerFrameTie(agreed.frame, voters, nowMs);
+				if (agreed.preparedFrame == 1) {
+					size_t offset = NetHash32{}.size();
+					for (uint8_t member: agreed.members) {
+						uint32_t delay = 0, neutral = 0, incarnation = 0;
+						if (!TakeSize(agreed.bytes, offset, delay) || !TakeSize(agreed.bytes, offset, neutral) || !TakeSize(agreed.bytes, offset, incarnation)) break;
+						if (member == m_Config.localPeerId) ownReturnGap = {agreed.frame, agreed.frame + std::max(neutral, delay)};
+					}
+				}
 				proofs.push_back(std::move(proof)); at += size;
 			}
 			if (at == body.size()) return true;
@@ -465,10 +482,17 @@ namespace RTE {
 					retained = input; retained.frames = FramesForSeat(decoded, m_Config.localPeerId);
 					std::vector<uint8_t> a, b;
 					if (NetLockstepCodec::EncodeRecoveryInput(input, a) && NetLockstepCodec::EncodeRecoveryInput(retained, b) && a == b) agreeing |= SeatBit(m_Config.localPeerId);
+				} else if (IsSeatReclaimGap(m_Config.localPeerId, message.frame) || (ownReturnGap && message.frame >= ownReturnGap->first && message.frame <= ownReturnGap->second)) {
+					// Inside its own return's neutral gap this seat sent nothing, so it confirms a record that carries nothing for it.
+					const auto sentByThisSeat = [&](const std::vector<NetGameCommand>& commands) {
+						return std::any_of(commands.begin(), commands.end(), [&](const NetGameCommand& command) { return command.senderPeerId == m_Config.localPeerId; });
+					};
+					if (FramesForSeat(decoded, m_Config.localPeerId).empty() && !sentByThisSeat(decoded.localCommands) && !sentByThisSeat(decoded.remoteCommands))
+						agreeing |= SeatBit(m_Config.localPeerId);
 				}
 			}
 			// An authenticated donor cannot commit a minority's tail by claiming somebody else's votes.
-			if ((agreeing & ~message.voterMask) != 0 || 2 * std::popcount(agreeing) <= std::popcount(message.voterMask)) {
+			if (!PeerFrameGroupConfirms(agreeing, message.voterMask, message.frame)) {
 				if (message.frame == m_Stats.nextFrame && nowMs >= m_PeerTailLogAtMs) {
 					m_PeerTailLogAtMs = nowMs + 1000;
 					DiagnosticLine() << "[net-peer-tail-wait] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << message.frame

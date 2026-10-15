@@ -1,4 +1,5 @@
 #include "FloatingPointEnvironment.h"
+#include "SteadyClock.h"
 #include "CheckpointImage.h"
 #include "PageWriteFence.h"
 #include "CheckpointNativeStorage.h"
@@ -161,13 +162,13 @@ void CheckpointGraphIndex::RestartStateWalk(const void* state) {
 
 void CheckpointGraphIndex::NoteTable(const void* table) {
 	if (s_IndexDetached > 0) return;
-	const auto start = std::chrono::steady_clock::now();
+	const auto start = RTE::SteadyClock::now();
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || !table) return;
 	// Path lookup and node ownership can depend on the same table.
 	auto& roots = m_Walking[table];
 	if (std::find(roots.begin(), roots.end(), m_Root) == roots.end()) roots.push_back(m_Root);
-	m_WalkNoteUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+	m_WalkNoteUs += std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count();
 }
 
 void CheckpointGraphIndex::NoteValue(const void* value) {
@@ -187,7 +188,7 @@ void CheckpointGraphIndex::NoteUncacheableRoots(size_t roots) {
 
 void CheckpointGraphIndex::EndWalk() {
 	if (s_IndexDetached > 0) return;
-	const auto start = std::chrono::steady_clock::now();
+	const auto start = RTE::SteadyClock::now();
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || --m_WalkDepth > 0) return;
 	// A walk answers for the states it covered: their rewritten roots leave the index, their reused
@@ -231,7 +232,7 @@ void CheckpointGraphIndex::EndWalk() {
 	m_FullWalk = true;
 	m_WorldWalk = true;
 	m_Root = {};
-	m_WalkParts.push_back({0, "index_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), false, {}});
+	m_WalkParts.push_back({0, "index_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count(), false, {}});
 }
 
 void CheckpointGraphIndex::NoteRootReuse(size_t reused, size_t rewritten) {
@@ -604,14 +605,14 @@ CheckpointText RTE::AssembleCheckpointSave(const CheckpointImage& image) {
 			writer.NewProperty("LockstepJoinQuarantine");
 			writer << savedTick << "|" << uid;
 		}
-		const auto graphTextStart = std::chrono::steady_clock::now();
+		const auto graphTextStart = RTE::SteadyClock::now();
 		for (size_t i = 0; i < image.graphs.size(); ++i) {
 			writer.NewProperty("LuaStateGraph");
 			writer << i << "|";
 			writer << image.graphs[i].Base64();
 		}
 		CheckpointCow::Get().RecordGraphText(std::chrono::duration_cast<std::chrono::microseconds>(
-			std::chrono::steady_clock::now() - graphTextStart).count());
+			RTE::SteadyClock::now() - graphTextStart).count());
 		writer.NewPropertyWithValue("PlaceObjectsIfSceneIsRestarted", image.placeObjects);
 		writer.NewPropertyWithValue("PlaceUnitsIfSceneIsRestarted", image.placeUnits);
 		writer.Append(image.scene);

@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "Singleton.h"
+#include "SteadyClock.h"
 #include "CheckpointFrozenClock.h"
 #include "CheckpointNativeContainers.h"
 
@@ -287,7 +288,7 @@ namespace RTE {
 
 	private:
 		struct CheckpointState : CheckpointNativeAllocated {
-			std::chrono::steady_clock::time_point m_StartTime; //!< The point in real time when the simulation (re)started.
+			RTE::SteadyClock::time_point m_StartTime; //!< The point in real time when the simulation (re)started.
 			long long m_TicksPerSecond; //!< The frequency of ticks each second, ie the resolution of the timer.
 			long long m_RealTimeTicks; //!< The number of actual microseconds counted so far.
 			long long m_SimTimeTicks; //!< The number of simulation time ticks counted so far.

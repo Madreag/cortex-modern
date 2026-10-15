@@ -1,4 +1,5 @@
 #include "GnsTransport.h"
+#include "SteadyClock.h"
 #include "DiagnosticLine.h"
 #include "NetIceServers.h"
 #include "NetLobbyProtocol.h"
@@ -184,7 +185,7 @@ namespace RTE {
 		std::atomic<uint64_t> g_GnsLingerUntilMs{0};
 
 		uint64_t GnsNowMs() {
-			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count());
 		}
 
 		void KeepGnsForLingeringClose() {
@@ -694,7 +695,7 @@ namespace RTE {
 
 		void PollCallbacks() {
 			const uint64_t reset = s_CrossTransportResetMs.load();
-			const uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+			const uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count();
 			if (reset && now >= reset && s_CrossTransportResetMs.exchange(0)) {
 				const bool accepted = ApplyCrossTransportFault(0, 0, 0, 0);
 				System::PrintDiagnosticLine("[cross-transport] timed_reset send_recv_armed=" + std::to_string(accepted));
@@ -787,7 +788,7 @@ namespace RTE {
 		}
 
 		static uint64_t SteadyMs() {
-			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 		}
 
 		// Digests bind the relay to its offer without writing the player's addresses.
@@ -1753,7 +1754,7 @@ namespace RTE {
 		accepted &= utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Pct, jitterMs > 0 ? 100.0F : 0.0F);
 		// A jittered cross link sends its packet spacing as the jitter lever's does; with no jitter left, GNS's default returns.
 		accepted &= utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendTimeSincePreviousPacket, jitterMs > 0 || s_SimulatedJitterMs > 0 ? 1 : -1);
-		s_CrossTransportResetMs.store(durationMs ? std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() + durationMs : 0);
+		s_CrossTransportResetMs.store(durationMs ? std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count() + durationMs : 0);
 		return accepted;
 #else
 		(void)lagMs; (void)lossPercent; (void)jitterMs; (void)durationMs;

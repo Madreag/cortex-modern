@@ -1,4 +1,5 @@
 #include "CheckpointPagePool.h"
+#include "SteadyClock.h"
 
 #include "PageWriteFence.h"
 #include "CheckpointPageCopy.h"
@@ -12,6 +13,7 @@
 #include "ScenarioRunner.h"
 #include "Vector.h"
 #include "ThreadMan.h"
+#include "System.h"
 
 #include <algorithm>
 #include <atomic>
@@ -19,6 +21,7 @@
 #include <bit>
 #include <chrono>
 #include <cstring>
+#include <cstdio>
 #include <cstdlib>
 #include <format>
 #include <future>
@@ -39,15 +42,21 @@
 #include <memory>
 #include <new>
 #include <optional>
+#include <set>
 #include <span>
 #include <string_view>
 #include <vector>
+
+#ifndef _MSC_VER
+#include <cxxabi.h>
+#endif
 
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <psapi.h>
 #else
 #include <pthread.h>
 #include <sys/mman.h>
@@ -56,8 +65,8 @@
 using namespace RTE;
 
 namespace {
-	int64_t Since(std::chrono::steady_clock::time_point start) {
-		return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+	int64_t Since(RTE::SteadyClock::time_point start) {
+		return std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count();
 	}
 	// Mapped bytes and ranges: [0] live blocks, [1] capture copies; and the copies' committed bytes.
 	std::atomic<uint64_t> s_MappedBytes[2]{}, s_MappedRanges[2]{}, s_CommittedCopyBytes{0};
@@ -152,6 +161,24 @@ namespace {
 		explicit Locked(std::atomic_flag& flag) : flag(flag) { while (flag.test_and_set(std::memory_order_acquire)) {} }
 		~Locked() { flag.clear(std::memory_order_release); }
 	};
+	// The private memory the process has committed, as a commit limit counts it; -1 where the platform charges only touched pages.
+	int64_t CommittedPrivateBytes() {
+#ifdef _WIN32
+		PROCESS_MEMORY_COUNTERS_EX counters{};
+		if (!K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters))) return -1;
+		return static_cast<int64_t>(counters.PrivateUsage);
+#elif defined(__linux__)
+		FILE* status = std::fopen("/proc/self/status", "r");
+		if (!status) return -1;
+		char line[256];
+		long long kilobytes = -1;
+		while (std::fgets(line, sizeof(line), status)) if (std::sscanf(line, "VmData: %lld kB", &kilobytes) == 1) break;
+		std::fclose(status);
+		return kilobytes < 0 ? -1 : kilobytes * 1024;
+#else
+		return -1;
+#endif
+	}
 }
 
 struct CheckpointPagePool::ArmGate {
@@ -262,7 +289,7 @@ struct CheckpointPagePool::Block {
 		return {copied, fenced};
 	}
 	bool SavePages(size_t first, size_t count, bool fault) noexcept {
-		const auto started = fault ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		const auto started = fault ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 		Locked guard(lock);
 		// A write fault saves and opens the aligned run around it, between saves too: taking a fault costs several times
 		// what copying a page does, and the game's writes come in runs.
@@ -295,7 +322,7 @@ struct CheckpointPagePool::Block {
 			opened = PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data + begin * pageBytes), (page - begin) * pageBytes);
 			if (opened) std::fill(states.begin() + begin, states.begin() + page, PageState::Hot);
 		}
-		const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
+		const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - started).count();
 		if (TallyingFaults()) { s_TallyFaults.fetch_add(1, std::memory_order_relaxed); s_TallyFaultNs.fetch_add(elapsed, std::memory_order_relaxed); }
 		for (const auto& copy: copies) if (copy->Armed() && !copy->completed) {
 			const bool simulation = std::this_thread::get_id() == copy->SimulationThread();
@@ -820,7 +847,7 @@ void CheckpointPagePool::Snapshot::Drain() const {
 		if (!part.copy->Armed()) throw std::logic_error("native checkpoint drain before its boundary");
 		// Inventory pages stay fenced until written, so the saver copies only what it reads.
 		if (m_ArmGate) continue;
-		const auto start = std::chrono::steady_clock::now();
+		const auto start = RTE::SteadyClock::now();
 		const size_t batch = std::max<size_t>(1, (size_t{64} << 10) / part.block->pageBytes);
 		for (size_t page = 0; page < part.copy->saved.size(); page += batch) {
 			if (!part.block->SavePages(page, std::min(batch, part.copy->saved.size() - page), false)) throw std::runtime_error("could not drain native checkpoint pages");
@@ -835,6 +862,10 @@ CheckpointPagePool::Costs CheckpointPagePool::Snapshot::Cost() const {
 	Costs result;
 	for (const auto& part: m_Parts) {
 		result.bytes += part.copy->pages.bytes;
+		{
+			Locked guard(part.block->lock);
+			result.committedBytes += part.copy->pages.committedBytes;
+		}
 		result.workerUs += part.copy->workerUs.load(std::memory_order_relaxed);
 		result.simFaultUs += (part.copy->simFaultNs.load(std::memory_order_relaxed) + 999) / 1000;
 		result.otherFaultUs += (part.copy->otherFaultNs.load(std::memory_order_relaxed) + 999) / 1000;
@@ -845,6 +876,20 @@ CheckpointPagePool::Costs CheckpointPagePool::Snapshot::Cost() const {
 }
 
 std::string CheckpointPagePool::SelfTestMismatch() {
+	{
+		// A prepared inventory holds address space for its shadow, never a second committed copy of the inventory.
+		constexpr size_t c_Bytes = size_t{64} << 20;
+		Allocation owned(c_Bytes, true);
+		std::memset(owned.Data(), 1, c_Bytes);
+		uint64_t generation = 0;
+		const int64_t before = CommittedPrivateBytes();
+		auto prepared = PrepareInventory(generation);
+		prepared->WarmShadow();
+		const int64_t grown = CommittedPrivateBytes() - before;
+		prepared->Cancel();
+		if (before >= 0 && grown > static_cast<int64_t>(c_Bytes / 4))
+			return std::format("a prepared inventory committed {} MB for its {} MB of storage before any page was written", grown >> 20, c_Bytes >> 20);
+	}
 	{
 		Allocation owned(4096, true);
 		auto* value = static_cast<uint64_t*>(owned.Data());
@@ -996,14 +1041,14 @@ namespace {
 	struct StorageCostSpan {
 		std::atomic<uint64_t>* count = nullptr;
 		std::atomic<uint64_t>* ns = nullptr;
-		std::chrono::steady_clock::time_point started;
+		RTE::SteadyClock::time_point started;
 		StorageCostSpan(std::atomic<uint64_t> StorageCostCounters::*countField, std::atomic<uint64_t> StorageCostCounters::*nsField) {
-			if (auto* counters = StorageCostsArmed()) { count = &(counters->*countField); ns = &(counters->*nsField); started = std::chrono::steady_clock::now(); }
+			if (auto* counters = StorageCostsArmed()) { count = &(counters->*countField); ns = &(counters->*nsField); started = RTE::SteadyClock::now(); }
 		}
 		~StorageCostSpan() {
 			if (!count) return;
 			count->fetch_add(1, std::memory_order_relaxed);
-			ns->fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count(), std::memory_order_relaxed);
+			ns->fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - started).count(), std::memory_order_relaxed);
 		}
 	};
 	thread_local bool s_NativeStorageAllocation = false;
@@ -1068,7 +1113,7 @@ void CheckpointNativeStorage::StartSettling() {
 	static std::jthread settler([](std::stop_token stop) {
 		SaverThreads::Mark();
 		uint64_t settled = UINT64_MAX;
-		auto cooled = std::chrono::steady_clock::now();
+		auto cooled = RTE::SteadyClock::now();
 		while (!stop.stop_requested()) {
 			const uint64_t generation = CheckpointPagePool::InventoryGeneration();
 			bool more = false;
@@ -1080,9 +1125,9 @@ void CheckpointNativeStorage::StartSettling() {
 			}
 			// A page that stopped changing for a pass is fenced again, so the next boundary copies only pages still written.
 			static const bool s_Cooling = std::getenv("CCCP_TEST_CHECKPOINT_NO_COOLING") == nullptr;
-			if (s_Cooling && expected && s_CoolingPauses.load(std::memory_order_acquire) == 0 && std::chrono::steady_clock::now() - cooled >= std::chrono::seconds(1)) {
+			if (s_Cooling && expected && s_CoolingPauses.load(std::memory_order_acquire) == 0 && RTE::SteadyClock::now() - cooled >= std::chrono::seconds(1)) {
 				CheckpointPagePool::CoolInventory();
-				cooled = std::chrono::steady_clock::now();
+				cooled = RTE::SteadyClock::now();
 			}
 			std::this_thread::sleep_for(more ? std::chrono::milliseconds(4) : std::chrono::milliseconds(50));
 		}
@@ -1616,6 +1661,41 @@ std::string CheckpointNativeStorage::DescribeView(const void* view, size_t bytes
 bool CheckpointNativeStorage::IsView(const void* address) {
 	if (s_Read && address && s_Read->privateRoots.Find(s_Read->roots, address, 1)) return false;
 	return Original(address) != address;
+}
+
+bool CheckpointNativeStorage::InBoundaryRoot(const void* view) {
+	if (!s_Read || !view) return false;
+	const RootRange* root = s_Read->viewRoots.Find(s_Read->roots, view, 1);
+	return root && !root->privateValues;
+}
+
+namespace {
+	std::atomic<int> s_StartupLinksRefusals{0};
+}
+
+CheckpointNativeStorage::StartupLinksRefusal::StartupLinksRefusal() { s_StartupLinksRefusals.fetch_add(1, std::memory_order_acq_rel); }
+
+CheckpointNativeStorage::StartupLinksRefusal::~StartupLinksRefusal() { s_StartupLinksRefusals.fetch_sub(1, std::memory_order_acq_rel); }
+
+void CheckpointNativeStorage::NoteStartupLinks(const void* view, const char* type) {
+	const RootRange* root = s_Read ? s_Read->viewRoots.Find(s_Read->roots, view, 1) : nullptr;
+	std::string name = type;
+#ifndef _MSC_VER
+	int status = 0;
+	if (char* demangled = abi::__cxa_demangle(type, nullptr, nullptr, &status)) { if (status == 0) name = demangled; std::free(demangled); }
+#endif
+	const size_t offset = root ? reinterpret_cast<uintptr_t>(view) - reinterpret_cast<uintptr_t>(root->view) : 0;
+	const std::string message = std::format("a startup object's container keeps its links outside checkpoint storage ({} at offset {} of a {}-byte root)",
+	    name, offset, root ? root->bytes : 0);
+	static const bool refuse = [] { const char* value = std::getenv("CC_TEST_CHECKPOINT_STARTUP_LINKS"); return value && std::string_view(value) == "1"; }();
+	if (refuse || s_StartupLinksRefusals.load(std::memory_order_acquire) > 0) throw std::logic_error(message);
+	static std::mutex mutex;
+	static std::set<std::pair<size_t, std::string>> named;
+	{
+		std::lock_guard lock(mutex);
+		if (!named.emplace(offset, name).second) return;
+	}
+	System::PrintDiagnosticLine("[checkpoint] " + message);
 }
 
 namespace {

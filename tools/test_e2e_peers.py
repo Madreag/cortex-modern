@@ -74,6 +74,12 @@ class SceneBoxesTest(unittest.TestCase):
         self.assertIn('clear = (h == 0) or title in ("Program Manager", "") or state.value in (1, 5, 6, 7)', script)
         self.assertLess(script.index("if (`$fg -notmatch 'clear=True')"), script.index("`$env:CC_RUNNER_IGNORE_FULLSCREEN = '1'"))
 
+    def test_a_windows_box_puts_its_named_tool_folders_first_on_the_game_tasks_path(self):
+        script = (Path(peers.__file__).parent / "e2e/peer_box.ps1").read_text()
+        self.assertIn("$prepend = @($requestData.box.path_prepend)", script)
+        self.assertLess(script.index("`$env:CC_RUNNER_IGNORE_FULLSCREEN = '1'"), script.index("$pathLine\n"))
+        self.assertLess(script.index("$pathLine\n"), script.index("& python -u '$tree\\tools\\e2e_peers.py' --play"))
+
     def test_fight_completion_file_reaches_the_other_player(self):
         document = peers.scene("fight15-s10")
         peers.check_scene(document)
@@ -273,9 +279,9 @@ class JoinerBoxTest(unittest.TestCase):
             self.assertEqual(peers.selected_boxes("host=Ally,joiner=" + joiner, self.boxes)["joiner"]["name"], joiner)
 
     def test_only_a_windows_host(self):
-        with self.assertRaisesRegex(ValueError, "Windows host and a Mac or Linux joiner"):
+        with self.assertRaisesRegex(ValueError, "needs a Windows host"):
             peers.selected_boxes("host=Linux,joiner=Mac", self.boxes)
-        with self.assertRaisesRegex(ValueError, "Windows host and a Mac or Linux joiner"):
+        with self.assertRaisesRegex(ValueError, "needs a Windows host"):
             peers.selected_boxes("host=Mac,joiner=Ally", self.boxes)
 
     def test_linux_player_script(self):
@@ -354,6 +360,234 @@ class JoinerBoxTest(unittest.TestCase):
         self.assertIsNone(peers.read_player_files(request)["pace"])
         (out / "run0" / "joiner" / peers.video.PACE_REPORT).write_text(json.dumps({"line": "[fight-pace] RED"}))
         self.assertEqual(peers.read_player_files(request)["pace"]["line"], "[fight-pace] RED")
+
+
+class WindowsJoinersTest(unittest.TestCase):
+    """Four players on four Windows boxes: every joiner plays through its own box's game task, each on its own engine host."""
+
+    BOXES = [("EROL-PC", "EROL-PC", "erol-pc"), ("Ally", "Erol-Ally7", "ally-ts"), ("EDITH", "EDITH", "edith-ts"), ("Z13", "Erol-Tablet", "z13-ts")]
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.boxes = self.root / "boxes.json"
+        self.write_boxes(self.BOXES)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def write_boxes(self, boxes):
+        self.boxes.write_text(json.dumps({"boxes": [
+            dict(name=name, os="win32", hostname=host, ssh=alias, repo=f"C:/{alias}/tree", scratch=f"C:/{alias}/mx", python="python",
+                 session_dir="C:/session1", task="cortex-session1") for name, host, alias in boxes]}))
+
+    def test_windows_joiners_play_through_their_own_box(self):
+        boxes = peers.selected_boxes("host=EROL-PC,joiner1=Ally,joiner2=EDITH,joiner3=Z13", self.boxes)
+        self.assertEqual(list(boxes), ["host", "joiner1", "joiner2", "joiner3"])
+        self.assertEqual([box["name"] for box in boxes.values()], ["EROL-PC", "Ally", "EDITH", "Z13"])
+        request = self.root / "request.json"
+        request.write_text(json.dumps(dict(out="C:/ally-ts/mx/s11-run0-1")))
+        with mock.patch.object(peers, "ssh"), mock.patch.object(peers, "copy_file"), \
+                mock.patch.object(peers.subprocess, "Popen") as popen:
+            peers.launch(boxes["joiner1"], request, None)
+        command = popen.call_args.args[0]
+        self.assertEqual(command[-2:], ["ally-ts", "pwsh -NoProfile -File C:/ally-ts/tree/tools/e2e/peer_box.ps1 -Request C:/ally-ts/mx/s11-run0-1/request.json"])
+        self.assertFalse(peers.headed_box(boxes["joiner2"]))
+
+    def test_each_player_needs_its_own_engine_host(self):
+        with self.assertRaisesRegex(ValueError, "a different box for each player"):
+            peers.selected_boxes("host=EROL-PC,joiner1=Ally,joiner2=Ally", self.boxes)
+        with self.assertRaisesRegex(ValueError, "a different box for each player"):
+            peers.selected_boxes("joiner1=Ally,joiner2=EDITH", self.boxes)
+        self.write_boxes([*self.BOXES[:3], ("Z13", "EDITH", "z13-ts")])
+        with self.assertRaisesRegex(ValueError, "two assignments name one engine host"):
+            peers.selected_boxes("host=EROL-PC,joiner1=Ally,joiner2=EDITH,joiner3=Z13", self.boxes)
+
+    def capture(self, hosts=None):
+        hosts = hosts or {role: role + "-computer" for role in ("host", "joiner1", "joiner2", "joiner3")}
+        run = dict(name="run0", peer_boxes={role: role + " box" for role in hosts}, peers=[])
+        for role, host in hosts.items():
+            root = self.root / role
+            root.mkdir(exist_ok=True)
+            record = dict(pid=42, exe_sha256=role + "-binary", box=role + " box", engine_hostname=host,
+                          source_commit="scene-commit", scene_sha256="scene-hash")
+            (root / "launch.json").write_text(json.dumps(record))
+            run["peers"].append(dict(peer=role, box=role + " box", box_hostname=host, root=str(root), record=record))
+        return dict(topology="spread", source={"tip": "scene-commit"}, scene_sha256="scene-hash", runs=[run])
+
+    def test_four_players_on_four_hosts(self):
+        self.assertTrue(peers.spread_check(self.capture())["passed"])
+        capture = self.capture()
+        capture["runs"][0]["peers"].pop()
+        self.assertIn("run0: a player's record is absent", peers.spread_check(capture)["reasons"])
+        hosts = {role: role + "-computer" for role in ("host", "joiner1", "joiner2")}
+        hosts["joiner3"] = "joiner1-computer"
+        self.assertIn("run0: peers ran on one engine host", peers.spread_check(self.capture(hosts))["reasons"])
+
+    def test_every_players_marker_reaches_every_other_player(self):
+        document = peers.scene("fight15-s11")
+        peers.check_scene(document)
+        run = peers.scene_runs(document)[0]
+        roles = peers.scene_roles(document, run)
+        self.assertEqual(roles, ["host", "joiner1", "joiner2", "joiner3"])
+        files = peers.player_files(document, run)
+        for marker in ("host-stage/probe/countdown.mark", "joiner1-stage/probe/joined.mark", "joiner2-stage/probe/joined.mark",
+                       *(role + "-stage/probe/fight-ticks-complete.json" for role in roles)):
+            self.assertIn(marker, files)
+        requests = {}
+        for role in roles:
+            out = self.root / ("native-" + role)
+            (out / "run0" / (role + "-stage/probe")).mkdir(parents=True)
+            (out / (role + "-started.json")).write_text("{}")
+            (out / "run0" / (role + "-stage/probe/fight-ticks-complete.json")).write_text('{"name":"fight-ticks-complete"}')
+            request = out / "request.json"
+            request.write_text(json.dumps(dict(out=str(out), role=role, run_name="run0", signal_files=files)))
+            requests[role] = request
+        (self.root / "native-joiner1/run0/joiner1-stage/probe/joined.mark").write_text("")
+        states = {role: peers.read_player_files(requests[role])["files"] for role in roles}
+        for role in roles:
+            incoming = {path: data for other, state in states.items() if other != role for path, data in state.items()}
+            peers.write_player_files(requests[role], incoming)
+            received = self.root / ("native-" + role) / "run0"
+            for other in roles:
+                self.assertTrue((received / (other + "-stage/probe/fight-ticks-complete.json")).is_file(), (role, other))
+            self.assertEqual((received / "joiner1-stage/probe/joined.mark").is_file(), True)
+
+    def test_a_player_packs_only_its_own_files(self):
+        out = self.root / "native-joiner2"
+        for role in ("host", "joiner1", "joiner2", "joiner3"):
+            (out / "run0" / (role + "-stage/probe")).mkdir(parents=True)
+            (out / "run0" / (role + "-stage/probe/fight-ticks-complete.json")).write_text("{}")
+        (out / "run0" / "joiner2").mkdir()
+        (out / "run0" / "joiner2" / "stdout.log").write_text("joiner2\n")
+        request = out / "request.json"
+        request.write_text(json.dumps(dict(out=str(out), role="joiner2", run_index=0, scene_relative="tools/e2e/fight15-s11.json",
+                                           box=dict(repo=str(Path(peers.__file__).resolve().parents[1])))))
+        with mock.patch("builtins.print"):
+            peers.pack(request)
+        import tarfile
+        with tarfile.open(out.with_suffix(".tgz")) as archive:
+            names = sorted(archive.getnames())
+        self.assertEqual(names, ["run0/joiner2-stage/probe/fight-ticks-complete.json", "run0/joiner2/stdout.log"])
+
+    def test_a_player_can_name_every_other_players_probe_directory(self):
+        repo = Path(peers.__file__).resolve().parents[1]
+        request = self.root / "request.json"
+        request.write_text(json.dumps(dict(box=dict(repo=str(repo), scratch=str(self.root), os="win32"), role="joiner2", run_index=0,
+                                           out=str(self.root / "native-joiner2"), commit="tip", scene_relative="tools/e2e/fight15-s11.json",
+                                           scene_sha256="scene", port=peers.video.PORT_LO, fps=30, sheet_every=15)))
+        seen = {}
+
+        def run_one(options, *args):
+            seen.update(options.tokens)
+            raise SceneAccepted
+        with mock.patch.object(peers, "check_build", return_value=({}, {}, {})), \
+                mock.patch.object(peers, "committed_scene_sha256", return_value="scene"), \
+                mock.patch.object(peers.video, "requirement_findings", return_value=[]), \
+                mock.patch.object(peers.video, "check_scratch_budget"), mock.patch.object(peers.video, "_run_one", side_effect=run_one):
+            with self.assertRaises(SceneAccepted):
+                peers.play(request)
+        self.assertEqual(sorted(seen), ["PROBE_DIR_host", "PROBE_DIR_joiner1", "PROBE_DIR_joiner2", "PROBE_DIR_joiner3"])
+        self.assertEqual(seen["PROBE_DIR_joiner1"], self.root / "native-joiner2" / "run0" / "joiner1-stage/probe")
+
+    def test_a_run_name_that_puts_windows_game_files_past_the_path_limit_is_refused(self):
+        boxes = peers.selected_boxes("host=EROL-PC,joiner1=Ally,joiner2=EDITH,joiner3=Z13", self.boxes)
+        roots = {"EROL-PC": "C:/cortex-project/mx/scene-peers-desync", "Ally": "C:/cortex-project/mx/two-box-harness",
+                 "EDITH": "D:/mx/two-box-harness", "Z13": "C:/cortex-project/mx/scene-peers-desync"}
+        # The Z13's joiner of fe5db-erolpc-ally-mac-z13-4p1 could not read this 125-character Data file at 260 characters.
+        longest = len("Data/Browncoats.rte/Scenes/Objects/BunkerSystems/RefineryAuthorizationConsole/RefineryAuthorizationConsolePieSliceActions.lua")
+        for run in ("fe5db-erolpc-ally-mac-z13-4p1", "fe5db-4p2"):
+            for box in boxes.values():
+                box["scratch"] = roots[box["name"]] + "/" + run
+            if run == "fe5db-4p2":
+                peers.check_windows_paths(boxes, run, "run0", Path("."), longest)
+                continue
+            with self.assertRaisesRegex(ValueError, "^Z13: the joiner3's game files would reach 260 characters"):
+                peers.check_windows_paths(boxes, run, "run0", Path("."), longest)
+        self.assertEqual(peers.longest_data_path(Path(peers.__file__).resolve().parents[1]), longest)
+
+    def test_a_scene_names_one_host_and_lowercase_players(self):
+        document = peers.scene("fight15-s11")
+        for names in (("host", "host", "joiner1"), ("host",), ("host", "Joiner1"), ("host", "joiner1", "joiner1")):
+            changed = copy.deepcopy(document)
+            changed["peers"] = [dict(document["peers"][1], name=name) for name in names]
+            with self.assertRaisesRegex(ValueError, "one host and at least one joiner"):
+                peers.check_scene(changed)
+
+
+class LobbyIdentityTest(unittest.TestCase):
+    """A joiner joins the lobby its own run's host opened, and a run never starts on a port another lobby lists."""
+
+    SCENES = [f"fight15-s{number:02d}" for number in range(1, 14)]
+    LOBBY = "{PROBE_DIR_host}/lobby.json"
+
+    def test_every_two_box_joiner_joins_its_own_hosts_lobby(self):
+        for name in self.SCENES:
+            scripts = peers.scene(name)["scripts"]
+            joiners = [text for text in scripts.values() if "click_row Public" in text or '"wait_public_row"' in text]
+            with self.subTest(scene=name):
+                self.assertTrue(joiners)
+                self.assertFalse([key for key, text in scripts.items() if "GameRowPort" in text], "a joiner picks its lobby by port alone")
+                for text in joiners:
+                    self.assertIn("click_row PublicGameRowLobby:" + self.LOBBY, text)
+                for text in (text for text in scripts.values() if "activate ButtonMultiplayerCreate" in text):
+                    self.assertIn("write_lobby {PROBE_DIR}/lobby.json", text)
+                for text in (text for text in scripts.values() if "wait_row PublicGameRowLobby:" in text):
+                    self.assertLess(text.index("wait_file " + self.LOBBY), text.index("wait_row PublicGameRowLobby:" + self.LOBBY))
+
+    def test_a_scene_whose_joiner_picks_a_row_by_port_alone_is_refused(self):
+        document = copy.deepcopy(peers.scene("fight15-s13"))
+        document["scripts"]["joiner1.menu"] = document["scripts"]["joiner1.menu"].replace("PublicGameRowLobby:" + self.LOBBY, "PublicGameRowPort{PORT}")
+        with self.assertRaisesRegex(ValueError, "by port alone"):
+            peers.check_scene(document)
+
+    def test_a_run_never_starts_on_a_port_another_lobby_lists(self):
+        # Another lane's lobby on this run's port: its joiners could take that row for their host's.
+        listing = {"sessions": [{"session_id": "0123456789abcdef", "name": "Captain", "activity": "Skirmish Defense", "listen_port": 49436}]}
+        urls = []
+        def fetch(url):
+            urls.append(url)
+            return listing
+        with self.assertRaisesRegex(ValueError, r"^port 49436 is held by another lobby in directory\.broserver\.com: Captain \(Skirmish Defense, session 0123456789abcdef\)"):
+            peers.require_free_port("directory.broserver.com", 49436, fetch=fetch, wait_s=0)
+        self.assertTrue(urls[0].startswith("https://directory.broserver.com/v1/sessions?limit="))
+        peers.require_free_port("directory.broserver.com", 49437, fetch=fetch, wait_s=0)
+
+    def test_a_lobby_that_is_closing_is_waited_out(self):
+        pages = [{"sessions": [{"session_id": "a", "name": "Captain", "listen_port": 49436}]}, {"sessions": []}]
+        now = [0.0]
+        def sleep(seconds):
+            now[0] += seconds
+        peers.require_free_port("directory.broserver.com", 49436, fetch=lambda url: pages.pop(0), wait_s=90, sleep=sleep, clock=lambda: now[0])
+        self.assertEqual(pages, [])
+
+    def test_every_page_of_the_listing_is_read(self):
+        pages = {"": {"sessions": [{"session_id": "a", "listen_port": 1}], "next_cursor": "c1"},
+                 "c1": {"sessions": [{"session_id": "b", "name": "Captain", "listen_port": 49436}]}}
+        fetch = lambda url: pages["c1" if "cursor=c1" in url else ""]
+        with self.assertRaisesRegex(ValueError, "session b"):
+            peers.require_free_port("directory.broserver.com", 49436, fetch=fetch, wait_s=0)
+
+    def test_a_held_port_stops_the_run_before_any_player_starts(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        boxes = root / "boxes.json"
+        boxes.write_text(json.dumps({"boxes": [
+            dict(name="EROL-PC", os="win32", hostname="EROL-PC", ssh="erol-pc", repo="C:/t", scratch="C:/mx", python="python", session_dir="C:/s", task="t"),
+            dict(name="Ally", os="win32", hostname="Erol-Ally7", ssh="ally-ts", repo="C:/t", scratch="C:/mx", python="python", session_dir="C:/s", task="t")]}))
+        args = SimpleNamespace(scenario="fight15-s13", peer_boxes="host=EROL-PC,joiner1=Ally", boxes_file=boxes, port=49436, engine_env=[],
+                               out=root / "s13-held", repo=Path(peers.__file__).resolve().parents[1])
+        held = ValueError("port 49436 is held by another lobby in directory.broserver.com: Captain (Skirmish Defense, session x)")
+        with mock.patch.object(peers.video, "source_evidence", return_value={"dirty": False, "tip": "0" * 40}), \
+                mock.patch.object(peers, "committed_scene_sha256", return_value="0" * 64), \
+                mock.patch.object(peers, "require_free_port", side_effect=held) as checked, \
+                mock.patch.object(peers, "launch") as launched, mock.patch("builtins.print"):
+            peers.capture_scene(args)
+        checked.assert_called_with("directory.broserver.com", 49436)
+        launched.assert_not_called()
+        capture = json.loads((root / "s13-held" / "capture.json").read_text())
+        self.assertIn("is held by another lobby", capture["interrupted"])
 
 
 if __name__ == "__main__":

@@ -100,6 +100,12 @@
     <ClInclude Include="Source\System\System.h">
       <Filter>System</Filter>
     </ClInclude>
+    <ClInclude Include="Source\System\SteadyClock.h">
+      <Filter>System</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\System\DisplayRefreshes.h">
+      <Filter>System</Filter>
+    </ClInclude>
     <ClInclude Include="Source\System\Timer.h">
       <Filter>System</Filter>
     </ClInclude>
@@ -170,6 +176,9 @@
       <Filter>Managers</Filter>
     </ClInclude>
     <ClInclude Include="Source\Managers\SettingsMan.h">
+      <Filter>Managers</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Managers\SwapWaitGuard.h">
       <Filter>Managers</Filter>
     </ClInclude>
     <ClInclude Include="Source\Managers\TimerMan.h">
@@ -884,6 +893,9 @@
       <Filter>System</Filter>
     </ClCompile>
     <ClCompile Include="Source\System\Color.cpp">
+      <Filter>System</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\System\DisplayRefreshes.cpp">
       <Filter>System</Filter>
     </ClCompile>
     <ClCompile Include="Source\System\CaptureSentinel.cpp">

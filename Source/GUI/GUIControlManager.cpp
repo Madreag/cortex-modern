@@ -1,4 +1,5 @@
 #include "GUI.h"
+#include "GUIDrawRecord.h"
 #include "CaptureSentinel.h"
 #include "GUICheckpoint.h"
 #include "CheckpointFrozenContainers.h"
@@ -525,6 +526,7 @@ void GUIControlManager::Clear() {
 	for (it = m_ControlList.begin(); it != m_ControlList.end(); it++) {
 		GUIControl* C = *it;
 
+		ForgetPanelDraw(C->GetPanel());
 		C->Destroy();
 		delete C;
 	}

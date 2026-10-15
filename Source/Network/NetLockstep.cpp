@@ -1,4 +1,5 @@
 #include "NetLockstep.h"
+#include "SteadyClock.h"
 #include "GnsTransport.h"
 
 #include "NetActorOwnership.h"
@@ -47,8 +48,8 @@ namespace RTE {
 	}
 
 	uint64_t NetLockstepNowMs() {
-		static const std::chrono::steady_clock::time_point base = std::chrono::steady_clock::now();
-		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - base).count());
+		static const RTE::SteadyClock::time_point base = SteadyNow();
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow() - base).count());
 	}
 
 	std::vector<const ControllerFrame*> CommittedControllerFramesInSenderOrder(const NetLockstepReadyFrame& ready, uint8_t localPeerId) {
@@ -72,7 +73,7 @@ namespace RTE {
 
 	uint64_t NetLockstepSharedClockMs() {
 		// The machine's monotonic clock, the same in every process on it, for diagnostics that compare peers.
-		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count());
 	}
 
 	namespace {
@@ -5438,7 +5439,7 @@ namespace RTE {
 		m_StartWaitSinceMs = 0;
 		m_LocalStartParkMs = 0;
 		m_PeerLastHeardMs.clear();
-		m_PeerBridges.clear(); m_PeerBridgeVotes.clear(); m_PeerBridgeCertificates.clear(); m_PeerRejectedInputs.clear();
+		m_PeerBridges.clear(); m_PeerBridgeVotes.clear(); m_PeerBridgeCertificates.clear(); m_PendingPeerDecisions.clear(); m_PeerVotedAtMs.clear(); m_PeerRejectedInputs.clear();
 		m_PeerPendingBridgeInputs.clear();
 		m_PeerReturnProofs.clear();
 		m_PeerPreparedPrefixes.clear(); m_PeerReplayAppliedPrefixes.clear(); m_PeerFrameWitnesses.clear();
@@ -7116,6 +7117,8 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		if (!HasHeldAISeat(peerId) && !(peerId == m_Config.localPeerId && m_LocalSeatHeld)) return false;
 		if (const auto back = m_ReclaimTransactions.find(peerId); back != m_ReclaimTransactions.end() && GetResumeFrame() >= back->second.activationFrame) return false;
+		// A machine held for being too slow keeps talking: its hold shows at once, not after a silence it never keeps.
+		if (IsHeldAsSlowMachine(peerId)) return true;
 		const auto bridge = m_SeatBridgeSinceMs.find(peerId);
 		if (bridge == m_SeatBridgeSinceMs.end()) return true;
 		if (nowMs == UINT64_MAX) nowMs = std::max(m_TimingNowMs, NetLockstepNowMs());
@@ -7163,6 +7166,7 @@ namespace RTE {
 			stats.longestWaitMsSinceReclaim = std::max(stats.longestWaitMsSinceReclaim, elapsed);
 		}
 		if (!missing.empty()) m_Stats.lastMissingPeers = DescribeMissingPeers();
+		m_ConsumerWaitMissing = missing;
 		// A wait past the bound names what it waits on, once: a stall is a defect to be found, not a number.
 		if (elapsed >= 100 && m_DescribedWaitFrame != frame) {
 			m_DescribedWaitFrame = frame;
@@ -7199,10 +7203,61 @@ namespace RTE {
 				DiagnosticLine waited;
 				waited << "[net-frame-wait] frame=" << *m_ConsumerWaitingFrame << " wait_ms=" << nowMs - m_ConsumerWaitStartMs << " on=" << m_Stats.lastMissingPeers;
 				if (nowMs - m_ConsumerWaitStartMs >= 100) waited << " blocked=" << m_AdvanceBlock << " duplicates=" << m_WaitDuplicates;
+				// What each seat it waited on cost this machine, for the capacity rule.
+				for (uint8_t peer: m_ConsumerWaitMissing) {
+					auto& costs = m_Stats.peers[peer].waitCosts;
+					costs.emplace_back(nowMs, nowMs - m_ConsumerWaitStartMs);
+					while (!costs.empty() && costs.front().first + c_CapacityWindowMs < nowMs) costs.pop_front();
+				}
 			}
 		}
 		m_ConsumerWaitingFrame.reset();
+		m_ConsumerWaitMissing.clear();
 		m_WaitDuplicates = 0;
+	}
+
+	std::optional<double> NetLockstepCoordinator::PeerAppliedRate(uint8_t peerId, uint64_t nowMs) const {
+		const auto found = m_PeerAppliedProgress.find(peerId);
+		if (found == m_PeerAppliedProgress.end() || found->second.empty()) return std::nullopt;
+		// The last second of reports: a silence before them is the hold's cause, not the seat's pace.
+		const auto first = std::find_if(found->second.begin(), found->second.end(), [nowMs](const auto& sample) { return sample.first + 1000 >= nowMs; });
+		if (first == found->second.end()) return 0.0;
+		const auto& [lastMs, lastFrame] = found->second.back();
+		// A seat that stopped reporting has stopped applying: its rate runs to now.
+		const uint64_t spanMs = std::max(lastMs, nowMs) - first->first;
+		if (spanMs < 500 || nowMs < first->first) return std::nullopt;
+		return static_cast<double>(lastFrame - first->second) * 1000.0 / static_cast<double>(spanMs);
+	}
+
+	bool NetLockstepCoordinator::CostsPastTolerance(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* cost) {
+		constexpr uint64_t c_PlayedFrames = 120;
+		if (!UsesPeerFrameGroups() || m_Playback || peerId == m_Config.localPeerId || m_Config.simTickMs <= 0.0 || frame < EffectiveStartOf(peerId) + c_PlayedFrames) return false;
+		const auto found = m_Stats.peers.find(peerId);
+		if (found == m_Stats.peers.end()) return false;
+		auto& stats = found->second;
+		while (!stats.waitCosts.empty() && stats.waitCosts.front().first + c_CapacityWindowMs < nowMs) stats.waitCosts.pop_front();
+		// A seat back from a hold catches up first; the round judges it after.
+		if (const uint64_t back = std::max(stats.reclaimAdmittedMs, stats.returnerCaughtUpMs); back != 0 && nowMs < back + 2000) return false;
+		uint64_t waited = m_ConsumerWaitingFrame && *m_ConsumerWaitingFrame == frame && nowMs >= m_ConsumerWaitStartMs ? nowMs - m_ConsumerWaitStartMs : 0;
+		for (const auto& [endMs, ms]: stats.waitCosts) waited += ms;
+		// Judged against this machine's own pace: a scene heavy for every machine slows the round for all of them together.
+		const double own = OwnCapacityTps();
+		if (own <= 0) return false;
+		const double tolerance = own >= 59.5 ? 0.5 : own / 10.0;
+		const double lost = own * static_cast<double>(waited) / static_cast<double>(c_CapacityWindowMs);
+		if (cost) *cost = lost;
+		if (lost <= tolerance) return false;
+		// Only a machine that feeds below this one's rate is slow; a seat late by a fixed trip or a lossy link feeds at the round's rate.
+		const auto& arrivals = stats.arrivals;
+		if (arrivals.size() < 2 || nowMs < arrivals.front().first || nowMs - arrivals.front().first < 1000) return false;
+		// A seat that stopped feeding is silent, not slow: the bound holds it for what it is.
+		const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
+		if (nowMs > arrivals.back().first + 2 * boundMs) return false;
+		// Counted in the seat's own ticks: a delay re-size moves its target frames without the seat running faster or slower.
+		const auto ownTick = [this, peerId](uint64_t target) { const uint64_t delay = InputDelayAt(peerId, target); return target > delay ? target - delay : 0; };
+		const uint64_t newest = ownTick(arrivals.back().second), oldest = ownTick(arrivals.front().second);
+		const double fed = static_cast<double>(newest > oldest ? newest - oldest : 0) * 1000.0 / static_cast<double>(nowMs - arrivals.front().first);
+		return fed < own - tolerance;
 	}
 
 	void NetLockstepCoordinator::NoteLocalTickCost(uint64_t producedFrame, double computeMs) {
@@ -10293,6 +10348,9 @@ namespace RTE {
 						if ((newerHold != m_HoldTransactions.end() && newerHold->second.cutoffFrame > outFrame.frame) ||
 						    (newerBack != m_ReclaimTransactions.end() && newerBack->second.activationFrame > outFrame.frame)) {
 							NoteSeatTransition(hold->peerId, outFrame.frame, SeatTransition::Held);
+							// The committed frame still hands the seat to the AI here, as it did on every peer that played it in time.
+							if (std::find(outFrame.aiHeldPeerIds.begin(), outFrame.aiHeldPeerIds.end(), hold->peerId) == outFrame.aiHeldPeerIds.end())
+								outFrame.aiHeldPeerIds.push_back(hold->peerId);
 							continue;
 						}
 						// A recorded hold ends the seat's recorded return before it, as the live hold ended it on every peer that took it.
@@ -13082,6 +13140,7 @@ namespace RTE {
 						break;
 					}
 				}
+				if (TakePendingPeerDecisions(nowMs)) { m_AdvanceBlock = "decision-pending"; break; }
 				if (ApplyPeerCommittedTail(m_Stats.nextFrame, nowMs)) continue;
 				PreparePeerBridgeInputs(m_Stats.nextFrame, nowMs);
 				if ((m_FrameGroupMembers & (1U << (m_Config.localPeerId - 1))) == 0) { RequestPeerCommittedTail(nowMs); m_AdvanceBlock = "private-peer-tail"; break; }

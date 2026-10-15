@@ -616,6 +616,7 @@ namespace RTE {
 		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
 		std::deque<std::pair<uint64_t, uint64_t>> arrivals; //!< When this peer's newest tick rose, and to which, over the last seconds.
 		std::deque<uint64_t> waitedFrames; //!< The frames of the last second this machine waited on this peer's input.
+		std::deque<std::pair<uint64_t, uint64_t>> waitCosts; //!< When each wait this machine spent on this peer's input ended and how long it lasted, over the capacity window.
 		uint64_t slowSinceMs = 0; //!< Since when this peer has fed below the round's rate without a break; 0 while it has not.
 		uint64_t reclaimAdmittedMs = 0; //!< When this seat's reclaim was admitted; its allowance runs from here.
 		uint64_t returnerCaughtUpMs = 0; //!< When this returning seat's catch-up reached its reclaim frame; 0 while it has not.
@@ -1556,6 +1557,7 @@ namespace RTE {
 		friend bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 		friend bool TestEveryHoldProducerWritesTheSeatLog(std::string* error);
 		friend bool TestAnOlderDeliveryLeavesTheNewerSeatState(std::string* error);
+		friend bool TestALateSimulationHandsAHeldSeatToTheAiAtItsFrame(std::string* error);
 		friend bool TestEveryGapStaysForASimulationBehind(std::string* error);
 		friend bool TestADeferredStopDoesNotExcuseASeatPastTheBound(std::string* error);
 		friend bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
@@ -1663,18 +1665,30 @@ namespace RTE {
 		/// The seats that vote now, with voters narrowed to them; zero when no voter is a retained seat.
 		uint32_t PeerVotingOwners(uint32_t& voters) const;
 		/// Whether voters are exactly half of the voting seats in a round whose ties the referee decides.
+		/// Whether the round's referee decides its ties: a directory round of two or four retained seats; the host's half wins any other tie.
+		bool PeerTieRefereed() const;
 		bool PeerGroupIsRefereedHalf(uint32_t voters) const;
 		/// The frame from which the whole group last played together at or before frame: the name every half gives the split after it.
 		uint64_t PeerSplitEpoch(uint64_t frame) const;
+		/// Whether these seats confirm a frame the given group of members played: a majority of them, or on a tie the half the round's tie
+		/// rule names, as for every other decision of that group.
+		bool PeerFrameGroupConfirms(uint32_t agreeing, uint32_t members, uint64_t frame) const;
 		void SendForwardedPeerInput(const NetLockstepFrame& input, uint8_t onlyPeer);
 		void CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs);
 		bool ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly = false);
 		bool ValidatePeerBridge(const NetHostMigrationMessage& proposal) const;
+		/// Whether this peer already voted a return of one of the proposal's seats at another frame that is still undecided: a held seat
+		/// returns once, so a member backs one return of it until that one is certified or played past.
+		bool VotedOtherPeerReturn(const NetHostMigrationMessage& proposal) const;
 		bool PeerBridgeHasInputConflict(const NetHostMigrationMessage& proposal) const;
 		void ResolvePeerBridgeInputConflicts(uint64_t nowMs);
 		bool DecodePeerBridgeCertificate(const NetHostMigrationMessage& certificate, NetHostMigrationMessage& agreed, uint32_t& voters) const;
 		void TryCommitPeerBridge(uint64_t frame, uint64_t nowMs, uint8_t kind = 0);
 		void InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs);
+		/// Takes the decisions kept for their frame, in frame order.
+		/// @return Whether the next frame waits on a decision: one kept for it, one this peer voted for, or a return proposed for it of a seat
+		/// still held, while it is undecided.
+		bool TakePendingPeerDecisions(uint64_t nowMs);
 		void PreparePeerBridgeInputs(uint64_t frame, uint64_t nowMs);
 		void NotePeerInputAccepted(const NetLockstepFrame& frame);
 		void RepairPeerReceiptGaps(uint64_t nowMs);
@@ -1699,6 +1713,8 @@ namespace RTE {
 		using PeerDecisionKey = std::pair<uint64_t, uint8_t>;
 		std::map<PeerDecisionKey, std::map<uint8_t, NetHostMigrationMessage>> m_PeerBridgeVotes;
 		std::map<PeerDecisionKey, NetHostMigrationMessage> m_PeerBridgeCertificates;
+		std::map<PeerDecisionKey, std::pair<NetHostMigrationMessage, uint64_t>> m_PendingPeerDecisions; //!< Certificates that came before this peer could take them, and since when.
+		std::map<PeerDecisionKey, uint64_t> m_PeerVotedAtMs; //!< When this peer voted for, or first waited on, a decision it has not yet seen certified.
 		std::map<uint64_t, NetHostMigrationMessage> m_PeerReturnProofs;
 		std::map<uint64_t, uint32_t> m_PeerRejectedInputs;
 		std::map<uint64_t, std::map<uint8_t, NetLockstepFrame>> m_PeerPendingBridgeInputs;
@@ -1734,6 +1750,7 @@ namespace RTE {
 		bool m_PeerHadHitch = false;
 		std::map<uint8_t, uint64_t> m_PeerAppliedThrough;
 		std::map<uint8_t, uint64_t> m_PeerAppliedAtMs;
+		std::map<uint8_t, std::deque<std::pair<uint64_t, uint64_t>>> m_PeerAppliedProgress; //!< When each seat's applied frame rose, and to which, over the last seconds.
 		uint64_t m_PeerHeartbeatAtMs = 0;
 		uint64_t m_PeerTailRequestAtMs = 0;
 		uint8_t m_PeerTailDonor = 0;
@@ -1991,6 +2008,12 @@ namespace RTE {
 		/// @param rate Set to the seat's measured ticks a second.
 		/// @return Whether the seat is a slow machine.
 		bool FeedsBelowRoundRate(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* rate = nullptr);
+		/// Whether a seat this machine waits on at the frame has cost it more than the round allows a slower machine: at 59.5 ticks a
+		/// second or more half a tick a second, below that a tenth of its own rate, over the last capacity window.
+		bool CostsPastTolerance(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* cost = nullptr);
+		static constexpr uint64_t c_CapacityWindowMs = 10000;
+		/// The ticks a second a seat applied over its recent reports, or nothing while they span less than half a second.
+		std::optional<double> PeerAppliedRate(uint8_t peerId, uint64_t nowMs) const;
 		static void NoteArrival(NetLockstepPeerStats& stats, uint64_t nowMs, uint64_t frame);
 		/// Wait for every human owner's published startup before committing the first frame.
 		void TickStartupWait(uint64_t nowMs);
@@ -2106,6 +2129,7 @@ namespace RTE {
 		uint64_t m_FirstMissingMs = 0;
 		std::optional<uint64_t> m_LastDeliveredFrame;
 		uint64_t m_ConsumerWaitStartMs = 0;
+		std::vector<uint8_t> m_ConsumerWaitMissing; //!< The seats whose input the current wait is for.
 		uint64_t m_LastTickMs = 0; //!< Our own last Tick; a gap in it is our park, not a peer's silence.
 		std::atomic<uint64_t> m_SimTickedMs{0}; //!< The simulation thread's last Tick; the plane stands in once it is a tick old.
 		bool m_PlaneTicking = false; //!< Inside PlaneTick: events that call out of the coordinator are deferred.

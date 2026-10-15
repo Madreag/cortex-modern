@@ -1,4 +1,5 @@
 #include "NetLobbySession.h"
+#include "SteadyClock.h"
 #include "DiagnosticLine.h"
 
 #include "NetIdentity.h"
@@ -64,7 +65,7 @@ namespace RTE {
 		std::atomic<uint64_t> g_LastStateTransferMs{0};
 
 		uint64_t TransferSteadyMs() {
-			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 		}
 
 		uint64_t RelayWallSeconds() {
@@ -215,6 +216,15 @@ namespace RTE {
 		}
 		return true;
 	}
+
+	namespace {
+		/// Session traffic wrapped for a frame-group link, which reaches a lobby only through its link's unwrapping.
+		bool IsWrappedSessionPacket(const std::vector<uint8_t>& bytes) {
+			if (bytes.size() < 8 || !NetHostMigrationCodec::LooksLikePacket(bytes)) return false;
+			const uint16_t type = static_cast<uint16_t>(bytes[6] | (bytes[7] << 8));
+			return type == static_cast<uint16_t>(NetHostMigrationMessageType::PeerSession) || type == static_cast<uint16_t>(NetHostMigrationMessageType::PeerSessionAck);
+		}
+	} // namespace
 
 	bool NetLobbySession::IsRoundPacket(const NetTransportEvent& event) {
 		return event.type == NetTransportEventType::PacketReceived && (NetLockstepCodec::LooksLikePacket(event.bytes) || NetHostMigrationCodec::LooksLikePacket(event.bytes));
@@ -1641,14 +1651,16 @@ namespace RTE {
 				m_LastReceiveMs = nowMs;
 				NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(event.bytes);
 				if (!decoded.ok) {
-					// Another phase's packet on the shared wire: session leftovers, or the prior
-					// match's in-flight lockstep frames when a rematch lobby round starts. A chat line
-					// that fails decode is counted and dropped by the session, never cause to eject.
+					// Another phase's packet on the shared wire: session leftovers, the prior match's in-flight lockstep
+					// or frame-group packets, or the next round's first ones from a peer whose lobby ended first (kept once
+					// this lobby has started). Session traffic wrapped for a frame-group link is not another phase's: one
+					// that arrives unwrapped is malformed here. A chat line that fails decode is counted and dropped by the
+					// session, never cause to eject.
 					uint16_t peekedType = 0;
 					const bool chatTyped = NetProtocol::PeekMessageType(event.bytes.data(), event.bytes.size(), peekedType) &&
 					                       peekedType == static_cast<uint16_t>(NetMessageType::Chat);
 					if (decoded.error.code == NetLobbyErrorCode::BadMagic &&
-					    (NetProtocol::Decode(event.bytes).ok || NetLockstepCodec::LooksLikePacket(event.bytes) || chatTyped)) {
+					    (NetProtocol::Decode(event.bytes).ok || (IsRoundPacket(event) && !IsWrappedSessionPacket(event.bytes)) || chatTyped)) {
 						++m_Stats.ignoredSessionPackets;
 						return;
 					}

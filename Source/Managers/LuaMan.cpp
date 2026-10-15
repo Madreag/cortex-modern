@@ -1,4 +1,5 @@
 #include "DeterministicMath.h"
+#include "SteadyClock.h"
 #include "LuaMan.h"
 #include "FloatText.h"
 
@@ -4611,7 +4612,7 @@ private:
 	const Fields& Owners() const {
 		Once(m_OwnersBuilt, m_OwnersReady, [this] {
 			static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
-			const auto started = report ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			const auto started = report ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 			const uint64_t cpuStart = report ? CheckpointThreadCpuUnits() : 0;
 			auto& vectors = m_Owners.vectors.sorted;
 			auto& controllers = m_Owners.controllers.sorted;
@@ -4634,7 +4635,7 @@ private:
 					vectors.emplace_back(&attachable->GetJointPos(), VectorField{uid, "JointPos"});
 				}
 			}
-			const auto enumerated = report ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			const auto enumerated = report ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 			const uint64_t cpuEnumerated = report ? CheckpointThreadCpuUnits() : 0;
 			// A later object's entry wins an address, as the map it replaces let it.
 			const auto settle = [](auto& fields) {
@@ -4656,7 +4657,7 @@ private:
 			settle(m_Owners.vectors);
 			settle(m_Owners.controllers);
 			if (report) {
-				const auto done = std::chrono::steady_clock::now();
+				const auto done = RTE::SteadyClock::now();
 				const uint64_t cpuDone = CheckpointThreadCpuUnits();
 #ifdef _WIN32
 				constexpr const char* cpuUnit = "cycles";
@@ -4841,7 +4842,7 @@ static int ScriptGraphDirtyRoots(lua_State* L) {
 }
 
 static int ScriptGraphClock(lua_State* L) {
-	lua_pushnumber(L, static_cast<lua_Number>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()));
+	lua_pushnumber(L, static_cast<lua_Number>(std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now().time_since_epoch()).count()));
 	return 1;
 }
 
@@ -7237,7 +7238,7 @@ namespace {
 
 bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector<std::string>& problems) {
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
-	const auto started = std::chrono::steady_clock::now();
+	const auto started = RTE::SteadyClock::now();
 	const int top = lua_gettop(m_State);
 	// Every write to the live heap happens before the freeze: after it each first write to a page is a fault.
 	struct RestoreCapture {
@@ -7272,7 +7273,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 			image->stateIndex = g_LuaMan.GetStateIndex(this);
 			image->liveSerial = ScriptGraphBirthHorizon(m_State, restore.serial);
 			image->rng = CaptureRandomGeneratorCheckpoint();
-			const auto callbacksStarted = std::chrono::steady_clock::now();
+			const auto callbacksStarted = RTE::SteadyClock::now();
 			const uint64_t callbacksCpu = phaseCosts ? CheckpointThreadCpuUnits() : 0;
 			if (CheckpointWriter::BatchEnabled()) {
 				image->callbackObjects = std::make_shared<CheckpointLua::CallbackImage>();
@@ -7281,7 +7282,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 			}
 			CaptureScriptCallbacks(restore.serial, image->callbackObjects.get());
 			const uint64_t callbacksCpuDone = phaseCosts ? CheckpointThreadCpuUnits() : 0;
-			const auto rootsStarted = std::chrono::steady_clock::now();
+			const auto rootsStarted = RTE::SteadyClock::now();
 			lua_newtable(m_State);
 			const int roots = lua_gettop(m_State);
 			CheckpointUnorderedSet<MovableObject*> objects = CheckpointStateValues().registeredMOs;
@@ -7299,7 +7300,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 				lua_settable(m_State, roots);
 			}
 			image->roots = m_State->top[-1];
-			const auto rootsDone = std::chrono::steady_clock::now();
+			const auto rootsDone = RTE::SteadyClock::now();
 			// The descriptor leaves the live globals now, before the freeze; the worker sees it injected under the same name.
 			lua_getglobal(m_State, "_ScriptGraphCallbacks");
 			image->callbacks = m_State->top[-1];
@@ -7315,13 +7316,13 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 			lua_getglobal(m_State, "_ScriptGraph"); lua_getfield(m_State, -1, "captureKeyLabels");
 			if (lua_pcall(m_State, 0, 1, 0)) throw std::runtime_error(lua_tostring(m_State, -1));
 			image->labels = m_State->top[-1];
-			const auto nativeStarted = std::chrono::steady_clock::now();
+			const auto nativeStarted = RTE::SteadyClock::now();
 			const uint64_t nativeCpu = phaseCosts ? CheckpointThreadCpuUnits() : 0;
 			if (!m_NativeCache) m_NativeCache = std::make_shared<CheckpointLua::NativeCache>(m_State);
 			std::optional<CaptureTrace::Span> span(std::in_place, "graph_natives", std::to_string(g_LuaMan.GetStateIndex(this)));
 			restore.nativeThreshold = G(m_State)->gc.threshold;
 			CheckpointLua::CaptureScope natives(m_State, *m_NativeCache);
-			const auto descriptorStarted = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			const auto descriptorStarted = phaseCosts ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 			const uint64_t descriptorCpu = phaseCosts ? CheckpointThreadCpuUnits() : 0;
 			const bool plainNatives = natives.TryCapturePlain();
 			std::optional<CheckpointLua::DescriptorRootScope> descriptorRoots;
@@ -7329,15 +7330,15 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 				image->callbackObjects ? std::span<const TValue>(image->callbackObjects->roots) : std::span<const TValue>(),
 				[&natives](const TValue& value) { return natives.BindingObject(value); });
 			const uint64_t descriptorCpuDone = phaseCosts ? CheckpointThreadCpuUnits() : 0;
-			const auto descriptorDone = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			const auto descriptorDone = phaseCosts ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 			if (!plainNatives) natives.Capture();
 			span.reset();
-			const auto nativeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
+			const auto nativeUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - nativeStarted).count();
 			const uint64_t nativeCpuDone = phaseCosts ? CheckpointThreadCpuUnits() : 0;
 			image->nativeUs = nativeUs;
-			const auto finishStarted = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			const auto finishStarted = phaseCosts ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 			image->native = natives.Finish(m_State);
-			const auto finishDone = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			const auto finishDone = phaseCosts ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 			image->scratch = scratch.values;
 			if (FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats) {
 				stats->plainStates += plainNatives;
@@ -7373,7 +7374,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		}
 		const uint64_t heapCpuDone = phaseCosts ? CheckpointThreadCpuUnits() : 0;
 		const size_t bytes = image->heap.ByteCount();
-		const auto frozenUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+		const auto frozenUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 		if (FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats) {
 			if (phaseCosts) {
 				stats->heapCpu = heapCpuDone - heapCpu;
@@ -7458,7 +7459,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	std::vector<FrozenCaptureStats> parts(order.size());
 	std::vector<char> complete(order.size(), 0);
 	const bool phaseCosts = CheckpointPhaseCostsRequested();
-	const auto phaseOrigin = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+	const auto phaseOrigin = phaseCosts ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 	std::vector<std::pair<int64_t, int64_t>> stateCosts(phaseCosts ? order.size() : 0);
 	std::vector<std::array<uint64_t, 3>> stateCpu(phaseCosts ? order.size() : 0);
 	CheckpointLua::NativeEffects effects;
@@ -7488,14 +7489,14 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 			FrozenCaptureStats* previous;
 			~RestoreStats() { LuaMan::s_FrozenCaptureStats = previous; }
 		} restoreStats{previous};
-		const auto start = phaseCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		const auto start = phaseCosts ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 		const uint64_t cpu = phaseCosts ? CheckpointThreadCpuUnits() : 0;
 		const uint64_t accountedCpu = phaseCosts ? CheckpointThreadAccountedCpu() : 0;
 		complete[index] = order[index]->CaptureScriptGraph(texts[index], refusals[index], true);
 		if (phaseCosts) stateCpu[index] = {CheckpointThreadIdentity(), CheckpointThreadCpuUnits() - cpu, CheckpointThreadAccountedCpu() - accountedCpu};
 		if (phaseCosts) stateCosts[index] = {
 		    std::chrono::duration_cast<std::chrono::microseconds>(start - phaseOrigin).count(),
-		    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()};
+		    std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count()};
 	};
 	// Each state is its own VM behind its own lock, so the states are captured side by side; this thread takes the states
 	// no pool thread has started once its own work is done.
@@ -7609,12 +7610,12 @@ CheckpointText LuaStateWrapper::CaptureRandomGeneratorCheckpoint() const {
 
 bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText* captured, std::vector<std::string>& problems) {
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
-	const auto nativeStart = std::chrono::steady_clock::now();
+	const auto nativeStart = RTE::SteadyClock::now();
 	struct FinishTiming {
 		lua_State* state;
-		std::optional<std::chrono::steady_clock::time_point> start;
+		std::optional<RTE::SteadyClock::time_point> start;
 		~FinishTiming() {
-			if (start) CheckpointGraphIndex::Get().NoteWalkPart(state, "native_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - *start).count(), false, {});
+			if (start) CheckpointGraphIndex::Get().NoteWalkPart(state, "native_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - *start).count(), false, {});
 		}
 	} finishTiming{m_State};
 	LuaCheckpointBarrierPause barrierPause;
@@ -7676,9 +7677,9 @@ bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText
 		explicit CarriedScope(std::unordered_set<const MovableObject*>& objects) { s_CarriedScriptOwnedObjects = &objects; }
 		~CarriedScope() { s_CarriedScriptOwnedObjects = nullptr; }
 	} carriedScope{carried};
-	const auto serializeStart = std::chrono::steady_clock::now();
+	const auto serializeStart = RTE::SteadyClock::now();
 	const int result = lua_pcall(m_State, 2, 2, 0);
-	finishTiming.start = std::chrono::steady_clock::now();
+	finishTiming.start = RTE::SteadyClock::now();
 	CheckpointGraphIndex::Get().NoteWalkPart(m_State, "native_setup", 0, std::chrono::duration_cast<std::chrono::microseconds>(serializeStart - nativeStart).count(), false, {});
 	if (result != 0) {
 		if (s_SerialBeforeCapture.contains(m_State)) ScriptGraphEndCapture(m_State);
@@ -8141,10 +8142,10 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 	LuaScriptGraphNativeCaptureScope::BuildOwners(lookups.Current());
 	const auto known = g_MovableMan.SnapshotKnownObjects();
 	graphs.resize(states.size()); scopes.resize(states.size());
-	const auto origin = std::chrono::steady_clock::now();
+	const auto origin = RTE::SteadyClock::now();
 	for (size_t index = 0; index < states.size(); ++index) {
 		SaverThreads::YieldToGame();
-		const auto started = std::chrono::steady_clock::now();
+		const auto started = RTE::SteadyClock::now();
 		FrozenCaptureStats part;
 		const uint64_t cpu = CheckpointThreadCpuUnits(), accounted = CheckpointThreadAccountedCpu();
 		const auto* source = CheckpointNativeStorage::Source(states[index]);
@@ -8174,13 +8175,13 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 		lua_State* const state = worker.GetLuaState();
 		const auto heap = boundary.LuaHeap(index).WithPrivate(worker.m_CheckpointHeap->PrivateReader());
 		CheckpointLua::FrozenBindings bindings(heap, &boundary.Bindings());
-		part.nativeSetupUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+		part.nativeSetupUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 		CheckpointLua::ProtectedCall(state, [&] {
 			const auto copy = [&, bindings](const luabind::detail::class_rep* type, const void* pointer, bool owned) -> void* {
-				const auto started = std::chrono::steady_clock::now();
+				const auto started = RTE::SteadyClock::now();
 				struct Cost {
-					FrozenCaptureStats& part; std::chrono::steady_clock::time_point started; uint64_t cpu;
-					~Cost() { ++part.userdata; part.nativeUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count(); part.nativeCpu += CheckpointThreadCpuUnits() - cpu; }
+					FrozenCaptureStats& part; RTE::SteadyClock::time_point started; uint64_t cpu;
+					~Cost() { ++part.userdata; part.nativeUs += std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count(); part.nativeCpu += CheckpointThreadCpuUnits() - cpu; }
 				} cost{part, started, CheckpointThreadCpuUnits()};
 				if (bindings.Class(type)->type() == LUABIND_TYPEID(LuaStateWrapper)) return &worker;
 				if (const auto offset = bindings.BaseOffset(type, "Entity")) {
@@ -8209,7 +8210,7 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 				if (id == LUABIND_TYPEID(SLBackground)) return value(static_cast<SLBackground*>(nullptr));
 				return const_cast<void*>(CheckpointNativeStorage::ViewObject(pointer));
 			};
-			const auto heapStarted = std::chrono::steady_clock::now();
+			const auto heapStarted = RTE::SteadyClock::now();
 			const uint64_t heapCpu = CheckpointThreadCpuUnits();
 			savedObjects = std::make_unique<CheckpointLua::SavedObjects>(state, heap, boundary.Bindings(), copy);
 			auto& objects = *savedObjects;
@@ -8218,12 +8219,12 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 			const TValue globals = heap.GlobalValue("_G");
 			values.Push(globals); lua_replace(state, LUA_GLOBALSINDEX);
 			values.Finish();
-			part.heapUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - heapStarted).count() - part.nativeUs;
+			part.heapUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - heapStarted).count() - part.nativeUs;
 			part.heapCpu = CheckpointThreadCpuUnits() - heapCpu - part.nativeCpu;
 			SetScriptBirthCounter(state, &s_SharedScriptBirthKey, ScriptBirthCounter(heap, &s_SharedScriptBirthKey));
 			SetScriptBirthCounter(state, &s_PeerScriptBirthKey, ScriptBirthCounter(heap, &s_PeerScriptBirthKey));
 			luaJIT_set_state_serial(state, heap.StateSerial());
-			const auto callbacksStarted = std::chrono::steady_clock::now();
+			const auto callbacksStarted = RTE::SteadyClock::now();
 			const uint64_t callbacksCpu = CheckpointThreadCpuUnits();
 			const uint64_t horizon = ScriptGraphBirthHorizon(heap);
 			CheckpointLua::ScratchImage scratch(horizon);
@@ -8247,7 +8248,7 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 			ScriptGraphCaptureScope capture(true);
 			g_LuaMan.PushPathCallbacks(state, heap.State(), snapshot.get());
 			lua_getglobal(state, "_ScriptGraphCallbacks"); lua_pushvalue(state, -2); lua_setfield(state, -2, "async"); lua_pop(state, 2);
-			part.callbacksUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - callbacksStarted).count();
+			part.callbacksUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - callbacksStarted).count();
 			part.callbacksCpu = CheckpointThreadCpuUnits() - callbacksCpu;
 			lua_getglobal(state, "_ScriptGraph"); lua_getfield(state, -1, "serialize");
 			lua_pushvalue(state, -3); lua_pushnumber(state, static_cast<lua_Number>(ScriptGraphBirthHorizon(heap)));
@@ -8258,10 +8259,10 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 				~RestoreCarried() { s_CarriedScriptOwnedObjects = const_cast<std::unordered_set<const MovableObject*>*>(previous); }
 			} restoreCarried{previous};
 			s_CarriedScriptOwnedObjects = &carried;
-			const auto answersStarted = std::chrono::steady_clock::now();
+			const auto answersStarted = RTE::SteadyClock::now();
 			const uint64_t answersCpu = CheckpointThreadCpuUnits();
 			const int result = lua_pcall(state, 2, 2, 0);
-			part.answerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - answersStarted).count();
+			part.answerUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - answersStarted).count();
 			part.nativeCpu += CheckpointThreadCpuUnits() - answersCpu;
 			if (result == LUA_ERRMEM) throw std::bad_alloc();
 			if (result) {
@@ -8271,16 +8272,16 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 			CollectStrings(state, -1, problems);
 			CheckpointText* text = ScriptGraphCapturedText(state, -2);
 			if (!text) throw std::runtime_error("saved script graph returned no owned text");
-			const auto finishStarted = std::chrono::steady_clock::now();
+			const auto finishStarted = RTE::SteadyClock::now();
 			const uint64_t finishCpu = CheckpointThreadCpuUnits();
 			CheckpointNativeSnapshot::ReadScope nativeValues(snapshot.get());
 			graphs[index] = text->Compact();
-			part.nativeFinishUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - finishStarted).count();
+			part.nativeFinishUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - finishStarted).count();
 			part.nativeCpu += CheckpointThreadCpuUnits() - finishCpu;
 			scopes[index] = callbacks.perPeer ? CheckpointScope::PerPeer : CheckpointScope::Shared;
 		});
 		if (CheckpointPhaseCostsRequested()) {
-			const auto total = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+			const auto total = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 			System::PrintDiagnosticLine(std::format("[checkpoint-lua-phase] state={} start_us={} total_us={} callbacks_us={} roots_us={} native_us={} native_setup_us={} descriptor_us={} enum_us={} world_us={} answers_us={} native_finish_us={} heap_us={} heap_setup_us={} heap_watch_setup_us={} heap_watch_arm_us={} userdata={} bytes={}", index,
 			    std::chrono::duration_cast<std::chrono::microseconds>(started - origin).count(), total, part.callbacksUs, 0,
 			    part.nativeUs + part.answerUs + part.nativeFinishUs, part.nativeSetupUs, 0, 0, 0, part.answerUs, part.nativeFinishUs, part.heapUs, 0, 0, 0, part.userdata, heap.ByteCount()));
@@ -8304,9 +8305,9 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial, CheckpointLua::CallbackImage* deferredObjects) {
 	const int top = lua_gettop(m_State);
 	FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats;
-	auto mark = std::chrono::steady_clock::now();
+	auto mark = RTE::SteadyClock::now();
 	const auto part = [&](int64_t& into) {
-		const auto now = std::chrono::steady_clock::now();
+		const auto now = RTE::SteadyClock::now();
 		if (stats) into += std::chrono::duration_cast<std::chrono::microseconds>(now - mark).count();
 		mark = now;
 	};
@@ -9986,9 +9987,9 @@ static bool RunGarbageCollectionThreadSelfTest() {
 		for (size_t index = 0; index < droppingStates; ++index) {
 			states[index].RunScriptString("_GCThreadDrop = {}; for i = 1, " + std::to_string(c_DropsPerState) + " do _GCThreadDrop[#_GCThreadDrop + 1] = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\"); _GCThreadDrop[#_GCThreadDrop + 1] = CreateSoundContainer(\"Funds Changed\", \"Base.rte\"); end; _GCThreadDrop = nil");
 		}
-		const auto started = std::chrono::steady_clock::now();
+		const auto started = RTE::SteadyClock::now();
 		CollectEveryStateAtTickEnd();
-		passMicroseconds += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+		passMicroseconds += std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 	}
 	passMicroseconds /= c_TimedRounds;
 
@@ -10663,6 +10664,12 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	{
 		const std::string mismatch = AudioMan::CheckpointRegistryStorageSelfTestMismatch();
 		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " frozen_sound_registry_keeps_private_owner_changes_and_retries" << std::endl;
+		if (!mismatch.empty()) std::cout << "[script-graph-selftest] detail=" << mismatch << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
+	}
+	{
+		const std::string mismatch = AudioMan::CheckpointStartupLinksSelfTestMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " frozen_audio_startup_containers_keep_their_links_in_storage" << std::endl;
 		if (!mismatch.empty()) std::cout << "[script-graph-selftest] detail=" << mismatch << std::endl;
 		checkpointValues = mismatch.empty() && checkpointValues;
 	}
@@ -12593,9 +12600,9 @@ debug.setupvalue(next, 4, "150")
 			std::lock_guard<std::recursive_mutex> lock(GetMutex());
 			frozen = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit);
 		}
-		const auto entered = std::chrono::steady_clock::now();
+		const auto entered = RTE::SteadyClock::now();
 		RunScriptString("for index = 1, 4096 do _ScriptGraphGateProbe[index] = -index end");
-		const auto waitedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - entered).count();
+		const auto waitedMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - entered).count();
 		for (auto& task: busy) task.wait();
 		bool imageHeld = false, liveWritten = false;
 		bool borrowedReads = false;
@@ -15203,9 +15210,9 @@ end
 		const std::string name = "'" + lastName + "'";
 		const std::string loop = "local name = " + name + "; for i = 1, 2000 do local p = CreateMOPixel(name) end";
 		const auto timed = [&state](const std::string& code) {
-			const auto begin = std::chrono::steady_clock::now();
+			const auto begin = RTE::SteadyClock::now();
 			const int status = state->RunScriptString(code);
-			const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count();
+			const double us = std::chrono::duration<double, std::micro>(RTE::SteadyClock::now() - begin).count();
 			return status == 0 ? us / 2000.0 : -1.0;
 		};
 		const auto window = [&actor](const std::function<void()>& body) {
@@ -15928,7 +15935,7 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 		NotePreviewHookRun(selfGlobalTableKey, path);
 	}
 
-	std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+	RTE::SteadyClock::time_point begin = RTE::SteadyClock::now();
 	{
 		ZoneScoped;
 		ZoneName(path.c_str(), path.length());
@@ -15946,7 +15953,7 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 			status = -1;
 		}
 	}
-	std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+	RTE::SteadyClock::time_point end = RTE::SteadyClock::now();
 
 	if (timing) {
 		timing->m_Time += std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
@@ -16039,7 +16046,7 @@ int LuaStateWrapper::RunScriptConditionalTestFunctionObject(const LuabindObjectW
 	}
 
 	const std::string& path = functionObject->GetFilePath();
-	std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+	RTE::SteadyClock::time_point begin = RTE::SteadyClock::now();
 	{
 		ZoneScoped;
 		ZoneName(path.c_str(), path.length());
@@ -16055,7 +16062,7 @@ int LuaStateWrapper::RunScriptConditionalTestFunctionObject(const LuabindObjectW
 			lua_pop(m_State, 1);
 		}
 	}
-	std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+	RTE::SteadyClock::time_point end = RTE::SteadyClock::now();
 
 	// only track time in non-MT scripts, for now
 	if (&g_LuaMan.GetMasterScriptState() == this) {
@@ -16930,7 +16937,7 @@ void LuaMan::PrepareCheckpointValues() {
 	if (CheckpointNativeStorage::Enabled()) g_SceneMan.PrepareCheckpointValues();
 	if (CheckpointNativeStorage::Enabled()) { g_UInputMan.PrepareCheckpointValues(); g_FrameMan.PrepareCheckpointValues(); g_PostProcessMan.PrepareCheckpointValues(); }
 	if (CheckpointNativeStorage::Enabled()) g_ActivityMan.PrepareCheckpointValues();
-	if (CheckpointNativeStorage::Enabled()) g_AudioMan.PrepareCheckpointRegistryValues();
+	if (CheckpointNativeStorage::Enabled()) { g_AudioMan.PrepareCheckpointRegistryValues(); g_AudioMan.PrepareCheckpointValues(); }
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointActorValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLooseValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLookupValues();
@@ -19043,9 +19050,9 @@ namespace {
 	// Times a window's stages into LuaMan's counters; each Lap charges the time since the last one to a stage.
 	struct PreviewWindowLaps {
 		std::array<double, 11>& totals;
-		std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+		RTE::SteadyClock::time_point last = RTE::SteadyClock::now();
 		void Lap(size_t stage) {
-			const auto now = std::chrono::steady_clock::now();
+			const auto now = RTE::SteadyClock::now();
 			totals[stage] += std::chrono::duration<double, std::milli>(now - last).count();
 			last = now;
 		}
@@ -19322,7 +19329,7 @@ void LuaMan::EndPreviewScripts() {
 		}
 	}
 	ClearPreviewRemapTables();
-	laps.last = std::chrono::steady_clock::now();
+	laps.last = RTE::SteadyClock::now();
 	ClosePreviewWindow();
 	laps.Lap(10);
 }

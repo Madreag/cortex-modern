@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointLuaView.h"
+#include "SteadyClock.h"
 #include "CheckpointLuaAddresses.h"
 #include "CaptureSentinel.h"
 #include "CheckpointCast.h"
@@ -360,14 +361,14 @@ namespace RTE::CheckpointLua {
 					return found == topology.end() ? nullptr : &found->second;
 				}
 				std::call_once(indexed, [this] {
-					const auto started = std::chrono::steady_clock::now();
+					const auto started = RTE::SteadyClock::now();
 					index.reserve(records.size());
 					for (const auto& record: records) index.push_back(&record);
 					std::sort(index.begin(), index.end(), [](const auto* first, const auto* second) { return first->first < second->first; });
 					static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
 					if (report) System::PrintDiagnosticLine(std::format("[checkpoint-topology-index] objects={} capture_thread={} worker_thread={} off_capture_thread={} us={}", records.size(),
 					    std::hash<std::thread::id>{}(captureThread), std::hash<std::thread::id>{}(std::this_thread::get_id()), captureThread != std::this_thread::get_id(),
-					    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()));
+					    std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count()));
 				});
 				const auto found = std::lower_bound(index.begin(), index.end(), identity, [](const auto* record, NativeId key) { return record->first < key; });
 				return found == index.end() || (*found)->first != identity ? nullptr : &(*found)->second;
@@ -555,7 +556,7 @@ namespace RTE::CheckpointLua {
 			if (!CheckpointWriter::BatchEnabled()) return false;
 			if (lua_gethook(State())) { m_PlainRefusal = "debug hook"; return false; }
 			if (m_Captured) return false;
-			const auto started = std::chrono::steady_clock::now();
+			const auto started = RTE::SteadyClock::now();
 			const auto key = [&](const char* name) {
 				lua_pushstring(State(), name);
 				GCstr* result = strV(&State()->top[-1]); Keep(-1); lua_pop(State(), 1);
@@ -623,7 +624,7 @@ namespace RTE::CheckpointLua {
 				lua_settop(State(), top);
 			}
 			if (!plain) return false;
-			const auto answers = std::chrono::steady_clock::now();
+			const auto answers = RTE::SteadyClock::now();
 			m_Image->m_EnumUs = std::chrono::duration_cast<std::chrono::microseconds>(answers - started).count();
 			m_Image->m_Scalars.reserve(values.size());
 			CaptureAddressSet enumerated(m_TransientResource);
@@ -658,7 +659,7 @@ namespace RTE::CheckpointLua {
 				const TValue value = m_Queue[index];
 				if (tvisudata(&value) && !enumerated.Contains(gcval(&value))) CaptureUserdata(value);
 			}
-			m_Image->m_AnswerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - answers).count();
+			m_Image->m_AnswerUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - answers).count();
 			m_Captured = true;
 			return true;
 		}
@@ -667,7 +668,7 @@ namespace RTE::CheckpointLua {
 			CheckThread();
 			if (m_Captured || !m_Image) throw std::logic_error("native image capture cannot be repeated");
 			if (!s_GraphNativeCapture) m_NativeScope.emplace();
-			const auto enumStarted = std::chrono::steady_clock::now();
+			const auto enumStarted = RTE::SteadyClock::now();
 			// The class descriptors were answered by an earlier capture; everything else is asked again.
 			const auto& classes = m_Cache.classes->entries;
 			const auto& compactClasses = m_Cache.classes->compact;
@@ -719,7 +720,7 @@ namespace RTE::CheckpointLua {
 				}
 			}
 			lua_pop(State(), 1);
-			const auto worldStarted = std::chrono::steady_clock::now();
+			const auto worldStarted = RTE::SteadyClock::now();
 			m_Image->m_EnumUs = std::chrono::duration_cast<std::chrono::microseconds>(worldStarted - enumStarted).count();
 			if (CheckpointWriter::BatchEnabled()) {
 				m_Image->m_Entries.reserve(m_Image->m_Entries.size() + m_Queue.size());
@@ -733,14 +734,14 @@ namespace RTE::CheckpointLua {
 				    ? FreezeWorld(s_GraphNativeCapture->KnownObjects()) : BuildWorld(s_GraphNativeCapture->KnownObjects());
 				m_Image->m_World = std::static_pointer_cast<const NativeImage::World>(shared);
 			}
-			const auto answerStarted = std::chrono::steady_clock::now();
+			const auto answerStarted = RTE::SteadyClock::now();
 			m_Image->m_WorldUs = std::chrono::duration_cast<std::chrono::microseconds>(answerStarted - worldStarted).count();
 			for (size_t index = 0; index < m_Queue.size(); ++index) {
 				const TValue value = m_Queue[index];
 				if (tvisudata(&value)) CaptureUserdata(value);
 				else CaptureIterator(value);
 			}
-			m_Image->m_AnswerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - answerStarted).count();
+			m_Image->m_AnswerUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - answerStarted).count();
 			if (m_RetainedReport) System::PrintDiagnosticLine(std::format("[checkpoint-retained] thread={} calls={} missing={} us={}", std::hash<std::thread::id>{}(std::this_thread::get_id()), m_RetainedCalls, m_RetainedMissing, m_RetainedUs));
 			m_Captured = true;
 		}
@@ -1023,7 +1024,7 @@ namespace RTE::CheckpointLua {
 		}
 		// A subject answered again names new values; what the last capture kept for it goes.
 		void ReleaseRetained(const TValue& subject) {
-			const auto started = m_RetainedReport ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			const auto started = m_RetainedReport ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 			m_Cache.PushRetained(State());
 			const TValue* previous = (m_RetainedReport || CheckpointWriter::BatchEnabled()) ? lj_tab_get(State(), tabV(&State()->top[-1]), &subject) : nullptr;
 			if (m_RetainedReport) {
@@ -1033,14 +1034,14 @@ namespace RTE::CheckpointLua {
 			// Setting an absent key to nil still grows Lua's hash chains.
 			if (CheckpointWriter::BatchEnabled() && (!previous || tvisnil(previous))) {
 				lua_pop(State(), 1);
-				if (m_RetainedReport) m_RetainedUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+				if (m_RetainedReport) m_RetainedUs += std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 				return;
 			}
 			Push(subject);
 			lua_pushnil(State());
 			lua_rawset(State(), -3);
 			lua_pop(State(), 1);
-			if (m_RetainedReport) m_RetainedUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+			if (m_RetainedReport) m_RetainedUs += std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 		}
 		// The heap values a cached answer names stay alive in the subject's bucket of the retained table.
 		void Retain(const NativeImage::Entry& entry) {

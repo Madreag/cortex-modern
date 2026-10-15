@@ -1,4 +1,5 @@
 #include "NetReplayTestUtils.h"
+#include "SteadyClock.h"
 #include "NetMatchSelfTest.h"
 
 #include "NetActorOwnership.h"
@@ -116,9 +117,9 @@ namespace RTE {
 			const nlohmann::json spec{{"id", "capture"}, {"phase", "capture_announced"}, {"tick", 77}, {"round", 9}, {"timeout_ms", 200}};
 			bool released = false;
 			std::thread worker([&] { released = CrossCaptureBarrier(spec, root.string(), "capture_announced", 77, 9); });
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+			const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(1);
 			const auto entered = root / "capture.9.capture_announced.77.enter.json";
-			while (!std::filesystem::exists(entered) && std::chrono::steady_clock::now() < deadline)
+			while (!std::filesystem::exists(entered) && RTE::SteadyClock::now() < deadline)
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			std::ofstream(root / "capture.9.capture_announced.77.release").put('1');
 			worker.join();
@@ -345,8 +346,8 @@ namespace RTE {
 			if (!GnsTransport::IsCompiledIn()) return true;
 			GnsTransport first, other, client;
 			if (!first.StartHost(43611, error) || !other.StartHost(43612, error) || !client.Connect("127.0.0.1", 43611, error)) return false;
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-			while (std::chrono::steady_clock::now() < deadline) {
+			const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(1);
+			while (RTE::SteadyClock::now() < deadline) {
 				if (!other.PollEvents().empty()) { *error = "another listener consumed a connection's callbacks"; return false; }
 				for (const auto& event: client.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) return true;
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -363,8 +364,8 @@ namespace RTE {
 			if (!host.StartHost(43613, error) || !client.Connect("127.0.0.1", 43613, error)) return false;
 			NetPeerId toClient = c_InvalidNetPeerId;
 			bool clientUp = false;
-			const auto started = std::chrono::steady_clock::now();
-			while ((toClient == c_InvalidNetPeerId || !clientUp) && std::chrono::steady_clock::now() - started < std::chrono::seconds(5)) {
+			const auto started = RTE::SteadyClock::now();
+			while ((toClient == c_InvalidNetPeerId || !clientUp) && RTE::SteadyClock::now() - started < std::chrono::seconds(5)) {
 				for (const auto& event: host.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) toClient = event.peerId;
 				for (const auto& event: client.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) clientUp = true;
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -397,8 +398,8 @@ namespace RTE {
 			uint32_t received = 0, corrupt = 0, reordered = 0;
 			std::thread first(send, 1), second(send, 2);
 			// This thread pumps both ends the whole time, as the simulation thread pumps the wire the session thread sends on.
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-			while (received + corrupt < 2 * c_Sends && std::chrono::steady_clock::now() < deadline) {
+			const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(60);
+			while (received + corrupt < 2 * c_Sends && RTE::SteadyClock::now() < deadline) {
 				(void)host.PollEvents();
 				for (const auto& event: client.PollEvents()) {
 					if (event.type != NetTransportEventType::PacketReceived) continue;
@@ -528,7 +529,7 @@ namespace RTE {
 		bool StartLoopbackTransports(uint16_t port, LoopbackTransport& hostTransport, LoopbackTransport& clientTransport, NetPeerId& hostRemotePeer, NetPeerId& clientRemotePeer, std::string* error);
 
 		bool TestReplayCommandSenders(std::string* error) {
-			const auto directory = std::filesystem::temp_directory_path() / ("cc-replay-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-replay-test-" + std::to_string(RTE::SteadyClock::now().time_since_epoch().count()));
 			if (!std::filesystem::create_directory(directory)) {
 				*error = "could not create replay test directory";
 				return false;
@@ -680,7 +681,7 @@ namespace RTE {
 		}
 
 		bool TestReplayCarriesAgreedStart(std::string* error) {
-			const auto directory = std::filesystem::temp_directory_path() / ("cc-replay-agreed-start-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-replay-agreed-start-" + std::to_string(RTE::SteadyClock::now().time_since_epoch().count()));
 			if (!std::filesystem::create_directory(directory)) { *error = "could not create agreed-start replay directory"; return false; }
 			const auto path = directory / "shifted.ccreplay";
 			struct Cleanup { std::filesystem::path path; ~Cleanup() { std::error_code ignored; std::filesystem::remove(path, ignored); std::filesystem::remove(path.parent_path(), ignored); } } cleanup{path};
@@ -2236,6 +2237,84 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestLobbyIgnoresTheLastRoundsFrameGroupPackets(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetPeerId hostRemotePeer = c_InvalidNetPeerId;
+			NetPeerId clientRemotePeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(43153, hostTransport, clientTransport, hostRemotePeer, clientRemotePeer, error)) return false;
+			NetLobbySession hostLobby;
+			NetLobbySession clientLobby;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remotePeerId = 2;
+			hostConfig.remoteTransportPeerId = hostRemotePeer;
+			hostConfig.matchConfig = MakeConfig();
+			hostConfig.startFrame = 77;
+			NetLobbySessionConfig clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			if (!hostLobby.Start(hostTransport, hostConfig, error) || !clientLobby.Start(clientTransport, clientConfig, error)) return false;
+			// The round that just ended was played in peer frame groups: a decision and an input still in flight reach each side's rematch lobby.
+			NetHostMigrationMessage decision;
+			decision.type = NetHostMigrationMessageType::PeerBridgeCommit;
+			decision.sessionId = 1;
+			decision.roundId = 77;
+			decision.generation = 1;
+			decision.senderPeerId = 1;
+			decision.successorPeerId = 1;
+			NetHostMigrationMessage input = decision;
+			input.type = NetHostMigrationMessageType::PeerInput;
+			input.senderPeerId = 2;
+			NetHash32 key{};
+			key.fill(23);
+			std::vector<uint8_t> decisionBytes, inputBytes;
+			if (!NetHostMigrationCodec::Encode(decision, key, decisionBytes) || !NetHostMigrationCodec::Encode(input, key, inputBytes) ||
+			    !hostTransport.Send(hostRemotePeer, NetTransportLane::ControlReliable, decisionBytes) || !clientTransport.Send(clientRemotePeer, NetTransportLane::ControlReliable, inputBytes)) {
+				*error = "lobby ignores the last round's frame group: the fixture's packets could not be sent";
+				return false;
+			}
+			std::string driven;
+			if (!DriveLobbyPair(hostTransport, clientTransport, hostLobby, clientLobby, &driven)) {
+				*error = "lobby ignores the last round's frame group: the rematch lobby ended on the last round's frame-group packets (" + driven + "; host error '" +
+				         hostLobby.GetFailureReason() + "', client error '" + clientLobby.GetFailureReason() + "'; malformed host " + std::to_string(hostLobby.GetStats().malformedMessages) +
+				         ", client " + std::to_string(clientLobby.GetStats().malformedMessages) + ")";
+				return false;
+			}
+			if (hostLobby.GetStats().ignoredSessionPackets == 0 || clientLobby.GetStats().ignoredSessionPackets == 0) {
+				*error = "lobby ignores the last round's frame group: a frame-group packet was taken for the lobby's own (host ignored " + std::to_string(hostLobby.GetStats().ignoredSessionPackets) +
+				         ", client ignored " + std::to_string(clientLobby.GetStats().ignoredSessionPackets) + ")";
+				return false;
+			}
+			// Session traffic wrapped for a frame-group link reaches a lobby only unwrapped: one that arrives wrapped is malformed, not another phase's.
+			LoopbackTransport wrappedHostTransport;
+			LoopbackTransport wrappedClientTransport;
+			if (!StartLoopbackTransports(43155, wrappedHostTransport, wrappedClientTransport, hostRemotePeer, clientRemotePeer, error)) return false;
+			NetLobbySession wrappedHost;
+			NetLobbySession wrappedClient;
+			hostConfig.remoteTransportPeerId = hostRemotePeer;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			if (!wrappedHost.Start(wrappedHostTransport, hostConfig, error) || !wrappedClient.Start(wrappedClientTransport, clientConfig, error)) return false;
+			NetHostMigrationMessage wrapped = decision;
+			wrapped.type = NetHostMigrationMessageType::PeerSession;
+			std::vector<uint8_t> wrappedBytes;
+			if (!NetHostMigrationCodec::Encode(wrapped, key, wrappedBytes) || !wrappedHostTransport.Send(hostRemotePeer, NetTransportLane::ControlReliable, wrappedBytes)) {
+				*error = "lobby ignores the last round's frame group: the wrapped session fixture could not be sent";
+				return false;
+			}
+			std::string wrappedEnd;
+			if (DriveLobbyPair(wrappedHostTransport, wrappedClientTransport, wrappedHost, wrappedClient, &wrappedEnd) || wrappedClient.GetFailureReason() != "bad lobby protocol magic") {
+				*error = "lobby ignores the last round's frame group: a wrapped session packet reaching the lobby was passed over as another phase's (client " +
+				         std::string(NetLobbySession::StateName(wrappedClient.GetState())) + ", error '" + wrappedClient.GetFailureReason() + "', ignored " +
+				         std::to_string(wrappedClient.GetStats().ignoredSessionPackets) + ")";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestLobbyRelayAdoption(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
 			NetPeerId hostPeer = c_InvalidNetPeerId, clientPeer = c_InvalidNetPeerId;
@@ -2873,12 +2952,12 @@ namespace RTE {
 			std::filesystem::remove(missing, fsError);
 
 			std::string waitError;
-			auto started = std::chrono::steady_clock::now();
+			auto started = RTE::SteadyClock::now();
 			if (NetMatchService::WaitForJoinTrigger(missing.string(), 300, &waitError)) {
 				*error = "the join wait proceeded with no trigger file";
 				return false;
 			}
-			auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+			auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - started).count();
 			if (waitError.find("join wait timed out") == std::string::npos || waitError.find(missing.string()) == std::string::npos) {
 				*error = "the join wait timeout did not name itself and the path: " + waitError;
 				return false;
@@ -2906,9 +2985,9 @@ namespace RTE {
 				std::ofstream handle(late, std::ios::binary);
 				handle << "go";
 			});
-			started = std::chrono::steady_clock::now();
+			started = RTE::SteadyClock::now();
 			const bool released = NetMatchService::WaitForJoinTrigger(late.string(), 10000, &waitError);
-			elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+			elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - started).count();
 			writer.join();
 			std::filesystem::remove(late, fsError);
 			std::filesystem::remove(present, fsError);
@@ -2964,7 +3043,7 @@ namespace RTE {
 		/// A scratch Autosaves directory of this run's own, removed when the row ends.
 		struct ResumeScratch {
 			std::filesystem::path path;
-			ResumeScratch(): path(std::filesystem::temp_directory_path() / ("cc-resume-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+			ResumeScratch(): path(std::filesystem::temp_directory_path() / ("cc-resume-" + std::to_string(RTE::SteadyClock::now().time_since_epoch().count()))) {
 				std::error_code ignored;
 				std::filesystem::create_directories(path, ignored);
 			}
@@ -4515,8 +4594,8 @@ namespace RTE {
 			NetLobbySession clientLobby;
 			NetLockstepCoordinator hostCoordinator, clientCoordinator;
 			NetMatchRunner runner;
-			const auto startedAt = std::chrono::steady_clock::now();
-			const auto nowMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count()); };
+			const auto startedAt = RTE::SteadyClock::now();
+			const auto nowMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - startedAt).count()); };
 			NetMatchRunnerConfig config;
 			config.host = true;
 			config.matchConfig = MakeConfig();
@@ -4621,8 +4700,8 @@ namespace RTE {
 				NetLobbySession clientLobby;
 				NetLockstepCoordinator hostCoordinator, clientCoordinator;
 				NetMatchRunner runner;
-				const auto startedAt = std::chrono::steady_clock::now();
-				const auto nowMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count()); };
+				const auto startedAt = RTE::SteadyClock::now();
+				const auto nowMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - startedAt).count()); };
 				NetMatchRunnerConfig config;
 				config.host = true;
 				config.matchConfig = MakeConfig();
@@ -4820,7 +4899,7 @@ namespace RTE {
 		std::string failure, peerError;
 		bool withholdClient = false, lobbyActive = false, coordinatorActive = false;
 		uint64_t transportClock = 0, lobbyStartedAt = 0;
-		std::chrono::steady_clock::time_point startedAt = std::chrono::steady_clock::now();
+		RTE::SteadyClock::time_point startedAt = RTE::SteadyClock::now();
 
 		explicit HostOptionsLobbyRow(uint16_t port, uint64_t revision = 1) {
 			config.host = true;
@@ -4870,7 +4949,7 @@ namespace RTE {
 		}
 
 		uint64_t NowMs() const {
-			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count());
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - startedAt).count());
 		}
 		~HostOptionsLobbyRow() {
 			service.Destroy();
@@ -5458,8 +5537,8 @@ namespace RTE {
 			NetLockstepCoordinator hostCoordinator, clientCoordinator;
 			NetMatchRunner runner;
 			NetHostOptionsSlot slot;
-			const auto startedAt = std::chrono::steady_clock::now();
-			const auto nowMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count()); };
+			const auto startedAt = RTE::SteadyClock::now();
+			const auto nowMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - startedAt).count()); };
 			NetMatchRunnerConfig config;
 			config.host = true;
 			config.matchConfig = MakeConfig();
@@ -5728,8 +5807,8 @@ namespace RTE {
 			NetSession hostSession;
 			NetLockstepCoordinator round1, round2;
 			NetMatchRunner runner;
-			const auto startedAt = std::chrono::steady_clock::now();
-			const auto nowMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count()); };
+			const auto startedAt = RTE::SteadyClock::now();
+			const auto nowMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - startedAt).count()); };
 
 			NetMatchRunnerConfig config;
 			config.host = true;
@@ -5988,11 +6067,11 @@ namespace RTE {
 
 		// Real elapsed time plus what a test skips, so a reclaim window can lapse without sleeping.
 		struct RematchClock {
-			const std::chrono::steady_clock::time_point origin = std::chrono::steady_clock::now();
+			const RTE::SteadyClock::time_point origin = RTE::SteadyClock::now();
 			std::atomic<uint64_t> skippedMs{0};
 
 			uint64_t NowMs() const {
-				return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - origin).count()) + skippedMs.load();
+				return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - origin).count()) + skippedMs.load();
 			}
 		};
 
@@ -6675,13 +6754,13 @@ namespace RTE {
 		}
 
 		bool PumpRematchUntil(RematchFixture& fixture, uint32_t budgetMs, const std::function<bool()>& done) {
-			const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(budgetMs);
+			const auto until = RTE::SteadyClock::now() + std::chrono::milliseconds(budgetMs);
 			while (true) {
 				for (auto& peer: fixture.peers) {
 					PumpRematchPeer(fixture, *peer);
 				}
 				if (done()) return true;
-				if (std::chrono::steady_clock::now() >= until) return false;
+				if (RTE::SteadyClock::now() >= until) return false;
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 		}
@@ -8334,8 +8413,8 @@ namespace RTE {
 		    !second.StartClient(secondLink, "127.0.0.1", secondConfig, error)) {
 			return false;
 		}
-		const auto started = std::chrono::steady_clock::now();
-		const auto elapsedMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()); };
+		const auto started = RTE::SteadyClock::now();
+		const auto elapsedMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - started).count()); };
 		while (elapsedMs() < 5000 && !(host.m_Session->GetReadyPeerCount() == 2 && joiner.m_Session->IsReady() && second.IsReady())) {
 			host.m_Session->Tick(elapsedMs());
 			joiner.m_Session->Tick(elapsedMs());
@@ -8434,9 +8513,9 @@ namespace RTE {
 		request.activityModule = "Base.rte";
 		request.sceneName = "Grasslands";
 		request.sceneModule = "Base.rte";
-		const auto begin = std::chrono::steady_clock::now();
+		const auto begin = RTE::SteadyClock::now();
 		const bool started = service.Start(request, error);
-		const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+		const double elapsed = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - begin).count();
 		service.Destroy();
 		std::cout << "[net-match-selftest] lobby_start_game_thread_ms=" << elapsed << std::endl;
 		if (!started) return false;
@@ -8954,9 +9033,9 @@ namespace RTE {
 		NetMatchService client;
 		client.m_IsHost = false;
 		std::string why;
-		const auto start = std::chrono::steady_clock::now();
+		const auto start = RTE::SteadyClock::now();
 		const bool armed = client.BeginHeldRejoinOnNextHost(&why);
-		const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+		const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - start).count();
 		if (!armed || client.m_HeldRejoinRetryAtMs == 0 || elapsedMs > 100) {
 			*error = "a held rejoin that failed with its host still there was not asked again off the game thread: armed=" + std::to_string(armed) +
 			         " elapsed=" + std::to_string(elapsedMs) + "ms why='" + why + "'";
@@ -8973,7 +9052,7 @@ namespace RTE {
 			return false;
 		}
 		client.m_HeldRejoinDriving = true;
-		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 		client.m_HeldRejoinStartedMs = now - 30001;
 		if (client.GetHostUnreachableLine() != "The host cannot be found. You can leave or keep trying.") { *error = "an unanswered rejoin has no thirty-second leave line"; return false; }
 		std::cout << "PASS a_held_rejoin_asks_its_host_again_off_the_game_thread cases=" << sizeof(cases) / sizeof(cases[0]) << " armed_in=" << elapsedMs
@@ -9585,8 +9664,8 @@ namespace RTE {
 			}
 			pumpAndCount();
 		}
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-		while (sender.joinable() && queued.load() < 100 && std::chrono::steady_clock::now() < deadline) {
+		const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(20);
+		while (sender.joinable() && queued.load() < 100 && RTE::SteadyClock::now() < deadline) {
 			pumpAndCount(); // keep pumping so the echoed-gated sender can finish its hundred
 		}
 		stopSending = true;
@@ -10260,9 +10339,9 @@ namespace RTE {
 			NetMatchService::RefuseEndedPeers(hostSession, endedRound, "match over through frame 2401", true);
 		});
 		constexpr uint32_t c_ShortenedCapMs = 400;
-		const auto began = std::chrono::steady_clock::now();
+		const auto began = RTE::SteadyClock::now();
 		const bool left = ScenarioRunner::DrainLockstepRelay(250, 0, c_ShortenedCapMs);
-		const auto spentMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
+		const auto spentMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - began).count();
 		ScenarioRunner::SetSessionPump(nullptr);
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		for (const uint64_t until = now + 1000; now <= until && !clientSession.HasReject(); now += 5) {
@@ -12209,9 +12288,9 @@ namespace RTE {
 		NetIdentity::RequestManifestPrimingStop();
 		const uint64_t beforeStopped = NetIdentity::ModuleContentHashCount();
 		NetIdentity::PrimeManifest();
-		const auto askedAt = std::chrono::steady_clock::now();
+		const auto askedAt = RTE::SteadyClock::now();
 		NetIdentity::StopManifestPriming();
-		const long long joinMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - askedAt).count();
+		const long long joinMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - askedAt).count();
 		const uint64_t walkedAnyway = NetIdentity::ModuleContentHashCount() - beforeStopped;
 		if (walkedAnyway != 0) {
 			*error = "the stopped priming pass hashed " + std::to_string(walkedAnyway) + " modules anyway (a full walk is " +
@@ -12984,10 +13063,10 @@ namespace RTE {
 			for (int slice = 0; slice < 120 && !cancel.load(); ++slice) std::this_thread::sleep_for(std::chrono::milliseconds(50));
 			cancel.store(true);
 		});
-		const auto began = std::chrono::steady_clock::now();
+		const auto began = RTE::SteadyClock::now();
 		std::string waitError;
 		const bool ready = runner.WaitForSessionReady(knockTransport, knock, 1, 400, &waitError);
-		const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+		const double elapsedMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - began).count();
 		if (ready || !knock.IsRejected() || knock.GetMismatchKey() != "peer_count" || retries != 0) {
 			cancel.store(true); watchdog.join();
 			*error = "an ordinary full-match refusal restarted the connection";
@@ -12995,9 +13074,9 @@ namespace RTE {
 		}
 		runner.m_Config.waitForSlot = true;
 		if (!knock.StartClient(knockTransport, "loopback", knockConfig, error)) { cancel.store(true); watchdog.join(); return false; }
-		const auto waitingBegan = std::chrono::steady_clock::now();
+		const auto waitingBegan = RTE::SteadyClock::now();
 		const bool waitingReady = runner.WaitForSessionReady(knockTransport, knock, 1, 400, &waitError);
-		const double waitingMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitingBegan).count();
+		const double waitingMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - waitingBegan).count();
 		cancel.store(true);
 		watchdog.join();
 		std::cout << "[net-match-selftest] full_knock ready=" << ready << " refused_full=" << sawFull << " elapsed_ms=" << static_cast<long long>(elapsedMs) << " why='" << waitError << "'" << std::endl;
@@ -15382,9 +15461,9 @@ namespace RTE {
 								add("SC2-ice second ReturnToLobby returned " + std::string(second ? "true" : "false") + " (\"" + again +
 								    "\"), joinable " + (joinable ? "yes" : "no"));
 							}
-							const auto t0 = std::chrono::steady_clock::now();
+							const auto t0 = RTE::SteadyClock::now();
 							service.Destroy();
-							const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+							const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - t0).count();
 							if (ms > 2000) add("SC2-ice Destroy took " + std::to_string(ms) + " ms");
 							if (service.m_Worker.joinable()) add("SC2-ice worker still joinable after Destroy");
 							std::lock_guard<std::mutex> lock(service.m_Mutex);
@@ -15516,9 +15595,9 @@ namespace RTE {
 							} else if (again.find("previous match worker") == std::string::npos) {
 								add("SC2-ip second ReturnToLobby \"" + again + "\"");
 							}
-							const auto t0 = std::chrono::steady_clock::now();
+							const auto t0 = RTE::SteadyClock::now();
 							service.Destroy();
-							const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+							const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - t0).count();
 							if (ms > 2000) add("SC2-ip Destroy took " + std::to_string(ms) + " ms");
 							if (service.m_Worker.joinable()) add("SC2-ip worker still joinable after Destroy");
 						}
@@ -15919,7 +15998,7 @@ namespace RTE {
 			peer.m_Runner = std::make_unique<NetMatchRunner>();
 			peer.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
 			peer.m_State = NetMatchServiceState::Starting;
-			peer.m_AdmissionClock.Start(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()));
+			peer.m_AdmissionClock.Start(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count()));
 			NetMatchRunnerConfig& config = configs[index];
 			config.host = peer.m_IsHost;
 			config.joinAddress = peer.m_IsHost ? "" : identity;
@@ -16033,8 +16112,8 @@ namespace RTE {
 		peers[0].m_RoundStartScriptsWanted = false;
 		if (!peers[0].ReturnToLobby(&rtl)) return fail("host ReturnToLobby: " + rtl);
 		if (!peers[0].m_RoundStartScriptsWanted) return fail("a successor host's rematch did not rearm its start scripts");
-		const auto rematchAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(1200);
-		while (std::chrono::steady_clock::now() < rematchAt) {
+		const auto rematchAt = RTE::SteadyClock::now() + std::chrono::milliseconds(1200);
+		while (RTE::SteadyClock::now() < rematchAt) {
 			peers[1].PumpSessionEvents();
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
@@ -16350,13 +16429,13 @@ namespace RTE {
 			std::lock_guard<std::mutex> lock(service.m_Mutex);
 			service.m_IdentityPending = false;
 		}
-		const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(budgetMs);
+		const auto until = RTE::SteadyClock::now() + std::chrono::milliseconds(budgetMs);
 		do {
 			service.Update();
 			status = service.GetPortMapStatus();
 			if (status.done || status.mapped) break;
 			std::this_thread::sleep_for(std::chrono::milliseconds(5));
-		} while (std::chrono::steady_clock::now() < until);
+		} while (RTE::SteadyClock::now() < until);
 		if (!status.done && !status.mapped) {
 			*error = "the mapping asked for while the lobby's identity was pending never ended: enabled=" + std::to_string(status.enabled) + " done=" +
 			         std::to_string(status.done) + " mapped=" + std::to_string(status.mapped) + " error='" + status.error + "'";
@@ -16483,8 +16562,8 @@ namespace RTE {
 		service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
 		NetMatchService::RequestHostPortMap(48044, &router);
 		const auto pumpUntil = [&](uint64_t budgetMs, const std::function<bool()>& done) {
-			const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(budgetMs);
-			while (!done() && std::chrono::steady_clock::now() < until) {
+			const auto until = RTE::SteadyClock::now() + std::chrono::milliseconds(budgetMs);
+			while (!done() && RTE::SteadyClock::now() < until) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(2));
 				service.Update();
 			}
@@ -16894,8 +16973,8 @@ namespace RTE {
 			service.Update();
 		};
 		const auto pumpUntil = [&](NetMatchService& service, uint64_t budgetMs, const std::function<bool()>& done) {
-			const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(budgetMs);
-			while (!done() && std::chrono::steady_clock::now() < until) {
+			const auto until = RTE::SteadyClock::now() + std::chrono::milliseconds(budgetMs);
+			while (!done() && RTE::SteadyClock::now() < until) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(2));
 				update(service);
 			}
@@ -17031,8 +17110,8 @@ namespace RTE {
 				step = "the pending identity lost its Unlisted registration intent";
 			}
 			service.m_IdentityPending = false;
-			const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-			while (step.empty() && confirmed(service) != nlohmann::json(false) && std::chrono::steady_clock::now() < until) {
+			const auto until = RTE::SteadyClock::now() + std::chrono::milliseconds(500);
+			while (step.empty() && confirmed(service) != nlohmann::json(false) && RTE::SteadyClock::now() < until) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(2));
 				service.Update();
 			}
@@ -17390,7 +17469,7 @@ namespace RTE {
 		service.m_LobbySnapshot.members = {host, second, third};
 		NetLanDiscovery browser;
 		if (!browser.StartBrowser(error)) return false;
-		uint64_t sampleNow = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		uint64_t sampleNow = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 		const auto read = [&](const std::string& expected) {
 			const std::string readHost = occupancyHost + "-" + std::to_string(++occupancyRead);
 			service.m_LocalName = readHost;
@@ -17489,20 +17568,20 @@ namespace RTE {
 		GnsTransport host, client;
 		if (!host.StartHost(43616, error) || !client.Connect("127.0.0.1", 43616, error)) return false;
 		NetPeerId hostPeer = 0, clientPeer = 0;
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-		while (std::chrono::steady_clock::now() < deadline) {
+		const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(2);
+		while (RTE::SteadyClock::now() < deadline) {
 			for (const auto& event: host.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) hostPeer = event.peerId;
 			for (const auto& event: client.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) clientPeer = event.peerId;
 			if (hostPeer && clientPeer) break;
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
 		if (!hostPeer || !clientPeer || !client.Send(clientPeer, NetTransportLane::ControlReliable, {41, 42})) { *error = "retiring transport did not connect"; return false; }
-		const auto begin = std::chrono::steady_clock::now();
+		const auto begin = RTE::SteadyClock::now();
 		client.Stop();
-		const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+		const double elapsed = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - begin).count();
 		if (elapsed >= 16) { *error = "retiring one transport blocked the live service for " + std::to_string(elapsed) + " ms"; return false; }
 		bool delivered = false;
-		while (std::chrono::steady_clock::now() < deadline && !delivered) {
+		while (RTE::SteadyClock::now() < deadline && !delivered) {
 			for (const auto& event: host.PollEvents()) delivered |= event.type == NetTransportEventType::PacketReceived && event.bytes == std::vector<uint8_t>{41, 42};
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
@@ -17518,8 +17597,8 @@ namespace RTE {
 		struct Output { std::streambuf* previous; ~Output() { std::cout.rdbuf(previous); } } output{std::cout.rdbuf(captured.rdbuf())};
 		if (!host.StartHost(43617, error) || !client.Connect("127.0.0.1", 43617, error)) return false;
 		NetPeerId hostPeer = 0, clientPeer = 0;
-		const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-		while (std::chrono::steady_clock::now() < end) {
+		const auto end = RTE::SteadyClock::now() + std::chrono::seconds(2);
+		while (RTE::SteadyClock::now() < end) {
 			for (const auto& event: host.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) hostPeer = event.peerId;
 			for (const auto& event: client.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) clientPeer = event.peerId;
 			if (hostPeer && clientPeer && host.GetPeerConnectionInfo(hostPeer).state == 3 && client.GetPeerConnectionInfo(clientPeer).state == 3) break;
@@ -18314,7 +18393,7 @@ namespace RTE {
 	}
 
 	bool TestReplayStorageDoesNotBlockTicks(std::string* error) {
-		const auto path = std::filesystem::current_path() / ("replay-storage-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".ccreplay");
+		const auto path = std::filesystem::current_path() / ("replay-storage-" + std::to_string(RTE::SteadyClock::now().time_since_epoch().count()) + ".ccreplay");
 		struct Cleanup {
 			std::filesystem::path path;
 			~Cleanup() { std::error_code ignored; std::filesystem::remove(path, ignored); }
@@ -18799,7 +18878,7 @@ namespace RTE {
 			NetMatchService::SetAdmissionEnabled(true);
 			const auto path = std::filesystem::current_path() / "Userdata" / "refused-rejoin-selftest" / "reconnect.ticket";
 			NetMatchService::SetTicketStorePath(path.string());
-			const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 			NetH4TicketRecord ticket;
 			ticket.recordVersion = NetReconnectTicketStore::RecordVersionFor(false);
 			ticket.epoch.fill(0x31); ticket.credential.fill(0x73);
@@ -18907,7 +18986,7 @@ namespace RTE {
 				}
 				host.m_IsHost = true; host.m_LocalPeerId = 1; returning.m_LocalPeerId = 2;
 				host.m_State = returning.m_State = NetMatchServiceState::Running;
-				const uint64_t steady = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+				const uint64_t steady = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 				const uint64_t wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 				host.UpdateConnectionAuthority(steady); returning.UpdateConnectionAuthority(steady);
 				if (phase == 1 && !returning.m_Coordinator->BeginHostMigration(50)) {
@@ -18981,7 +19060,7 @@ namespace RTE {
 			return false;
 		}
 		NetMatchService client;
-		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 		client.m_ReconnectUx.NoteDropped(now, "Lost host");
 		client.m_ReconnectUx.SetRetryWindowMs(NetMatchService::c_TicketRejoinAttemptBudgetMs * NetReconnectUx::c_MaxAttempts + 300000);
 		client.m_ReconnectUx.NoteAttemptStarted(now);
@@ -19436,6 +19515,7 @@ namespace RTE {
 		if (!TestLobbyCodecDedicatedFlag(&error)) return fail(error);
 		if (!TestLobbyStateMachineHappyPath(&error)) return fail(error);
 		if (!TestLobbyKeepsTheRoundsPacketsBehindItsStart(&error)) return fail(error);
+		if (!TestLobbyIgnoresTheLastRoundsFrameGroupPackets(&error)) return fail(error);
 		if (!TestLobbyRelayAdoption(&error)) return fail(error);
 		if (!TestLiveReportDumpsSurviveBadBytes(&error)) return fail(error);
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointLuaHeap.h"
+#include "SteadyClock.h"
 #include "CheckpointBindingLease.h"
 #include "CheckpointNativeStorage.h"
 
@@ -89,7 +90,7 @@ namespace RTE::CheckpointLua {
 		/// a heap about to be collected whole and a saver copies the rest in the order they collect.
 		void CollectionOrder(std::function<uint64_t(size_t heap)> ticksUntil) { m_TicksUntilCollection = std::move(ticksUntil); }
 		bool Arm(std::array<int64_t, 7>* parts = nullptr) {
-			const auto started = std::chrono::steady_clock::now();
+			const auto started = RTE::SteadyClock::now();
 			if (!Current()) return false;
 			Status expected = Status::Prepared;
 			if (!m_Status.compare_exchange_strong(expected, Status::Arming, std::memory_order_acq_rel)) return false;
@@ -103,7 +104,7 @@ namespace RTE::CheckpointLua {
 				static const bool s_SerialArm = std::getenv("CCCP_TEST_CHECKPOINT_SERIAL_ARM") != nullptr;
 				const size_t threads = s_SerialArm ? 1 : std::min<size_t>(4, std::max<size_t>(1, m_Heaps.size()));
 				auto heaps = std::async(s_SerialArm ? std::launch::deferred : std::launch::async, [this, &byCopy, &learn, threads] {
-					const auto begun = std::chrono::steady_clock::now();
+					const auto begun = RTE::SteadyClock::now();
 					// This thread plans every heap and holds the plans' locks until all are fenced. The copies are cut into chunks
 					// of a megabyte that every arming thread takes in turn, so one large heap does not set the boundary's length;
 					// then the heaps are fenced side by side.
@@ -122,7 +123,7 @@ namespace RTE::CheckpointLua {
 							copied[index] += count;
 						}
 					}
-					const auto planned = std::chrono::steady_clock::now();
+					const auto planned = RTE::SteadyClock::now();
 					std::atomic<size_t> next{0};
 					const auto copySome = [&chunks, &next, &sessions] {
 						for (size_t at; (at = next.fetch_add(1, std::memory_order_relaxed)) < chunks.size();) sessions[chunks[at].heap].CopyPages(chunks[at].first, chunks[at].count);
@@ -133,7 +134,7 @@ namespace RTE::CheckpointLua {
 						copySome();
 						for (auto& helper: helpers) helper.get();
 					}
-					const auto copiedAt = std::chrono::steady_clock::now();
+					const auto copiedAt = RTE::SteadyClock::now();
 					const int64_t copyUs = std::chrono::duration_cast<std::chrono::microseconds>(copiedAt - planned).count();
 					if (armed) {
 						AssignArmParts(copied, threads);
@@ -148,7 +149,7 @@ namespace RTE::CheckpointLua {
 						armed = fenceSome(0);
 						for (auto& helper: helpers) armed = helper.get() && armed;
 					}
-					const auto finished = std::chrono::steady_clock::now();
+					const auto finished = RTE::SteadyClock::now();
 					const auto us = [](auto from, auto to) { return std::chrono::duration_cast<std::chrono::microseconds>(to - from).count(); };
 					m_ArmPhaseUs = {us(begun, planned), copyUs, us(copiedAt, finished)};
 					return std::pair{armed, us(begun, finished)};
@@ -156,16 +157,16 @@ namespace RTE::CheckpointLua {
 				bool nativeArmed = false;
 				std::exception_ptr failure;
 				try { nativeArmed = m_Native->Arm(); } catch (...) { failure = std::current_exception(); }
-				const auto nativeFenced = std::chrono::steady_clock::now();
+				const auto nativeFenced = RTE::SteadyClock::now();
 				const auto [heapsArmed, heapsUs] = heaps.get();
-				const auto fenced = std::chrono::steady_clock::now();
+				const auto fenced = RTE::SteadyClock::now();
 				if (failure) std::rethrow_exception(failure);
 				if (!nativeArmed || !heapsArmed) { Cancel(); return false; }
 				m_ArmSplitUs = {std::chrono::duration_cast<std::chrono::microseconds>(nativeFenced - started).count(), heapsUs};
 				for (const auto& root: m_Roots) std::memcpy(const_cast<void*>(root.view), root.source, root.bytes);
 				if (parts) {
 					(*parts)[1] = std::chrono::duration_cast<std::chrono::microseconds>(fenced - started).count();
-					(*parts)[2] = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - fenced).count();
+					(*parts)[2] = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - fenced).count();
 				}
 				m_Status.store(Status::Armed, std::memory_order_release);
 				return true;

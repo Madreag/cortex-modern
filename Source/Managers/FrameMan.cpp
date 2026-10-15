@@ -1,4 +1,5 @@
 #include "FloatingPointEnvironment.h"
+#include "SteadyClock.h"
 #include "FrameMan.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
@@ -238,6 +239,7 @@ namespace {
 		uint64_t nextCaptureTick = 60;
 		size_t eventIndex = 0;
 		double capHz = 0;
+		double unseenDisplayCapHz = 0;
 		bool settingsApplied = false;
 		double nextDrawMS = 0;
 		double drawBeginMS = 0;
@@ -261,7 +263,7 @@ namespace {
 	FeelState s_Feel;
 
 	double FeelNowMS() {
-		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+		return std::chrono::duration<double, std::milli>(RTE::SteadyClock::now().time_since_epoch()).count();
 	}
 
 	/// The feel recorder's own work on the calling thread, charged to the frame it ends in.
@@ -456,13 +458,15 @@ void FrameMan::FeelBeforePreview() {
 	    {"wraps_x", g_SceneMan.SceneWrapsX()}, {"wraps_y", g_SceneMan.SceneWrapsY()}});
 }
 
-double FrameMan::FeelCapHz() { return s_Feel.capHz; }
+double FrameMan::FeelCapHz() { return s_Feel.capHz > 0 ? s_Feel.capHz : s_Feel.unseenDisplayCapHz; }
+
+void FrameMan::SetUnseenDisplayCap(bool unseen) { s_Feel.unseenDisplayCapHz = unseen ? 60 : 0; }
 
 bool FrameMan::FeelBeginDraw() {
-	if (s_Feel.capHz > 0) {
+	if (const double capHz = FeelCapHz(); capHz > 0) {
 		const double now = FeelNowMS();
 		if (s_Feel.nextDrawMS > now) return false;
-		s_Feel.nextDrawMS = std::max(now, s_Feel.nextDrawMS) + 1000.0 / s_Feel.capHz;
+		s_Feel.nextDrawMS = std::max(now, s_Feel.nextDrawMS) + 1000.0 / capHz;
 	}
 	if (!FeelRecordingEnabled()) return true;
 	const FeelCost cost;
@@ -529,7 +533,7 @@ void FrameMan::FeelAfterPresent() {
 		    {"path", name.generic_string()}, {"capture_ms", FeelNowMS() - now}},
 		    FloatingPointEnvironment::Async(std::launch::async, [copy, path = name.string()] {
 			    // The encode's processor time is the recorder's, charged to the frame it ends in.
-			    const auto began = std::chrono::steady_clock::now();
+			    const auto began = RTE::SteadyClock::now();
 			    const int64_t cpuBefore = FrameRecorder::ThreadCpuNanoseconds();
 			    FeelState::Encoded encoded;
 			    // The screen copy is 8-bit RGB: the recorder's fastest-level writer keeps the encode off the frames' budget.
@@ -540,7 +544,7 @@ void FrameMan::FeelAfterPresent() {
 			    const int64_t cpuNs = FrameRecorder::ThreadCpuNanoseconds() - cpuBefore;
 			    HarnessCost::Charge(HarnessCost::FeelRecorder, cpuNs);
 			    encoded.cpuMs = static_cast<double>(cpuNs) / 1e6;
-			    encoded.wallMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+			    encoded.wallMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - began).count();
 			    return encoded;
 		    })});
 		s_Feel.nextCaptureTick += 60;
@@ -1068,9 +1072,9 @@ bool FrameMan::RunTextWrapSelfTest() {
 		longLine += (i % 8 == 7) ? ' ' : 'a';
 	}
 	const int narrow = font->CalculateWidth("aaa") + 1;
-	const auto t0 = std::chrono::steady_clock::now();
+	const auto t0 = RTE::SteadyClock::now();
 	const std::string gotT = SplitStringToFitWidth(longLine, narrow, true);
-	const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+	const auto us = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - t0).count();
 	check(us < 8000, "timing_4kb_narrow", "us=" + std::to_string(us) + " budget=8000 (1/10 of 80000 us tip stand-in)");
 	check(width_ok(gotT, narrow), "timing_4kb_width", "wrapped");
 
@@ -2088,7 +2092,7 @@ void FrameMan::PrepareCheckpointValues() {
 		for (const auto& [key, entry]: m_ColorTables[mode]) if (color_map == &entry.first) selected.emplace(mode, key);
 	for (auto& tables: m_ColorTables) {
 		auto owned = tables;
-		tables.swap(owned);
+		tables = std::move(owned);
 	}
 	if (selected) color_map = &m_ColorTables[selected->first].at(selected->second).first;
 }

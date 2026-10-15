@@ -57,6 +57,20 @@ namespace RTE {
 			bool refereeDecides = false;
 			// The absent seat is gone past the donor's history and hands itself to a private image.
 			bool imageReturn = false;
+			// No proposal or certificate of the subject's own return reaches it: it learns the return from the committed tail alone.
+			bool returnByTailOnly = false;
+			// The subject's machine simulates at this share of the round's rate through the fault, its catch-up included, its link up (0: off).
+			uint32_t slowPercent = 0;
+			// A second seat drops this long after the subject and stays away until the fault ends (0: none).
+			uint8_t secondSubject = 0;
+			uint64_t secondAfterMs = 0;
+			// This seat's receipts reach the others this late through the fault, its inputs on time: a member slow to hear, not to play.
+			uint8_t lateReceiptsFrom = 0;
+			uint64_t lateReceiptsMs = 0;
+			// Once the host has the subject back, its machine runs at this share of the round's rate for refaultMs from refaultAfterMs later,
+			// while it still catches up: a second hold in a new split epoch that reaches it ahead of its own frames (0: none).
+			uint32_t refaultPercent = 0;
+			uint64_t refaultAfterMs = 0, refaultMs = 0;
 		};
 		struct Wire;
 		struct Hub {
@@ -68,8 +82,11 @@ namespace RTE {
 			std::map<std::pair<uint8_t, uint8_t>, unsigned> dials;
 			bool cleanRemoteClose = true;
 			bool DuringFault() const { return now >= faultAt && now < faultEnd; }
+			uint64_t refaultAt = UINT64_MAX, refaultEnd = 0;
+			bool InRefault() const { return now >= refaultAt && now < refaultEnd; }
 			bool Split(uint8_t a, uint8_t b) const {
-				if (!DuringFault() || row.frozen || row.blackout || !row.gapMs) return false;
+				if (!DuringFault() || row.frozen || row.blackout || row.slowPercent || !row.gapMs) return false;
+				if (row.secondSubject && now >= faultAt + row.secondAfterMs && (a == row.secondSubject || b == row.secondSubject)) return true;
 				if (row.tie) return (a <= 2) != (b <= 2);
 				return a == row.subject || b == row.subject;
 			}
@@ -91,6 +108,7 @@ namespace RTE {
 			uint8_t heldSeat = 0;
 			struct Tie { uint64_t at = 0; std::vector<std::vector<uint16_t>> confirmed; std::vector<uint16_t> winner; };
 			std::map<uint64_t, Tie> ties;
+			unsigned refusedTieRequests = 0;
 			std::map<uint8_t, NetHostChangeRequest> adminReports;
 			NetHostChangeReply adminDecision;
 			uint64_t firstAdminRequestMs = UINT64_MAX;
@@ -99,6 +117,7 @@ namespace RTE {
 			uint64_t asymmetricFrame = 0;
 			uint32_t asymmetricVoters = 0;
 			uint32_t asymmetricDropped = 0, asymmetricResent = 0;
+			uint32_t droppedReturns = 0;
 			bool asymmetricReleased = false;
 			// Signed wire decisions name the actual substituted frame range;
 			// a prepared bridge may exist before the display reaches that range.
@@ -263,6 +282,8 @@ namespace RTE {
 					}
 				}
 				if (hub.row.receiptGap && NetHostMigrationCodec::Decode(bytes, key, decision) && RemoveReceiptGap(decision, delivered)) return true;
+				if (hub.row.lateReceiptsFrom == owner && hub.DuringFault() && NetHostMigrationCodec::Decode(bytes, key, decision) &&
+				    decision.type == NetHostMigrationMessageType::PeerReceipt) sessionDelay = hub.row.lateReceiptsMs;
 #if __has_include("NetPeerSessionWire.h")
 				// The first frame requests are unavailable for one second. Sender
 				// receipt repair must keep the human inputs accepted through that gap.
@@ -289,6 +310,9 @@ namespace RTE {
 						}
 					}(hub, decision);
 				}
+				if (hub.row.returnByTailOnly && other->owner == hub.row.subject && NetHostMigrationCodec::Decode(bytes, key, decision) &&
+				    (decision.type == NetHostMigrationMessageType::PeerBridge || decision.type == NetHostMigrationMessageType::PeerBridgeCommit) && decision.preparedFrame == 1 &&
+				    std::find(decision.members.begin(), decision.members.end(), hub.row.subject) != decision.members.end()) { ++hub.droppedReturns; return true; }
 				unsigned asymmetric = 0;
 				if (hub.row.asymmetricBridge && hub.DuringFault()) {
 					NetHostMigrationMessage packet; NetHash32 key; key.fill(0x39);
@@ -340,13 +364,21 @@ namespace RTE {
 		struct World {
 			uint64_t applied = 0;
 			std::map<int64_t, int64_t> positions;
+			// The seats this world's simulation handed to the AI: a hand-over or hand-back is a simulated event like any input.
+			std::set<uint8_t> aiSeats;
+			std::map<uint64_t, std::string> aiAt; //!< The AI-held seats at each displayed frame, named when two worlds differ.
 			std::map<uint64_t, NetHash32> hashes;
 			bool Apply(const NetLockstepReadyFrame& ready, std::string& error) {
 				if (ready.frame != applied + 1) { error = "a displayed frame was skipped or undone: expected=" + std::to_string(applied + 1) + " actual=" + std::to_string(ready.frame); return false; }
 				for (const auto* inputs: {&ready.localFrames, &ready.remoteFrames}) for (const auto& input: *inputs) positions[input.actorUniqueID] += input.analogMoveX;
+				for (uint8_t peer: ready.reclaimedPeerIds) aiSeats.erase(peer);
+				for (uint8_t peer: ready.aiHeldPeerIds) aiSeats.insert(peer);
 				applied = ready.frame;
 				std::string state = std::to_string(applied);
 				for (const auto& [actor, position]: positions) state += ":" + std::to_string(actor) + ":" + std::to_string(position);
+				std::string ai;
+				for (uint8_t peer: aiSeats) ai += (ai.empty() ? "" : ",") + std::to_string(peer);
+				if (!ai.empty()) { state += ":ai" + ai; aiAt[applied] = ai; }
 				hashes[applied] = NetIdentity::HashCanonicalText("session-plane-fixture", {{"state", state}}); return true;
 			}
 		};
@@ -374,6 +406,13 @@ namespace RTE {
 				if (hub.row.internet) config.frameTieReferee = [&hub, peer](const auto& request) {
 					Reply reply; reply.state = Reply::State::Waiting;
 					if (!hub.DirectoryReachable(peer)) return reply;
+					// The directory's own checks: a tie names every retained seat as an owner, two or four of them, and an even half.
+					std::vector<uint16_t> retained;
+					for (uint16_t seat = 1; seat <= hub.row.seats; ++seat) retained.push_back(seat);
+					const auto sorted = [](const std::vector<uint16_t>& seats) { return std::is_sorted(seats.begin(), seats.end()) && std::adjacent_find(seats.begin(), seats.end()) == seats.end(); };
+					if (request.owners != retained || (retained.size() != 2 && retained.size() != 4) || !sorted(request.members) || request.members.size() * 2 != request.owners.size() ||
+					    !std::includes(request.owners.begin(), request.owners.end(), request.members.begin(), request.members.end()) ||
+					    (!request.queryOnly && std::find(request.members.begin(), request.members.end(), peer) == request.members.end())) { ++hub.refusedTieRequests; return reply; }
 					if (request.queryOnly && !hub.ties.contains(request.frame)) return reply;
 					auto [found, inserted] = hub.ties.try_emplace(request.frame);
 					auto& tie = found->second;
@@ -436,6 +475,7 @@ namespace RTE {
 			std::map<uint8_t, uint64_t> continuityFrom;
 			uint64_t substitutes = 0, continuityFrames = 0, aiFrames = 0, hostChanges = 0, firstLostPressMs = UINT64_MAX;
 			uint64_t shortGapSubstitutes = 0;
+			std::string wronglyHeld;
 			bool Start(const Case& row, std::string& error) {
 				hub.row = row; hub.faultEnd = hub.faultAt + (row.steadyMs ? row.steadyMs : row.gapMs);
 				worlds.resize(row.seats); committed.resize(row.seats); credits.resize(row.seats); queued.resize(row.seats); waitAt.resize(row.seats);
@@ -483,7 +523,8 @@ namespace RTE {
 				if (hub.row.refereeDecides) return hub.heldSeat != 0 && peer == hub.heldSeat;
 				if (hub.row.internet && hub.row.directoryDown) return true;
 				if (hub.row.seats == 2 && (!hub.row.internet || hub.row.directoryBoth)) return peer != 1;
-				return hub.row.tie ? peer >= 3 : peer == hub.row.subject;
+				const bool second = hub.row.secondSubject && peer == hub.row.secondSubject;
+				return hub.row.tie ? peer >= 3 || second : peer == hub.row.subject || second || peer == hub.row.lateReceiptsFrom;
 			}
 			bool CheckCommittedInputs(const NetLockstepReadyFrame& ready, uint8_t observer, std::string& error) {
 				if (IsAffected(observer) || !hub.row.gapMs) return true;
@@ -571,7 +612,9 @@ namespace RTE {
 						if (hub.now < startupResumeAt[id - 1]) continue;
 					}
 					if (hub.row.frozen && id == hub.row.subject && hub.DuringFault()) { credits[id - 1] = 0; continue; }
-					credits[id - 1] += (CatchingUp(peer) ? c_TestCatchUpRate : 1) / c_TestTickMs;
+					const bool refault = hub.row.refaultPercent && id == hub.row.subject && hub.InRefault();
+					const bool slowed = refault || (hub.row.slowPercent && id == hub.row.subject && hub.DuringFault());
+					credits[id - 1] += (slowed ? (refault ? hub.row.refaultPercent : hub.row.slowPercent) / 100.0 : CatchingUp(peer) ? c_TestCatchUpRate : 1) / c_TestTickMs;
 					credits[id - 1] = std::min(credits[id - 1], 6.0);
 					while (credits[id - 1] >= 1) {
 						const uint64_t next = world.applied + 1;
@@ -600,6 +643,8 @@ namespace RTE {
 						if (!CheckCommittedInputs(ready, id, error) || !world.Apply(ready, error)) return false;
 						if (hub.row.captureFrames) committed[id - 1][ready.frame] = ready;
 						peer.FinishSimulationTick(ready.frame); credits[id - 1] -= 1;
+						// What the tick cost this machine, as the engine reports it: a light tick, or a slow machine's whole share of its rate.
+						peer.NoteLocalTickCost(ready.frame, slowed ? c_TestTickMs * 100.0 / hub.row.slowPercent : 1.0);
 						if (displayedAt[id - 1] && hub.DuringFault()) blackoutGap[id - 1] = std::max(blackoutGap[id - 1], hub.now - displayedAt[id - 1]);
 						displayedAt[id - 1] = hub.now;
 						if (!firstDisplayedAt[id - 1]) firstDisplayedAt[id - 1] = hub.now;
@@ -620,14 +665,35 @@ namespace RTE {
 				if (hub.row.refereeDecides && !hub.heldSeat)
 					for (uint8_t id = 1; id <= hub.row.seats && !hub.heldSeat; ++id)
 						for (const auto& [seat, at]: Bridges(*peers[id - 1])) if (seat != id) { hub.heldSeat = seat; break; }
+				// A seat is held only for its own lateness: one that keeps the round's rate on its own link is never held for another's.
+				if (!hub.row.tie && !hub.row.partition && !hub.row.refereeDecides && !(hub.row.internet && hub.row.directoryDown) && wronglyHeld.empty())
+					for (uint8_t id = 1; id <= hub.row.seats; ++id)
+						for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
+							if (IsAffected(seat) || seat == hub.ReturningSeat() || !(Bridges(*peers[id - 1]).contains(seat) || peers[id - 1]->HasHeldAISeat(seat))) continue;
+							wronglyHeld = "peer " + std::to_string(id) + " held seat " + std::to_string(seat) + " at " + std::to_string(hub.now) + " ms (fault at " +
+							              std::to_string(hub.faultAt) + " ms) while only seat " + std::to_string(hub.row.subject) + " lagged";
+						}
 				const uint64_t common = std::min_element(worlds.begin(), worlds.end(), [](const World& a, const World& b) { return a.applied < b.applied; })->applied;
 				if (common) {
-					for (const auto& world: worlds) if (world.hashes.at(common) != worlds[0].hashes.at(common)) { error = "return hashes differ at displayed frame " + std::to_string(common); return false; }
+					for (const auto& world: worlds) if (world.hashes.at(common) != worlds[0].hashes.at(common)) {
+						error = "return hashes differ at displayed frame " + std::to_string(common) + ":";
+						for (size_t index = 0; index < worlds.size(); ++index) {
+							const auto ai = worlds[index].aiAt.find(common);
+							error += " peer " + std::to_string(index + 1) + " AI seats [" + (ai == worlds[index].aiAt.end() ? std::string() : ai->second) + "]";
+						}
+						return false;
+					}
+				}
+				if (hub.row.refaultPercent && hub.refaultAt == UINT64_MAX && hub.now >= hub.faultEnd &&
+				    !Bridges(*peers[0]).contains(hub.row.subject) && !peers[0]->HasHeldAISeat(hub.row.subject)) {
+					hub.refaultAt = hub.now + hub.row.refaultAfterMs;
+					hub.refaultEnd = hub.refaultAt + hub.row.refaultMs;
 				}
 				if (hub.now >= hub.faultEnd) {
 					const uint64_t highest = std::max_element(worlds.begin(), worlds.end(), [](const World& a, const World& b) { return a.applied < b.applied; })->applied;
 					for (uint8_t id = 1; id <= hub.row.seats; ++id) if (!caughtAt[id - 1] && worlds[id - 1].applied + 1 >= highest && common > 0 &&
-					    !peers[id - 1]->HasHeldAISeat(hub.ReturningSeat()) && !Bridges(*peers[id - 1]).contains(hub.ReturningSeat())) caughtAt[id - 1] = hub.now;
+					    !peers[id - 1]->HasHeldAISeat(hub.ReturningSeat()) && !Bridges(*peers[id - 1]).contains(hub.ReturningSeat()) &&
+					    (!hub.row.secondSubject || (!peers[id - 1]->HasHeldAISeat(hub.row.secondSubject) && !Bridges(*peers[id - 1]).contains(hub.row.secondSubject)))) caughtAt[id - 1] = hub.now;
 				}
 				++hub.now; return true;
 			}
@@ -638,7 +704,17 @@ namespace RTE {
 			bool RunStarted(const Case& row, std::string& error) {
 				const uint64_t end = hub.faultEnd + (row.gapMs > 5000 ? row.gapMs / 2 : 0) + c_TestReturnAllowanceMs + 4000 + row.postReturnMs;
 				while (hub.now <= end) if (!Step(error)) return false;
+				if (row.refaultPercent && !hub.refaultEnd) { error = "the subject never came back, so its second slowdown never began"; return false; }
+				while (hub.refaultEnd && hub.now <= hub.refaultEnd + c_TestReturnAllowanceMs + 4000) if (!Step(error)) return false;
 				if (row.asymmetricBridge && row.asymmetricBridge < 3 && !hub.asymmetricReleased) { error = "the asymmetric input lever did not force both pending bridge votes"; return false; }
+				if (row.returnByTailOnly && !hub.droppedReturns) { error = "the tail-only lever withheld no proposal or certificate of the subject's return"; return false; }
+				// A hold ends once: every peer's certified history names one return frame for it.
+				for (const auto& [seat, boundaries]: hub.bridgeBoundaries)
+					for (auto at = boundaries.begin(); at != boundaries.end() && std::next(at) != boundaries.end(); ++at)
+						if (!at->second && !std::next(at)->second) {
+							error = "one hold of seat " + std::to_string(seat) + " was certified to return at two frames, " + std::to_string(at->first) + " and " + std::to_string(std::next(at)->first);
+							return false;
+						}
 				const uint32_t requesters = ((1U << row.seats) - 1) & ~(1U << (row.subject - 1)) & ~(1U << 2);
 				if (row.asymmetricBridge == 3 && (hub.asymmetricDropped != requesters || hub.asymmetricResent == 0)) { error = "the lost-forward lever did not recover an accepted input from its surviving witness"; return false; }
 				// Check every unaffected consumer before a missing return can hide its wait.
@@ -648,6 +724,18 @@ namespace RTE {
 						error = "non-lagging peer " + std::to_string(id) + " stalled " + std::to_string(maxWait[id - 1]) + "ms past its bound"; return false;
 					}
 				}
+				// A machine slower than the others may cost them at most half a tick a second while they run the round's rate.
+				if (row.slowPercent) for (uint8_t id = 1; id <= row.seats; ++id) {
+					if (IsAffected(id)) continue;
+					const double tps = 1000.0 * static_cast<double>(paceEnd[id - 1] - paceBegin[id - 1]) / static_cast<double>(row.gapMs);
+					if (tps < 59.5) {
+						error = "peer " + std::to_string(id) + " ran " + std::to_string(tps) + " ticks/s while seat " + std::to_string(row.subject) + "'s machine ran at " +
+						        std::to_string(row.slowPercent) + "% of the round's rate";
+						return false;
+					}
+				}
+				if (!wronglyHeld.empty()) { error = "a seat was held for another's lateness: " + wronglyHeld; return false; }
+				if (hub.refusedTieRequests) { error = std::to_string(hub.refusedTieRequests) + " tie check-ins the directory would refuse: they did not name every retained seat and an even half"; return false; }
 				if (row.refereeDecides && !hub.heldSeat) { error = "the outage held no seat: both halves stalled through it"; return false; }
 				if (row.imageReturn && !imageAt[hub.heldSeat - 1]) { error = "the absent seat never handed itself to a private image after the donor's history ran out"; return false; }
 				for (uint8_t id = 1; id <= row.seats; ++id) {
@@ -664,7 +752,7 @@ namespace RTE {
 					}
 					const uint8_t held = row.refereeDecides ? hub.heldSeat : row.seats == 2 && (!row.internet || row.directoryBoth) ? 2 : row.subject;
 					if (peers[id - 1]->HasHeldAISeat(held) || Bridges(*peers[id - 1]).contains(held)) { error = "the returning human seat stayed bridged after catch-up"; return false; }
-					if (row.gapMs <= 3000 && caughtAt[id - 1] > hub.faultEnd + c_TestReturnAllowanceMs) { error = "return exceeded the spike plus its catch-up allowance"; return false; }
+					if (row.gapMs <= 3000 && !row.refaultPercent && caughtAt[id - 1] > hub.faultEnd + c_TestReturnAllowanceMs) { error = "return exceeded the spike plus its catch-up allowance"; return false; }
 				}
 				if (row.gapMs == 150 && shortGapSubstitutes) { error = "a spike inside the input delay committed a substitute"; return false; }
 				if (row.gapMs == 150 && maxWait[row.subject - 1]) { error = "a spike inside the input delay hitched the spiking player's view"; return false; }
@@ -1397,9 +1485,23 @@ namespace RTE {
 		const auto gap = [&](const char* name, uint8_t subject, uint64_t ms) { Case row{name}; row.subject = subject; row.gapMs = ms; return row; };
 		rows.push_back(gap("peer_returns_2s", 2, 2000)); rows.push_back(gap("peer_returns_8s", 2, 8000)); rows.push_back(gap("peer_returns_40s", 2, 40000));
 		auto frozen = gap("peer_frozen_10s_keepalives", 2, 10000); frozen.frozen = true; rows.push_back(frozen);
+		auto tailReturn = frozen; tailReturn.name = "peer_frozen_10s_return_by_tail_only"; tailReturn.returnByTailOnly = true; rows.push_back(tailReturn);
+		auto tailReturnTwo = tailReturn; tailReturnTwo.name = "two_internet_joiner_frozen_10s_return_by_tail_only"; tailReturnTwo.seats = 2; tailReturnTwo.internet = tailReturnTwo.directoryBoth = true; rows.push_back(tailReturnTwo);
 		rows.push_back(gap("host_absent_3s", 1, 3000)); rows.push_back(gap("host_absent_20s", 1, 20000));
+		auto slowMachine = gap("joiner_machine_at_90_percent_20s", 2, 20000); slowMachine.slowPercent = 90; rows.push_back(slowMachine);
+		auto slowerMachine = gap("joiner_machine_at_80_percent_20s", 2, 20000); slowerMachine.slowPercent = 80; rows.push_back(slowerMachine);
+		auto slowHearing = gap("held_seat_and_a_member_slow_to_hear_hold_nobody_else", 2, 10000); slowHearing.lateReceiptsFrom = 3; slowHearing.lateReceiptsMs = 2000; rows.push_back(slowHearing);
+		auto farReturn = gap("one_return_for_a_held_seat_over_150ms_round_trips", 2, 10000); farReturn.rttMs = farReturn.otherRttMs = 150; rows.push_back(farReturn);
+		auto inTurn = gap("three_seats_second_joiner_drops_while_the_first_is_held", 2, 10000); inTurn.seats = 3; inTurn.secondSubject = 3; inTurn.secondAfterMs = 4000; rows.push_back(inTurn);
+		auto heldAgain = gap("two_internet_joiner_held_again_while_catching_up", 2, 3000); heldAgain.seats = 2; heldAgain.internet = heldAgain.directoryBoth = true;
+		heldAgain.refaultPercent = 70; heldAgain.refaultAfterMs = 200; heldAgain.refaultMs = 5000; rows.push_back(heldAgain);
+		auto heldUnblocked = heldAgain; heldUnblocked.name = "two_internet_joiner_held_again_while_never_blocked"; heldUnblocked.refaultPercent = 92; heldUnblocked.refaultMs = 8000; rows.push_back(heldUnblocked);
+		auto slowJoinerTwo = gap("two_internet_joiner_machine_at_80_percent_20s", 2, 20000); slowJoinerTwo.seats = 2; slowJoinerTwo.internet = true; slowJoinerTwo.slowPercent = 80; rows.push_back(slowJoinerTwo);
+		auto slowHost = gap("two_internet_host_machine_at_90_percent_20s", 1, 20000); slowHost.seats = 2; slowHost.internet = true; slowHost.slowPercent = 90; rows.push_back(slowHost);
 		auto majority = gap("partition_3_1", 4, 3000); majority.partition = true; rows.push_back(majority);
 		auto tie = gap("partition_2_2_host_tie", 3, 3000); tie.tie = tie.internet = tie.directoryBoth = true; rows.push_back(tie);
+		auto tieThenDrop = tie; tieThenDrop.name = "refereed_2_2_split_then_a_second_drop_in_the_same_hold"; tieThenDrop.gapMs = 10000;
+		tieThenDrop.secondSubject = 2; tieThenDrop.secondAfterMs = 4000; rows.push_back(tieThenDrop);
 		auto two = gap("two_direct_host_3s", 1, 3000); two.seats = 2; rows.push_back(two);
 		auto relay = gap("relay_link_blackout_return", 2, 8000); relay.blackout = true; rows.push_back(relay);
 		for (uint8_t subject: {2, 1}) for (uint64_t ms: {150, 400, 1500, 3000}) {
@@ -1433,7 +1535,7 @@ namespace RTE {
 		pastHistory.rttMs = pastHistory.otherRttMs = 24; rows.push_back(pastHistory);
 		int passed = 0, failed = 0;
 		const char* selected = std::getenv("CC_TEST_SESSION_PLANE_CASE");
-		std::cout << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : 33) << std::endl;
+		std::cout << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 3) << std::endl;
 		for (const auto& row: rows) {
 			if (selected && std::string_view(selected) != row.name) continue;
 			std::string error; Fixture fixture; bool ok = fixture.Run(row, error);

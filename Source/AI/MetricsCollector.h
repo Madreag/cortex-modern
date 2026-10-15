@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SimChecksum.h"
+#include "SteadyClock.h"
 #include "Singleton.h"
 
 #include <chrono>
@@ -195,7 +196,7 @@ namespace RTE {
 		std::string                                   m_Scenario;
 		uint64_t                                      m_Seed = 0;
 		uint64_t                                      m_TickCount = 0;
-		std::chrono::steady_clock::time_point         m_StartWall;
+		RTE::SteadyClock::time_point         m_StartWall;
 
 		struct Result {
 			bool passed = false;

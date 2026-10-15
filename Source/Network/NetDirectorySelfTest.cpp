@@ -1,4 +1,5 @@
 #include "NetDirectoryClient.h"
+#include "SteadyClock.h"
 #include "NetDirectoryCodec.h"
 #include "NetDirectorySignalChannel.h"
 #include "NetHttpClient.h"
@@ -1137,9 +1138,9 @@ namespace RTE {
 				client.Start("GET", url, {}, "", "");
 				std::this_thread::sleep_for(std::chrono::milliseconds(200));
 				const bool inFlight = client.Poll() == NetHttpClient::PollResult::Pending;
-				const auto begin = std::chrono::steady_clock::now();
+				const auto begin = RTE::SteadyClock::now();
 				client.Cancel();
-				const long long elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count();
+				const long long elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - begin).count();
 				std::cout << "[net-directory-selftest] http client cancel url=" << url << " in_flight=" << (inFlight ? "true" : "false") << " cancel_ms=" << elapsed << std::endl;
 				if (elapsed >= 500) {
 					*error = "Cancel() took " + std::to_string(elapsed) + " ms for " + url;
@@ -1245,10 +1246,10 @@ namespace RTE {
 					client->Start("GET", "https://127.0.0.1:1/", {}, "", "");
 					refused.push_back(std::move(client));
 				}
-				const auto joinDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+				const auto joinDeadline = RTE::SteadyClock::now() + std::chrono::seconds(120);
 				for (int i = 0; i < 200; ++i) {
 					NetHttpClient& client = *refused[i];
-					while (client.Poll() == NetHttpClient::PollResult::Pending && std::chrono::steady_clock::now() < joinDeadline) {
+					while (client.Poll() == NetHttpClient::PollResult::Pending && RTE::SteadyClock::now() < joinDeadline) {
 						std::this_thread::sleep_for(std::chrono::milliseconds(1));
 					}
 					const NetHttpClient::Response response = client.GetResponse();
@@ -1279,8 +1280,8 @@ namespace RTE {
 						client.Cancel();
 						finished.store(true);
 					});
-					const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
-					while (!finished.load() && std::chrono::steady_clock::now() < deadline) {
+					const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(15);
+					while (!finished.load() && RTE::SteadyClock::now() < deadline) {
 						std::this_thread::sleep_for(std::chrono::milliseconds(10));
 					}
 					if (!finished.load()) {
@@ -2328,7 +2329,7 @@ namespace RTE {
 			}
 
 			uint64_t SteadyMs() {
-				return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+				return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 			}
 
 			const char* kSecretToken = "tok-report-secret-5e1d";
@@ -2654,9 +2655,9 @@ namespace RTE {
 					s.client.Update(base);
 					s.client.Update(base + 5000);
 					s.client.Update(base + 5000); // the interval heartbeat is throttled until base+35000
-					const auto begin = std::chrono::steady_clock::now();
+					const auto begin = RTE::SteadyClock::now();
 					s.client.Shutdown();
-					const long long elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count();
+					const long long elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - begin).count();
 					const json report = json::parse(s.client.BuildReportJson());
 					if (CountRequests(s, "DELETE", kSessionPath) != 0 || report.value("deletes", json()) != json(0)) {
 						note("shutdown-429: Shutdown sent or counted a DELETE inside retry_after");
@@ -2811,6 +2812,21 @@ namespace RTE {
 					}
 					if (NetDirectoryClient::JoinRefusalText(netMerged[1]) != "Cannot join this game: identity") {
 						note("identity-mismatch refusal read \"" + NetDirectoryClient::JoinRefusalText(netMerged[1]) + "\"");
+					}
+					// A computer that cannot read its own game files proves no game compatible: every row names the cause the player can fix.
+					std::vector<NetDirectoryClient::GameRow> unread = netMerged;
+					const std::string cause = "the game is installed too deep in folders for Windows: Deep.rte/Scenes reaches 270 characters where Windows allows 257";
+					NetDirectoryClient::RefuseForLocalIdentity(unread, cause);
+					for (const NetDirectoryClient::GameRow& row: unread) {
+						if (row.joinable || row.reason != "local files") {
+							note("a row read joinable=" + std::to_string(row.joinable) + " reason=\"" + row.reason + "\" though this computer could not read its game files");
+						}
+					}
+					if (NetDirectoryClient::JoinRefusalText(unread[0]) != "Cannot join this game: your game files could not be read - " + cause + ".") {
+						note("unreadable-files refusal read \"" + NetDirectoryClient::JoinRefusalText(unread[0]) + "\"");
+					}
+					if (NetDirectoryClient::JoinRefusalText(unread[1], true) != "Cannot join: your game files could not be read") {
+						note("unreadable-files brief refusal read \"" + NetDirectoryClient::JoinRefusalText(unread[1], true) + "\"");
 					}
 				}
 
@@ -3863,9 +3879,9 @@ namespace RTE {
 				}
 				standby->SetPolling(true, 0);
 				standby->Update(0);
-				const auto begin = std::chrono::steady_clock::now();
+				const auto begin = RTE::SteadyClock::now();
 				standby.reset();
-				const long long heldMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count();
+				const long long heldMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - begin).count();
 				CloseSocket(listener);
 				if (heldMs >= 500) {
 					*error = "migration standby: dropping a successor's host end with its poll in flight held the thread " + std::to_string(heldMs) + " ms";

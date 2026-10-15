@@ -1,4 +1,5 @@
 #include "CaptureSentinel.h"
+#include "SteadyClock.h"
 #include "CheckpointArchive.h"
 #include "CheckpointImage.h"
 #include "Constants.h"
@@ -710,6 +711,24 @@ static void ClearRejectedPurchaseView(Activity& activity, const NetGameDeliverCa
 	activity.ClearPreviewedPurchase(player, delivery.team, delivery.cost);
 }
 
+// A seat's own units - its brain and what its player bought - belong to that player's machine under the human-team policies, so
+// the player takes them without a handoff and a teammate's machine never produces them; the test policy that deals actors out by
+// id keeps its own rule.
+static bool SeatsOwnTheirUnits() {
+	const auto config = ScenarioRunner::GetLockstepMatchConfig();
+	return config && config->ownershipPolicy != NetActorOwnershipPolicy::UniqueIdModPeerCount;
+}
+
+// Every peer applies the purchase at the same committed frame, so every peer records the buyer as its craft's and passengers' owner.
+static void SeedPurchaseOwner(const ACraft& craft, uint8_t buyerPeerId, int team) {
+	if (buyerPeerId == 0 || !ScenarioRunner::IsLockstepControllerSyncActive() || !SeatsOwnTheirUnits()) return;
+	const uint8_t seededTeam = team < 0 ? uint8_t{0} : static_cast<uint8_t>(team);
+	NetActorOwnership::SeedOwner(static_cast<int64_t>(craft.GetUniqueID()), buyerPeerId, seededTeam);
+	for (const MovableObject* item: *craft.GetInventory()) {
+		if (const auto* passenger = dynamic_cast<const Actor*>(item)) NetActorOwnership::SeedOwner(static_cast<int64_t>(passenger->GetUniqueID()), buyerPeerId, seededTeam);
+	}
+}
+
 static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 	if (readyFrame.localCommands.empty() && readyFrame.remoteCommands.empty()) {
 		return;
@@ -861,6 +880,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				craft->SetControllerMode(Controller::CIM_AI);
 				craft->SetAIMode(Actor::AIMODE_DELIVER);
 				craft->SetNetworkDelivery(true);
+				SeedPurchaseOwner(*craft, command.senderPeerId, delivery->team);
 				g_MovableMan.AddActor(craft);
 				// One line per applied delivery on every peer, so the peers' logs compare directly.
 				std::cout << "[net-match] deliver command host applied tick=" << readyFrame.frame << " team=" << delivery->team << " order=" << command.sequence << " items=" << loaded << " peer=" << static_cast<int>(command.senderPeerId) << std::endl;
@@ -1989,7 +2009,7 @@ void MovableMan::CapturePhysicsHistory(uint64_t tick, uint64_t phase) const {
 		if (count > 0) flush(".desync");
 		return;
 	}
-	const auto entered = std::chrono::steady_clock::now();
+	const auto entered = RTE::SteadyClock::now();
 	const auto countObject = [&](auto&& self, const MovableObject* mo) -> size_t {
 		size_t result = 1;
 		if (const auto* rotating = dynamic_cast<const MOSRotating*>(mo)) {
@@ -2067,7 +2087,7 @@ void MovableMan::CapturePhysicsHistory(uint64_t tick, uint64_t phase) const {
 	const auto cohort = [&](const auto& objects, uint64_t kind) { for (MovableObject* mo: objects) record(record, mo, kind); };
 	cohort(CheckpointActorValues().m_Actors, 0); cohort(CheckpointLooseValues().m_Items, 1); cohort(CheckpointLooseValues().m_Particles, 2);
 	cohort(CheckpointActorValues().m_AddedActors, 3); cohort(CheckpointLooseValues().m_AddedItems, 4); cohort(CheckpointLooseValues().m_AddedParticles, 5);
-	const int64_t elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - entered).count();
+	const int64_t elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - entered).count();
 	maximumUs = std::max(maximumUs, elapsedUs); totalUs += elapsedUs; ++captures;
 	if (phase != 3) return;
 	if (tick % 600 == 0) {
@@ -2750,11 +2770,11 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 		std::map<std::string, std::pair<int, double>> profile;
 		const auto timed = [&profile, profileCapture](const MovableObject* mo, auto&& fn) {
 			if (!profileCapture) { fn(); return; }
-			const auto start = std::chrono::steady_clock::now();
+			const auto start = RTE::SteadyClock::now();
 			fn();
 			auto& slot = profile[mo->GetClassName() + " " + mo->GetPresetName()];
 			++slot.first;
-			slot.second += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+			slot.second += std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - start).count();
 		};
 		for (const Actor* actor: CheckpointActorValues().m_Actors) {
 			timed(actor, [&] { out.actors.push_back(dynamic_cast<Actor*>(actor->Clone())); });
@@ -2807,7 +2827,7 @@ bool MovableMan::WorldSnapshotRing::CaptureCommitted(uint64_t tick) {
 	    (m_Entries.back().tick == UINT64_MAX || tick != m_Entries.back().tick + 1)) ||
 	    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != tick) return false;
 	auto snapshot = std::make_unique<WorldSnapshot>();
-	const auto start = std::chrono::steady_clock::now();
+	const auto start = RTE::SteadyClock::now();
 	m_Cache.Begin();
 	bool captured = false;
 	{
@@ -2816,7 +2836,7 @@ bool MovableMan::WorldSnapshotRing::CaptureCommitted(uint64_t tick) {
 	}
 	m_Cache.RetireUnused();
 	const bool stored = captured && StoreCommitted(tick, std::move(snapshot));
-	m_LastCaptureUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+	m_LastCaptureUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count();
 	return stored;
 }
 
@@ -3228,8 +3248,8 @@ bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::v
 	// only while a walk covers every state, so one state that cannot freeze sends the whole capture that way.
 	bool frozen = g_LuaMan.GetMasterScriptState().FrozenCaptureAvailable();
 	for (const LuaStateWrapper& state: states) frozen = frozen && state.FrozenCaptureAvailable();
-	const auto started = std::chrono::steady_clock::now();
-	const auto elapsed = [&] { return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count(); };
+	const auto started = RTE::SteadyClock::now();
+	const auto elapsed = [&] { return std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count(); };
 	if (frozen) {
 		FrozenCaptureStats stats;
 		std::vector<std::string> frozenProblems;
@@ -3297,7 +3317,7 @@ double MovableMan::KnownObjectsScope::CopyMs() {
 
 void MovableMan::KnownObjectsScope::Copy() const {
 	std::call_once(m_Copied, [this] {
-		const auto copyStart = std::chrono::steady_clock::now();
+		const auto copyStart = RTE::SteadyClock::now();
 		CaptureSentinel::NoteCreation("known-objects index", this);
 		MovableMan& manager = g_MovableMan;
 		const auto collect = [&] {
@@ -3308,7 +3328,7 @@ void MovableMan::KnownObjectsScope::Copy() const {
 		else { std::lock_guard<std::mutex> guard(manager.m_ObjectRegisteredMutex); collect(); }
 		m_ByAddress.assign(m_ByIdentity.begin(), m_ByIdentity.end());
 		std::sort(m_ByAddress.begin(), m_ByAddress.end());
-		s_KnownObjectsCopyMs = s_KnownObjectsCopyMs.load() + std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - copyStart).count();
+		s_KnownObjectsCopyMs = s_KnownObjectsCopyMs.load() + std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - copyStart).count();
 	});
 }
 
@@ -3985,6 +4005,7 @@ bool MovableMan::ApplyQueuedPurchaseDelivery(GameActivity& activity, const NetGa
 		std::cout << "[net-match] buy order did not queue: team " << delivery.team << std::endl;
 		return false;
 	}
+	SeedPurchaseOwner(*craft, senderPeerId, delivery.team);
 	std::cout << "[net-match] buy order queued: team " << delivery.team << " cost " << delivery.cost << " funds " << fundsBefore << " -> " << activity.GetTeamFunds(delivery.team) << " items " << delivery.cargo.size() << std::endl;
 	return true;
 }
@@ -7374,7 +7395,7 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 					const auto plain = [&](const std::vector<std::pair<LuaStateWrapper*, MovableObject*>>& sequence) {
 						context.order.clear();
 						for (const auto& object: objects) object->RequestSyncedUpdate();
-						const auto started = std::chrono::steady_clock::now();
+						const auto started = RTE::SteadyClock::now();
 						LuaStateWrapper* current = nullptr;
 						for (const auto& [state, mo]: sequence) {
 							if (state != current) {
@@ -7387,7 +7408,7 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 							}
 						}
 						g_LuaMan.SetThreadLuaStateOverride(nullptr);
-						const long long elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+						const long long elapsed = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 						hashFixture(context, objects);
 						return elapsed;
 					};
@@ -7411,12 +7432,12 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 				perStateSamples.reserve(c_MeasureRounds);
 				globalSamples.reserve(c_MeasureRounds);
 				for (int round = 0; round < c_MeasureRounds; ++round) {
-					const auto perStateStarted = std::chrono::steady_clock::now();
+					const auto perStateStarted = RTE::SteadyClock::now();
 					run(false);
-					perStateSamples.push_back(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - perStateStarted).count());
-					const auto globalStarted = std::chrono::steady_clock::now();
+					perStateSamples.push_back(std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - perStateStarted).count());
+					const auto globalStarted = RTE::SteadyClock::now();
 					run(true);
-					globalSamples.push_back(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - globalStarted).count());
+					globalSamples.push_back(std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - globalStarted).count());
 				}
 				std::sort(perStateSamples.begin(), perStateSamples.end());
 				std::sort(globalSamples.begin(), globalSamples.end());
@@ -7445,9 +7466,9 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 					std::vector<long long> loadGlobalSamples;
 					std::vector<long long> loadAfterDeletionSamples;
 					const auto measure = [this](bool globalOrder) {
-						const auto started = std::chrono::steady_clock::now();
+						const auto started = RTE::SteadyClock::now();
 						RunThreadedSyncedUpdatePass(globalOrder);
-						return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+						return std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 					};
 					measure(false);
 					measure(true);
@@ -8273,12 +8294,18 @@ void MovableMan::UpdateControllers() {
 	// over: the policy would otherwise re-derive it from the control mode a switch is about to change.
 	// A live claim is not the owner to return to, so the entry takes the policy's peer, not the claimant.
 	if (lockstepActive) {
-		for (const Actor* actor: CheckpointActorValues().m_Actors) {
+		std::optional<bool> seatsOwnUnits;
+		for (Actor* actor: CheckpointActorValues().m_Actors) {
 			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
 			// The ownership query normalizes a negative team to 0; the seed records the team it was resolved at.
 			const uint8_t team = actor->GetTeam() < 0 ? uint8_t{0} : static_cast<uint8_t>(actor->GetTeam());
 			if (!NetActorOwnership::HasSeededOwnerForTeam(uid, team)) {
-				NetActorOwnership::SeedOwner(uid, ScenarioRunner::GetLockstepPolicyActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()), team);
+				if (!seatsOwnUnits) seatsOwnUnits = SeatsOwnTheirUnits();
+				// A seat's brain is its own player's from its first tick, whichever teammate the team's policy names.
+				Activity* activity = *seatsOwnUnits ? g_ActivityMan.GetActivity() : nullptr;
+				const int seat = activity ? activity->IsBrainOfWhichPlayer(actor) : Players::NoPlayer;
+				const uint8_t seatPeer = seat >= Players::PlayerOne && activity->IsHumanSeat(seat) ? GameActivity::LockstepSeatPeerId(seat) : uint8_t{0};
+				NetActorOwnership::SeedOwner(uid, seatPeer ? seatPeer : ScenarioRunner::GetLockstepPolicyActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()), team);
 			}
 		}
 	}

@@ -28,13 +28,15 @@ GUIManager::GUIManager(GUIInput* input) {
 }
 
 GUIManager::~GUIManager() {
+	// A manager let go of without a Clear takes its drawn panels too: their addresses can be reused.
+	ForgetPanelDraws(this);
 	delete m_pTimer;
 	m_pTimer = nullptr;
 }
 
 void GUIManager::Clear() {
 	// The panels this manager drew are gone with it; their addresses can be reused.
-	ClearPanelDrawRecord();
+	ForgetPanelDraws(this);
 	m_PanelList.clear();
 	m_CapturedPanel = nullptr;
 	m_MouseOverPanel = nullptr;

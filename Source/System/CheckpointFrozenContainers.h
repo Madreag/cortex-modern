@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <typeinfo>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -87,6 +88,12 @@ namespace RTE {
 			return Read(static_cast<const Links*>(node))->next;
 		}
 		inline const void* HashNext(const void* node) { return *Read(static_cast<const void* const*>(node)); }
+		// A container in an object the boundary copied whole keeps its links in storage only through a retained allocator.
+		template<class Container> void RequireStoredLinks(const Container& source) {
+			if (!CheckpointNativeStorage::InBoundaryRoot(&source)) return;
+			if constexpr (requires { source.get_allocator().Retained(); }) { if (source.get_allocator().Retained()) return; }
+			CheckpointNativeStorage::NoteStartupLinks(&source, typeid(Container).name());
+		}
 #ifdef _LIBCPP_VERSION
 		template<class T> struct DequePosition { const T* const* map; const T* value; };
 		template<class T, class A> DequePosition<T> Deque(const std::deque<T, A>& source) {
@@ -214,6 +221,7 @@ namespace RTE {
 		CheckpointFrozenRange<T> values(source.size());
 		if (!CheckpointNativeStorage::IsView(&source)) { for (const auto& value: source) values.Add(&value); return values; }
 		const CheckpointFrozenWalk walking(typeid(source));
+		CheckpointContainerDetail::RequireStoredLinks(source);
 		const auto iterator = CheckpointContainerDetail::End(source);
 		const void* end = CheckpointNativeStorage::Original(CheckpointContainerDetail::Node(iterator));
 		const void* node = CheckpointContainerDetail::ListNext(end);
@@ -231,6 +239,7 @@ namespace RTE {
 		if (!CheckpointNativeStorage::IsView(&source)) { for (const auto& value: source) values.Add(&value); return values; }
 		if (source.empty()) return values;
 		const CheckpointFrozenWalk walking(typeid(source));
+		CheckpointContainerDetail::RequireStoredLinks(source);
 		const auto iterator = CheckpointContainerDetail::End(source);
 		const void* end = CheckpointNativeStorage::Original(CheckpointContainerDetail::Node(iterator));
 #ifdef _LIBCPP_VERSION
@@ -272,6 +281,7 @@ namespace RTE {
 		if (!CheckpointNativeStorage::IsView(&source)) { for (const auto& value: source) values.Add(&value); return values; }
 		if (source.empty()) return values;
 		const CheckpointFrozenWalk walking(typeid(source));
+		CheckpointContainerDetail::RequireStoredLinks(source);
 		const auto iterator = CheckpointContainerDetail::End(source);
 		const void* end = CheckpointNativeStorage::Original(CheckpointContainerDetail::Node(iterator));
 #ifdef _MSVC_STL_VERSION

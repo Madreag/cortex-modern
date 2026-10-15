@@ -162,7 +162,7 @@ def score(roots):
         detail = {'participant': result, 'report_present': bool(report), 'placements': applies[role], 'routes': routes,
                   'path_samples': path_samples, 'path_summary': physical, 'lockstep': lock}
         details[role] = detail
-        # The match draws as single player does: every 60-tick window at the presentation's rate, as evenly (frame_pace.py).
+        # The match draws as single player does: every judged 60-tick window at the expected rate, as evenly (frame_pace.py).
         # The host blackout and the ten seconds allowed for the return after it are the blackout policy's to judge.
         drawn = detail['drawn_frames'] = frame_pace.check(text, 'lockstep', exclude=[(600, 1081 + 600 + 60)])
         require(drawn['status'] != 'NONE', role + ': no drawn-frame windows in the match')

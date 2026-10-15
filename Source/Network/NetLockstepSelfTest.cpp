@@ -1,4 +1,5 @@
 #include "NetReplayTestUtils.h"
+#include "SteadyClock.h"
 #include "NetLockstepSelfTest.h"
 #include "NetSessionPlaneSelfTest.h"
 #include <SDL3/SDL_stdinc.h>
@@ -378,6 +379,7 @@ namespace RTE {
 	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 	bool TestEveryHoldProducerWritesTheSeatLog(std::string* error);
 	bool TestAnOlderDeliveryLeavesTheNewerSeatState(std::string* error);
+	bool TestALateSimulationHandsAHeldSeatToTheAiAtItsFrame(std::string* error);
 	bool TestEveryGapStaysForASimulationBehind(std::string* error);
 	bool TestADeferredStopDoesNotExcuseASeatPastTheBound(std::string* error);
 	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
@@ -6579,9 +6581,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			ScenarioRunner::SetLockstepCoordinator(&replay);
 			ScenarioRunner::SetSessionPump([&] { if (++pumps <= c_MovingPumps) ++rejoinProgress; }, [] { return true; },
 			                               [&] { return rejoinProgress; });
-			const auto began = std::chrono::steady_clock::now();
+			const auto began = RTE::SteadyClock::now();
 			const bool drained = ScenarioRunner::DrainLockstepRelay(250, 0);
-			const auto spentMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
+			const auto spentMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - began).count();
 			ScenarioRunner::SetSessionPump(nullptr);
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			if (drained || pumps <= c_MovingPumps) {
@@ -15611,11 +15613,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					host.Complete("explicit host end from session pump");
 				}
 			});
-			const auto waitStart = std::chrono::steady_clock::now();
+			const auto waitStart = RTE::SteadyClock::now();
 			NetLockstepReadyFrame out;
 			std::string waitError;
 			const bool got = ScenarioRunner::WaitForLockstepControllerFrame(host.GetStats().nextFrame, out, &waitError);
-			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
+			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - waitStart).count();
 			ScenarioRunner::SetSessionPump(nullptr);
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			if (elapsedMs < 400) {
@@ -15703,11 +15705,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				held = held || host.AnyDroppedSeatHeld();
 				if (pumps == 900) host.Complete("explicit host end after late input and disconnect");
 			});
-			const auto waitStart = std::chrono::steady_clock::now();
+			const auto waitStart = RTE::SteadyClock::now();
 			NetLockstepReadyFrame out;
 			std::string waitError;
 			const bool got = ScenarioRunner::WaitForLockstepControllerFrame(host.GetStats().nextFrame, out, &waitError);
-			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
+			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - waitStart).count();
 			ScenarioRunner::SetSessionPump(nullptr);
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			if (pumps < 900 || !dropped || !held) {
@@ -15814,11 +15816,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				++pumps;
 				host.RequestResync("player rejoined");
 			});
-			const auto waitStart = std::chrono::steady_clock::now();
+			const auto waitStart = RTE::SteadyClock::now();
 			NetLockstepReadyFrame out;
 			std::string waitError;
 			const bool got = ScenarioRunner::WaitForLockstepControllerFrame(1, out, &waitError);
-			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
+			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - waitStart).count();
 			ScenarioRunner::SetSessionPump(nullptr);
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			if (!got || out.frame != 1) {
@@ -16519,7 +16521,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "the live settle frame did not hold peer A's NumberValue";
 				return false;
 			}
-			const auto directory = std::filesystem::temp_directory_path() / ("cc-value-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-value-replay-" + std::to_string(RTE::SteadyClock::now().time_since_epoch().count()));
 			std::error_code created;
 			std::filesystem::create_directories(directory, created);
 			if (created) {
@@ -16643,7 +16645,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "the live ready frame did not keep both peers' bindings";
 				return false;
 			}
-			const auto directory = std::filesystem::temp_directory_path() / ("cc-binding-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-binding-replay-" + std::to_string(RTE::SteadyClock::now().time_since_epoch().count()));
 			std::error_code created;
 			std::filesystem::create_directories(directory, created);
 			if (created) {
@@ -16698,7 +16700,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			NetGamePlayerBindings binding;
 			binding.players[0].active = true;
 			std::vector<NetGameCommand> commands{{2, binding}, {1, binding}, {3, binding}, {1, NetGameSeatHold{3, 0, 9, 1, 40}}};
-			const auto directory = std::filesystem::temp_directory_path() / ("cc-trailer-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-trailer-replay-" + std::to_string(RTE::SteadyClock::now().time_since_epoch().count()));
 			std::error_code created;
 			std::filesystem::create_directories(directory, created);
 			const auto path = directory / "match.ccreplay";
@@ -16737,7 +16739,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			// Two senders of 300 controllers each make one legal tick of 600: the record keeps all of them and reads them back.
 			std::vector<ControllerFrame> frames;
 			for (int64_t actor = 1; actor <= 600; ++actor) frames.push_back(MakeFrame(actor, 1));
-			const auto directory = std::filesystem::temp_directory_path() / ("cc-merged-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-merged-replay-" + std::to_string(RTE::SteadyClock::now().time_since_epoch().count()));
 			std::error_code created;
 			std::filesystem::create_directories(directory, created);
 			const auto path = directory / "match.ccreplay";
@@ -22377,6 +22379,40 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// The held seat's own peer, its simulation behind its commits, already holds the seat's return at 200 when it delivers the hold at 100:
+	// the frame at 100 still hands the seat to the AI, as it did on every peer that played it in time, and the frame at 200 hands it back.
+	bool TestALateSimulationHandsAHeldSeatToTheAiAtItsFrame(std::string* error) {
+		NetLockstepCoordinator late;
+		auto config = MakeCoordinatorConfig(2, 1, 0x9A21, 4, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 1; config.roundId = 44; config.authorityPeerId = 1;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A21);
+		config.resumeFromSnapshot = true;
+		late.m_Config = config; late.m_State = NetLockstepState::Running; late.m_RoundId = 44;
+		late.m_RemotePeerIds = {1, 3};
+		late.m_HostOrderedFrame = 200;
+		const NetGameSeatReclaim back{2, 0, 2, 2, 200, 4, 206};
+		late.m_ReclaimTransactions[2] = back;
+		NetLockstepReadyFrame held, returned;
+		held.frame = 100;
+		held.remoteCommands.push_back({1, NetGameSeatHold{2, 0, 1, 1, 100}});
+		returned.frame = 200;
+		returned.remoteCommands.push_back({1, back});
+		late.m_ReadyFrames.push_back(held);
+		late.m_ReadyFrames.push_back(returned);
+		NetLockstepReadyFrame first, second;
+		const bool popped = late.PopReadyFrame(first) && late.PopReadyFrame(second);
+		const auto names = [](const std::vector<uint8_t>& peers) { std::string text; for (uint8_t peer: peers) text += std::to_string(peer); return text; };
+		if (!popped) { *error = "a-late-simulation-hands-a-held-seat-to-the-ai-at-its-frame: the delivered hold and return could not be popped"; return false; }
+		if (names(first.aiHeldPeerIds) != "2") {
+			*error = "a-late-simulation-hands-a-held-seat-to-the-ai-at-its-frame: with its return at 200 already known, the hold at 100 handed seats [" +
+			         names(first.aiHeldPeerIds) + "] to the AI: the seat played on as a human where every peer that played 100 in time gave it to the AI";
+			return false;
+		}
+		if (names(second.reclaimedPeerIds) != "2") { *error = "a-late-simulation-hands-a-held-seat-to-the-ai-at-its-frame: the return at 200 handed back seats [" + names(second.reclaimedPeerIds) + "]"; return false; }
+		return true;
+	}
+
 	bool TestEveryGapStaysForASimulationBehind(std::string* error) {
 		// A survivor's simulation is paused at 99 while its plane commits seat 2's hold at 100, return at 160 (gap through 165), hold at 167,
 		// return at 200 (gap through 205) and hold at 203: the frames it has yet to apply keep every gap they fell in.
@@ -26484,13 +26520,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			volatile uint64_t sink = 0;
 			for (int sample = 0; sample < 7; ++sample) {
 				NetLockstepReadyFrame ready;
-				auto begin = std::chrono::steady_clock::now();
+				auto begin = RTE::SteadyClock::now();
 				for (uint64_t frame = 0; frame < count; ++frame) { ready.frame = frame; peer.StampFrameAuthority(ready); sink = sink + ready.authorityPeerId; }
-				auto end = std::chrono::steady_clock::now();
+				auto end = RTE::SteadyClock::now();
 				stamped.push_back(std::chrono::duration<double, std::nano>(end - begin).count() / count);
-				begin = std::chrono::steady_clock::now();
+				begin = RTE::SteadyClock::now();
 				for (uint64_t frame = 0; frame < count; ++frame) { ready.frame = frame; ready.authorityPeerId = peer.GetHostPeerId(); sink = sink + ready.authorityPeerId; }
-				end = std::chrono::steady_clock::now();
+				end = RTE::SteadyClock::now();
 				assigned.push_back(std::chrono::duration<double, std::nano>(end - begin).count() / count);
 			}
 			if (sink != 14 * count * peer.GetHostPeerId() || !peer.m_PeerLeaveFrames.empty() || !peer.m_AiHeldSeats.empty() || !peer.m_ReplayAuthorities.empty()) return {-1, -1};
@@ -28534,7 +28570,7 @@ namespace {
 			if (archive->empty()) return done("the captured newcomer scene archive is empty");
 			image.bytes = archive->size(); image.digest = DigestWorldJoinBytes(*archive);
 			host.m_WorldJoin.PublishImage(image); host.m_WorldJoinImageArchive = archive; host.m_WorldJoinImageDigest = image.digest;
-			host.m_PrivateImageTakenMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			host.m_PrivateImageTakenMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 			round.peers[0].SetSessionEventSink([&](const NetTransportEvent& event) {
 				if (event.type == NetTransportEventType::PacketReceived) host.m_PendingLobbyEvents.push_back(event);
 			});
@@ -28585,9 +28621,9 @@ namespace {
 				if (!pump()) return done(round.failure);
 				NetMatchService::StepWorldJoinCatchUpClient(joinLobby, catchUp);
 				for (NetLockstepReadyFrame ready; ScenarioRunner::TakeWorldCatchUpReadyFrame(replayed + 1, ready, &round.failure);) {
-					const auto began = std::chrono::steady_clock::now();
+					const auto began = RTE::SteadyClock::now();
 					view.ApplyTick(ready); ++replayed;
-					const auto work = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count());
+					const auto work = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - began).count());
 					ScenarioRunner::NoteWorldCatchUpTickCost(replayed, std::max<uint64_t>(work, 1));
 				}
 				NetMatchService::StepWorldJoinCatchUpClient(joinLobby, catchUp);
@@ -28634,6 +28670,18 @@ namespace {
 			std::cout << "[net-lockstep-selftest] opened_seat_image_tick=" << image.tick << " activation=" << activation << " first_control=" << applied << " first_required=" << firstRequired << std::endl;
 			return done("");
 		}
+
+		// A peer frame group keeps a slow seat's link in the round while the AI holds the seat; its player catches up in place on that
+		// link, so the private rejoin driver must take it up there and never offer it the image.
+		static bool HeldSeatsOwnLinkCarriesItsCatchUp(std::string* error) {
+			const auto done = [&](const std::string& why) { return ReportReleasedClaimsRow("a_seat_held_in_place_keeps_a_transfer_route_on_its_own_link", why, error); };
+			if (!NetMatchService::DrivesRejoinLink(true, true))
+				return done("the private rejoin driver skips a held seat's link that the round still carries: no transfer route is bound on it and its in-place catch-up reports are dropped as 'no current transfer route'");
+			if (NetMatchService::DrivesRejoinLink(true, false)) return done("the private rejoin driver takes up a playing seat's link from the round");
+			if (NetMatchService::OffersImageOnLink(true, false)) return done("a held seat whose link the round still carries is offered the private image instead of its in-place catch-up");
+			if (!NetMatchService::DrivesRejoinLink(false, true) || !NetMatchService::OffersImageOnLink(false, false)) return done("a returner the round no longer carries is not offered its private image");
+			return done("");
+		}
 	};
 
 	int NetLockstepSelfTest::RunSeatAdmission() {
@@ -28641,12 +28689,12 @@ namespace {
 		std::string error;
 		const char* selected = std::getenv("CCCP_SEAT_ADMISSION_CASE");
 		bool passed = true, ran = false;
-		for (const auto& [name, test]: std::array<std::pair<const char*, bool (*)(std::string*)>, 9>{{
+		for (const auto& [name, test]: std::array<std::pair<const char*, bool (*)(std::string*)>, 10>{{
 		    {"G1", SeatAdmissionServiceTest::FutureRemovalRollsBack}, {"G3", SeatAdmissionServiceTest::LeaverFindsSuccessor},
 		    {"G4", SeatAdmissionServiceTest::OpenedSeatJoinsThroughImage}, {"K2", SeatAdmissionServiceTest::EncodedRemovalFitsBothCapsules},
 		    {"K3", SeatAdmissionServiceTest::KickWithdrawsOpenedActivation}, {"K4", SeatAdmissionServiceTest::RepeatedRemovalKeepsCapacity},
 		    {"K1", SeatAdmissionServiceTest::LeaverWalksTwoSuccessors}, {"K5", SeatAdmissionServiceTest::AuthenticatedAdmissionRaces},
-		    {"K7", SeatAdmissionServiceTest::AnnouncedLoneDepartureEnds}}}) {
+		    {"K7", SeatAdmissionServiceTest::AnnouncedLoneDepartureEnds}, {"G5", SeatAdmissionServiceTest::HeldSeatsOwnLinkCarriesItsCatchUp}}}) {
 			if (selected && *selected && std::strcmp(selected, name) != 0) continue;
 			SeatAdmissionServiceTest::Reset();
 			passed &= test(&error); ran = true;
@@ -29126,7 +29174,7 @@ namespace {
 	int NetLockstepSelfTest::RunSeatLog() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		bool passed = true;
-		for (bool (*test)(std::string*): {TestEveryHoldProducerWritesTheSeatLog, TestAnOlderDeliveryLeavesTheNewerSeatState, TestEveryGapStaysForASimulationBehind,
+		for (bool (*test)(std::string*): {TestEveryHoldProducerWritesTheSeatLog, TestAnOlderDeliveryLeavesTheNewerSeatState, TestALateSimulationHandsAHeldSeatToTheAiAtItsFrame, TestEveryGapStaysForASimulationBehind,
 		                                   TestADeferredStopDoesNotExcuseASeatPastTheBound, TestALoneSurvivorCannotElectItself}) {
 			std::string error;
 			if (test(&error)) continue;
@@ -29446,6 +29494,7 @@ namespace {
 		row([](std::string* rowError) { return TestALaggingPeerReadsASeatAtItsFrame(rowError); }, "TestALaggingPeerReadsASeatAtItsFrame");
 		row([](std::string* rowError) { return TestEveryHoldProducerWritesTheSeatLog(rowError); }, "TestEveryHoldProducerWritesTheSeatLog");
 		row([](std::string* rowError) { return TestAnOlderDeliveryLeavesTheNewerSeatState(rowError); }, "TestAnOlderDeliveryLeavesTheNewerSeatState");
+		row([](std::string* rowError) { return TestALateSimulationHandsAHeldSeatToTheAiAtItsFrame(rowError); }, "TestALateSimulationHandsAHeldSeatToTheAiAtItsFrame");
 		row([](std::string* rowError) { return TestEveryGapStaysForASimulationBehind(rowError); }, "TestEveryGapStaysForASimulationBehind");
 		row([](std::string* rowError) { return TestADeferredStopDoesNotExcuseASeatPastTheBound(rowError); }, "TestADeferredStopDoesNotExcuseASeatPastTheBound");
 		row([](std::string* rowError) { return TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(rowError); }, "TestAReturnerSeesItsSeatHeldAgainBeforeItsStart");

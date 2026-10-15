@@ -8,8 +8,11 @@
 #include "NetSession.h"
 #include "PresetMan.h"
 #include "SettingsMan.h"
+#include "System.h"
 #include "TimerMan.h"
 
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -634,13 +637,76 @@ namespace RTE {
 			          << NetIdentity::HashHex(dataIdentity) << std::endl;
 			return true;
 		}
+
+		// A module installed under a deep folder hashes where the platform opens long paths; on Windows without them the walk
+		// stops on the sentence the join screen shows the player, never on an unreadable file read as another version.
+		bool TestLongModulePath(std::string* error) {
+			namespace fs = std::filesystem;
+			std::error_code ec;
+			const fs::path root = fs::temp_directory_path(ec) / ("cccp-identity-long-path-" + std::to_string(System::GetProcessID()));
+			if (ec) {
+				*error = "the long module path check has no temporary folder: " + ec.message();
+				return false;
+			}
+			fs::path module = root;
+			while (module.native().size() < 190) module /= "an-install-folder-several-levels-down";
+			module /= "Deep.rte";
+			fs::path folder = module / "Scenes";
+			while (folder.native().size() < 265) folder /= "Objects";
+			std::string name = "RefineryAuthorizationConsolePieSliceActions";
+			while ((folder / (name + ".lua")).native().size() < 290) name += "Long";
+			const fs::path file = folder / (name + ".lua");
+			// Only the extended prefix creates a path past the limit on Windows.
+			const auto extended = [](const fs::path& path) {
+#ifdef _WIN32
+				fs::path absolute = fs::absolute(path);
+				absolute.make_preferred();
+				return fs::path(LR"(\\?\)" + absolute.native());
+#else
+				return path;
+#endif
+			};
+			fs::remove_all(extended(root), ec);
+			fs::create_directories(extended(folder), ec);
+			if (!ec) std::ofstream(extended(file), std::ios::binary) << "-- a module file deep in an install\n";
+			const bool made = !ec && fs::exists(extended(file), ec);
+			NetIdentityManifest manifest = MakeManifest();
+			NetIdentityModuleEntry entry;
+			entry.fileName = "Deep.rte";
+			entry.root = module.generic_string();
+			manifest.modules = {entry};
+			std::string walkError;
+			const bool walked = made && NetIdentity::CompleteManifestFromInputs(manifest, &walkError);
+			fs::remove_all(extended(root), ec);
+			const std::string depth = std::to_string(file.native().size());
+			if (!made) {
+				*error = "the long module path check could not create its file " + depth + " characters deep";
+				return false;
+			}
+			if (NetIdentity::LongPathsAvailable()) {
+				if (!walked || manifest.modules[0].fileCount != 1) {
+					*error = "a module file " + depth + " characters deep did not hash where long paths open: " + walkError;
+					return false;
+				}
+				std::cout << "[net-identity-selftest] PASS a module file " << depth << " characters deep hashes" << std::endl;
+				return true;
+			}
+			if (walked || walkError.rfind("the game is installed too deep in folders for Windows: Deep.rte/Scenes/Objects", 0) != 0 ||
+			    walkError.find("Move the game's folder closer to the drive") == std::string::npos) {
+				*error = "a module folder past Windows' limit stopped the walk with \"" + walkError + "\"";
+				return false;
+			}
+			std::cout << "[net-identity-selftest] PASS a module file " << depth << " characters deep is refused with the player's reason: " << walkError << std::endl;
+			return true;
+		}
 	}
 
 	int NetIdentitySelfTest::Run() {
 		std::string error;
 		if (!TestCanonicalHelpers(&error) || !TestCompare(&error) || !TestDiffModules(&error) || !TestLuaStateCountIsABuildConstant(&error) ||
 		    !TestPresetIndependentAdmissionIdentity(&error) || !TestModuleRootOutOfIdentity(&error) ||
-		    !TestNamedModuleAdmission(&error) || !TestSelectedModuleAdmission(&error) || !TestCanonicalLoadedModules(&error)) {
+		    !TestNamedModuleAdmission(&error) || !TestSelectedModuleAdmission(&error) || !TestCanonicalLoadedModules(&error) ||
+		    !TestLongModulePath(&error)) {
 			std::cerr << "[net-identity-selftest] FAIL: " << error << std::endl;
 			return 1;
 		}

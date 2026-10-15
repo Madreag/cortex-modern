@@ -1,4 +1,5 @@
 #include "StallStackSampler.h"
+#include "SteadyClock.h"
 #include "FloatingPointEnvironment.h"
 
 #include "System.h"
@@ -33,7 +34,7 @@ namespace RTE {
 		s_ThresholdMs = threshold;
 		HarnessCost::SetEnabled(HarnessCost::StallSampler, true);
 		// The symbols load here, before any frame runs, so no sample pays for them inside a tick; the load is the sampler's own cost.
-		const auto loadStart = std::chrono::steady_clock::now();
+		const auto loadStart = RTE::SteadyClock::now();
 		SymSetOptions(SYMOPT_UNDNAME);
 		s_Symbols = SymInitialize(GetCurrentProcess(), nullptr, TRUE) || GetLastError() == ERROR_INVALID_PARAMETER;
 		// A module's symbols load on its first lookup: one lookup in each module now keeps that out of every sample.
@@ -48,7 +49,7 @@ namespace RTE {
 				return TRUE;
 			}, nullptr);
 		}
-		const int64_t loadNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - loadStart).count();
+		const int64_t loadNs = std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - loadStart).count();
 		HarnessCost::Charge(HarnessCost::StallSampler, loadNs);
 		s_Watcher = std::jthread([](std::stop_token stop) { FloatingPointEnvironment::Initialize(); const FloatingPointEnvironment::Scope scope("stack sampler"); Watch(stop); });
 		System::PrintDiagnosticLine("[stall-stack] armed: a tick past " + std::to_string(threshold) + " ms is sampled every " + std::to_string(threshold) +
@@ -76,9 +77,9 @@ namespace RTE {
 				continue;
 			}
 			nextSampleMs = now + s_ThresholdMs;
-			const auto sampleStart = std::chrono::steady_clock::now();
+			const auto sampleStart = RTE::SteadyClock::now();
 			const std::string frames = Sample();
-			const int64_t sampleNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - sampleStart).count();
+			const int64_t sampleNs = std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - sampleStart).count();
 			// A tick that ended while the stack was read is not reported.
 			// The suspension is charged as it ends; the rest of the sample is the watcher's own work.
 			HarnessCost::Charge(HarnessCost::StallSampler, sampleNs - s_LastSuspendNs);
@@ -96,7 +97,7 @@ namespace RTE {
 		DWORD64 addresses[c_MaxFrames] = {};
 		int count = 0;
 		s_LastSuspendNs = 0;
-		const auto suspended = std::chrono::steady_clock::now();
+		const auto suspended = RTE::SteadyClock::now();
 		if (SuspendThread(thread) == static_cast<DWORD>(-1)) {
 			return "suspend failed";
 		}
@@ -119,7 +120,7 @@ namespace RTE {
 			}
 		}
 		ResumeThread(thread);
-		s_LastSuspendNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - suspended).count();
+		s_LastSuspendNs = std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - suspended).count();
 		HarnessCost::NoteSimulationSuspended(s_LastSuspendNs);
 		HANDLE process = GetCurrentProcess();
 		const bool symbols = s_Symbols;

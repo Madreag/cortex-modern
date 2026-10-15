@@ -1,4 +1,5 @@
 #include "NetDirectoryClient.h"
+#include "SteadyClock.h"
 
 #include "NetHttpClient.h"
 #include "System.h"
@@ -22,7 +23,7 @@ namespace RTE {
 
 	namespace {
 		uint64_t SteadyNowMs() {
-			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count());
 		}
 
 		/// The production transport: one NetHttpClient per request, fired on its own thread.
@@ -1029,7 +1030,19 @@ namespace RTE {
 			return "Cannot join this game: your game data differs from the host's (yours " + row.localModuleManifestHash.substr(0, 8) + ", the host's " +
 			       row.hostModuleManifestHash.substr(0, 8) + "). Open the console (~) on both computers and compare the module digests it lists.";
 		}
+		if (row.reason == "local files") {
+			if (brief) return "Cannot join: your game files could not be read";
+			return "Cannot join this game: your game files could not be read" + (row.localIdentityError.empty() ? std::string() : " - " + row.localIdentityError) + ".";
+		}
 		return "Cannot join this game: " + row.reason;
+	}
+
+	void NetDirectoryClient::RefuseForLocalIdentity(std::vector<GameRow>& rows, const std::string& error) {
+		for (GameRow& row: rows) {
+			row.joinable = false;
+			row.reason = "local files";
+			row.localIdentityError = error;
+		}
 	}
 
 	std::string NetDirectoryClient::DescribeGameRow(const GameRow& row) {

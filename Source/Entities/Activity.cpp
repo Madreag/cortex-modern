@@ -39,6 +39,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <limits>
 #include <map>
@@ -1429,6 +1430,23 @@ bool Activity::SwitchToActorFromScript(Actor* actor, int player, int team) {
 	return true;
 }
 
+// CC_TEST_RETURN_INPUT_DETAILS names why a local seat's switch passes an actor by: its seat, input mode and owner peer.
+static void NoteRefusedSwitch(Actor* actor, int player, const char* reason) {
+	if (!std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) return;
+	std::ostringstream line;
+	line << "[net-actor-switch] refused player=" << player << " reason=" << reason;
+	if (actor && g_MovableMan.IsActor(actor)) {
+		const Controller* controller = actor->GetController();
+		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+		line << " uid=" << uid << " preset=" << actor->GetModuleAndPresetName() << " team=" << actor->GetTeam()
+		     << " seat_mode=" << static_cast<int>(controller->GetSeatMode()) << " seat_player=" << controller->GetSeatPlayerRaw()
+		     << " input_player=" << controller->GetInputPlayer() << " input_mode=" << static_cast<int>(controller->GetInputMode())
+		     << " controllable=" << actor->IsPlayerControllable() << " owner=" << static_cast<int>(ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()))
+		     << " seeded=" << static_cast<int>(NetActorOwnership::GetSeededOwner(uid));
+	}
+	std::cout << line.str() << std::endl;
+}
+
 bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount) {
 		return false;
@@ -1446,10 +1464,12 @@ bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 		return false;
 	}
 	if (!actor || !g_MovableMan.IsActor(actor) || !actor->IsPlayerControllable()) {
+		NoteRefusedSwitch(actor, player, "not a controllable actor");
 		return false;
 	}
 	if ((actor != m_Brain[player] && actor->GetController()->IsSeatedByPlayer()) ||
 		((!m_SharedPlayerSeats || actor != m_Brain[player]) && IsOtherPlayerBrain(actor, player))) {
+		NoteRefusedSwitch(actor, player, IsOtherPlayerBrain(actor, player) ? "another player's brain" : "seated by a player");
 		g_GUISound.UserErrorSound()->Play(player);
 		return false;
 	}

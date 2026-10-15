@@ -85,6 +85,7 @@ namespace RTE {
 			std::string hostModuleManifestHash;
 			int64_t localNetworkProtocol = 0;
 			int64_t hostNetworkProtocol = 0;
+			std::string localIdentityError; //!< A 'local files' refusal's cause: why this computer could not read its own game files.
 		};
 
 		/// The one line the join screen shows for a row. A world reads its boot, its published state and
@@ -92,6 +93,9 @@ namespace RTE {
 		static std::string DescribeGameRow(const GameRow& row);
 		/// The sentence the join screen shows for a row it refuses; brief is the form one line of the list's label holds.
 		static std::string JoinRefusalText(const GameRow& row, bool brief = false);
+
+		/// Refuses every row when this computer's own identity could not be built: no game can be proven compatible, and the cause is the player's to fix.
+		static void RefuseForLocalIdentity(std::vector<GameRow>& rows, const std::string& error);
 
 		NetDirectoryClient();
 		NetDirectoryClient(const NetDirectoryClient&) = delete;

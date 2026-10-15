@@ -1,4 +1,5 @@
 #include "FloatingPointEnvironment.h"
+#include "SteadyClock.h"
 #include "ActivityMan.h"
 #include "AutosaveStore.h"
 #include "MetricsCollector.h"
@@ -710,7 +711,41 @@ struct ActivityMan::PreparedAutosave {
 	    [this](const Header& header, const CheckpointLua::Boundary& boundary) { return Complete(header, boundary); },
 	    [this](const Header& header, std::exception_ptr error) { Refused(header, error); }) {}
 
+	size_t refusedPreparations = 0; //!< Preparations refused since the last one that succeeded; only the saver touches these.
+	bool exhaustedPreparation = false; //!< Test lever: the next preparation runs out of memory.
+	std::string lastPreparationRefusal;
+	RTE::SteadyClock::time_point refusedSince, refusalNamedAt;
+	bool afterRefusedCapture = false;
+
+	// A refused preparation is retried every tick, so each new reason is named once and the success that ends them is counted.
 	std::unique_ptr<CheckpointLua::Boundary> Prepare() {
+		const auto began = RTE::SteadyClock::now();
+		const bool named = std::exchange(afterRefusedCapture, false);
+		if (named) System::PrintDiagnosticLine("[autosave] inventory preparation began after the refused capture");
+		try {
+			if (std::exchange(exhaustedPreparation, false)) throw std::bad_alloc();
+			auto boundary = PrepareBoundary();
+			const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - began).count();
+			if (named || refusedPreparations || ms >= 2000) System::PrintDiagnosticLine(std::format("[autosave] inventory prepared in {} ms after {} refused preparations", ms, refusedPreparations));
+			refusedPreparations = 0; lastPreparationRefusal.clear();
+			return boundary;
+		} catch (const std::exception& failure) {
+			if (!refusedPreparations++) refusedSince = began;
+			if (lastPreparationRefusal != failure.what()) {
+				lastPreparationRefusal = failure.what();
+				refusalNamedAt = began;
+				System::PrintDiagnosticLine(std::format("[autosave] inventory preparation refused reason={}", lastPreparationRefusal));
+			} else if (began - refusalNamedAt >= std::chrono::seconds(10)) {
+				// A refusal that lasts is named again, so the log shows the retries going on.
+				refusalNamedAt = began;
+				System::PrintDiagnosticLine(std::format("[autosave] inventory preparation still refused after {} attempts in {} s reason={}", refusedPreparations,
+				    std::chrono::duration_cast<std::chrono::seconds>(began - refusedSince).count(), lastPreparationRefusal));
+			}
+			throw;
+		}
+	}
+
+	std::unique_ptr<CheckpointLua::Boundary> PrepareBoundary() {
 		using Root = CheckpointLua::Boundary::Root;
 		std::vector<Root> roots;
 		const auto add = [&]<class T>(const T& value) { roots.push_back(Root::Of(value)); };
@@ -736,12 +771,12 @@ struct ActivityMan::PreparedAutosave {
 		return boundary;
 	}
 
-	bool Capture(const std::string& match, uint64_t tick, const AutosaveIdentity& identity, std::chrono::steady_clock::time_point began) {
+	bool Capture(const std::string& match, uint64_t tick, const AutosaveIdentity& identity, RTE::SteadyClock::time_point began) {
 		std::shared_ptr<CheckpointCaptureClock> clock;
 		struct Finish {
-			ActivityMan& owner; std::shared_ptr<CheckpointCaptureClock>& clock; std::chrono::steady_clock::time_point began;
+			ActivityMan& owner; std::shared_ptr<CheckpointCaptureClock>& clock; RTE::SteadyClock::time_point began;
 			~Finish() {
-				const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count();
+				const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - began).count();
 				owner.m_LastAutosaveCaptureMs = elapsed / 1000.0;
 				if (!clock) return;
 #ifdef _WIN32
@@ -770,7 +805,7 @@ struct ActivityMan::PreparedAutosave {
 #endif
 			std::memcpy(header.match.data(), match.data(), match.size()); header.match[match.size()] = 0;
 			header.tick = tick; header.identity = identity; written = header.written;
-			clock->call->parts[0] = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count();
+			clock->call->parts[0] = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - began).count();
 		});
 		if (!accepted) owner.NoteAutosaveRefusal(notReady.empty() || failed, !notReady.empty() ? std::string_view(notReady) : std::string_view("the capture's pages could not be armed"));
 		if (accepted) {
@@ -783,6 +818,7 @@ struct ActivityMan::PreparedAutosave {
 	}
 
 	void Refused(const Header& header, std::exception_ptr error) noexcept {
+		afterRefusedCapture = true;
 		try {
 			owner.NoteAutosaveVerdict(header.tick, false, header.written->verdict);
 			try { std::rethrow_exception(error); }
@@ -799,6 +835,10 @@ struct ActivityMan::PreparedAutosave {
 		s_Stage = "manager values";
 		if (uint64_t refused = header.tick; header.tick != 0 && owner.m_RefusedWriterTick.compare_exchange_strong(refused, 0, std::memory_order_relaxed))
 			throw std::runtime_error("an injected refusal");
+		if (uint64_t exhausted = header.tick; header.tick != 0 && owner.m_ExhaustedWriterTick.compare_exchange_strong(exhausted, 0, std::memory_order_relaxed)) {
+			exhaustedPreparation = true;
+			throw std::bad_alloc();
+		}
 		if (const char* phases = std::getenv("CCCP_CHECKPOINT_PHASES"); phases && std::string_view(phases) == "1") {
 			size_t ranges = 0, bytes = 0, copied = 0, fenced = 0;
 			for (const auto& pages: boundary.NativeViews().pages) {
@@ -815,8 +855,9 @@ struct ActivityMan::PreparedAutosave {
 				previousFaults += heap.PreviousFaults(); previousFaultUs += heap.PreviousFaultUs();
 			}
 			// The previous capture's copy-on-write faults on the Lua heaps, which its whole save window paid for.
-			System::PrintDiagnosticLine(std::format("[checkpoint-arm-split] tick={} native_ranges={} native_bytes={} native_arm_us={} native_copied_pages={} native_fenced_pages={} lua_heaps={} lua_arm_us={} lua_bytes={} lua_copy_us={} lua_faults={} lua_previous_faults={} lua_previous_fault_us={} {}",
-			    header.tick, ranges, bytes, nativeUs, copied, fenced, boundary.StateCount(), luaUs, luaBytes, luaCopyUs, luaFaults, previousFaults, previousFaultUs, CheckpointNativeStorage::InventoryCensus()));
+			System::PrintDiagnosticLine(std::format("[checkpoint-arm-split] tick={} native_ranges={} native_bytes={} native_arm_us={} native_copied_pages={} native_fenced_pages={} lua_heaps={} lua_arm_us={} lua_bytes={} lua_copy_us={} lua_faults={} lua_previous_faults={} lua_previous_fault_us={} lua_copy_mapped_bytes={} lua_copy_idle_bytes={} {}",
+			    header.tick, ranges, bytes, nativeUs, copied, fenced, boundary.StateCount(), luaUs, luaBytes, luaCopyUs, luaFaults, previousFaults, previousFaultUs,
+			    CheckpointLua::HeapOwner::MappedCopyBytes(), CheckpointLua::HeapOwner::IdleCopyBytes(), CheckpointNativeStorage::InventoryCensus()));
 			// Per heap: slot, MB, copied whole (w) or fenced (f), the pages the boundary copied, the arm's us, the fencing thread, and
 			// the KB the state allocated between its last collections.
 			std::string heapArms;
@@ -880,24 +921,24 @@ struct ActivityMan::PreparedAutosave {
 		audioManager->FreezeCheckpointCapture(*audio, soundCursor);
 		std::unordered_set<uint64_t> managerSounds; audioManager->CollectManagerSoundIdentities(managerSounds);
 		s_Stage = "script graphs";
-		const auto graphStart = std::chrono::steady_clock::now();
+		const auto graphStart = RTE::SteadyClock::now();
 		std::vector<std::string> problems;
 		if (!LuaStateWrapper::CapturePreparedScriptGraphs(boundary, states, snapshot, image->graphs, image->graphScopes, problems, header.clock->call->simulation))
 			throw ScriptGraphRefusal(std::move(problems));
-		image->graphUs = image->graphWalkUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - graphStart).count();
+		image->graphUs = image->graphWalkUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - graphStart).count();
 		image->graphSerial = boundary.LuaHeap(0).StateSerial();
 		const auto& savers = RuntimeManagerSavers();
 		std::vector<CheckpointText> parts;
 		parts.reserve(savers.size());
 		for (const auto& saver: savers) {
 			s_Stage = "manager " + std::string(saver.name);
-			const auto start = std::chrono::steady_clock::now();
+			const auto start = RTE::SteadyClock::now();
 			parts.push_back(CheckpointWriter::CaptureNative(saver.save));
-			image->globalParts.emplace_back(saver.name, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+			image->globalParts.emplace_back(saver.name, std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count());
 		}
 		const std::string match(header.match.data()), file = match + "-" + std::to_string(header.tick);
 		const std::string path = AutosaveStore::ArchivePath(match, header.tick).string();
-		const auto now = [] { return std::chrono::steady_clock::now(); };
+		const auto now = [] { return RTE::SteadyClock::now(); };
 		auto start = now();
 		s_Stage = "scene";
 		image->scene = scene->CaptureSavedScene(SceneArchiveName(sourceScene, file));
@@ -1125,14 +1166,14 @@ void ActivityMan::ReportDeferredSaveRefusals() {
 }
 
 bool ActivityMan::SaveCurrentGame(const std::string& fileName, SaveCompression compression) {
-	const auto captureStart = std::chrono::steady_clock::now();
+	const auto captureStart = RTE::SteadyClock::now();
 	WaitForSaveGameTask();
 	const std::string path = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName + ".ccsave";
 	const bool saved = QueueSaveSnapshot(fileName, path, compression, m_SaveGameTask);
 	// Under the full-state oracle a save logs the state it holds, the canonical one a restore of it must reproduce.
 	if (saved && m_FullStateLever) CaptureFullStateHash(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), m_FullStateRound, {}, "canonical");
 	System::PrintDiagnosticLine(std::format("[checkpoint-capture] name={} tick={} sim_block_ms={:.3f} queued={}\n", fileName,
-	    g_TimerMan.GetSimUpdateCount(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count(), saved));
+	    g_TimerMan.GetSimUpdateCount(), std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - captureStart).count(), saved));
 	return saved;
 }
 
@@ -1181,7 +1222,7 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 }
 
 bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity) {
-	const auto captureStart = std::chrono::steady_clock::now();
+	const auto captureStart = RTE::SteadyClock::now();
 	if (!AutosaveStore::ValidMatchId(matchId) || tick == 0) return false;
 	if (CheckpointNativeStorage::WorldEnabled()) {
 		if (!m_PreparedAutosave) { NoteAutosaveRefusal(true, "no checkpoint inventory was prepared"); return false; }
@@ -1204,8 +1245,8 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 		const auto captureClock = std::make_shared<CheckpointCaptureClock>(CheckpointCaptureClock{captureStart, simDone.get_future().share()});
 		struct SimulationDone {
 			std::promise<int64_t>& done;
-			std::chrono::steady_clock::time_point started;
-			~SimulationDone() { done.set_value(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()); }
+			RTE::SteadyClock::time_point started;
+			~SimulationDone() { done.set_value(std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count()); }
 		} simulationDone{simDone, captureStart};
 #ifdef _WIN32
 		const char* phases = std::getenv("CCCP_CHECKPOINT_PHASES");
@@ -1223,7 +1264,7 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 		}
 		m_AutosaveTasks.push_back(std::move(task));
 		accepted = true;
-		const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count();
+		const double captureMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - captureStart).count();
 		m_LastAutosavePath = std::move(path);
 		m_LastAutosaveTick = tick;
 		m_LastAutosaveBytes = bytes;
@@ -1263,7 +1304,7 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	const auto* sourceActivity = dynamic_cast<const GAScripted*>(GetActivity());
 	if (!sourceScene || !sourceScene->GetTerrain() || !sourceActivity || sourceActivity->GetActivityState() == Activity::Over) return false;
 	const HarnessCost::SimulationSpan freezeSpan;
-	const auto began = captureClock ? captureClock->started : std::chrono::steady_clock::now();
+	const auto began = captureClock ? captureClock->started : RTE::SteadyClock::now();
 	auto image = std::make_shared<CheckpointImage>();
 	image->tick = tick; image->captureClock = std::move(captureClock);
 	CaptureTrace::Begin(tick);
@@ -1273,7 +1314,7 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	auto partStart = began;
 	const char* part = "sim_prepare";
 	const auto phase = [&](const char* next) {
-		const auto now = std::chrono::steady_clock::now();
+		const auto now = RTE::SteadyClock::now();
 		if (phases) image->simParts.emplace_back(part, std::chrono::duration_cast<std::chrono::microseconds>(now - partStart).count());
 		partStart = now; part = next;
 	};
@@ -1300,11 +1341,11 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	AudioMan::SoundCheckpointSaveScope::Lend soundNotes(carried.get());
 	const uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 	phase("sim_native_pages");
-	const auto nativeStarted = std::chrono::steady_clock::now();
+	const auto nativeStarted = RTE::SteadyClock::now();
 	Atom::SnapshotScope atoms(true, true);
 	image->nativePages = atoms.Pages();
 	if (image->nativePages) pagesArmed = g_ThreadMan.GetPriorityThreadPool().submit([pages = image->nativePages] { pages->Arm(); });
-	image->nativeBoundaryUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
+	image->nativeBoundaryUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - nativeStarted).count();
 	if (image->nativePages) image->nativeReady = CheckpointLua::CopyPool::Submit([pages = image->nativePages] { pages->Drain(); }).share();
 	std::vector<MovableObject*> held;
 	g_LuaMan.VisitScriptHeldMovableObjects([&held](MovableObject* object) { held.push_back(object); }, true);
@@ -1341,9 +1382,9 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 		if (hasStart) parts.emplace_back([&] { startActivity = snapshot->Object(m_StartActivity.get()); });
 		for (size_t index = 0; index < savers.size(); ++index) {
 			parts.emplace_back([&savers, &managers, &managerUs, index] {
-				const auto start = std::chrono::steady_clock::now();
+				const auto start = RTE::SteadyClock::now();
 				managers[index] = CheckpointWriter::CaptureNative(savers[index].save);
-				managerUs[index] = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+				managerUs[index] = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count();
 			});
 		}
 		parts.emplace_back([&] {
@@ -1357,7 +1398,7 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 		});
 		FreezeBoundaryParts(*snapshot, carried.get(), parts);
 	};
-	const auto graphStart = std::chrono::steady_clock::now();
+	const auto graphStart = RTE::SteadyClock::now();
 	g_LuaMan.ArmCheckpointWriteTrap();
 	std::vector<std::string> problems;
 	bool frozenGraphs = false;
@@ -1372,7 +1413,7 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	snapshot->SealBoundary();
 	for (size_t index = 0; index < savers.size(); ++index) image->globalParts.emplace_back(savers[index].name, managerUs[index]);
 	const std::string sceneName = SceneArchiveName(sourceScene, fileName);
-	image->graphUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - graphStart).count();
+	image->graphUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - graphStart).count();
 	image->graphWalkUs = image->graphUs;
 	image->graphScopes.assign(image->graphs.size(), CheckpointScope::Shared);
 	for (size_t state = 1; state < image->graphs.size() && state <= g_LuaMan.GetThreadedScriptStates().size(); ++state) {
@@ -1410,10 +1451,10 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 		CheckpointWriter::BatchOverride batch(true);
 		CheckpointWriter::CacheScope cache(nullptr);
 		AudioMan::SoundCheckpointSaveScope::Lend soundNotes(carried.get());
-		const auto start = std::chrono::steady_clock::now();
+		const auto start = RTE::SteadyClock::now();
 		image->scene = scene->CaptureSavedScene(sceneName);
 		image->movableUs = Scene::LastObjectCaptureUs();
-		image->sceneUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+		image->sceneUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count();
 		image->activity = Writer::Capture([&](Writer& writer) {
 			writer.NewPropertyWithValue("Activity", activity); writer.NewPropertyWithValue("HasCheckpointStartActivity", hasStart);
 			writer.PerPeerBegin(); if (hasStart) writer.NewPropertyWithValue("CheckpointStartActivity", startActivity); writer.PerPeerEnd();
@@ -1452,10 +1493,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	} traceEnd;
 	struct CaptureTailCost {
 		uint64_t tick;
-		std::optional<std::chrono::steady_clock::time_point> from;
+		std::optional<RTE::SteadyClock::time_point> from;
 		~CaptureTailCost() {
 			if (from) System::PrintDiagnosticLine(std::format("[checkpoint-capture-tail] tick={} tail_us={}", tick,
-			    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - *from).count()));
+			    std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - *from).count()));
 		}
 	} tailCost{tick};
 	std::optional<CaptureTrace::Span> simSpan(std::in_place, "sim_prepare");
@@ -1475,18 +1516,18 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	CheckpointWriter::CacheScope cache(&cow.Cache());
 	CheckpointWriter::BatchScope nativeBatches(!matchId.empty(), !matchId.empty());
 	CheckpointLua::CopyPool::PauseScope pageCopies(!matchId.empty());
-	const auto nativeStarted = std::chrono::steady_clock::now();
+	const auto nativeStarted = RTE::SteadyClock::now();
 	Atom::SnapshotScope nativePages(!matchId.empty());
 	auto image = std::make_shared<CheckpointImage>();
-	image->nativeBoundaryUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
+	image->nativeBoundaryUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - nativeStarted).count();
 	image->captureClock = std::move(captureClock);
 	static const bool simCosts = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
-	auto simPartStart = simCosts ? (image->captureClock ? image->captureClock->started : std::chrono::steady_clock::now()) : std::chrono::steady_clock::time_point{};
+	auto simPartStart = simCosts ? (image->captureClock ? image->captureClock->started : RTE::SteadyClock::now()) : RTE::SteadyClock::time_point{};
 	const char* simPart = "sim_prepare";
 	// The sim stages partition one clock; pool times overlap them.
 	const auto simPhase = [&](const char* next) {
 		if (simCosts) {
-			const auto now = std::chrono::steady_clock::now();
+			const auto now = RTE::SteadyClock::now();
 			image->simParts.emplace_back(simPart, std::chrono::duration_cast<std::chrono::microseconds>(now - simPartStart).count());
 			simPartStart = now;
 			simPart = next;
@@ -1498,8 +1539,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->tick = tick;
 	std::vector<std::shared_ptr<const BitmapSnapshot>> retiredLayers;
 	// Each record is timed on its own so the completion pass can see where the freeze goes.
-	const auto since = [](const std::chrono::steady_clock::time_point& from) {
-		return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - from).count();
+	const auto since = [](const RTE::SteadyClock::time_point& from) {
+		return std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - from).count();
 	};
 	// Every part but the script graphs is captured on the pool beside them; nothing writes the world until they are
 	// joined, and each keeps its own values and notes this capture's carried sounds.
@@ -1534,7 +1575,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	{
 		CaptureTrace::Span span("script_held");
 		static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
-		const auto started = report ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		const auto started = report ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 		g_LuaMan.VisitScriptHeldMovableObjects([&scriptHeld](MovableObject* object) { scriptHeld.push_back(object); }, !matchId.empty());
 		if (report) System::PrintDiagnosticLine(std::format("[checkpoint-script-held] objects={} parallel={} us={}", scriptHeld.size(), !matchId.empty(), since(started)));
 	}
@@ -1545,7 +1586,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	std::vector<std::function<void()>> aside;
 	AudioMan::SoundCheckpointSaveScope* const sounds = &carriedSounds;
 	const auto captureAside = [&aside, sounds](const char* label, std::string detail, std::function<void()> work, CheckpointCache* cache = nullptr) {
-		const auto task = [sounds, cache, label, detail = std::move(detail), queued = std::chrono::steady_clock::now(), work = std::move(work)] {
+		const auto task = [sounds, cache, label, detail = std::move(detail), queued = RTE::SteadyClock::now(), work = std::move(work)] {
 			CaptureSentinel::WorkerScope worker("capture-aside");
 			CaptureTrace::Span span(label, detail, queued);
 			AudioMan::SoundCheckpointSaveScope::Lend lend(sounds, CheckpointWriter::BatchEnabled());
@@ -1567,7 +1608,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	}
 	// Elapsed timer fields change even when their object's write stamp holds, so the scene keeps a cache of its own.
 	captureAside("scene", {}, [&] {
-		const auto sceneStart = std::chrono::steady_clock::now();
+		const auto sceneStart = RTE::SteadyClock::now();
 		// A loaded archive already gave its scene and terrain a saved identity. A new
 		// storage filename must not replace that identity when the same world is saved again.
 		image->scene = scene->CaptureSavedScene(SceneArchiveName(scene, fileName));
@@ -1577,7 +1618,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// The start activity is written beside the match's own and joins it after the join, in the same place.
 	CheckpointText playedActivity, startActivity;
 	captureAside("activity", {}, [&] {
-		const auto activityStart = std::chrono::steady_clock::now();
+		const auto activityStart = RTE::SteadyClock::now();
 		playedActivity = Writer::Capture([&](Writer& writer) {
 			writer.NewPropertyWithValue("Activity", activity);
 			writer.NewPropertyWithValue("HasCheckpointStartActivity", m_StartActivity != nullptr);
@@ -1599,7 +1640,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		return &cache;
 	};
 	captureAside("scene_runtime", {}, [&] {
-		const auto sceneRuntimeStart = std::chrono::steady_clock::now();
+		const auto sceneRuntimeStart = RTE::SteadyClock::now();
 		image->sceneRuntime = CheckpointWriter::CaptureNative([scene] { return scene->SaveRuntimeCheckpoint(); });
 		image->sceneRuntimeUs = since(sceneRuntimeStart);
 	}, partCache("scene_runtime"));
@@ -1607,17 +1648,17 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	for (size_t part = 0; part < managerSavers.size(); ++part) {
 		const std::string& name = managerSavers[part].name;
 		captureAside("manager", name, [&managerParts, &managerTimings, &managerSavers, &since, part] {
-			const auto start = std::chrono::steady_clock::now();
+			const auto start = RTE::SteadyClock::now();
 			managerParts[part] = CheckpointWriter::CaptureNative(managerSavers[part].save);
 			managerTimings[part] = {managerSavers[part].name, since(start)};
 		}, name == "frame" || name == "post_process" ? partCache("manager:" + name) : nullptr);
 	}
 	// Each terrain layer copies its own dirty rows; the image keeps the layers' order.
-	const auto layersStart = std::chrono::steady_clock::now();
+	const auto layersStart = RTE::SteadyClock::now();
 	static const bool layerCosts = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
 	for (LayerCapture& captured: layers) {
-		captureAside("layer", captured.name, [&captured, &layersUs, &since, layersStart, deferRows = !matchId.empty(), queued = layerCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}] {
-			const auto started = layerCosts ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		captureAside("layer", captured.name, [&captured, &layersUs, &since, layersStart, deferRows = !matchId.empty(), queued = layerCosts ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{}] {
+			const auto started = layerCosts ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 			const uint64_t cpuStart = layerCosts ? CheckpointCaptureCpuUnits() : 0;
 			captured.snapshot = captured.layer->CaptureBitmapSnapshot(&captured.retired, deferRows);
 			if (layerCosts) {
@@ -1643,12 +1684,12 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	int64_t audioReadUs = 0;
 	const auto readAudio = [&] {
 		if (audio) return;
-		const auto audioStart = std::chrono::steady_clock::now();
+		const auto audioStart = RTE::SteadyClock::now();
 		audio = g_AudioMan.CaptureCheckpointState(false);
 		audioReadUs = since(audioStart);
 	};
 	simPhase("sim_graphs");
-	const auto graphStart = std::chrono::steady_clock::now();
+	const auto graphStart = RTE::SteadyClock::now();
 	bool frozenGraphs = false;
 	const SaveKind kind = matchId.empty() ? (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual) : SaveKind::Autosave;
 	// Compiled table stores only mark while the trap is armed; it is re-armed before the freeze protects the heap.
@@ -1725,11 +1766,11 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	g_AudioMan.SetCheckpointSoundContainerCursor(liveSoundCursor);
 	allocation.RestoreCounters();
 	simPhase("sim_structure");
-	const auto structureStart = std::chrono::steady_clock::now();
+	const auto structureStart = RTE::SteadyClock::now();
 	image->structure = CheckpointWriter::CaptureNative([] { return g_MovableMan.SaveWorldStructure(); });
 	image->structureUs = since(structureStart);
 	simPhase("sim_globals");
-	const auto globalsStart = std::chrono::steady_clock::now();
+	const auto globalsStart = RTE::SteadyClock::now();
 	image->globals = CheckpointWriter::CaptureNative([&] {
 		return CaptureRuntimeGlobals(carriedSounds.Carried(), false, &image->globalParts, &managerParts, audio.get(), audioSamples.get(), fullStateOnly ? &image->globalSections : nullptr);
 	});
@@ -1771,7 +1812,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	const int64_t freezeNs = freezeSpan.Stop();
 	image->freezeUs = freezeNs / 1000;
 	if (!matchId.empty()) {
-		if (const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); value && std::string_view(value) == "1") tailCost.from = std::chrono::steady_clock::now();
+		if (const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); value && std::string_view(value) == "1") tailCost.from = RTE::SteadyClock::now();
 	}
 	// The full-state oracle's own freeze is an instrument's cost; an autosave's is the product's.
 	if (fullStateOnly) HarnessCost::Charge(HarnessCost::FullState, freezeNs);
@@ -1795,7 +1836,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 				image.reset();
 				return false;
 			}
-			const auto start = std::chrono::steady_clock::now();
+			const auto start = RTE::SteadyClock::now();
 			try {
 				if (image->nativeReady.valid()) image->nativeReady.get();
 				std::string line = FullStateHashLine(*image, dump) + " round=" + std::to_string(round);
@@ -1807,7 +1848,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 					if (scope != CheckpointScope::Shared) perPeer += (perPeer.empty() ? "" : ",") + name;
 				});
 				System::PrintDiagnosticLine(std::format("[fullstate-scope] tick={} round={} label={} per_peer={}", image->tick, round, label.empty() ? "sample" : label, perPeer));
-				const int64_t hashNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+				const int64_t hashNs = std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - start).count();
 				HarnessCost::Charge(HarnessCost::FullState, hashNs);
 				System::PrintDiagnosticLine(std::format("[fullstate-cost] tick={} freeze_us={} hash_us={} image_bytes={}", image->tick, image->freezeUs,
 				    hashNs / 1000, image->imageBytes));
@@ -1903,9 +1944,9 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 			return false;
 		}
 		const bool frozenNative = static_cast<bool>(complete);
-		const auto start = std::chrono::steady_clock::now();
+		const auto start = RTE::SteadyClock::now();
 		const auto sinceStart = [&start] {
-			return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+			return std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count();
 		};
 		bool archived = false;
 		try {
@@ -1935,11 +1976,11 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 			if (layerCosts && image->captureClock) {
 				for (const auto& [name, layer]: image->layers) layer->Finalize();
 				const int64_t simUs = image->captureClock->SimulationUs();
-				const int64_t totalUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - image->captureClock->started).count();
+				const int64_t totalUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - image->captureClock->started).count();
 				if (image->nativePages) native = image->nativePages->Cost();
-				System::PrintDiagnosticLine(std::format("[checkpoint-completion] tick={} sim_call_us={} total_capture_us={} native_boundary_us={} native_copy_worker_us={} native_sim_fault_observer_us={} native_other_fault_observer_us={} native_sim_faults={} native_other_faults={} native_bytes={} serializer_off_sim={}",
+				System::PrintDiagnosticLine(std::format("[checkpoint-completion] tick={} sim_call_us={} total_capture_us={} native_boundary_us={} native_copy_worker_us={} native_sim_fault_observer_us={} native_other_fault_observer_us={} native_sim_faults={} native_other_faults={} native_bytes={} native_committed_bytes={} serializer_off_sim={}",
 				    tick, simUs, totalUs, image->nativeBoundaryUs, native.workerUs, native.simFaultUs, native.otherFaultUs,
-				    native.simFaults, native.otherFaults, native.bytes, std::this_thread::get_id() != simThread));
+				    native.simFaults, native.otherFaults, native.bytes, native.committedBytes, std::this_thread::get_id() != simThread));
 				int64_t simPartsUs = 0;
 				if (image->captureClock->call) {
 					const std::array names{"prepare", "native_pages", "values", "structure", "globals", "handoff", "return_tail"};
@@ -1965,7 +2006,7 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 					    name, layer->copiedBytes, layer->workerCopyBytes, layer->scannedBytes, layer->dirtyBytes, layer->unmarkedDirtyBytes));
 				}
 			}
-			const auto archiveStart = std::chrono::steady_clock::now();
+			const auto archiveStart = RTE::SteadyClock::now();
 			if (image->captureClock && image->captureClock->call) {
 				System::PrintDiagnosticLine(std::format("[autosave] tick={} capture_ms={:.3f} bytes={}\n", tick, image->captureClock->SimulationUs() / 1000.0, image->imageBytes));
 			}
@@ -1984,7 +2025,7 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 			}
 			System::PrintDiagnosticLine(std::format("[autosave-split] tick={} serialize_scene_ms={:.3f} serialize_mos_ms={:.3f} lua_graph_ms={:.3f} compress_write_ms={:.3f} freeze_ms={:.3f} bytes={}\n",
 			    tick, (image->sceneUs - image->movableUs) / 1000.0, image->movableUs / 1000.0, image->graphUs / 1000.0,
-			    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - archiveStart).count(), image->freezeUs / 1000.0, image->imageBytes));
+			    std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - archiveStart).count(), image->freezeUs / 1000.0, image->imageBytes));
 			for (const auto& [part, micros]: image->globalParts) {
 				System::PrintDiagnosticLine(std::format("[autosave-globals] tick={} part={} capture_us={}\n", tick, part, micros));
 			}
@@ -2086,7 +2127,7 @@ bool ActivityMan::CaptureFullStateHash(uint64_t tick, uint64_t round, const std:
 	}
 	std::shared_future<bool> task;
 	size_t bytes = 0;
-	const auto captureStart = std::chrono::steady_clock::now();
+	const auto captureStart = RTE::SteadyClock::now();
 	try {
 		// Every capture of one tick takes one name: the capture writes it into the scene it holds.
 		if (!QueueIncrementalAutosave("fullstate-" + std::to_string(tick), "", "", tick, task, bytes, SaveCompression::Fast, nullptr, true)) {
@@ -2099,7 +2140,7 @@ bool ActivityMan::CaptureFullStateHash(uint64_t tick, uint64_t round, const std:
 	}
 	m_FullStateTasks.push_back(std::move(task));
 	System::PrintDiagnosticLine(std::format("[fullstate-capture] tick={} capture_ms={:.3f} bytes={}", tick,
-	    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count(), bytes));
+	    std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - captureStart).count(), bytes));
 	return true;
 }
 
@@ -2961,7 +3002,7 @@ bool ActivityMan::LoadArchiveToRestart(const std::string& archivePath, const std
 		~RestoreConstructionGlobals() { g_SimRNG = sim; g_RenderRNG = render; g_MovableMan.SetRestoringSnapshot(restoring); }
 	} constructionGlobals;
 	PendingCheckpoint candidate;
-	const auto readStart = std::chrono::steady_clock::now();
+	const auto readStart = RTE::SteadyClock::now();
 	const long uidCounter = MovableObject::GetUniqueIDCounter();
 	const bool wasRestoring = g_MovableMan.IsRestoringSnapshot();
 	g_MovableMan.SetRestoringSnapshot(true);
@@ -2983,7 +3024,7 @@ bool ActivityMan::LoadArchiveToRestart(const std::string& archivePath, const std
 	m_RestartRestoresSnapshot = true;
 	{
 		std::ostringstream line;
-		line << "[snapbench] read_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - readStart).count();
+		line << "[snapbench] read_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - readStart).count();
 		System::PrintDiagnosticLine(line.str());
 	}
 
@@ -3174,7 +3215,7 @@ void ActivityMan::ResumeActivity() {
 
 bool ActivityMan::RestartActivityCandidate() {
 	m_ActivityNeedsRestart = false;
-	const auto restartStart = std::chrono::steady_clock::now();
+	const auto restartStart = RTE::SteadyClock::now();
 	g_ConsoleMan.PrintString("SYSTEM: Activity was reset!");
 
 	if (!m_RestartRestoresSnapshot) g_AudioMan.StopAll();
@@ -3275,7 +3316,7 @@ bool ActivityMan::RestartActivityCandidate() {
 	}
 	if (!restoresSnapshot) g_TimerMan.PauseSim(false);
 
-	m_LastRestartMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - restartStart).count());
+	m_LastRestartMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - restartStart).count());
 	{
 		std::ostringstream line;
 		line << "[snapbench] restart_ms=" << m_LastRestartMs;
@@ -3430,9 +3471,9 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 	if (sections && !managerParts) throw std::logic_error("the runtime globals' sections need the manager parts");
 	CheckpointWriter writer("RuntimeGlobals11");
 	const auto record = [&](const char* name, const std::function<void()>& capture) {
-		const auto start = std::chrono::steady_clock::now();
+		const auto start = RTE::SteadyClock::now();
 		capture();
-		if (timings) timings->emplace_back(name, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+		if (timings) timings->emplace_back(name, std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count());
 	};
 	// Each part is written from the text its section keeps, so a section is exactly what the archive carries.
 	const auto write = [&](const char* name, CheckpointScope scope, const CheckpointText& text) {

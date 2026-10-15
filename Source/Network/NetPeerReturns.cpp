@@ -1,4 +1,5 @@
 #include "NetPeerFrameHelpers.h"
+#include "SteadyClock.h"
 
 #include "DiagnosticLine.h"
 #include "NetAuthCrypto.h"
@@ -99,11 +100,11 @@ namespace RTE {
 			SendPeerFrameMessage(std::move(missing), NetTransportLane::ControlReliable, peer);
 			return;
 		}
-		const auto workEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+		const auto workEnd = RTE::SteadyClock::now() + std::chrono::milliseconds(2);
 		uint32_t preparedFrames = 0;
 		for (auto kept = first; kept != m_MigrationHistory.end() && kept->first < range->second.second && m_LastCompletedSimulationTick && kept->first <= *m_LastCompletedSimulationTick; ++kept) {
 			// The donor's live seat keeps its next update while a reader catches up.
-			if (preparedFrames >= 4 || (preparedFrames != 0 && std::chrono::steady_clock::now() >= workEnd)) break;
+			if (preparedFrames >= 4 || (preparedFrames != 0 && RTE::SteadyClock::now() >= workEnd)) break;
 			const auto [wire, route] = PeerFrameRoute(peer);
 			const uint64_t retryMs = wire && wire->IsPeerPingMeasured(route) ? std::max<uint64_t>(500, wire->GetPeerPingMs(route)) : 1000;
 			if ((m_PeerAppliedThrough.contains(peer) && kept->first <= m_PeerAppliedThrough.at(peer)) || queued.contains(kept->first) ||
@@ -121,8 +122,8 @@ namespace RTE {
 			if (witnesses != m_PeerFrameWitnesses.end()) for (const auto& [sender, witness]: witnesses->second) witnessed |= SeatBit(sender);
 			// A reader that played in this frame confirms its own input in the record when it arrives.
 			if ((members & SeatBit(peer)) != 0) witnessed |= SeatBit(peer);
-			// One donor waits for the majority's witnesses before sending the needed history.
-			if ((witnessed & ~members) != 0 || 2 * std::popcount(witnessed) <= std::popcount(members)) {
+			// One donor waits for the witnesses that confirm the frame's group before sending the needed history.
+			if (!PeerFrameGroupConfirms(witnessed, members, kept->first)) {
 				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && m_TimingNowMs >= m_PeerTailLogAtMs) {
 					m_PeerTailLogAtMs = m_TimingNowMs + 1000;
 					DiagnosticLine() << "[net-peer-tail-witness-wait] donor=" << static_cast<int>(m_Config.localPeerId)
@@ -195,9 +196,9 @@ namespace RTE {
 			auto& repeats = m_PeerTailResendFrames[peer];
 			repeats.erase(repeats.begin(), repeats.upper_bound(applied));
 			uint64_t handedOver = 0;
-			const auto sendEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+			const auto sendEnd = RTE::SteadyClock::now() + std::chrono::milliseconds(2);
 			for (auto item = queued.begin(); item != queued.end() && handedOver < 64 * 1024;) {
-				if (handedOver != 0 && std::chrono::steady_clock::now() >= sendEnd) break;
+				if (handedOver != 0 && RTE::SteadyClock::now() >= sendEnd) break;
 				auto& body = item->second;
 				// Small records arrive independently and repeat within the measured request interval.
 				const bool independentRecord = body.bytes.size() <= 4096;
@@ -405,6 +406,7 @@ namespace RTE {
 		m_PeersPlayedThisRound.erase(peer); m_LastStartAnswerMs.erase(peer);
 		auto& votes = m_PeerBridgeVotes[{frame, 1}];
 		if (const auto own = votes.find(m_Config.localPeerId); own != votes.end()) return SameBridge(own->second, proposal);
+		if (VotedOtherPeerReturn(proposal)) { if (error) *error = "another return of the seat is still being decided"; return false; }
 		votes.emplace(m_Config.localPeerId, proposal); SendPeerFrameMessage(std::move(proposal)); TryCommitPeerBridge(frame, m_TimingNowMs, 1);
 		return true;
 	}

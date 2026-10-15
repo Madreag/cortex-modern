@@ -1,4 +1,5 @@
 #include "Scene.h"
+#include "SteadyClock.h"
 #include "CheckpointNativeSnapshot.h"
 #include "Vector.h"
 #include "Timer.h"
@@ -1762,7 +1763,7 @@ namespace {
 		void Write() {
 			CheckpointWriter::BatchOverride batch(m_Batched);
 			CheckpointNativeSnapshot::ReadScope native(m_Object->FrozenCheckpointNativeOwner());
-			const auto started = std::chrono::steady_clock::now();
+			const auto started = RTE::SteadyClock::now();
 			CaptureTrace::Span span("ahead", CaptureTrace::Active() ? TraceName(m_Object) : std::string());
 			try {
 				AudioMan::SoundCheckpointSaveScope carried(false);
@@ -1778,7 +1779,7 @@ namespace {
 			} catch (...) {
 				m_Failure = std::current_exception();
 			}
-			m_WriteUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+			m_WriteUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 			{
 				std::lock_guard lock(m_Mutex);
 				m_Written = true;
@@ -1832,7 +1833,7 @@ int64_t Scene::LastObjectCaptureUs() {
 }
 
 std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, const CheckpointList<SceneObject*>& objects, const std::function<bool(const SceneObject*)>& placeable, bool saveFullData) {
-	const auto started = std::chrono::steady_clock::now();
+	const auto started = RTE::SteadyClock::now();
 	static const bool cpuRequested = [] { const char* value = std::getenv("CCCP_CHECKPOINT_NATIVE_CPU"); return value && std::string_view(value) == "1"; }();
 	const bool cpuTrace = (CaptureTrace::Active() || cpuRequested) && CheckpointWriter::BatchEnabled();
 	if (cpuTrace) SnapshotThreadCpuUnits();
@@ -1867,7 +1868,7 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 			CaptureTrace::Span span("mo", CaptureTrace::Active() ? TraceName(object) : std::string());
 			const int64_t cpuStart = cpuTrace ? SnapshotThreadCpuUnits() : 0;
 			const int64_t faultStart = cpuTrace ? SnapshotThreadMinorFaults() : 0;
-			const auto wallStart = cpuTrace ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			const auto wallStart = cpuTrace ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 			texts[index] = Writer::Capture([&](Writer& owned) {
 				owned.SetSaveOverrides(overrides);
 				owned.SetCaptureObject(object);
@@ -1876,7 +1877,7 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 			if (cpuTrace) {
 				rootCpu[index] = SnapshotThreadCpuUnits() - cpuStart;
 				rootFaults[index] = SnapshotThreadMinorFaults() - faultStart;
-				rootWall[index] = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - wallStart).count();
+				rootWall[index] = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - wallStart).count();
 			}
 		}
 	};
@@ -1918,7 +1919,7 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 		if (cpuRequested) System::PrintDiagnosticLine("[checkpoint-native-cpu] " + detail);
 		else { CaptureTrace::Span receipt("native_root_cpu", detail); }
 	}
-	s_LastObjectCaptureUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+	s_LastObjectCaptureUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 	return texts;
 }
 
@@ -1952,7 +1953,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			}
 		}
 		// A node written ahead on the pool is taken as it was written; the heavy ones are written ahead next time.
-		const auto started = std::chrono::steady_clock::now();
+		const auto started = RTE::SteadyClock::now();
 		AheadNode* ahead = nullptr;
 		if (s_AheadCapture) {
 			if (const auto found = s_AheadCapture->nodes.find({sceneObjectToSave, channel}); found != s_AheadCapture->nodes.end()) ahead = found->second.get();
@@ -1963,7 +1964,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			SaveSceneObject(owned, sceneObjectToSave, isChildAttachable, saveFullData);
 		}, writer.GetIndent());
 		if (s_AheadCapture && identity != 0) {
-			const int64_t writeUs = ahead ? ahead->WriteUs() : std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+			const int64_t writeUs = ahead ? ahead->WriteUs() : std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 			if (writeUs >= c_AheadNodeUs) s_AheadCapture->NoteHeavy(static_cast<long>(identity), channel);
 		}
 		if (auto* cache = CheckpointWriter::CurrentCache()) text = cache->Remember(sceneObjectToSave, channel, std::move(text), stamp, identity, movableToSave);
@@ -3822,7 +3823,7 @@ void Scene::NoteHorizonTerrainBox(const Box& newArea) {
 		return;
 	}
 	const uint64_t originTick = ScenarioRunner::GetLockstepAppliedFrame();
-	const auto started = std::chrono::steady_clock::now();
+	const auto started = RTE::SteadyClock::now();
 	int captures = 0;
 	// Every pathfinder shares one node dimension, so one capture covers all of them unless a door override moves pixels in this box.
 	HorizonPatchRef sharedPatch;
@@ -3853,7 +3854,7 @@ void Scene::NoteHorizonTerrainBox(const Box& newArea) {
 		pathFinder->CaptureHorizonNodeSnapshots(newArea, nodes);
 		m_HorizonTerrainBoxes.push_back({newArea, originTick, index, patch, std::move(nodes)});
 	}
-	PathFinder::RecordHorizonNote(captures, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
+	PathFinder::RecordHorizonNote(captures, std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count());
 }
 
 void Scene::FlushHorizonTerrainBoxes() {

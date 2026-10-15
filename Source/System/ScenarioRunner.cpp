@@ -1,4 +1,5 @@
 #include "ScenarioRunner.h"
+#include "SteadyClock.h"
 #include "System.h"
 #include "Actor.h"
 #include "ActivityMan.h"
@@ -160,19 +161,19 @@ namespace RTE {
 		std::optional<uint64_t> s_SlowMachineLastNoticeMs;
 		uint64_t s_SlowMachineNoticeUntilMs = 0;
 		long long s_LockstepWaitUs = 0;
-		std::optional<std::chrono::steady_clock::time_point> s_PreSimWait;
+		std::optional<RTE::SteadyClock::time_point> s_PreSimWait;
 		bool s_PacedClockStarted = false; //!< This coordinator's round has run its first tick: its clock owes from there, never from the wait for its start.
 		NetPaceSlide s_PaceSlide;
 		struct LockstepWaitTimer {
-			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-			~LockstepWaitTimer() { s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(); }
+			RTE::SteadyClock::time_point start = RTE::SteadyClock::now();
+			~LockstepWaitTimer() { s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count(); }
 		};
 		struct LockstepWorkTimer {
 			uint64_t tick;
 			const char* phase;
-			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+			RTE::SteadyClock::time_point start = RTE::SteadyClock::now();
 			~LockstepWorkTimer() {
-				const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+				const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - start).count();
 				if (ms >= 50) System::PrintDiagnosticLine("[net-frame-work] frame=" + std::to_string(tick) + " phase=" + phase + " ms=" + std::to_string(ms));
 			}
 		};
@@ -1860,7 +1861,10 @@ namespace RTE {
 	bool ScenarioRunner::IsLockstepHoldNoticeVisible(uint8_t peerId) {
 		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) return true;
-		if (peerId == 0) peerId = s_LockstepCoordinator->GetConfig().localPeerId;
+		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
+		if (peerId == 0) peerId = local;
+		// This machine's own seat reads held while it is held, whether it went quiet or fell behind: a slow seat still hears its host.
+		if (peerId == local && IsLockstepOwnSeatHeld()) return true;
 		return !s_LockstepCoordinator->SeatBridgeTimes().contains(peerId) || s_LockstepCoordinator->IsSeatHoldVisible(peerId);
 	}
 
@@ -2280,14 +2284,14 @@ namespace RTE {
 		if (producing->TimingDecisionPendingAt(tick)) {
 			LockstepWaitTimer waitTimer;
 			// A production wait longer than a round trip is a defect, not pacing: name what holds it once.
-			const auto waitBegan = std::chrono::steady_clock::now();
+			const auto waitBegan = RTE::SteadyClock::now();
 			bool named = false;
 			while (producing->IsRunning() && producing->TimingDecisionPendingAt(tick)) {
 				producing->Tick(NetLockstepNowMs());
 				producing->NoteFrameWait(tick, NetLockstepNowMs(), true);
 				if (s_SessionPump) s_SessionPump();
 				if (producing != s_LockstepCoordinator) { if (error) *error = "the timing wait changed rounds"; return false; }
-				if (!named && std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitBegan).count() > 2000) {
+				if (!named && std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - waitBegan).count() > 2000) {
 					named = true;
 					std::cout << "[net-frame-wait] producing held: " << producing->DescribePendingTimingDecisions(tick) << std::endl;
 				}
@@ -3271,9 +3275,9 @@ namespace RTE {
 
 	bool ScenarioRunner::DrainLockstepRelay(uint32_t budgetMs, uint32_t lingerMs, uint32_t totalCapMs) {
 		NetLockstepPlaneGuard plane;
-		const auto start = std::chrono::steady_clock::now();
+		const auto start = RTE::SteadyClock::now();
 		auto elapsed = [&start] {
-			return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count());
+			return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - start).count());
 		};
 		if (!s_LockstepCoordinator) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(lingerMs));
@@ -3403,7 +3407,7 @@ namespace RTE {
 			if (!s_LockstepCoordinator->PrepareReplayFrame(tick, &error)) { SetControllerReplayError(error); return false; }
 			return true;
 		}
-		const auto now = std::chrono::steady_clock::now();
+		const auto now = RTE::SteadyClock::now();
 		if (s_PreSimWait) s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(now - *s_PreSimWait).count();
 		s_PreSimWait.reset();
 		if (!s_LocalStartParkPublished) {
@@ -3523,7 +3527,7 @@ namespace RTE {
 
 		// Late input is a lockstep wait. Only an explicit round stop, a protocol
 		// failure, or replacement of this coordinator ends it; elapsed lag never does.
-		const auto waitStart = std::chrono::steady_clock::now();
+		const auto waitStart = RTE::SteadyClock::now();
 		// A sub-second wait is a normal frame exchange; only a real stall gets the marker + overlay.
 		uint32_t nextOverlayMs = 1500;
 		bool stalled = false;
@@ -3542,7 +3546,7 @@ namespace RTE {
 			// be waiting on an answer only this pump can send. Paced to the tick so the plane's own
 			// clock does not run ahead of the wall clock while we spin.
 			if (s_SessionPump) {
-				const uint32_t sincePumpMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count());
+				const uint32_t sincePumpMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - waitStart).count());
 				if (sincePumpMs >= nextPumpMs) {
 					nextPumpMs = sincePumpMs + 15;
 					LockstepWorkTimer work{tick, "session-pump"};
@@ -3559,7 +3563,7 @@ namespace RTE {
 					FilterReclaimControllerInputs(ready);
 					s_LockstepCoordinator->FinishFrameWait(NetLockstepNowMs());
 					if (stalled) {
-						const auto stallMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
+						const auto stallMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - waitStart).count();
 						std::cout << "[net-match] peer stall recovered after " << stallMs << "ms (tick " << tick << ")" << std::endl;
 					}
 					if (s_ReplayWriter.IsOpen() || s_PendingWorldSegment) record(ready);
@@ -3581,7 +3585,7 @@ namespace RTE {
 				if (error) *error = s_LockstepCoordinator->GetStats().timeoutReason;
 				return false;
 			}
-			const uint32_t stallMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count());
+			const uint32_t stallMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - waitStart).count());
 			if (stallMs >= nextOverlayMs) {
 				if (!stalled) {
 					stalled = true;

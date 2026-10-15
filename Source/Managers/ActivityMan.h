@@ -225,6 +225,9 @@ namespace RTE {
 		AutosaveRefusal LastAutosaveRefusal() const;
 		/// Test lever CC_FAULT_INJECT=join_capture_refused: the writer refuses the capture of this tick as it starts.
 		void RefuseCaptureWriterAt(uint64_t tick) noexcept { m_RefusedWriterTick.store(tick, std::memory_order_relaxed); }
+		/// Test lever CC_FAULT_INJECT=join_capture_out_of_memory: the writer of this tick's capture runs out of memory as it starts, and so
+		/// does the inventory preparation after it.
+		void ExhaustCaptureMemoryAt(uint64_t tick) noexcept { m_ExhaustedWriterTick.store(tick, std::memory_order_relaxed); }
 		/// What the last capture did to the sim's counters while it ran; every field is zero when the serializers are pure.
 		struct CaptureEffects { long uidsAllocated = 0; uint64_t simDraws = 0; uint64_t renderDraws = 0; int soundCursorMoves = 0; };
 		CaptureEffects LastCaptureEffects() const { return m_LastCaptureEffects; }
@@ -518,6 +521,7 @@ namespace RTE {
 		mutable std::mutex m_DeferredRefusalMutex; //!< The checkpoint worker hands its refusals through it.
 		AutosaveRefusal m_LastAutosaveRefusal; //!< Under m_DeferredRefusalMutex: the writer thread sets it too.
 		std::atomic<uint64_t> m_RefusedWriterTick{0}; //!< The capture tick the test lever has the writer refuse; 0 for none.
+		std::atomic<uint64_t> m_ExhaustedWriterTick{0}; //!< The capture tick the test lever has the writer run out of memory at; 0 for none.
 		void NoteAutosaveRefusal(bool lasting, std::string_view reason, std::string_view detail = {}) noexcept;
 		std::vector<std::pair<SaveKind, std::vector<std::string>>> m_DeferredRefusals; //!< Found off the simulation thread, reported on it.
 		std::vector<std::string> m_DeferredSaveErrors; //!< The writer reports file errors on the simulation thread.

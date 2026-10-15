@@ -1,4 +1,5 @@
 #include "CaptureSentinel.h"
+#include "SteadyClock.h"
 
 #include "RTEError.h"
 #include "System.h"
@@ -170,7 +171,7 @@ namespace {
 	};
 	struct TraceState {
 		std::mutex mutex;
-		std::chrono::steady_clock::time_point origin;
+		RTE::SteadyClock::time_point origin;
 		uint64_t tick = 0;
 		std::vector<TraceRecord> records;
 	};
@@ -215,7 +216,7 @@ void CaptureTrace::Begin(uint64_t tick) {
 	if (!Enabled()) return;
 	TraceState& state = Trace();
 	std::lock_guard lock(state.mutex);
-	state.origin = std::chrono::steady_clock::now();
+	state.origin = RTE::SteadyClock::now();
 	state.tick = tick;
 	state.records.clear();
 	s_Active.store(true, std::memory_order_relaxed);
@@ -241,21 +242,21 @@ void CaptureTrace::End() {
 	System::PrintDiagnosticLine(out);
 }
 
-void CaptureTrace::Span::Start(const char* label, std::string detail, std::chrono::steady_clock::time_point queuedAt) {
+void CaptureTrace::Span::Start(const char* label, std::string detail, RTE::SteadyClock::time_point queuedAt) {
 	m_Label = label;
 	m_Detail = std::move(detail);
 	m_Queued = queuedAt;
-	m_Start = std::chrono::steady_clock::now();
+	m_Start = RTE::SteadyClock::now();
 }
 
 void CaptureTrace::Span::Stop() {
-	const auto end = std::chrono::steady_clock::now();
+	const auto end = RTE::SteadyClock::now();
 	TraceState& state = Trace();
-	const auto offset = [&state](std::chrono::steady_clock::time_point at) {
+	const auto offset = [&state](RTE::SteadyClock::time_point at) {
 		return std::chrono::duration_cast<std::chrono::microseconds>(at - state.origin).count();
 	};
 	std::lock_guard lock(state.mutex);
 	if (!Active()) return;
 	state.records.push_back({m_Label, std::move(m_Detail), ThreadOrdinal(),
-	                         m_Queued == std::chrono::steady_clock::time_point{} ? -1 : offset(m_Queued), offset(m_Start), offset(end)});
+	                         m_Queued == RTE::SteadyClock::time_point{} ? -1 : offset(m_Queued), offset(m_Start), offset(end)});
 }

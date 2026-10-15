@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Writer.h"
+#include "SteadyClock.h"
 #include "SceneLayer.h"
 #include "CheckpointPagePool.h"
 
@@ -60,7 +61,7 @@ namespace RTE {
 
 	/// Measures the complete simulation call and the owned capture's worker completion.
 	struct CheckpointCaptureClock {
-		std::chrono::steady_clock::time_point started;
+		RTE::SteadyClock::time_point started;
 		std::shared_future<int64_t> simulationUs;
 		struct Call {
 			std::atomic<int64_t> durationUs{-1};

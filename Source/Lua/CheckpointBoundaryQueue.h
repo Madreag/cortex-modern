@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointBoundary.h"
+#include "SteadyClock.h"
 #include "FloatingPointEnvironment.h"
 #include "ThreadMan.h"
 
@@ -14,6 +15,7 @@
 #include <type_traits>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -58,10 +60,10 @@ namespace RTE::CheckpointLua {
 		/// Waits up to the given time for a prepared plan the saver has warmed; false if none is warm by then.
 		bool WaitUntilWarm(std::chrono::milliseconds limit) const {
 			const SaverThreads::Lend lend;
-			const auto until = std::chrono::steady_clock::now() + limit;
+			const auto until = RTE::SteadyClock::now() + limit;
 			while (!(m_State.load(std::memory_order_acquire) == State::Ready && m_Warmed.load(std::memory_order_acquire))) {
 				const State state = m_State.load(std::memory_order_acquire);
-				if (state == State::Failed || state == State::Stopped || std::chrono::steady_clock::now() >= until) return false;
+				if (state == State::Failed || state == State::Stopped || RTE::SteadyClock::now() >= until) return false;
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 			return true;
@@ -70,7 +72,15 @@ namespace RTE::CheckpointLua {
 		std::pair<std::string, bool> NotReadyState() const {
 			switch (m_State.load(std::memory_order_acquire)) {
 				case State::Ready: return {};
-				case State::Preparing: return {"the checkpoint inventory is being prepared", false};
+				case State::Preparing: {
+					if (m_Releasing.load(std::memory_order_acquire)) return {"the last capture's inventory is still being released" + PreparationCosts(), false};
+					// A preparation refused before keeps its reason while the next one runs.
+					std::lock_guard lock(m_FailureMutex);
+					if (m_PrepareFailure.empty()) return {"the checkpoint inventory is being prepared" + PreparationCosts(), false};
+					const uint64_t refusals = m_Refusals.load(std::memory_order_acquire);
+					return {"the checkpoint inventory is being prepared again after " + std::to_string(refusals) + (refusals == 1 ? " refused preparation" : " refused preparations") +
+					    " (the last refused: " + m_PrepareFailure + ")" + PreparationCosts(), false};
+				}
 				case State::Rebuild: return {"the checkpoint inventory is being rebuilt", false};
 				case State::Claimed: case State::Armed: case State::Working: return {"the previous capture is still being written", false};
 				case State::Stopped: return {"the checkpoint saver has stopped", true};
@@ -129,6 +139,16 @@ namespace RTE::CheckpointLua {
 		std::atomic<bool> m_WantWarm{false};
 		int m_PlanWarm = -1; //!< The worker's: the prepared plan last warmed (1), cooled (0), or neither yet (-1).
 		std::atomic<bool> m_Warmed{false}; //!< The prepared plan is warm, for a thread that waits on it.
+		std::atomic<bool> m_Releasing{false}; //!< The last capture's plan is being torn down before the next preparation.
+		std::atomic<uint64_t> m_Preparations{0}, m_LastReleaseUs{0}, m_LastPrepareUs{0}; //!< Finished preparations and what the last one cost.
+		std::atomic<uint64_t> m_Refusals{0}; //!< Preparations refused since the last one that finished; each is tried again at the next tick.
+		/// How often and how slowly the inventory has been prepared, for a capture that found it not ready.
+		std::string PreparationCosts() const {
+			const uint64_t count = m_Preparations.load(std::memory_order_acquire);
+			if (!count) return {};
+			return " (" + std::to_string(count) + " prepared so far; the last released its predecessor in " + std::to_string(m_LastReleaseUs.load(std::memory_order_relaxed) / 1000) +
+			    " ms and prepared in " + std::to_string(m_LastPrepareUs.load(std::memory_order_relaxed) / 1000) + " ms)";
+		}
 		std::atomic<uint64_t> m_Wake{0};
 		mutable std::mutex m_FailureMutex;
 		std::string m_PrepareFailure; //!< Why the last preparation was refused.
@@ -144,7 +164,11 @@ namespace RTE::CheckpointLua {
 		void Wake() noexcept { m_Wake.fetch_add(1, std::memory_order_release); m_Wake.notify_one(); }
 		void Publish(State state) noexcept { m_State.store(state, std::memory_order_release); m_State.notify_all(); }
 		void PreparePlan() noexcept {
+			const auto began = RTE::SteadyClock::now();
+			m_Releasing.store(true, std::memory_order_release);
 			m_Plan.reset();
+			m_Releasing.store(false, std::memory_order_release);
+			const auto released = RTE::SteadyClock::now();
 			try {
 				CheckpointNativeStorage::CaptureScope allocations;
 				auto boundary = m_Prepare();
@@ -152,8 +176,18 @@ namespace RTE::CheckpointLua {
 				m_Plan = std::make_unique<Plan>(std::move(boundary));
 				m_PlanWarm = -1;
 				m_Warmed.store(false, std::memory_order_release);
+				const auto micros = [](auto from, auto to) { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(to - from).count()); };
+				m_LastReleaseUs.store(micros(began, released), std::memory_order_relaxed);
+				m_LastPrepareUs.store(micros(released, RTE::SteadyClock::now()), std::memory_order_relaxed);
+				m_Preparations.fetch_add(1, std::memory_order_acq_rel);
+				m_Refusals.store(0, std::memory_order_release);
+				try { std::lock_guard lock(m_FailureMutex); m_PrepareFailure.clear(); } catch (...) {}
 				Publish(State::Ready);
-			} catch (...) { NotePrepareFailure(std::current_exception()); Publish(State::Failed); }
+			} catch (...) {
+				NotePrepareFailure(std::current_exception());
+				m_Refusals.fetch_add(1, std::memory_order_acq_rel);
+				Publish(State::Failed);
+			}
 		}
 		void Work(std::stop_token stop) noexcept {
 			FloatingPointEnvironment::Initialize();
