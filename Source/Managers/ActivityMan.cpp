@@ -1924,9 +1924,9 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 				const int64_t simUs = image->captureClock->SimulationUs();
 				const int64_t totalUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - image->captureClock->started).count();
 				if (image->nativePages) native = image->nativePages->Cost();
-				System::PrintDiagnosticLine(std::format("[checkpoint-completion] tick={} sim_call_us={} total_capture_us={} native_boundary_us={} native_copy_worker_us={} native_sim_fault_observer_us={} native_other_fault_observer_us={} native_sim_faults={} native_other_faults={} native_bytes={} serializer_off_sim={}",
+				System::PrintDiagnosticLine(std::format("[checkpoint-completion] tick={} sim_call_us={} total_capture_us={} native_boundary_us={} native_copy_worker_us={} native_sim_fault_observer_us={} native_other_fault_observer_us={} native_sim_faults={} native_other_faults={} native_bytes={} native_committed_bytes={} serializer_off_sim={}",
 				    tick, simUs, totalUs, image->nativeBoundaryUs, native.workerUs, native.simFaultUs, native.otherFaultUs,
-				    native.simFaults, native.otherFaults, native.bytes, std::this_thread::get_id() != simThread));
+				    native.simFaults, native.otherFaults, native.bytes, native.committedBytes, std::this_thread::get_id() != simThread));
 				int64_t simPartsUs = 0;
 				if (image->captureClock->call) {
 					const std::array names{"prepare", "native_pages", "values", "structure", "globals", "handoff", "return_tail"};

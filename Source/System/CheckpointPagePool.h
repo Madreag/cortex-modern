@@ -22,6 +22,7 @@ namespace RTE {
 		class Allocation;
 		struct Costs {
 			uint64_t bytes = 0;
+			uint64_t committedBytes = 0; //!< The part of bytes the copies made resident.
 			int64_t workerUs = 0, simFaultUs = 0, otherFaultUs = 0;
 			uint64_t simFaults = 0, otherFaults = 0;
 		};
