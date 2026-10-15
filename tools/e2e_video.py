@@ -660,10 +660,11 @@ def capped_stop_ms(video_dir):
     return None
 
 
-# A still is confirmed on every picture: a frozen one changes no pixel by more than this many levels over its span, while
-# encoder noise stays far below it; this many such pixels is a picture that moved (a soldier walking on a 4K whole-map view).
+# A still is confirmed on every picture: a frozen one changes no pixel by more than this many levels over its span - each of the
+# recorder's encoders keeps every pixel of a repeated picture within it - so one such pixel is a picture that moved: a parked view's
+# live numbers, a cursor or one small actor are play, not a frozen game.
 MOTION_LEVELS = 40
-MOTION_PIXELS = 1000
+MOTION_PIXELS = 1
 
 
 def changed_pixels(ffmpeg, video, start_s, end_s):
