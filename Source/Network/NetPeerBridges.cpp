@@ -17,6 +17,13 @@ namespace RTE {
 
 	using namespace NetPeerFrameDetail;
 
+	bool NetLockstepCoordinator::RequestPrivateBaseCapture() { return false; }
+	void NetLockstepCoordinator::ClearPrivateBaseCaptureRequest() {}
+	void NetLockstepCoordinator::TickPeerCaptureRequest(uint64_t) {}
+	bool NetLockstepCoordinator::ValidatePeerCaptureRequest(const NetHostMigrationMessage&, uint64_t) const { return false; }
+	bool NetLockstepCoordinator::ValidatePeerCaptureBridge(const NetHostMigrationMessage&) const { return false; }
+	void NetLockstepCoordinator::AppendPeerCaptureCommand(NetLockstepReadyFrame&) const {}
+
 	bool NetLockstepCoordinator::PeerBridgeHasInputConflict(const NetHostMigrationMessage& proposal) const {
 		if (proposal.preparedFrame != 0) return false;
 		for (uint8_t owner: proposal.members) {
