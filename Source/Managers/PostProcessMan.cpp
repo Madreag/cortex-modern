@@ -151,6 +151,10 @@ void PostProcessMan::Destroy() {
 }
 
 void PostProcessMan::PrepareCheckpointValues() {
+	// The queues made at start lie outside checkpoint storage; copies made in it replace them.
+	const auto own = [](auto& queue) { auto owned = queue; queue.swap(owned); };
+	own(m_PostScreenEffects); own(m_PostSceneEffects); own(m_PostScreenGlowBoxes); own(m_GlowAreas);
+	for (auto& effects: m_ScreenRelativeEffects) own(effects);
 	// The rotation images are cleared before each use, so fresh ones made in checkpoint storage replace the ones made at start.
 	decltype(m_TempEffectBitmaps) owned;
 	for (const auto& [size, previous]: m_TempEffectBitmaps) {
