@@ -242,6 +242,7 @@ namespace RTE {
 			    (message.voterMask & SeatBit(message.senderPeerId)) != 0 && (message.voterMask >> m_Config.peerCount) == 0) {
 				heard();
 				m_PeerFrameWitnesses[message.frame].try_emplace(message.senderPeerId, message);
+				if (m_PeerTailVotes.contains(message.frame)) ConfirmPeerTail(message.frame, nowMs);
 				return true;
 			}
 			if (message.successorPeerId > 0 && message.successorPeerId <= m_Config.peerCount && message.bytes.empty() &&
@@ -472,10 +473,7 @@ namespace RTE {
 			if (at != body.size()) return true;
 			heard();
 			if (!PeerGroupHasAuthority(message.voterMask)) return true;
-			auto& votes = m_PeerTailVotes[message.frame];
-			votes.try_emplace(message.senderPeerId, PeerTailVote{message.voterMask, prefix, prepared, record});
 			uint32_t agreeing = witnessed;
-			for (const auto& [peer, vote]: votes) if (vote.members == message.voterMask && vote.prefix == prefix && vote.prepared == prepared && vote.bytes == record) agreeing |= SeatBit(peer);
 			if ((message.voterMask & SeatBit(m_Config.localPeerId)) != 0) {
 				const auto own = m_PeerSourceInputs.find(message.frame);
 				if (own != m_PeerSourceInputs.end() && own->second.contains(m_Config.localPeerId)) {
@@ -493,31 +491,12 @@ namespace RTE {
 						agreeing |= SeatBit(m_Config.localPeerId);
 				}
 			}
-			// An authenticated donor cannot commit a minority's tail by claiming somebody else's votes.
-			if (!PeerFrameGroupConfirms(agreeing, message.voterMask, message.frame)) {
-				if (message.frame == m_Stats.nextFrame && nowMs >= m_PeerTailLogAtMs) {
-					m_PeerTailLogAtMs = nowMs + 1000;
-					DiagnosticLine() << "[net-peer-tail-wait] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << message.frame
-					    << " donors=" << votes.size() << " matching_voters=" << agreeing << " members=" << message.voterMask << std::endl;
-				}
-				return true;
-			}
-			m_PeerCommittedTail.try_emplace(message.frame, std::move(record));
-			m_PeerPreparedPrefixes.try_emplace(message.frame, prepared);
-			m_PeerTailPrefixes.try_emplace(message.frame, prefix); m_PeerTailDecisions.try_emplace(message.frame, std::move(proofs));
-			m_PeerTailThrough = std::max(m_PeerTailThrough.value_or(0), message.appliedFrame);
-			m_FrameGroupMembers = message.voterMask;
-			if ((message.voterMask & SeatBit(m_Config.localPeerId)) == 0 && !m_PeerBridges.contains(m_Config.localPeerId)) {
-				PeerBridge own;
-				own.fromFrame = m_Stats.nextFrame;
-				own.aiFrame = own.fromFrame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs));
-				own.members = message.voterMask;
-				// The matching majority's committed history already excludes this seat.
-				own.committedHold = true;
-				m_PeerBridges.emplace(m_Config.localPeerId, std::move(own));
-				++m_Stats.peers[m_Config.localPeerId].holds;
-				m_SeatBridgeSinceMs[m_Config.localPeerId] = nowMs;
-			}
+			// The frame waits with what confirms it until its group does; a repeat from the same donor adds the witnesses it now carries.
+			auto& votes = m_PeerTailVotes[message.frame];
+			const auto [vote, fresh] = votes.try_emplace(message.senderPeerId, PeerTailVote{message.voterMask, prefix, prepared, digest, record, std::move(proofs), agreeing, message.appliedFrame});
+			if (!fresh && vote->second.members == message.voterMask && vote->second.prefix == prefix && vote->second.prepared == prepared && vote->second.bytes == record)
+				vote->second.confirmed |= agreeing;
+			ConfirmPeerTail(message.frame, nowMs);
 			return true;
 		}
 		if (!inputMessage || body.empty()) return true;

@@ -1699,6 +1699,8 @@ namespace RTE {
 		void RepairPeerReceiptGaps(uint64_t nowMs);
 		void RemovePeerFrameSeat(uint8_t peer, uint64_t frame);
 		bool ApplyPeerCommittedTail(uint64_t frame, uint64_t nowMs);
+		/// Commit a donor's frame once its group confirms it, with the witnesses this peer received itself as well as those carried in it.
+		bool ConfirmPeerTail(uint64_t frame, uint64_t nowMs);
 		void SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame);
 		void FlushPeerCommittedTails(uint64_t nowMs);
 		void RequestPeerCommittedTail(uint64_t nowMs);
@@ -1741,7 +1743,15 @@ namespace RTE {
 		/// Each owner's recent input-window entries as this peer decoded them, by a hash of their bytes.
 		std::map<uint8_t, std::unordered_map<uint64_t, PeerInputDecode>> m_PeerInputDecodes;
 		std::map<uint8_t, std::pair<uint64_t, uint32_t>> m_PeerArrivalLatencyMs;
-		struct PeerTailVote { uint32_t members = 0; NetHash32 prefix{}, prepared{}; std::vector<uint8_t> bytes; };
+		/// A donor's committed frame: its group, prefixes and record, the decisions it carries, and the seats that confirmed it in it.
+		struct PeerTailVote {
+			uint32_t members = 0;
+			NetHash32 prefix{}, prepared{}, digest{};
+			std::vector<uint8_t> bytes;
+			std::vector<NetHostMigrationMessage> proofs;
+			uint32_t confirmed = 0;
+			uint64_t through = 0;
+		};
 		std::map<uint64_t, std::map<uint8_t, PeerTailVote>> m_PeerTailVotes;
 		std::map<uint64_t, std::vector<NetHostMigrationMessage>> m_PeerTailDecisions;
 		struct PeerFrameIncoming {

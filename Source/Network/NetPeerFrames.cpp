@@ -360,6 +360,7 @@ namespace RTE {
 		m_PeerInputSentAtMs.erase(m_PeerInputSentAtMs.begin(), m_PeerInputSentAtMs.lower_bound(kept));
 		m_PeerPreparedPrefixes.erase(m_PeerPreparedPrefixes.begin(), m_PeerPreparedPrefixes.lower_bound(kept));
 		m_PeerFrameWitnesses.erase(m_PeerFrameWitnesses.begin(), m_PeerFrameWitnesses.lower_bound(kept));
+		m_PeerTailVotes.erase(m_PeerTailVotes.begin(), m_PeerTailVotes.lower_bound(m_Stats.nextFrame));
 		// The split in force keeps its name and its decision however long it lasts.
 		const uint64_t historyFloor = std::min(kept, PeerSplitEpoch(kept));
 		for (auto* history: {&m_PeerFrameTieWinners, &m_FrameGroupChanges}) {

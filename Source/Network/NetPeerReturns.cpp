@@ -9,6 +9,7 @@
 
 #include "lz4.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -117,21 +118,9 @@ namespace RTE {
 			if (queued.size() >= 128 || queuedBytes >= 4 * 1024 * 1024) break;
 			const auto membership = m_FrameGroupChanges.upper_bound(kept->first);
 			const uint32_t members = membership == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(membership)->second;
+			// The frame goes as soon as this donor displays it, with the witnesses it holds: the reader confirms the frame's group with
+			// the witnesses every member sends it too, so its trail is the transit alone.
 			const auto witnesses = m_PeerFrameWitnesses.find(kept->first);
-			uint32_t witnessed = 0;
-			if (witnesses != m_PeerFrameWitnesses.end()) for (const auto& [sender, witness]: witnesses->second) witnessed |= SeatBit(sender);
-			// A reader that played in this frame confirms its own input in the record when it arrives.
-			if ((members & SeatBit(peer)) != 0) witnessed |= SeatBit(peer);
-			// One donor waits for the witnesses that confirm the frame's group before sending the needed history.
-			if (!PeerFrameGroupConfirms(witnessed, members, kept->first)) {
-				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && m_TimingNowMs >= m_PeerTailLogAtMs) {
-					m_PeerTailLogAtMs = m_TimingNowMs + 1000;
-					DiagnosticLine() << "[net-peer-tail-witness-wait] donor=" << static_cast<int>(m_Config.localPeerId)
-					    << " reader=" << static_cast<int>(peer) << " frame=" << kept->first << " witnessed=" << witnessed
-					    << " members=" << members << " now_ms=" << m_TimingNowMs << std::endl;
-				}
-				break;
-			}
 			const auto prefix = kept->first == m_Config.startFrame ? NetHash32{} : PeerFramePrefix(kept->first - 1);
 			const auto prepared = PeerFramePrefix(kept->first);
 			std::vector<uint8_t> body(prefix.begin(), prefix.end()); body.insert(body.end(), prepared.begin(), prepared.end());
@@ -289,6 +278,48 @@ namespace RTE {
 			    << " donor_applied=" << m_PeerTailThrough.value_or(0) << " certified_ahead=" << m_PeerCommittedTail.size()
 			    << " requests=" << m_PeerTailRequests << std::endl;
 		}
+	}
+
+	bool NetLockstepCoordinator::ConfirmPeerTail(uint64_t frame, uint64_t nowMs) {
+		if (frame < m_Stats.nextFrame || m_PeerCommittedTail.contains(frame)) return false;
+		const auto votes = m_PeerTailVotes.find(frame);
+		if (votes == m_PeerTailVotes.end()) return false;
+		const auto heard = m_PeerFrameWitnesses.find(frame);
+		const auto same = [](const PeerTailVote& a, const PeerTailVote& b) { return a.members == b.members && a.prefix == b.prefix && a.prepared == b.prepared && a.bytes == b.bytes; };
+		for (const auto& [donor, vote]: votes->second) {
+			uint32_t agreeing = 0;
+			for (const auto& [peer, other]: votes->second) if (same(other, vote)) agreeing |= SeatBit(peer) | other.confirmed;
+			// A member's witness this peer received itself confirms the record as one its donor carried does.
+			if (heard != m_PeerFrameWitnesses.end()) for (const auto& [sender, witness]: heard->second)
+				if (witness.voterMask == vote.members && witness.bytes.size() == vote.digest.size() + vote.prepared.size() &&
+				    std::equal(vote.digest.begin(), vote.digest.end(), witness.bytes.begin()) && std::equal(vote.prepared.begin(), vote.prepared.end(), witness.bytes.begin() + vote.digest.size()))
+					agreeing |= SeatBit(sender);
+			// An authenticated donor cannot commit a minority's tail by claiming somebody else's votes.
+			if (!PeerFrameGroupConfirms(agreeing, vote.members, frame)) continue;
+			m_PeerCommittedTail.try_emplace(frame, vote.bytes);
+			m_PeerPreparedPrefixes.try_emplace(frame, vote.prepared);
+			m_PeerTailPrefixes.try_emplace(frame, vote.prefix); m_PeerTailDecisions.try_emplace(frame, vote.proofs);
+			m_PeerTailThrough = std::max(m_PeerTailThrough.value_or(0), vote.through);
+			m_FrameGroupMembers = vote.members;
+			if ((vote.members & SeatBit(m_Config.localPeerId)) == 0 && !m_PeerBridges.contains(m_Config.localPeerId)) {
+				PeerBridge own;
+				own.fromFrame = m_Stats.nextFrame;
+				own.aiFrame = own.fromFrame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs));
+				own.members = vote.members;
+				// The matching majority's committed history already excludes this seat.
+				own.committedHold = true;
+				m_PeerBridges.emplace(m_Config.localPeerId, std::move(own));
+				++m_Stats.peers[m_Config.localPeerId].holds;
+				m_SeatBridgeSinceMs[m_Config.localPeerId] = nowMs;
+			}
+			return true;
+		}
+		if (frame == m_Stats.nextFrame && nowMs >= m_PeerTailLogAtMs) {
+			m_PeerTailLogAtMs = nowMs + 1000;
+			DiagnosticLine() << "[net-peer-tail-wait] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << frame
+			    << " donors=" << votes->second.size() << " witnesses=" << (heard == m_PeerFrameWitnesses.end() ? 0 : heard->second.size()) << std::endl;
+		}
+		return false;
 	}
 
 	bool NetLockstepCoordinator::ApplyPeerCommittedTail(uint64_t frame, uint64_t nowMs) {
