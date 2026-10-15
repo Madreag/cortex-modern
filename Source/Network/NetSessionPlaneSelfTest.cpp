@@ -62,6 +62,7 @@ namespace RTE {
 			// These are the agreed match mode and roster stage, shared by every seat.
 			uint8_t mode = 0, rosterStage = 0; // mode: pause, dedicated, persistent; stage: starting, placement.
 			bool adminDirectory = false, adminDirectoryDown = false, repeatedAdministration = false;
+			bool tieBeforeAdministration = false;
 			unsigned asymmetricBridge = 0;
 			uint32_t planeIntervalMs = 1, recoveryRttMs = 0, stepMs = 1;
 			bool delayStartup = false;
@@ -337,6 +338,22 @@ namespace RTE {
 				return true;
 			}
 			DirectoryClient client; client.nextCheckInMs = 60000;
+			if (shape == "two-questions") {
+				client.Query(request, 60000); client.Poll(60000, 100, true, 1, directory);
+				auto other = request; ++other.frame;
+				if (client.Query(other, 60050).state != NetFrameTieReply::State::Waiting || client.request != request)
+					return fail("a second split replaced the exchange still in flight");
+				for (uint64_t now: {60050ULL, 60100ULL}) client.Poll(now, 100, true, 1, directory);
+				if (client.Query(request, 60100).state != NetFrameTieReply::State::Decided) return fail("the older split lost its completed answer");
+				if (client.Query(other, 60100).state != NetFrameTieReply::State::Waiting) return fail("the new split inherited the old split's answer");
+				for (uint64_t now: {60150ULL, 60200ULL, 60250ULL}) client.Poll(now, 100, true, 1, directory);
+				if (client.Query(other, 60250).state != NetFrameTieReply::State::Decided) return fail("the second split did not complete its own exchange");
+				if (client.Query(request, 60250).state != NetFrameTieReply::State::Waiting) return fail("switching back supplied a retired answer without an exchange");
+				for (uint64_t now: {60300ULL, 60350ULL, 60400ULL}) client.Poll(now, 100, true, 1, directory);
+				if (client.Query(request, 60400).state != NetFrameTieReply::State::Decided || directory.ties.size() != 2 || client.tieRequestCount != 3)
+					return fail("two split questions did not retain separate directory decisions and three client exchanges");
+				return true;
+			}
 			if (shape == "throttle") { directory.checkInStatus = 429; directory.retryAfterSeconds = 2; }
 			else { directory.tieStatus = directory.checkInStatus = 503; client.nextCheckInMs = 65000; client.Query(request, 60000); }
 			for (uint64_t now: {60000ULL, 60050ULL, 60100ULL}) client.Poll(now, 100, true, 1, directory);
@@ -460,6 +477,7 @@ namespace RTE {
 			uint64_t Next() { random ^= random << 13; random ^= random >> 7; random ^= random << 17; return random; }
 			bool Split(uint8_t a, uint8_t b) const {
 				if (schedule) return schedule->Cut(a, b, now);
+				if (row.tieBeforeAdministration && now >= 4000 && now < 4150) return (a <= 2) != (b <= 2);
 				if (row.silentVoter && a != b && (a == row.silentVoter || b == row.silentVoter) && now >= silentAt && now < silentAt + row.silentVoterMs) return true;
 				if (!DuringFault() || row.frozen || row.blackout || row.slowPercent || row.inputsLost || row.keepInputEvery || !row.gapMs) return false;
 				if (row.secondSubject && now >= faultAt + row.secondAfterMs && (a == row.secondSubject || b == row.secondSubject)) return true;
@@ -712,7 +730,7 @@ namespace RTE {
 						                         std::to_string(hub.inputSentThrough[owner]);
 				}
 				if (hub.dropReceiptsFrom == owner && peekInto(decision) && decision.type == NetHostMigrationMessageType::PeerReceipt) return true;
-				if (hub.dropInputsFrom == owner && peekInto(decision) &&
+				if ((hub.dropInputsFrom == owner || (hub.row.inputsLost && hub.row.secondSubject == owner && hub.DuringFault() && hub.now >= hub.faultAt + hub.row.secondAfterMs)) && peekInto(decision) &&
 				    (decision.type == NetHostMigrationMessageType::PeerInput || decision.type == NetHostMigrationMessageType::PeerForwardInput)) return true;
 				if (lane == NetTransportLane::ControlReliable && peekInto(decision)) {
 					[]<class Message>(Hub& hub, const Message& packet) {
@@ -2633,7 +2651,7 @@ namespace RTE {
 		auto match = NetMatchConfigUtil::MakeDefault(sessionConfig.sessionId);
 		match.peerCount = count; match.roundId = 77; match.players = {{1, 0, false, "Captain"}, {2, 1, false, "Joiner"}};
 		if (count == 3) match.players.push_back({3, 1, false, "Other joiner"});
-		if (name == "capsule-retry") {
+		if (name == "capsule-retry" || name == "paired-image-service") {
 			match.successorOrder = {2, 3};
 			match.migrationPeers = {{1, 47901, {"127.0.0.1"}}, {2, 47902, {"127.0.0.1"}}, {3, 47903, {"127.0.0.1"}}};
 		}
@@ -2874,6 +2892,44 @@ namespace RTE {
 				pumpRejoin(false);
 			}
 			if (!opened || service.m_SuccessorCapsulesOwed.contains(originalRoute)) { *error = "the live rejoin service did not retry and deliver its successor capsule"; return false; }
+			if (name == "paired-image-service") {
+				const auto ready = hostSession.GetReadyPeers();
+				const auto other = std::find_if(ready.begin(), ready.end(), [](const auto& peer) { return peer.assignedPeerId + 1 == 3; });
+				if (other == ready.end()) { *error = "the second image returner lost its admitted route"; return false; }
+				const NetPeerId otherRoute = other->transportPeerId;
+				if (!service.m_WorldJoin.BeginRejoin(otherRoute, 2, 3, 2, "Other joiner", hub.now, error)) return false;
+				NetWorldCheckpointImage image; image.privateSessionId = match.sessionId; image.round = 77; image.tick = applied[0] - 80;
+				image.bytes = 8; image.checkpointConfig = "config"; image.sideState = "state"; image.digest = "fixture-image";
+				service.m_WorldJoin.PublishImage(image);
+				if (!service.m_WorldJoin.NoteTransferComplete(otherRoute, image.bytes, error)) return false;
+				uint64_t activation = 0;
+				if (!service.m_WorldJoin.NoteCatchUpProgress(otherRoute, applied[2], 60, 1000, service.m_Coordinator->GetStats().nextFrame, &activation, error) || !activation) {
+					*error = "the second image return did not name its activation"; return false;
+				}
+				// Seat 3 still plays in the agreed round, so this activation must be refused. The first returner waits for its archive
+				// until that refusal has happened: a host-wide error here would prevent its later transfer.
+				for (const uint64_t until = hub.now + 2400; hub.now < until && !service.m_PrivateTransferHeldReasons.contains(otherRoute);) {
+					rounds[0] = std::move(service.m_Coordinator);
+					const bool advanced = step(false);
+					service.m_Coordinator = std::move(rounds[0]);
+					if (!advanced) return false;
+					clientLobby.Tick(hub.now); service.m_Runner->GetLobbySession().Tick(hub.now);
+					if (!service.m_WorldJoin.NoteCatchUpProgress(otherRoute, applied[2], 1, 17, service.m_Coordinator->GetStats().nextFrame, nullptr, error)) return false;
+					service.DrivePrivateMatchRejoins(hub.now);
+				}
+				if (!service.m_PrivateTransferHeldReasons.contains(otherRoute) || service.m_Coordinator->HasAgreedSeatReclaim(3)) {
+					*error = "the already-playing seat's image activation was not refused"; return false;
+				}
+				if (!service.m_PrivateJoinError.empty()) { *error = "one refused activation left a host-wide image error: " + service.m_PrivateJoinError; return false; }
+				service.m_WorldJoinImageArchive = std::make_shared<const std::vector<uint8_t>>(image.bytes, 0x39);
+				service.m_WorldJoinImageDigest = image.digest;
+				bool transferred = false;
+				for (const uint64_t until = hub.now + 2000; hub.now < until && !transferred; ++hub.now) {
+					pumpRejoin(true);
+					if (const auto* first = service.m_WorldJoin.FindSession(originalRoute)) transferred = first->transferStarted;
+				}
+				if (!transferred) { *error = "the first image did not leave after the other returner's activation was refused"; return false; }
+			}
 			return true;
 		}
 		if (name == "referee-input-runway") {
@@ -3378,7 +3434,7 @@ namespace RTE {
 		}
 		int passed = 0, failed = 0;
 		const char* selected = std::getenv("CC_TEST_SESSION_PLANE_CASE");
-		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 28 + FixedScheduleRows().size()) << std::endl;
+		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 33 + FixedScheduleRows().size()) << std::endl;
 		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest
 		// rows started first; the random driver's rounds follow them in the same pool.
 		QuietLines quiet(std::cout);
@@ -3388,6 +3444,40 @@ namespace RTE {
 			named.push_back({"host_hold_ai_authority_is_the_certified_frames", CheckHostHoldAuthority});
 		if (!selected || std::string_view(selected) == "directory_client_round_trip_allowances_and_refusals")
 			named.push_back({"directory_client_round_trip_allowances_and_refusals", CheckDirectoryClient});
+		if (!selected || std::string_view(selected) == "a_kept_hold_waits_for_its_own_directory_without_changing_history") {
+			named.push_back({"a_kept_hold_waits_for_its_own_directory_without_changing_history", [](std::string& error) {
+				Case row{"kept_hold_own_directory"}; row.seats = 4; row.subject = 2; row.secondSubject = 3;
+				row.gapMs = 8000; row.inputsLost = row.internet = row.subjectDirectoryDark = true; row.rttMs = row.otherRttMs = 100;
+				Fixture fixture; if (!fixture.Start(row, error)) return false;
+				uint64_t longestKept = 0; bool keptForAuthority = false;
+				for (const uint64_t until = fixture.hub.faultEnd + 12000; fixture.hub.now < until;) {
+					if (!fixture.Step(error)) return false;
+					const auto& reader = *fixture.peers[1];
+					for (const auto& [key, pending]: reader.m_PendingPeerDecisions) if (reader.m_AuthorityWaitSinceMs.contains(key)) {
+						keptForAuthority = true;
+						longestKept = std::max(longestKept, fixture.hub.now - pending.second);
+					}
+				}
+				DiagnosticLine() << "[session-plane-kept-hold] seed=0 kept_for_authority=" << keptForAuthority << " longest_kept_ms=" << longestKept
+				                 << " dropped=" << fixture.peers[1]->GetStats().decisionsDropped << std::endl;
+				if (!keptForAuthority || longestKept < 5000) { error = "the real hold did not remain pending for the directory through its five-second expiry"; return false; }
+				for (uint8_t seat: {1, 4}) if (fixture.maxWait[seat - 1] > 50) { error = "survivor " + std::to_string(seat) + " waited " + std::to_string(fixture.maxWait[seat - 1]) + "ms"; return false; }
+				return true;
+			}});
+		}
+		if (!selected || std::string_view(selected) == "a_healed_tie_keeps_one_history_across_a_host_change") {
+			named.push_back({"a_healed_tie_keeps_one_history_across_a_host_change", [](std::string& error) {
+				Case row{"old_tie_host_change"}; row.seats = 4; row.subject = 1; row.gapMs = 20000;
+				row.internet = row.adminDirectory = row.tieBeforeAdministration = row.imageReturn = true; row.rttMs = row.otherRttMs = 100;
+				Fixture fixture; const bool ok = fixture.Run(row, error);
+				bool oldTie = false;
+				for (const auto& [key, tie]: fixture.hub.directory.ties) oldTie |= std::get<0>(key) == 0 && !tie.winner.empty();
+				DiagnosticLine() << "[session-plane-old-tie] seed=0 old_tie=" << oldTie << " host_changes=" << fixture.hub.adminHistory.size() << std::endl;
+				if (!ok) return false;
+				if (!oldTie || fixture.hub.adminHistory.empty()) { error = "the healed split and the later host change did not both reach the real directory paths"; return false; }
+				return true;
+			}});
+		}
 		if (!selected || std::string_view(selected) == "repeated_host_changes_bound_the_tail_or_answer_missing") {
 			RowRun run; run.name = "repeated_host_changes_bound_the_tail_or_answer_missing"; run.cost = 4000000;
 			run.check = [](std::string& error) {
@@ -3468,6 +3558,7 @@ namespace RTE {
 		    {"directory_decision_lands_after_the_final_query", "final"},
 		    {"directory_refuses_stale_host_hash_generation_and_removed_owners", "refusals"},
 		    {"directory_general_429_blocks_both_request_allowances", "throttle"},
+		    {"directory_two_split_questions_wait_for_their_own_replies", "two-questions"},
 		    {"directory_full_record_503_retries_without_frame_authority", "storage"}}) {
 			if (selected && std::string_view(selected) != name) continue;
 			named.push_back({name, [shape = std::string(shape)](std::string& error) { return CheckDirectoryDelayedReply(shape, error); }});
@@ -3546,6 +3637,7 @@ namespace RTE {
 		}
 		for (const auto& [name, scene]: std::vector<std::pair<const char*, const char*>>{
 		    {"image_successor_capsule_sealing_refusal_is_retried", "capsule-retry"},
+		    {"a_refused_image_activation_keeps_the_other_returners_service_clear", "paired-image-service"},
 		    {"stored_ticket_redials_the_rematch_lobby_on_its_original_seat", "rematch-redial"}}) {
 			if (selected && std::string_view(selected) != name) continue;
 			std::string error; const bool ok = CheckSceneLifecycle(scene, &error);
