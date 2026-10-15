@@ -190,6 +190,8 @@ namespace RTE {
 		BITMAP* ReadBitmap(const BITMAP* source);
 		const BITMAP* Freeze(const BITMAP* source) { return Freeze(const_cast<BITMAP*>(source)); }
 		std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> Pixels(const BITMAP* bitmap) const;
+		/// The pixels of a header any snapshot froze in its source's place, which has no rows of its own; nothing for any other bitmap.
+		static std::optional<std::shared_ptr<const BitmapSnapshot>> FrozenPixels(const BITMAP* bitmap);
 		std::optional<const std::string*> BitmapPath(const BITMAP* bitmap, int& depth) const;
 		void MaterializePixels() const;
 		CheckpointText FreezeWriter(const Serializable* source);

@@ -231,6 +231,8 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::UniformRows(const BITMAP* 
 std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::FreezeRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll) {
 	if (source && CheckpointNativeStorage::Reading()) {
 		source = static_cast<const BITMAP*>(CheckpointNativeStorage::View(source, sizeof(BITMAP)));
+		// Whichever snapshot this read names, a header frozen in the source's place reads its pixels from its owner.
+		if (auto frozen = CheckpointNativeSnapshot::FrozenPixels(source)) return *frozen;
 		if (source->w <= 0 || source->h <= 0) return {};
 		const int depth = bitmap_color_depth(const_cast<BITMAP*>(source));
 		if (depth != 8 && depth != 15 && depth != 16 && depth != 24 && depth != 32)

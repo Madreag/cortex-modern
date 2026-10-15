@@ -101,12 +101,8 @@ std::string GUICheckpoint::SaveBitmap(const BITMAP* bitmap) {
 		}
 		const size_t stride = static_cast<size_t>(bitmap->w) * ((depth + 7) / 8);
 		std::string pixels;
-		if (CheckpointNativeStorage::Reading()) {
-			// A bitmap the snapshot froze in its source's place has no rows of its own; the snapshot keeps its pixels.
-			const auto* snapshot = CheckpointNativeSnapshot::Current();
-			if (auto frozen = snapshot ? snapshot->Pixels(bitmap) : std::nullopt) pixels = frozen->second.Text();
-			else pixels = BitmapSnapshot::Freeze(bitmap)->PixelBytes();
-		} else {
+		if (CheckpointNativeStorage::Reading()) pixels = BitmapSnapshot::Freeze(bitmap)->PixelBytes();
+		else {
 			pixels.reserve(stride * bitmap->h);
 			for (int y = 0; y < bitmap->h; ++y) pixels.append(reinterpret_cast<const char*>(bitmap->line[y]), stride);
 		}

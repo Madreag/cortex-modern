@@ -29,6 +29,7 @@
 #include <memory>
 #include <optional>
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 namespace RTE {
@@ -145,8 +146,10 @@ namespace RTE {
 		return m_UIDs.Find(uid).value_or(nullptr);
 	}
 	struct CheckpointNativeSnapshot::Pixel : CheckpointNativeAllocated {
-		mutable BITMAP bitmap{};
-		GFX_VTABLE table{};
+		/// The frozen header with its own table beside it and its owner, so a reader holding only the header finds the pixels.
+		struct Header { BITMAP bitmap; GFX_VTABLE table; const Pixel* owner; };
+		static_assert(std::is_standard_layout_v<Header>);
+		mutable Header header{};
 		mutable CheckpointVector<uint8_t*> lines;
 		std::shared_ptr<const BitmapSnapshot> snapshot;
 		const BITMAP* loaded = nullptr;
@@ -177,34 +180,34 @@ namespace RTE {
 			std::call_once(ready, [this] {
 				bytes = loaded ? Rows(loaded, rowBytes) : snapshot->PixelBytes();
 				const size_t stride = loaded ? rowBytes : snapshot->rowBytes;
-				lines.resize(bitmap.h);
+				lines.resize(header.bitmap.h);
 				if (CheckpointNativeStorage::Reading() && !bytes.empty()) {
 					CheckpointNativeStorage::RememberPrivate(bytes.data(), bytes.size());
 					privateRows = true;
 				}
 				for (size_t row = 0; row < lines.size(); ++row) lines[row] = reinterpret_cast<uint8_t*>(bytes.data()) + row * stride;
-				bitmap.line = lines.data();
+				header.bitmap.line = lines.data();
 				materialized.store(true, std::memory_order_release);
 			});
 		}
 	};
 	BITMAP* CheckpointNativeSnapshot::Freeze(BITMAP* source) {
 		if (!source) return nullptr;
-		if (const auto known = m_Bitmaps.Find(source)) return &(*known)->bitmap;
+		if (const auto known = m_Bitmaps.Find(source)) return &(*known)->header.bitmap;
 		const BITMAP* address = static_cast<const BITMAP*>(CheckpointNativeStorage::Original(source));
 		auto& recent = Recent<1>(source);
 		if (recent.first == source) return static_cast<BITMAP*>(recent.second);
 		if (const auto* known = m_BitmapSources.FindStored(source)) {
-			recent = {source, &(*known)->bitmap};
-			return &(*known)->bitmap;
+			recent = {source, &(*known)->header.bitmap};
+			return &(*known)->header.bitmap;
 		}
 		CheckpointCloneCost cost("BITMAP");
 		source = const_cast<BITMAP*>(static_cast<const BITMAP*>(CheckpointNativeStorage::View(source, sizeof(BITMAP))));
 		auto pixel = std::shared_ptr<Pixel>(new Pixel());
-		pixel->bitmap = *source; pixel->table = *source->vtable;
-		pixel->bitmap.vtable = &pixel->table;
-		pixel->bitmap.line = nullptr;
-		pixel->bitmap.dat = nullptr; pixel->bitmap.extra = nullptr;
+		pixel->header = {*source, *source->vtable, pixel.get()};
+		pixel->header.bitmap.vtable = &pixel->header.table;
+		pixel->header.bitmap.line = nullptr;
+		pixel->header.bitmap.dat = nullptr; pixel->header.bitmap.extra = nullptr;
 		{
 			CheckpointCloneCost paths("bitmap paths");
 			for (int depth = 0; depth < 2; ++depth) {
@@ -223,9 +226,9 @@ namespace RTE {
 		}
 		// Another thread freezing an owner of the same image may have frozen it first; its copy is the one kept.
 		const auto [kept, claimed] = m_BitmapSources.TryEmplace(source, pixel);
-		if (claimed) m_Bitmaps.InsertOrAssign(&pixel->bitmap, pixel);
-		recent = {source, &kept->bitmap};
-		return &kept->bitmap;
+		if (claimed) m_Bitmaps.InsertOrAssign(&pixel->header.bitmap, pixel);
+		recent = {source, &kept->header.bitmap};
+		return &kept->header.bitmap;
 	}
 	BITMAP* CheckpointNativeSnapshot::ReadBitmap(const BITMAP* source) {
 		BITMAP* bitmap = Freeze(const_cast<BITMAP*>(source));
@@ -238,8 +241,8 @@ namespace RTE {
 	}
 	void CheckpointNativeSnapshot::AppendBitmapReadValues(std::vector<CheckpointNativeStorage::RootRange>& roots) const {
 		m_BitmapSources.ForEach([&](const BITMAP* source, const std::shared_ptr<Pixel>& pixel) {
-			roots.push_back({source, &pixel->bitmap, sizeof(BITMAP), true});
-			roots.push_back({&pixel->table, &pixel->table, sizeof(pixel->table), true});
+			roots.push_back({source, &pixel->header.bitmap, sizeof(BITMAP), true});
+			roots.push_back({&pixel->header.table, &pixel->header.table, sizeof(pixel->header.table), true});
 			if (pixel->materialized.load(std::memory_order_acquire)) {
 				roots.push_back({pixel->lines.data(), pixel->lines.data(), pixel->lines.size() * sizeof(uint8_t*), true});
 				roots.push_back({pixel->bytes.data(), pixel->bytes.data(), pixel->bytes.size(), true});
@@ -251,6 +254,13 @@ namespace RTE {
 		if (!found) found = m_Bitmaps.Find(bitmap);
 		if (!found) return {};
 		return std::pair{(*found)->snapshot, (*found)->Text()};
+	}
+	std::optional<std::shared_ptr<const BitmapSnapshot>> CheckpointNativeSnapshot::FrozenPixels(const BITMAP* bitmap) {
+		// A frozen header's table is the copy beside it; no allegro bitmap keeps its table there.
+		if (!bitmap || reinterpret_cast<const std::byte*>(bitmap->vtable) != reinterpret_cast<const std::byte*>(bitmap) + offsetof(Pixel::Header, table)) return {};
+		const Pixel* pixel = reinterpret_cast<const Pixel::Header*>(bitmap)->owner;
+		// A loaded image keeps its pixels while it is loaded.
+		return pixel->snapshot || !pixel->loaded ? pixel->snapshot : BitmapSnapshot::Capture(pixel->loaded);
 	}
 	std::optional<const std::string*> CheckpointNativeSnapshot::BitmapPath(const BITMAP* bitmap, int& depth) const {
 		auto found = m_BitmapSources.Find(bitmap);
