@@ -253,21 +253,20 @@ namespace RTE {
 		double slowCost = 0;
 		const bool slowMachine = proposal.preparedFrame == 0 && !proposal.members.empty() && std::all_of(proposal.members.begin(), proposal.members.end(),
 		    [&](uint8_t peer) { return CostsPastTolerance(peer, frame, nowMs, &slowCost); });
-		// With another seat voting, a seat that still feeds is never held at the frame being waited on: its input reaches some voter before
-		// the proposal does, the voters stop at different frames, and no majority forms. Only a silent seat stops every voter at one frame.
-		// So the lowest seat that plays on holds a feeding seat at a frame past its inputs in flight, agreed ahead, once it costs more than
-		// the round allows or a wait on it passes the bound; the others wait for that hold.
+		// With another seat voting, a seat that still feeds - its inputs arrive within the bound - is never held at the frame being waited
+		// on: its input reaches some voter before the proposal does, the voters stop at different frames, and no majority forms. So the
+		// lowest seat that plays on holds it at a frame past its inputs in flight, agreed ahead, once it costs more than the round allows;
+		// the others wait for that hold. A seat silent past the bound stops every voter at one frame and is held there.
 		const bool otherVoter = (proposal.connectedMask & ~SeatBit(m_Config.localPeerId)) != 0;
 		const uint64_t feedBoundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
 		const bool feeding = proposal.preparedFrame == 0 && !proposal.members.empty() && !declaredDeparture &&
 		    std::all_of(proposal.members.begin(), proposal.members.end(), [&](uint8_t peer) {
 			    const auto& arrivals = m_Stats.peers[peer].arrivals;
-			    return !arrivals.empty() && nowMs <= arrivals.back().first + 2 * feedBoundMs;
+			    return !arrivals.empty() && nowMs <= arrivals.back().first + feedBoundMs;
 		    });
 		const bool heldAhead = otherVoter && feeding;
 		if (heldAhead) {
-			const bool waitedPastBound = m_ConsumerWaitingFrame == frame && nowMs >= m_ConsumerWaitStartMs && nowMs - m_ConsumerWaitStartMs >= feedBoundMs;
-			if (!(slowMachine || waitedPastBound) || std::countr_zero(proposal.connectedMask) + 1 != m_Config.localPeerId) return false;
+			if (!slowMachine || std::countr_zero(proposal.connectedMask) + 1 != m_Config.localPeerId) return false;
 			for (const auto& [key, votes]: m_PeerBridgeVotes) {
 				if (key.second != 0 || key.first <= frame || m_PeerBridgeCertificates.contains(key)) continue;
 				if (const auto own = votes.find(m_Config.localPeerId); own != votes.end())
