@@ -16851,7 +16851,8 @@ long long LuaMan::GetTotalHeapBytes() {
 }
 
 std::string LuaMan::CheckpointHeapCensus() {
-	return std::format("lua_committed_mb={} lua_free_mb={} lua_returned_mb={} lua_copy_mb={} lua_copy_committed_mb={} lua_idle_copy_mb={}", CheckpointLua::HeapOwner::CommittedHeapBytes() >> 20,
+	const std::string runs = CheckpointLua::HeapOwner::RunSlackCensus();
+	return (runs.empty() ? std::string() : runs + " ") + std::format("lua_committed_mb={} lua_free_mb={} lua_returned_mb={} lua_copy_mb={} lua_copy_committed_mb={} lua_idle_copy_mb={}", CheckpointLua::HeapOwner::CommittedHeapBytes() >> 20,
 	    CheckpointLua::HeapOwner::FreeHeapBytes() >> 20, CheckpointLua::HeapOwner::ReturnedHeapBytes() >> 20, CheckpointLua::HeapOwner::MappedCopyBytes() >> 20,
 	    CheckpointLua::HeapOwner::CommittedCopyBytes() >> 20, CheckpointLua::HeapOwner::IdleCopyBytes() >> 20);
 }

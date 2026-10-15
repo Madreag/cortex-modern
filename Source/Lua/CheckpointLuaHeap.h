@@ -535,6 +535,9 @@ namespace RTE::CheckpointLua {
 		/// Of those, the pages that hold nothing; and the bytes the trim gave back to the system.
 		static size_t FreeHeapBytes() { return FreePagesTotal().load(std::memory_order_relaxed) * Snapshot::c_PageBytes - HoleBytesTotal().load(std::memory_order_relaxed); }
 		static size_t ReturnedHeapBytes() { return HoleBytesTotal().load(std::memory_order_relaxed); }
+		/// Test lever CCCP_TEST_LUA_RUNS: the live heaps' unused blocks in partly used runs, and the classes holding the most as
+		/// class_bytes:slack_kb/live_kb/runs; empty without the lever.
+		static std::string RunSlackCensus();
 		static size_t IdleCopyBytes() { return CopyBytes(true).load(std::memory_order_relaxed); }
 		/// The copy buffers of this heap that a snapshot still holds.
 		size_t LiveSlabs() const { return m_LiveSlabs.load(std::memory_order_relaxed); }
@@ -836,6 +839,24 @@ namespace RTE::CheckpointLua {
 		uint32_t m_Roomy[c_ClassCount] = {}; // Each class's other runs with room.
 		size_t m_PageHint = 0; // No page below it is free.
 		size_t m_FreePageCount = 0;
+		static bool RunsLever() {
+			static const bool armed = std::getenv("CCCP_TEST_LUA_RUNS") != nullptr;
+			return armed;
+		}
+		// Test lever CCCP_TEST_LUA_RUNS: per class, the unused bytes of its runs, their live bytes and their count.
+		std::unique_ptr<std::array<std::atomic<size_t>, 3 * c_ClassCount>> m_RunCensus = RunsLever() ? std::make_unique<std::array<std::atomic<size_t>, 3 * c_ClassCount>>() : nullptr;
+		size_t m_TrimCalls = 0;
+		void NoteRuns() noexcept {
+			std::array<size_t, 3 * c_ClassCount> totals{};
+			for (const Run& run: m_Runs) {
+				if (!run.pages) continue;
+				const size_t bytes = ClassBytes(run.index);
+				totals[run.index] += (size_t{run.capacity} - run.live) * bytes;
+				totals[c_ClassCount + run.index] += size_t{run.live} * bytes;
+				++totals[2 * c_ClassCount + run.index];
+			}
+			for (size_t index = 0; index < totals.size(); ++index) (*m_RunCensus)[index].store(totals[index], std::memory_order_relaxed);
+		}
 		std::atomic<std::ptrdiff_t> m_FreeGranules{0}; // Granules with every page free and still committed.
 		// A bit per granule given back to the system: set by the trim under the preparation lock, cleared by whoever commits it
 		// again, so a clear bit always means committed pages.
@@ -2091,6 +2112,29 @@ namespace RTE::CheckpointLua {
 		return prepared;
 	}
 
+	inline std::string HeapOwner::RunSlackCensus() {
+		if (!RunsLever()) return {};
+		std::array<size_t, 3 * c_ClassCount> totals{};
+		{
+			std::lock_guard lock(RegistryMutex());
+			for (const auto& [owner, identity]: LiveHeaps()) {
+				if (!owner->m_RunCensus) continue;
+				for (size_t index = 0; index < totals.size(); ++index) totals[index] += (*owner->m_RunCensus)[index].load(std::memory_order_relaxed);
+			}
+		}
+		size_t slack = 0;
+		std::array<size_t, c_ClassCount> order{};
+		for (size_t index = 0; index < c_ClassCount; ++index) { order[index] = index; slack += totals[index]; }
+		std::sort(order.begin(), order.end(), [&totals](size_t a, size_t b) { return totals[a] > totals[b]; });
+		std::string text = "lua_run_slack_mb=" + std::to_string(slack >> 20) + " lua_run_slack_top=";
+		for (size_t rank = 0; rank < 12 && totals[order[rank]]; ++rank) {
+			const size_t index = order[rank];
+			text += (rank ? "," : "") + std::to_string(ClassBytes(index)) + ":" + std::to_string(totals[index] >> 10) + "/" + std::to_string(totals[c_ClassCount + index] >> 10) + "/" +
+			        std::to_string(totals[2 * c_ClassCount + index]);
+		}
+		return text;
+	}
+
 	inline bool HeapOwner::Quiet() noexcept {
 		for (const auto& weak: m_Prepared) {
 			const auto prepared = weak.lock();
@@ -2113,6 +2157,7 @@ namespace RTE::CheckpointLua {
 
 	inline void HeapOwner::Trim() noexcept {
 		if (!m_Reservation || m_PrivateNative || m_YieldsToGame) return;
+		if (m_RunCensus && m_TrimCalls++ % 32 == 0) NoteRuns();
 		const std::ptrdiff_t keep = static_cast<std::ptrdiff_t>(std::max(c_TrimKeepBytes, m_Bytes / 8) / c_GranuleBytes);
 		// Past the slice, so a heap that frees and takes a little each tick keeps its pages.
 		if (m_FreeGranules.load(std::memory_order_relaxed) <= keep + static_cast<std::ptrdiff_t>(c_TrimSliceGranules)) return;
