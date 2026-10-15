@@ -772,11 +772,17 @@ namespace RTE {
 			void Stop() override { while (!connections.empty()) Disconnect(connections.begin()->first, "fixture closes"); if (port && hub.listeners[port] == this) hub.listeners.erase(port); port = 0; events.clear(); }
 			std::vector<NetTransportEvent> PollEvents() override {
 				std::vector<NetTransportEvent> ready;
-				for (auto it = events.begin(); it != events.end();) {
-					if (it->at > hub.now) { ++it; continue; }
-					if (it->crossesFault || !hub.Split(owner, connections.contains(it->value.peerId) ? connections.at(it->value.peerId).first->owner : owner)) ready.push_back(std::move(it->value));
-					it = events.erase(it);
+				// Compact pending events once, retaining both pending and delivered order.
+				size_t pending = 0;
+				for (size_t index = 0; index < events.size(); ++index) {
+					auto& event = events[index];
+					if (event.at > hub.now) {
+						if (pending != index) events[pending] = std::move(event);
+						++pending; continue;
+					}
+					if (event.crossesFault || !hub.Split(owner, connections.contains(event.value.peerId) ? connections.at(event.value.peerId).first->owner : owner)) ready.push_back(std::move(event.value));
 				}
+				events.resize(pending);
 				return ready;
 			}
 			uint32_t GetPeerPingMs(NetPeerId id) const override { return connections.contains(id) ? static_cast<uint32_t>(2 * hub.Delay(owner, connections.at(id).first->owner)) : 0; }
@@ -2023,6 +2029,52 @@ namespace RTE {
 		const std::vector<ScheduleRow>& FixedScheduleRows() {
 			// Each seat's routine check-ins went out 1.7 s apart before the round, as the fixed rows above have them.
 			static const std::vector<ScheduleRow> rows = {
+				// The complete Linux 5,000-schedule run, then the current-history failure and its directory twin.
+				{"two_direct_seats_59ms_host_stopped_615ms_survivor_waits_seed_1811", "seed=1811 seats=2 internet=0 exchange=100 end=13169 rtt=59 jitter=0 recover=300,300 phase=0,0 spell=1:stopped:4247:615"},
+				{"two_internet_seats_180ms_directory_240ms_seat2_silent_174ms_survivor_waits_seed_518", "seed=518 seats=2 internet=1 exchange=240 end=13403 rtt=180 jitter=0 recover=300,300 phase=0,0 spell=2:silent:5142:174"},
+				{"two_direct_seats_238ms_host_silent_200ms_survivor_waits_seed_2453", "seed=2453 seats=2 internet=0 exchange=100 end=14109 rtt=238 jitter=0 recover=300,300 phase=0,0 spell=1:silent:5809:200"},
+				{"three_direct_seats_270ms_jitter_20ms_seat2_stopped_200ms_host_silent_360ms_survivor_waits_seed_2469", "seed=2469 seats=3 internet=0 exchange=100 end=13324 rtt=247,270,210 jitter=0,0,20 recover=300,300,300 phase=0,0,0 spell=2:stopped:4691:200 spell=1:silent:4784:360"},
+				{"four_direct_seats_115ms_jitter_40ms_host_silent_476ms_survivor_waits_seed_478", "seed=478 seats=4 internet=0 exchange=100 end=13210 rtt=94,109,97,84,115,87 jitter=20,40,10,0,40,40 recover=300,300,300,300 phase=0,0,0,0 spell=1:silent:4496:476"},
+				{"three_direct_seats_160ms_seat3_slow_61pc_1061ms_back_at_100pc_survivor_waits_seed_4758", "seed=4758 seats=3 internet=0 exchange=100 end=13554 rtt=160,160,160 jitter=0,0,0 recover=300,300,100 phase=0,0,0 spell=3:slow:4493:1061:61"},
+				{"two_internet_seats_212ms_directory_300ms_host_hung_408ms_tie_survivor_waits_seed_3719", "seed=3719 seats=2 internet=1 exchange=300 end=13953 rtt=212 jitter=0 recover=300,300 phase=0,0 spell=1:hung:5341:408"},
+				{"three_direct_seats_114ms_loss_60pc_seat3_seat2_leaves_tie_survivor_waits_seed_4908", "seed=4908 seats=3 internet=0 exchange=100 end=17211 rtt=114,114,114 jitter=0,0,0 recover=300,300,300 phase=0,0,0 burst=3:10379:832:60 leave=2:10500"},
+				{"three_direct_seats_275ms_seat3_silent_200ms_host_slow_57pc_1744ms_seat2_leaves_tie_survivor_waits_seed_3141", "seed=3141 seats=3 internet=0 exchange=100 end=16124 rtt=275,275,275 jitter=0,0,0 recover=300,300,300 phase=0,0,0 spell=3:silent:7824:200 spell=1:slow:5749:1744:57 leave=2:7063"},
+				{"four_direct_seats_59ms_seat4_silent_408ms_seat3_silent_200ms_tie_survivor_waits_seed_359", "seed=359 seats=4 internet=0 exchange=100 end=12837 rtt=59,59,59,59,59,59 jitter=0,0,0,0,0,0 recover=300,300,300,300 phase=0,0,0,0 spell=4:silent:4225:408 spell=3:silent:4467:200"},
+				{"four_internet_seats_218ms_host_hung_800ms_loss_60pc_seat2_tie_survivor_waits_seed_4282", "seed=4282 seats=4 internet=1 exchange=100 end=13553 rtt=218,218,218,218,218,218 jitter=0,0,0,0,0,0 recover=300,300,300,300 phase=0,0,0,0 spell=1:hung:4353:800 burst=2:4268:732:60"},
+				{"three_direct_seats_240ms_jitter_40ms_seat2_slow_53pc_1575ms_host_hung_1410ms_loss_60pc_host_engine_failed_seed_4779", "seed=4779 seats=3 internet=0 exchange=100 end=19504 rtt=227,217,240 jitter=20,0,40 recover=300,300,300 phase=0,0,0 spell=2:slow:7597:1575:53 spell=1:hung:9389:1410 burst=1:11657:1632:60"},
+				{"three_direct_seats_228ms_jitter_40ms_seat2_stopped_186ms_back_at_105pc_loss_90pc_seat2_engine_failed_seed_2540", "seed=2540 seats=3 internet=0 exchange=100 end=18627 rtt=228,184,204 jitter=20,10,40 recover=300,105,300 phase=0,0,0 spell=2:stopped:6721:186 burst=2:5583:2765:90"},
+				{"four_direct_seats_297ms_jitter_10ms_loss_60pc_seat4_engine_failed_seed_311", "seed=311 seats=4 internet=0 exchange=100 end=13875 rtt=220,217,297,262,210,237 jitter=10,5,0,0,10,0 recover=300,300,300,300 phase=0,0,0,0 burst=4:5011:2864:60"},
+				{"four_internet_seats_238ms_jitter_10ms_loss_60pc_seat2_engine_failed_seed_2125", "seed=2125 seats=4 internet=1 exchange=100 end=12765 rtt=196,216,238,182,186,162 jitter=5,0,0,0,10,10 recover=300,300,300,300 phase=0,0,0,0 burst=2:4225:2540:60"},
+				{"two_internet_seats_50ms_host_silent_dark_388ms_seat2_leaves_histories_differ_seed_360", "seed=360 seats=2 internet=1 exchange=100 end=14220 rtt=50 jitter=0 recover=300,300 phase=0,0 spell=1:silent:5638:388:dark leave=2:6475"},
+				{"three_direct_seats_52ms_jitter_26ms_host_silent_832ms_loss_10pc_host_histories_differ_seed_4847", "seed=4847 seats=3 internet=0 exchange=100 end=17372 rtt=52,40,41 jitter=26,5,0 recover=300,300,300 phase=0,0,0 spell=1:silent:4083:832 burst=1:9040:2332:10"},
+				{"three_direct_seats_224ms_jitter_10ms_seat3_stopped_1455ms_back_at_120pc_loss_90pc_seat2_histories_differ_seed_2208", "seed=2208 seats=3 internet=0 exchange=100 end=21605 rtt=224,224,168 jitter=0,0,10 recover=300,300,120 phase=0,0,0 spell=3:stopped:4875:1455 burst=2:10808:1991:90"},
+				{"four_direct_seats_59ms_jitter_20ms_host_hung_372ms_histories_differ_seed_4469", "seed=4469 seats=4 internet=0 exchange=100 end=17725 rtt=59,57,47,45,56,47 jitter=0,5,0,0,0,20 recover=300,300,300,300 phase=0,0,0,0 spell=1:hung:9167:372"},
+				{"three_direct_seats_204ms_jitter_10ms_loss_60pc_seat2_loss_90pc_seat3_histories_differ_seed_2810", "seed=2810 seats=3 internet=0 exchange=100 end=15069 rtt=204,194,204 jitter=0,10,5 recover=300,300,300 phase=0,0,0 burst=2:7318:1751:60 burst=3:5450:1017:90"},
+				{"four_internet_seats_252ms_jitter_40ms_held_at_the_round_start_seed_3034", "seed=3034 seats=4 internet=1 exchange=100 end=12000 rtt=205,227,215,242,252,250 jitter=40,0,10,20,5,0 recover=300,300,300,300 phase=0,0,0,0"},
+				{"two_direct_seats_280ms_seat2_late_100ms_more_200ms_back_at_120pc_loss_10pc_seat2_loss_90pc_seat2_held_seat_never_returns_seed_4266", "seed=4266 seats=2 internet=0 exchange=100 end=19463 rtt=280 jitter=0 recover=300,120 phase=0,0 spell=2:late:6000:200:100 burst=2:11567:1896:10 burst=2:10474:1070:90"},
+				{"two_internet_seats_55ms_host_silent_dark_456ms_seat2_leaves_held_seat_never_returns_seed_4838", "seed=4838 seats=2 internet=1 exchange=100 end=14633 rtt=55 jitter=0 recover=300,300 phase=0,0 spell=1:silent:5949:456:dark leave=2:8087"},
+				{"three_direct_seats_52ms_host_stopped_188ms_back_at_120pc_loss_90pc_host_held_seat_never_returns_seed_3652", "seed=3652 seats=3 internet=0 exchange=100 end=14663 rtt=52,52,52 jitter=0,0,0 recover=120,300,300 phase=0,0,0 spell=1:stopped:5535:188 burst=1:4078:2838:90"},
+				{"two_direct_seats_57ms_seat2_late_50ms_more_200ms_back_at_105pc_loss_90pc_host_held_seat_never_returns_seed_568", "seed=568 seats=2 internet=0 exchange=100 end=15479 rtt=57 jitter=0 recover=300,105 phase=0,0 spell=2:late:6000:200:50 burst=1:8339:1140:90"},
+				{"two_direct_seats_91ms_seat2_late_200ms_more_200ms_back_at_105pc_loss_90pc_seat2_held_seat_never_returns_seed_4759", "seed=4759 seats=2 internet=0 exchange=100 end=17946 rtt=91 jitter=0 recover=300,105 phase=0,0 spell=2:late:5598:200:200 burst=2:10783:1163:90"},
+				{"three_direct_seats_265ms_host_late_200ms_more_1335ms_back_at_105pc_held_seat_never_returns_seed_714", "seed=714 seats=3 internet=0 exchange=100 end=17838 rtt=265,265,265 jitter=0,0,0 recover=105,300,300 phase=0,0,0 spell=1:late:4503:1335:200"},
+				{"two_direct_seats_198ms_host_stopped_230ms_loss_60pc_host_loss_90pc_seat2_held_seat_returns_late_seed_3209", "seed=3209 seats=2 internet=0 exchange=100 end=19465 rtt=198 jitter=0 recover=300,300 phase=0,0 spell=1:stopped:9554:230 burst=1:11504:1961:60 burst=2:7033:1433:90"},
+				{"two_internet_seats_50ms_jitter_20ms_host_stopped_384ms_loss_30pc_host_held_seat_returns_late_seed_3775", "seed=3775 seats=2 internet=1 exchange=100 end=14868 rtt=50 jitter=20 recover=300,300 phase=0,0 spell=1:stopped:6292:384 burst=1:4489:2741:30"},
+				{"three_direct_seats_21ms_host_hung_472ms_back_at_120pc_loss_30pc_seat2_held_seat_returns_late_seed_2325", "seed=2325 seats=3 internet=0 exchange=100 end=15806 rtt=21,21,21 jitter=0,0,0 recover=120,300,300 phase=0,0,0 spell=1:hung:4974:472 burst=2:5914:670:30"},
+				{"three_direct_seats_172ms_seat2_silent_200ms_held_seat_returns_late_seed_3309", "seed=3309 seats=3 internet=0 exchange=100 end=13981 rtt=172,172,172 jitter=0,0,0 recover=300,300,300 phase=0,0,0 spell=2:silent:5681:200"},
+				{"two_direct_seats_282ms_loss_90pc_host_held_seat_returns_late_seed_3760", "seed=3760 seats=2 internet=0 exchange=100 end=15195 rtt=282 jitter=0 recover=300,300 phase=0,0 burst=1:6293:2902:90"},
+				{"three_direct_seats_240ms_seat3_silent_200ms_held_seat_returns_late_seed_1020", "seed=1020 seats=3 internet=0 exchange=100 end=14082 rtt=240,240,240 jitter=0,0,0 recover=300,300,300 phase=0,0,0 spell=3:silent:5782:200"},
+				{"three_direct_seats_57ms_jitter_10ms_host_hung_456ms_held_without_its_own_trouble_seed_4505", "seed=4505 seats=3 internet=0 exchange=100 end=12914 rtt=51,57,54 jitter=0,10,0 recover=300,300,300 phase=0,0,0 spell=1:hung:4230:456"},
+				{"three_direct_seats_58ms_host_silent_920ms_held_without_its_own_trouble_seed_1964", "seed=1964 seats=3 internet=0 exchange=100 end=16792 rtt=58,58,58 jitter=0,0,0 recover=300,300,300 phase=0,0,0 spell=1:silent:7412:920"},
+				{"three_direct_seats_47ms_jitter_23ms_host_silent_376ms_held_without_its_own_trouble_seed_1176", "seed=1176 seats=3 internet=0 exchange=100 end=13136 rtt=47,47,47 jitter=0,23,0 recover=300,300,300 phase=0,0,0 spell=1:silent:4572:376"},
+				{"four_internet_seats_297ms_jitter_40ms_held_without_its_own_trouble_seed_3563", "seed=3563 seats=4 internet=1 exchange=100 end=12000 rtt=255,277,295,290,297,270 jitter=40,20,10,5,20,10 recover=300,300,300,300 phase=0,0,0,0"},
+				{"three_direct_seats_50ms_jitter_25ms_host_silent_448ms_returned_seat_held_again_seed_1790", "seed=1790 seats=3 internet=0 exchange=100 end=13055 rtt=50,41,45 jitter=25,5,22 recover=300,300,300 phase=0,0,0 spell=1:silent:4383:448"},
+				{"three_direct_seats_60ms_jitter_30ms_host_late_400ms_more_344ms_loss_30pc_host_loss_60pc_seat2_returned_seat_held_again_seed_3372", "seed=3372 seats=3 internet=0 exchange=100 end=17535 rtt=58,60,43 jitter=5,30,5 recover=300,300,300 phase=0,0,0 spell=1:late:4589:344:400 burst=1:8811:2724:30 burst=2:6860:456:60"},
+				{"three_direct_seats_300ms_host_hung_200ms_seat3_silent_7200ms_returned_seat_held_again_seed_4371", "seed=4371 seats=3 internet=0 exchange=100 end=24800 rtt=300,300,300 jitter=0,0,0 recover=300,300,300 phase=0,0,0 spell=1:hung:5083:200 spell=3:silent:6000:7200"},
+				{"four_internet_seats_53ms_jitter_26ms_seat4_hung_186ms_back_at_100pc_host_late_400ms_more_436ms_returned_seat_held_again_seed_4066", "seed=4066 seats=4 internet=1 exchange=100 end=16664 rtt=52,45,42,53,41,40 jitter=20,0,10,26,10,0 recover=300,300,300,100 phase=0,0,0,0 spell=4:hung:6000:186 spell=1:late:8028:436:400"},
+				{"four_internet_seats_272ms_host_stopped_752ms_back_at_100pc_seat2_slow_86pc_5574ms_back_at_100pc_two_return_frames_seed_404", "seed=404 seats=4 internet=1 exchange=100 end=20304 rtt=250,272,245,230,222,265 jitter=0,0,0,0,0,0 recover=100,100,300,300 phase=0,0,0,0 spell=1:stopped:6000:752 spell=2:slow:6730:5574:86"},
+				{"three_direct_seats_290ms_jitter_10ms_seat3_slow_56pc_1296ms_back_at_105pc_host_silent_1335ms_histories_differ_seed_169", "seed=169 seats=3 internet=0 exchange=100 end=25340 rtt=270,215,290 jitter=0,0,10 recover=300,300,105 phase=0,0,0 spell=3:slow:4644:1296:56 spell=1:silent:6158:1335"},
+				{"three_internet_seats_290ms_jitter_10ms_seat3_slow_56pc_1296ms_back_at_105pc_host_silent_1335ms_histories_differ_seed_169", "seed=169 seats=3 internet=1 exchange=100 end=25340 rtt=270,215,290 jitter=0,0,10 recover=300,300,105 phase=0,0,0 spell=3:slow:4644:1296:56 spell=1:silent:6158:1335"},
+				{"three_seats_host_slows_while_the_other_joiner_is_held", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=3:silent:6000:10000 spell=1:slow:8500:4000:70"},
 				{"seed12_four_direct_joiner_slow_74_percent_with_a_lossy_voter", "seed=12 seats=4 internet=0 exchange=100 end=14984 rtt=230,282,202,247,250,282 jitter=0,0,0,0,0,0 recover=300,100,300,300 phase=0,0,0,0 spell=2:slow:6000:984:74 burst=3:6119:2414:60"},
 				{"seed12_four_internet_joiner_slow_74_percent_with_a_lossy_voter", "seed=12 seats=4 internet=1 exchange=100 end=14984 rtt=230,282,202,247,250,282 jitter=0,0,0,0,0,0 recover=300,100,300,300 phase=0,0,0,0 spell=2:slow:6000:984:74 burst=3:6119:2414:60"},
 				{"seed69_four_internet_host_slow_58_percent_with_loss", "seed=69 seats=4 internet=1 exchange=100 end=16747 rtt=17,17,17,17,17,17 jitter=0,0,0,0,0,0 recover=300,300,300,300 phase=0,0,0,0 spell=1:slow:5080:3031:58 burst=2:4215:2601:60 burst=1:7939:139:60"},
@@ -2522,7 +2574,7 @@ namespace RTE {
 
 	bool NetSessionPlaneSelfTest::CheckSceneLifecycle(const std::string& name, std::string* error) {
 		Hub hub;
-		const uint8_t count = name == "rematch-chat" || name == "kick-received-two" || name == "heavy-input" || name == "leave-rejoin-two" || name == "drop-after-input" || name == "drop-before-host-input" || name == "referee-input-runway" ? 2 : 3;
+		const uint8_t count = name == "rematch-chat" || name == "rematch-redial" || name == "kick-received-two" || name == "heavy-input" || name == "leave-rejoin-two" || name == "drop-after-input" || name == "drop-before-host-input" || name == "referee-input-runway" ? 2 : 3;
 		hub.row = Case{"scene_lifecycle"}; hub.row.seats = count; hub.row.rttMs = hub.row.otherRttMs = 100;
 		auto ip = std::make_unique<Wire>(hub, 1);
 		auto relay = std::make_unique<Wire>(hub, 1);
@@ -2656,6 +2708,66 @@ namespace RTE {
 		for (size_t index = 0; index < count; ++index) {
 			sessionWires[index] = std::make_unique<NetPeerSessionWire>(links[index]);
 			links[index]->sessionAttached = true; sessions[index]->RebindSessionWire(*sessionWires[index]);
+		}
+		if (name == "rematch-redial") {
+			NetSeatAuthRegistry registry;
+			if (!registry.BeginHostedSession()) { *error = "the rematch registry could not start"; return false; }
+			NetH4Identity authIdentity; authIdentity.gameVersion = identity.gameVersion; authIdentity.buildId = identity.buildId;
+			authIdentity.controllerFrameVersion = ControllerFrame::c_Version; authIdentity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			NetReconnectHost admission; admission.Configure(&registry, match.sessionId, authIdentity);
+			admission.SetSeatTable(NetH4BuildSeatTable(match), match.mode); admission.SetHostAddress("fixture");
+			admission.SetMatchConfigHash(NetMatchConfigUtil::HashConfig(match));
+			uint64_t unixNow = 1700000000000ULL;
+			const auto clock = [](void* context) { return *static_cast<uint64_t*>(context); };
+			admission.SetUnixClock(clock, &unixNow);
+			NetReconnectTicketStore store; store.SetPath("Userdata/hold-row-rematch-redial.json");
+			NetReconnectClient original; original.Configure(&store, authIdentity, "Joiner"); original.SetUnixClock(clock, &unixNow);
+			original.SetHostContext("fixture", NetMatchConfigUtil::HashConfig(match));
+			if (!original.BeginAdmission(hub.now, error)) return false;
+			for (unsigned pump = 0; pump < 20; ++pump, ++hub.now) {
+				for (const auto& packet: original.TakeOutbound()) admission.HandleMessage(originalRoute, packet.payload, hub.now);
+				admission.Tick(hub.now);
+				for (const auto& packet: admission.TakeOutbound()) if (packet.connection == originalRoute) original.HandleMessage(packet.payload, hub.now);
+				original.Tick(hub.now);
+			}
+			if (!original.IsAdmitted() || original.GetAssignedPeerId() + 1 != 2) { *error = "the first round did not issue the player's seat ticket"; return false; }
+			const auto ticket = original.GetRecord(); const auto incarnation = original.GetIncarnation();
+			admission.SetLiveMatch(true); hostSession.SetReconnectHost(&admission);
+			struct DetachAdmission { NetSession& host; NetSession& client; ~DetachAdmission() { host.SetReconnectHost(nullptr); client.SetReconnectClient(nullptr); } } detach{hostSession, returningSession};
+			rounds[0]->Complete("round ended");
+			for (const uint64_t until = hub.now + 300; hub.now < until; ++hub.now) for (auto& round: rounds) round->Tick(hub.now);
+			for (auto& round: rounds) round.reset();
+			admission.SetMatchEnded();
+			NetMatchConfig rematch;
+			if (!NetMatchConfigUtil::DeriveRematchConfig(match, rematch, error)) return false;
+			admission.SetSeatTable(NetH4BuildSeatTable(rematch), rematch.mode); admission.SetMatchConfigHash(NetMatchConfigUtil::HashConfig(rematch));
+			clientSession.Close("re-dialling the rematch lobby");
+			for (const uint64_t until = hub.now + 1200; hub.now < until; ++hub.now) { hostSession.Tick(hub.now); clientSession.Tick(hub.now); }
+			NetReconnectClient returning; returning.Configure(&store, authIdentity, "Joiner"); returning.SetUnixClock(clock, &unixNow);
+			returning.SetHostContext("fixture", NetMatchConfigUtil::HashConfig(rematch)); returning.SetRequireStoredTicket(true);
+			returningSession.SetReconnectClient(&returning);
+			auto redial = joinConfig; redial.localNonce += 4;
+			if (!returningSession.StartClient(returningWire, "fixture", redial, error)) return false;
+			for (const uint64_t until = hub.now + 3000; hub.now < until && (!returningSession.IsReady() || hostSession.GetReadyPeerCount() != 1); ++hub.now) {
+				hostSession.Tick(hub.now); returningSession.Tick(hub.now);
+			}
+			if (!returningSession.IsReady() || !returning.UsedStoredTicket() || returning.GetRecord().stableSeat != ticket.stableSeat ||
+			    returning.GetRecord().epoch != ticket.epoch || returning.GetIncarnation() <= incarnation || returningSession.GetLocalPeerId() != 1) {
+				*error = "the stored seat ticket did not re-dial the rematch lobby: " + returningSession.BuildRejectText(); return false;
+			}
+			std::array<NetLobbySession, 2> lobbies;
+			for (size_t index = 0; index < 2; ++index) {
+				NetLobbySessionConfig config; config.host = index == 0; config.localPeerId = static_cast<uint8_t>(index + 1);
+				config.matchConfig = rematch; config.startFrame = 1; config.autoReady = config.autoStart = false;
+				config.session = index == 0 ? &hostSession : &returningSession; config.sessionNowMs = [&] { return hub.now; };
+				config.remoteTransportPeerIds[index == 0 ? 2 : 1] = index == 0 ? hostSession.GetReadyPeers().front().transportPeerId : returningSession.GetRemoteTransportPeerId();
+				if (!lobbies[index].Start(index == 0 ? static_cast<INetTransport&>(*sessionWires[0]) : static_cast<INetTransport&>(returningWire), config, error)) return false;
+			}
+			for (const uint64_t until = hub.now + 2000; hub.now < until; ++hub.now) for (auto& lobby: lobbies) lobby.Tick(hub.now);
+			if (!lobbies[0].IsConfigAcked(2) || lobbies[1].GetMatchConfigHash() != NetMatchConfigUtil::HashConfig(rematch)) {
+				*error = "the re-dialled seat did not acknowledge the next round's config"; return false;
+			}
+			return true;
 		}
 		if (name == "capsule-retry") {
 			for (const uint64_t until = hub.now + 3000; hub.now < until;) if (!step(false)) return false;
@@ -3239,7 +3351,7 @@ namespace RTE {
 		}
 		int passed = 0, failed = 0;
 		const char* selected = std::getenv("CC_TEST_SESSION_PLANE_CASE");
-		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 27 + FixedScheduleRows().size()) << std::endl;
+		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 28 + FixedScheduleRows().size()) << std::endl;
 		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest
 		// rows started first; the random driver's rounds follow them in the same pool.
 		QuietLines quiet(std::cout);
@@ -3403,9 +3515,12 @@ namespace RTE {
 			                 << (!complete ? ": did not run every requested schedule" : driver.failedCount ? ": " + std::to_string(driver.failedCount) + " of " + std::to_string(driver.count) + " schedules broke a property" : "");
 			if (driver.failedCount || !complete) ++failed; else ++passed;
 		}
-		if (!selected || std::string_view(selected) == "image_successor_capsule_sealing_refusal_is_retried") {
-			std::string error; const bool ok = CheckSceneLifecycle("capsule-retry", &error);
-			DiagnosticLine() << "[net-session-plane-selftest] " << (ok ? "PASS " : "FAIL ") << "image_successor_capsule_sealing_refusal_is_retried" << (error.empty() ? "" : ": seed=0 " + error);
+		for (const auto& [name, scene]: std::vector<std::pair<const char*, const char*>>{
+		    {"image_successor_capsule_sealing_refusal_is_retried", "capsule-retry"},
+		    {"stored_ticket_redials_the_rematch_lobby_on_its_original_seat", "rematch-redial"}}) {
+			if (selected && std::string_view(selected) != name) continue;
+			std::string error; const bool ok = CheckSceneLifecycle(scene, &error);
+			DiagnosticLine() << "[net-session-plane-selftest] " << (ok ? "PASS " : "FAIL ") << name << (error.empty() ? "" : ": seed=0 " + error);
 			if (ok) ++passed; else ++failed;
 		}
 		// Service instances own process-wide replay hooks on destruction, so these checks follow the row pool.
