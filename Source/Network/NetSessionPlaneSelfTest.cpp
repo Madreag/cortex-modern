@@ -81,6 +81,8 @@ namespace RTE {
 			// This seat goes silent for silentVoterMs from the moment the leader first votes the subject's return: it never votes that return (0: none).
 			uint8_t silentVoter = 0;
 			uint64_t silentVoterMs = 0;
+			// The subject's own inputs stop reaching the others through the fault while its link stays up - receipts, heartbeats, tails.
+			bool inputsLost = false;
 			// The subject returns within this long after the fault, then stays returned for twenty seconds (0: the usual allowance).
 			uint64_t returnWithinMs = 0;
 		};
@@ -99,7 +101,7 @@ namespace RTE {
 			uint64_t silentAt = UINT64_MAX;
 			bool Split(uint8_t a, uint8_t b) const {
 				if (row.silentVoter && a != b && (a == row.silentVoter || b == row.silentVoter) && now >= silentAt && now < silentAt + row.silentVoterMs) return true;
-				if (!DuringFault() || row.frozen || row.blackout || row.slowPercent || !row.gapMs) return false;
+				if (!DuringFault() || row.frozen || row.blackout || row.slowPercent || row.inputsLost || !row.gapMs) return false;
 				if (row.secondSubject && now >= faultAt + row.secondAfterMs && (a == row.secondSubject || b == row.secondSubject)) return true;
 				if (row.tie) return (a <= 2) != (b <= 2);
 				return a == row.subject || b == row.subject;
@@ -603,6 +605,7 @@ namespace RTE {
 					if (hub.row.frozen && id == hub.row.subject && hub.DuringFault()) peers[id - 1]->PlaneTick(hub.now);
 					else peers[id - 1]->Tick(hub.now);
 				}
+				if (hub.row.inputsLost) hub.dropInputsFrom = hub.DuringFault() ? hub.row.subject : 0;
 				if (hub.row.joinerInputsLostFirstMs && hub.now == hub.faultAt - hub.row.joinerInputsLostFirstMs) hub.dropInputsFrom = 2;
 				if (hub.row.joinerInputsLostFirstMs && hub.now == hub.faultAt) hub.dropInputsFrom = 0;
 				if (hub.row.blackout && hub.now == hub.faultAt) {
@@ -1555,6 +1558,9 @@ namespace RTE {
 		rows.push_back(lagged("joiner_catching_up_at_105_percent_returns_over_100ms", 100, 105, 800, 20000));
 		rows.push_back(lagged("joiner_catching_up_at_105_percent_returns_over_200ms", 200, 105, 800, 20000));
 		rows.push_back(lagged("joiner_catching_up_at_102_percent_returns_over_100ms", 100, 102, 600, 40000));
+		// A seat held for waiting past the bound while its link stays up learns its hold: every peer plays the same history to the end.
+		auto lostInputs = gap("joiner_inputs_lost_1s_held_and_back_over_100ms", 2, 1000); lostInputs.seats = 3; lostInputs.inputsLost = true;
+		lostInputs.rttMs = lostInputs.otherRttMs = 100; rows.push_back(lostInputs);
 		// The W+L shape: a joiner a little slower than the host over the internet, its referee answering as late as the directory does.
 		auto lateReferee = gap("two_internet_late_joiner_takes_every_decision_with_an_800ms_referee", 2, 20000); lateReferee.seats = 2;
 		lateReferee.internet = lateReferee.directoryBoth = lateReferee.noRefusals = true; lateReferee.slowPercent = 95;
