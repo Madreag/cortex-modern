@@ -26,6 +26,7 @@
 #include <array>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <map>
 #include <memory>
 #include <span>
@@ -1271,9 +1272,12 @@ void Atom::FillPool(int fillAmount) {
 
 	// If concrete class, fill up the pool with pre-allocated memory blocks the size of the type
 	if (fillAmount > 0) {
-		// As many as we're asked to make
+		// As many as we're asked to make; a refused allocation stops the refill, so no null block reaches the pool.
+		s_AllocatedPool.reserve(s_AllocatedPool.size() + static_cast<size_t>(fillAmount));
 		for (int i = 0; i < fillAmount; ++i) {
-			s_AllocatedPool.push_back(malloc(sizeof(Atom)));
+			void* memory = malloc(sizeof(Atom));
+			if (!memory) throw std::bad_alloc();
+			s_AllocatedPool.push_back(memory);
 		}
 	}
 }

@@ -876,8 +876,12 @@ namespace RTE {
 
 		// If concrete class, fill up the pool with pre-allocated memory blocks the size of the type
 		if (m_Allocate && fillAmount > 0) {
+			m_AllocatedPool.reserve(m_AllocatedPool.size() + static_cast<size_t>(fillAmount));
 			for (int i = 0; i < fillAmount; ++i) {
-				m_AllocatedPool.push_back(m_Allocate());
+				// A refused allocation stops the refill: no null block ever reaches the pool.
+				void* memory = m_Allocate();
+				if (!memory) throw std::bad_alloc();
+				m_AllocatedPool.push_back(memory);
 			}
 		}
 #endif
