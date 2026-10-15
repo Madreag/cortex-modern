@@ -315,7 +315,7 @@ namespace RTE {
 			SendPeerFrameMessage(std::move(heartbeat), NetTransportLane::InputUnreliable);
 		}
 		const bool retryVotes = nowMs >= m_PeerVoteRetryAtMs;
-		if (retryVotes) m_PeerVoteRetryAtMs = nowMs + 100;
+		if (retryVotes) m_PeerVoteRetryAtMs = nowMs + c_NetPeerVoteResendMs;
 		// A vote received ahead of our prepared frame becomes eligible as
 		// soon as that frame is ready. The retransmission timer must not add
 		// up to 100 ms to the first answer of an otherwise healthy voter.

@@ -232,12 +232,12 @@ namespace RTE {
 			uint64_t lead = m_Config.slowPlayerBoundTicks;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 				if (peer == m_Config.localPeerId || (m_FrameGroupMembers & SeatBit(peer)) == 0) continue;
-				// Only surviving voters size the return's agreement lead.
+				// Only surviving voters size the return's agreement lead: their round trip, a vote sent again once, and the bound.
 				uint32_t rtt = 0;
 				const auto [wire, route] = PeerFrameRoute(peer);
 				if (wire && wire->IsPeerPingMeasured(route)) rtt = wire->GetPeerPingMs(route);
 				else if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end()) rtt = path->second.P95Ms();
-				lead = std::max<uint64_t>(lead, static_cast<uint64_t>(std::ceil(rtt / m_Config.simTickMs)) + m_Config.slowPlayerBoundTicks);
+				lead = std::max<uint64_t>(lead, static_cast<uint64_t>(std::ceil((rtt + c_NetPeerVoteResendMs) / m_Config.simTickMs)) + m_Config.slowPlayerBoundTicks);
 			}
 			uint64_t prepared = frame;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((m_FrameGroupMembers & SeatBit(peer)) != 0)
