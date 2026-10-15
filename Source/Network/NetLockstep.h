@@ -1683,6 +1683,10 @@ namespace RTE {
 		void PreparePeerBridgeInputs(uint64_t frame, uint64_t nowMs);
 		void NotePeerInputAccepted(const NetLockstepFrame& frame);
 		void RepairPeerReceiptGaps(uint64_t nowMs);
+		/// Takes the decisions kept for their frame, in frame order.
+		/// @return Whether the next frame waits on a decision: one kept for it, one this peer voted for, or a return proposed for it of a seat
+		/// still held, while it is undecided.
+		bool TakePendingPeerDecisions(uint64_t nowMs);
 		void RemovePeerFrameSeat(uint8_t peer, uint64_t frame);
 		bool ApplyPeerCommittedTail(uint64_t frame, uint64_t nowMs);
 		void SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame);
@@ -1707,6 +1711,8 @@ namespace RTE {
 		std::map<uint64_t, NetHostMigrationMessage> m_PeerReturnProofs;
 		std::map<uint64_t, uint32_t> m_PeerRejectedInputs;
 		std::map<uint64_t, std::map<uint8_t, NetLockstepFrame>> m_PeerPendingBridgeInputs;
+		std::map<PeerDecisionKey, std::pair<NetHostMigrationMessage, uint64_t>> m_PendingPeerDecisions; //!< Certificates that came before this peer could take them, and since when.
+		std::map<PeerDecisionKey, uint64_t> m_PeerVotedAtMs; //!< When this peer voted for, or first waited on, a decision it has not yet seen certified.
 		std::map<uint8_t, uint64_t> m_PeerAcceptedThrough;
 		struct PeerReceiptProgress { uint64_t through = 0, advancedAtMs = 0, repairedAtMs = 0; };
 		std::map<uint8_t, PeerReceiptProgress> m_PeerOwnReceiptProgress;

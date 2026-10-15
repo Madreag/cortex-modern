@@ -297,6 +297,7 @@ namespace RTE {
 				reply.voterMask = SeatBit(m_Config.localPeerId);
 				if (reply.preparedFrame == 3) m_PeerAdminOwnVote = reply;
 				votes.emplace(m_Config.localPeerId, reply);
+				m_PeerVotedAtMs.try_emplace({reply.frame, DecisionKind(reply)}, nowMs);
 				if (reply.preparedFrame == 0) for (uint8_t peer: reply.members) m_PeerRejectedInputs[reply.frame] |= SeatBit(peer);
 				SendPeerFrameMessage(std::move(reply));
 			}
