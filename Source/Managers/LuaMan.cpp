@@ -8189,7 +8189,11 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 					if (bindings.DerivesFrom(type, "MovableObject") && !LuaScriptGraphNativeCaptureScope::Current()->Known(static_cast<const MovableObject*>(entity))) return nullptr;
 					// A slice no known actor's pie menu holds was deleted with its menu; only its address is read.
 					if (!owned && bindings.DerivesFrom(type, "PieSlice") && !LuaScriptGraphNativeCaptureScope::Current()->PieSliceOwner(entity)) return nullptr;
-					return reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
+					try {
+						return reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
+					} catch (const UnsupportedCheckpointNative& error) {
+						throw UnsupportedCheckpointNative(std::string(error.what()) + ", held by Lua as " + bindings.Class(type)->name());
+					}
 				}
 				const auto value = [&]<class T>(T*) -> void* { return CopyFrozenValue<T>(*snapshot, pointer); };
 				const auto id = bindings.Class(type)->type();
