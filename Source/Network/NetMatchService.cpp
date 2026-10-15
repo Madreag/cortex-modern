@@ -4891,6 +4891,7 @@ static std::string ResyncSaveName() {
 		if (!session.matchConfigSent) {
 			if (!lobby.SendMatchConfigTo(lobbyPeer)) return false;
 			m_WorldJoin.NoteMatchConfigSent(session.connection);
+			if (m_WorldJoin.IsPrivateMatch()) m_SuccessorCapsulesOwed.insert(session.connection);
 		}
 		// The bytes and their digest were read once, when the image was published; re-reading the
 		// archive per pump is a sim-thread stall the world pays for every waiting bootstrap.
@@ -5286,6 +5287,7 @@ static std::string ResyncSaveName() {
 		m_WorldJoin.ReleaseLostConnections(live);
 		std::erase_if(m_PrivateActivations, [&](NetPeerId connection) { return m_WorldJoin.FindSession(connection) == nullptr; });
 		std::erase_if(m_PrivateTransferHeldReasons, [&](const auto& entry) { return m_WorldJoin.FindSession(entry.first) == nullptr; });
+		std::erase_if(m_SuccessorCapsulesOwed, [&](NetPeerId connection) { return m_WorldJoin.FindSession(connection) == nullptr; });
 		std::erase_if(m_ReturnerLinkSettlesMs, [&](const auto& entry) { return m_WorldJoin.FindSession(entry.first) == nullptr; });
 		std::erase_if(m_PrivateJoinBlobs, [&](const auto& task) { return m_WorldJoin.FindSession(task.first) == nullptr &&
 		    task.second.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; });
@@ -5294,8 +5296,16 @@ static std::string ResyncSaveName() {
 			// or it waits for a config that was sent while it could not hear it.
 			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.matchConfigSent && m_Runner->GetLobbySession().IsRemoteConnectionLobbyUp(session.assignedPeerId) &&
 			    m_Runner->GetLobbySession().SendMatchConfigTo(session.assignedPeerId)) {
-				SendSuccessorCapsuleToLocked(session.assignedPeerId);
 				m_WorldJoin.NoteMatchConfigSent(session.connection);
+				m_SuccessorCapsulesOwed.insert(session.connection);
+			}
+			// A seat applies its config only with its successor capsule, so a capsule that could not be sealed yet is tried again each pump.
+			if (m_SuccessorCapsulesOwed.contains(session.connection) && m_Runner->GetLobbySession().IsRemoteConnectionLobbyUp(session.assignedPeerId)) {
+				if (SendSuccessorCapsuleToLocked(session.assignedPeerId)) m_SuccessorCapsulesOwed.erase(session.connection);
+				else if (const std::string why = "its successor capsule could not be sealed yet"; m_PrivateTransferHeldReasons[session.connection] != why) {
+					m_PrivateTransferHeldReasons[session.connection] = why;
+					System::PrintDiagnosticLine("[net-match] private transfer waits peer=" + std::to_string(session.assignedPeerId) + ": " + why);
+				}
 			}
 			if (m_Coordinator->IsSeatReleased(session.assignedPeerId)) m_Coordinator->NoteAdmissionLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
 			else m_Coordinator->NoteReturningLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
@@ -5415,20 +5425,17 @@ static std::string ResyncSaveName() {
 		return false;
 	}
 
-	void NetMatchService::SendSuccessorCapsuleToLocked(uint8_t member) {
+	bool NetMatchService::SendSuccessorCapsuleToLocked(uint8_t member) {
 		// A match that names its successors withholds its config from a returner until it holds its successor capsule,
 		// so the capsule follows the config as a lobby round sends them.
 		NetLobbySession& lobby = m_Runner->GetLobbySession();
-		if (lobby.GetMatchConfig().successorOrder.empty()) return;
+		if (lobby.GetMatchConfig().successorOrder.empty()) return true;
 		NetLobbyMigration capsule;
 		capsule.kind = 2;
 		capsule.peerId = member;
 		capsule.configHash = lobby.GetMatchConfigHash();
-		if (!SealMigrationCapsuleLocked(member, capsule.configHash, capsule.sealedState)) {
-			System::PrintDiagnosticLine("[net-match] no successor capsule could be sealed for returning peer " + std::to_string(member));
-			return;
-		}
-		(void)lobby.SendPayloadTo(member, capsule, nullptr);
+		if (!SealMigrationCapsuleLocked(member, capsule.configHash, capsule.sealedState)) return false;
+		return lobby.SendPayloadTo(member, capsule, nullptr);
 	}
 
 	void NetMatchService::AnswerStalledReturnersLocked(uint64_t nowMs) {
