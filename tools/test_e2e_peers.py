@@ -223,7 +223,9 @@ class LostSoldierTest(unittest.TestCase):
                     start = steps[index - step["lost_rebuy_back"]]
                     # Back to the press that opens the pie for the purchase, a bounded number of times.
                     self.assertEqual((start["op"], start.get("button"), start.get("down")), ("game_mouse", "right", True), (name, script, index))
-                    self.assertEqual(steps[index - step["lost_rebuy_back"] + 2], {"op": "wait_scene", "input_player": 0, "equals": {"pie_visible": True}})
+                    reopened = dict(steps[index - step["lost_rebuy_back"] + 2])
+                    reopened.pop("skip_if_brain_lost", None)
+                    self.assertEqual(reopened, {"op": "wait_scene", "input_player": 0, "equals": {"pie_visible": True}})
                     self.assertEqual(step["lost_rebuy_attempts"], 3)
 
 

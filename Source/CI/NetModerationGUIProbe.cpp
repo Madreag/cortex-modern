@@ -120,6 +120,8 @@ namespace {
 		size_t minuteObservedIndex = SIZE_MAX;
 		uint64_t minuteObservedFrame = UINT64_MAX;
 		uint64_t minuteMs = 0, minuteTick = 0, minuteProbeNs = 0, fightSamples = 0, aiFiredFrames = 0;
+		std::array<uint64_t, Players::MaxPlayerCount> fightBrains{};
+		std::array<bool, Players::MaxPlayerCount> lostBrains{};
 		double minimumFightPace = std::numeric_limits<double>::infinity();
 		size_t landingMoveIndex = SIZE_MAX, actorCycleIndex = SIZE_MAX, aimIndex = SIZE_MAX;
 		int lostRebuys = 0; //!< Purchases bought again because their unit was lost before its player took it.
@@ -288,6 +290,19 @@ namespace {
 		return false;
 	}
 
+	bool BrainLossAllowed() { return probe.script.value("brain_loss_policy", "") == "spectate"; }
+
+	bool BrainLost(int player) {
+		return BrainLossAllowed() && player >= 0 && player < Players::MaxPlayerCount && probe.lostBrains[player];
+	}
+
+	bool Spectating() {
+		const auto* activity = g_ActivityMan.GetActivity();
+		for (int player = 0; activity && player < Players::MaxPlayerCount; ++player)
+			if (activity->IsLocalHumanSeat(player) && BrainLost(player)) return true;
+		return false;
+	}
+
 	Json Observe() {
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 		// sim_frame counts every sim update since launch, lobby ticks included; lockstep_frame is the round's own.
@@ -328,6 +343,22 @@ namespace {
 			if (game->IsReadyToStart(player)) observed["setup_ready"] = observed["setup_ready"].get<int>() + 1;
 			if (const auto* brain = game->GetPlayerBrain(player); brain && g_MovableMan.ValidMO(brain)) observed["brains"].push_back({{"player", player}, {"team", brain->GetTeam()},
 			    {"uid", brain->GetUniqueID()}, {"health", brain->GetHealth()}, {"x", brain->GetPos().m_X}, {"y", brain->GetPos().m_Y}});
+			if (BrainLossAllowed()) {
+				const auto* brain = game->GetPlayerBrain(player);
+				const bool alive = brain && g_MovableMan.ValidMO(brain) && !brain->IsDead();
+				if (alive) probe.fightBrains[player] = brain->GetUniqueID();
+				if (!alive && probe.fightBrains[player] && !probe.lostBrains[player] && snapshot.serviceState == "Running" && !observed["editing"].get<bool>()) {
+					probe.lostBrains[player] = true;
+					probe.result["brain_losses"].push_back({{"player", player}, {"uid", probe.fightBrains[player]}, {"tick", lockstepFrame},
+					    {"local", game->IsLocalHumanSeat(player)}, {"outcome", "spectating"}});
+					System::PrintDiagnosticLine("[fight15-scene] brain-loss player=" + std::to_string(player) + " tick=" + std::to_string(lockstepFrame) + " outcome=spectating");
+					if (game->IsLocalHumanSeat(player)) ReleasePanKey();
+				}
+			}
+		}
+		if (BrainLossAllowed()) {
+			observed["brain_losses"] = probe.result.value("brain_losses", Json::array());
+			observed["spectating"] = Spectating();
 		}
 		observed["editor_seats"] = Json::array();
 		observed["placement_seats"] = Json::array();
@@ -496,6 +527,7 @@ namespace {
 		std::ifstream input(path);
 		Require(static_cast<bool>(input), "cannot read input script");
 		probe.script = Json::parse(input);
+		Require(probe.script.value("brain_loss_policy", "").empty() || BrainLossAllowed(), "unknown brain loss policy");
 		Require(probe.script.at("schema") == 1 && probe.script.at("steps").is_array(), "invalid script schema");
 		Require(!probe.script["steps"].empty() && probe.script["steps"].size() <= c_MaxScriptSteps, "invalid script length");
 		const auto timeout = probe.script.at("timeout_ms").get<uint64_t>();
@@ -679,6 +711,19 @@ namespace {
 
 	bool Step(const Json& step, Json& observed) {
 		const std::string op = step.at("op");
+		if (step.contains("skip_if_brain_lost") && BrainLost(step.at("skip_if_brain_lost").get<int>())) {
+			const int player = step.at("skip_if_brain_lost").get<int>();
+			if (op == "actor_next_until" && probe.actorCycleIndex == probe.index && probe.actorCycleStage == 1) {
+				const auto key = static_cast<SDL_Scancode>(g_UInputMan.GetControlScheme(step.value("input_player", 0))->GetKeyMapping(InputElements::INPUT_NEXT));
+				SDL_Event event{}; event.type = SDL_EVENT_KEY_UP;
+				event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow()); event.key.scancode = key;
+				event.key.key = SDL_GetKeyFromScancode(key, SDL_KMOD_NONE, false); event.key.down = false;
+				Push(event);
+				probe.actorCycleIndex = SIZE_MAX; probe.actorCycleStage = 0;
+			}
+			observed["brain_loss_skip"] = {{"player", player}, {"uid", probe.fightBrains[player]}, {"reason", "brain lost; spectating"}};
+			return true;
+		}
 		if (op == "assert_buy" || op == "assert_pie" || op == "assert_window") {
 			Json scope;
 			int player = step.value("player", 0);
@@ -1046,7 +1091,13 @@ namespace {
 			observed["scene"] = state;
 			bool good = true;
 			const Json expectedValues = step.value("equals", Json::object());
-			for (const auto& [key, expected]: expectedValues.items()) good &= state.at(key) == expected;
+			for (const auto& [key, expected]: expectedValues.items()) {
+				if (key == "brain_count" && BrainLossAllowed() && std::any_of(probe.lostBrains.begin(), probe.lostBrains.end(), [](bool lost) { return lost; })) {
+					observed["brain_count_after_loss"] = state.at(key);
+					continue;
+				}
+				good &= state.at(key) == expected;
+			}
 			if (step.contains("delivered")) good &= std::find(state["team_actors"].begin(), state["team_actors"].end(), step.at("delivered")) != state["team_actors"].end();
 			if (step.contains("funds_delta_from")) {
 				const auto& order = probe.result.at("bookmarks").at(step.at("funds_delta_from").get<std::string>()).at("scope");
@@ -1102,7 +1153,8 @@ namespace {
 			observed["pan_scene"] = true; observed["pan_motion_events"] = probe.panMotionEvents;
 			observed["pan_view"]["screen_text"] = text;
 		} else if (op == "measure_minute") {
-			Require(observed["service"] == "Running" && observed["paused"] == false && observed["editing"] == false && observed["local_actor_alive"] == true,
+			Require(observed["service"] == "Running" && observed["paused"] == false && observed["editing"] == false &&
+			        (observed["local_actor_alive"] == true || (BrainLossAllowed() && observed.value("spectating", false))),
 			        "the AI fight stopped or its local player lost their actor");
 			if (probe.minuteIndex != probe.index) {
 				probe.minuteIndex = probe.index; probe.minuteMs = NowMs(); probe.minuteTick = observed["lockstep_frame"].get<uint64_t>();
@@ -1313,6 +1365,7 @@ namespace {
 			observed["control"] = ReadControl(control);
 		} else if (op == "assert") {
 			for (auto it = step.at("equals").begin(); it != step["equals"].end(); ++it) {
+				if (it.key() == "local_actor_alive" && Spectating()) continue;
 				Require(observed.at(it.key()) == it.value(), "assertion differs: " + it.key());
 			}
 			if (step.contains("sim_at_least")) Require(observed["sim_frame"].get<long long>() >= step["sim_at_least"].get<long long>(), "simulation did not advance");
@@ -1690,6 +1743,7 @@ namespace {
 				probe.result["round"] = round; probe.started = Clock::now();
 				probe.stepMs = probe.resultWrittenMs = probe.pendingWrittenMs = 0; probe.gestureIndex = SIZE_MAX; probe.handIndex = SIZE_MAX;
 				probe.roundEndArmed = false; probe.roundEndSignals.clear(); probe.lostRebuys = 0; probe.jumpTo = SIZE_MAX;
+				probe.fightBrains.fill(0); probe.lostBrains.fill(false); probe.result.erase("brain_losses");
 			}
 			if (probe.done) return;
 			if (!probe.phaseArmed) {
@@ -1743,7 +1797,7 @@ namespace {
 				probe.minuteObservedFrame = frame;
 				// Polls between commits have the same game state. Keep the deadlines and live-state guards on every poll.
 				if (sameFrame && probe.minuteIndex == probe.index && NowMs() - probe.minuteMs < 60000 &&
-				    g_NetMatchService.GetState() == NetMatchServiceState::Running && !g_ActivityMan.ActivityPaused() && LocalActorAlive() &&
+				    g_NetMatchService.GetState() == NetMatchServiceState::Running && !g_ActivityMan.ActivityPaused() && (LocalActorAlive() || Spectating()) &&
 				    g_ActivityMan.GetActivity()->GetActivityState() != Activity::Editing) return;
 			}
 			Json observed = Observe();

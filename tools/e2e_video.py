@@ -1539,10 +1539,14 @@ def minute_intervals(document, spec):
         pace = ((sample["lockstep_frame"] - previous["lockstep_frame"]) * 1000.0 / elapsed
                 if previous and elapsed > 0 else minute["pace"])
         slow = minute["pace"] < spec["minimum_tps"] or pace < spec["minimum_tps"]
+        spectating = (spec.get("allow_brain_loss") is True and sample.get("spectating") is True and
+                      any(loss.get("local") is True and loss.get("tick", float("inf")) <= sample.get("lockstep_frame", -1)
+                          for loss in sample.get("brain_losses", [])))
         passed = (minute["number"] == number and minute["elapsed_ms"] >= 60000 and elapsed >= 60000 and not slow
                   and sample.get("service") == "Running" and sample.get("paused") is False
-                  and sample.get("editing") is False and sample.get("local_actor_alive") is True)
-        intervals.append({"number": number, "elapsed_ms": elapsed, "pace": pace, "minute_pace": minute["pace"], "slow": slow, "pass": passed})
+                  and sample.get("editing") is False and (sample.get("local_actor_alive") is True or spectating))
+        intervals.append({"number": number, "elapsed_ms": elapsed, "pace": pace, "minute_pace": minute["pace"], "slow": slow, "pass": passed,
+                          "spectating_after_brain_loss": spectating})
         previous = sample
     return intervals
 

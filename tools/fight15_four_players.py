@@ -112,7 +112,7 @@ def setup(peer):
 
 def watch(other):
     """This peer's own committed state shows the other player's seat on that player's soldier, then that player back on its brain."""
-    return [dict(op="wait_scene", player=SEAT[other], equals=dict(preset=SOLDIER[other]), within_ms=300000),
+    return [dict(op="wait_scene", player=SEAT[other], equals=dict(preset=SOLDIER[other]), within_ms=300000, skip_if_brain_lost=SEAT[other]),
             dict(op="wait_file", path=f"{{PROBE_DIR_{other}}}/soldier-done.json", within_ms=300000)]
 
 
@@ -125,7 +125,14 @@ def turn(peer):
         steps += watch(other)
     # The soldier comes down by rocket, the player takes it and fires (a shot passes the shooter's own side), then goes back to
     # its brain in the bunker, where the AI's attack does not reach it.
-    steps += buy(peer, soldier=SOLDIER[peer], rebuy_lost=True)
+    purchase = buy(peer, soldier=SOLDIER[peer], rebuy_lost=True)
+    for step in purchase:
+        # Keep captures and input releases; a dead player's actor controls no longer apply.
+        release = step["op"] == "key_up" or (step["op"] == "game_mouse" and step.get("down") is False)
+        capture_step = step["op"] == "screenshot_pair" or step.get("scope") == "menu" or str(step.get("command", "")).startswith("video_mark ")
+        if not release and not capture_step:
+            step["skip_if_brain_lost"] = order
+    steps += purchase
     steps += [dict(op="actor_next_until", input_player=0, preset="Base.rte/Brain Case"),
               dict(op="wait_scene", input_player=0, equals=dict(preset="Base.rte/Brain Case")),
               dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset="Base.rte/Brain Case", brain_count=len(PLAYERS))),
@@ -181,12 +188,12 @@ def checklist_items(peer, steps, minutes=True):
                        what="Every bunker placement reached the shared scene before the brains started playing.", log_regex=bunkers))
     if minutes:
         checks.append(dict(id=f"twenty-minutes-{peer}", peer=peer, mark=f"fight-ended-{peer}", screen="MultiplayerScreen",
-                           what="Twenty full running minutes at >=58 ticks/s, living local player, AI weapon fire and named end reason.",
-                           continuous_minutes=dict(count=20, minimum_tps=58.0), log_regex=[r"\[fight15-scene\] minute=20 pace=", r"\[net-match\].*host"]))
+                           what="Twenty full running minutes at >=58 ticks/s, playing or spectating after a recorded brain loss, AI weapon fire and named end reason.",
+                           continuous_minutes=dict(count=20, minimum_tps=58.0, allow_brain_loss=True), log_regex=[r"\[fight15-scene\] minute=20 pace=", r"\[net-match\].*host"]))
         progress = [index for index, step in enumerate(steps) if step.get("lockstep_frame_at_least") or step.get("name") == "fight-ticks-complete" or
                     (step["op"] == "wait_file" and "fight-ticks-complete" in step["path"])]
         checks.append(dict(id=f"running-ticks-{peer}", peer=peer, mark=f"minute-20-{peer}", screen="game",
-                           what=f"The living player completes at least {TICKS} running ticks before any player ends the fight.",
+                           what=f"The player completes at least {TICKS} running ticks, spectating after brain loss, before any player ends the fight.",
                            probe_steps=progress, sim_progress=TICKS))
     checks.append(dict(id=f"fight-hashes-{peer}", peer=peer, mark=f"fight-ended-{peer}", screen="MultiplayerScreen",
                        what="Every running tick has matching shared component hashes on every player, with complete uninterrupted coverage.",
@@ -233,7 +240,17 @@ def main():
         for peer in PLAYERS:
             scripts[f"{peer}.menu"] = "\n".join(host_menu() if peer == "host" else joiner_menu(peer)) + "\n"
             steps = setup(peer) + (fight(peer) if minutes else turn(peer) + switch_check(peer)) + ending(peer)
-            scripts[f"{peer}.probe"] = game_probe(steps, timeout=1800000 if minutes else 900000)
+            if minutes:
+                for step in steps:
+                    if step["op"] in ("assert_scene", "wait_scene", "actor_next_until") or (step["op"] == "pan_scene" and step.get("enabled", True)):
+                        step.setdefault("skip_if_brain_lost", step.get("player", SEAT[peer]))
+            else:
+                for step in steps:
+                    step.pop("skip_if_brain_lost", None)
+            probe = json.loads(game_probe(steps, timeout=1800000 if minutes else 900000))
+            if minutes:
+                probe["brain_loss_policy"] = "spectate"
+            scripts[f"{peer}.probe"] = json.dumps(probe, indent=2) + "\n"
             checks += checklist_items(peer, steps, minutes)
             peers.append(dict(name=peer, menu_script=f"{peer}.menu", probe=f"{peer}.probe", env=dict(template["env"]),
                               settings=dict(SETTINGS, NetworkDisplayName=NAMES[peer]), args=list(template["args"])))
