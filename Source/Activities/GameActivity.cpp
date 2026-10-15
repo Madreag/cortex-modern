@@ -73,6 +73,9 @@
 #include "TimerMan.h"
 #include "OwnedMovableObjects.h"
 #include "System.h"
+#include "CheckpointNativeStorage.h"
+
+#include <typeinfo>
 #include "MenuAutomation.h"
 #include "NetModerationGUI.h"
 #include "MainMenuGUI.h"
@@ -598,6 +601,12 @@ template <class T> T* SeatStub(std::unique_ptr<T>& stub) {
 	if (!stub) {
 		CaptureSentinel::NoteCreation("seat stand-in", &stub);
 		stub = std::make_unique<T>();
+		// It stays in the world: one made outside the pools would be refused by every later capture.
+		if (CheckpointNativeStorage::LockstepAttached() && !CheckpointNativeStorage::Owns(stub.get())) {
+			const char* task = CaptureSentinel::CurrentTask();
+			System::PrintDiagnosticLine(std::string("[seat-stand-in] ") + typeid(T).name() + " made outside the native pools, task=" + (task ? task : "none") +
+			                            " saver=" + (SaverThreads::Current() ? "1" : "0"));
+		}
 	}
 	return stub.get();
 }
