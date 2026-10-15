@@ -59,7 +59,7 @@ namespace RTE {
 			bool imageReturn = false;
 			// No proposal or certificate of the subject's own return reaches it: it learns the return from the committed tail alone.
 			bool returnByTailOnly = false;
-			// The subject's machine simulates at this share of the round's rate through the fault, its catch-up included (0: off).
+			// The subject's machine simulates at this share of the round's rate through the fault, its catch-up included, its link up (0: off).
 			uint32_t slowPercent = 0;
 		};
 		struct Wire;
@@ -73,7 +73,7 @@ namespace RTE {
 			bool cleanRemoteClose = true;
 			bool DuringFault() const { return now >= faultAt && now < faultEnd; }
 			bool Split(uint8_t a, uint8_t b) const {
-				if (!DuringFault() || row.frozen || row.blackout || !row.gapMs) return false;
+				if (!DuringFault() || row.frozen || row.blackout || row.slowPercent || !row.gapMs) return false;
 				if (row.tie) return (a <= 2) != (b <= 2);
 				return a == row.subject || b == row.subject;
 			}
@@ -1435,6 +1435,7 @@ namespace RTE {
 		rows.push_back(gap("peer_returns_2s", 2, 2000)); rows.push_back(gap("peer_returns_8s", 2, 8000)); rows.push_back(gap("peer_returns_40s", 2, 40000));
 		auto frozen = gap("peer_frozen_10s_keepalives", 2, 10000); frozen.frozen = true; rows.push_back(frozen);
 		auto tailReturn = frozen; tailReturn.name = "peer_frozen_10s_return_by_tail_only"; tailReturn.returnByTailOnly = true; rows.push_back(tailReturn);
+		auto tailReturnTwo = tailReturn; tailReturnTwo.name = "two_internet_joiner_frozen_10s_return_by_tail_only"; tailReturnTwo.seats = 2; tailReturnTwo.internet = tailReturnTwo.directoryBoth = true; rows.push_back(tailReturnTwo);
 		rows.push_back(gap("host_absent_3s", 1, 3000)); rows.push_back(gap("host_absent_20s", 1, 20000));
 		auto slowMachine = gap("joiner_machine_at_90_percent_20s", 2, 20000); slowMachine.slowPercent = 90; rows.push_back(slowMachine);
 		auto slowHost = gap("two_internet_host_machine_at_90_percent_20s", 1, 20000); slowHost.seats = 2; slowHost.internet = true; slowHost.slowPercent = 90; rows.push_back(slowHost);
