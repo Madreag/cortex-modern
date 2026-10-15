@@ -88,8 +88,8 @@ namespace RTE {
 			bool InRefault() const { return now >= refaultAt && now < refaultEnd; }
 			bool Split(uint8_t a, uint8_t b) const {
 				if (!DuringFault() || row.frozen || row.blackout || row.slowPercent || !row.gapMs) return false;
-				if (row.tie) return (a <= 2) != (b <= 2);
 				if (row.secondSubject && now >= faultAt + row.secondAfterMs && (a == row.secondSubject || b == row.secondSubject)) return true;
+				if (row.tie) return (a <= 2) != (b <= 2);
 				return a == row.subject || b == row.subject;
 			}
 			uint64_t Delay(uint8_t a, uint8_t b) const {
@@ -112,6 +112,7 @@ namespace RTE {
 			uint64_t leaderReturnFrame = 0;
 			struct Tie { uint64_t at = 0; std::vector<std::vector<uint16_t>> confirmed; std::vector<uint16_t> winner; };
 			std::map<uint64_t, Tie> ties;
+			unsigned refusedTieRequests = 0;
 			std::map<uint8_t, NetHostChangeRequest> adminReports;
 			NetHostChangeReply adminDecision;
 			uint64_t firstAdminRequestMs = UINT64_MAX;
@@ -426,6 +427,13 @@ namespace RTE {
 				if (hub.row.internet) config.frameTieReferee = [&hub, peer](const auto& request) {
 					Reply reply; reply.state = Reply::State::Waiting;
 					if (!hub.DirectoryReachable(peer)) return reply;
+					// The directory's own checks: a tie names every retained seat as an owner, two or four of them, and an even half.
+					std::vector<uint16_t> retained;
+					for (uint16_t seat = 1; seat <= hub.row.seats; ++seat) retained.push_back(seat);
+					const auto sorted = [](const std::vector<uint16_t>& seats) { return std::is_sorted(seats.begin(), seats.end()) && std::adjacent_find(seats.begin(), seats.end()) == seats.end(); };
+					if (request.owners != retained || (retained.size() != 2 && retained.size() != 4) || !sorted(request.members) || request.members.size() * 2 != request.owners.size() ||
+					    !std::includes(request.owners.begin(), request.owners.end(), request.members.begin(), request.members.end()) ||
+					    (!request.queryOnly && std::find(request.members.begin(), request.members.end(), peer) == request.members.end())) { ++hub.refusedTieRequests; return reply; }
 					if (request.queryOnly && !hub.ties.contains(request.frame)) return reply;
 					auto [found, inserted] = hub.ties.try_emplace(request.frame);
 					auto& tie = found->second;
@@ -536,7 +544,8 @@ namespace RTE {
 				if (hub.row.refereeDecides) return hub.heldSeat != 0 && peer == hub.heldSeat;
 				if (hub.row.internet && hub.row.directoryDown) return true;
 				if (hub.row.seats == 2 && (!hub.row.internet || hub.row.directoryBoth)) return peer != 1;
-				return hub.row.tie ? peer >= 3 : peer == hub.row.subject || (hub.row.secondSubject && peer == hub.row.secondSubject) || peer == hub.row.lateReceiptsFrom;
+				const bool second = hub.row.secondSubject && peer == hub.row.secondSubject;
+				return hub.row.tie ? peer >= 3 || second : peer == hub.row.subject || second || peer == hub.row.lateReceiptsFrom;
 			}
 			bool CheckCommittedInputs(const NetLockstepReadyFrame& ready, uint8_t observer, std::string& error) {
 				if (IsAffected(observer) || !hub.row.gapMs) return true;
@@ -741,6 +750,7 @@ namespace RTE {
 					}
 				}
 				if (!wronglyHeld.empty()) { error = "a seat was held for another's lateness: " + wronglyHeld; return false; }
+				if (hub.refusedTieRequests) { error = std::to_string(hub.refusedTieRequests) + " tie check-ins the directory would refuse: they did not name every retained seat and an even half"; return false; }
 				if (row.refereeDecides && !hub.heldSeat) { error = "the outage held no seat: both halves stalled through it"; return false; }
 				if (row.imageReturn && !imageAt[hub.heldSeat - 1]) { error = "the absent seat never handed itself to a private image after the donor's history ran out"; return false; }
 				for (uint8_t id = 1; id <= row.seats; ++id) {
@@ -1505,6 +1515,8 @@ namespace RTE {
 		auto slowHost = gap("two_internet_host_machine_at_90_percent_20s", 1, 20000); slowHost.seats = 2; slowHost.internet = true; slowHost.slowPercent = 90; rows.push_back(slowHost);
 		auto majority = gap("partition_3_1", 4, 3000); majority.partition = true; rows.push_back(majority);
 		auto tie = gap("partition_2_2_host_tie", 3, 3000); tie.tie = tie.internet = tie.directoryBoth = true; rows.push_back(tie);
+		auto tieThenDrop = tie; tieThenDrop.name = "refereed_2_2_split_then_a_second_drop_in_the_same_hold"; tieThenDrop.gapMs = 10000;
+		tieThenDrop.secondSubject = 2; tieThenDrop.secondAfterMs = 4000; rows.push_back(tieThenDrop);
 		auto two = gap("two_direct_host_3s", 1, 3000); two.seats = 2; rows.push_back(two);
 		auto relay = gap("relay_link_blackout_return", 2, 8000); relay.blackout = true; rows.push_back(relay);
 		for (uint8_t subject: {2, 1}) for (uint64_t ms: {150, 400, 1500, 3000}) {
