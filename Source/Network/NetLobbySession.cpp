@@ -1,4 +1,5 @@
 #include "NetLobbySession.h"
+#include "SteadyClock.h"
 #include "DiagnosticLine.h"
 
 #include "NetIdentity.h"
@@ -64,7 +65,7 @@ namespace RTE {
 		std::atomic<uint64_t> g_LastStateTransferMs{0};
 
 		uint64_t TransferSteadyMs() {
-			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 		}
 
 		uint64_t RelayWallSeconds() {

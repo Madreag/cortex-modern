@@ -1,4 +1,5 @@
 #include "Entity.h"
+#include "SteadyClock.h"
 #include "CheckpointNativeSnapshot.h"
 #include "CheckpointNativeStorage.h"
 #include "CaptureSentinel.h"
@@ -58,7 +59,7 @@ namespace RTE {
 			return *totals;
 		}
 		thread_local CheckpointCloneCost* s_OpenCloneCost = nullptr;
-		int64_t CloneCostNow() { return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+		int64_t CloneCostNow() { return std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now().time_since_epoch()).count(); }
 	} // namespace
 
 	bool CheckpointCloneCost::Enabled() {

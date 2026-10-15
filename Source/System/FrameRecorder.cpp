@@ -1,4 +1,5 @@
 #include "FloatingPointEnvironment.h"
+#include "SteadyClock.h"
 #include "FrameRecorder.h"
 #include "FrameCaptureStream.h"
 #include "GLFrameReadback.h"
@@ -212,7 +213,7 @@ namespace RTE {
 	}
 
 	long long FrameRecorder::SteadyNowMS() {
-		return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+		return std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count();
 	}
 
 	FrameRecorder::FrameRecorder() = default;
@@ -444,7 +445,7 @@ namespace RTE {
 			}
 			WritePendingDrops();
 			// The writer's processor time is the recorder's cost: a write blocked on the encoder's pipe or the disk takes nothing from a frame.
-			const auto wallBefore = profileReadback ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			const auto wallBefore = profileReadback ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 			const int64_t cpuBefore = ThreadCpuNanoseconds();
 			std::string readbackError = frame.readbackError;
 			std::array<int64_t, 6> readbackPhases{};
@@ -465,7 +466,7 @@ namespace RTE {
 			const int64_t cpuNS = ThreadCpuNanoseconds() - cpuBefore;
 			HarnessCost::Charge(HarnessCost::Recorder, cpuNS);
 			if (profileReadback) {
-				const auto wallUS = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - wallBefore).count();
+				const auto wallUS = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - wallBefore).count();
 				System::PrintDiagnosticLine("[capture-writer-phase] tick=" + std::to_string(frame.meta.simTick) + " frame=" + std::to_string(frame.index) +
 				    " cpu_us=" + std::to_string(cpuNS / 1000) + " wall_us=" + std::to_string(wallUS) +
 				    " readback_cpu_us=" + std::to_string((cpuAfterReadback - cpuBefore) / 1000) +

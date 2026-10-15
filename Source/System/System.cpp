@@ -1,4 +1,5 @@
 #include "FloatingPointEnvironment.h"
+#include "SteadyClock.h"
 #include "System.h"
 
 #include "RTETools.h"
@@ -159,12 +160,12 @@ namespace {
 		/// Writes what is queued before a fault's own line: waits up to the bound for the writer, then writes the queue to the file
 		/// past a writer stuck in its write. Returns whether nothing queued was left behind.
 		bool DrainForFault(std::FILE* file, int waitMs = c_WriterWaitMs) {
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(waitMs);
+			const auto deadline = RTE::SteadyClock::now() + std::chrono::milliseconds(waitMs);
 			while (!Drain(true)) {
-				if (std::chrono::steady_clock::now() >= deadline) {
+				if (RTE::SteadyClock::now() >= deadline) {
 					std::unique_lock<std::mutex> lock(m_Lock, std::defer_lock);
 					while (!lock.try_lock()) {
-						if (std::chrono::steady_clock::now() >= deadline + std::chrono::milliseconds(waitMs)) return false;
+						if (RTE::SteadyClock::now() >= deadline + std::chrono::milliseconds(waitMs)) return false;
 						std::this_thread::sleep_for(std::chrono::milliseconds(1));
 					}
 					const std::string batch = TakeBatchLocked();
@@ -1043,8 +1044,8 @@ bool System::RunConsoleQueueSelfTest(std::string* error) {
 	const std::string first(32, 'a');
 	console->sputn(first.data(), static_cast<std::streamsize>(first.size()));
 	// The writer takes the first text and sticks in the disk's write, as a stalled log does.
-	const auto taken = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-	while (std::chrono::steady_clock::now() < taken && console->PendingBytes() != 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	const auto taken = RTE::SteadyClock::now() + std::chrono::seconds(2);
+	while (RTE::SteadyClock::now() < taken && console->PendingBytes() != 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	if (console->PendingBytes() != 0) return fail("the console writer never took its queue");
 	std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	const std::string queued(64, 'b');
@@ -1054,9 +1055,9 @@ bool System::RunConsoleQueueSelfTest(std::string* error) {
 	if (console->DroppedBytes() != overflow.size()) return fail("a full console queue dropped " + std::to_string(console->DroppedBytes()) + " bytes, not the 10 past its bound");
 	std::FILE* faultFile = std::tmpfile();
 	if (!faultFile) return fail("no temporary file for the fault drain");
-	const auto faultStarted = std::chrono::steady_clock::now();
+	const auto faultStarted = RTE::SteadyClock::now();
 	const bool drained = console->DrainForFault(faultFile, 100);
-	const auto faultMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - faultStarted).count();
+	const auto faultMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - faultStarted).count();
 	std::string faultText(256, '\0');
 	std::rewind(faultFile);
 	faultText.resize(std::fread(faultText.data(), 1, faultText.size(), faultFile));
@@ -1064,9 +1065,9 @@ bool System::RunConsoleQueueSelfTest(std::string* error) {
 	if (!drained || faultMs > 1000 || faultText.find(queued) == std::string::npos || faultText.find("[console] 10 bytes of output were dropped") == std::string::npos) {
 		return fail("a fault behind a stuck writer drained=" + std::to_string(drained) + " in " + std::to_string(faultMs) + " ms and wrote '" + faultText + "'");
 	}
-	const auto stopStarted = std::chrono::steady_clock::now();
+	const auto stopStarted = RTE::SteadyClock::now();
 	console->Stop(stdout, 100);
-	const auto stopMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stopStarted).count();
+	const auto stopMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - stopStarted).count();
 	if (stopMs > 1000) return fail("the exit waited " + std::to_string(stopMs) + " ms on a stuck writer");
 	// The writer finishes its batch once the disk moves; both objects stay alive for it, as the real console does.
 	sink->Release();

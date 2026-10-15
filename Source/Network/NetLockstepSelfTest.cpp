@@ -1,4 +1,5 @@
 #include "NetReplayTestUtils.h"
+#include "SteadyClock.h"
 #include "NetLockstepSelfTest.h"
 #include "NetSessionPlaneSelfTest.h"
 #include <SDL3/SDL_stdinc.h>
@@ -6580,9 +6581,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			ScenarioRunner::SetLockstepCoordinator(&replay);
 			ScenarioRunner::SetSessionPump([&] { if (++pumps <= c_MovingPumps) ++rejoinProgress; }, [] { return true; },
 			                               [&] { return rejoinProgress; });
-			const auto began = std::chrono::steady_clock::now();
+			const auto began = RTE::SteadyClock::now();
 			const bool drained = ScenarioRunner::DrainLockstepRelay(250, 0);
-			const auto spentMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
+			const auto spentMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - began).count();
 			ScenarioRunner::SetSessionPump(nullptr);
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			if (drained || pumps <= c_MovingPumps) {
@@ -15612,11 +15613,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					host.Complete("explicit host end from session pump");
 				}
 			});
-			const auto waitStart = std::chrono::steady_clock::now();
+			const auto waitStart = RTE::SteadyClock::now();
 			NetLockstepReadyFrame out;
 			std::string waitError;
 			const bool got = ScenarioRunner::WaitForLockstepControllerFrame(host.GetStats().nextFrame, out, &waitError);
-			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
+			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - waitStart).count();
 			ScenarioRunner::SetSessionPump(nullptr);
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			if (elapsedMs < 400) {
@@ -15704,11 +15705,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				held = held || host.AnyDroppedSeatHeld();
 				if (pumps == 900) host.Complete("explicit host end after late input and disconnect");
 			});
-			const auto waitStart = std::chrono::steady_clock::now();
+			const auto waitStart = RTE::SteadyClock::now();
 			NetLockstepReadyFrame out;
 			std::string waitError;
 			const bool got = ScenarioRunner::WaitForLockstepControllerFrame(host.GetStats().nextFrame, out, &waitError);
-			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
+			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - waitStart).count();
 			ScenarioRunner::SetSessionPump(nullptr);
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			if (pumps < 900 || !dropped || !held) {
@@ -15815,11 +15816,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				++pumps;
 				host.RequestResync("player rejoined");
 			});
-			const auto waitStart = std::chrono::steady_clock::now();
+			const auto waitStart = RTE::SteadyClock::now();
 			NetLockstepReadyFrame out;
 			std::string waitError;
 			const bool got = ScenarioRunner::WaitForLockstepControllerFrame(1, out, &waitError);
-			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
+			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - waitStart).count();
 			ScenarioRunner::SetSessionPump(nullptr);
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			if (!got || out.frame != 1) {
@@ -16520,7 +16521,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "the live settle frame did not hold peer A's NumberValue";
 				return false;
 			}
-			const auto directory = std::filesystem::temp_directory_path() / ("cc-value-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-value-replay-" + std::to_string(RTE::SteadyClock::now().time_since_epoch().count()));
 			std::error_code created;
 			std::filesystem::create_directories(directory, created);
 			if (created) {
@@ -16644,7 +16645,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "the live ready frame did not keep both peers' bindings";
 				return false;
 			}
-			const auto directory = std::filesystem::temp_directory_path() / ("cc-binding-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-binding-replay-" + std::to_string(RTE::SteadyClock::now().time_since_epoch().count()));
 			std::error_code created;
 			std::filesystem::create_directories(directory, created);
 			if (created) {
@@ -16699,7 +16700,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			NetGamePlayerBindings binding;
 			binding.players[0].active = true;
 			std::vector<NetGameCommand> commands{{2, binding}, {1, binding}, {3, binding}, {1, NetGameSeatHold{3, 0, 9, 1, 40}}};
-			const auto directory = std::filesystem::temp_directory_path() / ("cc-trailer-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-trailer-replay-" + std::to_string(RTE::SteadyClock::now().time_since_epoch().count()));
 			std::error_code created;
 			std::filesystem::create_directories(directory, created);
 			const auto path = directory / "match.ccreplay";
@@ -16738,7 +16739,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			// Two senders of 300 controllers each make one legal tick of 600: the record keeps all of them and reads them back.
 			std::vector<ControllerFrame> frames;
 			for (int64_t actor = 1; actor <= 600; ++actor) frames.push_back(MakeFrame(actor, 1));
-			const auto directory = std::filesystem::temp_directory_path() / ("cc-merged-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-merged-replay-" + std::to_string(RTE::SteadyClock::now().time_since_epoch().count()));
 			std::error_code created;
 			std::filesystem::create_directories(directory, created);
 			const auto path = directory / "match.ccreplay";
@@ -26519,13 +26520,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			volatile uint64_t sink = 0;
 			for (int sample = 0; sample < 7; ++sample) {
 				NetLockstepReadyFrame ready;
-				auto begin = std::chrono::steady_clock::now();
+				auto begin = RTE::SteadyClock::now();
 				for (uint64_t frame = 0; frame < count; ++frame) { ready.frame = frame; peer.StampFrameAuthority(ready); sink = sink + ready.authorityPeerId; }
-				auto end = std::chrono::steady_clock::now();
+				auto end = RTE::SteadyClock::now();
 				stamped.push_back(std::chrono::duration<double, std::nano>(end - begin).count() / count);
-				begin = std::chrono::steady_clock::now();
+				begin = RTE::SteadyClock::now();
 				for (uint64_t frame = 0; frame < count; ++frame) { ready.frame = frame; ready.authorityPeerId = peer.GetHostPeerId(); sink = sink + ready.authorityPeerId; }
-				end = std::chrono::steady_clock::now();
+				end = RTE::SteadyClock::now();
 				assigned.push_back(std::chrono::duration<double, std::nano>(end - begin).count() / count);
 			}
 			if (sink != 14 * count * peer.GetHostPeerId() || !peer.m_PeerLeaveFrames.empty() || !peer.m_AiHeldSeats.empty() || !peer.m_ReplayAuthorities.empty()) return {-1, -1};
@@ -28569,7 +28570,7 @@ namespace {
 			if (archive->empty()) return done("the captured newcomer scene archive is empty");
 			image.bytes = archive->size(); image.digest = DigestWorldJoinBytes(*archive);
 			host.m_WorldJoin.PublishImage(image); host.m_WorldJoinImageArchive = archive; host.m_WorldJoinImageDigest = image.digest;
-			host.m_PrivateImageTakenMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			host.m_PrivateImageTakenMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 			round.peers[0].SetSessionEventSink([&](const NetTransportEvent& event) {
 				if (event.type == NetTransportEventType::PacketReceived) host.m_PendingLobbyEvents.push_back(event);
 			});
@@ -28620,9 +28621,9 @@ namespace {
 				if (!pump()) return done(round.failure);
 				NetMatchService::StepWorldJoinCatchUpClient(joinLobby, catchUp);
 				for (NetLockstepReadyFrame ready; ScenarioRunner::TakeWorldCatchUpReadyFrame(replayed + 1, ready, &round.failure);) {
-					const auto began = std::chrono::steady_clock::now();
+					const auto began = RTE::SteadyClock::now();
 					view.ApplyTick(ready); ++replayed;
-					const auto work = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count());
+					const auto work = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - began).count());
 					ScenarioRunner::NoteWorldCatchUpTickCost(replayed, std::max<uint64_t>(work, 1));
 				}
 				NetMatchService::StepWorldJoinCatchUpClient(joinLobby, catchUp);

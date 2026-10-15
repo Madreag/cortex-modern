@@ -54,16 +54,24 @@ def host_setup(players=2, cpu=False, brain_loss=False):
     if cpu or brain_loss:
         lines += ["activate ButtonHostOptApply", "wait_ms 400"]
     lines += ["activate ButtonHostOptBack", "wait_ms 500",
-              "activate ButtonMultiplayerCreate", "wait_substate Lobby 90",
+              "activate ButtonMultiplayerCreate", "wait_substate Lobby 90", "write_lobby {PROBE_DIR}/lobby.json 90",
               "video_mark fight15-host-listening", f"wait_connected {players if cpu else 2} 90", "wait_ms 1200"]
     return lines
+
+
+# The lobby the run's own host listed, by its directory session: another lobby can list on the same port.
+OWN_LOBBY = "PublicGameRowLobby:{PROBE_DIR_host}/lobby.json"
+
+
+def join_own_lobby():
+    return ["wait_file {PROBE_DIR_host}/lobby.json 90", f"wait_row {OWN_LOBBY} 90", f"click_row {OWN_LOBBY}"]
 
 
 def join_setup(connected=2):
     return ["wait_ms 1800", "activate ButtonMainToMultiplayer", "wait_ms 600", "assert_substate Landing",
             "settext TextMultiplayerName Joiner", "activate ButtonMultiplayerJoinGame",
             "wait_ms 600", "assert_substate JoinSetup",
-            "wait_row PublicGameRowPort{PORT} 90", "click_row PublicGameRowPort{PORT}",
+            *join_own_lobby(),
             "assert_label LabelJoinSelected internet",
             "assert_enabled ButtonMultiplayerConnect 1", "activate ButtonMultiplayerConnect",
             f"wait_connected {connected} 90", "wait_substate Lobby 90", "wait_ms 1200"]
@@ -522,9 +530,9 @@ def moderation_scene():
                 equals=dict(text=f"The host {reason} you from this session", visible=True), fits=True, inside="MultiplayerLandingPanel")]
         if action == "ban":
             # The directory heartbeat must advertise the held seat before the new join can reach the host's ban check.
-            joiner += [menu("activate ButtonMultiplayerJoinGame"), dict(op="wait_public_row", scope="menu", name="PublicGameRowPort{PORT}",
+            joiner += [menu("activate ButtonMultiplayerJoinGame"), dict(op="wait_public_row", scope="menu", name=OWN_LOBBY,
                        state="running", held_at_least=1, joinable=True),
-                       menu("click_row PublicGameRowPort{PORT}"), menu("activate ButtonMultiplayerConnect"),
+                       menu(f"click_row {OWN_LOBBY}"), menu("activate ButtonMultiplayerConnect"),
                        wait(scope="menu", control="LabelJoinSelected", text_contains="The host banned you from this session")]
             joiner += capture("banned-rejoin-refused", "MultiplayerScreen") + [dict(op="assert_control", scope="menu", control="LabelJoinSelected",
                     equals=dict(text="The host banned you from this session", visible=True), fits=True)]

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "System.h"
+#include "SteadyClock.h"
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
@@ -20,7 +21,7 @@ namespace RTE {
 		uint64_t backoffMs = 0;
 
 		static uint64_t NowMs() {
-			return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+			return std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count();
 		}
 		static uint64_t After(uint64_t nowMs, uint64_t delayMs) {
 			return nowMs + std::min(delayMs, UINT64_MAX - nowMs);

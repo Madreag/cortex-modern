@@ -24,6 +24,7 @@ sources += files(
 'RTETools.cpp',
 'FloatingPointEnvironment.cpp',
 'FrameRecorder.cpp',
+'DisplayRefreshes.cpp',
 'StallStackSampler.cpp',
 'RotatePrimitiveSelfTest.cpp',
 'FloatTextSelfTest.cpp',

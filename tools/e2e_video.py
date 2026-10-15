@@ -1231,16 +1231,14 @@ def capture_evidence_items(scenario, capture, peer):
     elif health['starved']: error = f'saved share={health["saved_share"]}, recorder gap={health["recorder_gap_ms"]} ms, gap bound={health["recorder_gap_bar_ms"]} ms'
     output.append(item(f'recording-rate-{name}', 'Recorder evidence is complete, reaches its declared minimum and meets the existing saved-share/gap bars',
                        error, incomplete=health is None or not health.get('complete', False), recording=health))
-    # The match draws as single player does: the presentation's rate in every 60-tick window, the intervals as even.
+    # The match draws as single player does: the expected rate in every judged 60-tick window, the intervals as even.
     import frame_pace
     log = Path(peer['root']) / 'stdout.log'
     text = log.read_text(encoding='utf-8', errors='replace') if log.is_file() else ''
     drawn = frame_pace.check(text, 'lockstep')
     if drawn['status'] == 'NONE':
         drawn = frame_pace.check(text, 'single')
-    output.append(item(f'drawn-frames-{name}', f'Every 60-tick window of a running activity draws at least {frame_pace.FPS_SHARE:.0%} of the presentation rate '
-                       f'with interval p95 within {frame_pace.P95_PERIODS} frame periods; a run with no running activity reports none',
-                       '' if drawn['passed'] else drawn['reason'], drawn_frames=drawn))
+    output.append(item(f'drawn-frames-{name}', frame_pace.RULE, '' if drawn['passed'] else drawn['reason'], drawn_frames=drawn))
     allowed, stills, error = [], None, ''
     ffmpeg = find_ffmpeg()
     try:

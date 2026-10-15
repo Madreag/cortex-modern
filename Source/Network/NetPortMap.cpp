@@ -1,4 +1,5 @@
 #include "NetPortMap.h"
+#include "SteadyClock.h"
 #include "NetLanDiscovery.h"
 #include "System.h"
 
@@ -38,7 +39,7 @@ namespace RTE {
 #endif
 
 		uint64_t NowMs() {
-			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count());
 		}
 
 		// The mapper runs on its own thread: its lines go out whole under the engine's print lock.

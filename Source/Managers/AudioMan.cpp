@@ -1,4 +1,5 @@
 #include "AudioMan.h"
+#include "SteadyClock.h"
 #include "CheckpointNativeSnapshot.h"
 #include <cstdlib>
 #include <cstring>
@@ -3561,7 +3562,7 @@ void AudioMan::TraceCheckpointBoundary(const char* stage) const {
 			AudioCheckpoint::Require(m_AudioSystem->getOutput(&output));
 			AudioCheckpoint::Require(m_AudioSystem->getSoftwareFormat(&rate, nullptr, nullptr));
 			AudioCheckpoint::Require(m_AudioSystem->getDSPBufferSize(&buffer, &buffers));
-			const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+			const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now().time_since_epoch()).count();
 			trace << "[audio-boundary] stage=" << stage << " monotonic_ns=" << now << " output=" << output
 			      << " rate=" << rate << " buffer=" << buffer << " buffers=" << buffers << '\n';
 			for (const auto& [identity, voice]: m_PlayingVoices) {

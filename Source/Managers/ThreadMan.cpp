@@ -1,4 +1,5 @@
 #include "ThreadMan.h"
+#include "SteadyClock.h"
 
 #include <chrono>
 #include <cstdio>
@@ -127,7 +128,7 @@ void SaverThreads::GameWorkEnds() noexcept {
 }
 
 int64_t SaverThreads::NowUs() noexcept {
-	return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+	return std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now().time_since_epoch()).count();
 }
 
 void SaverThreads::OpenSlice(int64_t untilUs) {

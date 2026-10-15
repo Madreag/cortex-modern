@@ -1,4 +1,5 @@
 #include "GUI.h"
+#include "SteadyClock.h"
 #include "GUIDrawRecord.h"
 
 #include <atomic>
@@ -12,7 +13,7 @@ using namespace RTE;
 
 namespace RTE {
 	namespace {
-		using DrawClock = std::chrono::steady_clock;
+		using DrawClock = RTE::SteadyClock;
 		struct DrawPass {
 			uint64_t serial = 0;
 			DrawClock::time_point at;

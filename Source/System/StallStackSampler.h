@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include "SteadyClock.h"
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -32,7 +33,7 @@ namespace RTE {
 		}
 
 	private:
-		static int64_t NowMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+		static int64_t NowMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count(); }
 		static void Watch(std::stop_token stop);
 		static std::string Sample();
 
