@@ -503,9 +503,15 @@ namespace RTE {
 		if (!DecodePeerBridgeCertificate(certificate, agreed, voters)) { refused("certificate"); return; }
 		// A tie the referee decides is asked before the decision is set aside: its answer may already be there.
 		if (agreed.preparedFrame != 3 && !PeerGroupHasAuthority(voters, certificate.frame)) CheckPeerFrameTie(certificate.frame, voters, nowMs);
+		const PeerDecisionKey decision{certificate.frame, DecisionKind(certificate)};
 		if (agreed.preparedFrame == 3 ? !PeerAdminCertificateValid(agreed, voters) : !PeerGroupHasAuthority(voters, certificate.frame)) {
+			m_AuthorityWaitSinceMs.try_emplace(decision, nowMs);
 			refused("certificate");
 			keep(); return;
+		}
+		if (const auto since = m_AuthorityWaitSinceMs.find(decision); since != m_AuthorityWaitSinceMs.end()) {
+			m_Stats.longestAuthorityWaitMs = std::max(m_Stats.longestAuthorityWaitMs, nowMs >= since->second ? nowMs - since->second : 0);
+			m_AuthorityWaitSinceMs.erase(since);
 		}
 		const bool heldAhead = agreed.preparedFrame == 0 && agreed.boundary < certificate.frame;
 		if (agreed.preparedFrame == 0 && certificate.frame > m_Stats.nextFrame) { refused("ahead"); keep(); if (!heldAhead) RequestPeerCommittedTail(nowMs); return; }
@@ -626,6 +632,7 @@ namespace RTE {
 			if (const auto again = m_PendingPeerDecisions.find(key); again != m_PendingPeerDecisions.end()) {
 				again->second.second = kept.second;
 				if (nowMs >= kept.second + c_NetSeatDisconnectSilenceMs) {
+					++m_Stats.decisionsDropped;
 					DiagnosticLine() << "[net-peer-decision-dropped] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << key.first
 					    << " kind=" << static_cast<int>(key.second) << " kept_ms=" << nowMs - kept.second << std::endl;
 					m_PendingPeerDecisions.erase(again);

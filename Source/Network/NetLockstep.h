@@ -664,6 +664,8 @@ namespace RTE {
 		uint64_t checksumSubmissions = 0; //!< Local desync-check hashes the round took; a zero means the check never ran.
 		uint64_t decisionsRefusedForAuthority = 0; //!< Frame-group decisions set aside because this peer could not yet show their authority.
 		uint64_t returnsRefusedNotHeld = 0; //!< Returns set aside because this peer had not installed the hold they end.
+		uint64_t decisionsDropped = 0; //!< Decisions kept here past the silence the round allows a seat, then let go.
+		uint64_t longestAuthorityWaitMs = 0; //!< The longest a decision waited here before this peer could show its authority.
 		uint64_t checksumSends = 0; //!< Those the transport carried to the peers.
 		uint64_t checksumCompares = 0; //!< Local/remote hash pairs actually compared, per remote.
 		uint64_t checksumMismatches = 0; //!< Compares that named a desync.
@@ -1735,6 +1737,7 @@ namespace RTE {
 		std::map<PeerDecisionKey, NetHostMigrationMessage> m_PeerBridgeCertificates;
 		std::map<PeerDecisionKey, std::pair<NetHostMigrationMessage, uint64_t>> m_PendingPeerDecisions; //!< Certificates that came before this peer could take them, and since when.
 		std::map<PeerDecisionKey, uint64_t> m_PeerVotedAtMs; //!< When this peer voted for, or first waited on, a decision it has not yet seen certified.
+		std::map<PeerDecisionKey, uint64_t> m_AuthorityWaitSinceMs; //!< Decisions this peer could not yet show the authority of, and since when.
 		std::map<uint64_t, NetHostMigrationMessage> m_PeerReturnProofs;
 		std::map<uint64_t, uint32_t> m_PeerRejectedInputs;
 		std::map<uint64_t, std::map<uint8_t, NetLockstepFrame>> m_PeerPendingBridgeInputs;
