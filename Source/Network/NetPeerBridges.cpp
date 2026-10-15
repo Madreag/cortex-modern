@@ -57,7 +57,7 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::ValidatePeerBridge(const NetHostMigrationMessage& proposal) const {
 		if (proposal.preparedFrame == 3) return ValidatePeerAdmin(proposal);
-		if (proposal.members.empty() || proposal.bytes.size() != NetHash32{}.size() + (proposal.preparedFrame == 1 ? 12 * proposal.members.size() : 0) || !PeerGroupHasAuthority(proposal.connectedMask) ||
+		if (proposal.members.empty() || proposal.bytes.size() != NetHash32{}.size() + (proposal.preparedFrame == 1 ? 12 * proposal.members.size() : 0) || !PeerGroupHasAuthority(proposal.connectedMask, proposal.frame) ||
 		    proposal.preparedFrame > 2 || (proposal.connectedMask & SeatBit(m_Config.localPeerId)) == 0 || PeerBridgeHasInputConflict(proposal)) return false;
 		// A hold agreed ahead names a frame past a boundary every voter has applied, as a return does.
 		const bool ahead = proposal.preparedFrame != 0 || proposal.boundary < proposal.frame;
