@@ -1637,7 +1637,31 @@
     <ClCompile Include="Source\Network\NetPortMapSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetProtocol.cpp" />
     <ClCompile Include="Source\System\FrameRecorder.cpp" />
-    <ClCompile Include="Source\System\DisplayRefreshes.cpp" />
+    <ClCompile Include="Source\System\DisplayRefreshes.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug Release|Win32'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Final|Win32'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Profiling|Win32'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug Minimal|Win32'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug Full|Win32'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug Release|x64'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Final|x64'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Final ASan|x64'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Profiling|x64'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug Minimal|x64'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug Full|x64'">
+      </ForcedIncludeFiles>
+    </ClCompile>
     <ClCompile Include="Source\System\StallStackSampler.cpp" />
     <ClCompile Include="Source\System\RotatePrimitiveSelfTest.cpp" />
     <ClCompile Include="Source\System\FloatTextSelfTest.cpp" />
