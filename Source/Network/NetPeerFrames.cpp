@@ -105,8 +105,15 @@ namespace RTE {
 		return voters == 0 ? 0 : owners;
 	}
 
+	bool NetLockstepCoordinator::PeerTieRefereed() const {
+		// The directory referees an even split of two or four retained seats; any other tie goes to the host's half.
+		int retained = 0;
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) retained += !m_RemovedPeers.contains(peer) && !IsSeatReleased(peer);
+		return m_Config.frameTieReferee && (retained == 2 || retained == 4);
+	}
+
 	bool NetLockstepCoordinator::PeerGroupIsRefereedHalf(uint32_t voters) const {
-		const uint32_t owners = m_Config.frameTieReferee ? PeerVotingOwners(voters) : 0;
+		const uint32_t owners = PeerTieRefereed() ? PeerVotingOwners(voters) : 0;
 		return owners != 0 && 2 * std::popcount(voters) == std::popcount(owners);
 	}
 
@@ -116,7 +123,7 @@ namespace RTE {
 		if (m_PeerAdminFrameMembers != 0 && voters == m_PeerAdminFrameMembers) return true;
 		const int votes = std::popcount(voters), seats = std::popcount(owners);
 		if (2 * votes != seats) return 2 * votes > seats;
-		if (!m_Config.frameTieReferee) return (voters & SeatBit(GetHostPeerId())) != 0;
+		if (!PeerTieRefereed()) return (voters & SeatBit(GetHostPeerId())) != 0;
 		const auto decision = m_PeerFrameTieWinners.find(PeerSplitEpoch(m_Stats.nextFrame));
 		return decision != m_PeerFrameTieWinners.end() && decision->second == voters;
 	}
@@ -125,15 +132,18 @@ namespace RTE {
 		if ((agreeing & ~members) != 0) return false;
 		const int votes = std::popcount(agreeing), seats = std::popcount(members);
 		if (2 * votes != seats) return 2 * votes > seats;
-		if (!m_Config.frameTieReferee) return (agreeing & SeatBit(GetHostPeerId())) != 0;
+		if (!PeerTieRefereed()) return (agreeing & SeatBit(GetHostPeerId())) != 0;
 		const auto decision = m_PeerFrameTieWinners.find(PeerSplitEpoch(frame));
 		return decision != m_PeerFrameTieWinners.end() && decision->second == agreeing;
 	}
 
 	uint64_t NetLockstepCoordinator::PeerSplitEpoch(uint64_t frame) const {
+		// A seat held at the frame plays in neither half, so each new set of held seats names a new split for the referee.
 		uint32_t whole = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) whole |= SeatBit(peer);
+		for (const auto& [peer, bridge]: m_PeerBridges)
+			if (bridge.committedHold && frame >= bridge.fromFrame && (!bridge.returnFrame || frame < *bridge.returnFrame)) whole &= ~SeatBit(peer);
 		for (auto change = m_FrameGroupChanges.upper_bound(frame); change != m_FrameGroupChanges.begin();)
 			if (((--change)->second & whole) == whole) return change->first;
 		return m_Config.startFrame;
@@ -142,19 +152,31 @@ namespace RTE {
 	void NetLockstepCoordinator::CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs) {
 		// Both halves name a split by the last frame the whole group played, so every check-in of one split meets one decision.
 		const uint64_t split = PeerSplitEpoch(frame);
-		if (!m_Config.frameTieReferee || m_PeerFrameTieWinners.contains(split)) return;
+		if (!PeerTieRefereed() || m_PeerFrameTieWinners.contains(split)) return;
 		NetFrameTieRequest request;
 		request.generation = m_Config.migrationGeneration; request.roundId = m_Config.matchConfig.roundId;
 		request.frame = split; request.configHash = m_RoundConfigHash; request.host = GetHostPeerId();
 		request.queryOnly = (members & SeatBit(m_Config.localPeerId)) == 0;
-		// The tie is between the seats that vote now: a held seat answers nothing, as the group's authority reads it.
+		// The tie is between the seats that vote now, and the referee decides an even split of every retained seat: the seats that
+		// do not vote are dealt to the halves in seat order, the lower ones to the half that holds the lowest voting seat.
 		uint32_t voting = members;
 		const uint32_t owners = PeerVotingOwners(voting);
-		if (owners == 0) return;
+		if (owners == 0 || 2 * std::popcount(voting) != std::popcount(owners)) return;
+		uint32_t retained = 0;
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) retained |= SeatBit(peer);
+		const bool lowerHalf = (voting & (owners & (~owners + 1))) != 0;
+		uint32_t half = voting;
+		int dealt = 0;
+		const int share = std::popcount(retained & ~owners) / 2;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
-			if ((owners & SeatBit(peer)) == 0) continue;
+			if ((retained & ~owners & SeatBit(peer)) == 0) continue;
+			if ((dealt++ < share) == lowerHalf) half |= SeatBit(peer);
+		}
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+			if ((retained & SeatBit(peer)) == 0) continue;
 			request.owners.push_back(peer);
-			if ((voting & SeatBit(peer)) != 0) request.members.push_back(peer);
+			if ((half & SeatBit(peer)) != 0) request.members.push_back(peer);
 		}
 		if (request.members.size() * 2 != request.owners.size()) return;
 		// A seat that heard the other half play on keeps asking what was decided: the referee holds one request per seat, and
@@ -172,7 +194,9 @@ namespace RTE {
 				if (peer == 0 || peer > m_Config.peerCount || std::find(request.owners.begin(), request.owners.end(), peer) == request.owners.end()) return;
 				winner |= SeatBit(static_cast<uint8_t>(peer));
 			}
-			if (std::popcount(winner) * 2 == static_cast<int>(request.owners.size())) m_PeerFrameTieWinners.emplace(split, winner);
+			// The decided half is kept as the voting seats it holds, the form every authority check compares.
+			if (std::popcount(winner) * 2 == static_cast<int>(request.owners.size()) && 2 * std::popcount(winner & owners) == std::popcount(owners))
+				m_PeerFrameTieWinners.emplace(split, winner & owners);
 		}
 		// Silence from an internet referee grants neither side permission to display new history.
 	}

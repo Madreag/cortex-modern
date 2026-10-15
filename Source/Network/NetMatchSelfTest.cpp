@@ -2289,6 +2289,29 @@ namespace RTE {
 				         ", client ignored " + std::to_string(clientLobby.GetStats().ignoredSessionPackets) + ")";
 				return false;
 			}
+			// Session traffic wrapped for a frame-group link reaches a lobby only unwrapped: one that arrives wrapped is malformed, not another phase's.
+			LoopbackTransport wrappedHostTransport;
+			LoopbackTransport wrappedClientTransport;
+			if (!StartLoopbackTransports(43155, wrappedHostTransport, wrappedClientTransport, hostRemotePeer, clientRemotePeer, error)) return false;
+			NetLobbySession wrappedHost;
+			NetLobbySession wrappedClient;
+			hostConfig.remoteTransportPeerId = hostRemotePeer;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			if (!wrappedHost.Start(wrappedHostTransport, hostConfig, error) || !wrappedClient.Start(wrappedClientTransport, clientConfig, error)) return false;
+			NetHostMigrationMessage wrapped = decision;
+			wrapped.type = NetHostMigrationMessageType::PeerSession;
+			std::vector<uint8_t> wrappedBytes;
+			if (!NetHostMigrationCodec::Encode(wrapped, key, wrappedBytes) || !wrappedHostTransport.Send(hostRemotePeer, NetTransportLane::ControlReliable, wrappedBytes)) {
+				*error = "lobby ignores the last round's frame group: the wrapped session fixture could not be sent";
+				return false;
+			}
+			std::string wrappedEnd;
+			if (DriveLobbyPair(wrappedHostTransport, wrappedClientTransport, wrappedHost, wrappedClient, &wrappedEnd) || wrappedClient.GetFailureReason() != "bad lobby protocol magic") {
+				*error = "lobby ignores the last round's frame group: a wrapped session packet reaching the lobby was passed over as another phase's (client " +
+				         std::string(NetLobbySession::StateName(wrappedClient.GetState())) + ", error '" + wrappedClient.GetFailureReason() + "', ignored " +
+				         std::to_string(wrappedClient.GetStats().ignoredSessionPackets) + ")";
+				return false;
+			}
 			return true;
 		}
 

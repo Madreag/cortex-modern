@@ -28,6 +28,8 @@ GUIManager::GUIManager(GUIInput* input) {
 }
 
 GUIManager::~GUIManager() {
+	// A manager let go of without a Clear takes its drawn panels too: their addresses can be reused.
+	ForgetPanelDraws(this);
 	delete m_pTimer;
 	m_pTimer = nullptr;
 }
