@@ -515,5 +515,80 @@ class WindowsJoinersTest(unittest.TestCase):
                 peers.check_scene(changed)
 
 
+class LobbyIdentityTest(unittest.TestCase):
+    """A joiner joins the lobby its own run's host opened, and a run never starts on a port another lobby lists."""
+
+    SCENES = [f"fight15-s{number:02d}" for number in range(1, 14)]
+    LOBBY = "{PROBE_DIR_host}/lobby.json"
+
+    def test_every_two_box_joiner_joins_its_own_hosts_lobby(self):
+        for name in self.SCENES:
+            scripts = peers.scene(name)["scripts"]
+            joiners = [text for text in scripts.values() if "click_row Public" in text or '"wait_public_row"' in text]
+            with self.subTest(scene=name):
+                self.assertTrue(joiners)
+                self.assertFalse([key for key, text in scripts.items() if "GameRowPort" in text], "a joiner picks its lobby by port alone")
+                for text in joiners:
+                    self.assertIn("click_row PublicGameRowLobby:" + self.LOBBY, text)
+                for text in (text for text in scripts.values() if "activate ButtonMultiplayerCreate" in text):
+                    self.assertIn("write_lobby {PROBE_DIR}/lobby.json", text)
+                for text in (text for text in scripts.values() if "wait_row PublicGameRowLobby:" in text):
+                    self.assertLess(text.index("wait_file " + self.LOBBY), text.index("wait_row PublicGameRowLobby:" + self.LOBBY))
+
+    def test_a_scene_whose_joiner_picks_a_row_by_port_alone_is_refused(self):
+        document = copy.deepcopy(peers.scene("fight15-s13"))
+        document["scripts"]["joiner1.menu"] = document["scripts"]["joiner1.menu"].replace("PublicGameRowLobby:" + self.LOBBY, "PublicGameRowPort{PORT}")
+        with self.assertRaisesRegex(ValueError, "by port alone"):
+            peers.check_scene(document)
+
+    def test_a_run_never_starts_on_a_port_another_lobby_lists(self):
+        # Another lane's lobby on this run's port: its joiners could take that row for their host's.
+        listing = {"sessions": [{"session_id": "0123456789abcdef", "name": "Captain", "activity": "Skirmish Defense", "listen_port": 49436}]}
+        urls = []
+        def fetch(url):
+            urls.append(url)
+            return listing
+        with self.assertRaisesRegex(ValueError, r"^port 49436 is held by another lobby in directory\.broserver\.com: Captain \(Skirmish Defense, session 0123456789abcdef\)"):
+            peers.require_free_port("directory.broserver.com", 49436, fetch=fetch, wait_s=0)
+        self.assertTrue(urls[0].startswith("https://directory.broserver.com/v1/sessions?limit="))
+        peers.require_free_port("directory.broserver.com", 49437, fetch=fetch, wait_s=0)
+
+    def test_a_lobby_that_is_closing_is_waited_out(self):
+        pages = [{"sessions": [{"session_id": "a", "name": "Captain", "listen_port": 49436}]}, {"sessions": []}]
+        now = [0.0]
+        def sleep(seconds):
+            now[0] += seconds
+        peers.require_free_port("directory.broserver.com", 49436, fetch=lambda url: pages.pop(0), wait_s=90, sleep=sleep, clock=lambda: now[0])
+        self.assertEqual(pages, [])
+
+    def test_every_page_of_the_listing_is_read(self):
+        pages = {"": {"sessions": [{"session_id": "a", "listen_port": 1}], "next_cursor": "c1"},
+                 "c1": {"sessions": [{"session_id": "b", "name": "Captain", "listen_port": 49436}]}}
+        fetch = lambda url: pages["c1" if "cursor=c1" in url else ""]
+        with self.assertRaisesRegex(ValueError, "session b"):
+            peers.require_free_port("directory.broserver.com", 49436, fetch=fetch, wait_s=0)
+
+    def test_a_held_port_stops_the_run_before_any_player_starts(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        boxes = root / "boxes.json"
+        boxes.write_text(json.dumps({"boxes": [
+            dict(name="EROL-PC", os="win32", hostname="EROL-PC", ssh="erol-pc", repo="C:/t", scratch="C:/mx", python="python", session_dir="C:/s", task="t"),
+            dict(name="Ally", os="win32", hostname="Erol-Ally7", ssh="ally-ts", repo="C:/t", scratch="C:/mx", python="python", session_dir="C:/s", task="t")]}))
+        args = SimpleNamespace(scenario="fight15-s13", peer_boxes="host=EROL-PC,joiner1=Ally", boxes_file=boxes, port=49436, engine_env=[],
+                               out=root / "s13-held", repo=Path(peers.__file__).resolve().parents[1])
+        held = ValueError("port 49436 is held by another lobby in directory.broserver.com: Captain (Skirmish Defense, session x)")
+        with mock.patch.object(peers.video, "source_evidence", return_value={"dirty": False, "tip": "0" * 40}), \
+                mock.patch.object(peers, "committed_scene_sha256", return_value="0" * 64), \
+                mock.patch.object(peers, "require_free_port", side_effect=held) as checked, \
+                mock.patch.object(peers, "launch") as launched, mock.patch("builtins.print"):
+            peers.capture_scene(args)
+        checked.assert_called_with("directory.broserver.com", 49436)
+        launched.assert_not_called()
+        capture = json.loads((root / "s13-held" / "capture.json").read_text())
+        self.assertIn("is held by another lobby", capture["interrupted"])
+
+
 if __name__ == "__main__":
     unittest.main()

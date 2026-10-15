@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include "SteadyClock.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -50,14 +51,14 @@ namespace RTE {
 		/// Measures simulation-thread work between its start and Stop, less any suspension for a stack sample inside it.
 		class SimulationSpan {
 		public:
-			SimulationSpan() : m_Start(std::chrono::steady_clock::now()), m_Suspended(s_SuspendedNs.load(std::memory_order_relaxed)) {}
+			SimulationSpan() : m_Start(RTE::SteadyClock::now()), m_Suspended(s_SuspendedNs.load(std::memory_order_relaxed)) {}
 			/// The span's own nanoseconds.
 			int64_t Stop() const {
-				const int64_t elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - m_Start).count();
+				const int64_t elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - m_Start).count();
 				return elapsed - (s_SuspendedNs.load(std::memory_order_relaxed) - m_Suspended);
 			}
 		private:
-			std::chrono::steady_clock::time_point m_Start;
+			RTE::SteadyClock::time_point m_Start;
 			int64_t m_Suspended;
 		};
 

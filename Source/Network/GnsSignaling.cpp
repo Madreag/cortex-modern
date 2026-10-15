@@ -1,4 +1,5 @@
 #include "GnsSignaling.h"
+#include "SteadyClock.h"
 
 #ifdef CCCP_WITH_GNS
 
@@ -23,7 +24,7 @@ namespace RTE {
 		constexpr size_t c_IdentityChars = 24;
 
 		uint64_t SteadyNowMs() {
-			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count());
 		}
 
 		std::string MakeFrame(GnsSignalFrame kind, const void* body, size_t size) {

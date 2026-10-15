@@ -1,4 +1,5 @@
 #include "NetReplayTestUtils.h"
+#include "SteadyClock.h"
 #include "NetWorldJoinSelfTest.h"
 
 #include "ControllerFrame.h"
@@ -317,7 +318,7 @@ namespace RTE {
 		// A private directory for a row's own files; removed with them.
 		struct ResumeScratchDirectory {
 			std::filesystem::path path;
-			ResumeScratchDirectory(): path(std::filesystem::temp_directory_path() / ("cc-world-restart-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+			ResumeScratchDirectory(): path(std::filesystem::temp_directory_path() / ("cc-world-restart-" + std::to_string(RTE::SteadyClock::now().time_since_epoch().count()))) {
 				std::error_code ignored;
 				std::filesystem::create_directories(path, ignored);
 			}
@@ -3679,8 +3680,8 @@ namespace RTE {
 		for (uint64_t tick = 1; tick <= 8; ++tick) if (!log.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
 		if (log.Count() != 2 || !log.Covers(1)) return Fail("bounded memory discarded the checkpoint's committed history");
 		std::vector<std::vector<uint8_t>> records;
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-		while (log.CopyFrom(1, 8, 1024 * 1024, records) == 0 && std::chrono::steady_clock::now() < deadline && !log.JournalFailed())
+		const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(2);
+		while (log.CopyFrom(1, 8, 1024 * 1024, records) == 0 && RTE::SteadyClock::now() < deadline && !log.JournalFailed())
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		if (records.size() != 8) return Fail("the asynchronous journal did not return its complete older window");
 		for (size_t index = 0; index < records.size(); ++index) {
@@ -3710,8 +3711,8 @@ namespace RTE {
 		const uint64_t perFile = NetWorldFrameLog::c_JournalSegmentFrames;
 		for (uint64_t tick = 1; tick <= 3 * perFile; ++tick) if (!log.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
 		const auto settle = [&](auto&& done) {
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-			while (!done() && std::chrono::steady_clock::now() < deadline && !log.JournalFailed()) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(5);
+			while (!done() && RTE::SteadyClock::now() < deadline && !log.JournalFailed()) std::this_thread::sleep_for(std::chrono::milliseconds(2));
 			return done();
 		};
 		if (!settle([&] { return files() == 3; })) return Fail("the journal wrote " + std::to_string(files()) + " files for three files of frames");
@@ -3842,9 +3843,9 @@ namespace RTE {
 			if (tick % 60 == 0) {
 				// A world serves a joiner the published image while its tail is still in memory.
 				const bool served = tail.Count() != 0 && imageTick + 1 >= tail.FirstFrame();
-				const auto began = std::chrono::steady_clock::now();
+				const auto began = RTE::SteadyClock::now();
 				(void)NetMatchService::StepJoinHistory(host, tick, served ? std::optional<uint64_t>(imageTick) : std::nullopt, {}, tickMs, policy, &ends);
-				stepMaxUs = std::max(stepMaxUs, std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - began).count());
+				stepMaxUs = std::max(stepMaxUs, std::chrono::duration<double, std::micro>(RTE::SteadyClock::now() - began).count());
 				if (endedAt == 0 && !ends.empty()) endedAt = tick;
 			}
 			if (tick % 3000 == 0 || tick == lastTick) {
@@ -4077,9 +4078,9 @@ namespace RTE {
 		uint64_t failedAt = 0;
 		double appendMaxUs = 0.0, stepMaxUs = 0.0;
 		for (uint64_t tick = 1; tick <= lastTick; ++tick) {
-			auto began = std::chrono::steady_clock::now();
+			auto began = RTE::SteadyClock::now();
 			if (!tail.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
-			appendMaxUs = std::max(appendMaxUs, std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - began).count());
+			appendMaxUs = std::max(appendMaxUs, std::chrono::duration<double, std::micro>(RTE::SteadyClock::now() - began).count());
 			if (tick == 1) tail.EnableJournal((scratch.path / "world_history.inputs").string());
 			if (tick == imageTick) {
 				host.PublishImage(image);
@@ -4092,17 +4093,17 @@ namespace RTE {
 			}
 			// The writer runs behind the appends: once the faulted frame is queued the run waits for its writer to reach it.
 			if (tick == failAt && fault[0] == 'w') {
-				const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-				while (!tail.JournalFailed() && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(5);
+				while (!tail.JournalFailed() && RTE::SteadyClock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 			if (failure.empty() && tail.JournalFailed()) {
 				failure = tail.JournalFailure();
 				failedAt = tick;
 			}
 			if (tick % 60 == 0) {
-				began = std::chrono::steady_clock::now();
+				began = RTE::SteadyClock::now();
 				(void)NetMatchService::StepJoinHistory(host, tick, std::nullopt, {}, tickMs, policy, &ends);
-				stepMaxUs = std::max(stepMaxUs, std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - began).count());
+				stepMaxUs = std::max(stepMaxUs, std::chrono::duration<double, std::micro>(RTE::SteadyClock::now() - began).count());
 			}
 		}
 		if (failure.find(expected) == std::string::npos || failedAt < failAt)
@@ -4116,8 +4117,8 @@ namespace RTE {
 		const uint64_t from = keptAt + 1;
 		if (from >= tail.FirstFrame()) return Fail("journal-failure-not-recovered: memory still holds frame " + std::to_string(from) + "; the run proves nothing of the journal");
 		std::vector<std::vector<uint8_t>> records;
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-		while (tail.CopyFrom(from, 8, 1024 * 1024, records) == 0 && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(5);
+		while (tail.CopyFrom(from, 8, 1024 * 1024, records) == 0 && RTE::SteadyClock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		if (records.size() != 8) return Fail("journal-failure-not-recovered: the reopened journal returned " + std::to_string(records.size()) + " frames from " + std::to_string(from));
 		for (size_t index = 0; index < records.size(); ++index) {
 			NetLockstepFrame frame;
@@ -7533,8 +7534,8 @@ namespace RTE {
 		const uint64_t last = oldFiles * NetWorldFrameLog::c_JournalSegmentFrames + 1;
 		std::string error;
 		for (uint64_t tick = 1; tick <= last; ++tick) if (!tail.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-		while (tail.GetJournalStats().files < oldFiles + 1 && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(10);
+		while (tail.GetJournalStats().files < oldFiles + 1 && RTE::SteadyClock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
 		if (tail.GetJournalStats().files != oldFiles + 1) return Fail("B1 fixture did not finish writing its segment files");
 #ifdef _WIN32
 		std::vector<HANDLE> held;
@@ -7553,7 +7554,7 @@ namespace RTE {
 		tail.PruneJournalBefore(last);
 		// Failed deletes leave byte counts unchanged; their published receipt confirms the prune finished.
 		auto receipt = tail.GetJournalStats();
-		while (receipt.pendingDeleteFiles == 0 && receipt.orphanedFiles == 0 && std::chrono::steady_clock::now() < deadline) {
+		while (receipt.pendingDeleteFiles == 0 && receipt.orphanedFiles == 0 && RTE::SteadyClock::now() < deadline) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(5));
 			receipt = tail.GetJournalStats();
 		}
@@ -7570,8 +7571,8 @@ namespace RTE {
 			if constexpr (requires { value.deleteAttempts; }) return value.deleteAttempts;
 			else return uint64_t{0};
 		};
-		const auto retryDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(12);
-		while (attempts(tail.GetJournalStats()) < oldFiles + 32 * 7 && std::chrono::steady_clock::now() < retryDeadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		const auto retryDeadline = RTE::SteadyClock::now() + std::chrono::seconds(12);
+		while (attempts(tail.GetJournalStats()) < oldFiles + 32 * 7 && RTE::SteadyClock::now() < retryDeadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
 		const auto stopped = tail.GetJournalStats();
 		std::this_thread::sleep_for(std::chrono::milliseconds(1250));
 		const auto later = tail.GetJournalStats();
@@ -7609,8 +7610,8 @@ namespace RTE {
 		if (refused.files != 2) return Fail("F8: failed segment deletion left a file on disk that the journal forgot (reported files=" + std::to_string(refused.files) + ")");
 		// A second prune has the same floor; a transient delete failure still needs a retry.
 		tail.PruneJournalBefore(NetWorldFrameLog::c_JournalSegmentFrames + 1);
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-		while (std::filesystem::exists(path) && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(5);
+		while (std::filesystem::exists(path) && RTE::SteadyClock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
 		if (std::filesystem::exists(path) || settle().files != 1) return Fail("F8: the failed segment deletion was never retried after the disk allowed it");
 		std::cout << "[net-world-join-selftest] PASS journal_delete_is_retried_and_counted" << std::endl;
 		return 0;
@@ -8890,7 +8891,7 @@ namespace RTE {
 	/// Only the host's departure lands a seat that has committed nothing: an error on the peer's own side (a held client's private
 	/// catch-up that could not restore, say) keeps the seat's reconnect, so the seat the host still holds is rejoined, not abandoned.
 	bool TestAnOwnSideErrorKeepsTheSeatsReconnect(std::string* error) {
-		const std::filesystem::path scratch = std::filesystem::temp_directory_path() / ("cccp-own-side-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+		const std::filesystem::path scratch = std::filesystem::temp_directory_path() / ("cccp-own-side-" + std::to_string(RTE::SteadyClock::now().time_since_epoch().count()));
 		std::error_code ignored;
 		std::filesystem::create_directories(scratch, ignored);
 		const auto startPair = [](uint16_t port, LoopbackTransport& hostTransport, LoopbackTransport& clientTransport, NetSession& host, NetSession& client, std::string& why) {

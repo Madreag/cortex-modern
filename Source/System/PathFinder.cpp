@@ -1,4 +1,5 @@
 #include "FloatingPointEnvironment.h"
+#include "SteadyClock.h"
 #include "PathFinder.h"
 
 #include "Material.h"
@@ -540,9 +541,9 @@ void PathFinder::ClearHorizonState() {
 		std::lock_guard lock(m_HorizonMutex);
 		HoldDeferredHorizonFence();
 		for (const auto& job: m_HorizonJobs) {
-			const auto started = std::chrono::steady_clock::now();
+			const auto started = RTE::SteadyClock::now();
 			while (!job->ready.load()) {
-				const int64_t waitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+				const int64_t waitUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 				if (waitUs >= c_HorizonWaitCapUs) {
 					m_LastHorizonWaitUs = waitUs;
 					m_LastHorizonExpired += 1;
@@ -992,9 +993,9 @@ void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
 	bool expired = false;
 	if (!deferred.answer->solved.load(std::memory_order_acquire)) {
 		// A solve that is not finished at its commit tick stalls this tick, the same as a horizon job that is not ready.
-		const auto started = std::chrono::steady_clock::now();
+		const auto started = RTE::SteadyClock::now();
 		while (!deferred.answer->solved.load(std::memory_order_acquire)) {
-			waitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+			waitUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 			if (waitUs >= c_HorizonWaitCapUs) {
 				expired = true;
 				break;
@@ -1978,9 +1979,9 @@ void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
 		bool expired = false;
 		if (!job->ready.load()) {
 			// A job that is not ready at its commit tick stalls this tick, the same as a lockstep frame that has not arrived.
-			const auto started = std::chrono::steady_clock::now();
+			const auto started = RTE::SteadyClock::now();
 			while (!job->ready.load()) {
-				waitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+				waitUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 				if (waitUs >= c_HorizonWaitCapUs) {
 					expired = true;
 					break;
@@ -2006,9 +2007,9 @@ void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
 	{
 		std::unique_lock lock(m_HorizonMutex);
 		m_HorizonApplyPending = true;
-		const auto started = std::chrono::steady_clock::now();
+		const auto started = RTE::SteadyClock::now();
 		m_HorizonApplyCv.wait(lock, [this, applyGeneration] { return !HasOlderHorizonReaders(applyGeneration); });
-		m_LastHorizonReaderWaitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+		m_LastHorizonReaderWaitUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 		HoldDeferredHorizonFence();
 		for (size_t index = 0; index < due.size(); ++index) {
 			const std::shared_ptr<HorizonJob>& job = due[index];
@@ -2474,13 +2475,13 @@ int PathFinder::RunHorizonGridSelfTest() {
 	peerB.TestHoldPathingRequest();
 	peerA.QueueHorizonDelta(10, 4, wall, blocked);
 	// The late worker's 50 ms start at its queue, so the commit's own wait is 50 ms less whatever ran in between.
-	const auto lateQueued = std::chrono::steady_clock::now();
+	const auto lateQueued = RTE::SteadyClock::now();
 	peerB.QueueHorizonDelta(10, 4, wall, blocked);
 	peerA.TestApplyLiveUpdate(wall, blocked);
 	peerB.TestApplyLiveUpdate(wall, blocked);
 	peerA.CommitHorizonThrough(14);
 	peerB.CommitHorizonThrough(14);
-	const int64_t lateSpanUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - lateQueued).count();
+	const int64_t lateSpanUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - lateQueued).count();
 	const auto sharedA = pathCost(peerA, true);
 	const auto sharedB = pathCost(peerB, true);
 	const auto liveA = pathCost(peerA, false);

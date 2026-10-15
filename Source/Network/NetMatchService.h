@@ -609,6 +609,8 @@ namespace RTE {
 		int GetDirectoryVisibility() const;
 		/// Where this host's game stands in the online game list; the reason names why it is not listed when it failed.
 		NetListingStatus GetListingStatus(std::string* reason = nullptr) const;
+		/// The directory's session id of this host's listing; empty until the directory has registered it.
+		std::string GetListedSessionId() const;
 		/// Moves the lobby's directory visibility through the held lease: 0 retracts the row (LAN
 		/// only - re-listing needs a new hosted session), 1 keeps the lease hidden, 2 lists it.
 		/// False when there is no lease to move. The bound ICE identity never changes.

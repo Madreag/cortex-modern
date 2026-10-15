@@ -1,4 +1,5 @@
 #include "NetMatchReplay.h"
+#include "SteadyClock.h"
 #include "TelemetryBundle.h"
 #include "System.h"
 
@@ -18,9 +19,9 @@ namespace RTE {
 			uint64_t frame;
 			const char* phase;
 			size_t bytes = 0;
-			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+			RTE::SteadyClock::time_point start = RTE::SteadyClock::now();
 			~ReplayWorkTimer() {
-				const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+				const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - start).count();
 				if (ms >= 10) System::PrintDiagnosticLine("[net-replay-work] frame=" + std::to_string(frame) + " phase=" + phase + " ms=" + std::to_string(ms) + " bytes=" + std::to_string(bytes));
 			}
 		};
@@ -179,9 +180,9 @@ namespace RTE {
 	}
 
 	bool NetMatchReplayWriter::WaitForClose(uint64_t timeoutMs) const {
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+		const auto deadline = RTE::SteadyClock::now() + std::chrono::milliseconds(timeoutMs);
 		while (!IsCloseComplete()) {
-			if (std::chrono::steady_clock::now() >= deadline) return false;
+			if (RTE::SteadyClock::now() >= deadline) return false;
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
 		return true;

@@ -74,7 +74,7 @@ void MovableMan::CheckPreviewEffectsLingerForSelfTest() {
 			const int ticks = static_cast<int>(std::ceil(600.0 / g_TimerMan.GetDeltaTimeMS())) + maxTicks + 3;
 			const Vector target(268, 68);
 			for (int step = 0; step <= ticks; ++step) {
-				const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(1000000 / rate);
+				const auto deadline = RTE::SteadyClock::now() + std::chrono::microseconds(1000000 / rate);
 				const long long heldTick = g_TimerMan.GetSimUpdateCount();
 				const long long heldTime = g_TimerMan.GetSimTimeMS();
 				for (int repaint = 0; repaint < 2; ++repaint) {
@@ -221,7 +221,7 @@ void MovableMan::CheckEffectsLingerForSelfTest() {
 		const unsigned long explosionLifetimeMS = explosion->GetLifetime();
 		const Vector target(268, 68);
 		for (int step = 0; step <= ticks; ++step) {
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(1000000 / rate);
+			const auto deadline = RTE::SteadyClock::now() + std::chrono::microseconds(1000000 / rate);
 			const long long heldTick = g_TimerMan.GetSimUpdateCount();
 			const long long heldTime = g_TimerMan.GetSimTimeTicks();
 			const double age = static_cast<double>(heldTime - shotTime) * 1000.0 / g_TimerMan.GetTicksPerSecond();

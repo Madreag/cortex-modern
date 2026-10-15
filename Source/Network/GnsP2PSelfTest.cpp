@@ -1,4 +1,5 @@
 #include "GnsP2PSelfTest.h"
+#include "SteadyClock.h"
 
 #include "GnsTransport.h"
 #include "NetIceServers.h"
@@ -36,7 +37,7 @@ namespace RTE {
 
 	namespace {
 
-		using Clock = std::chrono::steady_clock;
+		using Clock = RTE::SteadyClock;
 
 		constexpr int c_HostVirtualPort = 47641;
 		constexpr int c_MessageSize = 64;

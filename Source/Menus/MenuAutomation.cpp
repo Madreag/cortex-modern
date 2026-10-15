@@ -1,4 +1,5 @@
 #include "MenuAutomation.h"
+#include "SteadyClock.h"
 #include "MetaMan.h"
 #include "MetagameGUI.h"
 #include "SettingsGUI.h"
@@ -1314,7 +1315,7 @@ namespace RTE::MenuAutomation {
 	}
 
 	double s_FrameSpanMs = c_DrawWindowSeconds * 1000;
-	std::chrono::steady_clock::time_point s_LastEvaluated;
+	RTE::SteadyClock::time_point s_LastEvaluated;
 
 	/// Drawn during the frame being judged: since the previous frame's evaluation.
 	bool Shown(GUIControl* control) {
@@ -1626,7 +1627,7 @@ namespace RTE::MenuAutomation {
 			s_DropReported = true;
 			ReportWatches("kill");
 		}
-		const auto now = std::chrono::steady_clock::now();
+		const auto now = RTE::SteadyClock::now();
 		const double span = s_LastEvaluated.time_since_epoch().count() == 0 ? c_DrawWindowSeconds * 1000 : std::chrono::duration<double, std::milli>(now - s_LastEvaluated).count();
 		s_FrameSpanMs = std::clamp(span + 1.0, 1.0, c_DrawWindowSeconds * 1000);
 		s_LastEvaluated = now;

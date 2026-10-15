@@ -1,4 +1,5 @@
 #include "NetHttpClient.h"
+#include "SteadyClock.h"
 #include "System.h"
 
 #ifdef _WIN32
@@ -441,9 +442,9 @@ namespace RTE {
 
 	void NetHttpClient::WorkerMainImpl(std::string method, std::string url, std::vector<std::pair<std::string, std::string>> headers, std::string body, std::string certPinSha256) {
 		Response response;
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(m_TimeoutMs);
+		const auto deadline = RTE::SteadyClock::now() + std::chrono::milliseconds(m_TimeoutMs);
 		const auto remainingMs = [&]() -> DWORD {
-			const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+			const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - RTE::SteadyClock::now()).count();
 			return left > 0 ? static_cast<DWORD>(left) : 0;
 		};
 		const auto aborted = [&]() -> bool {

@@ -31,6 +31,10 @@ FPS_SHARE = 0.95
 P95_PERIODS = 1.25
 # The round's first windows hold its start (loading, the first catch-up); its last may be cut by the round's end.
 SKIP = 3
+# What a scene's drawn-frames item states: the rule this check judges by.
+RULE = (f"Every 60-tick window of a running activity after its first {SKIP} and before its last draws at least {FPS_SHARE:.0%} of the "
+        f"expected rate (the recording's while the recorder runs, else the presentation's) with interval p95 within {P95_PERIODS} frame "
+        "periods; no window may miss; a run with no running activity reports none")
 
 
 def windows(text: str, mode: str | None = None) -> tuple[str, list[dict]]:

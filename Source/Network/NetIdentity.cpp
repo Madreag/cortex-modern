@@ -1,4 +1,5 @@
 #include "NetIdentity.h"
+#include "SteadyClock.h"
 
 #include "ControllerFrame.h"
 #include "DataModule.h"
@@ -586,7 +587,7 @@ namespace RTE {
 
 	// The walk uses captured inputs and an owned cache; cancellation never leaves a partial module cached.
 	static bool WalkManifestModules(NetIdentityManifest& manifest, std::string* error, const NetIdentityBuildOptions& options, const std::atomic<bool>* stop, const std::shared_ptr<PrimedManifestStore>& store, const std::string& workingDirectory) {
-		const auto started = std::chrono::steady_clock::now();
+		const auto started = RTE::SteadyClock::now();
 		for (NetIdentityModuleEntry& module : manifest.modules) {
 			if (StopRequested(stop)) {
 				if (error) *error = "manifest priming stopped before " + module.fileName;
@@ -635,7 +636,7 @@ namespace RTE {
 		// The menu's older tag names this runtime's session rules, so it must reject a build with the older frame path.
 		manifest.sessionRulesHash = HashSessionRulesTag(options.sessionRulesTag == "stage2-p2-session-rules" ? "peer-session-plane-v1" : options.sessionRulesTag);
 		manifest.sessionIdentityHash = HashIdentity(manifest);
-		manifest.hashDurationMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
+		manifest.hashDurationMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - started).count());
 		return true;
 	}
 
@@ -727,13 +728,13 @@ namespace RTE {
 	}
 
 	bool NetIdentity::BuildCurrentManifest(NetIdentityManifest& outManifest, std::string* error, NetIdentityBuildOptions options) {
-		const auto started = std::chrono::steady_clock::now();
+		const auto started = RTE::SteadyClock::now();
 
 		NetIdentityManifest manifest;
 		if (!CaptureManifestInputs(manifest, error, options) || !CompleteManifestFromInputs(manifest, error, options)) {
 			return false;
 		}
-		manifest.hashDurationMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
+		manifest.hashDurationMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - started).count());
 
 		outManifest = std::move(manifest);
 		return true;

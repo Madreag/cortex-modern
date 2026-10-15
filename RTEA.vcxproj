@@ -1019,6 +1019,8 @@
     <ClInclude Include="Source\System\Reader.h" />
     <ClInclude Include="Source\System\Serializable.h" />
     <ClInclude Include="Source\System\Singleton.h" />
+    <ClInclude Include="Source\System\SteadyClock.h" />
+    <ClInclude Include="Source\System\DisplayRefreshes.h" />
     <ClInclude Include="Source\System\System.h" />
     <ClInclude Include="Source\System\Timer.h" />
     <ClInclude Include="Source\System\Vector.h" />
@@ -1049,6 +1051,7 @@
     <ClInclude Include="Source\Managers\PresetMan.h" />
     <ClInclude Include="Source\Managers\SceneMan.h" />
     <ClInclude Include="Source\Managers\SettingsMan.h" />
+    <ClInclude Include="Source\Managers\SwapWaitGuard.h" />
     <ClInclude Include="Source\Managers\TimerMan.h" />
     <ClInclude Include="Source\Managers\UInputMan.h" />
     <ClInclude Include="Source\GUI\GUI.h" />
@@ -1634,6 +1637,31 @@
     <ClCompile Include="Source\Network\NetPortMapSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetProtocol.cpp" />
     <ClCompile Include="Source\System\FrameRecorder.cpp" />
+    <ClCompile Include="Source\System\DisplayRefreshes.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug Release|Win32'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Final|Win32'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Profiling|Win32'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug Minimal|Win32'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug Full|Win32'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug Release|x64'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Final|x64'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Final ASan|x64'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Profiling|x64'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug Minimal|x64'">
+      </ForcedIncludeFiles>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug Full|x64'">
+      </ForcedIncludeFiles>
+    </ClCompile>
     <ClCompile Include="Source\System\StallStackSampler.cpp" />
     <ClCompile Include="Source\System\RotatePrimitiveSelfTest.cpp" />
     <ClCompile Include="Source\System\FloatTextSelfTest.cpp" />

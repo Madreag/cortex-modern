@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointLuaView.h"
+#include "SteadyClock.h"
 #include "CheckpointArchive.h"
 #include "System.h"
 
@@ -45,7 +46,7 @@ namespace RTE::CheckpointLua {
 		bool report = false;
 
 		void Push(lua_State* state, View& view) const {
-			const auto started = report ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			const auto started = report ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 			const auto table = [&](size_t array, size_t fields) {
 				const auto hint = [](size_t count) { return count <= static_cast<size_t>(std::numeric_limits<int>::max()) ? static_cast<int>(count) : 0; };
 				lua_createtable(state, hint(array), hint(fields));
@@ -70,7 +71,7 @@ namespace RTE::CheckpointLua {
 			}
 			if (report) System::PrintDiagnosticLine(std::format("[checkpoint-callback-format] state={} objects={} functions={} capture_thread={} worker_thread={} off_capture_thread={} us={}",
 				stateIndex, objects.size(), roots.size(), std::hash<std::thread::id>{}(captureThread), std::hash<std::thread::id>{}(std::this_thread::get_id()), captureThread != std::this_thread::get_id(),
-				std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()));
+				std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count()));
 		}
 	};
 }

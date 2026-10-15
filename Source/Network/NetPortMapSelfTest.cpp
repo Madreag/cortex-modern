@@ -1,4 +1,5 @@
 #include "NetPortMap.h"
+#include "SteadyClock.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -392,7 +393,7 @@ namespace RTE {
 			}
 
 			uint64_t NowMsForTest() {
-				return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+				return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 			}
 
 			bool TestReleaseAndRenewal(std::string* error) {

@@ -31,6 +31,8 @@ import tarfile
 import threading
 import time
 from types import SimpleNamespace
+import urllib.parse
+import urllib.request
 import uuid
 
 import e2e_video as video
@@ -95,6 +97,51 @@ def player_files(document, run):
     return sorted(files)
 
 
+# A joiner names the lobby its own run's host wrote down; a row picked by port alone can be another host's lobby.
+HOST_LOBBY = "{PROBE_DIR_host}/lobby.json"
+DIRECTORY_AGENT = "cccp-scene-harness/1"
+PORT_CHECK_KEY = "scene-harness-port-check"
+
+
+def fetch_listing(url):
+    request = urllib.request.Request(url, headers={"X-Install-Key": PORT_CHECK_KEY, "User-Agent": DIRECTORY_AGENT})
+    with urllib.request.urlopen(request, timeout=20) as reply:
+        return json.loads(reply.read().decode("utf-8"))
+
+
+def directory_sessions(directory, fetch=None):
+    """Every session the directory lists now, page by page."""
+    rows, cursor = [], None
+    for _ in range(50):
+        query = "limit=200" + ("&cursor=" + urllib.parse.quote(cursor) if cursor else "")
+        body = (fetch or fetch_listing)(f"https://{directory}/v1/sessions?{query}")
+        rows += body.get("sessions", [])
+        cursor = body.get("next_cursor")
+        if not cursor:
+            break
+    return rows
+
+
+def require_free_port(directory, port, fetch=None, wait_s=90, sleep=time.sleep, clock=time.monotonic):
+    """A run starts only on a port no other lobby lists: a lobby that is closing is waited out, a live one refuses the run."""
+    deadline = clock() + wait_s
+    while True:
+        held = [row for row in directory_sessions(directory, fetch) if row.get("listen_port") == port]
+        if not held:
+            return
+        if clock() >= deadline:
+            names = ", ".join(f"{row.get('name', '?')} ({row.get('activity', '?')}, session {row.get('session_id', '?')})" for row in held[:3])
+            raise ValueError(f"port {port} is held by another lobby in {directory}: {names}")
+        sleep(10)
+
+
+def run_directory(document, run):
+    """The directory the run's host lists its lobby in."""
+    host = next(peer for peer in run.get("peers", document.get("peers", [])) if peer["name"] == "host")
+    url = host.get("settings", {}).get("SessionDirectoryUrl", "")
+    return urllib.parse.urlsplit(url if "://" in url else "https://" + url).netloc
+
+
 def check_scene(document):
     if not document.get("public_directory"):
         raise ValueError("scene must use its public directory")
@@ -123,6 +170,13 @@ def check_scene(document):
                 remaining = re.sub(SIGNAL_FILE, '', text)
                 if re.search(r"\{PROBE_DIR_" + PLAYER_NAME + r"\}", remaining):
                     raise ValueError("another player's probe file must name one declared marker")
+                if "GameRowPort" in text:
+                    raise ValueError("a joiner picks its lobby by port alone; it must click its own host's lobby, PublicGameRowLobby:" + HOST_LOBBY)
+        named = any("PublicGameRowLobby:" + HOST_LOBBY in video.scenario_text(document, peer[key])
+                    for peer in peers for key in ("menu_script", "probe") if peer.get(key))
+        host = next(peer for peer in peers if peer["name"] == "host")
+        if named and (not host.get("menu_script") or "write_lobby {PROBE_DIR}/lobby.json" not in video.scenario_text(document, host["menu_script"])):
+            raise ValueError("the joiners name the host's lobby, but the host's menu never writes it (write_lobby {PROBE_DIR}/lobby.json)")
 
 
 class PlayerRun:
@@ -545,6 +599,7 @@ def capture_scene(args):
         try:
             if set(roles) != set(boxes):
                 raise ValueError("the assigned boxes name other players than the scene: " + ", ".join(roles))
+            require_free_port(run_directory(document, run), port)
             for role in roles:
                 box = boxes[role]
                 remote_out = box["scratch"].rstrip("/") + "/" + out.name + "-" + name + "-" + uuid.uuid4().hex[:8]

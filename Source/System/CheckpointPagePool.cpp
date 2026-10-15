@@ -1,4 +1,5 @@
 #include "CheckpointPagePool.h"
+#include "SteadyClock.h"
 
 #include "PageWriteFence.h"
 #include "CheckpointPageCopy.h"
@@ -63,8 +64,8 @@
 using namespace RTE;
 
 namespace {
-	int64_t Since(std::chrono::steady_clock::time_point start) {
-		return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+	int64_t Since(RTE::SteadyClock::time_point start) {
+		return std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count();
 	}
 	struct Pages {
 		unsigned char* data = nullptr;
@@ -278,7 +279,7 @@ struct CheckpointPagePool::Block {
 		return {copied, fenced};
 	}
 	bool SavePages(size_t first, size_t count, bool fault) noexcept {
-		const auto started = fault ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		const auto started = fault ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 		Locked guard(lock);
 		// A write fault saves and opens the aligned run around it, between saves too: taking a fault costs several times
 		// what copying a page does, and the game's writes come in runs.
@@ -312,7 +313,7 @@ struct CheckpointPagePool::Block {
 			opened = PageWriteFence::OpenCopiedPage(reinterpret_cast<uintptr_t>(live.data + begin * pageBytes), (page - begin) * pageBytes);
 			if (opened) std::fill(states.begin() + begin, states.begin() + page, PageState::Hot);
 		}
-		const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
+		const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - started).count();
 		if (TallyingFaults()) { s_TallyFaults.fetch_add(1, std::memory_order_relaxed); s_TallyFaultNs.fetch_add(elapsed, std::memory_order_relaxed); }
 		for (const auto& copy: copies) if (copy->Armed() && !copy->completed) {
 			const bool simulation = std::this_thread::get_id() == copy->SimulationThread();
@@ -790,7 +791,7 @@ void CheckpointPagePool::Snapshot::Drain() const {
 		if (!part.copy->Armed()) throw std::logic_error("native checkpoint drain before its boundary");
 		// Inventory pages stay fenced until written, so the saver copies only what it reads.
 		if (m_ArmGate) continue;
-		const auto start = std::chrono::steady_clock::now();
+		const auto start = RTE::SteadyClock::now();
 		const size_t batch = std::max<size_t>(1, (size_t{64} << 10) / part.block->pageBytes);
 		for (size_t page = 0; page < part.copy->saved.size(); page += batch) {
 			if (!part.block->SavePages(page, std::min(batch, part.copy->saved.size() - page), false)) throw std::runtime_error("could not drain native checkpoint pages");
@@ -981,14 +982,14 @@ namespace {
 	struct StorageCostSpan {
 		std::atomic<uint64_t>* count = nullptr;
 		std::atomic<uint64_t>* ns = nullptr;
-		std::chrono::steady_clock::time_point started;
+		RTE::SteadyClock::time_point started;
 		StorageCostSpan(std::atomic<uint64_t> StorageCostCounters::*countField, std::atomic<uint64_t> StorageCostCounters::*nsField) {
-			if (auto* counters = StorageCostsArmed()) { count = &(counters->*countField); ns = &(counters->*nsField); started = std::chrono::steady_clock::now(); }
+			if (auto* counters = StorageCostsArmed()) { count = &(counters->*countField); ns = &(counters->*nsField); started = RTE::SteadyClock::now(); }
 		}
 		~StorageCostSpan() {
 			if (!count) return;
 			count->fetch_add(1, std::memory_order_relaxed);
-			ns->fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count(), std::memory_order_relaxed);
+			ns->fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - started).count(), std::memory_order_relaxed);
 		}
 	};
 	thread_local bool s_NativeStorageAllocation = false;
@@ -1035,7 +1036,7 @@ void CheckpointNativeStorage::StartSettling() {
 	static std::jthread settler([](std::stop_token stop) {
 		SaverThreads::Mark();
 		uint64_t settled = UINT64_MAX;
-		auto cooled = std::chrono::steady_clock::now();
+		auto cooled = RTE::SteadyClock::now();
 		while (!stop.stop_requested()) {
 			const uint64_t generation = CheckpointPagePool::InventoryGeneration();
 			bool more = false;
@@ -1045,9 +1046,9 @@ void CheckpointNativeStorage::StartSettling() {
 			}
 			// A page that stopped changing for a pass is fenced again, so the next boundary copies only pages still written.
 			static const bool s_Cooling = std::getenv("CCCP_TEST_CHECKPOINT_NO_COOLING") == nullptr;
-			if (s_Cooling && WorldEnabled() && s_CoolingPauses.load(std::memory_order_acquire) == 0 && std::chrono::steady_clock::now() - cooled >= std::chrono::seconds(1)) {
+			if (s_Cooling && WorldEnabled() && s_CoolingPauses.load(std::memory_order_acquire) == 0 && RTE::SteadyClock::now() - cooled >= std::chrono::seconds(1)) {
 				CheckpointPagePool::CoolInventory();
-				cooled = std::chrono::steady_clock::now();
+				cooled = RTE::SteadyClock::now();
 			}
 			std::this_thread::sleep_for(more ? std::chrono::milliseconds(4) : std::chrono::milliseconds(50));
 		}

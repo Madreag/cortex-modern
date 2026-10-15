@@ -8,6 +8,7 @@
 #include "Constants.h"
 #include "PerformanceMan.h"
 #include "SettingsMan.h"
+#include "SteadyClock.h"
 
 #include <algorithm>
 #include <limits>
@@ -86,7 +87,7 @@ std::string TimerMan::CheckpointStorageSelfTestMismatch() {
 }
 
 void TimerMan::Clear() {
-	CheckpointStateValues().m_StartTime = std::chrono::steady_clock::now();
+	CheckpointStateValues().m_StartTime = SteadyNow();
 	CheckpointStateValues().m_TicksPerSecond = 1000000;
 	CheckpointStateValues().m_RealTimeTicks = 0;
 	CheckpointStateValues().m_SimTimeTicks = 0;
@@ -129,7 +130,7 @@ void TimerMan::Initialize() {
 }
 
 long long TimerMan::GetAbsoluteTime() const {
-	return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+	return std::chrono::duration_cast<std::chrono::microseconds>(SteadyNow().time_since_epoch()).count();
 }
 
 float TimerMan::GetRealToSimCap() const {
@@ -148,7 +149,7 @@ float TimerMan::GetAIDeltaTimeSecs() const {
 
 void TimerMan::ResetTime() {
 	++CheckpointStateValues().m_PaceResetCalls;
-	CheckpointStateValues().m_StartTime = std::chrono::steady_clock::now();
+	CheckpointStateValues().m_StartTime = SteadyNow();
 
 	CheckpointStateValues().m_RealTimeTicks = 0;
 	CheckpointStateValues().m_SimAccumulator = 0;
@@ -203,7 +204,7 @@ void TimerMan::UpdateSim() {
 
 void TimerMan::Update() {
 	long long prevTime = CheckpointStateValues().m_RealTimeTicks;
-	CheckpointStateValues().m_RealTimeTicks = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - CheckpointStateValues().m_StartTime).count();
+	CheckpointStateValues().m_RealTimeTicks = std::chrono::duration_cast<std::chrono::microseconds>(SteadyNow() - CheckpointStateValues().m_StartTime).count();
 
 	// Cap timeIncrease if too long (as when the app went out of focus), to c_RealToSimCap.
 	long long timeIncrease = std::min(CheckpointStateValues().m_RealTimeTicks - prevTime, static_cast<long long>(c_RealToSimCap * CheckpointStateValues().m_TicksPerSecond));
@@ -262,7 +263,7 @@ bool TimerMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		CheckpointReader reader(text, legacy ? "TimerMan1" : "TimerMan2", validateOnly);
 		VisitCheckpoint(reader, CheckpointStateValues());
 		reader.Finish();
-		if (!validateOnly) CheckpointStateValues().m_StartTime = std::chrono::steady_clock::now() - std::chrono::microseconds(CheckpointStateValues().m_RealTimeTicks);
+		if (!validateOnly) CheckpointStateValues().m_StartTime = SteadyNow() - std::chrono::microseconds(CheckpointStateValues().m_RealTimeTicks);
 		return true;
 	} catch (const std::exception&) {
 		return false;
