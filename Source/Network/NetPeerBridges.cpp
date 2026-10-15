@@ -549,6 +549,10 @@ namespace RTE {
 				if (delay != InputDelayAt(peer, agreed.frame)) m_DelayChanges[peer][agreed.frame] = delay;
 				m_PeerEffectiveStart[peer] = agreed.frame + delay;
 				m_PeerAcceptedThrough[peer] = neutral + 1;
+				// The seat's pace is judged afresh from its return: what it cost and fed before its hold says nothing of it now.
+				auto& stats = m_Stats.peers[peer];
+				stats.reclaimAdmittedMs = nowMs;
+				stats.waitCosts.clear(); stats.arrivals.clear();
 				NoteSeatTransition(peer, agreed.frame, SeatTransition::Back);
 			} else {
 				const auto prior = m_PeerBridges.find(peer);

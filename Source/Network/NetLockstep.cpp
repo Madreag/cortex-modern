@@ -7245,13 +7245,21 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::CostsPastTolerance(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* cost) {
 		constexpr uint64_t c_PlayedFrames = 120;
-		if (!UsesPeerFrameGroups() || m_Playback || peerId == m_Config.localPeerId || m_Config.simTickMs <= 0.0 || frame < EffectiveStartOf(peerId) + c_PlayedFrames) return false;
+		// A seat back from a hold is judged from the end of the neutral gap its return's certificate gave it, the same frames on every peer.
+		uint64_t judgedFrom = EffectiveStartOf(peerId);
+		const auto returned = m_ReclaimTransactions.find(peerId);
+		if (returned != m_ReclaimTransactions.end())
+			judgedFrom = std::max(judgedFrom, std::max(returned->second.neutralThroughFrame, returned->second.activationFrame + returned->second.delayFrames) + 1);
+		// A round's first frames are no evidence of any machine's pace.
+		const bool early = frame < judgedFrom + c_PlayedFrames;
+		if (!UsesPeerFrameGroups() || m_Playback || peerId == m_Config.localPeerId || m_Config.simTickMs <= 0.0 || (early && returned == m_ReclaimTransactions.end())) return false;
 		const auto found = m_Stats.peers.find(peerId);
 		if (found == m_Stats.peers.end()) return false;
 		auto& stats = found->second;
 		while (!stats.waitCosts.empty() && stats.waitCosts.front().first + c_CapacityWindowMs < nowMs) stats.waitCosts.pop_front();
-		// A seat back from a hold catches up first; the round judges it after.
-		if (const uint64_t back = std::max(stats.reclaimAdmittedMs, stats.returnerCaughtUpMs); back != 0 && nowMs < back + 2000) return false;
+		// A seat starting or back from a hold catches up first; the round judges its pace after.
+		const uint64_t back = std::max(stats.reclaimAdmittedMs, stats.returnerCaughtUpMs);
+		const bool grace = early || (back != 0 && nowMs < back + 2000);
 		uint64_t waited = m_ConsumerWaitingFrame && *m_ConsumerWaitingFrame == frame && nowMs >= m_ConsumerWaitStartMs ? nowMs - m_ConsumerWaitStartMs : 0;
 		for (const auto& [endMs, ms]: stats.waitCosts) waited += ms;
 		// Judged against this machine's own pace: a scene heavy for every machine slows the round for all of them together.
@@ -7261,12 +7269,18 @@ namespace RTE {
 		const double lost = own * static_cast<double>(waited) / static_cast<double>(c_CapacityWindowMs);
 		if (cost) *cost = lost;
 		if (lost <= tolerance) return false;
-		// Only a machine that feeds below this one's rate is slow; a seat late by a fixed trip or a lossy link feeds at the round's rate.
+		// Inside that grace a catch-up burst is no evidence of a slow machine, but a seat that costs the others and says it cannot run
+		// the round's rate is one from its first ticks.
 		const auto& arrivals = stats.arrivals;
-		if (arrivals.size() < 2 || nowMs < arrivals.front().first || nowMs - arrivals.front().first < 1000) return false;
 		// A seat that stopped feeding is silent, not slow: the bound holds it for what it is.
 		const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
-		if (nowMs > arrivals.back().first + 2 * boundMs) return false;
+		if (arrivals.empty() || nowMs > arrivals.back().first + 2 * boundMs) return false;
+		if (grace) {
+			const auto published = m_PublishedCapacity.find(peerId);
+			return published != m_PublishedCapacity.end() && published->second > 0 && published->second < own - tolerance;
+		}
+		// Only a machine that feeds below this one's rate is slow; a seat late by a fixed trip or a lossy link feeds at the round's rate.
+		if (arrivals.size() < 2 || nowMs < arrivals.front().first || nowMs - arrivals.front().first < 1000) return false;
 		// Counted in the seat's own ticks: a delay re-size moves its target frames without the seat running faster or slower.
 		const auto ownTick = [this, peerId](uint64_t target) { const uint64_t delay = InputDelayAt(peerId, target); return target > delay ? target - delay : 0; };
 		const uint64_t newest = ownTick(arrivals.back().second), oldest = ownTick(arrivals.front().second);
