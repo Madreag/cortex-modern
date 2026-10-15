@@ -1,5 +1,5 @@
 """Write fight15-s11 and fight15-s12: fight15-s10's twenty-minute stock endless AI fight with four, then three, human
-players together on one side against the CPU team the co-op mode adds.
+players together on one side against the CPU team the co-op mode adds; and fight15-s13, its two-player co-op soldier turns alone.
 
 The host and each joiner take one box each. The joiners come into the lobby one after another, so each holds the
 seat of its order; the host starts a countdown the joiners answer with Ready; every player installs its brain in a
@@ -109,7 +109,7 @@ def setup(peer):
     return steps + capture(f"playing-{peer}")
 
 
-def fight(peer):
+def turn(peer):
     order = SEAT[peer]
     steps = []
     if order:
@@ -122,7 +122,11 @@ def fight(peer):
               dict(op="wait_scene", input_player=0, equals=dict(preset="Base.rte/Brain Case")),
               dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset="Base.rte/Brain Case", brain_count=len(PLAYERS))),
               dict(op="signal", name="soldier-done")]
-    steps += [dict(op="pan_scene", input_player=0, y=600, speed=8)] + capture(f"look-{peer}")
+    return steps
+
+
+def fight(peer):
+    steps = turn(peer) + [dict(op="pan_scene", input_player=0, y=600, speed=8)] + capture(f"look-{peer}")
     steps += [dict(op="pan_scene", input_player=0, y=600, speed=8),
               dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=len(PLAYERS), screen_text="Select a body to switch control to..."))]
     steps += capture(f"ai-view-{peer}")
@@ -149,19 +153,26 @@ def ending(peer):
     return steps
 
 
-def checklist_items(peer, steps):
+def switch_check(peer):
+    """Every player has taken, fired and left its own soldier before the host ends the match."""
+    return [dict(op="wait_file", path=f"{{PROBE_DIR_{other}}}/soldier-done.json", within_ms=300000) for other in others(peer)] + \
+        [dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset="Base.rte/Brain Case", brain_count=len(PLAYERS))), relay()]
+
+
+def checklist_items(peer, steps, minutes=True):
     checks = scene_checks(peer, steps)
     bunkers = [rf"\[net-match\] editor purchase applied: seat={SEAT[owner]} preset=Base.rte/Brain Chamber Left 2x2 - 1 funds=" for owner in PLAYERS]
     checks.append(dict(id=f"shared-bunkers-{peer}", peer=peer, mark=f"playing-{peer}", screen="game",
                        what="Every bunker placement reached the shared scene before the brains started playing.", log_regex=bunkers))
-    checks.append(dict(id=f"twenty-minutes-{peer}", peer=peer, mark=f"fight-ended-{peer}", screen="MultiplayerScreen",
-                       what="Twenty full running minutes at >=58 ticks/s, living local player, AI weapon fire and named end reason.",
-                       continuous_minutes=dict(count=20, minimum_tps=58.0), log_regex=[r"\[fight15-scene\] minute=20 pace=", r"\[net-match\].*host"]))
-    progress = [index for index, step in enumerate(steps) if step.get("lockstep_frame_at_least") or step.get("name") == "fight-ticks-complete" or
-                (step["op"] == "wait_file" and "fight-ticks-complete" in step["path"])]
-    checks.append(dict(id=f"running-ticks-{peer}", peer=peer, mark=f"minute-20-{peer}", screen="game",
-                       what=f"The living player completes at least {TICKS} running ticks before any player ends the fight.",
-                       probe_steps=progress, sim_progress=TICKS))
+    if minutes:
+        checks.append(dict(id=f"twenty-minutes-{peer}", peer=peer, mark=f"fight-ended-{peer}", screen="MultiplayerScreen",
+                           what="Twenty full running minutes at >=58 ticks/s, living local player, AI weapon fire and named end reason.",
+                           continuous_minutes=dict(count=20, minimum_tps=58.0), log_regex=[r"\[fight15-scene\] minute=20 pace=", r"\[net-match\].*host"]))
+        progress = [index for index, step in enumerate(steps) if step.get("lockstep_frame_at_least") or step.get("name") == "fight-ticks-complete" or
+                    (step["op"] == "wait_file" and "fight-ticks-complete" in step["path"])]
+        checks.append(dict(id=f"running-ticks-{peer}", peer=peer, mark=f"minute-20-{peer}", screen="game",
+                           what=f"The living player completes at least {TICKS} running ticks before any player ends the fight.",
+                           probe_steps=progress, sim_progress=TICKS))
     checks.append(dict(id=f"fight-hashes-{peer}", peer=peer, mark=f"fight-ended-{peer}", screen="MultiplayerScreen",
                        what="Every running tick has matching shared component hashes on every player, with complete uninterrupted coverage.",
                        gate="fight-hashes"))
@@ -189,26 +200,30 @@ def menu_checks():
     return checks
 
 
-SCENES = {4: (11, "Four players together against the AI over the relay: countdown, brains, Buy and fire, twenty minutes"),
-          3: (12, "Three players together against the AI over the relay: countdown, brains, Buy and fire, twenty minutes")}
+# The four- and three-player twenty-minute fights; the two-player scene checks only that each co-op player takes its own soldier,
+# with every tick hashed alike on both peers.
+SCENES = {4: (11, "Four players together against the AI over the relay: countdown, brains, Buy and fire, twenty minutes", True),
+          3: (12, "Three players together against the AI over the relay: countdown, brains, Buy and fire, twenty minutes", True),
+          2: (13, "Two players together against the AI: each takes and fires its own purchased soldier, alike on both peers", False)}
+SWITCH_TICKS = 3000
 
 
 def main():
     base = json.loads((ROOT / "fight15-s10.json").read_text(encoding="utf-8"))
     template = base["peers"][0]
-    for count, (number, title) in SCENES.items():
+    for count, (number, title, minutes) in SCENES.items():
         players(count)
         scripts, peers, checks = {}, [], menu_checks()
         for peer in PLAYERS:
             scripts[f"{peer}.menu"] = "\n".join(host_menu() if peer == "host" else joiner_menu(peer)) + "\n"
-            steps = setup(peer) + fight(peer) + ending(peer)
-            scripts[f"{peer}.probe"] = game_probe(steps, timeout=1800000)
-            checks += checklist_items(peer, steps)
+            steps = setup(peer) + (fight(peer) if minutes else turn(peer) + switch_check(peer)) + ending(peer)
+            scripts[f"{peer}.probe"] = game_probe(steps, timeout=1800000 if minutes else 900000)
+            checks += checklist_items(peer, steps, minutes)
             peers.append(dict(name=peer, menu_script=f"{peer}.menu", probe=f"{peer}.probe", env=dict(template["env"]),
                               settings=dict(SETTINGS, NetworkDisplayName=NAMES[peer]), args=list(template["args"])))
-        document = dict(schema=1, name=f"fight15-s{number}", title=title, port_base=49410 + number * 2, size=base["size"], timeout_s=2100,
-                        public_directory=True, peers=peers, scripts=scripts, checklist=checks,
-                        fight_hash_gate=dict(peers=list(PLAYERS), running_ticks=TICKS))
+        document = dict(schema=1, name=f"fight15-s{number}", title=title, port_base=49410 + number * 2, size=base["size"],
+                        timeout_s=2100 if minutes else 1100, public_directory=True, peers=peers, scripts=scripts, checklist=checks,
+                        fight_hash_gate=dict(peers=list(PLAYERS), running_ticks=TICKS if minutes else SWITCH_TICKS))
         (ROOT / f"fight15-s{number}.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
 
 
