@@ -2566,7 +2566,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				writer.NewPropertyWithValue("SpecialBehaviour_RecentMovement", actorToSave->GetRecentMovement());
 				writer.NewPropertyWithValue("SpecialBehaviour_LastSecondPos", actorToSave->GetLastSecondPos());
 			}
-			if (const long itemInReach = actorToSave->GetItemInReachUniqueID(); itemInReach > 0) {
+			if (const long itemInReach = actorToSave->GetItemInReachUniqueID(); itemInReach > 0 || itemInReach == Actor::c_GoneItemInReachUID) {
 				writer.NewPropertyWithValue("ItemInReachUniqueID", itemInReach);
 			}
 			// The loaded MO target is this machine's own pathfinder state.

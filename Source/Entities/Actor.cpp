@@ -55,6 +55,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <mutex>
+#include <new>
 #include <iterator>
 #include <limits>
 
@@ -94,6 +96,15 @@ namespace {
 		const Icon* icon = reference.kind == 1 ? (g_ActivityMan.GetActivity() ? g_ActivityMan.GetActivity()->GetTeamIcon(reference.team) : nullptr) : dynamic_cast<const Icon*>(g_PresetMan.GetEntityPreset("Icon", reference.preset, reference.module));
 		if (!icon) throw std::runtime_error("actor icon owner could not be restored");
 		return icon;
+	}
+	std::atomic<HeldDevice*> s_GoneItemInReach{nullptr};
+	// Only the device's address is read until the known objects say it is still in the world.
+	HeldDevice* FreezeItemInReach(HeldDevice* item, CheckpointNativeSnapshot& snapshot) {
+		if (!item || Actor::IsGoneItemInReach(item)) return item;
+		if (!g_MovableMan.IsKnownObject(item)) return nullptr;
+		// A device's slot another object took since is gone too.
+		if (!dynamic_cast<const HeldDevice*>(CheckpointNativeStorage::Source(static_cast<const MovableObject*>(item)))) return nullptr;
+		return snapshot.Freeze(item);
 	}
 	std::shared_ptr<volatile PathRequest> FreezeActorPathRequest(const std::shared_ptr<volatile PathRequest>& request, CheckpointNativeSnapshot& snapshot) {
 		if (!request) return {};
@@ -177,8 +188,8 @@ Actor::Actor(const Actor& source, CheckpointNativeSnapshot& snapshot) :
 	m_ViewPoint(snapshot.Freeze(source.m_ViewPoint)),
 	m_Inventory(snapshot.Freeze(source.m_Inventory, &m_Inventory)),
 	m_MaxInventoryMass(snapshot.Freeze(source.m_MaxInventoryMass)),
-	m_pItemInReach(snapshot.Freeze(source.m_pItemInReach)),
-	m_FaithfulItemInReachUID(snapshot.Freeze(source.m_FaithfulItemInReachUID)),
+	m_pItemInReach(FreezeItemInReach(source.m_pItemInReach, snapshot)),
+	m_FaithfulItemInReachUID(source.m_pItemInReach && !m_pItemInReach ? c_GoneItemInReachUID : snapshot.Freeze(source.m_FaithfulItemInReachUID)),
 	m_OffWireAimTick(snapshot.Freeze(source.m_OffWireAimTick)),
 	m_OffWireAim(snapshot.Freeze(source.m_OffWireAim)),
 	m_OffWireFlipTick(snapshot.Freeze(source.m_OffWireFlipTick)),
@@ -564,7 +575,7 @@ int Actor::Create(const Actor& reference) {
 		m_ViewPoint = reference.m_ViewPoint;
 		m_MovePath = reference.m_MovePath;
 		m_MovementState = reference.m_MovementState;
-		m_FaithfulItemInReachUID = reference.m_pItemInReach ? reference.m_pItemInReach->GetUniqueID() : reference.m_FaithfulItemInReachUID;
+		m_FaithfulItemInReachUID = reference.GetItemInReachUniqueID();
 		m_pItemInReach = nullptr;
 		m_FaithfulMOMoveTargetUID = reference.m_pMOMoveTarget ? reference.m_pMOMoveTarget->GetUniqueID() : reference.m_FaithfulMOMoveTargetUID;
 		m_pMOMoveTarget = nullptr;
@@ -2494,7 +2505,23 @@ MovableObject* Actor::FindPartByUniqueID(long uid) {
 }
 
 long Actor::GetItemInReachUniqueID() const {
+	if (IsGoneItemInReach(m_pItemInReach)) return c_GoneItemInReachUID;
 	return m_pItemInReach ? m_pItemInReach->GetUniqueID() : m_FaithfulItemInReachUID;
+}
+
+HeldDevice* Actor::GoneItemInReach() {
+	static std::once_flag made;
+	std::call_once(made, [] {
+		// Never deleted and never in the world; made on the thread that restores, outside every pool.
+		auto* device = new (::operator new(sizeof(HeldDevice))) HeldDevice();
+		device->SetToDelete(true);
+		s_GoneItemInReach.store(device, std::memory_order_release);
+	});
+	return s_GoneItemInReach.load(std::memory_order_acquire);
+}
+
+bool Actor::IsGoneItemInReach(const HeldDevice* item) {
+	return item && item == s_GoneItemInReach.load(std::memory_order_acquire);
 }
 
 void Actor::ResolveFaithfulLinks() {
@@ -2506,6 +2533,9 @@ void Actor::ResolveFaithfulLinks() {
 	}
 	if (m_FaithfulItemInReachUID > 0) {
 		m_pItemInReach = dynamic_cast<HeldDevice*>(g_MovableMan.FindObjectByUniqueID(m_FaithfulItemInReachUID));
+		m_FaithfulItemInReachUID = 0;
+	} else if (m_FaithfulItemInReachUID == c_GoneItemInReachUID) {
+		m_pItemInReach = GoneItemInReach();
 		m_FaithfulItemInReachUID = 0;
 	}
 	if (m_FaithfulMOMoveTargetUID > 0) {
@@ -2530,7 +2560,7 @@ void Actor::ResolveFaithfulLinks() {
 
 void Actor::RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) {
 	MOSRotating::RemapExternalLinks(map);
-	if (m_pItemInReach) {
+	if (m_pItemInReach && !IsGoneItemInReach(m_pItemInReach)) {
 		m_pItemInReach = dynamic_cast<HeldDevice*>(map(m_pItemInReach));
 	}
 	if (const MovableObject* current = m_pMOMoveTarget.get()) {

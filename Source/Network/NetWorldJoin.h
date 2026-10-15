@@ -540,7 +540,8 @@ namespace RTE {
 	/// WJIM: the joiner-only checkpoint envelope streamed through the lobby StateChunk pump.
 	inline constexpr uint32_t c_NetWorldImageMagic = 0x4D494A57U;
 	/// 3: a world offer carries the seats of its tick (held_state, departed_peers, the authority) beside its lockstep state.
-	inline constexpr uint8_t c_NetWorldImageVersion = 3;
+	/// 4: an actor's item in reach that left the world before the capture is saved as gone (ItemInReachUniqueID -1).
+	inline constexpr uint8_t c_NetWorldImageVersion = 4;
 	/// A valid 9-byte StateChunk the joiner and host exchange for progress, catch-up and E.
 	inline constexpr uint64_t c_NetWorldReportTransferId = 0x574A5250ULL;
 	inline constexpr uint64_t c_NetWorldTailTransferId = 0x5441494CULL;

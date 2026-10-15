@@ -330,6 +330,11 @@ namespace RTE {
 		const Vector& GetRecentMovement() const { return m_RecentMovement; }
 		const Vector& GetLastSecondPos() const { return m_LastSecondPos; }
 		long GetItemInReachUniqueID() const;
+		/// The saved item-in-reach UID of a device that left the world while the actor still reached for it.
+		static constexpr long c_GoneItemInReachUID = -1;
+		/// The restored stand-in for such a device: never in the world and always to be deleted, so the actor's next update clears it.
+		static HeldDevice* GoneItemInReach();
+		static bool IsGoneItemInReach(const HeldDevice* item);
 		long GetMOMoveTargetUniqueID() const { return m_pMOMoveTarget ? m_pMOMoveTarget->GetUniqueID() : m_FaithfulMOMoveTargetUID; }
 		const Vector& GetLastAlarmPosRaw() const { return m_LastAlarmPos; }
 		const Vector& GetViewPointRaw() const { return m_ViewPoint; }
