@@ -114,6 +114,14 @@ namespace RTE {
 		return m_Config.frameTieReferee && (retained == 2 || retained == 4);
 	}
 
+	uint8_t NetLockstepCoordinator::PeerTieHalfHolder(uint32_t owners) const {
+		// An unrefereed tie goes to the host's half. A host the round holds or has lost has no half, so the first playing seat in
+		// successor order takes its place, the same seat on every peer.
+		if ((owners & SeatBit(GetHostPeerId())) != 0 || owners == 0) return GetHostPeerId();
+		for (uint8_t peer: m_Config.matchConfig.successorOrder) if ((owners & SeatBit(peer)) != 0) return peer;
+		return static_cast<uint8_t>(std::countr_zero(owners) + 1);
+	}
+
 	bool NetLockstepCoordinator::PeerGroupIsRefereedHalf(uint32_t voters, uint64_t frame) const {
 		const uint32_t owners = PeerTieRefereed() ? PeerVotingOwners(voters, frame) : 0;
 		return owners != 0 && 2 * std::popcount(voters) == std::popcount(owners);
@@ -127,7 +135,7 @@ namespace RTE {
 		if (m_PeerAdminFrameMembers != 0 && voters == m_PeerAdminFrameMembers) return true;
 		const int votes = std::popcount(voters), seats = std::popcount(owners);
 		if (2 * votes != seats) return 2 * votes > seats;
-		if (!PeerTieRefereed()) return (voters & SeatBit(GetHostPeerId())) != 0;
+		if (!PeerTieRefereed()) return (voters & SeatBit(PeerTieHalfHolder(owners))) != 0;
 		const auto decision = m_PeerFrameTieWinners.find(PeerSplitEpoch(at));
 		return decision != m_PeerFrameTieWinners.end() && decision->second == voters;
 	}
@@ -136,7 +144,7 @@ namespace RTE {
 		if ((agreeing & ~members) != 0) return false;
 		const int votes = std::popcount(agreeing), seats = std::popcount(members);
 		if (2 * votes != seats) return 2 * votes > seats;
-		if (!PeerTieRefereed()) return (agreeing & SeatBit(GetHostPeerId())) != 0;
+		if (!PeerTieRefereed()) return (agreeing & SeatBit(PeerTieHalfHolder(members))) != 0;
 		const auto decision = m_PeerFrameTieWinners.find(PeerSplitEpoch(frame));
 		return decision != m_PeerFrameTieWinners.end() && decision->second == agreeing;
 	}
