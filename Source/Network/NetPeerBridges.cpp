@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <string_view>
 
 namespace RTE {
 
@@ -392,6 +393,8 @@ namespace RTE {
 		if (m_PeerBridgeCertificates.contains({certificate.frame, DecisionKind(certificate)})) return;
 		// CC_TEST_RETURN_INPUT_DETAILS names each decision this peer sets aside and why.
 		const auto refused = [&](const char* reason) {
+			if (std::string_view(reason) == "certificate") ++m_Stats.decisionsRefusedForAuthority;
+			if (std::string_view(reason) == "not held") ++m_Stats.returnsRefusedNotHeld;
 			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-decision-refused] local=" << static_cast<int>(m_Config.localPeerId)
 				<< " frame=" << certificate.frame << " kind=" << static_cast<int>(DecisionKind(certificate)) << " reason=" << reason << " next=" << m_Stats.nextFrame
 				<< " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " now_ms=" << nowMs << std::endl;

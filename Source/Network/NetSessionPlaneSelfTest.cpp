@@ -71,6 +71,13 @@ namespace RTE {
 			// while it still catches up: a second hold in a new split epoch that reaches it ahead of its own frames (0: none).
 			uint32_t refaultPercent = 0;
 			uint64_t refaultAfterMs = 0, refaultMs = 0;
+			// Once its slow spell ends, the subject catches up at only this share of the round's rate (0: the fixture's usual catch-up).
+			uint32_t catchUpPercent = 0;
+			// The directory answers a tie check-in only this long after the tie's first check-in, as a real one over its tunnel does.
+			uint64_t refereeLatencyMs = 0;
+			// The slow subject is held once through the fault and stays held; no peer sets a decision aside for authority it will have
+			// or a return for a hold it has not installed; the playing seats keep the bound, a two-seat internet round included.
+			bool heldOnce = false, noRefusals = false, strictBound = false;
 		};
 		struct Wire;
 		struct Hub {
@@ -419,6 +426,7 @@ namespace RTE {
 					if (inserted) tie.at = hub.now;
 					// The directory's rule: the first half to check in keeps the split at once.
 					if (!request.queryOnly && tie.winner.empty()) { tie.confirmed.push_back(request.members); tie.winner = request.members; }
+					if (hub.now < tie.at + hub.row.refereeLatencyMs) return reply;
 					if (!tie.winner.empty()) { reply.state = Reply::State::Decided; reply.members = tie.winner; } return reply;
 				};
 			}
@@ -614,7 +622,9 @@ namespace RTE {
 					if (hub.row.frozen && id == hub.row.subject && hub.DuringFault()) { credits[id - 1] = 0; continue; }
 					const bool refault = hub.row.refaultPercent && id == hub.row.subject && hub.InRefault();
 					const bool slowed = refault || (hub.row.slowPercent && id == hub.row.subject && hub.DuringFault());
-					credits[id - 1] += (slowed ? (refault ? hub.row.refaultPercent : hub.row.slowPercent) / 100.0 : CatchingUp(peer) ? c_TestCatchUpRate : 1) / c_TestTickMs;
+					const uint32_t ratePercent = refault ? hub.row.refaultPercent : hub.row.slowPercent;
+					const double catchUpRate = hub.row.catchUpPercent && id == hub.row.subject ? hub.row.catchUpPercent / 100.0 : c_TestCatchUpRate;
+					credits[id - 1] += (slowed ? ratePercent / 100.0 : CatchingUp(peer) ? catchUpRate : 1) / c_TestTickMs;
 					credits[id - 1] = std::min(credits[id - 1], 6.0);
 					while (credits[id - 1] >= 1) {
 						const uint64_t next = world.applied + 1;
@@ -644,7 +654,7 @@ namespace RTE {
 						if (hub.row.captureFrames) committed[id - 1][ready.frame] = ready;
 						peer.FinishSimulationTick(ready.frame); credits[id - 1] -= 1;
 						// What the tick cost this machine, as the engine reports it: a light tick, or a slow machine's whole share of its rate.
-						peer.NoteLocalTickCost(ready.frame, slowed ? c_TestTickMs * 100.0 / hub.row.slowPercent : 1.0);
+						peer.NoteLocalTickCost(ready.frame, slowed ? c_TestTickMs * 100.0 / ratePercent : 1.0);
 						if (displayedAt[id - 1] && hub.DuringFault()) blackoutGap[id - 1] = std::max(blackoutGap[id - 1], hub.now - displayedAt[id - 1]);
 						displayedAt[id - 1] = hub.now;
 						if (!firstDisplayedAt[id - 1]) firstDisplayedAt[id - 1] = hub.now;
@@ -708,6 +718,19 @@ namespace RTE {
 				while (hub.refaultEnd && hub.now <= hub.refaultEnd + c_TestReturnAllowanceMs + 4000) if (!Step(error)) return false;
 				if (row.asymmetricBridge && row.asymmetricBridge < 3 && !hub.asymmetricReleased) { error = "the asymmetric input lever did not force both pending bridge votes"; return false; }
 				if (row.returnByTailOnly && !hub.droppedReturns) { error = "the tail-only lever withheld no proposal or certificate of the subject's return"; return false; }
+				if (row.heldOnce) {
+					const auto boundaries = hub.bridgeBoundaries.find(row.subject);
+					const auto holds = boundaries == hub.bridgeBoundaries.end() ? 0 : std::count_if(boundaries->second.begin(), boundaries->second.end(), [](const auto& change) { return change.second; });
+					if (holds != 1) { error = "the slow seat was held " + std::to_string(holds) + " times, not once and kept"; return false; }
+				}
+				if (row.noRefusals) for (uint8_t id = 1; id <= row.seats; ++id) {
+					const auto& stats = peers[id - 1]->GetStats();
+					if (stats.decisionsRefusedForAuthority || stats.returnsRefusedNotHeld) {
+						error = "peer " + std::to_string(id) + " set aside " + std::to_string(stats.decisionsRefusedForAuthority) + " decisions for authority and " +
+						        std::to_string(stats.returnsRefusedNotHeld) + " returns of holds it had not installed";
+						return false;
+					}
+				}
 				// A hold ends once: every peer's certified history names one return frame for it.
 				for (const auto& [seat, boundaries]: hub.bridgeBoundaries)
 					for (auto at = boundaries.begin(); at != boundaries.end() && std::next(at) != boundaries.end(); ++at)
@@ -720,7 +743,7 @@ namespace RTE {
 				// Check every unaffected consumer before a missing return can hide its wait.
 				for (uint8_t id = 1; id <= row.seats; ++id) {
 					const bool doubleFailure = row.internet && row.directoryDown;
-					if (!IsAffected(id) && !doubleFailure && maxWait[id - 1] > (row.internet && row.seats == 2 && !row.refereeDecides ? 1000 : static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs)))) {
+					if (!IsAffected(id) && !doubleFailure && maxWait[id - 1] > (row.internet && row.seats == 2 && !row.refereeDecides && !row.strictBound ? 1000 : static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs)))) {
 						error = "non-lagging peer " + std::to_string(id) + " stalled " + std::to_string(maxWait[id - 1]) + "ms past its bound"; return false;
 					}
 				}
@@ -1491,6 +1514,24 @@ namespace RTE {
 		auto slowMachine = gap("joiner_machine_at_90_percent_20s", 2, 20000); slowMachine.slowPercent = 90; rows.push_back(slowMachine);
 		auto slowerMachine = gap("joiner_machine_at_80_percent_20s", 2, 20000); slowerMachine.slowPercent = 80; rows.push_back(slowerMachine);
 		auto slowHearing = gap("held_seat_and_a_member_slow_to_hear_hold_nobody_else", 2, 10000); slowHearing.lateReceiptsFrom = 3; slowHearing.lateReceiptsMs = 2000; rows.push_back(slowHearing);
+		const auto slowThree = [&](const char* name, uint32_t percent) {
+			Case row = gap(name, 2, 20000); row.seats = 3; row.slowPercent = percent; row.rttMs = row.otherRttMs = 100; row.heldOnce = true; return row;
+		};
+		rows.push_back(slowThree("slow_joiner_at_80_percent_three_seats_over_100ms_20s", 80));
+		rows.push_back(slowThree("slow_joiner_at_50_percent_three_seats_over_100ms_20s", 50));
+		const auto slowTwo = [&](const char* name, uint32_t percent) {
+			Case row = gap(name, 2, 20000); row.seats = 2; row.internet = row.directoryBoth = true; row.slowPercent = percent;
+			row.rttMs = row.otherRttMs = 100; row.heldOnce = row.noRefusals = row.strictBound = true; return row;
+		};
+		rows.push_back(slowTwo("two_internet_slow_joiner_at_80_percent_20s", 80));
+		rows.push_back(slowTwo("two_internet_slow_joiner_at_50_percent_20s", 50));
+		// The field's slow player: held for a slow spell, then able to catch up only a little faster than the round - it returns once, caught up.
+		auto slowSpell = slowTwo("two_internet_joiner_held_for_a_slow_spell_catches_up_at_115_percent", 80); slowSpell.catchUpPercent = 115;
+		slowSpell.postReturnMs = 35000; rows.push_back(slowSpell);
+		// The W+L shape: a joiner a little slower than the host over the internet, its referee answering as late as the directory does.
+		auto lateReferee = gap("two_internet_late_joiner_takes_every_decision_with_an_800ms_referee", 2, 20000); lateReferee.seats = 2;
+		lateReferee.internet = lateReferee.directoryBoth = lateReferee.noRefusals = true; lateReferee.slowPercent = 95;
+		lateReferee.rttMs = lateReferee.otherRttMs = 100; lateReferee.refereeLatencyMs = 800; rows.push_back(lateReferee);
 		auto farReturn = gap("one_return_for_a_held_seat_over_150ms_round_trips", 2, 10000); farReturn.rttMs = farReturn.otherRttMs = 150; rows.push_back(farReturn);
 		auto inTurn = gap("three_seats_second_joiner_drops_while_the_first_is_held", 2, 10000); inTurn.seats = 3; inTurn.secondSubject = 3; inTurn.secondAfterMs = 4000; rows.push_back(inTurn);
 		auto heldAgain = gap("two_internet_joiner_held_again_while_catching_up", 2, 3000); heldAgain.seats = 2; heldAgain.internet = heldAgain.directoryBoth = true;

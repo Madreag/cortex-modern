@@ -658,6 +658,8 @@ namespace RTE {
 		uint32_t startsRelayedOnRepeat = 0; //!< Host: other remotes' starts re-sent to a peer that repeated its own.
 		uint32_t preStartFramesBuffered = 0; //!< Frames/checksums held until their sender's start arrived.
 		uint64_t checksumSubmissions = 0; //!< Local desync-check hashes the round took; a zero means the check never ran.
+		uint64_t decisionsRefusedForAuthority = 0; //!< Frame-group decisions set aside because this peer could not yet show their authority.
+		uint64_t returnsRefusedNotHeld = 0; //!< Returns set aside because this peer had not installed the hold they end.
 		uint64_t checksumSends = 0; //!< Those the transport carried to the peers.
 		uint64_t checksumCompares = 0; //!< Local/remote hash pairs actually compared, per remote.
 		uint64_t checksumMismatches = 0; //!< Compares that named a desync.
