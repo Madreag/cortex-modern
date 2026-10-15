@@ -286,6 +286,7 @@ namespace RTE {
 		if (own != votes.end()) return m_PeerBridgeCertificates.contains({frame, 0});
 		proposal.voterMask = SeatBit(m_Config.localPeerId);
 		votes.emplace(m_Config.localPeerId, proposal);
+		m_PeerVotedAtMs.try_emplace({proposal.frame, DecisionKind(proposal)}, nowMs);
 		if (proposal.preparedFrame == 1) {
 			size_t offset = NetHash32{}.size();
 			for (uint8_t peer: proposal.members) {
@@ -300,7 +301,6 @@ namespace RTE {
 				m_PeerRejectedInputs[frame] |= SeatBit(peer);
 				if (!slowMachine) { m_SlowMachineHolds.erase(peer); continue; }
 				m_SlowMachineHolds.insert(peer);
-		m_PeerVotedAtMs.try_emplace({proposal.frame, DecisionKind(proposal)}, nowMs);
 				DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << frame << " cost " << slowCost
 				                 << " ticks/s against this machine's " << OwnCapacityTps() << "; the AI takes its seat" << std::endl;
 			}
@@ -382,6 +382,13 @@ namespace RTE {
 				<< " frame=" << certificate.frame << " kind=" << static_cast<int>(DecisionKind(certificate)) << " reason=" << reason << " next=" << m_Stats.nextFrame
 				<< " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " now_ms=" << nowMs << std::endl;
 		};
+		// A decision that came before this peer can take it is kept for its frame: a later hold, the hold a return ends, or the
+		// referee's answer to a tie this peer has not heard yet will let it in, and the frame waits for it rather than play without it.
+		const auto keep = [&] {
+			const PeerDecisionKey key{certificate.frame, DecisionKind(certificate)};
+			if (certificate.frame >= m_Stats.nextFrame && certificate.frame - m_Stats.nextFrame <= NetLockstepCodec::c_MaxFutureFrameSkew && m_PendingPeerDecisions.size() < 64)
+				m_PendingPeerDecisions.try_emplace(key, certificate, nowMs);
+		};
 		NetHostMigrationMessage agreed; uint32_t voters = 0;
 		if (!DecodePeerBridgeCertificate(certificate, agreed, voters)) { refused("certificate"); return; }
 		if (agreed.preparedFrame == 3 ? !PeerAdminCertificateValid(agreed, voters) : !PeerGroupHasAuthority(voters)) {
@@ -401,13 +408,6 @@ namespace RTE {
 		const NetHash32 prefix = certificate.frame == m_Config.startFrame ? NetHash32{} : agreed.preparedFrame != 0 ? PeerAppliedFramePrefix(prefixFrame) : PeerFramePrefix(prefixFrame);
 		if (agreed.bytes.size() != prefix.size() + (agreed.preparedFrame == 1 ? 12 * agreed.members.size() : 0) || !std::equal(prefix.begin(), prefix.end(), agreed.bytes.begin())) { refused("prefix"); return; }
 		size_t returnOffset = prefix.size();
-		// A decision that came before this peer can take it is kept for its frame: a later hold, the hold a return ends, or the
-		// referee's answer to a tie this peer has not heard yet will let it in, and the frame waits for it rather than play without it.
-		const auto keep = [&] {
-			const PeerDecisionKey key{certificate.frame, DecisionKind(certificate)};
-			if (certificate.frame >= m_Stats.nextFrame && certificate.frame - m_Stats.nextFrame <= NetLockstepCodec::c_MaxFutureFrameSkew && m_PendingPeerDecisions.size() < 64)
-				m_PendingPeerDecisions.try_emplace(key, certificate, nowMs);
-		};
 		std::map<uint8_t, std::tuple<uint16_t, uint64_t, uint32_t>> returnDelays;
 		if (agreed.preparedFrame == 1) for (uint8_t peer: agreed.members) {
 			const auto held = m_PeerBridges.find(peer);
@@ -486,20 +486,6 @@ namespace RTE {
 		                 << " members=" << agreed.connectedMask << " voters=" << voters << std::endl;
 	}
 
-	void NetLockstepCoordinator::PreparePeerBridgeInputs(uint64_t frame, uint64_t nowMs) {
-		if (const auto change = m_FrameGroupChanges.upper_bound(frame); change != m_FrameGroupChanges.begin()) m_FrameGroupMembers = std::prev(change)->second;
-		if (m_FrameGroupMembers != 0 && (m_FrameGroupMembers & SeatBit(m_PeerPaceReference)) == 0)
-			m_PeerPaceReference = static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
-		uint32_t owners = 0;
-		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= SeatBit(peer);
-		if (m_FrameGroupMembers == owners) m_PeerAdminFrameMembers = 0;
-		for (const auto& [peer, bridge]: m_PeerBridges) {
-			if (bridge.returnFrame && frame >= *bridge.returnFrame) {
-				m_PeerLeaveFrames.erase(peer); m_AiHeldSeats.erase(peer); m_SeatBridgeSinceMs.erase(peer);
-			}
-			if (frame < bridge.fromFrame || (bridge.returnFrame && frame >= *bridge.returnFrame)) continue;
-			if (peer == m_Config.localPeerId) continue;
-			if (frame < bridge.aiFrame) {
 	bool NetLockstepCoordinator::TakePendingPeerDecisions(uint64_t nowMs) {
 		auto pending = std::move(m_PendingPeerDecisions);
 		m_PendingPeerDecisions.clear();
@@ -535,6 +521,20 @@ namespace RTE {
 		return false;
 	}
 
+	void NetLockstepCoordinator::PreparePeerBridgeInputs(uint64_t frame, uint64_t nowMs) {
+		if (const auto change = m_FrameGroupChanges.upper_bound(frame); change != m_FrameGroupChanges.begin()) m_FrameGroupMembers = std::prev(change)->second;
+		if (m_FrameGroupMembers != 0 && (m_FrameGroupMembers & SeatBit(m_PeerPaceReference)) == 0)
+			m_PeerPaceReference = static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
+		uint32_t owners = 0;
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= SeatBit(peer);
+		if (m_FrameGroupMembers == owners) m_PeerAdminFrameMembers = 0;
+		for (const auto& [peer, bridge]: m_PeerBridges) {
+			if (bridge.returnFrame && frame >= *bridge.returnFrame) {
+				m_PeerLeaveFrames.erase(peer); m_AiHeldSeats.erase(peer); m_SeatBridgeSinceMs.erase(peer);
+			}
+			if (frame < bridge.fromFrame || (bridge.returnFrame && frame >= *bridge.returnFrame)) continue;
+			if (peer == m_Config.localPeerId) continue;
+			if (frame < bridge.aiFrame) {
 				const uint64_t elapsed = static_cast<uint64_t>(std::llround((frame - bridge.fromFrame) * m_Config.simTickMs));
 				m_RemoteFrames[frame][peer] = ContinuedInput(bridge.lastInput, elapsed);
 				m_RemoteCommands[frame][peer].clear();
