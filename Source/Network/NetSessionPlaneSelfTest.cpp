@@ -13,6 +13,7 @@
 #include "NetMuxTransport.h"
 #include "NetProtocol.h"
 #include "TimerMan.h"
+#include "ScenarioRunner.h"
 #include "lz4.h"
 
 #include <algorithm>
@@ -402,10 +403,10 @@ namespace RTE {
 				const bool linkUp = row.frozen || row.slowPercent || row.inputsLost || row.keepInputEvery || row.lateReceiptsFrom;
 				return row.directoryBoth || peer != row.subject || (linkUp && !row.subjectDirectoryDark);
 			}
-			// A two-seat internet round whose host still reaches the referee keeps the host's history, so the joiner is the seat that returns.
+			// The subject owns its fault; a referee row records the seat its actual decision held.
 			uint8_t ReturningSeat() const {
 				if (row.refereeDecides) return heldSeat;
-				return row.seats == 2 && row.internet && row.directoryBoth ? 2 : row.subject;
+				return row.subject;
 			}
 			uint8_t heldSeat = 0;
 			Directory directory;
@@ -893,13 +894,12 @@ namespace RTE {
 			bool IsAffected(uint8_t peer) const {
 				if (hub.row.refereeDecides) return hub.heldSeat != 0 && peer == hub.heldSeat;
 				if (hub.row.internet && hub.row.directoryDown) return true;
-				if (hub.row.seats == 2 && (!hub.row.internet || hub.row.directoryBoth)) return peer != 1;
 				const bool second = (hub.row.secondSubject && peer == hub.row.secondSubject) || (hub.row.silentVoter && peer == hub.row.silentVoter);
 				return hub.row.tie ? peer >= 3 || second : peer == hub.row.subject || second || peer == hub.row.lateReceiptsFrom;
 			}
 			bool CheckCommittedInputs(const NetLockstepReadyFrame& ready, uint8_t observer, std::string& error) {
 				if (IsAffected(observer) || !hub.row.gapMs) return true;
-				const uint8_t subject = hub.row.refereeDecides ? hub.heldSeat : hub.row.seats == 2 && (!hub.row.internet || hub.row.directoryBoth) ? 2 : hub.row.subject;
+				const uint8_t subject = hub.row.refereeDecides ? hub.heldSeat : hub.row.subject;
 				if (subject == 0) return true;
 				const auto bridge = Bridges(*peers[observer - 1]);
 				if (!bridge.contains(subject)) return true;
@@ -1215,7 +1215,7 @@ namespace RTE {
 				// Check every unaffected consumer before a missing return can hide its wait.
 				for (uint8_t id = 1; id <= row.seats; ++id) {
 					const bool doubleFailure = row.internet && row.directoryDown;
-					if (!IsAffected(id) && !doubleFailure && maxWait[id - 1] > (row.internet && row.seats == 2 && !row.refereeDecides && !row.strictBound ? 1000 : static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs)))) {
+					if (!IsAffected(id) && !doubleFailure && maxWait[id - 1] > static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs))) {
 						error = "non-lagging peer " + std::to_string(id) + " stalled " + std::to_string(maxWait[id - 1]) + "ms past its bound"; return false;
 					}
 				}
@@ -1247,7 +1247,7 @@ namespace RTE {
 						    " prepared=" + std::to_string(peers[id - 1]->GetStats().nextFrame) + " bridge_count=" + std::to_string(Bridges(*peers[id - 1]).size());
 						return false;
 					}
-					const uint8_t held = row.refereeDecides ? hub.heldSeat : row.seats == 2 && (!row.internet || row.directoryBoth) ? 2 : row.subject;
+					const uint8_t held = row.refereeDecides ? hub.heldSeat : row.subject;
 					if (peers[id - 1]->HasHeldAISeat(held) || Bridges(*peers[id - 1]).contains(held)) { error = "the returning human seat stayed bridged after catch-up"; return false; }
 					if (row.gapMs <= 3000 && !row.refaultPercent && caughtAt[id - 1] > hub.faultEnd + (row.returnWithinMs ? row.returnWithinMs : c_TestReturnAllowanceMs)) {
 						error = "return exceeded the spike plus its catch-up allowance"; return false;
@@ -1972,6 +1972,115 @@ namespace RTE {
 				return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - since).count());
 			}
 		};
+		bool CheckPrivateReturnShape(std::string_view shape, uint32_t rttMs, std::string& error) {
+			const auto fail = [&](const std::string& detail) { error = "seed=0 " + detail; return false; };
+			auto config = NetMatchConfigUtil::MakeDefault(0xF002);
+			config.peerCount = 4; config.players = {{1, 0, false, "Host"}, {2, 1, false, "Returner"}, {3, 2, false, "Other"}, {4, 3, false, "Witness"}};
+			NetWorldJoinHost host;
+			if (!host.ConfigureMatchRejoins(config, 77, c_TestTickMs, &error) || !host.BeginRejoin(12, 1, 2, 2, "Returner", 1, &error)) return false;
+			NetWorldCheckpointImage image; image.privateSessionId = config.sessionId; image.round = 77; image.tick = 400;
+			image.bytes = 8; image.checkpointConfig = "config"; image.sideState = "state";
+			host.PublishImage(image);
+			if (shape == "benign") {
+				NetSeatRoster roster; roster.matchId = config.sessionId; roster.roundNo = 77; roster.stage = NetRosterStage::Running; roster.revision = 1;
+				for (uint8_t seat = 1; seat <= 4; ++seat) {
+					NetRosterSeat entry; entry.seatId = seat; entry.owner = seat; entry.ticket = 100 + seat; entry.incarnation = 1;
+					entry.phase = seat == 2 ? NetSeatPhase::Held : NetSeatPhase::Running; entry.holdCause = seat == 2 ? NetSeatHoldCause::LinkDrop : NetSeatHoldCause::None;
+					roster.seats.push_back(entry);
+				}
+				for (unsigned attempt = 0; attempt < 6; ++attempt) {
+					NetRosterEvent returned; returned.kind = NetRosterEventKind::Returned; returned.seat = 2; returned.ticket = 102; returned.nowMs = 1000 + attempt;
+					auto admitted = ApplyRosterEvent(roster, returned);
+					if (admitted.refused) return fail("a benign cancellation exhausted the return offers: " + admitted.reason);
+					roster = std::move(admitted.roster);
+					host.CancelJoin(12, attempt % 2 ? "the capture park moved" : "the seat was held again", false);
+					const auto causes = host.TakeCancelledJoinCauses();
+					if (causes != std::vector<std::pair<uint8_t, bool>>{{2, false}}) return fail("a host-side cancellation was charged to its returner");
+					NetRosterEvent aborted; aborted.kind = NetRosterEventKind::TransferAborted; aborted.seat = 2; aborted.nowMs = returned.nowMs; aborted.excused = !causes.front().second;
+					auto cancelled = ApplyRosterEvent(roster, aborted);
+					if (cancelled.refused || cancelled.roster.Find(2)->failedReturns != 0 || cancelled.roster.Find(2)->returnAfterMs != 0)
+						return fail("a benign cancellation counted toward the three-failure backoff");
+					roster = std::move(cancelled.roster);
+					if (!host.BeginRejoin(12, 1, 2, 3 + attempt, "Returner", returned.nowMs, &error)) return false;
+				}
+				return true;
+			}
+			if (!host.NoteTransferComplete(12, 8, &error)) return false;
+			host.NoteRejoinLinkFit(12, true); host.NoteTailLinkRtt(12, rttMs);
+			if (shape == "edge") {
+				uint64_t work = 0, workUs = 0;
+				for (uint64_t horizon = 600; horizon <= 900; horizon += 20) {
+					work += 20; workUs += 333334;
+					if (!host.NoteRejoinCapacity(12, work, workUs, 0)) return fail("valid round-rate capacity was refused");
+					uint64_t activation = 0;
+					if (!host.NoteCatchUpProgress(12, horizon - 80, 20, 334, horizon, &activation, &error)) return false;
+					if (activation != 0) return fail("an image return eighty frames behind at the round's rate was activated over " + std::to_string(rttMs) + "ms");
+				}
+				return true;
+			}
+			if (shape == "paired") {
+				if (!host.BeginRejoin(13, 2, 3, 2, "Other returner", 2, &error) || !host.NoteTransferComplete(13, 8, &error)) return false;
+				host.NoteRejoinLinkFit(13, true); host.NoteTailLinkRtt(13, rttMs);
+			}
+			uint64_t activation = 0, prior = 0, applied = 400, work = 0, workUs = 0;
+			for (uint64_t horizon = 600; horizon <= 1000 && !activation; horizon += 20) {
+				applied += 40; work += 40; workUs += 320000;
+				(void)host.NoteRejoinCapacity(12, work, workUs, 0);
+				if (!host.NoteCatchUpProgress(12, applied, 40, 334, horizon, &activation, &error)) return false;
+				if (activation) {
+					const auto* session = host.FindSession(12);
+					const uint64_t behind = horizon > applied ? horizon - applied : 0;
+					if (!session || !session->closingMeasured || session->closingRate <= 0 ||
+					    activation < horizon + static_cast<uint64_t>(std::ceil(behind / session->closingRate)) + c_NetWorldActivationLeadFrames)
+						return fail("the image activation precedes the returner's measured catch-up");
+					prior = activation;
+				}
+				if (shape == "paired") {
+					(void)host.NoteRejoinCapacity(13, work / 2, workUs * 2, 0);
+					uint64_t otherActivation = 0;
+					if (!host.NoteCatchUpProgress(13, horizon - 100, 20, 334, horizon, &otherActivation, &error)) return false;
+					if (otherActivation || host.FindSession(13)->snapshotTick != image.tick) return fail("one image returner's progress activated the other or changed its shared base");
+				}
+			}
+			if (!activation) return fail("a returner closing twice as fast as the round was never activated");
+			if (shape == "closing") {
+				// A delayed progress report must preserve the time needed to close, rather than reset E to a fixed lead.
+				const uint64_t horizon = activation - c_NetWorldActivationLeadFrames / 2;
+				work += 40; workUs += 320000; (void)host.NoteRejoinCapacity(12, work, workUs, 0);
+				if (!host.NoteCatchUpProgress(12, applied + 40, 40, 334, horizon, &activation, &error)) return false;
+				const auto* session = host.FindSession(12);
+				const uint64_t behind = horizon > applied + 40 ? horizon - applied - 40 : 0;
+				if (!session || session->activationTick < prior || (session->closingRate > 0.1 &&
+				    session->activationTick < horizon + static_cast<uint64_t>(std::ceil(behind / session->closingRate)) + c_NetWorldActivationLeadFrames))
+					return fail("re-announcing the activation discarded the returner's measured closing time");
+			} else if (shape == "paired") {
+				host.CancelJoin(13, "its base was refused", false);
+				if (!host.FindSession(12) || host.FindSession(12)->activationTick != activation || host.Image().tick != image.tick)
+					return fail("a refused image return poisoned the other returner's activation or base");
+			}
+			return true;
+		}
+		bool CheckReplayConvergence(std::string& error) {
+			struct Release { ~Release() { ScenarioRunner::ReleaseWorldCatchUp(); } } release;
+			std::vector<NetLockstepFrame> tail;
+			for (uint64_t tick = 401; tick <= 2400; ++tick) { NetLockstepFrame frame; frame.senderPeerId = 1; frame.roundId = 77; frame.targetFrame = tick; tail.push_back(std::move(frame)); }
+			if (!ScenarioRunner::InstallWorldCatchUp(400, std::move(tail), &error)) return false;
+			uint64_t applied = 400; double elapsedMs = 0;
+			for (unsigned draws = 0; draws < 180; ++draws) {
+				ScenarioRunner::BeginWorldCatchUpFrame();
+				unsigned ticks = 0;
+				while (ScenarioRunner::TakeWorldCatchUpGrant(applied + 1)) {
+					NetLockstepReadyFrame ready;
+					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(applied + 1, ready, &error)) return false;
+					++applied; ++ticks; ScenarioRunner::NoteWorldCatchUpTickCost(applied, 12000, 12000);
+				}
+				elapsedMs += ticks * 12.0 + 10.0;
+				const uint64_t horizon = 640 + static_cast<uint64_t>(elapsedMs / c_TestTickMs);
+				if (applied >= horizon) return true;
+				if (!ticks) break;
+			}
+			error = "seed=0 private replay at 12ms per tick plus a 10ms draw never closed its 240-frame trail"; return false;
+		}
 		bool CheckRelayReturnAndDepartures(std::string& error) {
 			Case row{"three_peer_relay_host_return"};
 			row.seats = 3; row.subject = 1; row.gapMs = 8000; row.blackout = true;
@@ -2802,7 +2911,7 @@ namespace RTE {
 		}
 		int passed = 0, failed = 0;
 		const char* selected = std::getenv("CC_TEST_SESSION_PLANE_CASE");
-		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 5 + FixedScheduleRows().size()) << std::endl;
+		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 12 + FixedScheduleRows().size()) << std::endl;
 		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest
 		// rows started first; the random driver's rounds follow them in the same pool.
 		QuietLines quiet(std::cout);
@@ -2810,6 +2919,16 @@ namespace RTE {
 		std::vector<RowRun> named;
 		if (!selected || std::string_view(selected) == "directory_client_round_trip_allowances_and_refusals")
 			named.push_back({"directory_client_round_trip_allowances_and_refusals", CheckDirectoryClient});
+		for (const auto& [name, shape, rtt]: std::vector<std::tuple<const char*, const char*, uint32_t>>{
+		    {"image_return_at_round_rate_80_frames_behind_over_100ms", "edge", 100},
+		    {"image_return_at_round_rate_80_frames_behind_over_200ms", "edge", 200},
+		    {"image_return_at_round_rate_80_frames_behind_over_250ms", "edge", 250},
+		    {"image_activation_reannouncement_preserves_closing_time", "closing", 250},
+		    {"two_image_returners_share_a_base_and_keep_separate_outcomes", "paired", 100},
+		    {"benign_image_cancellations_do_not_exhaust_three_returns", "benign", 100}}) {
+			if (selected && std::string_view(selected) != name) continue;
+			named.push_back({name, [shape = std::string(shape), rtt](std::string& error) { return CheckPrivateReturnShape(shape, rtt, error); }});
+		}
 		for (const auto& row: rows) {
 			if (selected && std::string_view(selected) != row.name) continue;
 			RowRun run; run.name = row.name;
@@ -2857,7 +2976,7 @@ namespace RTE {
 			{ std::unique_lock lock(doneMutex); doneSignal.wait(lock, [&] { return !finished.empty(); }); index = finished.front(); finished.pop_front(); }
 			auto& run = named[index];
 			if (!run.lines.empty()) DiagnosticLine() << run.lines;
-			DiagnosticLine() << "[net-session-plane-selftest] " << (run.ok ? "PASS " : "FAIL ") << run.name << (run.error.empty() ? "" : ": " + run.error) << std::endl;
+			DiagnosticLine() << "[net-session-plane-selftest] " << (run.ok ? "PASS " : "FAIL ") << run.name << (run.error.empty() ? "" : ": " + (run.ok || run.error.starts_with("seed=") ? run.error : "seed=0 " + run.error)) << std::endl;
 			if (run.ok) ++passed; else ++failed;
 		}
 		for (auto& thread: pool) thread.join();
@@ -2871,6 +2990,11 @@ namespace RTE {
 			DiagnosticLine() << "[net-session-plane-selftest] " << (driver.failedCount || !complete ? "FAIL" : "PASS") << " random_hold_schedules"
 			                 << (!complete ? ": did not run every requested schedule" : driver.failedCount ? ": " + std::to_string(driver.failedCount) + " of " + std::to_string(driver.count) + " schedules broke a property" : "");
 			if (driver.failedCount || !complete) ++failed; else ++passed;
+		}
+		if (!selected || std::string_view(selected) == "image_replay_12ms_tick_10ms_draw_closes_its_trail") {
+			std::string error; const bool ok = CheckReplayConvergence(error);
+			DiagnosticLine() << "[net-session-plane-selftest] " << (ok ? "PASS " : "FAIL ") << "image_replay_12ms_tick_10ms_draw_closes_its_trail" << (error.empty() ? "" : ": " + error);
+			if (ok) ++passed; else ++failed;
 		}
 		for (unsigned arm = 0; arm < 3; ++arm) {
 			const char* name = arm == 0 ? "successor_unvalidated_boundary_refused" : arm == 1 ? "leave_during_handover_exits" : "malformed_traffic_does_not_renew_authority";
