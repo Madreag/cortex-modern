@@ -395,7 +395,7 @@ namespace RTE {
 			if (!NetHostMigrationCodec::Encode(vote, m_Config.migrationKey, bytes)) return;
 			voters |= SeatBit(peer); signedVotes.push_back(std::move(bytes));
 		}
-		if ((voters & required) != required || (proposal.preparedFrame == 3 ? !PeerAdminCertificateValid(proposal, voters) : !PeerGroupHasAuthority(voters))) return;
+		if ((voters & required) != required || (proposal.preparedFrame == 3 ? !PeerAdminCertificateValid(proposal, voters) : !PeerGroupHasAuthority(voters, frame))) return;
 		auto certificate = proposal;
 		certificate.type = NetHostMigrationMessageType::PeerBridgeCommit;
 		certificate.voterMask = voters;
@@ -454,9 +454,10 @@ namespace RTE {
 		};
 		NetHostMigrationMessage agreed; uint32_t voters = 0;
 		if (!DecodePeerBridgeCertificate(certificate, agreed, voters)) { refused("certificate"); return; }
-		if (agreed.preparedFrame == 3 ? !PeerAdminCertificateValid(agreed, voters) : !PeerGroupHasAuthority(voters)) {
+		// A tie the referee decides is asked before the decision is set aside: its answer may already be there.
+		if (agreed.preparedFrame != 3 && !PeerGroupHasAuthority(voters, certificate.frame)) CheckPeerFrameTie(certificate.frame, voters, nowMs);
+		if (agreed.preparedFrame == 3 ? !PeerAdminCertificateValid(agreed, voters) : !PeerGroupHasAuthority(voters, certificate.frame)) {
 			refused("certificate");
-			if (agreed.preparedFrame != 3) CheckPeerFrameTie(certificate.frame, voters, nowMs);
 			keep(); return;
 		}
 		const bool heldAhead = agreed.preparedFrame == 0 && agreed.boundary < certificate.frame;

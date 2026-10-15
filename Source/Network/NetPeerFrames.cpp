@@ -88,7 +88,8 @@ namespace RTE {
 		return held == m_PeerBridges.end() || !held->second.committedHold || held->second.returnFrame.has_value();
 	}
 
-	uint32_t NetLockstepCoordinator::PeerVotingOwners(uint32_t& voters) const {
+	uint32_t NetLockstepCoordinator::PeerVotingOwners(uint32_t& voters, uint64_t frame) const {
+		const uint64_t at = frame == UINT64_MAX ? m_Stats.nextFrame : frame;
 		uint32_t owners = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= SeatBit(peer);
@@ -96,11 +97,11 @@ namespace RTE {
 		// A declared Leave keeps its AI seat but answers nothing more from the moment it is declared, its last inputs ahead included.
 		for (const auto& [peer, ended]: m_PeerRoundEnds) if (!ended.closedLink) owners &= ~SeatBit(peer);
 		// A returning seat answers nothing until it plays, so it votes only after its agreed neutral interval.
-		for (const auto& [peer, back]: m_ReclaimTransactions) if (m_Stats.nextFrame <= back.neutralThroughFrame) owners &= ~SeatBit(peer);
+		for (const auto& [peer, back]: m_ReclaimTransactions) if (at <= back.neutralThroughFrame) owners &= ~SeatBit(peer);
 		// A seat the round holds answers nothing until it returns: the seats that play decide without it, so a second seat lost while
 		// the first is held is held too instead of leaving the rest without a majority.
 		for (const auto& [peer, bridge]: m_PeerBridges)
-			if (bridge.committedHold && m_Stats.nextFrame >= bridge.fromFrame && (!bridge.returnFrame || m_Stats.nextFrame < *bridge.returnFrame)) owners &= ~SeatBit(peer);
+			if (bridge.committedHold && at >= bridge.fromFrame && (!bridge.returnFrame || at < *bridge.returnFrame)) owners &= ~SeatBit(peer);
 		voters &= owners;
 		return voters == 0 ? 0 : owners;
 	}
@@ -113,19 +114,21 @@ namespace RTE {
 		return m_Config.frameTieReferee && (retained == 2 || retained == 4);
 	}
 
-	bool NetLockstepCoordinator::PeerGroupIsRefereedHalf(uint32_t voters) const {
-		const uint32_t owners = PeerTieRefereed() ? PeerVotingOwners(voters) : 0;
+	bool NetLockstepCoordinator::PeerGroupIsRefereedHalf(uint32_t voters, uint64_t frame) const {
+		const uint32_t owners = PeerTieRefereed() ? PeerVotingOwners(voters, frame) : 0;
 		return owners != 0 && 2 * std::popcount(voters) == std::popcount(owners);
 	}
 
-	bool NetLockstepCoordinator::PeerGroupHasAuthority(uint32_t voters) const {
-		const uint32_t owners = PeerVotingOwners(voters);
+	bool NetLockstepCoordinator::PeerGroupHasAuthority(uint32_t voters, uint64_t frame) const {
+		// A decision is judged at its own frame: a peer still behind the split it names would otherwise look up another split's answer.
+		const uint64_t at = frame == UINT64_MAX ? m_Stats.nextFrame : frame;
+		const uint32_t owners = PeerVotingOwners(voters, at);
 		if (owners == 0) return false;
 		if (m_PeerAdminFrameMembers != 0 && voters == m_PeerAdminFrameMembers) return true;
 		const int votes = std::popcount(voters), seats = std::popcount(owners);
 		if (2 * votes != seats) return 2 * votes > seats;
 		if (!PeerTieRefereed()) return (voters & SeatBit(GetHostPeerId())) != 0;
-		const auto decision = m_PeerFrameTieWinners.find(PeerSplitEpoch(m_Stats.nextFrame));
+		const auto decision = m_PeerFrameTieWinners.find(PeerSplitEpoch(at));
 		return decision != m_PeerFrameTieWinners.end() && decision->second == voters;
 	}
 
@@ -161,7 +164,7 @@ namespace RTE {
 		// The tie is between the seats that vote now, and the referee decides an even split of every retained seat: the seats that
 		// do not vote are dealt to the halves in seat order, the lower ones to the half that holds the lowest voting seat.
 		uint32_t voting = members;
-		const uint32_t owners = PeerVotingOwners(voting);
+		const uint32_t owners = PeerVotingOwners(voting, frame);
 		if (owners == 0 || 2 * std::popcount(voting) != std::popcount(owners)) return;
 		uint32_t retained = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
