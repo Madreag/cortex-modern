@@ -8,6 +8,7 @@
 #include "NetSession.h"
 #include "PresetMan.h"
 #include "SettingsMan.h"
+#include "System.h"
 #include "TimerMan.h"
 
 #include <filesystem>
@@ -637,12 +638,12 @@ namespace RTE {
 			return true;
 		}
 
-		// A module installed under a deep folder hashes like any other: past 260 characters a plain open on Windows fails, and
-		// the incomplete identity then reads every listed game as another protocol.
+		// A module installed under a deep folder hashes where the platform opens long paths; on Windows without them the walk
+		// stops on the sentence the join screen shows the player, never on an unreadable file read as another version.
 		bool TestLongModulePath(std::string* error) {
 			namespace fs = std::filesystem;
 			std::error_code ec;
-			const fs::path root = fs::temp_directory_path(ec) / "cccp-identity-long-path";
+			const fs::path root = fs::temp_directory_path(ec) / ("cccp-identity-long-path-" + std::to_string(System::GetProcessID()));
 			if (ec) {
 				*error = "the long module path check has no temporary folder: " + ec.message();
 				return false;
@@ -650,29 +651,52 @@ namespace RTE {
 			fs::path module = root;
 			while (module.native().size() < 190) module /= "an-install-folder-several-levels-down";
 			module /= "Deep.rte";
-			const fs::path folder = module / "Scenes" / "Objects";
-			std::string name = "ARefineryAuthorizationConsolePieSliceActions";
-			while ((folder / (name + ".lua")).native().size() < 275) name += "Long";
+			fs::path folder = module / "Scenes";
+			while (folder.native().size() < 265) folder /= "Objects";
+			std::string name = "RefineryAuthorizationConsolePieSliceActions";
+			while ((folder / (name + ".lua")).native().size() < 290) name += "Long";
 			const fs::path file = folder / (name + ".lua");
-			fs::remove_all(NetIdentity::OpenablePath(root), ec);
-			fs::create_directories(NetIdentity::OpenablePath(folder), ec);
-			if (!ec) {
-				std::ofstream out(NetIdentity::OpenablePath(file), std::ios::binary);
-				out << "-- a module file deep in an install\n";
-			}
+			// Only the extended prefix creates a path past the limit on Windows.
+			const auto extended = [](const fs::path& path) {
+#ifdef _WIN32
+				fs::path absolute = fs::absolute(path);
+				absolute.make_preferred();
+				return fs::path(LR"(\\?\)" + absolute.native());
+#else
+				return path;
+#endif
+			};
+			fs::remove_all(extended(root), ec);
+			fs::create_directories(extended(folder), ec);
+			if (!ec) std::ofstream(extended(file), std::ios::binary) << "-- a module file deep in an install\n";
+			const bool made = !ec && fs::exists(extended(file), ec);
 			NetIdentityManifest manifest = MakeManifest();
 			NetIdentityModuleEntry entry;
 			entry.fileName = "Deep.rte";
 			entry.root = module.generic_string();
 			manifest.modules = {entry};
 			std::string walkError;
-			const bool walked = !ec && NetIdentity::CompleteManifestFromInputs(manifest, &walkError);
-			fs::remove_all(NetIdentity::OpenablePath(root), ec);
-			if (!walked || manifest.modules[0].fileCount != 1) {
-				*error = "a module file " + std::to_string(file.native().size()) + " characters deep did not hash: " + walkError;
+			const bool walked = made && NetIdentity::CompleteManifestFromInputs(manifest, &walkError);
+			fs::remove_all(extended(root), ec);
+			const std::string depth = std::to_string(file.native().size());
+			if (!made) {
+				*error = "the long module path check could not create its file " + depth + " characters deep";
 				return false;
 			}
-			std::cout << "[net-identity-selftest] PASS a module file " << file.native().size() << " characters deep hashes" << std::endl;
+			if (NetIdentity::LongPathsAvailable()) {
+				if (!walked || manifest.modules[0].fileCount != 1) {
+					*error = "a module file " + depth + " characters deep did not hash where long paths open: " + walkError;
+					return false;
+				}
+				std::cout << "[net-identity-selftest] PASS a module file " << depth << " characters deep hashes" << std::endl;
+				return true;
+			}
+			if (walked || walkError.rfind("the game is installed too deep in folders for Windows: Deep.rte/Scenes/Objects", 0) != 0 ||
+			    walkError.find("Move the game's folder closer to the drive") == std::string::npos) {
+				*error = "a module folder past Windows' limit stopped the walk with \"" + walkError + "\"";
+				return false;
+			}
+			std::cout << "[net-identity-selftest] PASS a module file " << depth << " characters deep is refused with the player's reason: " << walkError << std::endl;
 			return true;
 		}
 	}

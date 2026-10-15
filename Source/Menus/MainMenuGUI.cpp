@@ -110,6 +110,7 @@ static std::string GameRowReasonWords(const std::string& reason) {
 	if (reason == "full") return "Full";
 	if (reason == "modules") return "Different mods";
 	if (reason == "address") return "No usable address";
+	if (reason == "local files") return "Your game files could not be read";
 	return "Different version";
 }
 
@@ -138,7 +139,7 @@ std::string MainMenuGUI::DiscoveredGameRowText(const NetDirectoryClient::GameRow
 }
 
 std::string MainMenuGUI::GameRowJoinRefusal(const NetDirectoryClient::GameRow& row) {
-	if (row.reason == "modules") return NetDirectoryClient::JoinRefusalText(row);
+	if (row.reason == "modules" || row.reason == "local files") return NetDirectoryClient::JoinRefusalText(row);
 	return "This game cannot be joined: " + GameRowReasonWords(row.reason) + ".";
 }
 
@@ -5583,12 +5584,12 @@ void MainMenuGUI::RefreshGamesList() {
 		identityOptions.buildId = "stage2-p2d-local";
 		identityOptions.sessionRulesTag = "stage2-p2-session-rules";
 		NetIdentity::StampOptionsForTarget(identityOptions, false);
-		std::string identityError;
-		const bool identityBuilt = NetIdentity::BuildCurrentManifest(manifest, &identityError, identityOptions);
+		const bool identityBuilt = NetIdentity::BuildCurrentManifest(manifest, &m_DirectoryIdentityError, identityOptions);
 		NetIdentityManifest worldManifest;
 		NetIdentityBuildOptions worldOptions = identityOptions;
 		NetIdentity::StampOptionsForTarget(worldOptions, true);
-		const bool worldBuilt = NetIdentity::BuildCurrentManifest(worldManifest, &identityError, worldOptions);
+		std::string worldError;
+		const bool worldBuilt = NetIdentity::BuildCurrentManifest(worldManifest, &worldError, worldOptions);
 		g_TimerMan.SetDeltaTimeSecs(menuDeltaTime);
 		if (identityBuilt) {
 			NetDirectoryLocalIdentity local;
@@ -5613,13 +5614,8 @@ void MainMenuGUI::RefreshGamesList() {
 	const NetDirectoryLocalIdentity* worldIdent = m_DirectoryWorldIdentity ? &*m_DirectoryWorldIdentity : nullptr;
 	std::vector<NetDirectoryClient::GameRow> rows = NetDirectoryClient::MergeGameLists(hosts, m_DirectoryBrowser.Rows(), m_DirectoryIdentity.value_or(NetDirectoryLocalIdentity{}), worldIdent);
 	if (!m_DirectoryIdentity) {
-		// Without the local identity no NET row can be proven compatible.
-		for (NetDirectoryClient::GameRow& row: rows) {
-			if (row.source == "NET") {
-				row.joinable = false;
-				row.reason = "identity";
-			}
-		}
+		// Without the local identity no row can be proven compatible, and the player is told why.
+		NetDirectoryClient::RefuseForLocalIdentity(rows, m_DirectoryIdentityError);
 	}
 	// One row per session: a host beaconing on several interfaces is one game, listed at its best
 	// address - loopback when the host is this machine, else the address the beacon came in on.

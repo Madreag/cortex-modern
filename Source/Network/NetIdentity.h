@@ -6,7 +6,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -176,9 +175,9 @@ namespace RTE {
 		static std::string HashHex(const NetHash32& hash);
 		static std::string ShortHashHex(const NetHash32& hash);
 		static std::string NormalizeRelativePathForHash(const std::string& path, std::string* error = nullptr);
-		/// A path the platform opens at any length: on Windows a long absolute path takes the extended-length prefix, which the
-		/// 260-character limit does not apply to; elsewhere the path itself.
-		static std::filesystem::path OpenablePath(const std::filesystem::path& path);
+		/// Whether this process opens paths of 260 characters or more: on Windows only when its manifest asks for long paths and
+		/// Windows has them turned on; elsewhere always.
+		static bool LongPathsAvailable();
 	};
 
 } // namespace RTE

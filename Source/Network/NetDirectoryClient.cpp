@@ -1029,7 +1029,19 @@ namespace RTE {
 			return "Cannot join this game: your game data differs from the host's (yours " + row.localModuleManifestHash.substr(0, 8) + ", the host's " +
 			       row.hostModuleManifestHash.substr(0, 8) + "). Open the console (~) on both computers and compare the module digests it lists.";
 		}
+		if (row.reason == "local files") {
+			if (brief) return "Cannot join: your game files could not be read";
+			return "Cannot join this game: your game files could not be read" + (row.localIdentityError.empty() ? std::string() : " - " + row.localIdentityError) + ".";
+		}
 		return "Cannot join this game: " + row.reason;
+	}
+
+	void NetDirectoryClient::RefuseForLocalIdentity(std::vector<GameRow>& rows, const std::string& error) {
+		for (GameRow& row: rows) {
+			row.joinable = false;
+			row.reason = "local files";
+			row.localIdentityError = error;
+		}
 	}
 
 	std::string NetDirectoryClient::DescribeGameRow(const GameRow& row) {
