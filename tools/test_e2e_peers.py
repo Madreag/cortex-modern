@@ -119,6 +119,26 @@ class FightEndCheckTest(unittest.TestCase):
                 self.assertEqual(checks[-1]["equals"].get("actor_selection"), False, (name, script, checks[-1]))
 
 
+class HeldHostSceneTest(unittest.TestCase):
+    def test_the_held_host_scene_holds_the_hosts_own_seat_on_every_run(self):
+        import fight15_held_host
+        committed = json.loads((fight15_held_host.ROOT / "fight15-s10h.json").read_text(encoding="utf-8"))
+        self.assertEqual(committed, fight15_held_host.held_host(json.loads((fight15_held_host.ROOT / "fight15-s10.json").read_text(encoding="utf-8"))))
+        document = peers.scene("fight15-s10h")
+        peers.check_scene(document)
+        host, joiner = (next(peer for peer in document["peers"] if peer["name"] == name) for name in ("host", "joiner"))
+        tick, milliseconds = map(int, host["args"][host["args"].index("-net-test-live-stall") + 1].split(":"))
+        # The host alone stalls, past the slow player bound (3 ticks) and inside the fight's twenty minutes.
+        self.assertGreater(milliseconds, 3 * 1000 / 60)
+        self.assertLess(tick, document["fight_hash_gate"]["running_ticks"])
+        self.assertNotIn("-net-test-live-stall", joiner["args"])
+        item = next(row for row in document["checklist"] if row["id"] == "host-seat-held-host")
+        self.assertEqual(item["peer"], "host")
+        self.assertTrue(any("peer=1 held=1" in pattern for pattern in item["log_regex"]), item)
+        self.assertTrue(any("seat-reclaimed peer=1" in pattern for pattern in item["log_regex"]), item)
+        self.assertEqual(host["env"].get("CC_TEST_RETURN_INPUT_DETAILS"), "1")
+
+
 class LostSoldierTest(unittest.TestCase):
     def test_a_soldier_lost_before_its_player_takes_it_is_bought_again(self):
         # 1 of 5 turns on 10-14: the fight killed a bought soldier during its player's held turn and the run failed on it.

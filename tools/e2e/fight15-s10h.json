@@ -1,0 +1,779 @@
+{
+  "schema": 1,
+  "name": "fight15-s10h",
+  "title": "Twenty-minute stock endless AI fight with scripted bunker and brain setup - the host's own seat held on cue and back",
+  "port_base": 49430,
+  "size": "960x540",
+  "timeout_s": 1750,
+  "public_directory": true,
+  "peers": [
+    {
+      "name": "host",
+      "menu_script": "host.menu",
+      "probe": "host.probe",
+      "env": {
+        "CCCP_TEST_READBACK_TIMING": "1",
+        "CC_TEST_RETURN_INPUT_DETAILS": "1"
+      },
+      "settings": {
+        "SessionDirectoryUrl": "directory.broserver.com",
+        "NetworkHostRelayMode": "Directory",
+        "NetworkConnectionMode": "RelayOnly",
+        "NetworkIceEnable": 1,
+        "NetworkPortMapEnable": 0,
+        "NetworkMatchStatusMode": "Always",
+        "NetworkDisplayName": "Captain"
+      },
+      "args": [
+        "-memory-census-seconds",
+        "60",
+        "-net-live-tick-hashes",
+        "{PROBE_DIR}/ticks.jsonl",
+        "-net-test-live-stall",
+        "6000:2000"
+      ]
+    },
+    {
+      "name": "joiner",
+      "menu_script": "joiner.menu",
+      "probe": "joiner.probe",
+      "env": {
+        "CCCP_TEST_READBACK_TIMING": "1"
+      },
+      "settings": {
+        "SessionDirectoryUrl": "directory.broserver.com",
+        "NetworkHostRelayMode": "Directory",
+        "NetworkConnectionMode": "RelayOnly",
+        "NetworkIceEnable": 1,
+        "NetworkPortMapEnable": 0,
+        "NetworkMatchStatusMode": "Always",
+        "NetworkDisplayName": "Joiner"
+      },
+      "args": [
+        "-memory-census-seconds",
+        "60",
+        "-net-live-tick-hashes",
+        "{PROBE_DIR}/ticks.jsonl"
+      ]
+    }
+  ],
+  "scripts": {
+    "host.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Captain\nactivate ButtonMultiplayerHostGame\nwait_ms 500\nassert_substate HostSetup\ncombo_select ComboHostActivity Skirmish Defense\ncombo_select ComboHostScene Grasslands\nsetup_host_port {PORT}\ncombo_select ComboHostPlayers 4\nactivate ButtonHostOptions\nwait_ms 500\nassert_substate HostOptions\nactivate TabHostPageConnection\ncombo_select ComboHostNetVisibility Public (default)\ncombo_select ComboHostNetRelay Game service (default)\nactivate TabHostPageSeats\nvideo_mark cpu-seats-host\ncombo_select ComboHostSeatType2 CPU\ncombo_select ComboHostSeatType3 CPU\nassert_label ComboHostSeatType0 Open\nassert_label ComboHostSeatType1 Open\nassert_label ComboHostSeatType2 CPU\nassert_label ComboHostSeatType3 CPU\nassert_text_fits LabelHostSeatState2\nassert_text_fits LabelHostSeatState3\nwait_ms 1400\nassert_label LabelHostSeatPlayers Human players\nvideo_mark cpu-human-count-host\ncombo_select ComboHostSeatPlayers 2\nassert_label ComboHostSeatPlayers 2\nassert_label ComboHostSeatType2 CPU\nassert_label ComboHostSeatType3 CPU\nwait_ms 1400\nactivate TabHostPageConnection\nassert_label ComboHostNetVisibility Public (default)\nassert_label ComboHostNetRelay Game service (default)\nactivate TabHostPageRules\nslider_set SliderHostRulesDifficulty 0\nslider_set SliderHostRulesGold 31000\nsetcheck CheckHostRulesClearPath 0\nactivate ButtonHostOptApply\nwait_ms 400\nactivate ButtonHostOptBack\nwait_ms 500\nactivate ButtonMultiplayerCreate\nwait_substate Lobby 90\nwrite_lobby {PROBE_DIR}/lobby.json 90\nvideo_mark fight15-host-listening\nwait_connected 4 90\nwait_ms 1200\nwait_remote_ready 90\nactivate ButtonMultiplayerStart\nwait_file {PROBE_DIR}/done.json 1600\nwait_ms 1400\nexit\n",
+    "joiner.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 90\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 90\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nassert_label LabelJoinSelected internet\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 4 90\nwait_substate Lobby 90\nwait_ms 1200\nactivate ButtonMultiplayerReady\nwait_file {PROBE_DIR}/done.json 1600\nwait_ms 1400\nexit\n",
+    "host.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 1600000,\n  \"step_timeout_ms\": 60000,\n  \"label_dump\": {\n    \"every_ms\": 5000\n  },\n  \"steps\": [\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"BunkerAssembly\",\n      \"preset\": \"Brain Chamber Left 2x2 - 1\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"x_fraction\": 0.3,\n      \"y\": 1104,\n      \"remember\": \"bunker\"\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 0\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark bunker-preview-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"bunker-preview-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"screen_text\": \"Click to ADD a new object - Drag for precision\"\n      }\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 90,\n      \"elapsed_ms\": 1600\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark bunker-installed-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"bunker-installed-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"x_fraction\": 0.3,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": -48,\n      \"offset_y\": -48\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 5,\n      \"elapsed_ms\": 1000\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark valid-preview-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"valid-preview-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"screen_text\": \"Valid spot - click to INSTALL your brain\"\n      }\n    },\n    {\n      \"op\": \"assert_net_ui_clear\",\n      \"player\": 0\n    },\n    {\n      \"op\": \"assert_control\",\n      \"control\": \"LabelNetMatchStatus\",\n      \"text_contains\": \"0 of 2\",\n      \"fits\": true,\n      \"inside\": \"BoxNetMatchStatus\"\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"setup_ready\": 1\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark placed-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"placed-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"ready\": true,\n        \"submitted\": true,\n        \"screen_text\": \"READY to start - wait for others to finish...\"\n      }\n    },\n    {\n      \"op\": \"assert_net_ui_clear\",\n      \"player\": 0\n    },\n    {\n      \"op\": \"assert_control\",\n      \"control\": \"LabelNetMatchStatus\",\n      \"text_contains\": \"1 of 2\",\n      \"fits\": true,\n      \"inside\": \"BoxNetMatchStatus\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"Return\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"Return\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": false,\n      \"paused\": false\n    },\n    {\n      \"op\": \"assert\",\n      \"equals\": {\n        \"setup_ready\": 2,\n        \"setup_humans\": 2,\n        \"local_actor_alive\": true\n      }\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"pan_scene\",\n      \"input_player\": 0,\n      \"y\": 600,\n      \"speed\": 8\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark playing-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"playing-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"pan_scene\",\n      \"input_player\": 0,\n      \"y\": 600,\n      \"speed\": 8\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2,\n        \"screen_text\": \"Select a body to switch control to...\"\n      }\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark ai-view-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"ai-view-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 1\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 1\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 1\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-01-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-01-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 2\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 2\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 2\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-02-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-02-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 3\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 3\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 3\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-03-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-03-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 4\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 4\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 4\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-04-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-04-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 5\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 5\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 5\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-05-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-05-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 6\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 6\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 6\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-06-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-06-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 7\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 7\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 7\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-07-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-07-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 8\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 8\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 8\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-08-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-08-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 9\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 9\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 9\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-09-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-09-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 10\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 10\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 10\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-10-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-10-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 11\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 11\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 11\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-11-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-11-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 12\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 12\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 12\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-12-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-12-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 13\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 13\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 13\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-13-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-13-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 14\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 14\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 14\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-14-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-14-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 15\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 15\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 15\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-15-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-15-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 16\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 16\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 16\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-16-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-16-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 17\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 17\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 17\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-17-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-17-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 18\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 18\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 18\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-18-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-18-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 19\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 19\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 19\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-19-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-19-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter host answers minute 20\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 20\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 20\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-20-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-20-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"editing\": false,\n      \"paused\": false,\n      \"lockstep_frame_at_least\": 73000\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"fight-ticks-complete\"\n    },\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR_joiner}/fight-ticks-complete.json\"\n    },\n    {\n      \"op\": \"pan_scene\",\n      \"enabled\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 90\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2,\n        \"actor_selection\": false\n      }\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"Escape\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"Escape\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"screen\": \"Pause\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"activate ButtonEndMatch\"\n    },\n    {\n      \"op\": \"wait\",\n      \"screen\": \"PauseLeaveConfirm\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"activate ButtonLeaveConfirm\"\n    },\n    {\n      \"op\": \"wait\",\n      \"scope\": \"menu\",\n      \"screen\": \"MultiplayerScreen\",\n      \"control\": \"LabelMultiplayerStatus\",\n      \"text_contains\": \"Waiting for Joiner to press Ready\",\n      \"within_ms\": 90000\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark fight-ended-host\",\n      \"capture_screen\": \"MultiplayerScreen\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"fight-ended-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"assert_label LabelLastMatchSummary Match ended by host\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"assert_text_fits LabelLastMatchSummary\"\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"done\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ],\n  \"activate_phase\": \"Running\",\n  \"sim_clock\": \"lockstep\"\n}\n",
+    "joiner.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 1600000,\n  \"step_timeout_ms\": 60000,\n  \"label_dump\": {\n    \"every_ms\": 5000\n  },\n  \"steps\": [\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"BunkerAssembly\",\n      \"preset\": \"Brain Chamber Left 2x2 - 1\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"x_fraction\": 0.7,\n      \"y\": 1104,\n      \"remember\": \"bunker\"\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 1\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark bunker-preview-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"bunker-preview-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"screen_text\": \"Click to ADD a new object - Drag for precision\"\n      }\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 90,\n      \"elapsed_ms\": 1600\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark bunker-installed-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"bunker-installed-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"x_fraction\": 0.7,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": -48,\n      \"offset_y\": -48\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 5,\n      \"elapsed_ms\": 1000\n    },\n    {\n      \"op\": \"wait\",\n      \"setup_ready\": 1\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 2500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark valid-preview-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"valid-preview-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"screen_text\": \"Valid spot - click to INSTALL your brain\"\n      }\n    },\n    {\n      \"op\": \"assert_net_ui_clear\",\n      \"player\": 1\n    },\n    {\n      \"op\": \"assert_control\",\n      \"control\": \"LabelNetMatchStatus\",\n      \"text_contains\": \"1 of 2\",\n      \"fits\": true,\n      \"inside\": \"BoxNetMatchStatus\"\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"Return\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"Return\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": false,\n      \"paused\": false\n    },\n    {\n      \"op\": \"assert\",\n      \"equals\": {\n        \"setup_ready\": 2,\n        \"setup_humans\": 2,\n        \"local_actor_alive\": true\n      }\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"pan_scene\",\n      \"input_player\": 0,\n      \"y\": 600,\n      \"speed\": 8\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark playing-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"playing-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"pan_scene\",\n      \"input_player\": 0,\n      \"y\": 600,\n      \"speed\": 8\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2,\n        \"screen_text\": \"Select a body to switch control to...\"\n      }\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark ai-view-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"ai-view-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 1\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 1\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 1\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-01-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-01-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 2\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 2\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 2\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-02-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-02-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 3\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 3\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 3\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-03-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-03-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 4\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 4\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 4\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-04-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-04-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 5\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 5\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 5\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-05-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-05-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 6\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 6\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 6\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-06-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-06-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 7\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 7\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 7\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-07-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-07-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 8\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 8\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 8\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-08-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-08-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 9\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 9\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 9\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-09-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-09-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 10\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 10\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 10\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-10-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-10-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 11\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 11\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 11\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-11-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-11-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 12\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 12\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 12\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-12-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-12-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 13\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 13\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 13\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-13-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-13-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 14\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 14\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 14\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-14-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-14-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 15\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 15\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 15\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-15-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-15-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 16\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 16\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 16\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-16-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-16-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 17\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 17\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 17\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-17-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-17-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 18\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 18\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 18\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-18-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-18-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 19\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 19\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 19\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-19-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-19-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"measure_minute\",\n      \"within_ms\": 70000\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"CHAT\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_entry_open\": true\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"type_text TextMatchChatInput enter joiner answers minute 20\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"joiner answers minute 20\"\n    },\n    {\n      \"op\": \"wait\",\n      \"chat_text_once\": \"host answers minute 20\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark minute-20-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"minute-20-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"editing\": false,\n      \"paused\": false,\n      \"lockstep_frame_at_least\": 73000\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"assert_relay\"\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"fight-ticks-complete\"\n    },\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR_host}/fight-ticks-complete.json\"\n    },\n    {\n      \"op\": \"pan_scene\",\n      \"enabled\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 90\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2,\n        \"actor_selection\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"scope\": \"menu\",\n      \"screen\": \"MultiplayerScreen\",\n      \"control\": \"LabelMultiplayerStatus\",\n      \"text_contains\": \"Press Ready when you're ready to play\",\n      \"within_ms\": 90000\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark fight-ended-joiner\",\n      \"capture_screen\": \"MultiplayerScreen\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"fight-ended-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"assert_label LabelLastMatchSummary Match ended by host\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"assert_text_fits LabelLastMatchSummary\"\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"done\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ],\n  \"activate_phase\": \"Running\",\n  \"sim_clock\": \"lockstep\"\n}\n"
+  },
+  "checklist": [
+    {
+      "id": "cpu-seats-host",
+      "peer": "host",
+      "mark": "cpu-seats-host",
+      "screen": "MultiplayerScreen",
+      "what": "Two held picks replace the open seats with CPU teams and remain selected after refresh.",
+      "events": [
+        "^combo_select ComboHostSeatType2 CPU pick \"CPU\" in ComboHostSeatType2 PASS$",
+        "^combo_select ComboHostSeatType3 CPU pick \"CPU\" in ComboHostSeatType3 PASS$",
+        "^assert_label ComboHostSeatType2 \"CPU\" text=\"CPU\" PASS$",
+        "^assert_label ComboHostSeatType3 \"CPU\" text=\"CPU\" PASS$"
+      ]
+    },
+    {
+      "id": "cpu-human-count-host",
+      "peer": "host",
+      "mark": "cpu-human-count-host",
+      "screen": "MultiplayerScreen",
+      "what": "The Human players count is two while both CPU seats remain selected.",
+      "events": [
+        "^combo_select ComboHostSeatPlayers 2 pick \"2\" in ComboHostSeatPlayers PASS$",
+        "^assert_label ComboHostSeatPlayers \"2\" text=\"2\" PASS$",
+        "^assert_label ComboHostSeatType2 \"CPU\" text=\"CPU\" PASS$",
+        "^assert_label ComboHostSeatType3 \"CPU\" text=\"CPU\" PASS$"
+      ]
+    },
+    {
+      "id": "host-bunker-preview-host",
+      "peer": "host",
+      "mark": "bunker-preview-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        7
+      ]
+    },
+    {
+      "id": "host-bunker-installed-host",
+      "peer": "host",
+      "mark": "bunker-installed-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        16,
+        18
+      ]
+    },
+    {
+      "id": "host-valid-preview-host",
+      "peer": "host",
+      "mark": "valid-preview-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        25,
+        26,
+        27
+      ]
+    },
+    {
+      "id": "host-placed-host",
+      "peer": "host",
+      "mark": "placed-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        36,
+        37,
+        38,
+        44,
+        45
+      ]
+    },
+    {
+      "id": "host-minute-01-host",
+      "peer": "host",
+      "mark": "minute-01-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        68,
+        69
+      ]
+    },
+    {
+      "id": "host-minute-02-host",
+      "peer": "host",
+      "mark": "minute-02-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        83,
+        84
+      ]
+    },
+    {
+      "id": "host-minute-03-host",
+      "peer": "host",
+      "mark": "minute-03-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        98,
+        99
+      ]
+    },
+    {
+      "id": "host-minute-04-host",
+      "peer": "host",
+      "mark": "minute-04-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        113,
+        114
+      ]
+    },
+    {
+      "id": "host-minute-05-host",
+      "peer": "host",
+      "mark": "minute-05-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        128,
+        129
+      ]
+    },
+    {
+      "id": "host-minute-06-host",
+      "peer": "host",
+      "mark": "minute-06-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        143,
+        144
+      ]
+    },
+    {
+      "id": "host-minute-07-host",
+      "peer": "host",
+      "mark": "minute-07-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        158,
+        159
+      ]
+    },
+    {
+      "id": "host-minute-08-host",
+      "peer": "host",
+      "mark": "minute-08-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        173,
+        174
+      ]
+    },
+    {
+      "id": "host-minute-09-host",
+      "peer": "host",
+      "mark": "minute-09-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        188,
+        189
+      ]
+    },
+    {
+      "id": "host-minute-10-host",
+      "peer": "host",
+      "mark": "minute-10-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        203,
+        204
+      ]
+    },
+    {
+      "id": "host-minute-11-host",
+      "peer": "host",
+      "mark": "minute-11-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        218,
+        219
+      ]
+    },
+    {
+      "id": "host-minute-12-host",
+      "peer": "host",
+      "mark": "minute-12-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        233,
+        234
+      ]
+    },
+    {
+      "id": "host-minute-13-host",
+      "peer": "host",
+      "mark": "minute-13-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        248,
+        249
+      ]
+    },
+    {
+      "id": "host-minute-14-host",
+      "peer": "host",
+      "mark": "minute-14-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        263,
+        264
+      ]
+    },
+    {
+      "id": "host-minute-15-host",
+      "peer": "host",
+      "mark": "minute-15-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        278,
+        279
+      ]
+    },
+    {
+      "id": "host-minute-16-host",
+      "peer": "host",
+      "mark": "minute-16-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        293,
+        294
+      ]
+    },
+    {
+      "id": "host-minute-17-host",
+      "peer": "host",
+      "mark": "minute-17-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        308,
+        309
+      ]
+    },
+    {
+      "id": "host-minute-18-host",
+      "peer": "host",
+      "mark": "minute-18-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        323,
+        324
+      ]
+    },
+    {
+      "id": "host-minute-19-host",
+      "peer": "host",
+      "mark": "minute-19-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        338,
+        339
+      ]
+    },
+    {
+      "id": "host-minute-20-host",
+      "peer": "host",
+      "mark": "minute-20-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        353,
+        354
+      ]
+    },
+    {
+      "id": "host-fight-ended-host",
+      "peer": "host",
+      "mark": "fight-ended-host",
+      "screen": "MultiplayerScreen",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        375,
+        376
+      ]
+    },
+    {
+      "id": "shared-bunkers-host",
+      "peer": "host",
+      "mark": "playing-host",
+      "screen": "game",
+      "what": "Both ordinary editor placements reached the shared scene before the brains started playing.",
+      "log_regex": [
+        "\\[net-match\\] editor purchase applied: seat=0 preset=Base.rte/Brain Chamber Left 2x2 - 1 funds=",
+        "\\[net-match\\] editor purchase applied: seat=1 preset=Base.rte/Brain Chamber Left 2x2 - 1 funds="
+      ]
+    },
+    {
+      "id": "twenty-minutes-host",
+      "peer": "host",
+      "mark": "fight-ended-host",
+      "screen": "MultiplayerScreen",
+      "what": "Twenty full running minutes at >=58 ticks/s, living local player, AI weapon fire and named end reason.",
+      "continuous_minutes": {
+        "count": 20,
+        "minimum_tps": 58.0
+      },
+      "log_regex": [
+        "\\[fight15-scene\\] minute=20 pace=",
+        "\\[net-match\\].*host"
+      ]
+    },
+    {
+      "id": "joiner-bunker-preview-joiner",
+      "peer": "joiner",
+      "mark": "bunker-preview-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        7
+      ]
+    },
+    {
+      "id": "joiner-bunker-installed-joiner",
+      "peer": "joiner",
+      "mark": "bunker-installed-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        16,
+        18
+      ]
+    },
+    {
+      "id": "joiner-valid-preview-joiner",
+      "peer": "joiner",
+      "mark": "valid-preview-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        27,
+        28,
+        29,
+        39,
+        40
+      ]
+    },
+    {
+      "id": "joiner-minute-01-joiner",
+      "peer": "joiner",
+      "mark": "minute-01-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        63,
+        64
+      ]
+    },
+    {
+      "id": "joiner-minute-02-joiner",
+      "peer": "joiner",
+      "mark": "minute-02-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        78,
+        79
+      ]
+    },
+    {
+      "id": "joiner-minute-03-joiner",
+      "peer": "joiner",
+      "mark": "minute-03-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        93,
+        94
+      ]
+    },
+    {
+      "id": "joiner-minute-04-joiner",
+      "peer": "joiner",
+      "mark": "minute-04-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        108,
+        109
+      ]
+    },
+    {
+      "id": "joiner-minute-05-joiner",
+      "peer": "joiner",
+      "mark": "minute-05-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        123,
+        124
+      ]
+    },
+    {
+      "id": "joiner-minute-06-joiner",
+      "peer": "joiner",
+      "mark": "minute-06-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        138,
+        139
+      ]
+    },
+    {
+      "id": "joiner-minute-07-joiner",
+      "peer": "joiner",
+      "mark": "minute-07-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        153,
+        154
+      ]
+    },
+    {
+      "id": "joiner-minute-08-joiner",
+      "peer": "joiner",
+      "mark": "minute-08-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        168,
+        169
+      ]
+    },
+    {
+      "id": "joiner-minute-09-joiner",
+      "peer": "joiner",
+      "mark": "minute-09-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        183,
+        184
+      ]
+    },
+    {
+      "id": "joiner-minute-10-joiner",
+      "peer": "joiner",
+      "mark": "minute-10-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        198,
+        199
+      ]
+    },
+    {
+      "id": "joiner-minute-11-joiner",
+      "peer": "joiner",
+      "mark": "minute-11-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        213,
+        214
+      ]
+    },
+    {
+      "id": "joiner-minute-12-joiner",
+      "peer": "joiner",
+      "mark": "minute-12-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        228,
+        229
+      ]
+    },
+    {
+      "id": "joiner-minute-13-joiner",
+      "peer": "joiner",
+      "mark": "minute-13-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        243,
+        244
+      ]
+    },
+    {
+      "id": "joiner-minute-14-joiner",
+      "peer": "joiner",
+      "mark": "minute-14-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        258,
+        259
+      ]
+    },
+    {
+      "id": "joiner-minute-15-joiner",
+      "peer": "joiner",
+      "mark": "minute-15-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        273,
+        274
+      ]
+    },
+    {
+      "id": "joiner-minute-16-joiner",
+      "peer": "joiner",
+      "mark": "minute-16-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        288,
+        289
+      ]
+    },
+    {
+      "id": "joiner-minute-17-joiner",
+      "peer": "joiner",
+      "mark": "minute-17-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        303,
+        304
+      ]
+    },
+    {
+      "id": "joiner-minute-18-joiner",
+      "peer": "joiner",
+      "mark": "minute-18-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        318,
+        319
+      ]
+    },
+    {
+      "id": "joiner-minute-19-joiner",
+      "peer": "joiner",
+      "mark": "minute-19-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        333,
+        334
+      ]
+    },
+    {
+      "id": "joiner-minute-20-joiner",
+      "peer": "joiner",
+      "mark": "minute-20-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        348,
+        349
+      ]
+    },
+    {
+      "id": "joiner-fight-ended-joiner",
+      "peer": "joiner",
+      "mark": "fight-ended-joiner",
+      "screen": "MultiplayerScreen",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        362,
+        363
+      ]
+    },
+    {
+      "id": "shared-bunkers-joiner",
+      "peer": "joiner",
+      "mark": "playing-joiner",
+      "screen": "game",
+      "what": "Both ordinary editor placements reached the shared scene before the brains started playing.",
+      "log_regex": [
+        "\\[net-match\\] editor purchase applied: seat=0 preset=Base.rte/Brain Chamber Left 2x2 - 1 funds=",
+        "\\[net-match\\] editor purchase applied: seat=1 preset=Base.rte/Brain Chamber Left 2x2 - 1 funds="
+      ]
+    },
+    {
+      "id": "twenty-minutes-joiner",
+      "peer": "joiner",
+      "mark": "fight-ended-joiner",
+      "screen": "MultiplayerScreen",
+      "what": "Twenty full running minutes at >=58 ticks/s, living local player, AI weapon fire and named end reason.",
+      "continuous_minutes": {
+        "count": 20,
+        "minimum_tps": 58.0
+      },
+      "log_regex": [
+        "\\[fight15-scene\\] minute=20 pace=",
+        "\\[net-match\\].*host"
+      ]
+    },
+    {
+      "id": "running-ticks-host",
+      "peer": "host",
+      "mark": "minute-20-host",
+      "screen": "game",
+      "what": "The living player completes at least 72000 running ticks before either peer ends the fight.",
+      "probe_steps": [
+        45,
+        355,
+        356,
+        357,
+        358,
+        359
+      ],
+      "sim_progress": 72000
+    },
+    {
+      "id": "fight-hashes-host",
+      "peer": "host",
+      "mark": "fight-ended-host",
+      "screen": "MultiplayerScreen",
+      "what": "Every running tick has matching shared component hashes on both peers, with complete uninterrupted coverage.",
+      "gate": "fight-hashes"
+    },
+    {
+      "id": "running-ticks-joiner",
+      "peer": "joiner",
+      "mark": "minute-20-joiner",
+      "screen": "game",
+      "what": "The living player completes at least 72000 running ticks before either peer ends the fight.",
+      "probe_steps": [
+        40,
+        350,
+        351,
+        352,
+        353,
+        354
+      ],
+      "sim_progress": 72000
+    },
+    {
+      "id": "fight-hashes-joiner",
+      "peer": "joiner",
+      "mark": "fight-ended-joiner",
+      "screen": "MultiplayerScreen",
+      "what": "Every running tick has matching shared component hashes on both peers, with complete uninterrupted coverage.",
+      "gate": "fight-hashes"
+    },
+    {
+      "id": "ai-view-host",
+      "peer": "host",
+      "mark": "ai-view-host",
+      "screen": "game",
+      "what": "A held Next Actor key and real relative mouse motion look across the live fight, with the exact actor-selection message and two living brains.",
+      "probe_steps": [
+        50,
+        51
+      ]
+    },
+    {
+      "id": "ai-view-joiner",
+      "peer": "joiner",
+      "mark": "ai-view-joiner",
+      "screen": "game",
+      "what": "A held Next Actor key and real relative mouse motion look across the live fight, with the exact actor-selection message and two living brains.",
+      "probe_steps": [
+        45,
+        46
+      ]
+    },
+    {
+      "id": "host-seat-held-host",
+      "peer": "host",
+      "mark": "minute-02-host",
+      "screen": "game",
+      "what": "The host's own simulation stalled 2000 ms at tick 6000: the session plane held the host's seat to the AI and the host came back to it while the joiner played on.",
+      "log_regex": [
+        "\\[net-test\\] live stall frame=\\d+ ms=2000",
+        "\\[net-seat-ai\\] peer=1 held=1 ",
+        "\\[net-match\\] seat-reclaimed peer=1 frame="
+      ]
+    }
+  ],
+  "fight_hash_gate": {
+    "peers": [
+      "host",
+      "joiner"
+    ],
+    "running_ticks": 72000
+  }
+}
