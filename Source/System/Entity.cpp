@@ -32,6 +32,9 @@
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include <iostream>
+#include <limits>
+#include <new>
 
 namespace RTE {
 	namespace {
@@ -994,6 +997,42 @@ namespace RTE {
 				info->m_AllocatedPool.pop_back();
 			}
 		}
+	}
+
+	bool Entity::ClassInfo::RunPoolExhaustionSelfTest() {
+		auto* info = const_cast<ClassInfo*>(GetClass("MOPixel"));
+		if (!info) {
+			std::cout << "[pool-exhaustion-selftest] FAIL no MOPixel class" << std::endl;
+			return false;
+		}
+		// The classic pools serve only when the world's storage is off, as in single player.
+		CheckpointNativeStorage::WorldAllocationScope classic(false);
+		std::vector<void*> pooled;
+		MemoryAllocate allocate;
+		{
+			std::lock_guard lock(info->m_Mutex);
+			pooled.swap(info->m_AllocatedPool);
+			allocate = std::exchange(info->m_Allocate, [] { return static_cast<void*>(nullptr); });
+		}
+		bool refused = false, handedNull = false;
+		try {
+			void* memory = info->GetPoolMemory();
+			handedNull = memory == nullptr;
+			if (memory) info->ReturnPoolMemory(memory);
+			else {
+				std::lock_guard lock(info->m_Mutex);
+				--info->m_InstancesInUse;
+			}
+		} catch (const std::bad_alloc&) { refused = true; }
+		{
+			std::lock_guard lock(info->m_Mutex);
+			info->m_Allocate = std::move(allocate);
+			std::erase(info->m_AllocatedPool, nullptr);
+			info->m_AllocatedPool.insert(info->m_AllocatedPool.end(), pooled.begin(), pooled.end());
+		}
+		const bool passed = refused && !handedNull;
+		std::cout << "[pool-exhaustion-selftest] " << (passed ? "PASS" : "FAIL") << " refused=" << refused << " handed_null=" << handedNull << std::endl;
+		return passed;
 	}
 
 	void Entity::ClassInfo::DumpPoolMemoryInfo(const Writer& fileWriter) {

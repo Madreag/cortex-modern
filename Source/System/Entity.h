@@ -202,6 +202,8 @@ namespace RTE {
 
 			static std::string GetPoolMemoryCounts();
 			static void ReleaseUnusedPoolMemory();
+			/// A pool whose refill the allocator refuses throws std::bad_alloc instead of handing out a null instance.
+			static bool RunPoolExhaustionSelfTest();
 
 			/// Adds a certain number of newly allocated instances to this' pool.
 			/// @param fillAmount The number of instances to fill the pool with. If 0 is specified, the set refill amount will be used.

@@ -13210,6 +13210,7 @@ debug.setupvalue(next, 4, "150")
 	checkpointValues = Actor::RunBorrowedReferenceSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunGoneItemInReachSelfTest() && checkpointValues;
 	checkpointValues = ACraft::RunGoneIncomingObjectSelfTest() && checkpointValues;
+	checkpointValues = Entity::ClassInfo::RunPoolExhaustionSelfTest() && checkpointValues;
 	checkpointValues = GameActivity::RunDeliveryReferenceSelfTest() && checkpointValues;
 	checkpointValues = RunLuaHeldReferenceSelfTest() && checkpointValues;
 	checkpointValues = MOSprite::RunCheckpointSelfTest() && checkpointValues;
