@@ -8404,7 +8404,7 @@ void RunGameLoop() {
 
 		// A world joiner applies the committed tail faster than real time. 16 is a ceiling, the frame's time after its draw a
 		// bound, and a tick is granted only when the tail still holds that next frame.
-		ScenarioRunner::BeginWorldCatchUpFrame(g_PerformanceMan.GetMSPDAverage());
+		ScenarioRunner::BeginWorldCatchUpFrame(g_PerformanceMan.GetMSPDAverage(), FrameMan::FeelMsUntilNextDraw());
 		CrossEndTargetObservation(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
 		// A lockstep peer with owed ticks presents at least once per tick length while it catches up, the round's first ticks

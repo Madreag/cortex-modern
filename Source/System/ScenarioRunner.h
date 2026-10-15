@@ -289,9 +289,10 @@ namespace RTE {
 		/// Whether the catch-up may take one more sim tick: the ceiling has to be left AND the tail has
 		/// to hold that very frame, so the sim clock never runs past what the world committed.
 		static bool WorldCatchUpMayGrant(uint64_t nextSimTick, int ticksLeftThisFrame);
-		/// Opens one real frame's catch-up budget: the ceiling, and the time the frame leaves after drawing it (drawMs, the draw's
-		/// recent cost). Every grant below is counted against both.
-		static void BeginWorldCatchUpFrame(double drawMs = 0.0);
+		/// Opens one real frame's catch-up budget: the ceiling, and the frame's time - up to the draw a presentation cap admits next
+		/// (untilDrawMs, when one paces the draws), else what the frame leaves after drawing it (drawMs, the draw's recent cost).
+		/// Every grant below is counted against both.
+		static void BeginWorldCatchUpFrame(double drawMs = 0.0, double untilDrawMs = -1.0);
 		/// Takes one catch-up sim tick out of this real frame's budget.
 		static bool TakeWorldCatchUpGrant(uint64_t nextSimTick);
 		/// A host whose own seat the AI holds, or a seat inside its own reclaim gap, runs its ready frames faster than real time, like a world joiner, until it is back.

@@ -459,6 +459,7 @@ void FrameMan::FeelBeforePreview() {
 }
 
 double FrameMan::FeelCapHz() { return s_Feel.capHz > 0 ? s_Feel.capHz : s_Feel.unseenDisplayCapHz; }
+double FrameMan::FeelMsUntilNextDraw() { return FeelCapHz() > 0 ? s_Feel.nextDrawMS - FeelNowMS() : -1.0; }
 
 void FrameMan::SetUnseenDisplayCap(bool unseen) { s_Feel.unseenDisplayCapHz = unseen ? 60 : 0; }
 
