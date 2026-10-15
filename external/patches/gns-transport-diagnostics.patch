@@ -1,0 +1,144 @@
+--- a/include/steam/steamnetworkingsockets.h
++++ b/include/steam/steamnetworkingsockets.h
+@@ -11,6 +11,8 @@
+ #endif
+ 
+ #include "isteamnetworkingsockets.h"
++
++#define STEAMNETWORKINGSOCKETS_TRANSPORT_DIAGNOSTICS 1
+ 
+ extern "C" {
+ 
+@@ -26,6 +28,9 @@
+ // Increments when a live ICE socket learns that its NAT mapping changed.
+ // Contains no address or credential. Safe to read from any thread.
+ STEAMNETWORKINGSOCKETS_INTERFACE uint32 SteamNetworkingSockets_GetLocalRouteRevision();
++
++// End-to-end packet timestamps on the local GNS clock, including keepalives; zero means none yet.
++STEAMNETWORKINGSOCKETS_INTERFACE bool SteamNetworkingSockets_GetConnectionPacketTimes( HSteamNetConnection connection, SteamNetworkingMicroseconds *sent, SteamNetworkingMicroseconds *received );
+ 
+ // Keep the server, username and password lists in the same offer generation.
+ STEAMNETWORKINGSOCKETS_INTERFACE bool SteamNetworkingSockets_SetTURNConfig( HSteamNetConnection connection, const char *servers, const char *users, const char *passwords );
+--- a/src/steamnetworkingsockets/steamnetworking_statsutils.h
++++ b/src/steamnetworkingsockets/steamnetworking_statsutils.h
+@@ -553,12 +553,10 @@
+ 	int64 m_nNextSendSequenceNumber;
+ 	PacketRate_t m_sent;
+ 	SteamNetworkingMicroseconds m_usecTimeLastSentSeq;
++	SteamNetworkingMicroseconds m_usecTimeLastSentPacket;
+ 
+ 	/// Called when we sent a packet, with or without a sequence number
+-	inline void TrackSentPacket( int cbPktSize )
+-	{
+-		m_sent.ProcessPacket( cbPktSize );
+-	}
++	void TrackSentPacket( int cbPktSize );
+ 
+ 	/// Consume the next sequence number, and record the time at which
+ 	/// we sent a sequenced packet.  (Don't call this unless you are sending
+--- a/src/steamnetworkingsockets/steamnetworkingsockets_stats.cpp
++++ b/src/steamnetworkingsockets/steamnetworkingsockets_stats.cpp
+@@ -246,6 +246,12 @@
+ 	Assert( m_pOwner == nullptr );
+ }
+ 
++void LinkStatsTrackerBase::TrackSentPacket( int cbPktSize )
++{
++	m_sent.ProcessPacket( cbPktSize );
++	m_usecTimeLastSentPacket = SteamNetworkingSockets_GetLocalTimestamp();
++}
++
+ void LinkStatsTrackerBase::InitInternal( SteamNetworkingMicroseconds usecNow )
+ {
+ 	m_nPeerProtocolVersion = 0;
+@@ -253,6 +259,7 @@
+ 	m_nNextSendSequenceNumber = 1;
+ 	m_sent.Reset();
+ 	m_usecTimeLastSentSeq = 0;
++	m_usecTimeLastSentPacket = 0;
+ 	InitMaxRecvPktNum( 0 );
+ 	m_recv.Reset();
+ 	m_nDebugPktsRecvInOrder = 0;
+--- a/src/steamnetworkingsockets/clientlib/csteamnetworkingsockets.cpp
++++ b/src/steamnetworkingsockets/clientlib/csteamnetworkingsockets.cpp
+@@ -2555,6 +2555,19 @@
+ 	return &s_utils;
+ }
+ 
++STEAMNETWORKINGSOCKETS_INTERFACE bool SteamNetworkingSockets_GetConnectionPacketTimes( HSteamNetConnection connection, SteamNetworkingMicroseconds *sent, SteamNetworkingMicroseconds *received )
++{
++	if ( !sent || !received ) return false;
++	*sent = *received = 0;
++	SteamNetworkingGlobalLock lock( "GetConnectionPacketTimes" );
++	ConnectionScopeLock connectionLock;
++	auto *peer = GetConnectionByHandleForAPI( connection, connectionLock, "GetConnectionPacketTimes" );
++	if ( !peer ) return false;
++	*sent = peer->m_statsEndToEnd.m_usecTimeLastSentPacket;
++	*received = peer->m_statsEndToEnd.m_usecTimeLastRecv;
++	return true;
++}
++
+ STEAMNETWORKINGSOCKETS_INTERFACE bool SteamNetworkingSockets_SetTURNConfig( HSteamNetConnection connection, const char *servers, const char *users, const char *passwords )
+ {
+ 	SteamNetworkingGlobalLock lock( "SetTURNConfig" );
+--- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
++++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
+@@ -1074,6 +1074,8 @@
+ {
+     Assert( !m_pPendingSTUNRequest );
+     m_pPendingSTUNRequest = new CSteamNetworkingSocketsSTUNRequest( this );
++    SpewMsg( "ICE: TURN request type=0x%04x server=%s relay=%s now_us=%lld\n", nMsgType,
++        CUtlNetAdrRender( addrTURNServer ).String(), CUtlNetAdrRender( m_addrRelayed ).String(), (long long)SteamNetworkingSockets_GetLocalTimestamp() );
+ 
+     if ( m_strTURNRealm.empty() )
+     {
+@@ -2454,6 +2456,10 @@
+ void CSteamNetworkingICESession::STUNRequestCallback_AllocateRelay( const RecvSTUNPktInfo_t &info )
+ {
+     ICESessionInterface * const pIntf = info.m_pRequest->m_pInterface;
++    SpewMsg( "ICE: TURN result operation=allocate server=%s relay=%s status=%s error=%d now_us=%lld\n",
++        CUtlNetAdrRender( info.m_pRequest->m_remoteAddr ).String(), CUtlNetAdrRender( pIntf->m_addrRelayed ).String(),
++        !info.m_pHeader ? "timeout" : IsSTUNErrorResponse( info.m_pHeader ) ? "error" : "success",
++        info.m_pHeader && IsSTUNErrorResponse( info.m_pHeader ) ? STUNErrorCode( info ) : 0, (long long)info.m_usecNow );
+     pIntf->m_pPendingSTUNRequest = nullptr;
+ 
+     // If we already have a result for this interface, ignore duplicates.
+@@ -2563,6 +2569,10 @@
+ void CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation( const RecvSTUNPktInfo_t &info )
+ {
+     ICESessionInterface * const pIntf = info.m_pRequest->m_pInterface;
++    SpewMsg( "ICE: TURN result operation=refresh server=%s relay=%s status=%s error=%d now_us=%lld\n",
++        CUtlNetAdrRender( info.m_pRequest->m_remoteAddr ).String(), CUtlNetAdrRender( pIntf->m_addrRelayed ).String(),
++        !info.m_pHeader ? "timeout" : IsSTUNErrorResponse( info.m_pHeader ) ? "error" : "success",
++        info.m_pHeader && IsSTUNErrorResponse( info.m_pHeader ) ? STUNErrorCode( info ) : 0, (long long)info.m_usecNow );
+     pIntf->m_pPendingSTUNRequest = nullptr;
+ 
+     const bool bRenewedLogin = info.m_pRequest->m_bRenewedLogin;
+@@ -2785,6 +2795,10 @@
+ void CSteamNetworkingICESession::STUNRequestCallback_CreatePermission( const RecvSTUNPktInfo_t &info )
+ {
+     ICESessionInterface * const pIntf = info.m_pRequest->m_pInterface;
++    SpewMsg( "ICE: TURN result operation=permission server=%s relay=%s status=%s error=%d now_us=%lld\n",
++        CUtlNetAdrRender( info.m_pRequest->m_remoteAddr ).String(), CUtlNetAdrRender( pIntf->m_addrRelayed ).String(),
++        !info.m_pHeader ? "timeout" : IsSTUNErrorResponse( info.m_pHeader ) ? "error" : "success",
++        info.m_pHeader && IsSTUNErrorResponse( info.m_pHeader ) ? STUNErrorCode( info ) : 0, (long long)info.m_usecNow );
+     pIntf->m_pPendingSTUNRequest = nullptr;
+ 
+     const int peerIndex = info.m_pRequest->m_nTURNPermissionIndex;
+@@ -3785,12 +3799,14 @@
+ 	iovec temp;
+ 	temp.iov_base = const_cast<void*>( pkt );
+ 	temp.iov_len = cbPkt;
+-	return m_pICESession->SendPacketGather( 1, &temp, cbPkt );
++	return SendPacketGather( 1, &temp, cbPkt );
+ }
+ 
+ bool CConnectionTransportP2PICE_Valve::SendPacketGather( int nChunks, const iovec *pChunks, int cbSendTotal )
+ {
+-	return m_pICESession->SendPacketGather( nChunks,pChunks, cbSendTotal );
++	const bool sent = m_pICESession->SendPacketGather( nChunks,pChunks, cbSendTotal );
++	if ( sent ) m_connection.m_statsEndToEnd.m_usecTimeLastSentPacket = SteamNetworkingSockets_GetLocalTimestamp();
++	return sent;
+ }
+ 
+ void CConnectionTransportP2PICE_Valve::OnLocalCandidateDiscovered( EICECandidateType type, const char *pszCandidateStr )
