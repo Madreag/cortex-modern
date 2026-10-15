@@ -484,6 +484,22 @@ class WindowsJoinersTest(unittest.TestCase):
         self.assertEqual(sorted(seen), ["PROBE_DIR_host", "PROBE_DIR_joiner1", "PROBE_DIR_joiner2", "PROBE_DIR_joiner3"])
         self.assertEqual(seen["PROBE_DIR_joiner1"], self.root / "native-joiner2" / "run0" / "joiner1-stage/probe")
 
+    def test_a_run_name_that_puts_windows_game_files_past_the_path_limit_is_refused(self):
+        boxes = peers.selected_boxes("host=EROL-PC,joiner1=Ally,joiner2=EDITH,joiner3=Z13", self.boxes)
+        roots = {"EROL-PC": "C:/cortex-project/mx/scene-peers-desync", "Ally": "C:/cortex-project/mx/two-box-harness",
+                 "EDITH": "D:/mx/two-box-harness", "Z13": "C:/cortex-project/mx/scene-peers-desync"}
+        # The Z13's joiner of fe5db-erolpc-ally-mac-z13-4p1 could not read this 125-character Data file at 260 characters.
+        longest = len("Data/Browncoats.rte/Scenes/Objects/BunkerSystems/RefineryAuthorizationConsole/RefineryAuthorizationConsolePieSliceActions.lua")
+        for run in ("fe5db-erolpc-ally-mac-z13-4p1", "fe5db-4p2"):
+            for box in boxes.values():
+                box["scratch"] = roots[box["name"]] + "/" + run
+            if run == "fe5db-4p2":
+                peers.check_windows_paths(boxes, run, "run0", Path("."), longest)
+                continue
+            with self.assertRaisesRegex(ValueError, "^Z13: the joiner3's game files would reach 260 characters"):
+                peers.check_windows_paths(boxes, run, "run0", Path("."), longest)
+        self.assertEqual(peers.longest_data_path(Path(peers.__file__).resolve().parents[1]), longest)
+
     def test_a_scene_names_one_host_and_lowercase_players(self):
         document = peers.scene("fight15-s11")
         for names in (("host", "host", "joiner1"), ("host",), ("host", "Joiner1"), ("host", "joiner1", "joiner1")):

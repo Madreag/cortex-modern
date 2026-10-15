@@ -481,6 +481,27 @@ def collect_player(out, name, role, player):
     archive.unlink()
 
 
+# Windows refuses a path of 260 characters or more where long paths are off; a player's runtime holds the game's Data.
+WINDOWS_PATH_LIMIT = 259
+
+
+def longest_data_path(repo):
+    return max((len(("Data" / path.relative_to(Path(repo) / "Data")).as_posix())
+                for path in (Path(repo) / "Data").rglob("*") if path.is_file()), default=0)
+
+
+def check_windows_paths(boxes, out_name, run_name, repo, longest=None):
+    """Refuse a run whose name would put a Windows player's game files past the path limit: the engine cannot read them there."""
+    for role, box in boxes.items():
+        if box["os"] != "win32":
+            continue
+        longest = longest_data_path(repo) if longest is None else longest
+        runtime = f'{box["scratch"].rstrip("/")}/{out_name}-{run_name}-{"0" * 8}/{run_name}/{role}/runtime/'
+        if len(runtime) + longest > WINDOWS_PATH_LIMIT:
+            raise ValueError(f"{box['name']}: the {role}'s game files would reach {len(runtime) + longest} characters, past Windows' "
+                             f"{WINDOWS_PATH_LIMIT + 1}-character path limit; name the run shorter")
+
+
 def scene_port(document, assigned=None):
     return video.port_for(0, assigned if assigned is not None else int(document.get("port_base", video.PORT_LO)))
 
@@ -499,6 +520,11 @@ def capture_scene(args):
     scene_path = Path(document["path"])
     relative = scene_path.relative_to(repo).as_posix()
     scene_hash = committed_scene_sha256(repo, source["tip"], scene_path)
+    windows = {role: box for role, box in boxes.items() if box["os"] == "win32"}
+    if windows:
+        longest = longest_data_path(repo)
+        for index, run in enumerate(scene_runs(document)):
+            check_windows_paths(windows, out.name, run.get("name", "run" + str(index)), repo, longest)
     out.mkdir(parents=True, exist_ok=False)
     controls = out / "commands"
     controls.mkdir()
