@@ -107,9 +107,9 @@
       "screen": "MultiplayerScreen",
       "what": "The lobby names every player in their joining order, each inside its row.",
       "events": [
-        "^assert_label LabelLobbyPlayer0 \"Captain\" text=\"Captain\" PASS$",
-        "^assert_label LabelLobbyPlayer1 \"Joiner1\" text=\"Joiner1\" PASS$",
-        "^assert_label LabelLobbyPlayer2 \"Joiner2\" text=\"Joiner2\" PASS$",
+        "^assert_label LabelLobbyPlayer0 \"Captain\" text=\"Captain( \\(you\\))? - Team \\d+ - [^\"]+\" PASS$",
+        "^assert_label LabelLobbyPlayer1 \"Joiner1\" text=\"Joiner1( \\(you\\))? - Team \\d+ - [^\"]+\" PASS$",
+        "^assert_label LabelLobbyPlayer2 \"Joiner2\" text=\"Joiner2( \\(you\\))? - Team \\d+ - [^\"]+\" PASS$",
         "^assert_text_fits LabelLobbyPlayer0 .*PASS",
         "^assert_text_fits LabelLobbyPlayer1 .*PASS",
         "^assert_text_fits LabelLobbyPlayer2 .*PASS"

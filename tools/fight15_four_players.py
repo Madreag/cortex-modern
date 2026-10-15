@@ -164,9 +164,10 @@ def ending(peer):
 
 
 def switch_check(peer):
-    """Every player has taken, fired and left its own soldier before the host ends the match."""
+    """Every player has taken, fired and left its own soldier, and the round has run the ticks its hash gate reads, before the host ends it."""
     return [dict(op="wait_file", path=f"{{PROBE_DIR_{other}}}/soldier-done.json", within_ms=300000) for other in others(peer)] + \
-        [dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset="Base.rte/Brain Case", brain_count=len(PLAYERS))), relay()]
+        [wait(service="Running", editing=False, paused=False, lockstep_frame_at_least=SWITCH_TICKS + 1000),
+         dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset="Base.rte/Brain Case", brain_count=len(PLAYERS))), relay()]
 
 
 def checklist_items(peer, steps, minutes=True):
@@ -198,7 +199,8 @@ def menu_checks():
                           [pass_line(f"assert_label ComboHostSeatType{count}", "CPU"), pass_line("assert_label ComboHostSeatPlayers", str(count))]),
               dict(id="players-host", peer="host", mark="players-host", screen="MultiplayerScreen",
                    what="The lobby names every player in their joining order, each inside its row.",
-                   events=[pass_line(f"assert_label LabelLobbyPlayer{SEAT[peer]}", NAMES[peer]) for peer in PLAYERS] +
+                   # A lobby row starts with its player's name: "Captain (you) - Team 1 - Host", "Joiner1 - Team 1 - Not ready".
+                   events=[rf'^assert_label LabelLobbyPlayer{SEAT[peer]} "{NAMES[peer]}" text="{NAMES[peer]}( \(you\))? - Team \d+ - [^"]+" PASS$' for peer in PLAYERS] +
                           [rf"^assert_text_fits LabelLobbyPlayer{seat} .*PASS" for seat in range(count)]),
               dict(id="countdown-host", peer="host", mark="countdown-host", screen="MultiplayerScreen",
                    what="The unready Start counts down: Cancel Start shows and the waiting line fits.",
