@@ -206,6 +206,10 @@ namespace RTE {
 		std::optional<uint64_t> m_FrameTieBoundStartMs;
 		bool m_FrameTieFinalQuerySent = false;
 		uint64_t m_NextFrameTie = 0;
+		uint64_t m_FrameTieSentMs = 0; //!< When the request in flight left.
+		uint64_t m_FrameTieExchangeMs = 0; //!< The longest recent tie exchange, decaying; sizes the next one's timeout.
+		bool m_FrameTieSentCheckIn = false; //!< The request in flight is a check-in, not a query.
+		std::deque<uint64_t> m_TieRequests; //!< Tie requests over the last minute: their own allowance, outside the routine check-ins'.
 		uint64_t m_NextHostChange = 0;
 		uint64_t m_NextCheckIn = 0, m_NextBootstrap = 0, m_CheckIns = 0;
 		uint64_t m_NextNetworkProbe = 0, m_LastWallSeconds = 0;
@@ -214,6 +218,7 @@ namespace RTE {
 		std::deque<uint64_t> m_SeatRequests;
 		uint64_t FailedReply(const NetHttpClient::Response& response, NetDirectoryRetry& retry, uint64_t nowMs, const char* path);
 		bool CanSeatRequest(uint64_t nowMs, bool decisionRequest = false);
+		bool CanTieRequest(uint64_t nowMs);
 		bool CanRequest(uint64_t nowMs) const;
 		uint32_t m_NetworkRevision = 0;
 		uint32_t m_NativeRouteRevision = 0;

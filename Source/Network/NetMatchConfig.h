@@ -83,6 +83,9 @@ namespace RTE {
 		uint32_t Percentile(unsigned percent) const;
 		void ForgetSilencesBefore(uint64_t nowMs);
 		std::deque<std::pair<uint64_t, uint32_t>> m_Samples;
+		uint64_t m_SamplesRevision = 0; //!< Moves whenever a sample comes or goes.
+		mutable uint64_t m_RankedRevision = UINT64_MAX; //!< The revision the ranked percentiles below were taken at.
+		mutable std::array<std::pair<unsigned, uint32_t>, 2> m_Ranked{}; //!< The percentiles asked for since, each with its value.
 		uint32_t m_LastMeasuredRttMs = 0;
 		std::deque<std::pair<uint64_t, uint32_t>> m_Silences;
 		std::optional<uint64_t> m_BelowSince;

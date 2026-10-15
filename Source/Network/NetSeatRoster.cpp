@@ -47,9 +47,11 @@ namespace RTE {
 		bool IsBanned(const NetSeatRoster& roster, uint64_t owner) { return owner != 0 && std::find(roster.banned.begin(), roster.banned.end(), owner) != roster.banned.end(); }
 
 		/// A failed transfer preserves an existing host hold; it cannot create AI authority.
-		void FailReturn(NetRosterSeat& seat, uint64_t nowMs, NetRosterStage stage, uint8_t hostSeat) {
-			seat.failedReturns = static_cast<uint8_t>(std::min<int>(seat.failedReturns + 1, 255));
-			seat.returnAfterMs = nowMs + BackoffMs(seat.failedReturns);
+		void FailReturn(NetRosterSeat& seat, uint64_t nowMs, NetRosterStage stage, uint8_t hostSeat, bool counted) {
+			if (counted) {
+				seat.failedReturns = static_cast<uint8_t>(std::min<int>(seat.failedReturns + 1, 255));
+				seat.returnAfterMs = nowMs + BackoffMs(seat.failedReturns);
+			}
 			const bool wasHeld = seat.holdCause != NetSeatHoldCause::None && seat.seatId != hostSeat;
 			const bool imageFailed = seat.phase == NetSeatPhase::RejoinImage;
 			seat.phase = wasHeld ? NetSeatPhase::Held : PresentPhase(stage);
@@ -118,7 +120,7 @@ namespace RTE {
 					// same boundary; its closed link changes the reason for waiting.
 					if (seat->phase == NetSeatPhase::Held) seat->holdCause = event.byChoice ? NetSeatHoldCause::Leave : NetSeatHoldCause::LinkDrop;
 					if (seat->phase == NetSeatPhase::RejoinImage || seat->phase == NetSeatPhase::RejoinCatchUp)
-						FailReturn(*seat, event.nowMs, next.stage, next.hostSeat);
+						FailReturn(*seat, event.nowMs, next.stage, next.hostSeat, !event.byChoice);
 					return commit("Connection lost - waiting for the host's ordered recovery");
 				}
 				case NetRosterEventKind::ProcessRelaunched: {
@@ -261,7 +263,7 @@ namespace RTE {
 				}
 				case NetRosterEventKind::TransferAborted: {
 					if (!seat || (seat->phase != NetSeatPhase::RejoinImage && seat->phase != NetSeatPhase::RejoinCatchUp)) return refuse("no return is in transfer to the seat");
-					FailReturn(*seat, event.nowMs, next.stage, next.hostSeat);
+					FailReturn(*seat, event.nowMs, next.stage, next.hostSeat, !event.excused);
 					return commit("Could not rejoin - retrying");
 				}
 				case NetRosterEventKind::LivenessPassed: {
@@ -309,7 +311,7 @@ namespace RTE {
 							each.phase = NetSeatPhase::Migrating;
 						} else if (each.phase == NetSeatPhase::RejoinImage || each.phase == NetSeatPhase::RejoinCatchUp) {
 							// Its return was the lost host's to serve; it returns to the new host.
-							FailReturn(each, event.nowMs, next.stage, next.hostSeat);
+							FailReturn(each, event.nowMs, next.stage, next.hostSeat, false);
 						}
 					}
 					return commit("Host lost - arranging handover");
