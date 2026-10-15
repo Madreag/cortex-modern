@@ -280,7 +280,8 @@ namespace RTE {
 			return true;
 		}
 		if (message.type == NetHostMigrationMessageType::PeerBridge) {
-			if (message.preparedFrame == 0 && message.frame > m_Stats.nextFrame && message.frame - m_Stats.nextFrame <= NetLockstepCodec::c_MaxFutureFrameSkew) {
+			// A hold made now is voted at its frame; one agreed ahead is voted as it arrives.
+			if (message.preparedFrame == 0 && message.boundary >= message.frame && message.frame > m_Stats.nextFrame && message.frame - m_Stats.nextFrame <= NetLockstepCodec::c_MaxFutureFrameSkew) {
 				m_PeerBridgeVotes[{message.frame, DecisionKind(message)}].try_emplace(message.senderPeerId, message);
 				return true;
 			}

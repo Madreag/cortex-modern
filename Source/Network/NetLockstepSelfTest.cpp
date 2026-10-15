@@ -29291,6 +29291,13 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "owner-hitch-two-internet") {
+				std::string error;
+				if (!TestOwnerSilenceThreshold(4, &error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] row two_internet_client_loop_3s_keepalive_host_keeps_the_bound passed" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "seat-return-pacing") {
 				std::string error;
 				const bool passed = TestALateVoterResyncsAfterTheMajorityCloses(&error) && TestPlacementBarrierReleasesPeerBridging(&error);
@@ -29338,6 +29345,7 @@ namespace {
 		row([](std::string* why) { return TestOwnerSilenceThreshold(1, why); }, "client_6s_silence_silent_bridge_then_visible_held");
 		row([](std::string* why) { return TestOwnerSilenceThreshold(2, why); }, "client_loop_10s_keepalive_bridge_automatic_return");
 		row([](std::string* why) { return TestOwnerSilenceThreshold(3, why); }, "host_sim_3s_plane_bridge_survivor_tick_bound_automatic_return");
+		row([](std::string* why) { return TestOwnerSilenceThreshold(4, why); }, "two_internet_client_loop_3s_keepalive_host_keeps_the_bound");
 		row([](std::string* why) { return TestOwnerHostChange(0, why); }, "host_loss_directory_referee");
 		row([](std::string* why) { return TestOwnerHostChange(1, why); }, "host_loss_directory_down_unanimous_fallback");
 		row([](std::string* why) { return TestOwnerHostChange(2, why); }, "host_loss_direct_unanimous_survivors");

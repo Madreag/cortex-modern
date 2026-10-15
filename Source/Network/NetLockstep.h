@@ -658,6 +658,8 @@ namespace RTE {
 		uint32_t startsRelayedOnRepeat = 0; //!< Host: other remotes' starts re-sent to a peer that repeated its own.
 		uint32_t preStartFramesBuffered = 0; //!< Frames/checksums held until their sender's start arrived.
 		uint64_t checksumSubmissions = 0; //!< Local desync-check hashes the round took; a zero means the check never ran.
+		uint64_t decisionsRefusedForAuthority = 0; //!< Frame-group decisions set aside because this peer could not yet show their authority.
+		uint64_t returnsRefusedNotHeld = 0; //!< Returns set aside because this peer had not installed the hold they end.
 		uint64_t checksumSends = 0; //!< Those the transport carried to the peers.
 		uint64_t checksumCompares = 0; //!< Local/remote hash pairs actually compared, per remote.
 		uint64_t checksumMismatches = 0; //!< Compares that named a desync.
@@ -1661,13 +1663,15 @@ namespace RTE {
 		bool PeerFrameBlackout(uint64_t nowMs);
 		bool PeerInputAccepted(uint64_t frame, uint8_t owner = 0) const;
 		uint32_t PeerInputVoters(uint64_t frame, uint8_t owner) const;
-		bool PeerGroupHasAuthority(uint32_t voters) const;
-		/// The seats that vote now, with voters narrowed to them; zero when no voter is a retained seat.
-		uint32_t PeerVotingOwners(uint32_t& voters) const;
-		/// Whether voters are exactly half of the voting seats in a round whose ties the referee decides.
+		/// Whether voters decide for the group at a frame (the next one to prepare by default): a majority of the seats that vote there,
+		/// or on a tie the half the round's tie rule names.
+		bool PeerGroupHasAuthority(uint32_t voters, uint64_t frame = UINT64_MAX) const;
+		/// The seats that vote at a frame (the next one to prepare by default), with voters narrowed to them; zero when no voter is a retained seat.
+		uint32_t PeerVotingOwners(uint32_t& voters, uint64_t frame = UINT64_MAX) const;
 		/// Whether the round's referee decides its ties: a directory round of two or four retained seats; the host's half wins any other tie.
 		bool PeerTieRefereed() const;
-		bool PeerGroupIsRefereedHalf(uint32_t voters) const;
+		/// Whether voters are exactly half of the seats that vote at a frame in a round whose ties the referee decides.
+		bool PeerGroupIsRefereedHalf(uint32_t voters, uint64_t frame = UINT64_MAX) const;
 		/// The frame from which the whole group last played together at or before frame: the name every half gives the split after it.
 		uint64_t PeerSplitEpoch(uint64_t frame) const;
 		/// Whether these seats confirm a frame the given group of members played: a majority of them, or on a tie the half the round's tie
