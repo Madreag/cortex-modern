@@ -1556,6 +1556,7 @@ namespace RTE {
 		friend bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 		friend bool TestEveryHoldProducerWritesTheSeatLog(std::string* error);
 		friend bool TestAnOlderDeliveryLeavesTheNewerSeatState(std::string* error);
+		friend bool TestALateSimulationHandsAHeldSeatToTheAiAtItsFrame(std::string* error);
 		friend bool TestEveryGapStaysForASimulationBehind(std::string* error);
 		friend bool TestADeferredStopDoesNotExcuseASeatPastTheBound(std::string* error);
 		friend bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);

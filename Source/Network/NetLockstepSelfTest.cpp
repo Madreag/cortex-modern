@@ -378,6 +378,7 @@ namespace RTE {
 	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 	bool TestEveryHoldProducerWritesTheSeatLog(std::string* error);
 	bool TestAnOlderDeliveryLeavesTheNewerSeatState(std::string* error);
+	bool TestALateSimulationHandsAHeldSeatToTheAiAtItsFrame(std::string* error);
 	bool TestEveryGapStaysForASimulationBehind(std::string* error);
 	bool TestADeferredStopDoesNotExcuseASeatPastTheBound(std::string* error);
 	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
@@ -22377,6 +22378,40 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// The held seat's own peer, its simulation behind its commits, already holds the seat's return at 200 when it delivers the hold at 100:
+	// the frame at 100 still hands the seat to the AI, as it did on every peer that played it in time, and the frame at 200 hands it back.
+	bool TestALateSimulationHandsAHeldSeatToTheAiAtItsFrame(std::string* error) {
+		NetLockstepCoordinator late;
+		auto config = MakeCoordinatorConfig(2, 1, 0x9A21, 4, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 1; config.roundId = 44; config.authorityPeerId = 1;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A21);
+		config.resumeFromSnapshot = true;
+		late.m_Config = config; late.m_State = NetLockstepState::Running; late.m_RoundId = 44;
+		late.m_RemotePeerIds = {1, 3};
+		late.m_HostOrderedFrame = 200;
+		const NetGameSeatReclaim back{2, 0, 2, 2, 200, 4, 206};
+		late.m_ReclaimTransactions[2] = back;
+		NetLockstepReadyFrame held, returned;
+		held.frame = 100;
+		held.remoteCommands.push_back({1, NetGameSeatHold{2, 0, 1, 1, 100}});
+		returned.frame = 200;
+		returned.remoteCommands.push_back({1, back});
+		late.m_ReadyFrames.push_back(held);
+		late.m_ReadyFrames.push_back(returned);
+		NetLockstepReadyFrame first, second;
+		const bool popped = late.PopReadyFrame(first) && late.PopReadyFrame(second);
+		const auto names = [](const std::vector<uint8_t>& peers) { std::string text; for (uint8_t peer: peers) text += std::to_string(peer); return text; };
+		if (!popped) { *error = "a-late-simulation-hands-a-held-seat-to-the-ai-at-its-frame: the delivered hold and return could not be popped"; return false; }
+		if (names(first.aiHeldPeerIds) != "2") {
+			*error = "a-late-simulation-hands-a-held-seat-to-the-ai-at-its-frame: with its return at 200 already known, the hold at 100 handed seats [" +
+			         names(first.aiHeldPeerIds) + "] to the AI: the seat played on as a human where every peer that played 100 in time gave it to the AI";
+			return false;
+		}
+		if (names(second.reclaimedPeerIds) != "2") { *error = "a-late-simulation-hands-a-held-seat-to-the-ai-at-its-frame: the return at 200 handed back seats [" + names(second.reclaimedPeerIds) + "]"; return false; }
+		return true;
+	}
+
 	bool TestEveryGapStaysForASimulationBehind(std::string* error) {
 		// A survivor's simulation is paused at 99 while its plane commits seat 2's hold at 100, return at 160 (gap through 165), hold at 167,
 		// return at 200 (gap through 205) and hold at 203: the frames it has yet to apply keep every gap they fell in.
@@ -29126,7 +29161,7 @@ namespace {
 	int NetLockstepSelfTest::RunSeatLog() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		bool passed = true;
-		for (bool (*test)(std::string*): {TestEveryHoldProducerWritesTheSeatLog, TestAnOlderDeliveryLeavesTheNewerSeatState, TestEveryGapStaysForASimulationBehind,
+		for (bool (*test)(std::string*): {TestEveryHoldProducerWritesTheSeatLog, TestAnOlderDeliveryLeavesTheNewerSeatState, TestALateSimulationHandsAHeldSeatToTheAiAtItsFrame, TestEveryGapStaysForASimulationBehind,
 		                                   TestADeferredStopDoesNotExcuseASeatPastTheBound, TestALoneSurvivorCannotElectItself}) {
 			std::string error;
 			if (test(&error)) continue;
@@ -29446,6 +29481,7 @@ namespace {
 		row([](std::string* rowError) { return TestALaggingPeerReadsASeatAtItsFrame(rowError); }, "TestALaggingPeerReadsASeatAtItsFrame");
 		row([](std::string* rowError) { return TestEveryHoldProducerWritesTheSeatLog(rowError); }, "TestEveryHoldProducerWritesTheSeatLog");
 		row([](std::string* rowError) { return TestAnOlderDeliveryLeavesTheNewerSeatState(rowError); }, "TestAnOlderDeliveryLeavesTheNewerSeatState");
+		row([](std::string* rowError) { return TestALateSimulationHandsAHeldSeatToTheAiAtItsFrame(rowError); }, "TestALateSimulationHandsAHeldSeatToTheAiAtItsFrame");
 		row([](std::string* rowError) { return TestEveryGapStaysForASimulationBehind(rowError); }, "TestEveryGapStaysForASimulationBehind");
 		row([](std::string* rowError) { return TestADeferredStopDoesNotExcuseASeatPastTheBound(rowError); }, "TestADeferredStopDoesNotExcuseASeatPastTheBound");
 		row([](std::string* rowError) { return TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(rowError); }, "TestAReturnerSeesItsSeatHeldAgainBeforeItsStart");
