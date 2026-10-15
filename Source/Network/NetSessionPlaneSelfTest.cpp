@@ -78,6 +78,9 @@ namespace RTE {
 			// The slow subject is held once through the fault and stays held; no peer sets a decision aside for authority it will have
 			// or a return for a hold it has not installed; the playing seats keep the bound, a two-seat internet round included.
 			bool heldOnce = false, noRefusals = false, strictBound = false;
+			// This seat goes silent for silentVoterMs from the moment the leader first votes the subject's return: it never votes that return (0: none).
+			uint8_t silentVoter = 0;
+			uint64_t silentVoterMs = 0;
 		};
 		struct Wire;
 		struct Hub {
@@ -91,7 +94,9 @@ namespace RTE {
 			bool DuringFault() const { return now >= faultAt && now < faultEnd; }
 			uint64_t refaultAt = UINT64_MAX, refaultEnd = 0;
 			bool InRefault() const { return now >= refaultAt && now < refaultEnd; }
+			uint64_t silentAt = UINT64_MAX;
 			bool Split(uint8_t a, uint8_t b) const {
+				if (row.silentVoter && a != b && (a == row.silentVoter || b == row.silentVoter) && now >= silentAt && now < silentAt + row.silentVoterMs) return true;
 				if (!DuringFault() || row.frozen || row.blackout || row.slowPercent || !row.gapMs) return false;
 				if (row.secondSubject && now >= faultAt + row.secondAfterMs && (a == row.secondSubject || b == row.secondSubject)) return true;
 				if (row.tie) return (a <= 2) != (b <= 2);
@@ -317,6 +322,10 @@ namespace RTE {
 						}
 					}(hub, decision);
 				}
+				// The voter falls silent as the leader sends its first proposal of the subject's return, so that return can never gather its vote.
+				if (hub.row.silentVoter && hub.silentAt == UINT64_MAX && owner == 1 && NetHostMigrationCodec::Decode(bytes, key, decision) &&
+				    decision.type == NetHostMigrationMessageType::PeerBridge && decision.preparedFrame == 1 &&
+				    std::find(decision.members.begin(), decision.members.end(), hub.row.subject) != decision.members.end()) hub.silentAt = hub.now;
 				if (hub.row.returnByTailOnly && other->owner == hub.row.subject && NetHostMigrationCodec::Decode(bytes, key, decision) &&
 				    (decision.type == NetHostMigrationMessageType::PeerBridge || decision.type == NetHostMigrationMessageType::PeerBridgeCommit) && decision.preparedFrame == 1 &&
 				    std::find(decision.members.begin(), decision.members.end(), hub.row.subject) != decision.members.end()) { ++hub.droppedReturns; return true; }
@@ -531,7 +540,7 @@ namespace RTE {
 				if (hub.row.refereeDecides) return hub.heldSeat != 0 && peer == hub.heldSeat;
 				if (hub.row.internet && hub.row.directoryDown) return true;
 				if (hub.row.seats == 2 && (!hub.row.internet || hub.row.directoryBoth)) return peer != 1;
-				const bool second = hub.row.secondSubject && peer == hub.row.secondSubject;
+				const bool second = (hub.row.secondSubject && peer == hub.row.secondSubject) || (hub.row.silentVoter && peer == hub.row.silentVoter);
 				return hub.row.tie ? peer >= 3 || second : peer == hub.row.subject || second || peer == hub.row.lateReceiptsFrom;
 			}
 			bool CheckCommittedInputs(const NetLockstepReadyFrame& ready, uint8_t observer, std::string& error) {
@@ -703,7 +712,8 @@ namespace RTE {
 					const uint64_t highest = std::max_element(worlds.begin(), worlds.end(), [](const World& a, const World& b) { return a.applied < b.applied; })->applied;
 					for (uint8_t id = 1; id <= hub.row.seats; ++id) if (!caughtAt[id - 1] && worlds[id - 1].applied + 1 >= highest && common > 0 &&
 					    !peers[id - 1]->HasHeldAISeat(hub.ReturningSeat()) && !Bridges(*peers[id - 1]).contains(hub.ReturningSeat()) &&
-					    (!hub.row.secondSubject || (!peers[id - 1]->HasHeldAISeat(hub.row.secondSubject) && !Bridges(*peers[id - 1]).contains(hub.row.secondSubject)))) caughtAt[id - 1] = hub.now;
+					    (!hub.row.secondSubject || (!peers[id - 1]->HasHeldAISeat(hub.row.secondSubject) && !Bridges(*peers[id - 1]).contains(hub.row.secondSubject))) &&
+					    (!hub.row.silentVoter || (hub.silentAt != UINT64_MAX && !peers[id - 1]->HasHeldAISeat(hub.row.silentVoter) && !Bridges(*peers[id - 1]).contains(hub.row.silentVoter)))) caughtAt[id - 1] = hub.now;
 				}
 				++hub.now; return true;
 			}
@@ -718,6 +728,7 @@ namespace RTE {
 				while (hub.refaultEnd && hub.now <= hub.refaultEnd + c_TestReturnAllowanceMs + 4000) if (!Step(error)) return false;
 				if (row.asymmetricBridge && row.asymmetricBridge < 3 && !hub.asymmetricReleased) { error = "the asymmetric input lever did not force both pending bridge votes"; return false; }
 				if (row.returnByTailOnly && !hub.droppedReturns) { error = "the tail-only lever withheld no proposal or certificate of the subject's return"; return false; }
+				if (row.silentVoter && hub.silentAt == UINT64_MAX) { error = "the leader never voted the subject's return, so no voter fell silent at it"; return false; }
 				if (row.heldOnce) {
 					const auto boundaries = hub.bridgeBoundaries.find(row.subject);
 					const auto holds = boundaries == hub.bridgeBoundaries.end() ? 0 : std::count_if(boundaries->second.begin(), boundaries->second.end(), [](const auto& change) { return change.second; });
@@ -1534,6 +1545,9 @@ namespace RTE {
 		auto lateReferee = gap("two_internet_late_joiner_takes_every_decision_with_an_800ms_referee", 2, 20000); lateReferee.seats = 2;
 		lateReferee.internet = lateReferee.directoryBoth = lateReferee.noRefusals = true; lateReferee.slowPercent = 95;
 		lateReferee.rttMs = lateReferee.otherRttMs = 100; lateReferee.refereeLatencyMs = 800; rows.push_back(lateReferee);
+		// A voter silent from the return's first vote: the members that play neither wait on its vote nor past the bound.
+		auto silentVoter = gap("held_seat_return_meets_a_silent_voter", 2, 10000); silentVoter.seats = 4; silentVoter.silentVoter = 4; silentVoter.silentVoterMs = 2000;
+		silentVoter.postReturnMs = 6000; rows.push_back(silentVoter);
 		auto farReturn = gap("one_return_for_a_held_seat_over_150ms_round_trips", 2, 10000); farReturn.rttMs = farReturn.otherRttMs = 150; rows.push_back(farReturn);
 		auto inTurn = gap("three_seats_second_joiner_drops_while_the_first_is_held", 2, 10000); inTurn.seats = 3; inTurn.secondSubject = 3; inTurn.secondAfterMs = 4000; rows.push_back(inTurn);
 		auto heldAgain = gap("two_internet_joiner_held_again_while_catching_up", 2, 3000); heldAgain.seats = 2; heldAgain.internet = heldAgain.directoryBoth = true;
