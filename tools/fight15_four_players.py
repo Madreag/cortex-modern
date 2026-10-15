@@ -125,7 +125,7 @@ def turn(peer):
         steps += watch(other)
     # The soldier comes down by rocket, the player takes it and fires (a shot passes the shooter's own side), then goes back to
     # its brain in the bunker, where the AI's attack does not reach it.
-    steps += buy(peer, soldier=SOLDIER[peer])
+    steps += buy(peer, soldier=SOLDIER[peer], rebuy_lost=True)
     steps += [dict(op="actor_next_until", input_player=0, preset="Base.rte/Brain Case"),
               dict(op="wait_scene", input_player=0, equals=dict(preset="Base.rte/Brain Case")),
               dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset="Base.rte/Brain Case", brain_count=len(PLAYERS))),

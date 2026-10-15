@@ -119,6 +119,25 @@ class FightEndCheckTest(unittest.TestCase):
                 self.assertEqual(checks[-1]["equals"].get("actor_selection"), False, (name, script, checks[-1]))
 
 
+class LostSoldierTest(unittest.TestCase):
+    def test_a_soldier_lost_before_its_player_takes_it_is_bought_again(self):
+        # 1 of 5 turns on 10-14: the fight killed a bought soldier during its player's held turn and the run failed on it.
+        for name in ("fight15-s11", "fight15-s12", "fight15-s13"):
+            document = peers.scene(name)
+            for script, text in document["scripts"].items():
+                if not script.endswith(".probe"):
+                    continue
+                steps = json.loads(text)["steps"]
+                selects = [(index, step) for index, step in enumerate(steps) if step.get("op") == "actor_next_until" and step["preset"] != "Base.rte/Brain Case"]
+                self.assertTrue(selects, (name, script))
+                for index, step in selects:
+                    start = steps[index - step["lost_rebuy_back"]]
+                    # Back to the press that opens the pie for the purchase, a bounded number of times.
+                    self.assertEqual((start["op"], start.get("button"), start.get("down")), ("game_mouse", "right", True), (name, script, index))
+                    self.assertEqual(steps[index - step["lost_rebuy_back"] + 2], {"op": "wait_scene", "input_player": 0, "equals": {"pie_visible": True}})
+                    self.assertEqual(step["lost_rebuy_attempts"], 3)
+
+
 class SceneAccepted(Exception):
     pass
 
