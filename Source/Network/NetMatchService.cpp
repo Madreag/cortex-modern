@@ -5236,10 +5236,11 @@ static std::string ResyncSaveName() {
 		m_WorldJoin.NoteSentInputThrough(sentThrough);
 		for (const auto& peer: ready) {
 			live.push_back(peer.transportPeerId);
-			if (m_Coordinator->UsesTransportPeer(peer.transportPeerId)) continue;
+			const uint8_t member = static_cast<uint8_t>(peer.assignedPeerId + 1);
+			const bool inRound = m_Coordinator->UsesTransportPeer(peer.transportPeerId);
+			if (!DrivesRejoinLink(inRound, m_Coordinator->HasHeldAISeat(member))) continue;
 			const NetWorldJoinSession* open = m_WorldJoin.FindSession(peer.transportPeerId);
 			if (open && open->phase != NetWorldJoinPhase::Active) continue;
-			const uint8_t member = static_cast<uint8_t>(peer.assignedPeerId + 1);
 			const bool opened = m_Coordinator->IsSeatReleased(member);
 			if (!m_Coordinator->HasHeldAISeat(member) && !opened) continue;
 			// A returner told this round is over waits for the next round's start, which offers its seat again.
@@ -5254,7 +5255,7 @@ static std::string ResyncSaveName() {
 				(void)m_Runner->GetLobbySession().BindWorldTransferRemote(member, holder, nullptr);
 				continue;
 			}
-			if (open) continue;
+			if (!OffersImageOnLink(inRound, open != nullptr)) continue;
 			// A seat the round started held carries the ticket's incarnation in the round already, so its return must be the next one.
 			if (const auto& known = m_Coordinator->GetConfig().peerIncarnations; known.contains(member)) {
 				const uint32_t returning = ImageReturnIncarnation(incarnation, known.at(member));
@@ -5387,7 +5388,8 @@ static std::string ResyncSaveName() {
 		// The round's own hold of a playing seat whose link stays open is the roster's too, and so is that seat's return in place.
 		for (const uint8_t peer: m_ReconnectHost.PlayingPeers())
 			if (m_Coordinator->HasHeldAISeat(peer) && m_Coordinator->IsSeatUnderAI(peer, next - 1) && m_Coordinator->IsSeatHoldVisible(peer))
-				m_ReconnectHost.NoteSeatHeldInPlace(peer, peer == m_Coordinator->GetHostPeerId() ? NetSeatHoldCause::OwnSeat : NetSeatHoldCause::LateStream);
+				m_ReconnectHost.NoteSeatHeldInPlace(peer, peer == m_Coordinator->GetHostPeerId() ? NetSeatHoldCause::OwnSeat :
+					    m_Coordinator->IsHeldAsSlowMachine(peer) ? NetSeatHoldCause::Capacity : NetSeatHoldCause::LateStream);
 		for (const uint8_t peer: m_ReconnectHost.HeldInPlacePeers())
 			if (m_Coordinator->SeatPlaysAtFrame(peer, next - 1)) m_ReconnectHost.NoteSeatPlaysAgain(peer);
 	}

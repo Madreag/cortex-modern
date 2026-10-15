@@ -109,10 +109,8 @@ namespace RTE {
 		/// Whether the capture rate admits a frame at this wall time, advancing the pacer when it does.
 		bool DueAt(long long wallMS);
 		void WriterLoop();
-#if defined(__APPLE__) || defined(__linux__)
 		void DrainTextureReadbacks(bool wait);
 		std::deque<QueuedFrame> m_PendingTextureFrames; //!< Render-context transfers awaiting their fence; original metadata stays with each copy.
-#endif
 		/// Encodes the frame; returns its index row, which the caller files in frame order.
 		std::string WriteFrame(const QueuedFrame& frame);
 		/// Streams the frame's timestamp and pixels; the encoder holds its previous picture across empty slots.
@@ -123,6 +121,8 @@ namespace RTE {
 		bool m_Enabled = false;
 		bool m_Finished = false;
 		bool m_ScriptedReadback = false;
+		/// A frame's copy is collected on the render context, never through a writer's shared context (test lever CC_TEST_RECORDER_SHARED_CONTEXT=1 on Windows keeps the shared one).
+		bool m_FencedReadback = true;
 		std::function<void()> m_FinishAction;
 		int m_Fps = c_DefaultFps;
 		std::size_t m_QueueBound = c_DefaultQueueBound;

@@ -1,3 +1,4 @@
+#include <chrono>
 #include <cstdlib>
 #include "WindowMan.h"
 #include "RTEError.h"
@@ -819,6 +820,11 @@ void WindowMan::UploadFrame() {
 }
 
 void WindowMan::Present() {
+	const auto swapBegan = std::chrono::steady_clock::now();
+	struct SwapClock {
+		double& ms; std::chrono::steady_clock::time_point began;
+		~SwapClock() { ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count(); }
+	} swapClock{m_LastSwapMs, swapBegan};
 	if (m_MultiDisplayWindows.empty()) {
 		SDL_GL_SwapWindow(m_PrimaryWindow.get());
 	} else {

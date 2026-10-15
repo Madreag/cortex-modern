@@ -257,9 +257,10 @@ namespace RTE {
 		m_EncoderCodec = codec && *codec ? codec : "libx264";
 		const char* probeScript = std::getenv("CC_TEST_NET_UI_SCRIPT");
 		m_ScriptedReadback = (probeScript && *probeScript) || (scriptedInput && !m_EncoderPath.empty());
-		// Scripted captures prepare their shared context before the first rendered frame.
 #if defined(_WIN32)
-		if (m_ScriptedReadback) {
+		m_FencedReadback = std::getenv("CC_TEST_RECORDER_SHARED_CONTEXT") == nullptr;
+		// Scripted captures through a shared context prepare it before the first rendered frame.
+		if (m_ScriptedReadback && !m_FencedReadback) {
 			const int64_t cpuBefore = ThreadCpuNanoseconds();
 			std::string readbackError;
 			m_ReadbackContext = FrameReadbackContext::Create(readbackError);
@@ -328,24 +329,18 @@ namespace RTE {
 
 	unsigned char* FrameRecorder::BeginFrame(long long wallMS, std::size_t bytes) {
 		if (!m_Enabled || m_StagingHeld || bytes == 0) return nullptr;
-#if defined(__APPLE__) || defined(__linux__)
 		if (!m_PendingTextureFrames.empty()) {
 			HarnessCost::SimulationSpan readbackCost;
 			DrainTextureReadbacks(false);
 			HarnessCost::Charge(HarnessCost::Recorder, readbackCost.Stop());
 		}
-#endif
 		std::unique_lock<std::mutex> lock(m_Mutex);
 		++m_Submitted;
 		if (!DueAt(wallMS)) {
 			++m_RateLimited;
 			return nullptr;
 		}
-		if (m_Queue.size()
-#if defined(__APPLE__) || defined(__linux__)
-		    + m_PendingTextureFrames.size()
-#endif
-		    >= m_QueueBound) {
+		if (m_Queue.size() + m_PendingTextureFrames.size() >= m_QueueBound) {
 			++m_Dropped;
 			m_PendingDrops.emplace_back(wallMS, m_Admitted - 1);
 			m_Wake.notify_one();
@@ -366,18 +361,17 @@ namespace RTE {
 
 	bool FrameRecorder::StageTextureReadback(unsigned int texture, int width, int height, std::string& error) {
 		if (!m_StagingHeld) { error = "no admitted frame"; return false; }
-#if defined(__APPLE__) || defined(__linux__)
-		// A fenced copy collected on this context by a later frame: the frame never waits for the GPU to finish drawing it.
 		m_StagedTextureReadback = true;
-		m_StagedReadback = FrameReadbackContext::Submit(texture, width, height, error, GL_BGRA);
-		return m_StagedReadback != nullptr;
-#else
-		m_StagedTextureReadback = true;
+		if (m_FencedReadback) {
+			// A fenced copy collected on this context by a later frame: the frame never waits for the GPU to finish drawing it, and no
+			// other context touches the render context's objects (a writer's shared context held the Windows swap behind its reads).
+			m_StagedReadback = FrameReadbackContext::Submit(texture, width, height, error, GL_BGRA);
+			return m_StagedReadback != nullptr;
+		}
 		if (!m_ReadbackContext) m_ReadbackContext = FrameReadbackContext::Create(error);
 		if (!m_ReadbackContext) return false;
 		m_StagedReadback = m_ReadbackContext->Submit(texture, width, height, error);
 		return m_StagedReadback != nullptr;
-#endif
 	}
 
 	std::string FrameRecorder::ReadbackError() const {
@@ -402,16 +396,12 @@ namespace RTE {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			frame.index = m_NextIndex++;
-#if defined(__APPLE__) || defined(__linux__)
-			if (frame.textureReadback) m_PendingTextureFrames.push_back(std::move(frame));
-			else
-#endif
-			m_Queue.push_back(std::move(frame));
+			if (frame.textureReadback && m_FencedReadback) m_PendingTextureFrames.push_back(std::move(frame));
+			else m_Queue.push_back(std::move(frame));
 		}
 		m_Wake.notify_one();
 	}
 
-#if defined(__APPLE__) || defined(__linux__)
 	void FrameRecorder::DrainTextureReadbacks(bool wait) {
 		while (!m_PendingTextureFrames.empty()) {
 			auto& pending = m_PendingTextureFrames.front();
@@ -429,7 +419,6 @@ namespace RTE {
 			m_Wake.notify_one();
 		}
 	}
-#endif
 
 	void FrameRecorder::WriterLoop() {
 		const bool profileReadback = std::getenv("CCCP_TEST_READBACK_TIMING") != nullptr;
@@ -611,11 +600,11 @@ namespace RTE {
 			m_StagedTextureReadback = false;
 			m_Staging.clear();
 		}
-#if defined(__APPLE__) || defined(__linux__)
-		const int64_t finalReadbackCPU = ThreadCpuNanoseconds();
-		DrainTextureReadbacks(true);
-		HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - finalReadbackCPU);
-#endif
+		if (!m_PendingTextureFrames.empty()) {
+			const int64_t finalReadbackCPU = ThreadCpuNanoseconds();
+			DrainTextureReadbacks(true);
+			HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - finalReadbackCPU);
+		}
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_Stopping = true;
