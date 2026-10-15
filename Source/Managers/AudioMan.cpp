@@ -3254,17 +3254,19 @@ std::string AudioMan::CheckpointBackendSelfTestMismatch() {
 			// A sound saved through its frozen page names the channels it played at the boundary, whatever the game plays after.
 			auto played = std::make_unique<SoundContainer>();
 			for (int identity: {101, 102, 103}) played->m_PlayingChannels.insert(identity);
+			played->AddToGroup("checkpoint-selftest-before");
 			const std::string before = played->SaveCheckpoint();
 			const auto playedPages = CheckpointNativeStorage::Prepare();
 			for (const auto& part: playedPages) part->Arm();
 			played->m_PlayingChannels.clear();
 			for (int identity = 200; identity < 264; ++identity) played->m_PlayingChannels.insert(identity);
+			for (int group = 0; group < 64; ++group) played->AddToGroup("checkpoint-selftest-after-" + std::to_string(group));
 			std::string frozen;
 			{
 				CheckpointNativeStorage::ReadScope read(playedPages);
 				try { frozen = CheckpointNativeStorage::Source(played.get())->SaveCheckpoint(); } catch (const std::exception&) {}
 			}
-			if (frozen != before) return "a sound saved through its frozen page names the channels it plays after the boundary";
+			if (frozen != before) return "a sound saved through its frozen page names the channels or groups it has after the boundary";
 		}
 		// The manager's tables predate every world's storage; a capture prepared as the autosave prepares one still reads them.
 		const SoundObservationKey key{7, 11, 13, 17, 19};
