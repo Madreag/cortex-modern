@@ -1995,7 +1995,7 @@ namespace RTE {
 		const char* m_PrivateBaseHeldReason = nullptr; //!< Host: why the last pass could not take a base, reported once per reason.
 		std::string m_PrivateBaseRefusal; //!< Host: why the base this attempt asked for was refused or not taken; empty while it can still come.
 		bool m_PrivateBaseRefusalLasting = false; //!< Host: that refusal will not pass by asking again.
-		bool m_InjectedJoinRefusal = false; //!< Test lever CC_FAULT_INJECT=join_capture_refused has refused its one base.
+		bool m_InjectedJoinRefusal = false; //!< Test lever CC_FAULT_INJECT=join_capture_refused or join_capture_out_of_memory has refused its one base.
 		void NotePrivateBaseRefusalLocked(const ActivityMan::AutosaveRefusal& refusal);
 		/// Drops a returning seat's base request once no returner waits for it, so a refused or departed return stops the captures it asked.
 		void DropUnwantedPrivateBaseLocked();

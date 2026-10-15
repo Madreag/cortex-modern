@@ -708,7 +708,41 @@ struct ActivityMan::PreparedAutosave {
 	    [this](const Header& header, const CheckpointLua::Boundary& boundary) { return Complete(header, boundary); },
 	    [this](const Header& header, std::exception_ptr error) { Refused(header, error); }) {}
 
+	size_t refusedPreparations = 0; //!< Preparations refused since the last one that succeeded; only the saver touches these.
+	bool exhaustedPreparation = false; //!< Test lever: the next preparation runs out of memory.
+	std::string lastPreparationRefusal;
+	std::chrono::steady_clock::time_point refusedSince, refusalNamedAt;
+	bool afterRefusedCapture = false;
+
+	// A refused preparation is retried every tick, so each new reason is named once and the success that ends them is counted.
 	std::unique_ptr<CheckpointLua::Boundary> Prepare() {
+		const auto began = std::chrono::steady_clock::now();
+		const bool named = std::exchange(afterRefusedCapture, false);
+		if (named) System::PrintDiagnosticLine("[autosave] inventory preparation began after the refused capture");
+		try {
+			if (std::exchange(exhaustedPreparation, false)) throw std::bad_alloc();
+			auto boundary = PrepareBoundary();
+			const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
+			if (named || refusedPreparations || ms >= 2000) System::PrintDiagnosticLine(std::format("[autosave] inventory prepared in {} ms after {} refused preparations", ms, refusedPreparations));
+			refusedPreparations = 0; lastPreparationRefusal.clear();
+			return boundary;
+		} catch (const std::exception& failure) {
+			if (!refusedPreparations++) refusedSince = began;
+			if (lastPreparationRefusal != failure.what()) {
+				lastPreparationRefusal = failure.what();
+				refusalNamedAt = began;
+				System::PrintDiagnosticLine(std::format("[autosave] inventory preparation refused reason={}", lastPreparationRefusal));
+			} else if (began - refusalNamedAt >= std::chrono::seconds(10)) {
+				// A refusal that lasts is named again, so the log shows the retries going on.
+				refusalNamedAt = began;
+				System::PrintDiagnosticLine(std::format("[autosave] inventory preparation still refused after {} attempts in {} s reason={}", refusedPreparations,
+				    std::chrono::duration_cast<std::chrono::seconds>(began - refusedSince).count(), lastPreparationRefusal));
+			}
+			throw;
+		}
+	}
+
+	std::unique_ptr<CheckpointLua::Boundary> PrepareBoundary() {
 		using Root = CheckpointLua::Boundary::Root;
 		std::vector<Root> roots;
 		const auto add = [&]<class T>(const T& value) { roots.push_back(Root::Of(value)); };
@@ -781,6 +815,7 @@ struct ActivityMan::PreparedAutosave {
 	}
 
 	void Refused(const Header& header, std::exception_ptr error) noexcept {
+		afterRefusedCapture = true;
 		try {
 			owner.NoteAutosaveVerdict(header.tick, false, header.written->verdict);
 			try { std::rethrow_exception(error); }
@@ -796,6 +831,10 @@ struct ActivityMan::PreparedAutosave {
 	bool Complete(const Header& header, const CheckpointLua::Boundary& boundary) {
 		if (uint64_t refused = header.tick; header.tick != 0 && owner.m_RefusedWriterTick.compare_exchange_strong(refused, 0, std::memory_order_relaxed))
 			throw std::runtime_error("an injected refusal");
+		if (uint64_t exhausted = header.tick; header.tick != 0 && owner.m_ExhaustedWriterTick.compare_exchange_strong(exhausted, 0, std::memory_order_relaxed)) {
+			exhaustedPreparation = true;
+			throw std::bad_alloc();
+		}
 		if (const char* phases = std::getenv("CCCP_CHECKPOINT_PHASES"); phases && std::string_view(phases) == "1") {
 			size_t ranges = 0, bytes = 0, copied = 0, fenced = 0;
 			for (const auto& pages: boundary.NativeViews().pages) {
@@ -812,8 +851,9 @@ struct ActivityMan::PreparedAutosave {
 				previousFaults += heap.PreviousFaults(); previousFaultUs += heap.PreviousFaultUs();
 			}
 			// The previous capture's copy-on-write faults on the Lua heaps, which its whole save window paid for.
-			System::PrintDiagnosticLine(std::format("[checkpoint-arm-split] tick={} native_ranges={} native_bytes={} native_arm_us={} native_copied_pages={} native_fenced_pages={} lua_heaps={} lua_arm_us={} lua_bytes={} lua_copy_us={} lua_faults={} lua_previous_faults={} lua_previous_fault_us={} {}",
-			    header.tick, ranges, bytes, nativeUs, copied, fenced, boundary.StateCount(), luaUs, luaBytes, luaCopyUs, luaFaults, previousFaults, previousFaultUs, CheckpointNativeStorage::InventoryCensus()));
+			System::PrintDiagnosticLine(std::format("[checkpoint-arm-split] tick={} native_ranges={} native_bytes={} native_arm_us={} native_copied_pages={} native_fenced_pages={} lua_heaps={} lua_arm_us={} lua_bytes={} lua_copy_us={} lua_faults={} lua_previous_faults={} lua_previous_fault_us={} lua_copy_mapped_bytes={} lua_copy_idle_bytes={} {}",
+			    header.tick, ranges, bytes, nativeUs, copied, fenced, boundary.StateCount(), luaUs, luaBytes, luaCopyUs, luaFaults, previousFaults, previousFaultUs,
+			    CheckpointLua::HeapOwner::MappedCopyBytes(), CheckpointLua::HeapOwner::IdleCopyBytes(), CheckpointNativeStorage::InventoryCensus()));
 		}
 		CheckpointNativeStorage::ReadScope pages(boundary.NativeViews());
 		RandomGenerator::CheckpointScope random;
@@ -1892,9 +1932,9 @@ bool ActivityMan::SubmitCheckpointArchiveImage(const std::string& fileName, cons
 				const int64_t simUs = image->captureClock->SimulationUs();
 				const int64_t totalUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - image->captureClock->started).count();
 				if (image->nativePages) native = image->nativePages->Cost();
-				System::PrintDiagnosticLine(std::format("[checkpoint-completion] tick={} sim_call_us={} total_capture_us={} native_boundary_us={} native_copy_worker_us={} native_sim_fault_observer_us={} native_other_fault_observer_us={} native_sim_faults={} native_other_faults={} native_bytes={} serializer_off_sim={}",
+				System::PrintDiagnosticLine(std::format("[checkpoint-completion] tick={} sim_call_us={} total_capture_us={} native_boundary_us={} native_copy_worker_us={} native_sim_fault_observer_us={} native_other_fault_observer_us={} native_sim_faults={} native_other_faults={} native_bytes={} native_committed_bytes={} serializer_off_sim={}",
 				    tick, simUs, totalUs, image->nativeBoundaryUs, native.workerUs, native.simFaultUs, native.otherFaultUs,
-				    native.simFaults, native.otherFaults, native.bytes, std::this_thread::get_id() != simThread));
+				    native.simFaults, native.otherFaults, native.bytes, native.committedBytes, std::this_thread::get_id() != simThread));
 				int64_t simPartsUs = 0;
 				if (image->captureClock->call) {
 					const std::array names{"prepare", "native_pages", "values", "structure", "globals", "handoff", "return_tail"};

@@ -2007,7 +2007,7 @@ void UInputMan::PrepareCheckpointValues() {
 	auto keyboards = m_KeyboardStates;
 	auto mice = m_MouseStates;
 	auto previous = s_PrevJoystickStates, changed = s_ChangedJoystickStates;
-	m_KeyboardStates.swap(keyboards); m_MouseStates.swap(mice);
+	m_KeyboardStates = std::move(keyboards); m_MouseStates = std::move(mice);
 	s_PrevJoystickStates.swap(previous); s_ChangedJoystickStates.swap(changed);
 }
 
