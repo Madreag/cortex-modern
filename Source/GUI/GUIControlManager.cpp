@@ -1882,6 +1882,20 @@ bool GUICheckpoint::RunSelfTest() {
 				proxyPixels = SaveBitmap(frozenImage) == pixels;
 			} catch (const std::exception&) {}
 			check("saved_frozen_image_pixels_come_from_its_snapshot", proxyPixels);
+			// The same header saved while the read names another snapshot, as a frozen menu's list is saved.
+			bool ownerPixels = false;
+			try {
+				const BITMAP* frozenImage = snapshot->Freeze(imageAddress);
+				auto frozenRoots = snapshot->ReadValues();
+				const auto views = CheckpointNativeStorage::CurrentViews();
+				frozenRoots.insert(frozenRoots.end(), views.roots.begin(), views.roots.end());
+				const CheckpointNativeStorage::ReadScope frozenRead({true, views.pages, frozenRoots, views.privateValues, views.owner});
+				auto elsewhere = std::make_unique<CheckpointNativeSnapshot>();
+				elsewhere->SealBoundary();
+				const CheckpointNativeSnapshot::ReadScope named(elsewhere.get(), false);
+				ownerPixels = SaveBitmap(frozenImage) == pixels;
+			} catch (const std::exception&) {}
+			check("saved_frozen_image_pixels_come_from_their_owner_under_another_read", ownerPixels);
 			BITMAP* savedImage = snapshot->ReadBitmap(imageAddress);
 			auto savedScreen = std::make_unique<AllegroScreen>(savedImage);
 			auto savedInput = std::make_unique<GUIInputWrapper>(0);
