@@ -390,7 +390,7 @@ bool FrameMan::SetFeelRecordDirectory(const std::string& path) {
 	}
 	else if (!s_Feel.out.Open(raw.string())) return false;
 	s_Feel.directory = path;
-	FeelWrite({{"type", "schema"}, {"version", 1}, {"clock", "steady_clock milliseconds"}, {"cpu_clock", "GetProcessTimes kernel+user milliseconds"},
+	FeelWrite({{"type", "schema"}, {"version", 1}, {"clock", "RTE::SteadyClock milliseconds (monotonic)"}, {"cpu_clock", "GetProcessTimes kernel+user milliseconds"},
 	    {"presentation_boundary", "UploadFrame return (upload, swap, and frame housekeeping)"}, {"pixels_per_meter", c_PPM},
 	    {"event_clock", "observation interval, not a mixer callback timestamp"}, {"event_start_capacity", 64}});
 	return true;
