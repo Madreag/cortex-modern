@@ -81,6 +81,8 @@ namespace RTE {
 			// This seat goes silent for silentVoterMs from the moment the leader first votes the subject's return: it never votes that return (0: none).
 			uint8_t silentVoter = 0;
 			uint64_t silentVoterMs = 0;
+			// The subject returns within this long after the fault, then stays returned for twenty seconds (0: the usual allowance).
+			uint64_t returnWithinMs = 0;
 		};
 		struct Wire;
 		struct Hub {
@@ -786,7 +788,10 @@ namespace RTE {
 					}
 					const uint8_t held = row.refereeDecides ? hub.heldSeat : row.seats == 2 && (!row.internet || row.directoryBoth) ? 2 : row.subject;
 					if (peers[id - 1]->HasHeldAISeat(held) || Bridges(*peers[id - 1]).contains(held)) { error = "the returning human seat stayed bridged after catch-up"; return false; }
-					if (row.gapMs <= 3000 && !row.refaultPercent && caughtAt[id - 1] > hub.faultEnd + c_TestReturnAllowanceMs) { error = "return exceeded the spike plus its catch-up allowance"; return false; }
+					if (row.gapMs <= 3000 && !row.refaultPercent && caughtAt[id - 1] > hub.faultEnd + (row.returnWithinMs ? row.returnWithinMs : c_TestReturnAllowanceMs)) {
+						error = "return exceeded the spike plus its catch-up allowance"; return false;
+					}
+					if (row.returnWithinMs && hub.now < caughtAt[id - 1] + 20000) { error = "the run ended before the returned seat played twenty seconds back"; return false; }
 				}
 				if (row.gapMs == 150 && shortGapSubstitutes) { error = "a spike inside the input delay committed a substitute"; return false; }
 				if (row.gapMs == 150 && maxWait[row.subject - 1]) { error = "a spike inside the input delay hitched the spiking player's view"; return false; }
@@ -1541,6 +1546,15 @@ namespace RTE {
 		// The field's slow player: held for a slow spell, then able to catch up only a little faster than the round - it returns once, caught up.
 		auto slowSpell = slowTwo("two_internet_joiner_held_for_a_slow_spell_catches_up_at_115_percent", 80); slowSpell.catchUpPercent = 115;
 		slowSpell.postReturnMs = 35000; rows.push_back(slowSpell);
+		// A seat that catches up only a little faster than the round and then keeps its rate returns and stays: what it still trails by
+		// once caught up is the round trip of its tail and report, at any internet round trip.
+		const auto lagged = [&](const char* name, uint32_t rtt, uint32_t catchUp, uint64_t gapMs, uint64_t withinMs) {
+			Case row = gap(name, 2, gapMs); row.seats = 3; row.rttMs = row.otherRttMs = rtt; row.catchUpPercent = catchUp; row.heldOnce = true;
+			row.returnWithinMs = withinMs; row.postReturnMs = withinMs + 16000; return row;
+		};
+		rows.push_back(lagged("joiner_catching_up_at_105_percent_returns_over_100ms", 100, 105, 800, 20000));
+		rows.push_back(lagged("joiner_catching_up_at_105_percent_returns_over_200ms", 200, 105, 800, 20000));
+		rows.push_back(lagged("joiner_catching_up_at_102_percent_returns_over_100ms", 100, 102, 600, 40000));
 		// The W+L shape: a joiner a little slower than the host over the internet, its referee answering as late as the directory does.
 		auto lateReferee = gap("two_internet_late_joiner_takes_every_decision_with_an_800ms_referee", 2, 20000); lateReferee.seats = 2;
 		lateReferee.internet = lateReferee.directoryBoth = lateReferee.noRefusals = true; lateReferee.slowPercent = 95;
