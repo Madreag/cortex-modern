@@ -93,7 +93,9 @@ namespace RTE {
 		bool s_WorldCatchUpHeld = false;
 		int s_WorldCatchUpBudget = 0;
 		RTE::SteadyClock::time_point s_WorldCatchUpFrameBegan;
+		RTE::SteadyClock::time_point s_WorldCatchUpLastGrant;
 		std::chrono::microseconds s_WorldCatchUpFrameTime{0};
+		std::chrono::microseconds s_WorldCatchUpTickTime{0}; //!< What a tail tick took lately, from one grant to the next in a frame.
 		int s_OwnSeatCatchUpBudget = 0;
 		uint64_t s_PeerCatchUpBudgetAtMs = 0;
 		double s_PeerCatchUpCredit = 0;
@@ -1567,9 +1569,17 @@ namespace RTE {
 		if (!WorldCatchUpMayGrant(nextSimTick, s_WorldCatchUpBudget)) {
 			return false;
 		}
-		if (c_WorldCatchUpTicksPerRealFrame - s_WorldCatchUpBudget >= c_WorldCatchUpMinTicksPerRealFrame && RTE::SteadyClock::now() - s_WorldCatchUpFrameBegan >= s_WorldCatchUpFrameTime) {
+		// The next tick is granted only when it still fits: a grant at the budget's edge ran a whole tick past it.
+		const auto now = RTE::SteadyClock::now();
+		const int granted = c_WorldCatchUpTicksPerRealFrame - s_WorldCatchUpBudget;
+		if (granted > 0) {
+			const auto tick = std::chrono::duration_cast<std::chrono::microseconds>(now - s_WorldCatchUpLastGrant);
+			s_WorldCatchUpTickTime = s_WorldCatchUpTickTime.count() == 0 ? tick : (s_WorldCatchUpTickTime * 3 + tick) / 4;
+		}
+		if (granted >= c_WorldCatchUpMinTicksPerRealFrame && now - s_WorldCatchUpFrameBegan + s_WorldCatchUpTickTime > s_WorldCatchUpFrameTime) {
 			return false;
 		}
+		s_WorldCatchUpLastGrant = now;
 		if (s_LockstepCoordinator && s_LockstepCoordinator->IsReplayPlayback() && s_LockstepCoordinator->IsRunning()) {
 			std::string error;
 			if (!s_LockstepCoordinator->HasReadyFrame(nextSimTick)) {
