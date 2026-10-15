@@ -12639,7 +12639,10 @@ debug.setupvalue(next, 4, "150")
 	}
 
 	if (m_CheckpointHeap) {
-		RunScriptString("_ScriptGraphCowProbe = {} for index = 1, 4096 do _ScriptGraphCowProbe[index] = index end");
+		// The cold array is written before the first freeze and again only after the second, so the second generation's fence
+		// meets a write whatever the first generation made hot.
+		RunScriptString("_ScriptGraphCowProbe = {} for index = 1, 4096 do _ScriptGraphCowProbe[index] = index end "
+		                "_ScriptGraphColdProbe = {} for index = 1, 65536 do _ScriptGraphColdProbe[index] = index end");
 		lua_getglobal(m_State, "_ScriptGraphCowProbe");
 		const auto* table = static_cast<const GCtab*>(lua_topointer(m_State, -1));
 		lua_pop(m_State, 1);
@@ -12674,7 +12677,8 @@ debug.setupvalue(next, 4, "150")
 			}, true);
 		}
 		const int64_t nextFreezeWait = CheckpointLua::HeapOwner::ThisThreadGateWaitMicroseconds() - beforeWait;
-		const int changedAgain = RunScriptString("for index = 1, 4096 do _ScriptGraphCowProbe[index] = index * 2 end collectgarbage('step', 200)");
+		const int changedAgain = RunScriptString("for index = 1, 4096 do _ScriptGraphCowProbe[index] = index * 2 end "
+		                                         "for index = 1, 65536 do _ScriptGraphColdProbe[index] = -index end collectgarbage('step', 200)");
 
 		if (queued) (*queued)();
 		if (queuedSecond) (*queuedSecond)();
@@ -12688,7 +12692,7 @@ debug.setupvalue(next, 4, "150")
 		} catch (const std::exception& error) {
 			std::cout << "[script-graph-selftest] page copy probe: " << error.what() << std::endl;
 		}
-		RunScriptString("_ScriptGraphCowProbe = nil");
+		RunScriptString("_ScriptGraphCowProbe = nil _ScriptGraphColdProbe = nil");
 		const bool held = changed == 0 && changedAgain == 0 && imageHeld && secondImageHeld && liveWritten && pendingDuringWrite && entryWait == 0 && nextFreezeWait == 0 && frozen.FaultCount() > 0 && secondFrozen.FaultCount() > 0;
 		std::cout << "[script-graph-selftest] " << (held ? "PASS" : "FAIL") << " a_checkpoint_copy_preserves_pages_without_waiting_at_vm_entry image_held="
 		          << imageHeld << " live_written=" << liveWritten << " copy_still_queued=" << pendingDuringWrite << " entry_wait_us=" << entryWait << " next_freeze_wait_us=" << nextFreezeWait << " second_image_held=" << secondImageHeld
