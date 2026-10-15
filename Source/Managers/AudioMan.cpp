@@ -82,7 +82,7 @@ namespace {
 		Container moved;
 		if constexpr (requires { moved.reserve(container.size()); }) moved.reserve(container.size());
 		for (auto& value: container) moved.insert(moved.end(), std::move(value));
-		container = std::move(moved);
+		container.swap(moved);
 	}
 	struct SavedSoundOperations {
 		std::unordered_map<uint64_t, SoundContainer*> pending;
