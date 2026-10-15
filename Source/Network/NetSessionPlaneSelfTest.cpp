@@ -91,6 +91,8 @@ namespace RTE {
 			uint64_t refaultAfterMs = 0, refaultMs = 0;
 			// Once its slow spell ends, the subject catches up at only this share of the round's rate (0: the fixture's usual catch-up).
 			uint32_t catchUpPercent = 0;
+			// After this long past its fault, the machine has only the round's rate even while it is still a private reader.
+			uint64_t roundRateAfterMs = 0;
 			// The slow subject is held once through the fault and stays held; no peer sets a decision aside for authority it will have
 			// or a return for a hold it has not installed; the playing seats keep the bound, a two-seat internet round included.
 			bool heldOnce = false, noRefusals = false, strictBound = false;
@@ -1190,7 +1192,8 @@ namespace RTE {
 					const bool slowed = refault || (hub.row.slowPercent && id == hub.row.subject && hub.DuringFault()) || (spell && spell->kind == Spell::Kind::Slow);
 					const uint32_t ratePercent = spell ? spell->percent : refault ? hub.row.refaultPercent : hub.row.slowPercent;
 					const uint32_t capacity = scheduled ? scheduled->CapacityPercent(id, hub.now) : 0;
-					const double catchUpRate = scheduled ? capacity / 100.0 : hub.row.catchUpPercent && id == hub.row.subject ? hub.row.catchUpPercent / 100.0 : c_TestCatchUpRate;
+					const bool atRoundRate = id == hub.row.subject && hub.row.roundRateAfterMs && hub.now >= hub.faultEnd + hub.row.roundRateAfterMs;
+					const double catchUpRate = scheduled ? capacity / 100.0 : atRoundRate ? 1.0 : hub.row.catchUpPercent && id == hub.row.subject ? hub.row.catchUpPercent / 100.0 : c_TestCatchUpRate;
 					credits[id - 1] += hub.row.stepMs * (slowed ? ratePercent / 100.0 : CatchingUp(peer) ? catchUpRate : 1) / c_TestTickMs;
 					credits[id - 1] = std::min(credits[id - 1], 6.0);
 					while (credits[id - 1] >= 1) {
@@ -3336,6 +3339,17 @@ namespace RTE {
 		auto fourSlow = lagged("joiner_catching_up_at_102_percent_returns_four_seats_over_100ms", 100, 102, 600, 40000); fourSlow.seats = 4; rows.push_back(fourSlow);
 		auto otherSlow = lagged("joiner_catching_up_at_102_percent_returns_from_another_donor", 100, 102, 600, 40000);
 		otherSlow.thirdSubjectRttMs = 20; otherSlow.otherRttMs = 200; otherSlow.donorSeat = 3; rows.push_back(otherSlow);
+		for (const auto& [name, seats, subject, rtt, donor]: std::vector<std::tuple<const char*, uint8_t, uint8_t, uint32_t, uint8_t>>{
+		    {"three_seats_held_host_catches_up_then_runs_at_round_rate_over_100ms", 3, 1, 100, 0},
+		    {"three_seats_held_host_catches_up_then_runs_at_round_rate_over_250ms", 3, 1, 250, 0},
+		    {"four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_100ms", 4, 2, 100, 0},
+		    {"four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_200ms", 4, 2, 200, 0},
+		    {"four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_250ms", 4, 2, 250, 0},
+		    {"four_seats_held_joiner_at_round_rate_uses_a_different_donor_over_200ms", 4, 2, 200, 3}}) {
+			auto row = lagged(name, rtt, 105, 800, 21000); row.seats = seats; row.subject = subject; row.roundRateAfterMs = 18000;
+			if (donor) { row.thirdSubjectRttMs = 20; row.donorSeat = donor; }
+			rows.push_back(row);
+		}
 		// A seat whose inputs keep arriving within the bound, though most are lost: each message carries the window back past the waited
 		// frame (the input delay and the bound), so no seat that plays waits past the bound on it and nothing need hold it.
 		auto thinned = gap("joiner_keeps_one_input_in_three_over_100ms", 2, 10000); thinned.seats = 3; thinned.rttMs = thinned.otherRttMs = 100;
@@ -3468,7 +3482,7 @@ namespace RTE {
 		if (!selected || std::string_view(selected) == "a_healed_tie_keeps_one_history_across_a_host_change") {
 			named.push_back({"a_healed_tie_keeps_one_history_across_a_host_change", [](std::string& error) {
 				Case row{"old_tie_host_change"}; row.seats = 4; row.subject = 1; row.gapMs = 20000;
-				row.internet = row.adminDirectory = row.tieBeforeAdministration = row.imageReturn = true; row.rttMs = row.otherRttMs = 100;
+				row.internet = row.adminDirectory = row.tieBeforeAdministration = true; row.rttMs = row.otherRttMs = 100;
 				Fixture fixture; const bool ok = fixture.Run(row, error);
 				bool oldTie = false;
 				for (const auto& [key, tie]: fixture.hub.directory.ties) oldTie |= std::get<0>(key) == 0 && !tie.winner.empty();
