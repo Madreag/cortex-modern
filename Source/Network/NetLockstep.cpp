@@ -493,7 +493,10 @@ namespace RTE {
 					SetError(error, NetLockstepErrorCode::InvalidValue, 0, mergedSenders ? "ControllerFrames must be sorted by unique id" : "ControllerFrames must be sorted by unique id without duplicates");
 					return false;
 				}
-				const std::vector<uint8_t> encodedFrame = ControllerFrameCodec::Encode(frame);
+				// Every frame round-trips through its encoding; one buffer serves them all.
+				thread_local std::vector<uint8_t> encodedFrame;
+				encodedFrame.clear();
+				ControllerFrameCodec::EncodeTo(encodedFrame, frame);
 				ControllerFrame decodedFrame;
 				std::string frameError;
 				if (!ControllerFrameCodec::Decode(encodedFrame.data(), encodedFrame.size(), decodedFrame, &frameError)) {
@@ -2898,6 +2901,7 @@ namespace RTE {
 		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : version == 2 ? 25 : version == 3 ? 27 : version == 4 ? c_WorldVersion : version == 5 ? c_CheckpointVersion : version == 6 ? c_HoldMarkerVersion : version == 7 ? c_SeatReleaseRecordVersion : version == 8 ? c_EditorPlacementVersion : c_HostAuthorityVersion, nullptr, true) || !reader.AtEnd()) return false;
 		NetLockstepFrame frame = std::get<NetLockstepFrame>(std::move(payload));
 		std::vector<uint8_t> canonical;
+		canonical.reserve(bytes.size());
 		AppendU32LE(canonical, c_RecoveryInputMagic);
 		AppendU16LE(canonical, version);
 		AppendU16LE(canonical, ControllerFrame::c_Version);
@@ -5443,7 +5447,7 @@ namespace RTE {
 		m_PeerPendingBridgeInputs.clear();
 		m_PeerReturnProofs.clear();
 		m_PeerPreparedPrefixes.clear(); m_PeerReplayAppliedPrefixes.clear(); m_PeerFrameWitnesses.clear();
-		m_PeerArrivalLatencyMs.clear(); m_PeerForwardedInputs.clear(); m_PeerAcceptedThrough.clear(); m_PeerInputReceipts.clear(); m_PeerAcceptedAhead.clear(); m_PeerSourceInputs.clear();
+		m_PeerArrivalLatencyMs.clear(); m_PeerForwardedInputs.clear(); m_PeerInputDecodes.clear(); m_PeerAcceptedThrough.clear(); m_PeerInputReceipts.clear(); m_PeerAcceptedAhead.clear(); m_PeerSourceInputs.clear();
 		m_PeerOwnReceiptProgress.clear(); m_PeerReceiptSampleFloorMs.clear(); m_PeerReceiptRepairs = 0;
 		m_PeerCommittedTail.clear(); m_PeerFrameIncoming.clear(); m_PeerTailThrough.reset(); m_PeerAppliedThrough.clear(); m_PeerAppliedAtMs.clear();
 		m_PeerTailRequestedUntil.clear(); m_PeerTailLastSentMs.clear(); m_PeerTailResendFrames.clear(); m_PeerTailSendRanges.clear();

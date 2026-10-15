@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <deque>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -534,31 +535,48 @@ namespace RTE {
 		const uint8_t count = body.front();
 		if (count == 0 || count > NetLockstepCodec::c_PeerInputWindowTicks) return true;
 		size_t offset = 1;
-		std::vector<NetLockstepFrame> inputs;
+		std::vector<const NetLockstepFrame*> inputs;
+		std::deque<NetLockstepFrame> unshared;
+		auto& decoded = m_PeerInputDecodes[owner];
+		// The window carries each input again in every message until it leaves it, so an entry this peer decoded before is reused.
+		const auto prune = [&] {
+			if (decoded.size() > 2U * NetLockstepCodec::c_PeerInputWindowTicks)
+				std::erase_if(decoded, [&](const auto& entry) { return entry.second.input.targetFrame + NetLockstepCodec::c_PeerInputWindowTicks < message.frame; });
+		};
 		for (uint8_t n = 0; n < count; ++n) {
 			uint32_t size = 0;
 			if (!TakeSize(body, offset, size) || offset > body.size() || size > body.size() - offset) return true;
-			NetLockstepFrame input;
-			NetLockstepError readError;
-			if (!NetLockstepCodec::DecodeRecoveryInput({body.begin() + offset, body.begin() + offset + size}, input, &readError)) {
-				DiagnosticLine() << "[net-peer-input-read] local=" << static_cast<int>(m_Config.localPeerId) << " owner=" << static_cast<int>(owner)
-				    << " through=" << message.frame << " bytes=" << size << " reason=" << readError.message << std::endl;
-				return true;
+			const auto first = body.begin() + offset, last = first + size;
+			uint64_t hash = 14695981039346656037ULL;
+			for (auto byte = first; byte != last; ++byte) hash = (hash ^ *byte) * 1099511628211ULL;
+			auto known = decoded.find(hash);
+			if (known == decoded.end() || !std::equal(first, last, known->second.bytes.begin(), known->second.bytes.end())) {
+				NetLockstepFrame input;
+				NetLockstepError readError;
+				if (!NetLockstepCodec::DecodeRecoveryInput({first, last}, input, &readError)) {
+					DiagnosticLine() << "[net-peer-input-read] local=" << static_cast<int>(m_Config.localPeerId) << " owner=" << static_cast<int>(owner)
+					    << " through=" << message.frame << " bytes=" << size << " reason=" << readError.message << std::endl;
+					return true;
+				}
+				if (known == decoded.end()) known = decoded.emplace(hash, PeerInputDecode{{first, last}, std::move(input)}).first;
+				else { unshared.push_back(std::move(input)); inputs.push_back(&unshared.back()); offset += size; continue; }
 			}
-			if (input.senderPeerId != owner || input.roundId != m_RoundId || input.targetFrame > message.frame || (n > 0 && input.targetFrame <= inputs.back().targetFrame)) {
+			const NetLockstepFrame& input = known->second.input;
+			if (input.senderPeerId != owner || input.roundId != m_RoundId || input.targetFrame > message.frame || (n > 0 && input.targetFrame <= inputs.back()->targetFrame)) {
 				DiagnosticLine() << "[net-peer-input-shape] local=" << static_cast<int>(m_Config.localPeerId) << " owner=" << static_cast<int>(owner)
 				    << " through=" << message.frame << " input=" << input.targetFrame << " sender=" << static_cast<int>(input.senderPeerId)
 				    << " round_matches=" << (input.roundId == m_RoundId) << " index=" << static_cast<int>(n) << std::endl;
 				return true;
 			}
-			inputs.push_back(std::move(input)); offset += size;
+			inputs.push_back(&input); offset += size;
 		}
-		if (offset != body.size() || inputs.back().targetFrame != message.frame) return true;
+		if (offset != body.size() || inputs.back()->targetFrame != message.frame) return true;
 		heard();
-		if (owner == m_Config.localPeerId) return true;
+		if (owner == m_Config.localPeerId) { prune(); return true; }
 		if (message.frame < m_Stats.nextFrame) {
 			if (const auto through = m_PeerAcceptedThrough.find(owner); through != m_PeerAcceptedThrough.end() && through->second > message.frame)
-				NotePeerInputAccepted(inputs.back());
+				NotePeerInputAccepted(*inputs.back());
+			prune();
 			return true;
 		}
 		if (m_PeerPaceStartMs && m_Config.simTickMs > 0) {
@@ -580,7 +598,8 @@ namespace RTE {
 				SendPeerFrameMessage(std::move(forwarded), wireBody.size() <= 4096 ? NetTransportLane::InputUnreliable : NetTransportLane::ControlReliable);
 			}
 		}
-		for (const auto& input: inputs) {
+		for (const NetLockstepFrame* entry: inputs) {
+			const NetLockstepFrame& input = *entry;
 			if (input.targetFrame < m_Stats.nextFrame || input.targetFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew) continue;
 			if ((m_PeerRejectedInputs[input.targetFrame] & SeatBit(input.senderPeerId)) != 0) {
 				if (!m_PeerBridgeCertificates.contains({input.targetFrame, 0})) {
@@ -596,6 +615,7 @@ namespace RTE {
 				m_PeerSourceInputs[input.targetFrame].try_emplace(input.senderPeerId, input);
 			else AcceptRemoteTick(input, nowMs, false);
 		}
+		prune();
 		return true;
 	}
 

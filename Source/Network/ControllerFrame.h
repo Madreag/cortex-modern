@@ -100,6 +100,8 @@ namespace RTE {
 		}
 
 		static std::vector<uint8_t> Encode(const ControllerFrame& frame);
+		/// Appends the same bytes Encode returns.
+		static void EncodeTo(std::vector<uint8_t>& out, const ControllerFrame& frame);
 		static bool Decode(const uint8_t* data, size_t size, ControllerFrame& outFrame, std::string* error = nullptr, uint16_t version = ControllerFrame::c_Version);
 
 		/// Bits for a negotiated window tick after the first; the actor id always rides the wire.

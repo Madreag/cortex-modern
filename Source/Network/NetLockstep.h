@@ -18,6 +18,7 @@
 #include <bit>
 #include <cstdint>
 #include <deque>
+#include <unordered_map>
 #include <functional>
 #include <list>
 #include <map>
@@ -1736,6 +1737,9 @@ namespace RTE {
 		std::map<uint64_t, NetHash32> m_PeerReplayAppliedPrefixes;
 		std::map<uint64_t, std::map<uint8_t, NetHostMigrationMessage>> m_PeerFrameWitnesses;
 		std::map<uint8_t, uint64_t> m_PeerForwardedInputs;
+		struct PeerInputDecode { std::vector<uint8_t> bytes; NetLockstepFrame input; };
+		/// Each owner's recent input-window entries as this peer decoded them, by a hash of their bytes.
+		std::map<uint8_t, std::unordered_map<uint64_t, PeerInputDecode>> m_PeerInputDecodes;
 		std::map<uint8_t, std::pair<uint64_t, uint32_t>> m_PeerArrivalLatencyMs;
 		struct PeerTailVote { uint32_t members = 0; NetHash32 prefix{}, prepared{}; std::vector<uint8_t> bytes; };
 		std::map<uint64_t, std::map<uint8_t, PeerTailVote>> m_PeerTailVotes;
