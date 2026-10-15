@@ -460,6 +460,24 @@ def game_scenes():
          scene_checks("host", host) + scene_checks("joiner", joiner))
 
 
+def allow_brain_loss(document):
+    for seat, peer in enumerate(document["peers"]):
+        name = peer["probe"]
+        probe = json.loads(document["scripts"][name])
+        probe["brain_loss_policy"] = "spectate"
+        for step in probe["steps"]:
+            if step["op"] in ("assert_scene", "wait_scene", "actor_next_until") or (step["op"] == "pan_scene" and step.get("enabled", True)):
+                step.setdefault("skip_if_brain_lost", step.get("player", seat))
+        document["scripts"][name] = json.dumps(probe, indent=2) + "\n"
+    for check in document["checklist"]:
+        if "continuous_minutes" in check:
+            check["continuous_minutes"]["allow_brain_loss"] = True
+            check["what"] = check["what"].replace("living local player", "playing or spectating after a recorded brain loss")
+        if "sim_progress" in check:
+            check["what"] = check["what"].replace("living player", "player, spectating after brain loss,")
+    return document
+
+
 def ai_fight():
     host_menu, join_menu = host_setup(4, cpu=True), join_setup(4)
     # These are stock activity options: Infinite gold selects Skirmish Defense's endless AI mode.
@@ -512,6 +530,9 @@ def ai_fight():
     emit(10, "Twenty-minute stock endless AI fight with scripted bunker and brain setup",
          host_menu, join_menu, probes["host"], probes["joiner"], checks, timeout=1750,
          engine_args=("-memory-census-seconds", "60"))
+    path = ROOT / "fight15-s10.json"
+    document = allow_brain_loss(json.loads(path.read_text(encoding="utf-8")))
+    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
 
 
 def moderation_scene():

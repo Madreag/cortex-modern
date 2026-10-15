@@ -56,7 +56,7 @@ class BrainLossEvidenceTest(unittest.TestCase):
             self.assertFalse(video.continuous_minute_evidence(path, self.spec)['pass'])
 
     def test_scene_policy_keeps_duration_and_rendezvous(self):
-        for name in ('fight15-s11', 'fight15-s12'):
+        for name in ('fight15-s10', 'fight15-s11', 'fight15-s12'):
             scene = json.loads((video.SCENARIO_DIR / (name+'.json')).read_text())
             self.assertEqual(scene['fight_hash_gate']['running_ticks'], 72000)
             for role in scene['fight_hash_gate']['peers']:
