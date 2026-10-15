@@ -36,6 +36,7 @@
 #include <type_traits>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -92,7 +93,7 @@ namespace RTE {
 			bool inputsLost = false;
 			// The subject returns within this long after the fault, then stays returned for twenty seconds (0: the usual allowance).
 			uint64_t returnWithinMs = 0;
-			// One directory request's HTTP exchange, from its send to its answer (0: the fixture's usual 100 ms); a frame tie gives up past 250 ms.
+			// One directory request's HTTP exchange, from its send to its answer (0: 100 ms).
 			uint32_t directoryExchangeMs = 0;
 			// The subject's directory requests fail through its fault though its link stays up: its directory alone is out of reach.
 			bool subjectDirectoryDark = false;
@@ -140,10 +141,7 @@ namespace RTE {
 				return {200, !tie.winner.empty(), tie.winner};
 			}
 		};
-		// One seat's directory requests as NetConnectionAuthority makes them (QueryFrameTie, PollFrameTie, PollCheckIn, CanSeatRequest): a
-		// new question waits while another is in flight and is answered Waiting until its HTTP exchange completes; a frame tie gives up
-		// past 250 ms; a failure backs off; an answer is polled again 50 ms later; and the seat's twelve requests a minute are shared with
-		// the check-in it sends every 5.1 s through the round, so a question can wait for the minute's allowance to free a request.
+		// Each requester follows NetConnectionAuthority's asynchronous tie and routine check-in policies.
 		struct DirectoryClient {
 			struct Exchange { NetFrameTieRequest sent; uint64_t arriveMs = 0, doneMs = 0; bool arrived = false, delivered = false; Directory::Answer answer; };
 			std::optional<NetFrameTieRequest> request;
@@ -153,11 +151,16 @@ namespace RTE {
 			std::optional<uint64_t> boundStartMs;
 			uint64_t nextTieMs = 0, nextCheckInMs = 0, nextSeatRequestMs = 0;
 			NetDirectoryRetry tieRetry, checkInRetry;
-			std::deque<uint64_t> seatRequests;
+			std::deque<uint64_t> seatRequests, tieRequests;
+			uint64_t sentMs = 0, exchangeEstimateMs = 0;
+			bool sentCheckIn = false;
 			// The row's evidence of the product's answers: the questions asked, those answered Waiting, and those decided.
-			uint64_t questions = 0, waitingAnswers = 0, decidedAnswers = 0, tieRequests = 0, firstQuestionMs = UINT64_MAX, firstDecidedMs = UINT64_MAX;
-			// A seat checks in every 5.1 s from its lobby on, so its round starts with this minute's allowance spent up to `phaseMs` ago.
+			uint64_t questions = 0, waitingAnswers = 0, decidedAnswers = 0, tieRequestCount = 0, firstQuestionMs = UINT64_MAX, firstDecidedMs = UINT64_MAX;
+			// A seat checks in every 5.1 s from its lobby on, so its round starts with this minute's allowance spent up to `phaseMs` ago; a
+			// rematch's round keeps the requests the seat has spent since.
+			bool started = false;
 			void StartRound(uint64_t nowMs, uint64_t phaseMs) {
+				if (std::exchange(started, true)) return;
 				for (int64_t at = static_cast<int64_t>(nowMs) - static_cast<int64_t>(phaseMs); at > static_cast<int64_t>(nowMs) - 60100; at -= 5100)
 					if (at >= 0) seatRequests.push_front(static_cast<uint64_t>(at));
 				nextCheckInMs = nowMs + 5100 - phaseMs; nextSeatRequestMs = nextCheckInMs;
@@ -165,6 +168,10 @@ namespace RTE {
 			bool CanSeatRequest(uint64_t nowMs, bool decisionRequest) {
 				while (!seatRequests.empty() && nowMs >= seatRequests.front() && nowMs - seatRequests.front() >= 60100) seatRequests.pop_front();
 				return seatRequests.size() < 12 && (decisionRequest || nowMs >= nextSeatRequestMs);
+			}
+			bool CanTieRequest(uint64_t nowMs) {
+				while (!tieRequests.empty() && nowMs >= tieRequests.front() && nowMs - tieRequests.front() >= 60100) tieRequests.pop_front();
+				return tieRequests.size() < 30;
 			}
 			NetFrameTieReply Query(const NetFrameTieRequest& asked, uint64_t nowMs) {
 				++questions; firstQuestionMs = std::min(firstQuestionMs, nowMs);
@@ -191,6 +198,7 @@ namespace RTE {
 					if (tie && nowMs >= tie->doneMs) {
 						const auto answer = tie->delivered ? tie->answer : Directory::Answer{};
 						tie.reset(); nextTieMs = nowMs + 50; reply = {};
+						const uint64_t exchanged = nowMs - sentMs;
 						const bool valid = answer.status == 200 && (!answer.decided || (answer.members.size() * 2 == request->owners.size() &&
 						    std::is_sorted(answer.members.begin(), answer.members.end()) && std::adjacent_find(answer.members.begin(), answer.members.end()) == answer.members.end() &&
 						    std::includes(request->owners.begin(), request->owners.end(), answer.members.begin(), answer.members.end())));
@@ -199,16 +207,20 @@ namespace RTE {
 							checkedIn = true; reply.state = NetFrameTieReply::State::Waiting;
 							if (answer.decided) { reply.state = NetFrameTieReply::State::Decided; reply.members = answer.members; }
 							tieRetry.Succeeded();
-						} else { nextTieMs = tieRetry.Failed(nowMs, answer.status, "", "", "frame-tie"); finalQuerySent = false; }
+							exchangeEstimateMs = std::max(exchanged, exchangeEstimateMs - exchangeEstimateMs / 4);
+							if (finalQuerySent) nextTieMs = nowMs + 250;
+						} else if (answer.status == 0 && sentCheckIn) { exchangeEstimateMs = std::max(exchangeEstimateMs, exchanged); finalQuerySent = false; }
+						else { nextTieMs = tieRetry.Failed(nowMs, answer.status, "", "", "frame-tie"); finalQuerySent = false; }
 					}
-					if (!tie && !finalQuerySent && reply.state != NetFrameTieReply::State::Decided) {
+					if (!tie && reply.state != NetFrameTieReply::State::Decided) {
 						const bool finalQuery = boundStartMs && nowMs >= *boundStartMs + c_NetFrameTieDeadlineMs;
-						if (!(checkedIn && !finalQuery && seatRequests.size() >= 11) && nowMs >= nextTieMs && nowMs >= tieRetry.nextMs && CanSeatRequest(nowMs, true)) {
+						if (nowMs >= nextTieMs && nowMs >= tieRetry.nextMs && CanTieRequest(nowMs)) {
 							auto sent = *request; sent.queryOnly = sent.queryOnly || checkedIn || finalQuery;
-							const bool answered = reachable && exchangeMs <= c_NetFrameTieHttpTimeoutMs;
-							tie = Exchange{sent, nowMs + exchangeMs / 2, nowMs + (answered ? exchangeMs : c_NetFrameTieHttpTimeoutMs), false, answered, {}};
-							finalQuerySent = finalQuery; ++tieRequests;
-							seatRequests.push_back(nowMs); if (!sent.queryOnly) nextSeatRequestMs = nowMs + 5100;
+							const uint64_t timeoutMs = std::clamp<uint64_t>(2 * exchangeEstimateMs, c_NetFrameTieHttpTimeoutMs, 2000);
+							const bool answered = reachable && exchangeMs <= timeoutMs;
+							tie = Exchange{sent, nowMs + exchangeMs / 2, nowMs + (answered ? exchangeMs : timeoutMs), false, answered, {}};
+							finalQuerySent = finalQuerySent || finalQuery; ++tieRequestCount;
+							tieRequests.push_back(nowMs); sentMs = nowMs; sentCheckIn = !sent.queryOnly;
 						}
 					}
 				}
@@ -216,7 +228,8 @@ namespace RTE {
 					if (nowMs < checkIn->doneMs) return;
 					const bool ok = checkIn->delivered && checkIn->answer.status == 200;
 					checkIn.reset(); nextCheckInMs = nowMs + 5000;
-					if (ok) checkInRetry.Succeeded(); else nextCheckInMs = checkInRetry.Failed(nowMs, 0, "", "", "seat-check-in");
+					// The directory answers again: a tie request backing off from its silence asks at once.
+					if (ok) { checkInRetry.Succeeded(); tieRetry = {}; } else nextCheckInMs = checkInRetry.Failed(nowMs, 0, "", "", "seat-check-in");
 				} else if (nowMs >= nextCheckInMs && nowMs >= checkInRetry.nextMs && CanSeatRequest(nowMs, false)) {
 					// A directory out of reach answers a check-in only at the connection's own five-second timeout.
 					checkIn = Exchange{{}, nowMs + exchangeMs / 2, nowMs + (reachable ? exchangeMs : 5000), false, reachable, {}};
@@ -224,6 +237,44 @@ namespace RTE {
 				}
 			}
 		};
+		bool CheckDirectoryClient(std::string& error) {
+			const auto fail = [&](const char* detail) { error = std::string("seed=0 ") + detail; return false; };
+			Directory directory; directory.retained = {1, 2};
+			NetFrameTieRequest request; request.owners = {1, 2}; request.members = {1}; request.host = 1; request.roundId = 1; request.frame = 100;
+			DirectoryClient first, second;
+			first.StartRound(60000, 1000); second.StartRound(60000, 1000);
+			if (first.Query(request, 60000).state != NetFrameTieReply::State::Waiting) return fail("new tie skipped its HTTP exchange");
+			first.Poll(60000, 100, true, 1, directory);
+			first.Poll(60050, 100, true, 1, directory);
+			if (first.Query(request, 60050).state != NetFrameTieReply::State::Waiting) return fail("outward request supplied an answer before its reply arrived");
+			auto later = request; ++later.frame;
+			if (first.Query(later, 60050).state != NetFrameTieReply::State::Waiting || first.request != request) return fail("new question replaced an in-flight request");
+			first.Poll(60100, 100, true, 1, directory);
+			if (first.Query(request, 60100).state != NetFrameTieReply::State::Decided || first.reply.members != std::vector<uint16_t>{1}) return fail("completed exchange lost its decided half");
+			auto opposite = request; opposite.members = {2};
+			if (second.Query(opposite, 60100).state != NetFrameTieReply::State::Waiting) return fail("another requester received an answer without its own exchange");
+			second.Poll(60100, 100, true, 2, directory); second.Poll(60150, 100, true, 2, directory); second.Poll(60200, 100, true, 2, directory);
+			if (second.Query(opposite, 60200).state != NetFrameTieReply::State::Decided || second.reply.members != first.reply.members) return fail("second check-in rewrote a decided split");
+			auto wrong = request; wrong.owners = {1, 3}; wrong.members = {1};
+			if (directory.FrameTie(1, wrong).status != 409) return fail("decided split accepted different owners");
+			wrong = request; wrong.members = {1, 2};
+			if (directory.FrameTie(1, wrong).status != 400) return fail("uneven half reached a tie decision");
+			wrong = request; ++wrong.frame; wrong.owners = {1, 3};
+			if (directory.FrameTie(1, wrong).status != 409) return fail("new split omitted a retained owner");
+			DirectoryClient allowance; allowance.StartRound(60000, 1000);
+			if (allowance.seatRequests.size() != 12 || allowance.CanSeatRequest(60000, false) || !allowance.CanTieRequest(60000)) return fail("routine check-ins spent the tie allowance");
+			for (unsigned index = 0; index < 30; ++index) allowance.tieRequests.push_back(60000);
+			if (allowance.CanTieRequest(120099) || !allowance.CanTieRequest(120100)) return fail("tie allowance did not retain its delivery margin");
+			DirectoryClient timeout; timeout.StartRound(60000, 1000); timeout.Query(later, 60000);
+			timeout.Poll(60000, 300, true, 1, directory); timeout.Poll(60150, 300, true, 1, directory); timeout.Poll(60250, 300, true, 1, directory);
+			if (timeout.tieRetry.nextMs || timeout.exchangeEstimateMs != 250 || timeout.nextTieMs != 60300) return fail("timed-out check-in entered failure backoff");
+			timeout.Poll(60300, 300, true, 1, directory); timeout.Poll(60450, 300, true, 1, directory); timeout.Poll(60600, 300, true, 1, directory);
+			if (timeout.Query(later, 60600).state != NetFrameTieReply::State::Decided || timeout.tieRequestCount != 2) return fail("adaptive timeout did not receive the retried check-in");
+			DirectoryClient refused; refused.StartRound(60000, 1000); refused.Query(wrong, 60000);
+			refused.Poll(60000, 100, true, 1, directory); refused.Poll(60050, 100, true, 1, directory); refused.Poll(60100, 100, true, 1, directory);
+			if (refused.reply.state == NetFrameTieReply::State::Decided || refused.tieRetry.nextMs != 61100) return fail("refused check-in supplied authority or skipped backoff");
+			return true;
+		}
 		// A round's schedule of trouble, the random driver's unit: which seat's machine slows or stops and when, each link's round trip
 		// and jitter, loss bursts, how fast each machine catches up once it runs again, and the directory's exchange.
 		struct Spell {
@@ -267,6 +318,7 @@ namespace RTE {
 			uint64_t leaveAtMs = 0;
 			uint8_t kicked = 0; //!< The host removes this seat at kickAtMs; the directory hears of it one exchange later (0: none).
 			uint64_t kickAtMs = 0;
+			uint64_t rematchAtMs = 0; //!< The host ends the round here and every seat starts the next one 300 ms later, on the same links (0: none).
 			uint64_t endMs = 30000;
 			bool Left(uint8_t seat, uint64_t now) const { return (leaver && seat == leaver && now >= leaveAtMs) || Removed(seat, now); }
 			bool Removed(uint8_t seat, uint64_t now) const { return kicked && seat == kicked && now >= kickAtMs; }
@@ -770,9 +822,25 @@ namespace RTE {
 			std::vector<uint64_t> heldSince;
 			uint64_t hashedThrough = 0;
 			bool leaverStopped = false;
+			// The round ended by the engine's own rule: every other seat left or was removed, and the last one completes it.
+			bool roundOver = false;
+			std::string earlierRoundRule; //!< A rule an earlier round of a rematch broke, judged before its frames were set aside.
+			// A hold ends once: every peer's certified history names one return frame for it.
+			std::string TwoReturnFrames() const {
+				for (const auto& [seat, boundaries]: hub.bridgeBoundaries)
+					for (auto at = boundaries.begin(); at != boundaries.end() && std::next(at) != boundaries.end(); ++at)
+						if (!at->second && !std::next(at)->second)
+							return "one hold of seat " + std::to_string(seat) + " was certified to return at " + std::to_string(at->first) + " and " + std::to_string(std::next(at)->first);
+				return {};
+			}
 			bool keepFrames = false; //!< A scheduled round alone keeps every committed frame, to name the inputs where histories part.
 			// The round is under way once every seat has displayed its first second; waits before that are the start's, not a hold's.
-			uint64_t settledAt = 0, startupWaitMs = 0;
+			uint64_t settledAt = 0, startupWaitMs = 0, roundStartMs = 0;
+			std::vector<std::pair<uint64_t, uint64_t>> startups; //!< Each round's start, to the moment every seat displayed its first second.
+			bool InStartup(uint64_t at) const {
+				for (const auto& [from, to]: startups) if (at >= from && at < to) return true;
+				return at >= roundStartMs && (startups.empty() || startups.back().first != roundStartMs);
+			}
 			bool Start(const Case& row, std::string& error) {
 				hub.row = row; hub.faultEnd = hub.faultAt + (row.steadyMs ? row.steadyMs : row.gapMs);
 				worlds.resize(row.seats); committed.resize(row.seats); credits.resize(row.seats); queued.resize(row.seats); waitAt.resize(row.seats);
@@ -786,9 +854,14 @@ namespace RTE {
 				for (uint8_t peer = 1; peer <= row.seats; ++peer) { wires.push_back(std::make_unique<Wire>(hub, peer)); peers.push_back(std::make_unique<NetLockstepCoordinator>()); }
 				if (!wires[0]->StartHost(47901, &error)) return false;
 				for (uint8_t peer = 2; peer <= row.seats; ++peer) if (!wires[peer - 1]->Connect("fixture", 47901, &error)) return false;
+				return StartPeers(77, error);
+			}
+			// Starts every seat's round on the fixture's links: the first round, or a rematch's next.
+			bool StartPeers(uint64_t roundId, std::string& error) {
+				const Case& row = hub.row;
 				auto match = NetMatchConfigUtil::MakeDefault(0xF001);
 				match.peerCount = row.seats; match.players.clear(); match.successorOrder.clear(); match.migrationPeers.clear();
-				match.inputDelayFrames = 1; match.peerInputDelayFrames.assign(row.seats, 1); match.roundId = 77;
+				match.inputDelayFrames = 1; match.peerInputDelayFrames.assign(row.seats, 1); match.roundId = roundId;
 				for (uint8_t peer = 1; peer <= row.seats; ++peer) {
 					uint32_t rtt = 0;
 					for (uint8_t other = 1; other <= row.seats; ++other) if (peer != other) rtt = std::max<uint32_t>(rtt, static_cast<uint32_t>(2 * hub.Delay(peer, other)));
@@ -802,7 +875,7 @@ namespace RTE {
 				}
 				for (uint8_t peer = 1; peer <= row.seats; ++peer) {
 					NetLockstepConfig config; config.sessionId = match.sessionId; config.matchConfig = match;
-					config.localPeerId = peer; config.peerCount = row.seats; config.roundId = peer == 1 ? 77 : 0;
+					config.localPeerId = peer; config.peerCount = row.seats; config.roundId = peer == 1 ? roundId : 0;
 					config.startFrame = 1; config.inputDelayFrames = match.peerInputDelayFrames[peer - 1]; config.timeoutMs = 60000;
 					config.frameLane = NetTransportLane::InputUnreliable; config.substituteSlowPeers = true; config.adaptiveInputDelay = true;
 					config.slowPlayerBoundTicks = c_TestBoundTicks; config.simTickMs = c_TestTickMs; config.relayToOtherPeers = peer == 1;
@@ -888,6 +961,21 @@ namespace RTE {
 					for (auto* wire: std::vector<Wire*>(hub.wires.begin(), hub.wires.end())) if (wire->owner == scheduled->kicked) wire->Stop();
 				}
 				if (scheduled && scheduled->kicked && hub.now == scheduled->kickAtMs + hub.DirectoryExchangeMs(1)) std::erase(hub.directory.retained, scheduled->kicked);
+				// A rematch: the host ends the round, and 300 ms later every seat starts the next one on the same links and directory clients.
+				const bool between = scheduled && scheduled->rematchAtMs && hub.now >= scheduled->rematchAtMs && hub.now < scheduled->rematchAtMs + 300;
+				if (scheduled && scheduled->rematchAtMs && hub.now == scheduled->rematchAtMs) peers[0]->Complete("round ended");
+				if (scheduled && scheduled->rematchAtMs && hub.now == scheduled->rematchAtMs + 300) {
+					for (auto& peer: peers) peer = std::make_unique<NetLockstepCoordinator>();
+					for (uint8_t id = 1; id <= hub.row.seats; ++id) {
+						worlds[id - 1] = World{}; credits[id - 1] = 0; queued[id - 1] = 0; waitAt[id - 1] = 0;
+						if (heldSince[id] != UINT64_MAX) { heldSpans[id].push_back({heldSince[id], hub.now}); heldSince[id] = UINT64_MAX; }
+					}
+					hashedThrough = 0; roundStartMs = hub.now;
+					// The wire's records count frames, which start again: the round that ended is judged on them first.
+					if (earlierRoundRule.empty()) earlierRoundRule = TwoReturnFrames();
+					hub.bridgeBoundaries.clear(); hub.inputSentThrough.clear(); hub.returnsProposed.clear();
+					if (!StartPeers(78, error)) return false;
+				}
 				const auto gone = [&](uint8_t id) { return scheduled && scheduled->Left(id, hub.now); };
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) if (!hung(id) && !gone(id)) hub.PollDirectory(id);
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) {
@@ -907,16 +995,22 @@ namespace RTE {
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) {
 					auto& peer = *peers[id - 1]; auto& world = worlds[id - 1];
 					if (gone(id)) { leaverStopped |= peer.IsStopped(); continue; }
+					if (between) { waitAt[id - 1] = 0; continue; }
 					if (peer.IsFailed()) { error = "peer " + std::to_string(id) + " failed: " + peer.GetStats().timeoutReason; return false; }
 					if (peer.GetHostPeerId() != 1 && (!hub.row.gapMs || hub.row.subject != 1 || hub.row.gapMs < 15000)) { error = "lag changed the lobby host"; return false; }
 					if (peer.GetHostPeerId() != 1 && firstAdminChangeMs[id - 1] == UINT64_MAX) {
 						firstAdminChangeMs[id - 1] = hub.now;
 						if (hub.now + hub.Delay(1, id) < hub.faultAt + 15000) { error = "admin host changed before fifteen seconds of authenticated silence"; return false; }
 					}
+					if (peer.IsStopped() && scheduled && peer.GetStats().timeoutReason.starts_with("Complete:")) {
+						bool alone = true;
+						for (uint8_t other = 1; other <= hub.row.seats; ++other) alone &= other == id || gone(other);
+						if (alone) { roundOver = true; continue; }
+					}
 					if (peer.IsStopped()) {
 						// An absent seat gone past the donor's history hands itself to a private image, a path past this fixture.
 						if (hub.row.imageReturn && peer.GetStats().timeoutReason.starts_with("PeerHeld:")) { if (!imageAt[id - 1]) imageAt[id - 1] = hub.now; continue; }
-						error = "lag ended participation or required a manual rejoin"; return false;
+						error = "lag ended participation or required a manual rejoin" + (hub.schedule ? ": peer " + std::to_string(id) + " stopped: " + peer.GetStats().timeoutReason : std::string()); return false;
 					}
 					if (!peer.IsRunning()) continue;
 					// A joiner reaches its first displayed tick later, then the
@@ -1028,7 +1122,7 @@ namespace RTE {
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) if (!hub.schedule->Left(seat, hub.now)) common = std::min(common, worlds[seat - 1].applied);
 				if (common == UINT64_MAX) common = 0;
 				const auto& reference = worlds[0];
-				if (!settledAt && common >= 60) settledAt = hub.now;
+				if (common >= 60 && (startups.empty() || startups.back().first != roundStartMs)) { startups.push_back({roundStartMs, hub.now}); if (!settledAt) settledAt = hub.now; }
 				for (uint64_t frame = hashedThrough + 1; frame <= common; ++frame) {
 					for (const auto& world: worlds) if (world.applied >= frame && world.hashes.at(frame) != reference.hashes.at(frame)) {
 						error = "histories differ at displayed frame " + std::to_string(frame) + ":";
@@ -1074,7 +1168,7 @@ namespace RTE {
 				for (const auto& [seat, client]: hub.directoryClients) {
 					if (!client.questions) continue;
 					text += " referee_seat" + std::to_string(seat) + "=asked:" + std::to_string(client.questions) + ",waiting:" + std::to_string(client.waitingAnswers) +
-					        ",decided:" + std::to_string(client.decidedAnswers) + ",requests:" + std::to_string(client.tieRequests) + ",first_decided_ms:" +
+					        ",decided:" + std::to_string(client.decidedAnswers) + ",requests:" + std::to_string(client.tieRequestCount) + ",first_decided_ms:" +
 					        (client.firstDecidedMs == UINT64_MAX ? std::string("never") : std::to_string(client.firstDecidedMs - client.firstQuestionMs));
 				}
 				return text;
@@ -1261,6 +1355,7 @@ namespace RTE {
 			for (const auto& burst: schedule.bursts) end = std::max(end, burst.atMs + burst.ms + 6000);
 			if (schedule.leaver) end = std::max(end, schedule.leaveAtMs + 6000);
 			if (schedule.kicked) end = std::max(end, schedule.kickAtMs + 6000);
+			if (schedule.rematchAtMs) end = std::max(end, schedule.rematchAtMs + 300 + 6000);
 			for (const auto& cut: schedule.cuts) end = std::max(end, cut.atMs + cut.ms + cut.ms / 2 + c_NetSeatCatchUpAllowanceMs + 6000);
 			return end;
 		}
@@ -1292,6 +1387,7 @@ namespace RTE {
 			for (const auto& cut: schedule.cuts)
 				text += " cut=" + std::to_string(cut.side) + ":" + std::to_string(cut.atMs) + ":" + std::to_string(cut.ms) + ":" + std::to_string(cut.directoryDark);
 			if (schedule.kicked) text += " kick=" + std::to_string(schedule.kicked) + ":" + std::to_string(schedule.kickAtMs);
+			if (schedule.rematchAtMs) text += " rematch=" + std::to_string(schedule.rematchAtMs);
 			return text;
 		}
 		bool ParseSchedule(std::string_view text, Schedule& schedule) {
@@ -1347,6 +1443,8 @@ namespace RTE {
 				} else if (key == "cut") {
 					if (list.size() < 3) return false;
 					schedule.cuts.push_back({static_cast<uint32_t>(list[0]), list[1], list[2], list.size() > 3 ? static_cast<uint32_t>(list[3]) : 0U});
+				} else if (key == "rematch") {
+					schedule.rematchAtMs = list.front();
 				} else if (key == "kick") {
 					if (list.size() != 2 || list[0] < 2 || list[0] > schedule.seats) return false;
 					schedule.kicked = static_cast<uint8_t>(list[0]); schedule.kickAtMs = list[1];
@@ -1385,6 +1483,7 @@ namespace RTE {
 				if (cut.directoryDark) name += "_some_dark";
 			}
 			if (schedule.kicked) name += "_seat" + std::to_string(schedule.kicked) + "_kicked";
+			if (schedule.rematchAtMs) name += "_rematch";
 			return name;
 		}
 		struct Random {
@@ -1441,6 +1540,19 @@ namespace RTE {
 				schedule.leaver = static_cast<uint8_t>(random.Between(2, schedule.seats)); schedule.leaveAtMs = random.Between(6000, 14000);
 				std::erase_if(schedule.spells, [&](const Spell& spell) { return spell.seat == schedule.leaver && spell.EndMs() >= schedule.leaveAtMs; });
 			}
+			// A rematch at times once the spells are over, and a spell in the next round.
+			if (random.Chance(8) && !schedule.leaver) {
+				uint64_t over = 8000;
+				for (const auto& spell: schedule.spells) over = std::max(over, spell.EndMs());
+				schedule.rematchAtMs = over + random.Between(2000, 5000);
+				Spell next; next.seat = static_cast<uint8_t>(random.Between(1, schedule.seats));
+				next.kind = random.Pick<Spell::Kind>({Spell::Kind::Silent, Spell::Kind::Stopped, Spell::Kind::Slow});
+				next.atMs = schedule.rematchAtMs + 300 + random.Between(3000, 6000);
+				next.ms = next.kind == Spell::Kind::Slow ? random.Between(2000, 6000) : random.Between(300, 2000);
+				next.percent = next.kind == Spell::Kind::Slow ? static_cast<uint32_t>(random.Between(50, 90)) : 100;
+				if (schedule.recoverPercent[next.seat] > 100 && schedule.recoverPercent[next.seat] < 300) schedule.recoverPercent[next.seat] = 300;
+				schedule.spells.push_back(next);
+			}
 			if (random.Chance(30)) for (uint64_t count = random.Between(1, 2); count > 0; --count)
 				schedule.bursts.push_back({static_cast<uint8_t>(random.Between(1, schedule.seats)), random.Between(4000, 12000), random.Between(300, 3000), random.Pick<uint32_t>({10, 30, 60, 90})});
 			schedule.endMs = ScheduleEndMs(schedule);
@@ -1461,20 +1573,19 @@ namespace RTE {
 				return Finding{"history", kind, why};
 			};
 			if (!fixture.Start(row, error)) return failed(error);
-			while (hub.now <= schedule.endMs) if (!fixture.Step(error)) return failed(error + " at " + std::to_string(hub.now) + " ms");
+			while (hub.now <= schedule.endMs && !fixture.roundOver) if (!fixture.Step(error)) return failed(error + " at " + std::to_string(hub.now) + " ms");
 			const uint64_t end = hub.now;
 			for (uint8_t seat = 1; seat <= schedule.seats; ++seat) {
 				if (fixture.heldSince[seat] != UINT64_MAX) fixture.heldSpans[seat].push_back({fixture.heldSince[seat], UINT64_MAX});
 				if (fixture.waitAt[seat - 1] && end - fixture.waitAt[seat - 1] > static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs)))
 					fixture.waits.push_back({seat, fixture.waitAt[seat - 1], end, fixture.worlds[seat - 1].applied + 1});
 			}
-			if (!fixture.settledAt) return Finding{"history", "never_started", "the seats never all displayed their first second of the round"};
+			if (!fixture.settledAt || fixture.startups.empty() || fixture.startups.back().first != fixture.roundStartMs)
+				return Finding{"history", "never_started", "the seats never all displayed their first second of a round"};
 			if (!hub.directory.refusals.empty()) return Finding{"rules", "directory_refused", std::to_string(hub.directory.refusals.size()) + " tie check-ins refused, the first " + hub.directory.refusals.front()};
 			if (!hub.returnInsideInputs.empty()) return Finding{"rules", "return_inside_inputs", hub.returnInsideInputs};
-			for (const auto& [seat, boundaries]: hub.bridgeBoundaries)
-				for (auto at = boundaries.begin(); at != boundaries.end() && std::next(at) != boundaries.end(); ++at)
-					if (!at->second && !std::next(at)->second)
-						return Finding{"rules", "two_return_frames", "one hold of seat " + std::to_string(seat) + " was certified to return at " + std::to_string(at->first) + " and " + std::to_string(std::next(at)->first)};
+			if (const auto twice = fixture.earlierRoundRule.empty() ? fixture.TwoReturnFrames() : fixture.earlierRoundRule + " in the first round"; !twice.empty())
+				return Finding{"rules", "two_return_frames", twice};
 			const auto heldDuring = [&](uint8_t seat, uint64_t from, uint64_t to) {
 				for (const auto& [since, until]: fixture.heldSpans[seat]) if (since <= to && until >= from) return true;
 				return false;
@@ -1494,7 +1605,7 @@ namespace RTE {
 			// (2) The longest wait of a seat that plays, on anyone.
 			const Fixture::Wait* worst = nullptr; bool worstTie = false;
 			for (const auto& wait: fixture.waits) {
-				if (!fixture.settledAt || wait.startMs < fixture.settledAt) { fixture.startupWaitMs = std::max(fixture.startupWaitMs, wait.endMs - wait.startMs); continue; }
+				if (fixture.InStartup(wait.startMs)) { fixture.startupWaitMs = std::max(fixture.startupWaitMs, wait.endMs - wait.startMs); continue; }
 				if (ownTrouble(wait.seat, wait.startMs, wait.endMs, 500) || heldDuring(wait.seat, wait.startMs, wait.endMs)) continue;
 				const Standing standing = WorstStanding(schedule, wait.seat, wait.startMs, wait.endMs);
 				if (standing == Standing::Isolated || standing == Standing::Loses) continue;
@@ -1542,7 +1653,7 @@ namespace RTE {
 					}
 					if (!caused) {
 						const bool again = index > 0;
-						return Finding{"return", again ? "returned_seat_held_again" : "held_without_its_own_trouble", "seat " + std::to_string(seat) + " was held at " + std::to_string(since) +
+						return Finding{"return", fixture.InStartup(since) ? "held_at_the_round_start" : again ? "returned_seat_held_again" : "held_without_its_own_trouble", "seat " + std::to_string(seat) + " was held at " + std::to_string(since) +
 						               " ms with no trouble of its own since " + std::to_string(lookFrom) + " ms" + (again ? " after it had returned" : "")};
 					}
 					const uint64_t catchUp = CatchUpMs(backlog, schedule.recoverPercent[seat]);
@@ -1625,6 +1736,7 @@ namespace RTE {
 			for (size_t index = 0; index < schedule.bursts.size(); ++index) { auto smaller = schedule; smaller.bursts.erase(smaller.bursts.begin() + index); add(smaller); }
 			if (schedule.leaver) { auto stays = schedule; stays.leaver = 0; stays.leaveAtMs = 0; add(stays); }
 			if (schedule.kicked) { auto kept = schedule; kept.kicked = 0; kept.kickAtMs = 0; add(kept); }
+			if (schedule.rematchAtMs) { auto one = schedule; one.rematchAtMs = 0; add(one); }
 			for (size_t index = 0; index < schedule.cuts.size(); ++index) {
 				auto whole = schedule; whole.cuts.erase(whole.cuts.begin() + index); add(whole);
 				if (schedule.cuts[index].ms > 200) { auto shorter = schedule; shorter.cuts[index].ms /= 2; add(shorter); }
@@ -1820,16 +1932,13 @@ namespace RTE {
 					fixedResults.emplace_back(names[index], !result);
 				}
 				if (!runRandom) { elapsedMs = Elapsed(began); return; }
-				// Group the failures by what failed and the shape that failed it, and minimize the smallest round of each group.
+				// Group the failures by what failed, the seats and whether a referee decides ties, and minimize the smallest round of each
+				// group; the minimized shapes are kept once each.
 				std::map<std::string, std::vector<size_t>> groups;
 				for (size_t index = fixedCount; index < schedules.size(); ++index) {
 					if (!results[index]) continue;
 					++failedCount;
-					std::set<std::string> kinds;
-					for (const auto& spell: schedules[index].spells) kinds.insert(std::string(spell.seat == 1 ? "host_" : "joiner_") + SpellWord(spell.kind));
-					std::string key = results[index]->property + ":" + results[index]->kind + ":" + std::to_string(schedules[index].seats) + (schedules[index].internet ? ":internet" : ":direct");
-					for (const auto& kind: kinds) key += ":" + kind;
-					groups[key].push_back(index);
+					groups[results[index]->property + ":" + results[index]->kind + ":" + std::to_string(schedules[index].seats) + (schedules[index].internet ? ":internet" : ":direct")].push_back(index);
 				}
 				std::map<std::string, std::string> minimized;
 				size_t done = 0;
@@ -2614,7 +2723,7 @@ namespace RTE {
 		auto lateReferee = gap("two_internet_late_joiner_takes_every_decision_with_a_240ms_referee", 2, 20000); lateReferee.seats = 2;
 		lateReferee.internet = lateReferee.directoryBoth = lateReferee.noRefusals = true; lateReferee.slowPercent = 95;
 		lateReferee.rttMs = lateReferee.otherRttMs = 100; lateReferee.directoryExchangeMs = 240; rows.push_back(lateReferee);
-		// A directory slower than a frame tie's 250 ms request timeout never answers one: the same late joiner, every request timed out.
+		// A secure exchange past the timeout floor succeeds after the client's measured timeout adapts.
 		auto pastTimeout = lateReferee; pastTimeout.name = "two_internet_late_joiner_with_a_referee_past_the_tie_timeout"; pastTimeout.directoryExchangeMs = 300;
 		rows.push_back(pastTimeout);
 		// Three retained seats: the directory referees only even splits of two or four, so a tie of the two playing seats goes to the host's half.
@@ -2689,12 +2798,14 @@ namespace RTE {
 		}
 		int passed = 0, failed = 0;
 		const char* selected = std::getenv("CC_TEST_SESSION_PLANE_CASE");
-		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 4 + FixedScheduleRows().size()) << std::endl;
+		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 5 + FixedScheduleRows().size()) << std::endl;
 		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest
 		// rows started first; the random driver's rounds follow them in the same pool.
 		QuietLines quiet(std::cout);
 		struct RowRun { std::string name; std::function<bool(std::string&)> check; std::string error, lines; bool ok = false; uint64_t cost = 0; };
 		std::vector<RowRun> named;
+		if (!selected || std::string_view(selected) == "directory_client_round_trip_allowances_and_refusals")
+			named.push_back({"directory_client_round_trip_allowances_and_refusals", CheckDirectoryClient});
 		for (const auto& row: rows) {
 			if (selected && std::string_view(selected) != row.name) continue;
 			RowRun run; run.name = row.name;
