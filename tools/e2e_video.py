@@ -1695,9 +1695,11 @@ def item_evidence(record, item, port=None):
     probe_steps = item.get("probe_steps")
     if item.get("mark") and probe_steps is None and probe_path.is_file():
         script = json.loads(probe_path.read_text(encoding="utf-8")).get("script", {}).get("steps", [])
-        start = next((index for index, step in enumerate(script) if step.get("command") == "video_mark " + item["mark"]), None)
+        # A step's command is a menu line, or a number where the step names a pie slice.
+        marks = [str(step.get("command", "")) for step in script]
+        start = next((index for index, command in enumerate(marks) if command == "video_mark " + item["mark"]), None)
         if start is not None:
-            end = next((index for index in range(start + 1, len(script)) if script[index].get("command", "").startswith("video_mark ")), len(script))
+            end = next((index for index in range(start + 1, len(script)) if marks[index].startswith("video_mark ")), len(script))
             probe_steps = list(range(start, end))
     if required:
         matched = [{"assertion": pattern, "observed": [event for event in events if re.search(pattern, event["message"])]}

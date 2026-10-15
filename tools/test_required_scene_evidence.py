@@ -67,6 +67,21 @@ class RequiredSceneEvidence(unittest.TestCase):
             _, evidence = video.item_evidence(peer, item)
             self.assertEqual(evidence['probe'], 'fail')
 
+    def test_a_marked_item_reads_past_a_step_whose_command_is_a_number(self):
+        # The pie menu's step names its command by number: a mark's steps still run to the next mark.
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root/'video').mkdir(); (root/'probe').mkdir()
+            (root/'video'/'events.jsonl').write_text(json.dumps(dict(message='video_mark playing-host', wall_ms=10)) + '\n')
+            steps = [dict(op='menu', command='video_mark playing-host'), dict(op='pie_point', input_player=0, command=6),
+                     dict(op='menu', command='video_mark pie-buy-host')]
+            observed = [dict(index=index, observed={}) for index in range(3)]
+            (root/'probe'/'net-ui-result.json').write_text(json.dumps(dict(script=dict(steps=steps), steps=observed)))
+            record = dict(root=str(root), probe_dir=str(root/'probe'), video_dir=str(root/'video'), index=[])
+            _, evidence = video.item_evidence(record, dict(id='playing-host', mark='playing-host', screen='game'))
+            self.assertEqual([row['step'] for row in evidence['assertions']], [0, 1])
+            self.assertEqual(evidence['probe'], 'pass')
+
 
 if __name__ == '__main__':
     unittest.main()
