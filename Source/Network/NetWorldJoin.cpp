@@ -2543,7 +2543,7 @@ namespace RTE {
 		return true;
 	}
 
-	void NetWorldJoinHost::CancelJoin(NetPeerId connection, const std::string& reason) {
+	void NetWorldJoinHost::CancelJoin(NetPeerId connection, const std::string& reason, bool returnerFailed) {
 		NetWorldJoinSession* session = Find(connection);
 		if (session == nullptr) {
 			return;
@@ -2556,22 +2556,22 @@ namespace RTE {
 		session->phase = NetWorldJoinPhase::Failed;
 		session->refusal = reason;
 		++m_JoinsCancelled;
-		if (session->assignedPeerId != 0) m_CancelledJoins.push_back(session->assignedPeerId);
+		if (session->assignedPeerId != 0) m_CancelledJoins.emplace_back(session->assignedPeerId, returnerFailed);
 		std::erase_if(m_Sessions, [&](const NetWorldJoinSession& entry) { return entry.connection == connection; });
 	}
 
-	void NetWorldJoinHost::EndBootstrap(NetPeerId connection, const std::string& reason) {
+	void NetWorldJoinHost::EndBootstrap(NetPeerId connection, const std::string& reason, bool returnerFailed) {
 		NetWorldJoinSession* session = Find(connection);
 		if (session == nullptr) return;
 		if (!session->returnsToHeldSeat) {
-			CancelJoin(connection, reason);
+			CancelJoin(connection, reason, returnerFailed);
 			return;
 		}
 		// The seat stays its player's: only the bootstrap ends, and the roster hears its return was cut short.
 		session->phase = NetWorldJoinPhase::Failed;
 		session->refusal = reason;
 		++m_JoinsCancelled;
-		if (session->assignedPeerId != 0) m_CancelledJoins.push_back(session->assignedPeerId);
+		if (session->assignedPeerId != 0) m_CancelledJoins.emplace_back(session->assignedPeerId, returnerFailed);
 		std::erase_if(m_Sessions, [&](const NetWorldJoinSession& entry) { return entry.connection == connection; });
 	}
 
@@ -2593,6 +2593,12 @@ namespace RTE {
 
 	std::vector<uint8_t> NetWorldJoinHost::TakeCancelledJoins() {
 		std::vector<uint8_t> taken;
+		for (const auto& [peer, failed]: TakeCancelledJoinCauses()) taken.push_back(peer);
+		return taken;
+	}
+
+	std::vector<std::pair<uint8_t, bool>> NetWorldJoinHost::TakeCancelledJoinCauses() {
+		std::vector<std::pair<uint8_t, bool>> taken;
 		taken.swap(m_CancelledJoins);
 		return taken;
 	}

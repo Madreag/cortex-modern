@@ -484,6 +484,7 @@ namespace RTE {
 	struct NetJoinHistoryEnd {
 		NetPeerId connection = c_InvalidNetPeerId;
 		bool rebase = false; //!< A returning seat of a match: it comes back on a fresh image. Any other reader is closed.
+		bool lagged = false; //!< It fell behind the lag limit itself; history the host no longer serves is not the reader's failure.
 		std::string receipt;
 	};
 
@@ -749,16 +750,19 @@ namespace RTE {
 		void AcknowledgeActivation(NetPeerId connection, uint64_t frame);
 		void MarkActivationProposed(NetPeerId connection);
 		void MarkActivationCommitted(NetPeerId connection);
-		/// Ends a bootstrap without a seat drop: a failed or slow fresh join is not a departure.
-		void CancelJoin(NetPeerId connection, const std::string& reason);
+		/// Ends a bootstrap without a seat drop: a failed or slow fresh join is not a departure. A return ended by the round or the
+		/// host - held again, a capture park, an image the host could not stage, the round's end - is not the returner's failure.
+		void CancelJoin(NetPeerId connection, const std::string& reason, bool returnerFailed = true);
 		/// Ends a bootstrap the round's history can no longer serve. A seat its player is coming back to stays held for that player, as a
 		/// dropped link leaves it; a fresh join gives its slot back as CancelJoin does, and a watcher its lobby id.
-		void EndBootstrap(NetPeerId connection, const std::string& reason);
+		void EndBootstrap(NetPeerId connection, const std::string& reason, bool returnerFailed = true);
 		/// Whether a reader has trailed the round past the lag limit for a whole limit of round time without gaining on it. A reader that
 		/// gains is closing, however far behind, and its window starts again.
 		bool TrailsPastLagLimit(NetPeerId connection, uint64_t tick, uint64_t limitFrames);
 		/// The peers whose joins were cancelled since the last call, oldest first.
 		std::vector<uint8_t> TakeCancelledJoins();
+		/// The same, each with whether the returner's own failure ended it.
+		std::vector<std::pair<uint8_t, bool>> TakeCancelledJoinCauses();
 		/// Cancels every bootstrap past its deadline. Returns how many it ended.
 		size_t ExpireStaleJoins(uint64_t nowMs, std::vector<NetPeerId>* expired = nullptr);
 		/// Ends every bootstrap whose connection is gone, so a spectator's lobby id returns to the pool.
@@ -810,7 +814,7 @@ namespace RTE {
 		uint64_t m_SentInputThrough = 0; //!< The round's highest sent target, from the coordinator.
 		uint64_t m_ActivationsCommitted = 0;
 		uint64_t m_JoinsCancelled = 0;
-		std::vector<uint8_t> m_CancelledJoins; //!< The assigned peers of the joins cancelled, for the host's seat roster.
+		std::vector<std::pair<uint8_t, bool>> m_CancelledJoins; //!< The assigned peers of the joins cancelled, and whether each was the returner's failure, for the host's seat roster.
 	};
 
 } // namespace RTE
