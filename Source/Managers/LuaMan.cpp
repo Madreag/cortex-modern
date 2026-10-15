@@ -4480,6 +4480,21 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 		if (CheckpointNativeSnapshot::Boundary()) if (const auto* field = DirectVectorOwner(address)) return field;
 		return Find(Owners().vectors, address);
 	}
+	/// Where a pie slice lives: the known actor whose pie menu tree holds it and the slice indices down to it ("menu/2/0").
+	struct PieSlicePlace {
+		const Actor* owner;
+		std::string path;
+	};
+	const PieSlicePlace* PieSliceOwner(const void* address) const {
+		address = CheckpointNativeStorage::Original(address);
+		Once(m_PieSlicesBuilt, m_PieSlicesReady, [this] {
+			for (MovableObject* original: KnownObjects()) {
+				if (const auto* actor = CheckpointCast<const Actor>(CheckpointNativeStorage::Source(original))) AddPieMenu(static_cast<const Actor*>(static_cast<const MovableObject*>(original)), actor->GetPieMenu(), "menu");
+			}
+		});
+		const auto found = m_PieSlices.find(address);
+		return found == m_PieSlices.end() ? nullptr : &found->second;
+	}
 	/// The actor a Controller belongs to, if it is a known actor's.
 	const long* ControllerOwner(const void* address) const {
 		address = CheckpointNativeStorage::Original(address);
@@ -4518,6 +4533,16 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	}
 
 private:
+	void AddPieMenu(const Actor* owner, const PieMenu* menu, const std::string& path) const {
+		if (!menu) return;
+		size_t index = 0;
+		for (const PieSlice* slice: CheckpointValues(CheckpointNativeStorage::Source(menu)->GetPieSlices())) {
+			const std::string place = path + "/" + std::to_string(index++);
+			if (!slice) continue;
+			m_PieSlices.try_emplace(CheckpointNativeStorage::Original(slice), PieSlicePlace{owner, place});
+			AddPieMenu(owner, CheckpointNativeStorage::Source(slice)->GetSubPieMenu(), place);
+		}
+	}
 	struct VectorGetter { const char* name; const Vector* (*get)(const MovableObject*); };
 	static constexpr std::array<VectorGetter, 9> c_VectorGetters{{
 	    {"Pos", [](const MovableObject* mo) { return &mo->GetPos(); }},
@@ -4672,6 +4697,9 @@ private:
 	mutable std::once_flag m_SpecialBuilt;
 	mutable std::atomic<bool> m_SpecialReady{false};
 	mutable std::unordered_set<const void*> m_Special;
+	mutable std::once_flag m_PieSlicesBuilt;
+	mutable std::atomic<bool> m_PieSlicesReady{false};
+	mutable std::unordered_map<const void*, PieSlicePlace> m_PieSlices;
 };
 static thread_local const LuaScriptGraphNativeCaptureData* s_GraphNativeCapture = nullptr;
 
@@ -5867,6 +5895,24 @@ static int ScriptGraphOwnerReference(lua_State* L) {
 				const auto parsed = std::from_chars(path.data(), path.data() + path.size(), uid);
 				if (parsed.ec == std::errc{} && parsed.ptr == path.data() + path.size()) return push(object->FindPartByUniqueID(uid));
 			}
+			constexpr std::string_view slicePrefix = "pie-slice:menu";
+			if (path.starts_with(slicePrefix)) {
+				path.remove_prefix(slicePrefix.size());
+				auto* actor = dynamic_cast<Actor*>(object);
+				PieMenu* menu = actor ? actor->GetPieMenu() : nullptr;
+				PieSlice* slice = nullptr;
+				// Each step is "/index": a slice of the menu so far, whose sub-menu the next step reads.
+				while (!path.empty() && path.front() == '/') {
+					path.remove_prefix(1);
+					size_t step = 0;
+					const auto parsed = std::from_chars(path.data(), path.data() + path.size(), step);
+					if (parsed.ec != std::errc{} || !menu || step >= menu->GetPieSlices().size()) { slice = nullptr; break; }
+					path.remove_prefix(static_cast<size_t>(parsed.ptr - path.data()));
+					slice = menu->GetPieSlices()[step];
+					menu = slice ? slice->GetSubPieMenu() : nullptr;
+				}
+				return push(path.empty() ? slice : nullptr);
+			}
 		} else if (std::strcmp(owner->crep()->name(), "Scene") == 0 && std::strcmp(property, "terrain") == 0) {
 			if (index == 0) return push(static_cast<Scene*>(owner->ptr())->GetTerrain());
 		} else if (std::strcmp(owner->crep()->name(), "Scene") == 0 && std::strcmp(property, "background") == 0) {
@@ -5923,6 +5969,11 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 		return 7;
 	};
 	const auto* type = rep->crep();
+	// A pie slice is named by its place in a known actor's pie menu tree, and never read.
+	if (s_GraphNativeCapture && type && std::strcmp(type->name(), "PieSlice") == 0) {
+		if (const auto* place = s_GraphNativeCapture->PieSliceOwner(rep->ptr())) return found(const_cast<Actor*>(place->owner), ("pie-slice:" + place->path).c_str(), 0);
+		return 0;
+	}
 	if (CheckpointWriter::BatchEnabled() && type && type->get_class_type() == luabind::detail::class_rep::cpp_class &&
 	    type->type() == LUABIND_TYPEID(Vector) && std::strcmp(type->name(), "Vector") == 0) {
 		if (const int index = g_PrimitiveMan.FindCheckpointVertex(rep->ptr()); index >= 0) return found(&g_PrimitiveMan, "primitive-vertex", index);
@@ -6044,6 +6095,12 @@ static int ScriptGraphNative(lua_State* L) {
 	const bool owned = (rep->flags() & luabind::detail::object_rep::owner) != 0;
 	const std::string className = crep->name();
 	const void* const handle = CheckpointNativeStorage::Original(rep->ptr());
+	// A pie slice whose menu deleted it was left out of the frozen copy; it stays a dead reference.
+	if (!owned && !rep->ptr() && className == "PieSlice") {
+		lua_pushstring(L, "invalid");
+		lua_pushstring(L, className.c_str());
+		return 2;
+	}
 	// An Area a script kept past its scene's end is named, never read.
 	if (!owned && className == "Area" && !ScriptGraphNativeAlive(L, rep)) {
 		lua_pushstring(L, "invalid");
@@ -6654,7 +6711,7 @@ static int ScriptGraphDeadReference(lua_State* L) {
 	lua_getglobal(L, name);
 	if (!luabind::detail::is_class_rep(L, -1)) return luaL_error(L, "unknown dead reference class %s", name);
 	auto* type = static_cast<luabind::detail::class_rep*>(lua_touserdata(L, -1));
-	if (!ClassDerivesFrom(type, "MovableObject") && std::strcmp(type->name(), "Area") != 0) return luaL_error(L, "dead reference class is not a MovableObject or an Area");
+	if (!ClassDerivesFrom(type, "MovableObject") && std::strcmp(type->name(), "Area") != 0 && std::strcmp(type->name(), "PieSlice") != 0) return luaL_error(L, "dead reference class is not a MovableObject, an Area or a PieSlice");
 	lua_pop(L, 1);
 	void* storage = lua_newuserdata(L, sizeof(luabind::detail::object_rep));
 	new (storage) luabind::detail::object_rep(nullptr, type, 0, nullptr);
@@ -8119,7 +8176,7 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 		CheckpointLua::FrozenBindings bindings(heap, &boundary.Bindings());
 		part.nativeSetupUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		CheckpointLua::ProtectedCall(state, [&] {
-			const auto copy = [&, bindings](const luabind::detail::class_rep* type, const void* pointer) -> void* {
+			const auto copy = [&, bindings](const luabind::detail::class_rep* type, const void* pointer, bool owned) -> void* {
 				const auto started = std::chrono::steady_clock::now();
 				struct Cost {
 					FrozenCaptureStats& part; std::chrono::steady_clock::time_point started; uint64_t cpu;
@@ -8129,6 +8186,8 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 				if (const auto offset = bindings.BaseOffset(type, "Entity")) {
 					const auto* entity = reinterpret_cast<const Entity*>(static_cast<const char*>(pointer) + *offset);
 					if (bindings.DerivesFrom(type, "MovableObject") && !LuaScriptGraphNativeCaptureScope::Current()->Known(static_cast<const MovableObject*>(entity))) return nullptr;
+					// A slice no known actor's pie menu holds was deleted with its menu; only its address is read.
+					if (!owned && bindings.DerivesFrom(type, "PieSlice") && !LuaScriptGraphNativeCaptureScope::Current()->PieSliceOwner(entity)) return nullptr;
 					return reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
 				}
 				const auto value = [&]<class T>(T*) -> void* { return CopyFrozenValue<T>(*snapshot, pointer); };
@@ -10787,7 +10846,7 @@ end
 			Vector* finalized = nullptr;
 			CheckpointLua::ProtectedCall(state, [&] {
 				bind(state); LuaThreadCodec::Register(state);
-				retained = std::make_unique<CheckpointLua::SavedObjects>(state, heap, callbacks, [&](const auto*, const void* pointer) -> void* {
+				retained = std::make_unique<CheckpointLua::SavedObjects>(state, heap, callbacks, [&](const auto*, const void* pointer, bool) -> void* {
 					auto& value = vectors[pointer];
 					if (!value) value = std::make_unique<Vector>(*CheckpointNativeStorage::Source(static_cast<const Vector*>(pointer)));
 					return value.get();
