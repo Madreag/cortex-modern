@@ -91,6 +91,7 @@ extern "C" {
 #include "SoundSimulation.h"
 #include "AudioCheckpoint.h"
 #include "System.h"
+#include "SteadyClock.h"
 #include "RTEError.h"
 #include "DataModule.h"
 #include "MenuAutomation.h"
@@ -3870,7 +3871,29 @@ static void DriveModerationE2e() {
 /// Game menus loop.
 /// </summary>
 static uint64_t MenuScriptNowMs() {
-	return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+	return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count());
+}
+
+// The clock a match paces and times itself by never runs back: a steady clock's reading is years from the wall clock's.
+static bool RunSteadyClockSelfTest() {
+	using namespace std::chrono;
+	const int64_t wall = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+	const int64_t library = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+	const int64_t engine = duration_cast<milliseconds>(SteadyNow().time_since_epoch()).count();
+	const auto followsWall = [wall](int64_t reading) { return std::llabs(reading - wall) < 60000; };
+	std::cout << "[steady-clock-selftest] std::chrono::steady_clock " << (followsWall(library) ? "reads the wall clock" : "is apart from the wall clock") << ": " << library << " ms, the wall " << wall << " ms" << std::endl;
+	bool forward = true;
+	auto previous = SteadyNow();
+	for (int count = 0; count < 100000; ++count) {
+		const auto now = SteadyNow();
+		forward = forward && now >= previous;
+		previous = now;
+	}
+	const bool apart = !followsWall(engine);
+	std::cout << "[steady-clock-selftest] " << (apart ? "PASS" : "FAIL") << " the match's clock " << (apart ? "is apart from the wall clock" : "reads the wall clock, which a time sync steps back") << ": " << engine << " ms" << std::endl;
+	std::cout << "[steady-clock-selftest] " << (forward ? "PASS" : "FAIL") << " 100000 reads of the match's clock in order" << (forward ? "" : " went back") << std::endl;
+	std::cout << "[steady-clock-selftest] " << (apart && forward ? "PASS" : "FAIL") << std::endl;
+	return apart && forward;
 }
 
 static void ConfigureMenuScriptInput(int argc, char** argv) {
@@ -11923,6 +11946,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-combo-key-selftest") {
 			return GUIManager::RunComboKeyCommitSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-steady-clock-selftest") {
+			return RunSteadyClockSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-rteerror-selftest") {
 			return RTEError::RunAssertPolicySelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;

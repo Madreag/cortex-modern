@@ -1,4 +1,5 @@
 #include "NetMatchService.h"
+#include "SteadyClock.h"
 #include "DiagnosticLine.h"
 #include "Controller.h"
 #include "LoopbackTransport.h"
@@ -448,7 +449,7 @@ static std::string ResyncSaveName() {
 		};
 
 		uint64_t SteadyNowMs() {
-			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count());
 		}
 
 		// The port mapper is file-scope because NetMatchService.h is outside this lane's edit set and

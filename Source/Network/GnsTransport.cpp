@@ -1,4 +1,5 @@
 #include "GnsTransport.h"
+#include "SteadyClock.h"
 #include "DiagnosticLine.h"
 #include "NetIceServers.h"
 #include "NetLobbyProtocol.h"
@@ -184,7 +185,7 @@ namespace RTE {
 		std::atomic<uint64_t> g_GnsLingerUntilMs{0};
 
 		uint64_t GnsNowMs() {
-			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count());
 		}
 
 		void KeepGnsForLingeringClose() {

@@ -1,4 +1,5 @@
 #include "NetLockstep.h"
+#include "SteadyClock.h"
 #include "GnsTransport.h"
 
 #include "NetActorOwnership.h"
@@ -47,8 +48,8 @@ namespace RTE {
 	}
 
 	uint64_t NetLockstepNowMs() {
-		static const std::chrono::steady_clock::time_point base = std::chrono::steady_clock::now();
-		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - base).count());
+		static const std::chrono::steady_clock::time_point base = SteadyNow();
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow() - base).count());
 	}
 
 	std::vector<const ControllerFrame*> CommittedControllerFramesInSenderOrder(const NetLockstepReadyFrame& ready, uint8_t localPeerId) {
@@ -72,7 +73,7 @@ namespace RTE {
 
 	uint64_t NetLockstepSharedClockMs() {
 		// The machine's monotonic clock, the same in every process on it, for diagnostics that compare peers.
-		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count());
 	}
 
 	namespace {

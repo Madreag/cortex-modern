@@ -1019,6 +1019,7 @@
     <ClInclude Include="Source\System\Reader.h" />
     <ClInclude Include="Source\System\Serializable.h" />
     <ClInclude Include="Source\System\Singleton.h" />
+    <ClInclude Include="Source\System\SteadyClock.h" />
     <ClInclude Include="Source\System\System.h" />
     <ClInclude Include="Source\System\Timer.h" />
     <ClInclude Include="Source\System\Vector.h" />

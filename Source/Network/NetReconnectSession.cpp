@@ -1,4 +1,5 @@
 #include "NetReconnectSession.h"
+#include "SteadyClock.h"
 #include "DiagnosticLine.h"
 #include "NetA7Journal.h"
 
@@ -23,7 +24,7 @@ namespace RTE {
 
 	namespace {
 		uint8_t RosterIdOf(uint16_t stableSeat) { return NetRosterIdOf(stableSeat); }
-		uint64_t ConnectionNowMs() { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); }
+		uint64_t ConnectionNowMs() { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count()); }
 	} // namespace
 
 	uint64_t NetRosterMatchIdOf(const NetAuthBytes16& epoch) {

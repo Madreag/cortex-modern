@@ -63,6 +63,7 @@ SELFTESTS = [
     "float-text",
     "combo-key",
     "rteerror",
+    "steady-clock",
     "module-version",
     "ext-validate-version",
     "path-prefix",

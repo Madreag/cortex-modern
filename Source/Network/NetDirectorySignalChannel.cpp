@@ -1,4 +1,5 @@
 #include "NetDirectorySignalChannel.h"
+#include "SteadyClock.h"
 #include "DiagnosticLine.h"
 
 #include "NetHttpClient.h"
@@ -25,7 +26,7 @@ namespace RTE {
 		static_assert(sizeof(c_InstallKeyAlphabet) == 65, "the nonce draws 6 bits per character");
 
 		uint64_t SteadyNowMs() {
-			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count());
 		}
 
 		/// The production transport: one NetHttpClient per request, carrying the channel's headers.
