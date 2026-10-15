@@ -1020,6 +1020,7 @@
     <ClInclude Include="Source\System\Serializable.h" />
     <ClInclude Include="Source\System\Singleton.h" />
     <ClInclude Include="Source\System\SteadyClock.h" />
+    <ClInclude Include="Source\System\DisplayRefreshes.h" />
     <ClInclude Include="Source\System\System.h" />
     <ClInclude Include="Source\System\Timer.h" />
     <ClInclude Include="Source\System\Vector.h" />
@@ -1636,6 +1637,7 @@
     <ClCompile Include="Source\Network\NetPortMapSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetProtocol.cpp" />
     <ClCompile Include="Source\System\FrameRecorder.cpp" />
+    <ClCompile Include="Source\System\DisplayRefreshes.cpp" />
     <ClCompile Include="Source\System\StallStackSampler.cpp" />
     <ClCompile Include="Source\System\RotatePrimitiveSelfTest.cpp" />
     <ClCompile Include="Source\System\FloatTextSelfTest.cpp" />

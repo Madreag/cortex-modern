@@ -3896,16 +3896,16 @@ static bool RunSwapWaitSelfTest() {
 		double now = 0;
 		int suspendedAt = -1;
 		for (int swap = 1; swap <= 40 && suspendedAt < 0; ++swap, now += 80.7) {
-			if (guard.Note(80.7, 165, now, true) == Action::Suspend) suspendedAt = swap;
+			if (guard.Note(80.7, 165, now, true, -1) == Action::Suspend) suspendedAt = swap;
 		}
 		check("an unseen display is let go after 30 long swaps", suspendedAt == SwapWaitGuard::c_LongSwapsToSuspend, "suspended at swap " + std::to_string(suspendedAt));
 		Action action = Action::Keep;
-		for (int frame = 0; frame < 200 && action == Action::Keep; ++frame) action = guard.Note(0.1, 165, now += 16.7, true);
+		for (int frame = 0; frame < 200 && action == Action::Keep; ++frame) action = guard.Note(0.1, 165, now += 16.7, true, -1);
 		check("a suspended wait is tried again", action == Action::Retry && now >= 2000.0, "action " + std::to_string(static_cast<int>(action)) + " at " + std::to_string(now) + " ms");
-		check("a retried swap that still waits keeps it let go", guard.Note(80.7, 165, now += 80.7, true) == Action::Suspend && guard.Suspended(), "the wait came back");
+		check("a retried swap that still waits keeps it let go", guard.Note(80.7, 165, now += 80.7, true, -1) == Action::Suspend && guard.Suspended(), "the wait came back");
 		action = Action::Keep;
-		for (int frame = 0; frame < 200 && action == Action::Keep; ++frame) action = guard.Note(0.1, 165, now += 16.7, true);
-		check("a retried swap within its refresh waits again", action == Action::Retry && guard.Note(5.9, 165, now += 5.9, true) == Action::Resume && !guard.Suspended(), "no resume");
+		for (int frame = 0; frame < 200 && action == Action::Keep; ++frame) action = guard.Note(0.1, 165, now += 16.7, true, -1);
+		check("a retried swap within its refresh waits again", action == Action::Retry && guard.Note(5.9, 165, now += 5.9, true, -1) == Action::Resume && !guard.Suspended(), "no resume");
 	}
 	{
 		// Displays that take frames: a 165 Hz panel, a 24 Hz screen at one period a swap, a 60 Hz one with a long swap every tenth.
@@ -3913,9 +3913,9 @@ static bool RunSwapWaitSelfTest() {
 		bool suspended = false;
 		double now = 0;
 		for (int swap = 0; swap < 2000; ++swap, now += 16.7) {
-			suspended = suspended || panel.Note(6.0, 165, now, true) == Action::Suspend;
-			suspended = suspended || slowScreen.Note(41.7, 24, now, true) == Action::Suspend;
-			suspended = suspended || hitches.Note(swap % 10 == 0 ? 80.0 : 16.0, 60, now, true) == Action::Suspend;
+			suspended = suspended || panel.Note(6.0, 165, now, true, -1) == Action::Suspend;
+			suspended = suspended || slowScreen.Note(41.7, 24, now, true, -1) == Action::Suspend;
+			suspended = suspended || hitches.Note(swap % 10 == 0 ? 80.0 : 16.0, 60, now, true, -1) == Action::Suspend;
 		}
 		check("a display that takes frames is always waited on", !suspended, "a wait was let go");
 	}
@@ -3924,10 +3924,31 @@ static bool RunSwapWaitSelfTest() {
 		SwapWaitGuard menus, ending;
 		bool suspended = false;
 		double now = 0;
-		for (int swap = 0; swap < 100; ++swap, now += 80.7) suspended = suspended || menus.Note(80.7, 165, now, false) == Action::Suspend;
-		for (int swap = 0; swap < SwapWaitGuard::c_LongSwapsToSuspend; ++swap, now += 80.7) ending.Note(80.7, 165, now, true);
-		check("outside a match nothing changes, and a match's end gives the wait back", !suspended && ending.Suspended() && ending.Note(80.7, 165, now, false) == Action::Resume && !ending.Suspended(),
+		for (int swap = 0; swap < 100; ++swap, now += 80.7) suspended = suspended || menus.Note(80.7, 165, now, false, -1) == Action::Suspend;
+		for (int swap = 0; swap < SwapWaitGuard::c_LongSwapsToSuspend; ++swap, now += 80.7) ending.Note(80.7, 165, now, true, -1);
+		check("outside a match nothing changes, and a match's end gives the wait back", !suspended && ending.Suspended() && ending.Note(80.7, 165, now, false, -1) == Action::Release && !ending.Suspended(),
 		      "a wait outside a match was let go or the end kept it");
+	}
+	{
+		// Where the compositor counts the display's refreshes: the Z13's dark panel counted 0.33 a second, a lit one 165.
+		SwapWaitGuard dark, lit;
+		double now = 0;
+		for (int swap = 0; swap < SwapWaitGuard::c_LongSwapsToSuspend; ++swap, now += 80.7) {
+			dark.Note(80.7, 165, now, true, -1);
+			lit.Note(80.7, 165, now, true, -1);
+		}
+		bool darkWaited = false, darkResumed = false;
+		double litResumedAt = -1;
+		const double suspendedAt = now;
+		for (int frame = 0; frame < 600; ++frame, now += 16.7) {
+			const Action darkAction = dark.Note(0.3, 165, now, true, static_cast<int64_t>(now / 3000.0));
+			darkWaited = darkWaited || darkAction == Action::Retry;
+			darkResumed = darkResumed || darkAction == Action::Resume;
+			if (litResumedAt < 0 && lit.Note(0.3, 165, now, true, static_cast<int64_t>(now * 0.165)) == Action::Resume) litResumedAt = now;
+		}
+		check("a dark display the compositor counts is never tried with a waited swap", !darkWaited && !darkResumed && dark.Suspended(), "a waited swap or a resume on a dark display");
+		check("a lit display the compositor counts is waited on again within a look", litResumedAt > suspendedAt && litResumedAt <= suspendedAt + SwapWaitGuard::c_RetryEveryMs + 50.0 && !lit.Suspended() && lit.ShownHz() > 150.0,
+		      "resumed at " + std::to_string(litResumedAt - suspendedAt) + " ms after the suspend, counted " + std::to_string(lit.ShownHz()) + " Hz");
 	}
 	std::cout << "[swap-wait-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;

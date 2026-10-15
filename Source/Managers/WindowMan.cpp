@@ -17,6 +17,7 @@
 #include "System.h"
 #include "ScenarioRunner.h"
 #include "SwapWaitGuard.h"
+#include "DisplayRefreshes.h"
 
 #include "GLCheck.h"
 #include <SDL3/SDL.h>
@@ -56,7 +57,8 @@ namespace {
 		const double refreshHz = mode ? mode->refresh_rate : 0.0;
 		const bool inMatch = vsync && !SwapWaitLifted() && ScenarioRunner::IsLockstepControllerSyncActive();
 		const bool wasSuspended = s_SwapWaitGuard.Suspended();
-		switch (s_SwapWaitGuard.Note(swapMs, refreshHz, nowMs, inMatch)) {
+		const int64_t refreshes = wasSuspended ? CompositorRefreshCount() : -1;
+		switch (s_SwapWaitGuard.Note(swapMs, refreshHz, nowMs, inMatch, refreshes)) {
 			case SwapWaitGuard::Action::Suspend:
 				SDL_GL_SetSwapInterval(0);
 				FrameMan::SetUnseenDisplayCap(true);
@@ -69,7 +71,13 @@ namespace {
 			case SwapWaitGuard::Action::Resume:
 				SDL_GL_SetSwapInterval(vsync && !SwapWaitLifted() ? 1 : 0);
 				FrameMan::SetUnseenDisplayCap(false);
-				System::PrintDiagnosticLine(std::format("[render] the display takes frames again (a swap of {:.1f} ms): presents wait for it", swapMs));
+				System::PrintDiagnosticLine(refreshes >= 0 ? std::format("[render] the display takes frames again (the compositor counts {:.0f} refreshes a second): presents wait for it", s_SwapWaitGuard.ShownHz()) :
+				                                             std::format("[render] the display takes frames again (a swap of {:.1f} ms): presents wait for it", swapMs));
+				break;
+			case SwapWaitGuard::Action::Release:
+				SDL_GL_SetSwapInterval(vsync && !SwapWaitLifted() ? 1 : 0);
+				FrameMan::SetUnseenDisplayCap(false);
+				System::PrintDiagnosticLine("[render] out of the match: presents wait for the display again");
 				break;
 			case SwapWaitGuard::Action::Keep:
 				break;
