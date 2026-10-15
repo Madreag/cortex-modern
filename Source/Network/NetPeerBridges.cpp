@@ -584,6 +584,29 @@ namespace RTE {
 					for (uint8_t peer: vote.members)
 						if (const auto held = m_PeerBridges.find(peer); held != m_PeerBridges.end() && held->second.committedHold && !held->second.returnFrame) open = true;
 			if (!open) continue;
+			// It is certified only with every seat that plays now: a seat held or silent at this frame, or one that backed another return
+			// of these seats, never completes it, so the frame does not wait on it and a silent seat is held within the bound instead.
+			const auto& basis = votes->second.contains(m_Config.localPeerId) ? votes->second.at(m_Config.localPeerId) : votes->second.begin()->second;
+			uint32_t required = basis.connectedMask, returning = 0;
+			if (basis.preparedFrame == 1) for (uint8_t peer: basis.members) { required &= ~SeatBit(peer); returning |= SeatBit(peer); }
+			const auto remote = m_RemoteFrames.find(m_Stats.nextFrame);
+			bool completes = true;
+			for (uint8_t peer = 1; completes && peer <= m_Config.peerCount; ++peer) {
+				if ((required & SeatBit(peer)) == 0 || peer == m_Config.localPeerId) continue;
+				if (const auto vote = votes->second.find(peer); vote != votes->second.end() && SameBridge(vote->second, basis)) continue;
+				const auto held = m_PeerBridges.find(peer);
+				const bool heldHere = held != m_PeerBridges.end() && held->second.committedHold && m_Stats.nextFrame >= held->second.fromFrame &&
+				    (!held->second.returnFrame || m_Stats.nextFrame < *held->second.returnFrame);
+				const bool silent = remote == m_RemoteFrames.end() || !remote->second.contains(peer);
+				bool backedAnother = false;
+				for (auto other = m_PeerBridgeVotes.lower_bound({m_Stats.nextFrame, 0}); returning != 0 && !backedAnother && other != m_PeerBridgeVotes.end(); ++other) {
+					if (other->first.second != 1 || other->first == votes->first) continue;
+					if (const auto vote = other->second.find(peer); vote != other->second.end())
+						for (uint8_t member: vote->second.members) backedAnother = backedAnother || (returning & SeatBit(member)) != 0;
+				}
+				completes = !heldHere && !silent && !backedAnother;
+			}
+			if (!completes) continue;
 			const auto seen = m_PeerVotedAtMs.try_emplace(votes->first, nowMs).first;
 			if (nowMs < seen->second + c_NetSeatCatchUpAllowanceMs) return true;
 		}
