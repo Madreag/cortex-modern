@@ -1,6 +1,7 @@
 #pragma once
 
 #include "glad/gl.h"
+#include "SteadyClock.h"
 #include <SDL3/SDL.h>
 
 #include <array>
@@ -136,14 +137,14 @@ namespace RTE {
 			return TextureReadbackResult::Failed;
 		}
 		bool done = false;
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
+		const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(90);
 		do {
 			const GLenum state = glad_glClientWaitSync(frame.ready, 0, wait ? 1000000 : 0);
 			const GLenum fenceError = glad_glGetError();
 			if (state == GL_ALREADY_SIGNALED || state == GL_CONDITION_SATISFIED) { done = fenceError == GL_NO_ERROR; if (done) break; }
 			if (state != GL_TIMEOUT_EXPIRED || fenceError != GL_NO_ERROR) { error = "queued pixel transfer fence failed: " + std::to_string(fenceError); break; }
 			if (!wait) return TextureReadbackResult::Pending;
-		} while (std::chrono::steady_clock::now() < deadline);
+		} while (RTE::SteadyClock::now() < deadline);
 		if (!done) {
 			if (error.empty()) error = "queued pixel transfer did not finish within 90 seconds";
 			DiscardTextureReadback(frame);
@@ -305,8 +306,8 @@ namespace RTE {
 			if (!writerCurrent && !MakeWriterCurrent(error)) return false;
 			noteCost(0);
 			bool done = false;
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
-			while (std::chrono::steady_clock::now() < deadline) {
+			const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(90);
+			while (RTE::SteadyClock::now() < deadline) {
 				const GLenum state = glad_glClientWaitSync(frame.ready, 0, yieldWhilePending ? 0 : 1000000);
 				if (state == GL_ALREADY_SIGNALED || state == GL_CONDITION_SATISFIED) { done = true; break; }
 				if (state == GL_WAIT_FAILED) { error = "queued pixel transfer fence failed"; break; }

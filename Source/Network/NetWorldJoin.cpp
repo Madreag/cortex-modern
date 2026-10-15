@@ -1,4 +1,5 @@
 #include "NetWorldJoin.h"
+#include "SteadyClock.h"
 
 #include "Constants.h"
 #include "NetIdentity.h"
@@ -1032,7 +1033,7 @@ namespace RTE {
 			std::deque<Segment> segments;
 			std::deque<Segment> pendingDeletes;
 			Job lastPrune;
-			auto nextDeleteRetry = std::chrono::steady_clock::now();
+			auto nextDeleteRetry = RTE::SteadyClock::now();
 			uint64_t opened = 0;
 			uint64_t orphanFiles = 0, orphanBytes = 0;
 			uint64_t scanCursor = 0, scanLimit = 0, scanFiles = 0, scanBytes = 0, outsideFiles = 0, outsideBytes = 0;
@@ -1133,21 +1134,21 @@ namespace RTE {
 					}
 					uint64_t dropped = 0;
 					bool receipt = false;
-					if (!pendingDeletes.empty() && std::chrono::steady_clock::now() >= nextDeleteRetry) {
+					if (!pendingDeletes.empty() && RTE::SteadyClock::now() >= nextDeleteRetry) {
 						receipt = true;
 						std::erase_if(pendingDeletes, [&](Segment& segment) {
 							if (close(segment)) { dropped += segment.FrameCount(); return true; }
 							if (segment.deleteAttempts >= c_JournalDeleteAttempts) { retire(segment, "attempt-limit"); return true; }
 							return false;
 						});
-						nextDeleteRetry = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+						nextDeleteRetry = RTE::SteadyClock::now() + std::chrono::seconds(1);
 					}
 					if (haveJob && job.prune) {
 						lastPrune = job; receipt = true;
 						// The segment being written stays: frames only ever join the newest one.
 						while (segments.size() > 1 && segments.front().first + segments.front().records.size() <= job.frame) {
 							if (close(segments.front())) dropped += segments.front().records.size();
-							else { defer(segments.front()); nextDeleteRetry = std::chrono::steady_clock::now() + std::chrono::seconds(1); }
+							else { defer(segments.front()); nextDeleteRetry = RTE::SteadyClock::now() + std::chrono::seconds(1); }
 							segments.pop_front();
 						}
 					} else if (haveJob && !job.result) {

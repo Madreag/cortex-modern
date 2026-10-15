@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointLuaPrototype.h"
+#include "SteadyClock.h"
 #include "CheckpointLuaNative.h"
 #include "CheckpointLuaThread.h"
 #include "CheckpointLuaCallbacks.h"
@@ -141,7 +142,7 @@ namespace RTE::CheckpointLua {
 					context.view.Push(worker, roots);
 					lua_pushnumber(worker, static_cast<lua_Number>(liveSerial));
 					Check(worker, lua_pcall(worker, 2, 2, 0), "could not serialize the frozen Lua graph");
-					const auto nativeFinish = std::chrono::steady_clock::now();
+					const auto nativeFinish = RTE::SteadyClock::now();
 					if (!lua_istable(worker, -1)) throw std::runtime_error("the frozen graph serializer supplied no refusal list");
 					std::vector<std::string> problems;
 					const int refusals = lua_gettop(worker);
@@ -158,7 +159,7 @@ namespace RTE::CheckpointLua {
 					if (lua_type(worker, -2) != LUA_TSTRING) throw std::runtime_error("the frozen graph serializer supplied no archive text");
 					size_t size = 0;
 					const char* bytes = lua_tolstring(worker, -2, &size);
-					context.Part("native_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeFinish).count(), false, {});
+					context.Part("native_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - nativeFinish).count(), false, {});
 					*observations = context.stats;
 					result.assign(bytes, size);
 					context.view.ReleaseSnapshot();
@@ -268,7 +269,7 @@ namespace RTE::CheckpointLua {
 		}
 		static int DirtyRoots(lua_State* state) {
 			Context& context = Self(state);
-			const auto start = std::chrono::steady_clock::now();
+			const auto start = RTE::SteadyClock::now();
 			std::set<std::string> roots, parts;
 			context.noting = true;
 			try {
@@ -288,7 +289,7 @@ namespace RTE::CheckpointLua {
 				}
 			} catch (...) { context.noting = false; throw; }
 			context.noting = false;
-			context.Part("cache", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), false, {});
+			context.Part("cache", 0, std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count(), false, {});
 			lua_newtable(state); lua_newtable(state);
 			for (const auto& root: roots) { lua_pushboolean(state, true); lua_setfield(state, -2, root.c_str()); }
 			lua_setfield(state, -2, "roots"); lua_newtable(state);
@@ -313,18 +314,18 @@ namespace RTE::CheckpointLua {
 				static_cast<int64_t>(luaL_checknumber(state, 3)), lua_toboolean(state, 4) != 0, luaL_optstring(state, 5, "")); return 0;
 		}
 		static int EndCapture(lua_State* state) {
-			auto& context = Self(state); const auto start = std::chrono::steady_clock::now();
+			auto& context = Self(state); const auto start = RTE::SteadyClock::now();
 			context.current.reset(); context.dependencies = std::move(context.nextDependencies); context.walked = true;
 			for (const auto& [root, dependencies]: context.dependencies) for (const auto& [address, value]: dependencies) {
 				if (tvistab(&value.value)) ++context.stats.tables; else ++context.stats.values;
 			}
-			context.Part("index_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), false, {});
+			context.Part("index_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count(), false, {});
 			return 0;
 		}
 		static int NotCapturing(lua_State* state) { lua_pushboolean(state, false); return 1; }
 		static int Clock(lua_State* state) {
 			lua_pushnumber(state, static_cast<lua_Number>(std::chrono::duration_cast<std::chrono::microseconds>(
-			    std::chrono::steady_clock::now().time_since_epoch()).count()));
+			    RTE::SteadyClock::now().time_since_epoch()).count()));
 			return 1;
 		}
 		static int RandomState(lua_State* state) {

@@ -359,9 +359,9 @@ static void InstallAllocationFailureRecord() {
 // Private bytes, and what the process heaps hold allocated and committed, for the memory census; costs gets each part's microseconds.
 static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 #ifdef _WIN32
-	auto lapStart = std::chrono::steady_clock::now();
+	auto lapStart = RTE::SteadyClock::now();
 	const auto lap = [&costs, &lapStart](const char* name) {
-		const auto now = std::chrono::steady_clock::now();
+		const auto now = RTE::SteadyClock::now();
 		costs += std::string(",") + name + ":" + std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(now - lapStart).count());
 		lapStart = now;
 	};
@@ -507,7 +507,7 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 }
 
 // The census's clock: the process's start, so its instants line up across rounds that restart their ticks.
-static const std::chrono::steady_clock::time_point s_CensusProcessStart = std::chrono::steady_clock::now();
+static const RTE::SteadyClock::time_point s_CensusProcessStart = RTE::SteadyClock::now();
 
 // The memory census's process figures are summed here, off the simulation thread: on a large heap they cost hundreds of milliseconds.
 class CensusWorker {
@@ -652,7 +652,7 @@ bool RTE::RunCrossReadyRevisionSelfTest(std::string* error) {
 
 static void CrossReadyForCurrentConfig(uint64_t& previous) {
 	if (s_crossHostOptions.empty() || g_NetMatchService.GetState() != NetMatchServiceState::Starting) return;
-	const auto attemptWindow = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) / 100;
+	const auto attemptWindow = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count()) / 100;
 	if (!CrossReadyRevision(attemptWindow, previous)) return;
 	g_NetMatchService.SetReady();
 	if (g_NetMatchService.IsHost()) g_NetMatchService.RequestStart();
@@ -840,7 +840,7 @@ static void BeginCrossTick(uint64_t tick) {
 	    {"checkpoint_digest", nullptr}, {"config_revision", config->configRevision},
 	    {"config_hash", configHash}, {"host_peer", ScenarioRunner::GetLockstepHostPeerId()},
 	    {"phase", tickPhase}, {"gameplay_tick", g_ActivityMan.ActivityRunning()},
-	    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()}};
+	    {"wall_ms", std::chrono::duration<double, std::milli>(RTE::SteadyClock::now().time_since_epoch()).count()}};
 	if (const auto view = g_NetMatchService.GetSeatView(ScenarioRunner::GetLockstepLocalPeerId())) {
 		s_crossContext["seat_incarnation"] = view->seat.incarnation;
 		s_crossContext["seat_revision"] = view->revision;
@@ -914,7 +914,7 @@ static void BeginCrossTick(uint64_t tick) {
 				const std::string id = "own-return-" + std::to_string(round) + "-" + std::to_string(tick);
 				s_crossRecoveryCases.push_back({{"id", id}, {"return_incarnation", incarnation}, {"deadline_ms", 60000}});
 				s_crossRecoveryStarts[id] = {{"effect_finished", true},
-				    {"engine_after_wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()}};
+				    {"engine_after_wall_ms", std::chrono::duration<double, std::milli>(RTE::SteadyClock::now().time_since_epoch()).count()}};
 				returnOwed = false;
 				break;
 			}
@@ -954,7 +954,7 @@ static void ApplyCrossSchedule() {
 	if (resetAt && s_crossBudget >= resetAt) {
 		const bool accepted = ApplyCrossTransportFault(0, 0, 0, 0);
 		g_MetricsCollector.WriteObservation({{"type", "fault_reset"}, {"send_recv_armed", accepted}, {"budget_tick", s_crossBudget}});
-		const double finished = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+		const double finished = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now().time_since_epoch()).count();
 		for (auto& [id, start]: s_crossRecoveryStarts.items()) if (start.value("waiting_for_reset", false)) {
 			start["waiting_for_reset"] = false; start["effect_finished"] = accepted; start["engine_after_wall_ms"] = finished;
 			g_MetricsCollector.WriteObservation({{"type", "fault_reset"}, {"id", id}, {"send_recv_armed", accepted}, {"budget_tick", s_crossBudget}});
@@ -969,7 +969,7 @@ static void ApplyCrossSchedule() {
 		if (const std::string owner = fault.value("peer", std::string()); !owner.empty() && owner != instance) continue;
 		const std::string action = fault.at("action");
 		if (action == "crash-restart" || action == "brain-eliminate") continue;
-		const auto stamp = [] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
+		const auto stamp = [] { return std::chrono::duration<double, std::milli>(RTE::SteadyClock::now().time_since_epoch()).count(); };
 		nlohmann::json receipt{{"type", "fault"}, {"id", id}, {"action", action}, {"requested_budget_tick", fault.at("tick")},
 		    {"budget_tick", s_crossBudget}, {"applied_wall_ms", stamp()}, {"applied", false}};
 		g_MetricsCollector.WriteObservation({{"type", "fault_begin"}, {"id", id}, {"action", action}, {"budget_tick", s_crossBudget},
@@ -1102,7 +1102,7 @@ static void CrossRecoveryAtCommittedTick(uint64_t tick, bool paused = false) {
 			if (start.value("effect_finished", false)) continue;
 			NetH4SetFault(NetH4Fault::None);
 			start["effect_finished"] = true;
-			start["engine_after_wall_ms"] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+			start["engine_after_wall_ms"] = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now().time_since_epoch()).count();
 			g_MetricsCollector.WriteObservation({{"type", "fault_effect"}, {"id", id}, {"effect_observed", true}, {"reset", true}, {"evidence", effect}});
 		}
 	}
@@ -1598,7 +1598,7 @@ static void NoteFramePresented() {
 		Pace pace;
 	};
 	static Window s_window;
-	const double now = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+	const double now = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now().time_since_epoch()).count();
 	const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
 	// A window belongs to one running activity in one mode; the present that opens it is its first frame.
@@ -1737,7 +1737,7 @@ static void PostMemoryCensus(uint64_t simTick, const std::string& when = std::st
 	const std::string textures = timed("gl", [] { return g_GLResourceMan.Census(); });
 	std::ostringstream rest;
 	// Rounds restart their ticks, so the census names its own instant for a slope across a rematching run.
-	rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_CensusProcessStart).count();
+	rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - s_CensusProcessStart).count();
 	// A capture still writing holds its whole frozen image, so a line taken beside one counts it.
 	rest << " in_flight=autosave:" << g_ActivityMan.UnwrittenAutosaves() << ",fullstate:" << g_ActivityMan.UnfinishedFullStateCaptures() << when;
 	rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
@@ -1745,10 +1745,10 @@ static void PostMemoryCensus(uint64_t simTick, const std::string& when = std::st
 	     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << " storage: " << storage << ' ' << textures << pace;
 	CensusWorker::Get().Post([simTick, rest = std::move(rest).str(), costs = std::move(costs)]() mutable {
 		// The worker's whole job is the census's cost too, charged to the frame it ends in.
-		const auto began = std::chrono::steady_clock::now();
+		const auto began = RTE::SteadyClock::now();
 		const std::string heap = ProcessHeapCensus(costs);
 		System::PrintDiagnosticLine("[mem-census] tick=" + std::to_string(simTick) + heap + rest + " census_us=" + costs);
-		HarnessCost::Charge(HarnessCost::Census, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - began).count());
+		HarnessCost::Charge(HarnessCost::Census, std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - began).count());
 	});
 }
 
@@ -1758,8 +1758,8 @@ static uint64_t s_memoryCensusSeconds = 0;
 static void MemoryCensusByUptime() {
 	if (s_memoryCensusSeconds == 0) return;
 	static uint64_t s_nextSlot = 0;
-	static std::optional<std::chrono::steady_clock::time_point> s_dueSince;
-	const auto now = std::chrono::steady_clock::now();
+	static std::optional<RTE::SteadyClock::time_point> s_dueSince;
+	const auto now = RTE::SteadyClock::now();
 	const uint64_t slot = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(now - s_CensusProcessStart).count()) / s_memoryCensusSeconds;
 	if (slot < s_nextSlot) return;
 	// A line waits out the captures still writing, so it reads the game's own memory and not a frozen image on its way to disk;
@@ -1807,7 +1807,7 @@ static constexpr int64_t c_CompletedProbeHoldMs = 12000;
 static int64_t s_netMatchE2ECompletedMs = 0;
 static int64_t s_netMatchE2ELeftMs = 0;
 static int64_t SteadyMilliseconds() {
-	return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+	return std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count();
 }
 /// Whether an e2e run that ended at endedMs still draws frames for a probe that is mid-script.
 static bool ProbeHoldsE2eEnd(int64_t endedMs) {
@@ -3847,7 +3847,7 @@ static void DriveModerationE2e() {
 	if (!anythingToDecide) {
 		return;
 	}
-	const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+	const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 	if (s_netMatchE2eModerateReadyMs == 0) {
 		s_netMatchE2eModerateReadyMs = nowMs + s_netMatchE2eModerateDelayMs;
 		{
@@ -3940,7 +3940,7 @@ static bool RunSteadyClockSelfTest() {
 	const int64_t library = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 	const int64_t engine = duration_cast<milliseconds>(SteadyNow().time_since_epoch()).count();
 	const auto followsWall = [wall](int64_t reading) { return std::llabs(reading - wall) < 60000; };
-	std::cout << "[steady-clock-selftest] std::chrono::steady_clock " << (followsWall(library) ? "reads the wall clock" : "is apart from the wall clock") << ": " << library << " ms, the wall " << wall << " ms" << std::endl;
+	std::cout << "[steady-clock-selftest] RTE::SteadyClock " << (followsWall(library) ? "reads the wall clock" : "is apart from the wall clock") << ": " << library << " ms, the wall " << wall << " ms" << std::endl;
 	bool forward = true;
 	auto previous = SteadyNow();
 	for (int count = 0; count < 100000; ++count) {
@@ -4983,13 +4983,13 @@ namespace {
 		}
 		void Run() {
 			m_SamplerId = GetCurrentThreadId();
-			auto refreshed = std::chrono::steady_clock::time_point{};
+			auto refreshed = RTE::SteadyClock::time_point{};
 			for (bool others = false;; others = !others) {
 				Sleep(1);
-				if (std::chrono::steady_clock::now() - refreshed > std::chrono::seconds(1)) {
+				if (RTE::SteadyClock::now() - refreshed > std::chrono::seconds(1)) {
 					std::lock_guard sampling(m_Sampling);
 					Refresh();
-					refreshed = std::chrono::steady_clock::now();
+					refreshed = RTE::SteadyClock::now();
 				}
 				if (!m_Active.load(std::memory_order_acquire)) continue;
 				std::lock_guard sampling(m_Sampling);
@@ -5116,10 +5116,10 @@ static void DumpSimStateIfArmed(uint64_t simTick) {
 	const double ms = static_cast<double>(simulationNs) / 1e6;
 	s_out.WriteMade([tape, inlineText, simTick, last = s_to]() {
 		// The writer's own work is the dump's too, charged to the frame it ends in.
-		const auto began = std::chrono::steady_clock::now();
+		const auto began = RTE::SteadyClock::now();
 		struct Charge {
-			std::chrono::steady_clock::time_point began;
-			~Charge() { HarnessCost::Charge(HarnessCost::SimDump, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - began).count()); }
+			RTE::SteadyClock::time_point began;
+			~Charge() { HarnessCost::Charge(HarnessCost::SimDump, std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - began).count()); }
 		} charge{began};
 		std::ostringstream text;
 		tape->Replay(text);
@@ -7160,14 +7160,14 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 		}
 	}
 	if (s_rbProbePhase == 0 && simTick == static_cast<uint64_t>(s_rbProbeAtTick)) {
-		const auto captureStart = std::chrono::steady_clock::now();
+		const auto captureStart = RTE::SteadyClock::now();
 		double worldCaptureMs = 0.0;
 		if (!CaptureProbeScriptGraphs()) {
 			System::SetQuit(true);
 			return;
 		}
 		if (s_rbProbeInMemory) {
-			const auto worldStart = std::chrono::steady_clock::now();
+			const auto worldStart = RTE::SteadyClock::now();
 			if (!g_MovableMan.CaptureWorld(s_rbProbeWorld)) {
 				{
 					std::ostringstream line;
@@ -7177,7 +7177,7 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 				System::SetQuit(true);
 				return;
 			}
-			worldCaptureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - worldStart).count();
+			worldCaptureMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - worldStart).count();
 		} else if (!g_ActivityMan.SaveCurrentGame(RollbackProbeSaveName())) {
 			{
 				std::ostringstream line;
@@ -7192,7 +7192,7 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 		if (ScenarioRunner::IsLockstepReplayPlayback()) {
 			ScenarioRunner::ArmReplayRewindBuffer(simTick + 1, static_cast<uint64_t>(s_rbProbeWindow));
 		}
-		const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count();
+		const double captureMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - captureStart).count();
 		{
 			std::ostringstream line;
 			line << "[rbprobe] capture_ms=" << captureMs << " world_ms=" << worldCaptureMs << " mos=" << (s_rbProbeWorld.actors.size() + s_rbProbeWorld.items.size() + s_rbProbeWorld.particles.size());
@@ -7868,7 +7868,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			std::string launchPreset;
 			for (bool attempt = resyncOk; attempt;) {
 				attempt = false;
-				const auto resyncWaitStart = std::chrono::steady_clock::now();
+				const auto resyncWaitStart = RTE::SteadyClock::now();
 				while (!g_NetMatchService.ConsumeReadyToLaunch(launchPreset)) {
 					// The round ended while this seat was on its way back: the host's end record is the result, and the session stays.
 					if (g_NetMatchService.TakeRoundEndRecord(endRecord)) {
@@ -7877,7 +7877,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 						break;
 					}
 					const std::string unreachable = heldRejoin ? g_NetMatchService.GetHostUnreachableLine() : std::string();
-					if (UpdateResyncUI(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - resyncWaitStart).count()), heldRejoin,
+					if (UpdateResyncUI(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(RTE::SteadyClock::now() - resyncWaitStart).count()), heldRejoin,
 					                   unreachable.empty() ? unreachableAtStop : unreachable)) {
 						leftTheWait = true;
 						resyncOk = false;
@@ -8453,8 +8453,8 @@ void RunGameLoop() {
 					SaverThreads::Enter();
 					std::vector<unsigned char> buffer(bytes, 1);
 					const size_t half = bytes / 2, chunk = size_t{1} << 20;
-					const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
-					for (size_t offset = 0; std::chrono::steady_clock::now() < until; offset = (offset + chunk) % half) {
+					const auto until = RTE::SteadyClock::now() + std::chrono::seconds(seconds);
+					for (size_t offset = 0; RTE::SteadyClock::now() < until; offset = (offset + chunk) % half) {
 					SaverThreads::YieldToGame();
 					std::memcpy(buffer.data() + half + offset, buffer.data() + offset, chunk);
 				}
@@ -8464,27 +8464,27 @@ void RunGameLoop() {
 			// Ends after the tick's own cost line, so printing the samples never lands inside a measured tick.
 			struct SampledTick {
 				uint64_t tick;
-				std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+				RTE::SteadyClock::time_point start = RTE::SteadyClock::now();
 				explicit SampledTick(uint64_t tick) : tick(tick) { if (auto* sampler = SimSampler::Armed()) sampler->BeginTick(); }
 				~SampledTick() {
-					if (auto* sampler = SimSampler::Armed()) sampler->EndTick(tick, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+					if (auto* sampler = SimSampler::Armed()) sampler->EndTick(tick, std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count());
 				}
 			} sampledTick{static_cast<uint64_t>(nextSimTick)};
 #endif
 			struct RestoreTickCost {
 				bool enabled;
 				uint64_t tick;
-				std::chrono::steady_clock::time_point start;
+				RTE::SteadyClock::time_point start;
 				~RestoreTickCost() {
 					if (enabled) System::PrintDiagnosticLine(std::format("[checkpoint-restore-tick] tick={} sim_us={}", tick,
-					    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()));
+					    std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count()));
 					if (enabled && CheckpointPagePool::TallyingFaults()) {
 						const auto tally = CheckpointPagePool::TakeFaultTally();
 						const auto [luaFaults, luaFaultUs] = LuaMan::TakeHeapFaultTally();
 						System::PrintDiagnosticLine(std::format("[native-fault-tick] tick={} faults={} fault_us={} settled={} cooled={} lua_faults={} lua_fault_us={}", tick, tally.faults, tally.faultNs / 1000, tally.settled, tally.cooled, luaFaults, luaFaultUs));
 					}
 				}
-			} restoreTickCost{s_checkpointRestoreContinue, nextSimTick, s_checkpointRestoreContinue ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}};
+			} restoreTickCost{s_checkpointRestoreContinue, nextSimTick, s_checkpointRestoreContinue ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{}};
 			const FloatingPointEnvironment::Scope floatingPointScope("simulation tick");
 			HarnessCost::BeginFrame();
 
@@ -8517,7 +8517,7 @@ void RunGameLoop() {
 					double startMs = 0, endMs = 0;
 				};
 				static Window s_window;
-				const auto steadyMs = [] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
+				const auto steadyMs = [] { return std::chrono::duration<double, std::milli>(RTE::SteadyClock::now().time_since_epoch()).count(); };
 				const auto receipt = [](const char* stage) {
 					return std::string("[sim-cost] ") + stage + " " + nlohmann::json{{"process", System::GetProcessID()}, {"instance", CrossEnvironment("CC_TEST_CROSS_INSTANCE")},
 					    {"incarnation", std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"))}, {"cost_us", s_testSimCostUs}, {"first_tick", s_window.firstTick},
@@ -9136,7 +9136,7 @@ void RunGameLoop() {
 				}
 				s_crossContext["applied_frame"] = ScenarioRunner::GetLockstepAppliedFrame();
 				s_crossContext["effective_start_frame"] = ScenarioRunner::GetLockstepEffectiveStartFrame();
-				s_crossContext["wall_ms"] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+				s_crossContext["wall_ms"] = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now().time_since_epoch()).count();
 				g_MetricsCollector.UpdateEventContext(s_crossContext);
 			}
 			CrossConfirmLocalControllerInputs(simTick);
@@ -9195,7 +9195,7 @@ void RunGameLoop() {
 						for (uint8_t peer = 1; peer <= config->peerCount; ++peer)
 							if (ScenarioRunner::IsLockstepSeatUnderAI(peer, simTick)) observation["ai_held_peer_ids"].push_back(peer);
 					observation.update(nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
-					    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()},
+					    {"wall_ms", std::chrono::duration<double, std::milli>(RTE::SteadyClock::now().time_since_epoch()).count()},
 					    {"peer", ScenarioRunner::GetLockstepLocalPeerId()}, {"paused", lockstepPausedTick},
 					    {"total", SimChecksum::HashHex(tickResult.total)}, {"sim_gated", SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult))},
 					    {"subsystems", std::move(subsystems)}});
@@ -9563,10 +9563,10 @@ void RunGameLoop() {
 
 			// Capture both peers after the complete tick, including global callbacks and worker joins.
 			if (ScenarioRunner::GetArgs().selftestSnapshot && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == 300) {
-				const auto saveStart = std::chrono::steady_clock::now();
+				const auto saveStart = RTE::SteadyClock::now();
 				const std::string saveName = "p5snap_p" + std::to_string(ScenarioRunner::GetLockstepLocalPeerId());
 				const bool saved = g_ActivityMan.SaveCurrentGame(saveName) && g_ActivityMan.WaitForSaveGameTask();
-				const auto saveMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - saveStart).count();
+				const auto saveMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - saveStart).count();
 				{
 					std::ostringstream line;
 					line << "[net-match] snapshot " << (saved ? "saved" : "FAILED") << ": " << saveName << " in " << saveMs << "ms at tick " << simTick;
@@ -10103,7 +10103,7 @@ void RunGameLoop() {
 			}
 			if (s_rbProbeMemoryRestorePending) {
 				s_rbProbeMemoryRestorePending = false;
-				const auto restoreStart = std::chrono::steady_clock::now();
+				const auto restoreStart = RTE::SteadyClock::now();
 				if (!g_MovableMan.SetAsideWorld(s_rbProbeOriginals)) {
 					{
 						std::ostringstream line;
@@ -10113,7 +10113,7 @@ void RunGameLoop() {
 					System::SetQuit(true);
 					break;
 				}
-				const auto worldRestoreStart = std::chrono::steady_clock::now();
+				const auto worldRestoreStart = RTE::SteadyClock::now();
 				if (!g_MovableMan.RestoreWorld(s_rbProbeWorld)) {
 					{
 						std::ostringstream line;
@@ -10124,7 +10124,7 @@ void RunGameLoop() {
 					System::SetQuit(true);
 					break;
 				}
-				const double worldRestoreMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - worldRestoreStart).count();
+				const double worldRestoreMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - worldRestoreStart).count();
 				std::string rewindError;
 				if (ScenarioRunner::IsLockstepReplayPlayback() &&
 				    !ScenarioRunner::RewindReplayForProbe(static_cast<uint64_t>(s_rbProbeSimCount) + 1, &rewindError)) {
@@ -10136,7 +10136,7 @@ void RunGameLoop() {
 					System::SetQuit(true);
 					break;
 				}
-				const double restoreMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - restoreStart).count();
+				const double restoreMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - restoreStart).count();
 				{
 					std::ostringstream line;
 					line << "[rbprobe] restore_ms=" << restoreMs << " world_ms=" << worldRestoreMs;
@@ -10446,14 +10446,14 @@ int RunNetSessionCli() {
 		System::PrintDiagnosticLine(line.str());
 	}
 
-	const auto startTime = std::chrono::steady_clock::now();
+	const auto startTime = RTE::SteadyClock::now();
 	constexpr uint64_t c_MaxRunMs = 15000;
 	constexpr uint64_t c_ReadySettleMs = 250;
 	bool sawReady = false;
 
 	while (true) {
 		const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::steady_clock::now() - startTime).count());
+			RTE::SteadyClock::now() - startTime).count());
 		session.Tick(nowMs);
 
 		if (session.IsRejected()) {
@@ -11010,10 +11010,10 @@ int RunNetReplayPlayback() {
 	// Playback is not real-time: free-run the sim as fast as it computes (the fixed dt is
 	// untouched). The wall/tick numbers this yields ARE the rollback re-sim budget.
 	g_TimerMan.SetFreeRunSim(true);
-	const auto playbackStart = std::chrono::steady_clock::now();
+	const auto playbackStart = RTE::SteadyClock::now();
 	RunGameLoop();
 	CheckRequiredProbesCompleted();
-	const auto playbackMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - playbackStart).count();
+	const auto playbackMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - playbackStart).count();
 	using ReplayOutcome = ScenarioRunner::LockstepReplayOutcome;
 	const ReplayOutcome finalOutcome = ScenarioRunner::GetLockstepReplayOutcome();
 	if (traceRun) {
@@ -11646,7 +11646,7 @@ int RunNetDirectorySignalProbe(const std::string& baseUrlArg, const std::string&
 		return out.error.empty();
 	};
 	const auto nowMs = [] {
-		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 	};
 	// Runs one channel until done() holds, the channel leaves Open, or 10 s pass.
 	auto pump = [&](Channel& channel, auto done) {
@@ -11872,7 +11872,7 @@ int RunNetDirectoryList() {
 	(void)browser.StartBrowser(&browseError);
 
 	const auto nowMs = [] {
-		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 	};
 	const uint64_t begin = nowMs();
 	while (nowMs() - begin < 2000) {
@@ -11923,7 +11923,7 @@ int RunNetPortMapProbe() {
 	NetPortMap mapper;
 	mapper.Request(s_netPort, NetPortMap::c_DefaultLeaseS, NetPortMap::ProbeOverrides());
 	const auto nowMs = [] {
-		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 	};
 	const uint64_t begin = nowMs();
 	while (!mapper.Done() && nowMs() - begin < NetPortMap::c_MapBudgetMs + NetPortMap::c_ReleaseBudgetMs) {

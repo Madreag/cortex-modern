@@ -1,4 +1,5 @@
 #include "ContentFile.h"
+#include "SteadyClock.h"
 #include "CheckpointNativeSnapshot.h"
 #include "CheckpointFrozenContainers.h"
 #include "CaptureSentinel.h"
@@ -1023,7 +1024,7 @@ bool ContentFile::RunImageLoadSelfTest() {
 
 bool ContentFile::WaitForPendingSounds(const ProgressCallback& progressCallback) {
 	std::vector<std::pair<std::string, FMOD::Sound*>> pending(s_LoadedSamples.begin(), s_LoadedSamples.end());
-	const auto start = std::chrono::steady_clock::now();
+	const auto start = RTE::SteadyClock::now();
 	auto nextProgress = start;
 	size_t initiallyPending = 0;
 	bool firstPass = true;
@@ -1048,7 +1049,7 @@ bool ContentFile::WaitForPendingSounds(const ProgressCallback& progressCallback)
 			firstPass = false;
 		}
 		if (pending.empty()) break;
-		const auto now = std::chrono::steady_clock::now();
+		const auto now = RTE::SteadyClock::now();
 		if (progressCallback && now >= nextProgress) {
 			progressCallback("Finishing sound loading: " + std::to_string(pending.size()) + " remaining", nextProgress == start);
 			nextProgress = now + std::chrono::milliseconds(100);
@@ -1056,7 +1057,7 @@ bool ContentFile::WaitForPendingSounds(const ProgressCallback& progressCallback)
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
 	if (initiallyPending != 0) {
-		const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+		const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - start).count();
 		g_ConsoleMan.PrintString("Sound loading completed: " + std::to_string(initiallyPending) + " pending samples, " + std::to_string(elapsed) + "ms");
 	}
 	return success;

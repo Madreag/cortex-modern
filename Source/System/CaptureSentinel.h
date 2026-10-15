@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include "SteadyClock.h"
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -90,7 +91,7 @@ namespace RTE {
 		class Span {
 		public:
 			/// @param label The kind of work. @param detail What it worked on. @param queuedAt When it was handed to a pool.
-			explicit Span(const char* label, std::string detail = {}, std::chrono::steady_clock::time_point queuedAt = {}) {
+			explicit Span(const char* label, std::string detail = {}, RTE::SteadyClock::time_point queuedAt = {}) {
 				if (Active()) Start(label, std::move(detail), queuedAt);
 			}
 			~Span() { if (m_Label) Stop(); }
@@ -98,11 +99,11 @@ namespace RTE {
 			Span& operator=(const Span&) = delete;
 
 		private:
-			void Start(const char* label, std::string detail, std::chrono::steady_clock::time_point queuedAt);
+			void Start(const char* label, std::string detail, RTE::SteadyClock::time_point queuedAt);
 			void Stop();
 			const char* m_Label = nullptr;
 			std::string m_Detail;
-			std::chrono::steady_clock::time_point m_Queued, m_Start;
+			RTE::SteadyClock::time_point m_Queued, m_Start;
 		};
 
 		/// Whether the environment asked for traces.

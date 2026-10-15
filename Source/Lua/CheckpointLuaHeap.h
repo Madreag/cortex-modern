@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointNativeStorage.h"
+#include "SteadyClock.h"
 
 #include "FloatingPointEnvironment.h"
 #include "ThreadMan.h"
@@ -528,7 +529,7 @@ namespace RTE::CheckpointLua {
 		Snapshot Freeze(const Submit& submit, bool copyOnWrite = false, bool batchCopy = false, HeapFreezeCosts* costs = nullptr, std::function<void()>* armLater = nullptr) {
 			std::lock_guard preparations(m_PrepareMutex);
 			FinishPrepared();
-			const auto started = std::chrono::steady_clock::now();
+			const auto started = RTE::SteadyClock::now();
 			if (!m_State) throw std::runtime_error("a Lua heap capture has no state");
 			void* allocatorData = nullptr;
 			if (lua_getallocf(m_State, &allocatorData) != &Allocate || allocatorData != this)
@@ -618,7 +619,7 @@ namespace RTE::CheckpointLua {
 					// A deferred fence must own this generation before any page is copied.
 					while (cow->armed.load(std::memory_order_acquire) == 0) cow->armed.wait(0, std::memory_order_acquire);
 					if (cow->armed.load(std::memory_order_acquire) != 1) throw std::runtime_error("the Lua heap copy fence was cancelled");
-					const auto copying = std::chrono::steady_clock::now();
+					const auto copying = RTE::SteadyClock::now();
 					// Bounded page runs avoid repeated protection calls while live faults still save individual pages.
 					const size_t batchPages = batchCopy ? 64 : 1;
 					for (size_t page = 0; page < cow->saved.size(); page += batchPages) {
@@ -689,7 +690,7 @@ namespace RTE::CheckpointLua {
 				const auto future = index < count ? m_PreviousCopies[index] : m_PendingCopy;
 				lock.unlock();
 				if (future.valid() && future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-					const auto waited = std::chrono::steady_clock::now();
+					const auto waited = RTE::SteadyClock::now();
 					future.wait();
 					const int64_t waitedUs = MicrosecondsSince(waited);
 					GateWaitUs().fetch_add(waitedUs, std::memory_order_relaxed);
@@ -889,7 +890,7 @@ namespace RTE::CheckpointLua {
 			// next, and taking a fault costs several times what copying a page does.
 			static constexpr size_t c_FaultRunPages = 16;
 			bool CopyPage(size_t page, bool fault) noexcept {
-				const auto started = fault ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+				const auto started = fault ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 				Locked guard(lock);
 				size_t first = page, last = page + 1;
 				if (fault) {
@@ -1140,15 +1141,15 @@ namespace RTE::CheckpointLua {
 			delete slab;
 		}
 
-		static int64_t MicrosecondsSince(std::chrono::steady_clock::time_point started) {
-			return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+		static int64_t MicrosecondsSince(RTE::SteadyClock::time_point started) {
+			return std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 		}
 
 		// Copies every committed page; nothing writes the heap meanwhile. A capture's collection marks every live object, so
 		// nearly every page is written between two freezes: keeping the last copy to share the rest would hold a second
 		// copy of the heap for a tenth of the copying, and the buffer it pins could never be reused.
 		void CopyPages(Snapshot::Data& data) {
-			const auto copyStarted = std::chrono::steady_clock::now();
+			const auto copyStarted = RTE::SteadyClock::now();
 			const size_t pageCount = data.committed / Snapshot::c_PageBytes;
 			if (pageCount != 0) {
 				std::shared_ptr<Slab> slab = TakeSlab(pageCount);
@@ -1372,7 +1373,7 @@ namespace RTE::CheckpointLua {
 			if (owner.m_CopyPending.load(std::memory_order_acquire) && !owner.m_CowGateFree.load(std::memory_order_acquire)) return false;
 			std::unique_lock lock(m_Mutex, std::try_to_lock);
 			if (!lock || m_Finished || m_Copy->armed.load(std::memory_order_relaxed) != 0) return false;
-			const auto started = std::chrono::steady_clock::now();
+			const auto started = RTE::SteadyClock::now();
 			m_Data->serial = G(owner.m_State)->objserial;
 			CowCoordinator::Prepared prepared{m_Coordinator.get(), m_Copy};
 			if (!(byCopy ? CowCoordinator::ArmByCopy : CowCoordinator::Arm)(&prepared, m_Data->base, m_Data->committed)) return false;
@@ -1387,7 +1388,7 @@ namespace RTE::CheckpointLua {
 			if (m_Copy->armed.load(std::memory_order_acquire) != 1) throw std::logic_error("Lua heap copy requested before its prepared boundary");
 			bool cancelled = false;
 			try {
-				const auto started = std::chrono::steady_clock::now();
+				const auto started = RTE::SteadyClock::now();
 				constexpr size_t batchPages = 64;
 				for (size_t page = 0; page < m_Copy->saved.size(); page += batchPages) {
 					if (!m_Coordinator->CopyPages(page, std::min(batchPages, m_Copy->saved.size() - page)))

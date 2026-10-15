@@ -1,6 +1,7 @@
 // Make sure this file is always set to NOT use pre-compiled headers and conformance mode (/permissive) otherwise everything will be on fire!
 
 #include "LuaBindingExhaustiveSelfTest.h"
+#include "SteadyClock.h"
 
 #include "LuabindDefinitions.h"
 #include "luabind/function.hpp"
@@ -1122,7 +1123,7 @@ namespace {
 	}
 
 	void Walk::WalkClass(Instance& instance) {
-		const auto started = std::chrono::steady_clock::now();
+		const auto started = RTE::SteadyClock::now();
 		const std::string className = instance.crep->name();
 		const size_t callsBefore = m_Calls;
 		const size_t leaksBefore = m_Leaks.size();
@@ -1252,7 +1253,7 @@ namespace {
 			});
 		}
 		Sweep(className);
-		const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+		const double seconds = std::chrono::duration<double>(RTE::SteadyClock::now() - started).count();
 		std::cout << "[bindx] class " << className << " methods=" << methods.size() << " overloads=" << overloads << " properties=" << properties.size()
 		          << " calls=" << (m_Calls - callsBefore) << " leaks=" << (m_Leaks.size() - leaksBefore) << " seconds=" << seconds << " instance: " << instance.origin << std::endl;
 	}
@@ -1545,7 +1546,7 @@ namespace {
 	}
 
 	bool Walk::RunWalk() {
-		const auto started = std::chrono::steady_clock::now();
+		const auto started = RTE::SteadyClock::now();
 		m_Classes = CppClasses(L);
 		MakeHelpers();
 		if (m_GetRef == LUA_NOREF) {
@@ -1611,7 +1612,7 @@ namespace {
 		WalkFreeFunctions();
 		ProbeReusedUniqueID();
 
-		const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+		const double seconds = std::chrono::duration<double>(RTE::SteadyClock::now() - started).count();
 		std::cout << c_Tag << " totals classes=" << m_Classes.size() << " with_instance=" << m_Instances.size() << " without_instance=" << without << " methods=" << m_Methods
 		          << " overloads=" << m_Overloads << " properties=" << m_Properties << " operators=" << m_Operators << " free_functions=" << m_FreeFunctions
 		          << " free_overloads=" << m_FreeOverloads << " script_objects=" << m_Owned.size() << " script_object_checks=" << m_OwnedChecks << " lua_classes=" << m_LuaClasses

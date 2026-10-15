@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointLuaHeap.h"
+#include "SteadyClock.h"
 #include "CheckpointBindingLease.h"
 #include "CheckpointNativeStorage.h"
 
@@ -79,7 +80,7 @@ namespace RTE::CheckpointLua {
 		/// a heap about to be collected whole and a saver copies the rest in the order they collect.
 		void CollectionOrder(std::function<uint64_t(size_t heap)> ticksUntil) { m_TicksUntilCollection = std::move(ticksUntil); }
 		bool Arm(std::array<int64_t, 7>* parts = nullptr) {
-			const auto started = std::chrono::steady_clock::now();
+			const auto started = RTE::SteadyClock::now();
 			if (!Current()) return false;
 			Status expected = Status::Prepared;
 			if (!m_Status.compare_exchange_strong(expected, Status::Arming, std::memory_order_acq_rel)) return false;
@@ -91,7 +92,7 @@ namespace RTE::CheckpointLua {
 				// The Lua heaps are fenced on another thread while this one arms the native pages.
 				static const bool s_SerialArm = std::getenv("CCCP_TEST_CHECKPOINT_SERIAL_ARM") != nullptr;
 				auto heaps = std::async(s_SerialArm ? std::launch::deferred : std::launch::async, [this, &byCopy] {
-					const auto begun = std::chrono::steady_clock::now();
+					const auto begun = RTE::SteadyClock::now();
 					// The heaps are fenced or copied side by side: protection calls and copies both scale across threads.
 					const size_t parts = s_SerialArm ? 1 : std::min<size_t>(4, std::max<size_t>(1, m_Heaps.size()));
 					const auto armSome = [this, parts, &byCopy](size_t part) {
@@ -103,21 +104,21 @@ namespace RTE::CheckpointLua {
 					for (size_t part = 1; part < parts; ++part) helpers.push_back(std::async(std::launch::async, armSome, part));
 					bool armed = armSome(0);
 					for (auto& helper: helpers) armed = helper.get() && armed;
-					return std::pair{armed, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begun).count()};
+					return std::pair{armed, std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - begun).count()};
 				});
 				bool nativeArmed = false;
 				std::exception_ptr failure;
 				try { nativeArmed = m_Native->Arm(); } catch (...) { failure = std::current_exception(); }
-				const auto nativeFenced = std::chrono::steady_clock::now();
+				const auto nativeFenced = RTE::SteadyClock::now();
 				const auto [heapsArmed, heapsUs] = heaps.get();
-				const auto fenced = std::chrono::steady_clock::now();
+				const auto fenced = RTE::SteadyClock::now();
 				if (failure) std::rethrow_exception(failure);
 				if (!nativeArmed || !heapsArmed) { Cancel(); return false; }
 				m_ArmSplitUs = {std::chrono::duration_cast<std::chrono::microseconds>(nativeFenced - started).count(), heapsUs};
 				for (const auto& root: m_Roots) std::memcpy(const_cast<void*>(root.view), root.source, root.bytes);
 				if (parts) {
 					(*parts)[1] = std::chrono::duration_cast<std::chrono::microseconds>(fenced - started).count();
-					(*parts)[2] = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - fenced).count();
+					(*parts)[2] = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - fenced).count();
 				}
 				m_Status.store(Status::Armed, std::memory_order_release);
 				return true;

@@ -1,4 +1,5 @@
 #include "PageWriteFence.h"
+#include "SteadyClock.h"
 #include "CheckpointFailure.h"
 
 #include <algorithm>
@@ -263,7 +264,7 @@ namespace RTE {
 	} // namespace
 
 	bool PageWriteFence::WatchCopies(void* owner, Buffer buffer, CopyObserver observer, void* context, CopyArm arm, void* armContext, CopyWatchCosts* costs, CopyReopen reopen) {
-		const auto started = costs ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		const auto started = costs ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 		const size_t page = PageBytes();
 		const uintptr_t begin = reinterpret_cast<uintptr_t>(buffer.data);
 		if (!owner || !observer || !page || !buffer.bytes || begin % page || buffer.bytes % page || buffer.bytes > UINTPTR_MAX - begin) return false;
@@ -314,11 +315,11 @@ namespace RTE {
 			watch->readers.fetch_add(1, std::memory_order_acquire);
 		}
 		// A failed arm retains its observer until unwatch opens any protected pages.
-		const auto arming = costs ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		const auto arming = costs ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 		if (costs) costs->setupUs = std::chrono::duration_cast<std::chrono::microseconds>(arming - started).count();
 		if (arm) {
 			const bool armed = arm(armContext, begin, buffer.bytes);
-			if (costs) costs->armUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - arming).count();
+			if (costs) costs->armUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - arming).count();
 			watch->readers.fetch_sub(1, std::memory_order_release);
 			return armed;
 		}

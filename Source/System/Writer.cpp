@@ -1,4 +1,5 @@
 #include "FloatingPointEnvironment.h"
+#include "SteadyClock.h"
 #include "Writer.h"
 #include "System.h"
 #include "CheckpointArchive.h"
@@ -292,7 +293,7 @@ namespace {
 				prepared->task.wait();
 				size_t bytes = 0;
 				for (const auto& block: prepared->blocks) bytes += block->bytes;
-				const auto started = std::chrono::steady_clock::now();
+				const auto started = RTE::SteadyClock::now();
 				prepared.reset(); // The pool keeps idle task closures, so release here.
 				const bool worker = std::this_thread::get_id() != owner;
 				if (worker) {
@@ -301,7 +302,7 @@ namespace {
 				}
 				if (const char* value = std::getenv("CCCP_CHECKPOINT_STORAGE_RELEASE"); value && std::string_view(value) == "1") {
 					System::PrintDiagnosticLine(std::format("[checkpoint-storage-release] worker={} bytes={} release_us={}", worker ? 1 : 0, bytes,
-					    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()));
+					    std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count()));
 				}
 				completion->set_value();
 			});
@@ -1098,9 +1099,9 @@ std::shared_future<void> CheckpointBuffer::PrepareCaptureStorage(size_t bytes) {
 		auto completion = std::move(prepared->completion);
 		try {
 			if (std::this_thread::get_id() == owner) throw std::logic_error("checkpoint preparation requires a worker");
-			const auto started = std::chrono::steady_clock::now();
+			const auto started = RTE::SteadyClock::now();
 			const auto& helpers = g_ThreadMan.GetCheckpointThreadPool();
-			const auto poolUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+			const auto poolUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 			prepared->blocks.reserve(count);
 			for (size_t index = 0; index < count; ++index) {
 				auto block = std::make_shared<CheckpointArenaGroup::Block>(chunk, alignof(std::max_align_t));
@@ -1109,7 +1110,7 @@ std::shared_future<void> CheckpointBuffer::PrepareCaptureStorage(size_t bytes) {
 			}
 			prepared->ready.store(true, std::memory_order_release);
 			System::PrintDiagnosticLine(std::format("[checkpoint-storage] worker=1 blocks={} bytes={} prepare_us={} helpers={} pool_us={}", count, count * chunk,
-			    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count(), helpers.get_thread_count(), poolUs));
+			    std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count(), helpers.get_thread_count(), poolUs));
 			prepared.reset();
 			completion.set_value();
 		} catch (...) {
@@ -1333,9 +1334,9 @@ const Entity* CheckpointCache::FindPreset(const std::string& type, const std::st
 
 CheckpointText CheckpointCache::Remember(const void* owner, unsigned channel, CheckpointText value) {
 	if (channel != 16) return Remember(owner, channel, std::move(value), 0);
-	const auto start = std::chrono::steady_clock::now();
+	const auto start = RTE::SteadyClock::now();
 	CheckpointText result = Remember(owner, channel, std::move(value), 0);
-	CheckpointGraphIndex::Get().NoteWalkPart(nullptr, "cache", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), false, {});
+	CheckpointGraphIndex::Get().NoteWalkPart(nullptr, "cache", 0, std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count(), false, {});
 	return result;
 }
 
@@ -1439,13 +1440,13 @@ struct BitmapPixelCaptureScope::State {
 	std::thread::id captureThread = std::this_thread::get_id();
 	~State() {
 		static const bool report = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
-		const auto started = report ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		const auto started = report ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 		size_t count = cells.size();
 		cells.clear();
 		for (auto& shard: pixelShards) if (shard.values) { count += shard.values->size(); shard.values->clear(); }
 		if (report) System::PrintDiagnosticLine(std::format("[checkpoint-pixel-release] entries={} capture_thread={} release_thread={} off_capture_thread={} us={}", count,
 			std::hash<std::thread::id>{}(captureThread), std::hash<std::thread::id>{}(std::this_thread::get_id()), captureThread != std::this_thread::get_id(),
-			std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()));
+			std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count()));
 	}
 };
 std::atomic<BitmapPixelCaptureScope::State*> BitmapPixelCaptureScope::s_Current{nullptr};

@@ -1,4 +1,5 @@
 #include "NetA7Journal.h"
+#include "SteadyClock.h"
 
 #include "System/FaultInjection.h"
 #include "System.h"
@@ -39,7 +40,7 @@ namespace RTE {
 
 	namespace {
 		using json = nlohmann::json;
-		using Clock = std::chrono::steady_clock;
+		using Clock = RTE::SteadyClock;
 		constexpr size_t c_QueueSize = 1024;
 		constexpr size_t c_RecordSize = 16384;
 		constexpr uint64_t c_GateBudgetMs = 240000;

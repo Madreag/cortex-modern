@@ -48,7 +48,7 @@ namespace RTE {
 	}
 
 	uint64_t NetLockstepNowMs() {
-		static const std::chrono::steady_clock::time_point base = SteadyNow();
+		static const RTE::SteadyClock::time_point base = SteadyNow();
 		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow() - base).count());
 	}
 

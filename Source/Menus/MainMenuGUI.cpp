@@ -1,4 +1,5 @@
 #include "MainMenuGUI.h"
+#include "SteadyClock.h"
 #include "NetHostOptionsText.h"
 #include "NetPlayerPresentation.h"
 #include "NetChatPresentation.h"
@@ -4049,10 +4050,10 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	std::string error;
 	m_MultiplayerJoinRequest = request;
 	m_MultiplayerApplyOffered = !host;
-	const auto start = std::chrono::steady_clock::now();
+	const auto start = RTE::SteadyClock::now();
 	const bool started = g_NetMatchService.Start(request, &error);
 	if (FrameRecorder::Instance().Enabled()) {
-		const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+		const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count();
 		const std::string event = "menu_start host=" + std::to_string(host) + " elapsed_us=" + std::to_string(elapsed) +
 		    " budget_us=16667 within_one_frame=" + std::to_string(elapsed <= 16667);
 		FrameRecorder::Instance().RecordEvent(event);
@@ -4245,7 +4246,7 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 
 // The menu's own clock: the reconnect schedule is real time, not sim time.
 uint64_t MainMenuGUI::MenuClockMs() {
-	return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+	return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 }
 
 void MainMenuGUI::RefreshReconnectControls() {
@@ -5542,7 +5543,7 @@ void MainMenuGUI::RefreshGamesList() {
 	std::string ignored;
 	(void)m_LanBrowser.StartBrowser(&ignored); // idempotent; a failed LAN half still shows NET rows
 	// A real monotonic clock, so host expiry holds at any frame rate and while minimized.
-	m_LanBrowserNowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+	m_LanBrowserNowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 	std::vector<NetLanHostInfo> hosts;
 	if (m_LanBrowser.IsBrowsing()) {
 		m_LanBrowser.Tick(m_LanBrowserNowMs);

@@ -1,4 +1,5 @@
 #include "FloatingPointEnvironment.h"
+#include "SteadyClock.h"
 #include "FrameMan.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
@@ -262,7 +263,7 @@ namespace {
 	FeelState s_Feel;
 
 	double FeelNowMS() {
-		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+		return std::chrono::duration<double, std::milli>(RTE::SteadyClock::now().time_since_epoch()).count();
 	}
 
 	/// The feel recorder's own work on the calling thread, charged to the frame it ends in.
@@ -532,7 +533,7 @@ void FrameMan::FeelAfterPresent() {
 		    {"path", name.generic_string()}, {"capture_ms", FeelNowMS() - now}},
 		    FloatingPointEnvironment::Async(std::launch::async, [copy, path = name.string()] {
 			    // The encode's processor time is the recorder's, charged to the frame it ends in.
-			    const auto began = std::chrono::steady_clock::now();
+			    const auto began = RTE::SteadyClock::now();
 			    const int64_t cpuBefore = FrameRecorder::ThreadCpuNanoseconds();
 			    FeelState::Encoded encoded;
 			    // The screen copy is 8-bit RGB: the recorder's fastest-level writer keeps the encode off the frames' budget.
@@ -543,7 +544,7 @@ void FrameMan::FeelAfterPresent() {
 			    const int64_t cpuNs = FrameRecorder::ThreadCpuNanoseconds() - cpuBefore;
 			    HarnessCost::Charge(HarnessCost::FeelRecorder, cpuNs);
 			    encoded.cpuMs = static_cast<double>(cpuNs) / 1e6;
-			    encoded.wallMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+			    encoded.wallMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - began).count();
 			    return encoded;
 		    })});
 		s_Feel.nextCaptureTick += 60;
@@ -1071,9 +1072,9 @@ bool FrameMan::RunTextWrapSelfTest() {
 		longLine += (i % 8 == 7) ? ' ' : 'a';
 	}
 	const int narrow = font->CalculateWidth("aaa") + 1;
-	const auto t0 = std::chrono::steady_clock::now();
+	const auto t0 = RTE::SteadyClock::now();
 	const std::string gotT = SplitStringToFitWidth(longLine, narrow, true);
-	const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+	const auto us = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - t0).count();
 	check(us < 8000, "timing_4kb_narrow", "us=" + std::to_string(us) + " budget=8000 (1/10 of 80000 us tip stand-in)");
 	check(width_ok(gotT, narrow), "timing_4kb_width", "wrapped");
 

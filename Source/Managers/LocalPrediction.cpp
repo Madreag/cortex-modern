@@ -1,4 +1,5 @@
 #include "LocalPrediction.h"
+#include "SteadyClock.h"
 
 #include "Activity.h"
 #include "ActivityMan.h"
@@ -215,7 +216,7 @@ namespace RTE {
 	}
 
 	void LocalPrediction::RunPreview() {
-		const auto entered = std::chrono::steady_clock::now();
+		const auto entered = RTE::SteadyClock::now();
 		if (!IsEnabled() || !ScenarioRunner::IsLockstepControllerSyncActive() || ScenarioRunner::IsLockstepPaused() || !g_ActivityMan.ActivityRunning()) {
 			if (TraceEnabled()) {
 				std::cout << "[localpred] skip: enabled=" << IsEnabled() << " lockstep=" << ScenarioRunner::IsLockstepControllerSyncActive() << " paused=" << ScenarioRunner::IsLockstepPaused() << " running=" << g_ActivityMan.ActivityRunning() << std::endl;
@@ -226,12 +227,12 @@ namespace RTE {
 		// Nothing new arrives between sim ticks, so a frame drawn from the same tick reuses the previews.
 		if (!s_Previews.empty() && s_PreviewedTick == g_TimerMan.GetSimUpdateCount()) {
 			++s_ReusedFrames;
-			s_ReusedMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - entered).count();
+			s_ReusedMs += std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - entered).count();
 			return;
 		}
-		const auto dropStart = std::chrono::steady_clock::now();
+		const auto dropStart = RTE::SteadyClock::now();
 		Clear();
-		s_PhaseMs[0] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - dropStart).count();
+		s_PhaseMs[0] += std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - dropStart).count();
 		const int delay = s_DepthOverride > 0 ? s_DepthOverride : static_cast<int>(ScenarioRunner::GetLockstepLocalInputDelay());
 		const int depth = ScenarioRunner::UsesBoundedLockstepWait() ? delay : std::min(delay, std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks()));
 		if (depth <= 0) {
@@ -272,10 +273,10 @@ namespace RTE {
 		}
 		Trace("preview start");
 
-		const auto start = std::chrono::steady_clock::now();
+		const auto start = RTE::SteadyClock::now();
 		auto lapStart = start;
 		const auto lap = [&lapStart](int phase) {
-			const auto now = std::chrono::steady_clock::now();
+			const auto now = RTE::SteadyClock::now();
 			s_PhaseMs[phase] += std::chrono::duration<double, std::milli>(now - lapStart).count();
 			lapStart = now;
 		};
@@ -531,7 +532,7 @@ namespace RTE {
 		s_PreviewedTick = simCount;
 		++s_PreviewCount;
 		s_PreviewTicks += static_cast<uint64_t>(depth) * s_Previews.size();
-		s_PreviewMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() - previewHarnessMs;
+		s_PreviewMs += std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - start).count() - previewHarnessMs;
 		// A script resumed a coroutine its copy only stands in for, so this tick's preview runs again with the scripts frozen.
 		if (LuaMan::TakePreviewCoroutineResumed() && !s_RerunningFrozen) {
 			++s_CoroutineReruns;

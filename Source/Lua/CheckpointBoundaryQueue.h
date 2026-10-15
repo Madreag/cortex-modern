@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointBoundary.h"
+#include "SteadyClock.h"
 #include "FloatingPointEnvironment.h"
 #include "ThreadMan.h"
 
@@ -144,11 +145,11 @@ namespace RTE::CheckpointLua {
 		void Wake() noexcept { m_Wake.fetch_add(1, std::memory_order_release); m_Wake.notify_one(); }
 		void Publish(State state) noexcept { m_State.store(state, std::memory_order_release); m_State.notify_all(); }
 		void PreparePlan() noexcept {
-			const auto began = std::chrono::steady_clock::now();
+			const auto began = RTE::SteadyClock::now();
 			m_Releasing.store(true, std::memory_order_release);
 			m_Plan.reset();
 			m_Releasing.store(false, std::memory_order_release);
-			const auto released = std::chrono::steady_clock::now();
+			const auto released = RTE::SteadyClock::now();
 			try {
 				CheckpointNativeStorage::CaptureScope allocations;
 				auto boundary = m_Prepare();
@@ -156,7 +157,7 @@ namespace RTE::CheckpointLua {
 				m_Plan = std::make_unique<Plan>(std::move(boundary));
 				const auto micros = [](auto from, auto to) { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(to - from).count()); };
 				m_LastReleaseUs.store(micros(began, released), std::memory_order_relaxed);
-				m_LastPrepareUs.store(micros(released, std::chrono::steady_clock::now()), std::memory_order_relaxed);
+				m_LastPrepareUs.store(micros(released, RTE::SteadyClock::now()), std::memory_order_relaxed);
 				m_Preparations.fetch_add(1, std::memory_order_acq_rel);
 				m_Refusals.store(0, std::memory_order_release);
 				try { std::lock_guard lock(m_FailureMutex); m_PrepareFailure.clear(); } catch (...) {}

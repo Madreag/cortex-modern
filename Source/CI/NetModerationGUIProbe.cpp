@@ -1,4 +1,5 @@
 #include "NetModerationGUIProbe.h"
+#include "SteadyClock.h"
 
 #include "Actor.h"
 #include "BuyMenuGUI.h"
@@ -89,7 +90,7 @@ void TraceObjectLifetime(const MovableObject* object, const char* stage, bool ob
 
 namespace {
 	using Json = nlohmann::json;
-	using Clock = std::chrono::steady_clock;
+	using Clock = RTE::SteadyClock;
 	enum class Phase {
 		Poll,
 		Draw,

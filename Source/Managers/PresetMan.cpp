@@ -2,6 +2,7 @@
 #pragma warning(disable : 4129)
 
 #include "PresetMan.h"
+#include "SteadyClock.h"
 #include "CheckpointFrozenContainers.h"
 #include "DataModule.h"
 #include "SceneObject.h"
@@ -132,7 +133,7 @@ bool PresetMan::LoadDataModule(const std::string& moduleName, bool official, boo
 bool HarnessMatchRunActive(); //!< Main.cpp: a -net-match-service-e2e match or the -net-replay playback of one.
 
 bool PresetMan::LoadAllDataModules() {
-	auto moduleLoadTimerStart = std::chrono::steady_clock::now();
+	auto moduleLoadTimerStart = RTE::SteadyClock::now();
 
 	// Destroy any possible loaded modules
 	Destroy();
@@ -195,10 +196,10 @@ bool PresetMan::LoadAllDataModules() {
 	}
 
 	if (const std::string costs = CheckpointNativeStorage::StorageCosts(); !costs.empty()) {
-		std::cout << "[storage-costs] load_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - moduleLoadTimerStart).count() << " " << costs << std::endl;
+		std::cout << "[storage-costs] load_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - moduleLoadTimerStart).count() << " " << costs << std::endl;
 	}
 	if (g_SettingsMan.IsMeasuringModuleLoadTime()) {
-		std::chrono::milliseconds moduleLoadElapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - moduleLoadTimerStart);
+		std::chrono::milliseconds moduleLoadElapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - moduleLoadTimerStart);
 		g_ConsoleMan.PrintString("Module load duration is: " + std::to_string(moduleLoadElapsedTime.count()) + "ms");
 	}
 	WarnNonCompliantModules();

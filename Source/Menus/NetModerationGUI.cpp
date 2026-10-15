@@ -1,4 +1,5 @@
 #include "NetModerationGUI.h"
+#include "SteadyClock.h"
 
 #include "ActivityMan.h"
 #include "Constants.h"
@@ -1507,10 +1508,10 @@ void NetModerationGUI::Update() {
 	// Without the cost lever the panel reads no clock for it.
 	struct FrameTime {
 		FrameCost* cost;
-		std::chrono::steady_clock::time_point started = cost ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		RTE::SteadyClock::time_point started = cost ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 		~FrameTime() {
 			if (!cost) return;
-			const long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
+			const long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - started).count();
 			cost->frameNs += ns;
 			cost->framePartsUs += ns / 1000;
 		}
@@ -2718,11 +2719,11 @@ namespace {
 		const bool armed = std::getenv("CCCP_TEST_DRAW_PHASES") != nullptr;
 		std::array<double, 5> totalUs{};
 		uint64_t frames = 0;
-		std::chrono::steady_clock::time_point lap;
-		void Begin() { if (armed) lap = std::chrono::steady_clock::now(); }
+		RTE::SteadyClock::time_point lap;
+		void Begin() { if (armed) lap = RTE::SteadyClock::now(); }
 		void Lap(size_t phase) {
 			if (!armed) return;
-			const auto now = std::chrono::steady_clock::now();
+			const auto now = RTE::SteadyClock::now();
 			totalUs[phase] += std::chrono::duration<double, std::micro>(now - lap).count();
 			lap = now;
 		}
@@ -2740,9 +2741,9 @@ namespace {
 void NetModerationGUI::Draw() {
 	struct DrawTime {
 		NetModerationGUI& panel;
-		std::chrono::steady_clock::time_point started = panel.m_Cost ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		RTE::SteadyClock::time_point started = panel.m_Cost ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 		~DrawTime() {
-			if (panel.m_Cost) panel.NoteFrameCost(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count());
+			if (panel.m_Cost) panel.NoteFrameCost(std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - started).count());
 		}
 	} drawTime{*this};
 	s_OverlayPhases.Begin();

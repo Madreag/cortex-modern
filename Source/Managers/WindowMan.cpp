@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <format>
 #include "WindowMan.h"
+#include "SteadyClock.h"
 #include "RTEError.h"
 #include "SDL3/SDL.h"
 #include "SettingsMan.h"
@@ -853,7 +854,7 @@ void WindowMan::UploadFrame() {
 }
 
 void WindowMan::Present() {
-	const auto swapBegan = std::chrono::steady_clock::now();
+	const auto swapBegan = RTE::SteadyClock::now();
 	if (m_MultiDisplayWindows.empty()) {
 		SDL_GL_SwapWindow(m_PrimaryWindow.get());
 	} else {
@@ -862,7 +863,7 @@ void WindowMan::Present() {
 			SDL_GL_SwapWindow(m_MultiDisplayWindows.at(i).get());
 		}
 	}
-	const auto swapEnded = std::chrono::steady_clock::now();
+	const auto swapEnded = RTE::SteadyClock::now();
 	m_LastSwapMs = std::chrono::duration<double, std::milli>(swapEnded - swapBegan).count();
 	JudgeSwapWait(m_PrimaryWindow.get(), m_LastSwapMs, m_EnableVSync, std::chrono::duration<double, std::milli>(swapEnded.time_since_epoch()).count());
 }

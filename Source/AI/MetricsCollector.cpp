@@ -1,4 +1,5 @@
 #include "FloatingPointEnvironment.h"
+#include "SteadyClock.h"
 #include "MetricsCollector.h"
 
 #include "ScenarioRunner.h"
@@ -38,7 +39,7 @@ namespace RTE {
 			throw std::runtime_error("invalid capture barrier identity, phase or timeout");
 		const auto root = std::filesystem::path(directory);
 		std::filesystem::create_directories(root);
-		const auto began = std::chrono::steady_clock::now();
+		const auto began = RTE::SteadyClock::now();
 		json receipt{{"type", "capture_barrier"}, {"id", id}, {"capture_phase", phase}, {"capture_tick", tick},
 		    {"capture_round", round}, {"timeout_ms", timeout}, {"outcome", "entered"},
 		    {"barrier_wall_ms", std::chrono::duration<double, std::milli>(began.time_since_epoch()).count()}};
@@ -54,11 +55,11 @@ namespace RTE {
 		};
 		publish(".enter.json");
 		const auto released = [&] { return std::filesystem::is_regular_file(prefix.string() + ".release"); };
-		while (!released() && std::chrono::steady_clock::now() - began < std::chrono::milliseconds(timeout))
+		while (!released() && RTE::SteadyClock::now() - began < std::chrono::milliseconds(timeout))
 			std::this_thread::sleep_for(std::chrono::milliseconds(2));
 		const bool passed = released();
 		receipt["outcome"] = passed ? "released" : "timeout";
-		receipt["wait_ms"] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+		receipt["wait_ms"] = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - began).count();
 		publish(".exit.json");
 		return passed;
 	}
@@ -347,7 +348,7 @@ namespace RTE {
 		if (!EventsEnabled() || (MovableMan::IsConstructed() && g_MovableMan.IsSpeculative())) return;
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (!m_EventStream->active) return;
-		if (producedWallMs < 0) producedWallMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+		if (producedWallMs < 0) producedWallMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now().time_since_epoch()).count();
 		json sample{{"type", "controller_input_produced"}, {"input_serial", ++m_EventStream->inputSerial},
 		    {"input_round", round}, {"produced_tick", producedTick}, {"target_tick", targetTick},
 		    {"actor", actor}, {"seat", seat}, {"produced_wall_ms", producedWallMs}};
@@ -664,7 +665,7 @@ namespace RTE {
 		m_SubsystemIndex.clear();
 		m_HostRun = false;
 		m_RecordTickHashes = armTickHashes;
-		m_StartWall = std::chrono::steady_clock::now();
+		m_StartWall = RTE::SteadyClock::now();
 		m_SimConfig = ScenarioRunner::GatherSimConfig();
 	}
 
@@ -678,7 +679,7 @@ namespace RTE {
 		const auto last = g_SimChecksum.GetLastResult();
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_FinalTotalHashHex = SimChecksum::HashHex(last.total);
-		const auto elapsed = std::chrono::steady_clock::now() - m_StartWall;
+		const auto elapsed = RTE::SteadyClock::now() - m_StartWall;
 		m_Numeric["__wall_seconds"] =
 		    std::chrono::duration_cast<std::chrono::duration<double>>(elapsed).count();
 	}

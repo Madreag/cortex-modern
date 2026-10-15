@@ -1924,8 +1924,8 @@ static std::string ResyncSaveName() {
 		StopSnapshotLoadKeepalive();
 		const uint64_t before = m_SnapshotLoadKeepaliveTicks.load();
 		StartSnapshotLoadKeepalive();
-		const auto start = std::chrono::steady_clock::now();
-		while (std::chrono::steady_clock::now() - start < std::chrono::milliseconds(300)) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		const auto start = RTE::SteadyClock::now();
+		while (RTE::SteadyClock::now() - start < std::chrono::milliseconds(300)) std::this_thread::sleep_for(std::chrono::milliseconds(5));
 		const uint64_t during = m_SnapshotLoadKeepaliveTicks.load() - before;
 		StopSnapshotLoadKeepalive();
 		if (during < 3) {
@@ -3815,9 +3815,9 @@ static std::string ResyncSaveName() {
 		if (!EncodeCommittedJoinFrame(holds, side, &error)) { m_PrivateJoinError = error; return; }
 		image.heldState = ResumeHex(side);
 		image.path = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + name + ".ccsave";
-		const auto began = std::chrono::steady_clock::now();
+		const auto began = RTE::SteadyClock::now();
 		if (!g_ActivityMan.SaveCurrentGame(name)) { m_PrivateJoinError = "the private checkpoint could not be captured"; return; }
-		image.captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+		image.captureMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - began).count();
 		const auto saved = g_ActivityMan.GetSaveGameTask();
 		m_PrivateImageTask = std::async(std::launch::async, [saved, image = std::move(image)]() mutable {
 			PrivateJoinImage result;
@@ -4252,9 +4252,9 @@ static std::string ResyncSaveName() {
 			NetLockstepPlaneGuard plane;
 			if (m_Coordinator) m_Coordinator->BeginSynchronizedCapture(tick);
 		}
-		const auto began = std::chrono::steady_clock::now();
+		const auto began = RTE::SteadyClock::now();
 		const bool taken = g_ActivityMan.CaptureFullStateHash(tick, round, dumpDirectory, label);
-		const double costMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+		const double costMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - began).count();
 		{
 			NetLockstepPlaneGuard plane;
 			if (m_Coordinator) m_Coordinator->CompleteSynchronizedCapture(tick, costMs);
@@ -4322,12 +4322,12 @@ static std::string ResyncSaveName() {
 			bool taken = false;
 			if (!ScenarioRunner::WorldCatchUpActive() && g_ActivityMan.ActivityRunning()) {
 				if (m_Coordinator) m_Coordinator->BeginSynchronizedCapture(tick);
-				const auto captureBegan = std::chrono::steady_clock::now();
+				const auto captureBegan = RTE::SteadyClock::now();
 				CrossCaptureBarrierFromEnvironment("capture_announced", tick, m_AutosaveIdentity.roundId);
 				m_AutosaveIdentity.savedByHost = output.manual;
 				taken = SaveStampedAutosave(tick);
 				m_AutosaveIdentity.savedByHost = false;
-				const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureBegan).count();
+				const double captureMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - captureBegan).count();
 				if (m_Coordinator) m_Coordinator->CompleteSynchronizedCapture(tick, taken ? std::max(g_ActivityMan.LastAutosaveCaptureMs(), captureMs) : captureMs);
 			}
 			if (output.manual) {
@@ -6790,12 +6790,12 @@ static std::string ResyncSaveName() {
 				DropReturnStartLocked("the live round was configured for another return");
 				return;
 			}
-			const auto activationBegan = std::chrono::steady_clock::now();
+			const auto activationBegan = RTE::SteadyClock::now();
 			NetResyncState committed;
 			std::string error;
 			if (!ScenarioRunner::CaptureNetResyncState(m_WorldCatchUp.activationTick - 1, committed, &error, false)) { ScenarioRunner::SetControllerReplayError("private catch-up activation: " + error); return; }
 			committed.ClearPending();
-			const auto activationCaptured = std::chrono::steady_clock::now();
+			const auto activationCaptured = RTE::SteadyClock::now();
 			const auto pause = ScenarioRunner::CaptureLockstepPauseState();
 			if (m_CatchUpCoordinator) m_Coordinator->AdoptReplayedSeatTransitions(*m_CatchUpCoordinator, m_WorldCatchUp.activationTick - 1);
 			ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), true);
@@ -6829,7 +6829,7 @@ static std::string ResyncSaveName() {
 				controller->DropLocalProduction();
 				controller->ResetLocalInputState(mode, player);
 			}
-			const auto activationLocal = std::chrono::steady_clock::now();
+			const auto activationLocal = RTE::SteadyClock::now();
 			for (const auto& event: m_CatchUpWirePackets) {
 				if (NetLockstepCodec::LooksLikePacket(event.bytes) && event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
 					const size_t offset = event.bytes[17] == 0 ? 20 : 28;
@@ -6839,13 +6839,13 @@ static std::string ResyncSaveName() {
 				}
 				m_Coordinator->InjectEvent(event, NetLockstepNowMs());
 			}
-			const auto activationWired = std::chrono::steady_clock::now();
+			const auto activationWired = RTE::SteadyClock::now();
 			m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 			m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset(); m_ActivateCatchUpLocalSeat = {};
 			// The tail replayed on this thread; the session read nothing while it ran, so neither the silence
 			// windows nor the admission deadlines count it.
 			m_AdmissionClock.NotePark(static_cast<uint64_t>(std::max(0.0,
-			    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - activationBegan).count())), SteadyNowMs());
+			    std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - activationBegan).count())), SteadyNowMs());
 			NotePumpParkedLocked();
 			SetRejoinPhaseLocked(NetSession::RejoinPhase::Active);
 			if (NetSession* live = LiveSessionLocked()) live->TickKeepalive(AdmissionNowMs());
@@ -6856,7 +6856,7 @@ static std::string ResyncSaveName() {
 				std::ostringstream line;
 				line << "[net-match] activation work frame=" << m_WorldCatchUp.activationTick
 				     << " capture_ms=" << milliseconds(activationBegan, activationCaptured) << " local_ms=" << milliseconds(activationCaptured, activationLocal)
-				     << " wire_ms=" << milliseconds(activationLocal, activationWired) << " cleanup_ms=" << milliseconds(activationWired, std::chrono::steady_clock::now());
+				     << " wire_ms=" << milliseconds(activationLocal, activationWired) << " cleanup_ms=" << milliseconds(activationWired, RTE::SteadyClock::now());
 				System::PrintDiagnosticLine(line.str());
 			}
 			{
@@ -9118,9 +9118,9 @@ static std::string ResyncSaveName() {
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions options = DiagnosticIdentityOptions();
 		NetIdentity::StampOptionsForTarget(options, m_MatchConfig.persistentWorld);
-		const auto started = std::chrono::steady_clock::now();
+		const auto started = RTE::SteadyClock::now();
 		const bool built = NetIdentity::BuildCurrentManifest(manifest, error, options);
-		if (buildMs) *buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+		if (buildMs) *buildMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - started).count();
 		if (!built) return false;
 		CacheDiagnosticIdentity(manifest);
 		return true;
@@ -9166,7 +9166,7 @@ static std::string ResyncSaveName() {
 		NetIdentityBuildOptions options = DiagnosticIdentityOptions();
 		NetIdentity::StampOptionsForTarget(options, capturedWorld);
 		const NetIdentityManifest captured = manifest;
-		const auto started = std::chrono::steady_clock::now();
+		const auto started = RTE::SteadyClock::now();
 		// The game thread can write a module tree while this walk reads it, so one failed walk is retried
 		// from the captured inputs before it is reported.
 		bool built = NetIdentity::CompleteManifestFromInputs(manifest, error, options);
@@ -9174,7 +9174,7 @@ static std::string ResyncSaveName() {
 			manifest = captured;
 			built = NetIdentity::CompleteManifestFromInputs(manifest, error, options);
 		}
-		if (buildMs) *buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+		if (buildMs) *buildMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - started).count();
 		if (!built) return false;
 		{
 			// A newer identity was cached while this one hashed: that one is the current build, not this.
@@ -10940,7 +10940,7 @@ static std::string ResyncSaveName() {
 	bool NetMatchService::WaitForJoinTrigger(const std::string& path, uint64_t budgetMs, std::string* error) {
 		if (path.empty()) return true;
 		const std::filesystem::path trigger(path);
-		const auto opened = std::chrono::steady_clock::now();
+		const auto opened = RTE::SteadyClock::now();
 		{
 			std::ostringstream line;
 			line << "[net-join-wait] waiting for " << path;
@@ -10949,7 +10949,7 @@ static std::string ResyncSaveName() {
 		for (;;) {
 			std::error_code fsError;
 			if (std::filesystem::exists(trigger, fsError) && !fsError) {
-				const auto waitedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - opened).count();
+				const auto waitedMs = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - opened).count();
 				{
 					std::ostringstream line;
 					line << "[net-join-wait] released after " << waitedMs << "ms";
@@ -10957,7 +10957,7 @@ static std::string ResyncSaveName() {
 				}
 				return true;
 			}
-			const uint64_t elapsedMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - opened).count());
+			const uint64_t elapsedMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - opened).count());
 			if (elapsedMs >= budgetMs) break;
 			const uint64_t remainingMs = budgetMs - elapsedMs;
 			std::this_thread::sleep_for(std::chrono::milliseconds(std::min<uint64_t>(c_JoinWaitPollMs, remainingMs)));
