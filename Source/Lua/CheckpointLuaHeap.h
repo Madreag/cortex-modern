@@ -1686,7 +1686,7 @@ namespace RTE::CheckpointLua {
 		void CopyFencedNow() {
 			std::lock_guard lock(m_Mutex);
 			if (m_Finished || m_Copy->armed.load(std::memory_order_acquire) != 1) return;
-			constexpr size_t batchPages = 64;
+			static constexpr size_t batchPages = 64;
 			const size_t pages = m_Copy->saved.size(), batches = (pages + batchPages - 1) / batchPages;
 			const SaverThreads::UngatedScope ungated;
 			ParallelWork copies(SaverThreads::Pool(), batches, [this, pages](size_t batch) {

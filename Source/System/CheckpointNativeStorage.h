@@ -22,6 +22,39 @@
 
 namespace RTE {
 
+	// The 64 KiB regions the pools' pages ever covered, so a free of heap memory skips their lock; a released region stays marked.
+	class CheckpointOwnedRegions {
+	public:
+		/// Records pages under the pools' lock before they are handed out; it never throws, so a grown block is always recorded.
+		void Mark(const void* address, size_t bytes) noexcept {
+			const uintptr_t first = reinterpret_cast<uintptr_t>(address) >> c_RegionBits, last = (reinterpret_cast<uintptr_t>(address) + bytes - 1) >> c_RegionBits;
+			for (uintptr_t region = first; region <= last; ++region) {
+				const uintptr_t top = region >> c_LeafBits;
+				if (top >= m_Leaves.size()) continue;
+				Leaf* leaf = m_Leaves[top].load(std::memory_order_acquire);
+				if (!leaf) {
+					leaf = new (std::nothrow) Leaf{};
+					if (!leaf) { m_Unsure.store(true, std::memory_order_release); continue; }
+					m_Leaves[top].store(leaf, std::memory_order_release);
+				}
+				leaf->words[(region & c_LeafMask) >> 6].fetch_or(uint64_t{1} << (region & 63), std::memory_order_release);
+			}
+		}
+		/// Whether the address can be the pools': false only for memory they never held.
+		bool Maybe(const void* address) const noexcept {
+			const uintptr_t region = reinterpret_cast<uintptr_t>(address) >> c_RegionBits, top = region >> c_LeafBits;
+			if (top >= m_Leaves.size() || m_Unsure.load(std::memory_order_acquire)) return true;
+			const Leaf* leaf = m_Leaves[top].load(std::memory_order_acquire);
+			return leaf && (leaf->words[(region & c_LeafMask) >> 6].load(std::memory_order_acquire) >> (region & 63) & 1);
+		}
+	private:
+		static constexpr unsigned c_RegionBits = 16, c_LeafBits = 16;
+		static constexpr uintptr_t c_LeafMask = (uintptr_t{1} << c_LeafBits) - 1;
+		struct Leaf { std::array<std::atomic<uint64_t>, (size_t{1} << c_LeafBits) / 64> words{}; };
+		std::array<std::atomic<Leaf*>, size_t{1} << 16> m_Leaves{};
+		std::atomic<bool> m_Unsure{false};
+	};
+
 	// Saved resources and native multiplayer values use pages without moving their identities.
 	class CheckpointNativeStorage {
 	public:
@@ -187,38 +220,6 @@ namespace RTE {
 		/// it: glibc places every module's static thread-locals at the top of each thread's stack.
 		static std::string ThreadStackSelfTestMismatch();
 	private:
-		// The 64 KiB regions the pools' pages ever covered, so a free of heap memory skips their lock; a released region stays marked.
-		class OwnedRegions {
-		public:
-			/// Records pages under the pools' lock before they are handed out; it never throws, so a grown block is always recorded.
-			void Mark(const void* address, size_t bytes) noexcept {
-				const uintptr_t first = reinterpret_cast<uintptr_t>(address) >> c_RegionBits, last = (reinterpret_cast<uintptr_t>(address) + bytes - 1) >> c_RegionBits;
-				for (uintptr_t region = first; region <= last; ++region) {
-					const uintptr_t top = region >> c_LeafBits;
-					if (top >= m_Leaves.size()) continue;
-					Leaf* leaf = m_Leaves[top].load(std::memory_order_acquire);
-					if (!leaf) {
-						leaf = new (std::nothrow) Leaf{};
-						if (!leaf) { m_Unsure.store(true, std::memory_order_release); continue; }
-						m_Leaves[top].store(leaf, std::memory_order_release);
-					}
-					leaf->words[(region & c_LeafMask) >> 6].fetch_or(uint64_t{1} << (region & 63), std::memory_order_release);
-				}
-			}
-			/// Whether the address can be the pools': false only for memory they never held.
-			bool Maybe(const void* address) const noexcept {
-				const uintptr_t region = reinterpret_cast<uintptr_t>(address) >> c_RegionBits, top = region >> c_LeafBits;
-				if (top >= m_Leaves.size() || m_Unsure.load(std::memory_order_acquire)) return true;
-				const Leaf* leaf = m_Leaves[top].load(std::memory_order_acquire);
-				return leaf && (leaf->words[(region & c_LeafMask) >> 6].load(std::memory_order_acquire) >> (region & 63) & 1);
-			}
-		private:
-			static constexpr unsigned c_RegionBits = 16, c_LeafBits = 16;
-			static constexpr uintptr_t c_LeafMask = (uintptr_t{1} << c_LeafBits) - 1;
-			struct Leaf { std::array<std::atomic<uint64_t>, (size_t{1} << c_LeafBits) / 64> words{}; };
-			std::array<std::atomic<Leaf*>, size_t{1} << 16> m_Leaves{};
-			std::atomic<bool> m_Unsure{false};
-		};
 		RTE_NOINLINE static bool ScopedEnabled(bool retained);
 		RTE_NOINLINE static bool ScopedRetaining() noexcept;
 		static constexpr int c_CostLeverOff = 1, c_CostLeverOn = 2;
@@ -228,7 +229,7 @@ namespace RTE {
 		static inline std::atomic<bool> s_WorldEnabled{false};
 		static inline std::atomic<bool> s_LockstepAttached{false};
 		static inline std::atomic<int> s_CostLever{0}; //!< The storage cost lever's state once read: unknown, off or on.
-		static inline OwnedRegions s_OwnedRegions;
+		static inline CheckpointOwnedRegions s_OwnedRegions;
 	};
 
 	class CheckpointNativeAllocated {
