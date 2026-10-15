@@ -405,6 +405,7 @@ namespace RTE {
 		m_PeersPlayedThisRound.erase(peer); m_LastStartAnswerMs.erase(peer);
 		auto& votes = m_PeerBridgeVotes[{frame, 1}];
 		if (const auto own = votes.find(m_Config.localPeerId); own != votes.end()) return SameBridge(own->second, proposal);
+		if (VotedOtherPeerReturn(proposal)) { if (error) *error = "another return of the seat is still being decided"; return false; }
 		votes.emplace(m_Config.localPeerId, proposal); SendPeerFrameMessage(std::move(proposal)); TryCommitPeerBridge(frame, m_TimingNowMs, 1);
 		return true;
 	}

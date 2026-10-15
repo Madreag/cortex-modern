@@ -1675,6 +1675,9 @@ namespace RTE {
 		void CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs);
 		bool ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly = false);
 		bool ValidatePeerBridge(const NetHostMigrationMessage& proposal) const;
+		/// Whether this peer already voted a return of one of the proposal's seats at another frame that is still undecided: a held seat
+		/// returns once, so a member backs one return of it until that one is certified or played past.
+		bool VotedOtherPeerReturn(const NetHostMigrationMessage& proposal) const;
 		bool PeerBridgeHasInputConflict(const NetHostMigrationMessage& proposal) const;
 		void ResolvePeerBridgeInputConflicts(uint64_t nowMs);
 		bool DecodePeerBridgeCertificate(const NetHostMigrationMessage& certificate, NetHostMigrationMessage& agreed, uint32_t& voters) const;

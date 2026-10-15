@@ -290,7 +290,7 @@ namespace RTE {
 			const auto own = votes.find(m_Config.localPeerId);
 			if (own != votes.end() && !SameBridge(own->second, message)) return true;
 			votes.try_emplace(message.senderPeerId, message);
-			if (own == votes.end()) {
+			if (own == votes.end() && !VotedOtherPeerReturn(message)) {
 				auto reply = message;
 				reply.senderPeerId = m_Config.localPeerId;
 				reply.appliedFrame = m_LastCompletedSimulationTick.value_or(0);

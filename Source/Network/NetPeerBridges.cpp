@@ -84,6 +84,19 @@ namespace RTE {
 		return proposal.preparedFrame == 1 ? (named & proposal.connectedMask) == named : (named & proposal.connectedMask) == 0;
 	}
 
+	bool NetLockstepCoordinator::VotedOtherPeerReturn(const NetHostMigrationMessage& proposal) const {
+		if (proposal.preparedFrame != 1) return false;
+		uint32_t named = 0;
+		for (uint8_t peer: proposal.members) named |= SeatBit(peer);
+		for (auto votes = m_PeerBridgeVotes.lower_bound({m_Stats.nextFrame, 0}); votes != m_PeerBridgeVotes.end(); ++votes) {
+			if (votes->first.second != 1 || votes->first.first == proposal.frame || m_PeerBridgeCertificates.contains(votes->first)) continue;
+			const auto own = votes->second.find(m_Config.localPeerId);
+			if (own == votes->second.end()) continue;
+			for (uint8_t peer: own->second.members) if ((named & SeatBit(peer)) != 0) return true;
+		}
+		return false;
+	}
+
 	bool NetLockstepCoordinator::ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly) {
 		if (!UsesPeerFrameGroups() || WaitsForPlacement() || frame != m_Stats.nextFrame || m_PeerBridgeCertificates.contains({frame, 0})) return false;
 		const auto sources = m_PeerSourceInputs.find(frame);
@@ -284,6 +297,7 @@ namespace RTE {
 		// Reporting it as progress makes AdvanceReadyFrames spin on the same frame
 		// and prevents the wire from delivering the other voters' answers.
 		if (own != votes.end()) return m_PeerBridgeCertificates.contains({frame, 0});
+		if (VotedOtherPeerReturn(proposal)) return false;
 		proposal.voterMask = SeatBit(m_Config.localPeerId);
 		votes.emplace(m_Config.localPeerId, proposal);
 		m_PeerVotedAtMs.try_emplace({proposal.frame, DecisionKind(proposal)}, nowMs);
