@@ -203,8 +203,15 @@ namespace RTE {
 				if (own > 0) {
 					const auto rate = PeerAppliedRate(peer, nowMs);
 					if (!rate) continue;
-					// It must also close its trail by its first live frame: one still behind there is late at once and held again.
-					const uint64_t trail = displayed > applied->second ? displayed - applied->second : 0;
+					// It must also close its trail by its first live frame: one still behind there is late at once and held again. A seat that keeps
+					// up still trails by the round trip its tail and its report take and by its last report's age; that lag is not trail to close.
+					uint32_t lagRttMs = m_Stats.peers[peer].pingMs;
+					if (wire && wire->IsPeerPingMeasured(route)) lagRttMs = std::max(lagRttMs, wire->GetPeerPingMs(route));
+					const auto reported = m_PeerAppliedAtMs.find(peer);
+					const uint64_t reportAgeMs = reported != m_PeerAppliedAtMs.end() && nowMs > reported->second ? nowMs - reported->second : 0;
+					const uint64_t lag = static_cast<uint64_t>(std::ceil((lagRttMs + reportAgeMs) / m_Config.simTickMs));
+					const uint64_t behind = displayed > applied->second ? displayed - applied->second : 0;
+					const uint64_t trail = behind > lag ? behind - lag : 0;
 					const uint64_t horizon = m_LastQueuedTargetFrame != UINT64_MAX && m_LastQueuedTargetFrame >= displayed ? m_LastQueuedTargetFrame + 1 - displayed : 0;
 					const double toLive = static_cast<double>(horizon + delay + trail + m_Config.slowPlayerBoundTicks);
 					const bool closes = trail <= m_Config.slowPlayerBoundTicks || (*rate - own) * toLive >= static_cast<double>(trail - m_Config.slowPlayerBoundTicks) * own;
