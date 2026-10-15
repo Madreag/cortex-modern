@@ -7,6 +7,7 @@
 
 #include "lz4.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
@@ -196,8 +197,13 @@ namespace RTE {
 			const auto ended = m_PeerRoundEnds.find(peer);
 			return ended != m_PeerRoundEnds.end() && !ended->second.closedLink && frame >= ended->second.frame;
 		});
+		// A machine slower than the others is held when it has cost them more than the round allows, not after a bound none of its
+		// late inputs reaches: waiting the bound on each of them would let it slow every other seat for good.
+		double slowCost = 0;
+		const bool slowMachine = proposal.preparedFrame == 0 && !proposal.members.empty() && std::all_of(proposal.members.begin(), proposal.members.end(),
+		    [&](uint8_t peer) { return CostsPastTolerance(peer, frame, nowMs, &slowCost); });
 		// A declared Leave has already ended its input; it needs no silence wait at that boundary.
-		if (proposal.preparedFrame == 0 && !declaredDeparture) {
+		if (proposal.preparedFrame == 0 && !declaredDeparture && !slowMachine) {
 			const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
 			// The startup consumer has no established buffered runway to spend.
 			// Its first missing inputs get the full bound from the actual wait.
@@ -278,7 +284,13 @@ namespace RTE {
 			}
 		}
 		if (proposal.preparedFrame == 0) {
-			for (uint8_t peer: proposal.members) m_PeerRejectedInputs[frame] |= SeatBit(peer);
+			for (uint8_t peer: proposal.members) {
+				m_PeerRejectedInputs[frame] |= SeatBit(peer);
+				if (!slowMachine) { m_SlowMachineHolds.erase(peer); continue; }
+				m_SlowMachineHolds.insert(peer);
+				DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << frame << " cost " << slowCost
+				                 << " ticks/s against this machine's " << OwnCapacityTps() << "; the AI takes its seat" << std::endl;
+			}
 			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
 				DiagnosticLine detail;
 				detail << "[net-peer-hold-vote] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << frame
