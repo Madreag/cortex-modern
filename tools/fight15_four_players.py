@@ -48,7 +48,8 @@ def host_menu():
               "activate TabHostPageRules", "slider_set SliderHostRulesDifficulty 0", "slider_set SliderHostRulesGold 31000",
               "setcheck CheckHostRulesClearPath 0", "activate ButtonHostOptApply", "wait_ms 400",
               "activate ButtonHostOptBack", "wait_ms 500", "activate ButtonMultiplayerCreate", "wait_substate Lobby 90",
-              "video_mark fight15-host-listening", f"wait_connected {count} 300", "wait_ms 1200", "video_mark players-host"]
+              # The lobby counts the CPU team among its connected members, as fight15-s10's count does.
+              "video_mark fight15-host-listening", f"wait_connected {count + 1} 300", "wait_ms 1200", "video_mark players-host"]
     lines += [f"assert_label LabelLobbyPlayer{SEAT[peer]} {NAMES[peer]}" for peer in PLAYERS]
     lines += [f"assert_text_fits LabelLobbyPlayer{seat}" for seat in range(count)]
     # Nobody is Ready yet: the Start counts down, and the joiners answer it.
