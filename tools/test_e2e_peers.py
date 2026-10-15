@@ -151,6 +151,16 @@ class HeldHostSceneTest(unittest.TestCase):
         self.assertEqual(item["peer"], "host")
         self.assertTrue(any("peer=1 held=1" in pattern for pattern in item["log_regex"]), item)
         self.assertTrue(any("seat-reclaimed peer=1" in pattern for pattern in item["log_regex"]), item)
+        # The hold is the stall's: one the host earns later on its own (f-s10h-2, frame 28558) does not count.
+        import re
+        held = next(pattern for pattern in item["log_regex"] if "held=1" in pattern)
+        self.assertTrue(re.search(held, "[net-seat-ai] peer=1 held=1 frame=6045 tick=6045 cpu_teams=13"))
+        self.assertFalse(re.search(held, "[net-seat-ai] peer=1 held=1 frame=28558 tick=28558 cpu_teams=13"))
+        # And the joiner never waits on the stalled host past A1's 50 ms (f-s10h-1/-2: 1,656 and 1,639 ms at frame 6022-6023).
+        (never,) = next(row for row in document["checklist"] if row["id"] == "joiner-never-waited-joiner")["forbidden_log_regex"]
+        self.assertTrue(re.search(never, "[net-frame-wait] frame=6023 wait_ms=1639 on=Captain blocked=remote-input duplicates=0"))
+        self.assertFalse(re.search(never, "[net-frame-wait] frame=6030 wait_ms=11 on=Captain"))
+        self.assertFalse(re.search(never, "[net-frame-wait] frame=8049 wait_ms=500 on=Captain"))
         self.assertEqual(host["env"].get("CC_TEST_RETURN_INPUT_DETAILS"), "1")
         # The lever's own freeze of the host's screen is named and left out of the host's drawn frames and stills, nothing else.
         (excluded,) = document["drawn_frames_exclude"]

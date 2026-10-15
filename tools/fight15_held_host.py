@@ -8,6 +8,8 @@ ROOT = Path(__file__).resolve().parent / "e2e"
 # In minute two of the fight (the first minute ends near tick 5,000 on every box), long past the 3-tick bound.
 STALL_TICK = 6000
 STALL_MS = 2000
+# The bound (3 ticks) plus the hold decision's trip, at the round's 60 ticks a second.
+HOLD_WITHIN_TICKS = 120
 
 
 def held_host(document):
@@ -22,12 +24,21 @@ def held_host(document):
     reason = f"the scene's own stall of the host's simulation, {STALL_MS} ms at tick {STALL_TICK}"
     scene["drawn_frames_exclude"] = [{"peer": "host", "first_tick": STALL_TICK - 60, "last_tick": STALL_TICK + 120, "reason": reason}]
     scene["allowed_stills"] = [{"peer": "host", "from_mark": "minute-01-host", "to_mark": "minute-02-host", "reason": reason}]
+    # The hold must follow the stall, within the bound and the decision's trip; a hold the host earns later on its own is not this one.
+    held = "|".join(str(STALL_TICK // 10 + offset) for offset in range(HOLD_WITHIN_TICKS // 10))
     scene["checklist"].append({
         "id": "host-seat-held-host", "peer": "host", "mark": "minute-02-host", "screen": "game",
         "what": f"The host's own simulation stalled {STALL_MS} ms at tick {STALL_TICK}: the session plane held the host's seat to the AI "
-                "and the host came back to it while the joiner played on.",
-        "log_regex": [f"\\[net-test\\] live stall frame=\\d+ ms={STALL_MS}", "\\[net-seat-ai\\] peer=1 held=1 ",
+                f"within {HOLD_WITHIN_TICKS} ticks and the host came back to it while the joiner played on.",
+        "log_regex": [f"\\[net-test\\] live stall frame=\\d+ ms={STALL_MS}", f"\\[net-seat-ai\\] peer=1 held=1 frame=({held})\\d ",
                       "\\[net-match\\] seat-reclaimed peer=1 frame="]})
+    # The joiner never waits on the stalled host past A1's bound: 50 ms on any frame from the stall to its hold's end.
+    waited = "|".join(str(STALL_TICK // 100 + offset) for offset in range(2))
+    scene["checklist"].append({
+        "id": "joiner-never-waited-joiner", "peer": "joiner", "mark": "minute-02-joiner", "screen": "game",
+        "what": f"The joiner never waited 50 ms or more on the host from its stall at tick {STALL_TICK} to {STALL_TICK + 199}.",
+        "log_regex": ["\\[fight15-scene\\] minute=2 pace="],
+        "forbidden_log_regex": [f"\\[net-frame-wait\\] frame=({waited})\\d\\d wait_ms=(\\d{{3,}}|[5-9]\\d) "]})
     return scene
 
 
