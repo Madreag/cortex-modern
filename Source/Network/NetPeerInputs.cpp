@@ -491,7 +491,7 @@ namespace RTE {
 				}
 			}
 			// An authenticated donor cannot commit a minority's tail by claiming somebody else's votes.
-			if ((agreeing & ~message.voterMask) != 0 || 2 * std::popcount(agreeing) <= std::popcount(message.voterMask)) {
+			if (!PeerFrameGroupConfirms(agreeing, message.voterMask, message.frame)) {
 				if (message.frame == m_Stats.nextFrame && nowMs >= m_PeerTailLogAtMs) {
 					m_PeerTailLogAtMs = nowMs + 1000;
 					DiagnosticLine() << "[net-peer-tail-wait] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << message.frame
