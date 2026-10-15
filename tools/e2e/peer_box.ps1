@@ -15,6 +15,9 @@ if (Get-Process -Name 'Cortex Command' -ErrorAction SilentlyContinue) {
   exit 99
 }
 $gns = [Environment]::GetEnvironmentVariable('GNS_ROOT', 'User')
+# A box names the tool folders its game task needs first on PATH (a box without ffmpeg on PATH names its own copy).
+$prepend = @($requestData.box.path_prepend) | Where-Object { $_ } | ForEach-Object { $_ -replace '/', '\' }
+$pathLine = if ($prepend) { "`$env:PATH = '" + ($prepend -join ';') + ";' + `$env:PATH" } else { '' }
 $probe = @'
 import ctypes as C, ctypes.wintypes as W
 u = C.windll.user32
@@ -34,6 +37,7 @@ $payload = @"
 `$fg.Trim() | Out-File -LiteralPath '$slog' -Append -Encoding utf8
 if (`$fg -notmatch 'clear=True') { "done rc=98 user program in the foreground; scene not run end=`$(Get-Date -Format s)" | Out-File -LiteralPath '$sdone' -Encoding ascii; exit 0 }
 `$env:CCCP_HEADLESS = '1'; `$env:GNS_ROOT = '$gns'; `$env:CC_RUNNER_IGNORE_FULLSCREEN = '1'
+$pathLine
 Set-Location '$tree'
 & python -u '$tree\tools\e2e_peers.py' --play '$Request' *>> '$slog'
 "done rc=`$LASTEXITCODE end=`$(Get-Date -Format s)" | Out-File -LiteralPath '$sdone' -Encoding ascii

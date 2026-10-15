@@ -74,6 +74,12 @@ class SceneBoxesTest(unittest.TestCase):
         self.assertIn('clear = (h == 0) or title in ("Program Manager", "") or state.value in (1, 5, 6, 7)', script)
         self.assertLess(script.index("if (`$fg -notmatch 'clear=True')"), script.index("`$env:CC_RUNNER_IGNORE_FULLSCREEN = '1'"))
 
+    def test_a_windows_box_puts_its_named_tool_folders_first_on_the_game_tasks_path(self):
+        script = (Path(peers.__file__).parent / "e2e/peer_box.ps1").read_text()
+        self.assertIn("$prepend = @($requestData.box.path_prepend)", script)
+        self.assertLess(script.index("`$env:CC_RUNNER_IGNORE_FULLSCREEN = '1'"), script.index("$pathLine\n"))
+        self.assertLess(script.index("$pathLine\n"), script.index("& python -u '$tree\\tools\\e2e_peers.py' --play"))
+
     def test_fight_completion_file_reaches_the_other_player(self):
         document = peers.scene("fight15-s10")
         peers.check_scene(document)
