@@ -9591,6 +9591,10 @@ void LuaStateWrapper::NoteFullCollection(size_t before, size_t after) {
 	if (m_CheckpointHeap) m_CheckpointHeap->NoteFullCollection(before, after);
 }
 
+void LuaStateWrapper::TrimHeap() {
+	if (m_CheckpointHeap) m_CheckpointHeap->Trim();
+}
+
 std::string LuaMan::TakeHeapFaultsByState() {
 	std::string text;
 	const auto add = [&text](size_t slot, LuaStateWrapper& state) {
@@ -10647,6 +10651,12 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	{
 		const bool exact = CheckpointLua::HeapOwner::RunPreparedSelfTest() && CheckpointLua::HeapOwner::RunReusedOwnerSelfTest() && CheckpointLua::HeapOwner::RunPreparationLifetimeSelfTest();
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " prepared_lua_pages_freeze_without_allocation_reject_growth_and_survive_source_death" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
+		std::string detail;
+		const bool exact = CheckpointLua::HeapOwner::RunTrimSelfTest(detail);
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " a_collected_lua_heap_gives_its_free_pages_back_and_a_capture_commits_them_again " << detail << std::endl;
 		checkpointValues = exact && checkpointValues;
 	}
 	{
@@ -16916,6 +16926,7 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 				    lua_gc(state, LUA_GCSTEP, 100);
 			    }
 			    lua_gc(state, LUA_GCSTOP, 0);
+			    luaState->TrimHeap();
 		    }));
 	}
 }

@@ -481,6 +481,9 @@ namespace RTE {
 
 		/// Tells the checkpoint heap the bytes in use before and after a full collection.
 		void NoteFullCollection(size_t before, size_t after);
+
+		/// Gives the checkpoint heap's free memory back to the system once its collector step has freed it; under the state's lock.
+		void TrimHeap();
 #pragma endregion
 
 #pragma region

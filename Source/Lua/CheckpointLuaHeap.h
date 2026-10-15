@@ -21,6 +21,7 @@ extern "C" {
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -488,7 +489,7 @@ namespace RTE::CheckpointLua {
 			if (m_PrivateRead) m_PrivateRead->base.store(0, std::memory_order_release);
 			for (const auto& [begin, bytes]: m_PrivateChunks) CheckpointNativeStorage::ForgetPrivate(reinterpret_cast<void*>(begin));
 			m_Bootstrap.reset();
-			if (m_Reservation) HeapCommitted().fetch_sub(m_Committed, std::memory_order_relaxed);
+			if (m_Reservation) HeapCommitted().fetch_sub(m_Committed - m_HoleBytes.load(std::memory_order_acquire), std::memory_order_relaxed);
 			Release();
 		}
 		HeapOwner(const HeapOwner&) = delete;
@@ -542,8 +543,12 @@ namespace RTE::CheckpointLua {
 		static bool RunPrivateNativeSelfTest();
 		static bool RunPreparationLifetimeSelfTest();
 		static bool RunReusedOwnerSelfTest();
+		static bool RunTrimSelfTest(std::string& detail);
 		/// Prepares storage and watches on the saver; Arm reads no Lua objects and allocates nothing.
 		std::shared_ptr<Prepared> PrepareFreeze();
+		/// Gives the free memory of a collected heap back to the system, past an eighth of its live bytes (4 MB at least), a
+		/// slice at a time and only while no capture plans, holds or copies the heap. Called by the thread holding the state.
+		void Trim() noexcept;
 
 		using Submit = std::function<std::future<void>(std::function<void()>)>;
 
@@ -556,6 +561,7 @@ namespace RTE::CheckpointLua {
 			FinishPrepared();
 			const auto started = RTE::SteadyClock::now();
 			if (!m_State) throw std::runtime_error("a Lua heap capture has no state");
+			if (!FillHoles()) throw std::bad_alloc();
 			void* allocatorData = nullptr;
 			if (lua_getallocf(m_State, &allocatorData) != &Allocate || allocatorData != this)
 				throw std::runtime_error("the Lua heap allocator changed after tracking began");
@@ -762,10 +768,9 @@ namespace RTE::CheckpointLua {
 		static constexpr size_t c_CommitStep = size_t(1) << 20;
 		static constexpr size_t c_LargeLimit = size_t(1) << 18; // Above this a block takes whole pages of its own.
 		static constexpr size_t c_ClassCount = 64 + 56 + 62;
-		// Heaps are reserved whole gigabytes apart and lay out alike, so each one starts its blocks on its own
-		// cache sets and its own pages: an odd count of lines along, and an odd count of the largest page a
-		// platform maps (16 KB) along, so the same block of every state takes neither one set nor one TLB entry.
-		static constexpr size_t c_ColorStride = 33 * 64;
+		// Heaps are reserved whole gigabytes apart and lay out alike, so each one starts on its own pages: an odd count of
+		// the largest page a platform maps (16 KB) along, so the same block of every state takes neither one TLB entry nor
+		// one set of the larger caches.
 		static constexpr size_t c_PageStride = 13 * 16384;
 		static constexpr size_t c_Colors = 64;
 
@@ -798,11 +803,38 @@ namespace RTE::CheckpointLua {
 		uintptr_t m_Base = 0;
 		size_t m_Committed = 0;
 		std::atomic<size_t> m_PublishedCommitted{0};
-		size_t m_Used = 0;
 		size_t m_Bytes = 0;
 		size_t m_Blocks = 0;
-		void* m_Free[c_ClassCount] = {};
-		std::vector<std::pair<void*, size_t>> m_LargeFree; // Whole-page blocks given back, by their rounded size.
+		// A run holds blocks of one class on whole pages of its own, so a run whose blocks have all died frees its pages; a
+		// block above the classes takes whole pages of its own. Free pages are taken lowest first, so the live blocks gather
+		// low and what a collection frees comes free in whole granules, which the trim gives back to the system.
+		struct Run {
+			uintptr_t begin = 0;
+			void* free = nullptr;
+			uint32_t live = 0, carved = 0, capacity = 0, pages = 0;
+			uint32_t previous = 0, next = 0; // Ids in the class's runs with room; 0 ends the list.
+			uint16_t index = 0;
+			bool listed = false;
+		};
+		static constexpr size_t c_GranuleBytes = size_t(1) << 16; // Whole pages on every platform; what goes back at once.
+		static constexpr size_t c_GranulePages = c_GranuleBytes / Snapshot::c_PageBytes;
+		static_assert(c_GranulePages == 16, "a page word holds four granules");
+		static constexpr size_t c_HoleWords = c_ReserveBytes / c_GranuleBytes / 64;
+		static constexpr size_t c_TrimKeepBytes = size_t(4) << 20;
+		static constexpr size_t c_TrimSliceGranules = 64; // 4 MB a call: a slice of the state's collector step.
+		static constexpr size_t c_NoPage = std::numeric_limits<size_t>::max();
+		std::vector<uint64_t> m_FreePages; // A bit per page of the committed range, set while the page holds nothing.
+		std::vector<uint32_t> m_PageRuns; // Per page, the id of the run on it; 0 for a free page or a whole-page block.
+		std::vector<Run> m_Runs; // By id - 1.
+		std::vector<uint32_t> m_SpareRuns; // Ids given back; reserved for every run, so giving one back never allocates.
+		uint32_t m_Current[c_ClassCount] = {}; // The run each class takes from.
+		uint32_t m_Roomy[c_ClassCount] = {}; // Each class's other runs with room.
+		size_t m_PageHint = 0; // No page below it is free.
+		std::atomic<std::ptrdiff_t> m_FreeGranules{0}; // Granules with every page free and still committed.
+		// A bit per granule given back to the system: set by the trim under the preparation lock, cleared by whoever commits it
+		// again, so a clear bit always means committed pages.
+		std::unique_ptr<std::atomic<uint64_t>[]> m_Holes = std::make_unique<std::atomic<uint64_t>[]>(c_HoleWords);
+		std::atomic<size_t> m_HoleBytes{0};
 
 		// A copy buffer mapped straight from the system and kept for reuse: a reused one has its pages resident.
 		struct Slab {
@@ -829,6 +861,8 @@ namespace RTE::CheckpointLua {
 		std::atomic<bool> m_CowGateFree{false};
 		std::mutex m_PrepareMutex;
 		std::vector<std::weak_ptr<Prepared>> m_Prepared;
+		/// The caller holds m_PrepareMutex: no preparation still to arm or drain and no copy still to land.
+		bool Quiet() noexcept;
 		std::atomic<size_t> m_PeriodAllocated{0};
 		std::atomic<bool> m_Busy{false};
 		size_t m_LastCollectedBytes = 0;
@@ -1422,9 +1456,7 @@ namespace RTE::CheckpointLua {
 #if !LJ_GC64
 			throw std::runtime_error("frozen Lua heap capture requires the GC64 allocator interface");
 #else
-			const size_t color = NextColor();
-			Reserve(color * c_PageStride);
-			m_Used = color * c_ColorStride;
+			Reserve(NextColor() * c_PageStride);
 			m_Bootstrap.reset(luaL_newstate());
 			if (!m_Bootstrap) throw std::bad_alloc();
 			const lua_CFunction panic = G(m_Bootstrap.get())->panic;
@@ -1516,63 +1548,221 @@ namespace RTE::CheckpointLua {
 		}
 #endif
 
-		void* Bump(size_t bytes) noexcept {
-			if (bytes > c_ReserveBytes - m_Used) return nullptr;
-			if (m_Used + bytes > m_Committed) {
-				const size_t needed = m_Used + bytes - m_Committed;
-				const size_t step = std::max(c_CommitStep, (needed + c_CommitStep - 1) / c_CommitStep * c_CommitStep);
-				if (m_Committed + step > c_ReserveBytes || !Commit(step)) return nullptr;
-				if (m_PrivateNative) {
-					void* begin = reinterpret_cast<void*>(m_Base + m_Committed);
-					bool recorded = false;
-					try {
-						CheckpointNativeStorage::RememberPrivate(begin, step); recorded = true;
-						m_PrivateChunks.emplace_back(reinterpret_cast<uintptr_t>(begin), step);
-					} catch (...) {
-						if (recorded) CheckpointNativeStorage::ForgetPrivate(begin);
-						return nullptr;
-					}
+		// Commits the committed range's next step, room for count pages at least.
+		bool Extend(size_t count) noexcept {
+			if (count > (c_ReserveBytes - m_Committed) / Snapshot::c_PageBytes) return false;
+			const size_t needed = count * Snapshot::c_PageBytes;
+			const size_t step = std::max(c_CommitStep, (needed + c_CommitStep - 1) / c_CommitStep * c_CommitStep);
+			if (step > c_ReserveBytes - m_Committed) return false;
+			const size_t first = m_Committed / Snapshot::c_PageBytes, pages = (m_Committed + step) / Snapshot::c_PageBytes;
+			try {
+				m_FreePages.resize(pages / 64, 0);
+				m_PageRuns.resize(pages, 0);
+			} catch (...) { return false; }
+			if (!Commit(step)) return false;
+			if (m_PrivateNative) {
+				void* begin = reinterpret_cast<void*>(m_Base + m_Committed);
+				bool recorded = false;
+				try {
+					CheckpointNativeStorage::RememberPrivate(begin, step); recorded = true;
+					m_PrivateChunks.emplace_back(reinterpret_cast<uintptr_t>(begin), step);
+				} catch (...) {
+					if (recorded) CheckpointNativeStorage::ForgetPrivate(begin);
+					return false;
 				}
-				m_Committed += step;
-				HeapCommitted().fetch_add(step, std::memory_order_relaxed);
-				m_PublishedCommitted.store(m_Committed, std::memory_order_release);
-				if (m_PrivateRead) m_PrivateRead->committed.store(m_Committed, std::memory_order_release);
 			}
-			void* result = reinterpret_cast<void*>(m_Base + m_Used);
-			m_Used += bytes;
-			return result;
+			std::fill(m_FreePages.begin() + static_cast<std::ptrdiff_t>(first / 64), m_FreePages.end(), ~uint64_t{0});
+			m_FreeGranules.fetch_add(static_cast<std::ptrdiff_t>(step / c_GranuleBytes), std::memory_order_relaxed);
+			m_PageHint = std::min(m_PageHint, first);
+			m_Committed += step;
+			HeapCommitted().fetch_add(step, std::memory_order_relaxed);
+			m_PublishedCommitted.store(m_Committed, std::memory_order_release);
+			if (m_PrivateRead) m_PrivateRead->committed.store(m_Committed, std::memory_order_release);
+			return true;
+		}
+
+		bool GranuleFree(size_t granule) const noexcept { return (m_FreePages[granule / 4] >> (granule % 4 * c_GranulePages) & 0xFFFF) == 0xFFFF; }
+		bool Hole(size_t granule) const noexcept { return m_Holes[granule / 64].load(std::memory_order_acquire) >> (granule % 64) & 1; }
+
+		// The lowest run of count free pages, or c_NoPage.
+		size_t FindPages(size_t count) const noexcept {
+			size_t start = 0, length = 0;
+			for (size_t word = m_PageHint / 64; word < m_FreePages.size(); ++word) {
+				const uint64_t bits = m_FreePages[word];
+				if (bits == ~uint64_t{0}) {
+					if (!length) start = word * 64;
+					length += 64;
+					if (length >= count) return start;
+					continue;
+				}
+				for (size_t bit = 0; bit < 64;) {
+					const uint64_t rest = bits >> bit;
+					if (!(rest & 1)) {
+						length = 0;
+						if (!rest) break;
+						bit += static_cast<size_t>(std::countr_zero(rest));
+						continue;
+					}
+					const size_t ones = static_cast<size_t>(std::countr_one(rest));
+					if (!length) start = word * 64 + bit;
+					length += ones;
+					if (length >= count) return start;
+					bit += ones;
+				}
+			}
+			return c_NoPage;
+		}
+
+		// Takes the lowest count free pages, committing again any granule among them the trim gave back.
+		size_t TakePages(size_t count) noexcept {
+			size_t first = FindPages(count);
+			if (first == c_NoPage && (!Extend(count) || (first = FindPages(count)) == c_NoPage)) return c_NoPage;
+			const size_t last = first + count, end = (last + c_GranulePages - 1) / c_GranulePages;
+			// Committed before the bit clears: a capture filling the holes meanwhile never sees a clear bit on uncommitted pages.
+			for (size_t granule = first / c_GranulePages; granule < end; ++granule)
+				if (Hole(granule) && !CommitPages(reinterpret_cast<void*>(m_Base + granule * c_GranuleBytes), c_GranuleBytes)) return c_NoPage;
+			for (size_t granule = first / c_GranulePages; granule < end; ++granule) {
+				const uint64_t bit = uint64_t{1} << (granule % 64);
+				if (m_Holes[granule / 64].fetch_and(~bit, std::memory_order_acq_rel) & bit) {
+					m_HoleBytes.fetch_sub(c_GranuleBytes, std::memory_order_relaxed);
+					HeapCommitted().fetch_add(c_GranuleBytes, std::memory_order_relaxed);
+				} else if (GranuleFree(granule)) {
+					m_FreeGranules.fetch_sub(1, std::memory_order_relaxed);
+				}
+			}
+			for (size_t page = first; page < last; ++page) m_FreePages[page / 64] &= ~(uint64_t{1} << (page % 64));
+			if (first == m_PageHint) m_PageHint = last;
+			return first;
+		}
+
+		void FreePages(size_t first, size_t count) noexcept {
+			const size_t last = first + count, end = (last + c_GranulePages - 1) / c_GranulePages;
+			std::ptrdiff_t freed = 0;
+			for (size_t granule = first / c_GranulePages; granule < end; ++granule) freed -= GranuleFree(granule);
+			for (size_t page = first; page < last; ++page) m_FreePages[page / 64] |= uint64_t{1} << (page % 64);
+			for (size_t granule = first / c_GranulePages; granule < end; ++granule) freed += GranuleFree(granule);
+			m_FreeGranules.fetch_add(freed, std::memory_order_relaxed);
+			m_PageHint = std::min(m_PageHint, first);
+		}
+
+		// At least eight blocks of a class to a run, four above 1 KB, on whole pages.
+		static size_t RunPages(size_t index) {
+			const size_t bytes = ClassBytes(index);
+			return ((bytes <= 1024 ? 8 : 4) * bytes + Snapshot::c_PageBytes - 1) / Snapshot::c_PageBytes;
+		}
+
+		uint32_t NewRun(size_t index) noexcept {
+			uint32_t id = 0;
+			try {
+				if (m_SpareRuns.empty()) {
+					m_SpareRuns.reserve(m_Runs.size() + 1);
+					m_Runs.emplace_back();
+					id = static_cast<uint32_t>(m_Runs.size());
+				} else {
+					id = m_SpareRuns.back();
+					m_SpareRuns.pop_back();
+				}
+			} catch (...) { return 0; }
+			const size_t pages = RunPages(index), first = TakePages(pages);
+			if (first == c_NoPage) {
+				m_SpareRuns.push_back(id);
+				return 0;
+			}
+			Run& run = m_Runs[id - 1];
+			run = Run{};
+			run.begin = m_Base + first * Snapshot::c_PageBytes;
+			run.pages = static_cast<uint32_t>(pages);
+			run.capacity = static_cast<uint32_t>(pages * Snapshot::c_PageBytes / ClassBytes(index));
+			run.index = static_cast<uint16_t>(index);
+			std::fill_n(m_PageRuns.begin() + static_cast<std::ptrdiff_t>(first), pages, id);
+			return id;
+		}
+
+		void FreeRun(uint32_t id) noexcept {
+			Run& run = m_Runs[id - 1];
+			const size_t first = (run.begin - m_Base) / Snapshot::c_PageBytes, pages = run.pages;
+			std::fill_n(m_PageRuns.begin() + static_cast<std::ptrdiff_t>(first), pages, 0u);
+			run = Run{};
+			FreePages(first, pages);
+			m_SpareRuns.push_back(id);
+		}
+
+		void List(uint32_t id) noexcept {
+			Run& run = m_Runs[id - 1];
+			run.previous = 0;
+			run.next = m_Roomy[run.index];
+			if (run.next) m_Runs[run.next - 1].previous = id;
+			m_Roomy[run.index] = id;
+			run.listed = true;
+		}
+
+		void Unlist(uint32_t id) noexcept {
+			Run& run = m_Runs[id - 1];
+			if (run.previous) m_Runs[run.previous - 1].next = run.next;
+			else m_Roomy[run.index] = run.next;
+			if (run.next) m_Runs[run.next - 1].previous = run.previous;
+			run.previous = run.next = 0;
+			run.listed = false;
 		}
 
 		void* Take(size_t size) noexcept {
 			if (size > c_LargeLimit) {
-				const size_t rounded = RoundPages(size);
-				for (auto entry = m_LargeFree.begin(); entry != m_LargeFree.end(); ++entry) {
-					if (entry->second != rounded) continue;
-					void* block = entry->first;
-					*entry = m_LargeFree.back();
-					m_LargeFree.pop_back();
-					return block;
-				}
-				// Whole pages start on a page, so a freed one can be given back as a whole.
-				m_Used = RoundPages(m_Used);
-				return Bump(rounded);
+				if (size > c_ReserveBytes) return nullptr;
+				const size_t first = TakePages(RoundPages(size) / Snapshot::c_PageBytes);
+				return first == c_NoPage ? nullptr : reinterpret_cast<void*>(m_Base + first * Snapshot::c_PageBytes);
 			}
 			const size_t index = ClassOf(size);
-			if (void* block = m_Free[index]) {
-				m_Free[index] = *static_cast<void**>(block);
-				return block;
+			uint32_t id = m_Current[index];
+			if (!id || (!m_Runs[id - 1].free && m_Runs[id - 1].carved == m_Runs[id - 1].capacity)) {
+				// The run in use is full: it waits off the list until one of its blocks dies.
+				if ((id = m_Roomy[index])) Unlist(id);
+				else if (!(id = NewRun(index))) return nullptr;
+				m_Current[index] = id;
 			}
-			return Bump(ClassBytes(index));
+			Run& run = m_Runs[id - 1];
+			void* block = run.free;
+			if (block) run.free = *static_cast<void**>(block);
+			else block = reinterpret_cast<void*>(run.begin + size_t{run.carved++} * ClassBytes(index));
+			++run.live;
+			return block;
 		}
 
 		void Give(void* block, size_t size) noexcept {
-			if (size > c_LargeLimit) {
-				try { m_LargeFree.emplace_back(block, RoundPages(size)); } catch (...) {}
+			const size_t page = (reinterpret_cast<uintptr_t>(block) - m_Base) / Snapshot::c_PageBytes;
+			const uint32_t id = m_PageRuns[page];
+			if (!id) {
+				FreePages(page, RoundPages(size) / Snapshot::c_PageBytes);
 				return;
 			}
-			const size_t index = ClassOf(size);
-			*static_cast<void**>(block) = m_Free[index];
-			m_Free[index] = block;
+			Run& run = m_Runs[id - 1];
+			*static_cast<void**>(block) = run.free;
+			run.free = block;
+			--run.live;
+			if (id == m_Current[run.index]) return;
+			if (!run.live) {
+				if (run.listed) Unlist(id);
+				FreeRun(id);
+			} else if (!run.listed) {
+				List(id);
+			}
+		}
+
+		// Commits every granule the trim gave back, before a capture plans or copies the committed range.
+		bool FillHoles() noexcept {
+			if (!m_HoleBytes.load(std::memory_order_acquire)) return true;
+			for (size_t word = 0; word < c_HoleWords; ++word) {
+				const uint64_t bits = m_Holes[word].load(std::memory_order_acquire);
+				for (uint64_t rest = bits; rest;) {
+					const size_t first = static_cast<size_t>(std::countr_zero(rest)), count = static_cast<size_t>(std::countr_one(rest >> first));
+					if (!CommitPages(reinterpret_cast<void*>(m_Base + (word * 64 + first) * c_GranuleBytes), count * c_GranuleBytes)) return false;
+					rest &= count == 64 ? 0 : ~(((uint64_t{1} << count) - 1) << first);
+				}
+				const size_t granules = static_cast<size_t>(std::popcount(m_Holes[word].fetch_and(~bits, std::memory_order_acq_rel) & bits));
+				m_HoleBytes.fetch_sub(granules * c_GranuleBytes, std::memory_order_relaxed);
+				HeapCommitted().fetch_add(granules * c_GranuleBytes, std::memory_order_relaxed);
+				m_FreeGranules.fetch_add(static_cast<std::ptrdiff_t>(granules), std::memory_order_relaxed);
+			}
+			return true;
 		}
 
 		// The VM calls this on the one thread running it and a freeze holds the VM's lock, so the ledger needs none.
@@ -1845,6 +2035,7 @@ namespace RTE::CheckpointLua {
 
 	inline std::shared_ptr<HeapOwner::Prepared> HeapOwner::PrepareFreeze() {
 		std::lock_guard preparations(m_PrepareMutex);
+		if (!FillHoles()) throw std::bad_alloc();
 		auto data = std::make_shared<Snapshot::Data>();
 		data->state = m_State; data->handlers = m_LibraryHandlers; data->base = m_Base;
 		data->sourceMemory = m_HeapMemory;
@@ -1876,6 +2067,58 @@ namespace RTE::CheckpointLua {
 		std::erase_if(m_Prepared, [](const auto& value) { return value.expired(); });
 		m_Prepared.push_back(prepared);
 		return prepared;
+	}
+
+	inline bool HeapOwner::Quiet() noexcept {
+		for (const auto& weak: m_Prepared) {
+			const auto prepared = weak.lock();
+			if (!prepared) continue;
+			std::unique_lock lock(prepared->m_Mutex, std::try_to_lock);
+			if (!lock || !prepared->m_Finished) return false;
+		}
+		{
+			std::unique_lock lock(m_CopyMutex, std::try_to_lock);
+			if (!lock) return false;
+			const auto landed = [](const std::shared_future<void>& copy) { return !copy.valid() || copy.wait_for(std::chrono::seconds(0)) == std::future_status::ready; };
+			if (!landed(m_PendingCopy) || !std::all_of(m_PreviousCopies.begin(), m_PreviousCopies.end(), landed)) return false;
+		}
+		if (m_CowCoordinator) {
+			CowCoordinator::Locked guard(m_CowCoordinator->lock);
+			for (const auto& copy: m_CowCoordinator->copies) if (!copy->completed) return false;
+		}
+		return true;
+	}
+
+	inline void HeapOwner::Trim() noexcept {
+		if (!m_Reservation || m_PrivateNative || m_YieldsToGame) return;
+		const std::ptrdiff_t keep = static_cast<std::ptrdiff_t>(std::max(c_TrimKeepBytes, m_Bytes / 8) / c_GranuleBytes);
+		// Past the slice, so a heap that frees and takes a little each tick keeps its pages.
+		if (m_FreeGranules.load(std::memory_order_relaxed) <= keep + static_cast<std::ptrdiff_t>(c_TrimSliceGranules)) return;
+		std::unique_lock preparations(m_PrepareMutex, std::try_to_lock);
+		if (!preparations || !Quiet()) return;
+		// A class's run with nothing in it goes back too: the class takes a fresh one, lowest first, when it allocates again.
+		for (size_t index = 0; index < c_ClassCount; ++index) {
+			if (const uint32_t id = m_Current[index]; id && !m_Runs[id - 1].live) {
+				m_Current[index] = 0;
+				FreeRun(id);
+			}
+		}
+		// The highest first: pages are taken lowest first, so those come back last.
+		size_t give = static_cast<size_t>(std::min<std::ptrdiff_t>(m_FreeGranules.load(std::memory_order_relaxed) - keep, c_TrimSliceGranules));
+		for (size_t granule = m_Committed / c_GranuleBytes; granule > 0 && give;) {
+			--granule;
+			if (!GranuleFree(granule) || Hole(granule)) continue;
+			size_t begin = granule;
+			while (begin > 0 && granule + 1 - begin < give && GranuleFree(begin - 1) && !Hole(begin - 1)) --begin;
+			const size_t count = granule + 1 - begin;
+			DecommitPages(reinterpret_cast<void*>(m_Base + begin * c_GranuleBytes), count * c_GranuleBytes);
+			for (size_t at = begin; at <= granule; ++at) m_Holes[at / 64].fetch_or(uint64_t{1} << (at % 64), std::memory_order_acq_rel);
+			m_FreeGranules.fetch_sub(static_cast<std::ptrdiff_t>(count), std::memory_order_relaxed);
+			m_HoleBytes.fetch_add(count * c_GranuleBytes, std::memory_order_relaxed);
+			HeapCommitted().fetch_sub(count * c_GranuleBytes, std::memory_order_relaxed);
+			give -= count;
+			granule = begin;
+		}
 	}
 
 	inline void HeapOwner::FinishPrepared() noexcept {
@@ -2076,7 +2319,7 @@ namespace RTE::CheckpointLua {
 			if (!refused) return false;
 		}
 		auto stale = owner->PrepareFreeze();
-		if (!owner->Bump(owner->m_Committed - owner->m_Used + Snapshot::c_PageBytes)) throw std::bad_alloc();
+		if (!owner->Extend(1)) throw std::bad_alloc();
 		if (stale->Current(*owner) || stale->Arm(*owner)) return false;
 		stale.reset();
 		bool refused = false;
@@ -2118,6 +2361,52 @@ namespace RTE::CheckpointLua {
 		auto replacement = create();
 		retained = {};
 		return replacement->LiveSlabs() == 0 && MappedCopyBytes() + retainedBytes == before;
+	}
+
+	inline bool HeapOwner::RunTrimSelfTest(std::string& detail) {
+		auto owner = Create();
+		lua_State* state = owner->State();
+		const auto held = [&owner] { return owner->m_Committed - owner->m_HoleBytes.load(std::memory_order_acquire); };
+		lua_gc(state, LUA_GCSTOP, 0);
+		lua_pushnumber(state, 41);
+		const TValue* value = state->top - 1;
+		const size_t before = held();
+		// About 64 MB of tables and strings that nothing keeps, made with the collector stopped.
+		const auto garbage = [state] {
+			ProtectedCall(state, [state] {
+				for (int index = 0; index < 400000; ++index) {
+					lua_createtable(state, 4, 0);
+					lua_pushfstring(state, "garbage %d", index);
+					lua_rawseti(state, -2, 1);
+					lua_pop(state, 1);
+				}
+			});
+		};
+		garbage();
+		const size_t grown = held();
+		lua_gc(state, LUA_GCCOLLECT, 0);
+		lua_gc(state, LUA_GCSTOP, 0);
+		for (int slice = 0; slice < 64; ++slice) owner->Trim();
+		const size_t trimmed = held();
+		// A preparation commits what the trim gave back before it plans the copy, and the copy holds the survivor.
+		auto prepared = owner->PrepareFreeze();
+		const bool filled = !owner->m_HoleBytes.load(std::memory_order_acquire);
+		if (!prepared->Arm(*owner)) {
+			detail = "the prepared copy did not arm after a trim";
+			return false;
+		}
+		const Snapshot frozen = prepared->Image();
+		prepared->Drain();
+		prepared.reset();
+		const bool kept = frozen.Read(value).n == 41;
+		// Pages given back are taken again, lowest first, once nothing plans a copy.
+		for (int slice = 0; slice < 64; ++slice) owner->Trim();
+		garbage();
+		const size_t reused = held();
+		detail = "before_mb=" + std::to_string(before >> 20) + " grown_mb=" + std::to_string(grown >> 20) + " trimmed_mb=" + std::to_string(trimmed >> 20) +
+		         " reused_mb=" + std::to_string(reused >> 20) + " filled=" + std::to_string(filled) + " kept=" + std::to_string(kept);
+		// Three quarters of what the garbage grew go back, and taking pages again commits no more than the first growth did.
+		return grown >= before + (size_t(32) << 20) && (trimmed <= before || (trimmed - before) * 4 <= grown - before) && filled && kept && reused <= grown + c_CommitStep;
 	}
 
 	// Every userdata hangs after the main thread in the GC chain; nothing before it is one.
