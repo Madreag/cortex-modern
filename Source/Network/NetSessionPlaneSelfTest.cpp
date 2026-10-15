@@ -170,6 +170,7 @@ namespace RTE {
 			struct Exchange { NetFrameTieRequest sent; uint64_t arriveMs = 0, doneMs = 0; bool arrived = false, delivered = false; Directory::Answer answer; };
 			std::optional<NetFrameTieRequest> request;
 			std::optional<Exchange> tie, checkIn;
+			std::vector<Exchange> retiredTies;
 			NetFrameTieReply reply;
 			bool checkedIn = false, finalQuerySent = false;
 			std::optional<uint64_t> boundStartMs;
@@ -200,7 +201,13 @@ namespace RTE {
 			NetFrameTieReply Query(const NetFrameTieRequest& asked, uint64_t nowMs) {
 				++questions; firstQuestionMs = std::min(firstQuestionMs, nowMs);
 				if (!request || *request != asked) {
-					if (tie) { ++waitingAnswers; return {NetFrameTieReply::State::Waiting}; }
+					if (request && reply.state == NetFrameTieReply::State::Decided) {
+						auto decided = *request; decided.members = asked.members; decided.queryOnly = asked.queryOnly;
+						if (decided == asked) { ++decidedAnswers; firstDecidedMs = std::min(firstDecidedMs, nowMs); return reply; }
+					}
+					if (tie && !(asked.queryOnly && request && !request->queryOnly)) { ++waitingAnswers; return {NetFrameTieReply::State::Waiting}; }
+					if (retiredTies.size() >= 16) return {};
+					if (tie) { retiredTies.push_back(std::move(*tie)); tie.reset(); }
 					if (asked.queryOnly && request && !request->queryOnly) { tieRetry = {}; nextTieMs = 0; }
 					request = asked; nextTieMs = std::max(nextTieMs, tieRetry.nextMs);
 					checkedIn = false; boundStartMs.reset(); finalQuerySent = false;
@@ -212,6 +219,11 @@ namespace RTE {
 			}
 			// `exchangeMs` is this seat's HTTP exchange now, `reachable` whether its request reaches the directory at all.
 			void Poll(uint64_t nowMs, uint32_t exchangeMs, bool reachable, uint8_t seat, Directory& directory) {
+				for (auto& retired: retiredTies) if (!retired.arrived && nowMs >= retired.arriveMs) {
+					retired.arrived = true;
+					if (reachable) retired.answer = directory.FrameTie(seat, retired.sent);
+				}
+				std::erase_if(retiredTies, [nowMs](const auto& retired) { return nowMs >= retired.doneMs; });
 				for (auto* exchange: {&tie, &checkIn}) if (*exchange && !(*exchange)->arrived && nowMs >= (*exchange)->arriveMs) {
 					(*exchange)->arrived = true;
 					// The directory acts on a request that reaches it even when the asker has stopped waiting for the answer.
@@ -340,6 +352,20 @@ namespace RTE {
 				return true;
 			}
 			DirectoryClient client; client.nextCheckInMs = 60000;
+			if (shape == "healed-query") {
+				client.Query(request, 60000); client.Poll(60000, 240, true, 1, directory);
+				client.tieRetry.nextMs = 65000; client.nextTieMs = 65000;
+				auto query = request; query.queryOnly = true;
+				if (client.Query(query, 60020).state != NetFrameTieReply::State::Waiting || client.tie || client.retiredTies.size() != 1 || client.tieRetry.nextMs)
+					return fail("the recovered link waited for the old check-in or its backoff before querying");
+				for (uint64_t now = 60020; now <= 60320; now += 10) client.Poll(now, 100, true, 1, directory);
+				if (client.Query(query, 60320).state != NetFrameTieReply::State::Decided || !client.retiredTies.empty() || client.reply.members != std::vector<uint16_t>{1})
+					return fail("retiring the old exchange lost its recorded check-in or bypassed the query's round trip");
+				query.members = {2};
+				if (client.Query(query, 60320).state != NetFrameTieReply::State::Decided || client.tie)
+					return fail("the same decided split was re-asked merely because the caller named the other half");
+				return true;
+			}
 			if (shape == "two-questions") {
 				client.Query(request, 60000); client.Poll(60000, 100, true, 1, directory);
 				auto other = request; ++other.frame;
@@ -3448,7 +3474,7 @@ namespace RTE {
 		}
 		int passed = 0, failed = 0;
 		const char* selected = std::getenv("CC_TEST_SESSION_PLANE_CASE");
-		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 33 + FixedScheduleRows().size()) << std::endl;
+		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 34 + FixedScheduleRows().size()) << std::endl;
 		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest
 		// rows started first; the random driver's rounds follow them in the same pool.
 		QuietLines quiet(std::cout);
@@ -3573,6 +3599,7 @@ namespace RTE {
 		    {"directory_refuses_stale_host_hash_generation_and_removed_owners", "refusals"},
 		    {"directory_general_429_blocks_both_request_allowances", "throttle"},
 		    {"directory_two_split_questions_wait_for_their_own_replies", "two-questions"},
+		    {"directory_healed_link_queries_before_the_old_exchange_times_out", "healed-query"},
 		    {"directory_full_record_503_retries_without_frame_authority", "storage"}}) {
 			if (selected && std::string_view(selected) != name) continue;
 			named.push_back({name, [shape = std::string(shape)](std::string& error) { return CheckDirectoryDelayedReply(shape, error); }});
