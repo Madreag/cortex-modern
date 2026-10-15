@@ -999,7 +999,11 @@ namespace {
 				if (tick < probe.actorCycleTick + ScenarioRunner::GetLockstepLocalInputDelay() + 5) return false;
 				probe.actorCycleStage = 0;
 			}
-			if (actor && actor->GetModuleAndPresetName() == step.at("preset").get<std::string>()) return true;
+			const std::string wanted = step.at("preset").get<std::string>();
+			if (actor && actor->GetModuleAndPresetName() == wanted) return true;
+			const auto* roster = g_MovableMan.GetTeamRoster(game->GetTeamOfPlayer(player));
+			Require(std::any_of(roster->begin(), roster->end(), [&wanted](const Actor* member) { return member->GetModuleAndPresetName() == wanted; }),
+			        "the unit " + wanted + " left the team before its player took it");
 			Require(probe.actorCyclePresses < 32, "thirty-two held Next Actor presses did not select the purchased unit");
 			pushKey(true); ++probe.actorCyclePresses; probe.actorCycleStage = 1; return false;
 		} else if (op == "assert_scene" || op == "wait_scene") {
