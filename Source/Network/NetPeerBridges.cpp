@@ -65,7 +65,7 @@ namespace RTE {
 	bool NetLockstepCoordinator::ValidatePeerBridge(const NetHostMigrationMessage& proposal) const {
 		if (proposal.preparedFrame == 3) return ValidatePeerAdmin(proposal);
 		// A hold may collect the missing seat's co-sign; its certificate still needs authority from the actual signers.
-		const bool cooperativeHold = proposal.preparedFrame == 0 && proposal.boundary == proposal.frame && proposal.members.size() == 1 &&
+		const bool cooperativeHold = proposal.preparedFrame == 0 && proposal.members.size() == 1 &&
 		    PeerGroupHasAuthority(proposal.connectedMask | SeatBit(proposal.members.front()), proposal.frame);
 		if (proposal.members.empty() || proposal.bytes.size() != NetHash32{}.size() + (proposal.preparedFrame == 1 ? 12 * proposal.members.size() : 0) ||
 		    (!PeerGroupHasAuthority(proposal.connectedMask, proposal.frame) && !cooperativeHold) ||
@@ -102,19 +102,24 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::CoSignsOwnHold(const NetHostMigrationMessage& proposal) const {
-		// A seat whose own simulation stopped short of the frame the others wait on co-signs its hold there from its live plane: it never
-		// produced its input for that frame and now never will, so the others do not wait on it for the authority its half would give.
-		// A seat cut off hears no proposal, so a true partition is still the tie rule's.
-		if (proposal.preparedFrame != 0 || proposal.boundary < proposal.frame || proposal.frame != m_Stats.nextFrame || proposal.members.size() != 1 ||
-		    proposal.members.front() != m_Config.localPeerId || proposal.bytes.size() != NetHash32{}.size() || (proposal.connectedMask & SeatBit(m_Config.localPeerId)) != 0 ||
-		    m_LocalFrames.contains(proposal.frame) || (m_LastQueuedTargetFrame != UINT64_MAX && m_LastQueuedTargetFrame >= proposal.frame) || PeerBridgeHasInputConflict(proposal))
-			return false;
+		// The missing seat may supply its own signature from the live plane. A future cutoff is a promise to stop producing there;
+		// the other half still needs authority from the actual signatures, so a silent partition grants no new authority.
+		const bool ahead = proposal.boundary < proposal.frame;
+		if (proposal.preparedFrame != 0 || proposal.members.size() != 1 || proposal.members.front() != m_Config.localPeerId ||
+		    proposal.bytes.size() != NetHash32{}.size() || (proposal.connectedMask & SeatBit(m_Config.localPeerId)) != 0 ||
+		    (!ahead && proposal.frame != m_Stats.nextFrame) ||
+		    (ahead && (proposal.frame <= m_Stats.nextFrame || proposal.frame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew)) ||
+		    m_LocalFrames.contains(proposal.frame) || (m_LastQueuedTargetFrame != UINT64_MAX && m_LastQueuedTargetFrame >= proposal.frame)) return false;
+		auto withOwnVote = proposal;
+		withOwnVote.connectedMask |= SeatBit(m_Config.localPeerId);
+		if (PeerBridgeHasInputConflict(withOwnVote)) return false;
 		if (proposal.frame != m_Config.startFrame) {
-			if (!m_MigrationHistory.contains(proposal.frame - 1)) return false;
-			const NetHash32 prefix = PeerFramePrefix(proposal.frame - 1);
+			const uint64_t boundary = ahead ? proposal.boundary : proposal.frame - 1;
+			if (!m_MigrationHistory.contains(boundary)) return false;
+			const auto prefix = ahead ? PeerAppliedFramePrefix(boundary) : PeerFramePrefix(boundary);
 			if (!std::equal(prefix.begin(), prefix.end(), proposal.bytes.begin())) return false;
 		}
-		return PeerGroupHasAuthority(proposal.connectedMask | SeatBit(m_Config.localPeerId), proposal.frame);
+		return PeerGroupHasAuthority(withOwnVote.connectedMask, proposal.frame);
 	}
 
 	bool NetLockstepCoordinator::VotedOtherPeerReturn(const NetHostMigrationMessage& proposal) const {
@@ -208,8 +213,7 @@ namespace RTE {
 				uint64_t delay = InputDelayAt(peer, frame);
 				const auto [wire, route] = PeerFrameRoute(peer);
 				if (wire && wire->IsPeerPingMeasured(route)) {
-					const uint32_t margin = std::max(c_NetInputJitterReserveMs +
-					    static_cast<uint32_t>(std::ceil((m_Config.slowPlayerBoundTicks + 1) * m_Config.simTickMs)), m_Stats.peers[peer].jitterMs);
+					const uint32_t margin = std::max(static_cast<uint32_t>(std::ceil(m_Config.simTickMs)), m_Stats.peers[peer].jitterMs);
 					delay = std::max<uint64_t>(delay, std::min<uint64_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
 					    static_cast<uint64_t>(std::ceil((wire->GetPeerPingMs(route) + margin) / m_Config.simTickMs))));
 				}
@@ -301,7 +305,9 @@ namespace RTE {
 			    const auto& arrivals = m_Stats.peers[peer].arrivals;
 			    return !arrivals.empty() && nowMs <= arrivals.back().first + feedBoundMs;
 		    });
-		const bool heldAhead = otherVoter && feeding;
+		const bool cooperativeAhead = proposal.members.size() == 1 &&
+		    PeerGroupHasAuthority(proposal.connectedMask | SeatBit(proposal.members.front()), proposal.frame);
+		const bool heldAhead = (otherVoter || cooperativeAhead) && feeding;
 		if (heldAhead) {
 			if (!slowMachine || std::countr_zero(proposal.connectedMask) + 1 != m_Config.localPeerId) return false;
 			for (const auto& [key, votes]: m_PeerBridgeVotes) {
@@ -322,6 +328,11 @@ namespace RTE {
 			}
 			// Past its inputs in flight by the round trip the proposal and its votes take and the bound, as a return is placed.
 			proposal.boundary = m_LastCompletedSimulationTick.value_or(frame - 1);
+			if (!PeerGroupHasAuthority(proposal.connectedMask, frame)) for (uint8_t peer: proposal.members) {
+				const auto applied = m_PeerAppliedThrough.find(peer);
+				if (applied == m_PeerAppliedThrough.end() || applied->second < m_Config.startFrame) return false;
+				proposal.boundary = std::min(proposal.boundary, applied->second);
+			}
 			proposal.frame = inFlight + static_cast<uint64_t>(std::ceil(rttMs / m_Config.simTickMs)) + m_Config.slowPlayerBoundTicks;
 		}
 		// A declared Leave has already ended its input; it needs no silence wait at that boundary.
@@ -347,12 +358,13 @@ namespace RTE {
 			if (anotherVoter) agreementMs = std::max<uint64_t>(1, agreementMs) + boundMs;
 			// A lone voter commits at once; half a tick covers the commit and the consumer's next poll, so its wait ends inside the bound.
 			else agreementMs = static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2));
-			// A voluntary co-sign spends the missing seat's round trip inside the buffered runway.
+			// The consumer's bound is already on the deadline below. Charge this co-sign its round trip and a poll, not the bound
+			// twice: an early speculative vote would fence a healthy returner's first input while it is still normally in flight.
 			if (!PeerGroupHasAuthority(proposal.connectedMask, proposal.frame)) for (uint8_t peer: proposal.members) {
 				uint64_t rtt = m_Stats.peers[peer].pingMs;
 				const auto [wire, route] = PeerFrameRoute(peer);
 				if (wire && wire->IsPeerPingMeasured(route)) rtt = std::max<uint64_t>(rtt, wire->GetPeerPingMs(route));
-				agreementMs = std::max(agreementMs, rtt + boundMs);
+				agreementMs = std::max(agreementMs, rtt + static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2)));
 			}
 			// Votes spend the buffered runway, so a healthy relay round trip fits inside the consumer's bound.
 			if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame) {
@@ -375,13 +387,12 @@ namespace RTE {
 		if (proposal.preparedFrame == 1) for (uint8_t peer: proposal.members) {
 			uint32_t rtt = m_Stats.peers[peer].pingMs;
 			const auto [wire, route] = PeerFrameRoute(peer);
-			if (wire && wire->IsPeerPingMeasured(route)) rtt = std::max(rtt, wire->GetPeerPingMs(route));
+			if (wire && wire->IsPeerPingMeasured(route)) rtt = wire->GetPeerPingMs(route);
 			const uint64_t displayed = m_LastCompletedSimulationTick.value_or(frame - 1);
 			const uint64_t applied = m_PeerAppliedThrough.at(peer);
 			const uint32_t trail = static_cast<uint32_t>(displayed - std::min(displayed, applied));
-			// Advertised jitter already includes the scheduling reserve.
-			const uint32_t margin = std::max(c_NetInputJitterReserveMs +
-			    static_cast<uint32_t>(std::ceil((m_Config.slowPlayerBoundTicks + 1) * m_Config.simTickMs)), m_Stats.peers[peer].jitterMs);
+			// The returning sender needs its measured link, outside the private reader's temporary trail.
+			const uint32_t margin = std::max(static_cast<uint32_t>(std::ceil(m_Config.simTickMs)), m_Stats.peers[peer].jitterMs);
 			const uint32_t transit = static_cast<uint32_t>(std::ceil((rtt + margin) / m_Config.simTickMs));
 			// The private reader's trail belongs in its temporary neutral
 			// interval. It must not become every human input's permanent delay.

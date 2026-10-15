@@ -423,28 +423,36 @@ namespace RTE {
 		if (!m_Config.adaptiveInputDelay || WaitsForPlacement() || !std::isfinite(m_Config.simTickMs) || m_Config.simTickMs <= 0) return;
 		if ((m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) == 0) return;
 		std::vector<std::pair<uint32_t, uint32_t>> paths;
+		bool transportsMeasured = true;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
-			if (peer == m_Config.localPeerId || m_RemovedPeers.contains(peer) || IsSeatReleased(peer)) continue;
+			if (peer == m_Config.localPeerId || m_RemovedPeers.contains(peer) || IsSeatReleased(peer) || (m_FrameGroupMembers & SeatBit(peer)) == 0) continue;
 			auto& sample = m_PeerReceiptDelaySamples[peer];
 			sample.Observe(nowMs, 0);
 			const auto [wire, route] = PeerFrameRoute(peer);
-			// Size a held reader's future live runway from transport, outside its catch-up receipts.
-			if ((m_FrameGroupMembers & SeatBit(peer)) != 0 && sample.P95Ms() != 0) paths.emplace_back(sample.P95Ms(), sample.JitterMs());
-			else if (wire && wire->IsPeerPingMeasured(route)) paths.emplace_back(wire->GetPeerPingMs(route), 0);
+			// A receipt percentile already measures the complete round trip through the input and acceptance pumps. Its jitter and
+			// scheduling time are inside that measurement. Raw transport RTT alone needs one input-production tick beside it.
+			const bool transportMeasured = wire && wire->IsPeerPingMeasured(route);
+			const uint32_t transportMs = transportMeasured ? wire->GetPeerPingMs(route) : 0;
+			if (sample.P95Ms() != 0 || transportMeasured) {
+				transportsMeasured &= transportMeasured;
+				const uint32_t receiptFrames = static_cast<uint32_t>(std::ceil(sample.P95Ms() / m_Config.simTickMs));
+				const uint32_t transportFrames = !transportMeasured ? 0U : static_cast<uint32_t>(std::ceil(transportMs / m_Config.simTickMs)) + 1;
+				paths.emplace_back(std::max(receiptFrames, transportFrames), transportMs);
+			}
 		}
 		const size_t needed = std::popcount(m_FrameGroupMembers) - 1;
 		if (needed == 0 || paths.size() < needed) return;
 		std::sort(paths.begin(), paths.end());
 		// Every active receiver needs the sender's buffered input. Sizing to
 		// only a quorum slowly drains the runway of a healthy, longer path.
-		const auto [rtt, jitter] = paths.back();
-		const uint32_t margin = std::max(c_NetInputJitterReserveMs, jitter) + static_cast<uint32_t>(std::ceil((m_Config.slowPlayerBoundTicks + 1) * m_Config.simTickMs));
+		const auto [bufferedFrames, transportMs] = paths.back();
+		const uint32_t rtt = transportMs;
 		auto& local = m_Stats.peers[m_Config.localPeerId];
-		local.pingMs = rtt; local.pingMeasured = true;
+		local.pingMs = rtt; local.pingMeasured = transportsMeasured;
 		const uint16_t current = InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame);
 		const uint16_t required = static_cast<uint16_t>(std::min<uint32_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
-		    std::max<uint32_t>(m_Config.matchConfig.inputDelayFrames, static_cast<uint32_t>(std::ceil((rtt + margin) / m_Config.simTickMs)))));
-		local.jitterMs = std::max<uint32_t>(margin, static_cast<uint32_t>(std::ceil(required * m_Config.simTickMs)) - std::min<uint32_t>(rtt, static_cast<uint32_t>(std::ceil(required * m_Config.simTickMs))));
+		    std::max<uint32_t>(m_Config.matchConfig.inputDelayFrames, bufferedFrames)));
+		local.jitterMs = static_cast<uint32_t>(std::ceil(required * m_Config.simTickMs)) - std::min<uint32_t>(rtt, static_cast<uint32_t>(std::ceil(required * m_Config.simTickMs)));
 		const auto last = m_LastDelayResizeMs.find(m_Config.localPeerId);
 		if (last != m_LastDelayResizeMs.end() && nowMs < last->second + c_DelayResizeIntervalMs) return;
 		if (required > current) {
