@@ -229,6 +229,14 @@ namespace RTE {
 			if (proposal.members.empty()) return false;
 			proposal.preparedFrame = 1;
 			proposal.boundary = m_LastCompletedSimulationTick.value_or(frame - 1);
+			// The boundary is history every voter has applied, so each can check it as the proposal arrives: a voter still finishing its
+			// own return's catch-up would otherwise answer only once it replays this machine's display, and the voters would wait on it.
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+				if (peer == m_Config.localPeerId || (proposal.connectedMask & SeatBit(peer)) == 0 ||
+				    std::find(proposal.members.begin(), proposal.members.end(), peer) != proposal.members.end()) continue;
+				if (const auto applied = m_PeerAppliedThrough.find(peer); applied != m_PeerAppliedThrough.end() && applied->second >= m_Config.startFrame)
+					proposal.boundary = std::min(proposal.boundary, applied->second);
+			}
 			uint64_t lead = m_Config.slowPlayerBoundTicks;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 				if (peer == m_Config.localPeerId || (m_FrameGroupMembers & SeatBit(peer)) == 0) continue;
