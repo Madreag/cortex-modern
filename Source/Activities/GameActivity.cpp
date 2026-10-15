@@ -674,6 +674,25 @@ GUIBanner* GameActivity::GetBanner(int whichColor, int player) const {
 	return presented && live ? live : SeatStub(m_SeatStubBanner[whichColor == YELLOW ? YELLOW : RED][player]);
 }
 
+GameActivity::SeatInterfaces GameActivity::CapturedSeatInterfaces(int player) const {
+	return {GetBuyGUI(player), GetEditorGUI(player), GetBanner(YELLOW, player), GetBanner(RED, player)};
+}
+
+bool GameActivity::RunCapturedSeatInterfacesSelfTest() {
+	const auto activity = std::make_unique<GameActivity>();
+	{
+		const CheckpointNativeStorage::CaptureScope capturing(true);
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) activity->CapturedSeatInterfaces(player);
+	}
+	int made = 0;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		made += (activity->GetExistingBuyGUI(player) != nullptr) + (activity->GetExistingEditorGUI(player) != nullptr) +
+		        (activity->GetExistingBanner(YELLOW, player) != nullptr) + (activity->GetExistingBanner(RED, player) != nullptr);
+	}
+	System::PrintDiagnosticLine(std::string("[seat-interface-capture-selftest] ") + (made ? "FAIL" : "PASS") + " stand_ins_made=" + std::to_string(made));
+	return made == 0;
+}
+
 bool GameActivity::IsBuyGUIVisible(int which) const {
 	if (which == -1) {
 		const int playerLimit = m_SharedPlayerSeats ? Players::MaxPlayerCount : GetPlayerCount();

@@ -355,6 +355,17 @@ namespace RTE {
 		SceneEditorGUI* GetExistingEditorGUI(unsigned int which) const;
 		GUIBanner* GetExistingBanner(int whichColor, int player) const;
 
+		/// One seat's interface objects, as a capture's workers ask which objects the activity owns.
+		struct SeatInterfaces {
+			BuyMenuGUI* buy = nullptr;
+			SceneEditorGUI* editor = nullptr;
+			GUIBanner* yellow = nullptr;
+			GUIBanner* red = nullptr;
+		};
+		SeatInterfaces CapturedSeatInterfaces(int player) const;
+		/// A capture that asks for every seat's interface leaves the activity as it was: no stand-in is made.
+		static bool RunCapturedSeatInterfacesSelfTest();
+
 		/// Sets the Area within which a team can land things.
 		/// @param team The number of the team we're setting for.
 		/// @param newArea The Area we're setting to limit their landings within.

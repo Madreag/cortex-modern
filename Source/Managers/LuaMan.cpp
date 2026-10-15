@@ -4437,9 +4437,9 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 				for (int player = 0; player < Players::MaxPlayerCount; ++player) {
 					add(activity->GetPlayerController(player));
 					if (const auto* game = dynamic_cast<const GameActivity*>(activity)) {
-						add(game->GetBuyGUI(player)); add(game->GetEditorGUI(player));
-						add(game->GetBanner(GameActivity::YELLOW, player)); add(game->GetBanner(GameActivity::RED, player));
-						if (auto* editor = game->GetEditorGUI(player)) {
+						const GameActivity::SeatInterfaces seat = game->CapturedSeatInterfaces(player);
+						add(seat.buy); add(seat.editor); add(seat.yellow); add(seat.red);
+						if (auto* editor = seat.editor) {
 							add(editor->GetCheckpointPieMenu());
 							const auto parts = [this, &add](const Entity* root) {
 								add(root);
@@ -12932,6 +12932,7 @@ debug.setupvalue(next, 4, "150")
 		// A Lua class left in a global is what a mod checkpoint has to carry; the UI rows move the camera, which needs the scene too.
 		RunScriptString("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end");
 		checkpointValues = GameActivity::RunNetLocalUIRestoreSelfTest() && checkpointValues;
+		checkpointValues = GameActivity::RunCapturedSeatInterfacesSelfTest() && checkpointValues;
 		checkpointValues = RunStaleActivityReferenceSelfTest(*this) && checkpointValues;
 		g_SceneMan.SetAsideScene(deliveryScene);
 		g_SceneMan.ReinstateScene(originalScene);
