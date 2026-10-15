@@ -991,7 +991,8 @@ namespace {
 				probe.actorCycleTick = tick; probe.actorCycleRender = probe.renders;
 			};
 			if (probe.actorCycleStage == 1) {
-				if (tick < probe.actorCycleTick + 2 || probe.renders < probe.actorCycleRender + 3) return false;
+				// A tap lets go on the next drawn frame: held past 250 ms of sim time, a slow screen's press opens manual actor select.
+				if (tick < probe.actorCycleTick + 2 || probe.renders < probe.actorCycleRender + 1) return false;
 				pushKey(false); probe.actorCycleStage = 2; return false;
 			}
 			if (probe.actorCycleStage == 2) {
