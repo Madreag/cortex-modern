@@ -916,9 +916,11 @@ namespace RTE {
 
 	bool NetSessionPlaneSelfTest::CheckOwnerHitch(unsigned arm, std::string* error) {
 		Case row{"owner_hitch"};
-		row.seats = 3; row.subject = arm == 3 ? 1 : 2;
+		row.seats = arm == 4 ? 2 : 3; row.subject = arm == 3 ? 1 : 2;
 		row.gapMs = arm == 0 ? 2000 : arm == 1 ? 6000 : arm == 2 ? 10000 : 3000;
-		row.frozen = arm != 1; row.realFrozen = arm == 2; row.captureFrames = true;
+		row.frozen = arm != 1; row.realFrozen = arm == 2 || arm == 4; row.captureFrames = true;
+		// Two seats over the internet: the joiner's inputs run ahead of its stopped loop, so only its unanswered receipts show the stop.
+		if (arm == 4) { row.internet = row.directoryBoth = row.strictBound = true; row.rttMs = row.otherRttMs = 60; }
 		Fixture fixture;
 		NetMatchService service;
 		uint64_t keepalives = 0;
@@ -937,8 +939,8 @@ namespace RTE {
 		fixture.onThaw = disarm;
 		std::string why;
 		if (!fixture.Run(row, why)) { if (error) *error = why; return false; }
-		if (arm == 2 && keepalives < 100) { if (error) *error = "the stopped main loop did not retain its independent authenticated sender for ten seconds"; return false; }
-		const size_t first = row.subject == 1 ? 1 : 0, second = 2;
+		if ((arm == 2 || arm == 4) && keepalives < 100) { if (error) *error = "the stopped main loop did not retain its independent authenticated sender"; return false; }
+		const size_t first = row.subject == 1 ? 1 : 0, second = row.seats > 2 ? 2 : first;
 		uint64_t heldAt = 0, returnedAt = 0;
 		for (const auto& [tick, ready]: fixture.committed[first]) for (const auto* commands: {&ready.localCommands, &ready.remoteCommands}) for (const auto& command: *commands) {
 			if (const auto* hold = std::get_if<NetGameSeatHold>(&command.payload); hold && hold->peerId == row.subject) heldAt = tick;
