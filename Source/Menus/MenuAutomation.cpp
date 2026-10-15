@@ -2794,6 +2794,15 @@ namespace RTE::MenuAutomation {
 			const std::string kept = "drawn_age_ms=" + std::to_string(PanelDrawAgeMs(&drawn)) + " loose_age_ms=" + std::to_string(PanelDrawAgeMs(&loose));
 			check("draw_record_kept_through_other_managers", PanelDrawnInLatestPass(&drawn, c_DrawWindowSeconds) && PanelDrawnInLatestPass(&loose, c_DrawWindowSeconds), kept);
 			check("draw_record_forgets_a_cleared_managers_panels", PanelDrawAgeMs(&own) < 0, "own_age_ms=" + std::to_string(PanelDrawAgeMs(&own)));
+			// A manager let go of without a Clear takes its drawn panels too, so a panel later made at one's address is not read as drawn.
+			int child = 0;
+			{
+				GUIManager gone(nullptr);
+				previous = BeginPanelDrawPass(&gone);
+				RecordPanelDraw(&child);
+				EndPanelDrawPass(previous);
+			}
+			check("draw_record_forgets_a_destroyed_managers_panels", PanelDrawAgeMs(&child) < 0, "child_age_ms=" + std::to_string(PanelDrawAgeMs(&child)));
 			ClearPanelDrawRecord();
 		}
 		{
