@@ -20,6 +20,7 @@
 #include "NetWorldJoin.h"
 #include "ActivityMan.h"
 #include "AudioMan.h"
+#include "FrameMan.h"
 #include "LuaMan.h"
 #include "MovableMan.h"
 #include "PresetMan.h"
@@ -1306,6 +1307,21 @@ namespace RTE {
 			if (during != "[catchup-tick-cost]" || after != "[sp-tick-cost]") {
 				return Fail("catch-up-ticks-counted-as-single-player: a world catch-up's replay ticks are written under " + during +
 				            " and single player's under " + after);
+			}
+			return 0;
+		}
+
+		/// A capped draw that is overdue is due: the catch-up gives it the floor and draws, as it would at the slot, never the uncapped rule.
+		int TestCatchUpReadsAnOverdueDrawAsDue() {
+			FrameMan::SetUnseenDisplayCap(true);
+			FrameMan::FeelBeginDraw();
+			std::this_thread::sleep_for(std::chrono::milliseconds(40));
+			const double overdue = FrameMan::FeelMsUntilNextDraw();
+			FrameMan::SetUnseenDisplayCap(false);
+			const double uncapped = FrameMan::FeelMsUntilNextDraw();
+			if (overdue < 0.0 || uncapped >= 0.0) {
+				return Fail("catch-up-read-an-overdue-draw-as-no-cap: a 60 Hz capped draw booked 40 ms ago reads " + std::to_string(overdue) +
+				            " ms until it, no cap reads " + std::to_string(uncapped) + " ms");
 			}
 			return 0;
 		}
@@ -9695,6 +9711,10 @@ namespace RTE {
 			s_FailTag = "net-world-catchup-census-selftest";
 			return TestCatchUpTicksAreNotSinglePlayers();
 		}
+		if (std::strcmp(name, "catchup-overdue") == 0 || std::strcmp(name, "-net-world-catchup-overdue-selftest") == 0) {
+			s_FailTag = "net-world-catchup-overdue-selftest";
+			return TestCatchUpReadsAnOverdueDrawAsDue();
+		}
 		if (std::strcmp(name, "take-pump") == 0 || std::strcmp(name, "-net-world-take-pump-selftest") == 0) {
 			s_FailTag = "net-world-take-pump-selftest";
 			return TestTakeDoesNotPumpTheSession();
@@ -10025,6 +10045,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestCatchUpTicksAreNotSinglePlayers(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCatchUpReadsAnOverdueDrawAsDue(); result != 0) {
 			return result;
 		}
 		if (const int result = TestTakeDoesNotPumpTheSession(); result != 0) {
