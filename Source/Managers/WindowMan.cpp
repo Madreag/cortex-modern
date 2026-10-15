@@ -18,6 +18,7 @@
 #include "ScenarioRunner.h"
 #include "SwapWaitGuard.h"
 #include "DisplayRefreshes.h"
+#include "HarnessCost.h"
 
 #include "GLCheck.h"
 #include <SDL3/SDL.h>
@@ -874,4 +875,5 @@ void WindowMan::Present() {
 	const auto swapEnded = RTE::SteadyClock::now();
 	m_LastSwapMs = std::chrono::duration<double, std::milli>(swapEnded - swapBegan).count();
 	JudgeSwapWait(m_PrimaryWindow.get(), m_LastSwapMs, m_EnableVSync, std::chrono::duration<double, std::milli>(swapEnded.time_since_epoch()).count());
+	if (HarnessCost::AnyEnabled()) HarnessCost::NotePresent();
 }

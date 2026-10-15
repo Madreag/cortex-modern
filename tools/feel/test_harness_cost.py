@@ -78,8 +78,10 @@ class HarnessCostEvidence(unittest.TestCase):
             self.assertFalse(self.measured(broken)['instrument_valid'])
 
 
-def receipt_log(segments, *, round_id=1, enabled=('recorder', 'screen_watches'), closed=True, opened=False, outside=None, frame_ms=None, version=2):
-    """Receipts as the engine writes them: per segment an optional opening receipt and outside-frame costs, its frames, its close."""
+def receipt_log(segments, *, round_id=1, enabled=('recorder', 'screen_watches'), closed=True, opened=False, outside=None, frame_ms=None, version=2,
+                presented=None):
+    """Receipts as the engine writes them: per segment an optional opening receipt and outside-frame costs, its frames, its close.
+    From version 3 each frame names the frames presented while it ran (one by default) and the costliest of them."""
     from feel.harness_cost import VERSION_INSTRUMENTS
     instruments = {name: name in enabled for name in VERSION_INSTRUMENTS[version]}
     rows = []
@@ -91,7 +93,11 @@ def receipt_log(segments, *, round_id=1, enabled=('recorder', 'screen_watches'),
             rows.append('[harness-cost-outside] ' + json.dumps(dict(base, before_frame=first, costs_ms={name: outside.get(name, 0) for name in enabled})))
         for frame in range(first, last + 1):
             costs = {name: (frame_ms or {}).get((frame, name), 1.0) for name in enabled}
-            rows.append('[harness-cost-frame] ' + json.dumps(dict(base, frame=frame, partition_valid=True, costs_ms=costs)))
+            row = dict(base, frame=frame, partition_valid=True, costs_ms=costs)
+            if version >= 3:
+                shown, costliest = (presented or {}).get(frame, (1, costs))
+                row.update(presented_frames=shown, costliest_presented_ms=sum(costliest.values()), costliest_presented_costs_ms=costliest)
+            rows.append('[harness-cost-frame] ' + json.dumps(row))
         if closed:
             rows.append('[harness-cost-scope] ' + json.dumps(dict(base, version=version, first_frame=first, last_frame=last, instruments=instruments)))
     return '\n'.join(rows) + '\n'
@@ -168,6 +174,28 @@ class HarnessCostReceipts(unittest.TestCase):
         self.assertIn('invalid or duplicate instrumentation scope', self.reduce(short)['reason'])
         traced = self.reduce(receipt_log([(1, 300)], enabled=('controller_trace', 'feel_recorder')))
         self.assertEqual(traced['instruments']['controller_trace']['frame_samples'], 300)
+
+    def test_a_frame_that_waited_on_its_peers_is_judged_by_the_costliest_frame_presented_meanwhile(self):
+        # The s12 joiner's frame 53753 waited 1,679 ms on its peers while 51 frames were drawn and recorded, 3.7 ms of recorder each.
+        waited = {(53, 'recorder'): 187.4, (53, 'screen_watches'): 37.8}
+        presented = {53: (51, dict(recorder=3.8, screen_watches=0.8))}
+        result = self.reduce(receipt_log([(1, 300)], version=3, frame_ms=waited, presented=presented))
+        self.assertEqual(result['status'], 'PASS', result['reason'])
+        self.assertEqual(result['max_frame_ms'], 4.6)
+        self.assertEqual(result['instruments']['recorder']['measured_total_ms'], 299 + 187.4)
+        self.assertEqual(result['peak_frame']['frame'], 53)
+        self.assertIn('the costliest of the 51 frames presented while it ran (225.2 ms in all)', result['table'][-1])
+        # One presented frame over the budget still fails, named with its number.
+        spike = self.reduce(receipt_log([(1, 300)], version=3, frame_ms={(1, 'recorder'): 96.96}, presented={1: (1, dict(recorder=96.96, screen_watches=12.78))}))
+        self.assertEqual(spike['status'], 'FAIL')
+        self.assertIn('recorder alone 96.96 ms', spike['reason'])
+        # A frame inside one presented frame (a catch-up's later ticks) is judged by its own costs.
+        inside = self.reduce(receipt_log([(1, 300)], version=3, frame_ms={(9, 'recorder'): 61.0}, presented={9: (0, dict(recorder=0, screen_watches=0))}))
+        self.assertIn('recorder alone 61 ms', inside['reason'])
+        # Version 3 frames must say what they spanned.
+        unsaid = receipt_log([(1, 300)], version=3).replace(', "presented_frames": 1', '')
+        self.assertIn('invalid, duplicated or unpartitioned frame costs', self.reduce(unsaid)['reason'])
+        self.assertIn('by the costliest of them', result['rule'])
 
 
 if __name__ == '__main__':

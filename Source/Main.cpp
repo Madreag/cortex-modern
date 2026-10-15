@@ -5218,6 +5218,7 @@ static void WriteHarnessCostFrameOf(uint64_t round, uint64_t frame) {
 	if (scope.open && (scope.round != round || frame != scope.last + 1)) CloseHarnessCostScopeLocked();
 	auto charged = HarnessCost::TakeFrame();
 	const auto before = HarnessCost::TakeBeforeFrame();
+	auto presented = HarnessCost::TakePresented();
 	if (!scope.open) {
 		static const bool s_flushAtExit = [] {
 			std::atexit([] {
@@ -5233,13 +5234,17 @@ static void WriteHarnessCostFrameOf(uint64_t round, uint64_t frame) {
 		    {"round", round}, {"segment", scope.segment}, {"first_frame", frame}, {"instruments", HarnessCostInstruments()}}.dump());
 		// What the instruments did before this run of frames began (a lobby, a loading screen) is no frame's cost.
 		System::PrintDiagnosticLine("[harness-cost-outside] " + nlohmann::json{{"process", System::GetProcessID()}, {"incarnation", incarnation}, {"round", round},
-		    {"segment", scope.segment}, {"before_frame", frame}, {"costs_ms", HarnessCostMs(before)}}.dump());
+		    {"segment", scope.segment}, {"before_frame", frame}, {"costs_ms", HarnessCostMs(before)}, {"presented_frames", presented.frames},
+		    {"costliest_presented_ms", static_cast<double>(presented.costliestNs) / 1e6}}.dump());
+		presented = {};
 	} else {
 		for (size_t instrument = 0; instrument < HarnessCost::InstrumentCount; ++instrument) charged[instrument] += before[instrument];
 	}
 	scope.last = frame;
+	// The frames this one's costs span on the screen - more than one while it waited on its peers - and the costliest of them.
 	System::PrintDiagnosticLine("[harness-cost-frame] " + nlohmann::json{{"process", System::GetProcessID()}, {"incarnation", incarnation}, {"round", round},
-	    {"segment", scope.segment}, {"frame", frame}, {"partition_valid", true}, {"costs_ms", HarnessCostMs(charged)}}.dump());
+	    {"segment", scope.segment}, {"frame", frame}, {"partition_valid", true}, {"costs_ms", HarnessCostMs(charged)}, {"presented_frames", presented.frames},
+	    {"costliest_presented_ms", static_cast<double>(presented.costliestNs) / 1e6}, {"costliest_presented_costs_ms", HarnessCostMs(presented.instrumentNs)}}.dump());
 }
 
 static void WriteHarnessCostFrame(uint64_t frame) {
