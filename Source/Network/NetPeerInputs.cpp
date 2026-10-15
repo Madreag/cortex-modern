@@ -7,9 +7,12 @@
 
 #include "lz4.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <optional>
+#include <utility>
 
 namespace RTE {
 
@@ -421,6 +424,8 @@ namespace RTE {
 			if (!DecodeMigrationFrame(record, message.frame, decoded) || at == body.size()) return readFailed("frame-record");
 			const uint8_t count = body[at++]; if (count > 32) return true;
 			std::vector<NetHostMigrationMessage> proofs;
+			// A certified return of this seat carried here: its activation and the end of its neutral gap.
+			std::optional<std::pair<uint64_t, uint64_t>> ownReturnGap;
 			for (uint8_t n = 0; n < count; ++n) {
 				if (!TakeSize(body, at, size) || at > body.size() || size > body.size() - at) return true;
 				NetHostMigrationMessage proof, agreed; uint32_t voters = 0;
@@ -431,6 +436,14 @@ namespace RTE {
 					NoteSuperseded(agreed.completeFrom);
 					if (PeerAdminCertificateValid(agreed, voters) && 2 * std::popcount(voters) >= static_cast<int>(m_Config.peerCount)) m_PeerAdminFrameMembers = voters;
 				} else if (agreed.connectedMask == message.voterMask && !PeerGroupHasAuthority(voters)) CheckPeerFrameTie(agreed.frame, voters, nowMs);
+				if (agreed.preparedFrame == 1) {
+					size_t offset = NetHash32{}.size();
+					for (uint8_t member: agreed.members) {
+						uint32_t delay = 0, neutral = 0, incarnation = 0;
+						if (!TakeSize(agreed.bytes, offset, delay) || !TakeSize(agreed.bytes, offset, neutral) || !TakeSize(agreed.bytes, offset, incarnation)) break;
+						if (member == m_Config.localPeerId) ownReturnGap = {agreed.frame, agreed.frame + std::max(neutral, delay)};
+					}
+				}
 				proofs.push_back(std::move(proof)); at += size;
 			}
 			if (at == body.size()) return true;
@@ -465,6 +478,13 @@ namespace RTE {
 					retained = input; retained.frames = FramesForSeat(decoded, m_Config.localPeerId);
 					std::vector<uint8_t> a, b;
 					if (NetLockstepCodec::EncodeRecoveryInput(input, a) && NetLockstepCodec::EncodeRecoveryInput(retained, b) && a == b) agreeing |= SeatBit(m_Config.localPeerId);
+				} else if (IsSeatReclaimGap(m_Config.localPeerId, message.frame) || (ownReturnGap && message.frame >= ownReturnGap->first && message.frame <= ownReturnGap->second)) {
+					// Inside its own return's neutral gap this seat sent nothing, so it confirms a record that carries nothing for it.
+					const auto sentByThisSeat = [&](const std::vector<NetGameCommand>& commands) {
+						return std::any_of(commands.begin(), commands.end(), [&](const NetGameCommand& command) { return command.senderPeerId == m_Config.localPeerId; });
+					};
+					if (FramesForSeat(decoded, m_Config.localPeerId).empty() && !sentByThisSeat(decoded.localCommands) && !sentByThisSeat(decoded.remoteCommands))
+						agreeing |= SeatBit(m_Config.localPeerId);
 				}
 			}
 			// An authenticated donor cannot commit a minority's tail by claiming somebody else's votes.
