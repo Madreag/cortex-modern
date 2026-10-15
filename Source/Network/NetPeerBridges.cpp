@@ -515,13 +515,9 @@ namespace RTE {
 		}
 		const bool heldAhead = agreed.preparedFrame == 0 && agreed.boundary < certificate.frame;
 		if (agreed.preparedFrame == 0 && certificate.frame > m_Stats.nextFrame) { refused("ahead"); keep(); if (!heldAhead) RequestPeerCommittedTail(nowMs); return; }
-		// A hold agreed ahead that this peer has already played past would rewrite history. Every voter fenced that frame and cannot pass
-		// it without the hold; the held seat passes it only on its own input there, which no voter took, so it reads the round's tail.
-		if (heldAhead && certificate.frame < m_Stats.nextFrame) {
-			refused("behind");
-			if (std::find(agreed.members.begin(), agreed.members.end(), m_Config.localPeerId) != agreed.members.end()) RequestPeerCommittedTail(nowMs);
-			return;
-		}
+		// No peer is past the frame of a hold agreed ahead when it is certified: every voter fenced that frame, and the held seat plays it
+		// only on its own input there, which needs a receipt from a voter - and a voter that took that input could not vote the hold.
+		if (heldAhead && certificate.frame < m_Stats.nextFrame) { refused("behind"); return; }
 		if (agreed.preparedFrame != 0 && certificate.frame < m_Stats.nextFrame) {
 			// Install a private return before its displayed tick, even if preparation has passed it.
 			const auto own = m_PeerBridges.find(m_Config.localPeerId);
