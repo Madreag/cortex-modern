@@ -149,8 +149,9 @@ def fight(peer):
               dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=len(PLAYERS))), relay(),
               dict(op="signal", name="fight-ticks-complete")]
     steps += [dict(op="wait_file", path=f"{{PROBE_DIR_{other}}}/fight-ticks-complete.json") for other in others(peer)]
+    # The pan's body selection is over: the view's own state, which the game's passing messages do not change.
     steps += [dict(op="pan_scene", enabled=False), wait(renders=3, sim_advanced=90),
-              dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=len(PLAYERS), screen_text=""))]
+              dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=len(PLAYERS), actor_selection=False))]
     return steps
 
 

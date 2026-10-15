@@ -105,6 +105,20 @@ class SceneBoxesTest(unittest.TestCase):
             peers.write_player_files(requests['host'], copied)
 
 
+class FightEndCheckTest(unittest.TestCase):
+    def test_the_fights_end_reads_the_view_state_not_the_absence_of_text(self):
+        # A unit lost in the fight's last seconds puts the game's own "Lost control of remote body!" on screen; the end check asks
+        # whether the pan's body selection is over, which no passing message changes.
+        for name in ("fight15-s10", "fight15-s11", "fight15-s12"):
+            document = peers.scene(name)
+            for script, text in document["scripts"].items():
+                if not script.endswith(".probe"):
+                    continue
+                checks = [step for step in json.loads(text)["steps"] if step.get("op") == "assert_scene"]
+                self.assertFalse([step for step in checks if step.get("equals", {}).get("screen_text") == ""], (name, script))
+                self.assertEqual(checks[-1]["equals"].get("actor_selection"), False, (name, script, checks[-1]))
+
+
 class SceneAccepted(Exception):
     pass
 
