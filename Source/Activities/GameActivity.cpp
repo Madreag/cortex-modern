@@ -675,7 +675,7 @@ GUIBanner* GameActivity::GetBanner(int whichColor, int player) const {
 }
 
 GameActivity::SeatInterfaces GameActivity::CapturedSeatInterfaces(int player) const {
-	return {GetBuyGUI(player), GetEditorGUI(player), GetBanner(YELLOW, player), GetBanner(RED, player)};
+	return {GetExistingBuyGUI(player), GetExistingEditorGUI(player), GetExistingBanner(YELLOW, player), GetExistingBanner(RED, player)};
 }
 
 bool GameActivity::RunCapturedSeatInterfacesSelfTest() {

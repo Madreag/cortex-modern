@@ -355,7 +355,8 @@ namespace RTE {
 		SceneEditorGUI* GetExistingEditorGUI(unsigned int which) const;
 		GUIBanner* GetExistingBanner(int whichColor, int player) const;
 
-		/// One seat's interface objects, as a capture's workers ask which objects the activity owns.
+		/// One seat's interface objects that exist, as a capture's workers ask which objects the activity owns; a stand-in
+		/// made on a worker would land outside the native pools and stay in the activity.
 		struct SeatInterfaces {
 			BuyMenuGUI* buy = nullptr;
 			SceneEditorGUI* editor = nullptr;
