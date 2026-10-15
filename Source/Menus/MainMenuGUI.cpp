@@ -47,6 +47,8 @@
 
 #include "Resources/Credits.h"
 
+#include "nlohmann/json.hpp"
+
 #include <algorithm>
 #include <map>
 #include <random>
@@ -58,6 +60,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <format>
@@ -5254,6 +5257,19 @@ static bool IsControlClickable(GUIControl* control) {
 }
 
 bool MainMenuGUI::AutomationRowOf(const std::string& name, std::string& listName, int& row) const {
+	if (name.starts_with("PublicGameRowLobby:")) {
+		// Another lobby can list on the same port; the one a run's own host wrote down is named by its directory session.
+		std::ifstream file(name.substr(19));
+		const nlohmann::json lobby = nlohmann::json::parse(file, nullptr, false);
+		const std::string session = lobby.is_object() ? lobby.value("session_id", std::string()) : std::string();
+		const auto found = std::find_if(m_GameRows.begin(), m_GameRows.end(), [&session](const NetDirectoryClient::GameRow& candidate) {
+			return !session.empty() && candidate.source == "NET" && candidate.sessionId == session;
+		});
+		if (found == m_GameRows.end()) return false;
+		listName = m_MultiplayerLanGamesList->GetName();
+		row = static_cast<int>(found - m_GameRows.begin());
+		return true;
+	}
 	// The list shows every engine beaconing on the network, so a scripted join names its own session's row by port.
 	const bool publicRow = name.starts_with("PublicGameRowPort");
 	if (publicRow || name.starts_with("GameRowPort")) {

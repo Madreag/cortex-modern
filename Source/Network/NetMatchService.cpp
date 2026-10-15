@@ -1339,6 +1339,11 @@ static std::string ResyncSaveName() {
 		return m_DirectoryHidden ? 1 : 2;
 	}
 
+	std::string NetMatchService::GetListedSessionId() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_IsHost && m_DirectoryRegistered && !m_DirectoryRetracted ? m_DirectorySessionId : std::string();
+	}
+
 	NetListingStatus NetMatchService::GetListingStatus(std::string* reason) const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (!m_IsHost || m_State == NetMatchServiceState::Idle) return NetListingStatus::None;

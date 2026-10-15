@@ -4054,6 +4054,18 @@ void ProcessMenuScript(bool inPlay = false) {
 			std::string listName;
 			int row = -1;
 			met = !pauseMenu && g_MenuMan.GetMainMenu()->AutomationRowOf(waitCond.substr(4), listName, row);
+		} else if (waitCond.starts_with("lobby:")) {
+			// Written whole, then renamed, so a joiner never reads half of it.
+			const std::string session = g_NetMatchService.GetListedSessionId();
+			const std::filesystem::path path = waitCond.substr(6);
+			if (!session.empty()) {
+				const std::filesystem::path partial = path.string() + ".part";
+				std::ofstream(partial) << nlohmann::json{{"session_id", session}}.dump() << "\n";
+				std::error_code renamed;
+				std::filesystem::rename(partial, path, renamed);
+				met = !renamed;
+				if (met) MenuScriptPrint("write_lobby " + path.generic_string() + " session=" + session);
+			}
 		} else if (waitCond.starts_with("label:")) {
 			std::istringstream label(waitCond.substr(6));
 			std::string control, expected, actual;
@@ -4229,6 +4241,16 @@ void ProcessMenuScript(bool inPlay = false) {
 		iss >> row >> std::ws;
 		if (row.empty() || (!iss.eof() && !(iss >> seconds)) || seconds <= 0) return MenuScriptFail("wait_row requires a row name and positive timeout");
 		waitCond = "row:" + row;
+		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000ULL;
+	} else if (cmd == "write_lobby") {
+		// A host names its listed lobby for its own run's joiners, so they join it and never another lobby on the same port.
+		std::string path;
+		int seconds = 60;
+		iss >> path >> std::ws;
+		if (path.empty() || (!iss.eof() && !(iss >> seconds)) || seconds <= 0) return MenuScriptFail("write_lobby requires a path and positive timeout");
+		std::error_code madeError;
+		std::filesystem::create_directories(std::filesystem::path(path).parent_path(), madeError);
+		waitCond = "lobby:" + path;
 		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000ULL;
 	} else if (cmd == "touch_file") {
 		// The other engine's wait_file: one run tells another it has seen what it waited for.
