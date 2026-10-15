@@ -1,5 +1,6 @@
 #include "AudioMan.h"
 #include "CheckpointNativeSnapshot.h"
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -63,6 +64,26 @@ using namespace RTE;
 
 namespace {
 	void ClearPendingAudioArchives();
+	/// Moves a table whose links or elements the native pools do not hold into them, so a frozen read finds every node.
+	template<class Container> void OwnCheckpointStorage(Container& container) {
+		const auto owned = [&container](const void* storage) {
+			const auto* at = static_cast<const std::byte*>(storage);
+			const auto* self = reinterpret_cast<const std::byte*>(&container);
+			// A library that keeps a container's head inside the container leaves nothing outside it to move.
+			return !storage || (at >= self && at < self + sizeof(Container)) || CheckpointNativeStorage::Owns(storage);
+		};
+		bool inPools;
+		if constexpr (requires { container.capacity(); }) inPools = owned(container.capacity() ? container.data() : nullptr);
+		else {
+			inPools = owned(CheckpointContainerDetail::Node(CheckpointContainerDetail::End(container)));
+			for (auto at = container.begin(); inPools && at != container.end(); ++at) inPools = owned(CheckpointContainerDetail::Node(at));
+		}
+		if (inPools) return;
+		Container moved;
+		if constexpr (requires { moved.reserve(container.size()); }) moved.reserve(container.size());
+		for (auto& value: container) moved.insert(moved.end(), std::move(value));
+		container = std::move(moved);
+	}
 	struct SavedSoundOperations {
 		std::unordered_map<uint64_t, SoundContainer*> pending;
 		std::unordered_set<SoundContainer*> logical;
@@ -1403,6 +1424,15 @@ AudioMan::CheckpointBackend::CheckpointBackend(const CheckpointBackend& source, 
 
 void AudioMan::PrepareCheckpointBackendValues() {
 	if (!CheckpointNativeStorage::Enabled() || CheckpointNativeStorage::Reading()) return;
+	// The manager built these before any world's storage existed; a frozen capture walks each of them.
+	OwnCheckpointStorage(m_CommittedAudibility);
+	OwnCheckpointStorage(m_CurrentActivityHumanPlayerPositions);
+	for (int player = 0; player < c_MaxClients; ++player) {
+		std::lock_guard lock(g_SoundEventsListMutex[player]);
+		OwnCheckpointStorage(m_SoundEvents[player]);
+	}
+	OwnCheckpointStorage(m_PlayingVoices);
+	OwnCheckpointStorage(m_SoundChannelMinimumAudibleDistances);
 	auto values = std::make_unique<CheckpointBackend>();
 	if (m_AudioEnabled) {
 		AudioCheckpoint::MixerLock mixer(m_AudioSystem);
