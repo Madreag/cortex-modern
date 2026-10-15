@@ -5354,14 +5354,16 @@ static std::string ResyncSaveName() {
 				const bool scheduled = m_Coordinator->IsSeatReleased(session.assignedPeerId)
 				    ? m_Coordinator->SchedulePeerAdmission(session.assignedPeerId, session.connection, session.incarnation, session.activationTick, &error, session.activationTrailFrames)
 				    : m_Coordinator->SchedulePeerReclaim(session.assignedPeerId, session.connection, session.incarnation, session.activationTick, &error, session.activationTrailFrames);
+				// A refused reclaim is this returner's alone: it tries again on the next pump, and every other returner's image still leaves.
 				if (!scheduled) {
 					if (m_PrivateTransferHeldReasons[session.connection] != error) {
 						m_PrivateTransferHeldReasons[session.connection] = error;
 						System::PrintDiagnosticLine("[net-match] reclaim not scheduled peer=" + std::to_string(session.assignedPeerId) + " e=" + std::to_string(session.activationTick) +
 						                            " incarnation=" + std::to_string(session.incarnation) + ": " + error);
 					}
-					m_PrivateJoinError = error; continue;
+					continue;
 				}
+				m_PrivateTransferHeldReasons.erase(session.connection);
 				m_PrivateActivations.insert(session.connection);
 				m_WorldJoin.MarkActivationProposed(session.connection);
 				(void)m_Coordinator->SendReturnerTheRoundFrom(session.assignedPeerId, session.activationTick);
