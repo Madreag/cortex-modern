@@ -285,8 +285,10 @@ namespace RTE {
 		static bool TakeWorldCatchUpReadyFrame(uint64_t simTick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
 		/// Ticks of tail a joiner applies in one real frame (faster than real time, still bounded).
 		static constexpr int c_WorldCatchUpTicksPerRealFrame = 16;
-		/// The ticks a real frame applies however long they take, so the catch-up still gains on the live round.
+		/// The ticks a real frame applies however long they take, at first; raised while the replay does not close on the live round.
 		static constexpr int c_WorldCatchUpMinTicksPerRealFrame = 2;
+		/// How much faster than the round a replay runs before it counts as closing on it; the host's activation reads less as the round's own pace.
+		static constexpr double c_WorldCatchUpClosingRate = 0.1;
 		/// Whether the catch-up may take one more sim tick: the ceiling has to be left AND the tail has
 		/// to hold that very frame, so the sim clock never runs past what the world committed.
 		static bool WorldCatchUpMayGrant(uint64_t nextSimTick, int ticksLeftThisFrame);

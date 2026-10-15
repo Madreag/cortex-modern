@@ -40,6 +40,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -1183,6 +1184,67 @@ namespace RTE {
 			if (const int distant = grantFrame(1000.0); distant != 3) {
 				return Fail("catch-up-stopped-short-of-the-caps-draw: " + std::to_string(distant) + " ticks in a frame whose capped draw is a second away, "
 				            "the tail holds 3");
+			}
+			return 0;
+		}
+
+		/// A returner whose ticks and draw leave a frame no time past the floor still closes on the round: 12 ms ticks and a 10 ms draw
+		/// at 60 Hz, presented on the display's refresh (the swap's wait counted in the draw, as the frame's average reads it) and
+		/// under the headless presentation cap.
+		int TestCatchUpClosesOnASlowMachine() {
+			using namespace std::chrono;
+			constexpr double c_TickMs = 12.0, c_DrawMs = 10.0;
+			constexpr uint64_t c_SnapshotTick = 1000, c_Behind = 600;
+			constexpr double c_LimitMs = 120000.0;
+			const double periodMs = c_DefaultDeltaTimeS * 1000.0;
+			for (const bool capped: {false, true}) {
+				const std::string how = capped ? "under the headless cap" : "on the display's refresh";
+				std::string error;
+				std::vector<NetLockstepFrame> tail;
+				for (uint64_t frame = c_SnapshotTick + 1; frame <= c_SnapshotTick + c_Behind; ++frame) {
+					tail.push_back(MakeCommittedFrame(frame));
+				}
+				if (!ScenarioRunner::InstallWorldCatchUp(c_SnapshotTick, tail, &error)) {
+					return Fail("slow catch-up install: " + error);
+				}
+				const RTE::SteadyClock::time_point began = RTE::SteadyClock::now();
+				double nowMs = 0.0, drawMs = c_DrawMs, nextDrawMs = 0.0;
+				const auto at = [&](double ms) { return began + duration_cast<RTE::SteadyClock::duration>(duration<double, std::milli>(ms)); };
+				uint64_t simTick = c_SnapshotTick, committed = c_SnapshotTick + c_Behind;
+				while (committed - simTick > c_NetWorldActivationLeadFrames && nowMs < c_LimitMs) {
+					ScenarioRunner::BeginWorldCatchUpFrame(drawMs, capped ? std::max(0.0, nextDrawMs - nowMs) : -1.0, at(nowMs));
+					while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1, at(nowMs))) {
+						NetLockstepReadyFrame ready;
+						if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(++simTick, ready, &error)) {
+							ScenarioRunner::ReleaseWorldCatchUp();
+							return Fail("catch-up-never-closes: tick " + std::to_string(simTick) + " had no committed frame " + how);
+						}
+						nowMs += c_TickMs;
+					}
+					if (capped) {
+						// The cap draws only once its slot is due, and books the next one a period after it.
+						if (nowMs >= nextDrawMs) {
+							nextDrawMs = std::max(nowMs, nextDrawMs) + periodMs;
+							nowMs += c_DrawMs;
+						}
+					} else {
+						const double drawnFrom = nowMs;
+						nowMs = std::ceil((drawnFrom + c_DrawMs) / periodMs) * periodMs;
+						drawMs = nowMs - drawnFrom;
+					}
+					std::vector<NetLockstepFrame> arrived;
+					while (static_cast<double>(committed - c_SnapshotTick - c_Behind) < nowMs / periodMs) {
+						arrived.push_back(MakeCommittedFrame(++committed));
+					}
+					ScenarioRunner::AppendWorldCatchUp(std::move(arrived));
+				}
+				ScenarioRunner::ReleaseWorldCatchUp();
+				if (committed - simTick > c_NetWorldActivationLeadFrames) {
+					return Fail("catch-up-never-closes: a returner with " + std::to_string(static_cast<int>(c_TickMs)) + " ms ticks and a " +
+					            std::to_string(static_cast<int>(c_DrawMs)) + " ms draw at 60 Hz " + how + " trailed the round by " +
+					            std::to_string(committed - simTick) + " frames after " + std::to_string(static_cast<int>(nowMs / 1000.0)) + " s (" +
+					            std::to_string(c_Behind) + " at the start)");
+				}
 			}
 			return 0;
 		}
@@ -9602,6 +9664,10 @@ namespace RTE {
 			s_FailTag = "net-world-catchup-ceiling-selftest";
 			return TestCatchUpKeepsItsCeiling();
 		}
+		if (std::strcmp(name, "catchup-closes") == 0 || std::strcmp(name, "-net-world-catchup-closes-selftest") == 0) {
+			s_FailTag = "net-world-catchup-closes-selftest";
+			return TestCatchUpClosesOnASlowMachine();
+		}
 		if (std::strcmp(name, "catchup-fresh") == 0 || std::strcmp(name, "-net-world-catchup-fresh-selftest") == 0) {
 			s_FailTag = "net-world-catchup-fresh-selftest";
 			return TestCatchUpForgetsTheLastTicksTime();
@@ -9927,6 +9993,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestCatchUpKeepsItsCeiling(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCatchUpClosesOnASlowMachine(); result != 0) {
 			return result;
 		}
 		if (const int result = TestCatchUpForgetsTheLastTicksTime(); result != 0) {
