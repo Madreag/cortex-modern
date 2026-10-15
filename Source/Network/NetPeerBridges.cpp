@@ -57,7 +57,11 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::ValidatePeerBridge(const NetHostMigrationMessage& proposal) const {
 		if (proposal.preparedFrame == 3) return ValidatePeerAdmin(proposal);
-		if (proposal.members.empty() || proposal.bytes.size() != NetHash32{}.size() + (proposal.preparedFrame == 1 ? 12 * proposal.members.size() : 0) || !PeerGroupHasAuthority(proposal.connectedMask, proposal.frame) ||
+		// A hold may collect the missing seat's co-sign; its certificate still needs authority from the actual signers.
+		const bool cooperativeHold = proposal.preparedFrame == 0 && proposal.boundary == proposal.frame && proposal.members.size() == 1 &&
+		    PeerGroupHasAuthority(proposal.connectedMask | SeatBit(proposal.members.front()), proposal.frame);
+		if (proposal.members.empty() || proposal.bytes.size() != NetHash32{}.size() + (proposal.preparedFrame == 1 ? 12 * proposal.members.size() : 0) ||
+		    (!PeerGroupHasAuthority(proposal.connectedMask, proposal.frame) && !cooperativeHold) ||
 		    proposal.preparedFrame > 2 || (proposal.connectedMask & SeatBit(m_Config.localPeerId)) == 0 || PeerBridgeHasInputConflict(proposal)) return false;
 		// A hold agreed ahead names a frame past a boundary every voter has applied, as a return does.
 		const bool ahead = proposal.preparedFrame != 0 || proposal.boundary < proposal.frame;
@@ -336,6 +340,13 @@ namespace RTE {
 			if (anotherVoter) agreementMs = std::max<uint64_t>(1, agreementMs) + boundMs;
 			// A lone voter commits at once; half a tick covers the commit and the consumer's next poll, so its wait ends inside the bound.
 			else agreementMs = static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2));
+			// A voluntary co-sign spends the missing seat's round trip inside the buffered runway.
+			if (!PeerGroupHasAuthority(proposal.connectedMask, proposal.frame)) for (uint8_t peer: proposal.members) {
+				uint64_t rtt = m_Stats.peers[peer].pingMs;
+				const auto [wire, route] = PeerFrameRoute(peer);
+				if (wire && wire->IsPeerPingMeasured(route)) rtt = std::max<uint64_t>(rtt, wire->GetPeerPingMs(route));
+				agreementMs = std::max(agreementMs, rtt + boundMs);
+			}
 			// Votes spend the buffered runway, so a healthy relay round trip fits inside the consumer's bound.
 			if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame) {
 				double dueMs = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
