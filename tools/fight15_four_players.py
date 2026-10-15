@@ -221,7 +221,7 @@ def main():
         for peer in PLAYERS:
             scripts[f"{peer}.menu"] = "\n".join(host_menu() if peer == "host" else joiner_menu(peer)) + "\n"
             steps = setup(peer) + first_burst(peer) + fight(peer) + ending(peer)
-            scripts[f"{peer}.probe"] = game_probe(steps, timeout=1900000)
+            scripts[f"{peer}.probe"] = game_probe(steps, timeout=1800000)
             checks += checklist_items(peer, steps)
             peers.append(dict(name=peer, menu_script=f"{peer}.menu", probe=f"{peer}.probe", env=dict(template["env"]),
                               settings=dict(SETTINGS, NetworkDisplayName=NAMES[peer]), args=list(template["args"])))
