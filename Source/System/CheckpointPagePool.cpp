@@ -1624,6 +1624,7 @@ namespace {
 		std::string message = std::format("native {} is outside the frozen inventory (address {:#x}, {} bytes", what, reinterpret_cast<uintptr_t>(source), bytes);
 		if (const std::string chain = CheckpointCloneCost::DescribeOpen(); !chain.empty()) message += ", freezing " + chain;
 		if (const std::type_info* walking = CheckpointFrozenWalk::Current()) message += std::string(", walking ") + walking->name();
+		if (const std::type_info* value = CheckpointFrozenValue::Current()) message += std::string(", value ") + value->name();
 		return message + ")";
 	}
 }

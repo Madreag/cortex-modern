@@ -36,6 +36,19 @@ namespace RTE {
 		static inline thread_local const std::type_info* s_Kind = nullptr;
 	};
 
+	/// The type of the value this thread reads from its frozen place, named when that read leaves the frozen inventory.
+	class CheckpointFrozenValue {
+	public:
+		explicit CheckpointFrozenValue(const std::type_info& kind) noexcept : m_Previous(s_Kind) { s_Kind = &kind; }
+		~CheckpointFrozenValue() { s_Kind = m_Previous; }
+		CheckpointFrozenValue(const CheckpointFrozenValue&) = delete;
+		CheckpointFrozenValue& operator=(const CheckpointFrozenValue&) = delete;
+		static const std::type_info* Current() noexcept { return s_Kind; }
+	private:
+		const std::type_info* m_Previous;
+		static inline thread_local const std::type_info* s_Kind = nullptr;
+	};
+
 	// The 64 KiB regions the pools' pages ever covered, so a free of heap memory skips their lock; a released region stays marked.
 	class CheckpointOwnedRegions {
 	public:

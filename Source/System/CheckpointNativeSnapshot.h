@@ -246,7 +246,10 @@ namespace RTE {
 		template<class T> T* ValueObject(const T* source) {
 			if (!source) return nullptr;
 			const void* identity = CheckpointNativeStorage::Original(source);
-			source = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
+			{
+				const CheckpointFrozenValue reading(typeid(T));
+				source = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
+			}
 			CheckpointNativeStorage::CaptureScope allocation;
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 			void* memory = AllocateFrozen(sizeof(T), alignof(T));
@@ -397,6 +400,7 @@ namespace RTE {
 		}
 		template<class T> T* CopyValue(const T* source) {
 			if (source && CheckpointNativeStorage::Reading()) {
+				const CheckpointFrozenValue reading(typeid(T));
 				const auto* value = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
 				if (CheckpointNativeStorage::Private(value, sizeof(T)) && CheckpointNativeStorage::Original(value) != value)
 					return const_cast<T*>(value);
@@ -406,7 +410,10 @@ namespace RTE {
 		template<class T, class Factory> T* RebuildValue(const T* source, const Factory& factory) {
 			if (!source) return nullptr;
 			const void* identity = CheckpointNativeStorage::Original(source);
-			source = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
+			{
+				const CheckpointFrozenValue reading(typeid(T));
+				source = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
+			}
 			CheckpointNativeStorage::CaptureScope allocation;
 			if (const auto known = m_Values.Find(identity)) return static_cast<T*>(*known);
 			auto& owner = AddValueOwner([](void* value) noexcept { delete static_cast<T*>(value); });
