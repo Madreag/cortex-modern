@@ -1455,7 +1455,6 @@ namespace RTE {
 		s_WorldCatchUpFence = frame;
 	}
 
-		s_WorldCatchUpTickTime = std::chrono::microseconds{0};
 	bool ScenarioRunner::TakeWorldCatchUpAppliedFrame(uint64_t simTick, NetLockstepFrame& outFrame) {
 		if (!s_WorldCatchUpLastApplied || s_WorldCatchUpLastApplied->targetFrame != simTick) return false;
 		outFrame = std::move(*s_WorldCatchUpLastApplied);
@@ -1529,6 +1528,7 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::BeginWorldCatchUpFrame(double drawMs, double untilDrawMs, RTE::SteadyClock::time_point now) {
+		s_WorldCatchUpBudget = s_WorldCatchUpActive ? c_WorldCatchUpTicksPerRealFrame : 0;
 		// A replay that does not close on the round never comes back, and a frame's time after its draw reads the display's wait as
 		// draw, so that time alone can settle at the round's pace. A second whose frames all stopped on their time or their ceiling
 		// with the tail ahead of them, applying less than the frames the round committed to the tail and a tenth, raises the ticks
@@ -1553,7 +1553,6 @@ namespace RTE {
 			}
 			s_WorldCatchUpFramePaced = false;
 		}
-		s_WorldCatchUpBudget = s_WorldCatchUpActive ? c_WorldCatchUpTicksPerRealFrame : 0;
 		// The returning player's own screen keeps its rate. Under a presentation cap the tail runs until the cap's next draw, which
 		// a sim that stops short of it would forgo; otherwise it takes what one tick's frame leaves after drawing it.
 		constexpr double c_FrameMarginMs = 1.0;
@@ -1589,10 +1588,10 @@ namespace RTE {
 		s_PeerCatchUpCredit = std::min(static_cast<double>(c_NetSeatCatchUpBurstTicks), s_PeerCatchUpCredit + c_NetSeatCatchUpRate * elapsed / tickMs);
 		s_OwnSeatCatchUpBudget = static_cast<int>(s_PeerCatchUpCredit);
 	}
+
 	const char* ScenarioRunner::TickCostCensusTag() {
 		return IsLockstepControllerSyncActive() ? "[net-tick-cost]" : s_WorldCatchUpActive ? "[catchup-tick-cost]" : "[sp-tick-cost]";
 	}
-
 
 	bool ScenarioRunner::TakeOwnSeatCatchUpGrant(uint64_t nextSimTick) {
 		NetLockstepPlaneGuard plane;
@@ -1610,11 +1609,11 @@ namespace RTE {
 	bool ScenarioRunner::TakeWorldCatchUpGrant(uint64_t nextSimTick, RTE::SteadyClock::time_point now) {
 		NetLockstepPlaneGuard plane;
 		if (!WorldCatchUpMayGrant(nextSimTick, s_WorldCatchUpBudget)) {
+			// A frame that spent its ceiling stopped on its pacing; one the tail's end, a fence or the hold stopped did not.
+			if (s_WorldCatchUpActive && s_WorldCatchUpBudget <= 0) s_WorldCatchUpFramePaced = true;
 			return false;
 		}
 		// The next tick is granted only when it still fits: a grant at the budget's edge ran a whole tick past it.
-			// A frame that spent its ceiling stopped on its pacing; one the tail's end, a fence or the hold stopped did not.
-			if (s_WorldCatchUpActive && s_WorldCatchUpBudget <= 0) s_WorldCatchUpFramePaced = true;
 		const int granted = c_WorldCatchUpTicksPerRealFrame - s_WorldCatchUpBudget;
 		if (granted > 0) {
 			const auto tick = std::chrono::duration_cast<std::chrono::microseconds>(now - s_WorldCatchUpLastGrant);

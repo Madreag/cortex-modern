@@ -3788,7 +3788,6 @@ static bool RunFrameRecorderSelfTest() {
 	}
 #endif
 
-	std::filesystem::remove_all(scratch, code);
 	{
 		// A receipt's presented frames count from the receipt before at the earliest and its own work after the last of them is named,
 		// so one tick's recorder spike shows in its own receipt alone.
@@ -3809,6 +3808,7 @@ static bool RunFrameRecorderSelfTest() {
 		}
 	}
 
+	std::filesystem::remove_all(scratch, code);
 	{
 		std::ostringstream line;
 		line << "[frame-recorder-selftest] PASS";
@@ -3981,7 +3981,6 @@ static bool RunSwapWaitSelfTest() {
 		check("a lit display the compositor counts is waited on again within a look", litResumedAt > suspendedAt && litResumedAt <= suspendedAt + SwapWaitGuard::c_RetryEveryMs + 50.0 && !lit.Suspended() && lit.ShownHz() > 150.0,
 		      "resumed at " + std::to_string(litResumedAt - suspendedAt) + " ms after the suspend, counted " + std::to_string(lit.ShownHz()) + " Hz");
 	}
-	std::cout << "[swap-wait-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	{
 		// A window on another display: the compositor counts only the primary display (60 Hz here), which still tells whether the
 		// desktop is composed at all - the Z13's dark desktop counted 0.33 refreshes a second.
@@ -4005,6 +4004,7 @@ static bool RunSwapWaitSelfTest() {
 		      triedAt > suspendedAt && triedAt <= suspendedAt + SwapWaitGuard::c_RetryEveryMs + 50.0 && tried == Action::Resume && !lit.Suspended(),
 		      "tried " + std::to_string(triedAt - suspendedAt) + " ms after the suspend, then action " + std::to_string(static_cast<int>(tried)));
 	}
+	std::cout << "[swap-wait-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;
 }
 
