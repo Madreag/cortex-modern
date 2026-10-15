@@ -284,11 +284,15 @@ namespace RTE {
 		static bool TakeWorldCatchUpReadyFrame(uint64_t simTick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
 		/// Ticks of tail a joiner applies in one real frame (faster than real time, still bounded).
 		static constexpr int c_WorldCatchUpTicksPerRealFrame = 16;
+		/// The ticks a real frame applies however long they take, so the catch-up still gains on the live round.
+		static constexpr int c_WorldCatchUpMinTicksPerRealFrame = 2;
 		/// Whether the catch-up may take one more sim tick: the ceiling has to be left AND the tail has
 		/// to hold that very frame, so the sim clock never runs past what the world committed.
 		static bool WorldCatchUpMayGrant(uint64_t nextSimTick, int ticksLeftThisFrame);
-		/// Opens one real frame's catch-up budget. Every grant below is counted against it.
-		static void BeginWorldCatchUpFrame();
+		/// Opens one real frame's catch-up budget: the ceiling, and the frame's time - up to the draw a presentation cap admits next
+		/// (untilDrawMs, when one paces the draws), else what the frame leaves after drawing it (drawMs, the draw's recent cost).
+		/// Every grant below is counted against both.
+		static void BeginWorldCatchUpFrame(double drawMs = 0.0, double untilDrawMs = -1.0);
 		/// Takes one catch-up sim tick out of this real frame's budget.
 		static bool TakeWorldCatchUpGrant(uint64_t nextSimTick);
 		/// A host whose own seat the AI holds, or a seat inside its own reclaim gap, runs its ready frames faster than real time, like a world joiner, until it is back.

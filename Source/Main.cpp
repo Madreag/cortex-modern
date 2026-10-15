@@ -1648,11 +1648,13 @@ static void NoteFramePresented() {
 	s_window = {true, lockstep, tick, now, now, {}, {}, pace()};
 }
 
-// Opt-in accounting only: aggregate complete running ticks, without changing their work or pacing.
-static void NoteTickCostDetails(uint64_t round, uint64_t tick, const std::array<long long, 7>& phases) {
+// Opt-in accounting only: aggregate complete running ticks, without changing their work or pacing. A lockstep round and a
+// single-player activity report on the same line shape, with the world's actor and particle counts at the window's end.
+static void NoteTickCostDetails(const char* tag, uint64_t round, uint64_t tick, const std::array<long long, 7>& phases, const std::array<long long, 8>& nested) {
 	struct Window {
 		uint64_t round = 0, firstTick = 0, ticks = 0;
 		std::array<long long, 7> phases{};
+		std::array<long long, 8> nested{};
 		std::array<uint64_t, PerformanceMan::PerfCounterCount> counters{};
 	};
 	static Window window;
@@ -1661,6 +1663,7 @@ static void NoteTickCostDetails(uint64_t round, uint64_t tick, const std::array<
 	if (window.ticks == 0) window.firstTick = tick;
 	++window.ticks;
 	for (size_t i = 0; i < phases.size(); ++i) window.phases[i] += phases[i];
+	for (size_t i = 0; i < nested.size(); ++i) window.nested[i] += nested[i];
 	for (int i = 0; i < PerformanceMan::PerfCounterCount; ++i)
 		window.counters[i] += g_PerformanceMan.GetPerformanceCounterSample(static_cast<PerformanceMan::PerformanceCounters>(i));
 	if (window.ticks < 600) return;
@@ -1668,15 +1671,20 @@ static void NoteTickCostDetails(uint64_t round, uint64_t tick, const std::array<
 	static constexpr std::array<const char*, PerformanceMan::PerfCounterCount> counterNames{
 	    "sim_counter", "actors_ai", "actors_travel", "actors_update", "particles_travel", "particles_update", "activity", "scripts"};
 	std::ostringstream line;
-	line << "[net-tick-cost] round=" << round << " first_tick=" << window.firstTick << " last_tick=" << tick << " ticks=" << window.ticks;
+	line << tag << " round=" << round << " first_tick=" << window.firstTick << " last_tick=" << tick << " ticks=" << window.ticks;
 	long long total = 0;
 	for (size_t i = 0; i < window.phases.size(); ++i) {
 		line << ' ' << phaseNames[i] << "_us=" << window.phases[i];
 		total += window.phases[i];
 	}
 	line << " total_us=" << total;
+	// The world's own parts, and inside the movable update the wait for the round's inputs and the checksum's randomness feed.
+	static constexpr std::array<const char*, 8> nestedNames{"world_activity", "world_scene", "world_movable", "movable_wait", "movable_checksum_feed",
+	                                                        "movable_callbacks", "movable_precontroller", "movable_controllers"};
+	for (size_t i = 0; i < window.nested.size(); ++i) line << ' ' << nestedNames[i] << "_us=" << window.nested[i];
 	// These existing counters describe work within the phases; nested counters are not additive.
 	for (size_t i = 0; i < window.counters.size(); ++i) line << ' ' << counterNames[i] << "_us=" << window.counters[i];
+	line << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount();
 	System::PrintDiagnosticLine(line.str());
 	window = {};
 }
@@ -5216,6 +5224,7 @@ static void WriteHarnessCostFrameOf(uint64_t round, uint64_t frame) {
 	if (scope.open && (scope.round != round || frame != scope.last + 1)) CloseHarnessCostScopeLocked();
 	auto charged = HarnessCost::TakeFrame();
 	const auto before = HarnessCost::TakeBeforeFrame();
+	auto presented = HarnessCost::TakePresented();
 	if (!scope.open) {
 		static const bool s_flushAtExit = [] {
 			std::atexit([] {
@@ -5231,13 +5240,17 @@ static void WriteHarnessCostFrameOf(uint64_t round, uint64_t frame) {
 		    {"round", round}, {"segment", scope.segment}, {"first_frame", frame}, {"instruments", HarnessCostInstruments()}}.dump());
 		// What the instruments did before this run of frames began (a lobby, a loading screen) is no frame's cost.
 		System::PrintDiagnosticLine("[harness-cost-outside] " + nlohmann::json{{"process", System::GetProcessID()}, {"incarnation", incarnation}, {"round", round},
-		    {"segment", scope.segment}, {"before_frame", frame}, {"costs_ms", HarnessCostMs(before)}}.dump());
+		    {"segment", scope.segment}, {"before_frame", frame}, {"costs_ms", HarnessCostMs(before)}, {"presented_frames", presented.frames},
+		    {"costliest_presented_ms", static_cast<double>(presented.costliestNs) / 1e6}}.dump());
+		presented = {};
 	} else {
 		for (size_t instrument = 0; instrument < HarnessCost::InstrumentCount; ++instrument) charged[instrument] += before[instrument];
 	}
 	scope.last = frame;
+	// The frames this one's costs span on the screen - more than one while it waited on its peers - and the costliest of them.
 	System::PrintDiagnosticLine("[harness-cost-frame] " + nlohmann::json{{"process", System::GetProcessID()}, {"incarnation", incarnation}, {"round", round},
-	    {"segment", scope.segment}, {"frame", frame}, {"partition_valid", true}, {"costs_ms", HarnessCostMs(charged)}}.dump());
+	    {"segment", scope.segment}, {"frame", frame}, {"partition_valid", true}, {"costs_ms", HarnessCostMs(charged)}, {"presented_frames", presented.frames},
+	    {"costliest_presented_ms", static_cast<double>(presented.costliestNs) / 1e6}, {"costliest_presented_costs_ms", HarnessCostMs(presented.instrumentNs)}}.dump());
 }
 
 static void WriteHarnessCostFrame(uint64_t frame) {
@@ -8389,9 +8402,9 @@ void RunGameLoop() {
 			g_TimerMan.SetFreeRunSim(freeRunLockstep);
 		}
 
-		// A world joiner applies the committed tail faster than real time. 16 is a ceiling, and a
-		// tick is granted only when the tail still holds that next frame.
-		ScenarioRunner::BeginWorldCatchUpFrame();
+		// A world joiner applies the committed tail faster than real time. 16 is a ceiling, the frame's time after its draw a
+		// bound, and a tick is granted only when the tail still holds that next frame.
+		ScenarioRunner::BeginWorldCatchUpFrame(g_PerformanceMan.GetMSPDAverage(), FrameMan::FeelMsUntilNextDraw());
 		CrossEndTargetObservation(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
 		// A lockstep peer with owed ticks presents at least once per tick length while it catches up, the round's first ticks
@@ -8518,7 +8531,7 @@ void RunGameLoop() {
 			static const bool tickCostDetails = std::getenv("CC_TEST_TICK_COST_DETAILS") != nullptr;
 			const bool tickPhaseDetails = heldTickDetails || tickCostDetails;
 			long long heldBeforeWorldUs = 0, heldAfterWorldUs = 0, heldAfterHashUs = 0, heldAfterCollectionUs = 0;
-			long long detailAfterAudioUs = 0, detailBeforeHashUs = 0;
+			long long detailAfterAudioUs = 0, detailBeforeHashUs = 0, detailAfterActivityUs = 0, detailAfterSceneUs = 0;
 			const bool measureLockstepCost = ScenarioRunner::IsLockstepControllerSyncActive();
 			g_PerformanceMan.NewPerformanceSample();
 			if (!measureLockstepCost) g_PerformanceMan.UpdateMSPSU();
@@ -9085,10 +9098,12 @@ void RunGameLoop() {
 					if (s_testSimCostUs > 0 && !s_testSimCostOutside) spendTestSimCost();
 					g_MovableMan.TraceFog("activity");
 					g_ActivityMan.Update();
+					if (tickCostDetails) detailAfterActivityUs = g_TimerMan.GetAbsoluteTime();
 
 					if (g_SceneMan.GetScene()) {
 						g_SceneMan.GetScene()->Update();
 					}
+					if (tickCostDetails) detailAfterSceneUs = g_TimerMan.GetAbsoluteTime();
 
 					g_LuaMan.ClearScriptTimings();
 					g_MovableMan.Update();
@@ -9546,16 +9561,19 @@ void RunGameLoop() {
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 			if (ScenarioRunner::WorldCatchUpActive()) ScenarioRunner::NoteWorldCatchUpTickCost(simTick, static_cast<uint64_t>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)), static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()));
 
+			const auto controllerPhases = tickCostDetails ? MovableMan::TakeControllerPhaseUs() : std::array<long long, 3>{};
 			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
 				++s_paceSimTicks;
 				const long long elapsedUs = g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
 				s_paceSimUs += elapsedUs;
 				if (tickCostDetails && !lockstepPausedTick) {
-					NoteTickCostDetails(ScenarioRunner::GetLockstepRoundId(), simTick, {
+					NoteTickCostDetails("[net-tick-cost]", ScenarioRunner::GetLockstepRoundId(), simTick, {
 					    heldBeforeWorldUs - paceTickStartUs, heldAfterWorldUs - heldBeforeWorldUs,
 					    detailAfterAudioUs - heldAfterWorldUs, detailBeforeHashUs - detailAfterAudioUs,
 					    heldAfterHashUs - detailBeforeHashUs, heldAfterCollectionUs - heldAfterHashUs,
-					    paceTickStartUs + elapsedUs - heldAfterCollectionUs});
+					    paceTickStartUs + elapsedUs - heldAfterCollectionUs}, {
+					    detailAfterActivityUs - heldBeforeWorldUs, detailAfterSceneUs - detailAfterActivityUs, heldAfterWorldUs - detailAfterSceneUs,
+					    ScenarioRunner::GetLockstepWaitUs() - paceWaitStartUs, MovableMan::TakeChecksumFeedUs(), controllerPhases[0], controllerPhases[1], controllerPhases[2]});
 				}
 				if (heldTickDetails) {
 					static long long detailAtUs = 0;
@@ -9580,6 +9598,16 @@ void RunGameLoop() {
 					    {"trace_vector_payload_bytes", g_MetricsCollector.InstrumentationBytes()}, {"budget_tick", s_crossBudget}});
 					g_MetricsCollector.WriteObservation(timing);
 				}
+			} else if (tickCostDetails && g_ActivityMan.ActivityRunning() && heldBeforeWorldUs > 0 && heldAfterWorldUs > 0) {
+				// The same split for a single-player activity, the baseline a round's own cost is read against.
+				const long long elapsedUs = g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
+				NoteTickCostDetails("[sp-tick-cost]", 0, simTick, {
+				    heldBeforeWorldUs - paceTickStartUs, heldAfterWorldUs - heldBeforeWorldUs,
+				    detailAfterAudioUs - heldAfterWorldUs, detailBeforeHashUs - detailAfterAudioUs,
+				    heldAfterHashUs - detailBeforeHashUs, heldAfterCollectionUs - heldAfterHashUs,
+				    paceTickStartUs + elapsedUs - heldAfterCollectionUs}, {
+				    detailAfterActivityUs - heldBeforeWorldUs, detailAfterSceneUs - detailAfterActivityUs, heldAfterWorldUs - detailAfterSceneUs,
+				    0, MovableMan::TakeChecksumFeedUs(), controllerPhases[0], controllerPhases[1], controllerPhases[2]});
 			}
 
 			// Capture both peers after the complete tick, including global callbacks and worker joins.
@@ -12371,6 +12399,8 @@ int main(int argc, char** argv) {
 			line << "[record-video] recording to " << s_recordVideoDirectory << " at " << s_recordVideoFps << " fps";
 			System::PrintDiagnosticLine(line.str());
 		}
+		// The first copy of the screen pays the driver's one-time setup (57-97 ms on the Ally); it is paid here, before any frame.
+		if (const auto screenBuffer = g_WindowMan.GetScreenBuffer()) FrameRecorder::Instance().WarmTextureReadback(screenBuffer->GetColorTexture().id, g_WindowMan.GetResX(), g_WindowMan.GetResY());
 	}
 
 	// The chat script drives session traffic — only a headless e2e match may carry it.

@@ -8,7 +8,10 @@ import re
 INSTRUMENTS = ('sim_dump', 'tick_end', 'fullstate', 'census', 'preview_fidelity',
                'stall_sampler', 'screen_watches', 'recorder', 'controller_trace', 'feel_recorder')
 # The instruments each receipt version names (HarnessCost::c_ReceiptVersion); version 1 had no controller trace or feel recorder.
-VERSION_INSTRUMENTS = {1: INSTRUMENTS[:8], 2: INSTRUMENTS}
+# Version 3's frames also name the frames presented on the screen while they ran and the costliest of them.
+VERSION_INSTRUMENTS = {1: INSTRUMENTS[:8], 2: INSTRUMENTS, 3: INSTRUMENTS}
+RULE = ('Every enabled instrument has complete measured cost coverage; aggregate frame cost <= 50 ms '
+        '(a frame that spans several presented frames - one that waited on its peers - by the costliest of them)')
 FRAME_BUDGET_MS = 50
 # The menu loop's stays are this bit with the stay's count below it (Main.cpp c_HarnessMenuRounds). Match round ids are random
 # 64-bit values, so only that narrow range reads as a menu stay.
@@ -122,18 +125,28 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
         identity, start, end, enabled = key(scope), scope['first_frame'], scope['last_frame'], scope['instruments']
         expected = {name for name, active in enabled.items() if active}
         by_frame = {}
+        presents = scope_version(scope) >= 3
         for row in grouped[identity]:
             frame, costs = row.get('frame'), row.get('costs_ms')
+            shown, costliest, costliest_costs = row.get('presented_frames'), row.get('costliest_presented_ms'), row.get('costliest_presented_costs_ms')
             measured = (type(frame) is int and start <= frame <= end and frame not in by_frame
                         and row.get('partition_valid') is True and isinstance(costs, dict) and set(costs) == expected
                         and all(number(v) for v in costs.values()))
+            if presents:
+                measured = (measured and type(shown) is int and shown >= 0 and number(costliest) and isinstance(costliest_costs, dict)
+                            and set(costliest_costs) == expected and all(number(v) for v in costliest_costs.values()))
             if not measured:
                 errors.append(f'{row["path"]}:{row["line"]}: invalid, duplicated or unpartitioned frame costs'); scope['valid'] = False; continue
             by_frame[frame] = row
+            # A frame whose costs span presented frames (one that waited on its peers) is judged by the costliest of them when that is
+            # the smaller: none of them took their sum. A present that ran several ticks stays judged tick by tick, as before.
+            spans = presents and shown >= 1 and costliest < sum(costs.values())
+            judged = costliest_costs if spans else costs
             aggregate.append(dict(process=scope['process'], incarnation=scope['incarnation'], round=scope['round'], segment=scope['segment'],
-                                  frame=frame, total_ms=sum(costs.values()), costs_ms=dict(costs), path=row['path'], line=row['line']))
+                                  frame=frame, total_ms=sum(costs.values()), judged_ms=costliest if spans else sum(costs.values()),
+                                  presented_frames=shown if presents else None, costs_ms=dict(judged), path=row['path'], line=row['line']))
             for name, value in costs.items():
-                covered[name].append(dict(frame=frame, ms=value, path=row['path'], line=row['line']))
+                covered[name].append(dict(frame=frame, ms=value, judged_ms=judged[name], path=row['path'], line=row['line']))
         scope['frames'] = set(by_frame)
         if len(by_frame) != end - start + 1:
             errors.append(f'{identity}: cost frames={len(by_frame)}, declared={end-start+1}'); scope['valid'] = False
@@ -171,7 +184,7 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
         # A version-1 receipt names eight instruments: one it does not name may have run without a receipt.
         unreceipted = bool(scopes) and all(name not in VERSION_INSTRUMENTS[scope_version(scope)] for scope in scopes) and not samples[name]
         values = [r['ms'] for r in covered[name]]
-        observed_max = max([r.get('max_ms', 0) for r in samples[name]] + values, default=None)
+        observed_max = max([r.get('max_ms', 0) for r in samples[name]] + [r['judged_ms'] for r in covered[name]], default=None)
         missing_sources = []
         for row in samples[name]:
             own_values = [value['ms'] for value in covered[name] if value['path'] == row['path']]
@@ -191,8 +204,8 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
             native_samples=samples[name], frame_samples=len(values))
         if name == 'census':
             instruments[name]['native_instant_max_ms'] = max((r['total_ms'] for r in samples[name]), default=None)
-    peak = max(aggregate, key=lambda row: row['total_ms'], default=None)
-    maximum = max([r['total_ms'] for r in aggregate] + [r['measured_max_ms'] for r in instruments.values()
+    peak = max(aggregate, key=lambda row: row['judged_ms'], default=None)
+    maximum = max([r['judged_ms'] for r in aggregate] + [r['measured_max_ms'] for r in instruments.values()
                   if r['measured_max_ms'] is not None and number(r['measured_max_ms'])], default=None)
     complete = bool(scopes) and bool(complete_scopes) and all(complete_scopes) and not errors and all(r['complete'] for r in instruments.values())
     over = maximum is not None and maximum > FRAME_BUDGET_MS
@@ -203,7 +216,9 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
     peak_text = None
     if peak is not None:
         parts = ', '.join(f'{name}={value:g}' for name, value in sorted(peak['costs_ms'].items(), key=lambda item: -item[1]) if value)
-        peak_text = f'peak frame {peak["frame"]} of round {peak["round"]} = {peak["total_ms"]:g} ms ({parts or "no instrument cost"})'
+        shown = peak.get('presented_frames') or 0
+        peak_text = (f'peak frame {peak["frame"]} of round {peak["round"]} = {peak["judged_ms"]:g} ms ({parts or "no instrument cost"})'
+                     + (f', the costliest of the {shown} frames presented while it ran ({peak["total_ms"]:g} ms in all)' if shown > 1 else ''))
     over_text = []
     if over:
         over_text.append(f'measured peak={maximum} ms > {FRAME_BUDGET_MS} ms' + (f'; {peak_text}' if peak_text else ''))
@@ -213,12 +228,12 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
     if census_instant is not None:
         reason = '; '.join(filter(None, [reason, f'census instant={census_instant:g} ms of measured instrument work; frame partition required, no pace subtraction']))
     return dict(status=status, passed=status == 'PASS', complete=complete, instrument_valid=status == 'PASS',
-                max_frame_ms=maximum, peak_frame=peak and {k: peak[k] for k in ('round', 'segment', 'frame', 'total_ms', 'costs_ms', 'path', 'line')},
+                max_frame_ms=maximum, peak_frame=peak and {k: peak[k] for k in ('round', 'segment', 'frame', 'total_ms', 'judged_ms', 'presented_frames', 'costs_ms', 'path', 'line')},
                 over_budget_instruments=over_instruments, budget_ms=FRAME_BUDGET_MS,
                 measured_total_ms=sum(row['total_ms'] for row in aggregate) if aggregate else None,
                 instruments=instruments, scope_receipts=[{k: v for k, v in scope.items() if k != 'frames'} for scope in scopes],
                 outside_frames=outside_rows, measured_frames=len(aggregate), reason=reason, table=cost_table(instruments, peak_text, maximum),
-                rule='Every enabled instrument has complete measured cost coverage; aggregate frame cost <= 50 ms',
+                rule=RULE,
                 subtraction_ms=0, accounting='Only native partitioned frame costs are added. Summary-only costs remain partial; cumulative preview '
                 'totals are not summed across snapshots. Work receipted before a run of frames began is listed per instrument, outside every frame.')
 

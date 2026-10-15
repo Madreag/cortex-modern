@@ -82,6 +82,9 @@ namespace RTE {
 		unsigned char* BeginFrame(long long wallMS, std::size_t bytes);
 		/// Queue an immutable GPU copy of the rendered texture; completion and RGB conversion belong to the writer.
 		bool StageTextureReadback(unsigned int texture, int width, int height, std::string& error);
+		/// Copies the texture once the way a frame does and waits for it, so the driver's one-time setup of that copy is paid
+		/// before the first frame. Render thread only, before any frame is recorded.
+		void WarmTextureReadback(unsigned int texture, int width, int height);
 		std::string ReadbackError() const;
 
 		/// Queues the buffer BeginFrame returned. Render thread only.
@@ -113,6 +116,8 @@ namespace RTE {
 		std::deque<QueuedFrame> m_PendingTextureFrames; //!< Render-context transfers awaiting their fence; original metadata stays with each copy.
 		/// Encodes the frame; returns its index row, which the caller files in frame order.
 		std::string WriteFrame(const QueuedFrame& frame);
+		/// Starts the encoder process on an empty pipe; the first frame writes the stream header.
+		void LaunchEncoder();
 		/// Streams the frame's timestamp and pixels; the encoder holds its previous picture across empty slots.
 		std::string EncodeFrame(const QueuedFrame& frame);
 		void WritePendingDrops();

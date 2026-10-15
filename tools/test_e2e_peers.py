@@ -105,6 +105,107 @@ class SceneBoxesTest(unittest.TestCase):
             peers.write_player_files(requests['host'], copied)
 
 
+class FightEndCheckTest(unittest.TestCase):
+    def test_the_fights_end_reads_the_view_state_not_the_absence_of_text(self):
+        # A unit lost in the fight's last seconds puts the game's own "Lost control of remote body!" on screen; the end check asks
+        # whether the pan's body selection is over, which no passing message changes.
+        for name in ("fight15-s10", "fight15-s11", "fight15-s12"):
+            document = peers.scene(name)
+            for script, text in document["scripts"].items():
+                if not script.endswith(".probe"):
+                    continue
+                checks = [step for step in json.loads(text)["steps"] if step.get("op") == "assert_scene"]
+                self.assertFalse([step for step in checks if step.get("equals", {}).get("screen_text") == ""], (name, script))
+                self.assertEqual(checks[-1]["equals"].get("actor_selection"), False, (name, script, checks[-1]))
+
+    def test_the_host_ends_the_match_only_after_every_player_checked_the_end(self):
+        # The end check waits 90 ticks; a host that paused to end the match first left a joiner's ticks stopped (f-s10h-1, step 356).
+        for name in ("fight15-s10", "fight15-s10h", "fight15-s11", "fight15-s12"):
+            document = peers.scene(name)
+            probes = {script[:-len(".probe")]: json.loads(text)["steps"] for script, text in document["scripts"].items() if script.endswith(".probe")}
+            joiners = [peer for peer in probes if peer != "host"]
+            for peer, steps in probes.items():
+                end = max(index for index, step in enumerate(steps) if step.get("op") == "assert_scene" and step.get("equals", {}).get("actor_selection") is False)
+                if peer == "host":
+                    escape = next(index for index in range(end, len(steps)) if steps[index] == {"op": "key_down", "key": "Escape"})
+                    waited = [steps[index]["path"] for index in range(end, escape) if steps[index]["op"] == "wait_file"]
+                    self.assertEqual(waited, [f"{{PROBE_DIR_{joiner}}}/end-checked.json" for joiner in joiners], (name, peer))
+                else:
+                    self.assertEqual(steps[end + 1], {"op": "signal", "name": "end-checked"}, (name, peer))
+
+
+class HeldHostSceneTest(unittest.TestCase):
+    def test_the_held_host_scene_holds_the_hosts_own_seat_on_every_run(self):
+        import fight15_held_host
+        committed = json.loads((fight15_held_host.ROOT / "fight15-s10h.json").read_text(encoding="utf-8"))
+        self.assertEqual(committed, fight15_held_host.held_host(json.loads((fight15_held_host.ROOT / "fight15-s10.json").read_text(encoding="utf-8"))))
+        document = peers.scene("fight15-s10h")
+        peers.check_scene(document)
+        host, joiner = (next(peer for peer in document["peers"] if peer["name"] == name) for name in ("host", "joiner"))
+        tick, milliseconds = map(int, host["args"][host["args"].index("-net-test-live-stall") + 1].split(":"))
+        # The host alone stalls, past the slow player bound (3 ticks) and inside the fight's twenty minutes.
+        self.assertGreater(milliseconds, 3 * 1000 / 60)
+        self.assertLess(tick, document["fight_hash_gate"]["running_ticks"])
+        self.assertNotIn("-net-test-live-stall", joiner["args"])
+        item = next(row for row in document["checklist"] if row["id"] == "host-seat-held-host")
+        self.assertEqual(item["peer"], "host")
+        self.assertTrue(any("peer=1 held=1" in pattern for pattern in item["log_regex"]), item)
+        self.assertTrue(any("seat-reclaimed peer=1" in pattern for pattern in item["log_regex"]), item)
+        # The hold is the stall's: one the host earns later on its own (f-s10h-2, frame 28558) does not count.
+        import re
+        held = next(pattern for pattern in item["log_regex"] if "held=1" in pattern)
+        self.assertTrue(re.search(held, "[net-seat-ai] peer=1 held=1 frame=6045 tick=6045 cpu_teams=13"))
+        self.assertFalse(re.search(held, "[net-seat-ai] peer=1 held=1 frame=28558 tick=28558 cpu_teams=13"))
+        # And the joiner never waits on the stalled host past A1's 50 ms (f-s10h-1/-2: 1,656 and 1,639 ms at frame 6022-6023).
+        (never,) = next(row for row in document["checklist"] if row["id"] == "joiner-never-waited-joiner")["forbidden_log_regex"]
+        self.assertTrue(re.search(never, "[net-frame-wait] frame=6023 wait_ms=1639 on=Captain blocked=remote-input duplicates=0"))
+        self.assertFalse(re.search(never, "[net-frame-wait] frame=6030 wait_ms=11 on=Captain"))
+        self.assertFalse(re.search(never, "[net-frame-wait] frame=8049 wait_ms=500 on=Captain"))
+        self.assertEqual(host["env"].get("CC_TEST_RETURN_INPUT_DETAILS"), "1")
+        # The lever's own freeze of the host's screen is named and left out of the host's drawn frames and stills, nothing else.
+        (excluded,) = document["drawn_frames_exclude"]
+        self.assertEqual(excluded["peer"], "host")
+        self.assertTrue(excluded["first_tick"] < tick < excluded["last_tick"] and excluded["last_tick"] - excluded["first_tick"] <= 180, excluded)
+        (still,) = document["allowed_stills"]
+        self.assertEqual((still["peer"], still["from_mark"], still["to_mark"]), ("host", "minute-01-host", "minute-02-host"))
+
+    def test_a_scenes_named_window_is_left_out_of_that_peers_drawn_frames(self):
+        def window(tick, max_ms):
+            return (f"[frame-pace] mode=lockstep recorder=1 recorder_hz=30 target_hz=60.00 first_tick={tick - 60} tick={tick} frames=60 wall_ms=1000.0 "
+                    f"fps=59.80 interval_p50_ms=16.67 interval_p95_ms=17.50 interval_max_ms={max_ms:.2f}")
+        log = "\n".join(window(60 * index, 2035.0 if 60 * index == 6000 else 18.0) for index in range(1, 201)) + "\n"
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "stdout.log").write_text(log)
+            peer = dict(peer="host", root=folder)
+            judged = {row["id"]: row for row in peers.video.capture_evidence_items({}, dict(name="run0"), peer)}
+            self.assertEqual(judged["drawn-frames-host"]["probe"], "fail")
+            scene = dict(drawn_frames_exclude=[dict(peer="host", first_tick=5940, last_tick=6120, reason="the stall")])
+            judged = {row["id"]: row for row in peers.video.capture_evidence_items(scene, dict(name="run0"), peer)}
+            self.assertEqual(judged["drawn-frames-host"]["probe"], "pass", judged["drawn-frames-host"])
+            self.assertEqual(judged["drawn-frames-host"]["excluded_windows"][0]["reason"], "the stall")
+            other = dict(drawn_frames_exclude=[dict(peer="joiner", first_tick=5940, last_tick=6120, reason="the stall")])
+            self.assertEqual({row["id"]: row for row in peers.video.capture_evidence_items(other, dict(name="run0"), peer)}["drawn-frames-host"]["probe"], "fail")
+
+
+class LostSoldierTest(unittest.TestCase):
+    def test_a_soldier_lost_before_its_player_takes_it_is_bought_again(self):
+        # 1 of 5 turns on 10-14: the fight killed a bought soldier during its player's held turn and the run failed on it.
+        for name in ("fight15-s11", "fight15-s12", "fight15-s13"):
+            document = peers.scene(name)
+            for script, text in document["scripts"].items():
+                if not script.endswith(".probe"):
+                    continue
+                steps = json.loads(text)["steps"]
+                selects = [(index, step) for index, step in enumerate(steps) if step.get("op") == "actor_next_until" and step["preset"] != "Base.rte/Brain Case"]
+                self.assertTrue(selects, (name, script))
+                for index, step in selects:
+                    start = steps[index - step["lost_rebuy_back"]]
+                    # Back to the press that opens the pie for the purchase, a bounded number of times.
+                    self.assertEqual((start["op"], start.get("button"), start.get("down")), ("game_mouse", "right", True), (name, script, index))
+                    self.assertEqual(steps[index - step["lost_rebuy_back"] + 2], {"op": "wait_scene", "input_player": 0, "equals": {"pie_visible": True}})
+                    self.assertEqual(step["lost_rebuy_attempts"], 3)
+
+
 class SceneAccepted(Exception):
     pass
 

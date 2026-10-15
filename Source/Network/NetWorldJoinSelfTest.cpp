@@ -1112,13 +1112,13 @@ namespace RTE {
 			std::string error;
 			std::vector<NetLockstepFrame> tail;
 			const int ceiling = ScenarioRunner::c_WorldCatchUpTicksPerRealFrame;
-			for (int i = 1; i <= ceiling + 4; ++i) {
+			for (int i = 1; i <= ceiling + 8; ++i) {
 				tail.push_back(MakeCommittedFrame(40 + static_cast<uint64_t>(i)));
 			}
 			if (!ScenarioRunner::InstallWorldCatchUp(40, tail, &error)) {
 				return Fail("ceiling catch-up install: " + error);
 			}
-			ScenarioRunner::SetWorldCatchUpActivation(40 + static_cast<uint64_t>(ceiling) + 5);
+			ScenarioRunner::SetWorldCatchUpActivation(40 + static_cast<uint64_t>(ceiling) + 9);
 			// The predicate's own contract: no ticks left this frame is a refusal whatever the tail holds.
 			if (ScenarioRunner::WorldCatchUpMayGrant(41, 0) || !ScenarioRunner::WorldCatchUpMayGrant(41, 1)) {
 				return Fail("catch-up-exceeded-the-ceiling: the grant predicate answered " +
@@ -1145,6 +1145,44 @@ namespace RTE {
 			if (!ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1)) {
 				return Fail("catch-up-exceeded-the-ceiling: the next real frame granted no tick over a tail that holds " +
 				            std::to_string(40 + ceiling + 4) + " and a sim clock at " + std::to_string(simTick));
+			}
+			++simTick;
+			NetLockstepReadyFrame taken;
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, taken, &error)) {
+				return Fail("catch-up-exceeded-the-ceiling: tick " + std::to_string(simTick) + " had no committed frame");
+			}
+			// A frame whose draw takes its whole tick applies the fewest ticks that still gain on the live round, and no more.
+			ScenarioRunner::BeginWorldCatchUpFrame(c_DefaultDeltaTimeS * 1000.0);
+			int drawnOut = 0;
+			while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1)) {
+				++simTick;
+				++drawnOut;
+				if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, taken, &error)) {
+					return Fail("catch-up-exceeded-the-ceiling: tick " + std::to_string(simTick) + " had no committed frame");
+				}
+			}
+			if (drawnOut != ScenarioRunner::c_WorldCatchUpMinTicksPerRealFrame) {
+				return Fail("catch-up-took-the-frames-draw: " + std::to_string(drawnOut) + " ticks in a real frame its draw fills, the floor is " +
+				            std::to_string(ScenarioRunner::c_WorldCatchUpMinTicksPerRealFrame));
+			}
+			// Under a presentation cap the frame runs to the cap's next draw: one that is due applies the floor, a far one the rest.
+			const auto grantFrame = [&](double untilDrawMs) {
+				ScenarioRunner::BeginWorldCatchUpFrame(0.0, untilDrawMs);
+				int granted = 0;
+				while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1)) {
+					++simTick;
+					++granted;
+					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, taken, &error)) return -1;
+				}
+				return granted;
+			};
+			if (const int due = grantFrame(0.0); due != ScenarioRunner::c_WorldCatchUpMinTicksPerRealFrame) {
+				return Fail("catch-up-ran-past-the-caps-draw: " + std::to_string(due) + " ticks in a frame whose capped draw is due, the floor is " +
+				            std::to_string(ScenarioRunner::c_WorldCatchUpMinTicksPerRealFrame));
+			}
+			if (const int distant = grantFrame(1000.0); distant != 3) {
+				return Fail("catch-up-stopped-short-of-the-caps-draw: " + std::to_string(distant) + " ticks in a frame whose capped draw is a second away, "
+				            "the tail holds 3");
 			}
 			return 0;
 		}
