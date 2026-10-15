@@ -895,8 +895,11 @@ namespace {
 			}
 			if (op == "pie_point") {
 				auto* game = g_ActivityMan.GetActivity();
-				auto* actor = game ? game->GetControlledActor(LocalPlayer(step)) : nullptr;
-				auto* pie = actor ? actor->GetPieMenu() : nullptr;
+				// The build editor's pie is the one a player finishes building with; an actor's carries its orders.
+				auto* editor = step.value("editor", false) ? dynamic_cast<GameActivity*>(game) : nullptr;
+				auto* actor = !editor && game ? game->GetControlledActor(LocalPlayer(step)) : nullptr;
+				auto* pie = editor && editor->GetEditorGUI(LocalPlayer(step)) ? editor->GetEditorGUI(LocalPlayer(step))->GetCheckpointPieMenu() :
+				            actor ? actor->GetPieMenu() : nullptr;
 				auto* slice = pie ? pie->GetFirstPieSliceByType(static_cast<PieSliceType>(step.value("command", 6))) : nullptr;
 				Require(slice && pie->IsVisible(), "the pie has no requested visible slice");
 				const Vector target = Vector(0.9F, 0).RadRotate(slice->GetMidAngle() + pie->GetRotAngle());

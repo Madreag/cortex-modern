@@ -1648,8 +1648,9 @@ static void NoteFramePresented() {
 	s_window = {true, lockstep, tick, now, now, {}, {}, pace()};
 }
 
-// Opt-in accounting only: aggregate complete running ticks, without changing their work or pacing.
-static void NoteTickCostDetails(uint64_t round, uint64_t tick, const std::array<long long, 7>& phases) {
+// Opt-in accounting only: aggregate complete running ticks, without changing their work or pacing. A lockstep round and a
+// single-player activity report on the same line shape, with the world's actor and particle counts at the window's end.
+static void NoteTickCostDetails(const char* tag, uint64_t round, uint64_t tick, const std::array<long long, 7>& phases) {
 	struct Window {
 		uint64_t round = 0, firstTick = 0, ticks = 0;
 		std::array<long long, 7> phases{};
@@ -1668,7 +1669,7 @@ static void NoteTickCostDetails(uint64_t round, uint64_t tick, const std::array<
 	static constexpr std::array<const char*, PerformanceMan::PerfCounterCount> counterNames{
 	    "sim_counter", "actors_ai", "actors_travel", "actors_update", "particles_travel", "particles_update", "activity", "scripts"};
 	std::ostringstream line;
-	line << "[net-tick-cost] round=" << round << " first_tick=" << window.firstTick << " last_tick=" << tick << " ticks=" << window.ticks;
+	line << tag << " round=" << round << " first_tick=" << window.firstTick << " last_tick=" << tick << " ticks=" << window.ticks;
 	long long total = 0;
 	for (size_t i = 0; i < window.phases.size(); ++i) {
 		line << ' ' << phaseNames[i] << "_us=" << window.phases[i];
@@ -1677,6 +1678,7 @@ static void NoteTickCostDetails(uint64_t round, uint64_t tick, const std::array<
 	line << " total_us=" << total;
 	// These existing counters describe work within the phases; nested counters are not additive.
 	for (size_t i = 0; i < window.counters.size(); ++i) line << ' ' << counterNames[i] << "_us=" << window.counters[i];
+	line << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount();
 	System::PrintDiagnosticLine(line.str());
 	window = {};
 }
@@ -9551,7 +9553,7 @@ void RunGameLoop() {
 				const long long elapsedUs = g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
 				s_paceSimUs += elapsedUs;
 				if (tickCostDetails && !lockstepPausedTick) {
-					NoteTickCostDetails(ScenarioRunner::GetLockstepRoundId(), simTick, {
+					NoteTickCostDetails("[net-tick-cost]", ScenarioRunner::GetLockstepRoundId(), simTick, {
 					    heldBeforeWorldUs - paceTickStartUs, heldAfterWorldUs - heldBeforeWorldUs,
 					    detailAfterAudioUs - heldAfterWorldUs, detailBeforeHashUs - detailAfterAudioUs,
 					    heldAfterHashUs - detailBeforeHashUs, heldAfterCollectionUs - heldAfterHashUs,
@@ -9580,6 +9582,14 @@ void RunGameLoop() {
 					    {"trace_vector_payload_bytes", g_MetricsCollector.InstrumentationBytes()}, {"budget_tick", s_crossBudget}});
 					g_MetricsCollector.WriteObservation(timing);
 				}
+			} else if (tickCostDetails && g_ActivityMan.ActivityRunning() && heldBeforeWorldUs > 0 && heldAfterWorldUs > 0) {
+				// The same split for a single-player activity, the baseline a round's own cost is read against.
+				const long long elapsedUs = g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
+				NoteTickCostDetails("[sp-tick-cost]", 0, simTick, {
+				    heldBeforeWorldUs - paceTickStartUs, heldAfterWorldUs - heldBeforeWorldUs,
+				    detailAfterAudioUs - heldAfterWorldUs, detailBeforeHashUs - detailAfterAudioUs,
+				    heldAfterHashUs - detailBeforeHashUs, heldAfterCollectionUs - heldAfterHashUs,
+				    paceTickStartUs + elapsedUs - heldAfterCollectionUs});
 			}
 
 			// Capture both peers after the complete tick, including global callbacks and worker joins.

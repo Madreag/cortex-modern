@@ -1,0 +1,191 @@
+{
+ "schema": 1,
+ "timeout_ms": 1700000,
+ "step_timeout_ms": 60000,
+ "label_dump": {
+  "every_ms": 60000
+ },
+ "steps": [
+  {
+   "op": "wait",
+   "editing": true
+  },
+  {
+   "op": "editor_pick",
+   "input_player": 0,
+   "brain": false,
+   "class": "BunkerAssembly",
+   "preset": "Brain Chamber Left 2x2 - 1"
+  },
+  {
+   "op": "editor_move",
+   "input_player": 0,
+   "x_fraction": 0.3,
+   "y": 1104,
+   "remember": "bunker"
+  },
+  {
+   "op": "wait",
+   "picker_open": false,
+   "player": 0
+  },
+  {
+   "op": "assert_editor",
+   "input_player": 0,
+   "equals": {
+    "screen_text": "Click to ADD a new object - Drag for precision"
+   }
+  },
+  {
+   "op": "game_mouse",
+   "button": "left",
+   "down": true
+  },
+  {
+   "op": "wait",
+   "renders": 3,
+   "sim_advanced": 2
+  },
+  {
+   "op": "game_mouse",
+   "button": "left",
+   "down": false
+  },
+  {
+   "op": "wait",
+   "renders": 3
+  },
+  {
+   "op": "wait",
+   "sim_advanced": 90,
+   "elapsed_ms": 1600
+  },
+  {
+   "op": "assert_editor",
+   "input_player": 0,
+   "equals": {
+    "placement_refused": false
+   }
+  },
+  {
+   "op": "wait",
+   "editing": true
+  },
+  {
+   "op": "editor_pick",
+   "input_player": 0
+  },
+  {
+   "op": "editor_move",
+   "input_player": 0,
+   "x_fraction": 0.3,
+   "relative_to": "bunker",
+   "offset_x": -48,
+   "offset_y": -48
+  },
+  {
+   "op": "wait",
+   "renders": 5,
+   "elapsed_ms": 1000
+  },
+  {
+   "op": "game_mouse",
+   "button": "left",
+   "down": true
+  },
+  {
+   "op": "wait",
+   "renders": 3,
+   "sim_advanced": 2
+  },
+  {
+   "op": "game_mouse",
+   "button": "left",
+   "down": false
+  },
+  {
+   "op": "wait",
+   "renders": 3
+  },
+  {
+   "op": "game_mouse",
+   "button": "right",
+   "down": true
+  },
+  {
+   "op": "wait",
+   "renders": 3,
+   "sim_advanced": 2
+  },
+  {
+   "op": "pie_point",
+   "input_player": 0,
+   "editor": true,
+   "command": 22
+  },
+  {
+   "op": "wait",
+   "renders": 5
+  },
+  {
+   "op": "game_mouse",
+   "button": "left",
+   "down": true
+  },
+  {
+   "op": "wait",
+   "renders": 3,
+   "sim_advanced": 2
+  },
+  {
+   "op": "game_mouse",
+   "button": "left",
+   "down": false
+  },
+  {
+   "op": "wait",
+   "renders": 3
+  },
+  {
+   "op": "game_mouse",
+   "button": "right",
+   "down": false
+  },
+  {
+   "op": "wait",
+   "renders": 3
+  },
+  {
+   "op": "wait",
+   "editing": false,
+   "within_ms": 120000
+  },
+  {
+   "op": "assert_scene",
+   "input_player": 0,
+   "equals": {
+    "alive": true,
+    "brain_count": 1
+   }
+  },
+  {
+   "op": "wait",
+   "sim_at_least": {SP_TICKS},
+   "within_ms": 1600000
+  },
+  {
+   "op": "assert_scene",
+   "input_player": 0,
+   "equals": {
+    "alive": true
+   }
+  },
+  {
+   "op": "signal",
+   "name": "done"
+  },
+  {
+   "op": "finish"
+  }
+ ]
+}
