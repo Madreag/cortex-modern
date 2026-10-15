@@ -152,6 +152,29 @@ class HeldHostSceneTest(unittest.TestCase):
         self.assertTrue(any("peer=1 held=1" in pattern for pattern in item["log_regex"]), item)
         self.assertTrue(any("seat-reclaimed peer=1" in pattern for pattern in item["log_regex"]), item)
         self.assertEqual(host["env"].get("CC_TEST_RETURN_INPUT_DETAILS"), "1")
+        # The lever's own freeze of the host's screen is named and left out of the host's drawn frames and stills, nothing else.
+        (excluded,) = document["drawn_frames_exclude"]
+        self.assertEqual(excluded["peer"], "host")
+        self.assertTrue(excluded["first_tick"] < tick < excluded["last_tick"] and excluded["last_tick"] - excluded["first_tick"] <= 180, excluded)
+        (still,) = document["allowed_stills"]
+        self.assertEqual((still["peer"], still["from_mark"], still["to_mark"]), ("host", "minute-01-host", "minute-02-host"))
+
+    def test_a_scenes_named_window_is_left_out_of_that_peers_drawn_frames(self):
+        def window(tick, max_ms):
+            return (f"[frame-pace] mode=lockstep recorder=1 recorder_hz=30 target_hz=60.00 first_tick={tick - 60} tick={tick} frames=60 wall_ms=1000.0 "
+                    f"fps=59.80 interval_p50_ms=16.67 interval_p95_ms=17.50 interval_max_ms={max_ms:.2f}")
+        log = "\n".join(window(60 * index, 2035.0 if 60 * index == 6000 else 18.0) for index in range(1, 201)) + "\n"
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "stdout.log").write_text(log)
+            peer = dict(peer="host", root=folder)
+            judged = {row["id"]: row for row in peers.video.capture_evidence_items({}, dict(name="run0"), peer)}
+            self.assertEqual(judged["drawn-frames-host"]["probe"], "fail")
+            scene = dict(drawn_frames_exclude=[dict(peer="host", first_tick=5940, last_tick=6120, reason="the stall")])
+            judged = {row["id"]: row for row in peers.video.capture_evidence_items(scene, dict(name="run0"), peer)}
+            self.assertEqual(judged["drawn-frames-host"]["probe"], "pass", judged["drawn-frames-host"])
+            self.assertEqual(judged["drawn-frames-host"]["excluded_windows"][0]["reason"], "the stall")
+            other = dict(drawn_frames_exclude=[dict(peer="joiner", first_tick=5940, last_tick=6120, reason="the stall")])
+            self.assertEqual({row["id"]: row for row in peers.video.capture_evidence_items(other, dict(name="run0"), peer)}["drawn-frames-host"]["probe"], "fail")
 
 
 class LostSoldierTest(unittest.TestCase):

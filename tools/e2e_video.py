@@ -1235,10 +1235,13 @@ def capture_evidence_items(scenario, capture, peer):
     import frame_pace
     log = Path(peer['root']) / 'stdout.log'
     text = log.read_text(encoding='utf-8', errors='replace') if log.is_file() else ''
-    drawn = frame_pace.check(text, 'lockstep')
+    # A scene's own lever may freeze a peer's screen on purpose (its stalled host); those windows are named, with the reason, not judged.
+    excluded = [spec for spec in scenario.get('drawn_frames_exclude', []) if spec.get('peer') == name]
+    exclude = [(spec['first_tick'], spec['last_tick']) for spec in excluded]
+    drawn = frame_pace.check(text, 'lockstep', exclude=exclude)
     if drawn['status'] == 'NONE':
-        drawn = frame_pace.check(text, 'single')
-    output.append(item(f'drawn-frames-{name}', frame_pace.RULE, '' if drawn['passed'] else drawn['reason'], drawn_frames=drawn))
+        drawn = frame_pace.check(text, 'single', exclude=exclude)
+    output.append(item(f'drawn-frames-{name}', frame_pace.RULE, '' if drawn['passed'] else drawn['reason'], drawn_frames=drawn, excluded_windows=excluded))
     allowed, stills, error = [], None, ''
     ffmpeg = find_ffmpeg()
     try:

@@ -775,5 +775,21 @@
       "joiner"
     ],
     "running_ticks": 72000
-  }
+  },
+  "drawn_frames_exclude": [
+    {
+      "peer": "host",
+      "first_tick": 5940,
+      "last_tick": 6120,
+      "reason": "the scene's own stall of the host's simulation, 2000 ms at tick 6000"
+    }
+  ],
+  "allowed_stills": [
+    {
+      "peer": "host",
+      "from_mark": "minute-01-host",
+      "to_mark": "minute-02-host",
+      "reason": "the scene's own stall of the host's simulation, 2000 ms at tick 6000"
+    }
+  ]
 }
