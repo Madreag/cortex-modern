@@ -300,7 +300,7 @@ namespace RTE {
 		ResolvePeerBridgeInputConflicts(nowMs);
 		if (m_FrameGroupChanges.empty()) { m_FrameGroupMembers = (1U << m_Config.peerCount) - 1; m_FrameGroupChanges[m_Config.startFrame] = m_FrameGroupMembers; }
 		if (nowMs >= m_PeerHeartbeatAtMs) {
-			m_PeerHeartbeatAtMs = nowMs + 250;
+			m_PeerHeartbeatAtMs = nowMs + c_NetPeerHeartbeatMs;
 			auto heartbeat = PeerFrameMessage(NetHostMigrationMessageType::PeerHeartbeat);
 			// Restored survivors can receive queued host traffic on a later local
 			// clock. Advertise eligibility before anyone fixes an immutable vote;

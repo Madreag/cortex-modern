@@ -494,6 +494,9 @@ namespace RTE {
 	constexpr uint32_t c_NetSeatCatchUpRate = 3;
 	constexpr uint32_t c_NetSeatCatchUpBurstTicks = 6;
 	constexpr uint64_t c_NetSeatCatchUpAllowanceMs = 2000;
+	/// How often a frame-group peer sends its undecided votes and recent certificates again, and its progress at the least.
+	constexpr uint64_t c_NetPeerVoteResendMs = 100;
+	constexpr uint64_t c_NetPeerHeartbeatMs = 250;
 	constexpr uint64_t c_NetFrameTieBoundMs = 1000;
 	/// One reading of host loss for every path that judges it: the round's own check, the roll call and a held seat's catch-up.
 	inline uint64_t NetHostLossBoundMs(uint64_t rttMs) { (void)rttMs; return c_NetHostLossSilenceMs; }
@@ -1769,6 +1772,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerAppliedThrough;
 		std::map<uint8_t, uint64_t> m_PeerAppliedAtMs;
 		std::map<uint8_t, std::deque<std::pair<uint64_t, uint64_t>>> m_PeerAppliedProgress; //!< When each seat's applied frame rose, and to which, over the last seconds.
+		std::deque<std::pair<uint64_t, uint64_t>> m_OwnDisplayProgress; //!< When this machine displayed each recent tick, over the last seconds.
 		uint64_t m_PeerHeartbeatAtMs = 0;
 		uint64_t m_PeerTailRequestAtMs = 0;
 		uint8_t m_PeerTailDonor = 0;
@@ -2030,8 +2034,9 @@ namespace RTE {
 		/// second or more half a tick a second, below that a tenth of its own rate, over the last capacity window.
 		bool CostsPastTolerance(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* cost = nullptr);
 		static constexpr uint64_t c_CapacityWindowMs = 10000;
-		/// The ticks a second a seat applied over its recent reports, or nothing while they span less than half a second.
-		std::optional<double> PeerAppliedRate(uint8_t peerId, uint64_t nowMs) const;
+		/// The ticks a second a seat applied over the second of its reports before the last one this machine's display covers, and the
+		/// ticks a second this machine displayed over the same window; nothing while the reports span less than half a second.
+		std::optional<std::pair<double, double>> PeerAppliedRate(uint8_t peerId) const;
 		static void NoteArrival(NetLockstepPeerStats& stats, uint64_t nowMs, uint64_t frame);
 		/// Wait for every human owner's published startup before committing the first frame.
 		void TickStartupWait(uint64_t nowMs);

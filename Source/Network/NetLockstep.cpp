@@ -5450,6 +5450,7 @@ namespace RTE {
 		m_PeerArrivalLatencyMs.clear(); m_PeerForwardedInputs.clear(); m_PeerInputDecodes.clear(); m_PeerAcceptedThrough.clear(); m_PeerInputReceipts.clear(); m_PeerAcceptedAhead.clear(); m_PeerSourceInputs.clear();
 		m_PeerOwnReceiptProgress.clear(); m_PeerReceiptSampleFloorMs.clear(); m_PeerReceiptRepairs = 0;
 		m_PeerCommittedTail.clear(); m_PeerFrameIncoming.clear(); m_PeerTailThrough.reset(); m_PeerAppliedThrough.clear(); m_PeerAppliedAtMs.clear();
+		m_PeerAppliedProgress.clear(); m_OwnDisplayProgress.clear();
 		m_PeerTailRequestedUntil.clear(); m_PeerTailLastSentMs.clear(); m_PeerTailResendFrames.clear(); m_PeerTailSendRanges.clear();
 		m_PeerTailDonor = 0; m_PeerTailDuplicateFrames = 0;
 		m_PeerTailOutgoing.clear(); m_PeerTailRawBytesSent = m_PeerTailDeferredSends = 0;
@@ -7220,17 +7221,26 @@ namespace RTE {
 		m_WaitDuplicates = 0;
 	}
 
-	std::optional<double> NetLockstepCoordinator::PeerAppliedRate(uint8_t peerId, uint64_t nowMs) const {
+	std::optional<std::pair<double, double>> NetLockstepCoordinator::PeerAppliedRate(uint8_t peerId) const {
 		const auto found = m_PeerAppliedProgress.find(peerId);
-		if (found == m_PeerAppliedProgress.end() || found->second.empty()) return std::nullopt;
-		// The last second of reports: a silence before them is the hold's cause, not the seat's pace.
-		const auto first = std::find_if(found->second.begin(), found->second.end(), [nowMs](const auto& sample) { return sample.first + 1000 >= nowMs; });
-		if (first == found->second.end()) return 0.0;
-		const auto& [lastMs, lastFrame] = found->second.back();
-		// A seat that stopped reporting has stopped applying: its rate runs to now.
-		const uint64_t spanMs = std::max(lastMs, nowMs) - first->first;
-		if (spanMs < 500 || nowMs < first->first) return std::nullopt;
-		return static_cast<double>(lastFrame - first->second) * 1000.0 / static_cast<double>(spanMs);
+		const auto& shown = m_OwnDisplayProgress;
+		if (found == m_PeerAppliedProgress.end() || found->second.empty() || shown.size() < 2) return std::nullopt;
+		// The span ends at a report, not now: the time since the last one is not the seat's pace. A silence before the second of reports
+		// is the hold's cause, and the round may itself run below the nominal rate, so this machine's display over the same window is the bar.
+		const auto last = std::find_if(found->second.rbegin(), found->second.rend(), [&shown](const auto& sample) { return sample.first <= shown.back().first; });
+		if (last == found->second.rend()) return std::nullopt;
+		const auto first = std::find_if(found->second.begin(), found->second.end(), [&](const auto& sample) {
+			return sample.first + 1000 >= last->first && sample.first >= shown.front().first;
+		});
+		if (first == found->second.end() || first->first >= last->first || last->first - first->first < 500) return std::nullopt;
+		const auto displayedAt = [&shown](uint64_t ms) {
+			const auto after = std::upper_bound(shown.begin(), shown.end(), ms, [](uint64_t at, const auto& sample) { return at < sample.first; });
+			const auto before = std::prev(after);
+			if (after == shown.end()) return static_cast<double>(before->second);
+			return static_cast<double>(before->second) + static_cast<double>(after->second - before->second) * static_cast<double>(ms - before->first) / static_cast<double>(after->first - before->first);
+		};
+		const double spanS = static_cast<double>(last->first - first->first) / 1000.0;
+		return std::pair{static_cast<double>(last->second - first->second) / spanS, (displayedAt(last->first) - displayedAt(first->first)) / spanS};
 	}
 
 	bool NetLockstepCoordinator::CostsPastTolerance(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* cost) {
@@ -10163,6 +10173,10 @@ namespace RTE {
 		// A tick the sim applied counts even once the round has failed: the heal resumes from it.
 		if (IsRunning() || IsFailed()) m_LastCompletedSimulationTick = completedTick;
 		if (UsesPeerFrameGroups() && IsRunning()) SendPeerFrameWitness(completedTick);
+		if (UsesPeerFrameGroups()) {
+			m_OwnDisplayProgress.emplace_back(m_TimingNowMs, completedTick);
+			while (m_OwnDisplayProgress.size() > 2 && m_OwnDisplayProgress.front().first + 3000 < m_TimingNowMs) m_OwnDisplayProgress.pop_front();
+		}
 		if (UsesPeerFrameGroups()) m_PeerConsumerAtMs = m_TimingNowMs;
 		if (UsesPeerFrameGroups() && !m_PeerPaceStartMs) { m_PeerPaceStartMs = m_TimingNowMs; m_PeerPaceStartFrame = completedTick; }
 		if (IsRunning() && m_Config.localPeerId == GetHostPeerId()) PublishPreparedFrame(m_TimingNowMs);
