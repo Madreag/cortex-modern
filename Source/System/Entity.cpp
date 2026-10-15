@@ -396,7 +396,8 @@ namespace RTE {
 	Entity* Entity::FreezeCheckpointNative(CheckpointNativeSnapshot&) const {
 		// An object being destroyed answers as its base class, so the refusal says where it lay.
 		throw UnsupportedCheckpointNative(std::format("native checkpoint snapshot is not implemented for {} (address {}, live {}, in the pools {})", GetClassName(),
-		    static_cast<const void*>(this), CheckpointNativeStorage::Original(this), CheckpointNativeStorage::Owns(CheckpointNativeStorage::Original(this))));
+		    static_cast<const void*>(this), CheckpointNativeStorage::Original(this), CheckpointNativeStorage::Owns(CheckpointNativeStorage::Original(this))) +
+		    (CheckpointCloneCost::DescribeOpen().empty() ? std::string{} : ", freezing " + CheckpointCloneCost::DescribeOpen()));
 	}
 	void CheckpointNativeSnapshot::AssignEntity(Entity& target, const Entity& source) {
 		target.m_FrozenCheckpointNative = true;
