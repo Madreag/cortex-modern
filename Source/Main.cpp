@@ -1650,11 +1650,11 @@ static void NoteFramePresented() {
 
 // Opt-in accounting only: aggregate complete running ticks, without changing their work or pacing. A lockstep round and a
 // single-player activity report on the same line shape, with the world's actor and particle counts at the window's end.
-static void NoteTickCostDetails(const char* tag, uint64_t round, uint64_t tick, const std::array<long long, 7>& phases, const std::array<long long, 5>& nested) {
+static void NoteTickCostDetails(const char* tag, uint64_t round, uint64_t tick, const std::array<long long, 7>& phases, const std::array<long long, 8>& nested) {
 	struct Window {
 		uint64_t round = 0, firstTick = 0, ticks = 0;
 		std::array<long long, 7> phases{};
-		std::array<long long, 5> nested{};
+		std::array<long long, 8> nested{};
 		std::array<uint64_t, PerformanceMan::PerfCounterCount> counters{};
 	};
 	static Window window;
@@ -1679,7 +1679,8 @@ static void NoteTickCostDetails(const char* tag, uint64_t round, uint64_t tick, 
 	}
 	line << " total_us=" << total;
 	// The world's own parts, and inside the movable update the wait for the round's inputs and the checksum's randomness feed.
-	static constexpr std::array<const char*, 5> nestedNames{"world_activity", "world_scene", "world_movable", "movable_wait", "movable_checksum_feed"};
+	static constexpr std::array<const char*, 8> nestedNames{"world_activity", "world_scene", "world_movable", "movable_wait", "movable_checksum_feed",
+	                                                        "movable_callbacks", "movable_precontroller", "movable_controllers"};
 	for (size_t i = 0; i < window.nested.size(); ++i) line << ' ' << nestedNames[i] << "_us=" << window.nested[i];
 	// These existing counters describe work within the phases; nested counters are not additive.
 	for (size_t i = 0; i < window.counters.size(); ++i) line << ' ' << counterNames[i] << "_us=" << window.counters[i];
@@ -9560,6 +9561,7 @@ void RunGameLoop() {
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 			if (ScenarioRunner::WorldCatchUpActive()) ScenarioRunner::NoteWorldCatchUpTickCost(simTick, static_cast<uint64_t>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)), static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()));
 
+			const auto controllerPhases = tickCostDetails ? MovableMan::TakeControllerPhaseUs() : std::array<long long, 3>{};
 			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
 				++s_paceSimTicks;
 				const long long elapsedUs = g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
@@ -9571,7 +9573,7 @@ void RunGameLoop() {
 					    heldAfterHashUs - detailBeforeHashUs, heldAfterCollectionUs - heldAfterHashUs,
 					    paceTickStartUs + elapsedUs - heldAfterCollectionUs}, {
 					    detailAfterActivityUs - heldBeforeWorldUs, detailAfterSceneUs - detailAfterActivityUs, heldAfterWorldUs - detailAfterSceneUs,
-					    ScenarioRunner::GetLockstepWaitUs() - paceWaitStartUs, MovableMan::TakeChecksumFeedUs()});
+					    ScenarioRunner::GetLockstepWaitUs() - paceWaitStartUs, MovableMan::TakeChecksumFeedUs(), controllerPhases[0], controllerPhases[1], controllerPhases[2]});
 				}
 				if (heldTickDetails) {
 					static long long detailAtUs = 0;
@@ -9605,7 +9607,7 @@ void RunGameLoop() {
 				    heldAfterHashUs - detailBeforeHashUs, heldAfterCollectionUs - heldAfterHashUs,
 				    paceTickStartUs + elapsedUs - heldAfterCollectionUs}, {
 				    detailAfterActivityUs - heldBeforeWorldUs, detailAfterSceneUs - detailAfterActivityUs, heldAfterWorldUs - detailAfterSceneUs,
-				    0, MovableMan::TakeChecksumFeedUs()});
+				    0, MovableMan::TakeChecksumFeedUs(), controllerPhases[0], controllerPhases[1], controllerPhases[2]});
 			}
 
 			// Capture both peers after the complete tick, including global callbacks and worker joins.

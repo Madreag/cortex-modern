@@ -1605,6 +1605,7 @@ namespace {
 	// and start mutating g_SimRNG on the thread pool — so the snapshot can't be raced. This is why
 	// the randomness feed stays inside Update while the object census moved to the tick's end.
 	long long s_ChecksumFeedUs = 0; //!< The tick-cost census's time in the checksum's randomness feed since it last read it.
+	std::array<long long, 3> s_ControllerPhaseUs{}; //!< The census's time in the script callbacks, the pre-controller update and the controllers.
 
 	void FeedSimChecksumRandomness() {
 		const std::string rngState = g_SimRNG.SerializeStateForHashing();
@@ -1615,6 +1616,10 @@ namespace {
 
 long long MovableMan::TakeChecksumFeedUs() {
 	return std::exchange(s_ChecksumFeedUs, 0);
+}
+
+std::array<long long, 3> MovableMan::TakeControllerPhaseUs() {
+	return std::exchange(s_ControllerPhaseUs, {});
 }
 
 bool MovableMan::RunLockstepPausedTick() {
@@ -7744,16 +7749,26 @@ void MovableMan::Update() {
 	// Finish our Seeing rays from last frame
 	WaitForActorsSeeTask("tick-start");
 
+	static const bool timedPhases = std::getenv("CC_TEST_TICK_COST_DETAILS") != nullptr;
+	const long long callbacksBeganUs = timedPhases ? g_TimerMan.GetAbsoluteTime() : 0;
 	// Prior to controller/AI update, execute lua callbacks
 	g_LuaMan.ExecuteLuaScriptCallbacks();
+	const long long preControllerBeganUs = timedPhases ? g_TimerMan.GetAbsoluteTime() : 0;
 
 	// Updates everything needed prior to AI/user input being processed
 	// Fugly hack to keep backwards compat with scripts that rely on weird frame-delay-ordering behaviours
 	// TODO, cleanup the pre-controller update and post-controller updates to have some consistent logic of what goes where
 	PreControllerUpdate();
+	const long long controllersBeganUs = timedPhases ? g_TimerMan.GetAbsoluteTime() : 0;
 
 	// Updates AI/user input
 	UpdateControllers();
+	if (timedPhases) {
+		const long long controllersEndedUs = g_TimerMan.GetAbsoluteTime();
+		s_ControllerPhaseUs[0] += preControllerBeganUs - callbacksBeganUs;
+		s_ControllerPhaseUs[1] += controllersBeganUs - preControllerBeganUs;
+		s_ControllerPhaseUs[2] += controllersEndedUs - controllersBeganUs;
+	}
 	if (ScenarioRunner::HasControllerReplayError()) {
 		return;
 	}
