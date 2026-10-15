@@ -228,6 +228,8 @@ namespace RTE {
 			uint64_t prepared = frame;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((m_FrameGroupMembers & SeatBit(peer)) != 0)
 				prepared = std::max(prepared, m_Stats.peers[peer].reportedNextFrame);
+			// No voter prepares a frame this machine has not sent its input for, so a return past those reaches every voter before its frame.
+			if (m_LastQueuedTargetFrame != UINT64_MAX) prepared = std::max(prepared, m_LastQueuedTargetFrame + 1);
 			proposal.frame = prepared + lead;
 		}
 		const bool declaredDeparture = !proposal.members.empty() && std::all_of(proposal.members.begin(), proposal.members.end(), [&](uint8_t peer) {
