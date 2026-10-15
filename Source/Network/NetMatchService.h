@@ -1120,8 +1120,8 @@ namespace RTE {
 		void RefuseReturnerLocked(NetPeerId connection, const std::string& reason, const std::string& text);
 		/// Client: points the ticket at a successor and rejoins it.
 		bool RejoinSuccessorRoute(const NetMatchServiceRequest& route, std::string* error);
-		/// Host: seals the successor capsule for a returning peer and sends it after the config, as a lobby round does.
-		void SendSuccessorCapsuleToLocked(uint8_t member);
+		/// Host: seals the successor capsule for a returning peer and sends it after the config, as a lobby round does; false until it went.
+		bool SendSuccessorCapsuleToLocked(uint8_t member);
 		/// Bounds a returning seat's wait on the private capture's writer: one fresh capture, then the seat stays with the AI.
 		void BoundPrivateImageWait(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
@@ -1998,6 +1998,7 @@ namespace RTE {
 		bool m_PrivateImageRecaptured = false; //!< Host: this wait already took its one fresh base.
 		bool m_PrivateImageSeatHeld = false;
 		std::map<NetPeerId, std::string> m_PrivateTransferHeldReasons; //!< Host: why a returner's image has not left, reported once per reason.
+		std::set<NetPeerId> m_SuccessorCapsulesOwed; //!< Host: the returners sent a config whose successor capsule has not gone yet.
 		static constexpr uint64_t c_ReturnerLinkSettleMs = 1000; //!< How long a returner's round trip still carries our image's queue after it lands.
 		std::map<NetPeerId, uint64_t> m_ReturnerLinkSettlesMs; //!< Host: until when each returner's link still carries the image we sent it.
 		const char* m_PrivateBaseHeldReason = nullptr; //!< Host: why the last pass could not take a base, reported once per reason.

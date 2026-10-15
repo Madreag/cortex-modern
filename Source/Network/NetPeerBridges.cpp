@@ -90,6 +90,22 @@ namespace RTE {
 		return proposal.preparedFrame == 1 ? (named & proposal.connectedMask) == named : (named & proposal.connectedMask) == 0;
 	}
 
+	bool NetLockstepCoordinator::CoSignsOwnHold(const NetHostMigrationMessage& proposal) const {
+		// A seat whose own simulation stopped short of the frame the others wait on co-signs its hold there from its live plane: it never
+		// produced its input for that frame and now never will, so the others do not wait on it for the authority its half would give.
+		// A seat cut off hears no proposal, so a true partition is still the tie rule's.
+		if (proposal.preparedFrame != 0 || proposal.boundary < proposal.frame || proposal.frame != m_Stats.nextFrame || proposal.members.size() != 1 ||
+		    proposal.members.front() != m_Config.localPeerId || proposal.bytes.size() != NetHash32{}.size() || (proposal.connectedMask & SeatBit(m_Config.localPeerId)) != 0 ||
+		    m_LocalFrames.contains(proposal.frame) || (m_LastQueuedTargetFrame != UINT64_MAX && m_LastQueuedTargetFrame >= proposal.frame) || PeerBridgeHasInputConflict(proposal))
+			return false;
+		if (proposal.frame != m_Config.startFrame) {
+			if (!m_MigrationHistory.contains(proposal.frame - 1)) return false;
+			const NetHash32 prefix = PeerFramePrefix(proposal.frame - 1);
+			if (!std::equal(prefix.begin(), prefix.end(), proposal.bytes.begin())) return false;
+		}
+		return PeerGroupHasAuthority(proposal.connectedMask | SeatBit(m_Config.localPeerId), proposal.frame);
+	}
+
 	bool NetLockstepCoordinator::VotedOtherPeerReturn(const NetHostMigrationMessage& proposal) const {
 		if (proposal.preparedFrame != 1) return false;
 		uint32_t named = 0;
@@ -199,26 +215,28 @@ namespace RTE {
 				    static_cast<uint64_t>(std::ceil(c_NetSeatCatchUpAllowanceMs / m_Config.simTickMs)));
 				if (displayed > applied->second && displayed - applied->second > allowance) continue;
 				// A seat returns once its catch-up shows headroom: a machine slower than this one would only fall behind and be held again.
-				const double own = OwnCapacityTps();
-				if (own > 0) {
-					const auto rate = PeerAppliedRate(peer, nowMs);
-					if (!rate) continue;
+				if (OwnCapacityTps() > 0) {
+					const auto rates = PeerAppliedRate(peer);
+					if (!rates) continue;
+					const auto [rate, own] = *rates;
+					// A seat that applies keeps reporting within a heartbeat; an older report is a seat that has stopped.
+					const auto reported = m_PeerAppliedAtMs.find(peer);
+					const uint64_t reportAgeMs = reported != m_PeerAppliedAtMs.end() && nowMs > reported->second ? nowMs - reported->second : 0;
+					if (own <= 0 || reportAgeMs > c_NetPeerHeartbeatMs) continue;
 					// It must also close its trail by its first live frame: one still behind there is late at once and held again. A seat that keeps
 					// up still trails by the round trip its tail and its report take and by its last report's age; that lag is not trail to close.
 					uint32_t lagRttMs = m_Stats.peers[peer].pingMs;
 					if (wire && wire->IsPeerPingMeasured(route)) lagRttMs = std::max(lagRttMs, wire->GetPeerPingMs(route));
-					const auto reported = m_PeerAppliedAtMs.find(peer);
-					const uint64_t reportAgeMs = reported != m_PeerAppliedAtMs.end() && nowMs > reported->second ? nowMs - reported->second : 0;
 					const uint64_t lag = static_cast<uint64_t>(std::ceil((lagRttMs + reportAgeMs) / m_Config.simTickMs));
 					const uint64_t behind = displayed > applied->second ? displayed - applied->second : 0;
 					const uint64_t trail = behind > lag ? behind - lag : 0;
 					const uint64_t horizon = m_LastQueuedTargetFrame != UINT64_MAX && m_LastQueuedTargetFrame >= displayed ? m_LastQueuedTargetFrame + 1 - displayed : 0;
 					const double toLive = static_cast<double>(horizon + delay + trail + m_Config.slowPlayerBoundTicks);
-					const bool closes = trail <= m_Config.slowPlayerBoundTicks || (*rate - own) * toLive >= static_cast<double>(trail - m_Config.slowPlayerBoundTicks) * own;
-					if (*rate < own - (own >= 59.5 ? 0.5 : own / 10.0) || !closes) {
+					const bool closes = trail <= m_Config.slowPlayerBoundTicks || (rate - own) * toLive >= static_cast<double>(trail - m_Config.slowPlayerBoundTicks) * own;
+					if (rate < own - (own >= 59.5 ? 0.5 : own / 10.0) || !closes) {
 						if (m_SlowMachineHolds.insert(peer).second)
-							DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " stays held: it applied " << *rate
-							                 << " ticks/s against this machine's " << own << " with " << trail << " ticks to close" << std::endl;
+							DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " stays held: it applied " << rate
+							                 << " ticks/s against this machine's " << own << " displayed with " << trail << " ticks to close" << std::endl;
 						continue;
 					}
 				}
@@ -227,15 +245,23 @@ namespace RTE {
 			if (proposal.members.empty()) return false;
 			proposal.preparedFrame = 1;
 			proposal.boundary = m_LastCompletedSimulationTick.value_or(frame - 1);
+			// The boundary is history every voter has applied, so each can check it as the proposal arrives: a voter still finishing its
+			// own return's catch-up would otherwise answer only once it replays this machine's display, and the voters would wait on it.
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+				if (peer == m_Config.localPeerId || (proposal.connectedMask & SeatBit(peer)) == 0 ||
+				    std::find(proposal.members.begin(), proposal.members.end(), peer) != proposal.members.end()) continue;
+				if (const auto applied = m_PeerAppliedThrough.find(peer); applied != m_PeerAppliedThrough.end() && applied->second >= m_Config.startFrame)
+					proposal.boundary = std::min(proposal.boundary, applied->second);
+			}
 			uint64_t lead = m_Config.slowPlayerBoundTicks;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 				if (peer == m_Config.localPeerId || (m_FrameGroupMembers & SeatBit(peer)) == 0) continue;
-				// Only surviving voters size the return's agreement lead.
+				// Only surviving voters size the return's agreement lead: their round trip, a vote sent again once, and the bound.
 				uint32_t rtt = 0;
 				const auto [wire, route] = PeerFrameRoute(peer);
 				if (wire && wire->IsPeerPingMeasured(route)) rtt = wire->GetPeerPingMs(route);
 				else if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end()) rtt = path->second.P95Ms();
-				lead = std::max<uint64_t>(lead, static_cast<uint64_t>(std::ceil(rtt / m_Config.simTickMs)) + m_Config.slowPlayerBoundTicks);
+				lead = std::max<uint64_t>(lead, static_cast<uint64_t>(std::ceil((rtt + c_NetPeerVoteResendMs) / m_Config.simTickMs)) + m_Config.slowPlayerBoundTicks);
 			}
 			uint64_t prepared = frame;
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((m_FrameGroupMembers & SeatBit(peer)) != 0)
@@ -398,8 +424,7 @@ namespace RTE {
 		const auto own = found->second.find(m_Config.localPeerId);
 		if (own == found->second.end()) return;
 		const auto& proposal = own->second;
-		uint32_t required = proposal.connectedMask;
-		if (proposal.preparedFrame == 1) for (uint8_t peer: proposal.members) required &= ~SeatBit(peer);
+		const uint32_t required = PeerDecisionRequiredVoters(proposal);
 		uint32_t voters = 0;
 		std::vector<std::vector<uint8_t>> signedVotes;
 		for (const auto& [peer, vote]: found->second) {
@@ -422,6 +447,16 @@ namespace RTE {
 		SendPeerFrameMessage(std::move(certificate));
 	}
 
+	uint32_t NetLockstepCoordinator::PeerDecisionRequiredVoters(const NetHostMigrationMessage& agreed) const {
+		uint32_t required = agreed.connectedMask;
+		if (agreed.preparedFrame == 1) for (uint8_t peer: agreed.members) required &= ~SeatBit(peer);
+		// A seat the round holds at the decision's frame plays none of it: whether it voted decides nothing, so a voter that knows of the
+		// hold certifies without it, and a seat held after voting cannot leave a decision certified on one peer and passed on another.
+		if (agreed.preparedFrame != 3) for (const auto& [peer, bridge]: m_PeerBridges)
+			if (bridge.committedHold && agreed.frame >= bridge.fromFrame && (!bridge.returnFrame || agreed.frame < *bridge.returnFrame)) required &= ~SeatBit(peer);
+		return required;
+	}
+
 	bool NetLockstepCoordinator::DecodePeerBridgeCertificate(const NetHostMigrationMessage& certificate, NetHostMigrationMessage& agreed, uint32_t& voters) const {
 		if (certificate.bytes.empty() || certificate.frame < m_Config.startFrame) return false;
 		const uint8_t count = certificate.bytes.front();
@@ -441,8 +476,7 @@ namespace RTE {
 			else if (!SameBridge(agreed, vote)) return false;
 			voters |= SeatBit(vote.senderPeerId); offset += size;
 		}
-		uint32_t required = agreed.connectedMask;
-		if (agreed.preparedFrame == 1) for (uint8_t peer: agreed.members) required &= ~SeatBit(peer);
+		const uint32_t required = PeerDecisionRequiredVoters(agreed);
 		return offset == certificate.bytes.size() && voters == certificate.voterMask && (voters & required) == required &&
 		    agreed.connectedMask == certificate.connectedMask && agreed.members == certificate.members && agreed.preparedFrame == certificate.preparedFrame &&
 		    agreed.boundary == certificate.boundary && agreed.completeFrom == certificate.completeFrom && agreed.successorPeerId == certificate.successorPeerId;
@@ -469,19 +503,21 @@ namespace RTE {
 		if (!DecodePeerBridgeCertificate(certificate, agreed, voters)) { refused("certificate"); return; }
 		// A tie the referee decides is asked before the decision is set aside: its answer may already be there.
 		if (agreed.preparedFrame != 3 && !PeerGroupHasAuthority(voters, certificate.frame)) CheckPeerFrameTie(certificate.frame, voters, nowMs);
+		const PeerDecisionKey decision{certificate.frame, DecisionKind(certificate)};
 		if (agreed.preparedFrame == 3 ? !PeerAdminCertificateValid(agreed, voters) : !PeerGroupHasAuthority(voters, certificate.frame)) {
+			m_AuthorityWaitSinceMs.try_emplace(decision, nowMs);
 			refused("certificate");
 			keep(); return;
 		}
+		if (const auto since = m_AuthorityWaitSinceMs.find(decision); since != m_AuthorityWaitSinceMs.end()) {
+			m_Stats.longestAuthorityWaitMs = std::max(m_Stats.longestAuthorityWaitMs, nowMs >= since->second ? nowMs - since->second : 0);
+			m_AuthorityWaitSinceMs.erase(since);
+		}
 		const bool heldAhead = agreed.preparedFrame == 0 && agreed.boundary < certificate.frame;
 		if (agreed.preparedFrame == 0 && certificate.frame > m_Stats.nextFrame) { refused("ahead"); keep(); if (!heldAhead) RequestPeerCommittedTail(nowMs); return; }
-		// A hold agreed ahead that this peer has already played past would rewrite history. Every voter fenced that frame and cannot pass
-		// it without the hold; the held seat passes it only on its own input there, which no voter took, so it reads the round's tail.
-		if (heldAhead && certificate.frame < m_Stats.nextFrame) {
-			refused("behind");
-			if (std::find(agreed.members.begin(), agreed.members.end(), m_Config.localPeerId) != agreed.members.end()) RequestPeerCommittedTail(nowMs);
-			return;
-		}
+		// No peer is past the frame of a hold agreed ahead when it is certified: every voter fenced that frame, and the held seat plays it
+		// only on its own input there, which needs a receipt from a voter - and a voter that took that input could not vote the hold.
+		if (heldAhead && certificate.frame < m_Stats.nextFrame) { refused("behind"); return; }
 		if (agreed.preparedFrame != 0 && certificate.frame < m_Stats.nextFrame) {
 			// Install a private return before its displayed tick, even if preparation has passed it.
 			const auto own = m_PeerBridges.find(m_Config.localPeerId);
@@ -507,7 +543,11 @@ namespace RTE {
 		if (agreed.preparedFrame == 2) {
 			if (agreed.members.size() != 1 || agreed.completeFrom == 0 || agreed.completeFrom > NetLockstepCodec::c_MaxPeerInputDelayFrames) return;
 			const uint8_t peer = agreed.members.front();
+			// Every delay the whole group certifies names its split afresh from its frame.
+			m_PeerSplitRenewals[agreed.frame] = agreed.connectedMask;
+			const bool restated = agreed.completeFrom == InputDelayAt(peer, agreed.frame);
 			m_DelayChanges[peer][agreed.frame] = static_cast<uint16_t>(agreed.completeFrom);
+			if (restated) return;
 			m_LastDelayResizeMs[peer] = nowMs; ++m_Stats.delayChangesCommitted;
 			++m_Stats.peers[peer].delayResizes;
 			if (peer == m_Config.localPeerId) PadAheadOfDelayRise();
@@ -547,6 +587,10 @@ namespace RTE {
 				if (delay != InputDelayAt(peer, agreed.frame)) m_DelayChanges[peer][agreed.frame] = delay;
 				m_PeerEffectiveStart[peer] = agreed.frame + delay;
 				m_PeerAcceptedThrough[peer] = neutral + 1;
+				// The seat's pace is judged afresh from its return: what it cost and fed before its hold says nothing of it now.
+				auto& stats = m_Stats.peers[peer];
+				stats.reclaimAdmittedMs = nowMs;
+				stats.waitCosts.clear(); stats.arrivals.clear();
 				NoteSeatTransition(peer, agreed.frame, SeatTransition::Back);
 			} else {
 				const auto prior = m_PeerBridges.find(peer);
@@ -584,13 +628,20 @@ namespace RTE {
 			if (const auto again = m_PendingPeerDecisions.find(key); again != m_PendingPeerDecisions.end()) {
 				again->second.second = kept.second;
 				if (nowMs >= kept.second + c_NetSeatDisconnectSilenceMs) {
+					++m_Stats.decisionsDropped;
 					DiagnosticLine() << "[net-peer-decision-dropped] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << key.first
 					    << " kind=" << static_cast<int>(key.second) << " kept_ms=" << nowMs - kept.second << std::endl;
 					m_PendingPeerDecisions.erase(again);
 				}
 			}
 		}
-		for (const auto& [key, kept]: m_PendingPeerDecisions) if (key.first <= m_Stats.nextFrame) return true;
+		// A decision this peer cannot yet show the authority of stops its frame; the frame's committed record, asked of the seats that have
+		// played it, settles that frame as they played it.
+		for (const auto& [key, kept]: m_PendingPeerDecisions) if (key.first <= m_Stats.nextFrame) {
+			if (m_PeerCommittedTail.contains(m_Stats.nextFrame)) return false;
+			RequestPeerCommittedTail(nowMs);
+			return true;
+		}
 		// A member that voted for a return, a delay or an admission at the next frame takes it before playing that frame, and so does
 		// every member that knows of a return proposed there for a seat still held: the others may certify it without this one's vote.
 		std::erase_if(m_PeerVotedAtMs, [this](const auto& voted) { return voted.first.first < m_Stats.nextFrame || m_PeerBridgeCertificates.contains(voted.first); });
@@ -605,8 +656,11 @@ namespace RTE {
 			// It is certified only with every seat that plays now: a seat held or silent at this frame, or one that backed another return
 			// of these seats, never completes it, so the frame does not wait on it and a silent seat is held within the bound instead.
 			const auto& basis = votes->second.contains(m_Config.localPeerId) ? votes->second.at(m_Config.localPeerId) : votes->second.begin()->second;
-			uint32_t required = basis.connectedMask, returning = 0;
-			if (basis.preparedFrame == 1) for (uint8_t peer: basis.members) { required &= ~SeatBit(peer); returning |= SeatBit(peer); }
+			const uint32_t required = PeerDecisionRequiredVoters(basis);
+			uint32_t returning = 0;
+			if (basis.preparedFrame == 1) for (uint8_t peer: basis.members) returning |= SeatBit(peer);
+			// One that needs this peer's vote, which it no longer gives at the frame it has reached, is never certified.
+			if (basis.preparedFrame != 3 && (required & SeatBit(m_Config.localPeerId)) != 0 && !votes->second.contains(m_Config.localPeerId)) continue;
 			const auto remote = m_RemoteFrames.find(m_Stats.nextFrame);
 			bool completes = true;
 			for (uint8_t peer = 1; completes && peer <= m_Config.peerCount; ++peer) {
@@ -625,7 +679,18 @@ namespace RTE {
 				completes = !heldHere && !silent && !backedAnother;
 			}
 			if (!completes) continue;
+			// The frame's committed record settles what this peer still waits on: it carries the decision if any peer certified it.
+			if (m_PeerCommittedTail.contains(m_Stats.nextFrame)) return false;
 			const auto seen = m_PeerVotedAtMs.try_emplace(votes->first, nowMs).first;
+			// Once the votes have had their round trip and the bound, the record is asked of the seats that have played the frame.
+			uint64_t roundTripMs = 0;
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+				if (peer == m_Config.localPeerId || (required & SeatBit(peer)) == 0) continue;
+				const auto [wire, route] = PeerFrameRoute(peer);
+				if (wire && wire->IsPeerPingMeasured(route)) roundTripMs = std::max<uint64_t>(roundTripMs, wire->GetPeerPingMs(route));
+			}
+			const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
+			if (nowMs >= seen->second + roundTripMs + boundMs) RequestPeerCommittedTail(nowMs);
 			if (nowMs < seen->second + c_NetSeatCatchUpAllowanceMs) return true;
 		}
 		return false;

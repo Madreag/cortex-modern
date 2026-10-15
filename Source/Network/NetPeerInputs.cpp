@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <deque>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -241,6 +242,7 @@ namespace RTE {
 			    (message.voterMask & SeatBit(message.senderPeerId)) != 0 && (message.voterMask >> m_Config.peerCount) == 0) {
 				heard();
 				m_PeerFrameWitnesses[message.frame].try_emplace(message.senderPeerId, message);
+				if (m_PeerTailVotes.contains(message.frame)) ConfirmPeerTail(message.frame, nowMs);
 				return true;
 			}
 			if (message.successorPeerId > 0 && message.successorPeerId <= m_Config.peerCount && message.bytes.empty() &&
@@ -285,7 +287,7 @@ namespace RTE {
 				m_PeerBridgeVotes[{message.frame, DecisionKind(message)}].try_emplace(message.senderPeerId, message);
 				return true;
 			}
-			if (!ValidatePeerBridge(message)) return true;
+			if (!ValidatePeerBridge(message) && !CoSignsOwnHold(message)) return true;
 			heard();
 			auto& votes = m_PeerBridgeVotes[{message.frame, DecisionKind(message)}];
 			const auto own = votes.find(m_Config.localPeerId);
@@ -471,10 +473,7 @@ namespace RTE {
 			if (at != body.size()) return true;
 			heard();
 			if (!PeerGroupHasAuthority(message.voterMask)) return true;
-			auto& votes = m_PeerTailVotes[message.frame];
-			votes.try_emplace(message.senderPeerId, PeerTailVote{message.voterMask, prefix, prepared, record});
 			uint32_t agreeing = witnessed;
-			for (const auto& [peer, vote]: votes) if (vote.members == message.voterMask && vote.prefix == prefix && vote.prepared == prepared && vote.bytes == record) agreeing |= SeatBit(peer);
 			if ((message.voterMask & SeatBit(m_Config.localPeerId)) != 0) {
 				const auto own = m_PeerSourceInputs.find(message.frame);
 				if (own != m_PeerSourceInputs.end() && own->second.contains(m_Config.localPeerId)) {
@@ -492,31 +491,12 @@ namespace RTE {
 						agreeing |= SeatBit(m_Config.localPeerId);
 				}
 			}
-			// An authenticated donor cannot commit a minority's tail by claiming somebody else's votes.
-			if (!PeerFrameGroupConfirms(agreeing, message.voterMask, message.frame)) {
-				if (message.frame == m_Stats.nextFrame && nowMs >= m_PeerTailLogAtMs) {
-					m_PeerTailLogAtMs = nowMs + 1000;
-					DiagnosticLine() << "[net-peer-tail-wait] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << message.frame
-					    << " donors=" << votes.size() << " matching_voters=" << agreeing << " members=" << message.voterMask << std::endl;
-				}
-				return true;
-			}
-			m_PeerCommittedTail.try_emplace(message.frame, std::move(record));
-			m_PeerPreparedPrefixes.try_emplace(message.frame, prepared);
-			m_PeerTailPrefixes.try_emplace(message.frame, prefix); m_PeerTailDecisions.try_emplace(message.frame, std::move(proofs));
-			m_PeerTailThrough = std::max(m_PeerTailThrough.value_or(0), message.appliedFrame);
-			m_FrameGroupMembers = message.voterMask;
-			if ((message.voterMask & SeatBit(m_Config.localPeerId)) == 0 && !m_PeerBridges.contains(m_Config.localPeerId)) {
-				PeerBridge own;
-				own.fromFrame = m_Stats.nextFrame;
-				own.aiFrame = own.fromFrame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs));
-				own.members = message.voterMask;
-				// The matching majority's committed history already excludes this seat.
-				own.committedHold = true;
-				m_PeerBridges.emplace(m_Config.localPeerId, std::move(own));
-				++m_Stats.peers[m_Config.localPeerId].holds;
-				m_SeatBridgeSinceMs[m_Config.localPeerId] = nowMs;
-			}
+			// The frame waits with what confirms it until its group does; a repeat from the same donor adds the witnesses it now carries.
+			auto& votes = m_PeerTailVotes[message.frame];
+			const auto [vote, fresh] = votes.try_emplace(message.senderPeerId, PeerTailVote{message.voterMask, prefix, prepared, digest, record, std::move(proofs), agreeing, message.appliedFrame});
+			if (!fresh && vote->second.members == message.voterMask && vote->second.prefix == prefix && vote->second.prepared == prepared && vote->second.bytes == record)
+				vote->second.confirmed |= agreeing;
+			ConfirmPeerTail(message.frame, nowMs);
 			return true;
 		}
 		if (!inputMessage || body.empty()) return true;
@@ -534,31 +514,48 @@ namespace RTE {
 		const uint8_t count = body.front();
 		if (count == 0 || count > NetLockstepCodec::c_PeerInputWindowTicks) return true;
 		size_t offset = 1;
-		std::vector<NetLockstepFrame> inputs;
+		std::vector<const NetLockstepFrame*> inputs;
+		std::deque<NetLockstepFrame> unshared;
+		auto& decoded = m_PeerInputDecodes[owner];
+		// The window carries each input again in every message until it leaves it, so an entry this peer decoded before is reused.
+		const auto prune = [&] {
+			if (decoded.size() > 2U * NetLockstepCodec::c_PeerInputWindowTicks)
+				std::erase_if(decoded, [&](const auto& entry) { return entry.second.input.targetFrame + NetLockstepCodec::c_PeerInputWindowTicks < message.frame; });
+		};
 		for (uint8_t n = 0; n < count; ++n) {
 			uint32_t size = 0;
 			if (!TakeSize(body, offset, size) || offset > body.size() || size > body.size() - offset) return true;
-			NetLockstepFrame input;
-			NetLockstepError readError;
-			if (!NetLockstepCodec::DecodeRecoveryInput({body.begin() + offset, body.begin() + offset + size}, input, &readError)) {
-				DiagnosticLine() << "[net-peer-input-read] local=" << static_cast<int>(m_Config.localPeerId) << " owner=" << static_cast<int>(owner)
-				    << " through=" << message.frame << " bytes=" << size << " reason=" << readError.message << std::endl;
-				return true;
+			const auto first = body.begin() + offset, last = first + size;
+			uint64_t hash = 14695981039346656037ULL;
+			for (auto byte = first; byte != last; ++byte) hash = (hash ^ *byte) * 1099511628211ULL;
+			auto known = decoded.find(hash);
+			if (known == decoded.end() || !std::equal(first, last, known->second.bytes.begin(), known->second.bytes.end())) {
+				NetLockstepFrame input;
+				NetLockstepError readError;
+				if (!NetLockstepCodec::DecodeRecoveryInput({first, last}, input, &readError)) {
+					DiagnosticLine() << "[net-peer-input-read] local=" << static_cast<int>(m_Config.localPeerId) << " owner=" << static_cast<int>(owner)
+					    << " through=" << message.frame << " bytes=" << size << " reason=" << readError.message << std::endl;
+					return true;
+				}
+				if (known == decoded.end()) known = decoded.emplace(hash, PeerInputDecode{{first, last}, std::move(input)}).first;
+				else { unshared.push_back(std::move(input)); inputs.push_back(&unshared.back()); offset += size; continue; }
 			}
-			if (input.senderPeerId != owner || input.roundId != m_RoundId || input.targetFrame > message.frame || (n > 0 && input.targetFrame <= inputs.back().targetFrame)) {
+			const NetLockstepFrame& input = known->second.input;
+			if (input.senderPeerId != owner || input.roundId != m_RoundId || input.targetFrame > message.frame || (n > 0 && input.targetFrame <= inputs.back()->targetFrame)) {
 				DiagnosticLine() << "[net-peer-input-shape] local=" << static_cast<int>(m_Config.localPeerId) << " owner=" << static_cast<int>(owner)
 				    << " through=" << message.frame << " input=" << input.targetFrame << " sender=" << static_cast<int>(input.senderPeerId)
 				    << " round_matches=" << (input.roundId == m_RoundId) << " index=" << static_cast<int>(n) << std::endl;
 				return true;
 			}
-			inputs.push_back(std::move(input)); offset += size;
+			inputs.push_back(&input); offset += size;
 		}
-		if (offset != body.size() || inputs.back().targetFrame != message.frame) return true;
+		if (offset != body.size() || inputs.back()->targetFrame != message.frame) return true;
 		heard();
-		if (owner == m_Config.localPeerId) return true;
+		if (owner == m_Config.localPeerId) { prune(); return true; }
 		if (message.frame < m_Stats.nextFrame) {
 			if (const auto through = m_PeerAcceptedThrough.find(owner); through != m_PeerAcceptedThrough.end() && through->second > message.frame)
-				NotePeerInputAccepted(inputs.back());
+				NotePeerInputAccepted(*inputs.back());
+			prune();
 			return true;
 		}
 		if (m_PeerPaceStartMs && m_Config.simTickMs > 0) {
@@ -580,7 +577,8 @@ namespace RTE {
 				SendPeerFrameMessage(std::move(forwarded), wireBody.size() <= 4096 ? NetTransportLane::InputUnreliable : NetTransportLane::ControlReliable);
 			}
 		}
-		for (const auto& input: inputs) {
+		for (const NetLockstepFrame* entry: inputs) {
+			const NetLockstepFrame& input = *entry;
 			if (input.targetFrame < m_Stats.nextFrame || input.targetFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew) continue;
 			if ((m_PeerRejectedInputs[input.targetFrame] & SeatBit(input.senderPeerId)) != 0) {
 				if (!m_PeerBridgeCertificates.contains({input.targetFrame, 0})) {
@@ -596,6 +594,7 @@ namespace RTE {
 				m_PeerSourceInputs[input.targetFrame].try_emplace(input.senderPeerId, input);
 			else AcceptRemoteTick(input, nowMs, false);
 		}
+		prune();
 		return true;
 	}
 
