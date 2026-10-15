@@ -622,12 +622,14 @@ def running_stills(spans, rows, minimum_s=1.0, capped_stop_ms=None, allowed=None
 
 
 def named_still_windows(scenario, run_name, peer, video_dir):
-    """The scenario's still states for this peer as recorder-clock windows, each from its first mark to its closing mark."""
-    path = Path(video_dir) / "events.jsonl" if video_dir else None
-    if not path or not path.is_file():
+    """The scenario's still states for this peer as recorder-clock windows: from a first mark to its closing mark, or from the
+    first picture of a tick window to its last."""
+    specs = [spec for spec in scenario.get("allowed_stills", []) if spec.get("peer") == peer and spec.get("run", run_name) == run_name]
+    if not specs or not video_dir:
         return []
+    path = Path(video_dir) / "events.jsonl"
     marks = {}
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if path.is_file() else []:
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
@@ -635,11 +637,14 @@ def named_still_windows(scenario, run_name, peer, video_dir):
         message = event.get("message", "")
         if message.startswith("video_mark ") and not message.endswith(" PASS"):
             marks.setdefault(message.split(" ", 2)[1], event.get("wall_ms"))
+    rows = [row for row in read_index(video_dir) if row.get("saved", True) and "wall_ms" in row and "sim_tick" in row] if any("first_tick" in spec for spec in specs) else []
     windows = []
-    for spec in scenario.get("allowed_stills", []):
-        if spec.get("peer") != peer or spec.get("run", run_name) != run_name:
-            continue
-        begin, end = marks.get(spec["from_mark"]), marks.get(spec["to_mark"])
+    for spec in specs:
+        if "first_tick" in spec:
+            inside = [row["wall_ms"] for row in rows if spec["first_tick"] <= row["sim_tick"] <= spec["last_tick"]]
+            begin, end = (min(inside), max(inside)) if inside else (None, None)
+        else:
+            begin, end = marks.get(spec["from_mark"]), marks.get(spec["to_mark"])
         if begin is not None and end is not None and begin < end:
             windows.append((begin, end, spec["reason"]))
     return windows
@@ -1235,10 +1240,13 @@ def capture_evidence_items(scenario, capture, peer):
     import frame_pace
     log = Path(peer['root']) / 'stdout.log'
     text = log.read_text(encoding='utf-8', errors='replace') if log.is_file() else ''
-    drawn = frame_pace.check(text, 'lockstep')
+    # A scene's own lever may freeze a peer's screen on purpose (its stalled host); those windows are named, with the reason, not judged.
+    excluded = [spec for spec in scenario.get('drawn_frames_exclude', []) if spec.get('peer') == name]
+    exclude = [(spec['first_tick'], spec['last_tick']) for spec in excluded]
+    drawn = frame_pace.check(text, 'lockstep', exclude=exclude)
     if drawn['status'] == 'NONE':
-        drawn = frame_pace.check(text, 'single')
-    output.append(item(f'drawn-frames-{name}', frame_pace.RULE, '' if drawn['passed'] else drawn['reason'], drawn_frames=drawn))
+        drawn = frame_pace.check(text, 'single', exclude=exclude)
+    output.append(item(f'drawn-frames-{name}', frame_pace.RULE, '' if drawn['passed'] else drawn['reason'], drawn_frames=drawn, excluded_windows=excluded))
     allowed, stills, error = [], None, ''
     ffmpeg = find_ffmpeg()
     try:

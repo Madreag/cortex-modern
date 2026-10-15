@@ -169,12 +169,6 @@ int AEmitter::Create(const AEmitter& reference) {
 	m_EmitterDamageMultiplier = reference.m_EmitterDamageMultiplier;
 	m_BurstSpacing = reference.m_BurstSpacing;
 	m_BurstTriggered = reference.m_BurstTriggered;
-	m_BurstTimer = reference.m_BurstTimer;
-	m_LastEmitTmr = reference.m_LastEmitTmr;
-	if (!IsFaithfulClone() && reference.IsOriginalPreset() && ScenarioRunner::IsLockstepControllerSyncActive()) {
-		// The preset has waited since loading. A new match emitter must not emit that old backlog.
-		m_LastEmitTmr.Reset();
-	}
 	m_PersistedBurstTimerAnchor = reference.m_PersistedBurstTimerAnchor;
 	m_PersistedLastEmitTimerAnchor = reference.m_PersistedLastEmitTimerAnchor;
 	m_PersistedEmissionAccumulators = reference.m_PersistedEmissionAccumulators;
@@ -191,6 +185,8 @@ int AEmitter::Create(const AEmitter& reference) {
 
 	if (IsFaithfulClone()) {
 		m_WasEmitting = reference.m_WasEmitting;
+		m_BurstTimer = reference.m_BurstTimer;
+		m_LastEmitTmr = reference.m_LastEmitTmr;
 		m_AvgBurstImpulse = reference.m_AvgBurstImpulse;
 		m_AvgImpulse = reference.m_AvgImpulse;
 	}
@@ -735,11 +731,15 @@ void AEmitter::Update() {
 				// We don't consider extra particles for our emission count, so add prior to multiply
 				emissionCountTotal += emissionCount;
 				emissionCount *= emission->GetParticleCount();
-				static const bool recordCounts = std::getenv("CC_TEST_EMISSION_COUNTS") != nullptr;
-				if (recordCounts && ScenarioRunner::IsLockstepControllerSyncActive() && emissionCount > 4096) {
+				static const int recordAbove = [] {
+					const char* value = std::getenv("CC_TEST_EMISSION_COUNTS");
+					return value ? (std::atoi(value) > 1 ? std::atoi(value) : 4096) : 0;
+				}();
+				if (recordAbove > 0 && emissionCount > recordAbove) {
+					const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
 					std::ostringstream line;
 					line.imbue(std::locale::classic());
-					line << "[emission-count] tick=" << ScenarioRunner::GetLockstepAppliedFrame() << " uid=" << GetUniqueID()
+					line << "[emission-count] tick=" << (lockstep ? ScenarioRunner::GetLockstepAppliedFrame() : static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) << " uid=" << GetUniqueID()
 					     << " emitter=" << GetModuleAndPresetName() << " root=" << pRootParent->GetModuleAndPresetName()
 					     << " root_uid=" << pRootParent->GetUniqueID() << " count=" << emissionCount
 					     << " was_emitting=" << m_WasEmitting << " burst=" << m_BurstTriggered << " burst_size=" << emission->GetBurstSize()

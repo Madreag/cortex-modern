@@ -271,6 +271,11 @@ namespace RTE {
 #endif
 		// A killed engine never writes its last manifest; this one already names the capture rate its index is judged at.
 		WriteManifest();
+		// The encoder process starts with the recording, before the game loads, so the first frames never wait for it to come up.
+		if (!m_EncoderPath.empty()) {
+			m_EncoderTried = false;
+			LaunchEncoder();
+		}
 		// An encoder takes the frames in order on one pipe, so it has one writer; PNGs encode on a pool.
 		const std::size_t writers = m_EncoderPath.empty() ? WriterCount() : 1;
 #if defined(_WIN32)
@@ -373,6 +378,18 @@ namespace RTE {
 		if (!m_ReadbackContext) return false;
 		m_StagedReadback = m_ReadbackContext->Submit(texture, width, height, error);
 		return m_StagedReadback != nullptr;
+	}
+
+	void FrameRecorder::WarmTextureReadback(unsigned int texture, int width, int height) {
+		if (!m_Enabled || !m_FencedReadback || width <= 0 || height <= 0) return;
+		HarnessCost::SimulationSpan warmCost;
+		std::string error;
+		if (auto queued = FrameReadbackContext::Submit(texture, width, height, error, GL_BGRA)) {
+			std::vector<unsigned char> rgb(static_cast<std::size_t>(width) * height * 3);
+			ReadQueuedTextureRGB(*queued, rgb, error, true);
+		}
+		HarnessCost::Charge(HarnessCost::Recorder, warmCost.Stop());
+		if (!error.empty()) System::PrintDiagnosticLine("[record-video] the warm-up copy failed: " + error);
 	}
 
 	std::string FrameRecorder::ReadbackError() const {
@@ -515,6 +532,16 @@ namespace RTE {
 		return line.dump();
 	}
 
+	void FrameRecorder::LaunchEncoder() {
+		const std::string preset = m_EncoderCodec == "h264_videotoolbox" ? "-q:v 100"
+		                        : m_EncoderCodec.find("nvenc") != std::string::npos ? "-preset p1 -cq 23" : "-preset ultrafast -crf 20";
+		const std::string command = "\"" + m_EncoderPath + "\" -hide_banner -loglevel warning -y -f matroska -i - -vf \"fps=" +
+		    std::to_string(m_Fps) + ":round=near,pad=ceil(iw/2)*2:ceil(ih/2)*2\" -c:v " + m_EncoderCodec + " " + preset + " -pix_fmt yuv420p \"" +
+		    (std::filesystem::path(m_Directory) / "capture.mp4").string() + "\"";
+		auto encoder = std::make_unique<EncoderPipe>();
+		if (encoder->Open(command, (std::filesystem::path(m_Directory) / "encoder.log").string(), m_EncoderError)) m_Encoder = std::move(encoder);
+	}
+
 	std::string FrameRecorder::EncodeFrame(const QueuedFrame& frame) {
 		if (!m_EncoderTried) {
 			m_EncoderTried = true;
@@ -522,16 +549,11 @@ namespace RTE {
 			m_EncodedHeight = frame.meta.height;
 			m_FirstSlot = frame.slot;
 			m_NextSlot = frame.slot;
-			const std::string preset = m_EncoderCodec == "h264_videotoolbox" ? "-q:v 100"
-			                        : m_EncoderCodec.find("nvenc") != std::string::npos ? "-preset p1 -cq 23" : "-preset ultrafast -crf 20";
-			const std::string command = "\"" + m_EncoderPath + "\" -hide_banner -loglevel warning -y -f matroska -i - -vf \"fps=" +
-			    std::to_string(m_Fps) + ":round=near,pad=ceil(iw/2)*2:ceil(ih/2)*2\" -c:v " + m_EncoderCodec + " " + preset + " -pix_fmt yuv420p \"" +
-			    (std::filesystem::path(m_Directory) / "capture.mp4").string() + "\"";
-			auto encoder = std::make_unique<EncoderPipe>();
-			if (encoder->Open(command, (std::filesystem::path(m_Directory) / "encoder.log").string(), m_EncoderError)) {
-				const auto header = FrameCaptureStream::Header(m_EncodedWidth, m_EncodedHeight, m_Fps);
-				if (!header.empty() && encoder->Write(header.data(), header.size())) m_Encoder = std::move(encoder);
-				else m_EncoderError = "the encoder refused the stream header";
+			// The encoder came up while the game loaded; the first frame names the stream's size.
+			const auto header = FrameCaptureStream::Header(m_EncodedWidth, m_EncodedHeight, m_Fps);
+			if (m_Encoder && (header.empty() || !m_Encoder->Write(header.data(), header.size()))) {
+				m_Encoder.reset();
+				m_EncoderError = "the encoder refused the stream header";
 			}
 			RecordEvent("encoder " + m_EncoderCodec + (m_Encoder ? " started" : " refused: " + m_EncoderError));
 		}

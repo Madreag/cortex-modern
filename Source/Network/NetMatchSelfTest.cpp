@@ -65,6 +65,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -337,6 +338,30 @@ namespace RTE {
 			if (body.GetRadius() != radius) { *error = "wound removal changed the published numeric radius"; return false; }
 			if (body.GetRadiusAffectingAttachable() != nullptr) {
 				*error = "a deleted wound still owns the cached radius";
+				return false;
+			}
+			return true;
+		}
+
+		// A new emitter starts its emission and burst clocks at its own birth, as upstream's does: a clone of a preset that loaded
+		// ten minutes ago must not emit those ten minutes at its first update. A save's faithful clone keeps the clocks it copies.
+		bool TestAClonedEmitterStartsItsOwnClock(std::string* error) {
+			const long long updates = g_TimerMan.GetSimUpdateCount(), ticks = g_TimerMan.GetSimTimeTicks();
+			AEmitter preset;
+			for (int tick = 0; tick < 60 * 600; ++tick) g_TimerMan.AdvanceSimTickForPreview();
+			std::unique_ptr<AEmitter> clone(dynamic_cast<AEmitter*>(preset.Clone()));
+			const AEmitter made;
+			const double waited = preset.GetLastEmitTimerElapsedSimMS(), emitClock = clone->GetLastEmitTimerElapsedSimMS(), burstClock = clone->GetBurstTimerElapsedSimMS();
+			const double madeEmit = made.GetLastEmitTimerElapsedSimMS(), madeBurst = made.GetBurstTimerElapsedSimMS();
+			g_TimerMan.RewindSimTo(updates, ticks);
+			if (waited < 590000.0) {
+				*error = "the sim clock did not advance for the emitter clock check (" + std::to_string(waited) + " ms)";
+				return false;
+			}
+			if (std::abs(emitClock - madeEmit) > 100.0 || std::abs(burstClock - madeBurst) > 100.0) {
+				*error = "an emitter cloned " + std::to_string(static_cast<int>(waited / 1000.0)) + " s after its preset starts with " + std::to_string(static_cast<int>(emitClock)) +
+				         " ms on its emission clock and " + std::to_string(static_cast<int>(burstClock)) + " ms on its burst clock, a new one with " +
+				         std::to_string(static_cast<int>(madeEmit)) + " and " + std::to_string(static_cast<int>(madeBurst));
 				return false;
 			}
 			return true;
@@ -19706,6 +19731,7 @@ namespace RTE {
 		sessionRow([&] { return TestAnEndedWorldLandsInsteadOfRematching(&error); }, "TestAnEndedWorldLandsInsteadOfRematching()");
 		sessionRow([&] { return TestServiceWorldJoinAdoptsConfig(&error); }, "TestServiceWorldJoinAdoptsConfig()");
 		sessionRow([&] { return TestRemovedWoundReleasesItsRadiusCache(&error); }, "TestRemovedWoundReleasesItsRadiusCache()");
+		sessionRow([&] { return TestAClonedEmitterStartsItsOwnClock(&error); }, "TestAClonedEmitterStartsItsOwnClock()");
 		sessionRow([&] { return TestLobbyStartReturnsBeforeHashingModules(&error); }, "TestLobbyStartReturnsBeforeHashingModules()");
 		sessionRow([&] { return TestRestartManifestAndAdmission(&error); }, "TestRestartManifestAndAdmission()");
 		sessionRow([&] { return TestWorldCheckpointOrderAndRoundPin(&error); }, "TestWorldCheckpointOrderAndRoundPin()");
