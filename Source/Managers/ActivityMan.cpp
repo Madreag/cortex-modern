@@ -851,8 +851,9 @@ struct ActivityMan::PreparedAutosave {
 				previousFaults += heap.PreviousFaults(); previousFaultUs += heap.PreviousFaultUs();
 			}
 			// The previous capture's copy-on-write faults on the Lua heaps, which its whole save window paid for.
-			System::PrintDiagnosticLine(std::format("[checkpoint-arm-split] tick={} native_ranges={} native_bytes={} native_arm_us={} native_copied_pages={} native_fenced_pages={} lua_heaps={} lua_arm_us={} lua_bytes={} lua_copy_us={} lua_faults={} lua_previous_faults={} lua_previous_fault_us={} {}",
-			    header.tick, ranges, bytes, nativeUs, copied, fenced, boundary.StateCount(), luaUs, luaBytes, luaCopyUs, luaFaults, previousFaults, previousFaultUs, CheckpointNativeStorage::InventoryCensus()));
+			System::PrintDiagnosticLine(std::format("[checkpoint-arm-split] tick={} native_ranges={} native_bytes={} native_arm_us={} native_copied_pages={} native_fenced_pages={} lua_heaps={} lua_arm_us={} lua_bytes={} lua_copy_us={} lua_faults={} lua_previous_faults={} lua_previous_fault_us={} lua_copy_mapped_bytes={} lua_copy_idle_bytes={} {}",
+			    header.tick, ranges, bytes, nativeUs, copied, fenced, boundary.StateCount(), luaUs, luaBytes, luaCopyUs, luaFaults, previousFaults, previousFaultUs,
+			    CheckpointLua::HeapOwner::MappedCopyBytes(), CheckpointLua::HeapOwner::IdleCopyBytes(), CheckpointNativeStorage::InventoryCensus()));
 		}
 		CheckpointNativeStorage::ReadScope pages(boundary.NativeViews());
 		RandomGenerator::CheckpointScope random;
