@@ -113,6 +113,11 @@
    "player": "local"
   },
   {
+   "op": "wait",
+   "renders": 30,
+   "elapsed_ms": 800
+  },
+  {
    "op": "game_mouse",
    "button": "right",
    "down": true
