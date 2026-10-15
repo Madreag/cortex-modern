@@ -13201,6 +13201,7 @@ debug.setupvalue(next, 4, "150")
 	}
 	checkpointValues = PieMenu::RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunBorrowedReferenceSelfTest() && checkpointValues;
+	checkpointValues = Actor::RunGoneItemInReachSelfTest() && checkpointValues;
 	checkpointValues = GameActivity::RunDeliveryReferenceSelfTest() && checkpointValues;
 	checkpointValues = RunLuaHeldReferenceSelfTest() && checkpointValues;
 	checkpointValues = MOSprite::RunCheckpointSelfTest() && checkpointValues;

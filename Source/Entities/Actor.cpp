@@ -3397,6 +3397,39 @@ bool Actor::RunCheckpointPathRequestSelfTest() {
 	}
 }
 
+bool Actor::RunGoneItemInReachSelfTest() {
+	// The saved form of an item in reach that left the world.
+	constexpr long gone = -1;
+	bool named = false;
+	{
+		CheckpointNativeStorage::AllocationScope storage(true);
+		auto actor = std::make_unique<Actor>();
+		auto device = std::make_unique<HeldDevice>();
+		actor->m_pItemInReach = device.get();
+		// Deleted at the end of a tick, before the boundary; the actor clears it only on its next update.
+		device.reset();
+		const auto pages = CheckpointNativeStorage::Prepare();
+		for (const auto& part: pages) part->Arm();
+		{
+			CheckpointNativeStorage::ReadScope read(pages);
+			CheckpointNativeSnapshot snapshot;
+			try {
+				const Actor* frozen = snapshot.Object(actor.get());
+				named = frozen && frozen->GetItemInReachUniqueID() == gone;
+			} catch (const std::exception& error) { std::cout << "[actor-item-in-reach-selftest] capture refused: " << error.what() << std::endl; }
+		}
+		actor->m_pItemInReach = nullptr;
+	}
+	Actor restored;
+	restored.m_FaithfulItemInReachUID = gone;
+	restored.ResolveFaithfulLinks();
+	const HeldDevice* item = restored.GetItemInReach();
+	const bool restoredGone = item && item->ToDelete() && !g_MovableMan.IsDevice(item) && restored.GetItemInReachUniqueID() == gone;
+	restored.m_pItemInReach = nullptr;
+	std::cout << "[actor-item-in-reach-selftest] " << (named && restoredGone ? "PASS" : "FAIL") << " saved_gone=" << named << " restored_gone=" << restoredGone << std::endl;
+	return named && restoredGone;
+}
+
 bool Actor::RunBorrowedReferenceSelfTest() {
     MovableMan::ConstructionRegistryScope registryScope;
     try {

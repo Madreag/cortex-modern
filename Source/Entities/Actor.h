@@ -670,6 +670,8 @@ namespace RTE {
 		/// Sets this' MovableObject move target. A write from inside a lockstep AI pass becomes a synced order.
 		void SetMOMoveTarget(const MovableObject* object);
 		static bool RunBorrowedReferenceSelfTest();
+		/// An item in reach deleted before a capture's boundary is saved as gone and restores as a gone device.
+		static bool RunGoneItemInReachSelfTest();
 		static bool RunCheckpointPathRequestSelfTest();
 		std::vector<long> GetCheckpointBorrowedReferences() const override;
 		std::vector<bool> GetCheckpointPerPeerReferences() const override;
