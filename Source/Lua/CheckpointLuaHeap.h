@@ -774,8 +774,9 @@ namespace RTE::CheckpointLua {
 	private:
 		static constexpr size_t c_ReserveBytes = size_t(1) << 32; // Address space only; committed as the VM grows.
 		static constexpr size_t c_CommitStep = size_t(1) << 20;
-		static constexpr size_t c_LargeLimit = size_t(1) << 18; // Above this a block takes whole pages of its own.
-		static constexpr size_t c_ClassCount = 64 + 56 + 62;
+		// Above this a block takes whole pages of its own: a state's one big table part would otherwise keep a run of four.
+		static constexpr size_t c_LargeLimit = size_t(1) << 13;
+		static constexpr size_t c_ClassCount = 64 + 56;
 		// Heaps are reserved whole gigabytes apart and lay out alike, so each one starts on its own pages: an odd count of
 		// the largest page a platform maps (16 KB) along, so the same block of every state takes neither one TLB entry nor
 		// one set of the larger caches.
@@ -1474,16 +1475,14 @@ namespace RTE::CheckpointLua {
 			data.copyUs.store(MicrosecondsSince(copyStarted), std::memory_order_relaxed);
 		}
 
-		// Classes: 16-byte steps to 1 KB, 128-byte steps to 8 KB, 4 KB steps to 256 KB.
+		// Classes: 16-byte steps to 1 KB, 128-byte steps to 8 KB.
 		static size_t ClassOf(size_t size) {
 			if (size <= 1024) return (size + 15) / 16 - 1;
-			if (size <= 8192) return 64 + (size - 1024 + 127) / 128 - 1;
-			return 64 + 56 + (size - 8192 + 4095) / 4096 - 1;
+			return 64 + (size - 1024 + 127) / 128 - 1;
 		}
 		static size_t ClassBytes(size_t index) {
 			if (index < 64) return (index + 1) * 16;
-			if (index < 64 + 56) return 1024 + (index - 64 + 1) * 128;
-			return 8192 + (index - 64 - 56 + 1) * 4096;
+			return 1024 + (index - 64 + 1) * 128;
 		}
 		static size_t RoundPages(size_t size) { return (size + Snapshot::c_PageBytes - 1) / Snapshot::c_PageBytes * Snapshot::c_PageBytes; }
 
