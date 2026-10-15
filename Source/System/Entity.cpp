@@ -525,7 +525,10 @@ namespace RTE {
 	std::string Entity::SaveCheckpoint() const {
 		CheckpointWriter archive("Entity1");
 		archive(m_PresetName, m_CopiedFromPresetName, m_PresetDescription, m_FormattedReaderPosition, m_IsOriginalPreset, m_DefinedInModule, m_RandomWeight);
-		archive(std::set<std::string>(m_Groups.begin(), m_Groups.end()));
+		// Saved through its frozen page, the groups are read as the boundary left them.
+		std::set<std::string> groups;
+		for (const CheckpointString& group: CheckpointValues(m_Groups)) groups.insert(group.Value());
+		archive(groups);
 		return archive.Text();
 	}
 
