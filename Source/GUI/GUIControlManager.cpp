@@ -1865,6 +1865,19 @@ bool GUICheckpoint::RunSelfTest() {
 			const auto* screenBitmap = CheckpointNativeStorage::Source(CheckpointNativeStorage::Source(screenAddress)->GetBitmap());
 			check("saved_screen_keeps_its_bitmap_after_source_destruction", screenBitmap && screenBitmap->GetBitmap() == imageAddress);
 			check("saved_module_lookup_keeps_name_case_extension_and_absence", baseModule >= 0 && g_PresetMan.GetModuleID("Base.rte") == baseModule && g_PresetMan.GetModuleID("BASE") == baseModule && g_PresetMan.GetModuleID("checkpoint-selftest-absent.rte") == -1);
+			// A frozen image saved before anything materializes it: the snapshot's own header, with no rows yet.
+			bool proxyPixels = false;
+			try {
+				const BITMAP* frozenImage = snapshot->Freeze(imageAddress);
+				// The writer's read: the snapshot's own values over the boundary's views.
+				auto frozenRoots = snapshot->ReadValues();
+				const auto views = CheckpointNativeStorage::CurrentViews();
+				frozenRoots.insert(frozenRoots.end(), views.roots.begin(), views.roots.end());
+				const CheckpointNativeStorage::ReadScope frozenRead({true, views.pages, frozenRoots, views.privateValues, views.owner});
+				const CheckpointNativeSnapshot::ReadScope frozen(snapshot.get(), false);
+				proxyPixels = SaveBitmap(frozenImage) == pixels;
+			} catch (const std::exception&) {}
+			check("saved_frozen_image_pixels_come_from_its_snapshot", proxyPixels);
 			BITMAP* savedImage = snapshot->ReadBitmap(imageAddress);
 			auto savedScreen = std::make_unique<AllegroScreen>(savedImage);
 			auto savedInput = std::make_unique<GUIInputWrapper>(0);
