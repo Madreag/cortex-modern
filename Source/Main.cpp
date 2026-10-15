@@ -3981,6 +3981,29 @@ static bool RunSwapWaitSelfTest() {
 		      "resumed at " + std::to_string(litResumedAt - suspendedAt) + " ms after the suspend, counted " + std::to_string(lit.ShownHz()) + " Hz");
 	}
 	std::cout << "[swap-wait-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
+	{
+		// A window on another display: the compositor counts only the primary display (60 Hz here), which still tells whether the
+		// desktop is composed at all - the Z13's dark desktop counted 0.33 refreshes a second.
+		SwapWaitGuard dark, lit;
+		double now = 0;
+		for (int swap = 0; swap < SwapWaitGuard::c_LongSwapsToSuspend; ++swap, now += 80.7) {
+			dark.Note(80.7, 144, now, true, -1);
+			lit.Note(80.7, 144, now, true, -1);
+		}
+		const double suspendedAt = now;
+		bool darkWaited = false;
+		for (int frame = 0; frame < 600; ++frame, now += 16.7) darkWaited = darkWaited || dark.Note(0.3, 144, now, true, static_cast<int64_t>(now / 3000.0), false, 60) == Action::Retry;
+		check("a window on another display is never tried with a waited swap while the desktop is dark", !darkWaited && dark.Suspended(), "a waited swap while the compositor composed nothing");
+		now = suspendedAt;
+		double triedAt = -1;
+		for (int frame = 0; frame < 600 && triedAt < 0; ++frame, now += 16.7) {
+			if (lit.Note(0.3, 144, now, true, static_cast<int64_t>(now * 0.06), false, 60) == Action::Retry) triedAt = now;
+		}
+		const Action tried = lit.Note(5.0, 144, now += 5.0, true, static_cast<int64_t>(now * 0.06), false, 60);
+		check("a window on another display is tried with one waited swap once the desktop composes, and its own refresh decides",
+		      triedAt > suspendedAt && triedAt <= suspendedAt + SwapWaitGuard::c_RetryEveryMs + 50.0 && tried == Action::Resume && !lit.Suspended(),
+		      "tried " + std::to_string(triedAt - suspendedAt) + " ms after the suspend, then action " + std::to_string(static_cast<int>(tried)));
+	}
 	return passed;
 }
 

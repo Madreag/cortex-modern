@@ -60,10 +60,11 @@ namespace {
 		const SDL_DisplayMode* mode = display ? SDL_GetCurrentDisplayMode(display) : nullptr;
 		const double refreshHz = mode ? mode->refresh_rate : 0.0;
 		const bool wasSuspended = s_SwapWaitGuard.Suspended();
-		// The compositor counts its primary display's refreshes; a window on another display, which may refresh at another rate,
-		// is judged by the guard's own swap test instead.
-		const int64_t refreshes = inMatch && wasSuspended && display == SDL_GetPrimaryDisplay() ? CompositorRefreshCount() : -1;
-		switch (s_SwapWaitGuard.Note(swapMs, refreshHz, nowMs, inMatch, refreshes)) {
+		// The compositor counts its primary display's refreshes, read only while the wait is suspended.
+		const SDL_DisplayID primary = inMatch && wasSuspended ? SDL_GetPrimaryDisplay() : 0;
+		const SDL_DisplayMode* primaryMode = primary && primary != display ? SDL_GetCurrentDisplayMode(primary) : mode;
+		const int64_t refreshes = primary ? CompositorRefreshCount() : -1;
+		switch (s_SwapWaitGuard.Note(swapMs, refreshHz, nowMs, inMatch, refreshes, display == primary, primaryMode ? primaryMode->refresh_rate : 0.0)) {
 			case SwapWaitGuard::Action::Suspend:
 				SDL_GL_SetSwapInterval(0);
 				FrameMan::SetUnseenDisplayCap(true);
