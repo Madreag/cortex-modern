@@ -152,7 +152,7 @@ namespace RTE {
 		}
 		if (proposal.members.empty() && !returningOnly && !PeerInputAccepted(frame)) {
 			// A seat whose own input the other half stopped confirming is in the same split as the half missing input:
-			// once the confirmation is overdue and that half has been silent past the bound, it checks in too.
+			// once the confirmation is overdue and that half has stopped answering past the bound, it checks in too.
 			const uint32_t confirming = PeerInputVoters(frame, m_Config.localPeerId);
 			const auto sent = m_PeerInputSentAtMs.find(frame);
 			const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
@@ -163,7 +163,13 @@ namespace RTE {
 				uint64_t transitMs = stats != m_Stats.peers.end() ? stats->second.pingMs : 0;
 				const auto [wire, route] = PeerFrameRoute(peer);
 				if (wire && wire->IsPeerPingMeasured(route)) transitMs = std::max<uint64_t>(transitMs, wire->GetPeerPingMs(route));
-				const uint64_t heard = LastAuthenticatedTraffic(peer);
+				// A stopped main loop keeps its link alive from another thread: neither its receipts of this machine's input nor its own
+				// inputs advance. Receipts alone stop too when this seat's inputs stop reaching it, and then it is this seat that went quiet.
+				uint64_t heard = LastAuthenticatedTraffic(peer);
+				if (const auto progress = m_PeerOwnReceiptProgress.find(peer); progress != m_PeerOwnReceiptProgress.end() && progress->second.through <= frame) {
+					const auto& arrivals = m_Stats.peers[peer].arrivals;
+					heard = std::min(heard, std::max(progress->second.advancedAtMs, arrivals.empty() ? 0 : arrivals.back().first));
+				}
 				overdue = nowMs >= sent->second + transitMs + boundMs && nowMs >= heard && nowMs - heard >= boundMs;
 			}
 			if (overdue) CheckPeerFrameTie(frame, confirming, nowMs);
