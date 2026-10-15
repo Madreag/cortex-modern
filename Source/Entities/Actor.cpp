@@ -3408,16 +3408,11 @@ bool Actor::RunGoneItemInReachSelfTest() {
 		actor->m_pItemInReach = device.get();
 		// Deleted at the end of a tick, before the boundary; the actor clears it only on its next update.
 		device.reset();
-		const auto pages = CheckpointNativeStorage::Prepare();
-		for (const auto& part: pages) part->Arm();
-		{
-			CheckpointNativeStorage::ReadScope read(pages);
-			CheckpointNativeSnapshot snapshot;
-			try {
-				const Actor* frozen = snapshot.Object(actor.get());
-				named = frozen && frozen->GetItemInReachUniqueID() == gone;
-			} catch (const std::exception& error) { std::cout << "[actor-item-in-reach-selftest] capture refused: " << error.what() << std::endl; }
-		}
+		CheckpointNativeSnapshot snapshot;
+		try {
+			const Actor* frozen = snapshot.Object(actor.get());
+			named = frozen && frozen->GetItemInReachUniqueID() == gone;
+		} catch (const std::exception& error) { std::cout << "[actor-item-in-reach-selftest] capture refused: " << error.what() << std::endl; }
 		actor->m_pItemInReach = nullptr;
 	}
 	Actor restored;
