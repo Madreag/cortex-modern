@@ -1445,6 +1445,7 @@ namespace RTE {
 		s_WorldCatchUpFence = frame;
 	}
 
+		s_WorldCatchUpTickTime = std::chrono::microseconds{0};
 	bool ScenarioRunner::TakeWorldCatchUpAppliedFrame(uint64_t simTick, NetLockstepFrame& outFrame) {
 		if (!s_WorldCatchUpLastApplied || s_WorldCatchUpLastApplied->targetFrame != simTick) return false;
 		outFrame = std::move(*s_WorldCatchUpLastApplied);
@@ -1517,12 +1518,12 @@ namespace RTE {
 		       WorldCatchUpHasFrame(nextSimTick);
 	}
 
-	void ScenarioRunner::BeginWorldCatchUpFrame(double drawMs, double untilDrawMs) {
+	void ScenarioRunner::BeginWorldCatchUpFrame(double drawMs, double untilDrawMs, RTE::SteadyClock::time_point now) {
 		s_WorldCatchUpBudget = s_WorldCatchUpActive ? c_WorldCatchUpTicksPerRealFrame : 0;
 		// The returning player's own screen keeps its rate. Under a presentation cap the tail runs until the cap's next draw, which
 		// a sim that stops short of it would forgo; otherwise it takes what one tick's frame leaves after drawing it.
 		constexpr double c_FrameMarginMs = 1.0;
-		s_WorldCatchUpFrameBegan = RTE::SteadyClock::now();
+		s_WorldCatchUpFrameBegan = now;
 		s_WorldCatchUpUntilDraw = untilDrawMs >= 0;
 		const double frameMs = s_WorldCatchUpUntilDraw ? untilDrawMs : c_DefaultDeltaTimeS * 1000.0 - drawMs - c_FrameMarginMs;
 		s_WorldCatchUpFrameTime = std::chrono::microseconds(static_cast<int64_t>(std::max(0.0, frameMs) * 1000.0));
@@ -1568,13 +1569,12 @@ namespace RTE {
 		return true;
 	}
 
-	bool ScenarioRunner::TakeWorldCatchUpGrant(uint64_t nextSimTick) {
+	bool ScenarioRunner::TakeWorldCatchUpGrant(uint64_t nextSimTick, RTE::SteadyClock::time_point now) {
 		NetLockstepPlaneGuard plane;
 		if (!WorldCatchUpMayGrant(nextSimTick, s_WorldCatchUpBudget)) {
 			return false;
 		}
 		// The next tick is granted only when it still fits: a grant at the budget's edge ran a whole tick past it.
-		const auto now = RTE::SteadyClock::now();
 		const int granted = c_WorldCatchUpTicksPerRealFrame - s_WorldCatchUpBudget;
 		if (granted > 0) {
 			const auto tick = std::chrono::duration_cast<std::chrono::microseconds>(now - s_WorldCatchUpLastGrant);

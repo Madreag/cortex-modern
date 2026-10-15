@@ -1187,6 +1187,48 @@ namespace RTE {
 			return 0;
 		}
 
+		/// A catch-up starts on its own ticks' time: one that follows a slow catch-up is not held to the floor by the last one's ticks.
+		int TestCatchUpForgetsTheLastTicksTime() {
+			using namespace std::chrono;
+			std::string error;
+			const RTE::SteadyClock::time_point began = RTE::SteadyClock::now();
+			const auto at = [&](double ms) { return began + duration_cast<RTE::SteadyClock::duration>(duration<double, std::milli>(ms)); };
+			double nowMs = 0.0;
+			// One uncapped, undrawn frame of a catch-up whose ticks take tickMs each; the frame's count of them.
+			const auto frame = [&](uint64_t from, double tickMs) {
+				std::vector<NetLockstepFrame> tail;
+				for (uint64_t target = from + 1; target <= from + 40; ++target) {
+					tail.push_back(MakeCommittedFrame(target));
+				}
+				if (!ScenarioRunner::InstallWorldCatchUp(from, tail, &error)) return -1;
+				ScenarioRunner::BeginWorldCatchUpFrame(0.0, -1.0, at(nowMs));
+				uint64_t simTick = from;
+				int granted = 0;
+				while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1, at(nowMs))) {
+					NetLockstepReadyFrame ready;
+					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(++simTick, ready, &error)) {
+						granted = -1;
+						break;
+					}
+					++granted;
+					nowMs += tickMs;
+				}
+				ScenarioRunner::ReleaseWorldCatchUp();
+				return granted;
+			};
+			if (frame(2000, 1000.0) < 0) {
+				return Fail("slow catch-up frame: " + error);
+			}
+			nowMs += 1000.0;
+			const int fresh = frame(3000, 1.0);
+			const int fits = static_cast<int>(c_DefaultDeltaTimeS * 1000.0 - 1.0) - 1;
+			if (fresh < fits) {
+				return Fail("catch-up-kept-the-last-ticks-time: a fresh catch-up of 1 ms ticks applied " + std::to_string(fresh) +
+				            " ticks in a frame with " + std::to_string(fits + 1) + " ms free, after a catch-up whose ticks took a second each");
+			}
+			return 0;
+		}
+
 		/// F1/F2/F3 of the r6 correctness read: the stop gate must not swallow the catch-up window, the
 		/// sim is held from the tail's last frame until the joiner's own round runs, and the catch-up is
 		/// released the moment it does.
@@ -9560,6 +9602,10 @@ namespace RTE {
 			s_FailTag = "net-world-catchup-ceiling-selftest";
 			return TestCatchUpKeepsItsCeiling();
 		}
+		if (std::strcmp(name, "catchup-fresh") == 0 || std::strcmp(name, "-net-world-catchup-fresh-selftest") == 0) {
+			s_FailTag = "net-world-catchup-fresh-selftest";
+			return TestCatchUpForgetsTheLastTicksTime();
+		}
 		if (std::strcmp(name, "take-pump") == 0 || std::strcmp(name, "-net-world-take-pump-selftest") == 0) {
 			s_FailTag = "net-world-take-pump-selftest";
 			return TestTakeDoesNotPumpTheSession();
@@ -9881,6 +9927,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestCatchUpKeepsItsCeiling(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCatchUpForgetsTheLastTicksTime(); result != 0) {
 			return result;
 		}
 		if (const int result = TestTakeDoesNotPumpTheSession(); result != 0) {
