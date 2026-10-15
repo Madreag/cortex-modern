@@ -393,6 +393,11 @@ namespace RTE {
 		const auto& scripts = (*reference)->scripts;
 		return std::find(scripts.begin(), scripts.end(), path) != scripts.end();
 	}
+	void CheckpointNativeSnapshot::RefuseUnreadableObject(const Entity* view, const Entity* source, const std::bad_typeid& error) {
+		const std::string chain = CheckpointCloneCost::DescribeOpen();
+		throw std::runtime_error(std::format("an object frozen at {} (live {}, in the pools {}) met an unreadable class: {}{}", static_cast<const void*>(view),
+		    static_cast<const void*>(source), CheckpointNativeStorage::Owns(source), error.what(), chain.empty() ? std::string{} : ", freezing " + chain));
+	}
 	Entity* Entity::FreezeCheckpointNative(CheckpointNativeSnapshot&) const {
 		// An object being destroyed answers as its base class, so the refusal says where it lay.
 		throw UnsupportedCheckpointNative(std::format("native checkpoint snapshot is not implemented for {} (address {}, live {}, in the pools {})", GetClassName(),

@@ -236,7 +236,8 @@ namespace RTE {
 					if (preset) insidePreset = true;
 					struct Leave { bool active; ~Leave() { if (active) insidePreset = false; } } leave{preset};
 					CheckpointCloneCost cost(CheckpointCloneCost::Enabled() ? view->GetClassName().c_str() : nullptr);
-					target = view->FreezeCheckpointNative(*this);
+					try { target = view->FreezeCheckpointNative(*this); }
+					catch (const std::bad_typeid& error) { RefuseUnreadableObject(view, base, error); }
 				}
 				slot = {base, target};
 			}
@@ -673,6 +674,8 @@ namespace RTE {
 			return record;
 		}
 		struct Pixel;
+		/// An object whose freeze met a class it cannot read refuses the capture, naming where it lay.
+		[[noreturn]] static void RefuseUnreadableObject(const Entity* view, const Entity* source, const std::bad_typeid& error);
 		void AppendBitmapReadValues(std::vector<CheckpointNativeStorage::RootRange>& roots) const;
 		using ValueOwner = std::pair<void*, void (*)(void*) noexcept>;
 		/// This thread's recent answers of this snapshot, read without a shard lock: the shared objects many owners
