@@ -1105,13 +1105,22 @@ namespace {
 			if (probe.fightSamples == 20) Require(probe.aiFiredFrames > 0, "twenty minutes passed without the AI firing a weapon");
 		} else if (op == "assert_relay") {
 			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
-			int routes = 0;
+			// A scene of more than two players names its count: the host links to every joiner, a joiner only to the host.
+			const int players = step.value("players", 2);
+			const bool host = snapshot.localPeerId == snapshot.hostPeerId;
+			int routes = 0, remotes = 0;
 			for (const auto& member: snapshot.members) {
 				if (member.cpu || member.peerId == snapshot.localPeerId) continue;
+				++remotes;
+				if (players > 2 && !host && member.peerId != snapshot.hostPeerId) {
+					Require(member.connectedRoute.empty() || member.connectedRoute == "relay", "another joiner is reached outside the relay: " + member.connectedRoute);
+					continue;
+				}
 				Require(member.connectedRoute == "relay", "remote player is not connected through the relay: " + member.connectedRoute);
 				++routes;
 			}
-			Require(routes == 1, "the relay scene needs exactly one remote player; the lobby lists " + std::to_string(routes) + " of " + std::to_string(snapshot.members.size()) + " members");
+			Require(remotes == players - 1 && routes == (host ? players - 1 : 1), "the relay scene needs " + std::to_string(players - 1) + " remote players on " +
+			    std::to_string(host ? players - 1 : 1) + " relay links; the lobby lists " + std::to_string(remotes) + " remote of " + std::to_string(snapshot.members.size()) + " members");
 			observed["relay_peers"] = routes;
 		} else if (op == "pad_down" || op == "pad_up") {
 			const std::string name = step.at("button");
