@@ -10293,6 +10293,9 @@ namespace RTE {
 						if ((newerHold != m_HoldTransactions.end() && newerHold->second.cutoffFrame > outFrame.frame) ||
 						    (newerBack != m_ReclaimTransactions.end() && newerBack->second.activationFrame > outFrame.frame)) {
 							NoteSeatTransition(hold->peerId, outFrame.frame, SeatTransition::Held);
+							// The committed frame still hands the seat to the AI here, as it did on every peer that played it in time.
+							if (std::find(outFrame.aiHeldPeerIds.begin(), outFrame.aiHeldPeerIds.end(), hold->peerId) == outFrame.aiHeldPeerIds.end())
+								outFrame.aiHeldPeerIds.push_back(hold->peerId);
 							continue;
 						}
 						// A recorded hold ends the seat's recorded return before it, as the live hold ended it on every peer that took it.
