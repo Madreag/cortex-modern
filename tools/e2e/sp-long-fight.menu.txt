@@ -1,0 +1,23 @@
+wait_ms 2000
+assert_screen MainScreen
+activate ButtonMainToSkirmish
+wait_ms 1600
+assert_screen ScenarioPicker
+combo_select ComboBoxActivitySelect Skirmish Defense
+wait_ms 700
+select_scene Grasslands
+wait_ms 900
+activate ButtonStartActivityConfig
+wait_ms 700
+assert_screen ScenarioConfig
+activate P1T1Box
+activate P5T2Box
+slider_set SliderActivityDifficulty 0
+slider_set SliderStartingGold 30000
+setcheck CheckboxRequireClearPathToOrbit 0
+wait_ms 1000
+assert_visible ButtonStartGame 1
+activate ButtonStartGame
+wait_file {PROBE_DIR}/done.json 1700
+wait_ms 700
+exit

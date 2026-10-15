@@ -16742,6 +16742,18 @@ long long LuaMan::GetTotalHeapBytes() {
 	return total;
 }
 
+long long LuaMan::GetTotalHeapLiveBytes() {
+	const auto live = [](LuaStateWrapper& luaState) {
+		std::lock_guard<std::recursive_mutex> lock(luaState.GetMutex());
+		return static_cast<long long>(G(luaState.GetLuaState())->gc.estimate);
+	};
+	long long total = live(m_MasterScriptState);
+	for (LuaStateWrapper& luaState: m_ScriptStates) {
+		total += live(luaState);
+	}
+	return total;
+}
+
 void LuaMan::CollectGarbageForCheckpoint() {
 	WaitForAsyncGarbageCollection();
 	// A finalizer keeps its own object, and anything only it reaches, alive for the cycle that runs

@@ -6,6 +6,7 @@
 #include "NetLockstep.h"
 #include "NetMatchReplay.h"
 #include "NetResyncState.h"
+#include "SteadyClock.h"
 
 #include <cstdint>
 #include <functional>
@@ -284,13 +285,21 @@ namespace RTE {
 		static bool TakeWorldCatchUpReadyFrame(uint64_t simTick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
 		/// Ticks of tail a joiner applies in one real frame (faster than real time, still bounded).
 		static constexpr int c_WorldCatchUpTicksPerRealFrame = 16;
+		/// The ticks a real frame applies however long they take, at first; raised while the replay does not close on the live round.
+		static constexpr int c_WorldCatchUpMinTicksPerRealFrame = 2;
+		/// How much faster than the round a replay runs before it counts as closing on it; the host's activation reads less as the round's own pace.
+		static constexpr double c_WorldCatchUpClosingRate = 0.1;
 		/// Whether the catch-up may take one more sim tick: the ceiling has to be left AND the tail has
 		/// to hold that very frame, so the sim clock never runs past what the world committed.
 		static bool WorldCatchUpMayGrant(uint64_t nextSimTick, int ticksLeftThisFrame);
-		/// Opens one real frame's catch-up budget. Every grant below is counted against it.
-		static void BeginWorldCatchUpFrame();
-		/// Takes one catch-up sim tick out of this real frame's budget.
-		static bool TakeWorldCatchUpGrant(uint64_t nextSimTick);
+		/// Opens one real frame's catch-up budget: the ceiling, and the frame's time - up to the draw a presentation cap admits next
+		/// (untilDrawMs, when one paces the draws), else what the frame leaves after drawing it (drawMs, the draw's recent cost).
+		/// Every grant below is counted against both, on the clock reading now.
+		static void BeginWorldCatchUpFrame(double drawMs = 0.0, double untilDrawMs = -1.0, RTE::SteadyClock::time_point now = RTE::SteadyClock::now());
+		/// Takes one catch-up sim tick out of this real frame's budget, on the clock reading now.
+		static bool TakeWorldCatchUpGrant(uint64_t nextSimTick, RTE::SteadyClock::time_point now = RTE::SteadyClock::now());
+		/// The census line a running tick's cost is written under: a lockstep round's, a world catch-up's replay or single player's.
+		static const char* TickCostCensusTag();
 		/// A host whose own seat the AI holds, or a seat inside its own reclaim gap, runs its ready frames faster than real time, like a world joiner, until it is back.
 		static bool TakeOwnSeatCatchUpGrant(uint64_t nextSimTick);
 		/// Whether a stopped coordinator holds the controller update this tick. A world joiner applying

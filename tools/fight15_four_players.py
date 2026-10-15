@@ -125,7 +125,7 @@ def turn(peer):
         steps += watch(other)
     # The soldier comes down by rocket, the player takes it and fires (a shot passes the shooter's own side), then goes back to
     # its brain in the bunker, where the AI's attack does not reach it.
-    steps += buy(peer, soldier=SOLDIER[peer])
+    steps += buy(peer, soldier=SOLDIER[peer], rebuy_lost=True)
     steps += [dict(op="actor_next_until", input_player=0, preset="Base.rte/Brain Case"),
               dict(op="wait_scene", input_player=0, equals=dict(preset="Base.rte/Brain Case")),
               dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset="Base.rte/Brain Case", brain_count=len(PLAYERS))),
@@ -149,9 +149,13 @@ def fight(peer):
               dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=len(PLAYERS))), relay(),
               dict(op="signal", name="fight-ticks-complete")]
     steps += [dict(op="wait_file", path=f"{{PROBE_DIR_{other}}}/fight-ticks-complete.json") for other in others(peer)]
+    # The pan's body selection is over: the view's own state, which the game's passing messages do not change.
     steps += [dict(op="pan_scene", enabled=False), wait(renders=3, sim_advanced=90),
-              dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=len(PLAYERS), screen_text=""))]
-    return steps
+              dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=len(PLAYERS), actor_selection=False))]
+    # The host ends the match only once every player has checked the fight's end: its pause would stop their ticks.
+    if peer == "host":
+        return steps + [dict(op="wait_file", path=f"{{PROBE_DIR_{other}}}/end-checked.json") for other in others(peer)]
+    return steps + [dict(op="signal", name="end-checked")]
 
 
 def ending(peer):
