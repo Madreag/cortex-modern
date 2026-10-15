@@ -118,6 +118,21 @@ class FightEndCheckTest(unittest.TestCase):
                 self.assertFalse([step for step in checks if step.get("equals", {}).get("screen_text") == ""], (name, script))
                 self.assertEqual(checks[-1]["equals"].get("actor_selection"), False, (name, script, checks[-1]))
 
+    def test_the_host_ends_the_match_only_after_every_player_checked_the_end(self):
+        # The end check waits 90 ticks; a host that paused to end the match first left a joiner's ticks stopped (f-s10h-1, step 356).
+        for name in ("fight15-s10", "fight15-s10h", "fight15-s11", "fight15-s12"):
+            document = peers.scene(name)
+            probes = {script[:-len(".probe")]: json.loads(text)["steps"] for script, text in document["scripts"].items() if script.endswith(".probe")}
+            joiners = [peer for peer in probes if peer != "host"]
+            for peer, steps in probes.items():
+                end = max(index for index, step in enumerate(steps) if step.get("op") == "assert_scene" and step.get("equals", {}).get("actor_selection") is False)
+                if peer == "host":
+                    escape = next(index for index in range(end, len(steps)) if steps[index] == {"op": "key_down", "key": "Escape"})
+                    waited = [steps[index]["path"] for index in range(end, escape) if steps[index]["op"] == "wait_file"]
+                    self.assertEqual(waited, [f"{{PROBE_DIR_{joiner}}}/end-checked.json" for joiner in joiners], (name, peer))
+                else:
+                    self.assertEqual(steps[end + 1], {"op": "signal", "name": "end-checked"}, (name, peer))
+
 
 class HeldHostSceneTest(unittest.TestCase):
     def test_the_held_host_scene_holds_the_hosts_own_seat_on_every_run(self):

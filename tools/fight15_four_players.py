@@ -152,7 +152,10 @@ def fight(peer):
     # The pan's body selection is over: the view's own state, which the game's passing messages do not change.
     steps += [dict(op="pan_scene", enabled=False), wait(renders=3, sim_advanced=90),
               dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=len(PLAYERS), actor_selection=False))]
-    return steps
+    # The host ends the match only once every player has checked the fight's end: its pause would stop their ticks.
+    if peer == "host":
+        return steps + [dict(op="wait_file", path=f"{{PROBE_DIR_{other}}}/end-checked.json") for other in others(peer)]
+    return steps + [dict(op="signal", name="end-checked")]
 
 
 def ending(peer):
