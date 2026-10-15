@@ -71,6 +71,20 @@ namespace RTE {
 			// while it still catches up: a second hold in a new split epoch that reaches it ahead of its own frames (0: none).
 			uint32_t refaultPercent = 0;
 			uint64_t refaultAfterMs = 0, refaultMs = 0;
+			// Once its slow spell ends, the subject catches up at only this share of the round's rate (0: the fixture's usual catch-up).
+			uint32_t catchUpPercent = 0;
+			// The directory answers a tie check-in only this long after the tie's first check-in, as a real one over its tunnel does.
+			uint64_t refereeLatencyMs = 0;
+			// The slow subject is held once through the fault and stays held; no peer sets a decision aside for authority it will have
+			// or a return for a hold it has not installed; the playing seats keep the bound, a two-seat internet round included.
+			bool heldOnce = false, noRefusals = false, strictBound = false;
+			// This seat goes silent for silentVoterMs from the moment the leader first votes the subject's return: it never votes that return (0: none).
+			uint8_t silentVoter = 0;
+			uint64_t silentVoterMs = 0;
+			// The subject's own inputs stop reaching the others through the fault while its link stays up - receipts, heartbeats, tails.
+			bool inputsLost = false;
+			// The subject returns within this long after the fault, then stays returned for twenty seconds (0: the usual allowance).
+			uint64_t returnWithinMs = 0;
 		};
 		struct Wire;
 		struct Hub {
@@ -84,8 +98,13 @@ namespace RTE {
 			bool DuringFault() const { return now >= faultAt && now < faultEnd; }
 			uint64_t refaultAt = UINT64_MAX, refaultEnd = 0;
 			bool InRefault() const { return now >= refaultAt && now < refaultEnd; }
+			uint64_t silentAt = UINT64_MAX;
+			std::map<uint8_t, uint64_t> inputSentThrough;
+			std::set<std::pair<uint8_t, uint64_t>> returnsProposed;
+			std::string returnInsideInputs;
 			bool Split(uint8_t a, uint8_t b) const {
-				if (!DuringFault() || row.frozen || row.blackout || row.slowPercent || !row.gapMs) return false;
+				if (row.silentVoter && a != b && (a == row.silentVoter || b == row.silentVoter) && now >= silentAt && now < silentAt + row.silentVoterMs) return true;
+				if (!DuringFault() || row.frozen || row.blackout || row.slowPercent || row.inputsLost || !row.gapMs) return false;
 				if (row.secondSubject && now >= faultAt + row.secondAfterMs && (a == row.secondSubject || b == row.secondSubject)) return true;
 				if (row.tie) return (a <= 2) != (b <= 2);
 				return a == row.subject || b == row.subject;
@@ -298,6 +317,15 @@ namespace RTE {
 				}
 #endif
 				if (hub.countInputs && owner == 1) CountInputTicks(bytes, lane);
+				// A return is placed past every input its proposer has sent: no voter can have prepared that far.
+				if (NetHostMigrationCodec::Decode(bytes, key, decision) && decision.senderPeerId == owner) {
+					if (decision.type == NetHostMigrationMessageType::PeerInput) hub.inputSentThrough[owner] = std::max(hub.inputSentThrough[owner], decision.frame);
+					// Judged when it is first sent: the proposer's vote is sent again later, after more of its inputs.
+					if (decision.type == NetHostMigrationMessageType::PeerBridge && decision.preparedFrame == 1 && decision.successorPeerId == owner &&
+					    hub.returnsProposed.insert({owner, decision.frame}).second && decision.frame <= hub.inputSentThrough[owner] && hub.returnInsideInputs.empty())
+						hub.returnInsideInputs = "peer " + std::to_string(owner) + " proposed a return at " + std::to_string(decision.frame) + " with its own inputs sent through " +
+						                         std::to_string(hub.inputSentThrough[owner]);
+				}
 				if (hub.dropReceiptsFrom == owner && NetHostMigrationCodec::Decode(bytes, key, decision) && decision.type == NetHostMigrationMessageType::PeerReceipt) return true;
 				if (hub.dropInputsFrom == owner && NetHostMigrationCodec::Decode(bytes, key, decision) &&
 				    (decision.type == NetHostMigrationMessageType::PeerInput || decision.type == NetHostMigrationMessageType::PeerForwardInput)) return true;
@@ -310,6 +338,10 @@ namespace RTE {
 						}
 					}(hub, decision);
 				}
+				// The voter falls silent as the leader sends its first proposal of the subject's return, so that return can never gather its vote.
+				if (hub.row.silentVoter && hub.silentAt == UINT64_MAX && owner == 1 && NetHostMigrationCodec::Decode(bytes, key, decision) &&
+				    decision.type == NetHostMigrationMessageType::PeerBridge && decision.preparedFrame == 1 &&
+				    std::find(decision.members.begin(), decision.members.end(), hub.row.subject) != decision.members.end()) hub.silentAt = hub.now;
 				if (hub.row.returnByTailOnly && other->owner == hub.row.subject && NetHostMigrationCodec::Decode(bytes, key, decision) &&
 				    (decision.type == NetHostMigrationMessageType::PeerBridge || decision.type == NetHostMigrationMessageType::PeerBridgeCommit) && decision.preparedFrame == 1 &&
 				    std::find(decision.members.begin(), decision.members.end(), hub.row.subject) != decision.members.end()) { ++hub.droppedReturns; return true; }
@@ -419,6 +451,7 @@ namespace RTE {
 					if (inserted) tie.at = hub.now;
 					// The directory's rule: the first half to check in keeps the split at once.
 					if (!request.queryOnly && tie.winner.empty()) { tie.confirmed.push_back(request.members); tie.winner = request.members; }
+					if (hub.now < tie.at + hub.row.refereeLatencyMs) return reply;
 					if (!tie.winner.empty()) { reply.state = Reply::State::Decided; reply.members = tie.winner; } return reply;
 				};
 			}
@@ -523,7 +556,7 @@ namespace RTE {
 				if (hub.row.refereeDecides) return hub.heldSeat != 0 && peer == hub.heldSeat;
 				if (hub.row.internet && hub.row.directoryDown) return true;
 				if (hub.row.seats == 2 && (!hub.row.internet || hub.row.directoryBoth)) return peer != 1;
-				const bool second = hub.row.secondSubject && peer == hub.row.secondSubject;
+				const bool second = (hub.row.secondSubject && peer == hub.row.secondSubject) || (hub.row.silentVoter && peer == hub.row.silentVoter);
 				return hub.row.tie ? peer >= 3 || second : peer == hub.row.subject || second || peer == hub.row.lateReceiptsFrom;
 			}
 			bool CheckCommittedInputs(const NetLockstepReadyFrame& ready, uint8_t observer, std::string& error) {
@@ -584,6 +617,7 @@ namespace RTE {
 					if (hub.row.frozen && id == hub.row.subject && hub.DuringFault()) peers[id - 1]->PlaneTick(hub.now);
 					else peers[id - 1]->Tick(hub.now);
 				}
+				if (hub.row.inputsLost) hub.dropInputsFrom = hub.DuringFault() ? hub.row.subject : 0;
 				if (hub.row.joinerInputsLostFirstMs && hub.now == hub.faultAt - hub.row.joinerInputsLostFirstMs) hub.dropInputsFrom = 2;
 				if (hub.row.joinerInputsLostFirstMs && hub.now == hub.faultAt) hub.dropInputsFrom = 0;
 				if (hub.row.blackout && hub.now == hub.faultAt) {
@@ -614,7 +648,9 @@ namespace RTE {
 					if (hub.row.frozen && id == hub.row.subject && hub.DuringFault()) { credits[id - 1] = 0; continue; }
 					const bool refault = hub.row.refaultPercent && id == hub.row.subject && hub.InRefault();
 					const bool slowed = refault || (hub.row.slowPercent && id == hub.row.subject && hub.DuringFault());
-					credits[id - 1] += (slowed ? (refault ? hub.row.refaultPercent : hub.row.slowPercent) / 100.0 : CatchingUp(peer) ? c_TestCatchUpRate : 1) / c_TestTickMs;
+					const uint32_t ratePercent = refault ? hub.row.refaultPercent : hub.row.slowPercent;
+					const double catchUpRate = hub.row.catchUpPercent && id == hub.row.subject ? hub.row.catchUpPercent / 100.0 : c_TestCatchUpRate;
+					credits[id - 1] += (slowed ? ratePercent / 100.0 : CatchingUp(peer) ? catchUpRate : 1) / c_TestTickMs;
 					credits[id - 1] = std::min(credits[id - 1], 6.0);
 					while (credits[id - 1] >= 1) {
 						const uint64_t next = world.applied + 1;
@@ -644,7 +680,7 @@ namespace RTE {
 						if (hub.row.captureFrames) committed[id - 1][ready.frame] = ready;
 						peer.FinishSimulationTick(ready.frame); credits[id - 1] -= 1;
 						// What the tick cost this machine, as the engine reports it: a light tick, or a slow machine's whole share of its rate.
-						peer.NoteLocalTickCost(ready.frame, slowed ? c_TestTickMs * 100.0 / hub.row.slowPercent : 1.0);
+						peer.NoteLocalTickCost(ready.frame, slowed ? c_TestTickMs * 100.0 / ratePercent : 1.0);
 						if (displayedAt[id - 1] && hub.DuringFault()) blackoutGap[id - 1] = std::max(blackoutGap[id - 1], hub.now - displayedAt[id - 1]);
 						displayedAt[id - 1] = hub.now;
 						if (!firstDisplayedAt[id - 1]) firstDisplayedAt[id - 1] = hub.now;
@@ -693,7 +729,8 @@ namespace RTE {
 					const uint64_t highest = std::max_element(worlds.begin(), worlds.end(), [](const World& a, const World& b) { return a.applied < b.applied; })->applied;
 					for (uint8_t id = 1; id <= hub.row.seats; ++id) if (!caughtAt[id - 1] && worlds[id - 1].applied + 1 >= highest && common > 0 &&
 					    !peers[id - 1]->HasHeldAISeat(hub.ReturningSeat()) && !Bridges(*peers[id - 1]).contains(hub.ReturningSeat()) &&
-					    (!hub.row.secondSubject || (!peers[id - 1]->HasHeldAISeat(hub.row.secondSubject) && !Bridges(*peers[id - 1]).contains(hub.row.secondSubject)))) caughtAt[id - 1] = hub.now;
+					    (!hub.row.secondSubject || (!peers[id - 1]->HasHeldAISeat(hub.row.secondSubject) && !Bridges(*peers[id - 1]).contains(hub.row.secondSubject))) &&
+					    (!hub.row.silentVoter || (hub.silentAt != UINT64_MAX && !peers[id - 1]->HasHeldAISeat(hub.row.silentVoter) && !Bridges(*peers[id - 1]).contains(hub.row.silentVoter)))) caughtAt[id - 1] = hub.now;
 				}
 				++hub.now; return true;
 			}
@@ -708,6 +745,21 @@ namespace RTE {
 				while (hub.refaultEnd && hub.now <= hub.refaultEnd + c_TestReturnAllowanceMs + 4000) if (!Step(error)) return false;
 				if (row.asymmetricBridge && row.asymmetricBridge < 3 && !hub.asymmetricReleased) { error = "the asymmetric input lever did not force both pending bridge votes"; return false; }
 				if (row.returnByTailOnly && !hub.droppedReturns) { error = "the tail-only lever withheld no proposal or certificate of the subject's return"; return false; }
+				if (!hub.returnInsideInputs.empty()) { error = hub.returnInsideInputs; return false; }
+				if (row.silentVoter && hub.silentAt == UINT64_MAX) { error = "the leader never voted the subject's return, so no voter fell silent at it"; return false; }
+				if (row.heldOnce) {
+					const auto boundaries = hub.bridgeBoundaries.find(row.subject);
+					const auto holds = boundaries == hub.bridgeBoundaries.end() ? 0 : std::count_if(boundaries->second.begin(), boundaries->second.end(), [](const auto& change) { return change.second; });
+					if (holds != 1) { error = "the slow seat was held " + std::to_string(holds) + " times, not once and kept"; return false; }
+				}
+				if (row.noRefusals) for (uint8_t id = 1; id <= row.seats; ++id) {
+					const auto& stats = peers[id - 1]->GetStats();
+					if (stats.decisionsRefusedForAuthority || stats.returnsRefusedNotHeld) {
+						error = "peer " + std::to_string(id) + " set aside " + std::to_string(stats.decisionsRefusedForAuthority) + " decisions for authority and " +
+						        std::to_string(stats.returnsRefusedNotHeld) + " returns of holds it had not installed";
+						return false;
+					}
+				}
 				// A hold ends once: every peer's certified history names one return frame for it.
 				for (const auto& [seat, boundaries]: hub.bridgeBoundaries)
 					for (auto at = boundaries.begin(); at != boundaries.end() && std::next(at) != boundaries.end(); ++at)
@@ -720,7 +772,7 @@ namespace RTE {
 				// Check every unaffected consumer before a missing return can hide its wait.
 				for (uint8_t id = 1; id <= row.seats; ++id) {
 					const bool doubleFailure = row.internet && row.directoryDown;
-					if (!IsAffected(id) && !doubleFailure && maxWait[id - 1] > (row.internet && row.seats == 2 && !row.refereeDecides ? 1000 : static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs)))) {
+					if (!IsAffected(id) && !doubleFailure && maxWait[id - 1] > (row.internet && row.seats == 2 && !row.refereeDecides && !row.strictBound ? 1000 : static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs)))) {
 						error = "non-lagging peer " + std::to_string(id) + " stalled " + std::to_string(maxWait[id - 1]) + "ms past its bound"; return false;
 					}
 				}
@@ -752,7 +804,10 @@ namespace RTE {
 					}
 					const uint8_t held = row.refereeDecides ? hub.heldSeat : row.seats == 2 && (!row.internet || row.directoryBoth) ? 2 : row.subject;
 					if (peers[id - 1]->HasHeldAISeat(held) || Bridges(*peers[id - 1]).contains(held)) { error = "the returning human seat stayed bridged after catch-up"; return false; }
-					if (row.gapMs <= 3000 && !row.refaultPercent && caughtAt[id - 1] > hub.faultEnd + c_TestReturnAllowanceMs) { error = "return exceeded the spike plus its catch-up allowance"; return false; }
+					if (row.gapMs <= 3000 && !row.refaultPercent && caughtAt[id - 1] > hub.faultEnd + (row.returnWithinMs ? row.returnWithinMs : c_TestReturnAllowanceMs)) {
+						error = "return exceeded the spike plus its catch-up allowance"; return false;
+					}
+					if (row.returnWithinMs && hub.now < caughtAt[id - 1] + 20000) { error = "the run ended before the returned seat played twenty seconds back"; return false; }
 				}
 				if (row.gapMs == 150 && shortGapSubstitutes) { error = "a spike inside the input delay committed a substitute"; return false; }
 				if (row.gapMs == 150 && maxWait[row.subject - 1]) { error = "a spike inside the input delay hitched the spiking player's view"; return false; }
@@ -893,9 +948,11 @@ namespace RTE {
 
 	bool NetSessionPlaneSelfTest::CheckOwnerHitch(unsigned arm, std::string* error) {
 		Case row{"owner_hitch"};
-		row.seats = 3; row.subject = arm == 3 ? 1 : 2;
+		row.seats = arm == 4 ? 2 : 3; row.subject = arm == 3 ? 1 : 2;
 		row.gapMs = arm == 0 ? 2000 : arm == 1 ? 6000 : arm == 2 ? 10000 : 3000;
-		row.frozen = arm != 1; row.realFrozen = arm == 2; row.captureFrames = true;
+		row.frozen = arm != 1; row.realFrozen = arm == 2 || arm == 4; row.captureFrames = true;
+		// Two seats over the internet: the joiner's inputs run ahead of its stopped loop, so only its unanswered receipts show the stop.
+		if (arm == 4) { row.internet = row.directoryBoth = row.strictBound = true; row.rttMs = row.otherRttMs = 60; }
 		Fixture fixture;
 		NetMatchService service;
 		uint64_t keepalives = 0;
@@ -914,8 +971,13 @@ namespace RTE {
 		fixture.onThaw = disarm;
 		std::string why;
 		if (!fixture.Run(row, why)) { if (error) *error = why; return false; }
-		if (arm == 2 && keepalives < 100) { if (error) *error = "the stopped main loop did not retain its independent authenticated sender for ten seconds"; return false; }
-		const size_t first = row.subject == 1 ? 1 : 0, second = 2;
+		// One keepalive per 100 ms of stopped loop: a Windows sender wakes on the system timer tick, so its cadence is coarser than Linux's.
+		if ((arm == 2 || arm == 4) && keepalives < row.gapMs / 100) {
+			if (error) *error = "the stopped main loop did not retain its independent authenticated sender: " + std::to_string(keepalives) + " in " + std::to_string(row.gapMs) + " ms";
+			return false;
+		}
+		const size_t first = row.subject == 1 ? 1 : 0, second = row.seats > 2 ? 2 : 1 - first;
+		if (second == first) { if (error) *error = "the controller comparison named one peer twice"; return false; }
 		uint64_t heldAt = 0, returnedAt = 0;
 		for (const auto& [tick, ready]: fixture.committed[first]) for (const auto* commands: {&ready.localCommands, &ready.remoteCommands}) for (const auto& command: *commands) {
 			if (const auto* hold = std::get_if<NetGameSeatHold>(&command.payload); hold && hold->peerId == row.subject) heldAt = tick;
@@ -1491,6 +1553,42 @@ namespace RTE {
 		auto slowMachine = gap("joiner_machine_at_90_percent_20s", 2, 20000); slowMachine.slowPercent = 90; rows.push_back(slowMachine);
 		auto slowerMachine = gap("joiner_machine_at_80_percent_20s", 2, 20000); slowerMachine.slowPercent = 80; rows.push_back(slowerMachine);
 		auto slowHearing = gap("held_seat_and_a_member_slow_to_hear_hold_nobody_else", 2, 10000); slowHearing.lateReceiptsFrom = 3; slowHearing.lateReceiptsMs = 2000; rows.push_back(slowHearing);
+		const auto slowThree = [&](const char* name, uint32_t percent) {
+			Case row = gap(name, 2, 20000); row.seats = 3; row.slowPercent = percent; row.rttMs = row.otherRttMs = 100; row.heldOnce = true; return row;
+		};
+		rows.push_back(slowThree("slow_joiner_at_80_percent_three_seats_over_100ms_20s", 80));
+		rows.push_back(slowThree("slow_joiner_at_50_percent_three_seats_over_100ms_20s", 50));
+		const auto slowTwo = [&](const char* name, uint32_t percent) {
+			Case row = gap(name, 2, 20000); row.seats = 2; row.internet = row.directoryBoth = true; row.slowPercent = percent;
+			row.rttMs = row.otherRttMs = 100; row.heldOnce = row.noRefusals = row.strictBound = true; return row;
+		};
+		rows.push_back(slowTwo("two_internet_slow_joiner_at_80_percent_20s", 80));
+		rows.push_back(slowTwo("two_internet_slow_joiner_at_50_percent_20s", 50));
+		// The field's slow player: held for a slow spell, then able to catch up only a little faster than the round - it returns once, caught up.
+		auto slowSpell = slowTwo("two_internet_joiner_held_for_a_slow_spell_catches_up_at_115_percent", 80); slowSpell.catchUpPercent = 115;
+		slowSpell.postReturnMs = 35000; rows.push_back(slowSpell);
+		// A seat that catches up only a little faster than the round and then keeps its rate returns and stays: what it still trails by
+		// once caught up is the round trip of its tail and report, at any internet round trip.
+		const auto lagged = [&](const char* name, uint32_t rtt, uint32_t catchUp, uint64_t gapMs, uint64_t withinMs) {
+			Case row = gap(name, 2, gapMs); row.seats = 3; row.rttMs = row.otherRttMs = rtt; row.catchUpPercent = catchUp; row.heldOnce = true;
+			row.returnWithinMs = withinMs; row.postReturnMs = withinMs + 16000; return row;
+		};
+		rows.push_back(lagged("joiner_catching_up_at_105_percent_returns_over_100ms", 100, 105, 800, 20000));
+		rows.push_back(lagged("joiner_catching_up_at_105_percent_returns_over_200ms", 200, 105, 800, 20000));
+		rows.push_back(lagged("joiner_catching_up_at_102_percent_returns_over_100ms", 100, 102, 600, 40000));
+		// A seat held for waiting past the bound while its link stays up learns its hold: every peer plays the same history to the end.
+		auto lostInputs = gap("joiner_inputs_lost_1s_held_and_back_over_100ms", 2, 1000); lostInputs.seats = 3; lostInputs.inputsLost = true;
+		lostInputs.rttMs = lostInputs.otherRttMs = 100; rows.push_back(lostInputs);
+		// The W+L shape: a joiner a little slower than the host over the internet, its referee answering as late as the directory does.
+		auto lateReferee = gap("two_internet_late_joiner_takes_every_decision_with_an_800ms_referee", 2, 20000); lateReferee.seats = 2;
+		lateReferee.internet = lateReferee.directoryBoth = lateReferee.noRefusals = true; lateReferee.slowPercent = 95;
+		lateReferee.rttMs = lateReferee.otherRttMs = 100; lateReferee.refereeLatencyMs = 800; rows.push_back(lateReferee);
+		// Three retained seats: the directory referees only even splits of two or four, so a tie of the two playing seats goes to the host's half.
+		auto threeTie = gap("three_retained_seats_tie_goes_to_the_hosts_half", 3, 10000); threeTie.seats = 3; threeTie.internet = threeTie.directoryBoth = true;
+		threeTie.secondSubject = 2; threeTie.secondAfterMs = 4000; rows.push_back(threeTie);
+		// A voter silent from the return's first vote: the members that play neither wait on its vote nor past the bound.
+		auto silentVoter = gap("held_seat_return_meets_a_silent_voter", 2, 10000); silentVoter.seats = 4; silentVoter.silentVoter = 4; silentVoter.silentVoterMs = 2000;
+		silentVoter.postReturnMs = 6000; rows.push_back(silentVoter);
 		auto farReturn = gap("one_return_for_a_held_seat_over_150ms_round_trips", 2, 10000); farReturn.rttMs = farReturn.otherRttMs = 150; rows.push_back(farReturn);
 		auto inTurn = gap("three_seats_second_joiner_drops_while_the_first_is_held", 2, 10000); inTurn.seats = 3; inTurn.secondSubject = 3; inTurn.secondAfterMs = 4000; rows.push_back(inTurn);
 		auto heldAgain = gap("two_internet_joiner_held_again_while_catching_up", 2, 3000); heldAgain.seats = 2; heldAgain.internet = heldAgain.directoryBoth = true;
