@@ -958,8 +958,13 @@ namespace RTE {
 		fixture.onThaw = disarm;
 		std::string why;
 		if (!fixture.Run(row, why)) { if (error) *error = why; return false; }
-		if ((arm == 2 || arm == 4) && keepalives < 100) { if (error) *error = "the stopped main loop did not retain its independent authenticated sender"; return false; }
-		const size_t first = row.subject == 1 ? 1 : 0, second = row.seats > 2 ? 2 : first;
+		// One keepalive per 100 ms of stopped loop: a Windows sender wakes on the system timer tick, so its cadence is coarser than Linux's.
+		if ((arm == 2 || arm == 4) && keepalives < row.gapMs / 100) {
+			if (error) *error = "the stopped main loop did not retain its independent authenticated sender: " + std::to_string(keepalives) + " in " + std::to_string(row.gapMs) + " ms";
+			return false;
+		}
+		const size_t first = row.subject == 1 ? 1 : 0, second = row.seats > 2 ? 2 : 1 - first;
+		if (second == first) { if (error) *error = "the controller comparison named one peer twice"; return false; }
 		uint64_t heldAt = 0, returnedAt = 0;
 		for (const auto& [tick, ready]: fixture.committed[first]) for (const auto* commands: {&ready.localCommands, &ready.remoteCommands}) for (const auto& command: *commands) {
 			if (const auto* hold = std::get_if<NetGameSeatHold>(&command.payload); hold && hold->peerId == row.subject) heldAt = tick;
