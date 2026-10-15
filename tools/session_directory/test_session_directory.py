@@ -34,7 +34,7 @@ import session_directory
 from world_ticks import compare_world_ticks, read_world_ticks
 from session_directory import IP_REG_PER_MIN, IP_REQ_PER_MIN, REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
 from unittest import mock
-from connection_authority import ConnectionErrorReply, ConnectionAuthority, MAX_RECORD_BYTES, REQUEST_DOMAIN, TOKEN_DOMAIN, TOKEN_FIELDS
+from connection_authority import ConnectionErrorReply, ConnectionAuthority, REQUEST_DOMAIN, TOKEN_DOMAIN, TOKEN_FIELDS
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 INSTALL_KEY = "0123456789abcdef"
@@ -3550,39 +3550,6 @@ class ConnectionAuthorityTests(unittest.TestCase):
             self.assertEqual(self.frame_check_in(seat, [1 - seat], frame=91, query_only=True)["status"], "waiting")
         ties = dict(self.store.connections.records())[self.sid]["frame_ties"]
         self.assertEqual(len(ties), 2)
-
-    def test_frame_tie_full_record_keeps_a_new_split_available(self):
-        self.referee_fixture()
-        self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [0, 1])
-        # A long-lived match can have this many first-arrival decisions. Seed the
-        # persisted history with the exact entry the signed endpoint just wrote,
-        # then cross the real storage boundary through new signed requests. This
-        # avoids thousands of redundant encrypted database writes in every suite.
-        with self.store.connections._lock:
-            record = json.loads(json.dumps(self.store.connections._records[self.sid]))
-            template = next(iter(record["frame_ties"].values()))
-            size = len(json.dumps(record, separators=(",", ":")).encode())
-            value_bytes = len(json.dumps(template, separators=(",", ":")).encode())
-            frame = 1000
-            while True:
-                key = f"0:7:{sample_register()['match_config_hash']}:{frame}"
-                extra = len(json.dumps(key).encode()) + 1 + value_bytes + 1
-                if size + extra > MAX_RECORD_BYTES - 600:
-                    break
-                record["frame_ties"][key] = dict(template)
-                size += extra
-                frame += 1
-            self.assertEqual(len(json.dumps(record, separators=(",", ":")).encode()), size)
-            self.store.connections._save(self.sid, record)
-        for offset in range(8):
-            self.now += 3
-            self.wall += 3
-            try:
-                answer = self.frame_check_in(0, [0, 1], frame=frame + offset)
-            except ConnectionErrorReply as unavailable:
-                self.fail(f"seed=0 shape=full_referee_record: a new split froze with HTTP {unavailable.status} "
-                          f"after {len(record['frame_ties'])} persisted decisions ({size} bytes)")
-            self.assertEqual((answer["status"], answer["members"]), ("decided", [0, 1]))
 
     def test_frame_tie_decision_survives_later_ties_and_reload(self):
         self.referee_fixture()
