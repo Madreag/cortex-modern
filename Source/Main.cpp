@@ -1593,6 +1593,7 @@ static void NoteFramePresented() {
 		uint64_t firstTick = 0;
 		double firstMs = 0, lastMs = 0;
 		std::vector<double> intervals;
+		std::vector<double> swaps; //!< Each present's wait in the driver's swap.
 		Pace pace;
 	};
 	static Window s_window;
@@ -1603,10 +1604,11 @@ static void NoteFramePresented() {
 	if (!g_ActivityMan.ActivityRunning() || (s_window.open && (s_window.lockstep != lockstep || tick < s_window.firstTick))) s_window = {};
 	if (!g_ActivityMan.ActivityRunning()) return;
 	if (!s_window.open) {
-		s_window = {true, lockstep, tick, now, now, {}, pace()};
+		s_window = {true, lockstep, tick, now, now, {}, {}, pace()};
 		return;
 	}
 	s_window.intervals.push_back(now - s_window.lastMs);
+	s_window.swaps.push_back(g_WindowMan.GetLastSwapMs());
 	s_window.lastMs = now;
 	if (tick - s_window.firstTick < 60) return;
 	std::vector<double> sorted = s_window.intervals;
@@ -1622,6 +1624,11 @@ static void NoteFramePresented() {
 	std::string line = std::format("[frame-pace] mode={} recorder={} recorder_hz={} target_hz={:.2f} first_tick={} tick={} frames={} wall_ms={:.1f} fps={:.2f} interval_p50_ms={:.2f} interval_p95_ms={:.2f} interval_max_ms={:.2f}",
 	    lockstep ? "lockstep" : "single", recorder.Enabled() ? 1 : 0, recorder.Enabled() ? recorder.Fps() : 0, targetHz, s_window.firstTick, tick, sorted.size(), wallMs,
 	    wallMs > 0 ? 1000.0 * static_cast<double>(sorted.size()) / wallMs : 0.0, at(0.5), at(0.95), sorted.back());
+	// The share of each frame the driver held in the swap: a present that waits on other GPU work shows here, not in the draw.
+	std::vector<double> swaps = s_window.swaps;
+	std::sort(swaps.begin(), swaps.end());
+	if (!swaps.empty()) line += std::format(" swap_p50_ms={:.2f} swap_p95_ms={:.2f} swap_max_ms={:.2f}", swaps[swaps.size() / 2],
+	    swaps[std::min(swaps.size() - 1, static_cast<size_t>(0.95 * static_cast<double>(swaps.size())))], swaps.back());
 	if (lockstep) {
 		// The round's loop in the window: its iterations, the ticks they ran, the frames shed, the iterations in the shedding budget,
 		// where the time went, and each preview stage's mean per preview.
@@ -1637,7 +1644,7 @@ static void NoteFramePresented() {
 		}
 	}
 	System::PrintDiagnosticLine(line);
-	s_window = {true, lockstep, tick, now, now, {}, pace()};
+	s_window = {true, lockstep, tick, now, now, {}, {}, pace()};
 }
 
 // Opt-in accounting only: aggregate complete running ticks, without changing their work or pacing.

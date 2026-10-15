@@ -616,6 +616,7 @@ namespace RTE {
 		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
 		std::deque<std::pair<uint64_t, uint64_t>> arrivals; //!< When this peer's newest tick rose, and to which, over the last seconds.
 		std::deque<uint64_t> waitedFrames; //!< The frames of the last second this machine waited on this peer's input.
+		std::deque<std::pair<uint64_t, uint64_t>> waitCosts; //!< When each wait this machine spent on this peer's input ended and how long it lasted, over the capacity window.
 		uint64_t slowSinceMs = 0; //!< Since when this peer has fed below the round's rate without a break; 0 while it has not.
 		uint64_t reclaimAdmittedMs = 0; //!< When this seat's reclaim was admitted; its allowance runs from here.
 		uint64_t returnerCaughtUpMs = 0; //!< When this returning seat's catch-up reached its reclaim frame; 0 while it has not.
@@ -1556,6 +1557,7 @@ namespace RTE {
 		friend bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 		friend bool TestEveryHoldProducerWritesTheSeatLog(std::string* error);
 		friend bool TestAnOlderDeliveryLeavesTheNewerSeatState(std::string* error);
+		friend bool TestALateSimulationHandsAHeldSeatToTheAiAtItsFrame(std::string* error);
 		friend bool TestEveryGapStaysForASimulationBehind(std::string* error);
 		friend bool TestADeferredStopDoesNotExcuseASeatPastTheBound(std::string* error);
 		friend bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
@@ -1734,6 +1736,7 @@ namespace RTE {
 		bool m_PeerHadHitch = false;
 		std::map<uint8_t, uint64_t> m_PeerAppliedThrough;
 		std::map<uint8_t, uint64_t> m_PeerAppliedAtMs;
+		std::map<uint8_t, std::deque<std::pair<uint64_t, uint64_t>>> m_PeerAppliedProgress; //!< When each seat's applied frame rose, and to which, over the last seconds.
 		uint64_t m_PeerHeartbeatAtMs = 0;
 		uint64_t m_PeerTailRequestAtMs = 0;
 		uint8_t m_PeerTailDonor = 0;
@@ -1991,6 +1994,12 @@ namespace RTE {
 		/// @param rate Set to the seat's measured ticks a second.
 		/// @return Whether the seat is a slow machine.
 		bool FeedsBelowRoundRate(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* rate = nullptr);
+		/// Whether a seat this machine waits on at the frame has cost it more than the round allows a slower machine: at 59.5 ticks a
+		/// second or more half a tick a second, below that a tenth of its own rate, over the last capacity window.
+		bool CostsPastTolerance(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* cost = nullptr);
+		static constexpr uint64_t c_CapacityWindowMs = 10000;
+		/// The ticks a second a seat applied over its recent reports, or nothing while they span less than half a second.
+		std::optional<double> PeerAppliedRate(uint8_t peerId, uint64_t nowMs) const;
 		static void NoteArrival(NetLockstepPeerStats& stats, uint64_t nowMs, uint64_t frame);
 		/// Wait for every human owner's published startup before committing the first frame.
 		void TickStartupWait(uint64_t nowMs);
@@ -2106,6 +2115,7 @@ namespace RTE {
 		uint64_t m_FirstMissingMs = 0;
 		std::optional<uint64_t> m_LastDeliveredFrame;
 		uint64_t m_ConsumerWaitStartMs = 0;
+		std::vector<uint8_t> m_ConsumerWaitMissing; //!< The seats whose input the current wait is for.
 		uint64_t m_LastTickMs = 0; //!< Our own last Tick; a gap in it is our park, not a peer's silence.
 		std::atomic<uint64_t> m_SimTickedMs{0}; //!< The simulation thread's last Tick; the plane stands in once it is a tick old.
 		bool m_PlaneTicking = false; //!< Inside PlaneTick: events that call out of the coordinator are deferred.

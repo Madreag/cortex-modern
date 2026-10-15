@@ -1081,6 +1081,12 @@ namespace RTE {
 
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest, NetIdentityBuildOptions identityOptions);
 		void DriveWorldJoins(uint64_t nowMs);
+		/// The private rejoin driver looks at a ready connection the round no longer carries, and at one it still carries for a seat the
+		/// AI holds: a peer frame group keeps a slow seat's link in the round, and its player catches up in place on it.
+		static bool DrivesRejoinLink(bool inRound, bool heldAISeat) { return !inRound || heldAISeat; }
+		/// A looked-at connection that is not its held seat's in-place route may take the private image when no join is open on it and
+		/// the round does not carry it.
+		static bool OffersImageOnLink(bool inRound, bool joinOpen) { return !joinOpen && !inRound; }
 		void DrivePrivateMatchRejoins(uint64_t nowMs);
 		/// Host: the seat roster's return phases from the round - a returner's world in, its seat playing at a committed frame, its
 		/// transfer abandoned.

@@ -188,6 +188,9 @@ namespace RTE {
 		void UploadFrame();
 
 		void Present();
+
+		/// How long the last present waited in the driver's swap, in milliseconds.
+		double GetLastSwapMs() const { return m_LastSwapMs; }
 #pragma endregion
 
 	private:
@@ -207,6 +210,7 @@ namespace RTE {
 		std::vector<glm::mat4> m_MultiDisplayTextureOffsets; //!< Texture offsets for multi-display fullscreen.
 
 		std::unique_ptr<SDL_GLContextState, SDLContextDeleter> m_GLContext; //!< OpenGL context.
+		double m_LastSwapMs = 0; //!< The last present's wait in the swap.
 		GLuint m_ScreenVAO; //!< Vertex Array Object for the screen quad.
 		GLuint m_ScreenVBO; //!< Vertex Buffer Object for the screen quad.
 
