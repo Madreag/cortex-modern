@@ -380,6 +380,18 @@ namespace RTE {
 		return m_StagedReadback != nullptr;
 	}
 
+	void FrameRecorder::WarmTextureReadback(unsigned int texture, int width, int height) {
+		if (!m_Enabled || !m_FencedReadback || width <= 0 || height <= 0) return;
+		HarnessCost::SimulationSpan warmCost;
+		std::string error;
+		if (auto queued = FrameReadbackContext::Submit(texture, width, height, error, GL_BGRA)) {
+			std::vector<unsigned char> rgb(static_cast<std::size_t>(width) * height * 3);
+			ReadQueuedTextureRGB(*queued, rgb, error, true);
+		}
+		HarnessCost::Charge(HarnessCost::Recorder, warmCost.Stop());
+		if (!error.empty()) System::PrintDiagnosticLine("[record-video] the warm-up copy failed: " + error);
+	}
+
 	std::string FrameRecorder::ReadbackError() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return m_ReadbackError;

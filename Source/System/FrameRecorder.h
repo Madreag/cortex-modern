@@ -82,6 +82,9 @@ namespace RTE {
 		unsigned char* BeginFrame(long long wallMS, std::size_t bytes);
 		/// Queue an immutable GPU copy of the rendered texture; completion and RGB conversion belong to the writer.
 		bool StageTextureReadback(unsigned int texture, int width, int height, std::string& error);
+		/// Copies the texture once the way a frame does and waits for it, so the driver's one-time setup of that copy is paid
+		/// before the first frame. Render thread only, before any frame is recorded.
+		void WarmTextureReadback(unsigned int texture, int width, int height);
 		std::string ReadbackError() const;
 
 		/// Queues the buffer BeginFrame returned. Render thread only.

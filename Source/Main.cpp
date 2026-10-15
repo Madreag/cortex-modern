@@ -12397,6 +12397,8 @@ int main(int argc, char** argv) {
 			line << "[record-video] recording to " << s_recordVideoDirectory << " at " << s_recordVideoFps << " fps";
 			System::PrintDiagnosticLine(line.str());
 		}
+		// The first copy of the screen pays the driver's one-time setup (57-97 ms on the Ally); it is paid here, before any frame.
+		if (const auto screenBuffer = g_WindowMan.GetScreenBuffer()) FrameRecorder::Instance().WarmTextureReadback(screenBuffer->GetColorTexture().id, g_WindowMan.GetResX(), g_WindowMan.GetResY());
 	}
 
 	// The chat script drives session traffic — only a headless e2e match may carry it.
