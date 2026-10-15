@@ -20,10 +20,12 @@ def held_host(document):
     host["args"] = host["args"] + ["-net-test-live-stall", f"{STALL_TICK}:{STALL_MS}"]
     # The seat's AI line is a detail line.
     host["env"] = {**host.get("env", {}), "CC_TEST_RETURN_INPUT_DETAILS": "1"}
-    # The stall freezes the host's own screen by design: its frames and its still are the lever's, named and left out of those two rules.
+    # The stall freezes the host's own screen by design: its frames and its still are the lever's, named for the stall's ticks alone and
+    # left out of those two rules.
     reason = f"the scene's own stall of the host's simulation, {STALL_MS} ms at tick {STALL_TICK}"
-    scene["drawn_frames_exclude"] = [{"peer": "host", "first_tick": STALL_TICK - 60, "last_tick": STALL_TICK + 120, "reason": reason}]
-    scene["allowed_stills"] = [{"peer": "host", "from_mark": "minute-01-host", "to_mark": "minute-02-host", "reason": reason}]
+    stall = {"peer": "host", "first_tick": STALL_TICK - 60, "last_tick": STALL_TICK + 120, "reason": reason}
+    scene["drawn_frames_exclude"] = [dict(stall)]
+    scene["allowed_stills"] = [dict(stall)]
     # The hold must follow the stall, within the bound and the decision's trip; a hold the host earns later on its own is not this one.
     held = "|".join(str(STALL_TICK // 10 + offset) for offset in range(HOLD_WITHIN_TICKS // 10))
     scene["checklist"].append({

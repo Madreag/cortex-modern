@@ -167,7 +167,28 @@ class HeldHostSceneTest(unittest.TestCase):
         self.assertEqual(excluded["peer"], "host")
         self.assertTrue(excluded["first_tick"] < tick < excluded["last_tick"] and excluded["last_tick"] - excluded["first_tick"] <= 180, excluded)
         (still,) = document["allowed_stills"]
-        self.assertEqual((still["peer"], still["from_mark"], still["to_mark"]), ("host", "minute-01-host", "minute-02-host"))
+        self.assertEqual(still["peer"], "host")
+        self.assertTrue(still.get("first_tick", 0) < tick < still.get("last_tick", 0) and still["last_tick"] - still["first_tick"] <= 180, still)
+
+    def test_a_scenes_still_window_of_ticks_allows_that_still_alone(self):
+        # The recorder's pictures, 30 a second: the host's screen freezes 2 s at tick 6000 and again, on its own, at tick 7500.
+        rows, wall = [], 0.0
+        for tick in range(5000, 9001, 2):
+            wall += 2000.0 if tick in (6002, 7502) else 1000.0 / 30
+            rows.append(dict(frame=len(rows), wall_ms=wall, sim_tick=tick, saved=True, screen="game", service_state="Running"))
+        stalls = [(next(row["wall_ms"] for row in rows if row["sim_tick"] == tick - 2) - rows[0]["wall_ms"],
+                   next(row["wall_ms"] for row in rows if row["sim_tick"] == tick) - rows[0]["wall_ms"]) for tick in (6002, 7502)]
+        spans = [(begin / 1000.0, end / 1000.0) for begin, end in stalls]
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "frames.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+            (Path(folder) / "events.jsonl").write_text("".join(json.dumps(dict(message=f"video_mark minute-0{minute}-host", wall_ms=rows[0]["wall_ms"] + 60000.0 * minute - 50000.0)) + "\n" for minute in (1, 2, 3)))
+            import fight15_held_host
+            scene = fight15_held_host.held_host(json.loads((fight15_held_host.ROOT / "fight15-s10.json").read_text(encoding="utf-8")))
+            allowed = []
+            stills = peers.video.running_stills(spans, rows, allowed=allowed, named=peers.video.named_still_windows(scene, "run0", "host", folder))
+        self.assertEqual([still["frames"][0] for still in allowed], [rows.index(next(row for row in rows if row["sim_tick"] == 6000))])
+        self.assertEqual(len(stills), 1, stills)
+        self.assertGreater(stills[0]["start_s"], spans[0][1])
 
     def test_a_scenes_named_window_is_left_out_of_that_peers_drawn_frames(self):
         def window(tick, max_ms):
