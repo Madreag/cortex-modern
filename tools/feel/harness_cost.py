@@ -138,8 +138,9 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
             if not measured:
                 errors.append(f'{row["path"]}:{row["line"]}: invalid, duplicated or unpartitioned frame costs'); scope['valid'] = False; continue
             by_frame[frame] = row
-            # A frame whose costs span presented frames is judged by the costliest of them; the others' work took nothing from it.
-            spans = presents and shown >= 1
+            # A frame whose costs span presented frames (one that waited on its peers) is judged by the costliest of them when that is
+            # the smaller: none of them took their sum. A present that ran several ticks stays judged tick by tick, as before.
+            spans = presents and shown >= 1 and costliest < sum(costs.values())
             judged = costliest_costs if spans else costs
             aggregate.append(dict(process=scope['process'], incarnation=scope['incarnation'], round=scope['round'], segment=scope['segment'],
                                   frame=frame, total_ms=sum(costs.values()), judged_ms=costliest if spans else sum(costs.values()),

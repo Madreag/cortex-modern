@@ -189,6 +189,10 @@ class HarnessCostReceipts(unittest.TestCase):
         spike = self.reduce(receipt_log([(1, 300)], version=3, frame_ms={(1, 'recorder'): 96.96}, presented={1: (1, dict(recorder=96.96, screen_watches=12.78))}))
         self.assertEqual(spike['status'], 'FAIL')
         self.assertIn('recorder alone 96.96 ms', spike['reason'])
+        # A present that ran several ticks (a round's start: 14 ticks of live hashing, 50.5 ms) is judged tick by tick, as before.
+        burst = self.reduce(receipt_log([(1, 300)], version=3, frame_ms={(17, 'recorder'): 4.7}, presented={17: (1, dict(recorder=50.5, screen_watches=1.9))}))
+        self.assertEqual(burst['status'], 'PASS', burst['reason'])
+        self.assertEqual(burst['max_frame_ms'], 5.7)
         # A frame inside one presented frame (a catch-up's later ticks) is judged by its own costs.
         inside = self.reduce(receipt_log([(1, 300)], version=3, frame_ms={(9, 'recorder'): 61.0}, presented={9: (0, dict(recorder=0, screen_watches=0))}))
         self.assertIn('recorder alone 61 ms', inside['reason'])
