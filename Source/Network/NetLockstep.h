@@ -1665,6 +1665,8 @@ namespace RTE {
 		/// The seats that vote now, with voters narrowed to them; zero when no voter is a retained seat.
 		uint32_t PeerVotingOwners(uint32_t& voters) const;
 		/// Whether voters are exactly half of the voting seats in a round whose ties the referee decides.
+		/// Whether the round's referee decides its ties: a directory round of two or four retained seats; the host's half wins any other tie.
+		bool PeerTieRefereed() const;
 		bool PeerGroupIsRefereedHalf(uint32_t voters) const;
 		/// The frame from which the whole group last played together at or before frame: the name every half gives the split after it.
 		uint64_t PeerSplitEpoch(uint64_t frame) const;
