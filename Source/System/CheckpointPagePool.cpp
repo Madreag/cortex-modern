@@ -12,6 +12,7 @@
 #include "ScenarioRunner.h"
 #include "Vector.h"
 #include "ThreadMan.h"
+#include "System.h"
 
 #include <algorithm>
 #include <atomic>
@@ -19,6 +20,7 @@
 #include <bit>
 #include <chrono>
 #include <cstring>
+#include <cstdio>
 #include <cstdlib>
 #include <format>
 #include <future>
@@ -38,15 +40,21 @@
 #include <memory>
 #include <new>
 #include <optional>
+#include <set>
 #include <span>
 #include <string_view>
 #include <vector>
+
+#ifndef _MSC_VER
+#include <cxxabi.h>
+#endif
 
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <psapi.h>
 #else
 #include <pthread.h>
 #include <sys/mman.h>
@@ -62,15 +70,24 @@ namespace {
 		unsigned char* data = nullptr;
 		size_t bytes;
 		bool betweenTicks = false; //!< A capture's copy goes back between the game's ticks.
-		explicit Pages(size_t bytes, bool betweenTicks = false) : bytes(bytes), betweenTicks(betweenTicks) {
+		/// @param reserved Address space only: Commit makes each range usable as it is needed.
+		explicit Pages(size_t bytes, bool betweenTicks = false, bool reserved = false) : bytes(bytes), betweenTicks(betweenTicks) {
 			CheckpointFailure::Check(CheckpointFailure::Point::NativePages);
 #ifdef _WIN32
-			data = static_cast<unsigned char*>(VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+			data = static_cast<unsigned char*>(reserved ? VirtualAlloc(nullptr, bytes, MEM_RESERVE, PAGE_NOACCESS) : VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
 #else
-			void* memory = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+			void* memory = mmap(nullptr, bytes, reserved ? PROT_NONE : PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 			if (memory != MAP_FAILED) data = static_cast<unsigned char*>(memory);
 #endif
 			if (!data) throw std::bad_alloc();
+		}
+		/// False when the process may take no more memory.
+		bool Commit(size_t offset, size_t size) noexcept {
+#ifdef _WIN32
+			return VirtualAlloc(data + offset, size, MEM_COMMIT, PAGE_READWRITE) != nullptr;
+#else
+			return mprotect(data + offset, size, PROT_READ | PROT_WRITE) == 0;
+#endif
 		}
 		~Pages() {
 			if (betweenTicks) ReleaseBetweenTicks(data, bytes);
@@ -111,6 +128,24 @@ namespace {
 		explicit Locked(std::atomic_flag& flag) : flag(flag) { while (flag.test_and_set(std::memory_order_acquire)) {} }
 		~Locked() { flag.clear(std::memory_order_release); }
 	};
+	// The private memory the process has committed, as a commit limit counts it; -1 where the platform charges only touched pages.
+	int64_t CommittedPrivateBytes() {
+#ifdef _WIN32
+		PROCESS_MEMORY_COUNTERS_EX counters{};
+		if (!K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters))) return -1;
+		return static_cast<int64_t>(counters.PrivateUsage);
+#elif defined(__linux__)
+		FILE* status = std::fopen("/proc/self/status", "r");
+		if (!status) return -1;
+		char line[256];
+		long long kilobytes = -1;
+		while (std::fgets(line, sizeof(line), status)) if (std::sscanf(line, "VmData: %lld kB", &kilobytes) == 1) break;
+		std::fclose(status);
+		return kilobytes < 0 ? -1 : kilobytes * 1024;
+#else
+		return -1;
+#endif
+	}
 }
 
 struct CheckpointPagePool::ArmGate {
@@ -125,6 +160,12 @@ struct CheckpointPagePool::Copy {
 	Pages pages;
 	std::vector<std::atomic<unsigned char>> saved;
 	std::vector<unsigned char> hot;
+	// An inventory's copy is address space until a page is saved into it: a boundary keeps only the pages written while it is
+	// read and the pages its reader copies, never a second copy of the whole inventory. Under the block's lock.
+	std::vector<unsigned char> committed;
+	size_t chunkBytes = 0;
+	std::atomic<uint64_t> committedBytes{0};
+	std::atomic<bool> exhausted{false}; //!< A page this copy had to keep found no memory, so its frozen view cannot be read.
 	std::thread::id simThread;
 	std::atomic<bool> armed{false};
 	std::atomic<int64_t> workerUs{0}, simFaultNs{0}, otherFaultNs{0};
@@ -132,8 +173,30 @@ struct CheckpointPagePool::Copy {
 	bool completed = false;
 	bool abandoned = false;
 	const std::shared_ptr<ArmGate> gate;
-	Copy(size_t bytes, size_t pageBytes, std::shared_ptr<ArmGate> gate = {}) : pages(bytes, true), saved(bytes / pageBytes), hot(bytes / pageBytes, 0), gate(std::move(gate)) {
+	Copy(size_t bytes, size_t pageBytes, std::shared_ptr<ArmGate> gate = {}) : pages(bytes, true, gate != nullptr), saved(bytes / pageBytes), hot(bytes / pageBytes, 0), gate(std::move(gate)) {
 		for (auto& page: saved) page.store(0, std::memory_order_relaxed);
+		if (this->gate) {
+			chunkBytes = std::max<size_t>(size_t{64} << 10, pageBytes);
+			committed.assign((bytes + chunkBytes - 1) / chunkBytes, 0);
+		} else {
+			committedBytes.store(bytes, std::memory_order_relaxed);
+		}
+	}
+	/// Makes the copy's pages [first, first + count) usable; the caller holds the block's lock.
+	bool Commit(size_t first, size_t count, size_t pageBytes) noexcept {
+		if (committed.empty() || !count) return true;
+		const size_t last = ((first + count) * pageBytes - 1) / chunkBytes;
+		for (size_t chunk = first * pageBytes / chunkBytes; chunk <= last; ++chunk) {
+			if (committed[chunk]) continue;
+			const size_t offset = chunk * chunkBytes, size = std::min(chunkBytes, pages.bytes - offset);
+			if (!pages.Commit(offset, size)) {
+				exhausted.store(true, std::memory_order_release);
+				return false;
+			}
+			committed[chunk] = 1;
+			committedBytes.fetch_add(size, std::memory_order_relaxed);
+		}
+		return true;
 	}
 	bool Arming() const noexcept { return gate && gate->state.load(std::memory_order_acquire) == ArmGate::State::Arming; }
 	bool Armed() const noexcept { return gate ? gate->state.load(std::memory_order_acquire) == ArmGate::State::Armed : armed.load(std::memory_order_acquire); }
@@ -193,6 +256,7 @@ struct CheckpointPagePool::Block {
 		for (size_t page = 0; page < states.size();) {
 			if (states[page] == PageState::Hot) {
 				if (!copy.saved[page].load(std::memory_order_relaxed)) {
+					if (!copy.Commit(page, 1, pageBytes)) throw std::bad_alloc();
 					CopyCheckpointPages(copy.pages.data + page * pageBytes, live.data + page * pageBytes, pageBytes);
 					copy.saved[page].store(1, std::memory_order_release);
 					++copied;
@@ -226,9 +290,11 @@ struct CheckpointPagePool::Block {
 		}
 		// Every capture whose boundary has begun keeps the page as that boundary saw it.
 		for (const auto& copy: copies) {
-			if (copy->completed || copy->abandoned || !(copy->Armed() || copy->Arming())) continue;
+			if (copy->completed || copy->abandoned || copy->exhausted.load(std::memory_order_relaxed) || !(copy->Armed() || copy->Arming())) continue;
 			for (size_t page = first; page < first + count; ++page) {
 				if (copy->saved[page].load(std::memory_order_relaxed)) continue;
+				// Without memory for the page its reader is refused; the game's write still goes ahead.
+				if (!copy->Commit(page, 1, pageBytes)) break;
 				const size_t offset = page * pageBytes;
 				CopyCheckpointPages(copy->pages.data + offset, live.data + offset, pageBytes);
 				copy->saved[page].store(1, std::memory_order_release);
@@ -556,6 +622,7 @@ std::span<const std::byte> CheckpointPagePool::Snapshot::ReadBytes(const void* s
 				throw std::runtime_error("could not read a frozen native page");
 		}
 	}
+	if (part.copy->exhausted.load(std::memory_order_acquire)) throw std::bad_alloc();
 	return {reinterpret_cast<const std::byte*>(part.copy->pages.data + offset), bytes};
 }
 
@@ -707,6 +774,7 @@ void CheckpointPagePool::Snapshot::WarmShadow() const {
 			Locked guard(part.block->lock);
 			written.reserve(part.block->states.size());
 			for (const auto state: part.block->states) written.push_back(state == Block::PageState::Hot);
+			for (size_t page = 0; page < written.size(); ++page) if (written[page] && !part.copy->Commit(page, 1, part.block->pageBytes)) throw std::bad_alloc();
 		}
 		for (size_t page = 0; page < part.copy->saved.size(); ++page) if (!m_ArmGate || written[page]) destination[page * part.block->pageBytes] = 0;
 	}
@@ -737,6 +805,7 @@ CheckpointPagePool::Costs CheckpointPagePool::Snapshot::Cost() const {
 	Costs result;
 	for (const auto& part: m_Parts) {
 		result.bytes += part.copy->pages.bytes;
+		result.committedBytes += part.copy->committedBytes.load(std::memory_order_relaxed);
 		result.workerUs += part.copy->workerUs.load(std::memory_order_relaxed);
 		result.simFaultUs += (part.copy->simFaultNs.load(std::memory_order_relaxed) + 999) / 1000;
 		result.otherFaultUs += (part.copy->otherFaultNs.load(std::memory_order_relaxed) + 999) / 1000;
@@ -747,6 +816,20 @@ CheckpointPagePool::Costs CheckpointPagePool::Snapshot::Cost() const {
 }
 
 std::string CheckpointPagePool::SelfTestMismatch() {
+	{
+		// A prepared inventory holds address space for its shadow, never a second committed copy of the inventory.
+		constexpr size_t c_Bytes = size_t{64} << 20;
+		Allocation owned(c_Bytes, true);
+		std::memset(owned.Data(), 1, c_Bytes);
+		uint64_t generation = 0;
+		const int64_t before = CommittedPrivateBytes();
+		auto prepared = PrepareInventory(generation);
+		prepared->WarmShadow();
+		const int64_t grown = CommittedPrivateBytes() - before;
+		prepared->Cancel();
+		if (before >= 0 && grown > static_cast<int64_t>(c_Bytes / 4))
+			return std::format("a prepared inventory committed {} MB for its {} MB of storage before any page was written", grown >> 20, c_Bytes >> 20);
+	}
 	{
 		Allocation owned(4096, true);
 		auto* value = static_cast<uint64_t*>(owned.Data());
@@ -1443,6 +1526,41 @@ const void* CheckpointNativeStorage::Original(const void* view) {
 bool CheckpointNativeStorage::IsView(const void* address) {
 	if (s_Read && address && s_Read->privateRoots.Find(s_Read->roots, address, 1)) return false;
 	return Original(address) != address;
+}
+
+bool CheckpointNativeStorage::InBoundaryRoot(const void* view) {
+	if (!s_Read || !view) return false;
+	const RootRange* root = s_Read->viewRoots.Find(s_Read->roots, view, 1);
+	return root && !root->privateValues;
+}
+
+namespace {
+	std::atomic<int> s_StartupLinksRefusals{0};
+}
+
+CheckpointNativeStorage::StartupLinksRefusal::StartupLinksRefusal() { s_StartupLinksRefusals.fetch_add(1, std::memory_order_acq_rel); }
+
+CheckpointNativeStorage::StartupLinksRefusal::~StartupLinksRefusal() { s_StartupLinksRefusals.fetch_sub(1, std::memory_order_acq_rel); }
+
+void CheckpointNativeStorage::NoteStartupLinks(const void* view, const char* type) {
+	const RootRange* root = s_Read ? s_Read->viewRoots.Find(s_Read->roots, view, 1) : nullptr;
+	std::string name = type;
+#ifndef _MSC_VER
+	int status = 0;
+	if (char* demangled = abi::__cxa_demangle(type, nullptr, nullptr, &status)) { if (status == 0) name = demangled; std::free(demangled); }
+#endif
+	const size_t offset = root ? reinterpret_cast<uintptr_t>(view) - reinterpret_cast<uintptr_t>(root->view) : 0;
+	const std::string message = std::format("a startup object's container keeps its links outside checkpoint storage ({} at offset {} of a {}-byte root)",
+	    name, offset, root ? root->bytes : 0);
+	static const bool refuse = [] { const char* value = std::getenv("CC_TEST_CHECKPOINT_STARTUP_LINKS"); return value && std::string_view(value) == "1"; }();
+	if (refuse || s_StartupLinksRefusals.load(std::memory_order_acquire) > 0) throw std::logic_error(message);
+	static std::mutex mutex;
+	static std::set<std::pair<size_t, std::string>> named;
+	{
+		std::lock_guard lock(mutex);
+		if (!named.emplace(offset, name).second) return;
+	}
+	System::PrintDiagnosticLine("[checkpoint] " + message);
 }
 
 namespace {

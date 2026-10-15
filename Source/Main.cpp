@@ -12175,6 +12175,20 @@ int main(int argc, char** argv) {
 	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');
 
 	const bool mainArgsValid = HandleMainArgs(argc, argv);
+	// Test lever CC_TEST_AUTOSAVE_SECONDS=<seconds>: -net-autosave-seconds for runners that pass only test levers.
+	if (const char* seconds = std::getenv("CC_TEST_AUTOSAVE_SECONDS"); seconds && *seconds) {
+		uint32_t value = 0;
+		const std::string_view text(seconds);
+		if (const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value); parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size())
+			NetMatchService::SetAutosaveSeconds(value);
+	}
+	// Test lever CC_TEST_MEMORY_CENSUS_TICKS=<ticks>: -memory-census-ticks for runners that pass only test levers.
+	if (const char* ticks = std::getenv("CC_TEST_MEMORY_CENSUS_TICKS"); ticks && *ticks) {
+		uint64_t value = 0;
+		const std::string_view text(ticks);
+		if (const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value); parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size())
+			s_memoryCensusTicks = value;
+	}
 	// Only a menu script, the UI probe or a harness's screen watches read what the renderer drew.
 	const char* screenWatches = std::getenv("CCCP_TEST_SCREEN_WATCHES");
 	SetPanelDrawRecording(!s_menuScriptPath.empty() || (netUiProbeScript != nullptr && *netUiProbeScript != '\0') || (screenWatches != nullptr && *screenWatches != '\0'));
