@@ -108,6 +108,31 @@
    "renders": 3
   },
   {
+   "op": "wait",
+   "picker_open": true,
+   "player": "local"
+  },
+  {
+   "op": "game_mouse",
+   "button": "right",
+   "down": true
+  },
+  {
+   "op": "wait",
+   "renders": 3,
+   "sim_advanced": 2
+  },
+  {
+   "op": "game_mouse",
+   "button": "right",
+   "down": false
+  },
+  {
+   "op": "wait",
+   "picker_open": false,
+   "player": "local"
+  },
+  {
    "op": "game_mouse",
    "button": "right",
    "down": true
@@ -185,7 +210,8 @@
    "name": "done"
   },
   {
-   "op": "finish"
+   "op": "finish",
+   "quit": true
   }
  ]
 }

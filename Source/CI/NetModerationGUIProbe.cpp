@@ -98,7 +98,7 @@ namespace {
 		Sim
 	};
 	struct Probe {
-		bool loaded = false, enabled = false, done = false, failed = false, resultStarted = false;
+		bool loaded = false, enabled = false, done = false, failed = false, resultStarted = false, quitWhenWritten = false;
 		size_t index = 0, gestureIndex = SIZE_MAX, handIndex = SIZE_MAX; //!< handIndex: the step whose hand gesture is still running.
 		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0, stepSim = 0, resultWrittenMs = 0, pendingWrittenMs = 0;
 		Clock::time_point started;
@@ -1662,6 +1662,8 @@ namespace {
 			probe.done = true;
 			probe.result["complete"] = true;
 			probe.result["pass"] = true;
+			// A run with no driver to end it (a single-player fight) ends its engine once the result is written.
+			probe.quitWhenWritten = step.value("quit", false);
 		} else {
 			throw std::runtime_error("unknown probe operation: " + op);
 		}
@@ -1777,6 +1779,7 @@ namespace {
 				probe.resultWrittenMs = probe.stepMs;
 			}
 			if (probe.done) System::PrintDiagnosticLine("[net-ui-probe] PASS: completed " + std::to_string(probe.index) + " steps");
+			if (probe.done && probe.quitWhenWritten) System::SetQuit(true);
 		} catch (const std::exception& error) {
 			try { ReleasePanKey(); } catch (...) {}
 			GUIInputWrapper::SetAutomationDriving(false);
