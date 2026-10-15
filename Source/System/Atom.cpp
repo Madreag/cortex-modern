@@ -1303,12 +1303,21 @@ std::string Atom::GetPoolMemoryCounts() {
 }
 
 void Atom::ReleaseUnusedPoolMemory() {
+	while (ReleaseUnusedPoolMemory(std::numeric_limits<size_t>::max())) {}
+}
+
+bool Atom::ReleaseUnusedPoolMemory(size_t budget) {
 	std::lock_guard lock(s_MemoryPoolMutex);
 	const size_t reserve = static_cast<size_t>(s_PoolAllocBlockCount > 0 ? s_PoolAllocBlockCount : 10) * 2;
+	if (s_AllocatedPool.size() <= reserve) return false;
 	while (s_AllocatedPool.size() > reserve) {
+		if (budget == 0) return true;
 		free(s_AllocatedPool.back());
 		s_AllocatedPool.pop_back();
+		--budget;
 	}
+	s_AllocatedPool.shrink_to_fit();
+	return false;
 }
 
 bool Atom::CalculateNormal(BITMAP* sprite, Vector spriteCenter) {

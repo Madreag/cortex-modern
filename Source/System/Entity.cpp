@@ -992,15 +992,24 @@ namespace RTE {
 	}
 
 	void Entity::ClassInfo::ReleaseUnusedPoolMemory() {
+		while (ReleaseUnusedPoolMemory(std::numeric_limits<size_t>::max())) {}
+	}
+
+	bool Entity::ClassInfo::ReleaseUnusedPoolMemory(size_t budget) {
 		for (ClassInfo* info = s_ClassHead; info; info = info->m_NextClass) {
 			if (!info->IsConcrete()) continue;
 			std::lock_guard lock(info->m_Mutex);
 			const size_t reserve = static_cast<size_t>(info->m_PoolAllocBlockCount > 0 ? info->m_PoolAllocBlockCount : 10) * 2;
+			if (info->m_AllocatedPool.size() <= reserve) continue;
 			while (info->m_AllocatedPool.size() > reserve) {
+				if (budget == 0) return true;
 				info->m_Deallocate(info->m_AllocatedPool.back());
 				info->m_AllocatedPool.pop_back();
+				--budget;
 			}
+			info->m_AllocatedPool.shrink_to_fit();
 		}
+		return false;
 	}
 
 	bool Entity::ClassInfo::RunPoolExhaustionSelfTest() {

@@ -9130,10 +9130,14 @@ void RunGameLoop() {
 				g_MovableMan.StartMOIDDrawTask();
 			}
 
-			if (ScenarioRunner::IsLockstepControllerSyncActive() && simTick % 300 == 0) {
-				// A particle wave can leave hundreds of thousands of returned blocks. Keep two refills, not the wave's peak.
-				Entity::ClassInfo::ReleaseUnusedPoolMemory();
-				Atom::ReleaseUnusedPoolMemory();
+			// A particle wave can leave hundreds of thousands of returned blocks, in single player as in a match: keep two
+			// refills, not the wave's peak, giving back a few thousand a tick so no one tick pays for the whole wave.
+			static bool s_poolReleasePending = false;
+			if (s_poolReleasePending || simTick % 300 == 0) {
+				constexpr size_t c_PoolBlocksPerTick = 2048;
+				const bool entities = Entity::ClassInfo::ReleaseUnusedPoolMemory(c_PoolBlocksPerTick);
+				const bool atoms = Atom::ReleaseUnusedPoolMemory(c_PoolBlocksPerTick);
+				s_poolReleasePending = entities || atoms;
 			}
 			RecordActorHistory(simTick);
 			DumpSimStateIfArmed(simTick);

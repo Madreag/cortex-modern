@@ -202,6 +202,9 @@ namespace RTE {
 
 			static std::string GetPoolMemoryCounts();
 			static void ReleaseUnusedPoolMemory();
+			/// Gives up to budget returned blocks back to the system, keeping two refills per class.
+			/// @return Whether blocks past two refills remain.
+			static bool ReleaseUnusedPoolMemory(size_t budget);
 			/// A pool whose refill the allocator refuses throws std::bad_alloc instead of handing out a null instance.
 			static bool RunPoolExhaustionSelfTest();
 
