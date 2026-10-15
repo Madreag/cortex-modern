@@ -612,7 +612,13 @@ namespace RTE {
 				}
 			}
 		}
-		for (const auto& [key, kept]: m_PendingPeerDecisions) if (key.first <= m_Stats.nextFrame) return true;
+		// A decision this peer cannot yet show the authority of stops its frame; the frame's committed record, asked of the seats that have
+		// played it, settles that frame as they played it.
+		for (const auto& [key, kept]: m_PendingPeerDecisions) if (key.first <= m_Stats.nextFrame) {
+			if (m_PeerCommittedTail.contains(m_Stats.nextFrame)) return false;
+			RequestPeerCommittedTail(nowMs);
+			return true;
+		}
 		// A member that voted for a return, a delay or an admission at the next frame takes it before playing that frame, and so does
 		// every member that knows of a return proposed there for a seat still held: the others may certify it without this one's vote.
 		std::erase_if(m_PeerVotedAtMs, [this](const auto& voted) { return voted.first.first < m_Stats.nextFrame || m_PeerBridgeCertificates.contains(voted.first); });
@@ -650,7 +656,18 @@ namespace RTE {
 				completes = !heldHere && !silent && !backedAnother;
 			}
 			if (!completes) continue;
+			// The frame's committed record settles what this peer still waits on: it carries the decision if any peer certified it.
+			if (m_PeerCommittedTail.contains(m_Stats.nextFrame)) return false;
 			const auto seen = m_PeerVotedAtMs.try_emplace(votes->first, nowMs).first;
+			// Once the votes have had their round trip and the bound, the record is asked of the seats that have played the frame.
+			uint64_t roundTripMs = 0;
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+				if (peer == m_Config.localPeerId || (required & SeatBit(peer)) == 0) continue;
+				const auto [wire, route] = PeerFrameRoute(peer);
+				if (wire && wire->IsPeerPingMeasured(route)) roundTripMs = std::max<uint64_t>(roundTripMs, wire->GetPeerPingMs(route));
+			}
+			const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
+			if (nowMs >= seen->second + roundTripMs + boundMs) RequestPeerCommittedTail(nowMs);
 			if (nowMs < seen->second + c_NetSeatCatchUpAllowanceMs) return true;
 		}
 		return false;
