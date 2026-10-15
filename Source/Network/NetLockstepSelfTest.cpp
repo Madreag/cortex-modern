@@ -28669,6 +28669,18 @@ namespace {
 			std::cout << "[net-lockstep-selftest] opened_seat_image_tick=" << image.tick << " activation=" << activation << " first_control=" << applied << " first_required=" << firstRequired << std::endl;
 			return done("");
 		}
+
+		// A peer frame group keeps a slow seat's link in the round while the AI holds the seat; its player catches up in place on that
+		// link, so the private rejoin driver must take it up there and never offer it the image.
+		static bool HeldSeatsOwnLinkCarriesItsCatchUp(std::string* error) {
+			const auto done = [&](const std::string& why) { return ReportReleasedClaimsRow("a_seat_held_in_place_keeps_a_transfer_route_on_its_own_link", why, error); };
+			if (!NetMatchService::DrivesRejoinLink(true, true))
+				return done("the private rejoin driver skips a held seat's link that the round still carries: no transfer route is bound on it and its in-place catch-up reports are dropped as 'no current transfer route'");
+			if (NetMatchService::DrivesRejoinLink(true, false)) return done("the private rejoin driver takes up a playing seat's link from the round");
+			if (NetMatchService::OffersImageOnLink(true, false)) return done("a held seat whose link the round still carries is offered the private image instead of its in-place catch-up");
+			if (!NetMatchService::DrivesRejoinLink(false, true) || !NetMatchService::OffersImageOnLink(false, false)) return done("a returner the round no longer carries is not offered its private image");
+			return done("");
+		}
 	};
 
 	int NetLockstepSelfTest::RunSeatAdmission() {
@@ -28676,12 +28688,12 @@ namespace {
 		std::string error;
 		const char* selected = std::getenv("CCCP_SEAT_ADMISSION_CASE");
 		bool passed = true, ran = false;
-		for (const auto& [name, test]: std::array<std::pair<const char*, bool (*)(std::string*)>, 9>{{
+		for (const auto& [name, test]: std::array<std::pair<const char*, bool (*)(std::string*)>, 10>{{
 		    {"G1", SeatAdmissionServiceTest::FutureRemovalRollsBack}, {"G3", SeatAdmissionServiceTest::LeaverFindsSuccessor},
 		    {"G4", SeatAdmissionServiceTest::OpenedSeatJoinsThroughImage}, {"K2", SeatAdmissionServiceTest::EncodedRemovalFitsBothCapsules},
 		    {"K3", SeatAdmissionServiceTest::KickWithdrawsOpenedActivation}, {"K4", SeatAdmissionServiceTest::RepeatedRemovalKeepsCapacity},
 		    {"K1", SeatAdmissionServiceTest::LeaverWalksTwoSuccessors}, {"K5", SeatAdmissionServiceTest::AuthenticatedAdmissionRaces},
-		    {"K7", SeatAdmissionServiceTest::AnnouncedLoneDepartureEnds}}}) {
+		    {"K7", SeatAdmissionServiceTest::AnnouncedLoneDepartureEnds}, {"G5", SeatAdmissionServiceTest::HeldSeatsOwnLinkCarriesItsCatchUp}}}) {
 			if (selected && *selected && std::strcmp(selected, name) != 0) continue;
 			SeatAdmissionServiceTest::Reset();
 			passed &= test(&error); ran = true;

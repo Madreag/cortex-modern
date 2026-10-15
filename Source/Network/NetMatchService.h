@@ -1079,6 +1079,10 @@ namespace RTE {
 
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest, NetIdentityBuildOptions identityOptions);
 		void DriveWorldJoins(uint64_t nowMs);
+		/// The private rejoin driver looks at a ready connection the round no longer carries; one it still carries plays in the round.
+		static bool DrivesRejoinLink(bool inRound, [[maybe_unused]] bool heldAISeat) { return !inRound; }
+		/// A looked-at connection that is not its held seat's in-place route may take the private image when no join is open on it.
+		static bool OffersImageOnLink([[maybe_unused]] bool inRound, bool joinOpen) { return !joinOpen; }
 		void DrivePrivateMatchRejoins(uint64_t nowMs);
 		/// Host: the seat roster's return phases from the round - a returner's world in, its seat playing at a committed frame, its
 		/// transfer abandoned.
