@@ -230,14 +230,22 @@ namespace RTE {
 			// Slow: the machine runs at `percent` of the round's rate, its link up. Stopped: its main loop stops while its plane keeps the
 			// link alive. Silent: every link of the seat drops while its machine runs on. Hung: the whole process stops - nothing sent,
 			// what reaches it waits in its socket. Late: every packet of the seat's links takes `percent` ms longer each way - its inputs
-			// keep arriving, past the bound.
-			enum class Kind : uint8_t { Slow, Stopped, Silent, Hung, Late };
+			// keep arriving, past the bound. Stall: only its reliable lanes take `percent` ms longer - votes and certificates stall while
+			// its inputs still flow.
+			enum class Kind : uint8_t { Slow, Stopped, Silent, Hung, Late, Stall };
 			uint8_t seat = 2;
 			Kind kind = Kind::Slow;
 			uint64_t atMs = 6000, ms = 2000;
 			uint32_t percent = 80;
 			bool directoryDark = false; //!< Silent: its whole connection goes dark, its directory requests with it.
 			uint64_t EndMs() const { return atMs + ms; }
+		};
+		// The round's links split into two sides for a while: every link between them drops, each side's own links stay up.
+		struct Cut {
+			uint32_t side = 0; //!< The seats on one side, as a mask of their bits; the rest are the other side.
+			uint64_t atMs = 6000, ms = 2000;
+			uint32_t directoryDark = 0; //!< The seats whose directory requests fail through the cut.
+			bool Separates(uint8_t a, uint8_t b) const { return ((side >> (a - 1)) & 1U) != ((side >> (b - 1)) & 1U); }
 		};
 		struct Burst {
 			uint8_t seat = 2; //!< Every link of this seat loses `percent` of its packets: unreliable ones dropped, reliable ones resent late.
@@ -254,10 +262,18 @@ namespace RTE {
 			uint32_t directoryExchangeMs = 100;
 			std::vector<Spell> spells;
 			std::vector<Burst> bursts;
+			std::vector<Cut> cuts;
 			uint8_t leaver = 0; //!< This seat leaves the round at leaveAtMs, its seat kept by the AI (0: none).
 			uint64_t leaveAtMs = 0;
+			uint8_t kicked = 0; //!< The host removes this seat at kickAtMs; the directory hears of it one exchange later (0: none).
+			uint64_t kickAtMs = 0;
 			uint64_t endMs = 30000;
-			bool Left(uint8_t seat, uint64_t now) const { return leaver && seat == leaver && now >= leaveAtMs; }
+			bool Left(uint8_t seat, uint64_t now) const { return (leaver && seat == leaver && now >= leaveAtMs) || Removed(seat, now); }
+			bool Removed(uint8_t seat, uint64_t now) const { return kicked && seat == kicked && now >= kickAtMs; }
+			bool CutBetween(uint8_t a, uint8_t b, uint64_t now) const {
+				for (const auto& cut: cuts) if (now >= cut.atMs && now < cut.atMs + cut.ms && cut.Separates(a, b)) return true;
+				return false;
+			}
 			uint32_t Rtt(uint8_t a, uint8_t b) const { return a == b ? 0 : rttMs[a][b]; }
 			bool In(const Spell& spell, uint8_t seat, uint64_t now) const { return spell.seat == seat && now >= spell.atMs && now < spell.EndMs(); }
 			const Spell* Active(uint8_t seat, uint64_t now) const {
@@ -265,14 +281,17 @@ namespace RTE {
 				return nullptr;
 			}
 			bool Is(uint8_t seat, uint64_t now, Spell::Kind kind) const { const auto* spell = Active(seat, now); return spell && spell->kind == kind; }
-			bool Cut(uint8_t a, uint8_t b, uint64_t now) const { return a != b && (Is(a, now, Spell::Kind::Silent) || Is(b, now, Spell::Kind::Silent)); }
+			bool Cut(uint8_t a, uint8_t b, uint64_t now) const { return a != b && (Is(a, now, Spell::Kind::Silent) || Is(b, now, Spell::Kind::Silent) || CutBetween(a, b, now)); }
 			bool DirectoryReachable(uint8_t seat, uint64_t now) const {
+				for (const auto& cut: cuts) if (now >= cut.atMs && now < cut.atMs + cut.ms && ((cut.directoryDark >> (seat - 1)) & 1U)) return false;
 				const auto* spell = Active(seat, now);
-				return !spell || spell->kind == Spell::Kind::Slow || spell->kind == Spell::Kind::Stopped || spell->kind == Spell::Kind::Late || (spell->kind == Spell::Kind::Silent && !spell->directoryDark);
+				return !spell || spell->kind == Spell::Kind::Slow || spell->kind == Spell::Kind::Stopped || spell->kind == Spell::Kind::Late || spell->kind == Spell::Kind::Stall ||
+				    (spell->kind == Spell::Kind::Silent && !spell->directoryDark);
 			}
-			uint32_t LateMs(uint8_t a, uint8_t b, uint64_t now) const {
+			uint32_t LateMs(uint8_t a, uint8_t b, uint64_t now, bool reliable) const {
 				uint32_t late = 0;
-				for (uint8_t seat: {a, b}) if (const auto* spell = Active(seat, now); spell && spell->kind == Spell::Kind::Late) late = std::max(late, spell->percent);
+				for (uint8_t seat: {a, b})
+					if (const auto* spell = Active(seat, now); spell && (spell->kind == Spell::Kind::Late || (reliable && spell->kind == Spell::Kind::Stall))) late = std::max(late, spell->percent);
 				return late;
 			}
 			uint32_t LossPercent(uint8_t a, uint8_t b, uint64_t now) const {
@@ -510,6 +529,13 @@ namespace RTE {
 				uint64_t sessionDelay = 0;
 				std::vector<uint8_t> delivered = bytes;
 				NetHostMigrationMessage decision; NetHash32 key; key.fill(0x39);
+				// The packet as its receiver reads it, authenticated once for every check below that only looks at it.
+				std::optional<bool> peeked; NetHostMigrationMessage read;
+				const auto peekInto = [&](NetHostMigrationMessage& into) {
+					if (!peeked) peeked = NetHostMigrationCodec::Decode(bytes, key, read);
+					if (*peeked) into = read;
+					return *peeked;
+				};
 				if (hub.row.laterSessionMessageFirst && owner == 2 && NetHostMigrationCodec::Decode(bytes, key, decision) &&
 				    decision.type == NetHostMigrationMessageType::PeerSession) {
 					const auto decoded = NetProtocol::Decode(decision.bytes);
@@ -519,7 +545,7 @@ namespace RTE {
 					}
 				}
 				if (hub.row.receiptGap && NetHostMigrationCodec::Decode(bytes, key, decision) && RemoveReceiptGap(decision, delivered)) return true;
-				if (hub.row.lateReceiptsFrom == owner && hub.DuringFault() && NetHostMigrationCodec::Decode(bytes, key, decision) &&
+				if (hub.row.lateReceiptsFrom == owner && hub.DuringFault() && peekInto(decision) &&
 				    decision.type == NetHostMigrationMessageType::PeerReceipt) sessionDelay = hub.row.lateReceiptsMs;
 #if __has_include("NetPeerSessionWire.h")
 				// The first frame requests are unavailable for one second. Sender
@@ -536,7 +562,7 @@ namespace RTE {
 #endif
 				if (hub.countInputs && owner == 1) CountInputTicks(bytes, lane);
 				// A return is placed past every input its proposer has sent: no voter can have prepared that far.
-				if (NetHostMigrationCodec::Decode(bytes, key, decision) && decision.senderPeerId == owner) {
+				if (peekInto(decision) && decision.senderPeerId == owner) {
 					if (decision.type == NetHostMigrationMessageType::PeerInput) hub.inputSentThrough[owner] = std::max(hub.inputSentThrough[owner], decision.frame);
 					if (decision.type == NetHostMigrationMessageType::PeerTail && other->owner == hub.row.subject) ++hub.tailsSentBy[owner];
 					if (hub.row.keepInputEvery && owner == hub.row.subject && hub.DuringFault() && decision.type == NetHostMigrationMessageType::PeerInput &&
@@ -547,10 +573,10 @@ namespace RTE {
 						hub.returnInsideInputs = "peer " + std::to_string(owner) + " proposed a return at " + std::to_string(decision.frame) + " with its own inputs sent through " +
 						                         std::to_string(hub.inputSentThrough[owner]);
 				}
-				if (hub.dropReceiptsFrom == owner && NetHostMigrationCodec::Decode(bytes, key, decision) && decision.type == NetHostMigrationMessageType::PeerReceipt) return true;
-				if (hub.dropInputsFrom == owner && NetHostMigrationCodec::Decode(bytes, key, decision) &&
+				if (hub.dropReceiptsFrom == owner && peekInto(decision) && decision.type == NetHostMigrationMessageType::PeerReceipt) return true;
+				if (hub.dropInputsFrom == owner && peekInto(decision) &&
 				    (decision.type == NetHostMigrationMessageType::PeerInput || decision.type == NetHostMigrationMessageType::PeerForwardInput)) return true;
-				if (lane == NetTransportLane::ControlReliable && NetHostMigrationCodec::Decode(bytes, key, decision)) {
+				if (lane == NetTransportLane::ControlReliable && peekInto(decision)) {
 					[]<class Message>(Hub& hub, const Message& packet) {
 						using Type = std::decay_t<decltype(packet.type)>;
 						if constexpr (requires { Type::PeerBridgeCommit; }) {
@@ -560,10 +586,10 @@ namespace RTE {
 					}(hub, decision);
 				}
 				// The voter falls silent as the leader sends its first proposal of the subject's return, so that return can never gather its vote.
-				if (hub.row.silentVoter && hub.silentAt == UINT64_MAX && owner == 1 && NetHostMigrationCodec::Decode(bytes, key, decision) &&
+				if (hub.row.silentVoter && hub.silentAt == UINT64_MAX && owner == 1 && peekInto(decision) &&
 				    decision.type == NetHostMigrationMessageType::PeerBridge && decision.preparedFrame == 1 &&
 				    std::find(decision.members.begin(), decision.members.end(), hub.row.subject) != decision.members.end()) hub.silentAt = hub.now;
-				if (hub.row.returnByTailOnly && other->owner == hub.row.subject && NetHostMigrationCodec::Decode(bytes, key, decision) &&
+				if (hub.row.returnByTailOnly && other->owner == hub.row.subject && peekInto(decision) &&
 				    (decision.type == NetHostMigrationMessageType::PeerBridge || decision.type == NetHostMigrationMessageType::PeerBridgeCommit) && decision.preparedFrame == 1 &&
 				    std::find(decision.members.begin(), decision.members.end(), hub.row.subject) != decision.members.end()) { ++hub.droppedReturns; return true; }
 				unsigned asymmetric = 0;
@@ -579,7 +605,7 @@ namespace RTE {
 					// Jitter delays each packet on its own; a lossy link drops an unreliable packet and resends a reliable one a round trip late.
 					const uint32_t rtt = hub.schedule->Rtt(owner, other->owner), jitter = hub.schedule->jitterMs[owner][other->owner], loss = hub.schedule->LossPercent(owner, other->owner, hub.now);
 					const bool reliable = lane == NetTransportLane::ControlReliable || lane == NetTransportLane::DiagnosticsReliable;
-					uint64_t at = hub.now + hub.Delay(owner, other->owner) + hub.schedule->LateMs(owner, other->owner, hub.now) + sessionDelay + (jitter ? hub.Next() % (jitter + 1) : 0);
+					uint64_t at = hub.now + hub.Delay(owner, other->owner) + hub.schedule->LateMs(owner, other->owner, hub.now, reliable) + sessionDelay + (jitter ? hub.Next() % (jitter + 1) : 0);
 					for (unsigned resend = 0; loss && resend < 4 && hub.Next() % 100 < loss; ++resend) {
 						if (!reliable) return true;
 						at += std::max<uint32_t>(200, rtt + rtt / 2);
@@ -707,6 +733,8 @@ namespace RTE {
 				return static_cast<uint16_t>(estimator.SenderRequiredFrames(c_TestTickMs, c_TestBoundTicks, floor));
 			else return host ? floor : static_cast<uint16_t>(std::min<uint32_t>(NetMatchConfigUtil::c_MaxInputDelayFrames, estimator.RequiredFrames(c_TestTickMs, floor) + c_TestBoundTicks));
 		}
+		// A row on a pool worker runs beside others: no plane ticks its coordinators, so it takes no plane lock and none waits on it.
+		thread_local bool t_PoolWorker = false;
 		struct Fixture {
 			Hub hub;
 			std::vector<std::unique_ptr<Wire>> wires;
@@ -839,7 +867,7 @@ namespace RTE {
 					while (NetLockstepNowMs() - freezeWallMs < hub.now - hub.faultAt) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 				} else if (freezeStarted && !thawed) { if (onThaw) onThaw(); thawed = true; }
 				std::optional<NetLockstepPlaneGuard> plane;
-				if (!parallel) plane.emplace();
+				if (!parallel && !t_PoolWorker) plane.emplace();
 				std::lock_guard lock(hub.mutex);
 				const Schedule* const scheduled = hub.schedule;
 				const auto hung = [&](uint8_t id) { return scheduled && scheduled->Is(id, hub.now, Spell::Kind::Hung); };
@@ -854,6 +882,12 @@ namespace RTE {
 				}
 				// A stopped main loop polls the directory too, from the session's liveness thread.
 				if (scheduled && scheduled->leaver && hub.now == scheduled->leaveAtMs) peers[scheduled->leaver - 1]->Leave("Match left");
+				// A kick: the host removes the seat and its player's links close; the directory drops its lease an exchange later.
+				if (scheduled && scheduled->kicked && hub.now == scheduled->kickAtMs) {
+					peers[0]->EvictRemovedPeer(scheduled->kicked, "removed from the session", hub.now);
+					for (auto* wire: std::vector<Wire*>(hub.wires.begin(), hub.wires.end())) if (wire->owner == scheduled->kicked) wire->Stop();
+				}
+				if (scheduled && scheduled->kicked && hub.now == scheduled->kickAtMs + hub.DirectoryExchangeMs(1)) std::erase(hub.directory.retained, scheduled->kicked);
 				const auto gone = [&](uint8_t id) { return scheduled && scheduled->Left(id, hub.now); };
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) if (!hung(id) && !gone(id)) hub.PollDirectory(id);
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) {
@@ -872,13 +906,13 @@ namespace RTE {
 				}
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) {
 					auto& peer = *peers[id - 1]; auto& world = worlds[id - 1];
+					if (gone(id)) { leaverStopped |= peer.IsStopped(); continue; }
 					if (peer.IsFailed()) { error = "peer " + std::to_string(id) + " failed: " + peer.GetStats().timeoutReason; return false; }
 					if (peer.GetHostPeerId() != 1 && (!hub.row.gapMs || hub.row.subject != 1 || hub.row.gapMs < 15000)) { error = "lag changed the lobby host"; return false; }
 					if (peer.GetHostPeerId() != 1 && firstAdminChangeMs[id - 1] == UINT64_MAX) {
 						firstAdminChangeMs[id - 1] = hub.now;
 						if (hub.now + hub.Delay(1, id) < hub.faultAt + 15000) { error = "admin host changed before fifteen seconds of authenticated silence"; return false; }
 					}
-					if (peer.IsStopped() && gone(id)) { leaverStopped = true; continue; }
 					if (peer.IsStopped()) {
 						// An absent seat gone past the donor's history hands itself to a private image, a path past this fixture.
 						if (hub.row.imageReturn && peer.GetStats().timeoutReason.starts_with("PeerHeld:")) { if (!imageAt[id - 1]) imageAt[id - 1] = hub.now; continue; }
@@ -1159,25 +1193,34 @@ namespace RTE {
 		struct Finding { std::string property, kind, detail; };
 		// Where a seat stands in a moment of a schedule: out of the round's votes itself, in the strict majority of retained seats that
 		// keeps the round, in an even half that its referee - or, unrefereed, the host - can still decide for, or in a group that can
-		// decide nothing. A seat votes while its links carry its answers: not silent, hung, stopped or losing most of its packets.
+		// decide nothing. A seat votes while its links carry its answers: not silent, hung, gone or losing most of its packets; a
+		// stopped loop's plane still answers. The seats a split leaves on its side are its group.
 		enum class Standing { Isolated, Keeps, Tie, Loses };
 		Standing GroupStanding(const Schedule& schedule, uint8_t seat, uint64_t at) {
 			const auto isolated = [&](uint8_t peer) {
-				if (schedule.Left(peer, at)) return true;
-				if (schedule.Is(peer, at, Spell::Kind::Silent) || schedule.Is(peer, at, Spell::Kind::Hung) || schedule.Is(peer, at, Spell::Kind::Stopped)) return true;
+				if (schedule.Left(peer, at) || schedule.Is(peer, at, Spell::Kind::Silent) || schedule.Is(peer, at, Spell::Kind::Hung)) return true;
 				for (const auto& burst: schedule.bursts) if (burst.seat == peer && burst.percent >= 60 && at >= burst.atMs && at < burst.atMs + burst.ms) return true;
 				return false;
 			};
 			if (isolated(seat)) return Standing::Isolated;
-			// A seat that left answers nothing more, so the others decide without it; it is still retained for the referee's rule.
-			unsigned connected = 0, owners = 0; bool host = false, directory = false;
+			uint32_t group = 1U << (seat - 1);
+			for (bool grew = true; grew;) {
+				grew = false;
+				for (uint8_t peer = 1; peer <= schedule.seats; ++peer) {
+					if ((group >> (peer - 1)) & 1U || isolated(peer)) continue;
+					for (uint8_t member = 1; member <= schedule.seats; ++member)
+						if (((group >> (member - 1)) & 1U) && !schedule.CutBetween(member, peer, at)) { group |= 1U << (peer - 1); grew = true; break; }
+				}
+			}
+			// A seat that left answers nothing more, so the others decide without it; one removed is no longer retained either.
+			unsigned connected = 0, owners = 0, retained = 0; bool host = false, directory = false;
 			for (uint8_t peer = 1; peer <= schedule.seats; ++peer) {
-				owners += !schedule.Left(peer, at);
-				if (!isolated(peer)) { ++connected; host |= peer == 1; directory |= schedule.DirectoryReachable(peer, at); }
+				owners += !schedule.Left(peer, at); retained += !schedule.Removed(peer, at);
+				if ((group >> (peer - 1)) & 1U) { ++connected; host |= peer == 1; directory |= schedule.DirectoryReachable(peer, at); }
 			}
 			if (2 * connected > owners) return Standing::Keeps;
 			if (2 * connected < owners) return Standing::Loses;
-			const bool refereed = schedule.internet && (schedule.seats == 2 || schedule.seats == 4);
+			const bool refereed = schedule.internet && (retained == 2 || retained == 4);
 			return (refereed ? directory : host) ? Standing::Tie : Standing::Loses;
 		}
 		// The worst standing of a seat over a span: every moment a spell begins or ends inside it is judged, and both ends.
@@ -1186,6 +1229,8 @@ namespace RTE {
 			for (const auto& spell: schedule.spells) for (uint64_t at: {spell.atMs, spell.EndMs()}) if (at > from && at < to) moments.push_back(at);
 			for (const auto& burst: schedule.bursts) for (uint64_t at: {burst.atMs, burst.atMs + burst.ms}) if (at > from && at < to) moments.push_back(at);
 			if (schedule.leaver && schedule.leaveAtMs > from && schedule.leaveAtMs < to) moments.push_back(schedule.leaveAtMs);
+			if (schedule.kicked && schedule.kickAtMs > from && schedule.kickAtMs < to) moments.push_back(schedule.kickAtMs);
+			for (const auto& cut: schedule.cuts) for (uint64_t at: {cut.atMs, cut.atMs + cut.ms}) if (at > from && at < to) moments.push_back(at);
 			Standing worst = Standing::Keeps;
 			for (uint64_t at: moments) {
 				const Standing standing = GroupStanding(schedule, seat, at);
@@ -1197,6 +1242,7 @@ namespace RTE {
 		// How far a seat's machine falls behind the round in a spell, in the round's milliseconds.
 		uint64_t BacklogMs(const Spell& spell) {
 			if (spell.kind == Spell::Kind::Late) return spell.percent;
+			if (spell.kind == Spell::Kind::Stall) return 0;
 			return spell.kind == Spell::Kind::Slow ? spell.ms * (100 - std::min<uint32_t>(spell.percent, 100)) / 100 : spell.ms;
 		}
 		// How long a seat takes to close a backlog at its catch-up rate; never, at the round's own rate.
@@ -1214,10 +1260,13 @@ namespace RTE {
 			}
 			for (const auto& burst: schedule.bursts) end = std::max(end, burst.atMs + burst.ms + 6000);
 			if (schedule.leaver) end = std::max(end, schedule.leaveAtMs + 6000);
+			if (schedule.kicked) end = std::max(end, schedule.kickAtMs + 6000);
+			for (const auto& cut: schedule.cuts) end = std::max(end, cut.atMs + cut.ms + cut.ms / 2 + c_NetSeatCatchUpAllowanceMs + 6000);
 			return end;
 		}
 		const char* SpellWord(Spell::Kind kind) {
-			return kind == Spell::Kind::Slow ? "slow" : kind == Spell::Kind::Stopped ? "stopped" : kind == Spell::Kind::Silent ? "silent" : kind == Spell::Kind::Hung ? "hung" : "late";
+			return kind == Spell::Kind::Slow ? "slow" : kind == Spell::Kind::Stopped ? "stopped" : kind == Spell::Kind::Silent ? "silent" : kind == Spell::Kind::Hung ? "hung" :
+			       kind == Spell::Kind::Late ? "late" : "stall";
 		}
 		// A schedule as one line of text, the form a fixed row keeps and ParseSchedule reads back.
 		std::string FormatSchedule(const Schedule& schedule) {
@@ -1234,12 +1283,15 @@ namespace RTE {
 			}
 			for (const auto& spell: schedule.spells) {
 				text += " spell=" + std::to_string(spell.seat) + ":" + SpellWord(spell.kind) + ":" + std::to_string(spell.atMs) + ":" + std::to_string(spell.ms);
-				if (spell.kind == Spell::Kind::Slow || spell.kind == Spell::Kind::Late) text += ":" + std::to_string(spell.percent);
+				if (spell.kind == Spell::Kind::Slow || spell.kind == Spell::Kind::Late || spell.kind == Spell::Kind::Stall) text += ":" + std::to_string(spell.percent);
 				if (spell.kind == Spell::Kind::Silent && spell.directoryDark) text += ":dark";
 			}
 			for (const auto& burst: schedule.bursts)
 				text += " burst=" + std::to_string(burst.seat) + ":" + std::to_string(burst.atMs) + ":" + std::to_string(burst.ms) + ":" + std::to_string(burst.percent);
 			if (schedule.leaver) text += " leave=" + std::to_string(schedule.leaver) + ":" + std::to_string(schedule.leaveAtMs);
+			for (const auto& cut: schedule.cuts)
+				text += " cut=" + std::to_string(cut.side) + ":" + std::to_string(cut.atMs) + ":" + std::to_string(cut.ms) + ":" + std::to_string(cut.directoryDark);
+			if (schedule.kicked) text += " kick=" + std::to_string(schedule.kicked) + ":" + std::to_string(schedule.kickAtMs);
 			return text;
 		}
 		bool ParseSchedule(std::string_view text, Schedule& schedule) {
@@ -1283,14 +1335,21 @@ namespace RTE {
 					Spell spell; const size_t first = value.find(':'), second = value.find(':', first + 1);
 					if (first == std::string::npos || second == std::string::npos) return false;
 					const std::string word = value.substr(first + 1, second - first - 1);
-					spell.kind = word == "slow" ? Spell::Kind::Slow : word == "stopped" ? Spell::Kind::Stopped : word == "silent" ? Spell::Kind::Silent : word == "hung" ? Spell::Kind::Hung : Spell::Kind::Late;
-					if (word != "slow" && word != "stopped" && word != "silent" && word != "hung" && word != "late") return false;
+					spell.kind = word == "slow" ? Spell::Kind::Slow : word == "stopped" ? Spell::Kind::Stopped : word == "silent" ? Spell::Kind::Silent : word == "hung" ? Spell::Kind::Hung :
+					             word == "late" ? Spell::Kind::Late : Spell::Kind::Stall;
+					if (word != "slow" && word != "stopped" && word != "silent" && word != "hung" && word != "late" && word != "stall") return false;
 					const auto times = numbers(value.substr(second + 1));
 					spell.seat = static_cast<uint8_t>(list.front()); spell.atMs = times.at(0); spell.ms = times.at(1);
-					if (spell.kind == Spell::Kind::Slow || spell.kind == Spell::Kind::Late) spell.percent = static_cast<uint32_t>(times.at(2));
+					if (spell.kind == Spell::Kind::Slow || spell.kind == Spell::Kind::Late || spell.kind == Spell::Kind::Stall) spell.percent = static_cast<uint32_t>(times.at(2));
 					spell.directoryDark = value.ends_with(":dark");
 					if (spell.seat < 1 || spell.seat > schedule.seats) return false;
 					schedule.spells.push_back(spell);
+				} else if (key == "cut") {
+					if (list.size() < 3) return false;
+					schedule.cuts.push_back({static_cast<uint32_t>(list[0]), list[1], list[2], list.size() > 3 ? static_cast<uint32_t>(list[3]) : 0U});
+				} else if (key == "kick") {
+					if (list.size() != 2 || list[0] < 2 || list[0] > schedule.seats) return false;
+					schedule.kicked = static_cast<uint8_t>(list[0]); schedule.kickAtMs = list[1];
 				} else if (key == "leave") {
 					if (list.size() != 2 || list[0] < 2 || list[0] > schedule.seats) return false;
 					schedule.leaver = static_cast<uint8_t>(list[0]); schedule.leaveAtMs = list[1];
@@ -1312,13 +1371,20 @@ namespace RTE {
 			for (const auto& spell: schedule.spells) {
 				name += std::string("_") + (spell.seat == 1 ? "host" : "seat" + std::to_string(spell.seat)) + "_" + SpellWord(spell.kind);
 				if (spell.kind == Spell::Kind::Slow) name += "_" + std::to_string(spell.percent) + "pc";
-				if (spell.kind == Spell::Kind::Late) name += "_" + std::to_string(spell.percent) + "ms_more";
+				if (spell.kind == Spell::Kind::Late || spell.kind == Spell::Kind::Stall) name += "_" + std::to_string(spell.percent) + "ms_more";
 				if (spell.kind == Spell::Kind::Silent && spell.directoryDark) name += "_dark";
 				name += "_" + std::to_string(spell.ms) + "ms";
 				if (schedule.recoverPercent[spell.seat] != 300) name += "_back_at_" + std::to_string(schedule.recoverPercent[spell.seat]) + "pc";
 			}
 			for (const auto& burst: schedule.bursts) name += "_loss_" + std::to_string(burst.percent) + "pc_" + (burst.seat == 1 ? std::string("host") : "seat" + std::to_string(burst.seat));
 			if (schedule.leaver) name += "_seat" + std::to_string(schedule.leaver) + "_leaves";
+			for (const auto& cut: schedule.cuts) {
+				name += "_split";
+				for (uint8_t seat = 1; seat <= schedule.seats; ++seat) if ((cut.side >> (seat - 1)) & 1U) name += std::to_string(seat);
+				name += "_from_the_rest_" + std::to_string(cut.ms) + "ms";
+				if (cut.directoryDark) name += "_some_dark";
+			}
+			if (schedule.kicked) name += "_seat" + std::to_string(schedule.kicked) + "_kicked";
 			return name;
 		}
 		struct Random {
@@ -1417,6 +1483,7 @@ namespace RTE {
 			const auto linkShared = [&](uint8_t troubled, uint8_t seat) { return troubled == seat || schedule.seats == 2; };
 			const auto ownTrouble = [&](uint8_t seat, uint64_t from, uint64_t to, uint64_t graceMs) {
 				if (schedule.leaver == seat && to + graceMs >= schedule.leaveAtMs) return true;
+				if (schedule.kicked == seat && to + graceMs >= schedule.kickAtMs) return true;
 				for (const auto& spell: schedule.spells) {
 					const bool mine = spell.kind == Spell::Kind::Late ? linkShared(spell.seat, seat) : spell.seat == seat;
 					if (mine && spell.atMs <= to && spell.EndMs() + graceMs >= from) return true;
@@ -1442,8 +1509,8 @@ namespace RTE {
 			}
 			// (3) Each hold has its seat's own cause, ends once the seat is back and caught up, and the seat stays back.
 			for (uint8_t seat = 1; seat <= schedule.seats; ++seat) {
-				// A seat that left is kept by the AI to the end; it never returns.
-				if (seat == schedule.leaver) continue;
+				// A seat that left or was removed is kept by the AI to the end; it never returns.
+				if (seat == schedule.leaver || seat == schedule.kicked) continue;
 				for (size_t index = 0; index < fixture.heldSpans[seat].size(); ++index) {
 					const auto [since, until] = fixture.heldSpans[seat][index];
 					uint64_t troubleEnd = 0, backlog = 0; bool caused = false;
@@ -1465,6 +1532,13 @@ namespace RTE {
 						const Standing standing = GroupStanding(schedule, seat, std::max(spell.atMs, std::min(lookFrom, spell.EndMs() - 1)));
 						if (standing == Standing::Keeps) continue;
 						caused |= spell.atMs <= since; troubleEnd = std::max(troubleEnd, spell.EndMs()); backlog += spell.ms;
+					}
+					// A split leaves a seat outside the group that keeps the round, or in a half its referee may decide against.
+					for (const auto& cut: schedule.cuts) {
+						if (cut.atMs > lookTo || cut.atMs + cut.ms + 3000 < lookFrom) continue;
+						const Standing standing = GroupStanding(schedule, seat, std::max(cut.atMs, std::min(lookFrom, cut.atMs + cut.ms - 1)));
+						if (standing == Standing::Keeps) continue;
+						caused |= cut.atMs <= since; troubleEnd = std::max(troubleEnd, cut.atMs + cut.ms); backlog += cut.ms;
 					}
 					if (!caused) {
 						const bool again = index > 0;
@@ -1513,7 +1587,7 @@ namespace RTE {
 			std::atomic<size_t> next{0};
 			std::vector<std::thread> pool;
 			for (unsigned index = 0; index < std::max(1U, threads); ++index)
-				pool.emplace_back([&] { t_QuietLines = true; for (size_t item; (item = next++) < count;) work(item); });
+				pool.emplace_back([&] { t_PoolWorker = t_QuietLines = true; for (size_t item; (item = next++) < count;) work(item); });
 			for (auto& thread: pool) thread.join();
 		}
 		std::optional<Finding> RunScheduleQuietly(const Schedule& schedule, uint64_t* startupWaitMs = nullptr) {
@@ -1533,6 +1607,12 @@ namespace RTE {
 				for (auto spell: schedule.spells) if (spell.seat != gone) { spell.seat = renumber(spell.seat); smaller.spells.push_back(spell); }
 				for (auto burst: schedule.bursts) if (burst.seat != gone) { burst.seat = renumber(burst.seat); smaller.bursts.push_back(burst); }
 				smaller.leaver = schedule.leaver == gone ? 0 : renumber(schedule.leaver); if (!smaller.leaver) smaller.leaveAtMs = 0;
+				smaller.kicked = schedule.kicked == gone ? 0 : renumber(schedule.kicked); if (!smaller.kicked) smaller.kickAtMs = 0;
+				for (auto& cut: smaller.cuts) for (uint32_t* mask: {&cut.side, &cut.directoryDark}) {
+					uint32_t kept = 0;
+					for (uint8_t seat = 1; seat <= schedule.seats; ++seat) if (seat != gone && ((*mask >> (seat - 1)) & 1U)) kept |= 1U << (renumber(seat) - 1);
+					*mask = kept;
+				}
 				for (uint8_t a = 1; a <= schedule.seats; ++a) for (uint8_t b = 1; b <= schedule.seats; ++b) if (a != gone && b != gone) {
 					smaller.rttMs[renumber(a)][renumber(b)] = schedule.rttMs[a][b]; smaller.jitterMs[renumber(a)][renumber(b)] = schedule.jitterMs[a][b];
 				}
@@ -1544,6 +1624,11 @@ namespace RTE {
 			for (size_t index = 0; index < schedule.spells.size(); ++index) { auto smaller = schedule; smaller.spells.erase(smaller.spells.begin() + index); add(smaller); }
 			for (size_t index = 0; index < schedule.bursts.size(); ++index) { auto smaller = schedule; smaller.bursts.erase(smaller.bursts.begin() + index); add(smaller); }
 			if (schedule.leaver) { auto stays = schedule; stays.leaver = 0; stays.leaveAtMs = 0; add(stays); }
+			if (schedule.kicked) { auto kept = schedule; kept.kicked = 0; kept.kickAtMs = 0; add(kept); }
+			for (size_t index = 0; index < schedule.cuts.size(); ++index) {
+				auto whole = schedule; whole.cuts.erase(whole.cuts.begin() + index); add(whole);
+				if (schedule.cuts[index].ms > 200) { auto shorter = schedule; shorter.cuts[index].ms /= 2; add(shorter); }
+			}
 			for (size_t index = 0; index < schedule.spells.size(); ++index) {
 				const auto& spell = schedule.spells[index];
 				if (spell.ms > 200) { auto smaller = schedule; smaller.spells[index].ms = std::max<uint64_t>(200, spell.ms / 2); add(smaller); }
@@ -1629,6 +1714,48 @@ namespace RTE {
 				{"three_seats_returned_joiner_autosaves_every_10s", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=2:silent:5000:2000 spell=2:stopped:10000:300 spell=2:stopped:20000:300 spell=2:stopped:30000:300"},
 				// A hold while another seat still catches up privately.
 				{"four_seats_hold_during_another_seats_private_catch_up", "seed=0 seats=4 internet=1 exchange=100 rtt=100,100,100,100,100,100 jitter=0,0,0,0,0,0 recover=300,105,300,300 phase=1700,3400,0,1700 spell=2:stopped:6000:1500 spell=3:silent:12000:1000"},
+				// The reviewers' referee shapes (hold-shapes part 2). #4: a split heals before any hold, then the epoch's winner lags.
+				{"two_internet_seats_split_heals_before_a_hold_then_the_host_stalls_2s", "seed=0 seats=2 internet=1 exchange=100 rtt=100 jitter=0 recover=300,300 phase=1700,3400 spell=2:late:6000:400:150 spell=1:stopped:12000:2000"},
+				// #5: four seats, a split {1,2}|{3,4} heals, then {1,3}|{2,4} splits in the same epoch.
+				{"four_internet_seats_split_12_34_heals_then_13_24_splits", "seed=0 seats=4 internet=1 exchange=100 rtt=100,100,100,100,100,100 jitter=0,0,0,0,0,0 recover=300,300,300,300 phase=1700,3400,0,1700 cut=3:6000:150:0 cut=5:12000:2000:0"},
+				// #6: the tie comes while the seat's minute of directory requests is spent on routine check-ins.
+				{"two_internet_seats_joiner_silent_2s_while_the_allowance_is_spent", "seed=0 seats=2 internet=1 exchange=100 rtt=100 jitter=0 recover=300,300 phase=1000,1000 spell=2:silent:6000:2000"},
+				// #7: every tie exchange takes longer than the client's 250 ms.
+				{"two_internet_seats_joiner_silent_2s_with_a_300ms_directory", "seed=0 seats=2 internet=1 exchange=300 rtt=100 jitter=0 recover=300,300 phase=1700,3400 spell=2:silent:6000:2000"},
+				// #10 and hold #29: a voter present at the return frame whose votes and certificates stall while its inputs flow.
+				{"three_seats_return_meets_a_voter_whose_reliable_lane_stalls", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=2:silent:6000:2000 spell=3:stall:8500:3000:2500"},
+				// #11: link and directory dark for both halves 3 s, then a stall that inherits the client's backoff.
+				{"two_internet_seats_link_and_directory_dark_3s_then_the_joiner_stalls", "seed=0 seats=2 internet=1 exchange=100 rtt=100 jitter=0 recover=300,300 phase=1700,3400 cut=1:6000:3000:3 spell=2:stopped:14000:1000"},
+				// #14: a decided split asked again with other owners after a kick.
+				{"four_internet_seats_decided_split_then_a_kick_then_a_stall", "seed=0 seats=4 internet=1 exchange=100 rtt=100,100,100,100,100,100 jitter=0,0,0,0,0,0 recover=300,300,300,300 phase=1700,3400,0,1700 cut=3:6000:1500:0 kick=4:9000 spell=3:stopped:12000:1000"},
+				// #15: the host kicks a seat while its own half has lost a 2:2 split it cannot see certified.
+				{"four_internet_seats_host_kicks_while_its_half_lost_the_split", "seed=0 seats=4 internet=1 exchange=100 rtt=100,100,100,100,100,100 jitter=0,0,0,0,0,0 recover=300,300,300,300 phase=1700,3400,0,1700 cut=3:6000:4000:3 kick=4:7000"},
+				// #19 and hold #20: three retained seats with the host held; the two joiners split, or one lags.
+				{"three_seats_host_held_then_the_joiners_split", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=1:silent:6000:10000 cut=2:10000:2000:0"},
+				{"three_seats_host_held_then_a_joiner_stalls_1s", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=1:silent:6000:10000 spell=3:stopped:10000:1000"},
+				{"three_seats_host_held_then_a_joiner_slow_70_percent", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=1:silent:6000:10000 spell=3:slow:9000:4000:70"},
+				// #23: a split while a seat returns.
+				{"four_internet_seats_split_while_a_seat_returns", "seed=0 seats=4 internet=1 exchange=100 rtt=100,100,100,100,100,100 jitter=0,0,0,0,0,0 recover=300,300,300,300 phase=1700,3400,0,1700 spell=4:stopped:6000:1000 cut=3:8500:1500:0"},
+				// The reviewers' hold shapes (hold-shapes part 3). #5: a seat's round trip steps up mid-match, below and past the margin.
+				{"three_seats_joiner_150ms_later_for_10s", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=2:late:6000:10000:150"},
+				{"three_seats_joiner_400ms_later_for_10s", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=2:late:6000:10000:400"},
+				// #8: a slow machine from the round's first ticks, and slow again just after its return.
+				{"three_seats_joiner_slow_50_percent_from_the_round_start", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=2:slow:0:10000:50"},
+				{"three_seats_joiner_slow_again_just_after_its_return", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=2:slow:6000:4000:60 spell=2:slow:13000:3000:60"},
+				// #16: the slow seat is near a voter and far from the proposer, so its input can beat the hold agreed ahead.
+				{"three_seats_slow_joiner_near_a_voter_far_from_the_proposer", "seed=0 seats=3 internet=1 exchange=100 rtt=250,250,20 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=2:slow:6000:10000:70"},
+				// #18: two seats with no directory, the host at fault.
+				{"two_direct_seats_host_slow_80_percent_10s", "seed=0 seats=2 internet=0 exchange=100 rtt=100 jitter=0 recover=300,300 phase=1700,3400 spell=1:slow:6000:10000:80"},
+				{"two_direct_seats_host_hung_2s", "seed=0 seats=2 internet=0 exchange=100 rtt=100 jitter=0 recover=300,300 phase=1700,3400 spell=1:hung:6000:2000"},
+				// #21: four seats with no directory, the host in the pair cut off from the other.
+				{"four_direct_seats_split_12_from_34_3s", "seed=0 seats=4 internet=0 exchange=100 rtt=100,100,100,100,100,100 jitter=0,0,0,0,0,0 recover=300,300,300,300 phase=1700,3400,0,1700 cut=3:6000:3000:0"},
+				// #34, #35: the host's loop stopped or its machine slow with three or four seats.
+				{"three_seats_host_loop_stopped_2s", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=1:stopped:6000:2000"},
+				{"four_seats_host_slow_80_percent_10s", "seed=0 seats=4 internet=1 exchange=100 rtt=100,100,100,100,100,100 jitter=0,0,0,0,0,0 recover=300,300,300,300 phase=1700,3400,0,1700 spell=1:slow:6000:10000:80"},
+				// #40: two machines slow at once in three seats.
+				{"three_seats_two_joiners_slow_70_percent_at_once", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=2:slow:6000:10000:70 spell=3:slow:6000:10000:70"},
+				// The return table's #13 on the proposer's side: the host loses a third of its packets while it proposes the return.
+				{"three_seats_joiner_returns_while_the_host_loses_30_percent", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=2:silent:6000:2000 burst=1:7500:4000:30"},
 			};
 			return rows;
 		}
@@ -1638,13 +1765,15 @@ namespace RTE {
 		// CC_TEST_HOLD_SCHEDULE_THREADS the workers, CC_TEST_HOLD_SCHEDULE_MINIMIZE_RUNS the rounds each minimization may spend.
 		struct ScheduleDriver {
 			size_t count = 0, threads = 0, budget = 0, shapes = 0, failedCount = 0, fixedCount = 0;
-			uint64_t firstSeed = 0, elapsedMs = 0;
+			uint64_t firstSeed = 0, elapsedMs = 0, budgetMs = 0;
 			bool runRandom = true;
 			std::chrono::steady_clock::time_point began;
 			std::vector<Schedule> schedules;
 			std::vector<std::string> names, lines;
 			std::vector<std::optional<Finding>> results;
 			std::vector<uint64_t> startupWaits;
+			std::vector<bool> ran;
+			std::atomic<size_t> ranCount{0};
 			std::vector<std::pair<std::string, bool>> fixedResults;
 			void Prepare(const char* selected) {
 				began = std::chrono::steady_clock::now();
@@ -1652,8 +1781,10 @@ namespace RTE {
 				firstSeed = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_SEED", 1);
 				const unsigned hardware = std::max(2U, std::thread::hardware_concurrency());
 				threads = std::max<size_t>(1, EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_THREADS", std::max(2U, hardware - 2)));
-				budget = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_MINIMIZE_RUNS", 150);
+				budget = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_MINIMIZE_RUNS", 60);
 				shapes = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_SHAPES", 8);
+				// The suite row's own budget: no random round starts past it, and failures past it are listed with their seeds, unminimized.
+				budgetMs = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_BUDGET_S", 200) * 1000;
 				for (const auto& row: FixedScheduleRows()) {
 					if (selected && std::string_view(selected) != row.name) continue;
 					Schedule schedule;
@@ -1664,9 +1795,14 @@ namespace RTE {
 				fixedCount = schedules.size();
 				runRandom = !selected || std::string_view(selected) == "random_hold_schedules";
 				if (runRandom) for (size_t index = 0; index < count; ++index) { schedules.push_back(GenerateSchedule(firstSeed + index)); names.emplace_back(); }
-				results.resize(schedules.size()); startupWaits.resize(schedules.size());
+				results.resize(schedules.size()); startupWaits.resize(schedules.size()); ran.assign(schedules.size(), false);
 			}
-			void RunOne(size_t index) { results[index] = RunScheduleQuietly(schedules[index], &startupWaits[index]); }
+			// A random round starts only inside the row's budget, so a slower box runs fewer of them rather than run out of time.
+			void RunOne(size_t index) {
+				if (index >= fixedCount && Elapsed(began) >= budgetMs) return;
+				results[index] = RunScheduleQuietly(schedules[index], &startupWaits[index]);
+				ran[index] = true; if (index >= fixedCount) ++ranCount;
+			}
 			// Waits before every seat displayed its first second: the round's start, judged apart from the holds.
 			std::string StartupWaits() const {
 				size_t over = 0; uint64_t most = 0, seed = 0;
@@ -1700,8 +1836,8 @@ namespace RTE {
 				for (const auto& [key, members]: groups) {
 					const size_t smallest = *std::min_element(members.begin(), members.end(), [&](size_t a, size_t b) { return schedules[a].endMs < schedules[b].endMs; });
 					const std::string seeds = [&] { std::string text; for (size_t member: members) text += (text.empty() ? "" : ",") + std::to_string(schedules[member].seed); return text; }();
-					if (done++ >= shapes) {
-						lines.push_back("FAIL random_hold_schedules group=" + key + " seeds=" + seeds + ": not minimized (past CC_TEST_HOLD_SCHEDULE_SHAPES), seed " +
+					if (done++ >= shapes || Elapsed(began) >= budgetMs) {
+						lines.push_back("FAIL random_hold_schedules group=" + key + " seeds=" + seeds + ": not minimized (past CC_TEST_HOLD_SCHEDULE_SHAPES or _BUDGET_S), seed " +
 						                std::to_string(schedules[smallest].seed) + ": " + results[smallest]->detail);
 						continue;
 					}
@@ -2554,10 +2690,10 @@ namespace RTE {
 		int passed = 0, failed = 0;
 		const char* selected = std::getenv("CC_TEST_SESSION_PLANE_CASE");
 		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 4 + FixedScheduleRows().size()) << std::endl;
-		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed in its turn, the longest rows
-		// started first; the random driver's rounds follow them in the same pool.
+		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest
+		// rows started first; the random driver's rounds follow them in the same pool.
 		QuietLines quiet(std::cout);
-		struct RowRun { std::string name; std::function<bool(std::string&)> check; std::string error, lines; bool ok = false; bool done = false; uint64_t cost = 0; };
+		struct RowRun { std::string name; std::function<bool(std::string&)> check; std::string error, lines; bool ok = false; uint64_t cost = 0; };
 		std::vector<RowRun> named;
 		for (const auto& row: rows) {
 			if (selected && std::string_view(selected) != row.name) continue;
@@ -2588,19 +2724,23 @@ namespace RTE {
 		const size_t total = named.size() + driver.schedules.size();
 		std::atomic<size_t> next{0};
 		std::mutex doneMutex; std::condition_variable doneSignal;
+		std::deque<size_t> finished;
 		std::vector<std::thread> pool;
 		for (size_t index = 0; index < driver.threads; ++index) pool.emplace_back([&] {
+			t_PoolWorker = true;
 			for (size_t item; (item = next++) < total;) {
 				if (item < named.size()) {
 					auto& run = named[order[item]];
 					t_RowLines = &run.lines; run.ok = run.check(run.error); t_RowLines = nullptr;
-					{ std::lock_guard lock(doneMutex); run.done = true; }
+					{ std::lock_guard lock(doneMutex); finished.push_back(order[item]); }
 					doneSignal.notify_all();
 				} else { t_QuietLines = true; driver.RunOne(item - named.size()); t_QuietLines = false; }
 			}
 		});
-		for (auto& run: named) {
-			{ std::unique_lock lock(doneMutex); doneSignal.wait(lock, [&] { return run.done; }); }
+		for (size_t printed = 0; printed < named.size(); ++printed) {
+			size_t index = 0;
+			{ std::unique_lock lock(doneMutex); doneSignal.wait(lock, [&] { return !finished.empty(); }); index = finished.front(); finished.pop_front(); }
+			auto& run = named[index];
 			if (!run.lines.empty()) DiagnosticLine() << run.lines;
 			DiagnosticLine() << "[net-session-plane-selftest] " << (run.ok ? "PASS " : "FAIL ") << run.name << (run.error.empty() ? "" : ": " + run.error) << std::endl;
 			if (run.ok) ++passed; else ++failed;
@@ -2610,9 +2750,9 @@ namespace RTE {
 		for (const auto& line: driver.lines) DiagnosticLine() << "[net-session-plane-selftest] " << line;
 		for (const auto& [name, ok]: driver.fixedResults) { if (ok) ++passed; else ++failed; }
 		if (driver.runRandom) {
-			DiagnosticLine() << "[net-session-plane-selftest] random_hold_schedules schedules=" << driver.count << " seeds=" << driver.firstSeed << ".." << driver.firstSeed + driver.count - 1
+			DiagnosticLine() << "[net-session-plane-selftest] random_hold_schedules schedules=" << driver.count << " ran=" << driver.ranCount.load() << " seeds=" << driver.firstSeed << ".." << driver.firstSeed + driver.count - 1
 			                 << " failed=" << driver.failedCount << " threads=" << driver.threads << " elapsed_s=" << driver.elapsedMs / 1000 << driver.StartupWaits();
-			DiagnosticLine() << "[net-session-plane-selftest] " << (driver.failedCount ? "FAIL" : "PASS") << " random_hold_schedules" << (driver.failedCount ? ": " + std::to_string(driver.failedCount) + " of " + std::to_string(driver.count) + " schedules broke a property" : "");
+			DiagnosticLine() << "[net-session-plane-selftest] " << (driver.failedCount ? "FAIL" : "PASS") << " random_hold_schedules" << (driver.failedCount ? ": " + std::to_string(driver.failedCount) + " of " + std::to_string(driver.ranCount.load()) + " schedules run broke a property" : "");
 			if (driver.failedCount) ++failed; else ++passed;
 		}
 		for (unsigned arm = 0; arm < 3; ++arm) {
