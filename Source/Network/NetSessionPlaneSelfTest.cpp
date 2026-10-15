@@ -1767,12 +1767,12 @@ namespace RTE {
 		}
 		// Shrinks a failing schedule while it still fails the same way: the shrinks are tried in order, a worker's worth at once, and the
 		// first in order that still fails is kept and shrunk again, until none does or the run budget is spent.
-		Schedule Minimize(Schedule schedule, const Finding& finding, unsigned threads, size_t budget, size_t& runs, Finding& last) {
+		Schedule Minimize(Schedule schedule, const Finding& finding, unsigned threads, size_t budget, size_t& runs, Finding& last, std::chrono::steady_clock::time_point deadline) {
 			last = finding;
-			for (bool shrunk = true; shrunk && runs < budget;) {
+			for (bool shrunk = true; shrunk && runs < budget && std::chrono::steady_clock::now() < deadline;) {
 				shrunk = false;
 				const auto candidates = Shrinks(schedule);
-				for (size_t first = 0; first < candidates.size() && !shrunk && runs < budget; first += threads) {
+				for (size_t first = 0; first < candidates.size() && !shrunk && runs < budget && std::chrono::steady_clock::now() < deadline; first += threads) {
 					const size_t count = std::min({static_cast<size_t>(threads), candidates.size() - first, budget - runs});
 					std::vector<std::optional<Finding>> results(count);
 					RunParallel(count, threads, [&](size_t index) { results[index] = RunScheduleQuietly(candidates[first + index]); });
@@ -1794,6 +1794,10 @@ namespace RTE {
 		const std::vector<ScheduleRow>& FixedScheduleRows() {
 			// Each seat's routine check-ins went out 1.7 s apart before the round, as the fixed rows above have them.
 			static const std::vector<ScheduleRow> rows = {
+				{"seed12_four_direct_joiner_slow_74_percent_with_a_lossy_voter", "seed=12 seats=4 internet=0 exchange=100 end=14984 rtt=230,282,202,247,250,282 jitter=0,0,0,0,0,0 recover=300,100,300,300 phase=0,0,0,0 spell=2:slow:6000:984:74 burst=3:6119:2414:60"},
+				{"seed12_four_internet_joiner_slow_74_percent_with_a_lossy_voter", "seed=12 seats=4 internet=1 exchange=100 end=14984 rtt=230,282,202,247,250,282 jitter=0,0,0,0,0,0 recover=300,100,300,300 phase=0,0,0,0 spell=2:slow:6000:984:74 burst=3:6119:2414:60"},
+				{"seed69_four_internet_host_slow_58_percent_with_loss", "seed=69 seats=4 internet=1 exchange=100 end=16747 rtt=17,17,17,17,17,17 jitter=0,0,0,0,0,0 recover=300,300,300,300 phase=0,0,0,0 spell=1:slow:5080:3031:58 burst=2:4215:2601:60 burst=1:7939:139:60"},
+				{"seed192_two_internet_host_stopped_then_the_joiner_leaves", "seed=192 seats=2 internet=1 exchange=100 end=22988 rtt=277 jitter=0 recover=105,300 phase=0,0 spell=1:stopped:6000:428 leave=2:10167"},
 				// The reviewers' return shapes (hold-shapes part 1): a held seat back, caught up at 105 % and then at exactly the round's rate.
 				// #5: three seats, the host held: every tail frame waits for both members' witnesses.
 				{"three_seats_host_held_catches_up_at_105_percent_over_100ms", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=105,300,300 phase=1700,3400,0 spell=1:stopped:6000:800"},
@@ -1884,7 +1888,7 @@ namespace RTE {
 			std::vector<std::string> names, lines;
 			std::vector<std::optional<Finding>> results;
 			std::vector<uint64_t> startupWaits;
-			std::vector<bool> ran;
+			std::vector<uint8_t> ran;
 			std::atomic<size_t> ranCount{0};
 			std::vector<std::pair<std::string, bool>> fixedResults;
 			void Prepare(const char* selected) {
@@ -1895,7 +1899,7 @@ namespace RTE {
 				threads = std::max<size_t>(1, EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_THREADS", std::max(2U, hardware - 2)));
 				budget = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_MINIMIZE_RUNS", 60);
 				shapes = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_SHAPES", 8);
-				// The suite row's own budget: no random round starts past it, and failures past it are listed with their seeds, unminimized.
+				// Only minimization spends the time budget; every requested schedule must run.
 				budgetMs = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_BUDGET_S", 200) * 1000;
 				for (const auto& row: FixedScheduleRows()) {
 					if (selected && std::string_view(selected) != row.name) continue;
@@ -1909,9 +1913,8 @@ namespace RTE {
 				if (runRandom) for (size_t index = 0; index < count; ++index) { schedules.push_back(GenerateSchedule(firstSeed + index)); names.emplace_back(); }
 				results.resize(schedules.size()); startupWaits.resize(schedules.size()); ran.assign(schedules.size(), false);
 			}
-			// A random round starts only inside the row's budget, so a slower box runs fewer of them rather than run out of time.
+			// Distinct byte elements may be written by different workers without sharing a packed bit.
 			void RunOne(size_t index) {
-				if (index >= fixedCount && Elapsed(began) >= budgetMs) return;
 				results[index] = RunScheduleQuietly(schedules[index], &startupWaits[index]);
 				ran[index] = true; if (index >= fixedCount) ++ranCount;
 			}
@@ -1948,14 +1951,15 @@ namespace RTE {
 					if (done++ >= shapes || Elapsed(began) >= budgetMs) {
 						lines.push_back("FAIL random_hold_schedules group=" + key + " seeds=" + seeds + ": not minimized (past CC_TEST_HOLD_SCHEDULE_SHAPES or _BUDGET_S), seed " +
 						                std::to_string(schedules[smallest].seed) + ": " + results[smallest]->detail);
+						lines.push_back("random_hold_schedules pending {\"" + NameSchedule(schedules[smallest]) + "_seed_" + std::to_string(schedules[smallest].seed) + "\", \"" + FormatSchedule(schedules[smallest]) + "\"}");
 						continue;
 					}
 					size_t runs = 0; Finding last;
-					const Schedule shape = Minimize(schedules[smallest], *results[smallest], static_cast<unsigned>(threads), budget, runs, last);
+					const Schedule shape = Minimize(schedules[smallest], *results[smallest], static_cast<unsigned>(threads), budget, runs, last, began + std::chrono::milliseconds(budgetMs));
 					// The shape must fail again by itself, the same way, to be kept as a row.
 					const auto again = RunScheduleQuietly(shape);
 					const bool repeats = again && again->property == last.property && again->kind == last.kind;
-					const std::string name = NameSchedule(shape) + "_" + last.kind;
+					const std::string name = NameSchedule(shape) + "_" + last.kind + "_seed_" + std::to_string(shape.seed);
 					if (minimized.contains(name)) { lines.push_back("FAIL random_hold_schedules group=" + key + " seeds=" + seeds + ": the shape of " + name); continue; }
 					minimized[name] = FormatSchedule(shape);
 					lines.push_back("FAIL random_hold_schedules shape=" + name + " group=" + key + " seeds=" + seeds + " property=" + last.property + " kind=" + last.kind +
@@ -2863,8 +2867,10 @@ namespace RTE {
 		if (driver.runRandom) {
 			DiagnosticLine() << "[net-session-plane-selftest] random_hold_schedules schedules=" << driver.count << " ran=" << driver.ranCount.load() << " seeds=" << driver.firstSeed << ".." << driver.firstSeed + driver.count - 1
 			                 << " failed=" << driver.failedCount << " threads=" << driver.threads << " elapsed_s=" << driver.elapsedMs / 1000 << driver.StartupWaits();
-			DiagnosticLine() << "[net-session-plane-selftest] " << (driver.failedCount ? "FAIL" : "PASS") << " random_hold_schedules" << (driver.failedCount ? ": " + std::to_string(driver.failedCount) + " of " + std::to_string(driver.ranCount.load()) + " schedules run broke a property" : "");
-			if (driver.failedCount) ++failed; else ++passed;
+			const bool complete = driver.ranCount.load() == driver.count;
+			DiagnosticLine() << "[net-session-plane-selftest] " << (driver.failedCount || !complete ? "FAIL" : "PASS") << " random_hold_schedules"
+			                 << (!complete ? ": did not run every requested schedule" : driver.failedCount ? ": " + std::to_string(driver.failedCount) + " of " + std::to_string(driver.count) + " schedules broke a property" : "");
+			if (driver.failedCount || !complete) ++failed; else ++passed;
 		}
 		for (unsigned arm = 0; arm < 3; ++arm) {
 			const char* name = arm == 0 ? "successor_unvalidated_boundary_refused" : arm == 1 ? "leave_during_handover_exits" : "malformed_traffic_does_not_renew_authority";
