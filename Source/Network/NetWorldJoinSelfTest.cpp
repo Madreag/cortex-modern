@@ -1180,8 +1180,8 @@ namespace RTE {
 				return Fail("catch-up-ran-past-the-caps-draw: " + std::to_string(due) + " ticks in a frame whose capped draw is due, the floor is " +
 				            std::to_string(ScenarioRunner::c_WorldCatchUpMinTicksPerRealFrame));
 			}
-			if (const int far = grantFrame(1000.0); far != 3) {
-				return Fail("catch-up-stopped-short-of-the-caps-draw: " + std::to_string(far) + " ticks in a frame whose capped draw is a second away, "
+			if (const int distant = grantFrame(1000.0); distant != 3) {
+				return Fail("catch-up-stopped-short-of-the-caps-draw: " + std::to_string(distant) + " ticks in a frame whose capped draw is a second away, "
 				            "the tail holds 3");
 			}
 			return 0;
