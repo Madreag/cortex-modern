@@ -287,7 +287,7 @@ namespace RTE {
 				m_PeerBridgeVotes[{message.frame, DecisionKind(message)}].try_emplace(message.senderPeerId, message);
 				return true;
 			}
-			if (!ValidatePeerBridge(message)) return true;
+			if (!ValidatePeerBridge(message) && !CoSignsOwnHold(message)) return true;
 			heard();
 			auto& votes = m_PeerBridgeVotes[{message.frame, DecisionKind(message)}];
 			const auto own = votes.find(m_Config.localPeerId);

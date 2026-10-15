@@ -336,7 +336,7 @@ namespace RTE {
 				if (key.first < m_Stats.nextFrame || m_PeerBridgeCertificates.contains(key)) continue;
 				bool newVote = false;
 				if (!votes.contains(m_Config.localPeerId)) for (const auto& [peer, vote]: votes) {
-					if (!ValidatePeerBridge(vote)) continue;
+					if (!ValidatePeerBridge(vote) && !CoSignsOwnHold(vote)) continue;
 					auto own = vote;
 					own.senderPeerId = m_Config.localPeerId; own.voterMask = SeatBit(m_Config.localPeerId);
 					own.appliedFrame = m_LastCompletedSimulationTick.value_or(0);

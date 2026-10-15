@@ -1695,6 +1695,8 @@ namespace RTE {
 		uint32_t PeerDecisionRequiredVoters(const NetHostMigrationMessage& agreed) const;
 		/// The seat whose half takes an unrefereed tie among these voting owners.
 		uint8_t PeerTieHalfHolder(uint32_t owners) const;
+		/// Whether this seat co-signs a hold of itself made now: its own simulation stopped short of the frame.
+		bool CoSignsOwnHold(const NetHostMigrationMessage& proposal) const;
 		/// Ask the whole group for a new split name once a tie decided in this one has healed.
 		void RenewSettledPeerSplit(uint64_t nowMs);
 		void TryCommitPeerBridge(uint64_t frame, uint64_t nowMs, uint8_t kind = 0);

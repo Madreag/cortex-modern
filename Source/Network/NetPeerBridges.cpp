@@ -90,6 +90,22 @@ namespace RTE {
 		return proposal.preparedFrame == 1 ? (named & proposal.connectedMask) == named : (named & proposal.connectedMask) == 0;
 	}
 
+	bool NetLockstepCoordinator::CoSignsOwnHold(const NetHostMigrationMessage& proposal) const {
+		// A seat whose own simulation stopped short of the frame the others wait on co-signs its hold there from its live plane: it never
+		// produced its input for that frame and now never will, so the others do not wait on it for the authority its half would give.
+		// A seat cut off hears no proposal, so a true partition is still the tie rule's.
+		if (proposal.preparedFrame != 0 || proposal.boundary < proposal.frame || proposal.frame != m_Stats.nextFrame || proposal.members.size() != 1 ||
+		    proposal.members.front() != m_Config.localPeerId || proposal.bytes.size() != NetHash32{}.size() || (proposal.connectedMask & SeatBit(m_Config.localPeerId)) != 0 ||
+		    m_LocalFrames.contains(proposal.frame) || (m_LastQueuedTargetFrame != UINT64_MAX && m_LastQueuedTargetFrame >= proposal.frame) || PeerBridgeHasInputConflict(proposal))
+			return false;
+		if (proposal.frame != m_Config.startFrame) {
+			if (!m_MigrationHistory.contains(proposal.frame - 1)) return false;
+			const NetHash32 prefix = PeerFramePrefix(proposal.frame - 1);
+			if (!std::equal(prefix.begin(), prefix.end(), proposal.bytes.begin())) return false;
+		}
+		return PeerGroupHasAuthority(proposal.connectedMask | SeatBit(m_Config.localPeerId), proposal.frame);
+	}
+
 	bool NetLockstepCoordinator::VotedOtherPeerReturn(const NetHostMigrationMessage& proposal) const {
 		if (proposal.preparedFrame != 1) return false;
 		uint32_t named = 0;
