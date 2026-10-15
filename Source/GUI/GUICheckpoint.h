@@ -92,6 +92,8 @@ namespace RTE {
 		template <class Archive> static void VisitPanelFields(Archive& archive, GUIPanel& panel);
 		template <class Archive> static void VisitPanelImages(Archive& archive, GUIPanel& panel);
 		static std::string SavePanel(const GUIPanel& panel);
+		/// SavePanel's work; SavePanel names the panel in a refusal.
+		static std::string SavePanelFields(const GUIPanel& panel);
 		static bool LoadPanel(GUIPanel& panel, std::string_view text, bool validateOnly, GUISkin* skin = nullptr, const std::unordered_set<std::string>* fontNames = nullptr, const std::unordered_set<std::string>* imagePaths = nullptr);
 		static std::string SaveSkin(const GUISkin& skin);
 		static bool LoadSkin(GUISkin& skin, std::string_view text, bool validateOnly);

@@ -236,6 +236,7 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::FreezeRows(const BITMAP* s
 		if (depth != 8 && depth != 15 && depth != 16 && depth != 24 && depth != 32)
 			throw std::runtime_error("Unsupported scene layer bitmap snapshot");
 		const size_t rowBytes = static_cast<size_t>(source->w) * ((depth + 7) / 8);
+		if (!source->line) throw std::runtime_error(std::format("a frozen {}x{} bitmap has no row table", source->w, source->h));
 		const auto* lines = static_cast<uint8_t* const*>(CheckpointNativeStorage::View(source->line, sizeof(uint8_t*) * source->h));
 		auto rows = std::make_unique<FrozenRows>();
 		rows->pages = CheckpointNativeStorage::PagesFor(lines[0], rowBytes);

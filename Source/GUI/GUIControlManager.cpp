@@ -59,6 +59,8 @@
 
 #include <cassert>
 #include <optional>
+#include <stdexcept>
+#include <string>
 
 using namespace RTE;
 
@@ -1024,6 +1026,15 @@ namespace {
 }
 
 std::string GUICheckpoint::SavePanel(const GUIPanel& source) {
+	try { return SavePanelFields(source); }
+	catch (const std::runtime_error& error) {
+		auto& panel = *CheckpointNativeStorage::Source(const_cast<GUIPanel*>(&source));
+		auto* control = dynamic_cast<GUIControl*>(&panel);
+		throw std::runtime_error(std::string("GUI panel ") + GUIPanelType(panel) + " '" + (control ? control->GetName() : std::string{}) + "': " + error.what());
+	}
+}
+
+std::string GUICheckpoint::SavePanelFields(const GUIPanel& source) {
 	auto& panel = *CheckpointNativeStorage::Source(const_cast<GUIPanel*>(&source));
 	CheckpointWriter writer("GUIPanel2");
 	writer(GUIPanelType(panel), panel.m_Font ? CheckpointNativeStorage::Source(panel.m_Font)->m_Name.Value() : std::string{}, dynamic_cast<GUIControl*>(&panel) ? dynamic_cast<GUIControl*>(&panel)->GetName() : std::string{});
@@ -1049,7 +1060,10 @@ std::string GUICheckpoint::SavePanel(const GUIPanel& source) {
 			const auto* item = CheckpointNativeStorage::Source(address);
 			if (!item) throw std::runtime_error("null checkpoint list item");
 			writer(item->m_ID, item->m_Name, item->m_RightText, item->m_ExtraIndex, item->m_Selected, item->m_Height, item->m_OffsetX,
-				CheckpointWriter::Native([&] { return SaveImage(item->m_pBitmap); }), CheckpointWriter::Native([&] { return SaveEntityReference(item->m_pEntity); }));
+				CheckpointWriter::Native([&] {
+					try { return SaveImage(item->m_pBitmap); }
+					catch (const std::runtime_error& error) { throw std::runtime_error("list item '" + item->m_Name.Value() + "': " + error.what()); }
+				}), CheckpointWriter::Native([&] { return SaveEntityReference(item->m_pEntity); }));
 		}
 		std::vector<size_t> selected;
 		const auto items = CheckpointValues(list->m_Items);
