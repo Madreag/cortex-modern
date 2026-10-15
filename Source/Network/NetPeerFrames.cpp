@@ -322,6 +322,11 @@ namespace RTE {
 		{
 			for (auto& [key, votes]: m_PeerBridgeVotes) {
 				if (key.first < m_Stats.nextFrame || m_PeerBridgeCertificates.contains(key)) continue;
+				// A hold of this seat's half that it cannot vote on yet is a tie it will need decided: it asks before the certificate comes.
+				if (key.second == 0 && key.first > m_Stats.nextFrame && !votes.contains(m_Config.localPeerId) && !votes.empty()) {
+					const uint32_t half = votes.begin()->second.connectedMask;
+					if ((half & SeatBit(m_Config.localPeerId)) == 0 && PeerGroupIsRefereedHalf(half, key.first)) CheckPeerFrameTie(key.first, half, nowMs);
+				}
 				bool newVote = false;
 				if (!votes.contains(m_Config.localPeerId)) for (const auto& [peer, vote]: votes) {
 					if (!ValidatePeerBridge(vote)) continue;
