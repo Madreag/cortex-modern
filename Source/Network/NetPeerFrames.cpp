@@ -197,9 +197,9 @@ namespace RTE {
 		if (request.members.size() * 2 != request.owners.size()) return;
 		// A seat that heard the other half play on keeps asking what was decided: the referee holds one request per seat, and
 		// checking in again would replace the question and lose its answer.
-		if (m_PeerFrameTie && m_PeerFrameTie->queryOnly && !request.queryOnly) {
+		if (m_PeerFrameTie && m_PeerFrameTie->queryOnly) {
 			auto asked = *m_PeerFrameTie;
-			asked.members = request.members; asked.queryOnly = false;
+			asked.members = request.members; asked.queryOnly = request.queryOnly;
 			if (asked == request) request = *m_PeerFrameTie;
 		}
 		if (!m_PeerFrameTie || *m_PeerFrameTie != request) { m_PeerFrameTie = request; m_PeerFrameTieSinceMs = nowMs; }

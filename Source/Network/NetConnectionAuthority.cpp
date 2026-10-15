@@ -563,7 +563,14 @@ namespace RTE {
 		auto request = peerRequest;
 		request.configHash = DirectoryMatchHash(peerRequest.configHash);
 		if (!m_FrameTieRequest || *m_FrameTieRequest != request) {
-			if (m_FrameTie) return {NetFrameTieReply::State::Waiting};
+			if (m_FrameTieRequest && m_FrameTieReply.state == NetFrameTieReply::State::Decided) {
+				auto decided = *m_FrameTieRequest;
+				decided.members = request.members; decided.queryOnly = request.queryOnly;
+				if (decided == request) return m_FrameTieReply;
+			}
+			// Authenticated traffic from the playing half turns a failed check-in into a read of its decision.
+			// Its old HTTP timeout must not keep the recovered seat from asking that question.
+			if (m_FrameTie && !(request.queryOnly && m_FrameTieRequest && !m_FrameTieRequest->queryOnly)) return {NetFrameTieReply::State::Waiting};
 			if (m_RetiredFrameTies.size() >= 16) return {};
 			// A query on the sim thread retires an old request without joining its worker.
 			if (m_FrameTie) m_RetiredFrameTies.push_back(std::move(m_FrameTie));
