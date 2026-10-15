@@ -844,7 +844,9 @@ struct ActivityMan::PreparedAutosave {
 		const auto views = CheckpointNativeStorage::CurrentViews();
 		roots.insert(roots.end(), views.roots.begin(), views.roots.end());
 		CheckpointNativeStorage::ReadScope managers({true, views.pages, roots, views.privateValues, views.owner});
+		s_Stage = "known objects";
 		MovableMan::KnownObjectsScope known; known.Copy();
+		s_Stage = "script-held objects";
 		MovableMan::ScriptHeldScope held(LuaStateWrapper::PreparedScriptHeldObjects(boundary));
 		ContentFile::LoadedBitmapIndexScope bitmapNames;
 		CheckpointWriter::BatchScope batches(true, true);
@@ -854,6 +856,7 @@ struct ActivityMan::PreparedAutosave {
 		// The sounds the saved objects write are the ones whose voices keep their owners.
 		AudioMan::SoundCheckpointSaveScope::Lend soundNotes(&carried);
 		const uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+		s_Stage = "frozen scene and activity";
 		const Scene* const sourceScene = dynamic_cast<const Scene*>(CheckpointNativeSnapshot::Source(g_SceneMan.GetScene()));
 		const auto* sourceActivity = dynamic_cast<const GAScripted*>(CheckpointNativeSnapshot::Source(g_ActivityMan.GetActivity()));
 		if (!sourceScene || !sourceScene->GetTerrain() || !sourceActivity || sourceActivity->GetActivityState() == Activity::Over)

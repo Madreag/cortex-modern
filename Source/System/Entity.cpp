@@ -394,7 +394,9 @@ namespace RTE {
 		return std::find(scripts.begin(), scripts.end(), path) != scripts.end();
 	}
 	Entity* Entity::FreezeCheckpointNative(CheckpointNativeSnapshot&) const {
-		throw UnsupportedCheckpointNative("native checkpoint snapshot is not implemented for " + GetClassName());
+		// An object being destroyed answers as its base class, so the refusal says where it lay.
+		throw UnsupportedCheckpointNative(std::format("native checkpoint snapshot is not implemented for {} (address {}, live {}, in the pools {})", GetClassName(),
+		    static_cast<const void*>(this), CheckpointNativeStorage::Original(this), CheckpointNativeStorage::Owns(CheckpointNativeStorage::Original(this))));
 	}
 	void CheckpointNativeSnapshot::AssignEntity(Entity& target, const Entity& source) {
 		target.m_FrozenCheckpointNative = true;
