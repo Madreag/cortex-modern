@@ -33,15 +33,26 @@
 #include "AllegroBitmap.h"
 #include "ACDropShip.h"
 #include "HeldDevice.h"
+#include "MovableMan.h"
 
 #include <memory>
 
 using namespace RTE;
 
+namespace {
+	// Only the incoming object's address is read until the known objects say it is still in the world.
+	MOSRotating* FreezeIncomingObject(MOSRotating* incoming, CheckpointNativeSnapshot& snapshot) {
+		if (!incoming || !g_MovableMan.IsKnownObject(incoming)) return nullptr;
+		// An object's slot another object took since is gone too.
+		if (!dynamic_cast<const MOSRotating*>(CheckpointNativeStorage::Source(static_cast<const MovableObject*>(incoming)))) return nullptr;
+		return snapshot.Object(incoming);
+	}
+} // namespace
+
 ACraft::Exit::Exit(const Exit& source, CheckpointNativeSnapshot& snapshot) :
 	m_Offset(source.m_Offset), m_Velocity(source.m_Velocity), m_VelSpread(source.m_VelSpread),
 	m_Radius(source.m_Radius), m_Range(source.m_Range), m_Clear(source.m_Clear),
-	m_pIncomingMO(snapshot.Object(source.m_pIncomingMO)), m_FaithfulIncomingMOUID(source.m_FaithfulIncomingMOUID),
+	m_pIncomingMO(FreezeIncomingObject(source.m_pIncomingMO, snapshot)), m_FaithfulIncomingMOUID(source.m_FaithfulIncomingMOUID),
 	m_CheckpointOwner(nullptr) {
 	snapshot.BindValue(source, this);
 }
