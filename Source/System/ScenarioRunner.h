@@ -298,6 +298,8 @@ namespace RTE {
 		static void BeginWorldCatchUpFrame(double drawMs = 0.0, double untilDrawMs = -1.0, RTE::SteadyClock::time_point now = RTE::SteadyClock::now());
 		/// Takes one catch-up sim tick out of this real frame's budget, on the clock reading now.
 		static bool TakeWorldCatchUpGrant(uint64_t nextSimTick, RTE::SteadyClock::time_point now = RTE::SteadyClock::now());
+		/// The census line a running tick's cost is written under: a lockstep round's, a world catch-up's replay or single player's.
+		static const char* TickCostCensusTag();
 		/// A host whose own seat the AI holds, or a seat inside its own reclaim gap, runs its ready frames faster than real time, like a world joiner, until it is back.
 		static bool TakeOwnSeatCatchUpGrant(uint64_t nextSimTick);
 		/// Whether a stopped coordinator holds the controller update this tick. A world joiner applying

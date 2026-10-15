@@ -1291,6 +1291,25 @@ namespace RTE {
 			return 0;
 		}
 
+		/// A joiner's replay ticks are written under the catch-up's census, never single player's.
+		int TestCatchUpTicksAreNotSinglePlayers() {
+			std::string error;
+			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return Fail("catch-up census: a lockstep round is still running");
+			}
+			if (!ScenarioRunner::InstallWorldCatchUp(40, {MakeCommittedFrame(41)}, &error)) {
+				return Fail("catch-up census install: " + error);
+			}
+			const std::string during = ScenarioRunner::TickCostCensusTag();
+			ScenarioRunner::ReleaseWorldCatchUp();
+			const std::string after = ScenarioRunner::TickCostCensusTag();
+			if (during != "[catchup-tick-cost]" || after != "[sp-tick-cost]") {
+				return Fail("catch-up-ticks-counted-as-single-player: a world catch-up's replay ticks are written under " + during +
+				            " and single player's under " + after);
+			}
+			return 0;
+		}
+
 		/// F1/F2/F3 of the r6 correctness read: the stop gate must not swallow the catch-up window, the
 		/// sim is held from the tail's last frame until the joiner's own round runs, and the catch-up is
 		/// released the moment it does.
@@ -9672,6 +9691,10 @@ namespace RTE {
 			s_FailTag = "net-world-catchup-fresh-selftest";
 			return TestCatchUpForgetsTheLastTicksTime();
 		}
+		if (std::strcmp(name, "catchup-census") == 0 || std::strcmp(name, "-net-world-catchup-census-selftest") == 0) {
+			s_FailTag = "net-world-catchup-census-selftest";
+			return TestCatchUpTicksAreNotSinglePlayers();
+		}
 		if (std::strcmp(name, "take-pump") == 0 || std::strcmp(name, "-net-world-take-pump-selftest") == 0) {
 			s_FailTag = "net-world-take-pump-selftest";
 			return TestTakeDoesNotPumpTheSession();
@@ -9999,6 +10022,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestCatchUpForgetsTheLastTicksTime(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCatchUpTicksAreNotSinglePlayers(); result != 0) {
 			return result;
 		}
 		if (const int result = TestTakeDoesNotPumpTheSession(); result != 0) {

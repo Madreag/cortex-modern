@@ -1652,13 +1652,15 @@ static void NoteFramePresented() {
 // single-player activity report on the same line shape, with the world's actor and particle counts at the window's end.
 static void NoteTickCostDetails(const char* tag, uint64_t round, uint64_t tick, const std::array<long long, 7>& phases, const std::array<long long, 8>& nested) {
 	struct Window {
+		const char* tag = nullptr;
 		uint64_t round = 0, firstTick = 0, ticks = 0;
 		std::array<long long, 7> phases{};
 		std::array<long long, 8> nested{};
 		std::array<uint64_t, PerformanceMan::PerfCounterCount> counters{};
 	};
 	static Window window;
-	if (window.round != round) window = {};
+	if (window.round != round || (window.tag && std::strcmp(window.tag, tag) != 0)) window = {};
+	window.tag = tag;
 	window.round = round;
 	if (window.ticks == 0) window.firstTick = tick;
 	++window.ticks;
@@ -9567,7 +9569,7 @@ void RunGameLoop() {
 				const long long elapsedUs = g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
 				s_paceSimUs += elapsedUs;
 				if (tickCostDetails && !lockstepPausedTick) {
-					NoteTickCostDetails("[net-tick-cost]", ScenarioRunner::GetLockstepRoundId(), simTick, {
+					NoteTickCostDetails(ScenarioRunner::TickCostCensusTag(), ScenarioRunner::GetLockstepRoundId(), simTick, {
 					    heldBeforeWorldUs - paceTickStartUs, heldAfterWorldUs - heldBeforeWorldUs,
 					    detailAfterAudioUs - heldAfterWorldUs, detailBeforeHashUs - detailAfterAudioUs,
 					    heldAfterHashUs - detailBeforeHashUs, heldAfterCollectionUs - heldAfterHashUs,
@@ -9599,9 +9601,9 @@ void RunGameLoop() {
 					g_MetricsCollector.WriteObservation(timing);
 				}
 			} else if (tickCostDetails && g_ActivityMan.ActivityRunning() && heldBeforeWorldUs > 0 && heldAfterWorldUs > 0) {
-				// The same split for a single-player activity, the baseline a round's own cost is read against.
+				// The same split for a single-player activity, the baseline a round's own cost is read against, and for a joiner's replay.
 				const long long elapsedUs = g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
-				NoteTickCostDetails("[sp-tick-cost]", 0, simTick, {
+				NoteTickCostDetails(ScenarioRunner::TickCostCensusTag(), 0, simTick, {
 				    heldBeforeWorldUs - paceTickStartUs, heldAfterWorldUs - heldBeforeWorldUs,
 				    detailAfterAudioUs - heldAfterWorldUs, detailBeforeHashUs - detailAfterAudioUs,
 				    heldAfterHashUs - detailBeforeHashUs, heldAfterCollectionUs - heldAfterHashUs,

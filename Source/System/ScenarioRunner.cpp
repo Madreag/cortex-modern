@@ -1589,6 +1589,10 @@ namespace RTE {
 		s_PeerCatchUpCredit = std::min(static_cast<double>(c_NetSeatCatchUpBurstTicks), s_PeerCatchUpCredit + c_NetSeatCatchUpRate * elapsed / tickMs);
 		s_OwnSeatCatchUpBudget = static_cast<int>(s_PeerCatchUpCredit);
 	}
+	const char* ScenarioRunner::TickCostCensusTag() {
+		return IsLockstepControllerSyncActive() ? "[net-tick-cost]" : s_WorldCatchUpActive ? "[catchup-tick-cost]" : "[sp-tick-cost]";
+	}
+
 
 	bool ScenarioRunner::TakeOwnSeatCatchUpGrant(uint64_t nextSimTick) {
 		NetLockstepPlaneGuard plane;
