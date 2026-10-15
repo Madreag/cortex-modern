@@ -7215,6 +7215,19 @@ namespace RTE {
 		m_WaitDuplicates = 0;
 	}
 
+	std::optional<double> NetLockstepCoordinator::PeerAppliedRate(uint8_t peerId, uint64_t nowMs) const {
+		const auto found = m_PeerAppliedProgress.find(peerId);
+		if (found == m_PeerAppliedProgress.end() || found->second.empty()) return std::nullopt;
+		// The last second of reports: a silence before them is the hold's cause, not the seat's pace.
+		const auto first = std::find_if(found->second.begin(), found->second.end(), [nowMs](const auto& sample) { return sample.first + 1000 >= nowMs; });
+		if (first == found->second.end()) return 0.0;
+		const auto& [lastMs, lastFrame] = found->second.back();
+		// A seat that stopped reporting has stopped applying: its rate runs to now.
+		const uint64_t spanMs = std::max(lastMs, nowMs) - first->first;
+		if (spanMs < 500 || nowMs < first->first) return std::nullopt;
+		return static_cast<double>(lastFrame - first->second) * 1000.0 / static_cast<double>(spanMs);
+	}
+
 	bool NetLockstepCoordinator::CostsPastTolerance(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* cost) {
 		constexpr uint64_t c_PlayedFrames = 120;
 		if (!UsesPeerFrameGroups() || m_Playback || peerId == m_Config.localPeerId || m_Config.simTickMs <= 0.0 || frame < EffectiveStartOf(peerId) + c_PlayedFrames) return false;
@@ -7236,6 +7249,9 @@ namespace RTE {
 		// Only a machine that feeds below this one's rate is slow; a seat late by a fixed trip or a lossy link feeds at the round's rate.
 		const auto& arrivals = stats.arrivals;
 		if (arrivals.size() < 2 || nowMs < arrivals.front().first || nowMs - arrivals.front().first < 1000) return false;
+		// A seat that stopped feeding is silent, not slow: the bound holds it for what it is.
+		const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
+		if (nowMs > arrivals.back().first + 2 * boundMs) return false;
 		// Counted in the seat's own ticks: a delay re-size moves its target frames without the seat running faster or slower.
 		const auto ownTick = [this, peerId](uint64_t target) { const uint64_t delay = InputDelayAt(peerId, target); return target > delay ? target - delay : 0; };
 		const uint64_t newest = ownTick(arrivals.back().second), oldest = ownTick(arrivals.front().second);

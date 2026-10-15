@@ -229,6 +229,9 @@ namespace RTE {
 			if (!m_PeerAppliedAtMs.contains(message.senderPeerId) || message.appliedFrame > applied) {
 				applied = std::max(applied, message.appliedFrame);
 				m_PeerAppliedAtMs[message.senderPeerId] = nowMs;
+				auto& progress = m_PeerAppliedProgress[message.senderPeerId];
+				progress.emplace_back(nowMs, applied);
+				while (progress.size() > 2 && progress.front().first + 3000 < nowMs) progress.pop_front();
 			}
 			if (message.senderPeerId == GetHostPeerId()) NoteAuthorityHeard(nowMs);
 		};

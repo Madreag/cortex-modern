@@ -173,6 +173,18 @@ namespace RTE {
 				const uint64_t allowance = std::max<uint64_t>(delay + m_Config.slowPlayerBoundTicks,
 				    static_cast<uint64_t>(std::ceil(c_NetSeatCatchUpAllowanceMs / m_Config.simTickMs)));
 				if (displayed > applied->second && displayed - applied->second > allowance) continue;
+				// A seat returns once its catch-up shows headroom: a machine slower than this one would only fall behind and be held again.
+				const double own = OwnCapacityTps();
+				if (own > 0) {
+					const auto rate = PeerAppliedRate(peer, nowMs);
+					if (!rate) continue;
+					if (*rate < own - (own >= 59.5 ? 0.5 : own / 10.0)) {
+						if (m_SlowMachineHolds.insert(peer).second)
+							DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " stays held: it applied " << *rate
+							                 << " ticks/s against this machine's " << own << std::endl;
+						continue;
+					}
+				}
 				proposal.members.push_back(peer); proposal.connectedMask |= SeatBit(peer);
 			}
 			if (proposal.members.empty()) return false;

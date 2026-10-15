@@ -1736,6 +1736,7 @@ namespace RTE {
 		bool m_PeerHadHitch = false;
 		std::map<uint8_t, uint64_t> m_PeerAppliedThrough;
 		std::map<uint8_t, uint64_t> m_PeerAppliedAtMs;
+		std::map<uint8_t, std::deque<std::pair<uint64_t, uint64_t>>> m_PeerAppliedProgress; //!< When each seat's applied frame rose, and to which, over the last seconds.
 		uint64_t m_PeerHeartbeatAtMs = 0;
 		uint64_t m_PeerTailRequestAtMs = 0;
 		uint8_t m_PeerTailDonor = 0;
@@ -1997,6 +1998,8 @@ namespace RTE {
 		/// second or more half a tick a second, below that a tenth of its own rate, over the last capacity window.
 		bool CostsPastTolerance(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* cost = nullptr);
 		static constexpr uint64_t c_CapacityWindowMs = 10000;
+		/// The ticks a second a seat applied over its recent reports, or nothing while they span less than half a second.
+		std::optional<double> PeerAppliedRate(uint8_t peerId, uint64_t nowMs) const;
 		static void NoteArrival(NetLockstepPeerStats& stats, uint64_t nowMs, uint64_t frame);
 		/// Wait for every human owner's published startup before committing the first frame.
 		void TickStartupWait(uint64_t nowMs);
