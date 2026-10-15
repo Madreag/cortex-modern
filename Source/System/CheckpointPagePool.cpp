@@ -20,6 +20,7 @@
 #include <bit>
 #include <chrono>
 #include <cstring>
+#include <cstdio>
 #include <cstdlib>
 #include <format>
 #include <future>
@@ -53,6 +54,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <psapi.h>
 #else
 #include <pthread.h>
 #include <sys/mman.h>
@@ -117,6 +119,24 @@ namespace {
 		explicit Locked(std::atomic_flag& flag) : flag(flag) { while (flag.test_and_set(std::memory_order_acquire)) {} }
 		~Locked() { flag.clear(std::memory_order_release); }
 	};
+	// The private memory the process has committed, as a commit limit counts it; -1 where the platform charges only touched pages.
+	int64_t CommittedPrivateBytes() {
+#ifdef _WIN32
+		PROCESS_MEMORY_COUNTERS_EX counters{};
+		if (!K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters))) return -1;
+		return static_cast<int64_t>(counters.PrivateUsage);
+#elif defined(__linux__)
+		FILE* status = std::fopen("/proc/self/status", "r");
+		if (!status) return -1;
+		char line[256];
+		long long kilobytes = -1;
+		while (std::fgets(line, sizeof(line), status)) if (std::sscanf(line, "VmData: %lld kB", &kilobytes) == 1) break;
+		std::fclose(status);
+		return kilobytes < 0 ? -1 : kilobytes * 1024;
+#else
+		return -1;
+#endif
+	}
 }
 
 struct CheckpointPagePool::ArmGate {
@@ -753,6 +773,20 @@ CheckpointPagePool::Costs CheckpointPagePool::Snapshot::Cost() const {
 }
 
 std::string CheckpointPagePool::SelfTestMismatch() {
+	{
+		// A prepared inventory holds address space for its shadow, never a second committed copy of the inventory.
+		constexpr size_t c_Bytes = size_t{64} << 20;
+		Allocation owned(c_Bytes, true);
+		std::memset(owned.Data(), 1, c_Bytes);
+		uint64_t generation = 0;
+		const int64_t before = CommittedPrivateBytes();
+		auto prepared = PrepareInventory(generation);
+		prepared->WarmShadow();
+		const int64_t grown = CommittedPrivateBytes() - before;
+		prepared->Cancel();
+		if (before >= 0 && grown > static_cast<int64_t>(c_Bytes / 4))
+			return std::format("a prepared inventory committed {} MB for its {} MB of storage before any page was written", grown >> 20, c_Bytes >> 20);
+	}
 	{
 		Allocation owned(4096, true);
 		auto* value = static_cast<uint64_t*>(owned.Data());
