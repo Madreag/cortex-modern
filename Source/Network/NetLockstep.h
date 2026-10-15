@@ -461,7 +461,8 @@ namespace RTE {
 		PeerControl,
 		PeerSession,
 		PeerSessionAck,
-		PeerForwardInput
+		PeerForwardInput,
+		PeerCaptureRequest
 	};
 
 	struct NetHostMigrationMessage {
@@ -1305,6 +1306,9 @@ namespace RTE {
 		uint8_t AiProducerOf(uint8_t ownerPeerId, std::optional<uint64_t> atFrame = std::nullopt) const;
 		/// Whether the host's own seat is held by the AI and not yet taken back.
 		bool IsOwnHostSeatHeld() const;
+		/// A held host asks the playing seats to agree on one private-return base capture outside its held input stream.
+		bool RequestPrivateBaseCapture();
+		void ClearPrivateBaseCaptureRequest();
 		/// The frame the host held this peer's seat from; 0 when the hold was not taken on the wire (a closed link).
 		uint64_t GetLocalHoldFrame() const { NET_PLANE_CHECK(); return m_LocalHoldFrame; }
 		/// Whether the host held this seat at or after a frame: a hold this round took, or one still waiting for its start.
@@ -1703,6 +1707,10 @@ namespace RTE {
 		bool CoSignsOwnHold(const NetHostMigrationMessage& proposal) const;
 		/// Ask the whole group for a new split name once a tie decided in this one has healed.
 		void RenewSettledPeerSplit(uint64_t nowMs);
+		void TickPeerCaptureRequest(uint64_t nowMs);
+		bool ValidatePeerCaptureRequest(const NetHostMigrationMessage& request, uint64_t frame) const;
+		bool ValidatePeerCaptureBridge(const NetHostMigrationMessage& proposal) const;
+		void AppendPeerCaptureCommand(NetLockstepReadyFrame& ready) const;
 		void TryCommitPeerBridge(uint64_t frame, uint64_t nowMs, uint8_t kind = 0);
 		void InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs);
 		/// Takes the decisions kept for their frame, in frame order.
@@ -1732,6 +1740,10 @@ namespace RTE {
 			uint32_t members = 0;
 		};
 		std::map<uint8_t, PeerBridge> m_PeerBridges;
+		std::optional<NetHostMigrationMessage> m_PeerCaptureRequest;
+		bool m_PeerCaptureRequested = false;
+		uint64_t m_PeerCaptureSerial = 0, m_PeerCaptureRetryAtMs = 0;
+		std::map<uint64_t, uint64_t> m_PeerCapturesCompleted; //!< Host generation to last agreed request serial.
 		using PeerDecisionKey = std::pair<uint64_t, uint8_t>;
 		std::map<PeerDecisionKey, std::map<uint8_t, NetHostMigrationMessage>> m_PeerBridgeVotes;
 		std::map<PeerDecisionKey, NetHostMigrationMessage> m_PeerBridgeCertificates;
