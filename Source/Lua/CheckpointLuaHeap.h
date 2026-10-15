@@ -490,6 +490,8 @@ namespace RTE::CheckpointLua {
 			for (const auto& [begin, bytes]: m_PrivateChunks) CheckpointNativeStorage::ForgetPrivate(reinterpret_cast<void*>(begin));
 			m_Bootstrap.reset();
 			if (m_Reservation) HeapCommitted().fetch_sub(m_Committed - m_HoleBytes.load(std::memory_order_acquire), std::memory_order_relaxed);
+			FreePagesTotal().fetch_sub(m_FreePageCount, std::memory_order_relaxed);
+			HoleBytesTotal().fetch_sub(m_HoleBytes.load(std::memory_order_acquire), std::memory_order_relaxed);
 			Release();
 		}
 		HeapOwner(const HeapOwner&) = delete;
@@ -530,6 +532,9 @@ namespace RTE::CheckpointLua {
 		static void KeepCopiesWarm(bool warm) noexcept { KeepWarm().store(warm, std::memory_order_release); }
 		/// Every live heap's committed pages.
 		static size_t CommittedHeapBytes() { return HeapCommitted().load(std::memory_order_relaxed); }
+		/// Of those, the pages that hold nothing; and the bytes the trim gave back to the system.
+		static size_t FreeHeapBytes() { return FreePagesTotal().load(std::memory_order_relaxed) * Snapshot::c_PageBytes - HoleBytesTotal().load(std::memory_order_relaxed); }
+		static size_t ReturnedHeapBytes() { return HoleBytesTotal().load(std::memory_order_relaxed); }
 		static size_t IdleCopyBytes() { return CopyBytes(true).load(std::memory_order_relaxed); }
 		/// The copy buffers of this heap that a snapshot still holds.
 		size_t LiveSlabs() const { return m_LiveSlabs.load(std::memory_order_relaxed); }
@@ -830,6 +835,7 @@ namespace RTE::CheckpointLua {
 		uint32_t m_Current[c_ClassCount] = {}; // The run each class takes from.
 		uint32_t m_Roomy[c_ClassCount] = {}; // Each class's other runs with room.
 		size_t m_PageHint = 0; // No page below it is free.
+		size_t m_FreePageCount = 0;
 		std::atomic<std::ptrdiff_t> m_FreeGranules{0}; // Granules with every page free and still committed.
 		// A bit per granule given back to the system: set by the trim under the preparation lock, cleared by whoever commits it
 		// again, so a clear bit always means committed pages.
@@ -1293,6 +1299,14 @@ namespace RTE::CheckpointLua {
 			static std::atomic<size_t> bytes{0};
 			return bytes;
 		}
+		static std::atomic<size_t>& FreePagesTotal() {
+			static std::atomic<size_t> pages{0};
+			return pages;
+		}
+		static std::atomic<size_t>& HoleBytesTotal() {
+			static std::atomic<size_t> bytes{0};
+			return bytes;
+		}
 		static std::atomic<size_t>& SlabCommitted() {
 			static std::atomic<size_t> bytes{0};
 			return bytes;
@@ -1573,6 +1587,8 @@ namespace RTE::CheckpointLua {
 			}
 			std::fill(m_FreePages.begin() + static_cast<std::ptrdiff_t>(first / 64), m_FreePages.end(), ~uint64_t{0});
 			m_FreeGranules.fetch_add(static_cast<std::ptrdiff_t>(step / c_GranuleBytes), std::memory_order_relaxed);
+			m_FreePageCount += pages - first;
+			FreePagesTotal().fetch_add(pages - first, std::memory_order_relaxed);
 			m_PageHint = std::min(m_PageHint, first);
 			m_Committed += step;
 			HeapCommitted().fetch_add(step, std::memory_order_relaxed);
@@ -1625,12 +1641,15 @@ namespace RTE::CheckpointLua {
 				const uint64_t bit = uint64_t{1} << (granule % 64);
 				if (m_Holes[granule / 64].fetch_and(~bit, std::memory_order_acq_rel) & bit) {
 					m_HoleBytes.fetch_sub(c_GranuleBytes, std::memory_order_relaxed);
+					HoleBytesTotal().fetch_sub(c_GranuleBytes, std::memory_order_relaxed);
 					HeapCommitted().fetch_add(c_GranuleBytes, std::memory_order_relaxed);
 				} else if (GranuleFree(granule)) {
 					m_FreeGranules.fetch_sub(1, std::memory_order_relaxed);
 				}
 			}
 			for (size_t page = first; page < last; ++page) m_FreePages[page / 64] &= ~(uint64_t{1} << (page % 64));
+			m_FreePageCount -= count;
+			FreePagesTotal().fetch_sub(count, std::memory_order_relaxed);
 			if (first == m_PageHint) m_PageHint = last;
 			return first;
 		}
@@ -1642,6 +1661,8 @@ namespace RTE::CheckpointLua {
 			for (size_t page = first; page < last; ++page) m_FreePages[page / 64] |= uint64_t{1} << (page % 64);
 			for (size_t granule = first / c_GranulePages; granule < end; ++granule) freed += GranuleFree(granule);
 			m_FreeGranules.fetch_add(freed, std::memory_order_relaxed);
+			m_FreePageCount += count;
+			FreePagesTotal().fetch_add(count, std::memory_order_relaxed);
 			m_PageHint = std::min(m_PageHint, first);
 		}
 
@@ -1759,6 +1780,7 @@ namespace RTE::CheckpointLua {
 				}
 				const size_t granules = static_cast<size_t>(std::popcount(m_Holes[word].fetch_and(~bits, std::memory_order_acq_rel) & bits));
 				m_HoleBytes.fetch_sub(granules * c_GranuleBytes, std::memory_order_relaxed);
+				HoleBytesTotal().fetch_sub(granules * c_GranuleBytes, std::memory_order_relaxed);
 				HeapCommitted().fetch_add(granules * c_GranuleBytes, std::memory_order_relaxed);
 				m_FreeGranules.fetch_add(static_cast<std::ptrdiff_t>(granules), std::memory_order_relaxed);
 			}
@@ -2115,6 +2137,7 @@ namespace RTE::CheckpointLua {
 			for (size_t at = begin; at <= granule; ++at) m_Holes[at / 64].fetch_or(uint64_t{1} << (at % 64), std::memory_order_acq_rel);
 			m_FreeGranules.fetch_sub(static_cast<std::ptrdiff_t>(count), std::memory_order_relaxed);
 			m_HoleBytes.fetch_add(count * c_GranuleBytes, std::memory_order_relaxed);
+			HoleBytesTotal().fetch_add(count * c_GranuleBytes, std::memory_order_relaxed);
 			HeapCommitted().fetch_sub(count * c_GranuleBytes, std::memory_order_relaxed);
 			give -= count;
 			granule = begin;
