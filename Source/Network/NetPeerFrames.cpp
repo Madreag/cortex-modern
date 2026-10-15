@@ -106,7 +106,8 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::PeerTieRefereed() const {
-		// The directory referees an even split of two or four retained seats; any other tie goes to the host's half.
+		// The directory referees an even split of two or four retained seats; any other tie goes to the host's half. Three retained
+		// seats never split evenly for it: with one held, the two that play tie one to one and the host's half keeps the round.
 		int retained = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) retained += !m_RemovedPeers.contains(peer) && !IsSeatReleased(peer);
 		return m_Config.frameTieReferee && (retained == 2 || retained == 4);

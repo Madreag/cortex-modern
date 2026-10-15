@@ -1545,6 +1545,9 @@ namespace RTE {
 		auto lateReferee = gap("two_internet_late_joiner_takes_every_decision_with_an_800ms_referee", 2, 20000); lateReferee.seats = 2;
 		lateReferee.internet = lateReferee.directoryBoth = lateReferee.noRefusals = true; lateReferee.slowPercent = 95;
 		lateReferee.rttMs = lateReferee.otherRttMs = 100; lateReferee.refereeLatencyMs = 800; rows.push_back(lateReferee);
+		// Three retained seats: the directory referees only even splits of two or four, so a tie of the two playing seats goes to the host's half.
+		auto threeTie = gap("three_retained_seats_tie_goes_to_the_hosts_half", 3, 10000); threeTie.seats = 3; threeTie.internet = threeTie.directoryBoth = true;
+		threeTie.secondSubject = 2; threeTie.secondAfterMs = 4000; rows.push_back(threeTie);
 		// A voter silent from the return's first vote: the members that play neither wait on its vote nor past the bound.
 		auto silentVoter = gap("held_seat_return_meets_a_silent_voter", 2, 10000); silentVoter.seats = 4; silentVoter.silentVoter = 4; silentVoter.silentVoterMs = 2000;
 		silentVoter.postReturnMs = 6000; rows.push_back(silentVoter);
