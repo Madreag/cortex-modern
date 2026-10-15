@@ -220,6 +220,9 @@ namespace RTE {
 		/// @return Whether this machine's seat took the passenger.
 		bool SwitchSeatToPassenger(Actor* passenger);
 
+		/// An exit's incoming object deleted before a capture's boundary is saved as none.
+		static bool RunGoneIncomingObjectSelfTest();
+
 		/// Gets the current state of the hatch.
 		/// @return An int encoding the hatch state. See the HatchState enum.
 		unsigned int GetHatchState() const { return m_HatchState; }
