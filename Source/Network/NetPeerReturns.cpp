@@ -370,6 +370,13 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetLockstepCoordinator::IsLocalPrivateReaderAt(uint64_t frame) const {
+		NET_PLANE_CHECK();
+		const auto own = m_PeerBridges.find(m_Config.localPeerId);
+		return UsesPeerFrameGroups() && own != m_PeerBridges.end() && own->second.committedHold && frame >= own->second.fromFrame &&
+		    (!own->second.returnFrame || frame < *own->second.returnFrame);
+	}
+
 	bool NetLockstepCoordinator::PeerFrameCatchUpActive() const {
 		NET_PLANE_CHECK();
 		if (!UsesPeerFrameGroups() || !IsRunning() || !m_LastCompletedSimulationTick) return false;

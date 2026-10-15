@@ -4319,9 +4319,11 @@ static std::string ResyncSaveName() {
 		}
 		if (output.capture) {
 			const bool joinCapture = IsJoinCaptureTick(tick);
-			// A peer replaying its catch-up is not live at this tick, and the host does not wait on it.
+			// A peer replaying its catch-up is not live at this tick, and the host does not wait on it - nor on a seat reading the round's
+			// tail privately, which replays this tick late; the host's own held seat still names the round's park.
 			bool taken = false;
-			if (!ScenarioRunner::WorldCatchUpActive() && g_ActivityMan.ActivityRunning()) {
+			const bool privateReader = m_Coordinator && !m_IsHost && m_Coordinator->IsLocalPrivateReaderAt(tick);
+			if (!ScenarioRunner::WorldCatchUpActive() && !privateReader && g_ActivityMan.ActivityRunning()) {
 				if (m_Coordinator) m_Coordinator->BeginSynchronizedCapture(tick);
 				const auto captureBegan = RTE::SteadyClock::now();
 				CrossCaptureBarrierFromEnvironment("capture_announced", tick, m_AutosaveIdentity.roundId);

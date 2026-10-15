@@ -1280,6 +1280,8 @@ namespace RTE {
 		/// Host: the current capture park covers the frame or may still grow to cover it.
 		bool CaptureParkMayReach(uint64_t frame) const;
 		bool IsLocalSeatHeld() const { NET_PLANE_CHECK(); return m_LocalSeatHeld; }
+		/// Whether this seat's frame comes from the round's committed tail: the frame groups hold it there.
+		bool IsLocalPrivateReaderAt(uint64_t frame) const;
 		/// Whether the host the last handover replaced sent its leave record: its departure was its own decision, never read from a silence.
 		bool MigrationHostAnnouncedLeave() const { NET_PLANE_CHECK(); return m_MigrationHostAnnounced; }
 		/// Host: whether a prepared frame lacks the retained remote copy needed to preserve one history through host change.
