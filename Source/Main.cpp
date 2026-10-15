@@ -1734,6 +1734,7 @@ static void PostMemoryCensus(uint64_t simTick, const std::string& when = std::st
 		return text.str();
 	};
 	const std::string lua = timed("lua", [] { return g_LuaMan.GetTotalHeapBytes(); });
+	const std::string luaLive = timed("lua_live", [] { return g_LuaMan.GetTotalHeapLiveBytes(); });
 	// The capture keeps its last image for the next one to share; that image is the full-state instrument's own memory.
 	const std::string cow = timed("cow", [] { return CheckpointCow::Get().Cache().Census() + " last_image_mb=" + std::to_string(CheckpointCow::Get().LastImageBytes() >> 20) + " " + CheckpointCow::Get().PartCensus(); });
 	const std::string movable = timed("movable", [] { return g_MovableMan.Census(); });
@@ -1750,7 +1751,7 @@ static void PostMemoryCensus(uint64_t simTick, const std::string& when = std::st
 	rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - s_CensusProcessStart).count();
 	// A capture still writing holds its whole frozen image, so a line taken beside one counts it.
 	rest << " in_flight=autosave:" << g_ActivityMan.UnwrittenAutosaves() << ",fullstate:" << g_ActivityMan.UnfinishedFullStateCaptures() << when;
-	rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
+	rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua << " lua_live_bytes=" << luaLive
 	     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
 	     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << " storage: " << storage << ' ' << textures << pace;
 	CensusWorker::Get().Post([simTick, rest = std::move(rest).str(), costs = std::move(costs)]() mutable {
