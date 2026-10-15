@@ -1695,6 +1695,8 @@ namespace RTE {
 		uint32_t PeerDecisionRequiredVoters(const NetHostMigrationMessage& agreed) const;
 		/// The seat whose half takes an unrefereed tie among these voting owners.
 		uint8_t PeerTieHalfHolder(uint32_t owners) const;
+		/// Ask the whole group for a new split name once a tie decided in this one has healed.
+		void RenewSettledPeerSplit(uint64_t nowMs);
 		void TryCommitPeerBridge(uint64_t frame, uint64_t nowMs, uint8_t kind = 0);
 		void InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs);
 		/// Takes the decisions kept for their frame, in frame order.
@@ -1792,6 +1794,7 @@ namespace RTE {
 		uint64_t m_PeerVoteRetryAtMs = 0;
 		uint32_t m_FrameGroupMembers = 0;
 		std::map<uint64_t, uint32_t> m_FrameGroupChanges;
+		std::map<uint64_t, uint32_t> m_PeerSplitRenewals; //!< Frames the whole group agreed a new split name at, after a tie it settled, and that group.
 		uint8_t m_AuthenticatedPeerMessage = 0;
 		bool m_PeerPrimaryListener = false;
 		std::map<uint8_t, uint64_t> m_PeerDelayBelowSinceMs;
