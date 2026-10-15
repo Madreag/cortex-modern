@@ -59,10 +59,12 @@ namespace RTE {
 		if (proposal.preparedFrame == 3) return ValidatePeerAdmin(proposal);
 		if (proposal.members.empty() || proposal.bytes.size() != NetHash32{}.size() + (proposal.preparedFrame == 1 ? 12 * proposal.members.size() : 0) || !PeerGroupHasAuthority(proposal.connectedMask) ||
 		    proposal.preparedFrame > 2 || (proposal.connectedMask & SeatBit(m_Config.localPeerId)) == 0 || PeerBridgeHasInputConflict(proposal)) return false;
-		if (proposal.preparedFrame == 0 && proposal.frame != m_Stats.nextFrame) return false;
-		if (proposal.preparedFrame != 0 && (proposal.frame <= m_Stats.nextFrame || proposal.frame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew)) return false;
-		const uint64_t prefixFrame = proposal.preparedFrame != 0 ? proposal.boundary : proposal.frame - 1;
-		const NetHash32 prefix = proposal.frame == m_Config.startFrame ? NetHash32{} : proposal.preparedFrame != 0 ? PeerAppliedFramePrefix(prefixFrame) : PeerFramePrefix(prefixFrame);
+		// A hold agreed ahead names a frame past a boundary every voter has applied, as a return does.
+		const bool ahead = proposal.preparedFrame != 0 || proposal.boundary < proposal.frame;
+		if (!ahead && proposal.frame != m_Stats.nextFrame) return false;
+		if (ahead && (proposal.frame <= m_Stats.nextFrame || proposal.frame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew)) return false;
+		const uint64_t prefixFrame = ahead ? proposal.boundary : proposal.frame - 1;
+		const NetHash32 prefix = proposal.frame == m_Config.startFrame ? NetHash32{} : ahead ? PeerAppliedFramePrefix(prefixFrame) : PeerFramePrefix(prefixFrame);
 		if (proposal.frame != m_Config.startFrame && !m_MigrationHistory.contains(prefixFrame)) return false;
 		if (!std::equal(prefix.begin(), prefix.end(), proposal.bytes.begin())) return false;
 		if (proposal.preparedFrame == 2) return proposal.members.size() == 1 && proposal.successorPeerId == proposal.members.front() &&
@@ -78,7 +80,10 @@ namespace RTE {
 			const bool departed = ended != m_PeerRoundEnds.end() && !ended->second.closedLink && proposal.frame >= ended->second.frame;
 			if (proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0 && (present || (neutral && !departed)) &&
 			    !(proposal.senderPeerId == GetHostPeerId() && present && !neutral && !HasPeerFrameRoute(peer))) return false;
-			if (proposal.preparedFrame == 0 && (proposal.connectedMask & SeatBit(peer)) != 0 && proposal.frame >= EffectiveStartOf(peer) && !neutral && !present) return false;
+			if (!ahead && (proposal.connectedMask & SeatBit(peer)) != 0 && proposal.frame >= EffectiveStartOf(peer) && !neutral && !present) return false;
+			// A hold agreed ahead of a seat the round already holds there has nothing to decide.
+			if (ahead && proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0)
+				if (const auto held = m_PeerBridges.find(peer); held != m_PeerBridges.end() && held->second.committedHold && !held->second.returnFrame) return false;
 			if (proposal.preparedFrame == 1 && (named & SeatBit(peer)) != 0 &&
 			    (!m_PeerBridges.contains(peer) || !m_PeerBridges.at(peer).committedHold || m_PeerBridges.at(peer).returnFrame)) return false;
 		}
@@ -228,8 +233,43 @@ namespace RTE {
 		double slowCost = 0;
 		const bool slowMachine = proposal.preparedFrame == 0 && !proposal.members.empty() && std::all_of(proposal.members.begin(), proposal.members.end(),
 		    [&](uint8_t peer) { return CostsPastTolerance(peer, frame, nowMs, &slowCost); });
+		// With another seat voting, a seat that still feeds is never held at the frame being waited on: its input reaches some voter before
+		// the proposal does, the voters stop at different frames, and no majority forms. Only a silent seat stops every voter at one frame.
+		// So the lowest seat that plays on holds a feeding seat at a frame past its inputs in flight, agreed ahead, once it costs more than
+		// the round allows or a wait on it passes the bound; the others wait for that hold.
+		const bool otherVoter = (proposal.connectedMask & ~SeatBit(m_Config.localPeerId)) != 0;
+		const uint64_t feedBoundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
+		const bool feeding = proposal.preparedFrame == 0 && !proposal.members.empty() && !declaredDeparture &&
+		    std::all_of(proposal.members.begin(), proposal.members.end(), [&](uint8_t peer) {
+			    const auto& arrivals = m_Stats.peers[peer].arrivals;
+			    return !arrivals.empty() && nowMs <= arrivals.back().first + 2 * feedBoundMs;
+		    });
+		const bool heldAhead = otherVoter && feeding;
+		if (heldAhead) {
+			const bool waitedPastBound = m_ConsumerWaitingFrame == frame && nowMs >= m_ConsumerWaitStartMs && nowMs - m_ConsumerWaitStartMs >= feedBoundMs;
+			if (!(slowMachine || waitedPastBound) || std::countr_zero(proposal.connectedMask) + 1 != m_Config.localPeerId) return false;
+			for (const auto& [key, votes]: m_PeerBridgeVotes) {
+				if (key.second != 0 || key.first <= frame || m_PeerBridgeCertificates.contains(key)) continue;
+				if (const auto own = votes.find(m_Config.localPeerId); own != votes.end())
+					for (uint8_t peer: own->second.members) if (std::find(proposal.members.begin(), proposal.members.end(), peer) != proposal.members.end()) return false;
+			}
+			uint64_t inFlight = frame;
+			uint32_t rttMs = 0;
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+				if (peer == m_Config.localPeerId) continue;
+				if (std::find(proposal.members.begin(), proposal.members.end(), peer) != proposal.members.end())
+					inFlight = std::max<uint64_t>(inFlight, m_Stats.peers[peer].highestTargetFrame + 1);
+				uint32_t rtt = m_Stats.peers[peer].pingMs;
+				const auto [wire, route] = PeerFrameRoute(peer);
+				if (wire && wire->IsPeerPingMeasured(route)) rtt = std::max(rtt, wire->GetPeerPingMs(route));
+				rttMs = std::max(rttMs, rtt);
+			}
+			// Past its inputs in flight by the round trip the proposal and its votes take and the bound, as a return is placed.
+			proposal.boundary = m_LastCompletedSimulationTick.value_or(frame - 1);
+			proposal.frame = inFlight + static_cast<uint64_t>(std::ceil(rttMs / m_Config.simTickMs)) + m_Config.slowPlayerBoundTicks;
+		}
 		// A declared Leave has already ended its input; it needs no silence wait at that boundary.
-		if (proposal.preparedFrame == 0 && !declaredDeparture && !slowMachine) {
+		if (proposal.preparedFrame == 0 && !declaredDeparture && !heldAhead && !(slowMachine && !otherVoter)) {
 			const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
 			// The startup consumer has no established buffered runway to spend.
 			// Its first missing inputs get the full bound from the actual wait.
@@ -267,7 +307,7 @@ namespace RTE {
 		const uint32_t proposers = proposal.preparedFrame == 1 ? m_FrameGroupMembers : proposal.connectedMask;
 		if (proposers == 0) return false;
 		proposal.successorPeerId = static_cast<uint8_t>(std::countr_zero(proposers) + 1);
-		const NetHash32 prefix = frame == m_Config.startFrame ? NetHash32{} : proposal.preparedFrame != 0 ? PeerAppliedFramePrefix(proposal.boundary) : PeerFramePrefix(frame - 1);
+		const NetHash32 prefix = frame == m_Config.startFrame ? NetHash32{} : proposal.preparedFrame != 0 || heldAhead ? PeerAppliedFramePrefix(proposal.boundary) : PeerFramePrefix(frame - 1);
 		proposal.bytes.assign(prefix.begin(), prefix.end());
 		if (proposal.preparedFrame == 1) for (uint8_t peer: proposal.members) {
 			uint32_t rtt = m_Stats.peers[peer].pingMs;
@@ -313,10 +353,10 @@ namespace RTE {
 		}
 		if (proposal.preparedFrame == 0) {
 			for (uint8_t peer: proposal.members) {
-				m_PeerRejectedInputs[frame] |= SeatBit(peer);
+				m_PeerRejectedInputs[proposal.frame] |= SeatBit(peer);
 				if (!slowMachine) { m_SlowMachineHolds.erase(peer); continue; }
 				m_SlowMachineHolds.insert(peer);
-				DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << frame << " cost " << slowCost
+				DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << proposal.frame << " cost " << slowCost
 				                 << " ticks/s against this machine's " << OwnCapacityTps() << "; the AI takes its seat" << std::endl;
 			}
 			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
@@ -413,7 +453,10 @@ namespace RTE {
 			if (agreed.preparedFrame != 3) CheckPeerFrameTie(certificate.frame, voters, nowMs);
 			keep(); return;
 		}
-		if (agreed.preparedFrame == 0 && certificate.frame > m_Stats.nextFrame) { refused("ahead"); keep(); RequestPeerCommittedTail(nowMs); return; }
+		const bool heldAhead = agreed.preparedFrame == 0 && agreed.boundary < certificate.frame;
+		if (agreed.preparedFrame == 0 && certificate.frame > m_Stats.nextFrame) { refused("ahead"); keep(); if (!heldAhead) RequestPeerCommittedTail(nowMs); return; }
+		// A hold agreed ahead that this peer has already played past would rewrite history: it was taken without this peer.
+		if (heldAhead && certificate.frame < m_Stats.nextFrame) { refused("behind"); return; }
 		if (agreed.preparedFrame != 0 && certificate.frame < m_Stats.nextFrame) {
 			// Install a private return before its displayed tick, even if preparation has passed it.
 			const auto own = m_PeerBridges.find(m_Config.localPeerId);
@@ -421,8 +464,8 @@ namespace RTE {
 			if (agreed.preparedFrame != 1 || !privateReader ||
 			    certificate.frame <= m_LastCompletedSimulationTick.value_or(0)) { refused(privateReader ? "displayed" : "behind"); return; }
 		}
-		const uint64_t prefixFrame = agreed.preparedFrame != 0 ? agreed.boundary : certificate.frame - 1;
-		const NetHash32 prefix = certificate.frame == m_Config.startFrame ? NetHash32{} : agreed.preparedFrame != 0 ? PeerAppliedFramePrefix(prefixFrame) : PeerFramePrefix(prefixFrame);
+		const uint64_t prefixFrame = agreed.preparedFrame != 0 || heldAhead ? agreed.boundary : certificate.frame - 1;
+		const NetHash32 prefix = certificate.frame == m_Config.startFrame ? NetHash32{} : agreed.preparedFrame != 0 || heldAhead ? PeerAppliedFramePrefix(prefixFrame) : PeerFramePrefix(prefixFrame);
 		if (agreed.bytes.size() != prefix.size() + (agreed.preparedFrame == 1 ? 12 * agreed.members.size() : 0) || !std::equal(prefix.begin(), prefix.end(), agreed.bytes.begin())) { refused("prefix"); return; }
 		size_t returnOffset = prefix.size();
 		std::map<uint8_t, std::tuple<uint16_t, uint64_t, uint32_t>> returnDelays;
@@ -483,6 +526,8 @@ namespace RTE {
 			} else {
 				const auto prior = m_PeerBridges.find(peer);
 				const bool alreadyHeld = prior != m_PeerBridges.end() && prior->second.committedHold && !prior->second.returnFrame;
+				// A hold agreed ahead of a seat the round already holds changes nothing: the standing hold keeps its frames.
+				if (alreadyHeld && heldAhead) continue;
 				PeerBridge bridge;
 				bridge.fromFrame = agreed.frame;
 				bridge.aiFrame = agreed.frame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs));
