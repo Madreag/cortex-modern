@@ -6317,9 +6317,16 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames) {
 		NET_PLANE_CHECK();
-		if (!m_DelayChanges.contains(m_Config.localPeerId)) return false;
 		const uint16_t delay = InputDelayAt(m_Config.localPeerId, producedFrame);
-		if (m_LastQueuedTargetFrame == UINT64_MAX || producedFrame > UINT64_MAX - delay || producedFrame + delay > m_LastQueuedTargetFrame) return false;
+		if (producedFrame > UINT64_MAX - delay) return false;
+		const uint64_t target = producedFrame + delay;
+		bool promisedHold = false;
+		if (UsesPeerFrameGroups()) for (auto fence = m_PeerRejectedInputs.lower_bound(m_Stats.nextFrame); fence != m_PeerRejectedInputs.end() && fence->first <= target; ++fence) {
+			if ((fence->second & (uint32_t{1} << (m_Config.localPeerId - 1))) == 0 || m_PeerBridgeCertificates.contains({fence->first, 0})) continue;
+			const auto votes = m_PeerBridgeVotes.find({fence->first, 0});
+			if (votes != m_PeerBridgeVotes.end() && votes->second.contains(m_Config.localPeerId)) { promisedHold = true; break; }
+		}
+		if (!promisedHold && (!m_DelayChanges.contains(m_Config.localPeerId) || m_LastQueuedTargetFrame == UINT64_MAX || target > m_LastQueuedTargetFrame)) return false;
 		const uint64_t edgeMask = DelayedControllerEdges();
 		for (const ControllerFrame& frame: frames) {
 			auto& pending = m_DeferredControllerFrames[frame.actorUniqueID];
@@ -7984,6 +7991,15 @@ namespace RTE {
 		if (targetFrame < EffectiveStartOf(m_Config.localPeerId)) {
 			if (error) *error = "local input precedes the sender's admission delay";
 			return false;
+		}
+		// A seat that co-signed its own hold cannot race that promise with a later local input. Normal production defers its sample above.
+		if (UsesPeerFrameGroups()) for (auto fence = m_PeerRejectedInputs.lower_bound(m_Stats.nextFrame); fence != m_PeerRejectedInputs.end() && fence->first <= targetFrame; ++fence) {
+			if ((fence->second & (uint32_t{1} << (m_Config.localPeerId - 1))) == 0 || m_PeerBridgeCertificates.contains({fence->first, 0})) continue;
+			const auto votes = m_PeerBridgeVotes.find({fence->first, 0});
+			if (votes != m_PeerBridgeVotes.end() && votes->second.contains(m_Config.localPeerId)) {
+				if (error) *error = "local input awaits its co-signed hold";
+				return false;
+			}
 		}
 		static const auto holdBeforeTarget = TestFrameFromEnvironment("CC_TEST_LOCKSTEP_HOLD_BEFORE_TARGET");
 		if (holdBeforeTarget && targetFrame == *holdBeforeTarget) {

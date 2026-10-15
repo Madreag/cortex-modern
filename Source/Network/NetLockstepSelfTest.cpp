@@ -135,6 +135,40 @@ namespace RTE {
 		}
 
 
+		static bool LinkDelay(std::string* error) {
+			for (const auto [rtt, minimum, maximum]: {std::array<uint32_t, 3>{30, 3, 6}, {58, 5, 6}, {200, 13, 14}}) {
+				NetInputDelayEstimator link;
+				link.Observe(0, rtt);
+				const uint32_t delay = link.SenderRequiredFrames(1000.0 / 60, 3, 1);
+				if (delay < minimum || delay > maximum) {
+					*error = "a measured " + std::to_string(rtt) + " ms link was padded to " + std::to_string(delay) + " input ticks";
+					return false;
+				}
+			}
+			Wire wire;
+			NetLockstepCoordinator peer;
+			Configure(peer, wire);
+			peer.m_Config.peerFrameGroups = peer.m_Config.adaptiveInputDelay = true;
+			peer.m_Config.inputDelayFrames = peer.m_Config.matchConfig.inputDelayFrames = 1;
+			peer.m_Config.peerInputDelayFrames = {{1, 1}, {2, 1}, {3, 1}};
+			peer.m_Config.matchConfig.peerInputDelayFrames = {1, 1, 1};
+			peer.m_FrameGroupMembers = 7;
+			peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_MigrationHistory[4422] = {1, 2, 3};
+			peer.m_PeerReceiptDelaySamples[1].Observe(1000, 85);
+			peer.m_PeerReceiptDelaySamples[3].Observe(1000, 67);
+			peer.TickPeerInputDelay(1000);
+			for (const auto& [key, votes]: peer.m_PeerBridgeVotes) if (key.second == 10 && votes.contains(2)) {
+				const auto& proposal = votes.at(2);
+				if (proposal.completeFrom > 6 || proposal.completeFrom < 5) {
+					*error = "a 67–85 ms input receipt path did not propose five or six ticks"; return false;
+				}
+				return true;
+			}
+			*error = "the measured live receipt path did not propose its input delay";
+			return false;
+		}
+
 		static bool ConcurrentReturnMembership(std::string* error) {
 			Wire wire;
 			NetLockstepCoordinator host;
@@ -29449,22 +29483,32 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "link-delay") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::LinkDelay(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS input_delay_follows_the_measured_link" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "concurrent-returns") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::ConcurrentReturnMembership(&error)) return fail(error);
 				std::cout << "[net-lockstep-selftest] PASS a_later_return_keeps_the_earlier_scheduled_return" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
 			if (std::string_view(selectedCase) == "own-ahead-hold") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::OwnAheadHoldFence(&error)) return fail(error);
 				std::cout << "[net-lockstep-selftest] PASS a_seat_co_signs_and_fences_its_own_future_hold" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
 			if (std::string_view(selectedCase) == "held-host-base-capture") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::HeldHostBaseCapture(&error) || !SeatAdmissionServiceTest::HeldHostAdoptsBaseCapture(&error)) return fail(error);
 				std::cout << "[net-lockstep-selftest] PASS held_host_names_a_private_base_through_the_playing_seats" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
 			if (std::string_view(selectedCase) == "owner-hitch-two-internet") {
@@ -29512,6 +29556,7 @@ namespace {
 		};
 		row([](std::string* why) { return TestOwnerSilenceThreshold(0, why); }, "client_2s_bridge_survivor_tick_bound_automatic_return");
 		row(&SeatAdmissionServiceTest::HeldHostAdoptsBaseCapture, "held_host_adopts_the_agreed_base_capture");
+		row(&SessionPlaneRecoveryTest::LinkDelay, "input_delay_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::ConcurrentReturnMembership, "a_later_return_keeps_the_earlier_scheduled_return");
 		row(&SessionPlaneRecoveryTest::OwnAheadHoldFence, "a_seat_co_signs_and_fences_its_own_future_hold");
 		row(&SessionPlaneRecoveryTest::HeldHostBaseCapture, "held_host_names_a_private_base_through_the_playing_seats");
