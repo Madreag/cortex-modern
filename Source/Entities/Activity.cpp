@@ -1431,7 +1431,7 @@ bool Activity::SwitchToActorFromScript(Actor* actor, int player, int team) {
 }
 
 // CC_TEST_RETURN_INPUT_DETAILS names why a local seat's switch passes an actor by: its seat, input mode and owner peer.
-static void NoteRefusedSwitch(const Actor* actor, int player, const char* reason) {
+static void NoteRefusedSwitch(Actor* actor, int player, const char* reason) {
 	if (!std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) return;
 	std::ostringstream line;
 	line << "[net-actor-switch] refused player=" << player << " reason=" << reason;
