@@ -379,6 +379,9 @@ LOCAL = "local"
 
 def remote_command(box, args):
     args = list(map(str, args))
+    if box["ssh"] != LOCAL and box["os"] == "win32" and args[0] != "pwsh":
+        encoded = base64.b64encode(json.dumps(args).encode("utf-8")).decode("ascii")
+        args = ["pwsh", "-NoProfile", "-File", box["repo"] + "/tools/e2e/peer_step.ps1", "-ArgumentsBase64", encoded]
     return args if box["ssh"] == LOCAL else ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", box["ssh"], shlex.join(args)]
 
 
