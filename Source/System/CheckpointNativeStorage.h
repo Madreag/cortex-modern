@@ -18,9 +18,23 @@
 #include <span>
 #include <string>
 #include <type_traits>
+#include <typeinfo>
 #include <vector>
 
 namespace RTE {
+
+	/// The frozen container this thread walks, named when a read of it leaves the frozen inventory.
+	class CheckpointFrozenWalk {
+	public:
+		explicit CheckpointFrozenWalk(const std::type_info& kind) noexcept : m_Previous(s_Kind) { s_Kind = &kind; }
+		~CheckpointFrozenWalk() { s_Kind = m_Previous; }
+		CheckpointFrozenWalk(const CheckpointFrozenWalk&) = delete;
+		CheckpointFrozenWalk& operator=(const CheckpointFrozenWalk&) = delete;
+		static const std::type_info* Current() noexcept { return s_Kind; }
+	private:
+		const std::type_info* m_Previous;
+		static inline thread_local const std::type_info* s_Kind = nullptr;
+	};
 
 	// The 64 KiB regions the pools' pages ever covered, so a free of heap memory skips their lock; a released region stays marked.
 	class CheckpointOwnedRegions {

@@ -7,6 +7,7 @@
 #include <cstring>
 #include <iterator>
 #include <stdexcept>
+#include <typeinfo>
 #include <deque>
 #include <list>
 #include <map>
@@ -129,7 +130,10 @@ namespace RTE {
 		static_assert(!std::is_same_v<T, bool>);
 		CheckpointFrozenRange<T> values(source.size());
 		const T* first = source.data();
-		if (!source.empty() && CheckpointNativeStorage::IsView(&source)) first = static_cast<const T*>(CheckpointNativeStorage::View(first, source.size() * sizeof(T)));
+		if (!source.empty() && CheckpointNativeStorage::IsView(&source)) {
+			const CheckpointFrozenWalk walking(typeid(source));
+			first = static_cast<const T*>(CheckpointNativeStorage::View(first, source.size() * sizeof(T)));
+		}
 		for (size_t index = 0; index < source.size(); ++index) values.Add(first + index);
 		return values;
 	}
@@ -172,6 +176,7 @@ namespace RTE {
 		CheckpointFrozenRange<T> values(source.size());
 		if (!CheckpointNativeStorage::IsView(&source)) { for (const auto& value: source) values.Add(&value); return values; }
 		if (source.empty()) return values;
+		const CheckpointFrozenWalk walking(typeid(source));
 #ifdef _MSVC_STL_VERSION
 		const auto first = source._Unchecked_begin();
 		const auto& header = *first._Mycont;
@@ -208,6 +213,7 @@ namespace RTE {
 	template<class T, class Allocator> auto CheckpointValues(const std::list<T, Allocator>& source) {
 		CheckpointFrozenRange<T> values(source.size());
 		if (!CheckpointNativeStorage::IsView(&source)) { for (const auto& value: source) values.Add(&value); return values; }
+		const CheckpointFrozenWalk walking(typeid(source));
 		const auto iterator = CheckpointContainerDetail::End(source);
 		const void* end = CheckpointNativeStorage::Original(CheckpointContainerDetail::Node(iterator));
 		const void* node = CheckpointContainerDetail::ListNext(end);
@@ -224,6 +230,7 @@ namespace RTE {
 		CheckpointFrozenRange<typename Container::value_type> values(source.size());
 		if (!CheckpointNativeStorage::IsView(&source)) { for (const auto& value: source) values.Add(&value); return values; }
 		if (source.empty()) return values;
+		const CheckpointFrozenWalk walking(typeid(source));
 		const auto iterator = CheckpointContainerDetail::End(source);
 		const void* end = CheckpointNativeStorage::Original(CheckpointContainerDetail::Node(iterator));
 #ifdef _LIBCPP_VERSION
@@ -264,6 +271,7 @@ namespace RTE {
 		CheckpointFrozenRange<typename Container::value_type> values(source.size());
 		if (!CheckpointNativeStorage::IsView(&source)) { for (const auto& value: source) values.Add(&value); return values; }
 		if (source.empty()) return values;
+		const CheckpointFrozenWalk walking(typeid(source));
 		const auto iterator = CheckpointContainerDetail::End(source);
 		const void* end = CheckpointNativeStorage::Original(CheckpointContainerDetail::Node(iterator));
 #ifdef _MSVC_STL_VERSION

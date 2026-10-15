@@ -30,6 +30,7 @@
 #include <stdexcept>
 #include <stop_token>
 #include <string>
+#include <typeinfo>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -1622,6 +1623,7 @@ namespace {
 	std::string OutsideInventory(const char* what, const void* source, size_t bytes) {
 		std::string message = std::format("native {} is outside the frozen inventory (address {:#x}, {} bytes", what, reinterpret_cast<uintptr_t>(source), bytes);
 		if (const std::string chain = CheckpointCloneCost::DescribeOpen(); !chain.empty()) message += ", freezing " + chain;
+		if (const std::type_info* walking = CheckpointFrozenWalk::Current()) message += std::string(", walking ") + walking->name();
 		return message + ")";
 	}
 }
