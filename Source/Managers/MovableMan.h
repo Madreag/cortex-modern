@@ -1092,6 +1092,9 @@ namespace RTE {
 		/// @return Whether the exchange succeeded; a failure sets the controller replay error.
 		bool RunLockstepPausedTick();
 
+		/// The microseconds the checksum's randomness feed took since the tick-cost census last asked (CC_TEST_TICK_COST_DETAILS).
+		static long long TakeChecksumFeedUs();
+
 		/// Feeds this tick's object census into the sim checksum, at the tick boundary the checkpoint
 		/// archive is written at, so the hash and the archive describe the same instant. Covers the
 		/// added deques, which the archive writes and a held tick never drains.
