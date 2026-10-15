@@ -50,6 +50,9 @@ namespace RTE {
 			size_t RangeBytes() const { size_t bytes = 0; for (const Range& range: m_Ranges) bytes += range.bytes; return bytes; }
 			/// What an inventory boundary did: pages copied as written, pages fenced as unseen.
 			std::pair<size_t, size_t> ArmedPages() const;
+			/// For a refusal: the block's sizes and, per page of the live span, whether the copy kept it, its fence state, whether the
+			/// boundary copied it and whether its run is committed.
+			std::string Describe(const void* source, size_t bytes) const;
 		private:
 			friend class CheckpointPagePool;
 			friend class Allocation;

@@ -758,6 +758,26 @@ void CheckpointPagePool::Snapshot::Arm() const {
 	}
 }
 
+std::string CheckpointPagePool::Snapshot::Describe(const void* source, size_t bytes) const {
+	const uintptr_t address = reinterpret_cast<uintptr_t>(source);
+	const auto end = std::upper_bound(m_Parts.begin(), m_Parts.end(), address, [](uintptr_t address, const Part& part) {
+		return address < reinterpret_cast<uintptr_t>(part.block->live.data);
+	});
+	if (end == m_Parts.begin() || !std::prev(end)->block->Contains(source, bytes ? bytes : 1)) return "outside this snapshot";
+	const auto& part = *std::prev(end);
+	const size_t offset = address - reinterpret_cast<uintptr_t>(part.block->live.data), pageBytes = part.block->pageBytes;
+	std::string text = std::format("block_bytes={} slot_bytes={} offset={} copy_armed={} copy_lost={}", part.block->live.bytes, part.block->slotBytes, offset,
+	    part.copy->Armed(), part.copy->lost.load(std::memory_order_acquire));
+	Locked guard(part.block->lock);
+	text += std::format(" copies_in_block={}", part.block->copies.size());
+	for (size_t page = offset / pageBytes; page <= (offset + std::max<size_t>(bytes, 1) - 1) / pageBytes; ++page) {
+		const bool run = part.copy->pages.committed || part.copy->pages.runs[page * pageBytes / Pages::c_RunBytes];
+		text += std::format(" page{}:saved={},state={},hot={},run={}", page, part.copy->saved[page].load(std::memory_order_acquire), static_cast<int>(part.block->states[page]),
+		    part.copy->hot[page], run);
+	}
+	return text;
+}
+
 std::pair<size_t, size_t> CheckpointPagePool::Snapshot::ArmedPages() const {
 	return m_ArmGate && m_ArmGate->state.load(std::memory_order_acquire) == ArmGate::State::Armed ? std::pair{m_ArmGate->copiedPages, m_ArmGate->fencedPages} : std::pair<size_t, size_t>{};
 }
@@ -1582,6 +1602,14 @@ const void* CheckpointNativeStorage::Original(const void* view) {
 		return static_cast<const std::byte*>(root->source) + (reinterpret_cast<uintptr_t>(view) - reinterpret_cast<uintptr_t>(root->view));
 	if (s_Read) for (const auto& pages: s_Read->pages) if (const void* source = pages->Original(view)) return source;
 	return view;
+}
+
+std::string CheckpointNativeStorage::DescribeView(const void* view, size_t bytes) {
+	if (!s_Read) return "no read";
+	const void* source = Original(view);
+	if (source == view) return Private(view, bytes) ? "a private value" : "not a view";
+	for (const auto& pages: s_Read->pages) if (pages->Contains(source, bytes)) return pages->Describe(source, bytes);
+	return "a root's view";
 }
 
 bool CheckpointNativeStorage::IsView(const void* address) {

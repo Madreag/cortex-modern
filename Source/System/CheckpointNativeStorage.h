@@ -212,6 +212,8 @@ namespace RTE {
 		RTE_NOINLINE static void* PrivateView(void* source, size_t bytes);
 		static std::shared_ptr<const CheckpointPagePool::Snapshot> PagesFor(const void* source, size_t bytes);
 		static const void* Original(const void* view);
+		/// For a refusal: where a frozen view's live span lies in the read's snapshots, page by page.
+		static std::string DescribeView(const void* view, size_t bytes);
 		static bool IsView(const void* address);
 		static const std::string* ReadString(const char* source, size_t bytes);
 		static std::shared_ptr<const void> ReadIndex(const void* source, const void* kind, const std::function<std::shared_ptr<const void>()>& build);
