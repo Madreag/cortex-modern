@@ -802,6 +802,7 @@ class IsolatedRun:
             return code
         if self.start_time is not None and time.monotonic() - self.start_time >= self.timeout:
             self.record["timed_out"] = True
+            self._record_stacks()
             self._signal_group(signal.SIGTERM)
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
@@ -816,6 +817,34 @@ class IsolatedRun:
                     pass
             return 124
         return None
+
+    def _record_stacks(self) -> None:
+        """Where a process the timeout is about to kill waits: every thread's call stack (sample on macOS) or, where no tracer may
+        attach (Linux under ptrace_scope 1), each thread's name, state and kernel wait channel, written beside its logs."""
+        far = self._hop_record(wait_s=2.0).get("engine_pid") if self.hop else None
+        pid = far or (self._proc.pid if self._proc is not None else None)
+        if not pid:
+            return
+        path = self.out / "stacks.txt"
+        stacks: dict[str, Any] = {"pid": pid, "process": "the hop's engine" if far else "the runner's child", "path": str(path)}
+        try:
+            if sys.platform == "darwin":
+                stacks["tool"] = "sample"
+                done = subprocess.run(["/usr/bin/sample", str(pid), "2", "-file", str(path)], capture_output=True, text=True, timeout=60)
+                stacks["tool_exit"] = done.returncode
+            else:
+                stacks["tool"] = "proc"
+                lines = []
+                for task in sorted(Path(f"/proc/{pid}/task").iterdir(), key=lambda entry: int(entry.name)):
+                    read = lambda name: (task / name).read_text(errors="replace").strip() if (task / name).is_file() else ""
+                    state = read("stat").rsplit(")", 1)[-1].split()[:1]
+                    lines.append(f"tid={task.name} comm={read('comm')} state={state[0] if state else '?'} wchan={read('wchan') or '-'}")
+                path.write_text(f"pid={pid} threads={len(lines)}\n" + "\n".join(lines) + "\n", encoding="utf-8")
+        except (OSError, subprocess.SubprocessError) as failed:
+            stacks["error"] = f"{type(failed).__name__}: {failed}"
+        stacks["written"] = path.is_file() and path.stat().st_size > 0
+        self.record["stacks"] = stacks
+        self._save()
 
     def _collect_evidence(self) -> None:
         log = self.out / "stdout.log"

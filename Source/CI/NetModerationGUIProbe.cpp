@@ -991,14 +991,19 @@ namespace {
 				probe.actorCycleTick = tick; probe.actorCycleRender = probe.renders;
 			};
 			if (probe.actorCycleStage == 1) {
-				if (tick < probe.actorCycleTick + 2 || probe.renders < probe.actorCycleRender + 3) return false;
+				// A tap lets go on the next drawn frame: held past 250 ms of sim time, a slow screen's press opens manual actor select.
+				if (tick < probe.actorCycleTick + 2 || probe.renders < probe.actorCycleRender + 1) return false;
 				pushKey(false); probe.actorCycleStage = 2; return false;
 			}
 			if (probe.actorCycleStage == 2) {
 				if (tick < probe.actorCycleTick + ScenarioRunner::GetLockstepLocalInputDelay() + 5) return false;
 				probe.actorCycleStage = 0;
 			}
-			if (actor && actor->GetModuleAndPresetName() == step.at("preset").get<std::string>()) return true;
+			const std::string wanted = step.at("preset").get<std::string>();
+			if (actor && actor->GetModuleAndPresetName() == wanted) return true;
+			const auto* roster = g_MovableMan.GetTeamRoster(game->GetTeamOfPlayer(player));
+			Require(std::any_of(roster->begin(), roster->end(), [&wanted](const Actor* member) { return member->GetModuleAndPresetName() == wanted; }),
+			        "the unit " + wanted + " left the team before its player took it");
 			Require(probe.actorCyclePresses < 32, "thirty-two held Next Actor presses did not select the purchased unit");
 			pushKey(true); ++probe.actorCyclePresses; probe.actorCycleStage = 1; return false;
 		} else if (op == "assert_scene" || op == "wait_scene") {
@@ -1105,13 +1110,22 @@ namespace {
 			if (probe.fightSamples == 20) Require(probe.aiFiredFrames > 0, "twenty minutes passed without the AI firing a weapon");
 		} else if (op == "assert_relay") {
 			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
-			int routes = 0;
+			// A scene of more than two players names its count: the host links to every joiner, a joiner only to the host.
+			const int players = step.value("players", 2);
+			const bool host = snapshot.localPeerId == snapshot.hostPeerId;
+			int routes = 0, remotes = 0;
 			for (const auto& member: snapshot.members) {
 				if (member.cpu || member.peerId == snapshot.localPeerId) continue;
+				++remotes;
+				if (players > 2 && !host && member.peerId != snapshot.hostPeerId) {
+					Require(member.connectedRoute.empty() || member.connectedRoute == "relay", "another joiner is reached outside the relay: " + member.connectedRoute);
+					continue;
+				}
 				Require(member.connectedRoute == "relay", "remote player is not connected through the relay: " + member.connectedRoute);
 				++routes;
 			}
-			Require(routes == 1, "the relay scene needs exactly one remote player; the lobby lists " + std::to_string(routes) + " of " + std::to_string(snapshot.members.size()) + " members");
+			Require(remotes == players - 1 && routes == (host ? players - 1 : 1), "the relay scene needs " + std::to_string(players - 1) + " remote players on " +
+			    std::to_string(host ? players - 1 : 1) + " relay links; the lobby lists " + std::to_string(remotes) + " remote of " + std::to_string(snapshot.members.size()) + " members");
 			observed["relay_peers"] = routes;
 		} else if (op == "pad_down" || op == "pad_up") {
 			const std::string name = step.at("button");

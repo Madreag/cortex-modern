@@ -843,6 +843,10 @@
       <!-- LuaJIT errors unwind through its C API and must destroy live C++ locals. -->
       <ExceptionHandling>SyncCThrow</ExceptionHandling>
     </ClCompile>
+    <Manifest>
+      <!-- Where Windows has long paths on, a game installed under deep folders still opens its files. -->
+      <AdditionalManifestFiles>Resources\LongPathAware.manifest.xml;%(AdditionalManifestFiles)</AdditionalManifestFiles>
+    </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="Source\Entities\Activity.h" />

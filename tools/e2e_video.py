@@ -660,10 +660,11 @@ def capped_stop_ms(video_dir):
     return None
 
 
-# A still is confirmed on every picture: a frozen one changes no pixel by more than this many levels over its span, while
-# encoder noise stays far below it; this many such pixels is a picture that moved (a soldier walking on a 4K whole-map view).
+# A still is confirmed on every picture: a frozen one changes no pixel by more than this many levels over its span - each of the
+# recorder's encoders keeps every pixel of a repeated picture within it - so one such pixel is a picture that moved: a parked view's
+# live numbers, a cursor or one small actor are play, not a frozen game.
 MOTION_LEVELS = 40
-MOTION_PIXELS = 1000
+MOTION_PIXELS = 1
 
 
 def changed_pixels(ffmpeg, video, start_s, end_s):
@@ -1694,9 +1695,11 @@ def item_evidence(record, item, port=None):
     probe_steps = item.get("probe_steps")
     if item.get("mark") and probe_steps is None and probe_path.is_file():
         script = json.loads(probe_path.read_text(encoding="utf-8")).get("script", {}).get("steps", [])
-        start = next((index for index, step in enumerate(script) if step.get("command") == "video_mark " + item["mark"]), None)
+        # A step's command is a menu line, or a number where the step names a pie slice.
+        marks = [str(step.get("command", "")) for step in script]
+        start = next((index for index, command in enumerate(marks) if command == "video_mark " + item["mark"]), None)
         if start is not None:
-            end = next((index for index in range(start + 1, len(script)) if script[index].get("command", "").startswith("video_mark ")), len(script))
+            end = next((index for index in range(start + 1, len(script)) if marks[index].startswith("video_mark ")), len(script))
             probe_steps = list(range(start, end))
     if required:
         matched = [{"assertion": pattern, "observed": [event for event in events if re.search(pattern, event["message"])]}

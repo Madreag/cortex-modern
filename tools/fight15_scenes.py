@@ -294,7 +294,7 @@ def scene_checks(peer, steps):
     return checks
 
 
-def buy(peer, fire=True, landing_offset=None, craft="Base.rte/Rocket MK2"):
+def buy(peer, fire=True, landing_offset=None, craft="Base.rte/Rocket MK2", soldier="Coalition.rte/Soldier Light"):
     steps = [dict(op="game_mouse", button="right", down=True), wait(renders=3, sim_advanced=2),
              dict(op="wait_scene", input_player=0, equals=dict(pie_visible=True)),
              dict(op="pie_point", input_player=0, command=6),
@@ -307,12 +307,12 @@ def buy(peer, fire=True, landing_offset=None, craft="Base.rte/Rocket MK2"):
     steps += [dict(op="assert_buy", input_player=0, equals=dict(visible=True, enabled=True, buy_allowed=True)),
               menu("activate OrderClearButton", scope="buy", input_player=0),
               menu("activate CraftTab", scope="buy", input_player=0), dict(op="shop_pick", input_player=0, preset=craft),
-              menu("activate BodiesTab", scope="buy", input_player=0), dict(op="shop_pick", input_player=0, preset="Coalition.rte/Soldier Light"),
+              menu("activate BodiesTab", scope="buy", input_player=0), dict(op="shop_pick", input_player=0, preset=soldier),
               menu("activate GunsTab", scope="buy", input_player=0), dict(op="shop_pick", input_player=0, preset="Coalition.rte/Assault Rifle")]
     steps += capture(f"order-{peer}")
     landing = dict(op="landing_zone_move", input_player=0, within_ms=15000)
     if landing_offset is not None: landing["offset_x"] = landing_offset
-    steps += [dict(op="assert_buy", input_player=0, equals=dict(cart=["Coalition.rte/Soldier Light", "Coalition.rte/Assault Rifle"], craft=craft, passengers=1), remember="order"),
+    steps += [dict(op="assert_buy", input_player=0, equals=dict(cart=[soldier, "Coalition.rte/Assault Rifle"], craft=craft, passengers=1), remember="order"),
               dict(op="assert_control", scope="buy", input_player=0, control="BuyButton", equals=dict(visible=True, enabled=True), fits=True, inside="BuyGUIBox"),
               menu("activate BuyButton", scope="buy", input_player=0),
               landing]
@@ -323,15 +323,15 @@ def buy(peer, fire=True, landing_offset=None, craft="Base.rte/Rocket MK2"):
     steps += [
               dict(op="wait_scene", input_player=0, funds_delta_from="order"),
               dict(op="assert_scene", input_player=0, funds_delta_from="order"),
-              dict(op="wait_scene", input_player=0, delivered="Coalition.rte/Soldier Light")]
-    select = [dict(op="actor_next_until", input_player=0, preset="Coalition.rte/Soldier Light"),
-              dict(op="wait_scene", input_player=0, equals=dict(preset="Coalition.rte/Soldier Light", weapon="Coalition.rte/Assault Rifle"))]
+              dict(op="wait_scene", input_player=0, delivered=soldier)]
+    select = [dict(op="actor_next_until", input_player=0, preset=soldier),
+              dict(op="wait_scene", input_player=0, equals=dict(preset=soldier, weapon="Coalition.rte/Assault Rifle"))]
     steps += capture(f"arrival-{peer}")
-    steps += [dict(op="assert_scene", input_player=0, delivered="Coalition.rte/Soldier Light", equals=dict(alive=True)),
+    steps += [dict(op="assert_scene", input_player=0, delivered=soldier, equals=dict(alive=True)),
               dict(op="assert_buy", input_player=0, equals=dict(visible=False, enabled=False))]
     steps += select
     if fire:
-        steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset="Coalition.rte/Soldier Light", weapon="Coalition.rte/Assault Rifle"), remember="before-fire")]
+        steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset=soldier, weapon="Coalition.rte/Assault Rifle"), remember="before-fire")]
         steps += [dict(op="game_mouse", down=True), wait(renders=5, sim_advanced=12)]
         steps += capture(f"fire-{peer}")
         steps += [dict(op="assert_scene", input_player=0, rounds_less_than="before-fire", equals=dict(alive=True, fired=True, weapon="Coalition.rte/Assault Rifle")), dict(op="game_mouse", down=False)]

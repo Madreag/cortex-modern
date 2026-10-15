@@ -2555,6 +2555,21 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {
 		visible.push_back(queued[index]);
 		indices.push_back(index);
 	}
+	if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+		// CC_TEST_RETURN_INPUT_DETAILS names the band's held-seat reading whenever it changes: the local seat, each seat toast and its line.
+		static std::string s_lastBand;
+		std::string band = "local=" + std::to_string(localPeer) + " own_held=" + std::to_string(ScenarioRunner::IsLockstepOwnSeatHeld()) +
+		    " own_notice=" + std::to_string(ScenarioRunner::IsLockstepHoldNoticeVisible()) + " screen=\"" + screenLine + "\"";
+		for (const auto& toast: queued) {
+			if (toast.kind != "seat_held") continue;
+			band += " toast=" + std::to_string(toast.senderPeerId) + ":\"" + toast.text + "\"->\"" + ToastText(toast) + "\"" + (ToastStillApplies(toast) ? "" : "(stale)");
+		}
+		band += " shown=" + std::to_string(visible.size());
+		if (band != s_lastBand) {
+			s_lastBand = band;
+			System::PrintDiagnosticLine("[net-toast-band] frame=" + std::to_string(ScenarioRunner::GetLockstepCompletedFrame()) + " " + band);
+		}
+	}
 	BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
 	const int rowHeight = std::max(12, font->GetFontHeight()) + 8;
