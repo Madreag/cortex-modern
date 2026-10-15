@@ -183,6 +183,8 @@ def play(request_path):
     role, index = request["role"], request["run_index"]
     run = copy.deepcopy(scene_runs(document)[index])
     name = run.get("name", "run" + str(index))
+    # Every player's probe directory is a token here, though this box plays only its own player.
+    roles = scene_roles(document, run)
     run["peers"] = [peer for peer in run.get("peers", document.get("peers", [])) if peer["name"] == role]
     for peer in run["peers"]:
         # A diagnostic lever the collector names reaches this player's engine; the scene itself is unchanged.
@@ -193,7 +195,7 @@ def play(request_path):
     options = SimpleNamespace(repo=Path(request["box"]["repo"]), size=None, port=request["port"], fps=request["fps"],
                               setting=[], render_cap=60, headed=headed, fullstate_every=0, sheet_every=request["sheet_every"],
                               tokens={"PROBE_DIR_" + other: out / name / (other + "-stage/probe")
-                                      for other in scene_roles(document, run)},
+                                      for other in roles},
                               resume_tokens={}, service_tokens={}, completed_runs=[],
                               scratch_root=Path(request["box"]["scratch"]), scratch_limit_bytes=video.SCRATCH_LIMIT,
                               remote_capture=PlayerRun(request, out / (role + "-started.json")))

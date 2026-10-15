@@ -464,6 +464,26 @@ class WindowsJoinersTest(unittest.TestCase):
             names = sorted(archive.getnames())
         self.assertEqual(names, ["run0/joiner2-stage/probe/fight-ticks-complete.json", "run0/joiner2/stdout.log"])
 
+    def test_a_player_can_name_every_other_players_probe_directory(self):
+        repo = Path(peers.__file__).resolve().parents[1]
+        request = self.root / "request.json"
+        request.write_text(json.dumps(dict(box=dict(repo=str(repo), scratch=str(self.root), os="win32"), role="joiner2", run_index=0,
+                                           out=str(self.root / "native-joiner2"), commit="tip", scene_relative="tools/e2e/fight15-s11.json",
+                                           scene_sha256="scene", port=peers.video.PORT_LO, fps=30, sheet_every=15)))
+        seen = {}
+
+        def run_one(options, *args):
+            seen.update(options.tokens)
+            raise SceneAccepted
+        with mock.patch.object(peers, "check_build", return_value=({}, {}, {})), \
+                mock.patch.object(peers, "committed_scene_sha256", return_value="scene"), \
+                mock.patch.object(peers.video, "requirement_findings", return_value=[]), \
+                mock.patch.object(peers.video, "check_scratch_budget"), mock.patch.object(peers.video, "_run_one", side_effect=run_one):
+            with self.assertRaises(SceneAccepted):
+                peers.play(request)
+        self.assertEqual(sorted(seen), ["PROBE_DIR_host", "PROBE_DIR_joiner1", "PROBE_DIR_joiner2", "PROBE_DIR_joiner3"])
+        self.assertEqual(seen["PROBE_DIR_joiner1"], self.root / "native-joiner2" / "run0" / "joiner1-stage/probe")
+
     def test_a_scene_names_one_host_and_lowercase_players(self):
         document = peers.scene("fight15-s11")
         for names in (("host", "host", "joiner1"), ("host",), ("host", "Joiner1"), ("host", "joiner1", "joiner1")):
