@@ -3220,6 +3220,25 @@ std::string AudioMan::CheckpointBackendSelfTestMismatch() {
 			if (!live.TakePendingSoundOpContainers().empty()) return "saved sound queue did not clear its private owner";
 		}
 		if (live.m_PendingSoundOpContainers != pending) return "saved position getter changes the live sound queue";
+		// The manager's tables predate every world's storage; a capture prepared as the autosave prepares one still reads them.
+		const SoundObservationKey key{7, 11, 13, 17, 19};
+		live.m_CommittedAudibility[key][3] = {23, 0.25F};
+		live.PrepareCheckpointBackendValues();
+		const auto audioPages = CheckpointNativeStorage::Prepare();
+		for (const auto& part: audioPages) part->Arm();
+		CheckpointNativeStorage::Root<AudioMan> audioRoot(&live);
+		audioRoot.Freeze();
+		bool frozenAudibility = false;
+		{
+			const std::array roots{audioRoot.Range()};
+			CheckpointNativeStorage::ReadScope read(audioPages, roots);
+			try {
+				const auto captured = CheckpointNativeStorage::Source(&live)->CaptureFrozenCheckpointState(false);
+				frozenAudibility = std::any_of(captured->state.audibility.begin(), captured->state.audibility.end(), [&key](const auto& reading) { return reading.key == key && reading.peer == 3 && reading.frame == 23; });
+			} catch (const std::logic_error&) {}
+		}
+		live.m_CommittedAudibility.erase(key);
+		if (!frozenAudibility) return "the saved committed audibility is outside its frozen inventory";
 	}
 	return {};
 }
