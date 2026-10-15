@@ -1146,6 +1146,25 @@ namespace RTE {
 				return Fail("catch-up-exceeded-the-ceiling: the next real frame granted no tick over a tail that holds " +
 				            std::to_string(40 + ceiling + 4) + " and a sim clock at " + std::to_string(simTick));
 			}
+			++simTick;
+			NetLockstepReadyFrame taken;
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, taken, &error)) {
+				return Fail("catch-up-exceeded-the-ceiling: tick " + std::to_string(simTick) + " had no committed frame");
+			}
+			// A frame whose draw takes its whole tick applies the fewest ticks that still gain on the live round, and no more.
+			ScenarioRunner::BeginWorldCatchUpFrame(c_DefaultDeltaTimeS * 1000.0);
+			int drawnOut = 0;
+			while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1)) {
+				++simTick;
+				++drawnOut;
+				if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, taken, &error)) {
+					return Fail("catch-up-exceeded-the-ceiling: tick " + std::to_string(simTick) + " had no committed frame");
+				}
+			}
+			if (drawnOut != ScenarioRunner::c_WorldCatchUpMinTicksPerRealFrame) {
+				return Fail("catch-up-took-the-frames-draw: " + std::to_string(drawnOut) + " ticks in a real frame its draw fills, the floor is " +
+				            std::to_string(ScenarioRunner::c_WorldCatchUpMinTicksPerRealFrame));
+			}
 			return 0;
 		}
 

@@ -92,6 +92,8 @@ namespace RTE {
 		bool s_WorldCatchUpActive = false;
 		bool s_WorldCatchUpHeld = false;
 		int s_WorldCatchUpBudget = 0;
+		RTE::SteadyClock::time_point s_WorldCatchUpFrameBegan;
+		std::chrono::microseconds s_WorldCatchUpFrameTime{0};
 		int s_OwnSeatCatchUpBudget = 0;
 		uint64_t s_PeerCatchUpBudgetAtMs = 0;
 		double s_PeerCatchUpCredit = 0;
@@ -1512,8 +1514,12 @@ namespace RTE {
 		       WorldCatchUpHasFrame(nextSimTick);
 	}
 
-	void ScenarioRunner::BeginWorldCatchUpFrame() {
+	void ScenarioRunner::BeginWorldCatchUpFrame(double drawMs) {
 		s_WorldCatchUpBudget = s_WorldCatchUpActive ? c_WorldCatchUpTicksPerRealFrame : 0;
+		// The returning player's own screen keeps its rate: the tail takes what one tick's frame leaves after drawing it.
+		constexpr double c_FrameMarginMs = 1.0;
+		s_WorldCatchUpFrameBegan = RTE::SteadyClock::now();
+		s_WorldCatchUpFrameTime = std::chrono::microseconds(static_cast<int64_t>(std::max(0.0, c_DefaultDeltaTimeS * 1000.0 - drawMs - c_FrameMarginMs) * 1000.0));
 		s_OwnSeatCatchUpBudget = c_WorldCatchUpTicksPerRealFrame;
 		NetLockstepPlaneGuard plane;
 		const uint64_t nowMs = NetLockstepNowMs();
@@ -1559,6 +1565,9 @@ namespace RTE {
 	bool ScenarioRunner::TakeWorldCatchUpGrant(uint64_t nextSimTick) {
 		NetLockstepPlaneGuard plane;
 		if (!WorldCatchUpMayGrant(nextSimTick, s_WorldCatchUpBudget)) {
+			return false;
+		}
+		if (c_WorldCatchUpTicksPerRealFrame - s_WorldCatchUpBudget >= c_WorldCatchUpMinTicksPerRealFrame && RTE::SteadyClock::now() - s_WorldCatchUpFrameBegan >= s_WorldCatchUpFrameTime) {
 			return false;
 		}
 		if (s_LockstepCoordinator && s_LockstepCoordinator->IsReplayPlayback() && s_LockstepCoordinator->IsRunning()) {
