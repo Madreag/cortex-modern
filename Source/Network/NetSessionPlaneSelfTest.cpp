@@ -1459,6 +1459,33 @@ namespace RTE {
 			}
 			return true;
 		}
+		// The field round's host was bridged at 57054, with AI due at 57175. A private reader and a
+		// survivor must read that same boundary from their certificate before either consumes its record.
+		bool CheckHostHoldAuthority(std::string& error) {
+			Case row{"host_hold_ai_authority_is_the_certified_frames"};
+			row.subject = 1; row.seats = 2; row.gapMs = 20000; row.internet = true;
+			row.slowPercent = 90; row.rttMs = row.otherRttMs = 30;
+			Fixture fixture;
+			if (!fixture.Start(row, error)) return false;
+			for (; fixture.hub.now < 38000;) {
+				if (!fixture.Step(error)) return false;
+				const auto host = Bridges(*fixture.peers[0]), survivor = Bridges(*fixture.peers[1]);
+				if (!host.contains(1) || !survivor.contains(1)) continue;
+				const auto& changes = fixture.hub.bridgeBoundaries[1];
+				if (changes.empty() || !changes.begin()->second) continue;
+				const uint64_t boundary = changes.begin()->first + static_cast<uint64_t>(std::ceil(c_TestContinuityMs / c_TestTickMs));
+				if (fixture.worlds[0].applied >= boundary || fixture.worlds[1].applied >= boundary) continue;
+				for (const auto& peer: fixture.peers) {
+					if (peer->IsSeatUnderAI(1, boundary - 1) || !peer->IsSeatUnderAI(1, boundary) || peer->AiProducerOf(1, boundary) != 2) {
+						error = "the certified host hold has different AI authority before its private reader consumes the hold record at " + std::to_string(boundary);
+						return false;
+					}
+				}
+				return true;
+			}
+			error = "the two seats did not certify the host's hold before the AI boundary";
+			return false;
+		}
 		struct Finding { std::string property, kind, detail; };
 		// Where a seat stands in a moment of a schedule: out of the round's votes itself, in the strict majority of retained seats that
 		// keeps the round, in an even half that its referee - or, unrefereed, the host - can still decide for, or in a group that can
@@ -3103,6 +3130,8 @@ namespace RTE {
 		QuietLines quiet(std::cout);
 		struct RowRun { std::string name; std::function<bool(std::string&)> check; std::string error, lines; bool ok = false; uint64_t cost = 0; };
 		std::vector<RowRun> named;
+		if (!selected || std::string_view(selected) == "host_hold_ai_authority_is_the_certified_frames")
+			named.push_back({"host_hold_ai_authority_is_the_certified_frames", CheckHostHoldAuthority});
 		if (!selected || std::string_view(selected) == "directory_client_round_trip_allowances_and_refusals")
 			named.push_back({"directory_client_round_trip_allowances_and_refusals", CheckDirectoryClient});
 		for (const auto& [name, seats, rtt]: std::vector<std::tuple<const char*, uint8_t, uint32_t>>{

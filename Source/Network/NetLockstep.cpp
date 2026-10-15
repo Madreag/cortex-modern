@@ -6910,6 +6910,10 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::IsSeatUnderAI(uint8_t peerId, uint64_t frame) const {
 		NET_PLANE_CHECK();
+		// The certificate fixes the end of continuity, including for its private reader. Preparing or delivering a record on this
+		// machine cannot choose which peer produces AI for the same agreed frame.
+		if (UsesPeerFrameGroups()) if (const auto bridge = m_PeerBridges.find(peerId); bridge != m_PeerBridges.end() && bridge->second.committedHold &&
+		    frame >= bridge->second.fromFrame && (!bridge->second.returnFrame || frame < *bridge->second.returnFrame)) return frame >= bridge->second.aiFrame;
 		if (const auto past = SeatStateBeforeNewest(peerId, frame)) return *past == SeatTransition::Held;
 		const auto seat = m_AiHeldSeats.find(peerId);
 		return seat != m_AiHeldSeats.end() && frame >= seat->second &&
