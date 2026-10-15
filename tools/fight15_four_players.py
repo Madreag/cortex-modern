@@ -8,7 +8,7 @@ chats; after the twenty minutes the host ends the match.
 """
 import json
 
-from fight15_scenes import ROOT, SETTINGS, buy, capture, click, game_probe, key, menu, pause_end, say, scene_checks, wait
+from fight15_scenes import ROOT, SETTINGS, buy, capture, click, game_probe, join_own_lobby, key, menu, pause_end, say, scene_checks, wait
 
 NAMES = {"host": "Captain", "joiner1": "Joiner1", "joiner2": "Joiner2", "joiner3": "Joiner3"}
 BUNKER_X = {"host": 0.3, "joiner1": 0.7, "joiner2": 0.1, "joiner3": 0.5}
@@ -51,6 +51,7 @@ def host_menu():
               "activate TabHostPageRules", "slider_set SliderHostRulesDifficulty 0", "slider_set SliderHostRulesGold 31000",
               "setcheck CheckHostRulesClearPath 0", "activate ButtonHostOptApply", "wait_ms 400",
               "activate ButtonHostOptBack", "wait_ms 500", "activate ButtonMultiplayerCreate", "wait_substate Lobby 90",
+              "write_lobby {PROBE_DIR}/lobby.json 90",
               # The lobby counts the CPU team among its connected members, as fight15-s10's count does.
               "video_mark fight15-host-listening", f"wait_connected {count + 1} 300", "wait_ms 1200", "video_mark players-host"]
     lines += [f"assert_label LabelLobbyPlayer{SEAT[peer]} {NAMES[peer]}" for peer in PLAYERS]
@@ -69,7 +70,7 @@ def joiner_menu(peer):
     if order > 1:
         # The one before is in the lobby first, so the seats follow the joiners' order.
         lines += [f"wait_file {{PROBE_DIR_joiner{order - 1}}}/joined.mark 300"]
-    lines += ["wait_row PublicGameRowPort{PORT} 90", "click_row PublicGameRowPort{PORT}", "assert_label LabelJoinSelected internet",
+    lines += [*join_own_lobby(), "assert_label LabelJoinSelected internet",
               "assert_enabled ButtonMultiplayerConnect 1", "activate ButtonMultiplayerConnect", "wait_substate Lobby 90", "wait_ms 1200",
               "touch_file {PROBE_DIR}/joined.mark", "wait_file {PROBE_DIR_host}/countdown.mark 300",
               "wait_label LabelMultiplayerStatus The host is starting the match in", f"video_mark countdown-{peer}",
