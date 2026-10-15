@@ -238,6 +238,7 @@ namespace {
 		uint64_t nextCaptureTick = 60;
 		size_t eventIndex = 0;
 		double capHz = 0;
+		double unseenDisplayCapHz = 0;
 		bool settingsApplied = false;
 		double nextDrawMS = 0;
 		double drawBeginMS = 0;
@@ -456,13 +457,15 @@ void FrameMan::FeelBeforePreview() {
 	    {"wraps_x", g_SceneMan.SceneWrapsX()}, {"wraps_y", g_SceneMan.SceneWrapsY()}});
 }
 
-double FrameMan::FeelCapHz() { return s_Feel.capHz; }
+double FrameMan::FeelCapHz() { return s_Feel.capHz > 0 ? s_Feel.capHz : s_Feel.unseenDisplayCapHz; }
+
+void FrameMan::SetUnseenDisplayCap(bool unseen) { s_Feel.unseenDisplayCapHz = unseen ? 60 : 0; }
 
 bool FrameMan::FeelBeginDraw() {
-	if (s_Feel.capHz > 0) {
+	if (const double capHz = FeelCapHz(); capHz > 0) {
 		const double now = FeelNowMS();
 		if (s_Feel.nextDrawMS > now) return false;
-		s_Feel.nextDrawMS = std::max(now, s_Feel.nextDrawMS) + 1000.0 / s_Feel.capHz;
+		s_Feel.nextDrawMS = std::max(now, s_Feel.nextDrawMS) + 1000.0 / capHz;
 	}
 	if (!FeelRecordingEnabled()) return true;
 	const FeelCost cost;

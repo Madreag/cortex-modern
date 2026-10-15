@@ -64,6 +64,7 @@ SELFTESTS = [
     "combo-key",
     "rteerror",
     "steady-clock",
+    "swap-wait",
     "module-version",
     "ext-validate-version",
     "path-prefix",

@@ -175,6 +175,9 @@
     <ClInclude Include="Source\Managers\SettingsMan.h">
       <Filter>Managers</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Managers\SwapWaitGuard.h">
+      <Filter>Managers</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Managers\TimerMan.h">
       <Filter>Managers</Filter>
     </ClInclude>

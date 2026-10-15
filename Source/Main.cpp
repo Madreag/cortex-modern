@@ -92,6 +92,7 @@ extern "C" {
 #include "AudioCheckpoint.h"
 #include "System.h"
 #include "SteadyClock.h"
+#include "SwapWaitGuard.h"
 #include "RTEError.h"
 #include "DataModule.h"
 #include "MenuAutomation.h"
@@ -3879,6 +3880,57 @@ static void DriveModerationE2e() {
 /// </summary>
 static uint64_t MenuScriptNowMs() {
 	return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count());
+}
+
+// A match stops waiting on a display that takes no frames and waits again once it does; a display that takes frames is always waited on.
+static bool RunSwapWaitSelfTest() {
+	bool passed = true;
+	const auto check = [&passed](const char* name, bool ok, const std::string& detail) {
+		std::cout << "[swap-wait-selftest] " << (ok ? "PASS " : "FAIL ") << name << (ok ? "" : ": " + detail) << std::endl;
+		passed = passed && ok;
+	};
+	using Action = SwapWaitGuard::Action;
+	{
+		// The Z13's panel switched off: 165 Hz, every waited swap 80.7 ms.
+		SwapWaitGuard guard;
+		double now = 0;
+		int suspendedAt = -1;
+		for (int swap = 1; swap <= 40 && suspendedAt < 0; ++swap, now += 80.7) {
+			if (guard.Note(80.7, 165, now, true) == Action::Suspend) suspendedAt = swap;
+		}
+		check("an unseen display is let go after 30 long swaps", suspendedAt == SwapWaitGuard::c_LongSwapsToSuspend, "suspended at swap " + std::to_string(suspendedAt));
+		Action action = Action::Keep;
+		for (int frame = 0; frame < 200 && action == Action::Keep; ++frame) action = guard.Note(0.1, 165, now += 16.7, true);
+		check("a suspended wait is tried again", action == Action::Retry && now >= 2000.0, "action " + std::to_string(static_cast<int>(action)) + " at " + std::to_string(now) + " ms");
+		check("a retried swap that still waits keeps it let go", guard.Note(80.7, 165, now += 80.7, true) == Action::Suspend && guard.Suspended(), "the wait came back");
+		action = Action::Keep;
+		for (int frame = 0; frame < 200 && action == Action::Keep; ++frame) action = guard.Note(0.1, 165, now += 16.7, true);
+		check("a retried swap within its refresh waits again", action == Action::Retry && guard.Note(5.9, 165, now += 5.9, true) == Action::Resume && !guard.Suspended(), "no resume");
+	}
+	{
+		// Displays that take frames: a 165 Hz panel, a 24 Hz screen at one period a swap, a 60 Hz one with a long swap every tenth.
+		SwapWaitGuard panel, slowScreen, hitches;
+		bool suspended = false;
+		double now = 0;
+		for (int swap = 0; swap < 2000; ++swap, now += 16.7) {
+			suspended = suspended || panel.Note(6.0, 165, now, true) == Action::Suspend;
+			suspended = suspended || slowScreen.Note(41.7, 24, now, true) == Action::Suspend;
+			suspended = suspended || hitches.Note(swap % 10 == 0 ? 80.0 : 16.0, 60, now, true) == Action::Suspend;
+		}
+		check("a display that takes frames is always waited on", !suspended, "a wait was let go");
+	}
+	{
+		// Single player and the menus keep their wait whatever it costs; a match that ends gives the wait back.
+		SwapWaitGuard menus, ending;
+		bool suspended = false;
+		double now = 0;
+		for (int swap = 0; swap < 100; ++swap, now += 80.7) suspended = suspended || menus.Note(80.7, 165, now, false) == Action::Suspend;
+		for (int swap = 0; swap < SwapWaitGuard::c_LongSwapsToSuspend; ++swap, now += 80.7) ending.Note(80.7, 165, now, true);
+		check("outside a match nothing changes, and a match's end gives the wait back", !suspended && ending.Suspended() && ending.Note(80.7, 165, now, false) == Action::Resume && !ending.Suspended(),
+		      "a wait outside a match was let go or the end kept it");
+	}
+	std::cout << "[swap-wait-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
+	return passed;
 }
 
 // The clock a match paces and times itself by never runs back: a steady clock's reading is years from the wall clock's.
@@ -11953,6 +12005,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-combo-key-selftest") {
 			return GUIManager::RunComboKeyCommitSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-swap-wait-selftest") {
+			return RunSwapWaitSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-steady-clock-selftest") {
 			return RunSteadyClockSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
