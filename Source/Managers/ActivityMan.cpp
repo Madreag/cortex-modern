@@ -711,6 +711,7 @@ struct ActivityMan::PreparedAutosave {
 	size_t refusedPreparations = 0; //!< Preparations refused since the last one that succeeded; only the saver touches these.
 	bool exhaustedPreparation = false; //!< Test lever: the next preparation runs out of memory.
 	std::string lastPreparationRefusal;
+	std::chrono::steady_clock::time_point refusedSince, refusalNamedAt;
 	bool afterRefusedCapture = false;
 
 	// A refused preparation is retried every tick, so each new reason is named once and the success that ends them is counted.
@@ -726,10 +727,16 @@ struct ActivityMan::PreparedAutosave {
 			refusedPreparations = 0; lastPreparationRefusal.clear();
 			return boundary;
 		} catch (const std::exception& failure) {
-			++refusedPreparations;
+			if (!refusedPreparations++) refusedSince = began;
 			if (lastPreparationRefusal != failure.what()) {
 				lastPreparationRefusal = failure.what();
+				refusalNamedAt = began;
 				System::PrintDiagnosticLine(std::format("[autosave] inventory preparation refused reason={}", lastPreparationRefusal));
+			} else if (began - refusalNamedAt >= std::chrono::seconds(10)) {
+				// A refusal that lasts is named again, so the log shows the retries going on.
+				refusalNamedAt = began;
+				System::PrintDiagnosticLine(std::format("[autosave] inventory preparation still refused after {} attempts in {} s reason={}", refusedPreparations,
+				    std::chrono::duration_cast<std::chrono::seconds>(began - refusedSince).count(), lastPreparationRefusal));
 			}
 			throw;
 		}

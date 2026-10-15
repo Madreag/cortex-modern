@@ -59,8 +59,10 @@ namespace RTE::CheckpointLua {
 					if (m_Releasing.load(std::memory_order_acquire)) return {"the last capture's inventory is still being released" + PreparationCosts(), false};
 					// A preparation refused before keeps its reason while the next one runs.
 					std::lock_guard lock(m_FailureMutex);
-					return {(m_PrepareFailure.empty() ? std::string("the checkpoint inventory is being prepared") :
-					    "the checkpoint inventory is being prepared again after its preparation was refused: " + m_PrepareFailure) + PreparationCosts(), false};
+					if (m_PrepareFailure.empty()) return {"the checkpoint inventory is being prepared" + PreparationCosts(), false};
+					const uint64_t refusals = m_Refusals.load(std::memory_order_acquire);
+					return {"the checkpoint inventory is being prepared again after " + std::to_string(refusals) + (refusals == 1 ? " refused preparation" : " refused preparations") +
+					    " (the last refused: " + m_PrepareFailure + ")" + PreparationCosts(), false};
 				}
 				case State::Rebuild: return {"the checkpoint inventory is being rebuilt", false};
 				case State::Claimed: case State::Armed: case State::Working: return {"the previous capture is still being written", false};
@@ -119,11 +121,12 @@ namespace RTE::CheckpointLua {
 		std::atomic<bool> m_Refresh{false};
 		std::atomic<bool> m_Releasing{false}; //!< The last capture's plan is being torn down before the next preparation.
 		std::atomic<uint64_t> m_Preparations{0}, m_LastReleaseUs{0}, m_LastPrepareUs{0}; //!< Finished preparations and what the last one cost.
+		std::atomic<uint64_t> m_Refusals{0}; //!< Preparations refused since the last one that finished; each is tried again at the next tick.
 		/// How often and how slowly the inventory has been prepared, for a capture that found it not ready.
 		std::string PreparationCosts() const {
 			const uint64_t count = m_Preparations.load(std::memory_order_acquire);
 			if (!count) return {};
-			return " (" + std::to_string(count) + " preparations so far; the last released its predecessor in " + std::to_string(m_LastReleaseUs.load(std::memory_order_relaxed) / 1000) +
+			return " (" + std::to_string(count) + " prepared so far; the last released its predecessor in " + std::to_string(m_LastReleaseUs.load(std::memory_order_relaxed) / 1000) +
 			    " ms and prepared in " + std::to_string(m_LastPrepareUs.load(std::memory_order_relaxed) / 1000) + " ms)";
 		}
 		std::atomic<uint64_t> m_Wake{0};
@@ -155,9 +158,14 @@ namespace RTE::CheckpointLua {
 				m_LastReleaseUs.store(micros(began, released), std::memory_order_relaxed);
 				m_LastPrepareUs.store(micros(released, std::chrono::steady_clock::now()), std::memory_order_relaxed);
 				m_Preparations.fetch_add(1, std::memory_order_acq_rel);
+				m_Refusals.store(0, std::memory_order_release);
 				try { std::lock_guard lock(m_FailureMutex); m_PrepareFailure.clear(); } catch (...) {}
 				Publish(State::Ready);
-			} catch (...) { NotePrepareFailure(std::current_exception()); Publish(State::Failed); }
+			} catch (...) {
+				NotePrepareFailure(std::current_exception());
+				m_Refusals.fetch_add(1, std::memory_order_acq_rel);
+				Publish(State::Failed);
+			}
 		}
 		void Work(std::stop_token stop) noexcept {
 			FloatingPointEnvironment::Initialize();
