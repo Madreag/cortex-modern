@@ -5438,7 +5438,7 @@ namespace RTE {
 		m_StartWaitSinceMs = 0;
 		m_LocalStartParkMs = 0;
 		m_PeerLastHeardMs.clear();
-		m_PeerBridges.clear(); m_PeerBridgeVotes.clear(); m_PeerBridgeCertificates.clear(); m_PeerRejectedInputs.clear();
+		m_PeerBridges.clear(); m_PeerBridgeVotes.clear(); m_PeerBridgeCertificates.clear(); m_PendingPeerDecisions.clear(); m_PeerVotedAtMs.clear(); m_PeerRejectedInputs.clear();
 		m_PeerPendingBridgeInputs.clear();
 		m_PeerReturnProofs.clear();
 		m_PeerPreparedPrefixes.clear(); m_PeerReplayAppliedPrefixes.clear(); m_PeerFrameWitnesses.clear();
@@ -13139,6 +13139,7 @@ namespace RTE {
 						break;
 					}
 				}
+				if (TakePendingPeerDecisions(nowMs)) { m_AdvanceBlock = "decision-pending"; break; }
 				if (ApplyPeerCommittedTail(m_Stats.nextFrame, nowMs)) continue;
 				PreparePeerBridgeInputs(m_Stats.nextFrame, nowMs);
 				if ((m_FrameGroupMembers & (1U << (m_Config.localPeerId - 1))) == 0) { RequestPeerCommittedTail(nowMs); m_AdvanceBlock = "private-peer-tail"; break; }

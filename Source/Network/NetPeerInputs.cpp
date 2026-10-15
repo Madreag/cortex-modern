@@ -290,13 +290,14 @@ namespace RTE {
 			const auto own = votes.find(m_Config.localPeerId);
 			if (own != votes.end() && !SameBridge(own->second, message)) return true;
 			votes.try_emplace(message.senderPeerId, message);
-			if (own == votes.end()) {
+			if (own == votes.end() && !VotedOtherPeerReturn(message)) {
 				auto reply = message;
 				reply.senderPeerId = m_Config.localPeerId;
 				reply.appliedFrame = m_LastCompletedSimulationTick.value_or(0);
 				reply.voterMask = SeatBit(m_Config.localPeerId);
 				if (reply.preparedFrame == 3) m_PeerAdminOwnVote = reply;
 				votes.emplace(m_Config.localPeerId, reply);
+				m_PeerVotedAtMs.try_emplace({reply.frame, DecisionKind(reply)}, nowMs);
 				if (reply.preparedFrame == 0) for (uint8_t peer: reply.members) m_PeerRejectedInputs[reply.frame] |= SeatBit(peer);
 				SendPeerFrameMessage(std::move(reply));
 			}
@@ -491,7 +492,7 @@ namespace RTE {
 				}
 			}
 			// An authenticated donor cannot commit a minority's tail by claiming somebody else's votes.
-			if ((agreeing & ~message.voterMask) != 0 || 2 * std::popcount(agreeing) <= std::popcount(message.voterMask)) {
+			if (!PeerFrameGroupConfirms(agreeing, message.voterMask, message.frame)) {
 				if (message.frame == m_Stats.nextFrame && nowMs >= m_PeerTailLogAtMs) {
 					m_PeerTailLogAtMs = nowMs + 1000;
 					DiagnosticLine() << "[net-peer-tail-wait] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << message.frame

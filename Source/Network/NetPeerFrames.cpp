@@ -97,6 +97,10 @@ namespace RTE {
 		for (const auto& [peer, ended]: m_PeerRoundEnds) if (!ended.closedLink) owners &= ~SeatBit(peer);
 		// A returning seat answers nothing until it plays, so it votes only after its agreed neutral interval.
 		for (const auto& [peer, back]: m_ReclaimTransactions) if (m_Stats.nextFrame <= back.neutralThroughFrame) owners &= ~SeatBit(peer);
+		// A seat the round holds answers nothing until it returns: the seats that play decide without it, so a second seat lost while
+		// the first is held is held too instead of leaving the rest without a majority.
+		for (const auto& [peer, bridge]: m_PeerBridges)
+			if (bridge.committedHold && m_Stats.nextFrame >= bridge.fromFrame && (!bridge.returnFrame || m_Stats.nextFrame < *bridge.returnFrame)) owners &= ~SeatBit(peer);
 		voters &= owners;
 		return voters == 0 ? 0 : owners;
 	}
@@ -117,6 +121,15 @@ namespace RTE {
 		return decision != m_PeerFrameTieWinners.end() && decision->second == voters;
 	}
 
+	bool NetLockstepCoordinator::PeerFrameGroupConfirms(uint32_t agreeing, uint32_t members, uint64_t frame) const {
+		if ((agreeing & ~members) != 0) return false;
+		const int votes = std::popcount(agreeing), seats = std::popcount(members);
+		if (2 * votes != seats) return 2 * votes > seats;
+		if (!m_Config.frameTieReferee) return (agreeing & SeatBit(GetHostPeerId())) != 0;
+		const auto decision = m_PeerFrameTieWinners.find(PeerSplitEpoch(frame));
+		return decision != m_PeerFrameTieWinners.end() && decision->second == agreeing;
+	}
+
 	uint64_t NetLockstepCoordinator::PeerSplitEpoch(uint64_t frame) const {
 		uint32_t whole = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
@@ -134,10 +147,14 @@ namespace RTE {
 		request.generation = m_Config.migrationGeneration; request.roundId = m_Config.matchConfig.roundId;
 		request.frame = split; request.configHash = m_RoundConfigHash; request.host = GetHostPeerId();
 		request.queryOnly = (members & SeatBit(m_Config.localPeerId)) == 0;
+		// The tie is between the seats that vote now: a held seat answers nothing, as the group's authority reads it.
+		uint32_t voting = members;
+		const uint32_t owners = PeerVotingOwners(voting);
+		if (owners == 0) return;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
-			if (m_RemovedPeers.contains(peer) || IsSeatReleased(peer)) continue;
+			if ((owners & SeatBit(peer)) == 0) continue;
 			request.owners.push_back(peer);
-			if ((members & SeatBit(peer)) != 0) request.members.push_back(peer);
+			if ((voting & SeatBit(peer)) != 0) request.members.push_back(peer);
 		}
 		if (request.members.size() * 2 != request.owners.size()) return;
 		// A seat that heard the other half play on keeps asking what was decided: the referee holds one request per seat, and

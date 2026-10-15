@@ -1668,15 +1668,25 @@ namespace RTE {
 		bool PeerGroupIsRefereedHalf(uint32_t voters) const;
 		/// The frame from which the whole group last played together at or before frame: the name every half gives the split after it.
 		uint64_t PeerSplitEpoch(uint64_t frame) const;
+		/// Whether these seats confirm a frame the given group of members played: a majority of them, or on a tie the half the round's tie
+		/// rule names, as for every other decision of that group.
+		bool PeerFrameGroupConfirms(uint32_t agreeing, uint32_t members, uint64_t frame) const;
 		void SendForwardedPeerInput(const NetLockstepFrame& input, uint8_t onlyPeer);
 		void CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs);
 		bool ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly = false);
 		bool ValidatePeerBridge(const NetHostMigrationMessage& proposal) const;
+		/// Whether this peer already voted a return of one of the proposal's seats at another frame that is still undecided: a held seat
+		/// returns once, so a member backs one return of it until that one is certified or played past.
+		bool VotedOtherPeerReturn(const NetHostMigrationMessage& proposal) const;
 		bool PeerBridgeHasInputConflict(const NetHostMigrationMessage& proposal) const;
 		void ResolvePeerBridgeInputConflicts(uint64_t nowMs);
 		bool DecodePeerBridgeCertificate(const NetHostMigrationMessage& certificate, NetHostMigrationMessage& agreed, uint32_t& voters) const;
 		void TryCommitPeerBridge(uint64_t frame, uint64_t nowMs, uint8_t kind = 0);
 		void InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs);
+		/// Takes the decisions kept for their frame, in frame order.
+		/// @return Whether the next frame waits on a decision: one kept for it, one this peer voted for, or a return proposed for it of a seat
+		/// still held, while it is undecided.
+		bool TakePendingPeerDecisions(uint64_t nowMs);
 		void PreparePeerBridgeInputs(uint64_t frame, uint64_t nowMs);
 		void NotePeerInputAccepted(const NetLockstepFrame& frame);
 		void RepairPeerReceiptGaps(uint64_t nowMs);
@@ -1701,6 +1711,8 @@ namespace RTE {
 		using PeerDecisionKey = std::pair<uint64_t, uint8_t>;
 		std::map<PeerDecisionKey, std::map<uint8_t, NetHostMigrationMessage>> m_PeerBridgeVotes;
 		std::map<PeerDecisionKey, NetHostMigrationMessage> m_PeerBridgeCertificates;
+		std::map<PeerDecisionKey, std::pair<NetHostMigrationMessage, uint64_t>> m_PendingPeerDecisions; //!< Certificates that came before this peer could take them, and since when.
+		std::map<PeerDecisionKey, uint64_t> m_PeerVotedAtMs; //!< When this peer voted for, or first waited on, a decision it has not yet seen certified.
 		std::map<uint64_t, NetHostMigrationMessage> m_PeerReturnProofs;
 		std::map<uint64_t, uint32_t> m_PeerRejectedInputs;
 		std::map<uint64_t, std::map<uint8_t, NetLockstepFrame>> m_PeerPendingBridgeInputs;

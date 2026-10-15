@@ -2778,6 +2778,23 @@ namespace RTE::MenuAutomation {
 			check("draw_record_outside_pass_uses_window", PanelDrawnInLatestPass(&loose, c_DrawWindowSeconds), age);
 			ClearPanelDrawRecord();
 			check("draw_record_cleared", !PanelDrawnInLatestPass(&shown, c_DrawWindowSeconds) && PanelDrawAgeMs(&shown) < 0, age);
+			// A GUI made or let go of mid-frame, such as a held seat's menus, takes only its own panels from the record.
+			int drawn = 0, own = 0;
+			previous = BeginPanelDrawPass(&manager);
+			RecordPanelDraw(&drawn);
+			EndPanelDrawPass(previous);
+			RecordPanelDraw(&loose);
+			// The manager's Timer reads g_TimerMan, and this runs before main() builds the managers.
+			if (!TimerMan::IsConstructed()) TimerMan::Construct();
+			GUIManager other(nullptr);
+			previous = BeginPanelDrawPass(&other);
+			RecordPanelDraw(&own);
+			EndPanelDrawPass(previous);
+			other.Clear();
+			const std::string kept = "drawn_age_ms=" + std::to_string(PanelDrawAgeMs(&drawn)) + " loose_age_ms=" + std::to_string(PanelDrawAgeMs(&loose));
+			check("draw_record_kept_through_other_managers", PanelDrawnInLatestPass(&drawn, c_DrawWindowSeconds) && PanelDrawnInLatestPass(&loose, c_DrawWindowSeconds), kept);
+			check("draw_record_forgets_a_cleared_managers_panels", PanelDrawAgeMs(&own) < 0, "own_age_ms=" + std::to_string(PanelDrawAgeMs(&own)));
+			ClearPanelDrawRecord();
 		}
 		{
 			// The option pages' hints say what a late player, a checkpoint and a route choice do, the host included.

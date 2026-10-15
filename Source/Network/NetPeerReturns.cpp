@@ -121,8 +121,8 @@ namespace RTE {
 			if (witnesses != m_PeerFrameWitnesses.end()) for (const auto& [sender, witness]: witnesses->second) witnessed |= SeatBit(sender);
 			// A reader that played in this frame confirms its own input in the record when it arrives.
 			if ((members & SeatBit(peer)) != 0) witnessed |= SeatBit(peer);
-			// One donor waits for the majority's witnesses before sending the needed history.
-			if ((witnessed & ~members) != 0 || 2 * std::popcount(witnessed) <= std::popcount(members)) {
+			// One donor waits for the witnesses that confirm the frame's group before sending the needed history.
+			if (!PeerFrameGroupConfirms(witnessed, members, kept->first)) {
 				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && m_TimingNowMs >= m_PeerTailLogAtMs) {
 					m_PeerTailLogAtMs = m_TimingNowMs + 1000;
 					DiagnosticLine() << "[net-peer-tail-witness-wait] donor=" << static_cast<int>(m_Config.localPeerId)
@@ -405,6 +405,7 @@ namespace RTE {
 		m_PeersPlayedThisRound.erase(peer); m_LastStartAnswerMs.erase(peer);
 		auto& votes = m_PeerBridgeVotes[{frame, 1}];
 		if (const auto own = votes.find(m_Config.localPeerId); own != votes.end()) return SameBridge(own->second, proposal);
+		if (VotedOtherPeerReturn(proposal)) { if (error) *error = "another return of the seat is still being decided"; return false; }
 		votes.emplace(m_Config.localPeerId, proposal); SendPeerFrameMessage(std::move(proposal)); TryCommitPeerBridge(frame, m_TimingNowMs, 1);
 		return true;
 	}

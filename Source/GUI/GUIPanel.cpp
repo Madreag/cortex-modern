@@ -1,9 +1,11 @@
 #include "GUI.h"
 #include "GUIDrawRecord.h"
 
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <mutex>
 #include <unordered_map>
 
 using namespace RTE;
@@ -20,37 +22,44 @@ namespace RTE {
 			uint64_t serial = 0;
 			DrawClock::time_point at;
 		};
-		// Keyed by manager and by panel, so a readback can ask the renderer instead of a visible flag.
+		// Keyed by manager and by panel, so a readback can ask the renderer instead of a visible flag. A capture's worker makes and lets go
+		// of GUI copies while the frame draws, so the record is shared under its lock.
+		std::mutex s_RecordMutex;
 		std::unordered_map<const void*, DrawPass> s_DrawPasses;
 		std::unordered_map<const void*, PanelDraw> s_PanelDraws;
-		const void* s_DrawingManager = nullptr;
-		bool s_Recording = false;
+		thread_local const void* s_DrawingManager = nullptr;
+		std::atomic<bool> s_Recording = false;
 
 		double SecondsSince(DrawClock::time_point at) { return std::chrono::duration<double>(DrawClock::now() - at).count(); }
 	} // namespace
 
 	const void* BeginPanelDrawPass(const void* manager) {
-		if (!s_Recording) return nullptr;
-		DrawPass& pass = s_DrawPasses[manager];
-		++pass.serial;
-		pass.at = DrawClock::now();
+		if (!s_Recording.load(std::memory_order_relaxed)) return nullptr;
+		{
+			std::lock_guard lock(s_RecordMutex);
+			DrawPass& pass = s_DrawPasses[manager];
+			++pass.serial;
+			pass.at = DrawClock::now();
+		}
 		const void* previous = s_DrawingManager;
 		s_DrawingManager = manager;
 		return previous;
 	}
 
 	void EndPanelDrawPass(const void* previous) {
-		if (s_Recording) s_DrawingManager = previous;
+		if (s_Recording.load(std::memory_order_relaxed)) s_DrawingManager = previous;
 	}
 
 	void RecordPanelDraw(const void* panel) {
-		if (s_Recording && panel) {
+		if (s_Recording.load(std::memory_order_relaxed) && panel) {
+			std::lock_guard lock(s_RecordMutex);
 			const auto pass = s_DrawingManager ? s_DrawPasses.find(s_DrawingManager) : s_DrawPasses.end();
 			s_PanelDraws[panel] = {s_DrawingManager, pass != s_DrawPasses.end() ? pass->second.serial : 0, DrawClock::now()};
 		}
 	}
 
 	bool PanelDrawnInLatestPass(const void* panel, double seconds) {
+		std::lock_guard lock(s_RecordMutex);
 		const auto drawn = s_PanelDraws.find(panel);
 		if (drawn == s_PanelDraws.end()) {
 			return false;
@@ -64,17 +73,32 @@ namespace RTE {
 	}
 
 	double PanelDrawAgeMs(const void* panel) {
+		std::lock_guard lock(s_RecordMutex);
 		const auto drawn = s_PanelDraws.find(panel);
 		return drawn == s_PanelDraws.end() ? -1.0 : SecondsSince(drawn->second.at) * 1000.0;
 	}
 
 	void ClearPanelDrawRecord() {
+		std::lock_guard lock(s_RecordMutex);
 		s_PanelDraws.clear();
 		s_DrawPasses.clear();
 	}
 
+	void ForgetPanelDraws(const void* manager) {
+		if (!s_Recording.load(std::memory_order_relaxed)) return;
+		std::lock_guard lock(s_RecordMutex);
+		if (s_DrawPasses.erase(manager) == 0) return;
+		std::erase_if(s_PanelDraws, [manager](const auto& draw) { return draw.second.manager == manager; });
+	}
+
+	void ForgetPanelDraw(const void* panel) {
+		if (!s_Recording.load(std::memory_order_relaxed)) return;
+		std::lock_guard lock(s_RecordMutex);
+		s_PanelDraws.erase(panel);
+	}
+
 	void SetPanelDrawRecording(bool recording) {
-		s_Recording = recording;
+		s_Recording.store(recording, std::memory_order_relaxed);
 		if (!recording) ClearPanelDrawRecord();
 	}
 } // namespace RTE

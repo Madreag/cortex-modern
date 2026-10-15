@@ -34,7 +34,7 @@ GUIManager::~GUIManager() {
 
 void GUIManager::Clear() {
 	// The panels this manager drew are gone with it; their addresses can be reused.
-	ClearPanelDrawRecord();
+	ForgetPanelDraws(this);
 	m_PanelList.clear();
 	m_CapturedPanel = nullptr;
 	m_MouseOverPanel = nullptr;
