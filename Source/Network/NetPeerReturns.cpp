@@ -94,13 +94,14 @@ namespace RTE {
 		auto& repeats = m_PeerTailResendFrames[peer];
 		uint64_t queuedBytes = 0;
 		for (const auto& [frame, item]: queued) queuedBytes += item.bytes.size();
-		const auto first = m_MigrationHistory.lower_bound(firstNeeded);
-		if (first == m_MigrationHistory.end() || first->first != firstNeeded) {
+		// A frame this donor cannot send is named to the reader, which returns through a private image instead of waiting on it.
+		const auto unavailable = [&](uint64_t frame) {
 			auto missing = PeerFrameMessage(NetHostMigrationMessageType::PeerTailMissing);
-			missing.frame = firstNeeded;
+			missing.frame = frame;
 			SendPeerFrameMessage(std::move(missing), NetTransportLane::ControlReliable, peer);
-			return;
-		}
+		};
+		const auto first = m_MigrationHistory.lower_bound(firstNeeded);
+		if (first == m_MigrationHistory.end() || first->first != firstNeeded) { unavailable(firstNeeded); return; }
 		const auto workEnd = RTE::SteadyClock::now() + std::chrono::milliseconds(2);
 		uint32_t preparedFrames = 0;
 		for (auto kept = first; kept != m_MigrationHistory.end() && kept->first < range->second.second && m_LastCompletedSimulationTick && kept->first <= *m_LastCompletedSimulationTick; ++kept) {
@@ -139,16 +140,16 @@ namespace RTE {
 				std::vector<uint8_t> bytes;
 				if (NetHostMigrationCodec::Encode(proof->second, m_Config.migrationKey, bytes)) certificates.push_back(std::move(bytes));
 			}
-			if (certificates.size() > 32) return;
+			if (certificates.size() > 32) { unavailable(kept->first); return; }
 			body.push_back(static_cast<uint8_t>(certificates.size()));
 			for (const auto& bytes: certificates) { PutSize(body, static_cast<uint32_t>(bytes.size())); body.insert(body.end(), bytes.begin(), bytes.end()); }
 			body.push_back(witnesses == m_PeerFrameWitnesses.end() ? 0 : static_cast<uint8_t>(witnesses->second.size()));
 			if (witnesses != m_PeerFrameWitnesses.end()) for (const auto& [sender, witness]: witnesses->second) {
 				std::vector<uint8_t> bytes;
-				if (!NetHostMigrationCodec::Encode(witness, m_Config.migrationKey, bytes)) return;
+				if (!NetHostMigrationCodec::Encode(witness, m_Config.migrationKey, bytes)) { unavailable(kept->first); return; }
 				PutSize(body, static_cast<uint32_t>(bytes.size())); body.insert(body.end(), bytes.begin(), bytes.end());
 			}
-			if (body.size() > NetHostMigrationCodec::c_MaxPeerTailBytes) return;
+			if (body.size() > NetHostMigrationCodec::c_MaxPeerTailBytes) { unavailable(kept->first); return; }
 			m_PeerTailRawBytesSent += body.size();
 			bool compressedBody = false;
 			std::vector<uint8_t> compressed(LZ4_compressBound(static_cast<int>(body.size())));
