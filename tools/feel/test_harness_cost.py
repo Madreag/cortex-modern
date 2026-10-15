@@ -79,9 +79,10 @@ class HarnessCostEvidence(unittest.TestCase):
 
 
 def receipt_log(segments, *, round_id=1, enabled=('recorder', 'screen_watches'), closed=True, opened=False, outside=None, frame_ms=None, version=2,
-                presented=None):
+                presented=None, after=None):
     """Receipts as the engine writes them: per segment an optional opening receipt and outside-frame costs, its frames, its close.
-    From version 3 each frame names the frames presented while it ran (one by default) and the costliest of them."""
+    From version 3 each frame names the frames presented while it ran (one by default) and the costliest of them; from version 4
+    its own work after the last of them (none by default)."""
     from feel.harness_cost import VERSION_INSTRUMENTS
     instruments = {name: name in enabled for name in VERSION_INSTRUMENTS[version]}
     rows = []
@@ -97,6 +98,8 @@ def receipt_log(segments, *, round_id=1, enabled=('recorder', 'screen_watches'),
             if version >= 3:
                 shown, costliest = (presented or {}).get(frame, (1, costs))
                 row.update(presented_frames=shown, costliest_presented_ms=sum(costliest.values()), costliest_presented_costs_ms=costliest)
+            if version >= 4:
+                row.update(after_presented_costs_ms=(after or {}).get(frame, {name: 0.0 for name in enabled}))
             rows.append('[harness-cost-frame] ' + json.dumps(row))
         if closed:
             rows.append('[harness-cost-scope] ' + json.dumps(dict(base, version=version, first_frame=first, last_frame=last, instruments=instruments)))
@@ -200,6 +203,31 @@ class HarnessCostReceipts(unittest.TestCase):
         unsaid = receipt_log([(1, 300)], version=3).replace(', "presented_frames": 1', '')
         self.assertIn('invalid, duplicated or unpartitioned frame costs', self.reduce(unsaid)['reason'])
         self.assertIn('by the costliest of them', result['rule'])
+
+    def test_one_ticks_work_shows_in_its_own_frame(self):
+        # A recorder spike in frame 40's own work; the frame presented after it (frame 41's span) holds the spike and its draw.
+        spike = {(40, 'recorder'): 60.0, (41, 'recorder'): 1.0}
+        presented = {40: (1, dict(recorder=1.0, screen_watches=1.0)), 41: (1, dict(recorder=61.0, screen_watches=1.0))}
+        result = self.reduce(receipt_log([(1, 300)], version=3, frame_ms=spike, presented=presented))
+        self.assertEqual(result['status'], 'FAIL', result['reason'])
+        self.assertEqual(result['peak_frame']['frame'], 40)
+        self.assertEqual(result['max_frame_ms'], 61.0)
+
+    def test_a_frame_that_waited_is_judged_by_its_presented_frames_or_its_own_work_after_them(self):
+        # Version 4: the presented frames count from the frame before at the earliest, and the frame's work after the last of them is named.
+        waited = {(53, 'recorder'): 187.4, (53, 'screen_watches'): 37.8}
+        presented = {53: (51, dict(recorder=3.8, screen_watches=0.8))}
+        quiet = self.reduce(receipt_log([(1, 300)], version=4, frame_ms=waited, presented=presented, after={53: dict(recorder=0.4, screen_watches=0.8)}))
+        self.assertEqual(quiet['status'], 'PASS', quiet['reason'])
+        self.assertEqual(quiet['max_frame_ms'], 4.6)
+        late = self.reduce(receipt_log([(1, 300)], version=4, frame_ms=waited, presented=presented, after={53: dict(recorder=58.0, screen_watches=3.0)}))
+        self.assertEqual(late['status'], 'FAIL', late['reason'])
+        self.assertIn('its own work after the 51 frames presented while it ran', late['reason'])
+        # A frame of one presented frame is judged by its own costs, whatever came after the present.
+        own = self.reduce(receipt_log([(1, 300)], version=4, frame_ms={(9, 'recorder'): 61.0}, presented={9: (1, dict(recorder=2.0, screen_watches=1.0))}))
+        self.assertIn('recorder alone 61 ms', own['reason'])
+        unsaid = receipt_log([(1, 300)], version=4).replace(', "after_presented_costs_ms": {"recorder": 0.0, "screen_watches": 0.0}', '')
+        self.assertIn('invalid, duplicated or unpartitioned frame costs', self.reduce(unsaid)['reason'])
 
 
 if __name__ == '__main__':

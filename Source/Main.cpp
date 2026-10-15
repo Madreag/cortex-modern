@@ -3789,6 +3789,26 @@ static bool RunFrameRecorderSelfTest() {
 
 	std::filesystem::remove_all(scratch, code);
 	{
+		// A receipt's presented frames count from the receipt before at the earliest and its own work after the last of them is named,
+		// so one tick's recorder spike shows in its own receipt alone.
+		const bool recording = HarnessCost::Enabled(HarnessCost::Recorder);
+		HarnessCost::SetEnabled(HarnessCost::Recorder, true);
+		HarnessCost::TakePresented();
+		HarnessCost::Charge(HarnessCost::Recorder, 60000000);
+		const HarnessCost::Presented spiked = HarnessCost::TakePresented();
+		HarnessCost::Charge(HarnessCost::Recorder, 1000000);
+		HarnessCost::NotePresent();
+		HarnessCost::Charge(HarnessCost::Recorder, 2000000);
+		const HarnessCost::Presented next = HarnessCost::TakePresented();
+		HarnessCost::TakeFrame();
+		HarnessCost::SetEnabled(HarnessCost::Recorder, recording);
+		if (spiked.frames != 0 || spiked.afterNs[HarnessCost::Recorder] != 60000000 || next.frames != 1 || next.costliestNs != 1000000 || next.afterNs[HarnessCost::Recorder] != 2000000) {
+			return FrameRecorderSelfTestFail("a receipt's presented frame reached into the receipt before it: the spike's receipt named " + std::to_string(spiked.afterNs[HarnessCost::Recorder]) +
+			                                 " ns after its presents, the next one's present " + std::to_string(next.costliestNs) + " ns and " + std::to_string(next.afterNs[HarnessCost::Recorder]) + " ns after it");
+		}
+	}
+
+	{
 		std::ostringstream line;
 		line << "[frame-recorder-selftest] PASS";
 		System::PrintDiagnosticLine(line.str());
@@ -5249,10 +5269,12 @@ static void WriteHarnessCostFrameOf(uint64_t round, uint64_t frame) {
 		for (size_t instrument = 0; instrument < HarnessCost::InstrumentCount; ++instrument) charged[instrument] += before[instrument];
 	}
 	scope.last = frame;
-	// The frames this one's costs span on the screen - more than one while it waited on its peers - and the costliest of them.
+	// The frames this one's costs span on the screen - more than one while it waited on its peers - the costliest of them and the
+	// work after the last.
 	System::PrintDiagnosticLine("[harness-cost-frame] " + nlohmann::json{{"process", System::GetProcessID()}, {"incarnation", incarnation}, {"round", round},
 	    {"segment", scope.segment}, {"frame", frame}, {"partition_valid", true}, {"costs_ms", HarnessCostMs(charged)}, {"presented_frames", presented.frames},
-	    {"costliest_presented_ms", static_cast<double>(presented.costliestNs) / 1e6}, {"costliest_presented_costs_ms", HarnessCostMs(presented.instrumentNs)}}.dump());
+	    {"costliest_presented_ms", static_cast<double>(presented.costliestNs) / 1e6}, {"costliest_presented_costs_ms", HarnessCostMs(presented.instrumentNs)},
+	    {"after_presented_costs_ms", HarnessCostMs(presented.afterNs)}}.dump());
 }
 
 static void WriteHarnessCostFrame(uint64_t frame) {

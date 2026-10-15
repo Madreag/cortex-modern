@@ -21,8 +21,9 @@ namespace RTE {
 		static constexpr std::array<const char*, InstrumentCount> c_Names{"sim_dump", "tick_end", "fullstate", "census", "preview_fidelity",
 		                                                                 "stall_sampler", "screen_watches", "recorder", "controller_trace", "feel_recorder"};
 		/// The receipts' version: 2 names the controller trace and the feel recorder beside version 1's eight instruments; 3 adds the
-		/// presented frames a receipt's costs span and the costliest of them.
-		static constexpr int c_ReceiptVersion = 3;
+		/// presented frames a receipt's costs span and the costliest of them; 4 counts each from the last receipt at the earliest and
+		/// names the work after the last of them.
+		static constexpr int c_ReceiptVersion = 4;
 
 		/// Whether this process runs an instrument; the run's receipt names every instrument with its state.
 		static void SetEnabled(Instrument instrument, bool enabled) { s_Enabled[instrument].store(enabled, std::memory_order_relaxed); }
@@ -44,11 +45,13 @@ namespace RTE {
 			}
 		}
 
-		/// What the costliest presented frame since the last receipt cost, instrument by instrument and in all.
+		/// What the costliest presented frame since the last receipt cost, instrument by instrument and in all, and what was spent
+		/// after the last of them.
 		struct Presented {
 			int64_t frames;
 			int64_t costliestNs;
 			std::array<int64_t, InstrumentCount> instrumentNs;
+			std::array<int64_t, InstrumentCount> afterNs;
 		};
 
 		/// Closes the presented frame that ends with this present. A simulated frame that waits on its peers carries every frame
@@ -70,8 +73,17 @@ namespace RTE {
 			++s_Presented.frames;
 		}
 
-		/// Takes the presented frames closed since the last receipt.
-		static Presented TakePresented() { return std::exchange(s_Presented, Presented{}); }
+		/// Takes the presented frames closed since the last receipt and the work after the last of them. The next presented frame
+		/// counts from here, so the work of one receipt is never another's.
+		static Presented TakePresented() {
+			Presented taken = std::exchange(s_Presented, Presented{});
+			for (size_t instrument = 0; instrument < InstrumentCount; ++instrument) {
+				const int64_t lifetime = s_Lifetime[instrument].load(std::memory_order_relaxed);
+				taken.afterNs[instrument] = lifetime - s_PresentMark[instrument];
+				s_PresentMark[instrument] = lifetime;
+			}
+			return taken;
+		}
 
 		/// The time the simulation thread spent suspended for a stack sample: charged to the sampler, and taken out of the
 		/// simulation-thread measurement it fell inside.
