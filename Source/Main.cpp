@@ -3940,7 +3940,7 @@ static bool RunSteadyClockSelfTest() {
 	const int64_t library = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 	const int64_t engine = duration_cast<milliseconds>(SteadyNow().time_since_epoch()).count();
 	const auto followsWall = [wall](int64_t reading) { return std::llabs(reading - wall) < 60000; };
-	std::cout << "[steady-clock-selftest] RTE::SteadyClock " << (followsWall(library) ? "reads the wall clock" : "is apart from the wall clock") << ": " << library << " ms, the wall " << wall << " ms" << std::endl;
+	std::cout << "[steady-clock-selftest] std::chrono::steady_clock " << (followsWall(library) ? "reads the wall clock" : "is apart from the wall clock") << ": " << library << " ms, the wall " << wall << " ms" << std::endl;
 	bool forward = true;
 	auto previous = SteadyNow();
 	for (int count = 0; count < 100000; ++count) {
