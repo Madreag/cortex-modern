@@ -212,7 +212,8 @@ namespace RTE {
 		bool StopRequested(const std::atomic<bool>* stop) { return stop && stop->load(std::memory_order_relaxed); }
 
 		bool ReadFileIntoHasher(const fs::path& path, CanonicalHasher& hasher, std::string* error, const std::atomic<bool>* stop) {
-			std::ifstream in(path, std::ios::binary);
+			// An install under a deep folder puts module files past 260 characters, which a plain open on Windows refuses.
+			std::ifstream in(NetIdentity::OpenablePath(path), std::ios::binary);
 			if (!in.is_open()) {
 				if (error) *error = "unreadable module file: " + path.generic_string();
 				return false;
@@ -982,6 +983,23 @@ namespace RTE {
 
 	std::string NetIdentity::ShortHashHex(const NetHash32& hash) {
 		return HashHex(hash).substr(0, 16);
+	}
+
+	fs::path NetIdentity::OpenablePath(const fs::path& path) {
+#ifdef _WIN32
+		// Paths short of the limit stay as they are; CreateDirectory's own limit is 248, so the prefix starts below that.
+		constexpr size_t c_PlainPathLimit = 240;
+		std::error_code ec;
+		fs::path absolute = fs::absolute(path, ec);
+		if (ec) return path;
+		absolute = absolute.lexically_normal();
+		absolute.make_preferred();
+		const std::wstring text = absolute.native();
+		if (text.size() < c_PlainPathLimit || text.starts_with(L"\\\\?\\")) return path;
+		return fs::path(text.starts_with(L"\\\\") ? L"\\\\?\\UNC\\" + text.substr(2) : L"\\\\?\\" + text);
+#else
+		return path;
+#endif
 	}
 
 	std::string NetIdentity::NormalizeRelativePathForHash(const std::string& path, std::string* error) {

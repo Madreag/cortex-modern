@@ -10,6 +10,8 @@
 #include "SettingsMan.h"
 #include "TimerMan.h"
 
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -634,13 +636,53 @@ namespace RTE {
 			          << NetIdentity::HashHex(dataIdentity) << std::endl;
 			return true;
 		}
+
+		// A module installed under a deep folder hashes like any other: past 260 characters a plain open on Windows fails, and
+		// the incomplete identity then reads every listed game as another protocol.
+		bool TestLongModulePath(std::string* error) {
+			namespace fs = std::filesystem;
+			std::error_code ec;
+			const fs::path root = fs::temp_directory_path(ec) / "cccp-identity-long-path";
+			if (ec) {
+				*error = "the long module path check has no temporary folder: " + ec.message();
+				return false;
+			}
+			fs::path module = root;
+			while (module.native().size() < 190) module /= "an-install-folder-several-levels-down";
+			module /= "Deep.rte";
+			const fs::path folder = module / "Scenes" / "Objects";
+			std::string name = "ARefineryAuthorizationConsolePieSliceActions";
+			while ((folder / (name + ".lua")).native().size() < 275) name += "Long";
+			const fs::path file = folder / (name + ".lua");
+			fs::remove_all(NetIdentity::OpenablePath(root), ec);
+			fs::create_directories(NetIdentity::OpenablePath(folder), ec);
+			if (!ec) {
+				std::ofstream out(NetIdentity::OpenablePath(file), std::ios::binary);
+				out << "-- a module file deep in an install\n";
+			}
+			NetIdentityManifest manifest = MakeManifest();
+			NetIdentityModuleEntry entry;
+			entry.fileName = "Deep.rte";
+			entry.root = module.generic_string();
+			manifest.modules = {entry};
+			std::string walkError;
+			const bool walked = !ec && NetIdentity::CompleteManifestFromInputs(manifest, &walkError);
+			fs::remove_all(NetIdentity::OpenablePath(root), ec);
+			if (!walked || manifest.modules[0].fileCount != 1) {
+				*error = "a module file " + std::to_string(file.native().size()) + " characters deep did not hash: " + walkError;
+				return false;
+			}
+			std::cout << "[net-identity-selftest] PASS a module file " << file.native().size() << " characters deep hashes" << std::endl;
+			return true;
+		}
 	}
 
 	int NetIdentitySelfTest::Run() {
 		std::string error;
 		if (!TestCanonicalHelpers(&error) || !TestCompare(&error) || !TestDiffModules(&error) || !TestLuaStateCountIsABuildConstant(&error) ||
 		    !TestPresetIndependentAdmissionIdentity(&error) || !TestModuleRootOutOfIdentity(&error) ||
-		    !TestNamedModuleAdmission(&error) || !TestSelectedModuleAdmission(&error) || !TestCanonicalLoadedModules(&error)) {
+		    !TestNamedModuleAdmission(&error) || !TestSelectedModuleAdmission(&error) || !TestCanonicalLoadedModules(&error) ||
+		    !TestLongModulePath(&error)) {
 			std::cerr << "[net-identity-selftest] FAIL: " << error << std::endl;
 			return 1;
 		}
