@@ -348,7 +348,14 @@ namespace RTE {
 					if (own.preparedFrame == 3) m_PeerAdminOwnVote = own;
 					votes.emplace(m_Config.localPeerId, std::move(own));
 					newVote = true;
-					if (vote.preparedFrame == 0) for (uint8_t held: vote.members) m_PeerRejectedInputs[vote.frame] |= SeatBit(held);
+					if (vote.preparedFrame == 0) for (uint8_t held: vote.members) {
+						m_PeerRejectedInputs[vote.frame] |= SeatBit(held);
+						m_HoldFacts[held] = {vote.frame, 0, m_Config.slowPlayerBoundTicks * m_Config.simTickMs, "peer_hold_proposal"};
+						DiagnosticLine() << "[net-peer-hold-trigger] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(held)
+						    << " frame=" << vote.frame << " ai_frame=" << vote.frame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs))
+						    << " now_ms=" << nowMs << " cause=peer_hold_proposal requested_by=" << static_cast<int>(peer)
+						    << " last_heard_ms=" << LastAuthenticatedTraffic(held) << " received_through=" << m_Stats.peers[held].highestTargetFrame << std::endl;
+					}
 					break;
 				}
 				if (const auto own = votes.find(m_Config.localPeerId); own != votes.end() && (newVote || retryVotes)) SendPeerFrameMessage(own->second);
