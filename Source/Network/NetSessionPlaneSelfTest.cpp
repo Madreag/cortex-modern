@@ -110,6 +110,7 @@ namespace RTE {
 			uint32_t directoryExchangeMs = 0;
 			// The subject's directory requests fail through its fault though its link stays up: its directory alone is out of reach.
 			bool subjectDirectoryDark = false;
+			bool secondHalfDirectoryDark = false;
 			// The subject's link to seat 3 has this round trip (0: the subject's own), and seat 3 must be one that sends it the tail.
 			uint32_t thirdSubjectRttMs = 0;
 			uint8_t donorSeat = 0;
@@ -526,6 +527,7 @@ namespace RTE {
 				if (schedule) return schedule->DirectoryReachable(peer, now);
 				if (!DuringFault()) return true;
 				if (row.directoryDown) return false;
+				if (row.secondHalfDirectoryDark && peer >= 3) return false;
 				// A subject whose link stays up through its fault - a slow or stopped machine, lost inputs - reaches the directory as well.
 				const bool linkUp = row.frozen || row.slowPercent || row.inputsLost || row.inputHalvesLost || row.keepInputEvery || row.lateReceiptsFrom;
 				return row.directoryBoth || peer != row.subject || (linkUp && !row.subjectDirectoryDark);
@@ -2993,7 +2995,15 @@ namespace RTE {
 				}
 				// Seat 3 still plays in the agreed round, so this activation must be refused. The first returner waits for its archive
 				// until that refusal has happened: a host-wide error here would prevent its later transfer.
-				for (const uint64_t until = hub.now + 2400; hub.now < until && !service.m_PrivateTransferHeldReasons.contains(otherRoute);) {
+				std::string expectedRefusal;
+				if (service.m_Coordinator->SchedulePeerReclaim(3, otherRoute, 2, activation, &expectedRefusal) || expectedRefusal.empty()) {
+					*error = "the round admitted an image return of a seat that was still playing"; return false;
+				}
+				const auto refused = [&] {
+					const auto held = service.m_PrivateTransferHeldReasons.find(otherRoute);
+					return held != service.m_PrivateTransferHeldReasons.end() && held->second == expectedRefusal;
+				};
+				for (const uint64_t until = hub.now + 2400; hub.now < until && !refused();) {
 					rounds[0] = std::move(service.m_Coordinator);
 					const bool advanced = step(false);
 					service.m_Coordinator = std::move(rounds[0]);
@@ -3003,7 +3013,7 @@ namespace RTE {
 					                                                              service.m_Coordinator->GetStats().nextFrame, nullptr, error)) return false;
 					service.DrivePrivateMatchRejoins(hub.now);
 				}
-				if (!service.m_PrivateTransferHeldReasons.contains(otherRoute) || service.m_Coordinator->HasAgreedSeatReclaim(3)) {
+				if (!refused() || service.m_Coordinator->HasAgreedSeatReclaim(3)) {
 					*error = "the already-playing seat's image activation was not refused"; return false;
 				}
 				if (!service.m_PrivateJoinError.empty()) { *error = "one refused activation left a host-wide image error: " + service.m_PrivateJoinError; return false; }
@@ -3544,7 +3554,7 @@ namespace RTE {
 		if (!selected || std::string_view(selected) == "a_kept_hold_waits_for_its_own_directory_without_changing_history") {
 			named.push_back({"a_kept_hold_waits_for_its_own_directory_without_changing_history", [](std::string& error) {
 				Case row{"kept_hold_own_directory"}; row.seats = 4; row.subject = 3;
-				row.gapMs = 8000; row.tie = row.tailWaitForDirectory = row.internet = row.subjectDirectoryDark = true; row.rttMs = row.otherRttMs = 100;
+				row.gapMs = 8000; row.tie = row.tailWaitForDirectory = row.internet = row.subjectDirectoryDark = row.secondHalfDirectoryDark = true; row.rttMs = row.otherRttMs = 100;
 				Fixture fixture; if (!fixture.Start(row, error)) return false;
 				uint64_t longestKept = 0; bool keptForAuthority = false;
 				for (const uint64_t until = fixture.hub.faultEnd + 12000; fixture.hub.now < until;) {
