@@ -102,7 +102,7 @@ namespace RTE::CheckpointLua {
 			for (const char* name: {
 			         "_ScriptGraphNative", "_ScriptGraphNativeAddress", "_ScriptGraphMembers", "_ScriptGraphInstance",
 			         "_ScriptGraphNativeSave", "_ScriptGraphAreaBoxes", "_ScriptGraphGibOwner", "_ScriptGraphSoundSetOwner",
-			         "_ScriptGraphLimbOwner", "_ScriptGraphPropertyOwner", "_ScriptGraphLimbVectorOwner",
+			         "_ScriptGraphLimbOwner", "_ScriptGraphPropertyOwner", "_ScriptGraphLimbVectorOwner", "_ScriptGraphGoneVector",
 			         "_ScriptGraphSceneBoxOwner", "_ScriptGraphIteratorSnapshot", "_ScriptGraphGibReferences"}) {
 				view.BindNative(destination, name);
 			}
@@ -1435,6 +1435,7 @@ namespace RTE::CheckpointLua {
 			if (contains("vector-ref-unresolved") || contains("timer-ref")) {
 				helper("_ScriptGraphPropertyOwner", ScriptGraphPropertyOwner);
 				helper("_ScriptGraphLimbVectorOwner", ScriptGraphLimbVectorOwner);
+				helper("_ScriptGraphGoneVector", ScriptGraphGoneVector);
 			}
 			static constexpr std::array vectorProperties{"X", "Y"};
 			static constexpr std::array timerProperties{"StartSimTimeTicks", "SimTimeLimitTicks", "StartRealTimeTicks", "RealTimeLimitTicks"};

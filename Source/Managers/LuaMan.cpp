@@ -1882,6 +1882,9 @@ local function visitUserdata(value, ctx)
 			noteNode(ctx, id, "U" .. outputNumber(id) .. ";k" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";" .. (constant and "t;" or "f;") .. "I" .. visit(_ScriptGraphInstance(value), ctx))
 			return reference(ctx, id)
 		end
+		-- A reference the script kept past the end of what it points into: the value it reads through it, as a vector of its own.
+		local goneX, goneY = _ScriptGraphGoneVector(value)
+		if goneX then return userdataNode(value, ctx, "v" .. numberText(goneX) .. "," .. numberText(goneY) .. ";") end
 		problem(ctx, "a " .. kind .. " into an engine object that no known property exposes")
 		return "z;"
 	end
@@ -5590,6 +5593,34 @@ static int ScriptGraphLimbVectorOwner(lua_State* L) {
 	return 0;
 }
 
+// A Vector reference that outlived every object holding it (an AI's waypoint into a move target that died): the value the
+// script reads through it, read only where the engine still holds the memory - a native pool's slot, a returned block of its
+// owner's class pool, or the capture's frozen copy; nothing for a reference with no owner, or memory nothing holds.
+static int ScriptGraphGoneVector(lua_State* L) {
+	auto* rep = luabind::detail::is_class_object(L, 1);
+	if (!rep || !rep->ptr() || (rep->flags() & luabind::detail::object_rep::owner) || !rep->crep() || rep->crep()->type() != LUABIND_TYPEID(Vector)) return 0;
+	if (!rep->get_dependencies().is_valid() || ScriptGraphNativeAlive(L, rep)) return 0;
+	const void* address = rep->ptr();
+	bool held = CheckpointNativeStorage::Reading() || CheckpointNativeStorage::Owns(CheckpointNativeStorage::Original(address));
+	if (!held) {
+		rep->get_dependencies().get(L);
+		lua_pushnil(L);
+		while (!held && lua_next(L, -2) != 0) {
+			if (const auto* owner = luabind::detail::is_class_object(L, -1); owner && owner->crep()) {
+				if (const auto* type = Entity::ClassInfo::GetClass(owner->crep()->name())) held = type->PoolHolds(address, sizeof(Vector));
+			}
+			lua_pop(L, 1);
+		}
+		if (held) lua_pop(L, 1);
+		lua_pop(L, 1);
+	}
+	if (!held) return 0;
+	const Vector value = *static_cast<const Vector*>(address);
+	lua_pushnumber(L, value.GetX());
+	lua_pushnumber(L, value.GetY());
+	return 2;
+}
+
 static int ScriptGraphLimbVector(lua_State* L) {
 	auto* owner = luabind::detail::is_class_object(L, 1);
 	const int index = lua_tointeger(L, 2);
@@ -6030,7 +6061,11 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 	// A pie slice is named by its place in a known actor's pie menu tree, and never read.
 	if (s_GraphNativeCapture && type && std::strcmp(type->name(), "PieSlice") == 0) {
 		if (const auto* place = s_GraphNativeCapture->PieSliceOwner(rep->ptr())) return found(const_cast<Actor*>(place->owner), ("pie-slice:" + place->path).c_str(), 0);
-		return 0;
+		// No known actor's menu holds it: the menu deleted it when its device left the holder or the holder went, so the handle
+		// stays a gone reference, as the frozen copy leaves it, and what it points at is never read.
+		lua_pushliteral(L, "invalid");
+		lua_pushliteral(L, "PieSlice");
+		return 2;
 	}
 	if (CheckpointWriter::BatchEnabled() && type && type->get_class_type() == luabind::detail::class_rep::cpp_class &&
 	    type->type() == LUABIND_TYPEID(Vector) && std::strcmp(type->name(), "Vector") == 0) {
@@ -7255,6 +7290,7 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_pushcfunction(m_State, ScriptGraphActorLimb);
 		lua_setglobal(m_State, "_ScriptGraphActorLimb");
 		RegisterScriptGraphHelper(m_State, "_ScriptGraphLimbVectorOwner", ScriptGraphLimbVectorOwner);
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphGoneVector", ScriptGraphGoneVector);
 		lua_pushcfunction(m_State, ScriptGraphLimbVector);
 		lua_setglobal(m_State, "_ScriptGraphLimbVector");
 		lua_pushcfunction(m_State, ScriptGraphGlobalScript);

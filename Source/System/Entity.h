@@ -205,6 +205,8 @@ namespace RTE {
 			/// Gives up to budget returned blocks back to the system, keeping two refills per class.
 			/// @return Whether blocks past two refills remain.
 			static bool ReleaseUnusedPoolMemory(size_t budget);
+			/// Whether bytes at an address lie in a block this class's pool holds returned.
+			bool PoolHolds(const void* address, size_t bytes) const;
 			/// A pool whose refill the allocator refuses throws std::bad_alloc instead of handing out a null instance.
 			static bool RunPoolExhaustionSelfTest();
 
@@ -246,7 +248,7 @@ namespace RTE {
 			int m_InstancesInUse; //!< The number of allocated instances passed out from the pool.
 
 #ifndef __ADDRESS_SANITIZER__ // Unused when ASan is enabled.
-			std::mutex m_Mutex; //!< Mutex to ensure multiple things aren't grabbing/deallocating memory at the same time
+			mutable std::mutex m_Mutex; //!< Mutex to ensure multiple things aren't grabbing/deallocating memory at the same time
 #endif
 
 			// Forbidding copying

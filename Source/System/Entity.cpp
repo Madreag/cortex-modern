@@ -1012,6 +1012,15 @@ namespace RTE {
 		return false;
 	}
 
+	bool Entity::ClassInfo::PoolHolds(const void* address, size_t bytes) const {
+		const auto* at = static_cast<const std::byte*>(address);
+		std::lock_guard lock(m_Mutex);
+		return std::any_of(m_AllocatedPool.begin(), m_AllocatedPool.end(), [&](const void* block) {
+			const auto* first = static_cast<const std::byte*>(block);
+			return at >= first && at + bytes <= first + m_InstanceBytes;
+		});
+	}
+
 	bool Entity::ClassInfo::RunPoolExhaustionSelfTest() {
 		auto* info = const_cast<ClassInfo*>(GetClass("MOPixel"));
 		if (!info) {
