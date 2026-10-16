@@ -273,7 +273,8 @@
   },
   "catchup:24": {
     "rows": [
-      "random_hold_schedules"
+      "random_hold_schedules",
+      "a_rematch_starts_without_the_ended_rounds_catch_up"
     ],
     "scope": "random schedules include rematches and next-round faults; per-seed results retained"
   },
@@ -356,15 +357,17 @@
   },
   "hold:11": {
     "rows": [
-      "peer_returns_2s"
+      "declared_leave_keeps_the_round_and_returns_on_its_seat",
+      "two_seats_declared_leave_returns_through_a_private_reclaim"
     ],
-    "scope": "ordinary leave is driven by existing net-lockstep scene rows"
+    "scope": "actual sessions, declared leave and private reclaim through the original seat"
   },
   "hold:12": {
     "rows": [
-      "peer_returns_2s"
+      "two_seats_closed_joiner_before_host_input_does_not_hold_up_the_host",
+      "two_seats_closed_joiner_after_input_does_not_hold_up_the_host"
     ],
-    "scope": "closed-link before host input is driven by existing net-lockstep scene rows"
+    "scope": "actual session close before and after the host input; host keeps the three-tick bound"
   },
   "hold:13": {
     "rows": [
@@ -760,7 +763,8 @@
   "referee:29": {
     "rows": [
       "directory_client_round_trip_allowances_and_refusals",
-      "directory_refuses_stale_host_hash_generation_and_removed_owners"
+      "directory_refuses_stale_host_hash_generation_and_removed_owners",
+      "healthy_input_runway_spends_no_tie_allowance_before_a_real_cut"
     ],
     "scope": "per-requester client model plus real signed endpoint test; real NetConnectionAuthority HTTP families remain in net-connection suite"
   }

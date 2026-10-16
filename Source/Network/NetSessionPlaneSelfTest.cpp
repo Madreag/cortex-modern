@@ -2843,7 +2843,7 @@ namespace RTE {
 			}
 			return true;
 		}
-		if (name == "capsule-retry") {
+		if (name == "capsule-retry" || name == "paired-image-service") {
 			for (const uint64_t until = hub.now + 3000; hub.now < until;) if (!step(false)) return false;
 			if (!rounds[0]->HasHeldAISeat(2)) { *error = "the returning successor was never held"; return false; }
 			// This is the service's real lobby and sealing path on the already admitted connection.
@@ -3474,7 +3474,7 @@ namespace RTE {
 		}
 		int passed = 0, failed = 0;
 		const char* selected = std::getenv("CC_TEST_SESSION_PLANE_CASE");
-		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 34 + FixedScheduleRows().size()) << std::endl;
+		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 40 + FixedScheduleRows().size()) << std::endl;
 		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest
 		// rows started first; the random driver's rounds follow them in the same pool.
 		QuietLines quiet(std::cout);
@@ -3677,6 +3677,12 @@ namespace RTE {
 			if (driver.failedCount || !complete) ++failed; else ++passed;
 		}
 		for (const auto& [name, scene]: std::vector<std::pair<const char*, const char*>>{
+		    {"declared_leave_keeps_the_round_and_returns_on_its_seat", "leave-rejoin"},
+		    {"two_seats_declared_leave_returns_through_a_private_reclaim", "leave-rejoin-two"},
+		    {"two_seats_closed_joiner_after_input_does_not_hold_up_the_host", "drop-after-input"},
+		    {"two_seats_closed_joiner_before_host_input_does_not_hold_up_the_host", "drop-before-host-input"},
+		    {"healthy_input_runway_spends_no_tie_allowance_before_a_real_cut", "referee-input-runway"},
+		    {"a_rematch_starts_without_the_ended_rounds_catch_up", "rematch-chat"},
 		    {"image_successor_capsule_sealing_refusal_is_retried", "capsule-retry"},
 		    {"a_refused_image_activation_keeps_the_other_returners_service_clear", "paired-image-service"},
 		    {"stored_ticket_redials_the_rematch_lobby_on_its_original_seat", "rematch-redial"}}) {
