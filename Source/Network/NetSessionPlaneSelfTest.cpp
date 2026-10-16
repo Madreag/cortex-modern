@@ -1497,12 +1497,23 @@ namespace RTE {
 		bool CheckImageActivation(uint8_t seats, uint32_t rttMs, std::string& error) {
 			const auto fail = [&](const std::string& detail) { error = "seed=0 " + detail; return false; };
 			Case row{"image_activation"}; row.seats = seats; row.subject = 2; row.gapMs = 60000; row.frozen = row.internet = row.captureFrames = true;
-			row.rttMs = row.otherRttMs = rttMs;
+			row.rttMs = row.otherRttMs = rttMs; row.checkpointEveryFrames = 60;
 			Fixture fixture; fixture.parallel = true;
 			if (!fixture.Start(row, error)) return false;
 			while (fixture.hub.now < 9000 && (!fixture.peers[0]->HasHeldAISeat(2) || fixture.hub.now < 7000)) if (!fixture.Step(error)) return false;
 			if (!fixture.peers[0]->HasHeldAISeat(2)) return fail("the frozen seat never entered the image-return shape");
-			World replay = fixture.worlds[0];
+			uint64_t common = fixture.worlds[0].applied;
+			for (uint8_t peer = 3; peer <= seats; ++peer) common = std::min(common, fixture.worlds[peer - 1].applied);
+			const uint64_t base = common - common % row.checkpointEveryFrames;
+			if (!base) return fail("the playing seats did not commit an image capture");
+			World replay; replay.sharedDigests = &fixture.sharedDigests;
+			// The image is the host's state at a named capture every playing seat already committed.
+			for (const auto& [tick, ready]: fixture.committed[0]) {
+				if (tick > base) break;
+				if (!replay.Apply(ready, error)) return false;
+			}
+			for (uint8_t peer = 3; peer <= seats; ++peer)
+				if (fixture.worlds[peer - 1].hashes.at(base) != replay.hashes.at(base)) return fail("the image capture already has different playing-seat histories");
 			auto config = fixture.peers[1]->GetConfig();
 			// The image's seat state and the committed tail go through the same replay coordinator as a real private return.
 			auto replayConfig = config;
@@ -1513,6 +1524,11 @@ namespace RTE {
 			replayConfig.initialSeatReclaims = fixture.peers[0]->ReclaimTransactions();
 			replayConfig.initialPeerLeaves = fixture.peers[0]->GetPeerLeaveFrames();
 			replayConfig.initialDelayChanges = fixture.peers[0]->GetDelayChanges();
+			// Later committed changes arrive through the replay, rather than being put into the older image.
+			std::erase_if(replayConfig.initialSeatHolds, [base](const auto& entry) { return entry.second.cutoffFrame > base; });
+			std::erase_if(replayConfig.initialSeatReclaims, [base](const auto& entry) { return entry.second.activationFrame > base; });
+			std::erase_if(replayConfig.initialPeerLeaves, [base](const auto& entry) { return entry.second > base; });
+			for (auto& [peer, changes]: replayConfig.initialDelayChanges) changes.erase(changes.upper_bound(base), changes.end());
 			LoopbackTransport replayWire; NetLockstepCoordinator replayCoordinator;
 			if (!replayCoordinator.StartCatchUpReplay(replayWire, replayConfig, *fixture.peers[1], &error)) return false;
 			NetWorldJoinHost join;
@@ -1562,7 +1578,7 @@ namespace RTE {
 						(void)fixture.peers[0]->SendReturnerTheRoundFrom(2, activation);
 					}
 				}
-				if (agreed && replay.applied + 1 == activation) break;
+				if (agreed && replay.applied + 1 == activation && fixture.peers[1]->m_PeerBridgeCertificates.contains({activation, 1})) break;
 			}
 			if (!agreed || replay.applied + 1 != activation) return fail("the private replay did not reach an activation every survivor certified");
 			config.startFrame = activation; config.roundId = 77; config.joinsRunningRound = config.continuesMatch = true;
@@ -1571,13 +1587,15 @@ namespace RTE {
 			config.initialSeatBridgeSinceMs = replayCoordinator.SeatBridgeTimes();
 			config.initialSeatReclaims = replayCoordinator.ReclaimTransactions();
 			config.initialPeerLeaves = replayCoordinator.GetPeerLeaveFrames();
-			NetLockstepCoordinator::AdoptOpenReturns(config, fixture.peers[0]->ReclaimTransactions(), activation);
-			const auto proof = fixture.hub.returnCertificates.find(activation);
-			if (proof == fixture.hub.returnCertificates.end()) return fail("the real return certificate never crossed its sender's wire");
+			NetLockstepCoordinator::AdoptOpenReturns(config, fixture.peers[1]->ReclaimTransactions(), activation);
+			const auto proof = fixture.peers[1]->m_PeerBridgeCertificates.find({activation, 1});
+			if (proof == fixture.peers[1]->m_PeerBridgeCertificates.end()) return fail("the returning seat did not receive the real return certificate");
 			std::string refusal;
 			if (!replayCoordinator.AdoptPeerReturn(config, replayCoordinator, proof->second, activation, &refusal))
 				return fail("the private replay could not adopt the survivors' real return certificate: " + refusal);
-			config.initialDelayChanges = fixture.peers[0]->GetDelayChanges();
+			config.initialDelayChanges = replayCoordinator.GetDelayChanges();
+			for (const auto& [peer, changes]: fixture.peers[1]->GetDelayChanges())
+				for (const auto& [tick, delay]: changes) config.initialDelayChanges[peer].try_emplace(tick, delay);
 			// The live start carries the delays the replay actually crossed, as InPlaceLiveRoundLocked does.
 			for (const auto& [peer, changes]: config.initialDelayChanges) {
 				const auto at = changes.upper_bound(activation);
@@ -2291,7 +2309,7 @@ namespace RTE {
 				count = EnvironmentNumber("CC_TEST_HOLD_SCHEDULES", 200);
 				firstSeed = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_SEED", 1);
 				const unsigned hardware = std::max(2U, std::thread::hardware_concurrency());
-				threads = std::max<size_t>(1, EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_THREADS", std::max(2U, hardware - 2)));
+				threads = std::max<size_t>(1, EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_THREADS", std::max(2U, hardware - 1)));
 				budget = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_MINIMIZE_RUNS", 60);
 				shapes = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_SHAPES", 8);
 				// Only minimization spends the time budget; every requested schedule must run.
@@ -2332,17 +2350,30 @@ namespace RTE {
 				if (!runRandom) { elapsedMs = Elapsed(began); return; }
 				// Group the failures by what failed, the seats and whether a referee decides ties, and minimize the smallest round of each
 				// group; the minimized shapes are kept once each.
+				const auto failureGroup = [&](size_t index) {
+					return results[index]->property + ":" + results[index]->kind + ":" + std::to_string(schedules[index].seats) +
+					       (schedules[index].internet ? ":internet" : ":direct");
+				};
+				std::map<std::string, std::string> reproduced;
+				for (size_t index = 0; index < fixedCount; ++index)
+					if (results[index]) reproduced.try_emplace(failureGroup(index), names[index]);
 				std::map<std::string, std::vector<size_t>> groups;
 				for (size_t index = fixedCount; index < schedules.size(); ++index) {
 					if (!results[index]) continue;
 					++failedCount;
-					groups[results[index]->property + ":" + results[index]->kind + ":" + std::to_string(schedules[index].seats) + (schedules[index].internet ? ":internet" : ":direct")].push_back(index);
+					groups[failureGroup(index)].push_back(index);
 				}
 				std::map<std::string, std::string> minimized;
 				size_t done = 0;
 				for (const auto& [key, members]: groups) {
 					const size_t smallest = *std::min_element(members.begin(), members.end(), [&](size_t a, size_t b) { return schedules[a].endMs < schedules[b].endMs; });
 					const std::string seeds = [&] { std::string text; for (size_t member: members) text += (text.empty() ? "" : ",") + std::to_string(schedules[member].seed); return text; }();
+					// A named regression just reproduced this same failure group. Keep every random failure red and spend minimization
+					// on new groups, rather than repeatedly minimizing a counterexample already running in this suite.
+					if (const auto fixed = reproduced.find(key); fixed != reproduced.end()) {
+						lines.push_back("FAIL random_hold_schedules group=" + key + " seeds=" + seeds + ": reproduced by fixed row " + fixed->second);
+						continue;
+					}
 					if (done++ >= shapes || Elapsed(began) >= budgetMs) {
 						lines.push_back("FAIL random_hold_schedules group=" + key + " seeds=" + seeds + ": not minimized (past CC_TEST_HOLD_SCHEDULE_SHAPES or _BUDGET_S), seed " +
 						                std::to_string(schedules[smallest].seed) + ": " + results[smallest]->detail);
@@ -2903,7 +2934,8 @@ namespace RTE {
 			g_ActivityMan.SwapCheckpointActivity(savedActivity);
 			struct RestoreActivity { std::unique_ptr<Activity>& saved; ~RestoreActivity() { g_ActivityMan.SwapCheckpointActivity(saved); } } restoreActivity{savedActivity};
 			struct RestorePath { std::string& slot; std::string old; ~RestorePath() { slot = std::move(old); } } restorePath{NetMatchService::s_TicketStorePath, NetMatchService::s_TicketStorePath};
-			NetMatchService::s_TicketStorePath = "Userdata/hold-row-successor-ticket.json";
+			const std::string ticketStem = "Userdata/hold-row-" + name + "-successor";
+			NetMatchService::s_TicketStorePath = ticketStem + "-host.json";
 			NetMatchService service; service.m_IsHost = true; service.m_LocalPeerId = 1; service.m_MatchConfig = match;
 			service.m_MigratedTransport = std::move(sessionWires[0]); service.m_Session = std::move(ownedHostSession);
 			service.m_Coordinator = std::move(rounds[0]); service.m_Runner = std::make_unique<NetMatchRunner>();
@@ -2915,7 +2947,7 @@ namespace RTE {
 			service.m_ReconnectHost.SetSeatTable(NetH4BuildSeatTable(match), match.mode);
 			service.m_ReconnectHost.SetHostAddress("127.0.0.1"); service.m_ReconnectHost.SetMatchConfigHash(NetMatchConfigUtil::HashConfig(match));
 			NetReconnectTicketStore clientStore, otherStore;
-			clientStore.SetPath("Userdata/hold-row-successor-client.json"); otherStore.SetPath("Userdata/hold-row-successor-other.json");
+			clientStore.SetPath(ticketStem + "-client.json"); otherStore.SetPath(ticketStem + "-other.json");
 			NetReconnectClient successor, otherSuccessor;
 			successor.Configure(&clientStore, identity, "Joiner"); otherSuccessor.Configure(&otherStore, identity, "Other joiner");
 			for (auto* admitted: {&successor, &otherSuccessor}) {
@@ -3845,22 +3877,28 @@ namespace RTE {
 				match.peerCount = 4; match.players = {{1, 0, false, "Host"}, {2, 1, false, "Returner"}, {3, 2, false, "Witness"}, {4, 3, false, "Other"}};
 				if (!service.m_WorldJoin.ConfigureMatchRejoins(match, 77, c_TestTickMs, &error)) return false;
 				if (arm >= 3) {
-					Case row{"held_host_image"}; row.subject = 1; row.seats = 4; row.gapMs = 6000; row.internet = row.captureFrames = true;
-					row.frozen = arm == 3; row.slowPercent = arm == 4 ? 50 : 0;
+					Case row{"held_host_image"}; row.subject = 1; row.seats = 4; row.gapMs = 15000; row.internet = row.captureFrames = true;
 					row.rttMs = row.otherRttMs = arm == 3 ? 100 : 2;
+					Schedule schedule; schedule.seats = 4; schedule.internet = true;
+					for (uint8_t a = 1; a <= 4; ++a) for (uint8_t b = 1; b <= 4; ++b) if (a != b) schedule.rttMs[a][b] = row.rttMs;
+					// The image seat leaves first; the host's machine then stops or slows while that other seat is already held.
+					schedule.spells = {{2, Spell::Kind::Silent, 6000, 12000}, {1, arm == 3 ? Spell::Kind::Stopped : Spell::Kind::Slow, 9000, 12000, 50}};
 					Fixture fixture;
+					fixture.hub.schedule = &schedule;
 					if (!fixture.Start(row, error)) return false;
-					while (fixture.hub.now < 18000 && (fixture.hub.now < fixture.hub.faultAt + 1000 || !fixture.peers[0]->IsOwnHostSeatHeld()))
+					const auto stepRound = [&] {
 						if (!fixture.Step(error)) return false;
-					if (!fixture.peers[0]->IsOwnHostSeatHeld()) { error = "the host did not become a private reader"; return false; }
-					// The other seat really loses its input stream and is held before it asks for an image.
-					// The service never invents a held returner beside coordinators that still play its input.
-					fixture.hub.row.secondSubject = 2; fixture.hub.dropInputsFrom = 2;
-					while (fixture.hub.now < fixture.hub.faultEnd &&
-					       (!fixture.peers[0]->IsOwnHostSeatHeld() || !fixture.peers[0]->HasHeldAISeat(2)))
-						if (!fixture.Step(error)) return false;
+						if (arm == 3) for (const auto& peer: fixture.peers) if (HoldVisible(*peer, 1, fixture.hub.now)) {
+							error = "flowing keepalives showed a held host seat"; return false;
+						}
+						return true;
+					};
+					while (fixture.hub.now < 24000 && (fixture.hub.now < 10000 ||
+					       !fixture.peers[0]->IsOwnHostSeatHeld() || !fixture.peers[0]->HasHeldAISeat(2)))
+						if (!stepRound()) return false;
 					if (!fixture.peers[0]->IsOwnHostSeatHeld() || !fixture.peers[0]->HasHeldAISeat(2)) {
-						error = "the image returner was not held while the host's own seat was held"; return false;
+						error = "the image returner and host were not both held: host=" + std::to_string(fixture.peers[0]->IsOwnHostSeatHeld()) +
+						        " image_seat=" + std::to_string(fixture.peers[0]->HasHeldAISeat(2)); return false;
 					}
 					if (!service.m_WorldJoin.ConfigureMatchRejoins(fixture.peers[0]->GetConfig().matchConfig, fixture.peers[0]->GetRoundId(), c_TestTickMs, &error)) return false;
 					service.m_LocalPeerId = 1;
@@ -3878,7 +3916,7 @@ namespace RTE {
 					uint64_t observed = input.tick, captureFrame = 0, captureTick = 0;
 					bool captured = false;
 					while (fixture.hub.now < fixture.hub.faultEnd + 12000) {
-						if (!fixture.Step(error)) return false;
+						if (!stepRound()) return false;
 						for (auto at = fixture.committed[0].upper_bound(observed); at != fixture.committed[0].end(); ++at) {
 							const auto& ready = at->second;
 							input = {}; input.tick = ready.frame; input.localPeer = 1; input.lead = 60;
@@ -3900,13 +3938,18 @@ namespace RTE {
 						}
 						if (!captureTick || !captured) continue;
 						bool allCommitted = true;
-						for (const auto& history: fixture.committed) {
+						for (size_t index = 0; index < fixture.committed.size(); ++index) {
+							if (index == 1) continue; // The image returner receives this state in its base, not on its old connection.
+							const auto& history = fixture.committed[index];
 							const auto at = history.find(captureFrame);
-							if (at == history.end()) { allCommitted = false; break; }
+							if (at == history.end() || !fixture.worlds[index].hashes.contains(captureTick)) { allCommitted = false; break; }
 							bool named = false;
 							for (const auto* commands: {&at->second.localCommands, &at->second.remoteCommands}) for (const auto& command: *commands)
 								if (const auto* note = std::get_if<NetGameCheckpoint>(&command.payload); note && command.senderPeerId == 1 && note->kind == NetGameCheckpoint::Capture && note->tick == captureTick) named = true;
 							if (!named) { error = "the playing seats committed different held-host base schedules"; return false; }
+							if (fixture.worlds[index].hashes.at(captureTick) != fixture.worlds[0].hashes.at(captureTick)) {
+								error = "the held host and playing seats have different image-capture histories"; return false;
+							}
 						}
 						if (allCommitted && service.m_OpenCaptureApplied && service.IsJoinCaptureTick(captureTick)) {
 							if (!fixture.wronglyHeld.empty()) { error = fixture.wronglyHeld; return false; }
