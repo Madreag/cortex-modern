@@ -102,6 +102,8 @@ namespace RTE {
 			uint64_t silentVoterMs = 0;
 			// The subject's own inputs stop reaching the others through the fault while its link stays up - receipts, heartbeats, tails.
 			bool inputsLost = false;
+			// The two halves still exchange control, but their inputs and the subject's committed tail arrive only after its directory returns.
+			bool inputHalvesLost = false, tailWaitForDirectory = false;
 			// The subject returns within this long after the fault, then stays returned for twenty seconds (0: the usual allowance).
 			uint64_t returnWithinMs = 0;
 			// One directory request's HTTP exchange, from its send to its answer (0: 100 ms).
@@ -508,7 +510,7 @@ namespace RTE {
 				if (schedule) return schedule->Cut(a, b, now);
 				if (row.tieBeforeAdministration && now >= 4000 && now < 4150) return (a <= 2) != (b <= 2);
 				if (row.silentVoter && a != b && (a == row.silentVoter || b == row.silentVoter) && now >= silentAt && now < silentAt + row.silentVoterMs) return true;
-				if (!DuringFault() || row.frozen || row.blackout || row.slowPercent || row.inputsLost || row.keepInputEvery || !row.gapMs) return false;
+				if (!DuringFault() || row.frozen || row.blackout || row.slowPercent || row.inputsLost || row.inputHalvesLost || row.keepInputEvery || !row.gapMs) return false;
 				if (row.secondSubject && now >= faultAt + row.secondAfterMs && (a == row.secondSubject || b == row.secondSubject)) return true;
 				if (row.tie) return (a <= 2) != (b <= 2);
 				return a == row.subject || b == row.subject;
@@ -525,7 +527,7 @@ namespace RTE {
 				if (!DuringFault()) return true;
 				if (row.directoryDown) return false;
 				// A subject whose link stays up through its fault - a slow or stopped machine, lost inputs - reaches the directory as well.
-				const bool linkUp = row.frozen || row.slowPercent || row.inputsLost || row.keepInputEvery || row.lateReceiptsFrom;
+				const bool linkUp = row.frozen || row.slowPercent || row.inputsLost || row.inputHalvesLost || row.keepInputEvery || row.lateReceiptsFrom;
 				return row.directoryBoth || peer != row.subject || (linkUp && !row.subjectDirectoryDark);
 			}
 			// The subject owns its fault; a referee row records the seat its actual decision held.
@@ -559,6 +561,7 @@ namespace RTE {
 			// Signed wire decisions name the actual substituted frame range;
 			// a prepared bridge may exist before the display reaches that range.
 			std::map<uint8_t, std::map<uint64_t, bool>> bridgeBoundaries;
+			std::map<uint64_t, NetHostMigrationMessage> returnCertificates;
 			uint64_t receiptGapFrame = 0, receiptGapDrops = 0;
 			uint64_t receiptGapAtMs = 0, receiptGapRequestDrops = 0;
 			uint64_t tailQueuePeak = 0;
@@ -729,6 +732,8 @@ namespace RTE {
 				if (hub.row.receiptGap && NetHostMigrationCodec::Decode(bytes, key, decision) && RemoveReceiptGap(decision, delivered)) return true;
 				if (hub.row.lateReceiptsFrom == owner && hub.DuringFault() && peekInto(decision) &&
 				    decision.type == NetHostMigrationMessageType::PeerReceipt) sessionDelay = hub.row.lateReceiptsMs;
+				if (hub.row.tailWaitForDirectory && hub.DuringFault() && other->owner == hub.row.subject && peekInto(decision) &&
+				    decision.type == NetHostMigrationMessageType::PeerTail) sessionDelay = hub.faultEnd - hub.now;
 #if __has_include("NetPeerSessionWire.h")
 				// The first frame requests are unavailable for one second. Sender
 				// receipt repair must keep the human inputs accepted through that gap.
@@ -761,10 +766,13 @@ namespace RTE {
 				if (hub.dropReceiptsFrom == owner && peekInto(decision) && decision.type == NetHostMigrationMessageType::PeerReceipt) return true;
 				if ((hub.dropInputsFrom == owner || (hub.row.inputsLost && hub.row.secondSubject == owner && hub.DuringFault() && hub.now >= hub.faultAt + hub.row.secondAfterMs)) && peekInto(decision) &&
 				    (decision.type == NetHostMigrationMessageType::PeerInput || decision.type == NetHostMigrationMessageType::PeerForwardInput)) return true;
+				if (hub.row.inputHalvesLost && hub.DuringFault() && (owner <= 2) != (other->owner <= 2) && peekInto(decision) &&
+				    (decision.type == NetHostMigrationMessageType::PeerInput || decision.type == NetHostMigrationMessageType::PeerForwardInput)) return true;
 				if (lane == NetTransportLane::ControlReliable && peekInto(decision)) {
 					[]<class Message>(Hub& hub, const Message& packet) {
 						using Type = std::decay_t<decltype(packet.type)>;
 						if constexpr (requires { Type::PeerBridgeCommit; }) {
+							if (hub.row.captureFrames && packet.type == Type::PeerBridgeCommit && packet.preparedFrame == 1) hub.returnCertificates.try_emplace(packet.frame, packet);
 							if (packet.type == Type::PeerBridgeCommit && packet.preparedFrame <= 1)
 								for (uint8_t peer: packet.members) hub.bridgeBoundaries[peer][packet.frame] = packet.preparedFrame == 0;
 						}
@@ -1561,8 +1569,11 @@ namespace RTE {
 			config.initialSeatReclaims = replayCoordinator.ReclaimTransactions();
 			config.initialPeerLeaves = replayCoordinator.GetPeerLeaveFrames();
 			NetLockstepCoordinator::AdoptOpenReturns(config, fixture.peers[0]->ReclaimTransactions(), activation);
-			if (!fixture.peers[0]->AdoptPeerReturnConfig(config, replayCoordinator, activation))
-				return fail("the private replay could not adopt the survivors' real return certificate");
+			const auto proof = fixture.hub.returnCertificates.find(activation);
+			if (proof == fixture.hub.returnCertificates.end()) return fail("the real return certificate never crossed its sender's wire");
+			std::string refusal;
+			if (!replayCoordinator.AdoptPeerReturn(config, replayCoordinator, proof->second, activation, &refusal))
+				return fail("the private replay could not adopt the survivors' real return certificate: " + refusal);
 			config.initialDelayChanges = fixture.peers[0]->GetDelayChanges();
 			// The live start carries the delays the replay actually crossed, as InPlaceLiveRoundLocked does.
 			for (const auto& [peer, changes]: config.initialDelayChanges) {
@@ -2956,6 +2967,7 @@ namespace RTE {
 				image.bytes = 8; image.checkpointConfig = "config"; image.sideState = "state"; image.digest = "fixture-image";
 				service.m_WorldJoin.PublishImage(image);
 				if (!service.m_WorldJoin.NoteTransferComplete(otherRoute, image.bytes, error)) return false;
+				service.m_WorldJoin.NoteRejoinLinkFit(otherRoute, true); service.m_WorldJoin.NoteTailLinkRtt(otherRoute, 100);
 				uint64_t activation = 0;
 				if (!service.m_WorldJoin.NoteCatchUpProgress(otherRoute, applied[2], 60, 1000, service.m_Coordinator->GetStats().nextFrame, &activation, error) || !activation) {
 					*error = "the second image return did not name its activation"; return false;
@@ -3511,22 +3523,24 @@ namespace RTE {
 			named.push_back({"directory_client_round_trip_allowances_and_refusals", CheckDirectoryClient});
 		if (!selected || std::string_view(selected) == "a_kept_hold_waits_for_its_own_directory_without_changing_history") {
 			named.push_back({"a_kept_hold_waits_for_its_own_directory_without_changing_history", [](std::string& error) {
-				Case row{"kept_hold_own_directory"}; row.seats = 4; row.subject = 2; row.secondSubject = 3;
-				row.gapMs = 8000; row.inputsLost = row.internet = row.subjectDirectoryDark = true; row.rttMs = row.otherRttMs = 100;
+				Case row{"kept_hold_own_directory"}; row.seats = 4; row.subject = 3;
+				row.gapMs = 8000; row.inputHalvesLost = row.tailWaitForDirectory = row.internet = row.subjectDirectoryDark = true; row.rttMs = row.otherRttMs = 100;
 				Fixture fixture; if (!fixture.Start(row, error)) return false;
 				uint64_t longestKept = 0; bool keptForAuthority = false;
 				for (const uint64_t until = fixture.hub.faultEnd + 12000; fixture.hub.now < until;) {
 					if (!fixture.Step(error)) return false;
-					const auto& reader = *fixture.peers[1];
+					const auto& reader = *fixture.peers[2];
 					for (const auto& [key, pending]: reader.m_PendingPeerDecisions) if (reader.m_AuthorityWaitSinceMs.contains(key)) {
 						keptForAuthority = true;
 						longestKept = std::max(longestKept, fixture.hub.now - pending.second);
 					}
+					if (reader.GetStats().decisionsDropped) for (const auto& [key, since]: reader.m_AuthorityWaitSinceMs)
+						longestKept = std::max(longestKept, fixture.hub.now - since);
 				}
 				DiagnosticLine() << "[session-plane-kept-hold] seed=0 kept_for_authority=" << keptForAuthority << " longest_kept_ms=" << longestKept
-				                 << " dropped=" << fixture.peers[1]->GetStats().decisionsDropped << std::endl;
-				if (!keptForAuthority || longestKept < 5000) { error = "the real hold did not remain pending for the directory through its five-second expiry"; return false; }
-				for (uint8_t seat: {1, 4}) if (fixture.maxWait[seat - 1] > 50) { error = "survivor " + std::to_string(seat) + " waited " + std::to_string(fixture.maxWait[seat - 1]) + "ms"; return false; }
+				                 << " dropped=" << fixture.peers[2]->GetStats().decisionsDropped << std::endl;
+				if (!keptForAuthority || longestKept < 5000 || !fixture.peers[2]->GetStats().decisionsDropped) { error = "the real hold did not remain pending for the directory through its five-second expiry"; return false; }
+				for (uint8_t seat: {1, 2}) if (fixture.maxWait[seat - 1] > 50) { error = "survivor " + std::to_string(seat) + " waited " + std::to_string(fixture.maxWait[seat - 1]) + "ms"; return false; }
 				return true;
 			}});
 		}
