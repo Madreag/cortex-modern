@@ -1680,6 +1680,8 @@ namespace RTE {
 		bool PeerGroupHasAuthority(uint32_t voters, uint64_t frame = UINT64_MAX) const;
 		/// The seats that vote at a frame (the next one to prepare by default), with voters narrowed to them; zero when no voter is a retained seat.
 		uint32_t PeerVotingOwners(uint32_t& voters, uint64_t frame = UINT64_MAX) const;
+		uint32_t PeerHeldSeatsAt(uint64_t frame) const;
+		uint32_t PeerFrameMembersAt(uint64_t frame) const;
 		/// Whether the round's referee decides its ties: a directory round of two or four retained seats; the host's half wins any other tie.
 		bool PeerTieRefereed() const;
 		/// Whether voters are exactly half of the seats that vote at a frame in a round whose ties the referee decides.
@@ -1813,6 +1815,7 @@ namespace RTE {
 		uint64_t m_PeerVoteRetryAtMs = 0;
 		uint32_t m_FrameGroupMembers = 0;
 		std::map<uint64_t, uint32_t> m_FrameGroupChanges;
+		std::map<uint8_t, std::map<uint64_t, bool>> m_PeerFrameHolds; //!< Each seat's certified hold/return boundaries, independent of another decision's group snapshot.
 		std::map<uint64_t, uint32_t> m_PeerSplitRenewals; //!< Frames the whole group agreed a new split name at, after a tie it settled, and that group.
 		uint8_t m_AuthenticatedPeerMessage = 0;
 		bool m_PeerPrimaryListener = false;

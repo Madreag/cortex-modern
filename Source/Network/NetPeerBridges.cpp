@@ -53,8 +53,7 @@ namespace RTE {
 	bool NetLockstepCoordinator::ValidatePeerCaptureBridge(const NetHostMigrationMessage& proposal) const {
 		if (proposal.preparedFrame != 4 || proposal.frame > UINT64_MAX - 2 || proposal.boundary >= proposal.frame ||
 		    proposal.bytes.size() <= NetHash32{}.size() || proposal.members.size() != 1) return false;
-		uint32_t playing = m_FrameGroupMembers;
-		if (const auto group = m_FrameGroupChanges.upper_bound(proposal.frame); group != m_FrameGroupChanges.begin()) playing = std::prev(group)->second;
+		uint32_t playing = PeerFrameMembersAt(proposal.frame);
 		PeerVotingOwners(playing, proposal.frame);
 		if (playing == 0 || (playing & ~proposal.connectedMask) != 0) return false;
 		NetHostMigrationMessage request;
@@ -420,8 +419,7 @@ namespace RTE {
 			for (uint8_t peer: proposal.members) returning |= SeatBit(peer);
 			bool settled = false;
 			for (unsigned pass = 0; pass < NetMatchConfigUtil::c_MaxPeerCount + 1; ++pass) {
-				uint32_t members = m_FrameGroupMembers;
-				if (const auto group = m_FrameGroupChanges.upper_bound(proposal.frame); group != m_FrameGroupChanges.begin()) members = std::prev(group)->second;
+				uint32_t members = PeerFrameMembersAt(proposal.frame);
 				members |= returning;
 				for (const auto& [peer, bridge]: m_PeerBridges)
 					if (bridge.returnFrame && *bridge.returnFrame <= proposal.frame && !m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) members |= SeatBit(peer);
@@ -682,8 +680,7 @@ namespace RTE {
 		if (agreed.preparedFrame == 1) for (uint8_t peer: agreed.members) required &= ~SeatBit(peer);
 		// A seat the round holds at the decision's frame plays none of it: whether it voted decides nothing, so a voter that knows of the
 		// hold certifies without it, and a seat held after voting cannot leave a decision certified on one peer and passed on another.
-		if (agreed.preparedFrame != 3) for (const auto& [peer, bridge]: m_PeerBridges)
-			if (bridge.committedHold && agreed.frame >= bridge.fromFrame && (!bridge.returnFrame || agreed.frame < *bridge.returnFrame)) required &= ~SeatBit(peer);
+		if (agreed.preparedFrame != 3) required &= ~PeerHeldSeatsAt(agreed.frame);
 		return required;
 	}
 
@@ -795,11 +792,12 @@ namespace RTE {
 			return;
 		}
 		m_FrameGroupChanges[agreed.frame] = agreed.connectedMask;
+		for (uint8_t peer: agreed.members) m_PeerFrameHolds[peer][agreed.frame] = agreed.preparedFrame == 0;
 		if (agreed.preparedFrame == 0) {
-			m_FrameGroupMembers = agreed.connectedMask;
+			m_FrameGroupMembers = PeerFrameMembersAt(agreed.frame);
 			// Retain the surviving display clock even when a certificate arrives after preparation.
-			if ((agreed.connectedMask & SeatBit(m_PeerPaceReference)) == 0)
-				m_PeerPaceReference = static_cast<uint8_t>(std::countr_zero(agreed.connectedMask) + 1);
+			if ((m_FrameGroupMembers & SeatBit(m_PeerPaceReference)) == 0)
+				m_PeerPaceReference = static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
 			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-pace] local=" << static_cast<int>(m_Config.localPeerId)
 				<< " frame=" << agreed.frame << " members=" << agreed.connectedMask << " reference=" << static_cast<int>(m_PeerPaceReference) << std::endl;
 		}
@@ -938,7 +936,7 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::PreparePeerBridgeInputs(uint64_t frame, uint64_t nowMs) {
-		if (const auto change = m_FrameGroupChanges.upper_bound(frame); change != m_FrameGroupChanges.begin()) m_FrameGroupMembers = std::prev(change)->second;
+		m_FrameGroupMembers = PeerFrameMembersAt(frame);
 		if (m_FrameGroupMembers != 0 && (m_FrameGroupMembers & SeatBit(m_PeerPaceReference)) == 0)
 			m_PeerPaceReference = static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
 		uint32_t owners = 0;

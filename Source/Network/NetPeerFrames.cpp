@@ -93,6 +93,27 @@ namespace RTE {
 		return held == m_PeerBridges.end() || !held->second.committedHold || held->second.returnFrame.has_value();
 	}
 
+	uint32_t NetLockstepCoordinator::PeerHeldSeatsAt(uint64_t frame) const {
+		uint32_t held = 0;
+		// Restored/private-tail bridges can precede the first decision certificate received here.
+		for (const auto& [peer, bridge]: m_PeerBridges)
+			if (bridge.committedHold && frame >= bridge.fromFrame && (!bridge.returnFrame || frame < *bridge.returnFrame)) held |= SeatBit(peer);
+		for (const auto& [peer, changes]: m_PeerFrameHolds) {
+			const auto after = changes.upper_bound(frame);
+			if (after != changes.begin() && std::prev(after)->second) held |= SeatBit(peer);
+			else held &= ~SeatBit(peer);
+		}
+		return held;
+	}
+
+	uint32_t NetLockstepCoordinator::PeerFrameMembersAt(uint64_t frame) const {
+		const auto group = m_FrameGroupChanges.upper_bound(frame);
+		const uint32_t members = group == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(group)->second;
+		// A future return can have been signed before another seat's intervening hold.
+		// Its snapshot cannot return that other seat: only a return naming it ends its hold.
+		return members & ~PeerHeldSeatsAt(frame);
+	}
+
 	uint32_t NetLockstepCoordinator::PeerVotingOwners(uint32_t& voters, uint64_t frame) const {
 		const uint64_t at = frame == UINT64_MAX ? m_Stats.nextFrame : frame;
 		uint32_t owners = 0;
@@ -102,11 +123,11 @@ namespace RTE {
 		// A declared Leave keeps its AI seat but answers nothing more from the moment it is declared, its last inputs ahead included.
 		for (const auto& [peer, ended]: m_PeerRoundEnds) if (!ended.closedLink) owners &= ~SeatBit(peer);
 		// A returning seat answers nothing until it plays, so it votes only after its agreed neutral interval.
-		for (const auto& [peer, back]: m_ReclaimTransactions) if (at <= back.neutralThroughFrame) owners &= ~SeatBit(peer);
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+			if (IsSeatReclaimGap(peer, at)) owners &= ~SeatBit(peer);
 		// A seat the round holds answers nothing until it returns: the seats that play decide without it, so a second seat lost while
 		// the first is held is held too instead of leaving the rest without a majority.
-		for (const auto& [peer, bridge]: m_PeerBridges)
-			if (bridge.committedHold && at >= bridge.fromFrame && (!bridge.returnFrame || at < *bridge.returnFrame)) owners &= ~SeatBit(peer);
+		owners &= ~PeerHeldSeatsAt(at);
 		voters &= owners;
 		return voters == 0 ? 0 : owners;
 	}
@@ -159,11 +180,10 @@ namespace RTE {
 		uint32_t whole = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) whole |= SeatBit(peer);
-		for (const auto& [peer, bridge]: m_PeerBridges)
-			if (bridge.committedHold && frame >= bridge.fromFrame && (!bridge.returnFrame || frame < *bridge.returnFrame)) whole &= ~SeatBit(peer);
+		whole &= ~PeerHeldSeatsAt(frame);
 		uint64_t name = m_Config.startFrame;
 		for (auto change = m_FrameGroupChanges.upper_bound(frame); change != m_FrameGroupChanges.begin();)
-			if (((--change)->second & whole) == whole) { name = change->first; break; }
+			if ((PeerFrameMembersAt((--change)->first) & whole) == whole) { name = change->first; break; }
 		// A split the whole group has played past since its tie was decided is named afresh, so the next tie is a new question.
 		for (auto renewal = m_PeerSplitRenewals.upper_bound(frame); renewal != m_PeerSplitRenewals.begin();)
 			if (((--renewal)->second & whole) == whole) { name = std::max(name, renewal->first); break; }
@@ -396,6 +416,10 @@ namespace RTE {
 		for (auto* history: {&m_PeerFrameTieWinners, &m_FrameGroupChanges, &m_PeerSplitRenewals}) {
 			const auto floor = history->lower_bound(historyFloor);
 			if (floor != history->begin()) history->erase(history->begin(), std::prev(floor));
+		}
+		for (auto& [peer, history]: m_PeerFrameHolds) {
+			const auto floor = history.lower_bound(historyFloor);
+			if (floor != history.begin()) history.erase(history.begin(), std::prev(floor));
 		}
 		std::erase_if(m_PeerFrameIncoming, [&](const auto& entry) { return nowMs >= entry.second.lastReceivedMs && nowMs - entry.second.lastReceivedMs > c_NetHostLossSilenceMs; });
 	}

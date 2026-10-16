@@ -196,8 +196,7 @@ namespace RTE {
 		m_PeerTailSendRanges.erase(peer); m_PeerTailOutgoing.erase(peer);
 		m_PeerTailLastSentMs.erase(peer); m_PeerTailResendFrames.erase(peer);
 		for (auto& [owner, receipts]: m_PeerInputReceipts) receipts.erase(peer);
-		const auto prior = m_FrameGroupChanges.upper_bound(frame);
-		const uint32_t members = prior == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(prior)->second;
+		const uint32_t members = PeerFrameMembersAt(frame);
 		m_FrameGroupChanges.try_emplace(frame, members);
 		for (auto change = m_FrameGroupChanges.lower_bound(frame); change != m_FrameGroupChanges.end(); ++change) change->second &= ~SeatBit(peer);
 		if (frame <= m_Stats.nextFrame) m_FrameGroupMembers &= ~SeatBit(peer);
@@ -257,8 +256,7 @@ namespace RTE {
 				}
 				if (message.successorPeerId == m_Config.localPeerId && advanced && message.frame > 0) if (const auto sent = m_PeerInputSentAtMs.find(message.frame - 1); sent != m_PeerInputSentAtMs.end() && nowMs >= sent->second)
 				{
-					const auto group = m_FrameGroupChanges.upper_bound(message.frame - 1);
-					const uint32_t members = group == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(group)->second;
+					const uint32_t members = PeerFrameMembersAt(message.frame - 1);
 					const auto bridge = m_PeerBridges.find(message.senderPeerId);
 					const bool live = bridge == m_PeerBridges.end() || (bridge->second.returnFrame && message.appliedFrame >= *bridge->second.returnFrame);
 					// A private tail reader's delayed receipt measures its catch-up,

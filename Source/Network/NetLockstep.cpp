@@ -5460,7 +5460,7 @@ namespace RTE {
 		m_PeerTailPrefixes.clear(); m_PeerTailVotes.clear(); m_PeerTailDecisions.clear();
 		m_PeerPaceStartMs.reset(); m_PeerConsumerAtMs.reset(); m_PeerPaceStartFrame = 0; m_PeerPaceReference = GetHostPeerId(); m_PeerHadHitch = false;
 		if (!m_Config.peerSessionLinks) { PeerListenerBindings().clear(); PeerPrimaryBindings().clear(); }
-		m_FrameGroupChanges.clear(); m_PeerSplitRenewals.clear(); m_PeerDelayBelowSinceMs.clear();
+		m_FrameGroupChanges.clear(); m_PeerFrameHolds.clear(); m_PeerSplitRenewals.clear(); m_PeerDelayBelowSinceMs.clear();
 		m_PeerFrameTie.reset(); m_PeerFrameTieWinners.clear(); m_PeerFrameTieSinceMs = 0;
 		m_PeerAdminRequest.reset(); m_PeerAdminOwnVote.reset(); m_PeerAdminFrameMembers = 0;
 		m_PeerAdminReady.clear();
@@ -5524,13 +5524,17 @@ namespace RTE {
 				bridge.committedHold = true;
 				bridge.members = ((1U << m_Config.peerCount) - 1) & ~(1U << (peer - 1));
 				m_PeerBridges[peer] = std::move(bridge);
+				m_PeerFrameHolds[peer][hold.cutoffFrame] = true;
 				++m_Stats.peers[peer].holds;
 			}
 		}
 		m_ReclaimTransactions = m_Config.initialSeatReclaims;
 		for (const auto& [peer, reclaim]: m_ReclaimTransactions) {
 			NoteSeatTransition(peer, reclaim.activationFrame, SeatTransition::Back);
-			if (m_Config.peerFrameGroups && m_PeerBridges.contains(peer)) m_PeerBridges[peer].returnFrame = reclaim.activationFrame;
+			if (m_Config.peerFrameGroups && m_PeerBridges.contains(peer)) {
+				m_PeerBridges[peer].returnFrame = reclaim.activationFrame;
+				m_PeerFrameHolds[peer][reclaim.activationFrame] = false;
+			}
 			m_NextTimingRevision = std::max(m_NextTimingRevision, reclaim.eventSequence == UINT64_MAX ? UINT64_MAX : reclaim.eventSequence + 1);
 		}
 		if (m_Config.peerFrameGroups) {
@@ -10447,10 +10451,10 @@ namespace RTE {
 					m_Config.peerIncarnations[reclaim->peerId] = reclaim->seatIncarnation;
 					if (UsesPeerFrameGroups() && m_PeerBridges.contains(reclaim->peerId)) {
 						m_PeerBridges[reclaim->peerId].returnFrame = outFrame.frame;
-						const auto previous = m_FrameGroupChanges.upper_bound(outFrame.frame);
-						const uint32_t members = previous == m_FrameGroupChanges.begin() ? m_FrameGroupMembers : std::prev(previous)->second;
+						m_PeerFrameHolds[reclaim->peerId][outFrame.frame] = false;
+						const uint32_t members = PeerFrameMembersAt(outFrame.frame);
 						m_FrameGroupChanges[outFrame.frame] = members | (1U << (reclaim->peerId - 1));
-						m_FrameGroupMembers = m_FrameGroupChanges[outFrame.frame];
+						m_FrameGroupMembers = PeerFrameMembersAt(outFrame.frame);
 					}
 					m_AiHeldSeats.erase(reclaim->peerId); m_ReleasedAiSeats.erase(reclaim->peerId); m_HoldTransactions.erase(reclaim->peerId);
 					// The cause belongs to the hold that ended, not to a later hold of this seat.

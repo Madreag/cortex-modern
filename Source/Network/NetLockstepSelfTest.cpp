@@ -206,6 +206,74 @@ namespace RTE {
 			*error = "the eligible second return was not proposed"; return false;
 		}
 
+		static bool ReturnKeepsOtherSeatHeld(std::string* error) {
+			// Seed12: return2 at127 was signed while seat3 still played; hold3 at91 intervened.
+			for (bool returnFirst: {false, true}) for (uint8_t local: {1, 3}) {
+				Wire wire;
+				NetLockstepCoordinator peer;
+				Configure(peer, wire);
+				peer.m_Config.localPeerId = local; peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+				peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+				peer.m_Config.matchConfig.successorOrder = {2, 3, 4};
+				peer.m_Config.peerFrameGroups = true;
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 15; peer.m_FrameGroupChanges = {{1, 15}};
+				peer.m_LastCompletedSimulationTick = 50; peer.m_Stats.nextFrame = 51;
+				peer.m_MigrationHistory.clear(); peer.m_MigrationHistory[50] = {1, 2, 3};
+				const auto install = [&](uint8_t seat, bool held, uint64_t frame, uint32_t members, uint32_t voters) {
+					auto proposal = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+					proposal.frame = frame; proposal.boundary = 50; proposal.preparedFrame = held ? 0 : 1;
+					proposal.members = {seat}; proposal.connectedMask = members;
+					const auto prefix = peer.PeerAppliedFramePrefix(50);
+					proposal.bytes.assign(prefix.begin(), prefix.end());
+					const auto append32 = [](std::vector<uint8_t>& bytes, uint32_t value) {
+						for (unsigned shift = 0; shift < 32; shift += 8) bytes.push_back(static_cast<uint8_t>(value >> shift));
+					};
+					if (!held) { append32(proposal.bytes, 3); append32(proposal.bytes, 6); append32(proposal.bytes, 1); }
+					proposal.totalBytes = proposal.bytes.size();
+					auto certificate = proposal;
+					certificate.type = NetHostMigrationMessageType::PeerBridgeCommit;
+					certificate.voterMask = voters; certificate.bytes = {static_cast<uint8_t>(std::popcount(voters))};
+					for (uint8_t voter = 1; voter <= 4; ++voter) if ((voters & (1U << (voter - 1))) != 0) {
+						proposal.senderPeerId = voter; proposal.voterMask = 1U << (voter - 1);
+						std::vector<uint8_t> signedVote;
+						if (!NetHostMigrationCodec::Encode(proposal, peer.m_Config.migrationKey, signedVote)) return false;
+						append32(certificate.bytes, signedVote.size());
+						certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end());
+					}
+					certificate.totalBytes = certificate.bytes.size();
+					peer.InstallPeerBridge(certificate, 1000 + frame);
+					return peer.m_PeerBridgeCertificates.contains({frame, held ? 0 : 1});
+				};
+				if (!install(2, true, 51, 13, 15)) { *error = "the first signed hold was not installed"; return false; }
+				peer.m_Stats.nextFrame = 91;
+				if (returnFirst && !install(2, false, 127, 15, 15)) { *error = "the scheduled return was not installed"; return false; }
+				if (!install(3, true, 91, 9, 13)) { *error = "the intervening signed hold was not installed"; return false; }
+				if (!returnFirst && !install(2, false, 127, 15, 15)) { *error = "the later-delivered return was not installed"; return false; }
+				if (!install(3, false, 204, 15, 15)) { *error = "the named return for the other seat was not installed"; return false; }
+				for (const auto [frame, members]: std::array<std::pair<uint64_t, uint32_t>, 9>{{{50, 15}, {51, 13}, {90, 13}, {91, 9}, {126, 9}, {127, 11}, {175, 11}, {203, 11}, {204, 15}}}) {
+					peer.PreparePeerBridgeInputs(frame, 2000 + frame);
+					if (peer.m_FrameGroupMembers != members) {
+						*error = "return2 changed another seat's certified membership at frame" + std::to_string(frame); return false;
+					}
+					uint32_t voters = 15;
+					const uint32_t expectedVoters = frame == 127 ? 9 : frame == 204 ? 11 : members;
+					if (peer.PeerVotingOwners(voters, frame) != expectedVoters || voters != expectedVoters) {
+						*error = "a future return changed an earlier frame's voting seats"; return false;
+					}
+				}
+				peer.m_MigrationHistory[175] = {4, 5, 6};
+				peer.SendPeerFrameWitness(175);
+				const auto witness = peer.m_PeerFrameWitnesses[175].find(local);
+				if (local == 3 ? witness != peer.m_PeerFrameWitnesses[175].end() : witness == peer.m_PeerFrameWitnesses[175].end() || witness->second.voterMask != 11) {
+					*error = "the committed tail's witness resurrected the other held seat"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool HoldInvitation(std::string* error) {
 			for (bool produced: {false, true}) {
 				std::array<Wire, 2> wires;
@@ -29685,6 +29753,13 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "return-keeps-other-held") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ReturnKeepsOtherSeatHeld(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_return_cannot_return_another_held_seat" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "hold-invitation") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::HoldInvitation(&error)) return fail(error);
@@ -29760,6 +29835,7 @@ namespace {
 		row(&SeatAdmissionServiceTest::HeldHostAdoptsBaseCapture, "held_host_adopts_the_agreed_base_capture");
 		row(&SessionPlaneRecoveryTest::LinkDelay, "input_delay_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::ConcurrentReturnMembership, "a_later_return_keeps_the_earlier_scheduled_return");
+		row(&SessionPlaneRecoveryTest::ReturnKeepsOtherSeatHeld, "a_return_cannot_return_another_held_seat");
 		row(&SessionPlaneRecoveryTest::HoldInvitation, "an_unsigned_hold_invitation_never_fences_an_input");
 		row(&SessionPlaneRecoveryTest::OwnAheadHoldFence, "a_seat_co_signs_and_fences_its_own_future_hold");
 		row(&SessionPlaneRecoveryTest::HeldHostBaseCapture, "held_host_names_a_private_base_through_the_playing_seats");

@@ -64,8 +64,7 @@ namespace RTE {
 		if (!m_MigrationHistory.contains(frame)) return;
 		auto witness = PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
 		witness.preparedFrame = UINT64_MAX; witness.frame = witness.appliedFrame = frame;
-		const auto group = m_FrameGroupChanges.upper_bound(frame);
-		witness.voterMask = group == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(group)->second;
+		witness.voterMask = PeerFrameMembersAt(frame);
 		if ((witness.voterMask & SeatBit(m_Config.localPeerId)) == 0) {
 			// A private reader cannot witness this group's frame. Advertise its
 			// newly applied prefix on the next pump so return eligibility can
@@ -117,8 +116,7 @@ namespace RTE {
 			// Bound application work even when several pipelined requests
 			// overlap. A large record resumes at its last queued chunk.
 			if (queued.size() >= 128 || queuedBytes >= 4 * 1024 * 1024) break;
-			const auto membership = m_FrameGroupChanges.upper_bound(kept->first);
-			const uint32_t members = membership == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(membership)->second;
+			const uint32_t members = PeerFrameMembersAt(kept->first);
 			// The frame goes as soon as this donor displays it, with the witnesses it holds: the reader confirms the frame's group with
 			// the witnesses every member sends it too, so its trail is the transit alone.
 			const auto witnesses = m_PeerFrameWitnesses.find(kept->first);
@@ -310,6 +308,7 @@ namespace RTE {
 				// The matching majority's committed history already excludes this seat.
 				own.committedHold = true;
 				m_PeerBridges.emplace(m_Config.localPeerId, std::move(own));
+				m_PeerFrameHolds[m_Config.localPeerId][m_Stats.nextFrame] = true;
 				++m_Stats.peers[m_Config.localPeerId].holds;
 				m_SeatBridgeSinceMs[m_Config.localPeerId] = nowMs;
 			}
@@ -423,8 +422,7 @@ namespace RTE {
 		if (HasAgreedSeatReclaim(peer, frame)) return true;
 		auto proposal = PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
 		proposal.preparedFrame = 1; proposal.frame = frame; proposal.boundary = m_LastCompletedSimulationTick.value_or(m_Stats.nextFrame - 1);
-		proposal.members = {peer}; proposal.connectedMask = m_FrameGroupMembers | SeatBit(peer);
-		if (const auto group = m_FrameGroupChanges.upper_bound(frame); group != m_FrameGroupChanges.begin()) proposal.connectedMask = std::prev(group)->second | SeatBit(peer);
+		proposal.members = {peer}; proposal.connectedMask = PeerFrameMembersAt(frame) | SeatBit(peer);
 		for (const auto& [returned, bridge]: m_PeerBridges)
 			if (bridge.returnFrame && *bridge.returnFrame <= frame && !m_RemovedPeers.contains(returned) && !IsSeatReleased(returned)) proposal.connectedMask |= SeatBit(returned);
 		for (uint8_t voter = 1; voter <= m_Config.peerCount; ++voter) {
