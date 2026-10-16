@@ -1238,7 +1238,7 @@ static std::string ResyncSaveName() {
 					if (returning->deliveredThrough < finalFrame) continue;
 				}
 			}
-			m_WorldJoin.CancelJoin(peer.transportPeerId, "the round ended");
+			m_WorldJoin.CancelJoin(peer.transportPeerId, "the round ended", false);
 			const bool answered = m_Runner && m_Runner->GetLobbySession().BindLateRemote(c_WorldRefusalLobbyPeer, peer.transportPeerId, nullptr) &&
 			                      m_Runner->GetLobbySession().SendPayloadTo(c_WorldRefusalLobbyPeer, MakeWorldJoinReport(c_NetWorldReportRoundEnded, PackRoundEndedRecord(finalFrame, m_EndWinnerTeam)), nullptr);
 			if (!answered) {
@@ -4203,6 +4203,7 @@ static std::string ResyncSaveName() {
 			NetJoinHistoryEnd end;
 			end.connection = session.connection;
 			end.rebase = host.IsPrivateMatch() && !session.spectator;
+			end.lagged = std::string(reason) == "lag";
 			end.receipt = std::format("[round-history] reader ended connection={} peer={} kind={} reason={} applied={} horizon={} trail_frames={} lag_limit_frames={} first_servable={} action={} seat={}",
 			                          session.connection, static_cast<int>(session.assignedPeerId), session.spectator ? "watcher" : session.returnsToHeldSeat ? "returner" : "joiner", reason,
 			                          session.acknowledgedThrough, tick, trail, policy.lagLimitFrames, tail.FirstServableFrame(), end.rebase ? "rebased" : "closed",
@@ -4210,7 +4211,7 @@ static std::string ResyncSaveName() {
 			ending.push_back(std::move(end));
 		}
 		for (const NetJoinHistoryEnd& end: ending) {
-			host.EndBootstrap(end.connection, "the round's history no longer serves it");
+			host.EndBootstrap(end.connection, "the round's history no longer serves it", end.lagged);
 			System::PrintDiagnosticLine(end.receipt);
 		}
 		if (tail.JournalFailed() && tail.ReopenJournal(tick))
@@ -4333,9 +4334,11 @@ static std::string ResyncSaveName() {
 		}
 		if (output.capture) {
 			const bool joinCapture = IsJoinCaptureTick(tick);
-			// A peer replaying its catch-up is not live at this tick, and the host does not wait on it.
+			// A peer replaying its catch-up is not live at this tick, and the host does not wait on it - nor on a seat reading the round's
+			// tail privately, which replays this tick late; the host's own held seat still names the round's park.
 			bool taken = false;
-			if (!ScenarioRunner::WorldCatchUpActive() && g_ActivityMan.ActivityRunning()) {
+			const bool privateReader = m_Coordinator && !m_IsHost && m_Coordinator->IsLocalPrivateReaderAt(tick);
+			if (!ScenarioRunner::WorldCatchUpActive() && !privateReader && g_ActivityMan.ActivityRunning()) {
 				if (m_Coordinator) m_Coordinator->BeginSynchronizedCapture(tick);
 				const auto captureBegan = RTE::SteadyClock::now();
 				CrossCaptureBarrierFromEnvironment("capture_announced", tick, m_AutosaveIdentity.roundId);
@@ -4906,6 +4909,7 @@ static std::string ResyncSaveName() {
 		if (!session.matchConfigSent) {
 			if (!lobby.SendMatchConfigTo(lobbyPeer)) return false;
 			m_WorldJoin.NoteMatchConfigSent(session.connection);
+			if (m_WorldJoin.IsPrivateMatch()) m_SuccessorCapsulesOwed.insert(session.connection);
 		}
 		// The bytes and their digest were read once, when the image was published; re-reading the
 		// archive per pump is a sim-thread stall the world pays for every waiting bootstrap.
@@ -5189,7 +5193,7 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		// The fresh capture never answered either: the returning seats stay with the AI that holds them.
-		for (const NetPeerId connection: waiting) m_WorldJoin.CancelJoin(connection, "the host could not stage the rejoin image");
+		for (const NetPeerId connection: waiting) m_WorldJoin.CancelJoin(connection, "the host could not stage the rejoin image", false);
 		m_PrivateImageRecaptured = false;
 		std::ostringstream line;
 		line << "[net-match] private rejoin refused: no checkpoint within two captures; " << waiting.size() << " seat(s) stay with the AI";
@@ -5301,6 +5305,7 @@ static std::string ResyncSaveName() {
 		m_WorldJoin.ReleaseLostConnections(live);
 		std::erase_if(m_PrivateActivations, [&](NetPeerId connection) { return m_WorldJoin.FindSession(connection) == nullptr; });
 		std::erase_if(m_PrivateTransferHeldReasons, [&](const auto& entry) { return m_WorldJoin.FindSession(entry.first) == nullptr; });
+		std::erase_if(m_SuccessorCapsulesOwed, [&](NetPeerId connection) { return m_WorldJoin.FindSession(connection) == nullptr; });
 		std::erase_if(m_ReturnerLinkSettlesMs, [&](const auto& entry) { return m_WorldJoin.FindSession(entry.first) == nullptr; });
 		std::erase_if(m_PrivateJoinBlobs, [&](const auto& task) { return m_WorldJoin.FindSession(task.first) == nullptr &&
 		    task.second.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; });
@@ -5309,8 +5314,16 @@ static std::string ResyncSaveName() {
 			// or it waits for a config that was sent while it could not hear it.
 			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.matchConfigSent && m_Runner->GetLobbySession().IsRemoteConnectionLobbyUp(session.assignedPeerId) &&
 			    m_Runner->GetLobbySession().SendMatchConfigTo(session.assignedPeerId)) {
-				SendSuccessorCapsuleToLocked(session.assignedPeerId);
 				m_WorldJoin.NoteMatchConfigSent(session.connection);
+				m_SuccessorCapsulesOwed.insert(session.connection);
+			}
+			// A seat applies its config only with its successor capsule, so a capsule that could not be sealed yet is tried again each pump.
+			if (m_SuccessorCapsulesOwed.contains(session.connection) && m_Runner->GetLobbySession().IsRemoteConnectionLobbyUp(session.assignedPeerId)) {
+				if (SendSuccessorCapsuleToLocked(session.assignedPeerId)) m_SuccessorCapsulesOwed.erase(session.connection);
+				else if (const std::string why = "its successor capsule could not be sealed yet"; m_PrivateTransferHeldReasons[session.connection] != why) {
+					m_PrivateTransferHeldReasons[session.connection] = why;
+					System::PrintDiagnosticLine("[net-match] private transfer waits peer=" + std::to_string(session.assignedPeerId) + ": " + why);
+				}
 			}
 			if (m_Coordinator->IsSeatReleased(session.assignedPeerId)) m_Coordinator->NoteAdmissionLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
 			else m_Coordinator->NoteReturningLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
@@ -5370,14 +5383,16 @@ static std::string ResyncSaveName() {
 				const bool scheduled = m_Coordinator->IsSeatReleased(session.assignedPeerId)
 				    ? m_Coordinator->SchedulePeerAdmission(session.assignedPeerId, session.connection, session.incarnation, session.activationTick, &error, session.activationTrailFrames)
 				    : m_Coordinator->SchedulePeerReclaim(session.assignedPeerId, session.connection, session.incarnation, session.activationTick, &error, session.activationTrailFrames);
+				// A refused reclaim is this returner's alone: it tries again on the next pump, and every other returner's image still leaves.
 				if (!scheduled) {
 					if (m_PrivateTransferHeldReasons[session.connection] != error) {
 						m_PrivateTransferHeldReasons[session.connection] = error;
 						System::PrintDiagnosticLine("[net-match] reclaim not scheduled peer=" + std::to_string(session.assignedPeerId) + " e=" + std::to_string(session.activationTick) +
 						                            " incarnation=" + std::to_string(session.incarnation) + ": " + error);
 					}
-					m_PrivateJoinError = error; continue;
+					continue;
 				}
+				m_PrivateTransferHeldReasons.erase(session.connection);
 				m_PrivateActivations.insert(session.connection);
 				m_WorldJoin.MarkActivationProposed(session.connection);
 				(void)m_Coordinator->SendReturnerTheRoundFrom(session.assignedPeerId, session.activationTick);
@@ -5393,11 +5408,11 @@ static std::string ResyncSaveName() {
 				m_Coordinator->NoteReturnerCatchingUp(session.assignedPeerId, NetLockstepNowMs());
 		}
 		// After the walk: CancelJoin erases from the vector the loop above is iterating.
-		for (const NetPeerId connection: missed) m_WorldJoin.CancelJoin(connection, "the returner could not be moved past the capture park");
+		for (const NetPeerId connection: missed) m_WorldJoin.CancelJoin(connection, "the returner could not be moved past the capture park", false);
 	}
 
 	void NetMatchService::FeedRosterReturnsLocked() {
-		for (const uint8_t peer: m_WorldJoin.TakeCancelledJoins()) m_ReconnectHost.NoteReturnAborted(peer);
+		for (const auto& [peer, returnerFailed]: m_WorldJoin.TakeCancelledJoinCauses()) m_ReconnectHost.NoteReturnAborted(peer, returnerFailed);
 		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions())
 			if (session.phase == NetWorldJoinPhase::CatchingUp || session.phase == NetWorldJoinPhase::Active) m_ReconnectHost.NoteReturnWorldReady(session.assignedPeerId);
 		if (!m_Coordinator || !m_Coordinator->IsRunning()) return;
@@ -5428,20 +5443,17 @@ static std::string ResyncSaveName() {
 		return false;
 	}
 
-	void NetMatchService::SendSuccessorCapsuleToLocked(uint8_t member) {
+	bool NetMatchService::SendSuccessorCapsuleToLocked(uint8_t member) {
 		// A match that names its successors withholds its config from a returner until it holds its successor capsule,
 		// so the capsule follows the config as a lobby round sends them.
 		NetLobbySession& lobby = m_Runner->GetLobbySession();
-		if (lobby.GetMatchConfig().successorOrder.empty()) return;
+		if (lobby.GetMatchConfig().successorOrder.empty()) return true;
 		NetLobbyMigration capsule;
 		capsule.kind = 2;
 		capsule.peerId = member;
 		capsule.configHash = lobby.GetMatchConfigHash();
-		if (!SealMigrationCapsuleLocked(member, capsule.configHash, capsule.sealedState)) {
-			System::PrintDiagnosticLine("[net-match] no successor capsule could be sealed for returning peer " + std::to_string(member));
-			return;
-		}
-		(void)lobby.SendPayloadTo(member, capsule, nullptr);
+		if (!SealMigrationCapsuleLocked(member, capsule.configHash, capsule.sealedState)) return false;
+		return lobby.SendPayloadTo(member, capsule, nullptr);
 	}
 
 	void NetMatchService::AnswerStalledReturnersLocked(uint64_t nowMs) {
@@ -5464,7 +5476,7 @@ static std::string ResyncSaveName() {
 				if (!session.spectator && session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted) ended.push_back(session.connection);
 			for (const NetPeerId connection: ended) {
 				System::PrintDiagnosticLine("[net-match] rejoin answered connection=" + std::to_string(connection) + ": the match is over");
-				m_WorldJoin.CancelJoin(connection, "the match is over");
+				m_WorldJoin.CancelJoin(connection, "the match is over", false);
 				m_ToldMatchOver.insert(connection);
 			}
 			if (!ended.empty() && m_Coordinator) {
@@ -5514,7 +5526,8 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::RefuseReturnerLocked(NetPeerId connection, const std::string& reason, const std::string& text) {
 		if (m_Session) m_Session->DisconnectReadyPeer(connection, NetRejectReason::HostNotAccepting, text);
-		m_WorldJoin.CancelJoin(connection, reason);
+		// Every refusal here is the host's: a base it could not stage, or the roster's own backoff.
+		m_WorldJoin.CancelJoin(connection, reason, false);
 	}
 
 	bool NetMatchService::MovePrivateActivationPastPark(const NetWorldJoinSession& session) {
@@ -5600,7 +5613,7 @@ static std::string ResyncSaveName() {
 			(void)m_WorldJoin.Membership().Release(held.peerId, nullptr);
 			(void)ScenarioRunner::SubmitWorldTransition(release);
 			NoteWorldReleaseLocked(m_ReconnectHost.GetSeatStatuses(), held.peerId, held.stableSeat, m_Coordinator->GetStats().nextFrame);
-			if (held.connection != c_InvalidNetPeerId) m_WorldJoin.CancelJoin(held.connection, "left while the AI held the seat");
+			if (held.connection != c_InvalidNetPeerId) m_WorldJoin.CancelJoin(held.connection, "left while the AI held the seat", false);
 			System::PrintDiagnosticLine("[net-world] release held peer=" + std::to_string(static_cast<int>(held.peerId)) + ": its player left while the AI held the seat");
 		}
 		// A member the roster seated before the round started holds its slot: a later join never takes it.
@@ -5697,7 +5710,7 @@ static std::string ResyncSaveName() {
 		}
 		// After the walk: CancelJoin erases from the vector the loop above is iterating.
 		for (const auto& [connection, reason]: unstartable) {
-			m_WorldJoin.CancelJoin(connection, reason);
+			m_WorldJoin.CancelJoin(connection, reason, false);
 			{
 				std::ostringstream line;
 				line << "[net-world] cancel bootstrap connection=" << connection << " " << reason;
@@ -5756,7 +5769,7 @@ static std::string ResyncSaveName() {
 			release.team = leave.team;
 			(void)m_WorldJoin.Membership().Release(leave.peerId, nullptr);
 			(void)ScenarioRunner::SubmitWorldTransition(release);
-			if (leave.connection != c_InvalidNetPeerId) m_WorldJoin.CancelJoin(leave.connection, "clean leave");
+			if (leave.connection != c_InvalidNetPeerId) m_WorldJoin.CancelJoin(leave.connection, "clean leave", false);
 			NoteWorldReleaseLocked(seatStatuses, leave.peerId, leave.stableSeat, nowFrame);
 			{
 				std::ostringstream line;
@@ -6388,7 +6401,7 @@ static std::string ResyncSaveName() {
 		}
 		for (const NetPeerId stale: overtaken) {
 			m_PrivateActivations.erase(stale);
-			m_WorldJoin.CancelJoin(stale, "the seat was held again after its return");
+			m_WorldJoin.CancelJoin(stale, "the seat was held again after its return", false);
 			System::PrintDiagnosticLine("[net-match] held seat peer=" + std::to_string(member) + " was held again after its return; its next catch-up replaces the last");
 		}
 		const std::optional<uint16_t> seat = m_ReconnectHost.StableSeatOfConnection(connection);
@@ -6401,7 +6414,7 @@ static std::string ResyncSaveName() {
 		if (heldBeforeHandover && heldThrough >= m_HandoverFrame) error = "its state ran past the handover at " + std::to_string(m_HandoverFrame);
 		else if (!heldBeforeHandover && heldThrough >= hold->second.cutoffFrame) error = "its state ran past the hold at " + std::to_string(hold->second.cutoffFrame);
 		// The connection's last return is done: its reclaim and its reasons belong to that return, not to this one.
-		if (m_WorldJoin.FindSession(connection)) m_WorldJoin.CancelJoin(connection, "the seat was held again");
+		if (m_WorldJoin.FindSession(connection)) m_WorldJoin.CancelJoin(connection, "the seat was held again", false);
 		m_PrivateActivations.erase(connection);
 		m_PrivateTransferHeldReasons.erase(connection);
 		// A return a lost host agreed and this round passed still spent its incarnation on every peer.

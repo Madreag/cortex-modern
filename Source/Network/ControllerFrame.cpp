@@ -348,6 +348,11 @@ namespace RTE {
 	std::vector<uint8_t> ControllerFrameCodec::Encode(const ControllerFrame& frame) {
 		std::vector<uint8_t> out;
 		out.reserve(ControllerFrame::c_EncodedSize);
+		EncodeTo(out, frame);
+		return out;
+	}
+
+	void ControllerFrameCodec::EncodeTo(std::vector<uint8_t>& out, const ControllerFrame& frame) {
 		AppendI64LE(out, frame.actorUniqueID);
 		AppendU64LE(out, frame.stateMask);
 		AppendI16LE(out, frame.analogMoveX);
@@ -374,7 +379,6 @@ namespace RTE {
 		AppendF32LE(out, frame.digitalAimSpeed);
 		AppendU8(out, frame.hatchCommand);
 		AppendU16LE(out, frame.mouseButtons);
-		return out;
 	}
 
 	// A repaired tick has to be the tick the original carried down to the bytes, and the desync check reads

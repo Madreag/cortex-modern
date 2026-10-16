@@ -503,7 +503,8 @@ namespace RTE {
 		std::vector<uint8_t> PlayingPeers() const;
 		std::vector<uint8_t> HeldInPlacePeers() const;
 		/// A returning seat's transfer was abandoned: the AI keeps the seat and the return is offered again after the roster's backoff.
-		void NoteReturnAborted(uint8_t lockstepPeerId);
+		/// A return ended before its seat played; only one the returner's own failure ended counts toward its attempts.
+		void NoteReturnAborted(uint8_t lockstepPeerId, bool returnerFailed = true);
 		/// The lockstep peers whose seats are on their way back, through the image or the catch-up.
 		std::vector<uint8_t> ReturningPeers() const;
 		/// A seat whose return failed while its player stayed connected: true when the return is offered again now (its backoff over,
@@ -658,7 +659,7 @@ namespace RTE {
 		/// When the holder went away, on this plane's clock; 0 while it is here.
 		uint64_t HolderAwaySinceMs(const SeatState& seat) const;
 		/// Every change to a seat's hold goes through the roster's one transition function.
-		void ApplySeatEvent(const SeatState& seat, NetRosterEventKind kind, bool byChoice = false, bool keptWorld = false, NetSeatHoldCause cause = NetSeatHoldCause::None);
+		void ApplySeatEvent(const SeatState& seat, NetRosterEventKind kind, bool byChoice = false, bool keptWorld = false, NetSeatHoldCause cause = NetSeatHoldCause::None, bool excused = false);
 		/// The roster holds the seat for its player: it has an owner who is away while the AI plays it.
 		bool RosterHoldsSeat(const SeatState& seat) const;
 		void ApplyStageEvent(NetRosterEventKind kind, uint64_t frame = 0);
