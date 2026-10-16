@@ -868,15 +868,6 @@ namespace RTE {
 		/// @return The number of waypoints in the MovePath.
 		int GetMovePathSize() const { return m_MovePath.size(); }
 
-		/// The points of this' current move path, in order.
-		const CheckpointList<Vector>& GetMovePath() const { return m_MovePath; }
-
-		/// A point of this' current move path by its place along it, or nullptr past its end.
-		Vector* GetMovePathPoint(size_t index) {
-			for (Vector& point: m_MovePath) if (index-- == 0) return &point;
-			return nullptr;
-		}
-
 		/// Returns whether we're waiting on a new pending movepath.
 		/// @return Whether we're waiting on a new pending movepath.
 		bool IsWaitingOnNewMovePath() const { return m_PathRequest != nullptr || m_UpdateMovePath; }

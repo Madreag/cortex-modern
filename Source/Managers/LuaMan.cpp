@@ -6398,11 +6398,11 @@ static bool RunStaleActivityReferenceSelfTest(LuaStateWrapper& lua) {
 }
 
 // A device's script keeps handles to the slices it put into its holder's pie menu (the Coalition grenade launcher's), and an AI
-// behavior coroutine keeps its waypoint as a reference into its actor's move path (SharedBehaviors.GoToWpt). Both captures write
-// them; the restore gives back the same slice of the same actor's menu, a slice its menu deleted as a gone reference with its
-// identity, and a live alias of the same move path point.
+// behavior coroutine keeps its waypoint as a reference to its move target's position (SharedBehaviors.GoToWpt:
+// 'Waypoint.Pos = Owner.MOMoveTarget.Pos'), a target that can be gone by the capture. Both captures write them; the restore
+// gives back the same slice of the same actor's menu, a slice its menu deleted as a gone reference with its identity, a live
+// alias of a living target's position, and the last position of a target that is gone.
 static bool RunEngineHandleSelfTest(LuaStateWrapper& lua) {
-	lua_State* L = lua.GetLuaState();
 	const bool planted = lua.RunScriptString(R"lua(
 _F5Handles = {}
 local function holding(x)
@@ -6421,21 +6421,41 @@ _F5Handles.goneAlias = _F5Handles.gone
 assert(_F5Handles.live ~= nil and _F5Handles.gone ~= nil, "a held Constructor put no options slice into its holder's menu")
 -- The device leaves its holder's hands: the menu deletes the slices it put there, and the handles point at nothing.
 _F5Handles.dropper:UnequipArms()
-_F5Handles.holder:AddToMovePathEnd(Vector(330, 200))
-_F5Handles.holder:AddToMovePathEnd(Vector(360, 200))
-_F5Handles.walker = coroutine.create(function(owner)
-	local Waypoint
-	for pos in owner.MovePath do Waypoint = {}; Waypoint.Pos = pos; break end
-	coroutine.yield()
-	return Waypoint.Pos.X
-end)
-assert(coroutine.resume(_F5Handles.walker, _F5Handles.holder))
+local target = CreateMOPixel("Spark Yellow 1", "Base.rte")
+target.Pos = Vector(610, 190)
+target.Vel = Vector(0, 0)
+MovableMan:AddParticle(target)
+_F5Handles.targetUID = target.UniqueID
+local function waypointTo(mo)
+	return coroutine.create(function()
+		local Waypoint = {}
+		Waypoint.Pos = mo.Pos
+		coroutine.yield()
+		return Waypoint.Pos.X, Waypoint.Pos.Y
+	end)
+end
+_F5Handles.follower = waypointTo(_F5Handles.holder)
+_F5Handles.chaser = waypointTo(target)
+assert(coroutine.resume(_F5Handles.follower) and coroutine.resume(_F5Handles.chaser))
 )lua") == 0;
+	// The chaser's target is deleted before the capture; the waypoint still holds its position.
+	bool targetGone = false;
+	if (planted) {
+		lua_State* L = lua.GetLuaState();
+		lua_getglobal(L, "_F5Handles");
+		lua_getfield(L, -1, "targetUID");
+		const long uid = static_cast<long>(lua_tointeger(L, -1));
+		lua_pop(L, 2);
+		if (MovableObject* target = g_MovableMan.FindObjectByUniqueID(uid); target && g_MovableMan.RemoveParticle(target) == target) {
+			delete target;
+			targetGone = true;
+		}
+	}
 	std::string text;
 	CheckpointText frozen;
 	std::vector<std::string> problems, frozenProblems;
 	bool captured = false, frozenSame = false;
-	if (planted) {
+	if (planted && targetGone) {
 		// A world capture opens these at its fence; the live walk is what it falls back to.
 		MovableMan::KnownObjectsScope known;
 		LuaScriptGraphNativeCaptureScope lookups;
@@ -6451,7 +6471,7 @@ assert(coroutine.resume(_F5Handles.walker, _F5Handles.holder))
 	}
 	for (const std::string& problem: problems) std::cout << "[engine-handle-selftest] live capture: " << problem << std::endl;
 	for (const std::string& problem: frozenProblems) std::cout << "[engine-handle-selftest] frozen capture: " << problem << std::endl;
-	bool restored = false, alias = false, kept = false;
+	bool restored = false, kept = false, followed = false, remembered = false;
 	if (captured) {
 		std::vector<std::string> restoreProblems;
 		restored = lua.RestoreScriptGraph(text, restoreProblems) && restoreProblems.empty();
@@ -6468,49 +6488,14 @@ _F5Handles.live.Enabled = enabled
 assert(type(_F5Handles.gone) == "userdata" and rawequal(_F5Handles.gone, _F5Handles.goneAlias), "the gone slice's handle was dropped or split")
 assert(_ScriptGraphNative(_F5Handles.gone) == "invalid", "the gone slice's handle came back as a live slice")
 )lua") == 0;
-		// The point changes in place in the restored actor's path; the coroutine reads it through the reference it kept.
-		lua_getglobal(L, "_F5Handles");
-		lua_getfield(L, -1, "holder");
-		auto* holder = luabind::detail::is_class_object(L, -1);
-		Vector* point = holder && holder->ptr() ? static_cast<Actor*>(holder->ptr())->GetMovePathPoint(0) : nullptr;
-		lua_pop(L, 2);
-		if (point) point->SetX(777.25F);
-		alias = point && lua.RunScriptString("local ok, x = coroutine.resume(_F5Handles.walker); assert(ok and x == 777.25, 'the waypoint read ' .. tostring(x) .. ', not its path point')") == 0;
-	}
-	// What a capture makes of a reference to a point its path has since dropped (GoToWpt's PrevWptPos after RemoveMovePathBeginning):
-	// reported, not judged.
-	if (planted && lua.RunScriptString(R"lua(
-_F5Handles.dropped = coroutine.create(function(owner)
-	local prev
-	for pos in owner.MovePath do prev = pos; break end
-	owner:RemoveMovePathBeginning()
-	coroutine.yield()
-	return prev
-end)
-assert(coroutine.resume(_F5Handles.dropped, _F5Handles.holder))
-)lua") == 0) {
-		std::string droppedText;
-		CheckpointText droppedFrozen;
-		std::vector<std::string> droppedLive, droppedImage;
-		{
-			MovableMan::KnownObjectsScope known;
-			LuaScriptGraphNativeCaptureScope lookups;
-			lua.SerializeScriptGraph(droppedText, droppedLive);
-			try {
-				lua.CaptureScriptGraph(droppedFrozen, droppedImage, true);
-			} catch (const ScriptGraphRefusal& refusal) {
-				droppedImage.insert(droppedImage.end(), refusal.problems.begin(), refusal.problems.end());
-			} catch (const std::exception& error) {
-				droppedImage.emplace_back(error.what());
-			}
-		}
-		std::cout << "[engine-handle-selftest] note dropped_path_point live=" << (droppedLive.empty() ? std::string("captured") : droppedLive.front())
-		          << " frozen=" << (droppedImage.empty() ? std::string("captured") : droppedImage.front()) << std::endl;
+		// The living target moves after the restore; the waypoint reads it through the reference it kept.
+		followed = restored && lua.RunScriptString("_F5Handles.holder.Pos = Vector(555.5, 201); local ok, x, y = coroutine.resume(_F5Handles.follower); assert(ok and x == 555.5 and y == 201, 'the follower read ' .. tostring(x) .. ', not its target')") == 0;
+		remembered = restored && lua.RunScriptString("local ok, x, y = coroutine.resume(_F5Handles.chaser); assert(ok and x == 610 and y == 190, 'the chaser read ' .. tostring(x) .. ', not its gone target\'s last position')") == 0;
 	}
 	lua.RunScriptString("MovableMan:RemoveActor(_F5Handles.holder); MovableMan:RemoveActor(_F5Handles.dropper); _F5Handles = nil; collectgarbage()");
-	const bool passed = planted && captured && frozenSame && restored && kept && alias;
-	std::cout << "[engine-handle-selftest] " << (passed ? "PASS" : "FAIL") << " planted=" << planted << " live_captured=" << captured << " frozen_same=" << frozenSame
-	          << " restored=" << restored << " slices_kept=" << kept << " path_alias_live=" << alias << std::endl;
+	const bool passed = planted && targetGone && captured && frozenSame && restored && kept && followed && remembered;
+	std::cout << "[engine-handle-selftest] " << (passed ? "PASS" : "FAIL") << " planted=" << planted << " target_gone=" << targetGone << " live_captured=" << captured
+	          << " frozen_same=" << frozenSame << " restored=" << restored << " slices_kept=" << kept << " follower_alias_live=" << followed << " chaser_kept_last=" << remembered << std::endl;
 	return passed;
 }
 
