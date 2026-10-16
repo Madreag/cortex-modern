@@ -2458,21 +2458,32 @@ namespace RTE {
 		bool CheckReplayConvergence(std::string& error) {
 			struct Release { ~Release() { ScenarioRunner::ReleaseWorldCatchUp(); } } release;
 			std::vector<NetLockstepFrame> tail;
-			for (uint64_t tick = 401; tick <= 2400; ++tick) { NetLockstepFrame frame; frame.senderPeerId = 1; frame.roundId = 77; frame.targetFrame = tick; tail.push_back(std::move(frame)); }
+			const auto appendFrame = [](std::vector<NetLockstepFrame>& frames, uint64_t tick) {
+				NetLockstepFrame frame; frame.senderPeerId = 1; frame.roundId = 77; frame.targetFrame = tick; frames.push_back(std::move(frame));
+			};
+			for (uint64_t tick = 401; tick <= 640; ++tick) appendFrame(tail, tick);
 			if (!ScenarioRunner::InstallWorldCatchUp(400, std::move(tail), &error)) return false;
-			uint64_t applied = 400; double elapsedMs = 0;
-			for (unsigned draws = 0; draws < 180; ++draws) {
-				ScenarioRunner::BeginWorldCatchUpFrame();
-				unsigned ticks = 0;
-				while (ScenarioRunner::TakeWorldCatchUpGrant(applied + 1)) {
+			uint64_t applied = 400, committed = 640; double elapsedMs = 0;
+			const auto began = SteadyNow();
+			const auto at = [&](double ms) { return began + std::chrono::duration_cast<SteadyClock::duration>(std::chrono::duration<double, std::milli>(ms)); };
+			const auto receiveCommitted = [&] {
+				std::vector<NetLockstepFrame> arrived;
+				const uint64_t head = 640 + static_cast<uint64_t>(elapsedMs / c_TestTickMs);
+				while (committed < head) appendFrame(arrived, ++committed);
+				ScenarioRunner::AppendWorldCatchUp(std::move(arrived));
+			};
+			while (elapsedMs < 120000) {
+				ScenarioRunner::BeginWorldCatchUpFrame(10.0, -1.0, at(elapsedMs));
+				while (ScenarioRunner::TakeWorldCatchUpGrant(applied + 1, at(elapsedMs))) {
 					NetLockstepReadyFrame ready;
 					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(applied + 1, ready, &error)) return false;
-					++applied; ++ticks; ScenarioRunner::NoteWorldCatchUpTickCost(applied, 12000, 12000);
+					++applied; elapsedMs += 12.0; ScenarioRunner::NoteWorldCatchUpTickCost(applied, 12000, 12000);
+					// A tail can arrive between tick boundaries, but never before the playing round committed it.
+					receiveCommitted();
+					if (applied >= committed) return true;
 				}
-				elapsedMs += ticks * 12.0 + 10.0;
-				const uint64_t horizon = 640 + static_cast<uint64_t>(elapsedMs / c_TestTickMs);
-				if (applied >= horizon) return true;
-				if (!ticks) break;
+				elapsedMs += 10.0;
+				receiveCommitted();
 			}
 			error = "seed=0 private replay at 12ms per tick plus a 10ms draw never closed its 240-frame trail"; return false;
 		}
