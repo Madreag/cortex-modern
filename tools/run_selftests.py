@@ -432,6 +432,29 @@ def run_lockstep_cli(repo, make_run, case, timeout):
 
 
 def run_row(options, make_run, name, case, sanitizer):
+    # These probes assert the headless policy itself. A headed-only collection
+    # must explicitly permit their mode; it must never score a headed run as one.
+    headless_policy = getattr(options, "headless_policy_rows", False) and name in {
+        "headless-assert-continues", "headless-render-cap"
+    }
+    if not headless_policy:
+        return run_row_in_mode(options, make_run, name, case, sanitizer)
+    keys = ("CC_RUNNER_HEADED", "CC_TEST_VISIBLE_WINDOW", "CCCP_HEADLESS")
+    previous = {key: os.environ.get(key) for key in keys}
+    try:
+        os.environ.update(CC_RUNNER_HEADED="0", CC_TEST_VISIBLE_WINDOW="0", CCCP_HEADLESS="1")
+        result = run_row_in_mode(options, make_run, name, case, sanitizer)
+        result["presentation"] = "explicit headless-policy probe"
+        return result
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def run_row_in_mode(options, make_run, name, case, sanitizer):
     if name in LOAD_SENSITIVE:
         budget = max(options.timeout, SANITIZER_ROW_TIMEOUT.get(name, {}).get(sanitizer, 0))
         run = make_run(options.repo, LOAD_SENSITIVE[name], case, budget, fixtures=SELFTEST_FIXTURES.get(name))
@@ -445,6 +468,18 @@ def run_row(options, make_run, name, case, sanitizer):
             scored = score_wall_clock_informational(stdout, record, name, sanitizer)
         scored["binary"] = record.get("exe_sha256")
         scored["load_sensitive"] = True
+    elif name == "module-version" and sys.platform.startswith("linux") and any(
+        os.environ.get(key) == "1" for key in ("CC_RUNNER_HEADED", "CC_TEST_VISIBLE_WINDOW")
+    ):
+        from test_module_version_warning import run_case as version_case  # noqa: PLC0415
+
+        record = version_case(options.repo, case, options.timeout)
+        stdout = (case / "stdout.log").read_text(errors="replace") if (case / "stdout.log").exists() else ""
+        scored = score_selftest(stdout, record.get("exit_code"), record.get("timed_out"), "module-version-selftest")
+        scored["binary"] = record.get("exe_sha256")
+        scored["warning_acknowledgment"] = record.get("warning_acknowledgment", {})
+        if not scored["warning_acknowledgment"].get("action") == "Return":
+            scored.update(**{"pass": False, "reason": "expected owned module warning was not acknowledged"})
     elif name == "headless-assert-continues":
         from test_headless_assert import run_case as assert_case  # noqa: PLC0415
 
@@ -597,6 +632,8 @@ def main():
                         help="also run every load-sensitive row in the quiet tail (only: the tail alone)")
     parser.add_argument("--only", action="append", default=[], metavar="ROW",
                         help="run just this row (repeatable); product failures remain failures")
+    parser.add_argument("--headless-policy-rows", action="store_true",
+                        help="explicitly run only the two headless-policy probes in headless mode, even in a headed collection")
     parser.add_argument("--self-test", action="store_true", help="the runner's own rows; no engine")
     options = parser.parse_args()
 
