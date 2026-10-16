@@ -2185,6 +2185,22 @@ namespace RTE {
 		const std::vector<ScheduleRow>& FixedScheduleRows() {
 			// Each seat's routine check-ins went out 1.7 s apart before the round, as the fixed rows above have them.
 			static const std::vector<ScheduleRow> rows = {
+				// Current-client groups: the minimized counterexample, plus its original seat/referee shape when shrinking changes it.
+				{"four_direct_seats_120ms_jitter_40ms_host_late_100ms_more_928ms_seat3_silent_200ms_back_at_105pc_loss_10pc_host_engine_failed_seed_42", "seed=42 seats=4 internet=0 exchange=100 end=16840 rtt=90,87,106,107,97,120 jitter=5,0,20,0,10,40 recover=300,300,105,120 phase=3851,2957,1974,3572 spell=1:late:5377:928:100 spell=3:silent:4640:200 burst=1:7122:1100:10"},
+				{"three_internet_seats_56ms_jitter_20ms_host_silent_200ms_back_at_100pc_host_hung_900ms_back_at_100pc_loss_90pc_seat3_loss_90pc_host_histories_differ_seed_127", "seed=127 seats=3 internet=1 exchange=100 end=17412 rtt=44,56,46 jitter=5,0,20 recover=100,300,100 phase=1745,1966,3496 spell=1:silent:5978:200 spell=1:hung:8062:900 burst=3:4947:1923:90 burst=1:7800:323:90"},
+				{"two_direct_seats_42ms_host_stopped_200ms_back_at_100pc_seat2_slow_74pc_737ms_held_seat_never_returns_seed_163", "seed=163 seats=2 internet=0 exchange=100 end=16149 rtt=42 jitter=0 recover=100,300 phase=0,0 spell=1:stopped:6000:200 spell=2:slow:7317:737:74"},
+				{"two_internet_seats_42ms_jitter_10ms_directory_40ms_host_stopped_464ms_back_at_100pc_seat2_slow_64pc_5902ms_host_silent_936ms_back_at_100pc_held_seat_never_returns_seed_163", "seed=163 seats=2 internet=1 exchange=40 end=22281 rtt=42 jitter=10 recover=100,300 phase=4776,3197 spell=1:stopped:6905:464 spell=2:slow:7317:5902:64 spell=1:silent:4302:936"},
+				{"two_direct_seats_170ms_seat2_slow_88pc_200ms_back_at_120pc_loss_60pc_seat2_held_seat_never_returns_seed_79", "seed=79 seats=2 internet=0 exchange=100 end=18279 rtt=170 jitter=0 recover=300,120 phase=0,0 spell=2:slow:4622:200:88 burst=2:9373:2906:60"},
+				{"four_internet_seats_226ms_jitter_5ms_directory_160ms_seat4_slow_68pc_4576ms_back_at_120pc_loss_60pc_seat4_held_seat_never_returns_seed_79", "seed=79 seats=4 internet=1 exchange=160 end=24518 rtt=184,226,170,164,192,202 jitter=0,0,0,5,0,0 recover=105,300,300,120 phase=1676,4320,3581,1557 spell=4:slow:4622:4576:68 burst=4:9373:2906:60"},
+				{"three_internet_seats_56ms_host_slow_90pc_895ms_back_at_100pc_seat2_silent_186ms_held_seat_returns_late_seed_116", "seed=116 seats=3 internet=1 exchange=100 end=14279 rtt=56,44,54 jitter=0,0,0 recover=100,300,300 phase=0,0,0 spell=1:slow:4109:895:90 spell=2:silent:6000:186"},
+				{"three_direct_seats_120ms_host_hung_200ms_back_at_105pc_held_seat_returns_late_seed_100", "seed=100 seats=3 internet=0 exchange=100 end=18200 rtt=120,120,120 jitter=0,0,0 recover=105,300,300 phase=0,0,0 spell=1:hung:6000:200"},
+				{"four_direct_seats_120ms_jitter_40ms_host_hung_750ms_back_at_105pc_held_seat_returns_late_seed_100", "seed=100 seats=4 internet=0 exchange=300 end=30636 rtt=90,86,113,120,107,119 jitter=20,0,0,0,0,40 recover=105,120,105,120 phase=2832,2565,4315,4286 spell=1:hung:6886:750"},
+				{"three_internet_seats_57ms_host_silent_198ms_seat3_silent_3000ms_held_seat_returns_late_seed_109", "seed=109 seats=3 internet=1 exchange=100 end=19842 rtt=57,57,57 jitter=0,0,0 recover=300,300,300 phase=0,0,0 spell=1:silent:6000:198 spell=3:silent:7342:3000"},
+				{"four_internet_seats_60ms_jitter_25ms_directory_40ms_host_silent_dark_198ms_seat4_silent_dark_3000ms_back_at_120pc_held_seat_returns_late_seed_109", "seed=109 seats=4 internet=1 exchange=40 end=33342 rtt=40,52,41,50,57,60 jitter=0,0,10,25,20,0 recover=300,300,300,120 phase=1062,764,2450,1484 spell=1:silent:6871:198:dark spell=4:silent:7342:3000:dark"},
+				{"three_direct_seats_200ms_jitter_40ms_held_without_its_own_trouble_seed_187", "seed=187 seats=3 internet=0 exchange=100 end=12000 rtt=200,200,200 jitter=40,10,0 recover=300,300,300 phase=0,0,0"},
+				{"four_internet_seats_270ms_jitter_40ms_directory_160ms_seat3_late_400ms_more_204ms_back_at_100pc_host_stopped_824ms_loss_90pc_seat4_loss_10pc_seat4_held_without_its_own_trouble_seed_187", "seed=187 seats=4 internet=1 exchange=160 end=14878 rtt=270,200,250,255,260,215 jitter=40,0,10,0,0,0 recover=300,100,100,100 phase=1441,2938,4715,2462 spell=3:late:5233:204:400 spell=1:stopped:5500:824 burst=4:4900:717:90 burst=4:8247:631:10"},
+				{"two_internet_seats_54ms_seat2_late_50ms_more_1785ms_returned_seat_held_again_seed_174", "seed=174 seats=2 internet=1 exchange=100 end=15810 rtt=54 jitter=0 recover=300,300 phase=0,0 spell=2:late:6000:1785:50"},
+				{"four_internet_seats_300ms_jitter_40ms_two_return_frames_seed_131", "seed=131 seats=4 internet=1 exchange=100 end=12000 rtt=220,260,282,300,245,290 jitter=40,20,0,40,0,0 recover=300,300,300,300 phase=0,0,0,0"},
 				// The complete Linux 5,000-schedule run, then the current-history failure and its directory twin.
 				{"two_direct_seats_59ms_host_stopped_615ms_survivor_waits_seed_1811", "seed=1811 seats=2 internet=0 exchange=100 end=13169 rtt=59 jitter=0 recover=300,300 phase=0,0 spell=1:stopped:4247:615"},
 				{"two_internet_seats_180ms_directory_240ms_seat2_silent_174ms_survivor_waits_seed_518", "seed=518 seats=2 internet=1 exchange=240 end=13403 rtt=180 jitter=0 recover=300,300 phase=0,0 spell=2:silent:5142:174"},
@@ -3651,7 +3667,8 @@ namespace RTE {
 				}
 				DiagnosticLine() << "[session-plane-kept-hold] seed=0 kept_for_authority=" << keptForAuthority << " longest_kept_ms=" << longestKept
 				                 << " dropped=" << fixture.peers[2]->GetStats().decisionsDropped << std::endl;
-				if (!keptForAuthority || longestKept < 5000 || !fixture.peers[2]->GetStats().decisionsDropped) { error = "the real hold did not remain pending for the directory through its five-second expiry"; return false; }
+				if (!keptForAuthority || longestKept < 5000) { error = "the real hold did not remain pending for its own directory decision past five seconds"; return false; }
+				if (fixture.peers[2]->GetStats().decisionsDropped) { error = "the agreed hold was discarded while its directory authority was still pending"; return false; }
 				for (uint8_t seat: {1, 2}) if (fixture.maxWait[seat - 1] > 50) { error = "survivor " + std::to_string(seat) + " waited " + std::to_string(fixture.maxWait[seat - 1]) + "ms"; return false; }
 				return true;
 			}});
