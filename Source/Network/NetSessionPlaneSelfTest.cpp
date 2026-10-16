@@ -585,6 +585,8 @@ namespace RTE {
 			std::map<std::pair<NetPeerId, NetTransportLane>, uint64_t> lastDelivery; //!< A reliable lane delivers in order, however its packets were delayed.
 			struct Event { uint64_t at; NetTransportEvent value; bool crossesFault = false; };
 			std::vector<Event> events;
+			bool keepReturnCertificates = false;
+			std::map<uint64_t, NetHostMigrationMessage> receivedReturnCertificates;
 			Wire(Hub& h, uint8_t seat): hub(h), owner(seat) { hub.wires.insert(this); }
 			~Wire() override { Stop(); hub.wires.erase(this); }
 			bool StartHost(uint16_t wanted, std::string* error = nullptr) override {
@@ -838,7 +840,17 @@ namespace RTE {
 						if (pending != index) events[pending] = std::move(event);
 						++pending; continue;
 					}
-					if (event.crossesFault || !hub.Split(owner, connections.contains(event.value.peerId) ? connections.at(event.value.peerId).first->owner : owner)) ready.push_back(std::move(event.value));
+					if (event.crossesFault || !hub.Split(owner, connections.contains(event.value.peerId) ? connections.at(event.value.peerId).first->owner : owner)) {
+						// The real image service keeps certificates received on this seat's link while its private reader runs.
+						if (keepReturnCertificates && event.value.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.value.bytes)) {
+							NetHash32 key; key.fill(0x39);
+							NetHostMigrationMessage certificate;
+							if (NetHostMigrationCodec::Decode(event.value.bytes, key, certificate) &&
+							    certificate.type == NetHostMigrationMessageType::PeerBridgeCommit && certificate.preparedFrame == 1)
+								receivedReturnCertificates.try_emplace(certificate.frame, std::move(certificate));
+						}
+						ready.push_back(std::move(event.value));
+					}
 				}
 				events.resize(pending);
 				return ready;
@@ -1500,6 +1512,7 @@ namespace RTE {
 			row.rttMs = row.otherRttMs = rttMs; row.checkpointEveryFrames = 60;
 			Fixture fixture; fixture.parallel = true;
 			if (!fixture.Start(row, error)) return false;
+			fixture.wires[1]->keepReturnCertificates = true;
 			while (fixture.hub.now < 9000 && (!fixture.peers[0]->HasHeldAISeat(2) || fixture.hub.now < 7000)) if (!fixture.Step(error)) return false;
 			if (!fixture.peers[0]->HasHeldAISeat(2)) return fail("the frozen seat never entered the image-return shape");
 			uint64_t common = fixture.worlds[0].applied;
@@ -1580,7 +1593,7 @@ namespace RTE {
 						(void)fixture.peers[0]->SendReturnerTheRoundFrom(2, activation);
 					}
 				}
-				if (agreed && replay.applied + 1 == activation && fixture.peers[1]->m_PeerBridgeCertificates.contains({activation, 1})) break;
+				if (agreed && replay.applied + 1 == activation && fixture.wires[1]->receivedReturnCertificates.contains(activation)) break;
 			}
 			if (!agreed || replay.applied + 1 != activation) return fail("the private replay did not reach an activation every survivor certified");
 			config.startFrame = activation; config.roundId = 77; config.joinsRunningRound = config.continuesMatch = true;
@@ -1590,8 +1603,8 @@ namespace RTE {
 			config.initialSeatReclaims = replayCoordinator.ReclaimTransactions();
 			config.initialPeerLeaves = replayCoordinator.GetPeerLeaveFrames();
 			NetLockstepCoordinator::AdoptOpenReturns(config, fixture.peers[1]->ReclaimTransactions(), activation);
-			const auto proof = fixture.peers[1]->m_PeerBridgeCertificates.find({activation, 1});
-			if (proof == fixture.peers[1]->m_PeerBridgeCertificates.end()) return fail("the returning seat did not receive the real return certificate");
+			const auto proof = fixture.wires[1]->receivedReturnCertificates.find(activation);
+			if (proof == fixture.wires[1]->receivedReturnCertificates.end()) return fail("the returning seat did not receive the real return certificate");
 			std::string refusal;
 			if (!replayCoordinator.AdoptPeerReturn(config, replayCoordinator, proof->second, activation, &refusal))
 				return fail("the private replay could not adopt the survivors' real return certificate: " + refusal);
