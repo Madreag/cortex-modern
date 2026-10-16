@@ -1514,6 +1514,8 @@ namespace RTE {
 			}
 			for (uint8_t peer = 3; peer <= seats; ++peer)
 				if (fixture.worlds[peer - 1].hashes.at(base) != replay.hashes.at(base)) return fail("the image capture already has different playing-seat histories");
+			DiagnosticLine() << "[session-plane-image] seed=0 seats=" << static_cast<unsigned>(seats) << " rtt_ms=" << rttMs
+			                 << " capture=" << base << " playing_committed_through=" << common << std::endl;
 			auto config = fixture.peers[1]->GetConfig();
 			// The image's seat state and the committed tail go through the same replay coordinator as a real private return.
 			auto replayConfig = config;
