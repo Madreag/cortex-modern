@@ -868,17 +868,11 @@ namespace RTE {
 		m_PendingPeerDecisions.clear();
 		for (const auto& [key, kept]: pending) {
 			if (m_PeerBridgeCertificates.contains(key) || key.first < m_Stats.nextFrame) continue;
-			// A hold is taken at its own frame; a decision still refused past the silence the round allows a seat is let go, named.
+			// A hold is taken at its own frame. Local silence never cancels an unresolved authority decision.
 			if (key.second == 0 && key.first > m_Stats.nextFrame) { m_PendingPeerDecisions.emplace(key, kept); continue; }
 			InstallPeerBridge(kept.first, nowMs);
 			if (const auto again = m_PendingPeerDecisions.find(key); again != m_PendingPeerDecisions.end()) {
 				again->second.second = kept.second;
-				if (nowMs >= kept.second + c_NetSeatDisconnectSilenceMs) {
-					++m_Stats.decisionsDropped;
-					DiagnosticLine() << "[net-peer-decision-dropped] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << key.first
-					    << " kind=" << static_cast<int>(key.second) << " kept_ms=" << nowMs - kept.second << std::endl;
-					m_PendingPeerDecisions.erase(again);
-				}
 			}
 		}
 		// A decision this peer cannot yet show the authority of stops its frame; the frame's committed record, asked of the seats that have
@@ -937,7 +931,8 @@ namespace RTE {
 			}
 			const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
 			if (nowMs >= seen->second + roundTripMs + boundMs) RequestPeerCommittedTail(nowMs);
-			if (nowMs < seen->second + c_NetSeatCatchUpAllowanceMs) return true;
+			// Only its certificate, a committed frame or a proof that it cannot complete releases this promise.
+			return true;
 		}
 		return false;
 	}
