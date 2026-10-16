@@ -1556,6 +1556,37 @@ namespace RTE {
 			uint64_t activation = 0, reported = replay.applied, reportAt = fixture.hub.now, work = 0;
 			double credit = 0;
 			bool proposed = false, agreed = false;
+			bool liveStarted = false;
+			std::string lastRefusal;
+			const auto startLive = [&] {
+				config.startFrame = activation; config.roundId = 77; config.joinsRunningRound = config.continuesMatch = true;
+				config.originalRoundConfigHash = fixture.peers[0]->GetRoundConfigHash();
+				config.initialSeatHolds = replayCoordinator.HeldTransactions();
+				config.initialSeatBridgeSinceMs = replayCoordinator.SeatBridgeTimes();
+				config.initialSeatReclaims = replayCoordinator.ReclaimTransactions();
+				config.initialPeerLeaves = replayCoordinator.GetPeerLeaveFrames();
+				NetLockstepCoordinator::AdoptOpenReturns(config, fixture.peers[1]->ReclaimTransactions(), activation);
+				const auto proof = fixture.wires[1]->receivedReturnCertificates.find(activation);
+				if (proof == fixture.wires[1]->receivedReturnCertificates.end()) return true;
+				if (!replayCoordinator.AdoptPeerReturn(config, replayCoordinator, proof->second, activation, &lastRefusal)) return true;
+				config.initialDelayChanges = replayCoordinator.GetDelayChanges();
+				for (const auto& [peer, changes]: fixture.peers[1]->GetDelayChanges())
+					for (const auto& [tick, delay]: changes) config.initialDelayChanges[peer].try_emplace(tick, delay);
+				// The live start carries the delays the replay actually crossed, as InPlaceLiveRoundLocked does.
+				for (const auto& [peer, changes]: config.initialDelayChanges) {
+					const auto at = changes.upper_bound(activation);
+					if (at != changes.begin()) config.matchConfig.peerInputDelayFrames[peer - 1] = std::prev(at)->second;
+				}
+				config.inputDelayFrames = config.matchConfig.peerInputDelayFrames[1];
+				for (uint8_t peer = 1; peer <= seats; ++peer) config.peerInputDelayFrames[peer] = config.matchConfig.peerInputDelayFrames[peer - 1];
+				config.peerIncarnations[2] = 2; config.seatStateThroughFrame = replay.applied;
+				fixture.peers[1] = std::make_unique<NetLockstepCoordinator>();
+				if (!fixture.peers[1]->Start(*fixture.wires[1], config, &error)) return false;
+				fixture.peers[1]->DeferStopsToTickBoundary();
+				liveStarted = true;
+				return true;
+			};
+
 			for (const uint64_t until = fixture.hub.now + 12000; fixture.hub.now < until;) {
 				if (!fixture.Step(error)) return false;
 				credit = std::min(6.0, credit + c_TestCatchUpRate / c_TestTickMs);
@@ -1593,35 +1624,14 @@ namespace RTE {
 						(void)fixture.peers[0]->SendReturnerTheRoundFrom(2, activation);
 					}
 				}
-				if (agreed && replay.applied + 1 == activation && fixture.wires[1]->receivedReturnCertificates.contains(activation)) break;
+				// As in the service, the live connection handshakes ahead of the return while the private replay finishes E-1.
+				if (agreed && !liveStarted && !startLive()) return false;
+				if (liveStarted && replay.applied + 1 == activation && fixture.peers[1]->IsRunning()) break;
 			}
 			if (!agreed || replay.applied + 1 != activation) return fail("the private replay did not reach an activation every survivor certified");
-			config.startFrame = activation; config.roundId = 77; config.joinsRunningRound = config.continuesMatch = true;
-			config.originalRoundConfigHash = fixture.peers[0]->GetRoundConfigHash();
-			config.initialSeatHolds = replayCoordinator.HeldTransactions();
-			config.initialSeatBridgeSinceMs = replayCoordinator.SeatBridgeTimes();
-			config.initialSeatReclaims = replayCoordinator.ReclaimTransactions();
-			config.initialPeerLeaves = replayCoordinator.GetPeerLeaveFrames();
-			NetLockstepCoordinator::AdoptOpenReturns(config, fixture.peers[1]->ReclaimTransactions(), activation);
-			const auto proof = fixture.wires[1]->receivedReturnCertificates.find(activation);
-			if (proof == fixture.wires[1]->receivedReturnCertificates.end()) return fail("the returning seat did not receive the real return certificate");
-			std::string refusal;
-			if (!replayCoordinator.AdoptPeerReturn(config, replayCoordinator, proof->second, activation, &refusal))
-				return fail("the private replay could not adopt the survivors' real return certificate: " + refusal);
-			config.initialDelayChanges = replayCoordinator.GetDelayChanges();
-			for (const auto& [peer, changes]: fixture.peers[1]->GetDelayChanges())
-				for (const auto& [tick, delay]: changes) config.initialDelayChanges[peer].try_emplace(tick, delay);
-			// The live start carries the delays the replay actually crossed, as InPlaceLiveRoundLocked does.
-			for (const auto& [peer, changes]: config.initialDelayChanges) {
-				const auto at = changes.upper_bound(activation);
-				if (at != changes.begin()) config.matchConfig.peerInputDelayFrames[peer - 1] = std::prev(at)->second;
-			}
-			config.inputDelayFrames = config.matchConfig.peerInputDelayFrames[1];
-			for (uint8_t peer = 1; peer <= seats; ++peer) config.peerInputDelayFrames[peer] = config.matchConfig.peerInputDelayFrames[peer - 1];
-			config.peerIncarnations[2] = 2; config.seatStateThroughFrame = activation - 1;
-			fixture.peers[1] = std::make_unique<NetLockstepCoordinator>();
-			if (!fixture.peers[1]->Start(*fixture.wires[1], config, &error)) return false;
-			fixture.peers[1]->DeferStopsToTickBoundary();
+			if (!liveStarted) return fail("the returning seat could not adopt its received return certificate: " + (lastRefusal.empty() ? "none received" : lastRefusal));
+			if (!fixture.peers[1]->IsRunning()) return fail("the returning seat did not finish its live handshake before activation: state=" +
+			    std::to_string(static_cast<int>(fixture.peers[1]->GetState())) + " starts_received=" + std::to_string(fixture.peers[1]->GetStats().startPacketsReceived));
 			fixture.peers[1]->AdoptReplayedSeatTransitions(replayCoordinator, activation - 1);
 			fixture.worlds[1] = std::move(replay); fixture.queued[1] = activation - 1; fixture.credits[1] = 0; fixture.waitAt[1] = 0;
 			fixture.hub.faultEnd = fixture.hub.now;
@@ -3815,7 +3825,8 @@ namespace RTE {
 			                 << " failed=" << driver.failedCount << " threads=" << driver.threads << " elapsed_s=" << driver.elapsedMs / 1000 << driver.StartupWaits();
 			const bool complete = driver.ranCount.load() == driver.count;
 			DiagnosticLine() << "[net-session-plane-selftest] " << (driver.failedCount || !complete ? "FAIL" : "PASS") << " random_hold_schedules"
-			                 << (!complete ? ": did not run every requested schedule" : driver.failedCount ? ": " + std::to_string(driver.failedCount) + " of " + std::to_string(driver.count) + " schedules broke a property" : "");
+			                 << (!complete || driver.failedCount ? ": seeds=" + std::to_string(driver.firstSeed) + ".." + std::to_string(driver.firstSeed + driver.count - 1) + " " : "")
+			                 << (!complete ? "did not run every requested schedule" : driver.failedCount ? std::to_string(driver.failedCount) + " of " + std::to_string(driver.count) + " schedules broke a property" : "");
 			if (driver.failedCount || !complete) ++failed; else ++passed;
 		}
 		for (const auto& [name, scene]: std::vector<std::pair<const char*, const char*>>{
