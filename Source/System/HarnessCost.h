@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <utility>
 
 namespace RTE {
 
@@ -19,8 +20,10 @@ namespace RTE {
 		enum Instrument : uint8_t { SimDump, TickEnd, FullState, Census, PreviewFidelity, StallSampler, ScreenWatches, Recorder, ControllerTrace, FeelRecorder, InstrumentCount };
 		static constexpr std::array<const char*, InstrumentCount> c_Names{"sim_dump", "tick_end", "fullstate", "census", "preview_fidelity",
 		                                                                 "stall_sampler", "screen_watches", "recorder", "controller_trace", "feel_recorder"};
-		/// The receipts' version: 2 names the controller trace and the feel recorder beside version 1's eight instruments.
-		static constexpr int c_ReceiptVersion = 2;
+		/// The receipts' version: 2 names the controller trace and the feel recorder beside version 1's eight instruments; 3 adds the
+		/// presented frames a receipt's costs span and the costliest of them; 4 counts each from the last receipt at the earliest and
+		/// names the work after the last of them.
+		static constexpr int c_ReceiptVersion = 4;
 
 		/// Whether this process runs an instrument; the run's receipt names every instrument with its state.
 		static void SetEnabled(Instrument instrument, bool enabled) { s_Enabled[instrument].store(enabled, std::memory_order_relaxed); }
@@ -38,7 +41,48 @@ namespace RTE {
 		static void Charge(Instrument instrument, int64_t nanoseconds) {
 			if (nanoseconds > 0) {
 				s_Charged[instrument].fetch_add(nanoseconds, std::memory_order_relaxed);
+				s_Lifetime[instrument].fetch_add(nanoseconds, std::memory_order_relaxed);
 			}
+		}
+
+		/// What the costliest presented frame since the last receipt cost, instrument by instrument and in all, and what was spent
+		/// after the last of them.
+		struct Presented {
+			int64_t frames;
+			int64_t costliestNs;
+			std::array<int64_t, InstrumentCount> instrumentNs;
+			std::array<int64_t, InstrumentCount> afterNs;
+		};
+
+		/// Closes the presented frame that ends with this present. A simulated frame that waits on its peers carries every frame
+		/// presented meanwhile, so its receipt also names the costliest of them: none of them took their sum from the screen.
+		/// The main thread's alone, as are the presents.
+		static void NotePresent() {
+			std::array<int64_t, InstrumentCount> spent{};
+			int64_t frameNs = 0;
+			for (size_t instrument = 0; instrument < InstrumentCount; ++instrument) {
+				const int64_t lifetime = s_Lifetime[instrument].load(std::memory_order_relaxed);
+				spent[instrument] = lifetime - s_PresentMark[instrument];
+				s_PresentMark[instrument] = lifetime;
+				frameNs += spent[instrument];
+			}
+			if (s_Presented.frames == 0 || frameNs > s_Presented.costliestNs) {
+				s_Presented.costliestNs = frameNs;
+				s_Presented.instrumentNs = spent;
+			}
+			++s_Presented.frames;
+		}
+
+		/// Takes the presented frames closed since the last receipt and the work after the last of them. The next presented frame
+		/// counts from here, so the work of one receipt is never another's.
+		static Presented TakePresented() {
+			Presented taken = std::exchange(s_Presented, Presented{});
+			for (size_t instrument = 0; instrument < InstrumentCount; ++instrument) {
+				const int64_t lifetime = s_Lifetime[instrument].load(std::memory_order_relaxed);
+				taken.afterNs[instrument] = lifetime - s_PresentMark[instrument];
+				s_PresentMark[instrument] = lifetime;
+			}
+			return taken;
 		}
 
 		/// The time the simulation thread spent suspended for a stack sample: charged to the sampler, and taken out of the
@@ -92,6 +136,9 @@ namespace RTE {
 		static inline std::array<std::atomic<bool>, InstrumentCount> s_Enabled{};
 		static inline std::array<std::atomic<int64_t>, InstrumentCount> s_Charged{};
 		static inline std::array<std::atomic<int64_t>, InstrumentCount> s_Before{};
+		static inline std::array<std::atomic<int64_t>, InstrumentCount> s_Lifetime{};
+		static inline std::array<int64_t, InstrumentCount> s_PresentMark{};
+		static inline Presented s_Presented{};
 		static inline std::atomic<int64_t> s_SuspendedNs{0};
 	};
 } // namespace RTE

@@ -18,6 +18,7 @@
 #include "ScenarioRunner.h"
 #include "SwapWaitGuard.h"
 #include "DisplayRefreshes.h"
+#include "HarnessCost.h"
 
 #include "GLCheck.h"
 #include <SDL3/SDL.h>
@@ -53,12 +54,17 @@ namespace {
 
 	// A match does not let a display that takes no frames hold its loop in the swap; outside a match nothing changes.
 	void JudgeSwapWait(SDL_Window* window, double swapMs, bool vsync, double nowMs) {
-		const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
-		const double refreshHz = mode ? mode->refresh_rate : 0.0;
 		const bool inMatch = vsync && !SwapWaitLifted() && ScenarioRunner::IsLockstepControllerSyncActive();
+		// Out of a match the guard only releases what a match engaged, so single player asks the display nothing.
+		const SDL_DisplayID display = inMatch ? SDL_GetDisplayForWindow(window) : 0;
+		const SDL_DisplayMode* mode = display ? SDL_GetCurrentDisplayMode(display) : nullptr;
+		const double refreshHz = mode ? mode->refresh_rate : 0.0;
 		const bool wasSuspended = s_SwapWaitGuard.Suspended();
-		const int64_t refreshes = wasSuspended ? CompositorRefreshCount() : -1;
-		switch (s_SwapWaitGuard.Note(swapMs, refreshHz, nowMs, inMatch, refreshes)) {
+		// The compositor counts its primary display's refreshes, read only while the wait is suspended.
+		const SDL_DisplayID primary = inMatch && wasSuspended ? SDL_GetPrimaryDisplay() : 0;
+		const SDL_DisplayMode* primaryMode = primary && primary != display ? SDL_GetCurrentDisplayMode(primary) : mode;
+		const int64_t refreshes = primary ? CompositorRefreshCount() : -1;
+		switch (s_SwapWaitGuard.Note(swapMs, refreshHz, nowMs, inMatch, refreshes, display == primary, primaryMode ? primaryMode->refresh_rate : 0.0)) {
 			case SwapWaitGuard::Action::Suspend:
 				SDL_GL_SetSwapInterval(0);
 				FrameMan::SetUnseenDisplayCap(true);
@@ -874,4 +880,5 @@ void WindowMan::Present() {
 	const auto swapEnded = RTE::SteadyClock::now();
 	m_LastSwapMs = std::chrono::duration<double, std::milli>(swapEnded - swapBegan).count();
 	JudgeSwapWait(m_PrimaryWindow.get(), m_LastSwapMs, m_EnableVSync, std::chrono::duration<double, std::milli>(swapEnded.time_since_epoch()).count());
+	if (HarnessCost::AnyEnabled()) HarnessCost::NotePresent();
 }

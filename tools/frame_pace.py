@@ -6,9 +6,11 @@ clock, the present-to-present interval p50/p95/max, and target_hz - the harness 
 A lockstep round always reports it; single player under CC_TEST_FRAME_PACE=1. An engine older than that line is read from its
 pace census instead (`frames_drawn` over `sim_ticks` per census window, at the sim's 60 ticks a second; no intervals).
 
-The check, per window after the round's first SKIP and before its last: fps >= FPS_SHARE x target, and the interval p95 at
-most P95_PERIODS frame periods. While the frame recorder runs, the target is its capture rate (`recorder_hz`, or the
-`[record-video] ... at N fps` line of an older engine): a recording's frames are the ones that must arrive.
+The check, per window after the round's first SKIP and before its last: fps >= FPS_SHARE x target, the interval p95 at most
+P95_PERIODS frame periods and the longest interval at most MAX_PERIODS. A window the frame recorder runs in has its capture
+rate as the target (`recorder_hz`, or the `[record-video] ... at N fps` line of an older engine): a recording's frames are the
+ones that must arrive. Any other window has the presentation's. A census window (an older engine's minute, which carries no
+intervals) is judged on its rate alone, after the round's first and before its last.
 
     python tools/frame_pace.py <stdout.log> [--mode lockstep|single] [--expect-hz 60]
 """
@@ -29,12 +31,16 @@ SIM_HZ = 60.0
 FPS_SHARE = 0.95
 # The interval p95 band in frame periods; single player's measured p95 lies inside it (the row's evidence).
 P95_PERIODS = 1.25
+# The longest interval in frame periods: every window of the inventory's green runs stays under 3.2; a freeze a window's
+# rate still covers does not.
+MAX_PERIODS = 4.0
 # The round's first windows hold its start (loading, the first catch-up); its last may be cut by the round's end.
 SKIP = 3
 # What a scene's drawn-frames item states: the rule this check judges by.
-RULE = (f"Every 60-tick window of a running activity after its first {SKIP} and before its last draws at least {FPS_SHARE:.0%} of the "
-        f"expected rate (the recording's while the recorder runs, else the presentation's) with interval p95 within {P95_PERIODS} frame "
-        "periods; no window may miss; a run with no running activity reports none")
+RULE = (f"Every 60-tick window of a running activity after its first {SKIP} and before its last draws at least {FPS_SHARE:.0%} of its "
+        f"expected rate (the recording's in a window the recorder runs in, else the presentation's) with interval p95 within {P95_PERIODS} "
+        f"frame periods and no interval over {MAX_PERIODS:g}; no window may miss; an older engine's pace census (minute windows without "
+        "intervals) is judged on its rate alone, after its first window and before its last; a run with no running activity reports none")
 
 
 def windows(text: str, mode: str | None = None) -> tuple[str, list[dict]]:
@@ -71,24 +77,32 @@ def check(text: str, mode: str | None = 'lockstep', expect_hz: float | None = No
     edge = skip if source == 'frame-pace' else 1
     judged = rows[edge:-1] if len(rows) > edge + 1 else rows
     presentation = expect_hz or max((row['target_hz'] for row in judged), default=0.0) or 60.0
-    recorded = [row['recorder_hz'] for row in judged if row['recorder'] and row['recorder_hz'] > 0]
-    target = min(recorded) if recorded and not expect_hz else presentation
-    floor = FPS_SHARE * target
-    band = P95_PERIODS * 1000.0 / target
-    slow = [row for row in judged if row['fps'] < floor]
-    uneven = [row for row in judged if row['p95_ms'] is not None and row['p95_ms'] > band]
-    result = dict(status='PASS' if not slow and not uneven else 'FAIL', source=source, mode=mode, target_hz=target,
-                  recording_hz=min(recorded) if recorded else None,
-                  fps_floor=round(floor, 2), p95_band_ms=round(band, 2), windows=len(judged),
+    # Each window is judged at its own target: the recording's where the recorder ran in it, else the presentation's.
+    for row in judged:
+        row['expected_hz'] = row['recorder_hz'] if row['recorder'] and row['recorder_hz'] > 0 and not expect_hz else presentation
+    recorded = [row['expected_hz'] for row in judged if row['recorder'] and row['recorder_hz'] > 0 and not expect_hz]
+    target = min(row['expected_hz'] for row in judged)
+    slow = [row for row in judged if row['fps'] < FPS_SHARE * row['expected_hz']]
+    uneven = [row for row in judged if row['p95_ms'] is not None and row['p95_ms'] > P95_PERIODS * 1000.0 / row['expected_hz']]
+    long = [row for row in judged if row['max_ms'] is not None and row['max_ms'] > MAX_PERIODS * 1000.0 / row['expected_hz']]
+    result = dict(status='PASS' if not slow and not uneven and not long else 'FAIL', source=source, mode=mode, target_hz=target,
+                  presentation_hz=presentation, recording_hz=min(recorded) if recorded else None, recorded_windows=len(recorded),
+                  fps_floor=round(FPS_SHARE * target, 2), p95_band_ms=round(P95_PERIODS * 1000.0 / target, 2),
+                  max_band_ms=round(MAX_PERIODS * 1000.0 / target, 2), windows=len(judged),
                   fps_min=round(min(row['fps'] for row in judged), 2), fps_median=round(statistics.median(row['fps'] for row in judged), 2),
                   p95_max_ms=max((row['p95_ms'] for row in judged if row['p95_ms'] is not None), default=None),
-                  slow_windows=len(slow), uneven_windows=len(uneven),
-                  first_slow=slow[0] if slow else None, first_uneven=uneven[0] if uneven else None)
+                  interval_max_ms=max((row['max_ms'] for row in judged if row['max_ms'] is not None), default=None),
+                  slow_windows=len(slow), uneven_windows=len(uneven), long_windows=len(long),
+                  first_slow=slow[0] if slow else None, first_uneven=uneven[0] if uneven else None, first_long=long[0] if long else None)
     result['passed'] = result['status'] == 'PASS'
     if not result['passed']:
-        first = (slow or uneven)[0]
-        result['reason'] = (f"{len(slow)} of {len(judged)} windows drew under {floor:.1f} fps (first {first['fps']:.1f}"
-                            + (f" at tick {first['tick']}" if first['tick'] is not None else '') + f"), {len(uneven)} with interval p95 over {band:.1f} ms")
+        first = (slow or uneven or long)[0]
+        at = lambda row: f" at tick {row['tick']}" if row['tick'] is not None else ''
+        result['reason'] = (f"{len(slow)} of {len(judged)} windows drew under {FPS_SHARE:.0%} of their rate"
+                            + (f" (first {slow[0]['fps']:.1f} fps of {slow[0]['expected_hz']:g}{at(slow[0])})" if slow else '')
+                            + f", {len(uneven)} with interval p95 over {P95_PERIODS} frame periods"
+                            + (f" (first {uneven[0]['p95_ms']:.1f} ms{at(uneven[0])})" if uneven else '')
+                            + f", {len(long)} with an interval over {MAX_PERIODS:g}" + (f" (first {long[0]['max_ms']:.1f} ms{at(long[0])})" if long else ''))
     return result
 
 

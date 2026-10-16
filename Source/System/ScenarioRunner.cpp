@@ -93,6 +93,18 @@ namespace RTE {
 		bool s_WorldCatchUpActive = false;
 		bool s_WorldCatchUpHeld = false;
 		int s_WorldCatchUpBudget = 0;
+		RTE::SteadyClock::time_point s_WorldCatchUpFrameBegan;
+		RTE::SteadyClock::time_point s_WorldCatchUpLastGrant;
+		std::chrono::microseconds s_WorldCatchUpFrameTime{0};
+		std::chrono::microseconds s_WorldCatchUpTickTime{0}; //!< What a tail tick took lately, from one grant to the next in a frame.
+		bool s_WorldCatchUpUntilDraw = false; //!< Whether this frame's catch-up runs to a presentation cap's next draw.
+		int s_WorldCatchUpFloor = 0; //!< The fewest tail ticks a frame applies; raised while the replay does not close on the round.
+		bool s_WorldCatchUpWindowOpen = false; //!< Whether a second of the replay's closing is being measured.
+		RTE::SteadyClock::time_point s_WorldCatchUpWindowBegan; //!< When that second began.
+		uint64_t s_WorldCatchUpWindowApplied = 0; //!< The tail frame applied last when it began.
+		uint64_t s_WorldCatchUpWindowHead = 0; //!< The newest frame the tail held when it began.
+		bool s_WorldCatchUpWindowPaced = false; //!< Whether every frame of it stopped on its time or its ceiling, with the tail still ahead.
+		bool s_WorldCatchUpFramePaced = false; //!< Whether this frame stopped on its time or its ceiling.
 		int s_OwnSeatCatchUpBudget = 0;
 		uint64_t s_PeerCatchUpBudgetAtMs = 0;
 		double s_PeerCatchUpCredit = 0;
@@ -1439,6 +1451,9 @@ namespace RTE {
 		s_WorldCatchUpHeld = false;
 		s_WorldCatchUpFence = 0;
 		s_WorldCatchUpLastApplied.reset();
+		s_WorldCatchUpTickTime = std::chrono::microseconds{0};
+		s_WorldCatchUpFloor = c_WorldCatchUpMinTicksPerRealFrame;
+		s_WorldCatchUpWindowOpen = false;
 		return true;
 	}
 
@@ -1518,8 +1533,39 @@ namespace RTE {
 		       WorldCatchUpHasFrame(nextSimTick);
 	}
 
-	void ScenarioRunner::BeginWorldCatchUpFrame() {
+	void ScenarioRunner::BeginWorldCatchUpFrame(double drawMs, double untilDrawMs, RTE::SteadyClock::time_point now) {
 		s_WorldCatchUpBudget = s_WorldCatchUpActive ? c_WorldCatchUpTicksPerRealFrame : 0;
+		// A replay that does not close on the round never comes back, and a frame's time after its draw reads the display's wait as
+		// draw, so that time alone can settle at the round's pace. A second whose frames all stopped on their time or their ceiling
+		// with the tail ahead of them, applying less than the frames the round committed to the tail and a tenth, raises the ticks
+		// every frame takes.
+		if (s_WorldCatchUpActive) {
+			const double windowMs = std::chrono::duration<double, std::milli>(now - s_WorldCatchUpWindowBegan).count();
+			const uint64_t head = s_WorldCatchUpTail.empty() ? s_WorldCatchUpAppliedThrough : std::max(s_WorldCatchUpAppliedThrough, s_WorldCatchUpTail.back().targetFrame);
+			s_WorldCatchUpWindowPaced = s_WorldCatchUpWindowPaced && s_WorldCatchUpFramePaced;
+			if (!s_WorldCatchUpWindowOpen || windowMs >= 1000.0) {
+				const uint64_t applied = s_WorldCatchUpAppliedThrough - s_WorldCatchUpWindowApplied, committed = head - s_WorldCatchUpWindowHead;
+				if (s_WorldCatchUpWindowOpen && s_WorldCatchUpWindowPaced && committed > 0 && static_cast<double>(applied) < static_cast<double>(committed) * (1.0 + c_WorldCatchUpClosingRate) &&
+				    s_WorldCatchUpFloor < c_WorldCatchUpTicksPerRealFrame) {
+					++s_WorldCatchUpFloor;
+					System::PrintDiagnosticLine("[net-world-catchup] floor=" + std::to_string(s_WorldCatchUpFloor) + " applied=" + std::to_string(applied) +
+					                            " committed=" + std::to_string(committed) + " window_ms=" + std::to_string(static_cast<int>(windowMs)));
+				}
+				s_WorldCatchUpWindowOpen = true;
+				s_WorldCatchUpWindowBegan = now;
+				s_WorldCatchUpWindowApplied = s_WorldCatchUpAppliedThrough;
+				s_WorldCatchUpWindowHead = head;
+				s_WorldCatchUpWindowPaced = true;
+			}
+			s_WorldCatchUpFramePaced = false;
+		}
+		// The returning player's own screen keeps its rate. Under a presentation cap the tail runs until the cap's next draw, which
+		// a sim that stops short of it would forgo; otherwise it takes what one tick's frame leaves after drawing it.
+		constexpr double c_FrameMarginMs = 1.0;
+		s_WorldCatchUpFrameBegan = now;
+		s_WorldCatchUpUntilDraw = untilDrawMs >= 0;
+		const double frameMs = s_WorldCatchUpUntilDraw ? untilDrawMs : c_DefaultDeltaTimeS * 1000.0 - drawMs - c_FrameMarginMs;
+		s_WorldCatchUpFrameTime = std::chrono::microseconds(static_cast<int64_t>(std::max(0.0, frameMs) * 1000.0));
 		s_OwnSeatCatchUpBudget = c_WorldCatchUpTicksPerRealFrame;
 		NetLockstepPlaneGuard plane;
 		const uint64_t nowMs = NetLockstepNowMs();
@@ -1549,6 +1595,10 @@ namespace RTE {
 		s_OwnSeatCatchUpBudget = static_cast<int>(s_PeerCatchUpCredit);
 	}
 
+	const char* ScenarioRunner::TickCostCensusTag() {
+		return IsLockstepControllerSyncActive() ? "[net-tick-cost]" : s_WorldCatchUpActive ? "[catchup-tick-cost]" : "[sp-tick-cost]";
+	}
+
 	bool ScenarioRunner::TakeOwnSeatCatchUpGrant(uint64_t nextSimTick) {
 		NetLockstepPlaneGuard plane;
 		if (s_OwnSeatCatchUpBudget <= 0 || !s_LockstepCoordinator || !s_LockstepCoordinator->HasReadyFrame(nextSimTick)) return false;
@@ -1562,11 +1612,24 @@ namespace RTE {
 		return true;
 	}
 
-	bool ScenarioRunner::TakeWorldCatchUpGrant(uint64_t nextSimTick) {
+	bool ScenarioRunner::TakeWorldCatchUpGrant(uint64_t nextSimTick, RTE::SteadyClock::time_point now) {
 		NetLockstepPlaneGuard plane;
 		if (!WorldCatchUpMayGrant(nextSimTick, s_WorldCatchUpBudget)) {
+			// A frame that spent its ceiling stopped on its pacing; one the tail's end, a fence or the hold stopped did not.
+			if (s_WorldCatchUpActive && s_WorldCatchUpBudget <= 0) s_WorldCatchUpFramePaced = true;
 			return false;
 		}
+		// The next tick is granted only when it still fits: a grant at the budget's edge ran a whole tick past it.
+		const int granted = c_WorldCatchUpTicksPerRealFrame - s_WorldCatchUpBudget;
+		if (granted > 0) {
+			const auto tick = std::chrono::duration_cast<std::chrono::microseconds>(now - s_WorldCatchUpLastGrant);
+			s_WorldCatchUpTickTime = s_WorldCatchUpTickTime.count() == 0 ? tick : (s_WorldCatchUpTickTime * 3 + tick) / 4;
+		}
+		if (granted >= s_WorldCatchUpFloor && now - s_WorldCatchUpFrameBegan + (s_WorldCatchUpUntilDraw ? std::chrono::microseconds{0} : s_WorldCatchUpTickTime) > s_WorldCatchUpFrameTime) {
+			s_WorldCatchUpFramePaced = true;
+			return false;
+		}
+		s_WorldCatchUpLastGrant = now;
 		if (s_LockstepCoordinator && s_LockstepCoordinator->IsReplayPlayback() && s_LockstepCoordinator->IsRunning()) {
 			std::string error;
 			if (!s_LockstepCoordinator->HasReadyFrame(nextSimTick)) {

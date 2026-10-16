@@ -20,6 +20,7 @@
 #include "NetWorldJoin.h"
 #include "ActivityMan.h"
 #include "AudioMan.h"
+#include "FrameMan.h"
 #include "LuaMan.h"
 #include "MovableMan.h"
 #include "PresetMan.h"
@@ -40,6 +41,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -1112,13 +1114,13 @@ namespace RTE {
 			std::string error;
 			std::vector<NetLockstepFrame> tail;
 			const int ceiling = ScenarioRunner::c_WorldCatchUpTicksPerRealFrame;
-			for (int i = 1; i <= ceiling + 4; ++i) {
+			for (int i = 1; i <= ceiling + 8; ++i) {
 				tail.push_back(MakeCommittedFrame(40 + static_cast<uint64_t>(i)));
 			}
 			if (!ScenarioRunner::InstallWorldCatchUp(40, tail, &error)) {
 				return Fail("ceiling catch-up install: " + error);
 			}
-			ScenarioRunner::SetWorldCatchUpActivation(40 + static_cast<uint64_t>(ceiling) + 5);
+			ScenarioRunner::SetWorldCatchUpActivation(40 + static_cast<uint64_t>(ceiling) + 9);
 			// The predicate's own contract: no ticks left this frame is a refusal whatever the tail holds.
 			if (ScenarioRunner::WorldCatchUpMayGrant(41, 0) || !ScenarioRunner::WorldCatchUpMayGrant(41, 1)) {
 				return Fail("catch-up-exceeded-the-ceiling: the grant predicate answered " +
@@ -1145,6 +1147,181 @@ namespace RTE {
 			if (!ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1)) {
 				return Fail("catch-up-exceeded-the-ceiling: the next real frame granted no tick over a tail that holds " +
 				            std::to_string(40 + ceiling + 4) + " and a sim clock at " + std::to_string(simTick));
+			}
+			++simTick;
+			NetLockstepReadyFrame taken;
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, taken, &error)) {
+				return Fail("catch-up-exceeded-the-ceiling: tick " + std::to_string(simTick) + " had no committed frame");
+			}
+			// A frame whose draw takes its whole tick applies the fewest ticks that still gain on the live round, and no more.
+			ScenarioRunner::BeginWorldCatchUpFrame(c_DefaultDeltaTimeS * 1000.0);
+			int drawnOut = 0;
+			while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1)) {
+				++simTick;
+				++drawnOut;
+				if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, taken, &error)) {
+					return Fail("catch-up-exceeded-the-ceiling: tick " + std::to_string(simTick) + " had no committed frame");
+				}
+			}
+			if (drawnOut != ScenarioRunner::c_WorldCatchUpMinTicksPerRealFrame) {
+				return Fail("catch-up-took-the-frames-draw: " + std::to_string(drawnOut) + " ticks in a real frame its draw fills, the floor is " +
+				            std::to_string(ScenarioRunner::c_WorldCatchUpMinTicksPerRealFrame));
+			}
+			// Under a presentation cap the frame runs to the cap's next draw: one that is due applies the floor, a far one the rest.
+			const auto grantFrame = [&](double untilDrawMs) {
+				ScenarioRunner::BeginWorldCatchUpFrame(0.0, untilDrawMs);
+				int granted = 0;
+				while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1)) {
+					++simTick;
+					++granted;
+					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, taken, &error)) return -1;
+				}
+				return granted;
+			};
+			if (const int due = grantFrame(0.0); due != ScenarioRunner::c_WorldCatchUpMinTicksPerRealFrame) {
+				return Fail("catch-up-ran-past-the-caps-draw: " + std::to_string(due) + " ticks in a frame whose capped draw is due, the floor is " +
+				            std::to_string(ScenarioRunner::c_WorldCatchUpMinTicksPerRealFrame));
+			}
+			if (const int distant = grantFrame(1000.0); distant != 3) {
+				return Fail("catch-up-stopped-short-of-the-caps-draw: " + std::to_string(distant) + " ticks in a frame whose capped draw is a second away, "
+				            "the tail holds 3");
+			}
+			return 0;
+		}
+
+		/// A returner whose ticks and draw leave a frame no time past the floor still closes on the round: 12 ms ticks and a 10 ms draw
+		/// at 60 Hz, presented on the display's refresh (the swap's wait counted in the draw, as the frame's average reads it) and
+		/// under the headless presentation cap.
+		int TestCatchUpClosesOnASlowMachine() {
+			using namespace std::chrono;
+			constexpr double c_TickMs = 12.0, c_DrawMs = 10.0;
+			constexpr uint64_t c_SnapshotTick = 1000, c_Behind = 600;
+			constexpr double c_LimitMs = 120000.0;
+			const double periodMs = c_DefaultDeltaTimeS * 1000.0;
+			for (const bool capped: {false, true}) {
+				const std::string how = capped ? "under the headless cap" : "on the display's refresh";
+				std::string error;
+				std::vector<NetLockstepFrame> tail;
+				for (uint64_t frame = c_SnapshotTick + 1; frame <= c_SnapshotTick + c_Behind; ++frame) {
+					tail.push_back(MakeCommittedFrame(frame));
+				}
+				if (!ScenarioRunner::InstallWorldCatchUp(c_SnapshotTick, tail, &error)) {
+					return Fail("slow catch-up install: " + error);
+				}
+				const RTE::SteadyClock::time_point began = RTE::SteadyClock::now();
+				double nowMs = 0.0, drawMs = c_DrawMs, nextDrawMs = 0.0;
+				const auto at = [&](double ms) { return began + duration_cast<RTE::SteadyClock::duration>(duration<double, std::milli>(ms)); };
+				uint64_t simTick = c_SnapshotTick, committed = c_SnapshotTick + c_Behind;
+				while (committed - simTick > c_NetWorldActivationLeadFrames && nowMs < c_LimitMs) {
+					ScenarioRunner::BeginWorldCatchUpFrame(drawMs, capped ? std::max(0.0, nextDrawMs - nowMs) : -1.0, at(nowMs));
+					while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1, at(nowMs))) {
+						NetLockstepReadyFrame ready;
+						if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(++simTick, ready, &error)) {
+							ScenarioRunner::ReleaseWorldCatchUp();
+							return Fail("catch-up-never-closes: tick " + std::to_string(simTick) + " had no committed frame " + how);
+						}
+						nowMs += c_TickMs;
+					}
+					if (capped) {
+						// The cap draws only once its slot is due, and books the next one a period after it.
+						if (nowMs >= nextDrawMs) {
+							nextDrawMs = std::max(nowMs, nextDrawMs) + periodMs;
+							nowMs += c_DrawMs;
+						}
+					} else {
+						const double drawnFrom = nowMs;
+						nowMs = std::ceil((drawnFrom + c_DrawMs) / periodMs) * periodMs;
+						drawMs = nowMs - drawnFrom;
+					}
+					std::vector<NetLockstepFrame> arrived;
+					while (static_cast<double>(committed - c_SnapshotTick - c_Behind) < nowMs / periodMs) {
+						arrived.push_back(MakeCommittedFrame(++committed));
+					}
+					ScenarioRunner::AppendWorldCatchUp(std::move(arrived));
+				}
+				ScenarioRunner::ReleaseWorldCatchUp();
+				if (committed - simTick > c_NetWorldActivationLeadFrames) {
+					return Fail("catch-up-never-closes: a returner with " + std::to_string(static_cast<int>(c_TickMs)) + " ms ticks and a " +
+					            std::to_string(static_cast<int>(c_DrawMs)) + " ms draw at 60 Hz " + how + " trailed the round by " +
+					            std::to_string(committed - simTick) + " frames after " + std::to_string(static_cast<int>(nowMs / 1000.0)) + " s (" +
+					            std::to_string(c_Behind) + " at the start)");
+				}
+			}
+			return 0;
+		}
+
+		/// A catch-up starts on its own ticks' time: one that follows a slow catch-up is not held to the floor by the last one's ticks.
+		int TestCatchUpForgetsTheLastTicksTime() {
+			using namespace std::chrono;
+			std::string error;
+			const RTE::SteadyClock::time_point began = RTE::SteadyClock::now();
+			const auto at = [&](double ms) { return began + duration_cast<RTE::SteadyClock::duration>(duration<double, std::milli>(ms)); };
+			double nowMs = 0.0;
+			// One uncapped, undrawn frame of a catch-up whose ticks take tickMs each; the frame's count of them.
+			const auto frame = [&](uint64_t from, double tickMs) {
+				std::vector<NetLockstepFrame> tail;
+				for (uint64_t target = from + 1; target <= from + 40; ++target) {
+					tail.push_back(MakeCommittedFrame(target));
+				}
+				if (!ScenarioRunner::InstallWorldCatchUp(from, tail, &error)) return -1;
+				ScenarioRunner::BeginWorldCatchUpFrame(0.0, -1.0, at(nowMs));
+				uint64_t simTick = from;
+				int granted = 0;
+				while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1, at(nowMs))) {
+					NetLockstepReadyFrame ready;
+					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(++simTick, ready, &error)) {
+						granted = -1;
+						break;
+					}
+					++granted;
+					nowMs += tickMs;
+				}
+				ScenarioRunner::ReleaseWorldCatchUp();
+				return granted;
+			};
+			if (frame(2000, 1000.0) < 0) {
+				return Fail("slow catch-up frame: " + error);
+			}
+			nowMs += 1000.0;
+			const int fresh = frame(3000, 1.0);
+			const int fits = static_cast<int>(c_DefaultDeltaTimeS * 1000.0 - 1.0) - 1;
+			if (fresh < fits) {
+				return Fail("catch-up-kept-the-last-ticks-time: a fresh catch-up of 1 ms ticks applied " + std::to_string(fresh) +
+				            " ticks in a frame with " + std::to_string(fits + 1) + " ms free, after a catch-up whose ticks took a second each");
+			}
+			return 0;
+		}
+
+		/// A joiner's replay ticks are written under the catch-up's census, never single player's.
+		int TestCatchUpTicksAreNotSinglePlayers() {
+			std::string error;
+			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return Fail("catch-up census: a lockstep round is still running");
+			}
+			if (!ScenarioRunner::InstallWorldCatchUp(40, {MakeCommittedFrame(41)}, &error)) {
+				return Fail("catch-up census install: " + error);
+			}
+			const std::string during = ScenarioRunner::TickCostCensusTag();
+			ScenarioRunner::ReleaseWorldCatchUp();
+			const std::string after = ScenarioRunner::TickCostCensusTag();
+			if (during != "[catchup-tick-cost]" || after != "[sp-tick-cost]") {
+				return Fail("catch-up-ticks-counted-as-single-player: a world catch-up's replay ticks are written under " + during +
+				            " and single player's under " + after);
+			}
+			return 0;
+		}
+
+		/// A capped draw that is overdue is due: the catch-up gives it the floor and draws, as it would at the slot, never the uncapped rule.
+		int TestCatchUpReadsAnOverdueDrawAsDue() {
+			FrameMan::SetUnseenDisplayCap(true);
+			FrameMan::FeelBeginDraw();
+			std::this_thread::sleep_for(std::chrono::milliseconds(40));
+			const double overdue = FrameMan::FeelMsUntilNextDraw();
+			FrameMan::SetUnseenDisplayCap(false);
+			const double uncapped = FrameMan::FeelMsUntilNextDraw();
+			if (overdue < 0.0 || uncapped >= 0.0) {
+				return Fail("catch-up-read-an-overdue-draw-as-no-cap: a 60 Hz capped draw booked 40 ms ago reads " + std::to_string(overdue) +
+				            " ms until it, no cap reads " + std::to_string(uncapped) + " ms");
 			}
 			return 0;
 		}
@@ -9522,6 +9699,22 @@ namespace RTE {
 			s_FailTag = "net-world-catchup-ceiling-selftest";
 			return TestCatchUpKeepsItsCeiling();
 		}
+		if (std::strcmp(name, "catchup-closes") == 0 || std::strcmp(name, "-net-world-catchup-closes-selftest") == 0) {
+			s_FailTag = "net-world-catchup-closes-selftest";
+			return TestCatchUpClosesOnASlowMachine();
+		}
+		if (std::strcmp(name, "catchup-fresh") == 0 || std::strcmp(name, "-net-world-catchup-fresh-selftest") == 0) {
+			s_FailTag = "net-world-catchup-fresh-selftest";
+			return TestCatchUpForgetsTheLastTicksTime();
+		}
+		if (std::strcmp(name, "catchup-census") == 0 || std::strcmp(name, "-net-world-catchup-census-selftest") == 0) {
+			s_FailTag = "net-world-catchup-census-selftest";
+			return TestCatchUpTicksAreNotSinglePlayers();
+		}
+		if (std::strcmp(name, "catchup-overdue") == 0 || std::strcmp(name, "-net-world-catchup-overdue-selftest") == 0) {
+			s_FailTag = "net-world-catchup-overdue-selftest";
+			return TestCatchUpReadsAnOverdueDrawAsDue();
+		}
 		if (std::strcmp(name, "take-pump") == 0 || std::strcmp(name, "-net-world-take-pump-selftest") == 0) {
 			s_FailTag = "net-world-take-pump-selftest";
 			return TestTakeDoesNotPumpTheSession();
@@ -9843,6 +10036,18 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestCatchUpKeepsItsCeiling(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCatchUpClosesOnASlowMachine(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCatchUpForgetsTheLastTicksTime(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCatchUpTicksAreNotSinglePlayers(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCatchUpReadsAnOverdueDrawAsDue(); result != 0) {
 			return result;
 		}
 		if (const int result = TestTakeDoesNotPumpTheSession(); result != 0) {

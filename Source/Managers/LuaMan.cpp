@@ -16911,6 +16911,18 @@ long long LuaMan::GetTotalHeapBytes() {
 	return total;
 }
 
+long long LuaMan::GetTotalHeapLiveBytes() {
+	const auto live = [](LuaStateWrapper& luaState) {
+		std::lock_guard<std::recursive_mutex> lock(luaState.GetMutex());
+		return static_cast<long long>(G(luaState.GetLuaState())->gc.estimate);
+	};
+	long long total = live(m_MasterScriptState);
+	for (LuaStateWrapper& luaState: m_ScriptStates) {
+		total += live(luaState);
+	}
+	return total;
+}
+
 std::string LuaMan::CheckpointHeapCensus() {
 	const std::string runs = CheckpointLua::HeapOwner::RunSlackCensus();
 	return (runs.empty() ? std::string() : runs + " ") + std::format("lua_committed_mb={} lua_free_mb={} lua_returned_mb={} lua_copy_mb={} lua_copy_committed_mb={} lua_idle_copy_mb={}", CheckpointLua::HeapOwner::CommittedHeapBytes() >> 20,

@@ -3,6 +3,7 @@
 #include "SoundContainerRegistry.h"
 #include "MusicMan.h"
 
+#include <array>
 #include <string>
 #include <string_view>
 #include <algorithm>
@@ -1091,6 +1092,12 @@ namespace RTE {
 		/// game commands it carries, so an unpause can arrive while the sim holds still.
 		/// @return Whether the exchange succeeded; a failure sets the controller replay error.
 		bool RunLockstepPausedTick();
+
+		/// The microseconds the checksum's randomness feed took since the tick-cost census last asked (CC_TEST_TICK_COST_DETAILS).
+		static long long TakeChecksumFeedUs();
+
+		/// The microseconds the script callbacks, the pre-controller update and the controllers' update took since the census last asked.
+		static std::array<long long, 3> TakeControllerPhaseUs();
 
 		/// Feeds this tick's object census into the sim checksum, at the tick boundary the checkpoint
 		/// archive is written at, so the hash and the archive describe the same instant. Covers the
