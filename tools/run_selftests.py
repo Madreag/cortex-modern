@@ -514,8 +514,14 @@ def run_row_in_mode(options, make_run, name, case, sanitizer):
     else:
         walk = name == "preview-binding-exhaustive"
         budget = max(options.timeout, BINDING_WALK_SANITIZER_TIMEOUT.get(sanitizer, BINDING_WALK_TIMEOUT)) if walk else options.timeout
+        row_env = None
+        if name == "net-session-plane" and "CC_TEST_HOLD_SCHEDULE_THREADS" not in os.environ:
+            # The pool mixes real waiting with schedule work. Seven workers on this
+            # eight-CPU box reached 300 s beside a -j4 build. Give the suite pool
+            # two workers per CPU; explicit campaign settings still take precedence.
+            row_env = {"CC_TEST_HOLD_SCHEDULE_THREADS": str(max(2, 2 * (os.cpu_count() or 1)))}
         run = make_run(options.repo, BINDING_WALK_ARGS if walk else [f"-{name}-selftest"], case, budget,
-                       fixtures=BINDING_WALK_FIXTURES if walk else SELFTEST_FIXTURES.get(name))
+                       fixtures=BINDING_WALK_FIXTURES if walk else SELFTEST_FIXTURES.get(name), env=row_env)
         try:
             record = run.start().finish()
         finally:
