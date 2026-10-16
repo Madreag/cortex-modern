@@ -376,6 +376,7 @@ namespace RTE {
 		RenewSettledPeerSplit(nowMs);
 		TickPeerInputDelay(nowMs);
 		TickPeerAdmin(nowMs);
+		TickPeerCaptureRequest(nowMs);
 		FlushPeerCommittedTails(nowMs);
 
 		if (m_PeerTailThrough && m_Stats.nextFrame <= *m_PeerTailThrough) RequestPeerCommittedTail(nowMs);

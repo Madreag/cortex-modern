@@ -40,6 +40,9 @@ namespace RTE {
 	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
 	uint64_t NetLockstepSharedClockMs();
 	static std::atomic<uint64_t> s_CrossTransportResetMs{0};
+#ifdef CCCP_WITH_GNS
+	static bool ApplyTimedTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
+#endif
 
 	std::string GnsTransport::TurnHostReceipts(const std::string& servers) {
 		std::istringstream input(servers);
@@ -703,7 +706,10 @@ namespace RTE {
 			const auto ageMs = [nowUs](SteamNetworkingMicroseconds stamp) { return stamp > 0 ? std::max<SteamNetworkingMicroseconds>(0, nowUs - stamp) / 1000 : -1; };
 			const auto flowIt = m_PacketFlow.find(connection);
 			const PacketFlow flow = flowIt == m_PacketFlow.end() ? PacketFlow{} : flowIt->second;
-			const auto queue = GetPeerQueueStats(peerId);
+			const bool queueStatsAvailable = info.state == k_ESteamNetworkingConnectionState_Connected;
+			const auto queue = queueStatsAvailable ? GetPeerQueueStats(peerId) : NetTransportQueueStats{};
+			const auto receipt = m_RouteReceipts.find(connection);
+			const std::string& route = info.connectedRoute.empty() && receipt != m_RouteReceipts.end() ? receipt->second.route : info.connectedRoute;
 			std::ostringstream line;
 			line << "[net-transport-health] event=" << event << " peer=" << peerId << " connection=" << connection
 			     << " side=" << (m_IsHost ? "host" : "client") << " state=" << info.state << " end_reason=" << info.endReason
@@ -714,8 +720,8 @@ namespace RTE {
 			     << " last_message_handoff_ms=" << flow.lastHandedOffUs / 1000 << " last_message_received_ms=" << flow.lastReceivedUs / 1000
 			     << " sent_messages=" << flow.sentMessages << " sent_bytes=" << flow.sentBytes
 			     << " received_messages=" << flow.receivedMessages << " received_bytes=" << flow.receivedBytes
-			     << " pending_reliable_bytes=" << queue.reliableBytes << " queue_ms=" << queue.queueMs
-			     << " route=\"" << info.routeReceipt << "\"";
+			     << " queue_stats_available=" << queueStatsAvailable << " pending_reliable_bytes=" << queue.reliableBytes << " queue_ms=" << queue.queueMs
+			     << " route=\"" << route << "\"";
 			if (std::string_view(event) != "sample") {
 				std::string detail = GetPeerDetailedStatus(peerId);
 				std::replace(detail.begin(), detail.end(), '\n', ' ');
@@ -747,7 +753,7 @@ namespace RTE {
 			const uint64_t reset = s_CrossTransportResetMs.load();
 			const uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count();
 			if (reset && now >= reset && s_CrossTransportResetMs.exchange(0)) {
-				const bool accepted = ApplyCrossTransportFault(0, 0, 0, 0);
+				const bool accepted = ApplyTimedTransportFault(0, 0, 0, 0);
 				System::PrintDiagnosticLine("[cross-transport] timed_reset send_recv_armed=" + std::to_string(accepted));
 			}
 			m_Interface->RunCallbacks();
@@ -810,7 +816,8 @@ namespace RTE {
 		}
 
 		mutable std::set<HSteamNetConnection> m_RouteLogged;
-		mutable std::map<HSteamNetConnection, std::string> m_RouteReceipts; //!< Each connection's latest [net-route] line.
+		struct RouteReceipt { std::string text, route; };
+		mutable std::map<HSteamNetConnection, RouteReceipt> m_RouteReceipts; //!< Each connection's latest receipt and selected route, retained through close diagnostics.
 		mutable GnsRouteTracker m_RouteTracker; //!< The route each receipt named, so a live change gets its own receipt.
 		std::map<HSteamNetConnection, uint64_t> m_DialedMs; //!< When each ICE connection was dialed or accepted.
 		std::map<HSteamNetConnection, std::string> m_ConnectionOffers; //!< The relay offer each connection's TURN lists came from.
@@ -858,7 +865,7 @@ namespace RTE {
 				line << " change=" << change;
 				if (const auto dialed = m_DialedMs.find(connection); dialed != m_DialedMs.end()) line << " after_ms=" << SteadyMs() - dialed->second;
 			}
-			m_RouteReceipts[connection] = line.str();
+			m_RouteReceipts[connection] = {line.str(), relayed ? "relay" : "direct"};
 			DiagnosticLine() << line.str() << std::endl;
 		}
 
@@ -1218,7 +1225,7 @@ namespace RTE {
 				}
 			}
 			result.relayOffer = RouteOffer(connection, (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0);
-			if (const auto receipt = m_RouteReceipts.find(connection); receipt != m_RouteReceipts.end()) result.routeReceipt = receipt->second;
+			if (const auto receipt = m_RouteReceipts.find(connection); receipt != m_RouteReceipts.end()) result.routeReceipt = receipt->second.text;
 
 			const std::pair<const char*, ESteamNetworkingConfigValue> numbers[] = {
 				{"P2P_Transport_ICE_Enable", k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable},
@@ -1798,10 +1805,11 @@ namespace RTE {
 #endif
 	}
 
-	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs) {
 #ifdef CCCP_WITH_GNS
-		const char* headless = std::getenv("CCCP_HEADLESS");
-		if (!headless || std::string_view(headless) != "1" || lagMs < 0 || lagMs > 20000 ||
+	// A fault that was armed resets even if presentation changes before its deadline. The public harness entry still
+	// requires headless mode; the internal operation also lets the headed selftest verify actual readback and expiry.
+	static bool ApplyTimedTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs) {
+		if (lagMs < 0 || lagMs > 20000 ||
 		    !std::isfinite(lossPercent) || !std::isfinite(jitterMs) || lossPercent < 0 || lossPercent > 100 || jitterMs < 0 || jitterMs > 10000 || durationMs > 600000) return false;
 		auto* utils = SteamNetworkingUtils();
 		if (!utils) return false;
@@ -1820,10 +1828,46 @@ namespace RTE {
 		accepted &= utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendTimeSincePreviousPacket, jitterMs > 0 || s_SimulatedJitterMs > 0 ? 1 : -1);
 		s_CrossTransportResetMs.store(durationMs ? std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count() + durationMs : 0);
 		return accepted;
+	}
+#endif
+
+	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs) {
+#ifdef CCCP_WITH_GNS
+		const char* headless = std::getenv("CCCP_HEADLESS");
+		if (!headless || std::string_view(headless) != "1") return false;
+		return ApplyTimedTransportFault(lagMs, lossPercent, jitterMs, durationMs);
 #else
 		(void)lagMs; (void)lossPercent; (void)jitterMs; (void)durationMs;
 		return false;
 #endif
+	}
+
+	bool GnsTimedTransportFaultSelfTest(std::string* error) {
+#ifdef CCCP_WITH_GNS
+		GnsTransport transport;
+		if (!transport.StartHost(43610, error)) return false;
+		const char* headless = std::getenv("CCCP_HEADLESS");
+		const bool harnessAllowed = headless && std::string_view(headless) == "1";
+		// Retain the public presentation guard and every bounds check, and exercise the same setter/reset under a visible window.
+		if (ApplyCrossTransportFault(-1, 0, 0, 10) || ApplyCrossTransportFault(0, 101, 0, 10) ||
+		    ApplyCrossTransportFault(10, 5, 2, 1) != harnessAllowed ||
+		    ApplyTimedTransportFault(-1, 0, 0, 10) || ApplyTimedTransportFault(0, 101, 0, 10) ||
+		    ApplyTimedTransportFault(0, 0, -1, 10) || ApplyTimedTransportFault(0, 0, 0, 600001) ||
+		    ApplyTimedTransportFault(0, std::numeric_limits<float>::quiet_NaN(), 0, 10) ||
+		    ApplyTimedTransportFault(0, 0, std::numeric_limits<float>::infinity(), 10) ||
+		    !ApplyTimedTransportFault(10, 5, 2, 1)) {
+			SetError(error, "transport hook accepted invalid bounds or changed its presentation guard, or the timed operation refused a valid setting");
+			return false;
+		}
+		float loss = 0; size_t bytes = sizeof(loss); ESteamNetworkingConfigDataType type;
+		const auto read = [&] { bytes = sizeof(loss); return SteamNetworkingUtils()->GetConfigValue(k_ESteamNetworkingConfig_FakePacketLoss_Send,
+		    k_ESteamNetworkingConfig_Global, 0, &type, &loss, &bytes) > 0; };
+		if (!read() || loss != 5) { SetError(error, "loss hook has no GNS readback"); return false; }
+		std::this_thread::sleep_for(std::chrono::milliseconds(3));
+		transport.PollEvents();
+		if (!read() || loss != 0) { SetError(error, "timed fault did not reset without simulation progress"); return false; }
+#endif
+		return true;
 	}
 
 	bool GnsPacketSpacingSelfTest(std::string* error) {

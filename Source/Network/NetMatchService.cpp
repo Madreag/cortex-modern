@@ -3967,6 +3967,15 @@ static std::string ResyncSaveName() {
 				m_ScheduledCaptures.insert(takenAt);
 				if (note.kind == NetGameCheckpoint::ManualCapture) m_ManualCaptures.insert(takenAt);
 				if (m_Coordinator) m_Coordinator->NoteAnnouncedCapture(takenAt);
+				// A held host's private-base request is carried by an agreed frame of the playing seats, not by its held input.
+				if (m_IsHost && note.kind == NetGameCheckpoint::Capture && note.sender == input.localPeer && m_PrivateBaseRequested &&
+				    m_WorldCapturePending && m_OpenCaptureTick == 0) {
+					m_OpenCaptureTick = note.tick;
+					m_OpenCaptureForJoin = true;
+					m_OpenCaptureManual = false;
+					m_CaptureWriters = input.writers;
+					if (m_Coordinator) m_Coordinator->ClearPrivateBaseCaptureRequest();
+				}
 				// The writers report the tick they took, so that is the capture the host waits on.
 				if (m_IsHost && note.tick == m_OpenCaptureTick) { m_OpenCaptureTick = takenAt; m_OpenCaptureApplied = true; }
 			} else if ((note.kind == NetGameCheckpoint::Written || note.kind == NetGameCheckpoint::Missed) && m_IsHost && note.tick == m_OpenCaptureTick) {
@@ -4043,7 +4052,13 @@ static std::string ResyncSaveName() {
 		// A park commits empty frames, so an activation inside one would never be stamped: nothing is named until it lands.
 		// The startup frames before a round's agreed first frame carry no commands either, so a capture named in them never
 		// reaches a writer and the schedule would wait on it for the rest of the round.
-		if (input.activationPending || input.startupPending || input.ownSeatHeld || input.hostProvisional) return output;
+		if (input.activationPending || input.startupPending || input.hostProvisional) return output;
+		if (input.ownSeatHeld) {
+			// This is a control-plane request, not a capture named on an input the held seat no longer supplies. Playing
+			// voters agree the eventual tick; the committed command below is the first thing that opens the capture.
+			output.requestPrivateBase = joinCapture && m_PrivateBaseRequested && m_WorldJoin.IsPrivateMatch();
+			return output;
+		}
 		if (!input.paused) {
 			const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
 			const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
@@ -4297,6 +4312,8 @@ static std::string ResyncSaveName() {
 			input.hostProvisional = m_Coordinator->IsHostProvisional();
 		}
 		AutosaveTickOutput output = StepAutosaveSchedule(input);
+		if (output.requestPrivateBase) (void)m_Coordinator->RequestPrivateBaseCapture();
+		else if (m_IsHost && (!m_PrivateBaseRequested || !m_WorldCapturePending || !input.ownSeatHeld)) m_Coordinator->ClearPrivateBaseCaptureRequest();
 		// The prepared capture warms ahead of the next one: a named capture is near at once, an interval one counts from the
 		// host's schedule or, on a peer, from the last capture it took.
 		bool named = std::any_of(output.send.begin(), output.send.end(), [](const auto& note) { return note.kind == NetGameCheckpoint::Capture || note.kind == NetGameCheckpoint::ManualCapture; });
