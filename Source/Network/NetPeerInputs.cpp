@@ -282,6 +282,13 @@ namespace RTE {
 			return true;
 		}
 		if (message.type == NetHostMigrationMessageType::PeerBridge) {
+			const bool invitation = message.voterMask == 0;
+			if (invitation) {
+				// An authenticated invitation is delivered only to its named owner. It contributes no vote on this or any other
+				// peer, and cannot stop an input. The owner's ordinary co-sign checks decide whether it can promise the cutoff.
+				if (message.preparedFrame != 0 || message.members.size() != 1 || message.members.front() != m_Config.localPeerId ||
+				    (message.connectedMask & SeatBit(message.senderPeerId)) == 0 || (message.connectedMask & SeatBit(m_Config.localPeerId)) != 0) return true;
+			} else if (message.voterMask != SeatBit(message.senderPeerId)) return true;
 			// A hold made now is voted at its frame; one agreed ahead is voted as it arrives.
 			if (message.preparedFrame == 0 && message.boundary >= message.frame && message.frame > m_Stats.nextFrame && message.frame - m_Stats.nextFrame <= NetLockstepCodec::c_MaxFutureFrameSkew) {
 				m_PeerBridgeVotes[{message.frame, DecisionKind(message)}].try_emplace(message.senderPeerId, message);
@@ -291,15 +298,16 @@ namespace RTE {
 			heard();
 			auto& votes = m_PeerBridgeVotes[{message.frame, DecisionKind(message)}];
 			const auto own = votes.find(m_Config.localPeerId);
-			if (own != votes.end() && !SameBridge(own->second, message)) return true;
-			votes.try_emplace(message.senderPeerId, message);
-			if (own == votes.end() && !VotedOtherPeerReturn(message)) {
+			if (own != votes.end() && own->second.voterMask != 0 && !SameBridge(own->second, message)) return true;
+			const auto previous = votes.find(message.senderPeerId);
+			if (previous == votes.end() || (previous->second.voterMask == 0 && !invitation)) votes.insert_or_assign(message.senderPeerId, message);
+			if ((own == votes.end() || own->second.voterMask == 0) && !VotedOtherPeerReturn(message)) {
 				auto reply = message;
 				reply.senderPeerId = m_Config.localPeerId;
 				reply.appliedFrame = m_LastCompletedSimulationTick.value_or(0);
 				reply.voterMask = SeatBit(m_Config.localPeerId);
 				if (reply.preparedFrame == 3) m_PeerAdminOwnVote = reply;
-				votes.emplace(m_Config.localPeerId, reply);
+				votes.insert_or_assign(m_Config.localPeerId, reply);
 				m_PeerVotedAtMs.try_emplace({reply.frame, DecisionKind(reply)}, nowMs);
 				if (reply.preparedFrame == 0) for (uint8_t peer: reply.members) {
 					m_PeerRejectedInputs[reply.frame] |= SeatBit(peer);

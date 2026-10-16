@@ -340,13 +340,17 @@ namespace RTE {
 			for (auto& [key, votes]: m_PeerBridgeVotes) {
 				if (key.first < m_Stats.nextFrame || m_PeerBridgeCertificates.contains(key)) continue;
 				bool newVote = false;
-				if (!votes.contains(m_Config.localPeerId)) for (const auto& [peer, vote]: votes) {
+				const auto previous = votes.find(m_Config.localPeerId);
+				if (previous == votes.end() || previous->second.voterMask == 0) for (const auto& [peer, vote]: votes) {
+					if (peer == m_Config.localPeerId ||
+					    (vote.voterMask == 0 && !(vote.preparedFrame == 0 && vote.members.size() == 1 && vote.members.front() == m_Config.localPeerId)) ||
+					    (vote.voterMask != 0 && vote.voterMask != SeatBit(peer))) continue;
 					if (!ValidatePeerBridge(vote) && !CoSignsOwnHold(vote)) continue;
 					auto own = vote;
 					own.senderPeerId = m_Config.localPeerId; own.voterMask = SeatBit(m_Config.localPeerId);
 					own.appliedFrame = m_LastCompletedSimulationTick.value_or(0);
 					if (own.preparedFrame == 3) m_PeerAdminOwnVote = own;
-					votes.emplace(m_Config.localPeerId, std::move(own));
+					votes.insert_or_assign(m_Config.localPeerId, std::move(own));
 					newVote = true;
 					if (vote.preparedFrame == 0) for (uint8_t held: vote.members) {
 						m_PeerRejectedInputs[vote.frame] |= SeatBit(held);
