@@ -89,6 +89,8 @@ namespace RTE {
 		static bool FeelBeginDraw();
 		/// The headless presentation cap in hertz, 0 when none applies.
 		static double FeelCapHz();
+		/// Milliseconds until the presentation cap admits the next draw; negative when no cap paces the draws.
+		static double FeelMsUntilNextDraw();
 		/// Inside a match whose display takes no frames, presents stay a sixtieth of a second apart without the display's wait.
 		static void SetUnseenDisplayCap(bool unseen);
 		static void FeelBeforePresent();

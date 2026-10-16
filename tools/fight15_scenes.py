@@ -302,7 +302,7 @@ def scene_checks(peer, steps):
     return checks
 
 
-def buy(peer, fire=True, landing_offset=None, craft="Base.rte/Rocket MK2", soldier="Coalition.rte/Soldier Light"):
+def buy(peer, fire=True, landing_offset=None, craft="Base.rte/Rocket MK2", soldier="Coalition.rte/Soldier Light", rebuy_lost=False):
     steps = [dict(op="game_mouse", button="right", down=True), wait(renders=3, sim_advanced=2),
              dict(op="wait_scene", input_player=0, equals=dict(pie_visible=True)),
              dict(op="pie_point", input_player=0, command=6),
@@ -337,6 +337,9 @@ def buy(peer, fire=True, landing_offset=None, craft="Base.rte/Rocket MK2", soldi
     steps += capture(f"arrival-{peer}")
     steps += [dict(op="assert_scene", input_player=0, delivered=soldier, equals=dict(alive=True)),
               dict(op="assert_buy", input_player=0, equals=dict(visible=False, enabled=False))]
+    if rebuy_lost:
+        # A unit the fight takes before its player does is bought again from the pie, up to three times.
+        select[0].update(lost_rebuy_back=len(steps), lost_rebuy_attempts=3)
     steps += select
     if fire:
         steps += [dict(op="assert_scene", input_player=0, equals=dict(alive=True, preset=soldier, weapon="Coalition.rte/Assault Rifle"), remember="before-fire")]

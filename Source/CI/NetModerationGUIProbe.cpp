@@ -57,6 +57,7 @@
 #include <limits>
 #include <stdexcept>
 #include <sstream>
+#include <utility>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -97,7 +98,7 @@ namespace {
 		Sim
 	};
 	struct Probe {
-		bool loaded = false, enabled = false, done = false, failed = false, resultStarted = false;
+		bool loaded = false, enabled = false, done = false, failed = false, resultStarted = false, quitWhenWritten = false;
 		size_t index = 0, gestureIndex = SIZE_MAX, handIndex = SIZE_MAX; //!< handIndex: the step whose hand gesture is still running.
 		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0, stepSim = 0, resultWrittenMs = 0, pendingWrittenMs = 0;
 		Clock::time_point started;
@@ -121,6 +122,8 @@ namespace {
 		uint64_t minuteMs = 0, minuteTick = 0, minuteProbeNs = 0, fightSamples = 0, aiFiredFrames = 0;
 		double minimumFightPace = std::numeric_limits<double>::infinity();
 		size_t landingMoveIndex = SIZE_MAX, actorCycleIndex = SIZE_MAX, aimIndex = SIZE_MAX;
+		int lostRebuys = 0; //!< Purchases bought again because their unit was lost before its player took it.
+		size_t jumpTo = SIZE_MAX; //!< The step a completed one sends the script back to.
 		uint64_t landingMoveTick = 0, actorCycleTick = 0, actorCycleRender = 0, aimTick = 0;
 		int actorCycleStage = 0, actorCyclePresses = 0;
 		uint64_t pageRender = 0; //!< The render show_row acts again at.
@@ -895,8 +898,11 @@ namespace {
 			}
 			if (op == "pie_point") {
 				auto* game = g_ActivityMan.GetActivity();
-				auto* actor = game ? game->GetControlledActor(LocalPlayer(step)) : nullptr;
-				auto* pie = actor ? actor->GetPieMenu() : nullptr;
+				// The build editor's pie is the one a player finishes building with; an actor's carries its orders.
+				auto* editor = step.value("editor", false) ? dynamic_cast<GameActivity*>(game) : nullptr;
+				auto* actor = !editor && game ? game->GetControlledActor(LocalPlayer(step)) : nullptr;
+				auto* pie = editor && editor->GetEditorGUI(LocalPlayer(step)) ? editor->GetEditorGUI(LocalPlayer(step))->GetCheckpointPieMenu() :
+				            actor ? actor->GetPieMenu() : nullptr;
 				auto* slice = pie ? pie->GetFirstPieSliceByType(static_cast<PieSliceType>(step.value("command", 6))) : nullptr;
 				Require(slice && pie->IsVisible(), "the pie has no requested visible slice");
 				const Vector target = Vector(0.9F, 0).RadRotate(slice->GetMidAngle() + pie->GetRotAngle());
@@ -1003,8 +1009,20 @@ namespace {
 			const std::string wanted = step.at("preset").get<std::string>();
 			if (actor && actor->GetModuleAndPresetName() == wanted) return true;
 			const auto* roster = g_MovableMan.GetTeamRoster(game->GetTeamOfPlayer(player));
-			Require(std::any_of(roster->begin(), roster->end(), [&wanted](const Actor* member) { return member->GetModuleAndPresetName() == wanted; }),
-			        "the unit " + wanted + " left the team before its player took it");
+			if (std::none_of(roster->begin(), roster->end(), [&wanted](const Actor* member) { return member->GetModuleAndPresetName() == wanted; })) {
+				// The fight can take a unit before its player does; a turn that buys it again goes back to where its purchase began.
+				const size_t back = step.value("lost_rebuy_back", size_t{0});
+				const int attempts = step.value("lost_rebuy_attempts", 0);
+				Require(back > 0 && back <= probe.index && probe.lostRebuys < attempts, "the unit " + wanted + " left the team before its player took it");
+				++probe.lostRebuys;
+				probe.result["lost_rebuys"].push_back({{"step", probe.index}, {"unit", wanted}, {"tick", tick}, {"presses", probe.actorCyclePresses}});
+				System::PrintDiagnosticLine("[net-ui-probe] the unit " + wanted + " was lost before its player took it at tick " + std::to_string(tick) +
+				                            ": buying it again (" + std::to_string(probe.lostRebuys) + " of " + std::to_string(attempts) + ")");
+				probe.actorCycleIndex = SIZE_MAX;
+				observed["lost_rebuy"] = {{"to_step", probe.index - back}, {"attempt", probe.lostRebuys}};
+				probe.jumpTo = probe.index - back;
+				return true;
+			}
 			Require(probe.actorCyclePresses < 32, "thirty-two held Next Actor presses did not select the purchased unit");
 			pushKey(true); ++probe.actorCyclePresses; probe.actorCycleStage = 1; return false;
 		} else if (op == "assert_scene" || op == "wait_scene") {
@@ -1016,6 +1034,7 @@ namespace {
 			Json state = {{"team", team}, {"funds", game->GetTeamFunds(team)}, {"alive", actor && !actor->IsDead()}, {"brain_count", observed["brains"].size()},
 			    {"preset", actor ? actor->GetModuleAndPresetName() : ""}, {"team_actors", Json::array()}, {"weapon", ""}, {"fired", false},
 			    {"landing_zone_selection", game->GetViewState(player) == Activity::ViewState::LandingZoneSelect},
+			    {"actor_selection", game->GetViewState(player) == Activity::ViewState::ActorSelect},
 			    {"screen_text", g_FrameMan.GetScreenText(game->ScreenOfPlayer(player))},
 			    {"pie_visible", pie && pie->IsVisible()}, {"pie_description", pie ? pie->GetHoveredSliceDescription() : ""}};
 			for (const auto* member: *g_MovableMan.GetTeamRoster(team)) state["team_actors"].push_back(member->GetModuleAndPresetName());
@@ -1580,12 +1599,14 @@ namespace {
 		} else if (op == "screenshot_pair") {
 			// Both shots of one capture inside a single step, so the overlay readback and the composited
 			// screen buffer are the same rendered frame.
-			const std::string name = step.at("name").get<std::string>();
+			// A purchase bought again takes its pictures again beside the first attempt's.
+			const std::string suffix = probe.lostRebuys > 0 ? "-rebuy" + std::to_string(probe.lostRebuys) : "";
+			const std::string name = step.at("name").get<std::string>() + suffix;
 			auto path = Leaf(name);
 			path += ".png";
 			Require(!std::filesystem::exists(path), "screenshot already exists");
 			Require(g_FrameMan.SaveBitmapToPNG(g_FrameMan.GetBackBuffer32(), path.string().c_str()) == 0, "screenshot save failed");
-			const std::string composited = step.value("composited_name", name + "_composited");
+			const std::string composited = step.contains("composited_name") ? step.at("composited_name").get<std::string>() + suffix : name + "_composited";
 			(void)Leaf(composited);
 			Require(g_FrameMan.SaveScreenToPNG(composited.c_str()) == 0, "composited screenshot save failed");
 			observed["screenshot"] = path.string();
@@ -1641,6 +1662,8 @@ namespace {
 			probe.done = true;
 			probe.result["complete"] = true;
 			probe.result["pass"] = true;
+			// A run with no driver to end it (a single-player fight) ends its engine once the result is written.
+			probe.quitWhenWritten = step.value("quit", false);
 		} else {
 			throw std::runtime_error("unknown probe operation: " + op);
 		}
@@ -1666,7 +1689,7 @@ namespace {
 				probe.result["steps"] = Json::array(); probe.result["complete"] = false; probe.result["pass"] = false;
 				probe.result["round"] = round; probe.started = Clock::now();
 				probe.stepMs = probe.resultWrittenMs = probe.pendingWrittenMs = 0; probe.gestureIndex = SIZE_MAX; probe.handIndex = SIZE_MAX;
-				probe.roundEndArmed = false; probe.roundEndSignals.clear();
+				probe.roundEndArmed = false; probe.roundEndSignals.clear(); probe.lostRebuys = 0; probe.jumpTo = SIZE_MAX;
 			}
 			if (probe.done) return;
 			if (!probe.phaseArmed) {
@@ -1745,6 +1768,7 @@ namespace {
 			probe.result.erase("pending");
 			if (step.contains("remember")) probe.result["bookmarks"][step.at("remember").get<std::string>()] = observed;
 			++probe.index;
+			if (probe.jumpTo != SIZE_MAX) probe.index = std::exchange(probe.jumpTo, SIZE_MAX);
 			probe.stepRender = probe.renders;
 			probe.stepMs = NowMs();
 			probe.stepSim = g_TimerMan.GetSimUpdateCount();
@@ -1755,6 +1779,7 @@ namespace {
 				probe.resultWrittenMs = probe.stepMs;
 			}
 			if (probe.done) System::PrintDiagnosticLine("[net-ui-probe] PASS: completed " + std::to_string(probe.index) + " steps");
+			if (probe.done && probe.quitWhenWritten) System::SetQuit(true);
 		} catch (const std::exception& error) {
 			try { ReleasePanKey(); } catch (...) {}
 			GUIInputWrapper::SetAutomationDriving(false);

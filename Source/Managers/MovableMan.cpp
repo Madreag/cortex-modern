@@ -1604,12 +1604,23 @@ namespace {
 	// Snapshot the sim + Lua RNG states here — before the see-ray and MOID-draw futures launch
 	// and start mutating g_SimRNG on the thread pool — so the snapshot can't be raced. This is why
 	// the randomness feed stays inside Update while the object census moved to the tick's end.
+	long long s_ChecksumFeedUs = 0; //!< The tick-cost census's time in the checksum's randomness feed since it last read it.
+	std::array<long long, 3> s_ControllerPhaseUs{}; //!< The census's time in the script callbacks, the pre-controller update and the controllers.
+
 	void FeedSimChecksumRandomness() {
 		const std::string rngState = g_SimRNG.SerializeStateForHashing();
 		g_SimChecksum.Update("sim_rng", rngState.data(), rngState.size());
 		g_LuaMan.HashAllLuaStatesIntoSimChecksum();
 	}
 } // namespace
+
+long long MovableMan::TakeChecksumFeedUs() {
+	return std::exchange(s_ChecksumFeedUs, 0);
+}
+
+std::array<long long, 3> MovableMan::TakeControllerPhaseUs() {
+	return std::exchange(s_ControllerPhaseUs, {});
+}
 
 bool MovableMan::RunLockstepPausedTick() {
 	const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
@@ -7738,16 +7749,26 @@ void MovableMan::Update() {
 	// Finish our Seeing rays from last frame
 	WaitForActorsSeeTask("tick-start");
 
+	static const bool timedPhases = std::getenv("CC_TEST_TICK_COST_DETAILS") != nullptr;
+	const long long callbacksBeganUs = timedPhases ? g_TimerMan.GetAbsoluteTime() : 0;
 	// Prior to controller/AI update, execute lua callbacks
 	g_LuaMan.ExecuteLuaScriptCallbacks();
+	const long long preControllerBeganUs = timedPhases ? g_TimerMan.GetAbsoluteTime() : 0;
 
 	// Updates everything needed prior to AI/user input being processed
 	// Fugly hack to keep backwards compat with scripts that rely on weird frame-delay-ordering behaviours
 	// TODO, cleanup the pre-controller update and post-controller updates to have some consistent logic of what goes where
 	PreControllerUpdate();
+	const long long controllersBeganUs = timedPhases ? g_TimerMan.GetAbsoluteTime() : 0;
 
 	// Updates AI/user input
 	UpdateControllers();
+	if (timedPhases) {
+		const long long controllersEndedUs = g_TimerMan.GetAbsoluteTime();
+		s_ControllerPhaseUs[0] += preControllerBeganUs - callbacksBeganUs;
+		s_ControllerPhaseUs[1] += controllersBeganUs - preControllerBeganUs;
+		s_ControllerPhaseUs[2] += controllersEndedUs - controllersBeganUs;
+	}
 	if (ScenarioRunner::HasControllerReplayError()) {
 		return;
 	}
@@ -8033,8 +8054,11 @@ void MovableMan::Update() {
 	// The RNG snapshot has to be taken here, before the see-ray and MOID-draw futures launch below;
 	// the object census is taken at the tick's end instead, where the checkpoint archive is written.
 	if (g_SimChecksum.IsActive()) {
+		static const bool timed = std::getenv("CC_TEST_TICK_COST_DETAILS") != nullptr;
+		const long long feedBeganUs = timed ? g_TimerMan.GetAbsoluteTime() : 0;
 		DumpControllerDebugSnapshot("end_tick_before_checksum", static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), CheckpointActorValues().m_Actors, nullptr, nullptr, &CheckpointLooseValues().m_Particles);
 		FeedSimChecksumRandomness();
+		if (timed) s_ChecksumFeedUs += g_TimerMan.GetAbsoluteTime() - feedBeganUs;
 	}
 
 	// Freeze the material terrain for the threaded vision pass so carves can't race the see-ray reads.
