@@ -5303,7 +5303,7 @@ static bool ScriptGraphReadableDependency(const luabind::detail::object_rep* own
 	}
 	if (std::strcmp(owner->crep()->name(), "SceneEditorGUI") == 0) {
 		const auto* game = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
-		for (int player = 0; game && player < Players::MaxPlayerCount; ++player) if (address == game->GetEditorGUI(player)) return true;
+		for (int player = 0; game && player < Players::MaxPlayerCount; ++player) if (address == game->GetExistingEditorGUI(player)) return true;
 		return false;
 	}
 	return true;
