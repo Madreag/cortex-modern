@@ -118,7 +118,7 @@
     "rows": [
       "image_return_*_keeps_equal_histories_and_bound"
     ],
-    "scope": "actual coordinators, a deterministic image from a common committed capture and the returning seat's own received activation certificate; no game archive"
+    "scope": "actual coordinators, a deterministic image from a common committed capture, the returning seat's own received activation certificate, and its live handshake while the private replay finishes; no game archive"
   },
   "return:20": {
     "rows": [
