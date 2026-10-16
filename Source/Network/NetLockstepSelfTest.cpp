@@ -348,6 +348,14 @@ namespace RTE {
 			}
 			if (peers[1].RequestPrivateBaseCapture()) { *error = "a client requested a host capture"; return false; }
 			if (!peers[0].RequestPrivateBaseCapture()) { *error = "a held host cannot name its requested base through the playing seats"; return false; }
+			for (unsigned arm = 0; arm < 4; ++arm) {
+				auto invalid = *peers[0].m_PeerCaptureRequest;
+				if (arm == 0) invalid.senderPeerId = invalid.successorPeerId = 2;
+				else if (arm == 1) ++invalid.boundary;
+				else if (arm == 2) invalid.configHash.front() ^= 1;
+				else invalid.completeFrom = 0;
+				if (peers[1].ValidatePeerCaptureRequest(invalid, 4423)) { *error = "a capture request escaped its host, generation, config or serial"; return false; }
+			}
 			for (uint64_t now = 0; now < 1000; now += 10) {
 				for (auto& peer: peers) peer.TickPeerCaptureRequest(now);
 				for (size_t from = 0; from < peers.size(); ++from) {
@@ -365,6 +373,24 @@ namespace RTE {
 				size_t captures = 0;
 				for (const auto& [key, certificate]: peer.m_PeerBridgeCertificates) {
 					if (key.second != 4) continue;
+					NetHostMigrationMessage agreed; uint32_t voters = 0;
+					if (!peer.DecodePeerBridgeCertificate(certificate, agreed, voters)) { *error = "the valid capture certificate cannot be decoded"; return false; }
+					auto corrupt = agreed;
+					corrupt.bytes.back() ^= 1;
+					if (peer.ValidatePeerCaptureBridge(corrupt)) { *error = "a capture accepted a corrupted host request"; return false; }
+					auto missing = agreed;
+					missing.connectedMask = missing.voterMask = 2;
+					missing.senderPeerId = 2;
+					if (peer.ValidatePeerCaptureBridge(missing)) { *error = "a capture omitted a playing voter"; return false; }
+					std::vector<uint8_t> signedMissing;
+					if (!NetHostMigrationCodec::Encode(missing, peer.m_Config.migrationKey, signedMissing)) { *error = "the negative capture vote did not encode"; return false; }
+					auto incomplete = missing;
+					incomplete.type = NetHostMigrationMessageType::PeerBridgeCommit;
+					incomplete.bytes = {1};
+					for (unsigned shift = 0; shift < 32; shift += 8) incomplete.bytes.push_back(static_cast<uint8_t>(signedMissing.size() >> shift));
+					incomplete.bytes.insert(incomplete.bytes.end(), signedMissing.begin(), signedMissing.end());
+					incomplete.totalBytes = static_cast<uint32_t>(incomplete.bytes.size());
+					if (peer.DecodePeerBridgeCertificate(incomplete, agreed, voters)) { *error = "a one-voter certificate bypassed the capture's playing-voter requirement"; return false; }
 					++captures;
 					if (agreedFrame && agreedFrame != key.first) { *error = "capture frames differ"; return false; }
 					agreedFrame = key.first;
@@ -28024,6 +28050,13 @@ namespace {
 			NetMatchService::AutosaveTickInput input;
 			input.tick = 120; input.localPeer = 1; input.ownSeatHeld = true;
 			input.writers = {1, 2, 3}; input.lead = 2;
+			auto match = NetMatchConfigUtil::MakeDefault(0x60584423);
+			if (!service.m_WorldJoin.ConfigureMatchRejoins(match, 77, 1000.0 / 60, error) ||
+			    !service.m_WorldJoin.BeginRejoin(12, 1, 2, 2, "Returner", 1000, error)) return false;
+			const auto requested = service.StepAutosaveSchedule(input);
+			if (!requested.requestPrivateBase || requested.capture || !requested.send.empty() || service.m_OpenCaptureTick != 0) {
+				*error = "the held host did not request an agreement independently of its absent input"; return false;
+			}
 			input.applied = {{1, NetGameCheckpoint::Capture, 130}};
 			const auto named = service.StepAutosaveSchedule(input);
 			if (named.capture || !named.send.empty() || !service.IsJoinCaptureTick(130)) {
