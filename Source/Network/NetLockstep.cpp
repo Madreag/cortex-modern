@@ -5925,6 +5925,7 @@ namespace RTE {
 				m_HoldTransactions.erase(seat->first);
 				m_DroppedSeatResolutions.erase(seat->first);
 				m_DroppedSeats.erase(seat->first); m_LeftSeatsHeld.erase(seat->first);
+				m_SlowMachineHolds.erase(seat->first);
 				seat = m_AiHeldSeats.erase(seat);
 			} else ++seat;
 		}
@@ -6511,6 +6512,7 @@ namespace RTE {
 					m_ReclaimTransactions.erase(back);
 					// The return ended the older hold whether or not this peer has simulated to it yet: this hold is the seat's own.
 					m_AiHeldSeats.erase(peer);
+					m_SlowMachineHolds.erase(peer);
 					if (peer != m_Config.localPeerId) m_PeerLeaveFrames.erase(peer);
 				}
 				NoteSeatTransition(peer, timing.applyFrame, SeatTransition::Held);
@@ -7466,6 +7468,7 @@ namespace RTE {
 		// The seat state this round started from may still hold the seat; the return ends that hold here, as the frame that
 		// carried it did on every peer that simulated it, or our first frame would hand the returned seat to the AI again.
 		m_AiHeldSeats.erase(peer); m_HoldTransactions.erase(peer); m_ReleasedAiSeats.erase(peer);
+		m_SlowMachineHolds.erase(peer);
 		m_RemovedPeers.erase(peer);
 		m_PeerLeaveFrames.erase(peer); m_PeerFrameWaivers.erase(peer);
 		m_DroppedSeats.erase(peer); m_LeftSeatsHeld.erase(peer); m_DroppedAtMs.erase(peer);
@@ -10450,6 +10453,8 @@ namespace RTE {
 						m_FrameGroupMembers = m_FrameGroupChanges[outFrame.frame];
 					}
 					m_AiHeldSeats.erase(reclaim->peerId); m_ReleasedAiSeats.erase(reclaim->peerId); m_HoldTransactions.erase(reclaim->peerId);
+					// The cause belongs to the hold that ended, not to a later hold of this seat.
+					m_SlowMachineHolds.erase(reclaim->peerId);
 					if (!m_EvictAfterReclaim.contains(reclaim->peerId)) m_RemovedPeers.erase(reclaim->peerId);
 					m_PeerLeaveFrames.erase(reclaim->peerId); m_PeerFrameWaivers.erase(reclaim->peerId);
 					m_DroppedSeats.erase(reclaim->peerId); m_LeftSeatsHeld.erase(reclaim->peerId); m_DroppedAtMs.erase(reclaim->peerId);
@@ -11238,6 +11243,7 @@ namespace RTE {
 		m_PeerFrameWaivers.erase(peerId);
 		m_DroppedSeats.erase(peerId);
 		m_AiHeldSeats.erase(peerId);
+		m_SlowMachineHolds.erase(peerId);
 		// A released seat that admits a member is that member's: a later hold of it is reclaimable.
 		m_ReleasedAiSeats.erase(peerId);
 		m_DroppedSeatResolutions.erase(peerId);

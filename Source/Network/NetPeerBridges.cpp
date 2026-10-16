@@ -947,6 +947,7 @@ namespace RTE {
 		for (const auto& [peer, bridge]: m_PeerBridges) {
 			if (bridge.returnFrame && frame >= *bridge.returnFrame) {
 				m_PeerLeaveFrames.erase(peer); m_AiHeldSeats.erase(peer); m_SeatBridgeSinceMs.erase(peer);
+				m_SlowMachineHolds.erase(peer);
 			}
 			if (frame < bridge.fromFrame || (bridge.returnFrame && frame >= *bridge.returnFrame)) continue;
 			if (peer == m_Config.localPeerId) continue;

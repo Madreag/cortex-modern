@@ -19398,6 +19398,7 @@ namespace RTE {
 			else if (name == "joining-lobby") passed = TestAJoiningLobbyWaitsForHostConfig(&error);
 			else if (name == "lobby-idle") passed = TestMenuLobbyWaitsForALiveHost(&error);
 			else if (name == "full-knock") passed = TestAFullMatchsKnockEndsAtTheBudget(&error);
+			else if (name == "transport-concurrency") passed = TestConnectionCallbacksReachTheirListener(&error) && TestTwoThreadsSendOnOneTransport(&error);
 			else if (name == "relay-core") {
 				// RunBeforeInitialization already checked settings and candidate policy,
 				// before the global SettingsMan singleton was constructed.

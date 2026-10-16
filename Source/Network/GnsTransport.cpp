@@ -486,6 +486,9 @@ namespace RTE {
 				SendFlags(lane),
 				nullptr);
 			flow.lastResult = static_cast<int>(result);
+			// The liveness sender keeps this evidence fresh even while the game thread cannot poll.
+			if (!m_LastHealthTraceUs.contains(connectionIt->second) || flow.lastAttemptUs - m_LastHealthTraceUs.at(connectionIt->second) >= 5000000)
+				TraceConnectionHealth(connectionIt->second, "sample");
 			if (result != k_EResultOK) {
 				// LimitExceeded means the queue is full, not that the peer is gone: the message was
 				// never taken, so the caller holds it rather than giving up on a reachable player.
