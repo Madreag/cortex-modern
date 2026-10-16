@@ -6440,7 +6440,14 @@ assert(coroutine.resume(_F5Handles.walker, _F5Handles.holder))
 		MovableMan::KnownObjectsScope known;
 		LuaScriptGraphNativeCaptureScope lookups;
 		captured = lua.SerializeScriptGraph(text, problems) && problems.empty();
-		frozenSame = lua.CaptureScriptGraph(frozen, frozenProblems, true) && frozenProblems.empty() && frozen.Text() == text;
+		// A frozen capture raises what it cannot carry.
+		try {
+			frozenSame = lua.CaptureScriptGraph(frozen, frozenProblems, true) && frozenProblems.empty() && frozen.Text() == text;
+		} catch (const ScriptGraphRefusal& refusal) {
+			frozenProblems.insert(frozenProblems.end(), refusal.problems.begin(), refusal.problems.end());
+		} catch (const std::exception& error) {
+			frozenProblems.emplace_back(error.what());
+		}
 	}
 	for (const std::string& problem: problems) std::cout << "[engine-handle-selftest] live capture: " << problem << std::endl;
 	for (const std::string& problem: frozenProblems) std::cout << "[engine-handle-selftest] frozen capture: " << problem << std::endl;
@@ -6489,7 +6496,13 @@ assert(coroutine.resume(_F5Handles.dropped, _F5Handles.holder))
 			MovableMan::KnownObjectsScope known;
 			LuaScriptGraphNativeCaptureScope lookups;
 			lua.SerializeScriptGraph(droppedText, droppedLive);
-			lua.CaptureScriptGraph(droppedFrozen, droppedImage, true);
+			try {
+				lua.CaptureScriptGraph(droppedFrozen, droppedImage, true);
+			} catch (const ScriptGraphRefusal& refusal) {
+				droppedImage.insert(droppedImage.end(), refusal.problems.begin(), refusal.problems.end());
+			} catch (const std::exception& error) {
+				droppedImage.emplace_back(error.what());
+			}
 		}
 		std::cout << "[engine-handle-selftest] note dropped_path_point live=" << (droppedLive.empty() ? std::string("captured") : droppedLive.front())
 		          << " frozen=" << (droppedImage.empty() ? std::string("captured") : droppedImage.front()) << std::endl;
