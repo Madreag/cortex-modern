@@ -2940,14 +2940,23 @@ namespace RTE {
 			if (!service.m_WorldJoin.ConfigureMatchRejoins(match, 77, c_TestTickMs, error) ||
 			    !service.m_WorldJoin.BeginRejoin(originalRoute, 1, 2, 2, "Joiner", hub.now, error)) return false;
 			const auto pumpRejoin = [&](bool tickHostLobby) {
-				service.m_Coordinator->Tick(hub.now);
-				for (size_t index = 1; index < count; ++index) rounds[index]->Tick(hub.now);
+				if (name == "paired-image-service") {
+					rounds[0] = std::move(service.m_Coordinator);
+					const bool advanced = step(true);
+					service.m_Coordinator = std::move(rounds[0]);
+					if (!advanced) return false;
+					--hub.now; // The caller advances the clock, as it does for the capsule-only pump.
+				} else {
+					service.m_Coordinator->Tick(hub.now);
+					for (size_t index = 1; index < count; ++index) rounds[index]->Tick(hub.now);
+				}
 				clientLobby.Tick(hub.now); clientSession.Tick(hub.now, false); otherSession.Tick(hub.now, false);
 				if (tickHostLobby) service.m_Runner->GetLobbySession().Tick(hub.now);
 				hostSession.Tick(hub.now, false); service.DrivePrivateMatchRejoins(hub.now);
+				return true;
 			};
 			for (const uint64_t until = hub.now + 1200; hub.now < until; ++hub.now) {
-				pumpRejoin(true);
+				if (!pumpRejoin(true)) return false;
 			}
 			const auto* pending = service.m_WorldJoin.FindSession(originalRoute);
 			if (!pending || !pending->matchConfigSent || !service.m_SuccessorCapsulesOwed.contains(originalRoute) || opened) {
@@ -2956,7 +2965,7 @@ namespace RTE {
 			service.m_DirectoryRegistered = true;
 			// The lobby's normal config resend is not ticked here: the live service must retry the capsule itself.
 			for (const uint64_t until = hub.now + 1200; hub.now < until && !opened; ++hub.now) {
-				pumpRejoin(false);
+				if (!pumpRejoin(false)) return false;
 			}
 			if (!opened || service.m_SuccessorCapsulesOwed.contains(originalRoute)) { *error = "the live rejoin service did not retry and deliver its successor capsule"; return false; }
 			if (name == "paired-image-service") {
@@ -3021,7 +3030,7 @@ namespace RTE {
 				service.m_WorldJoinImageDigest = image.digest;
 				bool transferred = false;
 				for (const uint64_t until = hub.now + 2000; hub.now < until && !transferred; ++hub.now) {
-					pumpRejoin(true);
+					if (!pumpRejoin(true)) return false;
 					if (const auto* first = service.m_WorldJoin.FindSession(originalRoute)) transferred = first->transferStarted;
 				}
 				if (!transferred) { *error = "the first image did not leave after the other returner's activation was refused"; return false; }
@@ -3554,7 +3563,7 @@ namespace RTE {
 		if (!selected || std::string_view(selected) == "a_kept_hold_waits_for_its_own_directory_without_changing_history") {
 			named.push_back({"a_kept_hold_waits_for_its_own_directory_without_changing_history", [](std::string& error) {
 				Case row{"kept_hold_own_directory"}; row.seats = 4; row.subject = 3;
-				row.gapMs = 8000; row.tie = row.tailWaitForDirectory = row.internet = row.subjectDirectoryDark = row.secondHalfDirectoryDark = true; row.rttMs = row.otherRttMs = 100;
+				row.gapMs = 8000; row.tie = row.tailWaitForDirectory = row.internet = row.subjectDirectoryDark = row.secondHalfDirectoryDark = true;
 				Fixture fixture; if (!fixture.Start(row, error)) return false;
 				uint64_t longestKept = 0; bool keptForAuthority = false;
 				for (const uint64_t until = fixture.hub.faultEnd + 12000; fixture.hub.now < until;) {
