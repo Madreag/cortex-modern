@@ -424,6 +424,15 @@ namespace RTE {
 		auto proposal = PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
 		proposal.preparedFrame = 1; proposal.frame = frame; proposal.boundary = m_LastCompletedSimulationTick.value_or(m_Stats.nextFrame - 1);
 		proposal.members = {peer}; proposal.connectedMask = m_FrameGroupMembers | SeatBit(peer);
+		if (const auto group = m_FrameGroupChanges.upper_bound(frame); group != m_FrameGroupChanges.begin()) proposal.connectedMask = std::prev(group)->second | SeatBit(peer);
+		for (const auto& [returned, bridge]: m_PeerBridges)
+			if (bridge.returnFrame && *bridge.returnFrame <= frame && !m_RemovedPeers.contains(returned) && !IsSeatReleased(returned)) proposal.connectedMask |= SeatBit(returned);
+		for (uint8_t voter = 1; voter <= m_Config.peerCount; ++voter) {
+			if (voter == peer || voter == m_Config.localPeerId || (proposal.connectedMask & SeatBit(voter)) == 0) continue;
+			const auto applied = m_PeerAppliedThrough.find(voter);
+			if (applied == m_PeerAppliedThrough.end() || applied->second < m_Config.startFrame) { if (error) *error = "the private return awaits a playing voter's common prefix"; return false; }
+			proposal.boundary = std::min(proposal.boundary, applied->second);
+		}
 		const auto prefix = PeerAppliedFramePrefix(proposal.boundary); proposal.bytes.assign(prefix.begin(), prefix.end());
 		const uint32_t delay = m_Config.adaptiveInputDelay ? std::min<uint16_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
 		    std::max<uint16_t>(InputDelayAt(peer, frame), ReturnDelayFloor(peer, transport))) : PeerInputDelay(peer);

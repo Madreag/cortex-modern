@@ -291,31 +291,40 @@ namespace RTE {
 			}
 			if (proposal.members.empty()) return false;
 			proposal.preparedFrame = 1;
-			proposal.boundary = m_LastCompletedSimulationTick.value_or(frame - 1);
-			// The boundary is history every voter has applied, so each can check it as the proposal arrives: a voter still finishing its
-			// own return's catch-up would otherwise answer only once it replays this machine's display, and the voters would wait on it.
-			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
-				if (peer == m_Config.localPeerId || (proposal.connectedMask & SeatBit(peer)) == 0 ||
-				    std::find(proposal.members.begin(), proposal.members.end(), peer) != proposal.members.end()) continue;
-				if (const auto applied = m_PeerAppliedThrough.find(peer); applied != m_PeerAppliedThrough.end() && applied->second >= m_Config.startFrame)
+			if (VotedOtherPeerReturn(proposal) || frame > UINT64_MAX - m_Config.slowPlayerBoundTicks) return false;
+			proposal.frame = frame + m_Config.slowPlayerBoundTicks;
+			// The activation can follow another return already agreed ahead of this prepared frame. Keep that seat in the
+			// later group, and include its displayed prefix and vote lead, even while it is still in its neutral interval now.
+			uint32_t returning = 0;
+			for (uint8_t peer: proposal.members) returning |= SeatBit(peer);
+			bool settled = false;
+			for (unsigned pass = 0; pass < NetMatchConfigUtil::c_MaxPeerCount + 1; ++pass) {
+				uint32_t members = m_FrameGroupMembers;
+				if (const auto group = m_FrameGroupChanges.upper_bound(proposal.frame); group != m_FrameGroupChanges.begin()) members = std::prev(group)->second;
+				members |= returning;
+				for (const auto& [peer, bridge]: m_PeerBridges)
+					if (bridge.returnFrame && *bridge.returnFrame <= proposal.frame && !m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) members |= SeatBit(peer);
+				uint64_t nextPrepared = frame, nextLead = m_Config.slowPlayerBoundTicks;
+				proposal.boundary = m_LastCompletedSimulationTick.value_or(frame - 1);
+				if (m_LastQueuedTargetFrame != UINT64_MAX) nextPrepared = std::max(nextPrepared, m_LastQueuedTargetFrame + 1);
+				for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+					if (peer == m_Config.localPeerId || (members & ~returning & SeatBit(peer)) == 0) continue;
+					const auto applied = m_PeerAppliedThrough.find(peer);
+					if (applied == m_PeerAppliedThrough.end() || applied->second < m_Config.startFrame) return false;
 					proposal.boundary = std::min(proposal.boundary, applied->second);
+					nextPrepared = std::max(nextPrepared, m_Stats.peers[peer].reportedNextFrame);
+					uint64_t rtt = m_Stats.peers[peer].pingMs;
+					const auto [wire, route] = PeerFrameRoute(peer);
+					if (wire && wire->IsPeerPingMeasured(route)) rtt = std::max<uint64_t>(rtt, wire->GetPeerPingMs(route));
+					else if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end()) rtt = std::max<uint64_t>(rtt, path->second.P95Ms());
+					nextLead = std::max<uint64_t>(nextLead, static_cast<uint64_t>(std::ceil((rtt + c_NetPeerVoteResendMs) / m_Config.simTickMs)) + m_Config.slowPlayerBoundTicks);
+				}
+				if (nextPrepared > UINT64_MAX - nextLead) return false;
+				const uint64_t activation = std::max(proposal.frame, nextPrepared + nextLead);
+				if (members == proposal.connectedMask && activation == proposal.frame) { settled = true; break; }
+				proposal.connectedMask = members; proposal.frame = activation;
 			}
-			uint64_t lead = m_Config.slowPlayerBoundTicks;
-			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
-				if (peer == m_Config.localPeerId || (m_FrameGroupMembers & SeatBit(peer)) == 0) continue;
-				// Only surviving voters size the return's agreement lead: their round trip, a vote sent again once, and the bound.
-				uint32_t rtt = 0;
-				const auto [wire, route] = PeerFrameRoute(peer);
-				if (wire && wire->IsPeerPingMeasured(route)) rtt = wire->GetPeerPingMs(route);
-				else if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end()) rtt = path->second.P95Ms();
-				lead = std::max<uint64_t>(lead, static_cast<uint64_t>(std::ceil((rtt + c_NetPeerVoteResendMs) / m_Config.simTickMs)) + m_Config.slowPlayerBoundTicks);
-			}
-			uint64_t prepared = frame;
-			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((m_FrameGroupMembers & SeatBit(peer)) != 0)
-				prepared = std::max(prepared, m_Stats.peers[peer].reportedNextFrame);
-			// No voter prepares a frame this machine has not sent its input for, so a return past those reaches every voter before its frame.
-			if (m_LastQueuedTargetFrame != UINT64_MAX) prepared = std::max(prepared, m_LastQueuedTargetFrame + 1);
-			proposal.frame = prepared + lead;
+			if (!settled) return false;
 		}
 		const bool declaredDeparture = !proposal.members.empty() && std::all_of(proposal.members.begin(), proposal.members.end(), [&](uint8_t peer) {
 			const auto ended = m_PeerRoundEnds.find(peer);
