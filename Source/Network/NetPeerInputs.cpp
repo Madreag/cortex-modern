@@ -301,7 +301,18 @@ namespace RTE {
 				if (reply.preparedFrame == 3) m_PeerAdminOwnVote = reply;
 				votes.emplace(m_Config.localPeerId, reply);
 				m_PeerVotedAtMs.try_emplace({reply.frame, DecisionKind(reply)}, nowMs);
-				if (reply.preparedFrame == 0) for (uint8_t peer: reply.members) m_PeerRejectedInputs[reply.frame] |= SeatBit(peer);
+				if (reply.preparedFrame == 0) for (uint8_t peer: reply.members) {
+					m_PeerRejectedInputs[reply.frame] |= SeatBit(peer);
+					const char* cause = peer == m_Config.localPeerId ? "own_hold_consent" : "peer_hold_proposal";
+					const uint64_t heardAt = LastAuthenticatedTraffic(peer);
+					m_HoldFacts[peer] = {reply.frame, nowMs >= heardAt ? nowMs - heardAt : 0, m_Config.slowPlayerBoundTicks * m_Config.simTickMs, cause};
+					DiagnosticLine() << "[net-peer-hold-trigger] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer)
+					    << " frame=" << reply.frame << " ai_frame=" << reply.frame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs))
+					    << " now_ms=" << nowMs << " cause=" << cause << " requested_by=" << static_cast<int>(message.senderPeerId)
+					    << " last_heard_ms=" << heardAt << " last_progress_ms=" << m_Stats.peers[peer].lastProgressMs
+					    << " received_through=" << m_Stats.peers[peer].highestTargetFrame << " delay_ticks=" << InputDelayAt(peer, reply.frame)
+					    << " voters=" << reply.voterMask << std::endl;
+				}
 				SendPeerFrameMessage(std::move(reply));
 			}
 			TryCommitPeerBridge(message.frame, nowMs, DecisionKind(message));

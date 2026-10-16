@@ -428,6 +428,28 @@ namespace RTE {
 		if (proposal.preparedFrame == 0) {
 			for (uint8_t peer: proposal.members) {
 				m_PeerRejectedInputs[proposal.frame] |= SeatBit(peer);
+				const auto& stats = m_Stats.peers[peer];
+				const auto ended = m_PeerRoundEnds.find(peer);
+				const bool declared = ended != m_PeerRoundEnds.end() && !ended->second.closedLink && frame >= ended->second.frame;
+				const bool sourcePresent = sources->second.contains(peer);
+				const char* cause = declared ? "declared_leave" : PeerLinkLostBeforeOwnInput(peer, frame) ? "link_closed" :
+				    slowMachine ? "slow_machine_capacity" : sourcePresent ? "input_acceptance" : "input_missing";
+				const uint64_t heard = LastAuthenticatedTraffic(peer);
+				const uint64_t silence = nowMs >= heard ? nowMs - heard : 0;
+				m_HoldFacts[peer] = {proposal.frame, silence, m_Config.slowPlayerBoundTicks * m_Config.simTickMs, cause};
+				const auto [wire, route] = PeerFrameRoute(peer);
+				const auto queue = wire ? wire->GetPeerQueueStats(route) : NetTransportQueueStats{};
+				const auto receipt = m_PeerReceiptDelaySamples.find(peer);
+				DiagnosticLine() << "[net-peer-hold-trigger] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer)
+				    << " frame=" << proposal.frame << " ai_frame=" << proposal.frame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs))
+				    << " observed_frame=" << frame << " now_ms=" << nowMs << " cause=" << cause << " ahead=" << heldAhead
+				    << " first_missing_ms=" << m_FirstMissingMs << " last_heard_ms=" << heard << " last_progress_ms=" << stats.lastProgressMs
+				    << " received_through=" << stats.highestTargetFrame << " accepted_through=" << stats.acceptedThroughFrame
+				    << " input_voters=" << PeerInputVoters(frame, peer) << " delay_ticks=" << InputDelayAt(peer, frame)
+				    << " bound_ticks=" << m_Config.slowPlayerBoundTicks << " transport_rtt_ms=" << (wire ? wire->GetPeerPingMs(route) : 0)
+				    << " transport_measured=" << (wire && wire->IsPeerPingMeasured(route)) << " receipt_p95_ms=" << (receipt == m_PeerReceiptDelaySamples.end() ? 0 : receipt->second.P95Ms())
+				    << " reliable_bytes=" << queue.reliableBytes << " queue_ms=" << queue.queueMs << " send_rate=" << queue.sendRateBytesPerSecond
+				    << " lost_tps=" << slowCost << " own_capacity_tps=" << OwnCapacityTps() << " route=" << (wire ? wire->GetConnectedRoute(route) : "none") << std::endl;
 				if (!slowMachine) { m_SlowMachineHolds.erase(peer); continue; }
 				m_SlowMachineHolds.insert(peer);
 				DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << proposal.frame << " cost " << slowCost
@@ -636,6 +658,12 @@ namespace RTE {
 					const auto bytes = m_MigrationHistory.find(agreed.frame - 1);
 					if (bytes != m_MigrationHistory.end() && DecodeMigrationFrame(bytes->second, agreed.frame - 1, previous)) bridge.lastInput = FramesForSeat(previous, peer);
 				}
+				const auto fact = m_HoldFacts.find(peer);
+				DiagnosticLine() << "[net-peer-hold-installed] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer)
+				    << " frame=" << bridge.fromFrame << " ai_frame=" << bridge.aiFrame << " voters=" << voters
+				    << " proposer=" << static_cast<int>(agreed.successorPeerId) << " certificate_sender=" << static_cast<int>(certificate.senderPeerId)
+				    << " next=" << m_Stats.nextFrame << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " now_ms=" << nowMs
+				    << " cause=" << (fact != m_HoldFacts.end() && fact->second.frame == agreed.frame ? fact->second.cause : "certified_peer_decision") << std::endl;
 				m_PeerBridges[peer] = std::move(bridge);
 				m_SeatBridgeSinceMs[peer] = nowMs;
 				if (!alreadyHeld) ++m_Stats.peers[peer].holds;

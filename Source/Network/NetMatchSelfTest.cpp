@@ -18538,7 +18538,7 @@ namespace RTE {
 		NetLobbyMember own; own.peerId = 1; own.connected = true;
 		connected.members.push_back(own);
 		NetMatchService::SeatView held; held.seat.owner = 1; held.state = "Held";
-		check(NetPlayerPresentation::PlayingSummary(NetPlayerPresentation::OwnSeatHeld(connected, held, false), 0, {}) == "The AI is playing for you",
+		check(NetPlayerPresentation::PlayingSummary(NetPlayerPresentation::OwnSeatHeld(connected, held, false), 0, {}) == "The AI is playing for you until you are back",
 		      "a connected local held seat reads as everyone playing");
 		held.state = "Reconnecting";
 		check(NetPlayerPresentation::OwnSeatHeld(connected, held, false), "a local returning seat reads as active control");
