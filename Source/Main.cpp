@@ -9139,6 +9139,8 @@ void RunGameLoop() {
 				const bool atoms = Atom::ReleaseUnusedPoolMemory(c_PoolBlocksPerTick);
 				s_poolReleasePending = entities || atoms;
 			}
+			static const bool s_staleActivityLever = std::getenv("CCCP_TEST_STALE_ACTIVITY") != nullptr;
+			if (s_staleActivityLever && simTick > 0 && simTick % 600 == 0) g_LuaMan.NameStaleActivityValues();
 			RecordActorHistory(simTick);
 			DumpSimStateIfArmed(simTick);
 			LocalPrediction::CompareFidelityAtTick(simTick);

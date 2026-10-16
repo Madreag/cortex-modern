@@ -4402,6 +4402,63 @@ static std::vector<const void*> LoadedPresets(const char* type) {
 // The loaded activity presets by address; a class global bound to anything else names an instance that is gone.
 static std::vector<const void*> LoadedActivityPresets() { return LoadedPresets("Activity"); }
 
+// Test lever CCCP_TEST_STALE_ACTIVITY: the paths in a state's globals and registry of activity values that are neither the running
+// activity nor a loaded preset; only the values' pointers are read.
+static void NameStaleActivityValues(lua_State* L, const std::string& stateName) {
+	const void* const running = g_ActivityMan.GetActivity();
+	const std::vector<const void*> presets = LoadedActivityPresets();
+	std::unordered_set<const void*> seen;
+	int named = 0;
+	std::function<void(int, const std::string&, int)> walk;
+	const auto value = [&](int index, const std::string& path, int depth) {
+		if (lua_istable(L, index)) {
+			walk(index, path, depth + 1);
+		} else if (lua_isfunction(L, index)) {
+			if (depth > 8 || !seen.insert(lua_topointer(L, index)).second) return;
+			for (int upvalue = 1; lua_getupvalue(L, index, upvalue); ++upvalue) {
+				walk(lua_gettop(L), path + "<upvalue " + std::to_string(upvalue) + ">", depth + 1);
+				lua_pop(L, 1);
+			}
+		} else if (auto* rep = luabind::detail::is_class_object(L, index)) {
+			if (ClassDerivesFrom(rep->crep(), "Activity") && rep->ptr() != running && !std::binary_search(presets.begin(), presets.end(), rep->ptr()) && named++ < 16)
+				System::PrintDiagnosticLine(std::format("[stale-activity] state={} path={} class={} address={}", stateName, path, rep->crep()->name(), rep->ptr()));
+			if (rep->get_lua_table().is_valid() && depth <= 8) {
+				rep->get_lua_table().get(L);
+				walk(lua_gettop(L), path + "<members>", depth + 1);
+				lua_pop(L, 1);
+			}
+		}
+	};
+	walk = [&](int index, const std::string& path, int depth) {
+		if (!lua_istable(L, index)) { value(index, path, depth); return; }
+		if (depth > 8 || named >= 16 || !seen.insert(lua_topointer(L, index)).second) return;
+		lua_pushnil(L);
+		while (lua_next(L, index) != 0) {
+			std::string key;
+			if (lua_type(L, -2) == LUA_TSTRING) key = "." + std::string(lua_tostring(L, -2));
+			else if (lua_type(L, -2) == LUA_TNUMBER) key = "[" + std::to_string(lua_tonumber(L, -2)) + "]";
+			else key = std::string("[") + lua_typename(L, lua_type(L, -2)) + "]";
+			value(lua_gettop(L), path + key, depth);
+			lua_pop(L, 1);
+		}
+	};
+	lua_pushvalue(L, LUA_GLOBALSINDEX);
+	walk(lua_gettop(L), "_G", 0);
+	lua_pop(L, 1);
+	lua_pushvalue(L, LUA_REGISTRYINDEX);
+	walk(lua_gettop(L), "registry", 0);
+	lua_pop(L, 1);
+}
+
+void LuaMan::NameStaleActivityValues() {
+	const auto name = [](LuaStateWrapper& state, const std::string& stateName) {
+		std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
+		if (state.GetLuaState()) ::NameStaleActivityValues(state.GetLuaState(), stateName);
+	};
+	name(m_MasterScriptState, "master");
+	for (size_t index = 0; index < m_ScriptStates.size(); ++index) name(m_ScriptStates[index], "threaded" + std::to_string(index));
+}
+
 struct RTE::LuaScriptGraphNativeCaptureData {
 	mutable std::thread::id captureThread = std::this_thread::get_id();
 	/// The objects that existed when the capture began, copied by the first question asked of them.

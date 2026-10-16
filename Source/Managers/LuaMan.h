@@ -1001,6 +1001,8 @@ namespace RTE {
 		long long GetTotalHeapBytes();
 		/// The tracked Lua heaps' committed pages and their copy buffers, mapped and idle, for the memory census.
 		static std::string CheckpointHeapCensus();
+		/// Test lever CCCP_TEST_STALE_ACTIVITY: names the Lua paths of activity values that are neither the running activity nor a preset.
+		void NameStaleActivityValues();
 
 		/// Visits all script-owned MovableObjects in the original caller order after joined VM scans.
 		void VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit, bool parallel = false);
