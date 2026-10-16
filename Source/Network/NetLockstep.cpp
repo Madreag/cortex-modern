@@ -7188,7 +7188,7 @@ namespace RTE {
 			m_DescribedWaitFrame = frame;
 			DiagnosticLine() << "[net-frame-wait] frame=" << frame << " waiting_ms=" << elapsed << " next=" << m_Stats.nextFrame << " missing=" << DescribeMissingPeers()
 			          << " blocked=" << m_AdvanceBlock << " local_sent_through=" << (m_LastQueuedTargetFrame == UINT64_MAX ? -1 : static_cast<int64_t>(m_LastQueuedTargetFrame))
-			          << " decision=" << TimingDecisionPendingAt(frame) << " " << DescribePendingTimingDecisions(frame) << std::endl;
+			          << " decision=" << TimingDecisionPendingAt(frame) << " " << DescribePendingTimingDecisions(frame) << " local=" << static_cast<int>(m_Config.localPeerId) << std::endl;
 			if (UsesPeerFrameGroups()) {
 				DiagnosticLine detail;
 				detail << "[net-frame-wait-inputs] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << frame << " members=" << m_FrameGroupMembers;
@@ -7217,7 +7217,7 @@ namespace RTE {
 			if (nowMs > m_ConsumerWaitStartMs) {
 				if (!m_ConsumerWaitCounted) { ++m_Stats.blockingFrameWaits; ++m_Stats.missingFrameStalls; }
 				DiagnosticLine waited;
-				waited << "[net-frame-wait] frame=" << *m_ConsumerWaitingFrame << " wait_ms=" << nowMs - m_ConsumerWaitStartMs << " on=" << m_Stats.lastMissingPeers;
+				waited << "[net-frame-wait] frame=" << *m_ConsumerWaitingFrame << " wait_ms=" << nowMs - m_ConsumerWaitStartMs << " on=" << m_Stats.lastMissingPeers << " local=" << static_cast<int>(m_Config.localPeerId);
 				if (nowMs - m_ConsumerWaitStartMs >= 100) waited << " blocked=" << m_AdvanceBlock << " duplicates=" << m_WaitDuplicates;
 				// What each seat it waited on cost this machine, for the capacity rule.
 				for (uint8_t peer: m_ConsumerWaitMissing) {
