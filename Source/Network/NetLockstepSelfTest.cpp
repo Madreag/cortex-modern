@@ -321,6 +321,78 @@ namespace RTE {
 			return true;
 		}
 
+		static bool PendingDecisionsSurviveLocalTime(std::string* error) {
+			for (unsigned arm = 0; arm < 2; ++arm) {
+				bool directoryAnswered = false;
+				std::array<Wire, 2> wires;
+				std::array<NetLockstepCoordinator, 2> peers;
+				for (size_t index = 0; index < peers.size(); ++index) {
+					auto& peer = peers[index];
+					Configure(peer, wires[index]);
+					peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+					peer.m_Config.matchConfig.players.resize(2);
+					peer.m_Config.matchConfig.successorOrder = {2};
+					peer.m_Config.peerFrameGroups = true;
+					peer.m_Config.frameTieReferee = [&](const NetFrameTieRequest&) {
+						NetFrameTieReply reply;
+						reply.state = directoryAnswered ? NetFrameTieReply::State::Decided : NetFrameTieReply::State::Waiting;
+						if (directoryAnswered) reply.members = {2};
+						return reply;
+					};
+					peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+					peer.m_MigrationPhase = NetHostMigrationPhase::None;
+					peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 3}};
+					peer.m_RemotePeerIds = {1}; peer.m_RemoteTransports = {{1, 42}};
+					peer.m_MigrationHistory[4422] = {1, 2, 3};
+					auto proposal = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+					proposal.frame = 4423; proposal.voterMask = 2;
+					if (arm == 0) {
+						proposal.boundary = proposal.frame; proposal.preparedFrame = 0;
+						proposal.connectedMask = 2; proposal.members = {1};
+						const auto prefix = peer.PeerFramePrefix(4422);
+						proposal.bytes.assign(prefix.begin(), prefix.end()); proposal.totalBytes = proposal.bytes.size();
+						std::vector<uint8_t> signedVote;
+						if (!NetHostMigrationCodec::Encode(proposal, peer.m_Config.migrationKey, signedVote)) return false;
+						auto certificate = proposal;
+						certificate.type = NetHostMigrationMessageType::PeerBridgeCommit;
+						certificate.bytes = {1};
+						for (unsigned shift = 0; shift < 32; shift += 8) certificate.bytes.push_back(static_cast<uint8_t>(signedVote.size() >> shift));
+						certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end());
+						certificate.totalBytes = certificate.bytes.size();
+						peer.InstallPeerBridge(certificate, 100);
+						if (peer.m_PendingPeerDecisions.size() != 1 || !peer.m_PeerBridges.empty()) {
+							*error = "the authentic tied-half certificate did not wait for its own directory answer"; return false;
+						}
+					} else {
+						proposal.boundary = 4422; proposal.preparedFrame = 2;
+						proposal.connectedMask = 3; proposal.members = {2}; proposal.completeFrom = 3;
+						const auto prefix = peer.PeerAppliedFramePrefix(4422);
+						proposal.bytes.assign(prefix.begin(), prefix.end()); proposal.totalBytes = proposal.bytes.size();
+						peer.m_PeerBridgeVotes[{4423, 10}][2] = proposal;
+						peer.m_PeerVotedAtMs[{4423, 10}] = 100;
+						peer.m_RemoteFrames[4423][1] = {};
+					}
+					// Identical authority and inputs must fence the same frame on either side of the old local timeout.
+					const uint64_t oldTimeout = arm == 0 ? 5000 : 2000;
+					if (!peer.TakePendingPeerDecisions(100 + oldTimeout - 1 + 2 * index) ||
+					    (arm == 0 && (peer.m_PendingPeerDecisions.size() != 1 || peer.m_Stats.decisionsDropped != 0))) {
+						*error = arm == 0 ? "a local five-second timer erased an unresolved certified hold" : "a local two-second timer let a voted decision's frame play without its certificate";
+						return false;
+					}
+				}
+				if (arm == 0) {
+					directoryAnswered = true;
+					for (auto& peer: peers) {
+						if (peer.TakePendingPeerDecisions(7000) || !peer.m_PendingPeerDecisions.empty() ||
+						    !peer.m_PeerBridgeCertificates.contains({4423, 0}) || !peer.m_PeerBridges.contains(1) || peer.m_PeerBridges.at(1).fromFrame != 4423) {
+							*error = "the late real authority answer did not install the same retained hold"; return false;
+						}
+					}
+				}
+			}
+			return true;
+		}
+
 		static bool HeldHostBaseCapture(std::string* error) {
 			std::array<Wire, 3> wires;
 			std::array<NetLockstepCoordinator, 3> peers;
@@ -29634,6 +29706,13 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "pending-decision-authority") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::PendingDecisionsSurviveLocalTime(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS pending_decisions_wait_for_authority_across_local_timeouts" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "owner-hitch-two-internet") {
 				std::string error;
 				if (!TestOwnerSilenceThreshold(4, &error)) return fail(error);
@@ -29684,6 +29763,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::HoldInvitation, "an_unsigned_hold_invitation_never_fences_an_input");
 		row(&SessionPlaneRecoveryTest::OwnAheadHoldFence, "a_seat_co_signs_and_fences_its_own_future_hold");
 		row(&SessionPlaneRecoveryTest::HeldHostBaseCapture, "held_host_names_a_private_base_through_the_playing_seats");
+		row(&SessionPlaneRecoveryTest::PendingDecisionsSurviveLocalTime, "pending_decisions_wait_for_authority_across_local_timeouts");
 		row(&SessionPlaneRecoveryTest::Boundary, "successor_refuses_unvalidated_boundary_before_publish");
 		row(&SessionPlaneRecoveryTest::Leave, "leave_clears_every_live_handover_phase");
 		row(&SessionPlaneRecoveryTest::AuthenticatedSilence, "undecodable_packet_does_not_refresh_authenticated_silence");
