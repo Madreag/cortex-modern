@@ -2968,8 +2968,27 @@ namespace RTE {
 				service.m_WorldJoin.PublishImage(image);
 				if (!service.m_WorldJoin.NoteTransferComplete(otherRoute, image.bytes, error)) return false;
 				service.m_WorldJoin.NoteRejoinLinkFit(otherRoute, true); service.m_WorldJoin.NoteTailLinkRtt(otherRoute, 100);
+				LoopbackTransport privateWire; NetLockstepCoordinator privateReader;
+				auto privateConfig = roundConfigs[2]; privateConfig.roundId = 77; privateConfig.startFrame = image.tick + 1;
+				privateConfig.peerFrameGroups = false; privateConfig.peerSessionLinks.reset();
+				if (!privateReader.StartReplay(privateWire, privateConfig, error)) return false;
+				const auto replayCommitted = [&] {
+					for (uint64_t frame = privateReader.GetStats().nextFrame; frame < service.m_Coordinator->GetStats().nextFrame; ++frame) {
+						const auto kept = service.m_Coordinator->m_MigrationHistory.find(frame);
+						NetLockstepReadyFrame ready;
+						if (kept == service.m_Coordinator->m_MigrationHistory.end() || !service.m_Coordinator->DecodeMigrationFrame(kept->second, frame, ready)) return false;
+						const auto recorded = PackWorldJoinReadyFrame(ready);
+						if (!privateReader.QueueReplayFrame(frame, recorded.frames, recorded.commands, error, recorded.observations, recorded.valueObservations,
+						                                   recorded.senderPeerId, recorded.replayUpdateAuthorityPeerId)) return false;
+						privateReader.Tick(hub.now);
+						if (!privateReader.PopReadyFrame(ready)) return false;
+						privateReader.FinishSimulationTick(ready.frame);
+					}
+					return true;
+				};
+				if (!replayCommitted()) { *error = "the other image reader could not consume the real committed tail"; return false; }
 				uint64_t activation = 0;
-				if (!service.m_WorldJoin.NoteCatchUpProgress(otherRoute, applied[2], 60, 1000, service.m_Coordinator->GetStats().nextFrame, &activation, error) || !activation) {
+				if (!service.m_WorldJoin.NoteCatchUpProgress(otherRoute, privateReader.GetStats().nextFrame - 1, 60, 1000, service.m_Coordinator->GetStats().nextFrame, &activation, error) || !activation) {
 					*error = "the second image return did not name its activation"; return false;
 				}
 				// Seat 3 still plays in the agreed round, so this activation must be refused. The first returner waits for its archive
@@ -2980,7 +2999,8 @@ namespace RTE {
 					service.m_Coordinator = std::move(rounds[0]);
 					if (!advanced) return false;
 					clientLobby.Tick(hub.now); service.m_Runner->GetLobbySession().Tick(hub.now);
-					if (!service.m_WorldJoin.NoteCatchUpProgress(otherRoute, applied[2], 1, 17, service.m_Coordinator->GetStats().nextFrame, nullptr, error)) return false;
+					if (!replayCommitted() || !service.m_WorldJoin.NoteCatchUpProgress(otherRoute, privateReader.GetStats().nextFrame - 1, 1, 17,
+					                                                              service.m_Coordinator->GetStats().nextFrame, nullptr, error)) return false;
 					service.DrivePrivateMatchRejoins(hub.now);
 				}
 				if (!service.m_PrivateTransferHeldReasons.contains(otherRoute) || service.m_Coordinator->HasAgreedSeatReclaim(3)) {
@@ -3524,11 +3544,13 @@ namespace RTE {
 		if (!selected || std::string_view(selected) == "a_kept_hold_waits_for_its_own_directory_without_changing_history") {
 			named.push_back({"a_kept_hold_waits_for_its_own_directory_without_changing_history", [](std::string& error) {
 				Case row{"kept_hold_own_directory"}; row.seats = 4; row.subject = 3;
-				row.gapMs = 8000; row.inputHalvesLost = row.tailWaitForDirectory = row.internet = row.subjectDirectoryDark = true; row.rttMs = row.otherRttMs = 100;
+				row.gapMs = 8000; row.tie = row.tailWaitForDirectory = row.internet = row.subjectDirectoryDark = true; row.rttMs = row.otherRttMs = 100;
 				Fixture fixture; if (!fixture.Start(row, error)) return false;
 				uint64_t longestKept = 0; bool keptForAuthority = false;
 				for (const uint64_t until = fixture.hub.faultEnd + 12000; fixture.hub.now < until;) {
 					if (!fixture.Step(error)) return false;
+					// The split first certifies a real held half. Its control path then heals while this seat's directory and tail still wait.
+					if (fixture.peers[0]->HasHeldAISeat(3)) fixture.hub.row.inputHalvesLost = true;
 					const auto& reader = *fixture.peers[2];
 					for (const auto& [key, pending]: reader.m_PendingPeerDecisions) if (reader.m_AuthorityWaitSinceMs.contains(key)) {
 						keptForAuthority = true;
