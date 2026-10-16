@@ -3,6 +3,7 @@
 #include "NetLockstep.h"
 #include "NetLockstepSelfTest.h"
 #include "NetMatchService.h"
+#include "LoopbackTransport.h"
 #if __has_include("NetPeerSessionWire.h")
 #include "NetPeerSessionWire.h"
 #endif
@@ -1492,6 +1493,17 @@ namespace RTE {
 			if (!fixture.peers[0]->HasHeldAISeat(2)) return fail("the frozen seat never entered the image-return shape");
 			World replay = fixture.worlds[0];
 			auto config = fixture.peers[1]->GetConfig();
+			// The image's seat state and the committed tail go through the same replay coordinator as a real private return.
+			auto replayConfig = config;
+			replayConfig.roundId = fixture.peers[0]->GetRoundId(); replayConfig.startFrame = replay.applied + 1;
+			replayConfig.peerFrameGroups = false; replayConfig.peerSessionLinks.reset();
+			replayConfig.originalRoundConfigHash = fixture.peers[0]->GetRoundConfigHash();
+			replayConfig.initialSeatHolds = fixture.peers[0]->HeldTransactions();
+			replayConfig.initialSeatReclaims = fixture.peers[0]->ReclaimTransactions();
+			replayConfig.initialPeerLeaves = fixture.peers[0]->GetPeerLeaveFrames();
+			replayConfig.initialDelayChanges = fixture.peers[0]->GetDelayChanges();
+			LoopbackTransport replayWire; NetLockstepCoordinator replayCoordinator;
+			if (!replayCoordinator.StartCatchUpReplay(replayWire, replayConfig, *fixture.peers[1], &error)) return false;
 			NetWorldJoinHost join;
 			if (!join.ConfigureMatchRejoins(config.matchConfig, 77, c_TestTickMs, &error) || !join.BeginRejoin(12, 1, 2, 2, "Returner", fixture.hub.now, &error)) return false;
 			NetWorldCheckpointImage image; image.privateSessionId = config.sessionId; image.round = 77; image.tick = replay.applied;
@@ -1508,7 +1520,15 @@ namespace RTE {
 				while (credit >= 1 && (!activation || replay.applied + 1 < activation)) {
 					const auto next = fixture.committed[0].find(replay.applied + 1);
 					if (next == fixture.committed[0].end()) break;
-					if (!replay.Apply(next->second, error)) return false;
+					const auto recorded = PackWorldJoinReadyFrame(next->second);
+					if (!replayCoordinator.QueueReplayFrame(recorded.targetFrame, recorded.frames, recorded.commands, &error,
+					                                      recorded.observations, recorded.valueObservations, recorded.senderPeerId,
+					                                      recorded.replayUpdateAuthorityPeerId)) return false;
+					replayCoordinator.Tick(fixture.hub.now);
+					NetLockstepReadyFrame ready;
+					if (!replayCoordinator.PopReadyFrame(ready)) return fail("the private coordinator did not consume the next committed frame");
+					if (!replay.Apply(ready, error)) return false;
+					replayCoordinator.FinishSimulationTick(ready.frame);
 					credit -= 1; ++work;
 				}
 				if (!activation && fixture.hub.now >= reportAt + 100) {
@@ -1536,9 +1556,13 @@ namespace RTE {
 			if (!agreed || replay.applied + 1 != activation) return fail("the private replay did not reach an activation every survivor certified");
 			config.startFrame = activation; config.roundId = 77; config.joinsRunningRound = config.continuesMatch = true;
 			config.originalRoundConfigHash = fixture.peers[0]->GetRoundConfigHash();
-			config.initialSeatHolds = fixture.peers[0]->HeldTransactions();
-			config.initialSeatReclaims = fixture.peers[0]->ReclaimTransactions();
-			config.initialPeerLeaves = fixture.peers[0]->GetPeerLeaveFrames();
+			config.initialSeatHolds = replayCoordinator.HeldTransactions();
+			config.initialSeatBridgeSinceMs = replayCoordinator.SeatBridgeTimes();
+			config.initialSeatReclaims = replayCoordinator.ReclaimTransactions();
+			config.initialPeerLeaves = replayCoordinator.GetPeerLeaveFrames();
+			NetLockstepCoordinator::AdoptOpenReturns(config, fixture.peers[0]->ReclaimTransactions(), activation);
+			if (!fixture.peers[0]->AdoptPeerReturnConfig(config, replayCoordinator, activation))
+				return fail("the private replay could not adopt the survivors' real return certificate");
 			config.initialDelayChanges = fixture.peers[0]->GetDelayChanges();
 			// The live start carries the delays the replay actually crossed, as InPlaceLiveRoundLocked does.
 			for (const auto& [peer, changes]: config.initialDelayChanges) {
@@ -1551,6 +1575,7 @@ namespace RTE {
 			fixture.peers[1] = std::make_unique<NetLockstepCoordinator>();
 			if (!fixture.peers[1]->Start(*fixture.wires[1], config, &error)) return false;
 			fixture.peers[1]->DeferStopsToTickBoundary();
+			fixture.peers[1]->AdoptReplayedSeatTransitions(replayCoordinator, activation - 1);
 			fixture.worlds[1] = std::move(replay); fixture.queued[1] = activation - 1; fixture.credits[1] = 0; fixture.waitAt[1] = 0;
 			fixture.hub.faultEnd = fixture.hub.now;
 			fixture.peers[0]->NoteReturnerCaughtUp(2, fixture.hub.now);
@@ -2843,7 +2868,7 @@ namespace RTE {
 			}
 			return true;
 		}
-		if (name == "capsule-retry") {
+		if (name == "capsule-retry" || name == "paired-image-service") {
 			for (const uint64_t until = hub.now + 3000; hub.now < until;) if (!step(false)) return false;
 			if (!rounds[0]->HasHeldAISeat(2)) { *error = "the returning successor was never held"; return false; }
 			// This is the service's real lobby and sealing path on the already admitted connection.
@@ -3474,7 +3499,7 @@ namespace RTE {
 		}
 		int passed = 0, failed = 0;
 		const char* selected = std::getenv("CC_TEST_SESSION_PLANE_CASE");
-		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 34 + FixedScheduleRows().size()) << std::endl;
+		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 40 + FixedScheduleRows().size()) << std::endl;
 		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest
 		// rows started first; the random driver's rounds follow them in the same pool.
 		QuietLines quiet(std::cout);
@@ -3512,9 +3537,10 @@ namespace RTE {
 				Fixture fixture; const bool ok = fixture.Run(row, error);
 				bool oldTie = false;
 				for (const auto& [key, tie]: fixture.hub.directory.ties) oldTie |= std::get<0>(key) == 0 && !tie.winner.empty();
-				DiagnosticLine() << "[session-plane-old-tie] seed=0 old_tie=" << oldTie << " host_changes=" << fixture.hub.adminHistory.size() << std::endl;
+				const bool hostChanged = fixture.hub.adminDecision.state == NetHostChangeReply::State::Decided && fixture.hub.adminDecision.generation == 1;
+				DiagnosticLine() << "[session-plane-old-tie] seed=0 old_tie=" << oldTie << " host_changes=" << hostChanged << std::endl;
 				if (!ok) return false;
-				if (!oldTie || fixture.hub.adminHistory.empty()) { error = "the healed split and the later host change did not both reach the real directory paths"; return false; }
+				if (!oldTie || !hostChanged) { error = "the healed split and the later host change did not both reach the real directory paths"; return false; }
 				return true;
 			}});
 		}
@@ -3677,6 +3703,12 @@ namespace RTE {
 			if (driver.failedCount || !complete) ++failed; else ++passed;
 		}
 		for (const auto& [name, scene]: std::vector<std::pair<const char*, const char*>>{
+		    {"declared_leave_keeps_the_round_and_returns_on_its_seat", "leave-rejoin"},
+		    {"two_seats_declared_leave_returns_through_a_private_reclaim", "leave-rejoin-two"},
+		    {"two_seats_closed_joiner_after_input_does_not_hold_up_the_host", "drop-after-input"},
+		    {"two_seats_closed_joiner_before_host_input_does_not_hold_up_the_host", "drop-before-host-input"},
+		    {"healthy_input_runway_spends_no_tie_allowance_before_a_real_cut", "referee-input-runway"},
+		    {"a_rematch_starts_without_the_ended_rounds_catch_up", "rematch-chat"},
 		    {"image_successor_capsule_sealing_refusal_is_retried", "capsule-retry"},
 		    {"a_refused_image_activation_keeps_the_other_returners_service_clear", "paired-image-service"},
 		    {"stored_ticket_redials_the_rematch_lobby_on_its_original_seat", "rematch-redial"}}) {
