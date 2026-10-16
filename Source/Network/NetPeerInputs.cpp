@@ -207,7 +207,7 @@ namespace RTE {
 	bool NetLockstepCoordinator::HandlePeerFrameMessage(const NetHostMigrationMessage& message, uint64_t nowMs, const NetHash32* readKey) {
 		if (HandlePeerSessionMessage(message, nowMs, readKey)) return true;
 		if (!UsesPeerFrameGroups() || message.type < NetHostMigrationMessageType::PeerInput ||
-		    (message.type > NetHostMigrationMessageType::PeerControl && message.type != NetHostMigrationMessageType::PeerForwardInput)) return false;
+		    (message.type > NetHostMigrationMessageType::PeerControl && message.type != NetHostMigrationMessageType::PeerForwardInput && message.type != NetHostMigrationMessageType::PeerCaptureRequest)) return false;
 		const uint8_t detailOwner = message.type == NetHostMigrationMessageType::PeerForwardInput ? message.successorPeerId : message.senderPeerId;
 		const auto detailBack = m_ReclaimTransactions.find(detailOwner);
 		if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && (message.type == NetHostMigrationMessageType::PeerInput || message.type == NetHostMigrationMessageType::PeerForwardInput) &&
@@ -279,6 +279,14 @@ namespace RTE {
 				receipt = std::max(receipt, message.frame);
 				ResolvePeerBridgeInputConflicts(nowMs);
 			}
+			return true;
+		}
+		if (message.type == NetHostMigrationMessageType::PeerCaptureRequest) {
+			if (!ValidatePeerCaptureRequest(message, m_Stats.nextFrame)) return true;
+			if (const auto completed = m_PeerCapturesCompleted.find(message.boundary); completed != m_PeerCapturesCompleted.end() && completed->second >= message.completeFrom) return true;
+			if (!m_PeerCaptureRequest || message.boundary > m_PeerCaptureRequest->boundary ||
+			    (message.boundary == m_PeerCaptureRequest->boundary && message.completeFrom > m_PeerCaptureRequest->completeFrom)) m_PeerCaptureRequest = message;
+			heard();
 			return true;
 		}
 		if (message.type == NetHostMigrationMessageType::PeerBridge) {

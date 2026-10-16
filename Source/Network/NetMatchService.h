@@ -448,6 +448,7 @@ namespace RTE {
 			bool hostProvisional = false; //!< Host: it reaches no majority, so its play may not be the match's and nothing is written.
 		};
 		struct AutosaveTickOutput {
+			bool requestPrivateBase = false; //!< Held host: ask the playing voters to agree a base capture, without naming a tick on held input.
 			bool capture = false; //!< This peer captures at this tick.
 			bool manual = false; //!< The capture is one the host asked for by hand.
 			std::vector<CheckpointNote> send; //!< Entries this peer puts on its committed stream.

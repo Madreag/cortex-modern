@@ -3065,7 +3065,7 @@ namespace RTE {
 		const auto type = static_cast<uint16_t>(message.type);
 		const size_t byteCap = (message.type == NetHostMigrationMessageType::PeerInput || message.type == NetHostMigrationMessageType::PeerForwardInput) ? NetLockstepCodec::c_InputWindowByteCap :
 		    message.type == NetHostMigrationMessageType::PeerTail ? c_MaxPeerTailBytes : c_MaxFrameBytes;
-		if (type < 1 || type > static_cast<uint16_t>(NetHostMigrationMessageType::PeerForwardInput) || message.sessionId == 0 || message.roundId == 0 || message.generation == 0 ||
+		if (type < 1 || type > static_cast<uint16_t>(NetHostMigrationMessageType::PeerCaptureRequest) || message.sessionId == 0 || message.roundId == 0 || message.generation == 0 ||
 		    message.senderPeerId == 0 || message.senderPeerId > NetMatchConfigUtil::c_MaxPeerCount || message.successorPeerId == 0 || message.successorPeerId > NetMatchConfigUtil::c_MaxPeerCount ||
 		    message.members.size() > NetMatchConfigUtil::c_MaxPeerCount || message.futureDelays.size() > 128 ||
 		    (!message.futureDelays.empty() && message.bytes.size() > 4) || message.bytes.size() > c_ChunkBytes || message.totalBytes > byteCap ||
@@ -3124,7 +3124,7 @@ namespace RTE {
 		uint8_t members = 0;
 		const uint8_t* data = nullptr;
 		if (!reader.ReadU32LE(magic) || magic != c_Magic || !reader.ReadU16LE(version) || version != c_Version || !reader.ReadU16LE(type) ||
-		    type < 1 || type > static_cast<uint16_t>(NetHostMigrationMessageType::PeerForwardInput) || !reader.ReadU64LE(decoded.sessionId) || !reader.ReadU64LE(decoded.roundId) || !reader.ReadU64LE(decoded.generation) ||
+		    type < 1 || type > static_cast<uint16_t>(NetHostMigrationMessageType::PeerCaptureRequest) || !reader.ReadU64LE(decoded.sessionId) || !reader.ReadU64LE(decoded.roundId) || !reader.ReadU64LE(decoded.generation) ||
 		    !reader.ReadU8(decoded.senderPeerId) || !reader.ReadU8(decoded.successorPeerId) || !reader.ReadBytes(data, decoded.configHash.size()))
 			return false;
 		std::copy_n(data, decoded.configHash.size(), decoded.configHash.begin());
@@ -5443,6 +5443,7 @@ namespace RTE {
 		m_StartWaitSinceMs = 0;
 		m_LocalStartParkMs = 0;
 		m_PeerLastHeardMs.clear();
+		m_PeerCaptureRequest.reset(); m_PeerCaptureRequested = false; m_PeerCaptureSerial = m_PeerCaptureRetryAtMs = 0; m_PeerCapturesCompleted.clear();
 		m_PeerBridges.clear(); m_PeerBridgeVotes.clear(); m_PeerBridgeCertificates.clear(); m_PendingPeerDecisions.clear(); m_PeerVotedAtMs.clear(); m_AuthorityWaitSinceMs.clear(); m_PeerRejectedInputs.clear();
 		m_PeerPendingBridgeInputs.clear();
 		m_PeerReturnProofs.clear();
@@ -13427,6 +13428,7 @@ namespace RTE {
 				commands.push_back(NetGameCommand{commitHost, reclaim});
 				if (reclaim.worldTransition) commands.push_back(NetGameCommand{commitHost, *reclaim.worldTransition});
 			}
+			if (!m_Playback && UsesPeerFrameGroups()) AppendPeerCaptureCommand(ready);
 			if (UsesPreparedFrameReceipts()) {
 				ready.committedPeerLeaves = m_PeerLeaveFrames; ready.committedFrameWaivers = m_PeerFrameWaivers;
 				for (const auto& [peer, leave]: m_PeerLeaveFrames) if (leave <= ready.frame) ready.departedPeerIds.push_back(peer);
