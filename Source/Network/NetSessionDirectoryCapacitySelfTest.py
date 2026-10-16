@@ -42,8 +42,12 @@ class FullRecordFixture(ConnectionAuthorityTests):
             try:
                 answer = self.frame_check_in(0, [0, 1], frame=frame + offset)
             except ConnectionErrorReply as unavailable:
+                with self.store.connections._lock:
+                    persisted = self.store.connections._records[self.sid]
+                    persisted_count = len(persisted["frame_ties"])
+                    persisted_bytes = len(json.dumps(persisted, separators=(",", ":")).encode())
                 self.fail(f"seed=0 shape=full_referee_record: a new split froze with HTTP {unavailable.status} "
-                          f"after {len(record['frame_ties'])} persisted decisions ({size} bytes)")
+                          f"after {persisted_count} persisted decisions ({persisted_bytes} bytes)")
             self.assertEqual((answer["status"], answer["members"]), ("decided", [0, 1]))
 
 
