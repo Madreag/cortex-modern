@@ -173,13 +173,13 @@
     "rows": [
       "image_replay_12ms_tick_10ms_draw_closes_its_trail"
     ],
-    "scope": "actual ScenarioRunner grant and replay API with measured costs"
+    "scope": "actual ScenarioRunner timed grant and replay API, 12 ms ticks and 10 ms draws, with only the round's already committed frames appended"
   },
   "catchup:9": {
     "rows": [
       "image_replay_12ms_tick_10ms_draw_closes_its_trail"
     ],
-    "scope": "current branch pacing; alternate two-tick harness policy is not merged or driven"
+    "scope": "merged adaptive catch-up floor is driven on the real timed grant API; the replay must completely close a 240-frame trail in 120 seconds"
   },
   "catchup:10": {
     "rows": [
@@ -254,9 +254,10 @@
   },
   "catchup:21": {
     "rows": [
-      "held_host_still_serves_another_seats_image"
+      "held_host_still_serves_another_seats_image",
+      "slow_held_host_names_another_seats_base_through_the_playing_seats"
     ],
-    "scope": "actual held host coordinator and service base scheduling"
+    "scope": "actual frozen and slow held host coordinators request a base from the playing voters; the real committed capture is followed through the service schedule, without archive restoration"
   },
   "catchup:22": {
     "rows": [
