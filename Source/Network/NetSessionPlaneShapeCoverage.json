@@ -641,7 +641,7 @@
       "two_internet_late_joiner_with_a_referee_past_the_tie_timeout",
       "a_kept_hold_waits_for_its_own_directory_without_changing_history"
     ],
-    "scope": "directory delay is driven; five-second kept-authority expiry not isolated"
+    "scope": "real tied-half certificate kept through the five-second authority expiry while its requester waits for its own directory and tail"
   },
   "referee:10": {
     "rows": [

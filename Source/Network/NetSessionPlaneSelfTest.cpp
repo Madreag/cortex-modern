@@ -15,6 +15,7 @@
 #include "NetProtocol.h"
 #include "TimerMan.h"
 #include "ScenarioRunner.h"
+#include "SteadyClock.h"
 #include "ActivityMan.h"
 #include "GameActivity.h"
 #include "MovableMan.h"
@@ -2977,6 +2978,8 @@ namespace RTE {
 				NetWorldCheckpointImage image; image.privateSessionId = match.sessionId; image.round = 77; image.tick = applied[0] - 80;
 				image.bytes = 8; image.checkpointConfig = "config"; image.sideState = "state"; image.digest = "fixture-image";
 				service.m_WorldJoin.PublishImage(image);
+				// The fixture's published base has the capture time the real image producer records with it.
+				service.m_PrivateImageTakenMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count());
 				if (!service.m_WorldJoin.NoteTransferComplete(otherRoute, image.bytes, error)) return false;
 				service.m_WorldJoin.NoteRejoinLinkFit(otherRoute, true); service.m_WorldJoin.NoteTailLinkRtt(otherRoute, 100);
 				LoopbackTransport privateWire; NetLockstepCoordinator privateReader;
