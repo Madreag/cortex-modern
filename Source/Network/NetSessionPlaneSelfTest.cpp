@@ -3821,10 +3821,11 @@ namespace RTE {
 			DiagnosticLine() << "[net-session-plane-selftest] " << (ok ? "PASS " : "FAIL ") << "in_place_private_reader_skips_the_committed_capture" << (error.empty() ? "" : ": seed=0 " + error);
 			if (ok) ++passed; else ++failed;
 		}
-		for (unsigned arm = 0; arm < 4; ++arm) {
+		for (unsigned arm = 0; arm < 5; ++arm) {
 			const char* name = arm == 0 ? "image_base_transient_refusal_answers_after_four_seconds" :
 			                   arm == 1 ? "image_base_out_of_memory_answers_immediately" :
-			                   arm == 2 ? "image_base_host_refusals_allow_fresh_attempts" : "held_host_still_serves_another_seats_image";
+			                   arm == 2 ? "image_base_host_refusals_allow_fresh_attempts" :
+			                   arm == 3 ? "held_host_still_serves_another_seats_image" : "slow_held_host_names_another_seats_base_through_the_playing_seats";
 			if (selected && std::string_view(selected) != name) continue;
 			std::string error;
 			const bool ok = [&] {
@@ -3832,20 +3833,64 @@ namespace RTE {
 				auto match = NetMatchConfigUtil::MakeDefault(0xF004);
 				match.peerCount = 4; match.players = {{1, 0, false, "Host"}, {2, 1, false, "Returner"}, {3, 2, false, "Witness"}, {4, 3, false, "Other"}};
 				if (!service.m_WorldJoin.ConfigureMatchRejoins(match, 77, c_TestTickMs, &error)) return false;
-				if (arm == 3) {
-					Case row{"held_host_image"}; row.subject = 1; row.seats = 4; row.gapMs = 6000; row.frozen = row.internet = true;
-					row.rttMs = row.otherRttMs = 100;
+				if (arm >= 3) {
+					Case row{"held_host_image"}; row.subject = 1; row.seats = 4; row.gapMs = 6000; row.internet = row.captureFrames = true;
+					row.frozen = arm == 3; row.slowPercent = arm == 4 ? 50 : 0;
+					row.rttMs = row.otherRttMs = arm == 3 ? 100 : 2;
 					Fixture fixture;
 					if (!fixture.Start(row, error)) return false;
-					while (fixture.hub.now < 18000 && !fixture.peers[0]->IsOwnHostSeatHeld()) if (!fixture.Step(error)) return false;
+					while (fixture.hub.now < 18000 && (fixture.hub.now < fixture.hub.faultAt + 1000 || !fixture.peers[0]->IsOwnHostSeatHeld()))
+						if (!fixture.Step(error)) return false;
 					if (!fixture.peers[0]->IsOwnHostSeatHeld()) { error = "the host did not become a private reader"; return false; }
+					if (!service.m_WorldJoin.ConfigureMatchRejoins(fixture.peers[0]->GetConfig().matchConfig, fixture.peers[0]->GetRoundId(), c_TestTickMs, &error)) return false;
+					service.m_LocalPeerId = 1;
+					// The fixture retains the coordinator; the service borrows it only while following its real capture schedule.
+					service.m_Coordinator.reset(fixture.peers[0].get());
+					struct ReleaseCoordinator { NetMatchService& service; ~ReleaseCoordinator() { (void)service.m_Coordinator.release(); } } releaseCoordinator{service};
 					if (!service.m_WorldJoin.BeginRejoin(12, 1, 2, 2, "Returner", fixture.hub.now, &error)) return false;
 					service.m_WorldCapturePending = service.m_PrivateBaseRequested = true;
-					NetMatchService::AutosaveTickInput input; input.tick = fixture.worlds[2].applied; input.localPeer = 1;
-					input.writers = {3, 4}; input.lead = 60; input.ownSeatHeld = fixture.peers[0]->IsOwnHostSeatHeld();
+					NetMatchService::AutosaveTickInput input; input.tick = fixture.worlds[0].applied; input.localPeer = 1;
+					input.writers = service.CheckpointWriters(input.tick); input.lead = 60; input.ownSeatHeld = true;
 					const auto output = service.StepAutosaveSchedule(input);
-					if (output.send.empty() && !output.capture) { error = "the held host cannot name the base another seat needs"; return false; }
-					return true;
+					if (!output.requestPrivateBase || !fixture.peers[0]->RequestPrivateBaseCapture()) {
+						error = "the held host did not ask the playing seats for the base another seat needs"; return false;
+					}
+					uint64_t observed = input.tick, captureFrame = 0, captureTick = 0;
+					bool captured = false;
+					while (fixture.hub.now < fixture.hub.faultEnd + 12000) {
+						if (!fixture.Step(error)) return false;
+						for (auto at = fixture.committed[0].upper_bound(observed); at != fixture.committed[0].end(); ++at) {
+							const auto& ready = at->second;
+							input = {}; input.tick = ready.frame; input.localPeer = 1; input.lead = 60;
+							input.writers = service.CheckpointWriters(input.tick);
+							input.ownSeatHeld = fixture.peers[0]->IsSeatUnderAI(1, ready.frame);
+							for (const auto* commands: {&ready.localCommands, &ready.remoteCommands}) for (const auto& command: *commands)
+								if (const auto* note = std::get_if<NetGameCheckpoint>(&command.payload)) {
+									input.applied.push_back({command.senderPeerId, note->kind, note->tick});
+									if (command.senderPeerId == 1 && note->kind == NetGameCheckpoint::Capture) {
+										if (!input.ownSeatHeld) { error = "the requested base was named only after the host returned"; return false; }
+										if (captureTick && captureTick != note->tick) { error = "one held-host request named two base ticks"; return false; }
+										captureFrame = ready.frame; captureTick = note->tick;
+									}
+								}
+							const auto step = service.StepAutosaveSchedule(input);
+							if (step.requestPrivateBase && !fixture.peers[0]->RequestPrivateBaseCapture()) { error = "the held host lost its base request"; return false; }
+							if (step.capture && input.tick == captureTick) captured = true;
+							observed = ready.frame;
+						}
+						if (!captureTick || !captured) continue;
+						bool allCommitted = true;
+						for (const auto& history: fixture.committed) {
+							const auto at = history.find(captureFrame);
+							if (at == history.end()) { allCommitted = false; break; }
+							bool named = false;
+							for (const auto* commands: {&at->second.localCommands, &at->second.remoteCommands}) for (const auto& command: *commands)
+								if (const auto* note = std::get_if<NetGameCheckpoint>(&command.payload); note && command.senderPeerId == 1 && note->kind == NetGameCheckpoint::Capture && note->tick == captureTick) named = true;
+							if (!named) { error = "the playing seats committed different held-host base schedules"; return false; }
+						}
+						if (allCommitted && service.m_OpenCaptureApplied && service.IsJoinCaptureTick(captureTick)) return true;
+					}
+					error = "the playing seats did not commit and apply the held host's requested base"; return false;
 				}
 				for (unsigned attempt = 0; attempt < (arm == 2 ? 6U : 1U); ++attempt) {
 					const uint64_t opened = 1000 + attempt * 5000;
