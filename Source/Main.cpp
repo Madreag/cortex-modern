@@ -3922,7 +3922,7 @@ static bool RunSwapWaitSelfTest() {
 	};
 	using Action = SwapWaitGuard::Action;
 	{
-		// The Z13's panel switched off: 165 Hz, every waited swap 80.7 ms.
+		// A panel switched off: 165 Hz, every waited swap 80.7 ms.
 		SwapWaitGuard guard;
 		double now = 0;
 		int suspendedAt = -1;
@@ -3961,7 +3961,7 @@ static bool RunSwapWaitSelfTest() {
 		      "a wait outside a match was let go or the end kept it");
 	}
 	{
-		// Where the compositor counts the display's refreshes: the Z13's dark panel counted 0.33 a second, a lit one 165.
+		// Where the compositor counts the display's refreshes: a dark panel counted 0.33 a second, a lit one 165.
 		SwapWaitGuard dark, lit;
 		double now = 0;
 		for (int swap = 0; swap < SwapWaitGuard::c_LongSwapsToSuspend; ++swap, now += 80.7) {
@@ -3983,7 +3983,7 @@ static bool RunSwapWaitSelfTest() {
 	}
 	{
 		// A window on another display: the compositor counts only the primary display (60 Hz here), which still tells whether the
-		// desktop is composed at all - the Z13's dark desktop counted 0.33 refreshes a second.
+		// desktop is composed at all - a dark desktop counted 0.33 refreshes a second.
 		SwapWaitGuard dark, lit;
 		double now = 0;
 		for (int swap = 0; swap < SwapWaitGuard::c_LongSwapsToSuspend; ++swap, now += 80.7) {
