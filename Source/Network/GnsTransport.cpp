@@ -706,7 +706,10 @@ namespace RTE {
 			const auto ageMs = [nowUs](SteamNetworkingMicroseconds stamp) { return stamp > 0 ? std::max<SteamNetworkingMicroseconds>(0, nowUs - stamp) / 1000 : -1; };
 			const auto flowIt = m_PacketFlow.find(connection);
 			const PacketFlow flow = flowIt == m_PacketFlow.end() ? PacketFlow{} : flowIt->second;
-			const auto queue = GetPeerQueueStats(peerId);
+			const bool queueStatsAvailable = info.state == k_ESteamNetworkingConnectionState_Connected;
+			const auto queue = queueStatsAvailable ? GetPeerQueueStats(peerId) : NetTransportQueueStats{};
+			const auto receipt = m_RouteReceipts.find(connection);
+			const std::string& route = info.connectedRoute.empty() && receipt != m_RouteReceipts.end() ? receipt->second.route : info.connectedRoute;
 			std::ostringstream line;
 			line << "[net-transport-health] event=" << event << " peer=" << peerId << " connection=" << connection
 			     << " side=" << (m_IsHost ? "host" : "client") << " state=" << info.state << " end_reason=" << info.endReason
@@ -717,8 +720,8 @@ namespace RTE {
 			     << " last_message_handoff_ms=" << flow.lastHandedOffUs / 1000 << " last_message_received_ms=" << flow.lastReceivedUs / 1000
 			     << " sent_messages=" << flow.sentMessages << " sent_bytes=" << flow.sentBytes
 			     << " received_messages=" << flow.receivedMessages << " received_bytes=" << flow.receivedBytes
-			     << " pending_reliable_bytes=" << queue.reliableBytes << " queue_ms=" << queue.queueMs
-			     << " route=\"" << info.routeReceipt << "\"";
+			     << " queue_stats_available=" << queueStatsAvailable << " pending_reliable_bytes=" << queue.reliableBytes << " queue_ms=" << queue.queueMs
+			     << " route=\"" << route << "\"";
 			if (std::string_view(event) != "sample") {
 				std::string detail = GetPeerDetailedStatus(peerId);
 				std::replace(detail.begin(), detail.end(), '\n', ' ');
@@ -813,7 +816,8 @@ namespace RTE {
 		}
 
 		mutable std::set<HSteamNetConnection> m_RouteLogged;
-		mutable std::map<HSteamNetConnection, std::string> m_RouteReceipts; //!< Each connection's latest [net-route] line.
+		struct RouteReceipt { std::string text, route; };
+		mutable std::map<HSteamNetConnection, RouteReceipt> m_RouteReceipts; //!< Each connection's latest receipt and selected route, retained through close diagnostics.
 		mutable GnsRouteTracker m_RouteTracker; //!< The route each receipt named, so a live change gets its own receipt.
 		std::map<HSteamNetConnection, uint64_t> m_DialedMs; //!< When each ICE connection was dialed or accepted.
 		std::map<HSteamNetConnection, std::string> m_ConnectionOffers; //!< The relay offer each connection's TURN lists came from.
@@ -861,7 +865,7 @@ namespace RTE {
 				line << " change=" << change;
 				if (const auto dialed = m_DialedMs.find(connection); dialed != m_DialedMs.end()) line << " after_ms=" << SteadyMs() - dialed->second;
 			}
-			m_RouteReceipts[connection] = line.str();
+			m_RouteReceipts[connection] = {line.str(), relayed ? "relay" : "direct"};
 			DiagnosticLine() << line.str() << std::endl;
 		}
 
@@ -1221,7 +1225,7 @@ namespace RTE {
 				}
 			}
 			result.relayOffer = RouteOffer(connection, (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0);
-			if (const auto receipt = m_RouteReceipts.find(connection); receipt != m_RouteReceipts.end()) result.routeReceipt = receipt->second;
+			if (const auto receipt = m_RouteReceipts.find(connection); receipt != m_RouteReceipts.end()) result.routeReceipt = receipt->second.text;
 
 			const std::pair<const char*, ESteamNetworkingConfigValue> numbers[] = {
 				{"P2P_Transport_ICE_Enable", k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable},
