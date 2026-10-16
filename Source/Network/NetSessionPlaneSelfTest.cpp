@@ -3853,6 +3853,15 @@ namespace RTE {
 					while (fixture.hub.now < 18000 && (fixture.hub.now < fixture.hub.faultAt + 1000 || !fixture.peers[0]->IsOwnHostSeatHeld()))
 						if (!fixture.Step(error)) return false;
 					if (!fixture.peers[0]->IsOwnHostSeatHeld()) { error = "the host did not become a private reader"; return false; }
+					// The other seat really loses its input stream and is held before it asks for an image.
+					// The service never invents a held returner beside coordinators that still play its input.
+					fixture.hub.row.secondSubject = 2; fixture.hub.dropInputsFrom = 2;
+					while (fixture.hub.now < fixture.hub.faultEnd &&
+					       (!fixture.peers[0]->IsOwnHostSeatHeld() || !fixture.peers[0]->HasHeldAISeat(2)))
+						if (!fixture.Step(error)) return false;
+					if (!fixture.peers[0]->IsOwnHostSeatHeld() || !fixture.peers[0]->HasHeldAISeat(2)) {
+						error = "the image returner was not held while the host's own seat was held"; return false;
+					}
 					if (!service.m_WorldJoin.ConfigureMatchRejoins(fixture.peers[0]->GetConfig().matchConfig, fixture.peers[0]->GetRoundId(), c_TestTickMs, &error)) return false;
 					service.m_LocalPeerId = 1;
 					// The fixture retains the coordinator; the service borrows it only while following its real capture schedule.
@@ -3899,7 +3908,14 @@ namespace RTE {
 								if (const auto* note = std::get_if<NetGameCheckpoint>(&command.payload); note && command.senderPeerId == 1 && note->kind == NetGameCheckpoint::Capture && note->tick == captureTick) named = true;
 							if (!named) { error = "the playing seats committed different held-host base schedules"; return false; }
 						}
-						if (allCommitted && service.m_OpenCaptureApplied && service.IsJoinCaptureTick(captureTick)) return true;
+						if (allCommitted && service.m_OpenCaptureApplied && service.IsJoinCaptureTick(captureTick)) {
+							if (!fixture.wronglyHeld.empty()) { error = fixture.wronglyHeld; return false; }
+							for (uint8_t seat: {3, 4}) if (fixture.maxWait[seat - 1] > static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs))) {
+								error = "playing seat " + std::to_string(seat) + " waited " + std::to_string(fixture.maxWait[seat - 1]) + "ms during the held-host base request"; return false;
+							}
+							if (const auto twoReturns = fixture.TwoReturnFrames(); !twoReturns.empty()) { error = twoReturns; return false; }
+							return true;
+						}
 					}
 					error = "the playing seats did not commit and apply the held host's requested base"; return false;
 				}
