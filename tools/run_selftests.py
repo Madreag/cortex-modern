@@ -445,6 +445,18 @@ def run_row(options, make_run, name, case, sanitizer):
             scored = score_wall_clock_informational(stdout, record, name, sanitizer)
         scored["binary"] = record.get("exe_sha256")
         scored["load_sensitive"] = True
+    elif name == "module-version" and sys.platform.startswith("linux") and any(
+        os.environ.get(key) == "1" for key in ("CC_RUNNER_HEADED", "CC_TEST_VISIBLE_WINDOW")
+    ):
+        from test_module_version_warning import run_case as version_case  # noqa: PLC0415
+
+        record = version_case(options.repo, case, options.timeout)
+        stdout = (case / "stdout.log").read_text(errors="replace") if (case / "stdout.log").exists() else ""
+        scored = score_selftest(stdout, record.get("exit_code"), record.get("timed_out"), "module-version-selftest")
+        scored["binary"] = record.get("exe_sha256")
+        scored["warning_acknowledgment"] = record.get("warning_acknowledgment", {})
+        if not scored["warning_acknowledgment"].get("action") == "Return":
+            scored.update(**{"pass": False, "reason": "expected owned module warning was not acknowledged"})
     elif name == "headless-assert-continues":
         from test_headless_assert import run_case as assert_case  # noqa: PLC0415
 
