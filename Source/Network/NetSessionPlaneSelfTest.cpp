@@ -3667,7 +3667,8 @@ namespace RTE {
 				}
 				DiagnosticLine() << "[session-plane-kept-hold] seed=0 kept_for_authority=" << keptForAuthority << " longest_kept_ms=" << longestKept
 				                 << " dropped=" << fixture.peers[2]->GetStats().decisionsDropped << std::endl;
-				if (!keptForAuthority || longestKept < 5000 || !fixture.peers[2]->GetStats().decisionsDropped) { error = "the real hold did not remain pending for the directory through its five-second expiry"; return false; }
+				if (!keptForAuthority || longestKept < 5000) { error = "the real hold did not remain pending for its own directory decision past five seconds"; return false; }
+				if (fixture.peers[2]->GetStats().decisionsDropped) { error = "the agreed hold was discarded while its directory authority was still pending"; return false; }
 				for (uint8_t seat: {1, 2}) if (fixture.maxWait[seat - 1] > 50) { error = "survivor " + std::to_string(seat) + " waited " + std::to_string(fixture.maxWait[seat - 1]) + "ms"; return false; }
 				return true;
 			}});
