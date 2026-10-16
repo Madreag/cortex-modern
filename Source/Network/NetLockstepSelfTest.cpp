@@ -253,6 +253,8 @@ namespace RTE {
 				if (!install(3, true, 91, 9, 13)) { *error = "the intervening signed hold was not installed"; return false; }
 				if (!returnFirst && !install(2, false, 127, 15, 15)) { *error = "the later-delivered return was not installed"; return false; }
 				if (!install(3, false, 204, 15, 15)) { *error = "the named return for the other seat was not installed"; return false; }
+				peer.PreparePeerBridgeInputs(175, 2175);
+				if (peer.m_FrameGroupMembers != 11) { *error = "return2 reintroduced still-held seat3 at frame175"; return false; }
 				for (const auto [frame, members]: std::array<std::pair<uint64_t, uint32_t>, 9>{{{50, 15}, {51, 13}, {90, 13}, {91, 9}, {126, 9}, {127, 11}, {175, 11}, {203, 11}, {204, 15}}}) {
 					peer.PreparePeerBridgeInputs(frame, 2000 + frame);
 					if (peer.m_FrameGroupMembers != members) {
@@ -270,6 +272,36 @@ namespace RTE {
 				if (local == 3 ? witness != peer.m_PeerFrameWitnesses[175].end() : witness == peer.m_PeerFrameWitnesses[175].end() || witness->second.voterMask != 11) {
 					*error = "the committed tail's witness resurrected the other held seat"; return false;
 				}
+			}
+			return true;
+		}
+
+		static bool FutureRemovalKeepsPastAuthority(std::string* error) {
+			Wire wire;
+			NetLockstepCoordinator peer;
+			Configure(peer, wire);
+			peer.m_Config.localPeerId = peer.m_Config.authorityPeerId = 1;
+			peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+			peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+			peer.m_Config.matchConfig.successorOrder = {2, 3, 4};
+			peer.m_Config.peerFrameGroups = true;
+			peer.m_Config.frameTieReferee = [](const NetFrameTieRequest&) { return NetFrameTieReply{}; };
+			peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+			peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_FrameGroupMembers = 15; peer.m_FrameGroupChanges = {{1, 15}};
+			peer.m_Stats.nextFrame = 363; peer.m_LastCompletedSimulationTick = 362;
+			// The directory already awarded the four-owner split to seats3/4.
+			peer.m_PeerFrameTieWinners[1] = 12;
+			if (peer.PeerGroupHasAuthority(3, 363) || peer.PeerFrameGroupConfirms(3, 15, 363) || !peer.PeerFrameGroupConfirms(12, 15, 363)) {
+				*error = "the starting directory decision was not respected"; return false;
+			}
+			peer.m_RemovedPeers.insert(4);
+			peer.RemovePeerFrameSeat(4, 366);
+			if (peer.PeerGroupHasAuthority(3, 363) || peer.PeerFrameGroupConfirms(3, 15, 363) || !peer.PeerFrameGroupConfirms(12, 15, 363)) {
+				*error = "removing seat4 at366 gave the losing half authority over frame363"; return false;
+			}
+			if (!peer.PeerGroupHasAuthority(3, 366) || !peer.PeerFrameGroupConfirms(3, 7, 366)) {
+				*error = "the new three-owner majority did not take effect at the removal frame"; return false;
 			}
 			return true;
 		}
@@ -29760,6 +29792,13 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "future-removal-authority") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::FutureRemovalKeepsPastAuthority(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_future_removal_keeps_the_past_directory_decision" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "hold-invitation") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::HoldInvitation(&error)) return fail(error);
@@ -29836,6 +29875,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LinkDelay, "input_delay_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::ConcurrentReturnMembership, "a_later_return_keeps_the_earlier_scheduled_return");
 		row(&SessionPlaneRecoveryTest::ReturnKeepsOtherSeatHeld, "a_return_cannot_return_another_held_seat");
+		row(&SessionPlaneRecoveryTest::FutureRemovalKeepsPastAuthority, "a_future_removal_keeps_the_past_directory_decision");
 		row(&SessionPlaneRecoveryTest::HoldInvitation, "an_unsigned_hold_invitation_never_fences_an_input");
 		row(&SessionPlaneRecoveryTest::OwnAheadHoldFence, "a_seat_co_signs_and_fences_its_own_future_hold");
 		row(&SessionPlaneRecoveryTest::HeldHostBaseCapture, "held_host_names_a_private_base_through_the_playing_seats");
