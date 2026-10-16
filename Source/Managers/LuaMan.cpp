@@ -4522,6 +4522,12 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 		});
 		return m_Special.contains(address) || g_PrimitiveMan.FindCheckpointPrimitive(address) >= 0 || g_PrimitiveMan.FindCheckpointVertex(address) >= 0;
 	}
+	/// Whether an activity value names one that still exists: the running activity, the one the checkpoint started from, or a
+	/// loaded preset; only the pointer is read.
+	bool LiveActivity(const void* address) const {
+		address = CheckpointNativeStorage::Original(address);
+		return address == m_RunningActivity || address == m_StartActivity || ActivityPreset(address);
+	}
 	/// Whether an address is a loaded activity preset; only the pointer is read.
 	bool ActivityPreset(const void* address) const {
 		address = CheckpointNativeStorage::Original(address);
@@ -4758,6 +4764,8 @@ private:
 	mutable std::once_flag m_SpecialBuilt;
 	mutable std::atomic<bool> m_SpecialReady{false};
 	mutable std::unordered_set<const void*> m_Special;
+	const void* const m_RunningActivity = g_ActivityMan.GetActivity();
+	const void* const m_StartActivity = g_ActivityMan.GetCheckpointStartActivity();
 	mutable std::once_flag m_PieSlicesBuilt;
 	mutable std::atomic<bool> m_PieSlicesReady{false};
 	mutable std::unordered_map<const void*, PieSlicePlace> m_PieSlices;
@@ -8384,6 +8392,9 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 					if (bindings.DerivesFrom(type, "MovableObject") && !LuaScriptGraphNativeCaptureScope::Current()->Known(static_cast<const MovableObject*>(entity))) return nullptr;
 					// A slice no known actor's pie menu holds was deleted with its menu; only its address is read.
 					if (!owned && bindings.DerivesFrom(type, "PieSlice") && !LuaScriptGraphNativeCaptureScope::Current()->PieSliceOwner(entity)) return nullptr;
+					// An activity the world no longer has (a rejoin's image load replaced it) can stay in the capture helper's own maps,
+					// which the copy carries and the serializer skips; it is never read.
+					if (!owned && bindings.DerivesFrom(type, "Activity") && !LuaScriptGraphNativeCaptureScope::Current()->LiveActivity(entity)) return nullptr;
 					try {
 						return reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
 					} catch (const UnsupportedCheckpointNative& error) {
