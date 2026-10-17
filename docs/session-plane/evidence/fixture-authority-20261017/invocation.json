@@ -1,0 +1,21 @@
+{
+  "git": "909e80ada525b70931d76b2eb5d95f94a15cc79c",
+  "binary_sha256": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+  "topology": "single-box",
+  "proof": false,
+  "mode": "suite",
+  "quiet_at_start": true,
+  "command": [
+    "/usr/bin/python3",
+    "/home/erol/cortex-workers/hold-rows-engineer/tools/run_selftests.py",
+    "--repo",
+    "/home/erol/cortex-workers/hold-rows-engineer",
+    "--out",
+    "/home/erol/cortex-workers/hold-rows-engineer/out/authority-contract-20261017/final-suite/runs",
+    "--timeout",
+    "300"
+  ],
+  "exit_code": 1,
+  "elapsed_s": 838.0214503129991,
+  "quiet_throughout": false
+}

@@ -1,0 +1,67 @@
+{
+  "source_commit": "909e80ada525b70931d76b2eb5d95f94a15cc79c",
+  "branch": "cm-wip/hold-rows",
+  "binary_sha256": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+  "gns_root": "/home/erol/deps/gns-turnfix-v6",
+  "required_ancestors": {
+    "d1cbc8e09": true,
+    "29c194a3a": true,
+    "acf9944d4": true
+  },
+  "fixture_source_hashes": {
+    "Source/Network/NetSessionPlaneSelfTest.cpp": "5bbfa580b4a578134ac7c7a429c10e1a2216cfe38fc5b5b24b8bb32e577ccf34",
+    "tools/run_selftests.py": "5f006a072e5202949103102bf9597e13698a069c0c3de0634b06b9608bd26c1c",
+    "Source/Network/NetSessionPlaneShapeCoverage.json": "47d278502c2fdb791d273f43d38756b35c4018ae509f2b8783c5801e8baa28e7"
+  },
+  "baseline_fixed_rows": 226,
+  "baseline_random_aggregate_rows": 1,
+  "saved_schedules": 108,
+  "saved_schedule_texts_unchanged": true,
+  "reviewer_mapping_unchanged": true,
+  "new_fixed_rows": 7,
+  "runtime_source_changes_by_fixture_lane": [
+    "Source/Network/NetSessionPlaneSelfTest.cpp",
+    "tools/run_selftests.py"
+  ],
+  "no_manual_production_source_edits": true,
+  "prohibited_branch_pushes": 0,
+  "force_pushes": 0,
+  "topology": "single-box: not field or spread-match proof",
+  "gns_static_library": {
+    "path": "/home/erol/deps/gns-turnfix-v6/lib/libGameNetworkingSockets_s.a",
+    "bytes": 2860648,
+    "sha256": "0ac31b066349fffa332c936e9c791a7b64d6501ad242d0b8464bd689d0923e75",
+    "link_input_verified": true
+  },
+  "rulebook": {
+    "path": "/home/erol/codex-runs/astra-hold-rows-20261017/WORKER-RULEBOOK.md",
+    "last_line": "RULEBOOK-END 8350dae6088b",
+    "read_completely": true
+  },
+  "configure_command": [
+    "meson",
+    "configure",
+    "build-gcc",
+    "-Dgns_root=/home/erol/deps/gns-turnfix-v6"
+  ],
+  "configure_exit_code": 0,
+  "build_commands": [
+    [
+      "ninja",
+      "-C",
+      "build-gcc",
+      "-j4"
+    ],
+    [
+      "ninja",
+      "-C",
+      "build-gcc",
+      "-j4"
+    ]
+  ],
+  "build_exit_codes": [
+    0,
+    0
+  ],
+  "post_build_ninja_dry_run": "no work to do"
+}
