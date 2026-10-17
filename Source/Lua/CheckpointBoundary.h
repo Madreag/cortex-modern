@@ -76,7 +76,7 @@ namespace RTE::CheckpointLua {
 			}
 			try { m_Native->Warm(); } catch (const std::logic_error&) {}
 		}
-		/// Gives every copy's memory back while no boundary has begun.
+		/// Gives cold copies back, retaining only native copy runs the last cooling pass left Hot.
 		void Cool() noexcept {
 			for (const Heap& heap: m_Heaps) heap.prepared->Cool();
 			m_Native->Cool();
