@@ -1021,6 +1021,11 @@ namespace RTE {
 		});
 	}
 
+	bool Entity::ClassInfo::AnyPoolHolds(const void* address, size_t bytes) {
+		for (const ClassInfo* info = s_ClassHead; info; info = info->m_NextClass) if (info->IsConcrete() && info->PoolHolds(address, bytes)) return true;
+		return false;
+	}
+
 	bool Entity::ClassInfo::RunPoolExhaustionSelfTest() {
 		auto* info = const_cast<ClassInfo*>(GetClass("MOPixel"));
 		if (!info) {

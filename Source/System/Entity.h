@@ -207,6 +207,8 @@ namespace RTE {
 			static bool ReleaseUnusedPoolMemory(size_t budget);
 			/// Whether bytes at an address lie in a block this class's pool holds returned.
 			bool PoolHolds(const void* address, size_t bytes) const;
+			/// Whether any class's pool holds such a block: memory no living entity owns.
+			static bool AnyPoolHolds(const void* address, size_t bytes);
 			/// A pool whose refill the allocator refuses throws std::bad_alloc instead of handing out a null instance.
 			static bool RunPoolExhaustionSelfTest();
 

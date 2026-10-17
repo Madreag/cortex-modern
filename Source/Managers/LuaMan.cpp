@@ -5601,29 +5601,17 @@ static int ScriptGraphLimbVectorOwner(lua_State* L) {
 	return 0;
 }
 
-// A Vector reference that outlived every object holding it (an AI's waypoint into a move target that died): the value the
-// script reads through it, read only where the engine still holds the memory - a native pool's slot, a returned block of its
-// owner's class pool, or the capture's frozen copy; nothing for a reference with no owner, or memory nothing holds.
+// A Vector reference that outlived the object it points into (an AI's waypoint into a move target that died): the value the
+// script reads through it, read only from memory the engine holds and no living object owns - a slot a native pool holds free
+// or a block a class pool holds returned; nothing for any other reference, or while an owner luabind recorded lives.
 static int ScriptGraphGoneVector(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	if (!rep || !rep->ptr() || (rep->flags() & luabind::detail::object_rep::owner) || !rep->crep() || rep->crep()->type() != LUABIND_TYPEID(Vector)) return 0;
-	if (!rep->get_dependencies().is_valid() || ScriptGraphNativeAlive(L, rep)) return 0;
-	const void* address = rep->ptr();
-	bool held = CheckpointNativeStorage::Reading() || CheckpointNativeStorage::Owns(CheckpointNativeStorage::Original(address));
-	if (!held) {
-		rep->get_dependencies().get(L);
-		lua_pushnil(L);
-		while (!held && lua_next(L, -2) != 0) {
-			if (const auto* owner = luabind::detail::is_class_object(L, -1); owner && owner->crep()) {
-				if (const auto* type = Entity::ClassInfo::GetClass(owner->crep()->name())) held = type->PoolHolds(address, sizeof(Vector));
-			}
-			lua_pop(L, 1);
-		}
-		if (held) lua_pop(L, 1);
-		lua_pop(L, 1);
-	}
-	if (!held) return 0;
-	const Vector value = *static_cast<const Vector*>(address);
+	if (rep->get_dependencies().is_valid() && ScriptGraphNativeAlive(L, rep)) return 0;
+	const void* original = CheckpointNativeStorage::Original(rep->ptr());
+	if (!CheckpointNativeStorage::FreeSlotHolds(original, sizeof(Vector)) && !Entity::ClassInfo::AnyPoolHolds(original, sizeof(Vector))) return 0;
+	// Through the view: a frozen state reads its copy of the bytes.
+	const Vector value = *static_cast<const Vector*>(rep->ptr());
 	lua_pushnumber(L, value.GetX());
 	lua_pushnumber(L, value.GetY());
 	return 2;

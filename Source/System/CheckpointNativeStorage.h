@@ -199,6 +199,8 @@ namespace RTE {
 		/// Deallocate's full path: private values, the cost lever and the pools under their lock.
 		RTE_NOINLINE static bool ReleaseOwned(void* address) noexcept;
 		static bool Owns(const void* address);
+		/// Whether bytes at an address lie in a slot a pool holds free: memory no living object owns.
+		static bool FreeSlotHolds(const void* address, size_t bytes);
 		/// Slot pool, free slot and large buffer bytes, and how much grew inside explicit owned scopes.
 		static std::string InventoryCensus();
 		/// The slot pools' classes and the bytes their free lists reserve.

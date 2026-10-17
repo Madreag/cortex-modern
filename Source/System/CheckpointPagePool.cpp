@@ -1021,6 +1021,7 @@ namespace {
 	struct NativeStorageRange {
 		size_t bytes = 0;
 		NativeStoragePool* pool = nullptr;
+		size_t slot = 0;
 	};
 	struct NativeStoragePools {
 		std::mutex mutex;
@@ -1177,7 +1178,7 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 		const auto [address, bytes] = pool.pages.Grow(slot, 1, pool.free, c_NativeStorageBlockBytes);
 		s_OwnedRegions.Mark(address, bytes);
 		node.key() = reinterpret_cast<uintptr_t>(address);
-		node.mapped() = {bytes, &pool};
+		node.mapped() = {bytes, &pool, slot};
 		pools.ranges.insert(std::move(node));
 		pool.bytes += pool.free.size() * slot;
 		(s_NativeStorageAllocation ? pools.explicitGrownBytes : pools.worldGrownBytes) += bytes;
@@ -1313,6 +1314,20 @@ std::string CheckpointNativeStorage::StorageCosts() {
 	const auto ms = [](const std::atomic<uint64_t>& ns) { return ns.load() / 1000000; };
 	return std::format("allocations={} allocate_ms={} frees={} free_ms={} grows={} grow_ms={} larges={} {}", counters->allocations.load(), ms(counters->allocateNs),
 	    counters->frees.load(), ms(counters->freeNs), counters->grows.load(), ms(counters->growNs), counters->larges.load(), InventoryCensus());
+}
+
+bool CheckpointNativeStorage::FreeSlotHolds(const void* address, size_t bytes) {
+	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
+	if (!pools || !s_OwnedRegions.Maybe(address)) return false;
+	const uintptr_t value = reinterpret_cast<uintptr_t>(address);
+	std::lock_guard lock(pools->mutex);
+	const auto after = pools->ranges.upper_bound(value);
+	if (after == pools->ranges.begin()) return false;
+	const auto& [begin, range] = *std::prev(after);
+	if (!range.pool || !range.slot || value - begin >= range.bytes) return false;
+	const uintptr_t slot = begin + (value - begin) / range.slot * range.slot;
+	if (value + bytes > slot + range.slot) return false;
+	return std::find(range.pool->free.begin(), range.pool->free.end(), reinterpret_cast<void*>(slot)) != range.pool->free.end();
 }
 
 bool CheckpointNativeStorage::Owns(const void* address) {
