@@ -7012,10 +7012,12 @@ _CaptureWindow.menuHolderUID = holder.UniqueID
 	lua.RunScriptString("if _CaptureWindow then MovableMan:RemoveActor(_CaptureWindow.dropper); if _CaptureWindow.taker then MovableMan:RemoveActor(_CaptureWindow.taker) end end; _CaptureWindow = nil; collectgarbage()");
 	const bool passed = recordAnswers && goneFreedAtFence && reusedInWindow && goneCarried && retainedAtFence && takenInWindow && vectorCarried && liveAtFence && freedInWindow &&
 	                    unreachedRefused && menuAtFence && menuMemoryTaken && deadMenuCopied;
-	std::cout << "[capture-window-selftest] " << (passed ? "PASS" : "FAIL") << " record_answers_as_of_fence=" << recordAnswers << " planted=" << planted << " freed_at_fence=" << goneFreedAtFence << " reused_in_window=" << reusedInWindow
+	std::cout << "[capture-window-selftest] record_answers_as_of_fence=" << recordAnswers << " planted=" << planted << " freed_at_fence=" << goneFreedAtFence << " reused_in_window=" << reusedInWindow
 	          << " freed_slice_carried=" << goneCarried << " retained_at_fence=" << retainedAtFence << " retained_taken_in_window=" << takenInWindow << " gone_vector_carried=" << vectorCarried
 	          << " live_at_fence=" << liveAtFence << " freed_in_window=" << freedInWindow << " unreached_refused_by_name=" << unreachedRefused
 	          << " menu_at_fence=" << menuAtFence << " menu_memory_taken=" << menuMemoryTaken << " gone_actor_menu_copied=" << deadMenuCopied << std::endl;
+	// The suite reads the verdict from a line of its own.
+	std::cout << "[capture-window-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;
 }
 
