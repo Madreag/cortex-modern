@@ -69,7 +69,10 @@ namespace RTE::CheckpointLua {
 		/// Commits every copy and makes the pages a boundary writes resident, ahead of a capture; a boundary begun meanwhile
 		/// ends it and commits the rest itself.
 		void Warm() {
-			for (const Heap& heap: m_Heaps) heap.prepared->Warm();
+			for (const Heap& heap: m_Heaps) {
+				heap.lease.FillHoles(*heap.prepared);
+				heap.prepared->Warm();
+			}
 			try { m_Native->Warm(); } catch (const std::logic_error&) {}
 		}
 		/// Gives every copy's memory back while no boundary has begun.

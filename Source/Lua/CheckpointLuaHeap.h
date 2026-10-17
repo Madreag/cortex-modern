@@ -102,6 +102,7 @@ namespace RTE::CheckpointLua {
 		int64_t armCopyUs = 0;
 		size_t armCopiedPages = 0;
 		bool armWhole = false;
+		size_t armHoleBytes = 0; // What the boundary had to commit again of the trim's holes.
 	};
 
 	struct LibraryHandlers {
@@ -159,6 +160,7 @@ namespace RTE::CheckpointLua {
 		size_t FaultCount() const { return m_Data && m_Data->faults ? m_Data->faults->count.load(std::memory_order_relaxed) : 0; }
 		int64_t ArmCopyUs() const { return m_Data && m_Data->faults ? m_Data->faults->armCopyUs : 0; }
 		size_t ArmCopiedPages() const { return m_Data && m_Data->faults ? m_Data->faults->armCopiedPages : 0; }
+		size_t ArmHoleBytes() const { return m_Data && m_Data->faults ? m_Data->faults->armHoleBytes : 0; }
 		bool ArmWhole() const { return m_Data && m_Data->faults && m_Data->faults->armWhole; }
 		/// The bytes the state allocated between its two full collections before the heap was prepared.
 		size_t PeriodAllocated() const { return m_Data ? m_Data->periodAllocated : 0; }
@@ -441,6 +443,9 @@ namespace RTE::CheckpointLua {
 			bool Arm(Prepared& prepared, bool byCopy = false) const noexcept;
 			/// The boundary's arm on several threads: Arm's locks and checks into the session, and the pages to copy.
 			bool BeginArm(Prepared& prepared, bool whole, bool learn, ArmSession& session) const;
+			/// Commits again, on the saver, the pages the trim gave back, a run at a time between the game's ticks, so the boundary
+			/// finds the heap whole; a boundary begun meanwhile commits the rest itself.
+			void FillHoles(const Prepared& prepared) const noexcept;
 			explicit operator bool() const noexcept { return m_Life != nullptr; }
 		private:
 			friend class HeapOwner;
@@ -894,6 +899,7 @@ namespace RTE::CheckpointLua {
 		std::atomic<bool> m_CopyPending{false};
 		std::atomic<bool> m_CowGateFree{false};
 		std::mutex m_PrepareMutex;
+		std::mutex m_HoleMutex; //!< The trim's decommits and the saver's commits of its holes, one at a time.
 		std::vector<std::weak_ptr<Prepared>> m_Prepared;
 		/// The caller holds m_PrepareMutex: no preparation whose boundary has begun and is not drained, and no copy still to land.
 		bool Quiet() noexcept;
@@ -1782,21 +1788,22 @@ namespace RTE::CheckpointLua {
 			}
 		}
 
-		// Commits every granule the trim gave back, before a capture plans or copies the committed range.
-		bool FillHoles() noexcept {
+		// Commits granules the trim gave back, at most the given number of runs of them, before a capture plans or copies the
+		// committed range; false only when a commit failed. A run's bits clear only after it is committed.
+		bool FillHoles(size_t runs = SIZE_MAX) noexcept {
 			if (!m_HoleBytes.load(std::memory_order_acquire)) return true;
-			for (size_t word = 0; word < c_HoleWords; ++word) {
-				const uint64_t bits = m_Holes[word].load(std::memory_order_acquire);
-				for (uint64_t rest = bits; rest;) {
+			for (size_t word = 0; word < c_HoleWords && runs; ++word) {
+				for (uint64_t rest = m_Holes[word].load(std::memory_order_acquire); rest && runs; --runs) {
 					const size_t first = static_cast<size_t>(std::countr_zero(rest)), count = static_cast<size_t>(std::countr_one(rest >> first));
+					const uint64_t run = count == 64 ? ~uint64_t{0} : ((uint64_t{1} << count) - 1) << first;
 					if (!CommitPages(reinterpret_cast<void*>(m_Base + (word * 64 + first) * c_GranuleBytes), count * c_GranuleBytes)) return false;
-					rest &= count == 64 ? 0 : ~(((uint64_t{1} << count) - 1) << first);
+					rest &= ~run;
+					const size_t granules = static_cast<size_t>(std::popcount(m_Holes[word].fetch_and(~run, std::memory_order_acq_rel) & run));
+					m_HoleBytes.fetch_sub(granules * c_GranuleBytes, std::memory_order_relaxed);
+					HoleBytesTotal().fetch_sub(granules * c_GranuleBytes, std::memory_order_relaxed);
+					HeapCommitted().fetch_add(granules * c_GranuleBytes, std::memory_order_relaxed);
+					m_FreeGranules.fetch_add(static_cast<std::ptrdiff_t>(granules), std::memory_order_relaxed);
 				}
-				const size_t granules = static_cast<size_t>(std::popcount(m_Holes[word].fetch_and(~bits, std::memory_order_acq_rel) & bits));
-				m_HoleBytes.fetch_sub(granules * c_GranuleBytes, std::memory_order_relaxed);
-				HoleBytesTotal().fetch_sub(granules * c_GranuleBytes, std::memory_order_relaxed);
-				HeapCommitted().fetch_add(granules * c_GranuleBytes, std::memory_order_relaxed);
-				m_FreeGranules.fetch_add(static_cast<std::ptrdiff_t>(granules), std::memory_order_relaxed);
 			}
 			return true;
 		}
@@ -1870,6 +1877,8 @@ namespace RTE::CheckpointLua {
 		bool Current(const HeapOwner& owner) const noexcept {
 			return m_Data->state == owner.m_State && m_Data->committed == owner.m_PublishedCommitted.load(std::memory_order_acquire);
 		}
+		/// Whether a boundary's writes into the buffer have begun, which ends warming.
+		bool WritesBegun() const noexcept { return m_WritesBegun.load(std::memory_order_seq_cst); }
 		/// One heap's boundary arm alone on this thread, through the plan, copies and fence a boundary takes; whole copies it all.
 		bool Arm(HeapOwner& owner, bool whole = false) noexcept {
 			try {
@@ -2035,6 +2044,21 @@ namespace RTE::CheckpointLua {
 		return m_CowCoordinator->FirstTickWrites();
 	}
 
+	inline void HeapOwner::PreparationLease::FillHoles(const Prepared& prepared) const noexcept {
+		if (!m_Life) return;
+		for (;;) {
+			{
+				// Each run holds the heap alive only as long as one commit takes, so a boundary arming meanwhile rarely meets it.
+				std::unique_lock alive(m_Life->mutex, std::try_to_lock);
+				if (!alive || !m_Life->owner || prepared.WritesBegun()) return;
+				HeapOwner& owner = *m_Life->owner;
+				std::unique_lock holes(owner.m_HoleMutex, std::try_to_lock);
+				if (!holes || !owner.FillHoles(1) || !owner.m_HoleBytes.load(std::memory_order_acquire)) return;
+			}
+			try { SaverThreads::YieldToGame(); } catch (...) { return; }
+		}
+	}
+
 	inline bool HeapOwner::PreparationLease::BeginArm(Prepared& prepared, bool whole, bool learn, ArmSession& session) const {
 		if (!m_Life) return false;
 		session.m_Alive = std::unique_lock(m_Life->mutex, std::try_to_lock);
@@ -2050,7 +2074,9 @@ namespace RTE::CheckpointLua {
 		session.m_Started = RTE::SteadyClock::now();
 		m_Data->serial = G(owner.m_State)->objserial;
 		session.m_Spans.reserve(CowCoordinator::c_HotRunCapacity + 1);
+		const size_t holes = owner.m_HoleBytes.load(std::memory_order_acquire);
 		if (!m_Coordinator->PlanArm(*m_Copy, m_Data->committed, whole, session.m_Spans) || !BeginWrites() || !owner.FillHoles()) return false;
+		if (m_Copy->faults) m_Copy->faults->armHoleBytes = holes;
 		session.m_Prepared = this;
 		session.m_Owner = &owner;
 		session.m_Whole = whole;
@@ -2149,8 +2175,9 @@ namespace RTE::CheckpointLua {
 		}
 		if (m_CowCoordinator) {
 			CowCoordinator::Locked guard(m_CowCoordinator->lock);
-			// An unarmed plan's copy fences nothing yet.
-			for (const auto& copy: m_CowCoordinator->copies) if (!copy->completed && copy->armed.load(std::memory_order_acquire) != 0) return false;
+			// An unarmed plan's copy fences nothing yet, but once a capture is near its saver has committed the heap for the boundary.
+			const bool near = KeepWarm().load(std::memory_order_acquire);
+			for (const auto& copy: m_CowCoordinator->copies) if (!copy->completed && (near || copy->armed.load(std::memory_order_acquire) != 0)) return false;
 		}
 		return true;
 	}
@@ -2163,6 +2190,8 @@ namespace RTE::CheckpointLua {
 		if (m_FreeGranules.load(std::memory_order_relaxed) <= keep + static_cast<std::ptrdiff_t>(c_TrimSliceGranules)) return;
 		std::unique_lock preparations(m_PrepareMutex, std::try_to_lock);
 		if (!preparations || !Quiet()) return;
+		std::unique_lock holes(m_HoleMutex, std::try_to_lock);
+		if (!holes) return;
 		// A class's run with nothing in it goes back too: the class takes a fresh one, lowest first, when it allocates again.
 		for (size_t index = 0; index < c_ClassCount; ++index) {
 			if (const uint32_t id = m_Current[index]; id && !m_Runs[id - 1].live) {
