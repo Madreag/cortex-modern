@@ -4955,7 +4955,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		NetLobbySnapshot snapshot; snapshot.isHost = snapshot.inLobby = snapshot.occupancyComplete = true; snapshot.localPeerId = snapshot.hostPeerId = 1;
 		snapshot.activityPreset = "Skirmish Defense"; snapshot.sceneName = "Grasslands";
 		NetLobbyMember host; host.peerId = 1; host.displayName = "Captain"; host.isLocal = host.connected = host.ready = true;
-		NetLobbyMember player; player.peerId = 2; player.displayName = "Edith"; player.connected = true; snapshot.members = {host, player};
+		NetLobbyMember player; player.peerId = 2; player.displayName = "Guest"; player.connected = true; snapshot.members = {host, player};
 		const auto draw = [&] { menu.RefreshMultiplayerScreenControls(snapshot); menu.m_SubMenuScreenGUIControlManager->Draw(); present("fight15_R5"); };
 		const auto click = [&] {
 			GUIControl* start = menu.m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart"); if (!start) return false;
@@ -4973,12 +4973,12 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 			int commands = 0; GUIEvent event; while (menu.m_SubMenuScreenGUIControlManager->GetEvent(&event)) if (event.GetControl() == start && event.GetType() == GUIEvent::Command) ++commands;
 			return commands == 1;
 		};
-		draw(); check("before_start_only_names_unready_players", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Edith to press Ready");
+		draw(); check("before_start_only_names_unready_players", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Guest to press Ready");
 		check("host_start_takes_hand_press_release", click()); snapshot.startCountdownRunning = true; snapshot.startCountdownMs = 30000; draw();
 		check("started_countdown_is_visible", menu.m_MultiplayerStatusLabel->GetText().starts_with("Starting in 30 s"));
 		snapshot.startCountdownMs = 27000; draw(); check("countdown_counts_down", menu.m_MultiplayerStatusLabel->GetText().starts_with("Starting in 27 s"));
 		check("host_can_press_cancel", menu.m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart") && click());
-		snapshot.startCountdownRunning = false; draw(); check("canceled_countdown_returns_to_waiting", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Edith to press Ready");
+		snapshot.startCountdownRunning = false; draw(); check("canceled_countdown_returns_to_waiting", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Guest to press Ready");
 		snapshot.isHost = false; snapshot.localPeerId = 2; snapshot.members[0].isLocal = false; snapshot.members[1].isLocal = true;
 		snapshot.joiningWorld = snapshot.startCountdownRunning = true; snapshot.startCountdownMs = 30000;
 		snapshot.transferLine = "Receiving the world: 0.0 of 1.7 MB"; draw();
