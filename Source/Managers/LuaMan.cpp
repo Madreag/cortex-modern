@@ -5438,7 +5438,8 @@ static int ScriptGraphPropertyOwner(lua_State* L) {
 		luabind::object(L, activity).push(L);
 		lua_rawseti(L, candidates, ++candidateCount);
 		for (int player = 0; player < Players::MaxPlayerCount; ++player) {
-			if (auto* editor = activity->GetEditorGUI(player)) {
+			// An unmade seat stand-in owns nothing; a capture never makes one, which the saver would make outside the world's storage.
+			if (auto* editor = activity->GetExistingEditorGUI(player)) {
 				std::unordered_set<const Entity*> entities;
 				std::unordered_set<const MovableObject*> objects;
 				CollectOwnedMovableObjects(editor->GetCurrentObject(), entities, objects);
