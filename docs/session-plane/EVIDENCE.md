@@ -111,6 +111,12 @@ trial added no whole-row GREEN and was [reverted with both measurements retained
 
 ## Held-host capture and transport
 
+The [native host handoff investigation](evidence/held-host-controller/README.md)
+records an additional current-binary desync: disabled flags first differ at727,
+then the Brain Robot's front arm/rifle at728. The new actual-handoff detector is
+RED before its correction. Field logs identify why the third hold differs in
+return-record arrival order; they still do not identify the exact field object.
+
 Commits `c9ccc3d76` and `23dd1a907` let the host whose own seat is held request a
 private base. Its authenticated request is embedded in a future capture proposal
 from the already agreed AI producer; all actual playing voters certify the same

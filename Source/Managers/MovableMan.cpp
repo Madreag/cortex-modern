@@ -222,6 +222,10 @@ namespace {
 		j["ctrl_cursor"] = {controller.GetAnalogCursor().m_X, controller.GetAnalogCursor().m_Y};
 		j["ctrl_input_mode"] = static_cast<int>(controller.GetInputMode());
 		j["ctrl_player"] = controller.GetPlayer();
+		j["ctrl_quick_disabled"] = controller.IsQuickDisabled();
+		j["ctrl_seat_mode"] = static_cast<int>(controller.GetSeatMode());
+		j["ctrl_seat_player"] = controller.GetSeatPlayerRaw();
+		j["ctrl_wire_apply_tick"] = controller.GetWireApplyTick();
 		j["movement_state"] = actor->GetMovementState();
 		j["wound_count"] = actor->GetWoundCount(true, true, true);
 		j["gib_wound_limit"] = actor->GetGibWoundLimit(true, true, true);
@@ -8610,6 +8614,7 @@ void MovableMan::UpdateControllers() {
 		NeutralizeUnframedLockstepActors(CheckpointActorValues().m_Actors, applied, canonicalStartup);
 		// The round's opening actors join after this apply; before the first frame they take the same route on every peer.
 		if (canonicalStartup) NeutralizeUnframedLockstepActors(CheckpointActorValues().m_AddedActors, applied, true);
+		DumpControllerDebugSnapshot("lockstep_pre_handoff", simTick, CheckpointActorValues().m_Actors, &readyFrame.remoteFrames);
 		ApplyLockstepLeaveHandoffsImpl(readyFrame, CheckpointActorValues().m_Actors, false);
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, CheckpointActorValues().m_Actors, &readyFrame.remoteFrames);
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);

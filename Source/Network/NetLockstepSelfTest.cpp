@@ -135,6 +135,62 @@ namespace RTE {
 		}
 
 
+		static bool HeldHostKeepsItsControllersEnabled(std::string* error) {
+			Wire wire;
+			NetLockstepCoordinator peer;
+			Configure(peer, wire);
+			peer.m_Config.authorityPeerId = 1;
+			peer.m_Config.peerFrameGroups = true;
+			peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_Stats.nextFrame = 728;
+			peer.m_LastDeliveredFrame = 727;
+			peer.m_PeerBridges[1] = {606, 727, true, {}, {}, 6};
+			peer.m_AiHeldSeats[1] = peer.m_PeerLeaveFrames[1] = 727;
+			peer.m_SeatTransitions[1][727] = NetLockstepCoordinator::SeatTransition::Held;
+			std::unique_ptr<Actor> actor = std::make_unique<Actor>();
+			if (actor->MovableObject::Create(1.0F) < 0) { *error = "held-host fixture could not create its actor"; return false; }
+			actor->SetTeam(0);
+			Controller& controller = *actor->GetController();
+			controller.SetControlledActor(actor.get());
+			NetLockstepReadyFrame handoff;
+			handoff.frame = 727;
+			handoff.aiHeldPeerIds = {1};
+			bool valid = true;
+			for (const bool futureReturn: {false, true}) {
+				if (futureReturn) {
+					peer.m_SeatTransitions[1][761] = NetLockstepCoordinator::SeatTransition::Back;
+					peer.m_ReclaimTransactions[1] = {1, 1, 761 * 8 + 1, 1, 761, 5, 790};
+					peer.m_PeerBridges[1].returnFrame = 761;
+				}
+				for (const bool disabled: {false, true}) {
+					ScenarioRunner::SetLockstepCoordinator(nullptr);
+					controller.ResetLocalInputState(Controller::CIM_PLAYER, 0);
+					controller.ApplyWireMode(Controller::CIM_PLAYER, 0);
+					controller.SetDisabled(disabled);
+					ScenarioRunner::SetLockstepCoordinator(&peer);
+					NetActorOwnership::SeedOwner(actor->GetUniqueID(), 1, 0);
+					const bool gone = peer.IsPeerGoneAtFrame(1, 727);
+					ApplyLockstepLeaveHandoffs(handoff, {actor.get()}, false);
+					const uint8_t producer = ScenarioRunner::GetLockstepActorOwner(actor->GetUniqueID(), 0, true, 727);
+					std::cout << "[net-lockstep-selftest] held_host_handoff future_return=" << futureReturn
+					          << " gone=" << gone << " initial_disabled=" << disabled << " disabled=" << controller.IsQuickDisabled()
+					          << " mode=" << controller.GetInputMode() << " producer=" << static_cast<int>(producer) << std::endl;
+					valid &= !gone && producer == 2 && controller.GetInputMode() == Controller::CIM_AI && controller.IsQuickDisabled() == disabled;
+				}
+			}
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			NetActorOwnership::ClearSeededOwners();
+			// The hub's held seat is not a departed hub. An explicit departure still is, and a held client keeps its existing rule.
+			peer.m_SeatTransitions[1][900] = NetLockstepCoordinator::SeatTransition::Left;
+			peer.m_PeerLeaveFrames[1] = 900;
+			peer.m_ReclaimTransactions.erase(1);
+			peer.m_PeerLeaveFrames[3] = peer.m_AiHeldSeats[3] = 727;
+			peer.m_SeatTransitions[3][727] = NetLockstepCoordinator::SeatTransition::Held;
+			valid &= peer.IsPeerGoneAtFrame(1, 900) && peer.IsPeerGoneAtFrame(3, 727);
+			if (!valid) *error = "a held host's controller disable depends on whether its future return has arrived";
+			return valid;
+		}
+
 		static bool LinkDelay(std::string* error) {
 			for (const auto [rtt, minimum, maximum]: {std::array<uint32_t, 3>{30, 3, 6}, {58, 5, 6}, {200, 13, 14}}) {
 				NetInputDelayEstimator link;
@@ -30308,6 +30364,13 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "held-host-controller") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::HeldHostKeepsItsControllersEnabled(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_held_host_preserves_controller_disable_before_its_return_arrives" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "link-delay") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::LinkDelay(&error)) return fail(error);
@@ -30493,6 +30556,7 @@ namespace {
 		};
 		row([](std::string* why) { return TestOwnerSilenceThreshold(0, why); }, "client_2s_bridge_survivor_tick_bound_automatic_return");
 		row(&SeatAdmissionServiceTest::HeldHostAdoptsBaseCapture, "held_host_adopts_the_agreed_base_capture");
+		row(&SessionPlaneRecoveryTest::HeldHostKeepsItsControllersEnabled, "a_held_host_preserves_controller_disable_before_its_return_arrives");
 		row(&SessionPlaneRecoveryTest::LinkDelay, "input_delay_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::ConcurrentReturnMembership, "a_later_return_keeps_the_earlier_scheduled_return");
 		row(&SessionPlaneRecoveryTest::ReturnKeepsOtherSeatHeld, "a_return_cannot_return_another_held_seat");
