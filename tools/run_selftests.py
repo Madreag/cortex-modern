@@ -521,9 +521,11 @@ def run_row_in_mode(options, make_run, name, case, sanitizer):
         native_name = "net-session-plane" if plane else name
         if plane:
             # Keep every fixture and every requested seed, in separate 300 s suite rows.
-            # Four workers avoid starving the long sequential host-change fixture.
+            # Cap the fixed pool at four for its long sequential host-change arm.
+            # Independent schedules use the original CPU-count-minus-one pool.
+            default_workers = max(1, (os.cpu_count() or 1) - 1) if driver else min(4, os.cpu_count() or 1)
             row_env = {"CC_TEST_HOLD_SCHEDULE_THREADS": os.environ.get(
-                "CC_TEST_HOLD_SCHEDULE_THREADS", str(min(4, os.cpu_count() or 1))),
+                "CC_TEST_HOLD_SCHEDULE_THREADS", str(default_workers)),
                 "CC_TEST_HOLD_SCHEDULES": os.environ.get("CC_TEST_HOLD_SCHEDULES", "200" if driver else "0")}
             if driver:
                 row_env["CC_TEST_SESSION_PLANE_CASE"] = "random_hold_schedules"
