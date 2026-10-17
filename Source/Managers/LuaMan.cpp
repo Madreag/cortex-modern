@@ -4527,7 +4527,7 @@ _F5LeverSlices.menuSlice = _F5LeverSlices.menu and _F5LeverSlices.menu:GetFirstP
 _F5LeverSlices.options = CreatePieSlice("Constructor Options", "Base.rte")
 _F5LeverSlices.subSlice = _F5LeverSlices.options and _F5LeverSlices.options.SubPieMenu and _F5LeverSlices.options.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Cancel Construction")
 _F5LeverSlices.presetEntity = PresetMan:GetPreset("PieSlice", "Menu", "Base.rte")
-_F5LeverSlices.presetSlice = _F5LeverSlices.presetEntity and ToConstPieSlice(_F5LeverSlices.presetEntity)
+_F5LeverSlices.presetSlice = _F5LeverSlices.presetEntity and ToPieSlice(_F5LeverSlices.presetEntity)
 assert(_F5LeverSlices.menuSlice and _F5LeverSlices.subSlice and _F5LeverSlices.presetSlice)
 )lua";
 	int planted = 0, states = 0;
@@ -6622,7 +6622,7 @@ _F5Handles.ownMenuAlias = _F5Handles.ownMenuSlice
 _F5Handles.ownSlice = CreatePieSlice("Constructor Options", "Base.rte")
 _F5Handles.subSlice = _F5Handles.ownSlice and _F5Handles.ownSlice.SubPieMenu and _F5Handles.ownSlice.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Cancel Construction")
 _F5Handles.presetEntity = PresetMan:GetPreset("PieSlice", "Menu", "Base.rte")
-_F5Handles.presetSlice = _F5Handles.presetEntity and ToConstPieSlice(_F5Handles.presetEntity)
+_F5Handles.presetSlice = _F5Handles.presetEntity and ToPieSlice(_F5Handles.presetEntity)
 assert(_F5Handles.ownMenuSlice and _F5Handles.subSlice and _F5Handles.presetSlice, "a script's own menu slice, its own slice's sub-menu slice or a preset slice could not be made")
 -- The device leaves its holder's hands: the menu deletes the slices it put there, and the handles point at nothing.
 _F5Handles.dropper:UnequipArms()
