@@ -1,0 +1,137 @@
+diff --git a/Source/Network/NetLockstepSelfTest.cpp b/Source/Network/NetLockstepSelfTest.cpp
+index a414d2141..607c5efc6 100644
+--- a/Source/Network/NetLockstepSelfTest.cpp
++++ b/Source/Network/NetLockstepSelfTest.cpp
+@@ -600,6 +600,94 @@ namespace RTE {
+ 			return true;
+ 		}
+ 
++		static bool ReturnDelayPadding(std::string* error) {
++			Wire wire; NetLockstepCoordinator peer;
++			Configure(peer, wire);
++			peer.m_Config.localPeerId = 3; peer.m_Config.authorityPeerId = 1;
++			peer.m_Config.peerFrameGroups = true; peer.m_MigrationPhase = NetHostMigrationPhase::None;
++			peer.m_Config.inputDelayFrames = peer.m_Config.matchConfig.inputDelayFrames = 21;
++			peer.m_Config.peerInputDelayFrames = {{1, 21}, {2, 21}, {3, 21}};
++			peer.m_Config.matchConfig.peerInputDelayFrames = {21, 21, 21};
++			peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}, {311, 3}, {459, 7}};
++			peer.m_PeerBridges[3] = {311, 431, true, 459, {}, 3};
++			peer.m_PeerFrameHolds[3] = {{311, true}, {459, false}};
++			peer.m_ReclaimTransactions[3] = {3, 1, 459 * 8 + 3, 1, 459, 21, 533};
++			peer.m_PeerEffectiveStart[3] = 480;
++			peer.m_Stats.nextFrame = 525; peer.m_LastCompletedSimulationTick = 512;
++			peer.m_LastQueuedTargetFrame = 329; peer.m_LastProducedFrame = 512;
++			peer.m_DelayChanges[3][513] = 24;
++			NetLockstepFrame previous; previous.senderPeerId = 3; previous.targetFrame = 329; previous.roundId = 77;
++			ControllerFrame control; control.actorUniqueID = 1003; control.analogMoveX = 300;
++			previous.frames = {control}; peer.m_LocalInputHistory[329] = previous;
++			peer.m_RemotePeerIds = {1, 2}; peer.m_RemoteTransports = {{1, 41}, {2, 42}};
++			std::string queueError;
++			if (!peer.QueueLocalInput(513, {control}, {}, &queueError)) {
++				*error = "a return delay rise padded across its old admission: " + queueError; return false;
++			}
++			for (const auto& [frame, input]: peer.m_LocalInputHistory) if (frame != 329 && (frame < 534 || frame > 537)) {
++				*error = "return padding invented input before the first live frame"; return false;
++			}
++			for (uint64_t frame = 534; frame <= 537; ++frame) if (!peer.m_LocalInputHistory.contains(frame)) {
++				*error = "return padding omitted an owed live input"; return false;
++			}
++			if (peer.QueueInputAtTarget(479, {}, {}, &queueError, {}) || queueError != "local input precedes the sender's admission delay") {
++				*error = "the strict admission check accepted a pre-admission target"; return false;
++			}
++			return true;
++		}
++
++		static bool ReceiptPublicationSurvivesSilence(std::string* error) {
++			Wire wire; NetLockstepCoordinator peer;
++			Configure(peer, wire);
++			peer.m_Config.authorityPeerId = 1; peer.m_Config.peerFrameGroups = true;
++			peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
++			peer.m_MigrationPhase = NetHostMigrationPhase::None;
++			peer.m_FrameGroupMembers = 15; peer.m_FrameGroupChanges = {{1, 15}};
++			peer.m_Stats.nextFrame = 5; peer.m_LastCompletedSimulationTick.reset();
++			peer.m_PeerEffectiveStart[1] = 5;
++			peer.m_RemotePeerIds = {1, 3, 4}; peer.m_RemoteTransports = {{1, 41}, {3, 43}, {4, 44}};
++			NetLockstepFrame input; input.senderPeerId = 1; input.targetFrame = 5; input.roundId = 77;
++			peer.NotePeerInputAccepted(input);
++			if (peer.m_PeerInputReceipts[1][2] != 6) { *error = "the receiver did not accept the first input"; return false; }
++			wire.sent.clear(); // The receiver's first publication missed the other routes.
++			peer.m_PeerInputReceipts[1][3] = 99;
++			peer.m_PeerInputReceipts[3][3] = 99;
++			peer.TickPeerFrameGroups(1000);
++			bool repeated = false;
++			for (const auto& bytes: wire.sent) {
++				NetHostMigrationMessage message;
++				if (!NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, message) || message.type != NetHostMigrationMessageType::PeerReceipt || !message.bytes.empty()) continue;
++				if (message.senderPeerId != 2 || message.successorPeerId != 1 || message.frame != 6) {
++					*error = "the receiver republished another seat's receipt as its own"; return false;
++				}
++				repeated = true;
++			}
++			if (!repeated) { *error = "a lost cumulative receipt was never republished without another input"; return false; }
++			return true;
++		}
++
++		static bool NeutralSeatOnlyQueriesTheReferee(std::string* error) {
++			for (uint8_t local: {2, 4}) {
++				Wire wire; NetLockstepCoordinator peer;
++				Configure(peer, wire);
++				peer.m_Config.localPeerId = local; peer.m_Config.authorityPeerId = 1;
++				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
++				peer.m_Config.peerFrameGroups = true; peer.m_MigrationPhase = NetHostMigrationPhase::None;
++				peer.m_Stats.nextFrame = 5000; peer.m_LastCompletedSimulationTick = 4999;
++				peer.m_FrameGroupMembers = 14; peer.m_FrameGroupChanges = {{1, 15}, {4300, 14}};
++				peer.m_PeerBridges[1] = {4300, 4420, true, {}, {}, 14};
++				peer.m_PeerFrameHolds[1][4300] = true;
++				peer.m_ReclaimTransactions[4] = {4, 1, 4500 * 8 + 4, 1, 4500, 10, 5100};
++				std::optional<NetFrameTieRequest> asked;
++				peer.m_Config.frameTieReferee = [&](const NetFrameTieRequest& request) { asked = request; return NetFrameTieReply{}; };
++				peer.CheckPeerFrameTie(5000, 10, 1000);
++				if (!asked || asked->owners != std::vector<uint16_t>{1, 2, 3, 4} || asked->members != std::vector<uint16_t>{1, 2} || asked->queryOnly != (local == 4)) {
++					*error = "a neutral seat checked in as a voter outside the referee's assigned half"; return false;
++				}
++			}
++			return true;
++		}
++
+ 		static bool SilenceDoesNotChangeTheSendingRate(std::string* error) {
+ 			Wire wire; NetLockstepCoordinator peer;
+ 			Configure(peer, wire);
+@@ -30290,6 +30378,27 @@ namespace {
+ 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+ 				return 0;
+ 			}
++			if (std::string_view(selectedCase) == "return-delay-padding") {
++				std::string error;
++				if (!SessionPlaneRecoveryTest::ReturnDelayPadding(&error)) return fail(error);
++				std::cout << "[net-lockstep-selftest] PASS a_return_delay_rise_pads_only_owed_live_inputs" << std::endl;
++				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
++				return 0;
++			}
++			if (std::string_view(selectedCase) == "receipt-publication") {
++				std::string error;
++				if (!SessionPlaneRecoveryTest::ReceiptPublicationSurvivesSilence(&error)) return fail(error);
++				std::cout << "[net-lockstep-selftest] PASS a_receiver_republishes_only_its_own_cumulative_receipts" << std::endl;
++				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
++				return 0;
++			}
++			if (std::string_view(selectedCase) == "neutral-referee-query") {
++				std::string error;
++				if (!SessionPlaneRecoveryTest::NeutralSeatOnlyQueriesTheReferee(&error)) return fail(error);
++				std::cout << "[net-lockstep-selftest] PASS a_neutral_seat_only_queries_the_assigned_referee_half" << std::endl;
++				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
++				return 0;
++			}
+ 			if (std::string_view(selectedCase) == "sender-rate-silence") {
+ 				std::string error;
+ 				if (!SessionPlaneRecoveryTest::SilenceDoesNotChangeTheSendingRate(&error)) return fail(error);
+@@ -30395,6 +30504,9 @@ namespace {
+ 		row(&SessionPlaneRecoveryTest::DeferredReturnKeepsItsFirstVote, "a_deferred_return_cannot_sign_a_second_activation");
+ 		row(&SessionPlaneRecoveryTest::NeutralGapVoters, "a_return_uses_only_voters_past_their_certified_neutral_gap");
+ 		row(&SessionPlaneRecoveryTest::DeliveredReturnKeepsCertifiedHold, "an_old_return_delivery_preserves_a_newer_certified_hold");
++		row(&SessionPlaneRecoveryTest::ReturnDelayPadding, "a_return_delay_rise_pads_only_owed_live_inputs");
++		row(&SessionPlaneRecoveryTest::ReceiptPublicationSurvivesSilence, "a_receiver_republishes_only_its_own_cumulative_receipts");
++		row(&SessionPlaneRecoveryTest::NeutralSeatOnlyQueriesTheReferee, "a_neutral_seat_only_queries_the_assigned_referee_half");
+ 		row(&SessionPlaneRecoveryTest::SilenceDoesNotChangeTheSendingRate, "a_silent_interval_does_not_lower_the_measured_sending_rate");
+ 		row(&SessionPlaneRecoveryTest::HoldInvitation, "an_unsigned_hold_invitation_never_fences_an_input");
+ 		row(&SessionPlaneRecoveryTest::OwnAheadHoldFence, "a_seat_co_signs_and_fences_its_own_future_hold");

@@ -1,0 +1,20 @@
+{
+  "source_parent": "f34243824ad4e7303a723fd12b2728aa1a846e8c",
+  "binary_sha256": "6928024b585503f9ae0455f176db688dbef47eb5059786da863c800afd03a649",
+  "results": [
+    {
+      "name": "return-delay-padding",
+      "exit_code": 1
+    },
+    {
+      "name": "receipt-publication",
+      "exit_code": 1
+    },
+    {
+      "name": "neutral-referee-query",
+      "exit_code": 1
+    }
+  ],
+  "complete": true,
+  "running": null
+}
