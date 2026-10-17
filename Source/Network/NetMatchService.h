@@ -1541,6 +1541,7 @@ namespace RTE {
 		uint32_t m_MatchAutosaveSeconds = 0; //!< The cadence the round agreed on, read once so the tick path never chases the runner.
 		int64_t m_NextAutosaveSimTime = -1;
 		int64_t m_LastAutosaveSimTime = -1;
+		int64_t m_CaptureAnchorSimTime = -1; //!< When this peer last took a capture, or first counted toward one.
 		AutosaveIdentity m_AutosaveIdentity; //!< What every checkpoint of this match is stamped with.
 		/// The agreed rewind point; a worker thread names it, and every capture in flight shares it so
 		/// retention reads the live value instead of the one the capture started with.

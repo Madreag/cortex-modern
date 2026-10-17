@@ -181,6 +181,9 @@ namespace RTE {
 
 		static std::string GetPoolMemoryCounts();
 		static void ReleaseUnusedPoolMemory();
+		/// Gives up to budget returned blocks back to the system, keeping two refills.
+		/// @return Whether blocks past two refills remain.
+		static bool ReleaseUnusedPoolMemory(size_t budget);
 #pragma endregion
 
 #pragma region Getters and Setters

@@ -2523,12 +2523,14 @@ void MovableMan::Destroy() {
 	Clear();
 }
 
+MovableObject* MovableMan::LookupFrozenMOID(MOID whichID) const {
+	if (whichID == g_NoMOID || whichID == 0 || whichID >= std::as_const(*this).CheckpointMembershipValues().m_MOIDIndex.size()) return nullptr;
+	MovableObject* candidate = *CheckpointContainerDetail::Read(std::as_const(*this).CheckpointMembershipValues().m_MOIDIndex.data() + whichID);
+	return candidate && CheckpointNativeStorage::Source(candidate)->GetID() == whichID ? candidate : nullptr;
+}
+
 MovableObject* MovableMan::LookupMOID(MOID whichID) const {
-	if (CheckpointNativeStorage::Reading()) {
-		if (whichID == g_NoMOID || whichID == 0 || whichID >= std::as_const(*this).CheckpointMembershipValues().m_MOIDIndex.size()) return nullptr;
-		MovableObject* candidate = *CheckpointContainerDetail::Read(std::as_const(*this).CheckpointMembershipValues().m_MOIDIndex.data() + whichID);
-		return candidate && CheckpointNativeStorage::Source(candidate)->GetID() == whichID ? candidate : nullptr;
-	}
+	if (CheckpointNativeStorage::Reading()) return LookupFrozenMOID(whichID);
 	if (whichID != g_NoMOID && whichID != 0 && whichID < std::as_const(*this).CheckpointMembershipValues().m_MOIDIndex.size()) {
 		// This is really, really awful
 		// But, Lua scripts can take ownership of an MO which exists in this list

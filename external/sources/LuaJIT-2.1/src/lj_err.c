@@ -216,6 +216,9 @@ static void *err_unwind(lua_State *L, void *stopcf, int errcode)
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#if defined(__SANITIZE_ADDRESS__)
+#include <sanitizer/asan_interface.h>
+#endif
 
 #if LJ_TARGET_X86
 typedef void *UndocumentedDispatcherContext;  /* Unused on x86. */
@@ -291,6 +294,10 @@ LJ_FUNCA int lj_err_unwind_win(EXCEPTION_RECORD *rec,
 	/* Don't catch access violations etc. */
 	return 1;  /* ExceptionContinueSearch */
       }
+#if defined(__SANITIZE_ADDRESS__)
+      /* The unwind below does not return; the frames it leaves, this handler's among them, must not keep poisoned redzones. */
+      __asan_handle_no_return();
+#endif
 #if LJ_TARGET_X86
       UNUSED(ctx);
       UNUSED(dispatch);
@@ -361,6 +368,10 @@ static void err_unwind_win_jit(global_State *g, int errcode)
       if (stub) {  /* Jump to side exit to unwind the trace. */
 	ctx.CONTEXT_REG_PC = stub;
 	G2J(g)->exitcode = errcode;
+#if defined(__SANITIZE_ADDRESS__)
+	/* The C frames left behind keep their poisoned redzones unless the sanitizer is told they are gone. */
+	__asan_handle_no_return();
+#endif
 	RtlRestoreContext(&ctx, NULL);  /* Does not return. */
       }
       break;

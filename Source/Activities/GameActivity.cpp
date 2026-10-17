@@ -73,6 +73,9 @@
 #include "TimerMan.h"
 #include "OwnedMovableObjects.h"
 #include "System.h"
+#include "CheckpointNativeStorage.h"
+
+#include <typeinfo>
 #include "MenuAutomation.h"
 #include "NetModerationGUI.h"
 #include "MainMenuGUI.h"
@@ -598,6 +601,12 @@ template <class T> T* SeatStub(std::unique_ptr<T>& stub) {
 	if (!stub) {
 		CaptureSentinel::NoteCreation("seat stand-in", &stub);
 		stub = std::make_unique<T>();
+		// It stays in the world: one made outside the pools would be refused by every later capture.
+		if (CheckpointNativeStorage::LockstepAttached() && !CheckpointNativeStorage::Owns(stub.get())) {
+			const char* task = CaptureSentinel::CurrentTask();
+			System::PrintDiagnosticLine(std::string("[seat-stand-in] ") + typeid(T).name() + " made outside the native pools, task=" + (task ? task : "none") +
+			                            " saver=" + (SaverThreads::Current() ? "1" : "0"));
+		}
 	}
 	return stub.get();
 }
@@ -663,6 +672,25 @@ GUIBanner* GameActivity::GetBanner(int whichColor, int player) const {
 	if (IsFrozenCheckpointNative() && !(presented && live) && m_SavedStubBanner[whichColor == YELLOW ? YELLOW : RED][player])
 		return m_SavedStubBanner[whichColor == YELLOW ? YELLOW : RED][player];
 	return presented && live ? live : SeatStub(m_SeatStubBanner[whichColor == YELLOW ? YELLOW : RED][player]);
+}
+
+GameActivity::SeatInterfaces GameActivity::CapturedSeatInterfaces(int player) const {
+	return {GetExistingBuyGUI(player), GetExistingEditorGUI(player), GetExistingBanner(YELLOW, player), GetExistingBanner(RED, player)};
+}
+
+bool GameActivity::RunCapturedSeatInterfacesSelfTest() {
+	const auto activity = std::make_unique<GameActivity>();
+	{
+		const CheckpointNativeStorage::CaptureScope capturing(true);
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) activity->CapturedSeatInterfaces(player);
+	}
+	int made = 0;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		made += (activity->GetExistingBuyGUI(player) != nullptr) + (activity->GetExistingEditorGUI(player) != nullptr) +
+		        (activity->GetExistingBanner(YELLOW, player) != nullptr) + (activity->GetExistingBanner(RED, player) != nullptr);
+	}
+	System::PrintDiagnosticLine(std::string("[seat-interface-capture-selftest] ") + (made ? "FAIL" : "PASS") + " stand_ins_made=" + std::to_string(made));
+	return made == 0;
 }
 
 bool GameActivity::IsBuyGUIVisible(int which) const {

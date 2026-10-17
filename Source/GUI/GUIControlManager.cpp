@@ -60,6 +60,8 @@
 
 #include <cassert>
 #include <optional>
+#include <stdexcept>
+#include <string>
 
 using namespace RTE;
 
@@ -1026,6 +1028,15 @@ namespace {
 }
 
 std::string GUICheckpoint::SavePanel(const GUIPanel& source) {
+	try { return SavePanelFields(source); }
+	catch (const std::runtime_error& error) {
+		auto& panel = *CheckpointNativeStorage::Source(const_cast<GUIPanel*>(&source));
+		auto* control = dynamic_cast<GUIControl*>(&panel);
+		throw std::runtime_error(std::string("GUI panel ") + GUIPanelType(panel) + " '" + (control ? control->GetName() : std::string{}) + "': " + error.what());
+	}
+}
+
+std::string GUICheckpoint::SavePanelFields(const GUIPanel& source) {
 	auto& panel = *CheckpointNativeStorage::Source(const_cast<GUIPanel*>(&source));
 	CheckpointWriter writer("GUIPanel2");
 	writer(GUIPanelType(panel), panel.m_Font ? CheckpointNativeStorage::Source(panel.m_Font)->m_Name.Value() : std::string{}, dynamic_cast<GUIControl*>(&panel) ? dynamic_cast<GUIControl*>(&panel)->GetName() : std::string{});
@@ -1051,7 +1062,10 @@ std::string GUICheckpoint::SavePanel(const GUIPanel& source) {
 			const auto* item = CheckpointNativeStorage::Source(address);
 			if (!item) throw std::runtime_error("null checkpoint list item");
 			writer(item->m_ID, item->m_Name, item->m_RightText, item->m_ExtraIndex, item->m_Selected, item->m_Height, item->m_OffsetX,
-				CheckpointWriter::Native([&] { return SaveImage(item->m_pBitmap); }), CheckpointWriter::Native([&] { return SaveEntityReference(item->m_pEntity); }));
+				CheckpointWriter::Native([&] {
+					try { return SaveImage(item->m_pBitmap); }
+					catch (const std::runtime_error& error) { throw std::runtime_error("list item '" + item->m_Name.Value() + "': " + error.what()); }
+				}), CheckpointWriter::Native([&] { return SaveEntityReference(item->m_pEntity); }));
 		}
 		std::vector<size_t> selected;
 		const auto items = CheckpointValues(list->m_Items);
@@ -1853,6 +1867,33 @@ bool GUICheckpoint::RunSelfTest() {
 			const auto* screenBitmap = CheckpointNativeStorage::Source(CheckpointNativeStorage::Source(screenAddress)->GetBitmap());
 			check("saved_screen_keeps_its_bitmap_after_source_destruction", screenBitmap && screenBitmap->GetBitmap() == imageAddress);
 			check("saved_module_lookup_keeps_name_case_extension_and_absence", baseModule >= 0 && g_PresetMan.GetModuleID("Base.rte") == baseModule && g_PresetMan.GetModuleID("BASE") == baseModule && g_PresetMan.GetModuleID("checkpoint-selftest-absent.rte") == -1);
+			// A frozen image saved before anything materializes it: the snapshot's own header, with no rows yet.
+			bool proxyPixels = false;
+			try {
+				const BITMAP* frozenImage = snapshot->Freeze(imageAddress);
+				// The writer's read: the snapshot's own values over the boundary's views.
+				auto frozenRoots = snapshot->ReadValues();
+				const auto views = CheckpointNativeStorage::CurrentViews();
+				frozenRoots.insert(frozenRoots.end(), views.roots.begin(), views.roots.end());
+				const CheckpointNativeStorage::ReadScope frozenRead({true, views.pages, frozenRoots, views.privateValues, views.owner});
+				const CheckpointNativeSnapshot::ReadScope frozen(snapshot.get(), false);
+				proxyPixels = SaveBitmap(frozenImage) == pixels;
+			} catch (const std::exception&) {}
+			check("saved_frozen_image_pixels_come_from_its_snapshot", proxyPixels);
+			// The same header saved while the read names another snapshot, as a frozen menu's list is saved.
+			bool ownerPixels = false;
+			try {
+				const BITMAP* frozenImage = snapshot->Freeze(imageAddress);
+				auto frozenRoots = snapshot->ReadValues();
+				const auto views = CheckpointNativeStorage::CurrentViews();
+				frozenRoots.insert(frozenRoots.end(), views.roots.begin(), views.roots.end());
+				const CheckpointNativeStorage::ReadScope frozenRead({true, views.pages, frozenRoots, views.privateValues, views.owner});
+				auto elsewhere = std::make_unique<CheckpointNativeSnapshot>();
+				elsewhere->SealBoundary();
+				const CheckpointNativeSnapshot::ReadScope named(elsewhere.get(), false);
+				ownerPixels = SaveBitmap(frozenImage) == pixels;
+			} catch (const std::exception&) {}
+			check("saved_frozen_image_pixels_come_from_their_owner_under_another_read", ownerPixels);
 			BITMAP* savedImage = snapshot->ReadBitmap(imageAddress);
 			auto savedScreen = std::make_unique<AllegroScreen>(savedImage);
 			auto savedInput = std::make_unique<GUIInputWrapper>(0);

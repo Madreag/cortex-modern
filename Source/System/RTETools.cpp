@@ -44,9 +44,15 @@ namespace RTE {
 	    m_Sim(std::as_const(g_SimRNG).CheckpointValues()), m_Render(std::as_const(g_RenderRNG).CheckpointValues()),
 	    m_PreviousSim(s_CaptureSim), m_PreviousRender(s_CaptureRender) {
 		m_Sim.m_TraceDraws = false; m_Render.m_TraceDraws = false;
+		CheckpointActivity::Begin();
+		s_CaptureScopes.fetch_add(1, std::memory_order_relaxed);
 		s_CaptureSim = &m_Sim; s_CaptureRender = &m_Render;
 	}
-	RandomGenerator::CheckpointScope::~CheckpointScope() { s_CaptureSim = m_PreviousSim; s_CaptureRender = m_PreviousRender; }
+	RandomGenerator::CheckpointScope::~CheckpointScope() {
+		s_CaptureSim = m_PreviousSim; s_CaptureRender = m_PreviousRender;
+		s_CaptureScopes.fetch_sub(1, std::memory_order_relaxed);
+		CheckpointActivity::End();
+	}
 
 	std::string RandomGenerator::CheckpointStorageSelfTestMismatch() {
 		CheckpointNativeStorage::AllocationScope allocations(true);

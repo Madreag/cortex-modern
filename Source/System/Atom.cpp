@@ -26,6 +26,7 @@
 #include <array>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <map>
 #include <memory>
 #include <span>
@@ -1225,7 +1226,7 @@ int Atom::Save(Writer& writer) const {
 
 void* Atom::GetPoolMemory() {
 	std::lock_guard<std::mutex> guard(s_MemoryPoolMutex);
-	if (s_NativeAtomAllocation || ScenarioRunner::HasLockstepCoordinator() || CheckpointNativeStorage::Enabled()) {
+	if (s_NativeAtomAllocation || ScenarioRunner::LockstepCoordinatorAttached() || CheckpointNativeStorage::Enabled()) {
 		// The native pool stays alive through manager and static teardown.
 		if (!s_NativeAtomPool) s_NativeAtomPool = new NativeAtomPool;
 		if (s_NativeAtomPool->free.empty()) s_NativeAtomPool->pages.Grow(sizeof(Atom), std::max(s_PoolAllocBlockCount, 10), s_NativeAtomPool->free);
@@ -1271,9 +1272,12 @@ void Atom::FillPool(int fillAmount) {
 
 	// If concrete class, fill up the pool with pre-allocated memory blocks the size of the type
 	if (fillAmount > 0) {
-		// As many as we're asked to make
+		// As many as we're asked to make; a refused allocation stops the refill, so no null block reaches the pool.
+		s_AllocatedPool.reserve(s_AllocatedPool.size() + static_cast<size_t>(fillAmount));
 		for (int i = 0; i < fillAmount; ++i) {
-			s_AllocatedPool.push_back(malloc(sizeof(Atom)));
+			void* memory = malloc(sizeof(Atom));
+			if (!memory) throw std::bad_alloc();
+			s_AllocatedPool.push_back(memory);
 		}
 	}
 }
@@ -1299,12 +1303,21 @@ std::string Atom::GetPoolMemoryCounts() {
 }
 
 void Atom::ReleaseUnusedPoolMemory() {
+	while (ReleaseUnusedPoolMemory(std::numeric_limits<size_t>::max())) {}
+}
+
+bool Atom::ReleaseUnusedPoolMemory(size_t budget) {
 	std::lock_guard lock(s_MemoryPoolMutex);
 	const size_t reserve = static_cast<size_t>(s_PoolAllocBlockCount > 0 ? s_PoolAllocBlockCount : 10) * 2;
+	if (s_AllocatedPool.size() <= reserve) return false;
 	while (s_AllocatedPool.size() > reserve) {
+		if (budget == 0) return true;
 		free(s_AllocatedPool.back());
 		s_AllocatedPool.pop_back();
+		--budget;
 	}
+	s_AllocatedPool.shrink_to_fit();
+	return false;
 }
 
 bool Atom::CalculateNormal(BITMAP* sprite, Vector spriteCenter) {

@@ -35,6 +35,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <cstdlib>
@@ -1150,6 +1151,7 @@ namespace RTE {
 			s_RetiredChecksumCounters.mismatches += retiring.checksumMismatches;
 		}
 		s_LockstepCoordinator = coordinator;
+		CheckpointNativeStorage::SetLockstepAttached(coordinator != nullptr);
 		NetLockstepPlane::Target(coordinator);
 		s_PreSimWait.reset();
 		s_PaceSlide.Reset();
@@ -1224,6 +1226,10 @@ namespace RTE {
 	bool ScenarioRunner::HasLockstepCoordinator() {
 		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator != nullptr;
+	}
+
+	bool ScenarioRunner::LockstepCoordinatorAttached() noexcept {
+		return CheckpointNativeStorage::LockstepAttached();
 	}
 
 	std::string ScenarioRunner::GetLockstepStopReason() {

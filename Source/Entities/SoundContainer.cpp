@@ -1087,7 +1087,8 @@ std::string SoundContainer::SaveCheckpoint() const {
 	CheckpointWriter archive("SoundContainer3");
 	// A predicted voice exists on the predicting peer only, so no checkpoint may name it.
 	std::set<int> playing;
-	for (int identity: m_PlayingChannels) {
+	// Saved through its frozen page, the set is read as the boundary left it.
+	for (int identity: CheckpointValues(m_PlayingChannels)) {
 		if (IsFrozenCheckpointNative() || !g_AudioMan.IsPredictedVoice(identity)) playing.insert(identity);
 	}
 	archive(static_cast<const Entity&>(*this), m_CheckpointIdentity);

@@ -802,6 +802,7 @@
       <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
+      <StackReserveSize>8388608</StackReserveSize>
       <LargeAddressAware>true</LargeAddressAware>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>

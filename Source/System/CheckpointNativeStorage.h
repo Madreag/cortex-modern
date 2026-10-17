@@ -1,9 +1,14 @@
 #pragma once
 
 #include "CheckpointPagePool.h"
+#include "CheckpointActivity.h"
+#include "NoInline.h"
+#include "SaverThreadMark.h"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -13,9 +18,107 @@
 #include <span>
 #include <string>
 #include <type_traits>
+#include <typeinfo>
+#include <utility>
 #include <vector>
 
 namespace RTE {
+
+	/// The frozen container this thread walks, named when a read of it leaves the frozen inventory.
+	class CheckpointFrozenWalk {
+	public:
+		explicit CheckpointFrozenWalk(const std::type_info& kind) noexcept : m_Previous(s_Kind) { s_Kind = &kind; }
+		~CheckpointFrozenWalk() { s_Kind = m_Previous; }
+		CheckpointFrozenWalk(const CheckpointFrozenWalk&) = delete;
+		CheckpointFrozenWalk& operator=(const CheckpointFrozenWalk&) = delete;
+		static const std::type_info* Current() noexcept { return s_Kind; }
+	private:
+		const std::type_info* m_Previous;
+		static inline thread_local const std::type_info* s_Kind = nullptr;
+	};
+
+	/// The type of the value this thread reads from its frozen place, named when that read leaves the frozen inventory.
+	class CheckpointFrozenValue {
+	public:
+		explicit CheckpointFrozenValue(const std::type_info& kind) noexcept : m_Previous(s_Kind) { s_Kind = &kind; }
+		~CheckpointFrozenValue() { s_Kind = m_Previous; }
+		CheckpointFrozenValue(const CheckpointFrozenValue&) = delete;
+		CheckpointFrozenValue& operator=(const CheckpointFrozenValue&) = delete;
+		static const std::type_info* Current() noexcept { return s_Kind; }
+	private:
+		const std::type_info* m_Previous;
+		static inline thread_local const std::type_info* s_Kind = nullptr;
+	};
+
+	// The 64 KiB regions the pools' pages ever covered, so a free of heap memory skips their lock; a released region stays marked.
+	class CheckpointOwnedRegions {
+	public:
+		/// Records pages under the pools' lock before they are handed out; it never throws, so a grown block is always recorded.
+		void Mark(const void* address, size_t bytes) noexcept {
+			const uintptr_t first = reinterpret_cast<uintptr_t>(address) >> c_RegionBits, last = (reinterpret_cast<uintptr_t>(address) + bytes - 1) >> c_RegionBits;
+			for (uintptr_t region = first; region <= last; ++region) {
+				const uintptr_t top = region >> c_LeafBits;
+				if (top >= m_Leaves.size()) continue;
+				Leaf* leaf = m_Leaves[top].load(std::memory_order_acquire);
+				if (!leaf) {
+					leaf = new (std::nothrow) Leaf{};
+					if (!leaf) { m_Unsure.store(true, std::memory_order_release); continue; }
+					m_Leaves[top].store(leaf, std::memory_order_release);
+				}
+				leaf->words[(region & c_LeafMask) >> 6].fetch_or(uint64_t{1} << (region & 63), std::memory_order_release);
+			}
+		}
+		/// Whether the address can be the pools': false only for memory they never held.
+		bool Maybe(const void* address) const noexcept {
+			const uintptr_t region = reinterpret_cast<uintptr_t>(address) >> c_RegionBits, top = region >> c_LeafBits;
+			if (top >= m_Leaves.size() || m_Unsure.load(std::memory_order_acquire)) return true;
+			const Leaf* leaf = m_Leaves[top].load(std::memory_order_acquire);
+			return leaf && (leaf->words[(region & c_LeafMask) >> 6].load(std::memory_order_acquire) >> (region & 63) & 1);
+		}
+	private:
+		static constexpr unsigned c_RegionBits = 16, c_LeafBits = 16;
+		static constexpr uintptr_t c_LeafMask = (uintptr_t{1} << c_LeafBits) - 1;
+		struct Leaf { std::array<std::atomic<uint64_t>, (size_t{1} << c_LeafBits) / 64> words{}; };
+		std::array<std::atomic<Leaf*>, size_t{1} << 16> m_Leaves{};
+		std::atomic<bool> m_Unsure{false};
+	};
+
+	/// Whether memory no living object owns - a free native slot, a block back in its class pool, a gone object's memory its Lua
+	/// handles retain - was held so when a boundary fenced the world. The first change after the fence to whether a block is
+	/// held keeps the block's old answer here, so a frozen walk on the saver answers as of the fence while the game allocates on.
+	class CheckpointHeldMemory {
+	public:
+		/// Opens a record on the thread that fences; it records until its last owner releases it.
+		static std::shared_ptr<CheckpointHeldMemory> Open();
+		~CheckpointHeldMemory();
+		CheckpointHeldMemory(const CheckpointHeldMemory&) = delete;
+		CheckpointHeldMemory& operator=(const CheckpointHeldMemory&) = delete;
+		/// Whether any record is open; a holder reads it under its own lock before it notes a change.
+		static bool Recording() noexcept { return s_Open.load(std::memory_order_acquire) != 0; }
+		/// A holder's block is about to change whether it is held; each open record keeps the block's first answer after its fence.
+		static void Note(const void* holder, const void* block, size_t bytes, bool held) noexcept;
+		/// The block's answer at the fence if it changed since, else none: the holder's own answer still stands.
+		std::optional<bool> HeldThen(const void* holder, const void* block) const;
+		/// Each of a holder's blocks that was held at the fence and changed since, with its bytes.
+		void ForEachHeldThen(const void* holder, const std::function<void(const void* block, size_t bytes)>& visit) const;
+		/// The record the calling thread's frozen walk answers from, or none.
+		static const CheckpointHeldMemory* Current() noexcept { return s_Current; }
+		class WalkScope {
+		public:
+			explicit WalkScope(const CheckpointHeldMemory* record) noexcept : m_Previous(s_Current) { s_Current = record; }
+			~WalkScope() { s_Current = m_Previous; }
+			WalkScope(const WalkScope&) = delete;
+			WalkScope& operator=(const WalkScope&) = delete;
+		private:
+			const CheckpointHeldMemory* m_Previous;
+		};
+	private:
+		CheckpointHeldMemory();
+		struct Changes;
+		std::unique_ptr<Changes> m_Changes;
+		static inline std::atomic<int> s_Open{0}; //!< Records open on all threads.
+		static inline thread_local const CheckpointHeldMemory* s_Current = nullptr;
+	};
 
 	// Saved resources and native multiplayer values use pages without moving their identities.
 	class CheckpointNativeStorage {
@@ -84,8 +187,18 @@ namespace RTE {
 			std::shared_ptr<ReadState> m_State;
 			ReadState* m_Previous;
 		};
-		static bool Enabled(bool retained = false);
-		static bool RetainingAllocations() noexcept;
+		static bool Enabled(bool retained = false) {
+			// With no storage scope alive on any thread, only the world and the round decide.
+			if (s_Scopes.load(std::memory_order_relaxed) == 0) return retained || s_WorldEnabled.load(std::memory_order_acquire) || s_LockstepAttached.load(std::memory_order_acquire);
+			return ScopedEnabled(retained);
+		}
+		static bool RetainingAllocations() noexcept {
+			if (s_Scopes.load(std::memory_order_relaxed) == 0) return s_WorldEnabled.load(std::memory_order_acquire);
+			return ScopedRetaining();
+		}
+		/// Whether a lockstep coordinator is attached; ScenarioRunner keeps it beside the coordinator for the checks above.
+		static bool LockstepAttached() noexcept { return s_LockstepAttached.load(std::memory_order_acquire); }
+		static void SetLockstepAttached(bool attached) noexcept { s_LockstepAttached.store(attached, std::memory_order_release); }
 		static bool WorldEnabled() noexcept;
 		static bool SetWorldEnabled(bool enabled) noexcept;
 		/// Starts fencing new owned pages in the background while a world is captured, a slice at a time.
@@ -99,7 +212,9 @@ namespace RTE {
 			CoolingPause(const CoolingPause&) = delete;
 			CoolingPause& operator=(const CoolingPause&) = delete;
 		};
-		static bool Reading() { return s_Read != nullptr; }
+		static bool Reading() { return s_Readers.load(std::memory_order_relaxed) != 0 && ReadingHere(); }
+		/// Whether the calling thread has a read scope open; out of line, so the inlined checks read no thread-local.
+		RTE_NOINLINE static bool ReadingHere() noexcept;
 		static void RememberPrivate(void* address, size_t bytes, bool borrowed = false);
 		static void BorrowPrivate(const void* address) noexcept;
 		static bool PrivateBorrowed(const void* address) noexcept;
@@ -112,10 +227,20 @@ namespace RTE {
 		static ReadViews CurrentViews();
 		static const void* RootView(const void* source, size_t bytes = 1);
 		static void* Allocate(size_t bytes, size_t alignment);
-		static bool Deallocate(void* address) noexcept;
+		static bool Deallocate(void* address) noexcept {
+			// Heap memory freed outside every save, with the cost lever known to be off, was never the pools'.
+			if (s_CostLever.load(std::memory_order_relaxed) == c_CostLeverOff && s_Readers.load(std::memory_order_relaxed) == 0 && !s_OwnedRegions.Maybe(address)) return false;
+			return ReleaseOwned(address);
+		}
+		/// Deallocate's full path: private values, the cost lever and the pools under their lock.
+		RTE_NOINLINE static bool ReleaseOwned(void* address) noexcept;
 		static bool Owns(const void* address);
+		/// Whether bytes at an address lie in a slot a pool holds free: memory no living object owns.
+		static bool FreeSlotHolds(const void* address, size_t bytes);
 		/// Slot pool, free slot and large buffer bytes, and how much grew inside explicit owned scopes.
 		static std::string InventoryCensus();
+		/// The slot pools' classes and the bytes their free lists reserve.
+		static std::string PoolCensus();
 		/// Test lever CCCP_TEST_STORAGE_COSTS: the owned allocations, frees and block growth so far and the time inside them; empty unset.
 		static std::string StorageCosts();
 		class Prepared {
@@ -123,6 +248,10 @@ namespace RTE {
 			bool Current() const noexcept;
 			bool Arm() const;
 			void Cancel() const noexcept;
+			/// Commits the prepared copies and makes the boundary's pages resident; throws std::logic_error once a boundary began.
+			void Warm() const;
+			/// Gives the prepared copies' commit back while no boundary has begun.
+			void Cool() const noexcept;
 			std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> Pages() const { return m_Pages; }
 		private:
 			friend class CheckpointNativeStorage;
@@ -134,15 +263,22 @@ namespace RTE {
 		static bool ReadBytes(const void* source, void* target, size_t bytes);
 		static const void* View(const void* source, size_t bytes);
 		static const void* ViewObject(const void* source);
-		template<class T> static T* Source(T* source) { return static_cast<T*>(const_cast<void*>(ViewObject(source))); }
+		template<class T> static T* Source(T* source) {
+			// With nothing frozen anywhere, every thread sees the live object; otherwise the view decides.
+			if (CheckpointActivity::Quiet()) return source;
+			if (s_Readers.load(std::memory_order_relaxed) == 0 && SaverThreadMark::marked.load(std::memory_order_relaxed) == 0) return source;
+			return static_cast<T*>(const_cast<void*>(ViewObject(source)));
+		}
 		template<class T> static T& PrivateValue(T* source) {
 			if (!Reading()) return *source;
-			T* value = Source(source);
-			if (!Private(value, sizeof(T))) throw std::logic_error("a saved getter needs private native values before changing them");
-			return *value;
+			return *static_cast<T*>(PrivateView(source, sizeof(T)));
 		}
+		/// A frozen reader's private copy of a value it is about to change; out of line so the live path stays small.
+		RTE_NOINLINE static void* PrivateView(void* source, size_t bytes);
 		static std::shared_ptr<const CheckpointPagePool::Snapshot> PagesFor(const void* source, size_t bytes);
 		static const void* Original(const void* view);
+		/// For a refusal: where a frozen view's live span lies in the read's snapshots, page by page.
+		static std::string DescribeView(const void* view, size_t bytes);
 		static bool IsView(const void* address);
 		/// Whether a frozen address lies in an object the boundary copied whole, such as a manager made before checkpoint storage.
 		static bool InBoundaryRoot(const void* view);
@@ -159,13 +295,24 @@ namespace RTE {
 			StartupLinksRefusal& operator=(const StartupLinksRefusal&) = delete;
 		};
 		static const std::string* ReadString(const char* source, size_t bytes);
+		/// Test lever CCCP_CHECKPOINT_PHASES=1: the frozen string reads so far and the bytes they copied; zeros unset.
+		static std::pair<uint64_t, uint64_t> StringReadCounts() noexcept;
 		static std::shared_ptr<const void> ReadIndex(const void* source, const void* kind, const std::function<std::shared_ptr<const void>()>& build);
 		static std::string SelfTestMismatch();
 		/// Empty when a thread made with a library's small stack (FMOD takes 96 KB for its output and stream threads) keeps most of
 		/// it: glibc places every module's static thread-locals at the top of each thread's stack.
 		static std::string ThreadStackSelfTestMismatch();
 	private:
+		RTE_NOINLINE static bool ScopedEnabled(bool retained);
+		RTE_NOINLINE static bool ScopedRetaining() noexcept;
+		static constexpr int c_CostLeverOff = 1, c_CostLeverOn = 2;
 		static thread_local ReadState* s_Read;
+		static inline std::atomic<int> s_Readers{0}; //!< Read scopes open on all threads.
+		static inline std::atomic<int> s_Scopes{0}; //!< Allocation, capture and world allocation scopes alive on all threads.
+		static inline std::atomic<bool> s_WorldEnabled{false};
+		static inline std::atomic<bool> s_LockstepAttached{false};
+		static inline std::atomic<int> s_CostLever{0}; //!< The storage cost lever's state once read: unknown, off or on.
+		static inline CheckpointOwnedRegions s_OwnedRegions;
 	};
 
 	class CheckpointNativeAllocated {

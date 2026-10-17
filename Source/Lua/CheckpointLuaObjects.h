@@ -22,7 +22,8 @@ namespace RTE::CheckpointLua {
 	// Saved handles keep their Lua aliases and point only at private native values.
 	class SavedObjects {
 	public:
-		using Copy = std::function<void*(const luabind::detail::class_rep*, const void*)>;
+		/// Copies a handle's native value; the flag says whether the script owns it.
+		using Copy = std::function<void*(const luabind::detail::class_rep*, const void*, bool)>;
 		SavedObjects(lua_State* state, Snapshot heap, const BindingMetadata::Lease& bindings, Copy copy) :
 		    m_State(state), m_Heap(std::move(heap)), m_Bindings(m_Heap, &bindings), m_Copy(std::move(copy)),
 		    m_Values(state, m_Heap, [this](lua_State*, const TValue& value) { PushNative(value); }),
@@ -30,7 +31,7 @@ namespace RTE::CheckpointLua {
 			luabind::detail::saved_objects = {this, [](void* owner, luabind::detail::class_rep* type, void* value, bool& borrowed) -> void* {
 				if (CheckpointNativeStorage::Private(value)) { borrowed = CheckpointNativeStorage::PrivateBorrowed(value); return value; }
 				borrowed = true;
-				return static_cast<SavedObjects*>(owner)->CopyNative(type, CheckpointNativeStorage::Original(value));
+				return static_cast<SavedObjects*>(owner)->CopyNative(type, CheckpointNativeStorage::Original(value), false);
 			}};
 		}
 		~SavedObjects() { luabind::detail::saved_objects = m_PreviousCopies; }
@@ -78,9 +79,9 @@ namespace RTE::CheckpointLua {
 		luabind::detail::saved_object_copy m_PreviousCopies;
 		std::unordered_map<const luabind::detail::class_rep*, luabind::detail::class_rep*> m_Classes;
 		std::unordered_map<const luabind::detail::class_rep*, const luabind::detail::class_rep*> m_ClassSources;
-		void* CopyNative(const luabind::detail::class_rep* type, const void* pointer) {
+		void* CopyNative(const luabind::detail::class_rep* type, const void* pointer, bool owned) {
 			if (const auto source = m_ClassSources.find(type); source != m_ClassSources.end()) type = source->second;
-			void* value = m_Copy(type, pointer);
+			void* value = m_Copy(type, pointer, owned);
 			CheckpointNativeStorage::BorrowPrivate(value);
 			return value;
 		}
@@ -137,7 +138,7 @@ namespace RTE::CheckpointLua {
 			PushClass(type);
 			auto* targetClass = static_cast<luabind::detail::class_rep*>(lua_touserdata(m_State, -1));
 			lua_pop(m_State, 1);
-			void* native = source->ptr() ? CopyNative(source->crep(), source->ptr()) : nullptr;
+			void* native = source->ptr() ? CopyNative(source->crep(), source->ptr(), (source->flags() & luabind::detail::object_rep::owner) != 0) : nullptr;
 			void* storage = lua_newuserdata(m_State, sizeof(luabind::detail::object_rep));
 			auto* target = new(storage) luabind::detail::object_rep(native, targetClass, source->flags() & ~luabind::detail::object_rep::checkpoint_trap, [](void*) {});
 			const int destination = lua_gettop(m_State);
