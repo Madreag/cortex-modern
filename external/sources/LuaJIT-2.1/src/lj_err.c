@@ -294,6 +294,10 @@ LJ_FUNCA int lj_err_unwind_win(EXCEPTION_RECORD *rec,
 	/* Don't catch access violations etc. */
 	return 1;  /* ExceptionContinueSearch */
       }
+#if defined(__SANITIZE_ADDRESS__)
+      /* The unwind below does not return; the frames it leaves, this handler's among them, must not keep poisoned redzones. */
+      __asan_handle_no_return();
+#endif
 #if LJ_TARGET_X86
       UNUSED(ctx);
       UNUSED(dispatch);
