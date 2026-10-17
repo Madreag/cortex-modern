@@ -522,7 +522,7 @@ namespace RTE {
 	class NetHostMigrationCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x314D4843;
-		static constexpr uint16_t c_Version = 6;
+		static constexpr uint16_t c_Version = 7;
 		static constexpr size_t c_ChunkBytes = 64 * 1024;
 		static constexpr size_t c_MaxFrameBytes = 4 * 512 * 1024 + 256;
 		static constexpr size_t c_MaxPeerTailBytes = c_MaxFrameBytes + 64 * 1024;
@@ -747,7 +747,7 @@ namespace RTE {
 		static constexpr uint32_t c_Magic = 0x334C4343U;
 		/// Version 40 carries scene-load readiness; version 39 carries each seat's device class.
 		static constexpr uint16_t c_Version = 40;
-		static constexpr uint16_t c_AdmissionVersion = 48; //!< Catch-up reports identify the replay owning their work counters.
+		static constexpr uint16_t c_AdmissionVersion = 51; //!< Private captures require the playing seats' authenticated agreement.
 		static constexpr uint16_t c_EditorPlacementVersion = 47;
 		static constexpr uint16_t c_HostAuthorityVersion = 49; //!< Committed handovers carry their tick and voting certificate.
 		static constexpr uint16_t c_WorldVersion = 39;

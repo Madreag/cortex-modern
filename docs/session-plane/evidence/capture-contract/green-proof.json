@@ -1,0 +1,92 @@
+{
+  "source_parent": "49da5589916a11642f26813654561618d2e34838",
+  "binary_sha256": "7a35988e1ea75ba063c6adc9cdbfbd832d55d83a5bf520753e74ef710cdd9a00",
+  "results": [
+    {
+      "name": "capture-wire-contract",
+      "exit_code": 0
+    },
+    {
+      "name": "deferred-return-vote",
+      "exit_code": 0
+    },
+    {
+      "name": "sender-rate-silence",
+      "exit_code": 0
+    },
+    {
+      "name": "future-removal-authority",
+      "exit_code": 0
+    },
+    {
+      "name": "return-keeps-other-held",
+      "exit_code": 0
+    },
+    {
+      "name": "return-start-admission",
+      "exit_code": 0
+    },
+    {
+      "name": "return-member-starts",
+      "exit_code": 0
+    },
+    {
+      "name": "removal-retry",
+      "exit_code": 0
+    },
+    {
+      "name": "future-facts-prefix",
+      "exit_code": 0
+    },
+    {
+      "name": "concurrent-returns",
+      "exit_code": 0
+    },
+    {
+      "name": "pending-decision-authority",
+      "exit_code": 0
+    },
+    {
+      "name": "own-ahead-hold",
+      "exit_code": 0
+    },
+    {
+      "name": "hold-invitation",
+      "exit_code": 0
+    },
+    {
+      "name": "link-delay",
+      "exit_code": 0
+    },
+    {
+      "name": "held-host-base-capture",
+      "exit_code": 0
+    },
+    {
+      "name": "seat-return-pacing",
+      "exit_code": 0
+    },
+    {
+      "name": "A-authority",
+      "exit_code": 0
+    },
+    {
+      "name": "C-ui",
+      "exit_code": 0
+    },
+    {
+      "name": "net-protocol",
+      "exit_code": 0
+    },
+    {
+      "name": "net-identity",
+      "exit_code": 0
+    },
+    {
+      "name": "net-session",
+      "exit_code": 0
+    }
+  ],
+  "complete": true,
+  "running": null
+}
