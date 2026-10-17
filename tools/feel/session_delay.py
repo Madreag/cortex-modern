@@ -177,7 +177,7 @@ def launch_case(root, arm, repeat, port, exe_sha, size, lag_step=None, preview_c
                      '-feel-measure', str(run_out / 'feel')]
             if dump_window:
                 flags += ['-controller-debug-dump', str(out / f'{peer}_controller.jsonl'),
-                          '-controller-debug-ticks', ':'.join(map(str, dump_window))]
+                          '-controller-debug-ticks', '-'.join(map(str, dump_window))]
             if rtt is None:
                 flags += ['-scenario', 'FeelBaseline']
             else:
