@@ -832,6 +832,31 @@ struct ActivityMan::PreparedAutosave {
 	}
 
 	bool Complete(const Header& header, const CheckpointLua::Boundary& boundary) {
+		// Test lever CCCP_CHECKPOINT_PHASES=1: what the whole save cost the saver's thread, and the frozen string reads made meanwhile.
+		struct SaverCost {
+			uint64_t tick = 0, cpu = 0;
+			std::pair<uint64_t, uint64_t> strings;
+			RTE::SteadyClock::time_point started;
+			~SaverCost() {
+				try {
+					const auto [reads, copied] = CheckpointNativeStorage::StringReadCounts();
+#ifdef _WIN32
+					constexpr const char* unit = "cycles";
+#else
+					constexpr const char* unit = "ns";
+#endif
+					System::PrintDiagnosticLine(std::format("[checkpoint-saver-cpu] tick={} cpu_unit={} cpu={} wall_us={} string_reads={} string_copied_bytes={}", tick, unit,
+					    CheckpointCaptureCpuUnits() - cpu, std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count(),
+					    reads - strings.first, copied - strings.second));
+				} catch (...) {}
+			}
+		};
+		static const bool s_SaverCost = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
+		std::optional<SaverCost> saverCost;
+		if (s_SaverCost) {
+			SaverCost& cost = saverCost.emplace();
+			cost.tick = header.tick; cost.cpu = CheckpointCaptureCpuUnits(); cost.strings = CheckpointNativeStorage::StringReadCounts(); cost.started = RTE::SteadyClock::now();
+		}
 		s_Stage = "manager values";
 		if (uint64_t refused = header.tick; header.tick != 0 && owner.m_RefusedWriterTick.compare_exchange_strong(refused, 0, std::memory_order_relaxed))
 			throw std::runtime_error("an injected refusal");

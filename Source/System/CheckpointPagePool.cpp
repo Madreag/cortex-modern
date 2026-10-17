@@ -1757,13 +1757,24 @@ const void* CheckpointNativeStorage::ViewObject(const void* source) {
 	throw std::logic_error(OutsideInventory("object", source, 0));
 }
 
+namespace {
+	const bool s_CountStringReads = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
+	std::atomic<uint64_t> s_StringReads{0}, s_StringCopiedBytes{0};
+}
+
+std::pair<uint64_t, uint64_t> CheckpointNativeStorage::StringReadCounts() noexcept {
+	return {s_StringReads.load(std::memory_order_relaxed), s_StringCopiedBytes.load(std::memory_order_relaxed)};
+}
+
 const std::string* CheckpointNativeStorage::ReadString(const char* source, size_t bytes) {
 	if (!s_Read) return nullptr;
 	static const std::string empty;
 	if (!bytes) return &empty;
+	if (s_CountStringReads) s_StringReads.fetch_add(1, std::memory_order_relaxed);
 	std::string& scratch = s_Read->scratch;
 	scratch.resize(bytes);
 	if (!ReadBytes(source, scratch.data(), bytes)) throw std::logic_error("native string is outside the frozen inventory");
+	if (s_CountStringReads) s_StringCopiedBytes.fetch_add(bytes, std::memory_order_relaxed);
 	if (const auto found = s_Read->strings.find(std::string_view(scratch)); found != s_Read->strings.end()) return &*found;
 	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 	return &*s_Read->strings.emplace(scratch).first;

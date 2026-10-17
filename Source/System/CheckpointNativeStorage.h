@@ -19,6 +19,7 @@
 #include <string>
 #include <type_traits>
 #include <typeinfo>
+#include <utility>
 #include <vector>
 
 namespace RTE {
@@ -257,6 +258,8 @@ namespace RTE {
 			StartupLinksRefusal& operator=(const StartupLinksRefusal&) = delete;
 		};
 		static const std::string* ReadString(const char* source, size_t bytes);
+		/// Test lever CCCP_CHECKPOINT_PHASES=1: the frozen string reads so far and the bytes they copied; zeros unset.
+		static std::pair<uint64_t, uint64_t> StringReadCounts() noexcept;
 		static std::shared_ptr<const void> ReadIndex(const void* source, const void* kind, const std::function<std::shared_ptr<const void>()>& build);
 		static std::string SelfTestMismatch();
 		/// Empty when a thread made with a library's small stack (FMOD takes 96 KB for its output and stream threads) keeps most of
