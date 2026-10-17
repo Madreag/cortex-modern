@@ -6349,6 +6349,12 @@ static int ScriptGraphNative(lua_State* L) {
 	const bool owned = (rep->flags() & luabind::detail::object_rep::owner) != 0;
 	const std::string className = crep->name();
 	const void* const handle = CheckpointNativeStorage::Original(rep->ptr());
+	// A dead slice reference - restored as one, its pointer null - stays one.
+	if (!owned && !rep->ptr() && className == "PieSlice") {
+		lua_pushstring(L, "invalid");
+		lua_pushstring(L, className.c_str());
+		return 2;
+	}
 	// An Area a script kept past its scene's end is named, never read.
 	if (!owned && className == "Area" && !ScriptGraphNativeAlive(L, rep)) {
 		lua_pushstring(L, "invalid");
