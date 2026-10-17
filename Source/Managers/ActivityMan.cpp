@@ -948,8 +948,9 @@ struct ActivityMan::PreparedAutosave {
 		s_Stage = "script graphs";
 		const auto graphStart = RTE::SteadyClock::now();
 		std::vector<std::string> problems;
-		if (!LuaStateWrapper::CapturePreparedScriptGraphs(boundary, states, snapshot, image->graphs, image->graphScopes, problems, header.clock->call->simulation))
-			throw ScriptGraphRefusal(std::move(problems));
+		const bool graphsCaptured = LuaStateWrapper::CapturePreparedScriptGraphs(boundary, states, snapshot, image->graphs, image->graphScopes, problems, header.clock->call->simulation);
+		boundary.CloseHeldMemory();
+		if (!graphsCaptured) throw ScriptGraphRefusal(std::move(problems));
 		image->graphUs = image->graphWalkUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - graphStart).count();
 		image->graphSerial = boundary.LuaHeap(0).StateSerial();
 		const auto& savers = RuntimeManagerSavers();

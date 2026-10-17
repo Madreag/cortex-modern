@@ -8742,6 +8742,8 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 	if (!CheckpointNativeStorage::Reading() || states.size() != boundary.StateCount() || !snapshot)
 		throw std::logic_error("saved script graphs need their frozen world and states");
 	snapshot->SealBoundary();
+	// Whether a handle's memory was freed or retained is read as of the fence, as everything else the walk reads is.
+	const CheckpointHeldMemory::WalkScope held(boundary.HeldMemory());
 	LuaScriptGraphNativeCaptureScope lookups;
 	lookups.Current()->captureThread = captureThread;
 	LuaScriptGraphNativeCaptureScope::BuildOwners(lookups.Current());

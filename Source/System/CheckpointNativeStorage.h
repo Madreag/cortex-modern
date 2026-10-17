@@ -83,6 +83,43 @@ namespace RTE {
 		std::atomic<bool> m_Unsure{false};
 	};
 
+	/// Whether memory no living object owns - a free native slot, a block back in its class pool, a gone object's memory its Lua
+	/// handles retain - was held so when a boundary fenced the world. The first change after the fence to whether a block is
+	/// held keeps the block's old answer here, so a frozen walk on the saver answers as of the fence while the game allocates on.
+	class CheckpointHeldMemory {
+	public:
+		/// Opens a record on the thread that fences; it records until its last owner releases it.
+		static std::shared_ptr<CheckpointHeldMemory> Open();
+		~CheckpointHeldMemory();
+		CheckpointHeldMemory(const CheckpointHeldMemory&) = delete;
+		CheckpointHeldMemory& operator=(const CheckpointHeldMemory&) = delete;
+		/// Whether any record is open; a holder reads it under its own lock before it notes a change.
+		static bool Recording() noexcept { return s_Open.load(std::memory_order_acquire) != 0; }
+		/// A holder's block is about to change whether it is held; each open record keeps the block's first answer after its fence.
+		static void Note(const void* holder, const void* block, size_t bytes, bool held) noexcept;
+		/// The block's answer at the fence if it changed since, else none: the holder's own answer still stands.
+		std::optional<bool> HeldThen(const void* holder, const void* block) const;
+		/// Each of a holder's blocks that was held at the fence and changed since, with its bytes.
+		void ForEachHeldThen(const void* holder, const std::function<void(const void* block, size_t bytes)>& visit) const;
+		/// The record the calling thread's frozen walk answers from, or none.
+		static const CheckpointHeldMemory* Current() noexcept { return s_Current; }
+		class WalkScope {
+		public:
+			explicit WalkScope(const CheckpointHeldMemory* record) noexcept : m_Previous(s_Current) { s_Current = record; }
+			~WalkScope() { s_Current = m_Previous; }
+			WalkScope(const WalkScope&) = delete;
+			WalkScope& operator=(const WalkScope&) = delete;
+		private:
+			const CheckpointHeldMemory* m_Previous;
+		};
+	private:
+		CheckpointHeldMemory();
+		struct Changes;
+		std::unique_ptr<Changes> m_Changes;
+		static inline std::atomic<int> s_Open{0}; //!< Records open on all threads.
+		static inline thread_local const CheckpointHeldMemory* s_Current = nullptr;
+	};
+
 	// Saved resources and native multiplayer values use pages without moving their identities.
 	class CheckpointNativeStorage {
 	public:

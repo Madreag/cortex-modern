@@ -45,6 +45,7 @@
 #include <set>
 #include <span>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -1178,6 +1179,8 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 		const StorageCostSpan growth(&StorageCostCounters::grows, &StorageCostCounters::growNs);
 		const auto [address, bytes] = pool.pages.Grow(slot, 1, pool.free, c_NativeStorageBlockBytes);
 		s_OwnedRegions.Mark(address, bytes);
+		// A frozen walk's fence knew nothing of a block grown after it.
+		if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(&pools.ranges, address, bytes, false);
 		node.key() = reinterpret_cast<uintptr_t>(address);
 		node.mapped() = {bytes, &pool, slot};
 		pools.ranges.insert(std::move(node));
@@ -1185,6 +1188,7 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 		(s_NativeStorageAllocation ? pools.explicitGrownBytes : pools.worldGrownBytes) += bytes;
 	}
 	void* address = pool.free.back();
+	if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(&pool, address, slot, true);
 	pool.free.pop_back();
 	return address;
 }
@@ -1227,6 +1231,7 @@ bool CheckpointNativeStorage::ReleaseOwned(void* address) noexcept {
 		const auto& range = *std::prev(after);
 		if (value - range.first >= range.second.bytes) return false;
 		// Free lists reserve every slot at growth, so returning storage cannot allocate or discard frozen pages.
+		if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(range.second.pool, address, range.second.slot, false);
 		range.second.pool->free.push_back(address);
 		return true;
 	}
@@ -1317,6 +1322,73 @@ std::string CheckpointNativeStorage::StorageCosts() {
 	    counters->frees.load(), ms(counters->freeNs), counters->grows.load(), ms(counters->growNs), counters->larges.load(), InventoryCensus());
 }
 
+struct CheckpointHeldMemory::Changes {
+	struct Key {
+		const void* holder;
+		const void* block;
+		bool operator==(const Key&) const = default;
+	};
+	struct KeyHash {
+		size_t operator()(const Key& key) const noexcept { return std::hash<const void*>{}(key.block) ^ (std::hash<const void*>{}(key.holder) * 31); }
+	};
+	struct Change {
+		size_t bytes;
+		bool held;
+	};
+	std::unordered_map<Key, Change, KeyHash> blocks;
+	std::unordered_map<const void*, std::vector<std::pair<const void*, size_t>>> heldThen;
+	bool incomplete = false; //!< A change could not be kept; every answer is then that nothing was held.
+};
+
+namespace {
+	// The open records and all their changes, under one lock a holder takes after its own.
+	std::mutex s_HeldRecordsMutex;
+	std::vector<CheckpointHeldMemory*> s_HeldRecords;
+}
+
+CheckpointHeldMemory::CheckpointHeldMemory() : m_Changes(std::make_unique<Changes>()) {}
+
+std::shared_ptr<CheckpointHeldMemory> CheckpointHeldMemory::Open() {
+	std::shared_ptr<CheckpointHeldMemory> record(new CheckpointHeldMemory);
+	std::lock_guard lock(s_HeldRecordsMutex);
+	s_HeldRecords.push_back(record.get());
+	s_Open.fetch_add(1, std::memory_order_acq_rel);
+	return record;
+}
+
+CheckpointHeldMemory::~CheckpointHeldMemory() {
+	std::lock_guard lock(s_HeldRecordsMutex);
+	if (std::erase(s_HeldRecords, this)) s_Open.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+void CheckpointHeldMemory::Note(const void* holder, const void* block, size_t bytes, bool held) noexcept {
+	std::lock_guard lock(s_HeldRecordsMutex);
+	for (CheckpointHeldMemory* record: s_HeldRecords) {
+		Changes& changes = *record->m_Changes;
+		if (changes.incomplete) continue;
+		try {
+			if (changes.blocks.try_emplace(Changes::Key{holder, block}, Changes::Change{bytes, held}).second && held) changes.heldThen[holder].emplace_back(block, bytes);
+		} catch (...) { changes.incomplete = true; }
+	}
+}
+
+std::optional<bool> CheckpointHeldMemory::HeldThen(const void* holder, const void* block) const {
+	std::lock_guard lock(s_HeldRecordsMutex);
+	// A record that lost a change says nothing was held, so the walk refuses instead of carrying a wrong answer.
+	if (m_Changes->incomplete) return false;
+	const auto found = m_Changes->blocks.find(Changes::Key{holder, block});
+	if (found == m_Changes->blocks.end()) return std::nullopt;
+	return found->second.held;
+}
+
+void CheckpointHeldMemory::ForEachHeldThen(const void* holder, const std::function<void(const void* block, size_t bytes)>& visit) const {
+	std::lock_guard lock(s_HeldRecordsMutex);
+	if (m_Changes->incomplete) return;
+	if (const auto found = m_Changes->heldThen.find(holder); found != m_Changes->heldThen.end()) {
+		for (const auto& [block, bytes]: found->second) visit(block, bytes);
+	}
+}
+
 bool CheckpointNativeStorage::FreeSlotHolds(const void* address, size_t bytes) {
 	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
 	if (!pools || !s_OwnedRegions.Maybe(address)) return false;
@@ -1328,6 +1400,11 @@ bool CheckpointNativeStorage::FreeSlotHolds(const void* address, size_t bytes) {
 	if (!range.pool || !range.slot || value - begin >= range.bytes) return false;
 	const uintptr_t slot = begin + (value - begin) / range.slot * range.slot;
 	if (value + bytes > slot + range.slot) return false;
+	// A frozen walk answers as of its fence: a block grown since held nothing then, and a slot that changed since keeps its answer.
+	if (const CheckpointHeldMemory* held = CheckpointHeldMemory::Current()) {
+		if (const auto grown = held->HeldThen(&pools->ranges, reinterpret_cast<const void*>(begin)); grown && !*grown) return false;
+		if (const auto then = held->HeldThen(range.pool, reinterpret_cast<const void*>(slot))) return *then;
+	}
 	return std::find(range.pool->free.begin(), range.pool->free.end(), reinterpret_cast<void*>(slot)) != range.pool->free.end();
 }
 

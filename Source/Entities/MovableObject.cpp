@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 #include "CheckpointNativeSnapshot.h"
+#include "CheckpointNativeStorage.h"
 #include "CheckpointProperties.h"
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
@@ -398,6 +399,7 @@ void MovableObject::ReleaseLuaHandle(void* record) {
 	handles->object->m_LuaHandles.store(nullptr, std::memory_order_relaxed);
 	{
 		std::lock_guard<std::mutex> retained(s_RetainedLock);
+		if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(&s_RetainedHead, handles->memory, handles->pool->CheckpointInstanceBytes(), true);
 		(handles->retainedPrevious ? handles->retainedPrevious->retainedNext : s_RetainedHead) = handles->retainedNext;
 		if (handles->retainedNext) handles->retainedNext->retainedPrevious = handles->retainedPrevious;
 	}
@@ -411,12 +413,21 @@ void MovableObject::ReleaseLuaHandle(void* record) {
 
 bool MovableObject::RetainedMemoryHolds(const void* address, size_t bytes) {
 	const auto* at = static_cast<const std::byte*>(address);
+	const auto covers = [at, bytes](const void* block, size_t blockBytes) {
+		const auto* first = static_cast<const std::byte*>(block);
+		return at >= first && at + bytes <= first + blockBytes;
+	};
+	// A frozen walk answers as of its fence: memory retained since was not retained then, and memory released since was.
+	const CheckpointHeldMemory* held = CheckpointHeldMemory::Current();
 	std::lock_guard<std::mutex> retained(s_RetainedLock);
 	for (const LuaHandles* record = s_RetainedHead; record; record = record->retainedNext) {
-		const auto* first = static_cast<const std::byte*>(record->memory);
-		if (at >= first && at + bytes <= first + record->pool->CheckpointInstanceBytes()) return true;
+		if (!covers(record->memory, record->pool->CheckpointInstanceBytes())) continue;
+		if (const auto then = held ? held->HeldThen(&s_RetainedHead, record->memory) : std::nullopt; then && !*then) continue;
+		return true;
 	}
-	return false;
+	bool heldThen = false;
+	if (held) held->ForEachHeldThen(&s_RetainedHead, [&](const void* block, size_t blockBytes) { heldThen = heldThen || covers(block, blockBytes); });
+	return heldThen;
 }
 
 bool MovableObject::RetainPooledMemory(MovableObject* object, void* memory, Entity::ClassInfo& pool) {
@@ -432,6 +443,7 @@ bool MovableObject::RetainPooledMemory(MovableObject* object, void* memory, Enti
 		handles->memory = memory;
 		{
 			std::lock_guard<std::mutex> retained(s_RetainedLock);
+			if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(&s_RetainedHead, memory, pool.CheckpointInstanceBytes(), false);
 			handles->retainedNext = s_RetainedHead;
 			if (s_RetainedHead) s_RetainedHead->retainedPrevious = handles;
 			s_RetainedHead = handles;

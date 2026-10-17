@@ -881,6 +881,7 @@ namespace RTE {
 				// A refused allocation stops the refill: no null block ever reaches the pool.
 				void* memory = m_Allocate();
 				if (!memory) throw std::bad_alloc();
+				if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(this, memory, m_InstanceBytes, false);
 				m_AllocatedPool.push_back(memory);
 			}
 		}
@@ -927,6 +928,7 @@ namespace RTE {
 
 		// Get the instance in the top of the pool and pop it off
 		void* foundMemory = m_AllocatedPool.back();
+		if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(this, foundMemory, m_InstanceBytes, true);
 		m_AllocatedPool.pop_back();
 
 		RTEAssert(foundMemory, "Could not find an available instance in the pool, even after increasing its size!");
@@ -963,8 +965,10 @@ namespace RTE {
 		// If compiled with ASan, sidestep pooling and just use the allocator normally.
 		m_Deallocate(returnedMemory);
 #else
-		try { m_AllocatedPool.push_back(returnedMemory); }
-		catch (const std::bad_alloc&) { m_Deallocate(returnedMemory); }
+		try {
+			if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(this, returnedMemory, m_InstanceBytes, false);
+			m_AllocatedPool.push_back(returnedMemory);
+		} catch (const std::bad_alloc&) { m_Deallocate(returnedMemory); }
 #endif
 
 		// Keep track of the number of instances passed in
@@ -1003,6 +1007,7 @@ namespace RTE {
 			if (info->m_AllocatedPool.size() <= reserve) continue;
 			while (info->m_AllocatedPool.size() > reserve) {
 				if (budget == 0) return true;
+				if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(info, info->m_AllocatedPool.back(), info->m_InstanceBytes, true);
 				info->m_Deallocate(info->m_AllocatedPool.back());
 				info->m_AllocatedPool.pop_back();
 				--budget;
@@ -1014,11 +1019,22 @@ namespace RTE {
 
 	bool Entity::ClassInfo::PoolHolds(const void* address, size_t bytes) const {
 		const auto* at = static_cast<const std::byte*>(address);
-		std::lock_guard lock(m_Mutex);
-		return std::any_of(m_AllocatedPool.begin(), m_AllocatedPool.end(), [&](const void* block) {
+		const auto covers = [at, bytes](const void* block, size_t blockBytes) {
 			const auto* first = static_cast<const std::byte*>(block);
-			return at >= first && at + bytes <= first + m_InstanceBytes;
+			return at >= first && at + bytes <= first + blockBytes;
+		};
+		// A frozen walk answers as of its fence: a block returned since was not held then, and one taken since was.
+		const CheckpointHeldMemory* held = CheckpointHeldMemory::Current();
+		std::lock_guard lock(m_Mutex);
+		const bool pooled = std::any_of(m_AllocatedPool.begin(), m_AllocatedPool.end(), [&](const void* block) {
+			if (!covers(block, m_InstanceBytes)) return false;
+			const auto then = held ? held->HeldThen(this, block) : std::nullopt;
+			return !then || *then;
 		});
+		if (pooled || !held) return pooled;
+		bool heldThen = false;
+		held->ForEachHeldThen(this, [&](const void* block, size_t blockBytes) { heldThen = heldThen || covers(block, blockBytes); });
+		return heldThen;
 	}
 
 	bool Entity::ClassInfo::AnyPoolHolds(const void* address, size_t bytes) {

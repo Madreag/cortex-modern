@@ -95,6 +95,8 @@ namespace RTE::CheckpointLua {
 			Status expected = Status::Prepared;
 			if (!m_Status.compare_exchange_strong(expected, Status::Arming, std::memory_order_acq_rel)) return false;
 			try {
+				// The saver's walk asks what memory was free or retained as of this fence, not as the game moves it on.
+				m_Held = CheckpointHeldMemory::Open();
 				std::vector<uint64_t> until(m_Heaps.size(), 0);
 				if (m_TicksUntilCollection) for (size_t index = 0; index < m_Heaps.size(); ++index) until[index] = m_TicksUntilCollection(index);
 				OrderDrains(until);
@@ -215,6 +217,10 @@ namespace RTE::CheckpointLua {
 		/// The Lua arm's plan, copy and fence, in microseconds.
 		std::array<int64_t, 3> ArmPhaseUs() const { return m_ArmPhaseUs; }
 		const BindingLease& Bindings() const { return m_Bindings; }
+		/// What the engine held free or retained at the fence, for the walk of the frozen script graphs.
+		const CheckpointHeldMemory* HeldMemory() const noexcept { return m_Held.get(); }
+		/// Ends the record once the script graphs are walked; nothing after them asks.
+		void CloseHeldMemory() const noexcept { m_Held.reset(); }
 		static std::string SelfTestMismatch() {
 			CheckpointNativeStorage::AllocationScope allocations(true);
 			auto state = HeapOwner::Create();
@@ -360,6 +366,7 @@ namespace RTE::CheckpointLua {
 		std::array<int64_t, 3> m_ArmPhaseUs{};
 		std::atomic<Status> m_Status{Status::Prepared};
 		std::unique_ptr<CheckpointNativeStorage::Prepared> m_Native;
+		mutable std::shared_ptr<CheckpointHeldMemory> m_Held;
 		BindingLease m_Bindings;
 		std::vector<Heap> m_Heaps;
 		std::unique_ptr<std::byte[]> m_HeaderBytes;
