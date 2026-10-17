@@ -1577,6 +1577,11 @@ struct CheckpointNativeStorage::ReadState : std::enable_shared_from_this<ReadSta
 		size_t operator()(std::string_view text) const noexcept { return std::hash<std::string_view>{}(text); }
 	};
 	std::unordered_set<std::string, StringHash, std::equal_to<>> strings;
+	// Frozen bytes do not change while the read lasts, so a string read again from the same place is the copy already kept.
+	struct SpanHash {
+		size_t operator()(const std::pair<const char*, size_t>& span) const noexcept { return std::hash<const char*>{}(span.first) ^ (span.second * 0x9E3779B97F4A7C15ull); }
+	};
+	std::unordered_map<std::pair<const char*, size_t>, const std::string*, SpanHash> stringsAt;
 	std::string scratch;
 	std::map<std::pair<uintptr_t, uintptr_t>, std::shared_ptr<const void>> indices;
 	std::shared_ptr<PrivateValues> privateValues;
@@ -1848,13 +1853,20 @@ const std::string* CheckpointNativeStorage::ReadString(const char* source, size_
 	static const std::string empty;
 	if (!bytes) return &empty;
 	if (s_CountStringReads) s_StringReads.fetch_add(1, std::memory_order_relaxed);
+	if (const auto known = s_Read->stringsAt.find({source, bytes}); known != s_Read->stringsAt.end()) return known->second;
 	std::string& scratch = s_Read->scratch;
 	scratch.resize(bytes);
 	if (!ReadBytes(source, scratch.data(), bytes)) throw std::logic_error("native string is outside the frozen inventory");
 	if (s_CountStringReads) s_StringCopiedBytes.fetch_add(bytes, std::memory_order_relaxed);
-	if (const auto found = s_Read->strings.find(std::string_view(scratch)); found != s_Read->strings.end()) return &*found;
-	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
-	return &*s_Read->strings.emplace(scratch).first;
+	const std::string* value;
+	if (const auto found = s_Read->strings.find(std::string_view(scratch)); found != s_Read->strings.end()) {
+		value = &*found;
+	} else {
+		CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+		value = &*s_Read->strings.emplace(scratch).first;
+	}
+	s_Read->stringsAt.emplace(std::pair{source, bytes}, value);
+	return value;
 }
 
 std::string CheckpointNativeStorage::SelfTestMismatch() {
