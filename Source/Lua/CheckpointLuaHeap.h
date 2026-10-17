@@ -889,7 +889,7 @@ namespace RTE::CheckpointLua {
 		std::atomic<bool> m_CowGateFree{false};
 		std::mutex m_PrepareMutex;
 		std::vector<std::weak_ptr<Prepared>> m_Prepared;
-		/// The caller holds m_PrepareMutex: no preparation still to arm or drain and no copy still to land.
+		/// The caller holds m_PrepareMutex: no preparation whose boundary has begun and is not drained, and no copy still to land.
 		bool Quiet() noexcept;
 		std::atomic<size_t> m_PeriodAllocated{0};
 		std::atomic<bool> m_Busy{false};
@@ -1881,7 +1881,7 @@ namespace RTE::CheckpointLua {
 			std::unique_lock lock(m_Mutex, std::try_to_lock);
 			if (!lock || m_Finished || m_Copy->armed.load(std::memory_order_relaxed) != 0) return false;
 			const auto started = RTE::SteadyClock::now();
-			if (!BeginWrites()) return false;
+			if (!BeginWrites() || !owner.FillHoles()) return false;
 			m_Data->serial = G(owner.m_State)->objserial;
 			CowCoordinator::Prepared prepared{m_Coordinator.get(), m_Copy};
 			if (!(byCopy ? CowCoordinator::ArmByCopy : CowCoordinator::Arm)(&prepared, m_Data->base, m_Data->committed)) return false;
@@ -2061,7 +2061,7 @@ namespace RTE::CheckpointLua {
 		session.m_Started = RTE::SteadyClock::now();
 		m_Data->serial = G(owner.m_State)->objserial;
 		session.m_Spans.reserve(CowCoordinator::c_HotRunCapacity + 1);
-		if (!m_Coordinator->PlanArm(*m_Copy, m_Data->committed, whole, session.m_Spans) || !BeginWrites()) return false;
+		if (!m_Coordinator->PlanArm(*m_Copy, m_Data->committed, whole, session.m_Spans) || !BeginWrites() || !owner.FillHoles()) return false;
 		session.m_Prepared = this;
 		session.m_Owner = &owner;
 		session.m_Whole = whole;
@@ -2076,8 +2076,8 @@ namespace RTE::CheckpointLua {
 	}
 
 	inline std::shared_ptr<HeapOwner::Prepared> HeapOwner::PrepareFreeze() {
+		// The plan fences nothing until its boundary, which commits the given-back granules then.
 		std::lock_guard preparations(m_PrepareMutex);
-		if (!FillHoles()) throw std::bad_alloc();
 		auto data = std::make_shared<Snapshot::Data>();
 		data->state = m_State; data->handlers = m_LibraryHandlers; data->base = m_Base;
 		data->sourceMemory = m_HeapMemory;
@@ -2138,8 +2138,9 @@ namespace RTE::CheckpointLua {
 		for (const auto& weak: m_Prepared) {
 			const auto prepared = weak.lock();
 			if (!prepared) continue;
+			// A plan holds address space only until its boundary arms it, and the arm commits what the trim gave back first.
 			std::unique_lock lock(prepared->m_Mutex, std::try_to_lock);
-			if (!lock || !prepared->m_Finished) return false;
+			if (!lock || (!prepared->m_Finished && prepared->m_WritesBegun.load(std::memory_order_seq_cst))) return false;
 		}
 		{
 			std::unique_lock lock(m_CopyMutex, std::try_to_lock);
@@ -2149,7 +2150,8 @@ namespace RTE::CheckpointLua {
 		}
 		if (m_CowCoordinator) {
 			CowCoordinator::Locked guard(m_CowCoordinator->lock);
-			for (const auto& copy: m_CowCoordinator->copies) if (!copy->completed) return false;
+			// An unarmed plan's copy fences nothing yet.
+			for (const auto& copy: m_CowCoordinator->copies) if (!copy->completed && copy->armed.load(std::memory_order_acquire) != 0) return false;
 		}
 		return true;
 	}
@@ -2453,12 +2455,14 @@ namespace RTE::CheckpointLua {
 		const size_t grown = held();
 		lua_gc(state, LUA_GCCOLLECT, 0);
 		lua_gc(state, LUA_GCSTOP, 0);
+		// A plan waiting for its boundary holds address space only, so the heap trims beside it; the arm commits what the trim
+		// gave back before it fences the heap, and the copy holds the survivor.
+		auto prepared = owner->PrepareFreeze();
 		for (int slice = 0; slice < 64; ++slice) owner->Trim();
 		const size_t trimmed = held();
-		// A preparation commits what the trim gave back before it plans the copy, and the copy holds the survivor.
-		auto prepared = owner->PrepareFreeze();
+		const bool armed = prepared->Arm(*owner);
 		const bool filled = !owner->m_HoleBytes.load(std::memory_order_acquire);
-		if (!prepared->Arm(*owner)) {
+		if (!armed) {
 			detail = "the prepared copy did not arm after a trim";
 			return false;
 		}
