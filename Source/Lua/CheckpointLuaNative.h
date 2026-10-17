@@ -102,7 +102,7 @@ namespace RTE::CheckpointLua {
 			for (const char* name: {
 			         "_ScriptGraphNative", "_ScriptGraphNativeAddress", "_ScriptGraphMembers", "_ScriptGraphInstance",
 			         "_ScriptGraphNativeSave", "_ScriptGraphAreaBoxes", "_ScriptGraphGibOwner", "_ScriptGraphSoundSetOwner",
-			         "_ScriptGraphLimbOwner", "_ScriptGraphPropertyOwner", "_ScriptGraphLimbVectorOwner", "_ScriptGraphGoneVector",
+			         "_ScriptGraphLimbOwner", "_ScriptGraphPropertyOwner", "_ScriptGraphLimbVectorOwner", "_ScriptGraphGoneVector", "_ScriptGraphPieSlices",
 			         "_ScriptGraphSceneBoxOwner", "_ScriptGraphIteratorSnapshot", "_ScriptGraphGibReferences"}) {
 				view.BindNative(destination, name);
 			}
@@ -1428,6 +1428,7 @@ namespace RTE::CheckpointLua {
 			const auto helper = [&](const char* name, lua_CFunction function) { entry.helpers.emplace(name, One(function, name, value)); };
 			if (contains("copy")) entry.helpers.emplace("_ScriptGraphNativeSave", One(ScriptGraphNativeSave, "NativeSave", value, true));
 			if (contains("area-ref") || (contains("copy") && className == "Area")) helper("_ScriptGraphAreaBoxes", ScriptGraphAreaBoxes);
+			if (contains("copy") && (className == "PieMenu" || className == "PieSlice")) helper("_ScriptGraphPieSlices", ScriptGraphPieSlices);
 			if (contains("gib-ref")) helper("_ScriptGraphGibOwner", ScriptGraphGibOwner);
 			if (contains("soundset-ref")) helper("_ScriptGraphSoundSetOwner", ScriptGraphSoundSetOwner);
 			if (contains("limb-ref")) helper("_ScriptGraphLimbOwner", ScriptGraphLimbOwner);

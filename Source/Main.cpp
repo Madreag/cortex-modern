@@ -9204,6 +9204,8 @@ void RunGameLoop() {
 			}
 			static const bool s_staleActivityLever = std::getenv("CCCP_TEST_STALE_ACTIVITY") != nullptr;
 			if (s_staleActivityLever && simTick > 0 && simTick % 600 == 0) g_LuaMan.NameStaleActivityValues();
+			static const bool s_pieSliceLever = std::getenv("CCCP_TEST_PIE_SLICE_HANDLES") != nullptr;
+			if (s_pieSliceLever && simTick == 1) g_LuaMan.PlantPieSliceHandles();
 			RecordActorHistory(simTick);
 			DumpSimStateIfArmed(simTick);
 			LocalPrediction::CompareFidelityAtTick(simTick);

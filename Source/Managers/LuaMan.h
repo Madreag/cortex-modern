@@ -1003,6 +1003,8 @@ namespace RTE {
 		static std::string CheckpointHeapCensus();
 		/// Test lever CCCP_TEST_STALE_ACTIVITY: names the Lua paths of activity values that are neither the running activity nor a preset.
 		void NameStaleActivityValues();
+		/// Test lever CCCP_TEST_PIE_SLICE_HANDLES: every state keeps live slices no actor's pie menu holds, for the world capture.
+		void PlantPieSliceHandles();
 		/// The heap every Lua state's collector found live when it last finished marking, less what it swept since, in bytes.
 		long long GetTotalHeapLiveBytes();
 
