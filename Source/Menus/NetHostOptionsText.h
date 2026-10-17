@@ -27,8 +27,8 @@ namespace RTE {
 	}
 
 	/// How the automatic input delay is sized, in the words every delay readout uses.
-	inline std::string NetAutoDelayText(uint16_t marginTicks) {
-		return "ping plus a " + std::to_string(marginTicks) + "-tick margin, raised live if inputs arrive late";
+	inline std::string NetAutoDelayText() {
+		return "measured ping and recent jitter, re-sized live";
 	}
 
 	/// The autosave interval row's range.
@@ -237,7 +237,7 @@ namespace RTE {
 		line(std::string("Input delay: ") +
 		     (config.delayPolicy == NetMatchDelayPolicy::Fixed
 		          ? "Fixed " + std::to_string(config.inputDelayFrames) + " ticks"
-		          : "Automatic, " + NetAutoDelayText(config.slowPlayerBoundTicks) + (live.empty() ? "" : " - now " + live)));
+		          : "Automatic, " + NetAutoDelayText() + (live.empty() ? "" : " - now " + live)));
 		line("Frame redundancy: " + std::to_string(config.frameRedundancyTicks) + " ticks   Slow player bound: " +
 		     std::to_string(config.slowPlayerBoundTicks) + " ticks");
 		line(std::string("When a player falls behind: ") + NetSlowPlayerPolicyText(config.slowPlayerPolicy));

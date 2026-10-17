@@ -1680,7 +1680,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		m_BaseDelayFrames = ScenarioRunner::GetLockstepInputDelayFrames();
 	}
 	char metrics[128];
-	std::snprintf(metrics, sizeof(metrics), "delay %u ticks / %.1f ms", static_cast<unsigned>(m_MatchDelayFrames), m_MatchDelayFrames * g_TimerMan.GetDeltaTimeMS());
+	std::snprintf(metrics, sizeof(metrics), "Input delay %u ticks / %.1f ms", static_cast<unsigned>(m_MatchDelayFrames), m_MatchDelayFrames * g_TimerMan.GetDeltaTimeMS());
 	// The summary reads the links the per-player lines list - the widest a host has, a client's own to its host - so the
 	// two never disagree; a link not measured yet reads as unknown in both.
 	std::optional<uint32_t> ping;
@@ -1898,7 +1898,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		const auto composeMetrics = [&](int width) {
 			std::string text = FitLine(font, headline(0), width - 12);
 			if (placing) text += "\n" + countOnly + " brains placed";
-			text += "\nInput " + std::string(metrics);
+			text += "\n" + std::string(metrics);
 			char pace[64];
 			std::snprintf(pace, sizeof(pace), " / PACE %.1f tps", s_paceTps);
 			text += "\nRTT " + (!hostLost && ping ? PingWords(*ping) : "--") + " ms" + pace;

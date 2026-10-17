@@ -2593,7 +2593,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		const std::string floor = std::to_string(m_HostOptionsDraft.inputDelayFrames) + " ticks (" +
 		                          std::to_string(static_cast<int>(m_HostOptionsDraft.inputDelayFrames * g_TimerMan.GetDeltaTimeMS())) + " ms)";
 		std::string effective = m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Auto
-		                            ? "Effective delay: " + NetAutoDelayText(m_HostOptionsDraft.slowPlayerBoundTicks) + ", at least " + floor
+		                            ? "Effective delay: " + NetAutoDelayText() + ", at least " + floor
 		                            : "Effective delay: " + floor;
 		if (!snapshot.inputDelayText.empty()) effective += " - " + snapshot.inputDelayText;
 		m_HostNetEffectiveLabel->SetText(effective);

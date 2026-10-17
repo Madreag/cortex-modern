@@ -2834,7 +2834,7 @@ namespace RTE::MenuAutomation {
 			same("hint_bound_one_tick", NetSlowPlayerHint(NetSlowPlayerPolicy::Substitute, 1, tickMs),
 			     "A player late past 1 tick (17 ms), host too, is held to the AI while others play on. Other policies return in a later version.");
 			same("hint_bound_pause", NetSlowPlayerHint(NetSlowPlayerPolicy::Pause, 3, tickMs), "Everyone waits for a late player, host included, for up to 20 s.");
-			same("hint_auto_delay", NetAutoDelayText(3), "ping plus a 3-tick margin, raised live if inputs arrive late");
+			same("hint_auto_delay", NetAutoDelayText(), "measured ping and recent jitter, re-sized live");
 			same("hint_autosave_range", NetAutosaveRangeHint(), "Every 60 s to 60 min, or off (default)");
 			same("hint_autosave_note", NetAutosaveNote(), "Every player takes each checkpoint at the same tick; a player who rejoins starts from one.");
 			same("hint_autosave_cost", NetAutosaveCostHint(), "Saving may cause a brief pause for other players on slower hosts");
@@ -2850,7 +2850,7 @@ namespace RTE::MenuAutomation {
 			const std::string summary = NetHostOptionsSummary(config, snapshot);
 			const std::string connection = NetHostConnectionSummary(config, snapshot);
 			check("hint_summary_policy", connection.find("\nWhen a player falls behind: Give the seat to the AI (host too) until they catch up\n") != std::string::npos, connection);
-			check("hint_summary_delay", connection.starts_with("Input delay: Automatic, ping plus a 3-tick margin, raised live if inputs arrive late - now 4 (auto, 50ms ping)\n"), connection);
+			check("hint_summary_delay", connection.starts_with("Input delay: Automatic, measured ping and recent jitter, re-sized live - now 4 (auto, 50ms ping)\n"), connection);
 			check("hint_summary_no_rejoin", summary.find("rejoin") == std::string::npos, summary);
 			check("summary_short_rows_share_lines", connection.find(" ticks   Slow player bound: 3 ticks\n") != std::string::npos && summary.find("\nDifficulty: ") != std::string::npos &&
 			      summary.find("   Starting gold: ") != std::string::npos, summary);
