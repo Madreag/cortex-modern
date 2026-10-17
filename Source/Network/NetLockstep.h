@@ -1314,9 +1314,9 @@ namespace RTE {
 		uint64_t GetLocalHoldFrame() const { NET_PLANE_CHECK(); return m_LocalHoldFrame; }
 		/// Whether the host held this seat at or after a frame: a hold this round took, or one still waiting for its start.
 		bool HeldLocalSeatSince(uint64_t frame) const;
-		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
-		bool PreparePeerAdmission(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
-		/// Delay window a returning seat needs: the measured round trip plus the restart its first tick pays.
+		bool PreparePeerRejoin(uint8_t peerId, std::optional<uint32_t> rttMs, uint64_t nowMs, std::string* error = nullptr);
+		bool PreparePeerAdmission(uint8_t peerId, std::optional<uint32_t> rttMs, uint64_t nowMs, std::string* error = nullptr);
+		/// Link-derived delay for a returning seat; restart and catch-up belong to its temporary neutral interval.
 		uint32_t RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const;
 		/// Delay a sender needs once its start work is published: its link's need plus the start work its machine did beyond ours,
 		/// since it begins the round that much later and stays that far behind until its stream shows the slack.
@@ -1975,7 +1975,7 @@ namespace RTE {
 		/// Host: proposes the agreed frame for every seat it released whose release no frame carries yet.
 		void ProposeOwedSeatReleases(uint64_t nowMs);
 		bool ScheduleSeatActivation(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error, uint64_t trailFrames);
-		bool PrepareSeatImageJoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error);
+		bool PrepareSeatImageJoin(uint8_t peerId, std::optional<uint32_t> rttMs, uint64_t nowMs, std::string* error);
 		/// Whether a release of the seat lands at or after the seat's newest hold.
 		bool HasReleaseSinceHold(uint8_t peerId) const;
 		void MaybeSendControlHeartbeat(uint64_t nowMs);

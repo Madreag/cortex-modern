@@ -6749,13 +6749,12 @@ namespace RTE {
 	uint16_t NetLockstepCoordinator::ReturnDelayFloor(uint8_t peerId, NetPeerId transport) const {
 		if (!m_Config.adaptiveInputDelay || !std::isfinite(m_Config.simTickMs) || m_Config.simTickMs <= 0) return 0;
 		// The same rule the round sized every sender's delay with at its start, on this seat's own link.
-		uint32_t ping = 0;
-		if (const auto known = m_Stats.peers.find(peerId); known != m_Stats.peers.end()) ping = known->second.pingMs;
-		if (m_Transport && transport != c_InvalidNetPeerId) ping = std::max(ping, m_Transport->GetPeerPingMs(transport));
+		if (!m_Transport || transport == c_InvalidNetPeerId || !m_Transport->IsPeerPingMeasured(transport))
+			return InputDelayAt(peerId, m_Stats.nextFrame);
 		NetInputDelayEstimator estimate;
-		estimate.Observe(0, ping);
-		return static_cast<uint16_t>(std::min<uint32_t>(estimate.RequiredFrames(m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames) +
-		                                                    NetMatchConfigUtil::HoldMarginFrames(m_Config.matchConfig), NetLockstepCodec::c_MaxInputDelayFrames));
+		if (const auto link = m_DelayEstimators.find(peerId); link != m_DelayEstimators.end()) estimate = link->second;
+		estimate.Observe(m_TimingNowMs, m_Transport->GetPeerPingMs(transport), true);
+		return static_cast<uint16_t>(std::min<uint32_t>(estimate.RequiredFrames(m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames), NetLockstepCodec::c_MaxInputDelayFrames));
 	}
 
 	uint32_t NetLockstepCoordinator::HorizonSlideTicks(uint64_t tick) const {
@@ -7030,16 +7029,8 @@ namespace RTE {
 
 	uint32_t NetLockstepCoordinator::RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const {
 		NET_PLANE_CHECK();
-		const uint32_t linkFrames = estimate.RequiredFrames(m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames);
-		const auto stats = m_Stats.peers.find(peerId);
-		if (!std::isfinite(m_Config.simTickMs) || m_Config.simTickMs <= 0 || stats == m_Stats.peers.end()) return linkFrames;
-		// A sender already in the round clears one trip: its clock and the round's advanced together. A
-		// returning seat starts its clock a trip after the round passed its activation frame and pays its
-		// own restart before its first tick, so its window has to clear the whole trip and that restart.
-		// Only the restart the peer published is used: our own parks move while the match runs, and a
-		// window that chased them would never settle.
-		const uint32_t restartFrames = static_cast<uint32_t>(std::ceil(static_cast<double>(stats->second.startParkMs) / m_Config.simTickMs));
-		return linkFrames > UINT32_MAX - restartFrames ? UINT32_MAX : linkFrames + restartFrames;
+		// Image catch-up and the return's neutral interval absorb restart work. The human input runway only follows the link.
+		return estimate.HasMeasurement() ? estimate.RequiredFrames(m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames) : InputDelayAt(peerId, m_Stats.nextFrame);
 	}
 
 	uint32_t NetLockstepCoordinator::StartSkewDelayFrames(uint32_t linkFrames, uint64_t peerStartMs, uint64_t ownStartMs, double tickMs) {
@@ -7048,7 +7039,7 @@ namespace RTE {
 		return static_cast<uint32_t>(std::min<uint64_t>(static_cast<uint64_t>(linkFrames) + skewFrames, UINT32_MAX));
 	}
 
-	bool NetLockstepCoordinator::PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error) {
+	bool NetLockstepCoordinator::PreparePeerRejoin(uint8_t peerId, std::optional<uint32_t> rttMs, uint64_t nowMs, std::string* error) {
 		NET_PLANE_CHECK();
 		if (!m_AiHeldSeats.contains(peerId)) return true;
 		if (m_ReleasedAiSeats.contains(peerId)) {
@@ -7062,7 +7053,7 @@ namespace RTE {
 		return PrepareSeatImageJoin(peerId, rttMs, nowMs, error);
 	}
 
-	bool NetLockstepCoordinator::PreparePeerAdmission(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error) {
+	bool NetLockstepCoordinator::PreparePeerAdmission(uint8_t peerId, std::optional<uint32_t> rttMs, uint64_t nowMs, std::string* error) {
 		NET_PLANE_CHECK();
 		const auto releases = m_SeatReleases.find(peerId);
 		if (m_Config.localPeerId != GetHostPeerId() || !IsSeatReleased(peerId) || releases == m_SeatReleases.end() ||
@@ -7073,9 +7064,10 @@ namespace RTE {
 		return PrepareSeatImageJoin(peerId, rttMs, nowMs, error);
 	}
 
-	bool NetLockstepCoordinator::PrepareSeatImageJoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error) {
+	bool NetLockstepCoordinator::PrepareSeatImageJoin(uint8_t peerId, std::optional<uint32_t> rttMs, uint64_t nowMs, std::string* error) {
 		auto& estimate = m_DelayEstimators[peerId];
-		estimate.Observe(nowMs, rttMs);
+		estimate.Observe(nowMs, rttMs.value_or(0), rttMs.has_value());
+		if (!rttMs) return true; // An unavailable link reading cannot change the agreed delay.
 		const uint32_t needed = RejoinDelayFrames(peerId, estimate);
 		const uint16_t current = InputDelayAt(peerId, m_LastDeliveredFrame.value_or(m_Config.startFrame));
 		if (needed <= current) return true;
@@ -7088,7 +7080,7 @@ namespace RTE {
 		if (ProposeInputDelay(peerId, static_cast<uint16_t>(needed), FutureTimingFrame())) {
 			const auto stats = m_Stats.peers.find(peerId);
 			DiagnosticLine() << "[net-lockstep] delay proposal peer=" << static_cast<int>(peerId) << " from=" << current << " to=" << needed << " reason=rejoin"
-			                 << " rtt_p95_ms=" << estimate.P95Ms() << " jitter_ms=" << estimate.JitterMs() << " silence_ms=" << estimate.SilenceMs() << " ping_ms=" << rttMs
+			                 << " rtt_p95_ms=" << estimate.P95Ms() << " jitter_ms=" << estimate.JitterMs() << " silence_ms=" << estimate.SilenceMs() << " ping_ms=" << rttMs.value_or(0) << " ping_measured=" << rttMs.has_value()
 			                 << " start_park_ms=" << (stats == m_Stats.peers.end() ? 0 : stats->second.startParkMs) << std::endl;
 		}
 		if (error) *error = "Rejoining: waiting for the agreed input delay to take effect";
@@ -7914,36 +7906,19 @@ namespace RTE {
 			for (const auto& [peer, transport]: m_RemoteTransports) {
 				auto& estimator = m_DelayEstimators[peer];
 				const uint32_t ping = m_Transport->GetPeerPingMs(transport);
-				estimator.Observe(nowMs, ping);
+				const bool measured = m_Transport->IsPeerPingMeasured(transport);
+				estimator.Observe(nowMs, ping, measured);
 				auto& stats = m_Stats.peers[peer];
 				// A connection with no samples on it yet reports nothing, which is not a reading of an instant
 				// link: a seat that comes back on a new transport keeps what its link last measured.
-				if (ping > 0 || stats.pingMs == 0) stats.pingMs = ping;
-				if (m_Transport->IsPeerPingMeasured(transport)) stats.pingMeasured = true;
+				if (measured) stats.pingMs = ping;
+				stats.pingMeasured = measured;
 				if (const uint32_t jitter = estimator.JitterMs(); jitter > 0 || stats.jitterMs == 0) stats.jitterMs = jitter;
 				stats.delayFrames = InputDelayAt(peer, m_Stats.nextFrame);
-				if (host && m_Config.adaptiveInputDelay && !UsesPeerFrameGroups()) {
+				if (host && m_Config.adaptiveInputDelay && measured && !UsesPeerFrameGroups()) {
 					std::optional<uint16_t> delay = estimator.Change(nowMs, stats.delayFrames, m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames);
-					const char* reason = "link";
-					if (delay && *delay < stats.delayFrames) delay = SlackLimitedDecrease(peer, *delay, stats.delayFrames, nowMs);
-					const uint32_t required = estimator.RequiredFrames(m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames);
-					if (const auto kept = MarginKeepingIncrease(peer, stats.delayFrames, required, nowMs); kept && (!delay || *kept > *delay)) delay = kept, reason = "lead";
-					// A sender whose start took longer than ours plays the round that much behind; its delay covers it once, from its own measurement.
-					bool startSkew = false;
-					if (m_PeerStartupPublished.contains(peer) && stats.startParkMs > 0 && !m_StartSkewSized.contains(peer)) {
-						const uint32_t started = std::min<uint32_t>(StartSkewDelayFrames(required, stats.startParkMs, m_LocalStartParkMs, m_Config.simTickMs), NetLockstepCodec::c_MaxInputDelayFrames);
-						if (started <= stats.delayFrames) m_StartSkewSized.insert(peer);
-						else if (!delay || started > *delay) delay = static_cast<uint16_t>(started), startSkew = true, reason = "start";
-					}
-					if (delay) {
-						const auto last = m_LastDelayResizeMs.find(peer);
-						const uint64_t interval = *delay < stats.delayFrames ? c_DelayShrinkIntervalMs : c_DelayResizeIntervalMs;
-						if (last != m_LastDelayResizeMs.end() && (nowMs < last->second || nowMs - last->second < interval)) delay.reset();
-						else if (*delay < stats.delayFrames) *delay = std::max<uint16_t>(*delay, stats.delayFrames - std::min(stats.delayFrames, c_DelayShrinkStep));
-					}
 					if (delay && ProposeInputDelay(peer, *delay, FutureTimingFrame())) {
-						if (startSkew) m_StartSkewSized.insert(peer);
-						DiagnosticLine() << "[net-lockstep] delay proposal peer=" << static_cast<int>(peer) << " from=" << stats.delayFrames << " to=" << *delay << " reason=" << reason
+						DiagnosticLine() << "[net-lockstep] delay proposal peer=" << static_cast<int>(peer) << " from=" << stats.delayFrames << " to=" << *delay << " reason=link"
 						                 << " rtt_p95_ms=" << estimator.P95Ms() << " jitter_ms=" << estimator.JitterMs() << " silence_ms=" << estimator.SilenceMs()
 						                 << " ping_ms=" << ping << " start_park_ms=" << stats.startParkMs << std::endl;
 					}

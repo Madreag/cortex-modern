@@ -98,7 +98,7 @@ namespace RTE {
 			}
 		};
 
-		static void Configure(NetLockstepCoordinator& peer, Wire& wire) {
+		static void Configure(NetLockstepCoordinator& peer, INetTransport& wire) {
 			peer.m_Config.sessionId = 0x60584422;
 			peer.m_Config.matchConfig = NetMatchConfigUtil::MakeDefault(peer.m_Config.sessionId);
 			peer.m_Config.matchConfig.peerCount = 3;
@@ -136,6 +136,132 @@ namespace RTE {
 
 
 
+		struct DelayWire final : LoopbackTransport {
+			uint32_t rtt = 0;
+			bool measured = true;
+			uint32_t GetPeerPingMs(NetPeerId) const override { return rtt; }
+			bool IsPeerPingMeasured(NetPeerId) const override { return measured; }
+			bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string* = nullptr, bool* = nullptr) override { return true; }
+		};
+
+		static void ConfigureDelay(NetLockstepCoordinator& peer, DelayWire& wire, unsigned mode, uint16_t delay) {
+			Configure(peer, wire);
+			peer.m_Config.localPeerId = peer.m_Config.authorityPeerId = 1;
+			peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+			peer.m_Config.matchConfig.players.resize(2);
+			peer.m_Config.matchConfig.successorOrder = {2};
+			peer.m_Config.peerFrameGroups = mode == 0;
+			peer.m_Config.matchConfig.dedicated = mode == 1;
+			peer.m_Config.matchConfig.persistentWorld = mode == 2;
+			peer.m_Config.matchConfig.slowPlayerPolicy = mode == 3 ? NetSlowPlayerPolicy::Pause : NetSlowPlayerPolicy::Substitute;
+			peer.m_Config.substituteSlowPeers = mode != 3;
+			peer.m_Config.adaptiveInputDelay = true;
+			peer.m_Config.inputDelayFrames = delay;
+			peer.m_Config.matchConfig.inputDelayFrames = 1;
+			peer.m_Config.matchConfig.peerInputDelayFrames = {delay, delay};
+			peer.m_Config.peerInputDelayFrames = {{1, delay}, {2, delay}};
+			peer.m_Config.slowPlayerBoundTicks = 3;
+			peer.m_Config.relayToOtherPeers = mode != 0;
+			peer.m_FrameGroupMembers = 3;
+			peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_RemotePeerIds = {2};
+			peer.m_RemoteTransports = {{2, 42}};
+			peer.m_RemoteStartsReceived = {2};
+			peer.m_MigrationHistory[4422] = {1, 2, 3};
+			peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+		}
+
+		static std::optional<uint16_t> DelayProposal(const NetLockstepCoordinator& peer) {
+			if (peer.UsesPeerFrameGroups()) {
+				for (const auto& [key, votes]: peer.m_PeerBridgeVotes)
+					if (key.second == 9 && votes.contains(1)) return static_cast<uint16_t>(votes.at(1).completeFrom);
+			} else for (const auto& [revision, decision]: peer.m_TimingDecisions)
+				if (decision.proposal.action == NetTimingAction::Delay) return decision.proposal.delayFrames;
+			return std::nullopt;
+		}
+
+		static void SampleDelay(NetLockstepCoordinator& peer, uint64_t nowMs) {
+			peer.m_TimingNowMs = nowMs;
+			if (peer.UsesPeerFrameGroups()) peer.TickPeerInputDelay(nowMs);
+			else peer.TickTiming(nowMs);
+		}
+
+		static bool MissingOrZeroLinkNeverUsesReceipts(std::string* error) {
+			for (unsigned mode = 0; mode != 4; ++mode) for (bool measured: {false, true}) {
+				DelayWire wire; wire.measured = measured;
+				NetLockstepCoordinator peer; ConfigureDelay(peer, wire, mode, measured ? 1 : 5);
+				peer.m_PeerReceiptDelaySamples[2].Observe(1000, 450);
+				if (!measured) peer.m_DelayEstimators[2].Observe(900, 58, true);
+				SampleDelay(peer, 1000);
+				if (DelayProposal(peer) || peer.m_Stats.peers[mode == 0 ? 1 : 2].pingMeasured != measured ||
+				    peer.ReturnDelayFloor(2, 42) != (measured ? 1 : 5)) {
+					*error = std::string(measured ? "measured zero RTT" : "missing RTT") + " sized from a 450ms application receipt or lost its measurement flag in mode " + std::to_string(mode);
+					return false;
+				}
+			}
+			return true;
+		}
+
+		static bool LinkSizingInEveryMode(std::string* error) {
+			for (unsigned mode = 0; mode != 4; ++mode) for (uint32_t rtt: {30U, 200U}) {
+				DelayWire wire; wire.rtt = rtt;
+				NetLockstepCoordinator peer; ConfigureDelay(peer, wire, mode, 1);
+				peer.m_PeerReceiptDelaySamples[2].Observe(1000, 450);
+				peer.m_DelayEstimators[2].ObserveSilence(1000, 250);
+				peer.m_Stats.peers[2].startParkMs = 900;
+				peer.m_PeerStartupPublished.insert(2);
+				SampleDelay(peer, 1000);
+				const auto delay = DelayProposal(peer);
+				const uint16_t expected = rtt == 30 ? 3 : 13;
+				const uint32_t returning = peer.RejoinDelayFrames(2, peer.m_DelayEstimators.at(2));
+				const uint16_t returnFloor = peer.ReturnDelayFloor(2, 42);
+				std::cout << "[link-mode] mode=" << mode << " rtt_ms=" << rtt << " live=" << delay.value_or(0)
+				          << " return=" << returning << " return_floor=" << returnFloor << std::endl;
+				if (delay != expected || returning != expected || returnFloor != expected) {
+					*error = "live and return delay must be exactly " + std::to_string(expected) + " ticks in mode " + std::to_string(mode) + "; machine receipt/silence/start costs are separate";
+					return false;
+				}
+			}
+			return true;
+		}
+
+		static bool LinkRiseHasNoResizeCooldown(std::string* error) {
+			for (unsigned mode = 0; mode != 4; ++mode) {
+				DelayWire wire; wire.rtt = 200;
+				NetLockstepCoordinator peer; ConfigureDelay(peer, wire, mode, 3);
+				peer.m_LastDelayResizeMs[mode == 0 ? 1 : 2] = 1000;
+				SampleDelay(peer, 1100);
+				if (DelayProposal(peer) != 13) {
+					*error = "a fresh 200ms link reading did not immediately propose 13 ticks after a recent resize in mode " + std::to_string(mode);
+					return false;
+				}
+			}
+			return true;
+		}
+
+		static bool LinkFallNeedsFiveMeasuredSeconds(std::string* error) {
+			for (unsigned mode = 0; mode != 4; ++mode) for (bool interrupted: {false, true}) {
+				DelayWire wire; wire.rtt = 30;
+				NetLockstepCoordinator peer; ConfigureDelay(peer, wire, mode, 16);
+				const uint64_t deadline = interrupted ? 10000 : 6000;
+				for (uint64_t nowMs = 1000; nowMs < deadline; nowMs += 100) {
+					wire.measured = !interrupted || nowMs != 4900;
+					SampleDelay(peer, nowMs);
+					if (DelayProposal(peer)) {
+						*error = "delay fell before five continuous measured seconds in mode " + std::to_string(mode) + " at " + std::to_string(nowMs) + "ms";
+						return false;
+					}
+				}
+				SampleDelay(peer, deadline);
+				const auto delay = DelayProposal(peer);
+				if (!delay || *delay < 3 || *delay >= 16) {
+					*error = "five measured seconds did not permit a link-derived decrease in mode " + std::to_string(mode);
+					return false;
+				}
+			}
+			return true;
+		}
+
 		static bool LinkDelay(std::string* error) {
 			for (const auto [rtt, minimum, maximum]: {std::array<uint32_t, 3>{30, 3, 6}, {58, 5, 6}, {200, 13, 14}}) {
 				NetInputDelayEstimator link;
@@ -146,9 +272,10 @@ namespace RTE {
 					return false;
 				}
 			}
-			Wire wire;
+			DelayWire wire; wire.rtt = 58;
 			NetLockstepCoordinator peer;
 			Configure(peer, wire);
+			peer.m_RemoteTransports[3] = 43;
 			peer.m_Config.peerFrameGroups = peer.m_Config.adaptiveInputDelay = true;
 			peer.m_Config.inputDelayFrames = peer.m_Config.matchConfig.inputDelayFrames = 1;
 			peer.m_Config.peerInputDelayFrames = {{1, 1}, {2, 1}, {3, 1}};
@@ -162,11 +289,11 @@ namespace RTE {
 			for (const auto& [key, votes]: peer.m_PeerBridgeVotes) if (key.second == 10 && votes.contains(2)) {
 				const auto& proposal = votes.at(2);
 				if (proposal.completeFrom > 6 || proposal.completeFrom < 5) {
-					*error = "a 67–85 ms input receipt path did not propose five or six ticks"; return false;
+					*error = "a measured 58 ms link did not propose five or six ticks despite later application receipts"; return false;
 				}
 				return true;
 			}
-			*error = "the measured live receipt path did not propose its input delay";
+			*error = "the measured live transport path did not propose its input delay";
 			return false;
 		}
 
@@ -4414,8 +4541,7 @@ namespace RTE {
 			a.simTickMs = b.simTickMs = c_DefaultDeltaTimeS * 1000.0;
 			a.peerIncarnations = b.peerIncarnations = {{1, 1}, {2, 1}};
 			if (!StartCoordinatorPair(48890, hostWire, clientWire, host, client, a, b, error)) return false;
-			// The 200 ms arms' numbers: a 400 ms round trip and a restart the returning machine published.
-			// The seat's window has to clear both, or the round requires its input before its first tick.
+			// A returning machine's published restart remains separate from the measured 400 ms link.
 			client.NoteLocalStartPark(285);
 			for (uint64_t now = 0; now < 10; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick( fixtureClock.At(now)); client.Tick( fixtureClock.At(now)); }
 			if (!host.QueueLocalInput(0, {}, {}, error) || !fixtureClock.Hold(host, 2, 10, error)) return false;
@@ -4433,15 +4559,14 @@ namespace RTE {
 				return false;
 			}
 			(void)host.FinishSimulationTick(0);
-			// The 200 ms trip clears one 400 ms retransmission before the restart.
-			const uint32_t link = static_cast<uint32_t>(std::ceil(600.0 / a.simTickMs)) + 1;
-			const uint32_t restart = static_cast<uint32_t>(std::ceil(285.0 / a.simTickMs));
+			// The permanent input window covers one round trip plus a tick.
+			const uint32_t link = static_cast<uint32_t>(std::ceil(400.0 / a.simTickMs)) + 1;
 			NetInputDelayEstimator measured;
 			for (uint64_t at = 0; at <= 400; at += 200) measured.Observe(at, 400);
 			const uint32_t window = host.RejoinDelayFrames(2, measured);
-			if (window != link + restart) {
-				*error = "the rejoin window did not clear the round trip and the restart: frames=" + std::to_string(window) +
-				         " expected=" + std::to_string(link + restart) + " trip=400ms restart=285ms";
+			if (window != link) {
+				*error = "the rejoin window included machine restart cost: frames=" + std::to_string(window) +
+				         " expected=" + std::to_string(link) + " trip=400ms restart=285ms";
 				return false;
 			}
 			std::string rejoin;
@@ -4470,9 +4595,9 @@ namespace RTE {
 				return false;
 			}
 			const uint16_t sized = host.InputDelayAt(2, 900);
-			if (sized < link + restart) {
-				*error = "the committed rejoin window was shorter than the trip and the restart: delay=" + std::to_string(sized) +
-				         " needed=" + std::to_string(link + restart) + " (" + rejoin + ")";
+			if (sized != link) {
+				*error = "the committed rejoin window differs from its measured link: delay=" + std::to_string(sized) +
+				         " needed=" + std::to_string(link) + " (" + rejoin + ")";
 				return false;
 			}
 			if (!host.SchedulePeerReclaim(2, 2, 2, 500, error)) return false;
@@ -4480,7 +4605,7 @@ namespace RTE {
 				*error = "the reclaim gap did not end at the committed window: delay=" + std::to_string(sized);
 				return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS rejoin_window_clears_restart rtt_ms=400 restart_ms=285 delay_frames=" << sized
+			std::cout << "[net-lockstep-selftest] PASS rejoin_window_uses_link_without_restart rtt_ms=400 restart_ms=285 delay_frames=" << sized
 			          << " gap=" << 500 << ".." << 500 + sized << std::endl;
 			return true;
 		}
@@ -24863,8 +24988,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
-	// A phone hotspot's link stops for ~150 ms every few tens of seconds and then delivers everything at once; its smoothed round
-	// trip never shows it (2026-10-04 LTE rows: 17 holds, each after a 116-168 ms silence, at a measured jitter of 2-9 ms).
+	// Application-stream gaps include machine and pump cost. Keep their diagnostics, but only measured transport RTT sizes delay.
 	bool TestALinksSilenceKeepsItsCover(std::string* error) {
 		const double tick = 1000.0 / 60.0;
 		struct Feed { uint64_t sim = 600, target = 609, k = 0; };
@@ -24898,12 +25022,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		for (int step = 0; step < 9; ++step) play(silent, feed, false);
 		for (int step = 0; step < 120; ++step) play(silent, feed, true);
 		const uint32_t covered = required(silent);
-		const uint32_t silenceFrames = static_cast<uint32_t>(std::ceil(140.0 / tick));
-		if (covered < linkOnly + silenceFrames) {
-			*error = "a 150 ms silence of the sender's stream left no cover in its delay: required=" + std::to_string(covered) + " link_only=" + std::to_string(linkOnly);
+		const uint32_t recordedSilence = silent.m_DelayEstimators.at(2).SilenceMs();
+		if (covered != linkOnly || recordedSilence < 140) {
+			*error = "a 150 ms application silence changed the link delay or lost its diagnostic: required=" + std::to_string(covered) + " link_only=" + std::to_string(linkOnly);
 			return false;
 		}
-		// Thirty seconds of a clean link later the cover still stands: the next silence comes.
+		// A clean half minute retains the silence diagnostic without inflating the measured link.
 		auto& link = silent.m_DelayEstimators[2];
 		const uint64_t silencedAt = at(feed);
 		std::optional<uint16_t> lowered;
@@ -24911,13 +25035,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			link.Observe(now, 50);
 			if (const auto change = link.Change(now, static_cast<uint16_t>(covered), tick, 1); change && *change < covered) lowered = change;
 		}
-		if (lowered) {
-			*error = "the delay gave back a silence's cover after a clean half minute: lowered to " + std::to_string(*lowered) + " from " + std::to_string(covered);
+		if (lowered || link.SilenceMs() != recordedSilence) {
+			*error = "the measured link or retained silence diagnostic changed after a clean half minute: lowered to " + std::to_string(lowered.value_or(covered)) + " from " + std::to_string(covered);
 			return false;
 		}
-		// Two minutes after it, a silence no longer sizes the link.
+		// Two minutes later the diagnostic expires without changing the link estimate.
 		for (uint64_t now = silencedAt + 30100; now <= silencedAt + 125000; now += 100) link.Observe(now, 50);
-		if (required(silent) != linkOnly) {
+		if (required(silent) != linkOnly || link.SilenceMs() != 0) {
 			*error = "a silence over two minutes old still sized the delay: required=" + std::to_string(required(silent)) + " link_only=" + std::to_string(linkOnly);
 			return false;
 		}
@@ -24945,7 +25069,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			         std::to_string(required(lowerer)) + " park=" + std::to_string(required(parked)) + " link_only=" + std::to_string(linkOnly);
 			return false;
 		}
-		// A link's silences are not all as short as its first (2026-10-04 9:09 PM: 67 and 83 ms, then a 152 ms one held the seat).
+		// Repeated stream gaps still cannot size the transport link.
 		NetLockstepCoordinator growing;
 		Feed growingFeed;
 		prepare(growing);
@@ -24955,13 +25079,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		for (int step = 0; step < 5; ++step) play(growing, growingFeed, false);
 		for (int step = 0; step < 60; ++step) play(growing, growingFeed, true);
 		const uint32_t afterShort = required(growing);
-		if (afterShort < linkOnly + static_cast<uint32_t>(std::ceil(152.0 / tick))) {
-			*error = "silences of 67 and 83 ms left no cover for the 152 ms one the same link went on to: required=" + std::to_string(afterShort) + " link_only=" + std::to_string(linkOnly);
-			return false;
-		}
-		// One silence alone is carried as it was: a machine's single spike costs its delay no more than the spike (the thin-lead row).
-		if (covered > linkOnly + static_cast<uint32_t>(std::ceil(151.0 / tick))) {
-			*error = "a single 150 ms silence was carried as more than itself: required=" + std::to_string(covered) + " link_only=" + std::to_string(linkOnly);
+		if (afterShort != linkOnly || growing.m_DelayEstimators.at(2).SilenceMs() < 67) {
+			*error = "repeated stream silences changed the measured link or lost their diagnostic: required=" + std::to_string(afterShort) + " link_only=" + std::to_string(linkOnly);
 			return false;
 		}
 		const auto threePeers = [&](NetLockstepCoordinator& host) {
@@ -24988,16 +25107,16 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			thirdInput(shared, sharedFeed); play(shared, sharedFeed, true);
 			thirdInput(separate, separateFeed); play(separate, separateFeed, true);
 		}
-		if (required(shared) != linkOnly || shared.m_DelayEstimators.at(3).RequiredFrames(tick, 1) != linkOnly || required(separate) <= linkOnly) {
-			*error = "common input silence is charged to a client, or individual silence is discarded: shared=" + std::to_string(required(shared)) +
+		if (required(shared) != linkOnly || shared.m_DelayEstimators.at(3).RequiredFrames(tick, 1) != linkOnly || required(separate) != linkOnly || separate.m_DelayEstimators.at(2).SilenceMs() < 140) {
+			*error = "application silence changed a link delay or lost the individual diagnostic: shared=" + std::to_string(required(shared)) +
 			         "/" + std::to_string(shared.m_DelayEstimators.at(3).RequiredFrames(tick, 1)) + " separate=" + std::to_string(required(separate)) + " link_only=" + std::to_string(linkOnly);
 			return false;
 		}
-		std::cout << "[net-lockstep-selftest] PASS a_links_silence_keeps_its_cover link_only=" << linkOnly << " covered=" << covered << " after_short=" << afterShort << " common=0" << std::endl;
+		std::cout << "[net-lockstep-selftest] PASS stream_silence_never_sizes_the_link link_only=" << linkOnly << " covered=" << covered << " after_short=" << afterShort << " common=0" << std::endl;
 		return true;
 	}
 
-	// The seat held for going silent comes back on the delay that would have carried that silence, not on one it will be held at again.
+	// The return uses the same measured link delay; catch-up and machine silence belong to the hold and neutral interval.
 	bool TestAHeldSeatsSilenceCarriesItsReturn(std::string* error) {
 			SessionFixtureClock fixtureClock;
 		LoopbackTransport hostWire, clientWire;
@@ -25019,13 +25138,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		late.senderPeerId = 2; late.targetFrame = 3; late.roundId = 77;
 		host.HandleFrame(late, 1150, 1, false, false);
 		const uint32_t after = host.RejoinDelayFrames(2, host.m_DelayEstimators[2]);
-		const uint32_t silenceFrames = static_cast<uint32_t>(std::ceil(150.0 / a.simTickMs));
-		if (after < before + silenceFrames - 1) {
-			*error = "the held seat's return does not carry the silence that held it: return_frames=" + std::to_string(after) + " before=" + std::to_string(before) +
-			         " silence_frames=" + std::to_string(silenceFrames);
+		if (after != before || host.m_DelayEstimators.at(2).SilenceMs() < 140) {
+			*error = "the held seat's return delay changed with its application silence: return_frames=" + std::to_string(after) + " before=" + std::to_string(before) +
+			         " silence_ms=" + std::to_string(host.m_DelayEstimators.at(2).SilenceMs());
 			return false;
 		}
-		std::cout << "[net-lockstep-selftest] PASS a_held_seats_silence_carries_its_return before=" << before << " after=" << after << std::endl;
+		std::cout << "[net-lockstep-selftest] PASS held_seat_return_uses_only_the_link before=" << before << " after=" << after << std::endl;
 		return true;
 	}
 
@@ -30309,6 +30427,31 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "link-measurement-presence") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS missing_or_zero_rtt_never_uses_machine_receipts\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
+			if (std::string_view(selectedCase) == "link-every-mode") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::LinkSizingInEveryMode(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS every_mode_sizes_live_and_return_from_the_link\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
+			if (std::string_view(selectedCase) == "link-immediate-rise") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS link_rise_has_no_resize_cooldown\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
+			if (std::string_view(selectedCase) == "link-five-second-fall") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS link_fall_requires_five_continuous_measured_seconds\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
+
 			if (std::string_view(selectedCase) == "held-host-controller") {
 				std::string error;
 				if (!NetSessionPlaneSelfTest::CheckHeldHostControllers(&error)) return fail(error);
@@ -30503,6 +30646,11 @@ namespace {
 		row(&SeatAdmissionServiceTest::HeldHostAdoptsBaseCapture, "held_host_adopts_the_agreed_base_capture");
 		row(&NetSessionPlaneSelfTest::CheckHeldHostControllers, "a_held_host_preserves_controller_disable_before_its_return_arrives");
 		row(&SessionPlaneRecoveryTest::LinkDelay, "input_delay_follows_the_measured_link");
+		row(&SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts, "missing_or_zero_rtt_never_uses_machine_receipts");
+		row(&SessionPlaneRecoveryTest::LinkSizingInEveryMode, "every_mode_sizes_live_and_return_from_the_link");
+		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
+		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
+
 		row(&SessionPlaneRecoveryTest::ConcurrentReturnMembership, "a_later_return_keeps_the_earlier_scheduled_return");
 		row(&SessionPlaneRecoveryTest::ReturnKeepsOtherSeatHeld, "a_return_cannot_return_another_held_seat");
 		row(&SessionPlaneRecoveryTest::FutureRemovalKeepsPastAuthority, "a_future_removal_keeps_the_past_directory_decision");
@@ -30586,11 +30734,11 @@ namespace {
 		row(&TestHostStatusKeepsTheReceiversLinkMeasurement, "host_status_keeps_the_receivers_link_measurement");
 		row(&TestEachSurvivorsRunwayUsesItsOwnLink, "each_survivors_runway_uses_its_own_link");
 		row(&TestAReturnRebuildsArrivalSlack, "a_return_rebuilds_arrival_slack");
-		row(&TestALinksSilenceKeepsItsCover, "a_links_silence_keeps_its_cover");
+		row(&TestALinksSilenceKeepsItsCover, "stream_silence_never_sizes_the_link");
 #ifdef CCCP_WITH_GNS
 		row(&GnsTransport::UplinkStallSelfTest, "uplink_stall_sends_only");
 #endif
-		row(&TestAHeldSeatsSilenceCarriesItsReturn, "a_held_seats_silence_carries_its_return");
+		row(&TestAHeldSeatsSilenceCarriesItsReturn, "held_seat_return_uses_only_the_link");
 		row(&TestANeutralGapLeavesNoCommandsToResend, "a_neutral_gap_leaves_no_commands_to_resend");
 		row(&TestFreshRoundDropsRetainedCollisionResults, "fresh_round_drops_retained_collision_results");
 		row(&TestReturnFramesBypassReliableLoss, "return_frames_bypass_reliable_loss");

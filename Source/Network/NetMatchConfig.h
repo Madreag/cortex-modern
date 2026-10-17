@@ -62,13 +62,14 @@ namespace RTE {
 	public:
 		static constexpr uint64_t c_WindowMs = 5000;
 		static constexpr uint64_t c_SampleMs = 100;
-		/// A link that fell silent once falls silent again: its longest silence is carried this long.
+		/// Retention for stream-silence diagnostics; these samples never size the link delay.
 		static constexpr uint64_t c_SilenceWindowMs = 120000;
-		/// A silence longer than half the largest delay is an outage the hold answers, not jitter a delay should carry.
+		/// Longer application gaps are outages; retain bounded silence diagnostics.
 		static constexpr uint32_t c_MaxCarriedSilenceMs = 500;
-		/// The most a link's silences add to its delay: a returning seat's delay still fits beside a long round trip and its restart.
-		static constexpr uint32_t c_MaxSilenceMarginMs = 300;
 		void Observe(uint64_t nowMs, uint32_t rttMs);
+		/// Transport measurements may be zero; absence is a separate fact.
+		void Observe(uint64_t nowMs, uint32_t rttMs, bool measured);
+		bool HasMeasurement() const { return m_HasMeasurement; }
 		/// Records how long the sender's input stream fell silent beyond its cadence.
 		void ObserveSilence(uint64_t nowMs, uint32_t silenceMs);
 		void Rebase(uint64_t nowMs);
@@ -87,6 +88,7 @@ namespace RTE {
 		mutable uint64_t m_RankedRevision = UINT64_MAX; //!< The revision the ranked percentiles below were taken at.
 		mutable std::array<std::pair<unsigned, uint32_t>, 2> m_Ranked{}; //!< The percentiles asked for since, each with its value.
 		uint32_t m_LastMeasuredRttMs = 0;
+		bool m_HasMeasurement = false;
 		std::deque<std::pair<uint64_t, uint32_t>> m_Silences;
 		std::optional<uint64_t> m_BelowSince;
 	};

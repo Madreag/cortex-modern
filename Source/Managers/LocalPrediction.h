@@ -65,6 +65,8 @@ namespace RTE {
 		/// The last active preview configuration, retained through teardown for the match report.
 		static int GetLastInputDelay() { return s_LastInputDelay; }
 		static int GetLastEffectiveMaxTicks() { return s_LastEffectiveMaxTicks; }
+		static uint64_t GetLastRequestedTick() { return s_LastRequestedTick; }
+		static bool LastRequestCompleted() { return s_LastRequestCompleted; }
 		static uint64_t GetPreviewCount() { return s_PreviewCount; }
 		static uint64_t GetPreviewTicks() { return s_PreviewTicks; }
 		static double GetPreviewMs() { return s_PreviewMs; }
@@ -96,6 +98,8 @@ namespace RTE {
 		static int s_LastDepth;
 		static int s_LastInputDelay;
 		static int s_LastEffectiveMaxTicks;
+		static uint64_t s_LastRequestedTick;
+		static bool s_LastRequestCompleted;
 		static uint64_t s_PreviewCount;
 		static uint64_t s_PreviewTicks;
 		static double s_PreviewMs;

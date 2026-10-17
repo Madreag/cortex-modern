@@ -269,6 +269,16 @@ namespace RTE {
 		if (sources == m_PeerSourceInputs.end() || !sources->second.contains(m_Config.localPeerId)) return false;
 		auto proposal = PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
 		std::map<uint8_t, uint64_t> returnCatchUpTicks;
+		const auto returnLinkDelay = [&](uint8_t peer, uint64_t at) {
+			const uint16_t current = InputDelayAt(peer, at);
+			if (!m_Config.adaptiveInputDelay) return static_cast<uint32_t>(current);
+			const auto [wire, route] = PeerFrameRoute(peer);
+			if (!wire || !wire->IsPeerPingMeasured(route)) return static_cast<uint32_t>(current);
+			auto& link = m_DelayEstimators[peer];
+			link.Observe(nowMs, wire->GetPeerPingMs(route), true);
+			return std::max<uint32_t>(current, std::min<uint32_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
+			    link.RequiredFrames(m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames)));
+		};
 		proposal.frame = proposal.boundary = frame;
 		proposal.connectedMask = 0;
 		proposal.preparedFrame = 0;
@@ -320,13 +330,8 @@ namespace RTE {
 			if (m_FrameGroupMembers == 0 || std::countr_zero(m_FrameGroupMembers) + 1 != m_Config.localPeerId) return false;
 			for (const auto& [peer, bridge]: m_PeerBridges) {
 				if (!bridge.committedHold || bridge.returnFrame || peer == m_Config.localPeerId) continue;
-				uint64_t delay = InputDelayAt(peer, frame);
+				const uint32_t delay = returnLinkDelay(peer, frame);
 				const auto [wire, route] = PeerFrameRoute(peer);
-				if (wire && wire->IsPeerPingMeasured(route)) {
-					const uint32_t margin = std::max(static_cast<uint32_t>(std::ceil(m_Config.simTickMs)), m_Stats.peers[peer].jitterMs);
-					delay = std::max<uint64_t>(delay, std::min<uint64_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
-					    static_cast<uint64_t>(std::ceil((wire->GetPeerPingMs(route) + margin) / m_Config.simTickMs))));
-				}
 				const uint64_t heard = LastAuthenticatedTraffic(peer);
 				const auto applied = m_PeerAppliedThrough.find(peer);
 				if (nowMs < heard || nowMs - heard > 1000 || applied == m_PeerAppliedThrough.end()) continue;
@@ -528,20 +533,12 @@ namespace RTE {
 		const NetHash32 prefix = frame == m_Config.startFrame ? NetHash32{} : proposal.preparedFrame != 0 || heldAhead ? PeerAppliedFramePrefix(proposal.boundary) : PeerFramePrefix(frame - 1);
 		proposal.bytes.assign(prefix.begin(), prefix.end());
 		if (proposal.preparedFrame == 1) for (uint8_t peer: proposal.members) {
-			uint32_t rtt = m_Stats.peers[peer].pingMs;
-			const auto [wire, route] = PeerFrameRoute(peer);
-			if (wire && wire->IsPeerPingMeasured(route)) rtt = wire->GetPeerPingMs(route);
 			const uint64_t displayed = m_LastCompletedSimulationTick.value_or(frame - 1);
 			const uint64_t applied = m_PeerAppliedThrough.at(peer);
 			const uint32_t trail = static_cast<uint32_t>(displayed - std::min(displayed, applied));
-			// The returning sender needs its measured link, outside the private reader's temporary trail.
-			const uint32_t margin = std::max(static_cast<uint32_t>(std::ceil(m_Config.simTickMs)), m_Stats.peers[peer].jitterMs);
-			const uint32_t transit = static_cast<uint32_t>(std::ceil((rtt + margin) / m_Config.simTickMs));
-			// The private reader's trail belongs in its temporary neutral
-			// interval. It must not become every human input's permanent delay.
-			// Fixed rounds keep their agreed delay; return transit stays in the neutral interval.
-			const uint32_t delay = m_Config.adaptiveInputDelay ? std::min<uint32_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
-			    std::max<uint32_t>(InputDelayAt(peer, proposal.frame), transit)) : PeerInputDelay(peer);
+			// The same link estimator sizes every live and returning sender. Catch-up belongs only to the temporary neutral interval.
+			const uint32_t delay = returnLinkDelay(peer, proposal.frame);
+			const uint32_t transit = delay;
 			const uint64_t neutral = std::max<uint64_t>(delay + transit + trail + m_Config.slowPlayerBoundTicks,
 			    returnCatchUpTicks.contains(peer) ? delay + returnCatchUpTicks.at(peer) : 0);
 			if (neutral > NetLockstepCodec::c_MaxFutureFrameSkew) return false;

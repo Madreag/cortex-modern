@@ -4079,6 +4079,7 @@ namespace RTE {
 				struct Wire final : LoopbackTransport {
 					uint32_t rtt = 0;
 					uint32_t GetPeerPingMs(NetPeerId) const override { return rtt; }
+					bool IsPeerPingMeasured(NetPeerId) const override { return true; }
 					bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string* = nullptr, bool* = nullptr) override { return true; }
 				};
 				for (const uint32_t rtt: {30U, 200U}) for (const uint32_t receiptMs: {rtt + 30, rtt + 250}) {

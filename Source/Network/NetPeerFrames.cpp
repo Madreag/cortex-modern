@@ -528,22 +528,25 @@ namespace RTE {
 			auto& sample = m_PeerReceiptDelaySamples[peer];
 			sample.Observe(nowMs, 0);
 			const auto [wire, route] = PeerFrameRoute(peer);
-			const uint32_t transportMs = wire && wire->IsPeerPingMeasured(route) ? wire->GetPeerPingMs(route) : 0;
-			// Zero is an absent RTT sample, as it is in the lobby's estimator. Receipts remain a fallback until the link is measured.
-			const bool transportMeasured = transportMs > 0;
-			if (sample.P95Ms() != 0 || transportMeasured) {
-				transportsMeasured &= transportMeasured;
-				const uint32_t receiptFrames = static_cast<uint32_t>(std::ceil(sample.P95Ms() / m_Config.simTickMs));
+			const bool transportMeasured = wire && wire->IsPeerPingMeasured(route);
+			transportsMeasured &= transportMeasured;
+			if (transportMeasured) {
+				const uint32_t transportMs = wire->GetPeerPingMs(route);
 				auto& link = m_DelayEstimators[peer];
-				link.Observe(nowMs, transportMs);
+				link.Observe(nowMs, transportMs, true);
 				// Receipt time includes both machines' simulation and catch-up. Only transport samples size a measured link;
 				// a machine that cannot feed that runway is handled by the seat's hold decision.
-				const uint32_t frames = transportMeasured ? link.SenderRequiredFrames(m_Config.simTickMs, m_Config.slowPlayerBoundTicks) : receiptFrames;
+				const uint32_t frames = link.RequiredFrames(m_Config.simTickMs);
 				paths.emplace_back(frames, transportMs);
 			}
 		}
 		const size_t needed = std::popcount(m_FrameGroupMembers) - 1;
-		if (needed == 0 || paths.size() < needed) return;
+		m_Stats.peers[m_Config.localPeerId].pingMeasured = transportsMeasured;
+		if (needed == 0 || paths.size() < needed) {
+			// With no current transport reading, keep the agreed link-derived delay. Missing data cannot prove five settled seconds.
+			m_PeerDelayBelowSinceMs.erase(m_Config.localPeerId);
+			return;
+		}
 		std::sort(paths.begin(), paths.end());
 		// Every active receiver needs the sender's buffered input. Sizing to
 		// only a quorum slowly drains the runway of a healthy, longer path.
@@ -555,15 +558,14 @@ namespace RTE {
 		const uint16_t required = static_cast<uint16_t>(std::min<uint32_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
 		    std::max<uint32_t>(m_Config.matchConfig.inputDelayFrames, bufferedFrames)));
 		local.jitterMs = static_cast<uint32_t>(std::ceil(required * m_Config.simTickMs)) - std::min<uint32_t>(rtt, static_cast<uint32_t>(std::ceil(required * m_Config.simTickMs)));
-		const auto last = m_LastDelayResizeMs.find(m_Config.localPeerId);
-		if (last != m_LastDelayResizeMs.end() && nowMs < last->second + c_DelayResizeIntervalMs) return;
 		if (required > current) {
 			m_PeerDelayBelowSinceMs.erase(m_Config.localPeerId);
 			(void)ProposePeerInputDelay(m_Config.localPeerId, required, FutureTimingFrame());
 		} else if (required < current) {
 			const auto [since, inserted] = m_PeerDelayBelowSinceMs.try_emplace(m_Config.localPeerId, nowMs);
+			if (nowMs < since->second) since->second = nowMs;
 			const uint16_t gap = current - required;
-			const uint64_t interval = gap > 2 ? std::max<uint64_t>(c_DelayResizeIntervalMs, c_DelayShrinkIntervalMs / gap) : c_DelayShrinkIntervalMs;
+			const uint64_t interval = NetInputDelayEstimator::c_WindowMs;
 			const uint16_t delay = gap > 2 ? std::min<uint16_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames, required + std::max<uint16_t>(2, gap / 2))
 			                             : current - std::min(current, c_DelayShrinkStep);
 			if (nowMs >= since->second + interval && ProposePeerInputDelay(m_Config.localPeerId, delay, FutureTimingFrame())) since->second = nowMs;

@@ -141,7 +141,7 @@ namespace RTE {
 			for (const auto& [peerId, transportId]: BuildRemoteTransportMap(session)) {
 				const uint32_t rttMs = transport.GetPeerPingMs(transportId);
 				NetInputDelayEstimator estimate;
-				estimate.Observe(0, rttMs);
+				estimate.Observe(0, rttMs, transport.IsPeerPingMeasured(transportId));
 				const uint16_t neededDelay = static_cast<uint16_t>(std::min<uint32_t>(UsesPeerFraming(m_MatchConfig) ? NetLockstepCodec::c_MaxPeerInputDelayFrames : NetLockstepCodec::c_MaxInputDelayFrames,
 				    estimate.SenderRequiredFrames(tickMs, m_MatchConfig.slowPlayerBoundTicks, floorDelay)));
 				delays[peerId - 1] = std::max(delays[peerId - 1], neededDelay);

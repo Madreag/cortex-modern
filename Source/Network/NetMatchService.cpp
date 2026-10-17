@@ -8381,9 +8381,11 @@ static std::string ResyncSaveName() {
 			if (peer.assignedPeerId + 1 != peerId) continue;
 			if (opened && !m_WorldJoin.FindSession(peer.transportPeerId)) return false;
 			std::string reason;
+			const std::optional<uint32_t> rtt = ActiveWireLocked()->IsPeerPingMeasured(peer.transportPeerId)
+			    ? std::optional<uint32_t>{ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId)} : std::nullopt;
 			const bool fits = opened
-			    ? m_Coordinator->PreparePeerAdmission(peerId, ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId), NetLockstepNowMs(), &reason)
-			    : m_Coordinator->PreparePeerRejoin(peerId, ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId), NetLockstepNowMs(), &reason);
+			    ? m_Coordinator->PreparePeerAdmission(peerId, rtt, NetLockstepNowMs(), &reason)
+			    : m_Coordinator->PreparePeerRejoin(peerId, rtt, NetLockstepNowMs(), &reason);
 			if (fits) {
 				m_RejoinFitReasons.erase(peerId);
 				return true;

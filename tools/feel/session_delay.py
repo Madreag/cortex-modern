@@ -125,6 +125,8 @@ def reduce_peer(folder, peer, rtt, plan, lag_step=None):
     preview_cost = preview.get('ms_total', 0) / preview['actor_ticks'] if preview.get('actor_ticks') else None
     preview_report_pass = rtt is None or bool(
         preview.get('enabled') and preview.get('previews', 0) > 0 and preview.get('actor_ticks', 0) > 0 and
+        preview.get('last_request_completed') is True and preview.get('last_completed_tick', 0) > 0 and
+        preview.get('last_completed_tick') == preview.get('last_requested_tick') and
         preview.get('input_delay_ticks', 0) > 0 and preview.get('last_depth') == preview['input_delay_ticks'] and
         preview.get('configured_max_ticks', -1) >= 0 and
         preview.get('effective_max_ticks') == max(preview['input_delay_ticks'], preview['configured_max_ticks']))

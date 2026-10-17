@@ -439,36 +439,36 @@ namespace RTE {
 			NetInputDelayEstimator unmeasured;
 			for (uint64_t now = 0; now < 500; now += 100) unmeasured.Observe(now, 0);
 			unmeasured.Observe(500, 401);
-			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 38 || unmeasured.JitterMs() != 0) {
+			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 26 || unmeasured.JitterMs() != 0) {
 				*error = "unmeasured RTT samples inflate a returning link's delay";
 				return false;
 			}
 			for (uint64_t now = 600; now <= 6000; now += 100) unmeasured.Observe(now, 0);
-			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 38 || unmeasured.JitterMs() != 0) {
+			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 26 || unmeasured.JitterMs() != 0) {
 				*error = "an unmeasured returning link loses its measured delay";
 				return false;
 			}
 			if (unmeasured.P95Ms() != 0) { *error = "an expired receipt window still carries old samples"; return false; }
 			unmeasured.Observe(6100, 100);
-			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 10 || unmeasured.P95Ms() != 100 || unmeasured.JitterMs() != 0) {
+			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 7 || unmeasured.P95Ms() != 100 || unmeasured.JitterMs() != 0) {
 				*error = "a new RTT reading did not replace the old unmeasured link estimate";
 				return false;
 			}
 			NetInputDelayEstimator estimate;
 			estimate.Observe(0, 401);
-			if (estimate.RequiredFrames(1000.0 / 60.0) != 38 || estimate.RequiredFrames(1000.0 / 120.0) != 74) {
-				*error = "401ms RTT did not cover one-way transit and one retransmission at the actual tick length";
+			if (estimate.RequiredFrames(1000.0 / 60.0) != 26 || estimate.RequiredFrames(1000.0 / 120.0) != 50) {
+				*error = "401ms RTT did not cover one round trip plus one tick at the actual tick length";
 				return false;
 			}
 			for (uint64_t now = 100; now <= 5000; now += 100) estimate.Observe(now, now >= 4700 ? 501 : 401);
-			if (estimate.P95Ms() != 501 || estimate.JitterMs() != 100 || estimate.RequiredFrames(1000.0 / 60.0) != 53 ||
-			    estimate.Change(5000, 26, 1000.0 / 60.0) != std::optional<uint16_t>{53}) {
+			if (estimate.P95Ms() != 501 || estimate.JitterMs() != 100 || estimate.RequiredFrames(1000.0 / 60.0) != 32 ||
+			    estimate.Change(5000, 26, 1000.0 / 60.0) != std::optional<uint16_t>{32}) {
 				*error = "the five-second RTT tail did not raise the delay with its jitter margin";
 				return false;
 			}
 			for (uint64_t now = 5100; now <= 10100; now += 100) estimate.Observe(now, 100);
 			if (estimate.Change(10100, 38, 1000.0 / 60.0) || estimate.Change(15099, 38, 1000.0 / 60.0) ||
-			    estimate.Change(15100, 38, 1000.0 / 60.0) != std::optional<uint16_t>{10}) {
+			    estimate.Change(15100, 38, 1000.0 / 60.0) != std::optional<uint16_t>{7}) {
 				*error = "a lower delay did not wait for five settled seconds";
 				return false;
 			}

@@ -53,6 +53,8 @@ namespace RTE {
 	int LocalPrediction::s_LastDepth = 0;
 	int LocalPrediction::s_LastInputDelay = 0;
 	int LocalPrediction::s_LastEffectiveMaxTicks = 0;
+	uint64_t LocalPrediction::s_LastRequestedTick = 0;
+	bool LocalPrediction::s_LastRequestCompleted = false;
 	bool LocalPrediction::s_RenderScriptsWereFrozen = false;
 	int LocalPrediction::s_Override = -1;
 	int LocalPrediction::s_DepthOverride = 0;
@@ -237,16 +239,17 @@ namespace RTE {
 		s_PhaseMs[0] += std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - dropStart).count();
 		const int delay = s_DepthOverride > 0 ? s_DepthOverride : static_cast<int>(ScenarioRunner::GetLockstepLocalInputDelay());
 		const int configuredCap = std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks());
-		const int effectiveCap = ScenarioRunner::UsesBoundedLockstepWait() ? std::max(delay, configuredCap) : configuredCap;
+		const int effectiveCap = std::max(delay, configuredCap);
 		// The coordinator is cleared before the final match report is assembled. Keep the
 		// configuration here, including frames when the local seat is held to the AI.
 		s_LastInputDelay = delay;
 		s_LastEffectiveMaxTicks = effectiveCap;
+		s_LastRequestedTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		s_LastRequestCompleted = false;
 		const int depth = std::min(delay, effectiveCap);
 		if (depth <= 0) {
 			return;
 		}
-		s_LastDepth = depth;
 		Activity* activity = g_ActivityMan.GetActivity();
 		std::vector<Preview> targets;
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
@@ -538,6 +541,9 @@ namespace RTE {
 		s_TakenResidents = std::move(taken);
 		s_LastOutcome = outcome;
 		s_PreviewedTick = simCount;
+		// This is an executed measurement, distinct from the requested horizon when no actor or snapshot was available.
+		s_LastDepth = depth;
+		s_LastRequestCompleted = true;
 		++s_PreviewCount;
 		s_PreviewTicks += static_cast<uint64_t>(depth) * s_Previews.size();
 		s_PreviewMs += std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - start).count() - previewHarnessMs;
