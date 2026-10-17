@@ -29,6 +29,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <deque>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -1556,6 +1557,37 @@ namespace RTE {
 			uint64_t activation = 0, reported = replay.applied, reportAt = fixture.hub.now, work = 0;
 			double credit = 0;
 			bool proposed = false, agreed = false;
+			bool liveStarted = false;
+			std::string lastRefusal;
+			const auto startLive = [&] {
+				config.startFrame = activation; config.roundId = 77; config.joinsRunningRound = config.continuesMatch = true;
+				config.originalRoundConfigHash = fixture.peers[0]->GetRoundConfigHash();
+				config.initialSeatHolds = replayCoordinator.HeldTransactions();
+				config.initialSeatBridgeSinceMs = replayCoordinator.SeatBridgeTimes();
+				config.initialSeatReclaims = replayCoordinator.ReclaimTransactions();
+				config.initialPeerLeaves = replayCoordinator.GetPeerLeaveFrames();
+				NetLockstepCoordinator::AdoptOpenReturns(config, fixture.peers[1]->ReclaimTransactions(), activation);
+				const auto proof = fixture.wires[1]->receivedReturnCertificates.find(activation);
+				if (proof == fixture.wires[1]->receivedReturnCertificates.end()) return true;
+				if (!replayCoordinator.AdoptPeerReturn(config, replayCoordinator, proof->second, activation, &lastRefusal)) return true;
+				config.initialDelayChanges = replayCoordinator.GetDelayChanges();
+				for (const auto& [peer, changes]: fixture.peers[1]->GetDelayChanges())
+					for (const auto& [tick, delay]: changes) config.initialDelayChanges[peer].try_emplace(tick, delay);
+				// The live start carries the delays the replay actually crossed, as InPlaceLiveRoundLocked does.
+				for (const auto& [peer, changes]: config.initialDelayChanges) {
+					const auto at = changes.upper_bound(activation);
+					if (at != changes.begin()) config.matchConfig.peerInputDelayFrames[peer - 1] = std::prev(at)->second;
+				}
+				config.inputDelayFrames = config.matchConfig.peerInputDelayFrames[1];
+				for (uint8_t peer = 1; peer <= seats; ++peer) config.peerInputDelayFrames[peer] = config.matchConfig.peerInputDelayFrames[peer - 1];
+				config.peerIncarnations[2] = 2; config.seatStateThroughFrame = replay.applied;
+				fixture.peers[1] = std::make_unique<NetLockstepCoordinator>();
+				if (!fixture.peers[1]->Start(*fixture.wires[1], config, &error)) return false;
+				fixture.peers[1]->DeferStopsToTickBoundary();
+				liveStarted = true;
+				return true;
+			};
+
 			for (const uint64_t until = fixture.hub.now + 12000; fixture.hub.now < until;) {
 				if (!fixture.Step(error)) return false;
 				credit = std::min(6.0, credit + c_TestCatchUpRate / c_TestTickMs);
@@ -1593,35 +1625,14 @@ namespace RTE {
 						(void)fixture.peers[0]->SendReturnerTheRoundFrom(2, activation);
 					}
 				}
-				if (agreed && replay.applied + 1 == activation && fixture.wires[1]->receivedReturnCertificates.contains(activation)) break;
+				// As in the service, the live connection handshakes ahead of the return while the private replay finishes E-1.
+				if (agreed && !liveStarted && !startLive()) return false;
+				if (liveStarted && replay.applied + 1 == activation && fixture.peers[1]->IsRunning()) break;
 			}
 			if (!agreed || replay.applied + 1 != activation) return fail("the private replay did not reach an activation every survivor certified");
-			config.startFrame = activation; config.roundId = 77; config.joinsRunningRound = config.continuesMatch = true;
-			config.originalRoundConfigHash = fixture.peers[0]->GetRoundConfigHash();
-			config.initialSeatHolds = replayCoordinator.HeldTransactions();
-			config.initialSeatBridgeSinceMs = replayCoordinator.SeatBridgeTimes();
-			config.initialSeatReclaims = replayCoordinator.ReclaimTransactions();
-			config.initialPeerLeaves = replayCoordinator.GetPeerLeaveFrames();
-			NetLockstepCoordinator::AdoptOpenReturns(config, fixture.peers[1]->ReclaimTransactions(), activation);
-			const auto proof = fixture.wires[1]->receivedReturnCertificates.find(activation);
-			if (proof == fixture.wires[1]->receivedReturnCertificates.end()) return fail("the returning seat did not receive the real return certificate");
-			std::string refusal;
-			if (!replayCoordinator.AdoptPeerReturn(config, replayCoordinator, proof->second, activation, &refusal))
-				return fail("the private replay could not adopt the survivors' real return certificate: " + refusal);
-			config.initialDelayChanges = replayCoordinator.GetDelayChanges();
-			for (const auto& [peer, changes]: fixture.peers[1]->GetDelayChanges())
-				for (const auto& [tick, delay]: changes) config.initialDelayChanges[peer].try_emplace(tick, delay);
-			// The live start carries the delays the replay actually crossed, as InPlaceLiveRoundLocked does.
-			for (const auto& [peer, changes]: config.initialDelayChanges) {
-				const auto at = changes.upper_bound(activation);
-				if (at != changes.begin()) config.matchConfig.peerInputDelayFrames[peer - 1] = std::prev(at)->second;
-			}
-			config.inputDelayFrames = config.matchConfig.peerInputDelayFrames[1];
-			for (uint8_t peer = 1; peer <= seats; ++peer) config.peerInputDelayFrames[peer] = config.matchConfig.peerInputDelayFrames[peer - 1];
-			config.peerIncarnations[2] = 2; config.seatStateThroughFrame = activation - 1;
-			fixture.peers[1] = std::make_unique<NetLockstepCoordinator>();
-			if (!fixture.peers[1]->Start(*fixture.wires[1], config, &error)) return false;
-			fixture.peers[1]->DeferStopsToTickBoundary();
+			if (!liveStarted) return fail("the returning seat could not adopt its received return certificate: " + (lastRefusal.empty() ? "none received" : lastRefusal));
+			if (!fixture.peers[1]->IsRunning()) return fail("the returning seat did not finish its live handshake before activation: state=" +
+			    std::to_string(static_cast<int>(fixture.peers[1]->GetState())) + " starts_received=" + std::to_string(fixture.peers[1]->GetStats().startPacketsReceived));
 			fixture.peers[1]->AdoptReplayedSeatTransitions(replayCoordinator, activation - 1);
 			fixture.worlds[1] = std::move(replay); fixture.queued[1] = activation - 1; fixture.credits[1] = 0; fixture.waitAt[1] = 0;
 			fixture.hub.faultEnd = fixture.hub.now;
@@ -2175,6 +2186,22 @@ namespace RTE {
 		const std::vector<ScheduleRow>& FixedScheduleRows() {
 			// Each seat's routine check-ins went out 1.7 s apart before the round, as the fixed rows above have them.
 			static const std::vector<ScheduleRow> rows = {
+				// Current-client groups: the minimized counterexample, plus its original seat/referee shape when shrinking changes it.
+				{"four_direct_seats_120ms_jitter_40ms_host_late_100ms_more_928ms_seat3_silent_200ms_back_at_105pc_loss_10pc_host_engine_failed_seed_42", "seed=42 seats=4 internet=0 exchange=100 end=16840 rtt=90,87,106,107,97,120 jitter=5,0,20,0,10,40 recover=300,300,105,120 phase=3851,2957,1974,3572 spell=1:late:5377:928:100 spell=3:silent:4640:200 burst=1:7122:1100:10"},
+				{"three_internet_seats_56ms_jitter_20ms_host_silent_200ms_back_at_100pc_host_hung_900ms_back_at_100pc_loss_90pc_seat3_loss_90pc_host_histories_differ_seed_127", "seed=127 seats=3 internet=1 exchange=100 end=17412 rtt=44,56,46 jitter=5,0,20 recover=100,300,100 phase=1745,1966,3496 spell=1:silent:5978:200 spell=1:hung:8062:900 burst=3:4947:1923:90 burst=1:7800:323:90"},
+				{"two_direct_seats_42ms_host_stopped_200ms_back_at_100pc_seat2_slow_74pc_737ms_held_seat_never_returns_seed_163", "seed=163 seats=2 internet=0 exchange=100 end=16149 rtt=42 jitter=0 recover=100,300 phase=0,0 spell=1:stopped:6000:200 spell=2:slow:7317:737:74"},
+				{"two_internet_seats_42ms_jitter_10ms_directory_40ms_host_stopped_464ms_back_at_100pc_seat2_slow_64pc_5902ms_host_silent_936ms_back_at_100pc_held_seat_never_returns_seed_163", "seed=163 seats=2 internet=1 exchange=40 end=22281 rtt=42 jitter=10 recover=100,300 phase=4776,3197 spell=1:stopped:6905:464 spell=2:slow:7317:5902:64 spell=1:silent:4302:936"},
+				{"two_direct_seats_170ms_seat2_slow_88pc_200ms_back_at_120pc_loss_60pc_seat2_held_seat_never_returns_seed_79", "seed=79 seats=2 internet=0 exchange=100 end=18279 rtt=170 jitter=0 recover=300,120 phase=0,0 spell=2:slow:4622:200:88 burst=2:9373:2906:60"},
+				{"four_internet_seats_226ms_jitter_5ms_directory_160ms_seat4_slow_68pc_4576ms_back_at_120pc_loss_60pc_seat4_held_seat_never_returns_seed_79", "seed=79 seats=4 internet=1 exchange=160 end=24518 rtt=184,226,170,164,192,202 jitter=0,0,0,5,0,0 recover=105,300,300,120 phase=1676,4320,3581,1557 spell=4:slow:4622:4576:68 burst=4:9373:2906:60"},
+				{"three_internet_seats_56ms_host_slow_90pc_895ms_back_at_100pc_seat2_silent_186ms_held_seat_returns_late_seed_116", "seed=116 seats=3 internet=1 exchange=100 end=14279 rtt=56,44,54 jitter=0,0,0 recover=100,300,300 phase=0,0,0 spell=1:slow:4109:895:90 spell=2:silent:6000:186"},
+				{"three_direct_seats_120ms_host_hung_200ms_back_at_105pc_held_seat_returns_late_seed_100", "seed=100 seats=3 internet=0 exchange=100 end=18200 rtt=120,120,120 jitter=0,0,0 recover=105,300,300 phase=0,0,0 spell=1:hung:6000:200"},
+				{"four_direct_seats_120ms_jitter_40ms_host_hung_750ms_back_at_105pc_held_seat_returns_late_seed_100", "seed=100 seats=4 internet=0 exchange=300 end=30636 rtt=90,86,113,120,107,119 jitter=20,0,0,0,0,40 recover=105,120,105,120 phase=2832,2565,4315,4286 spell=1:hung:6886:750"},
+				{"three_internet_seats_57ms_host_silent_198ms_seat3_silent_3000ms_held_seat_returns_late_seed_109", "seed=109 seats=3 internet=1 exchange=100 end=19842 rtt=57,57,57 jitter=0,0,0 recover=300,300,300 phase=0,0,0 spell=1:silent:6000:198 spell=3:silent:7342:3000"},
+				{"four_internet_seats_60ms_jitter_25ms_directory_40ms_host_silent_dark_198ms_seat4_silent_dark_3000ms_back_at_120pc_held_seat_returns_late_seed_109", "seed=109 seats=4 internet=1 exchange=40 end=33342 rtt=40,52,41,50,57,60 jitter=0,0,10,25,20,0 recover=300,300,300,120 phase=1062,764,2450,1484 spell=1:silent:6871:198:dark spell=4:silent:7342:3000:dark"},
+				{"three_direct_seats_200ms_jitter_40ms_held_without_its_own_trouble_seed_187", "seed=187 seats=3 internet=0 exchange=100 end=12000 rtt=200,200,200 jitter=40,10,0 recover=300,300,300 phase=0,0,0"},
+				{"four_internet_seats_270ms_jitter_40ms_directory_160ms_seat3_late_400ms_more_204ms_back_at_100pc_host_stopped_824ms_loss_90pc_seat4_loss_10pc_seat4_held_without_its_own_trouble_seed_187", "seed=187 seats=4 internet=1 exchange=160 end=14878 rtt=270,200,250,255,260,215 jitter=40,0,10,0,0,0 recover=300,100,100,100 phase=1441,2938,4715,2462 spell=3:late:5233:204:400 spell=1:stopped:5500:824 burst=4:4900:717:90 burst=4:8247:631:10"},
+				{"two_internet_seats_54ms_seat2_late_50ms_more_1785ms_returned_seat_held_again_seed_174", "seed=174 seats=2 internet=1 exchange=100 end=15810 rtt=54 jitter=0 recover=300,300 phase=0,0 spell=2:late:6000:1785:50"},
+				{"four_internet_seats_300ms_jitter_40ms_two_return_frames_seed_131", "seed=131 seats=4 internet=1 exchange=100 end=12000 rtt=220,260,282,300,245,290 jitter=40,20,0,40,0,0 recover=300,300,300,300 phase=0,0,0,0"},
 				// The complete Linux 5,000-schedule run, then the current-history failure and its directory twin.
 				{"two_direct_seats_59ms_host_stopped_615ms_survivor_waits_seed_1811", "seed=1811 seats=2 internet=0 exchange=100 end=13169 rtt=59 jitter=0 recover=300,300 phase=0,0 spell=1:stopped:4247:615"},
 				{"two_internet_seats_180ms_directory_240ms_seat2_silent_174ms_survivor_waits_seed_518", "seed=518 seats=2 internet=1 exchange=240 end=13403 rtt=180 jitter=0 recover=300,300 phase=0,0 spell=2:silent:5142:174"},
@@ -2310,7 +2337,8 @@ namespace RTE {
 		struct ScheduleDriver {
 			size_t count = 0, threads = 0, budget = 0, shapes = 0, failedCount = 0, fixedCount = 0;
 			uint64_t firstSeed = 0, elapsedMs = 0, budgetMs = 0;
-			bool runRandom = true;
+			bool runRandom = true, reusedFixedCatalogue = false;
+			std::map<std::string, std::string> priorFailures;
 			std::chrono::steady_clock::time_point began;
 			std::vector<Schedule> schedules;
 			std::vector<std::string> names, lines;
@@ -2319,6 +2347,30 @@ namespace RTE {
 			std::vector<uint8_t> ran;
 			std::atomic<size_t> ranCount{0};
 			std::vector<std::pair<std::string, bool>> fixedResults;
+			// This report is only the minimizer's index of failures just observed by the suite's
+			// fixed collection with the same executable. No fixture peer or property reads it.
+			bool ReadFixedFailureReport(const char* path) {
+				std::ifstream input(path);
+				std::string line;
+				if (!std::getline(input, line) || line != "hold-fixed-groups-v1") return false;
+				std::map<std::string, std::string> suffixes, reported;
+				for (const auto& row: FixedScheduleRows()) {
+					Schedule schedule;
+					if (!ParseSchedule(row.schedule, schedule)) return false;
+					suffixes.emplace(row.name, ":" + std::to_string(schedule.seats) + (schedule.internet ? ":internet" : ":direct"));
+				}
+				while (std::getline(input, line)) {
+					const auto tab = line.find('\t');
+					if (tab == std::string::npos || line.find('\t', tab + 1) != std::string::npos) return false;
+					const std::string group = line.substr(0, tab), name = line.substr(tab + 1);
+					const auto row = suffixes.find(name);
+					if (row == suffixes.end() || std::count(group.begin(), group.end(), ':') != 3 || !group.ends_with(row->second)) return false;
+					reported.try_emplace(group, name);
+				}
+				if (input.bad()) return false;
+				priorFailures = std::move(reported);
+				return true;
+			}
 			void Prepare(const char* selected) {
 				began = std::chrono::steady_clock::now();
 				count = EnvironmentNumber("CC_TEST_HOLD_SCHEDULES", 200);
@@ -2329,15 +2381,20 @@ namespace RTE {
 				shapes = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_SHAPES", 8);
 				// Only minimization spends the time budget; every requested schedule must run.
 				budgetMs = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_BUDGET_S", 200) * 1000;
+				const bool driverSelected = selected && std::string_view(selected) == "random_hold_schedules";
+				if (driverSelected) if (const char* report = std::getenv("CC_TEST_HOLD_FIXED_FAILURE_REPORT"))
+					reusedFixedCatalogue = ReadFixedFailureReport(report);
+				// A standalone driver without a valid current report runs every saved schedule itself.
 				for (const auto& row: FixedScheduleRows()) {
-					if (selected && std::string_view(selected) != row.name) continue;
+					if (reusedFixedCatalogue) break;
+					if (selected && !driverSelected && std::string_view(selected) != row.name) continue;
 					Schedule schedule;
 					if (!ParseSchedule(row.schedule, schedule)) { lines.push_back(std::string("FAIL ") + row.name + ": its schedule text does not parse"); fixedResults.emplace_back(row.name, false); continue; }
 					if (!schedule.endMs) schedule.endMs = ScheduleEndMs(schedule);
 					schedules.push_back(schedule); names.push_back(row.name);
 				}
 				fixedCount = schedules.size();
-				runRandom = !selected || std::string_view(selected) == "random_hold_schedules";
+				runRandom = count > 0 && (!selected || driverSelected);
 				if (runRandom) for (size_t index = 0; index < count; ++index) { schedules.push_back(GenerateSchedule(firstSeed + index)); names.emplace_back(); }
 				results.resize(schedules.size()); startupWaits.resize(schedules.size()); ran.assign(schedules.size(), false);
 			}
@@ -2356,20 +2413,23 @@ namespace RTE {
 				return " startup_waits_past_bound=" + std::to_string(over) + " startup_longest_ms=" + std::to_string(most) + (most ? " startup_longest_seed=" + std::to_string(seed) : "");
 			}
 			void Finish() {
+				const auto failureGroup = [&](size_t index) {
+					return results[index]->property + ":" + results[index]->kind + ":" + std::to_string(schedules[index].seats) +
+					       (schedules[index].internet ? ":internet" : ":direct");
+				};
 				for (size_t index = 0; index < fixedCount; ++index) {
 					const auto& result = results[index];
 					lines.push_back(std::string(result ? "FAIL " : "PASS ") + names[index] + (result ? ": seed=" + std::to_string(schedules[index].seed) + " property=" + result->property +
 					                " kind=" + result->kind + ": " + result->detail : ""));
 					fixedResults.emplace_back(names[index], !result);
+					if (result) lines.push_back("saved_schedule_group name=" + names[index] + " group=" + failureGroup(index));
 				}
+				if (!reusedFixedCatalogue) lines.push_back("saved_schedule_catalogue expected=" + std::to_string(FixedScheduleRows().size()) +
+				                                         " ran=" + std::to_string(std::count(ran.begin(), ran.begin() + fixedCount, uint8_t{1})));
 				if (!runRandom) { elapsedMs = Elapsed(began); return; }
 				// Group the failures by what failed, the seats and whether a referee decides ties, and minimize the smallest round of each
 				// group; the minimized shapes are kept once each.
-				const auto failureGroup = [&](size_t index) {
-					return results[index]->property + ":" + results[index]->kind + ":" + std::to_string(schedules[index].seats) +
-					       (schedules[index].internet ? ":internet" : ":direct");
-				};
-				std::map<std::string, std::string> reproduced;
+				std::map<std::string, std::string> reproduced = priorFailures;
 				for (size_t index = 0; index < fixedCount; ++index)
 					if (results[index]) reproduced.try_emplace(failureGroup(index), names[index]);
 				std::map<std::string, std::vector<size_t>> groups;
@@ -3611,6 +3671,7 @@ namespace RTE {
 		}
 		int passed = 0, failed = 0;
 		const char* selected = std::getenv("CC_TEST_SESSION_PLANE_CASE");
+		if (selected && std::string_view(selected) == "fixed_session_fixtures") selected = nullptr;
 		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 40 + FixedScheduleRows().size()) << std::endl;
 		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest
 		// rows started first; the random driver's rounds follow them in the same pool.
@@ -3641,7 +3702,8 @@ namespace RTE {
 				}
 				DiagnosticLine() << "[session-plane-kept-hold] seed=0 kept_for_authority=" << keptForAuthority << " longest_kept_ms=" << longestKept
 				                 << " dropped=" << fixture.peers[2]->GetStats().decisionsDropped << std::endl;
-				if (!keptForAuthority || longestKept < 5000 || !fixture.peers[2]->GetStats().decisionsDropped) { error = "the real hold did not remain pending for the directory through its five-second expiry"; return false; }
+				if (!keptForAuthority || longestKept < 5000) { error = "the real hold did not remain pending for its own directory decision past five seconds"; return false; }
+				if (fixture.peers[2]->GetStats().decisionsDropped) { error = "the agreed hold was discarded while its directory authority was still pending"; return false; }
 				for (uint8_t seat: {1, 2}) if (fixture.maxWait[seat - 1] > 50) { error = "survivor " + std::to_string(seat) + " waited " + std::to_string(fixture.maxWait[seat - 1]) + "ms"; return false; }
 				return true;
 			}});
@@ -3812,10 +3874,12 @@ namespace RTE {
 		for (const auto& [name, ok]: driver.fixedResults) { if (ok) ++passed; else ++failed; }
 		if (driver.runRandom) {
 			DiagnosticLine() << "[net-session-plane-selftest] random_hold_schedules schedules=" << driver.count << " ran=" << driver.ranCount.load() << " seeds=" << driver.firstSeed << ".." << driver.firstSeed + driver.count - 1
-			                 << " failed=" << driver.failedCount << " threads=" << driver.threads << " elapsed_s=" << driver.elapsedMs / 1000 << driver.StartupWaits();
+			                 << " failed=" << driver.failedCount << " threads=" << driver.threads << " elapsed_s=" << driver.elapsedMs / 1000
+			                 << " saved_catalogue_reused=" << driver.reusedFixedCatalogue << driver.StartupWaits();
 			const bool complete = driver.ranCount.load() == driver.count;
 			DiagnosticLine() << "[net-session-plane-selftest] " << (driver.failedCount || !complete ? "FAIL" : "PASS") << " random_hold_schedules"
-			                 << (!complete ? ": did not run every requested schedule" : driver.failedCount ? ": " + std::to_string(driver.failedCount) + " of " + std::to_string(driver.count) + " schedules broke a property" : "");
+			                 << (!complete || driver.failedCount ? ": seeds=" + std::to_string(driver.firstSeed) + ".." + std::to_string(driver.firstSeed + driver.count - 1) + " " : "")
+			                 << (!complete ? "did not run every requested schedule" : driver.failedCount ? std::to_string(driver.failedCount) + " of " + std::to_string(driver.count) + " schedules broke a property" : "");
 			if (driver.failedCount || !complete) ++failed; else ++passed;
 		}
 		for (const auto& [name, scene]: std::vector<std::pair<const char*, const char*>>{

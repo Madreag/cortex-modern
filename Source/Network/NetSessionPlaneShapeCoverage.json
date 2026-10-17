@@ -118,7 +118,7 @@
     "rows": [
       "image_return_*_keeps_equal_histories_and_bound"
     ],
-    "scope": "actual coordinators, a deterministic image from a common committed capture and the returning seat's own received activation certificate; no game archive"
+    "scope": "actual coordinators, a deterministic image from a common committed capture, the returning seat's own received activation certificate, and its live handshake while the private replay finishes; no game archive"
   },
   "return:20": {
     "rows": [
@@ -469,7 +469,7 @@
     "rows": [
       "a_kept_hold_waits_for_its_own_directory_without_changing_history"
     ],
-    "scope": "real coordinator certificate and delayed own directory, including five-second expiry; reachability checked by the row"
+    "scope": "real tied-half certificate kept beyond five seconds for its own directory authority; no local-clock discard, equal histories, and the survivor wait bound"
   },
   "hold:29": {
     "rows": [
@@ -642,7 +642,7 @@
       "two_internet_late_joiner_with_a_referee_past_the_tie_timeout",
       "a_kept_hold_waits_for_its_own_directory_without_changing_history"
     ],
-    "scope": "real tied-half certificate kept through the five-second authority expiry while its requester waits for its own directory and tail"
+    "scope": "real tied-half certificate waits beyond the old five-second local-clock limit for its own directory response; no discarded agreed hold, equal histories, and the survivor wait bound"
   },
   "referee:10": {
     "rows": [

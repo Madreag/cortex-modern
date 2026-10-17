@@ -53,8 +53,7 @@ namespace RTE {
 	bool NetLockstepCoordinator::ValidatePeerCaptureBridge(const NetHostMigrationMessage& proposal) const {
 		if (proposal.preparedFrame != 4 || proposal.frame > UINT64_MAX - 2 || proposal.boundary >= proposal.frame ||
 		    proposal.bytes.size() <= NetHash32{}.size() || proposal.members.size() != 1) return false;
-		uint32_t playing = m_FrameGroupMembers;
-		if (const auto group = m_FrameGroupChanges.upper_bound(proposal.frame); group != m_FrameGroupChanges.begin()) playing = std::prev(group)->second;
+		uint32_t playing = PeerFrameMembersAt(proposal.frame);
 		PeerVotingOwners(playing, proposal.frame);
 		if (playing == 0 || (playing & ~proposal.connectedMask) != 0) return false;
 		NetHostMigrationMessage request;
@@ -176,6 +175,10 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::ValidatePeerBridge(const NetHostMigrationMessage& proposal) const {
 		if (proposal.preparedFrame == 3) return ValidatePeerAdmin(proposal);
+		if (proposal.preparedFrame == 1) {
+			if (ReturnCrossesDeparture(proposal, m_PeerOwnershipChanges)) return false;
+			for (uint8_t peer: proposal.members) if ((PeerRetainedSeatsAt(proposal.frame) & SeatBit(peer)) == 0) return false;
+		}
 		// A hold may collect the missing seat's co-sign; its certificate still needs authority from the actual signers.
 		const bool cooperativeHold = proposal.preparedFrame == 0 && proposal.members.size() == 1 &&
 		    PeerGroupHasAuthority(proposal.connectedMask | SeatBit(proposal.members.front()), proposal.frame);
@@ -420,8 +423,7 @@ namespace RTE {
 			for (uint8_t peer: proposal.members) returning |= SeatBit(peer);
 			bool settled = false;
 			for (unsigned pass = 0; pass < NetMatchConfigUtil::c_MaxPeerCount + 1; ++pass) {
-				uint32_t members = m_FrameGroupMembers;
-				if (const auto group = m_FrameGroupChanges.upper_bound(proposal.frame); group != m_FrameGroupChanges.begin()) members = std::prev(group)->second;
+				uint32_t members = PeerFrameMembersAt(proposal.frame);
 				members |= returning;
 				for (const auto& [peer, bridge]: m_PeerBridges)
 					if (bridge.returnFrame && *bridge.returnFrame <= proposal.frame && !m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) members |= SeatBit(peer);
@@ -682,8 +684,7 @@ namespace RTE {
 		if (agreed.preparedFrame == 1) for (uint8_t peer: agreed.members) required &= ~SeatBit(peer);
 		// A seat the round holds at the decision's frame plays none of it: whether it voted decides nothing, so a voter that knows of the
 		// hold certifies without it, and a seat held after voting cannot leave a decision certified on one peer and passed on another.
-		if (agreed.preparedFrame != 3) for (const auto& [peer, bridge]: m_PeerBridges)
-			if (bridge.committedHold && agreed.frame >= bridge.fromFrame && (!bridge.returnFrame || agreed.frame < *bridge.returnFrame)) required &= ~SeatBit(peer);
+		if (agreed.preparedFrame != 3) required &= ~PeerHeldSeatsAt(agreed.frame);
 		return required;
 	}
 
@@ -731,6 +732,10 @@ namespace RTE {
 		};
 		NetHostMigrationMessage agreed; uint32_t voters = 0;
 		if (!DecodePeerBridgeCertificate(certificate, agreed, voters)) { refused("certificate"); return; }
+		if (agreed.preparedFrame == 1) {
+			if (ReturnCrossesDeparture(agreed, m_PeerOwnershipChanges)) { refused("owner changed"); return; }
+			for (uint8_t peer: agreed.members) if ((PeerRetainedSeatsAt(agreed.frame) & SeatBit(peer)) == 0) { refused("removed"); return; }
+		}
 		// A tie the referee decides is asked before the decision is set aside: its answer may already be there.
 		if (agreed.preparedFrame != 3 && !PeerGroupHasAuthority(voters, certificate.frame)) CheckPeerFrameTie(certificate.frame, voters, nowMs);
 		const PeerDecisionKey decision{certificate.frame, DecisionKind(certificate)};
@@ -795,11 +800,12 @@ namespace RTE {
 			return;
 		}
 		m_FrameGroupChanges[agreed.frame] = agreed.connectedMask;
+		for (uint8_t peer: agreed.members) m_PeerFrameHolds[peer][agreed.frame] = agreed.preparedFrame == 0;
 		if (agreed.preparedFrame == 0) {
-			m_FrameGroupMembers = agreed.connectedMask;
+			m_FrameGroupMembers = PeerFrameMembersAt(agreed.frame);
 			// Retain the surviving display clock even when a certificate arrives after preparation.
-			if ((agreed.connectedMask & SeatBit(m_PeerPaceReference)) == 0)
-				m_PeerPaceReference = static_cast<uint8_t>(std::countr_zero(agreed.connectedMask) + 1);
+			if ((m_FrameGroupMembers & SeatBit(m_PeerPaceReference)) == 0)
+				m_PeerPaceReference = static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
 			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-pace] local=" << static_cast<int>(m_Config.localPeerId)
 				<< " frame=" << agreed.frame << " members=" << agreed.connectedMask << " reference=" << static_cast<int>(m_PeerPaceReference) << std::endl;
 		}
@@ -824,6 +830,10 @@ namespace RTE {
 				const uint64_t revision = agreed.frame * 8 + peer;
 				const auto [delay, neutral, incarnation] = returnDelays.at(peer);
 				m_ReclaimTransactions[peer] = {peer, m_Config.migrationGeneration, revision, incarnation, agreed.frame, delay, neutral};
+				// Every survivor knows the certified terms before the returning process sends its new start.
+				m_PeerAdmissions[peer] = {agreed.frame, delay};
+				m_Config.initialPeerStartTerms[peer] = {agreed.frame, delay};
+				m_PeersPlayedThisRound.erase(peer); m_LastStartAnswerMs.erase(peer);
 				if (delay != InputDelayAt(peer, agreed.frame)) m_DelayChanges[peer][agreed.frame] = delay;
 				m_PeerEffectiveStart[peer] = agreed.frame + delay;
 				m_PeerAcceptedThrough[peer] = neutral + 1;
@@ -938,7 +948,7 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::PreparePeerBridgeInputs(uint64_t frame, uint64_t nowMs) {
-		if (const auto change = m_FrameGroupChanges.upper_bound(frame); change != m_FrameGroupChanges.begin()) m_FrameGroupMembers = std::prev(change)->second;
+		m_FrameGroupMembers = PeerFrameMembersAt(frame);
 		if (m_FrameGroupMembers != 0 && (m_FrameGroupMembers & SeatBit(m_PeerPaceReference)) == 0)
 			m_PeerPaceReference = static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
 		uint32_t owners = 0;
@@ -947,6 +957,7 @@ namespace RTE {
 		for (const auto& [peer, bridge]: m_PeerBridges) {
 			if (bridge.returnFrame && frame >= *bridge.returnFrame) {
 				m_PeerLeaveFrames.erase(peer); m_AiHeldSeats.erase(peer); m_SeatBridgeSinceMs.erase(peer);
+				m_SlowMachineHolds.erase(peer);
 			}
 			if (frame < bridge.fromFrame || (bridge.returnFrame && frame >= *bridge.returnFrame)) continue;
 			if (peer == m_Config.localPeerId) continue;

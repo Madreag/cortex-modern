@@ -42,7 +42,7 @@ class VideoOracleEvidence(unittest.TestCase):
                     self.assertEqual(stills[0]['changed_pixels'] >= video.MOTION_PIXELS, pixels > 0)
 
     def test_a_calm_view_with_small_live_motion_is_not_a_still(self):
-        # A parked camera on a quiet view: 944 pixels of a 960x540 picture change (the closing-window still of f7502-erolpc-mac-pin1).
+        # A parked camera on a quiet view: 944 pixels of a 960x540 picture change (the closing-window still of f7502-testpc-mac-pin1).
         ffmpeg = video.find_ffmpeg()
         self.assertIsNotNone(ffmpeg, video.missing_ffmpeg())
         real_run = subprocess.run

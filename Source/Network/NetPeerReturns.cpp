@@ -64,8 +64,7 @@ namespace RTE {
 		if (!m_MigrationHistory.contains(frame)) return;
 		auto witness = PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
 		witness.preparedFrame = UINT64_MAX; witness.frame = witness.appliedFrame = frame;
-		const auto group = m_FrameGroupChanges.upper_bound(frame);
-		witness.voterMask = group == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(group)->second;
+		witness.voterMask = PeerFrameMembersAt(frame);
 		if ((witness.voterMask & SeatBit(m_Config.localPeerId)) == 0) {
 			// A private reader cannot witness this group's frame. Advertise its
 			// newly applied prefix on the next pump so return eligibility can
@@ -117,8 +116,7 @@ namespace RTE {
 			// Bound application work even when several pipelined requests
 			// overlap. A large record resumes at its last queued chunk.
 			if (queued.size() >= 128 || queuedBytes >= 4 * 1024 * 1024) break;
-			const auto membership = m_FrameGroupChanges.upper_bound(kept->first);
-			const uint32_t members = membership == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(membership)->second;
+			const uint32_t members = PeerFrameMembersAt(kept->first);
 			// The frame goes as soon as this donor displays it, with the witnesses it holds: the reader confirms the frame's group with
 			// the witnesses every member sends it too, so its trail is the transit alone.
 			const auto witnesses = m_PeerFrameWitnesses.find(kept->first);
@@ -309,7 +307,12 @@ namespace RTE {
 				own.members = vote.members;
 				// The matching majority's committed history already excludes this seat.
 				own.committedHold = true;
+				DiagnosticLine() << "[net-peer-hold-trigger] local=" << static_cast<int>(m_Config.localPeerId)
+				    << " peer=" << static_cast<int>(m_Config.localPeerId) << " frame=" << own.fromFrame << " ai_frame=" << own.aiFrame
+				    << " now_ms=" << nowMs << " cause=certified_committed_tail donor=" << static_cast<int>(donor)
+				    << " tail_frame=" << frame << " members=" << vote.members << " voters=" << agreeing << std::endl;
 				m_PeerBridges.emplace(m_Config.localPeerId, std::move(own));
+				m_PeerFrameHolds[m_Config.localPeerId][m_Stats.nextFrame] = true;
 				++m_Stats.peers[m_Config.localPeerId].holds;
 				m_SeatBridgeSinceMs[m_Config.localPeerId] = nowMs;
 			}
@@ -423,8 +426,7 @@ namespace RTE {
 		if (HasAgreedSeatReclaim(peer, frame)) return true;
 		auto proposal = PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
 		proposal.preparedFrame = 1; proposal.frame = frame; proposal.boundary = m_LastCompletedSimulationTick.value_or(m_Stats.nextFrame - 1);
-		proposal.members = {peer}; proposal.connectedMask = m_FrameGroupMembers | SeatBit(peer);
-		if (const auto group = m_FrameGroupChanges.upper_bound(frame); group != m_FrameGroupChanges.begin()) proposal.connectedMask = std::prev(group)->second | SeatBit(peer);
+		proposal.members = {peer}; proposal.connectedMask = PeerFrameMembersAt(frame) | SeatBit(peer);
 		for (const auto& [returned, bridge]: m_PeerBridges)
 			if (bridge.returnFrame && *bridge.returnFrame <= frame && !m_RemovedPeers.contains(returned) && !IsSeatReleased(returned)) proposal.connectedMask |= SeatBit(returned);
 		for (uint8_t voter = 1; voter <= m_Config.peerCount; ++voter) {
@@ -474,14 +476,17 @@ namespace RTE {
 		const auto refuse = [&](const char* reason) { if (why) *why = reason; return false; };
 		if (proof.type != NetHostMigrationMessageType::PeerBridgeCommit || proof.frame != activation) return refuse("not this return's certificate");
 		if (!DecodePeerBridgeCertificate(proof, agreed, voters)) return refuse("certificate unreadable");
-		if (!PeerGroupHasAuthority(voters)) return refuse("voters lack authority");
+		if (!PeerGroupHasAuthority(voters, activation)) return refuse("voters lack authority");
 		if (agreed.sessionId != config.sessionId) return refuse("other session");
 		if (agreed.roundId != config.matchConfig.roundId) return refuse("other round");
 		if (agreed.configHash != config.originalRoundConfigHash) return refuse("other round configuration");
 		if (agreed.preparedFrame != 1) return refuse("not committed");
+		if (ReturnCrossesDeparture(agreed, m_PeerOwnershipChanges)) return refuse("owner changed before return");
+		for (uint8_t peer: agreed.members) if ((PeerRetainedSeatsAt(activation) & SeatBit(peer)) == 0) return refuse("seat removed before return");
 		if (!replay.m_MigrationHistory.contains(agreed.boundary) && !replay.m_PeerReplayAppliedPrefixes.contains(agreed.boundary)) return refuse("boundary not replayed");
 		const auto prefix = replay.PeerAppliedFramePrefix(agreed.boundary);
 		if (!std::equal(prefix.begin(), prefix.end(), agreed.bytes.begin())) return refuse("applied prefix differs");
+		for (const auto& [peer, terms]: replay.m_Config.initialPeerStartTerms) config.initialPeerStartTerms[peer] = terms;
 		size_t offset = prefix.size();
 		for (uint8_t peer: agreed.members) {
 			uint32_t delay = 0, neutral = 0, incarnation = 0;
@@ -490,6 +495,7 @@ namespace RTE {
 			    neutral < delay || neutral > NetLockstepCodec::c_MaxFutureFrameSkew || incarnation == 0 || activation > UINT64_MAX - neutral) return false;
 			config.initialSeatReclaims[peer] = {peer, config.migrationGeneration, activation * 8 + peer, incarnation, activation, static_cast<uint16_t>(delay), activation + neutral};
 			config.peerIncarnations[peer] = incarnation;
+			config.initialPeerStartTerms[peer] = {activation, static_cast<uint16_t>(delay)};
 		}
 		return offset == agreed.bytes.size() && config.initialSeatReclaims.contains(config.localPeerId);
 	}

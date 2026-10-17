@@ -329,9 +329,9 @@ namespace {
 		if (ToastNamesTheSeat(toast.kind)) {
 			// This player's own seat speaks to the player, not about them.
 			if (!sender || sender == ScenarioRunner::GetLockstepLocalPeerId()) {
-				if (toast.text.find("rejoining") != std::string::npos) return "Rejoining - the AI plays your units until you are back";
-				if (toast.text.find("joining") != std::string::npos) return "Joining - catching up with the match";
-				return "The AI is playing for you until you are back";
+				if (toast.text.find("rejoining") == std::string::npos && toast.text.find("joining") != std::string::npos)
+					return "Joining - catching up with the match";
+				return NetPlayerPresentation::PlayingSummary(true, 0, {});
 			}
 			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 			const auto member = std::find_if(snapshot.members.begin(), snapshot.members.end(), [&](const auto& row) { return row.peerId == sender; });
