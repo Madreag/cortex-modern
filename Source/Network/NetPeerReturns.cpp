@@ -482,6 +482,7 @@ namespace RTE {
 		if (!replay.m_MigrationHistory.contains(agreed.boundary) && !replay.m_PeerReplayAppliedPrefixes.contains(agreed.boundary)) return refuse("boundary not replayed");
 		const auto prefix = replay.PeerAppliedFramePrefix(agreed.boundary);
 		if (!std::equal(prefix.begin(), prefix.end(), agreed.bytes.begin())) return refuse("applied prefix differs");
+		for (const auto& [peer, terms]: replay.m_Config.initialPeerStartTerms) config.initialPeerStartTerms[peer] = terms;
 		size_t offset = prefix.size();
 		for (uint8_t peer: agreed.members) {
 			uint32_t delay = 0, neutral = 0, incarnation = 0;
@@ -490,6 +491,7 @@ namespace RTE {
 			    neutral < delay || neutral > NetLockstepCodec::c_MaxFutureFrameSkew || incarnation == 0 || activation > UINT64_MAX - neutral) return false;
 			config.initialSeatReclaims[peer] = {peer, config.migrationGeneration, activation * 8 + peer, incarnation, activation, static_cast<uint16_t>(delay), activation + neutral};
 			config.peerIncarnations[peer] = incarnation;
+			config.initialPeerStartTerms[peer] = {activation, static_cast<uint16_t>(delay)};
 		}
 		return offset == agreed.bytes.size() && config.initialSeatReclaims.contains(config.localPeerId);
 	}

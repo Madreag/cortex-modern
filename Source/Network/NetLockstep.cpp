@@ -5057,6 +5057,11 @@ namespace RTE {
 		m_MigrationFutureDelays.clear();
 		if (m_Config.peerSessionLinks && m_Config.peerSessionLinks->frameReader == this) m_Config.peerSessionLinks->frameReader = nullptr;
 		m_Config = config;
+		if (m_Config.peerFrameGroups && !m_Config.joinsRunningRound && !m_Config.continuesMatch) {
+			m_Config.initialPeerStartTerms.clear();
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+				m_Config.initialPeerStartTerms[peer] = {m_Config.startFrame, PeerInputDelay(peer)};
+		}
 		if (config.peerSessionLinks) {
 			auto& links = *config.peerSessionLinks;
 			if (!links.primary) links.primary = &transport;
@@ -5232,6 +5237,7 @@ namespace RTE {
 			start.inputDelayFrames = admission->second.delay;
 			start.resumeFromSnapshot = false;
 		}
+		if (UsesPeerFrameGroups()) m_Config.initialPeerStartTerms[m_Config.localPeerId] = {start.startFrame, start.inputDelayFrames};
 		// A returning seat's start names the terms it goes out on, so a host that reads it as a straggler is explained.
 		if (const auto own = m_ReclaimTransactions.find(m_Config.localPeerId); own != m_ReclaimTransactions.end() && m_Config.localPeerId != GetHostPeerId() && m_StartsSentNamed < 4) {
 			++m_StartsSentNamed;
@@ -5458,6 +5464,7 @@ namespace RTE {
 		m_PeerTailOutgoing.clear(); m_PeerTailRawBytesSent = m_PeerTailDeferredSends = 0;
 		m_PeerTailRequests = m_PeerTailFramesSent = m_PeerTailBytesSent = m_PeerTailLogAtMs = m_PeerPathLogAtMs = 0;
 		m_PeerRoundEnds.clear();
+		m_PeerRemovalNotices.clear();
 		m_PeerTailPrefixes.clear(); m_PeerTailVotes.clear(); m_PeerTailDecisions.clear();
 		m_PeerPaceStartMs.reset(); m_PeerConsumerAtMs.reset(); m_PeerPaceStartFrame = 0; m_PeerPaceReference = GetHostPeerId(); m_PeerHadHitch = false;
 		if (!m_Config.peerSessionLinks) { PeerListenerBindings().clear(); PeerPrimaryBindings().clear(); }
@@ -5552,9 +5559,15 @@ namespace RTE {
 		m_AwaitingReplayedSeatState = m_Config.joinsRunningRound && m_Config.seatStateThroughFrame != 0;
 		// A seat taken back before our first frame is a member from it: the start the host hands out for it names that frame.
 		// Its delay is the one the round runs at that frame, delay changes included, which is what the seat's own start carries.
+		if (m_Config.peerFrameGroups && m_Config.joinsRunningRound)
+			for (const auto& [peer, terms]: m_Config.initialPeerStartTerms) if (peer != GetHostPeerId()) m_PeerAdmissions[peer] = {terms.first, terms.second};
 		for (const auto& [peer, reclaim]: m_ReclaimTransactions)
-			m_PeerAdmissions[peer] = reclaim.activationFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, InputDelayAt(peer, m_Config.startFrame)} :
+			if (const auto known = m_Config.initialPeerStartTerms.find(peer); m_Config.peerFrameGroups && (!m_Config.joinsRunningRound || peer != GetHostPeerId()) && known != m_Config.initialPeerStartTerms.end() && known->second.first >= reclaim.activationFrame)
+				m_PeerAdmissions[peer] = {known->second.first, known->second.second};
+			else m_PeerAdmissions[peer] = reclaim.activationFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, InputDelayAt(peer, m_Config.startFrame)} :
 			    PeerAdmission{reclaim.activationFrame, reclaim.delayFrames};
+		if (m_Config.peerFrameGroups && m_Config.joinsRunningRound && GetHostPeerId() != m_Config.localPeerId)
+			m_PeerAdmissions[GetHostPeerId()] = {m_Config.startFrame, InputDelayAt(GetHostPeerId(), m_Config.startFrame)};
 		// Our own return produces on the delay the host admitted it on, whatever the config this round started from last heard.
 		if (const auto own = m_ReclaimTransactions.find(m_Config.localPeerId); own != m_ReclaimTransactions.end() && own->second.activationFrame >= m_Config.startFrame &&
 		    own->second.delayFrames != 0 && InputDelayAt(m_Config.localPeerId, own->second.activationFrame) != own->second.delayFrames) {
@@ -5603,6 +5616,11 @@ namespace RTE {
 		}
 		m_RoundId = roundId;
 		++m_Stats.roundReadoptions;
+		if (m_Config.peerFrameGroups) {
+			m_Config.initialPeerStartTerms.clear();
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+				m_Config.initialPeerStartTerms[peer] = {m_Config.startFrame, PeerInputDelay(peer)};
+		}
 		ResetRoundState();
 		m_LocalFrames.clear();
 		m_LocalCommands.clear();
@@ -5682,7 +5700,7 @@ namespace RTE {
 	void NetLockstepCoordinator::AnswerRepeatedStart(uint8_t peerId, uint64_t nowMs) {
 		// A peer we have no link to is the host's to answer, not ours; ours reaches us relayed.
 		if ((m_State != NetLockstepState::Running && m_State != NetLockstepState::WaitingForStart) ||
-		    m_RemoteTransports.find(peerId) == m_RemoteTransports.end()) {
+		    (m_RemoteTransports.find(peerId) == m_RemoteTransports.end() && !(UsesPeerFrameGroups() && HasPeerFrameRoute(peerId)))) {
 			return;
 		}
 		// A peer this round has taken frames from already had every start, or it could not have made
@@ -5712,7 +5730,7 @@ namespace RTE {
 				continue;
 			}
 			auto answer = otherStart;
-			if (const auto admission = m_PeerAdmissions.find(peerId); admission != m_PeerAdmissions.end() && !IsPersistentWorldRound()) {
+			if (const auto admission = m_PeerAdmissions.find(peerId); admission != m_PeerAdmissions.end() && !IsPersistentWorldRound() && !UsesPeerFrameGroups()) {
 				answer.startFrame = admission->second.frame;
 				answer.inputDelayFrames = InputDelayAt(otherPeerId, answer.startFrame);
 				answer.roundId = m_RoundId;
@@ -5795,6 +5813,7 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		NetLockstepPlane::Check(&live, "StartCatchUpReplay (the live round)");
 		if (!StartReplay(transport, config, error)) return false;
+		for (const auto& [peer, terms]: live.m_Config.initialPeerStartTerms) m_Config.initialPeerStartTerms.try_emplace(peer, terms);
 		m_SeatBridgeSinceMs = live.m_SeatBridgeSinceMs;
 		// Scripted switches can still read the hold before the newest return.
 		for (const auto& [peer, transitions]: live.m_SeatTransitions)
@@ -10484,6 +10503,7 @@ namespace RTE {
 					m_DroppedSeatResolutions[reclaim->peerId] = NetLockstepHoldResolution::Reclaimed;
 					m_PeerEffectiveStart[reclaim->peerId] = outFrame.frame + reclaim->delayFrames;
 					m_PeerAdmissions[reclaim->peerId] = {outFrame.frame, reclaim->delayFrames};
+					if (!m_Config.initialPeerStartTerms.empty()) m_Config.initialPeerStartTerms[reclaim->peerId] = {outFrame.frame, reclaim->delayFrames};
 				}
 				outFrame.reclaimedPeerIds.push_back(reclaim->peerId);
 				++m_Stats.peers[reclaim->peerId].rejoins;
@@ -12100,7 +12120,8 @@ namespace RTE {
 		// A seat joining the running round starts at its own admission; the start the host began the round with names
 		// a frame before it, and once this seat has its round that start is a straggler, never a mismatch.
 		if (m_Config.joinsRunningRound && start.localPeerId == GetHostPeerId() && start.startFrame < m_Config.startFrame &&
-		    m_RoundId != 0 && start.roundId == m_RoundId) {
+		    m_RoundId != 0 && start.roundId == m_RoundId &&
+		    !(m_Config.peerFrameGroups && m_Config.initialPeerStartTerms.contains(start.localPeerId) && StartMatchesConfig(start))) {
 			++m_Stats.staleRoundPackets;
 			return;
 		}
@@ -12174,6 +12195,10 @@ namespace RTE {
 		} else if (followTheAuthority) {
 			ReadoptRound(start.roundId, nowMs);
 		}
+		// A host answers a private return in the receiver's start context. Keep its actual member terms,
+		// so that this contextual reply cannot become the old host's start after a later handover.
+		if (UsesPeerFrameGroups() && !(m_Config.joinsRunningRound && start.localPeerId == GetHostPeerId()))
+			m_Config.initialPeerStartTerms[start.localPeerId] = {start.startFrame, start.inputDelayFrames};
 		if (m_PeerAdmissions.contains(start.localPeerId) && m_RelayHost) {
 			// The seat set its round up from the tail it replayed while no decision reached it: the holds and returns decided for
 			// frames up to its first go to it ahead of the starts that assume them.
@@ -12192,7 +12217,9 @@ namespace RTE {
 				if (peer == start.localPeerId || IsPeerGoneAtFrame(peer, start.startFrame)) continue;
 				NetLockstepStart member = start; member.localPeerId = peer; member.inputDelayFrames = InputDelayAt(peer, start.startFrame);
 				member.roundId = m_RoundId;
-				if (IsPersistentWorldRound() && peer != m_Config.localPeerId) {
+				if (const auto known = m_Config.initialPeerStartTerms.find(peer); UsesPeerFrameGroups() && peer != GetHostPeerId() && known != m_Config.initialPeerStartTerms.end()) {
+					member.startFrame = known->second.first; member.inputDelayFrames = known->second.second;
+				} else if (IsPersistentWorldRound() && peer != m_Config.localPeerId) {
 					const auto admission = m_PeerAdmissions.find(peer);
 					member.startFrame = admission == m_PeerAdmissions.end() ? m_Config.startFrame : admission->second.frame;
 					member.inputDelayFrames = admission == m_PeerAdmissions.end() ? PeerInputDelay(peer) : admission->second.delay;
@@ -13113,6 +13140,7 @@ namespace RTE {
 		notice.message = message;
 		if (!agreedBoundary) {
 			if (removed && UsesPeerFrameGroups()) {
+				if (m_RelayHost && m_Config.localPeerId == GetHostPeerId()) m_PeerRemovalNotices[peerId] = notice;
 				std::string ignored;
 				(void)SendPacket({notice}, NetTransportLane::ControlReliable, &ignored);
 			} else RelayToOtherRemotes({notice}, peerId);
@@ -13647,6 +13675,7 @@ namespace RTE {
 		CENSUS(m_SceneLoadStatus);
 		CENSUS(m_ParkCaptureHistoryMs); CENSUS(m_DropReasonsNamed); CENSUS(m_PlaneDeferredEvents); CENSUS(m_InstalledResyncTargets);
 		CENSUS(m_ResyncPrimeInputs); CENSUS(m_RetiredReclaimGaps); CENSUS(m_PreStartTiming);
+		CENSUS(m_PeerFrameHolds); CENSUS(m_PeerOwnershipChanges); CENSUS(m_PeerRemovalNotices); CENSUS(m_Config.initialPeerStartTerms);
 #undef CENSUS
 		return line.str();
 	}

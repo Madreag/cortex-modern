@@ -398,6 +398,10 @@ namespace RTE {
 			}
 		}
 		if (retryVotes) {
+			// A partition can lose the first roster notice. Repeat that exact authority and frame;
+			// elapsed time only schedules its publication, never a different removal.
+			if (m_RelayHost && m_Config.localPeerId == GetHostPeerId()) for (const auto& [peer, notice]: m_PeerRemovalNotices)
+				if (m_RemovedPeers.contains(peer)) (void)SendPacket({notice}, NetTransportLane::ControlReliable, nullptr);
 			for (const auto& [key, certificate]: m_PeerBridgeCertificates) {
 				if (key.first + NetLockstepCodec::c_MaxFutureFrameSkew < m_Stats.nextFrame) continue;
 				SendPeerFrameMessage(certificate);

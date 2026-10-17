@@ -832,6 +832,8 @@ namespace RTE {
 				m_ReclaimTransactions[peer] = {peer, m_Config.migrationGeneration, revision, incarnation, agreed.frame, delay, neutral};
 				// Every survivor knows the certified terms before the returning process sends its new start.
 				m_PeerAdmissions[peer] = {agreed.frame, delay};
+				m_Config.initialPeerStartTerms[peer] = {agreed.frame, delay};
+				m_PeersPlayedThisRound.erase(peer); m_LastStartAnswerMs.erase(peer);
 				if (delay != InputDelayAt(peer, agreed.frame)) m_DelayChanges[peer][agreed.frame] = delay;
 				m_PeerEffectiveStart[peer] = agreed.frame + delay;
 				m_PeerAcceptedThrough[peer] = neutral + 1;

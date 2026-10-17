@@ -332,6 +332,53 @@ namespace RTE {
 		static bool ReturnKeepsOtherSeatHeld(std::string* error) { return ReturnMembershipCases(error, false); }
 		static bool ReturnStartAdmission(std::string* error) { return ReturnMembershipCases(error, true); }
 
+		static bool ReturnMemberStarts(std::string* error) {
+			Wire wire; NetLockstepCoordinator peer;
+			Configure(peer, wire);
+			peer.m_Config.peerFrameGroups = peer.m_Config.joinsRunningRound = peer.m_Config.continuesMatch = true;
+			peer.m_Config.startFrame = 546;
+			peer.m_Config.inputDelayFrames = 13; peer.m_Config.peerInputDelayFrames = {{1, 7}, {2, 13}, {3, 7}};
+			peer.m_Config.initialPeerStartTerms = {{1, {1, 7}}, {2, {546, 13}}, {3, {1, 7}}};
+			peer.m_Config.initialSeatReclaims[2] = {2, 1, 546 * 8 + 2, 2, 546, 13, 570};
+			peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.ResetRoundState();
+			peer.m_State = NetLockstepState::WaitingForStart;
+			peer.m_Stats.nextFrame = 546;
+			const auto startOf = [&](uint8_t member) {
+				NetLockstepStart start;
+				start.sessionId = peer.m_Config.sessionId; start.roundId = 77; start.localPeerId = member;
+				start.startFrame = 1; start.inputDelayFrames = 7; start.peerCount = 3;
+				start.controllerFrameVersion = ControllerFrame::c_Version; start.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+				start.scenario = peer.m_Config.scenario; start.ownershipPolicy = peer.m_Config.ownershipPolicy;
+				return start;
+			};
+			const auto deliver = [&](NetLockstepStart start, uint8_t source) {
+				auto message = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerControl);
+				message.senderPeerId = source;
+				if (!NetLockstepCodec::Encode({start}, message.bytes)) return false;
+				message.totalBytes = message.bytes.size();
+				std::vector<uint8_t> signedMessage; NetHostMigrationMessage authenticated;
+				return NetHostMigrationCodec::Encode(message, peer.m_Config.migrationKey, signedMessage) &&
+				    NetHostMigrationCodec::Decode(signedMessage, peer.m_Config.migrationKey, authenticated) && peer.HandlePeerFrameMessage(authenticated, 8400);
+			};
+			auto wrong = startOf(3); wrong.inputDelayFrames = 8;
+			if (peer.StartMatchesConfig(wrong)) { *error = "a returned process accepted a different member delay"; return false; }
+			if (!deliver(startOf(3), 1) || peer.m_RemoteStartsReceived.contains(3)) { *error = "a relayed identity bypassed the peer sender check"; return false; }
+			auto host = startOf(1); host.startFrame = 546;
+			if (!deliver(host, 1) || !deliver(startOf(3), 3) || !peer.m_RemoteStartsReceived.contains(1) || !peer.m_RemoteStartsReceived.contains(3) || !peer.IsRunning()) {
+				*error = "a returned process did not accept each authenticated member's retained start"; return false;
+			}
+			if (peer.m_Config.initialPeerStartTerms.at(1) != std::pair<uint64_t, uint16_t>{1, 7}) {
+				*error = "a private host reply replaced the host's actual member start"; return false;
+			}
+			peer.m_Config.authorityPeerId = 3;
+			peer.ResetRoundState();
+			if (!peer.StartMatchesConfig(startOf(1))) {
+				*error = "a handover rejected the old host's authenticated member start"; return false;
+			}
+			return true;
+		}
+
 		static bool FutureRemovalKeepsPastAuthority(std::string* error) {
 			Wire wire;
 			NetLockstepCoordinator peer;
@@ -388,6 +435,37 @@ namespace RTE {
 			peer.m_PeerFrameHolds[4][450] = true;
 			peer.PrunePeerFrameSeatChanges(600);
 			if (peer.PeerRetainedSeatsAt(600) != 7) { *error = "pruning a later hold restored the removed owner"; return false; }
+			return true;
+		}
+
+		static bool RemovalNoticeRetries(std::string* error) {
+			Wire wire; NetLockstepCoordinator peer;
+			Configure(peer, wire);
+			peer.m_Config.localPeerId = 1; peer.m_Config.peerFrameGroups = true;
+			peer.m_RemotePeerIds = {2, 3}; peer.m_RemoteTransports = {{2, 42}, {3, 43}};
+			peer.m_RelayHost = true; peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_Stats.nextFrame = 366; peer.m_LastCompletedSimulationTick = 362;
+			peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+			peer.EvictRemovedPeer(3, "removed from the session", 7000);
+			const auto countNotices = [&] {
+				unsigned count = 0;
+				for (const auto& bytes: wire.sent) {
+					NetHostMigrationMessage message;
+					if (!NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, message) || message.type != NetHostMigrationMessageType::PeerControl || message.senderPeerId != 1) continue;
+					const auto decoded = NetLockstepCodec::Decode(message.bytes, ControllerFrame::c_Version);
+					if (!decoded.ok) continue;
+					const auto* stop = std::get_if<NetLockstepStop>(&decoded.packet.payload);
+					if (stop && stop->reason == NetLockstepStopReason::PeerRemoved && stop->senderPeerId == 3 && stop->frame == 366 && stop->message == "removed from the session") ++count;
+				}
+				return count;
+			};
+			if (countNotices() == 0) { *error = "the host did not publish its roster removal"; return false; }
+			wire.sent.clear(); // Every first notice was lost in the partition.
+			peer.TickPeerFrameGroups(10000);
+			if (countNotices() == 0) { *error = "the original removal was never published again after the cut"; return false; }
+			wire.sent.clear(); peer.m_RelayHost = false;
+			peer.TickPeerFrameGroups(11000);
+			if (countNotices() != 0) { *error = "a client published the host's removal"; return false; }
 			return true;
 		}
 
@@ -29884,6 +29962,20 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "return-member-starts") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ReturnMemberStarts(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_return_keeps_each_authenticated_members_start" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
+			if (std::string_view(selectedCase) == "removal-retry") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::RemovalNoticeRetries(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_roster_removal_keeps_its_frame_after_a_cut" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "future-removal-authority") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::FutureRemovalKeepsPastAuthority(&error)) return fail(error);
@@ -29969,6 +30061,8 @@ namespace {
 		row(&SessionPlaneRecoveryTest::ReturnKeepsOtherSeatHeld, "a_return_cannot_return_another_held_seat");
 		row(&SessionPlaneRecoveryTest::FutureRemovalKeepsPastAuthority, "a_future_removal_keeps_the_past_directory_decision");
 		row(&SessionPlaneRecoveryTest::ReturnStartAdmission, "a_return_start_uses_its_certified_admission");
+		row(&SessionPlaneRecoveryTest::ReturnMemberStarts, "a_return_keeps_each_authenticated_members_start");
+		row(&SessionPlaneRecoveryTest::RemovalNoticeRetries, "a_roster_removal_keeps_its_frame_after_a_cut");
 		row(&SessionPlaneRecoveryTest::HoldInvitation, "an_unsigned_hold_invitation_never_fences_an_input");
 		row(&SessionPlaneRecoveryTest::OwnAheadHoldFence, "a_seat_co_signs_and_fences_its_own_future_hold");
 		row(&SessionPlaneRecoveryTest::HeldHostBaseCapture, "held_host_names_a_private_base_through_the_playing_seats");

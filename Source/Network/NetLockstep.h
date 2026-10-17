@@ -381,6 +381,7 @@ namespace RTE {
 		std::map<uint8_t, std::map<uint64_t, uint16_t>> initialDelayChanges;
 		std::map<uint8_t, NetGameSeatHold> initialSeatHolds;
 		std::map<uint8_t, NetGameSeatReclaim> initialSeatReclaims;
+		std::map<uint8_t, std::pair<uint64_t, uint16_t>> initialPeerStartTerms; //!< Known member starts carried into a private return; separate from its simulation start.
 		std::map<uint8_t, uint64_t> initialSeatBridgeSinceMs; // Local presentation clock, retained across private catch-up.
 		uint64_t seatStateThroughFrame = 0; // A joining round's holds, departures and returns already cover every frame up to this one.
 		uint32_t timeoutMs = 500;
@@ -1815,6 +1816,7 @@ namespace RTE {
 		uint64_t m_PeerTailRawBytesSent = 0, m_PeerTailDeferredSends = 0;
 		uint64_t m_PeerTailRequests = 0, m_PeerTailFramesSent = 0, m_PeerTailBytesSent = 0, m_PeerTailLogAtMs = 0, m_PeerPathLogAtMs = 0;
 		uint64_t m_PeerVoteRetryAtMs = 0;
+		std::map<uint8_t, NetLockstepStop> m_PeerRemovalNotices; //!< Exact roster removals, repeated after a partition without choosing a new boundary.
 		uint32_t m_FrameGroupMembers = 0;
 		std::map<uint64_t, uint32_t> m_FrameGroupChanges;
 		std::map<uint8_t, std::map<uint64_t, bool>> m_PeerFrameHolds; //!< Each seat's certified hold/return boundaries, independent of another decision's group snapshot.

@@ -207,6 +207,7 @@ namespace RTE {
 				if (auto back = m_ReclaimTransactions.find(named); back != m_ReclaimTransactions.end() && back->second.activationFrame == agreed.frame) {
 					m_PeerEffectiveStart.erase(named);
 					if (auto admission = m_PeerAdmissions.find(named); admission != m_PeerAdmissions.end() && admission->second.frame == agreed.frame) m_PeerAdmissions.erase(admission);
+					if (auto terms = m_Config.initialPeerStartTerms.find(named); terms != m_Config.initialPeerStartTerms.end() && terms->second.first == agreed.frame) m_Config.initialPeerStartTerms.erase(terms);
 					m_ReclaimTransactions.erase(back);
 				}
 				if (auto holds = m_PeerFrameHolds.find(named); holds != m_PeerFrameHolds.end()) {
