@@ -13489,6 +13489,12 @@ namespace RTE {
 			if (!m_Playback && UsesPeerFrameGroups()) AppendPeerCaptureCommand(ready);
 			if (UsesPreparedFrameReceipts()) {
 				ready.committedPeerLeaves = m_PeerLeaveFrames; ready.committedFrameWaivers = m_PeerFrameWaivers;
+				if (UsesPeerFrameGroups()) {
+					// Future notices arrive at different times. The record of this frame contains only
+					// boundaries that apply to it; its prepared/applied prefix must not reveal that timing.
+					std::erase_if(ready.committedPeerLeaves, [&ready](const auto& fact) { return fact.second > ready.frame; });
+					std::erase_if(ready.committedFrameWaivers, [&ready](const auto& fact) { return fact.second > ready.frame; });
+				}
 				for (const auto& [peer, leave]: m_PeerLeaveFrames) if (leave <= ready.frame) ready.departedPeerIds.push_back(peer);
 				RetainMigrationFrame(ready);
 				if (!m_MigrationHistory.contains(ready.frame)) { Fail(NetLockstepStopReason::ProtocolError, ready.frame, "complete input could not be retained for handover"); return; }
