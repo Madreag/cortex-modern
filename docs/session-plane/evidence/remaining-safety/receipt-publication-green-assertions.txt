@@ -1,0 +1,2 @@
+[net-lockstep-selftest] PASS a_receiver_republishes_only_its_own_cumulative_receipts
+[net-lockstep-selftest] PASS

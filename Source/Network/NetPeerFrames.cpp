@@ -361,6 +361,14 @@ namespace RTE {
 			heartbeat.totalBytes = static_cast<uint32_t>(heartbeat.bytes.size());
 			// A newer progress report replaces an older one without waiting on the ordered stream.
 			SendPeerFrameMessage(std::move(heartbeat), NetTransportLane::InputUnreliable);
+			// The last receipt must survive a lost publication even when no new input follows it.
+			for (const auto& [owner, receipts]: m_PeerInputReceipts) {
+				const auto accepted = receipts.find(m_Config.localPeerId);
+				if (owner == m_Config.localPeerId || accepted == receipts.end() || accepted->second == 0) continue;
+				auto receipt = PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
+				receipt.successorPeerId = owner; receipt.frame = accepted->second;
+				SendPeerFrameMessage(std::move(receipt), NetTransportLane::InputUnreliable);
+			}
 		}
 		const bool retryVotes = nowMs >= m_PeerVoteRetryAtMs;
 		if (retryVotes) m_PeerVoteRetryAtMs = nowMs + c_NetPeerVoteResendMs;

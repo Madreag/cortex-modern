@@ -1,0 +1,60 @@
+diff --git a/Source/Network/NetLockstep.cpp b/Source/Network/NetLockstep.cpp
+index d2c6ea424..6028f1f00 100644
+--- a/Source/Network/NetLockstep.cpp
++++ b/Source/Network/NetLockstep.cpp
+@@ -6076,7 +6076,10 @@ namespace RTE {
+ 			}
+ 			// The cursor is this loop's own: a frame the capture park already committed is accepted without
+ 			// moving the queued watermark, and re-reading it there would pad the same frame for ever.
+-			for (uint64_t pad = m_LastQueuedTargetFrame + 1; pad < target; ++pad) {
++			const uint64_t firstPad = UsesPeerFrameGroups() ? std::max({m_LastQueuedTargetFrame + 1, m_Stats.nextFrame, EffectiveStartOf(m_Config.localPeerId)}) : m_LastQueuedTargetFrame + 1;
++			for (uint64_t pad = firstPad; pad < target; ++pad) {
++				// A returning seat owes no input in its certified neutral interval.
++				if (UsesPeerFrameGroups() && IsSeatReclaimGap(m_Config.localPeerId, pad)) continue;
+ 				if (!QueueInputAtTarget(pad, previous.frames, {}, error, {})) return false;
+ 				++m_Stats.delayPaddingFrames;
+ 			}
+@@ -6123,7 +6126,9 @@ namespace RTE {
+ 			controller.SetFlipIntent(false);
+ 			controller.hatchCommand = static_cast<uint8_t>(ControllerFrame::HatchCommand::None);
+ 		}
+-		for (uint64_t pad = m_LastQueuedTargetFrame + 1; pad < nextTarget; ++pad) {
++		const uint64_t firstPad = UsesPeerFrameGroups() ? std::max({m_LastQueuedTargetFrame + 1, m_Stats.nextFrame, EffectiveStartOf(m_Config.localPeerId)}) : m_LastQueuedTargetFrame + 1;
++		for (uint64_t pad = firstPad; pad < nextTarget; ++pad) {
++			if (UsesPeerFrameGroups() && IsSeatReclaimGap(m_Config.localPeerId, pad)) continue;
+ 			std::string ignored;
+ 			if (!QueueInputAtTarget(pad, previous.frames, {}, &ignored, {})) return;
+ 			++m_Stats.delayPaddingFrames;
+diff --git a/Source/Network/NetPeerFrames.cpp b/Source/Network/NetPeerFrames.cpp
+index f2253976c..b3dbc63ea 100644
+--- a/Source/Network/NetPeerFrames.cpp
++++ b/Source/Network/NetPeerFrames.cpp
+@@ -208,12 +208,12 @@ namespace RTE {
+ 		NetFrameTieRequest request;
+ 		request.generation = m_Config.migrationGeneration; request.roundId = m_Config.matchConfig.roundId;
+ 		request.frame = split; request.configHash = m_RoundConfigHash; request.host = GetHostPeerId();
+-		request.queryOnly = (members & SeatBit(m_Config.localPeerId)) == 0;
+ 		// The tie is between the seats that vote now, and the referee decides an even split of every retained seat: the seats that
+ 		// do not vote are dealt to the halves in seat order, the lower ones to the half that holds the lowest voting seat.
+ 		uint32_t voting = members;
+ 		const uint32_t owners = PeerVotingOwners(voting, frame);
+ 		if (owners == 0 || 2 * std::popcount(voting) != std::popcount(owners)) return;
++		request.queryOnly = (voting & SeatBit(m_Config.localPeerId)) == 0;
+ 		uint32_t retained = 0;
+ 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+ 			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) retained |= SeatBit(peer);
+@@ -361,6 +361,14 @@ namespace RTE {
+ 			heartbeat.totalBytes = static_cast<uint32_t>(heartbeat.bytes.size());
+ 			// A newer progress report replaces an older one without waiting on the ordered stream.
+ 			SendPeerFrameMessage(std::move(heartbeat), NetTransportLane::InputUnreliable);
++			// The last receipt must survive a lost publication even when no new input follows it.
++			for (const auto& [owner, receipts]: m_PeerInputReceipts) {
++				const auto accepted = receipts.find(m_Config.localPeerId);
++				if (owner == m_Config.localPeerId || accepted == receipts.end() || accepted->second == 0) continue;
++				auto receipt = PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
++				receipt.successorPeerId = owner; receipt.frame = accepted->second;
++				SendPeerFrameMessage(std::move(receipt), NetTransportLane::InputUnreliable);
++			}
+ 		}
+ 		const bool retryVotes = nowMs >= m_PeerVoteRetryAtMs;
+ 		if (retryVotes) m_PeerVoteRetryAtMs = nowMs + c_NetPeerVoteResendMs;
