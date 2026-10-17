@@ -11358,6 +11358,12 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	}
 	{
 		std::string detail;
+		const bool exact = CheckpointLua::HeapOwner::RunPreparationHandoffSelfTest(detail);
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " prepared_lua_inventory_waits_for_only_the_active_warm_commit " << detail << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
+		std::string detail;
 		const bool exact = CheckpointLua::HeapOwner::RunTrimSelfTest(detail);
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " a_collected_lua_heap_gives_its_free_pages_back_beside_a_waiting_plan_and_its_arm_commits_them_again " << detail << std::endl;
 		checkpointValues = exact && checkpointValues;
