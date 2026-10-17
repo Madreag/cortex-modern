@@ -85,6 +85,13 @@ namespace RTE {
 					framing.migrationKey = m_PeerFrameKey;
 					framing.migrationTransportFactory = [] { return std::make_unique<GnsTransport>(); };
 				};
+				// A peer may finish its lobby first and publish authenticated mesh readiness while this lobby still
+				// owns the wire. Recognize that phase's packets as soon as its capsule supplies the key.
+				session.SetAuxiliaryPacketValidator([this, &session](const std::vector<uint8_t>& bytes) {
+					NetHostMigrationMessage message;
+					return m_PeerFrameKey != NetHash32{} && NetHostMigrationCodec::Decode(bytes, m_PeerFrameKey, message) &&
+					    message.sessionId == session.GetSessionId();
+				});
 			}
 		}
 		// A round opened on a checkpoint resumes from a snapshot exactly as a healed round does.

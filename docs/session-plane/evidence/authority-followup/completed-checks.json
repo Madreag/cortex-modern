@@ -1,0 +1,86 @@
+{
+  "scope": "Completed focused checks; the four network rows remain open. No property or survivor bound is waived.",
+  "actual_return_delay": {
+    "before": {
+      "path": "retained-evidence/delay-admission-before/result.json",
+      "sha256": "d6d1d1a60662f65a4c35618da087f6a1a52670eb70bc30da0928b6f0e9560c62",
+      "binary_sha256": "d2c6d4c825b0cf0d6ce52124da6aad9f05b9fccb635cf3868cf92d515b8a1760",
+      "passed": 0,
+      "total": 1,
+      "complete": true
+    },
+    "after": {
+      "path": "retained-evidence/delay-admission-after/result.json",
+      "sha256": "b64df4163df5df88d0224d533bbccbcfcc3685820ba7f5354a5079ed4130a9cf",
+      "binary_sha256": "98d07a7ed699ccc6a7909157db91bf7b0351db9c81f7726d4f316d15c768cc97",
+      "passed": 1,
+      "total": 1,
+      "complete": true
+    },
+    "detector": "link-every-mode",
+    "expected": {
+      "rtt_30ms_ticks": 3,
+      "rtt_200ms_ticks": 13,
+      "catch_up_ticks_in_neutral_interval": 120
+    },
+    "modes": [
+      "peer framing",
+      "dedicated",
+      "persistent world",
+      "non-substitute"
+    ]
+  },
+  "waking_reader": {
+    "after": {
+      "path": "retained-evidence/waking-reader-after/result.json",
+      "sha256": "952fec2a637574e6c0c5c014749fe80e72ed1d9ad11574eb3c694dd7198bd2f1",
+      "binary_sha256": "98d07a7ed699ccc6a7909157db91bf7b0351db9c81f7726d4f316d15c768cc97",
+      "passed": 1,
+      "total": 1,
+      "complete": true
+    },
+    "detector": "owner-hitch-two-internet",
+    "cause": "After a stopped simulation loop, an old display clock proposed a hold of a healthy donor before consuming the pending local-seat hold. Fresh missing-input timing now starts at the observation; a private reader requests its committed tail.",
+    "before": {
+      "path": "retained-evidence/waking-reader-before/result.json",
+      "sha256": "c634c11a060096cecd3d5193127e2248ff32d59b90e5f73023ce2c76733d3650",
+      "binary_sha256": "d2c6d4c825b0cf0d6ce52124da6aad9f05b9fccb635cf3868cf92d515b8a1760",
+      "passed": 0,
+      "total": 1,
+      "complete": true
+    }
+  },
+  "match_startup": {
+    "after": {
+      "path": "retained-evidence/match-startup-after/result.json",
+      "sha256": "72e95abb2fe079d55908e5a7afef9f77d71316ad31ffa40cd6c44ce287093a70",
+      "binary_sha256": "98d07a7ed699ccc6a7909157db91bf7b0351db9c81f7726d4f316d15c768cc97",
+      "passed": 1,
+      "total": 1,
+      "complete": true
+    },
+    "cause": "Authenticated readiness packets could reach a peer while it still owned the lobby wire. The lobby validator now recognizes those packets as soon as the capsule supplies the key."
+  },
+  "fixture_disagreements": [
+    {
+      "row": "image_return_three_seats_over_250ms_keeps_equal_histories_and_bound",
+      "peer": 2,
+      "wait_start_ms": 5993,
+      "frozen_from_ms": 6000,
+      "failed_at_ms": 6044,
+      "displayed": 338,
+      "prepared_next": 342,
+      "reason": "The fixture retains waitPlaying after it disables this peer simulation, then charges the disabled interval as a playing survivor wait. The assertion remains RED."
+    },
+    {
+      "row": "image_return_four_seats_over_100ms_keeps_equal_histories_and_bound",
+      "peer": 2,
+      "wait_start_ms": 5996,
+      "frozen_from_ms": 6000,
+      "failed_at_ms": 6047,
+      "displayed": 351,
+      "prepared_next": 355,
+      "reason": "The same frozen-consumer accounting; no bound changed."
+    }
+  ]
+}

@@ -125,6 +125,6 @@
       ]
     }
   ],
-  "evidence": "retained-evidence/local-authority-04",
+  "evidence": "retained-evidence/split-boundary-checks",
   "note": "The losing stop boundary is corrected. Split image admission remains red for authority reconstruction; the 50 ms and full-history assertions are unchanged."
 }

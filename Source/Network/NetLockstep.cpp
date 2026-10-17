@@ -3826,7 +3826,7 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::WarmMigrationLinks(uint64_t nowMs) {
-		if ((!IsRunning() && !(UsesPeerFrameGroups() && m_Config.peerSessionLinks && m_Config.peerSessionLinks->sessionAttached)) || (IsMigrating() && !UsesPeerFrameGroups()) || (m_Config.localPeerId == GetHostPeerId() && !UsesPeerFrameGroups()) || m_Config.matchConfig.dedicated ||
+		if ((!IsRunning() && !(UsesPeerFrameGroups() && (m_State == NetLockstepState::WaitingForStart || (m_Config.peerSessionLinks && m_Config.peerSessionLinks->sessionAttached)))) || (IsMigrating() && !UsesPeerFrameGroups()) || (m_Config.localPeerId == GetHostPeerId() && !UsesPeerFrameGroups()) || m_Config.matchConfig.dedicated ||
 		    m_Config.matchConfig.persistentWorld || m_Config.matchConfig.successorOrder.empty() || !m_Config.migrationTransportFactory ||
 		    m_RoundId == 0 || m_MigrationGeneration == UINT64_MAX ||
 		    std::all_of(m_Config.migrationKey.begin(), m_Config.migrationKey.end(), [](uint8_t value) { return value == 0; })) return;
@@ -5540,6 +5540,10 @@ namespace RTE {
 		}
 		m_ReclaimTransactions = m_Config.initialSeatReclaims;
 		for (const auto& [peer, reclaim]: m_ReclaimTransactions) {
+			// An image retains each sender's own start, including returns before the capture.
+			const auto terms = m_Config.initialPeerStartTerms.find(peer);
+			if (terms == m_Config.initialPeerStartTerms.end() || terms->second.first < reclaim.activationFrame)
+				m_Config.initialPeerStartTerms[peer] = {reclaim.activationFrame, reclaim.delayFrames};
 			NoteSeatTransition(peer, reclaim.activationFrame, SeatTransition::Back);
 			if (m_Config.peerFrameGroups && m_PeerBridges.contains(peer)) {
 				m_PeerBridges[peer].returnFrame = reclaim.activationFrame;
@@ -6836,17 +6840,9 @@ namespace RTE {
 		timing.action = NetTimingAction::Reclaim; timing.phase = NetTimingPhase::Propose;
 		timing.sessionId = m_Config.sessionId; timing.roundId = m_RoundId; timing.authorityGeneration = m_Config.migrationGeneration;
 		timing.revision = m_NextTimingRevision++; timing.applyFrame = timing.cutoffFrame = frame; timing.nextFrame = m_Stats.nextFrame;
-		// A returner delivers each input as late as it trails the round plus its link's one-way trip: its return raises its own delay to
-		// cover both, so the survivors never wait on it and the lag stays with the seat that brings it.
-		uint64_t covering = trailFrames;
-		if (const NetLockstepPeerStats& link = m_Stats.peers[peerId]; std::isfinite(m_Config.simTickMs) && m_Config.simTickMs > 0) {
-			const auto estimate = m_DelayEstimators.find(peerId);
-			const uint32_t ping = std::max(link.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms());
-			covering += static_cast<uint64_t>(std::ceil((static_cast<double>(ping) / 2.0 + link.jitterMs) / m_Config.simTickMs));
-		}
-		// Never below the margin every seat's delay keeps: a seat that has never played has no delay of its own to come back to.
-		covering = std::max<uint64_t>(covering, ReturnDelayFloor(peerId, transport));
-		timing.delayFrames = static_cast<uint16_t>(std::min<uint64_t>(NetLockstepCodec::c_MaxInputDelayFrames, std::max<uint64_t>(InputDelayAt(peerId, frame), covering)));
+		// The return uses the same measured link delay as live play. Catch-up and restart work are covered by the
+		// temporary neutral interval below, so a slow machine never raises the match's input delay.
+		timing.delayFrames = std::max<uint16_t>(InputDelayAt(peerId, frame), ReturnDelayFloor(peerId, transport));
 		timing.neutralThroughFrame = frame + timing.delayFrames;
 		// An image return's first input has to cross its start handshake and published restart.
 		// Cover that work in the ordered gap; never lend it extra survivor wait after the gap.
@@ -9975,7 +9971,7 @@ namespace RTE {
 			// Startup is a host barrier. A late or disconnected loader retains its human seat.
 			allPublished = allPublished && m_PeerStartupPublished.contains(peer);
 		}
-		if (allPublished) FormAgreedFirstFrame(nowMs);
+		if (allPublished && AllRemoteStartsReceived()) FormAgreedFirstFrame(nowMs);
 	}
 
 	void NetLockstepCoordinator::Tick(uint64_t nowMs) {

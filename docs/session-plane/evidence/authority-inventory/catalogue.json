@@ -1,0 +1,1173 @@
+{
+  "binary_sha256": "5229e6a323a8c8d0a01e7280f3911023c831e7dc942d8328c5a5c997e78747d5",
+  "passed": 95,
+  "total": 233,
+  "log_sha256": "fe8f8817d720cda93e339c56b782a375885ce22c1049a0af3cbc85d2266b3ffb",
+  "rows": {
+    "a_held_host_preserves_controller_disable_before_its_return_arrives": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 13
+    },
+    "repeated_host_changes_bound_the_tail_or_answer_missing": {
+      "state": "RED",
+      "detail": "seed=0 admin generation 1: histories differ at displayed frame 61: peer 1 members=15 peer 2 members=14; authority ruling requires equal history within a half and after image return",
+      "line": 260
+    },
+    "steady_rtt_250ms_120s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 581
+    },
+    "four_host_relay_100ms_joiners_20ms_120s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 899
+    },
+    "relay_link_blackout_return": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 3664
+    },
+    "peer_returns_40s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 13221
+    },
+    "joiner_catching_up_at_102_percent_returns_four_seats_over_100ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 13955
+    },
+    "loss_20percent_60s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 14290
+    },
+    "two_internet_joiner_dark_past_history": {
+      "state": "RED",
+      "detail": "seed=0 histories differ at displayed frame 362: peer 1 members=3 peer 2 members=2; authority ruling requires equal history within a half and after image return",
+      "line": 14308
+    },
+    "two_internet_joiner_dark_past_history_over_100ms": {
+      "state": "RED",
+      "detail": "seed=0 histories differ at displayed frame 362: peer 1 members=3 peer 2 members=2; authority ruling requires equal history within a half and after image return",
+      "line": 14325
+    },
+    "joiner_catching_up_at_102_percent_returns_over_100ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 14390
+    },
+    "joiner_catching_up_at_102_percent_returns_from_another_donor": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 14417
+    },
+    "two_host_relay_100ms_120s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 14474
+    },
+    "four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_100ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 15208
+    },
+    "four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_200ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 15964
+    },
+    "four_seats_held_joiner_at_round_rate_uses_a_different_donor_over_200ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 16465
+    },
+    "host_absent_3s": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 16544
+    },
+    "four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_250ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 17466
+    },
+    "joiner_catching_up_at_105_percent_returns_four_seats_over_100ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 18200
+    },
+    "host_absent_20s": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 18248
+    },
+    "joiner_machine_at_90_percent_20s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 19287
+    },
+    "partition_3_1": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 24958
+    },
+    "two_internet_joiner_held_for_a_slow_spell_catches_up_at_115_percent": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 25052
+    },
+    "three_seats_held_host_catches_up_then_runs_at_round_rate_over_100ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 25115
+    },
+    "three_seats_held_host_catches_up_then_runs_at_round_rate_over_250ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 25307
+    },
+    "joiner_catching_up_at_105_percent_returns_over_100ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 25352
+    },
+    "joiner_catching_up_at_105_percent_returns_over_200ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 25472
+    },
+    "joiner_machine_at_80_percent_20s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 26452
+    },
+    "joiner_catching_up_at_105_percent_returns_from_another_donor": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 26478
+    },
+    "held_seat_return_meets_a_silent_voter_over_100ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 26574
+    },
+    "held_seat_return_meets_a_silent_voter": {
+      "state": "RED",
+      "detail": "seed=0 histories differ at displayed frame 992: peer 1 members=13 peer 4 members=12; authority ruling requires equal history within a half and after image return",
+      "line": 27893
+    },
+    "slow_joiner_at_80_percent_three_seats_over_100ms_20s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 28878
+    },
+    "slow_joiner_at_50_percent_three_seats_over_100ms_20s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 29684
+    },
+    "peer_frozen_10s_return_by_tail_only": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 32660
+    },
+    "peer_frozen_10s_keepalives": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 35636
+    },
+    "one_return_for_a_held_seat_over_150ms_round_trips": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 35858
+    },
+    "refereed_2_2_split_then_a_second_drop_in_the_same_hold": {
+      "state": "RED",
+      "detail": "seed=0 histories differ at displayed frame 602: peer 1 members=3 peer 2 members=2; authority ruling requires equal history within a half and after image return",
+      "line": 36167
+    },
+    "refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms": {
+      "state": "RED",
+      "detail": "seed=0 histories differ at displayed frame 362: peer 1 members=15 peer 3 members=14; authority ruling requires equal history within a half and after image return",
+      "line": 37033
+    },
+    "held_seat_and_a_member_slow_to_hear_hold_nobody_else": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 41253
+    },
+    "two_internet_slow_joiner_at_80_percent_20s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 42151
+    },
+    "two_internet_slow_joiner_at_50_percent_20s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 42870
+    },
+    "peer_returns_8s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 45623
+    },
+    "two_internet_late_joiner_takes_every_decision_with_a_240ms_referee": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 46612
+    },
+    "two_internet_late_joiner_with_a_referee_past_the_tie_timeout": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 47605
+    },
+    "two_internet_joiner_machine_at_80_percent_20s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 48499
+    },
+    "two_internet_host_machine_at_90_percent_20s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 49454
+    },
+    "two_internet_slow_host_whose_directory_is_out_of_reach_20s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 50411
+    },
+    "three_retained_seats_tie_goes_to_the_hosts_half": {
+      "state": "RED",
+      "detail": "seed=0 histories differ at displayed frame 602: peer 1 members=3 peer 2 members=2; authority ruling requires equal history within a half and after image return",
+      "line": 50693
+    },
+    "joiner_keeps_one_input_in_three_over_100ms": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 51176
+    },
+    "three_seats_second_joiner_drops_while_the_first_is_held": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling image return: the returning seat did not finish its live handshake before activation: state=1 starts_received=24",
+      "line": 52303
+    },
+    "split_four_seats_both_hold_before_a_1000ms_reply_winner_history_untouched": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling image return: the returning seat did not finish its live handshake before activation: state=1 starts_received=27",
+      "line": 55407
+    },
+    "hung_host_18s_direct_survivor_holds_then_migrates_roster": {
+      "state": "RED",
+      "detail": "seed=0 lag ended participation or required a manual rejoin: peer 2 stopped: PeerHeld:the direct host link is unavailable; returning through a private image",
+      "line": 55415
+    },
+    "split_four_seats_directory_dark_both_keep_bound_then_loser_images_back": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling image return: the returning seat did not finish its live handshake before activation: state=1 starts_received=27",
+      "line": 58567
+    },
+    "four_direct_seats_host_and_joiner_silent_keeps_survivors_bound": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 58670
+    },
+    "joiner_hiccup_3s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 60088
+    },
+    "partition_2_2_host_tie": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling image return: the returning seat did not finish its live handshake before activation: state=1 starts_received=27",
+      "line": 63068
+    },
+    "host_hiccup_3s": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 63116
+    },
+    "peer_returns_2s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 64417
+    },
+    "joiner_hiccup_1500ms": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 65669
+    },
+    "host_hiccup_1500ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 65717
+    },
+    "two_internet_joiner_frozen_10s_return_by_tail_only": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 66117
+    },
+    "host_spike_400ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 66165
+    },
+    "joiner_spike_400ms": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 67292
+    },
+    "host_spike_150ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 67340
+    },
+    "two_internet_host_blackout_directory_reachable_by_both": {
+      "state": "RED",
+      "detail": "seed=0 histories differ at displayed frame 360: peer 1 members=1 peer 2 members=3; authority ruling requires equal history within a half and after image return",
+      "line": 67355
+    },
+    "joiner_spike_150ms": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 68457
+    },
+    "two_internet_host_blackout_both_halves_stall": {
+      "state": "RED",
+      "detail": "seed=0 histories differ at displayed frame 362: peer 1 members=1 peer 2 members=3; authority ruling requires equal history within a half and after image return",
+      "line": 68474
+    },
+    "two_internet_host_blackout_directory_dark": {
+      "state": "RED",
+      "detail": "seed=0 histories differ at displayed frame 362: peer 1 members=1 peer 2 members=3; authority ruling requires equal history within a half and after image return",
+      "line": 68491
+    },
+    "pause_policy_stopped_joiner_keeps_the_survivor_bound": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 68496
+    },
+    "dedicated_match_stopped_joiner_keeps_the_survivor_bound": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 68500
+    },
+    "persistent_world_stopped_joiner_keeps_the_survivor_bound": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 68505
+    },
+    "agreed_start_gate_stopped_joiner_keeps_the_survivor_bound": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 68565
+    },
+    "agreed_brain_placement_stopped_joiner_keeps_the_survivor_bound": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 68625
+    },
+    "joiner_inputs_lost_1s_held_and_back_over_100ms": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 68690
+    },
+    "two_internet_joiner_held_again_while_catching_up": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: losing peer 2 did not stop at decision frame 665",
+      "line": 68759
+    },
+    "split_two_seats_both_hold_before_a_300ms_reply_loser_images_back": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 69673
+    },
+    "two_internet_joiner_held_again_while_never_blocked": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: losing peer 2 did not stop at decision frame 712",
+      "line": 69788
+    },
+    "two_internet_host_3s_directory_reachable": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 70046
+    },
+    "two_direct_host_3s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 70953
+    },
+    "two_host_3s_no_directory_configured": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 71860
+    },
+    "two_joiner_3s_internet_and_direct": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 72426
+    },
+    "two_internet_host_and_directory_3s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 72690
+    },
+    "hung_host_3s_direct_survivor_holds_without_a_split": {
+      "state": "RED",
+      "detail": "seed=0 lag ended participation or required a manual rejoin: peer 2 stopped: PeerHeld:the direct host link is unavailable; returning through a private image",
+      "line": 72698
+    },
+    "authority_fixture_checks_each_half_and_never_waives_the_bound": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 72699
+    },
+    "host_hold_ai_authority_is_the_certified_frames": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 72712
+    },
+    "input_delay_uses_link_jitter_without_machine_receipt_cost": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 72717
+    },
+    "directory_client_round_trip_allowances_and_refusals": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 72719
+    },
+    "hung_host_3s_and_directory_dark_survivor_holds_locally": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 73014
+    },
+    "a_healed_tie_keeps_one_history_across_a_host_change": {
+      "state": "RED",
+      "detail": "seed=0 histories differ at displayed frame 242: peer 1 members=15 peer 3 members=14; authority ruling requires equal history within a half and after image return",
+      "line": 73589
+    },
+    "image_return_three_seats_over_100ms_keeps_equal_histories_and_bound": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 74305
+    },
+    "a_kept_hold_waits_for_its_own_directory_without_changing_history": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling image return: the returning seat did not finish its live handshake before activation: state=1 starts_received=27",
+      "line": 77578
+    },
+    "image_return_four_seats_over_100ms_keeps_equal_histories_and_bound": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 78420
+    },
+    "image_return_three_seats_over_250ms_keeps_equal_histories_and_bound": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 78687
+    },
+    "directory_decision_lands_after_the_final_query": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 78688
+    },
+    "directory_refuses_stale_host_hash_generation_and_removed_owners": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 78689
+    },
+    "directory_general_429_blocks_both_request_allowances": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 78691
+    },
+    "directory_two_split_questions_wait_for_their_own_replies": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 78692
+    },
+    "directory_healed_link_queries_before_the_old_exchange_times_out": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 78693
+    },
+    "directory_full_record_503_retries_without_frame_authority": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 78695
+    },
+    "image_return_at_round_rate_80_frames_behind_over_100ms": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 78697
+    },
+    "image_return_at_round_rate_80_frames_behind_over_200ms": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 78699
+    },
+    "image_return_at_round_rate_80_frames_behind_over_250ms": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 78701
+    },
+    "image_activation_reannouncement_preserves_closing_time": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 78703
+    },
+    "two_image_returners_share_a_base_and_keep_separate_outcomes": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 78706
+    },
+    "benign_image_cancellations_do_not_exhaust_three_returns": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 78707
+    },
+    "image_return_four_seats_over_200ms_keeps_equal_histories_and_bound": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 79743
+    },
+    "four_direct_seats_120ms_jitter_40ms_host_late_100ms_more_928ms_seat3_silent_200ms_back_at_105pc_loss_10pc_host_engine_failed_seed_42": {
+      "state": "RED",
+      "detail": "seed=42 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4736 ms",
+      "line": 79744
+    },
+    "three_internet_seats_56ms_jitter_20ms_host_silent_200ms_back_at_100pc_host_hung_900ms_back_at_100pc_loss_90pc_seat3_loss_90pc_host_histories_differ_seed_127": {
+      "state": "RED",
+      "detail": "seed=127 property=history kind=histories_differ: histories differ at displayed frame 303: peer 2 members=7 peer 3 members=4; authority ruling requires equal history within a half and after image return at 5092 ms",
+      "line": 79746
+    },
+    "two_direct_seats_42ms_host_stopped_200ms_back_at_100pc_seat2_slow_74pc_737ms_held_seat_never_returns_seed_163": {
+      "state": "RED",
+      "detail": "seed=163 property=history kind=participation_ended: lag ended participation or required a manual rejoin: peer 2 stopped: PeerHeld:the direct host link is unavailable; returning through a private image at 6120 ms",
+      "line": 79748
+    },
+    "two_internet_seats_42ms_jitter_10ms_directory_40ms_host_stopped_464ms_back_at_100pc_seat2_slow_64pc_5902ms_host_silent_936ms_back_at_100pc_held_seat_never_returns_seed_163": {
+      "state": "RED",
+      "detail": "seed=163 property=history kind=histories_differ: histories differ at displayed frame 259: peer 1 members=1 peer 2 members=3; authority ruling requires equal history within a half and after image return at 4403 ms",
+      "line": 79750
+    },
+    "two_direct_seats_170ms_seat2_slow_88pc_200ms_back_at_120pc_loss_60pc_seat2_held_seat_never_returns_seed_79": {
+      "state": "RED",
+      "detail": "seed=79 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 9601 ms",
+      "line": 79752
+    },
+    "four_internet_seats_226ms_jitter_5ms_directory_160ms_seat4_slow_68pc_4576ms_back_at_120pc_loss_60pc_seat4_held_seat_never_returns_seed_79": {
+      "state": "RED",
+      "detail": "seed=79 property=return kind=held_seat_never_returns: seat 4 held at 4880 ms, its trouble over at 9198 ms and its 1464 ms backlog closed by 16518 ms, still held at 24519 ms against 18518 ms",
+      "line": 79754
+    },
+    "three_internet_seats_56ms_host_slow_90pc_895ms_back_at_100pc_seat2_silent_186ms_held_seat_returns_late_seed_116": {
+      "state": "RED",
+      "detail": "seed=116 property=rules kind=loser_did_not_stop_at_decision: authority ruling: losing peer 1 did not stop at decision frame 356 at 6248 ms",
+      "line": 79756
+    },
+    "three_direct_seats_120ms_host_hung_200ms_back_at_105pc_held_seat_returns_late_seed_100": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79758
+    },
+    "four_direct_seats_120ms_jitter_40ms_host_hung_750ms_back_at_105pc_held_seat_returns_late_seed_100": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79759
+    },
+    "three_internet_seats_57ms_host_silent_198ms_seat3_silent_3000ms_held_seat_returns_late_seed_109": {
+      "state": "RED",
+      "detail": "seed=109 property=history kind=histories_differ: histories differ at displayed frame 361: peer 1 members=1 peer 2 members=7; authority ruling requires equal history within a half and after image return at 6110 ms",
+      "line": 79760
+    },
+    "four_internet_seats_60ms_jitter_25ms_directory_40ms_host_silent_dark_198ms_seat4_silent_dark_3000ms_back_at_120pc_held_seat_returns_late_seed_109": {
+      "state": "RED",
+      "detail": "seed=109 property=history kind=histories_differ: histories differ at displayed frame 414: peer 1 members=3 peer 2 members=15; authority ruling requires equal history within a half and after image return at 6974 ms",
+      "line": 79762
+    },
+    "three_direct_seats_200ms_jitter_40ms_held_without_its_own_trouble_seed_187": {
+      "state": "RED",
+      "detail": "seed=187 property=history kind=histories_differ: histories differ at displayed frame 28: peer 1 members=7 peer 3 members=5; authority ruling requires equal history within a half and after image return at 647 ms",
+      "line": 79764
+    },
+    "four_internet_seats_270ms_jitter_40ms_directory_160ms_seat3_late_400ms_more_204ms_back_at_100pc_host_stopped_824ms_loss_90pc_seat4_loss_10pc_seat4_held_without_its_own_trouble_seed_187": {
+      "state": "RED",
+      "detail": "seed=187 property=history kind=histories_differ: histories differ at displayed frame 19: peer 1 members=15 peer 4 members=13; authority ruling requires equal history within a half and after image return at 544 ms",
+      "line": 79766
+    },
+    "two_internet_seats_54ms_seat2_late_50ms_more_1785ms_returned_seat_held_again_seed_174": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79768
+    },
+    "four_internet_seats_300ms_jitter_40ms_two_return_frames_seed_131": {
+      "state": "RED",
+      "detail": "seed=131 property=history kind=histories_differ: histories differ at displayed frame 20: peer 1 members=15 peer 4 members=11; authority ruling requires equal history within a half and after image return at 571 ms",
+      "line": 79769
+    },
+    "two_direct_seats_59ms_host_stopped_615ms_survivor_waits_seed_1811": {
+      "state": "RED",
+      "detail": "seed=1811 property=history kind=participation_ended: lag ended participation or required a manual rejoin: peer 2 stopped: PeerHeld:the direct host link is unavailable; returning through a private image at 4396 ms",
+      "line": 79771
+    },
+    "two_internet_seats_180ms_directory_240ms_seat2_silent_174ms_survivor_waits_seed_518": {
+      "state": "RED",
+      "detail": "seed=518 property=return kind=image_return: authority ruling image return: the returning seat could not adopt its received return certificate: applied prefix differs at 17539 ms",
+      "line": 79773
+    },
+    "two_direct_seats_238ms_host_silent_200ms_survivor_waits_seed_2453": {
+      "state": "RED",
+      "detail": "seed=2453 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5903 ms",
+      "line": 79775
+    },
+    "three_direct_seats_270ms_jitter_20ms_seat2_stopped_200ms_host_silent_360ms_survivor_waits_seed_2469": {
+      "state": "RED",
+      "detail": "seed=2469 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4902 ms",
+      "line": 79777
+    },
+    "four_direct_seats_115ms_jitter_40ms_host_silent_476ms_survivor_waits_seed_478": {
+      "state": "RED",
+      "detail": "seed=478 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4587 ms",
+      "line": 79779
+    },
+    "three_direct_seats_160ms_seat3_slow_61pc_1061ms_back_at_100pc_survivor_waits_seed_4758": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79781
+    },
+    "two_internet_seats_212ms_directory_300ms_host_hung_408ms_tie_survivor_waits_seed_3719": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79782
+    },
+    "three_direct_seats_114ms_loss_60pc_seat3_seat2_leaves_tie_survivor_waits_seed_4908": {
+      "state": "RED",
+      "detail": "seed=4908 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 10772 ms",
+      "line": 79783
+    },
+    "three_direct_seats_275ms_seat3_silent_200ms_host_slow_57pc_1744ms_seat2_leaves_tie_survivor_waits_seed_3141": {
+      "state": "RED",
+      "detail": "seed=3141 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 1394 ms",
+      "line": 79785
+    },
+    "four_direct_seats_59ms_seat4_silent_408ms_seat3_silent_200ms_tie_survivor_waits_seed_359": {
+      "state": "RED",
+      "detail": "seed=359 property=bound kind=survivor_waits: authority ruling: playing peer 4 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4311 ms",
+      "line": 79787
+    },
+    "four_internet_seats_218ms_host_hung_800ms_loss_60pc_seat2_tie_survivor_waits_seed_4282": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79789
+    },
+    "three_direct_seats_240ms_jitter_40ms_seat2_slow_53pc_1575ms_host_hung_1410ms_loss_60pc_host_engine_failed_seed_4779": {
+      "state": "RED",
+      "detail": "seed=4779 property=history kind=histories_differ: histories differ at displayed frame 17: peer 1 members=7 peer 2 members=3; authority ruling requires equal history within a half and after image return at 499 ms",
+      "line": 79790
+    },
+    "three_direct_seats_228ms_jitter_40ms_seat2_stopped_186ms_back_at_105pc_loss_90pc_seat2_engine_failed_seed_2540": {
+      "state": "RED",
+      "detail": "seed=2540 property=history kind=histories_differ: histories differ at displayed frame 31: peer 1 members=7 peer 3 members=5; authority ruling requires equal history within a half and after image return at 657 ms",
+      "line": 79792
+    },
+    "four_direct_seats_297ms_jitter_10ms_loss_60pc_seat4_engine_failed_seed_311": {
+      "state": "RED",
+      "detail": "seed=311 property=history kind=histories_differ: histories differ at displayed frame 38: peer 1 members=15 peer 2 members=7; authority ruling requires equal history within a half and after image return at 797 ms",
+      "line": 79794
+    },
+    "four_internet_seats_238ms_jitter_10ms_loss_60pc_seat2_engine_failed_seed_2125": {
+      "state": "RED",
+      "detail": "seed=2125 property=history kind=histories_differ: histories differ at displayed frame 17: peer 1 members=15 peer 3 members=7; authority ruling requires equal history within a half and after image return at 461 ms",
+      "line": 79796
+    },
+    "two_internet_seats_50ms_host_silent_dark_388ms_seat2_leaves_histories_differ_seed_360": {
+      "state": "RED",
+      "detail": "seed=360 property=return kind=image_return: authority ruling image return: the private replay did not reach an activation every survivor certified at 18142 ms",
+      "line": 79798
+    },
+    "three_direct_seats_52ms_jitter_26ms_host_silent_832ms_loss_10pc_host_histories_differ_seed_4847": {
+      "state": "RED",
+      "detail": "seed=4847 property=history kind=histories_differ: histories differ at displayed frame 245: peer 1 members=3 peer 2 members=7; authority ruling requires equal history within a half and after image return at 4161 ms",
+      "line": 79800
+    },
+    "three_direct_seats_224ms_jitter_10ms_seat3_stopped_1455ms_back_at_120pc_loss_90pc_seat2_histories_differ_seed_2208": {
+      "state": "RED",
+      "detail": "seed=2208 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 11004 ms",
+      "line": 79802
+    },
+    "four_direct_seats_59ms_jitter_20ms_host_hung_372ms_histories_differ_seed_4469": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79804
+    },
+    "three_direct_seats_204ms_jitter_10ms_loss_60pc_seat2_loss_90pc_seat3_histories_differ_seed_2810": {
+      "state": "RED",
+      "detail": "seed=2810 property=history kind=histories_differ: histories differ at displayed frame 30: peer 1 members=7 peer 3 members=5; authority ruling requires equal history within a half and after image return at 632 ms",
+      "line": 79805
+    },
+    "four_internet_seats_252ms_jitter_40ms_held_at_the_round_start_seed_3034": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79807
+    },
+    "two_direct_seats_280ms_seat2_late_100ms_more_200ms_back_at_120pc_loss_10pc_seat2_loss_90pc_seat2_held_seat_never_returns_seed_4266": {
+      "state": "RED",
+      "detail": "seed=4266 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6224 ms",
+      "line": 79808
+    },
+    "two_internet_seats_55ms_host_silent_dark_456ms_seat2_leaves_held_seat_never_returns_seed_4838": {
+      "state": "RED",
+      "detail": "seed=4838 property=return kind=image_return: authority ruling image return: the private replay did not reach an activation every survivor certified at 19011 ms",
+      "line": 79810
+    },
+    "three_direct_seats_52ms_host_stopped_188ms_back_at_120pc_loss_90pc_host_held_seat_never_returns_seed_3652": {
+      "state": "RED",
+      "detail": "seed=3652 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4193 ms",
+      "line": 79812
+    },
+    "two_direct_seats_57ms_seat2_late_50ms_more_200ms_back_at_105pc_loss_90pc_host_held_seat_never_returns_seed_568": {
+      "state": "RED",
+      "detail": "seed=568 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6154 ms",
+      "line": 79814
+    },
+    "two_direct_seats_91ms_seat2_late_200ms_more_200ms_back_at_105pc_loss_90pc_seat2_held_seat_never_returns_seed_4759": {
+      "state": "RED",
+      "detail": "seed=4759 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5730 ms",
+      "line": 79816
+    },
+    "three_direct_seats_265ms_host_late_200ms_more_1335ms_back_at_105pc_held_seat_never_returns_seed_714": {
+      "state": "RED",
+      "detail": "seed=714 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 1328 ms",
+      "line": 79818
+    },
+    "two_direct_seats_198ms_host_stopped_230ms_loss_60pc_host_loss_90pc_seat2_held_seat_returns_late_seed_3209": {
+      "state": "RED",
+      "detail": "seed=3209 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 7299 ms",
+      "line": 79820
+    },
+    "two_internet_seats_50ms_jitter_20ms_host_stopped_384ms_loss_30pc_host_held_seat_returns_late_seed_3775": {
+      "state": "RED",
+      "detail": "seed=3775 property=history kind=histories_differ: histories differ at displayed frame 291: peer 1 members=3 peer 2 members=2; authority ruling requires equal history within a half and after image return at 4913 ms",
+      "line": 79822
+    },
+    "three_direct_seats_21ms_host_hung_472ms_back_at_120pc_loss_30pc_seat2_held_seat_returns_late_seed_2325": {
+      "state": "RED",
+      "detail": "seed=2325 property=return kind=held_seat_returns_late: seat 1 held at 5079 ms, its trouble over at 5446 ms and its 472 ms backlog closed by 7806 ms, returned at 10076 ms against 9806 ms",
+      "line": 79824
+    },
+    "three_direct_seats_172ms_seat2_silent_200ms_held_seat_returns_late_seed_3309": {
+      "state": "RED",
+      "detail": "seed=3309 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5762 ms",
+      "line": 79826
+    },
+    "two_direct_seats_282ms_loss_90pc_host_held_seat_returns_late_seed_3760": {
+      "state": "RED",
+      "detail": "seed=3760 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6508 ms",
+      "line": 79828
+    },
+    "three_direct_seats_240ms_seat3_silent_200ms_held_seat_returns_late_seed_1020": {
+      "state": "RED",
+      "detail": "seed=1020 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5865 ms",
+      "line": 79830
+    },
+    "three_direct_seats_57ms_jitter_10ms_host_hung_456ms_held_without_its_own_trouble_seed_4505": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79832
+    },
+    "three_direct_seats_58ms_host_silent_920ms_held_without_its_own_trouble_seed_1964": {
+      "state": "RED",
+      "detail": "seed=1964 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 7496 ms",
+      "line": 79833
+    },
+    "three_direct_seats_47ms_jitter_23ms_host_silent_376ms_held_without_its_own_trouble_seed_1176": {
+      "state": "RED",
+      "detail": "seed=1176 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4650 ms",
+      "line": 79835
+    },
+    "four_internet_seats_297ms_jitter_40ms_held_without_its_own_trouble_seed_3563": {
+      "state": "RED",
+      "detail": "seed=3563 property=history kind=histories_differ: histories differ at displayed frame 40: peer 1 members=15 peer 3 members=13; authority ruling requires equal history within a half and after image return at 858 ms",
+      "line": 79837
+    },
+    "three_direct_seats_50ms_jitter_25ms_host_silent_448ms_returned_seat_held_again_seed_1790": {
+      "state": "RED",
+      "detail": "seed=1790 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4459 ms",
+      "line": 79839
+    },
+    "three_direct_seats_60ms_jitter_30ms_host_late_400ms_more_344ms_loss_30pc_host_loss_60pc_seat2_returned_seat_held_again_seed_3372": {
+      "state": "RED",
+      "detail": "seed=3372 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4707 ms",
+      "line": 79841
+    },
+    "three_direct_seats_300ms_host_hung_200ms_seat3_silent_7200ms_returned_seat_held_again_seed_4371": {
+      "state": "RED",
+      "detail": "seed=4371 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 1474 ms",
+      "line": 79843
+    },
+    "four_internet_seats_53ms_jitter_26ms_seat4_hung_186ms_back_at_100pc_host_late_400ms_more_436ms_returned_seat_held_again_seed_4066": {
+      "state": "RED",
+      "detail": "seed=4066 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 8117 ms",
+      "line": 79845
+    },
+    "four_internet_seats_272ms_host_stopped_752ms_back_at_100pc_seat2_slow_86pc_5574ms_back_at_100pc_two_return_frames_seed_404": {
+      "state": "RED",
+      "detail": "seed=404 property=history kind=histories_differ: histories differ at displayed frame 35: peer 1 members=15 peer 2 members=7; authority ruling requires equal history within a half and after image return at 768 ms",
+      "line": 79847
+    },
+    "three_direct_seats_290ms_jitter_10ms_seat3_slow_56pc_1296ms_back_at_105pc_host_silent_1335ms_histories_differ_seed_169": {
+      "state": "RED",
+      "detail": "seed=169 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6265 ms",
+      "line": 79849
+    },
+    "three_internet_seats_290ms_jitter_10ms_seat3_slow_56pc_1296ms_back_at_105pc_host_silent_1335ms_histories_differ_seed_169": {
+      "state": "RED",
+      "detail": "seed=169 property=history kind=histories_differ: histories differ at displayed frame 372: peer 1 members=3 peer 2 members=2; authority ruling requires equal history within a half and after image return at 6350 ms",
+      "line": 79851
+    },
+    "three_seats_host_slows_while_the_other_joiner_is_held": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 362: peer 1 members=7 peer 3 members=6; authority ruling requires equal history within a half and after image return at 6103 ms",
+      "line": 79853
+    },
+    "seed12_four_direct_joiner_slow_74_percent_with_a_lossy_voter": {
+      "state": "RED",
+      "detail": "seed=12 property=history kind=histories_differ: histories differ at displayed frame 34: peer 1 members=15 peer 4 members=13; authority ruling requires equal history within a half and after image return at 707 ms",
+      "line": 79855
+    },
+    "seed12_four_internet_joiner_slow_74_percent_with_a_lossy_voter": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79857
+    },
+    "seed69_four_internet_host_slow_58_percent_with_loss": {
+      "state": "RED",
+      "detail": "seed=69 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4425 ms",
+      "line": 79858
+    },
+    "seed192_two_internet_host_stopped_then_the_joiner_leaves": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79860
+    },
+    "three_seats_host_held_catches_up_at_105_percent_over_100ms": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79861
+    },
+    "three_seats_host_held_catches_up_at_105_percent_over_250ms": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79862
+    },
+    "four_seats_joiner_held_catches_up_at_105_percent_over_100ms": {
+      "state": "RED",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6050 ms",
+      "line": 79863
+    },
+    "four_seats_joiner_held_catches_up_at_105_percent_over_150ms": {
+      "state": "RED",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6042 ms",
+      "line": 79865
+    },
+    "four_seats_joiner_held_catches_up_at_105_percent_over_200ms": {
+      "state": "RED",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6050 ms",
+      "line": 79867
+    },
+    "four_seats_joiner_held_catches_up_at_105_percent_over_250ms": {
+      "state": "RED",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6042 ms",
+      "line": 79869
+    },
+    "four_seats_joiner_held_catches_up_from_a_near_donor_over_200ms": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79871
+    },
+    "three_seats_joiner_silent_2s_returns_over_250ms_with_40ms_jitter": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 34: peer 1 members=7 peer 3 members=5; authority ruling requires equal history within a half and after image return at 785 ms",
+      "line": 79872
+    },
+    "three_seats_joiner_returns_while_a_voter_loses_30_percent": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 362: peer 1 members=7 peer 2 members=6; authority ruling requires equal history within a half and after image return at 6103 ms",
+      "line": 79874
+    },
+    "three_seats_joiner_returns_to_a_host_at_95_percent": {
+      "state": "RED",
+      "detail": "seed=0 property=rules kind=loser_did_not_stop_at_decision: authority ruling: losing peer 1 did not stop at decision frame 356 at 6255 ms",
+      "line": 79876
+    },
+    "three_seats_joiner_slow_80_percent_6s_back_at_120_percent_stays_returned": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79878
+    },
+    "four_seats_two_joiners_held_at_once_catch_up_at_105_percent_over_100ms": {
+      "state": "RED",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6050 ms",
+      "line": 79879
+    },
+    "three_seats_joiner_inputs_200ms_late_for_5s_over_100ms": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 365: peer 1 members=7 peer 2 members=6; authority ruling requires equal history within a half and after image return at 6153 ms",
+      "line": 79881
+    },
+    "two_internet_seats_host_loop_stopped_2s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79883
+    },
+    "two_direct_seats_host_loop_stopped_2s": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=participation_ended: lag ended participation or required a manual rejoin: peer 2 stopped: PeerHeld:the direct host link is unavailable; returning through a private image at 6183 ms",
+      "line": 79884
+    },
+    "four_seats_host_loop_stopped_2s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79886
+    },
+    "three_seats_returned_joiner_meets_a_host_autosave_every_10s": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 302: peer 1 members=7 peer 2 members=6; authority ruling requires equal history within a half and after image return at 5103 ms",
+      "line": 79887
+    },
+    "three_seats_returned_joiner_autosaves_every_10s": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 302: peer 1 members=7 peer 2 members=6; authority ruling requires equal history within a half and after image return at 5103 ms",
+      "line": 79889
+    },
+    "four_seats_hold_during_another_seats_private_catch_up": {
+      "state": "RED",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6042 ms",
+      "line": 79891
+    },
+    "two_internet_seats_split_heals_before_a_hold_then_the_host_stalls_2s": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 365: peer 1 members=1 peer 2 members=2; authority ruling requires equal history within a half and after image return at 6174 ms",
+      "line": 79893
+    },
+    "four_internet_seats_split_12_34_heals_then_13_24_splits": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 362: peer 1 members=15 peer 3 members=14; authority ruling requires equal history within a half and after image return at 6098 ms",
+      "line": 79895
+    },
+    "two_internet_seats_joiner_silent_2s_while_the_allowance_is_spent": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79897
+    },
+    "two_internet_seats_joiner_silent_2s_with_a_300ms_directory": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79898
+    },
+    "three_seats_return_meets_a_voter_whose_reliable_lane_stalls": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 362: peer 1 members=7 peer 2 members=6; authority ruling requires equal history within a half and after image return at 6103 ms",
+      "line": 79899
+    },
+    "two_internet_seats_link_and_directory_dark_3s_then_the_joiner_stalls": {
+      "state": "RED",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 14100 ms",
+      "line": 79901
+    },
+    "four_internet_seats_decided_split_then_a_kick_then_a_stall": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 362: peer 1 members=15 peer 3 members=14; authority ruling requires equal history within a half and after image return at 6098 ms",
+      "line": 79903
+    },
+    "four_internet_seats_host_kicks_while_its_half_lost_the_split": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 362: peer 1 members=15 peer 3 members=14; authority ruling requires equal history within a half and after image return at 6098 ms",
+      "line": 79905
+    },
+    "three_seats_host_held_then_the_joiners_split": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 362: peer 1 members=7 peer 2 members=6; authority ruling requires equal history within a half and after image return at 6096 ms",
+      "line": 79907
+    },
+    "three_seats_host_held_then_a_joiner_stalls_1s": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 362: peer 1 members=7 peer 2 members=6; authority ruling requires equal history within a half and after image return at 6096 ms",
+      "line": 79909
+    },
+    "three_seats_host_held_then_a_joiner_slow_70_percent": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 362: peer 1 members=7 peer 2 members=6; authority ruling requires equal history within a half and after image return at 6096 ms",
+      "line": 79911
+    },
+    "four_internet_seats_split_while_a_seat_returns": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 512: peer 1 members=15 peer 3 members=14; authority ruling requires equal history within a half and after image return at 8615 ms",
+      "line": 79913
+    },
+    "three_seats_joiner_150ms_later_for_10s": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 365: peer 1 members=7 peer 2 members=6; authority ruling requires equal history within a half and after image return at 6153 ms",
+      "line": 79915
+    },
+    "three_seats_joiner_400ms_later_for_10s": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 365: peer 1 members=7 peer 2 members=6; authority ruling requires equal history within a half and after image return at 6153 ms",
+      "line": 79917
+    },
+    "three_seats_joiner_slow_50_percent_from_the_round_start": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79919
+    },
+    "three_seats_joiner_slow_again_just_after_its_return": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79920
+    },
+    "three_seats_slow_joiner_near_a_voter_far_from_the_proposer": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79921
+    },
+    "two_direct_seats_host_slow_80_percent_10s": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=participation_ended: lag ended participation or required a manual rejoin: peer 2 stopped: PeerHeld:the direct host link is unavailable; returning through a private image at 6249 ms",
+      "line": 79922
+    },
+    "two_direct_seats_host_hung_2s": {
+      "state": "RED",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6134 ms",
+      "line": 79924
+    },
+    "four_direct_seats_split_12_from_34_3s": {
+      "state": "RED",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6072 ms",
+      "line": 79926
+    },
+    "three_seats_host_loop_stopped_2s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79928
+    },
+    "four_seats_host_slow_80_percent_10s": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 79929
+    },
+    "three_seats_two_joiners_slow_70_percent_at_once": {
+      "state": "RED",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6250 ms",
+      "line": 79930
+    },
+    "host_slows_while_a_third_seat_is_already_held": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 362: peer 2 members=15 peer 3 members=14; authority ruling requires equal history within a half and after image return at 6081 ms",
+      "line": 79932
+    },
+    "three_seats_joiner_returns_while_the_host_loses_30_percent": {
+      "state": "RED",
+      "detail": "seed=0 property=history kind=histories_differ: histories differ at displayed frame 362: peer 1 members=7 peer 2 members=6; authority ruling requires equal history within a half and after image return at 6103 ms",
+      "line": 79934
+    },
+    "declared_leave_keeps_the_round_and_returns_on_its_seat": {
+      "state": "RED",
+      "detail": "seed=0 the answered returning seat did not resume its accepted input and live play",
+      "line": 79967
+    },
+    "two_seats_declared_leave_returns_through_a_private_reclaim": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 80172
+    },
+    "two_seats_closed_joiner_after_input_does_not_hold_up_the_host": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 80193
+    },
+    "two_seats_closed_joiner_before_host_input_does_not_hold_up_the_host": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 80211
+    },
+    "healthy_input_runway_spends_no_tie_allowance_before_a_real_cut": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 80234
+    },
+    "a_rematch_starts_without_the_ended_rounds_catch_up": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 80251
+    },
+    "image_successor_capsule_sealing_refusal_is_retried": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 82590
+    },
+    "a_refused_image_activation_keeps_the_other_returners_service_clear": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 84928
+    },
+    "stored_ticket_redials_the_rematch_lobby_on_its_original_seat": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 84936
+    },
+    "in_place_private_reader_skips_the_committed_capture": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 85022
+    },
+    "image_base_transient_refusal_answers_after_four_seconds": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 85024
+    },
+    "image_base_out_of_memory_answers_immediately": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 85026
+    },
+    "image_base_host_refusals_allow_fresh_attempts": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 85033
+    },
+    "held_host_still_serves_another_seats_image": {
+      "state": "RED",
+      "detail": "seed=0 histories differ at displayed frame 362: peer 2 members=14 peer 3 members=15; authority ruling requires equal history within a half and after image return",
+      "line": 85890
+    },
+    "slow_held_host_names_another_seats_base_through_the_playing_seats": {
+      "state": "RED",
+      "detail": "seed=0 authority ruling: losing peer 1 did not stop at decision frame 561",
+      "line": 86328
+    },
+    "image_replay_12ms_tick_10ms_draw_closes_its_trail": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 86331
+    },
+    "successor_unvalidated_boundary_refused": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 86332
+    },
+    "leave_during_handover_exits": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 86333
+    },
+    "malformed_traffic_does_not_renew_authority": {
+      "state": "GREEN",
+      "detail": "",
+      "line": 86334
+    }
+  }
+}

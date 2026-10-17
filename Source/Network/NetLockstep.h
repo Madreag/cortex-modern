@@ -2468,7 +2468,10 @@ namespace RTE {
 
 		bool AllRemoteStartsReceived() const {
 			return std::all_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
-				return m_RemoteStartsReceived.contains(peer) || (m_Config.joinsRunningRound && !IsRemoteRequiredForFrame(peer, m_Config.startFrame));
+				const bool start = m_RemoteStartsReceived.contains(peer) || (m_Config.joinsRunningRound && !IsRemoteRequiredForFrame(peer, m_Config.startFrame));
+				// A fresh round's first heartbeat follows establishment of every direct input route.
+				return start && (!UsesPeerFrameGroups() || m_Config.joinsRunningRound || m_Config.continuesMatch ||
+				    (HasPeerFrameRoute(peer) && m_PeerAppliedPrefixes.contains(peer)));
 			});
 		}
 		bool IsKnownRemotePeer(uint8_t peerId) const;

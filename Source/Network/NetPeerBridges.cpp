@@ -265,6 +265,15 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly) {
 		if (!UsesPeerFrameGroups() || WaitsForPlacement() || frame != m_Stats.nextFrame || m_PeerBridgeCertificates.contains({frame, 0})) return false;
+		// A lagging reader can receive its own hold before the last few preceding inputs. Fetch that committed tail;
+		// it must not turn its stale display clock into a new hold of the survivor whose record it is catching up to.
+		if (PeerFrameCatchUpActive()) for (const auto& [key, kept]: m_PendingPeerDecisions) {
+			const auto& hold = kept.first;
+			if (key.second == 0 && key.first > frame && std::find(hold.members.begin(), hold.members.end(), m_Config.localPeerId) != hold.members.end()) {
+				RequestPeerCommittedTail(nowMs);
+				return false;
+			}
+		}
 		const auto sources = m_PeerSourceInputs.find(frame);
 		if (sources == m_PeerSourceInputs.end() || !sources->second.contains(m_Config.localPeerId)) return false;
 		auto proposal = PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
@@ -446,7 +455,10 @@ namespace RTE {
 		    }));
 		const bool cooperativeAhead = proposal.members.size() == 1 &&
 		    PeerGroupHasAuthority(proposal.connectedMask | SeatBit(proposal.members.front()), proposal.frame);
-		const bool heldAhead = (otherVoter || cooperativeAhead) && feeding;
+		const bool localDeadline = m_ConsumerWaitingFrame && *m_ConsumerWaitingFrame <= frame && nowMs >= m_ConsumerWaitStartMs &&
+		    nowMs - m_ConsumerWaitStartMs + static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2)) >= feedBoundMs;
+		// Newer arrivals cannot extend the consumer's deadline for an older missing input.
+		const bool heldAhead = (otherVoter || cooperativeAhead) && feeding && (ownYield || !localDeadline);
 		if (heldAhead) {
 			if (!slowMachine || (!ownYield && std::countr_zero(proposal.connectedMask) + 1 != m_Config.localPeerId)) return false;
 			for (const auto& [key, votes]: m_PeerBridgeVotes) {
@@ -507,6 +519,8 @@ namespace RTE {
 					// The current displayed slot includes pauses and startup synchronization.
 				if (m_PeerConsumerAtMs && m_LastCompletedSimulationTick && frame > *m_LastCompletedSimulationTick)
 						dueMs = *m_PeerConsumerAtMs + (frame - *m_LastCompletedSimulationTick) * m_Config.simTickMs;
+				// A suspended machine's old display slot is not a fresh observation of another sender's absence.
+				if (m_FirstMissingFrame == frame) dueMs = std::max(dueMs, static_cast<double>(m_FirstMissingMs));
 				// Catch-up can ask for this tick before its original pacing slot.
 				// Its actual consumer wait still has the same three-tick bound.
 				if (m_ConsumerWaitingFrame == frame) dueMs = std::min(dueMs, static_cast<double>(m_ConsumerWaitStartMs));
@@ -624,7 +638,9 @@ namespace RTE {
 			voters |= SeatBit(peer); signedVotes.push_back(std::move(bytes));
 		}
 		if (proposal.preparedFrame == 0) {
-			if ((voters & proposal.connectedMask) == 0 || !PeerGroupMayHold(proposal.connectedMask, frame)) return;
+			// A direct host may consent to its own hold without transferring directory authority.
+			const bool coSigned = (voters & required) == required && PeerGroupHasAuthority(voters, frame);
+			if ((voters & proposal.connectedMask) == 0 || (!PeerGroupMayHold(proposal.connectedMask, frame) && !coSigned)) return;
 			if ((voters & required) != required) {
 				// Each survivor installs its own hold at the bound. The other survivors' signatures can still be in flight on a
 				// healthy long link; waiting a second round trip here would make their controls pay for the missing machine.
@@ -717,8 +733,10 @@ namespace RTE {
 		if (agreed.preparedFrame != 0 && agreed.preparedFrame != 3 && !PeerGroupHasAuthority(voters, certificate.frame))
 			CheckPeerFrameTie(certificate.frame, voters, nowMs);
 		const PeerDecisionKey decision{certificate.frame, DecisionKind(certificate)};
+		const uint32_t required = PeerDecisionRequiredVoters(agreed);
+		const bool coSignedHold = (voters & required) == required && PeerGroupHasAuthority(voters, certificate.frame);
 		if (agreed.preparedFrame == 3 ? !PeerAdminCertificateValid(agreed, voters) :
-		    agreed.preparedFrame == 0 ? !PeerGroupMayHold(agreed.connectedMask, certificate.frame) : !PeerGroupHasAuthority(voters, certificate.frame)) {
+		    agreed.preparedFrame == 0 ? !PeerGroupMayHold(agreed.connectedMask, certificate.frame) && !coSignedHold : !PeerGroupHasAuthority(voters, certificate.frame)) {
 			m_AuthorityWaitSinceMs.try_emplace(decision, nowMs);
 			refused("certificate");
 			keep(); return;

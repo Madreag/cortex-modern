@@ -1,0 +1,1042 @@
+{
+  "binary_sha256": "5229e6a323a8c8d0a01e7280f3911023c831e7dc942d8328c5a5c997e78747d5",
+  "counts": {
+    "GREEN": 47,
+    "RED": 74
+  },
+  "shapes": {
+    "return:1": {
+      "state": "GREEN",
+      "rows": [
+        "peer_returns_2s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:2": {
+      "state": "GREEN",
+      "rows": [
+        "two_internet_joiner_held_for_a_slow_spell_catches_up_at_115_percent"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:3": {
+      "state": "GREEN",
+      "rows": [
+        "two_direct_host_3s",
+        "two_internet_host_3s_directory_reachable"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:4": {
+      "state": "RED",
+      "rows": [
+        "joiner_catching_up_at_105_percent_returns_over_100ms"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:5": {
+      "state": "RED",
+      "rows": [
+        "three_seats_held_host_catches_up_then_runs_at_round_rate_over_100ms",
+        "three_seats_held_host_catches_up_then_runs_at_round_rate_over_250ms",
+        "three_seats_host_held_catches_up_at_105_percent_over_100ms",
+        "three_seats_host_held_catches_up_at_105_percent_over_250ms"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:6": {
+      "state": "RED",
+      "rows": [
+        "four_seats_held_joiner_at_round_rate_uses_a_different_donor_over_200ms",
+        "four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_100ms",
+        "four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_200ms",
+        "four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_250ms",
+        "four_seats_joiner_held_catches_up_at_105_percent_over_100ms",
+        "four_seats_joiner_held_catches_up_at_105_percent_over_150ms",
+        "four_seats_joiner_held_catches_up_at_105_percent_over_200ms",
+        "four_seats_joiner_held_catches_up_at_105_percent_over_250ms"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:7": {
+      "state": "RED",
+      "rows": [
+        "four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_250ms",
+        "four_seats_joiner_held_catches_up_at_105_percent_over_250ms"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:8": {
+      "state": "RED",
+      "rows": [
+        "three_seats_joiner_silent_2s_returns_over_250ms_with_40ms_jitter"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:9": {
+      "state": "RED",
+      "rows": [
+        "joiner_catching_up_at_102_percent_returns_over_100ms"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:10": {
+      "state": "GREEN",
+      "rows": [
+        "peer_returns_2s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:11": {
+      "state": "GREEN",
+      "rows": [
+        "peer_returns_40s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:12": {
+      "state": "RED",
+      "rows": [
+        "held_seat_return_meets_a_silent_voter_over_100ms"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:13": {
+      "state": "RED",
+      "rows": [
+        "three_seats_joiner_returns_while_a_voter_loses_30_percent",
+        "three_seats_joiner_returns_while_the_host_loses_30_percent"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:14": {
+      "state": "RED",
+      "rows": [
+        "three_seats_joiner_returns_to_a_host_at_95_percent"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:15": {
+      "state": "RED",
+      "rows": [
+        "two_internet_joiner_held_again_while_catching_up"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:16": {
+      "state": "GREEN",
+      "rows": [
+        "three_seats_joiner_slow_80_percent_6s_back_at_120_percent_stays_returned",
+        "three_seats_joiner_slow_again_just_after_its_return"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:17": {
+      "state": "RED",
+      "rows": [
+        "three_seats_second_joiner_drops_while_the_first_is_held"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:18": {
+      "state": "RED",
+      "rows": [
+        "four_seats_two_joiners_held_at_once_catch_up_at_105_percent_over_100ms"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "return:19": {
+      "state": "RED",
+      "rows": [
+        "image_return_four_seats_over_100ms_keeps_equal_histories_and_bound",
+        "image_return_four_seats_over_200ms_keeps_equal_histories_and_bound",
+        "image_return_three_seats_over_100ms_keeps_equal_histories_and_bound",
+        "image_return_three_seats_over_250ms_keeps_equal_histories_and_bound"
+      ],
+      "unmatched_patterns": [],
+      "scope": "actual coordinators, a deterministic image from a common committed capture, the returning seat's own received activation certificate, and its live handshake while the private replay finishes; no game archive"
+    },
+    "return:20": {
+      "state": "GREEN",
+      "rows": [
+        "peer_frozen_10s_return_by_tail_only"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "catchup:1": {
+      "state": "GREEN",
+      "rows": [
+        "peer_frozen_10s_return_by_tail_only",
+        "peer_returns_2s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "catchup:2": {
+      "state": "RED",
+      "rows": [
+        "joiner_catching_up_at_105_percent_returns_over_200ms"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "catchup:3": {
+      "state": "RED",
+      "rows": [
+        "two_internet_joiner_dark_past_history_over_100ms"
+      ],
+      "unmatched_patterns": [],
+      "scope": "actual committed tail to the public image handoff; archive replay is outside this row"
+    },
+    "catchup:4": {
+      "state": "RED",
+      "rows": [
+        "repeated_host_changes_bound_the_tail_or_answer_missing"
+      ],
+      "unmatched_patterns": [],
+      "scope": "33 real administrative certificates; proof retention measured; overflow branch not reached"
+    },
+    "catchup:5": {
+      "state": "RED",
+      "rows": [
+        "image_return_four_seats_over_100ms_keeps_equal_histories_and_bound",
+        "image_return_four_seats_over_200ms_keeps_equal_histories_and_bound",
+        "image_return_three_seats_over_100ms_keeps_equal_histories_and_bound",
+        "image_return_three_seats_over_250ms_keeps_equal_histories_and_bound"
+      ],
+      "unmatched_patterns": [],
+      "scope": "actual coordinator image activation; no game archive"
+    },
+    "catchup:6": {
+      "state": "GREEN",
+      "rows": [
+        "two_image_returners_share_a_base_and_keep_separate_outcomes"
+      ],
+      "unmatched_patterns": [],
+      "scope": "world-join protocol component; large-tail integration belongs to existing net-world-join tests"
+    },
+    "catchup:7": {
+      "state": "GREEN",
+      "rows": [
+        "image_successor_capsule_sealing_refusal_is_retried"
+      ],
+      "unmatched_patterns": [],
+      "scope": "actual live service seal retry and admitted client opens the encrypted successor capsule"
+    },
+    "catchup:8": {
+      "state": "GREEN",
+      "rows": [
+        "image_replay_12ms_tick_10ms_draw_closes_its_trail"
+      ],
+      "unmatched_patterns": [],
+      "scope": "actual ScenarioRunner timed grant and replay API, 12 ms ticks and 10 ms draws, with only the round's already committed frames appended"
+    },
+    "catchup:9": {
+      "state": "GREEN",
+      "rows": [
+        "image_replay_12ms_tick_10ms_draw_closes_its_trail"
+      ],
+      "unmatched_patterns": [],
+      "scope": "merged adaptive catch-up floor is driven on the real timed grant API; the replay must completely close a 240-frame trail in 120 seconds"
+    },
+    "catchup:10": {
+      "state": "RED",
+      "rows": [
+        "image_return_at_round_rate_80_frames_behind_over_100ms",
+        "image_return_at_round_rate_80_frames_behind_over_200ms",
+        "image_return_at_round_rate_80_frames_behind_over_250ms",
+        "image_return_four_seats_over_100ms_keeps_equal_histories_and_bound",
+        "image_return_four_seats_over_200ms_keeps_equal_histories_and_bound",
+        "image_return_three_seats_over_100ms_keeps_equal_histories_and_bound",
+        "image_return_three_seats_over_250ms_keeps_equal_histories_and_bound"
+      ],
+      "unmatched_patterns": [],
+      "scope": "capacity protocol gate plus actual coordinator activation"
+    },
+    "catchup:11": {
+      "state": "GREEN",
+      "rows": [
+        "image_activation_reannouncement_preserves_closing_time"
+      ],
+      "unmatched_patterns": [],
+      "scope": "world-join protocol reannouncement component"
+    },
+    "catchup:12": {
+      "state": "GREEN",
+      "rows": [
+        "peer_frozen_10s_return_by_tail_only"
+      ],
+      "unmatched_patterns": [],
+      "scope": "same-connection committed-tail fixture; new-connection leave-rejoin scene is covered by net-lockstep suite"
+    },
+    "catchup:13": {
+      "state": "RED",
+      "rows": [
+        "two_internet_joiner_held_again_while_catching_up"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "catchup:14": {
+      "state": "RED",
+      "rows": [
+        "image_return_four_seats_over_100ms_keeps_equal_histories_and_bound",
+        "image_return_four_seats_over_200ms_keeps_equal_histories_and_bound",
+        "image_return_three_seats_over_100ms_keeps_equal_histories_and_bound",
+        "image_return_three_seats_over_250ms_keeps_equal_histories_and_bound"
+      ],
+      "unmatched_patterns": [],
+      "scope": "every observer uses its own coordinator configuration; no host-only grace shortcut"
+    },
+    "catchup:15": {
+      "state": "GREEN",
+      "rows": [
+        "in_place_private_reader_skips_the_committed_capture"
+      ],
+      "unmatched_patterns": [],
+      "scope": "actual service tick-boundary capture guard; full image capture park is covered outside this fixture"
+    },
+    "catchup:16": {
+      "state": "GREEN",
+      "rows": [
+        "in_place_private_reader_skips_the_committed_capture"
+      ],
+      "unmatched_patterns": [],
+      "scope": "actual host checkpoint command, committed frame and private reader capture guard"
+    },
+    "catchup:17": {
+      "state": "GREEN",
+      "rows": [
+        "in_place_private_reader_skips_the_committed_capture"
+      ],
+      "unmatched_patterns": [],
+      "scope": "actual committed capture replayed by a real private reader; actual service capture call"
+    },
+    "catchup:18": {
+      "state": "GREEN",
+      "rows": [
+        "image_base_host_refusals_allow_fresh_attempts",
+        "image_base_out_of_memory_answers_immediately",
+        "image_base_transient_refusal_answers_after_four_seconds"
+      ],
+      "unmatched_patterns": [],
+      "scope": "service refusal and roster components; full archive fault switch not driven"
+    },
+    "catchup:19": {
+      "state": "RED",
+      "rows": [
+        "three_seats_returned_joiner_autosaves_every_10s",
+        "three_seats_returned_joiner_meets_a_host_autosave_every_10s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "periodic stopped-main-loop faults; no full service autosave or field X2 reproduction"
+    },
+    "catchup:20": {
+      "state": "RED",
+      "rows": [
+        "four_seats_host_loop_stopped_2s",
+        "host_absent_3s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "catchup:21": {
+      "state": "RED",
+      "rows": [
+        "held_host_still_serves_another_seats_image",
+        "slow_held_host_names_another_seats_base_through_the_playing_seats"
+      ],
+      "unmatched_patterns": [],
+      "scope": "actual frozen and slow held host coordinators request a base from the playing voters; the real committed capture is followed through the service schedule, without archive restoration"
+    },
+    "catchup:22": {
+      "state": "RED",
+      "rows": [
+        "three_seats_second_joiner_drops_while_the_first_is_held"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "catchup:23": {
+      "state": "GREEN",
+      "rows": [
+        "a_refused_image_activation_keeps_the_other_returners_service_clear",
+        "two_image_returners_share_a_base_and_keep_separate_outcomes"
+      ],
+      "unmatched_patterns": [],
+      "scope": "world-join independence plus real service refusal and subsequent transfer startup; archive restore is outside this row"
+    },
+    "catchup:24": {
+      "state": "RED",
+      "rows": [
+        "a_rematch_starts_without_the_ended_rounds_catch_up",
+        "random_hold_schedules"
+      ],
+      "unmatched_patterns": [],
+      "scope": "random schedules include rematches and next-round faults; per-seed results retained"
+    },
+    "catchup:25": {
+      "state": "GREEN",
+      "rows": [
+        "stored_ticket_redials_the_rematch_lobby_on_its_original_seat"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real stored ticket, session re-dial and rematch lobby acknowledgement; full service image incarnation path not driven"
+    },
+    "catchup:26": {
+      "state": "GREEN",
+      "rows": [
+        "benign_image_cancellations_do_not_exhaust_three_returns"
+      ],
+      "unmatched_patterns": [],
+      "scope": "six public world-join cancellations and actual roster reducer retry accounting"
+    },
+    "hold:1": {
+      "state": "RED",
+      "rows": [
+        "host_absent_3s",
+        "peer_returns_2s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:2": {
+      "state": "RED",
+      "rows": [
+        "host_spike_150ms",
+        "joiner_spike_150ms"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:3": {
+      "state": "RED",
+      "rows": [
+        "host_spike_400ms",
+        "joiner_spike_400ms"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:4": {
+      "state": "GREEN",
+      "rows": [
+        "loss_20percent_60s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:5": {
+      "state": "RED",
+      "rows": [
+        "three_seats_joiner_150ms_later_for_10s",
+        "three_seats_joiner_400ms_later_for_10s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:6": {
+      "state": "GREEN",
+      "rows": [
+        "slow_joiner_at_80_percent_three_seats_over_100ms_20s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:7": {
+      "state": "GREEN",
+      "rows": [
+        "two_internet_slow_joiner_at_80_percent_20s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:8": {
+      "state": "GREEN",
+      "rows": [
+        "three_seats_joiner_slow_50_percent_from_the_round_start",
+        "three_seats_joiner_slow_again_just_after_its_return"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:9": {
+      "state": "RED",
+      "rows": [
+        "three_seats_joiner_inputs_200ms_late_for_5s_over_100ms"
+      ],
+      "unmatched_patterns": [],
+      "scope": "observed late-feed behavior; no claim to execute the unused FeedsBelowRoundRate function"
+    },
+    "hold:10": {
+      "state": "GREEN",
+      "rows": [
+        "peer_frozen_10s_keepalives"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:11": {
+      "state": "RED",
+      "rows": [
+        "declared_leave_keeps_the_round_and_returns_on_its_seat",
+        "two_seats_declared_leave_returns_through_a_private_reclaim"
+      ],
+      "unmatched_patterns": [],
+      "scope": "actual sessions, declared leave and private reclaim through the original seat"
+    },
+    "hold:12": {
+      "state": "GREEN",
+      "rows": [
+        "two_seats_closed_joiner_after_input_does_not_hold_up_the_host",
+        "two_seats_closed_joiner_before_host_input_does_not_hold_up_the_host"
+      ],
+      "unmatched_patterns": [],
+      "scope": "actual session close before and after the host input; host keeps the three-tick bound"
+    },
+    "hold:13": {
+      "state": "GREEN",
+      "rows": [
+        "held_seat_and_a_member_slow_to_hear_hold_nobody_else"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:14": {
+      "state": "RED",
+      "rows": [
+        "host_absent_3s",
+        "partition_3_1"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:15": {
+      "state": "RED",
+      "rows": [
+        "host_absent_3s",
+        "partition_3_1"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:16": {
+      "state": "GREEN",
+      "rows": [
+        "three_seats_slow_joiner_near_a_voter_far_from_the_proposer"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:17": {
+      "state": "RED",
+      "rows": [
+        "three_seats_second_joiner_drops_while_the_first_is_held"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:18": {
+      "state": "RED",
+      "rows": [
+        "two_direct_seats_host_loop_stopped_2s",
+        "two_direct_seats_host_slow_80_percent_10s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:19": {
+      "state": "RED",
+      "rows": [
+        "two_internet_seats_split_heals_before_a_hold_then_the_host_stalls_2s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:20": {
+      "state": "RED",
+      "rows": [
+        "three_seats_host_held_then_a_joiner_slow_70_percent",
+        "three_seats_host_held_then_a_joiner_stalls_1s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:21": {
+      "state": "RED",
+      "rows": [
+        "four_direct_seats_host_and_joiner_silent_keeps_survivors_bound"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:22": {
+      "state": "RED",
+      "rows": [
+        "four_internet_seats_split_12_34_heals_then_13_24_splits"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:23": {
+      "state": "GREEN",
+      "rows": [
+        "two_internet_host_and_directory_3s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:24": {
+      "state": "GREEN",
+      "rows": [
+        "two_internet_late_joiner_takes_every_decision_with_a_240ms_referee",
+        "two_internet_late_joiner_with_a_referee_past_the_tie_timeout"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:25": {
+      "state": "GREEN",
+      "rows": [
+        "peer_returns_2s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:26": {
+      "state": "GREEN",
+      "rows": [
+        "slow_joiner_at_80_percent_three_seats_over_100ms_20s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:27": {
+      "state": "GREEN",
+      "rows": [
+        "peer_frozen_10s_keepalives"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:28": {
+      "state": "RED",
+      "rows": [
+        "a_kept_hold_waits_for_its_own_directory_without_changing_history"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real tied-half certificate kept beyond five seconds for its own directory authority; no local-clock discard, equal histories, and the survivor wait bound"
+    },
+    "hold:29": {
+      "state": "RED",
+      "rows": [
+        "three_seats_return_meets_a_voter_whose_reliable_lane_stalls"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:30": {
+      "state": "RED",
+      "rows": [
+        "joiner_inputs_lost_1s_held_and_back_over_100ms",
+        "peer_frozen_10s_return_by_tail_only"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:31": {
+      "state": "RED",
+      "rows": [
+        "joiner_inputs_lost_1s_held_and_back_over_100ms"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:32": {
+      "state": "GREEN",
+      "rows": [
+        "peer_returns_2s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:33": {
+      "state": "RED",
+      "rows": [
+        "host_absent_20s",
+        "host_absent_3s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:34": {
+      "state": "GREEN",
+      "rows": [
+        "four_seats_host_loop_stopped_2s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:35": {
+      "state": "GREEN",
+      "rows": [
+        "four_seats_host_slow_80_percent_10s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:36": {
+      "state": "GREEN",
+      "rows": [
+        "two_internet_seats_host_loop_stopped_2s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:37": {
+      "state": "RED",
+      "rows": [
+        "two_internet_seats_split_heals_before_a_hold_then_the_host_stalls_2s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:38": {
+      "state": "RED",
+      "rows": [
+        "three_seats_second_joiner_drops_while_the_first_is_held"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:39": {
+      "state": "RED",
+      "rows": [
+        "four_direct_seats_host_and_joiner_silent_keeps_survivors_bound",
+        "partition_2_2_host_tie"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:40": {
+      "state": "RED",
+      "rows": [
+        "three_seats_two_joiners_slow_70_percent_at_once"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:41": {
+      "state": "RED",
+      "rows": [
+        "four_seats_hold_during_another_seats_private_catch_up"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:42": {
+      "state": "RED",
+      "rows": [
+        "two_internet_joiner_held_again_while_catching_up",
+        "two_internet_joiner_held_again_while_never_blocked"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:43": {
+      "state": "GREEN",
+      "rows": [
+        "two_internet_joiner_held_for_a_slow_spell_catches_up_at_115_percent"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:44": {
+      "state": "RED",
+      "rows": [
+        "agreed_brain_placement_stopped_joiner_keeps_the_survivor_bound",
+        "agreed_start_gate_stopped_joiner_keeps_the_survivor_bound"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:45": {
+      "state": "RED",
+      "rows": [
+        "dedicated_match_stopped_joiner_keeps_the_survivor_bound",
+        "pause_policy_stopped_joiner_keeps_the_survivor_bound",
+        "persistent_world_stopped_joiner_keeps_the_survivor_bound"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "hold:46": {
+      "state": "RED",
+      "rows": [
+        "two_direct_host_3s",
+        "two_internet_host_blackout_directory_reachable_by_both"
+      ],
+      "unmatched_patterns": [],
+      "scope": "oracle strengthened: actual fault subject and 50ms survivor bound; every committed history frame compared"
+    },
+    "referee:1": {
+      "state": "RED",
+      "rows": [
+        "directory_client_round_trip_allowances_and_refusals",
+        "two_internet_host_blackout_directory_reachable_by_both"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:2": {
+      "state": "RED",
+      "rows": [
+        "partition_2_2_host_tie"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:3": {
+      "state": "RED",
+      "rows": [
+        "refereed_2_2_split_then_a_second_drop_in_the_same_hold"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:4": {
+      "state": "RED",
+      "rows": [
+        "two_internet_seats_split_heals_before_a_hold_then_the_host_stalls_2s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:5": {
+      "state": "RED",
+      "rows": [
+        "four_internet_seats_split_12_34_heals_then_13_24_splits"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:6": {
+      "state": "GREEN",
+      "rows": [
+        "directory_client_round_trip_allowances_and_refusals"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:7": {
+      "state": "GREEN",
+      "rows": [
+        "directory_client_round_trip_allowances_and_refusals",
+        "two_internet_seats_joiner_silent_2s_with_a_300ms_directory"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:8": {
+      "state": "GREEN",
+      "rows": [
+        "directory_decision_lands_after_the_final_query"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:9": {
+      "state": "RED",
+      "rows": [
+        "a_kept_hold_waits_for_its_own_directory_without_changing_history",
+        "two_internet_late_joiner_with_a_referee_past_the_tie_timeout"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real tied-half certificate waits beyond the old five-second local-clock limit for its own directory response; no discarded agreed hold, equal histories, and the survivor wait bound"
+    },
+    "referee:10": {
+      "state": "RED",
+      "rows": [
+        "three_seats_return_meets_a_voter_whose_reliable_lane_stalls"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:11": {
+      "state": "RED",
+      "rows": [
+        "two_internet_seats_link_and_directory_dark_3s_then_the_joiner_stalls"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:12": {
+      "state": "GREEN",
+      "rows": [
+        "directory_general_429_blocks_both_request_allowances"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:13": {
+      "state": "GREEN",
+      "rows": [
+        "directory_refuses_stale_host_hash_generation_and_removed_owners"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:14": {
+      "state": "RED",
+      "rows": [
+        "directory_client_round_trip_allowances_and_refusals",
+        "four_internet_seats_decided_split_then_a_kick_then_a_stall"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:15": {
+      "state": "RED",
+      "rows": [
+        "four_internet_seats_host_kicks_while_its_half_lost_the_split"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:16": {
+      "state": "RED",
+      "rows": [
+        "four_internet_seats_decided_split_then_a_kick_then_a_stall"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:17": {
+      "state": "RED",
+      "rows": [
+        "four_internet_seats_host_kicks_while_its_half_lost_the_split"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:18": {
+      "state": "RED",
+      "rows": [
+        "three_seats_host_slows_while_the_other_joiner_is_held"
+      ],
+      "unmatched_patterns": [],
+      "scope": "three retained seats, host slow while the other joiner is already held; real coordinator history and 50 ms oracle"
+    },
+    "referee:19": {
+      "state": "RED",
+      "rows": [
+        "three_seats_host_held_then_the_joiners_split"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:20": {
+      "state": "GREEN",
+      "rows": [
+        "two_direct_host_3s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:21": {
+      "state": "RED",
+      "rows": [
+        "refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:22": {
+      "state": "RED",
+      "rows": [
+        "a_kept_hold_waits_for_its_own_directory_without_changing_history",
+        "directory_healed_link_queries_before_the_old_exchange_times_out",
+        "directory_two_split_questions_wait_for_their_own_replies"
+      ],
+      "unmatched_patterns": [],
+      "scope": "separate split client exchanges, recovered-link retirement, and kept real coordinator authority; old-tail/current-tie overlap is not forced"
+    },
+    "referee:23": {
+      "state": "RED",
+      "rows": [
+        "four_internet_seats_split_while_a_seat_returns"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:24": {
+      "state": "RED",
+      "rows": [
+        "two_internet_seats_split_heals_before_a_hold_then_the_host_stalls_2s"
+      ],
+      "unmatched_patterns": [],
+      "scope": "real coordinators and deterministic worlds; single box"
+    },
+    "referee:25": {
+      "state": "RED",
+      "rows": [
+        "a_healed_tie_keeps_one_history_across_a_host_change"
+      ],
+      "unmatched_patterns": [],
+      "scope": "healed old-generation split followed by a real directory host change; reachability checked by the row"
+    },
+    "referee:26": {
+      "state": "GREEN",
+      "rows": [
+        "directory_decision_lands_after_the_final_query"
+      ],
+      "unmatched_patterns": [],
+      "scope": "query-only client behavior; engine case covered by SplitAnswerIsNotDisplaced in net-lockstep"
+    },
+    "referee:27": {
+      "state": "RED",
+      "rows": [
+        "persistent_world_stopped_joiner_keeps_the_survivor_bound"
+      ],
+      "unmatched_patterns": [],
+      "scope": "valid persistent-world config uses its agreed frame-group gate"
+    },
+    "referee:28": {
+      "state": "RED",
+      "rows": [],
+      "unmatched_patterns": [
+        "test_frame_tie_full_record_keeps_a_new_split_available"
+      ],
+      "scope": "real signed endpoint, genuine persisted record crosses 2MiB; separate test beside fixture"
+    },
+    "referee:29": {
+      "state": "GREEN",
+      "rows": [
+        "directory_client_round_trip_allowances_and_refusals",
+        "directory_refuses_stale_host_hash_generation_and_removed_owners",
+        "healthy_input_runway_spends_no_tie_allowance_before_a_real_cut"
+      ],
+      "unmatched_patterns": [],
+      "scope": "per-requester client model plus real signed endpoint test; real NetConnectionAuthority HTTP families remain in net-connection suite"
+    }
+  }
+}

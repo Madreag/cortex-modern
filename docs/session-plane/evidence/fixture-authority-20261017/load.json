@@ -5348,7 +5348,7 @@
           "pid": 186946,
           "ppid": 186856,
           "comm": "python3",
-          "args": "/usr/bin/python3 tools/run_selftests.py --repo engine --out retained-evidence/local-authority-04/host_hold_ai_authority_is_the_certified_frames --timeout 86400 --only net-session-plane"
+          "args": "/usr/bin/python3 tools/run_selftests.py --repo engine --out retained-evidence/split-boundary-checks/host_hold_ai_authority_is_the_certified_frames --timeout 86400 --only net-session-plane"
         }
       ],
       "engines": [
@@ -5368,14 +5368,14 @@
           "pid": 187003,
           "ppid": 186856,
           "comm": "python3",
-          "args": "/usr/bin/python3 tools/run_selftests.py --repo engine --out retained-evidence/local-authority-04/split_four_seats_both_hold_before_a_1000ms_reply_winner_history_untouched --timeout 86400 --only net-session-plane"
+          "args": "/usr/bin/python3 tools/run_selftests.py --repo engine --out retained-evidence/split-boundary-checks/split_four_seats_both_hold_before_a_1000ms_reply_winner_history_untouched --timeout 86400 --only net-session-plane"
         },
         {
           "pid": 187007,
           "ppid": 187003,
           "comm": "CortexCommand",
           "args": "engine/build-gcc/CortexCommand -net-session-plane-selftest",
-          "cwd": "retained-evidence/local-authority-04/split_four_seats_both_hold_before_a_1000ms_reply_winner_history_untouched/net-session-plane-selftest/runtime"
+          "cwd": "retained-evidence/split-boundary-checks/split_four_seats_both_hold_before_a_1000ms_reply_winner_history_untouched/net-session-plane-selftest/runtime"
         }
       ],
       "engines": [
@@ -5391,7 +5391,7 @@
           "ppid": 187003,
           "comm": "CortexCommand",
           "args": "engine/build-gcc/CortexCommand -net-session-plane-selftest",
-          "cwd": "retained-evidence/local-authority-04/split_four_seats_both_hold_before_a_1000ms_reply_winner_history_untouched/net-session-plane-selftest/runtime"
+          "cwd": "retained-evidence/split-boundary-checks/split_four_seats_both_hold_before_a_1000ms_reply_winner_history_untouched/net-session-plane-selftest/runtime"
         }
       ]
     }

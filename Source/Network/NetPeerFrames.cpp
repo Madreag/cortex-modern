@@ -8,6 +8,7 @@
 
 #include "lz4.h"
 
+#include <algorithm>
 #include <cmath>
 #include <chrono>
 #include <cstdlib>
@@ -369,14 +370,20 @@ namespace RTE {
 
 	void NetLockstepCoordinator::TickPeerFrameGroups(uint64_t nowMs) {
 		TickPeerSessionWire(nowMs);
-		if (!UsesPeerFrameGroups() || !IsRunning()) return;
-		PollPeerFrameTies(nowMs);
-		if (!IsRunning()) return;
+		if (!UsesPeerFrameGroups() || (!IsRunning() && m_State != NetLockstepState::WaitingForStart)) return;
+		if (IsRunning()) PollPeerFrameTies(nowMs);
+		if (!IsRunning() && m_State != NetLockstepState::WaitingForStart) return;
+		// No input clock starts while a cold mesh is still establishing a direct route.
+		if (m_State == NetLockstepState::WaitingForStart && !m_Config.joinsRunningRound && !m_Config.continuesMatch &&
+		    std::any_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) { return !HasPeerFrameRoute(peer); })) return;
 		if (m_ConsumerWaitingFrame && *m_ConsumerWaitingFrame == m_Stats.nextFrame) {
 			const uint64_t frame = *m_ConsumerWaitingFrame;
 			const uint64_t elapsed = nowMs >= m_ConsumerWaitStartMs ? nowMs - m_ConsumerWaitStartMs : 0;
 			const auto remote = m_RemoteFrames.find(frame);
+			const auto hostEnd = m_PeerRoundEnds.find(GetHostPeerId());
+			const bool hostDeclaredLeave = hostEnd != m_PeerRoundEnds.end() && !hostEnd->second.closedLink;
 			if (!PeerTieRefereed(frame) && m_Config.localPeerId != GetHostPeerId() &&
+			    !hostDeclaredLeave &&
 			    (PeerHeldSeatsAt(frame) & (uint32_t{1} << (GetHostPeerId() - 1))) == 0 &&
 			    IsRemoteRequiredForFrame(GetHostPeerId(), frame) &&
 			    (remote == m_RemoteFrames.end() || !remote->second.contains(GetHostPeerId())) &&
@@ -434,6 +441,15 @@ namespace RTE {
 				receipt.successorPeerId = owner; receipt.frame = accepted->second;
 				SendPeerFrameMessage(std::move(receipt), NetTransportLane::InputUnreliable);
 			}
+		}
+		if (m_State == NetLockstepState::WaitingForStart) {
+			if (!m_RequirePublishedStart && !m_AgreedStartApplied && AllRemoteStartsReceived()) {
+				m_State = NetLockstepState::Running;
+				auto timing = std::move(m_PreStartTiming); m_PreStartTiming.clear();
+				for (const auto& [decision, source]: timing) HandleTiming(decision, nowMs, source);
+				m_WaitingFrame = std::numeric_limits<uint64_t>::max();
+			}
+			return;
 		}
 		const bool retryVotes = nowMs >= m_PeerVoteRetryAtMs;
 		if (retryVotes) m_PeerVoteRetryAtMs = nowMs + c_NetPeerVoteResendMs;

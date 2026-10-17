@@ -221,6 +221,19 @@ namespace RTE {
 					*error = "live and return delay must be exactly " + std::to_string(expected) + " ticks in mode " + std::to_string(mode) + "; machine receipt/silence/start costs are separate";
 					return false;
 				}
+				if (mode != 0) {
+					// Check the actual admission record too: catch-up work belongs in the neutral gap, never in input delay.
+					constexpr uint64_t activation = 4500, trail = 120;
+					if (!peer.ScheduleSeatActivation(2, 42, 2, activation, error, trail)) return false;
+					const auto admitted = std::find_if(peer.m_TimingDecisions.begin(), peer.m_TimingDecisions.end(), [](const auto& entry) {
+						return entry.second.proposal.action == NetTimingAction::Reclaim;
+					});
+					if (admitted == peer.m_TimingDecisions.end() || admitted->second.proposal.delayFrames != expected ||
+					    admitted->second.proposal.neutralThroughFrame < activation + expected + trail) {
+						*error = "actual return activation folded catch-up lag into link delay or lost its neutral recovery gap in mode " + std::to_string(mode);
+						return false;
+					}
+				}
 			}
 			return true;
 		}
@@ -323,6 +336,11 @@ namespace RTE {
 			for (uint8_t peer: {2, 3, 4}) host.m_Stats.peers[peer].reportedNextFrame = 4423;
 			host.m_PeerSourceInputs[4423][1] = {};
 			host.m_PeerSourceInputs[4423][2] = {};
+			host.m_PeerAppliedPrefixes[4] = {4422, {}};
+			if (host.ProposePeerBridge(4423, 1000, true)) {
+				*error = "the second return was proposed with a different applied history"; return false;
+			}
+			host.m_PeerAppliedPrefixes[4] = {4422, host.PeerAppliedFramePrefix(4422)};
 			(void)host.ProposePeerBridge(4423, 1000, true);
 			for (const auto& [key, votes]: host.m_PeerBridgeVotes) if (key.second == 1 && votes.contains(1)) {
 				const auto& proposal = votes.at(1);
@@ -3665,7 +3683,7 @@ namespace RTE {
 				host.Tick(deadline + 500 + tick);
 				if (!host.PopReadyFrame(ready) || ready.frame != tick) { *error = "rejoin delay negotiation stalled the survivor"; return false; }
 				for (const auto& command: ready.localCommands) if (const auto* delay = std::get_if<NetGameInputDelay>(&command.payload); delay && delay->peerId == 2) {
-					if (delay->frames != 38 || applyFrame != 0) { *error = "readmission committed an insufficient or duplicate delay"; return false; }
+					if (delay->frames != 26 || applyFrame != 0) { *error = "readmission committed an insufficient or duplicate delay"; return false; }
 					applyFrame = tick;
 				}
 				(void)host.FinishSimulationTick(tick);
@@ -7338,7 +7356,11 @@ namespace RTE {
 		bool TestReturnKeepsTheLinkItLastMeasured(std::string* error) {
 			LoopbackTransportConfig lagged;
 			lagged.latencyMs = 200;
-			LoopbackTransport hostWire, clientWire;
+			struct MeasuredWire : LoopbackTransport {
+				bool measured = true;
+				bool IsPeerPingMeasured(NetPeerId peer) const override { return measured && LoopbackTransport::IsPeerPingMeasured(peer); }
+			};
+			MeasuredWire hostWire, clientWire;
 			hostWire.SetFaultConfig(lagged); clientWire.SetFaultConfig(lagged);
 			NetLockstepCoordinator host, client;
 			auto a = MakeCoordinatorConfig(1, 2, 0x9A42, 2, NetTransportLane::ControlReliable);
@@ -7365,11 +7387,12 @@ namespace RTE {
 			// The seat drops and comes back on a connection with no samples on it: it reports nothing.
 			LoopbackTransportConfig fresh;
 			hostWire.SetFaultConfig(fresh); clientWire.SetFaultConfig(fresh);
+			hostWire.measured = clientWire.measured = false;
 			for (uint64_t until = now + 2000; now < until; ++now) {
 				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
 				host.Tick(now); client.Tick(now);
 			}
-			if (pingOf() != measured) {
+			if (pingOf() != measured || host.GetStats().peers.at(2).pingMeasured) {
 				*error = "a connection with no samples overwrote the link the round had measured: ping=" +
 				         std::to_string(pingOf()) + " last_measured=" + std::to_string(measured);
 				return false;
@@ -29844,9 +29867,36 @@ namespace {
 	int NetLockstepSelfTest::RunSeatSuccession() {
 		EnsureSwitchTestManagers();
 		bool passed = true;
-		for (bool (*test)(std::string*): {TestTwoSuccessionsKeepBothFormerHosts, TestZeroDelayCannotRunAnUncommittedClientTick, TestPositiveDelayHostWaitsForCommittedTick, TestSurvivorsReadOneAuthorityDuringHandover, TestFutureReleaseIsVoidOnEverySurvivor, TestAnnouncedLeaveLoneOutcome, TestAnnouncedHostLeaveKeepsOneSurvivor, TestAnnouncedHostReturnsByTicket, TestAnnouncedHostLeaveKeepsTwoSurvivors, TestAnnouncedHostLeaveEndsAnEmptyMatch, TestPlayingDepartureSurvivesSuccession, TestUnequalFutureDeparturesConvergeAtSuccession, TestPlayingHostLossKeepsLiveClaims, TestPlayingHostLossRecordsHeldClaims, TestPlayingHostReturnsWithItsTicket, TestWorldDepartureUsesInputBoundary, TestHeldHostDepartureReplays, TestReplayAuthorityPrecedesActivity, TestReplayMatchesSuccessionDuringActivityTick, TestPreviousClaimRulesAreRefused, TestWorldAdmissionExcusesRemovedAcknowledger, TestHeldFormerHostKeepsReclaimableClaims, TestMultipartObservationSendersReplay}) {
+		for (const auto& [name, test]: std::array<std::pair<const char*, bool (*)(std::string*)>, 23>{{
+		    {"TestTwoSuccessionsKeepBothFormerHosts", TestTwoSuccessionsKeepBothFormerHosts},
+		    {"TestZeroDelayCannotRunAnUncommittedClientTick", TestZeroDelayCannotRunAnUncommittedClientTick},
+		    {"TestPositiveDelayHostWaitsForCommittedTick", TestPositiveDelayHostWaitsForCommittedTick},
+		    {"TestSurvivorsReadOneAuthorityDuringHandover", TestSurvivorsReadOneAuthorityDuringHandover},
+		    {"TestFutureReleaseIsVoidOnEverySurvivor", TestFutureReleaseIsVoidOnEverySurvivor},
+		    {"TestAnnouncedLeaveLoneOutcome", TestAnnouncedLeaveLoneOutcome},
+		    {"TestAnnouncedHostLeaveKeepsOneSurvivor", TestAnnouncedHostLeaveKeepsOneSurvivor},
+		    {"TestAnnouncedHostReturnsByTicket", TestAnnouncedHostReturnsByTicket},
+		    {"TestAnnouncedHostLeaveKeepsTwoSurvivors", TestAnnouncedHostLeaveKeepsTwoSurvivors},
+		    {"TestAnnouncedHostLeaveEndsAnEmptyMatch", TestAnnouncedHostLeaveEndsAnEmptyMatch},
+		    {"TestPlayingDepartureSurvivesSuccession", TestPlayingDepartureSurvivesSuccession},
+		    {"TestUnequalFutureDeparturesConvergeAtSuccession", TestUnequalFutureDeparturesConvergeAtSuccession},
+		    {"TestPlayingHostLossKeepsLiveClaims", TestPlayingHostLossKeepsLiveClaims},
+		    {"TestPlayingHostLossRecordsHeldClaims", TestPlayingHostLossRecordsHeldClaims},
+		    {"TestPlayingHostReturnsWithItsTicket", TestPlayingHostReturnsWithItsTicket},
+		    {"TestWorldDepartureUsesInputBoundary", TestWorldDepartureUsesInputBoundary},
+		    {"TestHeldHostDepartureReplays", TestHeldHostDepartureReplays},
+		    {"TestReplayAuthorityPrecedesActivity", TestReplayAuthorityPrecedesActivity},
+		    {"TestReplayMatchesSuccessionDuringActivityTick", TestReplayMatchesSuccessionDuringActivityTick},
+		    {"TestPreviousClaimRulesAreRefused", TestPreviousClaimRulesAreRefused},
+		    {"TestWorldAdmissionExcusesRemovedAcknowledger", TestWorldAdmissionExcusesRemovedAcknowledger},
+		    {"TestHeldFormerHostKeepsReclaimableClaims", TestHeldFormerHostKeepsReclaimableClaims},
+		    {"TestMultipartObservationSendersReplay", TestMultipartObservationSendersReplay},
+		}}) {
 			std::string error;
-			passed &= test(&error);
+			if (!test(&error)) {
+				passed = false;
+				std::cout << "[net-lockstep-seat-succession-selftest] FAIL " << name << ": " << error << std::endl;
+			}
 		}
 		if (passed) {
 			ReleasePathRound round;

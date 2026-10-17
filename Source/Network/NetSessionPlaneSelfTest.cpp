@@ -39,6 +39,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <deque>
+#include <exception>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -66,6 +67,7 @@ namespace RTE {
 		// Installed state, read by the self-test's friend accessors. The fixture never supplies a voting group to a peer.
 		std::function<uint32_t(const NetLockstepCoordinator&, uint64_t)> s_FrameMembers, s_HeldSeats;
 		std::function<const HoldBoundaries&(const NetLockstepCoordinator&)> s_HoldBoundaries;
+		std::function<std::string(const NetLockstepCoordinator&)> s_WaitState;
 		std::function<NetPeerId(const NetLockstepCoordinator&, uint8_t)> s_ReturnTransport;
 		std::once_flag s_FixtureObservers;
 		struct Fixture;
@@ -1171,7 +1173,10 @@ namespace RTE {
 					const uint64_t wait = std::max(playingMaxWait[index], waitAt[index] && waitPlaying[index] ? hub.now - waitAt[index] : 0);
 					if (wait > static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs))) {
 						error = "authority ruling: playing peer " + std::to_string(seat) + " waited " + std::to_string(wait) +
-						    "ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory";
+						    "ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory" +
+						    "; now_ms=" + std::to_string(hub.now) +
+						    (index < worlds.size() ? " applied=" + std::to_string(worlds[index].applied) : " world=unconstructed") +
+						    (index < peers.size() ? s_WaitState(*peers[index]) : " peer=unconstructed");
 						return false;
 					}
 				}
@@ -1191,7 +1196,9 @@ namespace RTE {
 						if (hub.row.internet && separated && frame >= separated && l && r && !(l & r) &&
 						    (l & (1U << (authorA - 1))) && (r & (1U << (authorB - 1)))) { splitHistories = true; continue; }
 						error = "histories differ at displayed frame " + std::to_string(frame) + ": peer " + std::to_string(a) + " members=" + std::to_string(l) +
-						    " peer " + std::to_string(b) + " members=" + std::to_string(r) + "; authority ruling requires equal history within a half and after image return";
+						    " peer " + std::to_string(b) + " members=" + std::to_string(r) + "; authority ruling requires equal history within a half and after image return" +
+						    "; now_ms=" + std::to_string(hub.now) + " live_split=" + std::to_string(hub.LiveSplit(a, b)) + " separated_frame=" + std::to_string(separated) +
+						    " authors=" + std::to_string(authorA) + "/" + std::to_string(authorB) + " ai=" + (left.aiAt.contains(frame) ? left.aiAt.at(frame) : "none") + "/" + (right.aiAt.contains(frame) ? right.aiAt.at(frame) : "none");
 						return false;
 					}
 					compared[a][b] = common;
@@ -2350,7 +2357,11 @@ namespace RTE {
 		}
 		std::optional<Finding> RunScheduleQuietly(const Schedule& schedule, uint64_t* startupWaitMs = nullptr) {
 			Fixture fixture; fixture.parallel = true;
-			auto finding = RunSchedule(schedule, fixture);
+			std::optional<Finding> finding;
+			try { finding = RunSchedule(schedule, fixture); }
+			catch (const std::exception& exception) {
+				finding = Finding{"exception", "schedule_exception", "schedule raised an exception at " + std::to_string(fixture.hub.now) + "ms: " + exception.what()};
+			}
 			if (startupWaitMs) *startupWaitMs = fixture.startupWaitMs;
 			return finding;
 		}
@@ -3064,6 +3075,13 @@ namespace RTE {
 	bool NetSessionPlaneSelfTest::CheckOwnerHitch(unsigned arm, std::string* error) {
 		std::call_once(s_FixtureObservers, [] {
 			s_FrameMembers = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerFrameMembersAt(frame); };
+			s_WaitState = [](const NetLockstepCoordinator& peer) {
+				return " next=" + std::to_string(peer.m_Stats.nextFrame) + " blocked=" + peer.m_AdvanceBlock +
+				    " consumer=" + (peer.m_ConsumerWaitingFrame ? std::to_string(*peer.m_ConsumerWaitingFrame) : "none") +
+				    " wait_since=" + std::to_string(peer.m_ConsumerWaitStartMs) + " members=" + std::to_string(peer.m_FrameGroupMembers) +
+				    " local_held=" + std::to_string(peer.m_LocalSeatHeld) + " granted=" + (peer.m_GrantedSimulationTick ? std::to_string(*peer.m_GrantedSimulationTick) : "none") +
+				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0}));
+			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
@@ -3122,6 +3140,13 @@ namespace RTE {
 	bool NetSessionPlaneSelfTest::CheckHostAdministration(unsigned arm, std::string* error) {
 		std::call_once(s_FixtureObservers, [] {
 			s_FrameMembers = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerFrameMembersAt(frame); };
+			s_WaitState = [](const NetLockstepCoordinator& peer) {
+				return " next=" + std::to_string(peer.m_Stats.nextFrame) + " blocked=" + peer.m_AdvanceBlock +
+				    " consumer=" + (peer.m_ConsumerWaitingFrame ? std::to_string(*peer.m_ConsumerWaitingFrame) : "none") +
+				    " wait_since=" + std::to_string(peer.m_ConsumerWaitStartMs) + " members=" + std::to_string(peer.m_FrameGroupMembers) +
+				    " local_held=" + std::to_string(peer.m_LocalSeatHeld) + " granted=" + (peer.m_GrantedSimulationTick ? std::to_string(*peer.m_GrantedSimulationTick) : "none") +
+				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0}));
+			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
@@ -3177,6 +3202,13 @@ namespace RTE {
 	bool NetSessionPlaneSelfTest::CheckSceneLifecycle(const std::string& name, std::string* error) {
 		std::call_once(s_FixtureObservers, [] {
 			s_FrameMembers = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerFrameMembersAt(frame); };
+			s_WaitState = [](const NetLockstepCoordinator& peer) {
+				return " next=" + std::to_string(peer.m_Stats.nextFrame) + " blocked=" + peer.m_AdvanceBlock +
+				    " consumer=" + (peer.m_ConsumerWaitingFrame ? std::to_string(*peer.m_ConsumerWaitingFrame) : "none") +
+				    " wait_since=" + std::to_string(peer.m_ConsumerWaitStartMs) + " members=" + std::to_string(peer.m_FrameGroupMembers) +
+				    " local_held=" + std::to_string(peer.m_LocalSeatHeld) + " granted=" + (peer.m_GrantedSimulationTick ? std::to_string(*peer.m_GrantedSimulationTick) : "none") +
+				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0}));
+			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
@@ -3895,6 +3927,13 @@ namespace RTE {
 	int NetSessionPlaneSelfTest::Run() {
 		std::call_once(s_FixtureObservers, [] {
 			s_FrameMembers = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerFrameMembersAt(frame); };
+			s_WaitState = [](const NetLockstepCoordinator& peer) {
+				return " next=" + std::to_string(peer.m_Stats.nextFrame) + " blocked=" + peer.m_AdvanceBlock +
+				    " consumer=" + (peer.m_ConsumerWaitingFrame ? std::to_string(*peer.m_ConsumerWaitingFrame) : "none") +
+				    " wait_since=" + std::to_string(peer.m_ConsumerWaitStartMs) + " members=" + std::to_string(peer.m_FrameGroupMembers) +
+				    " local_held=" + std::to_string(peer.m_LocalSeatHeld) + " granted=" + (peer.m_GrantedSimulationTick ? std::to_string(*peer.m_GrantedSimulationTick) : "none") +
+				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0}));
+			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
@@ -4311,7 +4350,10 @@ namespace RTE {
 			for (size_t item; (item = next++) < total;) {
 				if (item < named.size()) {
 					auto& run = named[order[item]];
-					t_RowLines = &run.lines; run.ok = run.check(run.error); t_RowLines = nullptr;
+					t_RowLines = &run.lines;
+					try { run.ok = run.check(run.error); }
+					catch (const std::exception& exception) { run.ok = false; run.error = "row raised an exception: " + std::string(exception.what()); }
+					t_RowLines = nullptr;
 					{ std::lock_guard lock(doneMutex); finished.push_back(order[item]); }
 					doneSignal.notify_all();
 				} else { t_QuietLines = true; driver.RunOne(item - named.size()); t_QuietLines = false; }

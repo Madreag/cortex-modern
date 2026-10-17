@@ -1,0 +1,30 @@
+{
+  "scope": "Descriptive relative references replace numbered execution labels; original files are retained privately.",
+  "files": [
+    {
+      "path": "NOTES.md",
+      "original_sha256": "f7ed589ed2b563d3f429650d010d8c2a254bf4f09e431d1e97248ad58d61f99f",
+      "published_sha256": "eab4bd6110c7bb99a314b4c0ece507368f9628e5a4a0ffb808f7847a649d35ec"
+    },
+    {
+      "path": "docs/session-plane/evidence/authority-local-20261017/split-boundary-and-prefix.json",
+      "original_sha256": "9302520caa645805abfee31675eda05f44fd054eb131afd8b603cad335287c59",
+      "published_sha256": "0445513c21a9a0485362b8f48e68078c21913aa4ae84e2978ea818c1ed845886"
+    },
+    {
+      "path": "docs/session-plane/evidence/authority-local-20261017/receipt-boundary.json",
+      "original_sha256": "881afc64dea5235fbb035163c9e8bb5ba60c59ca4cf016b3c462cd57d40d4a43",
+      "published_sha256": "b2b9a5783b4bf40a6ca868b6823442dacd6c118a72a67a8463eb002ba7df34d0"
+    },
+    {
+      "path": "docs/session-plane/evidence/authority-local-20261017/first-boundary.json",
+      "original_sha256": "5df26e72d828028cb3e1d136e985ab68d4496bf1fe096348b57055bd4117d611",
+      "published_sha256": "18fdb45d234c4735c299a6917d382aa68a7c387e097202d2b891c991ccf5eb2f"
+    },
+    {
+      "path": "docs/session-plane/evidence/fixture-authority-20261017/load.json",
+      "original_sha256": "a13168c19a9db024730d545542005837520900389046b874b1878c96f6279c85",
+      "published_sha256": "167bb71c26e6287f9861fc9e0514d35b25dd74166519d53213a430b03ea92fe8"
+    }
+  ]
+}

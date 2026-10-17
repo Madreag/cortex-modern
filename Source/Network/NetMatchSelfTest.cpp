@@ -2518,23 +2518,26 @@ namespace RTE {
 			void Stop() override { m_Inner.Stop(); }
 			std::vector<NetTransportEvent> PollEvents() override { return m_Inner.PollEvents(); }
 			uint32_t GetPeerPingMs(NetPeerId) const override { return m_PingMs; }
-			void SetPingMs(uint32_t pingMs) { m_PingMs = pingMs; }
+			bool IsPeerPingMeasured(NetPeerId) const override { return m_PingMeasured; }
+			void SetPingMs(uint32_t pingMs) { m_PingMs = pingMs; m_PingMeasured = true; }
 			void SetMissingTimingReplies() { m_MissingTimingReplies = true; }
 			uint32_t TimingRepliesDropped() const { return m_TimingRepliesDropped; }
 
 		private:
 			LoopbackTransport& m_Inner;
 			uint32_t m_PingMs = 0;
+			bool m_PingMeasured = false;
 			bool m_MissingTimingReplies = false;
 			uint32_t m_TimingRepliesDropped = 0;
 		};
 
 		bool TestLobbyStartTimingEnds(std::string* error) {
-			for (unsigned row = 0; row < 4; ++row) {
+			for (unsigned row = 0; row < 5; ++row) {
 				LoopbackTransport a, b; NetPeerId ar, br;
 				if (!StartLoopbackTransports(static_cast<uint16_t>(43570 + row), a, b, ar, br, error)) return false;
 				PingingLoopbackTransport measured(a), missing(b);
-				measured.SetPingMs(row == 1 ? 0 : row == 2 ? 800 : 120);
+				// An absent reading and a measured zero are distinct transport states.
+				if (row != 1) measured.SetPingMs(row == 4 ? 0 : row == 2 ? 800 : 120);
 				missing.SetMissingTimingReplies();
 				NetLobbySession host, client;
 				NetLobbySessionConfig hc;
@@ -2554,8 +2557,8 @@ namespace RTE {
 				const uint64_t deadline = row == 3 ? 800 : 2300;
 				while (now <= deadline && !(host.IsStarted() && client.IsStarted())) step();
 				// Without timing replies the bounded fallback uses the measured link: 120 ms needs ceil(120/tick)+1 = 9,
-				// an unmeasured link keeps one tick, and the 800 ms leg retains the existing 36-tick startup ceiling.
-				const uint16_t expected = row == 1 ? 1 : row == 2 ? 36 : 9;
+				// An unmeasured link keeps one tick, measured zero needs one tick, and 800 ms keeps the 36-tick startup ceiling.
+				const uint16_t expected = row == 1 || row == 4 ? 1 : row == 2 ? 36 : 9;
 				if (!host.IsStarted() || !client.IsStarted() || host.GetMatchConfigHash() != client.GetMatchConfigHash() ||
 				    NetMatchConfigUtil::PeerInputDelay(host.GetMatchConfig(), 1) != expected ||
 				    NetMatchConfigUtil::PeerInputDelay(host.GetMatchConfig(), 2) != expected ||
