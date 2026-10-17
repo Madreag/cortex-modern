@@ -1,8 +1,8 @@
 # NEEDS TESTING
 
 These runs belong to the lead. This lane has used only the assigned Linux box.
-The source under test is `51b578e56`; the Linux executable SHA-256 is
-`b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a`.
+The engine source under test is `6316cd948`; the Linux executable SHA-256 is
+`5a0ada0c38a725321cfda6d135e9ee7c82f2897c7366bb573ce1042dbece3c68`.
 Each peer must build the same source and the private patched native dependency.
 The lead supplies the box facts, assigns free boxes and records their build receipts.
 Every run below needs a quiet interval without another engine or build on its peers.
@@ -43,11 +43,13 @@ Field A still needs the two exact-round files
 `match-6004495977551122484-r2423981022284705150.ccreplay` and their startup/checkpoint
 images, or both peers' object and controller application traces for ticks
 57174–57177 (UID, parent UID, position/rotation, actual producer and applied input).
-The supplied one-way component hashes cannot recover those fields. The branch's
-33 sampled frames establish equality through 57175 and an attachables-only first
-difference at 57176; both reported host seat 1 under AI at 57175. Neither the
-synthetic certified-hold detector nor those AI labels identify the field object or
-prove why the third hold differs from the two earlier clean holds.
+The supplied component hashes cannot recover those fields. Commit `7ad1e02ef`
+closes a demonstrated controller-disable divergence: learning a future return
+used to change the held host's controller state at the current frame. The actual
+actor/controller detector is RED on `7b589c18e` and GREEN on the tip; the native
+host-stall reproduction has 1,200 equal hashes and identical handoff object dumps.
+The field's exact attachable UID remains unknown. See
+[the controller evidence](evidence/held-host-controller/README.md).
 
 Native diagnostics need a real TURN run long enough to observe allocation and
 permission refreshes, followed by a transport timeout/close with both ends' packet
@@ -57,8 +59,24 @@ a fresh private checkout with `external/patches/build_gns_turn.py`; its build re
 must contain `transport_diagnostics_version=1`. The patches are not idempotent.
 Windows/MSVC and Mac/GCC builds of that dependency remain unmeasured in this lane.
 
-The signed directory capacity row is still RED at 13129 decisions / 2097084 bytes
-with HTTP 503. Server persistence/deployment belongs to the lead's server lane.
+The signed directory capacity row is now GREEN locally in `ea64acb81`, retaining
+all decisions and the original 2 MiB record/entry bound. The new authenticated
+history storage is not deployed; rollout and rollback need matching directory
+code and state. See [the storage proof](evidence/directory-history/README.md).
+
+The unchanged pending-directory survivor bound is still RED. A healthy seat waits
+101 ms with a 100 ms directory exchange and 632 ms with a 300 ms exchange. Even
+an immediate request cannot fit the latter inside the brief's maximum six-tick
+30 ms-link reserve plus the 50 ms survivor bound. The lead needs to resolve this
+authority/availability conflict; no property has been waived. See
+[the quiet counterexamples](evidence/authority-wait-floor/README.md).
+
+The local B3 measurement also remains RED against its unchanged repeat-noise
+oracle. All three median response counts are two drawn frames, but seven of twelve
+network peer medians lie outside the measured SP millisecond envelope. The
+[retained quiet matrix](evidence/link-delay/cadence-repeat-findings.json) includes
+both original loaded arms and their explicitly mapped quiet replacements.
+
 The direct-host partition row remains reachable and RED: its symmetric partition
 holds the joiner while the documented no-referee host half continues. The lead must
 resolve that row's expected survivor against the existing host-half rule; this lane

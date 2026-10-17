@@ -149,8 +149,8 @@ def reduce_peer(folder, peer, rtt, plan, lag_step=None):
                   b1_delay_pass=bool(delay_values) and max(delay_values) <= limit and
                                 (not lag_step or bool(low_delay) and max(low_delay) <= 6),
                   b2_depth_pass=bool(owed) and not mismatches and not missing_state and (rtt is None or preview.get('enabled') and preview.get('previews', 0) > 0 and
-                      preview.get('actor_ticks', 0) > 0 and preview.get('last_depth', -1) >= 0 and
-                      preview.get('effective_max_ticks', -1) >= preview['last_depth']),
+                      preview.get('actor_ticks', 0) > 0 and preview.get('last_depth', -1) >= 0 and preview.get('input_delay_ticks', -1) >= 0 and
+                      preview.get('effective_max_ticks', -1) >= max(preview['last_depth'], preview['input_delay_ticks'])),
                   b3_coverage_pass=coverage,
                   b4_overlay_pass=rtt is None or bool(delay_watches) and all(w['active_frames'] > 0 and w['violations'] == 0 for w in delay_watches))
     write_json(folder / f'{peer}-measurement.json', result)
