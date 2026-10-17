@@ -1033,6 +1033,8 @@ namespace RTE {
 			std::vector<std::vector<std::map<uint64_t, NetHash32>>> discardedHistories;
 			std::array<std::array<uint64_t, 5>, 5> compared{}, splitFrom{};
 			std::vector<bool> waitPlaying, imageReading, imageNeeded, imageWithoutHeadroom;
+			std::vector<bool> splitParticipant;
+			std::vector<uint32_t> observedSplit;
 			std::vector<uint64_t> playingMaxWait, lostAt, lostFrame, imageReturns;
 			std::vector<size_t> decisionsRead;
 			std::vector<std::set<std::tuple<uint64_t, uint64_t, NetHash32, uint64_t>>> splitDecisions;
@@ -1194,6 +1196,7 @@ namespace RTE {
 				frameMembers.assign(row.seats, {0}); frameAuthors.assign(row.seats, {0}); installedBoundaries.resize(row.seats); discardedHistories.resize(row.seats);
 				waitPlaying.resize(row.seats); playingMaxWait.resize(row.seats); imageReading.resize(row.seats); imageNeeded.resize(row.seats);
 				imageWithoutHeadroom.resize(row.seats); splitDecisions.resize(row.seats);
+				splitParticipant.resize(row.seats); observedSplit.resize(row.seats);
 				lostAt.resize(row.seats); lostFrame.resize(row.seats); imageReturns.resize(row.seats); decisionsRead.resize(row.seats);
 				firstDisplayedAt.resize(row.seats); startupResumeAt.resize(row.seats); preFaultPaceLeadMs.resize(row.seats);
 				settledHostWaits.resize(row.seats); paceBegin.resize(row.seats); paceEnd.resize(row.seats);
@@ -1349,6 +1352,16 @@ namespace RTE {
 						sawSplit = true;
 						if (!splitFrom[a][b]) splitFrom[a][b] = std::max(worlds[a - 1].applied, worlds[b - 1].applied) + 1;
 					}
+				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
+					uint32_t cut = 0;
+					for (uint8_t other = 1; other <= hub.row.seats; ++other) if (hub.LiveSplit(seat, other)) cut |= 1U << (other - 1);
+					if (cut != observedSplit[seat - 1]) {
+						observedSplit[seat - 1] = cut;
+						splitParticipant[seat - 1] = cut && peers[seat - 1]->IsRunning() && !CatchingUp(*peers[seat - 1]) &&
+						    (s_FrameMembers(*peers[seat - 1], worlds[seat - 1].applied + 1) & (1U << (seat - 1)));
+					}
+					if (OwnMachineTrouble(seat)) splitParticipant[seat - 1] = false;
+				}
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) if (!hung(id) && !gone(id)) hub.PollDirectory(id);
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) {
 					if ((hub.now + id * 3) % hub.row.planeIntervalMs != 0) continue;
@@ -1413,6 +1426,10 @@ namespace RTE {
 						error = "authority ruling: losing peer " + std::to_string(id) + " did not stop at decision frame " + std::to_string(lostFrame[id - 1]); return false;
 					}
 					if (!peer.IsRunning() || imageReading[id - 1]) continue;
+					if (splitParticipant[id - 1] && observedSplit[id - 1] && !imageNeeded[id - 1] &&
+					    (!(s_FrameMembers(peer, world.applied + 1) & (1U << (id - 1))) || peer.IsLocalPrivateReaderAt(world.applied + 1))) {
+						error = "authority ruling: playing split peer " + std::to_string(id) + " became a private reader before a losing decision; a pending referee never suspends its half"; return false;
+					}
 					// A joiner reaches its first displayed tick later, then the
 					// normal 3x consumer catches it up to the host. This reproduces
 					// the stale first-tick anchor without forcing it ahead of play.
@@ -1448,6 +1465,7 @@ namespace RTE {
 							if (!waitAt[id - 1]) {
 								waitAt[id - 1] = hub.now;
 								waitPlaying[id - 1] = world.applied >= 60 && !OwnMachineTrouble(id) && !CatchingUp(peer) &&
+								    !peer.IsLocalPrivateReaderAt(next) && !peer.IsSeatUnderAI(id, next) &&
 								    (s_FrameMembers(peer, next) & (1U << (id - 1)));
 							}
 							peer.NoteFrameWait(next, hub.now); break;
@@ -4140,7 +4158,7 @@ namespace RTE {
 			RowRun run; run.name = "repeated_host_changes_bound_the_tail_or_answer_missing"; run.cost = 4000000;
 			run.check = [](std::string& error) {
 				const auto fail = [&](const std::string& detail) { error = "seed=0 " + detail; return false; };
-				Case row{"tail_after_33_administrations"}; row.subject = 1; row.seats = 4; row.gapMs = 20000;
+				Case row{"tail_after_33_administrations"}; row.subject = 1; row.seats = 4; row.gapMs = 20000; row.hung = true;
 				row.internet = row.adminDirectory = row.repeatedAdministration = row.imageReturn = true; row.rttMs = row.otherRttMs = 100;
 				row.stepMs = 5;
 				Fixture fixture; std::string detail;
@@ -4155,7 +4173,7 @@ namespace RTE {
 					std::fill(fixture.maxWait.begin(), fixture.maxWait.end(), 0);
 					bool returned = false;
 					for (const uint64_t until = fixture.hub.faultEnd + 14000; fixture.hub.now < until;) {
-						if (!fixture.Step(detail)) return fail("admin generation " + std::to_string(generation) + ": " + detail);
+						if (!fixture.Step(detail) || !fixture.CheckBound(detail)) return fail("admin generation " + std::to_string(generation) + ": " + detail);
 						if (fixture.hub.now < fixture.hub.faultEnd + 1000) continue;
 						returned = true;
 						for (uint8_t seat = 1; seat <= 4; ++seat) {
